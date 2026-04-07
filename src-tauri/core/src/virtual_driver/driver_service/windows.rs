@@ -2,13 +2,15 @@
 
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
 use crate::providers::plugin_display_name_from_manifest;
 use crate::storage::Storage;
-use crate::virtual_driver::vd_locale_sync::{album_folder_abs_path_for_explorer, vd_display_name_for_settings_sync};
+use crate::virtual_driver::vd_locale_sync::{
+    album_folder_abs_path_for_explorer, vd_display_name_for_settings_sync,
+};
 use arc_swap::ArcSwap;
 use widestring::U16CString;
 use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_UPDATEDIR, SHCNF_PATHW};
@@ -38,16 +40,15 @@ impl Default for VirtualDriveService {
 // windows实现
 impl VirtualDriveServiceTrait for VirtualDriveService {
     fn current_mount_point(&self) -> Option<String> {
-        self.mounted
-            .load_full()
-            .as_ref()
-            .as_ref()
-            .map(|s| s.to_string())
+        let snap = self.mounted.load_full();
+        let opt: &Option<Arc<str>> = snap.as_ref();
+        opt.as_ref().map(|s: &Arc<str>| s.to_string())
     }
 
     fn notify_root_dir_changed(&self) {
         let mounted_arc = self.mounted.load_full();
-        let Some(mp) = mounted_arc.as_ref().as_ref() else {
+        let opt: &Option<Arc<str>> = mounted_arc.as_ref();
+        let Some(mp) = opt.as_ref() else {
             return;
         };
         notify_explorer_dir_changed_path(mp.as_ref());
@@ -55,7 +56,8 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
 
     fn notify_album_dir_changed(&self, album_id: &str) {
         let mounted_arc = self.mounted.load_full();
-        let Some(mp) = mounted_arc.as_ref().as_ref() else {
+        let opt: &Option<Arc<str>> = mounted_arc.as_ref();
+        let Some(mp) = opt.as_ref() else {
             return;
         };
         match album_folder_abs_path_for_explorer(mp.as_ref(), album_id) {
@@ -162,7 +164,8 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
 
     fn unmount(&self) -> Result<bool, String> {
         let mount_point_arc = self.mounted.load_full();
-        let Some(mount_point) = mount_point_arc.as_ref().as_ref() else {
+        let opt: &Option<Arc<str>> = mount_point_arc.as_ref();
+        let Some(mount_point) = opt.as_ref() else {
             return Ok(false);
         };
         let mp = U16CString::from_str(mount_point.as_ref())
@@ -180,7 +183,8 @@ impl VirtualDriveService {
     /// 通知按任务根目录变更（私有辅助方法）
     fn notify_task_root_dir_changed(&self) {
         let mounted_arc = self.mounted.load_full();
-        let Some(mp) = mounted_arc.as_ref().as_ref() else {
+        let opt: &Option<Arc<str>> = mounted_arc.as_ref();
+        let Some(mp) = opt.as_ref() else {
             return;
         };
         let task_root = vd_display_name_for_settings_sync("task");
@@ -190,7 +194,8 @@ impl VirtualDriveService {
     /// 通知画册根目录变更（私有辅助方法）
     fn notify_albums_root_dir_changed(&self) {
         let mounted_arc = self.mounted.load_full();
-        let Some(mp) = mounted_arc.as_ref().as_ref() else {
+        let opt: &Option<Arc<str>> = mounted_arc.as_ref();
+        let Some(mp) = opt.as_ref() else {
             return;
         };
         let album_root = vd_display_name_for_settings_sync("album");
@@ -209,7 +214,8 @@ impl VirtualDriveService {
             return;
         }
         let mounted_arc = self.mounted.load_full();
-        let Some(mp) = mounted_arc.as_ref().as_ref() else {
+        let opt: &Option<Arc<str>> = mounted_arc.as_ref();
+        let Some(mp) = opt.as_ref() else {
             return;
         };
 
@@ -257,7 +263,8 @@ impl VirtualDriveService {
     /// - 按时间（可能出现新月份分组/数量变化）
     pub fn notify_gallery_tree_changed(&self) {
         let mounted_arc = self.mounted.load_full();
-        let Some(mp) = mounted_arc.as_ref().as_ref() else {
+        let opt: &Option<Arc<str>> = mounted_arc.as_ref();
+        let Some(mp) = opt.as_ref() else {
             return;
         };
 
@@ -292,7 +299,8 @@ impl VirtualDriveService {
 impl Drop for VirtualDriveService {
     fn drop(&mut self) {
         let mount_point_arc = self.mounted.load_full();
-        let Some(mount_point) = mount_point_arc.as_ref().as_ref() else {
+        let opt: &Option<Arc<str>> = mount_point_arc.as_ref();
+        let Some(mount_point) = opt.as_ref() else {
             return;
         };
         if let Ok(mp) = U16CString::from_str(mount_point.as_ref()) {
