@@ -59,7 +59,7 @@ pub struct GalleryBrowseResult {
 ///   `album/<albumId>/image-only/...`、`album/<albumId>/video-only/...` 仅图片或仅视频（子路径与上同）
 /// - `media-type/image[/desc]/<page>`、`media-type/video[/desc]/<page>` - 按媒体类型（画廊根）
 /// - `task/<taskId>/<page>` - 按任务分组
-/// - `surf/<surfRecordId>[/desc]/<page>` - 按畅游记录分组（默认升序，支持 desc）
+/// - `surf/<host>[/desc]/<page>` - 按畅游记录分组（host 与 `surf_records.host` 一致；默认升序，支持 desc）
 ///
 /// 保留旧 VD 路径兼容性（all/by-plugin/by-date/by-task/by-album）
 ///

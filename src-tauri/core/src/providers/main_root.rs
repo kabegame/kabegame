@@ -1275,23 +1275,21 @@ impl Provider for MainSurfGroupProvider {
         let records = Storage::global().get_surf_records_with_images()?;
         Ok(records
             .into_iter()
-            .filter_map(|(id, _)| {
-                self.get_child(&id)
-                    .map(|provider| ListEntry::Child { name: id, provider })
+            .filter_map(|(_id, host)| {
+                self.get_child(&host)
+                    .map(|provider| ListEntry::Child { name: host, provider })
             })
             .collect())
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
-        let id = name.trim();
-        if id.is_empty() {
+        let host = name.trim().to_lowercase();
+        if host.is_empty() {
             return None;
         }
-        if !Storage::global().surf_record_exists(id).ok()? {
-            return None;
-        }
+        let record = Storage::global().get_surf_record_by_host(&host).ok()??;
         Some(
-            Arc::new(MainSurfRecordProvider::new_with_config(id.to_string(), self.config))
+            Arc::new(MainSurfRecordProvider::new_with_config(record.id, self.config))
                 as Arc<dyn Provider>,
         )
     }
@@ -1300,8 +1298,7 @@ impl Provider for MainSurfGroupProvider {
 
 /// MainSurfRecordProvider：单个畅游记录，支持 desc 子目录与 page 动态子路径
 pub struct MainSurfRecordProvider {
-    query: ImageQuery,
-    config: ProviderConfig,
+    inner: CommonProvider,
 }
 
 impl MainSurfRecordProvider {
@@ -1310,41 +1307,26 @@ impl MainSurfRecordProvider {
     }
 
     pub fn new_with_config(surf_record_id: String, config: ProviderConfig) -> Self {
-        let query = ImageQuery::by_surf_record(surf_record_id);
         Self {
-            query,
-            config,
+            inner: CommonProvider::with_query_and_config(
+                ImageQuery::by_surf_record(surf_record_id),
+                config,
+            ),
         }
     }
 }
 
 impl Provider for MainSurfRecordProvider {
     fn descriptor(&self) -> ProviderDescriptor {
-        ProviderDescriptor::SimpleAll {
-            query: self.query.clone(),
-        }
+        self.inner.descriptor()
     }
 
     fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
-        Ok(vec![ListEntry::Child {
-            name: self.config.display_name("desc"),
-            provider: Arc::new(CommonProvider::with_query_and_config(
-                self.query.to_desc(),
-                self.config,
-            )) as Arc<dyn Provider>,
-        }])
+        self.inner.list_entries()
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
-        if self.config.canonical_name(name) != "desc" {
-            return None;
-        }
-        Some(
-            Arc::new(CommonProvider::with_query_and_config(
-                self.query.to_desc(),
-                self.config,
-            )) as Arc<dyn Provider>,
-        )
+        self.inner.get_child(name)
     }
 
 }

@@ -16,8 +16,8 @@ use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent};
 #[serde(rename_all = "camelCase")]
 pub struct SurfSessionStatus {
     pub active: bool,
-    pub surf_record_id: Option<String>,
-    pub host: Option<String>,
+    /// 当前畅游站点 host（对外索引键，与路由 `/surf/:host/images` 一致）
+    pub surf_host: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -139,6 +139,22 @@ fn save_surf_session_cookies(app: &AppHandle) {
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_json::Value, String> {
+    // 若当前会话窗口已存在，则仅置顶聚焦，不触发 navigate 刷新页面内容。
+    if let Some(win) = app.get_webview_window("surf") {
+        let current_record_id = SurfSessionState::global()
+            .lock()
+            .ok()
+            .and_then(|g| g.current_record_id.clone());
+        if let Some(record_id) = current_record_id {
+            let record = Storage::global()
+                .get_surf_record(&record_id)?
+                .ok_or_else(|| "畅游记录不存在".to_string())?;
+            let _ = win.show();
+            let _ = win.set_focus();
+            return serde_json::to_value(record).map_err(|e| e.to_string());
+        }
+    }
+
     let parsed = parse_external_url(url.trim())?;
     let host = parsed
         .host_str()
@@ -339,7 +355,7 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
 
     let _ = app.emit(
         "surf-session-changed",
-        serde_json::json!({ "active": true, "surfRecordId": record.id.clone() }),
+        serde_json::json!({ "active": true, "surfHost": record.host }),
     );
 
     let record_id_for_icon = record.id.clone();
@@ -362,7 +378,7 @@ pub fn notify_surf_session_closed(app: &AppHandle) {
     }
     let _ = app.emit(
         "surf-session-changed",
-        serde_json::json!({ "active": false, "surfRecordId": null }),
+        serde_json::json!({ "active": false, "surfHost": null }),
     );
 }
 
@@ -391,8 +407,7 @@ pub async fn surf_get_session_status(app: AppHandle) -> Result<SurfSessionStatus
         .map_err(|e| format!("Lock error: {}", e))?;
     Ok(SurfSessionStatus {
         active: active_window && guard.current_record_id.is_some(),
-        surf_record_id: guard.current_record_id.clone(),
-        host: guard.current_host.clone(),
+        surf_host: guard.current_host.clone(),
     })
 }
 
@@ -403,40 +418,64 @@ pub async fn surf_list_records(offset: usize, limit: usize) -> Result<RangedSurf
     Storage::global().list_surf_records(offset, page_limit)
 }
 
+fn normalize_surf_host(host: &str) -> String {
+    host.trim().to_lowercase()
+}
+
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_get_record(id: String) -> Result<Option<SurfRecord>, String> {
-    Storage::global().get_surf_record(&id)
+pub async fn surf_get_record(host: String) -> Result<Option<SurfRecord>, String> {
+    let host = normalize_surf_host(&host);
+    if host.is_empty() {
+        return Ok(None);
+    }
+    Storage::global().get_surf_record_by_host(&host)
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_get_record_images(
-    id: String,
+    host: String,
     offset: usize,
     limit: usize,
 ) -> Result<serde_json::Value, String> {
+    let host = normalize_surf_host(&host);
+    let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {
+        return Err("畅游记录不存在".to_string());
+    };
     let page_limit = if limit == 0 { 50 } else { limit };
-    let images = Storage::global().get_surf_record_images(&id, offset, page_limit)?;
+    let images = Storage::global().get_surf_record_images(&record.id, offset, page_limit)?;
     serde_json::to_value(images).map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_update_root_url(id: String, root_url: String) -> Result<(), String> {
-    Storage::global().update_surf_record_root_url(&id, &root_url)
+pub async fn surf_update_root_url(host: String, root_url: String) -> Result<(), String> {
+    let host = normalize_surf_host(&host);
+    let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {
+        return Err("畅游记录不存在".to_string());
+    };
+    Storage::global().update_surf_record_root_url(&record.id, &root_url)
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_update_name(id: String, name: String) -> Result<(), String> {
-    Storage::global().update_surf_record_name(&id, &name)
+pub async fn surf_update_name(host: String, name: String) -> Result<(), String> {
+    let host = normalize_surf_host(&host);
+    let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {
+        return Err("畅游记录不存在".to_string());
+    };
+    Storage::global().update_surf_record_name(&record.id, &name)
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_delete_record(id: String) -> Result<(), String> {
-    Storage::global().delete_surf_record(&id)
+pub async fn surf_delete_record(host: String) -> Result<(), String> {
+    let host = normalize_surf_host(&host);
+    let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {
+        return Err("畅游记录不存在".to_string());
+    };
+    Storage::global().delete_surf_record(&record.id)
 }
 
 /// 返回当前畅游会话对应站点的 Cookie（与浏览器请求头中发送的一致，含 HttpOnly）。
