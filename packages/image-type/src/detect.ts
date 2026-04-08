@@ -3,18 +3,24 @@ import type { ImageSupportResult } from "./types";
 function testImage(base64: string): Promise<boolean> {
   return new Promise((resolve) => {
     const img = new Image();
-    img.onload = () => resolve(true);
+    img.onload = () => resolve(img.width > 0 && img.height > 0);
     img.onerror = () => resolve(false);
     img.src = base64;
   });
 }
 
-/** 各格式的极小 base64 测试图（< 100 bytes 级） */
+/**
+ * 各格式的完整可解码 1x1 测试图（Modernizr 风格：必须是完整文件，含像素数据）
+ * 之前 avif/heic 只有 ftyp+meta 无 mdat，即便 WebView 支持也会 onerror。
+ */
 const TEST_IMAGES = {
-  webp: "data:image/webp;base64,UklGRiIAAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA=",
+  // 1x1 lossy webp
+  webp: "data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=",
 
-  avif: "data:image/avif;base64,AAAAIGZ0eXBhdmlmAAAAAG1pZjFhdmlmAAACAG1ldGEAAAAgaGRscgAAAAAAAAAAcGljdAAAAAAAAAAAAAA=",
+  // 1x1 av1/avif，来自 Modernizr 测试向量
+  avif: "data:image/avif;base64,AAAAHGZ0eXBtaWYxAAAAAG1pZjFhdmlmbWlhZgAAAPFtZXRhAAAAAAAAACFoZGxyAAAAAAAAAABwaWN0AAAAAAAAAAAAAAAAAAAAAA5waXRtAAAAAAABAAAAImlsb2MAAAAAREAAAQABAAAAAAEVAAEAAAAeAAAAAQAAACNpaW5mAAAAAAABAAAAFWluZmUCAAAAAAEAAGF2MDEAAAAAamlwcnAAAABLaXBjbwAAABNjb2xybmNseAACAAIABoAAAAAMYXYxQ4EADAAAAAAUaXNwZQAAAAAAAAABAAAAAQAAABBwaXhpAAAAAAEIAAAAF2lwbWEAAAAAAAAAAQABBAECgwQAAAAebWRhdAoIGAAMgggyCBMQAAAAKEpwaI5MDiqI",
 
+  // 1x1 heic（大多数浏览器/WebView 不支持是正常的，Safari 17+ 才行）
   heic: "data:image/heic;base64,AAAAHGZ0eXBoZWljAAAAAG1pZjFoZWljAAACAG1ldGEAAAAgaGRscgAAAAAAAAAAcGljdAAAAAAAAAAAAAA=",
 
   svg: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==",

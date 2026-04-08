@@ -5,8 +5,8 @@
   "identifier": {{#if isAndroid}}"app.kabegame"{{else}}"Kabegame"{{/if}},
   "build": {
     "beforeDevCommand": "bun run dev:frontend-main",
-    "devUrl": "http://{{devServerHost}}:1420",
-    "frontendDist": "../../dist-main"
+    "devUrl": "http://{{devServerHost}}:1420"{{#unless isDev}},
+    "frontendDist": "../../dist-main"{{/unless}}
   },
   "app": {
     {{#if isMacOS}}
