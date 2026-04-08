@@ -91,7 +91,7 @@
                   >
                     {{ $t('surf.startSurf') }}
                   </el-button>
-                  <el-button v-if="record.lastImage" size="small" @click.stop="goImages(record.id)">
+                  <el-button v-if="record.lastImage" size="small" @click.stop="goImages(record.host)">
                     {{ $t('surf.viewDownloadedImages') }}
                   </el-button>
                 </div>
@@ -385,7 +385,7 @@ function syncRecordInList(id: string, patch: Partial<SurfRecord>) {
 
 async function openDetailDialog(record: SurfRecord) {
   try {
-    const latest = await surfStore.getRecord(record.id);
+    const latest = await surfStore.getRecord(record.host);
     const target = latest ?? record;
     detailRecord.value = target;
     detailName.value = target.name || "";
@@ -410,7 +410,7 @@ async function saveDetailName() {
   const nextName = detailName.value.trim();
   if (nextName === (record.name || "")) return;
   try {
-    await surfStore.updateName(record.id, nextName);
+    await surfStore.updateName(record.host, nextName);
     detailRecord.value = { ...record, name: nextName };
     syncRecordInList(record.id, { name: nextName });
     ElMessage.success(t("surf.savedSuccess"));
@@ -425,7 +425,7 @@ async function saveDetailEntryPath() {
   const nextRootUrl = buildRootUrl(record.host, detailEntryPath.value);
   if (nextRootUrl === record.rootUrl) return;
   try {
-    await surfStore.updateRootUrl(record.id, nextRootUrl);
+    await surfStore.updateRootUrl(record.host, nextRootUrl);
     detailRecord.value = { ...record, rootUrl: nextRootUrl };
     syncRecordInList(record.id, { rootUrl: nextRootUrl });
     ElMessage.success(t("surf.savedSuccess"));
@@ -452,7 +452,7 @@ async function confirmAndDeleteRecord(record: SurfRecord) {
     t("surf.deleteRecordTitle"),
     { confirmButtonText: t("surf.deleteButton"), cancelButtonText: t("common.cancel"), type: "warning" }
   );
-  await surfStore.deleteRecord(record.id);
+  await surfStore.deleteRecord(record.host);
   ElMessage.success(t("surf.deleteSuccess"));
 }
 
@@ -479,8 +479,8 @@ const handleRecordClick = async (record: SurfRecord) => {
   }
 };
 
-const goImages = (id: string) => {
-  router.push(`/surf/${id}/images`);
+const goImages = (host: string) => {
+  router.push(`/surf/${host}/images`);
 };
 
 const openRecordContextMenu = (e: MouseEvent, record: SurfRecord) => {
@@ -492,7 +492,7 @@ const handleRecordMenuCommand = async (command: "viewImages" | "details" | "dele
   recordMenu.hide();
   if (!record) return;
   if (command === "viewImages") {
-    goImages(record.id);
+    goImages(record.host);
     return;
   }
   if (command === "details") {

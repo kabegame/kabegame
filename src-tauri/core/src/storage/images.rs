@@ -103,6 +103,22 @@ fn resolve_file_size(local_path: &str) -> Option<u64> {
     fs::metadata(local_path).ok().map(|m| m.len())
 }
 
+#[cfg(not(target_os = "android"))]
+fn remove_thumbnail_file_if_needed(local_path: Option<&str>, thumbnail_path: Option<&str>) {
+    let Some(thumb) = thumbnail_path.map(str::trim).filter(|p| !p.is_empty()) else {
+        return;
+    };
+    if let Some(local) = local_path.map(str::trim).filter(|p| !p.is_empty()) {
+        if local == thumb {
+            return;
+        }
+    }
+    let _ = fs::remove_file(thumb);
+}
+
+#[cfg(target_os = "android")]
+fn remove_thumbnail_file_if_needed(_local_path: Option<&str>, _thumbnail_path: Option<&str>) {}
+
 /// 启动时回填 `size`：桌面用 `metadata`；Android 的 `content://` 走 [`crate::crawler::content_io::ContentIoProvider::get_content_size`]。
 #[cfg(target_os = "android")]
 async fn resolve_file_size_for_backfill(local_path: &str) -> Option<u64> {
@@ -1114,11 +1130,11 @@ impl Storage {
     pub fn delete_image(&self, image_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let local_path: Option<String> = conn
+        let image_paths: Option<(String, String)> = conn
             .query_row(
-                "SELECT local_path FROM images WHERE id = ?1",
+                "SELECT local_path, thumbnail_path FROM images WHERE id = ?1",
                 params![image_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(|e| format!("Failed to query image path: {}", e))?;
@@ -1140,8 +1156,9 @@ impl Storage {
             })
             .map_err(|e| format!("Failed to query task IDs: {}", e))?;
 
-        if let Some(path) = local_path {
-            let _ = fs::remove_file(path);
+        if let Some((local_path, thumbnail_path)) = image_paths {
+            remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
+            let _ = fs::remove_file(local_path);
         }
 
         conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
@@ -1168,6 +1185,15 @@ impl Storage {
     pub fn remove_image(&self, image_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
+        let image_paths: Option<(String, String)> = conn
+            .query_row(
+                "SELECT local_path, thumbnail_path FROM images WHERE id = ?1",
+                params![image_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query image path: {}", e))?;
+
         // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
         let task_ids: Vec<String> = conn
             .prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
@@ -1184,6 +1210,10 @@ impl Storage {
                     })
             })
             .map_err(|e| format!("Failed to query task IDs: {}", e))?;
+
+        if let Some((local_path, thumbnail_path)) = image_paths {
+            remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
+        }
 
         conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
             .map_err(|e| format!("Failed to remove image from DB: {}", e))?;
@@ -1241,17 +1271,18 @@ impl Storage {
         }
 
         for id in image_ids {
-            let local_path: Option<String> = tx
+            let image_paths: Option<(String, String)> = tx
                 .query_row(
-                    "SELECT local_path FROM images WHERE id = ?1",
+                    "SELECT local_path, thumbnail_path FROM images WHERE id = ?1",
                     params![id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()
                 .map_err(|e| format!("Failed to query image path: {}", e))?;
 
-            if let Some(path) = local_path {
-                let _ = fs::remove_file(path);
+            if let Some((local_path, thumbnail_path)) = image_paths {
+                remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
+                let _ = fs::remove_file(local_path);
             }
 
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])
@@ -1311,6 +1342,19 @@ impl Storage {
         }
 
         for id in image_ids {
+            let image_paths: Option<(String, String)> = tx
+                .query_row(
+                    "SELECT local_path, thumbnail_path FROM images WHERE id = ?1",
+                    params![id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|e| format!("Failed to query image path: {}", e))?;
+
+            if let Some((local_path, thumbnail_path)) = image_paths {
+                remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
+            }
+
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])
                 .map_err(|e| format!("Failed to remove image: {}", e))?;
 

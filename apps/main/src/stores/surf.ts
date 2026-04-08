@@ -24,8 +24,7 @@ export interface SurfRecord {
 
 export interface SurfSessionStatus {
   active: boolean;
-  surfRecordId?: string | null;
-  host?: string | null;
+  surfHost?: string | null;
 }
 
 interface SurfRecordsResult {
@@ -68,7 +67,7 @@ export const useSurfStore = defineStore("surf", () => {
   const hasMore = ref(false);
   const total = ref(0);
   const sessionActive = ref(false);
-  const activeRecordId = ref<string | null>(null);
+  /** 当前畅游会话对应站点 host（与路由、Tauri 命令对外键一致） */
   const activeHost = ref<string | null>(null);
   const loading = ref(false);
   const offset = ref(0);
@@ -78,8 +77,8 @@ export const useSurfStore = defineStore("surf", () => {
   let unlistenRecords: UnlistenFn | null = null;
   let unlistenSession: UnlistenFn | null = null;
 
-  const getRecord = async (id: string) => {
-    return invoke<SurfRecord | null>("surf_get_record", { id });
+  const getRecord = async (host: string) => {
+    return invoke<SurfRecord | null>("surf_get_record", { host });
   };
 
   const applySurfRecordAdded = (recordRaw: unknown) => {
@@ -122,7 +121,7 @@ export const useSurfStore = defineStore("surf", () => {
     if (typeof d.rootUrl === "string") rec.rootUrl = d.rootUrl;
     if (typeof d.cookie === "string") rec.cookie = d.cookie;
     if (d.iconChanged === true) {
-      const fresh = await getRecord(id);
+      const fresh = await getRecord(rec.host);
       if (fresh) {
         rec.icon = fresh.icon;
         rec.lastImage = fresh.lastImage;
@@ -150,13 +149,12 @@ export const useSurfStore = defineStore("surf", () => {
       }
     });
 
-    unlistenSession = await listen<{ active?: boolean; surfRecordId?: string | null; host?: string | null }>(
+    unlistenSession = await listen<{ active?: boolean; surfHost?: string | null }>(
       "surf-session-changed",
       (event) => {
         const payload = event.payload ?? {};
         sessionActive.value = !!payload.active;
-        activeRecordId.value = payload.surfRecordId ?? null;
-        activeHost.value = payload.host ?? activeHost.value;
+        activeHost.value = payload.surfHost ?? null;
       },
     );
   };
@@ -193,7 +191,6 @@ export const useSurfStore = defineStore("surf", () => {
   const startSession = async (url: string) => {
     const record = await invoke<SurfRecord>("surf_start_session", { url });
     sessionActive.value = true;
-    activeRecordId.value = record.id;
     activeHost.value = record.host;
     await loadRecords();
     return record;
@@ -202,31 +199,29 @@ export const useSurfStore = defineStore("surf", () => {
   const closeSession = async () => {
     await invoke("surf_close_session");
     sessionActive.value = false;
-    activeRecordId.value = null;
     activeHost.value = null;
   };
 
   const checkSession = async () => {
     const status = await invoke<SurfSessionStatus>("surf_get_session_status");
     sessionActive.value = !!status.active;
-    activeRecordId.value = status.surfRecordId ?? null;
-    activeHost.value = status.host ?? null;
+    activeHost.value = status.surfHost ?? null;
   };
 
-  const getRecordImages = async (id: string, localOffset: number, limit: number) => {
-    return invoke<RangedImages>("surf_get_record_images", { id, offset: localOffset, limit });
+  const getRecordImages = async (host: string, localOffset: number, limit: number) => {
+    return invoke<RangedImages>("surf_get_record_images", { host, offset: localOffset, limit });
   };
 
-  const deleteRecord = async (id: string) => {
-    await invoke("surf_delete_record", { id });
+  const deleteRecord = async (host: string) => {
+    await invoke("surf_delete_record", { host });
   };
 
-  const updateName = async (id: string, name: string) => {
-    await invoke("surf_update_name", { id, name });
+  const updateName = async (host: string, name: string) => {
+    await invoke("surf_update_name", { host, name });
   };
 
-  const updateRootUrl = async (id: string, rootUrl: string) => {
-    await invoke("surf_update_root_url", { id, rootUrl });
+  const updateRootUrl = async (host: string, rootUrl: string) => {
+    await invoke("surf_update_root_url", { host, rootUrl });
   };
 
   return {
@@ -234,7 +229,6 @@ export const useSurfStore = defineStore("surf", () => {
     hasMore,
     total,
     sessionActive,
-    activeRecordId,
     activeHost,
     loading,
     loadRecords,
