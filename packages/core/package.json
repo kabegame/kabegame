@@ -9,10 +9,12 @@
     "vue": "^3.4.0"
   },
   "devDependencies": {
-    "@types/ejs": "^3.1.5"
+    "@types/ejs": "^3.1.5",
+    "modernizr": "^3.13.1"
   },
   "dependencies": {
     "@kabegame/i18n": "workspace:*",
+    "@kabegame/image-type": "workspace:*",
     "@panzoom/panzoom": "^4.6.1",
     "@tauri-apps/plugin-opener": "^2.0",
     "@vueuse/core": "^14.2.1",

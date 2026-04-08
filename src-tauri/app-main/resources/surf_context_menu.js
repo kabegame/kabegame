@@ -112,7 +112,8 @@
       const kind = typeof media === "string" ? "image" : media.kind || "image";
       e.preventDefault();
       e.stopPropagation();
-      show(e.clientX, e.clientY, toAbsolute(url), kind);
+      const absoluteUrl = toAbsolute(url);
+      show(e.clientX, e.clientY, absoluteUrl, kind);
     },
     true,
   );

@@ -108,7 +108,8 @@ const images = ref<ImageInfo[]>([]);
 const totalImagesCount = ref(0);
 const loading = ref(false);
 const record = ref<SurfRecord | null>(null);
-const recordId = ref("");
+/** 路由与 VD 路径使用的站点 host（与 `surf_records.host` 一致） */
+const surfHost = ref("");
 const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
 const surfViewRef = ref<InstanceType<typeof ImageGrid> | null>(null);
 const currentWallpaperImageId = ref<string | null>(null);
@@ -330,7 +331,7 @@ const isOnSurfImagesRoute = computed(() => String(route.name ?? "") === "SurfIma
 const surfImagesRouteStore = useSurfImagesRouteStore();
 const currentPath = computed(() => surfImagesRouteStore.currentPath);
 const currentPage = computed(() => surfImagesRouteStore.page);
-const providerRootPath = computed(() => `surf/${surfImagesRouteStore.recordId}`);
+const providerRootPath = computed(() => `surf/${surfImagesRouteStore.host}`);
 
 const recordTitle = computed(() => record.value?.host ?? t("surf.surfImagesTitle"));
 const lastVisitSubtitle = computed(() => {
@@ -356,8 +357,8 @@ const fetchPageImages = async (path: string) => {
 };
 
 const loadCurrentPage = async () => {
-  if (!recordId.value) return;
-  if (!providerRootPath.value.startsWith(`surf/${recordId.value}`)) return;
+  if (!surfHost.value) return;
+  if (!providerRootPath.value.startsWith(`surf/${surfHost.value}`)) return;
   loading.value = true;
   try {
     const path = currentPath.value || `${providerRootPath.value}/1`;
@@ -392,7 +393,7 @@ useImagesChangeRefresh({
   enabled: isOnSurfImagesRoute,
   waitMs: 500,
   filter: (p) => {
-    const rid = recordId.value;
+    const rid = record.value?.id ?? "";
     return !!rid && (p.surfRecordIds?.includes(rid) ?? false);
   },
   onRefresh: async () => {
@@ -400,20 +401,21 @@ useImagesChangeRefresh({
   },
 });
 
-const initRecord = async (id: string) => {
-  recordId.value = id;
+const initRecord = async (host: string) => {
+  surfHost.value = host;
   images.value = [];
   totalImagesCount.value = 0;
   record.value = null;
 
-  const r = surfStore.records.find((rec) => rec.id === id) ?? (await surfStore.getRecord(id));
+  const r =
+    surfStore.records.find((rec) => rec.host === host) ?? (await surfStore.getRecord(host));
   record.value = r ?? null;
   const rawPath = route.query.path;
   const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
-  if (qp.startsWith(`surf/${id}/`)) {
+  if (qp.startsWith(`surf/${host}/`)) {
     surfImagesRouteStore.syncFromUrl(qp);
   } else {
-    await surfImagesRouteStore.navigate({ recordId: id, page: 1 });
+    await surfImagesRouteStore.navigate({ host, page: 1 });
   }
   await loadCurrentPage();
 };
@@ -424,11 +426,11 @@ const goBack = () => {
 
 // keep-alive: 监听路由参数变化
 watch(
-  () => route.params.id,
-  async (newId) => {
+  () => route.params.host,
+  async (newHost) => {
     if (!isOnSurfImagesRoute.value) return;
-    if (newId && typeof newId === "string" && newId !== recordId.value) {
-      await initRecord(newId);
+    if (newHost && typeof newHost === "string" && newHost !== surfHost.value) {
+      await initRecord(newHost);
     }
   }
 );
@@ -437,11 +439,11 @@ watch(
   () => currentPath.value,
   async (newPath) => {
     if (!isOnSurfImagesRoute.value) return;
-    if (!recordId.value) return;
+    if (!surfHost.value) return;
     if (!newPath) return;
-    const root = `surf/${recordId.value}`;
+    const root = `surf/${surfHost.value}`;
     if (!newPath.startsWith(`${root}/`)) {
-      await surfImagesRouteStore.navigate({ recordId: recordId.value, page: 1 });
+      await surfImagesRouteStore.navigate({ host: surfHost.value, page: 1 });
       return;
     }
     await loadCurrentPage();
@@ -469,7 +471,7 @@ const startListening = async () => {
   unlistenRecordsChange = await listen<Record<string, unknown>>("surf-records-change", (event) => {
     const p = (event.payload ?? {}) as Record<string, unknown>;
     if (String(p.type) !== "SurfRecordDeleted") return;
-    if (String(p.surfRecordId ?? "") !== recordId.value) return;
+    if (String(p.surfRecordId ?? "") !== record.value?.id) return;
     goBack();
   });
 };
@@ -482,8 +484,8 @@ const stopListening = () => {
 };
 
 onMounted(async () => {
-  const id = String(route.params.id || "");
-  if (id) await initRecord(id);
+  const host = String(route.params.host || "");
+  if (host) await initRecord(host);
   await startListening();
 });
 
@@ -492,9 +494,9 @@ onBeforeUnmount(() => {
 });
 
 onActivated(async () => {
-  const id = String(route.params.id || "");
-  if (id && id !== recordId.value) {
-    await initRecord(id);
+  const host = String(route.params.host || "");
+  if (host && host !== surfHost.value) {
+    await initRecord(host);
   }
   await startListening();
 });

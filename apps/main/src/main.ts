@@ -16,13 +16,12 @@ import { IS_ANDROID } from "@kabegame/core/env";
 import { Toast, Picker, Popup } from "vant";
 import "vant/lib/picker/style";
 import "vant/lib/popup/style";
-import { getImageSupport, getSupportedFormats } from "@kabegame/image-type";
-import { invoke } from "@tauri-apps/api/core";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
 import { createMinAppVersionBeforeAddTaskGuard } from "@/composables/pluginMinAppVersionGate";
 import { useApp } from "@/stores/app";
 import { usePluginStore } from "@/stores/plugins";
 import { setCrawlerBeforeAddTaskGuard } from "@kabegame/core/stores/crawler";
+import { useImageSupportStore } from "@kabegame/core/stores/imageSupport";
 import { i18n } from "@kabegame/i18n";
 
 if (IS_ANDROID) {
@@ -54,11 +53,4 @@ app.use(Popup);
 app.mount("#app");
 
 // 启动时检测 WebView 图片格式能力并通知后端，扩展后端支持列表（如 avif、heic）
-getImageSupport()
-  .then((support) => {
-    const formats = getSupportedFormats(support);
-    return invoke("set_supported_image_formats", { formats });
-  })
-  .catch(() => {
-    // 非 Tauri 或 invoke 不可用时忽略
-  });
+void useImageSupportStore().detect();

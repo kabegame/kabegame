@@ -86,7 +86,7 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "route.surf" },
   },
   {
-    path: "/surf/:id/images",
+    path: "/surf/:host/images",
     name: "SurfImages",
     component: SurfImages,
     meta: { title: "route.surfImages" },
