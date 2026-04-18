@@ -2,19 +2,23 @@ fn main() {
     use std::env;
 
     // Build-time mode injection:
-    // - KABEGAME_MODE=standard | light
+    // - KABEGAME_MODE=standard | light | android
+    // - KABEGAME_DATA=dev | prod
     // - Expose to Rust code via env!("KABEGAME_BUILD_MODE")
     println!("cargo:rerun-if-env-changed=KABEGAME_MODE");
     println!("cargo:rerun-if-env-changed=KABEGAME_COMPONENT");
+    println!("cargo:rerun-if-env-changed=KABEGAME_DATA");
 
-    println!("cargo:rustc-check-cfg=cfg(kabegame_mode, values(\"standard\", \"light\"))");
+    println!("cargo:rustc-check-cfg=cfg(kabegame_mode, values(\"standard\", \"light\", \"android\"))");
     println!(
         "cargo:rustc-check-cfg=cfg(kabegame_component, values(\"main\", \"cli\", \"unknown\"))"
     );
+    println!("cargo:rustc-check-cfg=cfg(kabegame_data, values(\"dev\", \"prod\"))");
 
     let mode = env::var("KABEGAME_MODE").unwrap_or_else(|_| "standard".to_string());
     let normalized = match mode.as_str() {
         "light" => "light",
+        "android" => "android",
         _ => "standard",
     };
 
@@ -29,4 +33,10 @@ fn main() {
     };
     println!("cargo:rustc-cfg=kabegame_component=\"{}\"", component);
 
+    let data = env::var("KABEGAME_DATA").unwrap_or_else(|_| "prod".to_string());
+    let normalized_data = match data.as_str() {
+        "dev" => "dev",
+        _ => "prod",
+    };
+    println!("cargo:rustc-cfg=kabegame_data=\"{}\"", normalized_data);
 }

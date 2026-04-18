@@ -12,10 +12,9 @@ use include_dir::{include_dir, Dir};
 use kabegame_core::ipc::client::daemon_startup::*;
 use kabegame_core::{
     kgpg,
-    plugin::{manifest_value_to_display_string, ImportPreview, Plugin, PluginDetail, PluginManager, PluginManifest},
+    plugin::{manifest_value_to_display_string, PluginManager},
 };
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -150,7 +149,7 @@ struct RunPluginArgs {
 
 #[tokio::main]
 async fn main() {
-     // 执行绕过
+    // 执行绕过
     #[cfg(target_os = "linux")]
     kabegame_core::workarounds::apply_nvidia_dmabuf_renderer_workaround();
     let cli = Cli::parse();
@@ -197,15 +196,25 @@ fn new_plugin(args: NewPluginArgs) -> Result<(), String> {
     std::fs::create_dir_all(&plugin_dir).map_err(|e| format!("创建插件目录失败: {e}"))?;
 
     // 公共模板文件
-    write_template_text_to("manifest.json", &plugin_dir.join("manifest.json"), &args.name)?;
+    write_template_text_to(
+        "manifest.json",
+        &plugin_dir.join("manifest.json"),
+        &args.name,
+    )?;
     write_template_binary_to("icon.png", &plugin_dir.join("icon.png"))?;
-    write_template_text_to("doc_root/doc.md", &plugin_dir.join("doc_root/doc.md"), &args.name)?;
+    write_template_text_to(
+        "doc_root/doc.md",
+        &plugin_dir.join("doc_root/doc.md"),
+        &args.name,
+    )?;
 
     // 按后端写入脚本模板
     match args.backend {
-        PluginBackend::Rhai => {
-            write_template_text_to("rhai/crawl.rhai", &plugin_dir.join("crawl.rhai"), &args.name)?
-        }
+        PluginBackend::Rhai => write_template_text_to(
+            "rhai/crawl.rhai",
+            &plugin_dir.join("crawl.rhai"),
+            &args.name,
+        )?,
         PluginBackend::Webview => {
             write_template_text_to("webview/crawl.js", &plugin_dir.join("crawl.js"), &args.name)?;
             write_template_text_to(
@@ -235,7 +244,11 @@ fn is_valid_plugin_name(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn write_template_text_to(template_rel_path: &str, out_path: &Path, plugin_name: &str) -> Result<(), String> {
+fn write_template_text_to(
+    template_rel_path: &str,
+    out_path: &Path,
+    plugin_name: &str,
+) -> Result<(), String> {
     let file = TEMPLATE_DIR
         .get_file(template_rel_path)
         .ok_or_else(|| format!("缺少模板文件: {template_rel_path}"))?;
@@ -245,9 +258,11 @@ fn write_template_text_to(template_rel_path: &str, out_path: &Path, plugin_name:
         .replace("{{plugin_name}}", plugin_name);
 
     if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败 {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目录失败 {}: {e}", parent.display()))?;
     }
-    std::fs::write(out_path, content).map_err(|e| format!("写入文件失败 {}: {e}", out_path.display()))
+    std::fs::write(out_path, content)
+        .map_err(|e| format!("写入文件失败 {}: {e}", out_path.display()))
 }
 
 fn write_template_binary_to(template_rel_path: &str, out_path: &Path) -> Result<(), String> {
@@ -256,7 +271,8 @@ fn write_template_binary_to(template_rel_path: &str, out_path: &Path) -> Result<
         .ok_or_else(|| format!("缺少模板文件: {template_rel_path}"))?;
 
     if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败 {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目录失败 {}: {e}", parent.display()))?;
     }
     std::fs::write(out_path, file.contents())
         .map_err(|e| format!("写入文件失败 {}: {e}", out_path.display()))
@@ -432,7 +448,8 @@ async fn ipc_status() -> Result<(), String> {
             daemon_path.display()
         ));
     }
-    let resp = kabegame_core::ipc::ipc::request(kabegame_core::ipc::ipc::CliIpcRequest::Status).await?;
+    let resp =
+        kabegame_core::ipc::ipc::request(kabegame_core::ipc::ipc::CliIpcRequest::Status).await?;
     println!(
         "{}",
         serde_json::to_string_pretty(&resp).unwrap_or_else(|_| "ok".to_string())
@@ -467,7 +484,7 @@ async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
     // 结构检查（尽量给出更友好的错误）
     validate_kgpg_structure(pm, &p).await?;
 
-    let plugin = pm.install_plugin_from_zip(&p).await?;
+    let plugin = pm.install_plugin_from_kgpg(&p).await?;
     let plugins_dir = pm.get_plugins_directory();
 
     println!(
@@ -517,8 +534,8 @@ fn pack_plugin(args: PackPluginArgs) -> Result<(), String> {
     let manifest_val: serde_json::Value = serde_json::from_str(&manifest_raw)
         .map_err(|e| format!("解析 manifest.json 失败: {}", e))?;
 
-    let header_manifest_bytes =
-        serde_json::to_vec(&manifest_val).map_err(|e| format!("序列化头部 manifest 失败: {}", e))?;
+    let header_manifest_bytes = serde_json::to_vec(&manifest_val)
+        .map_err(|e| format!("序列化头部 manifest 失败: {}", e))?;
 
     maybe_run_webview_build(&plugin_dir)?;
     let backend = detect_plugin_backend(&plugin_dir)?;
@@ -552,8 +569,8 @@ fn maybe_run_webview_build(plugin_dir: &Path) -> Result<(), String> {
 
     let package_raw = std::fs::read_to_string(&package_json_path)
         .map_err(|e| format!("读取 package.json 失败: {e}"))?;
-    let package_val: serde_json::Value = serde_json::from_str(&package_raw)
-        .map_err(|e| format!("解析 package.json 失败: {e}"))?;
+    let package_val: serde_json::Value =
+        serde_json::from_str(&package_raw).map_err(|e| format!("解析 package.json 失败: {e}"))?;
     let has_build_script = package_val
         .get("scripts")
         .and_then(|s| s.get("build"))
@@ -564,7 +581,8 @@ fn maybe_run_webview_build(plugin_dir: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    let has_bun_lock = plugin_dir.join("bun.lockb").is_file() || plugin_dir.join("bun.lock").is_file();
+    let has_bun_lock =
+        plugin_dir.join("bun.lockb").is_file() || plugin_dir.join("bun.lock").is_file();
     let use_bun = if has_bun_lock {
         command_exists("bun")
     } else {
@@ -587,7 +605,9 @@ fn maybe_run_webview_build(plugin_dir: &Path) -> Result<(), String> {
         .status()
         .map_err(|e| format!("执行 `{runner} run build` 失败: {e}"))?;
     if !status.success() {
-        return Err(format!("webview 构建失败（`{runner} run build` 退出码: {status}）"));
+        return Err(format!(
+            "webview 构建失败（`{runner} run build` 退出码: {status}）"
+        ));
     }
     Ok(())
 }
@@ -698,10 +718,7 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf, backend: PluginBackend) -> Resul
                 if !rel.starts_with("doc_root/") {
                     continue;
                 }
-                let name = p
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
+                let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
                 let ext = p
                     .extension()
                     .and_then(|s| s.to_str())
@@ -709,7 +726,9 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf, backend: PluginBackend) -> Resul
                     .to_ascii_lowercase();
                 // doc.md、doc.<lang>.md（仅 doc_root 根目录的 .md 作为文档，子目录 .md 不打包）
                 if ext == "md" {
-                    if dir == doc_root && (name == "doc.md" || (name.starts_with("doc.") && name.ends_with(".md"))) {
+                    if dir == doc_root
+                        && (name == "doc.md" || (name.starts_with("doc.") && name.ends_with(".md")))
+                    {
                         entries.push((rel, p));
                     }
                     continue;
@@ -720,6 +739,15 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf, backend: PluginBackend) -> Resul
                     "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
                 );
                 if ok {
+                    const DOC_RESOURCE_MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
+                    let file_size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                    if file_size > DOC_RESOURCE_MAX_FILE_SIZE {
+                        eprintln!(
+                            "[WARN] doc_root 资源文件过大已跳过（上限 2MB）: {} ({} bytes)",
+                            rel, file_size
+                        );
+                        continue;
+                    }
                     entries.push((rel, p));
                 }
             }
@@ -785,8 +813,8 @@ fn has_non_empty_zip_entry(zip_path: &Path, entry_name: &str) -> Result<bool, St
         .ok_or_else(|| format!("插件包不是有效 ZIP/KGPG 格式: {}", zip_path.display()))?;
 
     let cursor = std::io::Cursor::new(&bytes[zip_offset..]);
-    let mut archive = zip::ZipArchive::new(cursor)
-        .map_err(|e| format!("解析插件 ZIP 失败: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| format!("解析插件 ZIP 失败: {e}"))?;
     let mut file = match archive.by_name(entry_name) {
         Ok(f) => f,
         Err(_) => return Ok(false),

@@ -208,8 +208,6 @@ pub async fn ensure_minimum_duration(download_start_time: u64, min_duration_ms: 
 async fn wait_after_download_if_needed(pool: &DownloadPool) {
     let interval_ms = Settings::global()
         .get_download_interval_ms()
-        .await
-        .unwrap_or(500)
         .clamp(100, 10000);
     if interval_ms == 0 {
         return;
@@ -706,8 +704,6 @@ impl DownloadQueue {
     pub async fn set_desired_concurrency_from_settings(&self) {
         let desired = Settings::global()
             .get_max_concurrent_downloads()
-            .await
-            .unwrap_or(1)
             .max(1);
         let mut total = self.pool.total_workers.lock().await;
         if *total < desired {
@@ -969,8 +965,6 @@ impl DownloadQueue {
                 let mut pool_st = self.pool.state.lock().await;
                 let desired = Settings::global()
                     .get_max_concurrent_downloads()
-                    .await
-                    .unwrap_or(1)
                     .max(1);
                 if pool_st.in_flight < desired {
                     pool_st.queue.push_back(request);
@@ -1028,8 +1022,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             _ = pool.exit_notify.notified() => {
                 let desired = Settings::global()
                     .get_max_concurrent_downloads()
-                    .await
-                    .unwrap_or(1)
                     .max(1);
                 let mut total = pool.total_workers.lock().await;
                 if *total > desired {
@@ -1107,8 +1099,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
         if !is_archive {
             let existing_opt = Settings::global()
                 .get_auto_deduplicate()
-                .await
-                .unwrap_or(false)
                 .then(|| {
                     Storage::global()
                         .find_image_by_url(job.url.as_str())
@@ -1558,9 +1548,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                 None,
                             );
                             let auto_deduplicate = Settings::global()
-                                .get_auto_deduplicate()
-                                .await
-                                .unwrap_or(false);
+                                .get_auto_deduplicate();
                             #[cfg(not(target_os = "android"))]
                             let _ = auto_deduplicate;
 
@@ -2305,10 +2293,7 @@ pub async fn postprocess_downloaded_image(
         return Err(err);
     }
 
-    let auto_deduplicate = Settings::global()
-        .get_auto_deduplicate()
-        .await
-        .unwrap_or(false);
+    let auto_deduplicate = Settings::global().get_auto_deduplicate();
 
     if !auto_deduplicate {
         let post_start = Instant::now();

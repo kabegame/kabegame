@@ -251,10 +251,6 @@ export function useFileDrop(
                   console.log("[App] 已添加本地导入任务:", allPaths.length, "个路径");
                 }
 
-                // kgpg 导入后刷新"已安装源"
-                if (importedPluginCount > 0) {
-                  void pluginStore.loadPlugins();
-                }
 
                 if (localImportItems.length > 0 && importedPluginCount > 0) {
                   ElMessage.success(

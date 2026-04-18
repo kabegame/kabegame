@@ -108,7 +108,7 @@ export function parseAlbumBrowsePath(path: string): ParsedAlbumBrowsePath | null
   if (Number.isNaN(pageNum) || pageNum < 1) return null;
 
   if (segs.length === 3) {
-    return { albumId, filter: "all", sort: "time-asc", page: pageNum };
+    return { albumId, filter: "all", sort: "time-asc", page: pageNum } as const;
   }
   if (segs.length === 4) {
     const mid = segs[2]!;

@@ -186,10 +186,11 @@ impl AppPaths {
     }
 }
 
-/// 是否为开发模式（debug 构建）
+/// 是否使用开发数据目录（仓库本地 data/ 和 cache/）。
+/// 由 --data dev|prod 构建选项控制（kabegame_data cfg），未指定时回退到 debug_assertions。
 #[inline]
 pub fn is_dev() -> bool {
-    cfg!(debug_assertions)
+    cfg!(kabegame_data = "dev")
 }
 
 /// 尝试从当前可执行文件位置推断项目根目录

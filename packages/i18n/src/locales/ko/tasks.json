@@ -7,6 +7,7 @@
   "drawerClearAll": "모두 지우기 ({n})",
   "drawerDeleteTask": "작업 삭제",
   "drawerViewLog": "작업 로그 보기",
+  "drawerViewParams": "실행 매개변수 보기",
   "drawerViewImages": "작업 이미지 보기",
   "taskRunParamsTitle": "실행 매개변수",
   "openRunParams": "실행 매개변수",

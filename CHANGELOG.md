@@ -6,6 +6,39 @@
  
 **Changelog entries:** Write release notes in **English** (new sections and bullets from [3.4.5] onward).
 
+## [4.0.0]
+### Breaking Changes
+- **MCP URI schemes (hard switch)** — The single `kabegame://` scheme has been split into six dedicated schemes: `provider://`, `album://`, `task://`, `surf://`, `image://`, `plugin://`. There is **no backward-compatible alias**; any cached `kabegame://…` URI in MCP clients must be updated.
+  - `provider://<path>` supports `?without=children` or `?without=images` (at most one) on List / ListWithMeta modes to trim Dir / Image entries for narrower context windows.
+  - `album://` / `task://` / `surf://` without id now return the **full list** of entities; `{scheme}://{id}` returns a single entity.
+  - `plugin://` and `plugin://{id}` return **trimmed** Plugin JSON — `docResources`, `iconPngBase64`, and `descriptionTemplate` are stripped. Fetch them on demand via `plugin://{id}/icon`, `plugin://{id}/description_template`, `plugin://{id}/doc`, and `plugin://{id}/doc_resource/{key}`.
+  - MCP `instructions` rewritten to document the new schemes, `ProviderMeta` shapes, `ImageInfo` fields (note: serde key is `type`, not `mediaType`), and the "do not batch-fetch plugin meta" warning.
+- **Database migration overhaul** — The legacy inline migration code (hundreds of lines of `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ADD COLUMN` / `perform_complex_migrations` etc.) has been removed. The database schema is now defined in a single authoritative `migrations/init.rs`.
+  - **Upgrade path**: Only users on **v3.5.x** (database `user_version = 7`) are supported for a seamless upgrade. Users on older versions will see an error on launch and must either upgrade to v3.5.x first, or delete their user data directory and re-import local images.
+  - **Linux (deb)**: Running `apt purge kabegame` now also removes user data directories (`~/.local/share/com.kabegame`, `~/.config/com.kabegame`, `~/.cache/com.kabegame`). Use `apt remove` to uninstall without deleting data.
+- Future database migrations should be added as versioned files under `src-tauri/core/src/storage/migrations/` following the pattern described in `migrations/mod.rs`.
+
+
+### Added
+- **Android:** - request for battery use when start crawl task or start wallpaper rotation.
+- **MCP:** Now you can orginaze your images with outer AI. create albums、add images to an album、summerize your albums、write auto configs、even write a plugin for you.
+
+### Optimized
+- **Provider architecture (full refactor):**
+  - New `Provider` trait with **internalized merge strategy**: each provider implements `apply_query(current: ImageQuery) -> ImageQuery` and owns its own join / where / order contribution; the runtime only threads the composed query down the chain without inspecting it.
+  - `list_children(&self, composed) -> Vec<ChildEntry>` returns only structural children; image enumeration is a separate `list_images(&self, composed)` call so the runtime never conflates the two.
+  - `ResolvedNode { provider, composed }` replaces ad-hoc pair passing; LRU caching on resolved nodes in `ProviderRuntime` makes repeated navigation / listing cheap.
+  - **`SortProvider`** cleanly flips `ASC ↔ DESC` at `desc` boundaries via `current.to_desc()`, instead of being open-coded in each parent.
+  - New **`shared/`** providers consolidate previously duplicated logic: `plugin`, `task`, `surf`, `media_type`, `album`, and the date chain (`years` / `year` / `month` / `day`) with `prepend_order_by` so time sorts are placed before the stable `id ASC` tiebreaker.
+  - **Terminal pagination** is now the single `QueryPageProvider` (offset/limit lives only here); `page = None` = root (last page + lists `1..=N` child pages), `page = Some(n)` = leaf.
+  - VD routing shells (root / all / by_plugin / by_task / by_surf / by_type / by_time / albums / sub_album_gate) and Gallery routing shells (8 files) are rewritten against the new trait; `GalleryDateScopedLeafProvider` is gone.
+  - Consumer layer (`virtual_driver::semantics`, gallery `query`/`browse`, commands) migrated to the new trait; `browse_from_provider` performs **zero** secondary DB lookups — storage assembles `ImageInfo` in a single SQL with favorite/thumbnail/size joined.
+
+### Removed
+- **VD:** some useless folder. Just keep simple
+- **Legacy `Provider` trait** (pre-refactor) and all compatibility shims; the legacy `QueryPageProviderV2` was promoted to the canonical `QueryPageProvider`.
+- **`Storage::get_image_entries_by_query`** — superseded by `get_images_info_range_by_query`, which returns fully-populated `ImageInfo` so callers no longer need per-row follow-up queries.
+
 ## [3.5.0]
 ### Added
 - **Surf:** **`resources/surf_bootstrap.js`** — injected first (before toast / context menu / navbar); centralizes **`window.open`** and **`target="_blank"`** link handling for external sites; exposes **`window.__kabegame_surf_triggerDownload`** for the context menu.
@@ -36,6 +69,7 @@
 - **Gallery / album detail:** `useImagesChangeRefresh` no longer skips `images-change` with **`reason: add`** when the current page is full (`length >= pageSize`). That optimization broke **time-desc** views: new images should appear at the top and displace the oldest item on the first page; the last page still looked correct because it was often shorter than `pageSize`. **Fixed** in **`Gallery.vue`** and **`AlbumDetail.vue`**.
 - **Surf (desktop WebView):** New-window requests (`window.open` / `<a target="_blank">`) are handled in the **same** surf window via **`on_new_window`** (navigate + deny) instead of relying on a second window or problematic page-level Tauri IPC on HTTPS origins.
 - **Surf session cookies:** **`surf_get_cookies`** and **`save_surf_session_cookies`** merge **`cookies_for_url(root)`** with the full jar from **`cookies()`**, keeping entries whose cookie **domain** matches the surf record **host** (RFC6265-style domain matching), so login cookies align with what DevTools shows rather than a narrow `cookies_for_url` slice alone.
+- **Tasks / local import completion:** Fixed a frontend `tasks-change` merge guard that incorrectly dropped non-progress diffs when `progress` was unchanged (notably at `100%`), which could leave local-import tasks (single folder/archive/image) stuck visually at 100% without transitioning to `completed`.
 
 ### Changed
 - **Image format detection:** Replaced the hand-rolled `@kabegame/image-type` runtime probe with a custom **Modernizr** build (webp + avif only) bundled at `packages/core/src/vendor/modernizr.js` via `scripts/build-modernizr.mjs`. Results now live in a shared Pinia store **`useImageSupportStore`** (`@kabegame/core/stores/imageSupport`): `detect()` runs once after `app.mount`, reports formats to the backend via `set_supported_image_formats`, exposes reactive `webp` / `avif` / `formats` / `ready`, and provides `ensure()` / `redetect()`. Keeps a single delayed retry when the first pass returns all-false (early WebView decoder race). **HEIC detection dropped** — Web platforms lack a reliable detect path and only very recent Safari supports it.

@@ -30,6 +30,7 @@ dirs = "5.0"
 tokio = {workspace = true}
 url = "2"
 uuid = {workspace = true}
+tauri-plugin-android-battery-optimization = "0.1.4"
 
 # 桌面端启用 IPC 功能，移动端禁用
 [target.'cfg(not(target_os = "android"))'.dependencies]
@@ -37,6 +38,7 @@ kabegame-core = {workspace = true, default-features = false, features = ["ipc-se
 governor = "0.7"
 axum = "0.8"
 reqwest = { version = "0.11", features = ["stream", "native-tls"] }
+rmcp = { version = "1.4", features = ["server", "transport-streamable-http-server"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 

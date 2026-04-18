@@ -17,7 +17,7 @@ import { run } from "./utils.js";
 import { BasePlugin } from "./plugins/base-plugin.ts";
 import { Skip, SkipPlugin } from "./plugins/skip-plugin.js";
 import { ReleasePlugin } from "./plugins/release-plugin.js";
-import { AndroidPlugin } from "./plugins/android-plugin.js";
+import { DataPlugin } from "./plugins/data-plugin.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,7 +45,7 @@ export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
 interface BuildOptions {
   component?: string;
   mode?: string;
-  android?: boolean;
+  data?: string;
   verbose?: boolean;
   trace?: boolean;
   skip?: string;
@@ -59,7 +59,7 @@ interface BuildContext {
   cmd: Cmd;
   component?: Component;
   mode?: Mode;
-  isAndroid?: boolean;
+  data?: string;
   skip?: Skip;
 }
 
@@ -146,20 +146,20 @@ export class BuildSystem {
     // --component
     this.use(new ComponentPlugin());
 
-    // --mode
+    // --mode (standard | light | android)
     this.use(new ModePlugin());
 
     // --release
     this.use(new ReleasePlugin());
-
-    // --android（仅 main 的 dev/build）
-    this.use(new AndroidPlugin());
 
     // --trace
     this.use(new TracePlugin());
 
     // --skip
     this.use(new SkipPlugin());
+
+    // --data (dev | prod)
+    this.use(new DataPlugin());
   }
 
   commonBefore(): void {
@@ -179,7 +179,7 @@ export class BuildSystem {
     this.hooks.beforeBuild.call();
     const { features } = this.hooks.prepareCompileArgs.call();
     const cwd = this.context.component!.appDir;
-    if (this.context.isAndroid) {
+    if (this.context.mode!.isAndroid) {
       const args = ["android", "dev"]
         .concat(features.length ? ["-f", features.join(",")] : [])
         .concat(this.options.args?.length ? ["--", ...(this.options.args ?? [])] : []);
@@ -258,7 +258,7 @@ export class BuildSystem {
         }
       }
       if (!this.context.skip?.isCargo) {
-        if (this.context.isAndroid) {
+        if (this.context.mode!.isAndroid) {
           const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
           const args = ["android", "build"]
             .concat(features.length ? ["-f", features.join(",")] : [])

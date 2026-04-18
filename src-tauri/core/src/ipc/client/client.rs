@@ -469,18 +469,6 @@ impl IpcClient {
         Ok(plugin_id)
     }
 
-    /// 获取插件变量定义
-    pub async fn plugin_get_vars(&self, plugin_id: String) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::PluginGetVars { plugin_id })
-            .await
-    }
-
-    /// 获取浏览器插件列表
-    pub async fn plugin_get_browser_plugins(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::PluginGetBrowserPlugins)
-            .await
-    }
-
     /// 获取插件源列表
     pub async fn plugin_get_plugin_sources(&self) -> Result<serde_json::Value, String> {
         self.request_data(CliIpcRequest::PluginGetPluginSources)
@@ -528,14 +516,6 @@ impl IpcClient {
             .await
     }
 
-    pub async fn plugin_install_browser_plugin(
-        &self,
-        plugin_id: String,
-    ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::PluginInstallBrowserPlugin { plugin_id })
-            .await
-    }
-
     pub async fn plugin_get_store_plugins(
         &self,
         source_id: Option<String>,
@@ -550,24 +530,6 @@ impl IpcClient {
         .await
     }
 
-    pub async fn plugin_get_detail_for_ui(
-        &self,
-        plugin_id: String,
-        download_url: Option<String>,
-        sha256: Option<String>,
-        size_bytes: Option<u64>,
-    ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::PluginGetDetailForUi {
-            plugin_id,
-            download_url,
-            sha256,
-            size_bytes,
-            source_id: None,
-            version: None,
-        })
-        .await
-    }
-
     pub async fn plugin_preview_import(
         &self,
         zip_path: String,
@@ -578,23 +540,14 @@ impl IpcClient {
 
     pub async fn plugin_preview_store_install(
         &self,
-        download_url: String,
-        sha256: Option<String>,
-        size_bytes: Option<u64>,
+        source_id: String,
+        plugin_id: String,
     ) -> Result<serde_json::Value, String> {
         self.request_data(CliIpcRequest::PluginPreviewStoreInstall {
-            download_url,
-            sha256,
-            size_bytes,
-            source_id: None,
-            version: None,
+            source_id,
+            plugin_id,
         })
         .await
-    }
-
-    pub async fn plugin_get_icon(&self, plugin_id: String) -> Result<Option<Vec<u8>>, String> {
-        self.request_bytes(CliIpcRequest::PluginGetIcon { plugin_id })
-            .await
     }
 
     pub async fn plugin_get_remote_icon_v2(
@@ -613,18 +566,12 @@ impl IpcClient {
         &self,
         plugin_id: String,
         image_path: String,
-        download_url: Option<String>,
-        sha256: Option<String>,
-        size_bytes: Option<u64>,
+        source_id: Option<String>,
     ) -> Result<Vec<u8>, String> {
         self.request_bytes(CliIpcRequest::PluginGetImageForDetail {
             plugin_id,
             image_path,
-            download_url,
-            sha256,
-            size_bytes,
-            source_id: None,
-            version: None,
+            source_id,
         })
         .await?
         .ok_or_else(|| "No image data in response".to_string())
@@ -841,7 +788,7 @@ impl IpcClient {
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     pub async fn settings_get_album_drive_enabled(&self) -> Result<bool, String> {
         let v = self
             .request_data(CliIpcRequest::SettingsGetAlbumDriveEnabled)
@@ -849,7 +796,7 @@ impl IpcClient {
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     pub async fn settings_get_album_drive_mount_point(&self) -> Result<String, String> {
         let v = self
             .request_data(CliIpcRequest::SettingsGetAlbumDriveMountPoint)
@@ -900,9 +847,9 @@ impl IpcClient {
         &self,
         include_subalbums: bool,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetWallpaperRotationIncludeSubalbums {
-            include_subalbums,
-        })
+        self.request_ok(
+            CliIpcRequest::SettingsSetWallpaperRotationIncludeSubalbums { include_subalbums },
+        )
         .await
     }
 
@@ -924,13 +871,13 @@ impl IpcClient {
             .await
     }
 
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     pub async fn settings_set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
         self.request_ok(CliIpcRequest::SettingsSetAlbumDriveEnabled { enabled })
             .await
     }
 
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     pub async fn settings_set_album_drive_mount_point(
         &self,
         mount_point: String,
@@ -1077,7 +1024,7 @@ impl IpcClient {
     // ==================== Virtual Driver ====================
 
     /// 挂载虚拟盘
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     pub async fn vd_mount(&self) -> Result<(), String> {
         let resp = self.request_raw(CliIpcRequest::VdMount).await?;
         if !resp.ok {
@@ -1087,7 +1034,7 @@ impl IpcClient {
     }
 
     /// 卸载虚拟盘
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     pub async fn vd_unmount(&self) -> Result<(), String> {
         let resp = self.request_raw(CliIpcRequest::VdUnmount).await?;
         if !resp.ok {
@@ -1097,7 +1044,7 @@ impl IpcClient {
     }
 
     /// 获取虚拟盘状态
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     pub async fn vd_status(&self) -> Result<(bool, Option<String>), String> {
         let resp = self.request_raw(CliIpcRequest::VdStatus).await?;
         if !resp.ok {

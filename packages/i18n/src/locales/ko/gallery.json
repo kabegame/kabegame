@@ -89,6 +89,7 @@
   "jumpToPage": "페이지로 이동",
   "byTimeAsc": "시간순 (오름차순)",
   "byTimeDesc": "시간순 (내림차순)",
+  "byAlbumDefaultSort": "기본 정렬",
   "byAlbumJoinAsc": "추가 순서 (오름차순)",
   "byAlbumJoinDesc": "추가 순서 (내림차순)",
   "byWallpaperSetAsc": "배경화면 설정 순 (오래된 순)",

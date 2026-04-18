@@ -7,6 +7,7 @@
   "drawerClearAll": "Clear all ({n})",
   "drawerDeleteTask": "Delete task",
   "drawerViewLog": "View task log",
+  "drawerViewParams": "View run parameters",
   "drawerViewImages": "View task images",
   "taskRunParamsTitle": "Run parameters",
   "openRunParams": "Run parameters",

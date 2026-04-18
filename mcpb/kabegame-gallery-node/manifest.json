@@ -1,0 +1,87 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/dist/mcpb-manifest.schema.json",
+  "manifest_version": "0.3",
+  "name": "kabegame-gallery-local",
+  "display_name": "Kabegame Gallery Local MCP",
+  "version": "1.0.0",
+  "description": "Local MCP bundle that exposes Kabegame gallery read and album ordering operations.",
+  "long_description": "This MCP Bundle connects to the local Kabegame MCP HTTP endpoint and exposes defensive, validated tools for gallery browsing, image metadata retrieval, and album image reordering. It is designed for local use with strict endpoint and timeout controls.",
+  "author": {
+    "name": "Kabegame Team"
+  },
+  "documentation": "https://github.com/modelcontextprotocol/mcpb/blob/main/MANIFEST.md",
+  "support": "https://github.com/dumtruckman/kabegame/issues",
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/index.js"
+      ],
+      "env": {
+        "KABEGAME_MCP_ENDPOINT": "${user_config.kabegame_mcp_endpoint}",
+        "KABEGAME_MCP_TIMEOUT_MS": "${user_config.request_timeout_ms}",
+        "KABEGAME_MCP_DEBUG": "${user_config.debug_logging}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "read_gallery_provider",
+      "description": "Read a Kabegame provider path and return gallery entries for one page."
+    },
+    {
+      "name": "read_image_metadata",
+      "description": "Read metadata for a specific image ID from Kabegame local storage."
+    },
+    {
+      "name": "set_album_images_order",
+      "description": "Set manual order for up to 100 images in one album operation."
+    }
+  ],
+  "keywords": [
+    "kabegame",
+    "wallpaper",
+    "gallery",
+    "mcp",
+    "local"
+  ],
+  "license": "MIT",
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
+  "user_config": {
+    "kabegame_mcp_endpoint": {
+      "type": "string",
+      "title": "Kabegame MCP endpoint",
+      "description": "Local Kabegame MCP HTTP endpoint URL.",
+      "default": "http://127.0.0.1:7490/mcp",
+      "required": true
+    },
+    "request_timeout_ms": {
+      "type": "number",
+      "title": "Request timeout (ms)",
+      "description": "Max timeout for each upstream MCP HTTP request.",
+      "default": 12000,
+      "min": 1000,
+      "max": 60000,
+      "required": true
+    },
+    "debug_logging": {
+      "type": "boolean",
+      "title": "Debug logging",
+      "description": "Enable verbose debug logs on stderr.",
+      "default": false,
+      "required": false
+    }
+  },
+  "privacy_policies": []
+}

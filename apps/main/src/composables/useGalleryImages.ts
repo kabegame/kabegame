@@ -1,34 +1,24 @@
-import { nextTick, ref, shallowRef, unref, type Ref } from "vue";
+import { nextTick, ref, shallowRef, type Ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { ImageInfo } from "@kabegame/core/types/image";
 
-type AlbumBrowseInfo = {
-  id: string;
-  name: string;
-  imageCount: number;
-  previewImages: ImageInfo[];
-};
-
 type GalleryBrowseEntry =
   | { kind: "dir"; name: string }
-  | { kind: "image"; image: ImageInfo }
-  | { kind: "album"; album: AlbumBrowseInfo };
+  | { kind: "image"; image: ImageInfo };
 
 type GalleryBrowseResult = {
-  total: number;
-  baseOffset: number;
-  rangeTotal: number;
   entries: GalleryBrowseEntry[];
+  total: number | null;
+  meta?: { kind: string; data: unknown } | null;
+  note?: { title: string; content: string } | null;
 };
 
 /**
  * 画廊图片列表管理（基于路径的查询）。
- * @param pageSize SimplePage 每页条数（与设置一致）
  * @param onBeforeFetch 每次 `browse_gallery_provider` 拉取前调用（如清空 per-page metadata 缓存）
  */
 export function useGalleryImages(
   galleryContainerRef: Ref<HTMLElement | null>,
-  pageSize: Ref<number>,
   onBeforeFetch?: () => void,
 ) {
   // 本地图片列表：由视图直接消费，避免引入额外全局同步开销
@@ -54,30 +44,28 @@ export function useGalleryImages(
 
   /**
    * 根据路径加载图片列表
-   * @returns { total: number, baseOffset: number } - 直接返回图片数据
+   * @returns { total: number } - 图片总数
    */
   const fetchByPath = async (
     path: string,
     opts?: { loadKey?: string },
   ) => {
     onBeforeFetch?.();
+    const p = path.endsWith("/") || path.endsWith("/*") ? path : `${path}/`;
     const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
-      path,
-      pageSize: unref(pageSize),
+      path: p,
     });
     totalImages.value = res.total ?? 0;
 
-    // 直接处理图片条目（新路径格式总是返回图片）
     const images = (res.entries || [])
       .filter((e) => e.kind === "image")
       .map((e) => (e as any).image as ImageInfo);
 
     await setLeafAndResetDisplay(images);
     loadedKey.value = opts?.loadKey ?? path;
- 
+
     return {
       total: totalImages.value,
-      baseOffset: res.baseOffset ?? 0,
     };
   };
 

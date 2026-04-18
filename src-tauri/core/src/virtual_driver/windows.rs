@@ -32,7 +32,6 @@ use super::driver_service::{join_mount_subdir, notify_explorer_dir_changed_path}
 use super::fs::KabegameFs;
 use super::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
-use crate::providers::descriptor::ProviderGroupKind;
 use crate::settings::Settings;
 use crate::storage::Storage;
 use dokan::{
@@ -84,19 +83,9 @@ fn file_index_from_path(path: &[String]) -> u64 {
     hasher.finish()
 }
 
-/// 从全局设置获取挂载点（同步方式，在同步上下文中调用异步方法）
+/// 从全局设置获取挂载点
 fn get_mount_point() -> String {
-    const DEFAULT_MOUNT_POINT: &str = "K:\\";
-    tokio::runtime::Handle::try_current()
-        .map(|handle| {
-            handle.block_on(async {
-                Settings::global()
-                    .get_album_drive_mount_point()
-                    .await
-                    .unwrap_or_else(|_| DEFAULT_MOUNT_POINT.to_string())
-            })
-        })
-        .unwrap_or_else(|_| DEFAULT_MOUNT_POINT.to_string())
+    Settings::global().get_album_drive_mount_point()
 }
 
 /// 文件系统项（Dokan handler 内部使用）
@@ -170,26 +159,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                     notify_explorer_dir_changed_path(&mount_point);
                 }
             }
-            FsItem::File { path, .. } => {
-                // 文件删除：默认只读；仅在画册分组下允许删除=从画册移除图片
-                if path.len() < 3 {
-                    return;
-                }
-                let rt = crate::providers::ProviderRuntime::global();
-                let sem = VfsSemantics::new(&*rt);
-                if !sem.path_starts_with_group(path, ProviderGroupKind::Album) {
-                    return;
-                }
-                let file_name = path.last().map(|s| s.as_str()).unwrap_or("");
-                let parent_path = &path[..path.len().saturating_sub(1)];
-                if sem
-                    .commit_delete_child_at(parent_path, file_name)
-                    .ok()
-                    .unwrap_or(false)
-                {
-                    let mount_point = get_mount_point();
-                    notify_explorer_dir_changed_path(&mount_point);
-                }
+            FsItem::File { .. } => {
+                // VD 只读——文件删除不执行任何操作
             }
         }
     }
@@ -315,7 +286,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
 
                 // 任务目录：修改时间 = end_time
                 if segments.len() == 2
-                    && sem.resolved_segment_is_group(segments[0], ProviderGroupKind::Task)
+                    && sem.is_vd_segment_canonical(segments[0], "task")
                 {
                     let name = segments[1];
                     let task_id = name
@@ -472,24 +443,9 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         &'h self,
         _file_name: &U16CStr,
         _info: &OperationInfo<'c, 'h, Self>,
-        context: &'c Self::Context,
+        _context: &'c Self::Context,
     ) -> OperationResult<()> {
-        let FsItem::File { path, .. } = context else {
-            return Err(STATUS_ACCESS_DENIED);
-        };
-
-        // 默认只读；仅允许在画册分组下“删除文件”=从画册移除图片（实际删除在 cleanup(delete_on_close) 中执行）。
-        if path.len() >= 3 {
-            let rt = crate::providers::ProviderRuntime::global();
-            let sem = VfsSemantics::new(&*rt);
-            if sem.path_starts_with_group(path, ProviderGroupKind::Album) {
-                let parent_path = &path[..path.len().saturating_sub(1)];
-                let file_name = path.last().map(|s| s.as_str()).unwrap_or("");
-                if let Ok(true) = sem.can_delete_child_at(parent_path, file_name) {
-                    return Ok(());
-                }
-            }
-        }
+        // VD 只读
         Err(STATUS_ACCESS_DENIED)
     }
 
@@ -497,60 +453,22 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         &'h self,
         _file_name: &U16CStr,
         _info: &OperationInfo<'c, 'h, Self>,
-        context: &'c Self::Context,
+        _context: &'c Self::Context,
     ) -> OperationResult<()> {
-        let FsItem::Directory { path } = context else {
-            return Err(STATUS_ACCESS_DENIED);
-        };
-
-        if path.is_empty() {
-            return Err(STATUS_ACCESS_DENIED);
-        }
-        let parent_path = &path[..path.len().saturating_sub(1)];
-        let child_name = path.last().map(|s| s.as_str()).unwrap_or("");
-        let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(&*rt);
-        sem.can_delete_child_at(parent_path, child_name)
-            .map(|_| ())
-            .map_err(|e| Self::map_vfs_error(e))
+        // VD 只读
+        Err(STATUS_ACCESS_DENIED)
     }
 
     fn move_file(
         &'h self,
         _file_name: &U16CStr,
-        new_file_name: &U16CStr,
+        _new_file_name: &U16CStr,
         _replace_if_existing: bool,
         _info: &OperationInfo<'c, 'h, Self>,
-        context: &'c Self::Context,
+        _context: &'c Self::Context,
     ) -> OperationResult<()> {
-        // 只允许重命名画册
-        let FsItem::Directory { path } = context else {
-            return Err(STATUS_ACCESS_DENIED);
-        };
-
-        let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(&*rt);
-        if path.len() != 2 || !sem.resolved_segment_is_group(&path[0], ProviderGroupKind::Album) {
-            return Err(STATUS_ACCESS_DENIED);
-        }
-
-        let new_comps = parse_segments(new_file_name);
-        if new_comps.len() != 2 {
-            return Err(STATUS_ACCESS_DENIED);
-        }
-
-        let new_name = new_comps[1].trim();
-        if new_name.is_empty() {
-            return Err(STATUS_INVALID_PARAMETER);
-        }
-
-        // 查找 Provider 并执行重命名
-        sem.rename_dir(path, new_name)
-            .map_err(Self::map_vfs_error)?;
-        // 事件由 storage rename_album 底层发出 AlbumChanged，此处仅刷新 Explorer
-        let mount_point = get_mount_point();
-        notify_explorer_dir_changed_path(&mount_point);
-        Ok(())
+        // VD 只读
+        Err(STATUS_ACCESS_DENIED)
     }
 
     fn get_disk_free_space(

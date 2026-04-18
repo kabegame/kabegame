@@ -10,7 +10,7 @@
                 <TaskDetailPageHeader :task-name="taskName" :task-subtitle="taskSubtitle"
                     :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
                     @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum" @help="openHelpDrawer"
-                    @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @back="goBack" />
+                    @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @back="goBack" />
 
                     <div class="task-detail-page-size-toolbar">
                         <TaskFilterControl
@@ -34,7 +34,7 @@
             <TaskDetailPageHeader :task-name="taskName" :task-subtitle="taskSubtitle"
                 :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
                 @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum" @help="openHelpDrawer"
-                @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @back="goBack" />
+                @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @back="goBack" />
 
             <div class="task-detail-page-size-toolbar">
                 <TaskFilterControl
@@ -105,6 +105,7 @@
             :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
 
         <TaskLogDialog ref="taskLogDialogRef" />
+        <TaskParamsDialog v-model="showTaskParamsDialog" :task="taskParamsTask" />
     </div>
 </template>
 
@@ -131,6 +132,8 @@ import { useUiStore } from "@kabegame/core/stores/ui";
 import { storeToRefs } from "pinia";
 import TaskDetailPageHeader from "@/components/header/TaskDetailPageHeader.vue";
 import TaskLogDialog from "@kabegame/core/components/task/TaskLogDialog.vue";
+import TaskParamsDialog from "@kabegame/core/components/task/TaskParamsDialog.vue";
+import type { TaskRunParamsTask } from "@kabegame/core/components/task/TaskRunParamsContent.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import type { Component } from "vue";
@@ -192,6 +195,13 @@ const handleViewTaskLog = () => {
     const id = String(taskId.value || "").trim();
     if (!id) return;
     taskLogDialogRef.value?.openTaskLog(id);
+};
+
+const showTaskParamsDialog = ref(false);
+const taskParamsTask = computed<TaskRunParamsTask | null>(() => taskFromStore.value ?? null);
+const handleViewTaskParams = () => {
+    if (!taskId.value) return;
+    showTaskParamsDialog.value = true;
 };
 
 const taskId = ref<string>("");
@@ -414,12 +424,12 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
     const showSkeleton = options?.showSkeleton ?? true;
     if (showSkeleton) loading.value = true;
     try {
-        // 直接加载当前路径（新路径格式总是包含页码）
-        const pathToLoad = currentPath.value || localProviderRootPath.value || `task/${taskId.value}/1`;
+        const rawPath = currentPath.value || localProviderRootPath.value || `task/${taskId.value}/1`;
+        const pathToLoad = rawPath.endsWith("/") ? rawPath : `${rawPath}/`;
         clearImageMetadataCache();
-        const res = await invoke<{ total?: number; baseOffset?: number; entries?: Array<{ kind: string; image?: ImageInfo }> }>(
+        const res = await invoke<{ total?: number; entries?: Array<{ kind: string; image?: ImageInfo }> }>(
             "browse_gallery_provider",
-            { path: pathToLoad, pageSize: pageSize.value }
+            { path: pathToLoad }
         );
         totalImagesCount.value = res?.total ?? 0;
         const imgs: ImageInfo[] = (res?.entries ?? [])

@@ -362,8 +362,6 @@ async fn wait_for_task_slot(running: &Arc<AtomicUsize>, notify: &Arc<Notify>) {
     loop {
         let max = Settings::global()
             .get_max_concurrent_tasks()
-            .await
-            .unwrap_or(2)
             .clamp(1, 10) as usize;
         let r = running.load(Ordering::Acquire);
         if r < max {
@@ -562,7 +560,7 @@ async fn run_task(
     // 两种运行模式：
     // 1) 已安装插件：通过 plugin_id 查找并运行
     // 2) 临时插件文件：通过 plugin_file_path 读取 manifest/config 并运行（不要求安装）
-    let (plugin, plugin_file_path) = plugin_manager
+    let (plugin, _plugin_file_path) = plugin_manager
         .resolve_plugin_for_task_request(&req.plugin_id, req.plugin_file_path.as_deref())
         .await?;
     if let Some(ref min_ver) = plugin.min_app_version {
@@ -572,32 +570,20 @@ async fn run_task(
     let images_dir = if let Some(ref dir) = req.output_dir {
         PathBuf::from(dir)
     } else {
-        match Settings::global().get_default_download_dir().await {
-            Ok(Some(dir)) => PathBuf::from(dir),
-            _ => storage.get_images_dir(),
+        match Settings::global().get_default_download_dir() {
+            Some(dir) => PathBuf::from(dir),
+            None => storage.get_images_dir(),
         }
     };
 
-    let plugin_file = if let Some(path) = plugin_file_path.as_ref() {
-        path.clone()
-    } else {
-        crate::plugin::find_plugin_kgpg_path(&plugin.id)
-            .ok_or_else(|| format!("插件 {} 未找到", plugin.id))?
-    };
-    let rhai_script = plugin_manager.read_plugin_script(&plugin_file)?;
+    // 从 Plugin 结构读取脚本和变量定义（已在 parse_kgpg 阶段加载到内存）
+    let rhai_script = plugin.rhai_script.clone();
     #[cfg(not(target_os = "android"))]
-    let js_script = plugin_manager.read_plugin_js_script(&plugin_file)?;
+    let js_script = plugin.js_script.clone();
 
     // merged_config：默认值 -> 用户覆盖 -> checkbox 规范化（与 crawl_images 保持一致）
     let user_cfg = req.user_config.clone().unwrap_or_default();
-    let var_defs = if let Some(path) = plugin_file_path.as_ref() {
-        plugin_manager.get_plugin_vars_from_file(path)?
-    } else {
-        plugin_manager
-            .get_plugin_vars(&plugin.id)
-            .await?
-            .unwrap_or_default()
-    };
+    let var_defs = plugin.var_defs.clone();
     let merged_config = build_effective_user_config_from_var_defs(&var_defs, user_cfg);
 
     #[cfg(not(target_os = "android"))]
@@ -687,22 +673,22 @@ pub struct ImageData {
 }
 
 /// 读取插件变量定义，合并默认值与用户配置，并对部分类型进行规范化（尤其是 checkbox）。
-fn build_effective_user_config(
-    plugin_id: &str,
-    user_config: Option<HashMap<String, serde_json::Value>>,
-) -> Result<HashMap<String, serde_json::Value>, String> {
-    let plugin_manager = crate::plugin::PluginManager::global();
-    let user_cfg = user_config.unwrap_or_default();
+// fn build_effective_user_config(
+//     plugin_id: &str,
+//     user_config: Option<HashMap<String, serde_json::Value>>,
+// ) -> Result<HashMap<String, serde_json::Value>, String> {
+//     let plugin_manager = crate::plugin::PluginManager::global();
+//     let user_cfg = user_config.unwrap_or_default();
 
-    // 读取插件变量定义（config.json 的 var）
-    let var_defs: Vec<VarDefinition> = Handle::current().block_on(plugin_manager
-        .get_plugin_vars(plugin_id))?
-        .unwrap_or_default();
+//     // 读取插件变量定义（config.json 的 var）
+//     let var_defs: Vec<VarDefinition> = Handle::current().block_on(plugin_manager
+//         .get_plugin_vars(plugin_id))?
+//         .unwrap_or_default();
 
-    Ok(build_effective_user_config_from_var_defs(
-        &var_defs, user_cfg,
-    ))
-}
+//     Ok(build_effective_user_config_from_var_defs(
+//         &var_defs, user_cfg,
+//     ))
+// }
 
 /// 将变量定义（var_defs）的默认值与用户配置合并，并对部分类型做规范化。
 ///
@@ -833,30 +819,4 @@ fn normalize_var_value(def: &VarDefinition, value: Option<serde_json::Value>) ->
         },
         _ => value.unwrap_or(serde_json::Value::Null),
     }
-}
-
-/// 查找插件文件
-pub fn find_plugin_file(plugins_dir: &Path, plugin_id: &str) -> Result<PathBuf, String> {
-    let entries = fs::read_dir(plugins_dir)
-        .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-        let path = entry.path();
-
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-            // 插件 ID = 插件文件名（不含扩展名）
-            let file_name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-
-            if file_name == plugin_id {
-                return Ok(path);
-            }
-        }
-    }
-
-    Err(format!("Plugin file not found for {}", plugin_id))
 }

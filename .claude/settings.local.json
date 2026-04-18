@@ -3,7 +3,13 @@
     "allow": [
       "Read(//c/Users/Lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/**)",
       "Bash(xargs grep:*)",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Read(//d/Codes/tauri-plugin-android-battery-optimization/android/src/main/java/**)",
+      "Read(//d/Codes/tauri-plugin-android-battery-optimization/guest-js/**)",
+      "Read(//d/Codes/tauri-plugin-android-battery-optimization/**)",
+      "Read(//d/Codes/tauri-plugin-desktop-underlay/**)",
+      "Bash(xargs ls *)",
+      "Bash(bun check *)"
     ]
   }
 }

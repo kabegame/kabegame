@@ -9,6 +9,8 @@ mod content_io_provider;
 mod http_server;
 #[cfg(target_os = "linux")]
 mod linux_desktop;
+#[cfg(not(target_os = "android"))]
+mod mcp_server;
 pub mod startup;
 #[cfg(not(mobile))]
 mod tray;
@@ -17,7 +19,7 @@ mod wallpaper;
 
 // IPC and daemon related modules
 mod ipc;
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 mod vd_listener;
 
 use commands::*;
@@ -43,13 +45,13 @@ use kabegame_core::storage::organize::OrganizeService;
 use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
     plugin::PluginManager,
-    providers::{ProviderCacheConfig, ProviderRuntime},
+    providers::{ProviderCacheConfig, ProviderRuntime, VdNewUnifiedRoot},
     scheduler::Scheduler,
     settings::Settings,
     storage::Storage,
 };
 
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 
 /// 统一初始化全局状态（安卓与桌面共用主流程，桌面端多出 DedupeService/VD 等用 cfg 收束）
@@ -62,9 +64,7 @@ fn init_globals() -> Result<(), String> {
 
     // 同步后端 i18n 语言（从配置恢复）
     {
-        let lang = tauri::async_runtime::block_on(Settings::global().get_language())
-            .ok()
-            .flatten();
+        let lang = Settings::global().get_language();
         kabegame_i18n::sync_locale(lang.as_deref());
     }
 
@@ -124,15 +124,10 @@ fn init_globals() -> Result<(), String> {
     println!("  ✓ Auto scheduler initialized");
 
     {
-        let mut cfg = ProviderCacheConfig::default();
-        if let Ok(dir) = std::env::var("KABEGAME_PROVIDER_DB_DIR") {
-            cfg.db_dir = std::path::PathBuf::from(dir);
-        }
-        if let Err(e) = ProviderRuntime::init_global(cfg.clone()) {
-            eprintln!("[providers] Init failed: {}", e);
-            if let Err(e2) = ProviderRuntime::init_global(ProviderCacheConfig::default()) {
-                return Err(format!("ProviderRuntime init failed: {}", e2));
-            }
+        let cfg = ProviderCacheConfig::default();
+        let root = std::sync::Arc::new(VdNewUnifiedRoot);
+        if let Err(e) = ProviderRuntime::init_global(root, cfg) {
+            return Err(format!("ProviderRuntime init failed: {}", e));
         }
     }
     println!("  ✓ ProviderRuntime initialized");
@@ -161,14 +156,8 @@ fn init_globals() -> Result<(), String> {
             let vd_service_for_mount = virtual_drive_service.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                let enabled = Settings::global()
-                    .get_album_drive_enabled()
-                    .await
-                    .unwrap_or(false);
-                let mount_point = Settings::global()
-                    .get_album_drive_mount_point()
-                    .await
-                    .unwrap_or_default();
+                let enabled = Settings::global().get_album_drive_enabled();
+                let mount_point = Settings::global().get_album_drive_mount_point();
                 if enabled && !mount_point.is_empty() {
                     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
                     let mount_result = tokio::task::spawn_blocking({
@@ -213,6 +202,7 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_compress::init());
         builder = builder.plugin(tauri_plugin_wallpaper::init());
         builder = builder.plugin(tauri_plugin_task_notification::init());
+        builder = builder.plugin(tauri_plugin_android_battery_optimization::init());
     }
 
     #[cfg(not(target_os = "android"))]
@@ -277,25 +267,9 @@ pub fn run() {
                             }
                         });
                         tauri::async_runtime::spawn(async {
-                            if let Err(e) =
-                                kabegame_core::storage::Storage::global().fill_missing_dimensions()
-                            {
-                                eprintln!("Failed to fill missing image dimensions: {}", e);
+                            if let Err(e) = mcp_server::start_mcp_server().await {
+                                eprintln!("Failed to start MCP server: {}", e);
                             }
-                            if let Err(e) = kabegame_core::storage::Storage::global()
-                                .fill_missing_sizes()
-                                .await
-                            {
-                                eprintln!("Failed to fill missing image sizes: {}", e);
-                            }
-                            let _ = tauri::async_runtime::spawn_blocking(move || {
-                                if let Err(e) = kabegame_core::storage::Storage::global()
-                                    .backfill_display_names()
-                                {
-                                    eprintln!("Failed to backfill display names: {}", e);
-                                }
-                            })
-                            .await;
                         });
                         startup::start_ipc_server(app.app_handle().clone());
                     }
@@ -330,14 +304,6 @@ pub fn run() {
                         {
                             eprintln!("[VideoCompress] Failed to set android compress provider: {e}");
                         }
-                        tauri::async_runtime::spawn(async {
-                            if let Err(e) = kabegame_core::storage::Storage::global()
-                                .fill_missing_sizes()
-                                .await
-                            {
-                                eprintln!("Failed to fill missing image sizes: {}", e);
-                            }
-                        });
                     }
 
                     // 初始化插件缓存
@@ -386,6 +352,7 @@ pub fn run() {
             get_album_media_type_counts,
             get_gallery_time_filter_data,
             browse_gallery_provider,
+            query_provider,
             clear_provider_cache,
             toggle_image_favorite,
             update_image_dimensions,
@@ -446,10 +413,10 @@ pub fn run() {
             dismiss_missed_configs,
             // --- Plugins ---
             get_plugins,
+            refresh_plugins,
             get_plugin_detail,
             delete_plugin,
-            get_browser_plugins,
-            install_browser_plugin,
+            install_from_store,
             get_plugin_sources,
             add_plugin_source,
             update_plugin_source,
@@ -457,19 +424,11 @@ pub fn run() {
             validate_plugin_source,
             get_store_plugins,
             preview_import_plugin,
-            preview_import_plugin_with_icon,
             preview_store_install,
             import_plugin_from_zip,
-            get_plugin_image,
             get_plugin_image_for_detail,
-            get_plugin_icon,
-            get_plugin_template,
             get_remote_plugin_icon,
-            get_plugin_doc_from_zip,
-            get_plugin_doc_by_id,
             get_plugin_image_from_zip,
-            get_plugin_vars,
-            get_plugin_recommended_configs,
             get_plugin_default_config,
             ensure_plugin_default_config,
             save_plugin_default_config,
@@ -556,13 +515,13 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             export_video_to_we_project,
             // --- Virtual Drive ---
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             get_album_drive_enabled,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             set_album_drive_enabled,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             get_album_drive_mount_point,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             set_album_drive_mount_point,
             // --- Window ---
             hide_main_window,

@@ -209,6 +209,52 @@ impl Storage {
         }
     }
 
+    /// 批量查询多个畅游记录。返回 id → SurfRecord 映射；`last_image` 字段为 None（批量场景不需要）。
+    pub fn get_surf_records_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<std::collections::HashMap<String, SurfRecord>, String> {
+        use std::collections::HashMap;
+        let mut out: HashMap<String, SurfRecord> = HashMap::new();
+        if ids.is_empty() {
+            return Ok(out);
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.download_count, sr.deleted_count, sr.created_at,
+                    (SELECT COUNT(*) FROM images WHERE surf_record_id = sr.id) AS image_count
+             FROM surf_records sr WHERE sr.id IN ({})",
+            placeholders
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {}", e))?;
+        let params_iter: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt
+            .query_map(params_iter.as_slice(), |r| {
+                Ok(SurfRecord {
+                    id: r.get::<_, String>(0)?,
+                    host: r.get::<_, String>(1)?,
+                    name: r.get::<_, String>(2)?,
+                    root_url: r.get::<_, String>(3)?,
+                    cookie: r.get::<_, String>(4)?,
+                    icon: r.get::<_, Option<Vec<u8>>>(5)?,
+                    last_visit_at: r.get::<_, i64>(6)? as u64,
+                    download_count: r.get::<_, i64>(7)?,
+                    deleted_count: r.get::<_, i64>(8)?,
+                    created_at: r.get::<_, i64>(9)? as u64,
+                    image_count: r.get::<_, i64>(10)?,
+                    last_image: None,
+                })
+            })
+            .map_err(|e| format!("query: {}", e))?;
+        for r in rows {
+            let rec = r.map_err(|e| format!("row: {}", e))?;
+            out.insert(rec.id.clone(), rec);
+        }
+        Ok(out)
+    }
+
     pub fn list_surf_records(
         &self,
         offset: usize,
@@ -289,6 +335,10 @@ impl Storage {
             offset,
             limit,
         })
+    }
+
+    pub fn list_all_surf_records(&self) -> Result<Vec<SurfRecord>, String> {
+        Ok(self.list_surf_records(0, usize::MAX)?.records)
     }
 
     pub fn get_surf_records_with_images(&self) -> Result<Vec<(String, String)>, String> {

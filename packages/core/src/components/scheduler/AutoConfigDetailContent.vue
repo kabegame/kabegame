@@ -1,30 +1,17 @@
 <template>
   <div class="auto-config-detail">
-    <el-descriptions
-      :title="t('autoConfig.detailSectionMeta')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block"
-    >
+    <el-descriptions :title="t('autoConfig.detailSectionMeta')" :column="1" border size="small"
+      class="params-desc-block">
       <el-descriptions-item :label="t('autoConfig.detailColConfigId')" :span="2">
         <span class="break-all mono">{{ config.id }}</span>
       </el-descriptions-item>
       <el-descriptions-item :label="t('common.name')" :span="2">
         <span class="break-all">{{ resolveText(config.name) }}</span>
       </el-descriptions-item>
-      <el-descriptions-item
-        v-if="config.description"
-        :label="t('common.description')"
-        :span="2"
-      >
+      <el-descriptions-item v-if="config.description" :label="t('common.description')" :span="2">
         <span class="break-all">{{ config.description }}</span>
       </el-descriptions-item>
-      <el-descriptions-item
-        v-if="showCreatedAtRow"
-        :label="t('autoConfig.detailColCreatedAt')"
-        :span="2"
-      >
+      <el-descriptions-item v-if="showCreatedAtRow" :label="t('autoConfig.detailColCreatedAt')" :span="2">
         {{ formatTs(config.createdAt) }}
       </el-descriptions-item>
       <el-descriptions-item v-if="config.url" :label="t('autoConfig.detailColUrl')" :span="2">
@@ -32,144 +19,83 @@
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions
-      :title="t('tasks.taskRunParamsSectionPlugin')"
-      :column="2"
-      border
-      size="small"
-      class="params-desc-block"
-    >
+    <el-descriptions :title="t('tasks.taskRunParamsSectionPlugin')" :column="2" border size="small"
+      class="params-desc-block">
       <el-descriptions-item :label="t('tasks.taskRunParamsColSource')" :span="2">
         <div class="plugin-source-cell">
           <div class="plugin-icon-box" aria-hidden="true">
             <el-image v-if="pluginIconDisplayUrl" :src="pluginIconDisplayUrl" fit="contain" class="plugin-icon-img" />
-            <el-icon v-else class="plugin-icon-fallback"><Grid /></el-icon>
+            <el-icon v-else class="plugin-icon-fallback">
+              <Grid />
+            </el-icon>
           </div>
           <span class="plugin-name-text">{{ getPluginName(config.pluginId) }}</span>
         </div>
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions
-      v-if="config.outputDir"
-      :title="t('tasks.taskRunParamsSectionOutput')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block"
-    >
+    <el-descriptions v-if="config.outputDir" :title="t('tasks.taskRunParamsSectionOutput')" :column="1" border
+      size="small" class="params-desc-block">
       <el-descriptions-item :label="t('tasks.taskRunParamsColOutputDir')" :span="2">
         <span class="break-all">{{ config.outputDir }}</span>
       </el-descriptions-item>
     </el-descriptions>
 
-    <div
-      ref="scheduleSectionRef"
-      :class="{
-        'schedule-detail--schedule-off':
-          !config.scheduleEnabled &&
-          (config.scheduleSpec?.mode === 'interval' ||
-            config.scheduleSpec?.mode === 'daily' ||
-            config.scheduleSpec?.mode === 'weekly'),
-      }"
-    >
-      <el-descriptions
-        :title="t('autoConfig.schedule')"
-        :column="1"
-        border
-        size="small"
-        class="params-desc-block"
-      >
+    <div ref="scheduleSectionRef" :class="{
+      'schedule-detail--schedule-off':
+        !config.scheduleEnabled &&
+        (config.scheduleSpec?.mode === 'interval' ||
+          config.scheduleSpec?.mode === 'daily' ||
+          config.scheduleSpec?.mode === 'weekly'),
+    }">
+      <el-descriptions :title="t('autoConfig.schedule')" :column="1" border size="small" class="params-desc-block">
         <el-descriptions-item :label="t('autoConfig.scheduleEnabled')" :span="2">
           {{ config.scheduleEnabled ? t('autoConfig.enabled') : t('autoConfig.disabled') }}
         </el-descriptions-item>
-        <template
-          v-if="
-            config.scheduleEnabled ||
-            config.scheduleSpec?.mode === 'interval' ||
-            config.scheduleSpec?.mode === 'daily' ||
-            config.scheduleSpec?.mode === 'weekly'
-          "
-        >
+        <template v-if="
+          config.scheduleEnabled ||
+          config.scheduleSpec?.mode === 'interval' ||
+          config.scheduleSpec?.mode === 'daily' ||
+          config.scheduleSpec?.mode === 'weekly'
+        ">
           <el-descriptions-item :label="t('autoConfig.mode')" :span="2">
             {{ scheduleModeTitle }}
           </el-descriptions-item>
-          <el-descriptions-item
-            v-if="config.scheduleSpec?.mode === 'interval'"
-            :label="t('autoConfig.modeInterval')"
-            :span="2"
-          >
+          <el-descriptions-item v-if="config.scheduleSpec?.mode === 'interval'" :label="t('autoConfig.modeInterval')"
+            :span="2">
             {{ intervalSummary }}
           </el-descriptions-item>
-          <el-descriptions-item
-            v-if="config.scheduleSpec?.mode === 'daily'"
-            :label="t('autoConfig.modeDaily')"
-            :span="2"
-          >
+          <el-descriptions-item v-if="config.scheduleSpec?.mode === 'daily'" :label="t('autoConfig.modeDaily')"
+            :span="2">
             {{ dailySummary }}
           </el-descriptions-item>
-          <el-descriptions-item
-            v-if="config.scheduleSpec?.mode === 'weekly'"
-            :label="t('autoConfig.modeWeekly')"
-            :span="2"
-          >
+          <el-descriptions-item v-if="config.scheduleSpec?.mode === 'weekly'" :label="t('autoConfig.modeWeekly')"
+            :span="2">
             {{ weeklySummary }}
           </el-descriptions-item>
-          <el-descriptions-item
-            v-if="config.schedulePlannedAt != null"
-            :label="t('autoConfig.detailColPlannedAt')"
-            :span="2"
-          >
+          <el-descriptions-item v-if="config.schedulePlannedAt != null" :label="t('autoConfig.detailColPlannedAt')"
+            :span="2">
             {{ formatTs(config.schedulePlannedAt) }}
           </el-descriptions-item>
-          <el-descriptions-item
-            v-if="showScheduleLastRun"
-            :label="t('autoConfig.lastRunAt')"
-            :span="2"
-          >
+          <el-descriptions-item v-if="showScheduleLastRun" :label="t('autoConfig.lastRunAt')" :span="2">
             {{ formatTs(config.scheduleLastRunAt) }}
           </el-descriptions-item>
         </template>
       </el-descriptions>
-      <ScheduleProgressBar
-        v-if="config.scheduleEnabled"
-        :config="config"
-        class="acd-detail-schedule-progress"
-      />
+      <ScheduleProgressBar v-if="config.scheduleEnabled" :config="config" class="acd-detail-schedule-progress" />
     </div>
 
-    <el-descriptions
-      v-if="visibleConfigEntries.length > 0"
-      :title="t('tasks.taskRunParamsSectionConfig')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item
-        v-for="[key, value] in visibleConfigEntries"
-        :key="key"
-        :label="getVarDisplayName(config.pluginId, String(key))"
-        :span="2"
-      >
+    <el-descriptions v-if="visibleConfigEntries.length > 0" :title="t('tasks.taskRunParamsSectionConfig')" :column="1"
+      border size="small" class="params-desc-block">
+      <el-descriptions-item v-for="[key, value] in visibleConfigEntries" :key="key"
+        :label="getVarDisplayName(config.pluginId, String(key))" :span="2">
         <span class="break-all">{{ formatConfigValue(config.pluginId, String(key), value) }}</span>
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions
-      v-if="headerEntries.length > 0"
-      :title="t('autoConfig.detailSectionHeaders')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item
-        v-for="[k, v] in headerEntries"
-        :key="k"
-        :label="k"
-        :span="2"
-      >
+    <el-descriptions v-if="headerEntries.length > 0" :title="t('autoConfig.detailSectionHeaders')" :column="1" border
+      size="small" class="params-desc-block">
+      <el-descriptions-item v-for="[k, v] in headerEntries" :key="k" :label="k" :span="2">
         <span class="break-all">{{ v }}</span>
       </el-descriptions-item>
     </el-descriptions>
@@ -220,7 +146,7 @@ const pluginIconDisplayUrl = computed(() => {
   const id = props.config.pluginId;
   if (!id) return null;
   if (id === LOCAL_IMPORT_PLUGIN_ID) return kbAppPublicIcon;
-  return pluginStore.pluginIconUrl(id) ?? null;
+  return pluginStore.pluginIconDataUrl(id) ?? null;
 });
 
 const varMetaByPluginId = computed(() => {

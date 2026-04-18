@@ -92,7 +92,7 @@ fn vd_flat_key_for_canonical(canonical: &str) -> Option<&'static str> {
         "album" => Some("vd.album"),
         "task" => Some("vd.task"),
         "surf" => Some("vd.surf"),
-        "media-type" => Some("vd.mediaType"),
+        "media-type" | "mediaType" => Some("vd.mediaType"),
         "wallpaper-order" => Some("vd.wallpaperOrder"),
         "desc" => Some("vd.desc"),
         "image" => Some("vd.image"),
@@ -100,7 +100,8 @@ fn vd_flat_key_for_canonical(canonical: &str) -> Option<&'static str> {
         "album-order" => Some("vd.albumOrder"),
         "image-only" => Some("vd.imageOnly"),
         "video-only" => Some("vd.videoOnly"),
-        "tree" => Some("vd.subAlbums"),
+        "tree" | "subAlbums" => Some("vd.subAlbums"),
+        "local-import" => Some("vd.localImport"),
         _ => None,
     }
 }

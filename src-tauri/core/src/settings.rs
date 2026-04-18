@@ -1,10 +1,10 @@
+use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
-use tokio::sync::Mutex as TokioMutex;
 use tokio::time::Instant;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use std::process::Command;
@@ -131,10 +131,10 @@ pub enum SettingKey {
     /// 当前壁纸图片ID
     CurrentWallpaperImageId,
     /// 画册盘启用
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     AlbumDriveEnabled,
     /// 画册盘挂载点
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     AlbumDriveMountPoint,
     /// 导入插件推荐运行配置时，是否默认启用定时（可在设置中关闭）
     ImportRecommendedScheduleEnabled,
@@ -221,7 +221,7 @@ impl SettingValue {
 pub type AppSettings = HashMap<SettingKey, SettingValue>;
 
 // 直接使用 OnceLock 存储 cells
-static CELLS: OnceLock<HashMap<SettingKey, TokioMutex<SettingValue>>> = OnceLock::new();
+static CELLS: OnceLock<HashMap<SettingKey, ArcSwap<SettingValue>>> = OnceLock::new();
 
 // 防抖状态（独立保护）
 struct DebounceState {
@@ -229,7 +229,7 @@ struct DebounceState {
     debounce_task: Option<tokio::task::JoinHandle<()>>,
 }
 
-static DEBOUNCE_STATE: OnceLock<tokio::sync::RwLock<DebounceState>> = OnceLock::new();
+static DEBOUNCE_STATE: OnceLock<RwLock<DebounceState>> = OnceLock::new();
 
 // 为了保持 API 兼容性，保留 Settings 结构体（但它是空的）
 pub struct Settings;
@@ -247,7 +247,7 @@ impl Settings {
             .set(cells)
             .map_err(|_| "Settings already initialized".to_string())?;
         DEBOUNCE_STATE
-            .set(tokio::sync::RwLock::new(DebounceState {
+            .set(RwLock::new(DebounceState {
                 last_modified: None,
                 debounce_task: None,
             }))
@@ -267,14 +267,14 @@ impl Settings {
     }
 
     /// 获取 cells（内部使用）
-    fn cells() -> &'static HashMap<SettingKey, TokioMutex<SettingValue>> {
+    fn cells() -> &'static HashMap<SettingKey, ArcSwap<SettingValue>> {
         CELLS
             .get()
             .expect("Settings not initialized. Call Settings::init_global() first.")
     }
 
     /// 获取防抖状态（内部使用）
-    fn debounce_state() -> &'static tokio::sync::RwLock<DebounceState> {
+    fn debounce_state() -> &'static RwLock<DebounceState> {
         DEBOUNCE_STATE
             .get()
             .expect("Settings not initialized. Call Settings::init_global() first.")
@@ -328,9 +328,9 @@ impl Settings {
             SettingKey::WallpaperVideoPlaybackRate => SettingValue::F64(1.0),
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
             SettingKey::CurrentWallpaperImageId => SettingValue::OptionString(None),
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             SettingKey::AlbumDriveEnabled => SettingValue::Bool(false),
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             SettingKey::AlbumDriveMountPoint => {
                 SettingValue::String(Self::default_album_drive_mount_point())
             }
@@ -365,7 +365,7 @@ impl Settings {
         }
     }
 
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     fn default_album_drive_mount_point() -> String {
         #[cfg(target_os = "windows")]
         {
@@ -512,7 +512,7 @@ Write-Output "$style,$tile"
 
     fn load_settings_map(
         file: &Path,
-    ) -> Result<HashMap<SettingKey, TokioMutex<SettingValue>>, String> {
+    ) -> Result<HashMap<SettingKey, ArcSwap<SettingValue>>, String> {
         let mut cells = HashMap::new();
 
         // 初始化所有键的默认值
@@ -545,9 +545,9 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperVideoPlaybackRate,
             SettingKey::WindowState,
             SettingKey::CurrentWallpaperImageId,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             SettingKey::AlbumDriveEnabled,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             SettingKey::AlbumDriveMountPoint,
             SettingKey::ImportRecommendedScheduleEnabled,
             SettingKey::Language,
@@ -593,17 +593,17 @@ Write-Output "$style,$tile"
             } else {
                 Self::default_value(key)
             };
-            cells.insert(key, TokioMutex::new(value));
+            cells.insert(key, ArcSwap::new(Arc::new(value)));
         }
 
         // 如果文件不存在或为空，使用系统默认值覆盖壁纸相关设置
         if json_value.is_none() {
             let (style, transition) = Self::get_system_wallpaper_settings();
             *cells.get_mut(&SettingKey::WallpaperStyle).unwrap() =
-                TokioMutex::new(SettingValue::String(style));
+                ArcSwap::new(Arc::new(SettingValue::String(style)));
             *cells
                 .get_mut(&SettingKey::WallpaperRotationTransition)
-                .unwrap() = TokioMutex::new(SettingValue::String(transition));
+                .unwrap() = ArcSwap::new(Arc::new(SettingValue::String(transition)));
         }
 
         Ok(cells)
@@ -644,7 +644,7 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperRotationIncludeSubalbums => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
             }
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             SettingKey::AlbumDriveEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
@@ -682,7 +682,7 @@ Write-Output "$style,$tile"
             | SettingKey::WallpaperMode => Ok(SettingValue::String(
                 json.as_str().unwrap_or("").to_string(),
             )),
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             SettingKey::AlbumDriveMountPoint => Ok(SettingValue::String(
                 json.as_str().unwrap_or("").to_string(),
             )),
@@ -732,7 +732,7 @@ Write-Output "$style,$tile"
     }
 
     /// 序列化当前所有设置到 JSON
-    async fn serialize_to_json() -> Result<serde_json::Value, String> {
+    fn serialize_to_json() -> Result<serde_json::Value, String> {
         let cells = Self::cells();
         let mut json_map = serde_json::Map::new();
 
@@ -740,7 +740,7 @@ Write-Output "$style,$tile"
         let keys: Vec<SettingKey> = cells.keys().cloned().collect();
         for key in keys {
             if let Some(cell) = cells.get(&key) {
-                let val = cell.lock().await;
+                let val = cell.load();
                 let json_val = Self::setting_value_to_json(key, &val)?;
                 let key_str = Self::key_to_json_string(key);
                 json_map.insert(key_str, json_val);
@@ -784,9 +784,9 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperVideoPlaybackRate => "wallpaperVideoPlaybackRate".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
             SettingKey::CurrentWallpaperImageId => "currentWallpaperImageId".to_string(),
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             SettingKey::AlbumDriveEnabled => "albumDriveEnabled".to_string(),
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             SettingKey::AlbumDriveMountPoint => "albumDriveMountPoint".to_string(),
             SettingKey::ImportRecommendedScheduleEnabled => {
                 "importRecommendedScheduleEnabled".to_string()
@@ -828,7 +828,7 @@ Write-Output "$style,$tile"
     }
 
     /// 发送设置变更事件
-    async fn emit_setting_change(key: SettingKey, value: &SettingValue) {
+    fn emit_setting_change(key: SettingKey, value: &SettingValue) {
         // 尝试通过 GlobalEmitter 发送事件
         if let Some(emitter) = GlobalEmitter::try_global() {
             // 将 SettingKey 和 SettingValue 转换为 JSON
@@ -847,9 +847,9 @@ Write-Output "$style,$tile"
     }
 
     /// 触发防抖写盘
-    async fn trigger_debounce_save() -> Result<(), String> {
+    fn trigger_debounce_save() -> Result<(), String> {
         let state = Self::debounce_state();
-        let mut state_guard = state.write().await;
+        let mut state_guard = state.write().unwrap();
         state_guard.last_modified = Some(Instant::now());
 
         // 取消之前的任务
@@ -864,7 +864,7 @@ Write-Output "$style,$tile"
 
             let should_write = {
                 let state = Self::debounce_state();
-                let state_guard = state.read().await;
+                let state_guard = state.read().unwrap();
                 state_guard
                     .last_modified
                     .map(|t| t.elapsed() >= Duration::from_secs(4))
@@ -877,7 +877,7 @@ Write-Output "$style,$tile"
                 }
 
                 // 序列化并写入
-                if let Ok(json_val) = Self::serialize_to_json().await {
+                if let Ok(json_val) = Self::serialize_to_json() {
                     if let Ok(content) = serde_json::to_string_pretty(&json_val) {
                         let tmp = file.with_extension("json.tmp");
                         if fs::write(&tmp, content).is_ok() {
@@ -915,349 +915,212 @@ Write-Output "$style,$tile"
 
     // ========== Getter 方法 ==========
 
-    pub async fn get_auto_launch(&self) -> Result<bool, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::AutoLaunch) {
-            let val = cell.lock().await;
-            Ok(val.as_bool().unwrap_or(false))
-        } else {
-            Ok(false)
-        }
+    pub fn get_auto_launch(&self) -> bool {
+        Self::cells().get(&SettingKey::AutoLaunch)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
     }
 
-    pub async fn get_auto_open_crawler_webview(&self) -> Result<bool, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::AutoOpenCrawlerWebview) {
-            let val = cell.lock().await;
-            Ok(val.as_bool().unwrap_or(false))
-        } else {
-            Ok(false)
-        }
+    pub fn get_auto_open_crawler_webview(&self) -> bool {
+        Self::cells().get(&SettingKey::AutoOpenCrawlerWebview)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
     }
 
-    pub async fn get_import_recommended_schedule_enabled(&self) -> Result<bool, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::ImportRecommendedScheduleEnabled) {
-            let val = cell.lock().await;
-            Ok(val.as_bool().unwrap_or(true))
-        } else {
-            Ok(true)
-        }
+    pub fn get_import_recommended_schedule_enabled(&self) -> bool {
+        Self::cells().get(&SettingKey::ImportRecommendedScheduleEnabled)
+            .map(|c| c.load().as_bool().unwrap_or(true))
+            .unwrap_or(true)
     }
 
-    pub async fn get_max_concurrent_downloads(&self) -> Result<u32, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::MaxConcurrentDownloads) {
-            let val = cell.lock().await;
-            Ok(val.as_u32().unwrap_or(3))
-        } else {
-            Ok(3)
-        }
+    pub fn get_max_concurrent_downloads(&self) -> u32 {
+        Self::cells().get(&SettingKey::MaxConcurrentDownloads)
+            .map(|c| c.load().as_u32().unwrap_or(3))
+            .unwrap_or(3)
     }
 
-    pub async fn get_max_concurrent_tasks(&self) -> Result<u32, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::MaxConcurrentTasks) {
-            let val = cell.lock().await;
-            Ok(val.as_u32().unwrap_or(2).clamp(1, 10))
-        } else {
-            Ok(2)
-        }
+    pub fn get_max_concurrent_tasks(&self) -> u32 {
+        Self::cells().get(&SettingKey::MaxConcurrentTasks)
+            .map(|c| c.load().as_u32().unwrap_or(2).clamp(1, 10))
+            .unwrap_or(2)
     }
 
-    pub async fn get_network_retry_count(&self) -> Result<u32, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::NetworkRetryCount) {
-            let val = cell.lock().await;
-            Ok(val.as_u32().unwrap_or(2))
-        } else {
-            Ok(2)
-        }
+    pub fn get_network_retry_count(&self) -> u32 {
+        Self::cells().get(&SettingKey::NetworkRetryCount)
+            .map(|c| c.load().as_u32().unwrap_or(2))
+            .unwrap_or(2)
     }
 
-    pub async fn get_download_interval_ms(&self) -> Result<u32, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::DownloadIntervalMs) {
-            let val = cell.lock().await;
-            Ok(val.as_u32().unwrap_or(500).clamp(100, 10000))
-        } else {
-            Ok(500)
-        }
+    pub fn get_download_interval_ms(&self) -> u32 {
+        Self::cells().get(&SettingKey::DownloadIntervalMs)
+            .map(|c| c.load().as_u32().unwrap_or(500).clamp(100, 10000))
+            .unwrap_or(500)
     }
 
-    pub async fn get_image_click_action(&self) -> Result<String, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::ImageClickAction) {
-            let val = cell.lock().await;
-            Ok(val.as_string().unwrap_or_else(|| "preview".to_string()))
-        } else {
-            Ok("preview".to_string())
-        }
+    pub fn get_image_click_action(&self) -> String {
+        Self::cells().get(&SettingKey::ImageClickAction)
+            .map(|c| c.load().as_string().unwrap_or_else(|| "preview".to_string()))
+            .unwrap_or_else(|| "preview".to_string())
     }
 
-    pub async fn get_gallery_image_aspect_ratio(&self) -> Result<Option<String>, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::GalleryImageAspectRatio) {
-            let val = cell.lock().await;
-            Ok(val.as_option_string().unwrap_or(None))
-        } else {
-            Ok(None)
-        }
+    pub fn get_gallery_image_aspect_ratio(&self) -> Option<String> {
+        Self::cells().get(&SettingKey::GalleryImageAspectRatio)
+            .and_then(|c| c.load().as_option_string())
+            .flatten()
     }
 
-    pub async fn get_gallery_image_object_position(&self) -> Result<String, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::GalleryImageObjectPosition) {
-            let val = cell.lock().await;
-            Ok(val.as_string().unwrap_or_else(|| "center".to_string()))
-        } else {
-            Ok("center".to_string())
-        }
+    pub fn get_gallery_image_object_position(&self) -> String {
+        Self::cells().get(&SettingKey::GalleryImageObjectPosition)
+            .map(|c| c.load().as_string().unwrap_or_else(|| "center".to_string()))
+            .unwrap_or_else(|| "center".to_string())
     }
 
-    pub async fn get_gallery_grid_columns(&self) -> Result<u32, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::GalleryGridColumns) {
-            let val = cell.lock().await;
-            let n = val.as_u32().unwrap_or(0);
-            Ok(if n <= 4 { n } else { 0 })
-        } else {
-            Ok(0)
-        }
+    pub fn get_gallery_grid_columns(&self) -> u32 {
+        let n = Self::cells().get(&SettingKey::GalleryGridColumns)
+            .map(|c| c.load().as_u32().unwrap_or(0))
+            .unwrap_or(0);
+        if n <= 4 { n } else { 0 }
     }
 
-    pub async fn get_gallery_page_size(&self) -> Result<u32, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::GalleryPageSize) {
-            let val = cell.lock().await;
-            let n = val.as_u32().unwrap_or(100);
-            Ok(Self::normalize_gallery_page_size(n))
-        } else {
-            Ok(100)
-        }
+    pub fn get_gallery_page_size(&self) -> u32 {
+        let n = Self::cells().get(&SettingKey::GalleryPageSize)
+            .map(|c| c.load().as_u32().unwrap_or(100))
+            .unwrap_or(100);
+        Self::normalize_gallery_page_size(n)
     }
 
-    pub async fn get_auto_deduplicate(&self) -> Result<bool, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::AutoDeduplicate) {
-            let val = cell.lock().await;
-            Ok(val.as_bool().unwrap_or(false))
-        } else {
-            Ok(false)
-        }
+    pub fn get_auto_deduplicate(&self) -> bool {
+        Self::cells().get(&SettingKey::AutoDeduplicate)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
     }
 
-    pub async fn get_default_download_dir(&self) -> Result<Option<String>, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::DefaultDownloadDir) {
-            let val = cell.lock().await;
-            Ok(val.as_option_string().unwrap_or(None))
-        } else {
-            Ok(None)
-        }
+    pub fn get_default_download_dir(&self) -> Option<String> {
+        Self::cells().get(&SettingKey::DefaultDownloadDir)
+            .and_then(|c| c.load().as_option_string())
+            .flatten()
     }
 
-    pub async fn get_wallpaper_engine_dir(&self) -> Result<Option<String>, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperEngineDir) {
-            let val = cell.lock().await;
-            Ok(val.as_option_string().unwrap_or(None))
-        } else {
-            Ok(None)
-        }
+    pub fn get_wallpaper_engine_dir(&self) -> Option<String> {
+        Self::cells().get(&SettingKey::WallpaperEngineDir)
+            .and_then(|c| c.load().as_option_string())
+            .flatten()
     }
 
-    pub async fn get_wallpaper_rotation_enabled(&self) -> Result<bool, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationEnabled) {
-            let val = cell.lock().await;
-            Ok(val.as_bool().unwrap_or(false))
-        } else {
-            Ok(false)
-        }
+    pub fn get_wallpaper_rotation_enabled(&self) -> bool {
+        Self::cells().get(&SettingKey::WallpaperRotationEnabled)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
     }
 
-    pub async fn get_wallpaper_rotation_album_id(&self) -> Result<Option<String>, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationAlbumId) {
-            let val = cell.lock().await;
-            Ok(val.as_option_string().unwrap_or(None))
-        } else {
-            Ok(None)
-        }
+    pub fn get_wallpaper_rotation_album_id(&self) -> Option<String> {
+        Self::cells().get(&SettingKey::WallpaperRotationAlbumId)
+            .and_then(|c| c.load().as_option_string())
+            .flatten()
     }
 
-    pub async fn get_wallpaper_rotation_include_subalbums(&self) -> Result<bool, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationIncludeSubalbums) {
-            let val = cell.lock().await;
-            Ok(val.as_bool().unwrap_or(true))
-        } else {
-            Ok(true)
-        }
+    pub fn get_wallpaper_rotation_include_subalbums(&self) -> bool {
+        Self::cells().get(&SettingKey::WallpaperRotationIncludeSubalbums)
+            .map(|c| c.load().as_bool().unwrap_or(true))
+            .unwrap_or(true)
     }
 
-    pub async fn get_wallpaper_rotation_interval_minutes(&self) -> Result<u32, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationIntervalMinutes) {
-            let val = cell.lock().await;
-            Ok(val.as_u32().unwrap_or(60))
-        } else {
-            Ok(60)
-        }
+    pub fn get_wallpaper_rotation_interval_minutes(&self) -> u32 {
+        Self::cells().get(&SettingKey::WallpaperRotationIntervalMinutes)
+            .map(|c| c.load().as_u32().unwrap_or(60))
+            .unwrap_or(60)
     }
 
-    pub async fn get_wallpaper_rotation_mode(&self) -> Result<String, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationMode) {
-            let val = cell.lock().await;
-            Ok(val.as_string().unwrap_or_else(|| "random".to_string()))
-        } else {
-            Ok("random".to_string())
-        }
+    pub fn get_wallpaper_rotation_mode(&self) -> String {
+        Self::cells().get(&SettingKey::WallpaperRotationMode)
+            .map(|c| c.load().as_string().unwrap_or_else(|| "random".to_string()))
+            .unwrap_or_else(|| "random".to_string())
     }
 
-    pub async fn get_wallpaper_rotation_style(&self) -> Result<String, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperStyle) {
-            let val = cell.lock().await;
-            Ok(val.as_string().unwrap_or_else(|| "fill".to_string()))
-        } else {
-            Ok("fill".to_string())
-        }
+    pub fn get_wallpaper_rotation_style(&self) -> String {
+        Self::cells().get(&SettingKey::WallpaperStyle)
+            .map(|c| c.load().as_string().unwrap_or_else(|| "fill".to_string()))
+            .unwrap_or_else(|| "fill".to_string())
     }
 
-    pub async fn get_wallpaper_rotation_transition(&self) -> Result<String, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationTransition) {
-            let val = cell.lock().await;
-            Ok(val
-                .as_string()
-                .unwrap_or_else(|| Self::default_wallpaper_rotation_transition()))
-        } else {
-            Ok(Self::default_wallpaper_rotation_transition())
-        }
+    pub fn get_wallpaper_rotation_transition(&self) -> String {
+        Self::cells().get(&SettingKey::WallpaperRotationTransition)
+            .map(|c| c.load().as_string().unwrap_or_else(|| Self::default_wallpaper_rotation_transition()))
+            .unwrap_or_else(|| Self::default_wallpaper_rotation_transition())
     }
 
-    pub async fn get_wallpaper_style_by_mode(&self) -> Result<HashMap<String, String>, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperStyleByMode) {
-            let val = cell.lock().await;
-            Ok(val.as_hashmap_string_string().unwrap_or_default())
-        } else {
-            Ok(HashMap::new())
-        }
+    pub fn get_wallpaper_style_by_mode(&self) -> HashMap<String, String> {
+        Self::cells().get(&SettingKey::WallpaperStyleByMode)
+            .map(|c| c.load().as_hashmap_string_string().unwrap_or_default())
+            .unwrap_or_default()
     }
 
-    pub async fn get_wallpaper_transition_by_mode(
-        &self,
-    ) -> Result<HashMap<String, String>, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperTransitionByMode) {
-            let val = cell.lock().await;
-            Ok(val.as_hashmap_string_string().unwrap_or_default())
-        } else {
-            Ok(HashMap::new())
-        }
+    pub fn get_wallpaper_transition_by_mode(&self) -> HashMap<String, String> {
+        Self::cells().get(&SettingKey::WallpaperTransitionByMode)
+            .map(|c| c.load().as_hashmap_string_string().unwrap_or_default())
+            .unwrap_or_default()
     }
 
-    pub async fn get_wallpaper_mode(&self) -> Result<String, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperMode) {
-            let val = cell.lock().await;
-            Ok(val
-                .as_string()
-                .unwrap_or_else(|| Self::default_wallpaper_mode()))
-        } else {
-            Ok(Self::default_wallpaper_mode())
-        }
+    pub fn get_wallpaper_mode(&self) -> String {
+        Self::cells().get(&SettingKey::WallpaperMode)
+            .map(|c| c.load().as_string().unwrap_or_else(|| Self::default_wallpaper_mode()))
+            .unwrap_or_else(|| Self::default_wallpaper_mode())
     }
 
-    pub async fn get_wallpaper_volume(&self) -> Result<f64, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperVolume) {
-            let val = cell.lock().await;
-            Ok(val.as_f64().unwrap_or(1.0))
-        } else {
-            Ok(1.0)
-        }
+    pub fn get_wallpaper_volume(&self) -> f64 {
+        Self::cells().get(&SettingKey::WallpaperVolume)
+            .map(|c| c.load().as_f64().unwrap_or(1.0))
+            .unwrap_or(1.0)
     }
 
-    pub async fn get_wallpaper_video_playback_rate(&self) -> Result<f64, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperVideoPlaybackRate) {
-            let val = cell.lock().await;
-            Ok(val.as_f64().unwrap_or(1.0).clamp(0.25, 3.0))
-        } else {
-            Ok(1.0)
-        }
+    pub fn get_wallpaper_video_playback_rate(&self) -> f64 {
+        Self::cells().get(&SettingKey::WallpaperVideoPlaybackRate)
+            .map(|c| c.load().as_f64().unwrap_or(1.0).clamp(0.25, 3.0))
+            .unwrap_or(1.0)
     }
 
-    pub async fn get_window_state(&self) -> Result<Option<WindowState>, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WindowState) {
-            let val = cell.lock().await;
-            Ok(val.as_option_window_state().unwrap_or(None))
-        } else {
-            Ok(None)
-        }
+    pub fn get_window_state(&self) -> Option<WindowState> {
+        Self::cells().get(&SettingKey::WindowState)
+            .and_then(|c| c.load().as_option_window_state())
+            .flatten()
     }
 
-    pub async fn get_current_wallpaper_image_id(&self) -> Result<Option<String>, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::CurrentWallpaperImageId) {
-            let val = cell.lock().await;
-            Ok(val.as_option_string().unwrap_or(None))
-        } else {
-            Ok(None)
-        }
+    pub fn get_current_wallpaper_image_id(&self) -> Option<String> {
+        Self::cells().get(&SettingKey::CurrentWallpaperImageId)
+            .and_then(|c| c.load().as_option_string())
+            .flatten()
     }
 
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-    pub async fn get_album_drive_enabled(&self) -> Result<bool, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::AlbumDriveEnabled) {
-            let val = cell.lock().await;
-            Ok(val.as_bool().unwrap_or(false))
-        } else {
-            Ok(false)
-        }
+    #[cfg(kabegame_mode = "standard")]
+    pub fn get_album_drive_enabled(&self) -> bool {
+        Self::cells().get(&SettingKey::AlbumDriveEnabled)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
     }
 
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-    pub async fn get_album_drive_mount_point(&self) -> Result<String, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::AlbumDriveMountPoint) {
-            let val = cell.lock().await;
-            Ok(val
-                .as_string()
-                .unwrap_or_else(|| Self::default_album_drive_mount_point()))
-        } else {
-            Ok(Self::default_album_drive_mount_point())
-        }
+    #[cfg(kabegame_mode = "standard")]
+    pub fn get_album_drive_mount_point(&self) -> String {
+        Self::cells().get(&SettingKey::AlbumDriveMountPoint)
+            .map(|c| c.load().as_string().unwrap_or_else(|| Self::default_album_drive_mount_point()))
+            .unwrap_or_else(|| Self::default_album_drive_mount_point())
     }
 
-    pub async fn get_language(&self) -> Result<Option<String>, String> {
-        let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::Language) {
-            let val = cell.lock().await;
-            Ok(val.as_option_string().unwrap_or(None))
-        } else {
-            Ok(None)
-        }
+    pub fn get_language(&self) -> Option<String> {
+        Self::cells().get(&SettingKey::Language)
+            .and_then(|c| c.load().as_option_string())
+            .flatten()
     }
 
     // ========== Setter 方法 ==========
 
-    pub async fn set_auto_launch(&self, enabled: bool) -> Result<(), String> {
+    pub fn set_auto_launch(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
         if let Some(cell) = cells.get(&SettingKey::AutoLaunch) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::AutoLaunch, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::AutoLaunch, &new_value);
+        Self::trigger_debounce_save()?;
 
         // 设置开机启动（Windows、Linux、macOS 共用逻辑）
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
@@ -1270,7 +1133,7 @@ Write-Output "$style,$tile"
             let mut builder = AutoLaunchBuilder::new();
             builder.set_app_name("Kabegame");
             builder.set_app_path(app_path_str);
-            
+
             // 如果启用开机启动，添加 --minimized 参数
             if enabled {
                 builder.set_args(&["--minimized"]);
@@ -1294,167 +1157,151 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    pub async fn set_auto_open_crawler_webview(&self, enabled: bool) -> Result<(), String> {
+    pub fn set_auto_open_crawler_webview(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
         if let Some(cell) = cells.get(&SettingKey::AutoOpenCrawlerWebview) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::AutoOpenCrawlerWebview, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::AutoOpenCrawlerWebview, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_import_recommended_schedule_enabled(&self, enabled: bool) -> Result<(), String> {
+    pub fn set_import_recommended_schedule_enabled(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
         if let Some(cell) = cells.get(&SettingKey::ImportRecommendedScheduleEnabled) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::ImportRecommendedScheduleEnabled, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::ImportRecommendedScheduleEnabled, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_max_concurrent_downloads(&self, count: u32) -> Result<(), String> {
+    pub fn set_max_concurrent_downloads(&self, count: u32) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::U32(count);
         if let Some(cell) = cells.get(&SettingKey::MaxConcurrentDownloads) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::MaxConcurrentDownloads, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::MaxConcurrentDownloads, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_max_concurrent_tasks(&self, count: u32) -> Result<(), String> {
+    pub fn set_max_concurrent_tasks(&self, count: u32) -> Result<(), String> {
         let clamped = count.clamp(1, 10);
         let cells = Self::cells();
         let new_value = SettingValue::U32(clamped);
         if let Some(cell) = cells.get(&SettingKey::MaxConcurrentTasks) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::MaxConcurrentTasks, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::MaxConcurrentTasks, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_network_retry_count(&self, count: u32) -> Result<(), String> {
+    pub fn set_network_retry_count(&self, count: u32) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::U32(count);
         if let Some(cell) = cells.get(&SettingKey::NetworkRetryCount) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::NetworkRetryCount, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::NetworkRetryCount, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_download_interval_ms(&self, interval_ms: u32) -> Result<(), String> {
+    pub fn set_download_interval_ms(&self, interval_ms: u32) -> Result<(), String> {
         let clamped = interval_ms.clamp(100, 10000);
         let cells = Self::cells();
         let new_value = SettingValue::U32(clamped);
         if let Some(cell) = cells.get(&SettingKey::DownloadIntervalMs) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::DownloadIntervalMs, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::DownloadIntervalMs, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_image_click_action(&self, action: String) -> Result<(), String> {
+    pub fn set_image_click_action(&self, action: String) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::String(action);
         if let Some(cell) = cells.get(&SettingKey::ImageClickAction) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::ImageClickAction, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::ImageClickAction, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_gallery_image_aspect_ratio(
+    pub fn set_gallery_image_aspect_ratio(
         &self,
         aspect_ratio: Option<String>,
     ) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::OptionString(aspect_ratio);
         if let Some(cell) = cells.get(&SettingKey::GalleryImageAspectRatio) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::GalleryImageAspectRatio, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::GalleryImageAspectRatio, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_gallery_image_object_position(&self, position: String) -> Result<(), String> {
+    pub fn set_gallery_image_object_position(&self, position: String) -> Result<(), String> {
         let cells = Self::cells();
-        let new_value = SettingValue::String(position.clone());
+        let new_value = SettingValue::String(position);
         if let Some(cell) = cells.get(&SettingKey::GalleryImageObjectPosition) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::GalleryImageObjectPosition, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::GalleryImageObjectPosition, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_gallery_grid_columns(&self, columns: u32) -> Result<(), String> {
+    pub fn set_gallery_grid_columns(&self, columns: u32) -> Result<(), String> {
         if columns > 4 {
             return Err("画廊列数必须在 0-4 之间".to_string());
         }
         let cells = Self::cells();
         let new_value = SettingValue::U32(columns);
         if let Some(cell) = cells.get(&SettingKey::GalleryGridColumns) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::GalleryGridColumns, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::GalleryGridColumns, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_gallery_page_size(&self, size: u32) -> Result<(), String> {
+    pub fn set_gallery_page_size(&self, size: u32) -> Result<(), String> {
         let clamped = Self::normalize_gallery_page_size(size);
         let cells = Self::cells();
         let new_value = SettingValue::U32(clamped);
         if let Some(cell) = cells.get(&SettingKey::GalleryPageSize) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::GalleryPageSize, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::GalleryPageSize, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_auto_deduplicate(&self, enabled: bool) -> Result<(), String> {
+    pub fn set_auto_deduplicate(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
         if let Some(cell) = cells.get(&SettingKey::AutoDeduplicate) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::AutoDeduplicate, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::AutoDeduplicate, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_default_download_dir(&self, dir: Option<String>) -> Result<(), String> {
+    pub fn set_default_download_dir(&self, dir: Option<String>) -> Result<(), String> {
         let normalized = dir.and_then(|s| {
             let t = s.trim().to_string();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
+            if t.is_empty() { None } else { Some(t) }
         });
 
         // 若提供了目录，则做基本校验
@@ -1470,24 +1317,19 @@ Write-Output "$style,$tile"
         }
 
         let cells = Self::cells();
-        let new_value = SettingValue::OptionString(normalized.clone());
+        let new_value = SettingValue::OptionString(normalized);
         if let Some(cell) = cells.get(&SettingKey::DefaultDownloadDir) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::DefaultDownloadDir, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::DefaultDownloadDir, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_wallpaper_engine_dir(&self, dir: Option<String>) -> Result<(), String> {
+    pub fn set_wallpaper_engine_dir(&self, dir: Option<String>) -> Result<(), String> {
         let normalized = dir.and_then(|s| {
             let t = s.trim().to_string();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
+            if t.is_empty() { None } else { Some(t) }
         });
 
         if let Some(ref path) = normalized {
@@ -1498,18 +1340,17 @@ Write-Output "$style,$tile"
         }
 
         let cells = Self::cells();
-        let new_value = SettingValue::OptionString(normalized.clone());
+        let new_value = SettingValue::OptionString(normalized);
         if let Some(cell) = cells.get(&SettingKey::WallpaperEngineDir) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WallpaperEngineDir, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::WallpaperEngineDir, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn get_wallpaper_engine_myprojects_dir(&self) -> Result<Option<String>, String> {
-        let base = self.get_wallpaper_engine_dir().await?;
+    pub fn get_wallpaper_engine_myprojects_dir(&self) -> Result<Option<String>, String> {
+        let base = self.get_wallpaper_engine_dir();
         let Some(ref base) = base else {
             return Ok(None);
         };
@@ -1561,290 +1402,268 @@ Write-Output "$style,$tile"
         Ok(None)
     }
 
-    pub async fn set_wallpaper_rotation_enabled(&self, enabled: bool) -> Result<(), String> {
+    pub fn set_wallpaper_rotation_enabled(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
         if let Some(cell) = cells.get(&SettingKey::WallpaperRotationEnabled) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WallpaperRotationEnabled, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::WallpaperRotationEnabled, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_wallpaper_rotation_album_id(
+    pub fn set_wallpaper_rotation_album_id(
         &self,
         album_id: Option<String>,
     ) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::OptionString(album_id);
         if let Some(cell) = cells.get(&SettingKey::WallpaperRotationAlbumId) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WallpaperRotationAlbumId, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::WallpaperRotationAlbumId, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_wallpaper_rotation_include_subalbums(
+    pub fn set_wallpaper_rotation_include_subalbums(
         &self,
         include: bool,
     ) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(include);
         if let Some(cell) = cells.get(&SettingKey::WallpaperRotationIncludeSubalbums) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WallpaperRotationIncludeSubalbums, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::WallpaperRotationIncludeSubalbums, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_wallpaper_rotation_interval_minutes(
+    pub fn set_wallpaper_rotation_interval_minutes(
         &self,
         minutes: u32,
     ) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::U32(minutes);
         if let Some(cell) = cells.get(&SettingKey::WallpaperRotationIntervalMinutes) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WallpaperRotationIntervalMinutes, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::WallpaperRotationIntervalMinutes, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_wallpaper_rotation_mode(&self, mode: String) -> Result<(), String> {
+    pub fn set_wallpaper_rotation_mode(&self, mode: String) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::String(mode);
         if let Some(cell) = cells.get(&SettingKey::WallpaperRotationMode) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WallpaperRotationMode, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::WallpaperRotationMode, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_wallpaper_style(&self, style: String) -> Result<(), String> {
-        let mode = self.get_wallpaper_mode().await?;
+    pub fn set_wallpaper_style(&self, style: String) -> Result<(), String> {
+        let mode = self.get_wallpaper_mode();
         let cells = Self::cells();
 
         // 更新 style
         let new_style_value = SettingValue::String(style.clone());
         if let Some(cell) = cells.get(&SettingKey::WallpaperStyle) {
-            let mut val = cell.lock().await;
-            *val = new_style_value.clone();
+            cell.store(Arc::new(new_style_value.clone()));
         }
 
         // 更新 style_by_mode
         let mut style_by_mode_value = None;
         if let Some(cell) = cells.get(&SettingKey::WallpaperStyleByMode) {
-            let mut val = cell.lock().await;
-            if let SettingValue::HashMapStringString(ref mut map) = *val {
-                map.insert(mode.clone(), style);
-                style_by_mode_value = Some(SettingValue::HashMapStringString(map.clone()));
+            let current = cell.load();
+            if let SettingValue::HashMapStringString(ref map) = **current {
+                let mut new_map = map.clone();
+                new_map.insert(mode, style);
+                let new_val = SettingValue::HashMapStringString(new_map);
+                style_by_mode_value = Some(new_val.clone());
+                cell.store(Arc::new(new_val));
             }
         }
 
-        Self::emit_setting_change(SettingKey::WallpaperStyle, &new_style_value).await;
+        Self::emit_setting_change(SettingKey::WallpaperStyle, &new_style_value);
         if let Some(ref v) = style_by_mode_value {
-            Self::emit_setting_change(SettingKey::WallpaperStyleByMode, v).await;
+            Self::emit_setting_change(SettingKey::WallpaperStyleByMode, v);
         }
 
-        Self::trigger_debounce_save().await?;
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_wallpaper_rotation_transition(
+    pub fn set_wallpaper_rotation_transition(
         &self,
         transition: String,
     ) -> Result<(), String> {
-        let mode = self.get_wallpaper_mode().await?;
+        let mode = self.get_wallpaper_mode();
         let cells = Self::cells();
 
         // 更新 transition
         let new_transition_value = SettingValue::String(transition.clone());
         if let Some(cell) = cells.get(&SettingKey::WallpaperRotationTransition) {
-            let mut val = cell.lock().await;
-            *val = new_transition_value.clone();
+            cell.store(Arc::new(new_transition_value.clone()));
         }
 
         // 更新 transition_by_mode
         let mut transition_by_mode_value = None;
         if let Some(cell) = cells.get(&SettingKey::WallpaperTransitionByMode) {
-            let mut val = cell.lock().await;
-            if let SettingValue::HashMapStringString(ref mut map) = *val {
-                map.insert(mode.clone(), transition);
-                transition_by_mode_value = Some(SettingValue::HashMapStringString(map.clone()));
+            let current = cell.load();
+            if let SettingValue::HashMapStringString(ref map) = **current {
+                let mut new_map = map.clone();
+                new_map.insert(mode, transition);
+                let new_val = SettingValue::HashMapStringString(new_map);
+                transition_by_mode_value = Some(new_val.clone());
+                cell.store(Arc::new(new_val));
             }
         }
 
-        Self::emit_setting_change(
-            SettingKey::WallpaperRotationTransition,
-            &new_transition_value,
-        )
-        .await;
+        Self::emit_setting_change(SettingKey::WallpaperRotationTransition, &new_transition_value);
         if let Some(ref v) = transition_by_mode_value {
-            Self::emit_setting_change(SettingKey::WallpaperTransitionByMode, v).await;
+            Self::emit_setting_change(SettingKey::WallpaperTransitionByMode, v);
         }
 
-        Self::trigger_debounce_save().await?;
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_wallpaper_mode(&self, mode: String) -> Result<(), String> {
+    pub fn set_wallpaper_mode(&self, mode: String) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::String(mode);
         if let Some(cell) = cells.get(&SettingKey::WallpaperMode) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WallpaperMode, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::WallpaperMode, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_wallpaper_volume(&self, volume: f64) -> Result<(), String> {
+    pub fn set_wallpaper_volume(&self, volume: f64) -> Result<(), String> {
         let v = volume.clamp(0.0, 1.0);
         let cells = Self::cells();
         let new_value = SettingValue::F64(v);
         if let Some(cell) = cells.get(&SettingKey::WallpaperVolume) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WallpaperVolume, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::WallpaperVolume, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_wallpaper_video_playback_rate(&self, rate: f64) -> Result<(), String> {
+    pub fn set_wallpaper_video_playback_rate(&self, rate: f64) -> Result<(), String> {
         let r = rate.clamp(0.25, 3.0);
         let cells = Self::cells();
         let new_value = SettingValue::F64(r);
         if let Some(cell) = cells.get(&SettingKey::WallpaperVideoPlaybackRate) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WallpaperVideoPlaybackRate, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::WallpaperVideoPlaybackRate, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn save_window_state(&self, window_state: WindowState) -> Result<(), String> {
+    pub fn save_window_state(&self, window_state: WindowState) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::OptionWindowState(Some(window_state));
         if let Some(cell) = cells.get(&SettingKey::WindowState) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WindowState, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::WindowState, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn clear_window_state(&self) -> Result<(), String> {
+    pub fn clear_window_state(&self) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::OptionWindowState(None);
         if let Some(cell) = cells.get(&SettingKey::WindowState) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WindowState, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::WindowState, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-    pub async fn set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
+    #[cfg(kabegame_mode = "standard")]
+    pub fn set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
         if let Some(cell) = cells.get(&SettingKey::AlbumDriveEnabled) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::AlbumDriveEnabled, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::AlbumDriveEnabled, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-    pub async fn set_album_drive_mount_point(&self, mount_point: String) -> Result<(), String> {
+    #[cfg(kabegame_mode = "standard")]
+    pub fn set_album_drive_mount_point(&self, mount_point: String) -> Result<(), String> {
         let t = mount_point.trim().to_string();
         if t.is_empty() {
             return Err("挂载点不能为空".to_string());
         }
         let cells = Self::cells();
-        let new_value = SettingValue::String(t.clone());
+        let new_value = SettingValue::String(t);
         if let Some(cell) = cells.get(&SettingKey::AlbumDriveMountPoint) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::AlbumDriveMountPoint, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::AlbumDriveMountPoint, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_language(&self, language: Option<String>) -> Result<(), String> {
+    pub fn set_language(&self, language: Option<String>) -> Result<(), String> {
         let opt = language.and_then(|s| {
             let t = s.trim().to_string();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
+            if t.is_empty() { None } else { Some(t) }
         });
         let cells = Self::cells();
-        let new_value = SettingValue::OptionString(opt.clone());
+        let new_value = SettingValue::OptionString(opt);
         if let Some(cell) = cells.get(&SettingKey::Language) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::Language, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::Language, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
-    pub async fn set_current_wallpaper_image_id(
+    pub fn set_current_wallpaper_image_id(
         &self,
         image_id: Option<String>,
     ) -> Result<(), String> {
         let normalized = image_id.and_then(|s| {
             let t = s.trim().to_string();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
+            if t.is_empty() { None } else { Some(t) }
         });
         let cells = Self::cells();
         let new_value = SettingValue::OptionString(normalized);
         if let Some(cell) = cells.get(&SettingKey::CurrentWallpaperImageId) {
-            let mut val = cell.lock().await;
-            *val = new_value.clone();
+            cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::CurrentWallpaperImageId, &new_value).await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::CurrentWallpaperImageId, &new_value);
+        Self::trigger_debounce_save()?;
         Ok(())
     }
 
     /// 切换模式前调用：交换 style/transition
-    pub async fn swap_style_transition_for_mode_switch(
+    pub fn swap_style_transition_for_mode_switch(
         &self,
         old_mode: &str,
         new_mode: &str,
     ) -> Result<(String, String), String> {
         // 获取当前值
-        let cur_style = self.get_wallpaper_rotation_style().await?;
-        let cur_transition = self.get_wallpaper_rotation_transition().await?;
+        let cur_style = self.get_wallpaper_rotation_style();
+        let cur_transition = self.get_wallpaper_rotation_transition();
 
         // 缓存旧模式的值
-        let mut style_by_mode = self.get_wallpaper_style_by_mode().await?;
-        let mut transition_by_mode = self.get_wallpaper_transition_by_mode().await?;
+        let mut style_by_mode = self.get_wallpaper_style_by_mode();
+        let mut transition_by_mode = self.get_wallpaper_transition_by_mode();
         style_by_mode.insert(old_mode.to_string(), cur_style.clone());
         transition_by_mode.insert(old_mode.to_string(), cur_transition.clone());
 
@@ -1871,40 +1690,27 @@ Write-Output "$style,$tile"
         let cells = Self::cells();
         let new_style_value = SettingValue::String(next_style.clone());
         let new_transition_value = SettingValue::String(next_transition.clone());
-        let new_style_by_mode_value = SettingValue::HashMapStringString(style_by_mode.clone());
-        let new_transition_by_mode_value =
-            SettingValue::HashMapStringString(transition_by_mode.clone());
+        let new_style_by_mode_value = SettingValue::HashMapStringString(style_by_mode);
+        let new_transition_by_mode_value = SettingValue::HashMapStringString(transition_by_mode);
 
         if let Some(cell) = cells.get(&SettingKey::WallpaperStyle) {
-            let mut val = cell.lock().await;
-            *val = new_style_value.clone();
+            cell.store(Arc::new(new_style_value.clone()));
         }
         if let Some(cell) = cells.get(&SettingKey::WallpaperRotationTransition) {
-            let mut val = cell.lock().await;
-            *val = new_transition_value.clone();
+            cell.store(Arc::new(new_transition_value.clone()));
         }
         if let Some(cell) = cells.get(&SettingKey::WallpaperStyleByMode) {
-            let mut val = cell.lock().await;
-            *val = new_style_by_mode_value.clone();
+            cell.store(Arc::new(new_style_by_mode_value.clone()));
         }
         if let Some(cell) = cells.get(&SettingKey::WallpaperTransitionByMode) {
-            let mut val = cell.lock().await;
-            *val = new_transition_by_mode_value.clone();
+            cell.store(Arc::new(new_transition_by_mode_value.clone()));
         }
 
-        Self::emit_setting_change(SettingKey::WallpaperStyle, &new_style_value).await;
-        Self::emit_setting_change(
-            SettingKey::WallpaperRotationTransition,
-            &new_transition_value,
-        )
-        .await;
-        Self::emit_setting_change(SettingKey::WallpaperStyleByMode, &new_style_by_mode_value).await;
-        Self::emit_setting_change(
-            SettingKey::WallpaperTransitionByMode,
-            &new_transition_by_mode_value,
-        )
-        .await;
-        Self::trigger_debounce_save().await?;
+        Self::emit_setting_change(SettingKey::WallpaperStyle, &new_style_value);
+        Self::emit_setting_change(SettingKey::WallpaperRotationTransition, &new_transition_value);
+        Self::emit_setting_change(SettingKey::WallpaperStyleByMode, &new_style_by_mode_value);
+        Self::emit_setting_change(SettingKey::WallpaperTransitionByMode, &new_transition_by_mode_value);
+        Self::trigger_debounce_save()?;
 
         Ok((next_style, next_transition))
     }

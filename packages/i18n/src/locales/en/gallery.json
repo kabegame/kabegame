@@ -87,6 +87,7 @@
   "jumpToPage": "Go to page",
   "byTimeAsc": "By time (ascending)",
   "byTimeDesc": "By time (descending)",
+  "byAlbumDefaultSort": "Default order",
   "byAlbumJoinAsc": "By add order (oldest first)",
   "byAlbumJoinDesc": "By add order (newest first)",
   "byWallpaperSetAsc": "By last set as wallpaper (oldest first)",

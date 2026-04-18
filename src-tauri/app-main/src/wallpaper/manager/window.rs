@@ -23,15 +23,11 @@ impl WindowWallpaperManager {
 #[async_trait]
 impl WallpaperManager for WindowWallpaperManager {
     async fn get_style(&self) -> Result<String, String> {
-        kabegame_core::settings::Settings::global()
-            .get_wallpaper_rotation_style()
-            .await
+        Ok(kabegame_core::settings::Settings::global().get_wallpaper_rotation_style())
     }
 
     async fn get_transition(&self) -> Result<String, String> {
-        kabegame_core::settings::Settings::global()
-            .get_wallpaper_rotation_transition()
-            .await
+        Ok(kabegame_core::settings::Settings::global().get_wallpaper_rotation_transition())
     }
 
     async fn set_wallpaper_path(&self, file_path: &str) -> Result<(), String> {

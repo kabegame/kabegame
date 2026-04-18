@@ -112,7 +112,7 @@ import { ElMessage } from "element-plus";
 import { List } from "@element-plus/icons-vue";
 import { IS_ANDROID } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
-import { useInstalledPluginsStore, usePluginStore } from "../../stores/plugins";
+import { usePluginStore } from "../../stores/plugins";
 import {
   imageMetadataResolverKey,
   type ImageMetadataResolver,
@@ -121,7 +121,6 @@ import { displayImageMimeType } from "../../utils/mediaMime";
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
-const installedPluginsStore = useInstalledPluginsStore();
 
 const toLocaleTag = (loc: string) => {
   if (loc.startsWith("zh")) return loc === "zhtw" ? "zh-TW" : "zh-CN";
@@ -305,10 +304,7 @@ onUnmounted(() => {
 });
 
 function pluginDescriptionTemplate(pluginId: string): string | undefined {
-  const a = pluginStore.pluginDescriptionTemplate(pluginId);
-  if (a) return a;
-  const b = installedPluginsStore.pluginDescriptionTemplate(pluginId);
-  return b;
+  return pluginStore.pluginDescriptionTemplate(pluginId);
 }
 
 /**

@@ -34,7 +34,7 @@ pub async fn open_album_virtual_drive_folder(album_id: String) -> Result<(), Str
         let _ = album_id;
         return Err("当前模式不支持虚拟盘".to_string());
     }
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     {
         use kabegame_core::settings::Settings;
         use kabegame_core::virtual_driver::album_folder_abs_path_for_explorer;
@@ -43,10 +43,7 @@ pub async fn open_album_virtual_drive_folder(album_id: String) -> Result<(), Str
         if id.is_empty() {
             return Err("画册 ID 不能为空".to_string());
         }
-        let mount = Settings::global()
-            .get_album_drive_mount_point()
-            .await
-            .map_err(|e| e.to_string())?;
+        let mount = Settings::global().get_album_drive_mount_point();
         let path = album_folder_abs_path_for_explorer(&mount, id)?;
         shell_open::open_explorer(&path)
     }

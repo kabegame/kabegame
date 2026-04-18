@@ -89,6 +89,7 @@
   "jumpToPage": "ページへ移動",
   "byTimeAsc": "日時順（昇順）",
   "byTimeDesc": "日時順（降順）",
+  "byAlbumDefaultSort": "既定の並び順",
   "byAlbumJoinAsc": "追加順（古い順）",
   "byAlbumJoinDesc": "追加順（新しい順）",
   "byWallpaperSetAsc": "壁紙にした順（古い順）",

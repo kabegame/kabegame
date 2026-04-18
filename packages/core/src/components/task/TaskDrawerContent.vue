@@ -25,15 +25,10 @@
                           {{ downloadStateText(download) }}
                         </el-tag>
                       </div>
-                      <div
-                        v-if="shouldShowDownloadProgress(download) && downloadProgressText(download)"
-                        class="download-progress"
-                      >
-                        <el-progress
-                          :percentage="downloadProgressPercent(download)"
-                          :format="() => downloadProgressText(download)!"
-                          :stroke-width="10"
-                        />
+                      <div v-if="shouldShowDownloadProgress(download) && downloadProgressText(download)"
+                        class="download-progress">
+                        <el-progress :percentage="downloadProgressPercent(download)"
+                          :format="() => downloadProgressText(download)!" :stroke-width="10" />
                       </div>
                     </div>
                   </div>
@@ -47,10 +42,7 @@
         </div>
       </CollapsibleDrawerPanel>
 
-      <CollapsibleDrawerPanel
-        storage-key="kabegame-task-drawer-tasks-open"
-        class="drawer-panel--tasks"
-      >
+      <CollapsibleDrawerPanel storage-key="kabegame-task-drawer-tasks-open" class="drawer-panel--tasks">
         <template #title>
           <span class="drawer-panel-title">{{ t("tasks.taskList") }}</span>
         </template>
@@ -60,152 +52,94 @@
         <div class="drawer-panel-body drawer-panel-body--tasks">
           <div class="tasks-summary">
             <span>{{ t('tasks.drawerTaskCount', { n: displayTaskCount }) }}</span>
-            <el-button
-              text
-              size="small"
-              class="clear-completed-btn"
-              :disabled="nonRunningTasksCount === 0"
-              @click.stop="$emit('clear-finished-tasks')"
-            >
+            <el-button text size="small" class="clear-completed-btn" :disabled="nonRunningTasksCount === 0"
+              @click.stop="$emit('clear-finished-tasks')">
               {{ t('tasks.drawerClearAll', { n: nonRunningTasksCount }) }}
             </el-button>
           </div>
           <div class="tasks-list-col">
-            <div
-              class="tasks-list tasks-list--virtual"
-              v-bind="containerProps"
-              @scroll="handleTasksListScroll"
-            >
+            <div class="tasks-list tasks-list--virtual" v-bind="containerProps" @scroll="handleTasksListScroll">
               <div v-bind="wrapperProps">
-                <div
-                  v-for="item in virtualList"
-                  :key="item.data.id"
-                  class="task-drawer-virtual-item"
-                >
-                  <div
-                    class="task-item task-item--fixed"
-                    :class="{ 'task-item-failed': item.data.status === 'failed' }"
-                    @contextmenu="(e) => handleTaskContextMenu(e, item.data)"
-                  >
-              <div class="task-close">
-                <el-button
-                  text
-                  circle
-                  size="small"
-                  class="close-btn"
-                  :title="t('tasks.drawerDeleteTask')"
-                  @click="$emit('delete-task', item.data.id)"
-                >
-                  <el-icon><Close /></el-icon>
-                </el-button>
-              </div>
-              <div class="task-item-body task-item-body--drawer">
-                <div class="task-drawer-grid-icon" aria-hidden="true">
-                  <div class="task-drawer-plugin-icon-box">
-                    <el-image
-                      v-if="drawerPluginIconSrc(item.data.pluginId)"
-                      :src="String(drawerPluginIconSrc(item.data.pluginId))"
-                      fit="contain"
-                      class="task-drawer-plugin-img"
-                    />
-                    <el-icon v-else class="task-drawer-plugin-fallback"><Grid /></el-icon>
-                  </div>
-                </div>
-                <div class="task-drawer-grid-summary">
-                  <TaskSummaryRow
-                    :task="item.data"
-                    layout="stacked"
-                    :show-schedule-button="isScheduledTask(item.data)"
-                    :scheduled-task-aria-label="scheduledTaskAriaLabel(item.data)"
-                    show-status-tag
-                    stacked-omit-image-log-actions
-                    @open-task-images="(id) => $emit('open-task-images', id)"
-                    @open-task-log="openTaskLog($event)"
-                    @open-schedule-config="handleOpenTaskScheduleConfig($event)"
-                  />
-                </div>
-                <div class="task-drawer-grid-footer">
-                  <div class="task-drawer-footer-progress-slot">
-                    <div
-                      v-if="shouldShowTaskProgressBar(item.data)"
-                      class="task-drawer-running-block"
-                    >
-                      <div
-                        class="task-progress task-progress--compact"
-                        :class="{
-                          'task-progress--canceled-bar': isCanceledTaskStatus(item.data.status),
-                          'task-progress--failed-bar': item.data.status === 'failed',
-                        }"
-                      >
-                        <el-progress
-                          :percentage="taskProgressPercent(item.data)"
-                          :stroke-width="4"
-                          :color="taskProgressBarColor(item.data.status)"
-                          :show-text="item.data.status === 'running'"
-                        />
-                        <div v-if="item.data.status === 'running'" class="progress-footer">
-                          <el-button
-                            text
-                            size="small"
-                            type="warning"
-                            class="stop-btn"
-                            @click.stop="$emit('cancel-task', item.data.id)"
-                          >
-                            {{ t("tasks.drawerStop") }}
-                          </el-button>
+                <div v-for="item in virtualList" :key="item.data.id" class="task-drawer-virtual-item">
+                  <div class="task-item task-item--fixed" :class="{ 'task-item-failed': item.data.status === 'failed' }"
+                    @contextmenu="(e) => handleTaskContextMenu(e, item.data)">
+                    <div class="task-close">
+                      <el-button text circle size="small" class="close-btn" :title="t('tasks.drawerDeleteTask')"
+                        @click="$emit('delete-task', item.data.id)">
+                        <el-icon>
+                          <Close />
+                        </el-icon>
+                      </el-button>
+                    </div>
+                    <div class="task-item-body task-item-body--drawer">
+                      <div class="task-drawer-grid-icon" aria-hidden="true">
+                        <div class="task-drawer-plugin-icon-box">
+                          <el-image v-if="drawerPluginIconSrc(item.data.pluginId)"
+                            :src="String(drawerPluginIconSrc(item.data.pluginId))" fit="contain"
+                            class="task-drawer-plugin-img" />
+                          <el-icon v-else class="task-drawer-plugin-fallback">
+                            <Grid />
+                          </el-icon>
+                        </div>
+                      </div>
+                      <div class="task-drawer-grid-summary">
+                        <TaskSummaryRow :task="item.data" layout="stacked"
+                          :show-schedule-button="isScheduledTask(item.data)"
+                          :scheduled-task-aria-label="scheduledTaskAriaLabel(item.data)" show-status-tag
+                          stacked-omit-image-log-actions @open-task-images="(id) => $emit('open-task-images', id)"
+                          @open-task-log="openTaskLog($event)"
+                          @open-schedule-config="handleOpenTaskScheduleConfig($event)" />
+                      </div>
+                      <div class="task-drawer-grid-footer">
+                        <div class="task-drawer-footer-progress-slot">
+                          <div v-if="shouldShowTaskProgressBar(item.data)" class="task-drawer-running-block">
+                            <div class="task-progress task-progress--compact" :class="{
+                              'task-progress--canceled-bar': isCanceledTaskStatus(item.data.status),
+                              'task-progress--failed-bar': item.data.status === 'failed',
+                            }">
+                              <el-progress :percentage="taskProgressPercent(item.data)" :stroke-width="4"
+                                :color="taskProgressBarColor(item.data.status)"
+                                :show-text="item.data.status === 'running'" />
+                              <div v-if="item.data.status === 'running'" class="progress-footer">
+                                <el-button text size="small" type="warning" class="stop-btn"
+                                  @click.stop="$emit('cancel-task', item.data.id)">
+                                  {{ t("tasks.drawerStop") }}
+                                </el-button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <div class="task-drawer-footer-actions">
+                          <div class="task-drawer-action-btns">
+                            <el-button plain size="small" type="info" class="task-drawer-action-btn"
+                              :title="t('tasks.openRunParams')" @click.stop="openRunParamsDialog(item.data)">
+                              {{ t("tasks.drawerTaskActionParams") }}
+                            </el-button>
+                            <el-button plain size="small" type="success" class="task-drawer-action-btn"
+                              :title="t('tasks.drawerViewImages')"
+                              @click.stop="$emit('open-task-images', item.data.id)">
+                              {{ t("tasks.drawerTaskActionImages") }}
+                            </el-button>
+                            <el-button plain size="small" type="warning" class="task-drawer-action-btn"
+                              :title="t('tasks.drawerViewLog')" @click.stop="openTaskLog(item.data.id)">
+                              {{ t("tasks.drawerTaskActionLog") }}
+                            </el-button>
+                          </div>
+                          <div v-if="item.data.startTime != null && Number(item.data.startTime) > 0"
+                            class="task-drawer-start-time" :title="formatDrawerTaskStartFull(item.data.startTime)">
+                            {{ formatDrawerTaskStart(item.data.startTime) }}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                  <div class="task-drawer-footer-actions">
-                    <div class="task-drawer-action-btns">
-                      <el-button
-                        plain
-                        size="small"
-                        type="info"
-                        class="task-drawer-action-btn"
-                        :title="t('tasks.openRunParams')"
-                        @click.stop="openRunParamsDialog(item.data)"
-                      >
-                        {{ t("tasks.drawerTaskActionParams") }}
-                      </el-button>
-                      <el-button
-                        plain
-                        size="small"
-                        type="success"
-                        class="task-drawer-action-btn"
-                        :title="t('tasks.drawerViewImages')"
-                        @click.stop="$emit('open-task-images', item.data.id)"
-                      >
-                        {{ t("tasks.drawerTaskActionImages") }}
-                      </el-button>
-                      <el-button
-                        plain
-                        size="small"
-                        type="warning"
-                        class="task-drawer-action-btn"
-                        :title="t('tasks.drawerViewLog')"
-                        @click.stop="openTaskLog(item.data.id)"
-                      >
-                        {{ t("tasks.drawerTaskActionLog") }}
-                      </el-button>
-                    </div>
-                    <div
-                      v-if="item.data.startTime != null && Number(item.data.startTime) > 0"
-                      class="task-drawer-start-time"
-                      :title="formatDrawerTaskStartFull(item.data.startTime)"
-                    >
-                      {{ formatDrawerTaskStart(item.data.startTime) }}
-                    </div>
-                  </div>
-                </div>
-              </div>
                   </div>
                 </div>
               </div>
             </div>
             <div v-if="hasMore && loadingMore" class="load-more-indicator">
-              <el-icon class="is-loading"><Loading /></el-icon>
+              <el-icon class="is-loading">
+                <Loading />
+              </el-icon>
               <span>{{ t("common.loading") }}</span>
             </div>
           </div>
@@ -213,11 +147,7 @@
       </CollapsibleDrawerPanel>
     </div>
 
-    <TaskParamsDialog
-      v-model="runParamsDialogOpen"
-      :task="runParamsTask"
-      @closed="runParamsTask = null"
-    />
+    <TaskParamsDialog v-model="runParamsDialogOpen" :task="runParamsTask" @closed="runParamsTask = null" />
     <TaskLogDialog ref="taskLogDialogRef" />
   </div>
 </template>
@@ -362,7 +292,7 @@ function taskProgressBarColor(status: string): string | undefined {
 function drawerPluginIconSrc(pluginId: string): string | undefined {
   if (!pluginId) return undefined;
   if (pluginId === LOCAL_IMPORT_PLUGIN_ID) return kbAppPublicIcon;
-  return pluginStore.pluginIconUrl(pluginId);
+  return pluginStore.pluginIconDataUrl(pluginId);
 }
 
 /** 与虚拟列表行高一致（须与 .task-drawer-virtual-item height 相同） */
@@ -1214,6 +1144,7 @@ onUnmounted(() => {
       :deep(.el-progress-bar__outer) {
         background-color: var(--el-fill-color-light, #e4e7ed) !important;
       }
+
       :deep(.el-progress-bar__inner) {
         background-color: var(--el-color-info, #909399) !important;
         background-image: none !important;

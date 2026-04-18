@@ -251,7 +251,7 @@
                       :style="{ width: `${storeInstallPercentClamped(plugin)}%` }" />
                     <span class="plugin-store-install-btn__label">{{
                       t('plugins.installingWithPercent', { percent: storeInstallPercentClamped(plugin) })
-                    }}</span>
+                      }}</span>
                   </span>
                   <span v-else>{{ $t('plugins.install') }}</span>
                 </el-button>
@@ -264,7 +264,7 @@
                       :style="{ width: `${storeInstallPercentClamped(plugin)}%` }" />
                     <span class="plugin-store-install-btn__label">{{
                       t('plugins.updatingWithPercent', { percent: storeInstallPercentClamped(plugin) })
-                    }}</span>
+                      }}</span>
                   </span>
                   <span v-else>{{ $t('plugins.update') }}</span>
                 </el-button>
@@ -280,7 +280,7 @@
                       :style="{ width: `${storeInstallPercentClamped(plugin)}%` }" />
                     <span class="plugin-store-install-btn__label">{{
                       t('plugins.reinstallingWithPercent', { percent: storeInstallPercentClamped(plugin) })
-                    }}</span>
+                      }}</span>
                   </span>
                   <span v-else>{{ $t('plugins.reinstall') }}</span>
                 </el-button>
@@ -446,22 +446,6 @@ interface StoreDownloadProgressPayload {
 /** 已安装插件或商店插件，用于列表卡片、详情跳转等统一入参 */
 type PluginListItem = Plugin | StorePluginResolved;
 
-interface ImportPreview {
-  id: string;
-  name: string;
-  version: string;
-  sizeBytes: number;
-  alreadyExists: boolean;
-  existingVersion?: string | null;
-  changeLogDiff?: string | null;
-  canInstall?: boolean;
-  installError?: string | null;
-}
-
-interface StoreInstallPreview {
-  tmpPath: string;
-  preview: ImportPreview;
-}
 
 const pluginStore = usePluginStore();
 const { t } = useI18n();
@@ -602,16 +586,15 @@ const applyInstalledVersions = (arr: StorePluginResolved[] | null | undefined): 
 // - 本地已安装：key = local:<pluginId>
 // - 商店源：key = store:<sourceId>:<pluginId>
 //
-// 关键：商店 tab 绝不能“命中”本地 icon，即使 id 一样；因此必须用不同 key 做隔离。
+// 关键：商店 tab 绝不能”命中”本地 icon，即使 id 一样；因此必须用不同 key 做隔离。
 const pluginIcons = ref<Record<string, string>>({});
 const pluginIconLoading = ref<Record<string, boolean>>({});
 
-const localIconKey = (pluginId: string) => `local:${pluginId}`;
 const storeIconKey = (sourceId: string, pluginId: string) => `store:${sourceId}:${pluginId}`;
 const getIconKey = (p: PluginListItem) => {
   // StorePluginResolved 一定有 sourceId；本地 Plugin 没有该字段
   const sid = "sourceId" in p && typeof p.sourceId === "string" ? p.sourceId : null;
-  return sid ? storeIconKey(sid, p.id) : localIconKey(p.id);
+  return sid ? storeIconKey(sid, p.id) : `local:${p.id}`;
 };
 const isIconLoading = (p: PluginListItem) => {
   const k = getIconKey(p);
@@ -638,35 +621,8 @@ const getPluginIconSrc = (p: PluginListItem) => {
     return pluginIcons.value[key] || null;
   }
 
-  // 已安装：只读本地 icon.png（data URL）
-  const key = localIconKey(p.id);
-  return pluginIcons.value[key] || null;
-};
-
-const loadPluginIcon = async (pluginId: string) => {
-  if (!pluginId) return;
-  const key = localIconKey(pluginId);
-  if (pluginIcons.value[key]) return;
-  if (pluginIconLoading.value[key]) return;
-  setPluginIconLoading(key, true);
-  try {
-    const iconData = await invoke<number[] | null>("get_plugin_icon", {
-      pluginId,
-    });
-    if (!iconData || iconData.length === 0) {
-      return;
-    }
-    const bytes = new Uint8Array(iconData);
-    const binaryString = Array.from(bytes)
-      .map((byte) => String.fromCharCode(byte))
-      .join("");
-    const base64 = btoa(binaryString);
-    pluginIcons.value = { ...pluginIcons.value, [key]: `data:image/png;base64,${base64}` };
-  } catch (e) {
-    // 图标缺失不算错误：保持占位符即可
-  } finally {
-    setPluginIconLoading(key, false);
-  }
+  // 已安装：图标已在 Plugin.iconPngBase64 中，直接从 store 读取
+  return pluginStore.pluginIconDataUrl(p.id) || null;
 };
 
 // 商店列表：当 index.json 不再提供 iconUrl 时，从 .kgpg 固定头部通过 Range 读取 icon（后端返回 PNG bytes）
@@ -730,10 +686,7 @@ const prefetchRemoteIconsForSource = async (sourceId: string) => {
 };
 
 const refreshPluginIcons = async () => {
-  const ids = new Set<string>();
-  // 已安装源：一定尝试加载本地 icon
-  installedPlugins.value.forEach((p) => ids.add(p.id));
-  await Promise.all([...ids].map((id) => loadPluginIcon(id)));
+  // 已安装插件的图标已内嵌在 Plugin.iconPngBase64 中，无需单独加载
 };
 
 const markStorePluginInstalled = (pluginId: string, installedVersion: string) => {
@@ -1165,28 +1118,21 @@ const handleImport = async () => {
     const fileExt = filePath.split('.').pop()?.toLowerCase();
 
     if (fileExt === "kgpg") {
-      const preview = await invoke<ImportPreview>("preview_import_plugin", { zipPath: filePath });
+      const parsed = await invoke<Plugin>("preview_import_plugin", { zipPath: filePath });
 
-      // 检查是否允许安装
-      if (preview.canInstall === false) {
-        ElMessage.warning(preview.installError || "该插件不允许导入");
+      const existing = pluginStore.plugins.find(p => p.id === parsed.id);
+      const alreadyExists = !!existing;
+      const existingVersion = existing?.version;
+
+      if (alreadyExists && existingVersion && existingVersion === parsed.version) {
+        ElMessage.info(`插件已存在（v${parsed.version}），无需重复导入`);
         return;
       }
 
-      if (preview.alreadyExists && preview.existingVersion && preview.existingVersion === preview.version) {
-        ElMessage.info(`插件已存在（v${preview.version}），无需重复导入`);
-        return;
-      }
-
-      const changeLogHtml = preview.changeLogDiff
-        ? `<details style="margin-top:10px;"><summary>查看变更</summary><pre style="white-space:pre-wrap;margin-top:8px;">${escapeHtml(
-          preview.changeLogDiff
-        )}</pre></details>`
-        : "";
-
-      const msg = preview.alreadyExists
-        ? `检测到同 ID 插件，版本将从 <b>v${preview.existingVersion || "?"}</b> 变更为 <b>v${preview.version}</b>，是否继续导入？${changeLogHtml}`
-        : `将导入插件：<b>${escapeHtml(preview.name)}</b>（v${preview.version}，${formatBytes(preview.sizeBytes)}），是否继续？${changeLogHtml}`;
+      const displayName = pluginName(parsed);
+      const msg = alreadyExists
+        ? `检测到同 ID 插件，版本将从 <b>v${existingVersion || "?"}</b> 变更为 <b>v${parsed.version}</b>，是否继续导入？`
+        : `将导入插件：<b>${escapeHtml(displayName)}</b>（v${parsed.version}，${formatBytes(parsed.sizeBytes)}），是否继续？`;
 
       await ElMessageBox.confirm(msg, t("plugins.confirmImport"), {
         type: "warning",
@@ -1204,7 +1150,7 @@ const handleImport = async () => {
     ElMessage.success(t("plugins.importSuccess"));
     showImportDialog.value = false;
     selectedFilePath.value = null;
-    await pluginStore.loadPlugins();
+    // plugin-added / plugin-updated event auto-updates the store
     // 若当前在某个商店源 tab，导入后顺手刷新当前源列表（否则只刷新已安装即可）
     // 只需更新 installedVersion，使用缓存即可
     if (activeStoreSourceId.value) {
@@ -1250,29 +1196,23 @@ const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = 
       ...installProgressByKey.value,
       [storePluginProgressKey(plugin)]: 0,
     };
-    const res = await invoke<StoreInstallPreview>("preview_store_install", {
-      downloadUrl: plugin.downloadUrl,
-      sha256: plugin.sha256 ?? null,
-      sizeBytes: plugin.sizeBytes || null,
-      sourceId: plugin.sourceId ?? null,
-      version: plugin.version ?? null,
+    const installed = await invoke<Plugin>("install_from_store", {
+      sourceId: plugin.sourceId,
+      pluginId: plugin.id,
     });
 
-    await invoke("import_plugin_from_zip", { zipPath: res.tmpPath });
-
     ElMessage.success(isReinstall ? t("plugins.reinstallSuccess") : willUpdate ? t("plugins.updateSuccess") : t("plugins.installSuccess"));
-    await pluginStore.loadPlugins();
+    // plugin-added / plugin-updated event auto-updates the store
 
     // 只更新本地 UI 状态：不触发整页/整 tab 列表刷新
-    markStorePluginInstalled(plugin.id, res.preview.version);
-    if (plugin.sourceId && res.preview?.version && plugin.version !== res.preview.version) {
+    markStorePluginInstalled(plugin.id, installed.version);
+    if (plugin.sourceId && installed.version && plugin.version !== installed.version) {
       const list = storePluginsBySource.value[plugin.sourceId] || [];
       storePluginsBySource.value = {
         ...storePluginsBySource.value,
-        [plugin.sourceId]: list.map((p) => (p.id === plugin.id ? { ...p, version: res.preview.version } : p)),
+        [plugin.sourceId]: list.map((p) => (p.id === plugin.id ? { ...p, version: installed.version } : p)),
       };
     }
-    await loadPluginIcon(plugin.id);
   } catch (error) {
     if (error !== "cancel") {
       console.error("商店安装失败:", error);
@@ -1291,7 +1231,7 @@ const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = 
 
 const viewPluginDetails = (plugin: PluginListItem) => {
   // 跳转到插件详情页面，对 ID 进行 URL 编码以支持中文字符
-  // 商店/官方源条目：通过 query 携带 downloadUrl 等信息，详情页才能走“远程下载到内存解析”的路径
+  // 商店/官方源条目：通过 mode=remote&sourceId 进入远程详情路径
   const path = `/plugin-detail/${encodeURIComponent(plugin.id)}`;
   if ("downloadUrl" in plugin && plugin.downloadUrl) {
     const store = plugin as StorePluginResolved;
@@ -1303,12 +1243,8 @@ const viewPluginDetails = (plugin: PluginListItem) => {
     router.push({
       path,
       query: {
-        downloadUrl: store.downloadUrl,
-        sha256: store.sha256 ?? undefined,
-        sizeBytes: store.sizeBytes != null ? String(store.sizeBytes) : undefined,
-        iconUrl: store.iconUrl ?? undefined,
+        mode: "remote",
         sourceId: store.sourceId ?? undefined,
-        version: store.version ?? undefined,
       },
     });
     return;
@@ -1346,8 +1282,8 @@ const handleRefresh = async () => {
         }
       }, 300);
       try {
-        // 触发后端全量刷新缓存（避免 get_plugins 只返回内存缓存导致“刷新无效”）
-        await pluginStore.loadPlugins();
+        // 触发后端全量刷新缓存（避免 get_plugins 只返回内存缓存导致”刷新无效”）
+        await pluginStore.refreshPlugins();
         await refreshPluginIcons();
         ElMessage.success(t("plugins.installedRefreshSuccess"));
       } catch (error) {

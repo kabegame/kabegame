@@ -343,10 +343,11 @@ const lastVisitSubtitle = computed(() => {
 
 const fetchPageImages = async (path: string) => {
   clearImageMetadataCache();
+  const p = path.endsWith("/") || path.endsWith("/*") ? path : `${path}/`;
   const res = await invoke<{
     total?: number;
     entries?: Array<{ kind: string; image?: ImageInfo }>;
-  }>("browse_gallery_provider", { path, pageSize: pageSize.value });
+  }>("browse_gallery_provider", { path: p });
   const list: ImageInfo[] = (res?.entries ?? [])
     .filter((e: any) => e?.kind === "image")
     .map((e: any) => e.image as ImageInfo);

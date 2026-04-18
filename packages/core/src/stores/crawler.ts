@@ -434,14 +434,14 @@ export const useCrawlerStore = defineStore("crawler", () => {
 
           const mergedProgress = merged.progress;
           if (mergedProgress != null) {
-            if (mergedProgress <= (cur.progress ?? 0)) {
-              return;
-            }
             const diffKeys = Object.keys(diff).filter((k) => diff[k] != null);
             const onlyProgress =
               diffKeys.length > 0 &&
               diffKeys.every((k) => k === "progress");
             if (onlyProgress) {
+              if (mergedProgress <= (cur.progress ?? 0)) {
+                return;
+              }
               const now = Date.now();
               const lastAt = lastProgressUpdateAt.get(taskId) ?? 0;
               if (mergedProgress < 100 && now - lastAt < 100) {
@@ -659,36 +659,23 @@ export const useCrawlerStore = defineStore("crawler", () => {
     }
   }
 
-  async function loadPluginRecommendedConfigs() {
+  function loadPluginRecommendedConfigs(
+    installedPlugins: Array<{ id: string; baseUrl?: string; recommendedConfigs?: unknown[] }> = [],
+  ) {
     try {
-      const plugins = await invoke<Array<{ id?: string; baseUrl?: string }>>("get_plugins");
-      const list = Array.isArray(plugins) ? plugins : [];
       const baseUrlById = new Map<string, string>();
-      const ids: string[] = [];
-      for (const p of list) {
-        if (!p || typeof p !== "object") continue;
-        const id = String(p.id ?? "").trim();
-        if (!id) continue;
-        ids.push(id);
-        baseUrlById.set(id, String(p.baseUrl ?? ""));
+      for (const p of installedPlugins) {
+        baseUrlById.set(p.id, p.baseUrl ?? "");
       }
       const collected: PluginRecommendedPreset[] = [];
-      await Promise.all(
-        ids.map(async (pluginId) => {
-          try {
-            const raw = await invoke<unknown[]>("get_plugin_recommended_configs", {
-              pluginId,
-            });
-            const arr = Array.isArray(raw) ? raw : [];
-            for (const item of arr) {
-              const parsed = parsePluginRecommendedPreset(item, baseUrlById);
-              if (parsed) collected.push(parsed);
-            }
-          } catch {
-            // 单插件无 configs 或读包失败时忽略
-          }
-        }),
-      );
+      for (const p of installedPlugins) {
+        const cfgs = p.recommendedConfigs;
+        if (!cfgs || !Array.isArray(cfgs)) continue;
+        for (const item of cfgs) {
+          const parsed = parsePluginRecommendedPreset(item, baseUrlById);
+          if (parsed) collected.push(parsed);
+        }
+      }
       collected.sort((a, b) =>
         a.pluginId.localeCompare(b.pluginId) || a.filename.localeCompare(b.filename),
       );
@@ -980,7 +967,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     tasksTotal.value = tasks.value.length;
   }
 
-  const runConfigsReady = loadRunConfigs().then(() => loadPluginRecommendedConfigs());
+  const runConfigsReady = loadRunConfigs();
   const tasksReady = loadTasks();
 
   return {

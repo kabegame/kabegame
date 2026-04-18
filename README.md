@@ -82,11 +82,11 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers�
 
 | OS | Standard | Light |
 |----|----------|-------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame-standard_3.5.0_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame-light_3.5.0_x64-setup.exe) |
-| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame-standard_3.5.0_aarch64.dmg) | [dmg](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame-light_3.5.0_aarch64.dmg) |
-| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame-standard_3.5.0_amd64.deb) | [deb](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame-light_3.5.0_amd64.deb) |
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame-standard_4.0.0_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame-light_4.0.0_x64-setup.exe) |
+| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame-standard_4.0.0_aarch64.dmg) | [dmg](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame-light_4.0.0_aarch64.dmg) |
+| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame-standard_4.0.0_amd64.deb) | [deb](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame-light_4.0.0_amd64.deb) |
 
-- **Android preview** : [apk](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame_3.5.0_android-preview.apk) on the same releases page.
+- **Android preview** : [apk](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame_4.0.0_android-preview.apk) on the same releases page.
 
 ## Installation
 
@@ -327,7 +327,8 @@ bun run build:ffmpeg             # Needs libx264 (macOS: brew install x264, Ubun
 
 - `-c, --component`: `main` | `cli`
 - `bun check` requires `-c`
-- `--mode`: `standard` (default, store + virtual disk + CLI) | `light` (store only)
+- `--mode`: `standard` (default, store + virtual disk + CLI) | `light` (store only) | `android` (Android target)
+- `--data`: `dev` (default for `bun dev` — uses repo-local `data/` and `cache/` dirs) | `prod` (default for all other commands — uses system data dirs). Use `--data prod` during `bun dev` to test against your installed Kabegame data.
 - `--skip`: `vue` | `cargo`
 - Main app `bun dev -c main` runs `crawler-plugins:package-to-dev-data` (NX) so packed `.kgpg` files land in `data/plugins-directory` for local testing; release builds do not bundle store plugins (users install from the GitHub store).
 
@@ -349,13 +350,13 @@ See [Android migration guide](docs/TAURI_ANDROID_MIGRATION.md). Main requirement
 
 #### Run on device/emulator
 
-Use **`bun dev -c main --android`** (omit `--android` and it runs desktop). With multiple devices:
+Use **`bun dev -c main --mode android`** (omit `--mode android` and it runs desktop). With multiple devices:
 
 ```bash
 adb devices
 
 # Specify device (replace <device-id> with first column from adb devices)
-bun dev -c main --android -- <device-id>
+bun dev -c main --mode android -- <device-id>
 ```
 
 #### DevTools

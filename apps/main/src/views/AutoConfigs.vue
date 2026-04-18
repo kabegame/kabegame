@@ -1,8 +1,8 @@
 <template>
   <div class="auto-configs-container">
     <TaskLogDialog ref="taskLogDialogRef" />
-    <PageHeader :title="$t('autoConfig.tabTitle')" :show="headerShowFeatures" :fold="[]"
-      sticky @action="handleHeaderAction">
+    <PageHeader :title="$t('autoConfig.tabTitle')" :show="headerShowFeatures" :fold="[]" sticky
+      @action="handleHeaderAction">
       <template #subtitle>
         <span>{{ headerSubtitle }}</span>
       </template>
@@ -478,7 +478,7 @@ function onPluginFilterCommand(cmd: string) {
   filterPluginId.value = cmd ? cmd : null;
 }
 
-const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconUrl(pluginId);
+const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconDataUrl(pluginId);
 
 const openTaskImages = (taskId: string) => {
   void router.push({ name: "TaskDetail", params: { id: taskId } });

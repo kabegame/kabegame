@@ -40,6 +40,7 @@ const emit = defineEmits<{
   help: [];
   'quick-settings': [];
   'view-task-log': [];
+  'view-task-params': [];
   back: [];
 }>();
 
@@ -54,6 +55,7 @@ const showIds = computed(() => {
       HeaderFeatureId.AddToAlbum,
       HeaderFeatureId.TaskDrawer,
       HeaderFeatureId.TaskViewLog,
+      HeaderFeatureId.TaskViewParams,
       HeaderFeatureId.Help,
       HeaderFeatureId.QuickSettings,
     ];
@@ -68,6 +70,7 @@ const foldIds = computed(() => {
     HeaderFeatureId.DeleteTask,
     HeaderFeatureId.AddToAlbum,
     HeaderFeatureId.TaskViewLog,
+    HeaderFeatureId.TaskViewParams,
     HeaderFeatureId.Help,
     HeaderFeatureId.QuickSettings,
   ];
@@ -98,6 +101,9 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.TaskViewLog:
       emit("view-task-log");
+      break;
+    case HeaderFeatureId.TaskViewParams:
+      emit("view-task-params");
       break;
   }
 };

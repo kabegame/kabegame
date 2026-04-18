@@ -15,11 +15,7 @@ use std::sync::Arc;
 /// - `ImagesChange` → 按 `task_ids` 通知任务目录，并 `notify_gallery_tree_changed`
 /// - `AlbumImagesChange` → 按 `album_ids` 通知画册目录，并 `notify_gallery_tree_changed`
 /// - `TaskAdded` / `TaskDeleted` → `bump_tasks()`
-#[cfg(all(
-    not(kabegame_mode = "light"),
-    not(target_os = "android"),
-    target_os = "windows"
-))]
+#[cfg(all(kabegame_mode = "standard", target_os = "windows"))]
 pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
     use kabegame_core::ipc::events::DaemonEventKind;
 

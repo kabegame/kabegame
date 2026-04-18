@@ -13,6 +13,7 @@
   "albumDriveMessageMountPointRequired": "먼저 마운트 지점을 입력하세요(예: K:\\)",
   "albumDriveMessageEnabled": "앨범 드라이브가 켜졌습니다",
   "albumDriveMessageDisabled": "앨범 드라이브가 꺼졌습니다",
+  "albumDriveOpenErrorHint": "설정에서 앨범 드라이브를 끄고 다시 켜보세요.",
   "imageClickAction": "이미지 클릭 동작",
   "imageClickActionDesc": "이미지 왼쪽 클릭 시 동작",
   "imageClickPreview": "앱 내 미리보기",

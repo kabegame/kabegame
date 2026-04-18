@@ -4,15 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { i18n, resolveConfigText, resolveManifestText } from "@kabegame/i18n";
 import { useCrawlerStore } from "./crawler";
 
-function toPngDataUrl(iconData: number[]): string {
-  const bytes = new Uint8Array(iconData);
-  const binaryString = Array.from(bytes)
-    .map((byte) => String.fromCharCode(byte))
-    .join("");
-  const base64 = btoa(binaryString);
-  return `data:image/png;base64,${base64}`;
-}
-
 /** manifest name/description：后端下发的 Record，键为 "default"（默认）及语言码 "zh"、"ja"、"ko" 等 */
 export type PluginManifestText = Record<string, string>;
 
@@ -57,153 +48,23 @@ export function resolvePluginIdDisplayName(
   return resolvePluginRecordDisplayName(plugin);
 }
 
-/** 插件文档多语言：键 "default" 及 "zh"、"en"、"ja"、"ko" 等，与 name/desp 同构 */
+/** 插件文档多语言：键 "default" 及 "zh"、"en"、"ja"、"ko" 等，与 name/description 同构 */
 export type PluginManifestDoc = Record<string, string>;
 
 /** 插件 config 变量 name/descripts/options[].name：后端下发的 Record，键为 "default" 及语言码 "zh"、"en" 等，与 manifest 同构 */
 export type PluginConfigText = Record<string, string>;
 
-/** 插件（已安装）的基本信息 */
-export interface BrowserPlugin {
-  id: string;
-  name: PluginManifestText;
-  desp: PluginManifestText;
-  /** manifest 版本（详情接口或路由 query 可提供） */
-  version?: string | null;
-  /** manifest minAppVersion */
-  minAppVersion?: string | null;
-  icon?: string | null;
-  filePath?: string | null;
-  doc?: PluginManifestDoc | null;
-  baseUrl?: string | null;
+/** 将插件 icon_png_base64 转为 data URL */
+export function pluginIconToDataUrl(
+  iconPngBase64: string | null | undefined,
+): string | undefined {
+  if (!iconPngBase64) return undefined;
+  return `data:image/png;base64,${iconPngBase64}`;
 }
 
 /**
- * 共用的插件 store
- * 用于管理已安装插件列表和图标缓存
- */
-export const useInstalledPluginsStore = defineStore("installedPlugins", () => {
-  /** 已安装的插件列表 */
-  const plugins = ref<BrowserPlugin[]>([]);
-  /** 插件图标缓存（key: pluginId, value: data URL） */
-  const icons = ref<Record<string, string>>({});
-  /** 插件包内 `templates/description.ejs`（无则为 null） */
-  const descriptionTemplates = ref<Record<string, string | null>>({});
-  /** 是否正在加载插件列表 */
-  const isLoading = ref(false);
-
-  /**
-   * 加载已安装插件列表
-   * @param commandName 后端命令名称（默认 "plugin_editor_list_installed_plugins"）
-   */
-  async function loadPlugins(
-    commandName = "plugin_editor_list_installed_plugins",
-  ) {
-    isLoading.value = true;
-    try {
-      plugins.value = await invoke<BrowserPlugin[]>(commandName);
-      await Promise.all([loadIcons(), loadDescriptionTemplates()]);
-    } catch (e) {
-      plugins.value = [];
-      console.error("加载插件列表失败:", e);
-    } finally {
-      isLoading.value = false;
-    }
-  }
-
-  /**
-   * 加载所有已安装插件的图标
-   */
-  async function loadIcons() {
-    for (const plugin of plugins.value) {
-      if (icons.value[plugin.id]) continue; // 已加载
-      await loadIcon(plugin.id);
-    }
-  }
-
-  /**
-   * 加载单个插件的图标
-   * @param pluginId 插件 ID
-   */
-  async function loadIcon(pluginId: string) {
-    if (!pluginId || icons.value[pluginId]) return;
-    try {
-      const iconData = await invoke<number[] | null>("get_plugin_icon", {
-        pluginId,
-      });
-      if (iconData && iconData.length > 0) {
-        icons.value[pluginId] = toPngDataUrl(iconData);
-      }
-    } catch {
-      // 图标加载失败，忽略（插件可能没有图标）
-    }
-  }
-
-  async function loadDescriptionTemplates() {
-    const next: Record<string, string | null> = {};
-    await Promise.all(
-      plugins.value.map(async (p) => {
-        const pluginId = p.id;
-        if (!pluginId) return;
-        try {
-          const tpl = await invoke<string | null>("get_plugin_template", {
-            pluginId,
-            templateName: "description",
-          });
-          next[pluginId] = tpl ?? null;
-        } catch {
-          next[pluginId] = null;
-        }
-      }),
-    );
-    descriptionTemplates.value = next;
-  }
-
-  function pluginDescriptionTemplate(pluginId: string): string | undefined {
-    const v = descriptionTemplates.value[pluginId];
-    return typeof v === "string" && v.length > 0 ? v : undefined;
-  }
-
-  /**
-   * 获取插件图标 URL
-   * @param pluginId 插件 ID
-   * @returns 图标的 data URL，如果没有则返回 undefined
-   */
-  function getIcon(pluginId: string): string | undefined {
-    return icons.value[pluginId];
-  }
-
-  /**
-   * 清除缓存（用于刷新）
-   */
-  function clearCache() {
-    plugins.value = [];
-    icons.value = {};
-    descriptionTemplates.value = {};
-  }
-
-  function pluginLabel(pluginId: string): string {
-    return resolvePluginIdDisplayName(pluginId, plugins.value);
-  }
-
-  return {
-    plugins,
-    icons,
-    descriptionTemplates,
-    isLoading,
-    loadPlugins,
-    loadIcons,
-    loadIcon,
-    loadDescriptionTemplates,
-    pluginDescriptionTemplate,
-    getIcon,
-    clearCache,
-    pluginLabel,
-  };
-});
-
-/**
- * 主程序（main）使用的爬虫插件信息（与后端 `get_plugins/delete_plugin` 对应）
+ * 主程序（main）使用的爬虫插件信息（与后端 `get_plugins/refresh_plugins` 对应）
+ * 单一类型涵盖已安装、临时打开等所有场景
  */
 export interface Plugin {
   id: string;
@@ -218,6 +79,18 @@ export interface Plugin {
   scriptType?: string;
   /** manifest minAppVersion，运行前由前端校验 */
   minAppVersion?: string | null;
+  /** 插件包文件路径（.kgpg），仅已安装插件有值 */
+  filePath?: string | null;
+  /** 多语言文档 */
+  doc?: PluginManifestDoc | null;
+  /** 图标 PNG base64（不含 data: 前缀） */
+  iconPngBase64?: string | null;
+  /** templates/description.ejs 内容 */
+  descriptionTemplate?: string | null;
+  /** configs/*.json 推荐运行配置列表 */
+  recommendedConfigs?: any[];
+  /** doc_root 下非 .md 资源（图片等）base64 映射，键为相对 doc_root 的路径 */
+  docResources?: Record<string, string> | null;
 }
 
 /**
@@ -255,7 +128,9 @@ export function buildVarMetaMapFromPluginConfig(
           if (!variable) continue;
           const name = o.name;
           optionNameByVariable[variable] =
-            name !== undefined && name !== null ? (name as PluginConfigText | string) : variable;
+            name !== undefined && name !== null
+              ? (name as PluginConfigText | string)
+              : variable;
         }
       }
     }
@@ -265,12 +140,17 @@ export function buildVarMetaMapFromPluginConfig(
         ? (whenRaw as Record<string, string[]>)
         : undefined;
     metaMap[key] = {
-      name: ((raw as Record<string, unknown>).name as PluginConfigText | string) ?? key,
-      type: typeof (raw as Record<string, unknown>).type === "string"
-        ? String((raw as Record<string, unknown>).type)
-        : undefined,
+      name:
+        ((raw as Record<string, unknown>).name as PluginConfigText | string) ??
+        key,
+      type:
+        typeof (raw as Record<string, unknown>).type === "string"
+          ? String((raw as Record<string, unknown>).type)
+          : undefined,
       optionNameByVariable:
-        Object.keys(optionNameByVariable).length > 0 ? optionNameByVariable : undefined,
+        Object.keys(optionNameByVariable).length > 0
+          ? optionNameByVariable
+          : undefined,
       when,
     };
   }
@@ -278,7 +158,9 @@ export function buildVarMetaMapFromPluginConfig(
 }
 
 /** 内置本地导入插件的变量展示名（需传入 `t` 以随语言切换）。 */
-export function localImportVarMetaMap(t: (key: string) => string): Record<string, PluginVarMeta> {
+export function localImportVarMetaMap(
+  t: (key: string) => string,
+): Record<string, PluginVarMeta> {
   return {
     paths: { name: t("tasks.drawerPathsMeta"), type: "text" },
     recursive: { name: t("tasks.drawerRecursiveMeta"), type: "boolean" },
@@ -314,101 +196,89 @@ export function resolvePluginVarDisplayName(
 export const usePluginStore = defineStore("plugins", () => {
   const plugins = ref<Plugin[]>([]);
   const activePlugin = ref<Plugin | null>(null);
-  const pluginDetailCache = ref<Record<string, BrowserPlugin>>({});
-  /** 已安装插件图标 data URL，与插件列表同生命周期（loadPlugins 时整表刷新） */
-  const pluginIcons = ref<Record<string, string>>({});
-  /** 已安装插件 doc 多语言 Markdown；`null` 表示已拉取但无文档 */
-  const pluginDocs = ref<Record<string, PluginManifestDoc | null>>({});
-  /** 插件包内 `templates/description.ejs`（无则为 null） */
-  const pluginDescriptionTemplates = ref<Record<string, string | null>>({});
+  /** 插件详情页缓存（按路由 key 存；已安装和商店插件共用） */
+  const pluginDetailCache = ref<Record<string, Plugin>>({});
 
-  async function loadPluginIcons() {
-    await Promise.all(
-      plugins.value.map(async (p) => {
-        const pluginId = p.id;
-        if (!pluginId || pluginIcons.value[pluginId]) return;
-        try {
-          const iconData = await invoke<number[] | null>("get_plugin_icon", { pluginId });
-          if (iconData && iconData.length > 0) {
-            pluginIcons.value = { ...pluginIcons.value, [pluginId]: toPngDataUrl(iconData) };
-          }
-        } catch {
-          // 无图标或失败时保持空
-        }
-      }),
-    );
+  let eventListenersInitialized = false;
+
+  /** 按 id 字典序排序（稳定 — Array.prototype.sort 在现代 JS 引擎里是稳定的） */
+  function sortPluginsById(list: Plugin[]): Plugin[] {
+    return [...list].sort((a, b) => a.id.localeCompare(b.id));
   }
 
-  async function loadPluginDocs() {
-    await Promise.all(
-      plugins.value.map(async (p) => {
-        const pluginId = p.id;
-        if (!pluginId || Object.prototype.hasOwnProperty.call(pluginDocs.value, pluginId)) {
-          return;
+  const initEventListeners = async () => {
+    if (eventListenersInitialized) return;
+    eventListenersInitialized = true;
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+
+      await listen<{ plugin: Plugin }>("plugin-added", (event) => {
+        const p = event.payload?.plugin as Plugin;
+        if (!p?.id) return;
+        if (!plugins.value.some((x) => x.id === p.id)) {
+          plugins.value = sortPluginsById([...plugins.value, p]);
         }
-        try {
-          const doc = await invoke<PluginManifestDoc | null>("get_plugin_doc_by_id", {
-            pluginId,
-          });
-          pluginDocs.value = { ...pluginDocs.value, [pluginId]: doc ?? null };
-        } catch {
-          pluginDocs.value = { ...pluginDocs.value, [pluginId]: null };
+        const crawler = useCrawlerStore();
+        crawler.loadPluginRecommendedConfigs(plugins.value);
+      });
+
+      await listen<{ plugin: Plugin }>("plugin-updated", (event) => {
+        const p = event.payload?.plugin as Plugin;
+        if (!p?.id) return;
+        const idx = plugins.value.findIndex((x) => x.id === p.id);
+        if (idx >= 0) {
+          const next = plugins.value.slice();
+          next[idx] = p;
+          plugins.value = sortPluginsById(next);
+        } else {
+          plugins.value = sortPluginsById([...plugins.value, p]);
         }
-      }),
-    );
+        const crawler = useCrawlerStore();
+        crawler.loadPluginRecommendedConfigs(plugins.value);
+      });
+
+      await listen<{ pluginId: string }>("plugin-deleted", (event) => {
+        const id = String(event.payload?.pluginId ?? "").trim();
+        if (!id) return;
+        plugins.value = sortPluginsById(plugins.value.filter((p) => p.id !== id));
+        if (activePlugin.value?.id === id) activePlugin.value = null;
+        delete pluginDetailCache.value[id];
+      });
+    } catch (e) {
+      console.warn("init plugin event listeners failed", e);
+    }
+  };
+
+  /** 从已加载的插件列表中返回图标 data URL */
+  function pluginIconDataUrl(pluginId: string): string | undefined {
+    const p = plugins.value.find((x) => x.id === pluginId);
+    return pluginIconToDataUrl(p?.iconPngBase64);
   }
 
-  async function loadPluginDescriptionTemplates() {
-    const next: Record<string, string | null> = {};
-    await Promise.all(
-      plugins.value.map(async (p) => {
-        const pluginId = p.id;
-        if (!pluginId) return;
-        try {
-          const tpl = await invoke<string | null>("get_plugin_template", {
-            pluginId,
-            templateName: "description",
-          });
-          next[pluginId] = tpl ?? null;
-        } catch {
-          next[pluginId] = null;
-        }
-      }),
-    );
-    pluginDescriptionTemplates.value = next;
+  /** 从已加载的插件列表中返回多语言 doc */
+  function pluginDoc(pluginId: string): PluginManifestDoc | null | undefined {
+    const p = plugins.value.find((x) => x.id === pluginId);
+    if (!p) return undefined;
+    return p.doc ?? null;
   }
 
+  /** 从已加载的插件列表中返回 description.ejs 模板内容 */
   function pluginDescriptionTemplate(pluginId: string): string | undefined {
-    const v = pluginDescriptionTemplates.value[pluginId];
+    const p = plugins.value.find((x) => x.id === pluginId);
+    const v = p?.descriptionTemplate;
     return typeof v === "string" && v.length > 0 ? v : undefined;
   }
 
-  function pluginIconUrl(pluginId: string): string | undefined {
-    return pluginIcons.value[pluginId];
-  }
-
-  /** 已加载的 doc；`undefined` 表示尚未随 loadPlugins 拉取 */
-  function pluginDoc(pluginId: string): PluginManifestDoc | null | undefined {
-    if (!Object.prototype.hasOwnProperty.call(pluginDocs.value, pluginId)) {
-      return undefined;
-    }
-    return pluginDocs.value[pluginId] ?? null;
-  }
-
-  function loadPlugins(): Promise<void> {
+  /** 从缓存读取插件列表（不重新扫盘）；首次调用时由 startup 的 ensure_installed_cache_initialized 保证缓存已就绪 */
+  async function loadPlugins(): Promise<void> {
+    await initEventListeners();
     return invoke<Plugin[]>("get_plugins")
       .then((result) => {
-        plugins.value = result;
-        pluginIcons.value = {};
-        pluginDocs.value = {};
-        pluginDescriptionTemplates.value = {};
+        const sorted = sortPluginsById(result);
+        plugins.value = sorted;
+        console.log("已加载插件列表:", sorted);
         const crawler = useCrawlerStore();
-        void Promise.all([
-          crawler.loadPluginRecommendedConfigs(),
-          loadPluginIcons(),
-          loadPluginDocs(),
-          loadPluginDescriptionTemplates(),
-        ]);
+        crawler.loadPluginRecommendedConfigs(sorted);
       })
       .catch((error) => {
         console.error("加载插件失败:", error);
@@ -416,28 +286,24 @@ export const usePluginStore = defineStore("plugins", () => {
       });
   }
 
+  /** 重新扫描磁盘并刷新缓存（用于手动刷新、安装/删除后） */
+  async function refreshPlugins(): Promise<void> {
+    try {
+      const result = await invoke<Plugin[]>("refresh_plugins");
+      const sorted = sortPluginsById(result);
+      plugins.value = sorted;
+      const crawler = useCrawlerStore();
+      crawler.loadPluginRecommendedConfigs(sorted);
+    } catch (error) {
+      console.error("刷新插件失败:", error);
+      throw error;
+    }
+  }
+
   async function deletePlugin(pluginId: string) {
     try {
       await invoke("delete_plugin", { pluginId });
-      plugins.value = plugins.value.filter((p) => p.id !== pluginId);
-      if (pluginIcons.value[pluginId]) {
-        const next = { ...pluginIcons.value };
-        delete next[pluginId];
-        pluginIcons.value = next;
-      }
-      if (Object.prototype.hasOwnProperty.call(pluginDocs.value, pluginId)) {
-        const next = { ...pluginDocs.value };
-        delete next[pluginId];
-        pluginDocs.value = next;
-      }
-      if (Object.prototype.hasOwnProperty.call(pluginDescriptionTemplates.value, pluginId)) {
-        const next = { ...pluginDescriptionTemplates.value };
-        delete next[pluginId];
-        pluginDescriptionTemplates.value = next;
-      }
-      if (activePlugin.value?.id === pluginId) {
-        activePlugin.value = null;
-      }
+      // plugin-deleted event handles store update
     } catch (error) {
       console.error("删除插件失败:", error);
       throw error;
@@ -448,11 +314,11 @@ export const usePluginStore = defineStore("plugins", () => {
     activePlugin.value = plugin;
   }
 
-  function getCachedPluginDetail(key: string): BrowserPlugin | undefined {
+  function getCachedPluginDetail(key: string): Plugin | undefined {
     return pluginDetailCache.value[key];
   }
 
-  function setCachedPluginDetail(key: string, plugin: BrowserPlugin) {
+  function setCachedPluginDetail(key: string, plugin: Plugin) {
     pluginDetailCache.value[key] = plugin;
   }
 
@@ -471,21 +337,22 @@ export const usePluginStore = defineStore("plugins", () => {
     localeCode: string,
     t: (key: string) => string,
   ): string {
-    return resolvePluginVarDisplayName(pluginId, varKey, localeCode, plugins.value, t);
+    return resolvePluginVarDisplayName(
+      pluginId,
+      varKey,
+      localeCode,
+      plugins.value,
+      t,
+    );
   }
 
   return {
     plugins,
     activePlugin,
     pluginDetailCache,
-    pluginIcons,
-    pluginDocs,
-    pluginDescriptionTemplates,
     loadPlugins,
-    loadPluginIcons,
-    loadPluginDocs,
-    loadPluginDescriptionTemplates,
-    pluginIconUrl,
+    refreshPlugins,
+    pluginIconDataUrl,
     pluginDoc,
     pluginDescriptionTemplate,
     deletePlugin,

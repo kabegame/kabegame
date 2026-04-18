@@ -118,7 +118,7 @@ const openVirtualDrive = async () => {
     await invoke("open_explorer", { path: albumDriveMountPoint.value });
   } catch (e) {
     console.error("打开虚拟磁盘失败:", e);
-    ElMessage.error(String(e));
+    ElMessage.error(`${String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
   }
 };
 
@@ -143,7 +143,7 @@ const moveTargetParentId = ref<string | null>(null);
 const moveAlbumTree = computed(() => {
   const a = moveDlgAlbum.value;
   if (!a) return [];
-  const exclude = [a.id, ...albumStore.getDescendantIds(a.id)];
+  const exclude = [a.id, ...albumStore.getDescendantIds(a.id), FAVORITE_ALBUM_ID.value];
   return albumStore.getAlbumTreeExcluding(exclude);
 });
 

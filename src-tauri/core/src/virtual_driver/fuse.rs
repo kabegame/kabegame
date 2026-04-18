@@ -16,7 +16,6 @@ use fuser::{
 };
 
 use crate::emitter::GlobalEmitter;
-use crate::providers::descriptor::ProviderGroupKind;
 use crate::providers::ProviderRuntime;
 use crate::virtual_driver::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
 use crate::virtual_driver::virtual_drive_io::{VdFileMeta, VdReadHandle};
@@ -409,33 +408,9 @@ impl Filesystem for KabegameFuseFs {
             return;
         }
 
-        let sem = self.semantics();
-
-        // 只允许在画册分组根下创建目录
-        if parent_path.len() != 1
-            || !sem.resolved_segment_is_group(&parent_path[0], ProviderGroupKind::Album)
-        {
-            reply.error(libc::EACCES);
-            return;
-        }
-
-        let mut child_path = parent_path.clone();
-        child_path.push(name_str.to_string());
-        match sem.create_dir(&parent_path, name_str) {
-            Ok(()) => {
-                let ino = self.get_or_alloc_inode(&child_path);
-                let attr = self.opened_to_attr(
-                    &VfsOpenedItem::Directory {
-                        path: child_path.clone(),
-                    },
-                    ino,
-                );
-                reply.entry(&TTL, &attr, 0);
-            }
-            Err(e) => {
-                reply.error(Self::map_vfs_error(e));
-            }
-        }
+        // VD 只读——不允许创建目录
+        let _ = name_str;
+        reply.error(libc::EACCES);
     }
 
     fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
@@ -452,130 +427,28 @@ impl Filesystem for KabegameFuseFs {
             }
         };
 
-        let sem = self.semantics();
-        match sem.commit_delete_child_at(&parent_path, name_str) {
-            Ok(true) => {
-                // 清理 inode 映射
-                let mut child_path = parent_path.clone();
-                child_path.push(name_str.to_string());
-                let mut path_to_inode = self.path_to_inode.lock().unwrap();
-                let mut inode_to_path = self.inode_to_path.lock().unwrap();
-                if let Some(ino) = path_to_inode.remove(&child_path) {
-                    inode_to_path.remove(&ino);
-                }
-                reply.ok();
-            }
-            Ok(false) => {
-                reply.error(libc::ENOENT);
-            }
-            Err(e) => {
-                reply.error(Self::map_vfs_error(e));
-            }
-        }
+        // VD 只读——不允许删除目录
+        let _ = name_str;
+        reply.error(libc::EACCES);
     }
 
-    fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
-        let Some(parent_path) = self.get_path(parent) else {
-            reply.error(libc::ENOENT);
-            return;
-        };
-
-        let name_str = match name.to_str() {
-            Some(s) => s,
-            None => {
-                reply.error(libc::EINVAL);
-                return;
-            }
-        };
-
-        let sem = self.semantics();
-
-        // 只允许在画册分组下删除文件（语义=从画册移除图片）
-        if parent_path.len() < 2 || !sem.path_starts_with_group(&parent_path, ProviderGroupKind::Album)
-        {
-            reply.error(libc::EACCES);
-            return;
-        }
-
-        match sem.commit_delete_child_at(&parent_path, name_str) {
-            Ok(true) => reply.ok(),
-            Ok(false) => reply.error(libc::ENOENT),
-            Err(e) => reply.error(Self::map_vfs_error(e)),
-        }
+    fn unlink(&mut self, _req: &Request<'_>, _parent: u64, _name: &OsStr, reply: fuser::ReplyEmpty) {
+        // VD 只读——不允许删除文件
+        reply.error(libc::EACCES);
     }
 
     fn rename(
         &mut self,
         _req: &Request<'_>,
-        parent: u64,
-        name: &OsStr,
-        newparent: u64,
-        newname: &OsStr,
-        flags: u32,
+        _parent: u64,
+        _name: &OsStr,
+        _newparent: u64,
+        _newname: &OsStr,
+        _flags: u32,
         reply: fuser::ReplyEmpty,
     ) {
-        let _ = flags; // 忽略 flags
-
-        let Some(parent_path) = self.get_path(parent) else {
-            reply.error(libc::ENOENT);
-            return;
-        };
-
-        let Some(newparent_path) = self.get_path(newparent) else {
-            reply.error(libc::ENOENT);
-            return;
-        };
-
-        let _name_str = match name.to_str() {
-            Some(s) => s,
-            None => {
-                reply.error(libc::EINVAL);
-                return;
-            }
-        };
-
-        let newname_str = match newname.to_str() {
-            Some(s) => s.trim(),
-            None => {
-                reply.error(libc::EINVAL);
-                return;
-            }
-        };
-
-        if newname_str.is_empty() {
-            reply.error(libc::EINVAL);
-            return;
-        }
-
-        let sem = self.semantics();
-
-        // 只允许重命名画册（必须在画册分组根下）
-        if parent_path.len() != 2
-            || !sem.resolved_segment_is_group(&parent_path[0], ProviderGroupKind::Album)
-            || newparent_path.len() != 1
-            || !sem.resolved_segment_is_group(&newparent_path[0], ProviderGroupKind::Album)
-        {
-            reply.error(libc::EACCES);
-            return;
-        }
-        match sem.rename_dir(&parent_path, newname_str) {
-            Ok(()) => {
-                // 更新 inode 映射
-                let old_path = parent_path.clone();
-                let mut new_path = newparent_path.clone();
-                new_path.push(newname_str.to_string());
-                let mut path_to_inode = self.path_to_inode.lock().unwrap();
-                let mut inode_to_path = self.inode_to_path.lock().unwrap();
-                if let Some(ino) = path_to_inode.remove(&old_path) {
-                    path_to_inode.insert(new_path.clone(), ino);
-                    inode_to_path.insert(ino, new_path);
-                }
-                reply.ok();
-            }
-            Err(e) => {
-                reply.error(Self::map_vfs_error(e));
-            }
-        }
+        // VD 只读——不允许重命名
+        reply.error(libc::EACCES);
     }
 }
 

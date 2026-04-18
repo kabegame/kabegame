@@ -1,4 +1,4 @@
-//! 虚拟盘“文件系统语义/原语”层（不依赖 Dokan/Win32）。
+//! 虚拟盘"文件系统语义/原语"层（不依赖 Dokan/Win32）。
 //!
 //! 目标：
 //! - 提供跨平台的文件系统操作语义：read_dir/read_file/create_dir/delete/rename 等。
@@ -14,17 +14,20 @@ use std::{
 };
 
 use crate::{
-    providers::descriptor::{ProviderDescriptor, ProviderGroupKind},
-    providers::provider::Provider,
+    providers::provider::{ChildEntry, ImageEntry, Provider, ProviderMeta},
     providers::ProviderRuntime,
+    storage::gallery::ImageQuery,
     storage::Storage,
 };
 
 use super::vd_locale_sync::vd_locale_segment_for_settings_sync;
 
-/// VD 路径解析结果（virtual_driver 专用，不属于 Provider trait）。
+/// VD 路径解析结果（virtual_driver 专用）。
 pub enum ResolveResult {
-    Directory(Arc<dyn Provider>),
+    Directory {
+        provider: Arc<dyn Provider>,
+        composed: ImageQuery,
+    },
     File {
         image_id: String,
         resolved_path: PathBuf,
@@ -32,7 +35,7 @@ pub enum ResolveResult {
     NotFound,
 }
 
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
 
 #[derive(Debug, Clone)]
@@ -135,7 +138,7 @@ fn system_time_from_fs_metadata(meta: &std::fs::Metadata) -> (SystemTime, System
     (created, accessed, modified)
 }
 
-/// app-main 的虚拟盘语义执行器：基于 core 的 Provider 树实现“文件系统操作语义”。
+/// app-main 的虚拟盘语义执行器：基于 core 的 Provider 树实现"文件系统操作语义"。
 pub struct VfsSemantics<'a> {
     provider_rt: &'a ProviderRuntime,
     vd_locale: &'static str,
@@ -149,19 +152,10 @@ impl<'a> VfsSemantics<'a> {
         }
     }
 
-    /// 第一段路径是否解析为指定 `Group`（用于替代硬编码的 VD 目录名）。
-    pub fn resolved_segment_is_group(&self, segment: &str, kind: ProviderGroupKind) -> bool {
-        match self.resolve_provider(&[segment]) {
-            Ok(Some(p)) => matches!(p.descriptor(), ProviderDescriptor::Group { kind: k, .. } if k == kind),
-            _ => false,
-        }
-    }
-
-    /// `path` 首段是否为某 Group（例如画册根下的「画册」文件夹名）。
-    pub fn path_starts_with_group(&self, path: &[String], kind: ProviderGroupKind) -> bool {
-        path.first()
-            .map(|s| self.resolved_segment_is_group(s.as_str(), kind))
-            .unwrap_or(false)
+    /// 检查第一个 VD 路径段是否对应某 canonical 类别（如 "task"/"album"）。
+    pub(crate) fn is_vd_segment_canonical(&self, segment: &str, canonical_i18n_key: &str) -> bool {
+        let cfg = crate::providers::vd::locale::VdLocaleConfig { locale: self.vd_locale };
+        cfg.display_name(canonical_i18n_key) == segment
     }
 
     pub fn path_to_segments(path: &[String]) -> Vec<&str> {
@@ -176,15 +170,7 @@ impl<'a> VfsSemantics<'a> {
         }
     }
 
-    fn vd_segments<'b>(&self, segments: &'b [&'b str]) -> Vec<&'b str> {
-        let mut out = Vec::with_capacity(segments.len() + 2);
-        out.push("vd");
-        out.push(self.vd_locale);
-        out.extend_from_slice(segments);
-        out
-    }
-
-    fn image_entry_file_name(image: &crate::providers::provider::ImageEntry) -> String {
+    fn image_entry_file_name(image: &ImageEntry) -> String {
         if image.media_type.as_deref() == Some("text/plain") && !image.display_name.trim().is_empty()
         {
             let n = image.display_name.trim();
@@ -200,16 +186,21 @@ impl<'a> VfsSemantics<'a> {
         format!("{}.{}", image.id, ext)
     }
 
-    fn image_entry_from_parent_file_name(
+    /// 通过父路径和文件名查找匹配的 ImageEntry。
+    fn image_entry_from_parent(
         &self,
-        parent: &Arc<dyn Provider>,
+        parent_segs: &[&str],
         file_name: &str,
-    ) -> Option<crate::providers::provider::ImageEntry> {
-        let entries = parent.list_entries().ok()?;
-        for entry in entries {
-            let crate::providers::provider::ListEntry::Image(image) = entry else {
-                continue;
-            };
+    ) -> Option<ImageEntry> {
+        let vd_path = self.vd_path(parent_segs);
+        let node = self.provider_rt.resolve(&vd_path).ok()??;
+        let composed = if node.composed.order_bys.is_empty() {
+            node.composed.clone().with_order("images.id ASC")
+        } else {
+            node.composed.clone()
+        };
+        let images = node.provider.list_images(&composed).ok()?;
+        for image in images {
             if Self::image_entry_file_name(&image) != file_name {
                 continue;
             }
@@ -223,8 +214,12 @@ impl<'a> VfsSemantics<'a> {
     /// 解析路径：最长前缀回退 + list 刷新
     pub fn resolve_cached(&self, segments: &[&str]) -> ResolveResult {
         if segments.is_empty() {
-            return match self.resolve_provider(segments) {
-                Ok(Some(root)) => ResolveResult::Directory(root),
+            let vd_path = self.vd_path(segments);
+            return match self.provider_rt.resolve(&vd_path) {
+                Ok(Some(node)) => ResolveResult::Directory {
+                    provider: node.provider,
+                    composed: node.composed,
+                },
                 _ => ResolveResult::NotFound,
             };
         }
@@ -233,60 +228,46 @@ impl<'a> VfsSemantics<'a> {
         let is_likely_file = segments.last().map(|s| s.contains('.')).unwrap_or(false);
 
         if is_likely_file && segments.len() >= 2 {
-            // 文件：优先用 parent.list_entries() 的 Image 条目解析
+            // 文件：优先用 parent.list_images() 的 Image 条目解析
             let parent_segs = &segments[..segments.len() - 1];
             let file_name = segments[segments.len() - 1];
-            if let Ok(Some(parent)) = self.resolve_provider(parent_segs) {
-                if let Some(image) = self.image_entry_from_parent_file_name(&parent, file_name) {
-                    return ResolveResult::File {
-                        image_id: image.id,
-                        resolved_path: PathBuf::from(image.local_path),
-                    };
-                }
+            if let Some(image) = self.image_entry_from_parent(parent_segs, file_name) {
+                return ResolveResult::File {
+                    image_id: image.id,
+                    resolved_path: PathBuf::from(image.local_path),
+                };
             }
         }
 
         // 目录：尝试把完整 segments 解析成 provider
-        if let Ok(Some(p)) = self.resolve_provider(segments) {
-            return ResolveResult::Directory(p);
+        let vd_path = self.vd_path(segments);
+        if let Ok(Some(node)) = self.provider_rt.resolve(&vd_path) {
+            return ResolveResult::Directory {
+                provider: node.provider,
+                composed: node.composed,
+            };
         }
 
-        // 文件（兜底）：当目录解析失败时，再尝试 resolve_file（支持无扩展名的说明文件）
+        // 文件（兜底）：当目录解析失败时，再尝试（支持无扩展名的说明文件）
         if !segments.is_empty() {
             let parent_segs = &segments[..segments.len().saturating_sub(1)];
             let file_name = segments[segments.len() - 1];
-            if let Ok(Some(parent)) = self.resolve_provider(parent_segs) {
-                if let Some(image) = self.image_entry_from_parent_file_name(&parent, file_name) {
-                    return ResolveResult::File {
-                        image_id: image.id,
-                        resolved_path: PathBuf::from(image.local_path),
-                    };
-                }
+            if let Some(image) = self.image_entry_from_parent(parent_segs, file_name) {
+                return ResolveResult::File {
+                    image_id: image.id,
+                    resolved_path: PathBuf::from(image.local_path),
+                };
             }
         }
 
         ResolveResult::NotFound
     }
 
-    /// 根据路径解析 Provider
-    pub fn resolve_provider(
-        &self,
-        segments: &[&str],
-    ) -> Result<Option<Arc<dyn Provider>>, VfsError> {
-        // 复用 core 的 ProviderRuntime：
-        // - 最长前缀回退（LRU / sled descriptor）
-        // - list 刷新写入 child key
-        // - Dynamic 子节点仅入 LRU（避免污染持久缓存）
-        self.provider_rt
-            .resolve(&self.vd_path(segments))
-            .map_err(VfsError::Other)
-    }
-
     /// 打开（仅支持 open existing；创建由 create_* 原语处理）
     pub fn open_existing(&self, path: &[String]) -> Result<VfsOpenedItem, VfsError> {
         let segs: Vec<&str> = Self::path_to_segments(path);
         match self.resolve_cached(&segs) {
-            ResolveResult::Directory(_) => Ok(VfsOpenedItem::Directory {
+            ResolveResult::Directory { .. } => Ok(VfsOpenedItem::Directory {
                 path: path.to_vec(),
             }),
             ResolveResult::File {
@@ -297,7 +278,6 @@ impl<'a> VfsSemantics<'a> {
                     .map_err(|_| VfsError::NotFound("文件不存在".to_string()))?;
                 let size = handle.len();
                 // 文件时间戳与画廊数据一致：优先取 DB 的 COALESCE(order, crawled_at)。
-                // 这里做一次轻量查询并缓存到 context，避免 get_file_information 再次查 DB / stat。
                 let meta = Storage::global()
                     .get_images_gallery_ts_by_ids(&[image_id.clone()])
                     .ok()
@@ -326,145 +306,139 @@ impl<'a> VfsSemantics<'a> {
 
     pub fn read_dir(&self, path: &[String]) -> Result<Vec<VfsEntry>, VfsError> {
         let segments = Self::path_to_segments(path);
-        let provider = match self.resolve_cached(&segments) {
-            ResolveResult::Directory(p) => p,
+        let (provider, composed) = match self.resolve_cached(&segments) {
+            ResolveResult::Directory { provider, composed } => (provider, composed),
             ResolveResult::File { .. } => {
                 return Err(VfsError::NotADirectory("目标不是目录".to_string()))
             }
             ResolveResult::NotFound => return Err(VfsError::NotFound("路径不存在".to_string())),
         };
 
-        // 使用新 API：list_entries（child provider + image）
-        let entries = provider.list_entries().map_err(VfsError::Other)?;
-        let mut file_ids: Vec<String> = entries
-            .iter()
-            .filter_map(|e| match e {
-                crate::providers::provider::ListEntry::Image(image) => Some(image.id.clone()),
-                _ => None,
-            })
-            .collect();
+        // 使用新 API：list_children_with_meta（批量拿到每个 Child 的 meta）
+        let children = provider.list_children_with_meta(&composed).map_err(VfsError::Other)?;
+        let composed_images = if composed.order_bys.is_empty() {
+            composed.clone().with_order("images.id ASC")
+        } else {
+            composed.clone()
+        };
+        let mut images = provider.list_images(&composed_images).map_err(VfsError::Other)?;
+
+        let mut file_ids: Vec<String> = images.iter().map(|img| img.id.clone()).collect();
 
         // 注入说明文件（若 provider 提供）
         if let Some((title, content)) = provider.get_note() {
-            if let Ok((id, path)) = crate::providers::vd_ops::ensure_note_file(&title, &content) {
-                file_ids.push(id);
-                // 用临时条目拼接到 entries 后面（不参与 child cache）
-                let mut ext_entries = entries;
-                ext_entries.push(crate::providers::provider::ListEntry::Image(
-                    crate::providers::provider::ImageEntry {
-                        id: file_ids.last().cloned().unwrap_or_default(),
-                        url: None,
-                        local_path: path.to_string_lossy().to_string(),
-                        plugin_id: String::new(),
-                        crawled_at: 0,
-                        hash: String::new(),
-                        width: None,
-                        height: None,
-                        display_name: title,
-                        media_type: Some("text/plain".to_string()),
-                    },
-                ));
-                return self.read_dir_entries_with_ts(&segments, ext_entries, &file_ids);
+            if let Ok((id, fpath)) = crate::providers::vd_ops::ensure_note_file(&title, &content) {
+                file_ids.push(id.clone());
+                images.push(ImageEntry {
+                    id,
+                    url: None,
+                    local_path: fpath.to_string_lossy().to_string(),
+                    plugin_id: String::new(),
+                    task_id: None,
+                    surf_record_id: None,
+                    crawled_at: 0,
+                    metadata: None,
+                    metadata_id: None,
+                    thumbnail_path: String::new(),
+                    favorite: false,
+                    local_exists: true,
+                    hash: String::new(),
+                    width: None,
+                    height: None,
+                    display_name: title,
+                    media_type: Some("text/plain".to_string()),
+                    last_set_wallpaper_at: None,
+                    size: None,
+                });
             }
         }
 
-        self.read_dir_entries_with_ts(&segments, entries, &file_ids)
+        self.read_dir_entries(&segments, children, images, &file_ids)
     }
 
-    fn read_dir_entries_with_ts(
+    fn read_dir_entries(
         &self,
-        segments: &[&str],
-        entries: Vec<crate::providers::provider::ListEntry>,
+        _segments: &[&str],
+        children: Vec<ChildEntry>,
+        images: Vec<ImageEntry>,
         file_ids: &[String],
     ) -> Result<Vec<VfsEntry>, VfsError> {
         let ts_map = Storage::global()
-            .get_images_gallery_ts_by_ids(&file_ids)
+            .get_images_gallery_ts_by_ids(file_ids)
             .unwrap_or_default();
 
-        let mut out = Vec::with_capacity(entries.len());
-        for entry in entries {
-            match entry {
-                crate::providers::provider::ListEntry::Child { name, .. } => {
-                    // 任务目录：modified = task end_time（无 end_time 则回退 start_time/now）
-                    let (created, accessed, modified) =
-                        if segments.len() == 1
-                            && self.resolved_segment_is_group(segments[0], ProviderGroupKind::Task)
-                        {
-                            let task_id = name
-                                .rsplit_once(" - ")
-                                .map(|(_, id)| id)
-                                .unwrap_or(name.as_str())
-                                .trim();
+        let mut out = Vec::with_capacity(children.len() + images.len());
 
-                            if let Ok(Some(task)) = Storage::global().get_task(task_id) {
-                                // 兼容：若是毫秒时间戳（大于 9999-12-31 秒级阈值），则降为秒
-                                fn normalize_unix_secs(ts: u64) -> u64 {
-                                    const MAX_SEC_9999: u64 = 253402300799;
-                                    if ts > MAX_SEC_9999 {
-                                        ts / 1000
-                                    } else {
-                                        ts
-                                    }
-                                }
-                                let ts = task
-                                    .end_time
-                                    .or(task.start_time)
-                                    .map(normalize_unix_secs)
-                                    .unwrap_or_else(|| {
-                                        now()
-                                            .duration_since(UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_secs()
-                                    });
-                                let t = UNIX_EPOCH
-                                    .checked_add(Duration::from_secs(ts))
-                                    .unwrap_or_else(now);
-                                (t, t, t)
-                            } else {
-                                let t = now();
-                                (t, t, t)
-                            }
-                        } else {
-                            let t = now();
-                            (t, t, t)
-                        };
+        // 目录条目（children）
+        for child in children {
+            // list_children_with_meta 已批量填充 meta 字段
+            let (created, accessed, modified) = match child.meta {
+                Some(ProviderMeta::Task(task)) => {
+                    let ts = task
+                        .end_time
+                        .or(task.start_time)
+                        .map(normalize_unix_secs)
+                        .unwrap_or_else(|| {
+                            now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()
+                        });
+                    let t = UNIX_EPOCH
+                        .checked_add(Duration::from_secs(ts))
+                        .unwrap_or_else(now);
+                    (t, t, t)
+                }
+                Some(ProviderMeta::Album(album)) => {
+                    let t = system_time_from_gallery_ts(album.created_at);
+                    (t, t, t)
+                }
+                Some(ProviderMeta::SurfRecord(sr)) => {
+                    let t = system_time_from_gallery_ts(sr.last_visit_at);
+                    (t, t, t)
+                }
+                _ => {
+                    let t = now();
+                    (t, t, t)
+                }
+            };
 
-                    out.push(VfsEntry::Directory {
-                        name,
-                        meta: VfsMetadata {
-                            is_dir: true,
-                            size: 0,
-                            created,
-                            accessed,
-                            modified,
-                        },
-                    });
-                }
-                crate::providers::provider::ListEntry::Image(image) => {
-                    let resolved_path = PathBuf::from(&image.local_path);
-                    let Ok(meta) = std::fs::metadata(&resolved_path) else {
-                        continue;
-                    };
-                    let (created, accessed, modified) = if let Some(ts) = ts_map.get(&image.id) {
-                        let t = system_time_from_gallery_ts(*ts);
-                        (t, t, t)
-                    } else {
-                        system_time_from_fs_metadata(&meta)
-                    };
-                    out.push(VfsEntry::File {
-                        name: Self::image_entry_file_name(&image),
-                        image_id: image.id,
-                        resolved_path,
-                        meta: VfsMetadata {
-                            is_dir: false,
-                            size: meta.len(),
-                            created,
-                            accessed,
-                            modified,
-                        },
-                    });
-                }
-            }
+            out.push(VfsEntry::Directory {
+                name: child.name,
+                meta: VfsMetadata {
+                    is_dir: true,
+                    size: 0,
+                    created,
+                    accessed,
+                    modified,
+                },
+            });
+        }
+
+        // 文件条目（images）
+        for image in images {
+            let resolved_path = PathBuf::from(&image.local_path);
+            let Ok(meta) = std::fs::metadata(&resolved_path) else {
+                continue;
+            };
+            let (created, accessed, modified) = if let Some(ts) = ts_map.get(&image.id) {
+                let t = system_time_from_gallery_ts(*ts);
+                (t, t, t)
+            } else {
+                system_time_from_fs_metadata(&meta)
+            };
+            out.push(VfsEntry::File {
+                name: Self::image_entry_file_name(&image),
+                image_id: image.id,
+                resolved_path,
+                meta: VfsMetadata {
+                    is_dir: false,
+                    size: meta.len(),
+                    created,
+                    accessed,
+                    modified,
+                },
+            });
         }
         Ok(out)
     }
@@ -480,71 +454,36 @@ impl<'a> VfsSemantics<'a> {
             .map_err(|e| VfsError::Other(e))
     }
 
+    /// VD 为只读文件系统 — 所有写操作返回 AccessDenied。
     pub fn create_dir(
         &self,
-        parent_path: &[String],
-        dir_name: &str,
+        _parent_path: &[String],
+        _dir_name: &str,
     ) -> Result<(), VfsError> {
-        let parent_segs = Self::path_to_segments(parent_path);
-        let parent = self
-            .resolve_provider(&parent_segs)?
-            .ok_or_else(|| VfsError::NotFound("父目录不存在".to_string()))?;
-
-        if parent.can_add_child() {
-            parent.add_child(dir_name).map_err(VfsError::Other)?;
-            return Ok(());
-        }
-        Err(VfsError::AccessDenied("不支持创建目录".to_string()))
+        Err(VfsError::AccessDenied("虚拟盘为只读，不支持创建目录".to_string()))
     }
 
     pub fn create_file(&self, _path: &[String]) -> Result<(), VfsError> {
-        Err(VfsError::AccessDenied(
-            "当前虚拟盘不支持创建文件".to_string(),
-        ))
+        Err(VfsError::AccessDenied("虚拟盘为只读，不支持创建文件".to_string()))
     }
 
-    /// Dokan「删除目录」预检：是否允许删除（不修改数据）。
-    pub fn can_delete_child_at(&self, parent_path: &[String], name: &str) -> Result<bool, VfsError> {
-        let parent_segs = Self::path_to_segments(parent_path);
-        let parent = self
-            .resolve_provider(&parent_segs)?
-            .ok_or_else(|| VfsError::NotFound("父目录不存在".to_string()))?;
-        Ok(parent.can_delete_child(name))
-    }
-
-    /// 执行删除子目录或子「文件」条目（画册下图片等），与 [`Self::can_delete_child_at`] 配对使用。
-    pub fn commit_delete_child_at(
-        &self,
-        parent_path: &[String],
-        name: &str,
-    ) -> Result<bool, VfsError> {
-        let parent_segs = Self::path_to_segments(parent_path);
-        let parent = self
-            .resolve_provider(&parent_segs)?
-            .ok_or_else(|| VfsError::NotFound("父目录不存在".to_string()))?;
-        if parent.can_delete_child(name) {
-            parent.delete_child(name).map_err(VfsError::Other)?;
-            return Ok(true);
-        }
+    /// VD 只读 — 始终返回 false，不允许删除。
+    pub fn can_delete_child_at(&self, _parent_path: &[String], _name: &str) -> Result<bool, VfsError> {
         Ok(false)
     }
 
-    pub fn rename_dir(&self, path: &[String], new_name: &str) -> Result<(), VfsError> {
-        if path.is_empty() {
-            return Err(VfsError::InvalidParameter("路径不能为空".to_string()));
-        }
-        let parent_path = &path[..path.len() - 1];
-        let old_name = path[path.len() - 1].as_str();
-        let parent_segs = Self::path_to_segments(parent_path);
-        if let Some(parent) = self.resolve_provider(&parent_segs)? {
-            if parent.can_rename_child() {
-                parent
-                    .rename_child(old_name, new_name)
-                    .map_err(VfsError::Other)?;
-                return Ok(());
-            }
-        }
-        Err(VfsError::AccessDenied("不支持重命名".to_string()))
+    /// VD 只读 — 始终返回 Ok(false)，不执行删除。
+    pub fn commit_delete_child_at(
+        &self,
+        _parent_path: &[String],
+        _name: &str,
+    ) -> Result<bool, VfsError> {
+        Ok(false)
+    }
+
+    /// VD 只读 — 始终返回 AccessDenied。
+    pub fn rename_dir(&self, _path: &[String], _new_name: &str) -> Result<(), VfsError> {
+        Err(VfsError::AccessDenied("虚拟盘为只读，不支持重命名".to_string()))
     }
 
     pub fn rename_file(&self, _path: &[String], _new_name: &str) -> Result<(), VfsError> {
@@ -552,5 +491,4 @@ impl<'a> VfsSemantics<'a> {
             "当前虚拟盘不支持重命名文件".to_string(),
         ))
     }
-
 }

@@ -19,6 +19,8 @@ export enum HeaderFeatureId {
   TaskDrawer = "taskDrawer",
   /** 任务详情页：查看任务日志（Android 放入 fold） */
   TaskViewLog = "taskViewLog",
+  /** 任务详情页：查看运行参数（Android 放入 fold） */
+  TaskViewParams = "taskViewParams",
   FailedImages = "failedImages",
   AddToAlbum = "addToAlbum",
   /** 画廊：过滤（全部 / 设置过壁纸等，仅 Android 放入 fold） */

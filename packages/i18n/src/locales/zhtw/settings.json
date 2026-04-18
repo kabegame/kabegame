@@ -13,6 +13,7 @@
   "albumDriveMessageMountPointRequired": "請先填寫掛載點（例如 K:\\）",
   "albumDriveMessageEnabled": "畫冊磁碟已開啟",
   "albumDriveMessageDisabled": "畫冊磁碟已關閉",
+  "albumDriveOpenErrorHint": "可以嘗試在設定中關閉再重新開啟畫冊磁碟。",
   "imageClickAction": "圖片點擊行為",
   "imageClickActionDesc": "左鍵點擊圖片時的行為",
   "imageClickPreview": "應用內預覽",

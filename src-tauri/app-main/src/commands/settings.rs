@@ -1,290 +1,186 @@
 // Settings related commands
 
 use kabegame_core::settings::Settings;
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
 
 // fields' getter commands
 #[tauri::command]
-pub async fn get_auto_launch() -> Result<bool, String> {
-    Settings::global()
-        .get_auto_launch()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_auto_launch() -> bool {
+    Settings::global().get_auto_launch()
 }
 
 #[tauri::command]
-pub async fn get_auto_open_crawler_webview() -> Result<bool, String> {
-    Settings::global()
-        .get_auto_open_crawler_webview()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_auto_open_crawler_webview() -> bool {
+    Settings::global().get_auto_open_crawler_webview()
 }
 
 #[tauri::command]
-pub async fn get_import_recommended_schedule_enabled() -> Result<bool, String> {
-    Settings::global()
-        .get_import_recommended_schedule_enabled()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_import_recommended_schedule_enabled() -> bool {
+    Settings::global().get_import_recommended_schedule_enabled()
 }
 
 #[tauri::command]
-pub async fn set_import_recommended_schedule_enabled(enabled: bool) -> Result<(), String> {
-    Settings::global()
-        .set_import_recommended_schedule_enabled(enabled)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_import_recommended_schedule_enabled(enabled: bool) -> Result<(), String> {
+    Settings::global().set_import_recommended_schedule_enabled(enabled)
 }
 
 #[tauri::command]
-pub async fn get_max_concurrent_downloads() -> Result<u32, String> {
-    Settings::global()
-        .get_max_concurrent_downloads()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_max_concurrent_downloads() -> u32 {
+    Settings::global().get_max_concurrent_downloads()
 }
 
 #[tauri::command]
-pub async fn get_max_concurrent_tasks() -> Result<u32, String> {
-    Settings::global()
-        .get_max_concurrent_tasks()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_max_concurrent_tasks() -> u32 {
+    Settings::global().get_max_concurrent_tasks()
 }
 
 #[tauri::command]
-pub async fn get_network_retry_count() -> Result<u32, String> {
-    Settings::global()
-        .get_network_retry_count()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_network_retry_count() -> u32 {
+    Settings::global().get_network_retry_count()
 }
 
 #[tauri::command]
-pub async fn get_download_interval_ms() -> Result<u32, String> {
-    Settings::global()
-        .get_download_interval_ms()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_download_interval_ms() -> u32 {
+    Settings::global().get_download_interval_ms()
 }
 
 #[tauri::command]
-pub async fn get_image_click_action() -> Result<String, String> {
-    Settings::global()
-        .get_image_click_action()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_image_click_action() -> String {
+    Settings::global().get_image_click_action()
 }
 
 #[tauri::command]
-pub async fn get_gallery_image_aspect_ratio() -> Result<Option<String>, String> {
-    Settings::global()
-        .get_gallery_image_aspect_ratio()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_gallery_image_aspect_ratio() -> Option<String> {
+    Settings::global().get_gallery_image_aspect_ratio()
 }
 
 #[tauri::command]
-pub async fn get_gallery_image_object_position() -> Result<String, String> {
-    Settings::global()
-        .get_gallery_image_object_position()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_gallery_image_object_position() -> String {
+    Settings::global().get_gallery_image_object_position()
 }
 
 #[tauri::command]
-pub async fn get_gallery_grid_columns() -> Result<u32, String> {
-    Settings::global()
-        .get_gallery_grid_columns()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_gallery_grid_columns() -> u32 {
+    Settings::global().get_gallery_grid_columns()
 }
 
 #[tauri::command]
-pub async fn get_gallery_page_size() -> Result<u32, String> {
-    Settings::global()
-        .get_gallery_page_size()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_gallery_page_size() -> u32 {
+    Settings::global().get_gallery_page_size()
 }
 
 #[tauri::command]
-pub async fn get_auto_deduplicate() -> Result<bool, String> {
-    Settings::global()
-        .get_auto_deduplicate()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_auto_deduplicate() -> bool {
+    Settings::global().get_auto_deduplicate()
 }
 
 #[tauri::command]
-pub async fn get_default_download_dir() -> Result<Option<String>, String> {
-    Settings::global()
-        .get_default_download_dir()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_default_download_dir() -> Option<String> {
+    Settings::global().get_default_download_dir()
 }
 
 #[tauri::command]
-pub async fn get_language() -> Result<Option<String>, String> {
-    Settings::global()
-        .get_language()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_language() -> Option<String> {
+    Settings::global().get_language()
 }
 
 #[tauri::command]
 #[cfg(target_os = "windows")]
-pub async fn get_wallpaper_engine_dir() -> Result<Option<String>, String> {
-    Settings::global()
-        .get_wallpaper_engine_dir()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_engine_dir() -> Option<String> {
+    Settings::global().get_wallpaper_engine_dir()
 }
 
 #[tauri::command]
-pub async fn get_wallpaper_rotation_enabled() -> Result<bool, String> {
-    Settings::global()
-        .get_wallpaper_rotation_enabled()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_rotation_enabled() -> bool {
+    Settings::global().get_wallpaper_rotation_enabled()
 }
 
 #[tauri::command]
-pub async fn get_wallpaper_rotation_album_id() -> Result<Option<String>, String> {
-    Settings::global()
-        .get_wallpaper_rotation_album_id()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_rotation_album_id() -> Option<String> {
+    Settings::global().get_wallpaper_rotation_album_id()
 }
 
 #[tauri::command]
-pub async fn get_wallpaper_rotation_include_subalbums() -> Result<bool, String> {
-    Settings::global()
-        .get_wallpaper_rotation_include_subalbums()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_rotation_include_subalbums() -> bool {
+    Settings::global().get_wallpaper_rotation_include_subalbums()
 }
 
 #[tauri::command]
-pub async fn get_wallpaper_rotation_interval_minutes() -> Result<u32, String> {
-    Settings::global()
-        .get_wallpaper_rotation_interval_minutes()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_rotation_interval_minutes() -> u32 {
+    Settings::global().get_wallpaper_rotation_interval_minutes()
 }
 
 #[tauri::command]
-pub async fn get_wallpaper_rotation_mode() -> Result<String, String> {
-    Settings::global()
-        .get_wallpaper_rotation_mode()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_rotation_mode() -> String {
+    Settings::global().get_wallpaper_rotation_mode()
 }
 
 #[tauri::command]
-pub async fn get_wallpaper_rotation_style() -> Result<String, String> {
-    Settings::global()
-        .get_wallpaper_rotation_style()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_rotation_style() -> String {
+    Settings::global().get_wallpaper_rotation_style()
 }
 
 #[tauri::command]
-pub async fn get_wallpaper_volume() -> Result<f64, String> {
-    Settings::global()
-        .get_wallpaper_volume()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_volume() -> f64 {
+    Settings::global().get_wallpaper_volume()
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_volume(volume: f64) -> Result<(), String> {
-    Settings::global()
-        .set_wallpaper_volume(volume)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_wallpaper_volume(volume: f64) -> Result<(), String> {
+    Settings::global().set_wallpaper_volume(volume)
 }
 
 #[tauri::command]
-pub async fn get_wallpaper_video_playback_rate() -> Result<f64, String> {
-    Settings::global()
-        .get_wallpaper_video_playback_rate()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_video_playback_rate() -> f64 {
+    Settings::global().get_wallpaper_video_playback_rate()
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_video_playback_rate(rate: f64) -> Result<(), String> {
-    Settings::global()
-        .set_wallpaper_video_playback_rate(rate)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_wallpaper_video_playback_rate(rate: f64) -> Result<(), String> {
+    Settings::global().set_wallpaper_video_playback_rate(rate)
 }
 
 #[tauri::command]
-pub async fn get_wallpaper_rotation_transition() -> Result<String, String> {
-    Settings::global()
-        .get_wallpaper_rotation_transition()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_rotation_transition() -> String {
+    Settings::global().get_wallpaper_rotation_transition()
 }
 
 #[tauri::command]
-pub async fn get_wallpaper_style_by_mode(
-) -> Result<std::collections::HashMap<String, String>, String> {
-    Settings::global()
-        .get_wallpaper_style_by_mode()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_style_by_mode() -> std::collections::HashMap<String, String> {
+    Settings::global().get_wallpaper_style_by_mode()
 }
 
 #[tauri::command]
-pub async fn get_wallpaper_transition_by_mode(
-) -> Result<std::collections::HashMap<String, String>, String> {
-    Settings::global()
-        .get_wallpaper_transition_by_mode()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_transition_by_mode() -> std::collections::HashMap<String, String> {
+    Settings::global().get_wallpaper_transition_by_mode()
 }
 
 #[tauri::command]
-pub async fn get_wallpaper_mode() -> Result<String, String> {
-    Settings::global()
-        .get_wallpaper_mode()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_mode() -> String {
+    Settings::global().get_wallpaper_mode()
 }
 
 #[tauri::command]
-pub async fn get_window_state() -> Result<Option<serde_json::Value>, String> {
-    let window_state = Settings::global()
-        .get_window_state()
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(window_state).ok())
+pub fn get_window_state() -> Option<serde_json::Value> {
+    let window_state = Settings::global().get_window_state();
+    serde_json::to_value(window_state).ok()
 }
 
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 #[tauri::command]
-pub async fn get_album_drive_enabled() -> Result<bool, String> {
-    Settings::global()
-        .get_album_drive_enabled()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_album_drive_enabled() -> bool {
+    Settings::global().get_album_drive_enabled()
 }
 
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 #[tauri::command]
-pub async fn get_album_drive_mount_point() -> Result<String, String> {
-    Settings::global()
-        .get_album_drive_mount_point()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_album_drive_mount_point() -> String {
+    Settings::global().get_album_drive_mount_point()
 }
 
 #[tauri::command]
@@ -293,16 +189,13 @@ pub fn get_favorite_album_id() -> Result<String, String> {
 }
 
 #[tauri::command]
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
     let settings = Settings::global();
 
     if enabled {
         // 启用：先挂载虚拟盘
-        let mount_point = settings
-            .get_album_drive_mount_point()
-            .await
-            .map_err(|e| e.to_string())?;
+        let mount_point = settings.get_album_drive_mount_point();
         println!("mount point: {}", mount_point);
         let vd_service = VirtualDriveService::global();
         let mount_result = tokio::task::spawn_blocking({
@@ -327,53 +220,35 @@ pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
         }
     }
 
-    settings
-        .set_album_drive_enabled(enabled)
-        .await
-        .map_err(|e| e.to_string())
+    settings.set_album_drive_enabled(enabled)
 }
 
 #[tauri::command]
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-pub async fn set_album_drive_mount_point(mount_point: String) -> Result<(), String> {
-    Settings::global()
-        .set_album_drive_mount_point(mount_point)
-        .await
-        .map_err(|e| e.to_string())
+#[cfg(kabegame_mode = "standard")]
+pub fn set_album_drive_mount_point(mount_point: String) -> Result<(), String> {
+    Settings::global().set_album_drive_mount_point(mount_point)
 }
 
 #[tauri::command]
-pub async fn set_language(language: Option<String>) -> Result<(), String> {
-    Settings::global()
-        .set_language(language.clone())
-        .await
-        .map_err(|e| e.to_string())?;
+pub fn set_language(language: Option<String>) -> Result<(), String> {
+    Settings::global().set_language(language.clone())?;
     kabegame_i18n::sync_locale(language.as_deref());
     Ok(())
 }
 
 #[tauri::command]
-pub async fn set_auto_launch(enabled: bool) -> Result<(), String> {
-    Settings::global()
-        .set_auto_launch(enabled)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_auto_launch(enabled: bool) -> Result<(), String> {
+    Settings::global().set_auto_launch(enabled)
 }
 
 #[tauri::command]
-pub async fn set_auto_open_crawler_webview(enabled: bool) -> Result<(), String> {
-    Settings::global()
-        .set_auto_open_crawler_webview(enabled)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_auto_open_crawler_webview(enabled: bool) -> Result<(), String> {
+    Settings::global().set_auto_open_crawler_webview(enabled)
 }
 
 #[tauri::command]
 pub async fn set_max_concurrent_downloads(count: u32) -> Result<(), String> {
-    Settings::global()
-        .set_max_concurrent_downloads(count)
-        .await
-        .map_err(|e| e.to_string())?;
+    Settings::global().set_max_concurrent_downloads(count)?;
 
     // 同时更新运行时调度器配置
     kabegame_core::crawler::TaskScheduler::global()
@@ -383,70 +258,45 @@ pub async fn set_max_concurrent_downloads(count: u32) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn set_max_concurrent_tasks(count: u32) -> Result<(), String> {
-    Settings::global()
-        .set_max_concurrent_tasks(count)
-        .await
-        .map_err(|e| e.to_string())?;
-
+pub fn set_max_concurrent_tasks(count: u32) -> Result<(), String> {
+    Settings::global().set_max_concurrent_tasks(count)?;
     kabegame_core::crawler::TaskScheduler::global().set_task_concurrency();
     Ok(())
 }
 
 #[tauri::command]
-pub async fn set_network_retry_count(count: u32) -> Result<(), String> {
-    Settings::global()
-        .set_network_retry_count(count)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_network_retry_count(count: u32) -> Result<(), String> {
+    Settings::global().set_network_retry_count(count)
 }
 
 #[tauri::command]
-pub async fn set_download_interval_ms(interval_ms: u32) -> Result<(), String> {
-    Settings::global()
-        .set_download_interval_ms(interval_ms)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_download_interval_ms(interval_ms: u32) -> Result<(), String> {
+    Settings::global().set_download_interval_ms(interval_ms)
 }
 
 #[tauri::command]
-pub async fn set_image_click_action(action: String) -> Result<(), String> {
-    Settings::global()
-        .set_image_click_action(action)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_image_click_action(action: String) -> Result<(), String> {
+    Settings::global().set_image_click_action(action)
 }
 
 #[tauri::command]
-pub async fn set_gallery_image_aspect_ratio(aspect_ratio: Option<String>) -> Result<(), String> {
-    Settings::global()
-        .set_gallery_image_aspect_ratio(aspect_ratio)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_gallery_image_aspect_ratio(aspect_ratio: Option<String>) -> Result<(), String> {
+    Settings::global().set_gallery_image_aspect_ratio(aspect_ratio)
 }
 
 #[tauri::command]
-pub async fn set_gallery_image_object_position(position: String) -> Result<(), String> {
-    Settings::global()
-        .set_gallery_image_object_position(position)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_gallery_image_object_position(position: String) -> Result<(), String> {
+    Settings::global().set_gallery_image_object_position(position)
 }
 
 #[tauri::command]
-pub async fn set_gallery_grid_columns(columns: u32) -> Result<(), String> {
-    Settings::global()
-        .set_gallery_grid_columns(columns)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_gallery_grid_columns(columns: u32) -> Result<(), String> {
+    Settings::global().set_gallery_grid_columns(columns)
 }
 
 #[tauri::command]
-pub async fn set_gallery_page_size(size: u32) -> Result<(), String> {
-    Settings::global()
-        .set_gallery_page_size(size)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_gallery_page_size(size: u32) -> Result<(), String> {
+    Settings::global().set_gallery_page_size(size)
 }
 
 #[tauri::command]
@@ -478,41 +328,29 @@ pub fn get_desktop_resolution(app: tauri::AppHandle) -> Result<(u32, u32), Strin
 }
 
 #[tauri::command]
-pub async fn set_auto_deduplicate(enabled: bool) -> Result<(), String> {
-    Settings::global()
-        .set_auto_deduplicate(enabled)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_auto_deduplicate(enabled: bool) -> Result<(), String> {
+    Settings::global().set_auto_deduplicate(enabled)
 }
 
 #[tauri::command]
-pub async fn set_default_download_dir(dir: Option<String>) -> Result<(), String> {
-    Settings::global()
-        .set_default_download_dir(dir)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_default_download_dir(dir: Option<String>) -> Result<(), String> {
+    Settings::global().set_default_download_dir(dir)
 }
 
 #[tauri::command]
 #[cfg(target_os = "windows")]
-pub async fn set_wallpaper_engine_dir(dir: Option<String>) -> Result<(), String> {
-    Settings::global()
-        .set_wallpaper_engine_dir(dir)
-        .await
-        .map_err(|e| e.to_string())
+pub fn set_wallpaper_engine_dir(dir: Option<String>) -> Result<(), String> {
+    Settings::global().set_wallpaper_engine_dir(dir)
 }
 
 #[tauri::command]
 #[cfg(target_os = "windows")]
-pub async fn get_wallpaper_engine_myprojects_dir() -> Result<Option<String>, String> {
-    Settings::global()
-        .get_wallpaper_engine_myprojects_dir()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_wallpaper_engine_myprojects_dir() -> Result<Option<String>, String> {
+    Settings::global().get_wallpaper_engine_myprojects_dir()
 }
 
 #[tauri::command]
-pub async fn get_default_images_dir() -> Result<String, String> {
+pub fn get_default_images_dir() -> Result<String, String> {
     Ok(kabegame_core::storage::Storage::global()
         .get_images_dir()
         .to_string_lossy()
