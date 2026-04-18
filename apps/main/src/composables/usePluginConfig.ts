@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { usePluginConfigI18n } from "@kabegame/i18n";
 import type { PluginConfigText } from "@kabegame/core/stores/plugins";
+import { usePluginStore } from "@/stores/plugins";
 import {
   formatPluginDateForBackend,
   parsePluginDateBound,
@@ -327,19 +328,10 @@ export function usePluginConfig() {
 
   // 仅加载插件变量定义到 pluginVars，不修改 form.vars（用于载入配置等场景）
   const loadPluginVarDefs = async (pluginId: string) => {
-    try {
-      const vars = await invoke<Array<PluginVarDef> | null>("get_plugin_vars", {
-        pluginId,
-      });
-      pluginVars.value = vars || [];
-      console.debug("[loadPluginVarDefs] get_plugin_vars result:", {
-        pluginId,
-        vars: pluginVars.value,
-      });
-    } catch (error) {
-      console.error("加载插件变量失败:", error);
-      pluginVars.value = [];
-    }
+    const pluginStore = usePluginStore();
+    const plugin = pluginStore.plugins.find((p) => p.id === pluginId);
+    const vars = (plugin?.config?.vars as PluginVarDef[] | undefined) ?? [];
+    pluginVars.value = vars;
   };
 
   // 根据当前 pluginVars 用默认值重置 form.vars

@@ -60,6 +60,7 @@ vd:
   wallpaperOrderSub: 壁紙順
   imageOnly: 画像のみ
   videoOnly: 動画のみ
+  localImport: ローカルインポート
 
 surf:
   windowTitle: "サーフ - {host}"

@@ -49,6 +49,8 @@ const props = withDefaults(
     loadImageBytes?: LoadImageBytes;
     /** 插件文档图片 URL 前缀：桌面为 http 服务器路径，安卓为 kbg-plugin-doc.localhost。有值时图片用 src=baseUrl+encodeURIComponent(path)，不调 loadImageBytes */
     docImageBaseUrl?: string | null;
+    /** 已安装插件内嵌的 doc_root 资源：相对路径 → base64。优先级最高。 */
+    docResources?: Record<string, string> | null;
   }>(),
   {
     emptyDescription: "该源暂无文档",
@@ -225,7 +227,8 @@ const sanitizeHtml = (rawHtml: string): string => {
 const renderMarkdown = async (
   markdown: string,
   loadImageBytes?: LoadImageBytes,
-  docImageBaseUrl?: string | null
+  docImageBaseUrl?: string | null,
+  docResources?: Record<string, string> | null
 ): Promise<string> => {
   if (!markdown) return "";
 
@@ -266,10 +269,31 @@ const renderMarkdown = async (
     searchIndex = pathEnd + 1;
   }
 
-  // 2) 替换图片：有 docImageBaseUrl 时用 URL（桌面 HTTP / 安卓自定义 host），否则用 loadImageBytes 转 data URL
+  // 2) 替换图片：优先 docResources（内嵌 base64），否则 docImageBaseUrl URL，否则 loadImageBytes 转 data URL
   let processed = markdown;
   if (imageMatches.length > 0) {
-    if (docImageBaseUrl) {
+    if (docResources) {
+      for (const img of imageMatches.slice().reverse()) {
+        const normalizedPath = normalizeDocPath(img.path);
+        const base64 = docResources[normalizedPath];
+        const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        if (base64) {
+          const mime = guessMime(img.path);
+          const url = `data:${mime};base64,${base64}`;
+          processed = processed.replace(
+            new RegExp(escapedMatch, "g"),
+            `<img src="${url}" alt="${escapeHtml(
+              img.alt
+            )}" style="max-width: 100%; height: auto;" />`
+          );
+        } else {
+          processed = processed.replace(
+            new RegExp(escapedMatch, "g"),
+            `[图片加载失败: ${escapeHtml(img.path)}]`
+          );
+        }
+      }
+    } else if (docImageBaseUrl) {
       for (const img of imageMatches.slice().reverse()) {
         try {
           const normalizedPath = normalizeDocPath(img.path);
@@ -346,7 +370,8 @@ watchEffect(() => {
     html.value = await renderMarkdown(
       text,
       props.loadImageBytes,
-      props.docImageBaseUrl
+      props.docImageBaseUrl,
+      props.docResources
     );
   })();
 });

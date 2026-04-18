@@ -359,7 +359,7 @@ async fn handle_plugin_doc_image(Query(query): Query<PluginDocImageQuery>) -> Re
 
     let manager = kabegame_core::plugin::PluginManager::global();
     let bytes = match manager
-        .load_plugin_image_for_detail(plugin_id, None, None, None, path, None, None)
+        .load_plugin_image_for_detail(plugin_id, path, None)
         .await
     {
         Ok(b) => b,

@@ -19,7 +19,7 @@ use kabegame_core::settings::Settings;
 use kabegame_core::storage::organize::OrganizeService;
 use kabegame_core::storage::tasks::TaskInfo;
 use kabegame_core::storage::Storage;
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -123,7 +123,7 @@ pub async fn dispatch_request(req: CliIpcRequest, app_handle: AppHandle) -> CliI
     if let Some(resp) = gallery::handle_gallery_request(&req).await {
         return resp;
     }
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     {
         if matches!(req, CliIpcRequest::VdMount) {
             return handle_vd_mount().await;
@@ -491,13 +491,13 @@ fn handle_status() -> CliIpcResponse {
             "settings": true,
             "events": true,
             "pluginRun": false,  // 暂未实现
-            "virtualDrive": cfg!(all(not(kabegame_mode = "light"), not(target_os = "android")))
+            "virtualDrive": cfg!(kabegame_mode = "standard")
         }
     }));
     resp
 }
 
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 async fn handle_vd_mount() -> CliIpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
@@ -509,10 +509,7 @@ async fn handle_vd_mount() -> CliIpcResponse {
         return CliIpcResponse::err("Virtual drive is not available".to_string());
     }
 
-    let path = Settings::global()
-        .get_album_drive_mount_point()
-        .await
-        .unwrap_or_default();
+    let path = Settings::global().get_album_drive_mount_point();
 
     let vd_service = VirtualDriveService::global().clone();
 
@@ -537,7 +534,7 @@ async fn handle_vd_mount() -> CliIpcResponse {
         Ok(()) => {
             // 挂载成功后，设置 enabled 为 true（会自动发送 SettingChange 事件）
             let settings = Settings::global();
-            if let Err(e) = settings.set_album_drive_enabled(true).await {
+            if let Err(e) = settings.set_album_drive_enabled(true) {
                 return CliIpcResponse::err(format!("Failed to set enabled: {}", e));
             }
 
@@ -547,7 +544,7 @@ async fn handle_vd_mount() -> CliIpcResponse {
     }
 }
 
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 async fn handle_vd_unmount() -> CliIpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
@@ -581,7 +578,7 @@ async fn handle_vd_unmount() -> CliIpcResponse {
         Ok(true) => {
             // 卸载成功后，设置 enabled 为 false（会自动发送 SettingChange 事件）
             let settings = Settings::global();
-            if let Err(e) = settings.set_album_drive_enabled(false).await {
+            if let Err(e) = settings.set_album_drive_enabled(false) {
                 return CliIpcResponse::err(format!("Failed to set enabled: {}", e));
             }
 
@@ -595,7 +592,7 @@ async fn handle_vd_unmount() -> CliIpcResponse {
     }
 }
 
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 async fn handle_vd_status() -> CliIpcResponse {
     let enabled = cfg!(all(
         not(kabegame_mode = "light"),

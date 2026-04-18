@@ -71,5 +71,10 @@
   "wallpaperSetSuccess": "Wallpaper set successfully",
   "wallpaperSetFailed": "Failed to set wallpaper",
   "addToAlbumFailed": "Failed to add images to album",
-  "exportFailed": "Export failed"
+  "exportFailed": "Export failed",
+  "batteryOptimizationTitle": "Allow background activity",
+  "batteryOptimizationDesc": "Allowing unrestricted background usage helps wallpaper rotation and download tasks keep running instead of being limited by battery optimization.",
+  "batteryOptimizationConfirm": "Open settings",
+  "batteryOptimizationCancel": "Not now",
+  "batteryOptimizationTooltip": "Background may be restricted. Tap to allow."
 }

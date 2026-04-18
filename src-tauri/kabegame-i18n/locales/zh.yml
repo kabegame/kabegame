@@ -60,6 +60,7 @@ vd:
   wallpaperOrderSub: 按壁纸顺序
   imageOnly: 仅图片
   videoOnly: 仅视频
+  localImport: 本地导入
 
 surf:
   windowTitle: "畅游 - {host}"

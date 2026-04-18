@@ -1,5 +1,5 @@
 use crate::emitter::GlobalEmitter;
-use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID};
+use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -187,6 +187,37 @@ impl Storage {
                 params![FAVORITE_ALBUM_ID, "收藏", created_at as i64],
             )
             .map_err(|e| format!("Failed to create default '收藏' album: {}", e))?;
+        }
+
+        Ok(())
+    }
+
+    /// 确保隐藏画册存在。名称采用 `hidden-{8hex}` 形式（取自 UUID v4 前 8 字符），
+    /// 便于大模型通过 `hidden-` 前缀识别，同时几乎不会与用户自定义画册重名。
+    /// 幂等：若记录已存在则不动（保留既有名称）。
+    pub fn ensure_hidden_album(&self) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM albums WHERE id = ?1)",
+                params![HIDDEN_ALBUM_ID],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to query hidden album existence: {}", e))?;
+
+        if !exists {
+            let rand_suffix = uuid::Uuid::new_v4().simple().to_string();
+            let name = format!("hidden-{}", &rand_suffix[..8]);
+            let created_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| format!("Time error: {}", e))?
+                .as_secs();
+            conn.execute(
+                "INSERT INTO albums (id, name, created_at, parent_id) VALUES (?1, ?2, ?3, NULL)",
+                params![HIDDEN_ALBUM_ID, name, created_at as i64],
+            )
+            .map_err(|e| format!("Failed to create hidden album: {}", e))?;
         }
 
         Ok(())
@@ -926,6 +957,9 @@ impl Storage {
     pub fn move_album(&self, album_id: &str, new_parent_id: Option<&str>) -> Result<(), String> {
         if album_id == FAVORITE_ALBUM_ID {
             return Err("不能移动系统默认画册".to_string());
+        }
+        if new_parent_id == Some(FAVORITE_ALBUM_ID) {
+            return Err("不能将画册移动到收藏画册下".to_string());
         }
         if let Some(pid) = new_parent_id {
             if pid == album_id {

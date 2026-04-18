@@ -30,7 +30,7 @@ pub mod wallpaper_engine_export;
 /// 虚拟盘。
 ///
 /// 注意：该模块仅在启用 feature `virtual-driver` 时编译，避免在不需要 VD 的 app 里引入相关依赖。
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+#[cfg(kabegame_mode = "standard")]
 pub mod virtual_driver;
 
 const BUILD_MODE: &str = env!("KABEGAME_BUILD_MODE"); // injected by build.rs

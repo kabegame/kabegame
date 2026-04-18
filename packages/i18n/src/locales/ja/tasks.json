@@ -7,6 +7,7 @@
   "drawerClearAll": "すべてクリア（{n}）",
   "drawerDeleteTask": "タスクを削除",
   "drawerViewLog": "タスクログを表示",
+  "drawerViewParams": "実行パラメータを表示",
   "drawerViewImages": "タスク画像を表示",
   "taskRunParamsTitle": "実行パラメータ",
   "openRunParams": "実行パラメータ",

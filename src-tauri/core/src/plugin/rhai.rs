@@ -194,29 +194,8 @@ fn get_page_stack(
         .ok_or_else(|| format!("Page stack not found for task {task_id}").into())
 }
 
-async fn get_network_retry_count_async(_dq: &crate::crawler::DownloadQueue) -> u32 {
-    // 注意：这个函数现在需要 async，但调用它的地方可能还是同步的
-    // 我们需要在调用处使用 block_on 或改为 async
-    Settings::global()
-        .get_network_retry_count()
-        .await
-        .unwrap_or(2)
-}
-
 fn get_network_retry_count(_dq: &crate::crawler::DownloadQueue) -> u32 {
-    // 临时实现：使用 block_on（需要 runtime handle）
-    // 更好的方式是让调用链也变成 async
-    let handle = tokio::runtime::Handle::try_current();
-    if let Ok(handle) = handle {
-        handle.block_on(async {
-            Settings::global()
-                .get_network_retry_count()
-                .await
-                .unwrap_or(2)
-        })
-    } else {
-        2 // 默认值
-    }
+    Settings::global().get_network_retry_count()
 }
 
 fn backoff_ms_for_attempt(attempt: u32) -> u64 {

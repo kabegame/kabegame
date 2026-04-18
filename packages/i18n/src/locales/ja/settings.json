@@ -13,6 +13,7 @@
   "albumDriveMessageMountPointRequired": "先にマウントポイントを入力してください（例: K:\\）",
   "albumDriveMessageEnabled": "アルバムドライブを有効にしました",
   "albumDriveMessageDisabled": "アルバムドライブを無効にしました",
+  "albumDriveOpenErrorHint": "設定でアルバムドライブをオフにしてから再度オンにしてみてください。",
   "imageClickAction": "画像クリック時の動作",
   "imageClickActionDesc": "画像を左クリックしたときの動作",
   "imageClickPreview": "アプリ内プレビュー",

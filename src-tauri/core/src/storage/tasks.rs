@@ -187,6 +187,60 @@ impl Storage {
         Ok(task)
     }
 
+    /// 批量查询多个任务。返回 id → TaskInfo 映射，缺失的 id 不在 map 中。
+    pub fn get_tasks_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<HashMap<String, TaskInfo>, String> {
+        let mut out: HashMap<String, TaskInfo> = HashMap::new();
+        if ids.is_empty() {
+            return Ok(out);
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.run_config_id, t.trigger_source
+             FROM tasks t WHERE t.id IN ({})",
+            placeholders
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {}", e))?;
+        let params_iter: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt
+            .query_map(params_iter.as_slice(), |row| {
+                let user_config_json: Option<String> = row.get(3)?;
+                let user_config = user_config_json.and_then(|s| serde_json::from_str(&s).ok());
+                let http_headers_json: Option<String> = row.get(4)?;
+                let http_headers = http_headers_json.and_then(|s| serde_json::from_str(&s).ok());
+                Ok(TaskInfo {
+                    id: row.get(0)?,
+                    plugin_id: row.get(1)?,
+                    output_dir: row.get(2)?,
+                    user_config,
+                    http_headers,
+                    status: row.get(5)?,
+                    progress: row.get(6)?,
+                    start_time: row.get::<_, Option<i64>>(7)?.map(|t| t as u64),
+                    end_time: row.get::<_, Option<i64>>(8)?.map(|t| t as u64),
+                    error: row.get(9)?,
+                    output_album_id: row.get(10)?,
+                    deleted_count: row.get(11)?,
+                    dedup_count: row.get(12)?,
+                    success_count: row.get(13)?,
+                    failed_count: row.get(14)?,
+                    run_config_id: row.get(15)?,
+                    trigger_source: row
+                        .get::<_, Option<String>>(16)?
+                        .unwrap_or_else(default_trigger_source),
+                })
+            })
+            .map_err(|e| format!("query: {}", e))?;
+        for r in rows {
+            let t = r.map_err(|e| format!("row: {}", e))?;
+            out.insert(t.id.clone(), t);
+        }
+        Ok(out)
+    }
+
     pub fn get_all_tasks(&self) -> Result<Vec<TaskInfo>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn

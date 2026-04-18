@@ -86,11 +86,11 @@
 
 | 操作系统 | Standard 模式 | Light 模式 |
 |---------|--------------|-----------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame-standard_3.5.0_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame-light_3.5.0_x64-setup.exe) |
-| macOS | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame-standard_3.5.0_aarch64.dmg) | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame-light_3.5.0_aarch64.dmg) |
-| Linux | [deb 包](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame-standard_3.5.0_amd64.deb) | [deb 包](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame-light_3.5.0_amd64.deb) |
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame-standard_4.0.0_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame-light_4.0.0_x64-setup.exe) |
+| macOS | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame-standard_4.0.0_aarch64.dmg) | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame-light_4.0.0_aarch64.dmg) |
+| Linux | [deb 包](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame-standard_4.0.0_amd64.deb) | [deb 包](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame-light_4.0.0_amd64.deb) |
 
-- **安卓预览版**：[apk](https://github.com/kabegame/kabegame/releases/download/v3.5.0/Kabegame_3.5.0_android-preview.apk)（同一发布页）。
+- **安卓预览版**：[apk](https://github.com/kabegame/kabegame/releases/download/v4.0.0/Kabegame_4.0.0_android-preview.apk)（同一发布页）。
 
 ## 安装方法
 
@@ -340,6 +340,11 @@ bun run build:ffmpeg             # 需 libx264（macOS: brew install x264，Ubun
 - `--mode`：构建模式
   - `standard`（默认）：标准版本，支持插件商店、虚拟磁盘和 CLI
   - `light`：轻量版本，仅支持插件商店
+  - `android`：Android 目标（替代原 `--android` 标志）
+- `--data`：数据目录模式
+  - `dev`（`bun dev` 默认）：使用仓库本地 `data/` 和 `cache/` 目录
+  - `prod`（其他命令默认）：使用系统用户数据目录
+  - 示例：`bun dev -c main --data prod` 可在开发时访问已安装版本的数据
 - `--skip <skip>`：跳过某个流程（只能一个值：`vue` | `cargo`）
   - 在 `check` 中始终生效：`--skip vue` 跳过 `vue-tsc`，`--skip cargo` 跳过 `cargo check`
   - 在 `build` 中：
@@ -366,14 +371,14 @@ Android 开发需要额外的环境配置，详见 [Android 迁移指南](docs/T
 
 #### 在真机/模拟器上运行
 
-Android 开发需使用 **`bun dev -c main --android`**（不能省略 `--android`，否则会跑桌面版）。若连接了多台设备（真机 + 模拟器），Tauri 可能选错设备，可指定设备 ID：
+Android 开发需使用 **`bun dev -c main --mode android`**（不能省略 `--mode android`，否则会跑桌面版）。若连接了多台设备（真机 + 模拟器），Tauri 可能选错设备，可指定设备 ID：
 
 ```bash
 # 查看已连接设备
 adb devices
 
 # 指定设备运行（将 <设备ID> 替换为 adb devices 第一列的值，如 10AECH09ZX001DJ）
-bun dev -c main --android -- <设备ID>
+bun dev -c main --mode android -- <设备ID>
 ```
 
 #### 打开开发者工具

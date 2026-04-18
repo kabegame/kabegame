@@ -71,5 +71,10 @@
   "wallpaperSetSuccess": "壁紙を設定しました",
   "wallpaperSetFailed": "壁紙の設定に失敗しました",
   "addToAlbumFailed": "アルバムに画像を追加できませんでした",
-  "exportFailed": "エクスポートに失敗しました"
+  "exportFailed": "エクスポートに失敗しました",
+  "batteryOptimizationTitle": "バックグラウンド実行を許可",
+  "batteryOptimizationDesc": "バックグラウンド実行を許可すると、壁紙のローテーションやダウンロードが省電力制限の影響を受けにくくなります。",
+  "batteryOptimizationConfirm": "設定を開く",
+  "batteryOptimizationCancel": "あとで",
+  "batteryOptimizationTooltip": "バックグラウンドが制限されています。タップで許可"
 }

@@ -318,9 +318,7 @@ pub async fn export_video_to_we_project(
 }
 
 /// 通过 daemon 获取设置并解析选项
-async fn resolve_options_from_settings(
-    override_opt: Option<WeExportOptions>,
-) -> Result<WeExportOptions, String> {
+fn resolve_options_from_settings(override_opt: Option<WeExportOptions>) -> WeExportOptions {
     let o = override_opt.unwrap_or(WeExportOptions {
         style: None,
         transition: None,
@@ -329,29 +327,17 @@ async fn resolve_options_from_settings(
     });
 
     let settings = kabegame_core::settings::Settings::global();
-    let style = settings
-        .get_wallpaper_rotation_style()
-        .await
-        .map_err(|e| format!("获取壁纸样式设置失败: {}", e))?;
-    let transition = settings
-        .get_wallpaper_rotation_transition()
-        .await
-        .map_err(|e| format!("获取壁纸过渡设置失败: {}", e))?;
-    let interval_minutes = settings
-        .get_wallpaper_rotation_interval_minutes()
-        .await
-        .map_err(|e| format!("获取壁纸间隔设置失败: {}", e))?;
-    let mode = settings
-        .get_wallpaper_rotation_mode()
-        .await
-        .map_err(|e| format!("获取壁纸模式设置失败: {}", e))?;
+    let style = settings.get_wallpaper_rotation_style();
+    let transition = settings.get_wallpaper_rotation_transition();
+    let interval_minutes = settings.get_wallpaper_rotation_interval_minutes();
+    let mode = settings.get_wallpaper_rotation_mode();
 
-    Ok(WeExportOptions {
+    WeExportOptions {
         style: Some(o.style.unwrap_or(style)),
         transition: Some(o.transition.unwrap_or(transition)),
         interval_ms: Some(o.interval_ms.unwrap_or(interval_minutes as u64 * 60_000)),
         order: Some(o.order.unwrap_or(mode)),
-    })
+    }
 }
 
 /// 导出相册到 Wallpaper Engine 项目
@@ -361,7 +347,7 @@ pub async fn export_album_to_we_project(
     output_parent_dir: String,
     options: Option<WeExportOptions>,
 ) -> Result<WeExportResult, String> {
-    let options = resolve_options_from_settings(options).await?;
+    let options = resolve_options_from_settings(options);
 
     let images = kabegame_core::storage::Storage::global()
         .get_album_images(&album_id)
@@ -382,7 +368,7 @@ pub async fn export_images_to_we_project(
     output_parent_dir: String,
     options: Option<WeExportOptions>,
 ) -> Result<WeExportResult, String> {
-    let options = resolve_options_from_settings(options).await?;
+    let options = resolve_options_from_settings(options);
 
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)

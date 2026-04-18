@@ -528,9 +528,7 @@ fn write_we_web_project(
     })
 }
 
-async fn resolve_options_from_settings(
-    override_opt: Option<WeExportOptions>,
-) -> Result<WeExportOptions, String> {
+fn resolve_options_from_settings(override_opt: Option<WeExportOptions>) -> WeExportOptions {
     let settings = Settings::global();
     let o = override_opt.unwrap_or(WeExportOptions {
         style: None,
@@ -539,17 +537,17 @@ async fn resolve_options_from_settings(
         order: None,
     });
 
-    let style = settings.get_wallpaper_rotation_style().await?;
-    let transition = settings.get_wallpaper_rotation_transition().await?;
-    let interval_minutes = settings.get_wallpaper_rotation_interval_minutes().await?;
-    let mode = settings.get_wallpaper_rotation_mode().await?;
+    let style = settings.get_wallpaper_rotation_style();
+    let transition = settings.get_wallpaper_rotation_transition();
+    let interval_minutes = settings.get_wallpaper_rotation_interval_minutes();
+    let mode = settings.get_wallpaper_rotation_mode();
 
-    Ok(WeExportOptions {
+    WeExportOptions {
         style: Some(o.style.unwrap_or(style)),
         transition: Some(o.transition.unwrap_or(transition)),
         interval_ms: Some(o.interval_ms.unwrap_or(interval_minutes as u64 * 60_000)),
         order: Some(o.order.unwrap_or(mode)),
-    })
+    }
 }
 
 pub async fn export_album_to_we_project(
@@ -560,12 +558,9 @@ pub async fn export_album_to_we_project(
     storage: &Storage,
     _settings: &Settings,
 ) -> Result<WeExportResult, String> {
-    let options = resolve_options_from_settings(options).await?;
+    let options = resolve_options_from_settings(options);
 
-    let include_sub = Settings::global()
-        .get_wallpaper_rotation_include_subalbums()
-        .await
-        .unwrap_or(true);
+    let include_sub = Settings::global().get_wallpaper_rotation_include_subalbums();
     let images: Vec<ImageInfo> =
         storage.get_album_images_for_wallpaper_rotation(&album_id, include_sub)?;
     let image_paths: Vec<String> = images.into_iter().map(|i| i.local_path).collect();
@@ -577,19 +572,19 @@ pub async fn export_album_to_we_project(
     write_we_web_project(&output_parent_dir, &title, &image_paths, &options)
 }
 
-pub async fn export_images_to_we_project(
-    image_paths: Vec<String>,
-    title: Option<String>,
-    output_parent_dir: String,
-    options: Option<WeExportOptions>,
-    _settings: &Settings,
-) -> Result<WeExportResult, String> {
-    let options = resolve_options_from_settings(options).await?;
+// pub async fn export_images_to_we_project(
+//     image_paths: Vec<String>,
+//     title: Option<String>,
+//     output_parent_dir: String,
+//     options: Option<WeExportOptions>,
+//     _settings: &Settings,
+// ) -> Result<WeExportResult, String> {
+//     let options = resolve_options_from_settings(options).ok?;
 
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let t = title.unwrap_or_else(|| format!("Kabegame_Selection_{}", ts));
-    write_we_web_project(&output_parent_dir, &t, &image_paths, &options)
-}
+//     let ts = SystemTime::now()
+//         .duration_since(UNIX_EPOCH)
+//         .unwrap_or_default()
+//         .as_secs();
+//     let t = title.unwrap_or_else(|| format!("Kabegame_Selection_{}", ts));
+//     write_we_web_project(&output_parent_dir, &t, &image_paths, &options)
+// }

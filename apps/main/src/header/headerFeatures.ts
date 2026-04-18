@@ -17,6 +17,7 @@ import {
   CircleClose,
   WarningFilled,
   Document,
+  InfoFilled,
 } from "@element-plus/icons-vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { i18n } from "@kabegame/i18n";
@@ -117,6 +118,11 @@ export function registerHeaderFeatures() {
       id: HeaderFeatureId.TaskViewLog,
       label: t("tasks.drawerViewLog"),
       icon: Document,
+    },
+    {
+      id: HeaderFeatureId.TaskViewParams,
+      label: t("tasks.drawerViewParams"),
+      icon: InfoFilled,
     },
     {
       id: HeaderFeatureId.FailedImages,

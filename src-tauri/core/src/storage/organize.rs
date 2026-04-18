@@ -528,13 +528,7 @@ fn run_organize(
     let mut cursor_id: i64 = 0;
 
     // 当前壁纸 id：若被移除则清空（与历史行为保持一致）
-    let mut current_wallpaper_id = handle.block_on(async {
-        Settings::global()
-            .get_current_wallpaper_image_id()
-            .await
-            .ok()
-            .flatten()
-    });
+    let mut current_wallpaper_id = Settings::global().get_current_wallpaper_image_id();
 
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -619,11 +613,7 @@ fn run_organize(
             // 检查壁纸是否被移除
             if let Some(cur) = current_wallpaper_id.as_deref() {
                 if remove_ids.iter().any(|id| id == cur) {
-                    let _ = handle.block_on(async {
-                        Settings::global()
-                            .set_current_wallpaper_image_id(None)
-                            .await
-                    });
+                    let _ = Settings::global().set_current_wallpaper_image_id(None);
                     current_wallpaper_id = None;
                 }
             }

@@ -83,6 +83,9 @@ daemon_event_kinds! {
     TasksChange,
     DaemonShutdown,
     AutoConfigChange,
+    PluginAdded,
+    PluginDeleted,
+    PluginUpdated,
 }
 
 impl DaemonEventKind {
@@ -114,6 +117,9 @@ impl DaemonEventKind {
             DaemonEventKind::TasksChange => "tasks-change",
             DaemonEventKind::DaemonShutdown => "daemon-shutdown",
             DaemonEventKind::AutoConfigChange => "auto-config-change",
+            DaemonEventKind::PluginAdded => "plugin-added",
+            DaemonEventKind::PluginDeleted => "plugin-deleted",
+            DaemonEventKind::PluginUpdated => "plugin-updated",
         }
         .to_string()
     }
@@ -140,6 +146,9 @@ impl DaemonEventKind {
             "tasks-change" => Some(DaemonEventKind::TasksChange),
             "daemon-shutdown" => Some(DaemonEventKind::DaemonShutdown),
             "auto-config-change" => Some(DaemonEventKind::AutoConfigChange),
+            "plugin-added" => Some(DaemonEventKind::PluginAdded),
+            "plugin-deleted" => Some(DaemonEventKind::PluginDeleted),
+            "plugin-updated" => Some(DaemonEventKind::PluginUpdated),
             "TaskAdded" | "TaskDeleted" | "TaskChanged" => Some(DaemonEventKind::TasksChange),
             _ => None,
         }
@@ -332,6 +341,20 @@ pub enum DaemonEvent {
         #[serde(rename = "configId")]
         config_id: String,
     },
+
+    /// 插件新增安装（首次安装）
+    PluginAdded {
+        plugin: serde_json::Value,
+    },
+    /// 插件卸载
+    PluginDeleted {
+        #[serde(rename = "pluginId")]
+        plugin_id: String,
+    },
+    /// 插件更新/重装（同 ID 覆盖安装）
+    PluginUpdated {
+        plugin: serde_json::Value,
+    },
 }
 
 /// 包装在 Arc 中的 Daemon 事件，用于零拷贝传递
@@ -366,6 +389,9 @@ impl DaemonEvent {
             | DaemonEvent::TaskChanged { .. } => DaemonEventKind::TasksChange,
             DaemonEvent::DaemonShutdown { .. } => DaemonEventKind::DaemonShutdown,
             DaemonEvent::AutoConfigChange { .. } => DaemonEventKind::AutoConfigChange,
+            DaemonEvent::PluginAdded { .. } => DaemonEventKind::PluginAdded,
+            DaemonEvent::PluginDeleted { .. } => DaemonEventKind::PluginDeleted,
+            DaemonEvent::PluginUpdated { .. } => DaemonEventKind::PluginUpdated,
         }
     }
 }

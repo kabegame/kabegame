@@ -13,6 +13,7 @@
   "albumDriveMessageMountPointRequired": "请先填写挂载点（例如 K:\\）",
   "albumDriveMessageEnabled": "画册盘已开启",
   "albumDriveMessageDisabled": "画册盘已关闭",
+  "albumDriveOpenErrorHint": "可以尝试在设置中关闭再重新开启画册盘。",
   "imageClickAction": "图片点击行为",
   "imageClickActionDesc": "左键点击图片时的行为",
   "imageClickPreview": "应用内预览",

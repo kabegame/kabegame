@@ -71,5 +71,10 @@
   "wallpaperSetSuccess": "壁纸设置成功",
   "wallpaperSetFailed": "设置壁纸失败",
   "addToAlbumFailed": "添加图片到画册失败",
-  "exportFailed": "导出失败"
+  "exportFailed": "导出失败",
+  "batteryOptimizationTitle": "开启后台运行权限",
+  "batteryOptimizationDesc": "允许后台运行可以确保壁纸轮播和下载任务在后台持续进行，不受系统省电优化的影响。",
+  "batteryOptimizationConfirm": "立即开启",
+  "batteryOptimizationCancel": "暂不开启",
+  "batteryOptimizationTooltip": "后台运行受限，点击开启"
 }

@@ -16,7 +16,7 @@ type AlbumDetailRouteState = {
 const defaultState: AlbumDetailRouteState = {
   albumId: "",
   filter: "all",
-  sort: "time-asc",
+  sort: "join-asc",
   page: 1,
 };
 

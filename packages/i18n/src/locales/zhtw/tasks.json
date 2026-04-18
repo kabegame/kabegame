@@ -7,6 +7,7 @@
   "drawerClearAll": "清除所有任務 ({n})",
   "drawerDeleteTask": "刪除任務",
   "drawerViewLog": "檢視任務日誌",
+  "drawerViewParams": "檢視執行參數",
   "drawerViewImages": "檢視任務圖片",
   "taskRunParamsTitle": "執行參數",
   "openRunParams": "執行參數",

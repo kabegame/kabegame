@@ -2,7 +2,14 @@
   <!-- Android：自研全宽抽屉，支持划入动画与拖拽滑出、背景透明度随拖拽变化 -->
   <AndroidDrawer v-if="IS_ANDROID" v-model="visible">
     <template #header>
-      <h3 class="task-drawer-android-title">{{ $t('tasks.taskList') }}</h3>
+      <div class="task-drawer-android-header">
+        <h3 class="task-drawer-android-title">{{ $t('tasks.taskList') }}</h3>
+        <el-tooltip v-if="IS_ANDROID && isOptimized" :content="$t('common.batteryOptimizationTooltip')" placement="bottom">
+          <el-button link type="warning" class="!p-1 shrink-0" @click="onBatteryIconClick">
+            <el-icon :size="18"><Lightning /></el-icon>
+          </el-button>
+        </el-tooltip>
+      </div>
     </template>
     <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
@@ -39,9 +46,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { storeToRefs } from "pinia";
 import { useI18n } from "@kabegame/i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { Lightning } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "vue-router";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
@@ -52,6 +61,7 @@ import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import TaskDrawerContent from "@kabegame/core/components/task/TaskDrawerContent.vue";
 import TaskContextMenu from "./contextMenu/TaskContextMenu.vue";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 
 interface Props {
   modelValue: boolean;
@@ -77,6 +87,19 @@ const visible = computed({
 });
 
 useModalBack(visible);
+
+const batteryStore = useBatteryOptimizationStore();
+const { isOptimized } = storeToRefs(batteryStore);
+
+watch(visible, (open) => {
+  if (open && IS_ANDROID) {
+    void batteryStore.checkAndPromptIfNeeded();
+  }
+});
+
+async function onBatteryIconClick() {
+  await batteryStore.checkAndPromptIfNeeded({ force: true });
+}
 
 // 任务右键菜单
 const contextMenuVisible = ref(false);
@@ -308,6 +331,14 @@ const handleDeleteAllTasks = async () => {
   /* 确保遮罩层有稳定的初始状态，避免闪烁 */
   will-change: opacity;
   backface-visibility: hidden;
+}
+
+.task-drawer-android-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
 }
 
 .task-drawer-android-title {

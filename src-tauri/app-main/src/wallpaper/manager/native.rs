@@ -16,21 +16,15 @@ impl NativeWallpaperManager {
         Self { _app: app }
     }
 
-    async fn current_wallpaper_path_from_settings(&self) -> Option<String> {
-        if let Ok(Some(id)) = Settings::global().get_current_wallpaper_image_id().await {
-            let img = Storage::global().find_image_by_id(&id).ok().flatten()?;
-            Some(img.local_path)
-        } else {
-            None
-        }
+    fn current_wallpaper_path_from_settings(&self) -> Option<String> {
+        let id = Settings::global().get_current_wallpaper_image_id()?;
+        let img = Storage::global().find_image_by_id(&id).ok().flatten()?;
+        Some(img.local_path)
     }
 
     #[cfg(target_os = "windows")]
-    async fn current_wallpaper_transition_from_ipc(&self) -> Option<String> {
-        Settings::global()
-            .get_wallpaper_rotation_transition()
-            .await
-            .ok()
+    fn current_wallpaper_transition_from_ipc(&self) -> Option<String> {
+        Some(Settings::global().get_wallpaper_rotation_transition())
     }
 
     /// 使用 osascript 设置 macOS 壁纸（仅设置路径，样式跟随系统）
@@ -534,10 +528,7 @@ impl WallpaperManager for NativeWallpaperManager {
     }
 
     async fn get_transition(&self) -> Result<String, String> {
-        Settings::global()
-            .get_wallpaper_rotation_transition()
-            .await
-            .map_err(|e| format!("Settings error: {}", e))
+        Ok(Settings::global().get_wallpaper_rotation_transition())
     }
 
     async fn set_wallpaper_path(&self, file_path: &str) -> Result<(), String> {
@@ -572,7 +563,6 @@ impl WallpaperManager for NativeWallpaperManager {
 
             let transition = self
                 .current_wallpaper_transition_from_ipc()
-                .await
                 .unwrap_or_else(|| "none".to_string());
 
             // 参考 wallpaper_rotator.rs 的实现：使用模拟方式实现淡入淡出
@@ -700,10 +690,7 @@ impl WallpaperManager for NativeWallpaperManager {
         {
             use crate::linux_desktop::{linux_desktop, LinuxDesktop};
 
-            let style = Settings::global()
-                .get_wallpaper_rotation_style()
-                .await
-                .unwrap_or_else(|_| "system".to_string());
+            let style = Settings::global().get_wallpaper_rotation_style();
             let effective = if style == "system" {
                 self.get_style()
                     .await
@@ -763,10 +750,7 @@ impl WallpaperManager for NativeWallpaperManager {
 
         #[cfg(target_os = "android")]
         {
-            let style = Settings::global()
-                .get_wallpaper_rotation_style()
-                .await
-                .unwrap_or_else(|_| "fill".to_string());
+            let style = Settings::global().get_wallpaper_rotation_style();
             // Android 无 "system" 样式，用 fill 作为兜底
             let style = if style == "system" { "fill" } else { style.as_str() };
             self._app
@@ -847,7 +831,7 @@ impl WallpaperManager for NativeWallpaperManager {
 
         // 仅刷新 WM_SETTINGCHANGE 在某些系统上仍可能不触发壁纸重新布局，
         // 这里强制"重载一次当前壁纸路径"，确保新 style 立刻反映到桌面。
-        if let Some(path) = self.current_wallpaper_path_from_settings().await {
+        if let Some(path) = self.current_wallpaper_path_from_settings() {
             if std::path::Path::new(&path).exists() {
                 let _ = self.set_wallpaper_path(&path).await;
             }
@@ -869,7 +853,7 @@ impl WallpaperManager for NativeWallpaperManager {
         let desktop = linux_desktop();
 
         async fn set_style_plasma(manager: &NativeWallpaperManager, style: &str) -> Result<(), String> {
-            if let Some(path) = manager.current_wallpaper_path_from_settings().await {
+            if let Some(path) = manager.current_wallpaper_path_from_settings() {
                 if std::path::Path::new(&path).exists() {
                     manager.set_wallpaper_plasma(&path, style)?;
                 } else {
@@ -920,7 +904,7 @@ impl WallpaperManager for NativeWallpaperManager {
             }
 
             // 如果有当前壁纸路径，重新设置壁纸以应用新样式
-            if let Some(path) = manager.current_wallpaper_path_from_settings().await {
+            if let Some(path) = manager.current_wallpaper_path_from_settings() {
                 if std::path::Path::new(&path).exists() {
                     manager.set_wallpaper_gnome(&path, style)?;
                 }
@@ -990,7 +974,6 @@ impl WallpaperManager for NativeWallpaperManager {
         let settings = kabegame_core::settings::Settings::global();
         settings
             .set_wallpaper_rotation_transition(transition.to_string())
-            .await
             .map_err(|e| format!("保存过渡效果设置失败: {}", e))?;
 
         // 方案 A：不修改系统级动画相关注册表。
@@ -1007,7 +990,7 @@ impl WallpaperManager for NativeWallpaperManager {
         }
 
         // 从全局设置读取当前壁纸路径（由应用维护）
-        let Some(current_wallpaper) = self.current_wallpaper_path_from_settings().await else {
+        let Some(current_wallpaper) = self.current_wallpaper_path_from_settings() else {
             return Ok(());
         };
 
@@ -1027,7 +1010,6 @@ impl WallpaperManager for NativeWallpaperManager {
         // 非 Windows 平台：仅保存设置，不做系统级预览
         Settings::global()
             .set_wallpaper_rotation_transition(transition.to_string())
-            .await
             .map_err(|e| format!("Settings error: {}", e))?;
         Ok(())
     }

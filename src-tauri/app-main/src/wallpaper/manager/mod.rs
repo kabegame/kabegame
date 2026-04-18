@@ -1,8 +1,8 @@
+pub mod native;
 #[cfg(target_os = "linux")]
 pub mod plasma_plugin;
 #[cfg(target_os = "linux")]
 pub mod plasma_qdbus;
-pub mod native;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod window;
 
@@ -81,13 +81,12 @@ impl WallpaperController {
 
     /// 根据当前设置选择活动后端（native/plasma-plugin/window等）。
     pub async fn active_manager(&self) -> Result<Arc<dyn WallpaperManager + Send + Sync>, String> {
-        let mode = Settings::global()
-            .get_wallpaper_mode()
-            .await
-            .unwrap_or_else(|_| "native".to_string());
+        let mode = Settings::global().get_wallpaper_mode();
         Ok(match mode.as_str() {
             #[cfg(target_os = "linux")]
-            "plasma-plugin" => self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+            "plasma-plugin" => {
+                self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>
+            }
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
             _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
@@ -98,7 +97,9 @@ impl WallpaperController {
     pub fn manager_for_mode(&self, mode: &str) -> Arc<dyn WallpaperManager + Send + Sync> {
         match mode {
             #[cfg(target_os = "linux")]
-            "plasma-plugin" => self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+            "plasma-plugin" => {
+                self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>
+            }
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
             _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,

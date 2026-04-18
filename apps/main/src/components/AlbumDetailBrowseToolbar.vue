@@ -74,13 +74,7 @@
             command="join-asc"
             :class="{ 'is-active': currentSortKey === 'join-asc' }"
           >
-            {{ t("gallery.byAlbumJoinAsc") }}
-          </el-dropdown-item>
-          <el-dropdown-item
-            command="join-desc"
-            :class="{ 'is-active': currentSortKey === 'join-desc' }"
-          >
-            {{ t("gallery.byAlbumJoinDesc") }}
+            {{ t("gallery.byAlbumDefaultSort") }}
           </el-dropdown-item>
         </el-dropdown-menu>
         <el-dropdown-menu v-else>
@@ -226,7 +220,7 @@ const filterMode = computed<AlbumBrowseFilter>(() => {
 });
 
 const currentSortKey = computed<AlbumBrowseSort>(() => {
-  return props.sort ?? "time-asc";
+  return props.sort ?? "join-asc";
 });
 
 const isWallpaperFilter = computed(() => filterMode.value === "wallpaper-order");
@@ -272,15 +266,13 @@ const sortButtonLabel = computed(() => {
     case "time-desc":
       return t("gallery.byTimeDesc");
     case "join-asc":
-      return t("gallery.byAlbumJoinAsc");
-    case "join-desc":
-      return t("gallery.byAlbumJoinDesc");
+      return t("gallery.byAlbumDefaultSort");
     case "set-asc":
       return t("gallery.bySetTimeAsc");
     case "set-desc":
       return t("gallery.bySetTimeDesc");
     default:
-      return t("gallery.byTimeAsc");
+      return t("gallery.byAlbumDefaultSort");
   }
 });
 
@@ -308,7 +300,6 @@ const SORT_CMDS_ALL = new Set<AlbumBrowseSort>([
   "time-asc",
   "time-desc",
   "join-asc",
-  "join-desc",
 ]);
 const SORT_CMDS_WALLPAPER = new Set<AlbumBrowseSort>(["set-asc", "set-desc"]);
 
@@ -374,8 +365,7 @@ const sortPickerColumns = computed(() => {
     return [
       { text: t("gallery.byTimeAsc"), value: "time-asc" },
       { text: t("gallery.byTimeDesc"), value: "time-desc" },
-      { text: t("gallery.byAlbumJoinAsc"), value: "join-asc" },
-      { text: t("gallery.byAlbumJoinDesc"), value: "join-desc" },
+      { text: t("gallery.byAlbumDefaultSort"), value: "join-asc" },
       { text: t("gallery.bySetTimeAsc"), value: "set-asc" },
       { text: t("gallery.bySetTimeDesc"), value: "set-desc" },
     ];
@@ -383,11 +373,10 @@ const sortPickerColumns = computed(() => {
   return [
     { text: t("gallery.byTimeAsc"), value: "time-asc" },
     { text: t("gallery.byTimeDesc"), value: "time-desc" },
-    { text: t("gallery.byAlbumJoinAsc"), value: "join-asc" },
-    { text: t("gallery.byAlbumJoinDesc"), value: "join-desc" },
+    { text: t("gallery.byAlbumDefaultSort"), value: "join-asc" },
   ];
 });
-const sortPickerSelected = ref<string[]>(["time-asc"]);
+const sortPickerSelected = ref<string[]>(["join-asc"]);
 watch(showSortPicker, (open) => {
   if (open) sortPickerSelected.value = [currentSortKey.value];
 });

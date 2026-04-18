@@ -60,6 +60,7 @@ vd:
   wallpaperOrderSub: By Wallpaper Order
   imageOnly: Images Only
   videoOnly: Videos Only
+  localImport: Local Import
 
 surf:
   windowTitle: "Surf - {host}"

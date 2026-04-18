@@ -137,11 +137,7 @@ impl WallpaperRotator {
     }
 
     async fn get_current_wallpaper_path(_app: &AppHandle) -> Option<String> {
-        let id = Settings::global()
-            .get_current_wallpaper_image_id()
-            .await
-            .ok()
-            .flatten()?;
+        let id = Settings::global().get_current_wallpaper_image_id()?;
         let img = Storage::global().find_image_by_id(&id).ok().flatten()?;
         let p = img.local_path;
         if Path::new(&p).exists() {
@@ -176,14 +172,10 @@ impl WallpaperRotator {
             state.store(STATE_RUNNING, Ordering::Release);
             println!("[WALLPAPER_ROTATOR] start");
             // 从用户设置中读取初始 interval
-            let initial_interval_secs = {
-                Settings::global()
-                    .get_wallpaper_rotation_interval_minutes()
-                    .await
-                    .unwrap_or(1)
-                    .saturating_mul(60)
-                    .max(60) as u64
-            };
+            let initial_interval_secs = Settings::global()
+                .get_wallpaper_rotation_interval_minutes()
+                .saturating_mul(60)
+                .max(60) as u64;
 
             // 用单一 ticker 控制轮播间隔；手动切换/重置通过 Notify 立即唤醒本线程处理。
             let mut current_interval_secs: u64 = initial_interval_secs;
@@ -209,21 +201,8 @@ impl WallpaperRotator {
 
                 // 获取设置
                 let settings = Settings::global();
-                let (enabled_result, mode_result, interval_result) = tokio::join!(
-                    settings.get_wallpaper_rotation_enabled(),
-                    settings.get_wallpaper_mode(),
-                    settings.get_wallpaper_rotation_interval_minutes()
-                );
-
-                // 如果获取设置失败，跳过
-                let enabled = match enabled_result {
-                    Ok(v) => v,
-                    Err(e) => {
-                        eprintln!("获取设置失败: {}", e);
-                        continue;
-                    }
-                };
-                let wallpaper_mode = mode_result.unwrap_or_else(|_| "native".to_string());
+                let enabled = settings.get_wallpaper_rotation_enabled();
+                let wallpaper_mode = settings.get_wallpaper_mode();
 
                 // 未启用轮播：仅保持线程等待（便于后续快速启用），不做任何切换
                 if !enabled {
@@ -232,7 +211,10 @@ impl WallpaperRotator {
                 }
 
                 // 如果 interval 被用户改了，更新 ticker，并重置定时器让下一次从现在开始计时
-                let desired_secs = interval_result.unwrap_or(1).saturating_mul(60).max(60) as u64;
+                let desired_secs = settings
+                    .get_wallpaper_rotation_interval_minutes()
+                    .saturating_mul(60)
+                    .max(60) as u64;
                 if desired_secs != current_interval_secs {
                     current_interval_secs = desired_secs;
                     ticker = interval(Duration::from_secs(current_interval_secs));
@@ -250,19 +232,10 @@ impl WallpaperRotator {
                 }
 
                 // 选择轮播来源：画册 / 画廊
-                let (album_id_result, include_sub_result) = tokio::join!(
-                    settings.get_wallpaper_rotation_album_id(),
-                    settings.get_wallpaper_rotation_include_subalbums(),
-                );
-                let include_subalbums = include_sub_result.unwrap_or(true);
-                let source = match album_id_result {
-                    Ok(Some(id)) if !id.trim().is_empty() => RotationSource::Album(id),
-                    Ok(Some(_)) | Ok(None) => RotationSource::Gallery,
-                    Err(_) => {
-                        // 获取设置失败：不做切换（线程不退出，避免 running 假死）
-                        eprintln!("获取轮播来源失败");
-                        continue;
-                    }
+                let include_subalbums = settings.get_wallpaper_rotation_include_subalbums();
+                let source = match settings.get_wallpaper_rotation_album_id() {
+                    Some(id) if !id.trim().is_empty() => RotationSource::Album(id),
+                    _ => RotationSource::Gallery,
                 };
 
                 // 获取图片列表
@@ -275,7 +248,6 @@ impl WallpaperRotator {
                         if e.contains("画册不存在") {
                             if settings
                                 .set_wallpaper_rotation_album_id(Some("".to_string()))
-                                .await
                                 .is_ok()
                             {
                                 source = RotationSource::Gallery;
@@ -300,7 +272,6 @@ impl WallpaperRotator {
                             // 先回退到画廊
                             if settings
                                 .set_wallpaper_rotation_album_id(Some("".to_string()))
-                                .await
                                 .is_ok()
                             {
                                 source = RotationSource::Gallery;
@@ -314,19 +285,16 @@ impl WallpaperRotator {
 
                     if images.is_empty() {
                         // 画廊也没有：降级到非轮播
-                        let _ = settings.set_wallpaper_rotation_enabled(false).await;
-                        let _ = settings.set_wallpaper_rotation_album_id(None).await;
-                        let _ = settings.set_current_wallpaper_image_id(None).await;
+                        let _ = settings.set_wallpaper_rotation_enabled(false);
+                        let _ = settings.set_wallpaper_rotation_album_id(None);
+                        let _ = settings.set_current_wallpaper_image_id(None);
                     }
                     eprintln!("无可用轮播图片，退出");
                     continue;
                 }
 
                 // 选择图片
-                let rotation_mode = settings
-                    .get_wallpaper_rotation_mode()
-                    .await
-                    .unwrap_or_else(|_| "random".to_string());
+                let rotation_mode = settings.get_wallpaper_rotation_mode();
                 let selected_image = match rotation_mode.as_str() {
                     "sequential" => {
                         // 顺序模式：从 current_index 开始，顺序找到第一张存在的图片
@@ -439,10 +407,8 @@ impl WallpaperRotator {
                     continue;
                 }
 
-                // 同步更新全局“当前壁纸”（imageId）
-                let _ = settings
-                    .set_current_wallpaper_image_id(Some(selected_image.id.clone()))
-                    .await;
+                // 同步更新全局”当前壁纸”（imageId）
+                let _ = settings.set_current_wallpaper_image_id(Some(selected_image.id.clone()));
 
                 let now_ts = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -466,18 +432,10 @@ impl WallpaperRotator {
         // 兼容旧调用点：start() 尝试按"当前设置"确保轮播线程存在。
         // 注意：如果用户未启用轮播或未选择来源（album_id=None），这里不会强制启动线程。
         let settings = Settings::global();
-        let enabled = settings
-            .get_wallpaper_rotation_enabled()
-            .await
-            .map_err(|e| format!("Settings error: {}", e))?;
-        if !enabled {
+        if !settings.get_wallpaper_rotation_enabled() {
             return Ok(());
         }
-        let album_id = settings
-            .get_wallpaper_rotation_album_id()
-            .await
-            .ok()
-            .flatten();
+        let album_id = settings.get_wallpaper_rotation_album_id();
         let start_from_current = album_id
             .as_deref()
             .map(|s| s.trim().is_empty())
@@ -495,17 +453,12 @@ impl WallpaperRotator {
             if start_from_current {
                 // 画廊顺序模式：对齐 current_index 到"当前壁纸之后"
                 let settings = Settings::global();
-                let (album_id_result, mode_result) = tokio::join!(
-                    settings.get_wallpaper_rotation_album_id(),
-                    settings.get_wallpaper_rotation_mode()
-                );
-                let is_gallery = album_id_result
-                    .ok()
-                    .flatten()
+                let is_gallery = settings
+                    .get_wallpaper_rotation_album_id()
                     .as_deref()
                     .map(|s| s.trim().is_empty())
                     .unwrap_or(false);
-                let is_seq = mode_result.unwrap_or_else(|_| "random".to_string()) == "sequential";
+                let is_seq = settings.get_wallpaper_rotation_mode() == "sequential";
                 if is_gallery && is_seq {
                     if let Ok(images) =
                         Self::load_images_for_source(&RotationSource::Gallery, false).await
@@ -538,20 +491,12 @@ impl WallpaperRotator {
 
         let start_res: Result<(), String> = async {
             let settings = Settings::global();
-            let enabled = settings
-                .get_wallpaper_rotation_enabled()
-                .await
-                .map_err(|e| format!("Settings error: {}", e))?;
-            if !enabled {
+            if !settings.get_wallpaper_rotation_enabled() {
                 return Err("壁纸轮播未启用".to_string());
             }
 
-            let (album_id, include_sub) = tokio::join!(
-                settings.get_wallpaper_rotation_album_id(),
-                settings.get_wallpaper_rotation_include_subalbums(),
-            );
-            let album_id = album_id.map_err(|e| format!("Settings error: {}", e))?;
-            let include_subalbums = include_sub.unwrap_or(true);
+            let album_id = settings.get_wallpaper_rotation_album_id();
+            let include_subalbums = settings.get_wallpaper_rotation_include_subalbums();
             let source = match album_id {
                 Some(id) if !id.trim().is_empty() => RotationSource::Album(id),
                 _ => RotationSource::Gallery,
@@ -572,10 +517,7 @@ impl WallpaperRotator {
                     .iter()
                     .any(|img| Self::normalize_path(&img.local_path) == Self::normalize_path(cur))
                 {
-                    let rotation_mode = settings
-                        .get_wallpaper_rotation_mode()
-                        .await
-                        .unwrap_or_else(|_| "random".to_string());
+                    let rotation_mode = settings.get_wallpaper_rotation_mode();
                     if rotation_mode == "sequential" {
                         // 顺序模式：让下一次轮播从 current 后一张开始
                         self.align_sequential_index_from_current(&images, cur);
@@ -595,8 +537,6 @@ impl WallpaperRotator {
 
                 let interval = settings
                     .get_wallpaper_rotation_interval_minutes()
-                    .await
-                    .unwrap_or(15)
                     .max(15) as u32;
 
                 self.app
@@ -647,12 +587,8 @@ impl WallpaperRotator {
 
         // 获取设置
         let settings = Settings::global();
-        let (album_id, include_sub) = tokio::join!(
-            settings.get_wallpaper_rotation_album_id(),
-            settings.get_wallpaper_rotation_include_subalbums(),
-        );
-        let album_id = album_id.map_err(|e| format!("Settings error: {}", e))?;
-        let include_subalbums = include_sub.unwrap_or(true);
+        let album_id = settings.get_wallpaper_rotation_album_id();
+        let include_subalbums = settings.get_wallpaper_rotation_include_subalbums();
         let source = match album_id {
             Some(id) if !id.trim().is_empty() => RotationSource::Album(id),
             _ => RotationSource::Gallery,
@@ -667,9 +603,7 @@ impl WallpaperRotator {
         if images.is_empty() {
             if matches!(source, RotationSource::Album(_)) {
                 // 回退到画廊
-                let _ = settings
-                    .set_wallpaper_rotation_album_id(Some("".to_string()))
-                    .await;
+                let _ = settings.set_wallpaper_rotation_album_id(Some("".to_string()));
                 source = RotationSource::Gallery;
                 images = Self::load_images_for_source(&source, false)
                     .await
@@ -678,22 +612,16 @@ impl WallpaperRotator {
 
             if images.is_empty() {
                 // 画廊也没有：降级到非轮播
-                let _ = settings.set_wallpaper_rotation_enabled(false).await;
-                let _ = settings.set_wallpaper_rotation_album_id(None).await;
-                let _ = settings.set_current_wallpaper_image_id(None).await;
+                let _ = settings.set_wallpaper_rotation_enabled(false);
+                let _ = settings.set_wallpaper_rotation_album_id(None);
+                let _ = settings.set_current_wallpaper_image_id(None);
                 return Ok(());
             }
         }
 
         // 选择图片
-        let rotation_mode = settings
-            .get_wallpaper_rotation_mode()
-            .await
-            .unwrap_or_else(|_| "random".to_string());
-        let wallpaper_mode = settings
-            .get_wallpaper_mode()
-            .await
-            .unwrap_or_else(|_| "native".to_string());
+        let rotation_mode = settings.get_wallpaper_rotation_mode();
+        let wallpaper_mode = settings.get_wallpaper_mode();
         let selected_image = match rotation_mode.as_str() {
             "sequential" => {
                 // 顺序模式：从当前索引开始，顺序找到第一张存在的图片
@@ -751,12 +679,8 @@ impl WallpaperRotator {
         let controller = WallpaperController::global();
         let manager = controller.active_manager().await?;
 
-        let (style_result, transition_result) = tokio::join!(
-            settings.get_wallpaper_rotation_style(),
-            settings.get_wallpaper_rotation_transition()
-        );
-        let style = style_result.unwrap_or_else(|_| "system".to_string());
-        let transition = transition_result.unwrap_or_else(|_| "none".to_string());
+        let style = settings.get_wallpaper_rotation_style();
+        let transition = settings.get_wallpaper_rotation_transition();
         manager
             .set_wallpaper(&wallpaper_path, &style, &transition)
             .await?;
@@ -764,9 +688,7 @@ impl WallpaperRotator {
         println!("壁纸已更换: {}", wallpaper_path);
 
         // 同步更新全局"当前壁纸"（imageId）
-        let _ = settings
-            .set_current_wallpaper_image_id(Some(selected_image.id.clone()))
-            .await;
+        let _ = settings.set_current_wallpaper_image_id(Some(selected_image.id.clone()));
 
         let now_ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -777,10 +699,7 @@ impl WallpaperRotator {
         GlobalEmitter::global().emit_images_change("change", &ids, None, None);
 
         // 如果轮播已启用但未运行，启动轮播器
-        let enabled = settings
-            .get_wallpaper_rotation_enabled()
-            .await
-            .unwrap_or(false);
+        let enabled = settings.get_wallpaper_rotation_enabled();
         if enabled && !self.running.load(Ordering::Relaxed) {
             // 这里不要求“从当前壁纸开始”，因为 rotate 本身就是用户手动触发的一次切换
             self.ensure_running(false).await?;
@@ -824,15 +743,11 @@ impl WallpaperRotator {
             let app = self.app.clone();
             tauri::async_runtime::spawn(async move {
                 use tauri_plugin_wallpaper::WallpaperExt;
-                if let Ok(interval) = Settings::global()
-                    .get_wallpaper_rotation_interval_minutes()
-                    .await
-                {
-                    let _ = app
-                        .wallpaper()
-                        .schedule_rotation(interval.max(15) as u32)
-                        .await;
-                }
+                let interval = Settings::global().get_wallpaper_rotation_interval_minutes();
+                let _ = app
+                    .wallpaper()
+                    .schedule_rotation(interval.max(15) as u32)
+                    .await;
             });
             return;
         }

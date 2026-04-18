@@ -1,0 +1,198 @@
+<template>
+  <TabLayout :title="title" :subtitle="subtitle" :show-back="showBack" @back="$emit('back')">
+    <template #icon>
+      <div v-if="iconUrl" class="plugin-icon-wrap">
+        <el-image :src="iconUrl" fit="contain" class="plugin-icon-image" />
+      </div>
+      <div v-else class="plugin-icon-placeholder">
+        <el-icon>
+          <Grid />
+        </el-icon>
+      </div>
+    </template>
+
+    <template #actions>
+      <div v-if="plugin" class="header-actions">
+        <el-tooltip :content="t('plugins.uninstall')" placement="bottom" v-if="showUninstall && installed">
+          <el-button :icon="Delete" circle type="danger" @click="$emit('uninstall')" />
+        </el-tooltip>
+      </div>
+    </template>
+
+    <div v-if="showSkeleton" class="loading">
+      <el-skeleton :rows="5" animated />
+    </div>
+
+    <div v-else-if="!loading && !plugin" class="empty">
+      <el-empty :description="effectiveEmptyDescription" />
+    </div>
+
+    <div v-else class="plugin-detail-content">
+      <!-- 基本信息 -->
+      <div class="plugin-info-section">
+        <PluginInfo v-if="plugin" :show-header="false" :plugin-id="plugin.id" :name="displayName"
+          :description="displayDesc" :version="plugin.version" :min-app-version="plugin.minAppVersion ?? null"
+          :app-version="appVersion ?? null" :base-url="plugin.baseUrl" :installed="installed" :show-copy-id="true"
+          :show-primary-action="true" :primary-action-loading="installing" :primary-action-disabled="installing"
+          :primary-action-text="installing ? effectiveInstallingText : effectiveInstallText"
+          :primary-action-progress-percent="installProgressPercent" @primary-action="$emit('install')"
+          @copy-id="$emit('copy-id', $event)">
+          <template #copy-id-button="{ pluginId }">
+            <el-button :icon="DocumentCopy" circle size="small" :title="t('plugins.detailCopyId')" @click="$emit('copy-id', pluginId)" />
+          </template>
+          <template v-if="$slots['detail-extra-items']" #extra-items>
+            <slot name="detail-extra-items" />
+          </template>
+          <template v-if="$slots['detail-actions']" #actions>
+            <slot name="detail-actions" />
+          </template>
+        </PluginInfo>
+      </div>
+
+      <!-- 文档（按当前语言解析 doc record） -->
+      <div class="plugin-doc-section">
+        <PluginDocRenderer v-if="displayDoc" :markdown="displayDoc" :load-image-bytes="loadDocImageBytes"
+          :doc-image-base-url="docImageBaseUrl" :doc-resources="plugin?.docResources ?? null"
+          :empty-description="effectiveDocEmptyDescription" />
+        <el-empty v-else :description="effectiveDocEmptyDescription" :image-size="100" />
+      </div>
+    </div>
+  </TabLayout>
+</template>
+
+<script setup lang="ts">
+import { computed } from "vue";
+import { useI18n, resolveManifestText, resolveManifestDoc } from "@kabegame/i18n";
+import { Delete, DocumentCopy, Grid } from "@element-plus/icons-vue";
+import TabLayout from "../../layouts/TabLayout.vue";
+import PluginDocRenderer from "./PluginDocRenderer.vue";
+import type { Plugin } from "../../stores/plugins";
+import { pluginIconToDataUrl } from "../../stores/plugins";
+import PluginInfo from "./PluginInfo.vue";
+
+const { t, locale } = useI18n();
+
+type LoadImageBytes = (imagePath: string) => Promise<Uint8Array | number[]>;
+
+
+const props = withDefaults(
+  defineProps<{
+    title: string;
+    subtitle?: string;
+    showBack?: boolean;
+
+    loading: boolean;
+    showSkeleton: boolean;
+    plugin: Plugin | null;
+
+    installed: boolean;
+    installing: boolean;
+    showUninstall?: boolean;
+
+    installText?: string;
+    installingText?: string;
+    emptyDescription?: string;
+    docEmptyDescription?: string;
+
+    loadDocImageBytes?: LoadImageBytes;
+    /** 插件文档图片 URL 前缀（桌面 HTTP / 安卓 kbg-plugin-doc.localhost），有值时优先用 URL 加载图片 */
+    docImageBaseUrl?: string | null;
+    /** 商店安装/更新下载进度 0–100 */
+    installProgressPercent?: number | null;
+    /** 当前 Kabegame 应用版本（用于描述列表内最低版本对比） */
+    appVersion?: string | null;
+  }>(),
+  {
+    showBack: false,
+    showUninstall: true,
+  }
+);
+
+const iconUrl = computed(() => pluginIconToDataUrl(props.plugin?.iconPngBase64));
+
+const effectiveInstallText = computed(() => props.installText ?? t("plugins.install"));
+const effectiveInstallingText = computed(() => props.installingText ?? t("plugins.installing"));
+const effectiveEmptyDescription = computed(() => props.emptyDescription ?? t("common.pluginNotExist"));
+const effectiveDocEmptyDescription = computed(() => props.docEmptyDescription ?? t("common.pluginNoDoc"));
+
+const displayDoc = computed(() =>
+  resolveManifestDoc(props.plugin?.doc ?? null, locale.value ?? "zh"),
+);
+
+const displayName = computed(() =>
+  props.plugin
+    ? resolveManifestText(props.plugin.name, locale.value) ||
+      (typeof props.plugin.name === "object" && props.plugin.name["default"]) ||
+      ""
+    : "",
+);
+const displayDesc = computed(() =>
+  props.plugin
+    ? resolveManifestText(props.plugin.description, locale.value) ||
+      (typeof props.plugin.description === "object" && props.plugin.description["default"]) ||
+      ""
+    : "",
+);
+
+defineEmits<{
+  (e: "back"): void;
+  (e: "install"): void;
+  (e: "uninstall"): void;
+  (e: "copy-id", pluginId: string): void;
+}>();
+</script>
+
+<style scoped lang="scss">
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plugin-icon-wrap,
+.plugin-icon-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.plugin-icon-image {
+  width: 100%;
+  height: 100%;
+}
+
+.plugin-icon-placeholder {
+  background: linear-gradient(135deg,
+      rgba(255, 107, 157, 0.2) 0%,
+      rgba(167, 139, 250, 0.2) 100%);
+  color: var(--anime-primary);
+  font-size: 32px;
+}
+
+.plugin-detail-content {
+  background: var(--anime-bg-card);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: var(--anime-shadow);
+
+  .loading {
+    padding: 40px;
+  }
+
+  .empty {
+    padding: 40px;
+    text-align: center;
+  }
+
+  .plugin-info-section {
+    margin-bottom: 32px;
+  }
+
+  .plugin-doc-section {
+    border-top: 1px solid var(--anime-border);
+    padding-top: 20px;
+  }
+}
+</style>

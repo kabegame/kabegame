@@ -447,9 +447,9 @@ pub async fn run_builtin_local_import(
 
     let images_dir = {
         let storage = Storage::global();
-        match Settings::global().get_default_download_dir().await {
-            Ok(Some(dir)) => PathBuf::from(dir),
-            _ => storage.get_images_dir(),
+        match Settings::global().get_default_download_dir() {
+            Some(dir) => PathBuf::from(dir),
+            None => storage.get_images_dir(),
         }
     };
 

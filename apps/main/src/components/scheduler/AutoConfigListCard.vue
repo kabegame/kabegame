@@ -104,7 +104,7 @@ const emit = defineEmits<{
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 
-const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconUrl(pluginId);
+const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconDataUrl(pluginId);
 const pluginName = (pluginId: string) => pluginStore.pluginLabel(pluginId);
 const resolveText = (value: unknown) => resolveConfigText(value as any, locale.value);
 

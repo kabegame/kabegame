@@ -43,15 +43,15 @@ pub enum CliIpcRequest {
     Status,
 
     /// 虚拟盘：挂载（Windows + virtual-driver）
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     VdMount,
 
     /// 虚拟盘：卸载（Windows + virtual-driver）
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     VdUnmount,
 
     /// 虚拟盘：状态（Windows + virtual-driver）
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     VdStatus,
 
     /// 导入插件请求（从 .kgpg 文件）
@@ -349,14 +349,6 @@ pub enum CliIpcRequest {
         kgpg_path: String,
     },
 
-    /// 获取插件变量定义
-    PluginGetVars {
-        plugin_id: String,
-    },
-
-    /// 获取浏览器插件列表
-    PluginGetBrowserPlugins,
-
     /// 获取插件源列表
     PluginGetPluginSources,
 
@@ -384,11 +376,6 @@ pub enum CliIpcRequest {
         id: String,
     },
 
-    /// 安装浏览器插件（从商店下载并安装）
-    PluginInstallBrowserPlugin {
-        plugin_id: String,
-    },
-
     /// 获取商店插件列表（可选指定 source_id）
     PluginGetStorePlugins {
         #[serde(default)]
@@ -400,41 +387,14 @@ pub enum CliIpcRequest {
         revalidate_if_stale_after_secs: Option<u64>,
     },
 
-    /// 统一插件详情入口（本地已安装 or 远程商店源）
-    PluginGetDetailForUi {
-        plugin_id: String,
-        #[serde(default)]
-        download_url: Option<String>,
-        #[serde(default)]
-        sha256: Option<String>,
-        #[serde(default)]
-        size_bytes: Option<u64>,
-        #[serde(default)]
-        source_id: Option<String>,
-        #[serde(default)]
-        version: Option<String>,
-    },
-
     /// 预览导入插件（读取 .kgpg）
     PluginPreviewImport {
         zip_path: String,
     },
 
-    /// 商店安装预览：下载到临时文件 + preview_import_from_zip
+    /// 商店安装预览：从 source cache 查找下载信息 + ensure_plugin_cached + preview
     PluginPreviewStoreInstall {
-        download_url: String,
-        #[serde(default)]
-        sha256: Option<String>,
-        #[serde(default)]
-        size_bytes: Option<u64>,
-        #[serde(default)]
-        source_id: Option<String>,
-        #[serde(default)]
-        version: Option<String>,
-    },
-
-    /// 获取已安装插件 icon（base64）
-    PluginGetIcon {
+        source_id: String,
         plugin_id: String,
     },
 
@@ -452,15 +412,7 @@ pub enum CliIpcRequest {
         plugin_id: String,
         image_path: String,
         #[serde(default)]
-        download_url: Option<String>,
-        #[serde(default)]
-        sha256: Option<String>,
-        #[serde(default)]
-        size_bytes: Option<u64>,
-        #[serde(default)]
         source_id: Option<String>,
-        #[serde(default)]
-        version: Option<String>,
     },
 
     // ======== Settings 相关 ========
@@ -491,9 +443,10 @@ pub enum CliIpcRequest {
     SettingsGetWindowState,
     SettingsGetCurrentWallpaperImageId,
     SettingsGetDefaultImagesDir,
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    SettingsGetGalleryPageSize,
+    #[cfg(kabegame_mode = "standard")]
     SettingsGetAlbumDriveEnabled,
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     SettingsGetAlbumDriveMountPoint,
 
     // ======== Settings Setter（保留 core::Settings 的校验逻辑）========
@@ -522,11 +475,11 @@ pub enum CliIpcRequest {
     SettingsSetWallpaperMode {
         mode: String,
     },
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     SettingsSetAlbumDriveEnabled {
         enabled: bool,
     },
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     SettingsSetAlbumDriveMountPoint {
         mount_point: String,
     },
@@ -609,12 +562,12 @@ pub struct CliIpcResponse {
 
     /// 对 VD：是否已挂载
     #[serde(default)]
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     pub mounted: Option<bool>,
 
     /// 对 VD：当前挂载点
     #[serde(default)]
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    #[cfg(kabegame_mode = "standard")]
     pub mount_point: Option<String>,
 
     /// 对 Status：daemon 版本/能力信息（可选，后续扩展）
@@ -643,9 +596,9 @@ impl CliIpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             mounted: None,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             mount_point: None,
             info: None,
             data: serde_json::Value::Null,
@@ -660,9 +613,9 @@ impl CliIpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             mounted: None,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             mount_point: None,
             info: None,
             data: serde_json::Value::Null,
@@ -677,9 +630,9 @@ impl CliIpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             mounted: None,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             mount_point: None,
             info: None,
             data: data,
@@ -698,9 +651,9 @@ impl CliIpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             mounted: None,
-            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+            #[cfg(kabegame_mode = "standard")]
             mount_point: None,
             info: None,
             data: serde_json::Value::Null,

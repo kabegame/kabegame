@@ -24,7 +24,7 @@ const buildSystem = new BuildSystem();
 interface BuildOptions {
   component?: string;
   mode?: string;
-  android?: boolean;
+  data?: string;
   verbose?: boolean;
   trace?: boolean;
   skip?: string;
@@ -75,10 +75,10 @@ program
   )
   .option(
     "--mode <mode>",
-    "构建模式：standard | light",
+    "构建模式：standard | light | android",
     Mode.STANDARD,
   )
-  .option("--android", "开发 Android 目标（仅 main，使用底部 Tab 布局等）")
+  .option("--data <data>", "数据目录模式：dev | prod（默认 dev）")
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", true)
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {
@@ -97,9 +97,10 @@ program
   )
   .option(
     "--mode <mode>",
-    "构建模式：standard | light",
+    "构建模式：standard | light | android",
     Mode.STANDARD,
   )
+  .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
   .option(
     "--no-nx",
@@ -127,10 +128,10 @@ program
   )
   .option(
     "--mode <mode>",
-    "构建模式：standard | light",
+    "构建模式：standard | light | android",
     Mode.STANDARD,
   )
-  .option("--android", "构建 Android 目标（仅 main，产出 APK/AAB）")
+  .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
   .option(
     "--release",
     "构建完成后复制安装包到 release/ 目录，只有构建main获取全量的情况下才可用",
@@ -157,9 +158,10 @@ program
   .option("--skip <skip>", "跳过检查项：vue/cargo（只能一个值）", "")
   .option(
     "--mode <mode>",
-    "构建模式：standard | light",
+    "构建模式：standard | light | android",
     Mode.STANDARD,
   )
+  .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
   .action(async (options: BuildOptions) => {
     await check(options);
   });

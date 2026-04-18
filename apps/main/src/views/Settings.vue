@@ -217,7 +217,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from "vue";
+import { ref, onMounted, onActivated, computed, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useLocalStorage } from "@vueuse/core";
 import { ElMessage } from "element-plus";
@@ -289,6 +289,7 @@ async function openDevWebview() {
   }
 }
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
+import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 import { useDesktop } from "@/composables/useDesktop";
 
 // 使用 300ms 防闪屏加载延迟
@@ -379,10 +380,17 @@ const handleRefresh = async () => {
   }
 };
 
+const batteryOptimizationStore = useBatteryOptimizationStore();
+
 // 首次进入时加载设置
 onMounted(async () => {
   await loadSettings();
   await refreshCurrentWallpaperPath();
+});
+
+onActivated(async () => {
+  if (!IS_ANDROID) return;
+  await batteryOptimizationStore.checkAndPromptIfNeeded();
 });
 
 </script>

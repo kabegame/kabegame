@@ -1,6 +1,5 @@
 import { ref, watch, computed, unref, type Ref } from "vue";
 import { useI18n, resolveConfigText, i18n } from "@kabegame/i18n";
-import { invoke } from "@tauri-apps/api/core";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useCrawlerStore, type RunConfig } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
@@ -68,10 +67,9 @@ export function useConfigCompatibility(
     }
 
     try {
-      // 加载插件变量定义
-      const vars = await invoke<Array<PluginVarDef> | null>("get_plugin_vars", {
-        pluginId: config.pluginId,
-      });
+      // 从已安装插件 store 读取变量定义（parse_kgpg 时已载入 Plugin.config.vars）
+      const plugin = plugins.value.find((p) => p.id === config.pluginId);
+      const vars = (plugin?.config?.vars as Array<PluginVarDef> | undefined) ?? [];
 
       if (!vars || vars.length === 0) {
         // 插件没有变量定义，配置总是兼容的
@@ -395,9 +393,8 @@ export async function checkRecommendedPresetCompatibility(
     return result;
   }
   try {
-    const vars = await invoke<Array<PluginVarDef> | null>("get_plugin_vars", {
-      pluginId,
-    });
+    const plugin = pluginStore.plugins.find((p) => p.id === pluginId);
+    const vars = (plugin?.config?.vars as Array<PluginVarDef> | undefined) ?? [];
     if (!vars || vars.length === 0) return result;
     const varDefMap = new Map(vars.map((def) => [def.key, def]));
     const uc = userConfig || {};

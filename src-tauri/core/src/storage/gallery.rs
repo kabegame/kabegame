@@ -59,6 +59,15 @@ impl ImageQuery {
         self
     }
 
+    /// 在 order_bys **头部**前插一个排序表达式（时间 provider 用，保证时间序优先于 id 序）。
+    pub fn prepend_order_by(mut self, expr: &str) -> Self {
+        let trimmed = expr.trim();
+        if !trimmed.is_empty() {
+            self.order_bys.insert(0, trimmed.to_string());
+        }
+        self
+    }
+
     pub fn merge(mut self, other: &ImageQuery) -> Self {
         self.joins.extend(other.joins.clone());
         self.wheres.extend(other.wheres.clone());
@@ -273,6 +282,27 @@ impl ImageQuery {
         })
     }
 
+    /// 查询组件：按 images.id 排序（用于 VD 分页稳定性：页数越小 id 越小）
+    pub fn sort_by_id(asc: bool) -> Self {
+        Self::new().with_order(if asc {
+            "images.id ASC"
+        } else {
+            "images.id DESC"
+        })
+    }
+
+    /// 返回替换排序为 id ASC 的副本（用于 VD：跨所有查询使用统一的、稳定的排序）
+    pub fn with_id_order(&self, asc: bool) -> Self {
+        let mut out = self.clone();
+        out.order_bys.clear();
+        out.order_bys.push(if asc {
+            "images.id ASC".to_string()
+        } else {
+            "images.id DESC".to_string()
+        });
+        out
+    }
+
     /// 查询组件：按最后设壁纸时间排序
     pub fn sort_by_wallpaper_set_at(asc: bool) -> Self {
         Self::new().with_order(if asc {
@@ -478,6 +508,7 @@ impl Storage {
             .prepare(
                 "SELECT plugin_id, COUNT(*) as cnt
                  FROM images
+                 WHERE plugin_id IS NOT NULL AND plugin_id != ''
                  GROUP BY plugin_id
                  ORDER BY plugin_id ASC",
             )

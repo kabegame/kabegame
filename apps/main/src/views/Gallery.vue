@@ -208,23 +208,15 @@ watch(
   { immediate: true }
 );
 
-type AlbumBrowseInfo = {
-  id: string;
-  name: string;
-  imageCount: number;
-  previewImages: ImageInfo[];
-};
-
 type GalleryBrowseEntry =
   | { kind: "dir"; name: string }
-  | { kind: "image"; image: ImageInfo }
-  | { kind: "album"; album: AlbumBrowseInfo };
+  | { kind: "image"; image: ImageInfo };
 
 type GalleryBrowseResult = {
-  total: number;
-  baseOffset: number;
-  rangeTotal: number;
   entries: GalleryBrowseEntry[];
+  total: number | null;
+  meta?: { kind: string; data: unknown } | null;
+  note?: { title: string; content: string } | null;
 };
 
 const monthOptions = ref<string[]>([]);
@@ -282,8 +274,7 @@ const loadMonthOptions = async () => {
   monthOptionsLoading.value = true;
   try {
     const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
-      path: "date",
-      pageSize: pageSize.value,
+      path: "date/",
     });
     const months = (res?.entries ?? [])
       .filter((e) => e.kind === "dir")
@@ -539,7 +530,6 @@ const {
   loadedKey,
 } = useGalleryImages(
   galleryContainerRef,
-  pageSize,
   clearImageMetadataCache,
 );
 
@@ -711,8 +701,7 @@ const loadTotalImagesCount = async () => {
   try {
     // 通过 provider 浏览接口获取 total（避免另起一套 count API）
     const res = await invoke<{ total: number }>("browse_gallery_provider", {
-      path: providerRootPath.value,
-      pageSize: pageSize.value,
+      path: `${providerRootPath.value}/`,
     });
     totalImagesCount.value = res?.total ?? 0;
   } catch (error) {
@@ -1109,41 +1098,6 @@ onMounted(async () => {
   // 注意：任务列表与运行配置在 crawler store 初始化时加载；已安装插件在 App.vue onMounted 中 loadPlugins
   loadTotalImagesCount(); // 加载总图片数
   loadMonthOptions(); // 加载月份下拉框选项
-
-  // 记录已经显示过弹窗的任务ID，避免重复弹窗
-  const shownErrorTasks = new Set<string>();
-
-  // 监听任务错误显示事件
-  const errorDisplayHandler = ((event: CustomEvent<{ taskId: string; pluginId: string; error: string }>) => {
-    const { taskId, pluginId, error } = event.detail;
-
-    // 如果已经显示过弹窗，不再显示
-    if (shownErrorTasks.has(taskId)) {
-      return;
-    }
-
-    // 标记为已显示
-    shownErrorTasks.add(taskId);
-
-    const pluginName = getPluginName(pluginId);
-
-    // 使用 nextTick 确保在下一个事件循环中显示弹窗
-    nextTick(() => {
-      ElMessageBox.alert(
-        `脚本执行出错：\n${error || '未知错误'}`,
-        `${pluginName} 执行失败`,
-        {
-          type: 'error',
-          confirmButtonText: '确定',
-        }
-      ).catch(() => {
-        // 用户可能关闭了弹窗，忽略错误
-      });
-    });
-  }) as EventListener;
-
-  // 不卸载取消监听。因为是keep-alive。并且不是web
-  window.addEventListener('task-error-display', errorDisplayHandler);
 
   // 如果监听器已经创建，跳过重复创建
   if (listenersCreated.value) {

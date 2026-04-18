@@ -12,8 +12,7 @@ pub async fn get_current_wallpaper_path_from_settings(
     _app: &tauri::AppHandle,
 ) -> Result<Option<String>, String> {
     // 从 Settings 获取 settings + image localPath
-    let id = Settings::global().get_current_wallpaper_image_id().await?;
-    if let Some(id) = id {
+    if let Some(id) = Settings::global().get_current_wallpaper_image_id() {
         let img = Storage::global()
             .find_image_by_id(&id)
             .map_err(|e| format!("Storage error: {}", e))?;
@@ -47,17 +46,14 @@ pub async fn set_wallpaper(file_path: String) -> Result<(), String> {
 
     let controller = WallpaperController::global();
     let settings = Settings::global();
-    let style = settings
-        .get_wallpaper_rotation_style()
-        .await
-        .unwrap_or_else(|_| "fill".to_string());
+    let style = settings.get_wallpaper_rotation_style();
 
     controller.set_wallpaper(&abs, &style).await?;
 
-    // 尽力同步更新“当前壁纸”（imageId）；失败不阻断
+    // 尽力同步更新"当前壁纸"（imageId）；失败不阻断
     let found = Storage::global().find_image_by_path(&abs).ok().flatten();
     let image_id = found.as_ref().map(|v| v.id.clone());
-    let _ = settings.set_current_wallpaper_image_id(image_id).await;
+    let _ = settings.set_current_wallpaper_image_id(image_id);
 
     if let Some(ref img) = found {
         let now = std::time::SystemTime::now()
@@ -74,10 +70,7 @@ pub async fn set_wallpaper(file_path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
     let settings = Settings::global();
-    let style = settings
-        .get_wallpaper_rotation_style()
-        .await
-        .unwrap_or_else(|_| "fill".to_string());
+    let style = settings.get_wallpaper_rotation_style();
 
     let image = Storage::global()
         .find_image_by_id(&image_id)
@@ -90,10 +83,7 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
 
     let requires_window_mode = kabegame_core::image_type::requires_window_mode(Path::new(&local_path));
     if requires_window_mode {
-        let current_mode = settings
-            .get_wallpaper_mode()
-            .await
-            .unwrap_or_else(|_| "native".to_string());
+        let current_mode = settings.get_wallpaper_mode();
         if current_mode != "window" {
             return Err("REQUIRES_WINDOW_MODE".to_string());
         }
@@ -101,10 +91,7 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
 
     let requires_plugin_mode = kabegame_core::image_type::requires_plugin_mode(Path::new(&local_path));
     if requires_plugin_mode {
-        let current_mode = settings
-            .get_wallpaper_mode()
-            .await
-            .unwrap_or_else(|_| "native".to_string());
+        let current_mode = settings.get_wallpaper_mode();
         if current_mode != "plasma-plugin" {
             return Err("REQUIRES_PLUGIN_MODE".to_string());
         }
@@ -112,7 +99,7 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
 
     // Android 上为 content:// URI，不能用 Path::exists 判断
     if !local_path.starts_with("content://") && !Path::new(&local_path).exists() {
-        let _ = settings.set_current_wallpaper_image_id(None).await;
+        let _ = settings.set_current_wallpaper_image_id(None);
         return Err("图片文件不存在".to_string());
     }
 
@@ -121,7 +108,6 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
 
     settings
         .set_current_wallpaper_image_id(Some(image_id.clone()))
-        .await
         .map_err(|e| format!("Settings error: {}", e))?;
 
     let now = std::time::SystemTime::now()
@@ -135,19 +121,13 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn get_current_wallpaper_image_id() -> Result<Option<String>, String> {
-    Settings::global()
-        .get_current_wallpaper_image_id()
-        .await
-        .map_err(|e| format!("Settings error: {}", e))
+pub fn get_current_wallpaper_image_id() -> Option<String> {
+    Settings::global().get_current_wallpaper_image_id()
 }
 
 #[tauri::command]
-pub async fn clear_current_wallpaper_image_id() -> Result<(), String> {
-    Settings::global()
-        .set_current_wallpaper_image_id(None)
-        .await
-        .map_err(|e| format!("Settings error: {}", e))
+pub fn clear_current_wallpaper_image_id() -> Result<(), String> {
+    Settings::global().set_current_wallpaper_image_id(None)
 }
 
 #[tauri::command]
@@ -167,10 +147,9 @@ pub struct RotationStartResult {
 
 // TODO: setting-change event driven
 #[tauri::command]
-pub async fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String> {
+pub fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String> {
     Settings::global()
         .set_wallpaper_rotation_enabled(enabled)
-        .await
         .map_err(|e| format!("Settings error: {}", e))?;
 
     if !enabled {
@@ -184,10 +163,7 @@ pub async fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String>
 #[tauri::command]
 pub async fn set_wallpaper_rotation_album_id(album_id: String) -> Result<(), String> {
     if album_id != "" {
-        let include = Settings::global()
-            .get_wallpaper_rotation_include_subalbums()
-            .await
-            .unwrap_or(true);
+        let include = Settings::global().get_wallpaper_rotation_include_subalbums();
         let images = Storage::global()
             .get_album_images_for_wallpaper_rotation(&album_id, include)
             .map_err(|e| e.to_string())?;
@@ -203,7 +179,6 @@ pub async fn set_wallpaper_rotation_album_id(album_id: String) -> Result<(), Str
 
     Settings::global()
         .set_wallpaper_rotation_album_id(normalized.clone())
-        .await
         .map_err(|e| format!("Settings error: {}", e))?;
 
     if normalized.is_none() {
@@ -213,16 +188,12 @@ pub async fn set_wallpaper_rotation_album_id(album_id: String) -> Result<(), Str
     }
 
     let settings = Settings::global();
-    let (enabled_result, album_id_result) = tokio::join!(
-        settings.get_wallpaper_rotation_enabled(),
-        settings.get_wallpaper_rotation_album_id()
-    );
+    let enabled = settings.get_wallpaper_rotation_enabled();
+    let album_id_opt = settings.get_wallpaper_rotation_album_id();
 
-    if enabled_result.unwrap_or(false) {
+    if enabled {
         let rotator = WallpaperRotator::global();
-        let start_from_current = album_id_result
-            .ok()
-            .flatten()
+        let start_from_current = album_id_opt
             .map(|s| s.is_empty())
             .unwrap_or(false);
         rotator
@@ -235,10 +206,9 @@ pub async fn set_wallpaper_rotation_album_id(album_id: String) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_rotation_include_subalbums(include_subalbums: bool) -> Result<(), String> {
+pub fn set_wallpaper_rotation_include_subalbums(include_subalbums: bool) -> Result<(), String> {
     Settings::global()
         .set_wallpaper_rotation_include_subalbums(include_subalbums)
-        .await
         .map_err(|e| format!("Settings error: {}", e))?;
 
     let rotator = WallpaperRotator::global();
@@ -252,12 +222,10 @@ pub async fn set_wallpaper_rotation_include_subalbums(include_subalbums: bool) -
 #[tauri::command]
 pub async fn start_wallpaper_rotation() -> Result<RotationStartResult, String> {
     let settings = Settings::global();
-    let (enabled_result, album_id_result) = tokio::join!(
-        settings.get_wallpaper_rotation_enabled(),
-        settings.get_wallpaper_rotation_album_id()
-    );
+    let enabled = settings.get_wallpaper_rotation_enabled();
+    let album_id_opt = settings.get_wallpaper_rotation_album_id();
 
-    if !enabled_result.unwrap_or(false) {
+    if !enabled {
         return Err("壁纸轮播未启用".to_string());
     }
 
@@ -265,7 +233,7 @@ pub async fn start_wallpaper_rotation() -> Result<RotationStartResult, String> {
     let mut did_fallback = false;
     let mut warning: Option<String> = None;
 
-    if let Some(saved) = album_id_result.ok().flatten().as_deref() {
+    if let Some(saved) = album_id_opt.as_deref() {
         if !saved.trim().is_empty() {
             match rotator.ensure_running(false).await {
                 Ok(_) => {
@@ -298,7 +266,6 @@ pub async fn start_wallpaper_rotation() -> Result<RotationStartResult, String> {
 
     settings
         .set_wallpaper_rotation_album_id(Some("".to_string()))
-        .await
         .map_err(|e| format!("Settings error: {}", e))?;
     rotator.ensure_running(true).await?;
 
@@ -312,7 +279,7 @@ pub async fn start_wallpaper_rotation() -> Result<RotationStartResult, String> {
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_rotation_interval_minutes(minutes: u32) -> Result<(), String> {
+pub fn set_wallpaper_rotation_interval_minutes(minutes: u32) -> Result<(), String> {
     #[cfg(target_os = "android")]
     let minutes = minutes.max(15);
     #[cfg(not(target_os = "android"))]
@@ -320,7 +287,6 @@ pub async fn set_wallpaper_rotation_interval_minutes(minutes: u32) -> Result<(),
 
     Settings::global()
         .set_wallpaper_rotation_interval_minutes(minutes)
-        .await
         .map_err(|e| format!("Settings error: {}", e))?;
 
     let rotator = WallpaperRotator::global();
@@ -332,18 +298,15 @@ pub async fn set_wallpaper_rotation_interval_minutes(minutes: u32) -> Result<(),
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_rotation_mode(mode: String) -> Result<(), String> {
+pub fn set_wallpaper_rotation_mode(mode: String) -> Result<(), String> {
     Settings::global()
         .set_wallpaper_rotation_mode(mode)
-        .await
         .map_err(|e| format!("Settings error: {}", e))
 }
 
 #[tauri::command]
 pub async fn set_wallpaper_style(style: String, app: AppHandle) -> Result<(), String> {
-    Settings::global()
-        .set_wallpaper_style(style.clone())
-        .await?;
+    Settings::global().set_wallpaper_style(style.clone())?;
 
     let app_clone = app.clone();
     let style_clone = style.clone();
@@ -360,14 +323,10 @@ pub async fn set_wallpaper_style(style: String, app: AppHandle) -> Result<(), St
 
 #[tauri::command]
 pub async fn set_wallpaper_rotation_transition(transition: String) -> Result<(), String> {
-    let enabled = Settings::global()
-        .get_wallpaper_rotation_enabled()
-        .await
-        .unwrap_or(false);
+    let enabled = Settings::global().get_wallpaper_rotation_enabled();
 
     Settings::global()
         .set_wallpaper_rotation_transition(transition.clone())
-        .await
         .map_err(|e| format!("Settings error: {}", e))?;
 
     let transition_clone = transition.clone();
@@ -385,10 +344,7 @@ pub async fn set_wallpaper_rotation_transition(transition: String) -> Result<(),
 #[tauri::command]
 pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), String> {
     let settings = Settings::global();
-    let old_mode = settings
-        .get_wallpaper_mode()
-        .await
-        .unwrap_or_else(|_| "native".to_string());
+    let old_mode = settings.get_wallpaper_mode();
 
     if old_mode == mode {
         return Ok(());
@@ -403,22 +359,10 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
     }
 
     let settings = Settings::global();
-    let (
-        rotation_enabled_result,
-        rotation_mode_result,
-        cur_style_result,
-        cur_transition_result,
-    ) = tokio::join!(
-        settings.get_wallpaper_rotation_enabled(),
-        settings.get_wallpaper_rotation_mode(),
-        settings.get_wallpaper_rotation_style(),
-        settings.get_wallpaper_rotation_transition()
-    );
-
-    let rotation_enabled = rotation_enabled_result.unwrap_or(false);
-    let rotation_mode = rotation_mode_result.unwrap_or_else(|_| "random".to_string());
-    let cur_style = cur_style_result.unwrap_or_else(|_| "fill".to_string());
-    let cur_transition = cur_transition_result.unwrap_or_else(|_| "none".to_string());
+    let rotation_enabled = settings.get_wallpaper_rotation_enabled();
+    let rotation_mode = settings.get_wallpaper_rotation_mode();
+    let cur_style = settings.get_wallpaper_rotation_style();
+    let cur_transition = settings.get_wallpaper_rotation_transition();
 
     let current_wallpaper = match get_current_wallpaper_path_from_settings(&app).await {
         Ok(Some(p)) => p,
@@ -429,7 +373,7 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
                 let target = controller.manager_for_mode(&mode);
                 target.init(app.clone()).map_err(|e| format!("切换系统壁纸插件失败: {}", e))?;
             }
-            settings.set_wallpaper_mode(mode.clone()).await?;
+            settings.set_wallpaper_mode(mode.clone())?;
             return Ok(());
         }
     };
@@ -484,7 +428,6 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
     };
     let (style_to_apply, transition_to_apply) = match settings
         .swap_style_transition_for_mode_switch(&old_mode, &mode)
-        .await
     {
         Ok(v) => v,
         Err(e) => {
@@ -544,7 +487,7 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
         }
     }
 
-    settings.set_wallpaper_mode(mode.clone()).await?;
+    settings.set_wallpaper_mode(mode.clone())?;
 
     if rotation_enabled {
         let _ = rotator.start().await;

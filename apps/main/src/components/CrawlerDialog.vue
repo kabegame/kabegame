@@ -9,14 +9,9 @@
     <el-form ref="formRef" :model="form" label-position="top" class="crawl-form">
       <el-form-item :label="$t('plugins.runConfig')">
         <div class="run-config-row">
-          <AndroidPickerSelect
-            :model-value="selectedRunConfigId ?? null"
-            :options="runConfigPickerOptions"
-            :title="$t('plugins.runConfig')"
-            :placeholder="$t('plugins.selectConfigOptional')"
-            clearable
-            @update:model-value="setRunConfigId"
-          />
+          <AndroidPickerSelect :model-value="selectedRunConfigId ?? null" :options="runConfigPickerOptions"
+            :title="$t('plugins.runConfig')" :placeholder="$t('plugins.selectConfigOptional')" clearable
+            @update:model-value="setRunConfigId" />
           <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="showAddConfigDialog = true">
             {{ $t("plugins.addConfig") }}
           </el-button>
@@ -28,13 +23,9 @@
       <el-form-item :label="$t('plugins.selectSource')">
         <div class="plugin-source-field">
           <div class="plugin-select-with-warning">
-            <AndroidPickerSelect
-              :model-value="form.pluginId ?? null"
-              :options="pluginPickerOptions"
-              :title="$t('plugins.selectSource')"
-              :placeholder="$t('plugins.selectSourcePlaceholder')"
-              @update:model-value="onPluginChange"
-            >
+            <AndroidPickerSelect :model-value="form.pluginId ?? null" :options="pluginPickerOptions"
+              :title="$t('plugins.selectSource')" :placeholder="$t('plugins.selectSourcePlaceholder')"
+              @update:model-value="onPluginChange">
               <template #option="{ option }">
                 <div class="plugin-option">
                   <img v-if="option.iconSrc" :src="option.iconSrc" class="plugin-option-icon" alt="" />
@@ -42,21 +33,15 @@
                     <Grid />
                   </el-icon>
                   <span class="plugin-picker-option-label">{{ option.label }}</span>
-                  <el-icon
-                    v-if="option.warning"
-                    class="plugin-picker-option-warning"
-                    :title="$t('plugins.androidNotSupported')"
-                  >
+                  <el-icon v-if="option.warning" class="plugin-picker-option-warning"
+                    :title="$t('plugins.androidNotSupported')">
                     <WarningFilled />
                   </el-icon>
                 </div>
               </template>
             </AndroidPickerSelect>
-            <el-icon
-              v-if="isSelectedPluginJs"
-              class="plugin-js-warning-icon"
-              :title="$t('plugins.jsPluginAndroidNotSupportedTitle')"
-            >
+            <el-icon v-if="isSelectedPluginJs" class="plugin-js-warning-icon"
+              :title="$t('plugins.jsPluginAndroidNotSupportedTitle')">
               <WarningFilled />
             </el-icon>
           </div>
@@ -79,65 +64,35 @@
       </el-form-item>
 
       <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPickerField
-          v-model="selectedOutputAlbumId"
-          :album-tree="albumTree"
-          :album-counts="albumCounts"
-          allow-create
-          :placeholder="$t('plugins.defaultGalleryOnly')"
-          :picker-title="$t('albums.outputAlbum')"
-          clearable
-        />
+        <AlbumPickerField v-model="selectedOutputAlbumId" :album-tree="albumTree" :album-counts="albumCounts"
+          allow-create :placeholder="$t('plugins.defaultGalleryOnly')" :picker-title="$t('albums.outputAlbum')"
+          clearable />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
-        <el-input
-          ref="newOutputAlbumNameInputRef"
-          v-model="newOutputAlbumName"
-          :placeholder="$t('albums.placeholderName')"
-          maxlength="50"
-          show-word-limit
-          @keyup.enter="handleCreateOutputAlbum"
-        />
+        <el-input ref="newOutputAlbumNameInputRef" v-model="newOutputAlbumName"
+          :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
+          @keyup.enter="handleCreateOutputAlbum" />
       </el-form-item>
 
       <template v-if="pluginVars.length > 0">
         <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
-        <el-form-item
-          v-for="varDef in visiblePluginVars"
-          :key="varDef.key"
-          :label="varDisplayName(varDef)"
-          :prop="`vars.${varDef.key}`"
-          :required="isRequired(varDef)"
-          :rules="getValidationRules(varDef, varDisplayName(varDef))"
-        >
-          <PluginVarField
-            :type="varDef.type"
-            :model-value="form.vars[varDef.key]"
-            :options="optionsForVar(varDef)"
+        <el-form-item v-for="varDef in visiblePluginVars" :key="varDef.key" :label="varDisplayName(varDef)"
+          :prop="`vars.${varDef.key}`" :required="isRequired(varDef)"
+          :rules="getValidationRules(varDef, varDisplayName(varDef))">
+          <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="optionsForVar(varDef)"
             :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
             :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
-            :file-extensions="getFileExtensions(varDef)"
-            :date-format="
-              typeof varDef.format === 'string' && varDef.format.trim() !== '' ? varDef.format : undefined
-            "
-            :date-min="
-              typeof varDef.dateMin === 'string' && varDef.dateMin.trim() !== '' ? varDef.dateMin : undefined
-            "
-            :date-max="
-              typeof varDef.dateMax === 'string' && varDef.dateMax.trim() !== '' ? varDef.dateMax : undefined
-            "
-            :placeholder="
-              varDescripts(varDef) ||
+            :file-extensions="getFileExtensions(varDef)" :date-format="typeof varDef.format === 'string' && varDef.format.trim() !== '' ? varDef.format : undefined
+              " :date-min="typeof varDef.dateMin === 'string' && varDef.dateMin.trim() !== '' ? varDef.dateMin : undefined
+              " :date-max="typeof varDef.dateMax === 'string' && varDef.dateMax.trim() !== '' ? varDef.dateMax : undefined
+              " :placeholder="varDescripts(varDef) ||
               (varDef.type === 'options' ||
-              varDef.type === 'list' ||
-              varDef.type === 'checkbox' ||
-              varDef.type === 'date'
+                varDef.type === 'list' ||
+                varDef.type === 'checkbox' ||
+                varDef.type === 'date'
                 ? `请选择${varDisplayName(varDef)}`
                 : `请输入${varDisplayName(varDef)}`)
-            "
-            :allow-unset="!isRequired(varDef)"
-            @update:model-value="(val) => (form.vars[varDef.key] = val)"
-          />
+              " :allow-unset="!isRequired(varDef)" @update:model-value="(val) => (form.vars[varDef.key] = val)" />
           <div v-if="varDescripts(varDef)">
             {{ varDescripts(varDef) }}
           </div>
@@ -187,7 +142,8 @@
           <div class="mode-line">
             <el-select v-model="dailyHour">
               <el-option :value="-1" :label="$t('autoConfig.everyHour')" />
-              <el-option v-for="h in 24" :key="`h-${h - 1}`" :value="h - 1" :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+              <el-option v-for="h in 24" :key="`h-${h - 1}`" :value="h - 1"
+                :label="`${String(h - 1).padStart(2, '0')}:xx`" />
             </el-select>
             <el-select v-model="dailyMinute">
               <el-option v-for="m in 60" :key="`m-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
@@ -197,15 +153,12 @@
         <el-form-item v-if="scheduleMode === 'weekly'" :label="$t('autoConfig.modeWeekly')">
           <div class="mode-line">
             <el-select v-model="weeklyWeekday">
-              <el-option
-                v-for="wd in 7"
-                :key="`awd-${wd - 1}`"
-                :value="wd - 1"
-                :label="$t(`autoConfig.weekday${wd - 1}`)"
-              />
+              <el-option v-for="wd in 7" :key="`awd-${wd - 1}`" :value="wd - 1"
+                :label="$t(`autoConfig.weekday${wd - 1}`)" />
             </el-select>
             <el-select v-model="dailyHour">
-              <el-option v-for="h in 24" :key="`awh-${h - 1}`" :value="h - 1" :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+              <el-option v-for="h in 24" :key="`awh-${h - 1}`" :value="h - 1"
+                :label="`${String(h - 1).padStart(2, '0')}:xx`" />
             </el-select>
             <el-select v-model="dailyMinute">
               <el-option v-for="m in 60" :key="`awm-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
@@ -222,44 +175,24 @@
     </div>
   </AndroidDrawer>
 
-  <ElDialog
-    v-else
-    v-model="visible"
-    :title="$t('plugins.startCollect')"
-    width="600px"
-    class="crawl-dialog"
-    align-center
-    :show-close="true"
-  >
+  <ElDialog v-else v-model="visible" :title="$t('plugins.startCollect')" width="600px" class="crawl-dialog" align-center
+    :show-close="true">
     <el-form ref="formRef" :model="form" label-position="top" class="crawl-form">
       <el-form-item :label="$t('plugins.runConfig')">
         <div class="run-config-row">
-          <el-select
-            v-model="selectedRunConfigId"
-            class="run-config-select"
-            :placeholder="$t('plugins.selectConfigOptional')"
-            clearable
-            popper-class="run-config-select-dropdown"
-            @change="(v: string | null) => void setRunConfigId(v)"
-          >
+          <el-select v-model="selectedRunConfigId" class="run-config-select"
+            :placeholder="$t('plugins.selectConfigOptional')" clearable popper-class="run-config-select-dropdown"
+            @change="(v: string | null) => void setRunConfigId(v)">
             <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="runConfigName(cfg)" :value="cfg.id">
               <div class="run-config-option">
                 <div class="run-config-info">
                   <div class="name">
-                    <el-tag
-                      v-if="configCompatibilityStatus[cfg.id]?.versionCompatible === false"
-                      type="danger"
-                      size="small"
-                      style="margin-right: 6px"
-                    >
+                    <el-tag v-if="configCompatibilityStatus[cfg.id]?.versionCompatible === false" type="danger"
+                      size="small" style="margin-right: 6px">
                       {{ $t("plugins.incompatible") }}
                     </el-tag>
-                    <el-tag
-                      v-else-if="configCompatibilityStatus[cfg.id]?.contentCompatible === false"
-                      type="warning"
-                      size="small"
-                      style="margin-right: 6px"
-                    >
+                    <el-tag v-else-if="configCompatibilityStatus[cfg.id]?.contentCompatible === false" type="warning"
+                      size="small" style="margin-right: 6px">
                       {{ $t("plugins.incompatible") }}
                     </el-tag>
                     {{ runConfigName(cfg) }}
@@ -290,13 +223,8 @@
       </el-form-item>
       <el-form-item :label="$t('plugins.selectSource')">
         <div class="plugin-source-field">
-          <el-select
-            v-model="form.pluginId"
-            style="width: 100%"
-            :placeholder="$t('plugins.selectSourcePlaceholder')"
-            popper-class="crawl-plugin-select-dropdown"
-            @change="onPluginChange"
-          >
+          <el-select v-model="form.pluginId" style="width: 100%" :placeholder="$t('plugins.selectSourcePlaceholder')"
+            popper-class="crawl-plugin-select-dropdown" @change="onPluginChange">
             <el-option v-for="plugin in plugins" :key="plugin.id" :label="pluginName(plugin)" :value="plugin.id">
               <div class="plugin-option">
                 <img v-if="pluginIconUrl(plugin.id)" :src="pluginIconUrl(plugin.id)" class="plugin-option-icon" />
@@ -326,65 +254,35 @@
       </el-form-item>
 
       <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPickerField
-          v-model="selectedOutputAlbumId"
-          :album-tree="albumTree"
-          :album-counts="albumCounts"
-          allow-create
-          :placeholder="$t('plugins.defaultGalleryOnly')"
-          :picker-title="$t('albums.outputAlbum')"
-          clearable
-        />
+        <AlbumPickerField v-model="selectedOutputAlbumId" :album-tree="albumTree" :album-counts="albumCounts"
+          allow-create :placeholder="$t('plugins.defaultGalleryOnly')" :picker-title="$t('albums.outputAlbum')"
+          clearable />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
-        <el-input
-          ref="newOutputAlbumNameInputRef"
-          v-model="newOutputAlbumName"
-          :placeholder="$t('albums.placeholderName')"
-          maxlength="50"
-          show-word-limit
-          @keyup.enter="handleCreateOutputAlbum"
-        />
+        <el-input ref="newOutputAlbumNameInputRef" v-model="newOutputAlbumName"
+          :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
+          @keyup.enter="handleCreateOutputAlbum" />
       </el-form-item>
 
       <template v-if="pluginVars.length > 0">
         <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
-        <el-form-item
-          v-for="varDef in visiblePluginVars"
-          :key="varDef.key"
-          :label="varDisplayName(varDef)"
-          :prop="`vars.${varDef.key}`"
-          :required="isRequired(varDef)"
-          :rules="getValidationRules(varDef, varDisplayName(varDef))"
-        >
-          <PluginVarField
-            :type="varDef.type"
-            :model-value="form.vars[varDef.key]"
-            :options="optionsForVar(varDef)"
+        <el-form-item v-for="varDef in visiblePluginVars" :key="varDef.key" :label="varDisplayName(varDef)"
+          :prop="`vars.${varDef.key}`" :required="isRequired(varDef)"
+          :rules="getValidationRules(varDef, varDisplayName(varDef))">
+          <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="optionsForVar(varDef)"
             :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
             :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
-            :file-extensions="getFileExtensions(varDef)"
-            :date-format="
-              typeof varDef.format === 'string' && varDef.format.trim() !== '' ? varDef.format : undefined
-            "
-            :date-min="
-              typeof varDef.dateMin === 'string' && varDef.dateMin.trim() !== '' ? varDef.dateMin : undefined
-            "
-            :date-max="
-              typeof varDef.dateMax === 'string' && varDef.dateMax.trim() !== '' ? varDef.dateMax : undefined
-            "
-            :placeholder="
-              varDescripts(varDef) ||
+            :file-extensions="getFileExtensions(varDef)" :date-format="typeof varDef.format === 'string' && varDef.format.trim() !== '' ? varDef.format : undefined
+              " :date-min="typeof varDef.dateMin === 'string' && varDef.dateMin.trim() !== '' ? varDef.dateMin : undefined
+              " :date-max="typeof varDef.dateMax === 'string' && varDef.dateMax.trim() !== '' ? varDef.dateMax : undefined
+              " :placeholder="varDescripts(varDef) ||
               (varDef.type === 'options' ||
-              varDef.type === 'list' ||
-              varDef.type === 'checkbox' ||
-              varDef.type === 'date'
+                varDef.type === 'list' ||
+                varDef.type === 'checkbox' ||
+                varDef.type === 'date'
                 ? `请选择${varDisplayName(varDef)}`
                 : `请输入${varDisplayName(varDef)}`)
-            "
-            :allow-unset="!isRequired(varDef)"
-            @update:model-value="(val) => (form.vars[varDef.key] = val)"
-          />
+              " :allow-unset="!isRequired(varDef)" @update:model-value="(val) => (form.vars[varDef.key] = val)" />
           <div v-if="varDescripts(varDef)">
             {{ varDescripts(varDef) }}
           </div>
@@ -434,7 +332,8 @@
           <div class="mode-line">
             <el-select v-model="dailyHour">
               <el-option :value="-1" :label="$t('autoConfig.everyHour')" />
-              <el-option v-for="h in 24" :key="`h-${h - 1}`" :value="h - 1" :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+              <el-option v-for="h in 24" :key="`h-${h - 1}`" :value="h - 1"
+                :label="`${String(h - 1).padStart(2, '0')}:xx`" />
             </el-select>
             <el-select v-model="dailyMinute">
               <el-option v-for="m in 60" :key="`m-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
@@ -444,15 +343,12 @@
         <el-form-item v-if="scheduleMode === 'weekly'" :label="$t('autoConfig.modeWeekly')">
           <div class="mode-line">
             <el-select v-model="weeklyWeekday">
-              <el-option
-                v-for="wd in 7"
-                :key="`bwd-${wd - 1}`"
-                :value="wd - 1"
-                :label="$t(`autoConfig.weekday${wd - 1}`)"
-              />
+              <el-option v-for="wd in 7" :key="`bwd-${wd - 1}`" :value="wd - 1"
+                :label="$t(`autoConfig.weekday${wd - 1}`)" />
             </el-select>
             <el-select v-model="dailyHour">
-              <el-option v-for="h in 24" :key="`bwh-${h - 1}`" :value="h - 1" :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+              <el-option v-for="h in 24" :key="`bwh-${h - 1}`" :value="h - 1"
+                :label="`${String(h - 1).padStart(2, '0')}:xx`" />
             </el-select>
             <el-select v-model="dailyMinute">
               <el-option v-for="m in 60" :key="`bwm-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
@@ -472,19 +368,16 @@
   </ElDialog>
 
   <!-- 新增配置弹窗 -->
-  <ElDialog
-    v-model="showAddConfigDialog"
-    :title="$t('plugins.newConfig')"
-    width="400px"
-    :close-on-click-modal="false"
-    @closed="onAddConfigDialogClosed"
-  >
+  <ElDialog v-model="showAddConfigDialog" :title="$t('plugins.newConfig')" width="400px" :close-on-click-modal="false"
+    @closed="onAddConfigDialogClosed">
     <el-form label-width="80px">
       <el-form-item :label="$t('common.name')" required>
-        <el-input v-model="newConfigName" :placeholder="$t('common.configNamePlaceholder')" maxlength="80" show-word-limit />
+        <el-input v-model="newConfigName" :placeholder="$t('common.configNamePlaceholder')" maxlength="80"
+          show-word-limit />
       </el-form-item>
       <el-form-item :label="$t('common.description')">
-        <el-input v-model="newConfigDescription" type="textarea" :placeholder="$t('common.configDescPlaceholder')" :rows="2" />
+        <el-input v-model="newConfigDescription" type="textarea" :placeholder="$t('common.configDescPlaceholder')"
+          :rows="2" />
       </el-form-item>
     </el-form>
     <template #footer>
@@ -521,6 +414,7 @@ import {
 } from "@kabegame/core/utils/pluginVarWhen";
 import { isPluginMinAppNotSatisfied } from "@/composables/pluginMinAppVersionGate";
 import { useApp } from "@/stores/app";
+import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 
 interface Props {
   modelValue: boolean;
@@ -542,6 +436,7 @@ const emit = defineEmits<{
 
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
+const batteryOptimizationStore = useBatteryOptimizationStore();
 const crawlerDrawerStore = useCrawlerDrawerStore();
 const recommendedPresetCount = computed(
   () => crawlerStore.pluginRecommendedConfigs.length,
@@ -552,7 +447,7 @@ function goImportRecommendedPresets() {
   void router.push({ name: "AutoConfigs", query: { tab: "recommended" } });
 }
 const pluginStore = usePluginStore();
-const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconUrl(pluginId);
+const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconDataUrl(pluginId);
 const { version: crawlDialogAppVersion } = storeToRefs(useApp());
 const { pluginName } = usePluginManifestI18n();
 const { varDisplayName, varDescripts, optionDisplayName, resolveConfigText, locale } = usePluginConfigI18n();
@@ -868,7 +763,7 @@ const pluginPickerOptions = computed(() =>
     label: pluginName(p),
     value: p.id,
     warning: p.scriptType === "js",
-    iconSrc: pluginStore.pluginIconUrl(p.id),
+    iconSrc: pluginStore.pluginIconDataUrl(p.id),
   })),
 );
 
@@ -1111,6 +1006,9 @@ const handleStartCrawl = async () => {
       }
     }
 
+    if (IS_ANDROID) {
+      await batteryOptimizationStore.checkAndPromptIfNeeded();
+    }
     const taskAdded = await crawlerStore.addTask(
       form.value.pluginId,
       form.value.outputDir || undefined,
@@ -1267,7 +1165,7 @@ watch(selectedOutputAlbumId, (newValue) => {
   width: 100%;
 }
 
-.mode-line > * {
+.mode-line>* {
   flex: 1;
 }
 
@@ -1297,7 +1195,7 @@ watch(selectedOutputAlbumId, (newValue) => {
 }
 
 .run-config-row .run-config-select,
-.run-config-row > *:first-child {
+.run-config-row>*:first-child {
   flex: 1;
   min-width: 0;
 }

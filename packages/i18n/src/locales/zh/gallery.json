@@ -89,6 +89,7 @@
   "jumpToPage": "跳转到页",
   "byTimeAsc": "按时间正序",
   "byTimeDesc": "按时间倒序",
+  "byAlbumDefaultSort": "默认排序",
   "byAlbumJoinAsc": "加入顺序正序",
   "byAlbumJoinDesc": "加入顺序倒序",
   "byWallpaperSetAsc": "按壁纸设置正序",

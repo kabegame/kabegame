@@ -67,7 +67,7 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
     }
 
     fn bump_tasks(&self) {
-        // 不做失效：仅提醒 Explorer 刷新（根目录 + 按任务）
+        // 提醒 Explorer 刷新（根目录 + 按任务）
         self.notify_root_dir_changed();
         self.notify_task_root_dir_changed();
     }

@@ -29,7 +29,8 @@ All top-level commands go through `scripts/run.ts` (a Tapable-based build system
 ```bash
 bun dev -c main                  # Start dev server (Vite + Tauri, port 1420)
 bun dev -c main --mode local     # Dev with all plugins bundled locally
-bun dev -c main --android        # Android dev
+bun dev -c main --mode android   # Android dev
+bun dev -c main --data prod      # Dev against system data dirs (not repo-local data/)
 bun dev:frontend-main            # Frontend only (no Tauri, port 1420)
 ```
 
@@ -40,7 +41,7 @@ bun b -c main                    # Build main app only
 bun b -c main --skip cargo       # Vue build only
 bun b -c main --skip vue         # Cargo build only
 bun b --release                  # Copy artifacts to release/
-bun b --android                  # Build Android APK/AAB
+bun b -c main --mode android     # Build Android APK/AAB
 ```
 
 ### Type Checking
@@ -48,6 +49,12 @@ bun b --android                  # Build Android APK/AAB
 bun check -c main                # Check Vue types + Cargo
 bun check -c main --skip cargo   # Vue types only
 ```
+
+### Data directory modes (`--data`)
+- `dev` (default for `bun dev`): repo-local `data/` and `cache/` dirs — isolated from installed app
+- `prod` (default for all other commands): system user data dirs (`%LOCALAPPDATA%\Kabegame` on Windows, `~/.local/share/Kabegame` on Linux/macOS)
+- Use `--data prod` during dev to test against real installed data; use `--data dev` in a release build for CI/testing isolation
+- Controlled via `kabegame_data` Rust cfg injected by `src-tauri/{core,app-main}/build.rs`
 
 ### Other
 ```bash

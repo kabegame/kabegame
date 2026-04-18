@@ -66,10 +66,7 @@ impl SchemeDownloader for HttpSchemeDownloader {
         headers: &HashMap<String, String>,
         progress: &DownloadProgressContext<'_>,
     ) -> Result<String, String> {
-        let retry = Settings::global()
-            .get_network_retry_count()
-            .await
-            .unwrap_or(2);
+        let retry = Settings::global().get_network_retry_count();
         download_http(dq, task_id, url, dest, headers, retry, progress).await
     }
 

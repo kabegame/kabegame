@@ -71,5 +71,10 @@
   "wallpaperSetSuccess": "배경화면 설정 완료",
   "wallpaperSetFailed": "배경화면 설정 실패",
   "addToAlbumFailed": "앨범에 이미지 추가 실패",
-  "exportFailed": "내보내기 실패"
+  "exportFailed": "내보내기 실패",
+  "batteryOptimizationTitle": "백그라운드 실행 허용",
+  "batteryOptimizationDesc": "백그라운드 실행을 허용하면 배경 화면 순환과 다운로드 작업이 절전 최적화의 영향을 덜 받고 계속 진행됩니다.",
+  "batteryOptimizationConfirm": "설정 열기",
+  "batteryOptimizationCancel": "나중에",
+  "batteryOptimizationTooltip": "백그라운드가 제한될 수 있습니다. 탭하여 허용"
 }

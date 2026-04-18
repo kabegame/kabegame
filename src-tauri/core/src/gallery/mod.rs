@@ -2,6 +2,4 @@
 
 pub mod browse;
 
-pub use browse::{
-    browse_gallery_provider, AlbumBrowseInfo, GalleryBrowseEntry, GalleryBrowseResult,
-};
+pub use browse::{browse_from_provider, GalleryBrowseEntry};

@@ -13,6 +13,7 @@
   "albumDriveMessageMountPointRequired": "Please set the mount point first (e.g. K:\\)",
   "albumDriveMessageEnabled": "Album drive enabled",
   "albumDriveMessageDisabled": "Album drive disabled",
+  "albumDriveOpenErrorHint": "Try disabling and re-enabling the album drive in Settings.",
   "imageClickAction": "Image click behavior",
   "imageClickActionDesc": "Action when left-clicking an image",
   "imageClickPreview": "In-app preview",

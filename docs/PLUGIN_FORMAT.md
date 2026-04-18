@@ -78,6 +78,9 @@ plugin-name.kgpg
 - `icon.png` - 可选，插件图标（仅支持 PNG）
 - `config.json` - 可选，插件配置
 - `doc_root/doc.md` - 可选，用户文档（基于标准 Markdown/GFM 渲染，图片路径仅允许 doc_root 内相对路径）
+- `doc_root/<image>` - 可选，文档引用的图片资源（jpg/jpeg/png/gif/webp/bmp）
+
+  这些非 .md 文件在插件解析时会被一次性读入内存，经 base64 编码后以 `Plugin.docResources` 字段下发给前端（相对 doc_root 的路径为 key）。为避免内存膨胀，对单个文件有 **2 MB** 上限（CLI 打包阶段即会跳过超限文件并警告）、单插件所有资源合计 **10 MB** 上限（解析阶段超出后续文件不再收录）。
 
 ### config.json 与变量在脚本中的访问
 
@@ -91,8 +94,8 @@ plugin-name.kgpg
   const tag       = ctx.vars?.tag ?? "";
   ```
 
-### 快速展开策略
-1. **读取阶段**：只读取 `manifest.json` 获取基本信息（用于列表展示）
-2. **安装阶段**：解压到临时目录，验证后移动到正式目录
-3. **使用阶段**：直接读取解压后的文件，无需再次解压
+### 加载与运行策略
+- **一次性加载**：已安装插件在首次列出时（或通过 `refresh_plugins`）被 `parse_kgpg` 一次性解析：`manifest.json`、`config.json`、`doc_root/*.md`、`doc_root/*` 图片资源、`crawl.rhai` / `crawl.js` 脚本内容、`templates/description.ejs`、`configs/*.json` 均被读入内存并挂在 `Plugin` 结构体上。
+- **运行阶段**：爬取任务、文档图片、变量定义等均直接从内存读取，不再重新打开 `.kgpg` ZIP（临时预览/导入时例外）。
+- **磁盘保留**：`.kgpg` 文件仍保留在插件目录（`Plugin.file_path`），用于插件升级、导出等操作。
 

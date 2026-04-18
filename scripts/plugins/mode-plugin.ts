@@ -6,7 +6,7 @@ import {
 } from "../utils";
 import { BasePlugin } from "./base-plugin";
 import { run } from "../utils";
-import { Component, ComponentPlugin } from "./component-plugin";
+import { Component } from "./component-plugin";
 import chalk from "chalk";
 import { BuildSystem } from "../build-system";
 import { OSPlugin } from "./os-plugin";
@@ -16,8 +16,9 @@ import fs from "fs";
 export class Mode {
   static readonly STANDARD = "standard";
   static readonly LIGHT = "light";
+  static readonly ANDROID = "android";
 
-  static readonly modes = [this.STANDARD, this.LIGHT];
+  static readonly modes = [this.STANDARD, this.LIGHT, this.ANDROID];
 
   constructor(private readonly _mode: string) {}
 
@@ -31,6 +32,10 @@ export class Mode {
 
   get isLight(): boolean {
     return this.mode === Mode.LIGHT;
+  }
+
+  get isAndroid(): boolean {
+    return this.mode === Mode.ANDROID;
   }
 }
 
@@ -54,17 +59,27 @@ export class ModePlugin extends BasePlugin {
         throw new Error(`未知的模式，允许的列表：${Mode.modes}`);
       }
       const modeObj = new Mode(mode);
-      if (modeObj.isLight && !bs.context.component!.isMain) {
-        throw new Error("light mode 只支持main组件！");
+      if ((modeObj.isLight || modeObj.isAndroid) && !bs.context.component!.isMain) {
+        throw new Error(`${mode} mode 只支持main组件！`);
+      }
+      if (modeObj.isAndroid && !(bs.context.cmd!.isDev || bs.context.cmd!.isBuild)) {
+        throw new Error("android mode 仅支持 dev 与 build 命令");
       }
       bs.context.mode = modeObj;
       this.mode = modeObj;
+      OSPlugin.isAndroid = modeObj.isAndroid;
     });
 
     bs.hooks.prepareEnv.tap(this.name, () => {
       this.setEnv("KABEGAME_MODE", this.mode!.mode);
       this.setEnv("VITE_KABEGAME_MODE", this.mode!.mode);
       this.addRustFlags(`--cfg kabegame_mode="${this.mode!.mode}"`);
+
+      if (this.mode!.isAndroid) {
+        this.setEnv("VITE_ANDROID", "true");
+        this.setEnv("TAURI_PLATFORM", "android");
+      }
+
       // 开发/start 时通过 PATH 让主进程及 sidecar（如 ffmpeg）找到 kabegame/bin 下的 DLL，无需复制
       if (
         OSPlugin.isWindows &&
@@ -99,7 +114,6 @@ export class ModePlugin extends BasePlugin {
       ) => {
         // virtual-driver 功能现在通过 cfg(kabegame_mode) 控制，不再使用 features
         // self-hosted 功能仍通过 feature 控制
-        const mode = this.mode!;
         const features: string[] = Array.isArray(nullOrCompOrFeatures)
           ? nullOrCompOrFeatures
           : [];
@@ -136,7 +150,7 @@ export class ModePlugin extends BasePlugin {
     // 仅在 main 组件构建时才需要处理 dokan 与 bin 下 DLL 资源
     if (bs.context.component!.isMain && OSPlugin.isWindows) {
       this.log("Copy Dokan and FFmpeg DLLs resources...");
-      if (!this.mode!.isLight) {
+      if (this.mode!.isStandard) {
         copyDokan2DllToResources();
         copyDokanInstallerToResources();
       }

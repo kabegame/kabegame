@@ -407,6 +407,30 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
+    /// 插件新增安装（首次安装，完整 Plugin JSON）
+    pub fn emit_plugin_added(&self, plugin: &serde_json::Value) {
+        let event = std::sync::Arc::new(DaemonEvent::PluginAdded {
+            plugin: plugin.clone(),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 插件卸载
+    pub fn emit_plugin_deleted(&self, plugin_id: &str) {
+        let event = std::sync::Arc::new(DaemonEvent::PluginDeleted {
+            plugin_id: plugin_id.to_string(),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 插件更新/重装（同 ID 覆盖安装，完整 Plugin JSON）
+    pub fn emit_plugin_updated(&self, plugin: &serde_json::Value) {
+        let event = std::sync::Arc::new(DaemonEvent::PluginUpdated {
+            plugin: plugin.clone(),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
     /// 从存储读取任务并发送 `TaskChanged`，用于下载失败等场景下刷新任务列表（避免一直显示“处理中”）。
     pub fn emit_task_status_from_storage(&self, task_id: &str) {
         let storage = crate::storage::Storage::global();
@@ -587,4 +611,10 @@ impl GlobalEmitter {
     pub fn emit_pending_queue_change(&self, _pending_count: usize) {}
 
     pub fn emit_task_status_from_storage(&self, _task_id: &str) {}
+
+    pub fn emit_plugin_added(&self, _plugin: &serde_json::Value) {}
+
+    pub fn emit_plugin_deleted(&self, _plugin_id: &str) {}
+
+    pub fn emit_plugin_updated(&self, _plugin: &serde_json::Value) {}
 }

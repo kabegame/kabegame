@@ -61,30 +61,22 @@ impl PlasmaPluginWallpaperManager {
 #[async_trait]
 impl WallpaperManager for PlasmaPluginWallpaperManager {
     async fn get_style(&self) -> Result<String, String> {
-        Settings::global()
-            .get_wallpaper_rotation_style()
-            .await
-            .map_err(|e| format!("Settings error: {}", e))
+        Ok(Settings::global().get_wallpaper_rotation_style())
     }
 
     async fn get_transition(&self) -> Result<String, String> {
-        Settings::global()
-            .get_wallpaper_rotation_transition()
-            .await
-            .map_err(|e| format!("Settings error: {}", e))
+        Ok(Settings::global().get_wallpaper_rotation_transition())
     }
 
     async fn set_style(&self, style: &str) -> Result<(), String> {
         Settings::global()
             .set_wallpaper_style(style.to_string())
-            .await
             .map_err(|e| format!("Settings error: {}", e))
     }
 
     async fn set_transition(&self, transition: &str) -> Result<(), String> {
         Settings::global()
             .set_wallpaper_rotation_transition(transition.to_string())
-            .await
             .map_err(|e| format!("Settings error: {}", e))
     }
 

@@ -5,19 +5,22 @@ fn main() {
     // We inject `--cfg desktop="plasma"` or `--cfg desktop="gnome"` at compile-time (via scripts/run.js --desktop),
     // so silence `unexpected_cfgs` warnings by declaring the allowed values here.
     println!("cargo:rustc-check-cfg=cfg(desktop, values(\"plasma\", \"gnome\"))");
-    println!("cargo:rustc-check-cfg=cfg(kabegame_mode, values(\"standard\", \"light\"))");
+    println!("cargo:rustc-check-cfg=cfg(kabegame_mode, values(\"standard\", \"light\", \"android\"))");
     println!(
         "cargo:rustc-check-cfg=cfg(kabegame_component, values(\"main\", \"cli\", \"unknown\"))"
     );
+    println!("cargo:rustc-check-cfg=cfg(kabegame_data, values(\"dev\", \"prod\"))");
 
     // Keep consistent with kabegame-core build.rs:
-    // expose KABEGAME_BUILD_MODE (= standard|light) to this crate as well,
+    // expose KABEGAME_BUILD_MODE (= standard|light|android) to this crate as well,
     // so app-main can answer `get_build_mode` without depending on kabegame-core::plugin.
     println!("cargo:rerun-if-env-changed=KABEGAME_MODE");
     println!("cargo:rerun-if-env-changed=KABEGAME_COMPONENT");
+    println!("cargo:rerun-if-env-changed=KABEGAME_DATA");
     let mode = std::env::var("KABEGAME_MODE").unwrap_or_else(|_| "standard".to_string());
     let normalized = match mode.as_str() {
         "light" => "light",
+        "android" => "android",
         _ => "standard",
     };
     println!("cargo:rustc-env=KABEGAME_BUILD_MODE={}", normalized);
@@ -31,12 +34,19 @@ fn main() {
     };
     println!("cargo:rustc-cfg=kabegame_component=\"{}\"", component);
 
+    let data = std::env::var("KABEGAME_DATA").unwrap_or_else(|_| "prod".to_string());
+    let normalized_data = match data.as_str() {
+        "dev" => "dev",
+        _ => "prod",
+    };
+    println!("cargo:rustc-cfg=kabegame_data=\"{}\"", normalized_data);
+
     // On Windows, the virtual-driver feature depends on dokan2.dll.
     // Use delay-load so the app can start even when dokan2.dll isn't present;
     // we can then show a friendly error only when the user actually tries to mount VD.
     //
     // This only works on MSVC toolchain.
-    if normalized != "light" {
+    if normalized == "standard" {
         #[cfg(all(target_os = "windows", target_env = "msvc"))]
         {
             // Needed for /DELAYLOAD.

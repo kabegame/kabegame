@@ -91,6 +91,7 @@
   "jumpToPage": "跳轉至頁",
   "byTimeAsc": "依時間正序",
   "byTimeDesc": "依時間倒序",
+  "byAlbumDefaultSort": "預設排序",
   "byAlbumJoinAsc": "加入順序正序",
   "byAlbumJoinDesc": "加入順序倒序",
   "byWallpaperSetAsc": "依設為桌布順（早→晚）",

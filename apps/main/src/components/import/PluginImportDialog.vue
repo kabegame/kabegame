@@ -11,14 +11,14 @@
     :class="{ 'mobile-fullscreen': IS_ANDROID }"
     @close="handleClose"
   >
-    <PluginDetailPage
+    <PluginDetailContent
       v-if="preview"
       :title="pageTitle"
       :subtitle="props.kgpgPath || t('common.noFilePath')"
       :show-back="IS_ANDROID"
       :loading="false"
       :show-skeleton="false"
-      :plugin="pluginVm"
+      :plugin="preview"
       :app-version="appVersion"
       :installed="installed"
       :installing="installing"
@@ -34,28 +34,22 @@
     >
       <template #detail-extra-items>
         <el-descriptions-item label="版本" v-if="preview">
-          v{{ preview.preview.version }}
-          <span v-if="preview.preview.alreadyExists" class="muted">
-            （已安装：v{{ preview.preview.existingVersion || "?" }}）
+          v{{ preview.version }}
+          <span v-if="installed" class="muted">
+            （已安装：v{{ existingVersion || "?" }}）
           </span>
-        </el-descriptions-item>
-        <el-descriptions-item label="目标目录" v-if="preview">
-          {{ preview.pluginsDir }}
-        </el-descriptions-item>
-        <el-descriptions-item v-if="preview && preview.preview.installError" label="提示">
-          <el-alert type="warning" :closable="false" :show-icon="true" :title="preview.preview.installError" />
         </el-descriptions-item>
       </template>
       <template #detail-actions>
-        <el-button 
-          :type="installed ? 'warning' : 'primary'" 
-          :loading="installing" 
-          :disabled="installing || !canInstall"
+        <el-button
+          :type="installed ? 'warning' : 'primary'"
+          :loading="installing"
+          :disabled="installing"
           @click="doInstall">
           {{ installText }}
         </el-button>
       </template>
-    </PluginDetailPage>
+    </PluginDetailContent>
     <el-alert v-else-if="errorMsg" type="error" :closable="false" show-icon :title="t('common.parseFailed')" :description="errorMsg" />
     <div v-else v-loading="loading" class="loading-container">
       {{ t('common.loading') }}
@@ -69,41 +63,13 @@ import { storeToRefs } from 'pinia';
 import { useI18n, usePluginManifestI18n } from '@kabegame/i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { ElMessage } from 'element-plus';
-import PluginDetailPage from '@kabegame/core/components/plugin/PluginDetailPage.vue';
-import type { PluginManifestText } from '@kabegame/core/stores/plugins';
+import type { Plugin } from '@kabegame/core/stores/plugins';
 import { usePluginStore } from '@/stores/plugins';
 import { useApp } from '@/stores/app';
 import { isUpdateAvailable } from '@kabegame/core/utils/version';
 import { IS_ANDROID } from '@kabegame/core/env';
 import { useModalBack } from '@kabegame/core/composables/useModalBack';
-
-type ImportPreview = {
-  id: string;
-  name: PluginManifestText;
-  version: string;
-  minAppVersion?: string | null;
-  sizeBytes: number;
-  alreadyExists: boolean;
-  existingVersion?: string | null;
-  changeLogDiff?: string | null;
-  canInstall?: boolean;
-  installError?: string | null;
-};
-
-type PluginManifest = {
-  name: PluginManifestText;
-  version: string;
-  description: PluginManifestText;
-  author?: string;
-};
-
-type ImportPreviewWithIcon = {
-  preview: ImportPreview;
-  manifest: PluginManifest;
-  iconBase64?: string | null;
-  baseUrl?: string | null;
-  pluginsDir: string;
-};
+import PluginDetailContent from '@kabegame/core/components/plugin/PluginDetailContent.vue';
 
 const props = defineProps<{
   kgpgPath: string | null;
@@ -133,13 +99,17 @@ const visible = computed({
 const loading = ref(false);
 const errorMsg = ref<string | null>(null);
 const { version: appVersion } = storeToRefs(useApp());
-const preview = ref<ImportPreviewWithIcon | null>(null);
-const installed = ref(false);
+const preview = ref<Plugin | null>(null);
 const installing = ref(false);
-const detail = ref<any | null>(null);
 const pluginStore = usePluginStore();
 
 useModalBack(visible);
+
+const existingPlugin = computed(() =>
+  preview.value ? pluginStore.plugins.find(p => p.id === preview.value!.id) : undefined
+);
+const installed = computed(() => !!existingPlugin.value);
+const existingVersion = computed(() => existingPlugin.value?.version ?? null);
 
 watch(() => props.kgpgPath, async (newPath) => {
   if (newPath && visible.value) {
@@ -151,12 +121,9 @@ watch(() => visible.value, async (val) => {
   if (val && props.kgpgPath) {
     await loadPreview(props.kgpgPath);
   } else if (!val) {
-    // Reset state when closed
     loading.value = false;
     preview.value = null;
     errorMsg.value = null;
-    installed.value = false;
-    detail.value = null;
   }
 });
 
@@ -164,27 +131,8 @@ const loadPreview = async (path: string) => {
   loading.value = true;
   errorMsg.value = null;
   preview.value = null;
-  installed.value = false;
-  detail.value = null;
   try {
-    const res = await invoke<ImportPreviewWithIcon>('preview_import_plugin_with_icon', { zipPath: path });
-    preview.value = res;
-    installed.value = !!res.preview.alreadyExists;
-    
-    // Load plugin detail (doc map, baseUrl, etc.)
-    try {
-      const doc = await invoke<Record<string, string> | null>('get_plugin_doc_from_zip', { zipPath: path });
-      detail.value = {
-        doc: doc ?? null,
-        baseUrl: res.baseUrl || null,
-      };
-    } catch (e) {
-      // If doc loading fails, continue with what we have
-      detail.value = {
-        doc: null,
-        baseUrl: res.baseUrl || null,
-      };
-    }
+    preview.value = await invoke<Plugin>('preview_import_plugin', { zipPath: path });
   } catch (e: any) {
     errorMsg.value = typeof e === 'string' ? e : String(e?.message || e);
   } finally {
@@ -192,48 +140,21 @@ const loadPreview = async (path: string) => {
   }
 };
 
-const iconDataUrl = computed(() => {
-  const b64 = preview.value?.iconBase64;
-  if (!b64) return null;
-  return `data:image/png;base64,${b64}`;
-});
-
-const pluginVm = computed(() => {
-  if (!preview.value) return null;
-  return {
-    id: preview.value.preview.id,
-    name: preview.value.preview.name,
-    desp: preview.value.manifest?.description ?? preview.value.preview.name,
-    version: preview.value.preview.version,
-    minAppVersion: preview.value.preview.minAppVersion ?? undefined,
-    icon: iconDataUrl.value ?? undefined,
-    doc: detail.value?.doc ?? undefined,
-    baseUrl: (detail.value?.baseUrl as string | undefined) ?? undefined,
-  };
-});
-
 const { t } = useI18n();
 const { pluginName } = usePluginManifestI18n();
-const pageTitle = computed(() => (pluginVm.value ? pluginName(pluginVm.value) : "") || t("common.importPlugin"));
-
-const canInstall = computed(() => {
-  const p = preview.value?.preview;
-  return p?.canInstall !== false; // 默认为 true，只有明确为 false 时才禁用
-});
+const pageTitle = computed(() => (preview.value ? pluginName(preview.value) : "") || t("common.importPlugin"));
 
 const installText = computed(() => {
-  const p = preview.value?.preview;
-  if (!p) return t('plugins.install');
-  if (!p.alreadyExists) return t('plugins.install');
-  const existing = p.existingVersion ?? null;
-  return isUpdateAvailable(existing, p.version) ? t('plugins.update') : t('plugins.reinstall');
+  if (!preview.value) return t('plugins.install');
+  if (!installed.value) return t('plugins.install');
+  return isUpdateAvailable(existingVersion.value, preview.value.version) ? t('plugins.update') : t('plugins.reinstall');
 });
 
 const loadDocImageBytes = async (imagePath: string): Promise<number[]> => {
   if (!props.kgpgPath) throw new Error("未提供插件文件路径");
-  return await invoke<number[]>('get_plugin_image_from_zip', { 
-    zipPath: props.kgpgPath, 
-    imagePath 
+  return await invoke<number[]>('get_plugin_image_from_zip', {
+    zipPath: props.kgpgPath,
+    imagePath
   });
 };
 
@@ -243,7 +164,7 @@ const doInstall = async () => {
   try {
     await invoke('import_plugin_from_zip', { zipPath: props.kgpgPath });
     ElMessage.success(t('common.importSuccess'));
-    await pluginStore.loadPlugins();
+    // plugin-added / plugin-updated event auto-updates the store
     emit('success');
     visible.value = false;
   } catch (e: any) {

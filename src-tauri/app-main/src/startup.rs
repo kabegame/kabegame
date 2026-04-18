@@ -14,6 +14,9 @@ use kabegame_core::storage::Storage;
 use std::fs;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Listener, Manager};
+#[cfg(not(target_os = "android"))]
+use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+
 
 #[cfg(not(target_os = "android"))]
 use kabegame_core::crawler::downloader::{
@@ -53,10 +56,7 @@ impl CrawlerWebViewHandler for AppCrawlerWebViewHandler {
             .navigate(parsed)
             .map_err(|e| format!("Failed to navigate crawler window: {}", e))?;
         // 由设置控制启动 WebView 插件任务时是否自动显示窗口
-        let auto_open = Settings::global()
-            .get_auto_open_crawler_webview()
-            .await
-            .unwrap_or(false);
+        let auto_open = Settings::global().get_auto_open_crawler_webview();
         if auto_open {
             let _ = crawler_window.show();
             let _ = crawler_window.set_focus();
@@ -67,12 +67,14 @@ impl CrawlerWebViewHandler for AppCrawlerWebViewHandler {
 
 pub fn init_kgpg_plugin() {
     tauri::async_runtime::spawn(async {
+        let pm = PluginManager::global();
         // 初始化已安装插件缓存（仅用户 data 目录下的 .kgpg）
-        if let Err(e) = PluginManager::global()
-            .ensure_installed_cache_initialized()
-            .await
-        {
+        if let Err(e) = pm.ensure_installed_cache_initialized().await {
             eprintln!("Failed to initialize plugin cache: {}", e);
+        }
+        // 初始化商店插件缓存（已下载到本地的 .kgpg）
+        if let Err(e) = pm.init_store_plugin_cache().await {
+            eprintln!("Failed to initialize store plugin cache: {}", e);
         }
     });
 }
@@ -279,6 +281,36 @@ pub fn start_local_event_loop(app: AppHandle) {
                 }
                 DaemonEvent::SettingChange { changes } => {
                     let _ = app.emit("setting-change", changes.clone());
+
+                    // maxConcurrentDownloads 变更时更新运行时调度器
+                    if changes.get("maxConcurrentDownloads").is_some() {
+                        let scheduler = TaskScheduler::global();
+                        tokio::spawn(async move {
+                            scheduler.set_download_concurrency().await;
+                        });
+                    }
+
+                    // albumDriveEnabled 变更时挂载/卸载虚拟盘
+                    #[cfg(kabegame_mode = "standard")]
+                    if let Some(enabled_val) = changes.get("albumDriveEnabled") {
+                        if let Some(enabled) = enabled_val.as_bool() {
+                            tokio::spawn(async move {
+                                if enabled {
+                                    let mount_point = Settings::global().get_album_drive_mount_point();
+                                    let vd_service = kabegame_core::virtual_driver::VirtualDriveService::global();
+                                    let _ = tokio::task::spawn_blocking(move || {
+                                        vd_service.mount(mount_point.as_str())
+                                    }).await;
+                                } else {
+                                    let vd_service = kabegame_core::virtual_driver::VirtualDriveService::global();
+                                    let _ = tokio::task::spawn_blocking(move || {
+                                        vd_service.unmount()
+                                    }).await;
+                                }
+                            });
+                        }
+                    }
+
                     // 语言变更时刷新托盘菜单、收藏画册/官方插件源 i18n 名称（与磁盘挂载等实现方式一致，在 setting 回调处处理）
                     if changes.get("language").is_some() {
                         let raw = t!("albums.favorite");
@@ -288,13 +320,14 @@ pub fn start_local_event_loop(app: AppHandle) {
                             raw
                         };
                         let raw_source_name = t!("plugins.officialGithubReleaseSourceName");
-                        let i18n_source_name =
-                            if raw_source_name == "plugins.officialGithubReleaseSourceName" {
-                                kabegame_core::storage::plugin_sources::OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME
+                        let i18n_source_name = if raw_source_name
+                            == "plugins.officialGithubReleaseSourceName"
+                        {
+                            kabegame_core::storage::plugin_sources::OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME
                                     .to_string()
-                            } else {
-                                raw_source_name
-                            };
+                        } else {
+                            raw_source_name
+                        };
                         #[cfg(not(target_os = "android"))]
                         if let Err(e) = crate::tray::update_tray_menu(&app) {
                             eprintln!("[托盘] 语言切换后刷新菜单失败: {}", e);
@@ -317,10 +350,7 @@ pub fn start_local_event_loop(app: AppHandle) {
                         let path = image_path.clone();
                         let controller = crate::wallpaper::manager::WallpaperController::global();
                         tokio::spawn(async move {
-                            let style = Settings::global()
-                                .get_wallpaper_rotation_style()
-                                .await
-                                .unwrap_or("fill".to_string());
+                            let style = Settings::global().get_wallpaper_rotation_style();
                             if let Err(e) = controller.set_wallpaper(&path, &style).await {
                                 eprintln!("[LocalEvent] Set wallpaper failed: {}", e);
                             }
@@ -341,10 +371,7 @@ pub fn start_local_event_loop(app: AppHandle) {
                             let tn = app.task_notification();
                             if running > 0 {
                                 let _ = tn.update_task_notification(running).await;
-                            } else if s == "completed"
-                                || s == "failed"
-                                || s == "canceled"
-                            {
+                            } else if s == "completed" || s == "failed" || s == "canceled" {
                                 let _ = tn.clear_task_notification().await;
                             }
                         }
@@ -667,13 +694,8 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     // 启动时只"尝试还原 currentWallpaperImageId"，不在客户端做大规模选图/回退，
     // 回退与轮播逻辑由 rotator 负责（避免客户端依赖 Storage/Settings）。
     let settings = Settings::global();
-    let (style_result, id_result) = tokio::join!(
-        settings.get_wallpaper_rotation_style(),
-        settings.get_current_wallpaper_image_id()
-    );
-
-    let style = style_result.unwrap_or_else(|_| "fill".to_string());
-    let Some(id) = id_result.ok().flatten() else {
+    let style = settings.get_wallpaper_rotation_style();
+    let Some(id) = settings.get_current_wallpaper_image_id() else {
         return Ok(());
     };
 
@@ -682,18 +704,18 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
         .map_err(|e| format!("Storage error: {}", e))?;
 
     let Some(img_info) = img_v else {
-        let _ = settings.set_current_wallpaper_image_id(None).await;
+        let _ = settings.set_current_wallpaper_image_id(None);
         return Ok(());
     };
     let path = img_info.local_path;
 
     if !Path::new(&path).exists() {
-        let _ = settings.set_current_wallpaper_image_id(None).await;
+        let _ = settings.set_current_wallpaper_image_id(None);
         return Ok(());
     }
 
     if controller.set_wallpaper(&path, &style).await.is_err() as bool {
-        let _ = settings.set_current_wallpaper_image_id(None).await;
+        let _ = settings.set_current_wallpaper_image_id(None);
     }
 
     Ok(())

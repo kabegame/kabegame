@@ -84,7 +84,7 @@ const openExplorer = async () => {
     await invoke("open_explorer", { path: mp });
   } catch (e) {
     console.error(e);
-    ElMessage.error(String(e));
+    ElMessage.error(`${String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
   }
 };
 

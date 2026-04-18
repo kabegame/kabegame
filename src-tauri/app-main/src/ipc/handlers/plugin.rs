@@ -1,7 +1,7 @@
 //! Plugin 相关请求
 
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
-use kabegame_core::plugin::{PluginManager, extract_kgpg_filename_from_url};
+use kabegame_core::plugin::PluginManager;
 
 pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse> {
     match req {
@@ -13,58 +13,35 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
 
         CliIpcRequest::PluginImport { kgpg_path } => Some(import_plugin(kgpg_path).await),
 
-        CliIpcRequest::PluginGetVars { plugin_id } => Some(get_plugin_vars(plugin_id).await),
-
-        CliIpcRequest::PluginGetBrowserPlugins => Some(get_browser_plugins().await),
-
         CliIpcRequest::PluginGetPluginSources => Some(get_plugin_sources().await),
 
         CliIpcRequest::PluginValidateSource { index_url } => {
             Some(validate_plugin_source(index_url).await)
         }
 
-        CliIpcRequest::PluginAddSource { id, name, index_url } => {
-            Some(add_plugin_source(id.clone(), name.clone(), index_url.clone()).await)
-        }
+        CliIpcRequest::PluginAddSource {
+            id,
+            name,
+            index_url,
+        } => Some(add_plugin_source(id.clone(), name.clone(), index_url.clone()).await),
 
-        CliIpcRequest::PluginUpdateSource { id, name, index_url } => {
-            Some(update_plugin_source(id.clone(), name.clone(), index_url.clone()).await)
-        }
+        CliIpcRequest::PluginUpdateSource {
+            id,
+            name,
+            index_url,
+        } => Some(update_plugin_source(id.clone(), name.clone(), index_url.clone()).await),
 
-        CliIpcRequest::PluginDeleteSource { id } => {
-            Some(delete_plugin_source(id.clone()).await)
-        }
-
-        CliIpcRequest::PluginInstallBrowserPlugin { plugin_id } => {
-            Some(install_browser_plugin(plugin_id).await)
-        }
+        CliIpcRequest::PluginDeleteSource { id } => Some(delete_plugin_source(id.clone()).await),
 
         CliIpcRequest::PluginGetStorePlugins {
             source_id,
             force_refresh,
             revalidate_if_stale_after_secs,
-        } => Some(get_store_plugins(
-            source_id.as_deref(),
-            *force_refresh,
-            *revalidate_if_stale_after_secs,
-        )
-        .await),
-
-        CliIpcRequest::PluginGetDetailForUi {
-            plugin_id,
-            download_url,
-            sha256,
-            size_bytes,
-            source_id,
-            version,
         } => Some(
-            get_plugin_detail_for_ui(
-                plugin_id,
-                download_url.as_deref(),
-                sha256.as_deref(),
-                *size_bytes,
+            get_store_plugins(
                 source_id.as_deref(),
-                version.as_deref(),
+                *force_refresh,
+                *revalidate_if_stale_after_secs,
             )
             .await,
         ),
@@ -72,44 +49,25 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
         CliIpcRequest::PluginPreviewImport { zip_path } => {
             Some(preview_import_plugin(zip_path).await)
         }
-
-        CliIpcRequest::PluginPreviewStoreInstall {
+        CliIpcRequest::PluginGetRemoteIconV2 {
             download_url,
-            sha256,
-            size_bytes,
             source_id,
-            version,
-        } => Some(preview_store_install(download_url, sha256.as_deref(), *size_bytes, source_id.as_deref(), version.as_deref()).await),
-
-        CliIpcRequest::PluginGetIcon { plugin_id } => Some(get_plugin_icon(plugin_id).await),
-
-        CliIpcRequest::PluginGetRemoteIconV2 { download_url, source_id, plugin_id } => {
-            Some(get_remote_plugin_icon_v2(download_url, source_id.as_deref(), plugin_id.as_deref()).await)
-        }
+            plugin_id,
+        } => Some(
+            get_remote_plugin_icon_v2(download_url, source_id.as_deref(), plugin_id.as_deref())
+                .await,
+        ),
 
         CliIpcRequest::PluginGetImageForDetail {
             plugin_id,
             image_path,
-            download_url,
-            sha256,
-            size_bytes,
             source_id,
-            version,
         } => Some(
-            get_plugin_image_for_detail(
-                plugin_id,
-                image_path,
-                download_url.as_deref(),
-                sha256.as_deref(),
-                *size_bytes,
-                source_id.as_deref(),
-                version.as_deref(),
-            )
-            .await,
+            get_plugin_image_for_detail(plugin_id, image_path, source_id.as_deref()).await,
         ),
 
         CliIpcRequest::PluginRun { .. } => {
-            // 謠剃ｻｶ霑占｡碁ｻ霎題ｾ・､肴揩・悟黒迢ｬ螟・炊
+            // 运行请求由主程序处理，此处不处理
             None
         }
 
@@ -119,7 +77,9 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
 
 async fn get_plugins() -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
-    // 遑ｮ菫晉ｼ灘ｭ伜ｷｲ蛻晏ｧ句喧/蛻ｷ譁ｰ荳谺｡・亥､ｱ雍･荳崎・蜻ｽ・悟錘扈ｭ get_all 莉堺ｼ夊ｧｦ蜿大・蟋句喧・・    let _ = plugin_manager.refresh_installed_plugins_cache();
+    if let Err(e) = plugin_manager.ensure_installed_cache_initialized().await {
+        return CliIpcResponse::err(e);
+    }
     match plugin_manager.get_all().await {
         Ok(plugins) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(plugins).unwrap_or_default())
@@ -149,7 +109,7 @@ async fn delete_plugin(plugin_id: &str) -> CliIpcResponse {
 async fn import_plugin(kgpg_path: &str) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
     let path = std::path::Path::new(kgpg_path);
-    match plugin_manager.install_plugin_from_zip(path).await {
+    match plugin_manager.install_plugin_from_kgpg(path).await {
         Ok(plugin) => {
             CliIpcResponse::ok_with_data("imported", serde_json::json!({ "pluginId": plugin.id }))
         }
@@ -164,16 +124,6 @@ async fn get_plugin_vars(plugin_id: &str) -> CliIpcResponse {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(vars).unwrap_or_default())
         }
         Ok(None) => CliIpcResponse::ok_with_data("ok", serde_json::json!([])),
-        Err(e) => CliIpcResponse::err(e),
-    }
-}
-
-async fn get_browser_plugins() -> CliIpcResponse {
-    let plugin_manager = PluginManager::global();
-    match plugin_manager.load_browser_plugins().await {
-        Ok(plugins) => {
-            CliIpcResponse::ok_with_data("ok", serde_json::to_value(plugins).unwrap_or_default())
-        }
         Err(e) => CliIpcResponse::err(e),
     }
 }
@@ -224,19 +174,6 @@ async fn delete_plugin_source(id: String) -> CliIpcResponse {
     }
 }
 
-async fn install_browser_plugin(plugin_id: &str) -> CliIpcResponse {
-    let plugin_manager = PluginManager::global();
-    match plugin_manager
-        .install_browser_plugin(plugin_id.to_string())
-        .await
-    {
-        Ok(plugin) => {
-            CliIpcResponse::ok_with_data("ok", serde_json::to_value(plugin).unwrap_or_default())
-        }
-        Err(e) => CliIpcResponse::err(e),
-    }
-}
-
 async fn get_store_plugins(
     source_id: Option<&str>,
     force_refresh: bool,
@@ -254,74 +191,27 @@ async fn get_store_plugins(
     }
 }
 
-async fn get_plugin_detail_for_ui(
-    plugin_id: &str,
-    download_url: Option<&str>,
-    sha256: Option<&str>,
-    size_bytes: Option<u64>,
-    source_id: Option<&str>,
-    version: Option<&str>,
-) -> CliIpcResponse {
-    let plugin_manager = PluginManager::global();
-    let res = match download_url {
-        Some(url) => {
-            plugin_manager
-                .load_remote_plugin_detail(plugin_id, url, sha256, size_bytes, source_id, version)
-                .await
-        }
-        None => plugin_manager.load_installed_plugin_detail(plugin_id).await,
-    };
-    match res {
-        Ok(detail) => {
-            CliIpcResponse::ok_with_data("ok", serde_json::to_value(detail).unwrap_or_default())
-        }
-        Err(e) => CliIpcResponse::err(e),
-    }
-}
-
 async fn preview_import_plugin(zip_path: &str) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
     let path = std::path::PathBuf::from(zip_path);
-    match plugin_manager.preview_import_from_zip(&path).await {
-        Ok(preview) => {
-            CliIpcResponse::ok_with_data("ok", serde_json::to_value(preview).unwrap_or_default())
+    match plugin_manager.preview_import_from_kgpg(&path).await {
+        Ok(plugin) => {
+            CliIpcResponse::ok_with_data("ok", serde_json::to_value(plugin).unwrap_or_default())
         }
         Err(e) => CliIpcResponse::err(e),
     }
 }
 
-async fn preview_store_install(
-    download_url: &str,
-    sha256: Option<&str>,
-    size_bytes: Option<u64>,
-    source_id: Option<&str>,
-    version: Option<&str>,
-) -> CliIpcResponse {
+async fn preview_store_install(source_id: &str, plugin_id: &str) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
-    let cached_path = match (source_id, version) {
-        (Some(source_id), Some(version)) => {
-            let plugin_id = extract_kgpg_filename_from_url(download_url)
-                .unwrap_or_else(|| "unknown".to_string());
-            match plugin_manager
-                .ensure_plugin_cached(source_id, &plugin_id, download_url, sha256, size_bytes, version, None)
-                .await
-            {
-                Ok(p) => p,
-                Err(e) => return CliIpcResponse::err(e),
-            }
-        }
-        _ => {
-            // 兼容模式：下载到临时文件
-            match plugin_manager
-                .download_plugin_to_temp(download_url, sha256, size_bytes, None)
-                .await
-            {
-                Ok(t) => t,
-                Err(e) => return CliIpcResponse::err(e),
-            }
-        }
+    let cached_path = match plugin_manager
+        .ensure_plugin_cached(source_id, plugin_id)
+        .await
+    {
+        Ok(p) => p,
+        Err(e) => return CliIpcResponse::err(e),
     };
-    let preview = match plugin_manager.preview_import_from_zip(&cached_path).await {
+    let plugin = match plugin_manager.preview_import_from_kgpg(&cached_path).await {
         Ok(p) => p,
         Err(e) => return CliIpcResponse::err(e),
     };
@@ -329,24 +219,16 @@ async fn preview_store_install(
         "ok",
         serde_json::json!({
             "tmpPath": cached_path.to_string_lossy().to_string(),
-            "preview": preview,
+            "plugin": plugin,
         }),
     )
 }
 
-async fn get_plugin_icon(plugin_id: &str) -> CliIpcResponse {
-    let plugin_manager = PluginManager::global();
-    let bytes = match plugin_manager.get_plugin_icon_by_id(plugin_id).await {
-        Ok(b) => b,
-        Err(e) => return CliIpcResponse::err(e),
-    };
-    match bytes {
-        Some(b) => CliIpcResponse::ok_with_bytes("ok", "image/png", b),
-        None => CliIpcResponse::ok("no icon"),
-    }
-}
-
-async fn get_remote_plugin_icon_v2(download_url: &str, source_id: Option<&str>, plugin_id: Option<&str>) -> CliIpcResponse {
+async fn get_remote_plugin_icon_v2(
+    download_url: &str,
+    source_id: Option<&str>,
+    plugin_id: Option<&str>,
+) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
     let bytes = match plugin_manager
         .fetch_remote_plugin_icon_v2(download_url, source_id, plugin_id)
@@ -364,15 +246,11 @@ async fn get_remote_plugin_icon_v2(download_url: &str, source_id: Option<&str>, 
 async fn get_plugin_image_for_detail(
     plugin_id: &str,
     image_path: &str,
-    download_url: Option<&str>,
-    sha256: Option<&str>,
-    size_bytes: Option<u64>,
     source_id: Option<&str>,
-    version: Option<&str>,
 ) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
     let bytes = match plugin_manager
-        .load_plugin_image_for_detail(plugin_id, download_url, sha256, size_bytes, image_path, source_id, version)
+        .load_plugin_image_for_detail(plugin_id, image_path, source_id)
         .await
     {
         Ok(b) => b,

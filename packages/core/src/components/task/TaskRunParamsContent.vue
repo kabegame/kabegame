@@ -1,139 +1,89 @@
 <template>
   <div class="task-run-params">
-    <el-descriptions
-      :title="t('tasks.taskRunParamsSectionPlugin')"
-      :column="2"
-      border
-      size="small"
-      class="params-desc-block"
-    >
+    <el-descriptions :title="t('tasks.taskRunParamsSectionPlugin')" :column="2" border size="small"
+      class="params-desc-block">
       <el-descriptions-item :label="t('tasks.taskRunParamsColSource')" :span="2">
         <div class="plugin-source-cell">
           <div class="plugin-icon-box" aria-hidden="true">
             <el-image v-if="pluginIconDisplayUrl" :src="pluginIconDisplayUrl" fit="contain" class="plugin-icon-img" />
-            <el-icon v-else class="plugin-icon-fallback"><Grid /></el-icon>
+            <el-icon v-else class="plugin-icon-fallback">
+              <Grid />
+            </el-icon>
           </div>
           <span class="plugin-name-text">{{ getPluginName(task.pluginId) }}</span>
         </div>
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions
-      v-if="showTimeSection"
-      :title="t('tasks.taskRunParamsSectionTime')"
-      :column="2"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item
-        v-if="hasStartTime"
-        :label="t('tasks.taskRunParamsColStartTime')"
-      >
+    <el-descriptions v-if="showTimeSection" :title="t('tasks.taskRunParamsSectionTime')" :column="2" border size="small"
+      class="params-desc-block">
+      <el-descriptions-item v-if="hasStartTime" :label="t('tasks.taskRunParamsColStartTime')">
         <span class="cell-with-icon">
-          <el-icon class="cell-icon"><Clock /></el-icon>
+          <el-icon class="cell-icon">
+            <Clock />
+          </el-icon>
           {{ formatDate(task.startTime!) }}
         </span>
       </el-descriptions-item>
       <el-descriptions-item :label="t('tasks.taskRunParamsColEndTime')">
         <span v-if="task.endTime" class="cell-with-icon">
-          <el-icon class="cell-icon"><Clock /></el-icon>
+          <el-icon class="cell-icon">
+            <Clock />
+          </el-icon>
           {{ formatDate(task.endTime) }}
         </span>
         <span v-else-if="hasStartTime">{{ t("tasks.drawerParamInProgress") }}</span>
         <span v-else class="text-muted">—</span>
       </el-descriptions-item>
-      <el-descriptions-item
-        v-if="hasStartTime"
-        :label="t('tasks.taskRunParamsColDuration')"
-        :span="2"
-      >
+      <el-descriptions-item v-if="hasStartTime" :label="t('tasks.taskRunParamsColDuration')" :span="2">
         {{
           formatDuration(task.startTime!, task.endTime != null ? task.endTime : undefined)
         }}
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions
-      v-if="showStatsSection"
-      :title="t('tasks.taskRunParamsSectionStats')"
-      :column="2"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item
-        v-if="(task.deletedCount ?? 0) > 0"
-        :label="t('tasks.taskRunParamsColDeleted')"
-      >
+    <el-descriptions v-if="showStatsSection" :title="t('tasks.taskRunParamsSectionStats')" :column="2" border
+      size="small" class="params-desc-block">
+      <el-descriptions-item v-if="(task.deletedCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDeleted')">
         {{ t("tasks.drawerDeletedCount", { n: task.deletedCount ?? 0 }) }}
       </el-descriptions-item>
-      <el-descriptions-item
-        v-if="(task.dedupCount ?? 0) > 0"
-        :label="t('tasks.taskRunParamsColDedup')"
-      >
+      <el-descriptions-item v-if="(task.dedupCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDedup')">
         {{ t("tasks.drawerDedupCount", { n: task.dedupCount ?? 0 }) }}
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions
-      v-if="task.outputDir"
-      :title="t('tasks.taskRunParamsSectionOutput')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block"
-    >
+    <el-descriptions v-if="task.outputDir" :title="t('tasks.taskRunParamsSectionOutput')" :column="1" border
+      size="small" class="params-desc-block">
       <el-descriptions-item :label="t('tasks.taskRunParamsColOutputDir')" :span="2">
         <span class="break-all">{{ task.outputDir }}</span>
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions
-      v-if="visibleConfigEntries.length > 0"
-      :title="t('tasks.taskRunParamsSectionConfig')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block"
-    >
-      <el-descriptions-item
-        v-for="[key, value] in visibleConfigEntries"
-        :key="key"
-        :label="getVarDisplayName(task.pluginId, String(key))"
-        :span="2"
-      >
+    <el-descriptions v-if="visibleConfigEntries.length > 0" :title="t('tasks.taskRunParamsSectionConfig')" :column="1"
+      border size="small" class="params-desc-block">
+      <el-descriptions-item v-for="[key, value] in visibleConfigEntries" :key="key"
+        :label="getVarDisplayName(task.pluginId, String(key))" :span="2">
         <span class="break-all">{{ formatConfigValue(task.pluginId, String(key), value) }}</span>
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions
-      v-if="task.status === 'failed'"
-      :title="t('tasks.taskRunParamsSectionError')"
-      :column="1"
-      border
-      size="small"
-      class="params-desc-block params-desc-block--error"
-    >
+    <el-descriptions v-if="task.status === 'failed'" :title="t('tasks.taskRunParamsSectionError')" :column="1" border
+      size="small" class="params-desc-block params-desc-block--error">
       <el-descriptions-item :label="t('tasks.taskRunParamsColErrorDetail')" :span="2">
         <div class="error-detail-cell">
           <div v-if="(task.progress ?? 0) > 0" class="error-progress">
-            <el-progress
-              :percentage="Math.round(Number(task.progress ?? 0))"
-              status="exception"
-            />
+            <el-progress :percentage="Math.round(Number(task.progress ?? 0))" status="exception" />
           </div>
           <div class="error-message-row">
-            <el-icon class="error-icon"><WarningFilled /></el-icon>
+            <el-icon class="error-icon">
+              <WarningFilled />
+            </el-icon>
             <span class="error-text">{{ task.error || t("tasks.drawerExecFailed") }}</span>
-            <el-button
-              text
-              size="small"
-              class="copy-error-btn"
-              :title="t('tasks.drawerCopyErrorTooltip')"
-              @click="handleCopyError(task)"
-            >
-              <el-icon><CopyDocument /></el-icon>
+            <el-button text size="small" class="copy-error-btn" :title="t('tasks.drawerCopyErrorTooltip')"
+              @click="handleCopyError(task)">
+              <el-icon>
+                <CopyDocument />
+              </el-icon>
             </el-button>
           </div>
         </div>
@@ -187,7 +137,7 @@ const pluginIconDisplayUrl = computed(() => {
   const id = props.task.pluginId;
   if (!id) return null;
   if (id === LOCAL_IMPORT_PLUGIN_ID) return kbAppPublicIcon;
-  return pluginStore.pluginIconUrl(id) ?? null;
+  return pluginStore.pluginIconDataUrl(id) ?? null;
 });
 
 const varMetaByPluginId = computed(() => {

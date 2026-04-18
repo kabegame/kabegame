@@ -119,32 +119,8 @@ fn remove_thumbnail_file_if_needed(local_path: Option<&str>, thumbnail_path: Opt
 #[cfg(target_os = "android")]
 fn remove_thumbnail_file_if_needed(_local_path: Option<&str>, _thumbnail_path: Option<&str>) {}
 
-/// 启动时回填 `size`：桌面用 `metadata`；Android 的 `content://` 走 [`crate::crawler::content_io::ContentIoProvider::get_content_size`]。
-#[cfg(target_os = "android")]
-async fn resolve_file_size_for_backfill(local_path: &str) -> Option<u64> {
-    if local_path.starts_with("content://") {
-        match crate::crawler::content_io::get_content_io_provider()
-            .get_content_size(local_path)
-            .await
-        {
-            Ok(s) => Some(s),
-            Err(e) => {
-                eprintln!(
-                    "resolve_file_size_for_backfill content:// failed: {} ({})",
-                    e, local_path
-                );
-                None
-            }
-        }
-    } else {
-        fs::metadata(local_path).ok().map(|m| m.len())
-    }
-}
-
-#[cfg(not(target_os = "android"))]
-async fn resolve_file_size_for_backfill(local_path: &str) -> Option<u64> {
-    resolve_file_size(local_path)
-}
+// v4.0 删除说明：resolve_file_size_for_backfill（含 Android / 桌面两个 cfg 版本）
+// 仅被 fill_missing_sizes 使用，随之一并删除。
 
 fn normalize_media_type(media_type: Option<String>) -> Option<String> {
     crate::image_type::normalize_stored_media_type(media_type)
@@ -194,86 +170,11 @@ pub(crate) fn insert_or_get_image_metadata_id(
     .map_err(|e| format!("select image_metadata id: {}", e))
 }
 
-/// pixiv 插件：`metadata.body` 仅保留 `description.ejs` 所需字段（与 `crawl.rhai` 的 `pixiv_trim_illust_body` 白名单一致）。
-const PIXIV_METADATA_BODY_KEYS: &[&str] = &[
-    "illustId",
-    "id",
-    "title",
-    "illustTitle",
-    "description",
-    "illustComment",
-    "userId",
-    "userName",
-    "uploadDate",
-    "createDate",
-    "bookmarkCount",
-    "likeCount",
-    "viewCount",
-    "tags",
-];
-
-fn trim_pixiv_metadata_body(body: &Value) -> Value {
-    let Some(obj) = body.as_object() else {
-        return body.clone();
-    };
-    let mut out = serde_json::Map::new();
-    for k in PIXIV_METADATA_BODY_KEYS {
-        if let Some(v) = obj.get(*k) {
-            out.insert((*k).to_string(), v.clone());
-        }
-    }
-    Value::Object(out)
-}
-
-/// 若 `metadata` 含可裁剪的 `body`，返回裁剪后的 JSON；否则 `None`。
-pub(crate) fn trim_pixiv_plugin_metadata_if_needed(value: &Value) -> Option<Value> {
-    let obj = value.as_object()?;
-    let body = obj.get("body")?;
-    if !body.is_object() {
-        return None;
-    }
-    let trimmed = trim_pixiv_metadata_body(body);
-    if trimmed == *body {
-        return None;
-    }
-    let mut root = value.clone();
-    let obj = root.as_object_mut()?;
-    obj.insert("body".to_string(), trimmed);
-    Some(root)
-}
-
-/// 一次性迁移：裁剪已有 pixiv 图片的 `metadata.body`，减轻列表查询读库/IPC 体积。
-pub(crate) fn migrate_pixiv_metadata_trim(conn: &rusqlite::Connection) -> Result<(), String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, metadata FROM images WHERE plugin_id = 'pixiv' AND metadata IS NOT NULL AND TRIM(metadata) != ''",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut update_stmt = conn
-        .prepare("UPDATE images SET metadata = ?1 WHERE id = ?2")
-        .map_err(|e| e.to_string())?;
-
-    for r in rows {
-        let (id, meta_str) = r.map_err(|e| e.to_string())?;
-        let Ok(v) = serde_json::from_str::<Value>(&meta_str) else {
-            continue;
-        };
-        let Some(trimmed) = trim_pixiv_plugin_metadata_if_needed(&v) else {
-            continue;
-        };
-        let new_str = serde_json::to_string(&trimmed).map_err(|e| e.to_string())?;
-        update_stmt
-            .execute(params![new_str, id])
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
+// v4.0 删除说明：以下内容已随 perform_complex_migrations 的移除一并删除。
+//   - PIXIV_METADATA_BODY_KEYS、trim_pixiv_metadata_body、
+//     trim_pixiv_plugin_metadata_if_needed、migrate_pixiv_metadata_trim
+// 这些函数用于一次性裁剪旧版 pixiv 图片的 metadata.body 字段，
+// 仅针对早于 3.5.x 的历史数据库，v4.0 不再支持从那些版本直接升级。
 
 pub(crate) fn row_optional_u64_ts(
     row: &rusqlite::Row,
@@ -367,74 +268,6 @@ impl Storage {
     pub fn get_all_images(&self) -> Result<Vec<ImageInfo>, String> {
         let result = self.get_images_paginated(0, 10000)?;
         Ok(result.images)
-    }
-
-    /// 按 ImageQuery 获取 Provider 新 API 所需的精简图片字段（Phase 1）。
-    pub fn get_image_entries_by_query(
-        &self,
-        query: &crate::storage::gallery::ImageQuery,
-        offset: usize,
-        count: usize,
-    ) -> Result<Vec<crate::providers::provider::ImageEntry>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let (decorator, built_params) = query.build_sql();
-
-        // 参数顺序：decorator params -> count -> offset
-        let mut params: Vec<Box<dyn ToSql>> = built_params
-            .iter()
-            .map(|p| Box::new(p.clone()) as Box<dyn ToSql>)
-            .collect();
-        params.push(Box::new(count as i64));
-        params.push(Box::new(offset as i64));
-        let params_ref: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
-
-        let sql = format!(
-            "SELECT
-                CAST(images.id AS TEXT) as id,
-                images.url,
-                images.local_path,
-                images.plugin_id,
-                images.crawled_at,
-                images.hash,
-                images.width,
-                images.height,
-                images.display_name,
-                COALESCE(images.type, 'image') as media_type
-             FROM images{} LIMIT ? OFFSET ?",
-            decorator
-        );
-
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| format!("Failed to prepare query: {} (SQL: {})", e, sql))?;
-
-        let rows = stmt
-            .query_map(params_from_iter(params_ref.iter().copied()), |row| {
-                let crawled_at_raw: i64 = row.get(4)?;
-                Ok(crate::providers::provider::ImageEntry {
-                    id: row.get(0)?,
-                    url: row.get::<_, Option<String>>(1)?,
-                    local_path: row.get(2)?,
-                    plugin_id: row.get(3)?,
-                    crawled_at: if crawled_at_raw >= 0 {
-                        crawled_at_raw as u64
-                    } else {
-                        0
-                    },
-                    hash: row.get(5)?,
-                    width: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(7)?.map(|v| v as u32),
-                    display_name: row.get(8)?,
-                    media_type: normalize_media_type(row.get::<_, Option<String>>(9)?),
-                })
-            })
-            .map_err(|e| format!("Failed to query image entries: {}", e))?;
-
-        let mut out = Vec::new();
-        for row_result in rows {
-            out.push(row_result.map_err(|e| format!("Failed to read row: {}", e))?);
-        }
-        Ok(out)
     }
 
     pub fn find_image_by_id(&self, image_id: &str) -> Result<Option<ImageInfo>, String> {
@@ -950,114 +783,9 @@ impl Storage {
         Ok(image)
     }
 
-    /// 批量补齐缺失的图片宽高数据（启动时调用）。
-    /// 仅处理非视频类 `type`（`video` 或 `video/*` 跳过；空/`image`/`image/*` 等参与补全）。
-    /// 先收集 (id, path) 后释放锁，再在无锁状态下解析尺寸并逐条更新，避免 resolve_image_dimensions 内 panic 毒化 db 锁。
-    pub fn fill_missing_dimensions(&self) -> Result<(), String> {
-        let to_fill: Vec<(i64, String)> = {
-            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id, local_path FROM images \
-                     WHERE (width IS NULL OR height IS NULL) \
-                       AND NOT ( \
-                         LOWER(COALESCE(type, '')) = 'video' \
-                         OR LOWER(COALESCE(type, '')) LIKE 'video/%' \
-                       )",
-                )
-                .map_err(|e| format!("Failed to prepare query: {}", e))?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(|e| format!("Failed to query images: {}", e))?;
-            rows.filter_map(Result::ok).collect()
-        };
-
-        let mut updated_count = 0;
-        let mut failed_count = 0;
-
-        for (id, local_path) in to_fill {
-            if let Some((w, h)) = resolve_image_dimensions(&local_path) {
-                let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-                match conn.execute(
-                    "UPDATE images SET width = ?1, height = ?2 WHERE id = ?3",
-                    params![w as i64, h as i64, id],
-                ) {
-                    Ok(_) => updated_count += 1,
-                    Err(e) => {
-                        eprintln!("Failed to update dimensions for image {}: {}", id, e);
-                        failed_count += 1;
-                    }
-                }
-            } else {
-                eprintln!(
-                    "Failed to resolve dimensions for image {}: {}",
-                    id, local_path
-                );
-                failed_count += 1;
-            }
-        }
-
-        if updated_count > 0 {
-            println!(
-                "Filled dimensions for {} images ({} failed)",
-                updated_count, failed_count
-            );
-        }
-
-        Ok(())
-    }
-
-    /// 批量补齐缺失的 `images.size`（启动时调用）。先收集 `(id, local_path)` 再逐条解析，避免长时间持锁。
-    pub async fn fill_missing_sizes(&self) -> Result<(), String> {
-        let to_fill: Vec<(i64, String)> = {
-            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-            let mut stmt = conn
-                .prepare("SELECT id, local_path FROM images WHERE size IS NULL")
-                .map_err(|e| format!("Failed to prepare query: {}", e))?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(|e| format!("Failed to query images for size backfill: {}", e))?;
-            rows.filter_map(Result::ok).collect()
-        };
-
-        let mut updated_count = 0usize;
-        let mut failed_count = 0usize;
-
-        for (id, local_path) in to_fill {
-            if local_path.trim().is_empty() {
-                failed_count += 1;
-                continue;
-            }
-            if let Some(s) = resolve_file_size_for_backfill(&local_path).await {
-                let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-                match conn.execute(
-                    "UPDATE images SET size = ?1 WHERE id = ?2",
-                    params![s as i64, id],
-                ) {
-                    Ok(_) => updated_count += 1,
-                    Err(e) => {
-                        eprintln!("Failed to update size for image {}: {}", id, e);
-                        failed_count += 1;
-                    }
-                }
-            } else {
-                failed_count += 1;
-            }
-        }
-
-        if updated_count > 0 {
-            println!(
-                "Filled file size for {} images ({} unresolved/failed)",
-                updated_count, failed_count
-            );
-        }
-
-        Ok(())
-    }
+    // v4.0 删除说明：fill_missing_dimensions 和 fill_missing_sizes 均为启动时回填旧数据的
+    // 一次性迁移逻辑（width/height/size 列早期为 NULL），v4.0 新库建表即含这些列，
+    // 3.5.x 用户的存量数据已由之前版本补齐，不再需要启动时扫描回填。
 
     /// 删除前查询图片所属任务 id（用于事件广播）
     pub fn get_task_ids_for_image(&self, image_id: &str) -> Result<Vec<String>, String> {
@@ -1440,6 +1168,16 @@ impl Storage {
             params![ts as i64, image_id],
         )
         .map_err(|e| format!("Failed to update last_set_wallpaper_at: {}", e))?;
+        Ok(())
+    }
+
+    pub fn update_image_display_name(&self, image_id: &str, display_name: &str) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.execute(
+            "UPDATE images SET display_name = ?1 WHERE id = ?2",
+            params![display_name, image_id],
+        )
+        .map_err(|e| format!("Failed to update display_name: {}", e))?;
         Ok(())
     }
 

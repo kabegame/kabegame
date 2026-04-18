@@ -71,5 +71,10 @@
   "wallpaperSetSuccess": "桌布設定成功",
   "wallpaperSetFailed": "設定桌布失敗",
   "addToAlbumFailed": "新增圖片到畫冊失敗",
-  "exportFailed": "匯出失敗"
+  "exportFailed": "匯出失敗",
+  "batteryOptimizationTitle": "開啟背景執行權限",
+  "batteryOptimizationDesc": "允許背景執行可確保桌布輪播與下載工作在背景持續進行，不受系統省電最佳化影響。",
+  "batteryOptimizationConfirm": "立即開啟",
+  "batteryOptimizationCancel": "暫不開啟",
+  "batteryOptimizationTooltip": "背景執行受限，點一下開啟"
 }

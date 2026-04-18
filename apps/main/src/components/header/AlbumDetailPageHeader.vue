@@ -43,6 +43,8 @@ interface Props {
   albumDriveEnabled?: boolean;
   /** 是否显示画册内「过滤 / 排序」（安卓上放入 fold） */
   includeBrowseControls?: boolean;
+  /** 收藏画册：隐藏「新建子画册」按钮 */
+  isFavoriteAlbum?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -52,6 +54,7 @@ const props = withDefaults(defineProps<Props>(), {
   editingName: "",
   albumDriveEnabled: false,
   includeBrowseControls: false,
+  isFavoriteAlbum: false,
 });
 
 const emit = defineEmits<{
@@ -82,18 +85,21 @@ const subtitle = computed(() =>
 const withVd = (ids: string[]) =>
   props.albumDriveEnabled ? ids : ids.filter((id) => id !== HeaderFeatureId.OpenVirtualDrive);
 
+const withoutCreateAlbum = (ids: string[]) =>
+  props.isFavoriteAlbum ? ids.filter((id) => id !== HeaderFeatureId.CreateAlbum) : ids;
+
 // 计算显示和折叠的feature ID
 const showIds = computed(() => {
   if (IS_ANDROID) {
     return [HeaderFeatureId.TaskDrawer];
   } else {
-    return withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings]);
+    return withoutCreateAlbum(withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings]));
   }
 });
 
 const foldIds = computed(() => {
   if (IS_ANDROID) {
-    const base = withVd([
+    const base = withoutCreateAlbum(withVd([
       HeaderFeatureId.OpenVirtualDrive,
       HeaderFeatureId.Refresh,
       HeaderFeatureId.CreateAlbum,
@@ -101,7 +107,7 @@ const foldIds = computed(() => {
       HeaderFeatureId.DeleteAlbum,
       HeaderFeatureId.Help,
       HeaderFeatureId.QuickSettings,
-    ]);
+    ]));
     if (props.includeBrowseControls) {
       return [
         HeaderFeatureId.AlbumBrowseFilter,
