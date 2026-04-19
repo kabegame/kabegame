@@ -61,6 +61,7 @@ vd:
   imageOnly: 僅圖片
   videoOnly: 僅影片
   localImport: 本地匯入
+  hiddenAlbum: 隱藏畫冊
 
 surf:
   windowTitle: "暢遊 - {host}"

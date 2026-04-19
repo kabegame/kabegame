@@ -1,5 +1,5 @@
 use crate::emitter::GlobalEmitter;
-use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID};
+use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -872,7 +872,8 @@ impl Storage {
                 "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata_id,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
-                 CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+                 CASE WHEN ai_fav.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+                 CASE WHEN ai_hid.image_id IS NOT NULL THEN 1 ELSE 0 END as is_hidden,
                  i.width,
                  i.height,
                  i.display_name,
@@ -880,14 +881,15 @@ impl Storage {
                  i.last_set_wallpaper_at,
                  i.size
                  FROM images i
-                 LEFT JOIN album_images ON i.id = album_images.image_id AND album_images.album_id = ?2
+                 LEFT JOIN album_images ai_fav ON i.id = ai_fav.image_id AND ai_fav.album_id = ?2
+                 LEFT JOIN album_images ai_hid ON i.id = ai_hid.image_id AND ai_hid.album_id = ?3
                  WHERE i.task_id = ?1
                  ORDER BY i.crawled_at ASC",
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let image_rows = stmt
-            .query_map(params![task_id, FAVORITE_ALBUM_ID], |row| {
+            .query_map(params![task_id, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID], |row| {
                 Ok(ImageInfo {
                     id: row.get(0)?,
                     url: row.get::<_, Option<String>>(1)?,
@@ -901,15 +903,16 @@ impl Storage {
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
                     favorite: row.get::<_, i64>(9)? != 0,
+                    is_hidden: row.get::<_, i64>(10)? != 0,
                     local_exists: true,
-                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    display_name: row.get(12)?,
+                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                    display_name: row.get(13)?,
                     media_type: crate::image_type::normalize_stored_media_type(
-                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, Option<String>>(14)?,
                     ),
-                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
-                    size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
+                    size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
                 })
             })
             .map_err(|e| format!("Failed to query task images: {}", e))?;
@@ -933,7 +936,8 @@ impl Storage {
                 "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata_id,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
-                 CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+                 CASE WHEN ai_fav.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+                 CASE WHEN ai_hid.image_id IS NOT NULL THEN 1 ELSE 0 END as is_hidden,
                  i.width,
                  i.height,
                  i.display_name,
@@ -941,16 +945,17 @@ impl Storage {
                  i.last_set_wallpaper_at,
                  i.size
                  FROM images i
-                 LEFT JOIN album_images ON i.id = album_images.image_id AND album_images.album_id = ?2
+                 LEFT JOIN album_images ai_fav ON i.id = ai_fav.image_id AND ai_fav.album_id = ?2
+                 LEFT JOIN album_images ai_hid ON i.id = ai_hid.image_id AND ai_hid.album_id = ?3
                  WHERE i.task_id = ?1
                  ORDER BY i.crawled_at ASC
-                 LIMIT ?3 OFFSET ?4",
+                 LIMIT ?4 OFFSET ?5",
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let image_rows = stmt
             .query_map(
-                params![task_id, FAVORITE_ALBUM_ID, limit as i64, offset as i64],
+                params![task_id, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID, limit as i64, offset as i64],
                 |row| {
                     Ok(ImageInfo {
                         id: row.get(0)?,
@@ -965,17 +970,18 @@ impl Storage {
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
                         favorite: row.get::<_, i64>(9)? != 0,
+                        is_hidden: row.get::<_, i64>(10)? != 0,
                         local_exists: true,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        display_name: row.get(12)?,
+                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                        display_name: row.get(13)?,
                         media_type: crate::image_type::normalize_stored_media_type(
-                            row.get::<_, Option<String>>(13)?,
+                            row.get::<_, Option<String>>(14)?,
                         ),
                         last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(
-                            row, 14,
+                            row, 15,
                         )?,
-                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                        size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
                     })
                 },
             )

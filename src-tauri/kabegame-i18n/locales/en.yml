@@ -61,6 +61,7 @@ vd:
   imageOnly: Images Only
   videoOnly: Videos Only
   localImport: Local Import
+  hiddenAlbum: Hidden Album
 
 surf:
   windowTitle: "Surf - {host}"

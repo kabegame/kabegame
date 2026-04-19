@@ -101,8 +101,15 @@ impl KabegameFuseFs {
     /// 将 VfsOpenedItem 转换为 FileAttr
     fn opened_to_attr(&self, item: &VfsOpenedItem, ino: u64) -> FileAttr {
         match item {
-            VfsOpenedItem::Directory { .. } => {
+            VfsOpenedItem::Directory { hidden, .. } => {
                 let now = SystemTime::now();
+                #[cfg(target_os = "macos")]
+                let flags: u32 = if *hidden { 0x8000 } else { 0 };
+                #[cfg(not(target_os = "macos"))]
+                let flags: u32 = {
+                    let _ = hidden;
+                    0
+                };
                 FileAttr {
                     ino,
                     size: 0,
@@ -117,11 +124,18 @@ impl KabegameFuseFs {
                     uid: unsafe { libc::getuid() },
                     gid: unsafe { libc::getgid() },
                     rdev: 0,
-                    flags: 0,
+                    flags,
                     blksize: 512,
                 }
             }
-            VfsOpenedItem::File { size, meta, .. } => {
+            VfsOpenedItem::File { size, meta, hidden, .. } => {
+                #[cfg(target_os = "macos")]
+                let flags: u32 = if *hidden { 0x8000 } else { 0 };
+                #[cfg(not(target_os = "macos"))]
+                let flags: u32 = {
+                    let _ = hidden;
+                    0
+                };
                 FileAttr {
                     ino,
                     size: *size,
@@ -136,7 +150,7 @@ impl KabegameFuseFs {
                     uid: unsafe { libc::getuid() },
                     gid: unsafe { libc::getgid() },
                     rdev: 0,
-                    flags: 0,
+                    flags,
                     blksize: 512,
                 }
             }
@@ -254,6 +268,13 @@ impl Filesystem for KabegameFuseFs {
 
         // 添加目录项
         for entry in &entries {
+            #[cfg(target_os = "linux")]
+            if matches!(
+                entry,
+                VfsEntry::Directory { hidden: true, .. } | VfsEntry::File { hidden: true, .. }
+            ) {
+                continue;
+            }
             let mut entry_path = path.clone();
             entry_path.push(entry.name().to_string());
             let entry_ino = self.get_or_alloc_inode(&entry_path);

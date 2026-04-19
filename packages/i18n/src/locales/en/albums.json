@@ -71,5 +71,7 @@
   "moveToRoot": "Move to root",
   "moveSuccess": "Album moved",
   "moveFailed": "Move failed",
-  "selectTargetAlbum": "Select target album"
+  "selectTargetAlbum": "Select target album",
+  "enterHidden": "Hidden album",
+  "hiddenAlbumName": "Hidden album"
 }

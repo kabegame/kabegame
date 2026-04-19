@@ -17,8 +17,9 @@ export class Mode {
   static readonly STANDARD = "standard";
   static readonly LIGHT = "light";
   static readonly ANDROID = "android";
+  static readonly WEB = "web";
 
-  static readonly modes = [this.STANDARD, this.LIGHT, this.ANDROID];
+  static readonly modes = [this.STANDARD, this.LIGHT, this.ANDROID, this.WEB];
 
   constructor(private readonly _mode: string) {}
 
@@ -36,6 +37,10 @@ export class Mode {
 
   get isAndroid(): boolean {
     return this.mode === Mode.ANDROID;
+  }
+
+  get isWeb(): boolean {
+    return this.mode === Mode.WEB;
   }
 }
 
@@ -59,11 +64,14 @@ export class ModePlugin extends BasePlugin {
         throw new Error(`未知的模式，允许的列表：${Mode.modes}`);
       }
       const modeObj = new Mode(mode);
-      if ((modeObj.isLight || modeObj.isAndroid) && !bs.context.component!.isMain) {
+      if ((modeObj.isLight || modeObj.isAndroid || modeObj.isWeb) && !bs.context.component!.isMain) {
         throw new Error(`${mode} mode 只支持main组件！`);
       }
       if (modeObj.isAndroid && !(bs.context.cmd!.isDev || bs.context.cmd!.isBuild)) {
         throw new Error("android mode 仅支持 dev 与 build 命令");
+      }
+      if (modeObj.isWeb && !(bs.context.cmd!.isDev || bs.context.cmd!.isBuild || bs.context.cmd!.isCheck)) {
+        throw new Error("web mode 仅支持 dev、build 与 check 命令");
       }
       bs.context.mode = modeObj;
       this.mode = modeObj;
@@ -73,7 +81,11 @@ export class ModePlugin extends BasePlugin {
     bs.hooks.prepareEnv.tap(this.name, () => {
       this.setEnv("KABEGAME_MODE", this.mode!.mode);
       this.setEnv("VITE_KABEGAME_MODE", this.mode!.mode);
-      this.addRustFlags(`--cfg kabegame_mode="${this.mode!.mode}"`);
+      // kabegame_mode cfg is only for local-internal subdivisions (standard/light/android).
+      // web/local split is done via Cargo features, not kabegame_mode.
+      if (!this.mode!.isWeb) {
+        this.addRustFlags(`--cfg kabegame_mode="${this.mode!.mode}"`);
+      }
 
       if (this.mode!.isAndroid) {
         this.setEnv("VITE_ANDROID", "true");
@@ -131,11 +143,18 @@ export class ModePlugin extends BasePlugin {
             ? nullOrCompOrFeatures.args
             : undefined;
 
-        // 只保留 self-hosted feature 的逻辑
+        // Inject Cargo feature flags based on mode.
+        // web mode: --no-default-features --features web (cuts out all tauri deps)
+        // local mode: default features already activate "local"; no extra flags needed
+        const finalArgs = args ? [...args] : [];
+        if (this.mode!.isWeb) {
+          finalArgs.push("--no-default-features", "--features", "web");
+        }
+
         return {
           comp,
           features,
-          ...(args && { args }),
+          ...(finalArgs.length > 0 && { args: finalArgs }),
         };
       },
     );
@@ -144,6 +163,10 @@ export class ModePlugin extends BasePlugin {
   // 准备资源文件（仅在需要时包含 dokan 相关文件）
   copyBin(bs: BuildSystem): void {
     if (!bs.context.cmd.isBuild) {
+      return;
+    }
+    // web mode outputs a plain binary — no Tauri bundle, no DLL resources needed
+    if (bs.context.mode!.isWeb) {
       return;
     }
 

@@ -291,6 +291,8 @@ import {
 import GalleryTimeFilterSubmenu from "@/header/comps/GalleryTimeFilterSubmenu.vue";
 import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
+import { useGalleryRouteStore } from "@/stores/galleryRoute";
+import { storeToRefs } from "pinia";
 
 interface Props {
   isLoadingAll?: boolean;
@@ -319,6 +321,8 @@ const props = withDefaults(defineProps<Props>(), {
 
 const router = useRouter();
 const failedImagesStore = useFailedImagesStore();
+const galleryRouteStore = useGalleryRouteStore();
+const { hide: galleryHide } = storeToRefs(galleryRouteStore);
 const failedCountFoldLabel = computed(() => {
   const n = failedImagesStore.allFailed.length;
   const suffix = n >= 99 ? "99+" : String(n);
@@ -707,13 +711,14 @@ const showIds = computed(() => {
 });
 
 const foldIds = computed(() => {
-  if (!IS_ANDROID) return [];
+  if (!IS_ANDROID) return [HeaderFeatureId.ToggleShowHidden];
   const ids: HeaderFeatureId[] = [HeaderFeatureId.FailedImages];
   if (showGalleryFilterFold.value) {
     ids.push(HeaderFeatureId.GalleryFilter);
   }
   ids.push(HeaderFeatureId.GallerySort);
   ids.push(HeaderFeatureId.GalleryPageSize);
+  ids.push(HeaderFeatureId.ToggleShowHidden);
   return ids;
 });
 
@@ -727,8 +732,13 @@ watch(
     showGalleryFilterFold,
     () => props.pageSize,
     () => failedImagesStore.allFailed.length,
+    galleryHide,
   ],
   () => {
+    headerStore.setFoldLabel(
+      HeaderFeatureId.ToggleShowHidden,
+      galleryHide.value ? t("header.showHidden") : t("header.hideHidden")
+    );
     if (!IS_ANDROID) return;
     headerStore.setFoldLabel(HeaderFeatureId.FailedImages, failedCountFoldLabel.value);
     if (showGalleryFilterFold.value) {
@@ -745,6 +755,7 @@ watch(
   { immediate: true }
 );
 onUnmounted(() => {
+  headerStore.setFoldLabel(HeaderFeatureId.ToggleShowHidden, undefined);
   if (!IS_ANDROID) return;
   headerStore.setFoldLabel(HeaderFeatureId.FailedImages, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, undefined);
@@ -790,6 +801,9 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
       break;
     case HeaderFeatureId.FailedImages:
       void router.push({ path: "/failed-images" });
+      break;
+    case HeaderFeatureId.ToggleShowHidden:
+      galleryRouteStore.hide = !galleryRouteStore.hide;
       break;
   }
 };

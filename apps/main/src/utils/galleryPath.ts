@@ -6,6 +6,7 @@
 export const GALLERY_STORAGE_KEY_ROOT = "kabegame-gallery-browse-root";
 export const GALLERY_STORAGE_KEY_SORT = "kabegame-gallery-sort";
 export const GALLERY_STORAGE_KEY_PAGE = "kabegame-gallery-page";
+export const GALLERY_STORAGE_KEY_HIDE = "kabegame-gallery-hide";
 
 export type GalleryTimeSort = "asc" | "desc";
 

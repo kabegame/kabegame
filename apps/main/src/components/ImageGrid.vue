@@ -45,13 +45,13 @@ import type {
 import type { ActionItem } from "@kabegame/core/actions/types";
 
 // 扩展 ContextCommand 类型，添加 app-main 特有的命令
-export type ContextCommand = CoreContextCommand | "favorite" | "addToAlbum" | "share";
+export type ContextCommand = CoreContextCommand | "favorite" | "addToAlbum" | "addToHidden" | "share";
 type ImageInfo = CoreImageInfo;
 
 // 扩展 ContextCommandPayload 类型
 // 对于扩展命令，payload 结构与 core 一致，只是 command 字段不同
 export type ContextCommandPayload<T extends ContextCommand = ContextCommand> =
-  T extends "favorite" | "addToAlbum" | "share"
+  T extends "favorite" | "addToAlbum" | "addToHidden" | "share"
   ? Omit<CoreContextCommandPayload, "command"> & { command: T }
   : CoreContextCommandPayload;
 

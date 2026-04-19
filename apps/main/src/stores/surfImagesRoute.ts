@@ -23,5 +23,6 @@ export const useSurfImagesRouteStore = createPathRouteStore<SurfImagesRouteState
     },
     build: (state) => `surf/${state.host}/${Math.max(1, state.page)}`,
     defaultState,
+    routeName: "SurfImages",
   }
 );

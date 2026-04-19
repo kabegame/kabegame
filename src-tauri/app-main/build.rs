@@ -1,4 +1,7 @@
 fn main() {
+    // tauri_build only needed for local (Tauri native) builds.
+    // #[cfg] is a compile-time gate so tauri_build doesn't need to be linked in web mode.
+    #[cfg(feature = "local")]
     tauri_build::build();
 
     // Rust check-cfg: declare custom cfg keys used in this crate.

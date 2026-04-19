@@ -93,7 +93,6 @@ import { useI18n } from "@kabegame/i18n";
 import { Document, FolderOpened } from "@element-plus/icons-vue";
 import { ElDialog, ElMessage } from "element-plus";
 import { open } from "@tauri-apps/plugin-dialog";
-import { stat } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useImageTypes } from "@/composables/useImageTypes";
@@ -176,6 +175,7 @@ async function handleAddFiles() {
   }
 }
 
+// TODO: web实现本地导入和服务器不同
 async function handleAddFolder() {
   try {
     const selected = await open({
@@ -187,15 +187,6 @@ async function handleAddFolder() {
 
     const pathStr = typeof selected === "string" ? selected : selected?.[0];
     if (pathStr && !paths.value.includes(pathStr)) {
-      try {
-        const meta = await stat(pathStr);
-        if (!meta.isDirectory) {
-          ElMessage.warning(t('albums.pleaseSelectFolder'));
-          return;
-        }
-      } catch {
-        // continue
-      }
       paths.value.push(pathStr);
     }
   } catch (e) {

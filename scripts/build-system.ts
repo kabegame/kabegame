@@ -177,13 +177,21 @@ export class BuildSystem {
     this.commonUse(Cmd.DEV);
     this.commonBefore();
     this.hooks.beforeBuild.call();
-    const { features } = this.hooks.prepareCompileArgs.call();
+    const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call();
     const cwd = this.context.component!.appDir;
     if (this.context.mode!.isAndroid) {
       const args = ["android", "dev"]
         .concat(features.length ? ["-f", features.join(",")] : [])
         .concat(this.options.args?.length ? ["--", ...(this.options.args ?? [])] : []);
       run("tauri", args, { cwd, bin: "cargo" });
+    } else if (this.context.mode!.isWeb) {
+      const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
+      const args = this.buildCargoArgs(
+        ["run", "-p", "kabegame"],
+        features,
+        mergedArgs.length > 0 ? mergedArgs : undefined,
+      );
+      run("cargo", args, { cwd: SRC_TAURI_DIR });
     } else {
       const baseArgs = ["dev"];
       const args = this.buildCargoArgs(baseArgs, features);
@@ -264,6 +272,14 @@ export class BuildSystem {
             .concat(features.length ? ["-f", features.join(",")] : [])
             .concat(mergedArgs);
           run("tauri", args, { cwd, bin: "cargo" });
+        } else if (this.context.mode!.isWeb) {
+          const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
+          const args = this.buildCargoArgs(
+            ["build", "--release", "-p", "kabegame"],
+            features,
+            mergedArgs.length > 0 ? mergedArgs : undefined,
+          );
+          run("cargo", args, { cwd: SRC_TAURI_DIR });
         } else {
           const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
           const args = this.buildCargoArgs(["build"], features, mergedArgs.length > 0 ? mergedArgs : undefined);
@@ -289,8 +305,16 @@ export class BuildSystem {
     }
 
     if (!this.context.skip?.isCargo) {
-      this.hooks.prepareCompileArgs.call(this.context.component!.comp);
-      run("cargo", ["check", "-p", this.context.component!.cargoComp]);
+      const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(
+        this.context.component!.comp,
+      );
+      const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
+      const checkArgs = this.buildCargoArgs(
+        ["check", "-p", this.context.component!.cargoComp],
+        features,
+        mergedArgs.length > 0 ? mergedArgs : undefined,
+      );
+      run("cargo", checkArgs);
     }
   }
 }

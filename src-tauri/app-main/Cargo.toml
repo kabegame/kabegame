@@ -17,20 +17,19 @@ memmap2 = {version = "0.9", optional = true}
 serde = {workspace = true}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
-tauri = { version = "2.10", features = [ "tray-icon", "devtools", "protocol-asset", "image-png"] }
-tauri-plugin-clipboard-manager = "2"
-tauri-plugin-dialog = "=2.4.2"
-tauri-plugin-fs = "=2.4.4"
-tauri-plugin-global-shortcut = "2.3.1"
-tauri-plugin-pathes = { workspace = true }
 kabegame-i18n = { workspace = true }
-tauri-plugin-shell = "=2.3.3"
-tauri-plugin-opener = "2"
 dirs = "5.0"
 tokio = {workspace = true}
 url = "2"
 uuid = {workspace = true}
-tauri-plugin-android-battery-optimization = "0.1.4"
+
+# local feature (Tauri native app — desktop + Android)
+tauri = { version = "2.10", features = ["tray-icon", "devtools", "protocol-asset", "image-png"], optional = true }
+tauri-plugin-clipboard-manager = { version = "2", optional = true }
+tauri-plugin-dialog = { version = "=2.4.2", optional = true }
+tauri-plugin-global-shortcut = { version = "2.3.1", optional = true }
+tauri-plugin-pathes = { workspace = true, optional = true }
+tauri-plugin-opener = { version = "2", optional = true }
 
 # 桌面端启用 IPC 功能，移动端禁用
 [target.'cfg(not(target_os = "android"))'.dependencies]
@@ -45,12 +44,13 @@ tower-http = { version = "0.6", features = ["fs", "cors"] }
 [target.'cfg(target_os = "android")'.dependencies]
 kabegame-core = {workspace = true, default-features = false, features = ["ipc-server"] }
 reqwest = { version = "0.11", features = ["stream", "rustls-tls"] }
-tauri-plugin-picker = { workspace = true }
-tauri-plugin-archiver = { workspace = true }
-tauri-plugin-share = { workspace = true }
-tauri-plugin-compress = { workspace = true }
-tauri-plugin-wallpaper = { workspace = true }
-tauri-plugin-task-notification = { workspace = true }
+tauri-plugin-picker = { workspace = true, optional = true }
+tauri-plugin-archiver = { workspace = true, optional = true }
+tauri-plugin-share = { workspace = true, optional = true }
+tauri-plugin-compress = { workspace = true, optional = true }
+tauri-plugin-wallpaper = { workspace = true, optional = true }
+tauri-plugin-task-notification = { workspace = true, optional = true }
+tauri-plugin-android-battery-optimization = { version = "0.1.4", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 include_dir = "0.7"
@@ -94,11 +94,30 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 objc2 = { version = "0.6", default-features = false }
 
 [build-dependencies]
-tauri-build = {workspace = true}
+tauri-build = {workspace = true, optional = true}
 
 [features]
-custom-protocol = ["tauri/custom-protocol"]
-default = ["custom-protocol"]
+default = ["local"]
+local = [
+    "dep:tauri",
+    "dep:tauri-plugin-clipboard-manager",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-global-shortcut",
+    "dep:tauri-plugin-pathes",
+    "dep:tauri-plugin-opener",
+    "dep:tauri-plugin-android-battery-optimization",
+    "dep:tauri-plugin-picker",
+    "dep:tauri-plugin-archiver",
+    "dep:tauri-plugin-share",
+    "dep:tauri-plugin-compress",
+    "dep:tauri-plugin-wallpaper",
+    "dep:tauri-plugin-task-notification",
+    "dep:tauri-build",
+]
+web = []
+# Activated by `tauri build` in production — serves embedded assets via tauri.localhost.
+# Must NOT be pulled in by `local`, or dev mode would bypass devUrl (Vite).
+custom-protocol = ["tauri?/custom-protocol"]
 
 [[bin]]
 name = "kabegame"

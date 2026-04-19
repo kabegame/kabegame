@@ -26,6 +26,7 @@
         <AlbumDetailPageHeader :album-name="albumName" :total-images-count="totalImagesCount" :is-renaming="isRenaming"
           v-model:editing-name="editingName" :album-drive-enabled="albumDriveEnabled"
           :is-favorite-album="albumId === FAVORITE_ALBUM_ID"
+          :is-hidden-album="albumId === HIDDEN_ALBUM_ID"
           include-browse-controls
           @view-vd="openVirtualDriveAlbumFolder" @refresh="handleRefresh"
           @set-wallpaper-rotate="handleSetAsWallpaperCarousel" @delete-album="handleDeleteAlbum" @help="openHelpDrawer"
@@ -52,7 +53,7 @@
               </router-link>
             </el-breadcrumb-item>
             <el-breadcrumb-item>
-              <span class="album-breadcrumb-current">{{ albumName || "…" }}</span>
+              <span class="album-breadcrumb-current">{{ albumId === HIDDEN_ALBUM_ID ? t("albums.hiddenAlbumName") : (albumName || "…") }}</span>
             </el-breadcrumb-item>
           </el-breadcrumb>
         </nav>
@@ -165,7 +166,7 @@ import { createImageActions } from "@/actions/imageActions";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
 import ImageGrid from "@/components/ImageGrid.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
-import { useAlbumStore } from "@/stores/albums";
+import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import type { Album } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
@@ -310,7 +311,7 @@ const childAlbumMenuContext = computed<AlbumActionContext>(() => {
 const moveAlbumTree = computed(() => {
   const a = moveDlgAlbum.value;
   if (!a) return [];
-  const exclude = [a.id, ...albumStore.getDescendantIds(a.id), FAVORITE_ALBUM_ID.value];
+  const exclude = [a.id, ...albumStore.getDescendantIds(a.id), FAVORITE_ALBUM_ID.value, HIDDEN_ALBUM_ID];
   return albumStore.getAlbumTreeExcluding(exclude);
 });
 
@@ -581,7 +582,11 @@ useImageGridAutoLoad({
 });
 
 // Image actions for context menu / action sheet
-const imageActions = computed(() => createImageActions({ removeText: t("gallery.removeFromAlbum") }));
+const imageActions = computed(() =>
+  createImageActions({
+    removeText: t("gallery.removeFromAlbum"),
+  }),
+);
 
 watch(
   () => albumViewRef.value,
@@ -670,9 +675,10 @@ const loadAlbum = async (opts?: { reset?: boolean; silent?: boolean }) => {
       await nextTick();
     }
 
-    // 直接加载当前路径（新路径格式总是包含页码）
+    // 直接加载当前路径（新路径格式总是包含页码；可能带 `hide/` 前缀）
     const rawPath = currentPath.value || localProviderRootPath.value || `album/${albumId.value}/1`;
-    if (!rawPath.startsWith("album/") || rawPath.startsWith("album//")) {
+    const inner = rawPath.startsWith("hide/") ? rawPath.slice("hide/".length) : rawPath;
+    if (!inner.startsWith("album/") || inner.startsWith("album//")) {
       return;
     }
     const pathToLoad = rawPath.endsWith("/") ? rawPath : `${rawPath}/`;
@@ -981,6 +987,29 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       const ids = imagesToProcess.map((img) => img.id);
       addToAlbumImageIds.value = ids;
       showAddToAlbumDialog.value = true;
+      break;
+    }
+    case "addToHidden": {
+      const ids = imagesToProcess.map((img) => img.id);
+      if (ids.length === 0) break;
+      const isUnhide = !!image?.isHidden || albumId.value === HIDDEN_ALBUM_ID;
+      try {
+        if (isUnhide) {
+          await albumStore.removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids);
+          ElMessage.success(t("contextMenu.unhideSuccess"));
+        } else {
+          await albumStore.addImagesToAlbum(HIDDEN_ALBUM_ID, ids);
+          ElMessage.success(
+            ids.length > 1
+              ? t("contextMenu.hiddenCount", { count: ids.length })
+              : t("contextMenu.hiddenOne"),
+          );
+        }
+        clearSelection();
+      } catch (e) {
+        console.error(isUnhide ? "取消隐藏失败:" : "隐藏失败:", e);
+        ElMessage.error(t(isUnhide ? "contextMenu.unhideFailed" : "contextMenu.hideFailed"));
+      }
       break;
     }
     case "remove":
@@ -1312,10 +1341,15 @@ useImagesChangeRefresh({
 });
 
 // album_images 表变更：与上同策略节流
+// HIDDEN 命中时也刷新——HideGate 会改变其它画册详情的可见性
 useAlbumImagesChangeRefresh({
   enabled: ref(true),
   waitMs: 1000,
-  filter: (p) => !!albumId.value && (p.albumIds ?? []).includes(albumId.value),
+  filter: (p) => {
+    if (!albumId.value) return false;
+    const ids = p.albumIds ?? [];
+    return ids.includes(albumId.value) || ids.includes(HIDDEN_ALBUM_ID);
+  },
   onRefresh: refreshAlbumDetailPageFromEvents,
 });
 

@@ -102,6 +102,7 @@ fn vd_flat_key_for_canonical(canonical: &str) -> Option<&'static str> {
         "video-only" => Some("vd.videoOnly"),
         "tree" | "subAlbums" => Some("vd.subAlbums"),
         "local-import" => Some("vd.localImport"),
+        "hidden-album" => Some("vd.hiddenAlbum"),
         _ => None,
     }
 }
@@ -113,6 +114,12 @@ pub fn translate_vd_canonical(locale: &str, canonical: &str) -> String {
     };
     let lang = resolve_supported_language(locale).unwrap_or(DEFAULT_LANGUAGE);
     rust_i18n::t!(key, locale = lang).to_string()
+}
+
+/// 当前全局 locale 下 canonical key 的 VD 目录显示名（最常用形式）。
+#[inline]
+pub fn vd_display_name(canonical: &str) -> String {
+    translate_vd_canonical(current_vd_locale(), canonical)
 }
 
 #[macro_export]

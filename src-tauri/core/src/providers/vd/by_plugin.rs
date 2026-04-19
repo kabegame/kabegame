@@ -8,16 +8,13 @@ use crate::plugin::PluginManager;
 use crate::providers::provider::{ChildEntry, Provider, ProviderMeta};
 use crate::providers::shared::plugin::PluginProvider;
 use crate::providers::vd::{
-    locale::VdLocaleConfig,
     notes::vd_by_plugin_note,
     plugin_names::{resolve_plugin_id_from_dir_name, vd_plugin_dir_name},
 };
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
-pub struct VdByPluginProvider {
-    pub cfg: VdLocaleConfig,
-}
+pub struct VdByPluginProvider;
 
 impl Provider for VdByPluginProvider {
     fn list_children(&self, _composed: &ImageQuery) -> Result<Vec<ChildEntry>, String> {

@@ -6,12 +6,11 @@
 use std::sync::Arc;
 
 use crate::providers::provider::{ChildEntry, Provider, ProviderMeta};
-use crate::providers::vd::{albums::VdAlbumEntryProvider, locale::VdLocaleConfig};
+use crate::providers::vd::albums::VdAlbumEntryProvider;
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
 pub struct VdSubAlbumGateProvider {
-    pub cfg: VdLocaleConfig,
     pub parent_album_id: String,
 }
 
@@ -31,7 +30,7 @@ impl Provider for VdSubAlbumGateProvider {
             .map(|a| {
                 ChildEntry::with_meta(
                     a.name.clone(),
-                    Arc::new(VdAlbumEntryProvider { cfg: self.cfg, album_id: a.id.clone() }),
+                    Arc::new(VdAlbumEntryProvider { album_id: a.id.clone() }),
                     ProviderMeta::Album(a),
                 )
             })
@@ -46,6 +45,6 @@ impl Provider for VdSubAlbumGateProvider {
         let child_id = Storage::global()
             .find_child_album_by_name_ci(Some(&self.parent_album_id), name)
             .ok()??;
-        Some(Arc::new(VdAlbumEntryProvider { cfg: self.cfg, album_id: child_id }))
+        Some(Arc::new(VdAlbumEntryProvider { album_id: child_id }))
     }
 }

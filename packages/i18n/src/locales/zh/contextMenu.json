@@ -18,5 +18,12 @@
   "setWallpaperRotationActive": "（已设置）",
   "rename": "重命名",
   "moveTo": "移动到",
-  "share": "分享"
+  "share": "分享",
+  "hide": "隐藏",
+  "hiddenOne": "已隐藏",
+  "hiddenCount": "已隐藏 {count} 张",
+  "hideFailed": "隐藏失败",
+  "unhide": "取消隐藏",
+  "unhideSuccess": "已取消隐藏",
+  "unhideFailed": "取消隐藏失败"
 }

@@ -7,12 +7,9 @@ use std::sync::Arc;
 
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider};
 use crate::providers::shared::query_page::QueryPageProvider;
-use crate::providers::vd::locale::VdLocaleConfig;
 use crate::storage::gallery::ImageQuery;
 
-pub struct VdAllProvider {
-    pub cfg: VdLocaleConfig,
-}
+pub struct VdAllProvider;
 
 impl Provider for VdAllProvider {
     fn list_children(&self, composed: &ImageQuery) -> Result<Vec<ChildEntry>, String> {

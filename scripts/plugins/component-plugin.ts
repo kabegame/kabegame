@@ -137,6 +137,7 @@ export class ComponentPlugin extends BasePlugin {
           }).toString(),
         );
         const isAndroid = !!bs.context.isAndroid;
+        const isWeb = !!bs.context.mode?.isWeb;
         const templateCtx = {
           isWindows: !isAndroid && OSPlugin.isWindows,
           isMacOS: !isAndroid && OSPlugin.isMacOS,
@@ -144,6 +145,7 @@ export class ComponentPlugin extends BasePlugin {
           isLight: isAndroid || bs.context.mode!.isLight,
           isDev: bs.context.cmd!.isDev,
           isAndroid: isAndroid,
+          isWeb: isWeb,
           isWindowEffect:
             !isAndroid && (OSPlugin.isWindows || OSPlugin.isMacOS),
           noResources: false,

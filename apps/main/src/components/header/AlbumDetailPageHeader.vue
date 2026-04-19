@@ -1,6 +1,6 @@
 <template>
   <PageHeader
-    :title="albumName || t('albums.title')"
+    :title="displayName"
     :subtitle="subtitle"
     :show="showIds"
     :fold="foldIds"
@@ -11,7 +11,7 @@
     <template #title>
       <div class="album-title-wrapper">
         <input
-          v-if="isRenaming"
+          v-if="isRenaming && !isHiddenAlbum"
           :value="editingName"
           ref="renameInputRef"
           class="album-name-input"
@@ -20,8 +20,15 @@
           @keyup.enter="handleRenameConfirm"
           @keyup.esc="handleRenameCancel"
         />
-        <span v-else class="album-name" @dblclick.stop="handleStartRename" @click.stop :title="t('albums.doubleClickToRename')">
-          {{ albumName || t('albums.title') }}
+        <span
+          v-else
+          class="album-name"
+          :class="{ 'album-name--readonly': isHiddenAlbum }"
+          @dblclick.stop="isHiddenAlbum ? undefined : handleStartRename()"
+          @click.stop
+          :title="isHiddenAlbum ? '' : t('albums.doubleClickToRename')"
+        >
+          {{ displayName }}
         </span>
       </div>
     </template>
@@ -29,11 +36,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, nextTick } from "vue";
+import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import { HeaderFeatureId } from "@kabegame/core/stores/header";
+import { HeaderFeatureId, useHeaderStore } from "@kabegame/core/stores/header";
 import { IS_ANDROID } from "@kabegame/core/env";
+import { storeToRefs } from "pinia";
+import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
 
 interface Props {
   albumName?: string;
@@ -45,6 +54,8 @@ interface Props {
   includeBrowseControls?: boolean;
   /** 收藏画册：隐藏「新建子画册」按钮 */
   isFavoriteAlbum?: boolean;
+  /** 隐藏画册：隐藏「新建子画册 / 删除 / 轮播」按钮 */
+  isHiddenAlbum?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -55,6 +66,7 @@ const props = withDefaults(defineProps<Props>(), {
   albumDriveEnabled: false,
   includeBrowseControls: false,
   isFavoriteAlbum: false,
+  isHiddenAlbum: false,
 });
 
 const emit = defineEmits<{
@@ -77,10 +89,32 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const renameInputRef = ref<HTMLInputElement>();
+const albumRouteStore = useAlbumDetailRouteStore();
+const { hide: albumHide } = storeToRefs(albumRouteStore);
+const headerStore = useHeaderStore();
+
+watch(
+  albumHide,
+  () => {
+    headerStore.setFoldLabel(
+      HeaderFeatureId.ToggleShowHidden,
+      albumHide.value ? t("header.showHidden") : t("header.hideHidden")
+    );
+  },
+  { immediate: true }
+);
+onUnmounted(() => {
+  headerStore.setFoldLabel(HeaderFeatureId.ToggleShowHidden, undefined);
+});
 
 const subtitle = computed(() =>
   props.totalImagesCount ? t("albums.totalCountSubtitle", { count: props.totalImagesCount }) : ""
 );
+
+const displayName = computed(() => {
+  if (props.isHiddenAlbum) return t("albums.hiddenAlbumName");
+  return props.albumName || t("albums.title");
+});
 
 const withVd = (ids: string[]) =>
   props.albumDriveEnabled ? ids : ids.filter((id) => id !== HeaderFeatureId.OpenVirtualDrive);
@@ -88,18 +122,29 @@ const withVd = (ids: string[]) =>
 const withoutCreateAlbum = (ids: string[]) =>
   props.isFavoriteAlbum ? ids.filter((id) => id !== HeaderFeatureId.CreateAlbum) : ids;
 
+const withoutHiddenAlbumActions = (ids: string[]) =>
+  props.isHiddenAlbum
+    ? ids.filter(
+        (id) =>
+          id !== HeaderFeatureId.CreateAlbum &&
+          id !== HeaderFeatureId.DeleteAlbum &&
+          id !== HeaderFeatureId.SetAsWallpaperCarousel,
+      )
+    : ids;
+
 // 计算显示和折叠的feature ID
 const showIds = computed(() => {
   if (IS_ANDROID) {
     return [HeaderFeatureId.TaskDrawer];
   } else {
-    return withoutCreateAlbum(withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings]));
+    return withoutHiddenAlbumActions(withoutCreateAlbum(withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings])));
   }
 });
 
 const foldIds = computed(() => {
+  const hideToggleIds = props.isHiddenAlbum ? [] : [HeaderFeatureId.ToggleShowHidden];
   if (IS_ANDROID) {
-    const base = withoutCreateAlbum(withVd([
+    const base = withoutHiddenAlbumActions(withoutCreateAlbum(withVd([
       HeaderFeatureId.OpenVirtualDrive,
       HeaderFeatureId.Refresh,
       HeaderFeatureId.CreateAlbum,
@@ -107,18 +152,19 @@ const foldIds = computed(() => {
       HeaderFeatureId.DeleteAlbum,
       HeaderFeatureId.Help,
       HeaderFeatureId.QuickSettings,
-    ]));
+    ])));
+    const withHide = [...base, ...hideToggleIds];
     if (props.includeBrowseControls) {
       return [
         HeaderFeatureId.AlbumBrowseFilter,
         HeaderFeatureId.AlbumBrowseSort,
         HeaderFeatureId.GalleryPageSize,
-        ...base,
+        ...withHide,
       ];
     }
-    return base;
+    return withHide;
   }
-  return [];
+  return hideToggleIds;
 });
 
 // 处理action事件
@@ -153,6 +199,9 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.GalleryPageSize:
       emit("open-browse-page-size");
+      break;
+    case HeaderFeatureId.ToggleShowHidden:
+      albumRouteStore.hide = !albumRouteStore.hide;
       break;
   }
 };
@@ -200,6 +249,14 @@ watch(
 .album-name {
   cursor: pointer;
   user-select: none;
+  background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+
+  &--readonly {
+    cursor: default;
+  }
 }
 
 .album-name-input {

@@ -34,6 +34,7 @@ impl QueryPageProvider {
 }
 
 impl Provider for QueryPageProvider {
+    // 不列最后一个页了，避免 UI 上重复（最后一页的图片列表和分页节点都在最后了）
     fn list_children(&self, composed: &ImageQuery) -> Result<Vec<ChildEntry>, String> {
         if self.page.is_some() {
             return Ok(Vec::new());
@@ -44,11 +45,12 @@ impl Provider for QueryPageProvider {
             return Ok(Vec::new());
         }
         let total_pages = total.div_ceil(ps);
-        Ok((1..=total_pages)
+        Ok((1..=total_pages-1)
             .map(|n| ChildEntry::new(n.to_string(), Arc::new(QueryPageProvider::page(n))))
             .collect())
     }
 
+    // 可以包含最后一页（如果正好满页就不多列了）
     fn get_child(&self, name: &str, _composed: &ImageQuery) -> Option<Arc<dyn Provider>> {
         if self.page.is_some() {
             return None;
@@ -57,6 +59,7 @@ impl Provider for QueryPageProvider {
         Some(Arc::new(QueryPageProvider::page(n)))
     }
 
+    // 列出最后一页
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
         let storage = Storage::global();
         let ps = page_size();

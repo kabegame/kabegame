@@ -17,10 +17,8 @@ use crate::{
     providers::provider::{ChildEntry, ImageEntry, Provider, ProviderMeta},
     providers::ProviderRuntime,
     storage::gallery::ImageQuery,
-    storage::Storage,
+    storage::{Storage, HIDDEN_ALBUM_ID},
 };
-
-use super::vd_locale_sync::vd_locale_segment_for_settings_sync;
 
 /// VD 路径解析结果（virtual_driver 专用）。
 pub enum ResolveResult {
@@ -31,6 +29,7 @@ pub enum ResolveResult {
     File {
         image_id: String,
         resolved_path: PathBuf,
+        hidden: bool,
     },
     NotFound,
 }
@@ -52,12 +51,14 @@ pub enum VfsEntry {
     Directory {
         name: String,
         meta: VfsMetadata,
+        hidden: bool,
     },
     File {
         name: String,
         image_id: String,
         resolved_path: PathBuf,
         meta: VfsMetadata,
+        hidden: bool,
     },
 }
 
@@ -74,6 +75,7 @@ impl VfsEntry {
 pub enum VfsOpenedItem {
     Directory {
         path: Vec<String>,
+        hidden: bool,
     },
     File {
         path: Vec<String>,
@@ -82,6 +84,7 @@ pub enum VfsOpenedItem {
         size: u64,
         meta: VdFileMeta,
         read_handle: Arc<VdReadHandle>,
+        hidden: bool,
     },
 }
 
@@ -141,21 +144,16 @@ fn system_time_from_fs_metadata(meta: &std::fs::Metadata) -> (SystemTime, System
 /// app-main 的虚拟盘语义执行器：基于 core 的 Provider 树实现"文件系统操作语义"。
 pub struct VfsSemantics<'a> {
     provider_rt: &'a ProviderRuntime,
-    vd_locale: &'static str,
 }
 
 impl<'a> VfsSemantics<'a> {
     pub fn new(provider_rt: &'a ProviderRuntime) -> Self {
-        Self {
-            provider_rt,
-            vd_locale: vd_locale_segment_for_settings_sync(),
-        }
+        Self { provider_rt }
     }
 
     /// 检查第一个 VD 路径段是否对应某 canonical 类别（如 "task"/"album"）。
     pub(crate) fn is_vd_segment_canonical(&self, segment: &str, canonical_i18n_key: &str) -> bool {
-        let cfg = crate::providers::vd::locale::VdLocaleConfig { locale: self.vd_locale };
-        cfg.display_name(canonical_i18n_key) == segment
+        kabegame_i18n::vd_display_name(canonical_i18n_key) == segment
     }
 
     pub fn path_to_segments(path: &[String]) -> Vec<&str> {
@@ -164,9 +162,9 @@ impl<'a> VfsSemantics<'a> {
 
     fn vd_path(&self, segments: &[&str]) -> String {
         if segments.is_empty() {
-            format!("vd/{}", self.vd_locale)
+            "vd".to_string()
         } else {
-            format!("vd/{}/{}", self.vd_locale, segments.join("/"))
+            format!("vd/{}", segments.join("/"))
         }
     }
 
@@ -235,6 +233,7 @@ impl<'a> VfsSemantics<'a> {
                 return ResolveResult::File {
                     image_id: image.id,
                     resolved_path: PathBuf::from(image.local_path),
+                    hidden: image.is_hidden,
                 };
             }
         }
@@ -256,6 +255,7 @@ impl<'a> VfsSemantics<'a> {
                 return ResolveResult::File {
                     image_id: image.id,
                     resolved_path: PathBuf::from(image.local_path),
+                    hidden: image.is_hidden,
                 };
             }
         }
@@ -267,12 +267,20 @@ impl<'a> VfsSemantics<'a> {
     pub fn open_existing(&self, path: &[String]) -> Result<VfsOpenedItem, VfsError> {
         let segs: Vec<&str> = Self::path_to_segments(path);
         match self.resolve_cached(&segs) {
-            ResolveResult::Directory { .. } => Ok(VfsOpenedItem::Directory {
-                path: path.to_vec(),
-            }),
+            ResolveResult::Directory { provider, .. } => {
+                let hidden = matches!(
+                    provider.get_meta(),
+                    Some(ProviderMeta::Album(ref a)) if a.id == HIDDEN_ALBUM_ID
+                );
+                Ok(VfsOpenedItem::Directory {
+                    path: path.to_vec(),
+                    hidden,
+                })
+            }
             ResolveResult::File {
                 image_id,
                 resolved_path,
+                hidden,
             } => {
                 let (handle, meta) = VdReadHandle::open(&resolved_path)
                     .map_err(|_| VfsError::NotFound("文件不存在".to_string()))?;
@@ -298,6 +306,7 @@ impl<'a> VfsSemantics<'a> {
                     size,
                     meta,
                     read_handle: Arc::new(handle),
+                    hidden,
                 })
             }
             ResolveResult::NotFound => Err(VfsError::NotFound("路径不存在".to_string())),
@@ -341,6 +350,7 @@ impl<'a> VfsSemantics<'a> {
                     metadata_id: None,
                     thumbnail_path: String::new(),
                     favorite: false,
+                    is_hidden: false,
                     local_exists: true,
                     hash: String::new(),
                     width: None,
@@ -371,6 +381,10 @@ impl<'a> VfsSemantics<'a> {
 
         // 目录条目（children）
         for child in children {
+            let hidden = matches!(
+                &child.meta,
+                Some(ProviderMeta::Album(a)) if a.id == HIDDEN_ALBUM_ID
+            );
             // list_children_with_meta 已批量填充 meta 字段
             let (created, accessed, modified) = match child.meta {
                 Some(ProviderMeta::Task(task)) => {
@@ -412,6 +426,7 @@ impl<'a> VfsSemantics<'a> {
                     accessed,
                     modified,
                 },
+                hidden,
             });
         }
 
@@ -438,6 +453,7 @@ impl<'a> VfsSemantics<'a> {
                     accessed,
                     modified,
                 },
+                hidden: image.is_hidden,
             });
         }
         Ok(out)

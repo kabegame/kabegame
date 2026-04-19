@@ -637,10 +637,16 @@ impl Storage {
 
     /// 获取符合条件的图片总数（用于 CommonProvider）
     pub fn get_images_count_by_query(&self, query: &ImageQuery) -> Result<usize, String> {
+        use crate::storage::HIDDEN_ALBUM_ID;
+
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let (decorator, built_params) = query.build_count_sql();
-        let sql = format!("SELECT COUNT(*) FROM images{}", decorator);
+        // ai_hid 始终注入：HideGateProvider 的 WHERE 引用此别名做过滤。
+        let sql = format!(
+            "SELECT COUNT(*) FROM images LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'{}",
+            HIDDEN_ALBUM_ID, decorator
+        );
 
         let params: Vec<&dyn ToSql> = built_params.iter().map(|p| p as &dyn ToSql).collect();
 
@@ -662,14 +668,15 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let (decorator, built_params) = query.build_sql();
+        // ai_hid 始终注入：HideGateProvider 的 WHERE 引用此别名做过滤。
         let sql = format!(
             "SELECT
                 CAST(images.id AS TEXT),
                 images.local_path,
                 images.thumbnail_path,
                 images.crawled_at as gallery_ts
-             FROM images{} LIMIT ? OFFSET ?",
-            decorator
+             FROM images LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'{} LIMIT ? OFFSET ?",
+            crate::storage::HIDDEN_ALBUM_ID, decorator
         );
 
         // 参数顺序：decorator params -> limit -> offset
@@ -775,7 +782,7 @@ impl Storage {
         offset: usize,
         limit: usize,
     ) -> Result<Vec<crate::storage::ImageInfo>, String> {
-        use crate::storage::FAVORITE_ALBUM_ID;
+        use crate::storage::{FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
@@ -789,7 +796,8 @@ impl Storage {
         params.push(Box::new(offset as i64));
         let params_ref: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
-        // 为避免与 query 的 album_images/ai 冲突，这里 favorites join 使用独立 alias：fav_ai
+        // 为避免与 query 的 album_images/ai 冲突，favorites/hidden join 都用独立 alias：fav_ai / ai_hid。
+        // ai_hid 始终注入：为 ImageInfo.is_hidden 投影服务，HideGateProvider 复用同一别名做 WHERE 过滤。
         let sql = format!(
             "SELECT
                 CAST(images.id AS TEXT) as id,
@@ -802,6 +810,7 @@ impl Storage {
                 COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                 images.hash,
                 CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+                CASE WHEN ai_hid.image_id IS NOT NULL THEN 1 ELSE 0 END as is_hidden,
                 images.width,
                 images.height,
                 images.display_name,
@@ -811,8 +820,10 @@ impl Storage {
              FROM images
              LEFT JOIN album_images fav_ai
                ON images.id = fav_ai.image_id AND fav_ai.album_id = '{}'
+             LEFT JOIN album_images ai_hid
+               ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
              {} LIMIT ? OFFSET ?",
-            FAVORITE_ALBUM_ID, decorator
+            FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID, decorator
         );
 
         let mut stmt = conn
@@ -821,7 +832,7 @@ impl Storage {
 
         let rows = stmt
             .query_map(params_from_iter(params_ref.iter().copied()), |row| {
-                let last_ts: Option<i64> = row.get(14)?;
+                let last_ts: Option<i64> = row.get(15)?;
                 let last_set_wallpaper_at = last_ts.filter(|&t| t >= 0).map(|t| t as u64);
                 Ok(crate::storage::ImageInfo {
                     id: row.get(0)?,
@@ -836,15 +847,16 @@ impl Storage {
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
                     favorite: row.get::<_, i64>(9)? != 0,
+                    is_hidden: row.get::<_, i64>(10)? != 0,
                     local_exists: true,
-                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    display_name: row.get(12)?,
+                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                    display_name: row.get(13)?,
                     media_type: crate::image_type::normalize_stored_media_type(
-                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, Option<String>>(14)?,
                     ),
                     last_set_wallpaper_at,
-                    size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                    size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;

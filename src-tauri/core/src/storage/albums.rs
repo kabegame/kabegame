@@ -36,6 +36,7 @@ fn image_info_from_album_preview_row(
         thumbnail_path: row.get(7)?,
         hash: row.get(8)?,
         favorite: album_for_fav == FAVORITE_ALBUM_ID,
+        is_hidden: album_for_fav == HIDDEN_ALBUM_ID,
         local_exists: true,
         width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
         height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
@@ -327,7 +328,7 @@ impl Storage {
     }
 
     pub fn delete_album(&self, album_id: &str) -> Result<(), String> {
-        if album_id == FAVORITE_ALBUM_ID {
+        if album_id == FAVORITE_ALBUM_ID || album_id == HIDDEN_ALBUM_ID {
             return Err("不能删除系统默认画册".to_string());
         }
 
@@ -351,7 +352,7 @@ impl Storage {
     }
 
     pub fn rename_album(&self, album_id: &str, new_name: &str) -> Result<(), String> {
-        if album_id == FAVORITE_ALBUM_ID {
+        if album_id == FAVORITE_ALBUM_ID || album_id == HIDDEN_ALBUM_ID {
             return Err("不能重命名系统默认画册".to_string());
         }
 
@@ -576,6 +577,7 @@ impl Storage {
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
                     favorite: album_id == FAVORITE_ALBUM_ID,
+                    is_hidden: album_id == HIDDEN_ALBUM_ID,
                     local_exists: true,
                     width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
                     height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
@@ -602,6 +604,17 @@ impl Storage {
                     .unwrap_or(0)
                     > 0;
                 img.favorite = is_fav;
+            }
+            if album_id != HIDDEN_ALBUM_ID {
+                let is_hid = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                        params![HIDDEN_ALBUM_ID, img.id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap_or(0)
+                    > 0;
+                img.is_hidden = is_hid;
             }
             images.push(img);
         }
@@ -955,11 +968,14 @@ impl Storage {
     }
 
     pub fn move_album(&self, album_id: &str, new_parent_id: Option<&str>) -> Result<(), String> {
-        if album_id == FAVORITE_ALBUM_ID {
+        if album_id == FAVORITE_ALBUM_ID || album_id == HIDDEN_ALBUM_ID {
             return Err("不能移动系统默认画册".to_string());
         }
         if new_parent_id == Some(FAVORITE_ALBUM_ID) {
             return Err("不能将画册移动到收藏画册下".to_string());
+        }
+        if new_parent_id == Some(HIDDEN_ALBUM_ID) {
+            return Err("不能将画册移动到隐藏画册下".to_string());
         }
         if let Some(pid) = new_parent_id {
             if pid == album_id {

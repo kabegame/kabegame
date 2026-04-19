@@ -71,5 +71,7 @@
   "moveToRoot": "루트로 이동",
   "moveSuccess": "앨범이 이동되었습니다",
   "moveFailed": "이동 실패",
-  "selectTargetAlbum": "대상 앨범 선택"
+  "selectTargetAlbum": "대상 앨범 선택",
+  "enterHidden": "숨김 앨범",
+  "hiddenAlbumName": "숨김 앨범"
 }

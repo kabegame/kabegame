@@ -71,5 +71,7 @@
   "moveToRoot": "移动到根级",
   "moveSuccess": "画册已移动",
   "moveFailed": "移动失败",
-  "selectTargetAlbum": "选择目标画册"
+  "selectTargetAlbum": "选择目标画册",
+  "enterHidden": "进入隐藏画册",
+  "hiddenAlbumName": "隐藏画册"
 }

@@ -7,16 +7,13 @@ use std::sync::Arc;
 use crate::providers::provider::{ChildEntry, Provider, ProviderMeta};
 use crate::providers::shared::task::TaskProvider;
 use crate::providers::vd::{
-    locale::VdLocaleConfig,
     notes::vd_by_task_note,
     plugin_names::{resolve_task_id_from_dir_name, vd_task_dir_name},
 };
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
-pub struct VdByTaskProvider {
-    pub cfg: VdLocaleConfig,
-}
+pub struct VdByTaskProvider;
 
 impl Provider for VdByTaskProvider {
     fn list_children(&self, _composed: &ImageQuery) -> Result<Vec<ChildEntry>, String> {

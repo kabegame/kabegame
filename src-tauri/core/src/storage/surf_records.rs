@@ -1,6 +1,6 @@
 use crate::emitter::GlobalEmitter;
 use crate::storage::images::RangedImages;
-use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID};
+use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -549,7 +549,8 @@ impl Storage {
             "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata_id,
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
-             CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+             CASE WHEN ai_fav.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+             CASE WHEN ai_hid.image_id IS NOT NULL THEN 1 ELSE 0 END as is_hidden,
              images.width,
              images.height,
              images.display_name,
@@ -557,11 +558,12 @@ impl Storage {
              images.last_set_wallpaper_at,
              images.size
              FROM images
-             LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
+             LEFT JOIN album_images ai_fav ON images.id = ai_fav.image_id AND ai_fav.album_id = '{}'
+             LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
              WHERE images.surf_record_id = ?1
              ORDER BY images.crawled_at DESC
              LIMIT ?2 OFFSET ?3",
-            FAVORITE_ALBUM_ID
+            FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID
         );
         let mut stmt = conn
             .prepare(&query)
@@ -584,17 +586,18 @@ impl Storage {
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
                         favorite: row.get::<_, i64>(9)? != 0,
+                        is_hidden: row.get::<_, i64>(10)? != 0,
                         local_exists: PathBuf::from(&local_path).exists(),
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        display_name: row.get(12)?,
+                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                        display_name: row.get(13)?,
                         media_type: crate::image_type::normalize_stored_media_type(
-                            row.get::<_, Option<String>>(13)?,
+                            row.get::<_, Option<String>>(14)?,
                         ),
                         last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(
-                            row, 14,
+                            row, 15,
                         )?,
-                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                        size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
                     })
                 },
             )
@@ -621,7 +624,8 @@ impl Storage {
             "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata_id,
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
-             CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+             CASE WHEN ai_fav.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+             CASE WHEN ai_hid.image_id IS NOT NULL THEN 1 ELSE 0 END as is_hidden,
              images.width,
              images.height,
              images.display_name,
@@ -629,11 +633,12 @@ impl Storage {
              images.last_set_wallpaper_at,
              images.size
              FROM images
-             LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
+             LEFT JOIN album_images ai_fav ON images.id = ai_fav.image_id AND ai_fav.album_id = '{}'
+             LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
              WHERE images.surf_record_id = ?1
              ORDER BY images.crawled_at DESC
              LIMIT 1",
-            FAVORITE_ALBUM_ID
+            FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID
         );
         let result = conn
             .query_row(&query, params![surf_record_id], |row| {
@@ -651,15 +656,16 @@ impl Storage {
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
                     favorite: row.get::<_, i64>(9)? != 0,
+                    is_hidden: row.get::<_, i64>(10)? != 0,
                     local_exists: PathBuf::from(&local_path).exists(),
-                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    display_name: row.get(12)?,
+                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                    display_name: row.get(13)?,
                     media_type: crate::image_type::normalize_stored_media_type(
-                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, Option<String>>(14)?,
                     ),
-                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
-                    size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
+                    size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
                 })
             })
             .optional()
