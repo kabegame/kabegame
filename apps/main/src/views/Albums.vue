@@ -59,18 +59,28 @@
         <el-button type="primary" @click="confirmMoveAlbum">{{ $t('common.ok') }}</el-button>
       </template>
     </el-dialog>
+
+    <button
+      class="hidden-album-fab"
+      :title="t('albums.enterHidden')"
+      :aria-label="t('albums.enterHidden')"
+      @click="openHiddenAlbum"
+      @contextmenu.prevent
+    >
+      <el-icon :size="20"><Delete /></el-icon>
+    </button>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Refresh, Setting, QuestionFilled } from "@element-plus/icons-vue";
+import { Refresh, Setting, QuestionFilled, Delete } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
-import { useAlbumStore } from "@/stores/albums";
+import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
@@ -143,7 +153,7 @@ const moveTargetParentId = ref<string | null>(null);
 const moveAlbumTree = computed(() => {
   const a = moveDlgAlbum.value;
   if (!a) return [];
-  const exclude = [a.id, ...albumStore.getDescendantIds(a.id), FAVORITE_ALBUM_ID.value];
+  const exclude = [a.id, ...albumStore.getDescendantIds(a.id), FAVORITE_ALBUM_ID.value, HIDDEN_ALBUM_ID];
   return albumStore.getAlbumTreeExcluding(exclude);
 });
 
@@ -490,7 +500,15 @@ const openAlbum = (album: { id: string; name: string }) => {
   router.push(`/albums/${album.id}`);
 };
 
+const openHiddenAlbum = () => {
+  router.push(`/albums/${HIDDEN_ALBUM_ID}`);
+};
+
 const openAlbumContextMenu = (event: MouseEvent, album: { id: string; name: string }) => {
+  if (album.id === HIDDEN_ALBUM_ID) {
+    event.preventDefault();
+    return;
+  }
   const albumObj = findAlbumById(album.id);
   if (albumObj) {
     albumMenu.show(albumObj, event);
@@ -632,5 +650,30 @@ const handleAlbumMenuCommand = async (
 .empty-tip {
   padding: 32px;
   color: var(--anime-text-muted);
+}
+
+.hidden-album-fab {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 100;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--anime-surface, #fff);
+  color: var(--anime-text-secondary, #666);
+  border: 1px solid var(--anime-border, rgba(0, 0, 0, 0.08));
+  box-shadow: var(--anime-shadow, 0 2px 10px rgba(0, 0, 0, 0.1));
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+
+  &:hover {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
 }
 </style>

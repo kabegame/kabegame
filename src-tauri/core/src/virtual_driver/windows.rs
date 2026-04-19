@@ -5,22 +5,6 @@
 //! - 每个 Provider 只返回自己的内容（子目录或文件）
 //! - 子目录通过 `get_child(name)` 获取对应的子 Provider
 //! - 路径解析由框架自动递归处理
-//!
-//! 目录结构：
-//! ```text
-//! K:\
-//! ├── 按时间\                  <- VdByDateProvider（根为年份，与 Main `date/` 同源）
-//! │   └── 2024\                <- MainDateScopedProvider（年→月→日）
-//! ├── 按插件\                  <- PluginGroupProvider
-//! │   └── konachan\            <- PluginImagesProvider (-> AllProvider)
-//! ├── 画册\                    <- AlbumsProvider
-//! │   ├── 收藏\                <- AlbumProvider (-> AllProvider)
-//! │   └── 其他画册\
-//! └── 全部\                    <- AllProvider
-//!     ├── 1-100000\            <- RangeProvider (贪心分解)
-//!     ├── 100001-110000\
-//!     └── *.jpg                <- 剩余文件直接显示
-//! ```
 
 use std::{
     path::PathBuf,
@@ -45,7 +29,10 @@ use winapi::{
         STATUS_OBJECT_NAME_NOT_FOUND,
     },
     shared::winerror,
-    um::winnt::{FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY},
+    um::winnt::{
+        FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
+        FILE_ATTRIBUTE_READONLY,
+    },
 };
 
 static DOKAN_INIT: Once = Once::new();
@@ -92,7 +79,7 @@ fn get_mount_point() -> String {
 #[derive(Clone)]
 pub enum FsItem {
     /// 目录
-    Directory { path: Vec<String> },
+    Directory { path: Vec<String>, hidden: bool },
     /// 文件
     File {
         path: Vec<String>,
@@ -101,6 +88,7 @@ pub enum FsItem {
         meta: VdFileMeta,
         /// 缓存的只读读取句柄：优先 mmap，fallback seek_read（面向 Explorer 缩略图/预览）
         read_handle: Arc<VdReadHandle>,
+        hidden: bool,
     },
 }
 
@@ -141,7 +129,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         }
 
         match context {
-            FsItem::Directory { path } => {
+            FsItem::Directory { path, .. } => {
                 // 目录删除：委托给父目录 provider.delete_child（无 can_* 查询）
                 if path.is_empty() {
                     return;
@@ -199,14 +187,14 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
 
             // 若已存在：按 CREATE_NEW 语义返回已存在；否则当作成功打开目录
             match sem.open_existing(&segs) {
-                Ok(VfsOpenedItem::Directory { .. }) => {
+                Ok(VfsOpenedItem::Directory { hidden, .. }) => {
                     if create_new {
                         return Err(dokan::map_win32_error_to_ntstatus(
                             winerror::ERROR_ALREADY_EXISTS,
                         ));
                     }
                     return Ok(CreateFileInfo {
-                        context: FsItem::Directory { path: segs },
+                        context: FsItem::Directory { path: segs, hidden },
                         is_dir: true,
                         new_file_created: false,
                     });
@@ -228,7 +216,10 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             match sem.create_dir(parent_path, dir_name) {
                 Ok(()) => {
                     return Ok(CreateFileInfo {
-                        context: FsItem::Directory { path: segs },
+                        context: FsItem::Directory {
+                            path: segs,
+                            hidden: false,
+                        },
                         is_dir: true,
                         new_file_created: true,
                     });
@@ -246,8 +237,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         }
 
         match sem.open_existing(&segs) {
-            Ok(VfsOpenedItem::Directory { .. }) => Ok(CreateFileInfo {
-                context: FsItem::Directory { path: segs },
+            Ok(VfsOpenedItem::Directory { hidden, .. }) => Ok(CreateFileInfo {
+                context: FsItem::Directory { path: segs, hidden },
                 is_dir: true,
                 new_file_created: false,
             }),
@@ -256,6 +247,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 size,
                 meta,
                 read_handle,
+                hidden,
                 ..
             }) => Ok(CreateFileInfo {
                 context: FsItem::File {
@@ -264,6 +256,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                     size,
                     meta,
                     read_handle,
+                    hidden,
                 },
                 is_dir: false,
                 new_file_created: false,
@@ -279,7 +272,12 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         context: &'c Self::Context,
     ) -> OperationResult<FileInfo> {
         match context {
-            FsItem::Directory { path } => {
+            FsItem::Directory { path, hidden } => {
+                let base_attr = if *hidden {
+                    FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_HIDDEN
+                } else {
+                    FILE_ATTRIBUTE_DIRECTORY
+                };
                 let segments = VfsSemantics::path_to_segments(path);
                 let rt = crate::providers::ProviderRuntime::global();
                 let sem = VfsSemantics::new(&*rt);
@@ -318,7 +316,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                             .checked_add(Duration::from_secs(ts))
                             .unwrap_or_else(now);
                         return Ok(FileInfo {
-                            attributes: FILE_ATTRIBUTE_DIRECTORY,
+                            attributes: base_attr,
                             creation_time: t,
                             last_access_time: t,
                             last_write_time: t,
@@ -330,7 +328,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 }
 
                 Ok(FileInfo {
-                    attributes: FILE_ATTRIBUTE_DIRECTORY,
+                    attributes: base_attr,
                     creation_time: now(),
                     last_access_time: now(),
                     last_write_time: now(),
@@ -343,16 +341,23 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 size,
                 image_id,
                 meta,
+                hidden,
                 ..
-            } => Ok(FileInfo {
-                attributes: FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE,
-                creation_time: meta.created,
-                last_access_time: meta.accessed,
-                last_write_time: meta.modified,
-                file_size: *size,
-                number_of_links: 1,
-                file_index: file_index_from_numeric_id(image_id),
-            }),
+            } => {
+                let mut attributes = FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE;
+                if *hidden {
+                    attributes |= FILE_ATTRIBUTE_HIDDEN;
+                }
+                Ok(FileInfo {
+                    attributes,
+                    creation_time: meta.created,
+                    last_access_time: meta.accessed,
+                    last_write_time: meta.modified,
+                    file_size: *size,
+                    number_of_links: 1,
+                    file_index: file_index_from_numeric_id(image_id),
+                })
+            }
         }
     }
 
@@ -364,29 +369,27 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         context: &'c Self::Context,
     ) -> OperationResult<()> {
         match context {
-            FsItem::Directory { path } => {
+            FsItem::Directory { path, .. } => {
                 let rt = crate::providers::ProviderRuntime::global();
                 let sem = VfsSemantics::new(&*rt);
                 let entries = sem.read_dir(path).map_err(Self::map_vfs_error)?;
                 for entry in entries {
                     let (attributes, file_size, created, accessed, modified, file_name) =
                         match entry {
-                            VfsEntry::Directory { name, meta } => (
-                                FILE_ATTRIBUTE_DIRECTORY,
-                                0,
-                                meta.created,
-                                meta.accessed,
-                                meta.modified,
-                                name,
-                            ),
-                            VfsEntry::File { name, meta, .. } => (
-                                FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE,
-                                meta.size,
-                                meta.created,
-                                meta.accessed,
-                                meta.modified,
-                                name,
-                            ),
+                            VfsEntry::Directory { name, meta, hidden } => {
+                                let mut attr = FILE_ATTRIBUTE_DIRECTORY;
+                                if hidden {
+                                    attr |= FILE_ATTRIBUTE_HIDDEN;
+                                }
+                                (attr, 0, meta.created, meta.accessed, meta.modified, name)
+                            }
+                            VfsEntry::File { name, meta, hidden, .. } => {
+                                let mut attr = FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE;
+                                if hidden {
+                                    attr |= FILE_ATTRIBUTE_HIDDEN;
+                                }
+                                (attr, meta.size, meta.created, meta.accessed, meta.modified, name)
+                            }
                         };
 
                     let data = dokan::FindData {

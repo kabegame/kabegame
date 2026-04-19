@@ -13,6 +13,9 @@ import { buildAlbumTreeFromFlat } from "@kabegame/core/utils/albumTree";
 
 export type { AlbumTreeNode };
 
+/** 隐藏画册的固定 UUID（与后端 `HIDDEN_ALBUM_ID` 常量一致） */
+export const HIDDEN_ALBUM_ID = "00000000-0000-0000-0000-000000000000";
+
 export interface Album {
   id: string;
   name: string;
@@ -96,9 +99,9 @@ export const useAlbumStore = defineStore("albums", () => {
     return buildAlbumTreeFromFlat(albums.value.filter((a) => !exclude.has(a.id)));
   };
 
-  /** 画册列表页仅展示根画册（无 parent） */
+  /** 画册列表页仅展示根画册（无 parent），并隐藏"隐藏画册"本体（通过独立入口访问） */
   const albumRoots = computed(() =>
-    albums.value.filter((a) => a.parentId == null),
+    albums.value.filter((a) => a.parentId == null && a.id !== HIDDEN_ALBUM_ID),
   );
 
   const applyAlbumAddedPayload = (p: Record<string, unknown>) => {
@@ -351,13 +354,6 @@ export const useAlbumStore = defineStore("albums", () => {
     return removed;
   };
 
-  const loadAlbumImages = async (albumId: string) => {
-    await initEventListeners();
-    const images = await invoke<ImageInfo[]>("get_album_images", { albumId });
-    albumImages.value[albumId] = images;
-    return images;
-  };
-
   const loadAlbumPreview = async (albumId: string, limit = 6) => {
     await initEventListeners();
     if (albumPreviews.value[albumId]) return albumPreviews.value[albumId];
@@ -383,6 +379,7 @@ export const useAlbumStore = defineStore("albums", () => {
     albumCounts,
     loading,
     FAVORITE_ALBUM_ID,
+    HIDDEN_ALBUM_ID,
     loadAlbums,
     getChildren,
     getDescendantIds,
@@ -394,7 +391,6 @@ export const useAlbumStore = defineStore("albums", () => {
     addImagesToAlbum,
     addTaskImagesToAlbum,
     removeImagesFromAlbum,
-    loadAlbumImages,
     loadAlbumPreview,
     getAlbumImageIds,
   };

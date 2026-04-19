@@ -5,18 +5,18 @@
 
 use std::sync::Arc;
 
+use kabegame_i18n::vd_display_name;
+
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider, ProviderMeta};
 use crate::providers::shared::album::AlbumsProvider;
 use crate::providers::shared::query_page::QueryPageProvider;
-use crate::providers::vd::{locale::VdLocaleConfig, sub_album_gate::VdSubAlbumGateProvider};
+use crate::providers::vd::sub_album_gate::VdSubAlbumGateProvider;
 use crate::storage::gallery::ImageQuery;
 use crate::storage::{Storage, HIDDEN_ALBUM_ID};
 
 // ── Albums root ──────────────────────────────────────────────────────────────
 
-pub struct VdAlbumsProvider {
-    pub cfg: VdLocaleConfig,
-}
+pub struct VdAlbumsProvider;
 
 impl Provider for VdAlbumsProvider {
     fn apply_query(&self, current: ImageQuery) -> ImageQuery {
@@ -28,9 +28,14 @@ impl Provider for VdAlbumsProvider {
         Ok(albums
             .into_iter()
             .map(|a| {
+                let display = if a.id == HIDDEN_ALBUM_ID {
+                    vd_display_name("hidden-album")
+                } else {
+                    a.name.clone()
+                };
                 ChildEntry::with_meta(
-                    a.name.clone(),
-                    Arc::new(VdAlbumEntryProvider { cfg: self.cfg, album_id: a.id.clone() }),
+                    display,
+                    Arc::new(VdAlbumEntryProvider { album_id: a.id.clone() }),
                     ProviderMeta::Album(a),
                 )
             })
@@ -42,8 +47,11 @@ impl Provider for VdAlbumsProvider {
         if name.is_empty() {
             return None;
         }
+        if name == vd_display_name("hidden-album") {
+            return Some(Arc::new(VdAlbumEntryProvider { album_id: HIDDEN_ALBUM_ID.to_string() }));
+        }
         let album_id = Storage::global().find_child_album_by_name_ci(None, name).ok()??;
-        Some(Arc::new(VdAlbumEntryProvider { cfg: self.cfg, album_id }))
+        Some(Arc::new(VdAlbumEntryProvider { album_id }))
     }
 }
 
@@ -51,14 +59,7 @@ impl Provider for VdAlbumsProvider {
 
 /// 单个画册：列 `{i18n(subAlbums)}` 子目录（若有子画册）+ 分页数字段。
 pub struct VdAlbumEntryProvider {
-    pub cfg: VdLocaleConfig,
     pub album_id: String,
-}
-
-impl VdAlbumEntryProvider {
-    fn sub_albums_name(&self) -> String {
-        self.cfg.display_name("subAlbums")
-    }
 }
 
 impl Provider for VdAlbumEntryProvider {
@@ -75,9 +76,8 @@ impl Provider for VdAlbumEntryProvider {
         let has_sub = !Storage::global().get_albums(Some(&self.album_id))?.is_empty();
         if has_sub {
             out.push(ChildEntry::new(
-                self.sub_albums_name(),
+                vd_display_name("subAlbums"),
                 Arc::new(VdSubAlbumGateProvider {
-                    cfg: self.cfg,
                     parent_album_id: self.album_id.clone(),
                 }),
             ));
@@ -87,9 +87,8 @@ impl Provider for VdAlbumEntryProvider {
     }
 
     fn get_child(&self, name: &str, composed: &ImageQuery) -> Option<Arc<dyn Provider>> {
-        if name == self.sub_albums_name() {
+        if name == vd_display_name("subAlbums") {
             return Some(Arc::new(VdSubAlbumGateProvider {
-                cfg: self.cfg,
                 parent_album_id: self.album_id.clone(),
             }));
         }

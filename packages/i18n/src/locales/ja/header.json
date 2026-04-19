@@ -20,5 +20,7 @@
   "failedImagesCancelWaiting": "待機をキャンセル",
   "failedImagesRetryAll": "すべて再試行",
   "failedImagesDeleteAll": "すべて削除",
-  "failedImagesFilter": "プラグインでフィルター"
+  "failedImagesFilter": "プラグインでフィルター",
+  "showHidden": "非表示画像を表示",
+  "hideHidden": "非表示画像を隠す"
 }

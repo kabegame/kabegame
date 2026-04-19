@@ -61,6 +61,7 @@ vd:
   imageOnly: 画像のみ
   videoOnly: 動画のみ
   localImport: ローカルインポート
+  hiddenAlbum: 非表示アルバム
 
 surf:
   windowTitle: "サーフ - {host}"

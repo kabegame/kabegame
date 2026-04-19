@@ -20,5 +20,7 @@
   "failedImagesCancelWaiting": "Cancel waiting",
   "failedImagesRetryAll": "Retry all",
   "failedImagesDeleteAll": "Delete all",
-  "failedImagesFilter": "Filter by plugin"
+  "failedImagesFilter": "Filter by plugin",
+  "showHidden": "Show hidden images",
+  "hideHidden": "Hide hidden images"
 }

@@ -16,9 +16,11 @@
             :title="recordTitle"
             :subtitle="lastVisitSubtitle"
             :show="[]"
+            :fold="[HeaderFeatureId.ToggleShowHidden]"
             show-back
             sticky
             @back="goBack"
+            @action="handleHeaderAction"
           />
 
           <div class="surf-page-size-toolbar">
@@ -61,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onActivated, onDeactivated, onBeforeUnmount, ref, computed, watch } from "vue";
+import { onMounted, onActivated, onDeactivated, onBeforeUnmount, onUnmounted, ref, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
@@ -77,12 +79,14 @@ import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import { createImageActions } from "@/actions/imageActions";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
-import { useAlbumStore } from "@/stores/albums";
+import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSurfImagesRouteStore } from "@/stores/surfImagesRoute";
+import { HeaderFeatureId, useHeaderStore } from "@kabegame/core/stores/header";
 import { useImageOperations } from "@/composables/useImageOperations";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useImageTypes } from "@/composables/useImageTypes";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { openLocalImage } from "@/utils/openLocalImage";
@@ -251,6 +255,29 @@ const handleImageMenuCommand = async (
         showAddToAlbumDialog.value = true;
       }
       break;
+    case "addToHidden": {
+      const ids = imagesToProcess.map((img) => img.id);
+      if (ids.length === 0) break;
+      const isUnhide = !!image.isHidden;
+      try {
+        if (isUnhide) {
+          await albumStore.removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids);
+          ElMessage.success(t("contextMenu.unhideSuccess"));
+        } else {
+          await albumStore.addImagesToAlbum(HIDDEN_ALBUM_ID, ids);
+          ElMessage.success(
+            ids.length > 1
+              ? t("contextMenu.hiddenCount", { count: ids.length })
+              : t("contextMenu.hiddenOne"),
+          );
+        }
+        clearSelection();
+      } catch (e) {
+        console.error(isUnhide ? "取消隐藏失败:" : "隐藏失败:", e);
+        ElMessage.error(t(isUnhide ? "contextMenu.unhideFailed" : "contextMenu.hideFailed"));
+      }
+      break;
+    }
     case "wallpaper":
       if (imagesToProcess.length > 0) await setWallpaper(imagesToProcess);
       break;
@@ -329,9 +356,31 @@ const confirmRemoveImages = async () => {
 
 const isOnSurfImagesRoute = computed(() => String(route.name ?? "") === "SurfImages");
 const surfImagesRouteStore = useSurfImagesRouteStore();
+const { hide: surfHide } = storeToRefs(surfImagesRouteStore);
 const currentPath = computed(() => surfImagesRouteStore.currentPath);
 const currentPage = computed(() => surfImagesRouteStore.page);
 const providerRootPath = computed(() => `surf/${surfImagesRouteStore.host}`);
+
+const headerStore = useHeaderStore();
+watch(
+  surfHide,
+  () => {
+    headerStore.setFoldLabel(
+      HeaderFeatureId.ToggleShowHidden,
+      surfHide.value ? t("header.showHidden") : t("header.hideHidden")
+    );
+  },
+  { immediate: true }
+);
+onUnmounted(() => {
+  headerStore.setFoldLabel(HeaderFeatureId.ToggleShowHidden, undefined);
+});
+
+const handleHeaderAction = (payload: { id: string }) => {
+  if (payload.id === HeaderFeatureId.ToggleShowHidden) {
+    surfImagesRouteStore.hide = !surfImagesRouteStore.hide;
+  }
+};
 
 const recordTitle = computed(() => record.value?.host ?? t("surf.surfImagesTitle"));
 const lastVisitSubtitle = computed(() => {
@@ -397,6 +446,16 @@ useImagesChangeRefresh({
     const rid = record.value?.id ?? "";
     return !!rid && (p.surfRecordIds?.includes(rid) ?? false);
   },
+  onRefresh: async () => {
+    await reloadAllImages();
+  },
+});
+
+// HIDDEN 画册成员变化：刷新当前 surf 列表（HideGate 影响可见性）
+useAlbumImagesChangeRefresh({
+  enabled: isOnSurfImagesRoute,
+  waitMs: 500,
+  filter: (p) => (p.albumIds ?? []).includes(HIDDEN_ALBUM_ID),
   onRefresh: async () => {
     await reloadAllImages();
   },

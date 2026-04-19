@@ -16,30 +16,33 @@
 
 - `move_album`：禁止自身/目标为 HIDDEN
 - `delete_album` / `rename_album`：禁止 HIDDEN
-- Album tauri commands（add/remove/add_task_images）：当 album_id=HIDDEN 跳过 VD bump
-- `ImageInfo.hidden` 字段 + SELECT decorate（对称 favorite）
 
 [详细计划](hidden-album-phase2-3.md)
 
 ## Phase 3 — VD FS 隐藏属性
 
+- 语义层：`VfsEntry::Directory` 和 `VfsOpenedItem::Directory` 加 `hidden: bool` 字段
 - Windows：`find_files` + `get_file_information` 叠加 `FILE_ATTRIBUTE_HIDDEN`
 - macOS FUSE：`opened_to_attr` 设 `flags |= UF_HIDDEN (0x8000)`
 - Linux FUSE：`readdir` 跳过 hidden 条目
-- 语义层：`VfsEntry::Directory` 和 `VfsOpenedItem::Directory` 加 `hidden: bool` 字段
 
 [详细计划](hidden-album-phase2-3.md)
 
-## Phase 4 — 前端核心：开关与路径
+## Phase 4 — 前端核心：开关与路径 ✅
 
-- Settings 加 `showHiddenImages`（持久化）
+- `BasePathRouteState { hide: boolean }` 通用接口，`createPathRouteStore` 工厂统一处理 `hide/` 前缀
 - 前端 `HIDDEN_ALBUM_ID` 常量 & album store 暴露
-- 所有 provider 路径构造点：`!showHiddenImages` 时前置 `hide/`（galleryPath、albumPath、Surf 路径）
+- Gallery / AlbumDetail / Surf / TaskDetail route store 扩展 `BasePathRouteState`，默认 `hide: true`
+- Gallery 额外用 localStorage 持久化 `hide` 状态
 
-## Phase 5 — 前端 Header toggle
+[详细计划](../../../Users/Lenovo/.claude/plans/claude-plans-hidden-album-md-phase4-5-replicated-mist.md)
 
-- `HeaderFeatureId.ToggleShowHidden` + 自定义可勾选组件（类 TaskDrawerButton）
-- 在 Gallery / AlbumDetail / SurfImages header fold 里注册
+## Phase 5 — 前端 Header toggle ✅
+
+- `HeaderFeatureId.ToggleShowHidden`，以 label + icon 在 fold dropdown 中注册
+- GalleryToolbar / AlbumDetailPageHeader / SurfImages 三处均接入：fold 注册、动态 label（setFoldLabel）、action 处理 navigate({ hide })
+
+[详细计划](../../../Users/Lenovo/.claude/plans/claude-plans-hidden-album-md-phase4-5-replicated-mist.md)
 
 ## Phase 6 — 前端 Albums 页 UI
 

@@ -178,12 +178,12 @@
       </template>
     </el-dialog>
 
-    <!-- 收集（与画廊页一致：桌面 CrawlerDialog / 本地导入；安卓 CollectSourcePicker / drawer / MediaPicker） -->
-    <CrawlerDialog v-if="!IS_ANDROID" v-model="showCrawlerDialog" :initial-config="crawlerDialogInitialConfig" />
-    <LocalImportDialog v-if="!IS_ANDROID" v-model="showLocalImportDialog" />
+    <!-- 安卓不显示这个页面，所以不做判断.收集（与画廊页一致：桌面 CrawlerDialog / 本地导入；安卓 CollectSourcePicker / drawer / MediaPicker） -->
+    <CrawlerDialog v-model="showCrawlerDialog" :initial-config="crawlerDialogInitialConfig" />
+    <LocalImportDialog v-model="showLocalImportDialog" />
 
-    <CollectSourcePicker v-if="IS_ANDROID" v-model="showCollectSourcePicker" @select="handleCollectSourceSelect" />
-    <MediaPicker v-if="IS_ANDROID" v-model="showMediaPicker" @select="handleMediaPickerSelect" />
+    <!-- <CollectSourcePicker v-if="IS_ANDROID" v-model="showCollectSourcePicker" @select="handleCollectSourceSelect" /> -->
+    <!-- <MediaPicker v-if="IS_ANDROID" v-model="showMediaPicker" @select="handleMediaPickerSelect" /> -->
   </div>
 </template>
 
@@ -202,17 +202,12 @@ import TaskLogDialog from "@kabegame/core/components/task/TaskLogDialog.vue";
 import AutoConfigListCard from "@/components/scheduler/AutoConfigListCard.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
 import LocalImportDialog from "@/components/LocalImportDialog.vue";
-import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
-import MediaPicker from "@/components/MediaPicker.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
-import { open } from "@tauri-apps/plugin-dialog";
-import { stat } from "@tauri-apps/plugin-fs";
-import { pickImages, pickVideos, type PickFolderResult } from "tauri-plugin-picker-api";
 import { checkRecommendedPresetCompatibility } from "@/composables/useConfigCompatibility";
 import type { PluginRecommendedPreset, RunConfig } from "@kabegame/core/stores/crawler";
 
@@ -500,121 +495,6 @@ const handleCollectSourceSelect = (source: "local" | "remote") => {
     showMediaPicker.value = true;
   } else {
     crawlerDrawerStore.open();
-  }
-};
-
-const handleMediaPickerSelect = async (
-  type: "image" | "folder" | "video" | "archive",
-  payload?: PickFolderResult,
-) => {
-  showMediaPicker.value = false;
-  await handleAndroidMediaSelection(type, payload);
-};
-
-/** 安卓本地导入：与画廊页逻辑一致 */
-const handleAndroidMediaSelection = async (
-  type: "image" | "folder" | "video" | "archive",
-  folderResult?: PickFolderResult,
-) => {
-  try {
-    if (type === "image") {
-      const uris = await pickImages();
-      if (!uris || uris.length === 0) {
-        return;
-      }
-      crawlerStore.addTask("local-import", undefined, {
-        paths: uris,
-        recursive: false,
-        include_archive: false,
-      });
-      ElMessage.success(t("gallery.localImportTaskAdded"));
-    } else if (type === "video") {
-      const uris = await pickVideos();
-      if (!uris || uris.length === 0) {
-        return;
-      }
-      crawlerStore.addTask("local-import", undefined, {
-        paths: uris,
-        recursive: false,
-        include_archive: false,
-      });
-      ElMessage.success(t("gallery.localImportTaskAdded"));
-    } else if (type === "archive") {
-      const selected = await open({
-        directory: false,
-        multiple: false,
-        filters: [
-          {
-            name: t("gallery.compressFile"),
-            extensions: ["zip"],
-          },
-        ],
-      });
-
-      if (!selected) {
-        return;
-      }
-
-      const paths = Array.isArray(selected) ? selected : [selected];
-      if (paths.length === 0) return;
-
-      const pathsToImport = paths.some((p) => p.startsWith("content://"))
-        ? paths
-        : (
-          await Promise.all(
-            paths.map(async (path) => {
-              try {
-                const metadata = await stat(path);
-                return metadata.isDirectory ? null : path;
-              } catch {
-                return null;
-              }
-            }),
-          )
-        ).filter((p): p is string => p != null);
-
-      if (pathsToImport.length === 0) {
-        ElMessage.warning(t("gallery.noArchiveFound"));
-        return;
-      }
-
-      crawlerStore.addTask("local-import", undefined, {
-        paths: pathsToImport,
-        recursive: false,
-        include_archive: true,
-      });
-      ElMessage.success(t("gallery.localImportTaskAdded"));
-    } else if (type === "folder" && folderResult) {
-      const folderPath = folderResult.uri ?? folderResult.path;
-      if (!folderPath) return;
-
-      if (!folderPath.startsWith("content://")) {
-        try {
-          const metadata = await stat(folderPath);
-          if (!metadata.isDirectory) {
-            ElMessage.warning(t("gallery.pleaseSelectFolder"));
-            return;
-          }
-        } catch (error) {
-          console.error("[AutoConfigs] 检查文件夹失败:", folderPath, error);
-          return;
-        }
-      }
-
-      crawlerStore.addTask("local-import", undefined, {
-        paths: [folderPath],
-        recursive: true,
-        include_archive: false,
-      });
-      ElMessage.success(t("gallery.localImportTaskAdded"));
-    }
-  } catch (error) {
-    console.error("[AutoConfigs] 安卓媒体选择失败:", error);
-    if (error !== "cancel" && error !== "close") {
-      ElMessage.error(
-        t("gallery.selectFailed") + ": " + (error instanceof Error ? error.message : String(error)),
-      );
-    }
   }
 };
 

@@ -43,6 +43,8 @@ export enum HeaderFeatureId {
   FailedImagesDeleteAll = "failedImagesDeleteAll",
   /** 失败图片页：按插件筛选；Android 放入 fold */
   FailedImagesFilter = "failedImagesFilter",
+  /** 显示/隐藏「隐藏画册」成员：Gallery / 画册详情 / 畅游 都在 fold 里展示 */
+  ToggleShowHidden = "toggleShowHidden",
 }
 
 export interface HeaderFeatureDef {

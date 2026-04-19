@@ -61,6 +61,7 @@ vd:
   imageOnly: 이미지 전용
   videoOnly: 비디오 전용
   localImport: 로컬 가져오기
+  hiddenAlbum: 숨김 앨범
 
 surf:
   windowTitle: "서핑 - {host}"

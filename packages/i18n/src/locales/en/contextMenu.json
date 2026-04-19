@@ -18,5 +18,12 @@
   "setWallpaperRotationActive": "(Active)",
   "rename": "Rename",
   "moveTo": "Move to",
-  "share": "Share"
+  "share": "Share",
+  "hide": "Hide",
+  "hiddenOne": "Hidden",
+  "hiddenCount": "Hidden {count} images",
+  "hideFailed": "Hide failed",
+  "unhide": "Unhide",
+  "unhideSuccess": "Unhidden",
+  "unhideFailed": "Unhide failed"
 }

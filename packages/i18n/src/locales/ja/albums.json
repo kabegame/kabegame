@@ -71,5 +71,7 @@
   "moveToRoot": "ルートに移動",
   "moveSuccess": "アルバムを移動しました",
   "moveFailed": "移動に失敗しました",
-  "selectTargetAlbum": "移動先のアルバムを選択"
+  "selectTargetAlbum": "移動先のアルバムを選択",
+  "enterHidden": "非表示アルバム",
+  "hiddenAlbumName": "非表示アルバム"
 }

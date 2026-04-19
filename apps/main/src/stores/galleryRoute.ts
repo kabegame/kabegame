@@ -33,7 +33,7 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
     parse: (path) => parseGalleryPath(path),
     build: (state) => buildGalleryPath(state.filter, state.sort, state.page),
     defaultState: createGalleryDefaultState(),
-    routePath: "/gallery",
+    routeName: "Gallery",
     onStateChange: (state) => {
       localStorage.setItem(GALLERY_STORAGE_KEY_ROOT, serializeFilter(state.filter));
       localStorage.setItem(GALLERY_STORAGE_KEY_SORT, state.sort);

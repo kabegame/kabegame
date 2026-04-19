@@ -20,5 +20,7 @@
   "failedImagesCancelWaiting": "取消等待",
   "failedImagesRetryAll": "全部重試",
   "failedImagesDeleteAll": "全部刪除",
-  "failedImagesFilter": "依插件篩選"
+  "failedImagesFilter": "依插件篩選",
+  "showHidden": "顯示隱藏圖片",
+  "hideHidden": "隱藏隱藏圖片"
 }

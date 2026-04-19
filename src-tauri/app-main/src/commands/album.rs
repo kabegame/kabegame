@@ -116,12 +116,6 @@ pub async fn remove_images_from_album(
 }
 
 #[tauri::command]
-pub async fn get_album_images(album_id: String) -> Result<serde_json::Value, String> {
-    let images = Storage::global().get_album_images(&album_id)?;
-    Ok(serde_json::to_value(images).map_err(|e| e.to_string())?)
-}
-
-#[tauri::command]
 pub async fn get_album_image_ids(album_id: String) -> Result<Vec<String>, String> {
     Storage::global().get_album_image_ids(&album_id)
 }

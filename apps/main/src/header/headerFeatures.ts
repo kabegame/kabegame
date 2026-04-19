@@ -18,6 +18,7 @@ import {
   WarningFilled,
   Document,
   InfoFilled,
+  View,
 } from "@element-plus/icons-vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { i18n } from "@kabegame/i18n";
@@ -181,6 +182,11 @@ export function registerHeaderFeatures() {
       id: HeaderFeatureId.FailedImagesFilter,
       label: t("header.failedImagesFilter"),
       icon: Filter,
+    },
+    {
+      id: HeaderFeatureId.ToggleShowHidden,
+      label: t("header.showHidden"),
+      icon: View,
     },
   ]);
 }

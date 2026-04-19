@@ -61,6 +61,7 @@ vd:
   imageOnly: 仅图片
   videoOnly: 仅视频
   localImport: 本地导入
+  hiddenAlbum: 隐藏画册
 
 surf:
   windowTitle: "畅游 - {host}"

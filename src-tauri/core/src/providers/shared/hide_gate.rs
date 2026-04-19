@@ -1,9 +1,9 @@
 //! HideGateProvider：隐藏画册过滤门。
 //!
-//! `apply_query` 注入带 `/*HIDE*/` 标签的 NOT EXISTS 子句，
-//! 过滤所有已加入隐藏画册的图片。`AlbumProvider` / `VdAlbumEntryProvider`
-//! 在 `album_id == HIDDEN_ALBUM_ID` 时会扫描 `wheres` 并剥除含
-//! `/*HIDE*/` 的片段，使隐藏画册详情页仍能显示自己的图片。
+//! `apply_query` 注入带 `/*HIDE*/` 标签的 WHERE，复用 `gallery.rs` 中始终注入的
+//! `ai_hid` LEFT JOIN（`ImageInfo.is_hidden` 投影所用），不再独立子查询。
+//! `AlbumProvider` / `VdAlbumEntryProvider` 在 `album_id == HIDDEN_ALBUM_ID`
+//! 时会扫描 `wheres` 并剥除含 `/*HIDE*/` 的片段，使隐藏画册详情页仍能显示自己的图片。
 //!
 //! 所有非 `apply_query` 方法 delegate 到 inner。
 
@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider, ProviderMeta};
 use crate::storage::gallery::ImageQuery;
-use crate::storage::HIDDEN_ALBUM_ID;
 
 pub struct HideGateProvider {
     pub inner: Arc<dyn Provider>,
@@ -25,11 +24,9 @@ impl HideGateProvider {
 
 impl Provider for HideGateProvider {
     fn apply_query(&self, current: ImageQuery) -> ImageQuery {
-        self.inner.apply_query(current).with_where(
-            "/*HIDE*/ NOT EXISTS (SELECT 1 FROM album_images aih \
-             WHERE aih.album_id = ? AND aih.image_id = images.id)",
-            vec![HIDDEN_ALBUM_ID.to_string()],
-        )
+        self.inner
+            .apply_query(current)
+            .with_where("/*HIDE*/ ai_hid.image_id IS NULL", vec![])
     }
 
     fn list_children(&self, composed: &ImageQuery) -> Result<Vec<ChildEntry>, String> {

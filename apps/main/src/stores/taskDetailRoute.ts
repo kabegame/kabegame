@@ -23,5 +23,8 @@ export const useTaskDetailRouteStore = createPathRouteStore<TaskDetailRouteState
     },
     build: (state) => `task/${state.taskId}/${Math.max(1, state.page)}`,
     defaultState,
+    routeName: "TaskDetail",
+    // TaskDetail 永远不参与 hide：URL 里永不出现 `hide/` 前缀
+    ignoreHide: () => true,
   }
 );

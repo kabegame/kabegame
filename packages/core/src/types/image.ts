@@ -23,6 +23,7 @@ export interface ImageInfo {
 
   // UI 状态字段
   favorite?: boolean;
+  isHidden?: boolean;
   localExists?: boolean;
 
   // 显示名称（从数据库 display_name 列读取）

@@ -1,197 +1,85 @@
-#[cfg(target_os = "android")]
-mod archiver_provider;
-mod commands;
-#[cfg(target_os = "android")]
-mod compress_provider;
-#[cfg(target_os = "android")]
-mod content_io_provider;
-#[cfg(not(target_os = "android"))]
-mod http_server;
-#[cfg(target_os = "linux")]
-mod linux_desktop;
-#[cfg(not(target_os = "android"))]
-mod mcp_server;
-pub mod startup;
-#[cfg(not(mobile))]
-mod tray;
-mod utils;
-mod wallpaper;
+// Shared modules (local + web)
+pub(crate) mod core_init;
 
-// IPC and daemon related modules
+// Web mode entry
+#[cfg(feature = "web")]
+mod web_entry;
+
+// Local (Tauri native) modules
+#[cfg(all(feature = "local", target_os = "android"))]
+mod archiver_provider;
+#[cfg(feature = "local")]
+mod commands;
+#[cfg(all(feature = "local", target_os = "android"))]
+mod compress_provider;
+#[cfg(all(feature = "local", target_os = "android"))]
+mod content_io_provider;
+#[cfg(all(feature = "local", not(target_os = "android")))]
+mod http_server;
+#[cfg(all(feature = "local", target_os = "linux"))]
+mod linux_desktop;
+#[cfg(all(feature = "local", not(target_os = "android")))]
+mod mcp_server;
+#[cfg(feature = "local")]
+pub mod startup;
+#[cfg(all(feature = "local", not(mobile)))]
+mod tray;
+#[cfg(feature = "local")]
+mod utils;
+#[cfg(feature = "local")]
+mod wallpaper;
+#[cfg(feature = "local")]
 mod ipc;
-#[cfg(kabegame_mode = "standard")]
+#[cfg(all(feature = "local", kabegame_mode = "standard"))]
 mod vd_listener;
 
+// ---- local-only imports ----
+#[cfg(feature = "local")]
 use commands::*;
+#[cfg(feature = "local")]
 use core::fmt;
-#[cfg(not(target_os = "android"))]
+#[cfg(all(feature = "local", not(target_os = "android")))]
 use http_server::get_http_server_base_url;
+#[cfg(feature = "local")]
 use startup::*;
+#[cfg(feature = "local")]
 use std::process;
+#[cfg(feature = "local")]
 use std::sync::Arc;
+#[cfg(feature = "local")]
 use tauri::{AppHandle, Emitter, Manager};
-#[cfg(not(target_os = "android"))]
+#[cfg(all(feature = "local", not(target_os = "android")))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-// Daemon Imports
-#[cfg(not(target_os = "android"))]
+#[cfg(all(feature = "local", not(target_os = "android")))]
 use crate::ipc::handlers::dispatch_request;
-#[cfg(not(target_os = "android"))]
+#[cfg(all(feature = "local", not(target_os = "android")))]
 use kabegame_core::ipc::events::{DaemonEvent, DaemonEventKind};
-#[cfg(not(target_os = "android"))]
+#[cfg(all(feature = "local", not(target_os = "android")))]
 use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
-#[cfg(not(target_os = "android"))]
+#[cfg(all(feature = "local", not(target_os = "android")))]
 use kabegame_core::storage::organize::OrganizeService;
-use kabegame_core::{
-    crawler::{DownloadQueue, TaskScheduler},
-    plugin::PluginManager,
-    providers::{ProviderCacheConfig, ProviderRuntime, VdNewUnifiedRoot},
-    scheduler::Scheduler,
-    settings::Settings,
-    storage::Storage,
-};
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(all(feature = "local", kabegame_mode = "standard"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 
-/// 统一初始化全局状态（安卓与桌面共用主流程，桌面端多出 DedupeService/VD 等用 cfg 收束）
-fn init_globals() -> Result<(), String> {
-    println!("Kabegame v{} bootstrap...", env!("CARGO_PKG_VERSION"));
-    println!("Initializing Globals...");
+// ---- web entry point ----
 
-    Settings::init_global().map_err(|e| format!("Failed to initialize settings: {}", e))?;
-    println!("  ✓ Settings initialized");
-
-    // 同步后端 i18n 语言（从配置恢复）
-    {
-        let lang = Settings::global().get_language();
-        kabegame_i18n::sync_locale(lang.as_deref());
-    }
-
-    PluginManager::init_global()
-        .map_err(|e| format!("Failed to initialize plugin manager: {}", e))?;
-    println!("  ✓ Plugin manager initialized");
-
-    Storage::init_global().map_err(|e| format!("Failed to initialize storage: {}", e))?;
-    let failed_count = Storage::global()
-        .mark_pending_running_tasks_as_failed()
-        .unwrap_or(0);
-    if failed_count > 0 {
-        println!("  ✓ Marked {failed_count} pending/running task(s) as failed");
-    }
-    println!("  ✓ Storage initialized");
-    // 收藏画册使用当前 locale 的 i18n 名称（与语言切换时 set_favorite_album_name 一致）
-    let raw = kabegame_i18n::t!("albums.favorite");
-    let name = if raw == "albums.favorite" {
-        "收藏"
-    } else {
-        raw.as_str()
-    };
-    let _ = Storage::global().set_favorite_album_name(name);
-    // 官方插件源使用当前 locale 的 i18n 名称（与语言切换时 set_official_source_name 一致）
-    let raw_source_name = kabegame_i18n::t!("plugins.officialGithubReleaseSourceName");
-    let source_name = if raw_source_name == "plugins.officialGithubReleaseSourceName" {
-        kabegame_core::storage::plugin_sources::OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME
-    } else {
-        raw_source_name.as_str()
-    };
-    let _ = Storage::global()
-        .plugin_sources()
-        .set_official_source_name(source_name);
-
-    kabegame_core::ipc::server::EventBroadcaster::init_global(1000)
-        .map_err(|e| format!("EventBroadcaster: {}", e))?;
-    kabegame_core::ipc::server::SubscriptionManager::init_global()
-        .map_err(|e| format!("SubscriptionManager: {}", e))?;
-    kabegame_core::emitter::GlobalEmitter::init_global()
-        .map_err(|e| format!("GlobalEmitter: {}", e))?;
-    println!("  ✓ Event broadcaster and emitter initialized");
-
-    println!("  ✓ Runtime initialized");
-
-    let download_queue = Arc::new(DownloadQueue::new());
-    println!("  ✓ DownloadQueue initialized");
-
-    TaskScheduler::init_global(download_queue.clone())
-        .map_err(|e| format!("Failed to initialize task scheduler: {}", e))?;
-    println!("  ✓ TaskScheduler initialized");
-    Scheduler::init_global().map_err(|e| format!("Failed to initialize scheduler: {}", e))?;
-    tauri::async_runtime::spawn(async {
-        if let Err(e) = Scheduler::global().start().await {
-            eprintln!("Failed to start scheduler: {}", e);
-        }
-    });
-    println!("  ✓ Auto scheduler initialized");
-
-    {
-        let cfg = ProviderCacheConfig::default();
-        let root = std::sync::Arc::new(VdNewUnifiedRoot);
-        if let Err(e) = ProviderRuntime::init_global(root, cfg) {
-            return Err(format!("ProviderRuntime init failed: {}", e));
-        }
-    }
-    println!("  ✓ ProviderRuntime initialized");
-
-    // 桌面端：OrganizeService、VD 等全局单例
-    #[cfg(not(target_os = "android"))]
-    {
-        OrganizeService::init_global(Arc::new(OrganizeService::new()))?;
-
-        #[cfg(not(kabegame_mode = "light"))]
-        {
-            VirtualDriveService::init_global()
-                .map_err(|e| format!("Failed to init VD service: {}", e))?;
-            let virtual_drive_service = VirtualDriveService::global();
-            println!("  ✓ Virtual drive support enabled");
-
-            #[cfg(target_os = "windows")]
-            {
-                let vd_service_for_listener = virtual_drive_service.clone();
-                tauri::async_runtime::spawn(async move {
-                    vd_listener::start_vd_event_listener(vd_service_for_listener).await;
-                    println!("  ✓ Virtual drive event listener started");
-                });
-            }
-
-            let vd_service_for_mount = virtual_drive_service.clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                let enabled = Settings::global().get_album_drive_enabled();
-                let mount_point = Settings::global().get_album_drive_mount_point();
-                if enabled && !mount_point.is_empty() {
-                    use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-                    let mount_result = tokio::task::spawn_blocking({
-                        let vd_service = vd_service_for_mount.clone();
-                        let mount_point = mount_point.clone();
-                        move || vd_service.mount(mount_point.as_str())
-                    })
-                    .await;
-                    if let Err(e) = mount_result {
-                        eprintln!("Auto mount failed: {}", e);
-                    } else if let Ok(Err(e)) = mount_result {
-                        eprintln!("Auto mount failed: {}", e);
-                    }
-                }
-            });
-        }
-
-        return Ok(());
-    }
-
-    #[cfg(target_os = "android")]
-    Ok(())
+#[cfg(feature = "web")]
+pub fn run() {
+    web_entry::run();
 }
 
-/// Tauri 应用入口（桌面 binary 与 Android 共用）
+// ---- local (Tauri) entry point ----
+
+#[cfg(feature = "local")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 先注册 pathes，在 .setup() 前完成 AppPaths 初始化，供 Settings/Storage 等使用
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_pathes::init());
 
     #[cfg(target_os = "android")]
@@ -228,8 +116,8 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             let _ = cleanup_user_data_if_marked();
 
-            // 启动内置 Backend（安卓与桌面共用 init_globals，用编译开关区分平台差异）
-            match init_globals() {
+            // 启动内置 Backend
+            match crate::core_init::init_globals() {
                 Ok(()) => {
                     // 在初始化全局状态后、初始化壁纸控制器前，检测并缓存 Linux 桌面环境
                     #[cfg(target_os = "linux")]
@@ -329,7 +217,6 @@ pub fn run() {
             rename_album,
             move_album,
             get_album_preview,
-            get_album_images,
             get_album_image_ids,
             add_images_to_album,
             add_task_images_to_album,

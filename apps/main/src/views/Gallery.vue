@@ -127,7 +127,7 @@ import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import type { Component } from "vue";
-import { useAlbumStore } from "@/stores/albums";
+import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { type ContextCommand } from "@/components/ImageGrid.vue";
 import { listen } from "@tauri-apps/api/event";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
@@ -143,7 +143,6 @@ export interface SelectionAction {
   command: string;
 }
 import { open } from "@tauri-apps/plugin-dialog";
-import { stat } from "@tauri-apps/plugin-fs";
 import MediaPicker from "@/components/MediaPicker.vue";
 import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
 import { useImageTypes } from "@/composables/useImageTypes";
@@ -403,29 +402,8 @@ const handleAndroidMediaSelection = async (
       const paths = Array.isArray(selected) ? selected : [selected];
       if (paths.length === 0) return;
 
-      // 安卓 content:// 路径跳过 stat（stat 不支持 content URI）
-      const pathsToImport = paths.some((p) => p.startsWith("content://"))
-        ? paths
-        : (
-          await Promise.all(
-            paths.map(async (path) => {
-              try {
-                const metadata = await stat(path);
-                return metadata.isDirectory ? null : path;
-              } catch {
-                return null;
-              }
-            })
-          )
-        ).filter((p): p is string => p != null);
-
-      if (pathsToImport.length === 0) {
-        ElMessage.warning(t("gallery.noArchiveFound"));
-        return;
-      }
-
       crawlerStore.addTask("local-import", undefined, {
-        paths: pathsToImport,
+        paths,
         recursive: false,
         include_archive: true,
       });
@@ -433,21 +411,6 @@ const handleAndroidMediaSelection = async (
     } else if (type === 'folder' && folderResult) {
       const folderPath = folderResult.uri ?? folderResult.path;
       if (!folderPath) return;
-
-      // 安卓 content:// 路径跳过 stat
-      if (!folderPath.startsWith("content://")) {
-        try {
-          const metadata = await stat(folderPath);
-          if (!metadata.isDirectory) {
-            ElMessage.warning(t("gallery.pleaseSelectFolder"));
-            return;
-          }
-        } catch (error) {
-          console.error('[Gallery] 检查文件夹失败:', folderPath, error);
-          return;
-        }
-      }
-
       crawlerStore.addTask("local-import", undefined, {
         paths: [folderPath],
         recursive: true,
@@ -918,6 +881,29 @@ const handleGridContextCommand = async (
       addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
       showAddToAlbumDialog.value = true;
       return null;
+    case "addToHidden": {
+      const ids = imagesToProcess.map((img) => img.id);
+      if (ids.length === 0) return null;
+      const isUnhide = !!image.isHidden;
+      try {
+        if (isUnhide) {
+          await albumStore.removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids);
+          ElMessage.success(t("contextMenu.unhideSuccess"));
+        } else {
+          await albumStore.addImagesToAlbum(HIDDEN_ALBUM_ID, ids);
+          ElMessage.success(
+            ids.length > 1
+              ? t("contextMenu.hiddenCount", { count: ids.length })
+              : t("contextMenu.hiddenOne"),
+          );
+        }
+        galleryViewRef.value?.clearSelection?.();
+      } catch (e) {
+        console.error(isUnhide ? "取消隐藏失败:" : "隐藏失败:", e);
+        ElMessage.error(t(isUnhide ? "contextMenu.unhideFailed" : "contextMenu.hideFailed"));
+      }
+      return null;
+    }
     case "share":
       if (!isMultiSelect && imagesToProcess[0]) {
         try {
@@ -1027,6 +1013,32 @@ watch(tasks, (newTasks, oldTasks) => {
   });
 }, { deep: true });
 
+const refreshGalleryPageFromEvents = async () => {
+  const prevList = displayedImages.value.slice();
+  // 当前壁纸被删/移除：前端清空当前选中（后端也会清空设置，这里是 UI 兜底）
+
+  // 先更新 total（用于页码越界兜底）
+  await loadTotalImagesCount();
+
+  // 刷新"当前页"数据：不 reset，不卸载组件，只替换 images 数组引用
+  await refreshImagesPreserveCache(currentPath.value, { preserveScroll: true });
+
+  const { addedIds, removedIds } = diffById(prevList, displayedImages.value);
+
+  // 当前壁纸被删/移除：前端清空当前选中（后端也会清空设置，这里是 UI 兜底）
+  if (
+    currentWallpaperImageId.value &&
+    removedIds.includes(currentWallpaperImageId.value)
+  ) {
+    currentWallpaperImageId.value = null;
+  }
+
+  // 若当前页被清空但仍有图：尽量跳转到仍可用的最大页
+  if (displayedImages.value.length === 0 && totalImagesCount.value > 0) {
+    await ensureValidGalleryPageAfterMassRemoval();
+  }
+};
+
 useImagesChangeRefresh({
   enabled: ref(true), // 始终启用，不管是否在前台（用于同步删除等操作）
   waitMs: 1000,
@@ -1046,39 +1058,23 @@ useImagesChangeRefresh({
     }
     return true;
   },
-  onRefresh: async () => {
-    const prevList = displayedImages.value.slice();
-    // 当前壁纸被删/移除：前端清空当前选中（后端也会清空设置，这里是 UI 兜底）
-
-    // 先更新 total（用于页码越界兜底）
-    await loadTotalImagesCount();
-
-    // 刷新"当前页"数据：不 reset，不卸载组件，只替换 images 数组引用
-    await refreshImagesPreserveCache(currentPath.value, { preserveScroll: true });
-
-    const { addedIds, removedIds } = diffById(prevList, displayedImages.value);
-
-    // 当前壁纸被删/移除：前端清空当前选中（后端也会清空设置，这里是 UI 兜底）
-    if (
-      currentWallpaperImageId.value &&
-      removedIds.includes(currentWallpaperImageId.value)
-    ) {
-      currentWallpaperImageId.value = null;
-    }
-
-    // 若当前页被清空但仍有图：尽量跳转到仍可用的最大页
-    if (displayedImages.value.length === 0 && totalImagesCount.value > 0) {
-      await ensureValidGalleryPageAfterMassRemoval();
-    }
-  },
+  onRefresh: refreshGalleryPageFromEvents,
 });
 
-/** 收藏画册成员变化：就地更新星标，避免全量重拉 */
+/** 画册成员变化：FAVORITE 就地更新星标；HIDDEN 全量刷新（HideGate 影响 gallery 可见性） */
 useAlbumImagesChangeRefresh({
   enabled: ref(true),
   waitMs: 1000,
-  filter: (p) => p.albumIds?.includes(FAVORITE_ALBUM_ID.value),
-  onRefresh: (p) => {
+  filter: (p) => {
+    const ids = p.albumIds ?? [];
+    return ids.includes(FAVORITE_ALBUM_ID.value) || ids.includes(HIDDEN_ALBUM_ID);
+  },
+  onRefresh: async (p) => {
+    const ids = p.albumIds ?? [];
+    if (ids.includes(HIDDEN_ALBUM_ID)) {
+      await refreshGalleryPageFromEvents();
+      return;
+    }
     const idSet = new Set(p.imageIds ?? []);
     if (idSet.size === 0) return;
     const fav = p.reason === "add";

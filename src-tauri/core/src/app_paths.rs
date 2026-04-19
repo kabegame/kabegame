@@ -125,11 +125,6 @@ impl AppPaths {
 
     // ========== 缓存目录 ==========
 
-    /// provider-cache 目录（RocksDB/sled 等）
-    pub fn provider_cache_dir(&self) -> PathBuf {
-        self.cache_dir.join("provider-cache")
-    }
-
     /// store-cache 目录（插件商店 index.json 缓存）
     pub fn store_cache_dir(&self) -> PathBuf {
         self.cache_dir.join("store-cache")
@@ -213,31 +208,4 @@ pub fn repo_root_dir() -> Option<PathBuf> {
     }
 
     None
-}
-
-// ========== 向后兼容的废弃函数（逐步迁移后删除） ==========
-
-#[deprecated(note = "Use AppPaths::global().settings_json() instead")]
-pub fn kabegame_data_dir() -> PathBuf {
-    AppPaths::global().data_dir.clone()
-}
-
-#[deprecated(note = "Use AppPaths::global().resource_dir instead")]
-pub fn resource_dir() -> PathBuf {
-    AppPaths::global().resource_dir.clone()
-}
-
-#[deprecated(note = "Use AppPaths::global().provider_cache_dir() instead")]
-pub fn provider_cache_dir() -> PathBuf {
-    AppPaths::global().provider_cache_dir()
-}
-
-#[deprecated(note = "Use AppPaths::global().store_cache_dir() instead")]
-pub fn store_cache_dir() -> PathBuf {
-    AppPaths::global().store_cache_dir()
-}
-
-#[deprecated(note = "Archive extraction path should be computed dynamically by caller")]
-pub fn archive_extract_dir() -> PathBuf {
-    AppPaths::global().temp_dir.join("archive_extract")
 }

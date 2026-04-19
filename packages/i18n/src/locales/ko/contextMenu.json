@@ -18,5 +18,12 @@
   "setWallpaperRotationActive": "(활성)",
   "rename": "이름 변경",
   "moveTo": "이동",
-  "share": "공유"
+  "share": "공유",
+  "hide": "숨기기",
+  "hiddenOne": "숨겼습니다",
+  "hiddenCount": "{count}장을 숨겼습니다",
+  "hideFailed": "숨기기 실패",
+  "unhide": "숨김 해제",
+  "unhideSuccess": "숨김 해제됨",
+  "unhideFailed": "숨김 해제 실패"
 }

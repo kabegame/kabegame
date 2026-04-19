@@ -11,6 +11,8 @@ import {
   Delete,
   More,
   Share,
+  Hide,
+  View,
 } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { ImageInfo } from "@kabegame/core/types/image";
@@ -112,6 +114,17 @@ export function createImageActions(
       visible: (ctx) => !hideSet.has("addToAlbum") && (!multiHideSet.has("addToAlbum") || !ctx.selectedCount || ctx.selectedCount === 1) && (!IS_ANDROID || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
     },
     {
+      key: "addToHidden",
+      label: (ctx: ActionContext<ImageInfo>) =>
+        ctx.target?.isHidden ? t("contextMenu.unhide") : t("contextMenu.hide"),
+      icon: (ctx: ActionContext<ImageInfo>) => (ctx.target?.isHidden ? View : Hide),
+      command: "addToHidden",
+      // On Android single-select: only in more submenu
+      visible: (ctx) =>
+        !hideSet.has("addToHidden") &&
+        (!IS_ANDROID || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
+    },
+    {
       key: "more",
       label: t("contextMenu.more"),
       icon: More,
@@ -150,6 +163,14 @@ export function createImageActions(
               icon: FolderAdd,
               command: "addToAlbum",
               visible: () => !hideSet.has("addToAlbum"),
+            },
+            {
+              key: "addToHidden",
+              label: (ctx: ActionContext<ImageInfo>) =>
+                ctx.target?.isHidden ? t("contextMenu.unhide") : t("contextMenu.hide"),
+              icon: (ctx: ActionContext<ImageInfo>) => (ctx.target?.isHidden ? View : Hide),
+              command: "addToHidden",
+              visible: () => !hideSet.has("addToHidden"),
             },
             {
               key: "remove",
@@ -213,6 +234,23 @@ export function createImageActions(
       command: "addToAlbum",
       visible: (ctx) => {
         if (hideSet.has("addToAlbum") || multiHideSet.has("addToAlbum")) return false;
+        return ctx.selectedCount !== undefined && ctx.selectedCount > 1;
+      },
+      suffix: (ctx) => ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : "",
+    },
+    {
+      key: "addToHidden",
+      label: (ctx) => {
+        const target = ctx.target as ImageInfo | null;
+        return target?.isHidden ? t("contextMenu.unhide") : t("contextMenu.hide");
+      },
+      icon: (ctx: ActionContext<ImageInfo>) => {
+        const target = ctx.target as ImageInfo | null;
+        return target?.isHidden ? View : Hide;
+      },
+      command: "addToHidden",
+      visible: (ctx) => {
+        if (hideSet.has("addToHidden") || multiHideSet.has("addToHidden")) return false;
         return ctx.selectedCount !== undefined && ctx.selectedCount > 1;
       },
       suffix: (ctx) => ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : "",

@@ -1,4 +1,4 @@
-use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
+use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use rusqlite::{params, params_from_iter, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,6 +33,11 @@ pub struct ImageInfo {
     #[serde(default)]
     pub thumbnail_path: String,
     pub favorite: bool,
+    /// 是否在隐藏画册（HIDDEN_ALBUM_ID）中。前端根据此值决定上下文菜单显示"隐藏"或"取消隐藏"。
+    /// VD 据此给虚拟图片文件叠加 OS hidden 属性。衍生自统一 LEFT JOIN，不是 images 表列。
+    #[serde(rename = "isHidden")]
+    #[serde(default)]
+    pub is_hidden: bool,
     /// 本地文件是否存在（用于前端标记缺失文件：仍展示条目，但提示用户源文件已丢失/移动）
     #[serde(default = "default_true")]
     pub local_exists: bool,
@@ -193,7 +198,8 @@ impl Storage {
             "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
-             CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+             CASE WHEN ai_fav.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+             CASE WHEN ai_hid.image_id IS NOT NULL THEN 1 ELSE 0 END as is_hidden,
              images.width,
              images.height,
              images.display_name,
@@ -201,10 +207,11 @@ impl Storage {
              images.last_set_wallpaper_at,
              images.size
              FROM images
-             LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
+             LEFT JOIN album_images ai_fav ON images.id = ai_fav.image_id AND ai_fav.album_id = '{}'
+             LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
              ORDER BY images.crawled_at ASC
              LIMIT ? OFFSET ?",
-            FAVORITE_ALBUM_ID
+            FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID
         );
 
         let mut stmt = conn
@@ -226,13 +233,14 @@ impl Storage {
                     thumbnail_path: row.get(8)?,
                     hash: row.get(9)?,
                     favorite: row.get::<_, i64>(10)? != 0,
+                    is_hidden: row.get::<_, i64>(11)? != 0,
                     local_exists: true,
-                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                    display_name: row.get(13)?,
-                    media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
-                    last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
-                    size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
+                    width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
+                    display_name: row.get(14)?,
+                    media_type: normalize_media_type(row.get::<_, Option<String>>(15)?),
+                    last_set_wallpaper_at: row_optional_u64_ts(row, 16)?,
+                    size: row.get::<_, Option<i64>>(17)?.map(|v| v as u64),
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
@@ -303,6 +311,7 @@ impl Storage {
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
                         favorite: false,
+                        is_hidden: false,
                         local_exists,
                         width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
@@ -325,6 +334,15 @@ impl Storage {
                 .unwrap_or(0)
                 > 0;
             image_info.favorite = is_favorite;
+            let is_hidden = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                    params![HIDDEN_ALBUM_ID, image_info.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+                > 0;
+            image_info.is_hidden = is_hidden;
         }
 
         Ok(result)
@@ -413,6 +431,7 @@ impl Storage {
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
                         favorite: false,
+                        is_hidden: false,
                         local_exists,
                         width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
@@ -435,6 +454,14 @@ impl Storage {
                 )
                 .unwrap_or(false);
             image_info.favorite = is_favorite;
+            let is_hidden = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                    params![HIDDEN_ALBUM_ID, image_id],
+                    |row| Ok(row.get::<_, i64>(0)? != 0),
+                )
+                .unwrap_or(false);
+            image_info.is_hidden = is_hidden;
         }
 
         Ok(result)
@@ -477,6 +504,7 @@ impl Storage {
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
                         favorite: false,
+                        is_hidden: false,
                         local_exists,
                         width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
@@ -499,6 +527,14 @@ impl Storage {
                 )
                 .unwrap_or(false);
             image_info.favorite = is_favorite;
+            let is_hidden = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                    params![HIDDEN_ALBUM_ID, image_id],
+                    |row| Ok(row.get::<_, i64>(0)? != 0),
+                )
+                .unwrap_or(false);
+            image_info.is_hidden = is_hidden;
         }
 
         Ok(result)
@@ -537,6 +573,7 @@ impl Storage {
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
                         favorite: false,
+                        is_hidden: false,
                         local_exists,
                         width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
@@ -559,6 +596,14 @@ impl Storage {
                 )
                 .unwrap_or(false);
             image_info.favorite = is_favorite;
+            let is_hidden = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                    params![HIDDEN_ALBUM_ID, image_id],
+                    |row| Ok(row.get::<_, i64>(0)? != 0),
+                )
+                .unwrap_or(false);
+            image_info.is_hidden = is_hidden;
         }
 
         Ok(result)
@@ -600,6 +645,7 @@ impl Storage {
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
                         favorite: false,
+                        is_hidden: false,
                         local_exists,
                         width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
@@ -622,6 +668,14 @@ impl Storage {
                 )
                 .unwrap_or(false);
             image_info.favorite = is_favorite;
+            let is_hidden = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                    params![HIDDEN_ALBUM_ID, image_id],
+                    |row| Ok(row.get::<_, i64>(0)? != 0),
+                )
+                .unwrap_or(false);
+            image_info.is_hidden = is_hidden;
         }
 
         Ok(result)
@@ -646,7 +700,8 @@ impl Storage {
             "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
-             CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+             CASE WHEN ai_fav.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+             CASE WHEN ai_hid.image_id IS NOT NULL THEN 1 ELSE 0 END as is_hidden,
              images.width,
              images.height,
              images.display_name,
@@ -654,11 +709,12 @@ impl Storage {
              images.last_set_wallpaper_at,
              images.size
              FROM images
-             LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
+             LEFT JOIN album_images ai_fav ON images.id = ai_fav.image_id AND ai_fav.album_id = '{}'
+             LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
              WHERE images.surf_record_id = ?1
              ORDER BY images.crawled_at DESC
              LIMIT ?2 OFFSET ?3",
-            FAVORITE_ALBUM_ID
+            FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID
         );
         let mut stmt = conn
             .prepare(&query)
@@ -681,13 +737,14 @@ impl Storage {
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
                         favorite: row.get::<_, i64>(10)? != 0,
+                        is_hidden: row.get::<_, i64>(11)? != 0,
                         local_exists: PathBuf::from(&local_path).exists(),
-                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                        display_name: row.get(13)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
-                        size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
+                        width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
+                        display_name: row.get(14)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(15)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 16)?,
+                        size: row.get::<_, Option<i64>>(17)?.map(|v| v as u64),
                     })
                 },
             )

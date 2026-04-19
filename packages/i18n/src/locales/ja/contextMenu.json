@@ -18,5 +18,12 @@
   "setWallpaperRotationActive": "（有効）",
   "rename": "名前を変更",
   "moveTo": "移動先",
-  "share": "共有"
+  "share": "共有",
+  "hide": "非表示",
+  "hiddenOne": "非表示にしました",
+  "hiddenCount": "{count} 件を非表示",
+  "hideFailed": "非表示に失敗",
+  "unhide": "再表示",
+  "unhideSuccess": "再表示しました",
+  "unhideFailed": "再表示に失敗"
 }

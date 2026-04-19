@@ -20,5 +20,7 @@
   "failedImagesCancelWaiting": "대기 취소",
   "failedImagesRetryAll": "모두 재시도",
   "failedImagesDeleteAll": "모두 삭제",
-  "failedImagesFilter": "플러그인별 필터"
+  "failedImagesFilter": "플러그인별 필터",
+  "showHidden": "숨김 이미지 표시",
+  "hideHidden": "숨김 이미지 숨기기"
 }

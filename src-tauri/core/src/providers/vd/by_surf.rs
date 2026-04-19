@@ -6,12 +6,9 @@ use std::sync::Arc;
 
 use crate::providers::provider::{ChildEntry, Provider};
 use crate::providers::shared::surf::SurfsProvider;
-use crate::providers::vd::locale::VdLocaleConfig;
 use crate::storage::gallery::ImageQuery;
 
-pub struct VdBySurfProvider {
-    pub cfg: VdLocaleConfig,
-}
+pub struct VdBySurfProvider;
 
 impl Provider for VdBySurfProvider {
     fn list_children(&self, composed: &ImageQuery) -> Result<Vec<ChildEntry>, String> {
