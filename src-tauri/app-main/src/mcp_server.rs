@@ -890,7 +890,8 @@ impl ServerHandler for KabegameMcpServer {
     }
 }
 
-pub async fn start_mcp_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// Returns a Router with `/mcp` (StreamableHTTP) nested, usable by both local and web modes.
+pub fn mcp_nest() -> axum::Router {
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService,
         session::local::LocalSessionManager,
@@ -902,9 +903,12 @@ pub async fn start_mcp_server() -> Result<(), Box<dyn std::error::Error + Send +
         StreamableHttpServerConfig::default(),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    axum::Router::new().nest_service("/mcp", service)
+}
+
+pub async fn start_mcp_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", MCP_PORT)).await?;
     println!("  ✓ MCP server listening on 127.0.0.1:{MCP_PORT}");
-    axum::serve(listener, router).await?;
+    axum::serve(listener, mcp_nest()).await?;
     Ok(())
 }

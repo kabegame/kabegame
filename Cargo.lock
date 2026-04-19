@@ -2952,6 +2952,7 @@ dependencies = [
  "dirs 5.0.1",
  "dispatch2",
  "dokan",
+ "futures-util",
  "governor",
  "image 0.24.9",
  "include_dir",
@@ -2983,6 +2984,7 @@ dependencies = [
  "tauri-plugin-task-notification",
  "tauri-plugin-wallpaper",
  "tokio",
+ "tokio-stream",
  "tower",
  "tower-http",
  "url",
@@ -6428,6 +6430,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
