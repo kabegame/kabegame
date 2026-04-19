@@ -1,7 +1,15 @@
 // Shared modules (local + web)
 pub(crate) mod core_init;
 
+// Shared non-android modules (local desktop + web)
+#[cfg(not(target_os = "android"))]
+pub(crate) mod commands_core;
+#[cfg(not(target_os = "android"))]
+pub(crate) mod ws;
+
 // Web mode entry
+#[cfg(feature = "web")]
+mod web_assets;
 #[cfg(feature = "web")]
 mod web_entry;
 
@@ -14,11 +22,11 @@ mod commands;
 mod compress_provider;
 #[cfg(all(feature = "local", target_os = "android"))]
 mod content_io_provider;
-#[cfg(all(feature = "local", not(target_os = "android")))]
+#[cfg(not(target_os = "android"))]
 mod http_server;
 #[cfg(all(feature = "local", target_os = "linux"))]
 mod linux_desktop;
-#[cfg(all(feature = "local", not(target_os = "android")))]
+#[cfg(not(target_os = "android"))]
 mod mcp_server;
 #[cfg(feature = "local")]
 pub mod startup;

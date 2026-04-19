@@ -122,6 +122,8 @@ export class ComponentPlugin extends BasePlugin {
 
     bs.hooks.beforeBuild.tap(this.name, (comp?: string) => {
       const component = comp ? new Component(comp) : this.component!;
+      // web mode 无 Tauri bundle，跳过 tauri.conf.json / capabilities 模板处理
+      if (bs.context.mode?.isWeb) return;
       // 编译可能存在的handlebars覆盖 tauri.config.json
       const tauriConfigHandlebars = path.resolve(
         component.appDir,
@@ -136,7 +138,7 @@ export class ComponentPlugin extends BasePlugin {
             encoding: "utf-8",
           }).toString(),
         );
-        const isAndroid = !!bs.context.isAndroid;
+        const isAndroid = !!bs.context.mode?.isAndroid;
         const isWeb = !!bs.context.mode?.isWeb;
         const templateCtx = {
           isWindows: !isAndroid && OSPlugin.isWindows,
@@ -145,7 +147,6 @@ export class ComponentPlugin extends BasePlugin {
           isLight: isAndroid || bs.context.mode!.isLight,
           isDev: bs.context.cmd!.isDev,
           isAndroid: isAndroid,
-          isWeb: isWeb,
           isWindowEffect:
             !isAndroid && (OSPlugin.isWindows || OSPlugin.isMacOS),
           noResources: false,
@@ -199,8 +200,9 @@ export class ComponentPlugin extends BasePlugin {
         if (
           component.isMain &&
           !bs.context.mode!.isLight &&
+          !bs.context.mode!.isWeb &&
           !OSPlugin.isLinux &&
-          !bs.context.isAndroid
+          !bs.context.mode?.isAndroid
         ) {
           stageResourceBinary(Component.cargoComp(Component.CLI));
         }

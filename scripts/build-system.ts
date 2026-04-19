@@ -6,6 +6,7 @@
 
 import { AsyncSeriesHook, SyncHook } from "tapable";
 import path from "path";
+import { existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { Component, ComponentPlugin } from "./plugins/component-plugin.js";
 import { Mode, ModePlugin } from "./plugins/mode-plugin.js";
@@ -273,6 +274,13 @@ export class BuildSystem {
             .concat(mergedArgs);
           run("tauri", args, { cwd, bin: "cargo" });
         } else if (this.context.mode!.isWeb) {
+          const distMain = path.join(root, "dist-main");
+          if (!existsSync(distMain)) {
+            throw new Error(
+              `[web build] dist-main/ not found at ${distMain}.\n` +
+              `Run Vue build first: bun b -c main --mode web --skip cargo`,
+            );
+          }
           const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
           const args = this.buildCargoArgs(
             ["build", "--release", "-p", "kabegame"],

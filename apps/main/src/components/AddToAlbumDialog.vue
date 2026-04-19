@@ -30,7 +30,7 @@ import { computed, ref, watch, nextTick } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ElMessage } from "element-plus";
 import { storeToRefs } from "pinia";
-import { useAlbumStore } from "@/stores/albums";
+import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 
@@ -59,7 +59,7 @@ const albumStore = useAlbumStore();
 const { albumCounts } = storeToRefs(albumStore);
 
 const albumTreeForPicker = computed(() =>
-  albumStore.getAlbumTreeExcluding(props.excludeAlbumIds ?? []),
+  albumStore.getAlbumTreeExcluding([HIDDEN_ALBUM_ID, ...(props.excludeAlbumIds ?? [])]),
 );
 
 const selectedAlbumId = ref<string | null>(null);

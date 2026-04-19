@@ -36,10 +36,13 @@ tauri-plugin-opener = { version = "2", optional = true }
 kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "ipc-client"] }
 governor = "0.7"
 axum = "0.8"
+futures-util = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }
 reqwest = { version = "0.11", features = ["stream", "native-tls"] }
 rmcp = { version = "1.4", features = ["server", "transport-streamable-http-server"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
+include_dir = "0.7"
 
 [target.'cfg(target_os = "android")'.dependencies]
 kabegame-core = {workspace = true, default-features = false, features = ["ipc-server"] }
@@ -53,7 +56,6 @@ tauri-plugin-task-notification = { workspace = true, optional = true }
 tauri-plugin-android-battery-optimization = { version = "0.1.4", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-include_dir = "0.7"
 dokan = {version = "0.3.1", optional = true}
 widestring = {version = "0.4.3", optional = true}
 winapi = {version = "0.3.9", features = ["ntstatus", "winnt", "winbase"], optional = true}

@@ -7,7 +7,7 @@ use axum::{
     extract::Query,
     http::{
         header::{
-            HeaderValue, ACCEPT_RANGES, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE,
+            HeaderValue, ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE,
             CONTENT_TYPE, RANGE,
         },
         Request, StatusCode, Uri,
@@ -61,19 +61,6 @@ fn is_allowed_media_ext(path: &str) -> bool {
         .and_then(|e| e.to_str())
         .unwrap_or_default();
     kabegame_core::image_type::is_supported_media_ext(ext)
-}
-
-#[cfg(not(target_os = "android"))]
-fn mime_for_doc_image_path(path: &str) -> String {
-    let ext = Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    kabegame_core::image_type::mime_by_ext()
-        .get(&ext)
-        .cloned()
-        .unwrap_or_else(|| "application/octet-stream".to_string())
 }
 
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
@@ -345,35 +332,6 @@ async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
         })
 }
 
-/// 插件文档图片：从已安装插件的 .kgpg 中读取 doc_root 下图片，供桌面端 HTTP 复用
-#[cfg(not(target_os = "android"))]
-async fn handle_plugin_doc_image(Query(query): Query<PluginDocImageQuery>) -> Response {
-    let plugin_id = query.plugin_id.trim();
-    let path = query.path.trim();
-    if plugin_id.is_empty() || path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "missing plugin_id or path").into_response();
-    }
-    if !is_allowed_media_ext(path) {
-        return (StatusCode::FORBIDDEN, "path extension not allowed").into_response();
-    }
-
-    let manager = kabegame_core::plugin::PluginManager::global();
-    let bytes = match manager
-        .load_plugin_image_for_detail(plugin_id, path, None)
-        .await
-    {
-        Ok(b) => b,
-        Err(_) => return (StatusCode::NOT_FOUND, "plugin or image not found").into_response(),
-    };
-
-    let mime = mime_for_doc_image_path(path);
-    let mut out = (StatusCode::OK, bytes).into_response();
-    out.headers_mut()
-        .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-    set_content_type_if_present(&mut out, Some(&mime));
-    out
-}
-
 #[cfg(not(target_os = "android"))]
 async fn handle_unmatched(uri: Uri) -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
@@ -431,24 +389,13 @@ async fn handle_debug_ingest(body: Bytes) -> Response {
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// Returns a Router with file-serving routes usable by both local and web modes.
+/// Does NOT include `/plugin-doc-image` (inlined as data URLs on the frontend).
 #[cfg(not(target_os = "android"))]
-pub async fn start_http_server() -> Result<u16, String> {
-    if let Some(port) = HTTP_SERVER_PORT.get() {
-        return Ok(*port);
-    }
-
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .map_err(|e| format!("bind file server failed: {e}"))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| format!("read file server local addr failed: {e}"))?
-        .port();
-
+pub fn file_routes() -> Router {
     let mut app = Router::new()
         .route("/file", get(handle_file_query))
         .route("/thumbnail", get(handle_thumbnail_query))
-        .route("/plugin-doc-image", get(handle_plugin_doc_image))
         .route("/proxy", get(handle_proxy_query));
 
     #[cfg(debug_assertions)]
@@ -463,16 +410,27 @@ pub async fn start_http_server() -> Result<u16, String> {
                     .allow_headers(Any),
             );
         app = app.merge(debug_routes);
-        eprintln!(
-            "[file-server] debug ingest POST http://127.0.0.1:{port}/debug/ingest → {}",
-            kabegame_core::app_paths::AppPaths::global()
-                .debug_ingest_log()
-                .display()
-        );
     }
 
-    let app = app.fallback(handle_unmatched);
-    tauri::async_runtime::spawn(async move {
+    app
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn start_http_server() -> Result<u16, String> {
+    if let Some(port) = HTTP_SERVER_PORT.get() {
+        return Ok(*port);
+    }
+
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .map_err(|e| format!("bind file server failed: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("read file server local addr failed: {e}"))?
+        .port();
+
+    let app = file_routes().fallback(handle_unmatched);
+    tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
             eprintln!("[file-server] stopped: {e}");
         }
@@ -482,7 +440,7 @@ pub async fn start_http_server() -> Result<u16, String> {
     Ok(port)
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), feature = "local"))]
 #[tauri::command]
 pub async fn get_http_server_base_url() -> Result<String, String> {
     for _ in 0..60 {

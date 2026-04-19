@@ -18,7 +18,16 @@ pub fn run() {
             std::process::exit(1);
         }
 
-        let router = Router::new().route("/__ping", get(|| async { "ok" }));
+        crate::ws::init_registry();
+        crate::ws::start_web_event_loop();
+
+        let router = Router::new()
+            .route("/__ping", get(|| async { "ok" }))
+            .merge(crate::http_server::file_routes())
+            .merge(crate::mcp_server::mcp_nest())
+            .merge(crate::ws::web_routes())
+            .fallback_service(crate::web_assets::static_assets_router());
+
         let addr: SocketAddr = "127.0.0.1:7490".parse().unwrap();
         let listener = tokio::net::TcpListener::bind(addr)
             .await
