@@ -1,6 +1,6 @@
 <template>
   <AndroidPickerNumber
-    v-if="IS_ANDROID"
+    v-if="isCompact"
     :model-value="localValue"
     :min="effectiveMin"
     :max="effectiveMax"
@@ -25,7 +25,7 @@
 import { computed, ref, watch } from "vue";
 import { useSettingKeyState } from "../../../composables/useSettingKeyState";
 import { type AppSettingKey } from "../../../stores/settings";
-import { IS_ANDROID } from "../../../env";
+import { useUiStore } from "../../../stores/ui";
 import AndroidPickerNumber from "../../AndroidPickerNumber.vue";
 
 const props = defineProps<{
@@ -36,6 +36,7 @@ const props = defineProps<{
   disabled?: boolean;
 }>();
 
+const isCompact = computed(() => useUiStore().isCompact);
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState(props.settingKey);
 const localValue = ref<number>(0);
 

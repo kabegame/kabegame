@@ -9,7 +9,7 @@
   />
 
   <!-- 桌面：筛选工具栏，仅在有失效图片时显示 -->
-  <div v-if="!IS_ANDROID && allFailedLength > 0" class="failed-filter-toolbar">
+  <div v-if="!uiStore.isCompact && allFailedLength > 0" class="failed-filter-toolbar">
     <el-dropdown trigger="click" @command="onDesktopFilterCommand">
       <el-button class="failed-filter-btn">
         <el-icon class="failed-filter-icon">
@@ -43,7 +43,7 @@
   </div>
 
   <!-- Android：fold 内点选「筛选」弹出 van-picker -->
-  <Teleport v-if="IS_ANDROID" to="body">
+  <Teleport v-if="uiStore.isCompact" to="body">
     <van-popup v-model:show="showFilterPicker" position="bottom" round>
       <van-picker
         v-model="filterPickerSelected"
@@ -64,9 +64,9 @@ import { useI18n } from "@kabegame/i18n";
 import { ArrowDown, Filter } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
-import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import type { usePluginStore } from "@/stores/plugins";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 interface PluginGroup {
   pluginId: string;
@@ -102,13 +102,14 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const headerStore = useHeaderStore();
+const uiStore = useUiStore();
 const showFilterPicker = ref(false);
 useModalBack(showFilterPicker);
 const filterPickerSelected = ref<string[]>([""]);
 
 const showIds = computed(() => {
   const ids: HeaderFeatureId[] = [HeaderFeatureId.TaskDrawer];
-  if (IS_ANDROID) return ids;
+  if (uiStore.isCompact) return ids;
   ids.push(HeaderFeatureId.QuickSettings);
   if (props.hasPendingInFilter) {
     ids.push(HeaderFeatureId.FailedImagesCancelWaiting);
@@ -121,7 +122,7 @@ const showIds = computed(() => {
 });
 
 const foldIds = computed(() => {
-  if (!IS_ANDROID) return [];
+  if (!uiStore.isCompact) return [];
   const ids: HeaderFeatureId[] = [];
   if (props.hasPendingInFilter) {
     ids.push(HeaderFeatureId.FailedImagesCancelWaiting);
@@ -141,7 +142,7 @@ const foldIds = computed(() => {
 watch(
   () => [props.pluginFilterLabel, props.pluginGroups.length],
   () => {
-    if (!IS_ANDROID) return;
+    if (!uiStore.isCompact) return;
     if (props.pluginGroups.length > 0) {
       headerStore.setFoldLabel(
         HeaderFeatureId.FailedImagesFilter,
@@ -154,7 +155,7 @@ watch(
   { immediate: true }
 );
 onUnmounted(() => {
-  if (!IS_ANDROID) return;
+  if (!uiStore.isCompact) return;
   headerStore.setFoldLabel(HeaderFeatureId.FailedImagesFilter, undefined);
 });
 
@@ -193,7 +194,7 @@ function handleAction(payload: { id: string; data: { type: string } }) {
       emit("deleteAll");
       break;
     case HeaderFeatureId.FailedImagesFilter:
-      if (IS_ANDROID) {
+      if (uiStore.isCompact) {
         filterPickerSelected.value = [
           props.filterPluginId ?? "",
         ];

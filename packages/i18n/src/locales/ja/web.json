@@ -1,0 +1,30 @@
+{
+  "desktopOnlyTitle": "デスクトップ専用機能",
+  "desktopOnlyDesc": "「{feature}」はデスクトップアプリでのみ利用できます。公式サイトからKabegameをダウンロードしてください。",
+  "goHomepage": "公式サイトへ",
+  "superRequiredTitle": "管理者権限が必要",
+  "superRequiredDesc": "この設定を変更するには super（管理者）モードが必要です。左下のトグルで super モードを有効にしてください。",
+  "feature": {
+    "picker": "ファイル選択",
+    "share": "共有",
+    "openLocal": "ローカルファイルを開く",
+    "imageClickAction": "画像クリック動作",
+    "wallpaper": "壁紙を設定",
+    "wallpaperRotation": "壁紙ローテーション",
+    "wallpaperPlayback": "壁紙再生",
+    "openCrawlerWindow": "クローラーウィンドウ",
+    "localImport": "ローカルインポート",
+    "crawl": "収集開始",
+    "autoLaunch": "自動起動",
+    "defaultDownloadDir": "デフォルトダウンロードフォルダ",
+    "albumDrive": "アルバムドライブ",
+    "windowState": "ウィンドウ状態",
+    "downloadSettings": "ダウンロード設定",
+    "gallerySettings": "ギャラリー表示",
+    "autoDeduplicate": "自動重複排除",
+    "scheduler": "スケジューラ",
+    "deleteImages": "画像を削除",
+    "hideImage": "画像を非表示",
+    "organize": "ライブラリを整理"
+  }
+}

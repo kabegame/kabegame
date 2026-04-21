@@ -16,16 +16,18 @@ export const isAndroid =
   process.env.VITE_ANDROID === "true";
 
 export const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
+export const isWeb = process.env.KABEGAME_MODE === "web";
 
 export default {
   plugins: [vue(), UnoCSS()],
 
   define: {
     __DEV__: process.env.NODE_ENV === "development",
-    __WINDOWS__: !isAndroid && isWindows,
-    __LINUX__: !isAndroid && isLinux,
-    __MACOS__: !isAndroid && isMacOS,
+    __WINDOWS__: !isAndroid && !isWeb && isWindows,
+    __LINUX__: !isAndroid && !isWeb && isLinux,
+    __MACOS__: !isAndroid && !isWeb && isMacOS,
     __ANDROID__: isAndroid,
+    __WEB__: isWeb,
     __LIGHT_MODE__: isAndroid || isLightMode,
     // 切换此开关来强制重启vite服务器
     __REBOOT__: true,
@@ -39,17 +41,17 @@ export default {
   server: {
     port: 1420,
     strictPort: true,
-    // 桌面端仅监听 localhost；Android 真机需监听所有网卡以便设备连接
-    host: isAndroid,
-    // Android 真机：HMR 与 origin 指向开发机 IP，使设备能连上 WebSocket 并正确解析 script/source map 等请求
-    ...(isAndroid
+    // 桌面端仅监听 localhost；Android 真机或 web 模式需监听所有网卡以便设备连接
+    host: isAndroid || isWeb,
+    // Android 真机或者web：HMR 与 origin 指向开发机 IP，使设备能连上 WebSocket 并正确解析 script/source map 等请求
+    ...(isAndroid || isWeb
       ? {
           origin: `http://${getDevServerHost()}:1420`,
-          hmr: {
-            protocol: "ws",
-            host: getDevServerHost(),
-            port: 1420,
-          },
+          // hmr: {
+          //   protocol: "ws",
+          //   host: getDevServerHost(),
+          //   port: 1420,
+          // },
         }
       : {}),
     watch: {

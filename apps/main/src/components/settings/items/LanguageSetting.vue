@@ -1,5 +1,5 @@
 <template>
-  <template v-if="IS_ANDROID">
+  <template v-if="uiStore.isCompact">
     <div
       class="android-picker-select language-setting-android"
       :class="{ 'is-disabled': props.disabled || disabled }"
@@ -45,9 +45,9 @@
 import { computed, ref, watch } from "vue";
 import { ArrowDown } from "@element-plus/icons-vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { SUPPORTED_LANGUAGES, resolveLanguage } from "@kabegame/i18n";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = defineProps<{
   disabled?: boolean;
@@ -58,6 +58,8 @@ const { settingValue, disabled, set } = useSettingKeyState("language");
 const options = computed(() =>
   SUPPORTED_LANGUAGES.map((l) => ({ label: l.label, value: l.value })),
 );
+
+const uiStore = useUiStore();
 
 /** 与解析链一致，保证选项中始终有合法选中值 */
 const effectiveLocale = computed(() =>

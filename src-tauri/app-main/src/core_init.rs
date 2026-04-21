@@ -104,11 +104,13 @@ pub fn init_globals() -> Result<(), String> {
     }
     println!("  ✓ ProviderRuntime initialized");
 
-    // 桌面端 local mode：OrganizeService、VD 等全局单例
+    // OrganizeService 在 local 和 web 模式下均需要（非 Android）
+    #[cfg(not(target_os = "android"))]
+    OrganizeService::init_global(Arc::new(OrganizeService::new()))?;
+
+    // 桌面端 local mode：VD 等全局单例
     #[cfg(all(not(target_os = "android"), feature = "local"))]
     {
-        OrganizeService::init_global(Arc::new(OrganizeService::new()))?;
-
         #[cfg(not(kabegame_mode = "light"))]
         {
             VirtualDriveService::init_global()

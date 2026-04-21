@@ -90,10 +90,6 @@ pub enum SettingKey {
     ImageClickAction,
     /// 画廊图片宽高比
     GalleryImageAspectRatio,
-    /// 画廊列数（0=动态，1-4=固定）
-    GalleryGridColumns,
-    /// 画廊 SimplePage 每页条数（100 / 500 / 1000）
-    GalleryPageSize,
     /// 画廊图片在方框内溢出时的垂直对齐（center/top/bottom），仅桌面端使用
     GalleryImageObjectPosition,
     /// 自动去重
@@ -284,14 +280,6 @@ impl Settings {
         crate::app_paths::AppPaths::global().settings_json()
     }
 
-    /// 画廊每页条数：仅允许 100 / 500 / 1000
-    fn normalize_gallery_page_size(n: u32) -> u32 {
-        match n {
-            100 | 500 | 1000 => n,
-            _ => 100,
-        }
-    }
-
     fn default_value(key: SettingKey) -> SettingValue {
         match key {
             SettingKey::AutoLaunch => SettingValue::Bool(false),
@@ -302,8 +290,6 @@ impl Settings {
             SettingKey::NetworkRetryCount => SettingValue::U32(2),
             SettingKey::ImageClickAction => SettingValue::String("preview".to_string()),
             SettingKey::GalleryImageAspectRatio => SettingValue::OptionString(None),
-            SettingKey::GalleryGridColumns => SettingValue::U32(0),
-            SettingKey::GalleryPageSize => SettingValue::U32(100),
             SettingKey::GalleryImageObjectPosition => SettingValue::String("center".to_string()),
             SettingKey::AutoDeduplicate => SettingValue::Bool(false),
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
@@ -525,8 +511,6 @@ Write-Output "$style,$tile"
             SettingKey::NetworkRetryCount,
             SettingKey::ImageClickAction,
             SettingKey::GalleryImageAspectRatio,
-            SettingKey::GalleryGridColumns,
-            SettingKey::GalleryPageSize,
             SettingKey::GalleryImageObjectPosition,
             SettingKey::AutoDeduplicate,
             SettingKey::DefaultDownloadDir,
@@ -651,13 +635,8 @@ Write-Output "$style,$tile"
             SettingKey::MaxConcurrentDownloads
             | SettingKey::MaxConcurrentTasks
             | SettingKey::NetworkRetryCount
-            | SettingKey::WallpaperRotationIntervalMinutes
-            | SettingKey::GalleryGridColumns => {
+            | SettingKey::WallpaperRotationIntervalMinutes => {
                 Ok(SettingValue::U32(json.as_u64().unwrap_or(0) as u32))
-            }
-            SettingKey::GalleryPageSize => {
-                let n = json.as_u64().unwrap_or(100) as u32;
-                Ok(SettingValue::U32(Self::normalize_gallery_page_size(n)))
             }
             SettingKey::DownloadIntervalMs => {
                 let v = json.as_u64().unwrap_or(500) as u32;
@@ -760,8 +739,6 @@ Write-Output "$style,$tile"
             SettingKey::NetworkRetryCount => "networkRetryCount".to_string(),
             SettingKey::ImageClickAction => "imageClickAction".to_string(),
             SettingKey::GalleryImageAspectRatio => "galleryImageAspectRatio".to_string(),
-            SettingKey::GalleryGridColumns => "galleryGridColumns".to_string(),
-            SettingKey::GalleryPageSize => "galleryPageSize".to_string(),
             SettingKey::GalleryImageObjectPosition => "galleryImageObjectPosition".to_string(),
             SettingKey::AutoDeduplicate => "autoDeduplicate".to_string(),
             SettingKey::DefaultDownloadDir => "defaultDownloadDir".to_string(),
@@ -973,20 +950,6 @@ Write-Output "$style,$tile"
         Self::cells().get(&SettingKey::GalleryImageObjectPosition)
             .map(|c| c.load().as_string().unwrap_or_else(|| "center".to_string()))
             .unwrap_or_else(|| "center".to_string())
-    }
-
-    pub fn get_gallery_grid_columns(&self) -> u32 {
-        let n = Self::cells().get(&SettingKey::GalleryGridColumns)
-            .map(|c| c.load().as_u32().unwrap_or(0))
-            .unwrap_or(0);
-        if n <= 4 { n } else { 0 }
-    }
-
-    pub fn get_gallery_page_size(&self) -> u32 {
-        let n = Self::cells().get(&SettingKey::GalleryPageSize)
-            .map(|c| c.load().as_u32().unwrap_or(100))
-            .unwrap_or(100);
-        Self::normalize_gallery_page_size(n)
     }
 
     pub fn get_auto_deduplicate(&self) -> bool {
@@ -1257,32 +1220,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::GalleryImageObjectPosition, &new_value);
-        Self::trigger_debounce_save()?;
-        Ok(())
-    }
-
-    pub fn set_gallery_grid_columns(&self, columns: u32) -> Result<(), String> {
-        if columns > 4 {
-            return Err("画廊列数必须在 0-4 之间".to_string());
-        }
-        let cells = Self::cells();
-        let new_value = SettingValue::U32(columns);
-        if let Some(cell) = cells.get(&SettingKey::GalleryGridColumns) {
-            cell.store(Arc::new(new_value.clone()));
-        }
-        Self::emit_setting_change(SettingKey::GalleryGridColumns, &new_value);
-        Self::trigger_debounce_save()?;
-        Ok(())
-    }
-
-    pub fn set_gallery_page_size(&self, size: u32) -> Result<(), String> {
-        let clamped = Self::normalize_gallery_page_size(size);
-        let cells = Self::cells();
-        let new_value = SettingValue::U32(clamped);
-        if let Some(cell) = cells.get(&SettingKey::GalleryPageSize) {
-            cell.store(Arc::new(new_value.clone()));
-        }
-        Self::emit_setting_change(SettingKey::GalleryPageSize, &new_value);
         Self::trigger_debounce_save()?;
         Ok(())
     }

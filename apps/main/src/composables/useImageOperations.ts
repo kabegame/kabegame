@@ -1,12 +1,13 @@
 import { computed, type Ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { useAlbumStore } from "@/stores/albums";
+import { useAlbumStore, FAVORITE_ALBUM_ID } from "@/stores/albums";
 import { storeToRefs } from "pinia";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { fileToUrl } from "@kabegame/core/httpServer";
+import { IS_WEB } from "@kabegame/core/env";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
 import { i18n } from "@kabegame/i18n";
@@ -26,7 +27,7 @@ export function useImageOperations(
 ) {
   const albumStore = useAlbumStore();
   const settingsStore = useSettingsStore();
-  const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
+
   const albums = computed(() => albumStore.albums);
   const { set: setWallpaperRotationEnabled } = useSettingKeyState(
     "wallpaperRotationEnabled",
@@ -54,8 +55,28 @@ export function useImageOperations(
     }
   };
 
+  // web 模式：通过 <a download> 触发浏览器下载原图
+  const handleDownloadImage = (image: ImageInfo) => {
+    const url = fileToUrl(image.localPath) || image.url;
+    if (!url) {
+      ElMessage.warning(i18n.global.t("common.imageNotLoadedYet"));
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = image.displayName || image.localPath.split(/[\\/]/).pop() || image.id;
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
   // 复制图片到剪贴板（不依赖 Tauri 剪贴板插件：本地文件用后端 copy_image_to_clipboard，否则用 navigator.clipboard）
   const handleCopyImage = async (image: ImageInfo) => {
+    if (IS_WEB) {
+      handleDownloadImage(image);
+      return;
+    }
     try {
       const writeImageBlobToClipboard = async (blob: Blob) => {
         const mime = blob.type || "image/png";
@@ -264,13 +285,13 @@ export function useImageOperations(
       // 1) 更新画廊缓存（就地更新，避免全量刷新导致“加载更多”图片丢失）
       applyFavoriteChangeToGalleryCache([image.id], newFavorite);
       // 2) 更新收藏画册计数（用于画册页预览/计数显示）
-      const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID.value] || 0;
-      albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(
+      const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID] || 0;
+      albumStore.albumCounts[FAVORITE_ALBUM_ID] = Math.max(
         0,
         currentCount + (newFavorite ? 1 : -1),
       );
       // 3) 若收藏画册图片缓存已加载：取消收藏应从缓存数组中移除（而不是清缓存）
-      const favList = albumStore.albumImages[FAVORITE_ALBUM_ID.value];
+      const favList = albumStore.albumImages[FAVORITE_ALBUM_ID];
       if (Array.isArray(favList)) {
         const idx = favList.findIndex((i) => i.id === image.id);
         if (newFavorite) {

@@ -65,8 +65,8 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { FolderOpened } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@/api/rpc";
+import { listen } from "@/api/rpc";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import OrganizeDialog from "@/components/OrganizeDialog.vue";
 

@@ -27,7 +27,6 @@
       :installing-text="t('plugins.installing')"
       :empty-description="t('common.pluginNotExist')"
       :doc-empty-description="t('common.pluginNoDoc')"
-      :load-doc-image-bytes="loadDocImageBytes"
       @install="doInstall"
       @copy-id="copyText"
       @back="handleBack"
@@ -61,13 +60,13 @@
 import { ref, computed, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useI18n, usePluginManifestI18n } from '@kabegame/i18n';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from "@/api/rpc";
 import { ElMessage } from 'element-plus';
 import type { Plugin } from '@kabegame/core/stores/plugins';
 import { usePluginStore } from '@/stores/plugins';
 import { useApp } from '@/stores/app';
 import { isUpdateAvailable } from '@kabegame/core/utils/version';
-import { IS_ANDROID } from '@kabegame/core/env';
+import { IS_ANDROID, IS_WEB } from '@kabegame/core/env';
 import { useModalBack } from '@kabegame/core/composables/useModalBack';
 import PluginDetailContent from '@kabegame/core/components/plugin/PluginDetailContent.vue';
 
@@ -150,14 +149,6 @@ const installText = computed(() => {
   return isUpdateAvailable(existingVersion.value, preview.value.version) ? t('plugins.update') : t('plugins.reinstall');
 });
 
-const loadDocImageBytes = async (imagePath: string): Promise<number[]> => {
-  if (!props.kgpgPath) throw new Error("未提供插件文件路径");
-  return await invoke<number[]>('get_plugin_image_from_zip', {
-    zipPath: props.kgpgPath,
-    imagePath
-  });
-};
-
 const doInstall = async () => {
   if (!props.kgpgPath) return;
   installing.value = true;
@@ -176,8 +167,7 @@ const doInstall = async () => {
 
 const copyText = async (text: string) => {
   try {
-    const { isTauri } = await import("@tauri-apps/api/core");
-    if (isTauri()) {
+    if (!IS_WEB) {
       const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
       await writeText(text);
     } else {

@@ -16,6 +16,10 @@ import { Picture, FolderOpened, Box, VideoPlay } from "@element-plus/icons-vue";
 import OptionPickerDrawer from "@/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@/components/common/OptionPickerDrawer.vue";
 import { pickFolder, type PickFolderResult } from "tauri-plugin-picker-api";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import { useApp } from "@/stores/app";
+import { useUiStore } from "@kabegame/core/stores/ui";
+import { IS_WEB } from "@kabegame/core/env";
 
 interface Props {
   modelValue: boolean;
@@ -27,6 +31,7 @@ const props = withDefaults(defineProps<Props>(), {
 });
 const { t } = useI18n();
 const resolvedTitle = computed(() => props.title ?? t('gallery.chooseImportMethod'));
+const appStore = useApp();
 
 const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;
@@ -46,12 +51,12 @@ const mediaOptions = computed<OptionItem[]>(() => [
     desc: t('gallery.selectVideoDesc'),
     icon: VideoPlay,
   },
-  {
+  ...(IS_WEB ? [] : [{
     id: "folder",
     title: t('gallery.selectFolder'),
     desc: t('gallery.selectFolderDesc'),
     icon: FolderOpened,
-  },
+  }]),
   {
     id: "archive",
     title: t('gallery.selectArchive'),
@@ -63,6 +68,7 @@ const mediaOptions = computed<OptionItem[]>(() => [
 // 受控：仅通过 modelValue 控制显示；选择时发 select，由父组件关闭
 // 移动端选文件夹时在此调用 picker 插件并带上结果
 const handleSelect = async (id: string) => {
+  if (!appStore.isSuper && await guardDesktopOnly("picker")) return;
   const type = id as "image" | "folder" | "video" | "archive";
   if (type === "folder") {
     const result = await pickFolder();

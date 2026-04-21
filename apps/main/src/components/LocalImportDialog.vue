@@ -49,15 +49,15 @@
         </div>
       </el-form-item>
 
-      <el-form-item v-if="paths.length > 0" :label="$t('common.selectedPaths')">
+      <el-form-item v-if="displayItems.length > 0" :label="$t('common.selectedPaths')">
         <div class="paths-list">
           <div
-            v-for="(p, idx) in paths"
+            v-for="(label, idx) in displayItems"
             :key="idx"
             class="path-item"
           >
-            <span class="path-text">{{ p }}</span>
-            <el-button type="danger" link size="small" @click="removePath(idx)">
+            <span class="path-text">{{ label }}</span>
+            <el-button type="danger" link size="small" @click="removeItem(idx)">
               {{ $t('common.remove') }}
             </el-button>
           </div>
@@ -79,7 +79,7 @@
     <template #footer>
       <div class="dialog-footer">
         <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
-        <el-button type="primary" :disabled="paths.length === 0" @click="handleSubmit">
+        <el-button type="primary" :disabled="displayItems.length === 0" @click="handleSubmit">
           {{ $t('albums.startImport') }}
         </el-button>
       </div>
@@ -93,10 +93,13 @@ import { useI18n } from "@kabegame/i18n";
 import { Document, FolderOpened } from "@element-plus/icons-vue";
 import { ElDialog, ElMessage } from "element-plus";
 import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { IS_WEB } from "@kabegame/core/env";
+import { invoke, uploadImport } from "@/api/rpc";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useApp } from "@/stores/app";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 interface Album {
   id: string;
@@ -120,20 +123,50 @@ const visible = computed({
 useModalBack(visible);
 
 const crawlerStore = useCrawlerStore();
+const appStore = useApp();
 const { extensions: imageExtensions, load: loadImageTypes } = useImageTypes();
 
 const albums = ref<Album[]>([]);
 const selectedOutputAlbumId = ref<string | undefined>();
 const newOutputAlbumName = ref("");
 const paths = ref<string[]>([]);
+const files = ref<File[]>([]);
 const recursive = ref(true);
 const includeArchive = ref(false);
 const isCreatingNewOutputAlbum = computed(
   () => selectedOutputAlbumId.value === "__create_new__"
 );
+const displayItems = computed(() =>
+  IS_WEB ? files.value.map((f) => f.name) : paths.value,
+);
 
 function hasExplicitArchivePath(path: string): boolean {
   return /\.(zip|rar)$/i.test(path.trim());
+}
+
+function pickWebFiles(directory: boolean): Promise<File[]> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    if (directory) {
+      (input as HTMLInputElement & { webkitdirectory?: boolean }).webkitdirectory = true;
+    }
+    input.style.display = "none";
+    let settled = false;
+    const finish = (list: File[]) => {
+      if (settled) return;
+      settled = true;
+      if (input.parentNode) input.parentNode.removeChild(input);
+      resolve(list);
+    };
+    input.addEventListener("change", () => {
+      finish(input.files ? Array.from(input.files) : []);
+    });
+    input.addEventListener("cancel", () => finish([]));
+    document.body.appendChild(input);
+    input.click();
+  });
 }
 
 async function loadAlbums() {
@@ -149,6 +182,15 @@ async function loadAlbums() {
 async function handleAddFiles() {
   try {
     await loadImageTypes();
+    if (IS_WEB) {
+      const picked = await pickWebFiles(false);
+      for (const f of picked) {
+        if (!files.value.some((x) => x.name === f.name && x.size === f.size)) {
+          files.value.push(f);
+        }
+      }
+      return;
+    }
     const exts = imageExtensions.value.length ? imageExtensions.value : ["jpg", "jpeg", "png", "gif", "webp", "bmp", "mp4", "mov"];
     const selected = await open({
       directory: false,
@@ -175,9 +217,18 @@ async function handleAddFiles() {
   }
 }
 
-// TODO: web实现本地导入和服务器不同
 async function handleAddFolder() {
   try {
+    if (IS_WEB) {
+      const picked = await pickWebFiles(true);
+      for (const f of picked) {
+        const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+        if (!files.value.some((x) => ((x as File & { webkitRelativePath?: string }).webkitRelativePath || x.name) === rel)) {
+          files.value.push(f);
+        }
+      }
+      return;
+    }
     const selected = await open({
       directory: true,
       multiple: false,
@@ -197,8 +248,12 @@ async function handleAddFolder() {
   }
 }
 
-function removePath(idx: number) {
-  paths.value.splice(idx, 1);
+function removeItem(idx: number) {
+  if (IS_WEB) {
+    files.value.splice(idx, 1);
+  } else {
+    paths.value.splice(idx, 1);
+  }
 }
 
 async function handleCreateOutputAlbum() {
@@ -221,8 +276,13 @@ async function handleCreateOutputAlbum() {
 }
 
 async function handleSubmit() {
-  if (paths.value.length === 0) {
+  if (displayItems.value.length === 0) {
     ElMessage.warning(t('albums.addPathFirst'));
+    return;
+  }
+
+  if (IS_WEB && !appStore.isSuper) {
+    await guardDesktopOnly("localImport");
     return;
   }
 
@@ -245,6 +305,26 @@ async function handleSubmit() {
     outputAlbumId = selectedOutputAlbumId.value;
   }
 
+  if (IS_WEB) {
+    const hasArchiveFiles = files.value.some((f) => hasExplicitArchivePath(f.name));
+    const effectiveIncludeArchive = includeArchive.value || hasArchiveFiles;
+    try {
+      await uploadImport(files.value, {
+        outputAlbumId,
+        recursive: recursive.value,
+        includeArchive: effectiveIncludeArchive,
+      });
+    } catch (e) {
+      console.error("上传导入失败:", e);
+      ElMessage.error(t('albums.selectFileFailed'));
+      return;
+    }
+    visible.value = false;
+    files.value = [];
+    ElMessage.success(t('gallery.localImportTaskAdded'));
+    return;
+  }
+
   const hasArchiveFiles = paths.value.some(hasExplicitArchivePath);
   const effectiveIncludeArchive = includeArchive.value || hasArchiveFiles;
 
@@ -265,6 +345,7 @@ function handleOpen() {
 
 function handleClosed() {
   paths.value = [];
+  files.value = [];
   newOutputAlbumName.value = "";
   selectedOutputAlbumId.value = undefined;
 }

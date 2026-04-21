@@ -1,6 +1,6 @@
 <template>
   <div class="task-filter-control">
-    <el-dropdown v-if="!IS_ANDROID" trigger="click" @command="onDesktopCommand">
+    <el-dropdown v-if="!uiStore.isCompact" trigger="click" @command="onDesktopCommand">
       <el-button :class="btnClass">
         <el-icon :class="iconClass">
           <Filter />
@@ -34,7 +34,7 @@
       <span>{{ currentLabel }}</span>
     </el-button>
 
-    <Teleport v-if="IS_ANDROID" to="body">
+    <Teleport v-if="uiStore.isCompact" to="body">
       <van-popup v-model:show="showPicker" position="bottom" round>
         <van-picker
           v-model="pickerSelected"
@@ -54,8 +54,8 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ArrowDown, Filter } from "@element-plus/icons-vue";
-import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = withDefaults(
   defineProps<{
@@ -75,6 +75,8 @@ const props = withDefaults(
 const emit = defineEmits<{
   "update:modelValue": [value: "success" | "failed"];
 }>();
+
+const uiStore = useUiStore();
 
 const { t } = useI18n();
 const options = computed(() => [

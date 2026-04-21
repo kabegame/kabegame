@@ -24,7 +24,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ElMessage } from "element-plus";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingsStore } from "@kabegame/core/stores/settings";

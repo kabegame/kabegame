@@ -1,6 +1,6 @@
 <template>
   <div class="gallery-page-size-control">
-    <el-dropdown v-if="!IS_ANDROID" trigger="click" @command="onDesktopCommand">
+    <el-dropdown v-if="!uiStore.isCompact" trigger="click" @command="onDesktopCommand">
       <el-button :class="btnClass">
         <el-icon :class="iconClass">
           <Histogram />
@@ -34,7 +34,7 @@
       <span>{{ pageSizeLabel }}</span>
     </el-button>
 
-    <Teleport v-if="IS_ANDROID" to="body">
+    <Teleport v-if="uiStore.isCompact" to="body">
       <van-popup v-model:show="showPicker" position="bottom" round>
         <van-picker
           v-model="pickerSelected"
@@ -54,9 +54,8 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ArrowDown, Histogram } from "@element-plus/icons-vue";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = withDefaults(
   defineProps<{
@@ -75,8 +74,13 @@ const props = withDefaults(
   },
 );
 
+const emit = defineEmits<{
+  "update:pageSize": [value: number];
+}>();
+
+const uiStore = useUiStore();
+
 const { t } = useI18n();
-const settingsStore = useSettingsStore();
 const options = [100, 500, 1000] as const;
 const pageSizeLabel = computed(() => String(props.pageSize));
 const btnClass = computed(() =>
@@ -89,7 +93,7 @@ const iconClass = computed(() =>
 async function onDesktopCommand(cmd: string) {
   const n = Number(cmd);
   if (n !== 100 && n !== 500 && n !== 1000) return;
-  await settingsStore.save("galleryPageSize", n);
+  emit("update:pageSize", n);
 }
 
 const showPicker = ref(false);
@@ -108,7 +112,7 @@ async function onPickerConfirm() {
   const v = pickerSelected.value[0];
   const n = Number(v);
   if (n !== 100 && n !== 500 && n !== 1000) return;
-  await settingsStore.save("galleryPageSize", n);
+  emit("update:pageSize", n);
 }
 
 function openPicker() {

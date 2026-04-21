@@ -2,42 +2,55 @@ import { createPathRouteStore } from "./pathRoute";
 import {
   buildGalleryPath,
   parseGalleryPath,
-  GALLERY_STORAGE_KEY_PAGE,
-  GALLERY_STORAGE_KEY_ROOT,
-  GALLERY_STORAGE_KEY_SORT,
-  parseFilter,
-  serializeFilter,
+  GALLERY_STORAGE_KEY_PATH,
+  DEFAULT_GALLERY_FILTER,
   type GalleryFilter,
   type GalleryTimeSort,
 } from "@/utils/galleryPath";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 type GalleryRouteState = {
   filter: GalleryFilter;
   sort: GalleryTimeSort;
   page: number;
+  pageSize: number;
 };
-
-function createGalleryDefaultState(): GalleryRouteState {
-  const rootRaw = localStorage.getItem(GALLERY_STORAGE_KEY_ROOT) ?? "all";
-  const sortRaw = localStorage.getItem(GALLERY_STORAGE_KEY_SORT);
-  const pageRaw = Number(localStorage.getItem(GALLERY_STORAGE_KEY_PAGE));
-  const filter = parseFilter(rootRaw.trim() || "all");
-  const sort: GalleryTimeSort = sortRaw === "desc" ? "desc" : "asc";
-  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 1;
-  return { filter, sort, page };
-}
 
 export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
   "galleryRoute",
   {
-    parse: (path) => parseGalleryPath(path),
-    build: (state) => buildGalleryPath(state.filter, state.sort, state.page),
-    defaultState: createGalleryDefaultState(),
+    parse: (path) => {
+      const parsed = parseGalleryPath(path);
+      return {
+        filter: parsed.filter,
+        sort: parsed.sort,
+        page: parsed.page,
+        pageSize: parsed.pageSize,
+      };
+    },
+    build: (state) => buildGalleryPath(state.filter, state.sort, state.page, state.pageSize),
+    defaultState: () => {
+      const settings = useSettingsStore();
+      const stored = localStorage.getItem(GALLERY_STORAGE_KEY_PATH);
+      const parsed = stored ? parseGalleryPath(stored) : null;
+      return {
+        filter: parsed?.filter ?? DEFAULT_GALLERY_FILTER,
+        sort: parsed?.sort ?? "asc",
+        page: 1, // 页码不持久化，由当前页面状态/URL 驱动
+        pageSize: (settings.values.galleryPageSize as number | undefined) ?? 100,
+      };
+    },
     routeName: "Gallery",
     onStateChange: (state) => {
-      localStorage.setItem(GALLERY_STORAGE_KEY_ROOT, serializeFilter(state.filter));
-      localStorage.setItem(GALLERY_STORAGE_KEY_SORT, state.sort);
-      localStorage.setItem(GALLERY_STORAGE_KEY_PAGE, String(state.page));
+      // 仅持久化 filter/sort（page 不持久化，pageSize 交 settings 统一管理）
+      localStorage.setItem(
+        GALLERY_STORAGE_KEY_PATH,
+        buildGalleryPath(state.filter, state.sort, 1),
+      );
+      const settings = useSettingsStore();
+      if (state.pageSize !== settings.values.galleryPageSize) {
+        void settings.save("galleryPageSize", state.pageSize);
+      }
     },
   }
 );

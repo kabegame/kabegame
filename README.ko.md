@@ -5,8 +5,7 @@
 Tauri 기반 이차원 크롤러 클라이언트! 벽지 크롤링·관리·설정·로테이션. 매일 좋아하는 이미지로 힐링하세요~ 플러그인으로 확장 가능, 다양한 이차원·애니 벽지 사이트에서 쉽게 이미지를 가져올 수 있습니다.
 
 <div align="center">
-  <img src="docs/images/image2.png" alt="Kabegame 마스코트 1" width="256"/>
-  <img src="docs/images/image1.png" alt="Kabegame 마스코트 2" width="256"/>
+  <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
 </div>
 
 ## 갤러리 스크린샷

@@ -1,6 +1,6 @@
 <template>
   <!-- 桌面：过滤 + 排序 -->
-  <div v-if="!IS_ANDROID" class="album-detail-browse-toolbar">
+  <div v-if="!uiStore.isCompact" class="album-detail-browse-toolbar">
     <el-dropdown trigger="click" @command="onFilterCommand">
       <el-button class="album-browse-btn">
         <el-icon class="album-browse-icon">
@@ -98,6 +98,7 @@
       :page-size="pageSize"
       variant="album"
       android-ui="header"
+      @update:page-size="(v) => emit('update:pageSize', v)"
     />
   </div>
 
@@ -107,10 +108,11 @@
     :page-size="pageSize"
     variant="album"
     android-ui="header"
+    @update:page-size="(v) => emit('update:pageSize', v)"
   />
 
   <!-- Android：fold 内点选后弹出 van-picker -->
-  <Teleport v-if="IS_ANDROID" to="body">
+  <Teleport v-if="uiStore.isCompact" to="body">
     <van-popup v-model:show="showFilterPicker" position="bottom" round>
       <van-picker
         v-model="filterPickerSelected"
@@ -141,16 +143,16 @@ import { computed, ref, watch, onUnmounted } from "vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { ArrowDown, Filter, Sort } from "@element-plus/icons-vue";
 import GalleryPageSizeControl from "@/components/GalleryPageSizeControl.vue";
-import { IS_ANDROID } from "@kabegame/core/env";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import {
   type AlbumBrowseFilter,
   type AlbumBrowseSort,
 } from "@/utils/albumPath";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = defineProps<{
   albumId: string;
@@ -163,10 +165,12 @@ const props = defineProps<{
 const emit = defineEmits<{
   "update:filter": [value: AlbumBrowseFilter];
   "update:sort": [value: AlbumBrowseSort];
+  "update:pageSize": [value: number];
 }>();
 
 const { t, locale } = useI18n();
 const headerStore = useHeaderStore();
+const uiStore = useUiStore();
 
 interface GalleryMediaTypeCountsPayload {
   imageCount: number;
@@ -404,7 +408,7 @@ defineExpose({ openFilterPicker, openSortPicker, openPageSizePicker });
 watch(
   [filterLabel, sortButtonLabel, () => props.pageSize],
   () => {
-    if (!IS_ANDROID) return;
+    if (!uiStore.isCompact) return;
     headerStore.setFoldLabel(HeaderFeatureId.AlbumBrowseFilter, filterLabel.value);
     headerStore.setFoldLabel(HeaderFeatureId.AlbumBrowseSort, sortButtonLabel.value);
     headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, String(props.pageSize));
@@ -413,7 +417,7 @@ watch(
 );
 
 onUnmounted(() => {
-  if (!IS_ANDROID) return;
+  if (!uiStore.isCompact) return;
   headerStore.setFoldLabel(HeaderFeatureId.AlbumBrowseFilter, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.AlbumBrowseSort, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, undefined);

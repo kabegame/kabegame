@@ -8,12 +8,28 @@ const isWeb = process.env.KABEGAME_MODE === "web";
 // web mode: no wallpaper window, chunking always on
 const hasWallpaper = !isWeb && (isWindows || isMacOS);
 
+const webProxyTarget = "http://localhost:7490";
+const webProxyPaths = ["/rpc", "/events", "/api", "/file", "/thumbnail", "/proxy", "/mcp"];
+const webProxy = isWeb
+  ? Object.fromEntries(
+      webProxyPaths.map((p) => [p, { target: webProxyTarget, changeOrigin: true, ws: false }]),
+    )
+  : undefined;
+
 const config = merge<UserConfig, UserConfig>(pubConfig, {
   server: {
+    allowedHosts: true,
     port: 1420,
+    ...(webProxy && { proxy: webProxy }),
   },
   build: {
     outDir: path.resolve(root, "dist-main"),
+    assetsInlineLimit: (filePath) => {
+      if (filePath.includes('icon-small.png')) {
+        return true;
+      }
+      return false;
+    },
     rollupOptions: {
       input: hasWallpaper ? { wallpaper: "./wallpaper.html" } : {},
       output: {

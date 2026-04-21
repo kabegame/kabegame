@@ -49,3 +49,7 @@ third/FFmpeg-build
 
 # 一些临时文件
 /ignore
+
+# Astro docs
+apps/docs/dist
+apps/docs/.astro

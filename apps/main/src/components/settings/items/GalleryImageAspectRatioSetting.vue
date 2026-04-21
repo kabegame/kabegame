@@ -13,7 +13,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 
 const { t } = useI18n();

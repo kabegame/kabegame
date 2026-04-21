@@ -157,7 +157,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useVirtualList } from "@vueuse/core";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { Close, Grid, Loading } from "@element-plus/icons-vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, listen } from "../../api";
 import CollapsibleDrawerPanel from "../common/CollapsibleDrawerPanel.vue";
 import TaskLogDialog from "./TaskLogDialog.vue";
 import TaskParamsDialog from "./TaskParamsDialog.vue";
@@ -595,7 +595,6 @@ const initAllEventListeners = async () => {
     return { taskId, url, startTime, pluginId, state, error, native: !!raw?.native };
   };
   try {
-    const { listen } = await import("@tauri-apps/api/event");
     unlistenDownloadProgress = await listen<DownloadProgressPayload>("download-progress", (event) => {
       const p = normalizeDownloadProgressPayload(event.payload as any);
       if (!p) return;
@@ -627,7 +626,6 @@ const initAllEventListeners = async () => {
     console.error("监听下载进度失败:", error);
   }
   try {
-    const { listen } = await import("@tauri-apps/api/event");
     unlistenDownloadState = await listen<DownloadStatePayload>("download-state", (event) => {
       const p = normalizeDownloadStatePayload(event.payload as any);
       if (!p) return;
@@ -642,7 +640,6 @@ const initAllEventListeners = async () => {
     console.error("监听下载状态失败:", error);
   }
   try {
-    const { listen } = await import("@tauri-apps/api/event");
     unlistenArchiverLog = await listen<{ text?: string }>("archiver-log", (event) => {
       const next = String((event.payload as any)?.text ?? "").trim();
       archiverLogText.value = next;

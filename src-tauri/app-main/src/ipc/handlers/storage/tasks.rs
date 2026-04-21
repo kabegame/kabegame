@@ -53,16 +53,6 @@ pub async fn delete_task(task_id: &str) -> CliIpcResponse {
     }
 }
 
-pub async fn get_task_images(task_id: &str) -> CliIpcResponse {
-    let storage = Storage::global();
-    match storage.get_task_images(task_id) {
-        Ok(images) => {
-            CliIpcResponse::ok_with_data("ok", serde_json::to_value(images).unwrap_or_default())
-        }
-        Err(e) => CliIpcResponse::err(e),
-    }
-}
-
 pub async fn get_task_image_ids(task_id: &str) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.get_task_image_ids(task_id) {
@@ -71,31 +61,6 @@ pub async fn get_task_image_ids(task_id: &str) -> CliIpcResponse {
         }
         Err(e) => CliIpcResponse::err(e),
     }
-}
-
-pub async fn get_task_images_paginated(
-    task_id: &str,
-    offset: usize,
-    limit: usize,
-) -> CliIpcResponse {
-    let storage = Storage::global();
-    let images = match storage.get_task_images_paginated(task_id, offset, limit) {
-        Ok(v) => v,
-        Err(e) => return CliIpcResponse::err(e),
-    };
-    let total = match storage.get_task_image_ids(task_id) {
-        Ok(ids) => ids.len(),
-        Err(e) => return CliIpcResponse::err(e),
-    };
-    CliIpcResponse::ok_with_data(
-        "ok",
-        serde_json::json!({
-            "images": images,
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-        }),
-    )
 }
 
 pub async fn get_task_failed_images(task_id: &str) -> CliIpcResponse {

@@ -10,8 +10,7 @@ import { ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Delete } from "@element-plus/icons-vue";
-import { invoke } from "@tauri-apps/api/core";
-
+import { invoke } from "@/api/rpc";
 const { t } = useI18n();
 const loading = ref(false);
 

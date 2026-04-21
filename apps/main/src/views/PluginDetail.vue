@@ -10,8 +10,6 @@
         :show-uninstall="true"
         :installing-text="t('plugins.installing')"
         :app-version="appVersion"
-        :load-doc-image-bytes="loadDocImageBytes"
-        :doc-image-base-url="docImageBaseUrl"
         @back="goBack" @install="handleInstall"
         @uninstall="handleUninstall"
         @copy-id="handleCopyPluginId" />
@@ -22,8 +20,9 @@ import { ref, computed, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
-import { invoke } from "@tauri-apps/api/core";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { invoke } from "@/api/rpc";
+import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { storePluginCacheDb } from "@kabegame/core/cache/storePluginCache";
 import { usePluginStore } from "@/stores/plugins";
 import { useApp } from "@/stores/app";
 import { storeToRefs } from "pinia";
@@ -51,6 +50,7 @@ const installing = ref(false);
 const pluginIdDecoded = computed(() => decodeURIComponent(route.params.id as string));
 const mode = computed(() => route.query.mode === "remote" ? "remote" as const : "local" as const);
 const sourceId = computed(() => (typeof route.query.sourceId === "string" ? route.query.sourceId : null));
+const expectedVersion = computed(() => (typeof route.query.version === "string" ? route.query.version : null));
 
 const isInstalled = computed(() => {
     if (!plugin.value) return false;
@@ -73,7 +73,7 @@ const loadPlugin = async () => {
         return;
     }
 
-    // 远程插件：先检查 pluginDetailCache
+    // 远程插件：先检查内存缓存
     const cacheKey = `${pluginId}::${sourceId.value}`;
     const cached = pluginStore.getCachedPluginDetail(cacheKey);
     if (cached) {
@@ -81,6 +81,19 @@ const loadPlugin = async () => {
         loading.value = false;
         showSkeleton.value = false;
         return;
+    }
+
+    // web 模式：再检查 Dexie 持久缓存（版本匹配）
+    if (IS_WEB && sourceId.value) {
+        const dexieKey = `${sourceId.value}:${pluginId}`;
+        const dexieCached = await storePluginCacheDb.details.get(dexieKey);
+        if (dexieCached && (!expectedVersion.value || dexieCached.version === expectedVersion.value)) {
+            plugin.value = dexieCached.data;
+            pluginStore.setCachedPluginDetail(cacheKey, dexieCached.data);
+            loading.value = false;
+            showSkeleton.value = false;
+            return;
+        }
     }
 
     // 缓存未命中，从后端加载（后端返回完整 Plugin）
@@ -102,6 +115,10 @@ const loadPlugin = async () => {
         });
         plugin.value = result;
         pluginStore.setCachedPluginDetail(cacheKey, result);
+        if (IS_WEB && sourceId.value) {
+            const dexieKey = `${sourceId.value}:${pluginId}`;
+            void storePluginCacheDb.details.put({ key: dexieKey, version: result.version, data: result, cachedAt: Date.now() });
+        }
     } catch (error) {
         if (isOnPluginDetailRoute.value) {
             ElMessage.error(t("plugins.loadPluginFailed"));
@@ -119,45 +136,6 @@ const loadPlugin = async () => {
 
 const goBack = () => {
     router.push("/plugin-browser");
-};
-
-// 插件文档图片 URL 前缀：桌面走 HTTP 服务，安卓走 Kotlin 拦截的 kbg-plugin-doc.localhost
-const docImageBaseUrl = ref<string | null>(null);
-watch(
-    plugin,
-    async (p) => {
-        if (!p) {
-            docImageBaseUrl.value = null;
-            return;
-        }
-        // 已安装插件直接使用 Plugin.docResources（内嵌 base64），无需 HTTP/自定义 host
-        if (mode.value !== "remote") {
-            docImageBaseUrl.value = null;
-            return;
-        }
-        const pluginId = p.id;
-        if (IS_ANDROID) {
-            docImageBaseUrl.value = `http://kbg-plugin-doc.localhost/${encodeURIComponent(pluginId)}/`;
-        } else {
-            try {
-                const base = await invoke<string>("get_http_server_base_url");
-                docImageBaseUrl.value = `${base}/plugin-doc-image?pluginId=${encodeURIComponent(pluginId)}&path=`;
-            } catch {
-                docImageBaseUrl.value = null;
-            }
-        }
-    },
-    { immediate: true }
-);
-
-// 供 core 的 PluginDocRenderer 加载 doc_root 图片（无 docImageBaseUrl 时回退，如导入预览）
-const loadDocImageBytes = async (imagePath: string): Promise<number[]> => {
-    const pluginId = decodeURIComponent(route.params.id as string);
-    return await invoke<number[]>("get_plugin_image_for_detail", {
-        pluginId,
-        imagePath,
-        sourceId: sourceId.value ?? undefined,
-    });
 };
 
 const handleInstall = async () => {

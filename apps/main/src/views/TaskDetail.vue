@@ -4,8 +4,8 @@
             <el-skeleton :rows="8" animated />
         </div>
         <ImageGrid v-else-if="imageFilter === 'success'" ref="taskViewRef" class="detail-body" :images="images"
-            :enable-ctrl-wheel-adjust-columns="!IS_ANDROID" :enable-ctrl-key-adjust-columns="!IS_ANDROID"
-            :enable-virtual-scroll="!IS_ANDROID" :actions="imageActions" :on-context-command="handleImageMenuCommand">
+            :enable-ctrl-wheel-adjust-columns="!isCompact" :enable-ctrl-key-adjust-columns="!isCompact"
+            :enable-virtual-scroll="!isCompact" :actions="imageActions" :on-context-command="handleImageMenuCommand">
             <template #before-grid>
                 <TaskDetailPageHeader :task-name="taskName" :task-subtitle="taskSubtitle"
                     :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
@@ -23,6 +23,7 @@
                             :page-size="pageSize"
                             variant="gallery"
                             android-ui="inline"
+                            @update:page-size="(ps) => taskDetailRouteStore.navigate({ page: 1, pageSize: ps })"
                         />
                     </div>
 
@@ -47,7 +48,7 @@
 
             <el-skeleton v-if="failedLoading" :rows="6" animated />
             <el-empty v-else-if="failedImages.length === 0" :description="t('gallery.emptyHint')" />
-            <TransitionGroup v-else name="task-failed-list" tag="div" class="failed-list" :class="{ 'failed-list-android': IS_ANDROID }">
+            <TransitionGroup v-else name="task-failed-list" tag="div" class="failed-list" :class="{ 'failed-list-android': isCompact }">
                 <div v-for="failed in failedImages" :key="failed.id" class="failed-item">
                     <div class="failed-meta">
                         <div class="failed-url-block">
@@ -102,7 +103,7 @@
         <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
             :message="removeDialogMessage" :title="$t('tasks.confirmDelete')" :checkbox-label="t('gallery.deleteSourceFilesCheckboxLabel')"
             :danger-text="t('gallery.deleteSourceFilesDangerText')" :safe-text="t('gallery.deleteSourceFilesSafeText')"
-            :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
+            :hide-checkbox="isCompact" @confirm="confirmRemoveImages" />
 
         <TaskLogDialog ref="taskLogDialogRef" />
         <TaskParamsDialog v-model="showTaskParamsDialog" :task="taskParamsTask" />
@@ -112,9 +113,9 @@
 <script setup lang="ts">
 import { ref, computed, reactive, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/api/rpc";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { VideoPause, Delete, Setting, Refresh, QuestionFilled, Star, StarFilled, InfoFilled, DocumentCopy, Picture, FolderAdd, MoreFilled } from "@element-plus/icons-vue";
 import { createImageActions } from "@/actions/imageActions";
@@ -154,12 +155,13 @@ import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
-import { IS_ANDROID } from "@kabegame/core/env";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import { IS_WEB } from "@kabegame/core/env";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { useFailedImagesStore } from "@/stores/failedImages";
 
@@ -173,9 +175,9 @@ const settingsStore = useSettingsStore();
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
 const albumStore = useAlbumStore();
-const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
+const isCompact = computed(() => uiStore.isCompact);
 
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
@@ -230,7 +232,7 @@ const shouldShowStopButton = computed(() => {
 const loading = ref(false);
 const isRefreshing = ref(false);
 const pullToRefreshOpts = computed(() =>
-    !IS_ANDROID
+    isCompact.value
         ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
         : undefined
 );
@@ -264,8 +266,6 @@ const { handleCopyImage } = useImageOperations(
     images,
     currentWallpaperImageId,
     taskViewRef,
-    () => { },
-    async () => { }
 );
 
 watch(
@@ -379,11 +379,8 @@ const localProviderRootPath = computed(() => {
     return `task/${taskId.value}`;
 });
 
-const pageSize = computed(() => {
-    const n = Number(settingsStore.values.galleryPageSize);
-    return n === 100 || n === 500 || n === 1000 ? n : 100;
-});
 const taskDetailRouteStore = useTaskDetailRouteStore();
+const { pageSize } = storeToRefs(taskDetailRouteStore);
 const currentPath = computed(() => taskDetailRouteStore.currentPath);
 const currentPage = computed(() => taskDetailRouteStore.page);
 
@@ -451,7 +448,6 @@ watch(
     async (_v, prev) => {
         if (prev === undefined) return;
         if (!isOnTaskRoute.value) return;
-        await taskDetailRouteStore.navigate({ page: 1 });
         await loadTaskImages({ showSkeleton: false });
     },
 );
@@ -776,7 +772,11 @@ const handleImageMenuCommand = async (
 
     switch (command) {
         case "copy":
-            if (imagesToProcess[0]) await handleCopyImage(imagesToProcess[0]);
+            if (IS_WEB) {
+              for (const img of imagesToProcess) handleCopyImage(img);
+            } else if (imagesToProcess[0]) {
+              await handleCopyImage(imagesToProcess[0]);
+            }
             break;
         case "favorite":
             if (imagesToProcess.length === 0) return null;
@@ -799,11 +799,13 @@ const handleImageMenuCommand = async (
             showAddToAlbumDialog.value = true;
             break;
         case "wallpaper":
+            if (await guardDesktopOnly("wallpaper")) break;
             if (imagesToProcess.length > 0) {
                 await setWallpaper(imagesToProcess);
             }
             break;
         case "share":
+            if (await guardDesktopOnly("share")) break;
             if (!isMultiSelect && imagesToProcess[0]) {
                 try {
                     const image = imagesToProcess[0];

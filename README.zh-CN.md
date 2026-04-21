@@ -5,8 +5,7 @@
 一个基于 Tauri 的二次元爬虫客户端！爬取、管理、设置/轮播壁纸，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元站点资源~
 
 <div align="center">
-  <img src="docs/images/image2.png" alt="Kabegame 形象图 1" width="256"/>
-  <img src="docs/images/image1.png" alt="Kabegame 形象图 2" width="256"/>
+  <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
 </div>
 
 ## 画廊截图

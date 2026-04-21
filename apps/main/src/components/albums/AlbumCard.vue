@@ -55,6 +55,7 @@ import type { ImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { thumbnailToUrl } from "@kabegame/core/httpServer";
 import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 interface Props {
   album: Album;
@@ -198,12 +199,13 @@ const handleRenameCancel = () => {
   isRenaming.value = false;
 };
 
+const uiStore = useUiStore();
 const heroIndex = ref(0);
-const heroMaxSlots = IS_ANDROID ? 1 : 3;
+const heroMaxSlots = computed(() => uiStore.isCompact ? 1 : 3);
 
 const heroSlots = computed(() => {
   const out: { key: string; image: ImageInfo | null; hasContent: boolean }[] = [];
-  for (let idx = 0; idx < heroMaxSlots; idx++) {
+  for (let idx = 0; idx < heroMaxSlots.value; idx++) {
     const img = props.previewImages[idx];
     const hasContent = !!(img && hasRenderablePreview(img));
     out.push({
@@ -220,7 +222,7 @@ const actualImageCount = computed(() => heroSlots.value.filter((s) => s.hasConte
 const heroDisplayCount = computed(() => {
   const actualCount = actualImageCount.value;
   if (actualCount > 0) return actualCount;
-  if (props.isLoading) return heroMaxSlots;
+  if (props.isLoading) return heroMaxSlots.value;
   return 0;
 });
 

@@ -1,0 +1,30 @@
+{
+  "desktopOnlyTitle": "桌面版功能",
+  "desktopOnlyDesc": "「{feature}」功能仅在桌面客户端可用。前往官网下载桌面版以享受完整功能。",
+  "goHomepage": "前往官网",
+  "superRequiredTitle": "需要管理员权限",
+  "superRequiredDesc": "此设置需要开启 super（管理员）模式才可修改。请点击左下角的开关启用 super 模式。",
+  "feature": {
+    "picker": "文件选择",
+    "share": "分享",
+    "openLocal": "打开本地文件",
+    "imageClickAction": "图片点击行为",
+    "wallpaper": "设置壁纸",
+    "wallpaperRotation": "壁纸轮播",
+    "wallpaperPlayback": "壁纸播放",
+    "openCrawlerWindow": "爬虫窗口",
+    "localImport": "本地导入",
+    "crawl": "开始收集",
+    "autoLaunch": "开机自启",
+    "defaultDownloadDir": "默认下载目录",
+    "albumDrive": "画册虚拟盘",
+    "windowState": "窗口状态",
+    "downloadSettings": "下载设置",
+    "gallerySettings": "画廊显示",
+    "autoDeduplicate": "自动去重",
+    "scheduler": "定时任务",
+    "deleteImages": "删除图片",
+    "hideImage": "隐藏图片",
+    "organize": "整理图库"
+  }
+}

@@ -60,7 +60,7 @@ const MCP_INSTRUCTIONS: &str = r#"Kabegame MCP exposes six URI schemes plus writ
      provider://all/                all images, page 1
      provider://all/desc/1/         all images, page 1, newest-first
      provider://all/?without=children  page 1 images only, no page dirs
-     provider://date/2024-03/       images crawled in 2024-03, page 1
+     provider://date/2024y/03m/     images crawled in 2024-03, page 1
      provider://media-type/image/   images only, page 1
      provider://wallpaper-order/1/  wallpaper history, page 1
 
@@ -571,7 +571,7 @@ impl ServerHandler for KabegameMcpServer {
 
                         let storage = Storage::global();
                         let entries =
-                            kabegame_core::gallery::browse_from_provider(storage, children, images)
+                            kabegame_core::gallery::browse_from_provider(children, images)
                                 .map_err(|e| McpError::internal_error(e, None))?;
                         let entries_json = serde_json::to_value(&entries)
                             .map_err(|e| McpError::internal_error(e.to_string(), None))?;

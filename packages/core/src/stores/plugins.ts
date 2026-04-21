@@ -1,6 +1,8 @@
 import { defineStore } from "pinia";
 import { ref, unref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, listen } from "../api";
+import { IS_WEB } from "../env";
+import { pluginCacheDb } from "../cache/pluginCache";
 import { i18n, resolveConfigText, resolveManifestText } from "@kabegame/i18n";
 import { useCrawlerStore } from "./crawler";
 
@@ -210,13 +212,19 @@ export const usePluginStore = defineStore("plugins", () => {
     if (eventListenersInitialized) return;
     eventListenersInitialized = true;
     try {
-      const { listen } = await import("@tauri-apps/api/event");
-
       await listen<{ plugin: Plugin }>("plugin-added", (event) => {
         const p = event.payload?.plugin as Plugin;
         if (!p?.id) return;
         if (!plugins.value.some((x) => x.id === p.id)) {
           plugins.value = sortPluginsById([...plugins.value, p]);
+        }
+        if (IS_WEB) {
+          void pluginCacheDb.plugins.put({
+            id: p.id,
+            version: p.version,
+            data: p,
+            cachedAt: Date.now(),
+          });
         }
         const crawler = useCrawlerStore();
         crawler.loadPluginRecommendedConfigs(plugins.value);
@@ -233,6 +241,14 @@ export const usePluginStore = defineStore("plugins", () => {
         } else {
           plugins.value = sortPluginsById([...plugins.value, p]);
         }
+        if (IS_WEB) {
+          void pluginCacheDb.plugins.put({
+            id: p.id,
+            version: p.version,
+            data: p,
+            cachedAt: Date.now(),
+          });
+        }
         const crawler = useCrawlerStore();
         crawler.loadPluginRecommendedConfigs(plugins.value);
       });
@@ -243,6 +259,9 @@ export const usePluginStore = defineStore("plugins", () => {
         plugins.value = sortPluginsById(plugins.value.filter((p) => p.id !== id));
         if (activePlugin.value?.id === id) activePlugin.value = null;
         delete pluginDetailCache.value[id];
+        if (IS_WEB) {
+          void pluginCacheDb.plugins.delete(id);
+        }
       });
     } catch (e) {
       console.warn("init plugin event listeners failed", e);
@@ -271,24 +290,63 @@ export const usePluginStore = defineStore("plugins", () => {
 
   /** 从缓存读取插件列表（不重新扫盘）；首次调用时由 startup 的 ensure_installed_cache_initialized 保证缓存已就绪 */
   async function loadPlugins(): Promise<void> {
-    await initEventListeners();
-    return invoke<Plugin[]>("get_plugins")
-      .then((result) => {
+        await initEventListeners();
+        try {
+      if (IS_WEB) {
+                const index = await invoke<Array<{ id: string; version: string }>>(
+          "get_plugins",
+        );
+                const list = await Promise.all(
+          index.map(async ({ id, version }) => {
+            const cached = await pluginCacheDb.plugins.get(id);
+            if (cached && cached.version === version) {
+                            return cached.data;
+            }
+                        const full = await invoke<Plugin>("get_plugin_detail", {
+              pluginId: id,
+            });
+            await pluginCacheDb.plugins.put({
+              id,
+              version,
+              data: full,
+              cachedAt: Date.now(),
+            });
+            return full;
+          }),
+        );
+                const validIds = new Set(index.map((i) => i.id));
+        const keys = await pluginCacheDb.plugins
+          .toCollection()
+          .primaryKeys();
+        const stale = keys.filter((k) => !validIds.has(String(k)));
+        if (stale.length) await pluginCacheDb.plugins.bulkDelete(stale);
+        const sorted = sortPluginsById(list);
+        plugins.value = sorted;
+                const crawler = useCrawlerStore();
+        crawler.loadPluginRecommendedConfigs(sorted);
+      } else {
+        const result = await invoke<Plugin[]>("get_plugins");
         const sorted = sortPluginsById(result);
         plugins.value = sorted;
-        console.log("已加载插件列表:", sorted);
         const crawler = useCrawlerStore();
         crawler.loadPluginRecommendedConfigs(sorted);
-      })
-      .catch((error) => {
-        console.error("加载插件失败:", error);
-        throw error;
-      });
+      }
+    } catch (error) {
+      console.error("加载插件失败:", error);
+      throw error;
+    }
   }
 
   /** 重新扫描磁盘并刷新缓存（用于手动刷新、安装/删除后） */
   async function refreshPlugins(): Promise<void> {
     try {
+      if (IS_WEB) {
+        // web: 服务器重扫磁盘后返回索引 [{id, version}]；本地 Dexie 缓存清空后走 loadPlugins 流程补全
+        await invoke("refresh_plugins");
+        await pluginCacheDb.plugins.clear();
+        await loadPlugins();
+        return;
+      }
       const result = await invoke<Plugin[]>("refresh_plugins");
       const sorted = sortPluginsById(result);
       plugins.value = sorted;

@@ -1,0 +1,30 @@
+{
+  "desktopOnlyTitle": "桌面版功能",
+  "desktopOnlyDesc": "「{feature}」功能僅在桌面用戶端可用。前往官網下載桌面版以享受完整功能。",
+  "goHomepage": "前往官網",
+  "superRequiredTitle": "需要管理員權限",
+  "superRequiredDesc": "此設定需要開啟 super（管理員）模式才可修改。請點擊左下角的開關啟用 super 模式。",
+  "feature": {
+    "picker": "檔案選擇",
+    "share": "分享",
+    "openLocal": "開啟本地檔案",
+    "imageClickAction": "圖片點擊行為",
+    "wallpaper": "設定桌布",
+    "wallpaperRotation": "桌布輪播",
+    "wallpaperPlayback": "桌布播放",
+    "openCrawlerWindow": "爬蟲視窗",
+    "localImport": "本地匯入",
+    "crawl": "開始收集",
+    "autoLaunch": "開機自啟",
+    "defaultDownloadDir": "預設下載目錄",
+    "albumDrive": "相冊虛擬磁碟",
+    "windowState": "視窗狀態",
+    "downloadSettings": "下載設定",
+    "gallerySettings": "相冊顯示",
+    "autoDeduplicate": "自動去重",
+    "scheduler": "定時任務",
+    "deleteImages": "刪除圖片",
+    "hideImage": "隱藏圖片",
+    "organize": "整理圖庫"
+  }
+}

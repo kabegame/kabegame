@@ -122,44 +122,18 @@ pub async fn clear_finished_tasks() -> Result<usize, String> {
 }
 
 #[tauri::command]
-pub async fn get_task_images(task_id: String) -> Result<serde_json::Value, String> {
-    let images = Storage::global().get_task_images(&task_id)?;
-    Ok(serde_json::to_value(images).map_err(|e| e.to_string())?)
-}
-
-#[tauri::command]
-pub async fn get_task_images_paginated(
-    task_id: String,
-    page: usize,
-    page_size: usize,
-) -> Result<serde_json::Value, String> {
-    // 这里的 page/page_size 是前端传来的，后端 get_task_images_paginated 接受 offset 和 limit
-    let offset = page.saturating_mul(page_size);
-    let images = Storage::global().get_task_images_paginated(&task_id, offset, page_size)?;
-    Ok(serde_json::to_value(images).map_err(|e| e.to_string())?)
-}
-
-#[tauri::command]
-pub async fn get_task_image_ids(task_id: String) -> Result<Vec<String>, String> {
-    Storage::global().get_task_image_ids(&task_id)
-}
-
-#[tauri::command]
 pub async fn get_task_failed_images(task_id: String) -> Result<serde_json::Value, String> {
-    let images = Storage::global().get_task_failed_images(&task_id)?;
-    Ok(serde_json::to_value(images).map_err(|e| e.to_string())?)
+    crate::commands_core::task::get_task_failed_images(task_id).await
 }
 
 #[tauri::command]
 pub async fn get_all_failed_images() -> Result<serde_json::Value, String> {
-    let images = Storage::global().get_all_failed_images()?;
-    Ok(serde_json::to_value(images).map_err(|e| e.to_string())?)
+    crate::commands_core::task::get_all_failed_images().await
 }
 
 #[tauri::command]
 pub async fn get_task_logs(task_id: String) -> Result<serde_json::Value, String> {
-    let logs = Storage::global().get_task_logs(&task_id)?;
-    Ok(serde_json::to_value(logs).map_err(|e| e.to_string())?)
+    crate::commands_core::task::get_task_logs(task_id).await
 }
 
 #[tauri::command]
@@ -287,51 +261,5 @@ pub async fn delete_task(task_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn start_task(task: serde_json::Value) -> Result<(), String> {
-    use kabegame_core::crawler::CrawlTaskRequest;
-    use kabegame_core::crawler::TaskScheduler;
-
-    // 解析 CrawlTaskRequest
-    let req: CrawlTaskRequest = serde_json::from_value(task).map_err(|e| e.to_string())?;
-
-    // 确保任务在 DB 中存在（否则调度器的状态持久化会变成 no-op）
-    match Storage::global().get_task(&req.task_id)? {
-        Some(_) => {}
-        None => {
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            let t = TaskInfo {
-                id: req.task_id.clone(),
-                plugin_id: req.plugin_id.clone(),
-                output_dir: req.output_dir.clone(),
-                user_config: req.user_config.clone(),
-                http_headers: req.http_headers.clone(),
-                output_album_id: req.output_album_id.clone(),
-                run_config_id: req.run_config_id.clone(),
-                trigger_source: if req.trigger_source.is_empty() {
-                    "manual".to_string()
-                } else {
-                    req.trigger_source.clone()
-                },
-                status: "pending".to_string(),
-                progress: 0.0,
-                deleted_count: 0,
-                dedup_count: 0,
-                success_count: 0,
-                failed_count: 0,
-                start_time: Some(now_ms),
-                end_time: None,
-                error: None,
-            };
-            let payload = serde_json::to_value(&t).map_err(|e| e.to_string())?;
-            Storage::global().add_task(t)?;
-            GlobalEmitter::global().emit_task_added(&payload);
-        }
-    }
-
-    let _task_id = TaskScheduler::global()
-        .submit_task(req)
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    crate::commands_core::task::start_task(task).await
 }

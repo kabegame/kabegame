@@ -11,6 +11,7 @@ import { ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { DocumentCopy, Check } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import { IS_WEB } from "@kabegame/core/env";
 
 const { t } = useI18n();
 const props = defineProps<{
@@ -21,8 +22,7 @@ const copied = ref(false);
 
 const handleCopy = async () => {
     try {
-        const { isTauri } = await import("@tauri-apps/api/core");
-        if (isTauri()) {
+        if (!IS_WEB) {
             const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
             await writeText(props.code);
         } else {

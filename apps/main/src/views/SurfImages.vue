@@ -5,9 +5,9 @@
         ref="surfViewRef"
         class="surf-grid"
         :images="images"
-        :enable-virtual-scroll="!IS_ANDROID"
-        :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
-        :enable-ctrl-key-adjust-columns="!IS_ANDROID"
+        :enable-virtual-scroll="!isCompact"
+        :enable-ctrl-wheel-adjust-columns="!isCompact"
+        :enable-ctrl-key-adjust-columns="!isCompact"
         :actions="imageActions"
         :on-context-command="handleImageMenuCommand"
       >
@@ -28,6 +28,7 @@
               :page-size="pageSize"
               variant="gallery"
               android-ui="inline"
+              @update:page-size="(ps) => surfImagesRouteStore.navigate({ page: 1, pageSize: ps })"
             />
           </div>
 
@@ -50,7 +51,7 @@
       :checkbox-label="$t('gallery.deleteSourceFilesCheckboxLabel')"
       :danger-text="$t('gallery.deleteSourceFilesDangerText')"
       :safe-text="$t('gallery.deleteSourceFilesSafeText')"
-      :hide-checkbox="IS_ANDROID"
+      :hide-checkbox="isCompact"
       @confirm="confirmRemoveImages"
     />
 
@@ -65,9 +66,9 @@
 <script setup lang="ts">
 import { onMounted, onActivated, onDeactivated, onBeforeUnmount, onUnmounted, ref, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/api/rpc";
 import { ElMessage } from "element-plus";
 import { storeToRefs } from "pinia";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
@@ -90,21 +91,21 @@ import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeR
 import { useImageTypes } from "@/composables/useImageTypes";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { openLocalImage } from "@/utils/openLocalImage";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { useUiStore } from "@kabegame/core/stores/ui";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import { IS_WEB } from "@kabegame/core/env";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useI18n } from "@kabegame/i18n";
 
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const { isCompact } = storeToRefs(useUiStore());
 const surfStore = useSurfStore();
 const albumStore = useAlbumStore();
-const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const settingsStore = useSettingsStore();
-const pageSize = computed(() => {
-  const n = Number(settingsStore.values.galleryPageSize);
-  return n === 100 || n === 500 || n === 1000 ? n : 100;
-});
+const surfImagesRouteStore = useSurfImagesRouteStore();
+const { pageSize, hide: surfHide } = storeToRefs(surfImagesRouteStore);
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
 
@@ -137,10 +138,6 @@ const { handleCopyImage } = useImageOperations(
   images,
   currentWallpaperImageId,
   surfViewRef,
-  () => {},
-  async () => {
-    await reloadAllImages();
-  }
 );
 
 const clearSelection = () => {
@@ -234,7 +231,11 @@ const handleImageMenuCommand = async (
 
   switch (command) {
     case "copy":
-      if (imagesToProcess[0]) await handleCopyImage(imagesToProcess[0]);
+      if (IS_WEB) {
+        for (const img of imagesToProcess) handleCopyImage(img);
+      } else if (imagesToProcess[0]) {
+        await handleCopyImage(imagesToProcess[0]);
+      }
       break;
     case "favorite":
       if (imagesToProcess.length > 0) await toggleFavoriteForImages(imagesToProcess);
@@ -256,6 +257,7 @@ const handleImageMenuCommand = async (
       }
       break;
     case "addToHidden": {
+      if (await guardDesktopOnly("hideImage")) break;
       const ids = imagesToProcess.map((img) => img.id);
       if (ids.length === 0) break;
       const isUnhide = !!image.isHidden;
@@ -279,9 +281,11 @@ const handleImageMenuCommand = async (
       break;
     }
     case "wallpaper":
+      if (await guardDesktopOnly("wallpaper")) break;
       if (imagesToProcess.length > 0) await setWallpaper(imagesToProcess);
       break;
     case "share":
+      if (await guardDesktopOnly("share")) break;
       if (!isMultiSelect && imagesToProcess[0]) {
         try {
           const img = imagesToProcess[0];
@@ -355,8 +359,6 @@ const confirmRemoveImages = async () => {
 };
 
 const isOnSurfImagesRoute = computed(() => String(route.name ?? "") === "SurfImages");
-const surfImagesRouteStore = useSurfImagesRouteStore();
-const { hide: surfHide } = storeToRefs(surfImagesRouteStore);
 const currentPath = computed(() => surfImagesRouteStore.currentPath);
 const currentPage = computed(() => surfImagesRouteStore.page);
 const providerRootPath = computed(() => `surf/${surfImagesRouteStore.host}`);
@@ -430,7 +432,6 @@ watch(
   pageSize,
   async (_v, prev) => {
     if (prev === undefined) return;
-    await surfImagesRouteStore.navigate({ page: 1 });
     await loadCurrentPage();
   },
 );

@@ -90,10 +90,9 @@ pub fn execute_provider_query(raw_path: &str) -> Result<Value, String> {
             };
             let images = node.provider.list_images(&composed_images)?;
 
-            let storage = Storage::global();
             let entries_json = {
                 let converted =
-                    crate::gallery::browse_from_provider(storage, children, images)?;
+                    crate::gallery::browse_from_provider(children, images)?;
                 serde_json::to_value(&converted).map_err(|e| e.to_string())?
             };
 

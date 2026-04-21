@@ -106,11 +106,11 @@ import ejs from "ejs";
 import DESCRIPTION_BRIDGE_INJECT_SCRIPT from "./descriptionBridgeInject.body.js?raw";
 import CollapsibleDrawerPanel from "./CollapsibleDrawerPanel.vue";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ElMessage } from "element-plus";
 import { List } from "@element-plus/icons-vue";
-import { IS_ANDROID } from "../../env";
+import { IS_ANDROID, IS_WEB } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
 import { usePluginStore } from "../../stores/plugins";
 import {
@@ -448,6 +448,7 @@ const handleOpenUrl = async (url?: string) => {
 
 const handleOpenPath = async (path?: string) => {
   if (!path) return;
+  if (IS_WEB) return;
   try {
     if (IS_ANDROID) {
       const uri = path.startsWith("content://")

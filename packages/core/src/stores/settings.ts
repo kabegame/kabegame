@@ -1,7 +1,11 @@
 import { defineStore } from "pinia";
-import { reactive, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import { IS_DEV, IS_LIGHT_MODE, IS_ANDROID, IS_WINDOWS } from "../env";
+import { nextTick, reactive, watch, type Ref } from "vue";
+import { useLocalStorage } from "@vueuse/core";
+import { invoke } from "../api";
+import { IS_DEV, IS_LIGHT_MODE, IS_ANDROID, IS_WINDOWS, IS_WEB } from "../env";
+import { guardDesktopOnly } from "../utils/desktopOnlyGuard";
+import { guardSuperRequired } from "../utils/superModeGuard";
+import { getIsSuper } from "../state/superState";
 
 // 与后端 settings.rs 的 AppSettings（serde rename_all = camelCase）保持一致
 export interface AppSettings {
@@ -16,10 +20,8 @@ export interface AppSettings {
   galleryImageAspectRatio: string | null;
   /** 图片在方框内溢出时的垂直对齐（仅桌面端）：center | top | bottom */
   galleryImageObjectPosition: "center" | "top" | "bottom";
-  // 画廊列数（0=动态；1-4=固定列数）
+  /** 画廊列数（0=动态；1-4=固定列数），前端本地偏好 */
   galleryGridColumns: number;
-  /** 画廊 SimplePage 每页条数（100 / 500 / 1000） */
-  galleryPageSize: number;
   autoDeduplicate: boolean;
   defaultDownloadDir: string | null;
   wallpaperEngineDir: string | null;
@@ -56,10 +58,114 @@ export interface AppSettings {
   importRecommendedScheduleEnabled: boolean;
   /** 界面语言（持久化为 canonical 语种码；缺失或非法时由前端解析链写回） */
   language: string | null;
+
+  // --- 前端本地偏好（始终走 localStorage，所有平台一致）---
+  /** 画廊每页条数（100 / 500 / 1000） */
+  galleryPageSize: number;
 }
 
 export type AppSettingKey = keyof AppSettings;
 export type ImageClickAction = AppSettings["imageClickAction"];
+
+/**
+ * Web mode 下通过浏览器 localStorage 持久化的设置项。
+ * 这些键在 web 环境下不走后端 IPC，而是直接读写本地存储；
+ * 其他平台（Tauri 桌面 / Android）仍走 IPC 后端。
+ *
+ * - `readonly: true`：web 端只读；写入时弹 desktopOnlyGuard 引导用户前往桌面版。
+ * - 省略 readonly：web 端可自由写入 localStorage（如语言、画廊设置等前端偏好）。
+ *
+ * 区别于"super 管控项"：非短路的设置项在 web 端仍走 RPC，需要 super 权限才可写入；
+ * 非 super 状态下写入时弹 guardSuperRequired 提示开启 super 模式。
+ */
+type WebLocalSettingEntry = {
+  [K in AppSettingKey]: { key: K; defaultValue: AppSettings[K]; readonly?: boolean };
+}[AppSettingKey];
+
+const WEB_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
+  { key: "language", defaultValue: "en" },
+  { key: "imageClickAction", defaultValue: "preview", readonly: true },
+  { key: "galleryImageAspectRatio", defaultValue: "16/10" },
+  { key: "galleryImageObjectPosition", defaultValue: "center" },
+  // 壁纸能力：web 模式下只做 localStorage 占位，修改时弹 desktopOnlyGuard
+  { key: "wallpaperRotationEnabled", defaultValue: false, readonly: true },
+  { key: "wallpaperRotationAlbumId", defaultValue: null, readonly: true },
+  { key: "wallpaperRotationIncludeSubalbums", defaultValue: true, readonly: true },
+  { key: "wallpaperRotationIntervalMinutes", defaultValue: 30, readonly: true },
+  { key: "wallpaperRotationMode", defaultValue: "random", readonly: true },
+  { key: "currentWallpaperImageId", defaultValue: null, readonly: true },
+  { key: "wallpaperVolume", defaultValue: 0.5, readonly: true },
+  { key: "wallpaperVideoPlaybackRate", defaultValue: 1, readonly: true },
+  // 壁纸样式/模式/过渡：web 不使用，readonly 占位防止 IPC 调用
+  { key: "wallpaperStyle", defaultValue: "fill", readonly: true },
+  { key: "wallpaperRotationTransition", defaultValue: "none", readonly: true },
+  { key: "wallpaperStyleByMode", defaultValue: {} as Record<string, string>, readonly: true },
+  { key: "wallpaperTransitionByMode", defaultValue: {} as Record<string, string>, readonly: true },
+  { key: "wallpaperMode", defaultValue: "native", readonly: true },
+  { key: "windowState", defaultValue: null as AppSettings["windowState"], readonly: true },
+  // 桌面/系统能力：web 端不可用，设置时弹 desktopOnlyGuard
+  { key: "albumDriveEnabled", defaultValue: false, readonly: true },
+  { key: "albumDriveMountPoint", defaultValue: "", readonly: true },
+  { key: "autoOpenCrawlerWebview", defaultValue: false, readonly: true },
+  { key: "defaultDownloadDir", defaultValue: null, readonly: true },
+  { key: "autoLaunch", defaultValue: false, readonly: true },
+];
+
+const WEB_LOCAL_STORAGE_PREFIX = "kabegame-setting-";
+
+/**
+ * 将设置键映射到 `web.feature.*` 下的通用桶，
+ * 避免为每个键单独添加 i18n 文案。
+ */
+const WEB_READONLY_FEATURE_KEY_MAP: Partial<Record<AppSettingKey, string>> = {
+  currentWallpaperImageId: "wallpaper",
+  wallpaperVolume: "wallpaperPlayback",
+  wallpaperVideoPlaybackRate: "wallpaperPlayback",
+  wallpaperRotationEnabled: "wallpaperRotation",
+  wallpaperRotationAlbumId: "wallpaperRotation",
+  wallpaperRotationIncludeSubalbums: "wallpaperRotation",
+  wallpaperRotationIntervalMinutes: "wallpaperRotation",
+  wallpaperRotationMode: "wallpaperRotation",
+  wallpaperRotationTransition: "wallpaperRotation",
+  wallpaperStyle: "wallpaper",
+  wallpaperStyleByMode: "wallpaper",
+  wallpaperTransitionByMode: "wallpaper",
+  wallpaperMode: "wallpaper",
+  wallpaperEngineDir: "wallpaper",
+  albumDriveEnabled: "albumDrive",
+  albumDriveMountPoint: "albumDrive",
+  autoOpenCrawlerWebview: "openCrawlerWindow",
+  windowState: "windowState",
+  autoLaunch: "autoLaunch",
+  defaultDownloadDir: "defaultDownloadDir",
+  imageClickAction: "imageClickAction",
+  maxConcurrentDownloads: "downloadSettings",
+  maxConcurrentTasks: "downloadSettings",
+  downloadIntervalMs: "downloadSettings",
+  networkRetryCount: "downloadSettings",
+  galleryImageObjectPosition: "gallerySettings",
+  autoDeduplicate: "autoDeduplicate",
+  importRecommendedScheduleEnabled: "scheduler",
+};
+
+function webReadonlyFeatureKey(key: AppSettingKey): string {
+  return WEB_READONLY_FEATURE_KEY_MAP[key] ?? key;
+}
+
+/**
+ * 前端本地偏好：始终走 localStorage（不经 IPC，所有平台一致）。
+ * 与 WEB_LOCAL_SETTING_ENTRIES 不同，这里不受 IS_WEB 限制——web 模式下
+ * 两份列表会合并到同一个 localStorage 短路层，对消费者完全透明。
+ */
+const FRONTEND_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
+  { key: "galleryPageSize", defaultValue: 100 },
+  { key: "galleryGridColumns", defaultValue: 0 },
+];
+
+/** 旧键 → 新键（`${WEB_LOCAL_STORAGE_PREFIX}${key}`）一次性迁移表。 */
+const LOCAL_SETTING_LEGACY_KEYS: Partial<Record<AppSettingKey, string>> = {
+  galleryPageSize: "kabegame-galleryPageSize",
+};
 
 type SettingKeyMeta = {
   getter: string;       // IPC getter 命令名
@@ -85,7 +191,6 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
     downloadIntervalMs: { getter: "get_download_interval_ms", setter: "set_download_interval_ms", param: "intervalMs" },
     networkRetryCount: { getter: "get_network_retry_count", setter: "set_network_retry_count", param: "count" },
     autoDeduplicate: { getter: "get_auto_deduplicate", setter: "set_auto_deduplicate", param: "enabled" },
-    galleryPageSize: { getter: "get_gallery_page_size", setter: "set_gallery_page_size", param: "size" },
     wallpaperRotationEnabled: { getter: "get_wallpaper_rotation_enabled", setter: "set_wallpaper_rotation_enabled", param: "enabled" },
     wallpaperRotationAlbumId: { getter: "get_wallpaper_rotation_album_id", setter: "set_wallpaper_rotation_album_id", param: "albumId" },
     wallpaperRotationIncludeSubalbums: {
@@ -112,7 +217,6 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
     map.imageClickAction = { getter: "get_image_click_action", setter: "set_image_click_action", param: "action" };
     map.galleryImageAspectRatio = { getter: "get_gallery_image_aspect_ratio", setter: "set_gallery_image_aspect_ratio", param: "aspectRatio" };
     map.galleryImageObjectPosition = { getter: "get_gallery_image_object_position", setter: "set_gallery_image_object_position", param: "position" };
-    map.galleryGridColumns = { getter: "get_gallery_grid_columns", setter: "set_gallery_grid_columns", param: "columns" };
     map.defaultDownloadDir = { getter: "get_default_download_dir", setter: "set_default_download_dir", param: "dir" };
     map.autoOpenCrawlerWebview = {
       getter: "get_auto_open_crawler_webview",
@@ -142,10 +246,7 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
  *  
 */
 export const useSettingsStore = defineStore("settings", () => {
-  // 旧逻辑：收藏画册 ID（不是 AppSettings 的字段）
-  const favoriteAlbumId = ref<string>("");
-
-  // 新逻辑：后端 AppSettings 的 key-value 缓存（key 与后端完全一致）
+  // 后端 AppSettings 的 key-value 缓存（key 与后端完全一致）
   const values = reactive<Partial<AppSettings>>({});
   const loadingByKey = reactive<Record<string, boolean>>({});
   const savingByKey = reactive<Record<string, boolean>>({});
@@ -153,18 +254,40 @@ export const useSettingsStore = defineStore("settings", () => {
   // 统一的设置键配置表
   const SETTING_KEY_MAP = buildSettingKeyMap();
 
-  const init = async () => {
-    try {
-      const id = await invoke<string>("get_favorite_album_id");
-      favoriteAlbumId.value = id;
-    } catch (e) {
-      console.error("Failed to load favorite album ID:", e);
-      // 如果加载失败，使用默认值作为兜底
-      favoriteAlbumId.value = "00000000-0000-0000-0000-000000000001";
+  // localStorage 短路层：FRONTEND_LOCAL 始终激活（所有平台），WEB_LOCAL 仅 web 模式追加。
+  // 对消费者透明：load/save 命中 webLocalRefs 的 key 即短路到 localStorage，其他走 IPC。
+  const webLocalRefs: Partial<Record<AppSettingKey, Ref<any>>> = {};
+  const webLocalReadonly = new Set<AppSettingKey>();
+  const localEntries: WebLocalSettingEntry[] = [
+    ...FRONTEND_LOCAL_SETTING_ENTRIES,
+    ...(IS_WEB ? WEB_LOCAL_SETTING_ENTRIES : []),
+  ];
+  for (const entry of localEntries) {
+    const newKey = `${WEB_LOCAL_STORAGE_PREFIX}${entry.key}`;
+    const legacyKey = LOCAL_SETTING_LEGACY_KEYS[entry.key];
+    if (legacyKey && localStorage.getItem(newKey) === null) {
+      const legacy = localStorage.getItem(legacyKey);
+      if (legacy !== null) {
+        localStorage.setItem(newKey, legacy);
+        localStorage.removeItem(legacyKey);
+      }
     }
-  };
+    webLocalRefs[entry.key] = useLocalStorage(
+      newKey,
+      entry.defaultValue as any,
+      { mergeDefaults: true },
+    );
+    if (entry.readonly) webLocalReadonly.add(entry.key);
+    // 预填 values，并保持与 ref 的双向同步（其它 tab 改 localStorage 也能带动 UI）
+    (values as any)[entry.key] = webLocalRefs[entry.key]!.value;
+    watch(webLocalRefs[entry.key]!, (v: unknown) => {
+      (values as any)[entry.key] = v;
+    });
+  }
+  const isWebLocal = (key: AppSettingKey) => key in webLocalRefs;
+  // 保留原语义：readonly 仅在 web 模式下生效；非 web 不关心 readonly。
+  const isWebReadonly = (key: AppSettingKey) => IS_WEB && webLocalReadonly.has(key);
 
-  // TODO: 将这些落实到前端状态管理中
   const isLoading = (key: AppSettingKey) => !!loadingByKey[key];
   const isSaving = (key: AppSettingKey) => !!savingByKey[key];
 
@@ -182,6 +305,11 @@ export const useSettingsStore = defineStore("settings", () => {
     if (loadingByKey[key]) return;
     loadingByKey[key] = true;
     try {
+      // Web mode：直接从 localStorage 读取
+      if (isWebLocal(key)) {
+        (values as any)[key] = webLocalRefs[key]!.value;
+        return;
+      }
       const command = getGetterCommand(key);
       if (!command) {
         console.warn(`No getter command found for key: ${key}`);
@@ -247,6 +375,32 @@ export const useSettingsStore = defineStore("settings", () => {
       // 更新本地值
       (values as any)[key] = value;
 
+      // Web mode：写入 localStorage 后即完成，不再走后端 IPC
+      if (isWebLocal(key)) {
+        if (isWebReadonly(key)) {
+          // 让 watcher 先捕获到「值被改变」的中间状态，然后再回滚；
+          // 否则 Vue 3 对"净变化=0"的连续写入会去重，导致组件里的
+          // localValue ref 无法通过 watch(settingValue) 被重置（UI 看上去「设置成功」）。
+          await nextTick();
+          (values as any)[key] = prevValue;
+          void guardDesktopOnly(webReadonlyFeatureKey(key));
+          return;
+        }
+        webLocalRefs[key]!.value = value;
+        if (onAfterSave) {
+          await onAfterSave();
+        }
+        return;
+      }
+
+      if (IS_WEB && !getIsSuper()) {
+        await nextTick();
+        // 回滚本地值
+        (values as any)[key] = prevValue;
+        guardDesktopOnly(webReadonlyFeatureKey(key));
+        return;
+      }
+
       // 调用后端接口
       const command = getSetterCommand(key);
       if (!command) {
@@ -271,6 +425,11 @@ export const useSettingsStore = defineStore("settings", () => {
     } catch (error) {
       // 回滚本地值
       (values as any)[key] = prevValue;
+      // web mode 下 RPC -32001 forbidden：需要 super 权限，弹窗提示
+      if (IS_WEB && (error as { code?: number }).code === -32001) {
+        void guardSuperRequired();
+        return;
+      }
       console.error(`Failed to save setting ${key}:`, error);
       throw error;
     } finally {
@@ -284,9 +443,6 @@ export const useSettingsStore = defineStore("settings", () => {
   };
 
   return {
-    favoriteAlbumId,
-    init,
-
     // app settings
     values,
     loadingByKey,
@@ -294,6 +450,7 @@ export const useSettingsStore = defineStore("settings", () => {
     isLoading,
     isSaving,
     isDown,
+    isWebReadonly,
     load,
     loadMany,
     loadAll,

@@ -2,6 +2,7 @@ pub mod album;
 pub mod date;
 pub mod hide_gate;
 pub mod media_type;
+pub mod page_size;
 pub mod plugin;
 pub mod query_page;
 pub mod sort;

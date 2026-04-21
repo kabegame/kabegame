@@ -1,11 +1,11 @@
 <template>
   <el-config-provider :locale="elementPlusLocale">
   <!-- 主窗口 -->
-  <el-container class="app-container" :class="{ 'app-container-android': IS_ANDROID }">
+  <el-container class="app-container" :class="{ 'app-container-compact': uiStore.isCompact }">
     <!-- 全局文件拖拽提示层（仅非安卓平台） -->
-    <FileDropOverlay v-if="!IS_ANDROID" ref="fileDropOverlayRef" @click="handleOverlayClick" />
+    <FileDropOverlay v-if="!uiStore.isCompact" ref="fileDropOverlayRef" @click="handleOverlayClick" />
     <!-- 文件拖拽导入确认弹窗（仅非安卓平台） -->
-    <ImportConfirmDialog v-if="!IS_ANDROID" ref="importConfirmDialogRef" />
+    <ImportConfirmDialog v-if="!uiStore.isCompact" ref="importConfirmDialogRef" />
     <!-- 外部插件导入弹窗 -->
     <PluginImportDialog 
       v-model:visible="showImportDialog" 
@@ -19,7 +19,7 @@
     <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
     <AutoConfigDialog />
     <!-- Android：全局导入抽屉 -->
-    <CrawlerDialog v-if="IS_ANDROID" v-model="crawlerDrawerVisible"
+    <CrawlerDialog v-if="uiStore.isCompact" v-model="crawlerDrawerVisible"
       :initial-config="crawlerDrawerInitialConfig" />
     <MissedRunsDialog
       v-model="missedRunsVisible"
@@ -27,11 +27,11 @@
       @run-now="handleRunMissedNow"
       @dismiss="handleDismissMissed"
     />
-    <!-- 非 Android：侧边栏 + 主内容 -->
-    <template v-if="!IS_ANDROID">
-      <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed, 'bg-transparent': IS_WINDOWS || IS_MACOS, 'bg-white': !IS_WINDOWS && !IS_MACOS }" :width="isCollapsed ? '64px' : '200px'">
+    <!-- 非紧凑布局：侧边栏 + 主内容 -->
+    <template v-if="!uiStore.isCompact">
+      <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed, 'bg-transparent': (IS_WINDOWS || IS_MACOS) && !IS_WEB, 'bg-white': !IS_WINDOWS && !IS_MACOS || IS_WEB }" :width="isCollapsed ? '64px' : '200px'">
         <div class="sidebar-header">
-          <img src="/icon.png" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
+          <img :src="appLogoUrl" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
           <div v-if="!isCollapsed" class="sidebar-title-section">
             <h1>Kabegame</h1>
           </div>
@@ -55,13 +55,13 @@
             </el-icon>
             <span>{{ $t('route.pluginBrowser') }}</span>
           </el-menu-item>
-          <el-menu-item index="/surf">
+          <el-menu-item index="/surf" v-if="!IS_WEB">
             <el-icon>
               <Compass />
             </el-icon>
             <span>{{ $t('route.surf') }}</span>
           </el-menu-item>
-          <el-menu-item index="/auto-configs">
+          <el-menu-item index="/auto-configs" v-if="!uiStore.isCompact">
             <el-icon>
               <AlarmClock />
             </el-icon>
@@ -89,8 +89,10 @@
         </keep-alive>
       </router-view>
     </el-main>
-    <!-- Android：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
-    <nav v-if="IS_ANDROID" class="app-bottom-tabs" aria-label="主导航">
+    <!-- Web mode：super 模式切换（左下角浮动） -->
+    <SuperModeToggle v-if="IS_WEB" />
+    <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
+    <nav v-if="uiStore.isCompact" class="app-bottom-tabs" aria-label="主导航">
       <router-link
         v-for="tab in bottomTabs"
         :key="tab.index"
@@ -109,14 +111,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import zhCn from "element-plus/dist/locale/zh-cn.mjs";
 import en from "element-plus/dist/locale/en.mjs";
 import zhTw from "element-plus/dist/locale/zh-tw.mjs";
 import ja from "element-plus/dist/locale/ja.mjs";
 import ko from "element-plus/dist/locale/ko.mjs";
 import { Picture, Grid, Setting, Collection, QuestionFilled, Compass, AlarmClock } from "@element-plus/icons-vue";
+import appLogoUrl from "@/assets/icon-small.png";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useUiStore } from "@kabegame/core/stores/ui";
 import { useI18n, setLocale, resolveLanguage, i18n } from "@kabegame/i18n";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
@@ -131,14 +135,15 @@ import PluginImportDialog from "./components/import/PluginImportDialog.vue";
 import CrawlerDialog from "./components/CrawlerDialog.vue";
 import MissedRunsDialog from "./components/scheduler/MissedRunsDialog.vue";
 import AutoConfigDialog from "./components/scheduler/AutoConfigDialog.vue";
+import SuperModeToggle from "./components/SuperModeToggle.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
 import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
 import { useSidebar } from "./composables/useSidebar";
-import { listen, emit, UnlistenFn } from "@tauri-apps/api/event";
+import { listen, emit, UnlistenFn } from "@/api/rpc";
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { invoke } from "@tauri-apps/api/core";
-import { IS_WINDOWS, IS_MACOS, IS_ANDROID } from "@kabegame/core/env";
+import { invoke } from "@/api/rpc";
+import { IS_WINDOWS, IS_MACOS, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { initHttpServerBaseUrl } from "@kabegame/core/httpServer";
 import { usePluginStore } from "./stores/plugins";
 import { useFailedImagesStore } from "./stores/failedImages";
@@ -181,7 +186,7 @@ const bottomTabs = computed(() => {
     { index: "/settings", icon: Setting, label: i18n.global.t("route.settings") },
     { index: "/help", icon: QuestionFilled, label: i18n.global.t("route.help") },
   ];
-  if (IS_ANDROID) {
+  if (uiStore.isCompact) {
     return tabs.filter((t) => t.index !== "/auto-configs");
   }
   return tabs;
@@ -223,6 +228,9 @@ const { init: initFileDrop, handleOverlayClick } = useFileDrop(fileDropOverlayRe
 
 // 侧边栏
 const { isCollapsed, toggleCollapse } = useSidebar();
+
+// 紧凑布局信号（Android 恒紧凑；web mode 跟随视口；Tauri 桌面永不紧凑）
+const uiStore = useUiStore();
 
 // 设置变更事件监听器
 let unlistenSettingChange: UnlistenFn | null = null;
@@ -283,9 +291,7 @@ onMounted(async () => {
     }
   }
 
-  // 初始化 settings store
   const settingsStore = useSettingsStore();
-  await settingsStore.init();
   // 加载全部设置
   await settingsStore.loadAll();
 
@@ -299,8 +305,10 @@ onMounted(async () => {
     }
   }
   registerHeaderFeatures();
+  console.log("[App.vue] about to call pluginStore.loadPlugins()");
   try {
     await pluginStore.loadPlugins();
+    console.log("[App.vue] pluginStore.loadPlugins() resolved");
   } catch (e) {
     console.error("加载已安装插件列表失败:", e);
   }
@@ -349,6 +357,18 @@ onMounted(async () => {
     }
   });
 
+  // Web mode 无 setting-change 事件，改用 watch 响应语言切换
+  if (IS_WEB) {
+    watch(
+      () => settingsStore.values.language,
+      (raw) => {
+        const canonical = resolveLanguage(raw ?? undefined);
+        setLocale(canonical);
+        registerHeaderFeatures();
+      },
+    );
+  }
+
   // 监听显示窗口事件（IPC）
   await listen('app-show-window', async () => {
     const win = getCurrentWindow();
@@ -393,6 +413,7 @@ onMounted(async () => {
 });
 
 const checkMissedRunsAtStartup = async () => {
+  if (IS_WEB) return; // web mode: backend auto-runs missed configs on startup
   try {
     await crawlerStore.runConfigsReady;
     const items = await crawlerStore.getMissedRuns();
@@ -457,24 +478,24 @@ body,
 }
 
 .app-container {
-  height: 100vh;
+  height: 100dvh;
   display: flex;
   // 让窗口透明层透出（DWM blur behind 只在透明像素处可见）
   background: transparent;
 
-  &.app-container-android {
+  &.app-container-compact {
     flex-direction: column;
   }
 }
 
-// Android：主内容区顶部留出状态栏高度，避免与系统状态栏重叠
-.app-container.app-container-android .app-main {
+// 紧凑布局：主内容区顶部留出状态栏高度，避免与 Android 系统状态栏重叠（桌面浏览器 env() 为 0）
+.app-container.app-container-compact .app-main {
   padding-top: var(--sat, env(safe-area-inset-top, 24px));
 }
 
-// Android：全局去除触摸时的浅蓝色高亮（与画廊图片等一致）
-.app-container.app-container-android,
-.app-container.app-container-android * {
+// 紧凑布局：全局去除触摸时的浅蓝色高亮（与画廊图片等一致）
+.app-container.app-container-compact,
+.app-container.app-container-compact * {
   -webkit-tap-highlight-color: transparent;
   tap-highlight-color: transparent;
 }
@@ -537,7 +558,7 @@ body,
   border-right: 2px solid var(--anime-border);
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100dvh;
   box-shadow: 4px 0 20px rgba(255, 107, 157, 0.1);
   transition: width 0.3s ease;
   // 防止横向滚动条

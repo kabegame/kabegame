@@ -12,7 +12,7 @@
 
       <div v-loading="showLoading" style="min-height: 200px;">
         <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div"
-          class="albums-grid" :class="{ 'albums-grid-android': IS_ANDROID }">
+          class="albums-grid" :class="{ 'albums-grid-compact': isCompact }">
           <AlbumCard v-for="album in albumRoots" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
             :count="albumCounts[album.id] || 0" :preview-images="albumPreviewImages[album.id] || []"
             :video-preview-remount-key="albumVideoPreviewRemountKey"
@@ -76,11 +76,11 @@
 import { ref, computed, onMounted, onActivated, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Refresh, Setting, QuestionFilled, Delete } from "@element-plus/icons-vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
-import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { useAlbumStore, HIDDEN_ALBUM_ID, FAVORITE_ALBUM_ID } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
@@ -92,8 +92,9 @@ import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import AlbumsPageHeader from "@/components/header/AlbumsPageHeader.vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, IS_WEB, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
@@ -102,12 +103,14 @@ import { thumbnailToUrl } from "@kabegame/core/httpServer";
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
-const { albums, albumRoots, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
+const { albums, albumRoots, albumCounts } = storeToRefs(albumStore);
 const router = useRouter();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albums");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("albums");
+const uiStore = useUiStore();
+const { isCompact } = storeToRefs(uiStore);
 
 const pullToRefreshOpts = computed(() =>
   IS_ANDROID
@@ -120,7 +123,7 @@ const pullToRefreshOpts = computed(() =>
 const settingsStore = useSettingsStore();
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
-const albumDriveEnabled = computed(() => !IS_ANDROID && !IS_LIGHT_MODE && !!settingsStore.values.albumDriveEnabled);
+const albumDriveEnabled = computed(() => !IS_ANDROID && !IS_WEB && !IS_LIGHT_MODE && !!settingsStore.values.albumDriveEnabled);
 const albumDriveMountPoint = computed(() => settingsStore.values.albumDriveMountPoint || "K:\\");
 
 const openVirtualDrive = async () => {
@@ -153,7 +156,7 @@ const moveTargetParentId = ref<string | null>(null);
 const moveAlbumTree = computed(() => {
   const a = moveDlgAlbum.value;
   if (!a) return [];
-  const exclude = [a.id, ...albumStore.getDescendantIds(a.id), FAVORITE_ALBUM_ID.value, HIDDEN_ALBUM_ID];
+  const exclude = [a.id, ...albumStore.getDescendantIds(a.id), FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID];
   return albumStore.getAlbumTreeExcluding(exclude);
 });
 
@@ -248,11 +251,11 @@ const albumIsLoading = ref<Set<string>>(new Set());
 
 // 刷新收藏画册的预览（用于收藏状态变化时）
 const refreshFavoriteAlbumPreview = async () => {
-  const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID.value);
+  const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
   if (!favoriteAlbum) return;
 
   // 清除收藏画册的预览缓存
-  clearAlbumPreviewCache(FAVORITE_ALBUM_ID.value);
+  clearAlbumPreviewCache(FAVORITE_ALBUM_ID);
   // 重新加载预览
   await prefetchPreview(favoriteAlbum);
 };
@@ -304,7 +307,7 @@ onMounted(async () => {
   // 监听收藏画册数量变化，刷新预览
   stopFavoriteCountWatch.value?.();
   stopFavoriteCountWatch.value = watch(
-    () => albumCounts.value[FAVORITE_ALBUM_ID.value],
+    () => albumCounts.value[FAVORITE_ALBUM_ID],
     () => {
       refreshFavoriteAlbumPreview();
     }
@@ -325,15 +328,15 @@ onActivated(async () => {
   ]);
 
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
-  const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID.value);
+  const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
   if (favoriteAlbum) {
-    const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID.value] || 0;
-    const images = albumPreviewImages.value[FAVORITE_ALBUM_ID.value];
+    const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID] || 0;
+    const images = albumPreviewImages.value[FAVORITE_ALBUM_ID];
     const hasValidPreview = images && images.length > 0 && images.some((img) => hasPreviewUrl(img));
 
     // 如果画册有内容但预览为空，清除缓存并重新加载
     if (favoriteCount > 0 && !hasValidPreview) {
-      clearAlbumPreviewCache(FAVORITE_ALBUM_ID.value);
+      clearAlbumPreviewCache(FAVORITE_ALBUM_ID);
       // 重新加载预览
       await prefetchPreview(favoriteAlbum);
     }
@@ -342,7 +345,7 @@ onActivated(async () => {
   // 检查是否有新画册需要加载预览（还没有预览数据的画册）
   for (const album of albumRoots.value.slice(0, 6)) {
     // 跳过收藏画册，因为上面已经处理过了
-    if (album.id === FAVORITE_ALBUM_ID.value) continue;
+    if (album.id === FAVORITE_ALBUM_ID) continue;
 
     const images = albumPreviewImages.value[album.id];
     if (!images || images.length === 0 || !images.some((img) => hasPreviewUrl(img))) {
@@ -370,14 +373,14 @@ const handleRefresh = async () => {
       clearAlbumPreviewCache(album.id);
     }
     // 收藏画册也强制重载一次（收藏状态变化会影响预览）
-    clearAlbumPreviewCache(FAVORITE_ALBUM_ID.value);
+    clearAlbumPreviewCache(FAVORITE_ALBUM_ID);
 
     // 清除所有画册的详情缓存，确保进入画册详情页时能获取最新内容
     for (const album of albums.value) {
       delete albumStore.albumImages[album.id];
     }
     // 也清除收藏画册的详情缓存
-    delete albumStore.albumImages[FAVORITE_ALBUM_ID.value];
+    delete albumStore.albumImages[FAVORITE_ALBUM_ID];
 
     // 强制重新挂载列表，让每个卡片的 enter 动画和内部状态都重置
     albumsListKey.value++;
@@ -453,20 +456,20 @@ const albumMenuContext = computed<AlbumActionContext>(() => {
     currentRotationAlbumId: currentRotationAlbumId.value,
     wallpaperRotationEnabled: wallpaperRotationEnabled.value,
     albumImageCount: album ? (albumCounts.value[album.id] || 0) : 0,
-    favoriteAlbumId: FAVORITE_ALBUM_ID.value,
+    favoriteAlbumId: FAVORITE_ALBUM_ID,
   };
 });
 
 const prefetchPreview = async (album: { id: string }) => {
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
-  if (album.id === FAVORITE_ALBUM_ID.value) {
-    const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID.value] || 0;
-    const images = albumPreviewImages.value[FAVORITE_ALBUM_ID.value];
+  if (album.id === FAVORITE_ALBUM_ID) {
+    const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID] || 0;
+    const images = albumPreviewImages.value[FAVORITE_ALBUM_ID];
     const hasValidPreview = images && images.length > 0 && images.some((img) => hasPreviewUrl(img));
 
     // 如果画册有内容但预览为空，清除缓存
     if (favoriteCount > 0 && !hasValidPreview) {
-      clearAlbumPreviewCache(FAVORITE_ALBUM_ID.value);
+      clearAlbumPreviewCache(FAVORITE_ALBUM_ID);
     }
   }
 
@@ -560,7 +563,7 @@ const handleAlbumMenuCommand = async (
   }
 
   // 检查是否为"收藏"画册（使用固定ID）
-  if (id === FAVORITE_ALBUM_ID.value) {
+  if (id === FAVORITE_ALBUM_ID) {
     ElMessage.warning(t("albums.cannotDeleteFavorite"));
     return;
   }
@@ -610,8 +613,8 @@ const handleAlbumMenuCommand = async (
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
 
-/* 安卓：2 列网格，卡片正方形 */
-.albums-grid-android {
+/* 紧凑布局：2 列网格，卡片正方形 */
+.albums-grid-compact {
   grid-template-columns: repeat(2, 1fr);
   gap: 12px;
 

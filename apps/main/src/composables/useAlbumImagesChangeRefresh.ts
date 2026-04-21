@@ -1,5 +1,6 @@
 import { onBeforeUnmount, onMounted, watch, type Ref } from "vue";
 import { useTrailingThrottleFn } from "@/composables/useTrailingThrottle";
+import { listen } from "@/api/rpc";
 
 /** 后端 `DaemonEvent::AlbumImagesChange` / 事件名 `album-images-change` */
 export type AlbumImagesChangePayload = {
@@ -36,7 +37,6 @@ export function useAlbumImagesChangeRefresh(params: {
 
   const start = async () => {
     if (unlisten) return;
-    const { listen } = await import("@tauri-apps/api/event");
     unlisten = await listen<AlbumImagesChangePayload>("album-images-change", async (event) => {
       const payload = (event?.payload ?? {}) as AlbumImagesChangePayload;
       if (params.filter && !params.filter(payload)) {

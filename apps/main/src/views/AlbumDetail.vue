@@ -1,7 +1,7 @@
 <template>
   <div class="album-detail" v-pull-to-refresh="pullToRefreshOpts">
-    <ImageGrid ref="albumViewRef" class="detail-body" :images="images" :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
-      :enable-ctrl-key-adjust-columns="!IS_ANDROID" :enable-virtual-scroll="!IS_ANDROID"
+    <ImageGrid ref="albumViewRef" class="detail-body" :images="images" :enable-ctrl-wheel-adjust-columns="!isCompact"
+      :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
       :loading="loading || isRefreshing" :loading-overlay="loading || isRefreshing" :actions="imageActions"
       :on-context-command="handleImageMenuCommand" hide-scrollbar @added-to-album="handleAddedToAlbum">
 
@@ -69,7 +69,7 @@
           <div
             v-show="childAlbumsExpanded"
             class="child-albums-body"
-            :class="IS_ANDROID ? 'child-albums-body--android' : 'child-albums-body--desktop'"
+            :class="isCompact ? 'child-albums-body--android' : 'child-albums-body--desktop'"
           >
             <AlbumCard
               v-for="child in childAlbums"
@@ -95,6 +95,7 @@
           :page-size="pageSize"
           @update:filter="(filter) => albumDetailRouteStore.navigate({ filter, page: 1 })"
           @update:sort="(sort) => albumDetailRouteStore.navigate({ sort })"
+          @update:pageSize="(ps) => albumDetailRouteStore.navigate({ page: 1, pageSize: ps })"
         />
 
         <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage"
@@ -103,7 +104,7 @@
     </ImageGrid>
 
     <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-      :message="removeDialogMessage" :title="t('gallery.removeFromAlbum')" :checkbox-label="t('gallery.removeDialogCheckboxLabel')" :hide-checkbox="IS_ANDROID"
+      :message="removeDialogMessage" :title="t('gallery.removeFromAlbum')" :checkbox-label="t('gallery.removeDialogCheckboxLabel')" :hide-checkbox="isCompact"
       :danger-text="t('gallery.removeDialogDangerText')" :safe-text="t('gallery.removeDialogSafeText')"
       @confirm="confirmRemoveImages" />
 
@@ -157,7 +158,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -166,7 +167,7 @@ import { createImageActions } from "@/actions/imageActions";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
 import ImageGrid from "@/components/ImageGrid.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
-import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { useAlbumStore, HIDDEN_ALBUM_ID, FAVORITE_ALBUM_ID } from "@/stores/albums";
 import type { Album } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
@@ -178,7 +179,8 @@ import { useUiStore } from "@kabegame/core/stores/ui";
 import AlbumDetailPageHeader from "@/components/header/AlbumDetailPageHeader.vue";
 import AlbumDetailBrowseToolbar from "@/components/AlbumDetailBrowseToolbar.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
-import { IS_LIGHT_MODE, IS_ANDROID } from "@kabegame/core/env";
+import { IS_LIGHT_MODE, IS_WEB } from "@kabegame/core/env";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import type { Component } from "vue";
@@ -216,13 +218,13 @@ const router = useRouter();
 const isOnAlbumRoute = computed(() => String(route.name ?? "") === "AlbumDetail");
 
 const albumStore = useAlbumStore();
-const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const settingsStore = useSettingsStore();
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
 const uiStore = useUiStore();
-const { load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
 const { imageGridColumns } = storeToRefs(uiStore);
+const isCompact = computed(() => uiStore.isCompact);
+const { load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
 const isAlbumDetailActive = ref(true);
 const albumDetailRouteStore = useAlbumDetailRouteStore();
 
@@ -232,7 +234,7 @@ const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("albumdetail");
 
 const pullToRefreshOpts = computed(() =>
-  IS_ANDROID
+  isCompact.value
     ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
     : undefined
 );
@@ -304,14 +306,14 @@ const childAlbumMenuContext = computed<AlbumActionContext>(() => {
     currentRotationAlbumId: currentRotationAlbumId.value,
     wallpaperRotationEnabled: wallpaperRotationEnabled.value,
     albumImageCount: album ? (albumStore.albumCounts[album.id] || 0) : 0,
-    favoriteAlbumId: FAVORITE_ALBUM_ID.value,
+    favoriteAlbumId: FAVORITE_ALBUM_ID,
   };
 });
 
 const moveAlbumTree = computed(() => {
   const a = moveDlgAlbum.value;
   if (!a) return [];
-  const exclude = [a.id, ...albumStore.getDescendantIds(a.id), FAVORITE_ALBUM_ID.value, HIDDEN_ALBUM_ID];
+  const exclude = [a.id, ...albumStore.getDescendantIds(a.id), FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID];
   return albumStore.getAlbumTreeExcluding(exclude);
 });
 
@@ -333,7 +335,7 @@ watch(albumId, () => {
 
 const prefetchChildPreview = async (child: Album) => {
   if (childPreviewImages.value[child.id]?.length) return;
-  const imgs = await albumStore.loadAlbumPreview(child.id, IS_ANDROID ? 1 : 3);
+  const imgs = await albumStore.loadAlbumPreview(child.id, isCompact.value ? 1 : 3);
   childPreviewImages.value = { ...childPreviewImages.value, [child.id]: imgs };
 };
 
@@ -446,7 +448,7 @@ const handleChildAlbumMenuCommand = async (
     return;
   }
 
-  if (id === FAVORITE_ALBUM_ID.value) {
+  if (id === FAVORITE_ALBUM_ID) {
     ElMessage.warning(t("albums.cannotDeleteFavorite"));
     return;
   }
@@ -489,10 +491,7 @@ const localProviderRootPath = computed(() => {
   return `album/${albumId.value}`;
 });
 
-const pageSize = computed(() => {
-  const n = Number(settingsStore.values.galleryPageSize);
-  return n === 100 || n === 500 || n === 1000 ? n : 100;
-});
+const { pageSize } = storeToRefs(albumDetailRouteStore);
 
 const currentPath = computed(() => albumDetailRouteStore.currentPath);
 const currentPage = computed(() => albumDetailRouteStore.page);
@@ -702,7 +701,6 @@ watch(
   pageSize,
   async (_v, prev) => {
     if (prev === undefined) return;
-    await albumDetailRouteStore.navigate({ page: 1 });
     await loadAlbum();
   },
 );
@@ -852,8 +850,9 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       break;
     }
     case "copy":
-      // 单选时复制图片（多选时已在 MultiImageContextMenu 中隐藏复制选项）
-      if (imagesToProcess[0]) {
+      if (IS_WEB) {
+        for (const img of imagesToProcess) handleCopyImage(img);
+      } else if (imagesToProcess[0]) {
         await handleCopyImage(imagesToProcess[0]);
       }
       break;
@@ -868,17 +867,20 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       }
       break;
     case "openFolder":
+      if (await guardDesktopOnly("openLocal")) break;
       if (!isMultiSelect) {
         await invoke("open_file_folder", { filePath: image.localPath });
       }
       break;
     case "wallpaper":
+      if (await guardDesktopOnly("wallpaper")) break;
       if (!isMultiSelect) {
         await setWallpaperByImageIdWithModeFallback(image.id);
         currentWallpaperImageId.value = image.id;
       }
       break;
     case "share":
+      if (await guardDesktopOnly("share")) break;
       if (!isMultiSelect && image) {
         try {
           const filePath = image.localPath;
@@ -990,6 +992,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       break;
     }
     case "addToHidden": {
+      if (await guardDesktopOnly("hideImage")) break;
       const ids = imagesToProcess.map((img) => img.id);
       if (ids.length === 0) break;
       const isUnhide = !!image?.isHidden || albumId.value === HIDDEN_ALBUM_ID;
@@ -1143,7 +1146,7 @@ onActivated(async () => {
   }
 
   // 如果是收藏画册且标记为需要刷新，重新加载
-  if (albumId.value === FAVORITE_ALBUM_ID.value && favoriteAlbumDirty.value) {
+  if (albumId.value === FAVORITE_ALBUM_ID && favoriteAlbumDirty.value) {
     favoriteAlbumDirty.value = false;
     await loadAlbum();
   }
@@ -1234,7 +1237,7 @@ const handleDeleteAlbum = async () => {
   if (!albumId.value) return;
 
   // 检查是否为"收藏"画册
-  if (albumId.value === FAVORITE_ALBUM_ID.value) {
+  if (albumId.value === FAVORITE_ALBUM_ID) {
     ElMessage.warning("不能删除'收藏'画册");
     return;
   }
@@ -1243,24 +1246,12 @@ const handleDeleteAlbum = async () => {
 
 
     const deletedAlbumId = albumId.value;
-    const wasEnabled = wallpaperRotationEnabled.value;
-    const wasCurrentRotation = currentRotationAlbumId.value === deletedAlbumId;
 
     await ElMessageBox.confirm(
       `确定要删除画册"${albumName.value}"吗？此操作仅删除画册及其关联，不会删除图片文件。`,
       "确认删除",
       { type: "warning" }
     );
-
-    // 先读一下当前壁纸（用于切回单张壁纸时保持不变）
-    let currentWallpaperPath: string | null = null;
-    if (wasEnabled && wasCurrentRotation) {
-      try {
-        currentWallpaperPath = await invoke<string | null>("get_current_wallpaper_path");
-      } catch {
-        currentWallpaperPath = null;
-      }
-    }
 
     // 删除画册
     await albumStore.deleteAlbum(deletedAlbumId);

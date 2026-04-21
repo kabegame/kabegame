@@ -5,8 +5,7 @@
 A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers—let your waifus (or husbandos) keep you company every day~ Plugin-extensible, so you can easily grab images from all kinds of anime wallpaper sites.
 
 <div align="center">
-  <img src="docs/images/image2.png" alt="Kabegame mascot 1" width="256"/>
-  <img src="docs/images/image1.png" alt="Kabegame mascot 2" width="256"/>
+  <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
 </div>
 
 ## Gallery Screenshots

@@ -1,7 +1,7 @@
 <template>
   <div class="download-interval-setting">
     <AndroidPickerDuration
-      v-if="IS_ANDROID"
+      v-if="uiStore.isCompact"
       :model-value="localValue"
       :title="$t('settings.downloadIntervalTitle')"
       :disabled="disabled"
@@ -23,8 +23,8 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { IS_ANDROID } from "@kabegame/core/env";
 import AndroidPickerDuration from "@kabegame/core/components/AndroidPickerDuration.vue";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("downloadIntervalMs");
 const localValue = ref<number>(500);
@@ -39,6 +39,8 @@ watch(
   },
   { immediate: true }
 );
+
+const uiStore = useUiStore();
 
 const onChange = async (v: number | undefined) => {
   if (typeof v !== "number" || !Number.isFinite(v)) return;

@@ -2,10 +2,10 @@
   <el-drawer
     :model-value="modelValue"
     :title="resolvedTitle"
-    :size="IS_ANDROID ? 'auto' : '400px'"
-    :direction="IS_ANDROID ? 'btt' : 'rtl'"
+    :size="uiStore.isCompact ? 'auto' : '400px'"
+    :direction="uiStore.isCompact ? 'btt' : 'rtl'"
     :close-on-click-modal="true"
-    :with-header="!IS_ANDROID"
+    :with-header="!uiStore.isCompact"
     class="option-picker-drawer"
     @update:model-value="$emit('update:modelValue', $event)"
   >
@@ -39,10 +39,10 @@
 import type { Component } from "vue";
 import { ArrowRight } from "@element-plus/icons-vue";
 import { ElDrawer, ElIcon } from "element-plus";
-import { IS_ANDROID } from "@kabegame/core/env";
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 export interface OptionItem {
   id: string;
@@ -62,6 +62,8 @@ const props = withDefaults(defineProps<Props>(), {
 });
 const { t } = useI18n();
 const resolvedTitle = computed(() => props.title ?? t('common.selectPlaceholder'));
+
+const uiStore = useUiStore();
 
 const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;

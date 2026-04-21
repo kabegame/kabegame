@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider};
 use crate::providers::shared::date::month::MonthProvider;
-use crate::providers::shared::query_page::QueryPageProvider;
+use crate::providers::shared::page_size::PageSizeGroupProvider;
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
@@ -54,6 +54,6 @@ impl Provider for YearProvider {
     }
 
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
-        QueryPageProvider::root().list_images(composed)
+        PageSizeGroupProvider.list_images(composed)
     }
 }

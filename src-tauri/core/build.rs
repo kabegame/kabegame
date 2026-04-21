@@ -9,7 +9,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=KABEGAME_COMPONENT");
     println!("cargo:rerun-if-env-changed=KABEGAME_DATA");
 
-    println!("cargo:rustc-check-cfg=cfg(kabegame_mode, values(\"standard\", \"light\", \"android\"))");
+    println!("cargo:rustc-check-cfg=cfg(kabegame_mode, values(\"standard\", \"light\", \"android\", \"web\"))");
     println!(
         "cargo:rustc-check-cfg=cfg(kabegame_component, values(\"main\", \"cli\", \"unknown\"))"
     );
@@ -19,6 +19,7 @@ fn main() {
     let normalized = match mode.as_str() {
         "light" => "light",
         "android" => "android",
+        "web" => "web",
         _ => "standard",
     };
 

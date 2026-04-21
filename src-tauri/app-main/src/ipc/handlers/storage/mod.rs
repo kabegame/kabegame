@@ -77,17 +77,6 @@ pub async fn handle_storage_request(req: &CliIpcRequest) -> Option<CliIpcRespons
         CliIpcRequest::StorageAddTask { task } => Some(tasks::add_task(task).await),
         CliIpcRequest::StorageUpdateTask { task } => Some(tasks::update_task(task).await),
         CliIpcRequest::StorageDeleteTask { task_id } => Some(tasks::delete_task(task_id).await),
-        CliIpcRequest::StorageGetTaskImages { task_id } => {
-            Some(tasks::get_task_images(task_id).await)
-        }
-        CliIpcRequest::StorageGetTaskImageIds { task_id } => {
-            Some(tasks::get_task_image_ids(task_id).await)
-        }
-        CliIpcRequest::StorageGetTaskImagesPaginated {
-            task_id,
-            offset,
-            limit,
-        } => Some(tasks::get_task_images_paginated(task_id, *offset, *limit).await),
         CliIpcRequest::StorageGetTaskFailedImages { task_id } => {
             Some(tasks::get_task_failed_images(task_id).await)
         }

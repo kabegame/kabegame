@@ -181,7 +181,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import AutoConfigDetailContent from "@kabegame/core/components/scheduler/AutoConfigDetailContent.vue";
 import ScheduleProgressBar from "@kabegame/core/components/scheduler/ScheduleProgressBar.vue";
 import OutputDirSelect from "@kabegame/core/components/crawler/OutputDirSelect.vue";
@@ -699,8 +699,7 @@ async function copyFullJson() {
   if (!cfg) return;
   const text = JSON.stringify(cfg, null, 2);
   try {
-    const { isTauri } = await import("@tauri-apps/api/core");
-    if (isTauri()) {
+    if (!IS_WEB) {
       const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
       await writeText(text);
     } else {

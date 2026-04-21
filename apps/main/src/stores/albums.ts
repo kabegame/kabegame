@@ -1,9 +1,9 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, listen } from "@/api/rpc";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import type { UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@/api/rpc";
 import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { ElMessageBox } from "element-plus";
@@ -15,6 +15,8 @@ export type { AlbumTreeNode };
 
 /** 隐藏画册的固定 UUID（与后端 `HIDDEN_ALBUM_ID` 常量一致） */
 export const HIDDEN_ALBUM_ID = "00000000-0000-0000-0000-000000000000";
+/** 收藏画册的固定 UUID（与后端 `FAVORITE_ALBUM_ID` 常量一致） */
+export const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
 
 export interface Album {
   id: string;
@@ -44,7 +46,6 @@ function normalizeAlbumRow(a: Record<string, unknown>): Album {
 
 export const useAlbumStore = defineStore("albums", () => {
   const settingsStore = useSettingsStore();
-  const FAVORITE_ALBUM_ID = computed(() => settingsStore.favoriteAlbumId);
 
   const albums = ref<Album[]>([]);
   const albumImages = ref<Record<string, ImageInfo[]>>({});
@@ -150,7 +151,6 @@ export const useAlbumStore = defineStore("albums", () => {
     if (eventListenersInitialized) return;
     eventListenersInitialized = true;
     try {
-      const { listen } = await import("@tauri-apps/api/event");
       unlistenAlbumAdded = await listen<Record<string, unknown>>("album-added", (event) => {
         const p = (event.payload ?? {}) as Record<string, unknown>;
         applyAlbumAddedPayload(p);
@@ -378,7 +378,6 @@ export const useAlbumStore = defineStore("albums", () => {
     albumPreviews,
     albumCounts,
     loading,
-    FAVORITE_ALBUM_ID,
     HIDDEN_ALBUM_ID,
     loadAlbums,
     getChildren,

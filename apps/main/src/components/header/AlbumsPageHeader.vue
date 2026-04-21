@@ -12,7 +12,8 @@ import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { useUiStore } from "@kabegame/core/stores/ui";
+import { storeToRefs } from "pinia";
 
 const { t } = useI18n();
 
@@ -29,12 +30,14 @@ const emit = defineEmits<{
   'quick-settings': [];
 }>();
 
+const { isCompact } = storeToRefs(useUiStore());
+
 const withVd = (ids: string[]) =>
   props.albumDriveEnabled ? ids : ids.filter((id) => id !== HeaderFeatureId.OpenVirtualDrive);
 
 // 计算显示和折叠的feature ID
 const showIds = computed(() => {
-  if (IS_ANDROID) {
+  if (isCompact.value) {
     return [HeaderFeatureId.TaskDrawer];
   } else {
     return withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings]);
@@ -42,7 +45,7 @@ const showIds = computed(() => {
 });
 
 const foldIds = computed(() => {
-  if (IS_ANDROID) {
+  if (isCompact.value) {
     return withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings]);
   } else {
     return [];

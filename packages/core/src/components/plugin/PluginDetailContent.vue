@@ -51,8 +51,8 @@
 
       <!-- 文档（按当前语言解析 doc record） -->
       <div class="plugin-doc-section">
-        <PluginDocRenderer v-if="displayDoc" :markdown="displayDoc" :load-image-bytes="loadDocImageBytes"
-          :doc-image-base-url="docImageBaseUrl" :doc-resources="plugin?.docResources ?? null"
+        <PluginDocRenderer v-if="displayDoc" :markdown="displayDoc"
+          :doc-resources="plugin?.docResources ?? null"
           :empty-description="effectiveDocEmptyDescription" />
         <el-empty v-else :description="effectiveDocEmptyDescription" :image-size="100" />
       </div>
@@ -72,9 +72,6 @@ import PluginInfo from "./PluginInfo.vue";
 
 const { t, locale } = useI18n();
 
-type LoadImageBytes = (imagePath: string) => Promise<Uint8Array | number[]>;
-
-
 const props = withDefaults(
   defineProps<{
     title: string;
@@ -93,10 +90,7 @@ const props = withDefaults(
     installingText?: string;
     emptyDescription?: string;
     docEmptyDescription?: string;
-
-    loadDocImageBytes?: LoadImageBytes;
-    /** 插件文档图片 URL 前缀（桌面 HTTP / 安卓 kbg-plugin-doc.localhost），有值时优先用 URL 加载图片 */
-    docImageBaseUrl?: string | null;
+  
     /** 商店安装/更新下载进度 0–100 */
     installProgressPercent?: number | null;
     /** 当前 Kabegame 应用版本（用于描述列表内最低版本对比） */

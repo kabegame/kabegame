@@ -132,14 +132,13 @@ export class ComponentPlugin extends BasePlugin {
       this.log(`tauriConfigHandlebars: ${tauriConfigHandlebars}`);
       if (existsSync(tauriConfigHandlebars)) {
         const tauriConfig = path.resolve(component.appDir, "tauri.conf.json");
-        Handlebars.registerHelper("devServerHost", () => getDevServerHost());
+        const isAndroid = !!bs.context.mode?.isAndroid;
+        Handlebars.registerHelper("devServerHost", () => isAndroid ? getDevServerHost() : "localhost");
         const template = Handlebars.compile(
           readFileSync(tauriConfigHandlebars, {
             encoding: "utf-8",
           }).toString(),
         );
-        const isAndroid = !!bs.context.mode?.isAndroid;
-        const isWeb = !!bs.context.mode?.isWeb;
         const templateCtx = {
           isWindows: !isAndroid && OSPlugin.isWindows,
           isMacOS: !isAndroid && OSPlugin.isMacOS,

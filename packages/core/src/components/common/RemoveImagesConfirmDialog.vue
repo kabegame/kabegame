@@ -17,6 +17,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, watch } from "vue";
 import { useModalBack } from "../../composables/useModalBack";
+import { useSuper } from "@kabegame/core/composables/useSuper";
+import { guardDesktopOnly } from "@kabegame/core/utils/desktopOnlyGuard";
 
 interface Props {
   modelValue: boolean;
@@ -57,13 +59,18 @@ const visible = computed({
 });
 
 useModalBack(visible);
+const { isSuper } = useSuper();
 
 const deleteFiles = computed({
   get: () => props.deleteFiles,
   set: (v) => emit("update:deleteFiles", v),
 });
 
-const emitConfirm = () => {
+const emitConfirm = async () => {
+  if (!isSuper.value) {
+    await guardDesktopOnly("deleteImages");
+    return;
+  }
   emit("confirm");
 };
 

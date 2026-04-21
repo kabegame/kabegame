@@ -94,6 +94,20 @@ function updateAllTauriConfs(newVersion: string): void {
   });
 }
 
+// 更新 apps/main/.env 中的 VITE_APP_VERSION（Vite 编译期注入前端版本号）
+function updateMainEnvVersion(newVersion: string): void {
+  const envPath = path.join(ROOT, "apps", "main", ".env");
+  const line = `VITE_APP_VERSION=${newVersion}`;
+  let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : "";
+  if (/^VITE_APP_VERSION=.*$/m.test(content)) {
+    content = content.replace(/^VITE_APP_VERSION=.*$/m, line);
+  } else {
+    content = (content && !content.endsWith("\n") ? content + "\n" : content) + line + "\n";
+  }
+  fs.writeFileSync(envPath, content);
+  console.log(`✓ Updated apps/main/.env to ${newVersion}`);
+}
+
 const README_RELEASE_FILES = [
   "README.md",
   "README.zh-CN.md",
@@ -177,6 +191,7 @@ function setVersion(newVersion: string): void {
     updateCargoTomlVersion(newVersion);
     updateCorePackageJson(newVersion);
     updateAllTauriConfs(newVersion);
+    updateMainEnvVersion(newVersion);
     updateReadmeKabegameReleaseLinks(previousVersion, newVersion);
     console.log(`\n🎉 Version successfully set to ${newVersion}!`);
   } catch (error) {
@@ -195,6 +210,7 @@ function syncVersion(): void {
 
     updateCorePackageJson(version);
     updateAllTauriConfs(version);
+    updateMainEnvVersion(version);
     const readmeReleaseVer = readReadmeKabegameReleaseVersion();
     if (readmeReleaseVer) {
       updateReadmeKabegameReleaseLinks(readmeReleaseVer, version);

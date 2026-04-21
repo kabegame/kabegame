@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref, unref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, listen } from "../api";
 import { i18n, resolveConfigText } from "@kabegame/i18n";
 import { IS_ANDROID } from "../env";
 
@@ -386,8 +386,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
 
   (async () => {
     try {
-      const { listen } = await import("@tauri-apps/api/event");
-
       await listen("tasks-change", async (event) => {
         const payload = event.payload as Record<string, unknown> | null;
         const type = String(payload?.type ?? "");

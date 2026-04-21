@@ -97,7 +97,7 @@
 import { ref, computed, watch, onMounted } from "vue";
 import { FolderOpened } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";

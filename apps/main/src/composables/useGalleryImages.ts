@@ -1,5 +1,5 @@
 import { nextTick, ref, shallowRef, type Ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import type { ImageInfo } from "@kabegame/core/types/image";
 
 type GalleryBrowseEntry =

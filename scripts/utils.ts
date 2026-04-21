@@ -39,18 +39,23 @@ export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
 
 /** 开发服务器 host：供 tauri.conf 的 devUrl / CSP 等使用；可被 TAURI_DEV_HOST / VITE_DEV_SERVER_HOST 覆盖 */
 export function getDevServerHost(): string {
-  const isAndroid = process.env.VITE_ANDROID === "true";
-  if (!isAndroid) return "localhost";
-  const envHost =
-    process.env.TAURI_DEV_HOST || process.env.VITE_DEV_SERVER_HOST;
-  if (envHost) return envHost;
+  const override = process.env.TAURI_DEV_HOST ?? process.env.VITE_DEV_SERVER_HOST;
+  if (override) return override;
+
   const ifaces = os.networkInterfaces();
+  const all: string[] = [];
   for (const name of Object.keys(ifaces || {})) {
     for (const iface of ifaces![name]!) {
-      if (iface.family === "IPv4" && !iface.internal) return iface.address;
+      if (iface.family !== "IPv4" || iface.internal) continue;
+      all.push(iface.address);
     }
   }
-  return "localhost";
+  // 优先返回 RFC 1918 私有地址，过滤 VPN/TUN 虚拟网卡（如 Clash 198.18.x.x）
+  const rfc1918 = all.find((ip) => {
+    const [a, b] = ip.split(".").map(Number);
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  });
+  return rfc1918 ?? all[0] ?? "localhost";
 }
 
 interface RunOptions {

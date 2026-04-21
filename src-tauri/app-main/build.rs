@@ -8,7 +8,7 @@ fn main() {
     // We inject `--cfg desktop="plasma"` or `--cfg desktop="gnome"` at compile-time (via scripts/run.js --desktop),
     // so silence `unexpected_cfgs` warnings by declaring the allowed values here.
     println!("cargo:rustc-check-cfg=cfg(desktop, values(\"plasma\", \"gnome\"))");
-    println!("cargo:rustc-check-cfg=cfg(kabegame_mode, values(\"standard\", \"light\", \"android\"))");
+    println!("cargo:rustc-check-cfg=cfg(kabegame_mode, values(\"standard\", \"light\", \"android\", \"web\"))");
     println!(
         "cargo:rustc-check-cfg=cfg(kabegame_component, values(\"main\", \"cli\", \"unknown\"))"
     );
@@ -24,6 +24,7 @@ fn main() {
     let normalized = match mode.as_str() {
         "light" => "light",
         "android" => "android",
+        "web" => "web",
         _ => "standard",
     };
     println!("cargo:rustc-env=KABEGAME_BUILD_MODE={}", normalized);

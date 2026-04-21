@@ -1,5 +1,5 @@
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@/api/rpc";
+import { invoke } from "@/api/rpc";
 import { fileToUrl, initHttpServerBaseUrl } from "@kabegame/core/httpServer";
 import { IS_DEV } from "@kabegame/core/env";
 

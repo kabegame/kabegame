@@ -22,6 +22,7 @@ import { useApp } from "@/stores/app";
 import { usePluginStore } from "@/stores/plugins";
 import { setCrawlerBeforeAddTaskGuard } from "@kabegame/core/stores/crawler";
 import { useImageSupportStore } from "@kabegame/core/stores/imageSupport";
+import { setSuperGetter } from "@kabegame/core/state/superState";
 import { i18n } from "@kabegame/i18n";
 
 if (IS_ANDROID) {
@@ -41,10 +42,12 @@ const pinia = createPinia();
 app.use(pinia);
 app.use(i18n);
 
-useApp();
 setCrawlerBeforeAddTaskGuard(createMinAppVersionBeforeAddTaskGuard(usePluginStore()));
 registerHeaderFeatures();
 app.use(router);
+// useApp 依赖 useSuper -> useRoute/useRouter，必须在 app.use(router) 之后首次实例化
+const appStore = useApp();
+setSuperGetter(() => appStore.isSuper);
 app.use(ElementPlus);
 app.use(Toast);
 app.use(Picker);

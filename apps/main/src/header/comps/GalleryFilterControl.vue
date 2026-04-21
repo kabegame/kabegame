@@ -141,7 +141,7 @@ import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useRoute } from "vue-router";
 import { ArrowDown, ArrowRight, Filter } from "@element-plus/icons-vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import {
   filterDateSegment,
   filterMediaKind,

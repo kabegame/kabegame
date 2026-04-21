@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider};
-use crate::providers::shared::query_page::QueryPageProvider;
+use crate::providers::shared::page_size::PageSizeGroupProvider;
 use crate::storage::gallery::ImageQuery;
 
 /// `gallery/date-range/`：根节点，子节点动态按 `YYYY-MM-DD~YYYY-MM-DD` 解析。
@@ -36,15 +36,15 @@ impl Provider for GalleryDateRangeProvider {
     }
 
     fn list_children(&self, composed: &ImageQuery) -> Result<Vec<ChildEntry>, String> {
-        QueryPageProvider::root().list_children(composed)
+        PageSizeGroupProvider.list_children(composed)
     }
 
     fn get_child(&self, name: &str, composed: &ImageQuery) -> Option<Arc<dyn Provider>> {
-        QueryPageProvider::root().get_child(name, composed)
+        PageSizeGroupProvider.get_child(name, composed)
     }
 
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
-        QueryPageProvider::root().list_images(composed)
+        PageSizeGroupProvider.list_images(composed)
     }
 }
 
