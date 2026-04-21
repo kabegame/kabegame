@@ -25,6 +25,13 @@
     "scheduler": "Scheduler",
     "deleteImages": "Delete images",
     "hideImage": "Hide image",
-    "organize": "Organize library"
+    "organize": "Organize library",
+    "runConfig": "Run config",
+    "importRecommendedConfig": "Import recommended config",
+    "deleteRunConfig": "Delete run config",
+    "saveRunConfig": "Save run config",
+    "installPlugin": "Install plugin",
+    "uninstallPlugin": "Uninstall plugin",
+    "addPluginSource": "Add plugin source"
   }
 }

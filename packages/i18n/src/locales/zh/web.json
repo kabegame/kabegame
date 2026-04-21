@@ -25,6 +25,13 @@
     "scheduler": "定时任务",
     "deleteImages": "删除图片",
     "hideImage": "隐藏图片",
-    "organize": "整理图库"
+    "organize": "整理图库",
+    "runConfig": "运行配置",
+    "importRecommendedConfig": "导入推荐配置",
+    "deleteRunConfig": "删除运行配置",
+    "saveRunConfig": "保存运行配置",
+    "installPlugin": "安装插件",
+    "uninstallPlugin": "卸载插件",
+    "addPluginSource": "添加商店源"
   }
 }

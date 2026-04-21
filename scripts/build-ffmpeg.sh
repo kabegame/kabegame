@@ -64,8 +64,10 @@ case "$(uname -s)" in
     fi
     ;;
   Linux)
-    # Linux：GIF 多帧输出（输入解码与 Windows/macOS 一致，不启用 libx264/mov）
-    CONFIGURE_LINUX_ONLY=1
+    # 桌面 Linux (Tauri)：GIF 多帧输出。服务器/web 模式设 KABEGAME_SERVER_BUILD=1 跳过，与 Windows/macOS 一致用 libx264。
+    if [[ -z "${KABEGAME_SERVER_BUILD:-}" ]]; then
+      CONFIGURE_LINUX_ONLY=1
+    fi
     ;;
 esac
 
@@ -102,6 +104,15 @@ if [[ -n "${CONFIGURE_LINUX_ONLY:-}" ]]; then
     "${CONFIGURE_EXTRA[@]}" \
     "$@"
 else
+  # server build 时静态链接 x264，避免目标机器需要安装 libx264
+  _EXTRA_LDFLAGS="-O2"
+  _EXTRA_LIBS=""
+  _PKG_CONFIG_FLAGS=""
+  if [[ -n "${KABEGAME_SERVER_BUILD:-}" ]]; then
+    _PKG_CONFIG_FLAGS="--static"
+    _EXTRA_LIBS="-lpthread -lm -ldl"
+  fi
+
   "$FFMPEG_SRC/configure" \
     --prefix="$BUILD_DIR/install" \
     --disable-everything \
@@ -131,6 +142,8 @@ else
     --enable-small \
     --disable-runtime-cpudetect \
     --extra-cflags="-O2" \
+    ${_PKG_CONFIG_FLAGS:+--pkg-config-flags="$_PKG_CONFIG_FLAGS"} \
+    ${_EXTRA_LIBS:+--extra-libs="$_EXTRA_LIBS"} \
     "${CONFIGURE_EXTRA[@]}" \
     "$@"
 fi

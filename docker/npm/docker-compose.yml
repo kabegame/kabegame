@@ -12,9 +12,8 @@ services:
       - ./letsencrypt:/etc/letsencrypt
       - ./cert-local:/cert
     networks:
-      - default
-      - umami_default
+      - umami
 
 networks:
-  umami_default:
+  umami:
     external: true

@@ -8,6 +8,7 @@ import {
   type GalleryTimeSort,
 } from "@/utils/galleryPath";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { IS_WEB } from "@kabegame/core/env";
 
 type GalleryRouteState = {
   filter: GalleryFilter;
@@ -33,9 +34,10 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
       const settings = useSettingsStore();
       const stored = localStorage.getItem(GALLERY_STORAGE_KEY_PATH);
       const parsed = stored ? parseGalleryPath(stored) : null;
+      const defaultSort: GalleryTimeSort = IS_WEB ? "desc" : "asc";
       return {
         filter: parsed?.filter ?? DEFAULT_GALLERY_FILTER,
-        sort: parsed?.sort ?? "asc",
+        sort: parsed?.sort ?? defaultSort,
         page: 1, // 页码不持久化，由当前页面状态/URL 驱动
         pageSize: (settings.values.galleryPageSize as number | undefined) ?? 100,
       };

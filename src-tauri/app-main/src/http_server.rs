@@ -31,7 +31,6 @@ use tokio::io::SeekFrom;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
 use tower::ServiceExt;
-#[cfg(all(not(target_os = "android"), debug_assertions))]
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
 use tower_http::services::ServeDir;
 
@@ -95,14 +94,16 @@ fn set_content_type_if_present(resp: &mut Response, mime_type: Option<&str>) {
     }
 }
 
-/// 本地文件按路径寻址、内容不变。浏览器命中磁盘缓存即可跳过一次 fs 读 + DB 查询。
 #[cfg(not(target_os = "android"))]
-fn apply_immutable_cache(resp: &mut Response) {
-    resp.headers_mut().insert(
-        CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=31536000, immutable"),
-    );
+const IMMUTABLE_CACHE_CONTROL: HeaderValue =
+    HeaderValue::from_static("public, max-age=31536000, immutable");
+
+#[cfg(not(target_os = "android"))]
+fn set_immutable_cache(resp: &mut Response) {
+    resp.headers_mut()
+        .insert(CACHE_CONTROL, IMMUTABLE_CACHE_CONTROL);
 }
+
 
 #[cfg(not(target_os = "android"))]
 async fn handle_file_query(
@@ -185,7 +186,7 @@ async fn serve_file_with_mime(
                     if resp.status().is_success() {
                         let mut out = resp.into_response();
                         set_content_type_if_present(&mut out, mime_type.as_deref());
-                        apply_immutable_cache(&mut out);
+                        set_immutable_cache(&mut out);
                         return out;
                     }
                 }
@@ -202,7 +203,7 @@ async fn serve_file_with_mime(
                     out.headers_mut()
                         .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
                     set_content_type_if_present(&mut out, mime_type.as_deref());
-                    apply_immutable_cache(&mut out);
+                    set_immutable_cache(&mut out);
                     return out;
                 }
                 if let Some(range_part) = range_header.strip_prefix("bytes=") {
@@ -248,7 +249,7 @@ async fn serve_file_with_mime(
                             out.headers_mut()
                                 .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
                             set_content_type_if_present(&mut out, mime_type.as_deref());
-                            apply_immutable_cache(&mut out);
+                            set_immutable_cache(&mut out);
                             return out;
                         }
                     }
@@ -271,7 +272,7 @@ async fn serve_file_with_mime(
             out.headers_mut()
                 .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
             set_content_type_if_present(&mut out, mime_type.as_deref());
-            apply_immutable_cache(&mut out);
+            set_immutable_cache(&mut out);
             out
         }
         Err(_) => (StatusCode::NOT_FOUND, "file not found").into_response(),

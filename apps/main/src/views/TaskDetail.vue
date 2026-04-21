@@ -128,7 +128,7 @@ import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { usePluginStore } from "@/stores/plugins";
-import { useAlbumStore } from "@/stores/albums";
+import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { storeToRefs } from "pinia";
 import TaskDetailPageHeader from "@/components/header/TaskDetailPageHeader.vue";
@@ -524,7 +524,11 @@ const handleDeleteFailedImage = async (failedId: number) => {
 
 const openFailedUrl = async (url: string) => {
     try {
-        await openUrl(url);
+        if (IS_WEB) {
+            window.open(url, "_blank", "noopener,noreferrer");
+        } else {
+            await openUrl(url);
+        }
     } catch {
         ElMessage.error(t("common.openUrlFailed"));
     }
@@ -798,6 +802,30 @@ const handleImageMenuCommand = async (
             addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
             showAddToAlbumDialog.value = true;
             break;
+        case "addToHidden": {
+            if (await guardDesktopOnly("hideImage", { needSuper: true })) return null;
+            const ids = imagesToProcess.map((img) => img.id);
+            if (ids.length === 0) return null;
+            const isUnhide = !!image.isHidden;
+            try {
+                if (isUnhide) {
+                    await albumStore.removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids);
+                    ElMessage.success(t("contextMenu.unhideSuccess"));
+                } else {
+                    await albumStore.addImagesToAlbum(HIDDEN_ALBUM_ID, ids);
+                    ElMessage.success(
+                        ids.length > 1
+                            ? t("contextMenu.hiddenCount", { count: ids.length })
+                            : t("contextMenu.hiddenOne"),
+                    );
+                }
+                taskViewRef.value?.clearSelection?.();
+            } catch (e) {
+                console.error(isUnhide ? "取消隐藏失败:" : "隐藏失败:", e);
+                ElMessage.error(t(isUnhide ? "contextMenu.unhideFailed" : "contextMenu.hideFailed"));
+            }
+            break;
+        }
         case "wallpaper":
             if (await guardDesktopOnly("wallpaper")) break;
             if (imagesToProcess.length > 0) {

@@ -25,6 +25,13 @@
     "scheduler": "スケジューラ",
     "deleteImages": "画像を削除",
     "hideImage": "画像を非表示",
-    "organize": "ライブラリを整理"
+    "organize": "ライブラリを整理",
+    "runConfig": "設定を実行",
+    "importRecommendedConfig": "推奨設定をインポート",
+    "deleteRunConfig": "設定を削除",
+    "saveRunConfig": "設定を保存",
+    "installPlugin": "プラグインをインストール",
+    "uninstallPlugin": "プラグインをアンインストール",
+    "addPluginSource": "プラグインソースを追加"
   }
 }

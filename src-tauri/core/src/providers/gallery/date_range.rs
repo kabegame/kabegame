@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider};
 use crate::providers::shared::page_size::PageSizeGroupProvider;
+use crate::providers::shared::sort::SortProvider;
 use crate::storage::gallery::ImageQuery;
 
 /// `gallery/date-range/`：根节点，子节点动态按 `YYYY-MM-DD~YYYY-MM-DD` 解析。
@@ -36,10 +37,24 @@ impl Provider for GalleryDateRangeProvider {
     }
 
     fn list_children(&self, composed: &ImageQuery) -> Result<Vec<ChildEntry>, String> {
-        PageSizeGroupProvider.list_children(composed)
+        let mut children = vec![ChildEntry::new(
+            "desc",
+            Arc::new(SortProvider::new(Arc::new(GalleryDateRangeProvider {
+                start: self.start.clone(),
+                end: self.end.clone(),
+            }))),
+        )];
+        children.extend(PageSizeGroupProvider.list_children(composed)?);
+        Ok(children)
     }
 
     fn get_child(&self, name: &str, composed: &ImageQuery) -> Option<Arc<dyn Provider>> {
+        if name == "desc" {
+            return Some(Arc::new(SortProvider::new(Arc::new(GalleryDateRangeProvider {
+                start: self.start.clone(),
+                end: self.end.clone(),
+            }))));
+        }
         PageSizeGroupProvider.get_child(name, composed)
     }
 

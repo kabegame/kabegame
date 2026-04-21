@@ -25,6 +25,13 @@
     "scheduler": "스케줄러",
     "deleteImages": "이미지 삭제",
     "hideImage": "이미지 숨기기",
-    "organize": "라이브러리 정리"
+    "organize": "라이브러리 정리",
+    "runConfig": "구성 실행",
+    "importRecommendedConfig": "추천 구성 가져오기",
+    "deleteRunConfig": "실행 구성 삭제",
+    "saveRunConfig": "실행 구성 저장",
+    "installPlugin": "플러그인 설치",
+    "uninstallPlugin": "플러그인 제거",
+    "addPluginSource": "플러그인 소스 추가"
   }
 }

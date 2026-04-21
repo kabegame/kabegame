@@ -98,7 +98,6 @@ import { invoke, uploadImport } from "@/api/rpc";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
-import { useApp } from "@/stores/app";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 interface Album {
@@ -123,7 +122,6 @@ const visible = computed({
 useModalBack(visible);
 
 const crawlerStore = useCrawlerStore();
-const appStore = useApp();
 const { extensions: imageExtensions, load: loadImageTypes } = useImageTypes();
 
 const albums = ref<Album[]>([]);
@@ -281,10 +279,7 @@ async function handleSubmit() {
     return;
   }
 
-  if (IS_WEB && !appStore.isSuper) {
-    await guardDesktopOnly("localImport");
-    return;
-  }
+  if (await guardDesktopOnly("localImport", { needSuper: true })) return;
 
   let outputAlbumId: string | undefined;
   if (selectedOutputAlbumId.value === "__create_new__") {

@@ -110,7 +110,9 @@ export function createPathRouteStore<TState extends object>(
       if (s.trim()) syncFromUrl(s);
     }
 
-    // state → URL：state 变化时 replace，以及路由激活时修正 stale URL
+    // state → URL：state 变化时 replace，以及路由激活/store 首次实例化时修正 stale URL。
+    // immediate：首屏访问 `/gallery`（无 `?path=`）时立即把默认路径写入 URL，
+    // 否则 watcher 要等 currentPath 变化才触发，而默认路径下它不会再变。
     watch(
       [currentPath, () => router.currentRoute.value.name] as const,
       async ([path]) => {
@@ -123,7 +125,8 @@ export function createPathRouteStore<TState extends object>(
         console.log(`[${storeId}] state→URL replace`, path);
         await router.replace({ path: cur.path, query: { ...cur.query, path } });
         config.onStateChange?.(merged(), path);
-      }
+      },
+      { immediate: true }
     );
 
     // URL → state：浏览器 back/forward、手输 URL、replace 后的回灌

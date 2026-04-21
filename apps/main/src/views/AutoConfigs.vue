@@ -209,6 +209,7 @@ import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { checkRecommendedPresetCompatibility } from "@/composables/useConfigCompatibility";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import type { PluginRecommendedPreset, RunConfig } from "@kabegame/core/stores/crawler";
 
 const { t, locale } = useI18n();
@@ -320,6 +321,7 @@ function openPresetPreview(preset: PluginRecommendedPreset) {
 }
 
 async function importPreset(preset: PluginRecommendedPreset) {
+  if (await guardDesktopOnly("importRecommendedConfig", { needSuper: true })) return;
   const compat = await checkRecommendedPresetCompatibility(preset.pluginId, preset.userConfig);
   if (!compat.versionCompatible) {
     ElMessage.error(compat.versionReason ?? t("common.pluginNotExist"));
@@ -499,6 +501,7 @@ const handleCollectSourceSelect = (source: "local" | "remote") => {
 };
 
 const handleDelete = async (id: string) => {
+  if (await guardDesktopOnly("deleteRunConfig", { needSuper: true })) return;
   try {
     await ElMessageBox.confirm(t("autoConfig.confirmDelete"), t("autoConfig.delete"), {
       type: "warning",
@@ -518,6 +521,7 @@ const handleCopy = async (id: string) => {
 };
 
 const handleRunNow = async (id: string) => {
+  if (await guardDesktopOnly("runConfig", { needSuper: true })) return;
   const ok = await crawlerStore.runFromConfig(id);
   if (ok) {
     ElMessage.success(t("autoConfig.runNowSuccess"));

@@ -865,6 +865,7 @@ const editSource = (idx: number) => {
 };
 
 const confirmEditSource = async () => {
+  if (await guardDesktopOnly("addPluginSource")) return;
   if (!editSourceForm.name.trim() || !editSourceForm.indexUrl.trim()) {
     ElMessage.warning(t("plugins.fillNameAndIndexUrl"));
     return;
@@ -1125,6 +1126,7 @@ const revalidateStorePluginsInBackground = (sourceId: string) => {
 };
 
 const selectPluginFile = async () => {
+  if (await guardDesktopOnly("picker")) return;
   try {
     const filePath = await open({
       filters: [
@@ -1215,6 +1217,7 @@ const handleImport = async () => {
 };
 
 const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = false) => {
+  if (await guardDesktopOnly("installPlugin", { needSuper: true })) return;
   try {
     // 之所以先下载，是为了避免实际版本不一致
     const willUpdate = isUpdateAvailable(plugin.installedVersion, plugin.version);
@@ -1304,6 +1307,7 @@ const viewPluginDetails = (plugin: PluginListItem) => {
 };
 
 const handleDelete = async (plugin: Plugin) => {
+  if (await guardDesktopOnly("uninstallPlugin", { needSuper: true })) return;
   try {
     await ElMessageBox.confirm(t("plugins.confirmUninstall", { name: pluginName(plugin) }), t("plugins.confirmDelete"), {
       type: "warning",

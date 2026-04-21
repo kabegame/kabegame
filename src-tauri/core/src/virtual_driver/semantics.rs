@@ -4,8 +4,6 @@
 //! - 提供跨平台的文件系统操作语义：read_dir/read_file/create_dir/delete/rename 等。
 //! - 平台层（Windows Dokan handler）只负责把平台参数映射到这些原语，并将结果映射回平台返回值。
 
-#![allow(dead_code)]
-
 use std::{
     path::Path,
     path::PathBuf,

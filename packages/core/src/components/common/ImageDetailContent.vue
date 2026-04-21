@@ -282,6 +282,19 @@ function onIframeBridgeMessage(event: MessageEvent) {
         );
         return;
       }
+      // web 端走浏览器新标签页（Tauri 的 openUrl 插件仅桌面/移动可用）
+      if (IS_WEB) {
+        try {
+          window.open(url, "_blank", "noopener,noreferrer");
+          iframeWin.postMessage({ type: "ejs-bridge-response", id }, "*");
+        } catch (err: unknown) {
+          iframeWin.postMessage(
+            { type: "ejs-bridge-response", id, error: String(err) },
+            "*",
+          );
+        }
+        return;
+      }
       void openUrl(url)
         .then(() => {
           iframeWin.postMessage({ type: "ejs-bridge-response", id }, "*");
@@ -439,7 +452,11 @@ const isFileUrl = (url?: string) => {
 const handleOpenUrl = async (url?: string) => {
   if (!url) return;
   try {
-    await openUrl(url);
+    if (IS_WEB) {
+      window.open(url, "_blank", "noopener,noreferrer");
+    } else {
+      await openUrl(url);
+    }
   } catch (error) {
     console.error("打开 URL 失败:", error);
     ElMessage.error(t("common.openUrlFailed"));

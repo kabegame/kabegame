@@ -405,7 +405,7 @@ import { useAlbumStore } from "@/stores/albums";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import {
@@ -904,10 +904,7 @@ const handleCreateOutputAlbum = async () => {
 };
 
 const handleStartCrawl = async () => {
-  if (IS_WEB && !appStore.isSuper) {
-    await guardDesktopOnly("crawl");
-    return;
-  }
+  if (await guardDesktopOnly("crawl", { needSuper: true })) return;
   try {
     if (!form.value.pluginId) {
       ElMessage.warning(t("plugins.selectSourcePlaceholder"));

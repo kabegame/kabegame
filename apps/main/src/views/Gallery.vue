@@ -111,7 +111,6 @@ import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import { useGalleryImages } from "@/composables/useGalleryImages";
 import { useImageOperations } from "@/composables/useImageOperations";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { useApp } from "@/stores/app";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
@@ -170,7 +169,6 @@ const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 const uiStore = useUiStore();
 
 const settingsStore = useSettingsStore();
-const appStore = useApp();
 const route = useRoute();
 const router = useRouter();
 const galleryRouteStore = useGalleryRouteStore();
@@ -888,10 +886,7 @@ const handleGridContextCommand = async (
       showAddToAlbumDialog.value = true;
       return null;
     case "addToHidden": {
-      if (!appStore.isSuper) {
-        await guardDesktopOnly("hideImage");
-        return null;
-      }
+      if (await guardDesktopOnly("hideImage", { needSuper: true })) return null;
       const ids = imagesToProcess.map((img) => img.id);
       if (ids.length === 0) return null;
       const isUnhide = !!image.isHidden;

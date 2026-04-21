@@ -257,7 +257,7 @@ const handleImageMenuCommand = async (
       }
       break;
     case "addToHidden": {
-      if (await guardDesktopOnly("hideImage")) break;
+      if (await guardDesktopOnly("hideImage", { needSuper: true })) break;
       const ids = imagesToProcess.map((img) => img.id);
       if (ids.length === 0) break;
       const isUnhide = !!image.isHidden;
