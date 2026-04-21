@@ -40,7 +40,7 @@ import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { HeaderFeatureId, useHeaderStore } from "@kabegame/core/stores/header";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { useUiStore } from "@kabegame/core/stores/ui";
 import { storeToRefs } from "pinia";
 import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
 
@@ -91,6 +91,7 @@ const { t } = useI18n();
 const renameInputRef = ref<HTMLInputElement>();
 const albumRouteStore = useAlbumDetailRouteStore();
 const { hide: albumHide } = storeToRefs(albumRouteStore);
+const { isCompact } = storeToRefs(useUiStore());
 const headerStore = useHeaderStore();
 
 watch(
@@ -134,7 +135,7 @@ const withoutHiddenAlbumActions = (ids: string[]) =>
 
 // 计算显示和折叠的feature ID
 const showIds = computed(() => {
-  if (IS_ANDROID) {
+  if (isCompact.value) {
     return [HeaderFeatureId.TaskDrawer];
   } else {
     return withoutHiddenAlbumActions(withoutCreateAlbum(withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings])));
@@ -143,7 +144,7 @@ const showIds = computed(() => {
 
 const foldIds = computed(() => {
   const hideToggleIds = props.isHiddenAlbum ? [] : [HeaderFeatureId.ToggleShowHidden];
-  if (IS_ANDROID) {
+  if (isCompact.value) {
     const base = withoutHiddenAlbumActions(withoutCreateAlbum(withVd([
       HeaderFeatureId.OpenVirtualDrive,
       HeaderFeatureId.Refresh,

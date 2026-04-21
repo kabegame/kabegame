@@ -105,6 +105,7 @@ import {
 } from "../../stores/plugins";
 import type { PluginVarMeta } from "../../stores/plugins";
 import { matchesPluginVarWhen } from "../../utils/pluginVarWhen";
+import { IS_WEB } from "@kabegame/core/env";
 
 export type TaskRunParamsTask = {
   id: string;
@@ -257,8 +258,7 @@ async function handleCopyError(task: TaskRunParamsTask) {
   if (task.endTime) text += `End time: ${formatDate(task.endTime)}\n`;
   text += `Progress: ${Math.round(Number(task.progress || 0))}%\n`;
   try {
-    const { isTauri } = await import("@tauri-apps/api/core");
-    if (isTauri()) {
+    if (!IS_WEB) {
       const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
       await writeText(text);
     } else {

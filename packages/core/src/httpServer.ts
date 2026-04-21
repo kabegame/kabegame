@@ -1,11 +1,17 @@
-import { invoke } from "@tauri-apps/api/core";
-import { IS_ANDROID } from "./env";
+import { invoke } from "./api";
+import { IS_ANDROID, IS_WEB } from "./env";
 
-let httpServerBaseUrl = "";
+// null = not yet initialized; "" = web same-origin; "http://..." = absolute base
+let httpServerBaseUrl: string | null = null;
 
 export async function initHttpServerBaseUrl() {
   if (IS_ANDROID) return;
-  if (httpServerBaseUrl) return;
+  if (httpServerBaseUrl !== null) return;
+  if (IS_WEB) {
+    const apiRoot = (import.meta.env.VITE_API_ROOT as string | undefined) ?? "/";
+    httpServerBaseUrl = apiRoot.replace(/\/$/, "");
+    return;
+  }
   try {
     const base = await invoke<string>("get_http_server_base_url");
     httpServerBaseUrl = (base || "").trim();
@@ -18,7 +24,7 @@ export function fileToUrl(localPath: string): string {
   const path = (localPath || "").trim();
   if (!path) return "";
   if (IS_ANDROID) return "";
-  if (!httpServerBaseUrl) return "";
+  if (httpServerBaseUrl === null) return "";
   return `${httpServerBaseUrl}/file?path=${encodeURIComponent(path)}`;
 }
 
@@ -27,6 +33,6 @@ export function thumbnailToUrl(thumbnailPath: string): string {
   const path = (thumbnailPath || "").trim();
   if (!path) return "";
   if (IS_ANDROID) return "";
-  if (!httpServerBaseUrl) return "";
+  if (httpServerBaseUrl === null) return "";
   return `${httpServerBaseUrl}/thumbnail?path=${encodeURIComponent(path)}`;
 }

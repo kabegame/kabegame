@@ -5,6 +5,8 @@
  */
 
 import { AsyncSeriesHook, SyncHook } from "tapable";
+import { spawn } from "child_process";
+import chalk from "chalk";
 import path from "path";
 import { existsSync } from "fs";
 import { fileURLToPath } from "url";
@@ -186,6 +188,26 @@ export class BuildSystem {
         .concat(this.options.args?.length ? ["--", ...(this.options.args ?? [])] : []);
       run("tauri", args, { cwd, bin: "cargo" });
     } else if (this.context.mode!.isWeb) {
+      // 同时启动 Vite dev server (1420) 和 web Rust 二进制 (7490)
+      // Vite 后台运行，cargo 前台运行；cargo 退出时杀掉 Vite
+      const feDir = this.context.component!.appFeDir;
+      console.log(chalk.cyan("[web dev] Starting Vite dev server on 1420..."));
+      const viteProc = spawn("bun", ["run", "dev"], {
+        cwd: feDir,
+        stdio: "inherit",
+        env: process.env,
+        shell: OSPlugin.isWindows,
+      });
+      const killVite = () => {
+        if (!viteProc.killed) {
+          try { viteProc.kill("SIGTERM"); } catch {}
+        }
+      };
+      process.on("exit", killVite);
+      process.on("SIGINT", killVite);
+      process.on("SIGTERM", killVite);
+
+      console.log(chalk.cyan("[web dev] Starting Rust web binary on 7490..."));
       const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
       const args = this.buildCargoArgs(
         ["run", "-p", "kabegame"],
@@ -193,6 +215,7 @@ export class BuildSystem {
         mergedArgs.length > 0 ? mergedArgs : undefined,
       );
       run("cargo", args, { cwd: SRC_TAURI_DIR });
+      killVite();
     } else {
       const baseArgs = ["dev"];
       const args = this.buildCargoArgs(baseArgs, features);

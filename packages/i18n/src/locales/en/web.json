@@ -1,0 +1,30 @@
+{
+  "desktopOnlyTitle": "Desktop Feature",
+  "desktopOnlyDesc": "\"{feature}\" is only available in the desktop app. Visit the homepage to download Kabegame.",
+  "goHomepage": "Go to Homepage",
+  "superRequiredTitle": "Admin Access Required",
+  "superRequiredDesc": "This setting requires super (admin) mode. Enable super mode via the toggle in the bottom-left corner.",
+  "feature": {
+    "picker": "File picker",
+    "share": "Share",
+    "openLocal": "Open local file",
+    "imageClickAction": "Image click action",
+    "wallpaper": "Set wallpaper",
+    "wallpaperRotation": "Wallpaper rotation",
+    "wallpaperPlayback": "Wallpaper playback",
+    "openCrawlerWindow": "Crawler window",
+    "localImport": "Local import",
+    "crawl": "Start crawl",
+    "autoLaunch": "Auto launch",
+    "defaultDownloadDir": "Default download directory",
+    "albumDrive": "Album drive",
+    "windowState": "Window state",
+    "downloadSettings": "Download settings",
+    "gallerySettings": "Gallery display",
+    "autoDeduplicate": "Auto-deduplication",
+    "scheduler": "Scheduler",
+    "deleteImages": "Delete images",
+    "hideImage": "Hide image",
+    "organize": "Organize library"
+  }
+}

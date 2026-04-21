@@ -16,8 +16,9 @@ import {
 } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { IS_WINDOWS, IS_ANDROID } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { i18n } from "@kabegame/i18n";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 export interface CreateImageActionsOptions {
   /** Custom text for remove action (e.g., "删除" | "从画册移除") */
@@ -38,6 +39,8 @@ export interface CreateImageActionsOptions {
 export function createImageActions(
   options: CreateImageActionsOptions = {}
 ): ActionItem<ImageInfo>[] {
+  // 没办法，这样写最简单
+  const uiStore = useUiStore();
   const t = (key: string) => i18n.global.t(key);
   const {
     removeText = t("common.delete"),
@@ -57,7 +60,7 @@ export function createImageActions(
       icon: InfoFilled,
       command: "detail",
       // On Android: only in "更多" submenu
-      visible: (ctx) => !hideSet.has("detail") && !IS_ANDROID,
+      visible: () => !hideSet.has("detail") && !uiStore.isCompact,
     },
     {
       key: "favorite",
@@ -65,7 +68,7 @@ export function createImageActions(
         ctx.target?.favorite ? t("contextMenu.unfavorite") : t("contextMenu.favorite"),
       icon: (ctx: ActionContext<ImageInfo>) => ctx.target?.favorite ? StarFilled : Star,
       command: "favorite",
-      visible: (ctx) => !hideSet.has("favorite"),
+      visible: () => !hideSet.has("favorite"),
     },
     {
       key: "share",
@@ -77,11 +80,21 @@ export function createImageActions(
     },
     {
       key: "copy",
-      label: t("contextMenu.copyImage"),
-      icon: DocumentCopy,
+      label: IS_WEB ? t("contextMenu.downloadImage") : t("contextMenu.copyImage"),
+      icon: IS_WEB ? Download : DocumentCopy,
       command: "copy",
-      // On Android, only in more submenu (single-select) or top level (multi-select)
-      visible: (ctx) => !hideSet.has("copy") && (!ctx.selectedCount || ctx.selectedCount === 1) && (!IS_ANDROID || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
+      visible: (ctx) => {
+        if (hideSet.has("copy")) return false;
+        const count = ctx.selectedCount ?? 1;
+        if (uiStore.isCompact) return count > 1;
+        if (IS_WEB) return count <= 20;
+        return count === 1;
+      },
+      suffix: (ctx) => {
+        if (!IS_WEB) return "";
+        const count = ctx.selectedCount ?? 1;
+        return count > 1 ? `(${count})` : "";
+      },
     },
     {
       key: "open",
@@ -103,7 +116,7 @@ export function createImageActions(
       label: t("contextMenu.wallpaper"),
       icon: Picture,
       command: "wallpaper",
-      visible: (ctx) => !hideSet.has("wallpaper"),
+      visible: () => !hideSet.has("wallpaper"),
     },
     {
       key: "addToAlbum",
@@ -111,7 +124,9 @@ export function createImageActions(
       icon: FolderAdd,
       command: "addToAlbum",
       // On Android single-select: only in more submenu
-      visible: (ctx) => !hideSet.has("addToAlbum") && (!multiHideSet.has("addToAlbum") || !ctx.selectedCount || ctx.selectedCount === 1) && (!IS_ANDROID || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
+      visible: (ctx) => !hideSet.has("addToAlbum") && (!multiHideSet.has("addToAlbum") 
+        || !ctx.selectedCount 
+        || ctx.selectedCount === 1) && (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
     },
     {
       key: "addToHidden",
@@ -122,7 +137,7 @@ export function createImageActions(
       // On Android single-select: only in more submenu
       visible: (ctx) =>
         !hideSet.has("addToHidden") &&
-        (!IS_ANDROID || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
+        (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
     },
     {
       key: "more",
@@ -132,9 +147,9 @@ export function createImageActions(
       visible: (ctx) => {
         if (hideSet.has("more")) return false;
         // Show on Windows (single-select) or Android (single-select)
-        return (IS_WINDOWS || IS_ANDROID) && (!ctx.selectedCount || ctx.selectedCount === 1);
+        return (IS_WINDOWS || uiStore.isCompact) && (!ctx.selectedCount || ctx.selectedCount === 1);
       },
-      children: IS_ANDROID
+      children: uiStore.isCompact
         ? [
             {
               key: "detail",
@@ -200,7 +215,7 @@ export function createImageActions(
       command: "remove",
       dividerBefore: true,
       // On Android single-select: only in more submenu
-      visible: (ctx) => !hideSet.has("remove") && (!IS_ANDROID || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
+      visible: (ctx) => !hideSet.has("remove") && (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
       suffix: (ctx) => {
         const count = ctx.selectedCount ?? 1;
         return count > 1 ? `(${count})` : "";

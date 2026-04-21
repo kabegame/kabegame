@@ -73,9 +73,14 @@ import { useModalBack } from "../../composables/useModalBack";
 import { useModalStackStore } from "../../stores/modalStack";
 import { useUiStore } from "../../stores/ui";
 import { useDragScroll } from "../../composables/useDragScroll";
-import { IS_ANDROID } from "../../env";
+import { IS_ANDROID, IS_WEB } from "../../env";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { openVideo } from "tauri-plugin-picker-api";
+
+async function tryOpenVideo(path: string) {
+  if (IS_WEB) return;
+  await openVideo(path);
+}
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 
@@ -200,6 +205,7 @@ const scrollButtonThreshold = 2000;
 /*----------------- 图片相关 -----------------*/
 const hasImages = computed(() => (props.images ?? []).length > 0);
 const imageGridColumns = computed(() => uiStore.imageGridColumns);
+const isCompact = computed(() => uiStore.isCompact);
 // 只有在不处于加载状态且确实没有图片时才显示空状态，避免加载过程中闪现空占位符
 const showEmptyOverlay = computed(() => !hasImages.value && !isLoading.value);
 
@@ -215,12 +221,12 @@ const isZoomingLayout = ref(false);
 let zoomAnimTimer: ReturnType<typeof setTimeout> | null = null;
 
 const gridColumnsCount = computed(() => (imageGridColumns.value > 0 ? imageGridColumns.value : 1));
-// Android：栅格更紧凑，空白更少
+// 紧凑布局：栅格更紧凑，空白更少
 const gridGapPx = computed(() =>
-  IS_ANDROID ? Math.max(2, 6 - (gridColumnsCount.value - 1)) : Math.max(4, 16 - (gridColumnsCount.value - 1))
+  isCompact.value ? Math.max(2, 6 - (gridColumnsCount.value - 1)) : Math.max(4, 16 - (gridColumnsCount.value - 1))
 );
-const BASE_GRID_PADDING_Y = computed(() => (IS_ANDROID ? 4 : 6));
-const BASE_GRID_PADDING_X = computed(() => (IS_ANDROID ? 4 : 8));
+const BASE_GRID_PADDING_Y = computed(() => (isCompact.value ? 4 : 6));
+const BASE_GRID_PADDING_X = computed(() => (isCompact.value ? 4 : 8));
 
 // 虚拟滚动测量
 const measuredItemHeight = ref<number | null>(null);
@@ -321,8 +327,8 @@ const updateWindowAspectRatio = () => {
   windowAspectRatio.value = window.innerWidth / window.innerHeight;
 };
 const effectiveAspectRatio = computed(() => {
-  // 安卓上不在此处固定 1:1，改为按单张图片在 getEffectiveAspectRatioForItem 里处理
-  if (!IS_ANDROID) {
+  // 紧凑模式下不在此处固定 1:1，改为按单张图片在 getEffectiveAspectRatioForItem 里处理
+  if (!isCompact.value) {
     if (storeAspectRatio.value !== null && storeAspectRatio.value > 0) {
       return storeAspectRatio.value;
     }
@@ -331,12 +337,12 @@ const effectiveAspectRatio = computed(() => {
     }
     return windowAspectRatio.value;
   }
-  return 1; // Android 默认（无 width/height 时用）
+  return 1; // 紧凑模式默认（无 width/height 时用）
 });
 
-/** Android：按该图 width/height 计算宽高比，行高由该行最高图自适应；非 Android 用全局 effectiveAspectRatio */
+/** 紧凑模式：按该图 width/height 计算宽高比，行高由该行最高图自适应；宽屏用全局 effectiveAspectRatio */
 const getEffectiveAspectRatioForItem = (image: ImageInfo) => {
-  if (IS_ANDROID && image?.width != null && image?.height != null && image.width > 0 && image.height > 0) {
+  if (isCompact.value && image?.width != null && image?.height != null && image.width > 0 && image.height > 0) {
     return image.width / image.height;
   }
   return effectiveAspectRatio.value;
@@ -447,8 +453,8 @@ const gridStyle = computed(() => {
     paddingLeft: `${BASE_GRID_PADDING_X.value}px`,
     paddingRight: `${BASE_GRID_PADDING_X.value}px`,
   };
-  // Android：行高由该行最高图决定，格子不拉伸
-  if (IS_ANDROID) {
+  // 紧凑模式：行高由该行最高图决定，格子不拉伸
+  if (isCompact.value) {
     style.alignItems = "start";
   }
   return style as any;
@@ -523,8 +529,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
   }
 
   // Ctrl/Cmd + +/-：调整列数（原来是 window 监听）
-  // Android 下不允许调整列数
-  if (!IS_ANDROID && props.enableCtrlKeyAdjustColumns && (event.ctrlKey || event.metaKey)) {
+  // 紧凑布局下不允许调整列数
+  if (!isCompact.value && props.enableCtrlKeyAdjustColumns && (event.ctrlKey || event.metaKey)) {
     if (event.key === "+" || event.key === "=") {
       event.preventDefault();
       uiStore.adjustImageGridColumn(-1);
@@ -584,8 +590,8 @@ const handleRootClick = (event: MouseEvent) => {
     return;
   }
 
-  // Android 选择模式下，点击空白处不清空选择（仅通过取消按钮退出）
-  if (IS_ANDROID && androidSelectionMode.value) {
+  // 紧凑模式选择模式下，点击空白处不清空选择（仅通过取消按钮退出）
+  if (isCompact.value && androidSelectionMode.value) {
     return;
   }
 
@@ -600,18 +606,18 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
   if (!event) return;
   focusGrid();
   
-  // Android 选择模式下的点击行为
-  if (IS_ANDROID && androidSelectionMode.value) {
+  // 紧凑模式选择模式下的点击行为
+  if (isCompact.value && androidSelectionMode.value) {
     toggleSelection(image.id, index);
     return;
   }
-  
-  // Android 非选择模式下，单击直接预览
-  if (IS_ANDROID && !androidSelectionMode.value) {
+
+  // 紧凑模式非选择模式下，单击直接预览
+  if (isCompact.value && !androidSelectionMode.value) {
     const action = settingsStore.values.imageClickAction || "none";
     if (action === "preview") {
-      if (isVideoMediaType(image.type) && image.localPath) {
-        void openVideo(image.localPath);
+      if (IS_ANDROID && isVideoMediaType(image.type) && image.localPath) {
+        void tryOpenVideo(image.localPath);
         return;
       }
       previewRef.value?.open(index);
@@ -640,16 +646,16 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
 };
 
 const handleItemDblClick = (image: ImageInfo, index: number) => {
-  // 安卓选择模式：快速连点会触发 dblclick，避免误开预览（单击已由 handleItemClick 处理）
-  if (IS_ANDROID && androidSelectionMode.value) {
+  // 紧凑模式选择中：快速连点会触发 dblclick，避免误开预览（单击已由 handleItemClick 处理）
+  if (isCompact.value && androidSelectionMode.value) {
+    return;
+  }
+  if (isCompact.value || IS_WEB) {
+    previewRef.value?.open(index);
     return;
   }
   const action = settingsStore.values.imageClickAction || "none";
   if (action === "preview") {
-    if (IS_ANDROID && isVideoMediaType(image.type) && image.localPath) {
-      void openVideo(image.localPath);
-      return;
-    }
     previewRef.value?.open(index);
     return;
   }
@@ -660,9 +666,9 @@ const handleItemDblClick = (image: ImageInfo, index: number) => {
 
 const handleItemContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
   if (!enableContextMenu.value) return;
-  if (IS_ANDROID && androidSelectionMode.value) {
-    if (isVideoMediaType(image.type) && image.localPath) {
-      void openVideo(image.localPath);
+  if (isCompact.value && androidSelectionMode.value) {
+    if (IS_ANDROID && isVideoMediaType(image.type) && image.localPath) {
+      void tryOpenVideo(image.localPath);
       return;
     }
     previewRef.value?.open(index);
@@ -813,10 +819,6 @@ onMounted(async () => {
   updateWindowAspectRatio();
   window.addEventListener("resize", updateWindowAspectRatio);
 
-  try {
-    !IS_ANDROID && await settingsStore.loadMany(["imageClickAction", "galleryImageAspectRatio", "galleryImageObjectPosition"]);
-  } catch { }
-
   await nextTick();
   const el = containerEl.value;
   if (el) {
@@ -830,8 +832,8 @@ onMounted(async () => {
     scheduleVirtualUpdate();
   }
 
-  // Android 下不允许通过 Ctrl+Wheel 调整列数
-  if (!IS_ANDROID) {
+  // 紧凑模式下不允许通过 Ctrl+Wheel 调整列数
+  if (!isCompact.value) {
     window.addEventListener(
       "wheel",
       (e: WheelEvent) => {
@@ -1006,8 +1008,8 @@ watch(
     const image = list[newIndex];
     if (!image) return;
 
-    // Android 下预览与选择解耦，不同步选中项
-    if (IS_ANDROID) {
+    // 紧凑模式下预览与选择解耦，不同步选中项
+    if (isCompact.value) {
       // 仅滚动到目标图片
       scrollToIndex(newIndex);
       return;
@@ -1021,9 +1023,9 @@ watch(
   }
 );
 
-// 退出 Android 选择模式（清空选择）
+// 退出紧凑模式选择模式（清空选择）
 const exitAndroidSelectionMode = () => {
-  if (!IS_ANDROID) return;
+  if (!isCompact.value) return;
   clearSelection();
 };
 

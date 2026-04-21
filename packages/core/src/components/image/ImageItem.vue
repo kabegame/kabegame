@@ -4,7 +4,7 @@
       'image-item-selected': selected,
       'item-entering': enteringClassActive,
       'item-leaving': isLeaving,
-      'image-item-android': IS_ANDROID,
+      'image-item-android': isCompact,
     },
     thumbnailObjectPositionClass,
   ]" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
@@ -52,7 +52,7 @@
           </el-skeleton>
         </div>
         <!-- 桌面双图：先缩略图，原图加载后淡入 -->
-        <template v-if="useDesktopLayers && !isVideo">
+        <template v-if="!isCompact && useDesktopLayers && !isVideo">
           <img v-if="!thumbnailLoadFailed" :src="thumbnailUrl" loading="lazy" decoding="async"
             class="thumbnail thumbnail-layer" :alt="image.id" draggable="false" @load="handleThumbnailLoad"
             @error="handleThumbnailError" />
@@ -60,9 +60,9 @@
             :class="['thumbnail', 'original-layer', { 'original-layer-visible': originalLoaded }]" :alt="image.id"
             draggable="false" @load="handleOriginalLoad" @error="handleOriginalError" />
         </template>
-        <!-- Android/Linux 视频：用 GIF 或者 jpg 缩略图（img）；Windows/macOS 视频：用 video 元素 -->
-        <img v-else-if="isVideo && (IS_ANDROID || IS_LINUX)" :src="displayUrl" loading="lazy" decoding="async"
-          :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': IS_ANDROID }]"
+        <!-- Android/Linux(非web) 视频：用 GIF ；Windows/macOS/web 视频：用 video 元素 -->
+        <img v-else-if="isVideo && !IS_WEB && (IS_ANDROID || IS_LINUX)" :src="displayUrl" loading="lazy" decoding="async"
+          :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': isCompact }]"
           :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
           @load="handleImageLoad" @error="handleImageError" />
         <video v-else-if="isVideo" :src="displayUrl" class="thumbnail" draggable="false" muted autoplay loop poster=""
@@ -70,7 +70,7 @@
           @dragstart.prevent @mousedown.prevent />
         <!-- 单图（桌面无独立缩略图） -->
         <img v-else-if="true" :src="displayUrl" loading="lazy" decoding="async"
-          :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': IS_ANDROID }]"
+          :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': isCompact }]"
           :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
           @load="handleImageLoad" @error="handleImageError" />
       </div>
@@ -87,8 +87,10 @@ import type { ImageClickAction } from "../../stores/settings";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import { useImageItemLoader } from "../../composables/useImageItemLoader";
 import { useSettingsStore } from "../../stores/settings";
-import { IS_ANDROID, IS_LINUX } from "../../env";
+import { IS_ANDROID, IS_LINUX, IS_WEB } from "../../env";
 import { isVideoMediaType } from "../../utils/mediaMime";
+import { storeToRefs } from "pinia";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 interface Props {
   image: ImageInfo;
@@ -117,9 +119,10 @@ const gridColumnsRef = toRef(props, "gridColumns");
 
 const rootEl = ref<HTMLElement | null>(null);
 const settingsStore = useSettingsStore();
-// 仅桌面端：图片溢出方框时的垂直对齐（center/top/bottom），通过 class 控制 .thumbnail 的 object-position
+const { isCompact } = storeToRefs(useUiStore());
+// 仅桌面端视图：图片溢出方框时的垂直对齐（center/top/bottom），通过 class 控制 .thumbnail 的 object-position
 const thumbnailObjectPositionClass = computed(() => {
-  if (IS_ANDROID) return "";
+  if (isCompact.value) return "";
   const pos = settingsStore.values.galleryImageObjectPosition;
   if (pos === "top") return "image-item--object-top";
   if (pos === "bottom") return "image-item--object-bottom";
@@ -174,7 +177,7 @@ let touchStartPos = { x: 0, y: 0 };
 let touchMoved = false;
 
 const handleTouchStart = (event: TouchEvent) => {
-  if (!IS_ANDROID) return;
+  if (!isCompact.value) return;
   if (event.touches.length !== 1) {
     // 多指触摸，取消长按检测
     if (longPressTimer) {
@@ -198,7 +201,7 @@ const handleTouchStart = (event: TouchEvent) => {
 };
 
 const handleTouchMove = (event: TouchEvent) => {
-  if (!IS_ANDROID) return;
+  if (!isCompact.value) return;
   // 检测移动距离，超过阈值则取消长按
   if (event.touches.length === 1 && longPressTimer) {
     const touch = event.touches[0];
@@ -215,7 +218,7 @@ const handleTouchMove = (event: TouchEvent) => {
 };
 
 const handleTouchEnd = () => {
-  if (!IS_ANDROID) return;
+  if (!isCompact.value) return;
   if (longPressTimer) {
     clearTimeout(longPressTimer);
     longPressTimer = null;
@@ -242,7 +245,7 @@ const isVideo = computed(() => isVideoMediaType(props.image.type));
 
 const handleWrapperClick = (event?: MouseEvent) => {
   // Android 下，如果刚触发了长按，跳过本次 click
-  if (IS_ANDROID && longPressFired) {
+  if (isCompact.value && longPressFired) {
     longPressFired = false;
     return;
   }

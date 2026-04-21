@@ -1,7 +1,7 @@
 import { onUnmounted } from "vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { invoke } from "@tauri-apps/api/core";
-
+import { IS_WEB } from "@kabegame/core/env";
+import { invoke } from "@/api/rpc";
 /**
  * 窗口事件监听 composable
  */
@@ -9,6 +9,7 @@ export function useWindowEvents() {
   let minimizeUnlisten: (() => void) | null = null;
 
   const init = async () => {
+    if (IS_WEB) return;
     // 监听窗口关闭事件 - 隐藏而不是退出
     try {
       const currentWindow = getCurrentWebviewWindow();

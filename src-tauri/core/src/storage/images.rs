@@ -1185,21 +1185,6 @@ impl Storage {
         Ok(())
     }
 
-    pub fn update_image_dimensions(
-        &self,
-        image_id: &str,
-        width: u32,
-        height: u32,
-    ) -> Result<(), String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.execute(
-            "UPDATE images SET width = ?1, height = ?2 WHERE id = ?3",
-            params![width as i64, height as i64, image_id],
-        )
-        .map_err(|e| format!("Failed to update dimensions: {}", e))?;
-        Ok(())
-    }
-
     pub fn update_image_thumbnail_path(
         &self,
         image_id: &str,

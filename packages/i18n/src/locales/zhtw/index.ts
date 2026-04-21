@@ -11,6 +11,7 @@ import help from "./help.json";
 import import_ from "./import.json";
 import contextMenu from "./contextMenu.json";
 import autoConfig from "./autoConfig.json";
+import web from "./web.json";
 
 export default {
   common,
@@ -26,4 +27,5 @@ export default {
   import: import_,
   contextMenu,
   autoConfig,
+  web,
 };

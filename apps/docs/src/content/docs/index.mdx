@@ -1,0 +1,36 @@
+---
+title: Kabegame — 让桌面充满二次元气息
+description: 跨平台动漫壁纸收集与管理器，支持插件扩展，轻松爬取各种二次元壁纸资源。
+template: splash
+hero:
+  tagline: 收集、管理、轮播——让老婆们每天陪伴你。支持 Windows / macOS / Linux / Android。
+  image:
+    file: ../../assets/icon.png
+  actions:
+    - text: 快速上手
+      link: /guide/gallery/
+      icon: right-arrow
+      variant: primary
+    - text: 插件开发
+      link: /dev/overview/
+      icon: external
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## 核心功能
+
+<CardGrid stagger>
+  <Card title="插件驱动收集" icon="puzzle">
+    通过 Rhai 脚本插件从各类动漫图站自动爬取图片，支持一键安装来自插件商店的社区插件。
+  </Card>
+  <Card title="画廊与画册管理" icon="open-book">
+    统一管理所有来源的图片，通过画册自由分类整理，支持批量操作与去重。
+  </Card>
+  <Card title="壁纸轮播" icon="laptop">
+    以画册为源自动轮播更换桌面壁纸，支持原生模式与窗口模式，可设置过渡效果与轮播间隔。
+  </Card>
+  <Card title="跨平台" icon="seti:config">
+    Windows、macOS、Linux 桌面端及 Android 均可使用，功能大体一致。
+  </Card>
+</CardGrid>

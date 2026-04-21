@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider, ProviderMeta};
 use crate::providers::shared::{
-    album::AlbumsProvider, query_page::QueryPageProvider, sort::SortProvider,
+    album::AlbumsProvider, page_size::PageSizeGroupProvider, sort::SortProvider,
 };
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
@@ -113,7 +113,7 @@ impl Provider for GalleryAlbumEntryProvider {
             ));
         }
 
-        children.extend(QueryPageProvider::root().list_children(composed)?);
+        children.extend(PageSizeGroupProvider.list_children(composed)?);
         Ok(children)
     }
 
@@ -140,8 +140,10 @@ impl Provider for GalleryAlbumEntryProvider {
         if name == "wallpaper-order" {
             return Some(Arc::new(GalleryAlbumWallpaperShell));
         }
-        if name.parse::<usize>().is_ok() {
-            return QueryPageProvider::root().get_child(name, composed);
+        if name.parse::<usize>().is_ok()
+            || (name.starts_with('x') && name.ends_with('x'))
+        {
+            return PageSizeGroupProvider.get_child(name, composed);
         }
         let album = Storage::global().get_album_by_id(name).ok()??;
         if album.parent_id.as_deref() != Some(&self.album_id) {
@@ -151,7 +153,7 @@ impl Provider for GalleryAlbumEntryProvider {
     }
 
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
-        QueryPageProvider::root().list_images(composed)
+        PageSizeGroupProvider.list_images(composed)
     }
 
     fn get_meta(&self) -> Option<ProviderMeta> {
@@ -179,7 +181,7 @@ impl Provider for GalleryAlbumOrderShell {
             "desc",
             Arc::new(SortProvider::new(Arc::new(GalleryAlbumOrderShell))),
         )];
-        children.extend(QueryPageProvider::root().list_children(composed)?);
+        children.extend(PageSizeGroupProvider.list_children(composed)?);
         Ok(children)
     }
 
@@ -187,11 +189,11 @@ impl Provider for GalleryAlbumOrderShell {
         if name == "desc" {
             return Some(Arc::new(SortProvider::new(Arc::new(GalleryAlbumOrderShell))));
         }
-        QueryPageProvider::root().get_child(name, composed)
+        PageSizeGroupProvider.get_child(name, composed)
     }
 
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
-        QueryPageProvider::root().list_images(composed)
+        PageSizeGroupProvider.list_images(composed)
     }
 }
 
@@ -221,7 +223,7 @@ impl Provider for GalleryAlbumMediaFilterShell {
             ChildEntry::new("album-order", Arc::new(GalleryAlbumOrderShell)),
             ChildEntry::new("wallpaper-order", Arc::new(GalleryAlbumWallpaperShell)),
         ];
-        children.extend(QueryPageProvider::root().list_children(composed)?);
+        children.extend(PageSizeGroupProvider.list_children(composed)?);
         Ok(children)
     }
 
@@ -237,11 +239,11 @@ impl Provider for GalleryAlbumMediaFilterShell {
         if name == "wallpaper-order" {
             return Some(Arc::new(GalleryAlbumWallpaperShell));
         }
-        QueryPageProvider::root().get_child(name, composed)
+        PageSizeGroupProvider.get_child(name, composed)
     }
 
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
-        QueryPageProvider::root().list_images(composed)
+        PageSizeGroupProvider.list_images(composed)
     }
 }
 
@@ -265,7 +267,7 @@ impl Provider for GalleryAlbumWallpaperShell {
             "desc",
             Arc::new(SortProvider::new(Arc::new(GalleryAlbumWallpaperShell))),
         )];
-        children.extend(QueryPageProvider::root().list_children(composed)?);
+        children.extend(PageSizeGroupProvider.list_children(composed)?);
         Ok(children)
     }
 
@@ -273,10 +275,10 @@ impl Provider for GalleryAlbumWallpaperShell {
         if name == "desc" {
             return Some(Arc::new(SortProvider::new(Arc::new(GalleryAlbumWallpaperShell))));
         }
-        QueryPageProvider::root().get_child(name, composed)
+        PageSizeGroupProvider.get_child(name, composed)
     }
 
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
-        QueryPageProvider::root().list_images(composed)
+        PageSizeGroupProvider.list_images(composed)
     }
 }

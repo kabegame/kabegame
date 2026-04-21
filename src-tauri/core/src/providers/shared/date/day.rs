@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider};
-use crate::providers::shared::query_page::QueryPageProvider;
+use crate::providers::shared::page_size::PageSizeGroupProvider;
 use crate::storage::gallery::ImageQuery;
 
 /// 单日叶子节点。apply_query：merge(day_filter)。list_images：override（最后一页）。
@@ -22,14 +22,14 @@ impl Provider for DayProvider {
     }
 
     fn list_children(&self, composed: &ImageQuery) -> Result<Vec<ChildEntry>, String> {
-        QueryPageProvider::root().list_children(composed)
+        PageSizeGroupProvider.list_children(composed)
     }
 
     fn get_child(&self, name: &str, composed: &ImageQuery) -> Option<Arc<dyn Provider>> {
-        QueryPageProvider::root().get_child(name, composed)
+        PageSizeGroupProvider.get_child(name, composed)
     }
 
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
-        QueryPageProvider::root().list_images(composed)
+        PageSizeGroupProvider.list_images(composed)
     }
 }

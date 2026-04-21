@@ -31,7 +31,7 @@ import { computed } from "vue";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import ActionSheet from "./ActionSheet.vue";
 import type { ActionItem, ActionContext } from "../actions/types";
-import { IS_ANDROID } from "../env";
+import { useUiStore } from "../stores/ui";
 
 interface Props {
   visible: boolean;
@@ -64,11 +64,11 @@ const emit = defineEmits<{
   command: [command: string];
 }>();
 
+const uiStore = useUiStore();
 const renderMode = computed<"contextmenu" | "actionsheet">(() => {
   if (props.mode === "contextmenu") return "contextmenu";
   if (props.mode === "actionsheet") return "actionsheet";
-  // Auto mode: Android uses action sheet, desktop uses context menu
-  return IS_ANDROID ? "actionsheet" : "contextmenu";
+  return uiStore.isCompact ? "actionsheet" : "contextmenu";
 });
 
 // Convert ActionItem[] to MenuItem[] for ContextMenu compatibility

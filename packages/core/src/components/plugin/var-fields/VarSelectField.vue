@@ -1,6 +1,6 @@
 <template>
   <AndroidPickerSelect
-    v-if="IS_ANDROID"
+    v-if="isCompact"
     :model-value="valueForSelect ?? null"
     :options="normalizedOptions"
     :title="placeholder || '请选择'"
@@ -22,8 +22,10 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { IS_ANDROID } from "../../../env";
+import { useUiStore } from "../../../stores/ui";
 import AndroidPickerSelect from "../../AndroidPickerSelect.vue";
+
+const isCompact = computed(() => useUiStore().isCompact);
 
 type VarOption = string | { name: string | Record<string, string>; variable: string };
 

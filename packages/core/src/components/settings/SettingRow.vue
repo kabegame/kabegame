@@ -4,7 +4,7 @@
       <div class="label">
         {{ label }}
         <template v-if="description">
-          <el-tooltip v-if="!IS_ANDROID" :content="description" placement="top">
+          <el-tooltip v-if="!uiStore.isCompact" :content="description" placement="top">
             <el-icon class="help-icon">
               <QuestionFilled />
             </el-icon>
@@ -12,7 +12,7 @@
           <el-icon
             v-else
             class="help-icon help-icon-clickable"
-            @click="onAndroidHelpClick"
+            @click="onCompactHelpClick"
           >
             <QuestionFilled />
           </el-icon>
@@ -27,7 +27,7 @@
 
 <script setup lang="ts">
 import { QuestionFilled } from "@element-plus/icons-vue";
-import { IS_ANDROID } from "../../env";
+import { useUiStore } from "../../stores/ui";
 import { showToast } from "vant";
 
 const props = defineProps<{
@@ -35,7 +35,9 @@ const props = defineProps<{
   description?: string;
 }>();
 
-function onAndroidHelpClick() {
+const uiStore = useUiStore();
+
+function onCompactHelpClick() {
   if (!props.description) return;
   showToast({ message: props.description, duration: 3000 });
 }

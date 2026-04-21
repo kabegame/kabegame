@@ -1,8 +1,8 @@
 <template>
   <div class="gallery-page">
     <div class="gallery-container" v-pull-to-refresh="pullToRefreshOpts">
-      <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
-        hide-scrollbar :enable-ctrl-key-adjust-columns="!IS_ANDROID" :enable-virtual-scroll="!IS_ANDROID"
+      <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!isCompact"
+        hide-scrollbar :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
         :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
         :on-context-command="handleGridContextCommand">
         <template #before-grid>
@@ -14,7 +14,8 @@
             @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
             @open-collect-menu="showCollectSourcePicker = true"
             @update:filter="(f) => galleryRouteStore.navigate({ filter: f, page: 1 })"
-            @update:sort="(sort) => galleryRouteStore.navigate({ sort })" />
+            @update:sort="(sort) => galleryRouteStore.navigate({ sort })"
+            @update:pageSize="(ps) => galleryRouteStore.navigate({ page: 1, pageSize: ps })" />
 
           <!-- 大页分页器 -->
           <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage" :big-page-size="pageSize"
@@ -49,8 +50,8 @@
     </div>
 
     <!-- 收集对话框（非 Android：本地渲染；Android：由 App.vue 全局承载） -->
-    <CrawlerDialog v-if="!IS_ANDROID" v-model="showCrawlerDialog" :initial-config="crawlerDialogInitialConfig" />
-    <LocalImportDialog v-if="!IS_ANDROID" v-model="showLocalImportDialog" />
+    <CrawlerDialog v-if="!isCompact" v-model="showCrawlerDialog" :initial-config="crawlerDialogInitialConfig" />
+    <LocalImportDialog v-if="!isCompact" v-model="showLocalImportDialog" />
 
 
     <!-- 移除/删除确认对话框 -->
@@ -58,7 +59,7 @@
       :message="removeDialogMessage" :title="$t('gallery.confirmDelete')"
       :checkbox-label="t('gallery.deleteSourceFilesCheckboxLabel')"
       :danger-text="t('gallery.deleteSourceFilesDangerText')" :safe-text="t('gallery.deleteSourceFilesSafeText')"
-      :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
+      :hide-checkbox="isCompact" @confirm="confirmRemoveImages" />
 
     <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
 
@@ -82,15 +83,15 @@
     </el-dialog>
 
     <!-- Android：收集方式选择器（本地 → MediaPicker，远程 → 收集 drawer） -->
-    <CollectSourcePicker v-if="IS_ANDROID" v-model="showCollectSourcePicker" @select="handleCollectSourceSelect" />
+    <CollectSourcePicker v-if="uiStore.isCompact" v-model="showCollectSourcePicker" @select="handleCollectSourceSelect" />
     <!-- 安卓媒体选择器（本地导入） -->
-    <MediaPicker v-if="IS_ANDROID" v-model="showMediaPicker" @select="handleMediaPickerSelect" />
+    <MediaPicker v-if="uiStore.isCompact" v-model="showMediaPicker" @select="handleMediaPickerSelect" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { useRouter, useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Plus, Picture, Star, StarFilled, FolderAdd, Delete, FolderOpened, Connection } from "@element-plus/icons-vue";
@@ -110,6 +111,7 @@ import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import { useGalleryImages } from "@/composables/useGalleryImages";
 import { useImageOperations } from "@/composables/useImageOperations";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useApp } from "@/stores/app";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
@@ -121,15 +123,15 @@ import { serializeFilter } from "@/utils/galleryPath";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
-import { IS_ANDROID, IS_WINDOWS } from "@kabegame/core/env";
+import { IS_ANDROID, IS_WINDOWS, IS_WEB } from "@kabegame/core/env";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import type { Component } from "vue";
-import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { useAlbumStore, HIDDEN_ALBUM_ID, FAVORITE_ALBUM_ID } from "@/stores/albums";
 import { type ContextCommand } from "@/components/ImageGrid.vue";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/api/rpc";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 
 const { t } = useI18n();
@@ -147,6 +149,7 @@ import MediaPicker from "@/components/MediaPicker.vue";
 import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { pickImages, pickVideos, type PickFolderResult } from "tauri-plugin-picker-api";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
@@ -160,25 +163,24 @@ const openQuickSettingsDrawer = () => quickSettingsDrawer.open("gallery");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("gallery");
 const pluginStore = usePluginStore();
-const uiStore = useUiStore();
-const { imageGridColumns } = storeToRefs(uiStore);
+const { imageGridColumns, isCompact } = storeToRefs(useUiStore());
 const { extensions: imageExtensions, load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
+const uiStore = useUiStore();
+
 const settingsStore = useSettingsStore();
-const pageSize = computed(() => {
-  const n = Number(settingsStore.values.galleryPageSize);
-  return n === 100 || n === 500 || n === 1000 ? n : 100;
-});
+const appStore = useApp();
+const route = useRoute();
+const router = useRouter();
+const galleryRouteStore = useGalleryRouteStore();
+const { pageSize } = storeToRefs(galleryRouteStore);
 
 // 是否启用分页（总数超过一页）
 const bigPageEnabled = computed(() => {
   return totalImagesCount.value > pageSize.value;
 });
 
-const route = useRoute();
-const router = useRouter();
-const galleryRouteStore = useGalleryRouteStore();
 const currentPath = computed(() => galleryRouteStore.currentPath);
 const providerRootPath = computed(() => serializeFilter(galleryRouteStore.filter));
 const currentPage = computed(() => galleryRouteStore.page);
@@ -311,7 +313,7 @@ const handleShowCrawlerDialog = () => {
 
 // 空状态按钮：与工具栏一致，安卓打开「本地/远程」选择 picker，桌面打开选择对话框
 const handleEmptyStateCollect = () => {
-  if (IS_ANDROID) {
+  if (isCompact.value) {
     showCollectSourcePicker.value = true;
   } else {
     showCollectMenuDialog.value = true;
@@ -353,11 +355,12 @@ const handleMediaPickerSelect = async (
   await handleAndroidMediaSelection(type, payload);
 };
 
-// 安卓下的媒体选择处理函数；选文件夹时由 MediaPicker 调 pickFolder，结果通过 payload 传入
+// 紧凑模式下的媒体选择处理函数；选文件夹时由 MediaPicker 调 pickFolder，结果通过 payload 传入
 const handleAndroidMediaSelection = async (
   type: "image" | "folder" | "video" | "archive",
   folderResult?: PickFolderResult
 ) => {
+  if (await guardDesktopOnly("picker")) return;
   try {
     if (type === 'image') {
       const uris = await pickImages();
@@ -542,7 +545,6 @@ watch(
   pageSize,
   async (_v, prev) => {
     if (prev === undefined) return;
-    await galleryRouteStore.navigate({ page: 1 });
     await loadTotalImagesCount();
     await loadImages(false);
   },
@@ -645,8 +647,6 @@ const {
 );
 
 const albumStore = useAlbumStore();
-const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
-
 const handleAddedToAlbum = async () => {
   // 画廊本身不依赖画册列表，但这里留个钩子以便其他页面/计数能及时刷新
   await albumStore.loadAlbums();
@@ -785,7 +785,7 @@ const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<s
 
 // 统一关闭/清理 Android 选择模式：清空选择（Grid 与 store 共用同一 ref，效果一致）
 const closeSelectionMode = () => {
-  if (!IS_ANDROID) return;
+  if (!isCompact.value) return;
   galleryViewRef.value?.clearSelection?.();
 };
 
@@ -811,7 +811,11 @@ const handleGridContextCommand = async (
     case "detail":
       return "detail";
     case "copy":
-      if (imagesToProcess[0]) await handleCopyImage(imagesToProcess[0]);
+      if (IS_WEB) {
+        for (const img of imagesToProcess) handleCopyImage(img);
+      } else if (imagesToProcess[0]) {
+        await handleCopyImage(imagesToProcess[0]);
+      }
       return null;
     case "favorite":
       if (imagesToProcess.length === 1) {
@@ -857,6 +861,7 @@ const handleGridContextCommand = async (
       }
       return null;
     case "openFolder":
+      if (await guardDesktopOnly("openLocal")) return null;
       if (!isMultiSelect) {
         try {
           if (imagesToProcess[0]) {
@@ -869,6 +874,7 @@ const handleGridContextCommand = async (
       }
       return null;
     case "wallpaper":
+      if (await guardDesktopOnly("wallpaper")) return null;
       if (imagesToProcess.length > 0) await setWallpaper(imagesToProcess);
       return null;
     case "exportToWE":
@@ -882,6 +888,10 @@ const handleGridContextCommand = async (
       showAddToAlbumDialog.value = true;
       return null;
     case "addToHidden": {
+      if (!appStore.isSuper) {
+        await guardDesktopOnly("hideImage");
+        return null;
+      }
       const ids = imagesToProcess.map((img) => img.id);
       if (ids.length === 0) return null;
       const isUnhide = !!image.isHidden;
@@ -905,6 +915,7 @@ const handleGridContextCommand = async (
       return null;
     }
     case "share":
+      if (await guardDesktopOnly("share")) return null;
       if (!isMultiSelect && imagesToProcess[0]) {
         try {
           const image = imagesToProcess[0];
@@ -1067,7 +1078,7 @@ useAlbumImagesChangeRefresh({
   waitMs: 1000,
   filter: (p) => {
     const ids = p.albumIds ?? [];
-    return ids.includes(FAVORITE_ALBUM_ID.value) || ids.includes(HIDDEN_ALBUM_ID);
+    return ids.includes(FAVORITE_ALBUM_ID) || ids.includes(HIDDEN_ALBUM_ID);
   },
   onRefresh: async (p) => {
     const ids = p.albumIds ?? [];
@@ -1101,8 +1112,8 @@ onMounted(async () => {
   }
   listenersCreated.value = true;
 
-  // 监听 App.vue 发送的文件拖拽事件（仅非安卓平台）
-  if (!IS_ANDROID) {
+  // 监听 App.vue 发送的文件拖拽事件（仅 Tauri 桌面）
+  if (!IS_ANDROID && !IS_WEB) {
     const handleFileDrop = async (event: Event) => {
       const customEvent = event as CustomEvent<{
         path: string;
@@ -1156,12 +1167,7 @@ onActivated(async () => {
     } catch (e) {
       const msg = e != null && typeof e === "object" && "message" in e ? String((e as Error).message) : String(e);
       console.error("[Gallery] onActivated loadImages 失败:", pathToLoad, msg);
-      if (msg.includes("路径不存在")) {
-        await invoke("clear_provider_cache").catch(() => { });
-        await refreshImagesPreserveCache(pathToLoad);
-      } else {
-        throw e;
-      }
+      throw e;
     }
   }
 });
@@ -1171,7 +1177,7 @@ onDeactivated(() => {
   isGalleryActive.value = false;
   // keep-alive 缓存时不清理 Blob URL，保持图片 URL 有效
   // Android 选择模式：统一关闭并收起 bar
-  if (IS_ANDROID) {
+  if (isCompact.value) {
     closeSelectionMode();
   }
 });

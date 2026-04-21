@@ -2,8 +2,7 @@
  * 媒体扩展名与 MIME 类型，运行时从后端获取，集中使用。
  */
 import { ref, type Ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-
+import { invoke } from "@/api/rpc";
 export interface SupportedImageTypes {
   extensions: string[];
   mimeByExt: Record<string, string>;

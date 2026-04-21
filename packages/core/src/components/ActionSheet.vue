@@ -68,8 +68,8 @@
 import { computed, markRaw, ref, toRaw, type Component } from "vue";
 import { CloseBold, Select } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "../actions/types";
-import { IS_ANDROID } from "../env";
 import { useModalBack } from "../composables/useModalBack";
+import { useUiStore } from "../stores/ui";
 
 interface Props {
   visible: boolean;
@@ -121,10 +121,11 @@ const resolvedActions = computed(() => {
   });
 });
 
-// Android: 全选/取消全选按钮（仅当 totalCount 有值且已有选中时显示）
+const uiStore = useUiStore();
+// 紧凑模式（Android/web 窄屏）：全选/取消全选按钮（仅当 totalCount 有值且已有选中时显示）
 const showSelectAllButton = computed(
   () =>
-    IS_ANDROID &&
+    uiStore.isCompact &&
     props.context.totalCount != null &&
     props.context.selectedCount >= 1
 );

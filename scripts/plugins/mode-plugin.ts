@@ -81,11 +81,7 @@ export class ModePlugin extends BasePlugin {
     bs.hooks.prepareEnv.tap(this.name, () => {
       this.setEnv("KABEGAME_MODE", this.mode!.mode);
       this.setEnv("VITE_KABEGAME_MODE", this.mode!.mode);
-      // kabegame_mode cfg is only for local-internal subdivisions (standard/light/android).
-      // web/local split is done via Cargo features, not kabegame_mode.
-      if (!this.mode!.isWeb) {
-        this.addRustFlags(`--cfg kabegame_mode="${this.mode!.mode}"`);
-      }
+      this.addRustFlags(`--cfg kabegame_mode="${this.mode!.mode}"`);
 
       if (this.mode!.isAndroid) {
         this.setEnv("VITE_ANDROID", "true");

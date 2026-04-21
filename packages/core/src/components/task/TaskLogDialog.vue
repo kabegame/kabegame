@@ -30,8 +30,7 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ElMessage } from "element-plus";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, listen } from "../../api";
 import { useModalBack } from "../../composables/useModalBack";
 
 type TaskLogEntry = {

@@ -16,7 +16,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { ElMessage } from "element-plus";
 import { useI18n } from "@kabegame/i18n";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";

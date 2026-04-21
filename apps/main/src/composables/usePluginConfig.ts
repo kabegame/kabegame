@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { usePluginConfigI18n } from "@kabegame/i18n";
@@ -12,6 +12,7 @@ import {
   shiftPluginDateByDays,
 } from "@kabegame/core/utils/pluginDateVar";
 import { validateVarValue } from "@/utils/pluginVarValidation";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 /** 从插件默认配置加载到表单时，一并返回 httpHeaders / outputDir */
 export type PluginDefaultLoadResult = {
@@ -411,6 +412,7 @@ export function usePluginConfig() {
 
   // 选择输出目录
   const selectOutputDir = async () => {
+    if (await guardDesktopOnly("openLocal")) return;
     try {
       const selected = await open({
         directory: true,

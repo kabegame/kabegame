@@ -16,11 +16,11 @@
                 <SettingRow :label="$t('settings.language')" :description="$t('settings.languageDesc')">
                   <LanguageSetting />
                 </SettingRow>
-                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.autoLaunch')"
+                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.autoLaunch')"
                   :description="$t('settings.autoLaunchDesc')">
                   <SettingSwitchControl setting-key="autoLaunch" />
                 </SettingRow>
-                <SettingRow v-if="!IS_ANDROID && !isLightMode" :label="$t('settings.albumDrive')"
+                <SettingRow v-if="!IS_ANDROID && !IS_WEB && !isLightMode" :label="$t('settings.albumDrive')"
                   :description="$t('settings.albumDriveDesc')">
                   <AlbumDriveSetting />
                 </SettingRow>
@@ -44,11 +44,11 @@
                   :description="$t('settings.imageObjectPositionDesc')">
                   <SettingRadioControl setting-key="galleryImageObjectPosition" :options="objectPositionOptions" />
                 </SettingRow>
-                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.clearUserData')"
+                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.clearUserData')"
                   :description="$t('settings.clearUserDataDesc')">
                   <ClearUserDataSetting />
                 </SettingRow>
-                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.autoOpenWebView')"
+                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.autoOpenWebView')"
                   :description="$t('settings.autoOpenWebViewDesc')">
                   <SettingSwitchControl :setting-key="autoOpenCrawlerWebviewKey" />
                 </SettingRow>
@@ -56,7 +56,7 @@
                   :description="$t('settings.debugGenerateImagesDesc')">
                   <DebugGenerateImagesSetting />
                 </SettingRow>
-                <SettingRow v-if="!IS_ANDROID && IS_DEV" :label="$t('settings.devWebView')"
+                <SettingRow v-if="!IS_ANDROID && !IS_WEB && IS_DEV" :label="$t('settings.devWebView')"
                   :description="$t('settings.devWebViewDesc')">
                   <div class="dev-webview-row">
                     <el-input v-model="devWebviewUrl" :placeholder="$t('settings.devWebviewPlaceholder')" clearable
@@ -71,7 +71,7 @@
           </el-card>
         </el-tab-pane>
 
-        <el-tab-pane :label="$t('settings.tabWallpaper')" :name="SETTINGS_TAB_NAMES[1]">
+        <el-tab-pane v-if="!IS_WEB" :label="$t('settings.tabWallpaper')" :name="SETTINGS_TAB_NAMES[1]">
           <el-card class="settings-card">
             <template #header>
               <span>{{ $t('settings.wallpaperSectionTitle') }}</span>
@@ -221,7 +221,7 @@ import { ref, onMounted, onActivated, computed, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useLocalStorage } from "@vueuse/core";
 import { ElMessage } from "element-plus";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
@@ -249,7 +249,7 @@ import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerat
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
 import LanguageSetting from "@/components/settings/items/LanguageSetting.vue";
 import PluginDefaultConfigsPanel from "@/components/settings/PluginDefaultConfigsPanel.vue";
-import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV, IS_MACOS } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV, IS_MACOS, IS_WEB } from "@kabegame/core/env";
 
 const { t } = useI18n();
 

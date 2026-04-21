@@ -58,7 +58,6 @@ pub async fn handle_settings_request(req: &CliIpcRequest) -> Option<CliIpcRespon
             Some(get_current_wallpaper_image_id())
         }
         CliIpcRequest::SettingsGetDefaultImagesDir => Some(get_default_images_dir()),
-        CliIpcRequest::SettingsGetGalleryPageSize => Some(get_gallery_page_size()),
         #[cfg(kabegame_mode = "standard")]
         CliIpcRequest::SettingsGetAlbumDriveEnabled => Some(get_album_drive_enabled()),
         #[cfg(kabegame_mode = "standard")]
@@ -540,11 +539,6 @@ fn get_default_images_dir() -> CliIpcResponse {
         .trim_start_matches("\\\\?\\")
         .to_string();
     CliIpcResponse::ok_with_data("ok", serde_json::json!(dir_str))
-}
-
-fn get_gallery_page_size() -> CliIpcResponse {
-    let v = Settings::global().get_gallery_page_size();
-    CliIpcResponse::ok_with_data("ok", serde_json::json!(v))
 }
 
 #[cfg(kabegame_mode = "standard")]

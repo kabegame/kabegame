@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::plugin::PluginManager;
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider, ProviderMeta};
-use crate::providers::shared::query_page::QueryPageProvider;
+use crate::providers::shared::page_size::PageSizeGroupProvider;
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
@@ -55,15 +55,15 @@ impl Provider for PluginProvider {
     }
 
     fn list_children(&self, composed: &ImageQuery) -> Result<Vec<ChildEntry>, String> {
-        QueryPageProvider::root().list_children(composed)
+        PageSizeGroupProvider.list_children(composed)
     }
 
     fn get_child(&self, name: &str, composed: &ImageQuery) -> Option<Arc<dyn Provider>> {
-        QueryPageProvider::root().get_child(name, composed)
+        PageSizeGroupProvider.get_child(name, composed)
     }
 
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
-        QueryPageProvider::root().list_images(composed)
+        PageSizeGroupProvider.list_images(composed)
     }
 
     fn get_meta(&self) -> Option<ProviderMeta> {

@@ -143,7 +143,7 @@ import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { CopyDocument, Loading, Picture, WarningFilled } from "@element-plus/icons-vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@/api/rpc";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";

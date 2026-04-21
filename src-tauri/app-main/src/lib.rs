@@ -5,13 +5,15 @@ pub(crate) mod core_init;
 #[cfg(not(target_os = "android"))]
 pub(crate) mod commands_core;
 #[cfg(not(target_os = "android"))]
-pub(crate) mod ws;
+pub(crate) mod web;
 
 // Web mode entry
 #[cfg(feature = "web")]
 mod web_assets;
 #[cfg(feature = "web")]
 mod web_entry;
+#[cfg(feature = "web")]
+mod web_import;
 
 // Local (Tauri native) modules
 #[cfg(all(feature = "local", target_os = "android"))]
@@ -248,9 +250,7 @@ pub fn run() {
             get_gallery_time_filter_data,
             browse_gallery_provider,
             query_provider,
-            clear_provider_cache,
             toggle_image_favorite,
-            update_image_dimensions,
             // --- Tasks ---
             get_all_tasks,
             get_tasks_page,
@@ -261,9 +261,6 @@ pub fn run() {
             start_task,
             cancel_task,
             clear_finished_tasks,
-            get_task_images,
-            get_task_images_paginated,
-            get_task_image_ids,
             get_task_failed_images,
             get_all_failed_images,
             get_task_logs,
@@ -321,9 +318,7 @@ pub fn run() {
             preview_import_plugin,
             preview_store_install,
             import_plugin_from_zip,
-            get_plugin_image_for_detail,
             get_remote_plugin_icon,
-            get_plugin_image_from_zip,
             get_plugin_default_config,
             ensure_plugin_default_config,
             save_plugin_default_config,
@@ -352,10 +347,6 @@ pub fn run() {
             set_gallery_image_aspect_ratio,
             get_gallery_image_object_position,
             set_gallery_image_object_position,
-            get_gallery_grid_columns,
-            set_gallery_grid_columns,
-            get_gallery_page_size,
-            set_gallery_page_size,
             get_auto_deduplicate,
             set_auto_deduplicate,
             get_default_download_dir,
@@ -431,7 +422,6 @@ pub fn run() {
             open_file_folder,
             open_album_virtual_drive_folder,
             // --- Misc ---
-            proxy_fetch,
             exit_app,
             #[cfg(not(target_os = "android"))]
             open_dev_webview,

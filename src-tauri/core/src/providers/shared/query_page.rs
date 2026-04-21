@@ -4,32 +4,30 @@
 //!
 //! - `page = None`：`list_images` 返回最后一页；`list_children` 返回数字段 `1..=N`。
 //! - `page = Some(n)`：`list_images` 返回第 n 页；`list_children = []`（叶子）。
+//!
+//! 不再读取 Settings——page_size 由调用方（PageSizeProvider）注入。
 
 use std::sync::Arc;
 
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider};
-use crate::settings::Settings;
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
-fn page_size() -> usize {
-    Settings::global().get_gallery_page_size() as usize
-}
-
-/// 终端分页节点。不持有自己的 query——composed 由 runtime 通过 apply_query 链传入。
+/// 终端分页节点。page_size 由调用方注入；不持有自己的 query。
 pub struct QueryPageProvider {
+    pub page_size: usize,
     /// None = 组根（list_images 取最后一页；list_children 返回 1..=N）
     /// Some(n) = 叶子（list_images 取第 n 页；list_children = []）
     pub page: Option<usize>,
 }
 
 impl QueryPageProvider {
-    pub fn root() -> Self {
-        Self { page: None }
+    pub fn new(page_size: usize) -> Self {
+        Self { page_size, page: None }
     }
 
-    pub fn page(n: usize) -> Self {
-        Self { page: Some(n.max(1)) }
+    pub fn leaf(page_size: usize, n: usize) -> Self {
+        Self { page_size, page: Some(n.max(1)) }
     }
 }
 
@@ -39,14 +37,14 @@ impl Provider for QueryPageProvider {
         if self.page.is_some() {
             return Ok(Vec::new());
         }
-        let ps = page_size();
+        let ps = self.page_size;
         let total = Storage::global().get_images_count_by_query(composed)?;
         if total == 0 {
             return Ok(Vec::new());
         }
         let total_pages = total.div_ceil(ps);
-        Ok((1..=total_pages-1)
-            .map(|n| ChildEntry::new(n.to_string(), Arc::new(QueryPageProvider::page(n))))
+        Ok((1..=total_pages - 1)
+            .map(|n| ChildEntry::new(n.to_string(), Arc::new(QueryPageProvider::leaf(ps, n))))
             .collect())
     }
 
@@ -56,13 +54,13 @@ impl Provider for QueryPageProvider {
             return None;
         }
         let n: usize = name.parse().ok().filter(|&n| n > 0)?;
-        Some(Arc::new(QueryPageProvider::page(n)))
+        Some(Arc::new(QueryPageProvider::leaf(self.page_size, n)))
     }
 
     // 列出最后一页
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
         let storage = Storage::global();
-        let ps = page_size();
+        let ps = self.page_size;
         match self.page {
             Some(p) => {
                 let offset = (p - 1) * ps;

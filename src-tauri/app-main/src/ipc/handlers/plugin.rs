@@ -58,14 +58,6 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
                 .await,
         ),
 
-        CliIpcRequest::PluginGetImageForDetail {
-            plugin_id,
-            image_path,
-            source_id,
-        } => Some(
-            get_plugin_image_for_detail(plugin_id, image_path, source_id.as_deref()).await,
-        ),
-
         CliIpcRequest::PluginRun { .. } => {
             // 运行请求由主程序处理，此处不处理
             None
@@ -241,20 +233,4 @@ async fn get_remote_plugin_icon_v2(
         Some(b) => CliIpcResponse::ok_with_bytes("ok", "image/png", b),
         None => CliIpcResponse::ok("no icon"),
     }
-}
-
-async fn get_plugin_image_for_detail(
-    plugin_id: &str,
-    image_path: &str,
-    source_id: Option<&str>,
-) -> CliIpcResponse {
-    let plugin_manager = PluginManager::global();
-    let bytes = match plugin_manager
-        .load_plugin_image_for_detail(plugin_id, image_path, source_id)
-        .await
-    {
-        Ok(b) => b,
-        Err(e) => return CliIpcResponse::err(e),
-    };
-    CliIpcResponse::ok_with_bytes("ok", "image/png", bytes)
 }

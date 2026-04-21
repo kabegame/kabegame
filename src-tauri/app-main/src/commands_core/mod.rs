@@ -1,4 +1,9 @@
 pub mod album;
 pub mod image;
 pub mod misc;
+pub mod organize;
+pub mod plugin;
+pub mod proxy;
+pub mod settings;
+pub mod surf;
 pub mod task;

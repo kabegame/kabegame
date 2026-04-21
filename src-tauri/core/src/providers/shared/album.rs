@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider, ProviderMeta};
-use crate::providers::shared::query_page::QueryPageProvider;
+use crate::providers::shared::page_size::PageSizeGroupProvider;
 use crate::storage::gallery::ImageQuery;
 use crate::storage::{Storage, HIDDEN_ALBUM_ID};
 
@@ -74,14 +74,16 @@ impl Provider for AlbumProvider {
                 )
             })
             .collect();
-        children.extend(QueryPageProvider::root().list_children(composed)?);
+        children.extend(PageSizeGroupProvider.list_children(composed)?);
         Ok(children)
     }
 
     fn get_child(&self, name: &str, composed: &ImageQuery) -> Option<Arc<dyn Provider>> {
-        // 数字页段委托 QueryPageProvider
-        if name.parse::<usize>().is_ok() {
-            return QueryPageProvider::root().get_child(name, composed);
+        // 数字页段 + x{size}x 页面大小段委托 PageSizeGroupProvider
+        if name.parse::<usize>().is_ok()
+            || (name.starts_with('x') && name.ends_with('x'))
+        {
+            return PageSizeGroupProvider.get_child(name, composed);
         }
         // 子画册：验证存在且父是本画册
         let album = Storage::global().get_album_by_id(name).ok()??;
@@ -92,7 +94,7 @@ impl Provider for AlbumProvider {
     }
 
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
-        QueryPageProvider::root().list_images(composed)
+        PageSizeGroupProvider.list_images(composed)
     }
 
     fn get_meta(&self) -> Option<ProviderMeta> {

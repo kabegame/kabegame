@@ -306,36 +306,6 @@ impl IpcClient {
             .await
     }
 
-    /// 获取任务图片
-    pub async fn storage_get_task_images(
-        &self,
-        task_id: String,
-    ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetTaskImages { task_id })
-            .await
-    }
-
-    pub async fn storage_get_task_image_ids(&self, task_id: String) -> Result<Vec<String>, String> {
-        let v = self
-            .request_data(CliIpcRequest::StorageGetTaskImageIds { task_id })
-            .await?;
-        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
-    }
-
-    pub async fn storage_get_task_images_paginated(
-        &self,
-        task_id: String,
-        offset: usize,
-        limit: usize,
-    ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetTaskImagesPaginated {
-            task_id,
-            offset,
-            limit,
-        })
-        .await
-    }
-
     /// 获取任务失败图片
     pub async fn storage_get_task_failed_images(
         &self,
@@ -560,21 +530,6 @@ impl IpcClient {
             plugin_id: None,
         })
         .await
-    }
-
-    pub async fn plugin_get_image_for_detail(
-        &self,
-        plugin_id: String,
-        image_path: String,
-        source_id: Option<String>,
-    ) -> Result<Vec<u8>, String> {
-        self.request_bytes(CliIpcRequest::PluginGetImageForDetail {
-            plugin_id,
-            image_path,
-            source_id,
-        })
-        .await?
-        .ok_or_else(|| "No image data in response".to_string())
     }
 
     /// 运行插件

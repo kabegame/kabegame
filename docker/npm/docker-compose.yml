@@ -1,0 +1,20 @@
+services:
+  app:
+    container_name: npm
+    image: jc21/nginx-proxy-manager:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "81:81"
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+      - ./cert-local:/cert
+    networks:
+      - default
+      - umami_default
+
+networks:
+  umami_default:
+    external: true

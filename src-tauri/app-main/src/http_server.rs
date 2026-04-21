@@ -1,5 +1,9 @@
 #[cfg(not(target_os = "android"))]
-use std::{path::Path, str::FromStr, sync::OnceLock};
+use std::{
+    path::Path,
+    str::FromStr,
+    sync::{Arc, OnceLock},
+};
 
 #[cfg(not(target_os = "android"))]
 use axum::{
@@ -7,17 +11,18 @@ use axum::{
     extract::Query,
     http::{
         header::{
-            HeaderValue, ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE,
+            HeaderValue, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE,
             CONTENT_TYPE, RANGE,
         },
         Request, StatusCode, Uri,
     },
+    middleware::{from_fn, Next},
     response::{IntoResponse, Response},
     routing::get,
     Router,
 };
-#[cfg(all(not(target_os = "android"), debug_assertions))]
-use axum::{body::Bytes, extract::DefaultBodyLimit, http::Method, routing::post};
+#[cfg(not(target_os = "android"))]
+use tokio::sync::Semaphore;
 #[cfg(not(target_os = "android"))]
 use serde::Deserialize;
 #[cfg(not(target_os = "android"))]
@@ -27,7 +32,6 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
 use tower::ServiceExt;
 #[cfg(all(not(target_os = "android"), debug_assertions))]
-use tower_http::cors::{Any, CorsLayer};
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
 use tower_http::services::ServeDir;
 
@@ -89,6 +93,15 @@ fn set_content_type_if_present(resp: &mut Response, mime_type: Option<&str>) {
     if let Ok(v) = HeaderValue::from_str(mime_type) {
         resp.headers_mut().insert(CONTENT_TYPE, v);
     }
+}
+
+/// 本地文件按路径寻址、内容不变。浏览器命中磁盘缓存即可跳过一次 fs 读 + DB 查询。
+#[cfg(not(target_os = "android"))]
+fn apply_immutable_cache(resp: &mut Response) {
+    resp.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
 }
 
 #[cfg(not(target_os = "android"))]
@@ -172,6 +185,7 @@ async fn serve_file_with_mime(
                     if resp.status().is_success() {
                         let mut out = resp.into_response();
                         set_content_type_if_present(&mut out, mime_type.as_deref());
+                        apply_immutable_cache(&mut out);
                         return out;
                     }
                 }
@@ -188,6 +202,7 @@ async fn serve_file_with_mime(
                     out.headers_mut()
                         .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
                     set_content_type_if_present(&mut out, mime_type.as_deref());
+                    apply_immutable_cache(&mut out);
                     return out;
                 }
                 if let Some(range_part) = range_header.strip_prefix("bytes=") {
@@ -233,6 +248,7 @@ async fn serve_file_with_mime(
                             out.headers_mut()
                                 .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
                             set_content_type_if_present(&mut out, mime_type.as_deref());
+                            apply_immutable_cache(&mut out);
                             return out;
                         }
                     }
@@ -255,6 +271,7 @@ async fn serve_file_with_mime(
             out.headers_mut()
                 .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
             set_content_type_if_present(&mut out, mime_type.as_deref());
+            apply_immutable_cache(&mut out);
             out
         }
         Err(_) => (StatusCode::NOT_FOUND, "file not found").into_response(),
@@ -337,82 +354,55 @@ async fn handle_unmatched(uri: Uri) -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
-#[cfg(all(not(target_os = "android"), debug_assertions))]
-const DEBUG_INGEST_MAX_BODY: usize = 256 * 1024;
-
-/// 开发调试用：接受 NDJSON 单行或原文，追加到 `AppPaths::debug_ingest_log()`（与 Cursor/agent 埋点类似）。
-#[cfg(all(not(target_os = "android"), debug_assertions))]
-async fn handle_debug_ingest(body: Bytes) -> Response {
-    use tokio::io::AsyncWriteExt;
-
-    if body.is_empty() {
-        return (StatusCode::BAD_REQUEST, "empty body").into_response();
-    }
-    if body.len() > DEBUG_INGEST_MAX_BODY {
-        return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response();
-    }
-
-    let path = kabegame_core::app_paths::AppPaths::global().debug_ingest_log();
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-
-    let mut chunk = body.to_vec();
-    if !chunk.ends_with(b"\n") {
-        chunk.push(b'\n');
-    }
-
-    match tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .await
-    {
-        Ok(mut f) => {
-            if let Err(e) = f.write_all(&chunk).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("write failed: {e}"),
-                )
-                    .into_response();
-            }
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("open failed: {e}"),
-            )
-                .into_response();
-        }
-    }
-
-    StatusCode::NO_CONTENT.into_response()
-}
 
 /// Returns a Router with file-serving routes usable by both local and web modes.
 /// Does NOT include `/plugin-doc-image` (inlined as data URLs on the frontend).
 #[cfg(not(target_os = "android"))]
 pub fn file_routes() -> Router {
-    let mut app = Router::new()
+    Router::new()
         .route("/file", get(handle_file_query))
         .route("/thumbnail", get(handle_thumbnail_query))
-        .route("/proxy", get(handle_proxy_query));
+        .route("/proxy", get(handle_proxy_query))
+}
 
-    #[cfg(debug_assertions)]
-    {
-        let debug_routes = Router::new()
-            .route("/debug/ingest", post(handle_debug_ingest))
-            .layer(DefaultBodyLimit::max(DEBUG_INGEST_MAX_BODY))
-            .layer(
-                CorsLayer::new()
-                    .allow_origin(Any)
-                    .allow_methods([Method::POST, Method::OPTIONS])
-                    .allow_headers(Any),
-            );
-        app = app.merge(debug_routes);
+/// web 模式下同时能响应多少张图片的上限。超出的请求在信号量上排队等待。
+#[cfg(not(target_os = "android"))]
+const WEB_IMAGE_CONCURRENCY: usize = 10;
+
+#[cfg(not(target_os = "android"))]
+static WEB_IMAGE_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+#[cfg(not(target_os = "android"))]
+fn web_image_semaphore() -> Arc<Semaphore> {
+    WEB_IMAGE_SEMAPHORE
+        .get_or_init(|| Arc::new(Semaphore::new(WEB_IMAGE_CONCURRENCY)))
+        .clone()
+}
+
+/// 给 /file 与 /thumbnail 套用的并发闸：最多 WEB_IMAGE_CONCURRENCY 个在飞，其余排队。
+/// permit 在响应发出之前持有；一旦 handler 返回（Response 构造完成）就释放，不会等客户端读完 body。
+#[cfg(not(target_os = "android"))]
+async fn image_concurrency_mw(req: Request<Body>, next: Next) -> Response {
+    let sem = web_image_semaphore();
+    // Semaphore 从不 close，acquire_owned 不会失败；兜底走降级（不限流），避免僵死。
+    match sem.acquire_owned().await {
+        Ok(permit) => {
+            let resp = next.run(req).await;
+            drop(permit);
+            resp
+        }
+        Err(_) => next.run(req).await,
     }
+}
 
-    app
+/// web 模式专用：/file 与 /thumbnail 套并发闸（10 个并发 + 无限排队），/proxy 不受限。
+#[cfg(not(target_os = "android"))]
+pub fn file_routes_web() -> Router {
+    let gated = Router::new()
+        .route("/file", get(handle_file_query))
+        .route("/thumbnail", get(handle_thumbnail_query))
+        .layer(from_fn(image_concurrency_mw));
+    gated.route("/proxy", get(handle_proxy_query))
 }
 
 #[cfg(not(target_os = "android"))]

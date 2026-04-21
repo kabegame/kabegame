@@ -2,8 +2,22 @@ export const IS_WINDOWS = __WINDOWS__;
 export const IS_LINUX = __LINUX__;
 export const IS_MACOS = __MACOS__;
 export const IS_ANDROID = __ANDROID__;
+export const IS_WEB = __WEB__;
 export const IS_DEV = __DEV__;
 export const IS_LIGHT_MODE = __LIGHT_MODE__;
+
+/**
+ * 应用版本号。由 `apps/main/.env` 的 `VITE_APP_VERSION` 编译期注入，
+ * 通过 `bun run set-version` 与 Cargo.toml 同步；所有平台（含 web）一致。
+ */
+export const APP_VERSION: string | null =
+  (import.meta.env.VITE_APP_VERSION as string | undefined)?.trim() || null;
+
+/**
+ * 紧凑布局阈值（px）。viewport 宽度小于该值时触发移动式紧凑布局。
+ * Android 原生应用恒为紧凑；Tauri 桌面永不紧凑；web mode 跟随视口。
+ */
+export const COMPACT_BREAKPOINT = 768;
 
 /**
  * Android content:// URI 代理前缀。

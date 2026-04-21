@@ -33,10 +33,10 @@
           <!-- 已安装：布局与商店一致 -->
           <div v-else>
             <transition-group name="fade-in-list" tag="div" class="plugin-grid"
-              :class="{ 'plugin-grid-android': IS_ANDROID }">
+              :class="{ 'plugin-grid-android': uiStore.isCompact }">
               <el-card v-for="plugin in installedPlugins" :key="plugin.id" class="plugin-card" shadow="hover"
                 @click="viewPluginDetails(plugin)">
-                <template v-if="IS_ANDROID">
+                <template v-if="uiStore.isCompact">
                   <div class="plugin-android-icon">
                     <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
                       <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
@@ -76,7 +76,7 @@
                   </div>
                 </div>
 
-                <div v-if="IS_ANDROID" class="plugin-info plugin-info--marquee">
+                <div v-if="uiStore.isCompact" class="plugin-info plugin-info--marquee">
                   <div class="plugin-info-track">
                     <div class="plugin-info-group">
                       <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
@@ -113,7 +113,7 @@
           </template>
           <!-- 插件列表（300ms 延迟显示骨架屏，避免快速刷新时闪屏） -->
           <div v-if="showSkeletonBySource[s.id]" class="loading-skeleton">
-            <div v-if="IS_ANDROID" class="skeleton-grid skeleton-grid-android">
+            <div v-if="uiStore.isCompact" class="skeleton-grid skeleton-grid-android">
               <div v-for="i in 8" :key="i" class="skeleton-card">
                 <el-skeleton :rows="0" animated>
                   <template #template>
@@ -164,10 +164,10 @@
           </div>
 
           <transition-group v-else name="fade-in-list" tag="div" class="plugin-grid"
-            :class="{ 'plugin-grid-android': IS_ANDROID }">
+            :class="{ 'plugin-grid-android': uiStore.isCompact }">
             <el-card v-for="plugin in getStorePlugins(s.id)" :key="plugin.id" class="plugin-card" shadow="hover"
               @click="viewPluginDetails(plugin)">
-              <template v-if="IS_ANDROID">
+              <template v-if="uiStore.isCompact">
                 <div class="plugin-android-icon">
                   <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
                     <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
@@ -207,7 +207,7 @@
                 </div>
               </div>
 
-              <div v-if="IS_ANDROID" class="plugin-info plugin-info--marquee">
+              <div v-if="uiStore.isCompact" class="plugin-info plugin-info--marquee">
                 <div class="plugin-info-track">
                   <div class="plugin-info-group">
                     <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
@@ -398,16 +398,19 @@ import { usePluginStore, type Plugin } from "@/stores/plugins";
 import type { PluginManifestText } from "@kabegame/core/stores/plugins";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, listen } from "@/api/rpc";
 import { open } from "@tauri-apps/plugin-dialog";
 import { pickKgpgFile } from "tauri-plugin-picker-api";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import PluginBrowserPageHeader from "@/components/header/PluginBrowserPageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import { isUpdateAvailable } from "@/utils/version";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { IS_LIGHT_MODE, IS_ANDROID } from "@kabegame/core/env";
+import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { storePluginCacheDb } from "@kabegame/core/cache/storePluginCache";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 interface PluginSource {
   id: string;
@@ -456,6 +459,8 @@ const openQuickSettings = () => quickSettingsDrawer.open("pluginbrowser");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("pluginbrowser");
 
+const uiStore = useUiStore();
+
 /** 与后端 `plugin_sources::OFFICIAL_PLUGIN_SOURCE_ID` 一致 */
 const OFFICIAL_PLUGIN_SOURCE_ID = "official_github_release";
 /** 与 `kabegame_core::storage::plugin_sources` 插入官方源时的默认 `name` 一致（用于识别「未自定义」以走 i18n） */
@@ -479,7 +484,7 @@ const pullToRefreshOpts = computed(() =>
 );
 
 const handleImportSource = () => {
-  if (IS_ANDROID) {
+  if (uiStore.isCompact) {
     triggerImportDirect();
   } else {
     showImportDialog.value = true;
@@ -617,6 +622,10 @@ const getPluginIconSrc = (p: PluginListItem) => {
   if (isStore) {
     const store = p as StorePluginResolved;
     if (store.iconUrl) return store.iconUrl;
+    // 商店插件 id 与已安装插件一致时，直接复用已安装图标
+    if (installedPlugins.value.some((x) => x.id === p.id)) {
+      return pluginStore.pluginIconDataUrl(p.id) || null;
+    }
     const key = getIconKey(p);
     return pluginIcons.value[key] || null;
   }
@@ -630,13 +639,22 @@ const loadRemotePluginIcon = async (plugin: {
   id: string;
   sourceId: string;
   downloadUrl?: string | null;
+  version?: string;
 }) => {
-  if (!plugin?.id) return;
-  if (!plugin.sourceId) return;
-  if (!plugin.downloadUrl) return;
+  if (!plugin?.id || !plugin.sourceId || !plugin.downloadUrl) return;
+  // 有同 id 的已安装插件 → 图标由 getPluginIconSrc 从已安装数据取，无需远程拉取
+  if (installedPlugins.value.some((p) => p.id === plugin.id)) return;
   const key = storeIconKey(plugin.sourceId, plugin.id);
   if (pluginIcons.value[key]) return;
   if (pluginIconLoading.value[key]) return;
+  // web 模式：先查 Dexie icon 缓存（版本匹配）
+  if (IS_WEB && plugin.version) {
+    const cached = await storePluginCacheDb.icons.get(key);
+    if (cached && cached.version === plugin.version) {
+      pluginIcons.value = { ...pluginIcons.value, [key]: `data:image/png;base64,${cached.iconBase64}` };
+      return;
+    }
+  }
   setPluginIconLoading(key, true);
   try {
     const iconData = await invoke<number[] | null>("get_remote_plugin_icon", {
@@ -651,6 +669,9 @@ const loadRemotePluginIcon = async (plugin: {
       .join("");
     const base64 = btoa(binaryString);
     pluginIcons.value = { ...pluginIcons.value, [key]: `data:image/png;base64,${base64}` };
+    if (IS_WEB && plugin.version) {
+      void storePluginCacheDb.icons.put({ key, version: plugin.version, iconBase64: base64, cachedAt: Date.now() });
+    }
   } catch {
     // 远程 icon 拉取失败：保持占位符即可
   } finally {
@@ -660,14 +681,16 @@ const loadRemotePluginIcon = async (plugin: {
 
 const prefetchRemoteIconsForSource = async (sourceId: string) => {
   const arr = getStorePlugins(sourceId) || [];
-  // 控制规模：只预取前 24 个缺失 iconUrl 的条目，避免刷新时并发过多
+  const installedIds = new Set(installedPlugins.value.map((p) => p.id));
+  // 控制规模：只预取前 24 个缺失 iconUrl 的条目，避免刷新时并发过多；已安装同 id 者跳过
   const targets = arr
     .filter((p) => {
-      const pv = typeof p.packageVersion === "number" ? p.packageVersion : 1;
+      if (installedIds.has(p.id)) return false;
+      const pv = typeof p.packageVersion === 'number' ? p.packageVersion : 1;
       return pv >= 2 && !p.iconUrl && !!p.downloadUrl;
     })
     .slice(0, 24);
-  // 有限并发：最多同时拉 10 个，避免请求风暴但也不会“一个接一个”太慢
+  // 有限并发：最多同时拉 10 个，避免请求风暴但也不会”一个接一个”太慢
   const concurrency = 10;
   let idx = 0;
   const workers = new Array(Math.min(concurrency, targets.length)).fill(0).map(async () => {
@@ -679,10 +702,34 @@ const prefetchRemoteIconsForSource = async (sourceId: string) => {
         id: cur.id,
         sourceId,
         downloadUrl: cur.downloadUrl,
+        version: cur.version,
       });
     }
   });
   await Promise.all(workers);
+};
+
+const restoreIconsFromCache = async (sourceId: string) => {
+  if (!IS_WEB) return;
+  const arr = getStorePlugins(sourceId);
+  if (!arr.length) return;
+  const installedIds = new Set(installedPlugins.value.map((p) => p.id));
+  const updates: Record<string, string> = {};
+  await Promise.all(
+    arr
+      .filter((p) => !p.iconUrl && !installedIds.has(p.id))
+      .map(async (p) => {
+        const key = storeIconKey(sourceId, p.id);
+        if (pluginIcons.value[key]) return;
+        const cached = await storePluginCacheDb.icons.get(key);
+        if (cached && cached.version === p.version) {
+          updates[key] = `data:image/png;base64,${cached.iconBase64}`;
+        }
+      }),
+  );
+  if (Object.keys(updates).length) {
+    pluginIcons.value = { ...pluginIcons.value, ...updates };
+  }
 };
 
 const refreshPluginIcons = async () => {
@@ -1009,7 +1056,8 @@ const loadStorePlugins = async (
       ElMessage.success(forceRefresh ? t("plugins.storeListRefreshed") : t("plugins.storeListLoaded"));
     }
 
-    // 新格式：iconUrl 可能为空，尝试通过 KGPG v2 Range 预取 icon（不阻塞 UI）
+    // 新格式：先从 Dexie 还原图标缓存，再按需发起远程拉取（均不阻塞 UI）
+    void restoreIconsFromCache(sourceId);
     void prefetchRemoteIconsForSource(sourceId);
   } catch (error) {
     console.error("加载商店失败:", error);
@@ -1066,6 +1114,7 @@ const revalidateStorePluginsInBackground = (sourceId: string) => {
       if (prev && prev.length > 0) {
         ElMessage.success(t("plugins.storeListAutoUpdated"));
       }
+      void restoreIconsFromCache(sourceId);
       void prefetchRemoteIconsForSource(sourceId);
     } catch {
       /* 静默 */
@@ -1098,6 +1147,7 @@ const selectPluginFile = async () => {
 /** Android：直接打开文件选择器，选择后执行导入（不显示导入弹窗）。
  *  使用 picker 插件的 pickKgpgFile 将 content:// URI 复制到应用私有目录，返回可读路径 */
 const triggerImportDirect = async () => {
+  if (await guardDesktopOnly("picker")) return;
   try {
     const filePath = await pickKgpgFile();
     if (!filePath) return;
@@ -1245,6 +1295,7 @@ const viewPluginDetails = (plugin: PluginListItem) => {
       query: {
         mode: "remote",
         sourceId: store.sourceId ?? undefined,
+        version: store.version,
       },
     });
     return;
@@ -1359,7 +1410,6 @@ onMounted(async () => {
     try {
       const { isTauri } = await import("@tauri-apps/api/core");
       if (isTauri()) {
-        const { listen } = await import("@tauri-apps/api/event");
         unlistenStoreDownloadProgress = await listen<StoreDownloadProgressPayload>(
           "plugin-store-download-progress",
           (event) => {

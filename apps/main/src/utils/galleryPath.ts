@@ -1,12 +1,15 @@
 /**
- * 画廊 query.path：`<root>/[desc/]<page>`，如 all/1、all/desc/2、plugin/foo/desc/1。
- * 纯函数：由 (filter, sort, page) 拼 path；由 path 解析出三部分。无聚合「状态对象」供业务持有。
+ * 画廊 query.path：`<root>/[desc/][x{pageSize}x/]<page>`
+ * 当 pageSize === 100（默认值）时省略 x{pageSize}x 段，保持与旧版路径兼容。
+ * 示例：all/1、all/desc/2、all/x500x/3、plugin/foo/desc/x1000x/1。
+ *
+ * 按时间（date）走分层段：`date/YYYYy[/MMm[/DDd]]`，与后端
+ * `gallery/date/` provider 树同构；例：date/2025y/1、date/2025y/01m/desc/2、
+ * date/2025y/01m/15d/x500x/3。
  */
 
-export const GALLERY_STORAGE_KEY_ROOT = "kabegame-gallery-browse-root";
-export const GALLERY_STORAGE_KEY_SORT = "kabegame-gallery-sort";
-export const GALLERY_STORAGE_KEY_PAGE = "kabegame-gallery-page";
-export const GALLERY_STORAGE_KEY_HIDE = "kabegame-gallery-hide";
+/** Gallery 持久化路径（不包含 `hide/` 前缀）：与 build/parseGalleryPath 同构。 */
+export const GALLERY_STORAGE_KEY_PATH = "kabegame-gallery-path";
 
 export type GalleryTimeSort = "asc" | "desc";
 
@@ -26,10 +29,12 @@ export interface ParsedGalleryPath {
   filter: GalleryFilter;
   sort: GalleryTimeSort;
   page: number;
+  pageSize: number;
 }
 
 const DEFAULT_SORT: GalleryStoredSort = "";
 const DEFAULT_PAGE = 1;
+const DEFAULT_PAGE_SIZE = 100;
 
 /** 默认 filter（与历史 `DEFAULT_ROOT === "all"` 一致） */
 export const DEFAULT_GALLERY_FILTER: GalleryFilter = { type: "all" };
@@ -43,7 +48,7 @@ export function serializeFilter(filter: GalleryFilter): string {
     case "plugin":
       return `plugin/${filter.pluginId}`;
     case "date":
-      return `date/${filter.segment}`;
+      return `date/${encodeDateSegment(filter.segment)}`;
     case "date-range":
       return `date-range/${filter.start}~${filter.end}`;
     case "media-type":
@@ -51,13 +56,25 @@ export function serializeFilter(filter: GalleryFilter): string {
   }
 }
 
-/** `date/<YYYY|YYYY-MM|YYYY-MM-DD>` 单段，末段含 `-` 时不能用 parseInt 当页码 */
-function isDateTimeTailSegment(seg: string): boolean {
-  return (
-    /^\d{4}-\d{2}-\d{2}$/.test(seg) ||
-    /^\d{4}-\d{2}$/.test(seg) ||
-    /^\d{4}$/.test(seg)
-  );
+/** canonical `YYYY[-MM[-DD]]` → 分层路径 `YYYYy[/MMm[/DDd]]`（与后端同构） */
+function encodeDateSegment(segment: string): string {
+  const [y, m, d] = segment.split("-");
+  if (d) return `${y}y/${m}m/${d}d`;
+  if (m) return `${y}y/${m}m`;
+  return `${y}y`;
+}
+
+/** 分层路径段 `YYYYy[/MMm[/DDd]]` → canonical + 消费段数，不合法返回 null */
+function decodeDateSegments(
+  segs: readonly string[]
+): { segment: string; consumed: number } | null {
+  const y = segs[0]?.match(/^(\d{4})y$/)?.[1];
+  if (!y) return null;
+  const m = segs[1]?.match(/^(\d{2})m$/)?.[1];
+  if (!m) return { segment: y, consumed: 1 };
+  const d = segs[2]?.match(/^(\d{2})d$/)?.[1];
+  if (!d) return { segment: `${y}-${m}`, consumed: 2 };
+  return { segment: `${y}-${m}-${d}`, consumed: 3 };
 }
 
 /**
@@ -87,8 +104,9 @@ export function parseFilter(root: string): GalleryFilter {
     }
   }
   if (lr.startsWith("date/")) {
-    const seg = (r.slice("date/".length).trim().split("/")[0] ?? "").trim();
-    if (seg && isDateTimeTailSegment(seg)) return { type: "date", segment: seg };
+    const parts = r.slice("date/".length).trim().split("/").filter(Boolean);
+    const decoded = decodeDateSegments(parts);
+    if (decoded) return { type: "date", segment: decoded.segment };
   }
   if (lr.startsWith("media-type/")) {
     const kind = (r.slice("media-type/".length).trim().split("/")[0] ?? "")
@@ -128,35 +146,48 @@ export function isSimpleFilter(f: GalleryFilter): boolean {
   }
 }
 
+/** 从尾段数组（根已被消费）中解析 sort / pageSize / page。 */
+function parseTail(tail: string[]): { sort: GalleryTimeSort; pageSize: number; page: number } {
+  let rest = [...tail];
+  let sort: GalleryTimeSort = "asc";
+  let pageSize = DEFAULT_PAGE_SIZE;
+
+  if (rest[0] === "desc") {
+    sort = "desc";
+    rest = rest.slice(1);
+  }
+
+  const pageSizeMatch = rest[0]?.match(/^x(\d+)x$/);
+  if (pageSizeMatch) {
+    pageSize = parseInt(pageSizeMatch[1]!, 10) || DEFAULT_PAGE_SIZE;
+    rest = rest.slice(1);
+  }
+
+  const p = parseInt(rest[0] ?? "", 10);
+  const page = Number.isNaN(p) || p < 1 ? DEFAULT_PAGE : p;
+  return { sort, pageSize, page };
+}
+
 /**
- * 解析 `date/<时间粒度>/[/desc/]<page>`，避免 `date/2025-01` 被误解析为 root=`date`、page=2025。
+ * 解析 `date/YYYYy[/MMm[/DDd]]/[desc/][x{n}x/]<page>`。
  */
 function tryParseDateGalleryPath(segs: string[]): ParsedGalleryPath | null {
   if (segs.length < 2 || segs[0]!.toLowerCase() !== "date") {
     return null;
   }
-  const t = segs[1]!.trim();
-  if (!isDateTimeTailSegment(t)) {
-    return null;
-  }
-  const filter: GalleryFilter = { type: "date", segment: t };
-  const tail = segs.slice(2);
+  const decoded = decodeDateSegments(segs.slice(1));
+  if (!decoded) return null;
+  const filter: GalleryFilter = { type: "date", segment: decoded.segment };
+  const tail = segs.slice(1 + decoded.consumed);
   if (tail.length === 0) {
-    return { filter, sort: "asc", page: DEFAULT_PAGE };
+    return { filter, sort: "asc", page: DEFAULT_PAGE, pageSize: DEFAULT_PAGE_SIZE };
   }
-  if (tail[0] === "desc") {
-    const p = parseInt(tail[1] ?? "", 10);
-    const page =
-      Number.isNaN(p) || p < 1 ? DEFAULT_PAGE : p;
-    return { filter, sort: "desc", page };
-  }
-  const p = parseInt(tail[0] ?? "", 10);
-  const page = Number.isNaN(p) || p < 1 ? DEFAULT_PAGE : p;
-  return { filter, sort: "asc", page };
+  const { sort, pageSize, page } = parseTail(tail);
+  return { filter, sort, page, pageSize };
 }
 
 /**
- * 解析 `media-type/image|video/[/desc/]<page>`，与 date 路径同理保留两段 root。
+ * 解析 `media-type/image|video/[/desc/][x{n}x/]<page>`。
  */
 function tryParseMediaTypeGalleryPath(segs: string[]): ParsedGalleryPath | null {
   if (segs.length < 2 || segs[0]!.toLowerCase() !== "media-type") {
@@ -169,20 +200,14 @@ function tryParseMediaTypeGalleryPath(segs: string[]): ParsedGalleryPath | null 
   const filter: GalleryFilter = { type: "media-type", kind };
   const tail = segs.slice(2);
   if (tail.length === 0) {
-    return { filter, sort: "asc", page: DEFAULT_PAGE };
+    return { filter, sort: "asc", page: DEFAULT_PAGE, pageSize: DEFAULT_PAGE_SIZE };
   }
-  if (tail[0] === "desc") {
-    const p = parseInt(tail[1] ?? "", 10);
-    const page = Number.isNaN(p) || p < 1 ? DEFAULT_PAGE : p;
-    return { filter, sort: "desc", page };
-  }
-  const p = parseInt(tail[0] ?? "", 10);
-  const page = Number.isNaN(p) || p < 1 ? DEFAULT_PAGE : p;
-  return { filter, sort: "asc", page };
+  const { sort, pageSize, page } = parseTail(tail);
+  return { filter, sort, page, pageSize };
 }
 
 /**
- * 解析 `date-range/<start>~<end>/[/desc/]<page>`。
+ * 解析 `date-range/<start>~<end>/[desc/][x{n}x/]<page>`。
  */
 function tryParseDateRangeGalleryPath(segs: string[]): ParsedGalleryPath | null {
   if (segs.length < 2 || segs[0]!.toLowerCase() !== "date-range") {
@@ -201,28 +226,24 @@ function tryParseDateRangeGalleryPath(segs: string[]): ParsedGalleryPath | null 
   const filter: GalleryFilter = { type: "date-range", start, end };
   const tail = segs.slice(2);
   if (tail.length === 0) {
-    return { filter, sort: "asc", page: DEFAULT_PAGE };
+    return { filter, sort: "asc", page: DEFAULT_PAGE, pageSize: DEFAULT_PAGE_SIZE };
   }
-  if (tail[0] === "desc") {
-    const p = parseInt(tail[1] ?? "", 10);
-    const page = Number.isNaN(p) || p < 1 ? DEFAULT_PAGE : p;
-    return { filter, sort: "desc", page };
-  }
-  const p = parseInt(tail[0] ?? "", 10);
-  const page = Number.isNaN(p) || p < 1 ? DEFAULT_PAGE : p;
-  return { filter, sort: "asc", page };
+  const { sort, pageSize, page } = parseTail(tail);
+  return { filter, sort, page, pageSize };
 }
 
 export function buildGalleryPath(
   filter: GalleryFilter,
   sort: GalleryStoredSort,
-  page: number
+  page: number,
+  pageSize: number = DEFAULT_PAGE_SIZE
 ): string {
   const r = serializeFilter(filter);
   const p = Math.max(1, Math.floor(Number(page)) || DEFAULT_PAGE);
   const s = sort === "desc" ? "desc" : "asc";
-  if (s === "desc") return `${r}/desc/${p}`;
-  return `${r}/${p}`;
+  const ps = pageSize === DEFAULT_PAGE_SIZE ? "" : `x${pageSize}x/`;
+  if (s === "desc") return `${r}/desc/${ps}${p}`;
+  return `${r}/${ps}${p}`;
 }
 
 export function parseGalleryPath(path: string): ParsedGalleryPath {
@@ -230,6 +251,7 @@ export function parseGalleryPath(path: string): ParsedGalleryPath {
     filter: DEFAULT_GALLERY_FILTER,
     sort: "asc",
     page: DEFAULT_PAGE,
+    pageSize: DEFAULT_PAGE_SIZE,
   };
   const trimmed = (path || "").trim();
   if (!trimmed) return base;
@@ -252,51 +274,55 @@ export function parseGalleryPath(path: string): ParsedGalleryPath {
     return dateRangeParsed;
   }
 
-  const last = segs[segs.length - 1]!;
-  const pageNum = parseInt(last, 10);
-  if (Number.isNaN(pageNum) || pageNum < 1) return base;
+  // General path: consume known root segments, then parse tail
+  // Root can be 1 segment (all, wallpaper-order) or 2 segments (plugin/<id>)
+  let rootSegs: string[];
+  let tail: string[];
 
-  if (segs.length === 1) {
-    return { ...base, page: pageNum };
+  if (
+    segs[0]!.toLowerCase() === "plugin" &&
+    segs.length >= 2 &&
+    segs[1] !== "desc" &&
+    !segs[1]!.match(/^x\d+x$/) &&
+    Number.isNaN(parseInt(segs[1]!, 10))
+  ) {
+    rootSegs = segs.slice(0, 2);
+    tail = segs.slice(2);
+  } else {
+    rootSegs = segs.slice(0, 1);
+    tail = segs.slice(1);
   }
 
-  const beforePage = segs[segs.length - 2]!;
-  if (beforePage === "desc") {
-    const rootSegs = segs.slice(0, -2);
-    const rootStr = rootSegs.length ? rootSegs.join("/") : "all";
-    return {
-      filter: parseFilter(rootStr),
-      sort: "desc",
-      page: pageNum,
-    };
+  if (tail.length === 0) {
+    return { ...base, filter: parseFilter(rootSegs.join("/")) };
   }
 
-  const rootSegs = segs.slice(0, -1);
-  const rootStr = rootSegs.length ? rootSegs.join("/") : "all";
+  const { sort, pageSize, page } = parseTail(tail);
   return {
-    filter: parseFilter(rootStr),
-    sort: "asc",
-    page: pageNum,
+    filter: parseFilter(rootSegs.join("/")),
+    sort,
+    page,
+    pageSize,
   };
 }
 
-/** 仅改排序，保留 filter 与 page */
+/** 仅改排序，保留 filter / pageSize，页码归 1 */
 export function galleryPathWithSortOnly(
   path: string,
   sort: GalleryTimeSort
 ): string {
   const p = parseGalleryPath(path);
-  return buildGalleryPath(p.filter, sort, p.page);
+  return buildGalleryPath(p.filter, sort, p.page, p.pageSize);
 }
 
-/** 画廊「全部 / 设置过壁纸」等简单过滤：改 filter，保留 sort，页码回到 1 */
+/** 画廊「全部 / 设置过壁纸」等简单过滤：改 filter，保留 sort / pageSize，页码回到 1 */
 export function galleryPathWithFilterOnly(
   path: string,
   newFilter: GalleryFilter
 ): string {
   const p = parseGalleryPath(path);
   const sort: GalleryStoredSort = p.sort === "desc" ? "desc" : "asc";
-  return buildGalleryPath(newFilter, sort, 1);
+  return buildGalleryPath(newFilter, sort, 1, p.pageSize);
 }
 
 export const DEFAULT_GALLERY_PATH = buildGalleryPath(

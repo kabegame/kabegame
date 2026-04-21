@@ -9,7 +9,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = defineProps<{
   /** 传入时替换主提示（用于壁纸顺序空状态等）；不传则使用默认 emptyStateTip */
@@ -17,11 +17,12 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
+const uiStore = useUiStore();
 
 const primaryText = computed(() => props.primaryTip ?? t("common.emptyStateTip"));
 
 /** 自定义主文案时不显示第二行提示，保持与默认两行文案总高度接近时可单独传 primaryTip */
-const showSecondLine = computed(() => !props.primaryTip && !IS_ANDROID);
+const showSecondLine = computed(() => !props.primaryTip && !uiStore.isCompact);
 </script>
 
 <style scoped lang="scss">

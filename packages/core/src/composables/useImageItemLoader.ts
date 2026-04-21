@@ -8,6 +8,8 @@ import {
   type CachedImageState,
 } from "./useImageStateCache";
 import { isVideoMediaType } from "../utils/mediaMime";
+import { storeToRefs } from "pinia";
+import { useUiStore } from "../stores/ui";
 
 type UrlKind = "thumbnail" | "original";
 
@@ -58,6 +60,8 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
   const originalLoaded = ref(false);
   /** 桌面双图：缩略图加载失败（仍显示原图层） */
   const thumbnailLoadFailed = ref(false);
+
+  const { isCompact } = storeToRefs(useUiStore());
 
   const urlPlan = computed(() => {
     const image = options.image.value;

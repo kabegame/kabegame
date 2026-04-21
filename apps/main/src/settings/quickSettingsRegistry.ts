@@ -2,7 +2,7 @@ import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import type { QuickSettingsPageId } from "@/stores/quickSettingsDrawer";
 import type { QuickSettingGroup, QuickSettingItem } from "@kabegame/core/components/settings/quick-settings-registry-types";
-import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
+import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_WEB, IS_WINDOWS } from "@kabegame/core/env";
 
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
@@ -159,7 +159,7 @@ export function useQuickSettingsGroups() {
           },
           pages: ["autoconfigs"],
         },
-        ...(!IS_ANDROID ? [{
+        ...(!IS_ANDROID && !IS_WEB ? [{
           key: "defaultDownloadDir",
           label: t("settings.defaultDownloadDir"),
           description: t("settings.defaultDownloadDirDesc"),
@@ -168,8 +168,8 @@ export function useQuickSettingsGroups() {
         } as QuickSettingItem<QuickSettingsPageId>] : []),
       ],
     },
-    {
-      id: "wallpaper",
+    ...(IS_WEB ? [] : [{
+      id: "wallpaper" as const,
       title: t("settings.quickWallpaper"),
       items: [
         {
@@ -178,7 +178,7 @@ export function useQuickSettingsGroups() {
           description: t("settings.wallpaperRotationEnabledDesc"),
           comp: WallpaperRotationEnabledSetting,
           pages: ["gallery", "albumdetail", "albums"],
-        },
+        } as QuickSettingItem<QuickSettingsPageId>,
         {
           key: "wallpaperRotationIntervalMinutes",
           label: t("settings.wallpaperRotationInterval"),
@@ -193,7 +193,7 @@ export function useQuickSettingsGroups() {
             step: 10,
           },
           pages: ["gallery", "albumdetail", "albums"],
-        },
+        } as QuickSettingItem<QuickSettingsPageId>,
         {
           key: "wallpaperRotationMode",
           label: t("settings.wallpaperRotationMode"),
@@ -209,7 +209,7 @@ export function useQuickSettingsGroups() {
             ],
           },
           pages: ["gallery", "albumdetail", "albums"],
-        },
+        } as QuickSettingItem<QuickSettingsPageId>,
         ...(IS_WINDOWS || IS_LINUX || IS_MACOS ? [{
           key: "wallpaperStyle",
           label: t("settings.wallpaperStyle"),
@@ -239,12 +239,12 @@ export function useQuickSettingsGroups() {
           pages: [],
         } as QuickSettingItem<QuickSettingsPageId>] : []),
       ],
-    },
+    }]),
     {
       id: "app",
       title: t("settings.quickApp"),
       items: [
-        ...(!IS_ANDROID ? [{
+        ...(!IS_ANDROID && !IS_WEB ? [{
           key: "autoLaunch",
           label: t("settings.autoLaunch"),
           description: t("settings.autoLaunchDesc"),

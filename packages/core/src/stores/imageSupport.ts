@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../api";
 import type { ImageFormat, ImageSupportResult } from "@kabegame/image-type";
 import "../vendor/modernizr.js";
 

@@ -176,15 +176,6 @@ pub async fn is_plasma_wallpaper_plugin_installed() -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn update_image_dimensions(
-    image_id: String,
-    width: u32,
-    height: u32,
-) -> Result<(), String> {
-    Storage::global().update_image_dimensions(&image_id, width, height)
-}
-
-#[tauri::command]
 #[cfg(not(target_os = "android"))]
 pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
     let app_data_dir = kabegame_core::app_paths::AppPaths::global()

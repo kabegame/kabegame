@@ -65,16 +65,6 @@ pub fn get_gallery_image_object_position() -> String {
 }
 
 #[tauri::command]
-pub fn get_gallery_grid_columns() -> u32 {
-    Settings::global().get_gallery_grid_columns()
-}
-
-#[tauri::command]
-pub fn get_gallery_page_size() -> u32 {
-    Settings::global().get_gallery_page_size()
-}
-
-#[tauri::command]
 pub fn get_auto_deduplicate() -> bool {
     Settings::global().get_auto_deduplicate()
 }
@@ -287,16 +277,6 @@ pub fn set_gallery_image_aspect_ratio(aspect_ratio: Option<String>) -> Result<()
 #[tauri::command]
 pub fn set_gallery_image_object_position(position: String) -> Result<(), String> {
     Settings::global().set_gallery_image_object_position(position)
-}
-
-#[tauri::command]
-pub fn set_gallery_grid_columns(columns: u32) -> Result<(), String> {
-    Settings::global().set_gallery_grid_columns(columns)
-}
-
-#[tauri::command]
-pub fn set_gallery_page_size(size: u32) -> Result<(), String> {
-    Settings::global().set_gallery_page_size(size)
 }
 
 #[tauri::command]

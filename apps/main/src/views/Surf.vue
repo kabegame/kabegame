@@ -209,13 +209,13 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from "vue";
 import { useRouter } from "vue-router";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ElDialog } from "element-plus";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
-import { IS_ANDROID, IS_LINUX } from "@kabegame/core/env";
+import { IS_ANDROID, IS_LINUX, IS_WEB } from "@kabegame/core/env";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import { usePluginStore } from "@/stores/plugins";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
@@ -229,7 +229,9 @@ const surfStore = useSurfStore();
 const pluginStore = usePluginStore();
 const { pluginName } = usePluginManifestI18n();
 const surfHeaderShowIds = computed(() =>
-  IS_ANDROID ? [HeaderFeatureId.Help] : [HeaderFeatureId.Help, HeaderFeatureId.OpenCrawlerWebview]
+  IS_ANDROID || IS_WEB
+    ? [HeaderFeatureId.Help]
+    : [HeaderFeatureId.Help, HeaderFeatureId.OpenCrawlerWebview]
 );
 
 const surfHelpVisible = ref(false);

@@ -1,5 +1,5 @@
 import { ref, onMounted } from "vue";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../api";
 
 /**
  * 后端状态管理 composable

@@ -12,7 +12,8 @@ import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { useUiStore } from "@kabegame/core/stores/ui";
+import { storeToRefs } from "pinia";
 
 const { t } = useI18n();
 
@@ -24,9 +25,11 @@ const emit = defineEmits<{
   'manage-sources': [];
 }>();
 
+const { isCompact } = storeToRefs(useUiStore());
+
 // 计算显示和折叠的feature ID
 const showIds = computed(() => {
-  if (IS_ANDROID) {
+  if (isCompact.value) {
     return [];
   } else {
     return [HeaderFeatureId.Refresh, HeaderFeatureId.ImportSource, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings];
@@ -34,7 +37,7 @@ const showIds = computed(() => {
 });
 
 const foldIds = computed(() => {
-  return IS_ANDROID ? [HeaderFeatureId.Refresh, HeaderFeatureId.ImportSource, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings, HeaderFeatureId.ManageSources] : [];
+  return isCompact.value ? [HeaderFeatureId.Refresh, HeaderFeatureId.ImportSource, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings, HeaderFeatureId.ManageSources] : [];
 });
 
 // 处理action事件

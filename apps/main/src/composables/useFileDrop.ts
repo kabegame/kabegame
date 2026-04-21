@@ -1,7 +1,7 @@
 import { ref, Ref, onUnmounted } from "vue";
 import { ElMessage } from "element-plus";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import FileDropOverlay from "@/components/FileDropOverlay.vue";
 import ImportConfirmDialog from "@/components/import/ImportConfirmDialog.vue";
 import { useTaskDrawerStore } from "@/stores/taskDrawer";

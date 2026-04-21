@@ -1,6 +1,6 @@
 <template>
   <AndroidPickerSelect
-    v-if="IS_ANDROID"
+    v-if="isCompact"
     :model-value="modelValue ?? null"
     :options="androidOptions"
     :title="pickerTitleResolved"
@@ -30,7 +30,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { IS_ANDROID } from "../../env";
+import { useUiStore } from "../../stores/ui";
 import AndroidPickerSelect from "../AndroidPickerSelect.vue";
 import type { AlbumTreeNode } from "../../types/album";
 import { flattenAlbumTreeForAndroidPicker } from "../../utils/albumTree";
@@ -57,6 +57,7 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+const isCompact = computed(() => useUiStore().isCompact);
 
 const pickerTitleResolved = computed(
   () => props.pickerTitle ?? props.placeholder ?? t("common.selectPlaceholder"),

@@ -15,7 +15,8 @@ import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { useUiStore } from "@kabegame/core/stores/ui";
+import { storeToRefs } from "pinia";
 
 interface Props {
   taskName?: string;
@@ -44,9 +45,11 @@ const emit = defineEmits<{
   back: [];
 }>();
 
+const { isCompact } = storeToRefs(useUiStore());
+
 // 计算显示和折叠的feature ID
 const showIds = computed(() => {
-  if (IS_ANDROID) {
+  if (isCompact.value) {
     return [HeaderFeatureId.Refresh, HeaderFeatureId.TaskDrawer];
   } else {
     const ids = [
@@ -65,7 +68,7 @@ const showIds = computed(() => {
 });
 
 const foldIds = computed(() => {
-  if (!IS_ANDROID) return [];
+  if (!isCompact.value) return [];
   const ids = [
     HeaderFeatureId.DeleteTask,
     HeaderFeatureId.AddToAlbum,

@@ -1,6 +1,6 @@
 <template>
   <!-- Android：自研全宽抽屉 -->
-  <AndroidDrawer v-if="IS_ANDROID" v-model="visible" show-close-button class="crawl-dialog">
+  <AndroidDrawer v-if="uiStore.isCompact" v-model="visible" show-close-button class="crawl-dialog">
     <template #header>
       <div class="crawl-drawer-header">
         <h3>{{ $t("plugins.startCollect") }}</h3>
@@ -50,7 +50,7 @@
           </div>
         </div>
       </el-form-item>
-      <el-form-item v-if="!IS_ANDROID" :label="$t('plugins.outputDir')">
+      <el-form-item v-if="!uiStore.isCompact" :label="$t('plugins.outputDir')">
         <el-input v-model="form.outputDir" :placeholder="$t('plugins.outputDirPlaceholder')" clearable>
           <template #append>
             <el-button @click="selectOutputDir">
@@ -240,7 +240,7 @@
           </div>
         </div>
       </el-form-item>
-      <el-form-item v-if="!IS_ANDROID" :label="$t('plugins.outputDir')">
+      <el-form-item v-if="!uiStore.isCompact" :label="$t('plugins.outputDir')">
         <el-input v-model="form.outputDir" :placeholder="$t('plugins.outputDirPlaceholder')" clearable>
           <template #append>
             <el-button @click="selectOutputDir">
@@ -405,8 +405,9 @@ import { useAlbumStore } from "@/stores/albums";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import {
   matchesPluginVarWhen,
   filterVarOptionsByWhen,
@@ -415,6 +416,7 @@ import {
 import { isPluginMinAppNotSatisfied } from "@/composables/pluginMinAppVersionGate";
 import { useApp } from "@/stores/app";
 import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 interface Props {
   modelValue: boolean;
@@ -448,7 +450,8 @@ function goImportRecommendedPresets() {
 }
 const pluginStore = usePluginStore();
 const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconDataUrl(pluginId);
-const { version: crawlDialogAppVersion } = storeToRefs(useApp());
+const appStore = useApp();
+const { version: crawlDialogAppVersion } = storeToRefs(appStore);
 const { pluginName } = usePluginManifestI18n();
 const { varDisplayName, varDescripts, optionDisplayName, resolveConfigText, locale } = usePluginConfigI18n();
 
@@ -466,6 +469,7 @@ function optionsForVar(varDef: PluginVarDef): (string | { name: string; variable
   );
 }
 const albumStore = useAlbumStore();
+const uiStore = useUiStore();
 
 type HttpHeaderRow = { key: string; value: string };
 const httpHeaderRows = ref<HttpHeaderRow[]>([]);
@@ -900,6 +904,10 @@ const handleCreateOutputAlbum = async () => {
 };
 
 const handleStartCrawl = async () => {
+  if (IS_WEB && !appStore.isSuper) {
+    await guardDesktopOnly("crawl");
+    return;
+  }
   try {
     if (!form.value.pluginId) {
       ElMessage.warning(t("plugins.selectSourcePlaceholder"));

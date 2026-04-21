@@ -30,7 +30,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { FolderOpened } from "@element-plus/icons-vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../../api";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettingKeyState } from "../../../composables/useSettingKeyState";
 

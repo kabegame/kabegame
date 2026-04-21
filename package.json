@@ -19,6 +19,8 @@
     "//": "以下命令为构建前端的命令，通过 bun b 调用不要直接调用因为没有设置相关环境变量",
     "build-main": "bun -b --cwd apps/main build",
     "set-version": "bun scripts/set-version.ts",
+    "docs:dev": "bun --cwd apps/docs dev",
+    "docs:build": "bun --cwd apps/docs build",
     "build:ffmpeg": "bash scripts/build-ffmpeg.sh",
     "prepare": "husky"
   },

@@ -11,8 +11,8 @@ import { useQuickSettingsDrawerStore, getQuickSettingsDrawerTitleKey } from "@/s
 import { useSettingsStore, type AppSettingKey } from "@kabegame/core/stores/settings";
 import CoreQuickSettingsDrawer from "@kabegame/core/components/settings/QuickSettingsDrawer.vue";
 import { useQuickSettingsGroups } from "@/settings/quickSettingsRegistry";
-import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 const { t } = useI18n();
 const drawer = useQuickSettingsDrawerStore();
@@ -25,7 +25,9 @@ const quickSettingsOpen = computed({
 });
 useModalBack(quickSettingsOpen);
 
-const drawerSize = computed(() => IS_ANDROID ? "70%" : "420px");
+const uiStore = useUiStore();
+
+const drawerSize = computed(() => uiStore.isCompact ? "70%" : "420px");
 
 const drawerTitle = computed(() => t(getQuickSettingsDrawerTitleKey(drawer.pageId)));
 

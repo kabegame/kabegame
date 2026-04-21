@@ -6,7 +6,7 @@
   </PageHeader>
 
   <!-- 桌面：过滤（全部 / 壁纸 / 按时间嵌套 / 按插件）+ 排序（任意根路径），置于标题与分页器之间 -->
-  <div v-if="!IS_ANDROID" class="gallery-browse-toolbar">
+  <div v-if="!uiStore.isCompact" class="gallery-browse-toolbar">
     <el-dropdown v-if="showGalleryFilterFold" trigger="click" @command="onDesktopFilterCommand">
       <el-button class="gallery-browse-btn">
         <el-icon class="gallery-browse-icon">
@@ -185,7 +185,7 @@
   </div>
 
   <!-- Android：fold 中「过滤」「排序」弹出的 van-picker -->
-  <Teleport v-if="IS_ANDROID" to="body">
+  <Teleport v-if="uiStore.isCompact" to="body">
     <van-popup v-model:show="showFilterPicker" position="bottom" round>
       <van-picker
         v-model="filterPickerSelected"
@@ -262,11 +262,9 @@ import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
 import { ArrowDown, ArrowRight, Filter, Histogram, Sort } from "@element-plus/icons-vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import {
   filterDateSegment,
@@ -293,6 +291,7 @@ import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
 import { storeToRefs } from "pinia";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 interface Props {
   isLoadingAll?: boolean;
@@ -337,6 +336,8 @@ const pluginStore = usePluginStore();
 const isWallpaperOrderBrowse = computed(
   () => props.filter.type === "wallpaper-order"
 );
+
+const uiStore = useUiStore();
 
 const currentPluginId = computed(() => filterPluginId(props.filter));
 
@@ -481,14 +482,13 @@ function onDesktopSortCommand(cmd: string) {
   onSortOrderChange(cmd);
 }
 
-const settingsStore = useSettingsStore();
 const pageSizeOptions = [100, 500, 1000] as const;
 const pageSizeLabel = computed(() => String(props.pageSize));
 
 async function onDesktopPageSizeCommand(cmd: string) {
   const n = Number(cmd);
   if (n !== 100 && n !== 500 && n !== 1000) return;
-  await settingsStore.save("galleryPageSize", n);
+  emit("update:pageSize", n);
 }
 
 // Android：fold 中过滤 / 排序弹出的 picker
@@ -673,7 +673,7 @@ async function onPageSizePickerConfirm() {
   const v = pageSizePickerSelected.value[0];
   const n = Number(v);
   if (n !== 100 && n !== 500 && n !== 1000) return;
-  await settingsStore.save("galleryPageSize", n);
+  emit("update:pageSize", n);
 }
 
 const totalCountText = computed(() => {
@@ -693,10 +693,11 @@ const emit = defineEmits<{
   "update:filter": [value: GalleryFilter];
   "update:sort": [value: GalleryTimeSort];
   "update:selectedRange": [value: [string, string] | null];
+  "update:pageSize": [value: number];
 }>();
 
 const showIds = computed(() => {
-  if (IS_ANDROID) {
+  if (uiStore.isCompact) {
     return [HeaderFeatureId.Collect, HeaderFeatureId.TaskDrawer];
   }
   return [
@@ -711,7 +712,7 @@ const showIds = computed(() => {
 });
 
 const foldIds = computed(() => {
-  if (!IS_ANDROID) return [HeaderFeatureId.ToggleShowHidden];
+  if (!uiStore.isCompact) return [HeaderFeatureId.ToggleShowHidden];
   const ids: HeaderFeatureId[] = [HeaderFeatureId.FailedImages];
   if (showGalleryFilterFold.value) {
     ids.push(HeaderFeatureId.GalleryFilter);
@@ -739,7 +740,7 @@ watch(
       HeaderFeatureId.ToggleShowHidden,
       galleryHide.value ? t("header.showHidden") : t("header.hideHidden")
     );
-    if (!IS_ANDROID) return;
+    if (!uiStore.isCompact) return;
     headerStore.setFoldLabel(HeaderFeatureId.FailedImages, failedCountFoldLabel.value);
     if (showGalleryFilterFold.value) {
       headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, filterFoldLabel.value);
@@ -756,7 +757,7 @@ watch(
 );
 onUnmounted(() => {
   headerStore.setFoldLabel(HeaderFeatureId.ToggleShowHidden, undefined);
-  if (!IS_ANDROID) return;
+  if (!uiStore.isCompact) return;
   headerStore.setFoldLabel(HeaderFeatureId.FailedImages, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.GallerySort, undefined);

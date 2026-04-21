@@ -4,6 +4,7 @@
     :title="$t('autoConfig.missedRuns.title')"
     width="560px"
     :close-on-click-modal="false"
+    :before-close="handleBeforeClose"
   >
     <div class="missed-runs-desc">
       {{ $t("autoConfig.missedRuns.desc") }}
@@ -50,6 +51,11 @@ const visible = computed({
 });
 
 useModalBack(visible);
+
+const handleBeforeClose = (done: () => void) => {
+  emit("dismiss");
+  done();
+};
 
 const modeText = (mode: MissedRunItem["scheduleMode"]) => {
   if (mode === "interval") return t("autoConfig.modeInterval");

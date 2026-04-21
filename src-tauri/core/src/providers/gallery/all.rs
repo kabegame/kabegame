@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider};
-use crate::providers::shared::{query_page::QueryPageProvider, sort::SortProvider};
+use crate::providers::shared::{page_size::PageSizeGroupProvider, sort::SortProvider};
 use crate::storage::gallery::ImageQuery;
 
 /// Gallery `all/`：全部图片，按抓取时间正序；`desc/` 翻转。
@@ -21,7 +21,7 @@ impl Provider for GalleryAllProvider {
         let mut children = vec![
             ChildEntry::new("desc", Arc::new(SortProvider::new(Arc::new(GalleryAllProvider)))),
         ];
-        children.extend(QueryPageProvider::root().list_children(composed)?);
+        children.extend(PageSizeGroupProvider.list_children(composed)?);
         Ok(children)
     }
 
@@ -29,11 +29,11 @@ impl Provider for GalleryAllProvider {
         if name == "desc" {
             return Some(Arc::new(SortProvider::new(Arc::new(GalleryAllProvider))));
         }
-        QueryPageProvider::root().get_child(name, composed)
+        PageSizeGroupProvider.get_child(name, composed)
     }
 
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
-        QueryPageProvider::root().list_images(composed)
+        PageSizeGroupProvider.list_images(composed)
     }
 }
 
@@ -54,7 +54,7 @@ impl Provider for GalleryWallpaperOrderProvider {
                 Arc::new(SortProvider::new(Arc::new(GalleryWallpaperOrderProvider))),
             ),
         ];
-        children.extend(QueryPageProvider::root().list_children(composed)?);
+        children.extend(PageSizeGroupProvider.list_children(composed)?);
         Ok(children)
     }
 
@@ -62,10 +62,10 @@ impl Provider for GalleryWallpaperOrderProvider {
         if name == "desc" {
             return Some(Arc::new(SortProvider::new(Arc::new(GalleryWallpaperOrderProvider))));
         }
-        QueryPageProvider::root().get_child(name, composed)
+        PageSizeGroupProvider.get_child(name, composed)
     }
 
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
-        QueryPageProvider::root().list_images(composed)
+        PageSizeGroupProvider.list_images(composed)
     }
 }

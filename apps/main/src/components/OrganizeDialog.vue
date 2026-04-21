@@ -1,6 +1,6 @@
 <template>
     <!-- Android：自研全宽抽屉，不显示右上角关闭按钮，关闭靠遮罩/返回 -->
-    <AndroidDrawer v-if="IS_ANDROID" v-model="visible" show-close-button class="organize-dialog">
+    <AndroidDrawer v-if="uiStore.isCompact" v-model="visible" show-close-button class="organize-dialog">
         <template #header>
             <div class="organize-drawer-header">
                 <h3>{{ $t('gallery.organizeGallery') }}</h3>
@@ -147,9 +147,11 @@
 
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { useApp } from "@/stores/app";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 interface Props {
     modelValue: boolean;
@@ -179,6 +181,8 @@ const emit = defineEmits<{
 const visible = ref(false);
 const totalCount = ref(0);
 const rangeValue = ref<[number, number]>([0, 0]);
+const appStore = useApp();
+const uiStore = useUiStore();
 
 const options = reactive({
     dedupe: true, // 默认开启去重
@@ -239,7 +243,11 @@ watch(visible, (newVal) => {
     emit("update:modelValue", newVal);
 });
 
-const handleConfirm = () => {
+const handleConfirm = async () => {
+    if (!appStore.isSuper) {
+        await guardDesktopOnly("organize");
+        return;
+    }
     const payload: OrganizeOptions = {
         dedupe: options.dedupe,
         removeMissing: options.removeMissing,

@@ -180,17 +180,6 @@ pub async fn import_plugin_from_zip(zip_path: String) -> Result<serde_json::Valu
 }
 
 #[tauri::command]
-pub async fn get_plugin_image_for_detail(
-    plugin_id: String,
-    image_path: String,
-    source_id: Option<String>,
-) -> Result<Vec<u8>, String> {
-    PluginManager::global()
-        .load_plugin_image_for_detail(&plugin_id, &image_path, source_id.as_deref())
-        .await
-}
-
-#[tauri::command]
 pub async fn get_remote_plugin_icon(
     download_url: String,
     source_id: Option<String>,
@@ -199,13 +188,4 @@ pub async fn get_remote_plugin_icon(
     PluginManager::global()
         .fetch_remote_plugin_icon_v2(&download_url, source_id.as_deref(), plugin_id.as_deref())
         .await
-}
-
-#[tauri::command]
-pub async fn get_plugin_image_from_zip(
-    zip_path: String,
-    image_path: String,
-) -> Result<Vec<u8>, String> {
-    let path = std::path::PathBuf::from(&zip_path);
-    PluginManager::global().read_plugin_image(&path, &image_path)
 }

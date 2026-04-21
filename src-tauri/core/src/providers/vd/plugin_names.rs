@@ -13,7 +13,7 @@ pub fn plugin_display_name_from_manifest(plugin_id: &str) -> Option<String> {
         let name = pm.get_cached_plugin_display_name_sync(pid)?;
         if name.is_empty() { None } else { Some(name) }
     }
-    #[cfg(any(kabegame_mode = "light", target_os = "android"))]
+    #[cfg(any(kabegame_mode = "light", kabegame_mode = "web", target_os = "android"))]
     {
         None
     }

@@ -1,5 +1,5 @@
 import { ref, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { IS_LINUX } from "@kabegame/core/env";
 
 export type DesktopEnv = "plasma" | "gnome" | "unknown";

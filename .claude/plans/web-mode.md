@@ -78,19 +78,42 @@
 
 ---
 
-### Phase 4 — 前端适配（ipc.ts + codemod + IS_WEB gate + 响应式重构）
+### Phase 4 — 前端 RPC 统一层 + Web 导入 + UI 门控 [已完成]
 
-**目标**：前端代码在 web mode 下通过 WebSocket 替代 Tauri IPC，本地导入改为 Web 上传，`IS_ANDROID` 布局分支改为 CSS 响应式。
+**目标**：前端所有 `invoke` / `listen` 走统一 `@/api/rpc` 抽象；web mode 本地导入改为 HTTP 上传；web mode 不可用 UI 入口隐藏。响应式布局改造延后到 Phase 4.5。
 
 **变更列表：**
-- 新建 `apps/main/src/api/web-client.ts`：WebSocket 单例 + pending request map，导出 `invoke` / `listen`
-- 新建 `apps/main/src/api/ipc.ts`：根据 `import.meta.env.VITE_KABEGAME_MODE` 选择 tauri 或 web 实现
-- **codemod**：批量替换 `@tauri-apps/api/core` invoke → `@/api/ipc`（约 221 处），`@tauri-apps/api/event` listen → `@/api/ipc` listen
-- **LocalImportDialog.vue**：web mode 下替换为 `<input type="file" multiple>` Web 上传界面，POST 到服务端接收存入图库（后端新增 `/api/import` endpoint）
-- **IS_ANDROID 布局响应式化**：梳理所有 `v-if="IS_ANDROID"` / `v-if="!IS_ANDROID"` 用法：
-  - **样式分支**（侧边栏宽度、列数、紧凑布局等）→ 改为 CSS 媒体查询 / UnoCSS viewport 响应式
-  - **功能分支**（分享、选择器、壁纸等 native 功能）→ 保留 platform flag，web mode 下隐藏
-- web mode 不支持的 UI 入口（虚拟盘、壁纸设置）通过 `VITE_KABEGAME_MODE === 'web'` 条件隐藏
+- 新建 `packages/core/src/env.ts` 的 `IS_WEB` + `vite.config.pub.ts` 的 `__WEB__` define
+- 新建 `apps/main/.env.development` / `.env.production`（`VITE_API_ROOT`）
+- 新建 `apps/main/src/api/{rpc,tauri-client,web-client,dialog}.ts`：façade 按 `IS_WEB` 选择实现，导出 `invoke` / `listen` / `emit`，签名与 Tauri 一致；`web-client.ts` 用 `fetch POST /rpc` + `EventSource /events`，单例 EventSource，订阅 `superMode` 变化时 tear down 重连
+- 新建 `apps/main/src/components/SuperModeToggle.vue`（左下角浮动开关，仅 `IS_WEB` 挂载）
+- `stores/app.ts`：新增 `superMode` 响应式状态，web 下 localStorage 持久化默认 false；桌面/Android 固定 true
+- 一次性 codemod `scripts/codemod-rpc.ts`（已删除）：批量替换 40 个文件共 49 处 `@tauri-apps/api/core` / `@tauri-apps/api/event` import 到 `@/api/rpc`
+- `LocalImportDialog.vue`：web mode 下 `<input type="file">` + FormData 到 `POST /api/import`；桌面路径不变
+- 新建 `src-tauri/app-main/src/web_import.rs`：`POST /api/import`（multipart）→ 写入 `cache_dir/web-upload/<uuid>/` → 走 `TaskScheduler::submit_task` 的 local-import 路径；附启动时 `gc_stale_uploads()` 清理 >24h 残留
+- `src-tauri/app-main/Cargo.toml`：`axum` 启用 `multipart` feature
+- `src-tauri/app-main/src/web_entry.rs`：合并 `api_routes()`，启动时 spawn gc 任务
+- `apps/main/vite.config.ts`：web mode 附加 `server.proxy`（`/rpc`、`/events`、`/api`、`/file`、`/thumbnail`、`/proxy`、`/mcp` → `http://localhost:7490`）
+- UI 门控（`IS_WEB` 条件隐藏）：
+  - `views/Settings.vue`：autoLaunch / albumDrive / clearUserData / autoOpenWebView / devWebView / 整个壁纸 tab
+  - `settings/quickSettingsRegistry.ts`：defaultDownloadDir、autoLaunch、整个 wallpaper group
+  - `views/Surf.vue`：`OpenCrawlerWebview` 在 web 下移除
+  - `views/Albums.vue`：`albumDriveEnabled` 在 web 下固定 false
+  - `composables/useWindowEvents.ts`、`utils/openLocalImage.ts`：入口处 `if (IS_WEB) return`
+
+**懒扩展策略**：Phase 3 的 10 个 RPC 命令覆盖首屏；剩余命令（`batch_delete_images`、`copy_image_to_clipboard`、`surf_*`、`wallpaper_*` 等）在实际点到报错时再补到 `web/dispatch.rs`。
+
+**后续补齐（2026-04-20）**：新增 Album/Image/Task/Plugin 写操作 14 个 method — `add_album`、`add_images_to_album`、`add_task_images_to_album`、`remove_images_from_album`、`update_album_images_order`、`remove_image`、`add_task`、`update_task`、`clear_finished_tasks`、`copy_run_config`、`get_run_config`、`get_missed_runs`、`add_plugin_source`、`preview_import_plugin`、`preview_store_install`。写操作全部 `requires_super: true`。范围不含 settings/surf/wallpaper/organize/`set_supported_image_formats`/`clear_user_data`（web 下隐藏或不支持）。
+
+---
+
+### Phase 4.5 — `IS_ANDROID` 布局响应式化 [已完成]
+
+**目标**：梳理所有 `v-if="IS_ANDROID"` / `v-if="!IS_ANDROID"` 用法，拆分"样式分支"与"功能分支"：
+- **样式分支**（侧边栏宽度、列数、紧凑布局）→ 改为 CSS 媒体查询 / UnoCSS viewport 响应式，使 web mode 在小屏浏览器或缩窄桌面窗口时也能自动切紧凑布局
+- **功能分支**（分享、选择器、壁纸等 native 功能）→ 保留 platform flag，web mode 下继续用 `IS_WEB` 隐藏
+
+此阶段不触碰 RPC 层，可独立推进。
 
 ---
 
@@ -123,6 +146,7 @@
 - [x] Phase 1：Cargo feature 门控 + web 二进制骨架 (`/__ping` on 7490)
 - [x] Phase 2：`/file` + `/mcp` 路由挂入 web Router；Vue 静态资产集成；构建系统清理
 - [x] Phase 3：SSE `/events` + HTTP `POST /rpc`；10 bootstrap 命令；EventBroadcaster 推送；super 鉴权
-- [ ] Phase 4：`ipc.ts` 统一出口 + codemod (221 invoke) + LocalImportDialog Web 上传 + IS_ANDROID 布局响应式化
+- [x] Phase 4：`rpc.ts` 统一出口 + codemod (40 文件 49 处 import) + LocalImportDialog Web 上传 + `POST /api/import` + super 切换 + UI 门控
+- [x] Phase 4.5：`IS_ANDROID` 布局响应式化（样式分支改 CSS，功能分支保留 platform flag）
 - [ ] Phase 5：Playwright Node sidecar 替代 WebView JS 爬虫后端
 - [ ] Phase 6：dev 双通道 + nginx 文档 + E2E 回归

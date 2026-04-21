@@ -9,7 +9,7 @@ import { useI18n } from "@kabegame/i18n";
 import { storeToRefs } from "pinia";
 import { Delete, FolderOpened, Picture, Edit } from "@element-plus/icons-vue";
 import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
-import { useAlbumStore } from "@/stores/albums";
+import { useAlbumStore, FAVORITE_ALBUM_ID } from "@/stores/albums";
 
 interface Props {
   visible: boolean;
@@ -22,8 +22,6 @@ interface Props {
 }
 
 const albumStore = useAlbumStore();
-const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
-
 const props = defineProps<Props>();
 const { t } = useI18n();
 
@@ -75,7 +73,7 @@ const menuItems = computed<MenuItem[]>(() => {
   });
 
   // 删除
-  if (props.albumId !== FAVORITE_ALBUM_ID.value) {
+  if (props.albumId !== FAVORITE_ALBUM_ID) {
     items.push({
       key: "delete",
       type: "item",

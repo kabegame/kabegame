@@ -9,7 +9,7 @@ use kabegame_i18n::vd_display_name;
 
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider, ProviderMeta};
 use crate::providers::shared::album::AlbumsProvider;
-use crate::providers::shared::query_page::QueryPageProvider;
+use crate::providers::shared::page_size::{PageSizeProvider, DEFAULT_PAGE_SIZE};
 use crate::providers::vd::sub_album_gate::VdSubAlbumGateProvider;
 use crate::storage::gallery::ImageQuery;
 use crate::storage::{Storage, HIDDEN_ALBUM_ID};
@@ -82,7 +82,7 @@ impl Provider for VdAlbumEntryProvider {
                 }),
             ));
         }
-        out.extend(QueryPageProvider::root().list_children(composed)?);
+        out.extend(PageSizeProvider { page_size: DEFAULT_PAGE_SIZE }.list_children(composed)?);
         Ok(out)
     }
 
@@ -92,11 +92,11 @@ impl Provider for VdAlbumEntryProvider {
                 parent_album_id: self.album_id.clone(),
             }));
         }
-        QueryPageProvider::root().get_child(name, composed)
+        PageSizeProvider { page_size: DEFAULT_PAGE_SIZE }.get_child(name, composed)
     }
 
     fn list_images(&self, composed: &ImageQuery) -> Result<Vec<ImageEntry>, String> {
-        QueryPageProvider::root().list_images(composed)
+        PageSizeProvider { page_size: DEFAULT_PAGE_SIZE }.list_images(composed)
     }
 
     fn get_meta(&self) -> Option<ProviderMeta> {

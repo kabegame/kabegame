@@ -1,16 +1,16 @@
 <template>
-    <div v-if="showPaginator" class="gallery-big-paginator" :class="{ 'is-sticky': isSticky, 'is-android': IS_ANDROID }">
+    <div v-if="showPaginator" class="gallery-big-paginator" :class="{ 'is-sticky': isSticky, 'is-android': isCompact }">
         <div class="paginator-content">
             <button class="nav-button prev" :disabled="currentBigPage === 1" @click="handlePrevPage">
                 <el-icon>
                     <ArrowLeft />
                 </el-icon>
-                <span v-if="!IS_ANDROID">{{ $t('gallery.prevPage') }}</span>
+                <span v-if="!isCompact">{{ $t('gallery.prevPage') }}</span>
             </button>
 
             <div class="paginator-info">
                 <!-- 桌面：输入框 + 斜杠 + 总页数 -->
-                <template v-if="!IS_ANDROID">
+                <template v-if="!isCompact">
                     <div class="page-number">
                         <div class="part part-current">
                             <el-input-number ref="pageInputRef" v-model="inputPage" :min="1" :max="totalBigPages" :precision="0"
@@ -35,7 +35,7 @@
             </div>
 
             <button class="nav-button next" :disabled="currentBigPage === totalBigPages" @click="handleNextPage">
-                <span v-if="!IS_ANDROID">{{ $t('gallery.nextPage') }}</span>
+                <span v-if="!isCompact">{{ $t('gallery.nextPage') }}</span>
                 <el-icon>
                     <ArrowRight />
                 </el-icon>
@@ -43,7 +43,7 @@
         </div>
 
         <!-- Android：页码选择器（Vant Picker）；Teleport 到 body 避免受父级 sticky 影响，从页面最底部弹出 -->
-        <Teleport v-if="IS_ANDROID" to="body">
+        <Teleport v-if="isCompact" to="body">
             <van-popup v-model:show="showPagePicker" position="bottom" round>
                 <van-picker
                     v-model="pickerSelectedValues"
@@ -63,8 +63,9 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
-import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { storeToRefs } from "pinia";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 interface Props {
     totalCount: number;
@@ -86,6 +87,7 @@ const emit = defineEmits<{
 const { t } = useI18n();
 
 const BIG_PAGE_SIZE = computed(() => props.bigPageSize);
+const { isCompact } = storeToRefs(useUiStore());
 
 // 总共有多少大页
 const totalBigPages = computed(() => {

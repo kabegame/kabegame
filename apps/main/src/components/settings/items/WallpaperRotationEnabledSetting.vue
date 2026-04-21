@@ -15,7 +15,7 @@ import { ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { ElMessage } from "element-plus";
 import { Lightning } from "@element-plus/icons-vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_ANDROID } from "@kabegame/core/env";

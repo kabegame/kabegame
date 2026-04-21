@@ -1,6 +1,6 @@
 <template>
   <!-- Android 全屏预览：使用 photoswipe-vue 组件，关闭按钮用组件自带的 -->
-  <PhotoSwipe v-if="IS_ANDROID" ref="pswpRef" v-model:open="previewVisible" v-model:index="previewIndex"
+  <PhotoSwipe v-if="uiStore.isCompact" ref="pswpRef" v-model:open="previewVisible" v-model:index="previewIndex"
     :data-source="pswpDataSource" :loop="true" :zIndex="2000" :close-on-vertical-drag="true"
     :on-vertical-drag="handlePswpVerticalDrag" :on-before-close="handlePswpBeforeClose" @change="handlePswpChange"
     @close="handlePswpClose" @ui-visible-change="handlePswpUiVisibleChange">
@@ -118,6 +118,7 @@ import ImageNotFound from "./ImageNotFound.vue";
 import ImageDetailContent from "./ImageDetailContent.vue";
 import VideoControls from "./VideoControls.vue";
 import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX, IS_LINUX } from "../../env";
+import { useUiStore } from "../../stores/ui";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
@@ -129,6 +130,7 @@ import { fileToUrl, thumbnailToUrl } from "../../httpServer";
 import { isVideoMediaType } from "../../utils/mediaMime";
 
 const { t } = useI18n();
+const uiStore = useUiStore();
 
 const props = withDefaults(defineProps<{
   images: ImageInfo[];
@@ -156,7 +158,7 @@ const previewImageUrl = ref("");
 const previewImagePath = ref("");
 const previewIndex = ref<number>(-1);
 const currentImageId = ref<string | null>(null);
-/** Android：仅图片的索引列表（用于过滤 PhotoSwipe 中的视频，视频改用系统播放器打开） */
+/** 紧凑模式（Android/web 窄屏）：仅图片的索引列表（用于过滤 PhotoSwipe 中的视频，视频改用系统播放器打开） */
 const androidFilteredIndices = computed(() =>
   props.images.map((img, i) => (!isVideoMediaType(img.type) ? i : -1)).filter((i) => i >= 0),
 );
@@ -165,7 +167,7 @@ const androidFilteredIndices = computed(() =>
 const previewImage = computed<ImageInfo | null>(() => {
   const idx = previewIndex.value;
   if (idx < 0) return null;
-  if (IS_ANDROID) {
+  if (uiStore.isCompact) {
     const origIdx = androidFilteredIndices.value[idx];
     if (origIdx == null || origIdx >= props.images.length) return null;
     return props.images[origIdx] ?? null;
@@ -267,7 +269,7 @@ const markPreviewInteracting = () => {
   destroy: panzoomDestroy,
 } = usePanzoomPreview(
   previewVisible,
-  computed(() => !IS_ANDROID),
+  computed(() => !uiStore.isCompact),
   {
     onPanzoomStart: () => notifyPreviewInteracting(true),
     onPanzoomEnd: markPreviewInteracting,
@@ -324,11 +326,11 @@ const isTextInputLike = (target: EventTarget | null) => {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el?.isContentEditable;
 };
 
-/** Android PhotoSwipe：根据当前 images 构建 dataSource 数组（只读 URL）。Android 下过滤掉视频，视频改用系统播放器打开。 */
+/** 紧凑模式 PhotoSwipe：根据当前 images 构建 dataSource 数组（只读 URL）。紧凑模式下过滤掉视频，视频改用系统播放器打开。 */
 const pswpDataSource = computed(() => {
   const fallbackW = 1920;
   const fallbackH = 1080;
-  const source = IS_ANDROID
+  const source = uiStore.isCompact
     ? props.images.filter((img) => !isVideoMediaType(img.type))
     : props.images;
   return source.map((img) => {
@@ -477,7 +479,7 @@ const previewActionContext = computed<ActionContext<ImageInfo>>(() => ({
 }));
 
 const handlePswpActionClose = () => {
-  if (IS_ANDROID) {
+  if (uiStore.isCompact) {
     // 关闭 ActionSheet 时隐藏 PSWP UI（使用 setUiVisible 避免 toggle 语义歧义）
     pswpRef.value?.setUiVisible(false);
   } else {
@@ -491,8 +493,8 @@ const handlePreviewActionCommand = (command: string) => {
     command,
     image: previewImage.value,
   };
-  if (IS_ANDROID) {
-    // On Android, hide PSWP UI after command (except for remove which may close preview)
+  if (uiStore.isCompact) {
+    // 紧凑模式（PhotoSwipe）：hide PSWP UI after command
     // ActionSheet 的 handleClick 会同时 emit command 和 close，所以这里不需要再调用 setUiVisible
     // close 事件会通过 handlePswpActionClose 处理 UI 隐藏
   } else {
@@ -593,9 +595,9 @@ const handlePreviewKeyDown = (event: KeyboardEvent) => {
   }
 };
 
-/** Android 预览关闭后的清理（不调用 pswp.close），避免 destroy 时重复关闭且确保遮罩移除 */
+/** 紧凑模式预览关闭后的清理（不调用 pswp.close），避免 destroy 时重复关闭且确保遮罩移除 */
 function doAndroidPreviewCleanup() {
-  if (!IS_ANDROID) return;
+  if (!uiStore.isCompact) return;
   previewVisible.value = false;
   pswpUiVisible.value = false;
   if (longPressTimer) {
@@ -606,11 +608,10 @@ function doAndroidPreviewCleanup() {
 }
 
 const closePreview = () => {
-  if (IS_ANDROID) {
+  if (uiStore.isCompact) {
     previewVisible.value = false;
     doAndroidPreviewCleanup();
     previewIndex.value = -1;
-    // previewImage 现在是 computed，设置 previewIndex = -1 即可
     return;
   }
   previewVisible.value = false;
@@ -647,7 +648,7 @@ watch(
     const foundIndex = props.images.findIndex((img) => img.id === currentImageId.value);
 
     if (foundIndex !== -1) {
-      if (IS_ANDROID) {
+      if (uiStore.isCompact) {
         const pswpIdx = androidFilteredIndices.value.indexOf(foundIndex);
         if (pswpIdx >= 0 && pswpIdx !== previewIndex.value) {
           previewIndex.value = pswpIdx;
@@ -661,7 +662,7 @@ watch(
     } else {
       if (props.images.length === 0) {
         closePreview();
-      } else if (IS_ANDROID) {
+      } else if (uiStore.isCompact) {
         const filteredLen = androidFilteredIndices.value.length;
         if (filteredLen <= previewIndex.value) {
           const newPswpIdx = Math.max(0, filteredLen - 1);
@@ -688,7 +689,7 @@ watch(
 watch(
   () => previewVisible.value,
   async (visible) => {
-    if (visible && !IS_ANDROID) {
+    if (visible && !uiStore.isCompact) {
       await nextTick();
       await measureContainerAfterRender();
     }
@@ -698,7 +699,7 @@ watch(
 watch(
   () => previewImageUrl.value,
   (url) => {
-    if (url && !IS_ANDROID) {
+    if (url && !uiStore.isCompact) {
       if (isPreviewVideo.value) return;
       panzoomReset();
     }
@@ -792,7 +793,7 @@ const handlePswpBeforeClose = (source?: string): boolean => {
 
 const handlePswpChange = ({ index }: { index: number }) => {
   if (index < 0) return;
-  if (IS_ANDROID) {
+  if (uiStore.isCompact) {
     const origIdx = androidFilteredIndices.value[index];
     if (origIdx == null || origIdx >= props.images.length) return;
     initialPanY = null;
@@ -814,9 +815,9 @@ const handlePswpChange = ({ index }: { index: number }) => {
   }
 };
 
-/** 安卓上切换控件（点击显示顶部栏）时，更新 UI 可见性状态 */
+/** 紧凑模式切换控件（点击显示顶部栏）时，更新 UI 可见性状态 */
 const handlePswpUiVisibleChange = ({ visible }: { visible: boolean }) => {
-  if (IS_ANDROID) {
+  if (uiStore.isCompact) {
     pswpUiVisible.value = visible;
   }
 };
@@ -856,7 +857,7 @@ onUnmounted(() => {
   }
 });
 
-if (!IS_ANDROID) {
+if (!uiStore.isCompact) {
   watch(
     () => previewContainerRef.value,
     (container) => {
@@ -873,9 +874,9 @@ if (!IS_ANDROID) {
 
 
 const open = (index: number) => {
-  if (IS_ANDROID) {
+  if (uiStore.isCompact) {
     const img = props.images[index];
-    if (isVideoMediaType(img?.type)) return; // 视频由 ImageGrid 调用 openVideo，不应进入预览
+    if (IS_ANDROID && isVideoMediaType(img?.type)) return; // Android 视频由 ImageGrid 调用 openVideo
     const pswpIndex = androidFilteredIndices.value.indexOf(index);
     if (pswpIndex < 0) return;
     previewIndex.value = pswpIndex;

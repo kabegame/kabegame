@@ -7,7 +7,7 @@
 
     <!-- Android：photoswipe-vue 底层组件，不循环 -->
     <PhotoSwipe
-      v-if="IS_ANDROID"
+      v-if="uiStore.isCompact"
       v-model:open="docPswpOpen"
       v-model:index="docPswpIndex"
       :data-source="docPswpDataSource"
@@ -17,7 +17,7 @@
 
     <!-- 桌面：Element Plus 图片查看器，不循环 -->
     <ElImageViewer
-      v-if="!IS_ANDROID && docDesktopViewerVisible"
+      v-if="!uiStore.isCompact && docDesktopViewerVisible"
       :url-list="docDesktopUrlList"
       :initial-index="docDesktopInitialIndex"
       :infinite="false"
@@ -36,19 +36,14 @@ import { marked } from "marked";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
 import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
-import { IS_ANDROID } from "../../env";
+import { IS_WEB } from "../../env";
 import { useModalBack } from "../../composables/useModalBack";
-
-type LoadImageBytes = (imagePath: string) => Promise<Uint8Array | number[]>;
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = withDefaults(
   defineProps<{
     markdown?: string | null;
     emptyDescription?: string;
-    /** 按路径加载图片字节（用于 data URL 或无 HTTP/自定义 URL 时） */
-    loadImageBytes?: LoadImageBytes;
-    /** 插件文档图片 URL 前缀：桌面为 http 服务器路径，安卓为 kbg-plugin-doc.localhost。有值时图片用 src=baseUrl+encodeURIComponent(path)，不调 loadImageBytes */
-    docImageBaseUrl?: string | null;
     /** 已安装插件内嵌的 doc_root 资源：相对路径 → base64。优先级最高。 */
     docResources?: Record<string, string> | null;
   }>(),
@@ -64,6 +59,8 @@ const docRootRef = ref<HTMLElement | null>(null);
 const docPswpOpen = ref(false);
 const docPswpIndex = ref(0);
 const docPswpDataSource = ref<Array<{ src: string; width: number; height: number }>>([]);
+
+const uiStore = useUiStore();
 
 /** 桌面 ElImageViewer */
 const docDesktopViewerVisible = ref(false);
@@ -118,7 +115,7 @@ const handleDocClick = (e: MouseEvent) => {
     e.stopPropagation();
     void (async () => {
       const { items, urls } = await buildDocPreviewMeta(imgs);
-      if (IS_ANDROID) {
+      if (uiStore.isCompact) {
         docPswpDataSource.value = items;
         docPswpIndex.value = index;
         await nextTick();
@@ -136,6 +133,8 @@ const handleDocClick = (e: MouseEvent) => {
   if (!a || !a.href) return;
   const href = a.getAttribute("href");
   if (!href || (!href.startsWith("http:") && !href.startsWith("https:"))) return;
+  // web mode：链接已有 target="_blank"，交给浏览器直接打开
+  if (IS_WEB) return;
   e.preventDefault();
   void openUrl(href);
 };
@@ -226,8 +225,6 @@ const sanitizeHtml = (rawHtml: string): string => {
 
 const renderMarkdown = async (
   markdown: string,
-  loadImageBytes?: LoadImageBytes,
-  docImageBaseUrl?: string | null,
   docResources?: Record<string, string> | null
 ): Promise<string> => {
   if (!markdown) return "";
@@ -269,11 +266,10 @@ const renderMarkdown = async (
     searchIndex = pathEnd + 1;
   }
 
-  // 2) 替换图片：优先 docResources（内嵌 base64），否则 docImageBaseUrl URL，否则 loadImageBytes 转 data URL
+  // 2) 替换图片：用 docResources（内嵌 base64）
   let processed = markdown;
-  if (imageMatches.length > 0) {
-    if (docResources) {
-      for (const img of imageMatches.slice().reverse()) {
+  if (imageMatches.length > 0 && docResources) {
+    for (const img of imageMatches.slice().reverse()) {
         const normalizedPath = normalizeDocPath(img.path);
         const base64 = docResources[normalizedPath];
         const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -293,52 +289,6 @@ const renderMarkdown = async (
           );
         }
       }
-    } else if (docImageBaseUrl) {
-      for (const img of imageMatches.slice().reverse()) {
-        try {
-          const normalizedPath = normalizeDocPath(img.path);
-          const url = docImageBaseUrl + encodeURIComponent(normalizedPath);
-          const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          processed = processed.replace(
-            new RegExp(escapedMatch, "g"),
-            `<img src="${url}" alt="${escapeHtml(
-              img.alt
-            )}" style="max-width: 100%; height: auto;" />`
-          );
-        } catch {
-          const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          processed = processed.replace(
-            new RegExp(escapedMatch, "g"),
-            `[图片加载失败: ${escapeHtml(img.path)}]`
-          );
-        }
-      }
-    } else if (loadImageBytes) {
-      for (const img of imageMatches.slice().reverse()) {
-        try {
-          const normalizedPath = normalizeDocPath(img.path);
-          const bytesAny = await loadImageBytes(normalizedPath);
-          const bytes =
-            bytesAny instanceof Uint8Array ? bytesAny : new Uint8Array(bytesAny);
-          const base64 = bytesToBase64(bytes);
-          const mime = guessMime(img.path);
-          const url = `data:${mime};base64,${base64}`;
-          const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          processed = processed.replace(
-            new RegExp(escapedMatch, "g"),
-            `<img src="${url}" alt="${escapeHtml(
-              img.alt
-            )}" style="max-width: 100%; height: auto;" />`
-          );
-        } catch {
-          const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          processed = processed.replace(
-            new RegExp(escapedMatch, "g"),
-            `[图片加载失败: ${escapeHtml(img.path)}]`
-          );
-        }
-      }
-    }
   }
 
   // 3) 配置 marked 渲染器，让链接在新窗口打开
@@ -369,8 +319,6 @@ watchEffect(() => {
     }
     html.value = await renderMarkdown(
       text,
-      props.loadImageBytes,
-      props.docImageBaseUrl,
       props.docResources
     );
   })();

@@ -217,23 +217,6 @@ pub enum CliIpcRequest {
         task_id: String,
     },
 
-    /// 获取任务图片
-    StorageGetTaskImages {
-        task_id: String,
-    },
-
-    /// 获取任务图片 id 列表
-    StorageGetTaskImageIds {
-        task_id: String,
-    },
-
-    /// 获取任务图片分页
-    StorageGetTaskImagesPaginated {
-        task_id: String,
-        offset: usize,
-        limit: usize,
-    },
-
     /// 获取任务失败图片
     StorageGetTaskFailedImages {
         task_id: String,
@@ -407,14 +390,6 @@ pub enum CliIpcRequest {
         plugin_id: Option<String>,
     },
 
-    /// 详情页文档图片：本地已安装/远程商店源统一入口（base64）
-    PluginGetImageForDetail {
-        plugin_id: String,
-        image_path: String,
-        #[serde(default)]
-        source_id: Option<String>,
-    },
-
     // ======== Settings 相关 ========
     // 注意：整包 SettingsGet/Update/Key 已移除，改为细粒度 getter/setter
 
@@ -443,7 +418,6 @@ pub enum CliIpcRequest {
     SettingsGetWindowState,
     SettingsGetCurrentWallpaperImageId,
     SettingsGetDefaultImagesDir,
-    SettingsGetGalleryPageSize,
     #[cfg(kabegame_mode = "standard")]
     SettingsGetAlbumDriveEnabled,
     #[cfg(kabegame_mode = "standard")]

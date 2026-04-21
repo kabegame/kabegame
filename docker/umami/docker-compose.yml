@@ -1,0 +1,44 @@
+services:
+  umami:
+    container_name: umami
+    image: ghcr.io/umami-software/umami:latest
+    ports:
+      - "5500:5500"
+    environment:
+      DATABASE_URL: postgresql://kabegame:umami@db:5432/umami
+      APP_SECRET: kabegame-umami # for jwt
+      DISABLE_UPDATES: 1
+      DISABLE_TELEMETRY: 1
+      HOSTNAME: 0.0.0.0 # change this for production
+      PORT: 5500
+      PRIVATE_MODE: 1
+      REMOVE_TRAILING_SLASH: 1
+      TRACKER_SCRIPT_NAME: kabegame-uba.js
+    depends_on:
+      db:
+        condition: service_healthy
+    init: true
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "curl http://localhost:5500/api/heartbeat"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  db:
+    container_name: umami-psql
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: umami
+      POSTGRES_USER: kabegame
+      POSTGRES_PASSWORD: umami
+    volumes:
+      - umami-db-data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  
+volumes:
+  umami-db-data:

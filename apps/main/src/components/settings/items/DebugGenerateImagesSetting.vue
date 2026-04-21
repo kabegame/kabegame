@@ -59,8 +59,7 @@
 import { computed, onMounted, onBeforeUnmount, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { invoke } from "@tauri-apps/api/core";
-
+import { invoke, listen } from "@/api/rpc";
 const { t } = useI18n();
 
 const count = ref<number>(200000);
@@ -81,7 +80,6 @@ let unlisten: null | (() => void) = null;
 
 onMounted(async () => {
   try {
-    const { listen } = await import("@tauri-apps/api/event");
     unlisten = await listen<{ inserted: number; total: number }>(
       "debug-clone-images-progress",
       (event) => {

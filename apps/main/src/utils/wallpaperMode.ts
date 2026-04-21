@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { ElMessageBox } from "element-plus";
 import { i18n } from "@kabegame/i18n";
 

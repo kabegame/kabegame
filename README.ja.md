@@ -5,8 +5,7 @@
 Tauri ベースの二次元クローラークライアント！画像をクロール、壁紙をクロール・管理・設定・ローテーション。推しの画像たちで毎日癒やされよう～ プラグインで拡張可能、様々な二次元系サイトから簡単に画像を取得できます。
 
 <div align="center">
-  <img src="docs/images/image2.png" alt="Kabegame マスコット 1" width="256"/>
-  <img src="docs/images/image1.png" alt="Kabegame マスコット 2" width="256"/>
+  <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
 </div>
 
 ## ギャラリースクリーンショット

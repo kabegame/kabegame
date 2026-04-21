@@ -22,7 +22,6 @@ pub enum GalleryBrowseEntry {
 /// 将 Provider list_children + list_images 结果转换为前端可序列化的 GalleryBrowseEntry。
 /// `ImageEntry` 已是 `ImageInfo` 别名，由 storage 层单次 SQL 组装；此处零二次查询。
 pub fn browse_from_provider(
-    _storage: &Storage,
     children: Vec<ChildEntry>,
     images: Vec<ImageEntry>,
 ) -> Result<Vec<GalleryBrowseEntry>, String> {

@@ -1,22 +1,20 @@
 import { defineStore, storeToRefs } from "pinia";
-import { computed, reactive, ref, toRefs, watch } from "vue";
+import { computed, reactive, toRefs, watch } from "vue";
+import { useLocalStorage } from "@vueuse/core";
 import router from "@/router";
 
 const HIDE_PREFIX = "hide/";
 const GLOBAL_HIDE_KEY = "pathRoute.hide";
 const LEGACY_GALLERY_HIDE_KEY = "kabegame-gallery-hide";
 
-const readInitialHide = (): boolean => {
-  const cur = localStorage.getItem(GLOBAL_HIDE_KEY);
-  if (cur !== null) return cur !== "false";
+// 一次性迁移：老键 "kabegame-gallery-hide" → 新键 "pathRoute.hide"
+if (localStorage.getItem(GLOBAL_HIDE_KEY) === null) {
   const legacy = localStorage.getItem(LEGACY_GALLERY_HIDE_KEY);
   if (legacy !== null) {
-    const v = legacy !== "false";
-    localStorage.setItem(GLOBAL_HIDE_KEY, String(v));
-    return v;
+    localStorage.setItem(GLOBAL_HIDE_KEY, legacy);
+    localStorage.removeItem(LEGACY_GALLERY_HIDE_KEY);
   }
-  return true;
-};
+}
 
 export interface GlobalRouteState {
   hide: boolean;
@@ -25,13 +23,10 @@ export interface GlobalRouteState {
 /**
  * 全局路由参数 singleton：目前只有 `hide`。它是"路由参数"——序列化进 URL
  * 的 `hide/` 前缀——但值在所有 path-route store 之间共享。
+ * 持久化通过 `useLocalStorage` 自动完成。
  */
 export const useGlobalPathRoute = defineStore("globalPathRoute", () => {
-  const hide = ref<boolean>(readInitialHide());
-  watch(hide, (v) => {
-    console.log("[globalHide] updated →", v);
-    localStorage.setItem(GLOBAL_HIDE_KEY, String(v));
-  });
+  const hide = useLocalStorage<boolean>(GLOBAL_HIDE_KEY, true);
   return { hide };
 });
 
@@ -40,7 +35,8 @@ type PathRouteStoreConfig<TState extends object> = {
   parse: (path: string) => TState;
   /** 构建业务部分：工厂会在外面自动套 `hide/`，不要自己套 */
   build: (state: TState) => string;
-  defaultState: TState;
+  /** 初始状态；传函数则延迟到 store setup 内求值（可安全调用其它 Pinia store） */
+  defaultState: TState | (() => TState);
   /** 该 store 所属的 vue-router route.name。URL↔state 同步只在 cur.name === routeName 时发生。 */
   routeName?: string;
   onStateChange?: (state: TState & GlobalRouteState, path: string) => void;
@@ -55,8 +51,14 @@ export function createPathRouteStore<TState extends object>(
   storeId: string,
   config: PathRouteStoreConfig<TState>
 ) {
+  const getDefault = (): TState =>
+    typeof config.defaultState === "function"
+      ? (config.defaultState as () => TState)()
+      : ({ ...config.defaultState });
+
   return defineStore(storeId, () => {
-    const local = reactive({ ...config.defaultState }) as TState;
+    const local = reactive(getDefault()) as TState;
+    const allowedKeys = new Set(Object.keys(local));
     const globalStore = useGlobalPathRoute();
     const { hide } = storeToRefs(globalStore);
 
@@ -86,7 +88,7 @@ export function createPathRouteStore<TState extends object>(
       const trimmed = (raw || "").trim();
       console.log(`[${storeId}] syncFromUrl ←`, JSON.stringify(trimmed));
       if (!trimmed) {
-        Object.assign(local, { ...config.defaultState });
+        Object.assign(local, getDefault());
         return;
       }
       const hasHide = trimmed.startsWith(HIDE_PREFIX);
@@ -94,7 +96,7 @@ export function createPathRouteStore<TState extends object>(
       if (inner) {
         Object.assign(local, config.parse(inner));
       } else {
-        Object.assign(local, { ...config.defaultState });
+        Object.assign(local, getDefault());
       }
       if (!config.ignoreHide?.(merged())) {
         hide.value = hasHide;
@@ -148,7 +150,7 @@ export function createPathRouteStore<TState extends object>(
       for (const [k, v] of Object.entries(u)) {
         if (k === "hide") {
           hide.value = v as boolean;
-        } else if (k in config.defaultState) {
+        } else if (allowedKeys.has(k)) {
           (local as Record<string, unknown>)[k] = v;
         }
       }
@@ -161,7 +163,7 @@ export function createPathRouteStore<TState extends object>(
       for (const [k, v] of Object.entries(u)) {
         if (k === "hide") {
           overrideHide = v as boolean;
-        } else if (k in config.defaultState) {
+        } else if (allowedKeys.has(k)) {
           overrideLocal[k] = v;
         }
       }

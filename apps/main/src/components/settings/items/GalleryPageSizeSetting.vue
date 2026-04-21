@@ -12,27 +12,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
+import { computed } from "vue";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 const options = [100, 500, 1000] as const;
+const disabled = false;
+const showDisabled = false;
 
-const { settingValue, disabled, showDisabled, set } = useSettingKeyState("galleryPageSize");
-const localValue = ref<number>(100);
-
-watch(
-  () => settingValue.value,
-  (v) => {
-    const n = Number(v ?? 100);
-    localValue.value = options.includes(n as (typeof options)[number]) ? n : 100;
-  },
-  { immediate: true },
+const settings = useSettingsStore();
+const localValue = computed(
+  () => (settings.values.galleryPageSize as number | undefined) ?? 100,
 );
 
-const onChange = async (v: string | number | boolean | undefined) => {
+const onChange = (v: string | number | boolean | undefined) => {
   const n = Number(v);
   if (!Number.isFinite(n)) return;
-  await set(n);
+  if (n !== 100 && n !== 500 && n !== 1000) return;
+  void settings.save("galleryPageSize", n);
 };
 </script>
 

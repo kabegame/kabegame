@@ -1,6 +1,6 @@
 <template>
   <AndroidPickerNumber
-    v-if="IS_ANDROID"
+    v-if="isCompact"
     :model-value="numberValue"
     :min="effectiveMin"
     :max="effectiveMax"
@@ -22,8 +22,10 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { IS_ANDROID } from "../../../env";
+import { useUiStore } from "../../../stores/ui";
 import AndroidPickerNumber from "../../AndroidPickerNumber.vue";
+
+const isCompact = computed(() => useUiStore().isCompact);
 
 const props = defineProps<{
   modelValue: unknown;

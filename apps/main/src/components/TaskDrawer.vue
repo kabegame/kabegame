@@ -1,6 +1,6 @@
 <template>
   <!-- Android：自研全宽抽屉，支持划入动画与拖拽滑出、背景透明度随拖拽变化 -->
-  <AndroidDrawer v-if="IS_ANDROID" v-model="visible">
+  <AndroidDrawer v-if="uiStore.isCompact" v-model="visible">
     <template #header>
       <div class="task-drawer-android-header">
         <h3 class="task-drawer-android-title">{{ $t('tasks.taskList') }}</h3>
@@ -51,7 +51,7 @@ import { storeToRefs } from "pinia";
 import { useI18n } from "@kabegame/i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Lightning } from "@element-plus/icons-vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/api/rpc";
 import { useRouter } from "vue-router";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { useCrawlerStore } from "@/stores/crawler";
@@ -62,6 +62,7 @@ import TaskDrawerContent from "@kabegame/core/components/task/TaskDrawerContent.
 import TaskContextMenu from "./contextMenu/TaskContextMenu.vue";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 interface Props {
   modelValue: boolean;
@@ -80,6 +81,7 @@ const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
 const pluginStore = usePluginStore();
+const uiStore = useUiStore();
 
 const visible = computed({
   get: () => props.modelValue,
@@ -182,6 +184,7 @@ const confirmSaveTaskAsConfig = async () => {
       outputDir: task.outputDir,
       userConfig: task.userConfig ?? {},
       httpHeaders: task.httpHeaders ?? {},
+      scheduleEnabled: false,
     });
     ElMessage.success(t('tasks.saveConfigSuccess'));
     saveConfigVisible.value = false;
