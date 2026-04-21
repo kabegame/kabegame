@@ -4,6 +4,8 @@
 
 一个基于 Tauri 的二次元爬虫客户端！爬取、管理、设置/轮播壁纸，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元站点资源~
 
+> 🌐 **在线体验**：[https://39.106.178.113/](https://39.106.178.113/)
+
 <div align="center">
   <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
 </div>
@@ -442,6 +444,8 @@ adb forward tcp:9222 localabstract:chrome_devtools_remote
 ├── package.json          # Node.js 依赖（包含 Bun workspace 配置）
 └── Cargo.toml            # Rust Cargo Workspace 配置
 ```
+
+<img src="https://39.106.178.113:5600/p/znhiqixFf" />
 
 ## 插件开发
 

@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import type { RouteRecordRaw } from "vue-router";
 import { i18n } from "@kabegame/i18n";
 import { IS_WEB } from "@kabegame/core/env";
+import { trackPage } from "@kabegame/core/track/umami";
 
 const routes: RouteRecordRaw[] = [
   {
@@ -110,6 +111,10 @@ router.beforeEach((to, from, next) => {
   }
 
   next();
+});
+
+router.afterEach((to) => {
+  trackPage(to.fullPath);
 });
 
 export default router;

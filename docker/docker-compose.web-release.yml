@@ -1,0 +1,53 @@
+# 本地构建 kabegame web 二进制，产物输出到 dist-web/kabegame
+#
+# 用法：
+#   docker compose -f docker/docker-compose.web-release.yml run --rm build
+#
+# 产物路径（宿主机）：dist-web/kabegame
+# 部署到服务器：
+#   rsync -avz dist-web/kabegame cmtheit.com:/home/cmtheit/kabegame/kabegame
+
+services:
+  build:
+    image: ${KABEGAME_WEB_BUILD_IMAGE:-kabegame-web-release:latest}
+    build:
+      context: ..
+      dockerfile: docker/web-release.Dockerfile
+    working_dir: /src
+    stdin_open: true
+    tty: false
+    volumes:
+      - ../dist-web:/dist
+    command:
+      - bash
+      - -lc
+      - >-
+        bun install --frozen-lockfile
+        && bun b -c main --mode web --no-nx
+        && mkdir -p /dist
+        && cp target/release/kabegame /dist/kabegame
+        && echo "✓ 产物已写入 /dist/kabegame"
+
+  build-ffmpeg:
+    image: ${KABEGAME_WEB_BUILD_IMAGE:-kabegame-web-release:latest}
+    build:
+      context: ..
+      dockerfile: docker/web-release.Dockerfile
+    working_dir: /src
+    environment:
+      - KABEGAME_SERVER_BUILD=1
+    volumes:
+      - ../dist-web:/dist
+    command:
+      - bash
+      - -lc
+      - >-
+        dnf install -y epel-release dnf-plugins-core
+        && dnf config-manager --set-enabled powertools
+        && dnf install -y --nogpgcheck https://download1.rpmfusion.org/free/el/rpmfusion-free-release-8.noarch.rpm
+        && dnf install -y nasm x264-devel
+        && git submodule update --init third/FFmpeg
+        && bash scripts/build-ffmpeg.sh
+        && mkdir -p /dist
+        && cp "src-tauri/app-main/sidecar/ffmpeg-kb-$(rustc -vV | sed -n 's/^host: //p')" /dist/ffmpeg-kb
+        && echo "✓ ffmpeg-kb 已写入 /dist/ffmpeg-kb"

@@ -18,6 +18,7 @@ export const isAndroid =
 export const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
 export const isWeb = process.env.KABEGAME_MODE === "web";
 
+
 export default {
   plugins: [vue(), UnoCSS()],
 

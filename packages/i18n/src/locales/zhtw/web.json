@@ -25,6 +25,13 @@
     "scheduler": "定時任務",
     "deleteImages": "刪除圖片",
     "hideImage": "隱藏圖片",
-    "organize": "整理圖庫"
+    "organize": "整理圖庫",
+    "runConfig": "執行設定",
+    "importRecommendedConfig": "匯入推薦設定",
+    "deleteRunConfig": "刪除執行設定",
+    "saveRunConfig": "儲存執行設定",
+    "installPlugin": "安裝外掛",
+    "uninstallPlugin": "解除安裝外掛",
+    "addPluginSource": "新增商店來源"
   }
 }

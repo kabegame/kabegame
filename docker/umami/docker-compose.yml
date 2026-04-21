@@ -24,6 +24,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - umami
   db:
     container_name: umami-psql
     image: postgres:15-alpine
@@ -39,6 +41,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - umami
   
 volumes:
   umami-db-data:
+
+networks:
+  umami:
+    external: true

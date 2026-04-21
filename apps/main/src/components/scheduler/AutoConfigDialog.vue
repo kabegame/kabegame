@@ -198,6 +198,7 @@ import {
   coerceOptionsVarsToVisibleChoices,
 } from "@kabegame/core/utils/pluginVarWhen";
 import type { RunConfig, ScheduleSpec } from "@kabegame/core/stores/crawler";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 const { t } = useI18n();
 const { varDisplayName, varDescripts, optionDisplayName } = usePluginConfigI18n();
@@ -629,6 +630,7 @@ const handleEditCancel = () => {
 };
 
 const handleSave = async () => {
+  if (await guardDesktopOnly("saveRunConfig", { needSuper: true })) return;
   if (!name.value.trim()) {
     ElMessage.warning(t("common.configNamePlaceholder"));
     return;

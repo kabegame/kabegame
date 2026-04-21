@@ -14,6 +14,11 @@ export const imageMetadataResolverKey: InjectionKey<ImageMetadataResolver> =
 
 const MAX_CACHE_SIZE = 1024;
 
+/** metadataId 存在时用其字符串作 key，否则降级为 imageId */
+function cacheKeyFor(imageId: string, metadataId?: number): string {
+  return metadataId != null ? String(metadataId) : imageId;
+}
+
 class LruMap {
   private readonly map = new Map<string, unknown | null>();
 
@@ -60,8 +65,8 @@ function ensureInit(): Promise<void> {
     .limit(MAX_CACHE_SIZE)
     .toArray()
     .then((all) => {
-      for (const { imageId, data } of all) {
-        mem.load(imageId, data);
+      for (const { cacheKey, data } of all) {
+        mem.load(cacheKey, data);
       }
     })
     .catch(() => {});
@@ -79,9 +84,11 @@ export function useProvideImageMetadataCache() {
   ): Promise<unknown | null> {
     await ensureInit();
 
+    const key = cacheKeyFor(imageId, metadataId);
+
     // 1. 内存 LRU 命中（初始化后与 Dexie 同步，命中内存即命中持久化层）
-    if (mem.has(imageId)) {
-      return mem.get(imageId) ?? null;
+    if (mem.has(key)) {
+      return mem.get(key) ?? null;
     }
 
     // 2. 后端 IPC 拉取
@@ -93,18 +100,18 @@ export function useProvideImageMetadataCache() {
         : await invoke<unknown | null>("get_image_metadata", { imageId });
     const v = raw ?? null;
 
-    const evictedId = mem.set(imageId, v);
+    const evictedKey = mem.set(key, v);
 
     if (IS_WEB) {
-      if (evictedId) {
+      if (evictedKey) {
         // 原子事务：删除被淘汰条目并写入新条目，Dexie 始终 ≤ 1024
         void imageMetadataCacheDb.transaction(
           "rw",
           imageMetadataCacheDb.entries,
           async () => {
-            await imageMetadataCacheDb.entries.delete(evictedId);
+            await imageMetadataCacheDb.entries.delete(evictedKey);
             await imageMetadataCacheDb.entries.put({
-              imageId,
+              cacheKey: key,
               data: v,
               cachedAt: Date.now(),
             });
@@ -112,7 +119,7 @@ export function useProvideImageMetadataCache() {
         );
       } else {
         void imageMetadataCacheDb.entries.put({
-          imageId,
+          cacheKey: key,
           data: v,
           cachedAt: Date.now(),
         });

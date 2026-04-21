@@ -14,7 +14,7 @@ use kabegame_core::storage::Storage;
 use std::fs;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Listener, Manager};
-#[cfg(not(target_os = "android"))]
+#[cfg(kabegame_mode = "standard")]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
 

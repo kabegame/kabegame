@@ -85,7 +85,7 @@ type WebLocalSettingEntry = {
 const WEB_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
   { key: "language", defaultValue: "en" },
   { key: "imageClickAction", defaultValue: "preview", readonly: true },
-  { key: "galleryImageAspectRatio", defaultValue: "16/10" },
+  { key: "galleryImageAspectRatio", defaultValue: "16:10" },
   { key: "galleryImageObjectPosition", defaultValue: "center" },
   // 壁纸能力：web 模式下只做 localStorage 占位，修改时弹 desktopOnlyGuard
   { key: "wallpaperRotationEnabled", defaultValue: false, readonly: true },

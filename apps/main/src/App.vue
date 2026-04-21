@@ -152,6 +152,7 @@ import { useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useThrottleFn } from "@vueuse/core";
+import { useApp } from "@/stores/app";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
@@ -217,6 +218,10 @@ const importKgpgPath = ref<string | null>(null);
 
 // 路由视图 key，用于强制刷新组件
 const routerViewKey = ref(0);
+const appStore = useApp();
+if (IS_WEB) {
+  watch(() => appStore.isSuper, () => { routerViewKey.value += 1; });
+}
 const missedRunsVisible = ref(false);
 const missedRunItems = ref<import("@kabegame/core/stores/crawler").MissedRunItem[]>([]);
 

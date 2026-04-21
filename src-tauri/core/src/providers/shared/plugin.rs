@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::plugin::PluginManager;
 use crate::providers::provider::{ChildEntry, ImageEntry, Provider, ProviderMeta};
 use crate::providers::shared::page_size::PageSizeGroupProvider;
+use crate::providers::shared::sort::SortProvider;
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
@@ -55,10 +56,22 @@ impl Provider for PluginProvider {
     }
 
     fn list_children(&self, composed: &ImageQuery) -> Result<Vec<ChildEntry>, String> {
-        PageSizeGroupProvider.list_children(composed)
+        let mut children = vec![ChildEntry::new(
+            "desc",
+            Arc::new(SortProvider::new(Arc::new(PluginProvider {
+                plugin_id: self.plugin_id.clone(),
+            }))),
+        )];
+        children.extend(PageSizeGroupProvider.list_children(composed)?);
+        Ok(children)
     }
 
     fn get_child(&self, name: &str, composed: &ImageQuery) -> Option<Arc<dyn Provider>> {
+        if name == "desc" {
+            return Some(Arc::new(SortProvider::new(Arc::new(PluginProvider {
+                plugin_id: self.plugin_id.clone(),
+            }))));
+        }
         PageSizeGroupProvider.get_child(name, composed)
     }
 
