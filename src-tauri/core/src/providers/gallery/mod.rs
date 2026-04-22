@@ -1,4 +1,4 @@
-//! Gallery Provider 系统：将画廊映射为前端 URL 路径树（canonical 路径，10 个顶层入口）。
+//! Gallery Provider 系统：将画廊映射为前端 URL 路径树（canonical 路径，11 个顶层入口）。
 //!
 //! ```text
 //! gallery/
@@ -21,7 +21,12 @@
 //! │   └── {YYYY-MM-DD~YYYY-MM-DD}/
 //! ├── album/                        <- GalleryAlbumsProvider（画册列表）
 //! │   └── {id}/                     <- GalleryAlbumProvider（+ desc/album-order/wallpaper-order/media-type 子路径）
-//! └── hide/                         <- HideGateProvider（隐藏图片入口）
+//! ├── hide/                         <- HideGateProvider（隐藏图片入口）
+//! └── search/                       <- GallerySearchRootProvider（前置搜索过滤器）
+//!     └── display-name/<q>/         <- 叶子 apply WHERE LIKE，挂裁剪版 gallery root
+//!         ├── all/ (带搜索过滤)
+//!         ├── plugin/{id}/ (带搜索过滤)
+//!         └── ...                   <- 所有其他 gallery 一等入口（不含 search）
 //! ```
 
 pub mod album;
@@ -31,5 +36,6 @@ pub mod date_range;
 pub mod media_type;
 pub mod plugin;
 pub mod root;
+pub mod search;
 pub mod surf;
 pub mod task;
