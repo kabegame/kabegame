@@ -88,6 +88,21 @@ pub fn setup_tray(app: AppHandle) {
         };
 
         // 创建托盘图标
+        // macOS：使用乌龟模板图（黑+alpha），随系统深色/浅色菜单栏自适应
+        // 其他平台：沿用窗口默认图标
+        #[cfg(target_os = "macos")]
+        let icon = {
+            const TURTLE_PNG: &[u8] =
+                include_bytes!("../icons/tray/turtle-tray@2x.png");
+            match tauri::image::Image::from_bytes(TURTLE_PNG) {
+                Ok(img) => img,
+                Err(e) => {
+                    eprintln!("加载托盘图标失败: {}", e);
+                    return;
+                }
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
         let icon = match app.default_window_icon() {
             Some(icon) => icon.clone(),
             None => {
@@ -100,12 +115,16 @@ pub fn setup_tray(app: AppHandle) {
         let handle_clone2 = app.clone();
 
         // 创建托盘（带 id 以便语言切换后 tray_by_id 刷新菜单），明确禁止左键点击显示菜单
-        let tray = match TrayIconBuilder::with_id(TRAY_ID)
+        let builder = TrayIconBuilder::with_id(TRAY_ID)
             .icon(icon)
             .tooltip(t!("common.appName"))
-            .show_menu_on_left_click(false) // 关键：禁止左键显示菜单
-            .build(&app)
-        {
+            .show_menu_on_left_click(false); // 关键：禁止左键显示菜单
+
+        // macOS 菜单栏图标使用 template 模式，由系统按主题自动反色
+        #[cfg(target_os = "macos")]
+        let builder = builder.icon_as_template(true);
+
+        let tray = match builder.build(&app) {
             Ok(tray) => tray,
             Err(e) => {
                 eprintln!("创建系统托盘失败: {}", e);
