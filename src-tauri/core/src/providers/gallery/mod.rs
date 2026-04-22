@@ -22,11 +22,11 @@
 //! ├── album/                        <- GalleryAlbumsProvider（画册列表）
 //! │   └── {id}/                     <- GalleryAlbumProvider（+ desc/album-order/wallpaper-order/media-type 子路径）
 //! ├── hide/                         <- HideGateProvider（隐藏图片入口）
-//! └── search/                       <- GallerySearchRootProvider（前置搜索过滤器）
-//!     └── display-name/<q>/         <- 叶子 apply WHERE LIKE，挂裁剪版 gallery root
+//! └── search/                       <- shared::SearchRootProvider（前置搜索过滤器，可嵌套 AND）
+//!     └── display-name/<q>/         <- 叶子 apply WHERE LIKE，inner = GalleryRootProvider
 //!         ├── all/ (带搜索过滤)
 //!         ├── plugin/{id}/ (带搜索过滤)
-//!         └── ...                   <- 所有其他 gallery 一等入口（不含 search）
+//!         └── ...                   <- 所有 gallery 一等入口（含 search，支持嵌套 AND）
 //! ```
 
 pub mod album;
@@ -36,6 +36,5 @@ pub mod date_range;
 pub mod media_type;
 pub mod plugin;
 pub mod root;
-pub mod search;
 pub mod surf;
 pub mod task;

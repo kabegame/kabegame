@@ -19,8 +19,11 @@ use crate::providers::gallery::album::{
     GalleryAlbumWallpaperShell, GalleryAlbumsProvider,
 };
 use crate::providers::gallery::all::GalleryAllProvider;
-use crate::providers::gallery::search::GallerySearchDisplayNameProvider;
+use crate::providers::gallery::root::GalleryRootProvider;
 use crate::providers::provider::Provider;
+use crate::providers::shared::search::{
+    SearchDisplayNameProvider, SearchDisplayNameRootProvider,
+};
 use crate::providers::shared::{
     album::AlbumsProvider, plugin::PluginProvider, sort::SortProvider,
 };
@@ -369,12 +372,16 @@ fn album_wallpaper_order_desc_flips_both() {
 
 // ── Search Provider：LIKE 过滤与下游组合 ──────────────────────────────────
 
+fn search_leaf(query: &str) -> SearchDisplayNameProvider {
+    SearchDisplayNameProvider {
+        query: query.to_string(),
+        inner: Arc::new(GalleryRootProvider),
+    }
+}
+
 #[test]
 fn display_name_search_leaf_appends_like_where() {
-    let q = GallerySearchDisplayNameProvider {
-        query: "原神".to_string(),
-    }
-    .apply_query(ImageQuery::new());
+    let q = search_leaf("原神").apply_query(ImageQuery::new());
 
     let (sql, params) = q.build_sql();
     assert!(
@@ -391,10 +398,7 @@ fn display_name_search_leaf_appends_like_where() {
 
 #[test]
 fn display_name_search_escapes_like_wildcards() {
-    let q = GallerySearchDisplayNameProvider {
-        query: "50%_off".to_string(),
-    }
-    .apply_query(ImageQuery::new());
+    let q = search_leaf("50%_off").apply_query(ImageQuery::new());
 
     let (_sql, params) = q.build_sql();
     assert!(
@@ -407,10 +411,7 @@ fn display_name_search_escapes_like_wildcards() {
 #[test]
 fn search_composes_with_all_plus_desc() {
     let mut composed = ImageQuery::new();
-    composed = GallerySearchDisplayNameProvider {
-        query: "原神".to_string(),
-    }
-    .apply_query(composed);
+    composed = search_leaf("原神").apply_query(composed);
     composed = GalleryAllProvider.apply_query(composed);
     composed = SortProvider::new(Arc::new(GalleryAllProvider)).apply_query(composed);
 
@@ -432,10 +433,7 @@ fn search_composes_with_all_plus_desc() {
 #[test]
 fn search_composes_with_plugin_filter() {
     let mut composed = ImageQuery::new();
-    composed = GallerySearchDisplayNameProvider {
-        query: "原神".to_string(),
-    }
-    .apply_query(composed);
+    composed = search_leaf("原神").apply_query(composed);
     composed = PluginProvider {
         plugin_id: "pixiv".to_string(),
     }
@@ -455,6 +453,70 @@ fn search_composes_with_plugin_filter() {
     );
     assert!(params.contains(&"%原神%".to_string()));
     assert!(params.contains(&"pixiv".to_string()));
+}
+
+/// 模拟 `search/display-name/A/search/display-name/B/all/`——嵌套 search 应 AND 组合。
+/// 走 get_child 链以真实验证 SearchRootProvider → SearchDisplayNameRootProvider → 叶子的路由。
+#[test]
+fn nested_search_produces_and_composition() {
+    let composed = ImageQuery::new();
+
+    // 第一层:gallery 根 → search → display-name → A
+    let root: Arc<dyn Provider> = Arc::new(GalleryRootProvider);
+    let search1 = root.get_child("search", &composed).expect("gallery 有 search 入口");
+    let display1 = search1
+        .get_child("display-name", &composed)
+        .expect("search 有 display-name 子");
+    let leaf1 = display1
+        .get_child("A", &composed)
+        .expect("非空 query 应解析为叶子");
+    let composed = leaf1.apply_query(composed);
+
+    // 第二层:从第一层叶子继续 get_child('search')(inner 是 GalleryRootProvider,仍有 search)
+    let search2 = leaf1
+        .get_child("search", &composed)
+        .expect("search 叶子 delegate inner,inner 是 GalleryRootProvider,含 search");
+    let display2 = search2
+        .get_child("display-name", &composed)
+        .expect("第二层同样有 display-name");
+    let leaf2 = display2
+        .get_child("B", &composed)
+        .expect("第二层 query 解析");
+    let composed = leaf2.apply_query(composed);
+
+    // 最后:all/
+    let all = leaf2
+        .get_child("all", &composed)
+        .expect("第二层叶子 delegate inner,含 all");
+    let composed = all.apply_query(composed);
+
+    let (sql, params) = composed.build_sql();
+
+    let like_count = sql.matches("LOWER(images.display_name) LIKE LOWER(?) ESCAPE '\\'").count();
+    assert_eq!(
+        like_count, 2,
+        "嵌套 search 应产生两条 LIKE WHERE(AND 组合)。实际: {}",
+        sql
+    );
+    assert!(
+        params.contains(&"%A%".to_string()) && params.contains(&"%B%".to_string()),
+        "params 应同时含 %A% 和 %B%。实际: {:?}",
+        params
+    );
+    assert!(
+        sql.contains("images.crawled_at ASC"),
+        "all 应 prepend crawled_at ASC。实际: {}",
+        sql
+    );
+}
+
+/// 空 query 在 SearchDisplayNameRootProvider::get_child 被拦截。
+#[test]
+fn empty_query_is_rejected() {
+    let root = SearchDisplayNameRootProvider::new(Arc::new(GalleryRootProvider));
+    let composed = ImageQuery::new();
+    assert!(root.get_child("", &composed).is_none());
+    assert!(root.get_child("   ", &composed).is_none());
 }
 
 #[test]

@@ -5,6 +5,7 @@ pub mod media_type;
 pub mod page_size;
 pub mod plugin;
 pub mod query_page;
+pub mod search;
 pub mod sort;
 pub mod surf;
 pub mod task;
