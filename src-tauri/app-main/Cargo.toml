@@ -24,7 +24,7 @@ url = "2"
 uuid = {workspace = true}
 
 # local feature (Tauri native app — desktop + Android)
-tauri = { version = "2.10", features = ["tray-icon", "devtools", "protocol-asset", "image-png"], optional = true }
+tauri = { version = "2.10", features = ["macos-private-api", "tray-icon", "devtools", "protocol-asset", "image-png"], optional = true }
 tauri-plugin-clipboard-manager = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "=2.4.2", optional = true }
 tauri-plugin-global-shortcut = { version = "2.3.1", optional = true }
@@ -101,6 +101,7 @@ tauri-build = {workspace = true, optional = true}
 [features]
 default = ["local"]
 local = [
+    "kabegame-core/virtual-driver",
     "dep:tauri",
     "dep:tauri-plugin-clipboard-manager",
     "dep:tauri-plugin-dialog",
