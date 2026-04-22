@@ -18,6 +18,8 @@ use crate::providers::gallery::album::{
     GalleryAlbumEntryProvider, GalleryAlbumMediaFilterShell, GalleryAlbumOrderShell,
     GalleryAlbumWallpaperShell, GalleryAlbumsProvider,
 };
+use crate::providers::gallery::all::GalleryAllProvider;
+use crate::providers::gallery::search::GallerySearchDisplayNameProvider;
 use crate::providers::provider::Provider;
 use crate::providers::shared::{
     album::AlbumsProvider, plugin::PluginProvider, sort::SortProvider,
@@ -364,6 +366,96 @@ fn album_wallpaper_order_desc_flips_both() {
 }
 
 // ── get_child 单元测试：SortProvider / QueryPageProvider（无 DB） ──────────
+
+// ── Search Provider：LIKE 过滤与下游组合 ──────────────────────────────────
+
+#[test]
+fn display_name_search_leaf_appends_like_where() {
+    let q = GallerySearchDisplayNameProvider {
+        query: "原神".to_string(),
+    }
+    .apply_query(ImageQuery::new());
+
+    let (sql, params) = q.build_sql();
+    assert!(
+        sql.contains("LOWER(images.display_name) LIKE LOWER(?) ESCAPE '\\'"),
+        "search 叶子应追加 LIKE WHERE。实际: {}",
+        sql
+    );
+    assert!(
+        params.contains(&"%原神%".to_string()),
+        "search 叶子应注入 %原神% 参数。实际 params: {:?}",
+        params
+    );
+}
+
+#[test]
+fn display_name_search_escapes_like_wildcards() {
+    let q = GallerySearchDisplayNameProvider {
+        query: "50%_off".to_string(),
+    }
+    .apply_query(ImageQuery::new());
+
+    let (_sql, params) = q.build_sql();
+    assert!(
+        params.contains(&"%50\\%\\_off%".to_string()),
+        "LIKE 通配符 % 与 _ 应被反斜杠转义。实际 params: {:?}",
+        params
+    );
+}
+
+#[test]
+fn search_composes_with_all_plus_desc() {
+    let mut composed = ImageQuery::new();
+    composed = GallerySearchDisplayNameProvider {
+        query: "原神".to_string(),
+    }
+    .apply_query(composed);
+    composed = GalleryAllProvider.apply_query(composed);
+    composed = SortProvider::new(Arc::new(GalleryAllProvider)).apply_query(composed);
+
+    let (sql, params) = composed.build_sql();
+
+    assert!(
+        sql.contains("LOWER(images.display_name) LIKE LOWER(?) ESCAPE '\\'"),
+        "组合链应保留 search LIKE WHERE。实际: {}",
+        sql
+    );
+    assert!(
+        sql.contains("images.crawled_at DESC"),
+        "组合链应含 all + desc 翻转后的 crawled_at DESC。实际: {}",
+        sql
+    );
+    assert!(params.contains(&"%原神%".to_string()));
+}
+
+#[test]
+fn search_composes_with_plugin_filter() {
+    let mut composed = ImageQuery::new();
+    composed = GallerySearchDisplayNameProvider {
+        query: "原神".to_string(),
+    }
+    .apply_query(composed);
+    composed = PluginProvider {
+        plugin_id: "pixiv".to_string(),
+    }
+    .apply_query(composed);
+
+    let (sql, params) = composed.build_sql();
+
+    assert!(
+        sql.contains("LOWER(images.display_name) LIKE LOWER(?) ESCAPE '\\'"),
+        "组合链应保留 search LIKE。实际: {}",
+        sql
+    );
+    assert!(
+        sql.contains("images.plugin_id = ?"),
+        "组合链应追加 plugin_id WHERE。实际: {}",
+        sql
+    );
+    assert!(params.contains(&"%原神%".to_string()));
+    assert!(params.contains(&"pixiv".to_string()));
+}
 
 #[test]
 fn sort_provider_delegates_get_child_to_inner() {

@@ -238,6 +238,22 @@ impl ImageQuery {
         )
     }
 
+    /// 查询组件：按 display_name 子串搜索（大小写不敏感）。
+    /// 调用方保证 query 非空；空串在 Provider 层已拦截。
+    pub fn display_name_search(query: String) -> Self {
+        let pattern = format!("%{}%", Self::escape_like(&query));
+        Self::new().with_where(
+            "LOWER(images.display_name) LIKE LOWER(?) ESCAPE '\\'",
+            vec![pattern],
+        )
+    }
+
+    fn escape_like(s: &str) -> String {
+        s.replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    }
+
     /// 查询组件：按畅游记录过滤
     pub fn surf_record_filter(surf_record_id: String) -> Self {
         Self::new().with_where("images.surf_record_id = ?", vec![surf_record_id])
