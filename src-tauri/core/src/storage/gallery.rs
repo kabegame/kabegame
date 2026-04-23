@@ -658,7 +658,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let (decorator, built_params) = query.build_count_sql();
-        // ai_hid 始终注入：HideGateProvider 的 WHERE 引用此别名做过滤。
+        // ai_hid 始终注入：HideProvider 的 WHERE 引用此别名做过滤。
         let sql = format!(
             "SELECT COUNT(*) FROM images LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'{}",
             HIDDEN_ALBUM_ID, decorator
@@ -684,7 +684,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let (decorator, built_params) = query.build_sql();
-        // ai_hid 始终注入：HideGateProvider 的 WHERE 引用此别名做过滤。
+        // ai_hid 始终注入：HideProvider 的 WHERE 引用此别名做过滤。
         let sql = format!(
             "SELECT
                 CAST(images.id AS TEXT),
@@ -813,7 +813,7 @@ impl Storage {
         let params_ref: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
         // 为避免与 query 的 album_images/ai 冲突，favorites/hidden join 都用独立 alias：fav_ai / ai_hid。
-        // ai_hid 始终注入：为 ImageInfo.is_hidden 投影服务，HideGateProvider 复用同一别名做 WHERE 过滤。
+        // ai_hid 始终注入：为 ImageInfo.is_hidden 投影服务，HideProvider 复用同一别名做 WHERE 过滤。
         let sql = format!(
             "SELECT
                 CAST(images.id AS TEXT) as id,

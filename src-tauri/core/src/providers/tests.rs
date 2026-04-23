@@ -20,10 +20,9 @@ use crate::providers::gallery::album::{
 };
 use crate::providers::gallery::all::GalleryAllProvider;
 use crate::providers::gallery::root::GalleryRootProvider;
+use crate::providers::gallery::search::GallerySearchDisplayNameShell;
 use crate::providers::provider::Provider;
-use crate::providers::shared::search::{
-    SearchDisplayNameProvider, SearchDisplayNameRootProvider,
-};
+use crate::providers::shared::search::SearchDisplayNameProvider;
 use crate::providers::shared::{
     album::AlbumsProvider, plugin::PluginProvider, sort::SortProvider,
 };
@@ -375,7 +374,6 @@ fn album_wallpaper_order_desc_flips_both() {
 fn search_leaf(query: &str) -> SearchDisplayNameProvider {
     SearchDisplayNameProvider {
         query: query.to_string(),
-        inner: Arc::new(GalleryRootProvider),
     }
 }
 
@@ -456,7 +454,8 @@ fn search_composes_with_plugin_filter() {
 }
 
 /// 模拟 `search/display-name/A/search/display-name/B/all/`——嵌套 search 应 AND 组合。
-/// 走 get_child 链以真实验证 SearchRootProvider → SearchDisplayNameRootProvider → 叶子的路由。
+/// 走 get_child 链以真实验证 GallerySearchShell → GallerySearchDisplayNameShell → 叶子壳的路由,
+/// 并确认叶子壳的 `get_child` 委派 GalleryRootProvider 后仍能再进入 search 子树。
 #[test]
 fn nested_search_produces_and_composition() {
     let composed = ImageQuery::new();
@@ -472,10 +471,10 @@ fn nested_search_produces_and_composition() {
         .expect("非空 query 应解析为叶子");
     let composed = leaf1.apply_query(composed);
 
-    // 第二层:从第一层叶子继续 get_child('search')(inner 是 GalleryRootProvider,仍有 search)
+    // 第二层:从第一层叶子继续 get_child('search')(叶子壳 get_child 委派 GalleryRootProvider,仍有 search)
     let search2 = leaf1
         .get_child("search", &composed)
-        .expect("search 叶子 delegate inner,inner 是 GalleryRootProvider,含 search");
+        .expect("叶子壳 get_child 委派 GalleryRootProvider,含 search");
     let display2 = search2
         .get_child("display-name", &composed)
         .expect("第二层同样有 display-name");
@@ -487,7 +486,7 @@ fn nested_search_produces_and_composition() {
     // 最后:all/
     let all = leaf2
         .get_child("all", &composed)
-        .expect("第二层叶子 delegate inner,含 all");
+        .expect("叶子壳 get_child 委派 GalleryRootProvider,含 all");
     let composed = all.apply_query(composed);
 
     let (sql, params) = composed.build_sql();
@@ -510,13 +509,13 @@ fn nested_search_produces_and_composition() {
     );
 }
 
-/// 空 query 在 SearchDisplayNameRootProvider::get_child 被拦截。
+/// 空 query 在 GallerySearchDisplayNameShell::get_child 被拦截。
 #[test]
 fn empty_query_is_rejected() {
-    let root = SearchDisplayNameRootProvider::new(Arc::new(GalleryRootProvider));
+    let shell = GallerySearchDisplayNameShell;
     let composed = ImageQuery::new();
-    assert!(root.get_child("", &composed).is_none());
-    assert!(root.get_child("   ", &composed).is_none());
+    assert!(shell.get_child("", &composed).is_none());
+    assert!(shell.get_child("   ", &composed).is_none());
 }
 
 #[test]
