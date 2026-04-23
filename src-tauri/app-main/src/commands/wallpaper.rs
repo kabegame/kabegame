@@ -1,6 +1,7 @@
 // 壁纸相关命令和函数
 
 use crate::wallpaper::manager::WallpaperController;
+use crate::wallpaper::rotator::{random_gallery_page_images, random_index};
 use crate::wallpaper::WallpaperRotator;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::settings::Settings;
@@ -388,29 +389,18 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
         current_cleaned.clone()
     } else {
         let picked_from_gallery: Option<String> = async {
-            let images_v = match Storage::global().get_all_images() {
-                Ok(v) => v,
-                Err(_) => return None,
-            };
-            let mut existing: Vec<String> = Vec::new();
-            for it in images_v {
-                if Path::new(&it.local_path).exists() {
-                    existing.push(it.local_path.clone());
-                }
-            }
+            let images_v = random_gallery_page_images().ok()?;
+            let existing: Vec<String> = images_v
+                .into_iter()
+                .filter(|it| Path::new(&it.local_path).exists())
+                .map(|it| it.local_path)
+                .collect();
             if existing.is_empty() {
                 None
             } else {
                 match rotation_mode.as_str() {
                     "sequential" => Some(existing[0].clone()),
-                    _ => {
-                        let idx = (std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_nanos() as usize)
-                            % existing.len();
-                        Some(existing[idx].clone())
-                    }
+                    _ => Some(existing[random_index(existing.len())].clone()),
                 }
             }
         }

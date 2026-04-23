@@ -2,8 +2,10 @@
 use std::{
     path::Path,
     str::FromStr,
-    sync::{Arc, OnceLock},
+    sync::OnceLock,
 };
+#[cfg(all(not(target_os = "android"), debug_assertions))]
+use std::sync::Arc;
 
 #[cfg(not(target_os = "android"))]
 use axum::{
@@ -16,12 +18,13 @@ use axum::{
         },
         Request, StatusCode, Uri,
     },
-    middleware::{from_fn, Next},
     response::{IntoResponse, Response},
     routing::get,
     Router,
 };
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), debug_assertions))]
+use axum::middleware::{from_fn, Next};
+#[cfg(all(not(target_os = "android"), debug_assertions))]
 use tokio::sync::Semaphore;
 #[cfg(not(target_os = "android"))]
 use serde::Deserialize;
@@ -366,26 +369,45 @@ pub fn file_routes() -> Router {
         .route("/proxy", get(handle_proxy_query))
 }
 
-/// web 模式下同时能响应多少张图片的上限。超出的请求在信号量上排队等待。
-#[cfg(not(target_os = "android"))]
+/// web 模式专用路由。
+///
+/// - **Release**：只保留 `/proxy`。图片和缩略图直接由 CDN 返回，web server
+///   不再经手磁盘 IO（避免并发下 IO 顶满把主进程拖死）；`commands_core::image`
+///   在 `ImageInfo` 序列化前把 `local_path` / `thumbnail_path` 改写成 CDN URL。
+/// - **Debug**：保留 `/file` `/thumbnail`，方便 `bun dev` 本地联调——
+///   开发机没 CDN，走本地文件最直观。并发闸只在 debug 生效。
+#[cfg(all(not(target_os = "android"), debug_assertions))]
+pub fn file_routes_web() -> Router {
+    let gated = Router::new()
+        .route("/file", get(handle_file_query))
+        .route("/thumbnail", get(handle_thumbnail_query))
+        .layer(from_fn(image_concurrency_mw));
+    gated.route("/proxy", get(handle_proxy_query))
+}
+
+#[cfg(all(not(target_os = "android"), not(debug_assertions)))]
+pub fn file_routes_web() -> Router {
+    Router::new().route("/proxy", get(handle_proxy_query))
+}
+
+/// Debug-only：/file 与 /thumbnail 的并发闸（10 个并发 + 无限排队）。
+/// Release 下 /file /thumbnail 不挂载，这些符号一起编译掉。
+#[cfg(all(not(target_os = "android"), debug_assertions))]
 const WEB_IMAGE_CONCURRENCY: usize = 10;
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), debug_assertions))]
 static WEB_IMAGE_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), debug_assertions))]
 fn web_image_semaphore() -> Arc<Semaphore> {
     WEB_IMAGE_SEMAPHORE
         .get_or_init(|| Arc::new(Semaphore::new(WEB_IMAGE_CONCURRENCY)))
         .clone()
 }
 
-/// 给 /file 与 /thumbnail 套用的并发闸：最多 WEB_IMAGE_CONCURRENCY 个在飞，其余排队。
-/// permit 在响应发出之前持有；一旦 handler 返回（Response 构造完成）就释放，不会等客户端读完 body。
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), debug_assertions))]
 async fn image_concurrency_mw(req: Request<Body>, next: Next) -> Response {
     let sem = web_image_semaphore();
-    // Semaphore 从不 close，acquire_owned 不会失败；兜底走降级（不限流），避免僵死。
     match sem.acquire_owned().await {
         Ok(permit) => {
             let resp = next.run(req).await;
@@ -394,16 +416,6 @@ async fn image_concurrency_mw(req: Request<Body>, next: Next) -> Response {
         }
         Err(_) => next.run(req).await,
     }
-}
-
-/// web 模式专用：/file 与 /thumbnail 套并发闸（10 个并发 + 无限排队），/proxy 不受限。
-#[cfg(not(target_os = "android"))]
-pub fn file_routes_web() -> Router {
-    let gated = Router::new()
-        .route("/file", get(handle_file_query))
-        .route("/thumbnail", get(handle_thumbnail_query))
-        .layer(from_fn(image_concurrency_mw));
-    gated.route("/proxy", get(handle_proxy_query))
 }
 
 #[cfg(not(target_os = "android"))]

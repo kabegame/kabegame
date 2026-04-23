@@ -20,9 +20,18 @@ export async function initHttpServerBaseUrl() {
   }
 }
 
+/** 绝对 URL 透传：web 上下文里 ImageInfo.localPath / thumbnailPath 已被后端
+ *  改写成 https://cdn... 直链（见 `src-tauri/app-main/src/web/image_rewrite.rs`），
+ *  直接交给 <img> 即可，不再经过本地 /file 代理。desktop 仍是文件系统路径，走老路径。 */
+function asAbsoluteUrlOrNull(p: string): string | null {
+  return p.startsWith("http://") || p.startsWith("https://") ? p : null;
+}
+
 export function fileToUrl(localPath: string): string {
   const path = (localPath || "").trim();
   if (!path) return "";
+  const abs = asAbsoluteUrlOrNull(path);
+  if (abs) return abs;
   if (IS_ANDROID) return "";
   if (httpServerBaseUrl === null) return "";
   return `${httpServerBaseUrl}/file?path=${encodeURIComponent(path)}`;
@@ -32,6 +41,8 @@ export function fileToUrl(localPath: string): string {
 export function thumbnailToUrl(thumbnailPath: string): string {
   const path = (thumbnailPath || "").trim();
   if (!path) return "";
+  const abs = asAbsoluteUrlOrNull(path);
+  if (abs) return abs;
   if (IS_ANDROID) return "";
   if (httpServerBaseUrl === null) return "";
   return `${httpServerBaseUrl}/thumbnail?path=${encodeURIComponent(path)}`;

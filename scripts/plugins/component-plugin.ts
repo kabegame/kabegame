@@ -122,8 +122,39 @@ export class ComponentPlugin extends BasePlugin {
 
     bs.hooks.beforeBuild.tap(this.name, (comp?: string) => {
       const component = comp ? new Component(comp) : this.component!;
+      const isAndroid = !!bs.context.mode?.isAndroid;
+      const isWeb = !!bs.context.mode?.isWeb;
+      const templateCtx = {
+        isWindows: !isAndroid && !isWeb && OSPlugin.isWindows,
+        isMacOS: !isAndroid && !isWeb && OSPlugin.isMacOS,
+        isLinux: !isAndroid && !isWeb && OSPlugin.isLinux,
+        isLight: isAndroid || bs.context.mode!.isLight,
+        isDev: bs.context.cmd!.isDev,
+        isAndroid,
+        isWeb,
+        isWindowEffect:
+          !isAndroid && !isWeb && (OSPlugin.isWindows || OSPlugin.isMacOS),
+        noResources: false,
+      };
+
+      // 编译 apps/<comp>/index.html.handlebars → index.html（在所有模式下，包括 web）
+      if (component.isMain) {
+        const indexHandlebars = path.resolve(
+          component.appFeDir,
+          "index.html.handlebars",
+        );
+        if (existsSync(indexHandlebars)) {
+          const indexOut = path.resolve(component.appFeDir, "index.html");
+          const indexTemplate = Handlebars.compile(
+            readFileSync(indexHandlebars, { encoding: "utf-8" }).toString(),
+          );
+          writeFileSync(indexOut, indexTemplate(templateCtx));
+          this.log(`生成 ${indexOut}`);
+        }
+      }
+
       // web mode 无 Tauri bundle，跳过 tauri.conf.json / capabilities 模板处理
-      if (bs.context.mode?.isWeb) return;
+      if (isWeb) return;
       // 编译可能存在的handlebars覆盖 tauri.config.json
       const tauriConfigHandlebars = path.resolve(
         component.appDir,
@@ -132,24 +163,12 @@ export class ComponentPlugin extends BasePlugin {
       this.log(`tauriConfigHandlebars: ${tauriConfigHandlebars}`);
       if (existsSync(tauriConfigHandlebars)) {
         const tauriConfig = path.resolve(component.appDir, "tauri.conf.json");
-        const isAndroid = !!bs.context.mode?.isAndroid;
         Handlebars.registerHelper("devServerHost", () => isAndroid ? getDevServerHost() : "localhost");
         const template = Handlebars.compile(
           readFileSync(tauriConfigHandlebars, {
             encoding: "utf-8",
           }).toString(),
         );
-        const templateCtx = {
-          isWindows: !isAndroid && OSPlugin.isWindows,
-          isMacOS: !isAndroid && OSPlugin.isMacOS,
-          isLinux: !isAndroid && OSPlugin.isLinux,
-          isLight: isAndroid || bs.context.mode!.isLight,
-          isDev: bs.context.cmd!.isDev,
-          isAndroid: isAndroid,
-          isWindowEffect:
-            !isAndroid && (OSPlugin.isWindows || OSPlugin.isMacOS),
-          noResources: false,
-        };
         writeFileSync(tauriConfig, template(templateCtx));
         // 仅 main 组件：用 handlebars 生成 capabilities/main.json（桌面不含 picker 权限，移动端含）
         if (component.isMain) {

@@ -90,15 +90,6 @@ pub enum CliIpcRequest {
     },
 
     // ======== Storage 相关 ========
-    /// 获取所有图片
-    StorageGetImages,
-
-    /// 分页获取图片
-    StorageGetImagesPaginated {
-        page: usize,
-        page_size: usize,
-    },
-
     /// 获取图片总数
     StorageGetImagesCount,
 
@@ -259,13 +250,6 @@ pub enum CliIpcRequest {
     /// 按 query 统计图片数量
     StorageGetImagesCountByQuery {
         query: serde_json::Value,
-    },
-
-    /// 按 query 获取图片范围
-    StorageGetImagesRangeByQuery {
-        query: serde_json::Value,
-        offset: usize,
-        limit: usize,
     },
 
     // ======== Task 调度（daemon 侧）========

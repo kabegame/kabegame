@@ -8,8 +8,6 @@ use std::sync::Arc;
 use kabegame_i18n::vd_display_name;
 
 use crate::providers::provider::{ChildEntry, Provider};
-// 不使用
-use crate::providers::shared::hide_gate::HideGateProvider;
 use crate::providers::vd::{
     albums::VdAlbumsProvider,
     all::VdAllProvider,

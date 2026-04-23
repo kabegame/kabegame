@@ -63,12 +63,6 @@ console.log("\n[2] read RPC methods");
     : err("get_tasks_page", r);
 }
 {
-  const r = await rpc("get_images_range", { offset: 0, limit: 3 });
-  Array.isArray(r.result?.images)
-    ? ok("get_images_range", `${r.result.images.length}/${r.result.total} images`)
-    : err("get_images_range", r);
-}
-{
   const r = await rpc("get_supported_image_types");
   Array.isArray(r.result?.extensions)
     ? ok("get_supported_image_types", `${r.result.extensions.length} exts`)
@@ -99,13 +93,6 @@ console.log("\n[4] error paths");
   r.error?.code === -32601
     ? ok("unknown method → -32601", r.error.message)
     : err("unknown method should be -32601", r);
-}
-{
-  // bad params
-  const r = await rpc("get_images_range", { offset: "bad" }, false);
-  r.error?.code === -32602
-    ? ok("bad params → -32602", r.error.message)
-    : err("bad params should be -32602", r);
 }
 
 // ── SSE ──────────────────────────────────────────────────────────────────────
