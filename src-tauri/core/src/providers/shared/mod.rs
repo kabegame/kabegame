@@ -1,6 +1,6 @@
 pub mod album;
 pub mod date;
-pub mod hide_gate;
+pub mod hide;
 pub mod media_type;
 pub mod page_size;
 pub mod plugin;
