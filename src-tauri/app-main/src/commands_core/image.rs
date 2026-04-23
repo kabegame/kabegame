@@ -1,28 +1,55 @@
-use kabegame_core::providers::{execute_provider_query, ProviderRuntime};
+//! Web JSON-RPC 的命令后端层。
+//!
+//! 唯一调用方是 `crate::web::dispatch`（桌面 Tauri 走 `crate::commands::image`，另一套）。
+//! 本模块事实上就是 web 边界：任何返回 `ImageInfo`（或嵌套 `ImageInfo`）的函数，
+//! **必须**在序列化前调用 `crate::web::image_rewrite::rewrite_image_info`，
+//! 把 `local_path` / `thumbnail_path` 改写成 CDN 绝对 URL。否则 web 客户端拿到
+//! 的是服务器本地路径，浏览器没法直接加载。
+
+use kabegame_core::gallery::GalleryBrowseEntry;
+use kabegame_core::providers::{
+    execute_provider_query_typed, provider_query_to_json, ProviderQueryTyped,
+};
 use kabegame_core::storage::image_events::{delete_images_with_events, toggle_image_favorite_with_event};
 use kabegame_core::storage::Storage;
 #[cfg(kabegame_mode = "standard")]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use serde_json::Value;
 
-pub async fn get_images_range(offset: usize, limit: usize) -> Result<Value, String> {
-    let result = Storage::global().get_images_range(offset, limit)?;
-    serde_json::to_value(result).map_err(|e| e.to_string())
+use crate::web::image_rewrite::rewrite_image_info;
+
+/// 对 typed provider 查询结果里的每个 Image 条目做 CDN URL 改写。
+fn rewrite_provider_query(t: &mut ProviderQueryTyped) {
+    if let ProviderQueryTyped::Listing { entries, .. } = t {
+        for entry in entries.iter_mut() {
+            if let GalleryBrowseEntry::Image { image } = entry {
+                rewrite_image_info(image);
+            }
+        }
+    }
 }
 
 pub async fn browse_gallery_provider(path: String) -> Result<Value, String> {
     let full = format!("gallery/{}", path.trim().trim_start_matches('/'));
-    let result = tokio::task::spawn_blocking(move || execute_provider_query(&full))
-        .await
-        .map_err(|e| e.to_string())??;
+    let result = tokio::task::spawn_blocking(move || {
+        let mut typed = execute_provider_query_typed(&full)?;
+        rewrite_provider_query(&mut typed);
+        provider_query_to_json(&typed)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     Ok(result)
 }
 
 pub async fn query_provider(path: String) -> Result<Value, String> {
     let p = path.trim().to_string();
-    let result = tokio::task::spawn_blocking(move || execute_provider_query(&p))
-        .await
-        .map_err(|e| e.to_string())??;
+    let result = tokio::task::spawn_blocking(move || {
+        let mut typed = execute_provider_query_typed(&p)?;
+        rewrite_provider_query(&mut typed);
+        provider_query_to_json(&typed)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     Ok(result)
 }
 
@@ -52,7 +79,10 @@ pub async fn get_gallery_time_filter_data() -> Result<Value, String> {
 }
 
 pub async fn get_image_by_id(image_id: String) -> Result<Value, String> {
-    let image = Storage::global().find_image_by_id(&image_id)?;
+    let mut image = Storage::global().find_image_by_id(&image_id)?;
+    if let Some(info) = image.as_mut() {
+        rewrite_image_info(info);
+    }
     serde_json::to_value(image).map_err(|e| e.to_string())
 }
 

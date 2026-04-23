@@ -9,10 +9,6 @@ use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 pub async fn handle_storage_request(req: &CliIpcRequest) -> Option<CliIpcResponse> {
     match req {
         // Images
-        CliIpcRequest::StorageGetImages => Some(images::get_images().await),
-        CliIpcRequest::StorageGetImagesPaginated { page, page_size } => {
-            Some(images::get_images_paginated(*page, *page_size).await)
-        }
         CliIpcRequest::StorageGetImagesCount => Some(images::get_images_count().await),
         CliIpcRequest::StorageGetImageById { image_id } => {
             Some(images::get_image_by_id(image_id).await)
@@ -103,12 +99,6 @@ pub async fn handle_storage_request(req: &CliIpcRequest) -> Option<CliIpcRespons
         CliIpcRequest::StorageGetImagesCountByQuery { query } => {
             Some(images::get_images_count_by_query(query).await)
         }
-        CliIpcRequest::StorageGetImagesRangeByQuery {
-            query,
-            offset,
-            limit,
-        } => Some(images::get_images_range_by_query(query, *offset, *limit).await),
-
         _ => None,
     }
 }

@@ -94,19 +94,6 @@ pub fn init_registry() {
         })),
     });
 
-    map.insert("get_images_range", MethodEntry {
-        requires_super: false,
-        handler: Arc::new(|p| Box::pin(async move {
-            #[derive(serde::Deserialize)]
-            #[serde(rename_all = "camelCase")]
-            struct Args { offset: usize, limit: usize }
-            let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-            crate::commands_core::image::get_images_range(args.offset, args.limit)
-                .await
-                .map_err(RpcError::internal)
-        })),
-    });
-
     map.insert("browse_gallery_provider", MethodEntry {
         requires_super: false,
         handler: Arc::new(|p| Box::pin(async move {

@@ -2,10 +2,10 @@
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
   "maxCacheSize": "20MB",
   "targetDefaults": {
-    "build-cli": {
+    "build-docs": {
       "cache": true,
-      "inputs": ["frontendCli"],
-      "outputs": ["{workspaceRoot}/dist-cli/**/*"]
+      "inputs": ["frontendDocs"],
+      "outputs": ["{workspaceRoot}/apps/docs/dist/**/*"]
     },
     "build-main": {
       "cache": true,
@@ -20,8 +20,7 @@
       { "env": "KABEGAME_MODE" },
       { "env": "TAURI_ENV_PLATFORM" },
       { "env": "TAURI_PLATFORM" },
-      { "env": "TAURI_DEBUG" },
-      { "runtime": "node -e \"['apps/main/.env','apps/main/.env.production','apps/main/.env.development'].forEach(f=>{try{process.stdout.write(require('fs').readFileSync(f,'utf8'))}catch(_){}})\"" }
+      { "env": "TAURI_DEBUG" }
     ],
     "frontendMain": [
       "{workspaceRoot}/apps/main/**/*",
@@ -30,6 +29,9 @@
       "{workspaceRoot}/bun.lock",
       "frontendEnv",
       "default"
+    ],
+    "frontendDocs": [
+      "{workspaceRoot}/apps/docs/**/*" 
     ],
     "sharedGlobals": []
   }

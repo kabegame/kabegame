@@ -1,3 +1,6 @@
+//! Web JSON-RPC 相册后端层。见 `super::image` 模块注释：
+//! 返回 `ImageInfo` 的函数必须先 [`crate::web::image_rewrite::rewrite_image_info`]。
+
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::image_events::{
     add_images_to_album_with_event, remove_images_from_album_with_event,
@@ -8,6 +11,8 @@ use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 #[cfg(kabegame_mode = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use serde_json::Value;
+
+use crate::web::image_rewrite::rewrite_image_info;
 
 pub async fn get_albums() -> Result<Value, String> {
     let albums = Storage::global().list_all_albums()?;
@@ -20,7 +25,10 @@ pub async fn get_album_counts() -> Result<Value, String> {
 }
 
 pub async fn get_album_preview(album_id: String, limit: usize) -> Result<Value, String> {
-    let images = Storage::global().get_album_preview(&album_id, limit)?;
+    let mut images = Storage::global().get_album_preview(&album_id, limit)?;
+    for info in images.iter_mut() {
+        rewrite_image_info(info);
+    }
     serde_json::to_value(images).map_err(|e| e.to_string())
 }
 

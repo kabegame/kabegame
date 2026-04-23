@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(wsl -d Ubuntu --user root --exec /bin/cat /etc/wsl.conf 2>&1)"
+    ]
+  }
+}
