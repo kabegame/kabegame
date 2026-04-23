@@ -1,5 +1,14 @@
-//! GalleryRootProvider：画廊根目录，列出 9 个固定子入口（canonical 名）。
-//! 类型归属：路由壳（gallery 根）。apply_query：noop。list_images：默认实现（不 override）。
+//! GalleryRootProvider:画廊根目录,列出 11 个 canonical 子入口。
+//! 类型归属:路由壳(gallery 根)。apply_query:noop。list_images:默认实现(不 override)。
+//!
+//! 11 个入口:`all` / `wallpaper-order` / `plugin` / `task` / `surf` / `media-type` /
+//! `date` / `date-range` / `album` / `hide` / `search`。其中 `hide` 与 `search` 都是
+//! gallery 特有的"路由壳 + 代理 shared 纯查询组件"模式——见 `gallery/hide.rs` 与
+//! `gallery/search.rs`。
+//!
+//! `search/` 允许嵌套(`search/.../A/search/.../B/...` = LIKE A AND LIKE B),
+//! 因为叶子壳 `list_children` / `get_child` 委派给 `GalleryRootProvider`,
+//! 下游树含 `search` 入口。
 
 use std::sync::Arc;
 
@@ -8,16 +17,17 @@ use crate::providers::gallery::{
     all::{GalleryAllProvider, GalleryWallpaperOrderProvider},
     date::GalleryDateGroupProvider,
     date_range::GalleryDateRangeRootProvider,
+    hide::GalleryHideShell,
     media_type::GalleryMediaTypeProvider,
     plugin::GalleryPluginGroupProvider,
+    search::GallerySearchShell,
     surf::GallerySurfGroupProvider,
     task::GalleryTaskGroupProvider,
 };
 use crate::providers::provider::{ChildEntry, Provider};
-use crate::providers::shared::hide_gate::HideGateProvider;
 use crate::storage::gallery::ImageQuery;
 
-/// 画廊根 provider — 固定 9 个 canonical 入口。
+/// 画廊根 provider — 10 个基础 canonical 入口 + `hide` + `search`(两个过滤壳)。
 pub struct GalleryRootProvider;
 
 impl Provider for GalleryRootProvider {
@@ -32,10 +42,8 @@ impl Provider for GalleryRootProvider {
             ChildEntry::new("date", Arc::new(GalleryDateGroupProvider)),
             ChildEntry::new("date-range", Arc::new(GalleryDateRangeRootProvider)),
             ChildEntry::new("album", Arc::new(GalleryAlbumsProvider)),
-            ChildEntry::new(
-                "hide",
-                Arc::new(HideGateProvider::new(Arc::new(GalleryRootProvider))),
-            ),
+            ChildEntry::new("hide", Arc::new(GalleryHideShell)),
+            ChildEntry::new("search", Arc::new(GallerySearchShell)),
         ])
     }
 
@@ -50,7 +58,8 @@ impl Provider for GalleryRootProvider {
             "date" => Arc::new(GalleryDateGroupProvider),
             "date-range" => Arc::new(GalleryDateRangeRootProvider),
             "album" => Arc::new(GalleryAlbumsProvider),
-            "hide" => Arc::new(HideGateProvider::new(Arc::new(GalleryRootProvider))),
+            "hide" => Arc::new(GalleryHideShell),
+            "search" => Arc::new(GallerySearchShell),
             _ => return None,
         };
         Some(provider)
