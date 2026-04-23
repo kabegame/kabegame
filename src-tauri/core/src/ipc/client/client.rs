@@ -100,22 +100,6 @@ impl IpcClient {
     }
 
     // ==================== Storage - Images ====================
-
-    /// 获取所有图片，不能用
-    pub async fn storage_get_images(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetImages).await
-    }
-
-    /// 分页获取图片
-    pub async fn storage_get_images_paginated(
-        &self,
-        page: usize,
-        page_size: usize,
-    ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetImagesPaginated { page, page_size })
-            .await
-    }
-
     /// 获取图片总数
     pub async fn storage_get_images_count(&self) -> Result<usize, String> {
         let v = self
@@ -381,20 +365,6 @@ impl IpcClient {
             .request_data(CliIpcRequest::StorageGetImagesCountByQuery { query })
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
-    }
-
-    pub async fn storage_get_images_range_by_query(
-        &self,
-        query: serde_json::Value,
-        offset: usize,
-        limit: usize,
-    ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetImagesRangeByQuery {
-            query,
-            offset,
-            limit,
-        })
-        .await
     }
 
     // ==================== Gallery / Provider ====================

@@ -190,94 +190,6 @@ pub(crate) fn row_optional_u64_ts(
 }
 
 impl Storage {
-    pub fn get_images_range(&self, offset: usize, limit: usize) -> Result<RangedImages, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let total = self.get_images_total_cached(&conn)?;
-
-        let query = format!(
-            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
-             COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
-             images.hash,
-             CASE WHEN ai_fav.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-             CASE WHEN ai_hid.image_id IS NOT NULL THEN 1 ELSE 0 END as is_hidden,
-             images.width,
-             images.height,
-             images.display_name,
-             COALESCE(images.type, 'image') as media_type,
-             images.last_set_wallpaper_at,
-             images.size
-             FROM images
-             LEFT JOIN album_images ai_fav ON images.id = ai_fav.image_id AND ai_fav.album_id = '{}'
-             LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
-             ORDER BY images.crawled_at ASC
-             LIMIT ? OFFSET ?",
-            FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID
-        );
-
-        let mut stmt = conn
-            .prepare(&query)
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let image_rows = stmt
-            .query_map(params![limit as i64, offset as i64], |row| {
-                Ok(ImageInfo {
-                    id: row.get(0)?,
-                    url: row.get::<_, Option<String>>(1)?,
-                    local_path: row.get(2)?,
-                    plugin_id: row.get(3)?,
-                    task_id: row.get(4)?,
-                    surf_record_id: row.get(5)?,
-                    crawled_at: row.get(6)?,
-                    metadata: None,
-                    metadata_id: row.get::<_, Option<i64>>(7)?,
-                    thumbnail_path: row.get(8)?,
-                    hash: row.get(9)?,
-                    favorite: row.get::<_, i64>(10)? != 0,
-                    is_hidden: row.get::<_, i64>(11)? != 0,
-                    local_exists: true,
-                    width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
-                    display_name: row.get(14)?,
-                    media_type: normalize_media_type(row.get::<_, Option<String>>(15)?),
-                    last_set_wallpaper_at: row_optional_u64_ts(row, 16)?,
-                    size: row.get::<_, Option<i64>>(17)?.map(|v| v as u64),
-                })
-            })
-            .map_err(|e| format!("Failed to query images: {}", e))?;
-
-        let mut images = Vec::new();
-        for row_result in image_rows {
-            images.push(row_result.map_err(|e| format!("Failed to read row: {}", e))?);
-        }
-
-        Ok(RangedImages {
-            images,
-            total,
-            offset,
-            limit,
-        })
-    }
-
-    pub fn get_images_paginated(
-        &self,
-        page: usize,
-        page_size: usize,
-    ) -> Result<PaginatedImages, String> {
-        let offset = page.saturating_mul(page_size);
-        let res = self.get_images_range(offset, page_size)?;
-        Ok(PaginatedImages {
-            images: res.images,
-            total: res.total,
-            page,
-            page_size,
-        })
-    }
-
-    pub fn get_all_images(&self) -> Result<Vec<ImageInfo>, String> {
-        let result = self.get_images_paginated(0, 10000)?;
-        Ok(result.images)
-    }
-
     pub fn find_image_by_id(&self, image_id: &str) -> Result<Option<ImageInfo>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
@@ -681,86 +593,6 @@ impl Storage {
         Ok(result)
     }
 
-    pub fn find_images_by_surf_record(
-        &self,
-        surf_record_id: &str,
-        offset: usize,
-        limit: usize,
-    ) -> Result<RangedImages, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let total: usize = conn
-            .query_row(
-                "SELECT COUNT(*) FROM images WHERE surf_record_id = ?1",
-                params![surf_record_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("Failed to query surf record image total: {}", e))?;
-
-        let query = format!(
-            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
-             COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
-             images.hash,
-             CASE WHEN ai_fav.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-             CASE WHEN ai_hid.image_id IS NOT NULL THEN 1 ELSE 0 END as is_hidden,
-             images.width,
-             images.height,
-             images.display_name,
-             COALESCE(images.type, 'image') as media_type,
-             images.last_set_wallpaper_at,
-             images.size
-             FROM images
-             LEFT JOIN album_images ai_fav ON images.id = ai_fav.image_id AND ai_fav.album_id = '{}'
-             LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
-             WHERE images.surf_record_id = ?1
-             ORDER BY images.crawled_at DESC
-             LIMIT ?2 OFFSET ?3",
-            FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID
-        );
-        let mut stmt = conn
-            .prepare(&query)
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-        let image_rows = stmt
-            .query_map(
-                params![surf_record_id, limit as i64, offset as i64],
-                |row| {
-                    let local_path: String = row.get(2)?;
-                    Ok(ImageInfo {
-                        id: row.get(0)?,
-                        url: row.get::<_, Option<String>>(1)?,
-                        local_path: local_path.clone(),
-                        plugin_id: row.get(3)?,
-                        task_id: row.get(4)?,
-                        surf_record_id: row.get(5)?,
-                        crawled_at: row.get(6)?,
-                        metadata: None,
-                        metadata_id: row.get::<_, Option<i64>>(7)?,
-                        thumbnail_path: row.get(8)?,
-                        hash: row.get(9)?,
-                        favorite: row.get::<_, i64>(10)? != 0,
-                        is_hidden: row.get::<_, i64>(11)? != 0,
-                        local_exists: PathBuf::from(&local_path).exists(),
-                        width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
-                        display_name: row.get(14)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(15)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 16)?,
-                        size: row.get::<_, Option<i64>>(17)?.map(|v| v as u64),
-                    })
-                },
-            )
-            .map_err(|e| format!("Failed to query surf record images: {}", e))?;
-        let mut images = Vec::new();
-        for row_result in image_rows {
-            images.push(row_result.map_err(|e| format!("Failed to read row: {}", e))?);
-        }
-        Ok(RangedImages {
-            images,
-            total,
-            offset,
-            limit,
-        })
-    }
-
     pub fn add_image(&self, mut image: ImageInfo) -> Result<ImageInfo, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
@@ -845,29 +677,22 @@ impl Storage {
     // 3.5.x 用户的存量数据已由之前版本补齐，不再需要启动时扫描回填。
 
     /// 删除前查询图片所属任务 id（用于事件广播）
-    pub fn get_task_ids_for_image(&self, image_id: &str) -> Result<Vec<String>, String> {
+    pub fn get_task_id_for_image(&self, image_id: &str) -> Result<Option<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
-            .and_then(|mut stmt| {
-                stmt.query_map(params![image_id], |row| row.get::<_, String>(0))
-                    .and_then(|rows| {
-                        let mut ids = Vec::new();
-                        for row_result in rows {
-                            if let Ok(id) = row_result {
-                                ids.push(id);
-                            }
-                        }
-                        Ok(ids)
-                    })
-            })
-            .map_err(|e| format!("Failed to query task IDs: {}", e))
+        conn.query_row(
+            "SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL",
+            params![image_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| format!("Failed to query task IDs: {}", e))
     }
 
     /// 批量图片在删除前涉及的任务 id（去重）
     pub fn collect_task_ids_for_images(&self, image_ids: &[String]) -> Result<Vec<String>, String> {
         let mut set = HashSet::new();
         for id in image_ids {
-            for tid in self.get_task_ids_for_image(id)? {
+            if let Some(tid) = self.get_task_id_for_image(id)? {
                 set.insert(tid);
             }
         }

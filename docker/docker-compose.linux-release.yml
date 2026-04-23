@@ -1,4 +1,11 @@
 # 用法：./docker/build-linux-release.sh（或 docker compose -f docker/docker-compose.linux-release.yml up --build）
+#
+# 设计：
+# - /src 是仓库 bind mount，源码改动不会失效镜像缓存。
+# - target/ 与 node_modules/ 放具名卷，持久化 cargo / bun 缓存；同时屏蔽宿主机（可能是 Windows）
+#   上平台相关的 node 原生模块与 cargo 中间产物，避免容器内外互踩。
+# - `bun install --frozen-lockfile` 只在 node_modules 为空时运行一次；lockfile 更新后请手动：
+#     docker compose -f docker/docker-compose.linux-release.yml run --rm pack-standard bun install --frozen-lockfile
 
 x-linux-release: &linux-release
   image: ${KABEGAME_LINUX_BUILD_IMAGE:-kabegame-linux-release:latest}
@@ -8,6 +15,12 @@ x-linux-release: &linux-release
   working_dir: /src
   stdin_open: true
   tty: false
+  volumes:
+    - ..:/src
+    - linux-release-cargo-target:/src/target
+    - linux-release-node-modules:/src/node_modules
+    - linux-release-cargo-registry:/root/.cargo/registry
+    - linux-release-cargo-git:/root/.cargo/git
 
 services:
   pack-standard:
@@ -16,7 +29,7 @@ services:
       - bash
       - -lc
       - >-
-        bun install --frozen-lockfile
+        { [ -d node_modules ] && [ -n "$(ls -A node_modules 2>/dev/null)" ]; } || bun install --frozen-lockfile
         && bun b -c cli
         && bun b -c main --mode standard --release --no-nx
 
@@ -26,6 +39,12 @@ services:
       - bash
       - -lc
       - >-
-        bun install --frozen-lockfile
+        { [ -d node_modules ] && [ -n "$(ls -A node_modules 2>/dev/null)" ]; } || bun install --frozen-lockfile
         && bun b -c cli
         && bun b -c main --mode light --release --no-nx
+
+volumes:
+  linux-release-cargo-target:
+  linux-release-node-modules:
+  linux-release-cargo-registry:
+  linux-release-cargo-git:

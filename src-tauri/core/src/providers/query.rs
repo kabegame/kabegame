@@ -9,6 +9,7 @@
 
 use serde_json::{json, Value};
 
+use crate::gallery::GalleryBrowseEntry;
 use crate::providers::provider::ProviderMeta;
 use crate::providers::runtime::ProviderRuntime;
 use crate::storage::Storage;
@@ -50,8 +51,27 @@ fn note_value(note: Option<(String, String)>) -> Option<Value> {
     note.map(|(title, content)| json!({ "title": title, "content": content }))
 }
 
-/// 统一入口：解析路径并执行查询。返回 JSON 值供 Tauri / MCP 直接使用。
-pub fn execute_provider_query(raw_path: &str) -> Result<Value, String> {
+/// Typed 版本的 provider 查询结果，`execute_provider_query` 的内部表示。
+/// 暴露给 web 边界层以便对 `Listing::entries` 里的 `ImageInfo` 做类型化改写
+/// （CDN URL 重写等），改写后再用 [`provider_query_to_json`] 序列化为和旧路径
+/// 字节级一致的 JSON envelope。
+#[derive(Debug)]
+pub enum ProviderQueryTyped {
+    Entry {
+        name: String,
+        meta: Option<ProviderMeta>,
+        note: Option<(String, String)>,
+    },
+    Listing {
+        entries: Vec<GalleryBrowseEntry>,
+        total: Option<usize>,
+        meta: Option<ProviderMeta>,
+        note: Option<(String, String)>,
+    },
+}
+
+/// Typed 入口：解析路径并执行查询，返回未序列化的 typed 结果。
+pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped, String> {
     let (path, mode) = parse_provider_path(raw_path);
     let rt = ProviderRuntime::global();
 
@@ -64,13 +84,11 @@ pub fn execute_provider_query(raw_path: &str) -> Result<Value, String> {
             let node = rt
                 .resolve(&path)?
                 .ok_or_else(|| format!("条目不存在: {}", raw_path))?;
-            let meta: Option<ProviderMeta> = node.provider.get_meta();
-            let note = note_value(node.provider.get_note());
-            Ok(json!({
-                "name": last,
-                "meta": meta,
-                "note": note,
-            }))
+            Ok(ProviderQueryTyped::Entry {
+                name: last,
+                meta: node.provider.get_meta(),
+                note: node.provider.get_note(),
+            })
         }
         ProviderPathQuery::List | ProviderPathQuery::ListWithMeta => {
             let node = rt
@@ -90,23 +108,47 @@ pub fn execute_provider_query(raw_path: &str) -> Result<Value, String> {
             };
             let images = node.provider.list_images(&composed_images)?;
 
-            let entries_json = {
-                let converted =
-                    crate::gallery::browse_from_provider(children, images)?;
-                serde_json::to_value(&converted).map_err(|e| e.to_string())?
-            };
+            let entries = crate::gallery::browse_from_provider(children, images)?;
 
-            let meta = node.provider.get_meta();
-            let note = note_value(node.provider.get_note());
             let total: Option<usize> =
                 Storage::global().get_images_count_by_query(&node.composed).ok();
 
+            Ok(ProviderQueryTyped::Listing {
+                entries,
+                total,
+                meta: node.provider.get_meta(),
+                note: node.provider.get_note(),
+            })
+        }
+    }
+}
+
+/// 把 typed 查询结果序列化为 Tauri / MCP / web 共用的 JSON envelope 形状。
+/// 保持与旧 `execute_provider_query` 字节级一致（字段顺序、null 位置）。
+pub fn provider_query_to_json(t: &ProviderQueryTyped) -> Result<Value, String> {
+    match t {
+        ProviderQueryTyped::Entry { name, meta, note } => Ok(json!({
+            "name": name,
+            "meta": meta,
+            "note": note_value(note.clone()),
+        })),
+        ProviderQueryTyped::Listing { entries, total, meta, note } => {
+            let entries_json = serde_json::to_value(entries).map_err(|e| e.to_string())?;
             Ok(json!({
                 "entries": entries_json,
                 "total": total,
                 "meta": meta,
-                "note": note,
+                "note": note_value(note.clone()),
             }))
         }
     }
+}
+
+/// 统一入口：解析路径并执行查询。返回 JSON 值供 Tauri / MCP 直接使用。
+///
+/// 实现：内部走 [`execute_provider_query_typed`] + [`provider_query_to_json`]。
+/// web 边界若需类型化改写请直接调 typed 版本，避免往 Value 上塞 JSON 遍历代码。
+pub fn execute_provider_query(raw_path: &str) -> Result<Value, String> {
+    let typed = execute_provider_query_typed(raw_path)?;
+    provider_query_to_json(&typed)
 }
