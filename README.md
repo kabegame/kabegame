@@ -405,7 +405,7 @@ adb forward tcp:9222 localabstract:chrome_devtools_remote
 └── Cargo.toml
 ```
 
-<img src="https://39.106.178.113:5600/p/HI9qXY1Le" />
+<img src="https://umi.kabegame.com/p/HI9qXY1Le" />
 
 ## Plugin development
 
