@@ -245,7 +245,7 @@ bun check -c main            # チェック
 └── ...
 ```
 
-<img src="https://39.106.178.113:5600/p/eOSPVVSPW" />
+<img src="https://umi.kabegame.com/p/eOSPVVSPW" />
 
 ## プラグイン開発
 
