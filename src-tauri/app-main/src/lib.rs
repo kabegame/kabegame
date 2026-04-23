@@ -1,8 +1,7 @@
 // Shared modules (local + web)
 pub(crate) mod core_init;
 
-// Shared non-android modules (local desktop + web)
-#[cfg(not(target_os = "android"))]
+// Shared modules (local desktop + web)
 pub(crate) mod commands_core;
 #[cfg(not(target_os = "android"))]
 pub(crate) mod web;
@@ -26,6 +25,8 @@ mod compress_provider;
 mod content_io_provider;
 #[cfg(not(target_os = "android"))]
 mod http_server;
+#[cfg(feature = "local")]
+mod ipc;
 #[cfg(all(feature = "local", target_os = "linux"))]
 mod linux_desktop;
 #[cfg(not(target_os = "android"))]
@@ -36,12 +37,10 @@ pub mod startup;
 mod tray;
 #[cfg(feature = "local")]
 mod utils;
-#[cfg(feature = "local")]
-mod wallpaper;
-#[cfg(feature = "local")]
-mod ipc;
 #[cfg(all(feature = "local", kabegame_mode = "standard"))]
 mod vd_listener;
+#[cfg(feature = "local")]
+mod wallpaper;
 
 // ---- local-only imports ----
 #[cfg(feature = "local")]
