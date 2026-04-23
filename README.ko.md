@@ -233,7 +233,7 @@ bun check -c main            # 검사
 └── ...
 ```
 
-<img src="https://umi.kabegame.com/p/amUGwJShY" />
+![visitor badge](https://visitor-badge.laobi.icu/badge?page_id=kabegame.readme.ko)
 
 ## 플러그인 개발
 
