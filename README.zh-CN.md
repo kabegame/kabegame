@@ -445,7 +445,7 @@ adb forward tcp:9222 localabstract:chrome_devtools_remote
 └── Cargo.toml            # Rust Cargo Workspace 配置
 ```
 
-<img src="https://umi.kabegame.com/p/znhiqixFf" />
+![visitor badge](https://visitor-badge.laobi.icu/badge?page_id=kabegame.readme.zh-CN)
 
 ## 插件开发
 

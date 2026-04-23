@@ -10,6 +10,8 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers�
   <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
 </div>
 
+![visitor badge](https://visitor-badge.laobi.icu/badge?page_id=kabegame.readme.en)
+
 ## Gallery Screenshots
 
 <table>
@@ -404,8 +406,6 @@ adb forward tcp:9222 localabstract:chrome_devtools_remote
 ├── package.json
 └── Cargo.toml
 ```
-
-<img src="https://umi.kabegame.com/p/HI9qXY1Le" />
 
 ## Plugin development
 

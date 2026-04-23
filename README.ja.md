@@ -245,7 +245,7 @@ bun check -c main            # チェック
 └── ...
 ```
 
-<img src="https://umi.kabegame.com/p/eOSPVVSPW" />
+![visitor badge](https://visitor-badge.laobi.icu/badge?page_id=kabegame.readme.ja)
 
 ## プラグイン開発
 
