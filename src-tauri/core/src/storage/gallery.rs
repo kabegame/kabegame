@@ -238,6 +238,22 @@ impl ImageQuery {
         )
     }
 
+    /// 查询组件：按 display_name 子串搜索（大小写不敏感）。
+    /// 调用方保证 query 非空；空串在 Provider 层已拦截。
+    pub fn display_name_search(query: String) -> Self {
+        let pattern = format!("%{}%", Self::escape_like(&query));
+        Self::new().with_where(
+            "LOWER(images.display_name) LIKE LOWER(?) ESCAPE '\\'",
+            vec![pattern],
+        )
+    }
+
+    fn escape_like(s: &str) -> String {
+        s.replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    }
+
     /// 查询组件：按畅游记录过滤
     pub fn surf_record_filter(surf_record_id: String) -> Self {
         Self::new().with_where("images.surf_record_id = ?", vec![surf_record_id])
@@ -642,7 +658,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let (decorator, built_params) = query.build_count_sql();
-        // ai_hid 始终注入：HideGateProvider 的 WHERE 引用此别名做过滤。
+        // ai_hid 始终注入：HideProvider 的 WHERE 引用此别名做过滤。
         let sql = format!(
             "SELECT COUNT(*) FROM images LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'{}",
             HIDDEN_ALBUM_ID, decorator
@@ -668,7 +684,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let (decorator, built_params) = query.build_sql();
-        // ai_hid 始终注入：HideGateProvider 的 WHERE 引用此别名做过滤。
+        // ai_hid 始终注入：HideProvider 的 WHERE 引用此别名做过滤。
         let sql = format!(
             "SELECT
                 CAST(images.id AS TEXT),
@@ -797,7 +813,7 @@ impl Storage {
         let params_ref: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
         // 为避免与 query 的 album_images/ai 冲突，favorites/hidden join 都用独立 alias：fav_ai / ai_hid。
-        // ai_hid 始终注入：为 ImageInfo.is_hidden 投影服务，HideGateProvider 复用同一别名做 WHERE 过滤。
+        // ai_hid 始终注入：为 ImageInfo.is_hidden 投影服务，HideProvider 复用同一别名做 WHERE 过滤。
         let sql = format!(
             "SELECT
                 CAST(images.id AS TEXT) as id,
