@@ -12,12 +12,6 @@ use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use kabegame_core::virtual_driver::VirtualDriveService;
 use tauri::AppHandle;
 
-#[tauri::command]
-pub async fn get_images_range(offset: usize, limit: usize) -> Result<serde_json::Value, String> {
-    let result = Storage::global().get_images_range(offset, limit)?;
-    Ok(serde_json::to_value(result).map_err(|e| e.to_string())?)
-}
-
 /// Gallery provider 浏览。路径语法由调用方控制：
 /// - `album/xyz/1/`  → list（返回 entries + total + meta + note）
 /// - `album/xyz/1/*` → list with meta（Dir 条目带批量 meta）

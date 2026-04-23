@@ -4,7 +4,7 @@
 
 Tauri 기반 이차원 크롤러 클라이언트! 벽지 크롤링·관리·설정·로테이션. 매일 좋아하는 이미지로 힐링하세요~ 플러그인으로 확장 가능, 다양한 이차원·애니 벽지 사이트에서 쉽게 이미지를 가져올 수 있습니다.
 
-> 🌐 **데모 페이지**: [https://39.106.178.113/](https://39.106.178.113/)
+> 🌐 **데모 페이지**: [https://kabegame.com/](https://kabegame.com/)
 
 <div align="center">
   <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
@@ -233,7 +233,7 @@ bun check -c main            # 검사
 └── ...
 ```
 
-<img src="https://39.106.178.113:5600/p/amUGwJShY" />
+![visitor badge](https://visitor-badge.laobi.icu/badge?page_id=kabegame.readme.ko)
 
 ## 플러그인 개발
 

@@ -4,7 +4,7 @@
 
 Tauri ベースの二次元クローラークライアント！画像をクロール、壁紙をクロール・管理・設定・ローテーション。推しの画像たちで毎日癒やされよう～ プラグインで拡張可能、様々な二次元系サイトから簡単に画像を取得できます。
 
-> 🌐 **デモページ**：[https://39.106.178.113/](https://39.106.178.113/)
+> 🌐 **デモページ**：[https://kabegame.com/](https://kabegame.com/)
 
 <div align="center">
   <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
@@ -245,7 +245,7 @@ bun check -c main            # チェック
 └── ...
 ```
 
-<img src="https://39.106.178.113:5600/p/eOSPVVSPW" />
+![visitor badge](https://visitor-badge.laobi.icu/badge?page_id=kabegame.readme.ja)
 
 ## プラグイン開発
 

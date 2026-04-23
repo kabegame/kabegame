@@ -4,11 +4,13 @@
 
 A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers—let your waifus (or husbandos) keep you company every day~ Plugin-extensible, so you can easily grab images from all kinds of anime wallpaper sites.
 
-> 🌐 **Demo Page**: [https://39.106.178.113/](https://39.106.178.113/)
+> 🌐 **Demo Page**: [https://kabegame.com/](https://kabegame.com/)
 
 <div align="center">
   <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
 </div>
+
+![visitor badge](https://visitor-badge.laobi.icu/badge?page_id=kabegame.readme.en)
 
 ## Gallery Screenshots
 
@@ -404,8 +406,6 @@ adb forward tcp:9222 localabstract:chrome_devtools_remote
 ├── package.json
 └── Cargo.toml
 ```
-
-<img src="https://39.106.178.113:5600/p/HI9qXY1Le" />
 
 ## Plugin development
 
