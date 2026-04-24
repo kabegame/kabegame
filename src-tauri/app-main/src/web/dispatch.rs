@@ -1111,9 +1111,7 @@ pub fn init_registry() {
             #[derive(serde::Deserialize)]
             struct Args { count: u32 }
             let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-            crate::commands_core::settings::set_max_concurrent_downloads(args.count)
-                .await
-                .map_err(RpcError::internal)
+            crate::commands_core::settings::set_max_concurrent_downloads(args.count).map_err(RpcError::internal)
         })),
     });
 

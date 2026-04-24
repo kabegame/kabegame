@@ -312,7 +312,7 @@ fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
         None => None,
     };
 
-    let req = kabegame_core::ipc::ipc::CliIpcRequest::PluginRun {
+    let req = kabegame_core::ipc::ipc::IpcRequest::PluginRun {
         plugin: args.plugin,
         output_dir: args
             .output_dir
@@ -378,7 +378,7 @@ fn vd_mount(_args: VdMountArgs) -> Result<(), String> {
             daemon_path.display()
         ));
     }
-    let req = kabegame_core::ipc::ipc::CliIpcRequest::VdMount;
+    let req = kabegame_core::ipc::ipc::IpcRequest::VdMount;
     let resp = rt.block_on(kabegame_core::ipc::ipc::request(req))?;
     if resp.ok {
         println!("{}", resp.message.unwrap_or_else(|| "ok".to_string()));
@@ -403,7 +403,7 @@ fn vd_unmount(_args: VdUnmountArgs) -> Result<(), String> {
             daemon_path.display()
         ));
     }
-    let req = kabegame_core::ipc::ipc::CliIpcRequest::VdUnmount;
+    let req = kabegame_core::ipc::ipc::IpcRequest::VdUnmount;
     let resp = rt.block_on(kabegame_core::ipc::ipc::request(req))?;
     if resp.ok {
         println!("{}", resp.message.unwrap_or_else(|| "ok".to_string()));
@@ -429,7 +429,7 @@ fn vd_status(args: VdStatusArgs) -> Result<(), String> {
             daemon_path.display()
         ));
     }
-    let req = kabegame_core::ipc::ipc::CliIpcRequest::VdStatus;
+    let req = kabegame_core::ipc::ipc::IpcRequest::VdStatus;
     let resp = rt.block_on(kabegame_core::ipc::ipc::request(req))?;
     println!(
         "{}",
@@ -449,7 +449,7 @@ async fn ipc_status() -> Result<(), String> {
         ));
     }
     let resp =
-        kabegame_core::ipc::ipc::request(kabegame_core::ipc::ipc::CliIpcRequest::Status).await?;
+        kabegame_core::ipc::ipc::request(kabegame_core::ipc::ipc::IpcRequest::Status).await?;
     println!(
         "{}",
         serde_json::to_string_pretty(&resp).unwrap_or_else(|_| "ok".to_string())

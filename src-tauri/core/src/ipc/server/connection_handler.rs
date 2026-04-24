@@ -1,7 +1,7 @@
 //! 连接处理逻辑（Windows 和 Unix 通用）
 
 use crate::ipc::ipc::{decode_frame, encode_frame, read_one_frame};
-use crate::ipc::{CliIpcRequest, CliIpcResponse};
+use crate::ipc::{IpcRequest, IpcResponse};
 use crate::ipc_dbg;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -17,8 +17,8 @@ pub async fn handle_connection<R, W, F, Fut>(
 ) where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
-    F: Fn(CliIpcRequest) -> Fut + Send + Sync + Clone + 'static,
-    Fut: std::future::Future<Output = CliIpcResponse> + Send,
+    F: Fn(IpcRequest) -> Fut + Send + Sync + Clone + 'static,
+    Fut: std::future::Future<Output = IpcResponse> + Send,
 {
     // 创建写入通道：用于发送响应和事件
     let (write_tx, mut write_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -55,14 +55,14 @@ pub async fn handle_connection<R, W, F, Fut>(
                         ipc_dbg!("[DEBUG] IPC 服务器读取 CBOR 帧，长度: {}", payload.len());
 
                         // 尝试解析为 IpcEnvelope<CliIpcRequest>（带 request_id）
-                        let (req, request_id): (CliIpcRequest, Option<u64>) = match decode_frame::<crate::ipc::ipc::IpcEnvelope<CliIpcRequest>>(&payload) {
+                        let (req, request_id): (IpcRequest, Option<u64>) = match decode_frame::<crate::ipc::ipc::IpcEnvelope<IpcRequest>>(&payload) {
                             Ok(envelope) => {
                                 ipc_dbg!("[DEBUG] IPC 服务器解析为 IpcEnvelope，request_id={}", envelope.request_id);
                                 (envelope.payload, Some(envelope.request_id))
                             }
                             Err(_) => {
                                 // 回退：尝试直接解析为 CliIpcRequest（无 request_id）
-                                match decode_frame::<CliIpcRequest>(&payload) {
+                                match decode_frame::<IpcRequest>(&payload) {
                                     Ok(req) => {
                                         ipc_dbg!("[DEBUG] IPC 服务器解析为 CliIpcRequest（无 request_id）");
                                         (req, None)
@@ -76,7 +76,7 @@ pub async fn handle_connection<R, W, F, Fut>(
                         };
 
                         // 检查是否是 SubscribeEvents 请求
-                        if let CliIpcRequest::SubscribeEvents { kinds } = req.clone() {
+                        if let IpcRequest::SubscribeEvents { kinds } = req.clone() {
                             ipc_dbg!(
                                 "[DEBUG] IPC 服务器收到 SubscribeEvents 请求, client_id={}, kinds={:?}",
                                 client_id, kinds

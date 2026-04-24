@@ -10,8 +10,6 @@ pub(crate) mod web;
 #[cfg(feature = "web")]
 mod web_assets;
 #[cfg(feature = "web")]
-mod web_entry;
-#[cfg(feature = "web")]
 mod web_import;
 
 // Local (Tauri native) modules
@@ -25,13 +23,11 @@ mod compress_provider;
 mod content_io_provider;
 #[cfg(not(target_os = "android"))]
 mod http_server;
-#[cfg(feature = "local")]
 mod ipc;
 #[cfg(all(feature = "local", target_os = "linux"))]
 mod linux_desktop;
 #[cfg(not(target_os = "android"))]
 mod mcp_server;
-#[cfg(feature = "local")]
 pub mod startup;
 #[cfg(all(feature = "local", not(mobile)))]
 mod tray;
@@ -49,14 +45,12 @@ use commands::*;
 use core::fmt;
 #[cfg(all(feature = "local", not(target_os = "android")))]
 use http_server::get_http_server_base_url;
-#[cfg(feature = "local")]
 use startup::*;
-#[cfg(feature = "local")]
 use std::process;
 #[cfg(feature = "local")]
 use std::sync::Arc;
 #[cfg(feature = "local")]
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 #[cfg(all(feature = "local", not(target_os = "android")))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -72,11 +66,173 @@ use kabegame_core::storage::organize::OrganizeService;
 #[cfg(all(feature = "local", kabegame_mode = "standard"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 
-// ---- web entry point ----
+use axum::{Router, routing::get};
+use std::net::SocketAddr;
 
+fn init(
+    #[cfg(feature = "local")]
+    app: &mut tauri::App
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+     // 若有清理标记，必须在 init_globals 之前清理 data/cache，否则 DB 等已打开无法删除
+    #[cfg(all(not(target_os = "android"), feature = "local"))]
+    let _ = cleanup_user_data_if_marked();
+
+    #[cfg(feature = "web")]
+    crate::core_init::init_app_paths_for_web()?;
+
+    // 启动内置 Backend
+    crate::core_init::init_globals()?;
+    // 在初始化全局状态后、初始化壁纸控制器前，检测并缓存 Linux 桌面环境
+    #[cfg(all(target_os = "linux", feature = "local"))]
+    {
+        crate::linux_desktop::init_linux_desktop();
+    }
+    
+    // 公共步骤
+    start_event_loop(
+        #[cfg(feature = "local")]
+        app.app_handle().clone()
+    );
+    // 命令行带 --minimized 时不创建主窗口，避免窗口闪现；托盘/IPC 显示时由 ensure_main_window 再创建
+    #[cfg(all(not(target_os = "android"), feature = "local"))]
+    if !startup::is_auto_startup() {
+        if let Err(e) = create_main_window(&app.app_handle()) {
+            return Err(Box::new(std::io::Error::other(e)));
+        }
+    }
+    #[cfg(all(not(target_os = "android"), feature = "local"))]
+    init_crawler_window(app.app_handle().clone());
+    // 初始化壁纸控制器
+    #[cfg(feature = "local")]
+    init_wallpaper_controller(app);
+    // 启动 TaskScheduler（启动 DownloadQueue 的 worker）
+    start_task_scheduler();
+    // 初始化download worker
+    init_download_workers();
+    // 初始化任务阻塞worker线程池
+    start_download_workers();
+    // 启动事件转发任务
+    start_event_forward_task();
+
+    // 首次启动：处理打开kgpg文件启动参数（仅local）
+    #[cfg(all(not(target_os = "android"), feature = "local"))]
+    if let Some(path) = startup::extract_kgpg_file_from_args() {
+
+        let app_handle_clone = app.app_handle().clone();
+        // 等待前端准备好
+        app.app_handle().once("app-ready", move |_| {
+            let _ = app_handle_clone.emit(
+                "app-import-plugin",
+                serde_json::json!({
+                    "kgpgPath": path
+                }),
+            );
+        });
+    }
+
+    #[cfg(all(not(target_os = "android")))]
+    {
+        #[cfg(feature = "local")]
+        tauri::async_runtime::spawn(async {
+            if let Err(e) = mcp_server::start_mcp_server().await {
+                eprintln!("Failed to start MCP server: {}", e);
+            }
+        });
+        
+        startup::start_ipc_server(
+            #[cfg(feature = "local")]
+            app.app_handle().clone()
+        );
+    }
+    #[cfg(all(target_os = "android", feature = "local"))]
+    {
+        let provider = content_io_provider::PickerContentIoProvider::new(
+            app.app_handle().clone(),
+        );
+        let proxy = content_io_provider::ChannelContentIoProvider::new(provider);
+        // 设置内容IO提供者
+        kabegame_core::crawler::content_io::set_content_io_provider(Box::new(
+            proxy,
+        ));
+        // 设置归档提取提供者
+        let archiver_provider = archiver_provider::ArchiverContentProvider::new(
+            app.app_handle().clone(),
+        );
+        let archiver_proxy = archiver_provider::ChannelArchiveExtractProvider::new(
+            archiver_provider,
+        );
+        kabegame_core::crawler::archiver::set_archive_extract_provider(Box::new(
+            archiver_proxy,
+        ));
+
+        let compress_provider =
+            compress_provider::PluginVideoCompressProvider::new(
+                app.app_handle().clone(),
+            );
+        let compress_proxy =
+            compress_provider::ChannelVideoCompressProvider::new(compress_provider);
+        if let Err(e) = kabegame_core::crawler::downloader::video_compress::set_android_video_compress_provider(Arc::new(compress_proxy))
+        {
+            eprintln!("[VideoCompress] Failed to set android compress provider: {e}");
+        }
+    }
+
+    // 初始化插件缓存
+    init_kgpg_plugin();
+
+    #[cfg(feature = "local")]
+    tauri::async_runtime::block_on(http_server::start_http_server());
+
+    Ok(())
+}
+
+// ---- web entry point ----
 #[cfg(feature = "web")]
 pub fn run() {
-    web_entry::run();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build tokio runtime");
+
+    rt.block_on(async move {
+        if let Err(e) = init() {
+            eprintln!("服务器初始化失败: {}", e);
+            process::exit(1);
+        }
+
+        tokio::spawn(async { crate::web_import::gc_stale_uploads().await });
+
+        // web 无前端弹窗确认：启动时自动触发所有漏跑的定时任务
+        tokio::spawn(async {
+            match kabegame_core::scheduler::collect_missed_runs_now() {
+                Ok(items) if !items.is_empty() => {
+                    let ids: Vec<String> = items.iter().map(|i| i.config_id.clone()).collect();
+                    println!("  ✓ Auto-running {} missed schedule(s)", ids.len());
+                    kabegame_core::scheduler::run_missed_configs(&ids);
+                    let _ = kabegame_core::scheduler::Scheduler::global().reload_config("").await;
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("  ✗ Failed to collect missed runs: {e}"),
+            }
+        });
+
+        let router = Router::new()
+            .route("/__ping", get(|| async { "ok" }))
+            .merge(crate::http_server::file_routes_web())
+            .merge(crate::web_import::api_routes())
+            .merge(crate::mcp_server::mcp_nest())
+            .merge(crate::web::web_routes())
+            .fallback_service(crate::web_assets::static_assets_router());
+
+        let addr: SocketAddr = "0.0.0.0:7490".parse().unwrap();
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .expect("Failed to bind 0.0.0.0:7490");
+        println!("  ✓ Web server listening on {addr}");
+        axum::serve(listener, router)
+            .await
+            .expect("Web server exited unexpectedly");
+    });
 }
 
 // ---- local (Tauri) entry point ----
@@ -121,99 +277,13 @@ pub fn run() {
 
     let app = builder
         .setup(|app| {
-            // 若有清理标记，必须在 init_globals 之前清理 data/cache，否则 DB 等已打开无法删除
-            #[cfg(not(target_os = "android"))]
-            let _ = cleanup_user_data_if_marked();
-
-            // 启动内置 Backend
-            match crate::core_init::init_globals() {
-                Ok(()) => {
-                    // 在初始化全局状态后、初始化壁纸控制器前，检测并缓存 Linux 桌面环境
-                    #[cfg(target_os = "linux")]
-                    {
-                        crate::linux_desktop::init_linux_desktop();
-                    }
-
-                    // 公共步骤
-                    start_local_event_loop(app.app_handle().clone());
-                    // 命令行带 --minimized 时不创建主窗口，避免窗口闪现；托盘/IPC 显示时由 ensure_main_window 再创建
-                    #[cfg(not(target_os = "android"))]
-                    if !startup::is_auto_startup() {
-                        if let Err(e) = create_main_window(&app.app_handle()) {
-                            return Err(Box::new(std::io::Error::other(e)));
-                        }
-                    }
-                    #[cfg(not(target_os = "android"))]
-                    init_crawler_window(app.app_handle().clone());
-                    // 初始化壁纸控制器
-                    init_wallpaper_controller(app);
-                    // 启动 TaskScheduler（启动 DownloadQueue 的 worker）
-                    start_task_scheduler();
-                    // 初始化download worker
-                    init_download_workers();
-                    // 初始化任务阻塞worker线程池
-                    start_download_workers();
-                    // 启动事件转发任务
-                    start_event_forward_task();
-
-                    #[cfg(not(target_os = "android"))]
-                    {
-                        tauri::async_runtime::spawn(async {
-                            if let Err(e) = http_server::start_http_server().await {
-                                eprintln!("Failed to start file server: {}", e);
-                            }
-                        });
-                        tauri::async_runtime::spawn(async {
-                            if let Err(e) = mcp_server::start_mcp_server().await {
-                                eprintln!("Failed to start MCP server: {}", e);
-                            }
-                        });
-                        startup::start_ipc_server(app.app_handle().clone());
-                    }
-                    #[cfg(target_os = "android")]
-                    {
-                        let provider = content_io_provider::PickerContentIoProvider::new(
-                            app.app_handle().clone(),
-                        );
-                        let proxy = content_io_provider::ChannelContentIoProvider::new(provider);
-                        // 设置内容IO提供者
-                        kabegame_core::crawler::content_io::set_content_io_provider(Box::new(
-                            proxy,
-                        ));
-                        // 设置归档提取提供者
-                        let archiver_provider = archiver_provider::ArchiverContentProvider::new(
-                            app.app_handle().clone(),
-                        );
-                        let archiver_proxy = archiver_provider::ChannelArchiveExtractProvider::new(
-                            archiver_provider,
-                        );
-                        kabegame_core::crawler::archiver::set_archive_extract_provider(Box::new(
-                            archiver_proxy,
-                        ));
-
-                        let compress_provider =
-                            compress_provider::PluginVideoCompressProvider::new(
-                                app.app_handle().clone(),
-                            );
-                        let compress_proxy =
-                            compress_provider::ChannelVideoCompressProvider::new(compress_provider);
-                        if let Err(e) = kabegame_core::crawler::downloader::video_compress::set_android_video_compress_provider(Arc::new(compress_proxy))
-                        {
-                            eprintln!("[VideoCompress] Failed to set android compress provider: {e}");
-                        }
-                    }
-
-                    // 初始化插件缓存
-                    init_kgpg_plugin();
-                }
-                Err(e) => {
-                    utils::show_error(
-                        app.app_handle(),
-                        kabegame_i18n::t!("dialog.initFatalError", detail = e.to_string()),
-                    );
-                    eprintln!("初始化过程中出现了致命错误！:{}", e);
-                    process::exit(1);
-                }
+            if let Err(e) = init(app) {
+                 #[cfg(feature = "local")]
+                utils::show_error(
+                    app.app_handle(),
+                    kabegame_i18n::t!("dialog.initFatalError", detail = e.to_string()),
+                );
+                eprintln!("应用初始化过程中出现了错误！:{}", e);
             }
             Ok(())
         })

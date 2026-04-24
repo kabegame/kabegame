@@ -239,18 +239,12 @@ pub fn set_auto_open_crawler_webview(enabled: bool) -> Result<(), String> {
 #[tauri::command]
 pub async fn set_max_concurrent_downloads(count: u32) -> Result<(), String> {
     Settings::global().set_max_concurrent_downloads(count)?;
-
-    // 同时更新运行时调度器配置
-    kabegame_core::crawler::TaskScheduler::global()
-        .set_download_concurrency()
-        .await;
     Ok(())
 }
 
 #[tauri::command]
 pub fn set_max_concurrent_tasks(count: u32) -> Result<(), String> {
     Settings::global().set_max_concurrent_tasks(count)?;
-    kabegame_core::crawler::TaskScheduler::global().set_task_concurrency();
     Ok(())
 }
 
