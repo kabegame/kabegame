@@ -3,6 +3,7 @@ import { useI18n } from "@kabegame/i18n";
 import type { QuickSettingsPageId } from "@/stores/quickSettingsDrawer";
 import type { QuickSettingGroup, QuickSettingItem } from "@kabegame/core/components/settings/quick-settings-registry-types";
 import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_WEB, IS_WINDOWS } from "@kabegame/core/env";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
@@ -24,6 +25,8 @@ import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTra
  */
 export function useQuickSettingsGroups() {
   const { t } = useI18n();
+  const settingsStore = useSettingsStore();
+  const isHorizontal = () => settingsStore.values.galleryLayoutDirection === "horizontal";
 
   const translatedGroups = computed((): QuickSettingGroup<QuickSettingsPageId>[] => [
     {
@@ -55,8 +58,8 @@ export function useQuickSettingsGroups() {
         } as QuickSettingItem<QuickSettingsPageId>] : []),
         ...(!IS_ANDROID ? [{
           key: "galleryGridColumns",
-          label: t("settings.quickColumns"),
-          description: t("settings.quickColumnsDesc"),
+          label: isHorizontal() ? t("settings.quickRows") : t("settings.quickColumns"),
+          description: isHorizontal() ? t("settings.quickRowsDesc") : t("settings.quickColumnsDesc"),
           comp: GalleryGridColumnsSetting,
           pages: ["gallery", "albumdetail"],
         } as QuickSettingItem<QuickSettingsPageId>] : []),
@@ -70,6 +73,20 @@ export function useQuickSettingsGroups() {
             options: [
               { label: t("settings.galleryLayoutModeGrid"), value: "grid" },
               { label: t("settings.galleryLayoutModeGallery"), value: "gallery" },
+            ],
+          },
+          pages: ["gallery", "albumdetail"],
+        } as QuickSettingItem<QuickSettingsPageId>,
+        {
+          key: "galleryLayoutDirection",
+          label: t("settings.galleryLayoutDirection"),
+          description: t("settings.galleryLayoutDirectionDesc"),
+          comp: SettingRadioControl,
+          props: {
+            settingKey: "galleryLayoutDirection",
+            options: [
+              { label: t("settings.galleryLayoutDirectionVertical"), value: "vertical" },
+              { label: t("settings.galleryLayoutDirectionHorizontal"), value: "horizontal" },
             ],
           },
           pages: ["gallery", "albumdetail"],

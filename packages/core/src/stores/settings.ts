@@ -62,8 +62,10 @@ export interface AppSettings {
   // --- 前端本地偏好（始终走 localStorage，所有平台一致）---
   /** 画廊每页条数（100 / 500 / 1000） */
   galleryPageSize: number;
-  /** 画廊布局模式："grid"=CSS 网格（现状）；"gallery"=纵向瀑布流（N 列 masonry） */
+  /** 画廊布局模式："grid"=CSS 网格（现状）；"gallery"=瀑布流（N 列/行 masonry） */
   galleryLayoutMode: "grid" | "gallery";
+  /** 布局方向："vertical"=从上到下滚动（现状）；"horizontal"=从左到右滚动 */
+  galleryLayoutDirection: "vertical" | "horizontal";
 }
 
 export type AppSettingKey = keyof AppSettings;
@@ -163,6 +165,7 @@ const FRONTEND_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
   { key: "galleryPageSize", defaultValue: 100 },
   { key: "galleryGridColumns", defaultValue: 0 },
   { key: "galleryLayoutMode", defaultValue: "grid" },
+  { key: "galleryLayoutDirection", defaultValue: "vertical" },
 ];
 
 /** 旧键 → 新键（`${WEB_LOCAL_STORAGE_PREFIX}${key}`）一次性迁移表。 */

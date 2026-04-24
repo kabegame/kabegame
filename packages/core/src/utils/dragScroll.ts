@@ -101,12 +101,17 @@ export function enableDragScroll(
   let spaceDown = false;
   let isDown = false;
   let pointerId: number | null = null;
+  let startX = 0;
   let startY = 0;
+  let startScrollLeft = 0;
   let startScrollTop = 0;
+  let lastX = 0;
   let lastY = 0;
   let lastT = 0;
-  let velocity = 0; // px/ms (scrollTop 方向：正=向下滚)
-  let prevAbsVelocity = 0; // 用于计算“加速”（d|v|/dt）
+  // px/ms。正 vx = 向右滚；正 vy = 向下滚。
+  let velocityX = 0;
+  let velocityY = 0;
+  let prevAbsVelocity = 0; // 用于计算“加速”（d|v|/dt），取 |v| 模长
   // “一次拖拽（按下到松开）内只提示一次”
   let overspeedShownThisDrag = false;
   let raf: number | null = null;
@@ -205,11 +210,15 @@ export function enableDragScroll(
     moved = false;
     hasPointerCapture = false;
     pointerId = e.pointerId;
+    startX = e.clientX;
     startY = e.clientY;
+    startScrollLeft = container.scrollLeft;
     startScrollTop = container.scrollTop;
+    lastX = e.clientX;
     lastY = e.clientY;
     lastT = performance.now();
-    velocity = 0;
+    velocityX = 0;
+    velocityY = 0;
     prevAbsVelocity = 0;
     overspeedShownThisDrag = false;
   };
@@ -218,9 +227,11 @@ export function enableDragScroll(
     if (!isDown) return;
     if (pointerId !== e.pointerId) return;
 
+    const dx = e.clientX - startX;
     const dy = e.clientY - startY;
+    const dist = Math.hypot(dx, dy);
     if (!moved) {
-      if (Math.abs(dy) < dragThresholdPx) return;
+      if (dist < dragThresholdPx) return;
       moved = true;
       container.classList.add(classActive);
       emitActiveChange(true);
@@ -230,33 +241,40 @@ export function enableDragScroll(
           hasPointerCapture = true;
         } catch {}
       }
+      lastX = e.clientX;
       lastY = e.clientY;
       lastT = performance.now();
-      velocity = 0;
+      velocityX = 0;
+      velocityY = 0;
       prevAbsVelocity = 0;
       overspeedShownThisDrag = false;
     }
 
     e.preventDefault();
+    // “抓取拖动”：按下位置跟随手指，scrollLeft/Top 与 dx/dy 反向移动。
+    // 不可滚动的轴浏览器会忽略写入，无需额外判断。
+    container.scrollLeft = startScrollLeft - dx;
     container.scrollTop = startScrollTop - dy;
 
     const now = performance.now();
     const dt = Math.max(1, now - lastT);
+    const deltaX = e.clientX - lastX;
     const deltaY = e.clientY - lastY;
-    velocity = clampVelocity(-deltaY / dt);
+    velocityX = clampVelocity(-deltaX / dt);
+    velocityY = clampVelocity(-deltaY / dt);
 
-    // “太快且仍在加速”提示：按 |v| 和 d|v|/dt 判断
+    // “太快且仍在加速”提示：按 |v| 模长 和 d|v|/dt 判断
     // - 用户需求：只在加速状态弹（absAccel > 0），且速度足够大
     // - 且：一次拖拽（按下到松开）内只提示一次
     try {
-      const absV = Math.abs(velocity);
+      const absV = Math.hypot(velocityX, velocityY);
       const absAccel = (absV - prevAbsVelocity) / dt; // px/ms^2
       const isAccelerating = absAccel >= overspeedAccelThresholdPxPerMs2;
       const isTooFast = absV >= overspeedVelocityThresholdPxPerMs;
       if (isTooFast && isAccelerating && !overspeedShownThisDrag) {
         container.dispatchEvent(
           new CustomEvent(overspeedEventName, {
-            detail: { velocity, absVelocity: absV, absAccel },
+            detail: { velocity: velocityY, absVelocity: absV, absAccel },
           })
         );
         overspeedShownThisDrag = true;
@@ -266,6 +284,7 @@ export function enableDragScroll(
       // ignore
     }
 
+    lastX = e.clientX;
     lastY = e.clientY;
     lastT = now;
   };
@@ -295,10 +314,11 @@ export function enableDragScroll(
     armSuppressClick();
 
     const minV = 0.02;
-    if (Math.abs(velocity) < minV) return;
+    if (Math.hypot(velocityX, velocityY) < minV) return;
 
     // 惯性阶段开始时也截断速度
-    let v = clampVelocity(velocity);
+    let vx = clampVelocity(velocityX);
+    let vy = clampVelocity(velocityY);
     let last = performance.now();
 
     const tick = () => {
@@ -306,10 +326,13 @@ export function enableDragScroll(
       const dt = now - last;
       last = now;
 
-      container.scrollTop += v * dt;
-      v *= Math.pow(friction, dt / 16.0);
+      container.scrollLeft += vx * dt;
+      container.scrollTop += vy * dt;
+      const decay = Math.pow(friction, dt / 16.0);
+      vx *= decay;
+      vy *= decay;
 
-      if (Math.abs(v) < minV) {
+      if (Math.hypot(vx, vy) < minV) {
         raf = null;
         return;
       }
@@ -331,10 +354,10 @@ export function enableDragScroll(
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
   window.addEventListener("blur", onBlur);
-  container.addEventListener("pointerdown", onPointerDown);
-  container.addEventListener("pointermove", onPointerMove);
-  container.addEventListener("pointerup", onPointerUp);
-  container.addEventListener("pointercancel", onPointerCancel);
+  container.addEventListener("pointerdown", onPointerDown, { capture: true });
+  container.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
+  container.addEventListener("pointerup", onPointerUp, { capture: true });
+  container.addEventListener("pointercancel", onPointerCancel, { capture: true });
 
   return () => {
     stopInertia();
@@ -343,10 +366,10 @@ export function enableDragScroll(
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("keyup", onKeyUp);
     window.removeEventListener("blur", onBlur);
-    container.removeEventListener("pointerdown", onPointerDown);
-    container.removeEventListener("pointermove", onPointerMove);
-    container.removeEventListener("pointerup", onPointerUp);
-    container.removeEventListener("pointercancel", onPointerCancel);
+    container.removeEventListener("pointerdown", onPointerDown, { capture: true } as any);
+    container.removeEventListener("pointermove", onPointerMove, { capture: true } as any);
+    container.removeEventListener("pointerup", onPointerUp, { capture: true } as any);
+    container.removeEventListener("pointercancel", onPointerCancel, { capture: true } as any);
     container.classList.remove(classReady);
     container.classList.remove(classActive);
   };
