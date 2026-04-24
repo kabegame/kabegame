@@ -45,13 +45,9 @@
 
     <RemoveImagesConfirmDialog
       v-model="showRemoveDialog"
-      v-model:delete-files="removeDeleteFiles"
       :message="removeDialogMessage"
       :title="$t('surf.confirmDelete')"
-      :checkbox-label="$t('gallery.deleteSourceFilesCheckboxLabel')"
-      :danger-text="$t('gallery.deleteSourceFilesDangerText')"
-      :safe-text="$t('gallery.deleteSourceFilesSafeText')"
-      :hide-checkbox="isCompact"
+      hide-checkbox
       @confirm="confirmRemoveImages"
     />
 
@@ -121,7 +117,6 @@ const currentWallpaperImageId = ref<string | null>(null);
 
 const showRemoveDialog = ref(false);
 const removeDialogMessage = ref("");
-const removeDeleteFiles = ref(false);
 const pendingRemoveImages = ref<ImageInfo[]>([]);
 const showAddToAlbumDialog = ref(false);
 const addToAlbumImageIds = ref<string[]>([]);
@@ -319,7 +314,6 @@ const handleImageMenuCommand = async (
       pendingRemoveImages.value = imagesToProcess;
       const count = imagesToProcess.length;
       removeDialogMessage.value = count > 1 ? t("surf.removeMessageMulti", { count }) : t("surf.removeMessageSingle");
-      removeDeleteFiles.value = false;
       showRemoveDialog.value = true;
       break;
   }
@@ -334,26 +328,20 @@ const confirmRemoveImages = async () => {
   }
 
   const count = imagesToRemove.length;
-  const shouldDeleteFiles = removeDeleteFiles.value;
   showRemoveDialog.value = false;
 
   try {
     const imageIds = imagesToRemove.map((img) => img.id);
-    if (shouldDeleteFiles) {
-      await invoke("batch_delete_images", { imageIds });
-    } else {
-      await invoke("batch_remove_images", { imageIds });
-    }
+    await invoke("batch_delete_images", { imageIds });
 
     clearSelection();
     // 列表由 images-change（带 surfRecordIds）节流刷新，见 startListening
 
-    const actionKey = shouldDeleteFiles ? "common.delete" : "common.remove";
-    const actionLabel = t(actionKey);
+    const actionLabel = t("common.delete");
     ElMessage.success(count > 1 ? t("surf.removedCount", { action: actionLabel, count }) : t("surf.removedSingle", { action: actionLabel }));
   } catch (e) {
     console.error("删除图片失败:", e);
-    const actionLabel = t(shouldDeleteFiles ? "common.delete" : "common.remove");
+    const actionLabel = t("common.delete");
     ElMessage.error(t("surf.actionFailed", { action: actionLabel }));
   }
 };

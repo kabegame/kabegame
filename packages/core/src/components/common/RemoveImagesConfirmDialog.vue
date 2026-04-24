@@ -21,7 +21,7 @@ import { guardDesktopOnly } from "@kabegame/core/utils/desktopOnlyGuard";
 
 interface Props {
   modelValue: boolean;
-  deleteFiles: boolean;
+  deleteFiles?: boolean;
   message: string;
   title?: string;
   checkboxLabel?: string;
@@ -35,6 +35,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  deleteFiles: false,
   title: "确认删除",
   checkboxLabel: "同时从电脑删除源文件（慎用）",
   dangerText: "警告：该操作将永久删除电脑文件，不可恢复！",

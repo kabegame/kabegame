@@ -107,6 +107,19 @@ pub fn init_registry() {
         })),
     });
 
+    map.insert("list_provider_children", MethodEntry {
+        requires_super: false,
+        handler: Arc::new(|p| Box::pin(async move {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args { path: String }
+            let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+            crate::commands_core::image::list_provider_children(args.path)
+                .await
+                .map_err(RpcError::internal)
+        })),
+    });
+
     map.insert("query_provider", MethodEntry {
         requires_super: false,
         handler: Arc::new(|p| Box::pin(async move {

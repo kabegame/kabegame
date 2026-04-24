@@ -11,12 +11,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onUnmounted, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import { HeaderFeatureId } from "@kabegame/core/stores/header";
+import { HeaderFeatureId, useHeaderStore } from "@kabegame/core/stores/header";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { storeToRefs } from "pinia";
+import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 
 interface Props {
   taskName?: string;
@@ -46,6 +47,23 @@ const emit = defineEmits<{
 }>();
 
 const { isCompact } = storeToRefs(useUiStore());
+const taskRouteStore = useTaskDetailRouteStore();
+const { hide: taskHide } = storeToRefs(taskRouteStore);
+const headerStore = useHeaderStore();
+
+watch(
+  taskHide,
+  () => {
+    headerStore.setFoldLabel(
+      HeaderFeatureId.ToggleShowHidden,
+      taskHide.value ? t("header.showHidden") : t("header.hideHidden"),
+    );
+  },
+  { immediate: true },
+);
+onUnmounted(() => {
+  headerStore.setFoldLabel(HeaderFeatureId.ToggleShowHidden, undefined);
+});
 
 // 计算显示和折叠的feature ID
 const showIds = computed(() => {
@@ -68,7 +86,7 @@ const showIds = computed(() => {
 });
 
 const foldIds = computed(() => {
-  if (!isCompact.value) return [];
+  if (!isCompact.value) return [HeaderFeatureId.ToggleShowHidden];
   const ids = [
     HeaderFeatureId.DeleteTask,
     HeaderFeatureId.AddToAlbum,
@@ -76,6 +94,7 @@ const foldIds = computed(() => {
     HeaderFeatureId.TaskViewParams,
     HeaderFeatureId.Help,
     HeaderFeatureId.QuickSettings,
+    HeaderFeatureId.ToggleShowHidden,
   ];
   if (props.showStopTask) ids.unshift(HeaderFeatureId.StopTask);
   return ids;
@@ -107,6 +126,9 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.TaskViewParams:
       emit("view-task-params");
+      break;
+    case HeaderFeatureId.ToggleShowHidden:
+      taskRouteStore.hide = !taskRouteStore.hide;
       break;
   }
 };

@@ -7,25 +7,40 @@
       @click="handleRootClick" @contextmenu.prevent>
       <!-- 关键：空/刷新时只隐藏 ImageItem 列表，避免 v-if 卸载导致"整页闪烁" -->
       <div class="image-grid-items" v-show="hasImages">
-        <div v-if="enableVirtualScroll" class="image-grid" :style="gridStyle">
-          <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
-            :image-click-action="settingsStore.values.imageClickAction || 'none'"
-            :window-aspect-ratio="getEffectiveAspectRatioForItem(item.image)" :selected="selectedIds.has(item.image.id)"
-            :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
-            @click="(e) => handleItemClick(item.image, item.index, e)"
-            @dblclick="() => handleItemDblClick(item.image, item.index)"
-            @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
-            @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
-        </div>
+        <template v-if="layoutMode === 'grid'">
+          <div v-if="virtualScrollActive" class="image-grid" :style="gridStyle">
+            <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
+              :image-click-action="settingsStore.values.imageClickAction || 'none'"
+              :window-aspect-ratio="getEffectiveAspectRatioForItem(item.image)" :selected="selectedIds.has(item.image.id)"
+              :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
+              @click="(e) => handleItemClick(item.image, item.index, e)"
+              @dblclick="() => handleItemDblClick(item.image, item.index)"
+              @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
+              @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
+          </div>
 
-        <transition-group v-else name="fade-in-list" tag="div" class="image-grid" :style="gridStyle">
-          <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
-            :image-click-action="settingsStore.values.imageClickAction || 'none'"
-            :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="selectedIds.has(image.id)"
-            :grid-columns="gridColumnsCount" :grid-index="index" @click="(e) => handleItemClick(image, index, e)"
-            @dblclick="() => handleItemDblClick(image, index)"
-            @contextmenu="(e) => handleItemContextMenu(image, index, e)" />
-        </transition-group>
+          <transition-group v-else name="fade-in-list" tag="div" class="image-grid" :style="gridStyle">
+            <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
+              :image-click-action="settingsStore.values.imageClickAction || 'none'"
+              :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="selectedIds.has(image.id)"
+              :grid-columns="gridColumnsCount" :grid-index="index" @click="(e) => handleItemClick(image, index, e)"
+              @dblclick="() => handleItemDblClick(image, index)"
+              @contextmenu="(e) => handleItemContextMenu(image, index, e)" />
+          </transition-group>
+        </template>
+
+        <div v-else class="image-gallery" :style="galleryStyle">
+          <div v-for="(col, ci) in galleryColumns" :key="ci" class="image-gallery-column"
+            :style="{ gap: gridGapPx + 'px' }">
+            <ImageItem v-for="entry in col" :key="entry.image.id" :image="entry.image"
+              :image-click-action="settingsStore.values.imageClickAction || 'none'"
+              :window-aspect-ratio="aspectRatioOf(entry.image)" :selected="selectedIds.has(entry.image.id)"
+              :grid-columns="gridColumnsCount" :grid-index="entry.index" fill-box
+              @click="(e) => handleItemClick(entry.image, entry.index, e)"
+              @dblclick="() => handleItemDblClick(entry.image, entry.index)"
+              @contextmenu="(e) => handleItemContextMenu(entry.image, entry.index, e)" />
+          </div>
+        </div>
       </div>
 
       <!-- 空状态：overlay（插槽可自定义），不影响 before-grid/footer 等插槽的挂载 -->
@@ -221,10 +236,13 @@ const isZoomingLayout = ref(false);
 let zoomAnimTimer: ReturnType<typeof setTimeout> | null = null;
 
 const gridColumnsCount = computed(() => (imageGridColumns.value > 0 ? imageGridColumns.value : 1));
-// 紧凑布局：栅格更紧凑，空白更少
-const gridGapPx = computed(() =>
-  isCompact.value ? Math.max(2, 6 - (gridColumnsCount.value - 1)) : Math.max(4, 16 - (gridColumnsCount.value - 1))
-);
+// 紧凑布局：栅格更紧凑，空白更少。整体间距为历史值的 1/3，让网格更紧凑。
+const gridGapPx = computed(() => {
+  const base = isCompact.value
+    ? Math.max(2, 6 - (gridColumnsCount.value - 1))
+    : Math.max(4, 16 - (gridColumnsCount.value - 1));
+  return Math.max(1, Math.round(base / 3));
+});
 const BASE_GRID_PADDING_Y = computed(() => (isCompact.value ? 4 : 6));
 const BASE_GRID_PADDING_X = computed(() => (isCompact.value ? 4 : 8));
 
@@ -348,6 +366,52 @@ const getEffectiveAspectRatioForItem = (image: ImageInfo) => {
   return effectiveAspectRatio.value;
 };
 
+/*----------------- Gallery（纵向 masonry）布局 -----------------*/
+const layoutMode = computed<"grid" | "gallery">(
+  () => (settingsStore.values.galleryLayoutMode as "grid" | "gallery") ?? "grid"
+);
+
+// 虚拟滚动假设每行等高，masonry 不成立——仅在 grid 模式下启用。
+const virtualScrollActive = computed(
+  () => props.enableVirtualScroll && layoutMode.value === "grid"
+);
+
+// gallery 模式下每张图的宽高比（带 fallback）
+const aspectRatioOf = (image: ImageInfo) => {
+  if (image?.width != null && image?.height != null && image.width > 0 && image.height > 0) {
+    return image.width / image.height;
+  }
+  return effectiveAspectRatio.value || 16 / 10;
+};
+
+// 高度均衡的列分配：放入当前最短的列。列宽相等，高度 ∝ 1 / aspectRatio。
+const galleryColumns = computed<Array<Array<{ image: ImageInfo; index: number }>>>(() => {
+  const cols = Math.max(1, gridColumnsCount.value);
+  const buckets: Array<Array<{ image: ImageInfo; index: number }>> = Array.from(
+    { length: cols },
+    () => []
+  );
+  const heights = new Array(cols).fill(0);
+  const list = props.images ?? [];
+  list.forEach((image, index) => {
+    const ratio = aspectRatioOf(image);
+    const relativeHeight = 1 / (ratio > 0 ? ratio : 1);
+    let target = 0;
+    for (let i = 1; i < cols; i++) if (heights[i] < heights[target]) target = i;
+    buckets[target].push({ image, index });
+    heights[target] += relativeHeight;
+  });
+  return buckets;
+});
+
+const galleryStyle = computed<Record<string, string>>(() => ({
+  gap: `${gridGapPx.value}px`,
+  paddingTop: `${BASE_GRID_PADDING_Y.value}px`,
+  paddingBottom: `${BASE_GRID_PADDING_Y.value}px`,
+  paddingLeft: `${BASE_GRID_PADDING_X.value}px`,
+  paddingRight: `${BASE_GRID_PADDING_X.value}px`,
+}));
+
 const estimatedItemHeight = () => {
   const container = containerEl.value;
   if (!container) return 240;
@@ -375,18 +439,18 @@ const totalRows = computed(() => {
 });
 
 const virtualPaddingTop = computed(() => {
-  if (!props.enableVirtualScroll) return 0;
+  if (!virtualScrollActive.value) return 0;
   return virtualStartRow.value * rowHeightWithGap.value;
 });
 
 const virtualPaddingBottom = computed(() => {
-  if (!props.enableVirtualScroll) return 0;
+  if (!virtualScrollActive.value) return 0;
   const rowsAfter = Math.max(0, totalRows.value - (virtualEndRow.value + 1));
   return rowsAfter * rowHeightWithGap.value;
 });
 
 const updateVirtualRange = () => {
-  if (!props.enableVirtualScroll) return;
+  if (!virtualScrollActive.value) return;
   const container = containerEl.value;
   if (!container) return;
   const rh = rowHeightWithGap.value || 1;
@@ -402,7 +466,7 @@ const updateVirtualRange = () => {
 };
 
 const measureItemHeight = () => {
-  if (!props.enableVirtualScroll) return;
+  if (!virtualScrollActive.value) return;
   if (!canMeasureLayout()) return;
   const grid = containerEl.value?.querySelector<HTMLElement>(".image-grid");
   const firstItem = grid?.querySelector<HTMLElement>(".image-item");
@@ -415,7 +479,7 @@ const measureItemHeight = () => {
 };
 
 const renderedItems = computed(() => {
-  if (!props.enableVirtualScroll) return [];
+  if (!virtualScrollActive.value) return [];
   const cols = gridColumnsCount.value;
   const start = Math.max(0, virtualStartRow.value * cols);
   const list = props.images ?? [];
@@ -443,8 +507,8 @@ const renderedItems = computed(() => {
 const gridStyle = computed(() => {
   const columns = gridColumnsCount.value;
   const gap = gridGapPx.value;
-  const paddingTop = BASE_GRID_PADDING_Y.value + (props.enableVirtualScroll ? virtualPaddingTop.value : 0);
-  const paddingBottom = BASE_GRID_PADDING_Y.value + (props.enableVirtualScroll ? virtualPaddingBottom.value : 0);
+  const paddingTop = BASE_GRID_PADDING_Y.value + (virtualScrollActive.value ? virtualPaddingTop.value : 0);
+  const paddingBottom = BASE_GRID_PADDING_Y.value + (virtualScrollActive.value ? virtualPaddingBottom.value : 0);
   const style: Record<string, string> = {
     gridTemplateColumns: `repeat(${columns}, 1fr)`,
     gap: `${gap}px`,
@@ -769,7 +833,7 @@ watch(
 // 虚拟滚动测量更新：合并到单个 rAF，避免短时间内多处触发导致重复测量/抖动
 let virtualUpdateRaf: number | null = null;
 const scheduleVirtualUpdate = () => {
-  if (!props.enableVirtualScroll) return;
+  if (!virtualScrollActive.value) return;
   if (virtualUpdateRaf != null) return;
   virtualUpdateRaf = requestAnimationFrame(() => {
     virtualUpdateRaf = null;
@@ -807,7 +871,7 @@ watch(
 // 虚拟滚动：滚动时用 rAF 实时更新可视行，避免 debounce 导致“滚快一点出现空白区域”
 let virtualScrollRaf: number | null = null;
 const scheduleVirtualRangeUpdate = () => {
-  if (!props.enableVirtualScroll) return;
+  if (!virtualScrollActive.value) return;
   if (virtualScrollRaf != null) return;
   virtualScrollRaf = requestAnimationFrame(() => {
     virtualScrollRaf = null;
@@ -1083,6 +1147,18 @@ defineExpose({
 
 .image-grid {
   display: grid;
+}
+
+.image-gallery {
+  display: flex;
+  min-height: 100%;
+}
+
+.image-gallery-column {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .fade-in-list-move,

@@ -20,7 +20,7 @@ export interface AppSettings {
   galleryImageAspectRatio: string | null;
   /** 图片在方框内溢出时的垂直对齐（仅桌面端）：center | top | bottom */
   galleryImageObjectPosition: "center" | "top" | "bottom";
-  /** 画廊列数（0=动态；1-4=固定列数），前端本地偏好 */
+  /** 画廊列数（0=动态；1-6=固定列数），前端本地偏好 */
   galleryGridColumns: number;
   autoDeduplicate: boolean;
   defaultDownloadDir: string | null;
@@ -62,6 +62,8 @@ export interface AppSettings {
   // --- 前端本地偏好（始终走 localStorage，所有平台一致）---
   /** 画廊每页条数（100 / 500 / 1000） */
   galleryPageSize: number;
+  /** 画廊布局模式："grid"=CSS 网格（现状）；"gallery"=纵向瀑布流（N 列 masonry） */
+  galleryLayoutMode: "grid" | "gallery";
 }
 
 export type AppSettingKey = keyof AppSettings;
@@ -160,6 +162,7 @@ function webReadonlyFeatureKey(key: AppSettingKey): string {
 const FRONTEND_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
   { key: "galleryPageSize", defaultValue: 100 },
   { key: "galleryGridColumns", defaultValue: 0 },
+  { key: "galleryLayoutMode", defaultValue: "grid" },
 ];
 
 /** 旧键 → 新键（`${WEB_LOCAL_STORAGE_PREFIX}${key}`）一次性迁移表。 */

@@ -12,7 +12,7 @@
         v-if="fixedModeEnabled"
         v-model="fixedColumns"
         :min="1"
-        :max="4"
+        :max="6"
         :step="1"
         :disabled="disabled"
         :controls="true"
@@ -36,7 +36,7 @@ const uiStore = useUiStore();
 const clampFixedColumns = (value: number) => {
   const n = Number(value);
   if (!Number.isFinite(n)) return 4;
-  return Math.min(4, Math.max(1, Math.round(n)));
+  return Math.min(6, Math.max(1, Math.round(n)));
 };
 
 const fixedColumns = ref(4);

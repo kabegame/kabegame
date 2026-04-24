@@ -6,9 +6,10 @@
 //! 把 `local_path` / `thumbnail_path` 改写成 CDN 绝对 URL。否则 web 客户端拿到
 //! 的是服务器本地路径，浏览器没法直接加载。
 
-use kabegame_core::gallery::GalleryBrowseEntry;
+use kabegame_core::gallery::{browse_from_provider, GalleryBrowseEntry};
 use kabegame_core::providers::{
-    execute_provider_query_typed, provider_query_to_json, ProviderQueryTyped,
+    decode_provider_path_segments, execute_provider_query_typed, provider_query_to_json,
+    ProviderQueryTyped, ProviderRuntime,
 };
 use kabegame_core::storage::image_events::{delete_images_with_events, toggle_image_favorite_with_event};
 use kabegame_core::storage::Storage;
@@ -31,10 +32,25 @@ fn rewrite_provider_query(t: &mut ProviderQueryTyped) {
 
 pub async fn browse_gallery_provider(path: String) -> Result<Value, String> {
     let full = format!("gallery/{}", path.trim().trim_start_matches('/'));
+    let full = decode_provider_path_segments(&full);
     let result = tokio::task::spawn_blocking(move || {
         let mut typed = execute_provider_query_typed(&full)?;
         rewrite_provider_query(&mut typed);
         provider_query_to_json(&typed)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(result)
+}
+
+pub async fn list_provider_children(path: String) -> Result<Value, String> {
+    let full = format!("gallery/{}", path.trim().trim_start_matches('/'));
+    let full = decode_provider_path_segments(&full);
+    let result = tokio::task::spawn_blocking(move || {
+        let rt = ProviderRuntime::global();
+        let children = rt.list_children_with_totals(&full)?;
+        let entries = browse_from_provider(children, Vec::new())?;
+        serde_json::to_value(entries).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())??;

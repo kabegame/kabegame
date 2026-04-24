@@ -37,6 +37,7 @@
   "wallpaperSortTitle": "壁紙設定順",
   "filter": "絞り込み",
   "pageSize": "1ページあたり",
+  "searchPlaceholder": "名前で検索",
   "filterAll": "すべて",
   "filterWallpaperSet": "壁紙にしたことがある",
   "filterByPlugin": "プラグイン別",
@@ -147,9 +148,6 @@
   "deletedAndRemovedSuccess": "削除しました（すべてのアルバムとギャラリーから削除済み）",
   "deletedAndRemovedCountSuccess": "{count} 枚削除しました（すべてのアルバムとギャラリーから削除済み）",
   "removeImageFailed": "アルバムからの削除に失敗しました",
-  "removeFromGalleryMessageSingle": "この画像をギャラリーから削除します。",
-  "removeFromGalleryMessageMulti": "これら {count} 枚の画像をギャラリーから削除します。",
-  "deleteSourceFilesCheckboxLabel": "PC 上の元ファイルも削除する（注意）",
-  "deleteSourceFilesDangerText": "警告：ファイルは完全に削除され、元に戻せません！",
-  "deleteSourceFilesSafeText": "オフの場合は一覧から削除されるだけで、ディスク上のファイルは残ります。"
+  "removeFromGalleryMessageSingle": "この画像を完全に削除します（ローカルファイルを含む）。元に戻せません。ファイルを残したい場合は「非表示」を使用してください。",
+  "removeFromGalleryMessageMulti": "これら {count} 枚の画像を完全に削除します（ローカルファイルを含む）。元に戻せません。ファイルを残したい場合は「非表示」を使用してください。"
 }

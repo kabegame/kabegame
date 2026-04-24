@@ -124,6 +124,23 @@ pub trait Provider: Send + Sync {
     }
 
     /// 可选：meta。
+    ///
+    /// 返回该节点对应的存储实体（Album / Task / Plugin / ...）。
+    ///
+    /// ## 与 `total` 的关系
+    ///
+    /// `get_meta` 只负责实体元数据。前端/MCP 调用 `<path>` 无尾缀语法
+    /// （[`ProviderPathQuery::Entry`](super::query::ProviderPathQuery::Entry)）时，
+    /// 返回的 JSON envelope 除 `meta` / `note` 外还带一个 `total` 字段——
+    /// 语义是"对该节点 composed query build 成 `SELECT COUNT(*)` 得到的匹配图片总数"。
+    /// 该计数由 runtime 统一产出
+    /// （见 [`ProviderRuntime::count`](super::runtime::ProviderRuntime::count) /
+    /// [`execute_provider_query_typed`](super::query::execute_provider_query_typed)），
+    /// **不由本方法返回**——provider 实现不需要也不应该自己去 build count SQL。
+    ///
+    /// 这意味着：任何 provider 节点（含 `search/display-name/<q>/all`、
+    /// `plugin/<id>`、`album/<id>/image-only` 等）的无尾缀查询都会带上该节点视角下
+    /// 的准确总数，不再需要单独的 count API。
     fn get_meta(&self) -> Option<ProviderMeta> {
         None
     }
@@ -132,19 +149,24 @@ pub trait Provider: Send + Sync {
 // ── ChildEntry（新 trait 用）────────────────────────────────
 
 /// Provider 的结构子节点条目。
+///
+/// `total` 语义：针对该子节点 composed query build 的 COUNT。由
+/// [`ProviderRuntime::list_children_with_totals`](super::runtime::ProviderRuntime::list_children_with_totals)
+/// 在列举子节点之后统一填充——provider 实现默认无需设置。
 pub struct ChildEntry {
     pub name: String,
     pub provider: Arc<dyn Provider>,
     pub meta: Option<ProviderMeta>,
+    pub total: Option<usize>,
 }
 
 impl ChildEntry {
     pub fn new(name: impl Into<String>, provider: Arc<dyn Provider>) -> Self {
-        Self { name: name.into(), provider, meta: None }
+        Self { name: name.into(), provider, meta: None, total: None }
     }
 
     pub fn with_meta(name: impl Into<String>, provider: Arc<dyn Provider>, meta: ProviderMeta) -> Self {
-        Self { name: name.into(), provider, meta: Some(meta) }
+        Self { name: name.into(), provider, meta: Some(meta), total: None }
     }
 }
 

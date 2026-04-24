@@ -1,11 +1,17 @@
 //! Provider 路径查询语法 — Tauri/MCP 边界使用。
 //!
 //! 语法:
-//! - `<path>`       → 单个 entry：resolve path → meta + note
-//! - `<path>/`      → `list_dir()`（子 Child 不带 meta）+ `list_images()`
-//! - `<path>/*`     → `list_dir_with_meta()`（子 Child 带批量 meta）+ `list_images()`
+//! - `<path>`       → 单个 entry：resolve path → meta + note + total（按该节点 composed query 的 COUNT）
+//! - `<path>/`      → `list_dir()`（子 Child 不带 meta）+ `list_images()` + total
+//! - `<path>/*`     → `list_dir_with_meta()`（子 Child 带批量 meta）+ `list_images()` + total
 //!
 //! Images 混合在 entries 数组里（Dir 在前，Image 在后）。
+//!
+//! `total` 字段语义（Entry 与 Listing 一致）：将该路径的 composed query（由
+//! [`Provider::apply_query`](super::provider::Provider::apply_query) 沿链累积）
+//! build 成 `SELECT COUNT(*)` 并执行，得到匹配当前过滤/搜索/JOIN/WHERE 的图片总数。
+//! 前端在需要展示总数但不需要当前页 entries 时，应优先使用无尾缀语法
+//! （例如 `all`、`search/display-name/<q>/all`），避免额外触发 `list_children` / `list_images`。
 
 use serde_json::{json, Value};
 
@@ -39,6 +45,47 @@ pub fn parse_provider_path(raw: &str) -> (String, ProviderPathQuery) {
     (trimmed.to_string(), ProviderPathQuery::Entry)
 }
 
+/// 对 provider 路径逐段 percent-decode：按 `/` 拆分，对每个非空段做 UTF-8 解码
+/// （失败时保留原段），再用 `/` 重新拼接。保留前导/尾随 `/` 与结尾的 `/*` 语法。
+///
+/// 用于 tauri / web 边界统一解码前端用 `encodeURIComponent` 编码的动态段
+/// （如搜索查询 `search/display-name/<q>/`、画册/任务 id 等），让所有 provider
+/// 拿到的都是原始字符串，无需各自处理 URL 编码。
+pub fn decode_provider_path_segments(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let (body, suffix) = if let Some(stripped) = trimmed.strip_suffix("/*") {
+        (stripped, "/*")
+    } else if trimmed.ends_with('/') {
+        (&trimmed[..trimmed.len() - 1], "/")
+    } else {
+        (trimmed, "")
+    };
+
+    let leading_slash = body.starts_with('/');
+    let core = body.trim_start_matches('/');
+
+    let decoded: Vec<String> = core
+        .split('/')
+        .map(|seg| {
+            if seg.is_empty() {
+                String::new()
+            } else {
+                urlencoding::decode(seg)
+                    .map(|cow| cow.into_owned())
+                    .unwrap_or_else(|_| seg.to_string())
+            }
+        })
+        .collect();
+
+    let mut out = String::new();
+    if leading_slash {
+        out.push('/');
+    }
+    out.push_str(&decoded.join("/"));
+    out.push_str(suffix);
+    out
+}
+
 fn split_last_segment(path: &str) -> (String, String) {
     let p = path.trim_start_matches('/').trim_end_matches('/');
     match p.rfind('/') {
@@ -61,6 +108,8 @@ pub enum ProviderQueryTyped {
         name: String,
         meta: Option<ProviderMeta>,
         note: Option<(String, String)>,
+        /// 按该节点 composed query 计算出的匹配图片总数；COUNT 失败时为 `None`。
+        total: Option<usize>,
     },
     Listing {
         entries: Vec<GalleryBrowseEntry>,
@@ -84,10 +133,12 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
             let node = rt
                 .resolve(&path)?
                 .ok_or_else(|| format!("条目不存在: {}", raw_path))?;
+            let total = Storage::global().get_images_count_by_query(&node.composed).ok();
             Ok(ProviderQueryTyped::Entry {
                 name: last,
                 meta: node.provider.get_meta(),
                 note: node.provider.get_note(),
+                total,
             })
         }
         ProviderPathQuery::List | ProviderPathQuery::ListWithMeta => {
@@ -127,10 +178,11 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
 /// 保持与旧 `execute_provider_query` 字节级一致（字段顺序、null 位置）。
 pub fn provider_query_to_json(t: &ProviderQueryTyped) -> Result<Value, String> {
     match t {
-        ProviderQueryTyped::Entry { name, meta, note } => Ok(json!({
+        ProviderQueryTyped::Entry { name, meta, note, total } => Ok(json!({
             "name": name,
             "meta": meta,
             "note": note_value(note.clone()),
+            "total": total,
         })),
         ProviderQueryTyped::Listing { entries, total, meta, note } => {
             let entries_json = serde_json::to_value(entries).map_err(|e| e.to_string())?;

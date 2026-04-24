@@ -39,6 +39,7 @@
   "wallpaperSortTitle": "設定桌布順序",
   "filter": "篩選",
   "pageSize": "每頁數量",
+  "searchPlaceholder": "依名稱搜尋",
   "filterAll": "全部",
   "filterWallpaperSet": "曾設為桌布的",
   "filterByPlugin": "依外掛",
@@ -149,9 +150,6 @@
   "deletedAndRemovedSuccess": "已刪除圖片（已從所有畫冊和畫廊中移除）",
   "deletedAndRemovedCountSuccess": "已刪除 {count} 張圖片（已從所有畫冊和畫廊中移除）",
   "removeImageFailed": "移除圖片失敗",
-  "removeFromGalleryMessageSingle": "將從畫廊移除此張圖片。",
-  "removeFromGalleryMessageMulti": "將從畫廊移除此 {count} 張圖片。",
-  "deleteSourceFilesCheckboxLabel": "同時從電腦刪除來源檔案（慎用）",
-  "deleteSourceFilesDangerText": "警告：此操作將永久刪除電腦上的檔案，無法復原！",
-  "deleteSourceFilesSafeText": "不勾選則僅從列表移除記錄，保留電腦上的檔案。"
+  "removeFromGalleryMessageSingle": "將永久刪除此張圖片（含本機檔案），此操作不可復原。如需保留本機檔案，請改用「隱藏」。",
+  "removeFromGalleryMessageMulti": "將永久刪除此 {count} 張圖片（含本機檔案），此操作不可復原。如需保留本機檔案，請改用「隱藏」。"
 }

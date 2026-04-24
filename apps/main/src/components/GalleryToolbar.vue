@@ -182,6 +182,13 @@
         </el-dropdown-menu>
       </template>
     </el-dropdown>
+
+    <SearchInput
+      :model-value="search"
+      :placeholder="t('gallery.searchPlaceholder')"
+      class="gallery-browse-search"
+      @update:model-value="(v) => emit('update:search', v)"
+    />
   </div>
 
   <!-- Android：fold 中「过滤」「排序」弹出的 van-picker -->
@@ -263,6 +270,7 @@ import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
 import { ArrowDown, ArrowRight, Filter, Histogram, Sort } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
+import SearchInput from "@/components/SearchInput.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
@@ -283,7 +291,6 @@ import {
   syncTimeMenuPickerState,
   type DateGroupRow,
   type DayGroupRow,
-  type GalleryTimeFilterPayload,
   type TimeMenuNode,
 } from "@/utils/galleryTimeFilterMenu";
 import GalleryTimeFilterSubmenu from "@/header/comps/GalleryTimeFilterSubmenu.vue";
@@ -304,6 +311,8 @@ interface Props {
   sort?: GalleryTimeSort;
   /** 每页条数（与设置同步，用于工具栏展示） */
   pageSize?: number;
+  /** display_name 搜索词 */
+  search?: string;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -316,6 +325,7 @@ const props = withDefaults(defineProps<Props>(), {
   filter: () => ({ type: "all" } as GalleryFilter),
   sort: "asc",
   pageSize: 100,
+  search: "",
 });
 
 const router = useRouter();
@@ -365,6 +375,13 @@ interface GalleryMediaTypeCountsPayload {
   videoCount: number;
 }
 
+/** list_provider_children 返回的子条目形状 */
+interface ProviderChildDir {
+  kind: "dir";
+  name: string;
+  total?: number | null;
+}
+
 const pluginGroups = ref<PluginGroupRow[]>([]);
 const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
   imageCount: 0,
@@ -381,30 +398,140 @@ const timeMenuRoots = computed<TimeMenuNode[]>(() =>
   )
 );
 
-async function loadFilterCounts() {
+/** 当前上下文前缀：hide + search，由 galleryRouteStore 统一拼出。
+ *  各 filter 列表查询（`plugin/` / `media-type/` / `date/`）都拼这个前缀，
+ *  保证 hide 状态与搜索词对预览计数生效。 */
+const { contextPath: filterContextPrefix } = storeToRefs(galleryRouteStore);
+
+async function loadPluginGroups() {
   try {
-    const [pg, timePayload, mt] = await Promise.all([
-      invoke<PluginGroupRow[]>("get_gallery_plugin_groups"),
-      invoke<GalleryTimeFilterPayload>("get_gallery_time_filter_data"),
-      invoke<GalleryMediaTypeCountsPayload>("get_gallery_media_type_counts"),
-    ]);
-    pluginGroups.value = Array.isArray(pg) ? pg : [];
-    monthGroups.value = Array.isArray(timePayload?.months) ? timePayload.months : [];
-    dayGroups.value = Array.isArray(timePayload?.days) ? timePayload.days : [];
-    if (mt && typeof mt.imageCount === "number" && typeof mt.videoCount === "number") {
-      mediaTypeCounts.value = {
-        imageCount: mt.imageCount,
-        videoCount: mt.videoCount,
-      };
-    }
+    const entries = await invoke<ProviderChildDir[]>("list_provider_children", {
+      path: `${filterContextPrefix.value}plugin/`,
+    });
+    pluginGroups.value = (Array.isArray(entries) ? entries : [])
+      .filter((e) => e?.kind === "dir" && typeof e.name === "string" && e.name)
+      .map((e) => ({ plugin_id: e.name, count: e.total ?? 0 }))
+      .filter((r) => r.count > 0);
   } catch {
     pluginGroups.value = [];
+  }
+}
+
+async function loadMediaTypeCounts() {
+  try {
+    const entries = await invoke<ProviderChildDir[]>("list_provider_children", {
+      path: `${filterContextPrefix.value}media-type/`,
+    });
+    const byName = new Map<string, number>();
+    for (const e of entries ?? []) {
+      if (e?.kind === "dir" && typeof e.name === "string") {
+        byName.set(e.name, e.total ?? 0);
+      }
+    }
+    mediaTypeCounts.value = {
+      imageCount: byName.get("image") ?? 0,
+      videoCount: byName.get("video") ?? 0,
+    };
+  } catch {
+    mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
+  }
+}
+
+const YEAR_SEG_RE = /^(\d{4})y$/;
+const MONTH_SEG_RE = /^(\d{2})m$/;
+const DAY_SEG_RE = /^(\d{2})d$/;
+
+/**
+ * 时间过滤菜单（年→月→日）通过 `list_provider_children` 分层拉取：
+ * - `date/`         → 年份列表（含 total）
+ * - `date/<y>/`     → 各年的月份列表
+ * - `date/<y>/<m>/` → 各月的日期列表
+ *
+ * 带上 `filterContextPrefix` 让搜索生效于日期筛选预览计数；每层剥离 provider
+ * 固定子段（如 `desc`）与翻页段，只保留 YYYYy / MMm / DDd 形状的 child。
+ * 0 计数的节点直接剪枝，避免向下发无用请求。
+ */
+async function loadTimeFilterData() {
+  const prefix = filterContextPrefix.value;
+  try {
+    const yearEntries = await invoke<ProviderChildDir[]>("list_provider_children", {
+      path: `${prefix}date/`,
+    });
+    const years = (yearEntries ?? [])
+      .filter((e): e is ProviderChildDir => !!e && e.kind === "dir")
+      .map((e) => {
+        const m = YEAR_SEG_RE.exec(e.name);
+        return m ? { year: m[1]!, seg: e.name, total: e.total ?? 0 } : null;
+      })
+      .filter((y): y is { year: string; seg: string; total: number } => !!y && y.total > 0);
+
+    const monthsPerYear = await Promise.all(
+      years.map(async (y) => {
+        const monthEntries = await invoke<ProviderChildDir[]>("list_provider_children", {
+          path: `${prefix}date/${y.seg}/`,
+        });
+        return (monthEntries ?? [])
+          .filter((e): e is ProviderChildDir => !!e && e.kind === "dir")
+          .map((e) => {
+            const m = MONTH_SEG_RE.exec(e.name);
+            return m
+              ? { year: y.year, month: m[1]!, seg: e.name, total: e.total ?? 0 }
+              : null;
+          })
+          .filter(
+            (x): x is { year: string; month: string; seg: string; total: number } =>
+              !!x && x.total > 0
+          );
+      })
+    );
+    const months = monthsPerYear.flat();
+
+    const daysPerMonth = await Promise.all(
+      months.map(async (mo) => {
+        const dayEntries = await invoke<ProviderChildDir[]>("list_provider_children", {
+          path: `${prefix}date/${mo.year}y/${mo.seg}/`,
+        });
+        return (dayEntries ?? [])
+          .filter((e): e is ProviderChildDir => !!e && e.kind === "dir")
+          .map((e) => {
+            const m = DAY_SEG_RE.exec(e.name);
+            return m
+              ? { year: mo.year, month: mo.month, day: m[1]!, total: e.total ?? 0 }
+              : null;
+          })
+          .filter(
+            (x): x is { year: string; month: string; day: string; total: number } =>
+              !!x && x.total > 0
+          );
+      })
+    );
+
+    monthGroups.value = months.map((mo) => ({
+      year_month: `${mo.year}-${mo.month}`,
+      count: mo.total,
+    }));
+    dayGroups.value = daysPerMonth.flat().map((d) => ({
+      ymd: `${d.year}-${d.month}-${d.day}`,
+      count: d.total,
+    }));
+  } catch {
     monthGroups.value = [];
     dayGroups.value = [];
   }
 }
 
+async function loadFilterCounts() {
+  await Promise.all([loadPluginGroups(), loadMediaTypeCounts(), loadTimeFilterData()]);
+}
+
 onMounted(() => void loadFilterCounts());
+
+// search 变化时重新计算 plugin / media-type / date 的上下文相关计数
+watch(filterContextPrefix, () => {
+  void loadPluginGroups();
+  void loadMediaTypeCounts();
+  void loadTimeFilterData();
+});
 
 useImagesChangeRefresh({
   enabled: ref(true),
@@ -694,6 +821,7 @@ const emit = defineEmits<{
   "update:sort": [value: GalleryTimeSort];
   "update:selectedRange": [value: [string, string] | null];
   "update:pageSize": [value: number];
+  "update:search": [value: string];
 }>();
 
 const showIds = computed(() => {
@@ -824,6 +952,10 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
     margin-right: 6px;
     font-size: 14px;
   }
+}
+
+.gallery-browse-search {
+  margin-left: auto;
 }
 
 .date-range-filter {

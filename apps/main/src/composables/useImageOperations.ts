@@ -2,7 +2,7 @@ import { computed, type Ref } from "vue";
 import { invoke } from "@/api/rpc";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { useAlbumStore, FAVORITE_ALBUM_ID } from "@/stores/albums";
+import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { storeToRefs } from "pinia";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
@@ -217,16 +217,11 @@ export function useImageOperations(
       displayedImages.value = next;
     }
   };
-  // 统一的删除操作：根据是否删除文件决定调用 removeImage 还是 deleteImage
-  // 注意：此函数不再显示确认对话框，调用方需要自行处理确认逻辑
-  const handleBatchDeleteImages = async (
-    imagesToProcess: ImageInfo[],
-    deleteFiles: boolean,
-  ) => {
+  // 永久删除：同时移除 DB 记录与磁盘文件。调用方自行处理确认逻辑。
+  const handleBatchDeleteImages = async (imagesToProcess: ImageInfo[]) => {
     if (imagesToProcess.length === 0) return;
 
     try {
-      // 删除触发“后续图片顶上来”的 move 过渡（仅短暂开启，避免加载更多抖动）
       galleryViewRef.value?.startDeleteMoveAnimation?.();
 
       const count = imagesToProcess.length;
@@ -235,32 +230,42 @@ export function useImageOperations(
         !!currentWallpaperImageId.value &&
         imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
 
-      // 使用批量 API 一次性处理所有图片
-      if (deleteFiles) {
-        await invoke("batch_delete_images", { imageIds });
-      } else {
-        await invoke("batch_remove_images", { imageIds });
-      }
+      await invoke("batch_delete_images", { imageIds });
 
       if (includesCurrent) {
         currentWallpaperImageId.value = null;
       }
 
-      // 列表由 `images-change` 事件驱动刷新，此处不做乐观移除
-
       ElMessage.success(
-        deleteFiles
-          ? i18n.global.t("common.deletedCountSuccess", { count })
-          : i18n.global.t("common.removedCountSuccess", { count }),
+        i18n.global.t("common.deletedCountSuccess", { count }),
       );
       galleryViewRef.value?.clearSelection?.();
     } catch (error) {
-      console.error(deleteFiles ? "删除失败:" : "移除失败:", error);
-      ElMessage.error(
-        deleteFiles
-          ? i18n.global.t("common.deleteFail")
-          : i18n.global.t("common.removeFail"),
+      console.error("删除失败:", error);
+      ElMessage.error(i18n.global.t("common.deleteFail"));
+    }
+  };
+
+  // 批量隐藏：加入 HIDDEN_ALBUM_ID，保留 DB 记录与磁盘文件
+  const handleBatchHideImages = async (imagesToProcess: ImageInfo[]) => {
+    if (imagesToProcess.length === 0) return;
+
+    try {
+      galleryViewRef.value?.startDeleteMoveAnimation?.();
+
+      const count = imagesToProcess.length;
+      const imageIds = imagesToProcess.map((img) => img.id);
+      await albumStore.addImagesToAlbum(HIDDEN_ALBUM_ID, imageIds);
+
+      ElMessage.success(
+        count > 1
+          ? i18n.global.t("contextMenu.hiddenCount", { count })
+          : i18n.global.t("contextMenu.hiddenOne"),
       );
+      galleryViewRef.value?.clearSelection?.();
+    } catch (error) {
+      console.error("隐藏失败:", error);
+      ElMessage.error(i18n.global.t("contextMenu.hideFailed"));
     }
   };
 
@@ -459,6 +464,7 @@ export function useImageOperations(
     handleCopyImage,
     applyFavoriteChangeToGalleryCache,
     handleBatchDeleteImages,
+    handleBatchHideImages,
     toggleFavorite,
     setWallpaper,
     exportToWallpaperEngine,

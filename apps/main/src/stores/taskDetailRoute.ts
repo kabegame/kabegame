@@ -2,11 +2,14 @@ import { createPathRouteStore } from "./pathRoute";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 const DEFAULT_PAGE_SIZE = 100;
+const SEARCH_PREFIX = "search/display-name/";
 
 type TaskDetailRouteState = {
   taskId: string;
   page: number;
   pageSize: number;
+  /** `display_name` 子串搜索，空串表示不过滤 */
+  search: string;
 };
 
 function createDefaultState(): TaskDetailRouteState {
@@ -15,11 +18,22 @@ function createDefaultState(): TaskDetailRouteState {
     taskId: "",
     page: 1,
     pageSize: (settings.values.galleryPageSize as number | undefined) ?? DEFAULT_PAGE_SIZE,
+    search: "",
   };
 }
 
 function parseTaskDetailPath(path: string): TaskDetailRouteState {
-  const segs = path.split("/").filter(Boolean);
+  const allSegs = path.split("/").filter(Boolean);
+  let segs = allSegs;
+  let search = "";
+  if (segs.length >= 3 && segs[0] === "search" && segs[1] === "display-name") {
+    try {
+      search = decodeURIComponent(segs[2] ?? "");
+    } catch {
+      search = segs[2] ?? "";
+    }
+    segs = segs.slice(3);
+  }
   const taskId = segs[1] || "";
   // segs: ["task", taskId, ...optional x{n}x..., page]
   let pageSize = DEFAULT_PAGE_SIZE;
@@ -34,6 +48,7 @@ function parseTaskDetailPath(path: string): TaskDetailRouteState {
     taskId,
     page: Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1,
     pageSize,
+    search,
   };
 }
 
@@ -43,12 +58,12 @@ export const useTaskDetailRouteStore = createPathRouteStore<TaskDetailRouteState
     parse: parseTaskDetailPath,
     build: (state) => {
       const ps = state.pageSize === DEFAULT_PAGE_SIZE ? "" : `x${state.pageSize}x/`;
-      return `task/${state.taskId}/${ps}${Math.max(1, state.page)}`;
+      const q = (state.search ?? "").trim();
+      const sp = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
+      return `${sp}task/${state.taskId}/${ps}${Math.max(1, state.page)}`;
     },
     defaultState: createDefaultState,
     routeName: "TaskDetail",
-    // TaskDetail 永远不参与 hide：URL 里永不出现 `hide/` 前缀
-    ignoreHide: () => true,
     onStateChange: (state) => {
       const settings = useSettingsStore();
       if (state.pageSize !== settings.values.galleryPageSize) {
