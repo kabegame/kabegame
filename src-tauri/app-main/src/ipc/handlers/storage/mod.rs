@@ -13,15 +13,9 @@ pub async fn handle_storage_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::StorageGetImageById { image_id } => {
             Some(images::get_image_by_id(image_id).await)
         }
-        IpcRequest::StorageFindImageByPath { path } => {
-            Some(images::find_image_by_path(path).await)
-        }
-        IpcRequest::StorageDeleteImage { image_id } => {
-            Some(images::delete_image(image_id).await)
-        }
-        IpcRequest::StorageRemoveImage { image_id } => {
-            Some(images::remove_image(image_id).await)
-        }
+        IpcRequest::StorageFindImageByPath { path } => Some(images::find_image_by_path(path).await),
+        IpcRequest::StorageDeleteImage { image_id } => Some(images::delete_image(image_id).await),
+        IpcRequest::StorageRemoveImage { image_id } => Some(images::remove_image(image_id).await),
         IpcRequest::StorageBatchDeleteImages { image_ids } => {
             Some(images::batch_delete_images(image_ids).await)
         }
@@ -38,9 +32,7 @@ pub async fn handle_storage_request(req: &IpcRequest) -> Option<IpcResponse> {
             // TODO: 蜑咲ｫｯ螟・炊 album_add 莠倶ｻｶ
             Some(albums::add_album(name).await)
         }
-        IpcRequest::StorageDeleteAlbum { album_id } => {
-            Some(albums::delete_album(album_id).await)
-        }
+        IpcRequest::StorageDeleteAlbum { album_id } => Some(albums::delete_album(album_id).await),
         IpcRequest::StorageRenameAlbum { album_id, new_name } => {
             Some(albums::rename_album(album_id, new_name).await)
         }
@@ -91,7 +83,7 @@ pub async fn handle_storage_request(req: &IpcRequest) -> Option<IpcResponse> {
             Some(run_configs::delete_run_config(config_id).await)
         }
 
-        // Gallery Query Helpers・井ｾ・app-main 扈・｣・判蟒願劒諡溯ｷｯ蠕・ｼ・        CliIpcRequest::StorageGetGalleryDateGroups => Some(images::get_gallery_date_groups().await),
+        // Gallery Query Helpers・井ｾ・app-main 扈・｣・判蟒願劒諡溯ｷｯ蠕・ｼ・        IpcRequest::StorageGetGalleryDateGroups => Some(images::get_gallery_date_groups().await),
         IpcRequest::StorageGetGalleryPluginGroups => {
             Some(images::get_gallery_plugin_groups().await)
         }

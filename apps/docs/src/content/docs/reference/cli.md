@@ -40,10 +40,10 @@ kabegame-cli plugin run --help
 kabegame-cli plugin new <name> [--backend rhai|webview]
 ```
 
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `name` | 是 | 插件名，必须是 kebab-case（正则 `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`）。`MyPlugin`、`my_plugin`、`1stplugin` 都会被拒绝。 |
-| `--backend` | 否 | `rhai`（默认）或 `webview`，决定生成的脚本文件（`crawl.rhai` 或 `crawl.js` + `package.json`）。 |
+| 参数        | 必填 | 说明                                                                                                                 |
+| ----------- | ---- | -------------------------------------------------------------------------------------------------------------------- |
+| `name`      | 是   | 插件名，必须是 kebab-case（正则 `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`）。`MyPlugin`、`my_plugin`、`1stplugin` 都会被拒绝。 |
+| `--backend` | 否   | `rhai`（默认）或 `webview`，决定生成的脚本文件（`crawl.rhai` 或 `crawl.js` + `package.json`）。                      |
 
 目标目录若已存在则直接报错退出。脚手架会从模板复制 `manifest.json`、`icon.png`、`doc_root/doc.md` 等通用文件，并根据 backend 生成对应脚本。
 
@@ -60,13 +60,13 @@ kabegame-cli plugin new my-site --backend webview
 kabegame-cli plugin run --plugin <id或路径> [选项] -- [插件参数...]
 ```
 
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `-p`, `--plugin` | 是 | 已安装的插件 ID（即 `.kgpg` 文件去掉扩展名），或一个本地 `.kgpg` 文件路径。 |
-| `-o`, `--output-dir` | 否 | 输出目录。省略时由 daemon 使用默认目录（Pictures/Kabegame 或数据目录）。 |
-| `--task-id` | 否 | 任务 ID，用于进度与日志归档；省略时自动生成。 |
-| `--output-album` | 否 | 目标画册**名称**（不是 ID）。由 daemon 调用 `storage_get_albums` 做大小写不敏感匹配；未匹配到会输出 `未找到名称为 "<name>" 的画册` 并以 1 退出。 |
-| `-- [args]` | 否 | 结尾 `--` 后的所有参数会被透传到插件，映射为插件 `config.json` 中的 `var` 条目。clap 启用了 `trailing_var_arg` 与 `allow_hyphen_values`，所以带连字符的值也能直接写。 |
+| 参数                 | 必填 | 说明                                                                                                                                                                  |
+| -------------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-p`, `--plugin`     | 是   | 已安装的插件 ID（即 `.kgpg` 文件去掉扩展名），或一个本地 `.kgpg` 文件路径。                                                                                           |
+| `-o`, `--output-dir` | 否   | 输出目录。省略时由 daemon 使用默认目录（Pictures/Kabegame 或数据目录）。                                                                                              |
+| `--task-id`          | 否   | 任务 ID，用于进度与日志归档；省略时自动生成。                                                                                                                         |
+| `--output-album`     | 否   | 目标画册**名称**（不是 ID）。由 daemon 调用 `storage_get_albums` 做大小写不敏感匹配；未匹配到会输出 `未找到名称为 "<name>" 的画册` 并以 1 退出。                      |
+| `-- [args]`          | 否   | 结尾 `--` 后的所有参数会被透传到插件，映射为插件 `config.json` 中的 `var` 条目。clap 启用了 `trailing_var_arg` 与 `allow_hyphen_values`，所以带连字符的值也能直接写。 |
 
 :::caution
 当前 zh 文档旧版本中写的 `--output-album-id`（接收 ID）已不存在，实际参数是 `--output-album`（接收名称）。
@@ -91,10 +91,10 @@ kabegame-cli plugin run --plugin local-import \
 kabegame-cli plugin pack --plugin-dir <目录> --output <输出.kgpg>
 ```
 
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `--plugin-dir` | 是 | 包含 `manifest.json` 以及 `crawl.js` 或 `crawl.rhai` 的插件目录。 |
-| `--output` | 是 | 输出的 `.kgpg` 文件路径。 |
+| 参数           | 必填 | 说明                                                              |
+| -------------- | ---- | ----------------------------------------------------------------- |
+| `--plugin-dir` | 是   | 包含 `manifest.json` 以及 `crawl.js` 或 `crawl.rhai` 的插件目录。 |
+| `--output`     | 是   | 输出的 `.kgpg` 文件路径。                                         |
 
 打包时会自动检测 backend：优先 `crawl.js`（webview），否则回退 `crawl.rhai`；两者都不存在会报错。
 
@@ -112,9 +112,9 @@ kabegame-cli plugin pack --plugin-dir <目录> --output <输出.kgpg>
 kabegame-cli plugin import <path.kgpg>
 ```
 
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| 位置参数 | 是 | `.kgpg` 文件路径。文件不存在或扩展名非 `.kgpg` 会立即报错。 |
+| 参数     | 必填 | 说明                                                        |
+| -------- | ---- | ----------------------------------------------------------- |
+| 位置参数 | 是   | `.kgpg` 文件路径。文件不存在或扩展名非 `.kgpg` 会立即报错。 |
 
 安装前会验证：manifest 可解析、包含非空 `crawl.rhai` 或 `crawl.js`、若存在 `config.json` 则可解析。成功时输出：
 
@@ -152,9 +152,9 @@ kabegame-cli vd unmount
 kabegame-cli vd status --mount-point <K|K:|K:\>
 ```
 
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `--mount-point` | 是 | 挂载点字符串。Windows 可写 `K`、`K:` 或 `K:\`；Unix 默认为 `$HOME/kabegame-vd`。 |
+| 参数            | 必填 | 说明                                                                             |
+| --------------- | ---- | -------------------------------------------------------------------------------- |
+| `--mount-point` | 是   | 挂载点字符串。Windows 可写 `K`、`K:` 或 `K:\`；Unix 默认为 `$HOME/kabegame-vd`。 |
 
 ## ipc-status
 
@@ -175,32 +175,32 @@ kabegame-cli ipc-status
 
 CLI 使用三种退出码：
 
-| 码 | 含义 |
-|---|---|
-| `0` | 成功。子命令返回 `Ok(())`，并打印 `ok` 或 daemon 返回消息。 |
+| 码  | 含义                                                                                                                                |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `0` | 成功。子命令返回 `Ok(())`，并打印 `ok` 或 daemon 返回消息。                                                                         |
 | `1` | 子命令执行失败。包括：插件名非法、文件缺失、daemon 不可达、daemon 返回 `ok=false`、IPC 解析错误、画册名未找到、webview 构建失败等。 |
-| `2` | clap 参数解析错误，例如缺少必填参数或未知子命令。由 clap 在进入 `main()` 之前抛出。 |
+| `2` | clap 参数解析错误，例如缺少必填参数或未知子命令。由 clap 在进入 `main()` 之前抛出。                                                 |
 
 ## 守护进程依赖
 
-| 子命令 | 是否需要 daemon | 原因 |
-|---|---|---|
-| `plugin new` | 否 | 纯本地模板复制。 |
-| `plugin pack` | 否 | 读取目录，必要时在本地执行 npm/bun 构建。 |
-| `plugin import` | 否 | 本地初始化 `PluginManager`。 |
-| `plugin run` | 是 | 通过 `CliIpcRequest::PluginRun` 委派 daemon。 |
-| `vd mount` / `vd unmount` / `vd status` | 是 | 全部走 IPC。 |
-| `ipc-status` | 是 | 用来探测 daemon。 |
+| 子命令                                  | 是否需要 daemon | 原因                                       |
+| --------------------------------------- | --------------- | ------------------------------------------ |
+| `plugin new`                            | 否              | 纯本地模板复制。                           |
+| `plugin pack`                           | 否              | 读取目录，必要时在本地执行 npm/bun 构建。  |
+| `plugin import`                         | 否              | 本地初始化 `PluginManager`。               |
+| `plugin run`                            | 是              | 通过 `IpcRequest::PluginRun` 委派 daemon。 |
+| `vd mount` / `vd unmount` / `vd status` | 是              | 全部走 IPC。                               |
+| `ipc-status`                            | 是              | 用来探测 daemon。                          |
 
 ## 平台差异
 
-| 能力 | Windows | macOS | Linux | Android |
-|---|---|---|---|---|
-| 随主应用发布 CLI | 是 | 是 | 否（需自行构建） | 不适用 |
-| `plugin new` / `pack` / `import` | 是 | 是 | 是（需本地构建 CLI） | 不适用 |
-| `plugin run` | 是 | 是 | 是（需 daemon） | 不适用 |
-| `vd *` | 是（Dokan） | 实验 | 实验 | 不适用 |
-| Light 构建含 `vd *` | 否 | 否 | 否 | 不适用 |
+| 能力                             | Windows     | macOS | Linux                | Android |
+| -------------------------------- | ----------- | ----- | -------------------- | ------- |
+| 随主应用发布 CLI                 | 是          | 是    | 否（需自行构建）     | 不适用  |
+| `plugin new` / `pack` / `import` | 是          | 是    | 是（需本地构建 CLI） | 不适用  |
+| `plugin run`                     | 是          | 是    | 是（需 daemon）      | 不适用  |
+| `vd *`                           | 是（Dokan） | 实验  | 实验                 | 不适用  |
+| Light 构建含 `vd *`              | 否          | 否    | 否                   | 不适用  |
 
 ## 常见问题
 
