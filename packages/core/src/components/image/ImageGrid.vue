@@ -1,73 +1,81 @@
 <template>
-  <div ref="containerEl" class="image-grid-container" :class="{ 'hide-scrollbar': hideScrollbar }" v-bind="$attrs"
-    tabindex="0" @keydown="handleKeyDown">
+  <div ref="containerEl" class="image-grid-container" :class="[
+      { 'hide-scrollbar': hideScrollbar },
+      `layout-${layoutDirection}`,
+    ]" v-bind="$attrs" tabindex="0" @keydown="handleKeyDown">
     <slot name="before-grid" />
 
-    <div class="image-grid-root" v-loading="isLoadingOverlay" :class="{ 'is-zooming': isZoomingLayout }"
-      @click="handleRootClick" @contextmenu.prevent>
-      <!-- 关键：空/刷新时只隐藏 ImageItem 列表，避免 v-if 卸载导致"整页闪烁" -->
-      <div class="image-grid-items" v-show="hasImages">
-        <template v-if="layoutMode === 'grid'">
-          <div v-if="virtualScrollActive" class="image-grid" :style="gridStyle">
-            <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
-              :image-click-action="settingsStore.values.imageClickAction || 'none'"
-              :window-aspect-ratio="getEffectiveAspectRatioForItem(item.image)" :selected="selectedIds.has(item.image.id)"
-              :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
-              @click="(e) => handleItemClick(item.image, item.index, e)"
-              @dblclick="() => handleItemDblClick(item.image, item.index)"
-              @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
-              @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
-          </div>
+    <div ref="scrollEl" class="image-grid-scroll" :class="`layout-${layoutDirection}`">
+      <div class="image-grid-root" v-loading="isLoadingOverlay" :class="{ 'is-zooming': isZoomingLayout }"
+        @click="handleRootClick" @contextmenu.prevent>
+        <!-- 关键：空/刷新时只隐藏 ImageItem 列表，避免 v-if 卸载导致"整页闪烁" -->
+        <div class="image-grid-items" v-show="hasImages">
+          <template v-if="layoutMode === 'grid'">
+            <div v-if="virtualScrollActive" class="image-grid" :class="`layout-${layoutDirection}`" :style="gridStyle">
+              <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
+                :image-click-action="settingsStore.values.imageClickAction || 'none'"
+                :window-aspect-ratio="getEffectiveAspectRatioForItem(item.image)" :selected="selectedIds.has(item.image.id)"
+                :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
+                :horizontal="isHorizontal"
+                @click="(e) => handleItemClick(item.image, item.index, e)"
+                @dblclick="() => handleItemDblClick(item.image, item.index)"
+                @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
+                @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
+            </div>
 
-          <transition-group v-else name="fade-in-list" tag="div" class="image-grid" :style="gridStyle">
-            <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
-              :image-click-action="settingsStore.values.imageClickAction || 'none'"
-              :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="selectedIds.has(image.id)"
-              :grid-columns="gridColumnsCount" :grid-index="index" @click="(e) => handleItemClick(image, index, e)"
-              @dblclick="() => handleItemDblClick(image, index)"
-              @contextmenu="(e) => handleItemContextMenu(image, index, e)" />
-          </transition-group>
-        </template>
+            <transition-group v-else name="fade-in-list" tag="div" class="image-grid"
+              :class="`layout-${layoutDirection}`" :style="gridStyle">
+              <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
+                :image-click-action="settingsStore.values.imageClickAction || 'none'"
+                :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="selectedIds.has(image.id)"
+                :grid-columns="gridColumnsCount" :grid-index="index" :horizontal="isHorizontal"
+                @click="(e) => handleItemClick(image, index, e)"
+                @dblclick="() => handleItemDblClick(image, index)"
+                @contextmenu="(e) => handleItemContextMenu(image, index, e)" />
+            </transition-group>
+          </template>
 
-        <div v-else class="image-gallery" :style="galleryStyle">
-          <div v-for="(col, ci) in galleryColumns" :key="ci" class="image-gallery-column"
-            :style="{ gap: gridGapPx + 'px' }">
-            <ImageItem v-for="entry in col" :key="entry.image.id" :image="entry.image"
-              :image-click-action="settingsStore.values.imageClickAction || 'none'"
-              :window-aspect-ratio="aspectRatioOf(entry.image)" :selected="selectedIds.has(entry.image.id)"
-              :grid-columns="gridColumnsCount" :grid-index="entry.index" fill-box
-              @click="(e) => handleItemClick(entry.image, entry.index, e)"
-              @dblclick="() => handleItemDblClick(entry.image, entry.index)"
-              @contextmenu="(e) => handleItemContextMenu(entry.image, entry.index, e)" />
+          <div v-else class="image-gallery" :class="`layout-${layoutDirection}`" :style="galleryStyle">
+            <div v-for="(bucket, bi) in galleryBuckets" :key="bi"
+              :class="isHorizontal ? 'image-gallery-row' : 'image-gallery-column'"
+              :style="{ gap: gridGapPx + 'px' }">
+              <ImageItem v-for="entry in bucket" :key="entry.image.id" :image="entry.image"
+                :image-click-action="settingsStore.values.imageClickAction || 'none'"
+                :window-aspect-ratio="aspectRatioOf(entry.image)" :selected="selectedIds.has(entry.image.id)"
+                :grid-columns="gridColumnsCount" :grid-index="entry.index" fill-box :horizontal="isHorizontal"
+                @click="(e) => handleItemClick(entry.image, entry.index, e)"
+                @dblclick="() => handleItemDblClick(entry.image, entry.index)"
+                @contextmenu="(e) => handleItemContextMenu(entry.image, entry.index, e)" />
+            </div>
           </div>
         </div>
+
+        <!-- 空状态：overlay（插槽可自定义），不影响 before-grid/footer 等插槽的挂载 -->
+        <div v-if="showEmptyOverlay" class="empty-overlay">
+          <slot name="empty">
+            <EmptyState />
+          </slot>
+        </div>
+
+        <!-- New action-based context menu -->
+        <ActionRenderer
+          v-if="enableContextMenu && actions && actions.length > 0"
+          :visible="contextMenuVisible"
+          :position="contextMenuPosition"
+          :actions="actions"
+          :context="contextMenuActionContext"
+          :zIndex="1900"
+          @close="closeContextMenu"
+          @command="handleContextMenuCommand" />
+
+        <ImagePreviewDialog
+          ref="previewRef"
+          :images="images"
+          :actions="actions"
+          :plugins="plugins"
+          @context-command="handlePreviewContextCommand"
+          @open-task="emit('open-task', $event)" />
       </div>
-
-      <!-- 空状态：overlay（插槽可自定义），不影响 before-grid/footer 等插槽的挂载 -->
-      <div v-if="showEmptyOverlay" class="empty-overlay">
-        <slot name="empty">
-          <EmptyState />
-        </slot>
-      </div>
-
-      <!-- New action-based context menu -->
-      <ActionRenderer
-        v-if="enableContextMenu && actions && actions.length > 0"
-        :visible="contextMenuVisible"
-        :position="contextMenuPosition"
-        :actions="actions"
-        :context="contextMenuActionContext"
-        :zIndex="1900"
-        @close="closeContextMenu"
-        @command="handleContextMenuCommand" />
-
-      <ImagePreviewDialog
-        ref="previewRef"
-        :images="images"
-        :actions="actions"
-        :plugins="plugins"
-        @context-command="handlePreviewContextCommand"
-        @open-task="emit('open-task', $event)" />
     </div>
 
     <slot name="footer" />
@@ -251,12 +259,15 @@ const measuredItemHeight = ref<number | null>(null);
 const virtualStartRow = ref(0);
 const virtualEndRow = ref(0);
 
+// 外层容器：只做键盘/焦点/resize，不是滚动元素
 const containerEl = ref<HTMLElement | null>(null);
+// 实际滚动容器：垂直方向滚 Y，水平方向滚 X。与 before-grid / footer 插槽解耦。
+const scrollEl = ref<HTMLElement | null>(null);
 
 // keep-alive/Tab 切换时，组件可能“已挂载但不可见/尺寸为 0”。
 // 此时若测量 ImageItem 高度，会得到 0 并被缓存，导致虚拟滚动 rowHeight 计算错误（滚动抖动）。
 const canMeasureLayout = () => {
-  const el = containerEl.value;
+  const el = scrollEl.value;
   if (!el) return false;
   return el.clientWidth > 0 && el.clientHeight > 0;
 };
@@ -265,7 +276,7 @@ const canMeasureLayout = () => {
 let containerResizeObserver: ResizeObserver | null = null;
 const setupContainerResizeObserver = () => {
   if (containerResizeObserver) return;
-  const el = containerEl.value;
+  const el = scrollEl.value;
   if (!el) return;
   if (typeof ResizeObserver === "undefined") return;
   containerResizeObserver = new ResizeObserver(() => {
@@ -289,15 +300,16 @@ const focusGrid = () => {
   }
 };
 
-// keep-alive/Tab 切换时保持滚动位置（对齐 before-src 行为）
-const savedScrollTop = ref<number>(0);
+// keep-alive/Tab 切换时保持滚动位置（保存当前滚动主轴）
+const savedScrollPos = ref<number>(0);
 let saveScrollRaf: number | null = null;
 const saveScrollPosition = () => {
   if (saveScrollRaf != null) cancelAnimationFrame(saveScrollRaf);
   saveScrollRaf = requestAnimationFrame(() => {
     saveScrollRaf = null;
-    if (containerEl.value) {
-      savedScrollTop.value = containerEl.value.scrollTop;
+    const el = scrollEl.value;
+    if (el) {
+      savedScrollPos.value = isHorizontal.value ? el.scrollLeft : el.scrollTop;
     }
   });
 };
@@ -366,14 +378,18 @@ const getEffectiveAspectRatioForItem = (image: ImageInfo) => {
   return effectiveAspectRatio.value;
 };
 
-/*----------------- Gallery（纵向 masonry）布局 -----------------*/
+/*----------------- Gallery（masonry）布局 + 方向 -----------------*/
 const layoutMode = computed<"grid" | "gallery">(
   () => (settingsStore.values.galleryLayoutMode as "grid" | "gallery") ?? "grid"
 );
+const layoutDirection = computed<"vertical" | "horizontal">(
+  () => (settingsStore.values.galleryLayoutDirection as "vertical" | "horizontal") ?? "vertical"
+);
+const isHorizontal = computed(() => layoutDirection.value === "horizontal");
 
-// 虚拟滚动假设每行等高，masonry 不成立——仅在 grid 模式下启用。
+// 虚拟滚动假设每行等高——仅在 grid+垂直 下启用；masonry/水平 都破坏该假设。
 const virtualScrollActive = computed(
-  () => props.enableVirtualScroll && layoutMode.value === "grid"
+  () => props.enableVirtualScroll && layoutMode.value === "grid" && !isHorizontal.value
 );
 
 // gallery 模式下每张图的宽高比（带 fallback）
@@ -384,22 +400,24 @@ const aspectRatioOf = (image: ImageInfo) => {
   return effectiveAspectRatio.value || 16 / 10;
 };
 
-// 高度均衡的列分配：放入当前最短的列。列宽相等，高度 ∝ 1 / aspectRatio。
-const galleryColumns = computed<Array<Array<{ image: ImageInfo; index: number }>>>(() => {
-  const cols = Math.max(1, gridColumnsCount.value);
-  const buckets: Array<Array<{ image: ImageInfo; index: number }>> = Array.from(
-    { length: cols },
-    () => []
-  );
-  const heights = new Array(cols).fill(0);
+/**
+ * 均衡分配 masonry 项到 N 个桶（列或行）。
+ * 垂直方向：桶=列，列宽相等，项高度 ∝ 1/ratio → 选择累计高度最小的桶。
+ * 水平方向：桶=行，行高相等，项宽度 ∝ ratio     → 选择累计宽度最小的桶。
+ */
+const galleryBuckets = computed<Array<Array<{ image: ImageInfo; index: number }>>>(() => {
+  const n = Math.max(1, gridColumnsCount.value);
+  const buckets: Array<Array<{ image: ImageInfo; index: number }>> = Array.from({ length: n }, () => []);
+  const loads = new Array(n).fill(0);
   const list = props.images ?? [];
+  const horizontal = isHorizontal.value;
   list.forEach((image, index) => {
     const ratio = aspectRatioOf(image);
-    const relativeHeight = 1 / (ratio > 0 ? ratio : 1);
+    const weight = horizontal ? (ratio > 0 ? ratio : 1) : 1 / (ratio > 0 ? ratio : 1);
     let target = 0;
-    for (let i = 1; i < cols; i++) if (heights[i] < heights[target]) target = i;
+    for (let i = 1; i < n; i++) if (loads[i] < loads[target]) target = i;
     buckets[target].push({ image, index });
-    heights[target] += relativeHeight;
+    loads[target] += weight;
   });
   return buckets;
 });
@@ -413,7 +431,7 @@ const galleryStyle = computed<Record<string, string>>(() => ({
 }));
 
 const estimatedItemHeight = () => {
-  const container = containerEl.value;
+  const container = scrollEl.value;
   if (!container) return 240;
   const availableWidth =
     container.clientWidth - BASE_GRID_PADDING_X.value * 2 - gridGapPx.value * (gridColumnsCount.value - 1);
@@ -429,7 +447,7 @@ const rowHeightWithGap = computed(() => {
 });
 
 // 限制拖拽滚动最大速度：每 0.2 秒滚动一行
-useDragScroll(containerEl, {
+useDragScroll(scrollEl, {
   maxVelocityPxPerMs: () => rowHeightWithGap.value / 100,
 });
 
@@ -451,7 +469,7 @@ const virtualPaddingBottom = computed(() => {
 
 const updateVirtualRange = () => {
   if (!virtualScrollActive.value) return;
-  const container = containerEl.value;
+  const container = scrollEl.value;
   if (!container) return;
   const rh = rowHeightWithGap.value || 1;
   const scrollTop = Math.max(0, container.scrollTop);
@@ -468,7 +486,7 @@ const updateVirtualRange = () => {
 const measureItemHeight = () => {
   if (!virtualScrollActive.value) return;
   if (!canMeasureLayout()) return;
-  const grid = containerEl.value?.querySelector<HTMLElement>(".image-grid");
+  const grid = scrollEl.value?.querySelector<HTMLElement>(".image-grid");
   const firstItem = grid?.querySelector<HTMLElement>(".image-item");
   if (firstItem) {
     const h = firstItem.getBoundingClientRect().height;
@@ -505,21 +523,29 @@ const renderedItems = computed(() => {
 });
 
 const gridStyle = computed(() => {
-  const columns = gridColumnsCount.value;
+  const n = gridColumnsCount.value;
   const gap = gridGapPx.value;
   const paddingTop = BASE_GRID_PADDING_Y.value + (virtualScrollActive.value ? virtualPaddingTop.value : 0);
   const paddingBottom = BASE_GRID_PADDING_Y.value + (virtualScrollActive.value ? virtualPaddingBottom.value : 0);
   const style: Record<string, string> = {
-    gridTemplateColumns: `repeat(${columns}, 1fr)`,
     gap: `${gap}px`,
     paddingTop: `${paddingTop}px`,
     paddingBottom: `${paddingBottom}px`,
     paddingLeft: `${BASE_GRID_PADDING_X.value}px`,
     paddingRight: `${BASE_GRID_PADDING_X.value}px`,
   };
-  // 紧凑模式：行高由该行最高图决定，格子不拉伸
-  if (isCompact.value) {
-    style.alignItems = "start";
+  if (isHorizontal.value) {
+    // 水平方向：N 行，按 aspect-ratio 自适应宽度，横向滚动
+    style.gridTemplateRows = `repeat(${n}, 1fr)`;
+    style.gridAutoFlow = "column";
+    style.gridAutoColumns = "auto";
+    style.height = "100%";
+  } else {
+    style.gridTemplateColumns = `repeat(${n}, 1fr)`;
+    // 紧凑模式：行高由该行最高图决定，格子不拉伸
+    if (isCompact.value) {
+      style.alignItems = "start";
+    }
   }
   return style as any;
 });
@@ -799,9 +825,9 @@ const emitScrollStable = () => {
 };
 
 const pulseZoomAnimation = () => {
-  const container = containerEl.value;
+  const container = scrollEl.value;
   if (!container) return;
-  const grid = container.querySelector<HTMLElement>(".image-grid");
+  const grid = container.querySelector<HTMLElement>(".image-grid, .image-gallery");
   if (!grid || !(grid as any).animate) return;
   (grid as any).animate(
     [
@@ -868,6 +894,100 @@ watch(
   }
 );
 
+// 布局/方向变化：重新测量行高 + 滚动范围
+watch([layoutMode, layoutDirection], () => {
+  scheduleVirtualUpdate();
+});
+
+// 丝滑滚轮：累加目标位置，用 rAF + lerp 把离散 wheel 事件转成平滑滚动；
+// 水平布局下把 deltaY 转成横向；Ctrl/Meta+Wheel 留给列数调整。
+const smoothWheel = {
+  targetX: 0,
+  targetY: 0,
+  raf: null as number | null,
+  active: false,
+};
+// 越大越跟手、越小越"漂"；snap 为终止阈值。
+const SMOOTH_WHEEL_EASE = 0.22;
+const SMOOTH_WHEEL_SNAP = 0.5;
+
+const stepSmoothWheel = () => {
+  smoothWheel.raf = null;
+  const el = scrollEl.value;
+  if (!el) {
+    smoothWheel.active = false;
+    return;
+  }
+  const maxX = Math.max(0, el.scrollWidth - el.clientWidth);
+  const maxY = Math.max(0, el.scrollHeight - el.clientHeight);
+  smoothWheel.targetX = Math.max(0, Math.min(maxX, smoothWheel.targetX));
+  smoothWheel.targetY = Math.max(0, Math.min(maxY, smoothWheel.targetY));
+  const curX = el.scrollLeft;
+  const curY = el.scrollTop;
+  const dx = smoothWheel.targetX - curX;
+  const dy = smoothWheel.targetY - curY;
+  const nextX = Math.abs(dx) < SMOOTH_WHEEL_SNAP ? smoothWheel.targetX : curX + dx * SMOOTH_WHEEL_EASE;
+  const nextY = Math.abs(dy) < SMOOTH_WHEEL_SNAP ? smoothWheel.targetY : curY + dy * SMOOTH_WHEEL_EASE;
+  if (nextX !== curX) el.scrollLeft = nextX;
+  if (nextY !== curY) el.scrollTop = nextY;
+  const done =
+    Math.abs(smoothWheel.targetX - el.scrollLeft) < SMOOTH_WHEEL_SNAP &&
+    Math.abs(smoothWheel.targetY - el.scrollTop) < SMOOTH_WHEEL_SNAP;
+  if (done) {
+    smoothWheel.active = false;
+    return;
+  }
+  smoothWheel.raf = requestAnimationFrame(stepSmoothWheel);
+};
+
+// 其它交互（拖拽/键盘/程序化）要独占滚动时，取消当前 wheel 动画，避免相互抢占。
+const cancelSmoothWheel = () => {
+  if (smoothWheel.raf != null) {
+    cancelAnimationFrame(smoothWheel.raf);
+    smoothWheel.raf = null;
+  }
+  smoothWheel.active = false;
+};
+
+const handleSmoothWheel = (event: WheelEvent) => {
+  if (event.ctrlKey || event.metaKey) return;
+  if (event.deltaY === 0 && event.deltaX === 0) return;
+  const el = scrollEl.value;
+  if (!el) return;
+  // 预览 / 弹窗 / 抽屉打开时不接管滚动（避免底层 grid 跟着滚）
+  if (isPreviewOpen.value) return;
+  const target = event.target as HTMLElement | null;
+  if (
+    target?.closest(
+      ".image-preview-dialog,.el-dialog,.el-drawer,.el-popper,.el-overlay,.pswp"
+    )
+  )
+    return;
+  // 事件目标不在当前 scrollEl 内部（例如冒泡自 teleport 的弹层）也不处理
+  if (target && !el.contains(target)) return;
+  // deltaMode: 0=像素, 1=行, 2=页
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? el.clientHeight || 0 : 1;
+  const dy = event.deltaY * unit;
+  const dx = event.deltaX * unit;
+  event.preventDefault();
+  // 非动画中时以真实滚动位置为起点，避免与外部滚动/跳转叠加
+  if (!smoothWheel.active) {
+    smoothWheel.targetX = el.scrollLeft;
+    smoothWheel.targetY = el.scrollTop;
+  }
+  if (isHorizontal.value) {
+    // 水平布局：deltaY 直接推动 scrollLeft；同时尊重触控板横向 deltaX
+    smoothWheel.targetX += dy + dx;
+  } else {
+    smoothWheel.targetY += dy;
+    smoothWheel.targetX += dx;
+  }
+  if (!smoothWheel.active) {
+    smoothWheel.active = true;
+    smoothWheel.raf = requestAnimationFrame(stepSmoothWheel);
+  }
+};
+
 // 虚拟滚动：滚动时用 rAF 实时更新可视行，避免 debounce 导致“滚快一点出现空白区域”
 let virtualScrollRaf: number | null = null;
 const scheduleVirtualRangeUpdate = () => {
@@ -884,7 +1004,7 @@ onMounted(async () => {
   window.addEventListener("resize", updateWindowAspectRatio);
 
   await nextTick();
-  const el = containerEl.value;
+  const el = scrollEl.value;
   if (el) {
     setupContainerResizeObserver();
     // 1) scroll-stable（内部已用 setTimeout 防抖）
@@ -893,6 +1013,10 @@ onMounted(async () => {
     el.addEventListener("scroll", scheduleVirtualRangeUpdate, { passive: true } as any);
     // 记录滚动位置（rAF 节流，尽量便宜）
     el.addEventListener("scroll", saveScrollPosition, { passive: true } as any);
+    // 丝滑滚轮：rAF + lerp 将离散 wheel 累加到目标位置（保留 Ctrl+Wheel 给列数调整）
+    el.addEventListener("wheel", handleSmoothWheel, { passive: false } as any);
+    // 指针按下时终止 wheel 动画，避免与拖拽滚动/程序化滚动互相抢写 scrollLeft/Top
+    el.addEventListener("pointerdown", cancelSmoothWheel, { passive: true, capture: true } as any);
     scheduleVirtualUpdate();
   }
 
@@ -921,6 +1045,19 @@ onMounted(async () => {
 
 onUnmounted(async () => {
   window.removeEventListener("resize", updateWindowAspectRatio);
+  const el = scrollEl.value;
+  if (el) {
+    el.removeEventListener("scroll", emitScrollStable as any);
+    el.removeEventListener("scroll", scheduleVirtualRangeUpdate as any);
+    el.removeEventListener("scroll", saveScrollPosition as any);
+    el.removeEventListener("wheel", handleSmoothWheel as any);
+    el.removeEventListener("pointerdown", cancelSmoothWheel as any, { capture: true } as any);
+  }
+  if (smoothWheel.raf != null) {
+    cancelAnimationFrame(smoothWheel.raf);
+    smoothWheel.raf = null;
+  }
+  smoothWheel.active = false;
   if (modalStackId.value) {
     modalStackStore.remove(modalStackId.value);
     modalStackId.value = null;
@@ -940,13 +1077,14 @@ onUnmounted(async () => {
 onActivated(() => {
   isComponentActive.value = true;
   // keep-alive 激活后恢复滚动位置；并刷新虚拟滚动范围，避免显示错位
-  const el = containerEl.value;
-  if (!el) return;
+  if (!scrollEl.value) return;
   setupContainerResizeObserver();
-  if (savedScrollTop.value > 0) {
+  if (savedScrollPos.value > 0) {
     requestAnimationFrame(() => {
-      if (!containerEl.value) return;
-      containerEl.value.scrollTop = savedScrollTop.value;
+      const el = scrollEl.value;
+      if (!el) return;
+      if (isHorizontal.value) el.scrollLeft = savedScrollPos.value;
+      else el.scrollTop = savedScrollPos.value;
       scheduleVirtualUpdate();
     });
     return;
@@ -978,10 +1116,12 @@ watch(
       if (oldIds.size > 0 && !hasIntersection) {
         // 刷新/换页：新旧列表完全不同，清空选择
         clearSelection();
-        // 换页时平滑滚动到顶部，避免保留上一页的滚动位置
+        // 换页时平滑滚动到顶部/起点，避免保留上一页的滚动位置
         nextTick(() => {
-          const el = containerEl.value;
-          if (el) el.scrollTo({ top: 0, behavior: "smooth" });
+          const el = scrollEl.value;
+          if (!el) return;
+          if (isHorizontal.value) el.scrollTo({ left: 0, behavior: "smooth" });
+          else el.scrollTo({ top: 0, behavior: "smooth" });
         });
       } else if (selectedIds.value.size > 0) {
         // 图片增减：从选择中移除被删除的图片
@@ -1034,9 +1174,9 @@ const handleEnterAnimationEnd = (imageId: string) => {
   enteringIds.value.delete(imageId);
 };
 
-// 滚动到指定索引的图片（基于 DOM 元素位置，兼容行高不一致的栅格）
+// 滚动到指定索引的图片（基于 DOM 元素位置，兼容主轴方向）
 const scrollToIndex = (index: number) => {
-  const container = containerEl.value;
+  const container = scrollEl.value;
   if (!container) return;
   const list = props.images ?? [];
   if (index < 0 || index >= list.length) return;
@@ -1048,15 +1188,26 @@ const scrollToIndex = (index: number) => {
   const containerRect = container.getBoundingClientRect();
   const elRect = el.getBoundingClientRect();
 
-  const elTop = elRect.top - containerRect.top + container.scrollTop;
-  const elBottom = elTop + elRect.height;
-  const viewportTop = container.scrollTop;
-  const viewportBottom = viewportTop + container.clientHeight;
-
-  if (elTop < viewportTop) {
-    container.scrollTo({ top: elTop, behavior: "smooth" });
-  } else if (elBottom > viewportBottom) {
-    container.scrollTo({ top: elBottom - container.clientHeight, behavior: "smooth" });
+  if (isHorizontal.value) {
+    const elLeft = elRect.left - containerRect.left + container.scrollLeft;
+    const elRight = elLeft + elRect.width;
+    const viewportLeft = container.scrollLeft;
+    const viewportRight = viewportLeft + container.clientWidth;
+    if (elLeft < viewportLeft) {
+      container.scrollTo({ left: elLeft, behavior: "smooth" });
+    } else if (elRight > viewportRight) {
+      container.scrollTo({ left: elRight - container.clientWidth, behavior: "smooth" });
+    }
+  } else {
+    const elTop = elRect.top - containerRect.top + container.scrollTop;
+    const elBottom = elTop + elRect.height;
+    const viewportTop = container.scrollTop;
+    const viewportBottom = viewportTop + container.clientHeight;
+    if (elTop < viewportTop) {
+      container.scrollTo({ top: elTop, behavior: "smooth" });
+    } else if (elBottom > viewportBottom) {
+      container.scrollTo({ top: elBottom - container.clientHeight, behavior: "smooth" });
+    }
   }
 };
 
@@ -1096,7 +1247,7 @@ const exitAndroidSelectionMode = () => {
 // Android：选择模式用 useModalBack，弹栈时通过 onClose 清除选择状态
 useModalBack(androidSelectionMode, { onClose: clearSelection });
 
-const getContainerEl = () => containerEl.value;
+const getContainerEl = () => scrollEl.value ?? containerEl.value;
 
 defineExpose({
   getContainerEl,
@@ -1109,7 +1260,11 @@ defineExpose({
 <style scoped lang="scss">
 .image-grid-container {
   height: 100%;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   outline: none;
 }
 
@@ -1121,11 +1276,28 @@ defineExpose({
   outline: none;
 }
 
-.hide-scrollbar {
+.image-grid-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+
+  &.layout-vertical {
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  &.layout-horizontal {
+    overflow-x: auto;
+    overflow-y: hidden;
+    height: 100%;
+  }
+}
+
+.hide-scrollbar .image-grid-scroll {
   scrollbar-width: none;
 }
 
-.hide-scrollbar::-webkit-scrollbar {
+.hide-scrollbar .image-grid-scroll::-webkit-scrollbar {
   display: none;
 }
 
@@ -1133,8 +1305,17 @@ defineExpose({
   position: relative;
 }
 
+.image-grid-container.layout-horizontal .image-grid-root {
+  height: 100%;
+}
+
 .image-grid-items {
   min-height: 100%;
+}
+
+.image-grid-container.layout-horizontal .image-grid-items {
+  height: 100%;
+  min-height: 0;
 }
 
 .empty-overlay {
@@ -1149,9 +1330,19 @@ defineExpose({
   display: grid;
 }
 
+/* CSS Grid 水平方向：N 行，按内容宽度自动成列 */
+.image-grid.layout-horizontal {
+  width: max-content;
+}
+
 .image-gallery {
   display: flex;
   min-height: 100%;
+}
+
+/* 垂直 masonry：N 列纵向堆叠 */
+.image-gallery.layout-vertical {
+  flex-direction: row;
 }
 
 .image-gallery-column {
@@ -1159,6 +1350,21 @@ defineExpose({
   min-width: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* 水平 masonry：N 行横向铺开，容器横向滚动 */
+.image-gallery.layout-horizontal {
+  flex-direction: column;
+  height: 100%;
+  width: max-content;
+}
+
+.image-gallery-row {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
 }
 
 .fade-in-list-move,

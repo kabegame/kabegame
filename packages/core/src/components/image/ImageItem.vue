@@ -7,9 +7,10 @@
       'image-item-android': isCompact,
       'image-item-hidden': image.isHidden,
       'image-item-fill': fillBox,
+      'image-item-horizontal': horizontal,
     },
     thumbnailObjectPositionClass,
-  ]" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
+  ]" :style="rootStyle" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
     <!-- 本地文件缺失标识：不阻挡点击/选择/右键 -->
     <el-tooltip v-if="originalMissing && !isLost" content="这张图片找不到了" placement="top" :show-after="300">
       <div class="missing-file-badge">
@@ -104,6 +105,7 @@ interface Props {
   isEntering?: boolean; // 是否正在入场（用于虚拟滚动的动画）
   isLeaving?: boolean; // 是否正在离开（用于虚拟滚动的动画）
   fillBox?: boolean; // gallery 布局：盒宽高比等于图片自然比，填满且不留 letterbox 背景
+  horizontal?: boolean; // 水平方向：盒子用 height: 100% 撑满主轴，width 由 aspect-ratio 决定
 }
 
 const props = defineProps<Props>();
@@ -243,6 +245,11 @@ const aspectRatioStyle = computed(() => {
   return r
     ? { aspectRatio: `${r}` }
     : { aspectRatio: "16 / 9" };
+});
+// 水平方向：把 aspect-ratio 也挂在 root 上，这样 flex 能基于 height 推导 width。
+const rootStyle = computed<Record<string, string> | undefined>(() => {
+  if (!props.horizontal) return undefined;
+  return aspectRatioStyle.value as Record<string, string>;
 });
 const isVideo = computed(() => isVideoMediaType(props.image.type));
 
@@ -417,6 +424,20 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     &.thumbnail-android {
       object-fit: contain;
       background: var(--anime-bg-card);
+    }
+  }
+
+  /* 水平方向：item 在横向滚动容器里作为"列/行"的单元，
+     应由 aspect-ratio 从 height 推导 width，而不是默认的 width → height。
+     关键：flex-shrink: 0 防止在 width: max-content 容器内被挤压。 */
+  &.image-item-horizontal {
+    height: 100%;
+    width: auto;
+    flex-shrink: 0;
+    .image-wrapper,
+    .image-preview-wrapper {
+      height: 100%;
+      width: auto;
     }
   }
 

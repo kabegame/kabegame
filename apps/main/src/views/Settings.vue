@@ -32,8 +32,9 @@
                   :description="$t('settings.imageAspectRatioDesc')">
                   <GalleryImageAspectRatioSetting />
                 </SettingRow>
-                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.galleryColumns')"
-                  :description="$t('settings.galleryColumnsDesc')">
+                <SettingRow v-if="!IS_ANDROID"
+                  :label="isHorizontal ? $t('settings.galleryRows') : $t('settings.galleryColumns')"
+                  :description="isHorizontal ? $t('settings.galleryRowsDesc') : $t('settings.galleryColumnsDesc')">
                   <GalleryGridColumnsSetting />
                 </SettingRow>
                 <SettingRow :label="$t('settings.galleryPageSize')"
@@ -43,6 +44,10 @@
                 <SettingRow :label="$t('settings.galleryLayoutMode')"
                   :description="$t('settings.galleryLayoutModeDesc')">
                   <SettingRadioControl setting-key="galleryLayoutMode" :options="galleryLayoutModeOptions" />
+                </SettingRow>
+                <SettingRow :label="$t('settings.galleryLayoutDirection')"
+                  :description="$t('settings.galleryLayoutDirectionDesc')">
+                  <SettingRadioControl setting-key="galleryLayoutDirection" :options="galleryLayoutDirectionOptions" />
                 </SettingRow>
                 <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageObjectPosition')"
                   :description="$t('settings.imageObjectPositionDesc')">
@@ -276,6 +281,10 @@ const galleryLayoutModeOptions = computed(() => [
   { label: t("settings.galleryLayoutModeGrid"), value: "grid" },
   { label: t("settings.galleryLayoutModeGallery"), value: "gallery" },
 ]);
+const galleryLayoutDirectionOptions = computed(() => [
+  { label: t("settings.galleryLayoutDirectionVertical"), value: "vertical" },
+  { label: t("settings.galleryLayoutDirectionHorizontal"), value: "horizontal" },
+]);
 
 const autoOpenCrawlerWebviewKey: AppSettingKey = "autoOpenCrawlerWebview";
 const devWebviewUrl = ref("https://www.example.com");
@@ -304,6 +313,9 @@ import { useDesktop } from "@/composables/useDesktop";
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 
 const settingsStore = useSettingsStore();
+const isHorizontal = computed(
+  () => settingsStore.values.galleryLayoutDirection === "horizontal"
+);
 
 // 持久化用户最后访问的设置 tab
 const SETTINGS_TAB_NAMES = ["app", "wallpaper", "download", "plugins"] as const;
