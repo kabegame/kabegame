@@ -1,6 +1,8 @@
 // Image 相关命令
 
-use kabegame_core::providers::{execute_provider_query, ProviderRuntime};
+use kabegame_core::providers::{
+    decode_provider_path_segments, execute_provider_query, ProviderRuntime,
+};
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::image_events::{
     delete_images_with_events, toggle_image_favorite_with_event,
@@ -19,9 +21,33 @@ use tauri::AppHandle;
 #[tauri::command]
 pub async fn browse_gallery_provider(path: String) -> Result<serde_json::Value, String> {
     let full = format!("gallery/{}", path.trim().trim_start_matches('/'));
+    let full = decode_provider_path_segments(&full);
     let result = tauri::async_runtime::spawn_blocking(move || execute_provider_query(&full))
         .await
         .map_err(|e| e.to_string())??;
+    Ok(result)
+}
+
+/// 列 gallery 下某路径的 **结构子节点**（不含 images），每个子节点附带：
+/// - `name`：子节点名（即路径段，如 `image` / `2025y` / `<plugin_id>`）
+/// - `meta`：`ProviderMeta`（Album / Task / Plugin / ...；无则 null）
+/// - `total`：该子节点 composed query 的 COUNT（`ImageQuery::apply_query` 沿链累积后执行 `SELECT COUNT(*)`）
+///
+/// 前端画廊 filter 下拉里的"按插件 / 按媒体类型 / 按日期"等选项直接消费此接口，
+/// 不再另起一套 SQL 聚合命令。path 语义与 `browse_gallery_provider` 一致
+/// （自动前缀 `gallery/` + 段级 percent-decode）。
+#[tauri::command]
+pub async fn list_provider_children(path: String) -> Result<serde_json::Value, String> {
+    let full = format!("gallery/{}", path.trim().trim_start_matches('/'));
+    let full = decode_provider_path_segments(&full);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let rt = ProviderRuntime::global();
+        let children = rt.list_children_with_totals(&full)?;
+        let entries = kabegame_core::gallery::browse_from_provider(children, Vec::new())?;
+        serde_json::to_value(entries).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     Ok(result)
 }
 

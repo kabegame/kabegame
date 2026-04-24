@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Per the [Claude Code memory documentation](https://code.claude.com/docs/en/memory), `CLAUDE.md` is project-level persistent context loaded each session. It is guidance, not a separate enforcement layer—keep it accurate, specific, and under ~200 lines when possible; split or use `@path` imports and optional `.claude/rules/` for larger or path-scoped instructions as that doc describes.
 
-## Cursor rules — read first, keep in sync
+## Recommand to read: Cursor rules.
 
 This repository’s **Cursor** constraints live in **`.cursor/rules/`** (`.mdc` files). They are the canonical, always-applied (or path-scoped) rules for work done in Cursor.
 
@@ -14,8 +14,8 @@ This repository’s **Cursor** constraints live in **`.cursor/rules/`** (`.mdc` 
 
 **When conventions change:** update `.cursor/rules/` and this `CLAUDE.md` together so they do not contradict each other—mirror critical requirements here or in imports, and keep Cursor rules as the source of truth for editor-enforced behavior.
 
-@.claude/cursor-debug-mode.md
-@.claude/cursor-plan-mode.md
+This is a index for code base. Keep in mind to sync these docs when do some changes.
+@cocs/README.md 
 
 ## What This Project Is
 
@@ -84,9 +84,6 @@ bun run build:ffmpeg             # Build FFmpeg sidecar (requires libx264)
 | Local (`--mode local`, dev) | All plugins bundled locally |
 
 ### Key Architecture Rules
-
-**No dynamic imports** — All TS/JS/Vue files must use static `import`. Dynamic `import()` is forbidden (Tauri packaging constraint).
-
 **Path logic belongs in `tauri-plugin-pathes`** — Any path/directory calculation must live in `src-tauri-plugins/tauri-plugin-pathes/`. Other modules call into it via `AppPaths`; never hardcode or recompute paths elsewhere.
 
 **Single source of truth for file types:**

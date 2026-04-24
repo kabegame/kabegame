@@ -1,5 +1,6 @@
 import { createPathRouteStore } from "./pathRoute";
 import {
+  buildGalleryContextPrefix,
   buildGalleryPath,
   parseGalleryPath,
   GALLERY_STORAGE_KEY_PATH,
@@ -15,6 +16,7 @@ type GalleryRouteState = {
   sort: GalleryTimeSort;
   page: number;
   pageSize: number;
+  search: string;
 };
 
 export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
@@ -27,9 +29,12 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
         sort: parsed.sort,
         page: parsed.page,
         pageSize: parsed.pageSize,
+        search: parsed.search,
       };
     },
-    build: (state) => buildGalleryPath(state.filter, state.sort, state.page, state.pageSize),
+    build: (state) =>
+      buildGalleryPath(state.filter, state.sort, state.page, state.pageSize, state.search),
+    buildContext: (state) => buildGalleryContextPrefix(state.search),
     defaultState: () => {
       const settings = useSettingsStore();
       const stored = localStorage.getItem(GALLERY_STORAGE_KEY_PATH);
@@ -40,11 +45,12 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
         sort: parsed?.sort ?? defaultSort,
         page: 1, // 页码不持久化，由当前页面状态/URL 驱动
         pageSize: (settings.values.galleryPageSize as number | undefined) ?? 100,
+        search: "", // 搜索词不持久化
       };
     },
     routeName: "Gallery",
     onStateChange: (state) => {
-      // 仅持久化 filter/sort（page 不持久化，pageSize 交 settings 统一管理）
+      // 仅持久化 filter/sort（page / search 不持久化，pageSize 交 settings 统一管理）
       localStorage.setItem(
         GALLERY_STORAGE_KEY_PATH,
         buildGalleryPath(state.filter, state.sort, 1),

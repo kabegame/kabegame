@@ -25,6 +25,13 @@
                             android-ui="inline"
                             @update:page-size="(ps) => taskDetailRouteStore.navigate({ page: 1, pageSize: ps })"
                         />
+                        <SearchInput
+                            v-if="!isCompact"
+                            :model-value="searchQuery"
+                            :placeholder="t('gallery.searchPlaceholder')"
+                            class="task-detail-search"
+                            @update:model-value="(v) => taskDetailRouteStore.navigate({ page: 1, search: v })"
+                        />
                     </div>
 
                     <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage"
@@ -100,10 +107,8 @@
         <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" :task-id="addToAlbumTaskId"
             @added="handleAddedToAlbum" />
 
-        <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-            :message="removeDialogMessage" :title="$t('tasks.confirmDelete')" :checkbox-label="t('gallery.deleteSourceFilesCheckboxLabel')"
-            :danger-text="t('gallery.deleteSourceFilesDangerText')" :safe-text="t('gallery.deleteSourceFilesSafeText')"
-            :hide-checkbox="isCompact" @confirm="confirmRemoveImages" />
+        <RemoveImagesConfirmDialog v-model="showRemoveDialog" :message="removeDialogMessage"
+            :title="$t('tasks.confirmDelete')" hide-checkbox @confirm="confirmRemoveImages" />
 
         <TaskLogDialog ref="taskLogDialogRef" />
         <TaskParamsDialog v-model="showTaskParamsDialog" :task="taskParamsTask" />
@@ -121,6 +126,7 @@ import { VideoPause, Delete, Setting, Refresh, QuestionFilled, Star, StarFilled,
 import { createImageActions } from "@/actions/imageActions";
 import ImageGrid from "@/components/ImageGrid.vue";
 import GalleryPageSizeControl from "@/components/GalleryPageSizeControl.vue";
+import SearchInput from "@/components/SearchInput.vue";
 import TaskFilterControl from "@/components/TaskFilterControl.vue";
 import type { ImageInfo, TaskFailedImage } from "@kabegame/core/types/image";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
@@ -154,6 +160,7 @@ import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
@@ -380,7 +387,7 @@ const localProviderRootPath = computed(() => {
 });
 
 const taskDetailRouteStore = useTaskDetailRouteStore();
-const { pageSize } = storeToRefs(taskDetailRouteStore);
+const { pageSize, search: searchQuery } = storeToRefs(taskDetailRouteStore);
 const currentPath = computed(() => taskDetailRouteStore.currentPath);
 const currentPage = computed(() => taskDetailRouteStore.page);
 
@@ -618,9 +625,8 @@ const handleDeleteTask = async () => {
     }
 };
 
-// 移除/删除对话框相关
+// 永久删除确认对话框相关
 const showRemoveDialog = ref(false);
-const removeDeleteFiles = ref(false);
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
 
@@ -865,27 +871,28 @@ const handleImageMenuCommand = async (
             break;
         case "remove":
             if (imagesToProcess.length === 0) return null;
-            // 显示移除对话框，让用户选择是否删除文件
+            // 永久删除确认对话框
             pendingRemoveImages.value = imagesToProcess;
             const count = imagesToProcess.length;
             removeDialogMessage.value = count > 1 ? t("tasks.removeDialogMessageMulti", { count }) : t("tasks.removeDialogMessageSingle");
-            removeDeleteFiles.value = false; // 默认不删除文件
             showRemoveDialog.value = true;
             break;
         case "swipe-remove" as any:
-            // 上划删除：直接删除，不删除文件，不显示确认对话框
+            // 上划手势：隐藏（加入隐藏画册，保留磁盘文件）
             if (imagesToProcess.length === 0) return null;
             void (async () => {
                 try {
                     const imageIds = imagesToProcess.map(img => img.id);
-
-                    // 不删除文件，只从任务中移除
-                    await invoke("batch_remove_images", { imageIds });
-
+                    await albumStore.addImagesToAlbum(HIDDEN_ALBUM_ID, imageIds);
+                    ElMessage.success(
+                        imageIds.length > 1
+                            ? t("contextMenu.hiddenCount", { count: imageIds.length })
+                            : t("contextMenu.hiddenOne"),
+                    );
                     clearSelection();
                 } catch (error) {
-                    console.error("删除图片失败:", error);
-                    ElMessage.error(t("tasks.deleteImagesFailed"));
+                    console.error("隐藏失败:", error);
+                    ElMessage.error(t("contextMenu.hideFailed"));
                 }
             })();
             break;
@@ -893,7 +900,7 @@ const handleImageMenuCommand = async (
     return null;
 };
 
-// 确认移除图片（合并了原来的 remove 和 delete 逻辑）
+// 确认永久删除
 const confirmRemoveImages = async () => {
     const imagesToRemove = pendingRemoveImages.value;
     if (imagesToRemove.length === 0) {
@@ -902,30 +909,16 @@ const confirmRemoveImages = async () => {
     }
 
     const count = imagesToRemove.length;
-    const shouldDeleteFiles = removeDeleteFiles.value;
-
     showRemoveDialog.value = false;
 
     try {
         const imageIds = imagesToRemove.map(img => img.id);
-
-        // 使用批量 API
-        if (shouldDeleteFiles) {
-            await invoke("batch_delete_images", { imageIds });
-        } else {
-            await invoke("batch_remove_images", { imageIds });
-        }
-
+        await invoke("batch_delete_images", { imageIds });
         clearSelection();
-
-        if (shouldDeleteFiles) {
-            ElMessage.success(count > 1 ? t("tasks.deleteSuccessCount", { count }) : t("tasks.deleteSuccess"));
-        } else {
-            ElMessage.success(count > 1 ? t("tasks.removeSuccessCount", { count }) : t("tasks.removeSuccess"));
-        }
+        ElMessage.success(count > 1 ? t("tasks.deleteSuccessCount", { count }) : t("tasks.deleteSuccess"));
     } catch (error) {
         console.error("删除图片失败:", error);
-        ElMessage.error(shouldDeleteFiles ? t("tasks.deleteFailed") : t("tasks.removeFailed"));
+        ElMessage.error(t("tasks.deleteFailed"));
     }
 };
 
@@ -933,7 +926,8 @@ const initTask = async (id: string) => {
     taskId.value = id;
     const rawPath = route.query.path;
     const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
-    if (qp.startsWith(`task/${id}/`)) {
+    const qpBody = qp.startsWith("hide/") ? qp.slice("hide/".length) : qp;
+    if (qpBody.startsWith(`task/${id}/`)) {
         taskDetailRouteStore.syncFromUrl(qp);
     } else {
         await taskDetailRouteStore.navigate({ taskId: id, page: 1 });
@@ -1088,6 +1082,19 @@ useImagesChangeRefresh({
     },
 });
 
+// HIDDEN 画册成员变化：重新拉取当前页，让 image.isHidden（决定缩略图透明度）
+// 以及在 hide=true 下 HideGate 带来的可见性变化能实时生效。
+useAlbumImagesChangeRefresh({
+    enabled: ref(true),
+    waitMs: 500,
+    filter: (p) => (p.albumIds ?? []).includes(HIDDEN_ALBUM_ID),
+    onRefresh: async () => {
+        if (!isOnTaskRoute.value) return;
+        if (!taskId.value) return;
+        await loadTaskImages({ showSkeleton: false });
+    },
+});
+
 onMounted(async () => {
     const id = route.params.id as string;
     if (id) {
@@ -1106,6 +1113,10 @@ onActivated(async () => {
     const id = route.params.id as string;
     if (id && id !== taskId.value) {
         await initTask(id);
+    } else if (taskId.value) {
+        // keep-alive 场景：用户可能在别的页面切换了全局 hide（currentPath 的 watcher
+        // 在本页未激活时会早退），回来时需要重新拉取当前页以反映最新的 hide 过滤。
+        await loadTaskImages({ showSkeleton: false });
     }
     // 页面激活时启动定时器和监听器（keep-alive 场景）
     await startTimersAndListeners();
@@ -1146,6 +1157,10 @@ onDeactivated(() => {
         align-items: center;
         gap: 8px;
         margin-bottom: 8px;
+    }
+
+    .task-detail-search {
+        margin-left: auto;
     }
 
     .failed-mode-body {

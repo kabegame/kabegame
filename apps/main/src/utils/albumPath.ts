@@ -23,6 +23,23 @@ export type AlbumBrowseSort =
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 100;
 
+/** 搜索段前缀；非空搜索时 URL 前缀为 `search/display-name/<enc>/album/…` */
+const SEARCH_PREFIX = "search/display-name/";
+
+function stripSearchPrefix(segs: string[]): { search: string; rest: string[] } {
+  if (segs.length >= 3 && segs[0] === "search" && segs[1] === "display-name") {
+    const raw = segs[2] ?? "";
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      decoded = raw;
+    }
+    return { search: decoded, rest: segs.slice(3) };
+  }
+  return { search: "", rest: segs };
+}
+
 function normalizeSortForFilter(
   filter: AlbumBrowseFilter,
   sort: AlbumBrowseSort
@@ -59,24 +76,27 @@ export function buildAlbumBrowsePath(
   filter: AlbumBrowseFilter,
   sort: AlbumBrowseSort,
   page: number,
-  pageSize: number = DEFAULT_PAGE_SIZE
+  pageSize: number = DEFAULT_PAGE_SIZE,
+  search: string = ""
 ): string {
   const id = (albumId || "").trim();
   if (!id) return `album//${DEFAULT_PAGE}`;
   const p = Math.max(1, Math.floor(Number(page)) || DEFAULT_PAGE);
   const s = normalizeSortForFilter(filter, sort);
   const ps = pageSize === DEFAULT_PAGE_SIZE ? "" : `x${pageSize}x/`;
+  const q = (search ?? "").trim();
+  const sp = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
 
   if (filter === "wallpaper-order") {
-    if (s === "set-desc") return `album/${id}/wallpaper-order/desc/${ps}${p}`;
-    return `album/${id}/wallpaper-order/${ps}${p}`;
+    if (s === "set-desc") return `${sp}album/${id}/wallpaper-order/desc/${ps}${p}`;
+    return `${sp}album/${id}/wallpaper-order/${ps}${p}`;
   }
 
   if (filter === "image-only" || filter === "video-only") {
     const prefix =
       filter === "image-only"
-        ? `album/${id}/image-only`
-        : `album/${id}/video-only`;
+        ? `${sp}album/${id}/image-only`
+        : `${sp}album/${id}/video-only`;
     if (s === "set-desc") return `${prefix}/wallpaper-order/desc/${ps}${p}`;
     if (s === "set-asc") return `${prefix}/wallpaper-order/${ps}${p}`;
     if (s === "join-desc") return `${prefix}/album-order/desc/${ps}${p}`;
@@ -85,10 +105,10 @@ export function buildAlbumBrowsePath(
     return `${prefix}/${ps}${p}`;
   }
 
-  if (s === "join-desc") return `album/${id}/album-order/desc/${ps}${p}`;
-  if (s === "join-asc") return `album/${id}/album-order/${ps}${p}`;
-  if (s === "time-desc") return `album/${id}/desc/${ps}${p}`;
-  return `album/${id}/${ps}${p}`;
+  if (s === "join-desc") return `${sp}album/${id}/album-order/desc/${ps}${p}`;
+  if (s === "join-asc") return `${sp}album/${id}/album-order/${ps}${p}`;
+  if (s === "time-desc") return `${sp}album/${id}/desc/${ps}${p}`;
+  return `${sp}album/${id}/${ps}${p}`;
 }
 
 export interface ParsedAlbumBrowsePath {
@@ -97,12 +117,22 @@ export interface ParsedAlbumBrowsePath {
   sort: AlbumBrowseSort;
   page: number;
   pageSize: number;
+  /** `display_name` 子串搜索，空串表示不过滤 */
+  search: string;
 }
 
 /** 解析 browse_gallery_provider 用的画册路径；无法识别时返回 null */
 export function parseAlbumBrowsePath(path: string): ParsedAlbumBrowsePath | null {
   const trimmed = (path || "").trim();
-  const rawSegs = trimmed.split("/").map((s) => s.trim()).filter(Boolean);
+  const allSegs = trimmed.split("/").map((s) => s.trim()).filter(Boolean);
+  const { search, rest: rawSegs } = stripSearchPrefix(allSegs);
+  const inner = parseAlbumBrowsePathCore(rawSegs);
+  return inner ? { ...inner, search } : null;
+}
+
+type AlbumParseCore = Omit<ParsedAlbumBrowsePath, "search">;
+
+function parseAlbumBrowsePathCore(rawSegs: string[]): AlbumParseCore | null {
   if (rawSegs.length < 3 || rawSegs[0] !== "album") return null;
   const albumId = rawSegs[1]!;
   if (!albumId) return null;
@@ -226,7 +256,7 @@ function mapSortWhenChangingFilter(
   return sort;
 }
 
-/** 切换过滤时回到第 1 页，并按语义映射排序 */
+/** 切换过滤时回到第 1 页，并按语义映射排序；保留 search */
 export function albumBrowsePathWithFilterOnly(
   path: string,
   newFilter: AlbumBrowseFilter
@@ -234,15 +264,25 @@ export function albumBrowsePathWithFilterOnly(
   const p = parseAlbumBrowsePath(path);
   if (!p) return path;
   const nextSort = mapSortWhenChangingFilter(p.filter, newFilter, p.sort);
-  return buildAlbumBrowsePath(p.albumId, newFilter, nextSort, 1, p.pageSize);
+  return buildAlbumBrowsePath(p.albumId, newFilter, nextSort, 1, p.pageSize, p.search);
 }
 
-/** 仅改排序，保留过滤与页码 */
+/** 仅改排序，保留过滤与页码；保留 search */
 export function albumBrowsePathWithSortOnly(
   path: string,
   sort: AlbumBrowseSort
 ): string {
   const p = parseAlbumBrowsePath(path);
   if (!p) return path;
-  return buildAlbumBrowsePath(p.albumId, p.filter, sort, p.page, p.pageSize);
+  return buildAlbumBrowsePath(p.albumId, p.filter, sort, p.page, p.pageSize, p.search);
+}
+
+/** 仅改搜索词，保留过滤/排序/pageSize，页码归 1 */
+export function albumBrowsePathWithSearchOnly(
+  path: string,
+  search: string
+): string {
+  const p = parseAlbumBrowsePath(path);
+  if (!p) return path;
+  return buildAlbumBrowsePath(p.albumId, p.filter, p.sort, 1, p.pageSize, search);
 }

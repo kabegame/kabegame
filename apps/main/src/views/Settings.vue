@@ -40,6 +40,10 @@
                   :description="$t('settings.galleryPageSizeDesc')">
                   <GalleryPageSizeSetting />
                 </SettingRow>
+                <SettingRow :label="$t('settings.galleryLayoutMode')"
+                  :description="$t('settings.galleryLayoutModeDesc')">
+                  <SettingRadioControl setting-key="galleryLayoutMode" :options="galleryLayoutModeOptions" />
+                </SettingRow>
                 <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageObjectPosition')"
                   :description="$t('settings.imageObjectPositionDesc')">
                   <SettingRadioControl setting-key="galleryImageObjectPosition" :options="objectPositionOptions" />
@@ -267,6 +271,10 @@ const objectPositionOptions = computed(() => [
 const wallpaperModeOptions = computed(() => [
   { label: t("settings.wallpaperModeRandom"), value: "random" },
   { label: t("settings.wallpaperModeSequential"), value: "sequential" },
+]);
+const galleryLayoutModeOptions = computed(() => [
+  { label: t("settings.galleryLayoutModeGrid"), value: "grid" },
+  { label: t("settings.galleryLayoutModeGallery"), value: "gallery" },
 ]);
 
 const autoOpenCrawlerWebviewKey: AppSettingKey = "autoOpenCrawlerWebview";

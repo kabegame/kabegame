@@ -9,7 +9,7 @@
     </div>
 
     <Teleport to="body">
-        <van-popup v-model:show="showPicker" position="bottom" round>
+        <van-popup v-model:show="showPicker" position="bottom" round :z-index="popupZIndex">
             <!-- 有 option 插槽时用自定义列表，可渲染叹号等 -->
             <template v-if="useOptionSlot">
                 <div class="android-picker-select__header">
@@ -46,6 +46,7 @@
 import { computed, ref, useSlots, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ArrowDown } from "@element-plus/icons-vue";
+import { useZIndex } from "element-plus";
 import { useModalBack } from "../composables/useModalBack";
 
 export interface AndroidPickerSelectOption {
@@ -83,6 +84,11 @@ const useOptionSlot = computed(() => !!slots.option);
 const showPicker = ref(false);
 useModalBack(showPicker);
 
+const { nextZIndex } = useZIndex();
+// 与 Element Plus 共用 z-index 计数器；每次打开取比当前 el-dialog 更高的值，
+// 避免 Vant 默认 z-index(2000) 低于上层 el-dialog 导致被覆盖。
+const popupZIndex = ref(nextZIndex());
+
 const displayLabel = computed(() => {
     const v = props.modelValue;
     if (v === null || v === undefined || v === "") return "";
@@ -105,6 +111,7 @@ const pickerSelectedValues = ref<string[]>([]);
 
 watch(showPicker, (open) => {
     if (open) {
+        popupZIndex.value = nextZIndex();
         const v = props.modelValue;
         const val =
             v !== null && v !== undefined && v !== "" ? v : (props.clearable ? "" : optionsWithClear.value[0]?.value ?? "");

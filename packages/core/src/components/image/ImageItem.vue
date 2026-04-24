@@ -5,6 +5,8 @@
       'item-entering': enteringClassActive,
       'item-leaving': isLeaving,
       'image-item-android': isCompact,
+      'image-item-hidden': image.isHidden,
+      'image-item-fill': fillBox,
     },
     thumbnailObjectPositionClass,
   ]" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
@@ -101,6 +103,7 @@ interface Props {
   gridIndex?: number; // 在网格中的索引
   isEntering?: boolean; // 是否正在入场（用于虚拟滚动的动画）
   isLeaving?: boolean; // 是否正在离开（用于虚拟滚动的动画）
+  fillBox?: boolean; // gallery 布局：盒宽高比等于图片自然比，填满且不留 letterbox 背景
 }
 
 const props = defineProps<Props>();
@@ -276,6 +279,25 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   user-select: none;
   -webkit-tap-highlight-color: transparent;
 
+  /* 隐藏图片：盖在所有图层（含桌面双图的原图 original-layer z-index:2 以及 video/GIF）最上面的半透明遮罩。
+     `isolation: isolate` 让 image-wrapper 自成一层独立 stacking context，遮罩只在 wrapper 内部生效，
+     而 .image-item 上的角标（video-play-badge / missing-file-badge）作为 wrapper 的兄弟节点仍显示在遮罩之上。 */
+  &.image-item-hidden {
+    .image-wrapper {
+      isolation: isolate;
+
+      &::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 9;
+        pointer-events: none;
+        background: rgba(20, 20, 24, 0.55);
+        border-radius: inherit;
+      }
+    }
+  }
+
   /* Android：无背景、无边框，更紧凑 */
   &.image-item-android {
     border: none;
@@ -395,6 +417,27 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     &.thumbnail-android {
       object-fit: contain;
       background: var(--anime-bg-card);
+    }
+  }
+
+  /* gallery 填充模式：盒宽高比 = 图片自然比，用 cover 即可无裁切地铺满，
+     且不需要 letterbox 背景色——避免加载过程中露出卡片色块。
+     同时去掉所有圆角，让画廊列的瓷砖完全贴合。 */
+  &.image-item-fill {
+    border-radius: 0;
+
+    .thumbnail.thumbnail-android {
+      object-fit: cover;
+      background: transparent;
+    }
+
+    .image-wrapper,
+    .image-preview-wrapper {
+      border-radius: 0;
+    }
+
+    .thumbnail {
+      border-radius: 0;
     }
   }
 

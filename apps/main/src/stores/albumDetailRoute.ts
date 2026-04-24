@@ -14,6 +14,7 @@ type AlbumDetailRouteState = {
   sort: AlbumBrowseSort;
   page: number;
   pageSize: number;
+  search: string;
 };
 
 function createDefaultState(): AlbumDetailRouteState {
@@ -24,6 +25,7 @@ function createDefaultState(): AlbumDetailRouteState {
     sort: "join-asc",
     page: 1,
     pageSize: (settings.values.galleryPageSize as number | undefined) ?? 100,
+    search: "",
   };
 }
 
@@ -36,7 +38,14 @@ export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteSta
       return parsed;
     },
     build: (state) =>
-      buildAlbumBrowsePath(state.albumId, state.filter, state.sort, state.page, state.pageSize),
+      buildAlbumBrowsePath(
+        state.albumId,
+        state.filter,
+        state.sort,
+        state.page,
+        state.pageSize,
+        state.search
+      ),
     defaultState: createDefaultState,
     routeName: "AlbumDetail",
     // HIDDEN 画册内部永远不套 `hide/` 前缀，否则 HideGate 会剔除其成员

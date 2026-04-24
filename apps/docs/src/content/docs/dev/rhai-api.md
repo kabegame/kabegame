@@ -1,9 +1,26 @@
 ---
-title: Rhai API 参考
-description: Kabegame 爬虫插件可用的全部 Rhai 函数，包括导航、查询、下载等。
+title: Rhai 脚本指南
+description: 教你如何用 Rhai 编写 Kabegame 爬虫插件：脚本生命周期、下载、分页与元数据。
 ---
 
-本文档列出了所有可在 `crawl.rhai` 中使用的爬虫相关函数。
+本页面向**插件作者**，讲解怎样用 Rhai 编写 `crawl.rhai`：脚本如何被执行、变量如何传入、下载与元数据怎么写、分页怎么实现。全部函数签名（参数、返回类型、错误字符串）请查看 [Rhai 函数字典](/reference/rhai-dictionary/)。
+
+插件包结构与打包请先看 [插件格式](/dev/format/)；爬虫后端的整体架构请看 [爬虫后端](/dev/crawler-backends/)。
+
+---
+
+## 脚本生命周期
+
+`crawl.rhai` **没有 main 函数**，整份文件从上到下执行一次。顶层的 `set_header(...)`、`to(...)`、`for` 循环等都是脚本主体。
+
+- 脚本**不应返回值**；若需提前退出，使用 `return;`（不是 `return [];`）。
+- 下载类调用（`download_image` / `download_archive`）是**异步入队**：它们立即返回，真正的下载在后台工作线程进行。脚本无需等待即可继续。
+- 函数失败时会返回错误字符串，可用 `?` 操作符向外传播。
+- 任务被用户取消后，`add_progress` 与 `download_*` 的下一次调用会抛出 `"Task canceled"`，配合 `?` 可让脚本干净地中止。
+
+```rust
+to("https://example.com")?;  // 失败则停止执行并返回错误
+```
 
 ---
 
@@ -258,6 +275,99 @@ download_archive("D:\\Downloads\\pack.rar", "rar");
 
 ---
 
+## 元数据白名单
+
+`metadata` 会被序列化后写入 `images.metadata`，并在插件详情面板由 `templates/description.ejs` 渲染。
+
+:::caution
+**只有你显式列出的字段会入库，请不要把上游 API 的整个 `body` 原样塞进去。**
+:::
+
+庞大的 `metadata` 会显著拖慢图库列表查询。正确做法是：在脚本里定义一个修剪函数，只保留 `description.ejs` 真正会用到的字段。
+
+```rust
+fn trim_body(raw) {
+    #{
+        id: raw["id"],
+        title: raw["title"],
+        userName: raw["userName"],
+        tags: raw["tags"],
+    }
+}
+
+download_image(url, #{
+    name: raw["title"],
+    metadata: trim_body(raw),
+});
+```
+
+可参考 `src-crawler-plugins/plugins/pixiv/crawl.rhai` 中的 `trim_body` 作为实作范本。
+
+:::note
+对 Pixiv 插件的历史数据，运行时会执行一次 `pixiv_metadata_trim_v1` 迁移自动收敛；但**新插件必须在写入时就完成裁剪**，不要依赖迁移。
+:::
+
+---
+
+## 分页：`next` 游标模式
+
+基于 JSON API 的列表接口通常用**接口自身的 `next` 字段**来驱动翻页，而不是靠"item 数量为 0 就停"来猜。
+
+典型循环形如：
+
+```rust
+let p = 1;
+let done = 0;
+loop {
+    let json = fetch_json(`https://api.example.com/list?p=${p}`);
+    let items = json["items"];
+    for item in items {
+        if done >= num_artworks { break; }
+        download_image(item["url"], #{ metadata: trim_body(item) });
+        done += 1;
+        add_progress(99.0 / num_artworks);
+    }
+    let next = json["next"];
+    if done >= num_artworks || type_of(next) == "bool" {
+        break;
+    }
+    p = next;
+}
+
+if done < num_artworks {
+    warn(`实际获取 ${done} 张，少于请求的 ${num_artworks}`);
+}
+```
+
+要点：
+
+- `next` 通常是**下一页的页码**（整数）或 `false`（到底了）。遇到 `false`/非数字就停。
+- 达不到用户请求数量时，用 `warn(...)` 明确告知，不要静默中止。
+- `add_progress(99.0 / total)` 让进度条匹配实际工作量。
+
+完整示例见 `src-crawler-plugins/plugins/pixiv/crawl.rhai`（Pixiv 排行榜 / 用户画作）与 `src-crawler-plugins/plugins/konachan/crawl.rhai`（标签搜索）。
+
+---
+
+## 实用函数速览
+
+以下函数同样注册在 Rhai 引擎中，完整签名请查 [Rhai 函数字典](/reference/rhai-dictionary/)。
+
+| 函数 | 用途 |
+|------|------|
+| `sleep(secs)` | **阻塞**当前任务线程若干秒，上限 300s。用于限速等简单场景 |
+| `rand_f64(min, max)` | 返回区间内的随机浮点数，常配合 `sleep` 做抖动 |
+| `unix_time_ms()` | 当前 Unix 毫秒时间戳，适合生成签名、nonce |
+| `xhh_nonce(t)` / `xhh_hkey(path, t, nonce)` | 小红书 X-s / X-t 签名算法（插件自用） |
+| `is_video_url(url)` / `is_media_url(url)` | `is_image_url` 的同族判断，用于区分视频或通用媒体 |
+| `create_image_metadata(map)` | 预先往 `images_metadata` 表插入一行并返回 `i64`；可作为 `download_image(url, #{ metadata_id })` 的高级用法，适合一份 metadata 被多张图片共享的场景 |
+
+:::note
+`download_image` 能接受视频 URL——函数名仅为历史遗留。不要用 `is_image_url` 过滤视频资源。
+:::
+
+---
+
 ## 进度与控制
 
 ### `add_progress(percentage)`
@@ -268,17 +378,13 @@ download_archive("D:\\Downloads\\pack.rar", "rar");
 add_progress(10);  // 增加 10%
 ```
 
-### `set_concurrency(limit)`
+### `list_local_files(folder_url, extensions, recursive)`
 
-设置当前任务的最大并发下载数量（`limit` 必须大于 0）。
+列出本地文件夹内的文件。`folder_url` 应为 `file:///` 开头的 URL，`extensions` 为文件扩展名数组（不含点号），`recursive` 为 bool，控制是否递归进入子目录。返回文件 URL 数组，错误时抛出异常。
 
-### `set_interval(ms)`
-
-设置当前任务下载请求之间的最小间隔时间（毫秒）。
-
-### `list_local_files(folder_url, extensions)`
-
-列出本地文件夹内的文件（非递归）。`folder_url` 应为 `file:///` 开头的 URL，`extensions` 为文件扩展名数组（不含点号）。返回文件 URL 数组，错误时抛出异常。
+```rust
+let files = list_local_files("file:///D:/images", ["jpg", "png"], true);
+```
 
 ---
 
@@ -352,11 +458,16 @@ for link in next_links {
 
 ## 注意事项
 
-1. 脚本**不应该返回值**，提前退出用 `return;`（不是 `return [];`）
-2. `to()` 入栈，`fetch_json()` 不入栈，`back()` 仅对 `to()` 打开的页面有效
-3. `download_image()` 是异步入队，不需要等待下载完成即可继续执行脚本
-4. 错误处理：函数失败时返回错误字符串，可用 `?` 操作符传播
+1. `to()` 入栈，`fetch_json()` / `parse_json()` 不入栈，`back()` 仅对 `to()` 打开的页面有效。
+2. `fetch_json` 与 `parse_json` 对**非对象**的 JSON 根会自动包一层 `"data"` 键；抓数组接口时记得用 `json["data"]` 取值。
+3. `set_header` 会**静默丢弃**非法的 header 名/值——只在任务日志写一条 warn，脚本无法编程判断。
+4. `sleep(secs)` 是阻塞调用且被强制裁剪到 300s，仅适合简单限速，不是通用的异步延迟。
+5. 任务取消后 `add_progress` / `download_*` 会抛 `"Task canceled"`，用 `?` 传播即可让脚本干净退出。
 
-```rust
-to("https://example.com")?;  // 失败则停止执行并返回错误
-```
+---
+
+## 延伸阅读
+
+- [插件格式](/dev/format/) — `.kgpg` 布局与 `crawl.rhai` 的位置
+- [爬虫后端](/dev/crawler-backends/) — Rhai 与 WebView 两种后端的选型
+- [Rhai 函数字典](/reference/rhai-dictionary/) — 全部函数的签名、返回类型与错误字符串

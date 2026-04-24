@@ -60,6 +60,20 @@ export function useQuickSettingsGroups() {
           comp: GalleryGridColumnsSetting,
           pages: ["gallery", "albumdetail"],
         } as QuickSettingItem<QuickSettingsPageId>] : []),
+        {
+          key: "galleryLayoutMode",
+          label: t("settings.galleryLayoutMode"),
+          description: t("settings.galleryLayoutModeDesc"),
+          comp: SettingRadioControl,
+          props: {
+            settingKey: "galleryLayoutMode",
+            options: [
+              { label: t("settings.galleryLayoutModeGrid"), value: "grid" },
+              { label: t("settings.galleryLayoutModeGallery"), value: "gallery" },
+            ],
+          },
+          pages: ["gallery", "albumdetail"],
+        } as QuickSettingItem<QuickSettingsPageId>,
         ...(!IS_ANDROID ? [{
           key: "galleryImageObjectPosition",
           label: t("settings.imageObjectPosition"),

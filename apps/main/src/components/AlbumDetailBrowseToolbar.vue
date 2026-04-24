@@ -100,6 +100,13 @@
       android-ui="header"
       @update:page-size="(v) => emit('update:pageSize', v)"
     />
+
+    <SearchInput
+      :model-value="search ?? ''"
+      :placeholder="t('gallery.searchPlaceholder')"
+      class="album-browse-search"
+      @update:model-value="(v) => emit('update:search', v)"
+    />
   </div>
 
   <GalleryPageSizeControl
@@ -146,6 +153,7 @@ import { useI18n } from "@kabegame/i18n";
 import { invoke } from "@/api/rpc";
 import { ArrowDown, Filter, Sort } from "@element-plus/icons-vue";
 import GalleryPageSizeControl from "@/components/GalleryPageSizeControl.vue";
+import SearchInput from "@/components/SearchInput.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import {
@@ -160,12 +168,15 @@ const props = defineProps<{
   sort: AlbumBrowseSort;
   /** 每页条数（与设置同步） */
   pageSize: number;
+  /** display_name 搜索词 */
+  search?: string;
 }>();
 
 const emit = defineEmits<{
   "update:filter": [value: AlbumBrowseFilter];
   "update:sort": [value: AlbumBrowseSort];
   "update:pageSize": [value: number];
+  "update:search": [value: string];
 }>();
 
 const { t, locale } = useI18n();
@@ -438,6 +449,10 @@ onUnmounted(() => {
     margin-right: 6px;
     font-size: 14px;
   }
+}
+
+.album-browse-search {
+  margin-left: auto;
 }
 
 .album-filter-count {

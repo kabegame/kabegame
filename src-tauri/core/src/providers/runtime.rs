@@ -13,6 +13,7 @@ use crate::providers::provider::{
     ChildEntry, ImageEntry, Provider, ProviderMeta, ResolvedNode,
 };
 use crate::storage::gallery::ImageQuery;
+use crate::storage::Storage;
 
 #[derive(Debug, Clone)]
 pub struct ProviderCacheConfig {
@@ -149,6 +150,32 @@ impl ProviderRuntime {
         node.provider.list_children_with_meta(&node.composed)
     }
 
+    /// 列结构子目录 + meta + 每个子节点对应的 total（COUNT）。
+    ///
+    /// 对 `list_children_with_meta` 的结果再逐 child 填充 `total`：
+    /// child_composed = child.apply_query(parent_composed.clone())，
+    /// 再对 child_composed 跑一遍 `get_images_count_by_query`。
+    ///
+    /// 场景：前端画廊 filter 下拉里展示"按插件/按日期/按媒体类型"各选项的
+    /// **当前上下文**（含 search/hide）下的匹配总数，一个请求拿全。
+    ///
+    /// 已经由 provider 预先设置了 `total` 的子节点会被保留不覆盖。
+    pub fn list_children_with_totals(&self, path: &str) -> Result<Vec<ChildEntry>, String> {
+        let node = self
+            .resolve(path)?
+            .ok_or_else(|| format!("路径不存在: {}", path))?;
+        let mut children = node.provider.list_children_with_meta(&node.composed)?;
+        let parent_composed = node.composed.clone();
+        for child in children.iter_mut() {
+            if child.total.is_some() {
+                continue;
+            }
+            let composed = child.provider.apply_query(parent_composed.clone());
+            child.total = Storage::global().get_images_count_by_query(&composed).ok();
+        }
+        Ok(children)
+    }
+
     /// 列该路径的 images。若 composed.order_bys 为空自动兜底 `images.id ASC`。
     pub fn list_images(&self, path: &str) -> Result<Vec<ImageEntry>, String> {
         let node = self
@@ -168,6 +195,18 @@ impl ProviderRuntime {
             .resolve(path)?
             .ok_or_else(|| format!("路径不存在: {}", path))?;
         Ok(node.provider.get_meta())
+    }
+
+    /// 计算该路径的匹配图片总数：resolve path → apply_query 累积 composed →
+    /// 以 composed build `SELECT COUNT(*)` 执行。
+    ///
+    /// 这是 `<path>`（无尾缀 Entry 语法）返回的 `total` 字段的来源，也可单独调用
+    /// 获得仅计数而不触发 `list_children` / `list_images`。
+    pub fn count(&self, path: &str) -> Result<usize, String> {
+        let node = self
+            .resolve(path)?
+            .ok_or_else(|| format!("路径不存在: {}", path))?;
+        Storage::global().get_images_count_by_query(&node.composed)
     }
 }
 

@@ -37,6 +37,7 @@
   "wallpaperSortTitle": "Wallpaper order",
   "filter": "Filter",
   "pageSize": "Per page",
+  "searchPlaceholder": "Search by name",
   "filterAll": "All",
   "filterWallpaperSet": "Set as wallpaper",
   "filterByPlugin": "By plugin",
@@ -145,9 +146,6 @@
   "deletedAndRemovedSuccess": "Deleted (removed from all albums and gallery)",
   "deletedAndRemovedCountSuccess": "Deleted {count} images (removed from all albums and gallery)",
   "removeImageFailed": "Failed to remove from album",
-  "removeFromGalleryMessageSingle": "This image will be removed from the gallery.",
-  "removeFromGalleryMessageMulti": "These {count} images will be removed from the gallery.",
-  "deleteSourceFilesCheckboxLabel": "Also delete source files from computer (use with caution)",
-  "deleteSourceFilesDangerText": "Warning: Files will be permanently deleted. This cannot be undone!",
-  "deleteSourceFilesSafeText": "If unchecked, only the record will be removed from the list; files on disk are kept."
+  "removeFromGalleryMessageSingle": "This image will be permanently deleted (including the local file). This cannot be undone. Use \"Hide\" if you want to keep the file.",
+  "removeFromGalleryMessageMulti": "These {count} images will be permanently deleted (including local files). This cannot be undone. Use \"Hide\" if you want to keep the files."
 }

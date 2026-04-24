@@ -9,13 +9,14 @@
           <!-- 顶部工具栏 -->
           <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
             :month-options="monthOptions" :month-loading="monthOptionsLoading" :filter="galleryRouteStore.filter"
-            :sort="galleryRouteStore.sort" :page-size="pageSize" v-model:selectedRange="selectedRange"
+            :sort="galleryRouteStore.sort" :page-size="pageSize" :search="search" v-model:selectedRange="selectedRange"
             @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
             @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
             @open-collect-menu="showCollectSourcePicker = true"
             @update:filter="(f) => galleryRouteStore.navigate({ filter: f, page: 1 })"
             @update:sort="(sort) => galleryRouteStore.navigate({ sort })"
-            @update:pageSize="(ps) => galleryRouteStore.navigate({ page: 1, pageSize: ps })" />
+            @update:pageSize="(ps) => galleryRouteStore.navigate({ page: 1, pageSize: ps })"
+            @update:search="(s) => galleryRouteStore.navigate({ page: 1, search: s })" />
 
           <!-- 大页分页器 -->
           <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage" :big-page-size="pageSize"
@@ -54,12 +55,9 @@
     <LocalImportDialog v-if="!isCompact" v-model="showLocalImportDialog" />
 
 
-    <!-- 移除/删除确认对话框 -->
-    <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-      :message="removeDialogMessage" :title="$t('gallery.confirmDelete')"
-      :checkbox-label="t('gallery.deleteSourceFilesCheckboxLabel')"
-      :danger-text="t('gallery.deleteSourceFilesDangerText')" :safe-text="t('gallery.deleteSourceFilesSafeText')"
-      :hide-checkbox="isCompact" @confirm="confirmRemoveImages" />
+    <!-- 永久删除确认对话框 -->
+    <RemoveImagesConfirmDialog v-model="showRemoveDialog" :message="removeDialogMessage"
+      :title="$t('gallery.confirmDelete')" hide-checkbox @confirm="confirmRemoveImages" />
 
     <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
 
@@ -119,6 +117,7 @@ import { storeToRefs } from "pinia";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galleryRoute";
 import { serializeFilter } from "@/utils/galleryPath";
+import { asEntryPath } from "@/utils/path";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
@@ -172,7 +171,7 @@ const settingsStore = useSettingsStore();
 const route = useRoute();
 const router = useRouter();
 const galleryRouteStore = useGalleryRouteStore();
-const { pageSize } = storeToRefs(galleryRouteStore);
+const { pageSize, search } = storeToRefs(galleryRouteStore);
 
 // 是否启用分页（总数超过一页）
 const bigPageEnabled = computed(() => {
@@ -426,9 +425,8 @@ const handleAndroidMediaSelection = async (
     }
   }
 };
-// 移除/删除对话框相关
+// 永久删除确认对话框相关
 const showRemoveDialog = ref(false);
-const removeDeleteFiles = ref(false);
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
 // 详情/加入画册对话框已下沉到 ImageGrid
@@ -638,6 +636,7 @@ const {
   setWallpaper,
   exportToWallpaperEngine,
   handleBatchDeleteImages,
+  handleBatchHideImages,
 } = useImageOperations(
   displayedImages,
   currentWallpaperImageId,
@@ -657,12 +656,14 @@ const getPluginName = (pluginId: string) => {
   return plugin ? (resolvePluginName(plugin) || pluginId) : pluginId;
 };
 
-// 获取总图片数（随 providerRootPath 变化）
+// 获取总图片数（随 currentPath 变化，含 filter / search / hide）
 const loadTotalImagesCount = async () => {
   try {
-    // 通过 provider 浏览接口获取 total（避免另起一套 count API）
-    const res = await invoke<{ total: number }>("browse_gallery_provider", {
-      path: `${providerRootPath.value}/`,
+    // 使用 provider 的无尾缀 Entry 语法：只算 composed query 的 COUNT，不触发 list_children / list_images。
+    // currentPath 已由 route store 统一拼好（filter + search + hide + page），
+    // COUNT SQL 忽略 LIMIT/OFFSET，所以无需单独剥离 page 段。
+    const res = await invoke<{ total: number | null }>("browse_gallery_provider", {
+      path: asEntryPath(galleryRouteStore.currentPath),
     });
     totalImagesCount.value = res?.total ?? 0;
   } catch (error) {
@@ -933,17 +934,16 @@ const handleGridContextCommand = async (
 
     // 画廊特有：删除/移除确认对话框
     case "remove":
-      // 显示删除对话框，让用户选择是否删除文件
+      // 永久删除确认对话框
       pendingRemoveImages.value = imagesToProcess;
       const count = imagesToProcess.length;
       removeDialogMessage.value = count > 1 ? t("gallery.removeFromGalleryMessageMulti", { count }) : t("gallery.removeFromGalleryMessageSingle");
-      removeDeleteFiles.value = false; // 默认不删除文件
       showRemoveDialog.value = true;
       return null;
     case "swipe-remove" as any:
-      // 上划删除：直接删除，不显示确认对话框，不删除本机文件
+      // 上划手势：隐藏（加入隐藏画册，保留磁盘文件）
       if (imagesToProcess.length > 0) {
-        void handleBatchDeleteImages(imagesToProcess, false);
+        void handleBatchHideImages(imagesToProcess);
       }
       return null;
     default:
@@ -953,7 +953,7 @@ const handleGridContextCommand = async (
 
 // removeFromUiCacheByIds 已移至 useGalleryImages composable
 
-// 确认移除图片（合并了原来的 remove 和 delete 逻辑）
+// 确认永久删除
 const confirmRemoveImages = async () => {
   const imagesToRemove = pendingRemoveImages.value;
   if (imagesToRemove.length === 0) {
@@ -961,12 +961,8 @@ const confirmRemoveImages = async () => {
     return;
   }
 
-  const shouldDeleteFiles = removeDeleteFiles.value;
-
   showRemoveDialog.value = false;
-
-  // 使用统一的删除函数
-  await handleBatchDeleteImages(imagesToRemove, shouldDeleteFiles);
+  await handleBatchDeleteImages(imagesToRemove);
 };
 
 // 监听 CrawlerDialog 关闭，清空初始配置

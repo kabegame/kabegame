@@ -37,6 +37,7 @@
   "wallpaperSortTitle": "设置壁纸顺序",
   "filter": "过滤",
   "pageSize": "每页数量",
+  "searchPlaceholder": "按名称搜索",
   "filterAll": "全部",
   "filterWallpaperSet": "设置过壁纸的",
   "filterByPlugin": "按插件",
@@ -147,10 +148,7 @@
   "deletedAndRemovedSuccess": "已删除图片（已从所有画册和画廊中移除）",
   "deletedAndRemovedCountSuccess": "已删除 {count} 张图片（已从所有画册和画廊中移除）",
   "removeImageFailed": "移除图片失败",
-  "removeFromGalleryMessageSingle": "将从画廊移除这张图片。",
-  "removeFromGalleryMessageMulti": "将从画廊移除这 {count} 张图片。",
-  "deleteSourceFilesCheckboxLabel": "同时从电脑删除源文件（慎用）",
-  "deleteSourceFilesDangerText": "警告：该操作将永久删除电脑文件，不可恢复！",
-  "deleteSourceFilesSafeText": "不勾选仅从列表移除记录，保留电脑文件。",
+  "removeFromGalleryMessageSingle": "将永久删除这张图片（含本地文件），此操作不可恢复。如需保留本地文件，请改用「隐藏」。",
+  "removeFromGalleryMessageMulti": "将永久删除这 {count} 张图片（含本地文件），此操作不可恢复。如需保留本地文件，请改用「隐藏」。",
   "konachanPostedTimeCrawlNote": "「发布时间」等相对表述（如几小时前）为入库抓取时站点上的文案，不会随当前查看时间更新。"
 }

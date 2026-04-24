@@ -93,9 +93,11 @@
           :filter="albumDetailRouteStore.filter"
           :sort="albumDetailRouteStore.sort"
           :page-size="pageSize"
+          :search="search"
           @update:filter="(filter) => albumDetailRouteStore.navigate({ filter, page: 1 })"
           @update:sort="(sort) => albumDetailRouteStore.navigate({ sort })"
           @update:pageSize="(ps) => albumDetailRouteStore.navigate({ page: 1, pageSize: ps })"
+          @update:search="(s) => albumDetailRouteStore.navigate({ page: 1, search: s })"
         />
 
         <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage"
@@ -491,7 +493,7 @@ const localProviderRootPath = computed(() => {
   return `album/${albumId.value}`;
 });
 
-const { pageSize } = storeToRefs(albumDetailRouteStore);
+const { pageSize, search } = storeToRefs(albumDetailRouteStore);
 
 const currentPath = computed(() => albumDetailRouteStore.currentPath);
 const currentPage = computed(() => albumDetailRouteStore.page);

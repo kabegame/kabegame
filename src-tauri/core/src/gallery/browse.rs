@@ -13,6 +13,10 @@ pub enum GalleryBrowseEntry {
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         meta: Option<ProviderMeta>,
+        /// 该子节点 composed query 的 COUNT（仅在调用方显式要求时填充，如
+        /// `ProviderRuntime::list_children_with_totals` 路径）。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        total: Option<usize>,
     },
     Image {
         image: ImageInfo,
@@ -27,7 +31,11 @@ pub fn browse_from_provider(
 ) -> Result<Vec<GalleryBrowseEntry>, String> {
     let mut out = Vec::with_capacity(children.len() + images.len());
     for child in children {
-        out.push(GalleryBrowseEntry::Dir { name: child.name, meta: child.meta });
+        out.push(GalleryBrowseEntry::Dir {
+            name: child.name,
+            meta: child.meta,
+            total: child.total,
+        });
     }
     for image in images {
         out.push(GalleryBrowseEntry::Image { image });

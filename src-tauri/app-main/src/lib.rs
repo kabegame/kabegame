@@ -248,6 +248,7 @@ pub fn run() {
             get_album_media_type_counts,
             get_gallery_time_filter_data,
             browse_gallery_provider,
+            list_provider_children,
             query_provider,
             toggle_image_favorite,
             // --- Tasks ---

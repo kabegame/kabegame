@@ -2,6 +2,16 @@
   "permissions": {
     "allow": [
       "PowerShell(wsl -d Ubuntu --user root --exec /bin/cat /etc/wsl.conf 2>&1)"
+    ],
+    "additionalDirectories": [
+      "d:\\Codes\\kabegame\\.claude\\research\\docs",
+      "D:\\Codes\\kabegame\\.claude\\research\\docs"
     ]
+  },
+  "mcpServers": {
+    "playwright": {
+      "command": "bunx",
+      "args": ["@executeautomation/playwright-mcp-server"]
+    }
   }
 }

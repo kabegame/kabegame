@@ -48,8 +48,8 @@ pub(crate) mod vd_ops;
 
 // ── 公开 re-exports ──────────────────────────────────────────────────────────
 pub use query::{
-    execute_provider_query, execute_provider_query_typed, parse_provider_path,
-    provider_query_to_json, ProviderPathQuery, ProviderQueryTyped,
+    decode_provider_path_segments, execute_provider_query, execute_provider_query_typed,
+    parse_provider_path, provider_query_to_json, ProviderPathQuery, ProviderQueryTyped,
 };
 pub use runtime::{ProviderCacheConfig, ProviderRuntime};
 pub use root::VdNewUnifiedRoot;

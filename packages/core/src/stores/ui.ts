@@ -16,25 +16,25 @@ export const useUiStore = defineStore("ui", () => {
   );
 
   // 全局维护一个列数状态，用于控制图片网格的列数
-  // 紧凑布局下固定为 2 列；桌面最大 4 列
+  // 紧凑布局下固定为 2 列；桌面最大 6 列
   const imageGridColumns = ref(isCompact.value ? 2 : 4);
   const settingsStore = useSettingsStore();
 
   const clampDesktopColumns = (value: number) => {
     const n = Number(value);
     if (!Number.isFinite(n)) return 4;
-    return Math.min(4, Math.max(1, Math.round(n)));
+    return Math.min(6, Math.max(1, Math.round(n)));
   };
 
   const adjustImageGridColumn = useThrottleFn((delta: number) => {
     // 紧凑布局下不允许调整列数
     if (isCompact.value) return;
-    // 固定列数模式（1-4）下，忽略快捷键/滚轮调整
+    // 固定列数模式（1-6）下，忽略快捷键/滚轮调整
     if ((settingsStore.values.galleryGridColumns ?? 0) > 0) return;
 
     if (delta > 0) {
-      // 增加列数（最大 4 列）
-      if (imageGridColumns.value < 4) {
+      // 增加列数（最大 6 列）
+      if (imageGridColumns.value < 6) {
         imageGridColumns.value++;
       }
     } else {
