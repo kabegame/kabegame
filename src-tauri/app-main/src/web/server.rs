@@ -19,15 +19,15 @@ use kabegame_core::ipc::server::EventBroadcaster;
 use super::dispatch::{JsonRpcRequest, dispatch};
 
 #[derive(Clone)]
-struct SseMessage {
-    event: String,
-    data: String,
-    id: u64,
+pub struct SseMessage {
+    pub event: String,
+    pub data: String,
+    pub id: u64,
 }
 
 static EVENT_BUS: OnceLock<broadcast::Sender<SseMessage>> = OnceLock::new();
 
-fn event_bus() -> &'static broadcast::Sender<SseMessage> {
+pub fn event_bus() -> &'static broadcast::Sender<SseMessage> {
     EVENT_BUS.get_or_init(|| {
         let (tx, _) = broadcast::channel(1024);
         tx

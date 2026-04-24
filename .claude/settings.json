@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(wsl -d Ubuntu --user root --exec /bin/cat /etc/wsl.conf 2>&1)"
+      "PowerShell(wsl -d Ubuntu --user root --exec /bin/cat /etc/wsl.conf 2>&1)",
+      "Bash(bun --cwd apps/docs build)"
     ],
     "additionalDirectories": [
       "d:\\Codes\\kabegame\\.claude\\research\\docs",
@@ -11,7 +12,9 @@
   "mcpServers": {
     "playwright": {
       "command": "bunx",
-      "args": ["@executeautomation/playwright-mcp-server"]
+      "args": [
+        "@executeautomation/playwright-mcp-server"
+      ]
     }
   }
 }

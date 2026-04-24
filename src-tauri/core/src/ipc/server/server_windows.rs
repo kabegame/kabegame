@@ -1,7 +1,7 @@
 //! Windows 特定的服务器实现
 
 use crate::ipc::ipc::{encode_frame, read_one_frame, windows_pipe_name, write_all};
-use crate::ipc::{CliIpcRequest, CliIpcResponse};
+use crate::ipc::{IpcRequest, IpcResponse};
 use crate::ipc_dbg;
 use tokio::io::split;
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
@@ -24,7 +24,7 @@ pub async fn check_other_daemon_running() -> bool {
 
     if let Ok(Some(mut client)) = client_result {
         // 如果连接成功，尝试发送 Status 请求验证
-        let status_req = CliIpcRequest::Status;
+        let status_req = IpcRequest::Status;
         if let Ok(bytes) = encode_frame(&status_req) {
             if write_all(&mut client, &bytes).await.is_ok() {
                 // 尝试读取响应（但不等待太久）
@@ -93,8 +93,8 @@ pub async fn serve<F, Fut>(
     handler: F,
 ) -> Result<(), String>
 where
-    F: Fn(CliIpcRequest) -> Fut + Send + Sync + Clone + 'static,
-    Fut: std::future::Future<Output = CliIpcResponse> + Send,
+    F: Fn(IpcRequest) -> Fut + Send + Sync + Clone + 'static,
+    Fut: std::future::Future<Output = IpcResponse> + Send,
 {
     // 绑定命名管道（带重试，应对清理重启时旧进程尚未完全退出的竞态）
     let mut server = 'bind: {

@@ -29,17 +29,13 @@ pub fn get_auto_deduplicate() -> Result<Value, String> {
     Ok(Value::Bool(Settings::global().get_auto_deduplicate()))
 }
 
-pub async fn set_max_concurrent_downloads(count: u32) -> Result<Value, String> {
+pub fn set_max_concurrent_downloads(count: u32) -> Result<Value, String> {
     Settings::global().set_max_concurrent_downloads(count)?;
-    kabegame_core::crawler::TaskScheduler::global()
-        .set_download_concurrency()
-        .await;
     Ok(Value::Null)
 }
 
 pub async fn set_max_concurrent_tasks(count: u32) -> Result<Value, String> {
     Settings::global().set_max_concurrent_tasks(count)?;
-    kabegame_core::crawler::TaskScheduler::global().set_task_concurrency();
     Ok(Value::Null)
 }
 

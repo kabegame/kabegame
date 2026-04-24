@@ -10,7 +10,7 @@ pub mod storage;
 
 use kabegame_core::crawler::{CrawlTaskRequest, TaskScheduler};
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
+use kabegame_core::ipc::ipc::{IpcRequest, IpcResponse};
 #[cfg(not(target_os = "android"))]
 use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::plugin::PluginManager;
@@ -22,25 +22,32 @@ use kabegame_core::storage::Storage;
 #[cfg(kabegame_mode = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::Arc;
+#[cfg(feature = "local")]
 use tauri::{AppHandle, Emitter};
 
 /// 分发 IPC 请求到对应的处理器（app_handle 由 start_ipc_server 传入，仅需发事件的请求使用）
-pub async fn dispatch_request(req: CliIpcRequest, app_handle: AppHandle) -> CliIpcResponse {
+pub async fn dispatch_request(
+    req: IpcRequest, 
+    #[cfg(feature = "local")]
+    app_handle: AppHandle
+) -> IpcResponse {
     // 获取s tatus
-    if matches!(req, CliIpcRequest::Status) {
+    if matches!(req, IpcRequest::Status) {
         return handle_status();
     }
 
-    if matches!(req, CliIpcRequest::AppShowWindow) {
+    #[cfg(feature = "local")]
+    if matches!(req, IpcRequest::AppShowWindow) {
         return handle_app_show_window(app_handle).await;
     }
 
-    if let CliIpcRequest::AppImportPlugin { kgpg_path } = req {
+    #[cfg(feature = "local")]
+    if let IpcRequest::AppImportPlugin { kgpg_path } = req {
         return handle_app_import_plugin(kgpg_path, app_handle).await;
     }
 
     // PluginRun：daemon 侧实现（入队执行）
-    if let CliIpcRequest::PluginRun {
+    if let IpcRequest::PluginRun {
         plugin,
         output_dir,
         task_id,
@@ -61,22 +68,22 @@ pub async fn dispatch_request(req: CliIpcRequest, app_handle: AppHandle) -> CliI
     }
 
     // TaskStart / TaskCancel：daemon 侧调度
-    if let CliIpcRequest::TaskStart { task } = req {
+    if let IpcRequest::TaskStart { task } = req {
         return handle_task_start(task).await;
     }
-    if let CliIpcRequest::TaskCancel { task_id } = req {
+    if let IpcRequest::TaskCancel { task_id } = req {
         return handle_task_cancel(task_id).await;
     }
-    if let CliIpcRequest::TaskRetryFailedImage { failed_id } = req {
+    if let IpcRequest::TaskRetryFailedImage { failed_id } = req {
         return handle_task_retry_failed_image(failed_id).await;
     }
-    if let CliIpcRequest::TaskDeleteFailedImage { failed_id } = req {
+    if let IpcRequest::TaskDeleteFailedImage { failed_id } = req {
         return handle_task_delete_failed_image(failed_id).await;
     }
-    if matches!(req, CliIpcRequest::GetActiveDownloads) {
+    if matches!(req, IpcRequest::GetActiveDownloads) {
         return handle_get_active_downloads().await;
     }
-    if let CliIpcRequest::OrganizeStart {
+    if let IpcRequest::OrganizeStart {
         dedupe,
         remove_missing,
         regen_thumbnails,
@@ -99,7 +106,7 @@ pub async fn dispatch_request(req: CliIpcRequest, app_handle: AppHandle) -> CliI
         )
         .await;
     }
-    if matches!(req, CliIpcRequest::OrganizeCancel) {
+    if matches!(req, IpcRequest::OrganizeCancel) {
         return handle_organize_cancel().await;
     }
 
@@ -125,25 +132,25 @@ pub async fn dispatch_request(req: CliIpcRequest, app_handle: AppHandle) -> CliI
     }
     #[cfg(kabegame_mode = "standard")]
     {
-        if matches!(req, CliIpcRequest::VdMount) {
+        if matches!(req, IpcRequest::VdMount) {
             return handle_vd_mount().await;
         }
-        if matches!(req, CliIpcRequest::VdUnmount) {
+        if matches!(req, IpcRequest::VdUnmount) {
             return handle_vd_unmount().await;
         }
-        if matches!(req, CliIpcRequest::VdStatus) {
+        if matches!(req, IpcRequest::VdStatus) {
             return handle_vd_status().await;
         }
     }
 
     // 未知请求
-    CliIpcResponse::err(format!("Unknown request: {:?}", req))
+    IpcResponse::err(format!("Unknown request: {:?}", req))
 }
 
-async fn handle_task_start(task: serde_json::Value) -> CliIpcResponse {
+async fn handle_task_start(task: serde_json::Value) -> IpcResponse {
     let t: TaskInfo = match serde_json::from_value(task) {
         Ok(t) => t,
-        Err(e) => return CliIpcResponse::err(format!("Invalid task data: {e}")),
+        Err(e) => return IpcResponse::err(format!("Invalid task data: {e}")),
     };
 
     // 确保任务在 DB 中存在（幂等）
@@ -151,10 +158,10 @@ async fn handle_task_start(task: serde_json::Value) -> CliIpcResponse {
         Ok(Some(_)) => {}
         Ok(None) => {
             if let Err(e) = Storage::global().add_task(t.clone()) {
-                return CliIpcResponse::err(e);
+                return IpcResponse::err(e);
             }
         }
-        Err(e) => return CliIpcResponse::err(e),
+        Err(e) => return IpcResponse::err(e),
     }
 
     let req = CrawlTaskRequest {
@@ -170,51 +177,51 @@ async fn handle_task_start(task: serde_json::Value) -> CliIpcResponse {
     };
 
     if let Err(e) = TaskScheduler::global().enqueue(req) {
-        return CliIpcResponse::err(e);
+        return IpcResponse::err(e);
     }
 
-    let mut resp = CliIpcResponse::ok("queued");
+    let mut resp = IpcResponse::ok("queued");
     resp.task_id = Some(t.id);
     resp
 }
 
-async fn handle_task_cancel(task_id: String) -> CliIpcResponse {
+async fn handle_task_cancel(task_id: String) -> IpcResponse {
     TaskScheduler::global().cancel_task(&task_id).await;
-    #[cfg(not(target_os = "android"))]
+    #[cfg(all(not(target_os = "android"), feature = "local"))]
     crate::commands::crawl_exit_with_status("canceled", Some(&task_id)).await;
-    CliIpcResponse::ok("ok")
+    IpcResponse::ok("ok")
 }
 
-async fn handle_task_retry_failed_image(failed_id: i64) -> CliIpcResponse {
+async fn handle_task_retry_failed_image(failed_id: i64) -> IpcResponse {
     match TaskScheduler::global().retry_failed_image(failed_id).await {
-        Ok(()) => CliIpcResponse::ok("ok"),
-        Err(e) => CliIpcResponse::err(e),
+        Ok(()) => IpcResponse::ok("ok"),
+        Err(e) => IpcResponse::err(e),
     }
 }
 
-async fn handle_task_delete_failed_image(failed_id: i64) -> CliIpcResponse {
+async fn handle_task_delete_failed_image(failed_id: i64) -> IpcResponse {
     let storage = Storage::global();
     let task_id = match storage.get_task_failed_image_by_id(failed_id) {
         Ok(item) => item.map(|item| item.task_id),
-        Err(e) => return CliIpcResponse::err(e),
+        Err(e) => return IpcResponse::err(e),
     };
     match storage.delete_task_failed_image(failed_id) {
         Ok(()) => {
             if let Some(task_id) = task_id {
                 GlobalEmitter::global().emit_failed_image_removed(&task_id, failed_id);
             }
-            CliIpcResponse::ok("ok")
+            IpcResponse::ok("ok")
         }
-        Err(e) => CliIpcResponse::err(e),
+        Err(e) => IpcResponse::err(e),
     }
 }
 
-async fn handle_get_active_downloads() -> CliIpcResponse {
+async fn handle_get_active_downloads() -> IpcResponse {
     match TaskScheduler::global().get_active_downloads().await {
         Ok(downloads) => {
-            CliIpcResponse::ok_with_data("ok", serde_json::to_value(downloads).unwrap_or_default())
+            IpcResponse::ok_with_data("ok", serde_json::to_value(downloads).unwrap_or_default())
         }
-        Err(e) => CliIpcResponse::err(e),
+        Err(e) => IpcResponse::err(e),
     }
 }
 
@@ -227,7 +234,7 @@ async fn handle_organize_start(
     range_end: Option<usize>,
     delete_source_files: bool,
     safe_delete: bool,
-) -> CliIpcResponse {
+) -> IpcResponse {
     use kabegame_core::storage::organize::OrganizeOptions;
     let (offset, limit) = match (range_start, range_end) {
         (Some(s), Some(e)) if e > s => (Some(s), Some(e - s)),
@@ -250,15 +257,15 @@ async fn handle_organize_start(
         )
         .await
     {
-        Ok(()) => CliIpcResponse::ok("ok"),
-        Err(e) => CliIpcResponse::err(e),
+        Ok(()) => IpcResponse::ok("ok"),
+        Err(e) => IpcResponse::err(e),
     }
 }
 
-async fn handle_organize_cancel() -> CliIpcResponse {
+async fn handle_organize_cancel() -> IpcResponse {
     match OrganizeService::global().cancel() {
-        Ok(v) => CliIpcResponse::ok_with_data("ok", serde_json::Value::Bool(v)),
-        Err(e) => CliIpcResponse::err(e),
+        Ok(v) => IpcResponse::ok_with_data("ok", serde_json::Value::Bool(v)),
+        Err(e) => IpcResponse::err(e),
     }
 }
 
@@ -269,13 +276,13 @@ async fn handle_plugin_run(
     output_album_id: Option<String>,
     plugin_args: Vec<String>,
     http_headers: Option<std::collections::HashMap<String, String>>,
-) -> CliIpcResponse {
+) -> IpcResponse {
     // resolve plugin：支持 id 或 .kgpg 路径
     let plugin_manager = PluginManager::global();
     let (plugin_obj, plugin_file_path, var_defs) =
         match plugin_manager.resolve_plugin_for_cli_run(&plugin).await {
             Ok(x) => x,
-            Err(e) => return CliIpcResponse::err(e),
+            Err(e) => return IpcResponse::err(e),
         };
 
     // task_id：若未提供则生成
@@ -284,7 +291,7 @@ async fn handle_plugin_run(
     // 解析 CLI plugin_args -> user_config（再由调度器用 var_defs 统一 normalize + 默认值合并）
     let user_cfg = match parse_plugin_args_to_user_config(&var_defs, &plugin_args) {
         Ok(m) => m,
-        Err(e) => return CliIpcResponse::err(e),
+        Err(e) => return IpcResponse::err(e),
     };
     let user_config = if user_cfg.is_empty() {
         None
@@ -316,10 +323,10 @@ async fn handle_plugin_run(
                 error: None,
             };
             if let Err(e) = Storage::global().add_task(t) {
-                return CliIpcResponse::err(e);
+                return IpcResponse::err(e);
             }
         }
-        Err(e) => return CliIpcResponse::err(e),
+        Err(e) => return IpcResponse::err(e),
     }
 
     // 入队执行
@@ -336,10 +343,10 @@ async fn handle_plugin_run(
     };
 
     if let Err(e) = TaskScheduler::global().enqueue(req) {
-        return CliIpcResponse::err(e);
+        return IpcResponse::err(e);
     }
 
-    let mut resp = CliIpcResponse::ok("queued");
+    let mut resp = IpcResponse::ok("queued");
     resp.task_id = Some(task_id);
     resp
 }
@@ -450,23 +457,25 @@ fn parse_plugin_args_to_user_config(
     Ok(out)
 }
 
-async fn handle_app_show_window(app_handle: AppHandle) -> CliIpcResponse {
+#[cfg(feature = "local")]
+async fn handle_app_show_window(app_handle: AppHandle) -> IpcResponse {
     match crate::startup::ensure_main_window(app_handle.clone()) {
         Ok(()) => {
             let _ = app_handle.emit("app-show-window", ());
-            CliIpcResponse::ok("window-shown")
+            IpcResponse::ok("window-shown")
         }
-        Err(e) => CliIpcResponse::err(format!("显示窗口失败: {}", e)),
+        Err(e) => IpcResponse::err(format!("显示窗口失败: {}", e)),
     }
 }
 
-async fn handle_app_import_plugin(kgpg_path: String, app_handle: AppHandle) -> CliIpcResponse {
+#[cfg(feature = "local")]
+async fn handle_app_import_plugin(kgpg_path: String, app_handle: AppHandle) -> IpcResponse {
     let path = std::path::PathBuf::from(&kgpg_path);
     if !path.is_file() {
-        return CliIpcResponse::err(format!("File not found: {}", kgpg_path));
+        return IpcResponse::err(format!("File not found: {}", kgpg_path));
     }
     if path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
-        return CliIpcResponse::err(format!("Not a .kgpg file: {}", kgpg_path));
+        return IpcResponse::err(format!("Not a .kgpg file: {}", kgpg_path));
     }
 
     let _ = app_handle.emit(
@@ -476,12 +485,12 @@ async fn handle_app_import_plugin(kgpg_path: String, app_handle: AppHandle) -> C
         }),
     );
 
-    CliIpcResponse::ok("import-request-sent")
+    IpcResponse::ok("import-request-sent")
 }
 
 // TODO: 将此json结构体化
-fn handle_status() -> CliIpcResponse {
-    let mut resp = CliIpcResponse::ok("ok");
+fn handle_status() -> IpcResponse {
+    let mut resp = IpcResponse::ok("ok");
     resp.info = Some(serde_json::json!({
         "name": "kabegame-daemon",
         "version": env!("CARGO_PKG_VERSION"),
@@ -498,7 +507,7 @@ fn handle_status() -> CliIpcResponse {
 }
 
 #[cfg(kabegame_mode = "standard")]
-async fn handle_vd_mount() -> CliIpcResponse {
+async fn handle_vd_mount() -> IpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
     if !cfg!(all(
@@ -506,7 +515,7 @@ async fn handle_vd_mount() -> CliIpcResponse {
         not(target_os = "android"),
         target_os = "windows"
     )) {
-        return CliIpcResponse::err("Virtual drive is not available".to_string());
+        return IpcResponse::err("Virtual drive is not available".to_string());
     }
 
     let path = Settings::global().get_album_drive_mount_point();
@@ -515,7 +524,7 @@ async fn handle_vd_mount() -> CliIpcResponse {
 
     // 检查是否已挂载（幂等处理）
     if vd_service.current_mount_point().is_some() {
-        return CliIpcResponse::ok("Already mounted");
+        return IpcResponse::ok("Already mounted");
     }
 
     // 执行挂载（使用 spawn_blocking 避免阻塞 tokio worker）
@@ -527,7 +536,7 @@ async fn handle_vd_mount() -> CliIpcResponse {
     .await
     {
         Ok(result) => result,
-        Err(e) => return CliIpcResponse::err(format!("Spawn blocking error: {}", e)),
+        Err(e) => return IpcResponse::err(format!("Spawn blocking error: {}", e)),
     };
 
     match mount_result {
@@ -535,17 +544,17 @@ async fn handle_vd_mount() -> CliIpcResponse {
             // 挂载成功后，设置 enabled 为 true（会自动发送 SettingChange 事件）
             let settings = Settings::global();
             if let Err(e) = settings.set_album_drive_enabled(true) {
-                return CliIpcResponse::err(format!("Failed to set enabled: {}", e));
+                return IpcResponse::err(format!("Failed to set enabled: {}", e));
             }
 
-            CliIpcResponse::ok("Mount successful")
+            IpcResponse::ok("Mount successful")
         }
-        Err(e) => CliIpcResponse::err(e),
+        Err(e) => IpcResponse::err(e),
     }
 }
 
 #[cfg(kabegame_mode = "standard")]
-async fn handle_vd_unmount() -> CliIpcResponse {
+async fn handle_vd_unmount() -> IpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
     if !cfg!(all(
@@ -553,14 +562,14 @@ async fn handle_vd_unmount() -> CliIpcResponse {
         not(target_os = "android"),
         target_os = "windows"
     )) {
-        return CliIpcResponse::err("Virtual drive is not available".to_string());
+        return IpcResponse::err("Virtual drive is not available".to_string());
     }
 
     let vd_service = VirtualDriveService::global().clone();
 
     // 检查是否已卸载（幂等处理）
     if vd_service.current_mount_point().is_none() {
-        return CliIpcResponse::ok("Already unmounted");
+        return IpcResponse::ok("Already unmounted");
     }
 
     // 执行卸载（使用 spawn_blocking 避免阻塞 tokio worker）
@@ -571,7 +580,7 @@ async fn handle_vd_unmount() -> CliIpcResponse {
     .await
     {
         Ok(result) => result,
-        Err(e) => return CliIpcResponse::err(format!("Spawn blocking error: {}", e)),
+        Err(e) => return IpcResponse::err(format!("Spawn blocking error: {}", e)),
     };
 
     match unmount_result {
@@ -579,27 +588,27 @@ async fn handle_vd_unmount() -> CliIpcResponse {
             // 卸载成功后，设置 enabled 为 false（会自动发送 SettingChange 事件）
             let settings = Settings::global();
             if let Err(e) = settings.set_album_drive_enabled(false) {
-                return CliIpcResponse::err(format!("Failed to set enabled: {}", e));
+                return IpcResponse::err(format!("Failed to set enabled: {}", e));
             }
 
-            CliIpcResponse::ok("Unmount successful")
+            IpcResponse::ok("Unmount successful")
         }
         Ok(false) => {
             // 卸载失败但可能已经卸载，返回成功（幂等）
-            CliIpcResponse::ok("Already unmounted")
+            IpcResponse::ok("Already unmounted")
         }
-        Err(e) => CliIpcResponse::err(e),
+        Err(e) => IpcResponse::err(e),
     }
 }
 
 #[cfg(kabegame_mode = "standard")]
-async fn handle_vd_status() -> CliIpcResponse {
+async fn handle_vd_status() -> IpcResponse {
     let enabled = cfg!(all(
         not(kabegame_mode = "light"),
         not(target_os = "android"),
         target_os = "windows"
     ));
-    let mut resp = CliIpcResponse::ok("ok");
+    let mut resp = IpcResponse::ok("ok");
     resp.info = Some(serde_json::json!({
         "status": if enabled { "ready" } else { "disabled" },
         "virtualDrive": enabled

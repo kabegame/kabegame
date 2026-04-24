@@ -4,99 +4,99 @@ pub mod images;
 pub mod run_configs;
 pub mod tasks;
 
-use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
+use kabegame_core::ipc::ipc::{IpcRequest, IpcResponse};
 
-pub async fn handle_storage_request(req: &CliIpcRequest) -> Option<CliIpcResponse> {
+pub async fn handle_storage_request(req: &IpcRequest) -> Option<IpcResponse> {
     match req {
         // Images
-        CliIpcRequest::StorageGetImagesCount => Some(images::get_images_count().await),
-        CliIpcRequest::StorageGetImageById { image_id } => {
+        IpcRequest::StorageGetImagesCount => Some(images::get_images_count().await),
+        IpcRequest::StorageGetImageById { image_id } => {
             Some(images::get_image_by_id(image_id).await)
         }
-        CliIpcRequest::StorageFindImageByPath { path } => {
+        IpcRequest::StorageFindImageByPath { path } => {
             Some(images::find_image_by_path(path).await)
         }
-        CliIpcRequest::StorageDeleteImage { image_id } => {
+        IpcRequest::StorageDeleteImage { image_id } => {
             Some(images::delete_image(image_id).await)
         }
-        CliIpcRequest::StorageRemoveImage { image_id } => {
+        IpcRequest::StorageRemoveImage { image_id } => {
             Some(images::remove_image(image_id).await)
         }
-        CliIpcRequest::StorageBatchDeleteImages { image_ids } => {
+        IpcRequest::StorageBatchDeleteImages { image_ids } => {
             Some(images::batch_delete_images(image_ids).await)
         }
-        CliIpcRequest::StorageBatchRemoveImages { image_ids } => {
+        IpcRequest::StorageBatchRemoveImages { image_ids } => {
             Some(images::batch_remove_images(image_ids).await)
         }
-        CliIpcRequest::StorageToggleImageFavorite { image_id, favorite } => {
+        IpcRequest::StorageToggleImageFavorite { image_id, favorite } => {
             Some(images::toggle_image_favorite(image_id, *favorite).await)
         }
 
         // Albums
-        CliIpcRequest::StorageGetAlbums => Some(albums::get_albums().await),
-        CliIpcRequest::StorageAddAlbum { name } => {
+        IpcRequest::StorageGetAlbums => Some(albums::get_albums().await),
+        IpcRequest::StorageAddAlbum { name } => {
             // TODO: 蜑咲ｫｯ螟・炊 album_add 莠倶ｻｶ
             Some(albums::add_album(name).await)
         }
-        CliIpcRequest::StorageDeleteAlbum { album_id } => {
+        IpcRequest::StorageDeleteAlbum { album_id } => {
             Some(albums::delete_album(album_id).await)
         }
-        CliIpcRequest::StorageRenameAlbum { album_id, new_name } => {
+        IpcRequest::StorageRenameAlbum { album_id, new_name } => {
             Some(albums::rename_album(album_id, new_name).await)
         }
-        CliIpcRequest::StorageAddImagesToAlbum {
+        IpcRequest::StorageAddImagesToAlbum {
             album_id,
             image_ids,
         } => Some(albums::add_images_to_album(album_id, image_ids).await),
-        CliIpcRequest::StorageRemoveImagesFromAlbum {
+        IpcRequest::StorageRemoveImagesFromAlbum {
             album_id,
             image_ids,
         } => Some(albums::remove_images_from_album(album_id, image_ids).await),
-        CliIpcRequest::StorageGetAlbumImages { album_id } => {
+        IpcRequest::StorageGetAlbumImages { album_id } => {
             Some(albums::get_album_images(album_id).await)
         }
-        CliIpcRequest::StorageGetAlbumPreview { album_id, limit } => {
+        IpcRequest::StorageGetAlbumPreview { album_id, limit } => {
             Some(albums::get_album_preview(album_id, *limit).await)
         }
-        CliIpcRequest::StorageGetAlbumCounts => Some(albums::get_album_counts().await),
-        CliIpcRequest::StorageUpdateAlbumImagesOrder {
+        IpcRequest::StorageGetAlbumCounts => Some(albums::get_album_counts().await),
+        IpcRequest::StorageUpdateAlbumImagesOrder {
             album_id,
             image_orders,
         } => Some(albums::update_album_images_order(album_id, image_orders).await),
-        CliIpcRequest::StorageGetAlbumImageIds { album_id } => {
+        IpcRequest::StorageGetAlbumImageIds { album_id } => {
             Some(albums::get_album_image_ids(album_id).await)
         }
 
         // Tasks
-        CliIpcRequest::StorageGetAllTasks => Some(tasks::get_all_tasks().await),
-        CliIpcRequest::StorageGetTask { task_id } => Some(tasks::get_task(task_id).await),
-        CliIpcRequest::StorageAddTask { task } => Some(tasks::add_task(task).await),
-        CliIpcRequest::StorageUpdateTask { task } => Some(tasks::update_task(task).await),
-        CliIpcRequest::StorageDeleteTask { task_id } => Some(tasks::delete_task(task_id).await),
-        CliIpcRequest::StorageGetTaskFailedImages { task_id } => {
+        IpcRequest::StorageGetAllTasks => Some(tasks::get_all_tasks().await),
+        IpcRequest::StorageGetTask { task_id } => Some(tasks::get_task(task_id).await),
+        IpcRequest::StorageAddTask { task } => Some(tasks::add_task(task).await),
+        IpcRequest::StorageUpdateTask { task } => Some(tasks::update_task(task).await),
+        IpcRequest::StorageDeleteTask { task_id } => Some(tasks::delete_task(task_id).await),
+        IpcRequest::StorageGetTaskFailedImages { task_id } => {
             Some(tasks::get_task_failed_images(task_id).await)
         }
-        CliIpcRequest::StorageGetAllFailedImages => Some(tasks::get_all_failed_images().await),
-        CliIpcRequest::StorageClearFinishedTasks => Some(tasks::clear_finished_tasks().await),
+        IpcRequest::StorageGetAllFailedImages => Some(tasks::get_all_failed_images().await),
+        IpcRequest::StorageClearFinishedTasks => Some(tasks::clear_finished_tasks().await),
 
         // Run Configs
-        CliIpcRequest::StorageGetRunConfigs => Some(run_configs::get_run_configs().await),
-        CliIpcRequest::StorageAddRunConfig { config } => {
+        IpcRequest::StorageGetRunConfigs => Some(run_configs::get_run_configs().await),
+        IpcRequest::StorageAddRunConfig { config } => {
             Some(run_configs::add_run_config(config).await)
         }
-        CliIpcRequest::StorageUpdateRunConfig { config } => {
+        IpcRequest::StorageUpdateRunConfig { config } => {
             Some(run_configs::update_run_config(config).await)
         }
-        CliIpcRequest::StorageDeleteRunConfig { config_id } => {
+        IpcRequest::StorageDeleteRunConfig { config_id } => {
             Some(run_configs::delete_run_config(config_id).await)
         }
 
         // Gallery Query Helpers・井ｾ・app-main 扈・｣・判蟒願劒諡溯ｷｯ蠕・ｼ・        CliIpcRequest::StorageGetGalleryDateGroups => Some(images::get_gallery_date_groups().await),
-        CliIpcRequest::StorageGetGalleryPluginGroups => {
+        IpcRequest::StorageGetGalleryPluginGroups => {
             Some(images::get_gallery_plugin_groups().await)
         }
-        CliIpcRequest::StorageGetTasksWithImages => Some(tasks::get_tasks_with_images().await),
-        CliIpcRequest::StorageGetImagesCountByQuery { query } => {
+        IpcRequest::StorageGetTasksWithImages => Some(tasks::get_tasks_with_images().await),
+        IpcRequest::StorageGetImagesCountByQuery { query } => {
             Some(images::get_images_count_by_query(query).await)
         }
         _ => None,

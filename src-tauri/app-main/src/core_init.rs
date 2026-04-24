@@ -152,11 +152,13 @@ pub fn init_globals() -> Result<(), String> {
         return Ok(());
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "local"))]
     return Ok(());
 
-    #[cfg(feature = "web")]
-    Ok(())
+     #[cfg(feature = "web")] {
+        crate::web::init_registry();
+        Ok(())    
+    }
 }
 
 /// Initialize AppPaths for web mode without Tauri.

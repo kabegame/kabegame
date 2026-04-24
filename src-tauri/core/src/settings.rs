@@ -824,7 +824,7 @@ Write-Output "$style,$tile"
     }
 
     /// 触发防抖写盘
-    fn trigger_debounce_save() -> Result<(), String> {
+    pub fn trigger_debounce_save() -> Result<(), String> {
         let state = Self::debounce_state();
         let mut state_guard = state.write().unwrap();
         state_guard.last_modified = Some(Instant::now());
@@ -1083,7 +1083,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::AutoLaunch, &new_value);
-        Self::trigger_debounce_save()?;
 
         // 设置开机启动（Windows、Linux、macOS 共用逻辑）
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
@@ -1127,7 +1126,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::AutoOpenCrawlerWebview, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1138,7 +1136,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::ImportRecommendedScheduleEnabled, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1149,7 +1146,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::MaxConcurrentDownloads, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1161,7 +1157,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::MaxConcurrentTasks, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1172,7 +1167,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::NetworkRetryCount, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1184,7 +1178,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::DownloadIntervalMs, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1195,7 +1188,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::ImageClickAction, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1209,7 +1201,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::GalleryImageAspectRatio, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1220,7 +1211,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::GalleryImageObjectPosition, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1231,7 +1221,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::AutoDeduplicate, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1259,7 +1248,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::DefaultDownloadDir, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1282,7 +1270,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperEngineDir, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1346,7 +1333,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperRotationEnabled, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1360,7 +1346,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperRotationAlbumId, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1374,7 +1359,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperRotationIncludeSubalbums, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1388,7 +1372,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperRotationIntervalMinutes, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1399,7 +1382,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperRotationMode, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1431,7 +1413,6 @@ Write-Output "$style,$tile"
             Self::emit_setting_change(SettingKey::WallpaperStyleByMode, v);
         }
 
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1466,7 +1447,6 @@ Write-Output "$style,$tile"
             Self::emit_setting_change(SettingKey::WallpaperTransitionByMode, v);
         }
 
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1477,7 +1457,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperMode, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1489,7 +1468,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperVolume, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1501,7 +1479,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperVideoPlaybackRate, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1512,7 +1489,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WindowState, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1523,7 +1499,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WindowState, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1535,7 +1510,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::AlbumDriveEnabled, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1551,7 +1525,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::AlbumDriveMountPoint, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1566,7 +1539,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::Language, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1584,7 +1556,6 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::CurrentWallpaperImageId, &new_value);
-        Self::trigger_debounce_save()?;
         Ok(())
     }
 
@@ -1647,8 +1618,6 @@ Write-Output "$style,$tile"
         Self::emit_setting_change(SettingKey::WallpaperRotationTransition, &new_transition_value);
         Self::emit_setting_change(SettingKey::WallpaperStyleByMode, &new_style_by_mode_value);
         Self::emit_setting_change(SettingKey::WallpaperTransitionByMode, &new_transition_by_mode_value);
-        Self::trigger_debounce_save()?;
-
         Ok((next_style, next_transition))
     }
 

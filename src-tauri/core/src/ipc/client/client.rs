@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use super::connection::{ConnectionStatus, PersistentConnection};
-use crate::ipc::ipc::{CliIpcRequest, CliIpcResponse};
+use crate::ipc::ipc::{IpcRequest, IpcResponse};
 use tokio::sync::watch;
 
 /// IPC 客户端（基于持久连接）
@@ -47,7 +47,7 @@ impl IpcClient {
 
     /// 内部辅助函数：发送请求并返回 data 字段
     /// TODO: data泛型化
-    async fn request_data(&self, req: CliIpcRequest) -> Result<serde_json::Value, String> {
+    async fn request_data(&self, req: IpcRequest) -> Result<serde_json::Value, String> {
         let resp = self.connection.request(req).await?;
         if !resp.ok {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
@@ -56,7 +56,7 @@ impl IpcClient {
     }
 
     /// 内部辅助函数：发送请求并检查是否成功
-    async fn request_ok(&self, req: CliIpcRequest) -> Result<(), String> {
+    async fn request_ok(&self, req: IpcRequest) -> Result<(), String> {
         let resp = self.connection.request(req).await?;
         if !resp.ok {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
@@ -65,12 +65,12 @@ impl IpcClient {
     }
 
     /// 内部辅助函数：发送请求并返回完整响应
-    async fn request_raw(&self, req: CliIpcRequest) -> Result<CliIpcResponse, String> {
+    async fn request_raw(&self, req: IpcRequest) -> Result<IpcResponse, String> {
         self.connection.request(req).await
     }
 
     /// 内部辅助函数：发送请求并返回 bytes 字段
-    async fn request_bytes(&self, req: CliIpcRequest) -> Result<Option<Vec<u8>>, String> {
+    async fn request_bytes(&self, req: IpcRequest) -> Result<Option<Vec<u8>>, String> {
         let resp = self.connection.request(req).await?;
         if !resp.ok {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
@@ -82,7 +82,7 @@ impl IpcClient {
 
     /// 检查 daemon 状态
     pub async fn status(&self) -> Result<serde_json::Value, String> {
-        let resp = self.request_raw(CliIpcRequest::Status).await?;
+        let resp = self.request_raw(IpcRequest::Status).await?;
         if !resp.ok {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
         }
@@ -103,7 +103,7 @@ impl IpcClient {
     /// 获取图片总数
     pub async fn storage_get_images_count(&self) -> Result<usize, String> {
         let v = self
-            .request_data(CliIpcRequest::StorageGetImagesCount)
+            .request_data(IpcRequest::StorageGetImagesCount)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
@@ -113,7 +113,7 @@ impl IpcClient {
         &self,
         image_id: String,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetImageById { image_id })
+        self.request_data(IpcRequest::StorageGetImageById { image_id })
             .await
     }
 
@@ -122,31 +122,31 @@ impl IpcClient {
         &self,
         path: String,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageFindImageByPath { path })
+        self.request_data(IpcRequest::StorageFindImageByPath { path })
             .await
     }
 
     /// 删除图片
     pub async fn storage_delete_image(&self, image_id: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageDeleteImage { image_id })
+        self.request_ok(IpcRequest::StorageDeleteImage { image_id })
             .await
     }
 
     /// 仅从 DB 移除图片（不删除本地文件）
     pub async fn storage_remove_image(&self, image_id: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageRemoveImage { image_id })
+        self.request_ok(IpcRequest::StorageRemoveImage { image_id })
             .await
     }
 
     /// 批量删除图片（删除本地文件 + DB）
     pub async fn storage_batch_delete_images(&self, image_ids: Vec<String>) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageBatchDeleteImages { image_ids })
+        self.request_ok(IpcRequest::StorageBatchDeleteImages { image_ids })
             .await
     }
 
     /// 批量仅从 DB 移除图片
     pub async fn storage_batch_remove_images(&self, image_ids: Vec<String>) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageBatchRemoveImages { image_ids })
+        self.request_ok(IpcRequest::StorageBatchRemoveImages { image_ids })
             .await
     }
 
@@ -156,7 +156,7 @@ impl IpcClient {
         image_id: String,
         favorite: bool,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageToggleImageFavorite { image_id, favorite })
+        self.request_ok(IpcRequest::StorageToggleImageFavorite { image_id, favorite })
             .await
     }
 
@@ -164,18 +164,18 @@ impl IpcClient {
 
     /// 获取所有画册
     pub async fn storage_get_albums(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetAlbums).await
+        self.request_data(IpcRequest::StorageGetAlbums).await
     }
 
     /// 添加画册
     pub async fn storage_add_album(&self, name: String) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageAddAlbum { name })
+        self.request_data(IpcRequest::StorageAddAlbum { name })
             .await
     }
 
     /// 删除画册
     pub async fn storage_delete_album(&self, album_id: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageDeleteAlbum { album_id })
+        self.request_ok(IpcRequest::StorageDeleteAlbum { album_id })
             .await
     }
 
@@ -184,7 +184,7 @@ impl IpcClient {
         album_id: String,
         new_name: String,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageRenameAlbum { album_id, new_name })
+        self.request_ok(IpcRequest::StorageRenameAlbum { album_id, new_name })
             .await
     }
 
@@ -194,7 +194,7 @@ impl IpcClient {
         album_id: String,
         image_ids: Vec<String>,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageAddImagesToAlbum {
+        self.request_data(IpcRequest::StorageAddImagesToAlbum {
             album_id,
             image_ids,
         })
@@ -206,7 +206,7 @@ impl IpcClient {
         album_id: String,
         image_ids: Vec<String>,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageRemoveImagesFromAlbum {
+        self.request_data(IpcRequest::StorageRemoveImagesFromAlbum {
             album_id,
             image_ids,
         })
@@ -218,7 +218,7 @@ impl IpcClient {
         &self,
         album_id: String,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetAlbumImages { album_id })
+        self.request_data(IpcRequest::StorageGetAlbumImages { album_id })
             .await
     }
 
@@ -227,12 +227,12 @@ impl IpcClient {
         album_id: String,
         limit: usize,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetAlbumPreview { album_id, limit })
+        self.request_data(IpcRequest::StorageGetAlbumPreview { album_id, limit })
             .await
     }
 
     pub async fn storage_get_album_counts(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetAlbumCounts)
+        self.request_data(IpcRequest::StorageGetAlbumCounts)
             .await
     }
 
@@ -241,7 +241,7 @@ impl IpcClient {
         album_id: String,
         image_orders: Vec<(String, i64)>,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageUpdateAlbumImagesOrder {
+        self.request_ok(IpcRequest::StorageUpdateAlbumImagesOrder {
             album_id,
             image_orders,
         })
@@ -254,7 +254,7 @@ impl IpcClient {
         album_id: String,
     ) -> Result<Vec<String>, String> {
         let v = self
-            .request_data(CliIpcRequest::StorageGetAlbumImageIds { album_id })
+            .request_data(IpcRequest::StorageGetAlbumImageIds { album_id })
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
@@ -263,30 +263,30 @@ impl IpcClient {
 
     /// 获取所有任务
     pub async fn storage_get_all_tasks(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetAllTasks).await
+        self.request_data(IpcRequest::StorageGetAllTasks).await
     }
 
     /// 根据 ID 获取任务
     pub async fn storage_get_task(&self, task_id: String) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetTask { task_id })
+        self.request_data(IpcRequest::StorageGetTask { task_id })
             .await
     }
 
     /// 添加任务
     pub async fn storage_add_task(&self, task: serde_json::Value) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageAddTask { task })
+        self.request_ok(IpcRequest::StorageAddTask { task })
             .await
     }
 
     /// 更新任务
     pub async fn storage_update_task(&self, task: serde_json::Value) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageUpdateTask { task })
+        self.request_ok(IpcRequest::StorageUpdateTask { task })
             .await
     }
 
     /// 删除任务
     pub async fn storage_delete_task(&self, task_id: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageDeleteTask { task_id })
+        self.request_ok(IpcRequest::StorageDeleteTask { task_id })
             .await
     }
 
@@ -295,19 +295,19 @@ impl IpcClient {
         &self,
         task_id: String,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetTaskFailedImages { task_id })
+        self.request_data(IpcRequest::StorageGetTaskFailedImages { task_id })
             .await
     }
 
     /// 获取所有任务失败图片
     pub async fn storage_get_all_failed_images(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetAllFailedImages)
+        self.request_data(IpcRequest::StorageGetAllFailedImages)
             .await
     }
 
     pub async fn storage_clear_finished_tasks(&self) -> Result<usize, String> {
         let v = self
-            .request_data(CliIpcRequest::StorageClearFinishedTasks)
+            .request_data(IpcRequest::StorageClearFinishedTasks)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
@@ -316,7 +316,7 @@ impl IpcClient {
 
     /// 获取运行配置列表
     pub async fn storage_get_run_configs(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetRunConfigs).await
+        self.request_data(IpcRequest::StorageGetRunConfigs).await
     }
 
     /// 添加运行配置
@@ -324,36 +324,36 @@ impl IpcClient {
         &self,
         config: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageAddRunConfig { config })
+        self.request_data(IpcRequest::StorageAddRunConfig { config })
             .await
     }
 
     /// 更新运行配置
     pub async fn storage_update_run_config(&self, config: serde_json::Value) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageUpdateRunConfig { config })
+        self.request_ok(IpcRequest::StorageUpdateRunConfig { config })
             .await
     }
 
     /// 删除运行配置
     pub async fn storage_delete_run_config(&self, config_id: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageDeleteRunConfig { config_id })
+        self.request_ok(IpcRequest::StorageDeleteRunConfig { config_id })
             .await
     }
 
     // ==================== Storage - Gallery Query Helpers ====================
 
     pub async fn storage_get_gallery_date_groups(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetGalleryDateGroups)
+        self.request_data(IpcRequest::StorageGetGalleryDateGroups)
             .await
     }
 
     pub async fn storage_get_gallery_plugin_groups(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetGalleryPluginGroups)
+        self.request_data(IpcRequest::StorageGetGalleryPluginGroups)
             .await
     }
 
     pub async fn storage_get_tasks_with_images(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::StorageGetTasksWithImages)
+        self.request_data(IpcRequest::StorageGetTasksWithImages)
             .await
     }
 
@@ -362,7 +362,7 @@ impl IpcClient {
         query: serde_json::Value,
     ) -> Result<usize, String> {
         let v = self
-            .request_data(CliIpcRequest::StorageGetImagesCountByQuery { query })
+            .request_data(IpcRequest::StorageGetImagesCountByQuery { query })
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
@@ -370,7 +370,7 @@ impl IpcClient {
     // ==================== Gallery / Provider ====================
 
     pub async fn gallery_browse_provider(&self, path: String) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::GalleryBrowseProvider { path })
+        self.request_data(IpcRequest::GalleryBrowseProvider { path })
             .await
     }
 
@@ -378,25 +378,25 @@ impl IpcClient {
 
     /// 获取已安装插件列表
     pub async fn plugin_get_plugins(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::PluginGetPlugins).await
+        self.request_data(IpcRequest::PluginGetPlugins).await
     }
 
     /// 获取插件详情
     pub async fn plugin_get_detail(&self, plugin_id: String) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::PluginGetDetail { plugin_id })
+        self.request_data(IpcRequest::PluginGetDetail { plugin_id })
             .await
     }
 
     /// 删除插件
     pub async fn plugin_delete(&self, plugin_id: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::PluginDelete { plugin_id })
+        self.request_ok(IpcRequest::PluginDelete { plugin_id })
             .await
     }
 
     /// 导入插件
     pub async fn plugin_import(&self, kgpg_path: String) -> Result<String, String> {
         let resp = self
-            .request_raw(CliIpcRequest::PluginImport { kgpg_path })
+            .request_raw(IpcRequest::PluginImport { kgpg_path })
             .await?;
         if !resp.ok {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
@@ -411,7 +411,7 @@ impl IpcClient {
 
     /// 获取插件源列表
     pub async fn plugin_get_plugin_sources(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::PluginGetPluginSources)
+        self.request_data(IpcRequest::PluginGetPluginSources)
             .await
     }
 
@@ -419,7 +419,7 @@ impl IpcClient {
         &self,
         index_url: String,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::PluginValidateSource { index_url })
+        self.request_data(IpcRequest::PluginValidateSource { index_url })
             .await
     }
 
@@ -429,7 +429,7 @@ impl IpcClient {
         name: String,
         index_url: String,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::PluginAddSource {
+        self.request_data(IpcRequest::PluginAddSource {
             id,
             name,
             index_url,
@@ -443,7 +443,7 @@ impl IpcClient {
         name: String,
         index_url: String,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::PluginUpdateSource {
+        self.request_ok(IpcRequest::PluginUpdateSource {
             id,
             name,
             index_url,
@@ -452,7 +452,7 @@ impl IpcClient {
     }
 
     pub async fn plugin_delete_source(&self, id: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::PluginDeleteSource { id })
+        self.request_ok(IpcRequest::PluginDeleteSource { id })
             .await
     }
 
@@ -462,7 +462,7 @@ impl IpcClient {
         force_refresh: bool,
         revalidate_if_stale_after_secs: Option<u64>,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::PluginGetStorePlugins {
+        self.request_data(IpcRequest::PluginGetStorePlugins {
             source_id,
             force_refresh,
             revalidate_if_stale_after_secs,
@@ -474,7 +474,7 @@ impl IpcClient {
         &self,
         zip_path: String,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::PluginPreviewImport { zip_path })
+        self.request_data(IpcRequest::PluginPreviewImport { zip_path })
             .await
     }
 
@@ -483,7 +483,7 @@ impl IpcClient {
         source_id: String,
         plugin_id: String,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::PluginPreviewStoreInstall {
+        self.request_data(IpcRequest::PluginPreviewStoreInstall {
             source_id,
             plugin_id,
         })
@@ -494,7 +494,7 @@ impl IpcClient {
         &self,
         download_url: String,
     ) -> Result<Option<Vec<u8>>, String> {
-        self.request_bytes(CliIpcRequest::PluginGetRemoteIconV2 {
+        self.request_bytes(IpcRequest::PluginGetRemoteIconV2 {
             download_url,
             source_id: None,
             plugin_id: None,
@@ -512,7 +512,7 @@ impl IpcClient {
         plugin_args: Vec<String>,
     ) -> Result<String, String> {
         let resp = self
-            .request_raw(CliIpcRequest::PluginRun {
+            .request_raw(IpcRequest::PluginRun {
                 plugin,
                 output_dir,
                 task_id: task_id.clone(),
@@ -531,42 +531,42 @@ impl IpcClient {
 
     pub async fn settings_get_auto_launch(&self) -> Result<bool, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetAutoLaunch)
+            .request_data(IpcRequest::SettingsGetAutoLaunch)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_max_concurrent_downloads(&self) -> Result<u32, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetMaxConcurrentDownloads)
+            .request_data(IpcRequest::SettingsGetMaxConcurrentDownloads)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_max_concurrent_tasks(&self) -> Result<u32, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetMaxConcurrentTasks)
+            .request_data(IpcRequest::SettingsGetMaxConcurrentTasks)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_network_retry_count(&self) -> Result<u32, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetNetworkRetryCount)
+            .request_data(IpcRequest::SettingsGetNetworkRetryCount)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_image_click_action(&self) -> Result<String, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetImageClickAction)
+            .request_data(IpcRequest::SettingsGetImageClickAction)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_gallery_image_aspect_ratio(&self) -> Result<Option<String>, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetGalleryImageAspectRatio)
+            .request_data(IpcRequest::SettingsGetGalleryImageAspectRatio)
             .await?;
         if v.is_null() {
             Ok(None)
@@ -577,14 +577,14 @@ impl IpcClient {
 
     pub async fn settings_get_auto_deduplicate(&self) -> Result<bool, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetAutoDeduplicate)
+            .request_data(IpcRequest::SettingsGetAutoDeduplicate)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_default_download_dir(&self) -> Result<Option<String>, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetDefaultDownloadDir)
+            .request_data(IpcRequest::SettingsGetDefaultDownloadDir)
             .await?;
         if v.is_null() {
             Ok(None)
@@ -595,7 +595,7 @@ impl IpcClient {
 
     pub async fn settings_get_wallpaper_engine_dir(&self) -> Result<Option<String>, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWallpaperEngineDir)
+            .request_data(IpcRequest::SettingsGetWallpaperEngineDir)
             .await?;
         if v.is_null() {
             Ok(None)
@@ -606,14 +606,14 @@ impl IpcClient {
 
     pub async fn settings_get_wallpaper_rotation_enabled(&self) -> Result<bool, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWallpaperRotationEnabled)
+            .request_data(IpcRequest::SettingsGetWallpaperRotationEnabled)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_wallpaper_rotation_album_id(&self) -> Result<Option<String>, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWallpaperRotationAlbumId)
+            .request_data(IpcRequest::SettingsGetWallpaperRotationAlbumId)
             .await?;
         if v.is_null() {
             Ok(None)
@@ -624,35 +624,35 @@ impl IpcClient {
 
     pub async fn settings_get_wallpaper_rotation_include_subalbums(&self) -> Result<bool, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWallpaperRotationIncludeSubalbums)
+            .request_data(IpcRequest::SettingsGetWallpaperRotationIncludeSubalbums)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_wallpaper_rotation_interval_minutes(&self) -> Result<u32, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWallpaperRotationIntervalMinutes)
+            .request_data(IpcRequest::SettingsGetWallpaperRotationIntervalMinutes)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_wallpaper_rotation_mode(&self) -> Result<String, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWallpaperRotationMode)
+            .request_data(IpcRequest::SettingsGetWallpaperRotationMode)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_wallpaper_rotation_style(&self) -> Result<String, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWallpaperStyle)
+            .request_data(IpcRequest::SettingsGetWallpaperStyle)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_wallpaper_rotation_transition(&self) -> Result<String, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWallpaperRotationTransition)
+            .request_data(IpcRequest::SettingsGetWallpaperRotationTransition)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
@@ -661,7 +661,7 @@ impl IpcClient {
         &self,
     ) -> Result<std::collections::HashMap<String, String>, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWallpaperStyleByMode)
+            .request_data(IpcRequest::SettingsGetWallpaperStyleByMode)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
@@ -670,14 +670,14 @@ impl IpcClient {
         &self,
     ) -> Result<std::collections::HashMap<String, String>, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWallpaperTransitionByMode)
+            .request_data(IpcRequest::SettingsGetWallpaperTransitionByMode)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_wallpaper_mode(&self) -> Result<String, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWallpaperMode)
+            .request_data(IpcRequest::SettingsGetWallpaperMode)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
@@ -686,7 +686,7 @@ impl IpcClient {
         &self,
     ) -> Result<Option<crate::settings::WindowState>, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWindowState)
+            .request_data(IpcRequest::SettingsGetWindowState)
             .await?;
         if v.is_null() {
             Ok(None)
@@ -697,7 +697,7 @@ impl IpcClient {
 
     pub async fn settings_get_current_wallpaper_image_id(&self) -> Result<Option<String>, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetCurrentWallpaperImageId)
+            .request_data(IpcRequest::SettingsGetCurrentWallpaperImageId)
             .await?;
         if v.is_null() {
             Ok(None)
@@ -708,7 +708,7 @@ impl IpcClient {
 
     pub async fn settings_get_default_images_dir(&self) -> Result<String, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetDefaultImagesDir)
+            .request_data(IpcRequest::SettingsGetDefaultImagesDir)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
@@ -716,7 +716,7 @@ impl IpcClient {
     #[cfg(kabegame_mode = "standard")]
     pub async fn settings_get_album_drive_enabled(&self) -> Result<bool, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetAlbumDriveEnabled)
+            .request_data(IpcRequest::SettingsGetAlbumDriveEnabled)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
@@ -724,7 +724,7 @@ impl IpcClient {
     #[cfg(kabegame_mode = "standard")]
     pub async fn settings_get_album_drive_mount_point(&self) -> Result<String, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetAlbumDriveMountPoint)
+            .request_data(IpcRequest::SettingsGetAlbumDriveMountPoint)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
@@ -733,7 +733,7 @@ impl IpcClient {
         &self,
         aspect_ratio: Option<String>,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetGalleryImageAspectRatio { aspect_ratio })
+        self.request_ok(IpcRequest::SettingsSetGalleryImageAspectRatio { aspect_ratio })
             .await
     }
 
@@ -741,14 +741,14 @@ impl IpcClient {
         &self,
         dir: Option<String>,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetWallpaperEngineDir { dir })
+        self.request_ok(IpcRequest::SettingsSetWallpaperEngineDir { dir })
             .await
     }
 
     pub async fn settings_get_wallpaper_engine_myprojects_dir(
         &self,
     ) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::SettingsGetWallpaperEngineMyprojectsDir)
+        self.request_data(IpcRequest::SettingsGetWallpaperEngineMyprojectsDir)
             .await
     }
 
@@ -756,7 +756,7 @@ impl IpcClient {
         &self,
         enabled: bool,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetWallpaperRotationEnabled { enabled })
+        self.request_ok(IpcRequest::SettingsSetWallpaperRotationEnabled { enabled })
             .await
     }
 
@@ -764,7 +764,7 @@ impl IpcClient {
         &self,
         album_id: Option<String>,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetWallpaperRotationAlbumId { album_id })
+        self.request_ok(IpcRequest::SettingsSetWallpaperRotationAlbumId { album_id })
             .await
     }
 
@@ -773,7 +773,7 @@ impl IpcClient {
         include_subalbums: bool,
     ) -> Result<(), String> {
         self.request_ok(
-            CliIpcRequest::SettingsSetWallpaperRotationIncludeSubalbums { include_subalbums },
+            IpcRequest::SettingsSetWallpaperRotationIncludeSubalbums { include_subalbums },
         )
         .await
     }
@@ -782,23 +782,23 @@ impl IpcClient {
         &self,
         transition: String,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetWallpaperRotationTransition { transition })
+        self.request_ok(IpcRequest::SettingsSetWallpaperRotationTransition { transition })
             .await
     }
 
     pub async fn settings_set_wallpaper_style(&self, style: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetWallpaperStyle { style })
+        self.request_ok(IpcRequest::SettingsSetWallpaperStyle { style })
             .await
     }
 
     pub async fn settings_set_wallpaper_mode(&self, mode: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetWallpaperMode { mode })
+        self.request_ok(IpcRequest::SettingsSetWallpaperMode { mode })
             .await
     }
 
     #[cfg(kabegame_mode = "standard")]
     pub async fn settings_set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetAlbumDriveEnabled { enabled })
+        self.request_ok(IpcRequest::SettingsSetAlbumDriveEnabled { enabled })
             .await
     }
 
@@ -807,37 +807,37 @@ impl IpcClient {
         &self,
         mount_point: String,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetAlbumDriveMountPoint { mount_point })
+        self.request_ok(IpcRequest::SettingsSetAlbumDriveMountPoint { mount_point })
             .await
     }
 
     pub async fn settings_set_auto_launch(&self, enabled: bool) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetAutoLaunch { enabled })
+        self.request_ok(IpcRequest::SettingsSetAutoLaunch { enabled })
             .await
     }
 
     pub async fn settings_set_max_concurrent_downloads(&self, count: u32) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetMaxConcurrentDownloads { count })
+        self.request_ok(IpcRequest::SettingsSetMaxConcurrentDownloads { count })
             .await
     }
 
     pub async fn settings_set_max_concurrent_tasks(&self, count: u32) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetMaxConcurrentTasks { count })
+        self.request_ok(IpcRequest::SettingsSetMaxConcurrentTasks { count })
             .await
     }
 
     pub async fn settings_set_network_retry_count(&self, count: u32) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetNetworkRetryCount { count })
+        self.request_ok(IpcRequest::SettingsSetNetworkRetryCount { count })
             .await
     }
 
     pub async fn settings_set_image_click_action(&self, action: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetImageClickAction { action })
+        self.request_ok(IpcRequest::SettingsSetImageClickAction { action })
             .await
     }
 
     pub async fn settings_set_auto_deduplicate(&self, enabled: bool) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetAutoDeduplicate { enabled })
+        self.request_ok(IpcRequest::SettingsSetAutoDeduplicate { enabled })
             .await
     }
 
@@ -845,7 +845,7 @@ impl IpcClient {
         &self,
         dir: Option<String>,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetDefaultDownloadDir { dir })
+        self.request_ok(IpcRequest::SettingsSetDefaultDownloadDir { dir })
             .await
     }
 
@@ -853,12 +853,12 @@ impl IpcClient {
         &self,
         minutes: u32,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetWallpaperRotationIntervalMinutes { minutes })
+        self.request_ok(IpcRequest::SettingsSetWallpaperRotationIntervalMinutes { minutes })
             .await
     }
 
     pub async fn settings_set_wallpaper_rotation_mode(&self, mode: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetWallpaperRotationMode { mode })
+        self.request_ok(IpcRequest::SettingsSetWallpaperRotationMode { mode })
             .await
     }
 
@@ -866,7 +866,7 @@ impl IpcClient {
         &self,
         image_id: Option<String>,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::SettingsSetCurrentWallpaperImageId { image_id })
+        self.request_ok(IpcRequest::SettingsSetCurrentWallpaperImageId { image_id })
             .await
     }
 
@@ -876,7 +876,7 @@ impl IpcClient {
         new_mode: String,
     ) -> Result<(String, String), String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsSwapStyleTransitionForModeSwitch {
+            .request_data(IpcRequest::SettingsSwapStyleTransitionForModeSwitch {
                 old_mode,
                 new_mode,
             })
@@ -896,7 +896,7 @@ impl IpcClient {
 
     // ==================== Task scheduling ====================
     pub async fn task_start(&self, task: serde_json::Value) -> Result<String, String> {
-        let resp = self.request_raw(CliIpcRequest::TaskStart { task }).await?;
+        let resp = self.request_raw(IpcRequest::TaskStart { task }).await?;
         if !resp.ok {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
         }
@@ -904,17 +904,17 @@ impl IpcClient {
     }
 
     pub async fn task_cancel(&self, task_id: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::TaskCancel { task_id }).await
+        self.request_ok(IpcRequest::TaskCancel { task_id }).await
     }
 
     pub async fn task_retry_failed_image(&self, failed_id: i64) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::TaskRetryFailedImage { failed_id })
+        self.request_ok(IpcRequest::TaskRetryFailedImage { failed_id })
             .await
     }
 
     /// 获取正在下载的任务列表
     pub async fn get_active_downloads(&self) -> Result<serde_json::Value, String> {
-        self.request_data(CliIpcRequest::GetActiveDownloads).await
+        self.request_data(IpcRequest::GetActiveDownloads).await
     }
 
     pub async fn organize_start(
@@ -928,7 +928,7 @@ impl IpcClient {
         delete_source_files: bool,
         safe_delete: bool,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::OrganizeStart {
+        self.request_ok(IpcRequest::OrganizeStart {
             dedupe,
             remove_missing,
             regen_thumbnails,
@@ -942,7 +942,7 @@ impl IpcClient {
     }
 
     pub async fn organize_cancel(&self) -> Result<bool, String> {
-        let v = self.request_data(CliIpcRequest::OrganizeCancel).await?;
+        let v = self.request_data(IpcRequest::OrganizeCancel).await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
@@ -951,7 +951,7 @@ impl IpcClient {
     /// 挂载虚拟盘
     #[cfg(kabegame_mode = "standard")]
     pub async fn vd_mount(&self) -> Result<(), String> {
-        let resp = self.request_raw(CliIpcRequest::VdMount).await?;
+        let resp = self.request_raw(IpcRequest::VdMount).await?;
         if !resp.ok {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
         }
@@ -961,7 +961,7 @@ impl IpcClient {
     /// 卸载虚拟盘
     #[cfg(kabegame_mode = "standard")]
     pub async fn vd_unmount(&self) -> Result<(), String> {
-        let resp = self.request_raw(CliIpcRequest::VdUnmount).await?;
+        let resp = self.request_raw(IpcRequest::VdUnmount).await?;
         if !resp.ok {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
         }
@@ -971,7 +971,7 @@ impl IpcClient {
     /// 获取虚拟盘状态
     #[cfg(kabegame_mode = "standard")]
     pub async fn vd_status(&self) -> Result<(bool, Option<String>), String> {
-        let resp = self.request_raw(CliIpcRequest::VdStatus).await?;
+        let resp = self.request_raw(IpcRequest::VdStatus).await?;
         if !resp.ok {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
         }
@@ -1008,7 +1008,7 @@ impl IpcClient {
 
         // 使用统一的 PersistentConnection 订阅事件
         self.connection
-            .request(CliIpcRequest::SubscribeEvents { kinds })
+            .request(IpcRequest::SubscribeEvents { kinds })
             .await?;
 
         eprintln!("[DEBUG] IpcClient::subscribe_events_stream 订阅成功，开始接收事件流");

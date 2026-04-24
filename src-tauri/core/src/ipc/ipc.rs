@@ -38,7 +38,7 @@ macro_rules! ipc_dbg {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]
-pub enum CliIpcRequest {
+pub enum IpcRequest {
     /// 探活
     Status,
 
@@ -505,7 +505,7 @@ pub struct IpcEnvelope<T> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub struct CliIpcResponse {
+pub struct IpcResponse {
     pub ok: bool,
     #[serde(default)]
     pub message: Option<String>,
@@ -547,7 +547,7 @@ pub struct CliIpcResponse {
     pub bytes_mime: Option<String>,
 }
 
-impl CliIpcResponse {
+impl IpcResponse {
     pub fn ok(message: impl Into<String>) -> Self {
         Self {
             ok: true,
@@ -702,7 +702,7 @@ pub fn unix_socket_path() -> std::path::PathBuf {
 
 #[cfg(feature = "ipc-client")]
 /// 客户端：发送一次请求并等待响应。
-pub async fn request(req: CliIpcRequest) -> Result<CliIpcResponse, String> {
+pub async fn request(req: IpcRequest) -> Result<IpcResponse, String> {
     #[cfg(target_os = "windows")]
     {
         use tokio::net::windows::named_pipe::ClientOptions;
@@ -714,7 +714,7 @@ pub async fn request(req: CliIpcRequest) -> Result<CliIpcResponse, String> {
         let bytes = encode_frame(&req)?;
         write_all(&mut client, &bytes).await?;
         let payload = read_one_frame(&mut client).await?;
-        let resp: CliIpcResponse = decode_frame(&payload)?;
+        let resp: IpcResponse = decode_frame(&payload)?;
         return Ok(resp);
     }
 
@@ -728,7 +728,7 @@ pub async fn request(req: CliIpcRequest) -> Result<CliIpcResponse, String> {
         let bytes = encode_frame(&req)?;
         write_all(&mut s, &bytes).await?;
         let payload = read_one_frame(&mut s).await?;
-        let resp: CliIpcResponse = decode_frame(&payload)?;
+        let resp: IpcResponse = decode_frame(&payload)?;
         return Ok(resp);
     }
 

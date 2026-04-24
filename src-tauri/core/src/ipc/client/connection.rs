@@ -8,7 +8,7 @@
 //! - 防止并发创建多个连接
 
 use crate::ipc::ipc::{
-    decode_frame, encode_frame, read_one_frame, CliIpcRequest, CliIpcResponse, IpcEnvelope,
+    decode_frame, encode_frame, read_one_frame, IpcRequest, IpcResponse, IpcEnvelope,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ struct RequestState {
     /// 请求 ID 计数器
     next_request_id: u64,
     /// 等待响应的请求：request_id -> oneshot sender
-    pending_requests: HashMap<u64, oneshot::Sender<CliIpcResponse>>,
+    pending_requests: HashMap<u64, oneshot::Sender<IpcResponse>>,
 }
 
 /// IPC 连接状态（公开枚举，用于外部订阅）
@@ -54,7 +54,7 @@ pub struct PersistentConnection {
 pub struct ConnectionHandle {
     /// 发送请求的通道（客户端 -> daemon）
     /// 不能并发发送请求
-    pub request_tx: Arc<Mutex<mpsc::UnboundedSender<(u64, CliIpcRequest)>>>,
+    pub request_tx: Arc<Mutex<mpsc::UnboundedSender<(u64, IpcRequest)>>>,
     /// 事件接收通道spsc（客户端 <- daemon）
     pub event_rx: Arc<Mutex<mpsc::Receiver<serde_json::Value>>>,
 }
@@ -167,7 +167,7 @@ impl PersistentConnection {
     async fn send_request(
         write_half: &mut WriteHalf,
         request_id: u64,
-        req: CliIpcRequest,
+        req: IpcRequest,
     ) -> Result<(), String> {
         use tokio::io::AsyncWriteExt;
 
@@ -237,7 +237,7 @@ impl PersistentConnection {
         );
 
         // 先尝试解析为响应
-        match decode_frame::<CliIpcResponse>(payload) {
+        match decode_frame::<IpcResponse>(payload) {
             Ok(resp) => {
                 // 这是响应
                 if let Some(id) = resp.request_id {
@@ -355,7 +355,7 @@ impl PersistentConnection {
     /// 此方法会等待连接进入 Connected 状态（最多10秒），但不会主动创建连接。
     /// 如果请求失败（发送失败或等待响应超时），会自动将连接状态设置为 Disconnected。
     /// 如果是连接相关错误，会弹出原生错误窗口提示用户先启动 kabegame。
-    pub async fn request(&self, req: CliIpcRequest) -> Result<CliIpcResponse, String> {
+    pub async fn request(&self, req: IpcRequest) -> Result<IpcResponse, String> {
         // 等待连接就绪（最多10秒），但不主动创建连接
         let connection_result = tokio::time::timeout(
             std::time::Duration::from_secs(10),

@@ -375,7 +375,7 @@ pub fn file_routes() -> Router {
 ///   不再经手磁盘 IO（避免并发下 IO 顶满把主进程拖死）；`commands_core::image`
 ///   在 `ImageInfo` 序列化前把 `local_path` / `thumbnail_path` 改写成 CDN URL。
 /// - **Debug**：保留 `/file` `/thumbnail`，方便 `bun dev` 本地联调——
-///   开发机没 CDN，走本地文件最直观。并发闸只在 debug 生效。
+///   开发机没 CDN，走本地文件最直观。
 #[cfg(all(not(target_os = "android"), debug_assertions))]
 pub fn file_routes_web() -> Router {
     let gated = Router::new()
