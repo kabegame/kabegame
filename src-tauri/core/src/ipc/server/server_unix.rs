@@ -1,7 +1,7 @@
 //! Unix 特定的服务器实现
 
 use crate::ipc::ipc::{encode_frame, read_one_frame, unix_socket_path, write_all};
-use crate::ipc::{CliIpcRequest, CliIpcResponse};
+use crate::ipc::{IpcRequest, IpcResponse};
 use crate::ipc_dbg;
 use tokio::io::split;
 use tokio::net::{UnixListener, UnixStream};
@@ -18,7 +18,7 @@ pub async fn check_other_daemon_running() -> bool {
 
     if let Ok(Ok(mut stream)) = connect_result {
         // 如果连接成功，尝试发送 Status 请求验证
-        let status_req = CliIpcRequest::Status;
+        let status_req = IpcRequest::Status;
         if let Ok(bytes) = encode_frame(&status_req) {
             if write_all(&mut stream, &bytes).await.is_ok() {
                 // 尝试读取响应（但不等待太久）
@@ -35,12 +35,10 @@ pub async fn check_other_daemon_running() -> bool {
 }
 
 /// Unix 平台的服务实现
-pub async fn serve<F, Fut>(
-    handler: F,
-) -> Result<(), String>
+pub async fn serve<F, Fut>(handler: F) -> Result<(), String>
 where
-    F: Fn(CliIpcRequest) -> Fut + Send + Sync + Clone + 'static,
-    Fut: std::future::Future<Output = CliIpcResponse> + Send,
+    F: Fn(IpcRequest) -> Fut + Send + Sync + Clone + 'static,
+    Fut: std::future::Future<Output = IpcResponse> + Send,
 {
     let path = unix_socket_path();
     // 确保父目录存在（Unix bind 不会创建目录，否则会报 ENOENT）
@@ -83,13 +81,7 @@ where
         tokio::spawn(async move {
             let (read_half, write_half) = split(stream);
 
-            connection_handler::handle_connection(
-                read_half,
-                write_half,
-                handler,
-                client_id,
-            )
-            .await;
+            connection_handler::handle_connection(read_half, write_half, handler, client_id).await;
 
             ipc_dbg!("[DEBUG] IPC 服务器连接处理完成");
         });

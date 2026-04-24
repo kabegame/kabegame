@@ -54,17 +54,17 @@ pub async fn handle_connection<R, W, F, Fut>(
                     Ok(payload) => {
                         ipc_dbg!("[DEBUG] IPC 服务器读取 CBOR 帧，长度: {}", payload.len());
 
-                        // 尝试解析为 IpcEnvelope<CliIpcRequest>（带 request_id）
+                        // 尝试解析为 IpcEnvelope<IpcRequest>（带 request_id）
                         let (req, request_id): (IpcRequest, Option<u64>) = match decode_frame::<crate::ipc::ipc::IpcEnvelope<IpcRequest>>(&payload) {
                             Ok(envelope) => {
                                 ipc_dbg!("[DEBUG] IPC 服务器解析为 IpcEnvelope，request_id={}", envelope.request_id);
                                 (envelope.payload, Some(envelope.request_id))
                             }
                             Err(_) => {
-                                // 回退：尝试直接解析为 CliIpcRequest（无 request_id）
+                                // 回退：尝试直接解析为 IpcRequest（无 request_id）
                                 match decode_frame::<IpcRequest>(&payload) {
                                     Ok(req) => {
-                                        ipc_dbg!("[DEBUG] IPC 服务器解析为 CliIpcRequest（无 request_id）");
+                                        ipc_dbg!("[DEBUG] IPC 服务器解析为 IpcRequest（无 request_id）");
                                         (req, None)
                                     }
                                     Err(e) => {
