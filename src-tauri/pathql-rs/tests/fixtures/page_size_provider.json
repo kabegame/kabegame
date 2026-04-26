@@ -1,0 +1,14 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "page_size_provider",
+    "properties": {
+        "page_size": { "type": "number", "default": 1, "optional": false }
+    },
+    "list": {
+        "${out.page_num}": {
+            "sql": "SELECT DISTINCT CAST(CEIL(CAST(ROW_NUMBER() OVER () AS REAL) / ${properties.page_size}) AS INTEGER) AS page_num FROM (${composed}) AS composed_result ORDER BY page_num",
+            "data_var": "out"
+        }
+    }
+}
