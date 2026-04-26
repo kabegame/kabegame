@@ -23,13 +23,11 @@
     },
 
     "resolve": {
-        "entries": {
-            // 私有路径: 内部跑 SQL 的 provider
-            "__provider": {
-                "provider": "page_size_provider",
-                "properties": {
-                    "page_size": "${properties.page_size}"
-                }
+        // 私有路径: 内部跑 SQL 的 provider
+        "__provider": {
+            "provider": "page_size_provider",
+            "properties": {
+                "page_size": "${properties.page_size}"
             }
         }
     }
