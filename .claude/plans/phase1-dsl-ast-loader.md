@@ -619,24 +619,25 @@ fn key_is_dynamic(key: &str) -> bool {
 
 ### S10. Resolve（`ast/resolve.rs`）
 
+`resolve` 直接是 `<regex>: ProviderInvocation` 的 map（无 `entries` 包装）。最简实现：transparent newtype 包 `HashMap`。注意 `HashMap` 不保证遍历顺序——运行期解析会按某个固定顺序尝试每条正则；如果未来碰到顺序敏感问题（重叠正则的优先级），改 `Vec<(String, Invocation)>` 保留声明顺序。Phase 1 先用 `HashMap`，标注风险。
+
 ```rust
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::ast::invocation::ProviderInvocation;
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Resolve {
-    pub entries: HashMap<String, ProviderInvocation>,
-}
+#[serde(transparent)]
+pub struct Resolve(pub HashMap<String, ProviderInvocation>);
 ```
 
-注意：RULES.md 已去掉 `inherit_dyn_list`，**不要重新引入**。
+注意：RULES.md 已去掉 `inherit_dyn_list` 与 `entries` 包装，**不要引入任何包装字段**。
 
 **测试要点**：
-- `{"entries":{"^x([0-9]+)$":{"provider":"foo"}}}` → `Resolve` 含 1 项 ByName
-- 缺 entries：`{}` → 反序列化失败（字段必需）
-- 含 unknown：`{"entries":{},"inherit_dyn_list":true}` → 反序列化失败
+- `{"^x([0-9]+)$":{"provider":"foo"}}` → `Resolve` 含 1 项 ByName
+- 多条 regex：`{"a":{"provider":"x"},"^b.*$":{"provider":"y"}}` → 2 项
+- 空对象 `{}` → `Resolve(empty HashMap)` 合法
+- ProviderInvocation 三态：分别测 ByName / ByDelegate / Empty 作为 value
 
 **Test**：`cargo test -p pathql-rs ast::resolve`。
 

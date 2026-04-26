@@ -221,7 +221,7 @@ key 不含 `${...}`。值为 `ProviderInvocation` 三态之一：
 |---|---|
 | 静态 list key 字面命中 → `InvokeByName` / `InvokeByDelegate` | ✅ 缓存 |
 | 动态 list 命中（SQL 行 / delegate child 匹配） | ✅ 缓存 |
-| `resolve.entries` 正则命中 → `InvokeByName` / `InvokeByDelegate` | ✅ 缓存 |
+| `resolve` 正则命中 → `InvokeByName` / `InvokeByDelegate` | ✅ 缓存 |
 | 任意命中 → `EmptyInvocation`（路径合法但无 list 服务） | ❌ **不缓存**（解析本身已是 O(1)，无需占用 LRU 槽位） |
 | 路径段未命中（list / resolve / 动态全 miss） | ❌ 不缓存（直接返回 404 / 不存在） |
 
@@ -283,11 +283,11 @@ DynamicListEntry_Sql / DynamicListEntry_Delegate）的目标：**最终产出可
 
 ## 5. Resolve 语义
 
-`Resolve` 结构 = `{ entries: { <regex>: ProviderInvocation } }`。
+`Resolve` 结构 = `{ <regex>: ProviderInvocation, ... }`（直接 key-value，无 `entries` 包装）。
 
 ### 5.1 全部按正则匹配
 
-- `entries` 内所有 key **一律按正则编译**——纯字面量是空元字符的合法子集，自动兼容
+- `resolve` 内所有 key **一律按正则编译**——纯字面量是空元字符的合法子集，自动兼容
 - 正则捕获组用 `${capture[<N>]}` 引用（N≥1；0 = 全匹配）
 - 这条决策放弃了"靠元字符判别字面 vs 正则"的区分尝试（语义不可靠）
 
@@ -295,7 +295,7 @@ DynamicListEntry_Sql / DynamicListEntry_Delegate）的目标：**最终产出可
 
 引擎按以下顺序逐级查找一个路径段名 `seg`：
 
-1. **正则 resolve.entries**：依次尝试每条正则；命中即构造对应 ProviderInvocation
+1. **正则 resolve**：依次尝试 `resolve` 内每条正则；命中即构造对应 ProviderInvocation
 2. **静态 list key 字面量**：在 list 中查 key 是否字面等于 `seg`；命中即构造
 3. **动态 list 反查**（默认开启，无需配置）：
    - 跑 list 中所有 DynamicListEntry 的 SQL / delegate 数据源
@@ -309,7 +309,7 @@ DynamicListEntry_Sql / DynamicListEntry_Delegate）的目标：**最终产出可
 
 - **静态 list 内部**：list key 不能重复（JSON 对象天然约束 + schema 检查）
 - **resolve 正则 vs 静态 list key**：每条正则去匹配每个静态 list key 字面，**任一匹配 → 拒绝**
-  - 错误示例：`list: { "x100x": ... }` 同时 `resolve.entries: { "x([0-9]+)x": ... }` —— 正则覆盖了静态字面，二义性
+  - 错误示例：`list: { "x100x": ... }` 同时 `resolve: { "x([0-9]+)x": ... }` —— 正则覆盖了静态字面，二义性
 - **正则 vs 正则**：用 `regex_automata` 求两条正则的交集 NFA；**非空 → 拒绝**
 - **动态 list 不参与碰撞检查**（性能 / 实用性权衡）：
   - 动态项 key 模板的取值集合在加载期未知（依赖运行时 SQL 结果）
@@ -442,9 +442,9 @@ DSL 内所有 `${...}` 表达式都是 **从某个上下文命名空间取值** 
   - [ ] SQL 模式不出现 `${data_var.provider}`（无意义）
   - [ ] `child_var` / `data_var` 不是保留标识符
 - [ ] Resolve 内：
-  - [ ] 每条 `entries` key 编译为合法正则
-  - [ ] 每条 entries 正则 vs 任一 list 静态 key 字面 → 无匹配
-  - [ ] 任意两条 entries 正则用 `regex_automata` 求交集 → 空集
+  - [ ] 每条 `resolve` key 编译为合法正则
+  - [ ] 每条 `resolve` 正则 vs 任一 list 静态 key 字面 → 无匹配
+  - [ ] 任意两条 `resolve` 正则用 `regex_automata` 求交集 → 空集
   - [ ] 正则项内 `${capture[N]}` 的 N 不超出捕获组数
 - [ ] meta 字段（详见 §4.5）：
   - [ ] 字符串模式：判别为 SQL 时仅单条 SELECT；多语句 / DDL 拒绝
