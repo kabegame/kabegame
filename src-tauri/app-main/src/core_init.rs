@@ -2,7 +2,7 @@ use std::sync::Arc;
 use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
     plugin::PluginManager,
-    providers::{ProviderCacheConfig, ProviderRuntime, VdNewUnifiedRoot},
+    providers::{ProviderCacheConfig, ProviderRuntime, Root},
     scheduler::Scheduler,
     settings::Settings,
     storage::Storage,
@@ -97,7 +97,7 @@ pub fn init_globals() -> Result<(), String> {
 
     {
         let cfg = ProviderCacheConfig::default();
-        let root = Arc::new(VdNewUnifiedRoot);
+        let root = Arc::new(Root);
         if let Err(e) = ProviderRuntime::init_global(root, cfg) {
             return Err(format!("ProviderRuntime init failed: {}", e));
         }

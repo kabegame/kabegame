@@ -52,7 +52,7 @@ pub use query::{
     parse_provider_path, provider_query_to_json, ProviderPathQuery, ProviderQueryTyped,
 };
 pub use runtime::{ProviderCacheConfig, ProviderRuntime};
-pub use root::VdNewUnifiedRoot;
+pub use root::Root;
 
 /// 虚拟盘专用：从 PluginManager 缓存读取插件显示名（用于"按任务"目录名展示）。
 #[cfg(kabegame_mode = "standard")]
