@@ -2,6 +2,7 @@
 members = [
   "src-tauri/core",
   "src-tauri/kabegame-i18n",
+  "src-tauri/pathql-rs",
   "src-tauri/app-main",
   "src-tauri/app-cli",
   "src-tauri-plugins/tauri-plugin-picker",
@@ -24,6 +25,8 @@ base64 = "0.22"
 image = "0.24"
 kabegame-core = {path = "./src-tauri/core", default-features = false}
 kabegame-i18n = {path = "./src-tauri/kabegame-i18n"}
+pathql-rs = {path = "./src-tauri/pathql-rs", default-features = false}
+thiserror = "1.0"
 rhai = {version = "1.24", features = ["sync"]}
 serde = {version = "1.0", features = ["derive"]}
 serde_bytes = "0.11"

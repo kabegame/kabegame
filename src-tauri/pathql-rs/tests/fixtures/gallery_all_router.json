@@ -1,0 +1,18 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_all_router",
+    "query": { "delegate": "./x100x/1/" },
+    "list": {
+        "desc": { "provider": "gallery_all_desc_router" }
+    },
+    "resolve": {
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": {
+                "page_size": "${capture[1]}"
+            }
+        }
+    },
+    "note": "All router provider, default 100 items per page, dynamic xPAGE_SIZEx are supported"
+}

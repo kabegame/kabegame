@@ -1,0 +1,28 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_paginate_router",
+    "query": { "limit": 0 },
+    "properties": {
+        "page_size": { "type": "number", "default": 1, "optional": false }
+    },
+    "list": {
+        "${out.meta.page_num}": {
+            "delegate": "./__provider",
+            "child_var": "out",
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": "${properties.page_size}",
+                "page_num":  "${out.meta.page_num}"
+            }
+        }
+    },
+    "resolve": {
+        "__provider": {
+            "provider": "page_size_provider",
+            "properties": {
+                "page_size": "${properties.page_size}"
+            }
+        }
+    }
+}

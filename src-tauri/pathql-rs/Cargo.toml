@@ -1,0 +1,18 @@
+[package]
+name = "pathql-rs"
+edition = { workspace = true }
+version = { workspace = true }
+description = "Path-folding query DSL — AST + Loader 抽象（格式无关）"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+default = []
+# 适配器 feature 占位；实现见 Phase 2
+json5 = []
+
+[dev-dependencies]
+serde_json = { workspace = true }
