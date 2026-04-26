@@ -1,0 +1,49 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_route",
+    "query": {
+        // 基础 FROM (cascading-replace; 下游可重声明覆盖)
+        "from": "images",
+        // 根节点不直接列图片
+        "limit": 0
+    },
+    "list": {
+        // next path -> provider name mapping
+        "all": {
+            "provider": "gallery_all_router"
+        },
+        "wallpaper-order": {
+            "provider": "gallery_wallpaper_order_router"
+        },
+        // rename plugin_group to plugins
+        "plugins": {
+            "provider": "gallery_plugins_router"
+        },
+        // same over
+        "tasks": {
+            "provider": "gallery_tasks_router"
+        },
+        // same over
+        "surf": {
+            "provider": "gallery_surfs_router"
+        },
+        "media-type": {
+            "provider": "gallery_media_type_router"
+        },
+        // same over
+        "dates": {
+            "provider": "gallery_dates_router"
+        },
+        "albums": {
+            "provider": "gallery_albums_router"
+        },
+        // same over
+        "hide": {
+            "provider": "gallery_hide_router"
+        },
+        "search": {
+            "provider": "gallery_search_router" 
+        }
+    }
+}

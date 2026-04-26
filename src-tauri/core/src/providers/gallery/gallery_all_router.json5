@@ -1,0 +1,22 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_all_router",
+    // 默认重定向到 100 大小、第 1 页
+    "query": { "delegate": "./x100x/1/" },
+    "list": {
+        "desc": { "provider": "gallery_all_desc_router" }
+        // x100x / x500x / x1000x 已合并入下方 resolve 正则, 不再单独列出静态项以避免碰撞
+    },
+    // 任意 xNNNx (NNN ≥ 1) 命中, page_size 取捕获组
+    "resolve": {
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": {
+                // page_size 类型为 number, 引擎自动从 ${capture[1]} 字符串转换
+                "page_size": "${capture[1]}"
+            }
+        }
+    },
+    "note": "All router provider, default 100 items per page, dynamic xPAGE_SIZEx are supported"
+}
