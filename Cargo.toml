@@ -27,6 +27,9 @@ json5 = "0.4"
 kabegame-core = {path = "./src-tauri/core", default-features = false}
 kabegame-i18n = {path = "./src-tauri/kabegame-i18n"}
 pathql-rs = {path = "./src-tauri/pathql-rs", default-features = false}
+regex = "1"
+regex-automata = "0.4"
+sqlparser = "0.51"
 thiserror = "1.0"
 rhai = {version = "1.24", features = ["sync"]}
 serde = {version = "1.0", features = ["derive"]}

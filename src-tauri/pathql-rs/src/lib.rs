@@ -2,6 +2,10 @@ pub mod adapters;
 pub mod ast;
 pub mod loader;
 pub mod registry;
+pub mod template;
+
+#[cfg(feature = "validate")]
+pub mod validate;
 
 pub use ast::*;
 pub use loader::{LoadError, Loader, Source};
