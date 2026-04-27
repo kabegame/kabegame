@@ -3,8 +3,6 @@
 //! 渲染顺序：SELECT → FROM → JOIN → WHERE → ORDER BY → OFFSET → LIMIT。
 //! bind params 按文本扫描顺序 push。
 
-#![cfg(feature = "compose")]
-
 use thiserror::Error;
 
 use crate::ast::{JoinKind, NumberOrTemplate, OrderDirection};
@@ -21,36 +19,48 @@ pub enum BuildError {
 }
 
 impl ProviderQuery {
-    // 
     pub fn build_sql(
         &self,
         ctx: &TemplateContext,
     ) -> Result<(String, Vec<TemplateValue>), BuildError> {
+        // 合并 adhoc_properties 进 effective ctx (adhoc 覆盖优先)
+        let effective_ctx;
+        let ctx_ref: &TemplateContext = if self.adhoc_properties.is_empty() {
+            ctx
+        } else {
+            let mut merged = ctx.clone();
+            for (k, v) in &self.adhoc_properties {
+                merged.properties.insert(k.clone(), v.clone());
+            }
+            effective_ctx = merged;
+            &effective_ctx
+        };
+
         let mut sql = String::new();
         let mut params = Vec::new();
 
         // SELECT
         sql.push_str("SELECT ");
-        self.render_select(&mut sql, &mut params, ctx)?;
+        self.render_select(&mut sql, &mut params, ctx_ref)?;
 
         // FROM
         sql.push_str(" FROM ");
         let from = self.from.as_ref().ok_or(BuildError::MissingFrom)?;
-        render_template_sql(&from.0, ctx, &self.aliases, &mut sql, &mut params)?;
+        render_template_sql(&from.0, ctx_ref, &self.aliases, &mut sql, &mut params)?;
 
         // JOIN
         for j in &self.joins {
-            self.render_one_join(j, &mut sql, &mut params, ctx)?;
+            self.render_one_join(j, &mut sql, &mut params, ctx_ref)?;
         }
 
         // WHERE
-        self.render_where(&mut sql, &mut params, ctx)?;
+        self.render_where(&mut sql, &mut params, ctx_ref)?;
 
         // ORDER BY
         self.render_order(&mut sql);
 
         // OFFSET / LIMIT
-        self.render_pagination(&mut sql, &mut params, ctx)?;
+        self.render_pagination(&mut sql, &mut params, ctx_ref)?;
 
         Ok((sql, params))
     }
@@ -649,5 +659,61 @@ mod tests {
             sql,
             "SELECT images.id FROM images INNER JOIN album_images AS ai ON ai.image_id = images.id WHERE (ai.album_id = 1) ORDER BY images.id DESC LIMIT 10 OFFSET (20)"
         );
+    }
+
+    // ----- raw-bind API merging with build_sql ctx -----
+
+    #[test]
+    fn build_sql_merges_adhoc_into_ctx() {
+        let q = ProviderQuery::new()
+            .with_where_raw("x = ?", &[TemplateValue::Int(7)]);
+        let mut q = q;
+        q.from = Some(SqlExpr("images".into()));
+        let (sql, params) = q.build_sql(&empty_ctx()).unwrap();
+        assert_eq!(sql, "SELECT * FROM images WHERE (x = ?)");
+        assert_eq!(params, vec![TemplateValue::Int(7)]);
+    }
+
+    #[test]
+    fn build_sql_adhoc_overrides_ctx() {
+        // ctx has property "x" = 1, but adhoc has "__pq_raw_0" = 99
+        // they don't conflict; this verifies adhoc is added without disturbing ctx
+        let q = ProviderQuery::new().with_where_raw("a = ?", &[TemplateValue::Int(99)]);
+        let mut q = q;
+        q.from = Some(SqlExpr("t".into()));
+        let ctx = props(&[("x", TemplateValue::Int(1))]);
+        let (sql, params) = q.build_sql(&ctx).unwrap();
+        assert!(sql.contains("WHERE (a = ?)"));
+        assert_eq!(params, vec![TemplateValue::Int(99)]);
+    }
+
+    #[test]
+    fn build_sql_raw_join_with_param() {
+        let mut q = ProviderQuery::new()
+            .with_join_raw(
+                JoinKind::Inner,
+                "tags",
+                "t",
+                Some("t.image_id = images.id AND t.name = ?"),
+                &[TemplateValue::Text("foo".into())],
+            )
+            .unwrap();
+        q.from = Some(SqlExpr("images".into()));
+        let (sql, params) = q.build_sql(&empty_ctx()).unwrap();
+        assert!(sql.contains("INNER JOIN tags AS t ON t.image_id = images.id AND t.name = ?"));
+        assert_eq!(params, vec![TemplateValue::Text("foo".into())]);
+    }
+
+    #[test]
+    fn build_sql_raw_field_with_alias_and_param() {
+        let mut q = ProviderQuery::new().with_field_raw(
+            "images.id + ?",
+            Some("y"),
+            &[TemplateValue::Int(10)],
+        );
+        q.from = Some(SqlExpr("images".into()));
+        let (sql, params) = q.build_sql(&empty_ctx()).unwrap();
+        assert_eq!(sql, "SELECT images.id + ? AS y FROM images");
+        assert_eq!(params, vec![TemplateValue::Int(10)]);
     }
 }

@@ -3,8 +3,6 @@
 //! 不处理 inline-replace 形态 (`${ref:X}` / `${composed}`); 那些在
 //! [`crate::compose::render`] 直接走字符串替换路径。
 
-#![cfg(feature = "compose")]
-
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use thiserror::Error;

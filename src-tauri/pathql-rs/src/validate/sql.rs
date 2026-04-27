@@ -18,7 +18,7 @@ pub fn validate_sql_exprs(
     cfg: &ValidateConfig,
     errors: &mut Vec<ValidateError>,
 ) {
-    for ((ns, name), def) in registry.iter() {
+    for ((ns, name), def) in registry.iter_dsl() {
         let fqn = super::fqn(ns, name);
 
         // ContribQuery fragments: light check

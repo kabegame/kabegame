@@ -3,8 +3,6 @@
 //! 把 dialect-agnostic 的 `Vec<TemplateValue>` 桥接到 `Vec<rusqlite::types::Value>`,
 //! 让消费者能直接喂给 `stmt.execute(rusqlite::params_from_iter(...))`。
 
-#![cfg(feature = "sqlite")]
-
 use crate::template::eval::TemplateValue;
 use rusqlite::types::Value;
 

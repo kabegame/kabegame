@@ -17,7 +17,7 @@ pub fn validate_meta(
     cfg: &ValidateConfig,
     errors: &mut Vec<ValidateError>,
 ) {
-    for ((ns, name), def) in registry.iter() {
+    for ((ns, name), def) in registry.iter_dsl() {
         let fqn = super::fqn(ns, name);
 
         // collect (location, allowed_ns, allowed_methods, meta value)
