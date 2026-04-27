@@ -13,7 +13,7 @@ use crate::template::parse::VarRef;
 
 /// bind 参数的中性表达, dialect-agnostic。
 ///
-/// pathql-rs 只产生它; 具体 DB 驱动转换在 `adapters::sqlite` 等 feature 下。
+/// pathql-rs 只产生它; 具体 DB 驱动转换在 `drivers::sqlite` 等 feature 下。
 #[derive(Debug, Clone, PartialEq)]
 pub enum TemplateValue {
     Null,
@@ -48,6 +48,7 @@ impl TemplateValue {
 }
 
 /// 渲染期上下文。每次 render 调用现造一个; builder 设置子集。
+/// TODO: 以后做成可任意扩展型
 #[derive(Debug, Default, Clone)]
 pub struct TemplateContext {
     /// `${properties.<name>}` → TemplateValue

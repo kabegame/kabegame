@@ -9,10 +9,12 @@ This crate is the standalone engine for the provider DSL described in [`cocs/pro
 | feature | what it enables |
 |---|---|
 | _(default)_ | AST types, `Loader` trait, `ProviderRegistry`, `LoadError`, `Source`, `template::parse` (`${...}` parser, no external deps) |
-| `json5` | `adapters::Json5Loader` — `serde` deserialization of `.json5` (comments, trailing comma, single quotes, unquoted keys) into `ProviderDef` |
+| `json5` | `loaders::Json5Loader` — `serde` deserialization of `.json5` (comments, trailing comma, single quotes, unquoted keys) into `ProviderDef` |
 | `validate` | `validate(registry, &cfg)` semantic checks (RULES §10): name/namespace patterns, `${ref:X}` resolution, dynamic-binding scoping, path expressions, SQL via `sqlparser` SQLite dialect (DDL/multi-stmt/whitelist), regex compile + intersection (regex-automata DFA product BFS), capture index bounds, optional cross-provider reference checks, recursive meta validation |
 | `compose` | `ProviderQuery` structured IR + `fold_contrib(state, &q)` cumulative semantics (RULES §3) + `template::eval` evaluator + `compose::render` template-to-SQL renderer + `ProviderQuery::build_sql(&ctx)` → `(String, Vec<TemplateValue>)`. `${ref:X}` and `${composed}` are inlined; `${properties.X}` / `${capture[N]}` / `${data_var.col}` / `${child_var.field}` become `?` bind placeholders. Dialect-agnostic — no DB driver. |
-| `sqlite` | `adapters::sqlite::params_for(&[TemplateValue]) -> Vec<rusqlite::types::Value>` bridge for feeding `params_from_iter` to rusqlite. Implies `compose`. |
+| `sqlite` | `drivers::sqlite::params_for(&[TemplateValue]) -> Vec<rusqlite::types::Value>` bridge for feeding `params_from_iter` to rusqlite. Implies `compose`. |
+
+Module layout: input adapters live in [`loaders/`](src/loaders/) (Loader trait impls); output / DB driver adapters live in [`drivers/`](src/drivers/) (TemplateValue → driver value bridges).
 
 ## Usage
 

@@ -1,7 +1,8 @@
-pub mod adapters;
 pub mod ast;
 pub mod compose;
+pub mod drivers;
 pub mod loader;
+pub mod loaders;
 pub mod registry;
 pub mod template;
 
@@ -13,4 +14,4 @@ pub use loader::{LoadError, Loader, Source};
 pub use registry::{ProviderRegistry, RegistryError};
 
 #[cfg(feature = "json5")]
-pub use adapters::Json5Loader;
+pub use loaders::Json5Loader;
