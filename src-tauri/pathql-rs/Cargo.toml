@@ -2,7 +2,7 @@
 name = "pathql-rs"
 edition = { workspace = true }
 version = { workspace = true }
-description = "Path-folding query DSL — AST + Loader 抽象，json5 适配器 + 加载期语义校验 (RULES §10) features"
+description = "Path-folding query DSL — AST + Loader + Registry; json5 / validate / compose features"
 
 [dependencies]
 serde = { workspace = true }
@@ -17,6 +17,7 @@ sqlparser = { workspace = true, optional = true }
 default = []
 json5 = ["dep:json5"]
 validate = ["dep:regex", "dep:regex-automata", "dep:sqlparser"]
+compose = []
 
 [dev-dependencies]
 serde_json = { workspace = true }

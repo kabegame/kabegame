@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod ast;
+pub mod compose;
 pub mod loader;
 pub mod registry;
 pub mod template;
