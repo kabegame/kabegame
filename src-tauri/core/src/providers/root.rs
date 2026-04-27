@@ -11,9 +11,9 @@ use crate::providers::vd::root::VdRootProvider;
 use crate::storage::gallery::ImageQuery;
 
 /// 新树根：含 VD 子树（Phase 3）和 Gallery 子树（Phase 4）。
-pub struct VdNewUnifiedRoot;
+pub struct Root;
 
-impl Provider for VdNewUnifiedRoot {
+impl Provider for Root {
     fn list_children(&self, _composed: &ImageQuery) -> Result<Vec<ChildEntry>, String> {
         Ok(vec![
             ChildEntry::new("vd", Arc::new(VdRootProvider)),
