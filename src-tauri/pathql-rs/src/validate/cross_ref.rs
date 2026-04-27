@@ -14,7 +14,7 @@ pub fn validate_cross_refs(
     if !cfg.enforce_cross_refs {
         return;
     }
-    for ((ns, name), def) in registry.iter() {
+    for ((ns, name), def) in registry.iter_dsl() {
         let fqn = super::fqn(ns, name);
         for (field, refer) in collect_refs(def) {
             if registry.resolve(ns, &refer).is_none() {

@@ -17,7 +17,7 @@ pub fn validate_resolve(
     registry: &crate::ProviderRegistry,
     errors: &mut Vec<ValidateError>,
 ) {
-    for ((ns, name), def) in registry.iter() {
+    for ((ns, name), def) in registry.iter_dsl() {
         let Some(resolve) = &def.resolve else {
             continue;
         };

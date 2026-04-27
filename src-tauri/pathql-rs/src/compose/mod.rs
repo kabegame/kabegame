@@ -1,8 +1,4 @@
-//! ProviderQuery 结构化中间表示 + ContribQuery 累积。
-//!
-//! 本模块只做结构化累积; SQL 渲染 + 模板求值在 Phase 5 (compose/build.rs)。
-
-#![cfg(feature = "compose")]
+//! ProviderQuery 结构化中间表示 + ContribQuery 累积 + SQL 渲染。
 
 pub mod aliases;
 pub mod build;
@@ -16,4 +12,4 @@ pub use build::BuildError;
 pub use fold::{fold_contrib, FoldError};
 pub use order::OrderState;
 pub use query::{FieldFrag, JoinFrag, ProviderQuery};
-pub use render::{render_template_sql, render_to_owned, RenderError};
+pub use render::{render_template_sql, render_template_to_string, render_to_owned, RenderError};

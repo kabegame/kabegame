@@ -7,7 +7,7 @@ pub fn validate_simple(
     cfg: &ValidateConfig,
     errors: &mut Vec<ValidateError>,
 ) {
-    for ((ns, name), def) in registry.iter() {
+    for ((ns, name), def) in registry.iter_dsl() {
         names::validate_names(ns, name, def, errors);
         query_refs::validate_query_refs(ns, name, def, errors);
         dynamic::validate_dynamic(ns, name, def, cfg, errors);

@@ -6,7 +6,7 @@
 //! Delegate query 节点不参与 fold（路径重定向，由 Phase 6 ProviderRuntime 处理）。
 //! 本测试只对 ContribQuery 节点做 fold_contrib，对结果 ProviderQuery 字段做 snapshot 校验。
 
-#![cfg(all(feature = "json5", feature = "compose"))]
+#![cfg(feature = "json5")]
 
 use std::path::PathBuf;
 

@@ -3,7 +3,7 @@
 //! 路径：gallery_route → gallery_paginate_router → query_page_provider。
 //! Delegate 节点 (gallery_all_router, gallery_page_router) 跳过 (Phase 6 ProviderRuntime 处理)。
 
-#![cfg(all(feature = "json5", feature = "compose", feature = "sqlite"))]
+#![cfg(all(feature = "json5", feature = "sqlite"))]
 
 use std::path::PathBuf;
 

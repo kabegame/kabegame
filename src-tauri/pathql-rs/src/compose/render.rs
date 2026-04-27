@@ -5,8 +5,6 @@
 //! - **bind 占位**: `${properties.X}` / `${capture[N]}` / `${data_var.col}` /
 //!   `${child_var.field}` → 替换为 `?` + push `TemplateValue` 到 params
 
-#![cfg(feature = "compose")]
-
 use thiserror::Error;
 
 use crate::compose::aliases::AliasTable;
@@ -76,6 +74,47 @@ pub fn render_to_owned(
     let mut params = Vec::new();
     render_template_sql(template, ctx, aliases, &mut sql, &mut params)?;
     Ok((sql, params))
+}
+
+/// 渲染模板为纯字符串 (无 SQL `?` 占位; 把 TemplateValue 转为字面字符串拼接)。
+/// 用于 key 模板、note 模板、object 形态 meta 模板等"纯字符串拼装"场景。
+///
+/// `${ref:X}` / `${composed}` 在此模式下视作错误 (idents/SQL 子查询不该出现在
+/// 纯字符串模板里)。
+pub fn render_template_to_string(
+    template: &str,
+    ctx: &TemplateContext,
+) -> Result<String, RenderError> {
+    use crate::template::parse::{parse, Segment, VarRef};
+    let ast = parse(template)?;
+    let mut out = String::new();
+    for seg in &ast.segments {
+        match seg {
+            Segment::Text(t) => out.push_str(t),
+            Segment::Var(VarRef::Method { name, arg }) if name == "ref" => {
+                return Err(RenderError::UnknownRef(arg.clone()));
+            }
+            Segment::Var(VarRef::Bare { ns }) if ns == "composed" => {
+                return Err(RenderError::MissingComposed);
+            }
+            Segment::Var(other) => {
+                let v = crate::template::eval::evaluate_var(other, ctx)?;
+                out.push_str(&template_value_to_string(&v));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn template_value_to_string(v: &TemplateValue) -> String {
+    match v {
+        TemplateValue::Null => String::new(),
+        TemplateValue::Bool(b) => b.to_string(),
+        TemplateValue::Int(i) => i.to_string(),
+        TemplateValue::Real(r) => r.to_string(),
+        TemplateValue::Text(s) => s.clone(),
+        TemplateValue::Json(j) => j.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -216,5 +255,46 @@ mod tests {
         .unwrap();
         assert_eq!(sql, "prefix ?");
         assert_eq!(params, vec![TemplateValue::Int(1), TemplateValue::Int(2)]);
+    }
+
+    // ===== render_template_to_string =====
+
+    #[test]
+    fn to_string_pure_text() {
+        let s = render_template_to_string("hello", &empty_ctx()).unwrap();
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn to_string_property_int() {
+        let ctx = ctx_with_props(&[("page", TemplateValue::Int(42))]);
+        let s = render_template_to_string("page=${properties.page}", &ctx).unwrap();
+        assert_eq!(s, "page=42");
+    }
+
+    #[test]
+    fn to_string_property_text() {
+        let ctx = ctx_with_props(&[("name", TemplateValue::Text("foo".into()))]);
+        let s = render_template_to_string("hi ${properties.name}!", &ctx).unwrap();
+        assert_eq!(s, "hi foo!");
+    }
+
+    #[test]
+    fn to_string_capture() {
+        let ctx = TemplateContext::default().with_capture(vec!["full".into(), "100".into()]);
+        let s = render_template_to_string("size=${capture[1]}", &ctx).unwrap();
+        assert_eq!(s, "size=100");
+    }
+
+    #[test]
+    fn to_string_ref_method_errors() {
+        let r = render_template_to_string("${ref:t}.id", &empty_ctx());
+        assert!(matches!(r, Err(RenderError::UnknownRef(_))));
+    }
+
+    #[test]
+    fn to_string_composed_errors() {
+        let r = render_template_to_string("${composed}", &empty_ctx());
+        assert!(matches!(r, Err(RenderError::MissingComposed)));
     }
 }
