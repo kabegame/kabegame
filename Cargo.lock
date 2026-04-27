@@ -3986,8 +3986,11 @@ name = "pathql-rs"
 version = "4.0.1"
 dependencies = [
  "json5",
+ "regex",
+ "regex-automata",
  "serde",
  "serde_json",
+ "sqlparser",
  "thiserror 1.0.69",
 ]
 
@@ -5678,6 +5681,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d96d2d1d716fb500937168cc09353ffdc7a012be8475ac7308e1bdf0e3923300"
 dependencies = [
  "lock_api",
+]
+
+[[package]]
+name = "sqlparser"
+version = "0.51.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fe11944a61da0da3f592e19a45ebe5ab92dc14a779907ff1f08fbb797bfefc7"
+dependencies = [
+ "log",
 ]
 
 [[package]]
