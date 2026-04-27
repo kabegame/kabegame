@@ -5,3 +5,6 @@ pub mod json5;
 
 #[cfg(feature = "json5")]
 pub use json5::Json5Loader;
+
+#[cfg(feature = "sqlite")]
+pub mod sqlite;

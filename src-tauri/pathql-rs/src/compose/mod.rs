@@ -5,11 +5,15 @@
 #![cfg(feature = "compose")]
 
 pub mod aliases;
+pub mod build;
 pub mod fold;
 pub mod order;
 pub mod query;
+pub mod render;
 
 pub use aliases::{AliasTable, AllocatedAlias, ResolvedAlias};
+pub use build::BuildError;
 pub use fold::{fold_contrib, FoldError};
 pub use order::OrderState;
 pub use query::{FieldFrag, JoinFrag, ProviderQuery};
+pub use render::{render_template_sql, render_to_owned, RenderError};

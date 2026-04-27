@@ -3988,6 +3988,7 @@ dependencies = [
  "json5",
  "regex",
  "regex-automata",
+ "rusqlite",
  "serde",
  "serde_json",
  "sqlparser",
