@@ -15,12 +15,30 @@ impl OrderState {
         Self::default()
     }
 
-    /// 添加 (field, direction)：若已存在同名 field，覆盖方向；否则追加。
+    /// 添加 (field, direction)，行为视 dir 而定：
+    /// - `Asc` / `Desc`：若已存在同名 field 则覆盖方向；否则追加。
+    /// - `Revert`：fold 期立即解析 — 若已存在则翻转 (Asc↔Desc, 已有 Revert 翻为 Asc)；
+    ///   若不存在则按默认 Asc 新增。Phase 5 渲染期假设 entries 中**不含** Revert。
     pub fn upsert(&mut self, field: String, dir: OrderDirection) {
-        if let Some(slot) = self.entries.iter_mut().find(|(f, _)| f == &field) {
-            slot.1 = dir;
-        } else {
-            self.entries.push((field, dir));
+        match dir {
+            OrderDirection::Asc | OrderDirection::Desc => {
+                if let Some(slot) = self.entries.iter_mut().find(|(f, _)| f == &field) {
+                    slot.1 = dir;
+                } else {
+                    self.entries.push((field, dir));
+                }
+            }
+            OrderDirection::Revert => {
+                if let Some(slot) = self.entries.iter_mut().find(|(f, _)| f == &field) {
+                    slot.1 = match slot.1 {
+                        OrderDirection::Asc => OrderDirection::Desc,
+                        OrderDirection::Desc => OrderDirection::Asc,
+                        OrderDirection::Revert => OrderDirection::Asc,
+                    };
+                } else {
+                    self.entries.push((field, OrderDirection::Asc));
+                }
+            }
         }
     }
 }
@@ -56,5 +74,28 @@ mod tests {
         let o = OrderState::new();
         assert!(o.global.is_none());
         assert!(o.entries.is_empty());
+    }
+
+    #[test]
+    fn upsert_revert_flips_existing_asc_to_desc() {
+        let mut o = OrderState::new();
+        o.upsert("a".into(), OrderDirection::Asc);
+        o.upsert("a".into(), OrderDirection::Revert);
+        assert_eq!(o.entries[0], ("a".into(), OrderDirection::Desc));
+    }
+
+    #[test]
+    fn upsert_revert_flips_existing_desc_to_asc() {
+        let mut o = OrderState::new();
+        o.upsert("a".into(), OrderDirection::Desc);
+        o.upsert("a".into(), OrderDirection::Revert);
+        assert_eq!(o.entries[0], ("a".into(), OrderDirection::Asc));
+    }
+
+    #[test]
+    fn upsert_revert_on_missing_defaults_to_asc() {
+        let mut o = OrderState::new();
+        o.upsert("a".into(), OrderDirection::Revert);
+        assert_eq!(o.entries[0], ("a".into(), OrderDirection::Asc));
     }
 }
