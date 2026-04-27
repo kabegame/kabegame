@@ -2,17 +2,17 @@
 name = "pathql-rs"
 edition = { workspace = true }
 version = { workspace = true }
-description = "Path-folding query DSL — AST + Loader 抽象（格式无关）"
+description = "Path-folding query DSL — AST + Loader 抽象（含 json5 适配器 feature）"
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+json5 = { workspace = true, optional = true }
 
 [features]
 default = []
-# 适配器 feature 占位；实现见 Phase 2
-json5 = []
+json5 = ["dep:json5"]
 
 [dev-dependencies]
 serde_json = { workspace = true }

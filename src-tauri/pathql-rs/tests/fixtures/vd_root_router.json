@@ -1,9 +1,0 @@
-{
-    "$schema": "../schema.json5",
-    "namespace": "kabegame",
-    "name": "vd_root_router",
-    "list": {
-        "i18n-zh_CN": { "provider": "vd_zh_CN_root_router" },
-        "i18n-en_US": { "provider": "vd_en_US_root_router" }
-    }
-}
