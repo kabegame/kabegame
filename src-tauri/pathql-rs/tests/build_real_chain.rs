@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use pathql_rs::adapters::sqlite::params_for;
+use pathql_rs::drivers::sqlite::params_for;
 use pathql_rs::ast::{Namespace, ProviderName, Query};
 use pathql_rs::compose::{fold_contrib, ProviderQuery};
 use pathql_rs::template::eval::{TemplateContext, TemplateValue};
