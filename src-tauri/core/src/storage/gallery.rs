@@ -651,66 +651,80 @@ impl Storage {
         Ok(groups)
     }
 
-    /// 获取符合条件的图片总数（用于 CommonProvider）
-    pub fn get_images_count_by_query(&self, query: &ImageQuery) -> Result<usize, String> {
-        use crate::storage::HIDDEN_ALBUM_ID;
+    /// 获取符合条件的图片总数（用于 CommonProvider）。
+    ///
+    /// 6b 起：query 是 pathql-rs 的 `ProviderQuery`，由 `build_sql` 产 SQL；
+    /// 用 `SELECT COUNT(*) FROM (<inner>) AS sub` wrapper 数行。
+    pub fn get_images_count_by_query(
+        &self,
+        query: &pathql_rs::compose::ProviderQuery,
+    ) -> Result<usize, String> {
+        use pathql_rs::drivers::sqlite::params_for;
+        use pathql_rs::template::eval::TemplateContext;
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let ctx = TemplateContext::default();
+        let (inner_sql, inner_values) = query
+            .build_sql(&ctx)
+            .map_err(|e| format!("build_sql: {}", e))?;
 
-        let (decorator, built_params) = query.build_count_sql();
-        // ai_hid 始终注入：HideProvider 的 WHERE 引用此别名做过滤。
-        let sql = format!(
-            "SELECT COUNT(*) FROM images LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'{}",
-            HIDDEN_ALBUM_ID, decorator
-        );
-
-        let params: Vec<&dyn ToSql> = built_params.iter().map(|p| p as &dyn ToSql).collect();
+        let sql = format!("SELECT COUNT(*) FROM ({}) AS sub", inner_sql);
+        let params = params_for(&inner_values);
 
         let count: i64 = conn
-            .query_row(&sql, params_from_iter(params.iter().copied()), |row| {
-                row.get(0)
-            })
+            .query_row(
+                &sql,
+                rusqlite::params_from_iter(params.iter()),
+                |row| row.get(0),
+            )
             .map_err(|e| format!("Failed to count images: {} (SQL: {})", e, sql))?;
         Ok(count as usize)
     }
 
-    /// 获取符合条件的图片条目（分页，用于 CommonProvider）
+    /// 获取符合条件的图片条目（分页，用于 CommonProvider）。
+    ///
+    /// 6b 起：query 是 `ProviderQuery`；offset/limit 由调用方在 query 上设置。
+    /// 内层 SQL 用 `images.*` 投影避免 JOIN 列冲突。
     pub fn get_images_fs_entries_by_query(
         &self,
-        query: &ImageQuery,
-        offset: usize,
-        limit: usize,
+        query: &pathql_rs::compose::ProviderQuery,
     ) -> Result<Vec<GalleryImageFsEntry>, String> {
+        use pathql_rs::ast::JoinKind;
+        use pathql_rs::drivers::sqlite::params_for;
+        use pathql_rs::template::eval::TemplateContext;
+
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let (decorator, built_params) = query.build_sql();
-        // ai_hid 始终注入：HideProvider 的 WHERE 引用此别名做过滤。
+        // 强制 SELECT images.* (避免 SELECT * 在 JOIN 后列名歧义)
+        let mut q = query.clone();
+        if q.fields.is_empty() {
+            q = q.with_field_raw("images.*", None, &[]);
+        }
+        let _ = JoinKind::Inner; // imports keep tidy
+
+        let ctx = TemplateContext::default();
+        let (inner_sql, inner_values) = q
+            .build_sql(&ctx)
+            .map_err(|e| format!("build_sql: {}", e))?;
+
         let sql = format!(
             "SELECT
-                CAST(images.id AS TEXT),
-                images.local_path,
-                images.thumbnail_path,
-                images.crawled_at as gallery_ts
-             FROM images LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'{} LIMIT ? OFFSET ?",
-            crate::storage::HIDDEN_ALBUM_ID, decorator
+                CAST(sub.id AS TEXT),
+                sub.local_path,
+                sub.thumbnail_path,
+                sub.crawled_at as gallery_ts
+             FROM ({}) sub",
+            inner_sql
         );
 
-        // 参数顺序：decorator params -> limit -> offset
-        let mut params: Vec<Box<dyn ToSql>> = built_params
-            .iter()
-            .map(|p| Box::new(p.clone()) as Box<dyn ToSql>)
-            .collect();
-        params.push(Box::new(limit as i64));
-        params.push(Box::new(offset as i64));
-
-        let params_ref: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let params = params_for(&inner_values);
 
         let mut stmt = conn
             .prepare(&sql)
             .map_err(|e| format!("Failed to prepare query: {} (SQL: {})", e, sql))?;
 
         let rows = stmt
-            .query_map(params_from_iter(params_ref.iter().copied()), |row| {
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
                 let id: String = row.get(0)?;
                 let local_path: String = row.get(1)?;
                 let thumb_path: String = row.get(2)?;
@@ -788,66 +802,70 @@ impl Storage {
         Ok(None)
     }
 
-    /// 获取符合条件的图片信息（分页，给 app-main 画廊 Provider 浏览复用）
+    /// 获取符合条件的图片信息（分页，给 app-main 画廊 Provider 浏览复用）。
+    ///
+    /// 6b 起：query 是 `ProviderQuery`；offset/limit 由调用方在 query 上设置。
+    /// 内层 SQL 用 `images.*` 投影避免 JOIN 列冲突；外层 wrapper 加 fav_ai / ai_hid 投影 is_favorite / is_hidden。
     ///
     /// 注意：这里不做本地文件 exists 检查（性能考虑），`local_exists` 统一置为 true。
     /// 为减少翻页数据量，**不**查询 `images.metadata` 列；详情区通过 `get_image_metadata` 按需加载。
     pub fn get_images_info_range_by_query(
         &self,
-        query: &ImageQuery,
-        offset: usize,
-        limit: usize,
+        query: &pathql_rs::compose::ProviderQuery,
     ) -> Result<Vec<crate::storage::ImageInfo>, String> {
         use crate::storage::{FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
+        use pathql_rs::drivers::sqlite::params_for;
+        use pathql_rs::template::eval::TemplateContext;
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let (decorator, built_params) = query.build_sql();
-        // 参数顺序：decorator params -> limit -> offset
-        let mut params: Vec<Box<dyn ToSql>> = built_params
-            .iter()
-            .map(|p| Box::new(p.clone()) as Box<dyn ToSql>)
-            .collect();
-        params.push(Box::new(limit as i64));
-        params.push(Box::new(offset as i64));
-        let params_ref: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        // 强制 SELECT images.* 在 inner query (避免 JOIN 后列名歧义)
+        let mut q = query.clone();
+        if q.fields.is_empty() {
+            q = q.with_field_raw("images.*", None, &[]);
+        }
 
-        // 为避免与 query 的 album_images/ai 冲突，favorites/hidden join 都用独立 alias：fav_ai / ai_hid。
-        // ai_hid 始终注入：为 ImageInfo.is_hidden 投影服务，HideProvider 复用同一别名做 WHERE 过滤。
+        let ctx = TemplateContext::default();
+        let (inner_sql, inner_values) = q
+            .build_sql(&ctx)
+            .map_err(|e| format!("build_sql: {}", e))?;
+
+        // outer wrapper: 把 inner 当 sub-query, 再 LEFT JOIN fav_ai / ai_hid 投影 is_favorite / is_hidden
         let sql = format!(
             "SELECT
-                CAST(images.id AS TEXT) as id,
-                images.url,
-                images.local_path,
-                images.plugin_id,
-                images.task_id,
-                images.crawled_at,
-                images.metadata_id,
-                COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
-                images.hash,
+                CAST(sub.id AS TEXT) as id,
+                sub.url,
+                sub.local_path,
+                sub.plugin_id,
+                sub.task_id,
+                sub.crawled_at,
+                sub.metadata_id,
+                COALESCE(NULLIF(sub.thumbnail_path, ''), sub.local_path) as thumbnail_path,
+                sub.hash,
                 CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                 CASE WHEN ai_hid.image_id IS NOT NULL THEN 1 ELSE 0 END as is_hidden,
-                images.width,
-                images.height,
-                images.display_name,
-                COALESCE(images.type, 'image') as media_type,
-                images.last_set_wallpaper_at,
-                images.size
-             FROM images
+                sub.width,
+                sub.height,
+                sub.display_name,
+                COALESCE(sub.type, 'image') as media_type,
+                sub.last_set_wallpaper_at,
+                sub.size
+             FROM ({}) sub
              LEFT JOIN album_images fav_ai
-               ON images.id = fav_ai.image_id AND fav_ai.album_id = '{}'
+               ON sub.id = fav_ai.image_id AND fav_ai.album_id = '{}'
              LEFT JOIN album_images ai_hid
-               ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
-             {} LIMIT ? OFFSET ?",
-            FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID, decorator
+               ON sub.id = ai_hid.image_id AND ai_hid.album_id = '{}'",
+            inner_sql, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID
         );
+
+        let params = params_for(&inner_values);
 
         let mut stmt = conn
             .prepare(&sql)
             .map_err(|e| format!("Failed to prepare query: {} (SQL: {})", e, sql))?;
 
         let rows = stmt
-            .query_map(params_from_iter(params_ref.iter().copied()), |row| {
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
                 let last_ts: Option<i64> = row.get(15)?;
                 let last_set_wallpaper_at = last_ts.filter(|&t| t >= 0).map(|t| t as u64);
                 Ok(crate::storage::ImageInfo {
