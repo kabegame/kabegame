@@ -1,18 +1,25 @@
-//! ProviderRuntime 启动期初始化（OnceLock 单例）。
+//! ProviderRuntime 启动期初始化 (OnceLock 单例)。
 //!
-//! Phase 6b: 仅注册 33 个硬编码 provider，不接 DSL（Phase 6c 启用 include_dir）。
+//! 6c 起: registry 同时持有
+//! - 程序化 provider (`programmatic::register_all_hardcoded`, ~31 个非 DSL 名)
+//! - DSL provider (`dsl_loader::load_dsl_into`, 9 个 .json5)
+//!
+//! root 由 DslProvider 包装 root_provider 的 ProviderDef 担任。运行期 SqlExecutor
+//! 通过 `Storage::global().db` 注入, 让 DSL 动态 SQL list 能跑真实 sqlite。
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use pathql_rs::ast::{Namespace, ProviderName};
+use pathql_rs::provider::DslProvider;
 use pathql_rs::{Provider, ProviderRegistry, ProviderRuntime};
 
+use super::dsl_loader::{load_dsl_into, validate_dsl};
 use super::programmatic::register_all_hardcoded;
+use super::sql_executor::make_sql_executor;
 
 static RUNTIME: OnceLock<Arc<ProviderRuntime>> = OnceLock::new();
 
-/// 全局 ProviderRuntime 引用。首次调用时初始化（注册 + 实例化 root）。
+/// 全局 ProviderRuntime 引用。首次调用时初始化 (注册 + 实例化 root + 注入 executor)。
 pub fn provider_runtime() -> &'static Arc<ProviderRuntime> {
     RUNTIME.get_or_init(init_runtime)
 }
@@ -20,21 +27,16 @@ pub fn provider_runtime() -> &'static Arc<ProviderRuntime> {
 fn init_runtime() -> Arc<ProviderRuntime> {
     let mut registry = ProviderRegistry::new();
     register_all_hardcoded(&mut registry).expect("register_all_hardcoded failed");
+    let root_def = load_dsl_into(&mut registry);
+    validate_dsl(&registry);
+
     let registry = Arc::new(registry);
 
-    // 通过 lookup → factory 实例化 root_provider
-    let entry = registry
-        .lookup(
-            &Namespace("kabegame".into()),
-            &ProviderName("root_provider".into()),
-        )
-        .expect("root_provider not registered");
+    let root: Arc<dyn Provider> = Arc::new(DslProvider {
+        def: Arc::new(root_def),
+        properties: HashMap::new(),
+    });
 
-    let root: Arc<dyn Provider> = match entry {
-        pathql_rs::registry::RegistryEntry::Programmatic(factory) => factory(&HashMap::new())
-            .expect("root_provider factory failed"),
-        _ => panic!("root_provider must be programmatic in 6b"),
-    };
-
-    ProviderRuntime::new(registry, root)
+    let executor = make_sql_executor(crate::storage::Storage::global().db.clone());
+    ProviderRuntime::new_with_executor(registry, root, Some(executor))
 }

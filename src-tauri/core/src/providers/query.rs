@@ -145,9 +145,12 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
             let raw_note = rt
                 .note(&rt_path)
                 .map_err(|e| format!("note failed: {}", e))?;
+            let meta = rt
+                .meta(&rt_path)
+                .map_err(|e| format!("meta failed: {}", e))?;
             Ok(ProviderQueryTyped::Entry {
                 name: last,
-                meta: None,
+                meta,
                 note: parse_note(raw_note),
                 total,
             })
@@ -169,11 +172,14 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
             let raw_note = rt
                 .note(&rt_path)
                 .map_err(|e| format!("note failed: {}", e))?;
+            let meta = rt
+                .meta(&rt_path)
+                .map_err(|e| format!("meta failed: {}", e))?;
 
             Ok(ProviderQueryTyped::Listing {
                 entries,
                 total,
-                meta: None,
+                meta,
                 note: parse_note(raw_note),
             })
         }
