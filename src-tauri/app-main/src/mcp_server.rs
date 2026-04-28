@@ -2,7 +2,7 @@ use kabegame_core::{
     emitter::GlobalEmitter,
     plugin::{Plugin, PluginManager},
     providers::{
-        execute_provider_query, parse_provider_path, ProviderPathQuery, ProviderRuntime,
+        execute_provider_query, parse_provider_path, provider_runtime, ProviderPathQuery,
     },
     storage::Storage,
 };
@@ -528,57 +528,63 @@ impl ServerHandler for KabegameMcpServer {
                         )
                     })?,
                     ProviderPathQuery::List | ProviderPathQuery::ListWithMeta => {
-                        let rt = ProviderRuntime::global();
+                        let rt = provider_runtime();
+                        let path_for_runtime = if full.starts_with('/') {
+                            full.clone()
+                        } else {
+                            format!("/{}", full)
+                        };
                         let node = rt
-                            .resolve(&full)
+                            .resolve(&path_for_runtime)
                             .map_err(|e| {
                                 McpError::internal_error(
                                     format!("resolve error: {e}"),
-                                    Some(json!({ "path": path_part })),
-                                )
-                            })?
-                            .ok_or_else(|| {
-                                McpError::resource_not_found(
-                                    "path_not_found",
                                     Some(json!({ "path": path_part })),
                                 )
                             })?;
 
                         let children = if without == McpWithout::Children {
                             Vec::new()
-                        } else if mode == ProviderPathQuery::ListWithMeta {
-                            node.provider
-                                .list_children_with_meta(&node.composed)
-                                .map_err(|e| McpError::internal_error(e, None))?
                         } else {
-                            node.provider
-                                .list_children(&node.composed)
-                                .map_err(|e| McpError::internal_error(e, None))?
+                            rt.list(&path_for_runtime)
+                                .map_err(|e| McpError::internal_error(format!("list: {e}"), None))?
                         };
 
                         let images = if without == McpWithout::Images {
                             Vec::new()
                         } else {
-                            let composed_images = if node.composed.order_bys.is_empty() {
-                                node.composed.clone().with_order("images.id ASC")
+                            // 6b: 简化版 — 沿用 query.rs 的 fetch_images 启发式（limit > 0 → fetch；
+                            //                                     limit=0 / None → 不 fetch）
+                            use pathql_rs::ast::NumberOrTemplate;
+                            let lim_zero = matches!(node.composed.limit,
+                                Some(NumberOrTemplate::Number(n)) if n == 0.0);
+                            if lim_zero || node.composed.limit.is_none() {
+                                Vec::new()
                             } else {
-                                node.composed.clone()
-                            };
-                            node.provider
-                                .list_images(&composed_images)
-                                .map_err(|e| McpError::internal_error(e, None))?
+                                Storage::global()
+                                    .get_images_info_range_by_query(&node.composed)
+                                    .map_err(|e| McpError::internal_error(e, None))?
+                            }
                         };
 
                         let storage = Storage::global();
-                        let entries =
-                            kabegame_core::gallery::browse_from_provider(children, images)
-                                .map_err(|e| McpError::internal_error(e, None))?;
+                        let entries = kabegame_core::gallery::browse_from_provider_jsonmeta(
+                            children, images,
+                        )
+                        .map_err(|e| McpError::internal_error(e, None))?;
                         let entries_json = serde_json::to_value(&entries)
                             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-                        let meta = node.provider.get_meta();
-                        let note = node.provider.get_note().map(|(title, content)| {
-                            json!({ "title": title, "content": content })
+                        let raw_note = rt
+                            .note(&path_for_runtime)
+                            .map_err(|e| McpError::internal_error(format!("note: {e}"), None))?;
+                        let note = raw_note.and_then(|s| {
+                            serde_json::from_str::<Value>(&s).ok().map(|v| {
+                                json!({
+                                    "title": v.get("title").cloned().unwrap_or(Value::Null),
+                                    "content": v.get("content").cloned().unwrap_or(Value::Null),
+                                })
+                            })
                         });
                         let total: Option<usize> =
                             storage.get_images_count_by_query(&node.composed).ok();
@@ -586,7 +592,7 @@ impl ServerHandler for KabegameMcpServer {
                         json!({
                             "entries": entries_json,
                             "total": total,
-                            "meta": meta,
+                            "meta": Value::Null,
                             "note": note,
                         })
                     }
