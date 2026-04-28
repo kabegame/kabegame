@@ -3,18 +3,33 @@
 //! 验证: DslProvider 通过注入的 SqlExecutor 跑动态 SQL list 项, 行 → 子节点;
 //! `resolve` 走动态反查命中。Delegate 动态项委托另一路径并枚举。
 
-#![cfg(feature = "sqlite")]
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use pathql_rs::ast::ProviderDef;
-use pathql_rs::drivers::sqlite::params_for;
 use pathql_rs::provider::{
-    ChildEntry, DslProvider, EngineError, Provider, ProviderContext, ProviderRuntime, SqlExecutor,
+    ChildEntry, ClosureExecutor, DslProvider, EngineError, Provider, ProviderContext,
+    ProviderRuntime, SqlDialect, SqlExecutor,
 };
+use pathql_rs::template::eval::TemplateValue;
 use pathql_rs::ProviderRegistry;
 use rusqlite::Connection;
+
+/// 6d: pathql-rs 不再附 driver 桥; 集成测试本地内联 TemplateValue → rusqlite::Value 转换。
+fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
+    use rusqlite::types::Value;
+    values
+        .iter()
+        .map(|v| match v {
+            TemplateValue::Null => Value::Null,
+            TemplateValue::Bool(b) => Value::Integer(if *b { 1 } else { 0 }),
+            TemplateValue::Int(i) => Value::Integer(*i),
+            TemplateValue::Real(r) => Value::Real(*r),
+            TemplateValue::Text(s) => Value::Text(s.clone()),
+            TemplateValue::Json(v) => Value::Text(v.to_string()),
+        })
+        .collect()
+}
 
 fn fixture_db() -> Arc<Mutex<Connection>> {
     let conn = Connection::open_in_memory().unwrap();
@@ -28,13 +43,13 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
     Arc::new(Mutex::new(conn))
 }
 
-fn make_executor(conn: Arc<Mutex<Connection>>) -> SqlExecutor {
-    Arc::new(move |sql: &str, params: &[pathql_rs::template::eval::TemplateValue]| {
+fn make_executor(conn: Arc<Mutex<Connection>>) -> Arc<dyn SqlExecutor> {
+    Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, move |sql: &str, params: &[TemplateValue]| {
         let conn = conn.lock().unwrap();
         let mut stmt = conn
             .prepare(sql)
             .map_err(|e| EngineError::FactoryFailed("sqlite".into(), "prepare".into(), e.to_string()))?;
-        let rusq_params = params_for(params);
+        let rusq_params = local_params_for(params);
         let col_names: Vec<String> = stmt
             .column_names()
             .into_iter()
@@ -60,11 +75,16 @@ fn make_executor(conn: Arc<Mutex<Connection>>) -> SqlExecutor {
             .map_err(|e| EngineError::FactoryFailed("sqlite".into(), "query".into(), e.to_string()))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| EngineError::FactoryFailed("sqlite".into(), "collect".into(), e.to_string()))
-    })
+    }))
 }
 
 fn empty_registry() -> Arc<ProviderRegistry> {
     Arc::new(ProviderRegistry::new())
+}
+
+/// 6d: 测试 nopop executor (供 ExecutorMissing 已删除后的"未注入"场景占位)。
+fn no_op_executor() -> Arc<dyn SqlExecutor> {
+    Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, |_sql, _params| Ok(Vec::new())))
 }
 
 #[test]
@@ -88,7 +108,7 @@ fn dynamic_sql_list_enumerates_rows() {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
-    let runtime = ProviderRuntime::new_with_executor(empty_registry(), root, Some(executor));
+    let runtime = ProviderRuntime::new(empty_registry(), root, executor);
 
     let children = runtime.list("/").unwrap();
     let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
@@ -108,24 +128,9 @@ fn dynamic_sql_list_enumerates_rows() {
     assert_eq!(labels, vec!["Plugin One", "Plugin Two", "Plugin Three"]);
 }
 
-#[test]
-fn dynamic_sql_executor_missing_returns_error() {
-    let def_json = r#"{
-        "namespace": "test",
-        "name": "no_exec",
-        "list": {
-            "${row.id}": {"sql": "SELECT id FROM plugins", "data_var": "row"}
-        }
-    }"#;
-    let def: ProviderDef = serde_json::from_str(def_json).unwrap();
-    let root: Arc<dyn Provider> = Arc::new(DslProvider {
-        def: Arc::new(def),
-        properties: HashMap::new(),
-    });
-    let runtime = ProviderRuntime::new(empty_registry(), root);
-    let err = runtime.list("/").unwrap_err();
-    assert!(matches!(err, EngineError::ExecutorMissing));
-}
+// 6d: ExecutorMissing 删除 — executor 改为 ProviderRuntime::new 的必填参数,
+// 该 case 已不可能在编译期发生 (构造 runtime 时就要传 executor)。
+// 此原 test (dynamic_sql_executor_missing_returns_error) 整个删除。
 
 #[test]
 fn dynamic_resolve_reverse_lookup_finds_match() {
@@ -179,7 +184,7 @@ fn dynamic_resolve_reverse_lookup_finds_match() {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
-    let runtime = ProviderRuntime::new_with_executor(Arc::new(reg), root, Some(executor));
+    let runtime = ProviderRuntime::new(Arc::new(reg), root, executor);
 
     // Reverse-lookup for /p2 should hit the dynamic SQL entry's row id=p2 → pinger provider.
     let resolved = runtime.resolve("/p2").unwrap();
@@ -288,7 +293,7 @@ fn dynamic_delegate_list_enumerates_target_children() {
         properties: HashMap::new(),
     });
     let root: Arc<dyn Provider> = Arc::new(Root { src, facade });
-    let runtime = ProviderRuntime::new_with_executor(empty_registry(), root, Some(executor));
+    let runtime = ProviderRuntime::new(empty_registry(), root, executor);
 
     let children = runtime.list("/facade").unwrap();
     let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();

@@ -11,7 +11,7 @@
 //!   再走 query.delegate ./__provider -> query_page_provider 贡献 OFFSET/LIMIT
 //! - `/vd/i18n-zh_CN/按画册` 中文路径段穿透 vd_root_router -> vd_zh_CN_root_router
 
-#![cfg(all(feature = "json5", feature = "sqlite"))]
+#![cfg(feature = "json5")]
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,13 +19,29 @@ use std::sync::{Arc, Mutex};
 
 use pathql_rs::ast::{Namespace, SimpleName};
 use pathql_rs::compose::ProviderQuery;
-use pathql_rs::drivers::sqlite::params_for;
 use pathql_rs::provider::{
-    ChildEntry, DslProvider, EngineError, Provider, ProviderContext, ProviderRuntime, SqlExecutor,
+    ChildEntry, ClosureExecutor, DslProvider, EngineError, Provider, ProviderContext,
+    ProviderRuntime, SqlDialect, SqlExecutor,
 };
 use pathql_rs::template::eval::TemplateValue;
 use pathql_rs::{Json5Loader, Loader, ProviderRegistry, Source};
 use rusqlite::Connection;
+
+/// 6d: 集成测试本地内联 TemplateValue → rusqlite::Value 转换。
+fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
+    use rusqlite::types::Value;
+    values
+        .iter()
+        .map(|v| match v {
+            TemplateValue::Null => Value::Null,
+            TemplateValue::Bool(b) => Value::Integer(if *b { 1 } else { 0 }),
+            TemplateValue::Int(i) => Value::Integer(*i),
+            TemplateValue::Real(r) => Value::Real(*r),
+            TemplateValue::Text(s) => Value::Text(s.clone()),
+            TemplateValue::Json(v) => Value::Text(v.to_string()),
+        })
+        .collect()
+}
 
 const PROVIDER_FILES: &[&str] = &[
     "root_provider.json",
@@ -84,8 +100,8 @@ fn rewrite_ceil_for_sqlite(sql: &str) -> String {
 
 /// 简化版 SqlExecutor: 把 page_size_provider 的 CEIL 重写为 sqlite 原生整数除法,
 /// 然后真实执行返回行。CEIL 出现一次 → 占位 ? 复制为二次, 因此 params 也复制 page_size。
-fn make_executor(conn: Arc<Mutex<Connection>>) -> SqlExecutor {
-    Arc::new(move |sql: &str, params: &[TemplateValue]| {
+fn make_executor(conn: Arc<Mutex<Connection>>) -> Arc<dyn SqlExecutor> {
+    Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, move |sql: &str, params: &[TemplateValue]| {
         let rewritten = rewrite_ceil_for_sqlite(sql);
         let effective_params: Vec<TemplateValue> = if rewritten == sql {
             params.to_vec()
@@ -100,7 +116,7 @@ fn make_executor(conn: Arc<Mutex<Connection>>) -> SqlExecutor {
         let mut stmt = conn
             .prepare(&rewritten)
             .map_err(|e| EngineError::FactoryFailed("sqlite".into(), "prepare".into(), e.to_string()))?;
-        let rusq_params = params_for(&effective_params);
+        let rusq_params = local_params_for(&effective_params);
         let col_names: Vec<String> = stmt
             .column_names()
             .into_iter()
@@ -126,7 +142,7 @@ fn make_executor(conn: Arc<Mutex<Connection>>) -> SqlExecutor {
             .map_err(|e| EngineError::FactoryFailed("sqlite".into(), "query".into(), e.to_string()))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| EngineError::FactoryFailed("sqlite".into(), "collect".into(), e.to_string()))
-    })
+    }))
 }
 
 /// "Stub" 程序化 provider: list 返回空, resolve 永远 None。注册给 gallery_route 中
@@ -206,7 +222,7 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         def: root_def.expect("root_provider not in PROVIDER_FILES"),
         properties: HashMap::new(),
     });
-    ProviderRuntime::new_with_executor(Arc::new(registry), root, Some(executor))
+    ProviderRuntime::new(Arc::new(registry), root, executor)
 }
 
 #[test]

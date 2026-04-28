@@ -7,7 +7,7 @@ version = { workspace = true }
 
 [dependencies]
 kabegame-i18n = { workspace = true }
-pathql-rs = { workspace = true, features = ["sqlite", "json5", "validate"] }
+pathql-rs = { workspace = true, features = ["json5", "validate"] }
 include_dir = { workspace = true }
 arc-swap = "1.7"
 async-trait = { workspace = true }
