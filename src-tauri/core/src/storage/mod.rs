@@ -14,6 +14,7 @@ pub mod plugin_sources;
 pub mod run_configs;
 pub mod surf_records;
 pub mod tasks;
+pub(crate) mod template_bridge;
 
 pub use albums::Album;
 pub use gallery::GalleryMediaTypeCounts;

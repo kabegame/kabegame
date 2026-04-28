@@ -10,12 +10,12 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use pathql_rs::provider::DslProvider;
+use pathql_rs::provider::{DslProvider, SqlExecutor};
 use pathql_rs::{Provider, ProviderRegistry, ProviderRuntime};
 
 use super::dsl_loader::{load_dsl_into, validate_dsl};
 use super::programmatic::register_all_hardcoded;
-use super::sql_executor::make_sql_executor;
+use super::sql_executor::KabegameSqlExecutor;
 
 static RUNTIME: OnceLock<Arc<ProviderRuntime>> = OnceLock::new();
 
@@ -37,6 +37,9 @@ fn init_runtime() -> Arc<ProviderRuntime> {
         properties: HashMap::new(),
     });
 
-    let executor = make_sql_executor(crate::storage::Storage::global().db.clone());
-    ProviderRuntime::new_with_executor(registry, root, Some(executor))
+    // 6d: executor 必填; ProviderRuntime::new 接 Arc<dyn SqlExecutor>。
+    let executor: Arc<dyn SqlExecutor> = Arc::new(KabegameSqlExecutor::new(
+        crate::storage::Storage::global().db.clone(),
+    ));
+    ProviderRuntime::new(registry, root, executor)
 }
