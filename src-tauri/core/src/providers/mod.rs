@@ -5,10 +5,12 @@
 //! - [`init`] — provider_runtime() 单例
 //! - [`query`] — Tauri/MCP IPC 边界（execute_provider_query / typed）
 
+pub mod dsl_loader;
 pub mod init;
 pub mod programmatic;
 pub mod provider;
 pub mod query;
+pub mod sql_executor;
 
 #[cfg(kabegame_mode = "standard")]
 pub(crate) mod vd_ops;
