@@ -2,8 +2,13 @@
     "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "gallery_all_router",
-    // 默认重定向到 100 大小、第 1 页
-    "query": { "delegate": "./x100x/1/" },
+    // 默认重定向到 100 大小、第 1 页 (6e: delegate 是 ProviderCall, 直接命中目标 provider)
+    "query": {
+        "delegate": {
+            "provider": "query_page_provider",
+            "properties": { "page_size": 100, "page_num": 1 }
+        }
+    },
     "list": {
         "desc": { "provider": "gallery_all_desc_router" }
         // x100x / x500x / x1000x 已合并入下方 resolve 正则, 不再单独列出静态项以避免碰撞

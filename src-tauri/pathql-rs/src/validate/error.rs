@@ -40,8 +40,6 @@ pub enum ValidateErrorKind {
     DynamicSqlProviderRef,
     #[error("reserved identifier `{0}` cannot be used as binding")]
     ReservedIdent(String),
-    #[error("path expression must start with `./` and not contain `..`")]
-    InvalidPathExpr,
     #[error("invalid namespace pattern: `{0}`")]
     InvalidNamespace(String),
     #[error("invalid name pattern: `{0}`")]
@@ -68,4 +66,6 @@ pub enum ValidateErrorKind {
     },
     #[error("provider reference `{0}` not found in registry (current_ns: `{1}`)")]
     UnresolvedProviderRef(String, String),
+    #[error("delegate cycle detected: {}", .0.join(" → "))]
+    DelegateCycle(Vec<String>),
 }

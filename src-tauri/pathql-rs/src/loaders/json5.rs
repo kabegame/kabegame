@@ -106,7 +106,7 @@ mod tests {
     "$schema": "../schema.json5",
     namespace: 'kabegame',
     name: "demo_router",
-    query: { delegate: "./x100x/" },
+    query: { delegate: { provider: "paginate_router" } },
     list: {
         "static_child": { provider: "child_router" },
     },

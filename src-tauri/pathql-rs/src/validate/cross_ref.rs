@@ -2,7 +2,7 @@
 
 use crate::ast::{
     DelegateProviderField, DynamicListEntry, ListEntry, Namespace, ProviderDef, ProviderInvocation,
-    ProviderName, SimpleName,
+    ProviderName, Query, SimpleName,
 };
 use crate::validate::{ValidateConfig, ValidateError, ValidateErrorKind};
 
@@ -31,6 +31,11 @@ pub fn validate_cross_refs(
 fn collect_refs(def: &ProviderDef) -> Vec<(String, ProviderName)> {
     let mut refs: Vec<(String, ProviderName)> = Vec::new();
 
+    // 6e: query.delegate 现在是 ProviderCall, 直接收集名字。
+    if let Some(Query::Delegate(d)) = &def.query {
+        refs.push(("query.delegate.provider".into(), d.delegate.provider.clone()));
+    }
+
     if let Some(list) = &def.list {
         for (key, entry) in &list.entries {
             match entry {
@@ -43,6 +48,12 @@ fn collect_refs(def: &ProviderDef) -> Vec<(String, ProviderName)> {
                     }
                 }
                 ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => {
+                    // 6e: delegate.provider 是数据源 ProviderCall
+                    refs.push((
+                        format!("list[`{}`].delegate.provider", key),
+                        e.delegate.provider.clone(),
+                    ));
+                    // 输出层 provider hint (Name 形态收集; ChildRef 跳过)
                     if let Some(DelegateProviderField::Name(n)) = &e.provider {
                         refs.push((format!("list[`{}`].provider", key), n.clone()));
                     }
@@ -153,25 +164,21 @@ mod tests {
     }
 
     #[test]
-    fn delegate_invocation_skipped() {
-        // ByDelegate references a path, not a registry name — runtime resolves it.
-        let list = List {
-            entries: vec![(
-                "k".into(),
-                ListEntry::Static(ProviderInvocation::ByDelegate(crate::ast::InvokeByDelegate {
-                    delegate: crate::ast::PathExpr("./missing".into()),
-                    properties: None,
-                    meta: None,
-                })),
-            )],
-        };
+    fn query_delegate_provider_collected() {
+        // 6e: query.delegate.provider 必须存在于 registry; 否则报 UnresolvedProviderRef
+        use crate::ast::{DelegateQuery, ProviderCall};
         let d = ProviderDef {
             schema: None,
             namespace: Some(Namespace("k".into())),
             name: SimpleName("p".into()),
             properties: None,
-            query: None,
-            list: Some(list),
+            query: Some(Query::Delegate(DelegateQuery {
+                delegate: ProviderCall {
+                    provider: ProviderName("missing".into()),
+                    properties: None,
+                },
+            })),
+            list: None,
             resolve: None,
             note: None,
         };
@@ -179,6 +186,8 @@ mod tests {
         r.register(d).unwrap();
         let mut errs = Vec::new();
         validate_cross_refs(&r, &cfg_strict(), &mut errs);
-        assert!(errs.is_empty());
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e.kind, ValidateErrorKind::UnresolvedProviderRef(_, _))));
     }
 }

@@ -241,7 +241,7 @@ fn dynamic_delegate_list_enumerates_target_children() {
         "name": "facade",
         "list": {
             "x-${out.name}": {
-                "delegate": "/src",
+                "delegate": {"provider": "src_inner"},
                 "child_var": "out",
                 "meta": {"upstream": "${out.meta.label}"}
             }
@@ -287,13 +287,23 @@ fn dynamic_delegate_list_enumerates_target_children() {
         }
     }
 
+    // 6e: delegate 是 ProviderCall, 通过 namespace=test 解析 src_inner provider name。
+    use pathql_rs::ast::{Namespace, SimpleName};
     let src: Arc<dyn Provider> = Arc::new(Source);
+    let mut reg = ProviderRegistry::new();
+    let src_for_factory = src.clone();
+    reg.register_provider(
+        Namespace("test".into()),
+        SimpleName("src_inner".into()),
+        move |_| Ok(src_for_factory.clone()),
+    )
+    .unwrap();
     let facade: Arc<dyn Provider> = Arc::new(DslProvider {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
     let root: Arc<dyn Provider> = Arc::new(Root { src, facade });
-    let runtime = ProviderRuntime::new(empty_registry(), root, executor);
+    let runtime = ProviderRuntime::new(Arc::new(reg), root, executor);
 
     let children = runtime.list("/facade").unwrap();
     let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();

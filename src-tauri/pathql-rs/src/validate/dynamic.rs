@@ -202,9 +202,17 @@ fn check_reserved(
 mod tests {
     use super::*;
     use crate::ast::{
-        DynamicDelegateEntry, DynamicSqlEntry, Identifier, List, PathExpr, ProviderName, SqlExpr,
+        DynamicDelegateEntry, DynamicSqlEntry, Identifier, List, ProviderCall, ProviderName,
+        SqlExpr,
     };
     use std::collections::HashMap;
+
+    fn pcall(name: &str) -> ProviderCall {
+        ProviderCall {
+            provider: ProviderName(name.into()),
+            properties: None,
+        }
+    }
 
     fn def_with_list(list: List) -> ProviderDef {
         ProviderDef {
@@ -299,7 +307,7 @@ mod tests {
             entries: vec![(
                 "${out.name}".into(),
                 ListEntry::Dynamic(DynamicListEntry::Delegate(DynamicDelegateEntry {
-                    delegate: PathExpr("./x".into()),
+                    delegate: pcall("x"),
                     child_var: Identifier("out".into()),
                     provider: None,
                     properties: Some(props),
@@ -361,7 +369,7 @@ mod tests {
             entries: vec![(
                 "${out.name}".into(),
                 ListEntry::Dynamic(DynamicListEntry::Delegate(DynamicDelegateEntry {
-                    delegate: PathExpr("./x".into()),
+                    delegate: pcall("x"),
                     child_var: Identifier("properties".into()), // reserved
                     provider: None,
                     properties: None,
@@ -386,7 +394,7 @@ mod tests {
             entries: vec![(
                 "${out.meta.page_num}".into(),
                 ListEntry::Dynamic(DynamicListEntry::Delegate(DynamicDelegateEntry {
-                    delegate: PathExpr("./__provider".into()),
+                    delegate: pcall("page_size_provider"),
                     child_var: Identifier("out".into()),
                     provider: None,
                     properties: Some(props),

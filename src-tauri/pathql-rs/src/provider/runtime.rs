@@ -76,34 +76,16 @@ impl ProviderRuntime {
         }
     }
 
-    /// 顶层路径解析。
+    /// 顶层路径解析 (6e: 移除 `resolve_with_initial`; 路径解析始终从 root cold-start
+    /// 或命中 longest-prefix cache 续 fold; delegate 不再绕过缓存)。
     pub fn resolve(&self, path: &str) -> Result<ResolvedNode, EngineError> {
-        self.resolve_with_initial(path, None)
-    }
-
-    /// 指定可选起点 ProviderQuery 的路径解析。
-    /// - `initial = None` 走标准路径 (含 longest-prefix cache lookup)
-    /// - `initial = Some(state)` 跳过缓存, 从给定 state cold-start fold (DslProvider DelegateQuery 用)
-    pub fn resolve_with_initial(
-        &self,
-        path: &str,
-        initial: Option<ProviderQuery>,
-    ) -> Result<ResolvedNode, EngineError> {
         let segments = self.normalize_path(path);
         let ctx = self.make_ctx();
-        let initial_provided = initial.is_some();
 
-        // === Longest-prefix cache lookup ===
-        // 仅 initial == None 时启用; 否则强制 cold start。
-        let (start_idx, mut current, mut composed) = match initial {
-            None => self.find_longest_cached_prefix(&segments, &ctx),
-            Some(q) => {
-                let q = self.root.apply_query(q, &ctx);
-                (0usize, self.root.clone(), q)
-            }
-        };
+        let (start_idx, mut current, mut composed) =
+            self.find_longest_cached_prefix(&segments, &ctx);
 
-        // === 早退: 完整路径已缓存 ===
+        // 早退: 完整路径已缓存
         if start_idx == segments.len() {
             return Ok(ResolvedNode {
                 provider: current,
@@ -111,7 +93,7 @@ impl ProviderRuntime {
             });
         }
 
-        // === Resume / cold-start: 从 start_idx 续 fold 剩余段 ===
+        // Resume / cold-start: 从 start_idx 续 fold 剩余段
         let mut path_so_far = build_path_key(&segments[..start_idx]);
         for seg in &segments[start_idx..] {
             path_so_far.push('/');
@@ -121,8 +103,8 @@ impl ProviderRuntime {
                 .ok_or_else(|| EngineError::PathNotFound(path_so_far.clone()))?;
             composed = next.apply_query(composed, &ctx);
             current = next;
-            // 缓存: 命中非 Empty 且非 cold-start-from-initial → 写入; 否则跳过。
-            if !current.is_empty() && !initial_provided {
+            // 缓存命中非 Empty 项写入; Empty 占位跳过。
+            if !current.is_empty() {
                 self.cache.lock().unwrap().insert(
                     path_so_far.clone(),
                     CachedNode {
