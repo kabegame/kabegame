@@ -3041,6 +3041,7 @@ dependencies = [
  "fuser",
  "futures-util",
  "image 0.24.9",
+ "include_dir",
  "infer",
  "kabegame-i18n",
  "libc",
