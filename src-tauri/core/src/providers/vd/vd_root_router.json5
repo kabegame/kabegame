@@ -1,0 +1,11 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_root_router",
+    // i18n 分发层: 主机读 locale 后拼路径 /vd/i18n-<locale>/<...> 进入对应翻译树
+    // 详见 cocs/provider-dsl/RULES.md §11.1
+    "list": {
+        "i18n-zh_CN": { "provider": "vd_zh_CN_root_router" },
+        "i18n-en_US": { "provider": "vd_en_US_root_router" }
+    }
+}

@@ -1,0 +1,22 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_page_router",
+    "properties": {
+        "page_size": { "type": "number", "default": 1, "optional": false },
+        "page_num":  { "type": "number", "default": 1, "optional": false }
+    },
+
+    // 委托内部私有路径 __provider, 由 query_page_provider 实际贡献 OFFSET/LIMIT
+    "query": { "delegate": "./__provider" },
+
+    "resolve": {
+        "__provider": {
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": "${properties.page_size}",
+                "page_num":  "${properties.page_num}"
+            }
+        }
+    }
+}

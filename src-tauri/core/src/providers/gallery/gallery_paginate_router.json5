@@ -1,0 +1,34 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_paginate_router",
+    // 容器节点: 自身不列图片
+    "query": { "limit": 0 },
+    "properties": {
+        "page_size": { "type": "number", "default": 1, "optional": false }
+    },
+
+    "list": {
+        // 数据源 = delegate ./__provider (page_size_provider 跑 SQL 算出页号集)
+        // 每个 child = { name: "<page>", meta: { page_num: <page> } }
+        "${out.meta.page_num}": {
+            "delegate": "./__provider",
+            "child_var": "out",
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": "${properties.page_size}",
+                "page_num":  "${out.meta.page_num}"
+            }
+        }
+    },
+
+    "resolve": {
+        // 私有路径: 内部跑 SQL 的 provider
+        "__provider": {
+            "provider": "page_size_provider",
+            "properties": {
+                "page_size": "${properties.page_size}"
+            }
+        }
+    }
+}
