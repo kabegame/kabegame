@@ -1,6 +1,5 @@
-//! Images 陦ｨ逶ｸ蜈ｳ謫堺ｽ・
+//! Images 表相关操作。
 use kabegame_core::ipc::ipc::IpcResponse;
-use kabegame_core::storage::gallery::ImageQuery;
 use kabegame_core::storage::image_events::{delete_images_with_events, toggle_image_favorite_with_event};
 use kabegame_core::storage::Storage;
 
@@ -56,16 +55,13 @@ pub async fn get_gallery_plugin_groups() -> IpcResponse {
     }
 }
 
-pub async fn get_images_count_by_query(query: &serde_json::Value) -> IpcResponse {
-    let storage = Storage::global();
-    let q = match serde_json::from_value::<ImageQuery>(query.clone()) {
-        Ok(v) => v,
-        Err(e) => return IpcResponse::err(format!("Invalid query: {}", e)),
-    };
-    match storage.get_images_count_by_query(&q) {
-        Ok(n) => IpcResponse::ok_with_data("ok", serde_json::to_value(n).unwrap_or_default()),
-        Err(e) => IpcResponse::err(e),
-    }
+/// 6b 弃用：旧 ImageQuery JSON wire 接口废弃；前端改用 provider path API
+/// (`browse_gallery_provider` / `query_provider`) 通过 path 表达过滤条件。
+pub async fn get_images_count_by_query(_query: &serde_json::Value) -> IpcResponse {
+    IpcResponse::err(
+        "get_images_count_by_query is deprecated since 6b; use provider path API instead"
+            .to_string(),
+    )
 }
 
 pub async fn delete_image(image_id: &str) -> IpcResponse {

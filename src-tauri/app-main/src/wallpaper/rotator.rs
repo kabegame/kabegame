@@ -1,9 +1,11 @@
 use super::manager::WallpaperController;
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::providers::ProviderRuntime;
+use kabegame_core::providers::provider_runtime;
 use kabegame_core::settings::Settings;
-use kabegame_core::storage::gallery::ImageQuery;
 use kabegame_core::storage::{ImageInfo, Storage};
+use pathql_rs::ast::{NumberOrTemplate, OrderDirection, SqlExpr};
+use pathql_rs::compose::ProviderQuery;
+use pathql_rs::template::eval::TemplateValue;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -36,43 +38,53 @@ pub(crate) fn next_sequential_gallery_images(
     limit: usize,
 ) -> Result<Vec<ImageInfo>, String> {
     let storage = Storage::global();
+    let make_q = |with_where_id: Option<&str>| -> ProviderQuery {
+        let mut q = ProviderQuery::new();
+        q.from = Some(SqlExpr("images".into()));
+        q.order
+            .entries
+            .push(("images.id".into(), OrderDirection::Asc));
+        q.limit = Some(NumberOrTemplate::Number(limit as f64));
+        if let Some(id) = with_where_id {
+            q = q.with_where_raw(
+                "images.id > ?",
+                &[TemplateValue::Text(id.into())],
+            );
+        }
+        q
+    };
+
     if let Some(id) = current_id.filter(|s| !s.is_empty()) {
-        let q = ImageQuery::new()
-            .with_where("images.id > ?", vec![id.to_string()])
-            .with_order("images.id ASC");
-        let out = storage.get_images_info_range_by_query(&q, 0, limit)?;
+        let q = make_q(Some(id));
+        let out = storage.get_images_info_range_by_query(&q)?;
         if !out.is_empty() {
             return Ok(out);
         }
     }
-    // 无 current_id 或已到末尾：从最小 id 开始
-    let q = ImageQuery::new().with_order("images.id ASC");
-    storage.get_images_info_range_by_query(&q, 0, limit)
+    storage.get_images_info_range_by_query(&make_q(None))
 }
 
 /// 从 `gallery/all` 随机挑一页，返回该页的全部图片。
 /// 先 `list_dir` 拿到所有数字分页段，再随机选其一（含 `QueryPageProvider` 省略的"最后一页"）。
 pub(crate) fn random_gallery_page_images() -> Result<Vec<ImageInfo>, String> {
-    let rt = ProviderRuntime::global();
-    let children = rt.list_dir("gallery/all")?;
+    let rt = provider_runtime();
+    // 列 /gallery/all/x100x/ 拿到所有 page 数字段
+    let children = rt
+        .list("/gallery/all/x100x")
+        .map_err(|e| format!("list failed: {}", e))?;
     let page_names: Vec<String> = children
         .into_iter()
         .filter(|c| c.name.parse::<usize>().is_ok())
         .map(|c| c.name)
         .collect();
 
-    // QueryPageProvider.list_children 返回 1..=N-1；最后一页通过对根调 list_images 取到。
-    let total_buckets = page_names.len() + 1;
-    if total_buckets == 0 {
+    if page_names.is_empty() {
         return Ok(Vec::new());
     }
-    let idx = random_index(total_buckets);
-    let path = if idx == page_names.len() {
-        "gallery/all".to_string()
-    } else {
-        format!("gallery/all/{}", page_names[idx])
-    };
-    rt.list_images(&path)
+    let idx = random_index(page_names.len());
+    let path = format!("/gallery/all/x100x/{}", page_names[idx]);
+    let resolved = rt.resolve(&path).map_err(|e| format!("resolve: {}", e))?;
+    Storage::global().get_images_info_range_by_query(&resolved.composed)
 }
 
 // 轮播线程控制标志位

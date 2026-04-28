@@ -2,7 +2,7 @@ use std::sync::Arc;
 use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
     plugin::PluginManager,
-    providers::{ProviderCacheConfig, ProviderRuntime, Root},
+    providers::provider_runtime,
     scheduler::Scheduler,
     settings::Settings,
     storage::Storage,
@@ -96,11 +96,9 @@ pub fn init_globals() -> Result<(), String> {
     println!("  ✓ Auto scheduler initialized");
 
     {
-        let cfg = ProviderCacheConfig::default();
-        let root = Arc::new(Root);
-        if let Err(e) = ProviderRuntime::init_global(root, cfg) {
-            return Err(format!("ProviderRuntime init failed: {}", e));
-        }
+        // 6b 起：provider_runtime() 是惰性 OnceLock 单例，首次访问时注册所有
+        // 硬编码 provider；这里强制初始化以便启动期 fail-fast。
+        let _rt = provider_runtime();
     }
     println!("  ✓ ProviderRuntime initialized");
 

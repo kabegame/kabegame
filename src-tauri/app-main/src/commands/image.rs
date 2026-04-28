@@ -1,16 +1,18 @@
 // Image 相关命令
 
 use kabegame_core::providers::{
-    decode_provider_path_segments, execute_provider_query, ProviderRuntime,
+    decode_provider_path_segments, execute_provider_query, provider_runtime,
 };
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::image_events::{
     delete_images_with_events, toggle_image_favorite_with_event,
 };
-use kabegame_core::storage::{Storage, FAVORITE_ALBUM_ID};
-#[cfg(kabegame_mode = "standard")]
+use kabegame_core::storage::Storage;
+#[cfg(all(kabegame_mode = "standard", feature = "vd-legacy"))]
+use kabegame_core::storage::FAVORITE_ALBUM_ID;
+#[cfg(all(kabegame_mode = "standard", feature = "vd-legacy"))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(kabegame_mode = "standard")]
+#[cfg(all(kabegame_mode = "standard", feature = "vd-legacy"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use tauri::AppHandle;
 
@@ -40,10 +42,18 @@ pub async fn browse_gallery_provider(path: String) -> Result<serde_json::Value, 
 pub async fn list_provider_children(path: String) -> Result<serde_json::Value, String> {
     let full = format!("gallery/{}", path.trim().trim_start_matches('/'));
     let full = decode_provider_path_segments(&full);
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let rt = ProviderRuntime::global();
-        let children = rt.list_children_with_totals(&full)?;
-        let entries = kabegame_core::gallery::browse_from_provider(children, Vec::new())?;
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let rt = provider_runtime();
+        // 6b 简化版：list_children_with_totals 暂未实现 per-child total（Phase 7 补）；
+        // 直接 list 子节点，total 字段为 None。
+        let path = if full.starts_with('/') {
+            full.clone()
+        } else {
+            format!("/{}", full)
+        };
+        let children = rt.list(&path).map_err(|e| format!("list failed: {}", e))?;
+        let entries =
+            kabegame_core::gallery::browse_from_provider_jsonmeta(children, Vec::new())?;
         serde_json::to_value(entries).map_err(|e| e.to_string())
     })
     .await
@@ -169,7 +179,7 @@ pub async fn toggle_image_favorite(
 ) -> Result<(), String> {
     toggle_image_favorite_with_event(&image_id, favorite)?;
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(all(kabegame_mode = "standard", feature = "vd-legacy"))]
     VirtualDriveService::global().notify_album_dir_changed(FAVORITE_ALBUM_ID);
     Ok(())
 }
