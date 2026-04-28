@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use pathql_rs::{Json5Loader, Loader, Namespace, ProviderName, ProviderRegistry, Source};
 
-/// 硬编码当前所有 provider 文件的相对路径（相对 core/src/providers/）。
+/// 硬编码当前所有 provider 文件的相对路径（相对 core/src/providers/dsl/）。
 /// 新增 provider 时同步此列表。
 const PROVIDER_FILES: &[&str] = &[
     "root_provider.json",
@@ -31,6 +31,7 @@ fn providers_dir() -> PathBuf {
         .join("core")
         .join("src")
         .join("providers")
+        .join("dsl")
 }
 
 fn build_registry() -> ProviderRegistry {

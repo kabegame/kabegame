@@ -45,6 +45,7 @@ fn providers_dir() -> PathBuf {
         .join("core")
         .join("src")
         .join("providers")
+        .join("dsl")
 }
 
 fn fixture_db() -> Arc<Mutex<Connection>> {

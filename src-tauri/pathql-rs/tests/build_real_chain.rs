@@ -30,7 +30,7 @@ fn build_full_registry() -> ProviderRegistry {
         .join("..")
         .join("core")
         .join("src")
-        .join("providers");
+        .join("providers").join("dsl");
     let loader = Json5Loader;
     let mut registry = ProviderRegistry::new();
     for rel in PROVIDER_FILES {
