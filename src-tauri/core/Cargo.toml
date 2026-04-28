@@ -94,3 +94,5 @@ default = ["ipc-client"]
 ipc-client = []
 ipc-server = []
 virtual-driver = ["dep:fuser", "dep:dokan"]
+# Phase 6b: 6c 通过 SqlExecutor 接入后再启用 VD module
+vd-legacy = []

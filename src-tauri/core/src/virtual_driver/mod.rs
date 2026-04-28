@@ -15,7 +15,7 @@ mod virtual_drive_io;
 mod virtual_drive_io_windows;
 #[cfg(all(kabegame_mode = "standard", target_os = "windows"))]
 mod windows;
-#[cfg(all(kabegame_mode = "standard", not(target_os = "windows")))]
+#[cfg(all(kabegame_mode = "standard", not(target_os = "windows"), feature = "virtual-driver"))]
 mod fuse;
 // 从 drive_service 模块导出 VirtualDriveService（根据平台自动选择实现）
 
