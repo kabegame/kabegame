@@ -1,9 +1,0 @@
-{
-    "$schema": "./schema.json5",
-    "namespace": "kabegame",
-    "name": "root_provider",
-    "list": {
-        "gallery": { "provider": "gallery_route" },
-        "vd": { "provider": "vd_root_router" }
-    }
-}
