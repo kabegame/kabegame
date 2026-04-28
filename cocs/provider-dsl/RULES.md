@@ -142,13 +142,12 @@ return ResolvedNode { provider, composed }
 
 ### 4.1 静态项（StaticListEntry）
 
-key 不含 `${...}`。值为 `ProviderInvocation` 三态之一：
+key 不含 `${...}`。值为 `ProviderInvocation` 二态之一（6e 起 ByDelegate variant 已删除）：
 
 - `InvokeByName`：`{provider: <name>, properties?, meta?}` — 显式构造命名 provider
-- `InvokeByDelegate`：`{delegate: <path>, properties?, meta?}` — 实例化目标路径终点 provider
 - `EmptyInvocation`：`{meta?}` — 占位，路径仍可被识别但本节点无 list/resolve 服务（缓存策略见 §4.4）
 
-**meta 字段语义**（三态共用，可选；详见 §4.5）：
+**meta 字段语义**（二态共用，可选；详见 §4.5）：
 
 ```json5
 {
@@ -189,7 +188,7 @@ key 不含 `${...}`。值为 `ProviderInvocation` 三态之一：
 
 ```json5
 "${plugin.name}": {
-    "delegate": "./__plugin_source",
+    "delegate": { "provider": "plugin_source_provider" },   // 6e: ProviderCall, 不是路径
     "child_var": "plugin",
     "provider": "${plugin.provider}",
     "properties": { "plugin_id": "${plugin.meta.id}" }
@@ -199,11 +198,12 @@ key 不含 `${...}`。值为 `ProviderInvocation` 三态之一：
 **加载期约束**：
 
 - key / properties 中所有 `${X.Y}` 的 X **必须等于** `child_var`
-- `provider` 字段三态：
+- `delegate` 字段（6e 起）：`ProviderCall { provider: <name>, properties? }` — **不是路径**。引擎按当前 namespace 链解析目标 provider name + 用 properties 实例化, 然后调它的 list_children 拿 children 序列。
+- 容器层 `provider` 字段三态：
   - 缺省 → 不挂 provider（路由壳常见）
   - 字面字符串 → 显式构造命名 provider
   - `${child_var.provider}` → 透传 delegate 返回的 child.provider 整体对象
-- delegate 路径返回的每个 ChildEntry `{name, provider?, meta?}` 通过 `${child_var.X}` 引用：
+- delegate 数据源每个 ChildEntry `{name, provider?, meta?}` 通过 `${child_var.X}` 引用：
   - `${child_var.name}` → child.name (string)
   - `${child_var.provider}` → child.provider (整体对象，仅 entry.provider 字段位置合法)
   - `${child_var.meta.<X>(.<sub>)*}` → child.meta.X (untyped JSON)
@@ -219,9 +219,9 @@ key 不含 `${...}`。值为 `ProviderInvocation` 三态之一：
 
 | 解析结果 | 是否缓存 |
 |---|---|
-| 静态 list key 字面命中 → `InvokeByName` / `InvokeByDelegate` | ✅ 缓存 |
+| 静态 list key 字面命中 → `InvokeByName` | ✅ 缓存 |
 | 动态 list 命中（SQL 行 / delegate child 匹配） | ✅ 缓存 |
-| `resolve` 正则命中 → `InvokeByName` / `InvokeByDelegate` | ✅ 缓存 |
+| `resolve` 正则命中 → `InvokeByName` | ✅ 缓存 |
 | 任意命中 → `EmptyInvocation`（路径合法但无 list 服务） | ❌ **不缓存**（解析本身已是 O(1)，无需占用 LRU 槽位） |
 | 路径段未命中（list / resolve / 动态全 miss） | ❌ 不缓存（直接返回 404 / 不存在） |
 
@@ -233,7 +233,7 @@ key 不含 `${...}`。值为 `ProviderInvocation` 三态之一：
 
 ### 4.5 meta 字段统一语义
 
-`meta` 字段（出现在 InvokeByName / InvokeByDelegate / EmptyInvocation /
+`meta` 字段（出现在 InvokeByName / EmptyInvocation /
 DynamicListEntry_Sql / DynamicListEntry_Delegate）的目标：**最终产出可序列化为 JSON 的值**填充 ChildEntry.meta。
 
 引擎按 meta 的 **JSON 类型** 决定行为：
@@ -340,7 +340,7 @@ DSL 内所有 `${...}` 表达式都是 **从某个上下文命名空间取值** 
 
 | 变量 | 合法位置 | 含义 |
 |---|---|---|
-| `${properties.<name>}` | 任何 TemplateExpr / SqlExpr / PathExpr / `note:` 字段 | 当前 provider 实例化属性值 |
+| `${properties.<name>}` | 任何 TemplateExpr / SqlExpr / `ProviderCall.properties` 值 / `note:` 字段 | 当前 provider 实例化属性值 |
 | `${capture[<N>]}` | 仅 Resolve regex 项内 | 正则捕获组（N≥0；0=全匹配） |
 | `${<child_var>(.<field>)*}` | 仅 DynamicListEntry_Delegate 内 | 由 child_var 绑定的 ChildEntry：`.name` / `.provider` / `.meta.X` |
 | `${<data_var>(.<col>)*}` | 仅 DynamicListEntry_Sql 内 | 由 data_var 绑定的 SQL 行：列值或子对象（如 `info` 列是 JSON） |
@@ -375,9 +375,9 @@ DSL 内所有 `${...}` 表达式都是 **从某个上下文命名空间取值** 
 
 ### 7.2 路径安全
 
-- PathExpr 加载期校验：起始 `./`、不含 `..` 段（运行期防御性二次检查）
+- 6e 起 delegate 字段不再是 PathExpr — provider 引用走 ProviderCall (name + properties), 引擎按 namespace 链解析
 - 所有路径段在 resolve 前 percent-decode（兼容前端 `encodeURIComponent`）
-- 不允许跨 root 引用（v0.7 不支持绝对路径）
+- 加载期 cross_ref 校验所有 ProviderCall.provider 必须存在; cycle 检测捕获 delegate 自指 / 多节点环
 
 ### 7.3 第三方插件信任边界
 
@@ -449,13 +449,14 @@ DSL 内所有 `${...}` 表达式都是 **从某个上下文命名空间取值** 
 - [ ] meta 字段（详见 §4.5）：
   - [ ] 字符串模式：判别为 SQL 时仅单条 SELECT；多语句 / DDL 拒绝
   - [ ] 对象 / 数组模式：递归校验内部模板变量作用域合法
-- [ ] ProviderInvocation.provider 引用解析（**可选，默认 off**——见 §13.4）：
+- [ ] ProviderInvocation.provider / ProviderCall.provider 引用解析（**可选，默认 off**——见 §13.4）：
   - 严格模式开启时按当前 namespace → 父 namespace → root 顺序查到目标 provider
   - 默认模式：未解析的引用允许在加载期通过；运行期才查 registry，未命中返回 path-not-found 而不是启动失败
   - 简单名 / 绝对名 `a.b.c.name` 均可
-- [ ] PathExpr 内：
-  - [ ] 不含 `..` 段
-  - [ ] 起始 `./`
+- [ ] **delegate 环检测**（6e 起；cross_ref 启用时）：
+  - 收集 `Query::Delegate.delegate.provider` + `DynamicDelegateEntry.delegate.provider` 全图边
+  - DFS 命中 back-edge → 报 `DelegateCycle(chain)` 错误
+  - 自指环 (A→A) 与多节点环 (A→B→A) 都会被捕获
 
 ---
 
@@ -513,7 +514,7 @@ ChildEntry {
 
 | 操作 | 对应 DSL 字段 | 输入 | 输出 | 语义 |
 |---|---|---|---|---|
-| `apply_query` | `query:` | 当前累积 ProviderQuery | 折叠后的 ProviderQuery | 把本 provider 对查询的贡献折叠入累积态（DelegateQuery 走路径重定向） |
+| `apply_query` | `query:` | 当前累积 ProviderQuery | 折叠后的 ProviderQuery | 把本 provider 对查询的贡献折叠入累积态（DelegateQuery 6e 起委托另一 provider 的 apply_query, 不再是路径重定向） |
 | `list` | `list:` | 当前累积 ProviderQuery | 子节点 ChildEntry 列表 | 枚举所有可见子节点（静态 + 动态项数据源驱动） |
 | `resolve` | `resolve:` | (段名, 当前累积 ProviderQuery) | 子 provider 引用或不存在 | 给定段名定位单个子 provider；语义按 §5.2 三步顺序（regex `resolve:` → 静态 list 字面 → 动态 list 反查） |
 | `get_note` | `note:` | 当前累积 ProviderQuery（隐式可选） | 字符串或空 | 返回 provider 自描述文本；**支持 `${properties.X}` / `${capture[N]}` 等模板插值**，求值规则同 §6（实现期渲染） |
