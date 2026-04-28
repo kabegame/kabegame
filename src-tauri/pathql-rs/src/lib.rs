@@ -1,6 +1,5 @@
 pub mod ast;
 pub mod compose;
-pub mod drivers;
 pub mod loader;
 pub mod loaders;
 pub mod provider;
@@ -13,8 +12,8 @@ pub mod validate;
 pub use ast::*;
 pub use loader::{LoadError, Loader, Source};
 pub use provider::{
-    ChildEntry, DslProvider, EmptyDslProvider, EngineError, Provider, ProviderContext,
-    ProviderRuntime, ResolvedNode,
+    ChildEntry, ClosureExecutor, DslProvider, EmptyDslProvider, EngineError, Provider,
+    ProviderContext, ProviderRuntime, ResolvedNode, SqlDialect, SqlExecutor,
 };
 pub use registry::{ProviderRegistry, RegistryError};
 

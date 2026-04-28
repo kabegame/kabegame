@@ -3,15 +3,31 @@
 //! 路径：gallery_route → gallery_paginate_router → query_page_provider。
 //! Delegate 节点 (gallery_all_router, gallery_page_router) 跳过 (Phase 6 ProviderRuntime 处理)。
 
-#![cfg(all(feature = "json5", feature = "sqlite"))]
+#![cfg(feature = "json5")]
 
 use std::path::PathBuf;
 
-use pathql_rs::drivers::sqlite::params_for;
 use pathql_rs::ast::{Namespace, ProviderName, Query};
 use pathql_rs::compose::{fold_contrib, ProviderQuery};
+use pathql_rs::provider::SqlDialect;
 use pathql_rs::template::eval::{TemplateContext, TemplateValue};
 use pathql_rs::{Json5Loader, Loader, ProviderRegistry, Source};
+
+/// 6d: pathql-rs 不再附 driver 桥; 集成测试本地内联 TemplateValue → rusqlite::Value 转换。
+fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
+    use rusqlite::types::Value;
+    values
+        .iter()
+        .map(|v| match v {
+            TemplateValue::Null => Value::Null,
+            TemplateValue::Bool(b) => Value::Integer(if *b { 1 } else { 0 }),
+            TemplateValue::Int(i) => Value::Integer(*i),
+            TemplateValue::Real(r) => Value::Real(*r),
+            TemplateValue::Text(s) => Value::Text(s.clone()),
+            TemplateValue::Json(v) => Value::Text(v.to_string()),
+        })
+        .collect()
+}
 
 const PROVIDER_FILES: &[&str] = &[
     "root_provider.json",
@@ -79,7 +95,7 @@ fn build_gallery_page_chain_renders_executable_sql() {
         .collect(),
     );
 
-    let (sql, params) = state.build_sql(&ctx).expect("build_sql");
+    let (sql, params) = state.build_sql(&ctx, SqlDialect::Sqlite).expect("build_sql");
 
     // string snapshot
     assert!(sql.contains("FROM images"), "sql missing FROM images: {}", sql);
@@ -100,7 +116,7 @@ fn build_gallery_page_chain_renders_executable_sql() {
     )
     .unwrap();
 
-    let rusqlite_params = params_for(&params);
+    let rusqlite_params = local_params_for(&params);
     let mut stmt = conn.prepare(&sql).unwrap_or_else(|e| {
         panic!("prepare failed for sql=\n{}\n: {}", sql, e);
     });
@@ -128,7 +144,7 @@ fn build_gallery_page_chain_with_page_2_offsets_correctly() {
         .collect(),
     );
 
-    let (sql, params) = state.build_sql(&ctx).unwrap();
+    let (sql, params) = state.build_sql(&ctx, SqlDialect::Sqlite).unwrap();
 
     // sqlite execute: 5 rows, page_size=2, page_num=2 → OFFSET 2, LIMIT 2 → rows 3,4
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -138,7 +154,7 @@ fn build_gallery_page_chain_with_page_2_offsets_correctly() {
     )
     .unwrap();
 
-    let rusqlite_params = params_for(&params);
+    let rusqlite_params = local_params_for(&params);
     let mut stmt = conn.prepare(&sql).unwrap();
     let titles: Vec<String> = stmt
         .query_map(
@@ -176,7 +192,7 @@ fn standalone_provider_query_with_join_executes() {
     let ctx = TemplateContext::default().with_properties(
         [("aid".into(), TemplateValue::Int(1))].into_iter().collect(),
     );
-    let (sql, params) = q.build_sql(&ctx).unwrap();
+    let (sql, params) = q.build_sql(&ctx, SqlDialect::Sqlite).unwrap();
     assert!(sql.contains("INNER JOIN album_images AS ai ON ai.image_id = images.id"));
 
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -188,7 +204,7 @@ fn standalone_provider_query_with_join_executes() {
     )
     .unwrap();
 
-    let rusqlite_params = params_for(&params);
+    let rusqlite_params = local_params_for(&params);
     let mut stmt = conn.prepare(&sql).unwrap();
     let titles: Vec<String> = stmt
         .query_map(

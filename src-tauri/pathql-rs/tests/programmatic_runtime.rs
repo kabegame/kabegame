@@ -8,10 +8,17 @@ use std::sync::Arc;
 use pathql_rs::ast::{Namespace, ProviderName, SimpleName, SqlExpr};
 use pathql_rs::compose::ProviderQuery;
 use pathql_rs::provider::{
-    ChildEntry, EngineError, Provider, ProviderContext, ProviderRuntime,
+    ChildEntry, ClosureExecutor, EngineError, Provider, ProviderContext, ProviderRuntime,
+    SqlDialect, SqlExecutor,
 };
 use pathql_rs::template::eval::TemplateValue;
 use pathql_rs::ProviderRegistry;
+
+fn no_op_executor() -> Arc<dyn SqlExecutor> {
+    Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, |_sql, _params| {
+        Ok(Vec::new())
+    }))
+}
 
 /// 简单 provider 实现: 给 from + 静态 children + 字面 resolve。
 /// **不持 registry / runtime 字段**——demo ctx-passing 设计。
@@ -87,7 +94,7 @@ fn three_level_chain_via_register_provider() {
         )
         .unwrap();
 
-    let runtime = ProviderRuntime::new(Arc::new(registry), root);
+    let runtime = ProviderRuntime::new(Arc::new(registry), root, no_op_executor());
 
     let resolved = runtime.resolve("/b/c").unwrap();
     assert_eq!(resolved.composed.from.unwrap().0, "leaf_table");
@@ -124,7 +131,7 @@ fn path_not_found_returns_error() {
         )
         .unwrap();
 
-    let runtime = ProviderRuntime::new(Arc::new(registry), root);
+    let runtime = ProviderRuntime::new(Arc::new(registry), root, no_op_executor());
     let err = runtime.resolve("/missing").unwrap_err();
     assert!(matches!(err, EngineError::PathNotFound(_)));
     assert_eq!(runtime.cache_size(), 0);
@@ -143,7 +150,7 @@ fn case_sensitive_paths() {
         note: None,
     });
     let registry = Arc::new(ProviderRegistry::new());
-    let runtime = ProviderRuntime::new(registry, root);
+    let runtime = ProviderRuntime::new(registry, root, no_op_executor());
 
     // /Hello 命中
     assert!(runtime.resolve("/Hello").is_ok());
@@ -231,7 +238,7 @@ fn factory_uses_properties() {
         .unwrap();
 
     let root: Arc<dyn Provider> = Arc::new(AlbumRouter);
-    let runtime = ProviderRuntime::new(Arc::new(registry), root);
+    let runtime = ProviderRuntime::new(Arc::new(registry), root, no_op_executor());
 
     let r1 = runtime.resolve("/A1").unwrap();
     let r2 = runtime.resolve("/B7").unwrap();

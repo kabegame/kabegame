@@ -3,20 +3,40 @@
 //!
 //! 不接 DSL, 不接 SqlExecutor 注入 (那是 6c)。本期 sqlite 直接由测试代码持有 + 在 build_sql 后手动执行。
 
-#![cfg(feature = "sqlite")]
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use pathql_rs::ast::{JoinKind, Namespace, ProviderName, SimpleName, SqlExpr};
 use pathql_rs::compose::ProviderQuery;
-use pathql_rs::drivers::sqlite::params_for;
 use pathql_rs::provider::{
-    ChildEntry, EngineError, Provider, ProviderContext, ProviderRuntime,
+    ChildEntry, ClosureExecutor, EngineError, Provider, ProviderContext, ProviderRuntime,
+    SqlDialect, SqlExecutor,
 };
 use pathql_rs::template::eval::{TemplateContext, TemplateValue};
 use pathql_rs::ProviderRegistry;
 use rusqlite::Connection;
+
+/// 6d: pathql-rs 不再附 driver 桥; 集成测试本地内联 TemplateValue → rusqlite::Value 转换。
+fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
+    use rusqlite::types::Value;
+    values
+        .iter()
+        .map(|v| match v {
+            TemplateValue::Null => Value::Null,
+            TemplateValue::Bool(b) => Value::Integer(if *b { 1 } else { 0 }),
+            TemplateValue::Int(i) => Value::Integer(*i),
+            TemplateValue::Real(r) => Value::Real(*r),
+            TemplateValue::Text(s) => Value::Text(s.clone()),
+            TemplateValue::Json(v) => Value::Text(v.to_string()),
+        })
+        .collect()
+}
+
+fn no_op_executor() -> Arc<dyn SqlExecutor> {
+    Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, |_sql, _params| {
+        Ok(Vec::new())
+    }))
+}
 
 fn fixture_db() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
@@ -182,12 +202,12 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         )
         .unwrap();
 
-    ProviderRuntime::new(Arc::new(registry), root)
+    ProviderRuntime::new(Arc::new(registry), root, no_op_executor())
 }
 
 fn execute_query(conn: &Connection, q: &ProviderQuery) -> Vec<i64> {
-    let (sql, values) = q.build_sql(&TemplateContext::default()).unwrap();
-    let params = params_for(&values);
+    let (sql, values) = q.build_sql(&TemplateContext::default(), SqlDialect::Sqlite).unwrap();
+    let params = local_params_for(&values);
     let mut stmt = conn.prepare(&sql).unwrap();
     stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {
         r.get::<_, i64>(0)
@@ -249,7 +269,7 @@ fn build_sql_from_resolved_state_executes_cleanly() {
 
     let (sql, _params) = resolved
         .composed
-        .build_sql(&TemplateContext::default())
+        .build_sql(&TemplateContext::default(), SqlDialect::Sqlite)
         .unwrap();
     assert!(sql.contains("FROM images"));
     assert!(sql.contains("INNER JOIN album_images AS ai ON ai.image_id = images.id"));

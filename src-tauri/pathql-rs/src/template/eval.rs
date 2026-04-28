@@ -11,7 +11,7 @@ use crate::template::parse::VarRef;
 
 /// bind 参数的中性表达, dialect-agnostic。
 ///
-/// pathql-rs 只产生它; 具体 DB 驱动转换在 `drivers::sqlite` 等 feature 下。
+/// pathql-rs 只产生它; 具体 DB 驱动转换由消费者自管 (6d 起 pathql-rs 不附驱动桥)。
 #[derive(Debug, Clone, PartialEq)]
 pub enum TemplateValue {
     Null,
