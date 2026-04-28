@@ -63,7 +63,7 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
     let out_path = thumbnails_dir.join(format!("{}.gif", uuid::Uuid::new_v4()));
     #[cfg(all(feature = "local", target_os = "linux"))]
     let out_path = thumbnails_dir.join(format!("{}.gif", uuid::Uuid::new_v4()));
-    #[cfg(not(any(target_os = "android", all(feature = "local"), target_os = "linux")))]
+    #[cfg(not(any(target_os = "android", all(feature = "local", target_os = "linux"))))]
     let out_path = thumbnails_dir.join(format!("{}.mp4", uuid::Uuid::new_v4()));
 
     #[cfg(target_os = "android")]

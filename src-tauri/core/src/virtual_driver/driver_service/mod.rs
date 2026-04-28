@@ -6,7 +6,7 @@
 #[cfg(all(kabegame_mode = "standard", target_os = "windows"))]
 mod windows;
 
-#[cfg(all(kabegame_mode = "standard", any(target_os = "macos", target_os = "linux")))]
+#[cfg(all(kabegame_mode = "standard", any(target_os = "macos", target_os = "linux"), feature = "virtual-driver"))]
 mod fuse;
 
 use std::sync::Arc;
@@ -21,8 +21,14 @@ pub use windows::{join_mount_subdir, notify_explorer_dir_changed_path};
 #[cfg(all(kabegame_mode = "standard", target_os = "windows"))]
 pub use windows::normalize_mount_point;
 
-#[cfg(all(kabegame_mode = "standard", any(target_os = "macos", target_os = "linux")))]
+#[cfg(all(kabegame_mode = "standard", any(target_os = "macos", target_os = "linux"), feature = "virtual-driver"))]
 pub use fuse::VirtualDriveService;
+
+// Stub VirtualDriveService when virtual-driver feature is off (linux/mac without fuser).
+#[cfg(all(kabegame_mode = "standard", any(target_os = "macos", target_os = "linux"), not(feature = "virtual-driver")))]
+mod stub;
+#[cfg(all(kabegame_mode = "standard", any(target_os = "macos", target_os = "linux"), not(feature = "virtual-driver")))]
+pub use stub::VirtualDriveService;
 
 
 /// 虚拟盘服务 trait（定义所有平台必须实现的接口）
