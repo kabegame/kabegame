@@ -88,6 +88,44 @@ impl DslProvider {
         Ok(out)
     }
 
+    /// 解析 delegate 路径: 绝对路径 (`/...`) 走 runtime; 相对路径 (`./...`) 从 self 起逐段
+    /// resolve + apply_query。返回 (provider, 累积 composed)。
+    fn resolve_delegate(
+        &self,
+        path: &str,
+        composed: &ProviderQuery,
+        ctx: &ProviderContext,
+    ) -> Result<(Arc<dyn Provider>, ProviderQuery), EngineError> {
+        if !path.starts_with("./") {
+            // 绝对路径走 runtime (含 longest-prefix cache)
+            let node = ctx
+                .runtime
+                .resolve_with_initial(path, Some(composed.clone()))?;
+            return Ok((node.provider, node.composed));
+        }
+        // 相对路径: 跳过 "./" 前缀, 从 self 起逐段 resolve
+        let stripped = &path[2..];
+        let mut iter = stripped.split('/').filter(|s| !s.is_empty());
+        let first = iter
+            .next()
+            .ok_or_else(|| EngineError::PathNotFound(path.into()))?;
+        let mut current = self
+            .resolve(first, composed, ctx)
+            .ok_or_else(|| EngineError::PathNotFound(format!("./{}", first)))?;
+        let mut current_composed = current.apply_query(composed.clone(), ctx);
+        let mut so_far = format!("./{}", first);
+        for seg in iter {
+            so_far.push('/');
+            so_far.push_str(seg);
+            let next = current
+                .resolve(seg, &current_composed, ctx)
+                .ok_or_else(|| EngineError::PathNotFound(so_far.clone()))?;
+            current_composed = next.apply_query(current_composed, ctx);
+            current = next;
+        }
+        Ok((current, current_composed))
+    }
+
     /// 渲染 meta 值: 字符串走 template; object/array 递归; 标量原样。
     fn eval_meta(
         &self,
@@ -126,10 +164,8 @@ impl DslProvider {
             ProviderInvocation::ByDelegate(b) => {
                 let props = self.eval_properties(&b.properties, captures)?;
                 let _ = props; // ByDelegate 仅借用路径解析; properties 用于 compose 阶段，本期不传给 runtime
-                let node = ctx
-                    .runtime
-                    .resolve_with_initial(&b.delegate.0, Some(composed.clone()))?;
-                Ok(Some(node.provider))
+                let (provider, _) = self.resolve_delegate(&b.delegate.0, composed, ctx)?;
+                Ok(Some(provider))
             }
             ProviderInvocation::Empty(_) => {
                 Ok(Some(Arc::new(EmptyDslProvider) as Arc<dyn Provider>))
@@ -142,6 +178,7 @@ impl DslProvider {
         &self,
         key_template: &str,
         entry: &DynamicSqlEntry,
+        composed: &ProviderQuery,
         ctx: &ProviderContext,
     ) -> Result<Vec<ChildEntry>, EngineError> {
         let executor = ctx
@@ -150,9 +187,12 @@ impl DslProvider {
             .ok_or(EngineError::ExecutorMissing)?
             .clone();
 
-        // 渲染 SQL: 仅 properties 作用域 (capture 空, data_var 此时未定)
+        // 渲染 SQL: properties 作用域 + 父 composed 内联 (供 ${composed} 子查询)。
         let aliases = AliasTable::new();
-        let prop_ctx = self.base_template_context(&[]);
+        let mut prop_ctx = self.base_template_context(&[]);
+        if let Ok(composed_rendered) = composed.build_sql(&prop_ctx) {
+            prop_ctx.composed = Some(composed_rendered);
+        }
         let (sql, params) = render_to_owned(&entry.sql.0, &prop_ctx, &aliases)?;
 
         let rows = executor(&sql, &params)?;
@@ -195,10 +235,9 @@ impl DslProvider {
         composed: &ProviderQuery,
         ctx: &ProviderContext,
     ) -> Result<Vec<ChildEntry>, EngineError> {
-        let target = ctx
-            .runtime
-            .resolve_with_initial(&entry.delegate.0, Some(composed.clone()))?;
-        let target_children = target.provider.list(&target.composed, ctx)?;
+        let (target_provider, target_composed) =
+            self.resolve_delegate(&entry.delegate.0, composed, ctx)?;
+        let target_children = target_provider.list(&target_composed, ctx)?;
 
         let child_var_name = entry.child_var.0.clone();
         let mut out = Vec::with_capacity(target_children.len());
@@ -249,7 +288,10 @@ impl DslProvider {
                     .ok_or(EngineError::ExecutorMissing)?
                     .clone();
                 let aliases = AliasTable::new();
-                let prop_ctx = self.base_template_context(&[]);
+                let mut prop_ctx = self.base_template_context(&[]);
+                if let Ok(composed_rendered) = composed.build_sql(&prop_ctx) {
+                    prop_ctx.composed = Some(composed_rendered);
+                }
                 let (sql, params) = render_to_owned(&sql_entry.sql.0, &prop_ctx, &aliases)?;
                 let rows = executor(&sql, &params)?;
 
@@ -278,10 +320,9 @@ impl DslProvider {
                 Ok(None)
             }
             DynamicListEntry::Delegate(del_entry) => {
-                let target = ctx
-                    .runtime
-                    .resolve_with_initial(&del_entry.delegate.0, Some(composed.clone()))?;
-                let target_children = target.provider.list(&target.composed, ctx)?;
+                let (target_provider, target_composed) =
+                    self.resolve_delegate(&del_entry.delegate.0, composed, ctx)?;
+                let target_children = target_provider.list(&target_composed, ctx)?;
 
                 let child_var_name = del_entry.child_var.0.clone();
                 for child in target_children {
@@ -349,9 +390,8 @@ impl Provider for DslProvider {
                 state
             }
             Some(Query::Delegate(d)) => {
-                ctx.runtime
-                    .resolve_with_initial(&d.delegate.0, Some(current.clone()))
-                    .map(|node| node.composed)
+                self.resolve_delegate(&d.delegate.0, &current, ctx)
+                    .map(|(_, composed)| composed)
                     .unwrap_or(current)
             }
         }
@@ -374,7 +414,7 @@ impl Provider for DslProvider {
                     }
                 }
                 ListEntry::Dynamic(DynamicListEntry::Sql(e)) => {
-                    let mut children = self.list_dynamic_sql(key, e, ctx)?;
+                    let mut children = self.list_dynamic_sql(key, e, composed, ctx)?;
                     out.append(&mut children);
                 }
                 ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => {
