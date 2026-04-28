@@ -3048,6 +3048,7 @@ dependencies = [
  "md5",
  "memmap2",
  "openssl",
+ "pathql-rs",
  "regex",
  "reqwest 0.11.27",
  "rhai",
