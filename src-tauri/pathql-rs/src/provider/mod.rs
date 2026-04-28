@@ -11,9 +11,24 @@ pub use dsl_provider::{DslProvider, EmptyDslProvider};
 pub use runtime::{ProviderRuntime, ResolvedNode};
 
 use crate::compose::{BuildError, FoldError, ProviderQuery, RenderError};
+use crate::template::eval::TemplateValue;
 use crate::ProviderRegistry;
 use std::sync::Arc;
 use thiserror::Error;
+
+/// SQL 执行能力的注入抽象。pathql-rs 不绑驱动；终端注入实现 (rusqlite / sqlx / 等)。
+///
+/// 输入：SQL 字符串 + bind 参数序列
+/// 输出：每行 = JSON 对象 (列名 → 值); 用作 `${data_var.col}` 求值上下文
+///
+/// 错误统一为 [`EngineError`]（含驱动错误转换；推荐用 `EngineError::FactoryFailed`
+/// 把驱动 error 转字符串）。
+pub type SqlExecutor = Arc<
+    dyn Fn(&str, &[TemplateValue]) -> Result<Vec<serde_json::Value>, EngineError>
+        + Send
+        + Sync
+        + 'static,
+>;
 
 /// 调用 Provider 方法时由 runtime 在入口构造并向下传递。
 /// 同一 ctx 在路径解析的整个 fold loop 中复用; 方法返回后 drop。

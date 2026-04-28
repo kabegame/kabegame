@@ -3,7 +3,7 @@
 //! ctx-passing 设计：runtime 持 `Weak<Self>`，方法入口构造 `ProviderContext`
 //! (含 `Arc<Self>`) 在调用栈生命周期内传递；调用返回后 ctx drop，**不形成长期循环引用**。
 
-use super::{ChildEntry, EngineError, Provider, ProviderContext};
+use super::{ChildEntry, EngineError, Provider, ProviderContext, SqlExecutor};
 use crate::compose::ProviderQuery;
 use crate::ProviderRegistry;
 use std::collections::HashMap;
@@ -33,6 +33,9 @@ pub struct ProviderRuntime {
     registry: Arc<ProviderRegistry>,
     root: Arc<dyn Provider>,
     weak_self: Weak<Self>,
+    /// 注入的 SQL 执行能力（DSL 动态 list SQL 项 + 反查需要它）。
+    /// 6c 起：core 通过 `new_with_executor` 注入；缺省 = None（动态 SQL 项报错）。
+    executor: Option<SqlExecutor>,
     /// 路径前缀 (`/seg₁/.../segₖ`) → CachedNode。
     /// 6a 简化：HashMap, 容量无限制；后期可换 LRU 不影响接口。
     cache: Mutex<HashMap<String, CachedNode>>,
@@ -40,16 +43,31 @@ pub struct ProviderRuntime {
 
 impl ProviderRuntime {
     pub fn new(registry: Arc<ProviderRegistry>, root: Arc<dyn Provider>) -> Arc<Self> {
+        Self::new_with_executor(registry, root, None)
+    }
+
+    /// 注入可选 SqlExecutor（6c 起）。executor 为 None 时 DSL 动态 SQL 项返回 ExecutorMissing 错。
+    pub fn new_with_executor(
+        registry: Arc<ProviderRegistry>,
+        root: Arc<dyn Provider>,
+        executor: Option<SqlExecutor>,
+    ) -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
             registry,
             root,
             weak_self: weak.clone(),
+            executor,
             cache: Mutex::new(HashMap::new()),
         })
     }
 
     pub fn registry(&self) -> &ProviderRegistry {
         &self.registry
+    }
+
+    /// 注入的 executor (none = 没注入)。DslProvider 通过此方法访问执行能力。
+    pub fn executor(&self) -> Option<&SqlExecutor> {
+        self.executor.as_ref()
     }
 
     /// 在路径解析入口构造 ctx; ctx 持 Arc<Self> 在调用栈生命期内存活。
@@ -159,6 +177,24 @@ impl ProviderRuntime {
     pub fn note(&self, path: &str) -> Result<Option<String>, EngineError> {
         let node = self.resolve(path)?;
         Ok(node.provider.get_note(&node.composed, &self.make_ctx()))
+    }
+
+    /// 顶层 meta 入口 (§12.3 typed meta wire 格式)。
+    /// 语义: `/a/b/c` 的 meta = 父路径 `/a/b` list 输出中 `name == c` 的 ChildEntry.meta。
+    /// root (`/`) 无父, 返回 None。
+    pub fn meta(&self, path: &str) -> Result<Option<serde_json::Value>, EngineError> {
+        let segments = self.normalize_path(path);
+        if segments.is_empty() {
+            return Ok(None);
+        }
+        let last = segments.last().unwrap().clone();
+        let parent_path = if segments.len() == 1 {
+            "/".to_string()
+        } else {
+            build_path_key(&segments[..segments.len() - 1])
+        };
+        let children = self.list(&parent_path)?;
+        Ok(children.into_iter().find(|c| c.name == last).and_then(|c| c.meta))
     }
 
     /// 路径段 normalize: percent-decode, 不做 lowercase 折叠 (§2 大小写敏感)。
@@ -447,6 +483,79 @@ mod tests {
         let runtime = ProviderRuntime::new(empty_registry(), Arc::new(N));
         let n = runtime.note("/").unwrap();
         assert_eq!(n, Some("hello".into()));
+    }
+
+    #[test]
+    fn meta_returns_none_for_root() {
+        let (runtime, _) = three_layer_runtime();
+        let m = runtime.meta("/").unwrap();
+        assert!(m.is_none());
+    }
+
+    #[test]
+    fn meta_reads_parents_list_child_meta() {
+        // root.list returns a child "k" with meta {"foo":"bar"}
+        struct Inner;
+        impl Provider for Inner {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ChildEntry>, EngineError> {
+                Ok(Vec::new())
+            }
+            fn resolve(
+                &self,
+                _: &str,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Option<Arc<dyn Provider>> {
+                None
+            }
+        }
+        struct Holder {
+            child: Arc<dyn Provider>,
+        }
+        impl Provider for Holder {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ChildEntry>, EngineError> {
+                Ok(vec![ChildEntry {
+                    name: "k".into(),
+                    provider: Some(self.child.clone()),
+                    meta: Some(serde_json::json!({"foo":"bar"})),
+                }])
+            }
+            fn resolve(
+                &self,
+                name: &str,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Option<Arc<dyn Provider>> {
+                if name == "k" {
+                    Some(self.child.clone())
+                } else {
+                    None
+                }
+            }
+        }
+        let leaf: Arc<dyn Provider> = Arc::new(Inner);
+        let root = Arc::new(Holder {
+            child: leaf,
+        });
+        let runtime = ProviderRuntime::new(empty_registry(), root);
+        let m = runtime.meta("/k").unwrap();
+        assert_eq!(m.unwrap(), serde_json::json!({"foo":"bar"}));
+    }
+
+    #[test]
+    fn meta_returns_none_when_child_meta_unset() {
+        let (runtime, _) = three_layer_runtime();
+        // CountingProvider.list returns ChildEntry with meta=None
+        let m = runtime.meta("/b").unwrap();
+        assert!(m.is_none());
     }
 
     #[test]
