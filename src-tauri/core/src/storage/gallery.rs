@@ -240,13 +240,13 @@ impl Storage {
         &self,
         query: &pathql_rs::compose::ProviderQuery,
     ) -> Result<usize, String> {
-        use pathql_rs::drivers::sqlite::params_for;
+        use crate::storage::template_bridge::template_params_for as params_for;
         use pathql_rs::template::eval::TemplateContext;
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let ctx = TemplateContext::default();
         let (inner_sql, inner_values) = query
-            .build_sql(&ctx)
+            .build_sql(&ctx, pathql_rs::SqlDialect::Sqlite)
             .map_err(|e| format!("build_sql: {}", e))?;
 
         let sql = format!("SELECT COUNT(*) FROM ({}) AS sub", inner_sql);
@@ -271,7 +271,7 @@ impl Storage {
         query: &pathql_rs::compose::ProviderQuery,
     ) -> Result<Vec<GalleryImageFsEntry>, String> {
         use pathql_rs::ast::JoinKind;
-        use pathql_rs::drivers::sqlite::params_for;
+        use crate::storage::template_bridge::template_params_for as params_for;
         use pathql_rs::template::eval::TemplateContext;
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -285,7 +285,7 @@ impl Storage {
 
         let ctx = TemplateContext::default();
         let (inner_sql, inner_values) = q
-            .build_sql(&ctx)
+            .build_sql(&ctx, pathql_rs::SqlDialect::Sqlite)
             .map_err(|e| format!("build_sql: {}", e))?;
 
         let sql = format!(
@@ -395,7 +395,7 @@ impl Storage {
         query: &pathql_rs::compose::ProviderQuery,
     ) -> Result<Vec<crate::storage::ImageInfo>, String> {
         use crate::storage::{FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
-        use pathql_rs::drivers::sqlite::params_for;
+        use crate::storage::template_bridge::template_params_for as params_for;
         use pathql_rs::template::eval::TemplateContext;
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -408,7 +408,7 @@ impl Storage {
 
         let ctx = TemplateContext::default();
         let (inner_sql, inner_values) = q
-            .build_sql(&ctx)
+            .build_sql(&ctx, pathql_rs::SqlDialect::Sqlite)
             .map_err(|e| format!("build_sql: {}", e))?;
 
         // outer wrapper: 把 inner 当 sub-query, 再 LEFT JOIN fav_ai / ai_hid 投影 is_favorite / is_hidden
