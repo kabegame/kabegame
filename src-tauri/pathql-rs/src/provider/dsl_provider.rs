@@ -181,21 +181,18 @@ impl DslProvider {
         composed: &ProviderQuery,
         ctx: &ProviderContext,
     ) -> Result<Vec<ChildEntry>, EngineError> {
-        let executor = ctx
-            .runtime
-            .executor()
-            .ok_or(EngineError::ExecutorMissing)?
-            .clone();
+        let executor = ctx.runtime.executor().clone();
+        let dialect = executor.dialect();
 
         // 渲染 SQL: properties 作用域 + 父 composed 内联 (供 ${composed} 子查询)。
         let aliases = AliasTable::new();
         let mut prop_ctx = self.base_template_context(&[]);
-        if let Ok(composed_rendered) = composed.build_sql(&prop_ctx) {
+        if let Ok(composed_rendered) = composed.build_sql(&prop_ctx, dialect) {
             prop_ctx.composed = Some(composed_rendered);
         }
-        let (sql, params) = render_to_owned(&entry.sql.0, &prop_ctx, &aliases)?;
+        let (sql, params) = render_to_owned(&entry.sql.0, &prop_ctx, &aliases, dialect)?;
 
-        let rows = executor(&sql, &params)?;
+        let rows = executor.execute(&sql, &params)?;
 
         let data_var_name = entry.data_var.0.clone();
         let mut out = Vec::with_capacity(rows.len());
@@ -282,18 +279,15 @@ impl DslProvider {
     ) -> Result<Option<Arc<dyn Provider>>, EngineError> {
         match entry {
             DynamicListEntry::Sql(sql_entry) => {
-                let executor = ctx
-                    .runtime
-                    .executor()
-                    .ok_or(EngineError::ExecutorMissing)?
-                    .clone();
+                let executor = ctx.runtime.executor().clone();
+                let dialect = executor.dialect();
                 let aliases = AliasTable::new();
                 let mut prop_ctx = self.base_template_context(&[]);
-                if let Ok(composed_rendered) = composed.build_sql(&prop_ctx) {
+                if let Ok(composed_rendered) = composed.build_sql(&prop_ctx, dialect) {
                     prop_ctx.composed = Some(composed_rendered);
                 }
-                let (sql, params) = render_to_owned(&sql_entry.sql.0, &prop_ctx, &aliases)?;
-                let rows = executor(&sql, &params)?;
+                let (sql, params) = render_to_owned(&sql_entry.sql.0, &prop_ctx, &aliases, dialect)?;
+                let rows = executor.execute(&sql, &params)?;
 
                 let data_var_name = sql_entry.data_var.0.clone();
                 for row in rows {

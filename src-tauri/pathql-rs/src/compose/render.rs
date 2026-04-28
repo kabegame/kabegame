@@ -8,6 +8,7 @@
 use thiserror::Error;
 
 use crate::compose::aliases::AliasTable;
+use crate::provider::SqlDialect;
 use crate::template::{
     eval::{evaluate_var, EvalError, TemplateContext, TemplateValue},
     parse::{parse, ParseError, Segment, VarRef},
@@ -25,12 +26,26 @@ pub enum RenderError {
     MissingComposed,
 }
 
-/// 渲染模板字符串到 (sql, params)。bind 占位用 `?`。
+/// 给定方言 + 当前 params 已 push 的数量, 返回此次 push 的占位符字符串。
+/// - Sqlite / Mysql → `?`
+/// - Postgres → `$N` (1-based, N = pushed_count + 1)
+///
+/// 由 build_sql 统一管理 (out_params.len() 即累积位移); 单 render_template_sql 调用内
+/// 顺序追加, 所以局部 += 1 等价全局位移。
+pub fn placeholder_for(dialect: SqlDialect, pushed_count: usize) -> String {
+    match dialect {
+        SqlDialect::Sqlite | SqlDialect::Mysql => "?".to_string(),
+        SqlDialect::Postgres => format!("${}", pushed_count + 1),
+    }
+}
+
+/// 渲染模板字符串到 (sql, params)。bind 占位由方言决定 (`?` 或 `$N`)。
 /// 结果追加到 `out_sql` / `out_params` (供 SQL 渲染分段调用)。
 pub fn render_template_sql(
     template: &str,
     ctx: &TemplateContext,
     aliases: &AliasTable,
+    dialect: SqlDialect,
     out_sql: &mut String,
     out_params: &mut Vec<TemplateValue>,
 ) -> Result<(), RenderError> {
@@ -56,7 +71,7 @@ pub fn render_template_sql(
             }
             Segment::Var(other) => {
                 let value = evaluate_var(other, ctx)?;
-                out_sql.push('?');
+                out_sql.push_str(&placeholder_for(dialect, out_params.len()));
                 out_params.push(value);
             }
         }
@@ -69,10 +84,11 @@ pub fn render_to_owned(
     template: &str,
     ctx: &TemplateContext,
     aliases: &AliasTable,
+    dialect: SqlDialect,
 ) -> Result<(String, Vec<TemplateValue>), RenderError> {
     let mut sql = String::new();
     let mut params = Vec::new();
-    render_template_sql(template, ctx, aliases, &mut sql, &mut params)?;
+    render_template_sql(template, ctx, aliases, dialect, &mut sql, &mut params)?;
     Ok((sql, params))
 }
 
@@ -137,7 +153,7 @@ mod tests {
     #[test]
     fn pure_literal() {
         let (sql, params) =
-            render_to_owned("SELECT 1", &empty_ctx(), &AliasTable::default()).unwrap();
+            render_to_owned("SELECT 1", &empty_ctx(), &AliasTable::default(), SqlDialect::Sqlite).unwrap();
         assert_eq!(sql, "SELECT 1");
         assert!(params.is_empty());
     }
@@ -146,7 +162,7 @@ mod tests {
     fn single_property() {
         let ctx = ctx_with_props(&[("x", TemplateValue::Int(42))]);
         let (sql, params) =
-            render_to_owned("id = ${properties.x}", &ctx, &AliasTable::default()).unwrap();
+            render_to_owned("id = ${properties.x}", &ctx, &AliasTable::default(), SqlDialect::Sqlite).unwrap();
         assert_eq!(sql, "id = ?");
         assert_eq!(params, vec![TemplateValue::Int(42)]);
     }
@@ -161,6 +177,7 @@ mod tests {
             "a = ${properties.x} AND b = ${properties.y}",
             &ctx,
             &AliasTable::default(),
+            SqlDialect::Sqlite,
         )
         .unwrap();
         assert_eq!(sql, "a = ? AND b = ?");
@@ -172,14 +189,14 @@ mod tests {
         let mut aliases = AliasTable::default();
         aliases.allocate("t");
         let (sql, params) =
-            render_to_owned("${ref:t}.id = ${ref:t}.x", &empty_ctx(), &aliases).unwrap();
+            render_to_owned("${ref:t}.id = ${ref:t}.x", &empty_ctx(), &aliases, SqlDialect::Sqlite).unwrap();
         assert_eq!(sql, "_a0.id = _a0.x");
         assert!(params.is_empty());
     }
 
     #[test]
     fn ref_unknown_errors() {
-        let err = render_to_owned("${ref:nope}", &empty_ctx(), &AliasTable::default()).unwrap_err();
+        let err = render_to_owned("${ref:nope}", &empty_ctx(), &AliasTable::default(), SqlDialect::Sqlite).unwrap_err();
         assert!(matches!(err, RenderError::UnknownRef(_)));
     }
 
@@ -187,7 +204,7 @@ mod tests {
     fn composed_inline() {
         let ctx = TemplateContext::default().with_composed("SELECT 1".into(), vec![]);
         let (sql, params) =
-            render_to_owned("FROM (${composed}) sub", &ctx, &AliasTable::default()).unwrap();
+            render_to_owned("FROM (${composed}) sub", &ctx, &AliasTable::default(), SqlDialect::Sqlite).unwrap();
         assert_eq!(sql, "FROM ((SELECT 1)) sub");
         assert!(params.is_empty());
     }
@@ -197,14 +214,14 @@ mod tests {
         let ctx = TemplateContext::default()
             .with_composed("WHERE x = ?".into(), vec![TemplateValue::Int(7)]);
         let (sql, params) =
-            render_to_owned("FROM (${composed})", &ctx, &AliasTable::default()).unwrap();
+            render_to_owned("FROM (${composed})", &ctx, &AliasTable::default(), SqlDialect::Sqlite).unwrap();
         assert_eq!(sql, "FROM ((WHERE x = ?))");
         assert_eq!(params, vec![TemplateValue::Int(7)]);
     }
 
     #[test]
     fn composed_missing() {
-        let err = render_to_owned("${composed}", &empty_ctx(), &AliasTable::default()).unwrap_err();
+        let err = render_to_owned("${composed}", &empty_ctx(), &AliasTable::default(), SqlDialect::Sqlite).unwrap_err();
         assert!(matches!(err, RenderError::MissingComposed));
     }
 
@@ -223,6 +240,7 @@ mod tests {
             "${ref:t}.id = ${properties.id} AND ${ref:t}.cap = ${capture[1]}",
             &ctx,
             &aliases,
+            SqlDialect::Sqlite,
         )
         .unwrap();
         assert_eq!(sql, "_a0.id = ? AND _a0.cap = ?");
@@ -237,7 +255,7 @@ mod tests {
 
     #[test]
     fn parse_error_propagates() {
-        let err = render_to_owned("${unclosed", &empty_ctx(), &AliasTable::default()).unwrap_err();
+        let err = render_to_owned("${unclosed", &empty_ctx(), &AliasTable::default(), SqlDialect::Sqlite).unwrap_err();
         assert!(matches!(err, RenderError::Parse(_)));
     }
 
@@ -249,6 +267,7 @@ mod tests {
             "${properties.x}",
             &ctx_with_props(&[("x", TemplateValue::Int(2))]),
             &AliasTable::default(),
+            SqlDialect::Sqlite,
             &mut sql,
             &mut params,
         )
@@ -296,5 +315,52 @@ mod tests {
     fn to_string_composed_errors() {
         let r = render_template_to_string("${composed}", &empty_ctx());
         assert!(matches!(r, Err(RenderError::MissingComposed)));
+    }
+
+    // ===== dialect-aware placeholders =====
+
+    #[test]
+    fn placeholder_sqlite_question_mark() {
+        assert_eq!(placeholder_for(SqlDialect::Sqlite, 0), "?");
+        assert_eq!(placeholder_for(SqlDialect::Sqlite, 5), "?");
+    }
+
+    #[test]
+    fn placeholder_mysql_question_mark() {
+        assert_eq!(placeholder_for(SqlDialect::Mysql, 0), "?");
+        assert_eq!(placeholder_for(SqlDialect::Mysql, 5), "?");
+    }
+
+    #[test]
+    fn placeholder_postgres_dollar_sequence() {
+        assert_eq!(placeholder_for(SqlDialect::Postgres, 0), "$1");
+        assert_eq!(placeholder_for(SqlDialect::Postgres, 1), "$2");
+        assert_eq!(placeholder_for(SqlDialect::Postgres, 9), "$10");
+    }
+
+    #[test]
+    fn render_postgres_uses_dollar_n() {
+        let ctx = ctx_with_props(&[
+            ("x", TemplateValue::Int(10)),
+            ("y", TemplateValue::Int(20)),
+        ]);
+        let (sql, params) = render_to_owned(
+            "a = ${properties.x} AND b = ${properties.y}",
+            &ctx,
+            &AliasTable::default(),
+            SqlDialect::Postgres,
+        )
+        .unwrap();
+        assert_eq!(sql, "a = $1 AND b = $2");
+        assert_eq!(params, vec![TemplateValue::Int(10), TemplateValue::Int(20)]);
+    }
+
+    #[test]
+    fn render_mysql_uses_question_mark() {
+        let ctx = ctx_with_props(&[("x", TemplateValue::Int(7))]);
+        let (sql, _) =
+            render_to_owned("id = ${properties.x}", &ctx, &AliasTable::default(), SqlDialect::Mysql)
+                .unwrap();
+        assert_eq!(sql, "id = ?");
     }
 }

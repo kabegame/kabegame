@@ -16,19 +16,71 @@ use crate::ProviderRegistry;
 use std::sync::Arc;
 use thiserror::Error;
 
-/// SQL 执行能力的注入抽象。pathql-rs 不绑驱动；终端注入实现 (rusqlite / sqlx / 等)。
+/// SQL 方言标注。executor 通过 `dialect()` 暴露; build_sql 渲染期据此选 placeholder。
+/// 6d 仅 Sqlite 完整覆盖; Postgres 用 `$N`; Mysql 同 Sqlite (`?`)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqlDialect {
+    Sqlite,
+    Postgres,
+    Mysql,
+}
+
+/// SQL 执行能力的注入抽象。pathql-rs 不绑驱动; 终端注入实现 (rusqlite / sqlx / 等)。
 ///
-/// 输入：SQL 字符串 + bind 参数序列
-/// 输出：每行 = JSON 对象 (列名 → 值); 用作 `${data_var.col}` 求值上下文
+/// 输入: SQL 字符串 + bind 参数序列
+/// 输出: 每行 = JSON 对象 (列名 → 值); 用作 `${data_var.col}` 求值上下文
 ///
-/// 错误统一为 [`EngineError`]（含驱动错误转换；推荐用 `EngineError::FactoryFailed`
-/// 把驱动 error 转字符串）。
-pub type SqlExecutor = Arc<
-    dyn Fn(&str, &[TemplateValue]) -> Result<Vec<serde_json::Value>, EngineError>
+/// 错误统一为 [`EngineError`] (含驱动错误转换; 推荐用 `EngineError::FactoryFailed`
+/// 把驱动 error 转字符串)。
+pub trait SqlExecutor: Send + Sync + 'static {
+    /// 当前 executor 服务的 SQL 方言。build_sql 依此选 placeholder 与方言差异语法。
+    fn dialect(&self) -> SqlDialect;
+
+    /// 真正的执行入口。
+    fn execute(
+        &self,
+        sql: &str,
+        params: &[TemplateValue],
+    ) -> Result<Vec<serde_json::Value>, EngineError>;
+}
+
+/// 方便测试 / 简单 backend 的闭包桥: `ClosureExecutor::new(dialect, |sql, params| ...)`。
+/// 持 connection state 的正式 backend 应该自定义 struct + impl SqlExecutor。
+pub struct ClosureExecutor<F> {
+    dialect: SqlDialect,
+    f: F,
+}
+
+impl<F> ClosureExecutor<F>
+where
+    F: Fn(&str, &[TemplateValue]) -> Result<Vec<serde_json::Value>, EngineError>
         + Send
         + Sync
         + 'static,
->;
+{
+    pub fn new(dialect: SqlDialect, f: F) -> Self {
+        Self { dialect, f }
+    }
+}
+
+impl<F> SqlExecutor for ClosureExecutor<F>
+where
+    F: Fn(&str, &[TemplateValue]) -> Result<Vec<serde_json::Value>, EngineError>
+        + Send
+        + Sync
+        + 'static,
+{
+    fn dialect(&self) -> SqlDialect {
+        self.dialect
+    }
+    fn execute(
+        &self,
+        sql: &str,
+        params: &[TemplateValue],
+    ) -> Result<Vec<serde_json::Value>, EngineError> {
+        (self.f)(sql, params)
+    }
+}
 
 /// 调用 Provider 方法时由 runtime 在入口构造并向下传递。
 /// 同一 ctx 在路径解析的整个 fold loop 中复用; 方法返回后 drop。
@@ -105,8 +157,6 @@ pub enum EngineError {
     InvalidPath(String),
     #[error("factory failed for `{0}.{1}`: {2}")]
     FactoryFailed(String, String, String),
-    #[error("executor not provided in runtime; dynamic SQL requires SqlExecutor injection")]
-    ExecutorMissing,
 }
 
 #[cfg(test)]
@@ -169,7 +219,29 @@ mod tests {
         assert!(format!("{}", e).contains("name"));
         let e = EngineError::FactoryFailed("ns".into(), "x".into(), "missing prop".into());
         assert!(format!("{}", e).contains("missing prop"));
-        let e = EngineError::ExecutorMissing;
-        assert!(format!("{}", e).contains("executor"));
+    }
+
+    #[test]
+    fn closure_executor_dialect_returned_unchanged() {
+        let exec = ClosureExecutor::new(SqlDialect::Sqlite, |_sql, _params| Ok(Vec::new()));
+        assert_eq!(exec.dialect(), SqlDialect::Sqlite);
+
+        let exec_pg = ClosureExecutor::new(SqlDialect::Postgres, |_sql, _params| Ok(Vec::new()));
+        assert_eq!(exec_pg.dialect(), SqlDialect::Postgres);
+    }
+
+    #[test]
+    fn closure_executor_execute_calls_inner_fn() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let count = Arc::new(AtomicUsize::new(0));
+        let count_clone = count.clone();
+        let exec = ClosureExecutor::new(SqlDialect::Sqlite, move |sql, _params| {
+            count_clone.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(sql, "SELECT 1");
+            Ok(vec![serde_json::json!({"x": 1})])
+        });
+        let rows = exec.execute("SELECT 1", &[]).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
     }
 }
