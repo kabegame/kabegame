@@ -2,10 +2,13 @@
 
 use super::{ChildEntry, EngineError, Provider, ProviderContext};
 use crate::ast::{
-    ListEntry, Namespace, ProviderDef, ProviderInvocation, Query,
-    TemplateValue as AstTemplateValue,
+    DelegateProviderField, DynamicDelegateEntry, DynamicListEntry, DynamicSqlEntry, ListEntry,
+    Namespace, ProviderDef, ProviderInvocation, Query, TemplateValue as AstTemplateValue,
 };
-use crate::compose::{fold_contrib, render_template_to_string, ProviderQuery, RenderError};
+use crate::compose::{
+    fold_contrib, render_template_to_string, render_to_owned, AliasTable, ProviderQuery,
+    RenderError,
+};
 use crate::template::eval::{TemplateContext, TemplateValue};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,19 +28,34 @@ impl DslProvider {
             .unwrap_or_else(|| Namespace(String::new()))
     }
 
+    /// 构造基础 TemplateContext (含 properties + 可选 captures)。
+    fn base_template_context(&self, captures: &[String]) -> TemplateContext {
+        let mut tctx = TemplateContext::default();
+        tctx.properties = self.properties.clone();
+        tctx.capture = captures.to_vec();
+        tctx
+    }
+
     /// 求值一组 properties (`HashMap<String, AstTemplateValue>`) 在当前作用域。
     fn eval_properties(
         &self,
         raw: &Option<HashMap<String, AstTemplateValue>>,
         captures: &[String],
     ) -> Result<HashMap<String, TemplateValue>, EngineError> {
+        let tctx = self.base_template_context(captures);
+        self.eval_properties_in_ctx(raw, &tctx)
+    }
+
+    /// 求值 properties 复用 caller 给出的 TemplateContext (可含 data_var / child_var)。
+    fn eval_properties_in_ctx(
+        &self,
+        raw: &Option<HashMap<String, AstTemplateValue>>,
+        tctx: &TemplateContext,
+    ) -> Result<HashMap<String, TemplateValue>, EngineError> {
         let Some(raw) = raw else {
             return Ok(HashMap::new());
         };
         let mut out = HashMap::with_capacity(raw.len());
-        let mut tctx = TemplateContext::default();
-        tctx.properties = self.properties.clone();
-        tctx.capture = captures.to_vec();
         for (k, v) in raw {
             let value = match v {
                 AstTemplateValue::String(s) => {
@@ -45,7 +63,7 @@ impl DslProvider {
                         TemplateValue::Text(s.clone())
                     } else {
                         // 字符串字面 → 求值后转 TemplateValue
-                        let rendered = render_template_to_string(s, &tctx)?;
+                        let rendered = render_template_to_string(s, tctx)?;
                         // 尝试 int / real 解析；否则保留 Text
                         if let Ok(i) = rendered.parse::<i64>() {
                             TemplateValue::Int(i)
@@ -76,11 +94,18 @@ impl DslProvider {
         meta: &Option<serde_json::Value>,
         captures: &[String],
     ) -> Result<Option<serde_json::Value>, EngineError> {
+        let tctx = self.base_template_context(captures);
+        self.eval_meta_in_ctx(meta, &tctx)
+    }
+
+    /// 在 caller 给定的 TemplateContext 下求值 meta (用于 dynamic 项, 可含 data_var / child_var)。
+    fn eval_meta_in_ctx(
+        &self,
+        meta: &Option<serde_json::Value>,
+        tctx: &TemplateContext,
+    ) -> Result<Option<serde_json::Value>, EngineError> {
         let Some(m) = meta else { return Ok(None) };
-        let mut tctx = TemplateContext::default();
-        tctx.properties = self.properties.clone();
-        tctx.capture = captures.to_vec();
-        Ok(Some(walk_meta_value(m, &tctx)?))
+        Ok(Some(walk_meta_value(m, tctx)?))
     }
 
     /// 实例化一个 ProviderInvocation 为 Provider 实例。
@@ -108,6 +133,184 @@ impl DslProvider {
             }
             ProviderInvocation::Empty(_) => {
                 Ok(Some(Arc::new(EmptyDslProvider) as Arc<dyn Provider>))
+            }
+        }
+    }
+
+    /// 动态 SQL list 项: 渲染 SQL → executor 执行 → 每行 row 注入为 data_var, 渲染 key/meta/properties。
+    fn list_dynamic_sql(
+        &self,
+        key_template: &str,
+        entry: &DynamicSqlEntry,
+        ctx: &ProviderContext,
+    ) -> Result<Vec<ChildEntry>, EngineError> {
+        let executor = ctx
+            .runtime
+            .executor()
+            .ok_or(EngineError::ExecutorMissing)?
+            .clone();
+
+        // 渲染 SQL: 仅 properties 作用域 (capture 空, data_var 此时未定)
+        let aliases = AliasTable::new();
+        let prop_ctx = self.base_template_context(&[]);
+        let (sql, params) = render_to_owned(&entry.sql.0, &prop_ctx, &aliases)?;
+
+        let rows = executor(&sql, &params)?;
+
+        let data_var_name = entry.data_var.0.clone();
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut row_ctx = self.base_template_context(&[]);
+            row_ctx.data_var = Some((data_var_name.clone(), row.clone()));
+
+            let name = render_template_to_string(key_template, &row_ctx)?;
+
+            let provider: Option<Arc<dyn Provider>> = match &entry.provider {
+                Some(prov_name) => {
+                    let props = self.eval_properties_in_ctx(&entry.properties, &row_ctx)?;
+                    ctx.registry
+                        .instantiate(&self.current_namespace(), prov_name, &props, ctx)
+                }
+                None => None,
+            };
+
+            let meta = self.eval_meta_in_ctx(&entry.meta, &row_ctx)?;
+            out.push(ChildEntry {
+                name,
+                provider,
+                meta,
+            });
+        }
+        Ok(out)
+    }
+
+    /// 动态 Delegate list 项: 解析 delegate 路径 → 列举其子节点 → 每个子节点 child_var 注入,
+    /// 渲染 key/meta/properties。`provider` 字段决定输出 ChildEntry.provider:
+    /// - `None` 或 `ChildRef("${child_var.provider}")` → 透传 target child.provider
+    /// - `Name(prov)` → 用 provider name 实例化
+    fn list_dynamic_delegate(
+        &self,
+        key_template: &str,
+        entry: &DynamicDelegateEntry,
+        composed: &ProviderQuery,
+        ctx: &ProviderContext,
+    ) -> Result<Vec<ChildEntry>, EngineError> {
+        let target = ctx
+            .runtime
+            .resolve_with_initial(&entry.delegate.0, Some(composed.clone()))?;
+        let target_children = target.provider.list(&target.composed, ctx)?;
+
+        let child_var_name = entry.child_var.0.clone();
+        let mut out = Vec::with_capacity(target_children.len());
+        for child in target_children {
+            let child_json = serde_json::json!({
+                "name": child.name,
+                "meta": child.meta.clone().unwrap_or(serde_json::Value::Null),
+            });
+            let mut tctx = self.base_template_context(&[]);
+            tctx.child_var = Some((child_var_name.clone(), child_json));
+
+            let name = render_template_to_string(key_template, &tctx)?;
+
+            let provider: Option<Arc<dyn Provider>> = match &entry.provider {
+                None => child.provider.clone(),
+                Some(DelegateProviderField::ChildRef(_)) => child.provider.clone(),
+                Some(DelegateProviderField::Name(prov_name)) => {
+                    let props = self.eval_properties_in_ctx(&entry.properties, &tctx)?;
+                    ctx.registry
+                        .instantiate(&self.current_namespace(), prov_name, &props, ctx)
+                }
+            };
+            let meta = self.eval_meta_in_ctx(&entry.meta, &tctx)?;
+            out.push(ChildEntry {
+                name,
+                provider,
+                meta,
+            });
+        }
+        Ok(out)
+    }
+
+    /// 反查: 给定 name, 找到哪个 dynamic 项的 key 模板渲染后等于 name, 然后实例化对应 provider。
+    /// 返回 `Ok(None)` 表示该 dynamic 项不命中; `Ok(Some(p))` 命中。
+    fn reverse_lookup_dynamic(
+        &self,
+        name: &str,
+        key_template: &str,
+        entry: &DynamicListEntry,
+        composed: &ProviderQuery,
+        ctx: &ProviderContext,
+    ) -> Result<Option<Arc<dyn Provider>>, EngineError> {
+        match entry {
+            DynamicListEntry::Sql(sql_entry) => {
+                let executor = ctx
+                    .runtime
+                    .executor()
+                    .ok_or(EngineError::ExecutorMissing)?
+                    .clone();
+                let aliases = AliasTable::new();
+                let prop_ctx = self.base_template_context(&[]);
+                let (sql, params) = render_to_owned(&sql_entry.sql.0, &prop_ctx, &aliases)?;
+                let rows = executor(&sql, &params)?;
+
+                let data_var_name = sql_entry.data_var.0.clone();
+                for row in rows {
+                    let mut row_ctx = self.base_template_context(&[]);
+                    row_ctx.data_var = Some((data_var_name.clone(), row.clone()));
+                    let rendered = render_template_to_string(key_template, &row_ctx)?;
+                    if rendered == name {
+                        let provider: Option<Arc<dyn Provider>> = match &sql_entry.provider {
+                            Some(prov_name) => {
+                                let props =
+                                    self.eval_properties_in_ctx(&sql_entry.properties, &row_ctx)?;
+                                ctx.registry.instantiate(
+                                    &self.current_namespace(),
+                                    prov_name,
+                                    &props,
+                                    ctx,
+                                )
+                            }
+                            None => None,
+                        };
+                        return Ok(provider);
+                    }
+                }
+                Ok(None)
+            }
+            DynamicListEntry::Delegate(del_entry) => {
+                let target = ctx
+                    .runtime
+                    .resolve_with_initial(&del_entry.delegate.0, Some(composed.clone()))?;
+                let target_children = target.provider.list(&target.composed, ctx)?;
+
+                let child_var_name = del_entry.child_var.0.clone();
+                for child in target_children {
+                    let child_json = serde_json::json!({
+                        "name": child.name,
+                        "meta": child.meta.clone().unwrap_or(serde_json::Value::Null),
+                    });
+                    let mut tctx = self.base_template_context(&[]);
+                    tctx.child_var = Some((child_var_name.clone(), child_json));
+                    let rendered = render_template_to_string(key_template, &tctx)?;
+                    if rendered == name {
+                        let provider: Option<Arc<dyn Provider>> = match &del_entry.provider {
+                            None => child.provider.clone(),
+                            Some(DelegateProviderField::ChildRef(_)) => child.provider.clone(),
+                            Some(DelegateProviderField::Name(prov_name)) => {
+                                let props =
+                                    self.eval_properties_in_ctx(&del_entry.properties, &tctx)?;
+                                ctx.registry.instantiate(
+                                    &self.current_namespace(),
+                                    prov_name,
+                                    &props,
+                                    ctx,
+                                )
+                            }
+                        };
+                        return Ok(provider);
+                    }
+                }
+                Ok(None)
             }
         }
     }
@@ -170,8 +373,13 @@ impl Provider for DslProvider {
                         out.push(child);
                     }
                 }
-                ListEntry::Dynamic(_) => {
-                    // 6a: 动态 list 项需要 SQL 执行能力, 留 6c 实现 (静默跳过)。
+                ListEntry::Dynamic(DynamicListEntry::Sql(e)) => {
+                    let mut children = self.list_dynamic_sql(key, e, ctx)?;
+                    out.append(&mut children);
+                }
+                ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => {
+                    let mut children = self.list_dynamic_delegate(key, e, composed, ctx)?;
+                    out.append(&mut children);
                 }
             }
         }
@@ -216,7 +424,16 @@ impl Provider for DslProvider {
                     }
                 }
             }
-            // 3. 动态反查留 6c
+            // 3. 动态反查 (§5.2 第三步): 找哪个 dynamic 项渲染出 == name 的 key, 实例化对应 provider
+            for (key_template, entry) in &list.entries {
+                if let ListEntry::Dynamic(dyn_entry) = entry {
+                    if let Ok(Some(p)) =
+                        self.reverse_lookup_dynamic(name, key_template, dyn_entry, composed, ctx)
+                    {
+                        return Some(p);
+                    }
+                }
+            }
         }
         None
     }
