@@ -1,24 +1,16 @@
 //! Provider 路径查询语法 — Tauri/MCP 边界使用。
 //!
-//! 语法:
-//! - `<path>`       → 单个 entry：resolve path → meta + note + total（按该节点 composed query 的 COUNT）
-//! - `<path>/`      → `list_dir()`（子 Child 不带 meta）+ `list_images()` + total
-//! - `<path>/*`     → `list_dir_with_meta()`（子 Child 带批量 meta）+ `list_images()` + total
-//!
-//! Images 混合在 entries 数组里（Dir 在前，Image 在后）。
-//!
-//! `total` 字段语义（Entry 与 Listing 一致）：将该路径的 composed query（由
-//! [`Provider::apply_query`](super::provider::Provider::apply_query) 沿链累积）
-//! build 成 `SELECT COUNT(*)` 并执行，得到匹配当前过滤/搜索/JOIN/WHERE 的图片总数。
-//! 前端在需要展示总数但不需要当前页 entries 时，应优先使用无尾缀语法
-//! （例如 `all`、`search/display-name/<q>/all`），避免额外触发 `list_children` / `list_images`。
+//! 6b 起：路径解析走 pathql-rs ProviderRuntime；图片获取直接调 Storage。
 
 use serde_json::{json, Value};
 
+use pathql_rs::ast::NumberOrTemplate;
+use pathql_rs::compose::ProviderQuery;
+
 use crate::gallery::GalleryBrowseEntry;
-use crate::providers::provider::ProviderMeta;
-use crate::providers::runtime::ProviderRuntime;
 use crate::storage::Storage;
+
+use super::init::provider_runtime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderPathQuery {
@@ -45,12 +37,7 @@ pub fn parse_provider_path(raw: &str) -> (String, ProviderPathQuery) {
     (trimmed.to_string(), ProviderPathQuery::Entry)
 }
 
-/// 对 provider 路径逐段 percent-decode：按 `/` 拆分，对每个非空段做 UTF-8 解码
-/// （失败时保留原段），再用 `/` 重新拼接。保留前导/尾随 `/` 与结尾的 `/*` 语法。
-///
-/// 用于 tauri / web 边界统一解码前端用 `encodeURIComponent` 编码的动态段
-/// （如搜索查询 `search/display-name/<q>/`、画册/任务 id 等），让所有 provider
-/// 拿到的都是原始字符串，无需各自处理 URL 编码。
+/// 对 provider 路径逐段 percent-decode。
 pub fn decode_provider_path_segments(raw: &str) -> String {
     let trimmed = raw.trim();
     let (body, suffix) = if let Some(stripped) = trimmed.strip_suffix("/*") {
@@ -94,35 +81,56 @@ fn split_last_segment(path: &str) -> (String, String) {
     }
 }
 
+/// 解析 get_note 的 JSON 字符串到 (title, content)；非 JSON 时把它当 title=content。
+fn parse_note(raw: Option<String>) -> Option<(String, String)> {
+    let s = raw?;
+    if let Ok(v) = serde_json::from_str::<Value>(&s) {
+        if let (Some(t), Some(c)) = (
+            v.get("title").and_then(|x| x.as_str()),
+            v.get("content").and_then(|x| x.as_str()),
+        ) {
+            return Some((t.to_string(), c.to_string()));
+        }
+    }
+    Some((s.clone(), s))
+}
+
 fn note_value(note: Option<(String, String)>) -> Option<Value> {
     note.map(|(title, content)| json!({ "title": title, "content": content }))
 }
 
-/// Typed 版本的 provider 查询结果，`execute_provider_query` 的内部表示。
-/// 暴露给 web 边界层以便对 `Listing::entries` 里的 `ImageInfo` 做类型化改写
-/// （CDN URL 重写等），改写后再用 [`provider_query_to_json`] 序列化为和旧路径
-/// 字节级一致的 JSON envelope。
+/// Typed 版本的 provider 查询结果。
 #[derive(Debug)]
 pub enum ProviderQueryTyped {
     Entry {
         name: String,
-        meta: Option<ProviderMeta>,
+        meta: Option<Value>,
         note: Option<(String, String)>,
-        /// 按该节点 composed query 计算出的匹配图片总数；COUNT 失败时为 `None`。
         total: Option<usize>,
     },
     Listing {
         entries: Vec<GalleryBrowseEntry>,
         total: Option<usize>,
-        meta: Option<ProviderMeta>,
+        meta: Option<Value>,
         note: Option<(String, String)>,
     },
+}
+
+fn normalize_for_runtime(path: &str) -> String {
+    if path.is_empty() {
+        "/".to_string()
+    } else if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{}", path)
+    }
 }
 
 /// Typed 入口：解析路径并执行查询，返回未序列化的 typed 结果。
 pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped, String> {
     let (path, mode) = parse_provider_path(raw_path);
-    let rt = ProviderRuntime::global();
+    let rt = provider_runtime();
+    let rt_path = normalize_for_runtime(&path);
 
     match mode {
         ProviderPathQuery::Entry => {
@@ -131,60 +139,97 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
                 return Err(format!("路径不完整: {}", raw_path));
             }
             let node = rt
-                .resolve(&path)?
-                .ok_or_else(|| format!("条目不存在: {}", raw_path))?;
+                .resolve(&rt_path)
+                .map_err(|e| format!("解析路径失败: {}: {}", raw_path, e))?;
             let total = Storage::global().get_images_count_by_query(&node.composed).ok();
+            let raw_note = rt
+                .note(&rt_path)
+                .map_err(|e| format!("note failed: {}", e))?;
             Ok(ProviderQueryTyped::Entry {
                 name: last,
-                meta: node.provider.get_meta(),
-                note: node.provider.get_note(),
+                meta: None,
+                note: parse_note(raw_note),
                 total,
             })
         }
         ProviderPathQuery::List | ProviderPathQuery::ListWithMeta => {
             let node = rt
-                .resolve(&path)?
-                .ok_or_else(|| format!("路径不存在: {}", path))?;
+                .resolve(&rt_path)
+                .map_err(|e| format!("解析路径失败: {}: {}", raw_path, e))?;
+            let children = rt
+                .list(&rt_path)
+                .map_err(|e| format!("list children failed: {}", e))?;
 
-            let children = if mode == ProviderPathQuery::ListWithMeta {
-                node.provider.list_children_with_meta(&node.composed)?
-            } else {
-                node.provider.list_children(&node.composed)?
-            };
-
-            let composed_images = if node.composed.order_bys.is_empty() {
-                node.composed.clone().with_order("images.id ASC")
-            } else {
-                node.composed.clone()
-            };
-            let images = node.provider.list_images(&composed_images)?;
-
-            let entries = crate::gallery::browse_from_provider(children, images)?;
+            let images = fetch_images_for(&node.composed)?;
+            let entries = crate::gallery::browse_from_provider_jsonmeta(children, images)?;
 
             let total: Option<usize> =
                 Storage::global().get_images_count_by_query(&node.composed).ok();
 
+            let raw_note = rt
+                .note(&rt_path)
+                .map_err(|e| format!("note failed: {}", e))?;
+
             Ok(ProviderQueryTyped::Listing {
                 entries,
                 total,
-                meta: node.provider.get_meta(),
-                note: node.provider.get_note(),
+                meta: None,
+                note: parse_note(raw_note),
             })
         }
     }
 }
 
-/// 把 typed 查询结果序列化为 Tauri / MCP / web 共用的 JSON envelope 形状。
-/// 保持与旧 `execute_provider_query` 字节级一致（字段顺序、null 位置）。
+/// 决定是否 fetch images：composed.limit 显式 > 0 → 取该页；
+/// limit=0（gallery_route 默认）→ 不 fetch；
+/// 无 limit → 默认最后一页 100 条。
+fn fetch_images_for(
+    composed: &ProviderQuery,
+) -> Result<Vec<crate::storage::ImageInfo>, String> {
+    if composed.from.is_none() {
+        return Ok(Vec::new());
+    }
+    let lim_zero = matches!(composed.limit, Some(NumberOrTemplate::Number(n)) if n == 0.0);
+    if lim_zero {
+        return Ok(Vec::new());
+    }
+    if composed.limit.is_some() {
+        return Storage::global().get_images_info_range_by_query(composed);
+    }
+    // 无 limit：默认最后一页 100 条
+    let total = Storage::global().get_images_count_by_query(composed)?;
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+    let page_size = 100usize;
+    let last_offset = ((total + page_size - 1) / page_size - 1) * page_size;
+    let mut q = composed.clone();
+    q.offset_terms
+        .push(NumberOrTemplate::Number(last_offset as f64));
+    q.limit = Some(NumberOrTemplate::Number(page_size as f64));
+    Storage::global().get_images_info_range_by_query(&q)
+}
+
+/// 把 typed 查询结果序列化为 Tauri / MCP / web 共用的 JSON envelope。
 pub fn provider_query_to_json(t: &ProviderQueryTyped) -> Result<Value, String> {
     match t {
-        ProviderQueryTyped::Entry { name, meta, note, total } => Ok(json!({
+        ProviderQueryTyped::Entry {
+            name,
+            meta,
+            note,
+            total,
+        } => Ok(json!({
             "name": name,
             "meta": meta,
             "note": note_value(note.clone()),
             "total": total,
         })),
-        ProviderQueryTyped::Listing { entries, total, meta, note } => {
+        ProviderQueryTyped::Listing {
+            entries,
+            total,
+            meta,
+            note,
+        } => {
             let entries_json = serde_json::to_value(entries).map_err(|e| e.to_string())?;
             Ok(json!({
                 "entries": entries_json,
@@ -196,10 +241,6 @@ pub fn provider_query_to_json(t: &ProviderQueryTyped) -> Result<Value, String> {
     }
 }
 
-/// 统一入口：解析路径并执行查询。返回 JSON 值供 Tauri / MCP 直接使用。
-///
-/// 实现：内部走 [`execute_provider_query_typed`] + [`provider_query_to_json`]。
-/// web 边界若需类型化改写请直接调 typed 版本，避免往 Value 上塞 JSON 遍历代码。
 pub fn execute_provider_query(raw_path: &str) -> Result<Value, String> {
     let typed = execute_provider_query_typed(raw_path)?;
     provider_query_to_json(&typed)

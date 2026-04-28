@@ -30,7 +30,9 @@ pub mod wallpaper_engine_export;
 /// 虚拟盘。
 ///
 /// 注意：该模块仅在启用 feature `virtual-driver` 时编译，避免在不需要 VD 的 app 里引入相关依赖。
-#[cfg(kabegame_mode = "standard")]
+// virtual_driver: Phase 6b 期间暂禁（依赖旧 Provider trait 的 list_images / get_meta typed enum）
+// Phase 6c 通过 SqlExecutor 重新接入。
+#[cfg(all(kabegame_mode = "standard", feature = "vd-legacy"))]
 pub mod virtual_driver;
 
 const BUILD_MODE: &str = env!("KABEGAME_BUILD_MODE"); // injected by build.rs
