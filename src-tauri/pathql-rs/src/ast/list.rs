@@ -1,5 +1,6 @@
 use crate::ast::{
-    expr::*, invocation::ProviderInvocation, names::*, property::TemplateValue, MetaValue,
+    expr::*, invocation::{ProviderCall, ProviderInvocation}, names::*, property::TemplateValue,
+    MetaValue,
 };
 use serde::{
     de::{self, MapAccess, Visitor},
@@ -32,7 +33,8 @@ pub enum DelegateProviderField {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DynamicDelegateEntry {
-    pub delegate: PathExpr,
+    /// 6e: 数据源 provider 引用 (ProviderCall); 实例化后调它的 list_children 拿 children 序列。
+    pub delegate: ProviderCall,
     pub child_var: Identifier,
     #[serde(default)]
     pub provider: Option<DelegateProviderField>,
@@ -141,8 +143,9 @@ mod tests {
 
     #[test]
     fn two_static_entries() {
+        // 6e: 静态项均为 ByName / Empty (ByDelegate variant 已删除)
         let v: List =
-            serde_json::from_str(r#"{"a":{"provider":"x"},"b":{"delegate":"./y"}}"#).unwrap();
+            serde_json::from_str(r#"{"a":{"provider":"x"},"b":{"provider":"y"}}"#).unwrap();
         assert_eq!(v.entries.len(), 2);
         assert!(matches!(v.entries[0].1, ListEntry::Static(_)));
         assert!(matches!(v.entries[1].1, ListEntry::Static(_)));
@@ -167,13 +170,13 @@ mod tests {
     #[test]
     fn dynamic_delegate_entry() {
         let v: List = serde_json::from_str(
-            r#"{"${out.name}":{"delegate":"./z","child_var":"out"}}"#,
+            r#"{"${out.name}":{"delegate":{"provider":"z"},"child_var":"out"}}"#,
         )
         .unwrap();
         assert_eq!(v.entries.len(), 1);
         match &v.entries[0].1 {
             ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => {
-                assert_eq!(e.delegate, PathExpr("./z".into()));
+                assert_eq!(e.delegate.provider, ProviderName("z".into()));
                 assert_eq!(e.child_var, Identifier("out".into()));
             }
             _ => panic!("expected Dynamic Delegate"),
@@ -186,8 +189,8 @@ mod tests {
             r#"{
                 "a": { "provider": "x" },
                 "${row.id}": { "sql": "s1", "data_var": "row" },
-                "b": { "delegate": "./y" },
-                "${out.name}": { "delegate": "./z", "child_var": "out" },
+                "b": { "provider": "y" },
+                "${out.name}": { "delegate": {"provider":"z"}, "child_var": "out" },
                 "c": {}
             }"#,
         )
@@ -223,13 +226,14 @@ mod tests {
     #[test]
     fn dynamic_with_provider_child_ref() {
         let v: List = serde_json::from_str(
-            r#"{"${out.meta.page_num}":{"delegate":"./__provider","child_var":"out","provider":"gallery_page_router"}}"#,
+            r#"{"${out.meta.page_num}":{"delegate":{"provider":"page_size_provider"},"child_var":"out","provider":"gallery_page_router"}}"#,
         )
         .unwrap();
         assert_eq!(v.entries.len(), 1);
         match &v.entries[0].1 {
             ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => {
                 assert!(e.provider.is_some());
+                assert_eq!(e.delegate.provider, ProviderName("page_size_provider".into()));
             }
             _ => panic!("expected Dynamic Delegate"),
         }

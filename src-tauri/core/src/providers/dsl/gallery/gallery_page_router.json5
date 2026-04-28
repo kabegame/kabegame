@@ -7,11 +7,10 @@
         "page_num":  { "type": "number", "default": 1, "optional": false }
     },
 
-    // 委托内部私有路径 __provider, 由 query_page_provider 实际贡献 OFFSET/LIMIT
-    "query": { "delegate": "./__provider" },
-
-    "resolve": {
-        "__provider": {
+    // 6e: delegate 直接命中 query_page_provider, 由它贡献 OFFSET/LIMIT。
+    // 原 __provider 私有 resolve 间接桥已删除。
+    "query": {
+        "delegate": {
             "provider": "query_page_provider",
             "properties": {
                 "page_size": "${properties.page_size}",

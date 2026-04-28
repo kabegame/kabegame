@@ -1,5 +1,5 @@
 use crate::ast::{
-    InvokeByDelegate, InvokeByName, ListEntry, ProviderInvocation, Resolve, TemplateValue,
+    InvokeByName, ListEntry, ProviderInvocation, Resolve, TemplateValue,
 };
 use crate::template::{parse, Segment, VarRef};
 use crate::validate::{ValidateError, ValidateErrorKind};
@@ -138,16 +138,6 @@ fn collect_invocation_strings(inv: &ProviderInvocation) -> Vec<(String, String)>
     };
     match inv {
         ProviderInvocation::ByName(InvokeByName {
-            properties, meta, ..
-        }) => {
-            if let Some(p) = properties {
-                push_props(p, &mut out);
-            }
-            if let Some(m) = meta {
-                push_meta(m, &mut out);
-            }
-        }
-        ProviderInvocation::ByDelegate(InvokeByDelegate {
             properties, meta, ..
         }) => {
             if let Some(p) = properties {

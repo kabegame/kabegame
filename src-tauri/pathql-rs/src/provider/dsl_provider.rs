@@ -3,7 +3,8 @@
 use super::{ChildEntry, EngineError, Provider, ProviderContext};
 use crate::ast::{
     DelegateProviderField, DynamicDelegateEntry, DynamicListEntry, DynamicSqlEntry, ListEntry,
-    Namespace, ProviderDef, ProviderInvocation, Query, TemplateValue as AstTemplateValue,
+    Namespace, ProviderCall, ProviderDef, ProviderInvocation, Query,
+    TemplateValue as AstTemplateValue,
 };
 use crate::compose::{
     fold_contrib, render_template_to_string, render_to_owned, AliasTable, ProviderQuery,
@@ -88,44 +89,6 @@ impl DslProvider {
         Ok(out)
     }
 
-    /// 解析 delegate 路径: 绝对路径 (`/...`) 走 runtime; 相对路径 (`./...`) 从 self 起逐段
-    /// resolve + apply_query。返回 (provider, 累积 composed)。
-    fn resolve_delegate(
-        &self,
-        path: &str,
-        composed: &ProviderQuery,
-        ctx: &ProviderContext,
-    ) -> Result<(Arc<dyn Provider>, ProviderQuery), EngineError> {
-        if !path.starts_with("./") {
-            // 绝对路径走 runtime (含 longest-prefix cache)
-            let node = ctx
-                .runtime
-                .resolve_with_initial(path, Some(composed.clone()))?;
-            return Ok((node.provider, node.composed));
-        }
-        // 相对路径: 跳过 "./" 前缀, 从 self 起逐段 resolve
-        let stripped = &path[2..];
-        let mut iter = stripped.split('/').filter(|s| !s.is_empty());
-        let first = iter
-            .next()
-            .ok_or_else(|| EngineError::PathNotFound(path.into()))?;
-        let mut current = self
-            .resolve(first, composed, ctx)
-            .ok_or_else(|| EngineError::PathNotFound(format!("./{}", first)))?;
-        let mut current_composed = current.apply_query(composed.clone(), ctx);
-        let mut so_far = format!("./{}", first);
-        for seg in iter {
-            so_far.push('/');
-            so_far.push_str(seg);
-            let next = current
-                .resolve(seg, &current_composed, ctx)
-                .ok_or_else(|| EngineError::PathNotFound(so_far.clone()))?;
-            current_composed = next.apply_query(current_composed, ctx);
-            current = next;
-        }
-        Ok((current, current_composed))
-    }
-
     /// 渲染 meta 值: 字符串走 template; object/array 递归; 标量原样。
     fn eval_meta(
         &self,
@@ -147,11 +110,12 @@ impl DslProvider {
     }
 
     /// 实例化一个 ProviderInvocation 为 Provider 实例。
+    /// 6e: ByDelegate variant 已删除; 仅 ByName + Empty。
     fn instantiate_invocation(
         &self,
         invocation: &ProviderInvocation,
         captures: &[String],
-        composed: &ProviderQuery,
+        _composed: &ProviderQuery,
         ctx: &ProviderContext,
     ) -> Result<Option<Arc<dyn Provider>>, EngineError> {
         match invocation {
@@ -161,16 +125,22 @@ impl DslProvider {
                     .registry
                     .instantiate(&self.current_namespace(), &b.provider, &props, ctx))
             }
-            ProviderInvocation::ByDelegate(b) => {
-                let props = self.eval_properties(&b.properties, captures)?;
-                let _ = props; // ByDelegate 仅借用路径解析; properties 用于 compose 阶段，本期不传给 runtime
-                let (provider, _) = self.resolve_delegate(&b.delegate.0, composed, ctx)?;
-                Ok(Some(provider))
-            }
             ProviderInvocation::Empty(_) => {
                 Ok(Some(Arc::new(EmptyDslProvider) as Arc<dyn Provider>))
             }
         }
+    }
+
+    /// 实例化一个 ProviderCall (6e 起 delegate 字段使用)。返回 None 表示目标未注册。
+    fn instantiate_call(
+        &self,
+        call: &ProviderCall,
+        ctx: &ProviderContext,
+    ) -> Result<Option<Arc<dyn Provider>>, EngineError> {
+        let props = self.eval_properties(&call.properties, &[])?;
+        Ok(ctx
+            .registry
+            .instantiate(&self.current_namespace(), &call.provider, &props, ctx))
     }
 
     /// 动态 SQL list 项: 渲染 SQL → executor 执行 → 每行 row 注入为 data_var, 渲染 key/meta/properties。
@@ -232,8 +202,17 @@ impl DslProvider {
         composed: &ProviderQuery,
         ctx: &ProviderContext,
     ) -> Result<Vec<ChildEntry>, EngineError> {
-        let (target_provider, target_composed) =
-            self.resolve_delegate(&entry.delegate.0, composed, ctx)?;
+        // 6e: delegate 直接是 ProviderCall — 实例化目标 + apply_query 累计上游 composed,
+        //     再调它的 list 拿 children。
+        let target_provider = self
+            .instantiate_call(&entry.delegate, ctx)?
+            .ok_or_else(|| {
+                EngineError::ProviderNotRegistered(
+                    self.current_namespace().0.clone(),
+                    entry.delegate.provider.0.clone(),
+                )
+            })?;
+        let target_composed = target_provider.apply_query(composed.clone(), ctx);
         let target_children = target_provider.list(&target_composed, ctx)?;
 
         let child_var_name = entry.child_var.0.clone();
@@ -314,8 +293,15 @@ impl DslProvider {
                 Ok(None)
             }
             DynamicListEntry::Delegate(del_entry) => {
-                let (target_provider, target_composed) =
-                    self.resolve_delegate(&del_entry.delegate.0, composed, ctx)?;
+                let target_provider = self
+                    .instantiate_call(&del_entry.delegate, ctx)?
+                    .ok_or_else(|| {
+                        EngineError::ProviderNotRegistered(
+                            self.current_namespace().0.clone(),
+                            del_entry.delegate.provider.0.clone(),
+                        )
+                    })?;
+                let target_composed = target_provider.apply_query(composed.clone(), ctx);
                 let target_children = target_provider.list(&target_composed, ctx)?;
 
                 let child_var_name = del_entry.child_var.0.clone();
@@ -362,7 +348,6 @@ impl DslProvider {
         let provider = self.instantiate_invocation(inv, &[], composed, ctx)?;
         let meta = match inv {
             ProviderInvocation::ByName(b) => self.eval_meta(&b.meta, &[])?,
-            ProviderInvocation::ByDelegate(b) => self.eval_meta(&b.meta, &[])?,
             ProviderInvocation::Empty(b) => self.eval_meta(&b.meta, &[])?,
         };
         Ok(Some(ChildEntry {
@@ -384,9 +369,12 @@ impl Provider for DslProvider {
                 state
             }
             Some(Query::Delegate(d)) => {
-                self.resolve_delegate(&d.delegate.0, &current, ctx)
-                    .map(|(_, composed)| composed)
-                    .unwrap_or(current)
+                // 6e: delegate 是 ProviderCall — 实例化目标 + 委托其 apply_query。
+                // 目标未注册时静默返回原 state (apply_query 无 Result 通道; validate cross_ref 应已捕获)。
+                match self.instantiate_call(&d.delegate, ctx) {
+                    Ok(Some(target)) => target.apply_query(current, ctx),
+                    _ => current,
+                }
             }
         }
     }

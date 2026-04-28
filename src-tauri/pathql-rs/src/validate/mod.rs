@@ -6,11 +6,11 @@
 
 pub mod config;
 pub mod cross_ref;
+pub mod cycle;
 pub mod dynamic;
 pub mod error;
 pub mod meta_check;
 pub mod names;
-pub mod paths;
 pub mod query_refs;
 pub mod resolve_check;
 pub mod simple;
@@ -30,6 +30,7 @@ pub fn validate(
     sql::validate_sql_exprs(registry, cfg, &mut errors);
     resolve_check::validate_resolve(registry, &mut errors);
     cross_ref::validate_cross_refs(registry, cfg, &mut errors);
+    cycle::check_delegate_cycles(registry, cfg, &mut errors);
     meta_check::validate_meta(registry, cfg, &mut errors);
     if errors.is_empty() {
         Ok(())

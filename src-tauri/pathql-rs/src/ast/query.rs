@@ -1,10 +1,10 @@
-use crate::ast::{expr::*, order::OrderForm, query_atoms::*};
+use crate::ast::{expr::*, invocation::ProviderCall, order::OrderForm, query_atoms::*};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DelegateQuery {
-    pub delegate: PathExpr,
+    pub delegate: ProviderCall,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
@@ -39,9 +39,26 @@ mod tests {
 
     #[test]
     fn delegate_form() {
-        let v: Query = serde_json::from_str(r#"{"delegate":"./foo"}"#).unwrap();
+        let v: Query = serde_json::from_str(r#"{"delegate":{"provider":"foo"}}"#).unwrap();
         match v {
-            Query::Delegate(d) => assert_eq!(d.delegate, PathExpr("./foo".into())),
+            Query::Delegate(d) => {
+                assert_eq!(d.delegate.provider, crate::ast::ProviderName("foo".into()));
+                assert!(d.delegate.properties.is_none());
+            }
+            _ => panic!("expected Delegate"),
+        }
+    }
+
+    #[test]
+    fn delegate_form_with_properties() {
+        let v: Query = serde_json::from_str(
+            r#"{"delegate":{"provider":"foo","properties":{"page_size":100}}}"#,
+        )
+        .unwrap();
+        match v {
+            Query::Delegate(d) => {
+                assert!(d.delegate.properties.is_some());
+            }
             _ => panic!("expected Delegate"),
         }
     }
@@ -73,7 +90,7 @@ mod tests {
     #[test]
     fn delegate_with_extra_field_rejected() {
         let r: Result<Query, _> =
-            serde_json::from_str(r#"{"delegate":"./foo","limit":0}"#);
+            serde_json::from_str(r#"{"delegate":{"provider":"foo"},"limit":0}"#);
         assert!(r.is_err());
     }
 

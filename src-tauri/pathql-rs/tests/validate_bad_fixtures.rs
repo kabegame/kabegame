@@ -206,24 +206,55 @@ fn reserved_data_var() {
 }
 
 #[test]
-fn invalid_path_in_resolve_delegate() {
-    let mut resolve = Resolve::default();
-    resolve.0.insert(
-        "k".into(),
-        ProviderInvocation::ByDelegate(InvokeByDelegate {
-            delegate: PathExpr("/oops".into()),
+fn delegate_self_cycle_detected() {
+    // 6e: delegate 是 ProviderCall; 自指环 A→A
+    let mut d = base_def("loopy");
+    d.query = Some(Query::Delegate(DelegateQuery {
+        delegate: ProviderCall {
+            provider: ProviderName("loopy".into()),
             properties: None,
-            meta: None,
-        }),
-    );
-    let mut d = base_def("p");
-    d.resolve = Some(resolve);
-    let errs = run_one(d);
-    assert_kind(
-        &errs,
-        |k| matches!(k, ValidateErrorKind::InvalidPathExpr),
-        "InvalidPathExpr",
-    );
+        },
+    }));
+    let mut r = ProviderRegistry::new();
+    r.register(d).unwrap();
+    let cfg = ValidateConfig::with_default_reserved().with_cross_refs(true);
+    let errs = match validate(&r, &cfg) {
+        Ok(()) => Vec::new(),
+        Err(es) => es,
+    };
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e.kind, ValidateErrorKind::DelegateCycle(_))));
+}
+
+#[test]
+fn delegate_two_node_cycle_detected() {
+    // 6e: A.delegate→B, B.delegate→A
+    let mut a = base_def("a");
+    a.query = Some(Query::Delegate(DelegateQuery {
+        delegate: ProviderCall {
+            provider: ProviderName("b".into()),
+            properties: None,
+        },
+    }));
+    let mut b = base_def("b");
+    b.query = Some(Query::Delegate(DelegateQuery {
+        delegate: ProviderCall {
+            provider: ProviderName("a".into()),
+            properties: None,
+        },
+    }));
+    let mut r = ProviderRegistry::new();
+    r.register(a).unwrap();
+    r.register(b).unwrap();
+    let cfg = ValidateConfig::with_default_reserved().with_cross_refs(true);
+    let errs = match validate(&r, &cfg) {
+        Ok(()) => Vec::new(),
+        Err(es) => es,
+    };
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e.kind, ValidateErrorKind::DelegateCycle(_))));
 }
 
 #[test]

@@ -39,12 +39,11 @@ mod tests {
     }
 
     #[test]
-    fn by_delegate_value() {
-        let v: Resolve = serde_json::from_str(r#"{"k":{"delegate":"./x"}}"#).unwrap();
-        assert!(matches!(
-            v.0.get("k"),
-            Some(ProviderInvocation::ByDelegate(_))
-        ));
+    fn delegate_string_no_longer_accepted() {
+        // 6e: ProviderInvocation::ByDelegate variant deleted. `{"delegate": "..."}`
+        // is no longer a valid invocation form (zero hits in real .json5 corpus).
+        let r: Result<Resolve, _> = serde_json::from_str(r#"{"k":{"delegate":"./x"}}"#);
+        assert!(r.is_err());
     }
 
     #[test]
