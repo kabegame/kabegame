@@ -80,18 +80,54 @@
 
 迁移期 checklist：每个迁移 commit 必含 `DSL_FILES` 数组的更新。建议加测试 `tests/dsl_files_consistency.rs`：扫 `dsl/` 实际 `.json5`/`.json` 文件 vs `DSL_FILES` 常量，差集报错——任何新文件忘了加清单 → cargo test 立刻挂。
 
-### 原则 4：Modifier 段需要包装 router
+### 原则 4（7b 修订）：Modifier 段用 `resolve.delegate` 转发
 
-凡是路径中"翻转/过滤/分组" 等**变换语义** + **后面有续段**的 segment，对应的 provider 必须是 router 模式（带 list/resolve）。常见 modifier 段及对应 router DSL：
+**对应能力 7b 才补全**——见 [phase7b-gallery-filters.md](./phase7b-gallery-filters.md) Stage A。
 
-| URL 段 | 角色 | 推荐 DSL 形态 |
+7b 把 6e 误删的 `ProviderInvocation::ByDelegate` variant **以 path-unaware 形式**恢复。三处 `delegate` 字段对称：
+
+| 字段位置                        | 转发的操作                          |
+|---|---|
+| `query.delegate`                | `target.apply_query(current, ctx)`  |
+| `list[].delegate`（动态项）      | `target.list(composed, ctx)`        |
+| **`resolve[].delegate`（7b 新）** | **`target.resolve(name, composed, ctx)`** |
+
+每处 delegate 都是 `ProviderCall = {provider, properties}`——永远 path-unaware；调用 target 上的"该上下文对应的方法"。
+
+#### Modifier router 的极简写法（7b 后）
+
+```jsonc
+// gallery_all_desc_router.json5 (7b 简化版):
+{
+    "name": "gallery_all_desc_router",
+    "query": { "order": { "all": "revert" } },
+    "resolve": {
+        ".*": { "delegate": { "provider": "gallery_all_router" } }
+    }
+}
+```
+
+`.*` 转发：任何 segment 我都不自己解 —— 把 name 转给 `gallery_all_router.resolve(name, ...)`。沿途 gallery_all_router 的 contrib（包括它的 `query.order: asc`）会被 desc_router 的 `revert` 翻转。`gallery_all_router` 已有的 resolve regex（xNx + 裸数字）继续工作。
+
+**收益**：每个 modifier router 只需写自己**特有的** apply_query 贡献 + 一行 `.*` 转发；不必复制粘贴上游路由表。
+
+### 原则 5（7b 新）：list / resolve key 支持 `${properties.X}` instance-static 模板
+
+key 形态分类：
+
+| Key 形态 | 何时定字面值 | Value 类型 |
 |---|---|---|
-| `desc` | 翻转 ORDER 后接分页 | router 持有 xNx + 裸数字 resolve |
-| `image-only` / `video-only` | 媒体过滤后接分页 | router 持有同样 resolve |
-| `wallpaper-order` | 设过壁纸过滤后接分页 | router |
-| `<year>y` / `<month>m` / `<day>d` | 日期下钻后接分页 | router 持有正则 + 子分页 |
+| `"plain"` / `"${X}"`（无点） | DSL 加载期 | `ProviderInvocation` |
+| **`"${properties.X}"`** | **Instance 实例化期** | **`ProviderInvocation`** |
+| `"${data_var.X}"` / `"${child_var.X}"` | 运行期每行 | `DynamicListEntry`（sql / delegate）|
 
-错误模式：把 sort_provider / media_filter_provider 等 leaf 直接挂在 modifier 段——会断链。
+实例化期可定的 key 让"同一份 DSL 不同 properties 实例化出不同 segment 名"成为可能（多语言 segment / 模板化路由）。
+
+### 原则 6（7b 新）：validate 不再做 regex 碰撞检测
+
+7b 之前 validate 强制 regex 之间不交集 + regex 不匹配 list 静态字面。新世界中 `.*` 转发模式 + instance-static key 让这两个检查全是 false positive。
+
+**新约定**：runtime 解析顺序固定 `static list → instance-static list → resolve regex → 动态反查`，多模式重叠由作者自负责任、按解析顺序覆写决定。validate 不再插手 key 相互关系。
 
 ---
 

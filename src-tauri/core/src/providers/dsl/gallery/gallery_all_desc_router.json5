@@ -6,20 +6,19 @@
     "query": {
         "order": { "all": "revert" }
     },
+    "list": {
+        "${all.name}": {
+            "child_var": "all",
+            "delegate": {
+                "provider": "gallery_all_router",
+            }
+        }
+    },
     "resolve": {
         // x{N}x → gallery_paginate_router (与 gallery_all_router 一致)
-        "x([1-9][0-9]*)x": {
-            "provider": "gallery_paginate_router",
-            "properties": {
-                "page_size": "${capture[1]}"
-            }
-        },
-        // 裸数字 = 默认 100/page 的页号 (frontend galleryPath.ts: 当 pageSize===100 时省略 x{N}x 段)
-        "([1-9][0-9]*)": {
-            "provider": "gallery_page_router",
-            "properties": {
-                "page_size": 100,
-                "page_num": "${capture[1]}"
+        ".*": {
+            "delegate": {
+                "provider": "gallery_all_router",
             }
         }
     },

@@ -3,6 +3,7 @@
     "namespace": "kabegame",
     "name": "gallery_route",
     "query": {
+        "order": [{"images.crawled_at": "asc"}],
         // 基础 FROM (cascading-replace; 下游可重声明覆盖)
         "from": "images",
         // 根节点不直接列图片
