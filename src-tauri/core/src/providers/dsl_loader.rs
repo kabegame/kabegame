@@ -25,9 +25,10 @@ pub const DSL_FILES: &[&str] = &[
     "shared/query_page_provider.json5",
     "vd/vd_root_router.json5",
     "vd/vd_zh_CN_root_router.json5",
+    "vd/vd_en_US_root_router.json5",
 ];
 
-/// 把 9 个 .json5 加载、注册进给定 registry, 返回 root_provider 的 ProviderDef。
+/// 把所有 DSL 文件加载、注册进给定 registry, 返回 root_provider 的 ProviderDef。
 ///
 /// `root_provider` 单独返回, 因为它是 DslProvider 实例化为 runtime root 的素材。
 pub fn load_dsl_into(registry: &mut ProviderRegistry) -> ProviderDef {
