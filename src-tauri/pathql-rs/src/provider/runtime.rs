@@ -9,6 +9,12 @@ use crate::ProviderRegistry;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
+/// 调试开关 (临时调试期强制开启, 调完移除): 设环境变量 `PATHQL_DEBUG=1` 启用,
+/// 但当前为了排查 path 解析问题强制 always-on。
+pub(crate) fn dbg_enabled() -> bool {
+    true
+}
+
 pub struct ResolvedNode {
     pub provider: Arc<dyn Provider>,
     pub composed: ProviderQuery,
@@ -85,8 +91,18 @@ impl ProviderRuntime {
         let (start_idx, mut current, mut composed) =
             self.find_longest_cached_prefix(&segments, &ctx);
 
+        if dbg_enabled() {
+            eprintln!(
+                "[pathql] resolve({:?}) — segments={:?} cache_start_idx={}",
+                path, segments, start_idx
+            );
+        }
+
         // 早退: 完整路径已缓存
         if start_idx == segments.len() {
+            if dbg_enabled() {
+                eprintln!("[pathql]   ← full-path cache hit, return");
+            }
             return Ok(ResolvedNode {
                 provider: current,
                 composed,
@@ -98,8 +114,16 @@ impl ProviderRuntime {
         for seg in &segments[start_idx..] {
             path_so_far.push('/');
             path_so_far.push_str(seg);
-            let next = current
-                .resolve(seg, &composed, &ctx)
+            let resolved = current.resolve(seg, &composed, &ctx);
+            if dbg_enabled() {
+                eprintln!(
+                    "[pathql]   step seg={:?} at path={:?} → {}",
+                    seg,
+                    path_so_far,
+                    if resolved.is_some() { "Some(provider)" } else { "None (PathNotFound)" }
+                );
+            }
+            let next = resolved
                 .ok_or_else(|| EngineError::PathNotFound(path_so_far.clone()))?;
             composed = next.apply_query(composed, &ctx);
             current = next;

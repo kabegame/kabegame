@@ -12,8 +12,10 @@
         "offset": 0
     },
     "list": {
-        // desc 直接复用 sort_provider (它的 apply_query 把累积 order revert)
-        "desc": { "provider": "sort_provider" }
+        // desc 指向 gallery_all_desc_router: 它持有自己的 resolve regex (xNx + 裸数字),
+        // 让 /all/desc/<page> 链能继续走分页. 单纯指 sort_provider 不行 — sort_provider
+        // 是叶子 (resolve 全 None), 路径在它后面没法继续.
+        "desc": { "provider": "gallery_all_desc_router" }
         // x100x / x500x / x1000x 由下方 resolve 正则统一处理, 不单独列静态项以避免碰撞
     },
     // 任意 xNNNx (NNN ≥ 1) 命中 → gallery_paginate_router; page_size 取捕获组

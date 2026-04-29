@@ -409,9 +409,12 @@ impl Provider for GalleryHideRouter {
         ctx: &ProviderContext,
     ) -> Result<Vec<ChildEntry>, EngineError> {
         // 委派 gallery_route.list：下游再次暴露完整 gallery 树。
+        eprint!("[hide router] call me list");
         if let Some(p) = instantiate_named("gallery_route", ctx) {
+            eprint!("[hide router] find the gallery router");
             return p.list(composed, ctx);
         }
+        eprint!("[hide router] the gallery router not found");
         Ok(Vec::new())
     }
 
@@ -421,6 +424,7 @@ impl Provider for GalleryHideRouter {
         composed: &ProviderQuery,
         ctx: &ProviderContext,
     ) -> Option<Arc<dyn Provider>> {
+        eprint!("[hide router] call me resolve");
         instantiate_named("gallery_route", ctx)?.resolve(name, composed, ctx)
     }
 }
