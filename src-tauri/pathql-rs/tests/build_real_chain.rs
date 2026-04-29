@@ -112,8 +112,8 @@ fn build_gallery_page_chain_renders_executable_sql() {
     // sqlite execute (in-memory)
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE images (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL);
-         INSERT INTO images (title) VALUES ('a'), ('b'), ('c');",
+        "CREATE TABLE images (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, crawled_at INTEGER);
+         INSERT INTO images (title, crawled_at) VALUES ('a',1), ('b',2), ('c',3);",
     )
     .unwrap();
 
@@ -150,8 +150,8 @@ fn build_gallery_page_chain_with_page_2_offsets_correctly() {
     // sqlite execute: 5 rows, page_size=2, page_num=2 → OFFSET 2, LIMIT 2 → rows 3,4
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE images (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL);
-         INSERT INTO images (title) VALUES ('a'), ('b'), ('c'), ('d'), ('e');",
+        "CREATE TABLE images (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, crawled_at INTEGER);
+         INSERT INTO images (title, crawled_at) VALUES ('a',1), ('b',2), ('c',3), ('d',4), ('e',5);",
     )
     .unwrap();
 
