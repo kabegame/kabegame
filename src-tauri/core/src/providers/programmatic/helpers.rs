@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use pathql_rs::ast::{Namespace, ProviderName};
-use pathql_rs::compose::ProviderQuery;
 use pathql_rs::template::eval::TemplateValue;
 use pathql_rs::{ChildEntry, EngineError, Provider, ProviderContext, ProviderRegistry};
 
@@ -127,11 +126,4 @@ pub fn prop_i64(
             "missing property".into(),
         )),
     }
-}
-
-/// 把 ProviderQuery 折叠后的 composed 喂给 storage 求 count。
-pub fn count_for(composed: &ProviderQuery, ctx: &pathql_rs::ProviderContext) -> Result<usize, String> {
-    let mut tctx = pathql_rs::template::eval::TemplateContext::default();
-    tctx.globals = ctx.runtime.globals().clone();
-    crate::storage::Storage::global().get_images_count_by_query(composed, &tctx)
 }
