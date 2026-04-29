@@ -10,7 +10,6 @@ pub mod gallery_root;
 pub mod helpers;
 pub mod shared;
 pub mod vd;
-pub mod wallpaper;
 
 use std::sync::Arc;
 
@@ -119,19 +118,6 @@ pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_r
     })?;
 
     // ── gallery dates ──
-    register(reg, "gallery_sequential_router", |_| {
-        Ok(Arc::new(wallpaper::GallerySequentialRouter) as Arc<dyn Provider>)
-    })?;
-    register(reg, "gallery_sequential_current_provider", |props| {
-        Ok(Arc::new(
-            wallpaper::GallerySequentialCurrentProvider::from_props(props)?,
-        ) as Arc<dyn Provider>)
-    })?;
-    register(reg, "gallery_sequential_provider", |props| {
-        Ok(Arc::new(wallpaper::GallerySequentialProvider::from_props(props)?)
-            as Arc<dyn Provider>)
-    })?;
-
     register(reg, "gallery_dates_router", |_| {
         Ok(Arc::new(gallery_dates::GalleryDatesRouter) as Arc<dyn Provider>)
     })?;

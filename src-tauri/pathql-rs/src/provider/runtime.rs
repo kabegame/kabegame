@@ -76,7 +76,8 @@ impl ProviderRuntime {
         &self.executor
     }
 
-    pub fn globals(&self) -> &HashMap<String, TemplateValue> {
+    /// 6e+: 返回 Arc 引用; 调用方 `.clone()` 仅是 refcount bump, 不复制 HashMap。
+    pub fn globals(&self) -> &Arc<HashMap<String, TemplateValue>> {
         &self.globals
     }
 

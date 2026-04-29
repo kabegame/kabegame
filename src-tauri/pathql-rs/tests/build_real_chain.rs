@@ -82,19 +82,21 @@ fn fold_gallery_page_chain(registry: &ProviderRegistry) -> ProviderQuery {
     state
 }
 
-fn gallery_globals() -> std::collections::HashMap<String, TemplateValue> {
-    [
-        (
-            "favorite_album_id".into(),
-            TemplateValue::Text("00000000-0000-0000-0000-000000000001".into()),
-        ),
-        (
-            "hidden_album_id".into(),
-            TemplateValue::Text("00000000-0000-0000-0000-000000000000".into()),
-        ),
-    ]
-    .into_iter()
-    .collect()
+fn gallery_globals() -> std::sync::Arc<std::collections::HashMap<String, TemplateValue>> {
+    std::sync::Arc::new(
+        [
+            (
+                "favorite_album_id".into(),
+                TemplateValue::Text("00000000-0000-0000-0000-000000000001".into()),
+            ),
+            (
+                "hidden_album_id".into(),
+                TemplateValue::Text("00000000-0000-0000-0000-000000000000".into()),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    )
 }
 
 #[test]

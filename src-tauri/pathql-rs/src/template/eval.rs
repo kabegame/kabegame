@@ -5,6 +5,7 @@
 
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
 
 use crate::template::parse::VarRef;
@@ -51,8 +52,10 @@ impl TemplateValue {
 pub struct TemplateContext {
     /// `${properties.<name>}` → TemplateValue
     pub properties: HashMap<String, TemplateValue>,
-    /// `${global.<name>}` → runtime-frozen host globals
-    pub globals: HashMap<String, TemplateValue>,
+    /// `${global.<name>}` → runtime-frozen host globals.
+    /// Arc-shared: 渲染期上下文是 cheap-cloneable; globals 由 ProviderRuntime 在
+    /// 启动期一次性写入并冻结, 所有 evaluator / TemplateContext 共享同一份不可变副本。
+    pub globals: Arc<HashMap<String, TemplateValue>>,
     /// `${capture[N]}` → 字符串 (N 从 1 开始; 0 = 全匹配)
     pub capture: Vec<String>,
     /// `${<data_var>.<col>}`: data_var 名 → row JSON
@@ -71,7 +74,7 @@ impl TemplateContext {
         self.properties = p;
         self
     }
-    pub fn with_globals(mut self, g: HashMap<String, TemplateValue>) -> Self {
+    pub fn with_globals(mut self, g: Arc<HashMap<String, TemplateValue>>) -> Self {
         self.globals = g;
         self
     }
@@ -229,14 +232,14 @@ mod tests {
 
     #[test]
     fn global_text() {
-        let ctx = TemplateContext::new().with_globals(
+        let ctx = TemplateContext::new().with_globals(Arc::new(
             [(
                 "favorite_album_id".to_string(),
                 TemplateValue::Text("fav".into()),
             )]
             .into_iter()
             .collect(),
-        );
+        ));
         let v = evaluate_var(&first_var("${global.favorite_album_id}"), &ctx).unwrap();
         assert_eq!(v, TemplateValue::Text("fav".into()));
     }
