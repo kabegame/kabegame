@@ -26,6 +26,75 @@
 
 ---
 
+## 设计原则（迁移期 checklist；违反必出 PathNotFound 类 bug）
+
+### 原则 1：Leaf vs Router 不能混用
+
+**叶子 provider（仅做 apply_query，list/resolve 永远空）只能放在路径终端位置**。如果路径预期会继续往下走（用户能在该 segment 后接更多 segment），listing 此处的 provider 必须是 **router**——拥有自己的 `list` 或 `resolve` 表能把后续 segment 解析下去。
+
+**真实案例（来自 Phase 7 调试期，6e 后引入）**：
+
+```jsonc
+// gallery_all_router.json5 (错):
+"list": {
+    "desc": { "provider": "sort_provider" }   // ❌ sort_provider 是 leaf
+}
+```
+
+`sort_provider`（programmatic）`fn resolve` 返回 `None`、`fn list` 返回空。语义上它正确地"翻转 order"，但结构上把它放在 `desc` 槽位 → `/gallery/all/desc/1` 路径在 `1` 这一步 PathNotFound——sort_provider 没法把"1"继续解析到分页层。
+
+**正确写法**：用一个**包装 router** DSL 文件（既翻转 order 又持有 resolve 表）：
+
+```jsonc
+// gallery_all_router.json5 (对):
+"list": {
+    "desc": { "provider": "gallery_all_desc_router" }   // ✅ router with resolve
+}
+```
+
+```jsonc
+// gallery_all_desc_router.json5:
+{
+    "name": "gallery_all_desc_router",
+    "query": { "order": { "all": "revert" } },     // 翻转 (语义等价 sort_provider.apply_query)
+    "resolve": {                                   // 自己的 resolve 表 → 路径能继续
+        "x([1-9][0-9]*)x": { "provider": "gallery_paginate_router", ... },
+        "([1-9][0-9]*)": { "provider": "gallery_page_router", ... }
+    }
+}
+```
+
+**判别 leaf vs router 的简单方法**：grep 所有 `<segment>/<more>...` 形态的 URL；如果 segment 后面有继续段，listing 此处的 provider 必须有 `list` 或 `resolve`。
+
+### 原则 2：路径无感（Path-unaware）—— 6e 已铸造
+
+延续 6e 的设计：provider 永远不感知"我在路径树的哪个位置"。它只关心"我是谁、我贡献什么"。当一个 provider 想引用另一个 provider 时，永远用 `{provider, properties}` 形态，不用路径字符串。
+
+迁移期 checklist：
+- ❌ 不要在 DSL 里写 `delegate: "./X"` / `delegate: "/foo/bar"`
+- ✅ 写 `delegate: { provider: "X", properties: {...} }`
+
+### 原则 3：DSL_FILES 清单同步
+
+每新建一个 .json5 文件，**必须**同时加入 [`core/src/providers/dsl_loader.rs`](../../src-tauri/core/src/providers/dsl_loader.rs) 的 `DSL_FILES` 常量数组——`include_dir!()` 把文件嵌入二进制，但 loader 用**显式清单**而非自动遍历加载。漏加 → registry 没注册 → 父级 list/resolve 引用时 instantiate 返回 None → 路径 PathNotFound。
+
+迁移期 checklist：每个迁移 commit 必含 `DSL_FILES` 数组的更新。建议加测试 `tests/dsl_files_consistency.rs`：扫 `dsl/` 实际 `.json5`/`.json` 文件 vs `DSL_FILES` 常量，差集报错——任何新文件忘了加清单 → cargo test 立刻挂。
+
+### 原则 4：Modifier 段需要包装 router
+
+凡是路径中"翻转/过滤/分组" 等**变换语义** + **后面有续段**的 segment，对应的 provider 必须是 router 模式（带 list/resolve）。常见 modifier 段及对应 router DSL：
+
+| URL 段 | 角色 | 推荐 DSL 形态 |
+|---|---|---|
+| `desc` | 翻转 ORDER 后接分页 | router 持有 xNx + 裸数字 resolve |
+| `image-only` / `video-only` | 媒体过滤后接分页 | router 持有同样 resolve |
+| `wallpaper-order` | 设过壁纸过滤后接分页 | router |
+| `<year>y` / `<month>m` / `<day>d` | 日期下钻后接分页 | router 持有正则 + 子分页 |
+
+错误模式：把 sort_provider / media_filter_provider 等 leaf 直接挂在 modifier 段——会断链。
+
+---
+
 ## 子期布局
 
 ```
