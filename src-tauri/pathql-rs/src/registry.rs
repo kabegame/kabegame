@@ -114,8 +114,30 @@ impl ProviderRegistry {
         properties: &HashMap<String, TemplateValue>,
         _ctx: &ProviderContext,
     ) -> Option<Arc<dyn Provider>> {
-        match self.lookup(current_ns, reference)? {
-            RegistryEntry::Programmatic(factory) => factory(properties).ok(),
+        let entry = self.lookup(current_ns, reference);
+        if crate::provider::runtime::dbg_enabled() {
+            let kind = match &entry {
+                Some(RegistryEntry::Dsl(_)) => "Dsl",
+                Some(RegistryEntry::Programmatic(_)) => "Programmatic",
+                None => "MISSING",
+            };
+            eprintln!(
+                "[pathql] registry.instantiate(current_ns={:?}, ref={:?}) → {}",
+                current_ns.0, reference.0, kind
+            );
+        }
+        match entry? {
+            RegistryEntry::Programmatic(factory) => {
+                let r = factory(properties);
+                if crate::provider::runtime::dbg_enabled() && r.is_err() {
+                    eprintln!(
+                        "[pathql]   factory({:?}) failed: {:?}",
+                        reference.0,
+                        r.as_ref().err()
+                    );
+                }
+                r.ok()
+            }
             RegistryEntry::Dsl(def) => Some(Arc::new(DslProvider {
                 def: def.clone(),
                 properties: properties.clone(),

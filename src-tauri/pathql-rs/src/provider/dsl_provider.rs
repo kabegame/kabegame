@@ -364,6 +364,22 @@ impl Provider for DslProvider {
             None => current,
             Some(Query::Contrib(q)) => {
                 let mut state = current;
+                // 把当前 provider 的 properties 写入 adhoc_properties, 让后续 build_sql
+                // 渲染 contrib 中的 ${properties.X} 模板时能取到值。
+                // 注: 路径上多个 DslProvider 各自调 apply_query 时累积写入; 同名 key 后写胜
+                // (符合 fold 累积语义 — 链下游 provider 的 properties 应覆盖上游)。
+                for (k, v) in &self.properties {
+                    state.adhoc_properties.insert(k.clone(), v.clone());
+                }
+                if crate::provider::runtime::dbg_enabled() {
+                    eprintln!(
+                        "[pathql] DslProvider({}::{}).apply_query Contrib — properties={:?} adhoc_after={:?}",
+                        self.def.namespace.as_ref().map(|n| n.0.as_str()).unwrap_or(""),
+                        self.def.name.0,
+                        self.properties.keys().collect::<Vec<_>>(),
+                        state.adhoc_properties.keys().collect::<Vec<_>>(),
+                    );
+                }
                 // fold 失败时静默返回原 state (apply_query 没有 Result 通道)
                 let _ = fold_contrib(&mut state, q);
                 state
@@ -371,6 +387,8 @@ impl Provider for DslProvider {
             Some(Query::Delegate(d)) => {
                 // 6e: delegate 是 ProviderCall — 实例化目标 + 委托其 apply_query。
                 // 目标未注册时静默返回原 state (apply_query 无 Result 通道; validate cross_ref 应已捕获)。
+                // 注: 不在此处写 self.properties 进 adhoc — 目标 provider 自己的 apply_query 会
+                //     用它本身的 properties (来自 ProviderCall.properties 实例化结果) 写入。
                 match self.instantiate_call(&d.delegate, ctx) {
                     Ok(Some(target)) => target.apply_query(current, ctx),
                     _ => current,
@@ -414,6 +432,39 @@ impl Provider for DslProvider {
         composed: &ProviderQuery,
         ctx: &ProviderContext,
     ) -> Option<Arc<dyn Provider>> {
+        let dbg = crate::provider::runtime::dbg_enabled();
+        if dbg {
+            let static_keys: Vec<&str> = self
+                .def
+                .list
+                .as_ref()
+                .map(|l| {
+                    l.entries
+                        .iter()
+                        .filter(|(_, e)| matches!(e, ListEntry::Static(_)))
+                        .map(|(k, _)| k.as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let regex_keys: Vec<&str> = self
+                .def
+                .resolve
+                .as_ref()
+                .map(|r| r.0.keys().map(|k| k.as_str()).collect())
+                .unwrap_or_default();
+            eprintln!(
+                "[pathql] DslProvider({}::{}).resolve({:?}) — static_list={:?} regex={:?}",
+                self.def
+                    .namespace
+                    .as_ref()
+                    .map(|n| n.0.as_str())
+                    .unwrap_or(""),
+                self.def.name.0,
+                name,
+                static_keys,
+                regex_keys
+            );
+        }
         // 1. resolve.entries (regex)
         if let Some(resolve) = &self.def.resolve {
             for (pattern, invocation) in &resolve.0 {
@@ -423,6 +474,9 @@ impl Provider for DslProvider {
                     Err(_) => continue,
                 };
                 if let Some(captures) = re.captures(name) {
+                    if dbg {
+                        eprintln!("[pathql]   regex {:?} matched", pattern);
+                    }
                     let cap_vec: Vec<String> = captures
                         .iter()
                         .map(|m| m.map(|x| x.as_str().to_string()).unwrap_or_default())
@@ -439,6 +493,9 @@ impl Provider for DslProvider {
             for (key, entry) in &list.entries {
                 if key == name {
                     if let ListEntry::Static(inv) = entry {
+                        if dbg {
+                            eprintln!("[pathql]   static list key {:?} matched", key);
+                        }
                         return self
                             .instantiate_invocation(inv, &[], composed, ctx)
                             .ok()
@@ -452,10 +509,19 @@ impl Provider for DslProvider {
                     if let Ok(Some(p)) =
                         self.reverse_lookup_dynamic(name, key_template, dyn_entry, composed, ctx)
                     {
+                        if dbg {
+                            eprintln!(
+                                "[pathql]   dynamic reverse-lookup matched (key_template={:?})",
+                                key_template
+                            );
+                        }
                         return Some(p);
                     }
                 }
             }
+        }
+        if dbg {
+            eprintln!("[pathql]   ← no match, returning None");
         }
         None
     }
