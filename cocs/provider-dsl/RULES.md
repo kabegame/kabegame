@@ -142,7 +142,12 @@ return ResolvedNode { provider, composed }
 
 ### 4.1 静态项（StaticListEntry）
 
-key 不含 `${...}`。值为 `ProviderInvocation` 二态之一（6e 起 ByDelegate variant 已删除）：
+key 形态分两类（7b 起）：
+
+- **静态字面**：不含 `${...}`，加载期已是字面。
+- **instance-static**：含 `${properties.X}`（且**不含** `${data_var.X}` / `${child_var.X}`）。引擎在 DslProvider 实例化时按 `self.properties` 渲染 key 模板得到字面，调 `list` / `resolve` 时按渲染后的字面比较。
+
+两类 key 的值均为 `ProviderInvocation` 二态之一（**list 静态项不允许 ByDelegate**；它仅在 Resolve 表里有意义）：
 
 - `InvokeByName`：`{provider: <name>, properties?, meta?}` — 显式构造命名 provider
 - `EmptyInvocation`：`{meta?}` — 占位，路径仍可被识别但本节点无 list/resolve 服务（缓存策略见 §4.4）
@@ -303,19 +308,39 @@ DynamicListEntry_Sql / DynamicListEntry_Delegate）的目标：**最终产出可
    - 命中即构造，**结果同样进 LRU 缓存**（与 §4.4 一致）
 4. 全部失败 → 该子节点不存在（404，不缓存）
 
-### 5.3 加载期碰撞检查（防御性，非正确性必需）
+### 5.3 加载期检查 (7b 起简化)
 
 引擎在加载每个 provider 时执行：
 
 - **静态 list 内部**：list key 不能重复（JSON 对象天然约束 + schema 检查）
-- **resolve 正则 vs 静态 list key**：每条正则去匹配每个静态 list key 字面，**任一匹配 → 拒绝**
-  - 错误示例：`list: { "x100x": ... }` 同时 `resolve: { "x([0-9]+)x": ... }` —— 正则覆盖了静态字面，二义性
-- **正则 vs 正则**：用 `regex_automata` 求两条正则的交集 NFA；**非空 → 拒绝**
-- **动态 list 不参与碰撞检查**（性能 / 实用性权衡）：
-  - 动态项 key 模板的取值集合在加载期未知（依赖运行时 SQL 结果）
-  - 即便运行期实际产生碰撞，引擎只是按 §5.2 的顺序简单覆写本路径段的 LRU 槽位
-  - 这种碰撞**不是正确性故障**，但**可能产生不可预见的 bug**（哪个 entry 优先取决于 §5.2 的顺序，对设计者不直观）
-- 所有拒绝错误必须打印**触发文件 + 具体冲突项 + 冲突原因**
+- **resolve 正则编译**：每条 pattern 编译失败 → 拒绝（含 instance-static `${properties.X}` 形态的 pattern 加载期跳过编译, 实例化期再编译）
+- **${capture[N]} 越界**：invocation properties / meta 中 N 必须 ≤ 当前 regex captures 数
+
+**7b 起删除的检查**（false positive 比例过高）：
+- ~~regex 与静态 list key 字面碰撞~~ — `.*` 转发模式 + 任意静态项是合法的（runtime 解析顺序 list → regex → 反查保证作者意图）
+- ~~regex 与 regex 交集 (NFA intersection)~~ — `${properties.X}` instance-static pattern 实例化前未知 + 含字符类的 regex 在 NFA 实测误判
+
+多模式重叠由作者按 schema 出现顺序覆写决定；引擎不再插手。
+
+### 5.4 Delegate 对称转发 (7b 起补全)
+
+DSL 三处 `delegate` 字段对应同一原则：**把当前上下文的操作转发给 target**。每处 payload 均为 `ProviderCall { provider, properties? }`，永远 path-unaware。
+
+| 字段位置                      | 容器 AST                       | 转发的操作                              |
+|---|---|---|
+| `query.delegate`              | `Query::Delegate`              | `target.apply_query(current, ctx)`      |
+| `list[<动态>].delegate`       | `DynamicListEntry::Delegate`   | `target.list(composed, ctx)` 取 children |
+| `resolve[<regex>].delegate`   | `ProviderInvocation::ByDelegate` | `target.resolve(name, composed, ctx)` 转发 |
+
+**注**：`ProviderInvocation::ByDelegate` 仅在 Resolve 表里有意义（list 静态项不允许）。原 6e 删除该 variant 是错误判断（结构上 ByDelegate 与 ByName payload 同形，但**操作语义不同** — ByName 的 X 直接是结果，ByDelegate 的 X.resolve(name) 才是结果）；7b 修正补回。
+
+**典型应用**（gallery_hide_router 模式）：
+```jsonc
+"resolve": {
+    ".*": { "delegate": { "provider": "gallery_route" } }
+}
+```
+含义：本节点不自己解决任何 segment，把 name 转给 `gallery_route.resolve(name, ...)`。本节点的 contrib（如 hide WHERE）随 apply_query 自然累积。
 
 ---
 
