@@ -5,7 +5,7 @@
 
 use super::{ChildEntry, EngineError, Provider, ProviderContext, SqlExecutor};
 use crate::compose::ProviderQuery;
-use crate::template::eval::TemplateValue;
+use crate::template::eval::{TemplateContext, TemplateValue};
 use crate::ProviderRegistry;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
@@ -212,6 +212,65 @@ impl ProviderRuntime {
             .into_iter()
             .find(|c| c.name == last)
             .and_then(|c| c.meta))
+    }
+
+    /// 构造含 globals 的 TemplateContext (Arc 共享, 不复制 HashMap)。
+    /// fetch / count 内部用; 也可被外部调用方在需要原始 ProviderQuery + ctx 时复用。
+    fn template_context(&self) -> TemplateContext {
+        let mut ctx = TemplateContext::default();
+        ctx.globals = self.globals.clone();
+        ctx
+    }
+
+    /// 路径 → 行集 (path-only 公开 API; 调用方不持 ProviderQuery / TemplateContext)。
+    /// 内部链路: resolve(path) → composed.build_sql(globals ctx, dialect) → executor.execute。
+    pub fn fetch(&self, path: &str) -> Result<Vec<serde_json::Value>, EngineError> {
+        let node = self.resolve(path)?;
+        let ctx = self.template_context();
+        let dialect = self.executor.dialect();
+        let (sql, values) = node
+            .composed
+            .build_sql(&ctx, dialect)
+            .map_err(|e| {
+                EngineError::FactoryFailed(
+                    "<runtime>".into(),
+                    "fetch".into(),
+                    e.to_string(),
+                )
+            })?;
+        self.executor.execute(&sql, &values)
+    }
+
+    /// 路径 → 行数 (`SELECT COUNT(*) FROM (<inner>) AS pq_sub`)。
+    /// pq_sub 别名硬编码; 与用户表别名重名概率近 0。
+    pub fn count(&self, path: &str) -> Result<usize, EngineError> {
+        let node = self.resolve(path)?;
+        let ctx = self.template_context();
+        let dialect = self.executor.dialect();
+        let (inner_sql, values) = node
+            .composed
+            .build_sql(&ctx, dialect)
+            .map_err(|e| {
+                EngineError::FactoryFailed(
+                    "<runtime>".into(),
+                    "count".into(),
+                    e.to_string(),
+                )
+            })?;
+        let sql = format!("SELECT COUNT(*) AS n FROM ({}) AS pq_sub", inner_sql);
+        let rows = self.executor.execute(&sql, &values)?;
+        let n = rows
+            .first()
+            .and_then(|row| row.get("n"))
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| {
+                EngineError::FactoryFailed(
+                    "<runtime>".into(),
+                    "count".into(),
+                    "COUNT(*) returned no row or non-integer".into(),
+                )
+            })?;
+        Ok(n as usize)
     }
 
     /// 路径段 normalize: percent-decode, 不做 lowercase 折叠 (§2 大小写敏感)。
@@ -624,5 +683,157 @@ mod tests {
         let _ = runtime
             .resolve("/%E6%8C%89%E7%94%BB%E5%86%8C")
             .expect("percent-decoded path should resolve");
+    }
+
+    // ── S1e S1: fetch(path) / count(path) ────────────────────────────────
+
+    /// 一个用 `from = images` 的简单叶子 provider, 配合 capturing executor 验证 fetch / count
+    /// 拼出的 SQL 与 Rust 看到的一致。
+    struct ImagesLeaf;
+    impl Provider for ImagesLeaf {
+        fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+            q.from = Some(crate::ast::SqlExpr("images".into()));
+            q
+        }
+        fn list(
+            &self,
+            _: &ProviderQuery,
+            _: &ProviderContext,
+        ) -> Result<Vec<ChildEntry>, EngineError> {
+            Ok(Vec::new())
+        }
+        fn resolve(
+            &self,
+            _: &str,
+            _: &ProviderQuery,
+            _: &ProviderContext,
+        ) -> Option<Arc<dyn Provider>> {
+            None
+        }
+    }
+
+    /// 记录 (sql, params) + 按 sql 子串返回伪行集的 executor。
+    struct CapturingExecutor {
+        captured: std::sync::Mutex<Vec<(String, Vec<TemplateValue>)>>,
+        rows_for_inner: Vec<serde_json::Value>,
+        rows_for_count: Vec<serde_json::Value>,
+    }
+    impl crate::provider::SqlExecutor for CapturingExecutor {
+        fn dialect(&self) -> crate::provider::SqlDialect {
+            crate::provider::SqlDialect::Sqlite
+        }
+        fn execute(
+            &self,
+            sql: &str,
+            params: &[TemplateValue],
+        ) -> Result<Vec<serde_json::Value>, EngineError> {
+            self.captured
+                .lock()
+                .unwrap()
+                .push((sql.to_string(), params.to_vec()));
+            // count wrapper 总以 "SELECT COUNT(*) AS n" 开头
+            if sql.starts_with("SELECT COUNT(*) AS n") {
+                Ok(self.rows_for_count.clone())
+            } else {
+                Ok(self.rows_for_inner.clone())
+            }
+        }
+    }
+
+    #[test]
+    fn fetch_resolves_path_then_executes() {
+        let exec = Arc::new(CapturingExecutor {
+            captured: std::sync::Mutex::new(Vec::new()),
+            rows_for_inner: vec![
+                serde_json::json!({"id": 1}),
+                serde_json::json!({"id": 2}),
+            ],
+            rows_for_count: vec![],
+        });
+        let root: Arc<dyn Provider> = Arc::new(ImagesLeaf);
+        let runtime = ProviderRuntime::new(
+            empty_registry(),
+            root,
+            exec.clone() as Arc<dyn crate::provider::SqlExecutor>,
+            HashMap::new(),
+        );
+
+        let rows = runtime.fetch("/").expect("fetch ok");
+        assert_eq!(rows.len(), 2);
+        let captured = exec.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        // inner SQL 不带 COUNT wrapper
+        assert!(captured[0].0.contains("FROM images"), "sql: {}", captured[0].0);
+        assert!(!captured[0].0.contains("COUNT(*)"), "sql: {}", captured[0].0);
+    }
+
+    #[test]
+    fn count_wraps_with_count_star() {
+        let exec = Arc::new(CapturingExecutor {
+            captured: std::sync::Mutex::new(Vec::new()),
+            rows_for_inner: vec![],
+            rows_for_count: vec![serde_json::json!({"n": 42})],
+        });
+        let root: Arc<dyn Provider> = Arc::new(ImagesLeaf);
+        let runtime = ProviderRuntime::new(
+            empty_registry(),
+            root,
+            exec.clone() as Arc<dyn crate::provider::SqlExecutor>,
+            HashMap::new(),
+        );
+
+        let n = runtime.count("/").expect("count ok");
+        assert_eq!(n, 42);
+        let captured = exec.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let sql = &captured[0].0;
+        assert!(sql.starts_with("SELECT COUNT(*) AS n FROM ("), "sql: {}", sql);
+        assert!(sql.contains("FROM images"), "inner sql missing: {}", sql);
+        assert!(sql.ends_with(") AS pq_sub"), "sql: {}", sql);
+    }
+
+    #[test]
+    fn fetch_returns_empty_on_limit_zero() {
+        // limit=0 让 SQLite 返回 0 行; executor stub 也返回空 → fetch 返回空 Vec。
+        struct LimitZeroLeaf;
+        impl Provider for LimitZeroLeaf {
+            fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+                q.from = Some(crate::ast::SqlExpr("images".into()));
+                q.limit = Some(crate::ast::NumberOrTemplate::Number(0.0));
+                q
+            }
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ChildEntry>, EngineError> {
+                Ok(Vec::new())
+            }
+            fn resolve(
+                &self,
+                _: &str,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Option<Arc<dyn Provider>> {
+                None
+            }
+        }
+        let exec = Arc::new(CapturingExecutor {
+            captured: std::sync::Mutex::new(Vec::new()),
+            rows_for_inner: vec![],
+            rows_for_count: vec![serde_json::json!({"n": 0})],
+        });
+        let root: Arc<dyn Provider> = Arc::new(LimitZeroLeaf);
+        let runtime = ProviderRuntime::new(
+            empty_registry(),
+            root,
+            exec.clone() as Arc<dyn crate::provider::SqlExecutor>,
+            HashMap::new(),
+        );
+
+        let rows = runtime.fetch("/").expect("fetch ok");
+        assert!(rows.is_empty());
+        let captured = exec.captured.lock().unwrap();
+        assert!(captured[0].0.contains("LIMIT"), "sql: {}", captured[0].0);
     }
 }
