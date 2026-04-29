@@ -83,9 +83,11 @@ pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_r
         Ok(Arc::new(gallery_filters::GalleryMediaTypeProvider::from_props(props)?)
             as Arc<dyn Provider>)
     })?;
-    register(reg, "gallery_hide_router", |_| {
-        Ok(Arc::new(gallery_filters::GalleryHideRouter) as Arc<dyn Provider>)
-    })?;
+    // 7b: gallery_hide_router 已迁移到 DSL (dsl/gallery/gallery_hide_router.json5)
+    // contrib HIDE WHERE + ".*" delegate 转发 gallery_route. 是 ByDelegate 复活 (7b S1+S2) 的首个生产用例。
+    // register(reg, "gallery_hide_router", |_| {
+    //     Ok(Arc::new(gallery_filters::GalleryHideRouter) as Arc<dyn Provider>)
+    // })?;
     // 7a: gallery_search_router 已迁移到 DSL (dsl/gallery/gallery_search_router.json5)
     // 纯 router 壳, list = {"display-name": gallery_search_display_name_router}
     // register(reg, "gallery_search_router", |_| {

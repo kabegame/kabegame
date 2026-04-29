@@ -9,9 +9,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use kabegame_core::providers::programmatic;
+use pathql_rs::ast::SqlExpr;
+use pathql_rs::compose::ProviderQuery;
 use pathql_rs::provider::{
     ClosureExecutor, Provider, ProviderContext, ProviderRuntime, SqlDialect, SqlExecutor,
 };
+use pathql_rs::template::eval::{TemplateContext, TemplateValue};
 use pathql_rs::{Json5Loader, Loader, ProviderRegistry, Source};
 
 // ── 公共 helpers ───────────────────────────────────────────────────────────
@@ -24,10 +27,13 @@ fn no_op_executor() -> Arc<dyn SqlExecutor> {
 
 /// 给定 programmatic provider Arc + DSL JSON5 字符串, 包装成两个独立的 ProviderRuntime
 /// (各自单 root provider), 比较 root 上同一段 `seg` 的 resolve / list / apply_query 输出。
-fn assert_provider_parity(
+///
+/// `dsl_properties` 给 DSL provider 注入实例属性 (模拟 registry.instantiate 的注入)。
+fn assert_provider_parity_with_props(
     case_name: &str,
     programmatic: Arc<dyn Provider>,
     dsl_json: &str,
+    dsl_properties: HashMap<String, TemplateValue>,
     test_segments: &[&str],
     test_apply_query: bool,
     test_list: bool,
@@ -42,11 +48,11 @@ fn assert_provider_parity(
     dsl_registry.register(dsl_def.clone()).expect("register DSL");
     let dsl_root: Arc<dyn Provider> = Arc::new(pathql_rs::DslProvider {
         def: Arc::new(dsl_def),
-        properties: HashMap::new(),
+        properties: dsl_properties,
     });
     let dsl_runtime = ProviderRuntime::new(Arc::new(dsl_registry), dsl_root, no_op_executor());
 
-    // 3. apply_query parity: 比较 build_sql 输出
+    // 3. apply_query parity: 比较 build_sql 输出 (真行为, 而非 Debug 投影)
     if test_apply_query {
         let prog_node = prog_runtime
             .resolve("/")
@@ -54,14 +60,14 @@ fn assert_provider_parity(
         let dsl_node = dsl_runtime
             .resolve("/")
             .expect("dsl runtime resolve(/) failed");
-        // composed query 状态字符串化对比 (没有 from 的 contrib leaf 走 build_sql 会 MissingFrom,
-        // 此时改对比 ProviderQuery 的 Debug 投影 — order/wheres/joins/limit/offset 等)
-        let prog_state = format!("{:?}", prog_node.composed);
-        let dsl_state = format!("{:?}", dsl_node.composed);
+        // 行为等价的最严苛对比: 把 ProviderQuery build_sql 出 (sql_string, bind_params) 再比。
+        // 没有 from 的 contrib leaf → 加个 dummy from 让 build_sql 能跑
+        let prog_sql = render_with_dummy_from(&prog_node.composed);
+        let dsl_sql = render_with_dummy_from(&dsl_node.composed);
         assert_eq!(
-            prog_state, dsl_state,
-            "[{}] composed ProviderQuery diverges:\n  prog: {}\n  dsl:  {}",
-            case_name, prog_state, dsl_state
+            prog_sql, dsl_sql,
+            "[{}] build_sql output diverges:\n  prog: {:?}\n  dsl:  {:?}",
+            case_name, prog_sql, dsl_sql
         );
     }
 
@@ -91,6 +97,36 @@ fn assert_provider_parity(
             case_name, seg, prog_resolved, dsl_resolved
         );
     }
+}
+
+/// 旧 API 兼容 wrapper — 不注入 properties (空 HashMap).
+fn assert_provider_parity(
+    case_name: &str,
+    programmatic: Arc<dyn Provider>,
+    dsl_json: &str,
+    test_segments: &[&str],
+    test_apply_query: bool,
+    test_list: bool,
+) {
+    assert_provider_parity_with_props(
+        case_name,
+        programmatic,
+        dsl_json,
+        HashMap::new(),
+        test_segments,
+        test_apply_query,
+        test_list,
+    );
+}
+
+/// build_sql 出 (sql, params) — 用 dummy from 占位让无 from 的 contrib-only provider 能跑。
+fn render_with_dummy_from(q: &ProviderQuery) -> (String, Vec<TemplateValue>) {
+    let mut q2 = q.clone();
+    if q2.from.is_none() {
+        q2.from = Some(SqlExpr("__dummy__".into()));
+    }
+    q2.build_sql(&TemplateContext::default(), SqlDialect::Sqlite)
+        .expect("build_sql failed")
 }
 
 /// 用 reflection trick: ProviderContext 需要 runtime 的 Arc, 但我们不给外部测试代码
@@ -154,6 +190,56 @@ fn gallery_search_router_parity() {
                // 的 Default Debug 字符串等价 — 但 dsl_def.query=None 与 programmatic 的
                // default 实现不一致时会有 trivial 字符串差异, 不是行为差异)
         true,  // 测 list (核心: 输出 ["display-name"])
+    );
+}
+
+// ── 7b S4: gallery_hide_router parity ──────────────────────────────────────
+//
+// 验证 ByDelegate 复活后 (S1+S2), gallery_hide_router DSL 行为与 programmatic 等价:
+// - apply_query: contrib HIDE WHERE
+// - list: target.list(gallery_route) 委派 (programmatic) vs ".*" delegate forward (DSL)
+//
+// 注: 跨 registry 的 list parity 比较起来复杂 — programmatic GalleryHideRouter.list
+// 调 instantiate_named("gallery_route") 但 helper 用 isolated registry, 所以
+// programmatic 一侧拿不到 gallery_route → list 会返回空。这里只比 apply_query 行为
+// (核心 contrib WHERE), list parity 留 7d E2E 测试覆盖。
+
+#[test]
+fn gallery_hide_router_apply_query_parity() {
+    use programmatic::gallery_filters::GalleryHideRouter;
+
+    let dsl_json = r#"{
+        "namespace": "kabegame",
+        "name": "gallery_hide_router",
+        "properties": {
+            "hidden_album_id": {
+                "type": "string",
+                "default": "00000000-0000-0000-0000-000000000000",
+                "optional": false
+            }
+        },
+        "query": {
+            "where": "/*HIDE*/ NOT EXISTS (SELECT 1 FROM album_images WHERE image_id = images.id AND album_id = ${properties.hidden_album_id})"
+        },
+        "resolve": {
+            ".*": { "delegate": { "provider": "gallery_route" } }
+        }
+    }"#;
+
+    let mut props = HashMap::new();
+    props.insert(
+        "hidden_album_id".into(),
+        TemplateValue::Text("00000000-0000-0000-0000-000000000000".into()),
+    );
+
+    assert_provider_parity_with_props(
+        "gallery_hide_router",
+        Arc::new(GalleryHideRouter) as Arc<dyn Provider>,
+        dsl_json,
+        props,
+        &[],
+        true,  // apply_query: contrib HIDE WHERE 等价 (build_sql 后 SQL+params 完全一致)
+        false, // list: 跨 registry 比较不可行 (上方注释)
     );
 }
 

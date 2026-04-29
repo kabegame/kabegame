@@ -22,6 +22,7 @@ pub const DSL_FILES: &[&str] = &[
     "gallery/gallery_all_desc_router.json5",
     "gallery/gallery_paginate_router.json5",
     "gallery/gallery_page_router.json5",
+    "gallery/gallery_hide_router.json5",
     "gallery/gallery_search_router.json5",
     "shared/page_size_provider.json5",
     "shared/query_page_provider.json5",

@@ -1,0 +1,25 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_hide_router",
+    "properties": {
+        // 默认 = HIDDEN_ALBUM_ID (storage::HIDDEN_ALBUM_ID 常量)
+        "hidden_album_id": {
+            "type": "string",
+            "default": "00000000-0000-0000-0000-000000000000",
+            "optional": false
+        }
+    },
+    "query": {
+        // /*HIDE*/ 标记: HiddenAlbum 详情页面的 album provider 在该 album_id ==
+        // hidden_album_id 时扫描 wheres 并剥除含此标记的片段, 让 hidden 画册详情仍能展示自身图片。
+        // ${properties.hidden_album_id} 渲染期变 `?` + bind, 不是字符串拼接, 注入安全。
+        "where": "/*HIDE*/ NOT EXISTS (SELECT 1 FROM album_images WHERE image_id = images.id AND album_id = ${properties.hidden_album_id})"
+    },
+    // 7b 新特性: ".*" 转发把任意 segment 的 resolve 决定权转给 gallery_route.
+    // 等价于 v4.0.1 GalleryHideShell.{list,get_child} 委派 GalleryRootProvider —
+    // /gallery/hide/ 下游暴露完整 gallery 树, 可与任意维度 / 搜索前缀组合。
+    "resolve": {
+        ".*": { "delegate": { "provider": "gallery_route" } }
+    }
+}
