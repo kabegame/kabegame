@@ -48,6 +48,10 @@
         "album": {
             "provider": "gallery_albums_router"
         },
+        // 日期范围(连续区间, 任意起止), 与 dates(年/月/日聚合) 互补
+        "date-range": {
+            "provider": "gallery_date_range_router"
+        },
         "albums": {
             "provider": "gallery_albums_router"
         },

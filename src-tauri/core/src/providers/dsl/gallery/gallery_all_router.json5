@@ -2,16 +2,19 @@
     "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "gallery_all_router",
-    // 默认重定向到 100 大小、第 1 页 (6e: delegate 是 ProviderCall, 直接命中目标 provider)
+    // 6e 起 Contrib 形态: 贡献 images.crawled_at ASC 基础排序 (从 v4.0.1 GalleryAllProvider
+    // 迁移; 6c → 6d 之间的 delegate 写法漏掉了这条 ORDER BY); limit=100 + offset=0 提供
+    // 默认页 (/gallery/all 等价 /gallery/all/x100x/1/); 子路径 x100x/N 由 gallery_paginate_router
+    // 重写 limit/offset, x500x/x1000x 同理。
     "query": {
-        "delegate": {
-            "provider": "query_page_provider",
-            "properties": { "page_size": 100, "page_num": 1 }
-        }
+        "order": [{"images.crawled_at": "asc"}],
+        "limit": 100,
+        "offset": 0
     },
     "list": {
-        "desc": { "provider": "gallery_all_desc_router" }
-        // x100x / x500x / x1000x 已合并入下方 resolve 正则, 不再单独列出静态项以避免碰撞
+        // desc 直接复用 sort_provider (它的 apply_query 把累积 order revert)
+        "desc": { "provider": "sort_provider" }
+        // x100x / x500x / x1000x 由下方 resolve 正则统一处理, 不单独列静态项以避免碰撞
     },
     // 任意 xNNNx (NNN ≥ 1) 命中 → gallery_paginate_router; page_size 取捕获组
     // 或裸数字 = 默认 100/page 的页号 (frontend galleryPath.ts: 当 pageSize===100 时省略 x{N}x 段; e.g. all/1)
@@ -31,5 +34,5 @@
             }
         }
     },
-    "note": "All router provider, default 100 items per page, dynamic xPAGE_SIZEx are supported"
+    "note": "All router provider, default 100 items per page sorted by crawled_at; dynamic xPAGE_SIZEx (≥1) supported"
 }
