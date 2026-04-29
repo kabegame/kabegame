@@ -20,9 +20,11 @@ use self::helpers::register;
 /// 注册全部硬编码 provider 到 registry。
 pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_rs::RegistryError> {
     // ── shared ──
-    register(reg, "sort_provider", |_| {
-        Ok(Arc::new(shared::SortProvider) as Arc<dyn Provider>)
-    })?;
+    // 7a: sort_provider 已迁移到 DSL (dsl/shared/sort_provider.json5)
+    // 纯 contrib leaf, query.order = {"all": "revert"}
+    // register(reg, "sort_provider", |_| {
+    //     Ok(Arc::new(shared::SortProvider) as Arc<dyn Provider>)
+    // })?;
     // 6c: page_size_provider / query_page_provider 由 DSL (shared/*.json5) 接管。
     // 程序化实现仍保留为模块代码以备灰度回退;此处注册位被显式禁用,保证唯一注册路径走 DSL。
     // register(reg, "page_size_provider", |props| {
@@ -84,9 +86,11 @@ pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_r
     register(reg, "gallery_hide_router", |_| {
         Ok(Arc::new(gallery_filters::GalleryHideRouter) as Arc<dyn Provider>)
     })?;
-    register(reg, "gallery_search_router", |_| {
-        Ok(Arc::new(gallery_filters::GallerySearchRouter) as Arc<dyn Provider>)
-    })?;
+    // 7a: gallery_search_router 已迁移到 DSL (dsl/gallery/gallery_search_router.json5)
+    // 纯 router 壳, list = {"display-name": gallery_search_display_name_router}
+    // register(reg, "gallery_search_router", |_| {
+    //     Ok(Arc::new(gallery_filters::GallerySearchRouter) as Arc<dyn Provider>)
+    // })?;
     register(reg, "gallery_search_display_name_router", |_| {
         Ok(Arc::new(gallery_filters::GallerySearchDisplayNameRouter) as Arc<dyn Provider>)
     })?;

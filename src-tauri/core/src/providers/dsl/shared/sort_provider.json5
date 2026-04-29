@@ -1,0 +1,12 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "sort_provider",
+    // 7a: 纯 contrib leaf — 仅翻转累积 ORDER 方向; 无 list / resolve。
+    // 严格遵守 router/provider 分工: 这是 leaf, 不能挂在路径中间被继续走;
+    // 需要"翻转 + 后续路径"场景写一个 router DSL (e.g. gallery_all_desc_router),
+    // 让 router 持有 resolve 表 + 内部 contrib query 走 revert。
+    "query": {
+        "order": { "all": "revert" }
+    }
+}
