@@ -1,0 +1,11 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_search_router",
+    // 7a: 纯 router 壳 — 仅持 list 路由表, 无 apply_query 贡献 (search 本身不变换 query;
+    // search 子项 /<query>/ 才会注入 LIKE WHERE). 严格遵守 router/provider 分工:
+    // 这一层只负责"知道往下能走 display-name", 不混业务逻辑。
+    "list": {
+        "display-name": { "provider": "gallery_search_display_name_router" }
+    }
+}
