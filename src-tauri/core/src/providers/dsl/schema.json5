@@ -1,8 +1,8 @@
-{
+﻿{
     "$schema": "http://json-schema.org/draft-07/schema#",
     "$id": "kabegame://provider/v0.7",
     "title": "Kabegame Provider Definition",
-    "description": "声明式 Provider — 路径折叠 × ImageQuery 贡献 × 动态枚举。详细语义见 cocs/provider-dsl/RULES.md。\n\n与 Rust trait Provider 对齐:\n  query   ↔ apply_query   节点对累积 ImageQuery 的贡献(或 delegate 委托另一 provider)\n  list    ↔ list_children 静态字面量 / 动态 SQL / 动态 delegate 子节点枚举\n  resolve ↔ get_child     正则解析单个子节点\n\nChildEntry 模型:\n  { name: string, provider?: ProviderInvocation, meta?: any }\n  - meta 为任意 JSON, 详见 RULES.md §4.5(字符串=SQL 或模板; 对象/数组/标量=直接作为 meta)\n  - provider 可缺省 — 当前层不挂下层 provider\n\n命名空间(Java 包风格):\n  顶层 namespace 字段, 形如 'kabegame' / 'kabegame.plugin' / 'pixiv'\n  全局名 = <namespace>.<name>; 同 namespace 内 provider 互相引用用 simple name\n  解析规则: 当前 namespace → 父 namespace → ... → root\n  ProviderInvocation.provider 可写 simple name 或绝对 'a.b.c.name'\n\n判别策略:\n  - Query 互斥: delegate ⊕ (from/join/where/fields/order/offset/limit)\n  - StaticListEntry 用 ProviderInvocation 二态: byName ⊕ Empty\n  - Resolve 用 ProviderInvocation 三态: byName ⊕ byDelegate ⊕ Empty (7b 起 byDelegate 复活, payload 为 ProviderCall)\n  - List entry 由 key 是否含 ${...} 判别 静态 / 动态\n  - DynamicListEntry 数据源互斥: sql ⊕ delegate\n  - order 形态: 数组(位置定序) ⊕ {all:...} 全局指令(二选一)\n\n6e 起: query.delegate / list dynamic delegate 字段类型为 ProviderCall { provider, properties? }; 不再是路径表达式 (PathExpr 整个删除)。Provider 是 path-unaware 的 — 引用其它 provider 走 namespace 链 + name + properties, 不混入路径概念。\n\nDelegate 对称转发 (7b 起三处对齐):\n  - query.delegate         → target.apply_query(current, ctx)  ; 借目标的 contrib 入 composed\n  - list[<dyn>].delegate   → target.list(composed, ctx)        ; 调目标的 list 取 children 序列\n  - resolve[].delegate     → target.resolve(name, composed, ctx); 把当前 segment 的 resolve 决定权转给目标\n每处 payload 都是 ProviderCall, 永远 path-unaware。\n\nContribQuery 拼接语义:\n  fields  → 累积到 SELECT; 用 as + in_need 解决冲突\n  from    → cascading-replace(注意: from 不应内嵌 JOIN, 见 RULES.md §3.1)\n  join    → 累积; 用 as + in_need 解决冲突\n  where   → 路径上各节点 where 用 AND 拼接\n  order   → 数组按位置定优先级(对象 {<field>: asc/desc/revert, ...}; 允许多键); 或 {all: asc/desc/revert} 全局指令\n  offset  → additive (+); 多次声明用 + 串接\n  limit   → last-wins\n\nas + in_need 别名共享机制:\n  as: 'ab'                → 字面别名; 路径累积时重名拒绝(默认 in_need=false)\n  as: 'ab', in_need: true → 重名时放弃本次贡献(用于跨 provider 共享同一 join/field)\n  as: '${ref:my_id}'      → 引擎自动分配唯一别名; 通过 ${ref:my_id} 在其他位置引用\n\nList 动态项的两种数据源:\n  sql 模式 (data_var 显式绑定):\n    SQL 每行 = 一项 child; ${<data_var>.<col>(.<sub>)*} 取 SQL 列(支持嵌套 JSON 列)\n  delegate 模式 (child_var 显式绑定):\n    调目标 ProviderCall list_children; ${<child_var>.name/provider/meta.X} 取 ChildEntry 字段\n\nResolve 全部按正则匹配(纯字面量是空元字符的合法子集); resolve 字段直接是 <regex>: ProviderInvocation 映射, 无 entries 包装。运行期解析顺序:\n  1) regex resolve → 2) 静态 list 字面 → 3) 动态 list 反查(默认开启, 命中进 LRU)\n\nResolve 加载期碰撞检查:\n  - 每条正则 vs 静态 list key 字面量: 任一匹配 → 拒绝\n  - 正则 vs 正则: regex_automata 求交集 → 非空则拒绝\n  - 动态 list 不参与碰撞检查(运行期碰撞按解析顺序覆写, 非正确性故障)\n\n模板变量 ${...} 语义(详见 RULES.md §6):\n  - ${<ns>(.<path>)*}      命名空间取值(properties / capture / data_var / child_var / composed)\n  - ${<ns>[<N>]}           索引访问(capture)\n  - ${<method>:<arg>}      方法标记 — 当前仅 ${ref:<ident>} 引擎分配别名\n\nDynamicListEntry.provider 字段语义:\n  - 缺省          → 当前层不挂 provider(默认; 大多数路由壳走这条)\n  - ProviderName  → 显式构造命名 provider, 用 properties 传参\n  - ${child_var.provider} → 透传 delegate 数据源返回的 child.provider (仅 delegate 模式)",
+    "description": "螢ｰ譏主ｼ・Provider 窶・霍ｯ蠕・釜蜿 ﾃ・ImageQuery 雍｡迪ｮ ﾃ・蜉ｨ諤∵椢荳ｾ縲りｯｦ扈・ｯｭ荵芽ｧ・cocs/provider-dsl/RULES.md縲・n\n荳・Rust trait Provider 蟇ｹ鮨・\n  query   竊・apply_query   闃らせ蟇ｹ邏ｯ遘ｯ ImageQuery 逧・ｴ｡迪ｮ(謌・delegate 蟋疲汚蜿ｦ荳 provider)\n  list    竊・list_children 髱呎∝ｭ鈴擇驥・/ 蜉ｨ諤・SQL / 蜉ｨ諤・delegate 蟄占鰍轤ｹ譫壻ｸｾ\n  resolve 竊・get_child     豁｣蛻呵ｧ｣譫仙黒荳ｪ蟄占鰍轤ｹ\n\nChildEntry 讓｡蝙・\n  { name: string, provider?: ProviderInvocation, meta?: any }\n  - meta 荳ｺ莉ｻ諢・JSON, 隸ｦ隗・RULES.md ﾂｧ4.5(蟄礼ｬｦ荳ｲ=SQL 謌匁ｨ｡譚ｿ; 蟇ｹ雎｡/謨ｰ扈・譬・㍼=逶ｴ謗･菴應ｸｺ meta)\n  - provider 蜿ｯ郛ｺ逵・窶・蠖灘燕螻ゆｸ肴撃荳句ｱ・provider\n\n蜻ｽ蜷咲ｩｺ髣ｴ(Java 蛹・｣取ｼ):\n  鬘ｶ螻・namespace 蟄玲ｮｵ, 蠖｢螯・'kabegame' / 'kabegame.plugin' / 'pixiv'\n  蜈ｨ螻蜷・= <namespace>.<name>; 蜷・namespace 蜀・provider 莠堤嶌蠑慕畑逕ｨ simple name\n  隗｣譫占ｧ・・: 蠖灘燕 namespace 竊・辷ｶ namespace 竊・... 竊・root\n  ProviderInvocation.provider 蜿ｯ蜀・simple name 謌也ｻ晏ｯｹ 'a.b.c.name'\n\n蛻､蛻ｫ遲也払:\n  - Query 莠呈箕: delegate 竓・(from/join/where/fields/order/offset/limit)\n  - StaticListEntry 逕ｨ ProviderInvocation 莠梧・ byName 竓・Empty\n  - Resolve 逕ｨ ProviderInvocation 荳画・ byName 竓・byDelegate 竓・Empty (7b 襍ｷ byDelegate 螟肴ｴｻ, payload 荳ｺ ProviderCall)\n  - List entry 逕ｱ key 譏ｯ蜷ｦ蜷ｫ ${...} 蛻､蛻ｫ 髱呎・/ 蜉ｨ諤―n  - DynamicListEntry 謨ｰ謐ｮ貅蝉ｺ呈箕: sql 竓・delegate\n  - order 蠖｢諤・ 謨ｰ扈・菴咲ｽｮ螳壼ｺ・ 竓・{all:...} 蜈ｨ螻謖・ｻ､(莠碁我ｸ)\n\n6e 襍ｷ: query.delegate / list dynamic delegate 蟄玲ｮｵ邀ｻ蝙倶ｸｺ ProviderCall { provider, properties? }; 荳榊・譏ｯ霍ｯ蠕・｡ｨ霎ｾ蠑・(PathExpr 謨ｴ荳ｪ蛻髯､)縲１rovider 譏ｯ path-unaware 逧・窶・蠑慕畑蜈ｶ螳・provider 襍ｰ namespace 體ｾ + name + properties, 荳肴ｷｷ蜈･霍ｯ蠕・ｦょｿｵ縲・n\nDelegate 蟇ｹ遘ｰ霓ｬ蜿・(7b 襍ｷ荳牙､・ｯｹ鮨・:\n  - query.delegate         竊・target.apply_query(current, ctx)  ; 蛟溽岼譬・噪 contrib 蜈･ composed\n  - list[<dyn>].delegate   竊・target.list(composed, ctx)        ; 隹・岼譬・噪 list 蜿・children 蠎丞・\n  - resolve[].delegate     竊・target.resolve(name, composed, ctx); 謚雁ｽ灘燕 segment 逧・resolve 蜀ｳ螳壽揀霓ｬ扈咏岼譬Ⅸn豈丞､・payload 驛ｽ譏ｯ ProviderCall, 豌ｸ霑・path-unaware縲・n\nContribQuery 諡ｼ謗･隸ｭ荵・\n  fields  竊・邏ｯ遘ｯ蛻ｰ SELECT; 逕ｨ as + in_need 隗｣蜀ｳ蜀ｲ遯―n  from    竊・cascading-replace(豕ｨ諢・ from 荳榊ｺ泌・蠏・JOIN, 隗・RULES.md ﾂｧ3.1)\n  join    竊・邏ｯ遘ｯ; 逕ｨ as + in_need 隗｣蜀ｳ蜀ｲ遯―n  where   竊・霍ｯ蠕・ｸ雁推闃らせ where 逕ｨ AND 諡ｼ謗･\n  order   竊・謨ｰ扈・潔菴咲ｽｮ螳壻ｼ伜・郤ｧ(蟇ｹ雎｡ {<field>: asc/desc/revert, ...}; 蜈∬ｮｸ螟夐醗); 謌・{all: asc/desc/revert} 蜈ｨ螻謖・ｻ､\n  offset  竊・additive (+); 螟壽ｬ｡螢ｰ譏守畑 + 荳ｲ謗･\n  limit   竊・last-wins\n\nas + in_need 蛻ｫ蜷榊・莠ｫ譛ｺ蛻ｶ:\n  as: 'ab'                竊・蟄鈴擇蛻ｫ蜷・ 霍ｯ蠕・ｴｯ遘ｯ譌ｶ驥榊錐諡堤ｻ・鮟倩ｮ､ in_need=false)\n  as: 'ab', in_need: true 竊・驥榊錐譌ｶ謾ｾ蠑・悽谺｡雍｡迪ｮ(逕ｨ莠手ｷｨ provider 蜈ｱ莠ｫ蜷御ｸ join/field)\n  as: '${ref:my_id}'      竊・蠑墓梼閾ｪ蜉ｨ蛻・・蜚ｯ荳蛻ｫ蜷・ 騾夊ｿ・${ref:my_id} 蝨ｨ蜈ｶ莉紋ｽ咲ｽｮ蠑慕畑\n\nList 蜉ｨ諤・｡ｹ逧・ｸ､遘肴焚謐ｮ貅・\n  sql 讓｡蠑・(data_var 譏ｾ蠑冗ｻ大ｮ・:\n    SQL 豈剰｡・= 荳鬘ｹ child; ${<data_var>.<col>(.<sub>)*} 蜿・SQL 蛻・謾ｯ謖∝ｵ悟･・JSON 蛻・\n  delegate 讓｡蠑・(child_var 譏ｾ蠑冗ｻ大ｮ・:\n    隹・岼譬・ProviderCall list_children; ${<child_var>.name/provider/meta.X} 蜿・ChildEntry 蟄玲ｮｵ\n\nResolve 蜈ｨ驛ｨ謖画ｭ｣蛻吝源驟・郤ｯ蟄鈴擇驥乗弍遨ｺ蜈・ｭ礼ｬｦ逧・粋豕募ｭ宣寔); resolve 蟄玲ｮｵ逶ｴ謗･譏ｯ <regex>: ProviderInvocation 譏蟆・ 譌 entries 蛹・｣・りｿ占｡梧悄隗｣譫宣｡ｺ蠎・\n  1) regex resolve 竊・2) 髱呎・list 蟄鈴擇 竊・3) 蜉ｨ諤・list 蜿肴衍(鮟倩ｮ､蠑蜷ｯ, 蜻ｽ荳ｭ霑・LRU)\n\nResolve 蜉霓ｽ譛溽｢ｰ謦樊｣譟･:\n  - 豈乗擅豁｣蛻・vs 髱呎・list key 蟄鈴擇驥・ 莉ｻ荳蛹ｹ驟・竊・諡堤ｻ拿n  - 豁｣蛻・vs 豁｣蛻・ regex_automata 豎ゆｺ､髮・竊・髱樒ｩｺ蛻呎拠扈拿n  - 蜉ｨ諤・list 荳榊盾荳守｢ｰ謦樊｣譟･(霑占｡梧悄遒ｰ謦樊潔隗｣譫宣｡ｺ蠎剰ｦ・・, 髱樊ｭ｣遑ｮ諤ｧ謨・囿)\n\n讓｡譚ｿ蜿倬㍼ ${...} 隸ｭ荵・隸ｦ隗・RULES.md ﾂｧ6):\n  - ${<ns>(.<path>)*}      蜻ｽ蜷咲ｩｺ髣ｴ蜿門ｼ(properties / capture / data_var / child_var / composed)\n  - ${<ns>[<N>]}           邏｢蠑戊ｮｿ髣ｮ(capture)\n  - ${<method>:<arg>}      譁ｹ豕墓・ｮｰ 窶・蠖灘燕莉・${ref:<ident>} 蠑墓梼蛻・・蛻ｫ蜷構n\nDynamicListEntry.provider 蟄玲ｮｵ隸ｭ荵・\n  - 郛ｺ逵・         竊・蠖灘燕螻ゆｸ肴撃 provider(鮟倩ｮ､; 螟ｧ螟壽焚霍ｯ逕ｱ螢ｳ襍ｰ霑呎擅)\n  - ProviderName  竊・譏ｾ蠑乗桷騾蜻ｽ蜷・provider, 逕ｨ properties 莨蜿・n  - ${child_var.provider} 竊・騾丈ｼ delegate 謨ｰ謐ｮ貅占ｿ泌屓逧・child.provider (莉・delegate 讓｡蠑・",
 
     "type": "object",
     "required": ["name"],
@@ -10,27 +10,27 @@
     "properties": {
         "$schema": {
             "type": "string",
-            "description": "Schema 锚点(建议 './schema.json5' 启用 IDE 补全)"
+            "description": "Schema 髞夂せ(蟒ｺ隶ｮ './schema.json5' 蜷ｯ逕ｨ IDE 陦･蜈ｨ)"
         },
         "namespace": {
             "$ref": "#/definitions/Namespace",
-            "description": "命名空间(Java 包风格点分式; 缺省=root)。全局名 = <namespace>.<name>"
+            "description": "蜻ｽ蜷咲ｩｺ髣ｴ(Java 蛹・｣取ｼ轤ｹ蛻・ｼ・ 郛ｺ逵・root)縲ょ・螻蜷・= <namespace>.<name>"
         },
         "name": {
             "$ref": "#/definitions/SimpleName",
-            "description": "本 provider 在所属 namespace 内的简单名(snake_case, 不含点)"
+            "description": "譛ｬ provider 蝨ｨ謇螻・namespace 蜀・噪邂蜊募錐(snake_case, 荳榊性轤ｹ)"
         },
         "properties": {
             "type": "object",
             "additionalProperties": { "$ref": "#/definitions/PropertyDecl" },
-            "description": "属性签名 — 调用方在 ProviderInvocation.properties 中赋值"
+            "description": "螻樊ｧ遲ｾ蜷・窶・隹・畑譁ｹ蝨ｨ ProviderInvocation.properties 荳ｭ襍句ｼ"
         },
         "query": { "$ref": "#/definitions/Query" },
         "list": { "$ref": "#/definitions/List" },
         "resolve": { "$ref": "#/definitions/Resolve" },
         "note": {
             "type": "string",
-            "description": "VD 说明文件内容(Provider::get_note)"
+            "description": "VD 隸ｴ譏取枚莉ｶ蜀・ｮｹ(Provider::get_note)"
         }
     },
 
@@ -39,24 +39,24 @@
         "ProviderName": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
-            "description": "Provider 引用名: 简单名(同 namespace 内查找) 或绝对名 'a.b.c.name'。引擎按当前 namespace → 父 namespace → ... → root 逐级解析"
+            "description": "Provider 蠑慕畑蜷・ 邂蜊募錐(蜷・namespace 蜀・衍謇ｾ) 謌也ｻ晏ｯｹ蜷・'a.b.c.name'縲ょｼ墓梼謖牙ｽ灘燕 namespace 竊・辷ｶ namespace 竊・... 竊・root 騾千ｺｧ隗｣譫・
         },
 
         "SimpleName": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*$",
-            "description": "单段标识符(snake_case, 不含点)"
+            "description": "蜊墓ｮｵ譬・ｯ・ｬｦ(snake_case, 荳榊性轤ｹ)"
         },
 
         "Namespace": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
-            "description": "Java 包风格命名空间; 点分隔多段"
+            "description": "Java 蛹・｣取ｼ蜻ｽ蜷咲ｩｺ髣ｴ; 轤ｹ蛻・囈螟壽ｮｵ"
         },
 
         "TemplateExpr": {
             "type": "string",
-            "description": "可含 ${...} 插值的字符串。详见顶层 description 模板变量列表"
+            "description": "蜿ｯ蜷ｫ ${...} 謠貞ｼ逧・ｭ礼ｬｦ荳ｲ縲りｯｦ隗・｡ｶ螻・description 讓｡譚ｿ蜿倬㍼蛻苓｡ｨ"
         },
 
         "TemplateValue": {
@@ -65,28 +65,28 @@
                 { "type": "number" },
                 { "type": "boolean" }
             ],
-            "description": "属性值字面量或模板字符串(按 PropertyDecl.type 做隐式转换)"
+            "description": "螻樊ｧ蛟ｼ蟄鈴擇驥乗・讓｡譚ｿ蟄礼ｬｦ荳ｲ(謖・PropertyDecl.type 蛛夐嚼蠑剰ｽｬ謐｢)"
         },
 
         "SqlExpr": {
             "type": "string",
-            "description": "受 sqlparser 校验的 SQL 片段; 多语句 / DDL 在加载期拒绝"
+            "description": "蜿・sqlparser 譬｡鬪檎噪 SQL 迚・ｮｵ; 螟夊ｯｭ蜿･ / DDL 蝨ｨ蜉霓ｽ譛滓拠扈・
         },
 
         "MetaValue": {
-            "description": "ChildEntry.meta 字段值; 任意 JSON 类型。详见 RULES.md §4.5。\n  - 字符串 + 含 SELECT/FROM 关键字 → 视为单行 SELECT, 引擎执行后取首行\n  - 字符串 + 仅含 ${...} 模板 → 模板插值, 结果作为 meta\n  - 对象/数组 → 递归对每个值做模板插值\n  - 数字/布尔/null → 直接作为 meta"
+            "description": "ChildEntry.meta 蟄玲ｮｵ蛟ｼ; 莉ｻ諢・JSON 邀ｻ蝙九りｯｦ隗・RULES.md ﾂｧ4.5縲・n  - 蟄礼ｬｦ荳ｲ + 蜷ｫ SELECT/FROM 蜈ｳ髞ｮ蟄・竊・隗・ｸｺ蜊戊｡・SELECT, 蠑墓梼謇ｧ陦悟錘蜿夜ｦ冶｡圭n  - 蟄礼ｬｦ荳ｲ + 莉・性 ${...} 讓｡譚ｿ 竊・讓｡譚ｿ謠貞ｼ, 扈捺棡菴應ｸｺ meta\n  - 蟇ｹ雎｡/謨ｰ扈・竊・騾貞ｽ貞ｯｹ豈丈ｸｪ蛟ｼ蛛壽ｨ｡譚ｿ謠貞ｼ\n  - 謨ｰ蟄・蟶・ｰ・null 竊・逶ｴ謗･菴應ｸｺ meta"
         },
 
         "ChildRefProvider": {
             "type": "string",
             "pattern": "^\\$\\{[a-z_][a-z0-9_]*\\.provider\\}$",
-            "description": "对 delegate 模式 child.provider 的整体对象引用; 仅 DynamicListEntry_Delegate.provider 字段位置合法。形如 ${<child_var>.provider}"
+            "description": "蟇ｹ delegate 讓｡蠑・child.provider 逧・紛菴灘ｯｹ雎｡蠑慕畑; 莉・DynamicListEntry_Delegate.provider 蟄玲ｮｵ菴咲ｽｮ蜷域ｳ輔ょｽ｢螯・${<child_var>.provider}"
         },
 
         "Identifier": {
             "type": "string",
             "pattern": "^[a-z_][a-z0-9_]*$",
-            "description": "标识符(snake_case); 用作 child_var / data_var 等绑定名"
+            "description": "譬・ｯ・ｬｦ(snake_case); 逕ｨ菴・child_var / data_var 遲臥ｻ大ｮ壼錐"
         },
 
         "PropertyDecl": {
@@ -95,7 +95,7 @@
                 { "$ref": "#/definitions/StringProp" },
                 { "$ref": "#/definitions/BooleanProp" }
             ],
-            "description": "属性声明 — 由 type 字段判别"
+            "description": "螻樊ｧ螢ｰ譏・窶・逕ｱ type 蟄玲ｮｵ蛻､蛻ｫ"
         },
 
         "NumberProp": {
@@ -121,7 +121,7 @@
                 "optional": { "type": "boolean" },
                 "pattern": {
                     "type": "string",
-                    "description": "正则约束"
+                    "description": "豁｣蛻咏ｺｦ譚・
                 }
             }
         },
@@ -142,7 +142,7 @@
                 { "$ref": "#/definitions/DelegateQuery" },
                 { "$ref": "#/definitions/ContribQuery" }
             ],
-            "description": "节点对累积 ImageQuery 的贡献 — DelegateQuery ⊕ ContribQuery (presence-based)。\n注意: query.delegate 是 [委托另一 provider 的贡献] (实例化目标后调它的 apply_query); 与 list[key].delegate 的 [数据源 ProviderCall] 语义不同"
+            "description": "闃らせ蟇ｹ邏ｯ遘ｯ ImageQuery 逧・ｴ｡迪ｮ 窶・DelegateQuery 竓・ContribQuery (presence-based)縲・n豕ｨ諢・ query.delegate 譏ｯ [蟋疲汚蜿ｦ荳 provider 逧・ｴ｡迪ｮ] (螳樔ｾ句喧逶ｮ譬・錘隹・ｮ・噪 apply_query); 荳・list[key].delegate 逧・[謨ｰ謐ｮ貅・ProviderCall] 隸ｭ荵我ｸ榊酔"
         },
 
         "DelegateQuery": {
@@ -152,7 +152,7 @@
             "properties": {
                 "delegate": { "$ref": "#/definitions/ProviderCall" }
             },
-            "description": "委托另一个 provider 的贡献 — 实例化目标 provider 后调它的 apply_query"
+            "description": "蟋疲汚蜿ｦ荳荳ｪ provider 逧・ｴ｡迪ｮ 窶・螳樔ｾ句喧逶ｮ譬・provider 蜷手ｰ・ｮ・噪 apply_query"
         },
 
         "ContribQuery": {
@@ -163,66 +163,65 @@
                 "fields": {
                     "type": "array",
                     "items": { "$ref": "#/definitions/Field" },
-                    "description": "SELECT 列贡献(GraphQL 风格累积)。用 as + in_need 解决路径上的命名冲突"
+                    "description": "SELECT 蛻苓ｴ｡迪ｮ(GraphQL 鬟取ｼ邏ｯ遘ｯ)縲ら畑 as + in_need 隗｣蜀ｳ霍ｯ蠕・ｸ顔噪蜻ｽ蜷榊・遯・
                 },
                 "from": {
                     "$ref": "#/definitions/SqlExpr",
-                    "description": "FROM 后的基础表达式。cascading-replace 语义: 一次声明影响下游所有节点; 子节点可重声明覆盖"
+                    "description": "FROM 蜷守噪蝓ｺ遑陦ｨ霎ｾ蠑上Ｄascading-replace 隸ｭ荵・ 荳谺｡螢ｰ譏主ｽｱ蜩堺ｸ区ｸｸ謇譛芽鰍轤ｹ; 蟄占鰍轤ｹ蜿ｯ驥榊｣ｰ譏手ｦ・尠"
                 },
                 "join": {
                     "type": "array",
                     "items": { "$ref": "#/definitions/Join" },
-                    "description": "JOIN 贡献(累积)。每项指定 table + as; 用 as + in_need 解决冲突 / 跨 provider 共享"
+                    "description": "JOIN 雍｡迪ｮ(邏ｯ遘ｯ)縲よｯ城｡ｹ謖・ｮ・table + as; 逕ｨ as + in_need 隗｣蜀ｳ蜀ｲ遯・/ 霍ｨ provider 蜈ｱ莠ｫ"
                 },
                 "where": {
                     "$ref": "#/definitions/SqlExpr",
-                    "description": "任意 WHERE 表达式(单条; 可写 'a > 1 and b < 2' 等)。路径上各 provider 的 where 引擎用 AND 拼接"
+                    "description": "莉ｻ諢・WHERE 陦ｨ霎ｾ蠑・蜊墓擅; 蜿ｯ蜀・'a > 1 and b < 2' 遲・縲りｷｯ蠕・ｸ雁推 provider 逧・where 蠑墓梼逕ｨ AND 諡ｼ謗･"
                 },
                 "order": {
                     "oneOf": [
                         {
                             "type": "array",
                             "items": { "$ref": "#/definitions/OrderArrayItem" },
-                            "description": "形态 A: 数组按位置定优先级(低 index 优先)。每项是 {<field>: 'asc'|'desc'|'revert'} 单键对象; 'revert' 翻转该字段上游已声明的方向; 同名字段后声明覆盖前声明(不报错)"
+                            "description": "蠖｢諤・A: 謨ｰ扈・潔菴咲ｽｮ螳壻ｼ伜・郤ｧ(菴・index 莨伜・)縲よｯ城｡ｹ譏ｯ {<field>: 'asc'|'desc'|'revert'} 蜊暮醗蟇ｹ雎｡; 'revert' 鄙ｻ霓ｬ隸･蟄玲ｮｵ荳頑ｸｸ蟾ｲ螢ｰ譏守噪譁ｹ蜷・ 蜷悟錐蟄玲ｮｵ蜷主｣ｰ譏手ｦ・尠蜑榊｣ｰ譏・荳肴冠髞・"
                         },
                         { "$ref": "#/definitions/OrderGlobal" }
                     ],
-                    "description": "ORDER BY 贡献; 二选一: 数组(位置定序) ⊕ {all:...} 全局指令"
+                    "description": "ORDER BY 雍｡迪ｮ; 莠碁我ｸ: 謨ｰ扈・菴咲ｽｮ螳壼ｺ・ 竓・{all:...} 蜈ｨ螻謖・ｻ､"
                 },
                 "offset": {
                     "oneOf": [
                         { "type": "number" },
                         { "$ref": "#/definitions/TemplateExpr" }
                     ],
-                    "description": "OFFSET 值; 数字字面量或模板字符串。路径累积语义: 多个 provider 各自声明会被引擎用 + 串接为 (o1) + (o2) + ...(嵌套分页)"
+                    "description": "OFFSET 蛟ｼ; 謨ｰ蟄怜ｭ鈴擇驥乗・讓｡譚ｿ蟄礼ｬｦ荳ｲ縲りｷｯ蠕・ｴｯ遘ｯ隸ｭ荵・ 螟壻ｸｪ provider 蜷・・螢ｰ譏惹ｼ夊｢ｫ蠑墓梼逕ｨ + 荳ｲ謗･荳ｺ (o1) + (o2) + ...(蠏悟･怜・鬘ｵ)"
                 },
                 "limit": {
                     "oneOf": [
                         { "type": "number" },
                         { "$ref": "#/definitions/TemplateExpr" }
                     ],
-                    "description": "LIMIT 值; 数字字面量或模板字符串。路径累积语义: last-wins(末次声明胜)。limit:0 = 空集(SQL 自然行为, 不特殊化)"
+                    "description": "LIMIT 蛟ｼ; 謨ｰ蟄怜ｭ鈴擇驥乗・讓｡譚ｿ蟄礼ｬｦ荳ｲ縲りｷｯ蠕・ｴｯ遘ｯ隸ｭ荵・ last-wins(譛ｫ谺｡螢ｰ譏手・)縲Ｍimit:0 = 遨ｺ髮・SQL 閾ｪ辟ｶ陦御ｸｺ, 荳咲音谿雁喧)"
                 }
             }
         },
 
         "Field": {
+            "oneOf": [
+                { "$ref": "#/definitions/SqlExpr" },
+                { "$ref": "#/definitions/FieldObject" }
+            ],
+            "description": "SELECT field. Bare string is shorthand for {sql:<string>}; object form supports as/in_need."
+        },
+
+        "FieldObject": {
             "type": "object",
             "additionalProperties": false,
             "required": ["sql"],
             "properties": {
-                "sql": {
-                    "$ref": "#/definitions/SqlExpr",
-                    "description": "字段表达式(可含子查询)。e.g. 'images.title' / '(SELECT COUNT(*) FROM tags ...)'"
-                },
-                "as": {
-                    "$ref": "#/definitions/AliasName",
-                    "description": "字段别名; 字面量 / ${ref:<ident>} 自动分配。某些表达式(如 'images.*')可省略"
-                },
-                "in_need": {
-                    "type": "boolean",
-                    "description": "true: 路径上同名 as 已存在时放弃本贡献(共享场景); 默认 false: 重名报错"
-                }
+                "sql": { "$ref": "#/definitions/SqlExpr" },
+                "as": { "$ref": "#/definitions/AliasName" },
+                "in_need": { "type": "boolean" }
             }
         },
 
@@ -233,23 +232,23 @@
             "properties": {
                 "kind": {
                     "enum": ["INNER", "LEFT", "RIGHT", "FULL"],
-                    "description": "JOIN 类型; 默认 INNER"
+                    "description": "JOIN 邀ｻ蝙・ 鮟倩ｮ､ INNER"
                 },
                 "table": {
                     "$ref": "#/definitions/SqlExpr",
-                    "description": "目标表名或子查询。e.g. 'album_images' / '(SELECT id, ts FROM ...)'"
+                    "description": "逶ｮ譬・｡ｨ蜷肴・蟄先衍隸｢縲Ｆ.g. 'album_images' / '(SELECT id, ts FROM ...)'"
                 },
                 "as": {
                     "$ref": "#/definitions/AliasName",
-                    "description": "表别名; 字面量 / ${ref:<ident>} 自动分配"
+                    "description": "陦ｨ蛻ｫ蜷・ 蟄鈴擇驥・/ ${ref:<ident>} 閾ｪ蜉ｨ蛻・・"
                 },
                 "on": {
                     "$ref": "#/definitions/SqlExpr",
-                    "description": "ON 子句; 可引用 ${ref:<ident>} 等。e.g. 'ai.image_id = images.id'"
+                    "description": "ON 蟄仙唱; 蜿ｯ蠑慕畑 ${ref:<ident>} 遲峨Ｆ.g. 'ai.image_id = images.id'"
                 },
                 "in_need": {
                     "type": "boolean",
-                    "description": "true: 路径上同名 as 已存在时放弃本贡献(跨 provider 共享 join 用); 默认 false: 重名报错"
+                    "description": "true: 霍ｯ蠕・ｸ雁酔蜷・as 蟾ｲ蟄伜惠譌ｶ謾ｾ蠑・悽雍｡迪ｮ(霍ｨ provider 蜈ｱ莠ｫ join 逕ｨ); 鮟倩ｮ､ false: 驥榊錐謚･髞・
                 }
             }
         },
@@ -260,7 +259,7 @@
             "additionalProperties": {
                 "enum": ["asc", "desc", "revert"]
             },
-            "description": "Order 数组项 — 对象 {<field_name>: 'asc'|'desc'|'revert', ...}。允许多键; field_name 是任意 SQL 列表达式(可含表前缀如 'images.crawled_at'); 'revert' 表示翻转该字段在上游的方向, 上游未声明则视为新增。多键时键间优先级按声明顺序。"
+            "description": "Order 謨ｰ扈・｡ｹ 窶・蟇ｹ雎｡ {<field_name>: 'asc'|'desc'|'revert', ...}縲ょ・隶ｸ螟夐醗; field_name 譏ｯ莉ｻ諢・SQL 蛻苓｡ｨ霎ｾ蠑・蜿ｯ蜷ｫ陦ｨ蜑咲ｼ螯・'images.crawled_at'); 'revert' 陦ｨ遉ｺ鄙ｻ霓ｬ隸･蟄玲ｮｵ蝨ｨ荳頑ｸｸ逧・婿蜷・ 荳頑ｸｸ譛ｪ螢ｰ譏主・隗・ｸｺ譁ｰ蠅槭ょ､夐醗譌ｶ髞ｮ髣ｴ莨伜・郤ｧ謖牙｣ｰ譏朱｡ｺ蠎上・
         },
 
         "OrderGlobal": {
@@ -270,10 +269,10 @@
             "properties": {
                 "all": {
                     "enum": ["asc", "desc", "revert"],
-                    "description": "全局指令对所有上游 order 字段生效: 'revert' = 翻转 ASC↔DESC; 'asc'/'desc' = 强制统一方向"
+                    "description": "蜈ｨ螻謖・ｻ､蟇ｹ謇譛我ｸ頑ｸｸ order 蟄玲ｮｵ逕滓譜: 'revert' = 鄙ｻ霓ｬ ASC竊妊ESC; 'asc'/'desc' = 蠑ｺ蛻ｶ扈滉ｸ譁ｹ蜷・
                 }
             },
-            "description": "Order 全局指令 {all: 'asc'|'desc'|'revert'}; 应用时插入累积链顶, 影响下游所有节点的方向解释"
+            "description": "Order 蜈ｨ螻謖・ｻ､ {all: 'asc'|'desc'|'revert'}; 蠎皮畑譌ｶ謠貞・邏ｯ遘ｯ體ｾ鬘ｶ, 蠖ｱ蜩堺ｸ区ｸｸ謇譛芽鰍轤ｹ逧・婿蜷題ｧ｣驥・
         },
 
         "AliasName": {
@@ -281,17 +280,17 @@
                 {
                     "type": "string",
                     "pattern": "^[a-z_][a-z0-9_]*$",
-                    "description": "字面别名(snake_case)"
+                    "description": "蟄鈴擇蛻ｫ蜷・snake_case)"
                 },
                 { "$ref": "#/definitions/RefAlias" }
             ],
-            "description": "别名: 字面量(snake_case) / ${ref:<ident>} 引擎自动分配"
+            "description": "蛻ｫ蜷・ 蟄鈴擇驥・snake_case) / ${ref:<ident>} 蠑墓梼閾ｪ蜉ｨ蛻・・"
         },
 
         "RefAlias": {
             "type": "string",
             "pattern": "^\\$\\{ref:[a-z_][a-z0-9_]*\\}$",
-            "description": "引擎自动分配别名占位符。同 ident 在 query 内其他位置(如 join.on / where) 用 ${ref:<ident>} 引用"
+            "description": "蠑墓梼閾ｪ蜉ｨ蛻・・蛻ｫ蜷榊頃菴咲ｬｦ縲ょ酔 ident 蝨ｨ query 蜀・・莉紋ｽ咲ｽｮ(螯・join.on / where) 逕ｨ ${ref:<ident>} 蠑慕畑"
         },
 
         "List": {
@@ -299,20 +298,20 @@
             "patternProperties": {
                 ".*\\$\\{[a-z_][a-z0-9_]*(?:\\.[a-z_][a-z0-9_]*)+\\}.*": {
                     "$ref": "#/definitions/DynamicListEntry",
-                    "description": "动态项: key 含 ${ident.field}, 必须有 sql 或 delegate 作为数据源"
+                    "description": "蜉ｨ諤・｡ｹ: key 蜷ｫ ${ident.field}, 蠢・｡ｻ譛・sql 謌・delegate 菴應ｸｺ謨ｰ謐ｮ貅・
                 },
                 "^(?!.*\\$\\{).+$": {
                     "$ref": "#/definitions/StaticListEntry",
-                    "description": "静态项: key 字面量, 用 ProviderInvocation 二态"
+                    "description": "髱呎・｡ｹ: key 蟄鈴擇驥・ 逕ｨ ProviderInvocation 莠梧・
                 }
             },
             "additionalProperties": false,
-            "description": "子节点枚举 — 静态字面量 key 或 含 ${ident.field} 的动态 key"
+            "description": "蟄占鰍轤ｹ譫壻ｸｾ 窶・髱呎∝ｭ鈴擇驥・key 謌・蜷ｫ ${ident.field} 逧・勘諤・key"
         },
 
         "StaticListEntry": {
             "$ref": "#/definitions/ProviderInvocation",
-            "description": "静态 list 项 = ProviderInvocation 二态 (byName / Empty); 6e 起 byDelegate variant 已删除"
+            "description": "髱呎・list 鬘ｹ = ProviderInvocation 莠梧・(byName / Empty); 6e 襍ｷ byDelegate variant 蟾ｲ蛻髯､"
         },
 
         "DynamicListEntry": {
@@ -320,7 +319,7 @@
                 { "$ref": "#/definitions/DynamicListEntry_Sql" },
                 { "$ref": "#/definitions/DynamicListEntry_Delegate" }
             ],
-            "description": "动态 list 项 — 数据源互斥: sql ⊕ delegate"
+            "description": "蜉ｨ諤・list 鬘ｹ 窶・謨ｰ謐ｮ貅蝉ｺ呈箕: sql 竓・delegate"
         },
 
         "DynamicListEntry_Sql": {
@@ -331,24 +330,24 @@
             "properties": {
                 "sql": {
                     "$ref": "#/definitions/SqlExpr",
-                    "description": "数据源 SQL; 通常含 ${composed} 子查询。每行 = 一项 child; 通过 ${<data_var>.<col>} 取 SQL 列"
+                    "description": "謨ｰ謐ｮ貅・SQL; 騾壼ｸｸ蜷ｫ ${composed} 蟄先衍隸｢縲よｯ剰｡・= 荳鬘ｹ child; 騾夊ｿ・${<data_var>.<col>} 蜿・SQL 蛻・
                 },
                 "data_var": {
                     "$ref": "#/definitions/Identifier",
-                    "description": "SQL 行绑定名。引擎要求 key 与 properties 中所有 ${X.Y} 的 X 必须等于此值"
+                    "description": "SQL 陦檎ｻ大ｮ壼錐縲ょｼ墓梼隕∵ｱ・key 荳・properties 荳ｭ謇譛・${X.Y} 逧・X 蠢・｡ｻ遲我ｺ取ｭ､蛟ｼ"
                 },
                 "provider": {
                     "$ref": "#/definitions/ProviderName",
-                    "description": "缺省=不挂 provider; 字符串=显式命名 (SQL 模式无透传)"
+                    "description": "郛ｺ逵・荳肴撃 provider; 蟄礼ｬｦ荳ｲ=譏ｾ蠑丞多蜷・(SQL 讓｡蠑乗裏騾丈ｼ)"
                 },
                 "properties": {
                     "type": "object",
                     "additionalProperties": { "$ref": "#/definitions/TemplateValue" },
-                    "description": "传给当前层 provider 的属性; 值可含 ${<data_var>.<col>} 引用"
+                    "description": "莨扈吝ｽ灘燕螻・provider 逧・ｱ樊ｧ; 蛟ｼ蜿ｯ蜷ｫ ${<data_var>.<col>} 蠑慕畑"
                 },
                 "meta": {
                     "$ref": "#/definitions/MetaValue",
-                    "description": "可选 meta(每行执行一次); 见 RULES.md §4.5。可为 SQL 字符串(访问 ${data_var.col}) / ${data_var}(透传整行) / 含模板的对象"
+                    "description": "蜿ｯ騾・meta(豈剰｡梧鴬陦御ｸ谺｡); 隗・RULES.md ﾂｧ4.5縲ょ庄荳ｺ SQL 蟄礼ｬｦ荳ｲ(隶ｿ髣ｮ ${data_var.col}) / ${data_var}(騾丈ｼ謨ｴ陦・ / 蜷ｫ讓｡譚ｿ逧・ｯｹ雎｡"
                 }
             }
         },
@@ -361,27 +360,27 @@
             "properties": {
                 "delegate": {
                     "$ref": "#/definitions/ProviderCall",
-                    "description": "数据源 provider 引用; 实例化后调它的 list_children, 每个 child = 一项。通过 ${<child_var>.name} / ${<child_var>.provider} / ${<child_var>.meta.X} 取 ChildEntry 字段"
+                    "description": "謨ｰ謐ｮ貅・provider 蠑慕畑; 螳樔ｾ句喧蜷手ｰ・ｮ・噪 list_children, 豈丈ｸｪ child = 荳鬘ｹ縲る夊ｿ・${<child_var>.name} / ${<child_var>.provider} / ${<child_var>.meta.X} 蜿・ChildEntry 蟄玲ｮｵ"
                 },
                 "child_var": {
                     "$ref": "#/definitions/Identifier",
-                    "description": "ChildEntry 绑定名。引擎要求 key 与 properties 中所有 ${X.Y} 的 X 必须等于此值"
+                    "description": "ChildEntry 扈大ｮ壼錐縲ょｼ墓梼隕∵ｱ・key 荳・properties 荳ｭ謇譛・${X.Y} 逧・X 蠢・｡ｻ遲我ｺ取ｭ､蛟ｼ"
                 },
                 "provider": {
                     "oneOf": [
                         { "$ref": "#/definitions/ProviderName" },
                         { "$ref": "#/definitions/ChildRefProvider" }
                     ],
-                    "description": "缺省=不挂 provider(默认; provider常见); 字符串=显式构造(路由壳常见); ${<child_var>.provider}=透传 delegate 返回的 child.provider"
+                    "description": "郛ｺ逵・荳肴撃 provider(鮟倩ｮ､; provider蟶ｸ隗・; 蟄礼ｬｦ荳ｲ=譏ｾ蠑乗桷騾(霍ｯ逕ｱ螢ｳ蟶ｸ隗・; ${<child_var>.provider}=騾丈ｼ delegate 霑泌屓逧・child.provider"
                 },
                 "properties": {
                     "type": "object",
                     "additionalProperties": { "$ref": "#/definitions/TemplateValue" },
-                    "description": "传给当前层 provider 的属性; 值可含 ${<child_var>.name|provider|meta.X} 引用"
+                    "description": "莨扈吝ｽ灘燕螻・provider 逧・ｱ樊ｧ; 蛟ｼ蜿ｯ蜷ｫ ${<child_var>.name|provider|meta.X} 蠑慕畑"
                 },
                 "meta": {
                     "$ref": "#/definitions/MetaValue",
-                    "description": "可选 meta(每个 child 执行一次); 见 RULES.md §4.5。可为 SQL 字符串(访问 ${child_var.X}) / ${child_var.meta}(透传上层 meta) / 含模板的对象"
+                    "description": "蜿ｯ騾・meta(豈丈ｸｪ child 謇ｧ陦御ｸ谺｡); 隗・RULES.md ﾂｧ4.5縲ょ庄荳ｺ SQL 蟄礼ｬｦ荳ｲ(隶ｿ髣ｮ ${child_var.X}) / ${child_var.meta}(騾丈ｼ荳雁ｱ・meta) / 蜷ｫ讓｡譚ｿ逧・ｯｹ雎｡"
                 }
             }
         },
@@ -389,7 +388,7 @@
         "Resolve": {
             "type": "object",
             "additionalProperties": { "$ref": "#/definitions/ProviderInvocation" },
-            "description": "正则 → ProviderInvocation 映射 (直接 key-value, 无 entries 包装)。所有 key 一律按正则编译 (纯字面量是空元字符的合法子集)。\n\nKey 形态 (7b 起):\n  - 静态 regex (无 ${...})         → 加载期编译\n  - instance-static (${properties.X}) → 实例化期渲染后再编译\n  - 不允许 ${data_var.X} / ${child_var.X} (resolve 表无 row/child 上下文)\n\n运行期解析顺序 (deterministic): regex resolve → 静态 list 字面 → 动态 list 反查 (默认开启)。\n\n7b 起: 引擎不再做加载期碰撞检测 — `.*` 转发模式 + instance-static key 都让该检测全是 false-positive。多模式重叠由作者按 schema 出现顺序覆写决定。"
+            "description": "豁｣蛻・竊・ProviderInvocation 譏蟆・(逶ｴ謗･ key-value, 譌 entries 蛹・｣・縲よ園譛・key 荳蠕区潔豁｣蛻咏ｼ冶ｯ・(郤ｯ蟄鈴擇驥乗弍遨ｺ蜈・ｭ礼ｬｦ逧・粋豕募ｭ宣寔)縲・n\nKey 蠖｢諤・(7b 襍ｷ):\n  - 髱呎・regex (譌 ${...})         竊・蜉霓ｽ譛溽ｼ冶ｯ曾n  - instance-static (${properties.X}) 竊・螳樔ｾ句喧譛滓ｸｲ譟灘錘蜀咲ｼ冶ｯ曾n  - 荳榊・隶ｸ ${data_var.X} / ${child_var.X} (resolve 陦ｨ譌 row/child 荳贋ｸ区枚)\n\n霑占｡梧悄隗｣譫宣｡ｺ蠎・(deterministic): regex resolve 竊・髱呎・list 蟄鈴擇 竊・蜉ｨ諤・list 蜿肴衍 (鮟倩ｮ､蠑蜷ｯ)縲・n\n7b 襍ｷ: 蠑墓梼荳榊・蛛壼刈霓ｽ譛溽｢ｰ謦樊｣豬・窶・`.*` 霓ｬ蜿第ｨ｡蠑・+ instance-static key 驛ｽ隶ｩ隸･譽豬句・譏ｯ false-positive縲ょ､壽ｨ｡蠑城㍾蜿逕ｱ菴懆・潔 schema 蜃ｺ邇ｰ鬘ｺ蠎剰ｦ・・蜀ｳ螳壹・
         },
 
         "ProviderInvocation": {
@@ -398,7 +397,7 @@
                 { "$ref": "#/definitions/InvokeByDelegate" },
                 { "$ref": "#/definitions/EmptyInvocation" }
             ],
-            "description": "三态 (7b 起):\n  - InvokeByName  — `{provider, properties?, meta?}`; 实例化 provider, 它即为 resolve 结果\n  - InvokeByDelegate — `{delegate: ProviderCall, meta?}`; 实例化 ProviderCall.provider, 调 target.resolve(name) 转发, target 给出的内层 provider 为结果 (仅 Resolve 表有效; 静态 list 项不允许)\n  - EmptyInvocation — `{meta?}` 占位\n\n用于 StaticListEntry (仅 ByName / Empty) 与 Resolve 项 (三态全允许)。\n\nInvokeByDelegate 是 7b 补回的 — query.delegate / list[].delegate / resolve[].delegate 三处 delegate 形成对称: 每个都'调用其上下文对应的操作并转发'。"
+            "description": "荳画・(7b 襍ｷ):\n  - InvokeByName  窶・`{provider, properties?, meta?}`; 螳樔ｾ句喧 provider, 螳・叉荳ｺ resolve 扈捺棡\n  - InvokeByDelegate 窶・`{delegate: ProviderCall, meta?}`; 螳樔ｾ句喧 ProviderCall.provider, 隹・target.resolve(name) 霓ｬ蜿・ target 扈吝・逧・・螻・provider 荳ｺ扈捺棡 (莉・Resolve 陦ｨ譛画譜; 髱呎・list 鬘ｹ荳榊・隶ｸ)\n  - EmptyInvocation 窶・`{meta?}` 蜊菴構n\n逕ｨ莠・StaticListEntry (莉・ByName / Empty) 荳・Resolve 鬘ｹ (荳画∝・蜈∬ｮｸ)縲・n\nInvokeByDelegate 譏ｯ 7b 陦･蝗樒噪 窶・query.delegate / list[].delegate / resolve[].delegate 荳牙､・delegate 蠖｢謌仙ｯｹ遘ｰ: 豈丈ｸｪ驛ｽ'隹・畑蜈ｶ荳贋ｸ区枚蟇ｹ蠎皮噪謫堺ｽ懷ｹｶ霓ｬ蜿・縲・
         },
 
         "InvokeByName": {
@@ -424,11 +423,11 @@
             "properties": {
                 "delegate": {
                     "$ref": "#/definitions/ProviderCall",
-                    "description": "[操作转发 — 对称语义] 实例化 ProviderCall.provider; 在其上调用此上下文对应方法 (resolve 表里 → target.resolve(name)). 与 query.delegate (→ target.apply_query) / DynamicListEntry_Delegate.delegate (→ target.list) 形成三处对称"
+                    "description": "[謫堺ｽ懆ｽｬ蜿・窶・蟇ｹ遘ｰ隸ｭ荵云 螳樔ｾ句喧 ProviderCall.provider; 蝨ｨ蜈ｶ荳願ｰ・畑豁､荳贋ｸ区枚蟇ｹ蠎疲婿豕・(resolve 陦ｨ驥・竊・target.resolve(name)). 荳・query.delegate (竊・target.apply_query) / DynamicListEntry_Delegate.delegate (竊・target.list) 蠖｢謌蝉ｸ牙､・ｯｹ遘ｰ"
                 },
                 "meta": { "$ref": "#/definitions/MetaValue" }
             },
-            "description": "Resolve 表项的 ByDelegate 形态 — 7b 补回。仅 Resolve 表有效; 静态 list 项不允许 (因 list 项要求返回 ChildEntry, 转发语义不组合)"
+            "description": "Resolve 陦ｨ鬘ｹ逧・ByDelegate 蠖｢諤・窶・7b 陦･蝗槭ゆｻ・Resolve 陦ｨ譛画譜; 髱呎・list 鬘ｹ荳榊・隶ｸ (蝗 list 鬘ｹ隕∵ｱりｿ泌屓 ChildEntry, 霓ｬ蜿題ｯｭ荵我ｸ咲ｻ・粋)"
         },
 
         "ProviderCall": {
@@ -440,10 +439,10 @@
                 "properties": {
                     "type": "object",
                     "additionalProperties": { "$ref": "#/definitions/TemplateValue" },
-                    "description": "传给目标 provider 的属性覆盖值"
+                    "description": "莨扈咏岼譬・provider 逧・ｱ樊ｧ隕・尠蛟ｼ"
                 }
             },
-            "description": "对另一个 provider 的引用 (含 properties); 用于 query.delegate / DynamicListEntry_Delegate.delegate"
+            "description": "蟇ｹ蜿ｦ荳荳ｪ provider 逧・ｼ慕畑 (蜷ｫ properties); 逕ｨ莠・query.delegate / DynamicListEntry_Delegate.delegate"
         },
 
         "EmptyInvocation": {
@@ -459,7 +458,7 @@
             "properties": {
                 "meta": { "$ref": "#/definitions/MetaValue" }
             },
-            "description": "空 invocation: 无 provider 也无 delegate。路径仍照常缓存, 但引擎不在该子节点提供 list / resolve 服务(缓存项为空, meta 可选)"
+            "description": "遨ｺ invocation: 譌 provider 荵滓裏 delegate縲りｷｯ蠕・ｻ咲・蟶ｸ郛灘ｭ・ 菴・ｼ墓梼荳榊惠隸･蟄占鰍轤ｹ謠蝉ｾ・list / resolve 譛榊苅(郛灘ｭ倬｡ｹ荳ｺ遨ｺ, meta 蜿ｯ騾・"
         }
 
     }

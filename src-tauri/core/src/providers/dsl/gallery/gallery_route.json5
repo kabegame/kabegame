@@ -2,72 +2,110 @@
     "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "gallery_route",
-    "properties": {
-        // todo: 改成全局变量，可通过 global.xxx 访问
-        "fav_ai_id": {
-            "type": "string",
-            "default": "00000000-0000-0000-0000-000000000001",
-            "optional": true
-        },
-        "hidden_ai_id": {
-            "type": "string",
-            "default": "00000000-0000-0000-0000-000000000000",
-            "optional": true
-        }
-    },
     "query": {
+        "from": "images",
         "fields": [
             {
                 "sql": "CAST(images.id AS TEXT)",
                 "as": "id"
-            }, 
-            { "sql": "images.url" }, 
-            { "sql": "images.local_path" }, 
-            { "sql": "images.plugin_id" },
-            { "sql": "images.task_id" },
-            { "sql": "images.crawled_at" },
-            { "sql": "images.metadata_id" },
-            { 
-                "sql": "COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path)",
-                "as": "thumbnail_path"
             },
-            { "sql": "images.hash" },
+            {
+                "sql": "images.url",
+                "as": "url",
+                "in_need": true
+            },
+            {
+                "sql": "images.local_path",
+                "as": "local_path",
+                "in_need": true
+            },
             { 
+                "sql": "images.plugin_id",
+                "as": "plugin_id",
+                "in_need": true
+            },
+            {
+                "sql": "images.task_id",
+                "as": "task_id",
+                "in_need": true
+            },
+            {
+                "sql": "images.crawled_at",
+                "as": "crawled_at",
+                "in_need": true
+            },
+            {
+                "sql": "images.metadata_id",
+                "as": "metadata_id",
+                "in_need": true
+            },
+            {
+                "sql": "COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path)",
+                "as": "thumbnail_path",
+                "in_need": true
+            },
+            {
+                "sql": "images.hash",
+                "as": "hash",
+                "in_need": true
+            },
+            {
                 "sql": "CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END",
-                "as": "is_favorite"
+                "as": "is_favorite",
+                "in_need": true,
             },
             {
                 "sql": "CASE WHEN hid_ai.image_id IS NOT NULL THEN 1 ELSE 0 END",
-                "as": "is_hidden"
+                "as": "is_hidden",
+                "in_need": true
             },
-            { "sql": "images.width" },
-            { "sql": "images.height" },
-            { "sql": "images.display_name" },
+            {
+                "sql": "images.width",
+                "as": "width",
+                "in_need": true
+            },
+            {
+                "sql": "images.height",
+                "as": "height",
+                "in_need": true
+            },
+            {
+                "sql": "images.display_name",
+                "as": "display_name",
+                "in_need": true
+            },
             {
                 "sql": "COALESCE(images.type, 'image')",
-                "as": "media_type"
+                "as": "media_type",
+                "in_need": true,
             },
-            { "sql": "images.last_set_wallpaper_at" },
-            { "sql": "images.size" }
+            {
+                "sql": "images.last_set_wallpaper_at",
+                "as": "last_set_wallpaper_at",
+                "in_need": true
+            },
+            {
+                "sql": "images.size",
+                "as": "size",
+                "in_need": true
+            }
         ],
         "order": [{"images.crawled_at": "asc"}],
-        // 因为total是从这里来的，所以不组织list images，但会卡死
         "join": [{
             "kind": "LEFT",
             "table": "album_images",
             "as": "fav_ai",
-            "on": "images.id = fav_ai.image_id and fav_ai.album_id = ${properties.fav_ai_id}",
+            "on": "images.id = fav_ai.image_id and fav_ai.album_id = ${global.favorite_album_id}",
+            "in_need": true
         }, {
-            "kind": "LEFT",  
+            "kind": "LEFT",
             "table": "album_images",
             "as": "hid_ai",
-            "on": "images.id = hid_ai.image_id and hid_ai.album_id = ${properties.hidden_ai_id}",
+            "on": "images.id = hid_ai.image_id and hid_ai.album_id = ${global.hidden_album_id}",
+            "in_need": true
         }]
     },
     "list": {
-        // 注: list key 是前端 URL 段; 同时接受单数 / 复数两种写法 (frontend 各处历史不一致,
-        // galleryPath.ts 用 plugin/date, albumPath.ts 用 album, 等等)。provider 注册名是
-        // 复数 (kabegame.gallery_*_router) — runtime 内部, 前端不见。
         "all": {
             "provider": "gallery_all_router"
         },
@@ -104,7 +142,6 @@
         "album": {
             "provider": "gallery_albums_router"
         },
-        // 日期范围(连续区间, 任意起止), 与 dates(年/月/日聚合) 互补
         "date-range": {
             "provider": "gallery_date_range_router"
         },
@@ -116,6 +153,9 @@
         },
         "search": {
             "provider": "gallery_search_router"
+        },
+        "__sequential": {
+            "provider": "gallery_sequential_router"
         }
     }
 }

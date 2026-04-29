@@ -48,7 +48,14 @@ impl ProviderQuery {
         // FROM
         sql.push_str(" FROM ");
         let from = self.from.as_ref().ok_or(BuildError::MissingFrom)?;
-        render_template_sql(&from.0, ctx_ref, &self.aliases, dialect, &mut sql, &mut params)?;
+        render_template_sql(
+            &from.0,
+            ctx_ref,
+            &self.aliases,
+            dialect,
+            &mut sql,
+            &mut params,
+        )?;
 
         // JOIN
         for j in &self.joins {
@@ -74,6 +81,17 @@ impl ProviderQuery {
         ctx: &TemplateContext,
         dialect: SqlDialect,
     ) -> Result<(), BuildError> {
+        if self.fields.is_empty() {
+            if let Some(from) = &self.from {
+                if is_simple_identifier(&from.0) {
+                    sql.push_str(&from.0);
+                    sql.push_str(".*");
+                    return Ok(());
+                }
+            }
+            sql.push('*');
+            return Ok(());
+        }
         for (i, f) in self.fields.iter().enumerate() {
             if i > 0 {
                 sql.push_str(", ");
@@ -153,9 +171,9 @@ impl ProviderQuery {
             sql.push_str(match effective {
                 OrderDirection::Asc => " ASC",
                 OrderDirection::Desc => " DESC",
-                OrderDirection::Revert => unreachable!(
-                    "Revert should be resolved during fold (see OrderState::upsert)"
-                ),
+                OrderDirection::Revert => {
+                    unreachable!("Revert should be resolved during fold (see OrderState::upsert)")
+                }
             });
         }
     }
@@ -222,6 +240,17 @@ impl ProviderQuery {
     }
 }
 
+fn is_simple_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,8 +282,21 @@ mod tests {
     #[test]
     fn select_star_when_no_fields() {
         let q = q_with_from("images");
-        let (sql, params) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
-        assert_eq!(sql, "SELECT * FROM images");
+        let (sql, params) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
+        assert_eq!(sql, "SELECT images.* FROM images");
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn select_star_when_from_complex() {
+        let q = q_with_from("(${composed}) AS sub");
+        let ctx = TemplateContext::default().with_composed("SELECT id FROM images".into(), vec![]);
+        let (sql, params) = q
+            .build_sql(&ctx, crate::provider::SqlDialect::Sqlite)
+            .unwrap();
+        assert_eq!(sql, "SELECT * FROM ((SELECT id FROM images)) AS sub");
         assert!(params.is_empty());
     }
 
@@ -266,7 +308,9 @@ mod tests {
             alias: None,
             in_need: false,
         });
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert_eq!(sql, "SELECT images.id FROM images");
     }
 
@@ -278,7 +322,9 @@ mod tests {
             alias: Some(ResolvedAlias::Literal("img_id".into())),
             in_need: false,
         });
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert_eq!(sql, "SELECT images.id AS img_id FROM images");
     }
 
@@ -291,7 +337,9 @@ mod tests {
             in_need: false,
         });
         let ctx = props(&[("x", TemplateValue::Int(1))]);
-        let (sql, params) = q.build_sql(&ctx, crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, params) = q
+            .build_sql(&ctx, crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert_eq!(sql, "SELECT images.id + ? AS y FROM images");
         assert_eq!(params, vec![TemplateValue::Int(1)]);
     }
@@ -309,7 +357,9 @@ mod tests {
             alias: Some(ResolvedAlias::Literal("ab".into())),
             in_need: false,
         });
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert_eq!(sql, "SELECT a, b AS ab FROM images");
     }
 
@@ -318,14 +368,18 @@ mod tests {
     #[test]
     fn from_simple() {
         let q = q_with_from("images");
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" FROM images"));
     }
 
     #[test]
     fn from_missing_errors() {
         let q = ProviderQuery::new();
-        let err = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap_err();
+        let err = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap_err();
         assert!(matches!(err, BuildError::MissingFrom));
     }
 
@@ -350,10 +404,12 @@ mod tests {
             "ai",
             Some("ai.image_id = images.id"),
         ));
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert_eq!(
             sql,
-            "SELECT * FROM images INNER JOIN album_images AS ai ON ai.image_id = images.id"
+            "SELECT images.* FROM images INNER JOIN album_images AS ai ON ai.image_id = images.id"
         );
     }
 
@@ -367,7 +423,9 @@ mod tests {
             Some("t.id = images.tag_id AND t.kind = ${properties.kind}"),
         ));
         let ctx = props(&[("kind", TemplateValue::Text("primary".into()))]);
-        let (sql, params) = q.build_sql(&ctx, crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, params) = q
+            .build_sql(&ctx, crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.contains(" LEFT JOIN tags AS t ON t.id = images.tag_id AND t.kind = ?"));
         assert_eq!(params, vec![TemplateValue::Text("primary".into())]);
     }
@@ -377,7 +435,9 @@ mod tests {
         let mut q = q_with_from("images");
         q.joins
             .push(join_frag(JoinKind::Inner, "albums", "a", None));
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.contains("INNER JOIN albums AS a"));
         assert!(!sql.contains(" ON "));
     }
@@ -387,7 +447,9 @@ mod tests {
     #[test]
     fn where_none() {
         let q = q_with_from("images");
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(!sql.contains(" WHERE "));
     }
 
@@ -395,7 +457,9 @@ mod tests {
     fn where_single() {
         let mut q = q_with_from("images");
         q.wheres.push(SqlExpr("x > 1".into()));
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" WHERE (x > 1)"));
     }
 
@@ -404,7 +468,9 @@ mod tests {
         let mut q = q_with_from("images");
         q.wheres.push(SqlExpr("a > 1".into()));
         q.wheres.push(SqlExpr("b < 2".into()));
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" WHERE (a > 1) AND (b < 2)"));
     }
 
@@ -414,7 +480,9 @@ mod tests {
         q.wheres
             .push(SqlExpr("images.id = ${properties.id}".into()));
         let ctx = props(&[("id", TemplateValue::Int(7))]);
-        let (sql, params) = q.build_sql(&ctx, crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, params) = q
+            .build_sql(&ctx, crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.contains(" WHERE (images.id = ?)"));
         assert_eq!(params, vec![TemplateValue::Int(7)]);
     }
@@ -424,7 +492,9 @@ mod tests {
     #[test]
     fn order_empty_no_clause() {
         let q = q_with_from("images");
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(!sql.contains(" ORDER BY "));
     }
 
@@ -432,7 +502,9 @@ mod tests {
     fn order_global_revert_no_entries() {
         let mut q = q_with_from("images");
         q.order.global = Some(OrderDirection::Revert);
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(!sql.contains(" ORDER BY "));
     }
 
@@ -441,7 +513,9 @@ mod tests {
         let mut q = q_with_from("images");
         q.order.entries.push(("a".into(), OrderDirection::Asc));
         q.order.entries.push(("b".into(), OrderDirection::Desc));
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" ORDER BY a ASC, b DESC"));
     }
 
@@ -450,7 +524,9 @@ mod tests {
         let mut q = q_with_from("images");
         q.order.entries.push(("a".into(), OrderDirection::Asc));
         q.order.global = Some(OrderDirection::Revert);
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" ORDER BY a DESC"));
     }
 
@@ -460,7 +536,9 @@ mod tests {
         q.order.entries.push(("a".into(), OrderDirection::Desc));
         q.order.entries.push(("b".into(), OrderDirection::Asc));
         q.order.global = Some(OrderDirection::Asc);
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" ORDER BY a ASC, b ASC"));
     }
 
@@ -470,7 +548,9 @@ mod tests {
         q.order.entries.push(("a".into(), OrderDirection::Desc));
         q.order.entries.push(("b".into(), OrderDirection::Asc));
         q.order.global = Some(OrderDirection::Desc);
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" ORDER BY a DESC, b DESC"));
     }
 
@@ -479,7 +559,9 @@ mod tests {
     #[test]
     fn pagination_none() {
         let q = q_with_from("images");
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(!sql.contains(" LIMIT "));
         assert!(!sql.contains(" OFFSET "));
     }
@@ -488,7 +570,9 @@ mod tests {
     fn limit_only_number() {
         let mut q = q_with_from("images");
         q.limit = Some(NumberOrTemplate::Number(100.0));
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" LIMIT 100"));
     }
 
@@ -499,7 +583,9 @@ mod tests {
             "${properties.lim}".into(),
         )));
         let ctx = props(&[("lim", TemplateValue::Int(50))]);
-        let (sql, params) = q.build_sql(&ctx, crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, params) = q
+            .build_sql(&ctx, crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" LIMIT ?"));
         assert_eq!(params, vec![TemplateValue::Int(50)]);
     }
@@ -508,7 +594,9 @@ mod tests {
     fn offset_single_number() {
         let mut q = q_with_from("images");
         q.offset_terms.push(NumberOrTemplate::Number(0.0));
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" OFFSET (0)"));
     }
 
@@ -520,7 +608,9 @@ mod tests {
             "${properties.x}".into(),
         )));
         let ctx = props(&[("x", TemplateValue::Int(7))]);
-        let (sql, params) = q.build_sql(&ctx, crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, params) = q
+            .build_sql(&ctx, crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" OFFSET (0) + (?)"));
         assert_eq!(params, vec![TemplateValue::Int(7)]);
     }
@@ -531,7 +621,9 @@ mod tests {
         q.offset_terms.push(NumberOrTemplate::Number(1.0));
         q.offset_terms.push(NumberOrTemplate::Number(2.0));
         q.offset_terms.push(NumberOrTemplate::Number(3.0));
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" OFFSET (1) + (2) + (3)"));
     }
 
@@ -540,7 +632,9 @@ mod tests {
         let mut q = q_with_from("images");
         q.offset_terms.push(NumberOrTemplate::Number(20.0));
         q.limit = Some(NumberOrTemplate::Number(10.0));
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.ends_with(" LIMIT 10 OFFSET (20)"));
     }
 
@@ -556,12 +650,12 @@ mod tests {
             kind: JoinKind::Inner,
             table: SqlExpr("album_images".into()),
             alias: ResolvedAlias::Literal("_a0".into()),
-            on: Some(SqlExpr(
-                "${ref:ai}.image_id = images.id".into(),
-            )),
+            on: Some(SqlExpr("${ref:ai}.image_id = images.id".into())),
             in_need: false,
         });
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.contains("INNER JOIN album_images AS _a0 ON _a0.image_id = images.id"));
     }
 
@@ -571,17 +665,19 @@ mod tests {
 
     #[test]
     fn composed_subquery_merges_params() {
-        // Inner: SELECT * FROM images WHERE (images.album_id = ?)
+        // Inner: SELECT images.* FROM images WHERE (images.album_id = ?)
         let mut inner = ProviderQuery::new();
         inner.from = Some(SqlExpr("images".into()));
         inner
             .wheres
             .push(SqlExpr("images.album_id = ${properties.aid}".into()));
         let inner_ctx = props(&[("aid", TemplateValue::Int(42))]);
-        let (sub_sql, sub_params) = inner.build_sql(&inner_ctx, crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sub_sql, sub_params) = inner
+            .build_sql(&inner_ctx, crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert_eq!(
             sub_sql,
-            "SELECT * FROM images WHERE (images.album_id = ?)"
+            "SELECT images.* FROM images WHERE (images.album_id = ?)"
         );
         assert_eq!(sub_params, vec![TemplateValue::Int(42)]);
 
@@ -603,7 +699,7 @@ mod tests {
 
         assert_eq!(
             outer_sql,
-            "SELECT * FROM ((SELECT * FROM images WHERE (images.album_id = ?))) AS sub WHERE sub.x = ?"
+            "SELECT * FROM ((SELECT images.* FROM images WHERE (images.album_id = ?))) AS sub WHERE sub.x = ?"
         );
         assert_eq!(outer_params.len(), 2);
         assert_eq!(outer_params[0], TemplateValue::Int(42));
@@ -630,7 +726,9 @@ mod tests {
                     .collect(),
             );
 
-        let (sql, params) = outer.build_sql(&outer_ctx, crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, params) = outer
+            .build_sql(&outer_ctx, crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert_eq!(
             sql,
             "SELECT * FROM ((SELECT id FROM images WHERE images.kind = ?)) AS sub WHERE (sub.id > ?)"
@@ -655,10 +753,14 @@ mod tests {
             Some("ai.image_id = images.id"),
         ));
         q.wheres.push(SqlExpr("ai.album_id = 1".into()));
-        q.order.entries.push(("images.id".into(), OrderDirection::Desc));
+        q.order
+            .entries
+            .push(("images.id".into(), OrderDirection::Desc));
         q.limit = Some(NumberOrTemplate::Number(10.0));
         q.offset_terms.push(NumberOrTemplate::Number(20.0));
-        let (sql, _) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert_eq!(
             sql,
             "SELECT images.id FROM images INNER JOIN album_images AS ai ON ai.image_id = images.id WHERE (ai.album_id = 1) ORDER BY images.id DESC LIMIT 10 OFFSET (20)"
@@ -669,12 +771,13 @@ mod tests {
 
     #[test]
     fn build_sql_merges_adhoc_into_ctx() {
-        let q = ProviderQuery::new()
-            .with_where_raw("x = ?", &[TemplateValue::Int(7)]);
+        let q = ProviderQuery::new().with_where_raw("x = ?", &[TemplateValue::Int(7)]);
         let mut q = q;
         q.from = Some(SqlExpr("images".into()));
-        let (sql, params) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
-        assert_eq!(sql, "SELECT * FROM images WHERE (x = ?)");
+        let (sql, params) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
+        assert_eq!(sql, "SELECT images.* FROM images WHERE (x = ?)");
         assert_eq!(params, vec![TemplateValue::Int(7)]);
     }
 
@@ -686,7 +789,9 @@ mod tests {
         let mut q = q;
         q.from = Some(SqlExpr("t".into()));
         let ctx = props(&[("x", TemplateValue::Int(1))]);
-        let (sql, params) = q.build_sql(&ctx, crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, params) = q
+            .build_sql(&ctx, crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.contains("WHERE (a = ?)"));
         assert_eq!(params, vec![TemplateValue::Int(99)]);
     }
@@ -703,7 +808,9 @@ mod tests {
             )
             .unwrap();
         q.from = Some(SqlExpr("images".into()));
-        let (sql, params) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, params) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert!(sql.contains("INNER JOIN tags AS t ON t.image_id = images.id AND t.name = ?"));
         assert_eq!(params, vec![TemplateValue::Text("foo".into())]);
     }
@@ -716,7 +823,9 @@ mod tests {
             &[TemplateValue::Int(10)],
         );
         q.from = Some(SqlExpr("images".into()));
-        let (sql, params) = q.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite).unwrap();
+        let (sql, params) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
         assert_eq!(sql, "SELECT images.id + ? AS y FROM images");
         assert_eq!(params, vec![TemplateValue::Int(10)]);
     }

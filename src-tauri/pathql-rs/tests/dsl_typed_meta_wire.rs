@@ -48,7 +48,8 @@ fn typed_meta_static_preserved_with_template_eval() {
         def: Arc::new(def),
         properties: props,
     });
-    let runtime = ProviderRuntime::new(empty_registry(), root, no_op_executor());
+    let runtime =
+        ProviderRuntime::new(empty_registry(), root, no_op_executor(), Default::default());
 
     let children = runtime.list("/").unwrap();
     assert_eq!(children.len(), 1);
@@ -75,7 +76,8 @@ fn runtime_meta_path_matches_parent_list_child_meta() {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
-    let runtime = ProviderRuntime::new(empty_registry(), root, no_op_executor());
+    let runtime =
+        ProviderRuntime::new(empty_registry(), root, no_op_executor(), Default::default());
 
     // root list shows leaf_x with the typed meta
     let listed = runtime.list("/").unwrap();
@@ -96,7 +98,8 @@ fn root_meta_is_none() {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
-    let runtime = ProviderRuntime::new(empty_registry(), root, no_op_executor());
+    let runtime =
+        ProviderRuntime::new(empty_registry(), root, no_op_executor(), Default::default());
     assert!(runtime.meta("/").unwrap().is_none());
 }
 
@@ -111,7 +114,8 @@ fn meta_for_unknown_segment_returns_none() {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
-    let runtime = ProviderRuntime::new(empty_registry(), root, no_op_executor());
+    let runtime =
+        ProviderRuntime::new(empty_registry(), root, no_op_executor(), Default::default());
     // Path /a is in list -> meta exists
     assert!(runtime.meta("/a").unwrap().is_some());
 }

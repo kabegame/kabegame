@@ -44,38 +44,44 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
 }
 
 fn make_executor(conn: Arc<Mutex<Connection>>) -> Arc<dyn SqlExecutor> {
-    Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, move |sql: &str, params: &[TemplateValue]| {
-        let conn = conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| EngineError::FactoryFailed("sqlite".into(), "prepare".into(), e.to_string()))?;
-        let rusq_params = local_params_for(params);
-        let col_names: Vec<String> = stmt
-            .column_names()
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect();
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(rusq_params.iter()), |row| {
-                let mut obj = serde_json::Map::new();
-                for (i, name) in col_names.iter().enumerate() {
-                    let v = match row.get_ref_unwrap(i) {
-                        rusqlite::types::ValueRef::Null => serde_json::Value::Null,
-                        rusqlite::types::ValueRef::Integer(i) => serde_json::Value::from(i),
-                        rusqlite::types::ValueRef::Real(f) => serde_json::json!(f),
-                        rusqlite::types::ValueRef::Text(t) => serde_json::Value::String(
-                            String::from_utf8_lossy(t).into_owned(),
-                        ),
-                        rusqlite::types::ValueRef::Blob(_) => serde_json::Value::Null,
-                    };
-                    obj.insert(name.clone(), v);
-                }
-                Ok(serde_json::Value::Object(obj))
+    Arc::new(ClosureExecutor::new(
+        SqlDialect::Sqlite,
+        move |sql: &str, params: &[TemplateValue]| {
+            let conn = conn.lock().unwrap();
+            let mut stmt = conn.prepare(sql).map_err(|e| {
+                EngineError::FactoryFailed("sqlite".into(), "prepare".into(), e.to_string())
+            })?;
+            let rusq_params = local_params_for(params);
+            let col_names: Vec<String> = stmt
+                .column_names()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(rusq_params.iter()), |row| {
+                    let mut obj = serde_json::Map::new();
+                    for (i, name) in col_names.iter().enumerate() {
+                        let v = match row.get_ref_unwrap(i) {
+                            rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+                            rusqlite::types::ValueRef::Integer(i) => serde_json::Value::from(i),
+                            rusqlite::types::ValueRef::Real(f) => serde_json::json!(f),
+                            rusqlite::types::ValueRef::Text(t) => {
+                                serde_json::Value::String(String::from_utf8_lossy(t).into_owned())
+                            }
+                            rusqlite::types::ValueRef::Blob(_) => serde_json::Value::Null,
+                        };
+                        obj.insert(name.clone(), v);
+                    }
+                    Ok(serde_json::Value::Object(obj))
+                })
+                .map_err(|e| {
+                    EngineError::FactoryFailed("sqlite".into(), "query".into(), e.to_string())
+                })?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+                EngineError::FactoryFailed("sqlite".into(), "collect".into(), e.to_string())
             })
-            .map_err(|e| EngineError::FactoryFailed("sqlite".into(), "query".into(), e.to_string()))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| EngineError::FactoryFailed("sqlite".into(), "collect".into(), e.to_string()))
-    }))
+        },
+    ))
 }
 
 fn empty_registry() -> Arc<ProviderRegistry> {
@@ -84,7 +90,9 @@ fn empty_registry() -> Arc<ProviderRegistry> {
 
 /// 6d: 测试 nopop executor (供 ExecutorMissing 已删除后的"未注入"场景占位)。
 fn no_op_executor() -> Arc<dyn SqlExecutor> {
-    Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, |_sql, _params| Ok(Vec::new())))
+    Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, |_sql, _params| {
+        Ok(Vec::new())
+    }))
 }
 
 #[test]
@@ -108,7 +116,7 @@ fn dynamic_sql_list_enumerates_rows() {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
-    let runtime = ProviderRuntime::new(empty_registry(), root, executor);
+    let runtime = ProviderRuntime::new(empty_registry(), root, executor, Default::default());
 
     let children = runtime.list("/").unwrap();
     let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
@@ -184,7 +192,7 @@ fn dynamic_resolve_reverse_lookup_finds_match() {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
-    let runtime = ProviderRuntime::new(Arc::new(reg), root, executor);
+    let runtime = ProviderRuntime::new(Arc::new(reg), root, executor, Default::default());
 
     // Reverse-lookup for /p2 should hit the dynamic SQL entry's row id=p2 → pinger provider.
     let resolved = runtime.resolve("/p2").unwrap();
@@ -303,7 +311,7 @@ fn dynamic_delegate_list_enumerates_target_children() {
         properties: HashMap::new(),
     });
     let root: Arc<dyn Provider> = Arc::new(Root { src, facade });
-    let runtime = ProviderRuntime::new(Arc::new(reg), root, executor);
+    let runtime = ProviderRuntime::new(Arc::new(reg), root, executor, Default::default());
 
     let children = runtime.list("/facade").unwrap();
     let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();

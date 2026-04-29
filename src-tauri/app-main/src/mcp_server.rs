@@ -2,7 +2,8 @@ use kabegame_core::{
     emitter::GlobalEmitter,
     plugin::{Plugin, PluginManager},
     providers::{
-        execute_provider_query, parse_provider_path, provider_runtime, ProviderPathQuery,
+        execute_provider_query, parse_provider_path, provider_runtime, provider_template_context,
+        ProviderPathQuery,
     },
     storage::Storage,
 };
@@ -562,7 +563,7 @@ impl ServerHandler for KabegameMcpServer {
                                 Vec::new()
                             } else {
                                 Storage::global()
-                                    .get_images_info_range_by_query(&node.composed)
+                                    .get_images_info_range_by_query(&node.composed, &provider_template_context())
                                     .map_err(|e| McpError::internal_error(e, None))?
                             }
                         };
@@ -587,7 +588,7 @@ impl ServerHandler for KabegameMcpServer {
                             })
                         });
                         let total: Option<usize> =
-                            storage.get_images_count_by_query(&node.composed).ok();
+                            storage.get_images_count_by_query(&node.composed, &provider_template_context()).ok();
 
                         json!({
                             "entries": entries_json,

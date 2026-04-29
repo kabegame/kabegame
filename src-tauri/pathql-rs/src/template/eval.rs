@@ -51,6 +51,8 @@ impl TemplateValue {
 pub struct TemplateContext {
     /// `${properties.<name>}` → TemplateValue
     pub properties: HashMap<String, TemplateValue>,
+    /// `${global.<name>}` → runtime-frozen host globals
+    pub globals: HashMap<String, TemplateValue>,
     /// `${capture[N]}` → 字符串 (N 从 1 开始; 0 = 全匹配)
     pub capture: Vec<String>,
     /// `${<data_var>.<col>}`: data_var 名 → row JSON
@@ -67,6 +69,10 @@ impl TemplateContext {
     }
     pub fn with_properties(mut self, p: HashMap<String, TemplateValue>) -> Self {
         self.properties = p;
+        self
+    }
+    pub fn with_globals(mut self, g: HashMap<String, TemplateValue>) -> Self {
+        self.globals = g;
         self
     }
     pub fn with_capture(mut self, c: Vec<String>) -> Self {
@@ -95,13 +101,13 @@ pub enum EvalError {
     BareNotAllowed(String),
     #[error("property `{0}` not bound in context")]
     UnboundProperty(String),
+    #[error("global `{0}` not bound in context")]
+    UnboundGlobal(String),
     #[error("capture[{0}] out of bounds (have {1} groups)")]
     CaptureOutOfBounds(usize, usize),
     #[error("path field `{0}` not found")]
     PathFieldMissing(String),
-    #[error(
-        "method `${{{0}:...}}` / bare `${{composed}}` handled in render layer, not evaluator"
-    )]
+    #[error("method `${{{0}:...}}` / bare `${{composed}}` handled in render layer, not evaluator")]
     MethodNotForEvaluator(String),
 }
 
@@ -121,6 +127,13 @@ pub fn evaluate_var(var: &VarRef, ctx: &TemplateContext) -> Result<TemplateValue
                 .get(&key)
                 .cloned()
                 .ok_or(EvalError::UnboundProperty(key))
+        }
+        VarRef::Path { ns, path } if ns == "global" => {
+            let key = path.join(".");
+            ctx.globals
+                .get(&key)
+                .cloned()
+                .ok_or(EvalError::UnboundGlobal(key))
         }
         VarRef::Path { ns, path } => {
             if let Some((n, json)) = &ctx.data_var {
@@ -215,6 +228,34 @@ mod tests {
     }
 
     #[test]
+    fn global_text() {
+        let ctx = TemplateContext::new().with_globals(
+            [(
+                "favorite_album_id".to_string(),
+                TemplateValue::Text("fav".into()),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let v = evaluate_var(&first_var("${global.favorite_album_id}"), &ctx).unwrap();
+        assert_eq!(v, TemplateValue::Text("fav".into()));
+    }
+
+    #[test]
+    fn global_unbound() {
+        let err =
+            evaluate_var(&first_var("${global.missing}"), &TemplateContext::default()).unwrap_err();
+        assert_eq!(err, EvalError::UnboundGlobal("missing".into()));
+    }
+
+    #[test]
+    fn global_does_not_fall_back_to_properties() {
+        let ctx = ctx_with_props(&[("same", TemplateValue::Text("prop".into()))]);
+        let err = evaluate_var(&first_var("${global.same}"), &ctx).unwrap_err();
+        assert_eq!(err, EvalError::UnboundGlobal("same".into()));
+    }
+
+    #[test]
     fn capture_index() {
         let ctx = TemplateContext::new().with_capture(vec!["full".into(), "first".into()]);
         let v = evaluate_var(&first_var("${capture[1]}"), &ctx).unwrap();
@@ -244,8 +285,7 @@ mod tests {
 
     #[test]
     fn child_var_meta() {
-        let ctx =
-            TemplateContext::new().with_child_var("plugin", json!({"meta":{"foo":"bar"}}));
+        let ctx = TemplateContext::new().with_child_var("plugin", json!({"meta":{"foo":"bar"}}));
         let v = evaluate_var(&first_var("${plugin.meta.foo}"), &ctx).unwrap();
         assert_eq!(v, TemplateValue::Text("bar".into()));
     }
@@ -264,8 +304,8 @@ mod tests {
 
     #[test]
     fn ref_in_eval_returns_method_not_for_evaluator() {
-        let err = evaluate_var(&first_var("${ref:my_id}"), &TemplateContext::default())
-            .unwrap_err();
+        let err =
+            evaluate_var(&first_var("${ref:my_id}"), &TemplateContext::default()).unwrap_err();
         assert_eq!(err, EvalError::MethodNotForEvaluator("ref".into()));
     }
 

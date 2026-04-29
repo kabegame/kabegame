@@ -17,7 +17,7 @@ pub(crate) mod vd_ops;
 
 // ── 公开 re-exports ──────────────────────────────────────────────────────────
 
-pub use init::provider_runtime;
+pub use init::{provider_runtime, provider_template_context};
 pub use pathql_rs::ProviderRuntime;
 pub use query::{
     decode_provider_path_segments, execute_provider_query, execute_provider_query_typed,

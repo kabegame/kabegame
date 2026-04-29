@@ -5,6 +5,7 @@
 
 use super::{ChildEntry, EngineError, Provider, ProviderContext, SqlExecutor};
 use crate::compose::ProviderQuery;
+use crate::template::eval::TemplateValue;
 use crate::ProviderRegistry;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
@@ -41,6 +42,7 @@ pub struct ProviderRuntime {
     weak_self: Weak<Self>,
     /// 注入的 SQL 执行能力 (6d 起强制必填; DSL 动态 list SQL 项 + 反查需要它)。
     executor: Arc<dyn SqlExecutor>,
+    globals: Arc<HashMap<String, TemplateValue>>,
     /// 路径前缀 (`/seg₁/.../segₖ`) → CachedNode。
     /// 6a 简化: HashMap, 容量无限制; 后期可换 LRU 不影响接口。
     cache: Mutex<HashMap<String, CachedNode>>,
@@ -52,12 +54,15 @@ impl ProviderRuntime {
         registry: Arc<ProviderRegistry>,
         root: Arc<dyn Provider>,
         executor: Arc<dyn SqlExecutor>,
+        globals: HashMap<String, TemplateValue>,
     ) -> Arc<Self> {
+        let globals = Arc::new(globals);
         Arc::new_cyclic(|weak| Self {
             registry,
             root,
             weak_self: weak.clone(),
             executor,
+            globals,
             cache: Mutex::new(HashMap::new()),
         })
     }
@@ -69,6 +74,10 @@ impl ProviderRuntime {
     /// 注入的 executor (6d 起必有)。DslProvider 通过此方法访问执行能力。
     pub fn executor(&self) -> &Arc<dyn SqlExecutor> {
         &self.executor
+    }
+
+    pub fn globals(&self) -> &HashMap<String, TemplateValue> {
+        &self.globals
     }
 
     /// 在路径解析入口构造 ctx; ctx 持 Arc<Self> 在调用栈生命期内存活。
@@ -120,11 +129,14 @@ impl ProviderRuntime {
                     "[pathql]   step seg={:?} at path={:?} → {}",
                     seg,
                     path_so_far,
-                    if resolved.is_some() { "Some(provider)" } else { "None (PathNotFound)" }
+                    if resolved.is_some() {
+                        "Some(provider)"
+                    } else {
+                        "None (PathNotFound)"
+                    }
                 );
             }
-            let next = resolved
-                .ok_or_else(|| EngineError::PathNotFound(path_so_far.clone()))?;
+            let next = resolved.ok_or_else(|| EngineError::PathNotFound(path_so_far.clone()))?;
             composed = next.apply_query(composed, &ctx);
             current = next;
             // 缓存命中非 Empty 项写入; Empty 占位跳过。
@@ -195,7 +207,10 @@ impl ProviderRuntime {
             build_path_key(&segments[..segments.len() - 1])
         };
         let children = self.list(&parent_path)?;
-        Ok(children.into_iter().find(|c| c.name == last).and_then(|c| c.meta))
+        Ok(children
+            .into_iter()
+            .find(|c| c.name == last)
+            .and_then(|c| c.meta))
     }
 
     /// 路径段 normalize: percent-decode, 不做 lowercase 折叠 (§2 大小写敏感)。
@@ -307,7 +322,8 @@ mod tests {
             children: vec![("b".into(), mid as Arc<dyn Provider>)],
             apply_count: counter.clone(),
         });
-        let runtime = ProviderRuntime::new(empty_registry(), root, no_op_executor());
+        let runtime =
+            ProviderRuntime::new(empty_registry(), root, no_op_executor(), HashMap::new());
         (runtime, counter)
     }
 
@@ -460,7 +476,8 @@ mod tests {
         let root = Arc::new(Holder {
             children: vec![("e".into(), empty_provider.clone())],
         });
-        let runtime = ProviderRuntime::new(empty_registry(), root, no_op_executor());
+        let runtime =
+            ProviderRuntime::new(empty_registry(), root, no_op_executor(), HashMap::new());
         runtime.resolve("/e").unwrap();
         // Empty provider hit doesn't cache
         assert_eq!(runtime.cache_size(), 0);
@@ -489,7 +506,12 @@ mod tests {
                 Some("hello".into())
             }
         }
-        let runtime = ProviderRuntime::new(empty_registry(), Arc::new(N), no_op_executor());
+        let runtime = ProviderRuntime::new(
+            empty_registry(),
+            Arc::new(N),
+            no_op_executor(),
+            HashMap::new(),
+        );
         let n = runtime.note("/").unwrap();
         assert_eq!(n, Some("hello".into()));
     }
@@ -551,10 +573,9 @@ mod tests {
             }
         }
         let leaf: Arc<dyn Provider> = Arc::new(Inner);
-        let root = Arc::new(Holder {
-            child: leaf,
-        });
-        let runtime = ProviderRuntime::new(empty_registry(), root, no_op_executor());
+        let root = Arc::new(Holder { child: leaf });
+        let runtime =
+            ProviderRuntime::new(empty_registry(), root, no_op_executor(), HashMap::new());
         let m = runtime.meta("/k").unwrap();
         assert_eq!(m.unwrap(), serde_json::json!({"foo":"bar"}));
     }
@@ -597,10 +618,10 @@ mod tests {
         let root = Arc::new(Inner {
             children: vec![("按画册".into(), leaf)],
         });
-        let runtime = ProviderRuntime::new(empty_registry(), root, no_op_executor());
+        let runtime =
+            ProviderRuntime::new(empty_registry(), root, no_op_executor(), HashMap::new());
         let _ = runtime
             .resolve("/%E6%8C%89%E7%94%BB%E5%86%8C")
             .expect("percent-decoded path should resolve");
     }
-
 }

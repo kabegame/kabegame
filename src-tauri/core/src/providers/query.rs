@@ -6,11 +6,12 @@ use serde_json::{json, Value};
 
 use pathql_rs::ast::NumberOrTemplate;
 use pathql_rs::compose::ProviderQuery;
+use pathql_rs::template::eval::TemplateContext;
 
 use crate::gallery::GalleryBrowseEntry;
 use crate::storage::Storage;
 
-use super::init::provider_runtime;
+use super::init::{provider_runtime, provider_template_context};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderPathQuery {
@@ -141,7 +142,10 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
             let node = rt
                 .resolve(&rt_path)
                 .map_err(|e| format!("解析路径失败: {}: {}", raw_path, e))?;
-            let total = Storage::global().get_images_count_by_query(&node.composed).ok();
+            let sql_ctx = provider_template_context();
+            let total = Storage::global()
+                .get_images_count_by_query(&node.composed, &sql_ctx)
+                .ok();
             let raw_note = rt
                 .note(&rt_path)
                 .map_err(|e| format!("note failed: {}", e))?;
@@ -163,11 +167,12 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
                 .list(&rt_path)
                 .map_err(|e| format!("list children failed: {}", e))?;
 
-            let images = fetch_images_for(&node.composed)?;
+            let sql_ctx = provider_template_context();
+            let images = fetch_images_for(&node.composed, &sql_ctx)?;
             let entries = crate::gallery::browse_from_provider_jsonmeta(children, images)?;
 
             let total: Option<usize> =
-                Storage::global().get_images_count_by_query(&node.composed).ok();
+                Storage::global().get_images_count_by_query(&node.composed, &sql_ctx).ok();
 
             let raw_note = rt
                 .note(&rt_path)
@@ -191,6 +196,7 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
 /// 无 limit → 默认最后一页 100 条。
 fn fetch_images_for(
     composed: &ProviderQuery,
+    ctx: &TemplateContext,
 ) -> Result<Vec<crate::storage::ImageInfo>, String> {
     if composed.from.is_none() {
         return Ok(Vec::new());
@@ -200,10 +206,10 @@ fn fetch_images_for(
         return Ok(Vec::new());
     }
     if composed.limit.is_some() {
-        return Storage::global().get_images_info_range_by_query(composed);
+        return Storage::global().get_images_info_range_by_query(composed, ctx);
     }
     // 无 limit：默认最后一页 100 条
-    let total = Storage::global().get_images_count_by_query(composed)?;
+    let total = Storage::global().get_images_count_by_query(composed, ctx)?;
     if total == 0 {
         return Ok(Vec::new());
     }
@@ -213,7 +219,7 @@ fn fetch_images_for(
     q.offset_terms
         .push(NumberOrTemplate::Number(last_offset as f64));
     q.limit = Some(NumberOrTemplate::Number(page_size as f64));
-    Storage::global().get_images_info_range_by_query(&q)
+    Storage::global().get_images_info_range_by_query(&q, ctx)
 }
 
 /// 把 typed 查询结果序列化为 Tauri / MCP / web 共用的 JSON envelope。

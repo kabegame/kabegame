@@ -60,7 +60,7 @@ impl Provider for PageSizeProvider {
         composed: &ProviderQuery,
         ctx: &ProviderContext,
     ) -> Result<Vec<ChildEntry>, EngineError> {
-        let total = count_for(composed).unwrap_or(0);
+        let total = count_for(composed, ctx).unwrap_or(0);
         if total == 0 || self.page_size <= 0 {
             return Ok(Vec::new());
         }

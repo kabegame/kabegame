@@ -46,9 +46,10 @@ fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
 const PROVIDER_FILES: &[&str] = &[
     "root_provider.json",
     "gallery/gallery_route.json5",
-    "gallery/gallery_all_router.json5",
-    "gallery/gallery_paginate_router.json5",
-    "gallery/gallery_page_router.json5",
+    "gallery/gallery_hide_router.json5",
+    "gallery/all_router/gallery_all_router.json5",
+    "gallery/all_router/x_page_x/gallery_paginate_router.json5",
+    "gallery/all_router/x_page_x/gallery_page_router.json5",
     "shared/page_size_provider.json5",
     "shared/query_page_provider.json5",
     "vd/vd_root_router.json5",
@@ -101,48 +102,54 @@ fn rewrite_ceil_for_sqlite(sql: &str) -> String {
 /// 简化版 SqlExecutor: 把 page_size_provider 的 CEIL 重写为 sqlite 原生整数除法,
 /// 然后真实执行返回行。CEIL 出现一次 → 占位 ? 复制为二次, 因此 params 也复制 page_size。
 fn make_executor(conn: Arc<Mutex<Connection>>) -> Arc<dyn SqlExecutor> {
-    Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, move |sql: &str, params: &[TemplateValue]| {
-        let rewritten = rewrite_ceil_for_sqlite(sql);
-        let effective_params: Vec<TemplateValue> = if rewritten == sql {
-            params.to_vec()
-        } else {
-            // CEIL 模式下, 重写后多了一个 ?, params 第 0 个 = page_size, 复制一次
-            let mut v = Vec::with_capacity(params.len() + 1);
-            v.push(params[0].clone());
-            v.extend_from_slice(params);
-            v
-        };
-        let conn = conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare(&rewritten)
-            .map_err(|e| EngineError::FactoryFailed("sqlite".into(), "prepare".into(), e.to_string()))?;
-        let rusq_params = local_params_for(&effective_params);
-        let col_names: Vec<String> = stmt
-            .column_names()
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect();
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(rusq_params.iter()), |row| {
-                let mut obj = serde_json::Map::new();
-                for (i, name) in col_names.iter().enumerate() {
-                    let v = match row.get_ref_unwrap(i) {
-                        rusqlite::types::ValueRef::Null => serde_json::Value::Null,
-                        rusqlite::types::ValueRef::Integer(i) => serde_json::Value::from(i),
-                        rusqlite::types::ValueRef::Real(f) => serde_json::json!(f),
-                        rusqlite::types::ValueRef::Text(t) => {
-                            serde_json::Value::String(String::from_utf8_lossy(t).into_owned())
-                        }
-                        rusqlite::types::ValueRef::Blob(_) => serde_json::Value::Null,
-                    };
-                    obj.insert(name.clone(), v);
-                }
-                Ok(serde_json::Value::Object(obj))
+    Arc::new(ClosureExecutor::new(
+        SqlDialect::Sqlite,
+        move |sql: &str, params: &[TemplateValue]| {
+            let rewritten = rewrite_ceil_for_sqlite(sql);
+            let effective_params: Vec<TemplateValue> = if rewritten == sql {
+                params.to_vec()
+            } else {
+                // CEIL 模式下, 重写后多了一个 ?, params 第 0 个 = page_size, 复制一次
+                let mut v = Vec::with_capacity(params.len() + 1);
+                v.push(params[0].clone());
+                v.extend_from_slice(params);
+                v
+            };
+            let conn = conn.lock().unwrap();
+            let mut stmt = conn.prepare(&rewritten).map_err(|e| {
+                EngineError::FactoryFailed("sqlite".into(), "prepare".into(), e.to_string())
+            })?;
+            let rusq_params = local_params_for(&effective_params);
+            let col_names: Vec<String> = stmt
+                .column_names()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(rusq_params.iter()), |row| {
+                    let mut obj = serde_json::Map::new();
+                    for (i, name) in col_names.iter().enumerate() {
+                        let v = match row.get_ref_unwrap(i) {
+                            rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+                            rusqlite::types::ValueRef::Integer(i) => serde_json::Value::from(i),
+                            rusqlite::types::ValueRef::Real(f) => serde_json::json!(f),
+                            rusqlite::types::ValueRef::Text(t) => {
+                                serde_json::Value::String(String::from_utf8_lossy(t).into_owned())
+                            }
+                            rusqlite::types::ValueRef::Blob(_) => serde_json::Value::Null,
+                        };
+                        obj.insert(name.clone(), v);
+                    }
+                    Ok(serde_json::Value::Object(obj))
+                })
+                .map_err(|e| {
+                    EngineError::FactoryFailed("sqlite".into(), "query".into(), e.to_string())
+                })?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+                EngineError::FactoryFailed("sqlite".into(), "collect".into(), e.to_string())
             })
-            .map_err(|e| EngineError::FactoryFailed("sqlite".into(), "query".into(), e.to_string()))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| EngineError::FactoryFailed("sqlite".into(), "collect".into(), e.to_string()))
-    }))
+        },
+    ))
 }
 
 /// "Stub" 程序化 provider: list 返回空, resolve 永远 None。注册给 gallery_route 中
@@ -164,11 +171,9 @@ impl Provider for StubProvider {
 
 fn register_stub(registry: &mut ProviderRegistry, ns: &str, name: &str) {
     registry
-        .register_provider(
-            Namespace(ns.into()),
-            SimpleName(name.into()),
-            |_| Ok(Arc::new(StubProvider) as Arc<dyn Provider>),
-        )
+        .register_provider(Namespace(ns.into()), SimpleName(name.into()), |_| {
+            Ok(Arc::new(StubProvider) as Arc<dyn Provider>)
+        })
         .unwrap();
 }
 
@@ -203,7 +208,6 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         "gallery_media_type_router",
         "gallery_dates_router",
         "gallery_albums_router",
-        "gallery_hide_router",
         "gallery_search_router",
         "gallery_all_desc_router",
         "vd_en_US_root_router",
@@ -222,7 +226,17 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         def: root_def.expect("root_provider not in PROVIDER_FILES"),
         properties: HashMap::new(),
     });
-    ProviderRuntime::new(Arc::new(registry), root, executor)
+    let globals = HashMap::from([
+        (
+            "favorite_album_id".to_string(),
+            TemplateValue::Text("favorite-album".to_string()),
+        ),
+        (
+            "hidden_album_id".to_string(),
+            TemplateValue::Text("hidden-album".to_string()),
+        ),
+    ]);
+    ProviderRuntime::new(Arc::new(registry), root, executor, globals)
 }
 
 #[test]
@@ -268,6 +282,24 @@ fn gallery_all_xNNNx_regex_resolves_with_page_size_capture() {
     // gallery_paginate_router 设置 query.limit=0; properties.page_size=100
     // composed.limit 应为 Some(NumberOrTemplate{0})
     let _ = resolved;
+}
+
+#[test]
+fn gallery_hide_all_page_resolves_and_builds_with_globals() {
+    let runtime = build_runtime();
+    let resolved = runtime.resolve("/gallery/hide/all/1").unwrap();
+    let mut ctx = pathql_rs::template::eval::TemplateContext::default();
+    ctx.globals = runtime.globals().clone();
+
+    let (sql, params) = resolved
+        .composed
+        .build_sql(&ctx, SqlDialect::Sqlite)
+        .unwrap();
+    assert!(sql.contains("hid_ai.image_id IS NULL"));
+    assert!(sql.contains("fav_ai.album_id = ?"));
+    assert!(sql.contains("hid_ai.album_id = ?"));
+    assert!(params.contains(&TemplateValue::Text("favorite-album".to_string())));
+    assert!(params.contains(&TemplateValue::Text("hidden-album".to_string())));
 }
 
 #[test]
