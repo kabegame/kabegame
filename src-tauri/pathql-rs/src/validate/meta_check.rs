@@ -1,10 +1,6 @@
-use crate::ast::{
-    DynamicListEntry, ListEntry, ProviderInvocation, SqlExpr,
-};
+use crate::ast::{DynamicListEntry, ListEntry, ProviderInvocation, SqlExpr};
 use crate::template::{parse, validate_scope};
-use crate::validate::{
-    sql::validate_full_sql, ValidateConfig, ValidateError, ValidateErrorKind,
-};
+use crate::validate::{sql::validate_full_sql, ValidateConfig, ValidateError, ValidateErrorKind};
 
 /// Meta 字段递归校验。
 ///
@@ -27,7 +23,7 @@ pub fn validate_meta(
                     ListEntry::Static(inv) => {
                         let m = invocation_meta(inv);
                         (
-                            vec!["properties", "capture", "composed", "_"],
+                            vec!["properties", "capture", "composed", "global", "_"],
                             vec!["ref"],
                             m,
                         )
@@ -37,6 +33,7 @@ pub fn validate_meta(
                             "properties",
                             "capture",
                             "composed",
+                            "global",
                             "_",
                             e.data_var.0.as_str(),
                         ],
@@ -48,6 +45,7 @@ pub fn validate_meta(
                             "properties",
                             "capture",
                             "composed",
+                            "global",
                             "_",
                             e.child_var.0.as_str(),
                         ],
@@ -72,7 +70,7 @@ pub fn validate_meta(
 
         if let Some(resolve) = &def.resolve {
             for (k, inv) in &resolve.0 {
-                let allowed_ns = vec!["properties", "capture", "composed", "_"];
+                let allowed_ns = vec!["properties", "capture", "composed", "global", "_"];
                 let allowed_methods = vec!["ref"];
                 let location = format!("resolve[`{}`]", k);
                 if let Some(m) = invocation_meta(inv) {
@@ -167,7 +165,17 @@ fn looks_like_sql(s: &str) -> bool {
     let upper = s.to_uppercase();
     let trimmed = upper.trim_start();
     // strict heuristic: must START with a SQL verb
-    for prefix in &["SELECT ", "INSERT ", "UPDATE ", "DELETE ", "WITH ", "DROP ", "CREATE ", "ALTER ", "TRUNCATE "] {
+    for prefix in &[
+        "SELECT ",
+        "INSERT ",
+        "UPDATE ",
+        "DELETE ",
+        "WITH ",
+        "DROP ",
+        "CREATE ",
+        "ALTER ",
+        "TRUNCATE ",
+    ] {
         if trimmed.starts_with(prefix) {
             return true;
         }

@@ -130,6 +130,8 @@ pub fn prop_i64(
 }
 
 /// 把 ProviderQuery 折叠后的 composed 喂给 storage 求 count。
-pub fn count_for(composed: &ProviderQuery) -> Result<usize, String> {
-    crate::storage::Storage::global().get_images_count_by_query(composed)
+pub fn count_for(composed: &ProviderQuery, ctx: &pathql_rs::ProviderContext) -> Result<usize, String> {
+    let mut tctx = pathql_rs::template::eval::TemplateContext::default();
+    tctx.globals = ctx.runtime.globals().clone();
+    crate::storage::Storage::global().get_images_count_by_query(composed, &tctx)
 }

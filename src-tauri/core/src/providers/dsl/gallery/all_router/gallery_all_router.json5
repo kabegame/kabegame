@@ -35,6 +35,13 @@
                 // page_size 类型为 number, 引擎自动从 ${capture[1]} 字符串转换
                 "page_size": "${capture[1]}"
             }
+        },
+        "([1-9][0-9]*)": {
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
         }
     },
     "note": "All router provider, default 100 items per page sorted by crawled_at; dynamic xPAGE_SIZEx (≥1) supported"

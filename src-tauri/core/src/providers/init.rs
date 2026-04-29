@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use pathql_rs::provider::{DslProvider, SqlExecutor};
+use pathql_rs::template::eval::{TemplateContext, TemplateValue};
 use pathql_rs::{Provider, ProviderRegistry, ProviderRuntime};
 
 use super::dsl_loader::{load_dsl_into, validate_dsl};
@@ -22,6 +23,12 @@ static RUNTIME: OnceLock<Arc<ProviderRuntime>> = OnceLock::new();
 /// 全局 ProviderRuntime 引用。首次调用时初始化 (注册 + 实例化 root + 注入 executor)。
 pub fn provider_runtime() -> &'static Arc<ProviderRuntime> {
     RUNTIME.get_or_init(init_runtime)
+}
+
+pub fn provider_template_context() -> TemplateContext {
+    let mut ctx = TemplateContext::default();
+    ctx.globals = provider_runtime().globals().clone();
+    ctx
 }
 
 fn init_runtime() -> Arc<ProviderRuntime> {
@@ -41,5 +48,15 @@ fn init_runtime() -> Arc<ProviderRuntime> {
     let executor: Arc<dyn SqlExecutor> = Arc::new(KabegameSqlExecutor::new(
         crate::storage::Storage::global().db.clone(),
     ));
-    ProviderRuntime::new(registry, root, executor)
+    let globals = HashMap::from([
+        (
+            "favorite_album_id".to_string(),
+            TemplateValue::Text(crate::storage::FAVORITE_ALBUM_ID.to_string()),
+        ),
+        (
+            "hidden_album_id".to_string(),
+            TemplateValue::Text(crate::storage::HIDDEN_ALBUM_ID.to_string()),
+        ),
+    ]);
+    ProviderRuntime::new(registry, root, executor, globals)
 }

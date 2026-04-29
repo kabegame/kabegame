@@ -59,11 +59,7 @@ impl Provider for GalleryRoot {
         q.from = Some(SqlExpr("images".into()));
         q
     }
-    fn list(
-        &self,
-        _: &ProviderQuery,
-        _: &ProviderContext,
-    ) -> Result<Vec<ChildEntry>, EngineError> {
+    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
         Ok(vec![
             ChildEntry {
                 name: "albums".into(),
@@ -100,11 +96,7 @@ impl Provider for GalleryRoot {
 /// AlbumsRouter: resolve album_id → AlbumProvider with where filter
 struct AlbumsRouter;
 impl Provider for AlbumsRouter {
-    fn list(
-        &self,
-        _: &ProviderQuery,
-        _: &ProviderContext,
-    ) -> Result<Vec<ChildEntry>, EngineError> {
+    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
         Ok(Vec::new())
     }
     fn resolve(
@@ -114,10 +106,7 @@ impl Provider for AlbumsRouter {
         ctx: &ProviderContext,
     ) -> Option<Arc<dyn Provider>> {
         let mut props = HashMap::new();
-        props.insert(
-            "album_id".into(),
-            TemplateValue::Text(name.to_string()),
-        );
+        props.insert("album_id".into(), TemplateValue::Text(name.to_string()));
         ctx.registry.instantiate(
             &Namespace("test".into()),
             &ProviderName("album_provider".into()),
@@ -147,11 +136,7 @@ impl Provider for AlbumProvider {
                 &[TemplateValue::Text(self.album_id.clone())],
             )
     }
-    fn list(
-        &self,
-        _: &ProviderQuery,
-        _: &ProviderContext,
-    ) -> Result<Vec<ChildEntry>, EngineError> {
+    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
         Ok(Vec::new())
     }
     fn resolve(
@@ -202,11 +187,18 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         )
         .unwrap();
 
-    ProviderRuntime::new(Arc::new(registry), root, no_op_executor())
+    ProviderRuntime::new(
+        Arc::new(registry),
+        root,
+        no_op_executor(),
+        Default::default(),
+    )
 }
 
 fn execute_query(conn: &Connection, q: &ProviderQuery) -> Vec<i64> {
-    let (sql, values) = q.build_sql(&TemplateContext::default(), SqlDialect::Sqlite).unwrap();
+    let (sql, values) = q
+        .build_sql(&TemplateContext::default(), SqlDialect::Sqlite)
+        .unwrap();
     let params = local_params_for(&values);
     let mut stmt = conn.prepare(&sql).unwrap();
     stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {

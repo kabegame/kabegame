@@ -30,9 +30,10 @@ impl DslProvider {
     }
 
     /// 构造基础 TemplateContext (含 properties + 可选 captures)。
-    fn base_template_context(&self, captures: &[String]) -> TemplateContext {
+    fn base_template_context(&self, ctx: &ProviderContext, captures: &[String]) -> TemplateContext {
         let mut tctx = TemplateContext::default();
         tctx.properties = self.properties.clone();
+        tctx.globals = ctx.runtime.globals().clone();
         tctx.capture = captures.to_vec();
         tctx
     }
@@ -42,8 +43,9 @@ impl DslProvider {
         &self,
         raw: &Option<HashMap<String, AstTemplateValue>>,
         captures: &[String],
+        ctx: &ProviderContext,
     ) -> Result<HashMap<String, TemplateValue>, EngineError> {
-        let tctx = self.base_template_context(captures);
+        let tctx = self.base_template_context(ctx, captures);
         self.eval_properties_in_ctx(raw, &tctx)
     }
 
@@ -94,8 +96,9 @@ impl DslProvider {
         &self,
         meta: &Option<serde_json::Value>,
         captures: &[String],
+        ctx: &ProviderContext,
     ) -> Result<Option<serde_json::Value>, EngineError> {
-        let tctx = self.base_template_context(captures);
+        let tctx = self.base_template_context(ctx, captures);
         self.eval_meta_in_ctx(meta, &tctx)
     }
 
@@ -122,7 +125,7 @@ impl DslProvider {
     ) -> Result<Option<Arc<dyn Provider>>, EngineError> {
         match invocation {
             ProviderInvocation::ByName(b) => {
-                let props = self.eval_properties(&b.properties, captures)?;
+                let props = self.eval_properties(&b.properties, captures, ctx)?;
                 Ok(ctx
                     .registry
                     .instantiate(&self.current_namespace(), &b.provider, &props, ctx))
@@ -145,11 +148,11 @@ impl DslProvider {
     /// - 不含 `${...}` 的纯字面 key 原样返回
     /// - 含 `${properties.X}` 等 instance-static 模板的 key 用 render_template_to_string 替换
     /// - 渲染失败 (引用未定义) 时返回原模板 (静默退化; 调用方按字面比较)
-    fn render_key_template(&self, key_template: &str) -> String {
+    fn render_key_template(&self, key_template: &str, ctx: &ProviderContext) -> String {
         if !key_template.contains("${") {
             return key_template.to_string();
         }
-        let tctx = self.base_template_context(&[]);
+        let tctx = self.base_template_context(ctx, &[]);
         render_template_to_string(key_template, &tctx).unwrap_or_else(|_| key_template.to_string())
     }
 
@@ -159,7 +162,7 @@ impl DslProvider {
         call: &ProviderCall,
         ctx: &ProviderContext,
     ) -> Result<Option<Arc<dyn Provider>>, EngineError> {
-        let props = self.eval_properties(&call.properties, &[])?;
+        let props = self.eval_properties(&call.properties, &[], ctx)?;
         Ok(ctx
             .registry
             .instantiate(&self.current_namespace(), &call.provider, &props, ctx))
@@ -178,7 +181,7 @@ impl DslProvider {
 
         // 渲染 SQL: properties 作用域 + 父 composed 内联 (供 ${composed} 子查询)。
         let aliases = AliasTable::new();
-        let mut prop_ctx = self.base_template_context(&[]);
+        let mut prop_ctx = self.base_template_context(ctx, &[]);
         if let Ok(composed_rendered) = composed.build_sql(&prop_ctx, dialect) {
             prop_ctx.composed = Some(composed_rendered);
         }
@@ -189,7 +192,7 @@ impl DslProvider {
         let data_var_name = entry.data_var.0.clone();
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            let mut row_ctx = self.base_template_context(&[]);
+            let mut row_ctx = self.base_template_context(ctx, &[]);
             row_ctx.data_var = Some((data_var_name.clone(), row.clone()));
 
             let name = render_template_to_string(key_template, &row_ctx)?;
@@ -244,7 +247,7 @@ impl DslProvider {
                 "name": child.name,
                 "meta": child.meta.clone().unwrap_or(serde_json::Value::Null),
             });
-            let mut tctx = self.base_template_context(&[]);
+            let mut tctx = self.base_template_context(ctx, &[]);
             tctx.child_var = Some((child_var_name.clone(), child_json));
 
             let name = render_template_to_string(key_template, &tctx)?;
@@ -280,21 +283,92 @@ impl DslProvider {
     ) -> Result<Option<Arc<dyn Provider>>, EngineError> {
         match entry {
             DynamicListEntry::Sql(sql_entry) => {
+                let dbg = crate::provider::runtime::dbg_enabled();
                 let executor = ctx.runtime.executor().clone();
                 let dialect = executor.dialect();
                 let aliases = AliasTable::new();
-                let mut prop_ctx = self.base_template_context(&[]);
-                if let Ok(composed_rendered) = composed.build_sql(&prop_ctx, dialect) {
-                    prop_ctx.composed = Some(composed_rendered);
+                let mut prop_ctx = self.base_template_context(ctx, &[]);
+                match composed.build_sql(&prop_ctx, dialect) {
+                    Ok(composed_rendered) => {
+                        if dbg {
+                            eprintln!(
+                                "[pathql]   reverse dynamic SQL composed provider={}::{} sql={:?} params={:?}",
+                                self.def
+                                    .namespace
+                                    .as_ref()
+                                    .map(|n| n.0.as_str())
+                                    .unwrap_or(""),
+                                self.def.name.0,
+                                composed_rendered.0,
+                                composed_rendered.1,
+                            );
+                        }
+                        prop_ctx.composed = Some(composed_rendered);
+                    }
+                    Err(e) => {
+                        if dbg {
+                            eprintln!(
+                                "[pathql]   reverse dynamic SQL composed render ERROR provider={}::{}: {}",
+                                self.def
+                                    .namespace
+                                    .as_ref()
+                                    .map(|n| n.0.as_str())
+                                    .unwrap_or(""),
+                                self.def.name.0,
+                                e,
+                            );
+                        }
+                    }
                 }
-                let (sql, params) = render_to_owned(&sql_entry.sql.0, &prop_ctx, &aliases, dialect)?;
+                let (sql, params) =
+                    render_to_owned(&sql_entry.sql.0, &prop_ctx, &aliases, dialect)?;
+                if dbg {
+                    eprintln!(
+                        "[pathql]   reverse dynamic SQL provider={}::{} key_template={:?} sql={:?} params={:?}",
+                        self.def
+                            .namespace
+                            .as_ref()
+                            .map(|n| n.0.as_str())
+                            .unwrap_or(""),
+                        self.def.name.0,
+                        key_template,
+                        sql,
+                        params,
+                    );
+                }
                 let rows = executor.execute(&sql, &params)?;
+                if dbg {
+                    eprintln!(
+                        "[pathql]   reverse dynamic SQL rows provider={}::{} count={}",
+                        self.def
+                            .namespace
+                            .as_ref()
+                            .map(|n| n.0.as_str())
+                            .unwrap_or(""),
+                        self.def.name.0,
+                        rows.len(),
+                    );
+                }
 
                 let data_var_name = sql_entry.data_var.0.clone();
                 for row in rows {
-                    let mut row_ctx = self.base_template_context(&[]);
+                    let mut row_ctx = self.base_template_context(ctx, &[]);
                     row_ctx.data_var = Some((data_var_name.clone(), row.clone()));
                     let rendered = render_template_to_string(key_template, &row_ctx)?;
+                    if dbg {
+                        eprintln!(
+                            "[pathql]   reverse dynamic candidate provider={}::{} rendered={:?} target={:?} row={:?}",
+                            self.def
+                                .namespace
+                                .as_ref()
+                                .map(|n| n.0.as_str())
+                                .unwrap_or(""),
+                            self.def.name.0,
+                            rendered,
+                            name,
+                            row,
+                        );
+                    }
                     if rendered == name {
                         let provider: Option<Arc<dyn Provider>> = match &sql_entry.provider {
                             Some(prov_name) => {
@@ -332,7 +406,7 @@ impl DslProvider {
                         "name": child.name,
                         "meta": child.meta.clone().unwrap_or(serde_json::Value::Null),
                     });
-                    let mut tctx = self.base_template_context(&[]);
+                    let mut tctx = self.base_template_context(ctx, &[]);
                     tctx.child_var = Some((child_var_name.clone(), child_json));
                     let rendered = render_template_to_string(key_template, &tctx)?;
                     if rendered == name {
@@ -380,8 +454,8 @@ impl DslProvider {
         // 静态项无 capture; meta 在 self.properties 作用域下渲染
         let provider = self.instantiate_invocation(inv, &[], composed, ctx)?;
         let meta = match inv {
-            ProviderInvocation::ByName(b) => self.eval_meta(&b.meta, &[])?,
-            ProviderInvocation::Empty(b) => self.eval_meta(&b.meta, &[])?,
+            ProviderInvocation::ByName(b) => self.eval_meta(&b.meta, &[], ctx)?,
+            ProviderInvocation::Empty(b) => self.eval_meta(&b.meta, &[], ctx)?,
             ProviderInvocation::ByDelegate(_) => unreachable!("rejected above"),
         };
         Ok(Some(ChildEntry {
@@ -444,7 +518,7 @@ impl Provider for DslProvider {
             match entry {
                 ListEntry::Static(invocation) => {
                     // 7b: 渲染 key 模板 (instance-static 形态会被替换为字面)
-                    let rendered_key = self.render_key_template(key_template);
+                    let rendered_key = self.render_key_template(key_template, ctx);
                     if let Some(child) =
                         self.materialize_static(&rendered_key, invocation, composed, ctx)?
                     {
@@ -456,7 +530,8 @@ impl Provider for DslProvider {
                     out.append(&mut children);
                 }
                 ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => {
-                    let mut children = self.list_dynamic_delegate(key_template, e, composed, ctx)?;
+                    let mut children =
+                        self.list_dynamic_delegate(key_template, e, composed, ctx)?;
                     out.append(&mut children);
                 }
             }
@@ -507,7 +582,7 @@ impl Provider for DslProvider {
         if let Some(resolve) = &self.def.resolve {
             for (pattern_template, invocation) in &resolve.0 {
                 // 7b: 渲染 pattern 中的 ${properties.X} (instance-static)
-                let pattern = self.render_key_template(pattern_template);
+                let pattern = self.render_key_template(pattern_template, ctx);
                 let anchored = format!("^(?:{})$", pattern);
                 let re = match regex::Regex::new(&anchored) {
                     Ok(r) => r,
@@ -515,7 +590,10 @@ impl Provider for DslProvider {
                 };
                 if let Some(captures) = re.captures(name) {
                     if dbg {
-                        eprintln!("[pathql]   regex {:?} (rendered={:?}) matched", pattern_template, pattern);
+                        eprintln!(
+                            "[pathql]   regex {:?} (rendered={:?}) matched",
+                            pattern_template, pattern
+                        );
                     }
                     let cap_vec: Vec<String> = captures
                         .iter()
@@ -548,7 +626,7 @@ impl Provider for DslProvider {
         if let Some(list) = &self.def.list {
             for (key_template, entry) in &list.entries {
                 if let ListEntry::Static(inv) = entry {
-                    let rendered_key = self.render_key_template(key_template);
+                    let rendered_key = self.render_key_template(key_template, ctx);
                     if rendered_key == name {
                         if dbg {
                             eprintln!(
@@ -603,13 +681,12 @@ impl Provider for DslProvider {
         None
     }
 
-    fn get_note(&self, _composed: &ProviderQuery, _ctx: &ProviderContext) -> Option<String> {
+    fn get_note(&self, _composed: &ProviderQuery, ctx: &ProviderContext) -> Option<String> {
         let raw = self.def.note.as_ref()?;
         if !raw.contains("${") {
             return Some(raw.clone());
         }
-        let mut tctx = TemplateContext::default();
-        tctx.properties = self.properties.clone();
+        let tctx = self.base_template_context(ctx, &[]);
         // 渲染失败时回落到原文 (note 是诊断字段，不应阻断 list)
         Some(render_template_to_string(raw, &tctx).unwrap_or_else(|_| raw.clone()))
     }
@@ -648,11 +725,7 @@ fn walk_meta_value(
 pub struct EmptyDslProvider;
 
 impl Provider for EmptyDslProvider {
-    fn list(
-        &self,
-        _: &ProviderQuery,
-        _: &ProviderContext,
-    ) -> Result<Vec<ChildEntry>, EngineError> {
+    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
         Ok(Vec::new())
     }
     fn resolve(

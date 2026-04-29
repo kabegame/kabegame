@@ -6,6 +6,16 @@
 
 ---
 
+## 7b-S1c/S1d implementation notes
+
+- Templates may read runtime-frozen globals via `${global.<key>}`. Hosts inject these at
+  `ProviderRuntime` construction time; pathql treats them like bind parameters in SQL templates.
+- `fields[]` accepts either full object form `{ "sql": "...", "as": "...", "in_need": true }`
+  or shorthand string form `"images.url"`, equivalent to `{ "sql": "images.url" }`.
+- When a query has no selected fields, SQL rendering emits `SELECT <from>.*` if `from` is a
+  simple ASCII identifier; otherwise it falls back to `SELECT *`.
+
+
 ## 1. 文件与位置
 
 - 后缀：`.json5`（推荐 `.provider.json5` 后缀以便 IDE 区分）

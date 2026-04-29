@@ -94,7 +94,12 @@ fn three_level_chain_via_register_provider() {
         )
         .unwrap();
 
-    let runtime = ProviderRuntime::new(Arc::new(registry), root, no_op_executor());
+    let runtime = ProviderRuntime::new(
+        Arc::new(registry),
+        root,
+        no_op_executor(),
+        Default::default(),
+    );
 
     let resolved = runtime.resolve("/b/c").unwrap();
     assert_eq!(resolved.composed.from.unwrap().0, "leaf_table");
@@ -131,7 +136,12 @@ fn path_not_found_returns_error() {
         )
         .unwrap();
 
-    let runtime = ProviderRuntime::new(Arc::new(registry), root, no_op_executor());
+    let runtime = ProviderRuntime::new(
+        Arc::new(registry),
+        root,
+        no_op_executor(),
+        Default::default(),
+    );
     let err = runtime.resolve("/missing").unwrap_err();
     assert!(matches!(err, EngineError::PathNotFound(_)));
     assert_eq!(runtime.cache_size(), 0);
@@ -150,7 +160,7 @@ fn case_sensitive_paths() {
         note: None,
     });
     let registry = Arc::new(ProviderRegistry::new());
-    let runtime = ProviderRuntime::new(registry, root, no_op_executor());
+    let runtime = ProviderRuntime::new(registry, root, no_op_executor(), Default::default());
 
     // /Hello 命中
     assert!(runtime.resolve("/Hello").is_ok());
@@ -238,7 +248,12 @@ fn factory_uses_properties() {
         .unwrap();
 
     let root: Arc<dyn Provider> = Arc::new(AlbumRouter);
-    let runtime = ProviderRuntime::new(Arc::new(registry), root, no_op_executor());
+    let runtime = ProviderRuntime::new(
+        Arc::new(registry),
+        root,
+        no_op_executor(),
+        Default::default(),
+    );
 
     let r1 = runtime.resolve("/A1").unwrap();
     let r2 = runtime.resolve("/B7").unwrap();

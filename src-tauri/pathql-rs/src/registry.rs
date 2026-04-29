@@ -1,4 +1,4 @@
-use crate::ast::{Namespace, ProviderDef, ProviderName, SimpleName};
+use crate::ast::{Namespace, PropertyDecl, PropertySpec, ProviderDef, ProviderName, SimpleName};
 use crate::provider::{DslProvider, EngineError, Provider, ProviderContext};
 use crate::template::eval::TemplateValue;
 use std::collections::HashMap;
@@ -140,7 +140,7 @@ impl ProviderRegistry {
             }
             RegistryEntry::Dsl(def) => Some(Arc::new(DslProvider {
                 def: def.clone(),
-                properties: properties.clone(),
+                properties: fill_defaults(&def.properties, properties),
             })),
         }
     }
@@ -162,9 +162,7 @@ impl ProviderRegistry {
     }
 
     /// 仅遍历 DSL 项 (跳过 Programmatic) — validator 等只对 DSL spec 适用的场景用。
-    pub fn iter_dsl(
-        &self,
-    ) -> impl Iterator<Item = (&(Namespace, SimpleName), &Arc<ProviderDef>)> {
+    pub fn iter_dsl(&self) -> impl Iterator<Item = (&(Namespace, SimpleName), &Arc<ProviderDef>)> {
         self.defs.iter().filter_map(|(k, v)| match v {
             RegistryEntry::Dsl(def) => Some((k, def)),
             RegistryEntry::Programmatic(_) => None,
@@ -177,6 +175,39 @@ impl ProviderRegistry {
 
     pub fn is_empty(&self) -> bool {
         self.defs.is_empty()
+    }
+}
+
+fn fill_defaults(
+    declarations: &Option<HashMap<String, PropertyDecl>>,
+    caller: &HashMap<String, TemplateValue>,
+) -> HashMap<String, TemplateValue> {
+    let mut out = caller.clone();
+    let Some(declarations) = declarations else {
+        return out;
+    };
+    for (key, decl) in declarations {
+        if out.contains_key(key) {
+            continue;
+        }
+        if let Some(value) = default_value(decl) {
+            out.insert(key.clone(), value);
+        }
+    }
+    out
+}
+
+fn default_value(decl: &PropertyDecl) -> Option<TemplateValue> {
+    match &decl.spec {
+        PropertySpec::Number { default, .. } => default.map(|n| {
+            if n.fract() == 0.0 {
+                TemplateValue::Int(n as i64)
+            } else {
+                TemplateValue::Real(n)
+            }
+        }),
+        PropertySpec::String { default, .. } => default.clone().map(TemplateValue::Text),
+        PropertySpec::Boolean { default } => default.map(TemplateValue::Bool),
     }
 }
 
@@ -197,7 +228,28 @@ mod tests {
         }
     }
 
-    fn dummy_factory() -> impl Fn(&HashMap<String, TemplateValue>) -> Result<Arc<dyn Provider>, EngineError>
+    fn def_with_props(ns: Option<&str>, name: &str) -> ProviderDef {
+        let mut d = def(ns, name);
+        d.properties = Some(
+            [(
+                "page_size".to_string(),
+                PropertyDecl {
+                    optional: Some(true),
+                    spec: PropertySpec::Number {
+                        default: Some(1.0),
+                        min: None,
+                        max: None,
+                    },
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        d
+    }
+
+    fn dummy_factory(
+    ) -> impl Fn(&HashMap<String, TemplateValue>) -> Result<Arc<dyn Provider>, EngineError>
            + Send
            + Sync
            + 'static {
@@ -246,10 +298,7 @@ mod tests {
     fn resolve_simple_same_ns() {
         let mut r = ProviderRegistry::new();
         r.register(def(Some("kabegame"), "foo")).unwrap();
-        let found = r.resolve(
-            &Namespace("kabegame".into()),
-            &ProviderName("foo".into()),
-        );
+        let found = r.resolve(&Namespace("kabegame".into()), &ProviderName("foo".into()));
         assert!(found.is_some());
     }
 
@@ -357,10 +406,7 @@ mod tests {
             dummy_factory(),
         )
         .unwrap();
-        let found = r.lookup(
-            &Namespace("a.b.c".into()),
-            &ProviderName("foo".into()),
-        );
+        let found = r.lookup(&Namespace("a.b.c".into()), &ProviderName("foo".into()));
         assert!(matches!(found, Some(RegistryEntry::Programmatic(_))));
     }
 
@@ -398,5 +444,22 @@ mod tests {
         // resolve (old API returning ProviderDef) returns None for programmatic
         let found = r.resolve(&Namespace("a".into()), &ProviderName("foo".into()));
         assert!(found.is_none());
+    }
+
+    #[test]
+    fn fill_defaults_adds_declared_defaults() {
+        let d = def_with_props(Some("test"), "pager");
+        let props = fill_defaults(&d.properties, &HashMap::new());
+        assert_eq!(props.get("page_size"), Some(&TemplateValue::Int(1)));
+    }
+
+    #[test]
+    fn fill_defaults_keeps_caller_value() {
+        let d = def_with_props(Some("test"), "pager");
+        let caller = [("page_size".to_string(), TemplateValue::Int(99))]
+            .into_iter()
+            .collect();
+        let props = fill_defaults(&d.properties, &caller);
+        assert_eq!(props.get("page_size"), Some(&TemplateValue::Int(99)));
     }
 }

@@ -40,17 +40,29 @@ fn assert_provider_parity_with_props(
 ) {
     // 1. programmatic registry: 直接把 provider 当 root 跑
     let prog_registry = Arc::new(ProviderRegistry::new());
-    let prog_runtime = ProviderRuntime::new(prog_registry, programmatic.clone(), no_op_executor());
+    let prog_runtime = ProviderRuntime::new(
+        prog_registry,
+        programmatic.clone(),
+        no_op_executor(),
+        Default::default(),
+    );
 
     // 2. DSL registry: 加载 JSON5 + 把 DslProvider 当 root
     let dsl_def = Json5Loader.load(Source::Str(dsl_json)).expect("load DSL");
     let mut dsl_registry = ProviderRegistry::new();
-    dsl_registry.register(dsl_def.clone()).expect("register DSL");
+    dsl_registry
+        .register(dsl_def.clone())
+        .expect("register DSL");
     let dsl_root: Arc<dyn Provider> = Arc::new(pathql_rs::DslProvider {
         def: Arc::new(dsl_def),
         properties: dsl_properties,
     });
-    let dsl_runtime = ProviderRuntime::new(Arc::new(dsl_registry), dsl_root, no_op_executor());
+    let dsl_runtime = ProviderRuntime::new(
+        Arc::new(dsl_registry),
+        dsl_root,
+        no_op_executor(),
+        Default::default(),
+    );
 
     // 3. apply_query parity: 比较 build_sql 输出 (真行为, 而非 Debug 投影)
     if test_apply_query {
@@ -160,9 +172,9 @@ fn sort_provider_parity() {
         "sort_provider",
         Arc::new(SortProvider) as Arc<dyn Provider>,
         dsl_json,
-        &[], // 不测 resolve (sort_provider 是 leaf, resolve 永远 None)
-        true,  // 测 apply_query (核心: order.global = Revert)
-        true,  // 测 list (都应返回空)
+        &[],  // 不测 resolve (sort_provider 是 leaf, resolve 永远 None)
+        true, // 测 apply_query (核心: order.global = Revert)
+        true, // 测 list (都应返回空)
     );
 }
 
@@ -185,11 +197,11 @@ fn gallery_search_router_parity() {
         Arc::new(GallerySearchRouter) as Arc<dyn Provider>,
         dsl_json,
         &[], // 不测 resolve (gallery_search_display_name_router 跨 registry, 在 isolated
-             // helper 里两边都拿不到目标 → 都 None / 都 Err, 等价但 trivially 等价不值得断言)
+        // helper 里两边都拿不到目标 → 都 None / 都 Err, 等价但 trivially 等价不值得断言)
         false, // 不测 apply_query (router 壳无 apply_query 贡献; 二者均 noop, ProviderQuery
-               // 的 Default Debug 字符串等价 — 但 dsl_def.query=None 与 programmatic 的
-               // default 实现不一致时会有 trivial 字符串差异, 不是行为差异)
-        true,  // 测 list (核心: 输出 ["display-name"])
+        // 的 Default Debug 字符串等价 — 但 dsl_def.query=None 与 programmatic 的
+        // default 实现不一致时会有 trivial 字符串差异, 不是行为差异)
+        true, // 测 list (核心: 输出 ["display-name"])
     );
 }
 

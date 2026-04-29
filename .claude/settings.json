@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "PowerShell(wsl -d Ubuntu --user root --exec /bin/cat /etc/wsl.conf 2>&1)",
-      "Bash(bun --cwd apps/docs build)"
+      "Bash(bun --cwd apps/docs build)",
+      "Bash(git -C d:/Codes/kabegame status)",
+      "Bash(git -C d:/Codes/kabegame log --oneline -10)",
+      "Bash(cargo check *)"
     ],
     "additionalDirectories": [
       "d:\\Codes\\kabegame\\.claude\\research\\docs",

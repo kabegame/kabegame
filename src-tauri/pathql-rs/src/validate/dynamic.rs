@@ -1,6 +1,4 @@
-use crate::ast::{
-    DynamicListEntry, ListEntry, Namespace, ProviderDef, SimpleName,
-};
+use crate::ast::{DynamicListEntry, ListEntry, Namespace, ProviderDef, SimpleName};
 use crate::template::{parse, Segment, VarRef};
 use crate::validate::{ValidateConfig, ValidateError, ValidateErrorKind};
 
@@ -112,10 +110,10 @@ fn template_value_as_str(v: &crate::ast::TemplateValue) -> String {
     }
 }
 
-/// `${X.Y...}` 中, 当 X 不是 reserved namespace (properties/capture/composed/out/_/ref/<binding>)
+/// `${X.Y...}` 中, 当 X 不是 reserved namespace (properties/capture/composed/global/out/_/ref/<binding>)
 /// 也不等于 expected_binding 时, 报 DynamicVarMismatch.
 ///
-/// 允许的 namespace: properties, capture, composed, ref(method), out, _, expected_binding
+/// 允许的 namespace: properties, capture, composed, global, ref(method), out, _, expected_binding
 fn check_template_var_prefix(
     fqn: &str,
     _key: &str,
@@ -154,7 +152,7 @@ fn check_template_var_prefix(
 
 /// 引擎自身永远在作用域内的 namespace (与用户 binding 无关)。
 fn is_reserved_template_ns(ns: &str) -> bool {
-    matches!(ns, "properties" | "capture" | "composed" | "_")
+    matches!(ns, "properties" | "capture" | "composed" | "global" | "_")
 }
 
 fn check_no_provider_ref(

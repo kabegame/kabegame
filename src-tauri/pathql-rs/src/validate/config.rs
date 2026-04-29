@@ -24,7 +24,7 @@ impl ValidateConfig {
     ///
     /// "out" / "row" 等是约定的 binding 名而非保留字，不在此集合内（实际数据广泛使用）。
     pub fn with_default_reserved() -> Self {
-        let reserved = ["properties", "capture", "composed", "ref", "_"]
+        let reserved = ["properties", "capture", "composed", "global", "ref", "_"]
             .into_iter()
             .collect();
         Self {
