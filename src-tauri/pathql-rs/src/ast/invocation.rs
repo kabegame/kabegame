@@ -12,6 +12,17 @@ pub struct InvokeByName {
     pub meta: Option<MetaValue>,
 }
 
+/// 7b: 恢复 ByDelegate variant — payload 是 ProviderCall (path-unaware)。
+/// 仅在 `Resolve` 表项里有意义: `target.resolve(name, ...)` 转发对当前 segment 的
+/// resolve 决定权给 target. 静态 list 项不允许 (运行期拒绝)。
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvokeByDelegate {
+    pub delegate: ProviderCall,
+    #[serde(default)]
+    pub meta: Option<MetaValue>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmptyInvocation {
@@ -23,6 +34,7 @@ pub struct EmptyInvocation {
 #[serde(untagged)]
 pub enum ProviderInvocation {
     ByName(InvokeByName),
+    ByDelegate(InvokeByDelegate),
     Empty(EmptyInvocation),
 }
 
@@ -105,11 +117,61 @@ mod tests {
     }
 
     #[test]
-    fn delegate_form_no_longer_byname_or_empty() {
-        // 6e: `{"delegate":"..."}` not a valid ProviderInvocation any more — neither
-        // ByName (no provider) nor Empty (extra field). Must err with deny_unknown_fields.
+    fn delegate_string_payload_rejected() {
+        // 6e/7b: 旧 PathExpr 形态 `{"delegate":"./bar"}` 被拒 (delegate 必须是 ProviderCall 对象)
         let r: Result<ProviderInvocation, _> =
             serde_json::from_str(r#"{"delegate":"./bar"}"#);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn by_delegate_provider_call_payload() {
+        // 7b: ByDelegate 复活, payload = ProviderCall {provider, properties?}
+        let v: ProviderInvocation =
+            serde_json::from_str(r#"{"delegate":{"provider":"foo"}}"#).unwrap();
+        match v {
+            ProviderInvocation::ByDelegate(b) => {
+                assert_eq!(b.delegate.provider, ProviderName("foo".into()));
+                assert!(b.delegate.properties.is_none());
+                assert!(b.meta.is_none());
+            }
+            _ => panic!("expected ByDelegate"),
+        }
+    }
+
+    #[test]
+    fn by_delegate_with_properties_and_meta() {
+        let v: ProviderInvocation = serde_json::from_str(
+            r#"{"delegate":{"provider":"foo","properties":{"k":"v"}},"meta":{"hint":"x"}}"#,
+        )
+        .unwrap();
+        match v {
+            ProviderInvocation::ByDelegate(b) => {
+                assert_eq!(b.delegate.provider, ProviderName("foo".into()));
+                assert!(b.delegate.properties.is_some());
+                assert!(b.meta.is_some());
+            }
+            _ => panic!("expected ByDelegate"),
+        }
+    }
+
+    #[test]
+    fn by_name_and_by_delegate_disambiguated() {
+        // {provider:"X"} → ByName
+        let v: ProviderInvocation = serde_json::from_str(r#"{"provider":"X"}"#).unwrap();
+        assert!(matches!(v, ProviderInvocation::ByName(_)));
+        // {delegate:{provider:"X"}} → ByDelegate
+        let v: ProviderInvocation =
+            serde_json::from_str(r#"{"delegate":{"provider":"X"}}"#).unwrap();
+        assert!(matches!(v, ProviderInvocation::ByDelegate(_)));
+    }
+
+    #[test]
+    fn provider_and_delegate_mutually_exclusive() {
+        // {provider:..., delegate:...} 两个都给 → 不属于任何 variant (deny_unknown_fields)
+        let r: Result<ProviderInvocation, _> = serde_json::from_str(
+            r#"{"provider":"foo","delegate":{"provider":"bar"}}"#,
+        );
         assert!(r.is_err());
     }
 

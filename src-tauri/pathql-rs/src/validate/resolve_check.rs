@@ -5,14 +5,21 @@ use crate::template::{parse, Segment, VarRef};
 use crate::validate::{ValidateError, ValidateErrorKind};
 
 use regex::Regex;
-use regex_automata::{
-    dfa::{dense, Automaton},
-    Anchored, Input,
-};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 
-const PRODUCT_DFA_STATE_LIMIT: usize = 100_000;
-
+/// 校验 resolve 表项: 仅留下两类检查 (7b 起)。
+///
+/// **删除的检查**:
+/// - regex vs static list key literal 碰撞 (false positive: `.*` 转发模式 + `${properties.X}`
+///   instance-static key 都是合法但被误判)
+/// - regex vs regex 交集 (regex_automata 误判 + 与 `.*` 转发模式根本冲突)
+///
+/// 运行期解析顺序是 deterministic 的 (静态 list → resolve regex → 动态反查); 多模式重叠
+/// 由作者按 schema 出现顺序覆写决定。
+///
+/// **保留的检查**:
+/// 1. regex 编译错误
+/// 2. invocation properties / meta 中 `${capture[N]}` 越界 (按当前 regex captures 数算)
 pub fn validate_resolve(
     registry: &crate::ProviderRegistry,
     errors: &mut Vec<ValidateError>,
@@ -26,9 +33,13 @@ pub fn validate_resolve(
         // 1) compile each key as anchored regex; track captures count for bounds checking
         let mut compiled: Vec<(String, Regex, usize)> = Vec::new();
         for (pat, _) in &resolve.0 {
+            // pattern 可能含 ${properties.X} (instance-static); 加载期跳过编译, 仅检查
+            // pattern 不为空 — 实例化期再编译
+            if pat.contains("${") {
+                continue;
+            }
             match Regex::new(&format!("^(?:{})$", pat)) {
                 Ok(re) => {
-                    // captures_len includes group 0 (whole-match)
                     let groups = re.captures_len().saturating_sub(1);
                     compiled.push((pat.clone(), re, groups));
                 }
@@ -43,46 +54,7 @@ pub fn validate_resolve(
             }
         }
 
-        // 2) regex vs static list key literals
-        if let Some(list) = &def.list {
-            for (key, entry) in &list.entries {
-                // skip dynamic keys (template-bearing) — they're not literals
-                if is_template_key(key) {
-                    continue;
-                }
-                // also skip dynamic ListEntry (its key may be runtime)
-                if matches!(entry, ListEntry::Dynamic(_)) {
-                    continue;
-                }
-                for (pat, re, _) in &compiled {
-                    if re.is_match(key) {
-                        errors.push(ValidateError::new(
-                            &fqn,
-                            format!("resolve[`{}`]", pat),
-                            ValidateErrorKind::RegexMatchesStatic(pat.clone(), key.clone()),
-                        ));
-                    }
-                }
-            }
-        }
-
-        // 3) regex vs regex (pairwise intersection)
-        for i in 0..compiled.len() {
-            for j in (i + 1)..compiled.len() {
-                let (pa, _, _) = &compiled[i];
-                let (pb, _, _) = &compiled[j];
-                if regexes_intersect(pa, pb).unwrap_or(false) {
-                    errors.push(ValidateError::new(
-                        &fqn,
-                        format!("resolve"),
-                        ValidateErrorKind::RegexIntersection(pa.clone(), pb.clone()),
-                    ));
-                }
-            }
-        }
-
-        // 4) capture[N] bounds in invocation properties / meta
-        // Build a map pattern -> groups for fast lookup
+        // 2) capture[N] bounds in invocation properties / meta
         let pattern_to_groups: HashMap<&str, usize> = compiled
             .iter()
             .map(|(p, _, g)| (p.as_str(), *g))
@@ -114,14 +86,11 @@ pub fn validate_resolve(
             }
         }
 
-        let _ = compiled; // silence unused
+        let _ = compiled;
         let _ = pattern_to_groups;
         let _: &Resolve = resolve;
+        let _ = ListEntry::Static; // keep import live (used in tests)
     }
-}
-
-fn is_template_key(s: &str) -> bool {
-    s.contains("${")
 }
 
 fn collect_invocation_strings(inv: &ProviderInvocation) -> Vec<(String, String)> {
@@ -144,6 +113,15 @@ fn collect_invocation_strings(inv: &ProviderInvocation) -> Vec<(String, String)>
                 push_props(p, &mut out);
             }
             if let Some(m) = meta {
+                push_meta(m, &mut out);
+            }
+        }
+        ProviderInvocation::ByDelegate(b) => {
+            // 7b: ByDelegate.delegate.properties 也可能含 ${capture[N]} — 收集
+            if let Some(p) = &b.delegate.properties {
+                push_props(p, &mut out);
+            }
+            if let Some(m) = &b.meta {
                 push_meta(m, &mut out);
             }
         }
@@ -171,54 +149,6 @@ fn walk_meta_strings(v: &serde_json::Value, path: &str, out: &mut Vec<(String, S
         }
         _ => {}
     }
-}
-
-/// 检测两个 regex 模式是否存在共同接受的字符串。
-/// 通过两个 anchored DFA 的 product BFS 实现。
-/// 状态数超过 PRODUCT_DFA_STATE_LIMIT 时保守返回 false（无重叠）。
-pub(crate) fn regexes_intersect(a: &str, b: &str) -> Result<bool, regex_automata::dfa::dense::BuildError> {
-    let pa = format!("^(?:{})$", a);
-    let pb = format!("^(?:{})$", b);
-    let dfa_a = dense::DFA::new(&pa)?;
-    let dfa_b = dense::DFA::new(&pb)?;
-
-    let input_a = Input::new("").anchored(Anchored::Yes);
-    let input_b = Input::new("").anchored(Anchored::Yes);
-    let start_a = match dfa_a.start_state_forward(&input_a) {
-        Ok(s) => s,
-        Err(_) => return Ok(false),
-    };
-    let start_b = match dfa_b.start_state_forward(&input_b) {
-        Ok(s) => s,
-        Err(_) => return Ok(false),
-    };
-
-    let mut visited: HashSet<(_, _)> = HashSet::new();
-    let mut queue = VecDeque::new();
-    visited.insert((start_a, start_b));
-    queue.push_back((start_a, start_b));
-
-    while let Some((sa, sb)) = queue.pop_front() {
-        if visited.len() > PRODUCT_DFA_STATE_LIMIT {
-            return Ok(false);
-        }
-        let eoi_a = dfa_a.next_eoi_state(sa);
-        let eoi_b = dfa_b.next_eoi_state(sb);
-        if dfa_a.is_match_state(eoi_a) && dfa_b.is_match_state(eoi_b) {
-            return Ok(true);
-        }
-        for byte in 0u8..=255 {
-            let na = dfa_a.next_state(sa, byte);
-            let nb = dfa_b.next_state(sb, byte);
-            if dfa_a.is_dead_state(na) || dfa_b.is_dead_state(nb) {
-                continue;
-            }
-            if visited.insert((na, nb)) {
-                queue.push_back((na, nb));
-            }
-        }
-    }
-    Ok(false)
 }
 
 #[cfg(test)]
@@ -287,46 +217,37 @@ mod tests {
             .any(|e| matches!(e.kind, ValidateErrorKind::RegexCompileError { .. })));
     }
 
+    /// 7b: 不再检测 regex 与静态 list key 字面碰撞 — 运行期顺序 (list → regex) 决定。
     #[test]
-    fn regex_matches_static() {
+    fn regex_overlapping_static_no_longer_errors() {
         let mut r = Resolve::default();
         r.0.insert("x([0-9]+)x".into(), by_name("p"));
         let list = List {
             entries: vec![("x100x".into(), ListEntry::Static(by_name("static_p")))],
         };
-        let errs = run(r, Some(list));
-        assert!(errs
-            .iter()
-            .any(|e| matches!(e.kind, ValidateErrorKind::RegexMatchesStatic(_, _))));
+        // 7b: 不再报错; runtime 解析顺序保证作者意图
+        assert!(run(r, Some(list)).is_empty());
     }
 
+    /// 7b: 不再检测 regex vs regex 交集 — 实测 NFA 误判 + `.*` 转发场景合法重叠。
     #[test]
-    fn regex_not_matching_static_ok() {
+    fn regex_overlapping_pair_no_longer_errors() {
         let mut r = Resolve::default();
-        r.0.insert("x([0-9]+)x".into(), by_name("p"));
+        r.0.insert("a.*".into(), by_name("p1"));
+        r.0.insert("ab.*".into(), by_name("p2"));
+        // 7b: 不再报错
+        assert!(run(r, None).is_empty());
+    }
+
+    /// 7b: `.*` 转发模式 + 静态 list key 共存合法 (gallery_hide_router 模式)。
+    #[test]
+    fn wildcard_forward_with_static_list_ok() {
+        let mut r = Resolve::default();
+        r.0.insert(".*".into(), by_name("forward_target"));
         let list = List {
             entries: vec![("desc".into(), ListEntry::Static(by_name("desc_p")))],
         };
         assert!(run(r, Some(list)).is_empty());
-    }
-
-    #[test]
-    fn regex_pair_overlap_detected() {
-        let mut r = Resolve::default();
-        r.0.insert("a.*".into(), by_name("p1"));
-        r.0.insert("ab.*".into(), by_name("p2"));
-        let errs = run(r, None);
-        assert!(errs
-            .iter()
-            .any(|e| matches!(e.kind, ValidateErrorKind::RegexIntersection(_, _))));
-    }
-
-    #[test]
-    fn regex_pair_disjoint_ok() {
-        let mut r = Resolve::default();
-        r.0.insert("aaa".into(), by_name("p1"));
-        r.0.insert("bbb".into(), by_name("p2"));
-        assert!(run(r, None).is_empty());
     }
 
     #[test]
@@ -377,12 +298,18 @@ mod tests {
         let mut errs = Vec::new();
         validate_resolve(&reg, &mut errs);
         assert!(errs.is_empty());
+        let _ = Namespace(String::new()); // keep import
     }
 
+    /// 7b: pattern 含 `${properties.X}` 模板 → 加载期跳过编译 (实例化期再编译)
     #[test]
-    fn intersect_helper_basic() {
-        assert!(regexes_intersect("ab.*", "abc").unwrap());
-        assert!(!regexes_intersect("aaa", "bbb").unwrap());
-        assert!(regexes_intersect("x([0-9]+)x", "xxx").unwrap_or(false) == false);
+    fn instance_static_pattern_skipped_at_load() {
+        let mut r = Resolve::default();
+        r.0.insert("${properties.prefix}_[a-z]+".into(), by_name("p"));
+        // 不应报 RegexCompileError (因为根本没尝试编译)
+        let errs = run(r, None);
+        assert!(errs
+            .iter()
+            .all(|e| !matches!(e.kind, ValidateErrorKind::RegexCompileError { .. })));
     }
 }

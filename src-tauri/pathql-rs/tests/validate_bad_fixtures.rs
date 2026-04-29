@@ -326,66 +326,9 @@ fn invalid_regex_in_resolve() {
     );
 }
 
-#[test]
-fn regex_matches_static_list_key() {
-    let mut resolve = Resolve::default();
-    resolve.0.insert(
-        "x([0-9]+)x".into(),
-        ProviderInvocation::ByName(InvokeByName {
-            provider: ProviderName("p2".into()),
-            properties: None,
-            meta: None,
-        }),
-    );
-    let list = List {
-        entries: vec![(
-            "x100x".into(),
-            ListEntry::Static(ProviderInvocation::ByName(InvokeByName {
-                provider: ProviderName("p3".into()),
-                properties: None,
-                meta: None,
-            })),
-        )],
-    };
-    let mut d = base_def("p");
-    d.resolve = Some(resolve);
-    d.list = Some(list);
-    let errs = run_one(d);
-    assert_kind(
-        &errs,
-        |k| matches!(k, ValidateErrorKind::RegexMatchesStatic(_, _)),
-        "RegexMatchesStatic",
-    );
-}
-
-#[test]
-fn regex_pair_overlap_in_resolve() {
-    let mut resolve = Resolve::default();
-    resolve.0.insert(
-        "a.*".into(),
-        ProviderInvocation::ByName(InvokeByName {
-            provider: ProviderName("p2".into()),
-            properties: None,
-            meta: None,
-        }),
-    );
-    resolve.0.insert(
-        "ab.*".into(),
-        ProviderInvocation::ByName(InvokeByName {
-            provider: ProviderName("p3".into()),
-            properties: None,
-            meta: None,
-        }),
-    );
-    let mut d = base_def("p");
-    d.resolve = Some(resolve);
-    let errs = run_one(d);
-    assert_kind(
-        &errs,
-        |k| matches!(k, ValidateErrorKind::RegexIntersection(_, _)),
-        "RegexIntersection",
-    );
-}
+// 7b: regex_matches_static_list_key + regex_pair_overlap_in_resolve 测试整个删除。
+//      碰撞检测被去掉, 因为 `.*` 转发模式 + ${properties.X} instance-static key 都是
+//      合法重叠, 运行期解析顺序保证作者意图。
 
 #[test]
 fn capture_index_out_of_bounds() {

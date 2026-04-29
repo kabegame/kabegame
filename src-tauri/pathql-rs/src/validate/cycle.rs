@@ -83,6 +83,7 @@ fn dfs_delegate(
 }
 
 fn collect_delegate_targets(def: &ProviderDef) -> Vec<&ProviderName> {
+    use crate::ast::ProviderInvocation;
     let mut out: Vec<&ProviderName> = Vec::new();
     if let Some(Query::Delegate(d)) = &def.query {
         out.push(&d.delegate.provider);
@@ -91,6 +92,14 @@ fn collect_delegate_targets(def: &ProviderDef) -> Vec<&ProviderName> {
         for (_, entry) in &list.entries {
             if let ListEntry::Dynamic(DynamicListEntry::Delegate(d)) = entry {
                 out.push(&d.delegate.provider);
+            }
+        }
+    }
+    // 7b: resolve 表中的 ByDelegate (target.resolve 转发) 也是 delegate 边
+    if let Some(resolve) = &def.resolve {
+        for (_, inv) in resolve.0.iter() {
+            if let ProviderInvocation::ByDelegate(b) = inv {
+                out.push(&b.delegate.provider);
             }
         }
     }

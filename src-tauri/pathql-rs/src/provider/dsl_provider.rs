@@ -110,7 +110,9 @@ impl DslProvider {
     }
 
     /// 实例化一个 ProviderInvocation 为 Provider 实例。
-    /// 6e: ByDelegate variant 已删除; 仅 ByName + Empty。
+    /// 实例化 ProviderInvocation 为 Provider (静态 list 项 / resolve ByName / Empty 路径用)。
+    /// **不处理 ByDelegate** — ByDelegate 在 resolve() 内部 inline 处理 (需要 name 转发, 而本函数
+    /// 只接 captures, 不接 name)。Caller 应在调用前已 dispatch 出 ByDelegate.
     fn instantiate_invocation(
         &self,
         invocation: &ProviderInvocation,
@@ -128,7 +130,27 @@ impl DslProvider {
             ProviderInvocation::Empty(_) => {
                 Ok(Some(Arc::new(EmptyDslProvider) as Arc<dyn Provider>))
             }
+            ProviderInvocation::ByDelegate(_) => {
+                // 不可达: caller (resolve / materialize_static) 在到这之前应已 dispatch ByDelegate.
+                Err(EngineError::FactoryFailed(
+                    self.current_namespace().0.clone(),
+                    self.def.name.0.clone(),
+                    "instantiate_invocation does not handle ByDelegate; must be dispatched inline by caller (resolve forward / static-list rejection)".into(),
+                ))
+            }
         }
+    }
+
+    /// 7b: 把 list / resolve 的 key 模板按 self.properties 渲染为 instance-static 字面量。
+    /// - 不含 `${...}` 的纯字面 key 原样返回
+    /// - 含 `${properties.X}` 等 instance-static 模板的 key 用 render_template_to_string 替换
+    /// - 渲染失败 (引用未定义) 时返回原模板 (静默退化; 调用方按字面比较)
+    fn render_key_template(&self, key_template: &str) -> String {
+        if !key_template.contains("${") {
+            return key_template.to_string();
+        }
+        let tctx = self.base_template_context(&[]);
+        render_template_to_string(key_template, &tctx).unwrap_or_else(|_| key_template.to_string())
     }
 
     /// 实例化一个 ProviderCall (6e 起 delegate 字段使用)。返回 None 表示目标未注册。
@@ -337,6 +359,7 @@ impl DslProvider {
     }
 
     /// 把 ProviderInvocation 包成 ChildEntry (静态 list 项用)。
+    /// 7b: 拒绝 ByDelegate — list 静态项不支持转发语义 (只有 resolve 表里有意义)。
     fn materialize_static(
         &self,
         key: &str,
@@ -344,11 +367,22 @@ impl DslProvider {
         composed: &ProviderQuery,
         ctx: &ProviderContext,
     ) -> Result<Option<ChildEntry>, EngineError> {
+        if matches!(inv, ProviderInvocation::ByDelegate(_)) {
+            return Err(EngineError::FactoryFailed(
+                self.current_namespace().0.clone(),
+                self.def.name.0.clone(),
+                format!(
+                    "static list entry `{}` cannot use ByDelegate ({{delegate:...}}); only resolve table supports forwarding",
+                    key
+                ),
+            ));
+        }
         // 静态项无 capture; meta 在 self.properties 作用域下渲染
         let provider = self.instantiate_invocation(inv, &[], composed, ctx)?;
         let meta = match inv {
             ProviderInvocation::ByName(b) => self.eval_meta(&b.meta, &[])?,
             ProviderInvocation::Empty(b) => self.eval_meta(&b.meta, &[])?,
+            ProviderInvocation::ByDelegate(_) => unreachable!("rejected above"),
         };
         Ok(Some(ChildEntry {
             name: key.to_string(),
@@ -406,19 +440,23 @@ impl Provider for DslProvider {
             return Ok(Vec::new());
         };
         let mut out = Vec::new();
-        for (key, entry) in &list.entries {
+        for (key_template, entry) in &list.entries {
             match entry {
                 ListEntry::Static(invocation) => {
-                    if let Some(child) = self.materialize_static(key, invocation, composed, ctx)? {
+                    // 7b: 渲染 key 模板 (instance-static 形态会被替换为字面)
+                    let rendered_key = self.render_key_template(key_template);
+                    if let Some(child) =
+                        self.materialize_static(&rendered_key, invocation, composed, ctx)?
+                    {
                         out.push(child);
                     }
                 }
                 ListEntry::Dynamic(DynamicListEntry::Sql(e)) => {
-                    let mut children = self.list_dynamic_sql(key, e, composed, ctx)?;
+                    let mut children = self.list_dynamic_sql(key_template, e, composed, ctx)?;
                     out.append(&mut children);
                 }
                 ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => {
-                    let mut children = self.list_dynamic_delegate(key, e, composed, ctx)?;
+                    let mut children = self.list_dynamic_delegate(key_template, e, composed, ctx)?;
                     out.append(&mut children);
                 }
             }
@@ -467,7 +505,9 @@ impl Provider for DslProvider {
         }
         // 1. resolve.entries (regex)
         if let Some(resolve) = &self.def.resolve {
-            for (pattern, invocation) in &resolve.0 {
+            for (pattern_template, invocation) in &resolve.0 {
+                // 7b: 渲染 pattern 中的 ${properties.X} (instance-static)
+                let pattern = self.render_key_template(pattern_template);
                 let anchored = format!("^(?:{})$", pattern);
                 let re = match regex::Regex::new(&anchored) {
                     Ok(r) => r,
@@ -475,12 +515,28 @@ impl Provider for DslProvider {
                 };
                 if let Some(captures) = re.captures(name) {
                     if dbg {
-                        eprintln!("[pathql]   regex {:?} matched", pattern);
+                        eprintln!("[pathql]   regex {:?} (rendered={:?}) matched", pattern_template, pattern);
                     }
                     let cap_vec: Vec<String> = captures
                         .iter()
                         .map(|m| m.map(|x| x.as_str().to_string()).unwrap_or_default())
                         .collect();
+                    // 7b: ByDelegate 在此 inline 处理 — 调 target.resolve(name) 转发解析责任
+                    if let ProviderInvocation::ByDelegate(b) = invocation {
+                        if dbg {
+                            eprintln!(
+                                "[pathql]   regex matched ByDelegate; forwarding to {:?}.resolve({:?})",
+                                b.delegate.provider, name
+                            );
+                        }
+                        let target = match self.instantiate_call(&b.delegate, ctx).ok().flatten() {
+                            Some(t) => t,
+                            None => return None,
+                        };
+                        // target 的 contrib 借给本节点 (与路径自然下走对称)
+                        let next_composed = target.apply_query(composed.clone(), ctx);
+                        return target.resolve(name, &next_composed, ctx);
+                    }
                     return self
                         .instantiate_invocation(invocation, &cap_vec, composed, ctx)
                         .ok()
@@ -488,13 +544,17 @@ impl Provider for DslProvider {
                 }
             }
         }
-        // 2. 静态 list 字面
+        // 2. 静态 list 字面 (含 instance-static; key 模板按 properties 渲染后比较)
         if let Some(list) = &self.def.list {
-            for (key, entry) in &list.entries {
-                if key == name {
-                    if let ListEntry::Static(inv) = entry {
+            for (key_template, entry) in &list.entries {
+                if let ListEntry::Static(inv) = entry {
+                    let rendered_key = self.render_key_template(key_template);
+                    if rendered_key == name {
                         if dbg {
-                            eprintln!("[pathql]   static list key {:?} matched", key);
+                            eprintln!(
+                                "[pathql]   static list key {:?} (rendered={:?}) matched",
+                                key_template, rendered_key
+                            );
                         }
                         return self
                             .instantiate_invocation(inv, &[], composed, ctx)
