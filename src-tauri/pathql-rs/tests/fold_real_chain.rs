@@ -63,11 +63,11 @@ fn fold_gallery_page_chain() {
 
     // gallery_route.query: { from: "images", limit: 0 }
     fold_provider_query(&mut state, &r, "gallery_route");
-    // gallery_all_router.query: { delegate: "./x100x/1/" } — Delegate, skipped
+    // 6e/smoke: gallery_all_router.query 现在是 Contrib { order: [crawled_at asc], limit: 100, offset: 0 }
     fold_provider_query(&mut state, &r, "gallery_all_router");
     // gallery_paginate_router.query: { limit: 0 }
     fold_provider_query(&mut state, &r, "gallery_paginate_router");
-    // gallery_page_router.query: { delegate: "./__provider" } — Delegate, skipped
+    // gallery_page_router.query: { delegate: query_page_provider {ps,pn} } — Delegate, skipped (fold 不展开)
     fold_provider_query(&mut state, &r, "gallery_page_router");
     // query_page_provider.query: { offset: "${...} * (${...} - 1)", limit: "${properties.page_size}" }
     fold_provider_query(&mut state, &r, "query_page_provider");
@@ -85,22 +85,29 @@ fn fold_gallery_page_chain() {
         _ => panic!("expected templated limit, got {:?}", state.limit),
     }
 
-    // offset accumulated: only one term from query_page_provider
-    assert_eq!(state.offset_terms.len(), 1);
+    // offset accumulated: gallery_all_router (0) + query_page_provider (template). 共两项, 用 + 串接。
+    assert_eq!(state.offset_terms.len(), 2);
     match &state.offset_terms[0] {
+        NumberOrTemplate::Number(n) => assert_eq!(*n, 0.0),
+        _ => panic!("expected first offset term to be 0 (gallery_all_router)"),
+    }
+    match &state.offset_terms[1] {
         NumberOrTemplate::Template(t) => {
             assert!(t.0.contains("${properties.page_size}"));
             assert!(t.0.contains("${properties.page_num}"));
         }
-        _ => panic!("expected templated offset"),
+        _ => panic!("expected second offset term to be query_page_provider's template"),
     }
 
-    // no fields / joins / wheres / order accumulated
+    // order: gallery_all_router 贡献 images.crawled_at ASC
+    assert_eq!(state.order.entries.len(), 1);
+    assert_eq!(state.order.entries[0].0, "images.crawled_at");
+    assert!(state.order.global.is_none());
+
+    // no fields / joins / wheres accumulated
     assert!(state.fields.is_empty());
     assert!(state.joins.is_empty());
     assert!(state.wheres.is_empty());
-    assert!(state.order.entries.is_empty());
-    assert!(state.order.global.is_none());
 
     // no refs allocated
     assert_eq!(state.aliases.counter, 0);
@@ -108,23 +115,28 @@ fn fold_gallery_page_chain() {
 
 #[test]
 fn fold_skipping_root_and_delegates_only_contrib_applies() {
-    // Confirm that root_provider (no query) and delegate-only nodes never push into state.
+    // root_provider / gallery_page_router / vd_root_router / vd_zh_CN_root_router
+    // 都没有 Contrib query (root_provider/vd_*_router list-only; gallery_page_router 是 delegate),
+    // 所以这条链跑完只剩 gallery_all_router 的 Contrib (order + limit + offset)。
     let r = build_full_registry();
     let mut state = ProviderQuery::new();
 
     fold_provider_query(&mut state, &r, "root_provider");
-    fold_provider_query(&mut state, &r, "gallery_all_router"); // delegate
-    fold_provider_query(&mut state, &r, "gallery_page_router"); // delegate
+    fold_provider_query(&mut state, &r, "gallery_all_router"); // 6e: Contrib (order + limit + offset)
+    fold_provider_query(&mut state, &r, "gallery_page_router"); // delegate, skipped
     fold_provider_query(&mut state, &r, "vd_root_router");
     fold_provider_query(&mut state, &r, "vd_zh_CN_root_router");
 
-    // none of these contribute via Contrib → state stays empty
-    assert!(state.from.is_none());
+    // gallery_all_router contributes: from=None (gallery_route 未跑), order=[crawled_at asc], limit=100, offset=[0]
+    assert!(state.from.is_none()); // gallery_route 未参与本链
     assert!(state.fields.is_empty());
     assert!(state.joins.is_empty());
     assert!(state.wheres.is_empty());
-    assert!(state.offset_terms.is_empty());
-    assert!(state.limit.is_none());
+    assert_eq!(state.order.entries.len(), 1);
+    assert_eq!(state.order.entries[0].0, "images.crawled_at");
+    assert_eq!(state.offset_terms.len(), 1);
+    matches!(state.offset_terms[0], NumberOrTemplate::Number(n) if n == 0.0);
+    matches!(state.limit, Some(NumberOrTemplate::Number(n)) if n == 100.0);
 }
 
 #[test]
