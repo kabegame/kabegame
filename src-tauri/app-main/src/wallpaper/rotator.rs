@@ -1,6 +1,6 @@
 use super::manager::WallpaperController;
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::providers::provider_runtime;
+use kabegame_core::providers::{provider_runtime, provider_template_context};
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::{ImageInfo, Storage};
 use pathql_rs::ast::{NumberOrTemplate, OrderDirection, SqlExpr};
@@ -54,14 +54,15 @@ pub(crate) fn next_sequential_gallery_images(
         q
     };
 
+    let ctx = provider_template_context();
     if let Some(id) = current_id.filter(|s| !s.is_empty()) {
         let q = make_q(Some(id));
-        let out = storage.get_images_info_range_by_query(&q)?;
+        let out = storage.get_images_info_range_by_query(&q, &ctx)?;
         if !out.is_empty() {
             return Ok(out);
         }
     }
-    storage.get_images_info_range_by_query(&make_q(None))
+    storage.get_images_info_range_by_query(&make_q(None), &ctx)
 }
 
 /// 从 `gallery/all` 随机挑一页，返回该页的全部图片。
@@ -84,7 +85,7 @@ pub(crate) fn random_gallery_page_images() -> Result<Vec<ImageInfo>, String> {
     let idx = random_index(page_names.len());
     let path = format!("/gallery/all/x100x/{}", page_names[idx]);
     let resolved = rt.resolve(&path).map_err(|e| format!("resolve: {}", e))?;
-    Storage::global().get_images_info_range_by_query(&resolved.composed)
+    Storage::global().get_images_info_range_by_query(&resolved.composed, &provider_template_context())
 }
 
 // 轮播线程控制标志位

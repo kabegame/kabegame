@@ -153,9 +153,6 @@
         },
         "search": {
             "provider": "gallery_search_router"
-        },
-        "__sequential": {
-            "provider": "gallery_sequential_router"
         }
     }
 }
