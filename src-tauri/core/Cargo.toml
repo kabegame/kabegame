@@ -24,7 +24,7 @@ md5 = { workspace = true }
 regex = "1.11"
 rhai = { workspace = true }
 rhai-chrono = { version = "0.1.1", default-features = false, features = ["sync"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["bundled", "functions"] }
 scraper = "0.19"
 select = "0.6"
 serde = { workspace = true }
