@@ -6,17 +6,25 @@
     // 迁移; 6c → 6d 之间的 delegate 写法漏掉了这条 ORDER BY); limit=100 + offset=0 提供
     // 默认页 (/gallery/all 等价 /gallery/all/x100x/1/); 子路径 x100x/N 由 gallery_paginate_router
     // 重写 limit/offset, x500x/x1000x 同理。
-    "query": {
-        "order": [{"images.crawled_at": "asc"}],
-        "limit": 100,
-        "offset": 0
-    },
     "list": {
         // desc 指向 gallery_all_desc_router: 它持有自己的 resolve regex (xNx + 裸数字),
         // 让 /all/desc/<page> 链能继续走分页. 单纯指 sort_provider 不行 — sort_provider
         // 是叶子 (resolve 全 None), 路径在它后面没法继续.
-        "desc": { "provider": "gallery_all_desc_router" }
-        // x100x / x500x / x1000x 由下方 resolve 正则统一处理, 不单独列静态项以避免碰撞
+        "desc": { "provider": "gallery_all_desc_router" },
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": {
+                    "page_size": 100
+                }
+            },
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        }
     },
     // 任意 xNNNx (NNN ≥ 1) 命中 → gallery_paginate_router; page_size 取捕获组
     // 或裸数字 = 默认 100/page 的页号 (frontend galleryPath.ts: 当 pageSize===100 时省略 x{N}x 段; e.g. all/1)
@@ -26,13 +34,6 @@
             "properties": {
                 // page_size 类型为 number, 引擎自动从 ${capture[1]} 字符串转换
                 "page_size": "${capture[1]}"
-            }
-        },
-        "([1-9][0-9]*)": {
-            "provider": "gallery_page_router",
-            "properties": {
-                "page_size": 100,
-                "page_num": "${capture[1]}"
             }
         }
     },

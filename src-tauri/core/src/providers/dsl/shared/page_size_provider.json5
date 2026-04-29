@@ -10,8 +10,8 @@
         // 每行 = 一个页号; data_var "out" 把 SQL 列暴露给路径段
         "${out.page_num}": {
             "sql": "SELECT DISTINCT CAST(CEIL(CAST(ROW_NUMBER() OVER () AS REAL) / ${properties.page_size}) AS INTEGER) AS page_num FROM (${composed}) AS composed_result ORDER BY page_num",
-            "data_var": "out"
-            // 无 provider 字段: 子节点不挂 provider, 仅作路径段存在(被上层 paginate_router 通过 data 字段引用)
+            "data_var": "out",
+            // 无 provider 字段: 子节点不挂 provider, 仅作路径段存在(被上层 paginate_router 通过 mata 字段引用)
         }
     }
 }
