@@ -16,7 +16,7 @@ use fuser::{
 };
 
 use crate::emitter::GlobalEmitter;
-use crate::providers::ProviderRuntime;
+use crate::providers::provider_runtime;
 use crate::virtual_driver::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
 use crate::virtual_driver::virtual_drive_io::{VdFileMeta, VdReadHandle};
 
@@ -66,7 +66,7 @@ impl KabegameFuseFs {
     }
 
     fn semantics(&self) -> VfsSemantics<'_> {
-        VfsSemantics::new(ProviderRuntime::global())
+        VfsSemantics::new(provider_runtime())
     }
 
     /// 获取路径对应的 inode，如果不存在则分配新的
