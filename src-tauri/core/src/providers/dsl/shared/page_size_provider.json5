@@ -8,8 +8,10 @@
     "list": {
         // SQL 数据源: 计算上游 ${composed} 总行数, 按 page_size 切分, 输出 1..N 页号
         // 每行 = 一个页号; data_var "out" 把 SQL 列暴露给路径段
+        // 注: 用 ((rn-1)/ps)+1 整数算术等价于 CEIL(rn/ps), 不依赖 SQLite math extension
+        // (rusqlite 0.31 "bundled" 默认没开 SQLITE_ENABLE_MATH_FUNCTIONS)
         "${out.page_num}": {
-            "sql": "SELECT DISTINCT CAST(CEIL(CAST(ROW_NUMBER() OVER () AS REAL) / ${properties.page_size}) AS INTEGER) AS page_num FROM (${composed}) AS composed_result ORDER BY page_num",
+            "sql": "SELECT DISTINCT ((ROW_NUMBER() OVER () - 1) / ${properties.page_size}) + 1 AS page_num FROM (${composed}) AS composed_result ORDER BY page_num",
             "data_var": "out",
             // 无 provider 字段: 子节点不挂 provider, 仅作路径段存在(被上层 paginate_router 通过 mata 字段引用)
         }

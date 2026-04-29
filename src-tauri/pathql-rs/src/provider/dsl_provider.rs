@@ -566,16 +566,33 @@ impl Provider for DslProvider {
             // 3. 动态反查 (§5.2 第三步): 找哪个 dynamic 项渲染出 == name 的 key, 实例化对应 provider
             for (key_template, entry) in &list.entries {
                 if let ListEntry::Dynamic(dyn_entry) = entry {
-                    if let Ok(Some(p)) =
-                        self.reverse_lookup_dynamic(name, key_template, dyn_entry, composed, ctx)
+                    match self.reverse_lookup_dynamic(name, key_template, dyn_entry, composed, ctx)
                     {
-                        if dbg {
-                            eprintln!(
-                                "[pathql]   dynamic reverse-lookup matched (key_template={:?})",
-                                key_template
-                            );
+                        Ok(Some(p)) => {
+                            if dbg {
+                                eprintln!(
+                                    "[pathql]   dynamic reverse-lookup matched (key_template={:?})",
+                                    key_template
+                                );
+                            }
+                            return Some(p);
                         }
-                        return Some(p);
+                        Ok(None) => {
+                            if dbg {
+                                eprintln!(
+                                    "[pathql]   dynamic reverse-lookup miss (key_template={:?})",
+                                    key_template
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            if dbg {
+                                eprintln!(
+                                    "[pathql]   dynamic reverse-lookup ERROR (key_template={:?}): {}",
+                                    key_template, e
+                                );
+                            }
+                        }
                     }
                 }
             }

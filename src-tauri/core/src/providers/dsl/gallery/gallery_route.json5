@@ -2,12 +2,67 @@
     "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "gallery_route",
+    "properties": {
+        // todo: 改成全局变量，可通过 global.xxx 访问
+        "fav_ai_id": {
+            "type": "string",
+            "default": "00000000-0000-0000-0000-000000000001",
+            "optional": true
+        },
+        "hidden_ai_id": {
+            "type": "string",
+            "default": "00000000-0000-0000-0000-000000000000",
+            "optional": true
+        }
+    },
     "query": {
+        "fields": [
+            {
+                "sql": "CAST(images.id AS TEXT)",
+                "as": "id"
+            }, 
+            { "sql": "images.url" }, 
+            { "sql": "images.local_path" }, 
+            { "sql": "images.plugin_id" },
+            { "sql": "images.task_id" },
+            { "sql": "images.crawled_at" },
+            { "sql": "images.metadata_id" },
+            { 
+                "sql": "COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path)",
+                "as": "thumbnail_path"
+            },
+            { "sql": "images.hash" },
+            { 
+                "sql": "CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END",
+                "as": "is_favorite"
+            },
+            {
+                "sql": "CASE WHEN hid_ai.image_id IS NOT NULL THEN 1 ELSE 0 END",
+                "as": "is_hidden"
+            },
+            { "sql": "images.width" },
+            { "sql": "images.height" },
+            { "sql": "images.display_name" },
+            {
+                "sql": "COALESCE(images.type, 'image')",
+                "as": "media_type"
+            },
+            { "sql": "images.last_set_wallpaper_at" },
+            { "sql": "images.size" }
+        ],
         "order": [{"images.crawled_at": "asc"}],
-        // 基础 FROM (cascading-replace; 下游可重声明覆盖)
-        "from": "images",
-        // 根节点不直接列图片
-        "limit": 0
+        // 因为total是从这里来的，所以不组织list images，但会卡死
+        "join": [{
+            "kind": "LEFT",
+            "table": "album_images",
+            "as": "fav_ai",
+            "on": "images.id = fav_ai.image_id and fav_ai.album_id = ${properties.fav_ai_id}",
+        }, {
+            "kind": "LEFT",  
+            "table": "album_images",
+            "as": "hid_ai",
+            "on": "images.id = hid_ai.image_id and hid_ai.album_id = ${properties.hidden_ai_id}",
+        }]
     },
     "list": {
         // 注: list key 是前端 URL 段; 同时接受单数 / 复数两种写法 (frontend 各处历史不一致,
