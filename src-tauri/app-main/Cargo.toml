@@ -18,6 +18,7 @@ serde = {workspace = true}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
 kabegame-i18n = { workspace = true }
+pathql-rs = { workspace = true }
 dirs = "5.0"
 tokio = {workspace = true}
 url = "2"

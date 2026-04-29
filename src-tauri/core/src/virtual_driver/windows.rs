@@ -136,8 +136,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 }
                 let parent_path = &path[..path.len().saturating_sub(1)];
                 let child_name = path.last().map(|s| s.as_str()).unwrap_or("");
-                let rt = crate::providers::ProviderRuntime::global();
-                let sem = VfsSemantics::new(&*rt);
+                let rt = crate::providers::provider_runtime();
+                let sem = VfsSemantics::new(rt);
                 if sem
                     .commit_delete_child_at(parent_path, child_name)
                     .ok()
@@ -171,8 +171,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             create_disposition,
         );
         let segs = parse_segments(file_name);
-        let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(&*rt);
+        let rt = crate::providers::provider_runtime();
+        let sem = VfsSemantics::new(rt);
 
         // 3 = OPEN_EXISTING；其他均视为“创建类操作”。
         // 默认只读：只有 provider 覆写允许的场景才放行（目前：画册根目录 mkdir）。
@@ -279,8 +279,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                     FILE_ATTRIBUTE_DIRECTORY
                 };
                 let segments = VfsSemantics::path_to_segments(path);
-                let rt = crate::providers::ProviderRuntime::global();
-                let sem = VfsSemantics::new(&*rt);
+                let rt = crate::providers::provider_runtime();
+                let sem = VfsSemantics::new(rt);
 
                 // 任务目录：修改时间 = end_time
                 if segments.len() == 2
@@ -370,8 +370,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
     ) -> OperationResult<()> {
         match context {
             FsItem::Directory { path, .. } => {
-                let rt = crate::providers::ProviderRuntime::global();
-                let sem = VfsSemantics::new(&*rt);
+                let rt = crate::providers::provider_runtime();
+                let sem = VfsSemantics::new(rt);
                 let entries = sem.read_dir(path).map_err(Self::map_vfs_error)?;
                 for entry in entries {
                     let (attributes, file_size, created, accessed, modified, file_name) =
@@ -423,8 +423,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         if offset < 0 {
             return Err(STATUS_INVALID_PARAMETER);
         }
-        let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(&*rt);
+        let rt = crate::providers::provider_runtime();
+        let sem = VfsSemantics::new(rt);
         let n = sem
             .read_file(read_handle, offset as u64, buffer)
             .map_err(Self::map_vfs_error)?;

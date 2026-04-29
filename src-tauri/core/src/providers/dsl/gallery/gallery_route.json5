@@ -9,41 +9,53 @@
         "limit": 0
     },
     "list": {
-        // next path -> provider name mapping
+        // 注: list key 是前端 URL 段; 同时接受单数 / 复数两种写法 (frontend 各处历史不一致,
+        // galleryPath.ts 用 plugin/date, albumPath.ts 用 album, 等等)。provider 注册名是
+        // 复数 (kabegame.gallery_*_router) — runtime 内部, 前端不见。
         "all": {
             "provider": "gallery_all_router"
         },
         "wallpaper-order": {
             "provider": "gallery_wallpaper_order_router"
         },
-        // rename plugin_group to plugins
+        "plugin": {
+            "provider": "gallery_plugins_router"
+        },
         "plugins": {
             "provider": "gallery_plugins_router"
         },
-        // same over
+        "task": {
+            "provider": "gallery_tasks_router"
+        },
         "tasks": {
             "provider": "gallery_tasks_router"
         },
-        // same over
         "surf": {
+            "provider": "gallery_surfs_router"
+        },
+        "surfs": {
             "provider": "gallery_surfs_router"
         },
         "media-type": {
             "provider": "gallery_media_type_router"
         },
-        // same over
+        "date": {
+            "provider": "gallery_dates_router"
+        },
         "dates": {
             "provider": "gallery_dates_router"
+        },
+        "album": {
+            "provider": "gallery_albums_router"
         },
         "albums": {
             "provider": "gallery_albums_router"
         },
-        // same over
         "hide": {
             "provider": "gallery_hide_router"
         },
         "search": {
-            "provider": "gallery_search_router" 
+            "provider": "gallery_search_router"
         }
     }
 }

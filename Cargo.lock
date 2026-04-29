@@ -2976,6 +2976,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "pathql-rs",
  "reqwest 0.11.27",
  "rmcp",
  "serde",
