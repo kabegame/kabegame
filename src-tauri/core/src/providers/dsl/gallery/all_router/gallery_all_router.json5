@@ -1,5 +1,5 @@
 {
-    "$schema": "../schema.json5",
+    "$schema": "../../schema.json5",
     "namespace": "kabegame",
     "name": "gallery_all_router",
     // 6e 起 Contrib 形态: 贡献 images.crawled_at ASC 基础排序 (从 v4.0.1 GalleryAllProvider

@@ -74,10 +74,6 @@ impl ProviderQuery {
         ctx: &TemplateContext,
         dialect: SqlDialect,
     ) -> Result<(), BuildError> {
-        if self.fields.is_empty() {
-            sql.push('*');
-            return Ok(());
-        }
         for (i, f) in self.fields.iter().enumerate() {
             if i > 0 {
                 sql.push_str(", ");
