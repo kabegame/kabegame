@@ -94,6 +94,7 @@ pub fn validate_meta(
 fn invocation_meta(inv: &ProviderInvocation) -> Option<&serde_json::Value> {
     match inv {
         ProviderInvocation::ByName(b) => b.meta.as_ref(),
+        ProviderInvocation::ByDelegate(b) => b.meta.as_ref(),
         ProviderInvocation::Empty(b) => b.meta.as_ref(),
     }
 }

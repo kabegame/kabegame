@@ -65,8 +65,18 @@ fn collect_refs(def: &ProviderDef) -> Vec<(String, ProviderName)> {
 
     if let Some(resolve) = &def.resolve {
         for (k, inv) in &resolve.0 {
-            if let ProviderInvocation::ByName(b) = inv {
-                refs.push((format!("resolve[`{}`].provider", k), b.provider.clone()));
+            match inv {
+                ProviderInvocation::ByName(b) => {
+                    refs.push((format!("resolve[`{}`].provider", k), b.provider.clone()));
+                }
+                // 7b: ByDelegate 也是跨 provider 引用
+                ProviderInvocation::ByDelegate(b) => {
+                    refs.push((
+                        format!("resolve[`{}`].delegate.provider", k),
+                        b.delegate.provider.clone(),
+                    ));
+                }
+                ProviderInvocation::Empty(_) => {}
             }
         }
     }

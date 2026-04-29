@@ -61,9 +61,11 @@ fn fold_gallery_page_chain() {
     let r = build_full_registry();
     let mut state = ProviderQuery::new();
 
-    // gallery_route.query: { from: "images", limit: 0 }
+    // 7b: gallery_route.query 现在含 order=[crawled_at asc] (从 gallery_all_router 上移),
+    // from=images, limit=0
     fold_provider_query(&mut state, &r, "gallery_route");
-    // 6e/smoke: gallery_all_router.query 现在是 Contrib { order: [crawled_at asc], limit: 100, offset: 0 }
+    // 7b: gallery_all_router 移除了 query 字段 (从 Contrib 改为纯 router; order/limit/offset 上移到
+    // gallery_route, 分页通过 list 动态项委托 page_size_provider + gallery_page_router)
     fold_provider_query(&mut state, &r, "gallery_all_router");
     // gallery_paginate_router.query: { limit: 0 }
     fold_provider_query(&mut state, &r, "gallery_paginate_router");
@@ -85,21 +87,17 @@ fn fold_gallery_page_chain() {
         _ => panic!("expected templated limit, got {:?}", state.limit),
     }
 
-    // offset accumulated: gallery_all_router (0) + query_page_provider (template). 共两项, 用 + 串接。
-    assert_eq!(state.offset_terms.len(), 2);
+    // 7b: offset 仅一项 — query_page_provider 的 template (gallery_all_router 不再贡献 offset)
+    assert_eq!(state.offset_terms.len(), 1);
     match &state.offset_terms[0] {
-        NumberOrTemplate::Number(n) => assert_eq!(*n, 0.0),
-        _ => panic!("expected first offset term to be 0 (gallery_all_router)"),
-    }
-    match &state.offset_terms[1] {
         NumberOrTemplate::Template(t) => {
             assert!(t.0.contains("${properties.page_size}"));
             assert!(t.0.contains("${properties.page_num}"));
         }
-        _ => panic!("expected second offset term to be query_page_provider's template"),
+        _ => panic!("expected query_page_provider's offset template"),
     }
 
-    // order: gallery_all_router 贡献 images.crawled_at ASC
+    // 7b: order 来自 gallery_route (上移后)
     assert_eq!(state.order.entries.len(), 1);
     assert_eq!(state.order.entries[0].0, "images.crawled_at");
     assert!(state.order.global.is_none());
@@ -115,28 +113,23 @@ fn fold_gallery_page_chain() {
 
 #[test]
 fn fold_skipping_root_and_delegates_only_contrib_applies() {
-    // root_provider / gallery_page_router / vd_root_router / vd_zh_CN_root_router
-    // 都没有 Contrib query (root_provider/vd_*_router list-only; gallery_page_router 是 delegate),
-    // 所以这条链跑完只剩 gallery_all_router 的 Contrib (order + limit + offset)。
+    // 7b: gallery_all_router 已移除 query 字段, 这条链下没有任何 ContribQuery 产生贡献。
     let r = build_full_registry();
     let mut state = ProviderQuery::new();
 
     fold_provider_query(&mut state, &r, "root_provider");
-    fold_provider_query(&mut state, &r, "gallery_all_router"); // 6e: Contrib (order + limit + offset)
+    fold_provider_query(&mut state, &r, "gallery_all_router"); // 7b: 无 query, 无贡献
     fold_provider_query(&mut state, &r, "gallery_page_router"); // delegate, skipped
     fold_provider_query(&mut state, &r, "vd_root_router");
     fold_provider_query(&mut state, &r, "vd_zh_CN_root_router");
 
-    // gallery_all_router contributes: from=None (gallery_route 未跑), order=[crawled_at asc], limit=100, offset=[0]
-    assert!(state.from.is_none()); // gallery_route 未参与本链
+    assert!(state.from.is_none());
     assert!(state.fields.is_empty());
     assert!(state.joins.is_empty());
     assert!(state.wheres.is_empty());
-    assert_eq!(state.order.entries.len(), 1);
-    assert_eq!(state.order.entries[0].0, "images.crawled_at");
-    assert_eq!(state.offset_terms.len(), 1);
-    matches!(state.offset_terms[0], NumberOrTemplate::Number(n) if n == 0.0);
-    matches!(state.limit, Some(NumberOrTemplate::Number(n)) if n == 100.0);
+    assert!(state.order.entries.is_empty());
+    assert!(state.offset_terms.is_empty());
+    assert!(state.limit.is_none());
 }
 
 #[test]
@@ -146,4 +139,7 @@ fn fold_gallery_route_alone_sets_from_and_limit_zero() {
     fold_provider_query(&mut state, &r, "gallery_route");
     assert_eq!(state.from, Some(SqlExpr("images".into())));
     assert_eq!(state.limit, Some(NumberOrTemplate::Number(0.0)));
+    // 7b: gallery_route 现也贡献 order
+    assert_eq!(state.order.entries.len(), 1);
+    assert_eq!(state.order.entries[0].0, "images.crawled_at");
 }

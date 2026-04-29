@@ -74,11 +74,13 @@ impl<'de> Deserialize<'de> for List {
                 let mut entries = Vec::new();
                 while let Some(key) = map.next_key::<String>()? {
                     let value: serde_json::Value = map.next_value()?;
-                    let entry = if key_is_dynamic(&key) {
+                    let entry = if key_uses_dynamic_var(&key) {
                         ListEntry::Dynamic(serde_json::from_value(value).map_err(|e| {
                             de::Error::custom(format!("dynamic entry `{}`: {}", key, e))
                         })?)
                     } else {
+                        // Static 或 InstanceStatic (含 ${properties.X}); 二者 value 类型相同
+                        // (ProviderInvocation), DslProvider list/resolve 期再做 key 模板渲染。
                         ListEntry::Static(serde_json::from_value(value).map_err(|e| {
                             de::Error::custom(format!("static entry `{}`: {}", key, e))
                         })?)
@@ -106,24 +108,51 @@ impl Serialize for List {
     }
 }
 
-/// key 含 `${<ident>.<field>...}` → dynamic
-pub(crate) fn key_is_dynamic(key: &str) -> bool {
-    let bytes = key.as_bytes();
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'$' && bytes[i + 1] == b'{' {
-            if let Some(end) = key[i + 2..].find('}') {
-                let inner = &key[i + 2..i + 2 + end];
-                if inner.contains('.') {
+/// 判断 list key 是否需要 per-row / per-child 动态渲染。
+///
+/// **返回 true (Dynamic, 走 ListEntry::Dynamic)** 仅当 key 中包含至少一个
+/// 非保留 namespace 的路径变量 (`${X.Y}` 且 X 既不是 `properties` 也不是 `capture`)。
+/// 这样的 key 形态约束 X 必须等于 SQL 行 data_var 或 delegate child_var 之一。
+///
+/// **返回 false (Static / InstanceStatic, 走 ListEntry::Static)** 当 key 是:
+/// - 纯字面量 (无 `${...}`)
+/// - 仅含 `${X}` (无点号; 当字面字符串处理)
+/// - 仅含 `${properties.X}` / `${capture[N]}` 等 instance-static 引用
+///
+/// 后者称为 "instance-static" — DSL 加载期 key 字面值未定 (取决于实例化时的
+/// properties), 但与 dynamic per-row 模式语义不同, 仍走静态 ListEntry::Static
+/// (value 是 ProviderInvocation), 实际 key 字面在 DslProvider list/resolve
+/// 调用时按 self.properties 渲染。
+pub(crate) fn key_uses_dynamic_var(key: &str) -> bool {
+    use crate::template::{parse, Segment, VarRef};
+    let Ok(ast) = parse(key) else {
+        return false;
+    };
+    for seg in ast.segments {
+        if let Segment::Var(v) = seg {
+            let ns_opt = match &v {
+                VarRef::Bare { ns } => Some(ns.as_str()),
+                VarRef::Path { ns, .. } => Some(ns.as_str()),
+                VarRef::Index { ns, .. } => Some(ns.as_str()),
+                VarRef::Method { .. } => None,
+            };
+            if let Some(ns) = ns_opt {
+                // 非保留 ns + 含路径段 → dynamic
+                let is_reserved = matches!(ns, "properties" | "capture" | "composed" | "_");
+                let has_path = matches!(&v, VarRef::Path { path, .. } if !path.is_empty());
+                if !is_reserved && has_path {
                     return true;
                 }
-                i += 2 + end + 1;
-                continue;
             }
         }
-        i += 1;
     }
     false
+}
+
+/// 旧名兼容 alias (内部模块仍可能引用).
+#[allow(dead_code)]
+pub(crate) fn key_is_dynamic(key: &str) -> bool {
+    key_uses_dynamic_var(key)
 }
 
 #[cfg(test)]
@@ -131,14 +160,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn key_is_dynamic_cases() {
-        assert!(!key_is_dynamic("a"));
-        assert!(!key_is_dynamic("${x}"));
-        assert!(key_is_dynamic("${x.y}"));
-        assert!(key_is_dynamic("prefix-${x.y}-suffix"));
-        assert!(key_is_dynamic("${a.b}-${c.d}"));
-        assert!(!key_is_dynamic("${a}-${b}"));
-        assert!(!key_is_dynamic("plain text"));
+    fn key_uses_dynamic_var_cases() {
+        // 静态字面
+        assert!(!key_uses_dynamic_var("a"));
+        assert!(!key_uses_dynamic_var("plain text"));
+        assert!(!key_uses_dynamic_var("${x}")); // 无路径段, 当字面
+        assert!(!key_uses_dynamic_var("${a}-${b}"));
+
+        // 7b: instance-static (${properties.X}) 不算 dynamic
+        assert!(!key_uses_dynamic_var("${properties.lang}"));
+        assert!(!key_uses_dynamic_var("prefix-${properties.x}-suffix"));
+        assert!(!key_uses_dynamic_var("${properties.a}-${properties.b}"));
+        assert!(!key_uses_dynamic_var("${capture[1]}_x"));
+
+        // dynamic (data_var / child_var)
+        assert!(key_uses_dynamic_var("${x.y}"));
+        assert!(key_uses_dynamic_var("prefix-${x.y}-suffix"));
+        assert!(key_uses_dynamic_var("${a.b}-${c.d}"));
+        assert!(key_uses_dynamic_var("${row.id}"));
+        assert!(key_uses_dynamic_var("${child.meta.foo}"));
+
+        // 混: properties + data_var → 仍 dynamic (因含 data_var)
+        assert!(key_uses_dynamic_var("${properties.x}-${row.id}"));
+    }
+
+    #[test]
+    fn instance_static_key_routes_to_static_entry() {
+        // ${properties.X} 形态 key 仍归 ListEntry::Static (value=ProviderInvocation)
+        let v: List = serde_json::from_str(
+            r#"{"${properties.lang}":{"provider":"target"}}"#,
+        )
+        .unwrap();
+        assert_eq!(v.entries.len(), 1);
+        match &v.entries[0].1 {
+            ListEntry::Static(ProviderInvocation::ByName(b)) => {
+                assert_eq!(b.provider, ProviderName("target".into()));
+            }
+            _ => panic!("expected ListEntry::Static (instance-static keys go through Static)"),
+        }
     }
 
     #[test]

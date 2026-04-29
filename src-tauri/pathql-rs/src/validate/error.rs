@@ -54,10 +54,6 @@ pub enum ValidateErrorKind {
     TableNotWhitelisted(String),
     #[error("regex compile error in `{pattern}`: {msg}")]
     RegexCompileError { pattern: String, msg: String },
-    #[error("regex `{0}` matches static list key `{1}`")]
-    RegexMatchesStatic(String, String),
-    #[error("regex `{0}` and regex `{1}` overlap (intersection non-empty)")]
-    RegexIntersection(String, String),
     #[error("${{capture[{idx}]}} out of bounds (regex `{pattern}` has {groups} group(s))")]
     CaptureIndexOutOfBounds {
         pattern: String,
