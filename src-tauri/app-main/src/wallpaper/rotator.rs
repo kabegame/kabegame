@@ -156,6 +156,15 @@ pub(crate) fn load_random_image_for_wallpaper(
     Ok(None)
 }
 
+/// 模式切换 / 兜底场景: 从画廊里随机取一张可作壁纸的图, 返回 local_path。
+/// `commands::wallpaper::set_wallpaper_mode` 在原壁纸文件不存在时用作 fallback。
+pub fn pick_random_gallery_wallpaper(wallpaper_mode: &str) -> Option<String> {
+    load_random_image_for_wallpaper(&RotationSource::Gallery, wallpaper_mode)
+        .ok()
+        .flatten()
+        .map(|img| img.local_path)
+}
+
 // 轮播线程控制标志位
 const FLAG_ROTATE: u8 = 1; // 立即切换壁纸
 const FLAG_RESET: u8 = 2; // 重置定时器

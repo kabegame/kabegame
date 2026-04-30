@@ -1,7 +1,7 @@
 // 壁纸相关命令和函数
 
 use crate::wallpaper::manager::WallpaperController;
-use crate::wallpaper::rotator::{random_gallery_page_images, random_index};
+use crate::wallpaper::rotator::pick_random_gallery_wallpaper;
 use crate::wallpaper::WallpaperRotator;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::settings::Settings;
@@ -361,7 +361,6 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
 
     let settings = Settings::global();
     let rotation_enabled = settings.get_wallpaper_rotation_enabled();
-    let rotation_mode = settings.get_wallpaper_rotation_mode();
     let cur_style = settings.get_wallpaper_rotation_style();
     let cur_transition = settings.get_wallpaper_rotation_transition();
 
@@ -387,34 +386,14 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
 
     let resolved_wallpaper = if Path::new(&current_cleaned).exists() {
         current_cleaned.clone()
+    } else if let Some(p) = pick_random_gallery_wallpaper(&mode) {
+        eprintln!(
+            "[WARN] set_wallpaper_mode: 当前壁纸文件不存在，将从画廊选择兜底图片: {} (原路径: {})",
+            p, current_wallpaper
+        );
+        p
     } else {
-        let picked_from_gallery: Option<String> = async {
-            let images_v = random_gallery_page_images().ok()?;
-            let existing: Vec<String> = images_v
-                .into_iter()
-                .filter(|it| Path::new(&it.local_path).exists())
-                .map(|it| it.local_path)
-                .collect();
-            if existing.is_empty() {
-                None
-            } else {
-                match rotation_mode.as_str() {
-                    "sequential" => Some(existing[0].clone()),
-                    _ => Some(existing[random_index(existing.len())].clone()),
-                }
-            }
-        }
-        .await;
-
-        if let Some(p) = picked_from_gallery {
-            eprintln!(
-                "[WARN] set_wallpaper_mode: 当前壁纸文件不存在，将从画廊选择兜底图片: {} (原路径: {})",
-                p, current_wallpaper
-            );
-            p
-        } else {
-            current_cleaned.clone()
-        }
+        current_cleaned.clone()
     };
     let (style_to_apply, transition_to_apply) = match settings
         .swap_style_transition_for_mode_switch(&old_mode, &mode)
