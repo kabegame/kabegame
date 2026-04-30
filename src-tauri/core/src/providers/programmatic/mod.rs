@@ -37,12 +37,14 @@ pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_r
     //     Ok(Arc::new(gallery_filters::GalleryPluginProvider::from_props(props)?)
     //         as Arc<dyn Provider>)
     // })?;
-    register(reg, "gallery_tasks_router", |_| {
-        Ok(Arc::new(gallery_filters::GalleryTasksRouter) as Arc<dyn Provider>)
-    })?;
-    register(reg, "gallery_task_provider", |props| {
-        Ok(Arc::new(gallery_filters::GalleryTaskProvider::from_props(props)?) as Arc<dyn Provider>)
-    })?;
+    // 7c S3: gallery_tasks_router / gallery_task_provider 由 DSL
+    //        (dsl/gallery/tasks/*.json5) 接管。
+    // register(reg, "gallery_tasks_router", |_| {
+    //     Ok(Arc::new(gallery_filters::GalleryTasksRouter) as Arc<dyn Provider>)
+    // })?;
+    // register(reg, "gallery_task_provider", |props| {
+    //     Ok(Arc::new(gallery_filters::GalleryTaskProvider::from_props(props)?) as Arc<dyn Provider>)
+    // })?;
     register(reg, "gallery_surfs_router", |_| {
         Ok(Arc::new(gallery_filters::GallerySurfsRouter) as Arc<dyn Provider>)
     })?;
