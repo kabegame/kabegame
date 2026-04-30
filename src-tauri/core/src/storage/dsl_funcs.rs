@@ -27,7 +27,24 @@ pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::
     register_get_album(conn)?;
     register_get_task(conn)?;
     register_get_surf_record(conn)?;
+    register_crawled_at_seconds(conn)?;
     Ok(())
+}
+
+/// `crawled_at_seconds(t)` — 把 `images.crawled_at` (可能 ms 或 s 时间戳) 规整为秒。
+/// 阈值 253402300799 (= 9999-12-31 23:59:59 unix epoch seconds): 大于此值视作毫秒
+/// (除以 1000), 否则原样。用于替换全工程 4 处重复的 `CASE WHEN crawled_at > 253402300799 ...`
+/// 表达式 (date 函数 / time filter / 等)。
+fn register_crawled_at_seconds(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.create_scalar_function(
+        "crawled_at_seconds",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| -> rusqlite::Result<i64> {
+            let v: i64 = ctx.get(0)?;
+            Ok(if v > 253_402_300_799 { v / 1000 } else { v })
+        },
+    )
 }
 
 fn register_get_surf_record(conn: &Connection) -> Result<(), rusqlite::Error> {

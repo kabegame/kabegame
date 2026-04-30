@@ -619,8 +619,8 @@ impl GalleryDateRangeEntryProvider {
 
 impl Provider for GalleryDateRangeEntryProvider {
     fn apply_query(&self, current: ProviderQuery, _ctx: &ProviderContext) -> ProviderQuery {
-        let lo = "date(CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') >= date(?)";
-        let hi = "date(CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') <= date(?)";
+        let lo = "date(crawled_at_seconds(images.crawled_at), 'unixepoch') >= date(?)";
+        let hi = "date(crawled_at_seconds(images.crawled_at), 'unixepoch') <= date(?)";
         let mut q = current
             .with_where_raw(lo, &[TemplateValue::Text(self.start.clone())])
             .with_where_raw(hi, &[TemplateValue::Text(self.end.clone())]);

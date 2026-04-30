@@ -97,7 +97,7 @@ impl GalleryDateYearProvider {
 
 impl Provider for GalleryDateYearProvider {
     fn apply_query(&self, current: ProviderQuery, _ctx: &ProviderContext) -> ProviderQuery {
-        let sql = "strftime('%Y', CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') = ?";
+        let sql = "strftime('%Y', crawled_at_seconds(images.crawled_at), 'unixepoch') = ?";
         let mut q = current.with_where_raw(sql, &[TemplateValue::Text(self.year.clone())]);
         q.limit = None;
         q
@@ -171,7 +171,7 @@ impl GalleryDateMonthProvider {
 
 impl Provider for GalleryDateMonthProvider {
     fn apply_query(&self, current: ProviderQuery, _ctx: &ProviderContext) -> ProviderQuery {
-        let sql = "strftime('%Y-%m', CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') = ?";
+        let sql = "strftime('%Y-%m', crawled_at_seconds(images.crawled_at), 'unixepoch') = ?";
         let mut q = current.with_where_raw(sql, &[TemplateValue::Text(self.year_month.clone())]);
         q.limit = None;
         q
@@ -240,7 +240,7 @@ impl GalleryDateDayProvider {
 
 impl Provider for GalleryDateDayProvider {
     fn apply_query(&self, current: ProviderQuery, _ctx: &ProviderContext) -> ProviderQuery {
-        let sql = "strftime('%Y-%m-%d', CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') = ?";
+        let sql = "strftime('%Y-%m-%d', crawled_at_seconds(images.crawled_at), 'unixepoch') = ?";
         let mut q = current.with_where_raw(sql, &[TemplateValue::Text(self.ymd.clone())]);
         q.limit = None;
         q
