@@ -33,15 +33,13 @@ pub mod wallpaper_engine_export;
 /// 6b 起：VfsSemantics 用 ProviderQuery + Storage 替代旧 Provider::list_images /
 /// get_meta-typed-enum；部分动态目录列举功能临时为 stub 状态，
 /// 待 Phase 6c SqlExecutor 接入后完整恢复。
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "virtual-driver")]
 pub mod virtual_driver;
 
-const BUILD_MODE: &str = env!("KABEGAME_BUILD_MODE"); // injected by build.rs
-
 pub fn is_standard_mode() -> bool {
-    BUILD_MODE == "standard"
+    cfg!(feature = "virtual-driver")
 }
 
 pub fn is_light_mode() -> bool {
-    BUILD_MODE == "light"
+    !cfg!(feature = "virtual-driver")
 }

@@ -5,9 +5,9 @@ use kabegame_core::storage::image_events::{
     add_images_to_album_with_event, remove_images_from_album_with_event,
 };
 use kabegame_core::storage::Storage;
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use tauri::AppHandle;
 
@@ -36,7 +36,7 @@ pub async fn delete_album(_app: AppHandle, album_id: String) -> Result<(), Strin
             Settings::global().set_wallpaper_rotation_album_id(None)?;
         }
     }
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "standard")]
     VirtualDriveService::global().bump_albums();
     Ok(())
 }
@@ -48,7 +48,7 @@ pub async fn rename_album(
     new_name: String,
 ) -> Result<(), String> {
     Storage::global().rename_album(&album_id, &new_name)?;
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "standard")]
     VirtualDriveService::global().bump_albums();
     Ok(())
 }
@@ -60,7 +60,7 @@ pub async fn move_album(
     new_parent_id: Option<String>,
 ) -> Result<(), String> {
     Storage::global().move_album(&album_id, new_parent_id.as_deref())?;
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "standard")]
     VirtualDriveService::global().bump_albums();
     Ok(())
 }
@@ -72,7 +72,7 @@ pub async fn add_images_to_album(
     image_ids: Vec<String>,
 ) -> Result<serde_json::Value, String> {
     let r = add_images_to_album_with_event(&album_id, &image_ids)?;
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "standard")]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
 
     Ok(serde_json::to_value(r).map_err(|e| e.to_string())?)
@@ -96,7 +96,7 @@ pub async fn add_task_images_to_album(
         .map_err(|e| e.to_string())?);
     }
     let r = add_images_to_album_with_event(&album_id, &image_ids)?;
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "standard")]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
 
     Ok(serde_json::to_value(r).map_err(|e| e.to_string())?)
@@ -109,7 +109,7 @@ pub async fn remove_images_from_album(
     image_ids: Vec<String>,
 ) -> Result<usize, String> {
     let removed = remove_images_from_album_with_event(&album_id, &image_ids)?;
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "standard")]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
 
     Ok(removed)

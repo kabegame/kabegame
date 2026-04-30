@@ -29,12 +29,12 @@ pub fn open_file_folder(file_path: String) -> Result<(), String> {
 /// 在资源管理器中打开虚拟盘内指定画册文件夹（含子画册路径，与 VD 目录结构一致）。
 #[tauri::command]
 pub async fn open_album_virtual_drive_folder(album_id: String) -> Result<(), String> {
-    #[cfg(any(kabegame_mode = "light", target_os = "android"))]
+    #[cfg(not(feature = "standard"))]
     {
         let _ = album_id;
         return Err("当前模式不支持虚拟盘".to_string());
     }
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "standard")]
     {
         use kabegame_core::settings::Settings;
         use kabegame_core::virtual_driver::album_folder_abs_path_for_explorer;

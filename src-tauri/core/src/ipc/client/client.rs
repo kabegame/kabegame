@@ -703,7 +703,7 @@ impl IpcClient {
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub async fn settings_get_album_drive_enabled(&self) -> Result<bool, String> {
         let v = self
             .request_data(IpcRequest::SettingsGetAlbumDriveEnabled)
@@ -711,7 +711,7 @@ impl IpcClient {
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub async fn settings_get_album_drive_mount_point(&self) -> Result<String, String> {
         let v = self
             .request_data(IpcRequest::SettingsGetAlbumDriveMountPoint)
@@ -786,13 +786,13 @@ impl IpcClient {
             .await
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub async fn settings_set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
         self.request_ok(IpcRequest::SettingsSetAlbumDriveEnabled { enabled })
             .await
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub async fn settings_set_album_drive_mount_point(
         &self,
         mount_point: String,
@@ -939,7 +939,7 @@ impl IpcClient {
     // ==================== Virtual Driver ====================
 
     /// 挂载虚拟盘
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub async fn vd_mount(&self) -> Result<(), String> {
         let resp = self.request_raw(IpcRequest::VdMount).await?;
         if !resp.ok {
@@ -949,7 +949,7 @@ impl IpcClient {
     }
 
     /// 卸载虚拟盘
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub async fn vd_unmount(&self) -> Result<(), String> {
         let resp = self.request_raw(IpcRequest::VdUnmount).await?;
         if !resp.ok {
@@ -959,7 +959,7 @@ impl IpcClient {
     }
 
     /// 获取虚拟盘状态
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub async fn vd_status(&self) -> Result<(bool, Option<String>), String> {
         let resp = self.request_raw(IpcRequest::VdStatus).await?;
         if !resp.ok {

@@ -127,10 +127,10 @@ pub enum SettingKey {
     /// 当前壁纸图片ID
     CurrentWallpaperImageId,
     /// 画册盘启用
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     AlbumDriveEnabled,
     /// 画册盘挂载点
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     AlbumDriveMountPoint,
     /// 导入插件推荐运行配置时，是否默认启用定时（可在设置中关闭）
     ImportRecommendedScheduleEnabled,
@@ -314,9 +314,9 @@ impl Settings {
             SettingKey::WallpaperVideoPlaybackRate => SettingValue::F64(1.0),
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
             SettingKey::CurrentWallpaperImageId => SettingValue::OptionString(None),
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => SettingValue::Bool(false),
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveMountPoint => {
                 SettingValue::String(Self::default_album_drive_mount_point())
             }
@@ -351,7 +351,7 @@ impl Settings {
         }
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     fn default_album_drive_mount_point() -> String {
         #[cfg(target_os = "windows")]
         {
@@ -529,9 +529,9 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperVideoPlaybackRate,
             SettingKey::WindowState,
             SettingKey::CurrentWallpaperImageId,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveMountPoint,
             SettingKey::ImportRecommendedScheduleEnabled,
             SettingKey::Language,
@@ -628,7 +628,7 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperRotationIncludeSubalbums => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
             }
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
@@ -661,7 +661,7 @@ Write-Output "$style,$tile"
             | SettingKey::WallpaperMode => Ok(SettingValue::String(
                 json.as_str().unwrap_or("").to_string(),
             )),
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveMountPoint => Ok(SettingValue::String(
                 json.as_str().unwrap_or("").to_string(),
             )),
@@ -761,9 +761,9 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperVideoPlaybackRate => "wallpaperVideoPlaybackRate".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
             SettingKey::CurrentWallpaperImageId => "currentWallpaperImageId".to_string(),
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => "albumDriveEnabled".to_string(),
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveMountPoint => "albumDriveMountPoint".to_string(),
             SettingKey::ImportRecommendedScheduleEnabled => {
                 "importRecommendedScheduleEnabled".to_string()
@@ -1054,14 +1054,14 @@ Write-Output "$style,$tile"
             .flatten()
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub fn get_album_drive_enabled(&self) -> bool {
         Self::cells().get(&SettingKey::AlbumDriveEnabled)
             .map(|c| c.load().as_bool().unwrap_or(false))
             .unwrap_or(false)
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub fn get_album_drive_mount_point(&self) -> String {
         Self::cells().get(&SettingKey::AlbumDriveMountPoint)
             .map(|c| c.load().as_string().unwrap_or_else(|| Self::default_album_drive_mount_point()))
@@ -1502,7 +1502,7 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub fn set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
@@ -1513,7 +1513,7 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub fn set_album_drive_mount_point(&self, mount_point: String) -> Result<(), String> {
         let t = mount_point.trim().to_string();
         if t.is_empty() {

@@ -5,7 +5,7 @@ use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::ipc::ipc::{IpcRequest, IpcResponse};
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::{driver_service::VirtualDriveServiceTrait, VirtualDriveService};
 
 /// 处理所有 Settings 相关的 IPC 请求
@@ -58,9 +58,9 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
             Some(get_current_wallpaper_image_id())
         }
         IpcRequest::SettingsGetDefaultImagesDir => Some(get_default_images_dir()),
-        #[cfg(kabegame_mode = "standard")]
+        #[cfg(feature = "standard")]
         IpcRequest::SettingsGetAlbumDriveEnabled => Some(get_album_drive_enabled()),
-        #[cfg(kabegame_mode = "standard")]
+        #[cfg(feature = "standard")]
         IpcRequest::SettingsGetAlbumDriveMountPoint => Some(get_album_drive_mount_point()),
 
         IpcRequest::SettingsSetGalleryImageAspectRatio { aspect_ratio } => {
@@ -90,11 +90,11 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::SettingsSetWallpaperMode { mode } => {
             Some(set_wallpaper_mode(mode.clone()))
         }
-        #[cfg(kabegame_mode = "standard")]
+        #[cfg(feature = "standard")]
         IpcRequest::SettingsSetAlbumDriveEnabled { enabled } => {
             Some(set_album_drive_enabled(*enabled).await)
         }
-        #[cfg(kabegame_mode = "standard")]
+        #[cfg(feature = "standard")]
         IpcRequest::SettingsSetAlbumDriveMountPoint { mount_point } => {
             Some(set_album_drive_mount_point(mount_point.clone()))
         }
@@ -197,7 +197,7 @@ fn set_wallpaper_mode(mode: String) -> IpcResponse {
     }
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 async fn set_album_drive_enabled(enabled: bool) -> IpcResponse {
     let settings = Settings::global();
 
@@ -286,7 +286,7 @@ async fn set_album_drive_enabled(enabled: bool) -> IpcResponse {
     }
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 fn set_album_drive_mount_point(mount_point: String) -> IpcResponse {
     match Settings::global().set_album_drive_mount_point(mount_point) {
         Ok(()) => IpcResponse::ok("updated"),
@@ -535,13 +535,13 @@ fn get_default_images_dir() -> IpcResponse {
     IpcResponse::ok_with_data("ok", serde_json::json!(dir_str))
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 fn get_album_drive_enabled() -> IpcResponse {
     let v = Settings::global().get_album_drive_enabled();
     IpcResponse::ok_with_data("ok", serde_json::json!(v))
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 fn get_album_drive_mount_point() -> IpcResponse {
     let v = Settings::global().get_album_drive_mount_point();
     IpcResponse::ok_with_data("ok", serde_json::json!(v))

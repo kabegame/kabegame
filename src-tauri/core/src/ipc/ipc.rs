@@ -43,15 +43,15 @@ pub enum IpcRequest {
     Status,
 
     /// 虚拟盘：挂载（Windows + virtual-driver）
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     VdMount,
 
     /// 虚拟盘：卸载（Windows + virtual-driver）
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     VdUnmount,
 
     /// 虚拟盘：状态（Windows + virtual-driver）
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     VdStatus,
 
     /// 导入插件请求（从 .kgpg 文件）
@@ -397,9 +397,9 @@ pub enum IpcRequest {
     SettingsGetWindowState,
     SettingsGetCurrentWallpaperImageId,
     SettingsGetDefaultImagesDir,
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     SettingsGetAlbumDriveEnabled,
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     SettingsGetAlbumDriveMountPoint,
 
     // ======== Settings Setter（保留 core::Settings 的校验逻辑）========
@@ -428,11 +428,11 @@ pub enum IpcRequest {
     SettingsSetWallpaperMode {
         mode: String,
     },
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     SettingsSetAlbumDriveEnabled {
         enabled: bool,
     },
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     SettingsSetAlbumDriveMountPoint {
         mount_point: String,
     },
@@ -515,12 +515,12 @@ pub struct IpcResponse {
 
     /// 对 VD：是否已挂载
     #[serde(default)]
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub mounted: Option<bool>,
 
     /// 对 VD：当前挂载点
     #[serde(default)]
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub mount_point: Option<String>,
 
     /// 对 Status：daemon 版本/能力信息（可选，后续扩展）
@@ -549,9 +549,9 @@ impl IpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             mounted: None,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             mount_point: None,
             info: None,
             data: serde_json::Value::Null,
@@ -566,9 +566,9 @@ impl IpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             mounted: None,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             mount_point: None,
             info: None,
             data: serde_json::Value::Null,
@@ -583,9 +583,9 @@ impl IpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             mounted: None,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             mount_point: None,
             info: None,
             data: data,
@@ -604,9 +604,9 @@ impl IpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             mounted: None,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             mount_point: None,
             info: None,
             data: serde_json::Value::Null,

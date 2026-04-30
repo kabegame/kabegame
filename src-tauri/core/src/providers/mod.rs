@@ -12,7 +12,7 @@ pub mod provider;
 pub mod query;
 pub mod sql_executor;
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "virtual-driver")]
 pub(crate) mod vd_ops;
 
 // ── 公开 re-exports ──────────────────────────────────────────────────────────
@@ -26,7 +26,7 @@ pub use query::{
 };
 
 /// VD 专用：从 PluginManager 缓存读取插件显示名（用于「按任务」目录名展示）。
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "virtual-driver")]
 #[allow(unused_variables)]
 pub fn plugin_display_name_from_manifest(plugin_id: &str) -> Option<String> {
     let pid = plugin_id.trim();

@@ -24,7 +24,7 @@ tokio = {workspace = true}
 url = "2"
 uuid = {workspace = true}
 
-# local feature (Tauri native app — desktop + Android)
+# Tauri native app stack (activated by `standard` / `light` / `android` features)
 tauri = { version = "2.10", features = [ "tray-icon", "devtools", "protocol-asset", "image-png"], optional = true }
 tauri-plugin-clipboard-manager = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "=2.4.2", optional = true }
@@ -100,9 +100,33 @@ objc2 = { version = "0.6", default-features = false }
 tauri-build = {workspace = true, optional = true}
 
 [features]
-default = ["local"]
-local = [
+default = ["standard"]
+
+# Standard desktop build: shared Tauri stack + virtual driver
+standard = [
     "kabegame-core/virtual-driver",
+    "dep:tauri",
+    "dep:tauri-plugin-clipboard-manager",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-global-shortcut",
+    "dep:tauri-plugin-pathes",
+    "dep:tauri-plugin-opener",
+    "dep:tauri-build",
+]
+
+# Light desktop build: shared Tauri stack, no virtual driver
+light = [
+    "dep:tauri",
+    "dep:tauri-plugin-clipboard-manager",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-global-shortcut",
+    "dep:tauri-plugin-pathes",
+    "dep:tauri-plugin-opener",
+    "dep:tauri-build",
+]
+
+# Android build: shared Tauri stack + android-only plugins, no virtual driver
+android = [
     "dep:tauri",
     "dep:tauri-plugin-clipboard-manager",
     "dep:tauri-plugin-dialog",
@@ -118,9 +142,12 @@ local = [
     "dep:tauri-plugin-task-notification",
     "dep:tauri-build",
 ]
+
+# Web build: no Tauri stack (mutually exclusive with standard/light/android)
 web = []
+
 # Activated by `tauri build` in production — serves embedded assets via tauri.localhost.
-# Must NOT be pulled in by `local`, or dev mode would bypass devUrl (Vite).
+# Must NOT be pulled in by standard/light/android, or dev mode would bypass devUrl (Vite).
 custom-protocol = ["tauri?/custom-protocol"]
 
 [[bin]]
