@@ -102,22 +102,23 @@ pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_r
     //     ) as Arc<dyn Provider>)
     // })?;
 
-    // ── gallery dates ──
-    register(reg, "gallery_dates_router", |_| {
-        Ok(Arc::new(gallery_dates::GalleryDatesRouter) as Arc<dyn Provider>)
-    })?;
-    register(reg, "gallery_date_year_provider", |props| {
-        Ok(Arc::new(gallery_dates::GalleryDateYearProvider::from_props(props)?)
-            as Arc<dyn Provider>)
-    })?;
-    register(reg, "gallery_date_month_provider", |props| {
-        Ok(Arc::new(gallery_dates::GalleryDateMonthProvider::from_props(props)?)
-            as Arc<dyn Provider>)
-    })?;
-    register(reg, "gallery_date_day_provider", |props| {
-        Ok(Arc::new(gallery_dates::GalleryDateDayProvider::from_props(props)?)
-            as Arc<dyn Provider>)
-    })?;
+    // 7c S7-b: gallery_dates_router / gallery_date_year/month/day_provider 由 DSL
+    //          (dsl/gallery/dates/*.json5) 接管。
+    // register(reg, "gallery_dates_router", |_| {
+    //     Ok(Arc::new(gallery_dates::GalleryDatesRouter) as Arc<dyn Provider>)
+    // })?;
+    // register(reg, "gallery_date_year_provider", |props| {
+    //     Ok(Arc::new(gallery_dates::GalleryDateYearProvider::from_props(props)?)
+    //         as Arc<dyn Provider>)
+    // })?;
+    // register(reg, "gallery_date_month_provider", |props| {
+    //     Ok(Arc::new(gallery_dates::GalleryDateMonthProvider::from_props(props)?)
+    //         as Arc<dyn Provider>)
+    // })?;
+    // register(reg, "gallery_date_day_provider", |props| {
+    //     Ok(Arc::new(gallery_dates::GalleryDateDayProvider::from_props(props)?)
+    //         as Arc<dyn Provider>)
+    // })?;
 
     // ── vd ──
     // 6c: vd_root_router 由 DSL (vd/vd_root_router.json5) 接管。程序化备份不再注册。

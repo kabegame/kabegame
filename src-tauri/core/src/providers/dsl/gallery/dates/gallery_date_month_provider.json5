@@ -1,0 +1,44 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_date_month_provider",
+    "properties": {
+        "year_month": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "strftime('%Y-%m', crawled_at_seconds(images.crawled_at), 'unixepoch') = ${properties.year_month}"
+    },
+    "list": {
+        "desc":   { "provider": "sort_provider" },
+        "${out.dd}d": {
+            "sql": "SELECT DISTINCT substr(strftime('%Y-%m-%d', crawled_at_seconds(images.crawled_at), 'unixepoch'), 9, 2) AS dd FROM (${composed}) AS sub WHERE strftime('%Y-%m-%d', crawled_at_seconds(images.crawled_at), 'unixepoch') IS NOT NULL ORDER BY dd DESC",
+            "data_var": "out",
+            "provider": "gallery_date_day_provider",
+            "properties": {
+                "ymd": "${properties.year_month}-${out.dd}"
+            }
+        },
+        "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
+        "x500x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
+        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
+    },
+    "resolve": {
+        "([0-9]{2})d": {
+            "provider": "gallery_date_day_provider",
+            "properties": {
+                "ymd": "${properties.year_month}-${capture[1]}"
+            }
+        },
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        },
+        "([1-9][0-9]*)": {
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        }
+    }
+}
