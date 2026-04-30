@@ -26,7 +26,20 @@ pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::
     register_get_plugin(conn)?;
     register_get_album(conn)?;
     register_get_task(conn)?;
+    register_get_surf_record(conn)?;
     Ok(())
+}
+
+fn register_get_surf_record(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.create_scalar_function(
+        "get_surf_record",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
+        |ctx| -> rusqlite::Result<String> {
+            let id: String = ctx.get(0)?;
+            Ok(get_surf_record_json(&id))
+        },
+    )
 }
 
 fn register_get_album(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -75,6 +88,18 @@ fn get_task_json(task_id: &str) -> String {
         return "null".into();
     };
     serde_json::json!({ "kind": "task", "data": data }).to_string()
+}
+
+/// 返回 surf_record typed meta JSON 字符串, 与 wrap_typed_meta_json(SurfRecord) 一致
+/// (kind="surfRecord"); 记录不存在时返回 `"null"`。
+fn get_surf_record_json(record_id: &str) -> String {
+    let Ok(Some(record)) = Storage::global().get_surf_record(record_id) else {
+        return "null".into();
+    };
+    let Ok(data) = serde_json::to_value(&record) else {
+        return "null".into();
+    };
+    serde_json::json!({ "kind": "surfRecord", "data": data }).to_string()
 }
 
 fn register_get_plugin(conn: &Connection) -> Result<(), rusqlite::Error> {
