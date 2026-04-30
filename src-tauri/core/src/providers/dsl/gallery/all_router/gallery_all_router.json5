@@ -22,7 +22,7 @@
             "provider": "gallery_page_router",
             "properties": {
                 "page_size": 100,
-                "page_num": "${capture[1]}"
+                "page_num": "${page.meta.page_num}"
             }
         }
     },

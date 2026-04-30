@@ -29,11 +29,7 @@ impl SqlExecutor for KabegameSqlExecutor {
         SqlDialect::Sqlite
     }
 
-    fn execute(
-        &self,
-        sql: &str,
-        params: &[TemplateValue],
-    ) -> Result<Vec<JsonValue>, EngineError> {
+    fn execute(&self, sql: &str, params: &[TemplateValue]) -> Result<Vec<JsonValue>, EngineError> {
         let conn = self.db.lock().map_err(|e| {
             EngineError::FactoryFailed(
                 "core".into(),

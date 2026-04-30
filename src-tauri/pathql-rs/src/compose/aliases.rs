@@ -20,10 +20,7 @@ impl ResolvedAlias {
     /// `${ref:X}` 形态 → UnresolvedRef("X")；其他 → Literal(原文)。
     pub fn from_alias_name(a: &AliasName) -> Self {
         let s = &a.0;
-        if let Some(inner) = s
-            .strip_prefix("${ref:")
-            .and_then(|s| s.strip_suffix('}'))
-        {
+        if let Some(inner) = s.strip_prefix("${ref:").and_then(|s| s.strip_suffix('}')) {
             ResolvedAlias::UnresolvedRef(inner.to_string())
         } else {
             ResolvedAlias::Literal(s.clone())
@@ -55,10 +52,8 @@ impl AliasTable {
         if !self.map.contains_key(ref_ident) {
             let literal = format!("_a{}", self.counter);
             self.counter += 1;
-            self.map.insert(
-                ref_ident.to_string(),
-                AllocatedAlias { literal },
-            );
+            self.map
+                .insert(ref_ident.to_string(), AllocatedAlias { literal });
         }
         self.map
             .get(ref_ident)

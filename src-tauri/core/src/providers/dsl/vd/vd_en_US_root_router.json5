@@ -5,11 +5,14 @@
     // English (US) path segments -> business provider mapping.
     // Translated text as path segments; business providers decoupled from locale.
     "list": {
+        "Albums":        { "provider": "vd_albums_provider" },
         "By Album":      { "provider": "vd_albums_provider" },
         "By Plugin":     { "provider": "vd_plugins_provider" },
         "By Task":       { "provider": "vd_tasks_provider" },
         "By Surf":       { "provider": "vd_surfs_provider" },
+        "By Type":       { "provider": "vd_media_type_provider" },
         "By Media Type": { "provider": "vd_media_type_provider" },
+        "By Date":       { "provider": "vd_dates_provider" },
         "By Time":       { "provider": "vd_dates_provider" },
         "All":           { "provider": "vd_all_provider" }
     }

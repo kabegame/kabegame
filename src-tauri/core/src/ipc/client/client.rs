@@ -102,9 +102,7 @@ impl IpcClient {
     // ==================== Storage - Images ====================
     /// 获取图片总数
     pub async fn storage_get_images_count(&self) -> Result<usize, String> {
-        let v = self
-            .request_data(IpcRequest::StorageGetImagesCount)
-            .await?;
+        let v = self.request_data(IpcRequest::StorageGetImagesCount).await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
@@ -232,8 +230,7 @@ impl IpcClient {
     }
 
     pub async fn storage_get_album_counts(&self) -> Result<serde_json::Value, String> {
-        self.request_data(IpcRequest::StorageGetAlbumCounts)
-            .await
+        self.request_data(IpcRequest::StorageGetAlbumCounts).await
     }
 
     pub async fn storage_update_album_images_order(
@@ -274,8 +271,7 @@ impl IpcClient {
 
     /// 添加任务
     pub async fn storage_add_task(&self, task: serde_json::Value) -> Result<(), String> {
-        self.request_ok(IpcRequest::StorageAddTask { task })
-            .await
+        self.request_ok(IpcRequest::StorageAddTask { task }).await
     }
 
     /// 更新任务
@@ -401,8 +397,7 @@ impl IpcClient {
 
     /// 获取插件源列表
     pub async fn plugin_get_plugin_sources(&self) -> Result<serde_json::Value, String> {
-        self.request_data(IpcRequest::PluginGetPluginSources)
-            .await
+        self.request_data(IpcRequest::PluginGetPluginSources).await
     }
 
     pub async fn plugin_validate_source(
@@ -442,8 +437,7 @@ impl IpcClient {
     }
 
     pub async fn plugin_delete_source(&self, id: String) -> Result<(), String> {
-        self.request_ok(IpcRequest::PluginDeleteSource { id })
-            .await
+        self.request_ok(IpcRequest::PluginDeleteSource { id }).await
     }
 
     pub async fn plugin_get_store_plugins(
@@ -520,9 +514,7 @@ impl IpcClient {
     // ========== Settings Getter ==========
 
     pub async fn settings_get_auto_launch(&self) -> Result<bool, String> {
-        let v = self
-            .request_data(IpcRequest::SettingsGetAutoLaunch)
-            .await?;
+        let v = self.request_data(IpcRequest::SettingsGetAutoLaunch).await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
@@ -762,9 +754,9 @@ impl IpcClient {
         &self,
         include_subalbums: bool,
     ) -> Result<(), String> {
-        self.request_ok(
-            IpcRequest::SettingsSetWallpaperRotationIncludeSubalbums { include_subalbums },
-        )
+        self.request_ok(IpcRequest::SettingsSetWallpaperRotationIncludeSubalbums {
+            include_subalbums,
+        })
         .await
     }
 

@@ -41,11 +41,7 @@ fn run_one_strict_cross(d: ProviderDef) -> Vec<ValidateError> {
     }
 }
 
-fn assert_kind<F: Fn(&ValidateErrorKind) -> bool>(
-    errs: &[ValidateError],
-    pred: F,
-    label: &str,
-) {
+fn assert_kind<F: Fn(&ValidateErrorKind) -> bool>(errs: &[ValidateError], pred: F, label: &str) {
     assert!(
         errs.iter().any(|e| pred(&e.kind)),
         "expected {} among errors:\n{}",
@@ -62,7 +58,11 @@ fn bad_name_caps_or_invalid() {
     let mut d = base_def("BAD-NAME");
     d.namespace = Some(Namespace("k".into()));
     let errs = run_one(d);
-    assert_kind(&errs, |k| matches!(k, ValidateErrorKind::InvalidName(_)), "InvalidName");
+    assert_kind(
+        &errs,
+        |k| matches!(k, ValidateErrorKind::InvalidName(_)),
+        "InvalidName",
+    );
 }
 
 #[test]
@@ -87,7 +87,11 @@ fn undefined_ref_in_where() {
     let mut d = base_def("p");
     d.query = Some(Query::Contrib(q));
     let errs = run_one(d);
-    assert_kind(&errs, |k| matches!(k, ValidateErrorKind::UndefinedRef(_)), "UndefinedRef");
+    assert_kind(
+        &errs,
+        |k| matches!(k, ValidateErrorKind::UndefinedRef(_)),
+        "UndefinedRef",
+    );
 }
 
 #[test]
@@ -115,7 +119,9 @@ fn ref_alias_with_in_need() {
 #[test]
 fn from_contains_join_keyword() {
     let q = ContribQuery {
-        from: Some(SqlExpr("images JOIN album_images ai ON ai.image_id = images.id".into())),
+        from: Some(SqlExpr(
+            "images JOIN album_images ai ON ai.image_id = images.id".into(),
+        )),
         ..Default::default()
     };
     let mut d = base_def("p");
@@ -155,10 +161,7 @@ fn dynamic_var_mismatch() {
 #[test]
 fn dynamic_sql_provider_ref_rejected() {
     let mut props = HashMap::new();
-    props.insert(
-        "x".into(),
-        TemplateValue::String("${row.provider}".into()),
-    );
+    props.insert("x".into(), TemplateValue::String("${row.provider}".into()));
     let list = List {
         entries: vec![(
             "${row.id}".into(),
@@ -333,10 +336,7 @@ fn invalid_regex_in_resolve() {
 #[test]
 fn capture_index_out_of_bounds() {
     let mut props = HashMap::new();
-    props.insert(
-        "x".into(),
-        TemplateValue::String("${capture[5]}".into()),
-    );
+    props.insert("x".into(), TemplateValue::String("${capture[5]}".into()));
     let mut resolve = Resolve::default();
     resolve.0.insert(
         "^([a-z]+)$".into(),

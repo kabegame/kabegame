@@ -42,22 +42,23 @@ pub async fn browse_gallery_provider(path: String) -> Result<serde_json::Value, 
 pub async fn list_provider_children(path: String) -> Result<serde_json::Value, String> {
     let full = format!("gallery/{}", path.trim().trim_start_matches('/'));
     let full = decode_provider_path_segments(&full);
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
-        let rt = provider_runtime();
-        // 6b 简化版：list_children_with_totals 暂未实现 per-child total（Phase 7 补）；
-        // 直接 list 子节点，total 字段为 None。
-        let path = if full.starts_with('/') {
-            full.clone()
-        } else {
-            format!("/{}", full)
-        };
-        let children = rt.list(&path).map_err(|e| format!("list failed: {}", e))?;
-        let entries =
-            kabegame_core::gallery::browse_from_provider_jsonmeta(children, Vec::new())?;
-        serde_json::to_value(entries).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
+            let rt = provider_runtime();
+            // 6b 简化版：list_children_with_totals 暂未实现 per-child total（Phase 7 补）；
+            // 直接 list 子节点，total 字段为 None。
+            let path = if full.starts_with('/') {
+                full.clone()
+            } else {
+                format!("/{}", full)
+            };
+            let children = rt.list(&path).map_err(|e| format!("list failed: {}", e))?;
+            let entries =
+                kabegame_core::gallery::browse_from_provider_jsonmeta(children, Vec::new())?;
+            serde_json::to_value(entries).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     Ok(result)
 }
 

@@ -8,9 +8,7 @@ use crate::ipc::server::server_windows::serve;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::ipc::server::server_unix::serve;
 
-pub async fn serve_with_events<F, Fut>(
-    handler: F,
-) -> Result<(), String>
+pub async fn serve_with_events<F, Fut>(handler: F) -> Result<(), String>
 where
     F: Fn(IpcRequest) -> Fut + Send + Sync + Clone + 'static,
     Fut: std::future::Future<Output = IpcResponse> + Send,
@@ -18,9 +16,7 @@ where
     serve_impl(handler).await
 }
 
-async fn serve_impl<F, Fut>(
-    handler: F,
-) -> Result<(), String>
+async fn serve_impl<F, Fut>(handler: F) -> Result<(), String>
 where
     F: Fn(IpcRequest) -> Fut + Send + Sync + Clone + 'static,
     Fut: std::future::Future<Output = IpcResponse> + Send,

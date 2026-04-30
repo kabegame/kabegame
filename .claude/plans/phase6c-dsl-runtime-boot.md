@@ -1172,7 +1172,7 @@ fn vd_zh_cn_root_resolves_static_routes() {
     let conn = Arc::new(Mutex::new(fixture_db()));
     let runtime = build_full_runtime(conn);
     
-    // vd_root_router (i18n 分发) → vd_zh_CN_root_router → "按画册"
+    // vd_root_router (i18n 分发) → vd_zh_CN_root_router → "画册"
     // 由于 vd_albums_provider 是 dangling (未在 9 个真文件中), 期望 PathNotFound
     let result = runtime.resolve("/vd/i18n-zh_CN/按画册/");
     assert!(matches!(result, Err(EngineError::PathNotFound(_))));

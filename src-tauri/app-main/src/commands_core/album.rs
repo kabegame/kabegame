@@ -56,10 +56,7 @@ pub async fn delete_album(album_id: String) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-pub async fn move_album(
-    album_id: String,
-    new_parent_id: Option<String>,
-) -> Result<Value, String> {
+pub async fn move_album(album_id: String, new_parent_id: Option<String>) -> Result<Value, String> {
     Storage::global().move_album(&album_id, new_parent_id.as_deref())?;
     #[cfg(feature = "standard")]
     kabegame_core::virtual_driver::VirtualDriveService::global().bump_albums();
@@ -81,10 +78,7 @@ pub async fn add_images_to_album(
     serde_json::to_value(r).map_err(|e| e.to_string())
 }
 
-pub async fn add_task_images_to_album(
-    task_id: String,
-    album_id: String,
-) -> Result<Value, String> {
+pub async fn add_task_images_to_album(task_id: String, album_id: String) -> Result<Value, String> {
     let image_ids = Storage::global().get_task_image_ids(&task_id)?;
     if image_ids.is_empty() {
         return Ok(serde_json::json!({

@@ -15,6 +15,15 @@
 - When a query has no selected fields, SQL rendering emits `SELECT <from>.*` if `from` is a
   simple ASCII identifier; otherwise it falls back to `SELECT *`.
 
+## Phase 7c completion note
+
+Kabegame core built-in providers are fully DSL-backed as of Phase 7c. The former
+`providers/programmatic/` module and `register_all_hardcoded` bootstrap path have been removed;
+`dsl_loader::DSL_FILES` is now the source of truth for the root, gallery, shared pagination/sort,
+and VD provider tree. The v0.7 engine features used by the migrated providers include globals,
+field shorthand, path-only fetch/count, delegate symmetry, instance-static keys, typed JSON meta
+bridges, host SQL functions, and `where_clear`.
+
 
 ## 1. 文件与位置
 
@@ -537,6 +546,16 @@ JSON1 函数（`json_extract` 等）拆解返回值。
 get_plugin(plugin_id [, locale]) -> JSON_TEXT
   返回 {"id","name","description","baseUrl"};
   name / description 按 locale 解析（exact > prefix split _ > "default" > "en" > "")。
+get_album(album_id) -> JSON_TEXT
+get_task(task_id) -> JSON_TEXT
+get_surf_record(record_id) -> JSON_TEXT
+  返回 {"kind": <typed-kind>, "data": <entity>} 形态, 供 DSL `$json` meta directive 注入。
+
+crawled_at_seconds(timestamp) -> INTEGER
+  将秒 / 毫秒混合的 crawled_at 规整为 unix seconds, 供日期 router 与 date_range 复用。
+
+vd_display_name(canonical) -> TEXT
+  读取当前 VD locale, 把 canonical 段名映射为本地化路径显示名。
 ```
 
 **DSL 调用模式**：

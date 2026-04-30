@@ -64,6 +64,9 @@ impl NativeDownloadState {
     }
 }
 
-pub fn compute_native_download_destination(url: &str, images_dir: &Path) -> Result<PathBuf, String> {
+pub fn compute_native_download_destination(
+    url: &str,
+    images_dir: &Path,
+) -> Result<PathBuf, String> {
     super::compute_image_download_path(url, images_dir)
 }

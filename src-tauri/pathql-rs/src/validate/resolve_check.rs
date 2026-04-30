@@ -1,6 +1,4 @@
-use crate::ast::{
-    InvokeByName, ListEntry, ProviderInvocation, Resolve, TemplateValue,
-};
+use crate::ast::{InvokeByName, ListEntry, ProviderInvocation, Resolve, TemplateValue};
 use crate::template::{parse, Segment, VarRef};
 use crate::validate::{ValidateError, ValidateErrorKind};
 
@@ -20,10 +18,7 @@ use std::collections::HashMap;
 /// **保留的检查**:
 /// 1. regex 编译错误
 /// 2. invocation properties / meta 中 `${capture[N]}` 越界 (按当前 regex captures 数算)
-pub fn validate_resolve(
-    registry: &crate::ProviderRegistry,
-    errors: &mut Vec<ValidateError>,
-) {
+pub fn validate_resolve(registry: &crate::ProviderRegistry, errors: &mut Vec<ValidateError>) {
     for ((ns, name), def) in registry.iter_dsl() {
         let Some(resolve) = &def.resolve else {
             continue;
@@ -55,10 +50,8 @@ pub fn validate_resolve(
         }
 
         // 2) capture[N] bounds in invocation properties / meta
-        let pattern_to_groups: HashMap<&str, usize> = compiled
-            .iter()
-            .map(|(p, _, g)| (p.as_str(), *g))
-            .collect();
+        let pattern_to_groups: HashMap<&str, usize> =
+            compiled.iter().map(|(p, _, g)| (p.as_str(), *g)).collect();
         for (pat, inv) in &resolve.0 {
             let Some(&groups) = pattern_to_groups.get(pat.as_str()) else {
                 continue;
@@ -189,10 +182,7 @@ mod tests {
         })
     }
 
-    fn by_name_with_props(
-        name: &str,
-        props: HashMap<String, TemplateValue>,
-    ) -> ProviderInvocation {
+    fn by_name_with_props(name: &str, props: HashMap<String, TemplateValue>) -> ProviderInvocation {
         ProviderInvocation::ByName(InvokeByName {
             provider: ProviderName(name.into()),
             properties: Some(props),
@@ -268,16 +258,17 @@ mod tests {
     #[test]
     fn capture_out_of_bounds() {
         let mut props = HashMap::new();
-        props.insert(
-            "x".into(),
-            TemplateValue::String("${capture[5]}".into()),
-        );
+        props.insert("x".into(), TemplateValue::String("${capture[5]}".into()));
         let mut r = Resolve::default();
         r.0.insert("^([a-z]+)$".into(), by_name_with_props("p", props));
         let errs = run(r, None);
         assert!(errs.iter().any(|e| matches!(
             e.kind,
-            ValidateErrorKind::CaptureIndexOutOfBounds { idx: 5, groups: 1, .. }
+            ValidateErrorKind::CaptureIndexOutOfBounds {
+                idx: 5,
+                groups: 1,
+                ..
+            }
         )));
     }
 

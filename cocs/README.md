@@ -13,6 +13,9 @@
 
 ## Provider DSL（`provider-dsl/`）
 
+- 状态：Phase 7c 后内置 Provider 已全量 DSL 化，`src-tauri/core/src/providers/programmatic/`
+  已删除；core 启动时只加载 `dsl_loader::DSL_FILES` 中的 root/gallery/shared/VD provider。
+
 - [provider-dsl/RULES.md](provider-dsl/RULES.md)
   - 主题：声明式 Provider DSL（v0.7）的加载期与运行期语义合约 —— schema 之外的规则。涵盖路径折叠、ContribQuery 累积语义（fields/from/join/where/order 各自规则；offset 累加、limit 末次胜）、List 静态/动态项、Resolve 正则解析、`${...}` 模板语义（命名空间取值 + 方法标记）、`as + in_need` 共享机制、缓存契约（只缓存命中）、安全契约、保留标识符、主机协调模式抽象。
   - 适用场景：实现引擎 loader / 解析器；编写 *.provider.json5 文件；排查跨字段约束错误；设计第三方插件可贡献的 provider。

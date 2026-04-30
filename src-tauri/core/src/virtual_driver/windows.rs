@@ -7,31 +7,31 @@
 //! - 路径解析由框架自动递归处理
 
 use std::{
-    path::PathBuf,
     sync::{Arc, Once},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use super::driver_service::{join_mount_subdir, notify_explorer_dir_changed_path};
+use super::driver_service::notify_explorer_dir_changed_path;
 use super::fs::KabegameFs;
 use super::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use dokan::{
-    CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler, OperationInfo, OperationResult,
-    VolumeInfo,
+    CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler, FileTimeOperation, OperationInfo,
+    OperationResult, VolumeInfo,
 };
 use widestring::{U16CStr, U16CString};
 use winapi::{
     shared::ntstatus::{
         STATUS_ACCESS_DENIED, STATUS_INVALID_PARAMETER, STATUS_NOT_A_DIRECTORY,
-        STATUS_OBJECT_NAME_NOT_FOUND,
+        STATUS_NOT_IMPLEMENTED, STATUS_OBJECT_NAME_NOT_FOUND,
     },
     shared::winerror,
     um::winnt::{
         FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
-        FILE_ATTRIBUTE_READONLY,
+        FILE_ATTRIBUTE_READONLY, FILE_CASE_PRESERVED_NAMES, FILE_UNICODE_ON_DISK,
+        PSECURITY_DESCRIPTOR,
     },
 };
 
@@ -46,9 +46,6 @@ pub fn dokan_init_once() {
 fn now() -> SystemTime {
     SystemTime::now()
 }
-
-// NOTE: 文件时间戳由语义层（VfsSemantics::open_existing/read_dir）统一决定并缓存到 context；
-// 这里的几个 helper 仅用于历史逻辑，保留无害，但不应再在高频路径中调用。
 
 fn parse_segments(file_name: &U16CStr) -> Vec<String> {
     let s = file_name.to_string_lossy();
@@ -130,7 +127,6 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
 
         match context {
             FsItem::Directory { path, .. } => {
-                // 目录删除：委托给父目录 provider.delete_child（无 can_* 查询）
                 if path.is_empty() {
                     return;
                 }
@@ -147,9 +143,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                     notify_explorer_dir_changed_path(&mount_point);
                 }
             }
-            FsItem::File { .. } => {
-                // VD 只读——文件删除不执行任何操作
-            }
+            FsItem::File { .. } => {}
         }
     }
 
@@ -160,7 +154,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         desired_access: winapi::um::winnt::ACCESS_MASK,
         file_attributes: u32,
         _share_access: u32,
-        create_disposition: u32,
+        _create_disposition: u32,
         create_options: u32,
         _info: &mut OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<CreateFileInfo<Self::Context>> {
@@ -168,24 +162,33 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             desired_access,
             file_attributes,
             create_options,
-            create_disposition,
+            _create_disposition,
         );
         let segs = parse_segments(file_name);
+
+        if segs.is_empty() && user_flags.creation_disposition == 3 {
+            return Ok(CreateFileInfo {
+                context: FsItem::Directory {
+                    path: Vec::new(),
+                    hidden: false,
+                },
+                is_dir: true,
+                new_file_created: false,
+            });
+        }
+
         let rt = crate::providers::provider_runtime();
         let sem = VfsSemantics::new(rt);
 
         // 3 = OPEN_EXISTING；其他均视为“创建类操作”。
-        // 默认只读：只有 provider 覆写允许的场景才放行（目前：画册根目录 mkdir）。
+        // 默认只读：只有 provider 覆写允许的场景才放行。
         if user_flags.creation_disposition != 3 {
             let is_dir_request = (file_attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
             if !is_dir_request || segs.is_empty() {
                 return Err(Self::deny_access());
             }
 
-            // 目录创建：委托给 parent provider
-            let create_new = user_flags.creation_disposition == 1; // CREATE_NEW
-
-            // 若已存在：按 CREATE_NEW 语义返回已存在；否则当作成功打开目录
+            let create_new = user_flags.creation_disposition == 1;
             match sem.open_existing(&segs) {
                 Ok(VfsOpenedItem::Directory { hidden, .. }) => {
                     if create_new {
@@ -213,22 +216,19 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 return Err(STATUS_INVALID_PARAMETER);
             }
 
-            match sem.create_dir(parent_path, dir_name) {
-                Ok(()) => {
-                    return Ok(CreateFileInfo {
-                        context: FsItem::Directory {
-                            path: segs,
-                            hidden: false,
-                        },
-                        is_dir: true,
-                        new_file_created: true,
-                    });
-                }
-                Err(e) => return Err(Self::map_vfs_error(e)),
-            }
+            return match sem.create_dir(parent_path, dir_name) {
+                Ok(()) => Ok(CreateFileInfo {
+                    context: FsItem::Directory {
+                        path: segs,
+                        hidden: false,
+                    },
+                    is_dir: true,
+                    new_file_created: true,
+                }),
+                Err(e) => Err(Self::map_vfs_error(e)),
+            };
         }
 
-        // 对文件的写入操作拒绝
         const GENERIC_WRITE: u32 = winapi::um::winnt::GENERIC_WRITE;
         if segs.len() >= 3 && (desired_access & GENERIC_WRITE) != 0 {
             return Err(dokan::map_win32_error_to_ntstatus(
@@ -282,10 +282,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 let rt = crate::providers::provider_runtime();
                 let sem = VfsSemantics::new(rt);
 
-                // 任务目录：修改时间 = end_time
-                if segments.len() == 2
-                    && sem.is_vd_segment_canonical(segments[0], "task")
-                {
+                if segments.len() == 2 && sem.is_vd_segment_canonical(segments[0], "task") {
                     let name = segments[1];
                     let task_id = name
                         .rsplit_once(" - ")
@@ -383,12 +380,21 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                                 }
                                 (attr, 0, meta.created, meta.accessed, meta.modified, name)
                             }
-                            VfsEntry::File { name, meta, hidden, .. } => {
+                            VfsEntry::File {
+                                name, meta, hidden, ..
+                            } => {
                                 let mut attr = FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE;
                                 if hidden {
                                     attr |= FILE_ATTRIBUTE_HIDDEN;
                                 }
-                                (attr, meta.size, meta.created, meta.accessed, meta.modified, name)
+                                (
+                                    attr,
+                                    meta.size,
+                                    meta.created,
+                                    meta.accessed,
+                                    meta.modified,
+                                    name,
+                                )
                             }
                         };
 
@@ -407,6 +413,17 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             }
             FsItem::File { .. } => Err(STATUS_NOT_A_DIRECTORY),
         }
+    }
+
+    fn find_files_with_pattern(
+        &'h self,
+        file_name: &U16CStr,
+        _pattern: &U16CStr,
+        fill_find_data: impl FnMut(&dokan::FindData) -> dokan::FillDataResult,
+        info: &OperationInfo<'c, 'h, Self>,
+        context: &'c Self::Context,
+    ) -> OperationResult<()> {
+        self.find_files(file_name, fill_find_data, info, context)
     }
 
     fn read_file(
@@ -431,6 +448,37 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         Ok(n as u32)
     }
 
+    fn flush_file_buffers(
+        &'h self,
+        _file_name: &U16CStr,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c Self::Context,
+    ) -> OperationResult<()> {
+        Ok(())
+    }
+
+    fn set_file_attributes(
+        &'h self,
+        _file_name: &U16CStr,
+        _file_attributes: u32,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c Self::Context,
+    ) -> OperationResult<()> {
+        Err(STATUS_ACCESS_DENIED)
+    }
+
+    fn set_file_time(
+        &'h self,
+        _file_name: &U16CStr,
+        _creation_time: FileTimeOperation,
+        _last_access_time: FileTimeOperation,
+        _last_write_time: FileTimeOperation,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c Self::Context,
+    ) -> OperationResult<()> {
+        Err(STATUS_ACCESS_DENIED)
+    }
+
     fn write_file(
         &'h self,
         _file_name: &U16CStr,
@@ -442,13 +490,54 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         Err(STATUS_ACCESS_DENIED)
     }
 
+    fn set_end_of_file(
+        &'h self,
+        _file_name: &U16CStr,
+        _offset: i64,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c Self::Context,
+    ) -> OperationResult<()> {
+        Err(STATUS_ACCESS_DENIED)
+    }
+
+    fn set_allocation_size(
+        &'h self,
+        _file_name: &U16CStr,
+        _alloc_size: i64,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c Self::Context,
+    ) -> OperationResult<()> {
+        Err(STATUS_ACCESS_DENIED)
+    }
+
+    fn lock_file(
+        &'h self,
+        _file_name: &U16CStr,
+        _offset: i64,
+        _length: i64,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c Self::Context,
+    ) -> OperationResult<()> {
+        Err(STATUS_NOT_IMPLEMENTED)
+    }
+
+    fn unlock_file(
+        &'h self,
+        _file_name: &U16CStr,
+        _offset: i64,
+        _length: i64,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c Self::Context,
+    ) -> OperationResult<()> {
+        Err(STATUS_NOT_IMPLEMENTED)
+    }
+
     fn delete_file(
         &'h self,
         _file_name: &U16CStr,
         _info: &OperationInfo<'c, 'h, Self>,
         _context: &'c Self::Context,
     ) -> OperationResult<()> {
-        // VD 只读
         Err(STATUS_ACCESS_DENIED)
     }
 
@@ -458,7 +547,6 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         _info: &OperationInfo<'c, 'h, Self>,
         _context: &'c Self::Context,
     ) -> OperationResult<()> {
-        // VD 只读
         Err(STATUS_ACCESS_DENIED)
     }
 
@@ -470,7 +558,6 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         _info: &OperationInfo<'c, 'h, Self>,
         _context: &'c Self::Context,
     ) -> OperationResult<()> {
-        // VD 只读
         Err(STATUS_ACCESS_DENIED)
     }
 
@@ -479,9 +566,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         _info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<DiskSpaceInfo> {
         Ok(DiskSpaceInfo {
-            // 让资源管理器显示为 “0 / 1KB”
-            // 注意：某些系统 UI 可能会对极小容量做最小显示/四舍五入，但这里返回值已是 1KB 总量、0 可用。
-            byte_count: 1024, // 1KB
+            byte_count: 1024 * 1024 * 1024,
             free_byte_count: 0,
             available_byte_count: 0,
         })
@@ -493,10 +578,44 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
     ) -> OperationResult<VolumeInfo> {
         Ok(VolumeInfo {
             name: U16CString::from_str("Kabegame").map_err(|_| STATUS_INVALID_PARAMETER)?,
-            serial_number: 0x4B41_4245u32, // 'KABE'
+            serial_number: 0x4B41_4245u32,
             max_component_length: 255,
-            fs_flags: 0,
+            fs_flags: FILE_CASE_PRESERVED_NAMES | FILE_UNICODE_ON_DISK,
             fs_name: U16CString::from_str("NTFS").map_err(|_| STATUS_INVALID_PARAMETER)?,
         })
+    }
+
+    fn mounted(
+        &'h self,
+        _mount_point: &U16CStr,
+        _info: &OperationInfo<'c, 'h, Self>,
+    ) -> OperationResult<()> {
+        Ok(())
+    }
+
+    fn unmounted(&'h self, _info: &OperationInfo<'c, 'h, Self>) -> OperationResult<()> {
+        Ok(())
+    }
+
+    fn get_file_security(
+        &'h self,
+        _file_name: &U16CStr,
+        _security_information: u32,
+        _security_descriptor: PSECURITY_DESCRIPTOR,
+        _buffer_length: u32,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c Self::Context,
+    ) -> OperationResult<u32> {
+        Err(STATUS_NOT_IMPLEMENTED)
+    }
+
+    fn find_streams(
+        &'h self,
+        _file_name: &U16CStr,
+        _fill_find_stream_data: impl FnMut(&dokan::FindStreamData) -> dokan::FillDataResult,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c Self::Context,
+    ) -> OperationResult<()> {
+        Err(STATUS_NOT_IMPLEMENTED)
     }
 }

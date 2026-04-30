@@ -111,12 +111,7 @@ pub async fn clear_finished_tasks() -> Result<usize, String> {
     if !all_image_ids.is_empty() {
         let mut seen = HashSet::new();
         all_image_ids.retain(|id| seen.insert(id.clone()));
-        GlobalEmitter::global().emit_images_change(
-            "change",
-            &all_image_ids,
-            Some(&task_ids),
-            None,
-        );
+        GlobalEmitter::global().emit_images_change("change", &all_image_ids, Some(&task_ids), None);
     }
     Ok(count)
 }

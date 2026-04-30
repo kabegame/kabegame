@@ -5,7 +5,7 @@
 use std::sync::OnceLock;
 
 use crate::ipc::events::{ArcDaemonEvent, DaemonEventKind};
-use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
 /// 全局事件广播器单例
 pub struct EventBroadcaster {
@@ -86,7 +86,6 @@ impl EventBroadcaster {
                 }
             }
         }
-
     }
 
     /// 广播事件

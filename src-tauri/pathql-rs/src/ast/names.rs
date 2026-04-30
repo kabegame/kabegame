@@ -10,7 +10,9 @@ pub struct Namespace(pub String);
 
 impl Namespace {
     pub fn parent(&self) -> Option<Namespace> {
-        self.0.rfind('.').map(|i| Namespace(self.0[..i].to_string()))
+        self.0
+            .rfind('.')
+            .map(|i| Namespace(self.0[..i].to_string()))
     }
 }
 

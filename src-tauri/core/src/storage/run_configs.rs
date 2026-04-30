@@ -29,7 +29,9 @@ fn parse_schedule_spec_cell(s: Option<String>) -> Result<Option<ScheduleSpec>, S
     match s {
         None => Ok(None),
         Some(ref x) if x.trim().is_empty() => Ok(None),
-        Some(s) => serde_json::from_str(&s).map_err(|e| format!("Failed to parse schedule_spec: {}", e)),
+        Some(s) => {
+            serde_json::from_str(&s).map_err(|e| format!("Failed to parse schedule_spec: {}", e))
+        }
     }
 }
 

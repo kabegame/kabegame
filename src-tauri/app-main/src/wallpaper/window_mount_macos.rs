@@ -32,8 +32,7 @@ pub fn mount_to_desktop(window: &WebviewWindow) -> Result<(), String> {
 fn apply_desktop_window_props(ns_window_ptr: *mut std::ffi::c_void) -> Result<(), String> {
     const DESKTOP_WINDOW_LEVEL_MINUS_ONE: i64 = -2_147_483_623;
 
-    let mtm = MainThreadMarker::new()
-        .ok_or("必须在主线程设置 NSWindow 属性".to_string())?;
+    let mtm = MainThreadMarker::new().ok_or("必须在主线程设置 NSWindow 属性".to_string())?;
 
     #[allow(unused_unsafe)]
     unsafe {

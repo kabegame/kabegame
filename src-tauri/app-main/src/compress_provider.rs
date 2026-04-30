@@ -81,7 +81,8 @@ fn run_worker_loop<R: Runtime + 'static>(
                 let p = &provider;
                 Response::GenerateGifThumbnail(rt.block_on(async move {
                     let frame_dir = kabegame_core::app_paths::AppPaths::global()
-                        .temp_dir.clone()
+                        .temp_dir
+                        .clone()
                         .join(format!("gif_frames_{}", uuid::Uuid::new_v4()));
                     tokio::fs::create_dir_all(&frame_dir)
                         .await
@@ -89,7 +90,10 @@ fn run_worker_loop<R: Runtime + 'static>(
                     let extract_result = p
                         .app_handle
                         .compress()
-                        .extract_video_frames(input_path.clone(), frame_dir.to_string_lossy().to_string())
+                        .extract_video_frames(
+                            input_path.clone(),
+                            frame_dir.to_string_lossy().to_string(),
+                        )
                         .await
                         .map_err(|e| e.to_string())?;
                     let frame_dir_path = std::path::Path::new(&extract_result.frame_dir);

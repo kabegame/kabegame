@@ -34,9 +34,9 @@ impl SubscriptionManager {
 
     /// 获取全局 SubscriptionManager 引用
     pub fn global() -> &'static SubscriptionManager {
-        SUBSCRIPTION_MANAGER
-            .get()
-            .expect("SubscriptionManager not initialized. Call SubscriptionManager::init_global() first.")
+        SUBSCRIPTION_MANAGER.get().expect(
+            "SubscriptionManager not initialized. Call SubscriptionManager::init_global() first.",
+        )
     }
 
     pub async fn subscribe(

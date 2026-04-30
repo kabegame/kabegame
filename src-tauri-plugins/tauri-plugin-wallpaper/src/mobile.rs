@@ -37,9 +37,7 @@ impl<R: Runtime> Wallpaper<R> {
             .0
             .run_mobile_plugin_async(
                 "scheduleRotation",
-                ScheduleRotationArgs {
-                    interval_minutes,
-                },
+                ScheduleRotationArgs { interval_minutes },
             )
             .await?;
         Ok(())

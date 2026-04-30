@@ -241,8 +241,7 @@ mod tests {
 
     #[test]
     fn with_where_raw_simple() {
-        let q = ProviderQuery::new()
-            .with_where_raw("x = ?", &[TemplateValue::Int(7)]);
+        let q = ProviderQuery::new().with_where_raw("x = ?", &[TemplateValue::Int(7)]);
         assert_eq!(q.wheres.len(), 1);
         assert_eq!(q.wheres[0].0, "x = ${properties.__pq_raw_0}");
         assert_eq!(

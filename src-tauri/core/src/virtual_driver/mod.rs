@@ -7,6 +7,8 @@
 pub mod driver_service;
 #[cfg(target_os = "windows")]
 mod fs;
+#[cfg(not(target_os = "windows"))]
+mod fuse;
 mod semantics;
 pub(crate) mod vd_locale_sync;
 mod virtual_drive_io;
@@ -14,8 +16,6 @@ mod virtual_drive_io;
 mod virtual_drive_io_windows;
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(not(target_os = "windows"))]
-mod fuse;
 // 从 drive_service 模块导出 VirtualDriveService（根据平台自动选择实现）
 
 pub use driver_service::VirtualDriveService;

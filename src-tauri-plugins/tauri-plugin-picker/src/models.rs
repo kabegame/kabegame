@@ -4,184 +4,184 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PickFolderResult {
-  pub uri: Option<String>,
-  pub path: Option<String>,
+    pub uri: Option<String>,
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListContentChildrenArgs {
-  pub uri: String,
+    pub uri: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContentEntry {
-  pub uri: String,
-  pub name: String,
-  pub is_directory: bool,
+    pub uri: String,
+    pub name: String,
+    pub is_directory: bool,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListContentChildrenResponse {
-  pub entries: Vec<ContentEntry>,
+    pub entries: Vec<ContentEntry>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadContentUriArgs {
-  pub uri: String,
+    pub uri: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadContentUriResponse {
-  pub path: String,
+    pub path: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IsDirectoryArgs {
-  pub uri: String,
+    pub uri: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IsDirectoryResponse {
-  pub is_directory: bool,
+    pub is_directory: bool,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetMimeTypeArgs {
-  pub uri: String,
+    pub uri: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetMimeTypeResponse {
-  pub mime_type: Option<String>,
+    pub mime_type: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetImageDimensionsArgs {
-  pub uri: String,
+    pub uri: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetImageDimensionsResponse {
-  pub width: u32,
-  pub height: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetContentSizeArgs {
-  pub uri: String,
+    pub uri: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetContentSizeResponse {
-  pub size: u64,
+    pub size: u64,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadFileBytesArgs {
-  pub uri: String,
+    pub uri: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadFileBytesResponse {
-  pub data: String,
-  pub size: u64,
+    pub data: String,
+    pub size: u64,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TakePersistablePermissionArgs {
-  pub uri: String,
+    pub uri: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetDisplayNameArgs {
-  pub uri: String,
+    pub uri: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetDisplayNameResponse {
-  pub name: String,
+    pub name: String,
 }
 
 /// 选图结果：返回 content:// URI 列表。需 Serialize 供 command 返回前端。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PickImagesResponse {
-  pub uris: Vec<String>,
+    pub uris: Vec<String>,
 }
 
 /// 选视频结果：返回 content:// URI 列表。需 Serialize 供 command 返回前端。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PickVideosResponse {
-  pub uris: Vec<String>,
+    pub uris: Vec<String>,
 }
 
 /// 选 .kgpg 文件结果。需 Serialize 供 command 返回前端。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PickKgpgFileResponse {
-  pub path: String,
+    pub path: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenImageArgs {
-  pub uri: String,
+    pub uri: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenVideoArgs {
-  pub uri: String,
+    pub uri: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopyImageToPicturesArgs {
-  pub source_path: String,
-  pub mime_type: String,
-  pub display_name: String,
+    pub source_path: String,
+    pub mime_type: String,
+    pub display_name: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopyImageToPicturesResponse {
-  pub content_uri: String,
+    pub content_uri: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopyExtractedImagesToPicturesArgs {
-  pub source_dir: String,
+    pub source_dir: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopiedImageEntry {
-  pub content_uri: String,
-  pub display_name: String,
+    pub content_uri: String,
+    pub display_name: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopyExtractedImagesToPicturesResponse {
-  pub entries: Vec<CopiedImageEntry>,
+    pub entries: Vec<CopiedImageEntry>,
 }

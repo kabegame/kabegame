@@ -702,9 +702,7 @@ impl DownloadQueue {
     }
 
     pub async fn set_desired_concurrency_from_settings(&self) {
-        let desired = Settings::global()
-            .get_max_concurrent_downloads()
-            .max(1);
+        let desired = Settings::global().get_max_concurrent_downloads().max(1);
         let mut total = self.pool.total_workers.lock().await;
         if *total < desired {
             let add = desired - *total;
@@ -963,9 +961,7 @@ impl DownloadQueue {
 
             {
                 let mut pool_st = self.pool.state.lock().await;
-                let desired = Settings::global()
-                    .get_max_concurrent_downloads()
-                    .max(1);
+                let desired = Settings::global().get_max_concurrent_downloads().max(1);
                 if pool_st.in_flight < desired {
                     pool_st.queue.push_back(request);
                     pool_st.in_flight += 1;
@@ -1547,8 +1543,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                 "processing",
                                 None,
                             );
-                            let auto_deduplicate = Settings::global()
-                                .get_auto_deduplicate();
+                            let auto_deduplicate = Settings::global().get_auto_deduplicate();
                             #[cfg(not(target_os = "android"))]
                             let _ = auto_deduplicate;
 

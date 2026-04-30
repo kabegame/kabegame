@@ -11,7 +11,11 @@ pub struct ValidateError {
 }
 
 impl ValidateError {
-    pub fn new(provider: impl Into<String>, field: impl Into<String>, kind: ValidateErrorKind) -> Self {
+    pub fn new(
+        provider: impl Into<String>,
+        field: impl Into<String>,
+        kind: ValidateErrorKind,
+    ) -> Self {
         Self {
             provider: provider.into(),
             field: field.into(),

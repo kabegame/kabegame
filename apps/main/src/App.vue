@@ -90,7 +90,7 @@
       </router-view>
     </el-main>
     <!-- Web mode：super 模式切换（左下角浮动） -->
-    <SuperModeToggle v-if="IS_WEB" />
+    <SuperModeToggle v-if="IS_WEB && !uiStore.isCompact" />
     <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
     <nav v-if="uiStore.isCompact" class="app-bottom-tabs" aria-label="主导航">
       <router-link

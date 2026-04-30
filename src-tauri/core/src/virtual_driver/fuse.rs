@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use fuser::{
-    FileAttr, FileType, Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEntry,
-    ReplyOpen, Request,
+    FileAttr, FileType, Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyOpen,
+    Request,
 };
 
 use crate::emitter::GlobalEmitter;
@@ -128,7 +128,9 @@ impl KabegameFuseFs {
                     blksize: 512,
                 }
             }
-            VfsOpenedItem::File { size, meta, hidden, .. } => {
+            VfsOpenedItem::File {
+                size, meta, hidden, ..
+            } => {
                 #[cfg(target_os = "macos")]
                 let flags: u32 = if *hidden { 0x8000 } else { 0 };
                 #[cfg(not(target_os = "macos"))]
@@ -176,13 +178,7 @@ impl Filesystem for KabegameFuseFs {
         Ok(())
     }
 
-    fn lookup(
-        &mut self,
-        _req: &Request<'_>,
-        parent: u64,
-        name: &OsStr,
-        reply: ReplyEntry,
-    ) {
+    fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let Some(parent_path) = self.get_path(parent) else {
             reply.error(libc::ENOENT);
             return;
@@ -370,10 +366,7 @@ impl Filesystem for KabegameFuseFs {
         }
 
         let mut buffer = vec![0u8; size as usize];
-        match opened_file
-            .read_handle
-            .read_at(offset as u64, &mut buffer)
-        {
+        match opened_file.read_handle.read_at(offset as u64, &mut buffer) {
             Ok(n) => {
                 buffer.truncate(n);
                 reply.data(&buffer);
@@ -453,7 +446,13 @@ impl Filesystem for KabegameFuseFs {
         reply.error(libc::EACCES);
     }
 
-    fn unlink(&mut self, _req: &Request<'_>, _parent: u64, _name: &OsStr, reply: fuser::ReplyEmpty) {
+    fn unlink(
+        &mut self,
+        _req: &Request<'_>,
+        _parent: u64,
+        _name: &OsStr,
+        reply: fuser::ReplyEmpty,
+    ) {
         // VD 只读——不允许删除文件
         reply.error(libc::EACCES);
     }
@@ -472,4 +471,3 @@ impl Filesystem for KabegameFuseFs {
         reply.error(libc::EACCES);
     }
 }
-

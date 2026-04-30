@@ -10,10 +10,9 @@ use crate::ProviderRegistry;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
-/// 调试开关 (临时调试期强制开启, 调完移除): 设环境变量 `PATHQL_DEBUG=1` 启用,
-/// 但当前为了排查 path 解析问题强制 always-on。
+/// 调试开关: 设环境变量 `PATHQL_DEBUG=1` 启用。
 pub(crate) fn dbg_enabled() -> bool {
-    true
+    std::env::var("PATHQL_DEBUG").ok().as_deref() == Some("1")
 }
 
 pub struct ResolvedNode {
@@ -228,16 +227,9 @@ impl ProviderRuntime {
         let node = self.resolve(path)?;
         let ctx = self.template_context();
         let dialect = self.executor.dialect();
-        let (sql, values) = node
-            .composed
-            .build_sql(&ctx, dialect)
-            .map_err(|e| {
-                EngineError::FactoryFailed(
-                    "<runtime>".into(),
-                    "fetch".into(),
-                    e.to_string(),
-                )
-            })?;
+        let (sql, values) = node.composed.build_sql(&ctx, dialect).map_err(|e| {
+            EngineError::FactoryFailed("<runtime>".into(), "fetch".into(), e.to_string())
+        })?;
         self.executor.execute(&sql, &values)
     }
 
@@ -247,16 +239,9 @@ impl ProviderRuntime {
         let node = self.resolve(path)?;
         let ctx = self.template_context();
         let dialect = self.executor.dialect();
-        let (inner_sql, values) = node
-            .composed
-            .build_sql(&ctx, dialect)
-            .map_err(|e| {
-                EngineError::FactoryFailed(
-                    "<runtime>".into(),
-                    "count".into(),
-                    e.to_string(),
-                )
-            })?;
+        let (inner_sql, values) = node.composed.build_sql(&ctx, dialect).map_err(|e| {
+            EngineError::FactoryFailed("<runtime>".into(), "count".into(), e.to_string())
+        })?;
         let sql = format!("SELECT COUNT(*) AS n FROM ({}) AS pq_sub", inner_sql);
         let rows = self.executor.execute(&sql, &values)?;
         let n = rows
@@ -650,7 +635,7 @@ mod tests {
 
     #[test]
     fn percent_decode_path_segments() {
-        // simulate /vd/i18n-zh_CN/%E6%8C%89%E7%94%BB%E5%86%8C  (UTF-8 percent-encoded "按画册")
+        // simulate /vd/i18n-zh_CN/%E6%8C%89%E7%94%BB%E5%86%8C  (UTF-8 percent-encoded "画册")
         struct Inner {
             children: Vec<(String, Arc<dyn Provider>)>,
         }
@@ -676,7 +661,7 @@ mod tests {
         }
         let leaf: Arc<dyn Provider> = Arc::new(Inner { children: vec![] });
         let root = Arc::new(Inner {
-            children: vec![("按画册".into(), leaf)],
+            children: vec![("画册".into(), leaf)],
         });
         let runtime =
             ProviderRuntime::new(empty_registry(), root, no_op_executor(), HashMap::new());
@@ -744,10 +729,7 @@ mod tests {
     fn fetch_resolves_path_then_executes() {
         let exec = Arc::new(CapturingExecutor {
             captured: std::sync::Mutex::new(Vec::new()),
-            rows_for_inner: vec![
-                serde_json::json!({"id": 1}),
-                serde_json::json!({"id": 2}),
-            ],
+            rows_for_inner: vec![serde_json::json!({"id": 1}), serde_json::json!({"id": 2})],
             rows_for_count: vec![],
         });
         let root: Arc<dyn Provider> = Arc::new(ImagesLeaf);
@@ -763,8 +745,16 @@ mod tests {
         let captured = exec.captured.lock().unwrap();
         assert_eq!(captured.len(), 1);
         // inner SQL 不带 COUNT wrapper
-        assert!(captured[0].0.contains("FROM images"), "sql: {}", captured[0].0);
-        assert!(!captured[0].0.contains("COUNT(*)"), "sql: {}", captured[0].0);
+        assert!(
+            captured[0].0.contains("FROM images"),
+            "sql: {}",
+            captured[0].0
+        );
+        assert!(
+            !captured[0].0.contains("COUNT(*)"),
+            "sql: {}",
+            captured[0].0
+        );
     }
 
     #[test]
@@ -787,7 +777,11 @@ mod tests {
         let captured = exec.captured.lock().unwrap();
         assert_eq!(captured.len(), 1);
         let sql = &captured[0].0;
-        assert!(sql.starts_with("SELECT COUNT(*) AS n FROM ("), "sql: {}", sql);
+        assert!(
+            sql.starts_with("SELECT COUNT(*) AS n FROM ("),
+            "sql: {}",
+            sql
+        );
         assert!(sql.contains("FROM images"), "inner sql missing: {}", sql);
         assert!(sql.ends_with(") AS pq_sub"), "sql: {}", sql);
     }

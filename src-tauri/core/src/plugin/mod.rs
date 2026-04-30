@@ -330,8 +330,6 @@ impl PluginManager {
         crate::app_paths::AppPaths::global().plugins_dir()
     }
 
-
-
     /// 从 ZIP 格式的插件文件中读取 manifest.json
     pub async fn read_plugin_manifest(&self, zip_path: &Path) -> Result<PluginManifest, String> {
         read_plugin_manifest_from_kgpg_file(zip_path).await
@@ -863,10 +861,7 @@ impl PluginManager {
                 }
             }
         }
-        Err(format!(
-            "商店源 {} 中未找到插件 {}",
-            source_id, plugin_id
-        ))
+        Err(format!("商店源 {} 中未找到插件 {}", source_id, plugin_id))
     }
 
     /// 从单个源获取插件列表（从远程获取并保存缓存）
@@ -1878,7 +1873,10 @@ impl PluginManager {
                     if !s.is_empty() {
                         doc_entries.push((lang_key, s));
                     }
-                } else if name.starts_with("doc_root/") && !name.ends_with(".md") && !name.ends_with('/') {
+                } else if name.starts_with("doc_root/")
+                    && !name.ends_with(".md")
+                    && !name.ends_with('/')
+                {
                     let rel_path = name.strip_prefix("doc_root/").unwrap().to_string();
                     if !rel_path.is_empty() {
                         let mut bytes = Vec::new();
@@ -1896,7 +1894,8 @@ impl PluginManager {
 
             // 回落：若 zip 根目录无 icon.png，尝试 doc_root/icon.png
             if icon_png_bytes.is_none() {
-                if let Some((_, bytes)) = doc_resource_entries.iter().find(|(p, _)| p == "icon.png") {
+                if let Some((_, bytes)) = doc_resource_entries.iter().find(|(p, _)| p == "icon.png")
+                {
                     icon_png_bytes = Some(bytes.clone());
                 }
             }
@@ -1968,11 +1967,13 @@ impl PluginManager {
                             image::ImageFormat::Png,
                         )
                         .ok()?;
-                    if png_bytes.is_empty() { None } else { Some(STANDARD.encode(png_bytes)) }
+                    if png_bytes.is_empty() {
+                        None
+                    } else {
+                        Some(STANDARD.encode(png_bytes))
+                    }
                 })
-                .or_else(|| {
-                    icon_png_bytes.as_ref().map(|b| STANDARD.encode(b))
-                })
+                .or_else(|| icon_png_bytes.as_ref().map(|b| STANDARD.encode(b)))
         } else {
             icon_png_bytes.as_ref().map(|bytes| {
                 use base64::{engine::general_purpose::STANDARD, Engine as _};

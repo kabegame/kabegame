@@ -1,6 +1,4 @@
-use crate::ast::{
-    list::List, names::*, property::PropertyDecl, query::Query, resolve::Resolve,
-};
+use crate::ast::{list::List, names::*, property::PropertyDecl, query::Query, resolve::Resolve};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -58,17 +56,14 @@ mod tests {
 
     #[test]
     fn unknown_field_rejected() {
-        let r: Result<ProviderDef, _> =
-            serde_json::from_str(r#"{"name":"foo","unknown":1}"#);
+        let r: Result<ProviderDef, _> = serde_json::from_str(r#"{"name":"foo","unknown":1}"#);
         assert!(r.is_err());
     }
 
     #[test]
     fn with_namespace() {
-        let v: ProviderDef = serde_json::from_str(
-            r#"{"namespace":"kabegame","name":"foo"}"#,
-        )
-        .unwrap();
+        let v: ProviderDef =
+            serde_json::from_str(r#"{"namespace":"kabegame","name":"foo"}"#).unwrap();
         assert_eq!(v.namespace, Some(Namespace("kabegame".into())));
     }
 }

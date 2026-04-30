@@ -26,7 +26,6 @@ pub use windows::normalize_mount_point;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use fuse::VirtualDriveService;
 
-
 /// 虚拟盘服务 trait（定义所有平台必须实现的接口）
 ///
 /// 注意：此 trait 不用于动态分发（`dyn VirtualDriveServiceTrait`），

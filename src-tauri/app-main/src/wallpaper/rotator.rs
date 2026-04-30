@@ -76,9 +76,7 @@ fn sequential_path(source: &RotationSource, marker: Option<CurrentMarker>) -> St
         (RotationSource::Gallery, Some(CurrentMarker::Time(t))) => {
             format!("/gallery/bigger_crawler_time/{}/l100l", t)
         }
-        (RotationSource::Gallery, _) => {
-            "/gallery/bigger_crawler_time/0/l100l".to_string()
-        }
+        (RotationSource::Gallery, _) => "/gallery/bigger_crawler_time/0/l100l".to_string(),
     }
 }
 
@@ -502,7 +500,10 @@ impl WallpaperRotator {
                                 .enumerate()
                                 .filter_map(|(idx, img)| {
                                     if Path::new(&img.local_path).exists()
-                                        && Self::media_allowed_in_mode(&img.local_path, &wallpaper_mode)
+                                        && Self::media_allowed_in_mode(
+                                            &img.local_path,
+                                            &wallpaper_mode,
+                                        )
                                     {
                                         Some(idx)
                                     } else {
@@ -564,7 +565,8 @@ impl WallpaperRotator {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs();
-                let _ = Storage::global().update_image_last_set_wallpaper_at(&selected_image.id, now_ts);
+                let _ = Storage::global()
+                    .update_image_last_set_wallpaper_at(&selected_image.id, now_ts);
                 let ids = vec![selected_image.id.clone()];
                 GlobalEmitter::global().emit_images_change("change", &ids, None, None);
 
@@ -655,10 +657,9 @@ impl WallpaperRotator {
             // Gallery 顺序模式改由 `images.id > current` 在 DB 层定位下一张，无需对齐。
             if matches!(source, RotationSource::Album(_)) && rotation_mode == "sequential" {
                 if let Some(cur) = Self::get_current_wallpaper_path(&self.app).await {
-                    if images
-                        .iter()
-                        .any(|img| Self::normalize_path(&img.local_path) == Self::normalize_path(&cur))
-                    {
+                    if images.iter().any(|img| {
+                        Self::normalize_path(&img.local_path) == Self::normalize_path(&cur)
+                    }) {
                         self.align_sequential_index_from_current(&images, &cur);
                     }
                 }
@@ -668,9 +669,7 @@ impl WallpaperRotator {
             {
                 use tauri_plugin_wallpaper::WallpaperExt;
 
-                let interval = settings
-                    .get_wallpaper_rotation_interval_minutes()
-                    .max(15) as u32;
+                let interval = settings.get_wallpaper_rotation_interval_minutes().max(15) as u32;
 
                 self.app
                     .wallpaper()
@@ -745,14 +744,10 @@ impl WallpaperRotator {
                 // 回退到画廊
                 let _ = settings.set_wallpaper_rotation_album_id(Some("".to_string()));
                 source = RotationSource::Gallery;
-                images = Self::load_images_for_source(
-                    &source,
-                    false,
-                    &rotation_mode,
-                    &wallpaper_mode,
-                )
-                .await
-                .unwrap_or_default();
+                images =
+                    Self::load_images_for_source(&source, false, &rotation_mode, &wallpaper_mode)
+                        .await
+                        .unwrap_or_default();
             }
 
             if images.is_empty() {

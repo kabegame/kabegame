@@ -125,7 +125,8 @@ mod tests {
 
     #[test]
     fn multi_key_round_trip_preserves_order() {
-        let v: OrderForm = serde_json::from_str(r#"[{"a":"asc","b":"desc","c":"revert"}]"#).unwrap();
+        let v: OrderForm =
+            serde_json::from_str(r#"[{"a":"asc","b":"desc","c":"revert"}]"#).unwrap();
         let j = serde_json::to_string(&v).unwrap();
         let back: OrderForm = serde_json::from_str(&j).unwrap();
         assert_eq!(v, back);

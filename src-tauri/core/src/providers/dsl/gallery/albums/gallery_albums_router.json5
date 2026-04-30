@@ -5,7 +5,7 @@
     // 7c S1: programmatic GalleryAlbumsRouter 迁 DSL。
     // - INNER JOIN album_images AS ai (让下游 album entry 能用 ai.album_id WHERE)
     // - 暴露 ai."order" AS album_order (壁纸顺序模式 marker, 7b S1e 引入)
-    // - 默认按 images.crawled_at ASC (与 6e gallery_all_router 同款 baseline ORDER)
+    // - 默认按 images.crawled_at ASC (与旧 shared AlbumsProvider/VD 行为对齐)。
     "query": {
         "join": [{
             "kind": "INNER",
@@ -19,17 +19,23 @@
         "order": [{ "images.crawled_at": "asc" }]
     },
     "list": {
-        // 根画册 (parent_id IS NULL); meta 由 host SQL 函数 get_album(id) 返回的 JSON 文本
-        // 经 `$json` directive 整体 parse 注入, 与 wrap_typed_meta_json(Album) 输出完全一致 —
-        // 类型也保留 (createdAt 仍为 number)。
+        // 根画册 (parent_id IS NULL); meta 由 runtime 按 SQL 行字段构造。
         "${out.id}": {
-            "sql": "SELECT id, get_album(id) AS album_meta_json FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
+            "sql": "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
             "data_var": "out",
             "provider": "gallery_album_provider",
             "properties": {
                 "album_id": "${out.id}"
             },
-            "meta": { "$json": "${out.album_meta_json}" }
+            "meta": {
+                "kind": "album",
+                "data": {
+                    "id": "${out.id}",
+                    "name": "${out.name}",
+                    "createdAt": "${out.created_at}",
+                    "parentId": "${out.parent_id}"
+                }
+            }
         }
     },
     "resolve": {

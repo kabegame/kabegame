@@ -204,9 +204,7 @@ impl PluginSourcesStorage {
 
     /// 获取插件源缓存（仅 JSON 正文）
     pub fn get_source_cache(&self, source_id: &str) -> SqliteResult<Option<String>> {
-        Ok(self
-            .get_source_cache_row(source_id)?
-            .map(|(json, _)| json))
+        Ok(self.get_source_cache_row(source_id)?.map(|(json, _)| json))
     }
 
     /// 获取插件源缓存行：`json_content` 与 `updated_at`（Unix 秒）

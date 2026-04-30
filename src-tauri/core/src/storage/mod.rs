@@ -94,8 +94,7 @@ PRAGMA mmap_size = 268435456;
 
         // 7a: schema 就绪后注册 DSL 主机 SQL 函数 (get_plugin 等)。
         // connection-scoped, 单连接架构注册一次即可。
-        dsl_funcs::register_dsl_functions(&conn)
-            .expect("Failed to register DSL scalar functions");
+        dsl_funcs::register_dsl_functions(&conn).expect("Failed to register DSL scalar functions");
 
         Self {
             db: Arc::new(Mutex::new(conn)),

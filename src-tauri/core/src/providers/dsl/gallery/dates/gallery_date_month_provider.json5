@@ -9,13 +9,25 @@
         "where": "strftime('%Y-%m', crawled_at_seconds(images.crawled_at), 'unixepoch') = ${properties.year_month}"
     },
     "list": {
-        "desc":   { "provider": "sort_provider" },
+        "desc":   { "provider": "sort_router" },
         "${out.dd}d": {
-            "sql": "SELECT DISTINCT substr(strftime('%Y-%m-%d', crawled_at_seconds(images.crawled_at), 'unixepoch'), 9, 2) AS dd FROM (${composed}) AS sub WHERE strftime('%Y-%m-%d', crawled_at_seconds(images.crawled_at), 'unixepoch') IS NOT NULL ORDER BY dd DESC",
+            "sql": "SELECT DISTINCT substr(strftime('%Y-%m-%d', crawled_at_seconds(sub.crawled_at), 'unixepoch'), 9, 2) AS dd FROM (${composed}) AS sub WHERE strftime('%Y-%m-%d', crawled_at_seconds(sub.crawled_at), 'unixepoch') IS NOT NULL ORDER BY dd DESC",
             "data_var": "out",
             "provider": "gallery_date_day_provider",
             "properties": {
                 "ymd": "${properties.year_month}-${out.dd}"
+            }
+        },
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
             }
         },
         "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
@@ -34,7 +46,7 @@
             "properties": { "page_size": "${capture[1]}" }
         },
         "([1-9][0-9]*)": {
-            "provider": "query_page_provider",
+            "provider": "gallery_page_router",
             "properties": {
                 "page_size": 100,
                 "page_num": "${capture[1]}"

@@ -13,11 +13,19 @@
     // list 子画册 (parent_id = ${properties.parent_album_id})
     "list": {
         "${out.name}": {
-            "sql": "SELECT id, name, get_album(id) AS album_meta_json FROM albums WHERE parent_id = ${properties.parent_album_id} ORDER BY created_at ASC",
+            "sql": "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id = ${properties.parent_album_id} ORDER BY created_at ASC",
             "data_var": "out",
             "provider": "vd_album_entry_provider",
             "properties": { "album_id": "${out.id}" },
-            "meta": { "$json": "${out.album_meta_json}" }
+            "meta": {
+                "kind": "album",
+                "data": {
+                    "id": "${out.id}",
+                    "name": "${out.name}",
+                    "createdAt": "${out.created_at}",
+                    "parentId": "${out.parent_id}"
+                }
+            }
         }
     }
 }

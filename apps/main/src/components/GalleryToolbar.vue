@@ -33,10 +33,12 @@
               trigger="hover"
               placement="right-start"
               @command="onDesktopTimeFilterCommand"
+              @visible-change="onDesktopTimeMenuVisible"
             >
               <span
                 class="plugin-submenu-trigger"
                 :class="{ 'is-active': isTimeFilterBrowse }"
+                @mouseenter="void ensureTimeRootLoaded()"
               >
                 {{ t("gallery.filterByTime") }}
                 <el-icon class="plugin-submenu-chevron">
@@ -49,10 +51,16 @@
                     <GalleryTimeFilterSubmenu
                       :nodes="timeMenuRoots"
                       :date-tail="dateTail"
+                      :loading-names="visibleTimeLoadingNames"
+                      :loading-text="t('common.loading')"
                       @command="onDesktopTimeFilterCommand"
+                      @lazy-open="(node) => void ensureTimeNodeChildrenLoaded(node)"
                     />
                   </template>
-                  <el-dropdown-item v-else disabled>
+                  <el-dropdown-item v-else-if="isLazyLoadingVisible('time-root')" disabled>
+                    {{ t("common.loading") }}
+                  </el-dropdown-item>
+                  <el-dropdown-item v-else-if="isLazyLoaded('time-root')" disabled>
                     {{ t("gallery.filterByTimeEmpty") }}
                   </el-dropdown-item>
                 </el-dropdown-menu>
@@ -64,10 +72,12 @@
               trigger="hover"
               placement="right-start"
               @command="onDesktopPluginFilterCommand"
+              @visible-change="onDesktopPluginMenuVisible"
             >
               <span
                 class="plugin-submenu-trigger"
                 :class="{ 'is-active': isPluginFilterBrowse }"
+                @mouseenter="void ensurePluginGroupsLoaded()"
               >
                 {{ t("gallery.filterByPlugin") }}
                 <el-icon class="plugin-submenu-chevron">
@@ -76,7 +86,10 @@
               </span>
               <template #dropdown>
                 <el-dropdown-menu class="plugin-submenu-menu">
-                  <template v-if="pluginGroups.length">
+                  <el-dropdown-item v-if="isLazyLoadingVisible('plugin')" disabled>
+                    {{ t("common.loading") }}
+                  </el-dropdown-item>
+                  <template v-else-if="pluginGroups.length">
                     <el-dropdown-item
                       v-for="g in pluginGroups"
                       :key="g.plugin_id"
@@ -87,7 +100,7 @@
                       <span class="plugin-count">({{ g.count }})</span>
                     </el-dropdown-item>
                   </template>
-                  <el-dropdown-item v-else disabled>
+                  <el-dropdown-item v-else-if="isLazyLoaded('plugin')" disabled>
                     {{ t("gallery.filterByPluginEmpty") }}
                   </el-dropdown-item>
                 </el-dropdown-menu>
@@ -99,10 +112,12 @@
               trigger="hover"
               placement="right-start"
               @command="onDesktopMediaTypeFilterCommand"
+              @visible-change="onDesktopMediaTypeMenuVisible"
             >
               <span
                 class="plugin-submenu-trigger"
                 :class="{ 'is-active': isMediaTypeFilterBrowse }"
+                @mouseenter="void ensureMediaTypeCountsLoaded()"
               >
                 {{ t("gallery.filterByMediaType") }}
                 <el-icon class="plugin-submenu-chevron">
@@ -111,7 +126,11 @@
               </span>
               <template #dropdown>
                 <el-dropdown-menu class="plugin-submenu-menu">
+                  <el-dropdown-item v-if="isLazyLoadingVisible('media-type')" disabled>
+                    {{ t("common.loading") }}
+                  </el-dropdown-item>
                   <el-dropdown-item
+                    v-else
                     command="image"
                     :class="{
                       'is-active': filterMediaKind(props.filter) === 'image',
@@ -121,6 +140,7 @@
                     <span class="plugin-count">({{ mediaTypeCounts.imageCount }})</span>
                   </el-dropdown-item>
                   <el-dropdown-item
+                    v-if="!isLazyLoadingVisible('media-type')"
                     command="video"
                     :class="{
                       'is-active': filterMediaKind(props.filter) === 'video',
@@ -264,7 +284,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onUnmounted, onMounted } from "vue";
+import { computed, ref, watch, onUnmounted } from "vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
@@ -292,6 +312,7 @@ import {
   type DateGroupRow,
   type DayGroupRow,
   type TimeMenuNode,
+  type YearGroupRow,
 } from "@/utils/galleryTimeFilterMenu";
 import GalleryTimeFilterSubmenu from "@/header/comps/GalleryTimeFilterSubmenu.vue";
 import { usePluginStore } from "@/stores/plugins";
@@ -382,6 +403,10 @@ interface ProviderChildDir {
   total?: number | null;
 }
 
+interface ProviderCountResult {
+  total?: number | null;
+}
+
 const pluginGroups = ref<PluginGroupRow[]>([]);
 const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
   imageCount: 0,
@@ -389,12 +414,15 @@ const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
 });
 const monthGroups = ref<DateGroupRow[]>([]);
 const dayGroups = ref<DayGroupRow[]>([]);
+const yearGroups = ref<YearGroupRow[]>([]);
 
 const timeMenuRoots = computed<TimeMenuNode[]>(() =>
   buildGalleryTimeMenuTree(
     monthGroups.value,
     dayGroups.value,
-    buildTimeMenuScopeLabels(t, String(locale.value))
+    buildTimeMenuScopeLabels(t, String(locale.value)),
+    yearGroups.value,
+    { collapse: false }
   )
 );
 
@@ -403,140 +431,310 @@ const timeMenuRoots = computed<TimeMenuNode[]>(() =>
  *  保证 hide 状态与搜索词对预览计数生效。 */
 const { contextPath: filterContextPrefix } = storeToRefs(galleryRouteStore);
 
-async function loadPluginGroups() {
-  try {
-    const entries = await invoke<ProviderChildDir[]>("list_provider_children", {
-      path: `${filterContextPrefix.value}plugin/`,
-    });
-    pluginGroups.value = (Array.isArray(entries) ? entries : [])
-      .filter((e) => e?.kind === "dir" && typeof e.name === "string" && e.name)
-      .map((e) => ({ plugin_id: e.name, count: e.total ?? 0 }))
-      .filter((r) => r.count > 0);
-  } catch {
-    pluginGroups.value = [];
-  }
+async function countProviderPath(path: string): Promise<number> {
+  const p = path.trim().replace(/\/+$/, "");
+  if (!p) return 0;
+  const res = await invoke<ProviderCountResult>("browse_gallery_provider", {
+    path: p,
+  });
+  return typeof res?.total === "number" ? res.total : 0;
 }
 
-async function loadMediaTypeCounts() {
-  try {
-    const entries = await invoke<ProviderChildDir[]>("list_provider_children", {
-      path: `${filterContextPrefix.value}media-type/`,
-    });
-    const byName = new Map<string, number>();
-    for (const e of entries ?? []) {
-      if (e?.kind === "dir" && typeof e.name === "string") {
-        byName.set(e.name, e.total ?? 0);
-      }
-    }
-    mediaTypeCounts.value = {
-      imageCount: byName.get("image") ?? 0,
-      videoCount: byName.get("video") ?? 0,
-    };
-  } catch {
-    mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
-  }
+async function listProviderDirs(path: string): Promise<ProviderChildDir[]> {
+  const entries = await invoke<ProviderChildDir[]>("list_provider_children", {
+    path,
+  });
+  return (Array.isArray(entries) ? entries : []).filter(
+    (e): e is ProviderChildDir => !!e && e.kind === "dir" && typeof e.name === "string" && !!e.name
+  );
 }
 
 const YEAR_SEG_RE = /^(\d{4})y$/;
 const MONTH_SEG_RE = /^(\d{2})m$/;
 const DAY_SEG_RE = /^(\d{2})d$/;
 
-/**
- * 时间过滤菜单（年→月→日）通过 `list_provider_children` 分层拉取：
- * - `date/`         → 年份列表（含 total）
- * - `date/<y>/`     → 各年的月份列表
- * - `date/<y>/<m>/` → 各月的日期列表
- *
- * 带上 `filterContextPrefix` 让搜索生效于日期筛选预览计数；每层剥离 provider
- * 固定子段（如 `desc`）与翻页段，只保留 YYYYy / MMm / DDd 形状的 child。
- * 0 计数的节点直接剪枝，避免向下发无用请求。
- */
-async function loadTimeFilterData() {
-  const prefix = filterContextPrefix.value;
-  try {
-    const yearEntries = await invoke<ProviderChildDir[]>("list_provider_children", {
-      path: `${prefix}date/`,
-    });
-    const years = (yearEntries ?? [])
-      .filter((e): e is ProviderChildDir => !!e && e.kind === "dir")
-      .map((e) => {
-        const m = YEAR_SEG_RE.exec(e.name);
-        return m ? { year: m[1]!, seg: e.name, total: e.total ?? 0 } : null;
-      })
-      .filter((y): y is { year: string; seg: string; total: number } => !!y && y.total > 0);
+type LazyScope = "plugin" | "media-type" | "time-root" | `time-year:${string}` | `time-month:${string}`;
 
-    const monthsPerYear = await Promise.all(
-      years.map(async (y) => {
-        const monthEntries = await invoke<ProviderChildDir[]>("list_provider_children", {
-          path: `${prefix}date/${y.seg}/`,
-        });
-        return (monthEntries ?? [])
-          .filter((e): e is ProviderChildDir => !!e && e.kind === "dir")
-          .map((e) => {
-            const m = MONTH_SEG_RE.exec(e.name);
-            return m
-              ? { year: y.year, month: m[1]!, seg: e.name, total: e.total ?? 0 }
-              : null;
-          })
-          .filter(
-            (x): x is { year: string; month: string; seg: string; total: number } =>
-              !!x && x.total > 0
-          );
-      })
-    );
-    const months = monthsPerYear.flat();
+const lazyLoadedKeys = ref(new Set<string>());
+const lazyDirtyKeys = ref(new Set<string>());
+const lazyPendingKeys = ref(new Set<string>());
+const lazyVisibleLoadingKeys = ref(new Set<string>());
+const lazyInFlight = new Map<string, Promise<void>>();
+const lazyLoadingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-    const daysPerMonth = await Promise.all(
-      months.map(async (mo) => {
-        const dayEntries = await invoke<ProviderChildDir[]>("list_provider_children", {
-          path: `${prefix}date/${mo.year}y/${mo.seg}/`,
-        });
-        return (dayEntries ?? [])
-          .filter((e): e is ProviderChildDir => !!e && e.kind === "dir")
-          .map((e) => {
-            const m = DAY_SEG_RE.exec(e.name);
-            return m
-              ? { year: mo.year, month: mo.month, day: m[1]!, total: e.total ?? 0 }
-              : null;
-          })
-          .filter(
-            (x): x is { year: string; month: string; day: string; total: number } =>
-              !!x && x.total > 0
-          );
-      })
-    );
+function currentLazyKey(scope: LazyScope, prefix = filterContextPrefix.value) {
+  return `${prefix}|${scope}`;
+}
 
-    monthGroups.value = months.map((mo) => ({
-      year_month: `${mo.year}-${mo.month}`,
-      count: mo.total,
-    }));
-    dayGroups.value = daysPerMonth.flat().map((d) => ({
-      ymd: `${d.year}-${d.month}-${d.day}`,
-      count: d.total,
-    }));
-  } catch {
-    monthGroups.value = [];
-    dayGroups.value = [];
+function replaceSetValue(target: typeof lazyLoadedKeys, op: (next: Set<string>) => void) {
+  const next = new Set(target.value);
+  op(next);
+  target.value = next;
+}
+
+function isLazyLoaded(scope: LazyScope) {
+  return lazyLoadedKeys.value.has(currentLazyKey(scope));
+}
+
+function isLazyLoadingVisible(scope: LazyScope) {
+  return lazyVisibleLoadingKeys.value.has(currentLazyKey(scope));
+}
+
+function startLazyLoadingUi(key: string) {
+  replaceSetValue(lazyPendingKeys, (next) => next.add(key));
+  replaceSetValue(lazyVisibleLoadingKeys, (next) => next.delete(key));
+  if (lazyLoadingTimers.has(key)) {
+    clearTimeout(lazyLoadingTimers.get(key)!);
   }
+  lazyLoadingTimers.set(
+    key,
+    setTimeout(() => {
+      if (lazyPendingKeys.value.has(key)) {
+        replaceSetValue(lazyVisibleLoadingKeys, (next) => next.add(key));
+      }
+      lazyLoadingTimers.delete(key);
+    }, 300)
+  );
 }
 
-async function loadFilterCounts() {
-  await Promise.all([loadPluginGroups(), loadMediaTypeCounts(), loadTimeFilterData()]);
+function finishLazyLoadingUi(key: string) {
+  if (lazyLoadingTimers.has(key)) {
+    clearTimeout(lazyLoadingTimers.get(key)!);
+    lazyLoadingTimers.delete(key);
+  }
+  replaceSetValue(lazyPendingKeys, (next) => next.delete(key));
+  replaceSetValue(lazyVisibleLoadingKeys, (next) => next.delete(key));
 }
 
-onMounted(() => void loadFilterCounts());
+async function ensureLazyLoaded(scope: LazyScope, loader: (prefix: string) => Promise<void>) {
+  const prefix = filterContextPrefix.value;
+  const key = currentLazyKey(scope, prefix);
+  if (lazyLoadedKeys.value.has(key) && !lazyDirtyKeys.value.has(key)) return;
+  const existing = lazyInFlight.get(key);
+  if (existing) return existing;
 
-// search 变化时重新计算 plugin / media-type / date 的上下文相关计数
+  startLazyLoadingUi(key);
+  const task = (async () => {
+    try {
+      await loader(prefix);
+      if (prefix === filterContextPrefix.value) {
+        replaceSetValue(lazyLoadedKeys, (next) => next.add(key));
+        replaceSetValue(lazyDirtyKeys, (next) => next.delete(key));
+      }
+    } finally {
+      finishLazyLoadingUi(key);
+      lazyInFlight.delete(key);
+    }
+  })();
+  lazyInFlight.set(key, task);
+  return task;
+}
+
+function resetLazyDataForPrefixChange() {
+  for (const timer of lazyLoadingTimers.values()) {
+    clearTimeout(timer);
+  }
+  lazyLoadingTimers.clear();
+  lazyInFlight.clear();
+  lazyLoadedKeys.value = new Set();
+  lazyDirtyKeys.value = new Set();
+  lazyPendingKeys.value = new Set();
+  lazyVisibleLoadingKeys.value = new Set();
+  pluginGroups.value = [];
+  mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
+  yearGroups.value = [];
+  monthGroups.value = [];
+  dayGroups.value = [];
+}
+
+function markFilterLazyDataDirty() {
+  lazyDirtyKeys.value = new Set(lazyLoadedKeys.value);
+}
+
 watch(filterContextPrefix, () => {
-  void loadPluginGroups();
-  void loadMediaTypeCounts();
-  void loadTimeFilterData();
+  resetLazyDataForPrefixChange();
+});
+
+onUnmounted(() => {
+  for (const timer of lazyLoadingTimers.values()) {
+    clearTimeout(timer);
+  }
+  lazyLoadingTimers.clear();
 });
 
 useImagesChangeRefresh({
   enabled: ref(true),
   waitMs: 500,
-  onRefresh: () => void loadFilterCounts(),
+  onRefresh: markFilterLazyDataDirty,
+});
+
+async function ensurePluginGroupsLoaded() {
+  await ensureLazyLoaded("plugin", async (prefix) => {
+    try {
+      const entries = await listProviderDirs(`${prefix}plugin/`);
+      const groups = await Promise.all(
+        entries.map(async (e) => ({
+          plugin_id: e.name,
+          count: await countProviderPath(`${prefix}plugin/${encodeURIComponent(e.name)}`),
+        }))
+      );
+      if (prefix !== filterContextPrefix.value) return;
+      pluginGroups.value = groups.filter((r) => r.count > 0);
+    } catch {
+      if (prefix === filterContextPrefix.value) pluginGroups.value = [];
+    }
+  });
+}
+
+async function ensureMediaTypeCountsLoaded() {
+  await ensureLazyLoaded("media-type", async (prefix) => {
+    try {
+      const [imageCount, videoCount] = await Promise.all([
+        countProviderPath(`${prefix}media-type/image`),
+        countProviderPath(`${prefix}media-type/video`),
+      ]);
+      if (prefix !== filterContextPrefix.value) return;
+      mediaTypeCounts.value = { imageCount, videoCount };
+    } catch {
+      if (prefix === filterContextPrefix.value) {
+        mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
+      }
+    }
+  });
+}
+
+async function ensureTimeRootLoaded() {
+  await ensureLazyLoaded("time-root", async (prefix) => {
+    try {
+      const yearEntries = await listProviderDirs(`${prefix}date/`);
+      const yearCandidates = yearEntries
+        .map((e) => {
+          const m = YEAR_SEG_RE.exec(e.name);
+          return m ? { year: m[1]!, seg: e.name } : null;
+        })
+        .filter((y): y is { year: string; seg: string } => !!y);
+      const years = (
+        await Promise.all(
+          yearCandidates.map(async (y) => ({
+            year: y.year,
+            count: await countProviderPath(`${prefix}date/${y.seg}`),
+          }))
+        )
+      ).filter((y) => y.count > 0);
+      if (prefix !== filterContextPrefix.value) return;
+      yearGroups.value = years;
+    } catch {
+      if (prefix === filterContextPrefix.value) {
+        yearGroups.value = [];
+        monthGroups.value = [];
+        dayGroups.value = [];
+      }
+    }
+  });
+}
+
+async function ensureTimeYearMonthsLoaded(year: string) {
+  if (!/^\d{4}$/.test(year)) return;
+  await ensureLazyLoaded(`time-year:${year}`, async (prefix) => {
+    try {
+      const yearSeg = `${year}y`;
+      const monthEntries = await listProviderDirs(`${prefix}date/${yearSeg}/`);
+      const monthCandidates = monthEntries
+        .map((e) => {
+          const m = MONTH_SEG_RE.exec(e.name);
+          return m ? { month: m[1]!, seg: e.name } : null;
+        })
+        .filter((m): m is { month: string; seg: string } => !!m);
+      const months = (
+        await Promise.all(
+          monthCandidates.map(async (mo) => ({
+            year_month: `${year}-${mo.month}`,
+            count: await countProviderPath(`${prefix}date/${yearSeg}/${mo.seg}`),
+          }))
+        )
+      ).filter((mo) => mo.count > 0);
+      if (prefix !== filterContextPrefix.value) return;
+      monthGroups.value = [
+        ...monthGroups.value.filter((m) => !m.year_month.startsWith(`${year}-`)),
+        ...months,
+      ];
+      dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${year}-`));
+    } catch {
+      if (prefix === filterContextPrefix.value) {
+        monthGroups.value = monthGroups.value.filter((m) => !m.year_month.startsWith(`${year}-`));
+        dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${year}-`));
+      }
+    }
+  });
+}
+
+async function ensureTimeMonthDaysLoaded(yearMonth: string) {
+  const m = /^(\d{4})-(\d{2})$/.exec(yearMonth);
+  if (!m) return;
+  const [, year, month] = m;
+  await ensureLazyLoaded(`time-month:${yearMonth}`, async (prefix) => {
+    try {
+      const yearSeg = `${year}y`;
+      const monthSeg = `${month}m`;
+      const dayEntries = await listProviderDirs(`${prefix}date/${yearSeg}/${monthSeg}/`);
+      const dayCandidates = dayEntries
+        .map((e) => {
+          const dm = DAY_SEG_RE.exec(e.name);
+          return dm ? { day: dm[1]!, seg: e.name } : null;
+        })
+        .filter((d): d is { day: string; seg: string } => !!d);
+      const days = (
+        await Promise.all(
+          dayCandidates.map(async (d) => ({
+            ymd: `${yearMonth}-${d.day}`,
+            count: await countProviderPath(`${prefix}date/${yearSeg}/${monthSeg}/${d.seg}`),
+          }))
+        )
+      ).filter((d) => d.count > 0);
+      if (prefix !== filterContextPrefix.value) return;
+      dayGroups.value = [
+        ...dayGroups.value.filter((d) => !d.ymd.startsWith(`${yearMonth}-`)),
+        ...days,
+      ];
+    } catch {
+      if (prefix === filterContextPrefix.value) {
+        dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${yearMonth}-`));
+      }
+    }
+  });
+}
+
+async function ensureTimeNodeChildrenLoaded(node: TimeMenuNode) {
+  if (/^\d{4}$/.test(node.name)) {
+    await ensureTimeYearMonthsLoaded(node.name);
+  } else if (/^\d{4}-\d{2}$/.test(node.name)) {
+    await ensureTimeMonthDaysLoaded(node.name);
+  }
+}
+
+function onDesktopTimeMenuVisible(open: boolean) {
+  if (open) void ensureTimeRootLoaded();
+}
+
+function onDesktopPluginMenuVisible(open: boolean) {
+  if (open) void ensurePluginGroupsLoaded();
+}
+
+function onDesktopMediaTypeMenuVisible(open: boolean) {
+  if (open) void ensureMediaTypeCountsLoaded();
+}
+
+const visibleTimeLoadingNames = computed(() => {
+  const names = new Set<string>();
+  for (const key of lazyVisibleLoadingKeys.value) {
+    const scope = key.slice(key.indexOf("|") + 1);
+    if (scope.startsWith("time-year:")) {
+      names.add(scope.slice("time-year:".length));
+    } else if (scope.startsWith("time-month:")) {
+      names.add(scope.slice("time-month:".length));
+    }
+  }
+  return names;
 });
 
 const sortOptionLabelAsc = computed(() =>
@@ -562,10 +760,12 @@ const filterFoldLabel = computed(() => {
   if (pid) return t("gallery.filterByPluginWithName", { name: pluginStore.pluginLabel(pid) });
   const mk = filterMediaKind(props.filter);
   if (mk === "image") {
-    return `${t("gallery.filterImageOnlyLabel")} (${mediaTypeCounts.value.imageCount})`;
+    const label = t("gallery.filterImageOnlyLabel");
+    return isLazyLoaded("media-type") ? `${label} (${mediaTypeCounts.value.imageCount})` : label;
   }
   if (mk === "video") {
-    return `${t("gallery.filterVideoOnlyLabel")} (${mediaTypeCounts.value.videoCount})`;
+    const label = t("gallery.filterVideoOnlyLabel");
+    return isLazyLoaded("media-type") ? `${label} (${mediaTypeCounts.value.videoCount})` : label;
   }
   return t("gallery.filterAll");
 });
@@ -655,20 +855,24 @@ watch(showFilterPicker, (open) => {
     }
   }
 });
-function onFilterPickerConfirm() {
+async function onFilterPickerConfirm() {
   showFilterPicker.value = false;
   const v = filterPickerSelected.value[0];
   if (v === "time") {
+    await ensureTimeRootLoaded();
+    await ensureTimeTailLoaded(dateTail.value);
     if (!timeMenuRoots.value.length) return;
     showTimeFilterPicker.value = true;
     return;
   }
   if (v === "plugin") {
+    await ensurePluginGroupsLoaded();
     if (!pluginGroups.value.length) return;
     showPluginFilterPicker.value = true;
     return;
   }
   if (v === "media-type") {
+    await ensureMediaTypeCountsLoaded();
     showMediaTypeFilterPicker.value = true;
     return;
   }
@@ -692,6 +896,31 @@ function applyTimeMenuPickerState(raw: readonly string[]) {
   timeFilterPickerSelected.value = values;
 }
 
+function findTimeNodeByPickerValues(raw: readonly string[]) {
+  let nodes = timeMenuRoots.value;
+  let found: TimeMenuNode | null = null;
+  for (const value of raw) {
+    const node = nodes.find((n) => (n.key ?? n.name) === value);
+    if (!node) break;
+    found = node;
+    nodes = node.children ?? [];
+  }
+  return found;
+}
+
+async function ensureTimeTailLoaded(tail: string | null) {
+  const s = tail?.trim();
+  if (!s) return;
+  const year = /^(\d{4})(?:-\d{2})?(?:-\d{2})?$/.exec(s)?.[1];
+  if (year) {
+    await ensureTimeYearMonthsLoaded(year);
+  }
+  const yearMonth = /^(\d{4}-\d{2})(?:-\d{2})?$/.exec(s)?.[1];
+  if (yearMonth) {
+    await ensureTimeMonthDaysLoaded(yearMonth);
+  }
+}
+
 watch(showTimeFilterPicker, (open) => {
   if (!open) return;
   const roots = timeMenuRoots.value;
@@ -699,14 +928,19 @@ watch(showTimeFilterPicker, (open) => {
   applyTimeMenuPickerState(initial);
 });
 
-function onTimeFilterPickerChange(payload: {
+async function onTimeFilterPickerChange(payload: {
   selectedValues: (string | number)[];
   columnIndex: number;
 }) {
   const { columnIndex, selectedValues } = payload;
   const maxD = getTimeMenuMaxDepth(timeMenuRoots.value);
   if (columnIndex >= maxD - 1) return;
-  applyTimeMenuPickerState(selectedValues.map(String));
+  const values = selectedValues.map(String);
+  const node = findTimeNodeByPickerValues(values);
+  if (node) {
+    await ensureTimeNodeChildrenLoaded(node);
+  }
+  applyTimeMenuPickerState(values);
 }
 
 function onTimeFilterPickerConfirm(payload: {

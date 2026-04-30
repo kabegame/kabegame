@@ -8,14 +8,14 @@ use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use tokio::task::JoinHandle;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, RwLock};
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex, Notify};
 use tokio::runtime::Handle;
+use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::task::JoinHandle;
 use url::Url;
 
 /// 任务 worker 协程数量上限（与设置「同时运行任务数」1~10 一致；实际并发由 `wait_for_task_slot` 与设置共同限制）。
@@ -146,10 +146,7 @@ impl TaskScheduler {
         let storage = Storage::global();
         // let emitter = GlobalEmitter::global();
         let _ = persist_task_status(storage, &req.task_id, "pending", None, None, None);
-        GlobalEmitter::global().emit_task_changed(
-            &req.task_id,
-            json!({ "status": "pending" }),
-        );
+        GlobalEmitter::global().emit_task_changed(&req.task_id, json!({ "status": "pending" }));
 
         self.queue_tx
             .send(req)
@@ -275,7 +272,9 @@ impl TaskScheduler {
     }
 
     pub async fn set_download_concurrency(&self) {
-        self.download_queue.set_desired_concurrency_from_settings().await;
+        self.download_queue
+            .set_desired_concurrency_from_settings()
+            .await;
         self.download_queue.notify_all_waiting();
     }
 
@@ -348,10 +347,7 @@ fn persist_task_status(
         task.error = error;
     }
     storage.update_task(task)?;
-    if matches!(
-        status,
-        "completed" | "failed" | "canceled" | "cancelled"
-    ) {
+    if matches!(status, "completed" | "failed" | "canceled" | "cancelled") {
         on_crawl_task_reached_terminal(task_id);
     }
     Ok(())
@@ -360,9 +356,7 @@ fn persist_task_status(
 /// 按当前「同时运行任务数」设置占用槽位（`running` +1）；若已满则等待直至有任务结束或设置增大。
 async fn wait_for_task_slot(running: &Arc<AtomicUsize>, notify: &Arc<Notify>) {
     loop {
-        let max = Settings::global()
-            .get_max_concurrent_tasks()
-            .clamp(1, 10) as usize;
+        let max = Settings::global().get_max_concurrent_tasks().clamp(1, 10) as usize;
         let r = running.load(Ordering::Acquire);
         if r < max {
             if running

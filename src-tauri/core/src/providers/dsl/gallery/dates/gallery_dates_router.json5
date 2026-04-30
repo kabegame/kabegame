@@ -10,7 +10,7 @@
     "list": {
         // 从 composed 抽 distinct 年 (DESC, 最近的先)。${composed} 已带 gallery_route fields/joins。
         "${out.year}y": {
-            "sql": "SELECT DISTINCT strftime('%Y', crawled_at_seconds(images.crawled_at), 'unixepoch') AS year FROM (${composed}) AS sub WHERE strftime('%Y', crawled_at_seconds(images.crawled_at), 'unixepoch') IS NOT NULL ORDER BY year DESC",
+            "sql": "SELECT DISTINCT strftime('%Y', crawled_at_seconds(sub.crawled_at), 'unixepoch') AS year FROM (${composed}) AS sub WHERE strftime('%Y', crawled_at_seconds(sub.crawled_at), 'unixepoch') IS NOT NULL ORDER BY year DESC",
             "data_var": "out",
             "provider": "gallery_date_year_provider",
             "properties": {

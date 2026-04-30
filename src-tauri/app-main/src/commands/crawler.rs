@@ -1,5 +1,5 @@
-use kabegame_core::crawler::scheduler::PageStackEntry;
 use kabegame_core::crawler::downloader::BrowserDownloadState;
+use kabegame_core::crawler::scheduler::PageStackEntry;
 use kabegame_core::crawler::webview::{crawler_window_state, JsTaskPatch};
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
@@ -66,10 +66,7 @@ fn update_task_status(task_id: &str, status: &str, end_time: Option<u64>, error:
             task.error = Some(err);
         }
         let _ = Storage::global().update_task(task);
-        if matches!(
-            status,
-            "completed" | "failed" | "canceled" | "cancelled"
-        ) {
+        if matches!(status, "completed" | "failed" | "canceled" | "cancelled") {
             on_crawl_task_reached_terminal(task_id);
         }
     }
@@ -118,7 +115,11 @@ fn merge_state(current: Option<&Value>, patch: &Value) -> Value {
     Value::Object(base)
 }
 
-fn resolve_target_url(raw_url: &str, current_url: Option<&str>, base_url: &str) -> Result<String, String> {
+fn resolve_target_url(
+    raw_url: &str,
+    current_url: Option<&str>,
+    base_url: &str,
+) -> Result<String, String> {
     if let Ok(abs) = Url::parse(raw_url) {
         return Ok(abs.to_string());
     }
@@ -253,7 +254,9 @@ pub async fn crawl_exit_with_status(status: &str, only_for_task_id: Option<&str>
         diff["progress"] = json!(100);
     }
     GlobalEmitter::global().emit_task_changed(&ctx.task_id, diff);
-    TaskScheduler::global().page_stacks().remove_stack(&ctx.task_id);
+    TaskScheduler::global()
+        .page_stacks()
+        .remove_stack(&ctx.task_id);
     let _ = state.release_task(&ctx.task_id).await;
 }
 
@@ -291,7 +294,9 @@ pub async fn crawl_error(message: String) -> Result<(), String> {
             "error": err,
         }),
     );
-    TaskScheduler::global().page_stacks().remove_stack(&ctx.task_id);
+    TaskScheduler::global()
+        .page_stacks()
+        .remove_stack(&ctx.task_id);
     let _ = state.release_task(&ctx.task_id).await;
     Ok(())
 }
@@ -419,7 +424,8 @@ pub async fn crawl_register_blob_download(
             payload.download_id, ctx.task_id
         ));
     }
-    let result = BrowserDownloadState::global().register_blob_url(&payload.download_id, &payload.blob_url);
+    let result =
+        BrowserDownloadState::global().register_blob_url(&payload.download_id, &payload.blob_url);
     result
 }
 
@@ -541,7 +547,10 @@ pub async fn crawl_to(app: AppHandle, payload: CrawlToPayload) -> Result<(), Str
         let mut guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
         if guard.is_empty() {
             guard.push(PageStackEntry {
-                url: ctx.current_url.clone().unwrap_or_else(|| ctx.base_url.clone()),
+                url: ctx
+                    .current_url
+                    .clone()
+                    .unwrap_or_else(|| ctx.base_url.clone()),
                 html: String::new(),
                 headers: HashMap::new(),
                 page_label: ctx.page_label.clone(),
@@ -643,7 +652,9 @@ pub async fn crawl_back(app: AppHandle, count: Option<usize>) -> Result<(), Stri
 #[tauri::command]
 pub fn show_crawler_window(app: AppHandle) -> Result<(), String> {
     if crawler_window_state().try_get_context().is_none() {
-        return Err("爬虫 WebView 窗口当前为空，没有爬虫插件在占用，先运行一个爬虫插件吧".to_string());
+        return Err(
+            "爬虫 WebView 窗口当前为空，没有爬虫插件在占用，先运行一个爬虫插件吧".to_string(),
+        );
     }
     let crawler_window = app
         .get_webview_window("crawler")

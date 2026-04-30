@@ -10,9 +10,10 @@ use crate::compose::{
     fold_contrib, render_template_to_string, render_to_owned, AliasTable, ProviderQuery,
     RenderError,
 };
-use crate::template::eval::{TemplateContext, TemplateValue};
+use crate::template::{evaluate_var, parse, Segment, TemplateContext, TemplateValue, VarRef};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// DSL provider 实例。
 pub struct DslProvider {
@@ -21,6 +22,45 @@ pub struct DslProvider {
 }
 
 impl DslProvider {
+    fn provider_label(&self) -> String {
+        format!(
+            "{}::{}",
+            self.def
+                .namespace
+                .as_ref()
+                .map(|n| n.0.as_str())
+                .unwrap_or(""),
+            self.def.name.0
+        )
+    }
+
+    fn profile_enabled(&self) -> bool {
+        let Ok(filter) = std::env::var("PATHQL_PROFILE") else {
+            return false;
+        };
+        let filter = filter.trim();
+        if filter.is_empty() || matches!(filter, "0" | "false" | "off") {
+            return false;
+        }
+        if matches!(filter, "1" | "true" | "all") {
+            return true;
+        }
+
+        self.provider_label().contains(filter) || self.def.name.0.contains(filter)
+    }
+
+    fn profile_log(&self, op: &str, started: Instant, detail: impl AsRef<str>) {
+        if self.profile_enabled() {
+            eprintln!(
+                "[pathql-profile] provider={} op={} elapsed_ms={} {}",
+                self.provider_label(),
+                op,
+                started.elapsed().as_millis(),
+                detail.as_ref()
+            );
+        }
+    }
+
     /// 自身 namespace (用于 instantiate 时的当前命名空间)。
     fn current_namespace(&self) -> Namespace {
         self.def
@@ -176,19 +216,45 @@ impl DslProvider {
         composed: &ProviderQuery,
         ctx: &ProviderContext,
     ) -> Result<Vec<ChildEntry>, EngineError> {
+        let total_started = Instant::now();
         let executor = ctx.runtime.executor().clone();
         let dialect = executor.dialect();
 
         // 渲染 SQL: properties 作用域 + 父 composed 内联 (供 ${composed} 子查询)。
+        let render_started = Instant::now();
         let aliases = AliasTable::new();
         let mut prop_ctx = self.base_template_context(ctx, &[]);
         if let Ok(composed_rendered) = composed.build_sql(&prop_ctx, dialect) {
             prop_ctx.composed = Some(composed_rendered);
         }
         let (sql, params) = render_to_owned(&entry.sql.0, &prop_ctx, &aliases, dialect)?;
+        self.profile_log(
+            "list.sql.render",
+            render_started,
+            format!("key_template={key_template:?} params={}", params.len()),
+        );
 
-        let rows = executor.execute(&sql, &params)?;
+        let execute_started = Instant::now();
+        let rows = match executor.execute(&sql, &params) {
+            Ok(rows) => {
+                self.profile_log(
+                    "list.sql.execute",
+                    execute_started,
+                    format!("rows={} sql={sql:?}", rows.len()),
+                );
+                rows
+            }
+            Err(e) => {
+                self.profile_log(
+                    "list.sql.execute",
+                    execute_started,
+                    format!("err={e:?} sql={sql:?}"),
+                );
+                return Err(e);
+            }
+        };
 
+        let materialize_started = Instant::now();
         let data_var_name = entry.data_var.0.clone();
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
@@ -213,6 +279,16 @@ impl DslProvider {
                 meta,
             });
         }
+        self.profile_log(
+            "list.sql.materialize",
+            materialize_started,
+            format!("children={}", out.len()),
+        );
+        self.profile_log(
+            "list.sql.total",
+            total_started,
+            format!("key_template={key_template:?} children={}", out.len()),
+        );
         Ok(out)
     }
 
@@ -283,6 +359,7 @@ impl DslProvider {
     ) -> Result<Option<Arc<dyn Provider>>, EngineError> {
         match entry {
             DynamicListEntry::Sql(sql_entry) => {
+                let total_started = Instant::now();
                 let dbg = crate::provider::runtime::dbg_enabled();
                 let executor = ctx.runtime.executor().clone();
                 let dialect = executor.dialect();
@@ -320,8 +397,17 @@ impl DslProvider {
                         }
                     }
                 }
+                let render_started = Instant::now();
                 let (sql, params) =
                     render_to_owned(&sql_entry.sql.0, &prop_ctx, &aliases, dialect)?;
+                self.profile_log(
+                    "resolve.dynamic.sql.render",
+                    render_started,
+                    format!(
+                        "target={name:?} key_template={key_template:?} params={}",
+                        params.len()
+                    ),
+                );
                 if dbg {
                     eprintln!(
                         "[pathql]   reverse dynamic SQL provider={}::{} key_template={:?} sql={:?} params={:?}",
@@ -336,7 +422,25 @@ impl DslProvider {
                         params,
                     );
                 }
-                let rows = executor.execute(&sql, &params)?;
+                let execute_started = Instant::now();
+                let rows = match executor.execute(&sql, &params) {
+                    Ok(rows) => {
+                        self.profile_log(
+                            "resolve.dynamic.sql.execute",
+                            execute_started,
+                            format!("target={name:?} rows={} sql={sql:?}", rows.len()),
+                        );
+                        rows
+                    }
+                    Err(e) => {
+                        self.profile_log(
+                            "resolve.dynamic.sql.execute",
+                            execute_started,
+                            format!("target={name:?} err={e:?} sql={sql:?}"),
+                        );
+                        return Err(e);
+                    }
+                };
                 if dbg {
                     eprintln!(
                         "[pathql]   reverse dynamic SQL rows provider={}::{} count={}",
@@ -350,6 +454,7 @@ impl DslProvider {
                     );
                 }
 
+                let scan_started = Instant::now();
                 let data_var_name = sql_entry.data_var.0.clone();
                 for row in rows {
                     let mut row_ctx = self.base_template_context(ctx, &[]);
@@ -383,9 +488,29 @@ impl DslProvider {
                             }
                             None => None,
                         };
+                        self.profile_log(
+                            "resolve.dynamic.sql.scan",
+                            scan_started,
+                            format!("target={name:?} result=hit rendered={rendered:?}"),
+                        );
+                        self.profile_log(
+                            "resolve.dynamic.sql.total",
+                            total_started,
+                            format!("target={name:?} result=hit"),
+                        );
                         return Ok(provider);
                     }
                 }
+                self.profile_log(
+                    "resolve.dynamic.sql.scan",
+                    scan_started,
+                    format!("target={name:?} result=miss"),
+                );
+                self.profile_log(
+                    "resolve.dynamic.sql.total",
+                    total_started,
+                    format!("target={name:?} result=miss"),
+                );
                 Ok(None)
             }
             DynamicListEntry::Delegate(del_entry) => {
@@ -692,6 +817,48 @@ impl Provider for DslProvider {
     }
 }
 
+fn template_value_to_json(v: TemplateValue) -> serde_json::Value {
+    match v {
+        TemplateValue::Null => serde_json::Value::Null,
+        TemplateValue::Bool(b) => serde_json::Value::Bool(b),
+        TemplateValue::Int(i) => serde_json::Value::from(i),
+        TemplateValue::Real(r) => serde_json::Number::from_f64(r)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        TemplateValue::Text(s) => serde_json::Value::String(s),
+        TemplateValue::Json(v) => v,
+    }
+}
+
+fn pure_meta_template_value(
+    template: &str,
+    tctx: &TemplateContext,
+) -> Result<Option<serde_json::Value>, RenderError> {
+    let ast = parse(template)?;
+    if ast.segments.len() != 1 {
+        return Ok(None);
+    }
+
+    let Segment::Var(var) = &ast.segments[0] else {
+        return Ok(None);
+    };
+
+    if let VarRef::Bare { ns } = var {
+        if let Some((name, json)) = &tctx.data_var {
+            if name == ns {
+                return Ok(Some(json.clone()));
+            }
+        }
+        if let Some((name, json)) = &tctx.child_var {
+            if name == ns {
+                return Ok(Some(json.clone()));
+            }
+        }
+    }
+
+    Ok(Some(template_value_to_json(evaluate_var(var, tctx)?)))
+}
+
 fn walk_meta_value(
     v: &serde_json::Value,
     tctx: &TemplateContext,
@@ -699,22 +866,21 @@ fn walk_meta_value(
     use serde_json::Value as J;
     match v {
         // 7c S2: `{"$json": "<template>"}` directive — 渲染模板字符串后 parse 为 JSON 值。
-        // 用例: meta 用 host SQL 函数 (`get_plugin(id)` / `get_album(id)` 等) 返回的 JSON 文本
+        // 用例: meta 用 host SQL 函数 (`get_plugin(id)`) 返回的 JSON 文本
         // 整体注入, 无需在 DSL 里逐字段展开。directive 形态: 单键 `$json`, 值是模板字符串。
         J::Object(map) if map.len() == 1 && map.contains_key("$json") => {
-            let template = map
-                .get("$json")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    RenderError::MetaJsonParse(
-                        "$json directive value must be a string template".into(),
-                    )
-                })?;
+            let template = map.get("$json").and_then(|v| v.as_str()).ok_or_else(|| {
+                RenderError::MetaJsonParse("$json directive value must be a string template".into())
+            })?;
             let rendered = render_template_to_string(template, tctx)?;
-            serde_json::from_str(&rendered)
-                .map_err(|e| RenderError::MetaJsonParse(format!("{} (rendered: {:?})", e, rendered)))
+            serde_json::from_str(&rendered).map_err(|e| {
+                RenderError::MetaJsonParse(format!("{} (rendered: {:?})", e, rendered))
+            })
         }
         J::String(s) if s.contains("${") => {
+            if let Some(value) = pure_meta_template_value(s, tctx)? {
+                return Ok(value);
+            }
             let rendered = render_template_to_string(s, tctx)?;
             Ok(J::String(rendered))
         }
@@ -768,9 +934,12 @@ mod walk_meta_tests {
 
     #[test]
     fn json_directive_parses_rendered_template_to_object() {
-        let ctx = ctx_with_data("out", serde_json::json!({
-            "blob": r#"{"a":1,"b":"x"}"#
-        }));
+        let ctx = ctx_with_data(
+            "out",
+            serde_json::json!({
+                "blob": r#"{"a":1,"b":"x"}"#
+            }),
+        );
         let meta = serde_json::json!({"$json": "${out.blob}"});
         let result = walk_meta_value(&meta, &ctx).unwrap();
         assert_eq!(result, serde_json::json!({"a":1,"b":"x"}));
@@ -794,14 +963,59 @@ mod walk_meta_tests {
 
     #[test]
     fn plain_object_meta_still_walks_children() {
-        let ctx = TemplateContext::new()
-            .with_properties([("k".into(), TemplateValue::Text("v".into()))].into_iter().collect());
+        let ctx = TemplateContext::new().with_properties(
+            [("k".into(), TemplateValue::Text("v".into()))]
+                .into_iter()
+                .collect(),
+        );
         let meta = serde_json::json!({
             "kind": "x",
             "value": "${properties.k}"
         });
         let result = walk_meta_value(&meta, &ctx).unwrap();
         assert_eq!(result, serde_json::json!({"kind":"x","value":"v"}));
+    }
+
+    #[test]
+    fn pure_variable_meta_preserves_json_types() {
+        let ctx = ctx_with_data(
+            "out",
+            serde_json::json!({
+                "id": "a",
+                "created_at": 42,
+                "parent_id": null,
+                "nested": {"ok": true}
+            }),
+        );
+        let meta = serde_json::json!({
+            "kind": "album",
+            "data": {
+                "id": "${out.id}",
+                "createdAt": "${out.created_at}",
+                "parentId": "${out.parent_id}",
+                "nested": "${out.nested}"
+            },
+            "row": "${out}"
+        });
+        let result = walk_meta_value(&meta, &ctx).unwrap();
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "kind": "album",
+                "data": {
+                    "id": "a",
+                    "createdAt": 42,
+                    "parentId": null,
+                    "nested": {"ok": true}
+                },
+                "row": {
+                    "id": "a",
+                    "created_at": 42,
+                    "parent_id": null,
+                    "nested": {"ok": true}
+                }
+            })
+        );
     }
 
     #[test]

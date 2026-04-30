@@ -46,9 +46,7 @@ pub async fn handle_plugin_request(req: &IpcRequest) -> Option<IpcResponse> {
             .await,
         ),
 
-        IpcRequest::PluginPreviewImport { zip_path } => {
-            Some(preview_import_plugin(zip_path).await)
-        }
+        IpcRequest::PluginPreviewImport { zip_path } => Some(preview_import_plugin(zip_path).await),
         IpcRequest::PluginGetRemoteIconV2 {
             download_url,
             source_id,

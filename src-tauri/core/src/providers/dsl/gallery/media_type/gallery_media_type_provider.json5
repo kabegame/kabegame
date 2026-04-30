@@ -11,18 +11,27 @@
         "where": "CASE ${properties.kind} WHEN 'video' THEN (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') ELSE NOT (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') END"
     },
     "list": {
-        "desc":   { "provider": "sort_provider" },
-        "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
-        "x500x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
-        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
+            }
+        },
     },
     "resolve": {
+        "desc":  { "provider": "sort_router" },
         "x([1-9][0-9]*)x": {
             "provider": "gallery_paginate_router",
             "properties": { "page_size": "${capture[1]}" }
         },
         "([1-9][0-9]*)": {
-            "provider": "query_page_provider",
+            "provider": "gallery_page_router",
             "properties": {
                 "page_size": 100,
                 "page_num": "${capture[1]}"

@@ -153,7 +153,10 @@ pub fn get_processor(archive_type: ArchiveType) -> Option<&'static ArchiveProces
 }
 
 /// 根据 URL（及可选的 MIME）猜测格式并返回对应处理器。
-pub fn get_processor_by_url(url: &Url, mime: Option<&str>) -> Option<&'static ArchiveProcessorEnum> {
+pub fn get_processor_by_url(
+    url: &Url,
+    mime: Option<&str>,
+) -> Option<&'static ArchiveProcessorEnum> {
     ARCHIVE_PROCESSOR_REGISTRY
         .iter()
         .find(|(_, processor)| processor.can_handle(url, mime))

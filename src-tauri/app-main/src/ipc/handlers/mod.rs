@@ -27,9 +27,8 @@ use tauri::{AppHandle, Emitter};
 
 /// 分发 IPC 请求到对应的处理器（app_handle 由 start_ipc_server 传入，仅需发事件的请求使用）
 pub async fn dispatch_request(
-    req: IpcRequest, 
-    #[cfg(not(feature = "web"))]
-    app_handle: AppHandle
+    req: IpcRequest,
+    #[cfg(not(feature = "web"))] app_handle: AppHandle,
 ) -> IpcResponse {
     // 获取s tatus
     if matches!(req, IpcRequest::Status) {

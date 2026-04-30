@@ -1,20 +1,18 @@
-#[cfg(not(target_os = "android"))]
-use std::{
-    path::Path,
-    str::FromStr,
-    sync::OnceLock,
-};
 #[cfg(all(not(target_os = "android"), debug_assertions))]
 use std::sync::Arc;
+#[cfg(not(target_os = "android"))]
+use std::{path::Path, str::FromStr, sync::OnceLock};
 
+#[cfg(all(not(target_os = "android"), debug_assertions))]
+use axum::middleware::{from_fn, Next};
 #[cfg(not(target_os = "android"))]
 use axum::{
     body::Body,
     extract::Query,
     http::{
         header::{
-            HeaderValue, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE,
-            CONTENT_TYPE, RANGE,
+            HeaderValue, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
+            RANGE,
         },
         Request, StatusCode, Uri,
     },
@@ -22,16 +20,14 @@ use axum::{
     routing::get,
     Router,
 };
-#[cfg(all(not(target_os = "android"), debug_assertions))]
-use axum::middleware::{from_fn, Next};
-#[cfg(all(not(target_os = "android"), debug_assertions))]
-use tokio::sync::Semaphore;
 #[cfg(not(target_os = "android"))]
 use serde::Deserialize;
 #[cfg(not(target_os = "android"))]
 use tokio::io::SeekFrom;
 #[cfg(not(target_os = "android"))]
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
+#[cfg(all(not(target_os = "android"), debug_assertions))]
+use tokio::sync::Semaphore;
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
 use tower::ServiceExt;
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
@@ -106,7 +102,6 @@ fn set_immutable_cache(resp: &mut Response) {
     resp.headers_mut()
         .insert(CACHE_CONTROL, IMMUTABLE_CACHE_CONTROL);
 }
-
 
 #[cfg(not(target_os = "android"))]
 async fn handle_file_query(
@@ -357,7 +352,6 @@ async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
 async fn handle_unmatched(uri: Uri) -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
 }
-
 
 /// Returns a Router with file-serving routes usable by both local and web modes.
 /// Does NOT include `/plugin-doc-image` (inlined as data URLs on the frontend).

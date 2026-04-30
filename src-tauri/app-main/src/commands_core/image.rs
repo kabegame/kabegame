@@ -11,7 +11,9 @@ use kabegame_core::providers::{
     decode_provider_path_segments, execute_provider_query_typed, provider_query_to_json,
     provider_runtime, ProviderQueryTyped,
 };
-use kabegame_core::storage::image_events::{delete_images_with_events, toggle_image_favorite_with_event};
+use kabegame_core::storage::image_events::{
+    delete_images_with_events, toggle_image_favorite_with_event,
+};
 use kabegame_core::storage::Storage;
 use serde_json::Value;
 

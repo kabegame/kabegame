@@ -479,12 +479,11 @@ impl WallpaperManager for NativeWallpaperManager {
                         e
                     );
                     match self.get_wallpaper_plasma_fill_mode() {
-                        Ok(fill_mode) => Ok(Self::plasma_fill_mode_to_style(&fill_mode).to_string()),
+                        Ok(fill_mode) => {
+                            Ok(Self::plasma_fill_mode_to_style(&fill_mode).to_string())
+                        }
                         Err(e2) => {
-                            eprintln!(
-                                "[WARN] 无法读取 Plasma FillMode: {}，返回默认值 fill",
-                                e2
-                            );
+                            eprintln!("[WARN] 无法读取 Plasma FillMode: {}，返回默认值 fill", e2);
                             Ok("fill".to_string())
                         }
                     }
@@ -500,7 +499,9 @@ impl WallpaperManager for NativeWallpaperManager {
                             e
                         );
                         match self.get_wallpaper_plasma_fill_mode() {
-                            Ok(fill_mode) => Ok(Self::plasma_fill_mode_to_style(&fill_mode).to_string()),
+                            Ok(fill_mode) => {
+                                Ok(Self::plasma_fill_mode_to_style(&fill_mode).to_string())
+                            }
                             Err(e2) => {
                                 eprintln!(
                                     "[WARN] Unknown 桌面环境：读取 Plasma FillMode 失败: {}，返回默认值 fill",
@@ -708,9 +709,7 @@ impl WallpaperManager for NativeWallpaperManager {
                 style: &str,
             ) -> Result<(), String> {
                 match manager.set_wallpaper_plasma(path, style) {
-                    Ok(()) => {
-                        Ok(())
-                    },
+                    Ok(()) => Ok(()),
                     Err(e) => {
                         eprintln!("[WARN] Plasma 壁纸设置失败，尝试 GNOME 实现: {}", e);
                         manager.set_wallpaper_gnome(path, style)
@@ -752,7 +751,11 @@ impl WallpaperManager for NativeWallpaperManager {
         {
             let style = Settings::global().get_wallpaper_rotation_style();
             // Android 无 "system" 样式，用 fill 作为兜底
-            let style = if style == "system" { "fill" } else { style.as_str() };
+            let style = if style == "system" {
+                "fill"
+            } else {
+                style.as_str()
+            };
             self._app
                 .wallpaper()
                 .set_wallpaper(file_path, style)
@@ -837,7 +840,10 @@ impl WallpaperManager for NativeWallpaperManager {
             }
         }
 
-        println!("[DEBUG] 壁纸样式设置完成（使用 winreg，快速），style={}", style);
+        println!(
+            "[DEBUG] 壁纸样式设置完成（使用 winreg，快速），style={}",
+            style
+        );
         Ok(())
     }
 
@@ -852,7 +858,10 @@ impl WallpaperManager for NativeWallpaperManager {
 
         let desktop = linux_desktop();
 
-        async fn set_style_plasma(manager: &NativeWallpaperManager, style: &str) -> Result<(), String> {
+        async fn set_style_plasma(
+            manager: &NativeWallpaperManager,
+            style: &str,
+        ) -> Result<(), String> {
             if let Some(path) = manager.current_wallpaper_path_from_settings() {
                 if std::path::Path::new(&path).exists() {
                     manager.set_wallpaper_plasma(&path, style)?;
@@ -879,7 +888,10 @@ impl WallpaperManager for NativeWallpaperManager {
             Ok(())
         }
 
-        async fn set_style_gnome(manager: &NativeWallpaperManager, style: &str) -> Result<(), String> {
+        async fn set_style_gnome(
+            manager: &NativeWallpaperManager,
+            style: &str,
+        ) -> Result<(), String> {
             use std::process::Command;
 
             // 设置 picture-options

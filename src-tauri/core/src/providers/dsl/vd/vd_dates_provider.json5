@@ -8,7 +8,9 @@
     "list": {
         "${root.name}": {
             "child_var": "root",
-            "delegate": { "provider": "gallery_dates_router" }
+            "delegate": { "provider": "gallery_dates_router" },
+            "provider": "${root.provider}",
+            "meta": "${root.meta}"
         }
     },
     "resolve": {

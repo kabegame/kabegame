@@ -6,17 +6,29 @@
         "year": { "type": "string", "default": "", "optional": false }
     },
     "query": {
-        "where": "strftime('%Y', crawled_at_seconds(images.crawled_at), 'unixepoch') = ${properties.year}"
+        "where": "strftime('%Y', crawled_at_seconds(images.crawled_at), 'unixepoch') = CAST(${properties.year} AS TEXT)"
     },
     // list: desc 静态 + 动态月份 + 默认分页静态 (与 programmatic 同; 用户在年下既可看月也可直接翻页)
     "list": {
-        "desc":   { "provider": "sort_provider" },
+        "desc":   { "provider": "sort_router" },
         "${out.mm}m": {
-            "sql": "SELECT DISTINCT substr(strftime('%Y-%m', crawled_at_seconds(images.crawled_at), 'unixepoch'), 6, 2) AS mm FROM (${composed}) AS sub WHERE strftime('%Y-%m', crawled_at_seconds(images.crawled_at), 'unixepoch') IS NOT NULL ORDER BY mm DESC",
+            "sql": "SELECT DISTINCT substr(strftime('%Y-%m', crawled_at_seconds(sub.crawled_at), 'unixepoch'), 6, 2) AS mm FROM (${composed}) AS sub WHERE strftime('%Y-%m', crawled_at_seconds(sub.crawled_at), 'unixepoch') IS NOT NULL ORDER BY mm DESC",
             "data_var": "out",
             "provider": "gallery_date_month_provider",
             "properties": {
                 "year_month": "${properties.year}-${out.mm}"
+            }
+        },
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
             }
         },
         "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
@@ -35,7 +47,7 @@
             "properties": { "page_size": "${capture[1]}" }
         },
         "([1-9][0-9]*)": {
-            "provider": "query_page_provider",
+            "provider": "gallery_page_router",
             "properties": {
                 "page_size": 100,
                 "page_num": "${capture[1]}"

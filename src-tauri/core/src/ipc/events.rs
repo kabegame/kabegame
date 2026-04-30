@@ -286,9 +286,7 @@ pub enum DaemonEvent {
     },
     /// 畅游记录新增（完整 JSON，与前端 `SurfRecord` 对齐）
     #[serde(rename = "SurfRecordAdded")]
-    SurfRecordAdded {
-        record: serde_json::Value,
-    },
+    SurfRecordAdded { record: serde_json::Value },
     /// 畅游记录删除
     #[serde(rename = "SurfRecordDeleted")]
     SurfRecordDeleted {
@@ -316,9 +314,7 @@ pub enum DaemonEvent {
     },
     /// 任务新增（完整任务 JSON）
     #[serde(rename = "TaskAdded")]
-    TaskAdded {
-        task: serde_json::Value,
-    },
+    TaskAdded { task: serde_json::Value },
     /// 任务删除（仅 ID）
     #[serde(rename = "TaskDeleted")]
     TaskDeleted {
@@ -343,18 +339,14 @@ pub enum DaemonEvent {
     },
 
     /// 插件新增安装（首次安装）
-    PluginAdded {
-        plugin: serde_json::Value,
-    },
+    PluginAdded { plugin: serde_json::Value },
     /// 插件卸载
     PluginDeleted {
         #[serde(rename = "pluginId")]
         plugin_id: String,
     },
     /// 插件更新/重装（同 ID 覆盖安装）
-    PluginUpdated {
-        plugin: serde_json::Value,
-    },
+    PluginUpdated { plugin: serde_json::Value },
 }
 
 /// 包装在 Arc 中的 Daemon 事件，用于零拷贝传递
