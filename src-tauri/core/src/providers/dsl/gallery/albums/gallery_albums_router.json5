@@ -19,26 +19,17 @@
         "order": [{ "images.crawled_at": "asc" }]
     },
     "list": {
-        // 根画册 (parent_id IS NULL); meta 形态对齐 wrap_typed_meta_json(Album):
-        //   { "kind": "album", "data": { id, name, createdAt, parentId } }
-        // createdAt / parentId 在模板渲染期是字符串化的 (引擎当前不保留类型);
-        // 前端读 data.id / data.name 主路径不受影响, createdAt 字符串化是已知小幅 wire drift。
+        // 根画册 (parent_id IS NULL); meta 由 host SQL 函数 get_album(id) 返回的 JSON 文本
+        // 经 `$json` directive 整体 parse 注入, 与 wrap_typed_meta_json(Album) 输出完全一致 —
+        // 类型也保留 (createdAt 仍为 number)。
         "${out.id}": {
-            "sql": "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
+            "sql": "SELECT id, get_album(id) AS album_meta_json FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
             "data_var": "out",
             "provider": "gallery_album_provider",
             "properties": {
                 "album_id": "${out.id}"
             },
-            "meta": {
-                "kind": "album",
-                "data": {
-                    "id": "${out.id}",
-                    "name": "${out.name}",
-                    "createdAt": "${out.created_at}",
-                    "parentId": "${out.parent_id}"
-                }
-            }
+            "meta": { "$json": "${out.album_meta_json}" }
         }
     },
     "resolve": {

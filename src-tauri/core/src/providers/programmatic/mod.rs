@@ -28,13 +28,15 @@ pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_r
     // register(reg, "gallery_album_provider", |props| {
     //     Ok(Arc::new(gallery_albums::GalleryAlbumProvider::from_props(props)?) as Arc<dyn Provider>)
     // })?;
-    register(reg, "gallery_plugins_router", |_| {
-        Ok(Arc::new(gallery_filters::GalleryPluginsRouter) as Arc<dyn Provider>)
-    })?;
-    register(reg, "gallery_plugin_provider", |props| {
-        Ok(Arc::new(gallery_filters::GalleryPluginProvider::from_props(props)?)
-            as Arc<dyn Provider>)
-    })?;
+    // 7c S2: gallery_plugins_router / gallery_plugin_provider 由 DSL
+    //        (dsl/gallery/plugins/*.json5) 接管。
+    // register(reg, "gallery_plugins_router", |_| {
+    //     Ok(Arc::new(gallery_filters::GalleryPluginsRouter) as Arc<dyn Provider>)
+    // })?;
+    // register(reg, "gallery_plugin_provider", |props| {
+    //     Ok(Arc::new(gallery_filters::GalleryPluginProvider::from_props(props)?)
+    //         as Arc<dyn Provider>)
+    // })?;
     register(reg, "gallery_tasks_router", |_| {
         Ok(Arc::new(gallery_filters::GalleryTasksRouter) as Arc<dyn Provider>)
     })?;

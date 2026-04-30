@@ -1,25 +1,55 @@
-//! 主机 SQL 函数 (sqlite scalar functions): 把业务侧元数据 (PluginManager 等) 暴露给
-//! DSL 的 SQL 上下文。注册由 [`super::Storage::new`] 在打开 connection + schema migration
-//! 完成后调用。
+//! 主机 SQL 函数 (sqlite scalar functions): 把业务侧元数据 (PluginManager / albums / tasks
+//! 等) 暴露给 DSL 的 SQL 上下文。注册由 [`super::Storage::new`] 在打开 connection +
+//! schema migration 完成后调用。
 //!
 //! 当前提供:
 //! - [`get_plugin`](plugin_id [, locale]) → JSON_TEXT
 //!   返回 `{"id","name","description","baseUrl"}`; plugin 不存在 → `"null"`。
 //!   name / description 按 locale 解析 (locale 缺省走 [`kabegame_i18n::current_vd_locale`])。
+//! - `get_album(album_id)` → JSON_TEXT
+//!   返回 `{"kind":"album","data":{<Album camelCase fields>}}` (与
+//!   [`crate::providers::provider::wrap_typed_meta_json`] 输出对齐); album 不存在 → `"null"`。
+//!   配合 DSL meta `{"$json": "${get_album(...)}"}` directive 把 JSON 文本直接注入 meta。
 //!
-//! 未来扩展模式: `get_<entity>(id [, locale]) -> JSON_TEXT`, 调用方在 DSL 里用
-//! `json_extract(get_<entity>(...), '$.<field>')` 拆字段。
+//! 扩展模式: `get_<entity>(id [, locale]) -> JSON_TEXT`, 调用方在 DSL 里用
+//! `json_extract(get_<entity>(...), '$.<field>')` 拆字段, 或用 `$json` directive 整体注入 meta。
 
 use rusqlite::functions::FunctionFlags;
 use rusqlite::Connection;
 
 use crate::plugin::PluginManager;
+use crate::storage::Storage;
 
 /// 在给定 connection 上注册所有 DSL 主机 SQL 函数。
 /// connection-scoped — 每个连接需独立注册。kabegame 当前单连接架构, 一次即可。
 pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::Error> {
     register_get_plugin(conn)?;
+    register_get_album(conn)?;
     Ok(())
+}
+
+fn register_get_album(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.create_scalar_function(
+        "get_album",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
+        |ctx| -> rusqlite::Result<String> {
+            let id: String = ctx.get(0)?;
+            Ok(get_album_json(&id))
+        },
+    )
+}
+
+/// 返回 album typed meta JSON 字符串, 与 wrap_typed_meta_json(Album) 一致;
+/// album 不存在时返回 `"null"`。
+fn get_album_json(album_id: &str) -> String {
+    let Ok(Some(album)) = Storage::global().get_album_by_id(album_id) else {
+        return "null".into();
+    };
+    let Ok(data) = serde_json::to_value(&album) else {
+        return "null".into();
+    };
+    serde_json::json!({ "kind": "album", "data": data }).to_string()
 }
 
 fn register_get_plugin(conn: &Connection) -> Result<(), rusqlite::Error> {
