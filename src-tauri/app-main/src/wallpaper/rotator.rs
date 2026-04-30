@@ -1,11 +1,8 @@
 use super::manager::WallpaperController;
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::providers::{images_at, provider_runtime, provider_template_context};
+use kabegame_core::providers::{images_at, provider_runtime};
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::{ImageInfo, Storage};
-use pathql_rs::ast::{NumberOrTemplate, OrderDirection, SqlExpr};
-use pathql_rs::compose::ProviderQuery;
-use pathql_rs::template::eval::TemplateValue;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -30,39 +27,85 @@ pub(crate) fn random_index(len: usize) -> usize {
     (x as usize) % len
 }
 
-/// 画廊顺序模式：返回 `id > current_id` 的前若干张（按 id 升序）。
-/// 若 `current_id` 为空或已越过最大 id，则从最小 id 开始（自然回环）。
-/// `limit` 给上层留余地：首张若文件缺失 / 媒体不匹配时可回退到下一张。
-pub(crate) fn next_sequential_gallery_images(
-    current_id: Option<&str>,
-    limit: usize,
-) -> Result<Vec<ImageInfo>, String> {
-    let storage = Storage::global();
-    let make_q = |with_where_id: Option<&str>| -> ProviderQuery {
-        let mut q = ProviderQuery::new();
-        q.from = Some(SqlExpr("images".into()));
-        q.order
-            .entries
-            .push(("images.id".into(), OrderDirection::Asc));
-        q.limit = Some(NumberOrTemplate::Number(limit as f64));
-        if let Some(id) = with_where_id {
-            q = q.with_where_raw(
-                "images.id > ?",
-                &[TemplateValue::Text(id.into())],
-            );
-        }
-        q
-    };
+/// 顺序壁纸轮播 marker (区分 gallery / album)。
+/// `Time(t)` = images.crawled_at; `Order(n)` = album_images."order"。
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CurrentMarker {
+    Time(i64),
+    Order(i64),
+}
 
-    let ctx = provider_template_context();
-    if let Some(id) = current_id.filter(|s| !s.is_empty()) {
-        let q = make_q(Some(id));
-        let out = storage.get_images_info_range_by_query(&q, &ctx)?;
-        if !out.is_empty() {
-            return Ok(out);
+/// 给定 source + 当前壁纸 image id, 查 storage 拿 marker 初值; 找不到返回 None
+/// (caller 用 None 时路径段填 0, 表示从最早一张开始)。
+fn current_marker_for_source(
+    source: &RotationSource,
+    current_id: Option<&str>,
+) -> Option<CurrentMarker> {
+    let id = current_id?.trim();
+    if id.is_empty() {
+        return None;
+    }
+    match source {
+        RotationSource::Gallery => {
+            let img = Storage::global().find_image_by_id(id).ok().flatten()?;
+            Some(CurrentMarker::Time(img.crawled_at as i64))
+        }
+        RotationSource::Album(album_id) => Storage::global()
+            .get_album_image_order(album_id, id)
+            .ok()
+            .flatten()
+            .map(CurrentMarker::Order),
+    }
+}
+
+fn extract_marker_from(source: &RotationSource, img: &ImageInfo) -> CurrentMarker {
+    match source {
+        RotationSource::Album(_) => CurrentMarker::Order(img.album_order.unwrap_or(0)),
+        RotationSource::Gallery => CurrentMarker::Time(img.crawled_at as i64),
+    }
+}
+
+fn sequential_path(source: &RotationSource, marker: Option<CurrentMarker>) -> String {
+    match (source, marker) {
+        (RotationSource::Album(id), Some(CurrentMarker::Order(o))) => {
+            format!("/gallery/album/{}/bigger_order/{}/l100l", id, o)
+        }
+        (RotationSource::Album(id), _) => {
+            format!("/gallery/album/{}/bigger_order/0/l100l", id)
+        }
+        (RotationSource::Gallery, Some(CurrentMarker::Time(t))) => {
+            format!("/gallery/bigger_crawler_time/{}/l100l", t)
+        }
+        (RotationSource::Gallery, _) => {
+            "/gallery/bigger_crawler_time/0/l100l".to_string()
         }
     }
-    storage.get_images_info_range_by_query(&make_q(None), &ctx)
+}
+
+/// 顺序模式: 在 source 上从 current_marker 之后取下一批 100 张, 找首张可用图返回; 全 100 张
+/// 不可用则用最后一张的 marker 推进, 直到 path 返回空 (后面没有了) → None。
+pub(crate) fn load_next_sequential(
+    source: &RotationSource,
+    current_marker: Option<CurrentMarker>,
+    wallpaper_mode: &str,
+) -> Result<Option<ImageInfo>, String> {
+    let mut marker = current_marker;
+    loop {
+        let path = sequential_path(source, marker);
+        let images = images_at(&path)?;
+        if images.is_empty() {
+            return Ok(None);
+        }
+        if let Some(img) = images
+            .iter()
+            .find(|img| is_wallpaper_suitable(img, wallpaper_mode))
+        {
+            return Ok(Some(img.clone()));
+        }
+        // 这 100 张全不可用 → 推进 marker 到最后一张, 继续下一批
+        let last = images.last().expect("non-empty checked above");
+        marker = Some(extract_marker_from(source, last));
+    }
 }
 
 /// 单图可作壁纸判定（路径存在 + 媒体类型匹配 wallpaper_mode）。
@@ -182,17 +225,6 @@ impl WallpaperRotator {
             .to_ascii_lowercase()
     }
 
-    fn images_from_info(v: Vec<ImageInfo>) -> Vec<ImageLite> {
-        let mut out: Vec<ImageLite> = Vec::with_capacity(v.len());
-        for it in v {
-            out.push(ImageLite {
-                id: it.id,
-                local_path: it.local_path,
-            });
-        }
-        out
-    }
-
     /// 轮播候选是否允许：根据壁纸模式筛选。
     /// - 窗口模式（window）、插件模式（plasma-plugin）：图片与视频均可参与轮播。
     /// - 原生模式（native）等：仅图片参与轮播，视频壁纸过滤掉。
@@ -205,36 +237,25 @@ impl WallpaperRotator {
 
     async fn load_images_for_source(
         source: &RotationSource,
-        include_subalbums: bool,
+        _include_subalbums: bool,
         rotation_mode: &str,
         wallpaper_mode: &str,
     ) -> Result<Vec<ImageLite>, String> {
-        // sequential mode 仍走老路 (S4-b 改 path-only)。random mode 全部走 path-only。
-        if rotation_mode != "sequential" {
-            // 随机模式: 路径化 + 内置可用性过滤; 只返 0 / 1 张
-            let picked = load_random_image_for_wallpaper(source, wallpaper_mode)?;
-            return Ok(picked
-                .into_iter()
-                .map(|img| ImageLite {
-                    id: img.id,
-                    local_path: img.local_path,
-                })
-                .collect());
-        }
-        match source {
-            RotationSource::Album(id) => {
-                let v = Storage::global()
-                    .get_album_images_for_wallpaper_rotation(id, include_subalbums)
-                    .map_err(|e| format!("Storage error: {}", e))?;
-                Ok(Self::images_from_info(v))
-            }
-            RotationSource::Gallery => {
-                let current_id = Settings::global().get_current_wallpaper_image_id();
-                let v = next_sequential_gallery_images(current_id.as_deref(), 20)
-                    .map_err(|e| format!("Storage error: {}", e))?;
-                Ok(Self::images_from_info(v))
-            }
-        }
+        // S1e S4: 两种模式都走 path-only API, 内置可用性过滤; loader 只返 0 / 1 张。
+        let picked = if rotation_mode == "sequential" {
+            let current_id = Settings::global().get_current_wallpaper_image_id();
+            let marker = current_marker_for_source(source, current_id.as_deref());
+            load_next_sequential(source, marker, wallpaper_mode)?
+        } else {
+            load_random_image_for_wallpaper(source, wallpaper_mode)?
+        };
+        Ok(picked
+            .into_iter()
+            .map(|img| ImageLite {
+                id: img.id,
+                local_path: img.local_path,
+            })
+            .collect())
     }
 
     async fn get_current_wallpaper_path(_app: &AppHandle) -> Option<String> {

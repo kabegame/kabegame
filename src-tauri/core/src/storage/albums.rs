@@ -46,6 +46,7 @@ fn image_info_from_album_preview_row(
         ),
         last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
         size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+        album_order: None,
     })
 }
 
@@ -119,6 +120,23 @@ impl Storage {
             )
             .map_err(|e| format!("Failed to check image in album: {}", e))?;
         Ok(exists)
+    }
+
+    /// 7b S1e S4-b: 顺序壁纸轮播 marker 查询。给定 (album_id, image_id), 返回该图片在
+    /// album_images 中的 `order` 值。Some(n) = 在画册里且 n 为 order；None = 不在画册。
+    pub fn get_album_image_order(
+        &self,
+        album_id: &str,
+        image_id: &str,
+    ) -> Result<Option<i64>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.query_row(
+            "SELECT \"order\" FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+            params![album_id, image_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|e| format!("Failed to query album image order: {}", e))
     }
 
     /// 批量图片在删除/移除前涉及的画册 id（去重），用于 `images-change` 事件。
@@ -587,6 +605,7 @@ impl Storage {
                     ),
                     last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
                     size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                    album_order: None,
                 })
             })
             .map_err(|e| format!("Failed to query album images: {}", e))?;

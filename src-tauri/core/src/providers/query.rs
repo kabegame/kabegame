@@ -260,6 +260,7 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
             .filter(|&t| t >= 0)
             .map(|t| t as u64),
         size: i("size").map(|v| v as u64),
+        album_order: i("album_order"),
     })
 }
 

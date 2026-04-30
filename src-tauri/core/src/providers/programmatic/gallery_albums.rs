@@ -36,6 +36,9 @@ impl Provider for GalleryAlbumsRouter {
                 blank.from = from_backup;
                 blank
             });
+        // S1e S4-b: 暴露 album_images."order" AS album_order, 让顺序模式 rotator 从 ImageInfo
+        // 直接读 marker (避免 rotator 反查 album_images 表)。"order" 是 SQL 关键字, 加引号。
+        q = q.with_field_raw("ai.\"order\"", Some("album_order"), &[]);
         // prepend crawled_at ASC
         q.order.entries.insert(
             0,
@@ -156,6 +159,12 @@ impl Provider for GalleryAlbumProvider {
     ) -> Option<Arc<dyn Provider>> {
         if name == "desc" {
             return instantiate_named("sort_provider", ctx);
+        }
+        // S1e S4-b: 顺序模式 — /gallery/album/{id}/bigger_order/{order}/l<N>l
+        // 过渡形态 (programmatic 端 3 行调 DSL provider); 后续 albums 完整迁 DSL 时
+        // 直接在 list 加静态项替代。
+        if name == "bigger_order" {
+            return instantiate_named("gallery_album_bigger_order_router", ctx);
         }
         // xNNNx → paginate
         if let Some(inner) = name.strip_prefix('x').and_then(|s| s.strip_suffix('x')) {
