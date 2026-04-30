@@ -1,8 +1,7 @@
 //! ProviderRuntime 启动期初始化 (OnceLock 单例)。
 //!
-//! 6c 起: registry 同时持有
-//! - 程序化 provider (`programmatic::register_all_hardcoded`, ~31 个非 DSL 名)
-//! - DSL provider (`dsl_loader::load_dsl_into`, 9 个 .json5)
+//! 7c 起: 全部 provider 由 DSL (`dsl_loader::load_dsl_into`, 35+ 个 .json5) 提供。
+//! 6c 时期的 programmatic 模块已删除。
 //!
 //! root 由 DslProvider 包装 root_provider 的 ProviderDef 担任。运行期 SqlExecutor
 //! 通过 `Storage::global().db` 注入, 让 DSL 动态 SQL list 能跑真实 sqlite。
@@ -15,7 +14,6 @@ use pathql_rs::template::eval::{TemplateContext, TemplateValue};
 use pathql_rs::{Provider, ProviderRegistry, ProviderRuntime};
 
 use super::dsl_loader::{load_dsl_into, validate_dsl};
-use super::programmatic::register_all_hardcoded;
 use super::sql_executor::KabegameSqlExecutor;
 
 static RUNTIME: OnceLock<Arc<ProviderRuntime>> = OnceLock::new();
@@ -33,7 +31,6 @@ pub fn provider_template_context() -> TemplateContext {
 
 fn init_runtime() -> Arc<ProviderRuntime> {
     let mut registry = ProviderRegistry::new();
-    register_all_hardcoded(&mut registry).expect("register_all_hardcoded failed");
     let root_def = load_dsl_into(&mut registry);
     validate_dsl(&registry);
 
