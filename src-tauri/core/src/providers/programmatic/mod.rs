@@ -53,13 +53,15 @@ pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_r
     // register(reg, "gallery_surf_provider", |props| {
     //     Ok(Arc::new(gallery_filters::GallerySurfProvider::from_props(props)?) as Arc<dyn Provider>)
     // })?;
-    register(reg, "gallery_media_type_router", |_| {
-        Ok(Arc::new(gallery_filters::GalleryMediaTypeRouter) as Arc<dyn Provider>)
-    })?;
-    register(reg, "gallery_media_type_provider", |props| {
-        Ok(Arc::new(gallery_filters::GalleryMediaTypeProvider::from_props(props)?)
-            as Arc<dyn Provider>)
-    })?;
+    // 7c S5: gallery_media_type_router / gallery_media_type_provider 由 DSL
+    //        (dsl/gallery/media_type/*.json5) 接管。
+    // register(reg, "gallery_media_type_router", |_| {
+    //     Ok(Arc::new(gallery_filters::GalleryMediaTypeRouter) as Arc<dyn Provider>)
+    // })?;
+    // register(reg, "gallery_media_type_provider", |props| {
+    //     Ok(Arc::new(gallery_filters::GalleryMediaTypeProvider::from_props(props)?)
+    //         as Arc<dyn Provider>)
+    // })?;
     // 7b: gallery_hide_router 已迁移到 DSL (dsl/gallery/gallery_hide_router.json5)
     // contrib HIDE WHERE + ".*" delegate 转发 gallery_route. 是 ByDelegate 复活 (7b S1+S2) 的首个生产用例。
     // register(reg, "gallery_hide_router", |_| {
@@ -82,9 +84,11 @@ pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_r
             ) as Arc<dyn Provider>)
         },
     )?;
-    register(reg, "gallery_wallpaper_order_router", |_| {
-        Ok(Arc::new(gallery_filters::GalleryWallpaperOrderRouter) as Arc<dyn Provider>)
-    })?;
+    // 7c S5: gallery_wallpaper_order_router 由 DSL
+    //        (dsl/gallery/gallery_wallpaper_order_router.json5) 接管。
+    // register(reg, "gallery_wallpaper_order_router", |_| {
+    //     Ok(Arc::new(gallery_filters::GalleryWallpaperOrderRouter) as Arc<dyn Provider>)
+    // })?;
     register(reg, "gallery_date_range_router", |_| {
         Ok(Arc::new(gallery_filters::GalleryDateRangeRouter) as Arc<dyn Provider>)
     })?;
