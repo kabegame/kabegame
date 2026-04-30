@@ -45,12 +45,14 @@ pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_r
     // register(reg, "gallery_task_provider", |props| {
     //     Ok(Arc::new(gallery_filters::GalleryTaskProvider::from_props(props)?) as Arc<dyn Provider>)
     // })?;
-    register(reg, "gallery_surfs_router", |_| {
-        Ok(Arc::new(gallery_filters::GallerySurfsRouter) as Arc<dyn Provider>)
-    })?;
-    register(reg, "gallery_surf_provider", |props| {
-        Ok(Arc::new(gallery_filters::GallerySurfProvider::from_props(props)?) as Arc<dyn Provider>)
-    })?;
+    // 7c S4: gallery_surfs_router / gallery_surf_provider 由 DSL
+    //        (dsl/gallery/surfs/*.json5) 接管。
+    // register(reg, "gallery_surfs_router", |_| {
+    //     Ok(Arc::new(gallery_filters::GallerySurfsRouter) as Arc<dyn Provider>)
+    // })?;
+    // register(reg, "gallery_surf_provider", |props| {
+    //     Ok(Arc::new(gallery_filters::GallerySurfProvider::from_props(props)?) as Arc<dyn Provider>)
+    // })?;
     register(reg, "gallery_media_type_router", |_| {
         Ok(Arc::new(gallery_filters::GalleryMediaTypeRouter) as Arc<dyn Provider>)
     })?;
