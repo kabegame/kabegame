@@ -17,11 +17,22 @@ pub fn fold_contrib(state: &mut ProviderQuery, q: &ContribQuery) -> Result<(), F
     fold_from(state, &q.from);
     fold_fields(state, &q.fields)?;
     fold_joins(state, &q.join)?;
+    fold_where_clear(state, &q.where_clear);
     fold_where(state, &q.where_);
     fold_order(state, &q.order);
     fold_offset(state, &q.offset);
     fold_limit(state, &q.limit);
     Ok(())
+}
+
+fn fold_where_clear(state: &mut ProviderQuery, patterns: &Option<Vec<SqlExpr>>) {
+    let Some(patterns) = patterns else { return };
+    if patterns.is_empty() {
+        return;
+    }
+    state
+        .wheres
+        .retain(|w| !patterns.iter().any(|p| w.0.contains(&p.0)));
 }
 
 fn fold_from(state: &mut ProviderQuery, from: &Option<SqlExpr>) {
@@ -558,5 +569,53 @@ mod tests {
         q.join = Some(vec![j]);
         let err = fold_contrib(&mut s, &q).unwrap_err();
         assert_eq!(err, FoldError::RefAliasWithInNeed("t1".into()));
+    }
+
+    // ===== where_clear =====
+
+    #[test]
+    fn where_clear_drops_existing_matching_where() {
+        let mut s = ProviderQuery::new();
+        let mut q1 = empty_q();
+        q1.where_ = Some(SqlExpr("ai.album_id = 'A'".into()));
+        fold_contrib(&mut s, &q1).unwrap();
+        assert_eq!(s.wheres.len(), 1);
+
+        let mut q2 = empty_q();
+        q2.where_clear = Some(vec![SqlExpr("ai.album_id".into())]);
+        fold_contrib(&mut s, &q2).unwrap();
+        assert!(s.wheres.is_empty(), "where_clear should drop matching WHERE");
+    }
+
+    #[test]
+    fn where_clear_then_new_where_in_same_contrib() {
+        let mut s = ProviderQuery::new();
+        let mut q1 = empty_q();
+        q1.where_ = Some(SqlExpr("ai.album_id = 'A'".into()));
+        fold_contrib(&mut s, &q1).unwrap();
+
+        let mut q2 = empty_q();
+        q2.where_clear = Some(vec![SqlExpr("ai.album_id".into())]);
+        q2.where_ = Some(SqlExpr("ai.album_id = 'B'".into()));
+        fold_contrib(&mut s, &q2).unwrap();
+        // 父 WHERE 被剥, 新 WHERE 写入
+        assert_eq!(s.wheres.len(), 1);
+        assert_eq!(s.wheres[0].0, "ai.album_id = 'B'");
+    }
+
+    #[test]
+    fn where_clear_keeps_non_matching() {
+        let mut s = ProviderQuery::new();
+        let mut q1 = empty_q();
+        q1.where_ = Some(SqlExpr("images.plugin_id = 'pixiv'".into()));
+        fold_contrib(&mut s, &q1).unwrap();
+        let mut q2 = empty_q();
+        q2.where_ = Some(SqlExpr("ai.album_id = 'A'".into()));
+        fold_contrib(&mut s, &q2).unwrap();
+        let mut q3 = empty_q();
+        q3.where_clear = Some(vec![SqlExpr("ai.album_id".into())]);
+        fold_contrib(&mut s, &q3).unwrap();
+        assert_eq!(s.wheres.len(), 1);
+        assert_eq!(s.wheres[0].0, "images.plugin_id = 'pixiv'");
     }
 }

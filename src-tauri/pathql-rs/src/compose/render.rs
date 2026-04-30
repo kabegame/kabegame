@@ -24,6 +24,9 @@ pub enum RenderError {
     UnknownRef(String),
     #[error("`${{composed}}` requires TemplateContext::composed to be set")]
     MissingComposed,
+    /// Meta `{"$json": "<template>"}` 渲染后无法 parse 成 JSON。
+    #[error("meta `$json` directive: rendered text is not valid JSON: {0}")]
+    MetaJsonParse(String),
 }
 
 /// 给定方言 + 当前 params 已 push 的数量, 返回此次 push 的占位符字符串。

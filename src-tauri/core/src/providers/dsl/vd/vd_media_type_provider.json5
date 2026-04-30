@@ -1,0 +1,20 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_media_type_provider",
+    // 7c S9: VD 媒体类型分组。路径段是 i18n 化的 "图片"/"视频" / "Images"/"Videos" 等;
+    // vd_display_name() host fn 在当前 locale 下解析 canonical → 显示文本。
+    // 实现策略: 用动态 SQL 列出 (canonical, display) 对; key 模板用 display, 实例化
+    // gallery_media_type_provider 时按 canonical 注入 kind 属性。reverse-lookup
+    // (DSL §5.2 step 3) 在 resolve 时重跑同一 SQL 比对名字。
+    "list": {
+        "${out.display}": {
+            "sql": "SELECT 'image' AS canonical, vd_display_name('image') AS display UNION ALL SELECT 'video', vd_display_name('video')",
+            "data_var": "out",
+            "provider": "gallery_media_type_provider",
+            "properties": {
+                "kind": "${out.canonical}"
+            }
+        }
+    }
+}
