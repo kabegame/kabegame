@@ -32,7 +32,6 @@ pub enum ResolveResult {
     NotFound,
 }
 
-#[cfg(kabegame_mode = "standard")]
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
 
 #[derive(Debug, Clone)]

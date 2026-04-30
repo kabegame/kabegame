@@ -443,7 +443,7 @@ pub async fn start_http_server() -> Result<u16, String> {
     Ok(port)
 }
 
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 #[tauri::command]
 pub async fn get_http_server_base_url() -> Result<String, String> {
     for _ in 0..60 {

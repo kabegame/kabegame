@@ -19,16 +19,16 @@ use kabegame_core::settings::Settings;
 use kabegame_core::storage::organize::OrganizeService;
 use kabegame_core::storage::tasks::TaskInfo;
 use kabegame_core::storage::Storage;
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::Arc;
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 use tauri::{AppHandle, Emitter};
 
 /// 分发 IPC 请求到对应的处理器（app_handle 由 start_ipc_server 传入，仅需发事件的请求使用）
 pub async fn dispatch_request(
     req: IpcRequest, 
-    #[cfg(feature = "local")]
+    #[cfg(not(feature = "web"))]
     app_handle: AppHandle
 ) -> IpcResponse {
     // 获取s tatus
@@ -36,12 +36,12 @@ pub async fn dispatch_request(
         return handle_status();
     }
 
-    #[cfg(feature = "local")]
+    #[cfg(not(feature = "web"))]
     if matches!(req, IpcRequest::AppShowWindow) {
         return handle_app_show_window(app_handle).await;
     }
 
-    #[cfg(feature = "local")]
+    #[cfg(not(feature = "web"))]
     if let IpcRequest::AppImportPlugin { kgpg_path } = req {
         return handle_app_import_plugin(kgpg_path, app_handle).await;
     }
@@ -130,7 +130,7 @@ pub async fn dispatch_request(
     if let Some(resp) = gallery::handle_gallery_request(&req).await {
         return resp;
     }
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "standard")]
     {
         if matches!(req, IpcRequest::VdMount) {
             return handle_vd_mount().await;
@@ -187,7 +187,7 @@ async fn handle_task_start(task: serde_json::Value) -> IpcResponse {
 
 async fn handle_task_cancel(task_id: String) -> IpcResponse {
     TaskScheduler::global().cancel_task(&task_id).await;
-    #[cfg(all(not(target_os = "android"), feature = "local"))]
+    #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     crate::commands::crawl_exit_with_status("canceled", Some(&task_id)).await;
     IpcResponse::ok("ok")
 }
@@ -457,7 +457,7 @@ fn parse_plugin_args_to_user_config(
     Ok(out)
 }
 
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 async fn handle_app_show_window(app_handle: AppHandle) -> IpcResponse {
     match crate::startup::ensure_main_window(app_handle.clone()) {
         Ok(()) => {
@@ -468,7 +468,7 @@ async fn handle_app_show_window(app_handle: AppHandle) -> IpcResponse {
     }
 }
 
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 async fn handle_app_import_plugin(kgpg_path: String, app_handle: AppHandle) -> IpcResponse {
     let path = std::path::PathBuf::from(&kgpg_path);
     if !path.is_file() {
@@ -500,21 +500,17 @@ fn handle_status() -> IpcResponse {
             "settings": true,
             "events": true,
             "pluginRun": false,  // 暂未实现
-            "virtualDrive": cfg!(kabegame_mode = "standard")
+            "virtualDrive": cfg!(feature = "standard")
         }
     }));
     resp
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 async fn handle_vd_mount() -> IpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
-    if !cfg!(all(
-        not(kabegame_mode = "light"),
-        not(target_os = "android"),
-        target_os = "windows"
-    )) {
+    if !cfg!(target_os = "windows") {
         return IpcResponse::err("Virtual drive is not available".to_string());
     }
 
@@ -553,15 +549,11 @@ async fn handle_vd_mount() -> IpcResponse {
     }
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 async fn handle_vd_unmount() -> IpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
-    if !cfg!(all(
-        not(kabegame_mode = "light"),
-        not(target_os = "android"),
-        target_os = "windows"
-    )) {
+    if !cfg!(target_os = "windows") {
         return IpcResponse::err("Virtual drive is not available".to_string());
     }
 
@@ -601,13 +593,9 @@ async fn handle_vd_unmount() -> IpcResponse {
     }
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 async fn handle_vd_status() -> IpcResponse {
-    let enabled = cfg!(all(
-        not(kabegame_mode = "light"),
-        not(target_os = "android"),
-        target_os = "windows"
-    ));
+    let enabled = cfg!(target_os = "windows");
     let mut resp = IpcResponse::ok("ok");
     resp.info = Some(serde_json::json!({
         "status": if enabled { "ready" } else { "disabled" },

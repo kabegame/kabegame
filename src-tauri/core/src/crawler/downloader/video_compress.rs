@@ -61,9 +61,9 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
 
     #[cfg(target_os = "android")]
     let out_path = thumbnails_dir.join(format!("{}.gif", uuid::Uuid::new_v4()));
-    #[cfg(all(feature = "local", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     let out_path = thumbnails_dir.join(format!("{}.gif", uuid::Uuid::new_v4()));
-    #[cfg(not(any(target_os = "android", all(feature = "local", target_os = "linux"))))]
+    #[cfg(not(any(target_os = "android", target_os = "linux")))]
     let out_path = thumbnails_dir.join(format!("{}.mp4", uuid::Uuid::new_v4()));
 
     #[cfg(target_os = "android")]
@@ -112,7 +112,7 @@ fn run_ffmpeg_sidecar(input_path: &Path, output_path: &Path) -> Result<(), Strin
     cmd.creation_flags(0x0800_0000);
     cmd.arg("-y").arg("-i").arg(input_path);
 
-    #[cfg(all(feature = "local", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     {
         cmd.arg("-t").arg("2.5")
             .arg("-vf")
@@ -121,7 +121,7 @@ fn run_ffmpeg_sidecar(input_path: &Path, output_path: &Path) -> Result<(), Strin
             .arg(output_path);
     }
 
-    #[cfg(any(feature = "web", not(target_os = "linux")))]
+    #[cfg(not(target_os = "linux"))]
     {
         cmd.arg("-t").arg("2.5")
             .arg("-vf")

@@ -2,33 +2,29 @@
 //!
 //! - 根据平台导出不同的实现，但统一使用 `VirtualDriveService` 名称，保持代码稳定性。
 //! - 使用 trait 定义统一接口，但不用于动态分发（编译时多态）。
+//!
+//! 整个模块仅在启用 feature `virtual-driver` 时编译（父模块 `virtual_driver` 已 feature-gate）。
 
-#[cfg(all(kabegame_mode = "standard", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 mod windows;
 
-#[cfg(all(kabegame_mode = "standard", any(target_os = "macos", target_os = "linux"), feature = "virtual-driver"))]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod fuse;
 
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-#[cfg(all(kabegame_mode = "standard", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub use windows::VirtualDriveService;
 
-#[cfg(all(kabegame_mode = "standard", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub use windows::{join_mount_subdir, notify_explorer_dir_changed_path};
 
-#[cfg(all(kabegame_mode = "standard", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub use windows::normalize_mount_point;
 
-#[cfg(all(kabegame_mode = "standard", any(target_os = "macos", target_os = "linux"), feature = "virtual-driver"))]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use fuse::VirtualDriveService;
-
-// Stub VirtualDriveService when virtual-driver feature is off (linux/mac without fuser).
-#[cfg(all(kabegame_mode = "standard", any(target_os = "macos", target_os = "linux"), not(feature = "virtual-driver")))]
-mod stub;
-#[cfg(all(kabegame_mode = "standard", any(target_os = "macos", target_os = "linux"), not(feature = "virtual-driver")))]
-pub use stub::VirtualDriveService;
 
 
 /// 虚拟盘服务 trait（定义所有平台必须实现的接口）
