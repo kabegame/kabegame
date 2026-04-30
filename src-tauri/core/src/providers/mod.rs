@@ -20,8 +20,9 @@ pub(crate) mod vd_ops;
 pub use init::{provider_runtime, provider_template_context};
 pub use pathql_rs::ProviderRuntime;
 pub use query::{
-    decode_provider_path_segments, execute_provider_query, execute_provider_query_typed,
-    parse_provider_path, provider_query_to_json, ProviderPathQuery, ProviderQueryTyped,
+    count_at, decode_provider_path_segments, execute_provider_query,
+    execute_provider_query_typed, images_at, parse_provider_path, provider_query_to_json,
+    ProviderPathQuery, ProviderQueryTyped,
 };
 
 /// VD 专用：从 PluginManager 缓存读取插件显示名（用于「按任务」目录名展示）。

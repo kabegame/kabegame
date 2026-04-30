@@ -1,17 +1,15 @@
 //! Provider 路径查询语法 — Tauri/MCP 边界使用。
 //!
-//! 6b 起：路径解析走 pathql-rs ProviderRuntime；图片获取直接调 Storage。
+//! 7b S1e 起：所有"路径 → 图片/计数"查询走 pathql Runtime 的 path-only API
+//! ([`images_at`] / [`count_at`])；core 不再持有 `ProviderQuery` /
+//! `TemplateContext`。
 
 use serde_json::{json, Value};
 
-use pathql_rs::ast::NumberOrTemplate;
-use pathql_rs::compose::ProviderQuery;
-use pathql_rs::template::eval::TemplateContext;
-
 use crate::gallery::GalleryBrowseEntry;
-use crate::storage::Storage;
+use crate::storage::ImageInfo;
 
-use super::init::{provider_runtime, provider_template_context};
+use super::init::provider_runtime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderPathQuery {
@@ -139,13 +137,7 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
             if last.is_empty() {
                 return Err(format!("路径不完整: {}", raw_path));
             }
-            let node = rt
-                .resolve(&rt_path)
-                .map_err(|e| format!("解析路径失败: {}: {}", raw_path, e))?;
-            let sql_ctx = provider_template_context();
-            let total = Storage::global()
-                .get_images_count_by_query(&node.composed, &sql_ctx)
-                .ok();
+            let total = count_at(&rt_path).ok();
             let raw_note = rt
                 .note(&rt_path)
                 .map_err(|e| format!("note failed: {}", e))?;
@@ -160,19 +152,14 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
             })
         }
         ProviderPathQuery::List | ProviderPathQuery::ListWithMeta => {
-            let node = rt
-                .resolve(&rt_path)
-                .map_err(|e| format!("解析路径失败: {}: {}", raw_path, e))?;
             let children = rt
                 .list(&rt_path)
                 .map_err(|e| format!("list children failed: {}", e))?;
 
-            let sql_ctx = provider_template_context();
-            let images = fetch_images_for(&node.composed, &sql_ctx)?;
+            let images = images_for_listing(&rt_path)?;
             let entries = crate::gallery::browse_from_provider_jsonmeta(children, images)?;
 
-            let total: Option<usize> =
-                Storage::global().get_images_count_by_query(&node.composed, &sql_ctx).ok();
+            let total = count_at(&rt_path).ok();
 
             let raw_note = rt
                 .note(&rt_path)
@@ -191,35 +178,89 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
     }
 }
 
-/// 决定是否 fetch images：composed.limit 显式 > 0 → 取该页；
-/// limit=0（gallery_route 默认）→ 不 fetch；
-/// 无 limit → 默认最后一页 100 条。
-fn fetch_images_for(
-    composed: &ProviderQuery,
-    ctx: &TemplateContext,
-) -> Result<Vec<crate::storage::ImageInfo>, String> {
-    if composed.from.is_none() {
+/// **Engine service**: 路径 → ImageInfo 列表。
+/// 内部：`runtime.fetch(path)` → JSON 行 → 按列名映射到 ImageInfo (gallery_route alias 契约)。
+/// 不带启发式分支；调用方负责传一个能限定范围的 path
+/// (例如 `/gallery/all/x100x/3`，避免在 `/gallery/` 等根路径上调本函数)。
+pub fn images_at(path: &str) -> Result<Vec<ImageInfo>, String> {
+    let rt = provider_runtime();
+    let rows = rt.fetch(path).map_err(|e| e.to_string())?;
+    rows.iter().map(json_row_to_image_info).collect()
+}
+
+/// **Engine service**: 路径 → 行数 (`SELECT COUNT(*)` wrapper)。
+pub fn count_at(path: &str) -> Result<usize, String> {
+    provider_runtime().count(path).map_err(|e| e.to_string())
+}
+
+/// IPC business 包装: 在 listing 模式下挑一组合理的图片显示。
+/// `/gallery/` 等根路径不带 limit, 直接 fetch 会拉百万级行 — 此处用 count + last-page-100
+/// 启发式选最后一页, 与前端默认行为对齐。
+fn images_for_listing(rt_path: &str) -> Result<Vec<ImageInfo>, String> {
+    let rt = provider_runtime();
+    let node = rt
+        .resolve(rt_path)
+        .map_err(|e| format!("resolve failed: {}", e))?;
+    if node.composed.from.is_none() {
         return Ok(Vec::new());
     }
-    let lim_zero = matches!(composed.limit, Some(NumberOrTemplate::Number(n)) if n == 0.0);
-    if lim_zero {
-        return Ok(Vec::new());
+    if node.composed.limit.is_some() {
+        return images_at(rt_path);
     }
-    if composed.limit.is_some() {
-        return Storage::global().get_images_info_range_by_query(composed, ctx);
-    }
-    // 无 limit：默认最后一页 100 条
-    let total = Storage::global().get_images_count_by_query(composed, ctx)?;
+    // 无 limit: 取最后一页 100 (前端 root 路径默认期望)
+    let total = count_at(rt_path)?;
     if total == 0 {
         return Ok(Vec::new());
     }
     let page_size = 100usize;
     let last_offset = ((total + page_size - 1) / page_size - 1) * page_size;
-    let mut q = composed.clone();
-    q.offset_terms
-        .push(NumberOrTemplate::Number(last_offset as f64));
-    q.limit = Some(NumberOrTemplate::Number(page_size as f64));
-    Storage::global().get_images_info_range_by_query(&q, ctx)
+    let last_page = last_offset / page_size + 1;
+    let last_page_path = format!(
+        "{}/x{}x/{}",
+        rt_path.trim_end_matches('/'),
+        page_size,
+        last_page
+    );
+    images_at(&last_page_path)
+}
+
+/// JSON 行 → ImageInfo (按 gallery_route 17 fields 的 alias 契约读列)。
+/// alias 名硬契约: id, url, local_path, plugin_id, task_id, crawled_at, metadata_id,
+/// thumbnail_path, hash, is_favorite, is_hidden, width, height, display_name,
+/// media_type, last_set_wallpaper_at, size。
+fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
+    let obj = row.as_object().ok_or("executor row not a JSON object")?;
+    let s = |k: &str| obj.get(k).and_then(|v| v.as_str()).map(String::from);
+    let i = |k: &str| obj.get(k).and_then(|v| v.as_i64());
+    let b = |k: &str| match obj.get(k) {
+        Some(Value::Bool(v)) => *v,
+        Some(v) => v.as_i64().unwrap_or(0) != 0,
+        None => false,
+    };
+    Ok(ImageInfo {
+        id: s("id").ok_or("row missing `id`")?,
+        url: s("url"),
+        local_path: s("local_path").ok_or("row missing `local_path`")?,
+        plugin_id: s("plugin_id").ok_or("row missing `plugin_id`")?,
+        task_id: s("task_id"),
+        surf_record_id: None,
+        crawled_at: i("crawled_at").filter(|&t| t >= 0).map(|t| t as u64).unwrap_or(0),
+        metadata: None,
+        metadata_id: i("metadata_id"),
+        thumbnail_path: s("thumbnail_path").unwrap_or_default(),
+        hash: s("hash").unwrap_or_default(),
+        favorite: b("is_favorite"),
+        is_hidden: b("is_hidden"),
+        local_exists: true,
+        width: i("width").map(|v| v as u32),
+        height: i("height").map(|v| v as u32),
+        display_name: s("display_name").unwrap_or_default(),
+        media_type: crate::image_type::normalize_stored_media_type(s("media_type")),
+        last_set_wallpaper_at: i("last_set_wallpaper_at")
+            .filter(|&t| t >= 0)
+            .map(|t| t as u64),
+        size: i("size").map(|v| v as u64),
+    })
 }
 
 /// 把 typed 查询结果序列化为 Tauri / MCP / web 共用的 JSON envelope。
