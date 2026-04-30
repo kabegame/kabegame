@@ -28,7 +28,23 @@ pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::
     register_get_task(conn)?;
     register_get_surf_record(conn)?;
     register_crawled_at_seconds(conn)?;
+    register_vd_display_name(conn)?;
     Ok(())
+}
+
+/// `vd_display_name(canonical)` — 当前全局 locale 下 canonical 段名 (如
+/// `'subAlbums'` / `'hidden-album'` / `'image'`) 的本地化字符串。读取 thread-local
+/// `current_vd_locale()`, 与 programmatic 的 `kabegame_i18n::vd_display_name` 等价。
+fn register_vd_display_name(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.create_scalar_function(
+        "vd_display_name",
+        1,
+        FunctionFlags::SQLITE_UTF8,
+        |ctx| -> rusqlite::Result<String> {
+            let canonical: String = ctx.get(0)?;
+            Ok(kabegame_i18n::vd_display_name(&canonical))
+        },
+    )
 }
 
 /// `crawled_at_seconds(t)` — 把 `images.crawled_at` (可能 ms 或 s 时间戳) 规整为秒。
