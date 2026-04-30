@@ -5,12 +5,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use axum::{
-    Router,
     extract::{Multipart, Query},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
-    Json,
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
@@ -73,10 +72,7 @@ fn bad_request(msg: impl Into<String>) -> Response {
     (StatusCode::BAD_REQUEST, msg.into()).into_response()
 }
 
-async fn handle_import(
-    Query(q): Query<ImportQuery>,
-    mut multipart: Multipart,
-) -> Response {
+async fn handle_import(Query(q): Query<ImportQuery>, mut multipart: Multipart) -> Response {
     if !truthy(&q.super_flag) {
         return (StatusCode::FORBIDDEN, "super required").into_response();
     }
@@ -146,7 +142,11 @@ async fn handle_import(
         return bad_request("no files uploaded");
     }
 
-    let recursive = q.recursive.as_deref().map(|v| v == "1" || v == "true").unwrap_or(true);
+    let recursive = q
+        .recursive
+        .as_deref()
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(true);
     let include_archive = truthy(&q.include_archive);
 
     let root_str = upload_root.to_string_lossy().to_string();
@@ -223,7 +223,9 @@ pub async fn gc_stale_uploads() {
     };
     let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(24 * 3600);
     while let Ok(Some(entry)) = dir.next_entry().await {
-        let Ok(meta) = entry.metadata().await else { continue };
+        let Ok(meta) = entry.metadata().await else {
+            continue;
+        };
         if !meta.is_dir() {
             continue;
         }

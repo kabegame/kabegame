@@ -93,7 +93,9 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
         let (tx, rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
 
         let mount_point_for_thread = mount_point.clone();
-        tokio::spawn(async move {
+        let _mount_thread = std::thread::Builder::new()
+            .name("kabegame-vd-dokan".to_string())
+            .spawn(move || {
             dokan_init_once();
 
             let handler = KabegameFs::new();
@@ -111,7 +113,7 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
                 // 默认使用 CURRENT_SESSION：
                 // - 更符合“仅当前用户会话可见”的产品语义
                 // - 在部分 Win10 环境下可降低“必须管理员才能挂载盘符”的概率
-                flags: MountFlags::CURRENT_SESSION | MountFlags::CASE_SENSITIVE,
+                flags: MountFlags::CURRENT_SESSION | MountFlags::WRITE_PROTECT,
                 unc_name: None,
                 timeout: Duration::from_secs(30),
                 allocation_unit_size: 4096,
@@ -125,6 +127,9 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
             match mount_res {
                 Ok(fs) => {
                     let _ = tx.send(Ok(()));
+                    // `FileSystem` 的 Drop 会阻塞直到 Dokan 卷卸载。这里必须留在
+                    // 专用 OS 线程里，不能占用 Tokio runtime worker，否则挂载成功后
+                    // IPC/前端任务可能被长期阻塞。
                     drop(fs);
                 }
                 Err(e) => {
@@ -145,7 +150,11 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
                     }
                 }
             };
-        });
+        })
+        .map_err(|e| {
+            self.mounted.store(Arc::new(None));
+            format!("挂载线程创建失败: {e}")
+        })?;
 
         match rx.recv_timeout(Duration::from_secs(20)) {
             Ok(Ok(())) => Ok(()),
@@ -309,20 +318,31 @@ impl Drop for VirtualDriveService {
     }
 }
 
-/// 规范化挂载点（Windows 特定：处理 `K:` -> `K:\`）
+/// 规范化挂载点（Windows 特定：处理 `K` / `K:` / `K:\` -> `K:`）。
+///
+/// Dokan 的盘符挂载点应使用 drive-letter 形式，而不是根目录路径。
+/// `K:\` 虽然可能创建出卷回调，但 Explorer 会卡在反复查询卷信息而不进入目录枚举。
 pub fn normalize_mount_point(input: &str) -> Result<String, String> {
     let s = input.trim();
     if s.is_empty() {
         return Err("mount_point 不能为空".to_string());
     }
     if s.len() == 1 && s.chars().next().unwrap().is_ascii_alphabetic() {
-        return Ok(format!("{}:\\", s.to_uppercase()));
+        return Ok(format!("{}:", s.to_uppercase()));
     }
     if s.len() == 2
         && s.chars().next().unwrap().is_ascii_alphabetic()
         && s.chars().nth(1) == Some(':')
     {
-        return Ok(format!("{}\\", s.to_uppercase()));
+        return Ok(s.to_uppercase());
+    }
+    if s.len() == 3
+        && s.chars().next().unwrap().is_ascii_alphabetic()
+        && s.chars().nth(1) == Some(':')
+        && matches!(s.chars().nth(2), Some('\\' | '/'))
+    {
+        let drive = s.chars().next().unwrap().to_ascii_uppercase();
+        return Ok(format!("{drive}:"));
     }
     Ok(s.to_string())
 }

@@ -1,4 +1,7 @@
-use std::sync::Arc;
+#[cfg(not(target_os = "android"))]
+use kabegame_core::storage::organize::OrganizeService;
+#[cfg(all(not(target_os = "android"), feature = "standard"))]
+use kabegame_core::virtual_driver::VirtualDriveService;
 use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
     plugin::PluginManager,
@@ -7,10 +10,7 @@ use kabegame_core::{
     settings::Settings,
     storage::Storage,
 };
-#[cfg(not(target_os = "android"))]
-use kabegame_core::storage::organize::OrganizeService;
-#[cfg(all(not(target_os = "android"), feature = "standard"))]
-use kabegame_core::virtual_driver::VirtualDriveService;
+use std::sync::Arc;
 
 /// Feature-gated async spawn helper.
 /// In local (Tauri) mode tauri::async_runtime::spawn must be used — tokio::spawn
@@ -162,14 +162,12 @@ pub fn init_app_paths_for_web() -> Result<(), String> {
     use kabegame_core::app_paths::{is_dev, repo_root_dir, AppPaths};
 
     let data_dir = if is_dev() {
-        repo_root_dir()
-            .map(|r| r.join("data"))
-            .unwrap_or_else(|| {
-                dirs::data_local_dir()
-                    .or_else(|| dirs::data_dir())
-                    .expect("cannot determine data dir")
-                    .join("Kabegame")
-            })
+        repo_root_dir().map(|r| r.join("data")).unwrap_or_else(|| {
+            dirs::data_local_dir()
+                .or_else(|| dirs::data_dir())
+                .expect("cannot determine data dir")
+                .join("Kabegame")
+        })
     } else {
         dirs::data_local_dir()
             .or_else(|| dirs::data_dir())
@@ -178,13 +176,11 @@ pub fn init_app_paths_for_web() -> Result<(), String> {
     };
 
     let cache_dir = if is_dev() {
-        repo_root_dir()
-            .map(|r| r.join("cache"))
-            .unwrap_or_else(|| {
-                dirs::cache_dir()
-                    .expect("cannot determine cache dir")
-                    .join("Kabegame")
-            })
+        repo_root_dir().map(|r| r.join("cache")).unwrap_or_else(|| {
+            dirs::cache_dir()
+                .expect("cannot determine cache dir")
+                .join("Kabegame")
+        })
     } else {
         dirs::cache_dir()
             .expect("cannot determine cache dir")

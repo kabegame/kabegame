@@ -7,6 +7,10 @@
 use serde_json::{json, Value};
 
 use crate::gallery::GalleryBrowseEntry;
+use crate::storage::gallery::{DateGroup, DayGroup, GalleryMediaTypeCounts, PluginGroup};
+use crate::storage::gallery_time::{gallery_month_groups_from_days, GalleryTimeFilterPayload};
+use crate::storage::images::parse_image_metadata_json;
+use crate::storage::organize::OrganizeScanRow;
 use crate::storage::ImageInfo;
 
 use super::init::provider_runtime;
@@ -193,6 +197,196 @@ pub fn count_at(path: &str) -> Result<usize, String> {
     provider_runtime().count(path).map_err(|e| e.to_string())
 }
 
+fn raw_rows_at(path: &str) -> Result<Vec<Value>, String> {
+    provider_runtime().fetch(path).map_err(|e| e.to_string())
+}
+
+fn json_string(row: &Value, key: &str) -> Option<String> {
+    row.get(key).and_then(|v| {
+        v.as_str()
+            .map(str::to_string)
+            .or_else(|| v.as_i64().map(|i| i.to_string()))
+            .or_else(|| v.as_u64().map(|i| i.to_string()))
+    })
+}
+
+fn json_i64(row: &Value, key: &str) -> Option<i64> {
+    row.get(key).and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok()))
+            .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+    })
+}
+
+/// `/images/x{N}x/{page}` → organize scan rows.
+pub fn organize_batch_at(page_size: usize, page: usize) -> Result<Vec<OrganizeScanRow>, String> {
+    let page_size = page_size.max(1);
+    let page = page.max(1);
+    let rows = raw_rows_at(&format!("/images/x{}x/{}", page_size, page))?;
+    rows.iter()
+        .map(|row| {
+            Ok(OrganizeScanRow {
+                id: json_i64(row, "id").ok_or("organize row missing `id`")?,
+                hash: json_string(row, "hash").unwrap_or_default(),
+                local_path: json_string(row, "local_path")
+                    .ok_or("organize row missing `local_path`")?,
+                thumbnail_path: json_string(row, "thumbnail_path").unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+/// `/images/id_{id}/metadata` → metadata JSON, matching the old fallback order:
+/// `image_metadata.data` first, then legacy `images.metadata`.
+pub fn image_metadata_at(image_id: &str) -> Result<Option<Value>, String> {
+    let encoded = urlencoding::encode(image_id.trim());
+    let rows = raw_rows_at(&format!("/images/id_{}/metadata", encoded))?;
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    if let Some(v) = parse_image_metadata_json(json_string(row, "metadata_json")) {
+        return Ok(Some(v));
+    }
+    Ok(parse_image_metadata_json(json_string(
+        row,
+        "legacy_metadata_json",
+    )))
+}
+
+pub fn gallery_total_count_at() -> Result<usize, String> {
+    count_at("/gallery/all")
+}
+
+pub fn gallery_plugin_groups_at() -> Result<Vec<PluginGroup>, String> {
+    let rt = provider_runtime();
+    let children = rt
+        .list("/gallery/plugin")
+        .map_err(|e| format!("list /gallery/plugin failed: {}", e))?;
+    children
+        .into_iter()
+        .map(|child| {
+            let count = count_at(&format!(
+                "/gallery/plugin/{}",
+                urlencoding::encode(&child.name)
+            ))?;
+            Ok(PluginGroup {
+                plugin_id: child.name,
+                count,
+            })
+        })
+        .collect()
+}
+
+pub fn gallery_media_type_counts_at(base_path: &str) -> Result<GalleryMediaTypeCounts, String> {
+    let base = normalize_for_runtime(base_path)
+        .trim_end_matches('/')
+        .to_string();
+    Ok(GalleryMediaTypeCounts {
+        image_count: count_at(&format!("{}/media-type/image", base))?,
+        video_count: count_at(&format!("{}/media-type/video", base))?,
+    })
+}
+
+pub fn gallery_day_groups_at() -> Result<Vec<DayGroup>, String> {
+    let rt = provider_runtime();
+    let mut days = Vec::new();
+    for year in rt
+        .list("/gallery/date")
+        .map_err(|e| format!("list /gallery/date failed: {}", e))?
+    {
+        let Some(y) = year.name.strip_suffix('y') else {
+            continue;
+        };
+        if y.len() != 4 || !y.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let year_path = format!("/gallery/date/{}", year.name);
+        for month in rt
+            .list(&year_path)
+            .map_err(|e| format!("list {} failed: {}", year_path, e))?
+        {
+            let Some(m) = month.name.strip_suffix('m') else {
+                continue;
+            };
+            if m.len() != 2 || !m.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let month_path = format!("{}/{}", year_path, month.name);
+            for day in rt
+                .list(&month_path)
+                .map_err(|e| format!("list {} failed: {}", month_path, e))?
+            {
+                let Some(d) = day.name.strip_suffix('d') else {
+                    continue;
+                };
+                if d.len() != 2 || !d.chars().all(|c| c.is_ascii_digit()) {
+                    continue;
+                }
+                let day_path = format!("{}/{}", month_path, day.name);
+                days.push(DayGroup {
+                    ymd: format!("{y}-{m}-{d}"),
+                    count: count_at(&day_path)?,
+                });
+            }
+        }
+    }
+    Ok(days)
+}
+
+pub fn gallery_date_groups_at() -> Result<Vec<DateGroup>, String> {
+    Ok(gallery_month_groups_from_days(&gallery_day_groups_at()?))
+}
+
+pub fn gallery_time_filter_payload_at() -> Result<GalleryTimeFilterPayload, String> {
+    Ok(GalleryTimeFilterPayload::from_storage_days(
+        gallery_day_groups_at()?,
+    ))
+}
+
+pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, String> {
+    let limit = limit.max(1);
+    let encoded = urlencoding::encode(album_id.trim());
+    let base = format!("/gallery/album/{}", encoded);
+    let mut out = images_at(&format!("{}/order/x{}x/1", base, limit))?;
+    if out.len() >= limit {
+        out.truncate(limit);
+        return Ok(out);
+    }
+
+    let rt = provider_runtime();
+    let children = rt
+        .list(&base)
+        .map_err(|e| format!("list {} failed: {}", base, e))?;
+    for child in children {
+        let is_album = child
+            .meta
+            .as_ref()
+            .and_then(|m| m.get("kind"))
+            .and_then(|v| v.as_str())
+            == Some("album");
+        if !is_album {
+            continue;
+        }
+        let child_id = child
+            .meta
+            .as_ref()
+            .and_then(|m| m.get("data"))
+            .and_then(|d| d.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(&child.name);
+        let child_encoded = urlencoding::encode(child_id);
+        let child_path = format!("/gallery/album/{}/order/x3x/1", child_encoded);
+        for image in images_at(&child_path)? {
+            out.push(image);
+            if out.len() >= limit {
+                out.truncate(limit);
+                return Ok(out);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// IPC business 包装: 在 listing 模式下挑一组合理的图片显示。
 /// `/gallery/` 等根路径不带 limit, 直接 fetch 会拉百万级行 — 此处用 count + last-page-100
 /// 启发式选最后一页, 与前端默认行为对齐。
@@ -244,7 +438,10 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
         plugin_id: s("plugin_id").ok_or("row missing `plugin_id`")?,
         task_id: s("task_id"),
         surf_record_id: None,
-        crawled_at: i("crawled_at").filter(|&t| t >= 0).map(|t| t as u64).unwrap_or(0),
+        crawled_at: i("crawled_at")
+            .filter(|&t| t >= 0)
+            .map(|t| t as u64)
+            .unwrap_or(0),
         metadata: None,
         metadata_id: i("metadata_id"),
         thumbnail_path: s("thumbnail_path").unwrap_or_default(),

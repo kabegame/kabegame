@@ -1,5 +1,8 @@
 use crate::ast::{
-    expr::*, invocation::{ProviderCall, ProviderInvocation}, names::*, property::TemplateValue,
+    expr::*,
+    invocation::{ProviderCall, ProviderInvocation},
+    names::*,
+    property::TemplateValue,
     MetaValue,
 };
 use serde::{
@@ -187,10 +190,8 @@ mod tests {
     #[test]
     fn instance_static_key_routes_to_static_entry() {
         // ${properties.X} 形态 key 仍归 ListEntry::Static (value=ProviderInvocation)
-        let v: List = serde_json::from_str(
-            r#"{"${properties.lang}":{"provider":"target"}}"#,
-        )
-        .unwrap();
+        let v: List =
+            serde_json::from_str(r#"{"${properties.lang}":{"provider":"target"}}"#).unwrap();
         assert_eq!(v.entries.len(), 1);
         match &v.entries[0].1 {
             ListEntry::Static(ProviderInvocation::ByName(b)) => {
@@ -212,10 +213,8 @@ mod tests {
 
     #[test]
     fn dynamic_sql_entry() {
-        let v: List = serde_json::from_str(
-            r#"{"${row.id}":{"sql":"select 1","data_var":"row"}}"#,
-        )
-        .unwrap();
+        let v: List =
+            serde_json::from_str(r#"{"${row.id}":{"sql":"select 1","data_var":"row"}}"#).unwrap();
         assert_eq!(v.entries.len(), 1);
         match &v.entries[0].1 {
             ListEntry::Dynamic(DynamicListEntry::Sql(e)) => {
@@ -270,9 +269,7 @@ mod tests {
     #[test]
     fn error_message_contains_key_name() {
         // Dynamic entry with bad payload (missing data_var)
-        let r: Result<List, _> = serde_json::from_str(
-            r#"{"${row.id}":{"sql":"select 1"}}"#,
-        );
+        let r: Result<List, _> = serde_json::from_str(r#"{"${row.id}":{"sql":"select 1"}}"#);
         let err = r.expect_err("should fail");
         let msg = err.to_string();
         assert!(
@@ -292,7 +289,10 @@ mod tests {
         match &v.entries[0].1 {
             ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => {
                 assert!(e.provider.is_some());
-                assert_eq!(e.delegate.provider, ProviderName("page_size_provider".into()));
+                assert_eq!(
+                    e.delegate.provider,
+                    ProviderName("page_size_provider".into())
+                );
             }
             _ => panic!("expected Dynamic Delegate"),
         }

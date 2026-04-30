@@ -74,8 +74,7 @@ mod tests {
 
     #[test]
     fn property_decl_boolean() {
-        let v: PropertyDecl =
-            serde_json::from_str(r#"{"type":"boolean","default":true}"#).unwrap();
+        let v: PropertyDecl = serde_json::from_str(r#"{"type":"boolean","default":true}"#).unwrap();
         match v.spec {
             PropertySpec::Boolean { default } => assert_eq!(default, Some(true)),
             _ => panic!("expected Boolean variant"),

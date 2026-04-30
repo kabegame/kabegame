@@ -2,9 +2,9 @@
 // 仅在非移动端平台编译
 
 use governor::{Quota, RateLimiter};
+use kabegame_i18n::t;
 use std::num::NonZeroU32;
 use std::time::Duration;
-use kabegame_i18n::t;
 use tauri::{
     menu::{Menu, MenuEvent, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -25,18 +25,20 @@ const TRAY_CLICK_DEBOUNCE_MS: u64 = 500; // 500ms 防抖
 
 /// 使用当前 locale 构建托盘菜单（供首次创建与语言切换后刷新共用）
 fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
-    let show_item =
-        MenuItem::with_id(app, "show", t!("tray.showWindow"), true, None::<&str>)
-            .map_err(|e| format!("创建菜单项失败: {}", e))?;
-    let hide_item =
-        MenuItem::with_id(app, "hide", t!("tray.hideWindow"), true, None::<&str>)
-            .map_err(|e| format!("创建菜单项失败: {}", e))?;
-    let next_wallpaper_item =
-        MenuItem::with_id(app, "next_wallpaper", t!("tray.nextWallpaper"), true, None::<&str>)
-            .map_err(|e| format!("创建菜单项失败: {}", e))?;
-    let quit_item =
-        MenuItem::with_id(app, "quit", t!("tray.quit"), true, None::<&str>)
-            .map_err(|e| format!("创建菜单项失败: {}", e))?;
+    let show_item = MenuItem::with_id(app, "show", t!("tray.showWindow"), true, None::<&str>)
+        .map_err(|e| format!("创建菜单项失败: {}", e))?;
+    let hide_item = MenuItem::with_id(app, "hide", t!("tray.hideWindow"), true, None::<&str>)
+        .map_err(|e| format!("创建菜单项失败: {}", e))?;
+    let next_wallpaper_item = MenuItem::with_id(
+        app,
+        "next_wallpaper",
+        t!("tray.nextWallpaper"),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| format!("创建菜单项失败: {}", e))?;
+    let quit_item = MenuItem::with_id(app, "quit", t!("tray.quit"), true, None::<&str>)
+        .map_err(|e| format!("创建菜单项失败: {}", e))?;
 
     #[cfg(debug_assertions)]
     let menu = Menu::with_items(
@@ -61,7 +63,8 @@ pub fn update_tray_menu(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     };
     let menu = build_tray_menu(app)?;
-    tray.set_menu(Some(menu)).map_err(|e| format!("设置托盘菜单失败: {}", e))?;
+    tray.set_menu(Some(menu))
+        .map_err(|e| format!("设置托盘菜单失败: {}", e))?;
     tray.set_tooltip(Some(t!("common.appName")));
     Ok(())
 }
@@ -92,8 +95,7 @@ pub fn setup_tray(app: AppHandle) {
         // 其他平台：沿用窗口默认图标
         #[cfg(target_os = "macos")]
         let icon = {
-            const TURTLE_PNG: &[u8] =
-                include_bytes!("../icons/tray/turtle-tray@2x.png");
+            const TURTLE_PNG: &[u8] = include_bytes!("../icons/tray/turtle-tray@2x.png");
             match tauri::image::Image::from_bytes(TURTLE_PNG) {
                 Ok(img) => img,
                 Err(e) => {

@@ -135,7 +135,12 @@ mod tests {
     fn run(q: ContribQuery) -> Vec<ValidateError> {
         let d = def_with_query(q);
         let mut errs = Vec::new();
-        validate_query_refs(&Namespace(String::new()), &SimpleName("p".into()), &d, &mut errs);
+        validate_query_refs(
+            &Namespace(String::new()),
+            &SimpleName("p".into()),
+            &d,
+            &mut errs,
+        );
         errs
     }
 
@@ -238,7 +243,12 @@ mod tests {
             resolve: None,
             note: None,
         };
-        validate_query_refs(&Namespace(String::new()), &SimpleName("p".into()), &d, &mut errs);
+        validate_query_refs(
+            &Namespace(String::new()),
+            &SimpleName("p".into()),
+            &d,
+            &mut errs,
+        );
         assert!(errs.is_empty());
     }
 }

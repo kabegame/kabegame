@@ -19,6 +19,7 @@ pub fn fold_contrib(state: &mut ProviderQuery, q: &ContribQuery) -> Result<(), F
     fold_joins(state, &q.join)?;
     fold_where_clear(state, &q.where_clear);
     fold_where(state, &q.where_);
+    fold_order_clear(state, &q.order_clear);
     fold_order(state, &q.order);
     fold_offset(state, &q.offset);
     fold_limit(state, &q.limit);
@@ -125,6 +126,18 @@ fn fold_where(state: &mut ProviderQuery, w: &Option<SqlExpr>) {
     if let Some(expr) = w {
         state.wheres.push(expr.clone());
     }
+}
+
+fn fold_order_clear(state: &mut ProviderQuery, patterns: &Option<Vec<SqlExpr>>) {
+    let Some(patterns) = patterns else { return };
+    if patterns.is_empty() {
+        return;
+    }
+    state.order.entries.retain(|(field, _)| {
+        !patterns
+            .iter()
+            .any(|needle| !needle.0.is_empty() && field.contains(&needle.0))
+    });
 }
 
 fn fold_order(state: &mut ProviderQuery, order: &Option<OrderForm>) {
@@ -584,7 +597,10 @@ mod tests {
         let mut q2 = empty_q();
         q2.where_clear = Some(vec![SqlExpr("ai.album_id".into())]);
         fold_contrib(&mut s, &q2).unwrap();
-        assert!(s.wheres.is_empty(), "where_clear should drop matching WHERE");
+        assert!(
+            s.wheres.is_empty(),
+            "where_clear should drop matching WHERE"
+        );
     }
 
     #[test]

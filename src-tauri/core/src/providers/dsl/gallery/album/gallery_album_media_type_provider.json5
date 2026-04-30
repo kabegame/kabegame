@@ -1,0 +1,45 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_album_media_type_provider",
+    "properties": {
+        "kind": { "type": "string", "default": "image", "optional": false }
+    },
+    "query": {
+        "where": "CASE ${properties.kind} WHEN 'video' THEN (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') ELSE NOT (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') END"
+    },
+    "list": {
+        "desc": { "provider": "sort_router" },
+        "wallpaper-order": { "provider": "gallery_wallpaper_order_router" },
+        "order": { "provider": "gallery_album_order_provider" },
+        "album-order": { "provider": "gallery_album_order_provider" },
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
+            }
+        },
+        "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
+        "x500x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
+        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
+    },
+    "resolve": {
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        },
+        "([1-9][0-9]*)": {
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        }
+    }
+}

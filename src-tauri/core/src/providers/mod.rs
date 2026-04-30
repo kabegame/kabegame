@@ -20,9 +20,11 @@ pub(crate) mod vd_ops;
 pub use init::{provider_runtime, provider_template_context};
 pub use pathql_rs::ProviderRuntime;
 pub use query::{
-    count_at, decode_provider_path_segments, execute_provider_query,
-    execute_provider_query_typed, images_at, parse_provider_path, provider_query_to_json,
-    ProviderPathQuery, ProviderQueryTyped,
+    album_preview_at, count_at, decode_provider_path_segments, execute_provider_query,
+    execute_provider_query_typed, gallery_date_groups_at, gallery_day_groups_at,
+    gallery_media_type_counts_at, gallery_plugin_groups_at, gallery_time_filter_payload_at,
+    gallery_total_count_at, image_metadata_at, images_at, organize_batch_at, parse_provider_path,
+    provider_query_to_json, ProviderPathQuery, ProviderQueryTyped,
 };
 
 /// VD 专用：从 PluginManager 缓存读取插件显示名（用于「按任务」目录名展示）。

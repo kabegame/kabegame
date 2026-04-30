@@ -33,7 +33,10 @@ fn collect_refs(def: &ProviderDef) -> Vec<(String, ProviderName)> {
 
     // 6e: query.delegate 现在是 ProviderCall, 直接收集名字。
     if let Some(Query::Delegate(d)) = &def.query {
-        refs.push(("query.delegate.provider".into(), d.delegate.provider.clone()));
+        refs.push((
+            "query.delegate.provider".into(),
+            d.delegate.provider.clone(),
+        ));
     }
 
     if let Some(list) = &def.list {
@@ -155,7 +158,8 @@ mod tests {
     #[test]
     fn unresolved_emits_error() {
         let mut r = ProviderRegistry::new();
-        r.register(def_with_ref(Some("k"), "bar", "missing")).unwrap();
+        r.register(def_with_ref(Some("k"), "bar", "missing"))
+            .unwrap();
         let mut errs = Vec::new();
         validate_cross_refs(&r, &cfg_strict(), &mut errs);
         assert!(errs
@@ -166,7 +170,8 @@ mod tests {
     #[test]
     fn enforce_off_skips_check() {
         let mut r = ProviderRegistry::new();
-        r.register(def_with_ref(Some("k"), "bar", "missing")).unwrap();
+        r.register(def_with_ref(Some("k"), "bar", "missing"))
+            .unwrap();
         let mut errs = Vec::new();
         // enforce_cross_refs default = false
         validate_cross_refs(&r, &ValidateConfig::with_default_reserved(), &mut errs);

@@ -78,4 +78,3 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
         }
     }
 }
-

@@ -5,9 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 
-use crate::storage::gallery_time::{gallery_month_groups_from_days, GalleryTimeFilterPayload};
+use crate::storage::gallery_time::GalleryTimeFilterPayload;
 use crate::storage::Storage;
-
 
 /// 插件分组信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,52 +89,12 @@ impl Storage {
 
     /// 获取所有插件分组及其图片数量
     pub fn get_gallery_plugin_groups(&self) -> Result<Vec<PluginGroup>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT plugin_id, COUNT(*) as cnt
-                 FROM images
-                 WHERE plugin_id IS NOT NULL AND plugin_id != ''
-                 GROUP BY plugin_id
-                 ORDER BY plugin_id ASC",
-            )
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(PluginGroup {
-                    plugin_id: row.get(0)?,
-                    count: row.get::<_, i64>(1)? as usize,
-                })
-            })
-            .map_err(|e| format!("Failed to query plugin groups: {}", e))?;
-
-        let mut groups = Vec::new();
-        for r in rows {
-            groups.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
-        }
-        Ok(groups)
+        crate::providers::gallery_plugin_groups_at()
     }
 
     /// 画廊全局：按 `images.type` 统计图片与视频条数
     pub fn get_gallery_media_type_counts(&self) -> Result<GalleryMediaTypeCounts, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let (video_count, image_count): (i64, i64) = conn
-            .query_row(
-                "SELECT
-                    SUM(CASE WHEN LOWER(COALESCE(type, '')) = 'video'
-                              OR LOWER(COALESCE(type, '')) LIKE 'video/%' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN NOT (LOWER(COALESCE(type, '')) = 'video'
-                              OR LOWER(COALESCE(type, '')) LIKE 'video/%') THEN 1 ELSE 0 END)
-                 FROM images",
-                [],
-                |row| Ok((row.get::<_, Option<i64>>(0)?.unwrap_or(0), row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
-            )
-            .map_err(|e| format!("Failed to query media type counts: {}", e))?;
-        Ok(GalleryMediaTypeCounts {
-            image_count: image_count as usize,
-            video_count: video_count as usize,
-        })
+        crate::providers::gallery_media_type_counts_at("/gallery")
     }
 
     /// 指定画册内：按媒体类型统计条数
@@ -150,76 +109,25 @@ impl Storage {
                 video_count: 0,
             });
         }
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let (video_count, image_count): (i64, i64) = conn
-            .query_row(
-                "SELECT
-                    SUM(CASE WHEN LOWER(COALESCE(images.type, '')) = 'video'
-                              OR LOWER(COALESCE(images.type, '')) LIKE 'video/%' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN NOT (LOWER(COALESCE(images.type, '')) = 'video'
-                              OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') THEN 1 ELSE 0 END)
-                 FROM images
-                 INNER JOIN album_images ai ON images.id = ai.image_id
-                 WHERE ai.album_id = ?",
-                [id],
-                |row| Ok((row.get::<_, Option<i64>>(0)?.unwrap_or(0), row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
-            )
-            .map_err(|e| format!("Failed to query album media type counts: {}", e))?;
-        Ok(GalleryMediaTypeCounts {
-            image_count: image_count as usize,
-            video_count: video_count as usize,
-        })
+        crate::providers::gallery_media_type_counts_at(&format!(
+            "/gallery/album/{}",
+            urlencoding::encode(id)
+        ))
     }
 
     /// 获取所有日期分组（年-月）及其图片数量（由日粒度聚合派生，见 `gallery_time`）。
     pub fn get_gallery_date_groups(&self) -> Result<Vec<DateGroup>, String> {
-        let days = self.get_gallery_day_groups()?;
-        Ok(gallery_month_groups_from_days(&days))
+        crate::providers::gallery_date_groups_at()
     }
 
     /// 画廊时间过滤：一次返回月（派生）+ 日（原始）
     pub fn get_gallery_time_filter_payload(&self) -> Result<GalleryTimeFilterPayload, String> {
-        let days = self.get_gallery_day_groups()?;
-        Ok(GalleryTimeFilterPayload::from_storage_days(days))
+        crate::providers::gallery_time_filter_payload_at()
     }
 
     /// 获取所有「自然日」分组及图片数量（用于画廊按日筛选）
     pub fn get_gallery_day_groups(&self) -> Result<Vec<DayGroup>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT strftime('%Y-%m-%d', crawled_at_seconds(crawled_at), 'unixepoch') as d, COUNT(*) as cnt
-                 FROM images
-                 WHERE crawled_at IS NOT NULL
-                 GROUP BY 1
-                 HAVING d IS NOT NULL
-                 ORDER BY 1 DESC",
-            )
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                let d: Option<String> = row.get(0)?;
-                let Some(ymd) = d else {
-                    return Ok(None);
-                };
-                let cnt: i64 = row.get(1)?;
-                Ok(Some(DayGroup {
-                    ymd,
-                    count: cnt as usize,
-                }))
-            })
-            .map_err(|e| format!("Failed to query day groups: {}", e))?;
-
-        let mut groups = Vec::new();
-        for r in rows {
-            match r {
-                Ok(Some(g)) => groups.push(g),
-                Ok(None) => {}
-                Err(e) => return Err(format!("Failed to read row: {}", e)),
-            }
-        }
-        Ok(groups)
+        crate::providers::gallery_day_groups_at()
     }
 
     /// 解析画廊图片的本地路径（用于虚拟磁盘读取文件）
@@ -249,5 +157,4 @@ impl Storage {
 
         Ok(None)
     }
-
 }

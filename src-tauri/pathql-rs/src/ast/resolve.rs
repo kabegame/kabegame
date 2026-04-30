@@ -13,8 +13,7 @@ mod tests {
 
     #[test]
     fn single_regex_by_name() {
-        let v: Resolve =
-            serde_json::from_str(r#"{"^x([0-9]+)$":{"provider":"foo"}}"#).unwrap();
+        let v: Resolve = serde_json::from_str(r#"{"^x([0-9]+)$":{"provider":"foo"}}"#).unwrap();
         assert_eq!(v.0.len(), 1);
         let entry = v.0.get("^x([0-9]+)$").unwrap();
         match entry {
@@ -25,10 +24,8 @@ mod tests {
 
     #[test]
     fn multi_regex() {
-        let v: Resolve = serde_json::from_str(
-            r#"{"a":{"provider":"x"},"^b.*$":{"provider":"y"}}"#,
-        )
-        .unwrap();
+        let v: Resolve =
+            serde_json::from_str(r#"{"a":{"provider":"x"},"^b.*$":{"provider":"y"}}"#).unwrap();
         assert_eq!(v.0.len(), 2);
     }
 

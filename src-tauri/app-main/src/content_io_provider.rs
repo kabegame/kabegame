@@ -5,9 +5,7 @@
 
 use async_trait::async_trait;
 use base64::Engine;
-use kabegame_core::crawler::content_io::{
-    ContentEntry, ContentIoProvider, CopiedImageEntry,
-};
+use kabegame_core::crawler::content_io::{ContentEntry, ContentIoProvider, CopiedImageEntry};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
@@ -76,93 +74,81 @@ fn run_worker_loop<R: Runtime + 'static>(
         let response = match req {
             Request::IsDirectory(uri) => {
                 let p = &provider;
-                Response::IsDirectory(
-                    rt.block_on(async move {
-                        p.app_handle
-                            .picker()
-                            .is_directory(uri)
-                            .await
-                            .map(|r| r.is_directory)
-                            .map_err(|e| e.to_string())
-                    }),
-                )
+                Response::IsDirectory(rt.block_on(async move {
+                    p.app_handle
+                        .picker()
+                        .is_directory(uri)
+                        .await
+                        .map(|r| r.is_directory)
+                        .map_err(|e| e.to_string())
+                }))
             }
             Request::GetMimeType(uri) => {
                 let p = &provider;
-                Response::GetMimeType(
-                    rt.block_on(async move {
-                        p.app_handle
-                            .picker()
-                            .get_mime_type(uri)
-                            .await
-                            .map(|r| r.mime_type)
-                            .map_err(|e| e.to_string())
-                    }),
-                )
+                Response::GetMimeType(rt.block_on(async move {
+                    p.app_handle
+                        .picker()
+                        .get_mime_type(uri)
+                        .await
+                        .map(|r| r.mime_type)
+                        .map_err(|e| e.to_string())
+                }))
             }
             Request::ListChildren(uri) => {
                 let p = &provider;
-                Response::ListChildren(
-                    rt.block_on(async move {
-                        let resp = p
-                            .app_handle
-                            .picker()
-                            .list_content_children(uri)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        Ok(resp
-                            .entries
-                            .into_iter()
-                            .map(|e| ContentEntry {
-                                uri: e.uri,
-                                name: e.name,
-                                is_directory: e.is_directory,
-                            })
-                            .collect())
-                    }),
-                )
+                Response::ListChildren(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .picker()
+                        .list_content_children(uri)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(resp
+                        .entries
+                        .into_iter()
+                        .map(|e| ContentEntry {
+                            uri: e.uri,
+                            name: e.name,
+                            is_directory: e.is_directory,
+                        })
+                        .collect())
+                }))
             }
             Request::ReadFileBytes(uri) => {
                 let p = &provider;
-                Response::ReadFileBytes(
-                    rt.block_on(async move {
-                        let resp = p
-                            .app_handle
-                            .picker()
-                            .read_file_bytes(uri)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        base64::engine::general_purpose::STANDARD
-                            .decode(&resp.data)
-                            .map_err(|e| e.to_string())
-                    }),
-                )
+                Response::ReadFileBytes(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .picker()
+                        .read_file_bytes(uri)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    base64::engine::general_purpose::STANDARD
+                        .decode(&resp.data)
+                        .map_err(|e| e.to_string())
+                }))
             }
             Request::TakePersistablePermission(uri) => {
                 let p = &provider;
-                Response::TakePersistablePermission(
-                    rt.block_on(async move {
-                        p.app_handle
-                            .picker()
-                            .take_persistable_permission(uri)
-                            .await
-                            .map_err(|e| e.to_string())
-                    }),
-                )
+                Response::TakePersistablePermission(rt.block_on(async move {
+                    p.app_handle
+                        .picker()
+                        .take_persistable_permission(uri)
+                        .await
+                        .map_err(|e| e.to_string())
+                }))
             }
             Request::GetImageDimensions(uri) => {
                 let p = &provider;
-                Response::GetImageDimensions(
-                    rt.block_on(async move {
-                        let resp = p
-                            .app_handle
-                            .picker()
-                            .get_image_dimensions(uri)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        Ok((resp.width, resp.height))
-                    }),
-                )
+                Response::GetImageDimensions(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .picker()
+                        .get_image_dimensions(uri)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok((resp.width, resp.height))
+                }))
             }
             Request::GetContentSize(uri) => {
                 let p = &provider;
@@ -178,17 +164,15 @@ fn run_worker_loop<R: Runtime + 'static>(
             }
             Request::GetDisplayName(uri) => {
                 let p = &provider;
-                Response::GetDisplayName(
-                    rt.block_on(async move {
-                        let resp = p
-                            .app_handle
-                            .picker()
-                            .get_display_name(uri)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        Ok(resp.name)
-                    }),
-                )
+                Response::GetDisplayName(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .picker()
+                        .get_display_name(uri)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(resp.name)
+                }))
             }
             Request::CopyImageToPictures {
                 source_path,
@@ -236,9 +220,7 @@ pub struct ChannelContentIoProvider {
 }
 
 impl ChannelContentIoProvider {
-    pub fn new<R: Runtime + 'static>(
-        provider: PickerContentIoProvider<R>,
-    ) -> Self {
+    pub fn new<R: Runtime + 'static>(provider: PickerContentIoProvider<R>) -> Self {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || run_worker_loop(provider, rx));
         Self { tx }
@@ -364,7 +346,10 @@ impl ContentIoProvider for ChannelContentIoProvider {
     ) -> Result<Vec<CopiedImageEntry>, String> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.tx
-            .send((Request::CopyExtractedImagesToPictures(source_dir.to_string()), resp_tx))
+            .send((
+                Request::CopyExtractedImagesToPictures(source_dir.to_string()),
+                resp_tx,
+            ))
             .map_err(|e| e.to_string())?;
         match resp_rx.await.map_err(|e| e.to_string())? {
             Response::CopyExtractedImagesToPictures(r) => r,

@@ -220,7 +220,10 @@ impl Storage {
             return Ok(out);
         }
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.download_count, sr.deleted_count, sr.created_at,
                     (SELECT COUNT(*) FROM images WHERE surf_record_id = sr.id) AS image_count
@@ -467,9 +470,15 @@ impl Storage {
         )
         .map_err(|e| format!("Failed to increment surf_record download_count: {}", e))?;
         drop(conn);
-        if let Ok((image_count, deleted_count, download_count)) = self.surf_record_counts_snapshot(id)
+        if let Ok((image_count, deleted_count, download_count)) =
+            self.surf_record_counts_snapshot(id)
         {
-            GlobalEmitter::global().emit_surf_record_counts(id, image_count, deleted_count, download_count);
+            GlobalEmitter::global().emit_surf_record_counts(
+                id,
+                image_count,
+                deleted_count,
+                download_count,
+            );
         }
         Ok(())
     }

@@ -7,6 +7,7 @@
     },
     "list": {
         "gallery": { "provider": "gallery_route" },
+        "images": { "provider": "images_root_provider" },
         "vd": { "provider": "vd_root_router" }
     }
 }

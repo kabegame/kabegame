@@ -136,7 +136,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useRoute } from "vue-router";
@@ -153,12 +153,13 @@ import {
   buildTimeMenuScopeLabels,
   type DateGroupRow,
   type DayGroupRow,
-  type GalleryTimeFilterPayload,
   type TimeMenuNode,
+  type YearGroupRow,
 } from "@/utils/galleryTimeFilterMenu";
 import GalleryTimeFilterSubmenu from "./GalleryTimeFilterSubmenu.vue";
 import { usePluginStore } from "@/stores/plugins";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
+import { storeToRefs } from "pinia";
 
 interface PluginGroupRow {
   plugin_id: string;
@@ -170,10 +171,20 @@ interface GalleryMediaTypeCountsPayload {
   videoCount: number;
 }
 
+interface ProviderChildDir {
+  kind: "dir";
+  name: string;
+}
+
+interface ProviderCountResult {
+  total?: number | null;
+}
+
 const route = useRoute();
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 const galleryRouteStore = useGalleryRouteStore();
+const { contextPath: filterContextPrefix } = storeToRefs(galleryRouteStore);
 
 const showSimpleFilter = computed(() =>
   isSimpleFilter(galleryRouteStore.filter)
@@ -198,41 +209,188 @@ const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
 });
 const monthGroups = ref<DateGroupRow[]>([]);
 const dayGroups = ref<DayGroupRow[]>([]);
+const yearGroups = ref<YearGroupRow[]>([]);
 
 const timeMenuRoots = computed<TimeMenuNode[]>(() =>
   buildGalleryTimeMenuTree(
     monthGroups.value,
     dayGroups.value,
-    buildTimeMenuScopeLabels(t, String(locale.value))
+    buildTimeMenuScopeLabels(t, String(locale.value)),
+    yearGroups.value
   )
 );
 
-async function loadFilterCounts() {
+async function countProviderPath(path: string): Promise<number> {
+  const p = path.trim().replace(/\/+$/, "");
+  if (!p) return 0;
+  const res = await invoke<ProviderCountResult>("browse_gallery_provider", {
+    path: p,
+  });
+  return typeof res?.total === "number" ? res.total : 0;
+}
+
+async function listProviderDirs(path: string): Promise<ProviderChildDir[]> {
+  const entries = await invoke<ProviderChildDir[]>("list_provider_children", {
+    path,
+  });
+  return (Array.isArray(entries) ? entries : []).filter(
+    (e): e is ProviderChildDir =>
+      !!e && e.kind === "dir" && typeof e.name === "string" && !!e.name
+  );
+}
+
+async function loadPluginGroups() {
   try {
-    const [pg, timePayload, mt] = await Promise.all([
-      invoke<PluginGroupRow[]>("get_gallery_plugin_groups"),
-      invoke<GalleryTimeFilterPayload>("get_gallery_time_filter_data"),
-      invoke<GalleryMediaTypeCountsPayload>("get_gallery_media_type_counts"),
-    ]);
-    pluginGroups.value = Array.isArray(pg) ? pg : [];
-    monthGroups.value = Array.isArray(timePayload?.months) ? timePayload.months : [];
-    dayGroups.value = Array.isArray(timePayload?.days) ? timePayload.days : [];
-    if (mt && typeof mt.imageCount === "number" && typeof mt.videoCount === "number") {
-      mediaTypeCounts.value = {
-        imageCount: mt.imageCount,
-        videoCount: mt.videoCount,
-      };
-    }
+    const prefix = filterContextPrefix.value;
+    const entries = await listProviderDirs(`${prefix}plugin/`);
+    const groups = await Promise.all(
+      entries.map(async (e) => ({
+        plugin_id: e.name,
+        count: await countProviderPath(`${prefix}plugin/${encodeURIComponent(e.name)}`),
+      }))
+    );
+    pluginGroups.value = groups.filter((r) => r.count > 0);
   } catch {
     pluginGroups.value = [];
+  }
+}
+
+async function loadMediaTypeCounts() {
+  try {
+    const prefix = filterContextPrefix.value;
+    const [imageCount, videoCount] = await Promise.all([
+      countProviderPath(`${prefix}media-type/image`),
+      countProviderPath(`${prefix}media-type/video`),
+    ]);
+    mediaTypeCounts.value = { imageCount, videoCount };
+  } catch {
+    mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
+  }
+}
+
+const YEAR_SEG_RE = /^(\d{4})y$/;
+const MONTH_SEG_RE = /^(\d{2})m$/;
+const DAY_SEG_RE = /^(\d{2})d$/;
+
+async function loadTimeFilterData() {
+  const prefix = filterContextPrefix.value;
+  try {
+    const yearEntries = await listProviderDirs(`${prefix}date/`);
+    const yearCandidates = yearEntries
+      .map((e) => {
+        const m = YEAR_SEG_RE.exec(e.name);
+        return m ? { year: m[1]!, seg: e.name } : null;
+      })
+      .filter((y): y is { year: string; seg: string } => !!y);
+
+    const years = (
+      await Promise.all(
+        yearCandidates.map(async (y) => ({
+          ...y,
+          total: await countProviderPath(`${prefix}date/${y.seg}`),
+        }))
+      )
+    ).filter((y) => y.total > 0);
+    yearGroups.value = years.map((y) => ({
+      year: y.year,
+      count: y.total,
+    }));
+
+    const monthsPerYear = await Promise.all(
+      years.map(async (y) => {
+        try {
+          const monthEntries = await listProviderDirs(`${prefix}date/${y.seg}/`);
+          const monthCandidates = monthEntries
+            .map((e) => {
+              const m = MONTH_SEG_RE.exec(e.name);
+              return m
+                ? { year: y.year, month: m[1]!, yearSeg: y.seg, seg: e.name }
+                : null;
+            })
+            .filter(
+              (x): x is { year: string; month: string; yearSeg: string; seg: string } => !!x
+            );
+          return (
+            await Promise.all(
+              monthCandidates.map(async (mo) => ({
+                ...mo,
+                total: await countProviderPath(`${prefix}date/${mo.yearSeg}/${mo.seg}`),
+              }))
+            )
+          ).filter((x) => x.total > 0);
+        } catch {
+          return [];
+        }
+      })
+    );
+    const months = monthsPerYear.flat();
+
+    const daysPerMonth = await Promise.all(
+      months.map(async (mo) => {
+        try {
+          const dayEntries = await listProviderDirs(`${prefix}date/${mo.yearSeg}/${mo.seg}/`);
+          const dayCandidates = dayEntries
+            .map((e) => {
+              const m = DAY_SEG_RE.exec(e.name);
+              return m
+                ? {
+                    year: mo.year,
+                    month: mo.month,
+                    yearSeg: mo.yearSeg,
+                    monthSeg: mo.seg,
+                    day: m[1]!,
+                    seg: e.name,
+                  }
+                : null;
+            })
+            .filter(
+              (x): x is {
+                year: string;
+                month: string;
+                yearSeg: string;
+                monthSeg: string;
+                day: string;
+                seg: string;
+              } => !!x
+            );
+          return (
+            await Promise.all(
+              dayCandidates.map(async (d) => ({
+                ...d,
+                total: await countProviderPath(`${prefix}date/${d.yearSeg}/${d.monthSeg}/${d.seg}`),
+              }))
+            )
+          ).filter((x) => x.total > 0);
+        } catch {
+          return [];
+        }
+      })
+    );
+
+    monthGroups.value = months.map((mo) => ({
+      year_month: `${mo.year}-${mo.month}`,
+      count: mo.total,
+    }));
+    dayGroups.value = daysPerMonth.flat().map((d) => ({
+      ymd: `${d.year}-${d.month}-${d.day}`,
+      count: d.total,
+    }));
+  } catch {
     monthGroups.value = [];
     dayGroups.value = [];
+    yearGroups.value = [];
   }
+}
+
+async function loadFilterCounts() {
+  await Promise.all([loadPluginGroups(), loadMediaTypeCounts(), loadTimeFilterData()]);
 }
 
 const isOnGalleryPage = computed(() => route.path === "/gallery");
 
 onMounted(() => void loadFilterCounts());
+
+watch(filterContextPrefix, () => void loadFilterCounts());
 
 useImagesChangeRefresh({
   enabled: isOnGalleryPage,

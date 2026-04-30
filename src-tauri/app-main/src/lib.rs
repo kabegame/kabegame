@@ -66,14 +66,13 @@ use kabegame_core::storage::organize::OrganizeService;
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 
-use axum::{Router, routing::get};
+use axum::{routing::get, Router};
 use std::net::SocketAddr;
 
 fn init(
-    #[cfg(not(feature = "web"))]
-    app: &mut tauri::App
+    #[cfg(not(feature = "web"))] app: &mut tauri::App,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-     // 若有清理标记，必须在 init_globals 之前清理 data/cache，否则 DB 等已打开无法删除
+    // 若有清理标记，必须在 init_globals 之前清理 data/cache，否则 DB 等已打开无法删除
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     let _ = cleanup_user_data_if_marked();
 
@@ -87,11 +86,11 @@ fn init(
     {
         crate::linux_desktop::init_linux_desktop();
     }
-    
+
     // 公共步骤
     start_event_loop(
         #[cfg(not(feature = "web"))]
-        app.app_handle().clone()
+        app.app_handle().clone(),
     );
     // 命令行带 --minimized 时不创建主窗口，避免窗口闪现；托盘/IPC 显示时由 ensure_main_window 再创建
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
@@ -117,7 +116,6 @@ fn init(
     // 首次启动：处理打开kgpg文件启动参数（仅local）
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     if let Some(path) = startup::extract_kgpg_file_from_args() {
-
         let app_handle_clone = app.app_handle().clone();
         // 等待前端准备好
         app.app_handle().once("app-ready", move |_| {
@@ -138,40 +136,33 @@ fn init(
                 eprintln!("Failed to start MCP server: {}", e);
             }
         });
-        
+
         startup::start_ipc_server(
             #[cfg(not(feature = "web"))]
-            app.app_handle().clone()
+            app.app_handle().clone(),
         );
     }
     #[cfg(all(target_os = "android", not(feature = "web")))]
     {
-        let provider = content_io_provider::PickerContentIoProvider::new(
-            app.app_handle().clone(),
-        );
+        let provider = content_io_provider::PickerContentIoProvider::new(app.app_handle().clone());
         let proxy = content_io_provider::ChannelContentIoProvider::new(provider);
         // 设置内容IO提供者
-        kabegame_core::crawler::content_io::set_content_io_provider(Box::new(
-            proxy,
-        ));
+        kabegame_core::crawler::content_io::set_content_io_provider(Box::new(proxy));
         // 设置归档提取提供者
-        let archiver_provider = archiver_provider::ArchiverContentProvider::new(
-            app.app_handle().clone(),
-        );
-        let archiver_proxy = archiver_provider::ChannelArchiveExtractProvider::new(
-            archiver_provider,
-        );
-        kabegame_core::crawler::archiver::set_archive_extract_provider(Box::new(
-            archiver_proxy,
-        ));
+        let archiver_provider =
+            archiver_provider::ArchiverContentProvider::new(app.app_handle().clone());
+        let archiver_proxy =
+            archiver_provider::ChannelArchiveExtractProvider::new(archiver_provider);
+        kabegame_core::crawler::archiver::set_archive_extract_provider(Box::new(archiver_proxy));
 
         let compress_provider =
-            compress_provider::PluginVideoCompressProvider::new(
-                app.app_handle().clone(),
-            );
+            compress_provider::PluginVideoCompressProvider::new(app.app_handle().clone());
         let compress_proxy =
             compress_provider::ChannelVideoCompressProvider::new(compress_provider);
-        if let Err(e) = kabegame_core::crawler::downloader::video_compress::set_android_video_compress_provider(Arc::new(compress_proxy))
+        if let Err(e) =
+            kabegame_core::crawler::downloader::video_compress::set_android_video_compress_provider(
+                Arc::new(compress_proxy),
+            )
         {
             eprintln!("[VideoCompress] Failed to set android compress provider: {e}");
         }
@@ -209,7 +200,9 @@ pub fn run() {
                     let ids: Vec<String> = items.iter().map(|i| i.config_id.clone()).collect();
                     println!("  ✓ Auto-running {} missed schedule(s)", ids.len());
                     kabegame_core::scheduler::run_missed_configs(&ids);
-                    let _ = kabegame_core::scheduler::Scheduler::global().reload_config("").await;
+                    let _ = kabegame_core::scheduler::Scheduler::global()
+                        .reload_config("")
+                        .await;
                 }
                 Ok(_) => {}
                 Err(e) => eprintln!("  ✗ Failed to collect missed runs: {e}"),
@@ -278,7 +271,7 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             if let Err(e) = init(app) {
-                 #[cfg(not(feature = "web"))]
+                #[cfg(not(feature = "web"))]
                 utils::show_error(
                     app.app_handle(),
                     kabegame_i18n::t!("dialog.initFatalError", detail = e.to_string()),

@@ -25,6 +25,8 @@ pub struct ContribQuery {
     #[serde(default)]
     pub where_clear: Option<Vec<SqlExpr>>,
     #[serde(default)]
+    pub order_clear: Option<Vec<SqlExpr>>,
+    #[serde(default)]
     pub order: Option<OrderForm>,
     #[serde(default)]
     pub offset: Option<NumberOrTemplate>,

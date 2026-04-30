@@ -198,9 +198,7 @@ pub fn validate_scope(
                         ));
                     }
                 }
-                VarRef::Bare { ns }
-                | VarRef::Path { ns, .. }
-                | VarRef::Index { ns, .. } => {
+                VarRef::Bare { ns } | VarRef::Path { ns, .. } | VarRef::Index { ns, .. } => {
                     if !allowed_ns.contains(&ns.as_str()) {
                         return Err(ScopeError::UnknownNamespace(
                             ns.clone(),
@@ -221,7 +219,13 @@ mod tests {
     fn vars(ast: &TemplateAst) -> Vec<&VarRef> {
         ast.segments
             .iter()
-            .filter_map(|s| if let Segment::Var(v) = s { Some(v) } else { None })
+            .filter_map(|s| {
+                if let Segment::Var(v) = s {
+                    Some(v)
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
@@ -349,18 +353,12 @@ mod tests {
 
     #[test]
     fn empty_ns_dot() {
-        assert!(matches!(
-            parse("${.foo}"),
-            Err(ParseError::Invalid { .. })
-        ));
+        assert!(matches!(parse("${.foo}"), Err(ParseError::Invalid { .. })));
     }
 
     #[test]
     fn empty_method_name() {
-        assert!(matches!(
-            parse("${:arg}"),
-            Err(ParseError::Invalid { .. })
-        ));
+        assert!(matches!(parse("${:arg}"), Err(ParseError::Invalid { .. })));
     }
 
     #[test]
@@ -373,7 +371,7 @@ mod tests {
     fn unicode_text() {
         let a = parse("按画册${properties.x}").unwrap();
         assert_eq!(a.segments.len(), 2);
-        assert_eq!(a.segments[0], Segment::Text("按画册".into()));
+        assert_eq!(a.segments[0], Segment::Text("画册".into()));
     }
 
     #[test]

@@ -57,12 +57,7 @@ pub fn validate_sql_exprs(
 }
 
 /// 片段级校验：纯字符串扫描 DDL 关键字 / 多语句。
-fn check_fragment(
-    fqn: &str,
-    field: &str,
-    expr: &SqlExpr,
-    errors: &mut Vec<ValidateError>,
-) {
+fn check_fragment(fqn: &str, field: &str, expr: &SqlExpr, errors: &mut Vec<ValidateError>) {
     let s = &expr.0;
     if has_unbalanced_semicolon(s) {
         errors.push(ValidateError::new(
@@ -287,14 +282,19 @@ fn literal_tables_in_stmt(stmt: &Statement) -> Vec<String> {
     let mut tables = Vec::new();
     match stmt {
         Statement::Query(q) => collect_tables_query(q, &mut tables),
-        Statement::Insert(Insert { table_name, source, .. }) => {
+        Statement::Insert(Insert {
+            table_name, source, ..
+        }) => {
             tables.push(object_name_to_string(table_name));
             if let Some(src) = source {
                 collect_tables_query(src, &mut tables);
             }
         }
         Statement::Update {
-            table, from, selection: _, ..
+            table,
+            from,
+            selection: _,
+            ..
         } => {
             collect_tables_table_with_joins(table, &mut tables);
             if let Some(from) = from {
@@ -373,7 +373,9 @@ fn collect_tables_table_factor(tf: &TableFactor, out: &mut Vec<String>) {
         TableFactor::Derived { .. } => {
             // 子查询: 不算字面表 (白名单豁免)
         }
-        TableFactor::NestedJoin { table_with_joins, .. } => {
+        TableFactor::NestedJoin {
+            table_with_joins, ..
+        } => {
             collect_tables_table_with_joins(table_with_joins, out);
         }
         _ => {}
@@ -408,11 +410,7 @@ mod tests {
 
     #[test]
     fn select_with_template() {
-        assert!(run_full(
-            "SELECT * FROM images WHERE id = ${properties.id}",
-            None
-        )
-        .is_empty());
+        assert!(run_full("SELECT * FROM images WHERE id = ${properties.id}", None).is_empty());
     }
 
     #[test]
@@ -525,24 +523,14 @@ mod tests {
     #[test]
     fn fragment_clean() {
         let mut errs = Vec::new();
-        check_fragment(
-            "p",
-            "query.from",
-            &SqlExpr("images".into()),
-            &mut errs,
-        );
+        check_fragment("p", "query.from", &SqlExpr("images".into()), &mut errs);
         assert!(errs.is_empty());
     }
 
     #[test]
     fn fragment_trailing_semicolon_ok() {
         let mut errs = Vec::new();
-        check_fragment(
-            "p",
-            "query.from",
-            &SqlExpr("images;".into()),
-            &mut errs,
-        );
+        check_fragment("p", "query.from", &SqlExpr("images;".into()), &mut errs);
         assert!(errs.is_empty());
     }
 

@@ -188,23 +188,24 @@ impl Storage {
     }
 
     /// 批量查询多个任务。返回 id → TaskInfo 映射，缺失的 id 不在 map 中。
-    pub fn get_tasks_by_ids(
-        &self,
-        ids: &[String],
-    ) -> Result<HashMap<String, TaskInfo>, String> {
+    pub fn get_tasks_by_ids(&self, ids: &[String]) -> Result<HashMap<String, TaskInfo>, String> {
         let mut out: HashMap<String, TaskInfo> = HashMap::new();
         if ids.is_empty() {
             return Ok(out);
         }
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.run_config_id, t.trigger_source
              FROM tasks t WHERE t.id IN ({})",
             placeholders
         );
         let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {}", e))?;
-        let params_iter: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let params_iter: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
         let rows = stmt
             .query_map(params_iter.as_slice(), |row| {
                 let user_config_json: Option<String> = row.get(3)?;

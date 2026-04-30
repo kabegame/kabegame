@@ -2,15 +2,20 @@
     "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "vd_plugins_provider",
-    // 7c S9: 整体委派 gallery_plugins_router (list / resolve 一致), 等价于 programmatic
-    // VdPluginsProvider 的 instantiate_named("gallery_plugins_router") 转发。
+    // 对齐旧版 VdByPluginProvider: 目录名为 `{插件展示名} - {plugin_id}`; 无展示名则裸 id。
     "list": {
-        "${root.name}": {
-            "child_var": "root",
-            "delegate": { "provider": "gallery_plugins_router" }
+        "${out.display}": {
+            "sql": "SELECT q.plugin_id AS plugin_id, q.plugin_meta_json AS plugin_meta_json, CASE WHEN IFNULL(json_extract(q.plugin_meta_json, '$.name'), '') != '' THEN json_extract(q.plugin_meta_json, '$.name') || ' - ' || q.plugin_id ELSE q.plugin_id END AS display FROM (SELECT p.plugin_id AS plugin_id, get_plugin(p.plugin_id) AS plugin_meta_json FROM (SELECT DISTINCT images.plugin_id AS plugin_id FROM images WHERE images.plugin_id IS NOT NULL AND images.plugin_id != '') p) q ORDER BY q.plugin_id ASC",
+            "data_var": "out",
+            "provider": "gallery_plugin_provider",
+            "properties": { "plugin_id": "${out.plugin_id}" },
+            "meta": { "$json": "${out.plugin_meta_json}" }
         }
     },
     "resolve": {
-        ".*": { "delegate": { "provider": "gallery_plugins_router" } }
+        "(?:.* - )?([a-z][a-z0-9_-]*)": {
+            "provider": "gallery_plugin_provider",
+            "properties": { "plugin_id": "${capture[1]}" }
+        }
     }
 }

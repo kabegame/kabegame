@@ -7,7 +7,7 @@
     // 前端仅按列表项渲染, count 已不依赖此处)。
     "list": {
         "${out.plugin_id}": {
-            "sql": "SELECT DISTINCT images.plugin_id AS plugin_id, get_plugin(images.plugin_id) AS plugin_meta_json FROM images WHERE images.plugin_id IS NOT NULL AND images.plugin_id != '' ORDER BY images.plugin_id ASC",
+            "sql": "SELECT p.plugin_id AS plugin_id, get_plugin(p.plugin_id) AS plugin_meta_json FROM (SELECT DISTINCT images.plugin_id AS plugin_id FROM images WHERE images.plugin_id IS NOT NULL AND images.plugin_id != '') p ORDER BY p.plugin_id ASC",
             "data_var": "out",
             "provider": "gallery_plugin_provider",
             "properties": {

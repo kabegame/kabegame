@@ -90,10 +90,7 @@ mod tests {
         match v {
             ProviderInvocation::ByName(b) => {
                 let props = b.properties.unwrap();
-                assert_eq!(
-                    props.get("a"),
-                    Some(&TemplateValue::String("b".into()))
-                );
+                assert_eq!(props.get("a"), Some(&TemplateValue::String("b".into())));
             }
             _ => panic!("expected ByName"),
         }
@@ -119,8 +116,7 @@ mod tests {
     #[test]
     fn delegate_string_payload_rejected() {
         // 6e/7b: 旧 PathExpr 形态 `{"delegate":"./bar"}` 被拒 (delegate 必须是 ProviderCall 对象)
-        let r: Result<ProviderInvocation, _> =
-            serde_json::from_str(r#"{"delegate":"./bar"}"#);
+        let r: Result<ProviderInvocation, _> = serde_json::from_str(r#"{"delegate":"./bar"}"#);
         assert!(r.is_err());
     }
 
@@ -169,9 +165,8 @@ mod tests {
     #[test]
     fn provider_and_delegate_mutually_exclusive() {
         // {provider:..., delegate:...} 两个都给 → 不属于任何 variant (deny_unknown_fields)
-        let r: Result<ProviderInvocation, _> = serde_json::from_str(
-            r#"{"provider":"foo","delegate":{"provider":"bar"}}"#,
-        );
+        let r: Result<ProviderInvocation, _> =
+            serde_json::from_str(r#"{"provider":"foo","delegate":{"provider":"bar"}}"#);
         assert!(r.is_err());
     }
 
@@ -184,10 +179,8 @@ mod tests {
 
     #[test]
     fn provider_call_with_properties() {
-        let v: ProviderCall = serde_json::from_str(
-            r#"{"provider":"foo","properties":{"page_size":100}}"#,
-        )
-        .unwrap();
+        let v: ProviderCall =
+            serde_json::from_str(r#"{"provider":"foo","properties":{"page_size":100}}"#).unwrap();
         assert_eq!(v.provider, ProviderName("foo".into()));
         let p = v.properties.unwrap();
         assert!(p.contains_key("page_size"));

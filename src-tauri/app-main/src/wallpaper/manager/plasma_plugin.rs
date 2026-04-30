@@ -49,8 +49,8 @@ impl PlasmaPluginWallpaperManager {
     /// 启动时边缘对齐：若当前为 Plasma 且设置是插件模式，但系统壁纸插件不是 Kabegame，
     /// 则自动切到 Kabegame 插件（与 Windows/macOS 窗口模式启动时自动挂载窗口一致）。
     pub fn ensure_plasma_plugin_aligned() -> Result<(), String> {
-        let current = plasma_qdbus::get_current_plasma_wallpaper_plugin()
-            .unwrap_or_else(|_| String::new());
+        let current =
+            plasma_qdbus::get_current_plasma_wallpaper_plugin().unwrap_or_else(|_| String::new());
         if current.trim() == plasma_qdbus::KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID {
             return Ok(());
         }

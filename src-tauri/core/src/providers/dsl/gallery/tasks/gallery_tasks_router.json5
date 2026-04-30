@@ -4,15 +4,37 @@
     "name": "gallery_tasks_router",
     // 7c S3: programmatic GalleryTasksRouter 迁 DSL。
     // list 直接扫 tasks 表 (与 get_tasks_with_images 同 SQL 但去掉中间元组), 按 start_time 倒序。
+    // task meta 由 runtime 按 SQL 行字段构造，避免 host function 访问连接。
     "list": {
         "${out.id}": {
-            "sql": "SELECT id, get_task(id) AS task_meta_json FROM tasks ORDER BY COALESCE(start_time, 0) DESC",
+            "sql": "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.output_album_id, t.run_config_id, COALESCE(NULLIF(t.trigger_source, ''), 'manual') AS trigger_source, t.status, t.progress, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.start_time, t.end_time, t.error FROM tasks t ORDER BY COALESCE(t.start_time, 0) DESC",
             "data_var": "out",
             "provider": "gallery_task_provider",
             "properties": {
                 "task_id": "${out.id}"
             },
-            "meta": { "$json": "${out.task_meta_json}" }
+            "meta": {
+                "kind": "task",
+                "data": {
+                    "id": "${out.id}",
+                    "pluginId": "${out.plugin_id}",
+                    "outputDir": "${out.output_dir}",
+                    "userConfig": "${out.user_config}",
+                    "httpHeaders": "${out.http_headers}",
+                    "outputAlbumId": "${out.output_album_id}",
+                    "runConfigId": "${out.run_config_id}",
+                    "triggerSource": "${out.trigger_source}",
+                    "status": "${out.status}",
+                    "progress": "${out.progress}",
+                    "deletedCount": "${out.deleted_count}",
+                    "dedupCount": "${out.dedup_count}",
+                    "successCount": "${out.success_count}",
+                    "failedCount": "${out.failed_count}",
+                    "startTime": "${out.start_time}",
+                    "endTime": "${out.end_time}",
+                    "error": "${out.error}"
+                }
+            }
         }
     },
     // task_id 是 UUID v4; 与 plugins/albums 一致用 UUID 正则锁定段。

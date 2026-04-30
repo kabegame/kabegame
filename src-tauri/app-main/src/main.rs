@@ -1,6 +1,9 @@
 // Prevents additional console window on Windows in release (local/Tauri GUI only).
 // Web mode is a console server — keep the default console subsystem so stdout/stderr are visible.
-#![cfg_attr(all(not(debug_assertions), not(feature = "web")), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), not(feature = "web")),
+    windows_subsystem = "windows"
+)]
 
 fn main() {
     #[cfg(target_os = "linux")]

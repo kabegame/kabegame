@@ -114,7 +114,9 @@ pub async fn delete_task(task_id: String) -> Result<Value, String> {
 
 pub async fn retry_task_failed_image(failed_id: i64) -> Result<Value, String> {
     use kabegame_core::crawler::TaskScheduler;
-    TaskScheduler::global().retry_failed_image(failed_id).await?;
+    TaskScheduler::global()
+        .retry_failed_image(failed_id)
+        .await?;
     Ok(Value::Null)
 }
 
@@ -249,12 +251,7 @@ pub async fn clear_finished_tasks() -> Result<Value, String> {
     if !all_image_ids.is_empty() {
         let mut seen = HashSet::new();
         all_image_ids.retain(|id| seen.insert(id.clone()));
-        GlobalEmitter::global().emit_images_change(
-            "change",
-            &all_image_ids,
-            Some(&task_ids),
-            None,
-        );
+        GlobalEmitter::global().emit_images_change("change", &all_image_ids, Some(&task_ids), None);
     }
     serde_json::to_value(count).map_err(|e| e.to_string())
 }

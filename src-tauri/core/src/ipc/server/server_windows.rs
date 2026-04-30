@@ -89,9 +89,7 @@ fn create_secure_server() -> Result<NamedPipeServer, String> {
 }
 
 /// Windows 平台的服务实现
-pub async fn serve<F, Fut>(
-    handler: F,
-) -> Result<(), String>
+pub async fn serve<F, Fut>(handler: F) -> Result<(), String>
 where
     F: Fn(IpcRequest) -> Fut + Send + Sync + Clone + 'static,
     Fut: std::future::Future<Output = IpcResponse> + Send,
@@ -108,7 +106,10 @@ where
                     if attempt < MAX_RETRIES {
                         eprintln!(
                             "[IPC] 命名管道绑定失败 (尝试 {}/{}): {}，{}ms 后重试...",
-                            attempt + 1, MAX_RETRIES + 1, e, RETRY_INTERVAL_MS
+                            attempt + 1,
+                            MAX_RETRIES + 1,
+                            e,
+                            RETRY_INTERVAL_MS
                         );
                         tokio::time::sleep(Duration::from_millis(RETRY_INTERVAL_MS)).await;
                         continue;
@@ -149,13 +150,7 @@ where
             // 分离读写端，允许并发读写
             let (read_half, write_half) = split(connected);
 
-            connection_handler::handle_connection(
-                read_half,
-                write_half,
-                handler,
-                client_id,
-            )
-            .await;
+            connection_handler::handle_connection(read_half, write_half, handler, client_id).await;
 
             eprintln!("[DEBUG] IPC 服务器连接处理完成");
         });

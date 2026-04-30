@@ -15,10 +15,9 @@ pub async fn get_albums() -> IpcResponse {
 pub async fn add_album(name: &str) -> IpcResponse {
     let storage = Storage::global();
     match storage.add_album(name, None) {
-        Ok(album) => IpcResponse::ok_with_data(
-            "created",
-            serde_json::to_value(album).unwrap_or_default(),
-        ),
+        Ok(album) => {
+            IpcResponse::ok_with_data("created", serde_json::to_value(album).unwrap_or_default())
+        }
         Err(e) => IpcResponse::err(e),
     }
 }
@@ -101,9 +100,7 @@ pub async fn update_album_images_order(
 pub async fn get_album_image_ids(album_id: &str) -> IpcResponse {
     let storage = Storage::global();
     match storage.get_album_image_ids(album_id) {
-        Ok(ids) => {
-            IpcResponse::ok_with_data("ok", serde_json::to_value(ids).unwrap_or_default())
-        }
+        Ok(ids) => IpcResponse::ok_with_data("ok", serde_json::to_value(ids).unwrap_or_default()),
         Err(e) => IpcResponse::err(e),
     }
 }

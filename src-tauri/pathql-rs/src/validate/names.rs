@@ -96,28 +96,19 @@ mod tests {
     #[test]
     fn bad_starts_with_digit() {
         let errs = run("k", "1foo");
-        assert!(matches!(
-            errs[0].kind,
-            ValidateErrorKind::InvalidName(_)
-        ));
+        assert!(matches!(errs[0].kind, ValidateErrorKind::InvalidName(_)));
     }
 
     #[test]
     fn bad_name_with_hyphen() {
         let errs = run("k", "foo-bar");
-        assert!(matches!(
-            errs[0].kind,
-            ValidateErrorKind::InvalidName(_)
-        ));
+        assert!(matches!(errs[0].kind, ValidateErrorKind::InvalidName(_)));
     }
 
     #[test]
     fn bad_empty_name() {
         let errs = run("k", "");
-        assert!(matches!(
-            errs[0].kind,
-            ValidateErrorKind::InvalidName(_)
-        ));
+        assert!(matches!(errs[0].kind, ValidateErrorKind::InvalidName(_)));
     }
 
     #[test]

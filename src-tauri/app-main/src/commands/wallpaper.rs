@@ -27,7 +27,6 @@ pub async fn get_current_wallpaper_path_from_settings(
     }
 }
 
-
 #[tauri::command]
 pub async fn set_wallpaper(file_path: String) -> Result<(), String> {
     // Android 上为 content:// URI，不能做 Path::exists/canonicalize
@@ -82,7 +81,8 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
     };
     let local_path = info.local_path;
 
-    let requires_window_mode = kabegame_core::image_type::requires_window_mode(Path::new(&local_path));
+    let requires_window_mode =
+        kabegame_core::image_type::requires_window_mode(Path::new(&local_path));
     if requires_window_mode {
         let current_mode = settings.get_wallpaper_mode();
         if current_mode != "window" {
@@ -90,7 +90,8 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
         }
     }
 
-    let requires_plugin_mode = kabegame_core::image_type::requires_plugin_mode(Path::new(&local_path));
+    let requires_plugin_mode =
+        kabegame_core::image_type::requires_plugin_mode(Path::new(&local_path));
     if requires_plugin_mode {
         let current_mode = settings.get_wallpaper_mode();
         if current_mode != "plasma-plugin" {
@@ -194,9 +195,7 @@ pub async fn set_wallpaper_rotation_album_id(album_id: String) -> Result<(), Str
 
     if enabled {
         let rotator = WallpaperRotator::global();
-        let start_from_current = album_id_opt
-            .map(|s| s.is_empty())
-            .unwrap_or(false);
+        let start_from_current = album_id_opt.map(|s| s.is_empty()).unwrap_or(false);
         rotator
             .ensure_running(start_from_current)
             .await
@@ -371,7 +370,9 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
             #[cfg(target_os = "linux")]
             if mode == "plasma-plugin" {
                 let target = controller.manager_for_mode(&mode);
-                target.init(app.clone()).map_err(|e| format!("切换系统壁纸插件失败: {}", e))?;
+                target
+                    .init(app.clone())
+                    .map_err(|e| format!("切换系统壁纸插件失败: {}", e))?;
             }
             settings.set_wallpaper_mode(mode.clone())?;
             return Ok(());
@@ -395,21 +396,22 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
     } else {
         current_cleaned.clone()
     };
-    let (style_to_apply, transition_to_apply) = match settings
-        .swap_style_transition_for_mode_switch(&old_mode, &mode)
-    {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!(
-                "[WARN] set_wallpaper_mode: swap_style_transition_for_mode_switch 失败: {}",
-                e
-            );
-            (cur_style.clone(), cur_transition.clone())
-        }
-    };
+    let (style_to_apply, transition_to_apply) =
+        match settings.swap_style_transition_for_mode_switch(&old_mode, &mode) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!(
+                    "[WARN] set_wallpaper_mode: swap_style_transition_for_mode_switch 失败: {}",
+                    e
+                );
+                (cur_style.clone(), cur_transition.clone())
+            }
+        };
 
     eprintln!("[DEBUG] set_wallpaper_mode: 开始应用模式 {}", mode);
-    target.init(app.clone()).map_err(|e| format!("init 失败: {}", e))?;
+    target
+        .init(app.clone())
+        .map_err(|e| format!("init 失败: {}", e))?;
     #[cfg(not(target_os = "linux"))]
     let is_plugin_mode = false;
     #[cfg(target_os = "linux")]

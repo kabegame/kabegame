@@ -1,4 +1,3 @@
-use kabegame_i18n::t;
 use kabegame_core::crawler::downloader::{
     compute_native_download_destination, get_default_images_dir, postprocess_downloaded_image,
     NativeDownloadEntry, NativeDownloadState,
@@ -6,11 +5,12 @@ use kabegame_core::crawler::downloader::{
 use kabegame_core::crawler::favicon::fetch_favicon;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::storage::{RangedSurfRecords, Storage, SurfRecord};
-use std::sync::{Mutex, OnceLock};
+use kabegame_i18n::t;
 use std::collections::HashMap;
-use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tauri::Emitter;
+use std::sync::{Mutex, OnceLock};
 use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent};
+use tauri::Emitter;
+use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -228,18 +228,23 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                             return false;
                         }
                         let effective_url = if url.scheme() == "blob" {
-                            url.as_str().strip_prefix("blob:").unwrap_or(url.as_str()).to_string()
+                            url.as_str()
+                                .strip_prefix("blob:")
+                                .unwrap_or(url.as_str())
+                                .to_string()
                         } else {
                             url.as_str().to_string()
                         };
 
-                        let native_dest =
-                            match compute_native_download_destination(&effective_url, &images_dir) {
-                                Ok(p) => p,
-                                Err(_) => {
-                                    return false;
-                                }
-                            };
+                        let native_dest = match compute_native_download_destination(
+                            &effective_url,
+                            &images_dir,
+                        ) {
+                            Ok(p) => p,
+                            Err(_) => {
+                                return false;
+                            }
+                        };
                         let download_start_time = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis() as u64)
@@ -309,7 +314,11 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                                                     .increment_surf_record_download_count(id);
                                                 eval_surf_toast(&app2, "下载成功", "success");
                                             } else {
-                                                eval_surf_toast(&app2, "下载失败（重复或未入库）", "failed");
+                                                eval_surf_toast(
+                                                    &app2,
+                                                    "下载失败（重复或未入库）",
+                                                    "failed",
+                                                );
                                             }
                                         } else {
                                             eval_surf_toast(&app2, "下载失败", "failed");

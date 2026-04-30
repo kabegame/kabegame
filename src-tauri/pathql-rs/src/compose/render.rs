@@ -155,8 +155,13 @@ mod tests {
 
     #[test]
     fn pure_literal() {
-        let (sql, params) =
-            render_to_owned("SELECT 1", &empty_ctx(), &AliasTable::default(), SqlDialect::Sqlite).unwrap();
+        let (sql, params) = render_to_owned(
+            "SELECT 1",
+            &empty_ctx(),
+            &AliasTable::default(),
+            SqlDialect::Sqlite,
+        )
+        .unwrap();
         assert_eq!(sql, "SELECT 1");
         assert!(params.is_empty());
     }
@@ -164,18 +169,20 @@ mod tests {
     #[test]
     fn single_property() {
         let ctx = ctx_with_props(&[("x", TemplateValue::Int(42))]);
-        let (sql, params) =
-            render_to_owned("id = ${properties.x}", &ctx, &AliasTable::default(), SqlDialect::Sqlite).unwrap();
+        let (sql, params) = render_to_owned(
+            "id = ${properties.x}",
+            &ctx,
+            &AliasTable::default(),
+            SqlDialect::Sqlite,
+        )
+        .unwrap();
         assert_eq!(sql, "id = ?");
         assert_eq!(params, vec![TemplateValue::Int(42)]);
     }
 
     #[test]
     fn multi_property() {
-        let ctx = ctx_with_props(&[
-            ("x", TemplateValue::Int(10)),
-            ("y", TemplateValue::Int(20)),
-        ]);
+        let ctx = ctx_with_props(&[("x", TemplateValue::Int(10)), ("y", TemplateValue::Int(20))]);
         let (sql, params) = render_to_owned(
             "a = ${properties.x} AND b = ${properties.y}",
             &ctx,
@@ -191,23 +198,39 @@ mod tests {
     fn ref_inline() {
         let mut aliases = AliasTable::default();
         aliases.allocate("t");
-        let (sql, params) =
-            render_to_owned("${ref:t}.id = ${ref:t}.x", &empty_ctx(), &aliases, SqlDialect::Sqlite).unwrap();
+        let (sql, params) = render_to_owned(
+            "${ref:t}.id = ${ref:t}.x",
+            &empty_ctx(),
+            &aliases,
+            SqlDialect::Sqlite,
+        )
+        .unwrap();
         assert_eq!(sql, "_a0.id = _a0.x");
         assert!(params.is_empty());
     }
 
     #[test]
     fn ref_unknown_errors() {
-        let err = render_to_owned("${ref:nope}", &empty_ctx(), &AliasTable::default(), SqlDialect::Sqlite).unwrap_err();
+        let err = render_to_owned(
+            "${ref:nope}",
+            &empty_ctx(),
+            &AliasTable::default(),
+            SqlDialect::Sqlite,
+        )
+        .unwrap_err();
         assert!(matches!(err, RenderError::UnknownRef(_)));
     }
 
     #[test]
     fn composed_inline() {
         let ctx = TemplateContext::default().with_composed("SELECT 1".into(), vec![]);
-        let (sql, params) =
-            render_to_owned("FROM (${composed}) sub", &ctx, &AliasTable::default(), SqlDialect::Sqlite).unwrap();
+        let (sql, params) = render_to_owned(
+            "FROM (${composed}) sub",
+            &ctx,
+            &AliasTable::default(),
+            SqlDialect::Sqlite,
+        )
+        .unwrap();
         assert_eq!(sql, "FROM ((SELECT 1)) sub");
         assert!(params.is_empty());
     }
@@ -216,15 +239,26 @@ mod tests {
     fn composed_with_subparams_merges() {
         let ctx = TemplateContext::default()
             .with_composed("WHERE x = ?".into(), vec![TemplateValue::Int(7)]);
-        let (sql, params) =
-            render_to_owned("FROM (${composed})", &ctx, &AliasTable::default(), SqlDialect::Sqlite).unwrap();
+        let (sql, params) = render_to_owned(
+            "FROM (${composed})",
+            &ctx,
+            &AliasTable::default(),
+            SqlDialect::Sqlite,
+        )
+        .unwrap();
         assert_eq!(sql, "FROM ((WHERE x = ?))");
         assert_eq!(params, vec![TemplateValue::Int(7)]);
     }
 
     #[test]
     fn composed_missing() {
-        let err = render_to_owned("${composed}", &empty_ctx(), &AliasTable::default(), SqlDialect::Sqlite).unwrap_err();
+        let err = render_to_owned(
+            "${composed}",
+            &empty_ctx(),
+            &AliasTable::default(),
+            SqlDialect::Sqlite,
+        )
+        .unwrap_err();
         assert!(matches!(err, RenderError::MissingComposed));
     }
 
@@ -258,7 +292,13 @@ mod tests {
 
     #[test]
     fn parse_error_propagates() {
-        let err = render_to_owned("${unclosed", &empty_ctx(), &AliasTable::default(), SqlDialect::Sqlite).unwrap_err();
+        let err = render_to_owned(
+            "${unclosed",
+            &empty_ctx(),
+            &AliasTable::default(),
+            SqlDialect::Sqlite,
+        )
+        .unwrap_err();
         assert!(matches!(err, RenderError::Parse(_)));
     }
 
@@ -343,10 +383,7 @@ mod tests {
 
     #[test]
     fn render_postgres_uses_dollar_n() {
-        let ctx = ctx_with_props(&[
-            ("x", TemplateValue::Int(10)),
-            ("y", TemplateValue::Int(20)),
-        ]);
+        let ctx = ctx_with_props(&[("x", TemplateValue::Int(10)), ("y", TemplateValue::Int(20))]);
         let (sql, params) = render_to_owned(
             "a = ${properties.x} AND b = ${properties.y}",
             &ctx,
@@ -361,9 +398,13 @@ mod tests {
     #[test]
     fn render_mysql_uses_question_mark() {
         let ctx = ctx_with_props(&[("x", TemplateValue::Int(7))]);
-        let (sql, _) =
-            render_to_owned("id = ${properties.x}", &ctx, &AliasTable::default(), SqlDialect::Mysql)
-                .unwrap();
+        let (sql, _) = render_to_owned(
+            "id = ${properties.x}",
+            &ctx,
+            &AliasTable::default(),
+            SqlDialect::Mysql,
+        )
+        .unwrap();
         assert_eq!(sql, "id = ?");
     }
 }

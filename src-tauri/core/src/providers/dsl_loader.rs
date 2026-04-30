@@ -17,6 +17,9 @@ pub static DSL_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/providers/ds
 /// 文件清单。新增 / 删除 DSL provider 时同步更新此处 + register 调用方。
 pub const DSL_FILES: &[&str] = &[
     "root_provider.json",
+    "images/images_root_provider.json5",
+    "images/images_id_provider.json5",
+    "images/images_metadata_provider.json5",
     "gallery/gallery_route.json5",
     "gallery/all_router/gallery_all_router.json5",
     "gallery/all_router/desc/gallery_all_desc_router.json5",
@@ -28,6 +31,8 @@ pub const DSL_FILES: &[&str] = &[
     "gallery/gallery_bigger_crawler_time_filter.json5",
     "gallery/album/gallery_album_bigger_order_router.json5",
     "gallery/album/gallery_album_bigger_order_filter.json5",
+    "gallery/album/gallery_album_order_provider.json5",
+    "gallery/album/gallery_album_media_type_provider.json5",
     "gallery/albums/gallery_albums_router.json5",
     "gallery/albums/gallery_album_provider.json5",
     "gallery/plugins/gallery_plugins_router.json5",
@@ -50,10 +55,14 @@ pub const DSL_FILES: &[&str] = &[
     "shared/page_size_provider.json5",
     "shared/query_page_provider.json5",
     "shared/sort_provider.json5",
+    "shared/sort_router.json5",
     "shared/limit_leaf_provider.json5",
     "vd/vd_root_router.json5",
     "vd/vd_zh_CN_root_router.json5",
     "vd/vd_en_US_root_router.json5",
+    "vd/vd_ja_root_router.json5",
+    "vd/vd_ko_root_router.json5",
+    "vd/vd_zhtw_root_router.json5",
     "vd/vd_all_provider.json5",
     "vd/vd_albums_provider.json5",
     "vd/vd_album_entry_provider.json5",
@@ -89,9 +98,10 @@ pub fn load_dsl_into(registry: &mut ProviderRegistry) -> ProviderDef {
     root_def.expect("root_provider missing from DSL_FILES")
 }
 
-/// 启动期 sanity: 跑一次完整 validate (cross-ref + sql shape)。失败直接 panic, 让构建立刻挂。
-/// 注意: cross-ref 模式默认关掉是因为 9 个 DSL 引用的部分名字仍由 programmatic 层提供 (gallery_albums_router 等);
-/// 这里走的是 `enforce_cross_refs = false` 默认值, 只检查 reserved + sql 等本地约束。
+/// 启动期 sanity: 跑一次完整 validate。失败直接 panic, 让构建立刻挂。
+/// Phase 7c 后 core 内置 provider 已全量 DSL 化; 这里仍沿用默认配置, 只检查
+/// reserved / SQL shape 等本地约束。跨引用严格模式留给后续第三方 DSL namespace
+/// 装载策略一起开启。
 pub fn validate_dsl(registry: &ProviderRegistry) {
     let cfg = ValidateConfig::with_default_reserved();
     if let Err(errs) = validate(registry, &cfg) {

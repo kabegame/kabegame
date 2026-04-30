@@ -71,7 +71,10 @@ fn dfs_delegate(
     for target in target_names {
         if let Some(target_def) = registry.resolve(current_ns, target) {
             // 用 target_def 的 namespace 作下一步 ns (resolve 链已找到具体定义)
-            let next_ns = target_def.namespace.clone().unwrap_or_else(|| Namespace(String::new()));
+            let next_ns = target_def
+                .namespace
+                .clone()
+                .unwrap_or_else(|| Namespace(String::new()));
             if let Some(c) = dfs_delegate(&target_def, &next_ns, registry, visited, stack) {
                 return Some(c);
             }
@@ -180,7 +183,8 @@ mod tests {
     fn no_cycles_clean() {
         let mut r = ProviderRegistry::new();
         r.register(def_named("k", "leaf")).unwrap();
-        r.register(def_query_delegate("k", "router", "leaf")).unwrap();
+        r.register(def_query_delegate("k", "router", "leaf"))
+            .unwrap();
         let mut errs = Vec::new();
         check_delegate_cycles(&r, &cfg_strict(), &mut errs);
         assert!(errs.is_empty());
@@ -189,7 +193,8 @@ mod tests {
     #[test]
     fn self_cycle_detected() {
         let mut r = ProviderRegistry::new();
-        r.register(def_query_delegate("k", "loopy", "loopy")).unwrap();
+        r.register(def_query_delegate("k", "loopy", "loopy"))
+            .unwrap();
         let mut errs = Vec::new();
         check_delegate_cycles(&r, &cfg_strict(), &mut errs);
         assert!(errs
@@ -228,7 +233,8 @@ mod tests {
     #[test]
     fn cross_ref_off_skips_check() {
         let mut r = ProviderRegistry::new();
-        r.register(def_query_delegate("k", "loopy", "loopy")).unwrap();
+        r.register(def_query_delegate("k", "loopy", "loopy"))
+            .unwrap();
         let mut errs = Vec::new();
         // enforce_cross_refs default = false
         check_delegate_cycles(&r, &ValidateConfig::with_default_reserved(), &mut errs);

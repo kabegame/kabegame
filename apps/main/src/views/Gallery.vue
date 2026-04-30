@@ -116,8 +116,7 @@ import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { storeToRefs } from "pinia";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galleryRoute";
-import { serializeFilter } from "@/utils/galleryPath";
-import { asEntryPath } from "@/utils/path";
+import { buildGalleryCountPath, serializeFilter } from "@/utils/galleryPath";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
@@ -606,11 +605,10 @@ watch(
 
     startLoading();
     try {
-      const result = await fetchByPath(newPath, {
+      await fetchByPath(newPath, {
         loadKey: newPath,
       });
-      // 同步 total 到本地
-      totalImagesCount.value = result.total ?? 0;
+      await loadTotalImagesCount();
     } catch (error) {
       console.error("加载路径失败:", newPath, error);
       if (
@@ -660,10 +658,14 @@ const getPluginName = (pluginId: string) => {
 const loadTotalImagesCount = async () => {
   try {
     // 使用 provider 的无尾缀 Entry 语法：只算 composed query 的 COUNT，不触发 list_children / list_images。
-    // currentPath 已由 route store 统一拼好（filter + search + hide + page），
-    // COUNT SQL 忽略 LIMIT/OFFSET，所以无需单独剥离 page 段。
+    // 这里必须剥离排序和分页段；pathql count 会精确统计传入路径。
+    const rootPath = buildGalleryCountPath(
+      galleryRouteStore.filter,
+      galleryRouteStore.search
+    );
+    const countPath = galleryRouteStore.hide ? `hide/${rootPath}` : rootPath;
     const res = await invoke<{ total: number | null }>("browse_gallery_provider", {
-      path: asEntryPath(galleryRouteStore.currentPath),
+      path: countPath,
     });
     totalImagesCount.value = res?.total ?? 0;
   } catch (error) {

@@ -2,20 +2,24 @@
     "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "vd_all_provider",
-    // 7c S8: VD 全部图片入口。无 apply_query 贡献 (与 programmatic 同, 仅承上下分页)。
+    // 旧版 VdAllProvider: 固定 DEFAULT_PAGE_SIZE=100, 直接列页号; 不暴露 desc/xNNNx。
     "list": {
-        "desc":   { "provider": "sort_provider" },
-        "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
-        "x500x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
-        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
+            }
+        }
     },
     "resolve": {
-        "x([1-9][0-9]*)x": {
-            "provider": "gallery_paginate_router",
-            "properties": { "page_size": "${capture[1]}" }
-        },
         "([1-9][0-9]*)": {
-            "provider": "query_page_provider",
+            "provider": "gallery_page_router",
             "properties": {
                 "page_size": 100,
                 "page_num": "${capture[1]}"

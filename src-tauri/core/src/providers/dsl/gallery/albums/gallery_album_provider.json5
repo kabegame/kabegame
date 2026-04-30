@@ -10,20 +10,55 @@
         "where": "ai.album_id = ${properties.album_id}"
     },
     "list": {
-        // 子画册 (parent_id = ${properties.album_id}); meta 用 get_album + $json 整体注入。
+        // 子画册 (parent_id = ${properties.album_id}); meta 由 runtime 按 SQL 行字段构造。
         "${out.id}": {
-            "sql": "SELECT id, get_album(id) AS album_meta_json FROM albums WHERE parent_id = ${properties.album_id} ORDER BY created_at ASC",
+            "sql": "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id = ${properties.album_id} ORDER BY created_at ASC",
             "data_var": "out",
             "provider": "gallery_album_provider",
             "properties": {
                 "album_id": "${out.id}"
             },
-            "meta": { "$json": "${out.album_meta_json}" }
+            "meta": {
+                "kind": "album",
+                "data": {
+                    "id": "${out.id}",
+                    "name": "${out.name}",
+                    "createdAt": "${out.created_at}",
+                    "parentId": "${out.parent_id}"
+                }
+            }
         },
         // 排序翻转
-        "desc": { "provider": "sort_provider" },
+        "desc": { "provider": "sort_router" },
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
+            }
+        },
+        "wallpaper-order": { "provider": "gallery_wallpaper_order_router" },
+        // 兼容前端历史路径: image-only / video-only 是画册内媒体类型过滤。
+        "image-only": {
+            "provider": "gallery_album_media_type_provider",
+            "properties": { "kind": "image" }
+        },
+        "video-only": {
+            "provider": "gallery_album_media_type_provider",
+            "properties": { "kind": "video" }
+        },
         // 顺序模式入口 (7b S1e)
         "bigger_order": { "provider": "gallery_album_bigger_order_router" },
+        // album 页面顺序读取: x{N}x/{page} 是分页; l{N}l 只是 limit。
+        "order": { "provider": "gallery_album_order_provider" },
+        // 兼容前端历史路径: album-order 等价于 order。
+        "album-order": { "provider": "gallery_album_order_provider" },
+        "media-type": { "provider": "gallery_media_type_router" },
         // 默认分页项 — 与 gallery_album_router (programmatic) 一致, 暴露 100/500/1000 三档
         "x100x": {
             "provider": "gallery_paginate_router",
@@ -46,7 +81,7 @@
         },
         // 裸数字段 → 默认 page_size=100 的页号
         "([1-9][0-9]*)": {
-            "provider": "query_page_provider",
+            "provider": "gallery_page_router",
             "properties": {
                 "page_size": 100,
                 "page_num": "${capture[1]}"

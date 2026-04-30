@@ -6,27 +6,56 @@
 //! - [`get_plugin`](plugin_id [, locale]) → JSON_TEXT
 //!   返回 `{"id","name","description","baseUrl"}`; plugin 不存在 → `"null"`。
 //!   name / description 按 locale 解析 (locale 缺省走 [`kabegame_i18n::current_vd_locale`])。
-//! - `get_album(album_id)` → JSON_TEXT
-//!   返回 `{"kind":"album","data":{<Album camelCase fields>}}` (与
-//!   [`crate::providers::provider::wrap_typed_meta_json`] 输出对齐); album 不存在 → `"null"`。
-//!   配合 DSL meta `{"$json": "${get_album(...)}"}` directive 把 JSON 文本直接注入 meta。
+//! - `vd_display_name(canonical)` → 当前 VD locale 下的路径显示名。
+//! - `crawled_at_seconds(timestamp)` → 规整秒/毫秒时间戳。
 //!
-//! 扩展模式: `get_<entity>(id [, locale]) -> JSON_TEXT`, 调用方在 DSL 里用
-//! `json_extract(get_<entity>(...), '$.<field>')` 拆字段, 或用 `$json` directive 整体注入 meta。
+//! 约束: host SQL function 不得访问当前 Storage/SQLite 连接。数据库中可查的数据应直接写
+//! SQL；否则会在 `KabegameSqlExecutor` 持有连接 mutex 期间重入同一把锁。
 
 use rusqlite::functions::FunctionFlags;
 use rusqlite::Connection;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use crate::plugin::PluginManager;
-use crate::storage::Storage;
+
+static GET_PLUGIN_PROFILE_CALLS: AtomicU64 = AtomicU64::new(0);
+static GET_PLUGIN_PROFILE_MICROS: AtomicU64 = AtomicU64::new(0);
+
+fn get_plugin_profile_enabled() -> bool {
+    let Ok(filter) = std::env::var("PATHQL_PROFILE") else {
+        return false;
+    };
+    let filter = filter.trim();
+    if filter.is_empty() || matches!(filter, "0" | "false" | "off") {
+        return false;
+    }
+    matches!(filter, "1" | "true" | "all")
+        || filter.contains("plugin")
+        || filter.contains("get_plugin")
+}
+
+fn profile_get_plugin_call(plugin_id: &str, locale: Option<&str>, started: Instant, result: &str) {
+    if !get_plugin_profile_enabled() {
+        return;
+    }
+
+    let last_us = started.elapsed().as_micros() as u64;
+    let calls = GET_PLUGIN_PROFILE_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    let total_us = GET_PLUGIN_PROFILE_MICROS.fetch_add(last_us, Ordering::Relaxed) + last_us;
+    if calls <= 20 || calls % 100 == 0 {
+        eprintln!(
+            "[pathql-profile] host_fn=get_plugin calls={calls} last_us={last_us} total_ms={} plugin_id={plugin_id:?} locale={locale:?} result_null={}",
+            total_us / 1000,
+            result == "null",
+        );
+    }
+}
 
 /// 在给定 connection 上注册所有 DSL 主机 SQL 函数。
 /// connection-scoped — 每个连接需独立注册。kabegame 当前单连接架构, 一次即可。
 pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::Error> {
     register_get_plugin(conn)?;
-    register_get_album(conn)?;
-    register_get_task(conn)?;
-    register_get_surf_record(conn)?;
     register_crawled_at_seconds(conn)?;
     register_vd_display_name(conn)?;
     Ok(())
@@ -63,78 +92,6 @@ fn register_crawled_at_seconds(conn: &Connection) -> Result<(), rusqlite::Error>
     )
 }
 
-fn register_get_surf_record(conn: &Connection) -> Result<(), rusqlite::Error> {
-    conn.create_scalar_function(
-        "get_surf_record",
-        1,
-        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
-        |ctx| -> rusqlite::Result<String> {
-            let id: String = ctx.get(0)?;
-            Ok(get_surf_record_json(&id))
-        },
-    )
-}
-
-fn register_get_album(conn: &Connection) -> Result<(), rusqlite::Error> {
-    conn.create_scalar_function(
-        "get_album",
-        1,
-        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
-        |ctx| -> rusqlite::Result<String> {
-            let id: String = ctx.get(0)?;
-            Ok(get_album_json(&id))
-        },
-    )
-}
-
-fn register_get_task(conn: &Connection) -> Result<(), rusqlite::Error> {
-    conn.create_scalar_function(
-        "get_task",
-        1,
-        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
-        |ctx| -> rusqlite::Result<String> {
-            let id: String = ctx.get(0)?;
-            Ok(get_task_json(&id))
-        },
-    )
-}
-
-/// 返回 album typed meta JSON 字符串, 与 wrap_typed_meta_json(Album) 一致;
-/// album 不存在时返回 `"null"`。
-fn get_album_json(album_id: &str) -> String {
-    let Ok(Some(album)) = Storage::global().get_album_by_id(album_id) else {
-        return "null".into();
-    };
-    let Ok(data) = serde_json::to_value(&album) else {
-        return "null".into();
-    };
-    serde_json::json!({ "kind": "album", "data": data }).to_string()
-}
-
-/// 返回 task typed meta JSON 字符串, 与 wrap_typed_meta_json(Task) 一致;
-/// task 不存在时返回 `"null"`。
-fn get_task_json(task_id: &str) -> String {
-    let Ok(Some(task)) = Storage::global().get_task(task_id) else {
-        return "null".into();
-    };
-    let Ok(data) = serde_json::to_value(&task) else {
-        return "null".into();
-    };
-    serde_json::json!({ "kind": "task", "data": data }).to_string()
-}
-
-/// 返回 surf_record typed meta JSON 字符串, 与 wrap_typed_meta_json(SurfRecord) 一致
-/// (kind="surfRecord"); 记录不存在时返回 `"null"`。
-fn get_surf_record_json(record_id: &str) -> String {
-    let Ok(Some(record)) = Storage::global().get_surf_record(record_id) else {
-        return "null".into();
-    };
-    let Ok(data) = serde_json::to_value(&record) else {
-        return "null".into();
-    };
-    serde_json::json!({ "kind": "surfRecord", "data": data }).to_string()
-}
-
 fn register_get_plugin(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.create_scalar_function(
         "get_plugin",
@@ -158,7 +115,10 @@ fn register_get_plugin(conn: &Connection) -> Result<(), rusqlite::Error> {
             } else {
                 None
             };
-            Ok(get_plugin_json(&plugin_id, locale.as_deref()))
+            let started = Instant::now();
+            let result = get_plugin_json(&plugin_id, locale.as_deref());
+            profile_get_plugin_call(&plugin_id, locale.as_deref(), started, &result);
+            Ok(result)
         },
     )
 }

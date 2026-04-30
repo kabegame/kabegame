@@ -1,28 +1,29 @@
 // 启动步骤函数
 
 use async_trait::async_trait;
-use kabegame_core::crawler::{TaskScheduler, scheduler};
+use kabegame_core::crawler::{scheduler, TaskScheduler};
 use kabegame_i18n::t;
 // 事件转发到前端（桌面与 Android 均需要，用于 tasks-change 等）
 #[cfg(not(feature = "web"))]
 use crate::wallpaper::manager::WallpaperController;
 #[cfg(not(feature = "web"))]
 use crate::wallpaper::WallpaperRotator;
+#[cfg(feature = "web")]
+use crate::web::server::SseMessage;
 use kabegame_core::ipc::events::DaemonEventKind;
 use kabegame_core::ipc::{DaemonEvent, EventBroadcaster};
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
+#[cfg(feature = "standard")]
+use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use std::fs;
 use std::sync::Arc;
 #[cfg(not(feature = "web"))]
 use tauri::{AppHandle, Emitter, Listener, Manager};
-#[cfg(feature = "standard")]
-use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+
 #[cfg(feature = "web")]
-use crate::web::server::SseMessage;
-
-
+use crate::web::server::*;
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::downloader::{
     compute_native_download_destination, postprocess_downloaded_image, BrowserDownloadState,
@@ -36,8 +37,6 @@ use kabegame_core::crawler::webview::{
 use kabegame_core::emitter::GlobalEmitter;
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use tauri::webview::DownloadEvent;
-#[cfg(feature = "web")]
-use crate::web::server::*;
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 struct AppCrawlerWebViewHandler {
@@ -272,7 +271,7 @@ pub fn init_wallpaper_controller(app: &mut tauri::App) {
 
 /// 启动事件转发任务（将同步广播和异步广播都收拢到一个接口处）
 pub fn start_event_forward_task() {
-    let task_future= async {
+    let task_future = async {
         EventBroadcaster::start_forward_task().await;
     };
     #[cfg(not(feature = "web"))]
@@ -282,10 +281,7 @@ pub fn start_event_forward_task() {
 }
 
 /// 启动本地事件转发循环（将 Broadcaster 事件转发给 Tauri 前端，桌面与 Android 均需）
-pub fn start_event_loop(
-    #[cfg(not(feature = "web"))]
-    app: AppHandle
-) {
+pub fn start_event_loop(#[cfg(not(feature = "web"))] app: AppHandle) {
     #[cfg(feature = "web")]
     let bus = event_bus().clone();
     #[cfg(feature = "web")]
@@ -298,15 +294,16 @@ pub fn start_event_loop(
         while let Some((_id, event)) = rx.recv().await {
             let kind = event.kind();
 
-            #[cfg(feature = "web")] {
+            #[cfg(feature = "web")]
+            {
                 counter += 1;
             }
 
             #[cfg(feature = "web")]
-            let _ = bus.send(SseMessage { 
-                event: kind.as_event_name(), 
-                data: serde_json::to_string(&*event).unwrap_or_else(|_| "null".into()), 
-                id: counter 
+            let _ = bus.send(SseMessage {
+                event: kind.as_event_name(),
+                data: serde_json::to_string(&*event).unwrap_or_else(|_| "null".into()),
+                id: counter,
             });
 
             match &*event {
@@ -340,16 +337,22 @@ pub fn start_event_loop(
                         if let Some(enabled) = enabled_val.as_bool() {
                             tokio::spawn(async move {
                                 if enabled {
-                                    let mount_point = Settings::global().get_album_drive_mount_point();
-                                    let vd_service = kabegame_core::virtual_driver::VirtualDriveService::global();
+                                    let mount_point =
+                                        Settings::global().get_album_drive_mount_point();
+                                    let vd_service =
+                                        kabegame_core::virtual_driver::VirtualDriveService::global(
+                                        );
                                     let _ = tokio::task::spawn_blocking(move || {
                                         vd_service.mount(mount_point.as_str())
-                                    }).await;
+                                    })
+                                    .await;
                                 } else {
-                                    let vd_service = kabegame_core::virtual_driver::VirtualDriveService::global();
-                                    let _ = tokio::task::spawn_blocking(move || {
-                                        vd_service.unmount()
-                                    }).await;
+                                    let vd_service =
+                                        kabegame_core::virtual_driver::VirtualDriveService::global(
+                                        );
+                                    let _ =
+                                        tokio::task::spawn_blocking(move || vd_service.unmount())
+                                            .await;
                                 }
                             });
                         }
@@ -427,9 +430,8 @@ pub fn start_event_loop(
                 _ => {
                     #[cfg(not(feature = "web"))]
                     let _ = app.emit(
-                        kind.as_event_name().as_str(), 
-                        serde_json::to_value(&event)
-                            .unwrap_or_else(|_| serde_json::Value::Null)
+                        kind.as_event_name().as_str(),
+                        serde_json::to_value(&event).unwrap_or_else(|_| serde_json::Value::Null),
                     );
                 }
             }
@@ -493,10 +495,7 @@ pub fn try_forward_to_existing_instance_and_exit() {
 
 /// 启动 IPC 服务（仅需 app_handle，DedupeService / VirtualDriveService 等由全局单例提供）
 #[cfg(not(target_os = "android"))]
-pub fn start_ipc_server(
-    #[cfg(not(feature = "web"))]
-    app_handle: AppHandle
-) {
+pub fn start_ipc_server(#[cfg(not(feature = "web"))] app_handle: AppHandle) {
     println!("[IPC_SERVER] Starting IPC server...");
 
     let task_future = async move {
@@ -506,10 +505,12 @@ pub fn start_ipc_server(
             let app_handle = app_handle.clone();
             async move {
                 use crate::ipc::dispatch_request;
-                dispatch_request(req, 
+                dispatch_request(
+                    req,
                     #[cfg(not(feature = "web"))]
-                    app_handle
-                ).await
+                    app_handle,
+                )
+                .await
             }
         })
         .await;
@@ -741,7 +742,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     {
         use crate::linux_desktop::{linux_desktop, LinuxDesktop};
         use crate::wallpaper::manager::PlasmaPluginWallpaperManager;
-        let mode = Settings::global().get_wallpaper_mode();        
+        let mode = Settings::global().get_wallpaper_mode();
         if linux_desktop() == LinuxDesktop::Plasma && mode == "plasma-plugin" {
             if let Err(e) = PlasmaPluginWallpaperManager::ensure_plasma_plugin_aligned() {
                 eprintln!("[WARN] ensure_plasma_plugin_aligned failed: {}", e);

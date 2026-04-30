@@ -194,9 +194,7 @@ mod tests {
         std::fs::write(&path, "{ broken").unwrap();
         let r = Json5Loader.load(Source::Path(&path));
         match r {
-            Err(LoadError::Syntax {
-                path: p, line, ..
-            }) => {
+            Err(LoadError::Syntax { path: p, line, .. }) => {
                 assert_eq!(p, Some(path.clone()));
                 assert!(line.is_some(), "line info expected");
             }

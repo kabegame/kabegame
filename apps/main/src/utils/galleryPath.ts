@@ -277,6 +277,17 @@ export function buildGalleryPath(
   return `${prefix}${r}/${ps}${p}`;
 }
 
+/** 构造用于 COUNT 的 provider root path：保留 filter/search，去掉排序、pageSize、page。 */
+export function buildGalleryCountPath(
+  filter: GalleryFilter,
+  search: string = ""
+): string {
+  const r = serializeFilter(filter);
+  const q = (search ?? "").trim();
+  const prefix = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
+  return `${prefix}${r}`;
+}
+
 export function parseGalleryPath(path: string): ParsedGalleryPath {
   const base: ParsedGalleryPath = {
     filter: DEFAULT_GALLERY_FILTER,

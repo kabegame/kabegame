@@ -13,10 +13,12 @@
         trigger="hover"
         placement="right-start"
         @command="(cmd: string) => $emit('command', cmd)"
+        @visible-change="onNodeMenuVisible($event, node)"
       >
         <span
           class="gallery-time-submenu-trigger"
           :class="{ 'is-active': isTimeMenuNodeActive(node, dateTail) }"
+          @mouseenter="$emit('lazy-open', node)"
         >
           <span class="gallery-time-submenu-label">
             {{ node.label }}
@@ -28,10 +30,16 @@
         </span>
         <template #dropdown>
           <el-dropdown-menu class="gallery-time-submenu-menu">
+            <el-dropdown-item v-if="loadingNames.has(node.name)" disabled>
+              {{ loadingText }}
+            </el-dropdown-item>
             <GalleryTimeFilterSubmenuAsync
               :nodes="node.children"
               :date-tail="dateTail"
+              :loading-names="loadingNames"
+              :loading-text="loadingText"
               @command="$emit('command', $event)"
+              @lazy-open="$emit('lazy-open', $event)"
             />
           </el-dropdown-menu>
         </template>
@@ -50,14 +58,24 @@ const GalleryTimeFilterSubmenuAsync = defineAsyncComponent(
   () => import("./GalleryTimeFilterSubmenu.vue")
 );
 
-defineProps<{
+withDefaults(defineProps<{
   nodes: TimeMenuNode[];
   dateTail: string | null;
+  loadingNames?: ReadonlySet<string>;
+  loadingText?: string;
+}>(), {
+  loadingNames: () => new Set<string>(),
+  loadingText: "Loading",
+});
+
+const emit = defineEmits<{
+  command: [name: string];
+  "lazy-open": [node: TimeMenuNode];
 }>();
 
-defineEmits<{
-  command: [name: string];
-}>();
+function onNodeMenuVisible(open: boolean, node: TimeMenuNode) {
+  if (open) emit("lazy-open", node);
+}
 </script>
 
 <style scoped lang="scss">

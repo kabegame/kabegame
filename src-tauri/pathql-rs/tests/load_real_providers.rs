@@ -98,7 +98,7 @@ fn vd_zh_cn_router_loads_via_loader() {
         .expect("vd_zh_CN_root_router");
     let list = vd.list.as_ref().expect("list");
     assert_eq!(list.entries.len(), 7);
-    assert_eq!(list.entries[0].0, "按画册");
+    assert_eq!(list.entries[0].0, "画册");
 }
 
 #[test]

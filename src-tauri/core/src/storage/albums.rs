@@ -19,37 +19,6 @@ fn validate_album_name(name: &str) -> Result<&str, String> {
     Ok(t)
 }
 
-fn image_info_from_album_preview_row(
-    row: &rusqlite::Row<'_>,
-    album_for_fav: &str,
-) -> rusqlite::Result<ImageInfo> {
-    Ok(ImageInfo {
-        id: row.get(0)?,
-        url: row.get::<_, Option<String>>(1)?,
-        local_path: row.get(2)?,
-        plugin_id: row.get(3)?,
-        task_id: row.get(4)?,
-        surf_record_id: None,
-        crawled_at: row.get(5)?,
-        metadata: None,
-        metadata_id: row.get::<_, Option<i64>>(6)?,
-        thumbnail_path: row.get(7)?,
-        hash: row.get(8)?,
-        favorite: album_for_fav == FAVORITE_ALBUM_ID,
-        is_hidden: album_for_fav == HIDDEN_ALBUM_ID,
-        local_exists: true,
-        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-        display_name: row.get(12)?,
-        media_type: crate::image_type::normalize_stored_media_type(
-            row.get::<_, Option<String>>(13)?,
-        ),
-        last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
-        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
-        album_order: None,
-    })
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Album {
@@ -242,11 +211,7 @@ impl Storage {
         Ok(())
     }
 
-    pub fn add_album(
-        &self,
-        name: &str,
-        parent_id: Option<&str>,
-    ) -> Result<Album, String> {
+    pub fn add_album(&self, name: &str, parent_id: Option<&str>) -> Result<Album, String> {
         let name_trimmed = validate_album_name(name)?;
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -331,9 +296,7 @@ impl Storage {
     pub fn list_all_albums(&self) -> Result<Vec<Album>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare(
-                "SELECT id, name, created_at, parent_id FROM albums ORDER BY created_at DESC",
-            )
+            .prepare("SELECT id, name, created_at, parent_id FROM albums ORDER BY created_at DESC")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
         let rows = stmt
             .query_map([], album_from_storage_row)
@@ -560,85 +523,10 @@ impl Storage {
     }
 
     pub fn get_album_images(&self, album_id: &str) -> Result<Vec<ImageInfo>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata_id,
-                 COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
-                 i.hash,
-                 ai.\"order\",
-                 i.width,
-                 i.height,
-                 i.display_name,
-                 COALESCE(i.type, 'image') as media_type,
-                 i.last_set_wallpaper_at,
-                 i.size
-                 FROM images i
-                 INNER JOIN album_images ai ON i.id = ai.image_id
-                 WHERE ai.album_id = ?1
-                 ORDER BY COALESCE(ai.\"order\", ai.rowid) ASC",
-            )
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let image_rows = stmt
-            .query_map(params![album_id], |row| {
-                Ok(ImageInfo {
-                    id: row.get(0)?,
-                    url: row.get::<_, Option<String>>(1)?,
-                    local_path: row.get(2)?,
-                    plugin_id: row.get(3)?,
-                    task_id: row.get(4)?,
-                    surf_record_id: None,
-                    crawled_at: row.get(5)?,
-                    metadata: None,
-                    metadata_id: row.get::<_, Option<i64>>(6)?,
-                    thumbnail_path: row.get(7)?,
-                    hash: row.get(8)?,
-                    favorite: album_id == FAVORITE_ALBUM_ID,
-                    is_hidden: album_id == HIDDEN_ALBUM_ID,
-                    local_exists: true,
-                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    display_name: row.get(12)?,
-                    media_type: crate::image_type::normalize_stored_media_type(
-                        row.get::<_, Option<String>>(13)?,
-                    ),
-                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
-                    size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
-                    album_order: None,
-                })
-            })
-            .map_err(|e| format!("Failed to query album images: {}", e))?;
-
-        let mut images = Vec::new();
-        for row_result in image_rows {
-            let mut img = row_result.map_err(|e| format!("Failed to read row: {}", e))?;
-            if album_id != FAVORITE_ALBUM_ID {
-                let is_fav = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                        params![FAVORITE_ALBUM_ID, img.id],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .unwrap_or(0)
-                    > 0;
-                img.favorite = is_fav;
-            }
-            if album_id != HIDDEN_ALBUM_ID {
-                let is_hid = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                        params![HIDDEN_ALBUM_ID, img.id],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .unwrap_or(0)
-                    > 0;
-                img.is_hidden = is_hid;
-            }
-            images.push(img);
-        }
-
-        Ok(images)
+        crate::providers::images_at(&format!(
+            "/gallery/album/{}/order",
+            urlencoding::encode(album_id)
+        ))
     }
 
     fn collect_subtree_album_ids_bfs(&self, root_id: &str) -> Result<Vec<String>, String> {
@@ -685,80 +573,7 @@ impl Storage {
         album_id: &str,
         limit: usize,
     ) -> Result<Vec<ImageInfo>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let limit = limit.min(10_000);
-        let limit_i = limit as i64;
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata_id,
-                 COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
-                 i.hash,
-                 ai.\"order\",
-                 i.width,
-                 i.height,
-                 i.display_name,
-                 COALESCE(i.type, 'image') as media_type,
-                 i.last_set_wallpaper_at,
-                 i.size
-                 FROM images i
-                 INNER JOIN album_images ai ON i.id = ai.image_id
-                 WHERE ai.album_id = ?1
-                 ORDER BY COALESCE(ai.\"order\", ai.rowid) ASC
-                 LIMIT ?2",
-            )
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let mut direct: Vec<ImageInfo> = stmt
-            .query_map(params![album_id, limit_i], |row| {
-                image_info_from_album_preview_row(row, album_id)
-            })
-            .map_err(|e| format!("Failed to query album preview: {}", e))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to read row: {}", e))?;
-
-        if direct.len() >= limit {
-            return Ok(direct);
-        }
-
-        let remaining = (limit - direct.len()) as i64;
-        let mut stmt2 = conn
-            .prepare(
-                "WITH RECURSIVE sub(id) AS (
-                    SELECT id FROM albums WHERE parent_id = ?1
-                    UNION ALL
-                    SELECT a.id FROM albums a INNER JOIN sub s ON a.parent_id = s.id
-                )
-                SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata_id,
-                 COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
-                 i.hash,
-                 ai.\"order\",
-                 i.width,
-                 i.height,
-                 i.display_name,
-                 COALESCE(i.type, 'image') as media_type,
-                 i.last_set_wallpaper_at,
-                 i.size,
-                 CAST(ai.album_id AS TEXT) as aid
-                 FROM images i
-                 INNER JOIN album_images ai ON i.id = ai.image_id
-                 WHERE ai.album_id IN (SELECT id FROM sub)
-                 ORDER BY COALESCE(ai.\"order\", ai.rowid) ASC
-                 LIMIT ?2",
-            )
-            .map_err(|e| format!("Failed to prepare descendant preview: {}", e))?;
-
-        let rest: Vec<ImageInfo> = stmt2
-            .query_map(params![album_id, remaining], |row| {
-                let aid: String = row.get(16)?;
-                image_info_from_album_preview_row(row, &aid)
-            })
-            .map_err(|e| format!("Failed to query album preview: {}", e))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to read row: {}", e))?;
-
-        direct.extend(rest);
-        Ok(direct)
+        crate::providers::album_preview_at(album_id, limit)
     }
 
     pub fn get_album_image_ids(&self, album_id: &str) -> Result<Vec<String>, String> {
@@ -777,7 +592,6 @@ impl Storage {
         }
         Ok(ids)
     }
-
 
     // TODO: 改为前端计算，后端只需要返回各画册下图片数量即可
     /// 每个画册的图片总数 = 该画册内直接关联的图片数 + 所有子画册（递归）的图片总数。
@@ -1026,12 +840,7 @@ impl Storage {
             .ok_or_else(|| "画册不存在".to_string())?;
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        Self::ensure_album_name_unique_ci(
-            &conn,
-            &album.name,
-            new_parent_id,
-            Some(album_id),
-        )?;
+        Self::ensure_album_name_unique_ci(&conn, &album.name, new_parent_id, Some(album_id))?;
 
         match new_parent_id {
             None => conn.execute(
@@ -1046,10 +855,7 @@ impl Storage {
         .map_err(|e| format!("Failed to move album: {}", e))?;
 
         if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_album_changed(
-                album_id,
-                json!({ "parentId": new_parent_id }),
-            );
+            emitter.emit_album_changed(album_id, json!({ "parentId": new_parent_id }));
         }
         Ok(())
     }
