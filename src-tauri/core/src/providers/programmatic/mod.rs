@@ -125,21 +125,14 @@ pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_r
     // register(reg, "vd_root_router", |_| {
     //     Ok(Arc::new(vd::VdRootRouter) as Arc<dyn Provider>)
     // })?;
-    // 7c S8/S9/S10: vd_all / vd_plugins / vd_tasks / vd_surfs / vd_media_type / vd_dates
-    //               由 DSL (dsl/vd/*.json5) 接管。vd_albums / vd_album_entry / vd_sub_album_gate
-    //               由于需要 vd_display_name 翻译 + sub-album gate 的 ai.album_id WHERE 剥离,
-    //               暂保留 programmatic; Stage D 删除 programmatic 模块前需补充对应 DSL 实现
-    //               (或引擎扩展 where_clear)。
+    // 7c Stage C: 全部 VD provider (vd_all / vd_albums / vd_album_entry / vd_sub_album_gate /
+    //             vd_plugins / vd_tasks / vd_surfs / vd_media_type / vd_dates) 由 DSL
+    //             (dsl/vd/*.json5) 接管。Album 三件套使用 7c where_clear 引擎扩展剥离父链
+    //             ai.album_id; 显示名通过 vd_display_name() host fn 解析当前 locale。
     // register(reg, "vd_all_provider", |_| { ... })?;
-    register(reg, "vd_albums_provider", |_| {
-        Ok(Arc::new(vd::VdAlbumsProvider) as Arc<dyn Provider>)
-    })?;
-    register(reg, "vd_album_entry_provider", |props| {
-        Ok(Arc::new(vd::VdAlbumEntryProvider::from_props(props)?) as Arc<dyn Provider>)
-    })?;
-    register(reg, "vd_sub_album_gate_provider", |props| {
-        Ok(Arc::new(vd::VdSubAlbumGateProvider::from_props(props)?) as Arc<dyn Provider>)
-    })?;
+    // register(reg, "vd_albums_provider", |_| { ... })?;
+    // register(reg, "vd_album_entry_provider", |props| { ... })?;
+    // register(reg, "vd_sub_album_gate_provider", |props| { ... })?;
     // register(reg, "vd_plugins_provider", |_| { ... })?;
     // register(reg, "vd_tasks_provider", |_| { ... })?;
     // register(reg, "vd_surfs_provider", |_| { ... })?;
