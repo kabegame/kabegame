@@ -55,15 +55,6 @@ pub async fn get_gallery_plugin_groups() -> IpcResponse {
     }
 }
 
-/// 6b 弃用：旧 ImageQuery JSON wire 接口废弃；前端改用 provider path API
-/// (`browse_gallery_provider` / `query_provider`) 通过 path 表达过滤条件。
-pub async fn get_images_count_by_query(_query: &serde_json::Value) -> IpcResponse {
-    IpcResponse::err(
-        "get_images_count_by_query is deprecated since 6b; use provider path API instead"
-            .to_string(),
-    )
-}
-
 pub async fn delete_image(image_id: &str) -> IpcResponse {
     match delete_images_with_events(&[image_id.to_string()], true) {
         Ok(()) => IpcResponse::ok("deleted"),

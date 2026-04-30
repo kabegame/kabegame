@@ -247,11 +247,6 @@ pub enum IpcRequest {
     /// 获取“按任务”分组（只返回包含图片的任务）
     StorageGetTasksWithImages,
 
-    /// 按 query 统计图片数量
-    StorageGetImagesCountByQuery {
-        query: serde_json::Value,
-    },
-
     // ======== Task 调度（daemon 侧）========
     /// 入队一个任务（daemon 负责落库幂等 + 入队执行）
     TaskStart {

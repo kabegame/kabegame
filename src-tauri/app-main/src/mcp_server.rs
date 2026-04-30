@@ -2,8 +2,7 @@ use kabegame_core::{
     emitter::GlobalEmitter,
     plugin::{Plugin, PluginManager},
     providers::{
-        execute_provider_query, parse_provider_path, provider_runtime, provider_template_context,
-        ProviderPathQuery,
+        execute_provider_query, parse_provider_path, provider_runtime, ProviderPathQuery,
     },
     storage::Storage,
 };
@@ -535,14 +534,6 @@ impl ServerHandler for KabegameMcpServer {
                         } else {
                             format!("/{}", full)
                         };
-                        let node = rt
-                            .resolve(&path_for_runtime)
-                            .map_err(|e| {
-                                McpError::internal_error(
-                                    format!("resolve error: {e}"),
-                                    Some(json!({ "path": path_part })),
-                                )
-                            })?;
 
                         let children = if without == McpWithout::Children {
                             Vec::new()
@@ -554,21 +545,21 @@ impl ServerHandler for KabegameMcpServer {
                         let images = if without == McpWithout::Images {
                             Vec::new()
                         } else {
-                            // 6b: 简化版 — 沿用 query.rs 的 fetch_images 启发式（limit > 0 → fetch；
-                            //                                     limit=0 / None → 不 fetch）
-                            use pathql_rs::ast::NumberOrTemplate;
-                            let lim_zero = matches!(node.composed.limit,
-                                Some(NumberOrTemplate::Number(n)) if n == 0.0);
-                            if lim_zero || node.composed.limit.is_none() {
-                                Vec::new()
-                            } else {
-                                Storage::global()
-                                    .get_images_info_range_by_query(&node.composed, &provider_template_context())
+                            // S1e: path-only fetch; 仅在 path 有显式 limit 时取图 (避免根路径百万级行)
+                            let node = rt.resolve(&path_for_runtime).map_err(|e| {
+                                McpError::internal_error(
+                                    format!("resolve error: {e}"),
+                                    Some(json!({ "path": path_part })),
+                                )
+                            })?;
+                            if node.composed.limit.is_some() {
+                                kabegame_core::providers::images_at(&path_for_runtime)
                                     .map_err(|e| McpError::internal_error(e, None))?
+                            } else {
+                                Vec::new()
                             }
                         };
 
-                        let storage = Storage::global();
                         let entries = kabegame_core::gallery::browse_from_provider_jsonmeta(
                             children, images,
                         )
@@ -588,7 +579,7 @@ impl ServerHandler for KabegameMcpServer {
                             })
                         });
                         let total: Option<usize> =
-                            storage.get_images_count_by_query(&node.composed, &provider_template_context()).ok();
+                            kabegame_core::providers::count_at(&path_for_runtime).ok();
 
                         json!({
                             "entries": entries_json,
