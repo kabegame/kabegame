@@ -32,6 +32,8 @@ pub const DSL_FILES: &[&str] = &[
     "gallery/albums/gallery_album_provider.json5",
     "gallery/plugins/gallery_plugins_router.json5",
     "gallery/plugins/gallery_plugin_provider.json5",
+    "gallery/tasks/gallery_tasks_router.json5",
+    "gallery/tasks/gallery_task_provider.json5",
     "shared/page_size_provider.json5",
     "shared/query_page_provider.json5",
     "shared/sort_provider.json5",

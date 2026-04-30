@@ -25,6 +25,7 @@ use crate::storage::Storage;
 pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::Error> {
     register_get_plugin(conn)?;
     register_get_album(conn)?;
+    register_get_task(conn)?;
     Ok(())
 }
 
@@ -40,6 +41,18 @@ fn register_get_album(conn: &Connection) -> Result<(), rusqlite::Error> {
     )
 }
 
+fn register_get_task(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.create_scalar_function(
+        "get_task",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
+        |ctx| -> rusqlite::Result<String> {
+            let id: String = ctx.get(0)?;
+            Ok(get_task_json(&id))
+        },
+    )
+}
+
 /// 返回 album typed meta JSON 字符串, 与 wrap_typed_meta_json(Album) 一致;
 /// album 不存在时返回 `"null"`。
 fn get_album_json(album_id: &str) -> String {
@@ -50,6 +63,18 @@ fn get_album_json(album_id: &str) -> String {
         return "null".into();
     };
     serde_json::json!({ "kind": "album", "data": data }).to_string()
+}
+
+/// 返回 task typed meta JSON 字符串, 与 wrap_typed_meta_json(Task) 一致;
+/// task 不存在时返回 `"null"`。
+fn get_task_json(task_id: &str) -> String {
+    let Ok(Some(task)) = Storage::global().get_task(task_id) else {
+        return "null".into();
+    };
+    let Ok(data) = serde_json::to_value(&task) else {
+        return "null".into();
+    };
+    serde_json::json!({ "kind": "task", "data": data }).to_string()
 }
 
 fn register_get_plugin(conn: &Connection) -> Result<(), rusqlite::Error> {
