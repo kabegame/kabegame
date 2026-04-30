@@ -72,31 +72,35 @@ pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_r
     // register(reg, "gallery_search_router", |_| {
     //     Ok(Arc::new(gallery_filters::GallerySearchRouter) as Arc<dyn Provider>)
     // })?;
-    register(reg, "gallery_search_display_name_router", |_| {
-        Ok(Arc::new(gallery_filters::GallerySearchDisplayNameRouter) as Arc<dyn Provider>)
-    })?;
-    register(
-        reg,
-        "gallery_search_display_name_query_provider",
-        |props| {
-            Ok(Arc::new(
-                gallery_filters::GallerySearchDisplayNameQueryProvider::from_props(props)?,
-            ) as Arc<dyn Provider>)
-        },
-    )?;
+    // 7c S6: gallery_search_display_name_router / _query_provider 由 DSL
+    //        (dsl/gallery/search/*.json5) 接管。
+    // register(reg, "gallery_search_display_name_router", |_| {
+    //     Ok(Arc::new(gallery_filters::GallerySearchDisplayNameRouter) as Arc<dyn Provider>)
+    // })?;
+    // register(
+    //     reg,
+    //     "gallery_search_display_name_query_provider",
+    //     |props| {
+    //         Ok(Arc::new(
+    //             gallery_filters::GallerySearchDisplayNameQueryProvider::from_props(props)?,
+    //         ) as Arc<dyn Provider>)
+    //     },
+    // )?;
     // 7c S5: gallery_wallpaper_order_router 由 DSL
     //        (dsl/gallery/gallery_wallpaper_order_router.json5) 接管。
     // register(reg, "gallery_wallpaper_order_router", |_| {
     //     Ok(Arc::new(gallery_filters::GalleryWallpaperOrderRouter) as Arc<dyn Provider>)
     // })?;
-    register(reg, "gallery_date_range_router", |_| {
-        Ok(Arc::new(gallery_filters::GalleryDateRangeRouter) as Arc<dyn Provider>)
-    })?;
-    register(reg, "gallery_date_range_entry_provider", |props| {
-        Ok(Arc::new(
-            gallery_filters::GalleryDateRangeEntryProvider::from_props(props)?,
-        ) as Arc<dyn Provider>)
-    })?;
+    // 7c S6: gallery_date_range_router / _entry_provider 由 DSL
+    //        (dsl/gallery/date_range/*.json5) 接管。
+    // register(reg, "gallery_date_range_router", |_| {
+    //     Ok(Arc::new(gallery_filters::GalleryDateRangeRouter) as Arc<dyn Provider>)
+    // })?;
+    // register(reg, "gallery_date_range_entry_provider", |props| {
+    //     Ok(Arc::new(
+    //         gallery_filters::GalleryDateRangeEntryProvider::from_props(props)?,
+    //     ) as Arc<dyn Provider>)
+    // })?;
 
     // ── gallery dates ──
     register(reg, "gallery_dates_router", |_| {

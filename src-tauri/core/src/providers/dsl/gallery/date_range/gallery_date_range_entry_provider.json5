@@ -1,0 +1,34 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_date_range_entry_provider",
+    "properties": {
+        "start": { "type": "string", "default": "", "optional": false },
+        "end":   { "type": "string", "default": "", "optional": false }
+    },
+    // 取 [start, end] (含端点) 内 crawled_at 落在的图片, 按 crawled_at ASC 排序。
+    // 注: CASE WHEN 处理 ms / s 双单位时间戳。S7-a 会将此换成 crawled_at_seconds() host fn。
+    "query": {
+        "where": "date(CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') BETWEEN date(${properties.start}) AND date(${properties.end})",
+        "order": [{ "images.crawled_at": "asc" }]
+    },
+    "list": {
+        "desc":   { "provider": "sort_provider" },
+        "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
+        "x500x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
+        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
+    },
+    "resolve": {
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        },
+        "([1-9][0-9]*)": {
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        }
+    }
+}
