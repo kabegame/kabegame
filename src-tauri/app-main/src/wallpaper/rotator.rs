@@ -1,6 +1,6 @@
 use super::manager::WallpaperController;
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::providers::{provider_runtime, provider_template_context};
+use kabegame_core::providers::{images_at, provider_runtime, provider_template_context};
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::{ImageInfo, Storage};
 use pathql_rs::ast::{NumberOrTemplate, OrderDirection, SqlExpr};
@@ -65,27 +65,52 @@ pub(crate) fn next_sequential_gallery_images(
     storage.get_images_info_range_by_query(&make_q(None), &ctx)
 }
 
-/// 从 `gallery/all` 随机挑一页，返回该页的全部图片。
-/// 先 `list_dir` 拿到所有数字分页段，再随机选其一（含 `QueryPageProvider` 省略的"最后一页"）。
-pub(crate) fn random_gallery_page_images() -> Result<Vec<ImageInfo>, String> {
+/// 单图可作壁纸判定（路径存在 + 媒体类型匹配 wallpaper_mode）。
+/// random / sequential 共用; 集中放置便于以后扩展（格式过滤、最小分辨率等）。
+pub(crate) fn is_wallpaper_suitable(img: &ImageInfo, wallpaper_mode: &str) -> bool {
+    if !Path::new(&img.local_path).exists() {
+        return false;
+    }
+    if wallpaper_mode == "window" || wallpaper_mode == "plasma-plugin" {
+        return true;
+    }
+    !kabegame_core::image_type::is_video_by_path(Path::new(&img.local_path))
+}
+
+/// 随机模式: 从 `<base>/x100x/` 随机抽一页, 取该页第一张可用图; 不可用则换下一页 (不重复抽);
+/// 所有页都 try 完返回 None。base 由 source 决定:
+/// - Gallery → `/gallery/all/x100x`
+/// - Album(id) → `/gallery/album/<id>/x100x`
+pub(crate) fn load_random_image_for_wallpaper(
+    source: &RotationSource,
+    wallpaper_mode: &str,
+) -> Result<Option<ImageInfo>, String> {
     let rt = provider_runtime();
-    // 列 /gallery/all/x100x/ 拿到所有 page 数字段
-    let children = rt
-        .list("/gallery/all/x100x")
-        .map_err(|e| format!("list failed: {}", e))?;
-    let page_names: Vec<String> = children
+    let base_path = match source {
+        RotationSource::Album(id) => format!("/gallery/album/{}/x100x", id),
+        RotationSource::Gallery => "/gallery/all/x100x".to_string(),
+    };
+    let mut pages: Vec<String> = rt
+        .list(&base_path)
+        .map_err(|e| format!("list {}: {}", base_path, e))?
         .into_iter()
         .filter(|c| c.name.parse::<usize>().is_ok())
         .map(|c| c.name)
         .collect();
 
-    if page_names.is_empty() {
-        return Ok(Vec::new());
+    while !pages.is_empty() {
+        let idx = random_index(pages.len());
+        let page = pages.swap_remove(idx);
+        let path = format!("{}/{}", base_path, page);
+        let images = images_at(&path)?;
+        if let Some(img) = images
+            .into_iter()
+            .find(|img| is_wallpaper_suitable(img, wallpaper_mode))
+        {
+            return Ok(Some(img));
+        }
     }
-    let idx = random_index(page_names.len());
-    let path = format!("/gallery/all/x100x/{}", page_names[idx]);
-    let resolved = rt.resolve(&path).map_err(|e| format!("resolve: {}", e))?;
-    Storage::global().get_images_info_range_by_query(&resolved.composed, &provider_template_context())
+    Ok(None)
 }
 
 // 轮播线程控制标志位
@@ -182,7 +207,20 @@ impl WallpaperRotator {
         source: &RotationSource,
         include_subalbums: bool,
         rotation_mode: &str,
+        wallpaper_mode: &str,
     ) -> Result<Vec<ImageLite>, String> {
+        // sequential mode 仍走老路 (S4-b 改 path-only)。random mode 全部走 path-only。
+        if rotation_mode != "sequential" {
+            // 随机模式: 路径化 + 内置可用性过滤; 只返 0 / 1 张
+            let picked = load_random_image_for_wallpaper(source, wallpaper_mode)?;
+            return Ok(picked
+                .into_iter()
+                .map(|img| ImageLite {
+                    id: img.id,
+                    local_path: img.local_path,
+                })
+                .collect());
+        }
         match source {
             RotationSource::Album(id) => {
                 let v = Storage::global()
@@ -191,14 +229,9 @@ impl WallpaperRotator {
                 Ok(Self::images_from_info(v))
             }
             RotationSource::Gallery => {
-                let v = if rotation_mode == "sequential" {
-                    let current_id = Settings::global().get_current_wallpaper_image_id();
-                    next_sequential_gallery_images(current_id.as_deref(), 20)
-                        .map_err(|e| format!("Storage error: {}", e))?
-                } else {
-                    random_gallery_page_images()
-                        .map_err(|e| format!("Provider error: {}", e))?
-                };
+                let current_id = Settings::global().get_current_wallpaper_image_id();
+                let v = next_sequential_gallery_images(current_id.as_deref(), 20)
+                    .map_err(|e| format!("Storage error: {}", e))?;
                 Ok(Self::images_from_info(v))
             }
         }
@@ -313,6 +346,7 @@ impl WallpaperRotator {
                     &source,
                     include_subalbums,
                     &rotation_mode,
+                    &wallpaper_mode,
                 )
                 .await
                 {
@@ -325,9 +359,14 @@ impl WallpaperRotator {
                                 .is_ok()
                             {
                                 source = RotationSource::Gallery;
-                                Self::load_images_for_source(&source, false, &rotation_mode)
-                                    .await
-                                    .unwrap_or_default()
+                                Self::load_images_for_source(
+                                    &source,
+                                    false,
+                                    &rotation_mode,
+                                    &wallpaper_mode,
+                                )
+                                .await
+                                .unwrap_or_default()
                             } else {
                                 eprintln!("获取轮播图片失败: {}", e);
                                 Vec::new()
@@ -353,6 +392,7 @@ impl WallpaperRotator {
                                     &source,
                                     false,
                                     &rotation_mode,
+                                    &wallpaper_mode,
                                 )
                                 .await
                                 .unwrap_or_default();
@@ -566,10 +606,12 @@ impl WallpaperRotator {
             };
 
             let rotation_mode = settings.get_wallpaper_rotation_mode();
+            let wallpaper_mode = settings.get_wallpaper_mode();
             let images = Self::load_images_for_source(
                 &source,
                 include_subalbums,
                 &rotation_mode,
+                &wallpaper_mode,
             )
             .await?;
             if images.is_empty() {
@@ -651,15 +693,21 @@ impl WallpaperRotator {
         let album_id = settings.get_wallpaper_rotation_album_id();
         let include_subalbums = settings.get_wallpaper_rotation_include_subalbums();
         let rotation_mode = settings.get_wallpaper_rotation_mode();
+        let wallpaper_mode = settings.get_wallpaper_mode();
         let source = match album_id {
             Some(id) if !id.trim().is_empty() => RotationSource::Album(id),
             _ => RotationSource::Gallery,
         };
 
         let mut source = source;
-        let mut images = Self::load_images_for_source(&source, include_subalbums, &rotation_mode)
-            .await
-            .unwrap_or_default();
+        let mut images = Self::load_images_for_source(
+            &source,
+            include_subalbums,
+            &rotation_mode,
+            &wallpaper_mode,
+        )
+        .await
+        .unwrap_or_default();
 
         // 无可用图片：画册->画廊->关闭轮播并清空 currentWallpaperImageId
         if images.is_empty() {
@@ -667,9 +715,14 @@ impl WallpaperRotator {
                 // 回退到画廊
                 let _ = settings.set_wallpaper_rotation_album_id(Some("".to_string()));
                 source = RotationSource::Gallery;
-                images = Self::load_images_for_source(&source, false, &rotation_mode)
-                    .await
-                    .unwrap_or_default();
+                images = Self::load_images_for_source(
+                    &source,
+                    false,
+                    &rotation_mode,
+                    &wallpaper_mode,
+                )
+                .await
+                .unwrap_or_default();
             }
 
             if images.is_empty() {
@@ -682,7 +735,6 @@ impl WallpaperRotator {
         }
 
         // 选择图片
-        let wallpaper_mode = settings.get_wallpaper_mode();
         let selected_image = match rotation_mode.as_str() {
             "sequential" => {
                 // Album：按 current_index 递进；Gallery：images 已按 id > current 预排序，从 0 开始即可。
