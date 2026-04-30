@@ -23,9 +23,6 @@
                 "page_num": "${page.meta.page_num}"
             }
         },
-        "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
-        "x500x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
-        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
     },
     // 默认分页 resolve: xNNNx + 裸数字 (与 default_pagination_resolve 等价)
     "resolve": {
