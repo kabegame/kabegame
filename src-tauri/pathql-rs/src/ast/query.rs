@@ -18,6 +18,12 @@ pub struct ContribQuery {
     pub join: Option<Vec<Join>>,
     #[serde(default, rename = "where")]
     pub where_: Option<SqlExpr>,
+    /// 7c: 折叠期 substring 移除已有 WHERE 子句; 在新 `where` 写入前生效。
+    /// 用例: VD `vd_sub_album_gate_provider` 进入子画册 gate 时, 剥除父
+    /// `ai.album_id = ?` WHERE, 让下游 entry 写入新 album_id 不形成
+    /// 永远空的 `A AND B`。
+    #[serde(default)]
+    pub where_clear: Option<Vec<SqlExpr>>,
     #[serde(default)]
     pub order: Option<OrderForm>,
     #[serde(default)]

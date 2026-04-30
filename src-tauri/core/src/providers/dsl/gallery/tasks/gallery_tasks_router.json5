@@ -1,0 +1,27 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_tasks_router",
+    // 7c S3: programmatic GalleryTasksRouter 迁 DSL。
+    // list 直接扫 tasks 表 (与 get_tasks_with_images 同 SQL 但去掉中间元组), 按 start_time 倒序。
+    "list": {
+        "${out.id}": {
+            "sql": "SELECT id, get_task(id) AS task_meta_json FROM tasks ORDER BY COALESCE(start_time, 0) DESC",
+            "data_var": "out",
+            "provider": "gallery_task_provider",
+            "properties": {
+                "task_id": "${out.id}"
+            },
+            "meta": { "$json": "${out.task_meta_json}" }
+        }
+    },
+    // task_id 是 UUID v4; 与 plugins/albums 一致用 UUID 正则锁定段。
+    "resolve": {
+        "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}": {
+            "provider": "gallery_task_provider",
+            "properties": {
+                "task_id": "${capture[0]}"
+            }
+        }
+    }
+}

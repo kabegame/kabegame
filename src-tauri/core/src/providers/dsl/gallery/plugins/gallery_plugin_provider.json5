@@ -1,0 +1,32 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_plugin_provider",
+    "properties": {
+        "plugin_id": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "images.plugin_id = ${properties.plugin_id}"
+    },
+    // 默认分页 (与 default_pagination_children 等价): desc + x100x/x500x/x1000x
+    "list": {
+        "desc":   { "provider": "sort_provider" },
+        "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
+        "x500x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
+        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
+    },
+    // 默认分页 resolve: xNNNx + 裸数字 (与 default_pagination_resolve 等价)
+    "resolve": {
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        },
+        "([1-9][0-9]*)": {
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        }
+    }
+}

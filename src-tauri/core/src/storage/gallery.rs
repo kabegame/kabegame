@@ -188,7 +188,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
             .prepare(
-                "SELECT strftime('%Y-%m-%d', CASE WHEN crawled_at > 253402300799 THEN crawled_at/1000 ELSE crawled_at END, 'unixepoch') as d, COUNT(*) as cnt
+                "SELECT strftime('%Y-%m-%d', crawled_at_seconds(crawled_at), 'unixepoch') as d, COUNT(*) as cnt
                  FROM images
                  WHERE crawled_at IS NOT NULL
                  GROUP BY 1

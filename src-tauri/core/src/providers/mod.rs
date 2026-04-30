@@ -1,13 +1,13 @@
-//! Provider 体系（6b 起：基于 pathql-rs 的编程注册）。
+//! Provider 体系 (7c 起: 全 DSL)。
 //!
 //! - [`provider`] — pathql-rs 类型 reexport + 前端 wire format helper
-//! - [`programmatic`] — 33 个硬编码 provider impl + register_all_hardcoded
+//! - [`dsl_loader`] — include_dir 嵌入的 dsl/**/*.json5 全量加载
 //! - [`init`] — provider_runtime() 单例
-//! - [`query`] — Tauri/MCP IPC 边界（execute_provider_query / typed）
+//! - [`query`] — Tauri/MCP IPC 边界 (execute_provider_query / typed)
+//! - [`sql_executor`] — pathql_rs::SqlExecutor 的 rusqlite 实现 (注入 Storage db)
 
 pub mod dsl_loader;
 pub mod init;
-pub mod programmatic;
 pub mod provider;
 pub mod query;
 pub mod sql_executor;
