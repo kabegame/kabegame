@@ -1,0 +1,71 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_album_provider",
+    "properties": {
+        "album_id": { "type": "string", "default": "", "optional": false }
+    },
+    // 持 album_id, WHERE 过滤本画册图片
+    "query": {
+        "where": "ai.album_id = ${properties.album_id}"
+    },
+    "list": {
+        // 子画册 (parent_id = ${properties.album_id})
+        "${out.id}": {
+            "sql": "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id = ${properties.album_id} ORDER BY created_at ASC",
+            "data_var": "out",
+            "provider": "gallery_album_provider",
+            "properties": {
+                "album_id": "${out.id}"
+            },
+            "meta": {
+                "kind": "album",
+                "data": {
+                    "id": "${out.id}",
+                    "name": "${out.name}",
+                    "createdAt": "${out.created_at}",
+                    "parentId": "${out.parent_id}"
+                }
+            }
+        },
+        // 排序翻转
+        "desc": { "provider": "sort_provider" },
+        // 顺序模式入口 (7b S1e)
+        "bigger_order": { "provider": "gallery_album_bigger_order_router" },
+        // 默认分页项 — 与 gallery_album_router (programmatic) 一致, 暴露 100/500/1000 三档
+        "x100x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": 100 }
+        },
+        "x500x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": 500 }
+        },
+        "x1000x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": 1000 }
+        }
+    },
+    "resolve": {
+        // 任意 xNNNx (NNN ≥ 1) → 自定义 page_size paginate
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        },
+        // 裸数字段 → 默认 page_size=100 的页号
+        "([1-9][0-9]*)": {
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        },
+        // sub-album: 用 UUID 正则锁定, 避免与静态 desc/bigger_order/xNNNx 及裸数字冲突。
+        // 不再校验 parent_id 关系 (programmatic 原检查 sub-album.parent_id == self.album_id);
+        // 不存在的 UUID 走空集而非 PathNotFound — 与 gallery_albums_router 一致。
+        "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}": {
+            "provider": "gallery_album_provider",
+            "properties": { "album_id": "${capture[0]}" }
+        }
+    }
+}
