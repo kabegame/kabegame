@@ -1,0 +1,17 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_dates_provider",
+    // 7c S10: VD `按时间` 当前直接复用 gallery_dates 的 yyyy/mm/dd 段名 (非 i18n 翻译);
+    // 与 programmatic 等价 (programmatic VdDatesProvider 也是纯 delegate gallery_dates_router)。
+    // 计划提到的 i18n 翻译年月日段名属于 frontend 显示层关注; 路径仍走 4位y / 2位m / 2位d。
+    "list": {
+        "${root.name}": {
+            "child_var": "root",
+            "delegate": { "provider": "gallery_dates_router" }
+        }
+    },
+    "resolve": {
+        ".*": { "delegate": { "provider": "gallery_dates_router" } }
+    }
+}

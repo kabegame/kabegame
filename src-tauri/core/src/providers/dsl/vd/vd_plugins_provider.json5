@@ -1,0 +1,16 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_plugins_provider",
+    // 7c S9: 整体委派 gallery_plugins_router (list / resolve 一致), 等价于 programmatic
+    // VdPluginsProvider 的 instantiate_named("gallery_plugins_router") 转发。
+    "list": {
+        "${root.name}": {
+            "child_var": "root",
+            "delegate": { "provider": "gallery_plugins_router" }
+        }
+    },
+    "resolve": {
+        ".*": { "delegate": { "provider": "gallery_plugins_router" } }
+    }
+}

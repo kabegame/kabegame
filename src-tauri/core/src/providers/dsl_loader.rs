@@ -54,6 +54,12 @@ pub const DSL_FILES: &[&str] = &[
     "vd/vd_root_router.json5",
     "vd/vd_zh_CN_root_router.json5",
     "vd/vd_en_US_root_router.json5",
+    "vd/vd_all_provider.json5",
+    "vd/vd_plugins_provider.json5",
+    "vd/vd_tasks_provider.json5",
+    "vd/vd_surfs_provider.json5",
+    "vd/vd_media_type_provider.json5",
+    "vd/vd_dates_provider.json5",
 ];
 
 /// 把所有 DSL 文件加载、注册进给定 registry, 返回 root_provider 的 ProviderDef。
