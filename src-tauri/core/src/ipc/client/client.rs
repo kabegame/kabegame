@@ -357,16 +357,6 @@ impl IpcClient {
             .await
     }
 
-    pub async fn storage_get_images_count_by_query(
-        &self,
-        query: serde_json::Value,
-    ) -> Result<usize, String> {
-        let v = self
-            .request_data(IpcRequest::StorageGetImagesCountByQuery { query })
-            .await?;
-        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
-    }
-
     // ==================== Gallery / Provider ====================
 
     pub async fn gallery_browse_provider(&self, path: String) -> Result<serde_json::Value, String> {
