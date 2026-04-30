@@ -1,0 +1,16 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_date_range_router",
+    // 7c S6: 路径段形态 `<start>~<end>`, 两端都是 YYYY-MM-DD (ISO date) — programmatic 的
+    // length-10 + split('~') 逻辑等价用 regex 表达。
+    "resolve": {
+        "([0-9]{4}-[0-9]{2}-[0-9]{2})~([0-9]{4}-[0-9]{2}-[0-9]{2})": {
+            "provider": "gallery_date_range_entry_provider",
+            "properties": {
+                "start": "${capture[1]}",
+                "end":   "${capture[2]}"
+            }
+        }
+    }
+}
