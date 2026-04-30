@@ -1,0 +1,56 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_albums_router",
+    // 7c S1: programmatic GalleryAlbumsRouter 迁 DSL。
+    // - INNER JOIN album_images AS ai (让下游 album entry 能用 ai.album_id WHERE)
+    // - 暴露 ai."order" AS album_order (壁纸顺序模式 marker, 7b S1e 引入)
+    // - 默认按 images.crawled_at ASC (与 6e gallery_all_router 同款 baseline ORDER)
+    "query": {
+        "join": [{
+            "kind": "INNER",
+            "table": "album_images",
+            "as": "ai",
+            "on": "images.id = ai.image_id"
+        }],
+        "fields": [
+            { "sql": "ai.\"order\"", "as": "album_order" }
+        ],
+        "order": [{ "images.crawled_at": "asc" }]
+    },
+    "list": {
+        // 根画册 (parent_id IS NULL); meta 形态对齐 wrap_typed_meta_json(Album):
+        //   { "kind": "album", "data": { id, name, createdAt, parentId } }
+        // createdAt / parentId 在模板渲染期是字符串化的 (引擎当前不保留类型);
+        // 前端读 data.id / data.name 主路径不受影响, createdAt 字符串化是已知小幅 wire drift。
+        "${out.id}": {
+            "sql": "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
+            "data_var": "out",
+            "provider": "gallery_album_provider",
+            "properties": {
+                "album_id": "${out.id}"
+            },
+            "meta": {
+                "kind": "album",
+                "data": {
+                    "id": "${out.id}",
+                    "name": "${out.name}",
+                    "createdAt": "${out.created_at}",
+                    "parentId": "${out.parent_id}"
+                }
+            }
+        }
+    },
+    "resolve": {
+        // album_id 是 UUID v4 (uuid::Uuid::new_v4()) 或 FAVORITE_ALBUM_ID/HIDDEN_ALBUM_ID
+        // (亦 UUID 形态: 0...001 / 0...000)。用 UUID 正则避免与 "desc" / "x100x" 等
+        // 静态/数字段冲突 (DSL resolve regex 在静态 list 之前生效)。不存在的 UUID 走空集
+        // 而非 PathNotFound — 与原 programmatic album_exists None 语义有微小放宽。
+        "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}": {
+            "provider": "gallery_album_provider",
+            "properties": {
+                "album_id": "${capture[0]}"
+            }
+        }
+    }
+}

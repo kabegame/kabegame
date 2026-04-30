@@ -28,6 +28,8 @@ pub const DSL_FILES: &[&str] = &[
     "gallery/gallery_bigger_crawler_time_filter.json5",
     "gallery/album/gallery_album_bigger_order_router.json5",
     "gallery/album/gallery_album_bigger_order_filter.json5",
+    "gallery/albums/gallery_albums_router.json5",
+    "gallery/albums/gallery_album_provider.json5",
     "shared/page_size_provider.json5",
     "shared/query_page_provider.json5",
     "shared/sort_provider.json5",

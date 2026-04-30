@@ -20,12 +20,14 @@ use self::helpers::register;
 /// 注册全部硬编码 provider 到 registry。
 pub fn register_all_hardcoded(reg: &mut ProviderRegistry) -> Result<(), pathql_rs::RegistryError> {
     // ── gallery filters ──
-    register(reg, "gallery_albums_router", |_| {
-        Ok(Arc::new(gallery_albums::GalleryAlbumsRouter) as Arc<dyn Provider>)
-    })?;
-    register(reg, "gallery_album_provider", |props| {
-        Ok(Arc::new(gallery_albums::GalleryAlbumProvider::from_props(props)?) as Arc<dyn Provider>)
-    })?;
+    // 7c S1: gallery_albums_router / gallery_album_provider 由 DSL
+    //        (dsl/gallery/albums/*.json5) 接管。programmatic 实现删除候选 (Stage D 一并清)。
+    // register(reg, "gallery_albums_router", |_| {
+    //     Ok(Arc::new(gallery_albums::GalleryAlbumsRouter) as Arc<dyn Provider>)
+    // })?;
+    // register(reg, "gallery_album_provider", |props| {
+    //     Ok(Arc::new(gallery_albums::GalleryAlbumProvider::from_props(props)?) as Arc<dyn Provider>)
+    // })?;
     register(reg, "gallery_plugins_router", |_| {
         Ok(Arc::new(gallery_filters::GalleryPluginsRouter) as Arc<dyn Provider>)
     })?;
