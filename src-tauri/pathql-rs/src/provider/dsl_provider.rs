@@ -698,6 +698,22 @@ fn walk_meta_value(
 ) -> Result<serde_json::Value, RenderError> {
     use serde_json::Value as J;
     match v {
+        // 7c S2: `{"$json": "<template>"}` directive — 渲染模板字符串后 parse 为 JSON 值。
+        // 用例: meta 用 host SQL 函数 (`get_plugin(id)` / `get_album(id)` 等) 返回的 JSON 文本
+        // 整体注入, 无需在 DSL 里逐字段展开。directive 形态: 单键 `$json`, 值是模板字符串。
+        J::Object(map) if map.len() == 1 && map.contains_key("$json") => {
+            let template = map
+                .get("$json")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    RenderError::MetaJsonParse(
+                        "$json directive value must be a string template".into(),
+                    )
+                })?;
+            let rendered = render_template_to_string(template, tctx)?;
+            serde_json::from_str(&rendered)
+                .map_err(|e| RenderError::MetaJsonParse(format!("{} (rendered: {:?})", e, rendered)))
+        }
         J::String(s) if s.contains("${") => {
             let rendered = render_template_to_string(s, tctx)?;
             Ok(J::String(rendered))
@@ -738,5 +754,66 @@ impl Provider for EmptyDslProvider {
     }
     fn is_empty(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod walk_meta_tests {
+    use super::*;
+    use crate::template::eval::{TemplateContext, TemplateValue};
+
+    fn ctx_with_data(name: &str, json: serde_json::Value) -> TemplateContext {
+        TemplateContext::new().with_data_var(name, json)
+    }
+
+    #[test]
+    fn json_directive_parses_rendered_template_to_object() {
+        let ctx = ctx_with_data("out", serde_json::json!({
+            "blob": r#"{"a":1,"b":"x"}"#
+        }));
+        let meta = serde_json::json!({"$json": "${out.blob}"});
+        let result = walk_meta_value(&meta, &ctx).unwrap();
+        assert_eq!(result, serde_json::json!({"a":1,"b":"x"}));
+    }
+
+    #[test]
+    fn json_directive_parses_rendered_to_null() {
+        let ctx = ctx_with_data("out", serde_json::json!({"blob": "null"}));
+        let meta = serde_json::json!({"$json": "${out.blob}"});
+        let result = walk_meta_value(&meta, &ctx).unwrap();
+        assert_eq!(result, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn json_directive_invalid_returns_meta_json_parse_error() {
+        let ctx = ctx_with_data("out", serde_json::json!({"blob": "not json {"}));
+        let meta = serde_json::json!({"$json": "${out.blob}"});
+        let err = walk_meta_value(&meta, &ctx).unwrap_err();
+        assert!(matches!(err, RenderError::MetaJsonParse(_)));
+    }
+
+    #[test]
+    fn plain_object_meta_still_walks_children() {
+        let ctx = TemplateContext::new()
+            .with_properties([("k".into(), TemplateValue::Text("v".into()))].into_iter().collect());
+        let meta = serde_json::json!({
+            "kind": "x",
+            "value": "${properties.k}"
+        });
+        let result = walk_meta_value(&meta, &ctx).unwrap();
+        assert_eq!(result, serde_json::json!({"kind":"x","value":"v"}));
+    }
+
+    #[test]
+    fn json_directive_only_triggers_for_single_key_object() {
+        // Object with $json AND another key → treated as plain object (not directive).
+        let ctx = ctx_with_data("out", serde_json::json!({"blob": r#"{"a":1}"#}));
+        let meta = serde_json::json!({"$json": "${out.blob}", "extra": "y"});
+        let result = walk_meta_value(&meta, &ctx).unwrap();
+        // The $json key value is a template string, walked as such → kept as string
+        assert_eq!(
+            result,
+            serde_json::json!({"$json": r#"{"a":1}"#, "extra": "y"})
+        );
     }
 }

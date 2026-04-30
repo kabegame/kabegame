@@ -10,23 +10,15 @@
         "where": "ai.album_id = ${properties.album_id}"
     },
     "list": {
-        // 子画册 (parent_id = ${properties.album_id})
+        // 子画册 (parent_id = ${properties.album_id}); meta 用 get_album + $json 整体注入。
         "${out.id}": {
-            "sql": "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id = ${properties.album_id} ORDER BY created_at ASC",
+            "sql": "SELECT id, get_album(id) AS album_meta_json FROM albums WHERE parent_id = ${properties.album_id} ORDER BY created_at ASC",
             "data_var": "out",
             "provider": "gallery_album_provider",
             "properties": {
                 "album_id": "${out.id}"
             },
-            "meta": {
-                "kind": "album",
-                "data": {
-                    "id": "${out.id}",
-                    "name": "${out.name}",
-                    "createdAt": "${out.created_at}",
-                    "parentId": "${out.parent_id}"
-                }
-            }
+            "meta": { "$json": "${out.album_meta_json}" }
         },
         // 排序翻转
         "desc": { "provider": "sort_provider" },
