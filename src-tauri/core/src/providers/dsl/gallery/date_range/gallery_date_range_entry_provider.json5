@@ -7,9 +7,9 @@
         "end":   { "type": "string", "default": "", "optional": false }
     },
     // 取 [start, end] (含端点) 内 crawled_at 落在的图片, 按 crawled_at ASC 排序。
-    // 注: CASE WHEN 处理 ms / s 双单位时间戳。S7-a 会将此换成 crawled_at_seconds() host fn。
+    // crawled_at_seconds() host fn 处理 ms / s 双单位时间戳。
     "query": {
-        "where": "date(CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') BETWEEN date(${properties.start}) AND date(${properties.end})",
+        "where": "date(crawled_at_seconds(images.crawled_at), 'unixepoch') BETWEEN date(${properties.start}) AND date(${properties.end})",
         "order": [{ "images.crawled_at": "asc" }]
     },
     "list": {
