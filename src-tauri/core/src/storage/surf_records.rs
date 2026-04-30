@@ -598,6 +598,7 @@ impl Storage {
                             row, 15,
                         )?,
                         size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
+                        album_order: None,
                     })
                 },
             )
@@ -666,6 +667,7 @@ impl Storage {
                     ),
                     last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
                     size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
+                    album_order: None,
                 })
             })
             .optional()

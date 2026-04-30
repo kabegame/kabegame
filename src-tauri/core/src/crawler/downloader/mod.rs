@@ -2184,6 +2184,7 @@ async fn process_downloaded_content_image_to_storage(
         media_type,
         last_set_wallpaper_at: None,
         size: None,
+        album_order: None,
     };
     match Storage::global().add_image(image_info) {
         Ok(inserted) => {
@@ -2681,6 +2682,7 @@ pub async fn process_downloaded_image_to_storage(
         }),
         last_set_wallpaper_at: None,
         size: None,
+        album_order: None,
     };
     let t_add = postprocess_timing_hash_ms.map(|_| Instant::now());
     match Storage::global().add_image(image_info) {

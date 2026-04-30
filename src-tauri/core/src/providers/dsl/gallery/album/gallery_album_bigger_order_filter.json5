@@ -1,0 +1,21 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_album_bigger_order_filter",
+    "properties": {
+        "order": { "type": "string", "default": "0", "optional": false }
+    },
+    "query": {
+        // album 顺序模式: WHERE album_images.order > N, ORDER BY album_images.order ASC
+        "where": "album_images.order > ${properties.order}",
+        "order": [{ "album_images.order": "asc" }]
+    },
+    "resolve": {
+        "l([0-9]+)l": {
+            "provider": "limit_leaf_provider",
+            "properties": {
+                "limit": "${capture[1]}"
+            }
+        }
+    }
+}

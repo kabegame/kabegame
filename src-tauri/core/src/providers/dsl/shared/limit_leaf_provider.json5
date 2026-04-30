@@ -1,0 +1,12 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "limit_leaf_provider",
+    "properties": {
+        "limit": { "type": "number", "default": 100, "optional": false }
+    },
+    "query": {
+        // 纯 LIMIT N 叶子, 无 offset / 不分页 (区别于 query_page_provider 的 page_size 形态)
+        "limit": "${properties.limit}"
+    }
+}

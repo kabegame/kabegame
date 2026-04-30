@@ -60,6 +60,12 @@ pub struct ImageInfo {
     /// 图片磁盘大小（字节）；旧数据或无法获取时为 None。
     #[serde(default)]
     pub size: Option<u64>,
+    /// 仅在画册路径 (`/gallery/album/<id>/...`) 下被填: 该图片在 album_images 表中的 `order` 列。
+    /// 顺序壁纸轮播 (sequential mode) 用它定位 next 图片 (`bigger_order` 路径)。
+    /// 非画册路径的查询里恒为 None。
+    #[serde(rename = "albumOrder")]
+    #[serde(default)]
+    pub album_order: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -231,6 +237,7 @@ impl Storage {
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                         size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                        album_order: None,
                     })
                 },
             )
@@ -351,6 +358,7 @@ impl Storage {
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                         size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                        album_order: None,
                     })
                 },
             )
@@ -424,6 +432,7 @@ impl Storage {
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                         size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                        album_order: None,
                     })
                 },
             )
@@ -493,6 +502,7 @@ impl Storage {
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                         size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                        album_order: None,
                     })
                 },
             )
@@ -565,6 +575,7 @@ impl Storage {
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                         size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                        album_order: None,
                     })
                 },
             )

@@ -153,6 +153,9 @@
         },
         "search": {
             "provider": "gallery_search_router"
+        },
+        "bigger_crawler_time": {
+            "provider": "gallery_bigger_crawler_time_router"
         }
     }
 }

@@ -470,6 +470,7 @@ impl Storage {
                     ),
                     last_set_wallpaper_at,
                     size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
+                    album_order: None,
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
