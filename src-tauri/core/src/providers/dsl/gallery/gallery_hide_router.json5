@@ -10,10 +10,17 @@
             "child_var": "root",
             "delegate": {
                 "provider": "gallery_route"
-            }
+            },
+            "provider": "${root.provider}",
+            "meta": "${root.meta}"
         }
     },
     "resolve": {
-        ".*": { "delegate": { "provider": "gallery_route" } }
+        ".*": {
+            "delegate": { "provider": "gallery_route" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
     }
 }

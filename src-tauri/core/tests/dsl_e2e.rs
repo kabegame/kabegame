@@ -6,10 +6,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use kabegame_core::providers::dsl_loader::{load_dsl_into, validate_dsl};
-use pathql_rs::provider::{ClosureExecutor, DslProvider, EngineError, Provider, SqlDialect};
+use kabegame_core::providers::dsl_loader::{register_embedded_dsl, validate_dsl};
+use pathql_rs::provider::{ClosureExecutor, EngineError, SqlDialect};
 use pathql_rs::template::eval::{TemplateContext, TemplateValue};
-use pathql_rs::{ProviderRegistry, ProviderRuntime};
+use pathql_rs::ProviderRuntime;
 use rusqlite::functions::FunctionFlags;
 use rusqlite::Connection;
 
@@ -252,14 +252,6 @@ fn make_executor(conn: Arc<Mutex<Connection>>) -> Arc<dyn pathql_rs::SqlExecutor
 }
 
 fn build_runtime() -> Arc<ProviderRuntime> {
-    let mut registry = ProviderRegistry::new();
-    let root_def = load_dsl_into(&mut registry);
-    validate_dsl(&registry);
-
-    let root: Arc<dyn Provider> = Arc::new(DslProvider {
-        def: Arc::new(root_def),
-        properties: HashMap::new(),
-    });
     let globals = HashMap::from([
         (
             "favorite_album_id".to_string(),
@@ -270,12 +262,11 @@ fn build_runtime() -> Arc<ProviderRuntime> {
             TemplateValue::Text(HIDDEN_ALBUM_ID.to_string()),
         ),
     ]);
-    ProviderRuntime::new(
-        Arc::new(registry),
-        root,
-        make_executor(fixture_db()),
-        globals,
-    )
+    let runtime = ProviderRuntime::new(make_executor(fixture_db()), globals);
+    register_embedded_dsl(&runtime);
+    validate_dsl(&runtime);
+    runtime.set_root("kabegame", "root_provider").unwrap();
+    runtime
 }
 
 fn ids(rows: Vec<serde_json::Value>) -> Vec<String> {
@@ -442,9 +433,7 @@ fn album_order_path_paginates_and_limit_leaf_only_limits() {
 fn vd_album_i18n_roots_resolve_to_same_image_set() {
     let runtime = build_runtime();
     kabegame_i18n::set_locale("zh");
-    let zh = ids(runtime
-        .fetch("/vd/i18n-zh_CN/画册/AlbumA/x100x/1")
-        .unwrap());
+    let zh = ids(runtime.fetch("/vd/i18n-zh_CN/画册/AlbumA/x100x/1").unwrap());
     kabegame_i18n::set_locale("en");
     let en = ids(runtime
         .fetch("/vd/i18n-en_US/By Album/AlbumA/x100x/1")

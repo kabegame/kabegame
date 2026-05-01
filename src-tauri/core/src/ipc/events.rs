@@ -241,6 +241,8 @@ pub enum DaemonEvent {
         task_ids: Option<Vec<String>>,
         #[serde(rename = "surfRecordIds", skip_serializing_if = "Option::is_none")]
         surf_record_ids: Option<Vec<String>>,
+        #[serde(rename = "pluginIds", skip_serializing_if = "Option::is_none")]
+        plugin_ids: Option<Vec<String>>,
     },
 
     /// `album_images` 表增删（reason: `add` | `delete`）

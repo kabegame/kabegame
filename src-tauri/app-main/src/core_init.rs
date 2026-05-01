@@ -5,7 +5,6 @@ use kabegame_core::virtual_driver::VirtualDriveService;
 use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
     plugin::PluginManager,
-    providers::provider_runtime,
     scheduler::Scheduler,
     settings::Settings,
     storage::Storage,
@@ -95,12 +94,7 @@ pub fn init_globals() -> Result<(), String> {
     });
     println!("  ✓ Auto scheduler initialized");
 
-    {
-        // 6b 起：provider_runtime() 是惰性 OnceLock 单例，首次访问时注册所有
-        // 硬编码 provider；这里强制初始化以便启动期 fail-fast。
-        let _rt = provider_runtime();
-    }
-    println!("  ✓ ProviderRuntime initialized");
+    println!("  ✓ ProviderRuntime deferred until kgpg plugin init");
 
     // OrganizeService 在 local 和 web 模式下均需要（非 Android）
     #[cfg(not(target_os = "android"))]

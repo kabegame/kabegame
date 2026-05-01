@@ -1,53 +1,58 @@
 <template>
   <div class="gallery-page">
     <div class="gallery-container" v-pull-to-refresh="pullToRefreshOpts">
-      <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!isCompact"
-        hide-scrollbar :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
-        :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
-        :on-context-command="handleGridContextCommand">
-        <template #before-grid>
-          <!-- 顶部工具栏 -->
-          <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
-            :month-options="monthOptions" :month-loading="monthOptionsLoading" :filter="galleryRouteStore.filter"
-            :sort="galleryRouteStore.sort" :page-size="pageSize" :search="search" v-model:selectedRange="selectedRange"
-            @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
-            @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
-            @open-collect-menu="showCollectSourcePicker = true"
-            @update:filter="(f) => galleryRouteStore.navigate({ filter: f, page: 1 })"
-            @update:sort="(sort) => galleryRouteStore.navigate({ sort })"
-            @update:pageSize="(ps) => galleryRouteStore.navigate({ page: 1, pageSize: ps })"
-            @update:search="(s) => galleryRouteStore.navigate({ page: 1, search: s })" />
+      <div class="gallery-content-layout">
+        <div class="gallery-grid-pane">
+          <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!isCompact"
+            hide-scrollbar :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
+            :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
+            :on-context-command="handleGridContextCommand">
+            <template #before-grid>
+              <!-- 顶部工具栏 -->
+              <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
+                :month-options="monthOptions" :month-loading="monthOptionsLoading" :filter="galleryRouteStore.filter"
+                :sort="galleryRouteStore.sort" :page-size="pageSize" :search="search" v-model:selectedRange="selectedRange"
+                :provider-context-prefix="galleryRouteStore.contextPath"
+                @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
+                @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
+                @open-collect-menu="showCollectSourcePicker = true"
+                @update:filter="(f) => galleryRouteStore.navigate({ filter: f, page: 1 })"
+                @update:sort="(sort) => galleryRouteStore.navigate({ sort })"
+                @update:pageSize="(ps) => galleryRouteStore.navigate({ page: 1, pageSize: ps })"
+                @update:search="(s) => galleryRouteStore.navigate({ page: 1, search: s })" />
 
-          <!-- 大页分页器 -->
-          <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage" :big-page-size="pageSize"
-            :is-sticky="true" @jump-to-page="handleJumpToBigPage" />
-        </template>
+              <!-- 大页分页器 -->
+              <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage" :big-page-size="pageSize"
+                :is-sticky="true" @jump-to-page="handleJumpToBigPage" />
+            </template>
 
-        <!-- 无图片空状态：使用 ImageGrid 的 empty 插槽（只隐藏 ImageItem，不影响 header/插槽挂载） -->
-        <template #empty>
-          <div v-if="displayedImages.length === 0 && !loading && !isRefreshing" :key="'empty-' + refreshKey"
-            class="empty fade-in">
-            <template v-if="isWallpaperOrderEmpty">
-              <EmptyState :primary-tip="$t('gallery.wallpaperOrderEmptyTip')" />
-              <el-button type="primary" class="empty-action-btn" @click="handleWallpaperEmptyViewAll">
-                <el-icon>
-                  <Picture />
-                </el-icon>
-                {{ $t('gallery.viewAllImages') }}
-              </el-button>
+            <!-- 无图片空状态：使用 ImageGrid 的 empty 插槽（只隐藏 ImageItem，不影响 header/插槽挂载） -->
+            <template #empty>
+              <div v-if="displayedImages.length === 0 && !loading && !isRefreshing" :key="'empty-' + refreshKey"
+                class="empty fade-in">
+                <template v-if="isWallpaperOrderEmpty">
+                  <EmptyState :primary-tip="$t('gallery.wallpaperOrderEmptyTip')" />
+                  <el-button type="primary" class="empty-action-btn" @click="handleWallpaperEmptyViewAll">
+                    <el-icon>
+                      <Picture />
+                    </el-icon>
+                    {{ $t('gallery.viewAllImages') }}
+                  </el-button>
+                </template>
+                <template v-else>
+                  <EmptyState />
+                  <el-button type="primary" class="empty-action-btn" @click="handleEmptyStateCollect">
+                    <el-icon>
+                      <Plus />
+                    </el-icon>
+                    {{ $t('gallery.startCollect') }}
+                  </el-button>
+                </template>
+              </div>
             </template>
-            <template v-else>
-              <EmptyState />
-              <el-button type="primary" class="empty-action-btn" @click="handleEmptyStateCollect">
-                <el-icon>
-                  <Plus />
-                </el-icon>
-                {{ $t('gallery.startCollect') }}
-              </el-button>
-            </template>
-          </div>
-        </template>
-      </ImageGrid>
+          </ImageGrid>
+        </div>
+      </div>
     </div>
 
     <!-- 收集对话框（非 Android：本地渲染；Android：由 App.vue 全局承载） -->
@@ -1188,8 +1193,29 @@ onDeactivated(() => {
 .gallery-container {
   width: 100%;
   flex: 1;
+  min-height: 0;
   /* 避免外层与 ImageGrid 内层双重滚动导致出现"多一条滚动条" */
   overflow: hidden;
+
+  .gallery-content-layout {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+  }
+
+  .gallery-grid-pane {
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 auto;
+    height: 100%;
+  }
+
+  .gallery-grid-pane > :deep(.image-grid-container) {
+    height: 100%;
+  }
 
   /* 按住空格进入“拖拽滚动模式” */
   &.drag-scroll-ready {

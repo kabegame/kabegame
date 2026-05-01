@@ -13,9 +13,11 @@ pub use ast::*;
 pub use loader::{LoadError, Loader, Source};
 pub use provider::{
     ChildEntry, ClosureExecutor, DslProvider, EmptyDslProvider, EngineError, Provider,
-    ProviderContext, ProviderRuntime, ResolvedNode, SqlDialect, SqlExecutor,
+    ProviderContext, ProviderKey, ProviderRuntime, ResolvedNode, SqlDialect, SqlExecutor,
 };
 pub use registry::{ProviderRegistry, RegistryError};
 
 #[cfg(feature = "json5")]
 pub use loaders::Json5Loader;
+
+pub use loaders::LoaderType;

@@ -6,20 +6,31 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use pathql_rs::ast::ProviderDef;
+use pathql_rs::ast::{Namespace, ProviderDef, SimpleName};
 use pathql_rs::provider::{
     ClosureExecutor, DslProvider, Provider, ProviderRuntime, SqlDialect, SqlExecutor,
 };
 use pathql_rs::ProviderRegistry;
-
-fn empty_registry() -> Arc<ProviderRegistry> {
-    Arc::new(ProviderRegistry::new())
-}
-
 fn no_op_executor() -> Arc<dyn SqlExecutor> {
     Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, |_sql, _params| {
         Ok(Vec::new())
     }))
+}
+
+fn runtime_with_root(root: Arc<dyn Provider>) -> Arc<ProviderRuntime> {
+    let mut registry = ProviderRegistry::new();
+    let root_for_factory = root.clone();
+    registry
+        .register_provider(
+            Namespace(String::new()),
+            SimpleName("__root".into()),
+            move |_| Ok(root_for_factory.clone()),
+        )
+        .unwrap();
+    let runtime =
+        ProviderRuntime::with_registry(Arc::new(registry), no_op_executor(), Default::default());
+    runtime.set_root("", "__root").unwrap();
+    runtime
 }
 
 #[test]
@@ -48,8 +59,7 @@ fn typed_meta_static_preserved_with_template_eval() {
         def: Arc::new(def),
         properties: props,
     });
-    let runtime =
-        ProviderRuntime::new(empty_registry(), root, no_op_executor(), Default::default());
+    let runtime = runtime_with_root(root);
 
     let children = runtime.list("/").unwrap();
     assert_eq!(children.len(), 1);
@@ -76,8 +86,7 @@ fn runtime_meta_path_matches_parent_list_child_meta() {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
-    let runtime =
-        ProviderRuntime::new(empty_registry(), root, no_op_executor(), Default::default());
+    let runtime = runtime_with_root(root);
 
     // root list shows leaf_x with the typed meta
     let listed = runtime.list("/").unwrap();
@@ -98,8 +107,7 @@ fn root_meta_is_none() {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
-    let runtime =
-        ProviderRuntime::new(empty_registry(), root, no_op_executor(), Default::default());
+    let runtime = runtime_with_root(root);
     assert!(runtime.meta("/").unwrap().is_none());
 }
 
@@ -114,8 +122,7 @@ fn meta_for_unknown_segment_returns_none() {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
-    let runtime =
-        ProviderRuntime::new(empty_registry(), root, no_op_executor(), Default::default());
+    let runtime = runtime_with_root(root);
     // Path /a is in list -> meta exists
     assert!(runtime.meta("/a").unwrap().is_some());
 }

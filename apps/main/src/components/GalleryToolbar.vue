@@ -5,157 +5,34 @@
     </template>
   </PageHeader>
 
-  <!-- 桌面：过滤（全部 / 壁纸 / 按时间嵌套 / 按插件）+ 排序（任意根路径），置于标题与分页器之间 -->
+  <!-- 桌面：过滤（provider tree）+ 排序（任意根路径），置于标题与分页器之间 -->
   <div v-if="!uiStore.isCompact" class="gallery-browse-toolbar">
-    <el-dropdown v-if="showGalleryFilterFold" trigger="click" @command="onDesktopFilterCommand">
-      <el-button class="gallery-browse-btn">
-        <el-icon class="gallery-browse-icon">
-          <Filter />
-        </el-icon>
-        <span>{{ filterFoldLabel }}</span>
-        <el-icon class="el-icon--right">
-          <ArrowDown />
-        </el-icon>
-      </el-button>
-      <template #dropdown>
-        <el-dropdown-menu>
-          <el-dropdown-item command="all" :class="{ 'is-active': isAllFilterBrowse }">
-            {{ t("gallery.filterAll") }}
-          </el-dropdown-item>
-          <el-dropdown-item
-            command="wallpaper-order"
-            :class="{ 'is-active': isWallpaperOrderBrowse }"
-          >
-            {{ t("gallery.filterWallpaperSet") }}
-          </el-dropdown-item>
-          <el-dropdown-item divided class="plugin-submenu-wrap" @click.stop>
-            <el-dropdown
-              trigger="hover"
-              placement="right-start"
-              @command="onDesktopTimeFilterCommand"
-              @visible-change="onDesktopTimeMenuVisible"
-            >
-              <span
-                class="plugin-submenu-trigger"
-                :class="{ 'is-active': isTimeFilterBrowse }"
-                @mouseenter="void ensureTimeRootLoaded()"
-              >
-                {{ t("gallery.filterByTime") }}
-                <el-icon class="plugin-submenu-chevron">
-                  <ArrowRight />
-                </el-icon>
-              </span>
-              <template #dropdown>
-                <el-dropdown-menu class="plugin-submenu-menu">
-                  <template v-if="timeMenuRoots.length">
-                    <GalleryTimeFilterSubmenu
-                      :nodes="timeMenuRoots"
-                      :date-tail="dateTail"
-                      :loading-names="visibleTimeLoadingNames"
-                      :loading-text="t('common.loading')"
-                      @command="onDesktopTimeFilterCommand"
-                      @lazy-open="(node) => void ensureTimeNodeChildrenLoaded(node)"
-                    />
-                  </template>
-                  <el-dropdown-item v-else-if="isLazyLoadingVisible('time-root')" disabled>
-                    {{ t("common.loading") }}
-                  </el-dropdown-item>
-                  <el-dropdown-item v-else-if="isLazyLoaded('time-root')" disabled>
-                    {{ t("gallery.filterByTimeEmpty") }}
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </el-dropdown-item>
-          <el-dropdown-item class="plugin-submenu-wrap" @click.stop>
-            <el-dropdown
-              trigger="hover"
-              placement="right-start"
-              @command="onDesktopPluginFilterCommand"
-              @visible-change="onDesktopPluginMenuVisible"
-            >
-              <span
-                class="plugin-submenu-trigger"
-                :class="{ 'is-active': isPluginFilterBrowse }"
-                @mouseenter="void ensurePluginGroupsLoaded()"
-              >
-                {{ t("gallery.filterByPlugin") }}
-                <el-icon class="plugin-submenu-chevron">
-                  <ArrowRight />
-                </el-icon>
-              </span>
-              <template #dropdown>
-                <el-dropdown-menu class="plugin-submenu-menu">
-                  <el-dropdown-item v-if="isLazyLoadingVisible('plugin')" disabled>
-                    {{ t("common.loading") }}
-                  </el-dropdown-item>
-                  <template v-else-if="pluginGroups.length">
-                    <el-dropdown-item
-                      v-for="g in pluginGroups"
-                      :key="g.plugin_id"
-                      :command="g.plugin_id"
-                      :class="{ 'is-active': currentPluginId === g.plugin_id }"
-                    >
-                      {{ pluginStore.pluginLabel(g.plugin_id) }}
-                      <span class="plugin-count">({{ g.count }})</span>
-                    </el-dropdown-item>
-                  </template>
-                  <el-dropdown-item v-else-if="isLazyLoaded('plugin')" disabled>
-                    {{ t("gallery.filterByPluginEmpty") }}
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </el-dropdown-item>
-          <el-dropdown-item divided class="plugin-submenu-wrap" @click.stop>
-            <el-dropdown
-              trigger="hover"
-              placement="right-start"
-              @command="onDesktopMediaTypeFilterCommand"
-              @visible-change="onDesktopMediaTypeMenuVisible"
-            >
-              <span
-                class="plugin-submenu-trigger"
-                :class="{ 'is-active': isMediaTypeFilterBrowse }"
-                @mouseenter="void ensureMediaTypeCountsLoaded()"
-              >
-                {{ t("gallery.filterByMediaType") }}
-                <el-icon class="plugin-submenu-chevron">
-                  <ArrowRight />
-                </el-icon>
-              </span>
-              <template #dropdown>
-                <el-dropdown-menu class="plugin-submenu-menu">
-                  <el-dropdown-item v-if="isLazyLoadingVisible('media-type')" disabled>
-                    {{ t("common.loading") }}
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-else
-                    command="image"
-                    :class="{
-                      'is-active': filterMediaKind(props.filter) === 'image',
-                    }"
-                  >
-                    {{ t("gallery.filterImageOnly") }}
-                    <span class="plugin-count">({{ mediaTypeCounts.imageCount }})</span>
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="!isLazyLoadingVisible('media-type')"
-                    command="video"
-                    :class="{
-                      'is-active': filterMediaKind(props.filter) === 'video',
-                    }"
-                  >
-                    {{ t("gallery.filterVideoOnly") }}
-                    <span class="plugin-count">({{ mediaTypeCounts.videoCount }})</span>
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </el-dropdown-item>
-        </el-dropdown-menu>
+    <el-popover
+      v-if="showGalleryFilterFold"
+      v-model:visible="showProviderTreePopover"
+      placement="bottom-start"
+      trigger="click"
+      width="auto"
+      popper-class="gallery-provider-tree-popover"
+    >
+      <template #reference>
+        <el-button class="gallery-browse-btn">
+          <el-icon class="gallery-browse-icon">
+            <Filter />
+          </el-icon>
+          <span>{{ filterFoldLabel }}</span>
+          <el-icon class="el-icon--right">
+            <ArrowDown />
+          </el-icon>
+        </el-button>
       </template>
-    </el-dropdown>
+      <GalleryProviderTreeSidebar
+        mode="popover"
+        :context-prefix="providerContextPrefix"
+        :filter="filter"
+        @update:filter="onProviderTreeFilter"
+      />
+    </el-popover>
 
     <el-dropdown trigger="click" @command="onDesktopSortCommand">
       <el-button class="gallery-browse-btn">
@@ -285,12 +162,13 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, onUnmounted } from "vue";
-import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
-import { ArrowDown, ArrowRight, Filter, Histogram, Sort } from "@element-plus/icons-vue";
+import { ArrowDown, Filter, Histogram, Sort } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
 import SearchInput from "@/components/SearchInput.vue";
+import GalleryProviderTreeSidebar from "@/components/GalleryProviderTreeSidebar.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
@@ -314,7 +192,6 @@ import {
   type TimeMenuNode,
   type YearGroupRow,
 } from "@/utils/galleryTimeFilterMenu";
-import GalleryTimeFilterSubmenu from "@/header/comps/GalleryTimeFilterSubmenu.vue";
 import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
@@ -334,6 +211,8 @@ interface Props {
   pageSize?: number;
   /** display_name 搜索词 */
   search?: string;
+  /** provider tree 上下文前缀：hide/search 等由 route store 统一拼好 */
+  providerContextPrefix?: string;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -347,6 +226,7 @@ const props = withDefaults(defineProps<Props>(), {
   sort: "asc",
   pageSize: 100,
   search: "",
+  providerContextPrefix: "",
 });
 
 const router = useRouter();
@@ -382,8 +262,6 @@ const isMediaTypeFilterBrowse = computed(
   () => filterMediaKind(props.filter) != null
 );
 
-const isAllFilterBrowse = computed(() => props.filter.type === "all");
-
 const showGalleryFilterFold = computed(() => isSimpleFilter(props.filter));
 
 interface PluginGroupRow {
@@ -400,6 +278,9 @@ interface GalleryMediaTypeCountsPayload {
 interface ProviderChildDir {
   kind: "dir";
   name: string;
+  meta?: {
+    isLeaf?: boolean;
+  } | null;
   total?: number | null;
 }
 
@@ -407,11 +288,18 @@ interface ProviderCountResult {
   total?: number | null;
 }
 
+interface PickerCascadeOption {
+  text: string;
+  value: string;
+  children?: PickerCascadeOption[];
+}
+
 const pluginGroups = ref<PluginGroupRow[]>([]);
 const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
   imageCount: 0,
   videoCount: 0,
 });
+const showProviderTreePopover = ref(false);
 const monthGroups = ref<DateGroupRow[]>([]);
 const dayGroups = ref<DayGroupRow[]>([]);
 const yearGroups = ref<YearGroupRow[]>([]);
@@ -453,7 +341,13 @@ const YEAR_SEG_RE = /^(\d{4})y$/;
 const MONTH_SEG_RE = /^(\d{2})m$/;
 const DAY_SEG_RE = /^(\d{2})d$/;
 
-type LazyScope = "plugin" | "media-type" | "time-root" | `time-year:${string}` | `time-month:${string}`;
+type LazyScope =
+  | "plugin"
+  | "media-type"
+  | "time-root"
+  | `time-year:${string}`
+  | `time-month:${string}`
+  | `plugin-extend:${string}`;
 
 const lazyLoadedKeys = ref(new Set<string>());
 const lazyDirtyKeys = ref(new Set<string>());
@@ -461,6 +355,7 @@ const lazyPendingKeys = ref(new Set<string>());
 const lazyVisibleLoadingKeys = ref(new Set<string>());
 const lazyInFlight = new Map<string, Promise<void>>();
 const lazyLoadingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pluginExtendChildren = ref<Record<string, ProviderChildDir[]>>({});
 
 function currentLazyKey(scope: LazyScope, prefix = filterContextPrefix.value) {
   return `${prefix}|${scope}`;
@@ -541,14 +436,72 @@ function resetLazyDataForPrefixChange() {
   lazyPendingKeys.value = new Set();
   lazyVisibleLoadingKeys.value = new Set();
   pluginGroups.value = [];
+  pluginExtendChildren.value = {};
   mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
   yearGroups.value = [];
   monthGroups.value = [];
   dayGroups.value = [];
 }
 
-function markFilterLazyDataDirty() {
-  lazyDirtyKeys.value = new Set(lazyLoadedKeys.value);
+function parsePluginExtendScope(scope: string) {
+  const raw = scope.slice("plugin-extend:".length);
+  const tab = raw.indexOf("\t");
+  if (tab < 0) return { pluginId: raw, extendPath: "" };
+  return { pluginId: raw.slice(0, tab), extendPath: raw.slice(tab + 1) };
+}
+
+function loadedPluginExtendScopes() {
+  const prefix = `${filterContextPrefix.value}|plugin-extend:`;
+  return [...lazyLoadedKeys.value]
+    .filter((key) => key.startsWith(prefix))
+    .map((key) => parsePluginExtendScope(key.slice(prefix.length)))
+    .filter((scope) => scope.pluginId);
+}
+
+function imageChangePluginIds(payload: ImagesChangePayload) {
+  const ids = (payload.pluginIds ?? []).map((id) => id.trim()).filter(Boolean);
+  return ids.length ? new Set(ids) : null;
+}
+
+async function markFilterLazyDataDirty(payload: ImagesChangePayload = {}) {
+  const changedPluginIds = imageChangePluginIds(payload);
+  const shouldReloadPlugins = isLazyLoaded("plugin");
+  const shouldReloadPluginExtends = loadedPluginExtendScopes().filter(
+    ({ pluginId }) => !changedPluginIds || changedPluginIds.has(pluginId)
+  );
+  const nextDirty = new Set(lazyDirtyKeys.value);
+  const currentPrefix = `${filterContextPrefix.value}|`;
+  for (const key of lazyLoadedKeys.value) {
+    if (!key.startsWith(currentPrefix)) continue;
+    const scope = key.slice(currentPrefix.length);
+    if (!scope.startsWith("plugin-extend:")) {
+      nextDirty.add(key);
+      continue;
+    }
+    const { pluginId } = parsePluginExtendScope(scope);
+    if (!changedPluginIds || changedPluginIds.has(pluginId)) {
+      nextDirty.add(key);
+    }
+  }
+  lazyDirtyKeys.value = nextDirty;
+  if (changedPluginIds) {
+    const nextChildren = { ...pluginExtendChildren.value };
+    for (const key of Object.keys(nextChildren)) {
+      const { pluginId } = parsePluginExtendKey(key);
+      if (changedPluginIds.has(pluginId)) delete nextChildren[key];
+    }
+    pluginExtendChildren.value = nextChildren;
+  } else {
+    pluginExtendChildren.value = {};
+  }
+  if (shouldReloadPlugins) {
+    await ensurePluginGroupsLoaded();
+  }
+  await Promise.all(
+    shouldReloadPluginExtends.map(({ pluginId, extendPath }) =>
+      ensurePluginExtendLoaded(pluginId, extendPath)
+    )
+  );
 }
 
 watch(filterContextPrefix, () => {
@@ -568,6 +521,41 @@ useImagesChangeRefresh({
   onRefresh: markFilterLazyDataDirty,
 });
 
+const pluginSignature = computed(() =>
+  pluginStore.plugins.map((p) => `${p.id}:${p.version}`).join("|")
+);
+
+function resetPluginLazyData() {
+  for (const timer of lazyLoadingTimers.values()) {
+    clearTimeout(timer);
+  }
+  lazyLoadingTimers.clear();
+  for (const key of [...lazyInFlight.keys()]) {
+    if (key.includes("|plugin")) lazyInFlight.delete(key);
+  }
+  lazyLoadedKeys.value = new Set([...lazyLoadedKeys.value].filter((key) => !key.includes("|plugin")));
+  lazyDirtyKeys.value = new Set([...lazyDirtyKeys.value].filter((key) => !key.includes("|plugin")));
+  lazyPendingKeys.value = new Set([...lazyPendingKeys.value].filter((key) => !key.includes("|plugin")));
+  lazyVisibleLoadingKeys.value = new Set(
+    [...lazyVisibleLoadingKeys.value].filter((key) => !key.includes("|plugin"))
+  );
+  pluginGroups.value = [];
+  pluginExtendChildren.value = {};
+}
+
+watch(pluginSignature, () => {
+  const shouldReloadPlugins = isLazyLoaded("plugin");
+  resetPluginLazyData();
+  const current = props.filter.type === "plugin" ? props.filter.pluginId : "";
+  if (current && !pluginStore.plugins.some((p) => p.id === current)) {
+    emit("update:filter", { type: "all" });
+    return;
+  }
+  if (shouldReloadPlugins) {
+    void ensurePluginGroupsLoaded();
+  }
+});
+
 async function ensurePluginGroupsLoaded() {
   await ensureLazyLoaded("plugin", async (prefix) => {
     try {
@@ -575,7 +563,9 @@ async function ensurePluginGroupsLoaded() {
       const groups = await Promise.all(
         entries.map(async (e) => ({
           plugin_id: e.name,
-          count: await countProviderPath(`${prefix}plugin/${encodeURIComponent(e.name)}`),
+          count: typeof e.total === "number"
+            ? e.total
+            : await countProviderPath(`${prefix}plugin/${encodeURIComponent(e.name)}`),
         }))
       );
       if (prefix !== filterContextPrefix.value) return;
@@ -584,6 +574,135 @@ async function ensurePluginGroupsLoaded() {
       if (prefix === filterContextPrefix.value) pluginGroups.value = [];
     }
   });
+}
+
+function normalizeExtendPath(path = "") {
+  return path.trim().replace(/^\/+|\/+$/g, "");
+}
+
+function pluginExtendKey(pluginId: string, extendPath = "") {
+  const path = normalizeExtendPath(extendPath);
+  return path ? `${pluginId}\t${path}` : pluginId;
+}
+
+function parsePluginExtendKey(key: string) {
+  const tab = key.indexOf("\t");
+  if (tab < 0) return { pluginId: key, extendPath: "" };
+  return { pluginId: key.slice(0, tab), extendPath: key.slice(tab + 1) };
+}
+
+function pluginExtendScope(pluginId: string, extendPath = ""): LazyScope {
+  return `plugin-extend:${pluginExtendKey(pluginId, extendPath)}`;
+}
+
+function pluginExtendPathForProvider(extendPath = "") {
+  return normalizeExtendPath(extendPath)
+    .split("/")
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join("/");
+}
+
+function pluginExtendChildrenByPath(pluginId: string) {
+  const prefix = `${pluginId}\t`;
+  const out: Record<string, ProviderChildDir[]> = {};
+  for (const [key, children] of Object.entries(pluginExtendChildren.value)) {
+    if (key === pluginId) {
+      out[""] = children;
+    } else if (key.startsWith(prefix)) {
+      out[key.slice(prefix.length)] = children;
+    }
+  }
+  return out;
+}
+
+function isProviderLeaf(entry: ProviderChildDir) {
+  return entry.meta?.isLeaf === true;
+}
+
+function activePluginExtendPath(pluginId: string) {
+  return props.filter.type === "plugin" && props.filter.pluginId === pluginId
+    ? normalizeExtendPath(props.filter.extendPath ?? "")
+    : "";
+}
+
+function visiblePluginExtendLoadingPaths(pluginId: string) {
+  const prefix = `${filterContextPrefix.value}|plugin-extend:${pluginId}`;
+  const paths = new Set<string>();
+  for (const key of lazyVisibleLoadingKeys.value) {
+    if (!key.startsWith(prefix)) continue;
+    const suffix = key.slice(prefix.length);
+    paths.add(suffix.startsWith("\t") ? suffix.slice(1) : "");
+  }
+  return paths;
+}
+
+function pluginCommand(pluginId: string, extendPath = "") {
+  return extendPath ? `${pluginId}\t${extendPath}` : pluginId;
+}
+
+function parsePluginCommand(command: string) {
+  const [pluginId, extendPath = ""] = String(command || "").split("\t");
+  return { pluginId: pluginId.trim(), extendPath: extendPath.trim() };
+}
+
+function isPluginCommandActive(pluginId: string, extendPath = "") {
+  return (
+    props.filter.type === "plugin" &&
+    props.filter.pluginId === pluginId &&
+    (props.filter.extendPath ?? "") === extendPath
+  );
+}
+
+function isPluginProviderCommandActive(pluginId: string) {
+  return props.filter.type === "plugin" && props.filter.pluginId === pluginId;
+}
+
+async function ensurePluginExtendLoaded(pluginId: string, extendPath = "") {
+  const id = pluginId.trim();
+  if (!id) return;
+  const path = normalizeExtendPath(extendPath);
+  await ensureLazyLoaded(pluginExtendScope(id, path), async (prefix) => {
+    try {
+      const providerPath = pluginExtendPathForProvider(path);
+      const entries = await listProviderDirs(
+        `${prefix}plugin/${encodeURIComponent(id)}/extend/${providerPath}`
+      );
+      if (prefix !== filterContextPrefix.value) return;
+      pluginExtendChildren.value = {
+        ...pluginExtendChildren.value,
+        [pluginExtendKey(id, path)]: entries,
+      };
+    } catch {
+      if (prefix === filterContextPrefix.value) {
+        pluginExtendChildren.value = {
+          ...pluginExtendChildren.value,
+          [pluginExtendKey(id, path)]: [],
+        };
+      }
+    }
+  });
+}
+
+async function ensureAllPluginExtendsLoaded() {
+  await Promise.all(pluginGroups.value.map((g) => ensurePluginExtendTreeLoaded(g.plugin_id)));
+}
+
+async function ensurePluginExtendTreeLoaded(pluginId: string, extendPath = "", depth = 0) {
+  if (depth > 3) return;
+  await ensurePluginExtendLoaded(pluginId, extendPath);
+  const children = pluginExtendChildren.value[pluginExtendKey(pluginId, extendPath)] ?? [];
+  await Promise.all(
+    children
+      .filter((child) => !isProviderLeaf(child))
+      .map((child) =>
+        ensurePluginExtendTreeLoaded(
+          pluginId,
+          [normalizeExtendPath(extendPath), child.name].filter(Boolean).join("/"),
+          depth + 1
+        )
+      )
+  );
 }
 
 async function ensureMediaTypeCountsLoaded() {
@@ -712,31 +831,6 @@ async function ensureTimeNodeChildrenLoaded(node: TimeMenuNode) {
   }
 }
 
-function onDesktopTimeMenuVisible(open: boolean) {
-  if (open) void ensureTimeRootLoaded();
-}
-
-function onDesktopPluginMenuVisible(open: boolean) {
-  if (open) void ensurePluginGroupsLoaded();
-}
-
-function onDesktopMediaTypeMenuVisible(open: boolean) {
-  if (open) void ensureMediaTypeCountsLoaded();
-}
-
-const visibleTimeLoadingNames = computed(() => {
-  const names = new Set<string>();
-  for (const key of lazyVisibleLoadingKeys.value) {
-    const scope = key.slice(key.indexOf("|") + 1);
-    if (scope.startsWith("time-year:")) {
-      names.add(scope.slice("time-year:".length));
-    } else if (scope.startsWith("time-month:")) {
-      names.add(scope.slice("time-month:".length));
-    }
-  }
-  return names;
-});
-
 const sortOptionLabelAsc = computed(() =>
   isWallpaperOrderBrowse.value
     ? t("gallery.bySetTimeAsc")
@@ -757,7 +851,11 @@ const filterFoldLabel = computed(() => {
   const dt = dateTail.value;
   if (dt) return t("gallery.filterByTimeWithDetail", { detail: dt });
   const pid = currentPluginId.value;
-  if (pid) return t("gallery.filterByPluginWithName", { name: pluginStore.pluginLabel(pid) });
+  if (pid) {
+    const ext = props.filter.type === "plugin" ? props.filter.extendPath?.trim() : "";
+    const name = pluginStore.pluginLabel(pid);
+    return ext ? `${name} / ${ext}` : t("gallery.filterByPluginWithName", { name });
+  }
   const mk = filterMediaKind(props.filter);
   if (mk === "image") {
     const label = t("gallery.filterImageOnlyLabel");
@@ -779,29 +877,9 @@ const sortToolbarButtonLabel = computed(() =>
   sortOrder.value === "desc" ? sortOptionLabelDesc.value : sortOptionLabelAsc.value
 );
 
-function onDesktopFilterCommand(cmd: string) {
-  if (cmd !== "all" && cmd !== "wallpaper-order") return;
-  emit(
-    "update:filter",
-    cmd === "all" ? { type: "all" } : { type: "wallpaper-order" }
-  );
-}
-
-function onDesktopPluginFilterCommand(pluginId: string) {
-  const id = (pluginId || "").trim();
-  if (!id) return;
-  emit("update:filter", { type: "plugin", pluginId: id });
-}
-
-function onDesktopTimeFilterCommand(seg: string) {
-  const s = (seg || "").trim();
-  if (!s) return;
-  emit("update:filter", { type: "date", segment: s });
-}
-
-function onDesktopMediaTypeFilterCommand(kind: string) {
-  if (kind !== "image" && kind !== "video") return;
-  emit("update:filter", { type: "media-type", kind });
+function onProviderTreeFilter(filter: GalleryFilter) {
+  emit("update:filter", filter);
+  showProviderTreePopover.value = false;
 }
 
 function onDesktopSortCommand(cmd: string) {
@@ -867,6 +945,7 @@ async function onFilterPickerConfirm() {
   }
   if (v === "plugin") {
     await ensurePluginGroupsLoaded();
+    await ensureAllPluginExtendsLoaded();
     if (!pluginGroups.value.length) return;
     showPluginFilterPicker.value = true;
     return;
@@ -958,26 +1037,54 @@ function onTimeFilterPickerConfirm(payload: {
 
 const pluginFilterPickerColumns = computed(() => {
   void locale.value;
-  return pluginGroups.value.map((g) => ({
-    text: `${pluginStore.pluginLabel(g.plugin_id)} (${g.count})`,
-    value: g.plugin_id,
-  }));
+  const rows: PickerCascadeOption[] = [];
+  for (const g of pluginGroups.value) {
+    const pluginLabel = pluginStore.pluginLabel(g.plugin_id);
+    const children: PickerCascadeOption[] = [
+      {
+        text: `${t("gallery.filterAll")} (${g.count})`,
+        value: pluginCommand(g.plugin_id),
+      },
+    ];
+    children.push(...pluginExtendPickerOptions(g.plugin_id));
+    rows.push({
+      text: `${pluginLabel} (${g.count})`,
+      value: g.plugin_id,
+      children,
+    });
+  }
+  return rows;
 });
+
+function pluginExtendPickerOptions(pluginId: string, parentPath = ""): PickerCascadeOption[] {
+  return (pluginExtendChildren.value[pluginExtendKey(pluginId, parentPath)] ?? []).map((child) => {
+    const path = [normalizeExtendPath(parentPath), child.name].filter(Boolean).join("/");
+    const nested = isProviderLeaf(child) ? [] : pluginExtendPickerOptions(pluginId, path);
+    return {
+      text: child.name,
+      value: pluginCommand(pluginId, path),
+      children: nested.length ? nested : undefined,
+    };
+  });
+}
 const pluginFilterPickerSelected = ref<string[]>([]);
 watch(showPluginFilterPicker, (open) => {
   if (open) {
-    const id =
-      currentPluginId.value ||
-      pluginGroups.value[0]?.plugin_id ||
-      "";
-    pluginFilterPickerSelected.value = id ? [id] : [];
+    const id = currentPluginId.value || pluginGroups.value[0]?.plugin_id || "";
+    const extendPath = props.filter.type === "plugin" ? props.filter.extendPath ?? "" : "";
+    pluginFilterPickerSelected.value = id ? [id, pluginCommand(id, extendPath)] : [];
   }
 });
 function onPluginFilterPickerConfirm() {
   showPluginFilterPicker.value = false;
-  const id = pluginFilterPickerSelected.value[0];
+  const selected = pluginFilterPickerSelected.value;
+  const command = selected[selected.length - 1] ?? "";
+  const { pluginId: id, extendPath } = parsePluginCommand(command);
   if (!id) return;
-  emit("update:filter", { type: "plugin", pluginId: id });
+  emit(
+    "update:filter",
+    extendPath ? { type: "plugin", pluginId: id, extendPath } : { type: "plugin", pluginId: id }
+  );
 }
 
 const mediaTypeFilterPickerColumns = computed(() => {
@@ -1206,35 +1313,4 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
   }
 }
 
-.plugin-submenu-wrap {
-  padding: 0 !important;
-}
-
-.plugin-submenu-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 5px 16px;
-  font-size: 14px;
-  line-height: 22px;
-  box-sizing: border-box;
-  cursor: pointer;
-}
-
-.plugin-submenu-chevron {
-  margin-left: 12px;
-  font-size: 12px;
-}
-
-.plugin-submenu-menu {
-  max-height: min(60vh, 360px);
-  overflow-y: auto;
-}
-
-.plugin-count {
-  margin-left: 4px;
-  opacity: 0.75;
-  font-size: 12px;
-}
 </style>

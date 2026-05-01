@@ -4,7 +4,7 @@ use crate::validate::{ValidateError, ValidateErrorKind};
 /// 校验 namespace / name 字符模式。
 ///
 /// - `name`：`^[A-Za-z_][A-Za-z0-9_]*$`（兼容 `vd_zh_CN_root_router` 等 i18n 路由名）
-/// - `namespace`：dot-separated 段，每段同 name 规则；空串 (root namespace) 合法
+/// - `namespace`：dot-separated 段，每段允许 `-`；空串 (root namespace) 合法
 pub fn validate_names(
     ns: &Namespace,
     name: &SimpleName,
@@ -154,11 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn bad_namespace_segment_with_hyphen() {
-        let errs = run("kabegame.bad-seg", "n");
-        assert!(matches!(
-            errs[0].kind,
-            ValidateErrorKind::InvalidNamespace(_)
-        ));
+    fn valid_namespace_segment_with_hyphen() {
+        assert!(run("kabegame.bad-seg", "n").is_empty());
     }
 }

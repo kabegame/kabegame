@@ -50,8 +50,8 @@ pub fn wrap_typed_meta_json(id: &str, kind: MetaEntityKind) -> Option<JsonValue>
             ("task", serde_json::to_value(t).ok()?)
         }
         MetaEntityKind::Plugin => {
-            let p = PluginManager::global().get_sync(id)?;
-            ("plugin", serde_json::to_value(p).ok()?)
+            let p = PluginManager::global().get(id)?;
+            ("plugin", serde_json::to_value(p.as_ref()).ok()?)
         }
         MetaEntityKind::RunConfig => {
             let rc = Storage::global().get_run_config(id).ok()??;

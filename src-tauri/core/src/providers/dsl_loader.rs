@@ -1,22 +1,34 @@
 //! DSL 加载: 用 [`include_dir!`] 把 `core/src/providers/dsl/**/*.json5` 编进二进制,
-//! 启动期按文件清单依次喂给 pathql-rs 的 [`pathql_rs::Json5Loader`] 并注册到
-//! [`pathql_rs::ProviderRegistry`]。
+//! 启动期按文件清单依次喂给 pathql-rs 的 runtime 动态注册接口。
 //!
 //! 启用 `validate` feature 时, 注册完后跑一次 [`pathql_rs::validate::validate`]
 //! 做交叉引用 / SQL 形态体检, 失败直接 panic — DSL 是源码资产, 启动期就该挂。
 
 use include_dir::{include_dir, Dir};
-use pathql_rs::{
-    validate::{validate, ValidateConfig},
-    Json5Loader, Loader, ProviderDef, ProviderRegistry, Source,
-};
+use pathql_rs::{validate::ValidateConfig, LoaderType, ProviderRuntime, Source};
+
+/// Provider DSL files supported inside plugin `providers/` directories.
+pub const PROVIDER_FILE_EXTENSIONS: &[&str] = &["json", "json5"];
+
+pub fn is_provider_file_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    normalized.starts_with("providers/")
+        && PROVIDER_FILE_EXTENSIONS.iter().any(|ext| {
+            normalized
+                .rsplit_once('.')
+                .map(|(_, got)| got.eq_ignore_ascii_case(ext))
+                .unwrap_or(false)
+        })
+}
 
 /// 编译期嵌入的 DSL 资产根。布局必须与 `core/src/providers/dsl/` 同构。
 pub static DSL_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/providers/dsl");
 
+pub const ROOT_PROVIDER: &str = "root_provider.json";
+
 /// 文件清单。新增 / 删除 DSL provider 时同步更新此处 + register 调用方。
 pub const DSL_FILES: &[&str] = &[
-    "root_provider.json",
+    ROOT_PROVIDER,
     "images/images_root_provider.json5",
     "images/images_id_provider.json5",
     "images/images_metadata_provider.json5",
@@ -58,6 +70,7 @@ pub const DSL_FILES: &[&str] = &[
     "shared/sort_provider.json5",
     "shared/sort_router.json5",
     "shared/limit_leaf_provider.json5",
+    "shared/plugin_entry_provider.json5",
     "vd/vd_root_router.json5",
     "vd/vd_zh_CN_root_router.json5",
     "vd/vd_en_US_root_router.json5",
@@ -84,37 +97,26 @@ pub const DSL_FILES: &[&str] = &[
     "vd/vd_dates_provider.json5",
 ];
 
-/// 把所有 DSL 文件加载、注册进给定 registry, 返回 root_provider 的 ProviderDef。
-///
-/// `root_provider` 单独返回, 因为它是 DslProvider 实例化为 runtime root 的素材。
-pub fn load_dsl_into(registry: &mut ProviderRegistry) -> ProviderDef {
-    let loader = Json5Loader;
-    let mut root_def: Option<ProviderDef> = None;
+/// 把所有内置 DSL 文件动态注册进 runtime。
+pub fn register_embedded_dsl(runtime: &ProviderRuntime) {
     for rel in DSL_FILES {
         let file = DSL_DIR
             .get_file(rel)
             .unwrap_or_else(|| panic!("DSL file `{}` not found in include_dir embed", rel));
         let bytes = file.contents();
-        let def = loader
-            .load(Source::Bytes(bytes))
-            .unwrap_or_else(|e| panic!("Json5Loader failed on `{}`: {}", rel, e));
-        if def.name.0 == "root_provider" {
-            root_def = Some(def.clone());
-        }
-        registry
-            .register(def)
-            .unwrap_or_else(|e| panic!("register `{}` failed: {}", rel, e));
+        runtime
+            .register_provider_dsl(LoaderType::JSON5, Source::Bytes(bytes))
+            .unwrap_or_else(|e| panic!("register DSL `{}` failed: {}", rel, e));
     }
-    root_def.expect("root_provider missing from DSL_FILES")
 }
 
 /// 启动期 sanity: 跑一次完整 validate。失败直接 panic, 让构建立刻挂。
 /// Phase 7c 后 core 内置 provider 已全量 DSL 化; 这里仍沿用默认配置, 只检查
 /// reserved / SQL shape 等本地约束。跨引用严格模式留给后续第三方 DSL namespace
 /// 装载策略一起开启。
-pub fn validate_dsl(registry: &ProviderRegistry) {
+pub fn validate_dsl(runtime: &ProviderRuntime) {
     let cfg = ValidateConfig::with_default_reserved();
-    if let Err(errs) = validate(registry, &cfg) {
+    if let Err(errs) = runtime.validate(&cfg) {
         for e in &errs {
             eprintln!("[DSL validate] {}", e);
         }

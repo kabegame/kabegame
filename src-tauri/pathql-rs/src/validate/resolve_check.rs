@@ -1,4 +1,6 @@
-use crate::ast::{InvokeByName, ListEntry, ProviderInvocation, Resolve, TemplateValue};
+use crate::ast::{
+    DelegateProviderField, InvokeByName, ListEntry, ProviderInvocation, Resolve, TemplateValue,
+};
 use crate::template::{parse, Segment, VarRef};
 use crate::validate::{ValidateError, ValidateErrorKind};
 
@@ -53,6 +55,18 @@ pub fn validate_resolve(registry: &crate::ProviderRegistry, errors: &mut Vec<Val
         let pattern_to_groups: HashMap<&str, usize> =
             compiled.iter().map(|(p, _, g)| (p.as_str(), *g)).collect();
         for (pat, inv) in &resolve.0 {
+            if let ProviderInvocation::ByDelegate(b) = inv {
+                if !matches!(b.provider, Some(DelegateProviderField::Name(_)))
+                    && b.properties.is_some()
+                {
+                    errors.push(ValidateError::new(
+                        &fqn,
+                        format!("resolve[`{}`].properties", pat),
+                        ValidateErrorKind::PropertiesRequireExplicitProvider,
+                    ));
+                }
+            }
+
             let Some(&groups) = pattern_to_groups.get(pat.as_str()) else {
                 continue;
             };
@@ -114,6 +128,9 @@ fn collect_invocation_strings(inv: &ProviderInvocation) -> Vec<(String, String)>
             if let Some(p) = &b.delegate.properties {
                 push_props(p, &mut out);
             }
+            if let Some(p) = &b.properties {
+                push_props(p, &mut out);
+            }
             if let Some(m) = &b.meta {
                 push_meta(m, &mut out);
             }
@@ -148,7 +165,8 @@ fn walk_meta_strings(v: &serde_json::Value, path: &str, out: &mut Vec<(String, S
 mod tests {
     use super::*;
     use crate::ast::{
-        InvokeByName, List, ListEntry, Namespace, ProviderDef, ProviderName, Resolve, SimpleName,
+        Identifier, InvokeByDelegate, InvokeByName, List, ListEntry, Namespace, ProviderCall,
+        ProviderDef, ProviderName, Resolve, SimpleName,
     };
     use crate::ProviderRegistry;
     use std::collections::HashMap;
@@ -190,6 +208,24 @@ mod tests {
         })
     }
 
+    fn by_delegate_child_ref_with_props() -> ProviderInvocation {
+        let mut props = HashMap::new();
+        props.insert(
+            "ignored".into(),
+            TemplateValue::String("${out.name}".into()),
+        );
+        ProviderInvocation::ByDelegate(InvokeByDelegate {
+            delegate: ProviderCall {
+                provider: ProviderName("target".into()),
+                properties: None,
+            },
+            child_var: Some(Identifier("out".into())),
+            provider: Some(DelegateProviderField::ChildRef("${out.provider}".into())),
+            properties: Some(props),
+            meta: Some(serde_json::json!("${out.meta}")),
+        })
+    }
+
     #[test]
     fn valid_resolve_pattern() {
         let mut r = Resolve::default();
@@ -205,6 +241,16 @@ mod tests {
         assert!(errs
             .iter()
             .any(|e| matches!(e.kind, ValidateErrorKind::RegexCompileError { .. })));
+    }
+
+    #[test]
+    fn delegate_child_ref_rejects_properties() {
+        let mut r = Resolve::default();
+        r.0.insert(".*".into(), by_delegate_child_ref_with_props());
+        let errs = run(r, None);
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e.kind, ValidateErrorKind::PropertiesRequireExplicitProvider)));
     }
 
     /// 7b: 不再检测 regex 与静态 list key 字面碰撞 — 运行期顺序 (list → regex) 决定。

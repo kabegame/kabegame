@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use kabegame_core::{
     emitter::GlobalEmitter,
     plugin::{Plugin, PluginManager},
@@ -137,7 +139,7 @@ IMPORTANT — actions that are NOT supported:
 
 /// Trim large Plugin fields (docResources / iconPngBase64 / descriptionTemplate) before returning
 /// over MCP. Heavy resources are accessible via dedicated sub-paths on demand.
-fn serialize_plugin_lite(plugin: &Plugin) -> Value {
+fn serialize_plugin_lite(plugin: &Arc<Plugin>) -> Value {
     let mut v = serde_json::to_value(plugin).unwrap_or(Value::Null);
     if let Value::Object(ref mut map) = v {
         map.remove("docResources");
@@ -439,7 +441,6 @@ impl ServerHandler for KabegameMcpServer {
                 if id.is_empty() {
                     let plugins = PluginManager::global()
                         .get_all()
-                        .await
                         .map_err(|e| McpError::internal_error(e, None))?;
                     let arr: Vec<Value> = plugins.iter().map(serialize_plugin_lite).collect();
                     let json = serde_json::to_string(&arr)
@@ -456,8 +457,7 @@ impl ServerHandler for KabegameMcpServer {
                     }
                     let resources = PluginManager::global()
                         .get(id)
-                        .await
-                        .and_then(|p| p.doc_resources)
+                        .and_then(|p| p.doc_resources.clone())
                         .ok_or_else(|| {
                             McpError::resource_not_found(
                                 "no_doc_resources",
@@ -482,8 +482,7 @@ impl ServerHandler for KabegameMcpServer {
                     "/description_template" => {
                         let tpl = PluginManager::global()
                             .get(id)
-                            .await
-                            .and_then(|p| p.description_template)
+                            .and_then(|p| p.description_template.clone())
                             .ok_or_else(|| {
                                 McpError::resource_not_found(
                                     "no_description_template",
@@ -499,8 +498,7 @@ impl ServerHandler for KabegameMcpServer {
                     "/icon" => {
                         let icon = PluginManager::global()
                             .get(id)
-                            .await
-                            .and_then(|p| p.icon_png_base64)
+                            .and_then(|p| p.icon_png_base64.clone())
                             .ok_or_else(|| {
                                 McpError::resource_not_found(
                                     "no_icon",
@@ -516,8 +514,7 @@ impl ServerHandler for KabegameMcpServer {
                     "/doc" => {
                         let doc = PluginManager::global()
                             .get(id)
-                            .await
-                            .and_then(|p| p.doc)
+                            .and_then(|p| p.doc.clone())
                             .ok_or_else(|| {
                                 McpError::resource_not_found(
                                     "no_plugin_doc",
@@ -537,7 +534,7 @@ impl ServerHandler for KabegameMcpServer {
                         .with_mime_type("text/markdown")]))
                     }
                     "" | "/" => {
-                        let plugin = PluginManager::global().get(id).await.ok_or_else(|| {
+                        let plugin = PluginManager::global().get(id).ok_or_else(|| {
                             McpError::resource_not_found(
                                 "plugin_not_found",
                                 Some(json!({ "pluginId": id })),
@@ -982,11 +979,18 @@ impl ServerHandler for KabegameMcpServer {
                 Storage::global()
                     .update_image_display_name(&args.image_id, &args.display_name)
                     .map_err(|e| McpError::internal_error(e, None))?;
+                let plugin_ids = Storage::global()
+                    .find_image_by_id(&args.image_id)
+                    .ok()
+                    .flatten()
+                    .map(|image| vec![image.plugin_id])
+                    .unwrap_or_default();
                 GlobalEmitter::global().emit_images_change(
                     "rename",
                     &[args.image_id.clone()],
                     None,
                     None,
+                    Some(&plugin_ids),
                 );
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Renamed image '{}' to '{}'.",

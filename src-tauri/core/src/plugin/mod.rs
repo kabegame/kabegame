@@ -19,6 +19,11 @@ use url::Url;
 use uuid::Uuid;
 use zip::ZipArchive;
 
+use pathql_rs::{
+    ContribQuery, Json5Loader, List, Loader, Namespace, ProviderDef, Query, SimpleName, Source,
+    SqlExpr,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plugin {
@@ -88,6 +93,15 @@ pub struct Plugin {
         rename = "docResources"
     )]
     pub doc_resources: Option<HashMap<String, String>>,
+    /// 插件内 providers/ 解析出的 DSL，仅后端使用，不序列化到前端。
+    #[serde(skip)]
+    pub providers: Vec<PluginProviderDef>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginProviderDef {
+    pub source_path: String,
+    pub def: ProviderDef,
 }
 
 pub struct PluginManager {
@@ -135,7 +149,7 @@ fn store_download_progress_key(source_id: &str, plugin_id: &str) -> String {
 // 全局 PluginManager 单例
 static PLUGIN_MANAGER: OnceLock<PluginManager> = OnceLock::new();
 
-/// 已安装插件缓存类型：plugin_id → Arc<Plugin>。
+/// 已安装插件类型：plugin_id → Arc<Plugin>。
 /// 使用 Arc 避免 HashMap clone 时复制整个 Plugin（仅复制 Arc 指针）。
 type InstalledPlugins = HashMap<String, Arc<Plugin>>;
 
@@ -230,26 +244,22 @@ impl PluginManager {
         Ok(())
     }
 
-    /// 从插件目录中的 .kgpg 文件加载所有已安装的插件
-    pub async fn get_all(&self) -> Result<Vec<Plugin>, String> {
-        let guard = self.plugins.load();
-        let mut plugins: Vec<Plugin> = match guard.as_ref().as_ref() {
-            Some(m) => m.values().map(|a| (**a).clone()).collect(),
+    /// 从缓存获取所有已安装的插件
+    pub fn get_all(&self) -> Result<Vec<Arc<Plugin>>, String> {
+        let guard = self.plugins.load_full();
+        let mut plugins: Vec<Arc<Plugin>> = match guard.as_ref().as_ref() {
+            Some(m) => m.values().map(|a| (*a).clone()).collect(),
             None => Vec::new(),
         };
         plugins.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(plugins)
     }
 
-    pub async fn get(&self, id: &str) -> Option<Plugin> {
-        self.get_sync(id)
-    }
-
     /// 同步获取 Plugin（无锁读 ArcSwap 快照）。
-    pub fn get_sync(&self, id: &str) -> Option<Plugin> {
-        let guard = self.plugins.load();
+    pub fn get(&self, id: &str) -> Option<Arc<Plugin>> {
+        let guard = self.plugins.load_full();
         let plugins = guard.as_ref().as_ref()?;
-        plugins.get(id).map(|a| (**a).clone())
+        plugins.get(id).map(|a| (*a).clone())
     }
 
     /// 同步读取已安装缓存中的插件展示名（不做磁盘 IO）。
@@ -286,9 +296,9 @@ impl PluginManager {
         }
 
         // id 模式（已安装）
-        let plugin = self.get(id_or_path).await.ok_or("Plugin not found!")?;
+        let plugin = self.get(id_or_path).ok_or("Plugin not found!")?;
         let var_defs = plugin.var_defs.clone();
-        Ok((plugin, None, var_defs))
+        Ok(((*plugin).clone(), None, var_defs))
     }
 
     /// 调度器/任务场景：支持"已安装插件（plugin_id）"或"指定 `.kgpg` 文件临时运行"。
@@ -303,8 +313,8 @@ impl PluginManager {
             return Ok((plugin, Some(path)));
         }
         self.ensure_installed_cache_initialized().await?;
-        let plugin = self.get(plugin_id).await.ok_or("找不到插件")?;
-        Ok((plugin, None))
+        let plugin = self.get(plugin_id).ok_or("找不到插件")?;
+        Ok(((*plugin).clone(), None))
     }
 
     /// 删除插件（仅删除用户插件目录 data/plugins-directory 中的 .kgpg 文件）
@@ -316,7 +326,7 @@ impl PluginManager {
         }
         fs::remove_file(&path).map_err(|e| format!("Failed to delete plugin file: {}", e))?;
         // 删除后局部刷新缓存（避免前端仍看到旧列表/旧图标）
-        let _ = self.refresh_plugin(id).await;
+        self.refresh_plugin(id).await?;
 
         // 发送插件删除事件
         if let Some(emitter) = crate::emitter::GlobalEmitter::try_global() {
@@ -328,6 +338,74 @@ impl PluginManager {
 
     pub fn get_plugins_directory(&self) -> PathBuf {
         crate::app_paths::AppPaths::global().plugins_dir()
+    }
+
+    pub async fn register_installed_plugin_providers(&self) -> Result<(), String> {
+        let plugins: InstalledPlugins = self
+            .get_all()?
+            .into_iter()
+            .map(|plugin| (plugin.id.clone(), plugin))
+            .collect();
+        self.replace_all_plugin_providers(&plugins)
+    }
+
+    fn register_plugin_providers(&self, plugin: &Plugin) -> Result<(), String> {
+        let defs: Vec<ProviderDef> = plugin.providers.iter().map(|p| p.def.clone()).collect();
+        validate_plugin_provider_defs(&plugin.id, &defs)?;
+        if defs.is_empty() {
+            return Ok(());
+        }
+
+        let runtime = crate::providers::provider_runtime();
+        for def in defs {
+            runtime
+                .register_provider(def)
+                .map_err(|e| format!("register plugin `{}` provider failed: {}", plugin.id, e))?;
+        }
+        Ok(())
+    }
+
+    fn replace_all_plugin_providers(&self, plugins: &InstalledPlugins) -> Result<(), String> {
+        for (plugin_id, plugin) in plugins {
+            let defs: Vec<ProviderDef> = plugin.providers.iter().map(|p| p.def.clone()).collect();
+            validate_plugin_provider_defs(plugin_id, &defs)?;
+        }
+        let current = self.plugins.load();
+        if let Some(old_plugins) = current.as_ref().as_ref() {
+            for plugin in old_plugins.values() {
+                self.unregister_plugin_providers(plugin)?;
+            }
+        }
+        for plugin in plugins.values() {
+            self.register_plugin_providers(plugin)?;
+        }
+        Ok(())
+    }
+
+    fn replace_plugin_providers(&self, old: Option<&Plugin>, new: &Plugin) -> Result<(), String> {
+        let defs: Vec<ProviderDef> = new.providers.iter().map(|p| p.def.clone()).collect();
+        validate_plugin_provider_defs(&new.id, &defs)?;
+        if let Some(old) = old {
+            self.unregister_plugin_providers(old)?;
+        }
+        self.register_plugin_providers(new)
+    }
+
+    fn unregister_plugin_providers(&self, plugin: &Plugin) -> Result<(), String> {
+        if plugin.providers.is_empty() {
+            return Ok(());
+        }
+        let runtime = crate::providers::provider_runtime();
+        for provider in &plugin.providers {
+            let namespace = provider
+                .def
+                .namespace
+                .as_ref()
+                .map(|ns| ns.0.as_str())
+                .unwrap_or("");
+            runtime.unregister_provider(namespace, provider.def.name.0.as_str());
+        }
+        Ok(())
     }
 
     /// 从 ZIP 格式的插件文件中读取 manifest.json
@@ -464,6 +542,12 @@ impl PluginManager {
             .as_ref()
             .as_ref()
             .map_or(false, |m| m.contains_key(&plugin_id));
+        let old_plugin = current
+            .as_ref()
+            .as_ref()
+            .and_then(|m| m.get(&plugin_id))
+            .map(|p| (**p).clone());
+        self.replace_plugin_providers(old_plugin.as_ref(), &plugin)?;
         let mut plugins_map = current.as_ref().as_ref().cloned().unwrap_or_default();
         plugins_map.insert(plugin_id, Arc::new(plugin.clone()));
         self.plugins.store(Arc::new(Some(plugins_map)));
@@ -498,7 +582,7 @@ impl PluginManager {
         &self,
         plugin_id: &str,
     ) -> Result<Option<Vec<VarDefinition>>, String> {
-        if let Some(plugin) = self.get(plugin_id).await {
+        if let Some(plugin) = self.get(plugin_id) {
             return Ok(Some(plugin.var_defs.clone()));
         }
         Err(format!("Plugin {} not found", plugin_id))
@@ -727,7 +811,7 @@ impl PluginManager {
         }
 
         // 检查已安装的插件版本
-        let installed_plugins = self.get_all().await?;
+        let installed_plugins = self.get_all()?;
         let installed_versions: HashMap<String, String> = installed_plugins
             .iter()
             .map(|p| (p.id.clone(), p.version.clone()))
@@ -1642,6 +1726,7 @@ impl PluginManager {
             }
         }
 
+        self.replace_all_plugin_providers(&plugins)?;
         self.plugins.store(Arc::new(Some(plugins)));
         Ok(())
     }
@@ -1686,6 +1771,12 @@ impl PluginManager {
 
             // clone 当前快照（仅 Arc 指针），更新一条，原子替换
             let current = self.plugins.load();
+            let old_plugin = current
+                .as_ref()
+                .as_ref()
+                .and_then(|m| m.get(plugin_id))
+                .map(|p| (**p).clone());
+            self.replace_plugin_providers(old_plugin.as_ref(), &plugin)?;
             let mut plugins_map = current.as_ref().as_ref().cloned().unwrap_or_default();
             plugins_map.insert(plugin_id.to_string(), Arc::new(plugin));
             self.plugins.store(Arc::new(Some(plugins_map)));
@@ -1695,7 +1786,9 @@ impl PluginManager {
         // 未找到文件：从快照中清理
         let current = self.plugins.load();
         let mut plugins_map = current.as_ref().as_ref().cloned().unwrap_or_default();
-        plugins_map.remove(plugin_id);
+        if let Some(old_plugin) = plugins_map.remove(plugin_id) {
+            self.unregister_plugin_providers(&old_plugin)?;
+        }
         self.plugins.store(Arc::new(Some(plugins_map)));
         Ok(())
     }
@@ -1775,6 +1868,7 @@ impl PluginManager {
             rhai_script_content,
             js_script_content,
             doc_resource_entries,
+            provider_entries,
         ) = tokio::task::spawn_blocking(move || -> Result<_, String> {
             let file = fs::File::open(&zip_path)
                 .map_err(|e| format!("Failed to open plugin file: {}", e))?;
@@ -1792,6 +1886,7 @@ impl PluginManager {
             let mut js_script_content: Option<String> = None;
             let mut doc_resource_entries: Vec<(String, Vec<u8>)> = Vec::new();
             let mut doc_resource_total_size: usize = 0;
+            let mut provider_entries: Vec<(String, String)> = Vec::new();
 
             for i in 0..archive.len() {
                 let mut f = archive
@@ -1889,6 +1984,13 @@ impl PluginManager {
                             doc_resource_entries.push((rel_path, bytes));
                         }
                     }
+                } else if crate::providers::is_provider_file_path(&name) {
+                    let mut s = String::new();
+                    f.read_to_string(&mut s)
+                        .map_err(|e| format!("读取 provider `{}` 失败: {}", name, e))?;
+                    if !s.trim().is_empty() {
+                        provider_entries.push((name, s));
+                    }
                 }
             }
 
@@ -1945,6 +2047,7 @@ impl PluginManager {
                 rhai_script_content,
                 js_script_content,
                 doc_resource_entries,
+                provider_entries,
             ))
         })
         .await
@@ -1992,6 +2095,8 @@ impl PluginManager {
             Some(map)
         };
 
+        let providers = parse_plugin_provider_entries(&plugin_id, provider_entries)?;
+
         Ok(Plugin {
             id: plugin_id,
             name: manifest.name_to_value(),
@@ -2017,8 +2122,102 @@ impl PluginManager {
             rhai_script: rhai_script_content,
             js_script: js_script_content,
             doc_resources,
+            providers,
         })
     }
+}
+
+fn plugin_provider_namespace_allowed(plugin_id: &str, def: &ProviderDef) -> bool {
+    let base = format!("plugins.{}", plugin_id);
+    def.namespace
+        .as_ref()
+        .map(|ns| ns.0 == base || ns.0.starts_with(&(base + ".")))
+        .unwrap_or(false)
+}
+
+fn validate_plugin_provider_defs(plugin_id: &str, defs: &[ProviderDef]) -> Result<(), String> {
+    for def in defs {
+        if !plugin_provider_namespace_allowed(plugin_id, def) {
+            let ns = def.namespace.as_ref().map(|ns| ns.0.as_str()).unwrap_or("");
+            return Err(format!(
+                "插件 `{}` provider `{}.{}` 不能逃逸插件 namespace",
+                plugin_id, ns, def.name.0
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_plugin_provider_def(
+    plugin_id: &str,
+    mut def: ProviderDef,
+) -> Result<ProviderDef, String> {
+    let base = format!("plugins.{}", plugin_id);
+    match def.namespace.as_ref().map(|ns| ns.0.as_str()) {
+        None | Some("") => def.namespace = Some(Namespace(base)),
+        Some(ns) if ns == base || ns.starts_with(&(base.clone() + ".")) => {}
+        Some(ns) if !ns.starts_with("plugins.") => {
+            def.namespace = Some(Namespace(format!("{}.{}", base, ns)));
+        }
+        Some(ns) => {
+            return Err(format!(
+                "插件 provider namespace `{}` 不能逃逸 `{}`",
+                ns, base
+            ))
+        }
+    }
+    Ok(def)
+}
+
+fn default_plugin_entry_provider(plugin_id: &str) -> ProviderDef {
+    ProviderDef {
+        schema: None,
+        namespace: Some(Namespace(format!("plugins.{}", plugin_id))),
+        name: SimpleName("entry_provider".to_string()),
+        properties: None,
+        query: Some(Query::Contrib(ContribQuery {
+            where_: Some(SqlExpr("1 = 0".to_string())),
+            ..Default::default()
+        })),
+        list: Some(List::default()),
+        resolve: None,
+        note: None,
+    }
+}
+
+fn parse_plugin_provider_entries(
+    plugin_id: &str,
+    mut entries: Vec<(String, String)>,
+) -> Result<Vec<PluginProviderDef>, String> {
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let loader = Json5Loader;
+    let mut providers = Vec::new();
+    for (source_path, source) in entries {
+        let def = loader.load(Source::Str(&source)).map_err(|err| {
+            format!(
+                "解析插件 `{}` provider `{}` 失败: {}",
+                plugin_id, source_path, err
+            )
+        })?;
+        providers.push(PluginProviderDef {
+            source_path,
+            def: normalize_plugin_provider_def(plugin_id, def)?,
+        });
+    }
+
+    let base = format!("plugins.{}", plugin_id);
+    let has_entry = providers.iter().any(|provider| {
+        provider.def.namespace.as_ref().map(|ns| ns.0.as_str()) == Some(base.as_str())
+            && provider.def.name.0 == "entry_provider"
+    });
+    if !has_entry {
+        providers.push(PluginProviderDef {
+            source_path: "<default entry_provider>".to_string(),
+            def: default_plugin_entry_provider(plugin_id),
+        });
+    }
+
+    Ok(providers)
 }
 
 /// 从任意 `.kgpg` 文件读取 manifest.json（优先 KGPG v2 头部）。

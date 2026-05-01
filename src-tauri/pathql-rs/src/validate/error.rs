@@ -64,6 +64,8 @@ pub enum ValidateErrorKind {
         idx: usize,
         groups: usize,
     },
+    #[error("`properties` can only be used with an explicit provider name")]
+    PropertiesRequireExplicitProvider,
     #[error("provider reference `{0}` not found in registry (current_ns: `{1}`)")]
     UnresolvedProviderRef(String, String),
     #[error("delegate cycle detected: {}", .0.join(" → "))]

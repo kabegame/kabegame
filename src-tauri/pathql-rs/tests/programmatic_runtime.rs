@@ -20,6 +20,28 @@ fn no_op_executor() -> Arc<dyn SqlExecutor> {
     }))
 }
 
+fn runtime_with_registry(
+    mut registry: ProviderRegistry,
+    root: Arc<dyn Provider>,
+) -> Arc<ProviderRuntime> {
+    let root_for_factory = root.clone();
+    registry
+        .register_provider(
+            Namespace(String::new()),
+            SimpleName("__root".into()),
+            move |_| Ok(root_for_factory.clone()),
+        )
+        .unwrap();
+    let runtime =
+        ProviderRuntime::with_registry(Arc::new(registry), no_op_executor(), Default::default());
+    runtime.set_root("", "__root").unwrap();
+    runtime
+}
+
+fn runtime_with_root(root: Arc<dyn Provider>) -> Arc<ProviderRuntime> {
+    runtime_with_registry(ProviderRegistry::new(), root)
+}
+
 /// 简单 provider 实现: 给 from + 静态 children + 字面 resolve。
 /// **不持 registry / runtime 字段**——demo ctx-passing 设计。
 struct StaticProvider {
@@ -50,16 +72,15 @@ impl Provider for StaticProvider {
             })
             .collect())
     }
-    fn resolve(
-        &self,
-        name: &str,
-        _: &ProviderQuery,
-        _ctx: &ProviderContext,
-    ) -> Option<Arc<dyn Provider>> {
+    fn resolve(&self, name: &str, _: &ProviderQuery, _ctx: &ProviderContext) -> Option<ChildEntry> {
         self.children
             .iter()
             .find(|(n, _)| n == name)
-            .map(|(_, p)| p.clone())
+            .map(|(n, p)| ChildEntry {
+                name: n.clone(),
+                provider: Some(p.clone()),
+                meta: None,
+            })
     }
     fn get_note(&self, _: &ProviderQuery, _: &ProviderContext) -> Option<String> {
         self.note.clone()
@@ -94,12 +115,7 @@ fn three_level_chain_via_register_provider() {
         )
         .unwrap();
 
-    let runtime = ProviderRuntime::new(
-        Arc::new(registry),
-        root,
-        no_op_executor(),
-        Default::default(),
-    );
+    let runtime = runtime_with_registry(registry, root);
 
     let resolved = runtime.resolve("/b/c").unwrap();
     assert_eq!(resolved.composed.from.unwrap().0, "leaf_table");
@@ -136,12 +152,7 @@ fn path_not_found_returns_error() {
         )
         .unwrap();
 
-    let runtime = ProviderRuntime::new(
-        Arc::new(registry),
-        root,
-        no_op_executor(),
-        Default::default(),
-    );
+    let runtime = runtime_with_registry(registry, root);
     let err = runtime.resolve("/missing").unwrap_err();
     assert!(matches!(err, EngineError::PathNotFound(_)));
     assert_eq!(runtime.cache_size(), 0);
@@ -159,8 +170,7 @@ fn case_sensitive_paths() {
         children: vec![("Hello".into(), leaf.clone())],
         note: None,
     });
-    let registry = Arc::new(ProviderRegistry::new());
-    let runtime = ProviderRuntime::new(registry, root, no_op_executor(), Default::default());
+    let runtime = runtime_with_root(root);
 
     // /Hello 命中
     assert!(runtime.resolve("/Hello").is_ok());
@@ -189,12 +199,7 @@ fn factory_uses_properties() {
         ) -> Result<Vec<ChildEntry>, EngineError> {
             Ok(Vec::new())
         }
-        fn resolve(
-            &self,
-            _: &str,
-            _: &ProviderQuery,
-            _: &ProviderContext,
-        ) -> Option<Arc<dyn Provider>> {
+        fn resolve(&self, _: &str, _: &ProviderQuery, _: &ProviderContext) -> Option<ChildEntry> {
             None
         }
     }
@@ -214,15 +219,21 @@ fn factory_uses_properties() {
             name: &str,
             _: &ProviderQuery,
             ctx: &ProviderContext,
-        ) -> Option<Arc<dyn Provider>> {
+        ) -> Option<ChildEntry> {
             let mut props = HashMap::new();
             props.insert("album_id".into(), TemplateValue::Text(name.to_string()));
-            ctx.registry.instantiate(
-                &Namespace("test".into()),
-                &ProviderName("album_provider".into()),
-                &props,
-                ctx,
-            )
+            ctx.registry
+                .instantiate(
+                    &Namespace("test".into()),
+                    &ProviderName("album_provider".into()),
+                    &props,
+                    ctx,
+                )
+                .map(|provider| ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(provider),
+                    meta: None,
+                })
         }
     }
 
@@ -248,12 +259,7 @@ fn factory_uses_properties() {
         .unwrap();
 
     let root: Arc<dyn Provider> = Arc::new(AlbumRouter);
-    let runtime = ProviderRuntime::new(
-        Arc::new(registry),
-        root,
-        no_op_executor(),
-        Default::default(),
-    );
+    let runtime = runtime_with_registry(registry, root);
 
     let r1 = runtime.resolve("/A1").unwrap();
     let r2 = runtime.resolve("/B7").unwrap();
@@ -300,7 +306,7 @@ fn programmatic_and_dsl_coexist_in_namespace_chain() {
                         _: &str,
                         _: &ProviderQuery,
                         _: &ProviderContext,
-                    ) -> Option<Arc<dyn Provider>> {
+                    ) -> Option<ChildEntry> {
                         None
                     }
                 }

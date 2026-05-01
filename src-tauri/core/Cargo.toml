@@ -9,7 +9,7 @@ version = { workspace = true }
 kabegame-i18n = { workspace = true }
 pathql-rs = { workspace = true, features = ["json5", "validate"] }
 include_dir = { workspace = true }
-arc-swap = "1.7"
+arc-swap = { workspace = true }
 async-trait = { workspace = true }
 auto-launch = "0.5"
 base64 = { workspace = true }
