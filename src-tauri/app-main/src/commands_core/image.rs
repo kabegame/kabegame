@@ -11,15 +11,19 @@ use kabegame_core::providers::{
     decode_provider_path_segments, execute_provider_query_typed, provider_query_to_json,
     ProviderQueryTyped, ProviderRuntime,
 };
-use kabegame_core::storage::image_events::{delete_images_with_events, toggle_image_favorite_with_event};
+use kabegame_core::storage::image_events::{
+    delete_images_with_events, toggle_image_favorite_with_event,
+};
 use kabegame_core::storage::Storage;
 #[cfg(kabegame_mode = "standard")]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use serde_json::Value;
 
+#[cfg(feature = "web")]
 use crate::web::image_rewrite::rewrite_image_info;
 
 /// 对 typed provider 查询结果里的每个 Image 条目做 CDN URL 改写。
+#[cfg(feature = "web")]
 fn rewrite_provider_query(t: &mut ProviderQueryTyped) {
     if let ProviderQueryTyped::Listing { entries, .. } = t {
         for entry in entries.iter_mut() {
@@ -35,6 +39,7 @@ pub async fn browse_gallery_provider(path: String) -> Result<Value, String> {
     let full = decode_provider_path_segments(&full);
     let result = tokio::task::spawn_blocking(move || {
         let mut typed = execute_provider_query_typed(&full)?;
+        #[cfg(feature = "web")]
         rewrite_provider_query(&mut typed);
         provider_query_to_json(&typed)
     })
@@ -61,6 +66,7 @@ pub async fn query_provider(path: String) -> Result<Value, String> {
     let p = path.trim().to_string();
     let result = tokio::task::spawn_blocking(move || {
         let mut typed = execute_provider_query_typed(&p)?;
+        #[cfg(feature = "web")]
         rewrite_provider_query(&mut typed);
         provider_query_to_json(&typed)
     })
@@ -96,6 +102,7 @@ pub async fn get_gallery_time_filter_data() -> Result<Value, String> {
 
 pub async fn get_image_by_id(image_id: String) -> Result<Value, String> {
     let mut image = Storage::global().find_image_by_id(&image_id)?;
+    #[cfg(feature = "web")]
     if let Some(info) = image.as_mut() {
         rewrite_image_info(info);
     }
