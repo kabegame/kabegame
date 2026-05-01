@@ -80,6 +80,7 @@ interface Props {
   enableVirtualScroll?: boolean;
   virtualOverscan?: number;
   windowAspectRatio?: number; // 外部传入的窗口宽高比（可选）
+  scrollWholeContainer?: boolean;
 }
 
 const props = defineProps<Props>();

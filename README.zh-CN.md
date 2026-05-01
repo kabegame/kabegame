@@ -87,11 +87,11 @@
 
 | 操作系统 | Standard 模式 | Light 模式 |
 |---------|--------------|-----------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame-standard_4.0.1_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame-light_4.0.1_x64-setup.exe) |
-| macOS | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame-standard_4.0.1_aarch64.dmg) | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame-light_4.0.1_aarch64.dmg) |
-| Linux | [deb 包](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame-standard_4.0.1_amd64.deb) | [deb 包](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame-light_4.0.1_amd64.deb) |
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame-standard_4.1.0_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame-light_4.1.0_x64-setup.exe) |
+| macOS | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame-standard_4.1.0_aarch64.dmg) | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame-light_4.1.0_aarch64.dmg) |
+| Linux | [deb 包](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame-standard_4.1.0_amd64.deb) | [deb 包](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame-light_4.1.0_amd64.deb) |
 
-- **安卓预览版**：[apk](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame_4.0.1_android-preview.apk)（同一发布页）。
+- **安卓预览版**：[apk](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame_4.1.0_android-preview.apk)（同一发布页）。
 
 ## 安装方法
 
