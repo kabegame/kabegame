@@ -6,7 +6,7 @@
           <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!isCompact"
             hide-scrollbar :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
             :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
-            :on-context-command="handleGridContextCommand">
+            :on-context-command="handleGridContextCommand" scroll-whole-container>
             <template #before-grid>
               <!-- 顶部工具栏 -->
               <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"

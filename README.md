@@ -85,11 +85,11 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapersâ€
 
 | OS | Standard | Light |
 |----|----------|-------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame-standard_4.0.1_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame-light_4.0.1_x64-setup.exe) |
-| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame-standard_4.0.1_aarch64.dmg) | [dmg](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame-light_4.0.1_aarch64.dmg) |
-| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame-standard_4.0.1_amd64.deb) | [deb](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame-light_4.0.1_amd64.deb) |
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame-standard_4.1.0_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame-light_4.1.0_x64-setup.exe) |
+| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame-standard_4.1.0_aarch64.dmg) | [dmg](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame-light_4.1.0_aarch64.dmg) |
+| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame-standard_4.1.0_amd64.deb) | [deb](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame-light_4.1.0_amd64.deb) |
 
-- **Android preview** : [apk](https://github.com/kabegame/kabegame/releases/download/v4.0.1/Kabegame_4.0.1_android-preview.apk) on the same releases page.
+- **Android preview** : [apk](https://github.com/kabegame/kabegame/releases/download/v4.1.0/Kabegame_4.1.0_android-preview.apk) on the same releases page.
 
 ## Installation
 

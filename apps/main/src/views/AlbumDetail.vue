@@ -1,9 +1,74 @@
 <template>
   <div class="album-detail" v-pull-to-refresh="pullToRefreshOpts">
-    <ImageGrid ref="albumViewRef" class="detail-body" :images="images" :enable-ctrl-wheel-adjust-columns="!isCompact"
+    <div
+      v-if="showAlbumDetailTabs && activeAlbumDetailTab === 'subAlbums'"
+      ref="albumSubAlbumsScrollRef"
+      class="album-detail-scroll hide-scrollbar"
+    >
+      <AlbumDetailPageHeader :album-name="albumName" :total-images-count="totalImagesCount" :is-renaming="isRenaming"
+        v-model:editing-name="editingName" :album-drive-enabled="albumDriveEnabled"
+        :is-favorite-album="albumId === FAVORITE_ALBUM_ID"
+        :is-hidden-album="albumId === HIDDEN_ALBUM_ID"
+        :include-browse-controls="false"
+        @view-vd="openVirtualDriveAlbumFolder" @refresh="handleRefresh"
+        @set-wallpaper-rotate="handleSetAsWallpaperCarousel" @delete-album="handleDeleteAlbum" @help="openHelpDrawer"
+        @quick-settings="openQuickSettings" @back="goBack" @start-rename="handleStartRename"
+        @confirm-rename="handleRenameConfirm" @cancel-rename="handleRenameCancel"
+        @open-browse-filter="albumBrowseToolbarRef?.openFilterPicker()"
+        @open-browse-sort="albumBrowseToolbarRef?.openSortPicker()"
+        @open-browse-page-size="albumBrowseToolbarRef?.openPageSizePicker()"
+        @create-sub-album="openCreateSubAlbumDialog" />
+
+      <nav v-if="albumId" class="album-breadcrumb-wrap" aria-label="breadcrumb">
+        <el-breadcrumb>
+          <el-breadcrumb-item>
+            <router-link :to="{ name: 'Albums' }" class="album-breadcrumb-link">
+              {{ t("route.albums") }}
+            </router-link>
+          </el-breadcrumb-item>
+          <el-breadcrumb-item v-for="crumb in albumAncestorCrumbs" :key="crumb.id">
+            <router-link
+              :to="{ name: 'AlbumDetail', params: { id: crumb.id } }"
+              class="album-breadcrumb-link"
+            >
+              {{ crumb.name }}
+            </router-link>
+          </el-breadcrumb-item>
+          <el-breadcrumb-item>
+            <span class="album-breadcrumb-current">{{ albumId === HIDDEN_ALBUM_ID ? t("albums.hiddenAlbumName") : (albumName || "…") }}</span>
+          </el-breadcrumb-item>
+        </el-breadcrumb>
+      </nav>
+
+      <StyledTabs v-model="activeAlbumDetailTab" class="album-detail-tabs">
+        <el-tab-pane :label="imagesTabLabel" name="images" />
+        <el-tab-pane :label="subAlbumsTabLabel" name="subAlbums" />
+      </StyledTabs>
+
+      <div
+        class="child-albums-view"
+        :class="isCompact ? 'child-albums-view--android' : 'child-albums-view--desktop'"
+      >
+        <AlbumCard
+          v-for="child in childAlbums"
+          :key="child.id"
+          class="child-album-card"
+          :album="child"
+          :count="albumStore.albumCounts[child.id] || 0"
+          :preview-images="childPreviewImages[child.id] || []"
+          :video-preview-remount-key="0"
+          :is-loading="false"
+          @click="openChildAlbum(child)"
+          @visible="prefetchChildPreview(child)"
+          @contextmenu="openChildAlbumContextMenu($event, child)"
+        />
+      </div>
+    </div>
+
+    <ImageGrid v-else ref="albumViewRef" class="detail-body" :images="images" :enable-ctrl-wheel-adjust-columns="!isCompact"
       :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
       :loading="loading || isRefreshing" :loading-overlay="loading || isRefreshing" :actions="imageActions"
-      :on-context-command="handleImageMenuCommand" hide-scrollbar @added-to-album="handleAddedToAlbum">
+      :on-context-command="handleImageMenuCommand" hide-scrollbar scroll-whole-container @added-to-album="handleAddedToAlbum">
 
       <template #empty>
         <div class="album-empty fade-in">
@@ -27,7 +92,7 @@
           v-model:editing-name="editingName" :album-drive-enabled="albumDriveEnabled"
           :is-favorite-album="albumId === FAVORITE_ALBUM_ID"
           :is-hidden-album="albumId === HIDDEN_ALBUM_ID"
-          include-browse-controls
+          :include-browse-controls="activeAlbumDetailTab === 'images'"
           @view-vd="openVirtualDriveAlbumFolder" @refresh="handleRefresh"
           @set-wallpaper-rotate="handleSetAsWallpaperCarousel" @delete-album="handleDeleteAlbum" @help="openHelpDrawer"
           @quick-settings="openQuickSettings" @back="goBack" @start-rename="handleStartRename"
@@ -58,34 +123,10 @@
           </el-breadcrumb>
         </nav>
 
-        <div v-if="childAlbums.length > 0" class="child-albums-wrap">
-          <button type="button" class="child-albums-toggle" @click="childAlbumsExpanded = !childAlbumsExpanded">
-            <el-icon class="child-albums-toggle-icon">
-              <ArrowUp v-if="childAlbumsExpanded" />
-              <ArrowDown v-else />
-            </el-icon>
-            <span>{{ t("albums.subAlbums") }} ({{ childAlbums.length }})</span>
-          </button>
-          <div
-            v-show="childAlbumsExpanded"
-            class="child-albums-body"
-            :class="isCompact ? 'child-albums-body--android' : 'child-albums-body--desktop'"
-          >
-            <AlbumCard
-              v-for="child in childAlbums"
-              :key="child.id"
-              class="child-album-card"
-              :album="child"
-              :count="albumStore.albumCounts[child.id] || 0"
-              :preview-images="childPreviewImages[child.id] || []"
-              :video-preview-remount-key="0"
-              :is-loading="false"
-              @click="openChildAlbum(child)"
-              @visible="prefetchChildPreview(child)"
-              @contextmenu="openChildAlbumContextMenu($event, child)"
-            />
-          </div>
-        </div>
+        <StyledTabs v-if="showAlbumDetailTabs" v-model="activeAlbumDetailTab" class="album-detail-tabs">
+          <el-tab-pane :label="imagesTabLabel" name="images" />
+          <el-tab-pane :label="subAlbumsTabLabel" name="subAlbums" />
+        </StyledTabs>
 
         <AlbumDetailBrowseToolbar
           ref="albumBrowseToolbarRef"
@@ -164,7 +205,7 @@ import { invoke } from "@/api/rpc";
 import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Delete, Star, StarFilled, FolderAdd, Picture, ArrowDown, ArrowUp } from "@element-plus/icons-vue";
+import { Delete, Star, StarFilled, FolderAdd, Picture } from "@element-plus/icons-vue";
 import { createImageActions } from "@/actions/imageActions";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
 import ImageGrid from "@/components/ImageGrid.vue";
@@ -180,6 +221,7 @@ import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyStat
 import { useUiStore } from "@kabegame/core/stores/ui";
 import AlbumDetailPageHeader from "@/components/header/AlbumDetailPageHeader.vue";
 import AlbumDetailBrowseToolbar from "@/components/AlbumDetailBrowseToolbar.vue";
+import StyledTabs from "@/components/common/StyledTabs.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { IS_LIGHT_MODE, IS_WEB } from "@kabegame/core/env";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
@@ -198,6 +240,7 @@ import { useImageOperations } from "@/composables/useImageOperations";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import {
+  buildAlbumCountPath,
   isAlbumWallpaperFilterPath,
 } from "@/utils/albumPath";
 import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
@@ -268,6 +311,10 @@ const childAlbums = computed(() => {
   if (!albumId.value) return [];
   return albumStore.getChildren(albumId.value);
 });
+const showAlbumDetailTabs = computed(() => childAlbums.value.length > 0);
+const activeAlbumDetailTab = ref<"images" | "subAlbums">("images");
+const imagesTabLabel = computed(() => `${t("albums.imagesTab")} (${totalImagesCount.value})`);
+const subAlbumsTabLabel = computed(() => `${t("albums.subAlbums")} (${childAlbums.value.length})`);
 
 /** 从根到直接父级（不含当前画册），供面包屑中间段 */
 const albumAncestorCrumbs = computed((): { id: string; name: string }[] => {
@@ -286,7 +333,6 @@ const albumAncestorCrumbs = computed((): { id: string; name: string }[] => {
   up.reverse();
   return up;
 });
-const childAlbumsExpanded = ref(true);
 const childPreviewImages = ref<Record<string, ImageInfo[]>>({});
 const showCreateSubAlbumDialog = ref(false);
 const newSubAlbumName = ref("");
@@ -332,7 +378,11 @@ const onMoveAlbumDialogClosed = () => {
 
 watch(albumId, () => {
   childPreviewImages.value = {};
-  childAlbumsExpanded.value = true;
+  activeAlbumDetailTab.value = "images";
+});
+
+watch(showAlbumDetailTabs, (hasTabs) => {
+  if (!hasTabs) activeAlbumDetailTab.value = "images";
 });
 
 const prefetchChildPreview = async (child: Album) => {
@@ -361,6 +411,7 @@ const confirmCreateSubAlbum = async () => {
     await albumStore.createAlbum(name, { parentId: albumId.value, reload: true });
     showCreateSubAlbumDialog.value = false;
     newSubAlbumName.value = "";
+    activeAlbumDetailTab.value = "subAlbums";
     ElMessage.success(t("albums.albumCreated"));
   } catch (error: any) {
     const errorMessage =
@@ -479,6 +530,7 @@ const images = ref<ImageInfo[]>([]);
 let leafAllImages: ImageInfo[] = [];
 const totalImagesCount = ref<number>(0);
 const albumViewRef = ref<any>(null);
+const albumSubAlbumsScrollRef = ref<HTMLElement | null>(null);
 const albumBrowseToolbarRef = ref<{
   openFilterPicker: () => void;
   openSortPicker: () => void;
@@ -508,6 +560,20 @@ const handleAlbumWallpaperEmptyViewAll = async () => {
 
 const handleJumpToPage = async (page: number) => {
   await albumDetailRouteStore.navigate({ page });
+};
+
+const loadTotalImagesCount = async () => {
+  if (!albumId.value) return;
+  const rootPath = buildAlbumCountPath(
+    albumDetailRouteStore.albumId,
+    albumDetailRouteStore.filter,
+    albumDetailRouteStore.search,
+  );
+  const countPath = currentPath.value.startsWith("hide/") ? `hide/${rootPath}` : rootPath;
+  const res = await invoke<{ total: number | null }>("browse_gallery_provider", {
+    path: countPath,
+  });
+  totalImagesCount.value = res?.total ?? 0;
 };
 
 // 跟随路径变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
@@ -590,10 +656,13 @@ const imageActions = computed(() =>
 );
 
 watch(
-  () => albumViewRef.value,
+  [() => albumViewRef.value, activeAlbumDetailTab],
   async () => {
     await nextTick();
-    albumContainerRef.value = albumViewRef.value?.getContainerEl?.() ?? null;
+    albumContainerRef.value =
+      activeAlbumDetailTab.value === "images"
+        ? albumViewRef.value?.getContainerEl?.() ?? null
+        : null;
   },
   { immediate: true }
 );
@@ -688,7 +757,12 @@ const loadAlbum = async (opts?: { reset?: boolean; silent?: boolean }) => {
       "browse_gallery_provider",
       { path: pathToLoad }
     );
-    totalImagesCount.value = res?.total ?? 0;
+    try {
+      await loadTotalImagesCount();
+    } catch (error) {
+      console.error("获取画册总图片数失败:", error);
+      totalImagesCount.value = res?.total ?? 0;
+    }
     const list: ImageInfo[] = (res?.entries ?? [])
       .filter((e: any) => e?.kind === "image")
       .map((e: any) => e.image as ImageInfo);
@@ -1387,55 +1461,45 @@ onBeforeUnmount(() => {
   }
 }
 
-.child-albums-wrap {
-  margin-bottom: 12px;
+.album-detail-tabs {
+  flex: none;
+  margin-top: 0;
+
+  :deep(.el-tabs__header) {
+    margin-bottom: 12px;
+  }
 }
 
-.child-albums-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 8px 10px;
-  margin-bottom: 8px;
-  border: 1px solid var(--anime-border);
-  border-radius: 8px;
-  background: var(--anime-bg-secondary);
-  color: var(--anime-text-primary);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  text-align: left;
-}
-
-.child-albums-toggle-icon {
-  flex-shrink: 0;
+.child-albums-view {
+  padding-right: 2px;
 }
 
 /* 桌面：与画册列表页一致的响应式网格 */
-.child-albums-body--desktop {
+.child-albums-view--desktop {
   display: grid;
   gap: 16px;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  align-content: start;
 }
 
-.child-albums-body--desktop .child-album-card {
+.child-albums-view--desktop .child-album-card {
   min-width: 0;
 }
 
 /* 安卓：与画册列表页一致的双列方格 */
-.child-albums-body--android {
+.child-albums-view--android {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 12px;
+  align-content: start;
 }
 
-.child-albums-body--android :deep(.album-card) {
+.child-albums-view--android :deep(.album-card) {
   height: auto;
   aspect-ratio: 1;
 }
 
-.child-albums-body--android .child-album-card {
+.child-albums-view--android .child-album-card {
   min-width: 0;
 }
 
@@ -1445,6 +1509,21 @@ onBeforeUnmount(() => {
   flex-direction: column;
   padding: 16px;
   overflow: hidden;
+
+  .album-detail-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .album-detail-scroll.hide-scrollbar {
+    scrollbar-width: none;
+
+    &::-webkit-scrollbar {
+      display: none;
+    }
+  }
 
   .album-empty {
     display: flex;

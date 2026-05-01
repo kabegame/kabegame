@@ -10,8 +10,7 @@
     </div>
 
     <div v-if="mode === 'popover' || !collapsed" class="provider-tree">
-      <div v-if="loadingGroups" class="provider-tree-state">{{ t("common.loading") }}</div>
-      <div v-else-if="!visibleRows.length" class="provider-tree-state">
+      <div v-if="!visibleRows.length" class="provider-tree-state">
         {{ t("gallery.filterByPluginEmpty") }}
       </div>
       <div
@@ -134,6 +133,7 @@ const visibleRows = computed<TreeRow[]>(() => {
     depth: 0,
     count: countsByKey.value.date ?? null,
   });
+  appendRootLoading(rows, "date", 1);
   appendProviderChildren(rows, "date", 1);
   rows.push({
     kind: "root",
@@ -142,6 +142,7 @@ const visibleRows = computed<TreeRow[]>(() => {
     depth: 0,
     count: countsByKey.value["media-type"] ?? null,
   });
+  appendRootLoading(rows, "media-type", 1);
   appendProviderChildren(rows, "media-type", 1);
   rows.push({
     kind: "root",
@@ -150,6 +151,9 @@ const visibleRows = computed<TreeRow[]>(() => {
     depth: 0,
     count: countsByKey.value["plugin-root"] ?? null,
   });
+  if (expandedKeys.value.has("plugin-root") && loadingGroups.value && pluginGroups.value.length === 0) {
+    rows.push({ kind: "loading", key: "plugin-root:loading", depth: 1 });
+  }
   for (const group of pluginGroups.value) {
     const key = nodeKey(group.pluginId);
     if (expandedKeys.value.has("plugin-root")) {
@@ -168,6 +172,12 @@ const visibleRows = computed<TreeRow[]>(() => {
   }
   return rows;
 });
+
+function appendRootLoading(rows: TreeRow[], key: string, depth: number) {
+  if (!expandedKeys.value.has(key)) return;
+  if (!loadingGroups.value || loadedKeys.value.has(key)) return;
+  rows.push({ kind: "loading", key: `${key}:loading`, depth });
+}
 
 function appendProviderChildren(rows: TreeRow[], parentKey: string, depth: number) {
   if (!expandedKeys.value.has(parentKey)) return;
@@ -235,18 +245,22 @@ function providerPathSegment(path = "") {
   return normalizePath(path).split("/").filter(Boolean).map(encodeURIComponent).join("/");
 }
 
-function withContext(path: string) {
-  const prefix = normalizePath(props.contextPrefix ?? "");
+function withContextPrefix(contextPrefix: string, path: string) {
+  const prefix = normalizePath(contextPrefix);
   return [prefix, normalizePath(path)].filter(Boolean).join("/");
 }
 
-function pluginRootProviderPath(pluginId: string) {
-  return withContext(`plugin/${encodeURIComponent(pluginId)}`);
+function pluginRootProviderPath(pluginId: string, contextPrefix = props.contextPrefix ?? "") {
+  return withContextPrefix(contextPrefix, `plugin/${encodeURIComponent(pluginId)}`);
 }
 
-function pluginExtendProviderPath(pluginId: string, extendPath = "") {
+function pluginExtendProviderPath(
+  pluginId: string,
+  extendPath = "",
+  contextPrefix = props.contextPrefix ?? ""
+) {
   const childPath = providerPathSegment(extendPath);
-  return withContext(`plugin/${encodeURIComponent(pluginId)}/extend/${childPath}`);
+  return withContextPrefix(contextPrefix, `plugin/${encodeURIComponent(pluginId)}/extend/${childPath}`);
 }
 
 function hasListedChildren(key: string) {
@@ -260,7 +274,7 @@ function isProviderLeaf(entry: ProviderChildDir) {
 function canExpand(row: TreeRow) {
   if (row.kind === "loading") return false;
   if (row.isLeaf) return false;
-  if (row.key === "plugin-root") return pluginGroups.value.length > 0;
+  if (row.key === "plugin-root") return loadingGroups.value || pluginGroups.value.length > 0;
   if (row.kind === "date" || row.kind === "media-type" || row.kind === "root") {
     return !loadedKeys.value.has(row.key) || hasListedChildren(row.key);
   }
@@ -285,22 +299,25 @@ async function countProviderPath(path: string): Promise<number> {
 
 async function loadGroups() {
   const token = ++loadToken;
+  const contextPrefix = props.contextPrefix ?? "";
   loadingGroups.value = true;
   try {
     const [allCount, wallpaperCount, dateEntries, mediaEntries, pluginEntries] = await Promise.all([
-      countProviderPath(withContext("all")),
-      countProviderPath(withContext("wallpaper-order")),
-      listProviderDirs(withContext("date/")),
-      listProviderDirs(withContext("media-type/")),
-      listProviderDirs(withContext("plugin/")),
+      countProviderPath(withContextPrefix(contextPrefix, "all")),
+      countProviderPath(withContextPrefix(contextPrefix, "wallpaper-order")),
+      listProviderDirs(withContextPrefix(contextPrefix, "date/")),
+      listProviderDirs(withContextPrefix(contextPrefix, "media-type/")),
+      listProviderDirs(withContextPrefix(contextPrefix, "plugin/")),
     ]);
     const groups = await Promise.all(
       pluginEntries.map(async (entry) => ({
         pluginId: entry.name,
-        count: typeof entry.total === "number" ? entry.total : await countProviderPath(pluginRootProviderPath(entry.name)),
+        count: typeof entry.total === "number"
+          ? entry.total
+          : await countProviderPath(pluginRootProviderPath(entry.name, contextPrefix)),
       }))
     );
-    if (token !== loadToken) return;
+    if (token !== loadToken || contextPrefix !== (props.contextPrefix ?? "")) return;
     pluginGroups.value = groups.filter((group) => group.count > 0);
     countsByKey.value = {
       ...countsByKey.value,
@@ -323,7 +340,6 @@ async function loadGroups() {
       next.add("media-type");
       next.add("plugin-root");
     });
-    await Promise.all(pluginGroups.value.map((group) => loadChildren(group.pluginId, "", true)));
   } catch {
     if (token === loadToken) pluginGroups.value = [];
   } finally {
@@ -333,42 +349,40 @@ async function loadGroups() {
 
 async function loadProviderChildren(key: string) {
   if (loadedKeys.value.has(key) || loadingKeys.value.has(key)) return;
+  const contextPrefix = props.contextPrefix ?? "";
   replaceSet(loadingKeys, (next) => next.add(key));
   try {
-    const entries = await listProviderDirs(withContext(`${key}/`));
+    const entries = await listProviderDirs(withContextPrefix(contextPrefix, `${key}/`));
+    if (contextPrefix !== (props.contextPrefix ?? "")) return;
     childrenByKey.value = { ...childrenByKey.value, [key]: entries };
     replaceSet(loadedKeys, (next) => next.add(key));
-    void loadProviderChildCounts(key, entries, props.contextPrefix ?? "");
+    void loadProviderChildCounts(key, entries, contextPrefix);
   } catch {
-    childrenByKey.value = { ...childrenByKey.value, [key]: [] };
-    replaceSet(loadedKeys, (next) => next.add(key));
+    if (contextPrefix === (props.contextPrefix ?? "")) {
+      childrenByKey.value = { ...childrenByKey.value, [key]: [] };
+      replaceSet(loadedKeys, (next) => next.add(key));
+    }
   } finally {
     replaceSet(loadingKeys, (next) => next.delete(key));
   }
 }
 
-async function loadChildren(pluginId: string, extendPath = "", preloadImmediateChildren = false) {
+async function loadChildren(pluginId: string, extendPath = "") {
   const key = nodeKey(pluginId, extendPath);
   if (loadedKeys.value.has(key) || loadingKeys.value.has(key)) return;
+  const contextPrefix = props.contextPrefix ?? "";
   replaceSet(loadingKeys, (next) => next.add(key));
   try {
-    const entries = await listProviderDirs(pluginExtendProviderPath(pluginId, extendPath));
+    const entries = await listProviderDirs(pluginExtendProviderPath(pluginId, extendPath, contextPrefix));
+    if (contextPrefix !== (props.contextPrefix ?? "")) return;
     childrenByKey.value = { ...childrenByKey.value, [key]: entries };
     replaceSet(loadedKeys, (next) => next.add(key));
-    void loadChildCounts(pluginId, extendPath, entries, props.contextPrefix ?? "");
-
-    if (preloadImmediateChildren && entries.length > 0 && entries.length <= 40) {
-      await Promise.all(
-        entries
-          .filter((entry) => !isProviderLeaf(entry))
-          .map((entry) =>
-            loadChildren(pluginId, [normalizePath(extendPath), entry.name].filter(Boolean).join("/"))
-          )
-      );
-    }
+    void loadChildCounts(pluginId, extendPath, entries, contextPrefix);
   } catch {
-    childrenByKey.value = { ...childrenByKey.value, [key]: [] };
-    replaceSet(loadedKeys, (next) => next.add(key));
+    if (contextPrefix === (props.contextPrefix ?? "")) {
+      childrenByKey.value = { ...childrenByKey.value, [key]: [] };
+      replaceSet(loadedKeys, (next) => next.add(key));
+    }
   } finally {
     replaceSet(loadingKeys, (next) => next.delete(key));
   }
@@ -381,7 +395,9 @@ async function loadProviderChildCounts(parentKey: string, entries: ProviderChild
       try {
         return [
           childKey,
-          typeof entry.total === "number" ? entry.total : await countProviderPath(withContext(childKey)),
+          typeof entry.total === "number"
+            ? entry.total
+            : await countProviderPath(withContextPrefix(contextPrefix, childKey)),
         ] as const;
       } catch {
         return [childKey, null] as const;
@@ -407,7 +423,7 @@ async function loadChildCounts(
           childKey,
           typeof entry.total === "number"
             ? entry.total
-            : await countProviderPath(pluginExtendProviderPath(pluginId, childExtendPath)),
+            : await countProviderPath(pluginExtendProviderPath(pluginId, childExtendPath, contextPrefix)),
         ] as const;
       } catch {
         return [childKey, null] as const;
@@ -441,14 +457,14 @@ async function toggleRow(row: TreeRow) {
     return;
   }
   if (!loadedKeys.value.has(row.key)) {
-    await loadChildren(row.pluginId!, row.extendPath ?? "", true);
+    await loadChildren(row.pluginId!, row.extendPath ?? "");
   }
   if (expandedKeys.value.has(row.key)) {
     replaceSet(expandedKeys, (next) => next.delete(row.key));
     return;
   }
   replaceSet(expandedKeys, (next) => next.add(row.key));
-  await loadChildren(row.pluginId!, row.extendPath ?? "", true);
+  await loadChildren(row.pluginId!, row.extendPath ?? "");
 }
 
 function selectRow(row: TreeRow) {
