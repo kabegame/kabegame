@@ -7,7 +7,7 @@
     "list": {
         "Albums":        { "provider": "vd_albums_provider" },
         "By Album":      { "provider": "vd_albums_provider" },
-        "By Plugin":     { "provider": "vd_plugins_provider" },
+        "By Plugin":     { "provider": "vd_en_US_plugins_provider" },
         "By Task":       { "provider": "vd_tasks_provider" },
         "By Surf":       { "provider": "vd_surfs_provider" },
         "By Type":       { "provider": "vd_media_type_provider" },

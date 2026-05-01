@@ -22,6 +22,19 @@ pub struct DslProvider {
 }
 
 impl DslProvider {
+    fn render_provider_name(
+        &self,
+        provider: &crate::ast::ProviderName,
+        captures: &[String],
+        ctx: &ProviderContext,
+    ) -> Result<crate::ast::ProviderName, EngineError> {
+        if !provider.0.contains("${") {
+            return Ok(provider.clone());
+        }
+        let tctx = self.base_template_context(ctx, captures);
+        let rendered = render_template_to_string(&provider.0, &tctx)?;
+        Ok(crate::ast::ProviderName(rendered))
+    }
     fn provider_label(&self) -> String {
         format!(
             "{}::{}",
@@ -166,9 +179,10 @@ impl DslProvider {
         match invocation {
             ProviderInvocation::ByName(b) => {
                 let props = self.eval_properties(&b.properties, captures, ctx)?;
+                let provider_name = self.render_provider_name(&b.provider, captures, ctx)?;
                 Ok(ctx
                     .registry
-                    .instantiate(&self.current_namespace(), &b.provider, &props, ctx))
+                    .instantiate(&self.current_namespace(), &provider_name, &props, ctx))
             }
             ProviderInvocation::Empty(_) => {
                 Ok(Some(Arc::new(EmptyDslProvider) as Arc<dyn Provider>))
@@ -203,9 +217,10 @@ impl DslProvider {
         ctx: &ProviderContext,
     ) -> Result<Option<Arc<dyn Provider>>, EngineError> {
         let props = self.eval_properties(&call.properties, &[], ctx)?;
+        let provider_name = self.render_provider_name(&call.provider, &[], ctx)?;
         Ok(ctx
             .registry
-            .instantiate(&self.current_namespace(), &call.provider, &props, ctx))
+            .instantiate(&self.current_namespace(), &provider_name, &props, ctx))
     }
 
     /// 动态 SQL list 项: 渲染 SQL → executor 执行 → 每行 row 注入为 data_var, 渲染 key/meta/properties。

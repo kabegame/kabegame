@@ -4,7 +4,7 @@
     "name": "vd_ja_root_router",
     "list": {
         "アルバム":       { "provider": "vd_albums_provider" },
-        "プラグイン別":   { "provider": "vd_plugins_provider" },
+        "プラグイン別":   { "provider": "vd_ja_plugins_provider" },
         "タスク別":       { "provider": "vd_tasks_provider" },
         "サーフ別":       { "provider": "vd_surfs_provider" },
         "種類別":         { "provider": "vd_media_type_provider" },
