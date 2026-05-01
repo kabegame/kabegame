@@ -12,6 +12,7 @@ use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use kabegame_core::virtual_driver::VirtualDriveService;
 use serde_json::Value;
 
+#[cfg(feature = "web")]
 use crate::web::image_rewrite::rewrite_image_info;
 
 pub async fn get_albums() -> Result<Value, String> {
@@ -26,6 +27,7 @@ pub async fn get_album_counts() -> Result<Value, String> {
 
 pub async fn get_album_preview(album_id: String, limit: usize) -> Result<Value, String> {
     let mut images = Storage::global().get_album_preview(&album_id, limit)?;
+    #[cfg(feature = "web")]
     for info in images.iter_mut() {
         rewrite_image_info(info);
     }
@@ -56,10 +58,7 @@ pub async fn delete_album(album_id: String) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-pub async fn move_album(
-    album_id: String,
-    new_parent_id: Option<String>,
-) -> Result<Value, String> {
+pub async fn move_album(album_id: String, new_parent_id: Option<String>) -> Result<Value, String> {
     Storage::global().move_album(&album_id, new_parent_id.as_deref())?;
     #[cfg(kabegame_mode = "standard")]
     kabegame_core::virtual_driver::VirtualDriveService::global().bump_albums();
@@ -81,10 +80,7 @@ pub async fn add_images_to_album(
     serde_json::to_value(r).map_err(|e| e.to_string())
 }
 
-pub async fn add_task_images_to_album(
-    task_id: String,
-    album_id: String,
-) -> Result<Value, String> {
+pub async fn add_task_images_to_album(task_id: String, album_id: String) -> Result<Value, String> {
     let image_ids = Storage::global().get_task_image_ids(&task_id)?;
     if image_ids.is_empty() {
         return Ok(serde_json::json!({
