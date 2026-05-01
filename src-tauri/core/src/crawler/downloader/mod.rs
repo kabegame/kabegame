@@ -702,9 +702,7 @@ impl DownloadQueue {
     }
 
     pub async fn set_desired_concurrency_from_settings(&self) {
-        let desired = Settings::global()
-            .get_max_concurrent_downloads()
-            .max(1);
+        let desired = Settings::global().get_max_concurrent_downloads().max(1);
         let mut total = self.pool.total_workers.lock().await;
         if *total < desired {
             let add = desired - *total;
@@ -963,9 +961,7 @@ impl DownloadQueue {
 
             {
                 let mut pool_st = self.pool.state.lock().await;
-                let desired = Settings::global()
-                    .get_max_concurrent_downloads()
-                    .max(1);
+                let desired = Settings::global().get_max_concurrent_downloads().max(1);
                 if pool_st.in_flight < desired {
                     pool_st.queue.push_back(request);
                     pool_st.in_flight += 1;
@@ -1547,8 +1543,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                 "processing",
                                 None,
                             );
-                            let auto_deduplicate = Settings::global()
-                                .get_auto_deduplicate();
+                            let auto_deduplicate = Settings::global().get_auto_deduplicate();
                             #[cfg(not(target_os = "android"))]
                             let _ = auto_deduplicate;
 
@@ -1863,6 +1858,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                         &ids_dup,
                                                         Some(&tid_dup),
                                                         None,
+                                                        Some(&[plugin_id_clone.clone()]),
                                                     );
                                                     if let Ok(new_count) = Storage::global()
                                                         .increment_task_dedup_count(&task_id_clone)
@@ -2184,13 +2180,20 @@ async fn process_downloaded_content_image_to_storage(
         media_type,
         last_set_wallpaper_at: None,
         size: None,
+        album_order: None,
     };
     match Storage::global().add_image(image_info) {
         Ok(inserted) => {
             let image_id = inserted.id.clone();
             let ids = vec![image_id.clone()];
             let tid_add = vec![task_id.to_string()];
-            GlobalEmitter::global().emit_images_change("add", &ids, Some(&tid_add), None);
+            GlobalEmitter::global().emit_images_change(
+                "add",
+                &ids,
+                Some(&tid_add),
+                None,
+                Some(&[plugin_id.to_string()]),
+            );
             if let Some(album_id) = output_album_id {
                 if !album_id.trim().is_empty() {
                     let added =
@@ -2430,7 +2433,13 @@ pub async fn postprocess_downloaded_image(
         if let Some(task_id) = task_id {
             let ids = vec![existing.id.clone()];
             let tid = vec![task_id.to_string()];
-            GlobalEmitter::global().emit_images_change("change", &ids, Some(&tid), None);
+            GlobalEmitter::global().emit_images_change(
+                "change",
+                &ids,
+                Some(&tid),
+                None,
+                Some(&[plugin_id.to_string()]),
+            );
         } else if let Some(surf_record_id) = surf_record_id {
             emit_task_log(
                 surf_record_id,
@@ -2447,7 +2456,13 @@ pub async fn postprocess_downloaded_image(
             );
             let ids = vec![existing.id.clone()];
             let srid = vec![surf_record_id.to_string()];
-            GlobalEmitter::global().emit_images_change("change", &ids, None, Some(&srid));
+            GlobalEmitter::global().emit_images_change(
+                "change",
+                &ids,
+                None,
+                Some(&srid),
+                Some(&[plugin_id.to_string()]),
+            );
             GlobalEmitter::global().emit_download_state_with_native(
                 event_task_id,
                 url,
@@ -2681,6 +2696,7 @@ pub async fn process_downloaded_image_to_storage(
         }),
         last_set_wallpaper_at: None,
         size: None,
+        album_order: None,
     };
     let t_add = postprocess_timing_hash_ms.map(|_| Instant::now());
     match Storage::global().add_image(image_info) {
@@ -2696,6 +2712,7 @@ pub async fn process_downloaded_image_to_storage(
                 &ids,
                 task_opt.as_ref().map(|v| v.as_slice()),
                 surf_opt.as_ref().map(|v| v.as_slice()),
+                Some(&[plugin_id.to_string()]),
             );
             if let Some(album_id) = output_album_id {
                 if !album_id.trim().is_empty() {

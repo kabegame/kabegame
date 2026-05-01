@@ -196,7 +196,11 @@ pub fn compute_next_planned_at(config: &RunConfig, after: i64) -> Option<i64> {
         Some(ScheduleSpec::Daily { hour, minute }) => {
             let minute = (*minute).clamp(0, 59) as u32;
             let hour = *hour;
-            let t = if after > 0 { after } else { ts_to_secs(config.created_at) };
+            let t = if after > 0 {
+                after
+            } else {
+                ts_to_secs(config.created_at)
+            };
             compute_next_daily_fire_at(t, hour, minute)
         }
         Some(ScheduleSpec::Weekly {
@@ -206,7 +210,11 @@ pub fn compute_next_planned_at(config: &RunConfig, after: i64) -> Option<i64> {
         }) => {
             let minute = (*minute).clamp(0, 59) as u32;
             let hour = *hour;
-            let t = if after > 0 { after } else { ts_to_secs(config.created_at) };
+            let t = if after > 0 {
+                after
+            } else {
+                ts_to_secs(config.created_at)
+            };
             compute_next_weekly_fire_at(t, *weekday, hour, minute)
         }
         None => None,
@@ -246,12 +254,16 @@ fn compute_next_weekly_fire_at(now_secs: i64, weekday: i32, hour: i32, minute: u
     let safe_hour = hour.clamp(0, 23) as u32;
     let cur_dow = now_local.weekday().num_days_from_monday();
     let mut days = (target_dow as i64 - cur_dow as i64 + 7) % 7;
-    let mut date = now_local.date_naive().checked_add_signed(chrono::Duration::days(days))?;
+    let mut date = now_local
+        .date_naive()
+        .checked_add_signed(chrono::Duration::days(days))?;
     let mut naive = date.and_hms_opt(safe_hour, minute, 0)?;
     let mut dt = naive.and_local_timezone(Local).single()?;
     if dt <= now_local {
         days += 7;
-        date = now_local.date_naive().checked_add_signed(chrono::Duration::days(days))?;
+        date = now_local
+            .date_naive()
+            .checked_add_signed(chrono::Duration::days(days))?;
         naive = date.and_hms_opt(safe_hour, minute, 0)?;
         dt = naive.and_local_timezone(Local).single()?;
     }

@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 pub async fn get_plugins() -> Result<Value, String> {
     let pm = PluginManager::global();
     pm.ensure_installed_cache_initialized().await?;
-    let plugins = pm.get_all().await?;
+    let plugins = pm.get_all()?;
     let index: Vec<Value> = plugins
         .iter()
         .map(|p| json!({ "id": p.id, "version": p.version }))
@@ -41,7 +41,11 @@ pub async fn get_store_plugins(
     revalidate_if_stale_after_secs: Option<u64>,
 ) -> Result<Value, String> {
     let plugins = PluginManager::global()
-        .fetch_store_plugins(source_id.as_deref(), force_refresh, revalidate_if_stale_after_secs)
+        .fetch_store_plugins(
+            source_id.as_deref(),
+            force_refresh,
+            revalidate_if_stale_after_secs,
+        )
         .await?;
     serde_json::to_value(plugins).map_err(|e| e.to_string())
 }
@@ -137,10 +141,7 @@ pub async fn preview_import_plugin(zip_path: String) -> Result<Value, String> {
     serde_json::to_value(plugin).map_err(|e| e.to_string())
 }
 
-pub async fn preview_store_install(
-    source_id: String,
-    plugin_id: String,
-) -> Result<Value, String> {
+pub async fn preview_store_install(source_id: String, plugin_id: String) -> Result<Value, String> {
     let pm = PluginManager::global();
     let cached_path = pm.ensure_plugin_cached(&source_id, &plugin_id).await?;
     let plugin = pm.preview_import_from_kgpg(&cached_path).await?;

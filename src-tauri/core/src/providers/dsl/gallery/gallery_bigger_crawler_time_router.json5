@@ -1,0 +1,14 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_bigger_crawler_time_router",
+    "resolve": {
+        // 任意非空段被当作 unix epoch 时间戳, 转交 filter
+        "(.+)": {
+            "provider": "gallery_bigger_crawler_time_filter",
+            "properties": {
+                "time": "${capture[1]}"
+            }
+        }
+    }
+}

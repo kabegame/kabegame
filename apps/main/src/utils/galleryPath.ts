@@ -19,7 +19,7 @@ export type GalleryStoredSort = GalleryTimeSort | "";
 export type GalleryFilter =
   | { type: "all" }
   | { type: "wallpaper-order" }
-  | { type: "plugin"; pluginId: string }
+  | { type: "plugin"; pluginId: string; extendPath?: string }
   | { type: "date"; segment: string }
   | { type: "date-range"; start: string; end: string }
   | { type: "media-type"; kind: "image" | "video" };
@@ -73,8 +73,11 @@ export function serializeFilter(filter: GalleryFilter): string {
       return "all";
     case "wallpaper-order":
       return "wallpaper-order";
-    case "plugin":
-      return `plugin/${filter.pluginId}`;
+    case "plugin": {
+      const id = filter.pluginId.trim();
+      const extendPath = (filter.extendPath ?? "").trim().replace(/^\/+|\/+$/g, "");
+      return extendPath ? `plugin/${id}/extend/${extendPath}` : `plugin/${id}`;
+    }
     case "date":
       return `date/${encodeDateSegment(filter.segment)}`;
     case "date-range":
@@ -119,8 +122,16 @@ export function parseFilter(root: string): GalleryFilter {
   }
   const lr = r.toLowerCase();
   if (lr.startsWith("plugin/")) {
-    const id = r.slice("plugin/".length).trim();
-    return id ? { type: "plugin", pluginId: id } : DEFAULT_GALLERY_FILTER;
+    const parts = r.slice("plugin/".length).trim().split("/").filter(Boolean);
+    const id = parts[0]?.trim();
+    if (!id) return DEFAULT_GALLERY_FILTER;
+    if (parts[1] === "extend") {
+      const extendPath = parts.slice(2).join("/").trim();
+      return extendPath
+        ? { type: "plugin", pluginId: id, extendPath }
+        : { type: "plugin", pluginId: id };
+    }
+    return { type: "plugin", pluginId: id };
   }
   if (lr.startsWith("date-range/")) {
     const rest = r.slice("date-range/".length).trim();
@@ -260,6 +271,55 @@ function tryParseDateRangeGalleryPath(segs: string[]): ParsedGalleryPath | null 
   return { filter, sort, page, pageSize, search: "" };
 }
 
+function splitPathAndTail(segs: string[]): { path: string[]; tail: string[] } {
+  if (!segs.length || !/^[1-9][0-9]*$/.test(segs[segs.length - 1]!)) {
+    return { path: segs, tail: [] };
+  }
+  let tailStart = segs.length - 1;
+  if (tailStart > 0 && /^x[1-9][0-9]*x$/.test(segs[tailStart - 1]!)) {
+    tailStart -= 1;
+  }
+  if (tailStart > 0 && segs[tailStart - 1] === "desc") {
+    tailStart -= 1;
+  }
+  return { path: segs.slice(0, tailStart), tail: segs.slice(tailStart) };
+}
+
+function tryParsePluginGalleryPath(segs: string[]): ParsedGalleryPath | null {
+  if (segs.length < 2 || segs[0]!.toLowerCase() !== "plugin") {
+    return null;
+  }
+  const pluginId = segs[1]!.trim();
+  if (!pluginId || pluginId === "desc" || /^x\d+x$/.test(pluginId) || /^[0-9]+$/.test(pluginId)) {
+    return null;
+  }
+
+  const rest = segs.slice(2);
+  if (rest[0] === "extend") {
+    const { path, tail } = splitPathAndTail(rest.slice(1));
+    const extendPath = path.join("/");
+    const filter: GalleryFilter = extendPath
+      ? { type: "plugin", pluginId, extendPath }
+      : { type: "plugin", pluginId };
+    if (tail.length === 0) {
+      return { filter, sort: "asc", page: DEFAULT_PAGE, pageSize: DEFAULT_PAGE_SIZE, search: "" };
+    }
+    const { sort, pageSize, page } = parseTail(tail);
+    return { filter, sort, page, pageSize, search: "" };
+  }
+
+  const { sort, pageSize, page } = rest.length
+    ? parseTail(rest)
+    : { sort: "asc" as GalleryTimeSort, pageSize: DEFAULT_PAGE_SIZE, page: DEFAULT_PAGE };
+  return {
+    filter: { type: "plugin", pluginId },
+    sort,
+    page,
+    pageSize,
+    search: "",
+  };
+}
+
 export function buildGalleryPath(
   filter: GalleryFilter,
   sort: GalleryStoredSort,
@@ -275,6 +335,17 @@ export function buildGalleryPath(
   const prefix = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
   if (s === "desc") return `${prefix}${r}/desc/${ps}${p}`;
   return `${prefix}${r}/${ps}${p}`;
+}
+
+/** 构造用于 COUNT 的 provider root path：保留 filter/search，去掉排序、pageSize、page。 */
+export function buildGalleryCountPath(
+  filter: GalleryFilter,
+  search: string = ""
+): string {
+  const r = serializeFilter(filter);
+  const q = (search ?? "").trim();
+  const prefix = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
+  return `${prefix}${r}`;
 }
 
 export function parseGalleryPath(path: string): ParsedGalleryPath {
@@ -309,6 +380,11 @@ export function parseGalleryPath(path: string): ParsedGalleryPath {
   const dateRangeParsed = tryParseDateRangeGalleryPath(segs);
   if (dateRangeParsed) {
     return { ...dateRangeParsed, search };
+  }
+
+  const pluginParsed = tryParsePluginGalleryPath(segs);
+  if (pluginParsed) {
+    return { ...pluginParsed, search };
   }
 
   // General path: consume known root segments, then parse tail

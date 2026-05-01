@@ -1,0 +1,34 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_plugins_router",
+    // 7c S2: programmatic GalleryPluginsRouter 迁 DSL。
+    // list 直接扫 images 表 distinct plugin_id (与原 get_gallery_plugin_groups 等价但不带 count;
+    // 前端仅按列表项渲染, count 已不依赖此处)。
+    "list": {
+        "${out.plugin_id}": {
+            "sql": "SELECT p.plugin_id AS plugin_id, get_plugin(p.plugin_id) AS plugin_meta_json FROM (SELECT DISTINCT images.plugin_id AS plugin_id FROM images WHERE images.plugin_id IS NOT NULL AND images.plugin_id != '') p ORDER BY p.plugin_id ASC",
+            "data_var": "out",
+            "provider": "gallery_plugin_router",
+            "properties": {
+                "plugin_id": "${out.plugin_id}"
+            },
+            // get_plugin host fn 返回 {id,name,description,baseUrl} (i18n 解析后);
+            // 用 $json directive 整体 parse 注入。programmatic 原使用 wrap_typed_meta_json
+            // (Plugin) 含 {kind:"plugin", data:{<Plugin struct>}}; DSL 这里的 meta 形态更精简 —
+            // 仅暴露前端实际消费字段, 减少 wire 体积。
+            "meta": { "$json": "${out.plugin_meta_json}" }
+        }
+    },
+    // 任意非空段视作 plugin_id 直接转发; 不存在的 plugin_id 走空集 (与原 programmatic 的
+    // groups 逐个比对 → None 相比有微小语义放宽)。注意 plugin_id 通常是 "pixiv" / "wallhaven"
+    // 这种短英文 slug, 与 "x100x" / 数字段不冲突。
+    "resolve": {
+        "([a-z][a-z0-9_-]*)": {
+            "provider": "gallery_plugin_router",
+            "properties": {
+                "plugin_id": "${capture[1]}"
+            }
+        }
+    }
+}

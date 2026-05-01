@@ -1,9 +1,9 @@
 // Settings related commands
 
 use kabegame_core::settings::Settings;
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
@@ -161,13 +161,13 @@ pub fn get_window_state() -> Option<serde_json::Value> {
     serde_json::to_value(window_state).ok()
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 #[tauri::command]
 pub fn get_album_drive_enabled() -> bool {
     Settings::global().get_album_drive_enabled()
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 #[tauri::command]
 pub fn get_album_drive_mount_point() -> String {
     Settings::global().get_album_drive_mount_point()
@@ -179,7 +179,7 @@ pub fn get_favorite_album_id() -> Result<String, String> {
 }
 
 #[tauri::command]
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
     let settings = Settings::global();
 
@@ -214,7 +214,7 @@ pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 pub fn set_album_drive_mount_point(mount_point: String) -> Result<(), String> {
     Settings::global().set_album_drive_mount_point(mount_point)
 }

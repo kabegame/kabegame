@@ -63,4 +63,3 @@ fn has_nvidia_gpu() -> bool {
 
     false
 }
-

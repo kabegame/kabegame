@@ -38,8 +38,16 @@ struct Migration {
 ///
 /// v4.0 起从空列表开始；新增迁移请参见模块顶部注释。
 const MIGRATIONS: &[Migration] = &[
-    Migration { version: 8, name: "flatten_favorite_album", up: v008_flatten_favorite_album::up },
-    Migration { version: 9, name: "seed_hidden_album", up: v009_seed_hidden_album::up },
+    Migration {
+        version: 8,
+        name: "flatten_favorite_album",
+        up: v008_flatten_favorite_album::up,
+    },
+    Migration {
+        version: 9,
+        name: "seed_hidden_album",
+        up: v009_seed_hidden_album::up,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。

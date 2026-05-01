@@ -64,7 +64,7 @@
       </el-form-item>
 
       <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPickerField v-model="selectedOutputAlbumId" :album-tree="albumTree" :album-counts="albumCounts"
+        <AlbumPickerField v-model="selectedOutputAlbumId" :album-tree="outputAlbumTree" :album-counts="albumCounts"
           allow-create :placeholder="$t('plugins.defaultGalleryOnly')" :picker-title="$t('albums.outputAlbum')"
           clearable />
       </el-form-item>
@@ -254,7 +254,7 @@
       </el-form-item>
 
       <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPickerField v-model="selectedOutputAlbumId" :album-tree="albumTree" :album-counts="albumCounts"
+        <AlbumPickerField v-model="selectedOutputAlbumId" :album-tree="outputAlbumTree" :album-counts="albumCounts"
           allow-create :placeholder="$t('plugins.defaultGalleryOnly')" :picker-title="$t('albums.outputAlbum')"
           clearable />
       </el-form-item>
@@ -401,7 +401,7 @@ import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
 import { useCrawlerStore, type RunConfig, type ScheduleSpec } from "@/stores/crawler";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { usePluginStore } from "@/stores/plugins";
-import { useAlbumStore } from "@/stores/albums";
+import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -750,7 +750,8 @@ useModalBack(visible);
 
 const plugins = computed(() => pluginStore.plugins);
 const runConfigs = computed(() => crawlerStore.runConfigs);
-const { albumTree, albumCounts } = storeToRefs(albumStore);
+const { albumCounts } = storeToRefs(albumStore);
+const outputAlbumTree = computed(() => albumStore.getAlbumTreeExcluding([HIDDEN_ALBUM_ID]));
 
 const runConfigPickerOptions = computed(() =>
   runConfigs.value.map((cfg) => {

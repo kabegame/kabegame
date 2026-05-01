@@ -1,0 +1,31 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_sub_album_gate_provider",
+    "properties": {
+        "parent_album_id": { "type": "string", "default": "", "optional": false }
+    },
+    // 7c: 进入 subAlbums gate 前剥除父链注入的 ai.album_id WHERE。下游 entry 会写入新的
+    // ai.album_id, 不剥则两条 WHERE 并存 (= A AND = B 永远空集)。where_clear 7c 引擎扩展。
+    "query": {
+        "where_clear": ["ai.album_id"]
+    },
+    // list 子画册 (parent_id = ${properties.parent_album_id})
+    "list": {
+        "${out.name}": {
+            "sql": "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id = ${properties.parent_album_id} ORDER BY created_at ASC",
+            "data_var": "out",
+            "provider": "vd_album_entry_provider",
+            "properties": { "album_id": "${out.id}" },
+            "meta": {
+                "kind": "album",
+                "data": {
+                    "id": "${out.id}",
+                    "name": "${out.name}",
+                    "createdAt": "${out.created_at}",
+                    "parentId": "${out.parent_id}"
+                }
+            }
+        }
+    }
+}

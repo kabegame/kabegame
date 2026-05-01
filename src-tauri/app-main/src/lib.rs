@@ -11,60 +11,60 @@ mod web_assets;
 mod web_import;
 
 // Local (Tauri native) modules
-#[cfg(all(feature = "local", target_os = "android"))]
+#[cfg(all(not(feature = "web"), target_os = "android"))]
 mod archiver_provider;
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 mod commands;
 
 mod commands_core;
 
 #[cfg(all(feature = "local", target_os = "android"))]
 mod compress_provider;
-#[cfg(all(feature = "local", target_os = "android"))]
+#[cfg(all(not(feature = "web"), target_os = "android"))]
 mod content_io_provider;
 #[cfg(not(target_os = "android"))]
 mod http_server;
 mod ipc;
-#[cfg(all(feature = "local", target_os = "linux"))]
+#[cfg(all(not(feature = "web"), target_os = "linux"))]
 mod linux_desktop;
 #[cfg(not(target_os = "android"))]
 mod mcp_server;
 pub mod startup;
-#[cfg(all(feature = "local", not(mobile)))]
+#[cfg(all(not(feature = "web"), not(mobile)))]
 mod tray;
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 mod utils;
-#[cfg(all(feature = "local", kabegame_mode = "standard"))]
+#[cfg(feature = "standard")]
 mod vd_listener;
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 mod wallpaper;
 
 // ---- local-only imports ----
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 use commands::*;
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 use core::fmt;
-#[cfg(all(feature = "local", not(target_os = "android")))]
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
 use http_server::get_http_server_base_url;
 use startup::*;
 use std::process;
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 use std::sync::Arc;
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 use tauri::{AppHandle, Emitter, Listener, Manager};
-#[cfg(all(feature = "local", not(target_os = "android")))]
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-#[cfg(all(feature = "local", not(target_os = "android")))]
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
 use crate::ipc::handlers::dispatch_request;
-#[cfg(all(feature = "local", not(target_os = "android")))]
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
 use kabegame_core::ipc::events::{DaemonEvent, DaemonEventKind};
-#[cfg(all(feature = "local", not(target_os = "android")))]
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
 use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
-#[cfg(all(feature = "local", not(target_os = "android")))]
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
 use kabegame_core::storage::organize::OrganizeService;
 
-#[cfg(all(feature = "local", kabegame_mode = "standard"))]
+#[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 
 #[cfg(not(target_os = "android"))]
@@ -72,10 +72,10 @@ use axum::{routing::get, Router};
 use std::net::SocketAddr;
 
 fn init(
-    #[cfg(feature = "local")] app: &mut tauri::App,
+    #[cfg(not(feature = "web"))] app: &mut tauri::App,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     // 若有清理标记，必须在 init_globals 之前清理 data/cache，否则 DB 等已打开无法删除
-    #[cfg(all(not(target_os = "android"), feature = "local"))]
+    #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     let _ = cleanup_user_data_if_marked();
 
     #[cfg(feature = "web")]
@@ -84,27 +84,27 @@ fn init(
     // 启动内置 Backend
     crate::core_init::init_globals()?;
     // 在初始化全局状态后、初始化壁纸控制器前，检测并缓存 Linux 桌面环境
-    #[cfg(all(target_os = "linux", feature = "local"))]
+    #[cfg(all(target_os = "linux", not(feature = "web")))]
     {
         crate::linux_desktop::init_linux_desktop();
     }
 
     // 公共步骤
     start_event_loop(
-        #[cfg(feature = "local")]
+        #[cfg(not(feature = "web"))]
         app.app_handle().clone(),
     );
     // 命令行带 --minimized 时不创建主窗口，避免窗口闪现；托盘/IPC 显示时由 ensure_main_window 再创建
-    #[cfg(all(not(target_os = "android"), feature = "local"))]
+    #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     if !startup::is_auto_startup() {
         if let Err(e) = create_main_window(&app.app_handle()) {
             return Err(Box::new(std::io::Error::other(e)));
         }
     }
-    #[cfg(all(not(target_os = "android"), feature = "local"))]
+    #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     init_crawler_window(app.app_handle().clone());
     // 初始化壁纸控制器
-    #[cfg(feature = "local")]
+    #[cfg(not(feature = "web"))]
     init_wallpaper_controller(app);
     // 启动 TaskScheduler（启动 DownloadQueue 的 worker）
     start_task_scheduler();
@@ -116,7 +116,7 @@ fn init(
     start_event_forward_task();
 
     // 首次启动：处理打开kgpg文件启动参数（仅local）
-    #[cfg(all(not(target_os = "android"), feature = "local"))]
+    #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     if let Some(path) = startup::extract_kgpg_file_from_args() {
         let app_handle_clone = app.app_handle().clone();
         // 等待前端准备好
@@ -132,7 +132,7 @@ fn init(
 
     #[cfg(not(target_os = "android"))]
     {
-        #[cfg(feature = "local")]
+        #[cfg(not(feature = "web"))]
         tauri::async_runtime::spawn(async {
             if let Err(e) = mcp_server::start_mcp_server().await {
                 eprintln!("Failed to start MCP server: {}", e);
@@ -140,11 +140,11 @@ fn init(
         });
 
         startup::start_ipc_server(
-            #[cfg(feature = "local")]
+            #[cfg(not(feature = "web"))]
             app.app_handle().clone(),
         );
     }
-    #[cfg(all(target_os = "android", feature = "local"))]
+    #[cfg(all(target_os = "android", not(feature = "web")))]
     {
         let provider = content_io_provider::PickerContentIoProvider::new(app.app_handle().clone());
         let proxy = content_io_provider::ChannelContentIoProvider::new(provider);
@@ -232,7 +232,7 @@ pub fn run() {
 
 // ---- local (Tauri) entry point ----
 
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 先注册 pathes，在 .setup() 前完成 AppPaths 初始化，供 Settings/Storage 等使用
@@ -273,7 +273,7 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             if let Err(e) = init(app) {
-                #[cfg(feature = "local")]
+                #[cfg(not(feature = "web"))]
                 utils::show_error(
                     app.app_handle(),
                     kabegame_i18n::t!("dialog.initFatalError", detail = e.to_string()),
@@ -466,13 +466,13 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             export_video_to_we_project,
             // --- Virtual Drive ---
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "standard")]
             get_album_drive_enabled,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "standard")]
             set_album_drive_enabled,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "standard")]
             get_album_drive_mount_point,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "standard")]
             set_album_drive_mount_point,
             // --- Window ---
             hide_main_window,

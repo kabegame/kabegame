@@ -4,10 +4,10 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use axum::{
-    Json, Router,
     extract::Query,
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
+    Json, Router,
 };
 use futures_util::{Stream, StreamExt};
 use tokio::sync::broadcast;
@@ -16,7 +16,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use kabegame_core::ipc::events::DaemonEventKind;
 use kabegame_core::ipc::server::EventBroadcaster;
 
-use super::dispatch::{JsonRpcRequest, dispatch};
+use super::dispatch::{dispatch, JsonRpcRequest};
 
 #[derive(Clone)]
 pub struct SseMessage {
@@ -63,8 +63,7 @@ async fn sse_handler(
         })
     });
 
-    Sse::new(hello.chain(events))
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(25)))
+    Sse::new(hello.chain(events)).keep_alive(KeepAlive::new().interval(Duration::from_secs(25)))
 }
 
 async fn rpc_handler(
@@ -78,14 +77,17 @@ async fn rpc_handler(
 pub fn start_web_event_loop() {
     let bus = event_bus().clone();
     tokio::spawn(async move {
-        let mut rx = EventBroadcaster::global()
-            .subscribe_filtered_stream(&DaemonEventKind::ALL);
+        let mut rx = EventBroadcaster::global().subscribe_filtered_stream(&DaemonEventKind::ALL);
         let mut counter = 0u64;
         while let Some((_id, event)) = rx.recv().await {
             counter += 1;
             let event_name = event.kind().as_event_name();
             let data = serde_json::to_string(&*event).unwrap_or_else(|_| "null".into());
-            let _ = bus.send(SseMessage { event: event_name, data, id: counter });
+            let _ = bus.send(SseMessage {
+                event: event_name,
+                data,
+                id: counter,
+            });
         }
     });
 }

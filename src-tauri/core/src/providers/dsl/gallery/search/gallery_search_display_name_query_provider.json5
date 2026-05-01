@@ -1,0 +1,32 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_search_display_name_query_provider",
+    "properties": {
+        "query": { "type": "string", "default": "", "optional": false }
+    },
+    // SQL 转义 LIKE 元字符 % / _ / \\ 后包裹 % 通配; ESCAPE '\' 关掉 LIKE 默认对 \\ 的处理。
+    // ${properties.query} 在 REPLACE 内只 bind 一次, 多层 REPLACE 都作用在同一参数上。
+    "query": {
+        "where": "LOWER(images.display_name) LIKE LOWER('%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\'"
+    },
+    // list / resolve 都委派 gallery_route — 让搜索结果可以继续走 all/x100x/N 等分页或
+    // album/plugin 等过滤维度 (与 programmatic 等价: instantiate_named("gallery_route") +
+    // 转发 list/resolve)。
+    "list": {
+        "${root.name}": {
+            "child_var": "root",
+            "delegate": { "provider": "gallery_route" },
+            "provider": "${root.provider}",
+            "meta": "${root.meta}"
+        }
+    },
+    "resolve": {
+        ".*": {
+            "delegate": { "provider": "gallery_route" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

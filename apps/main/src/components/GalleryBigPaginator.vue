@@ -418,13 +418,16 @@ const handleJumpToPage = (page: number | null | undefined) => {
 
         &:hover {
             background: rgba(255, 107, 157, 0.05);
-            border: 1px solid transparent;
+            border: none;
+            box-shadow: none;
         }
 
         &.is-focus {
             background: rgba(255, 255, 255, 0.95);
-            border: 2px solid var(--anime-primary);
-            box-shadow: 0 0 0 2px rgba(255, 107, 157, 0.2);
+            border: none;
+            box-shadow:
+                inset 0 0 0 1px var(--anime-primary),
+                0 0 0 2px rgba(255, 107, 157, 0.2);
         }
     }
 

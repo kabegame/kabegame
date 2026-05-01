@@ -111,6 +111,38 @@ export function buildAlbumBrowsePath(
   return `${sp}album/${id}/${ps}${p}`;
 }
 
+/** 构造用于 COUNT 的画册 provider root path：保留 album/filter/search，去掉排序、pageSize、page。 */
+export function buildAlbumCountPath(
+  albumId: string,
+  filter: AlbumBrowseFilter,
+  search: string = ""
+): string {
+  const id = (albumId || "").trim();
+  if (!id) return "album/";
+  const q = (search ?? "").trim();
+  const sp = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
+  if (filter === "wallpaper-order") return `${sp}album/${id}/wallpaper-order`;
+  if (filter === "image-only") return `${sp}album/${id}/image-only`;
+  if (filter === "video-only") return `${sp}album/${id}/video-only`;
+  return `${sp}album/${id}`;
+}
+
+/** 从当前画册 browse path 派生 COUNT path：保留 hide/search/filter/sort，去掉 pageSize/page。 */
+export function buildAlbumCountPathFromCurrentPath(path: string): string {
+  const trimmed = (path || "").trim().replace(/\/+$/g, "");
+  if (!trimmed) return "";
+  const segs = trimmed.split("/").filter(Boolean);
+  const last = segs[segs.length - 1] ?? "";
+  if (!/^[1-9][0-9]*$/.test(last)) return trimmed;
+
+  segs.pop();
+  const pageSize = segs[segs.length - 1] ?? "";
+  if (/^x[1-9][0-9]*x$/.test(pageSize)) {
+    segs.pop();
+  }
+  return segs.join("/");
+}
+
 export interface ParsedAlbumBrowsePath {
   albumId: string;
   filter: AlbumBrowseFilter;

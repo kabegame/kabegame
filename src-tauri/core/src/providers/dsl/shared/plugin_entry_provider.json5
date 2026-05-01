@@ -1,0 +1,54 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "plugin_entry_provider",
+    "properties": {
+        "plugin_id": {
+            "type": "string",
+            "optional": false
+        }
+    },
+    "query": {
+        // Plugin extension providers often need crawl-time metadata. Resolve it
+        // once from images.metadata_id, falling back to legacy images.metadata.
+        "join": [{
+            "kind": "LEFT",
+            "table": "image_metadata",
+            "as": "plugin_im",
+            "on": "images.metadata_id = plugin_im.id",
+            "in_need": true
+        }],
+        "fields": [
+            {
+                "sql": "COALESCE(plugin_im.data, images.metadata)",
+                "as": "plugin_metadata",
+                "in_need": true
+            },
+            {
+                "sql": "COALESCE(plugin_im.data, images.metadata)",
+                "as": "metadata",
+                "in_need": true
+            }
+        ]
+    },
+    "list": {
+        "${extend.name}": {
+            "child_var": "extend",
+            "delegate": {
+                "provider": "plugins.${properties.plugin_id}.entry_provider"
+            },
+            "provider": "${extend.provider}",
+            "meta": "${extend.meta}"
+        }
+    },
+    "resolve": {
+        ".*": {
+            "delegate": {
+                "provider": "plugins.${properties.plugin_id}.entry_provider"
+            },
+            "child_var": "extend",
+            "provider": "${extend.provider}",
+            "meta": "${extend.meta}"
+        }
+    }
+}

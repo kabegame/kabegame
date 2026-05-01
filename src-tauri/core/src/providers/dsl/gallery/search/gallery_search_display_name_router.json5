@@ -1,0 +1,12 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_search_display_name_router",
+    // 7c S6: 路径段是用户输入的搜索关键词 (任意 UTF-8 字符串)。空 list, 任意非空段都接 query provider。
+    "resolve": {
+        "(.+)": {
+            "provider": "gallery_search_display_name_query_provider",
+            "properties": { "query": "${capture[1]}" }
+        }
+    }
+}

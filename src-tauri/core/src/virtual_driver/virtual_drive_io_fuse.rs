@@ -4,6 +4,7 @@
 //! - 仅提供"按 offset 读取"能力（read_at），供 FUSE handler 使用。
 //! - Linux 版本直接使用文件读取，不使用内存映射优化。
 
+use std::fmt;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -11,7 +12,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
-use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct VdFileMeta {
@@ -62,13 +62,7 @@ impl VdReadHandle {
         let file = File::open(path).map_err(|e| format!("open failed: {}", e))?;
         let file = Arc::new(Mutex::new(file));
 
-        Ok((
-            Self {
-                len,
-                file,
-            },
-            times,
-        ))
+        Ok((Self { len, file }, times))
     }
 
     /// 按 offset 读取：返回实际读取字节数（可能小于 buffer.len）。
@@ -80,17 +74,20 @@ impl VdReadHandle {
             return Ok(0);
         }
 
-        let mut file = self.file.lock()
+        let mut file = self
+            .file
+            .lock()
             .map_err(|e| format!("lock failed: {}", e))?;
-        
+
         file.seek(SeekFrom::Start(offset))
             .map_err(|e| format!("seek failed: {}", e))?;
-        
+
         let max_read = (self.len - offset) as usize;
         let read_size = buffer.len().min(max_read);
-        let n = file.read(&mut buffer[..read_size])
+        let n = file
+            .read(&mut buffer[..read_size])
             .map_err(|e| format!("read failed: {}", e))?;
-        
+
         Ok(n)
     }
 }

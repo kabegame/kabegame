@@ -20,7 +20,10 @@ pub fn vd_display_name_for_settings_sync(canonical: &str) -> String {
 ///
 /// - 顶层画册：`{挂载点}/{vd.album}/{画册名}`
 /// - 子画册：`…/{vd.album}/{祖先1}/…/{vd.subAlbums}/{父名}/{vd.subAlbums}/{自身名}`（与 VD 中「子画册」目录链一致）
-pub fn album_folder_abs_path_for_explorer(mount_point: &str, album_id: &str) -> Result<String, String> {
+pub fn album_folder_abs_path_for_explorer(
+    mount_point: &str,
+    album_id: &str,
+) -> Result<String, String> {
     let storage = Storage::global();
     let Some(target) = storage
         .get_album_by_id(album_id)

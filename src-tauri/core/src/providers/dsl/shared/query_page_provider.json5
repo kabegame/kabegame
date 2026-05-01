@@ -1,0 +1,14 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "query_page_provider",
+    "properties": {
+        "page_size": { "type": "number", "default": 1, "optional": false },
+        "page_num":  { "type": "number", "default": 1, "optional": false }
+    },
+    "query": {
+        // 终端分页: 贡献 OFFSET / LIMIT
+        "offset": "${properties.page_size} * (${properties.page_num} - 1)",
+        "limit":  "${properties.page_size}"
+    }
+}

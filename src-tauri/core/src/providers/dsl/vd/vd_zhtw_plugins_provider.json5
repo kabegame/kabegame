@@ -1,0 +1,26 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_zhtw_plugins_provider",
+    "list": {
+        "${out.display}": {
+            "sql": "SELECT q.plugin_id AS plugin_id, q.plugin_meta_json AS plugin_meta_json, CASE WHEN IFNULL(json_extract(q.plugin_meta_json, '$.name'), '') != '' THEN json_extract(q.plugin_meta_json, '$.name') || ' - ' || q.plugin_id ELSE q.plugin_id END AS display FROM (SELECT p.plugin_id AS plugin_id, get_plugin(p.plugin_id) AS plugin_meta_json FROM (SELECT DISTINCT images.plugin_id AS plugin_id FROM images WHERE images.plugin_id IS NOT NULL AND images.plugin_id != '') p) q ORDER BY q.plugin_id ASC",
+            "data_var": "out",
+            "provider": "vd_zhtw_plugin_router",
+            "properties": {
+                "plugin_id": "${out.plugin_id}"
+            },
+            "meta": {
+                "$json": "${out.plugin_meta_json}"
+            }
+        }
+    },
+    "resolve": {
+        "(?:.* - )?([a-z][a-z0-9_-]*)": {
+            "provider": "vd_zhtw_plugin_router",
+            "properties": {
+                "plugin_id": "${capture[1]}"
+            }
+        }
+    }
+}

@@ -1,0 +1,29 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_albums_provider",
+    // 7c S8: VD `按画册` 入口。对齐旧版 VdAlbumsProvider: 委派 shared AlbumsProvider
+    // 语义 (album_images join + crawled_at ASC), list 名称使用画册显示名。
+    // list 用 vd_display_name() 把 HIDDEN_ALBUM_ID 翻译成本地化名 (其它画册显示 album.name)。
+    // album meta 由 runtime 按 SQL 行字段构造，避免 host function 重入 SQLite 连接。
+    "query": {
+        "delegate": { "provider": "gallery_albums_router" }
+    },
+    "list": {
+        "${out.display}": {
+            "sql": "SELECT id, name, created_at, parent_id, CASE WHEN id = ${global.hidden_album_id} THEN vd_display_name('hidden-album') ELSE name END AS display FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
+            "data_var": "out",
+            "provider": "vd_album_entry_provider",
+            "properties": { "album_id": "${out.id}" },
+            "meta": {
+                "kind": "album",
+                "data": {
+                    "id": "${out.id}",
+                    "name": "${out.name}",
+                    "createdAt": "${out.created_at}",
+                    "parentId": "${out.parent_id}"
+                }
+            }
+        }
+    }
+}

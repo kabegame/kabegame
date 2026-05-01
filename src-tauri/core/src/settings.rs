@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use std::process::Command;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 use tokio::time::Instant;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-use std::process::Command;
 
 use crate::emitter::GlobalEmitter;
 
@@ -127,10 +127,10 @@ pub enum SettingKey {
     /// 当前壁纸图片ID
     CurrentWallpaperImageId,
     /// 画册盘启用
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     AlbumDriveEnabled,
     /// 画册盘挂载点
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     AlbumDriveMountPoint,
     /// 导入插件推荐运行配置时，是否默认启用定时（可在设置中关闭）
     ImportRecommendedScheduleEnabled,
@@ -314,9 +314,9 @@ impl Settings {
             SettingKey::WallpaperVideoPlaybackRate => SettingValue::F64(1.0),
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
             SettingKey::CurrentWallpaperImageId => SettingValue::OptionString(None),
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => SettingValue::Bool(false),
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveMountPoint => {
                 SettingValue::String(Self::default_album_drive_mount_point())
             }
@@ -351,7 +351,7 @@ impl Settings {
         }
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     fn default_album_drive_mount_point() -> String {
         #[cfg(target_os = "windows")]
         {
@@ -529,9 +529,9 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperVideoPlaybackRate,
             SettingKey::WindowState,
             SettingKey::CurrentWallpaperImageId,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled,
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveMountPoint,
             SettingKey::ImportRecommendedScheduleEnabled,
             SettingKey::Language,
@@ -628,7 +628,7 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperRotationIncludeSubalbums => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
             }
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
@@ -661,7 +661,7 @@ Write-Output "$style,$tile"
             | SettingKey::WallpaperMode => Ok(SettingValue::String(
                 json.as_str().unwrap_or("").to_string(),
             )),
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveMountPoint => Ok(SettingValue::String(
                 json.as_str().unwrap_or("").to_string(),
             )),
@@ -761,9 +761,9 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperVideoPlaybackRate => "wallpaperVideoPlaybackRate".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
             SettingKey::CurrentWallpaperImageId => "currentWallpaperImageId".to_string(),
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => "albumDriveEnabled".to_string(),
-            #[cfg(kabegame_mode = "standard")]
+            #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveMountPoint => "albumDriveMountPoint".to_string(),
             SettingKey::ImportRecommendedScheduleEnabled => {
                 "importRecommendedScheduleEnabled".to_string()
@@ -893,183 +893,229 @@ Write-Output "$style,$tile"
     // ========== Getter 方法 ==========
 
     pub fn get_auto_launch(&self) -> bool {
-        Self::cells().get(&SettingKey::AutoLaunch)
+        Self::cells()
+            .get(&SettingKey::AutoLaunch)
             .map(|c| c.load().as_bool().unwrap_or(false))
             .unwrap_or(false)
     }
 
     pub fn get_auto_open_crawler_webview(&self) -> bool {
-        Self::cells().get(&SettingKey::AutoOpenCrawlerWebview)
+        Self::cells()
+            .get(&SettingKey::AutoOpenCrawlerWebview)
             .map(|c| c.load().as_bool().unwrap_or(false))
             .unwrap_or(false)
     }
 
     pub fn get_import_recommended_schedule_enabled(&self) -> bool {
-        Self::cells().get(&SettingKey::ImportRecommendedScheduleEnabled)
+        Self::cells()
+            .get(&SettingKey::ImportRecommendedScheduleEnabled)
             .map(|c| c.load().as_bool().unwrap_or(true))
             .unwrap_or(true)
     }
 
     pub fn get_max_concurrent_downloads(&self) -> u32 {
-        Self::cells().get(&SettingKey::MaxConcurrentDownloads)
+        Self::cells()
+            .get(&SettingKey::MaxConcurrentDownloads)
             .map(|c| c.load().as_u32().unwrap_or(3))
             .unwrap_or(3)
     }
 
     pub fn get_max_concurrent_tasks(&self) -> u32 {
-        Self::cells().get(&SettingKey::MaxConcurrentTasks)
+        Self::cells()
+            .get(&SettingKey::MaxConcurrentTasks)
             .map(|c| c.load().as_u32().unwrap_or(2).clamp(1, 10))
             .unwrap_or(2)
     }
 
     pub fn get_network_retry_count(&self) -> u32 {
-        Self::cells().get(&SettingKey::NetworkRetryCount)
+        Self::cells()
+            .get(&SettingKey::NetworkRetryCount)
             .map(|c| c.load().as_u32().unwrap_or(2))
             .unwrap_or(2)
     }
 
     pub fn get_download_interval_ms(&self) -> u32 {
-        Self::cells().get(&SettingKey::DownloadIntervalMs)
+        Self::cells()
+            .get(&SettingKey::DownloadIntervalMs)
             .map(|c| c.load().as_u32().unwrap_or(500).clamp(100, 10000))
             .unwrap_or(500)
     }
 
     pub fn get_image_click_action(&self) -> String {
-        Self::cells().get(&SettingKey::ImageClickAction)
-            .map(|c| c.load().as_string().unwrap_or_else(|| "preview".to_string()))
+        Self::cells()
+            .get(&SettingKey::ImageClickAction)
+            .map(|c| {
+                c.load()
+                    .as_string()
+                    .unwrap_or_else(|| "preview".to_string())
+            })
             .unwrap_or_else(|| "preview".to_string())
     }
 
     pub fn get_gallery_image_aspect_ratio(&self) -> Option<String> {
-        Self::cells().get(&SettingKey::GalleryImageAspectRatio)
+        Self::cells()
+            .get(&SettingKey::GalleryImageAspectRatio)
             .and_then(|c| c.load().as_option_string())
             .flatten()
     }
 
     pub fn get_gallery_image_object_position(&self) -> String {
-        Self::cells().get(&SettingKey::GalleryImageObjectPosition)
+        Self::cells()
+            .get(&SettingKey::GalleryImageObjectPosition)
             .map(|c| c.load().as_string().unwrap_or_else(|| "center".to_string()))
             .unwrap_or_else(|| "center".to_string())
     }
 
     pub fn get_auto_deduplicate(&self) -> bool {
-        Self::cells().get(&SettingKey::AutoDeduplicate)
+        Self::cells()
+            .get(&SettingKey::AutoDeduplicate)
             .map(|c| c.load().as_bool().unwrap_or(false))
             .unwrap_or(false)
     }
 
     pub fn get_default_download_dir(&self) -> Option<String> {
-        Self::cells().get(&SettingKey::DefaultDownloadDir)
+        Self::cells()
+            .get(&SettingKey::DefaultDownloadDir)
             .and_then(|c| c.load().as_option_string())
             .flatten()
     }
 
     pub fn get_wallpaper_engine_dir(&self) -> Option<String> {
-        Self::cells().get(&SettingKey::WallpaperEngineDir)
+        Self::cells()
+            .get(&SettingKey::WallpaperEngineDir)
             .and_then(|c| c.load().as_option_string())
             .flatten()
     }
 
     pub fn get_wallpaper_rotation_enabled(&self) -> bool {
-        Self::cells().get(&SettingKey::WallpaperRotationEnabled)
+        Self::cells()
+            .get(&SettingKey::WallpaperRotationEnabled)
             .map(|c| c.load().as_bool().unwrap_or(false))
             .unwrap_or(false)
     }
 
     pub fn get_wallpaper_rotation_album_id(&self) -> Option<String> {
-        Self::cells().get(&SettingKey::WallpaperRotationAlbumId)
+        Self::cells()
+            .get(&SettingKey::WallpaperRotationAlbumId)
             .and_then(|c| c.load().as_option_string())
             .flatten()
     }
 
     pub fn get_wallpaper_rotation_include_subalbums(&self) -> bool {
-        Self::cells().get(&SettingKey::WallpaperRotationIncludeSubalbums)
+        Self::cells()
+            .get(&SettingKey::WallpaperRotationIncludeSubalbums)
             .map(|c| c.load().as_bool().unwrap_or(true))
             .unwrap_or(true)
     }
 
     pub fn get_wallpaper_rotation_interval_minutes(&self) -> u32 {
-        Self::cells().get(&SettingKey::WallpaperRotationIntervalMinutes)
+        Self::cells()
+            .get(&SettingKey::WallpaperRotationIntervalMinutes)
             .map(|c| c.load().as_u32().unwrap_or(60))
             .unwrap_or(60)
     }
 
     pub fn get_wallpaper_rotation_mode(&self) -> String {
-        Self::cells().get(&SettingKey::WallpaperRotationMode)
+        Self::cells()
+            .get(&SettingKey::WallpaperRotationMode)
             .map(|c| c.load().as_string().unwrap_or_else(|| "random".to_string()))
             .unwrap_or_else(|| "random".to_string())
     }
 
     pub fn get_wallpaper_rotation_style(&self) -> String {
-        Self::cells().get(&SettingKey::WallpaperStyle)
+        Self::cells()
+            .get(&SettingKey::WallpaperStyle)
             .map(|c| c.load().as_string().unwrap_or_else(|| "fill".to_string()))
             .unwrap_or_else(|| "fill".to_string())
     }
 
     pub fn get_wallpaper_rotation_transition(&self) -> String {
-        Self::cells().get(&SettingKey::WallpaperRotationTransition)
-            .map(|c| c.load().as_string().unwrap_or_else(|| Self::default_wallpaper_rotation_transition()))
+        Self::cells()
+            .get(&SettingKey::WallpaperRotationTransition)
+            .map(|c| {
+                c.load()
+                    .as_string()
+                    .unwrap_or_else(|| Self::default_wallpaper_rotation_transition())
+            })
             .unwrap_or_else(|| Self::default_wallpaper_rotation_transition())
     }
 
     pub fn get_wallpaper_style_by_mode(&self) -> HashMap<String, String> {
-        Self::cells().get(&SettingKey::WallpaperStyleByMode)
+        Self::cells()
+            .get(&SettingKey::WallpaperStyleByMode)
             .map(|c| c.load().as_hashmap_string_string().unwrap_or_default())
             .unwrap_or_default()
     }
 
     pub fn get_wallpaper_transition_by_mode(&self) -> HashMap<String, String> {
-        Self::cells().get(&SettingKey::WallpaperTransitionByMode)
+        Self::cells()
+            .get(&SettingKey::WallpaperTransitionByMode)
             .map(|c| c.load().as_hashmap_string_string().unwrap_or_default())
             .unwrap_or_default()
     }
 
     pub fn get_wallpaper_mode(&self) -> String {
-        Self::cells().get(&SettingKey::WallpaperMode)
-            .map(|c| c.load().as_string().unwrap_or_else(|| Self::default_wallpaper_mode()))
+        Self::cells()
+            .get(&SettingKey::WallpaperMode)
+            .map(|c| {
+                c.load()
+                    .as_string()
+                    .unwrap_or_else(|| Self::default_wallpaper_mode())
+            })
             .unwrap_or_else(|| Self::default_wallpaper_mode())
     }
 
     pub fn get_wallpaper_volume(&self) -> f64 {
-        Self::cells().get(&SettingKey::WallpaperVolume)
+        Self::cells()
+            .get(&SettingKey::WallpaperVolume)
             .map(|c| c.load().as_f64().unwrap_or(1.0))
             .unwrap_or(1.0)
     }
 
     pub fn get_wallpaper_video_playback_rate(&self) -> f64 {
-        Self::cells().get(&SettingKey::WallpaperVideoPlaybackRate)
+        Self::cells()
+            .get(&SettingKey::WallpaperVideoPlaybackRate)
             .map(|c| c.load().as_f64().unwrap_or(1.0).clamp(0.25, 3.0))
             .unwrap_or(1.0)
     }
 
     pub fn get_window_state(&self) -> Option<WindowState> {
-        Self::cells().get(&SettingKey::WindowState)
+        Self::cells()
+            .get(&SettingKey::WindowState)
             .and_then(|c| c.load().as_option_window_state())
             .flatten()
     }
 
     pub fn get_current_wallpaper_image_id(&self) -> Option<String> {
-        Self::cells().get(&SettingKey::CurrentWallpaperImageId)
+        Self::cells()
+            .get(&SettingKey::CurrentWallpaperImageId)
             .and_then(|c| c.load().as_option_string())
             .flatten()
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub fn get_album_drive_enabled(&self) -> bool {
-        Self::cells().get(&SettingKey::AlbumDriveEnabled)
+        Self::cells()
+            .get(&SettingKey::AlbumDriveEnabled)
             .map(|c| c.load().as_bool().unwrap_or(false))
             .unwrap_or(false)
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub fn get_album_drive_mount_point(&self) -> String {
-        Self::cells().get(&SettingKey::AlbumDriveMountPoint)
-            .map(|c| c.load().as_string().unwrap_or_else(|| Self::default_album_drive_mount_point()))
+        Self::cells()
+            .get(&SettingKey::AlbumDriveMountPoint)
+            .map(|c| {
+                c.load()
+                    .as_string()
+                    .unwrap_or_else(|| Self::default_album_drive_mount_point())
+            })
             .unwrap_or_else(|| Self::default_album_drive_mount_point())
     }
 
     pub fn get_language(&self) -> Option<String> {
-        Self::cells().get(&SettingKey::Language)
+        Self::cells()
+            .get(&SettingKey::Language)
             .and_then(|c| c.load().as_option_string())
             .flatten()
     }
@@ -1227,7 +1273,11 @@ Write-Output "$style,$tile"
     pub fn set_default_download_dir(&self, dir: Option<String>) -> Result<(), String> {
         let normalized = dir.and_then(|s| {
             let t = s.trim().to_string();
-            if t.is_empty() { None } else { Some(t) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         });
 
         // 若提供了目录，则做基本校验
@@ -1254,7 +1304,11 @@ Write-Output "$style,$tile"
     pub fn set_wallpaper_engine_dir(&self, dir: Option<String>) -> Result<(), String> {
         let normalized = dir.and_then(|s| {
             let t = s.trim().to_string();
-            if t.is_empty() { None } else { Some(t) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         });
 
         if let Some(ref path) = normalized {
@@ -1336,10 +1390,7 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    pub fn set_wallpaper_rotation_album_id(
-        &self,
-        album_id: Option<String>,
-    ) -> Result<(), String> {
+    pub fn set_wallpaper_rotation_album_id(&self, album_id: Option<String>) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::OptionString(album_id);
         if let Some(cell) = cells.get(&SettingKey::WallpaperRotationAlbumId) {
@@ -1349,10 +1400,7 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    pub fn set_wallpaper_rotation_include_subalbums(
-        &self,
-        include: bool,
-    ) -> Result<(), String> {
+    pub fn set_wallpaper_rotation_include_subalbums(&self, include: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(include);
         if let Some(cell) = cells.get(&SettingKey::WallpaperRotationIncludeSubalbums) {
@@ -1362,10 +1410,7 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    pub fn set_wallpaper_rotation_interval_minutes(
-        &self,
-        minutes: u32,
-    ) -> Result<(), String> {
+    pub fn set_wallpaper_rotation_interval_minutes(&self, minutes: u32) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::U32(minutes);
         if let Some(cell) = cells.get(&SettingKey::WallpaperRotationIntervalMinutes) {
@@ -1416,10 +1461,7 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    pub fn set_wallpaper_rotation_transition(
-        &self,
-        transition: String,
-    ) -> Result<(), String> {
+    pub fn set_wallpaper_rotation_transition(&self, transition: String) -> Result<(), String> {
         let mode = self.get_wallpaper_mode();
         let cells = Self::cells();
 
@@ -1442,7 +1484,10 @@ Write-Output "$style,$tile"
             }
         }
 
-        Self::emit_setting_change(SettingKey::WallpaperRotationTransition, &new_transition_value);
+        Self::emit_setting_change(
+            SettingKey::WallpaperRotationTransition,
+            &new_transition_value,
+        );
         if let Some(ref v) = transition_by_mode_value {
             Self::emit_setting_change(SettingKey::WallpaperTransitionByMode, v);
         }
@@ -1502,7 +1547,7 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub fn set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
@@ -1513,7 +1558,7 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    #[cfg(kabegame_mode = "standard")]
+    #[cfg(feature = "virtual-driver")]
     pub fn set_album_drive_mount_point(&self, mount_point: String) -> Result<(), String> {
         let t = mount_point.trim().to_string();
         if t.is_empty() {
@@ -1531,7 +1576,11 @@ Write-Output "$style,$tile"
     pub fn set_language(&self, language: Option<String>) -> Result<(), String> {
         let opt = language.and_then(|s| {
             let t = s.trim().to_string();
-            if t.is_empty() { None } else { Some(t) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         });
         let cells = Self::cells();
         let new_value = SettingValue::OptionString(opt);
@@ -1542,13 +1591,14 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    pub fn set_current_wallpaper_image_id(
-        &self,
-        image_id: Option<String>,
-    ) -> Result<(), String> {
+    pub fn set_current_wallpaper_image_id(&self, image_id: Option<String>) -> Result<(), String> {
         let normalized = image_id.and_then(|s| {
             let t = s.trim().to_string();
-            if t.is_empty() { None } else { Some(t) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         });
         let cells = Self::cells();
         let new_value = SettingValue::OptionString(normalized);
@@ -1615,9 +1665,15 @@ Write-Output "$style,$tile"
         }
 
         Self::emit_setting_change(SettingKey::WallpaperStyle, &new_style_value);
-        Self::emit_setting_change(SettingKey::WallpaperRotationTransition, &new_transition_value);
+        Self::emit_setting_change(
+            SettingKey::WallpaperRotationTransition,
+            &new_transition_value,
+        );
         Self::emit_setting_change(SettingKey::WallpaperStyleByMode, &new_style_by_mode_value);
-        Self::emit_setting_change(SettingKey::WallpaperTransitionByMode, &new_transition_by_mode_value);
+        Self::emit_setting_change(
+            SettingKey::WallpaperTransitionByMode,
+            &new_transition_by_mode_value,
+        );
         Ok((next_style, next_transition))
     }
 

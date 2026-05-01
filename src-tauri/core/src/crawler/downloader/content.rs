@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use url::Url;
 
-use super::{short_hash8, DownloadProgressContext, DownloadQueue, SchemeDownloader, UrlDownloaderKind};
+use super::{
+    short_hash8, DownloadProgressContext, DownloadQueue, SchemeDownloader, UrlDownloaderKind,
+};
 
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
@@ -43,7 +45,10 @@ impl SchemeDownloader for ContentSchemeDownloader {
     async fn display_name(&self, _url: &Url, final_local_path: &str) -> String {
         #[cfg(target_os = "android")]
         {
-            match get_content_io_provider().get_display_name(final_local_path).await {
+            match get_content_io_provider()
+                .get_display_name(final_local_path)
+                .await
+            {
                 Ok(name) => name,
                 Err(_) => {
                     // 回退到 URI 末段
@@ -76,13 +81,16 @@ async fn handle_content(
     #[cfg(not(target_os = "android"))]
     return Err("content:// is only supported on Android".to_string());
 
-    #[cfg(target_os = "android")] {
+    #[cfg(target_os = "android")]
+    {
         if dq.is_task_canceled(task_id).await {
             return Err("Task canceled".to_string());
         }
-    
-        let _ = get_content_io_provider().take_persistable_permission(url).await;
-    
+
+        let _ = get_content_io_provider()
+            .take_persistable_permission(url)
+            .await;
+
         crate::emitter::GlobalEmitter::global().emit_download_progress(
             task_id,
             url,
@@ -91,7 +99,7 @@ async fn handle_content(
             1,
             Some(1),
         );
-    
+
         Ok(url.to_string())
     }
 }

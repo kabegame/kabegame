@@ -207,45 +207,18 @@ impl Storage {
         Ok(DebugCloneImagesResult { inserted })
     }
 
-    /// 获取整理用的分批图片数据（单遍扫描）
-    /// SELECT CAST(id AS TEXT), hash, local_path, thumbnail_path FROM images WHERE id > ?cursor_id ORDER BY id ASC LIMIT ?limit
+    /// 获取整理用的分批图片数据（provider path: `/images/x{limit}x/{page}`）。
     pub fn get_organize_batch(
         &self,
-        cursor_id: i64,
+        page: usize,
         limit: usize,
     ) -> Result<Vec<OrganizeScanRow>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-
-        let query = "SELECT CAST(id AS TEXT), hash, local_path, thumbnail_path FROM images WHERE id > ? ORDER BY id ASC LIMIT ?";
-        let mut stmt = conn
-            .prepare(query)
-            .map_err(|e| format!("Failed to prepare organize batch query: {}", e))?;
-
-        let rows = stmt
-            .query_map(params![cursor_id, limit as i64], |row| {
-                Ok(OrganizeScanRow {
-                    id: row.get::<_, String>(0)?.parse().unwrap_or(0),
-                    hash: row.get(1)?,
-                    local_path: row.get(2)?,
-                    thumbnail_path: row.get(3)?,
-                })
-            })
-            .map_err(|e| format!("Failed to query organize batch: {}", e))?;
-
-        let mut results: Vec<OrganizeScanRow> = Vec::new();
-        for r in rows {
-            results.push(r.map_err(|e| format!("Failed to read organize row: {}", e))?);
-        }
-        Ok(results)
+        crate::providers::organize_batch_at(limit, page)
     }
 
     /// 获取总图片数（用于进度计算）
     pub fn get_images_total_count(&self) -> Result<usize, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let count: usize = conn
-            .query_row("SELECT COUNT(*) FROM images", [], |row| row.get(0))
-            .map_err(|e| format!("Failed to query images total count: {}", e))?;
-        Ok(count)
+        crate::providers::count_at("/images")
     }
 }
 
@@ -525,7 +498,7 @@ fn run_organize(
     let mut row_index: usize = 0;
     let mut removed_total: usize = 0;
     let mut regenerated_total: usize = 0;
-    let mut cursor_id: i64 = 0;
+    let mut page: usize = 1;
 
     // 当前壁纸 id：若被移除则清空（与历史行为保持一致）
     let mut current_wallpaper_id = Settings::global().get_current_wallpaper_image_id();
@@ -536,14 +509,11 @@ fn run_organize(
             return Ok(());
         }
 
-        // 分批扫描: SELECT id, hash, local_path, thumbnail_path FROM images WHERE id > ? ORDER BY id ASC LIMIT 1000
-        let batch = storage.get_organize_batch(cursor_id, 1000)?;
+        let batch = storage.get_organize_batch(page, 1000)?;
         if batch.is_empty() {
             break;
         }
-
-        // 游标推进
-        cursor_id = batch.last().unwrap().id;
+        page += 1;
 
         let mut remove_ids: Vec<String> = Vec::new();
         let mut regen_list: Vec<(i64, String)> = Vec::new();
@@ -665,13 +635,7 @@ fn run_organize(
         }
 
         // 本批（扫描 + 删除 + 缩略图）完成后发送进度
-        push_organize_progress(
-            total,
-            &options,
-            row_index,
-            removed_total,
-            regenerated_total,
-        );
+        push_organize_progress(total, &options, row_index, removed_total, regenerated_total);
 
         if finish_organize {
             break;

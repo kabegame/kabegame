@@ -1,0 +1,53 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_root_router",
+    // i18n 分发层: 主机读 locale 后拼路径 /vd/i18n-<locale>/<...> 进入对应翻译树
+    // 详见 cocs/provider-dsl/RULES.md §11.1
+    // 对齐旧版 VdRootProvider: 整个 VD 子树继承 gallery row fields + id ASC 基础排序。
+    "query": {
+        "from": "images",
+        "fields": [
+            { "sql": "CAST(images.id AS TEXT)", "as": "id" },
+            { "sql": "images.url", "as": "url", "in_need": true },
+            { "sql": "images.local_path", "as": "local_path", "in_need": true },
+            { "sql": "images.plugin_id", "as": "plugin_id", "in_need": true },
+            { "sql": "images.task_id", "as": "task_id", "in_need": true },
+            { "sql": "images.crawled_at", "as": "crawled_at", "in_need": true },
+            { "sql": "images.metadata_id", "as": "metadata_id", "in_need": true },
+            { "sql": "COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path)", "as": "thumbnail_path", "in_need": true },
+            { "sql": "images.hash", "as": "hash", "in_need": true },
+            { "sql": "CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END", "as": "is_favorite", "in_need": true },
+            { "sql": "CASE WHEN hid_ai.image_id IS NOT NULL THEN 1 ELSE 0 END", "as": "is_hidden", "in_need": true },
+            { "sql": "images.width", "as": "width", "in_need": true },
+            { "sql": "images.height", "as": "height", "in_need": true },
+            { "sql": "images.display_name", "as": "display_name", "in_need": true },
+            { "sql": "COALESCE(images.type, 'image')", "as": "media_type", "in_need": true },
+            { "sql": "images.last_set_wallpaper_at", "as": "last_set_wallpaper_at", "in_need": true },
+            { "sql": "images.size", "as": "size", "in_need": true }
+        ],
+        "order": [{ "images.id": "asc" }],
+        "join": [{
+            "kind": "LEFT",
+            "table": "album_images",
+            "as": "fav_ai",
+            "on": "images.id = fav_ai.image_id and fav_ai.album_id = ${global.favorite_album_id}",
+            "in_need": true
+        }, {
+            "kind": "LEFT",
+            "table": "album_images",
+            "as": "hid_ai",
+            "on": "images.id = hid_ai.image_id and hid_ai.album_id = ${global.hidden_album_id}",
+            "in_need": true
+        }]
+    },
+    "list": {
+        "i18n-zh_CN": { "provider": "vd_zh_CN_root_router" },
+        "i18n-zh": { "provider": "vd_zh_CN_root_router" },
+        "i18n-en_US": { "provider": "vd_en_US_root_router" },
+        "i18n-en": { "provider": "vd_en_US_root_router" },
+        "i18n-ja": { "provider": "vd_ja_root_router" },
+        "i18n-ko": { "provider": "vd_ko_root_router" },
+        "i18n-zhtw": { "provider": "vd_zhtw_root_router" }
+    }
+}

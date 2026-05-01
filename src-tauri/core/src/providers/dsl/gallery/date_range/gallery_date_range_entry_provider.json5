@@ -1,0 +1,46 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_date_range_entry_provider",
+    "properties": {
+        "start": { "type": "string", "default": "", "optional": false },
+        "end":   { "type": "string", "default": "", "optional": false }
+    },
+    // 取 [start, end] (含端点) 内 crawled_at 落在的图片, 按 crawled_at ASC 排序。
+    // crawled_at_seconds() host fn 处理 ms / s 双单位时间戳。
+    "query": {
+        "where": "date(crawled_at_seconds(images.crawled_at), 'unixepoch') BETWEEN date(${properties.start}) AND date(${properties.end})",
+        "order": [{ "images.crawled_at": "asc" }]
+    },
+    "list": {
+        "desc":   { "provider": "sort_router" },
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
+            }
+        },
+        "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
+        "x500x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
+        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
+    },
+    "resolve": {
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        },
+        "([1-9][0-9]*)": {
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        }
+    }
+}

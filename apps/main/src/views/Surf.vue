@@ -64,7 +64,7 @@
             <el-card
               v-for="record in surfStore.records"
               :key="record.id"
-              class="surf-card"
+              :class="['surf-card', appBackgroundCardClass]"
               @click="openDetailDialog(record)"
               @contextmenu.prevent="openRecordContextMenu($event, record)"
             >
@@ -222,12 +222,19 @@ import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
 import { createSurfRecordActions } from "@/actions/surfRecordActions";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 const { t } = useI18n();
 const router = useRouter();
 const surfStore = useSurfStore();
 const pluginStore = usePluginStore();
+const settingsStore = useSettingsStore();
 const { pluginName } = usePluginManifestI18n();
+const appBackgroundCardClass = computed(() =>
+  settingsStore.values.appBackgroundEnabled
+    ? "!bg-transparent [--el-card-bg-color:transparent]"
+    : ""
+);
 const surfHeaderShowIds = computed(() =>
   IS_ANDROID || IS_WEB
     ? [HeaderFeatureId.Help]

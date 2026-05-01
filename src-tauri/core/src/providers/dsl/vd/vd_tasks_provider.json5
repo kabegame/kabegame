@@ -1,0 +1,21 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_tasks_provider",
+    // 对齐旧版 VdByTaskProvider: 目录名为 `{插件展示名} - {task_id}`; 无展示名则裸 task_id。
+    // VD 只需要目录名和 task_id；完整 task meta 留给 gallery task router。
+    "list": {
+        "${out.display}": {
+            "sql": "SELECT id, CASE WHEN IFNULL(plugin_name, '') != '' THEN plugin_name || ' - ' || id ELSE id END AS display FROM (SELECT t.id AS id, json_extract(get_plugin(t.plugin_id), '$.name') AS plugin_name, COALESCE(t.start_time, 0) AS sort_time FROM tasks t WHERE EXISTS (SELECT 1 FROM images WHERE images.task_id = t.id)) q ORDER BY sort_time DESC",
+            "data_var": "out",
+            "provider": "gallery_task_provider",
+            "properties": { "task_id": "${out.id}" }
+        }
+    },
+    "resolve": {
+        "(?:.* - )?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})": {
+            "provider": "gallery_task_provider",
+            "properties": { "task_id": "${capture[1]}" }
+        }
+    }
+}

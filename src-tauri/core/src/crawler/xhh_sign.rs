@@ -35,7 +35,10 @@ pub fn normalize_path(url_or_path: &str) -> String {
         trimmed
     };
     // 去除 query string
-    let path_only = path_only.find('?').map(|i| &path_only[..i]).unwrap_or(path_only);
+    let path_only = path_only
+        .find('?')
+        .map(|i| &path_only[..i])
+        .unwrap_or(path_only);
     let segs: Vec<&str> = path_only.split('/').filter(|s| !s.is_empty()).collect();
     format!("/{}/", segs.join("/"))
 }
@@ -45,24 +48,34 @@ pub fn normalize_path(url_or_path: &str) -> String {
 fn map_string_with_charset(s: &str, charset_len: usize) -> String {
     let pool: Vec<char> = CHARSET.chars().take(charset_len).collect();
     let len = pool.len();
-    s.chars()
-        .map(|c| pool[(c as usize) % len])
-        .collect()
+    s.chars().map(|c| pool[(c as usize) % len]).collect()
 }
 
 /// Galois field helpers（与 JS Vm/qm/$m/Ym/Gm 等价）
 #[inline]
 fn gf_vm(e: u32) -> u32 {
-    if e & 128 != 0 { 255 & ((e << 1) ^ 27) } else { e << 1 }
+    if e & 128 != 0 {
+        255 & ((e << 1) ^ 27)
+    } else {
+        e << 1
+    }
 }
 #[inline]
-fn gf_qm(e: u32) -> u32 { gf_vm(e) ^ e }
+fn gf_qm(e: u32) -> u32 {
+    gf_vm(e) ^ e
+}
 #[inline]
-fn gf_sm(e: u32) -> u32 { gf_qm(gf_vm(e)) }
+fn gf_sm(e: u32) -> u32 {
+    gf_qm(gf_vm(e))
+}
 #[inline]
-fn gf_ym(e: u32) -> u32 { gf_sm(gf_qm(gf_vm(e))) }
+fn gf_ym(e: u32) -> u32 {
+    gf_sm(gf_qm(gf_vm(e)))
+}
 #[inline]
-fn gf_gm(e: u32) -> u32 { gf_ym(e) ^ gf_sm(e) ^ gf_qm(e) }
+fn gf_gm(e: u32) -> u32 {
+    gf_ym(e) ^ gf_sm(e) ^ gf_qm(e)
+}
 
 /// 对 last6Codes 的前 4 字节应用 Galois field 混合（in-place）
 fn mix_four_bytes_in_place(e: &mut [u32]) {
@@ -113,7 +126,14 @@ pub fn xhh_hkey(path: &str, t: i64, nonce: &str) -> String {
     let md5hex = format!("{:x}", md5::compute(interleaved.as_bytes()));
 
     // Last 6 chars → ASCII codes
-    let last6_chars: Vec<char> = md5hex.chars().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect();
+    let last6_chars: Vec<char> = md5hex
+        .chars()
+        .rev()
+        .take(6)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     let mut last6_codes: Vec<u32> = last6_chars.iter().map(|&c| c as u32).collect();
 
     // Mix first 4 bytes in place
@@ -136,14 +156,21 @@ mod tests {
     #[test]
     fn test_normalize_path() {
         assert_eq!(normalize_path("/bbs/app/feeds"), "/bbs/app/feeds/");
-        assert_eq!(normalize_path("https://api.xiaoheihe.cn/bbs/app/feeds?foo=bar"), "/bbs/app/feeds/");
+        assert_eq!(
+            normalize_path("https://api.xiaoheihe.cn/bbs/app/feeds?foo=bar"),
+            "/bbs/app/feeds/"
+        );
         assert_eq!(normalize_path("/bbs/app/link/tree"), "/bbs/app/link/tree/");
     }
 
     #[test]
     fn test_hkey_length() {
         // hkey should be 7 chars: 5 prefix + 2 digit
-        let h = xhh_hkey("/bbs/app/api/general/search/v1", 1700000000, "ABCDEF1234567890ABCDEF1234567890");
+        let h = xhh_hkey(
+            "/bbs/app/api/general/search/v1",
+            1700000000,
+            "ABCDEF1234567890ABCDEF1234567890",
+        );
         assert_eq!(h.len(), 7, "hkey length should be 7, got: {}", h);
     }
 
@@ -151,6 +178,11 @@ mod tests {
     fn test_nonce_format() {
         let n = xhh_nonce(1700000000);
         assert_eq!(n.len(), 32);
-        assert!(n.chars().all(|c| c.is_ascii_hexdigit() && !c.is_lowercase()), "nonce should be uppercase hex: {}", n);
+        assert!(
+            n.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_lowercase()),
+            "nonce should be uppercase hex: {}",
+            n
+        );
     }
 }

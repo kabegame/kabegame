@@ -1,0 +1,29 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_all_provider",
+    // 旧版 VdAllProvider: 固定 DEFAULT_PAGE_SIZE=100, 直接列页号; 不暴露 desc/xNNNx。
+    "list": {
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
+            }
+        }
+    },
+    "resolve": {
+        "([1-9][0-9]*)": {
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        }
+    }
+}

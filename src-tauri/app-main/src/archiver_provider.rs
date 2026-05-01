@@ -4,9 +4,7 @@
 #![cfg(target_os = "android")]
 
 use async_trait::async_trait;
-use kabegame_core::crawler::archiver::{
-    ArchiveExtractProvider,
-};
+use kabegame_core::crawler::archiver::ArchiveExtractProvider;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -30,8 +28,14 @@ impl<R: Runtime> ArchiverContentProvider<R> {
 
 #[derive(Debug)]
 enum Request {
-    ExtractZip { archive_uri: String, output_dir: String },
-    ExtractRar { archive_uri: String, output_dir: String },
+    ExtractZip {
+        archive_uri: String,
+        output_dir: String,
+    },
+    ExtractRar {
+        archive_uri: String,
+        output_dir: String,
+    },
 }
 
 #[derive(Debug)]
@@ -54,33 +58,35 @@ fn run_worker_loop<R: Runtime + 'static>(
     };
     while let Ok((req, resp_tx)) = rx.recv() {
         let response = match req {
-            Request::ExtractZip { archive_uri, output_dir } => {
+            Request::ExtractZip {
+                archive_uri,
+                output_dir,
+            } => {
                 let p = &provider;
-                Response::ExtractZip(
-                    rt.block_on(async move {
-                        let resp = p
-                            .app_handle
-                            .archiver()
-                            .extract_zip(archive_uri, output_dir)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        Ok(PathBuf::from(resp.dir))
-                    }),
-                )
+                Response::ExtractZip(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .archiver()
+                        .extract_zip(archive_uri, output_dir)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(PathBuf::from(resp.dir))
+                }))
             }
-            Request::ExtractRar { archive_uri, output_dir } => {
+            Request::ExtractRar {
+                archive_uri,
+                output_dir,
+            } => {
                 let p = &provider;
-                Response::ExtractRar(
-                    rt.block_on(async move {
-                        let resp = p
-                            .app_handle
-                            .archiver()
-                            .extract_rar(archive_uri, output_dir)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        Ok(PathBuf::from(resp.dir))
-                    }),
-                )
+                Response::ExtractRar(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .archiver()
+                        .extract_rar(archive_uri, output_dir)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(PathBuf::from(resp.dir))
+                }))
             }
         };
         let _ = resp_tx.send(response);
@@ -93,9 +99,7 @@ pub struct ChannelArchiveExtractProvider {
 }
 
 impl ChannelArchiveExtractProvider {
-    pub fn new<R: Runtime + 'static>(
-        provider: ArchiverContentProvider<R>,
-    ) -> Self {
+    pub fn new<R: Runtime + 'static>(provider: ArchiverContentProvider<R>) -> Self {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || run_worker_loop(provider, rx));
         Self { tx }
@@ -107,7 +111,13 @@ impl ArchiveExtractProvider for ChannelArchiveExtractProvider {
     async fn extract_zip(&self, archive_uri: &str, output_dir: &str) -> Result<PathBuf, String> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.tx
-            .send((Request::ExtractZip { archive_uri: archive_uri.to_string(), output_dir: output_dir.to_string() }, resp_tx))
+            .send((
+                Request::ExtractZip {
+                    archive_uri: archive_uri.to_string(),
+                    output_dir: output_dir.to_string(),
+                },
+                resp_tx,
+            ))
             .map_err(|e| e.to_string())?;
         match resp_rx.await.map_err(|e| e.to_string())? {
             Response::ExtractZip(r) => r,
@@ -118,7 +128,13 @@ impl ArchiveExtractProvider for ChannelArchiveExtractProvider {
     async fn extract_rar(&self, archive_uri: &str, output_dir: &str) -> Result<PathBuf, String> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.tx
-            .send((Request::ExtractRar { archive_uri: archive_uri.to_string(), output_dir: output_dir.to_string() }, resp_tx))
+            .send((
+                Request::ExtractRar {
+                    archive_uri: archive_uri.to_string(),
+                    output_dir: output_dir.to_string(),
+                },
+                resp_tx,
+            ))
             .map_err(|e| e.to_string())?;
         match resp_rx.await.map_err(|e| e.to_string())? {
             Response::ExtractRar(r) => r,

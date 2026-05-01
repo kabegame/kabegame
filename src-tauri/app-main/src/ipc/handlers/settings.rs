@@ -5,41 +5,33 @@ use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::ipc::ipc::{IpcRequest, IpcResponse};
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
-#[cfg(kabegame_mode = "standard")]
-use kabegame_core::virtual_driver::{driver_service::VirtualDriveServiceTrait, VirtualDriveService};
+#[cfg(feature = "standard")]
+use kabegame_core::virtual_driver::{
+    driver_service::VirtualDriveServiceTrait, VirtualDriveService,
+};
 
 /// 处理所有 Settings 相关的 IPC 请求
 pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
     match req {
         // 扈・ｲ貞ｺｦ Getter
         IpcRequest::SettingsGetAutoLaunch => Some(get_auto_launch()),
-        IpcRequest::SettingsGetMaxConcurrentDownloads => {
-            Some(get_max_concurrent_downloads())
-        }
+        IpcRequest::SettingsGetMaxConcurrentDownloads => Some(get_max_concurrent_downloads()),
         IpcRequest::SettingsGetMaxConcurrentTasks => Some(get_max_concurrent_tasks()),
         IpcRequest::SettingsGetNetworkRetryCount => Some(get_network_retry_count()),
         IpcRequest::SettingsGetImageClickAction => Some(get_image_click_action()),
-        IpcRequest::SettingsGetGalleryImageAspectRatio => {
-            Some(get_gallery_image_aspect_ratio())
-        }
+        IpcRequest::SettingsGetGalleryImageAspectRatio => Some(get_gallery_image_aspect_ratio()),
         IpcRequest::SettingsGetAutoDeduplicate => Some(get_auto_deduplicate()),
         IpcRequest::SettingsGetDefaultDownloadDir => Some(get_default_download_dir()),
         IpcRequest::SettingsGetWallpaperEngineDir => Some(get_wallpaper_engine_dir()),
-        IpcRequest::SettingsGetWallpaperRotationEnabled => {
-            Some(get_wallpaper_rotation_enabled())
-        }
-        IpcRequest::SettingsGetWallpaperRotationAlbumId => {
-            Some(get_wallpaper_rotation_album_id())
-        }
+        IpcRequest::SettingsGetWallpaperRotationEnabled => Some(get_wallpaper_rotation_enabled()),
+        IpcRequest::SettingsGetWallpaperRotationAlbumId => Some(get_wallpaper_rotation_album_id()),
         IpcRequest::SettingsGetWallpaperRotationIncludeSubalbums => {
             Some(get_wallpaper_rotation_include_subalbums())
         }
         IpcRequest::SettingsGetWallpaperRotationIntervalMinutes => {
             Some(get_wallpaper_rotation_interval_minutes())
         }
-        IpcRequest::SettingsGetWallpaperRotationMode => {
-            Some(get_wallpaper_rotation_mode())
-        }
+        IpcRequest::SettingsGetWallpaperRotationMode => Some(get_wallpaper_rotation_mode()),
         IpcRequest::SettingsGetWallpaperStyle => Some(get_wallpaper_rotation_style()),
         IpcRequest::SettingsGetWallpaperRotationTransition => {
             Some(get_wallpaper_rotation_transition())
@@ -54,13 +46,11 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
             Some(get_wallpaper_video_playback_rate())
         }
         IpcRequest::SettingsGetWindowState => Some(get_window_state()),
-        IpcRequest::SettingsGetCurrentWallpaperImageId => {
-            Some(get_current_wallpaper_image_id())
-        }
+        IpcRequest::SettingsGetCurrentWallpaperImageId => Some(get_current_wallpaper_image_id()),
         IpcRequest::SettingsGetDefaultImagesDir => Some(get_default_images_dir()),
-        #[cfg(kabegame_mode = "standard")]
+        #[cfg(feature = "standard")]
         IpcRequest::SettingsGetAlbumDriveEnabled => Some(get_album_drive_enabled()),
-        #[cfg(kabegame_mode = "standard")]
+        #[cfg(feature = "standard")]
         IpcRequest::SettingsGetAlbumDriveMountPoint => Some(get_album_drive_mount_point()),
 
         IpcRequest::SettingsSetGalleryImageAspectRatio { aspect_ratio } => {
@@ -84,17 +74,13 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::SettingsSetWallpaperRotationTransition { transition } => {
             Some(set_wallpaper_rotation_transition(transition.clone()))
         }
-        IpcRequest::SettingsSetWallpaperStyle { style } => {
-            Some(set_wallpaper_style(style.clone()))
-        }
-        IpcRequest::SettingsSetWallpaperMode { mode } => {
-            Some(set_wallpaper_mode(mode.clone()))
-        }
-        #[cfg(kabegame_mode = "standard")]
+        IpcRequest::SettingsSetWallpaperStyle { style } => Some(set_wallpaper_style(style.clone())),
+        IpcRequest::SettingsSetWallpaperMode { mode } => Some(set_wallpaper_mode(mode.clone())),
+        #[cfg(feature = "standard")]
         IpcRequest::SettingsSetAlbumDriveEnabled { enabled } => {
             Some(set_album_drive_enabled(*enabled).await)
         }
-        #[cfg(kabegame_mode = "standard")]
+        #[cfg(feature = "standard")]
         IpcRequest::SettingsSetAlbumDriveMountPoint { mount_point } => {
             Some(set_album_drive_mount_point(mount_point.clone()))
         }
@@ -106,15 +92,11 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::SettingsSetMaxConcurrentTasks { count } => {
             Some(set_max_concurrent_tasks(*count))
         }
-        IpcRequest::SettingsSetNetworkRetryCount { count } => {
-            Some(set_network_retry_count(*count))
-        }
+        IpcRequest::SettingsSetNetworkRetryCount { count } => Some(set_network_retry_count(*count)),
         IpcRequest::SettingsSetImageClickAction { action } => {
             Some(set_image_click_action(action.clone()))
         }
-        IpcRequest::SettingsSetAutoDeduplicate { enabled } => {
-            Some(set_auto_deduplicate(*enabled))
-        }
+        IpcRequest::SettingsSetAutoDeduplicate { enabled } => Some(set_auto_deduplicate(*enabled)),
         IpcRequest::SettingsSetDefaultDownloadDir { dir } => {
             Some(set_default_download_dir(dir.clone()))
         }
@@ -127,9 +109,9 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::SettingsSetCurrentWallpaperImageId { image_id } => {
             Some(set_current_wallpaper_image_id(image_id.clone()))
         }
-        IpcRequest::SettingsSwapStyleTransitionForModeSwitch { old_mode, new_mode } => {
-            Some(swap_style_transition_for_mode_switch(old_mode.clone(), new_mode.clone()))
-        }
+        IpcRequest::SettingsSwapStyleTransitionForModeSwitch { old_mode, new_mode } => Some(
+            swap_style_transition_for_mode_switch(old_mode.clone(), new_mode.clone()),
+        ),
         _ => None,
     }
 }
@@ -197,7 +179,7 @@ fn set_wallpaper_mode(mode: String) -> IpcResponse {
     }
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 async fn set_album_drive_enabled(enabled: bool) -> IpcResponse {
     let settings = Settings::global();
 
@@ -286,7 +268,7 @@ async fn set_album_drive_enabled(enabled: bool) -> IpcResponse {
     }
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 fn set_album_drive_mount_point(mount_point: String) -> IpcResponse {
     match Settings::global().set_album_drive_mount_point(mount_point) {
         Ok(()) => IpcResponse::ok("updated"),
@@ -366,7 +348,19 @@ fn set_current_wallpaper_image_id(image_id: Option<String>) -> IpcResponse {
                     .unwrap_or_default()
                     .as_secs();
                 let _ = Storage::global().update_image_last_set_wallpaper_at(&id, now);
-                GlobalEmitter::global().emit_images_change("change", &[id], None, None);
+                let plugin_ids = Storage::global()
+                    .find_image_by_id(&id)
+                    .ok()
+                    .flatten()
+                    .map(|image| vec![image.plugin_id])
+                    .unwrap_or_default();
+                GlobalEmitter::global().emit_images_change(
+                    "change",
+                    &[id],
+                    None,
+                    None,
+                    Some(&plugin_ids),
+                );
             }
             IpcResponse::ok("updated")
         }
@@ -535,13 +529,13 @@ fn get_default_images_dir() -> IpcResponse {
     IpcResponse::ok_with_data("ok", serde_json::json!(dir_str))
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 fn get_album_drive_enabled() -> IpcResponse {
     let v = Settings::global().get_album_drive_enabled();
     IpcResponse::ok_with_data("ok", serde_json::json!(v))
 }
 
-#[cfg(kabegame_mode = "standard")]
+#[cfg(feature = "standard")]
 fn get_album_drive_mount_point() -> IpcResponse {
     let v = Settings::global().get_album_drive_mount_point();
     IpcResponse::ok_with_data("ok", serde_json::json!(v))

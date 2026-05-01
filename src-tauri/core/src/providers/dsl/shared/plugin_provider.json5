@@ -1,0 +1,11 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "plugin_provider",
+    "properties": {
+        "plugin_id": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "images.plugin_id = ${properties.plugin_id}"
+    }
+}

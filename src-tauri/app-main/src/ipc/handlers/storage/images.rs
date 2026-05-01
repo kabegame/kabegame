@@ -1,7 +1,8 @@
-//! Images 陦ｨ逶ｸ蜈ｳ謫堺ｽ・
+//! Images 表相关操作。
 use kabegame_core::ipc::ipc::IpcResponse;
-use kabegame_core::storage::gallery::ImageQuery;
-use kabegame_core::storage::image_events::{delete_images_with_events, toggle_image_favorite_with_event};
+use kabegame_core::storage::image_events::{
+    delete_images_with_events, toggle_image_favorite_with_event,
+};
 use kabegame_core::storage::Storage;
 
 pub async fn get_images_count() -> IpcResponse {
@@ -52,18 +53,6 @@ pub async fn get_gallery_plugin_groups() -> IpcResponse {
         Ok(groups) => {
             IpcResponse::ok_with_data("ok", serde_json::to_value(groups).unwrap_or_default())
         }
-        Err(e) => IpcResponse::err(e),
-    }
-}
-
-pub async fn get_images_count_by_query(query: &serde_json::Value) -> IpcResponse {
-    let storage = Storage::global();
-    let q = match serde_json::from_value::<ImageQuery>(query.clone()) {
-        Ok(v) => v,
-        Err(e) => return IpcResponse::err(format!("Invalid query: {}", e)),
-    };
-    match storage.get_images_count_by_query(&q) {
-        Ok(n) => IpcResponse::ok_with_data("ok", serde_json::to_value(n).unwrap_or_default()),
         Err(e) => IpcResponse::err(e),
     }
 }

@@ -1,0 +1,44 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_surf_provider",
+    "properties": {
+        "host": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        // host 与 record_id 一一对应 (Storage::add_surf_record 对 host 幂等), 用 IN 子查询
+        // 隔开 host → record_id 的查询。
+        "where": "images.surf_record_id IN (SELECT id FROM surf_records WHERE host = ${properties.host})"
+    },
+    "list": {
+        "desc":   { "provider": "sort_router" },
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
+            }
+        },
+        "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
+        "x500x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
+        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
+    },
+    "resolve": {
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        },
+        "([1-9][0-9]*)": {
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        }
+    }
+}

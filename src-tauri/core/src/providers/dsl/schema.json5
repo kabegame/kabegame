@@ -1,0 +1,491 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "kabegame://provider/v0.7",
+    "title": "Kabegame Provider Definition",
+    "description": "声明式 Provider — 路径折叠 × ProviderQuery 贡献 × 动态枚举。详细语义见 cocs/provider-dsl/RULES.md。\n\n与 Rust trait Provider 对齐:\n  query   ↔ apply_query   节点对累积 ProviderQuery 的贡献(或 delegate 委托另一 provider)\n  list    ↔ list_children 静态字面量 / 动态 SQL / 动态 delegate 子节点枚举\n  resolve ↔ get_child     正则解析单个子节点\n\nChildEntry 模型:\n  { name: string, provider?: ProviderInvocation, meta?: any }\n  - meta 为任意 JSON, 详见 RULES.md §4.5(字符串=SQL 或模板; 对象/数组/标量=直接作为 meta)\n  - provider 可缺省 — 当前层不挂下层 provider\n\n命名空间(Java 包风格):\n  顶层 namespace 字段, 形如 'kabegame' / 'kabegame.plugin' / 'pixiv'\n  全局名 = <namespace>.<name>; 同 namespace 内 provider 互相引用用 simple name\n  解析规则: 当前 namespace → 父 namespace → ... → root\n  ProviderInvocation.provider 可写 simple name 或绝对 'a.b.c.name'\n\n判别策略:\n  - Query 互斥: delegate ⊕ (from/join/where/fields/order/offset/limit)\n  - StaticListEntry 用 ProviderInvocation 二态: byName ⊕ Empty\n  - Resolve 用 ProviderInvocation 三态: byName ⊕ byDelegate ⊕ Empty (7b 起 byDelegate 复活, payload 为 ProviderCall)\n  - List entry 由 key 是否含 ${...} 判别 静态 / 动态\n  - DynamicListEntry 数据源互斥: sql ⊕ delegate\n  - order 形态: 数组(位置定序) ⊕ {all:...} 全局指令(二选一)\n\n6e 起: query.delegate / list dynamic delegate 字段类型为 ProviderCall { provider, properties? }; 不再是路径表达式 (PathExpr 整个删除)。Provider 是 path-unaware 的 — 引用其它 provider 走 namespace 链 + name + properties, 不混入路径概念。\n\nDelegate 对称转发 (7b 起三处对齐):\n  - query.delegate         → target.apply_query(current, ctx)  ; 借目标的 contrib 入 composed\n  - list[<dyn>].delegate   → target.list(composed, ctx)        ; 调目标的 list 取 children 序列\n  - resolve[].delegate     → target.resolve(name, composed, ctx); 把当前 segment 的 resolve 决定权转给目标\n每处 payload 都是 ProviderCall, 永远 path-unaware。\n\nContribQuery 拼接语义:\n  fields  → 累积到 SELECT; 用 as + in_need 解决冲突\n  from    → cascading-replace(注意: from 不应内嵌 JOIN, 见 RULES.md §3.1)\n  join    → 累积; 用 as + in_need 解决冲突\n  where   → 路径上各节点 where 用 AND 拼接\n  order   → 数组按位置定优先级(对象 {<field>: asc/desc/revert, ...}; 允许多键); 或 {all: asc/desc/revert} 全局指令\n  offset  → additive (+); 多次声明用 + 串接\n  limit   → last-wins\n\nas + in_need 别名共享机制:\n  as: 'ab'                → 字面别名; 路径累积时重名拒绝(默认 in_need=false)\n  as: 'ab', in_need: true → 重名时放弃本次贡献(用于跨 provider 共享同一 join/field)\n  as: '${ref:my_id}'      → 引擎自动分配唯一别名; 通过 ${ref:my_id} 在其他位置引用\n\nList 动态项的两种数据源:\n  sql 模式 (data_var 显式绑定):\n    SQL 每行 = 一项 child; ${<data_var>.<col>(.<sub>)*} 取 SQL 列(支持嵌套 JSON 列)\n  delegate 模式 (child_var 显式绑定):\n    调目标 ProviderCall list_children; ${<child_var>.name/provider/meta.X} 取 ChildEntry 字段\n\nResolve 全部按正则匹配(纯字面量是空元字符的合法子集); resolve 字段直接是 <regex>: ProviderInvocation 映射, 无 entries 包装。运行期解析顺序:\n  1) regex resolve → 2) 静态 list 字面 → 3) 动态 list 反查(默认开启, 命中进 LRU)\n\nResolve 加载期碰撞检查:\n  - 每条正则 vs 静态 list key 字面量: 任一匹配 → 拒绝\n  - 正则 vs 正则: regex_automata 求交集 → 非空则拒绝\n  - 动态 list 不参与碰撞检查(运行期碰撞按解析顺序覆写, 非正确性故障)\n\n模板变量 ${...} 语义(详见 RULES.md §6):\n  - ${<ns>(.<path>)*}      命名空间取值(properties / capture / data_var / child_var / composed)\n  - ${<ns>[<N>]}           索引访问(capture)\n  - ${<method>:<arg>}      方法标记 — 当前仅 ${ref:<ident>} 引擎分配别名\n\nDynamicListEntry.provider 字段语义:\n  - 缺省          → 当前层不挂 provider\n  - ProviderName  → 显式构造命名 provider, 用 properties 传参\n  - ${child_var.provider} → 透传 delegate 数据源返回的 child.provider",
+
+    "type": "object",
+    "required": ["name"],
+    "additionalProperties": false,
+    "properties": {
+        "$schema": {
+            "type": "string",
+            "description": "Schema 锚点(建议 './schema.json5' 启用 IDE 补全)"
+        },
+        "namespace": {
+            "$ref": "#/definitions/Namespace",
+            "description": "命名空间(Java 包风格点分式; 缺省=root)。全局名 = <namespace>.<name>"
+        },
+        "name": {
+            "$ref": "#/definitions/SimpleName",
+            "description": "本 provider 在所属 namespace 内的简单名(snake_case, 不含点)"
+        },
+        "properties": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/definitions/PropertyDecl" },
+            "description": "属性签名 — 调用方在 ProviderInvocation.properties 中赋值"
+        },
+        "query": { "$ref": "#/definitions/Query" },
+        "list": { "$ref": "#/definitions/List" },
+        "resolve": { "$ref": "#/definitions/Resolve" },
+        "note": {
+            "type": "string",
+            "description": "VD 说明文件内容(Provider::get_note)"
+        }
+    },
+
+    "definitions": {
+
+        "ProviderName": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+            "description": "Provider 引用名: 简单名(同 namespace 内查找) 或绝对名 'a.b.c.name'。引擎按当前 namespace → 父 namespace → ... → root 逐级解析"
+        },
+
+        "SimpleName": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "单段标识符(snake_case, 不含点)"
+        },
+
+        "Namespace": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+            "description": "Java 包风格命名空间; 点分隔多段"
+        },
+
+        "TemplateExpr": {
+            "type": "string",
+            "description": "可含 ${...} 插值的字符串。详见顶层 description 模板变量列表"
+        },
+
+        "TemplateValue": {
+            "oneOf": [
+                { "type": "string" },
+                { "type": "number" },
+                { "type": "boolean" }
+            ],
+            "description": "属性值字面量或模板字符串(按 PropertyDecl.type 做隐式转换)"
+        },
+
+        "SqlExpr": {
+            "type": "string",
+            "description": "受 sqlparser 校验的 SQL 片段; 多语句 / DDL 在加载期拒绝"
+        },
+
+        "MetaValue": {
+            "description": "ChildEntry.meta 字段值; 任意 JSON 类型。详见 RULES.md §4.5。\n  - 字符串 + 含 SELECT/FROM 关键字 → 视为单行 SELECT, 引擎执行后取首行\n  - 字符串 + 仅含 ${...} 模板 → 模板插值, 结果作为 meta\n  - 对象/数组 → 递归对每个值做模板插值\n  - 数字/布尔/null → 直接作为 meta"
+        },
+
+        "ChildRefProvider": {
+            "type": "string",
+            "pattern": "^\\$\\{[a-z_][a-z0-9_]*\\.provider\\}$",
+                    "description": "对 delegate 模式 child.provider 的整体对象引用; 仅 DynamicListEntry_Delegate.provider / InvokeByDelegate.provider 字段位置合法。形如 ${<child_var>.provider}"
+        },
+
+        "Identifier": {
+            "type": "string",
+            "pattern": "^[a-z_][a-z0-9_]*$",
+            "description": "标识符(snake_case); 用作 child_var / data_var 等绑定名"
+        },
+
+        "PropertyDecl": {
+            "oneOf": [
+                { "$ref": "#/definitions/NumberProp" },
+                { "$ref": "#/definitions/StringProp" },
+                { "$ref": "#/definitions/BooleanProp" }
+            ],
+            "description": "属性声明 — 由 type 字段判别"
+        },
+
+        "NumberProp": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": {
+                "type": { "const": "number" },
+                "default": { "type": "number" },
+                "optional": { "type": "boolean" },
+                "min": { "type": "number" },
+                "max": { "type": "number" }
+            }
+        },
+
+        "StringProp": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": {
+                "type": { "const": "string" },
+                "default": { "type": "string" },
+                "optional": { "type": "boolean" },
+                "pattern": {
+                    "type": "string",
+                    "description": "正则约束"
+                }
+            }
+        },
+
+        "BooleanProp": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": {
+                "type": { "const": "boolean" },
+                "default": { "type": "boolean" },
+                "optional": { "type": "boolean" }
+            }
+        },
+
+        "Query": {
+            "oneOf": [
+                { "$ref": "#/definitions/DelegateQuery" },
+                { "$ref": "#/definitions/ContribQuery" }
+            ],
+            "description": "节点对累积 ProviderQuery 的贡献 — DelegateQuery ⊕ ContribQuery (presence-based)。\n注意: query.delegate 是 [委托另一 provider 的贡献] (实例化目标后调它的 apply_query); 与 list[key].delegate 的 [数据源 ProviderCall] 语义不同"
+        },
+
+        "DelegateQuery": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["delegate"],
+            "properties": {
+                "delegate": { "$ref": "#/definitions/ProviderCall" }
+            },
+            "description": "委托另一个 provider 的贡献 — 实例化目标 provider 后调它的 apply_query"
+        },
+
+        "ContribQuery": {
+            "type": "object",
+            "additionalProperties": false,
+            "not": { "required": ["delegate"] },
+            "properties": {
+                "fields": {
+                    "type": "array",
+                    "items": { "$ref": "#/definitions/Field" },
+                    "description": "SELECT 列贡献(GraphQL 风格累积)。用 as + in_need 解决路径上的命名冲突"
+                },
+                "from": {
+                    "$ref": "#/definitions/SqlExpr",
+                    "description": "FROM 后的基础表达式。cascading-replace 语义: 一次声明影响下游所有节点; 子节点可重声明覆盖"
+                },
+                "join": {
+                    "type": "array",
+                    "items": { "$ref": "#/definitions/Join" },
+                    "description": "JOIN 贡献(累积)。每项指定 table + as; 用 as + in_need 解决冲突 / 跨 provider 共享"
+                },
+                "where": {
+                    "$ref": "#/definitions/SqlExpr",
+                    "description": "任意 WHERE 表达式(单条; 可写 'a > 1 and b < 2' 等)。路径上各 provider 的 where 引擎用 AND 拼接"
+                },
+                "order": {
+                    "oneOf": [
+                        {
+                            "type": "array",
+                            "items": { "$ref": "#/definitions/OrderArrayItem" },
+                            "description": "形态 A: 数组按位置定优先级(低 index 优先)。每项是 {<field>: 'asc'|'desc'|'revert'} 单键对象; 'revert' 翻转该字段上游已声明的方向; 同名字段后声明覆盖前声明(不报错)"
+                        },
+                        { "$ref": "#/definitions/OrderGlobal" }
+                    ],
+                    "description": "ORDER BY 贡献; 二选一: 数组(位置定序) ⊕ {all:...} 全局指令"
+                },
+                "offset": {
+                    "oneOf": [
+                        { "type": "number" },
+                        { "$ref": "#/definitions/TemplateExpr" }
+                    ],
+                    "description": "OFFSET 值; 数字字面量或模板字符串。路径累积语义: 多个 provider 各自声明会被引擎用 + 串接为 (o1) + (o2) + ...(嵌套分页)"
+                },
+                "limit": {
+                    "oneOf": [
+                        { "type": "number" },
+                        { "$ref": "#/definitions/TemplateExpr" }
+                    ],
+                    "description": "LIMIT 值; 数字字面量或模板字符串。路径累积语义: last-wins(末次声明胜)。limit:0 = 空集(SQL 自然行为, 不特殊化)"
+                }
+            }
+        },
+
+        "Field": {
+            "oneOf": [
+                { "$ref": "#/definitions/SqlExpr" },
+                { "$ref": "#/definitions/FieldObject" }
+            ],
+            "description": "SELECT 字段贡献。裸字符串是 { sql: <string> } 的简写; 对象形态支持 as / in_need"
+        },
+
+        "FieldObject": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sql"],
+            "properties": {
+                "sql": { "$ref": "#/definitions/SqlExpr" },
+                "as": { "$ref": "#/definitions/AliasName" },
+                "in_need": { "type": "boolean" }
+            },
+            "description": "字段对象形态。sql 为字段表达式(可含子查询); as 为字段别名; in_need=true 时路径上同名 as 已存在则放弃本贡献"
+        },
+
+        "Join": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["table", "as"],
+            "properties": {
+                "kind": {
+                    "enum": ["INNER", "LEFT", "RIGHT", "FULL"],
+                    "description": "JOIN 类型; 默认 INNER"
+                },
+                "table": {
+                    "$ref": "#/definitions/SqlExpr",
+                    "description": "目标表名或子查询。e.g. 'album_images' / '(SELECT id, ts FROM ...)'"
+                },
+                "as": {
+                    "$ref": "#/definitions/AliasName",
+                    "description": "表别名; 字面量 / ${ref:<ident>} 自动分配"
+                },
+                "on": {
+                    "$ref": "#/definitions/SqlExpr",
+                    "description": "ON 子句; 可引用 ${ref:<ident>} 等。e.g. 'ai.image_id = images.id'"
+                },
+                "in_need": {
+                    "type": "boolean",
+                    "description": "true: 路径上同名 as 已存在时放弃本贡献(跨 provider 共享 join 用); 默认 false: 重名报错"
+                }
+            }
+        },
+
+        "OrderArrayItem": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+                "enum": ["asc", "desc", "revert"]
+            },
+            "description": "Order 数组项 — 对象 {<field_name>: 'asc'|'desc'|'revert', ...}。允许多键; field_name 是任意 SQL 列表达式(可含表前缀如 'images.crawled_at'); 'revert' 表示翻转该字段在上游的方向, 上游未声明则视为新增。多键时键间优先级按声明顺序。"
+        },
+
+        "OrderGlobal": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["all"],
+            "properties": {
+                "all": {
+                    "enum": ["asc", "desc", "revert"],
+                    "description": "全局指令对所有上游 order 字段生效: 'revert' = 翻转 ASC↔DESC; 'asc'/'desc' = 强制统一方向"
+                }
+            },
+            "description": "Order 全局指令 {all: 'asc'|'desc'|'revert'}; 应用时插入累积链顶, 影响下游所有节点的方向解释"
+        },
+
+        "AliasName": {
+            "oneOf": [
+                {
+                    "type": "string",
+                    "pattern": "^[a-z_][a-z0-9_]*$",
+                    "description": "字面别名(snake_case)"
+                },
+                { "$ref": "#/definitions/RefAlias" }
+            ],
+            "description": "别名: 字面量(snake_case) / ${ref:<ident>} 引擎自动分配"
+        },
+
+        "RefAlias": {
+            "type": "string",
+            "pattern": "^\\$\\{ref:[a-z_][a-z0-9_]*\\}$",
+            "description": "引擎自动分配别名占位符。同 ident 在 query 内其他位置(如 join.on / where) 用 ${ref:<ident>} 引用"
+        },
+
+        "List": {
+            "type": "object",
+            "patternProperties": {
+                ".*\\$\\{[a-z_][a-z0-9_]*(?:\\.[a-z_][a-z0-9_]*)+\\}.*": {
+                    "$ref": "#/definitions/DynamicListEntry",
+                    "description": "动态项: key 含 ${ident.field}, 必须有 sql 或 delegate 作为数据源"
+                },
+                "^(?!.*\\$\\{).+$": {
+                    "$ref": "#/definitions/StaticListEntry",
+                    "description": "静态项: key 字面量, 用 ProviderInvocation 二态"
+                }
+            },
+            "additionalProperties": false,
+            "description": "子节点枚举 — 静态字面量 key 或 含 ${ident.field} 的动态 key"
+        },
+
+        "StaticListEntry": {
+            "$ref": "#/definitions/ProviderInvocation",
+            "description": "静态 list 项 = ProviderInvocation 二态 (byName / Empty); 6e 起 byDelegate variant 已删除"
+        },
+
+        "DynamicListEntry": {
+            "oneOf": [
+                { "$ref": "#/definitions/DynamicListEntry_Sql" },
+                { "$ref": "#/definitions/DynamicListEntry_Delegate" }
+            ],
+            "description": "动态 list 项 — 数据源互斥: sql ⊕ delegate"
+        },
+
+        "DynamicListEntry_Sql": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sql", "data_var"],
+            "not": { "required": ["delegate", "child_var"] },
+            "properties": {
+                "sql": {
+                    "$ref": "#/definitions/SqlExpr",
+                    "description": "数据源 SQL; 通常含 ${composed} 子查询。每行 = 一项 child; 通过 ${<data_var>.<col>} 取 SQL 列"
+                },
+                "data_var": {
+                    "$ref": "#/definitions/Identifier",
+                    "description": "SQL 行绑定名。引擎要求 key 与 properties 中所有 ${X.Y} 的 X 必须等于此值"
+                },
+                "provider": {
+                    "$ref": "#/definitions/ProviderName",
+                    "description": "缺省=不挂 provider; 字符串=显式命名 (SQL 模式无透传)"
+                },
+                "properties": {
+                    "type": "object",
+                    "additionalProperties": { "$ref": "#/definitions/TemplateValue" },
+                    "description": "传给当前层 provider 的属性; 值可含 ${<data_var>.<col>} 引用"
+                },
+                "meta": {
+                    "$ref": "#/definitions/MetaValue",
+                    "description": "可选 meta(每行执行一次); 见 RULES.md §4.5。可为 SQL 字符串(访问 ${data_var.col}) / ${data_var}(透传整行) / 含模板的对象"
+                }
+            }
+        },
+
+        "DynamicListEntry_Delegate": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["delegate", "child_var"],
+            "not": { "required": ["sql", "data_var"] },
+            "properties": {
+                "delegate": {
+                    "$ref": "#/definitions/ProviderCall",
+                    "description": "数据源 provider 引用; 实例化后调它的 list_children, 每个 child = 一项。通过 ${<child_var>.name} / ${<child_var>.provider} / ${<child_var>.meta.X} 取 ChildEntry 字段"
+                },
+                "child_var": {
+                    "$ref": "#/definitions/Identifier",
+                    "description": "ChildEntry 绑定名。引擎要求 key 与 properties 中所有 ${X.Y} 的 X 必须等于此值"
+                },
+                "provider": {
+                    "oneOf": [
+                        { "$ref": "#/definitions/ProviderName" },
+                        { "$ref": "#/definitions/ChildRefProvider" }
+                    ],
+                    "description": "缺省=不挂 provider; 字符串=显式构造(可搭配 properties 传参); ${<child_var>.provider}=透传 delegate 返回的 child.provider"
+                },
+                "properties": {
+                    "type": "object",
+                    "additionalProperties": { "$ref": "#/definitions/TemplateValue" },
+                    "description": "传给当前层 provider 的属性; 仅 provider 为显式 ProviderName 时使用; 值可含 ${<child_var>.name|provider|meta.X} 引用"
+                },
+                "meta": {
+                    "$ref": "#/definitions/MetaValue",
+                    "description": "可选 meta(每个 child 执行一次); 见 RULES.md §4.5。可为 SQL 字符串(访问 ${child_var.X}) / ${child_var.meta}(透传上层 meta) / 含模板的对象"
+                }
+            }
+        },
+
+        "Resolve": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/definitions/ProviderInvocation" },
+            "description": "正则 → ProviderInvocation 映射 (直接 key-value, 无 entries 包装)。所有 key 一律按正则编译 (纯字面量是空元字符的合法子集)。\n\nKey 形态 (7b 起):\n  - 静态 regex (无 ${...})         → 加载期编译\n  - instance-static (${properties.X}) → 实例化期渲染后再编译\n  - 不允许 ${data_var.X} / ${child_var.X} (resolve 表无 row/child 上下文)\n\n运行期解析顺序 (deterministic): regex resolve → 静态 list 字面 → 动态 list 反查 (默认开启)。\n\n7b 起: 引擎不再做加载期碰撞检测 — `.*` 转发模式 + instance-static key 都让该检测全是 false-positive。多模式重叠由作者按 schema 出现顺序覆写决定。"
+        },
+
+        "ProviderInvocation": {
+            "oneOf": [
+                { "$ref": "#/definitions/InvokeByName" },
+                { "$ref": "#/definitions/InvokeByDelegate" },
+                { "$ref": "#/definitions/EmptyInvocation" }
+            ],
+            "description": "三态 (7b 起):\n  - InvokeByName  — `{provider, properties?, meta?}`; 实例化 provider, 它即为 resolve 结果\n  - InvokeByDelegate — `{delegate, child_var?, provider?, properties?, meta?}`; 调 target.resolve(name) 得到 ChildEntry, 再按当前项 provider/meta 转换返回; 默认不透传 provider/meta\n  - EmptyInvocation — `{meta?}` 占位\n\n用于 StaticListEntry (仅 ByName / Empty) 与 Resolve 项 (三态全允许)。"
+        },
+
+        "InvokeByName": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider"],
+            "not": { "required": ["delegate"] },
+            "properties": {
+                "provider": { "$ref": "#/definitions/ProviderName" },
+                "properties": {
+                    "type": "object",
+                    "additionalProperties": { "$ref": "#/definitions/TemplateValue" }
+                },
+                "meta": { "$ref": "#/definitions/MetaValue" }
+            }
+        },
+
+        "InvokeByDelegate": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["delegate"],
+            "allOf": [{
+                "if": {
+                    "properties": {
+                        "provider": { "$ref": "#/definitions/ChildRefProvider" }
+                    }
+                },
+                "then": {
+                    "not": { "required": ["properties"] }
+                }
+            }],
+            "properties": {
+                "delegate": {
+                    "$ref": "#/definitions/ProviderCall",
+                    "description": "[操作转发 — 对称语义] 实例化 ProviderCall.provider; 在其上调用 target.resolve(name), 得到 ChildEntry 后再由当前项转换"
+                },
+                "child_var": {
+                    "$ref": "#/definitions/Identifier",
+                    "description": "target.resolve(name) 返回的 ChildEntry 绑定名。provider/properties/meta 可通过 ${<child_var>.name|provider|meta.X} 引用"
+                },
+                "provider": {
+                    "oneOf": [
+                        { "$ref": "#/definitions/ProviderName" },
+                        { "$ref": "#/definitions/ChildRefProvider" }
+                    ],
+                    "description": "字符串=显式构造 provider; ${<child_var>.provider}=透传 target child.provider"
+                },
+                "properties": {
+                    "type": "object",
+                    "additionalProperties": { "$ref": "#/definitions/TemplateValue" },
+                    "description": "传给当前层 provider 的属性; 值可含 ${<child_var>.name|provider|meta.X} 引用"
+                },
+                "meta": { "$ref": "#/definitions/MetaValue" }
+            },
+            "description": "Resolve 表项的 ByDelegate 形态。缺省 child_var/provider/meta 保持旧语义: 不透传 provider/meta, 返回 null provider/null meta; 需要透传时显式写 child_var/provider/meta。"
+        },
+
+        "ProviderCall": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider"],
+            "properties": {
+                "provider": { "$ref": "#/definitions/ProviderName" },
+                "properties": {
+                    "type": "object",
+                    "additionalProperties": { "$ref": "#/definitions/TemplateValue" },
+                    "description": "传给目标 provider 的属性覆盖值"
+                }
+            },
+            "description": "对另一个 provider 的引用 (含 properties); 用于 query.delegate / DynamicListEntry_Delegate.delegate"
+        },
+
+        "EmptyInvocation": {
+            "type": "object",
+            "additionalProperties": false,
+            "not": {
+                "anyOf": [
+                    { "required": ["provider"] },
+                    { "required": ["delegate"] },
+                    { "required": ["properties"] }
+                ]
+            },
+            "properties": {
+                "meta": { "$ref": "#/definitions/MetaValue" }
+            },
+            "description": "空 invocation: 无 provider 也无 delegate。路径仍照常缓存, 但引擎不在该子节点提供 list / resolve 服务(缓存项为空, meta 可选)"
+        }
+
+    }
+}

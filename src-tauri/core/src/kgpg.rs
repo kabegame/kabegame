@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
+use std::io;
 use std::io::SeekFrom;
 use std::path::Path;
-use std::io;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 /// KGPG v2：固定头部 + ZIP（SFX 兼容）

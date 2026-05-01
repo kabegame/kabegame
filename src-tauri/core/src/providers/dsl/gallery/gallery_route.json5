@@ -1,0 +1,161 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_route",
+    "query": {
+        "from": "images",
+        "fields": [
+            {
+                "sql": "CAST(images.id AS TEXT)",
+                "as": "id"
+            },
+            {
+                "sql": "images.url",
+                "as": "url",
+                "in_need": true
+            },
+            {
+                "sql": "images.local_path",
+                "as": "local_path",
+                "in_need": true
+            },
+            { 
+                "sql": "images.plugin_id",
+                "as": "plugin_id",
+                "in_need": true
+            },
+            {
+                "sql": "images.task_id",
+                "as": "task_id",
+                "in_need": true
+            },
+            {
+                "sql": "images.crawled_at",
+                "as": "crawled_at",
+                "in_need": true
+            },
+            {
+                "sql": "images.metadata_id",
+                "as": "metadata_id",
+                "in_need": true
+            },
+            {
+                "sql": "COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path)",
+                "as": "thumbnail_path",
+                "in_need": true
+            },
+            {
+                "sql": "images.hash",
+                "as": "hash",
+                "in_need": true
+            },
+            {
+                "sql": "CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END",
+                "as": "is_favorite",
+                "in_need": true,
+            },
+            {
+                "sql": "CASE WHEN hid_ai.image_id IS NOT NULL THEN 1 ELSE 0 END",
+                "as": "is_hidden",
+                "in_need": true
+            },
+            {
+                "sql": "images.width",
+                "as": "width",
+                "in_need": true
+            },
+            {
+                "sql": "images.height",
+                "as": "height",
+                "in_need": true
+            },
+            {
+                "sql": "images.display_name",
+                "as": "display_name",
+                "in_need": true
+            },
+            {
+                "sql": "COALESCE(images.type, 'image')",
+                "as": "media_type",
+                "in_need": true,
+            },
+            {
+                "sql": "images.last_set_wallpaper_at",
+                "as": "last_set_wallpaper_at",
+                "in_need": true
+            },
+            {
+                "sql": "images.size",
+                "as": "size",
+                "in_need": true
+            }
+        ],
+        "order": [{"images.crawled_at": "asc"}],
+        "join": [{
+            "kind": "LEFT",
+            "table": "album_images",
+            "as": "fav_ai",
+            "on": "images.id = fav_ai.image_id and fav_ai.album_id = ${global.favorite_album_id}",
+            "in_need": true
+        }, {
+            "kind": "LEFT",
+            "table": "album_images",
+            "as": "hid_ai",
+            "on": "images.id = hid_ai.image_id and hid_ai.album_id = ${global.hidden_album_id}",
+            "in_need": true
+        }]
+    },
+    "list": {
+        "all": {
+            "provider": "gallery_all_router"
+        },
+        "wallpaper-order": {
+            "provider": "gallery_wallpaper_order_router"
+        },
+        "plugin": {
+            "provider": "gallery_plugins_router"
+        },
+        "plugins": {
+            "provider": "gallery_plugins_router"
+        },
+        "task": {
+            "provider": "gallery_tasks_router"
+        },
+        "tasks": {
+            "provider": "gallery_tasks_router"
+        },
+        "surf": {
+            "provider": "gallery_surfs_router"
+        },
+        "surfs": {
+            "provider": "gallery_surfs_router"
+        },
+        "media-type": {
+            "provider": "gallery_media_type_router"
+        },
+        "date": {
+            "provider": "gallery_dates_router"
+        },
+        "dates": {
+            "provider": "gallery_dates_router"
+        },
+        "album": {
+            "provider": "gallery_albums_router"
+        },
+        "date-range": {
+            "provider": "gallery_date_range_router"
+        },
+        "albums": {
+            "provider": "gallery_albums_router"
+        },
+        "hide": {
+            "provider": "gallery_hide_router"
+        },
+        "search": {
+            "provider": "gallery_search_router"
+        },
+        "bigger_crawler_time": {
+            "provider": "gallery_bigger_crawler_time_router"
+        }
+    }
+}

@@ -1,24 +1,19 @@
 //! Provider 路径查询语法 — Tauri/MCP 边界使用。
 //!
-//! 语法:
-//! - `<path>`       → 单个 entry：resolve path → meta + note + total（按该节点 composed query 的 COUNT）
-//! - `<path>/`      → `list_dir()`（子 Child 不带 meta）+ `list_images()` + total
-//! - `<path>/*`     → `list_dir_with_meta()`（子 Child 带批量 meta）+ `list_images()` + total
-//!
-//! Images 混合在 entries 数组里（Dir 在前，Image 在后）。
-//!
-//! `total` 字段语义（Entry 与 Listing 一致）：将该路径的 composed query（由
-//! [`Provider::apply_query`](super::provider::Provider::apply_query) 沿链累积）
-//! build 成 `SELECT COUNT(*)` 并执行，得到匹配当前过滤/搜索/JOIN/WHERE 的图片总数。
-//! 前端在需要展示总数但不需要当前页 entries 时，应优先使用无尾缀语法
-//! （例如 `all`、`search/display-name/<q>/all`），避免额外触发 `list_children` / `list_images`。
+//! 7b S1e 起：所有"路径 → 图片/计数"查询走 pathql Runtime 的 path-only API
+//! ([`images_at`] / [`count_at`])；core 不再持有 `ProviderQuery` /
+//! `TemplateContext`。
 
 use serde_json::{json, Value};
 
 use crate::gallery::GalleryBrowseEntry;
-use crate::providers::provider::ProviderMeta;
-use crate::providers::runtime::ProviderRuntime;
-use crate::storage::Storage;
+use crate::storage::gallery::{DateGroup, DayGroup, GalleryMediaTypeCounts, PluginGroup};
+use crate::storage::gallery_time::{gallery_month_groups_from_days, GalleryTimeFilterPayload};
+use crate::storage::images::parse_image_metadata_json;
+use crate::storage::organize::OrganizeScanRow;
+use crate::storage::ImageInfo;
+
+use super::init::provider_runtime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderPathQuery {
@@ -45,12 +40,7 @@ pub fn parse_provider_path(raw: &str) -> (String, ProviderPathQuery) {
     (trimmed.to_string(), ProviderPathQuery::Entry)
 }
 
-/// 对 provider 路径逐段 percent-decode：按 `/` 拆分，对每个非空段做 UTF-8 解码
-/// （失败时保留原段），再用 `/` 重新拼接。保留前导/尾随 `/` 与结尾的 `/*` 语法。
-///
-/// 用于 tauri / web 边界统一解码前端用 `encodeURIComponent` 编码的动态段
-/// （如搜索查询 `search/display-name/<q>/`、画册/任务 id 等），让所有 provider
-/// 拿到的都是原始字符串，无需各自处理 URL 编码。
+/// 对 provider 路径逐段 percent-decode。
 pub fn decode_provider_path_segments(raw: &str) -> String {
     let trimmed = raw.trim();
     let (body, suffix) = if let Some(stripped) = trimmed.strip_suffix("/*") {
@@ -94,35 +84,56 @@ fn split_last_segment(path: &str) -> (String, String) {
     }
 }
 
+/// 解析 get_note 的 JSON 字符串到 (title, content)；非 JSON 时把它当 title=content。
+fn parse_note(raw: Option<String>) -> Option<(String, String)> {
+    let s = raw?;
+    if let Ok(v) = serde_json::from_str::<Value>(&s) {
+        if let (Some(t), Some(c)) = (
+            v.get("title").and_then(|x| x.as_str()),
+            v.get("content").and_then(|x| x.as_str()),
+        ) {
+            return Some((t.to_string(), c.to_string()));
+        }
+    }
+    Some((s.clone(), s))
+}
+
 fn note_value(note: Option<(String, String)>) -> Option<Value> {
     note.map(|(title, content)| json!({ "title": title, "content": content }))
 }
 
-/// Typed 版本的 provider 查询结果，`execute_provider_query` 的内部表示。
-/// 暴露给 web 边界层以便对 `Listing::entries` 里的 `ImageInfo` 做类型化改写
-/// （CDN URL 重写等），改写后再用 [`provider_query_to_json`] 序列化为和旧路径
-/// 字节级一致的 JSON envelope。
+/// Typed 版本的 provider 查询结果。
 #[derive(Debug)]
 pub enum ProviderQueryTyped {
     Entry {
         name: String,
-        meta: Option<ProviderMeta>,
+        meta: Option<Value>,
         note: Option<(String, String)>,
-        /// 按该节点 composed query 计算出的匹配图片总数；COUNT 失败时为 `None`。
         total: Option<usize>,
     },
     Listing {
         entries: Vec<GalleryBrowseEntry>,
         total: Option<usize>,
-        meta: Option<ProviderMeta>,
+        meta: Option<Value>,
         note: Option<(String, String)>,
     },
+}
+
+fn normalize_for_runtime(path: &str) -> String {
+    if path.is_empty() {
+        "/".to_string()
+    } else if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{}", path)
+    }
 }
 
 /// Typed 入口：解析路径并执行查询，返回未序列化的 typed 结果。
 pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped, String> {
     let (path, mode) = parse_provider_path(raw_path);
-    let rt = ProviderRuntime::global();
+    let rt = provider_runtime();
+    let rt_path = normalize_for_runtime(&path);
 
     match mode {
         ProviderPathQuery::Entry => {
@@ -130,61 +141,346 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
             if last.is_empty() {
                 return Err(format!("路径不完整: {}", raw_path));
             }
-            let node = rt
-                .resolve(&path)?
-                .ok_or_else(|| format!("条目不存在: {}", raw_path))?;
-            let total = Storage::global().get_images_count_by_query(&node.composed).ok();
+            let total = count_at(&rt_path).ok();
+            let raw_note = rt
+                .note(&rt_path)
+                .map_err(|e| format!("note failed: {}", e))?;
+            let meta = rt
+                .meta(&rt_path)
+                .map_err(|e| format!("meta failed: {}", e))?;
             Ok(ProviderQueryTyped::Entry {
                 name: last,
-                meta: node.provider.get_meta(),
-                note: node.provider.get_note(),
+                meta,
+                note: parse_note(raw_note),
                 total,
             })
         }
         ProviderPathQuery::List | ProviderPathQuery::ListWithMeta => {
-            let node = rt
-                .resolve(&path)?
-                .ok_or_else(|| format!("路径不存在: {}", path))?;
+            let children = rt
+                .list(&rt_path)
+                .map_err(|e| format!("list children failed: {}", e))?;
 
-            let children = if mode == ProviderPathQuery::ListWithMeta {
-                node.provider.list_children_with_meta(&node.composed)?
-            } else {
-                node.provider.list_children(&node.composed)?
-            };
+            let images = images_for_listing(&rt_path)?;
+            let entries = crate::gallery::browse_from_provider_jsonmeta(children, images)?;
 
-            let composed_images = if node.composed.order_bys.is_empty() {
-                node.composed.clone().with_order("images.id ASC")
-            } else {
-                node.composed.clone()
-            };
-            let images = node.provider.list_images(&composed_images)?;
+            let total = count_at(&rt_path).ok();
 
-            let entries = crate::gallery::browse_from_provider(children, images)?;
-
-            let total: Option<usize> =
-                Storage::global().get_images_count_by_query(&node.composed).ok();
+            let raw_note = rt
+                .note(&rt_path)
+                .map_err(|e| format!("note failed: {}", e))?;
+            let meta = rt
+                .meta(&rt_path)
+                .map_err(|e| format!("meta failed: {}", e))?;
 
             Ok(ProviderQueryTyped::Listing {
                 entries,
                 total,
-                meta: node.provider.get_meta(),
-                note: node.provider.get_note(),
+                meta,
+                note: parse_note(raw_note),
             })
         }
     }
 }
 
-/// 把 typed 查询结果序列化为 Tauri / MCP / web 共用的 JSON envelope 形状。
-/// 保持与旧 `execute_provider_query` 字节级一致（字段顺序、null 位置）。
+/// **Engine service**: 路径 → ImageInfo 列表。
+/// 内部：`runtime.fetch(path)` → JSON 行 → 按列名映射到 ImageInfo (gallery_route alias 契约)。
+/// 不带启发式分支；调用方负责传一个能限定范围的 path
+/// (例如 `/gallery/all/x100x/3`，避免在 `/gallery/` 等根路径上调本函数)。
+pub fn images_at(path: &str) -> Result<Vec<ImageInfo>, String> {
+    let rt = provider_runtime();
+    let rows = rt.fetch(path).map_err(|e| e.to_string())?;
+    rows.iter().map(json_row_to_image_info).collect()
+}
+
+/// **Engine service**: 路径 → 行数 (`SELECT COUNT(*)` wrapper)。
+pub fn count_at(path: &str) -> Result<usize, String> {
+    provider_runtime().count(path).map_err(|e| e.to_string())
+}
+
+fn raw_rows_at(path: &str) -> Result<Vec<Value>, String> {
+    provider_runtime().fetch(path).map_err(|e| e.to_string())
+}
+
+fn json_string(row: &Value, key: &str) -> Option<String> {
+    row.get(key).and_then(|v| {
+        v.as_str()
+            .map(str::to_string)
+            .or_else(|| v.as_i64().map(|i| i.to_string()))
+            .or_else(|| v.as_u64().map(|i| i.to_string()))
+    })
+}
+
+fn json_i64(row: &Value, key: &str) -> Option<i64> {
+    row.get(key).and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok()))
+            .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+    })
+}
+
+/// `/images/x{N}x/{page}` → organize scan rows.
+pub fn organize_batch_at(page_size: usize, page: usize) -> Result<Vec<OrganizeScanRow>, String> {
+    let page_size = page_size.max(1);
+    let page = page.max(1);
+    let rows = raw_rows_at(&format!("/images/x{}x/{}", page_size, page))?;
+    rows.iter()
+        .map(|row| {
+            Ok(OrganizeScanRow {
+                id: json_i64(row, "id").ok_or("organize row missing `id`")?,
+                hash: json_string(row, "hash").unwrap_or_default(),
+                local_path: json_string(row, "local_path")
+                    .ok_or("organize row missing `local_path`")?,
+                thumbnail_path: json_string(row, "thumbnail_path").unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+/// `/images/id_{id}/metadata` → metadata JSON, matching the old fallback order:
+/// `image_metadata.data` first, then legacy `images.metadata`.
+pub fn image_metadata_at(image_id: &str) -> Result<Option<Value>, String> {
+    let encoded = urlencoding::encode(image_id.trim());
+    let rows = raw_rows_at(&format!("/images/id_{}/metadata", encoded))?;
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    if let Some(v) = parse_image_metadata_json(json_string(row, "metadata_json")) {
+        return Ok(Some(v));
+    }
+    Ok(parse_image_metadata_json(json_string(
+        row,
+        "legacy_metadata_json",
+    )))
+}
+
+pub fn gallery_total_count_at() -> Result<usize, String> {
+    count_at("/gallery/all")
+}
+
+pub fn gallery_plugin_groups_at() -> Result<Vec<PluginGroup>, String> {
+    let rt = provider_runtime();
+    let children = rt
+        .list("/gallery/plugin")
+        .map_err(|e| format!("list /gallery/plugin failed: {}", e))?;
+    children
+        .into_iter()
+        .map(|child| {
+            let count = count_at(&format!(
+                "/gallery/plugin/{}",
+                urlencoding::encode(&child.name)
+            ))?;
+            Ok(PluginGroup {
+                plugin_id: child.name,
+                count,
+            })
+        })
+        .collect()
+}
+
+pub fn gallery_media_type_counts_at(base_path: &str) -> Result<GalleryMediaTypeCounts, String> {
+    let base = normalize_for_runtime(base_path)
+        .trim_end_matches('/')
+        .to_string();
+    Ok(GalleryMediaTypeCounts {
+        image_count: count_at(&format!("{}/media-type/image", base))?,
+        video_count: count_at(&format!("{}/media-type/video", base))?,
+    })
+}
+
+pub fn gallery_day_groups_at() -> Result<Vec<DayGroup>, String> {
+    let rt = provider_runtime();
+    let mut days = Vec::new();
+    for year in rt
+        .list("/gallery/date")
+        .map_err(|e| format!("list /gallery/date failed: {}", e))?
+    {
+        let Some(y) = year.name.strip_suffix('y') else {
+            continue;
+        };
+        if y.len() != 4 || !y.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let year_path = format!("/gallery/date/{}", year.name);
+        for month in rt
+            .list(&year_path)
+            .map_err(|e| format!("list {} failed: {}", year_path, e))?
+        {
+            let Some(m) = month.name.strip_suffix('m') else {
+                continue;
+            };
+            if m.len() != 2 || !m.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let month_path = format!("{}/{}", year_path, month.name);
+            for day in rt
+                .list(&month_path)
+                .map_err(|e| format!("list {} failed: {}", month_path, e))?
+            {
+                let Some(d) = day.name.strip_suffix('d') else {
+                    continue;
+                };
+                if d.len() != 2 || !d.chars().all(|c| c.is_ascii_digit()) {
+                    continue;
+                }
+                let day_path = format!("{}/{}", month_path, day.name);
+                days.push(DayGroup {
+                    ymd: format!("{y}-{m}-{d}"),
+                    count: count_at(&day_path)?,
+                });
+            }
+        }
+    }
+    Ok(days)
+}
+
+pub fn gallery_date_groups_at() -> Result<Vec<DateGroup>, String> {
+    Ok(gallery_month_groups_from_days(&gallery_day_groups_at()?))
+}
+
+pub fn gallery_time_filter_payload_at() -> Result<GalleryTimeFilterPayload, String> {
+    Ok(GalleryTimeFilterPayload::from_storage_days(
+        gallery_day_groups_at()?,
+    ))
+}
+
+pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, String> {
+    let limit = limit.max(1);
+    let encoded = urlencoding::encode(album_id.trim());
+    let base = format!("/gallery/album/{}", encoded);
+    let mut out = images_at(&format!("{}/order/x{}x/1", base, limit))?;
+    if out.len() >= limit {
+        out.truncate(limit);
+        return Ok(out);
+    }
+
+    let rt = provider_runtime();
+    let children = rt
+        .list(&base)
+        .map_err(|e| format!("list {} failed: {}", base, e))?;
+    for child in children {
+        let is_album = child
+            .meta
+            .as_ref()
+            .and_then(|m| m.get("kind"))
+            .and_then(|v| v.as_str())
+            == Some("album");
+        if !is_album {
+            continue;
+        }
+        let child_id = child
+            .meta
+            .as_ref()
+            .and_then(|m| m.get("data"))
+            .and_then(|d| d.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(&child.name);
+        let child_encoded = urlencoding::encode(child_id);
+        let child_path = format!("/gallery/album/{}/order/x3x/1", child_encoded);
+        for image in images_at(&child_path)? {
+            out.push(image);
+            if out.len() >= limit {
+                out.truncate(limit);
+                return Ok(out);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// IPC business 包装: 在 listing 模式下挑一组合理的图片显示。
+/// `/gallery/` 等根路径不带 limit, 直接 fetch 会拉百万级行 — 此处用 count + last-page-100
+/// 启发式选最后一页, 与前端默认行为对齐。
+fn images_for_listing(rt_path: &str) -> Result<Vec<ImageInfo>, String> {
+    let rt = provider_runtime();
+    let node = rt
+        .resolve(rt_path)
+        .map_err(|e| format!("resolve failed: {}", e))?;
+    if node.composed.from.is_none() {
+        return Ok(Vec::new());
+    }
+    if node.composed.limit.is_some() {
+        return images_at(rt_path);
+    }
+    // 无 limit: 取最后一页 100 (前端 root 路径默认期望)
+    let total = count_at(rt_path)?;
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+    let page_size = 100usize;
+    let last_offset = ((total + page_size - 1) / page_size - 1) * page_size;
+    let last_page = last_offset / page_size + 1;
+    let last_page_path = format!(
+        "{}/x{}x/{}",
+        rt_path.trim_end_matches('/'),
+        page_size,
+        last_page
+    );
+    images_at(&last_page_path)
+}
+
+/// JSON 行 → ImageInfo (按 gallery_route 17 fields 的 alias 契约读列)。
+/// alias 名硬契约: id, url, local_path, plugin_id, task_id, crawled_at, metadata_id,
+/// thumbnail_path, hash, is_favorite, is_hidden, width, height, display_name,
+/// media_type, last_set_wallpaper_at, size。
+fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
+    let obj = row.as_object().ok_or("executor row not a JSON object")?;
+    let s = |k: &str| obj.get(k).and_then(|v| v.as_str()).map(String::from);
+    let i = |k: &str| obj.get(k).and_then(|v| v.as_i64());
+    let b = |k: &str| match obj.get(k) {
+        Some(Value::Bool(v)) => *v,
+        Some(v) => v.as_i64().unwrap_or(0) != 0,
+        None => false,
+    };
+    Ok(ImageInfo {
+        id: s("id").ok_or("row missing `id`")?,
+        url: s("url"),
+        local_path: s("local_path").ok_or("row missing `local_path`")?,
+        plugin_id: s("plugin_id").ok_or("row missing `plugin_id`")?,
+        task_id: s("task_id"),
+        surf_record_id: None,
+        crawled_at: i("crawled_at")
+            .filter(|&t| t >= 0)
+            .map(|t| t as u64)
+            .unwrap_or(0),
+        metadata: None,
+        metadata_id: i("metadata_id"),
+        thumbnail_path: s("thumbnail_path").unwrap_or_default(),
+        hash: s("hash").unwrap_or_default(),
+        favorite: b("is_favorite"),
+        is_hidden: b("is_hidden"),
+        local_exists: true,
+        width: i("width").map(|v| v as u32),
+        height: i("height").map(|v| v as u32),
+        display_name: s("display_name").unwrap_or_default(),
+        media_type: crate::image_type::normalize_stored_media_type(s("media_type")),
+        last_set_wallpaper_at: i("last_set_wallpaper_at")
+            .filter(|&t| t >= 0)
+            .map(|t| t as u64),
+        size: i("size").map(|v| v as u64),
+        album_order: i("album_order"),
+    })
+}
+
+/// 把 typed 查询结果序列化为 Tauri / MCP / web 共用的 JSON envelope。
 pub fn provider_query_to_json(t: &ProviderQueryTyped) -> Result<Value, String> {
     match t {
-        ProviderQueryTyped::Entry { name, meta, note, total } => Ok(json!({
+        ProviderQueryTyped::Entry {
+            name,
+            meta,
+            note,
+            total,
+        } => Ok(json!({
             "name": name,
             "meta": meta,
             "note": note_value(note.clone()),
             "total": total,
         })),
-        ProviderQueryTyped::Listing { entries, total, meta, note } => {
+        ProviderQueryTyped::Listing {
+            entries,
+            total,
+            meta,
+            note,
+        } => {
             let entries_json = serde_json::to_value(entries).map_err(|e| e.to_string())?;
             Ok(json!({
                 "entries": entries_json,
@@ -196,10 +492,6 @@ pub fn provider_query_to_json(t: &ProviderQueryTyped) -> Result<Value, String> {
     }
 }
 
-/// 统一入口：解析路径并执行查询。返回 JSON 值供 Tauri / MCP 直接使用。
-///
-/// 实现：内部走 [`execute_provider_query_typed`] + [`provider_query_to_json`]。
-/// web 边界若需类型化改写请直接调 typed 版本，避免往 Value 上塞 JSON 遍历代码。
 pub fn execute_provider_query(raw_path: &str) -> Result<Value, String> {
     let typed = execute_provider_query_typed(raw_path)?;
     provider_query_to_json(&typed)

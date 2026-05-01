@@ -1,0 +1,29 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_album_media_type_provider",
+    "properties": {
+        "kind": { "type": "string", "default": "image", "optional": false }
+    },
+    "query": {
+        "where": "CASE ${properties.kind} WHEN 'video' THEN (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') ELSE NOT (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') END"
+    },
+    "list": {},
+    "resolve": {
+        "desc": { "provider": "sort_router" },
+        "wallpaper-order": { "provider": "gallery_wallpaper_order_router" },
+        "order": { "provider": "gallery_album_order_provider" },
+        "album-order": { "provider": "gallery_album_order_provider" },
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        },
+        "([1-9][0-9]*)": {
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        }
+    }
+}

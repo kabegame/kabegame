@@ -85,13 +85,16 @@ pub const KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID: &str = "org.kabegame.wallpaper";
 pub fn is_kabegame_plasma_plugin_installed() -> bool {
     use std::path::Path;
 
-    let system_path = Path::new("/usr/share/plasma/wallpapers").join(KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID);
+    let system_path =
+        Path::new("/usr/share/plasma/wallpapers").join(KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID);
     if system_path.is_dir() {
         return true;
     }
 
     if let Some(data) = dirs::data_dir() {
-        let user_path = data.join("plasma/wallpapers").join(KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID);
+        let user_path = data
+            .join("plasma/wallpapers")
+            .join(KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID);
         if user_path.is_dir() {
             return true;
         }

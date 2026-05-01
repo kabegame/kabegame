@@ -15,7 +15,7 @@ use std::sync::Arc;
 /// - `ImagesChange` → 按 `task_ids` 通知任务目录，并 `notify_gallery_tree_changed`
 /// - `AlbumImagesChange` → 按 `album_ids` 通知画册目录，并 `notify_gallery_tree_changed`
 /// - `TaskAdded` / `TaskDeleted` → `bump_tasks()`
-#[cfg(all(kabegame_mode = "standard", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
     use kabegame_core::ipc::events::DaemonEventKind;
 
@@ -78,11 +78,3 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
         }
     }
 }
-
-// /// 非 Windows 或未启用 virtual-driver feature 时的空实现
-// #[cfg(all(not(kabegame_mode = "light"), any(target_os = "macos", target_os = "linux")))]
-// pub async fn start_vd_event_listener(
-//     _vd_service: Arc<VirtualDriveService>,
-// ) {
-//     // 空实现：非 Windows 或未启用 virtual-driver feature 时不做任何事
-// }

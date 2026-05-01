@@ -7,7 +7,7 @@
       <StyledTabs v-model="activeTab" sticky>
 
         <el-tab-pane :label="$t('settings.appSettings')" :name="SETTINGS_TAB_NAMES[0]">
-          <el-card class="settings-card">
+          <el-card class="settings-card" :class="appBackgroundCardClass">
             <template #header>
               <span>{{ $t('settings.appSettings') }}</span>
             </template>
@@ -53,6 +53,22 @@
                   :description="$t('settings.imageObjectPositionDesc')">
                   <SettingRadioControl setting-key="galleryImageObjectPosition" :options="objectPositionOptions" />
                 </SettingRow>
+                <SettingRow :label="$t('settings.appBackgroundEnabled')"
+                  :description="$t('settings.appBackgroundEnabledDesc')">
+                  <SettingSwitchControl setting-key="appBackgroundEnabled" />
+                </SettingRow>
+                <template v-if="settingsStore.values.appBackgroundEnabled">
+                  <SettingRow :label="$t('settings.appBackgroundOpacity')"
+                    :description="$t('settings.appBackgroundOpacityDesc')">
+                    <SettingSliderControl setting-key="appBackgroundOpacity" :min="0.05" :max="0.6" :step="0.05"
+                      :precision="2" />
+                  </SettingRow>
+                  <SettingRow :label="$t('settings.appBackgroundBlur')"
+                    :description="$t('settings.appBackgroundBlurDesc')">
+                    <SettingSliderControl setting-key="appBackgroundBlur" :min="0" :max="20" :step="1"
+                      :precision="0" />
+                  </SettingRow>
+                </template>
                 <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.clearUserData')"
                   :description="$t('settings.clearUserDataDesc')">
                   <ClearUserDataSetting />
@@ -81,7 +97,7 @@
         </el-tab-pane>
 
         <el-tab-pane v-if="!IS_WEB" :label="$t('settings.tabWallpaper')" :name="SETTINGS_TAB_NAMES[1]">
-          <el-card class="settings-card">
+          <el-card class="settings-card" :class="appBackgroundCardClass">
             <template #header>
               <span>{{ $t('settings.wallpaperSectionTitle') }}</span>
             </template>
@@ -162,7 +178,7 @@
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.tabDownload')" :name="SETTINGS_TAB_NAMES[2]">
-          <el-card class="settings-card">
+          <el-card class="settings-card" :class="appBackgroundCardClass">
             <template #header>
               <span>{{ $t('settings.downloadSectionTitle') }}</span>
             </template>
@@ -202,7 +218,7 @@
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.tabPlugins')" :name="SETTINGS_TAB_NAMES[3]">
-          <el-card class="settings-card">
+          <el-card class="settings-card" :class="appBackgroundCardClass">
             <template #header>
               <span>{{ $t("settings.pluginDefaultsSectionTitle") }}</span>
             </template>
@@ -313,6 +329,11 @@ import { useDesktop } from "@/composables/useDesktop";
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 
 const settingsStore = useSettingsStore();
+const appBackgroundCardClass = computed(() =>
+  settingsStore.values.appBackgroundEnabled
+    ? "!bg-transparent [--el-card-bg-color:transparent]"
+    : ""
+);
 const isHorizontal = computed(
   () => settingsStore.values.galleryLayoutDirection === "horizontal"
 );

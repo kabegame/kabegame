@@ -79,9 +79,10 @@ export class ModePlugin extends BasePlugin {
     });
 
     bs.hooks.prepareEnv.tap(this.name, () => {
+      // 仅供前端 vite 注入展示与 build.rs 旧期间兼容；不再驱动 Rust 编译期分支。
+      // 编译期 mode 现在通过 cargo --features 传递（见 prepareCompileArgs hook）。
       this.setEnv("KABEGAME_MODE", this.mode!.mode);
       this.setEnv("VITE_KABEGAME_MODE", this.mode!.mode);
-      this.addRustFlags(`--cfg kabegame_mode="${this.mode!.mode}"`);
 
       if (this.mode!.isAndroid) {
         this.setEnv("VITE_ANDROID", "true");
@@ -120,11 +121,11 @@ export class ModePlugin extends BasePlugin {
           | string
           | { comp: Component; features: string[]; args?: string[] },
       ) => {
-        // virtual-driver 功能现在通过 cfg(kabegame_mode) 控制，不再使用 features
-        // self-hosted 功能仍通过 feature 控制
         const features: string[] = Array.isArray(nullOrCompOrFeatures)
-          ? nullOrCompOrFeatures
-          : [];
+          ? [...nullOrCompOrFeatures]
+          : typeof nullOrCompOrFeatures === "object" && nullOrCompOrFeatures !== null
+            ? [...(nullOrCompOrFeatures.features || [])]
+            : [];
         const comp = nullOrCompOrFeatures
           ? typeof nullOrCompOrFeatures === "string"
             ? new Component(nullOrCompOrFeatures)
@@ -139,12 +140,26 @@ export class ModePlugin extends BasePlugin {
             ? nullOrCompOrFeatures.args
             : undefined;
 
-        // Inject Cargo feature flags based on mode.
-        // web mode: --no-default-features --features web (cuts out all tauri deps)
-        // local mode: default features already activate "local"; no extra flags needed
+        // Mode → cargo feature 翻译。仅作用于 main 组件；cli 始终以 standard 等价
+        // 编译，不感知 mode（mode-plugin.ts 顶部 parseParams 已强制 light/android/web
+        // 只允许 main 组件）。
+        //   - standard：default = ["standard"]，无需额外参数
+        //   - light：--no-default-features --features light
+        //   - android：--no-default-features --features android（不带 VD，含 android-only 插件）
+        //   - web：--no-default-features --features web（不带 Tauri 栈）
         const finalArgs = args ? [...args] : [];
-        if (this.mode!.isWeb) {
-          finalArgs.push("--no-default-features", "--features", "web");
+        if (comp.isMain) {
+          if (this.mode!.isWeb) {
+            finalArgs.push("--no-default-features");
+            features.push("web");
+          } else if (this.mode!.isAndroid) {
+            finalArgs.push("--no-default-features");
+            features.push("android");
+          } else if (this.mode!.isLight) {
+            finalArgs.push("--no-default-features");
+            features.push("light");
+          }
+          // standard 模式走 cargo default features，无需注入。
         }
 
         return {

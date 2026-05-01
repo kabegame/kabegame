@@ -9,7 +9,11 @@
       "Read(//d/Codes/tauri-plugin-android-battery-optimization/**)",
       "Read(//d/Codes/tauri-plugin-desktop-underlay/**)",
       "Bash(xargs ls *)",
-      "Bash(bun check *)"
+      "Bash(bun check *)",
+      "Bash(node scripts/check-manifest.js)",
+      "Bash(node --check server/index.js)",
+      "Bash(grep -E \"\\\\.\\(rs|ts\\)$\")",
+      "Bash(grep -r \"interface.*Settings\\\\|type.*Settings\" --include=\"*.ts\" packages/core/src --include-dir=types)"
     ]
   }
 }
