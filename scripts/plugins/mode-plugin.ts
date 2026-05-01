@@ -122,8 +122,10 @@ export class ModePlugin extends BasePlugin {
           | { comp: Component; features: string[]; args?: string[] },
       ) => {
         const features: string[] = Array.isArray(nullOrCompOrFeatures)
-          ? nullOrCompOrFeatures
-          : [];
+          ? [...nullOrCompOrFeatures]
+          : typeof nullOrCompOrFeatures === "object" && nullOrCompOrFeatures !== null
+            ? [...(nullOrCompOrFeatures.features || [])]
+            : [];
         const comp = nullOrCompOrFeatures
           ? typeof nullOrCompOrFeatures === "string"
             ? new Component(nullOrCompOrFeatures)
@@ -148,11 +150,14 @@ export class ModePlugin extends BasePlugin {
         const finalArgs = args ? [...args] : [];
         if (comp.isMain) {
           if (this.mode!.isWeb) {
-            finalArgs.push("--no-default-features", "--features", "web");
+            finalArgs.push("--no-default-features");
+            features.push("web");
           } else if (this.mode!.isAndroid) {
-            finalArgs.push("--no-default-features", "--features", "android");
+            finalArgs.push("--no-default-features");
+            features.push("android");
           } else if (this.mode!.isLight) {
-            finalArgs.push("--no-default-features", "--features", "light");
+            finalArgs.push("--no-default-features");
+            features.push("light");
           }
           // standard 模式走 cargo default features，无需注入。
         }

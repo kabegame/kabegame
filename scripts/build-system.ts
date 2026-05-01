@@ -143,6 +143,25 @@ export class BuildSystem {
     return args;
   }
 
+  private buildTauriArgs(
+    baseArgs: string[],
+    features: string[],
+    runnerArgs?: string[],
+    additionalTauriArgs?: string[],
+  ): string[] {
+    const args = [...baseArgs];
+    if (features.length > 0) {
+      args.push("--features", features.join(","));
+    }
+    if (additionalTauriArgs && additionalTauriArgs.length > 0) {
+      args.push(...additionalTauriArgs);
+    }
+    if (runnerArgs && runnerArgs.length > 0) {
+      args.push("--", ...runnerArgs);
+    }
+    return args;
+  }
+
   commonUse(cmd: string): void {
     this.use(new CmdPlugin(cmd));
     this.use(new OSPlugin());
@@ -183,9 +202,12 @@ export class BuildSystem {
     const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call();
     const cwd = this.context.component!.appDir;
     if (this.context.mode!.isAndroid) {
-      const args = ["android", "dev"]
-        .concat(features.length ? ["-f", features.join(",")] : [])
-        .concat(this.options.args?.length ? ["--", ...(this.options.args ?? [])] : []);
+      const args = this.buildTauriArgs(
+        ["android", "dev"],
+        features,
+        compileArgs,
+        this.options.args,
+      );
       run("tauri", args, { cwd, bin: "cargo" });
     } else if (this.context.mode!.isWeb) {
       // 同时启动 Vite dev server (1420) 和 web Rust 二进制 (7490)
@@ -217,12 +239,12 @@ export class BuildSystem {
       run("cargo", args, { cwd: SRC_TAURI_DIR });
       killVite();
     } else {
-      const baseArgs = ["dev"];
-      const args = this.buildCargoArgs(baseArgs, features);
-      if (this.options.args && this.options.args.length > 0) {
-        args.push("--");
-        args.push(...this.options.args);
-      }
+      const args = this.buildTauriArgs(
+        ["dev"],
+        features,
+        compileArgs,
+        this.options.args,
+      );
       run("tauri", args, { cwd, bin: "cargo" });
     }
   }
@@ -291,10 +313,12 @@ export class BuildSystem {
       }
       if (!this.context.skip?.isCargo) {
         if (this.context.mode!.isAndroid) {
-          const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
-          const args = ["android", "build"]
-            .concat(features.length ? ["-f", features.join(",")] : [])
-            .concat(mergedArgs);
+          const args = this.buildTauriArgs(
+            ["android", "build"],
+            features,
+            compileArgs,
+            this.options.args,
+          );
           run("tauri", args, { cwd, bin: "cargo" });
         } else if (this.context.mode!.isWeb) {
           const distMain = path.join(root, "dist-main");
@@ -312,8 +336,12 @@ export class BuildSystem {
           );
           run("cargo", args, { cwd: SRC_TAURI_DIR });
         } else {
-          const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
-          const args = this.buildCargoArgs(["build"], features, mergedArgs.length > 0 ? mergedArgs : undefined);
+          const args = this.buildTauriArgs(
+            ["build"],
+            features,
+            compileArgs,
+            this.options.args,
+          );
           run("tauri", args, { cwd, bin: "cargo" });
         }
       }
