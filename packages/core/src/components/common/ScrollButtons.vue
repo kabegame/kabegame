@@ -18,16 +18,34 @@
             </div>
         </Transition>
     </Teleport>
+    <Teleport to="body">
+        <Transition name="scroll-btn-fade">
+            <div v-if="showLeftButton" class="scroll-btn scroll-btn-left" :style="buttonStyle" @click="scrollToLeft">
+                <el-icon :size="20">
+                    <ArrowLeft />
+                </el-icon>
+            </div>
+        </Transition>
+    </Teleport>
+    <Teleport to="body">
+        <Transition name="scroll-btn-fade">
+            <div v-if="showRightButton" class="scroll-btn scroll-btn-right" :style="buttonStyle" @click="scrollToRight">
+                <el-icon :size="20">
+                    <ArrowRight />
+                </el-icon>
+            </div>
+        </Transition>
+    </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { ArrowUp, ArrowDown } from "@element-plus/icons-vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
 
 interface Props {
     /** 获取滚动容器的函数 */
     getContainer: () => HTMLElement | null;
-    /** 触发显示的滚动阈值（像素） */
+    /** @deprecated 箭头现在仅按是否贴紧顶部/底部显示，保留该字段兼容旧调用。 */
     threshold?: number;
     /** 按钮距离右侧的距离 */
     right?: number;
@@ -46,15 +64,24 @@ const props = withDefaults(defineProps<Props>(), {
 
 // 滚动状态
 const scrollTop = ref(0);
+const scrollLeft = ref(0);
 const scrollHeight = ref(0);
 const clientHeight = ref(0);
+const scrollWidth = ref(0);
+const clientWidth = ref(0);
 
 // 是否可以滚动（有滚动条）
-const canScroll = computed(() => scrollHeight.value > clientHeight.value);
+const canScrollVertical = computed(() => scrollHeight.value > clientHeight.value + 1);
+const canScrollHorizontal = computed(() => scrollWidth.value > clientWidth.value + 1);
 
 // 距离底部的距离
 const distanceToBottom = computed(() => {
     return Math.max(0, scrollHeight.value - scrollTop.value - clientHeight.value);
+});
+
+// 距离右侧的距离
+const distanceToRight = computed(() => {
+    return Math.max(0, scrollWidth.value - scrollLeft.value - clientWidth.value);
 });
 
 // 是否已到达顶部（小于1px算到达）
@@ -63,25 +90,29 @@ const isAtTop = computed(() => scrollTop.value < 1);
 // 是否已到达底部（距离底部小于1px算到达）
 const isAtBottom = computed(() => distanceToBottom.value < 1);
 
-// 用于记录用户曾经到达过的位置
-const hasReachedBottom = ref(false); // 是否曾经到达过底部
-
-// 显示控制状态：一旦触发显示，即使离开阈值范围也保持显示，直到到达边界
-const topButtonTriggered = ref(false);
-const bottomButtonTriggered = ref(false);
+const isAtLeft = computed(() => scrollLeft.value < 1);
+const isAtRight = computed(() => distanceToRight.value < 1);
 
 // 回到顶部按钮显示逻辑
 const showTopButton = computed(() => {
-    if (!canScroll.value) return false;
-    if (isAtTop.value) return false;
-    return topButtonTriggered.value;
+    if (!canScrollVertical.value) return false;
+    return !isAtTop.value;
 });
 
 // 滑到底部按钮显示逻辑
 const showBottomButton = computed(() => {
-    if (!canScroll.value) return false;
-    if (isAtBottom.value) return false;
-    return bottomButtonTriggered.value;
+    if (!canScrollVertical.value) return false;
+    return !isAtBottom.value;
+});
+
+const showLeftButton = computed(() => {
+    if (!canScrollHorizontal.value) return false;
+    return !isAtLeft.value;
+});
+
+const showRightButton = computed(() => {
+    if (!canScrollHorizontal.value) return false;
+    return !isAtRight.value;
 });
 
 // 按钮样式
@@ -91,70 +122,51 @@ const buttonStyle = computed(() => ({
     "--scroll-btn-bottom-bottom": `${props.bottomButtonBottom}px`,
 }));
 
-// 监听滚动位置变化，触发显示
-watch(
-    () => scrollTop.value,
-    (newVal, oldVal) => {
-        const threshold = props.threshold;
-        const scrollingDown = newVal > (oldVal ?? 0);
-        const scrollingUp = newVal < (oldVal ?? 0);
-
-        // 检测到达底部
-        if (isAtBottom.value) {
-            hasReachedBottom.value = true;
-            bottomButtonTriggered.value = false; // 到达底部时隐藏"滑到底部"
-        }
-
-        // 检测到达顶部
-        if (isAtTop.value) {
-            topButtonTriggered.value = false; // 到达顶部时隐藏"回到顶部"
-            hasReachedBottom.value = false; // 重置"曾到达底部"状态
-        }
-
-        // 从顶部往下滚动超过阈值时触发"回到顶部"按钮
-        if (scrollingDown && newVal > threshold && !topButtonTriggered.value) {
-            topButtonTriggered.value = true;
-        }
-
-        // 从底部向上滚动：曾经到达过底部，且距离底部超过阈值时触发"滑到底部"按钮
-        if (scrollingUp && hasReachedBottom.value && distanceToBottom.value > threshold && !bottomButtonTriggered.value) {
-            bottomButtonTriggered.value = true;
-        }
-    }
-);
-
-// 当 canScroll 变化时重置状态
-watch(
-    () => canScroll.value,
-    (val) => {
-        if (!val) {
-            topButtonTriggered.value = false;
-            bottomButtonTriggered.value = false;
-            hasReachedBottom.value = false;
-        }
-    }
-);
-
 const updateScrollState = () => {
     const el = props.getContainer();
     if (!el) return;
     scrollTop.value = el.scrollTop;
+    scrollLeft.value = el.scrollLeft;
     scrollHeight.value = el.scrollHeight;
     clientHeight.value = el.clientHeight;
+    scrollWidth.value = el.scrollWidth;
+    clientWidth.value = el.clientWidth;
+};
+
+const notifyProgrammaticScroll = (el: HTMLElement) => {
+    el.dispatchEvent(new CustomEvent("scroll-buttons-scroll-command"));
 };
 
 const scrollToTop = () => {
-    if (!canScroll.value) return;
+    if (!canScrollVertical.value) return;
     const el = props.getContainer();
     if (!el) return;
+    notifyProgrammaticScroll(el);
     el.scrollTo({ top: 0, behavior: "smooth" });
 };
 
 const scrollToBottom = () => {
-    if (!canScroll.value) return;
+    if (!canScrollVertical.value) return;
     const el = props.getContainer();
     if (!el) return;
+    notifyProgrammaticScroll(el);
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+};
+
+const scrollToLeft = () => {
+    if (!canScrollHorizontal.value) return;
+    const el = props.getContainer();
+    if (!el) return;
+    notifyProgrammaticScroll(el);
+    el.scrollTo({ left: 0, behavior: "smooth" });
+};
+
+const scrollToRight = () => {
+    if (!canScrollHorizontal.value) return;
+    const el = props.getContainer();
+    if (!el) return;
+    notifyProgrammaticScroll(el);
+    el.scrollTo({ left: el.scrollWidth, behavior: "smooth" });
 };
 
 let scrollRaf: number | null = null;
@@ -219,6 +231,8 @@ onUnmounted(() => {
 defineExpose({
     scrollToTop,
     scrollToBottom,
+    scrollToLeft,
+    scrollToRight,
 });
 </script>
 
@@ -259,6 +273,14 @@ defineExpose({
 }
 
 .scroll-btn-bottom {
+    bottom: var(--scroll-btn-bottom-bottom, 60px);
+}
+
+.scroll-btn-left {
+    bottom: var(--scroll-btn-top-bottom, 120px);
+}
+
+.scroll-btn-right {
     bottom: var(--scroll-btn-bottom-bottom, 60px);
 }
 

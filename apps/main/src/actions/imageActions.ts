@@ -113,7 +113,7 @@ export function createImageActions(
     },
     {
       key: "wallpaper",
-      label: t("contextMenu.wallpaper"),
+      label: IS_WEB ? t("contextMenu.background") : t("contextMenu.wallpaper"),
       icon: Picture,
       command: "wallpaper",
       visible: () => !hideSet.has("wallpaper"),
@@ -272,7 +272,7 @@ export function createImageActions(
     },
     {
       key: "wallpaper",
-      label: t("contextMenu.wallpaper"),
+      label: IS_WEB ? t("contextMenu.background") : t("contextMenu.wallpaper"),
       icon: Picture,
       command: "wallpaper",
       visible: (ctx) => {

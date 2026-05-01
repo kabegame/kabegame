@@ -6,7 +6,7 @@ use kabegame_core::plugin::PluginManager;
 pub async fn get_plugins() -> Result<serde_json::Value, String> {
     let plugin_manager = PluginManager::global();
     plugin_manager.ensure_installed_cache_initialized().await?;
-    let plugins = plugin_manager.get_all().await?;
+    let plugins = plugin_manager.get_all()?;
     Ok(serde_json::to_value(plugins).map_err(|e| e.to_string())?)
 }
 
@@ -15,13 +15,24 @@ pub async fn get_plugins() -> Result<serde_json::Value, String> {
 pub async fn refresh_plugins() -> Result<serde_json::Value, String> {
     let plugin_manager = PluginManager::global();
     plugin_manager.refresh_plugins().await?;
-    let plugins = plugin_manager.get_all().await?;
+    let plugins = plugin_manager.get_all()?;
     Ok(serde_json::to_value(plugins).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub fn get_build_mode() -> Result<String, String> {
-    Ok(env!("KABEGAME_BUILD_MODE").to_string())
+    let mode = if cfg!(feature = "web") {
+        "web"
+    } else if cfg!(feature = "android") {
+        "android"
+    } else if cfg!(feature = "standard") {
+        "standard"
+    } else if cfg!(feature = "light") {
+        "light"
+    } else {
+        "unknown"
+    };
+    Ok(mode.to_string())
 }
 
 #[tauri::command]

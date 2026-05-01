@@ -6,6 +6,34 @@
  
 **Changelog entries:** Write release notes in **English** (new sections and bullets from [3.4.5] onward).
 
+## [4.1.0]
+### Added
+- **Provider DSL migration:** Most gallery, virtual-disk, MCP, wallpaper-rotation, organize, album, task, surf, plugin, media-type, date, search, wallpaper-order, raw-image, and image-metadata provider paths now run through declarative PathQL provider DSL files instead of hand-written programmatic provider/router code. The public path surface stays path-first (`fetch(path)`, `count(path)`, list children, and provider-backed helper APIs), while the implementation is now data-driven and easier to extend.
+- **Plugin-owned provider trees:** Installed crawler plugins can ship provider DSL files in their package and expose nested provider subtrees through their plugin entry provider. Gallery's "by plugin" tree and the virtual-disk plugin folders now share the same plugin-owned provider contract, so plugin-specific browse paths can come from plugin metadata instead of app-specific UI logic.
+- **Raw image provider channel:** Added an explicit `/images` provider tree for automation and MCP use, including paged raw image rows and `/images/id_{id}/metadata` metadata lookup paths.
+- **Album detail tabs:** AlbumDetail now switches between an image grid tab and a sub-albums tab instead of rendering child albums as an expandable block above the image grid.
+- **In-app background image:** Added a frontend-local app background that mirrors the current wallpaper image across all platforms. The feature is enabled by default and includes local settings for enable/disable, opacity, and blur, exposed in Settings and Quick Settings.
+
+### Changed
+- **Provider path semantics:** Pagination, plain limit, ordering, count, child listing, and metadata lookup semantics are now represented consistently in provider paths. Page-list folders are exposed across equivalent gallery and virtual-disk branches rather than only under `all`.
+- **MCP/provider automation:** MCP-facing provider reads now have clearer path semantics and can use the DSL-backed provider tree directly for gallery browsing, raw image enumeration, image metadata, and album-order workflows.
+- **Gallery / AlbumDetail sticky scrolling:** Gallery and AlbumDetail now use the `ImageGrid` scroll context for their page header, browse toolbar, and big paginator, so sticky headers and paginators pin inside the same scroll container as the image grid. Horizontal layouts keep the inner horizontal scroll container to preserve item sizing.
+- **ImageGrid scroll controls:** The floating scroll controls are simplified to explicit edge shortcuts: show top/bottom arrows whenever the vertical container is not at that edge, and show left/right arrows for horizontal scroll containers. Programmatic edge scrolling now cancels in-flight smooth-wheel animation before jumping.
+- **Web wallpaper action:** In web mode, the image action is labeled "Set as background" and stores `currentWallpaperImageId` in localStorage instead of showing the desktop-only wallpaper guard. Multi-select falls back to setting the first selected image as the in-app background.
+- **Background-aware cards:** Settings cards and Plugin Browser plugin cards become transparent only while the in-app background setting is enabled, using UnoCSS utility classes so the normal theme remains unchanged when the feature is off.
+
+### Fixed
+- **Gallery desktop filter tree:** Changing the Gallery search query no longer collapses the whole provider filter popover into a single global "Loading" row. The tree keeps its root rows visible and lazy-loads only the expanded branch.
+- **Gallery / AlbumDetail big paginator input:** Hovering or focusing the paginator page input no longer adds a physical border that changes the paginator height and causes layout jitter.
+- **Crawler output album picker:** Hidden albums are now filtered out of CrawlerDialog's output-album picker, matching other album move/picker flows.
+- **Album image count:** AlbumDetail totals are loaded through the provider count path instead of deriving the total from the current page size, so the tab label and big paginator use the full matching image count.
+- **ImageGrid whole-container virtual scroll:** Grid-mode virtual scrolling now accounts for the offset of `before-grid` content such as headers, toolbars, and paginators, preventing short pages and blank space when the whole `ImageGrid` container is the scroll element.
+- **ImageGrid horizontal mode:** Horizontal grid mode keeps correct item sizing with `scrollWholeContainer`, supports virtual scrolling by calculating visible column groups from `scrollLeft`, and rebinds scroll listeners when the active scroll element changes between vertical and horizontal layouts.
+- **ImageGrid preview sync:** Preview navigation that wraps from the last image to the first image, or from the first image to the last image, now scrolls the virtualized grid to the target even when that item is not currently mounted in the DOM.
+
+### Removed
+- **Programmatic provider duplication:** Removed the old programmatic provider/router layer for migrated paths; the canonical implementation now lives in the DSL provider tree.
+
 ## [4.0.1]
 ### Added
 - **ImageGrid — horizontal scroll direction:** New frontend-local setting `galleryLayoutDirection` (`"vertical" | "horizontal"`, default `"vertical"`) toggles the scroll axis in both Grid and Gallery modes; wide images get more screen area when scanning sideways. In horizontal mode the outer `.image-grid-container` becomes `flex-direction: column; overflow: hidden` and the scroll axis moves into a new inner `.image-grid-scroll` wrapper (`overflow-x: auto; overflow-y: hidden`), so the `before-grid` (filter toolbar) and `footer` (paginator) slots stay pinned. Grid mode horizontal uses `grid-template-rows: repeat(N, 1fr); grid-auto-flow: column; grid-auto-columns: auto` so each item's `aspect-ratio` drives its intrinsic width. Gallery mode horizontal flips the masonry into N flex rows stacked vertically, with `galleryBuckets` swapping its weighting from `1 / ratio` (vertical) to `ratio` (horizontal) so the narrowest row wins. `gridColumnsCount` (backed by existing `galleryGridColumns` + `uiStore.imageGridColumns`) is reused as "row count" in horizontal mode — Android stays fixed at 2; desktop adjusts via the existing settings / Ctrl+Wheel / quick drawer. Settings and QuickSettingsDrawer labels swap dynamically between `galleryColumns`/`quickColumns` and new `galleryRows`/`quickRows` i18n keys based on direction. `ImageItem` gains a `horizontal` prop: when true the item and its wrapper use `height: 100%; width: auto` and the aspect-ratio is also mirrored onto the `.image-item` root (via `rootStyle`) so Flex can compute the item's intrinsic width from its resolved height — `flex-shrink: 0` prevents the flex row in a `width: max-content` parent from compressing items down to 0. Scroll-dependent logic (`scrollEl` ref, scroll event listeners, `updateVirtualRange`, `measureItemHeight`, `scrollToIndex`, drag-scroll, page-change `scrollTo`, keep-alive `savedScrollPos` restore) now targets the inner `.image-grid-scroll` element and branches on `scrollLeft`/`left` vs `scrollTop`/`top`. Vertical wheel input is translated to horizontal scroll when direction is horizontal (`translateVerticalWheelToHorizontal` on `.image-grid-scroll`, with `deltaMode` line/page normalization and `Ctrl+Wheel` / `Meta+Wheel` passthrough preserved for column-count adjustment). Virtual scroll auto-disables when direction is horizontal (row-height assumption no longer holds), in addition to the existing disable when mode is gallery. New i18n keys `galleryLayoutDirection` / `galleryLayoutDirectionDesc` / `galleryLayoutDirectionVertical` / `galleryLayoutDirectionHorizontal` / `galleryRows` / `galleryRowsDesc` / `quickRows` / `quickRowsDesc` in en / zh / zhtw / ja / ko.
@@ -509,5 +537,3 @@
   - 例如：命令/事件、下载队列、壁纸管理器、存储/迁移等
 - **插件系统（Rhai / crawler-plugins / .kgpg）**
   - 例如：Rhai API 变更、插件打包格式、插件商店安装/更新、兼容性说明等
-
-

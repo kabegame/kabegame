@@ -1,0 +1,285 @@
+//! 端到端：fold 真路径链 → build_sql → sqlite 执行。
+//!
+//! 路径：gallery_route → gallery_paginate_router → query_page_provider。
+//! Delegate 节点 (gallery_all_router, gallery_page_router) 跳过 (Phase 6 ProviderRuntime 处理)。
+
+#![cfg(feature = "json5")]
+
+use std::path::PathBuf;
+
+use pathql_rs::ast::{Namespace, ProviderName, Query};
+use pathql_rs::compose::{fold_contrib, ProviderQuery};
+use pathql_rs::provider::SqlDialect;
+use pathql_rs::template::eval::{TemplateContext, TemplateValue};
+use pathql_rs::{Json5Loader, Loader, ProviderRegistry, Source};
+
+/// 6d: pathql-rs 不再附 driver 桥; 集成测试本地内联 TemplateValue → rusqlite::Value 转换。
+fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
+    use rusqlite::types::Value;
+    values
+        .iter()
+        .map(|v| match v {
+            TemplateValue::Null => Value::Null,
+            TemplateValue::Bool(b) => Value::Integer(if *b { 1 } else { 0 }),
+            TemplateValue::Int(i) => Value::Integer(*i),
+            TemplateValue::Real(r) => Value::Real(*r),
+            TemplateValue::Text(s) => Value::Text(s.clone()),
+            TemplateValue::Json(v) => Value::Text(v.to_string()),
+        })
+        .collect()
+}
+
+const PROVIDER_FILES: &[&str] = &[
+    "root_provider.json",
+    "gallery/gallery_route.json5",
+    "gallery/all_router/gallery_all_router.json5",
+    "gallery/all_router/x_page_x/gallery_paginate_router.json5",
+    "gallery/all_router/x_page_x/gallery_page_router.json5",
+    "shared/page_size_provider.json5",
+    "shared/query_page_provider.json5",
+    "vd/vd_root_router.json5",
+    "vd/vd_zh_CN_root_router.json5",
+];
+
+fn build_full_registry() -> ProviderRegistry {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("core")
+        .join("src")
+        .join("providers")
+        .join("dsl");
+    let loader = Json5Loader;
+    let mut registry = ProviderRegistry::new();
+    for rel in PROVIDER_FILES {
+        let path = dir.join(rel);
+        let def = loader
+            .load(Source::Path(&path))
+            .unwrap_or_else(|e| panic!("load {}: {}", rel, e));
+        registry
+            .register(def)
+            .unwrap_or_else(|e| panic!("register {}: {}", rel, e));
+    }
+    registry
+}
+
+fn fold_provider_query(state: &mut ProviderQuery, registry: &ProviderRegistry, name: &str) {
+    let ns = Namespace("kabegame".into());
+    let def = registry
+        .resolve(&ns, &ProviderName(name.into()))
+        .unwrap_or_else(|| panic!("provider {} not in registry", name));
+    if let Some(Query::Contrib(q)) = &def.query {
+        fold_contrib(state, q).unwrap_or_else(|e| panic!("fold {} failed: {}", name, e));
+    }
+}
+
+fn fold_gallery_page_chain(registry: &ProviderRegistry) -> ProviderQuery {
+    let mut state = ProviderQuery::new();
+    fold_provider_query(&mut state, registry, "gallery_route");
+    fold_provider_query(&mut state, registry, "gallery_all_router"); // delegate, skipped
+    fold_provider_query(&mut state, registry, "gallery_paginate_router");
+    fold_provider_query(&mut state, registry, "gallery_page_router"); // delegate, skipped
+    fold_provider_query(&mut state, registry, "query_page_provider");
+    state
+}
+
+fn gallery_globals() -> std::sync::Arc<std::collections::HashMap<String, TemplateValue>> {
+    std::sync::Arc::new(
+        [
+            (
+                "favorite_album_id".into(),
+                TemplateValue::Text("00000000-0000-0000-0000-000000000001".into()),
+            ),
+            (
+                "hidden_album_id".into(),
+                TemplateValue::Text("00000000-0000-0000-0000-000000000000".into()),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    )
+}
+
+#[test]
+fn build_gallery_page_chain_renders_executable_sql() {
+    let registry = build_full_registry();
+    let state = fold_gallery_page_chain(&registry);
+
+    let ctx = TemplateContext::default()
+        .with_properties(
+            [
+                ("page_size".into(), TemplateValue::Int(100)),
+                ("page_num".into(), TemplateValue::Int(1)),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .with_globals(gallery_globals());
+
+    let (sql, params) = state
+        .build_sql(&ctx, SqlDialect::Sqlite)
+        .expect("build_sql");
+
+    // string snapshot
+    assert!(
+        sql.contains("FROM images"),
+        "sql missing FROM images: {}",
+        sql
+    );
+    assert!(sql.contains(" LIMIT ?"), "sql missing LIMIT ?: {}", sql);
+    assert!(
+        sql.contains(" OFFSET ("),
+        "sql missing OFFSET (...): {}",
+        sql
+    );
+
+    // 5 bind params: 2 global album ids + limit + 2 offset operands
+    assert_eq!(params.len(), 5, "expected 5 params, got {:?}", params);
+    assert_eq!(params[2], TemplateValue::Int(100)); // LIMIT
+    assert_eq!(params[3], TemplateValue::Int(100)); // OFFSET page_size
+    assert_eq!(params[4], TemplateValue::Int(1)); // OFFSET page_num
+
+    // sqlite execute (in-memory)
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT,
+            local_path TEXT NOT NULL DEFAULT '',
+            plugin_id TEXT,
+            task_id TEXT,
+            crawled_at INTEGER,
+            metadata_id INTEGER,
+            thumbnail_path TEXT NOT NULL DEFAULT '',
+            hash TEXT,
+            width INTEGER,
+            height INTEGER,
+            display_name TEXT,
+            type TEXT,
+            last_set_wallpaper_at INTEGER,
+            size INTEGER
+         );
+         CREATE TABLE album_images (album_id TEXT, image_id INTEGER);
+         INSERT INTO images (url, local_path, thumbnail_path, crawled_at, display_name)
+         VALUES ('a','a.jpg','a.thumb',1,'a'), ('b','b.jpg','b.thumb',2,'b'), ('c','c.jpg','c.thumb',3,'c');",
+    )
+    .unwrap();
+
+    let rusqlite_params = local_params_for(&params);
+    let mut stmt = conn.prepare(&sql).unwrap_or_else(|e| {
+        panic!("prepare failed for sql=\n{}\n: {}", sql, e);
+    });
+    let row_count: i64 = stmt
+        .query_map(rusqlite::params_from_iter(rusqlite_params.iter()), |_| {
+            Ok(1i64)
+        })
+        .unwrap()
+        .count() as i64;
+    assert_eq!(row_count, 3, "should return all 3 inserted rows");
+}
+
+#[test]
+fn build_gallery_page_chain_with_page_2_offsets_correctly() {
+    let registry = build_full_registry();
+    let state = fold_gallery_page_chain(&registry);
+
+    let ctx = TemplateContext::default()
+        .with_properties(
+            [
+                ("page_size".into(), TemplateValue::Int(2)),
+                ("page_num".into(), TemplateValue::Int(2)),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .with_globals(gallery_globals());
+
+    let (sql, params) = state.build_sql(&ctx, SqlDialect::Sqlite).unwrap();
+
+    // sqlite execute: 5 rows, page_size=2, page_num=2 → OFFSET 2, LIMIT 2 → rows 3,4
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT,
+            local_path TEXT NOT NULL DEFAULT '',
+            plugin_id TEXT,
+            task_id TEXT,
+            crawled_at INTEGER,
+            metadata_id INTEGER,
+            thumbnail_path TEXT NOT NULL DEFAULT '',
+            hash TEXT,
+            width INTEGER,
+            height INTEGER,
+            display_name TEXT,
+            type TEXT,
+            last_set_wallpaper_at INTEGER,
+            size INTEGER
+         );
+         CREATE TABLE album_images (album_id TEXT, image_id INTEGER);
+         INSERT INTO images (url, local_path, thumbnail_path, crawled_at, display_name)
+         VALUES ('a','a.jpg','a.thumb',1,'a'), ('b','b.jpg','b.thumb',2,'b'), ('c','c.jpg','c.thumb',3,'c'), ('d','d.jpg','d.thumb',4,'d'), ('e','e.jpg','e.thumb',5,'e');",
+    )
+    .unwrap();
+
+    let rusqlite_params = local_params_for(&params);
+    let mut stmt = conn.prepare(&sql).unwrap();
+    let ids: Vec<String> = stmt
+        .query_map(rusqlite::params_from_iter(rusqlite_params.iter()), |r| {
+            r.get::<_, String>(0)
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(ids, vec!["3".to_string(), "4".to_string()]);
+}
+
+#[test]
+fn standalone_provider_query_with_join_executes() {
+    use pathql_rs::ast::{JoinKind, SqlExpr};
+    use pathql_rs::compose::{FieldFrag, JoinFrag, ResolvedAlias};
+
+    let mut q = ProviderQuery::new();
+    q.from = Some(SqlExpr("images".into()));
+    q.fields.push(FieldFrag {
+        sql: SqlExpr("images.title".into()),
+        alias: None,
+        in_need: false,
+    });
+    q.joins.push(JoinFrag {
+        kind: JoinKind::Inner,
+        table: SqlExpr("album_images".into()),
+        alias: ResolvedAlias::Literal("ai".into()),
+        on: Some(SqlExpr("ai.image_id = images.id".into())),
+        in_need: false,
+    });
+    q.wheres
+        .push(SqlExpr("ai.album_id = ${properties.aid}".into()));
+
+    let ctx = TemplateContext::default().with_properties(
+        [("aid".into(), TemplateValue::Int(1))]
+            .into_iter()
+            .collect(),
+    );
+    let (sql, params) = q.build_sql(&ctx, SqlDialect::Sqlite).unwrap();
+    assert!(sql.contains("INNER JOIN album_images AS ai ON ai.image_id = images.id"));
+
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE images (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL);
+         CREATE TABLE album_images (album_id INTEGER, image_id INTEGER);
+         INSERT INTO images (title) VALUES ('first'), ('second'), ('third');
+         INSERT INTO album_images (album_id, image_id) VALUES (1, 1), (1, 2), (2, 3);",
+    )
+    .unwrap();
+
+    let rusqlite_params = local_params_for(&params);
+    let mut stmt = conn.prepare(&sql).unwrap();
+    let titles: Vec<String> = stmt
+        .query_map(rusqlite::params_from_iter(rusqlite_params.iter()), |r| {
+            r.get::<_, String>(0)
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(titles, vec!["first".to_string(), "second".to_string()]);
+}

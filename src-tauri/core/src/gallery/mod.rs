@@ -2,4 +2,4 @@
 
 pub mod browse;
 
-pub use browse::{browse_from_provider, GalleryBrowseEntry};
+pub use browse::{browse_from_provider, browse_from_provider_jsonmeta, GalleryBrowseEntry};

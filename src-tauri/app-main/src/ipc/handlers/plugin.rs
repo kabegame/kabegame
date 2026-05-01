@@ -46,9 +46,7 @@ pub async fn handle_plugin_request(req: &IpcRequest) -> Option<IpcResponse> {
             .await,
         ),
 
-        IpcRequest::PluginPreviewImport { zip_path } => {
-            Some(preview_import_plugin(zip_path).await)
-        }
+        IpcRequest::PluginPreviewImport { zip_path } => Some(preview_import_plugin(zip_path).await),
         IpcRequest::PluginGetRemoteIconV2 {
             download_url,
             source_id,
@@ -72,7 +70,7 @@ async fn get_plugins() -> IpcResponse {
     if let Err(e) = plugin_manager.ensure_installed_cache_initialized().await {
         return IpcResponse::err(e);
     }
-    match plugin_manager.get_all().await {
+    match plugin_manager.get_all() {
         Ok(plugins) => {
             IpcResponse::ok_with_data("ok", serde_json::to_value(plugins).unwrap_or_default())
         }

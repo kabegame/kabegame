@@ -1,0 +1,14 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_album_bigger_order_router",
+    "resolve": {
+        // 任意非空段被当作 album_images.order 整数, 转交 filter
+        "(.+)": {
+            "provider": "gallery_album_bigger_order_filter",
+            "properties": {
+                "order": "${capture[1]}"
+            }
+        }
+    }
+}

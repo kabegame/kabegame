@@ -1,0 +1,29 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_dates_router",
+    // 7c S7-b: programmatic GalleryDatesRouter 迁 DSL。年→月→日 三层结构,
+    // 本层是年; apply_query 给上游加 crawled_at ASC 排序基线 (与 programmatic 同)。
+    "query": {
+        "order": [{ "images.crawled_at": "asc" }]
+    },
+    "list": {
+        // 从 composed 抽 distinct 年 (DESC, 最近的先)。${composed} 已带 gallery_route fields/joins。
+        "${out.year}y": {
+            "sql": "SELECT DISTINCT strftime('%Y', crawled_at_seconds(sub.crawled_at), 'unixepoch') AS year FROM (${composed}) AS sub WHERE strftime('%Y', crawled_at_seconds(sub.crawled_at), 'unixepoch') IS NOT NULL ORDER BY year DESC",
+            "data_var": "out",
+            "provider": "gallery_date_year_provider",
+            "properties": {
+                "year": "${out.year}"
+            }
+        }
+    },
+    "resolve": {
+        "([0-9]{4})y": {
+            "provider": "gallery_date_year_provider",
+            "properties": {
+                "year": "${capture[1]}"
+            }
+        }
+    }
+}

@@ -10,7 +10,8 @@ pub(super) async fn fix_wallpaper_window_zorder(app: tauri::AppHandle) {
     };
 
     // 检查是否是窗口模式（从 Settings 读取 settings.wallpaperMode）
-    let is_window_mode = kabegame_core::settings::Settings::global().get_wallpaper_mode() == "window";
+    let is_window_mode =
+        kabegame_core::settings::Settings::global().get_wallpaper_mode() == "window";
 
     if !is_window_mode {
         return;

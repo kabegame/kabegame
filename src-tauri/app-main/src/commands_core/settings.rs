@@ -2,27 +2,39 @@ use kabegame_core::settings::Settings;
 use serde_json::Value;
 
 pub fn get_favorite_album_id() -> Result<Value, String> {
-    Ok(Value::String("00000000-0000-0000-0000-000000000001".to_string()))
+    Ok(Value::String(
+        "00000000-0000-0000-0000-000000000001".to_string(),
+    ))
 }
 
 pub fn get_import_recommended_schedule_enabled() -> Result<Value, String> {
-    Ok(Value::Bool(Settings::global().get_import_recommended_schedule_enabled()))
+    Ok(Value::Bool(
+        Settings::global().get_import_recommended_schedule_enabled(),
+    ))
 }
 
 pub fn get_max_concurrent_downloads() -> Result<Value, String> {
-    Ok(serde_json::json!(Settings::global().get_max_concurrent_downloads()))
+    Ok(serde_json::json!(
+        Settings::global().get_max_concurrent_downloads()
+    ))
 }
 
 pub fn get_max_concurrent_tasks() -> Result<Value, String> {
-    Ok(serde_json::json!(Settings::global().get_max_concurrent_tasks()))
+    Ok(serde_json::json!(
+        Settings::global().get_max_concurrent_tasks()
+    ))
 }
 
 pub fn get_download_interval_ms() -> Result<Value, String> {
-    Ok(serde_json::json!(Settings::global().get_download_interval_ms()))
+    Ok(serde_json::json!(
+        Settings::global().get_download_interval_ms()
+    ))
 }
 
 pub fn get_network_retry_count() -> Result<Value, String> {
-    Ok(serde_json::json!(Settings::global().get_network_retry_count()))
+    Ok(serde_json::json!(
+        Settings::global().get_network_retry_count()
+    ))
 }
 
 pub fn get_auto_deduplicate() -> Result<Value, String> {

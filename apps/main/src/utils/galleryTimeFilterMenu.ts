@@ -15,6 +15,10 @@ export interface TimeMenuNode {
   children?: TimeMenuNode[];
 }
 
+export interface GalleryTimeMenuTreeOptions {
+  collapse?: boolean;
+}
+
 /** `@kabegame/i18n` / `useI18n().t`（仅用于时间菜单文案） */
 export type TimeMenuTranslateFn = (
   key: string,
@@ -116,8 +120,38 @@ export function formatTimeMenuDayRow(
   return englishOrdinalDay(dayNum);
 }
 
+export function formatTimeFilterDetail(
+  segment: string,
+  locale: string,
+  t: TimeMenuTranslateFn
+): string {
+  const parts = segment.trim().split("-");
+  const year = parts[0] ?? "";
+  if (!/^\d{4}$/.test(year)) return segment;
+
+  const labels = buildTimeMenuScopeLabels(t, locale);
+  const month = parts[1] ?? "";
+  if (!month) return labels.labelFullYearRow(year);
+
+  const yearMonth = `${year}-${month}`;
+  if (!/^\d{4}-\d{2}$/.test(yearMonth)) return segment;
+  const monthLabel = labels.labelMonthRow(yearMonth);
+
+  const day = parts[2] ?? "";
+  if (!day) return `${year} ${monthLabel}`;
+
+  const ymd = `${yearMonth}-${day}`;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return segment;
+  return `${year} ${monthLabel} ${labels.labelDayRow(ymd)}`;
+}
+
 export interface DateGroupRow {
   year_month: string;
+  count: number;
+}
+
+export interface YearGroupRow {
+  year: string;
   count: number;
 }
 
@@ -136,12 +170,14 @@ export interface GalleryTimeFilterPayload {
 export interface GalleryTimeIndex {
   daysByYm: Map<string, DayGroupRow[]>;
   yearToMonths: Map<string, DateGroupRow[]>;
+  yearCounts: Map<string, number>;
   years: string[];
 }
 
 export function buildGalleryTimeIndex(
   monthGroups: DateGroupRow[],
-  dayGroups: DayGroupRow[]
+  dayGroups: DayGroupRow[],
+  yearGroups: YearGroupRow[] = []
 ): GalleryTimeIndex {
   const daysByYm = new Map<string, DayGroupRow[]>();
   for (const d of dayGroups) {
@@ -171,8 +207,17 @@ export function buildGalleryTimeIndex(
     arr.sort((a, b) => a.year_month.localeCompare(b.year_month));
   }
 
-  const years = [...yearToMonths.keys()].sort((a, b) => a.localeCompare(b));
-  return { daysByYm, yearToMonths, years };
+  const yearCounts = new Map<string, number>();
+  for (const y of yearGroups) {
+    if (/^\d{4}$/.test(y.year) && y.count > 0) {
+      yearCounts.set(y.year, y.count);
+    }
+  }
+
+  const years = [...new Set([...yearCounts.keys(), ...yearToMonths.keys()])].sort((a, b) =>
+    a.localeCompare(b)
+  );
+  return { daysByYm, yearToMonths, yearCounts, years };
 }
 
 /** 若某层仅有一个子级，则省略该层，直接展示子级（递归向下）。 */
@@ -190,11 +235,14 @@ export function collapseTimeMenuTree(nodes: TimeMenuNode[]): TimeMenuNode[] {
 export function buildGalleryTimeMenuTree(
   monthGroups: DateGroupRow[],
   dayGroups: DayGroupRow[],
-  labels: TimeMenuScopeLabels
+  labels: TimeMenuScopeLabels,
+  yearGroups: YearGroupRow[] = [],
+  options: GalleryTimeMenuTreeOptions = {}
 ): TimeMenuNode[] {
-  const { daysByYm, yearToMonths, years } = buildGalleryTimeIndex(
+  const { daysByYm, yearToMonths, yearCounts, years } = buildGalleryTimeIndex(
     monthGroups,
-    dayGroups
+    dayGroups,
+    yearGroups
   );
 
   const roots: TimeMenuNode[] = years.map((year) => {
@@ -222,7 +270,7 @@ export function buildGalleryTimeMenuTree(
       };
     });
 
-    const total = months.reduce((s, m) => s + m.count, 0);
+    const total = yearCounts.get(year) ?? months.reduce((s, m) => s + m.count, 0);
     const fullYear: TimeMenuNode = {
       name: year,
       label: labels.labelFullYearRow(year),
@@ -239,7 +287,7 @@ export function buildGalleryTimeMenuTree(
     };
   });
 
-  return collapseTimeMenuTree(roots);
+  return options.collapse === false ? roots : collapseTimeMenuTree(roots);
 }
 
 export function isTimeMenuNodeActive(

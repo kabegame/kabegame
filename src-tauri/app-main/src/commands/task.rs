@@ -104,6 +104,12 @@ pub async fn clear_finished_tasks() -> Result<usize, String> {
         let ids = storage.get_task_image_ids(tid)?;
         all_image_ids.extend(ids);
     }
+    let mut plugin_seen = HashSet::new();
+    let plugin_ids: Vec<String> = task_ids
+        .iter()
+        .filter_map(|tid| storage.get_task(tid).ok().flatten().map(|t| t.plugin_id))
+        .filter(|pid| plugin_seen.insert(pid.clone()))
+        .collect();
     let count = storage.clear_finished_tasks()?;
     for tid in &task_ids {
         GlobalEmitter::global().emit_task_deleted(tid);
@@ -116,6 +122,7 @@ pub async fn clear_finished_tasks() -> Result<usize, String> {
             &all_image_ids,
             Some(&task_ids),
             None,
+            Some(&plugin_ids),
         );
     }
     Ok(count)
@@ -250,11 +257,21 @@ pub async fn update_task(task: serde_json::Value) -> Result<(), String> {
 pub async fn delete_task(task_id: String) -> Result<(), String> {
     let storage = Storage::global();
     let image_ids = storage.get_task_image_ids(&task_id)?;
+    let plugin_ids = storage
+        .get_task(&task_id)?
+        .map(|t| vec![t.plugin_id])
+        .unwrap_or_default();
     storage.delete_task(&task_id)?;
     GlobalEmitter::global().emit_task_deleted(&task_id);
     if !image_ids.is_empty() {
         let tids = vec![task_id];
-        GlobalEmitter::global().emit_images_change("change", &image_ids, Some(&tids), None);
+        GlobalEmitter::global().emit_images_change(
+            "change",
+            &image_ids,
+            Some(&tids),
+            None,
+            Some(&plugin_ids),
+        );
     }
     Ok(())
 }

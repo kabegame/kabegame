@@ -1,0 +1,36 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_paginate_router",
+    // 容器节点: 自身不列图片
+    "query": { "limit": 0 },
+    "properties": {
+        "page_size": { "type": "number", "default": 1, "optional": false }
+    },
+
+    "list": {
+        // 6e: 数据源 delegate 直接命中 page_size_provider (无 __provider 间接桥)。
+        // 每个 child = { name: "<page>", meta: { page_num: <page> } }
+        "${out.meta.page_num}": {
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": "${properties.page_size}" }
+            },
+            "child_var": "out",
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": "${properties.page_size}",
+                "page_num":  "${out.meta.page_num}"
+            }
+        }
+    },
+    "resolve": {
+        "([1-9][0-9]*)": {
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": "${properties.page_size}",
+                "page_num": "${capture[1]}"
+            }
+        }
+    }
+}

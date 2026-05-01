@@ -5,8 +5,8 @@ use tauri::{
 };
 
 use crate::models::{
-    CompressVideoForPreviewArgs, CompressVideoForPreviewResponse,
-    ExtractVideoFramesArgs, ExtractVideoFramesResponse,
+    CompressVideoForPreviewArgs, CompressVideoForPreviewResponse, ExtractVideoFramesArgs,
+    ExtractVideoFramesResponse,
 };
 
 pub fn init<R: Runtime, C: DeserializeOwned>(

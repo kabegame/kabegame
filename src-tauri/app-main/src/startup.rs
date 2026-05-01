@@ -1,50 +1,49 @@
 // 启动步骤函数
 
 use async_trait::async_trait;
-use kabegame_core::crawler::{TaskScheduler, scheduler};
+use kabegame_core::crawler::{scheduler, TaskScheduler};
 use kabegame_i18n::t;
 // 事件转发到前端（桌面与 Android 均需要，用于 tasks-change 等）
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 use crate::wallpaper::manager::WallpaperController;
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 use crate::wallpaper::WallpaperRotator;
+#[cfg(feature = "web")]
+use crate::web::server::SseMessage;
 use kabegame_core::ipc::events::DaemonEventKind;
 use kabegame_core::ipc::{DaemonEvent, EventBroadcaster};
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
+#[cfg(feature = "standard")]
+use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use std::fs;
 use std::sync::Arc;
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 use tauri::{AppHandle, Emitter, Listener, Manager};
-#[cfg(kabegame_mode = "standard")]
-use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+
 #[cfg(feature = "web")]
-use crate::web::server::SseMessage;
-
-
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+use crate::web::server::*;
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::downloader::{
     compute_native_download_destination, postprocess_downloaded_image, BrowserDownloadState,
     NativeDownloadEntry, NativeDownloadState,
 };
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::webview::{
     crawler_window_state, set_webview_handler, CrawlerWebViewHandler,
 };
 #[cfg(not(target_os = "android"))]
 use kabegame_core::emitter::GlobalEmitter;
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use tauri::webview::DownloadEvent;
-#[cfg(feature = "web")]
-use crate::web::server::*;
 
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 struct AppCrawlerWebViewHandler {
     app: AppHandle,
 }
 
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 #[async_trait]
 impl CrawlerWebViewHandler for AppCrawlerWebViewHandler {
     async fn setup_js_task(&self, _task_id: &str, base_url: &str) -> Result<(), String> {
@@ -79,19 +78,22 @@ pub fn init_kgpg_plugin() {
         if let Err(e) = pm.ensure_installed_cache_initialized().await {
             eprintln!("Failed to initialize plugin cache: {}", e);
         }
+        if let Err(e) = pm.register_installed_plugin_providers().await {
+            eprintln!("Failed to register installed plugin providers: {}", e);
+        }
         // 初始化商店插件缓存（已下载到本地的 .kgpg）
         if let Err(e) = pm.init_store_plugin_cache().await {
             eprintln!("Failed to initialize store plugin cache: {}", e);
         }
     };
-    #[cfg(feature = "local")]
+    #[cfg(not(feature = "web"))]
     tauri::async_runtime::spawn(task_future);
     #[cfg(feature = "web")]
     tokio::spawn(task_future);
 }
 
 // 清理用户数据（清理后重启时在 init_globals 之前执行，避免 DB 已打开导致删除失败）
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 pub fn cleanup_user_data_if_marked() -> bool {
     let paths = kabegame_core::app_paths::AppPaths::global();
     let cleanup_marker = paths.cleanup_marker();
@@ -121,7 +123,7 @@ pub fn cleanup_user_data_if_marked() -> bool {
     is_cleaning_data
 }
 
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 pub fn create_main_window(app_handle: &AppHandle) -> Result<(), String> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -179,13 +181,13 @@ pub fn create_main_window(app_handle: &AppHandle) -> Result<(), String> {
 }
 /// 检测是否是开机启动（带 --minimized 时不创建/不显示主窗口）
 /// 判断逻辑：检查命令行参数中是否有 --minimized 参数
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 pub fn is_auto_startup() -> bool {
     std::env::args().any(|arg| arg == "--minimized")
 }
 
 /// 若主窗口不存在则创建，然后显示并聚焦。用于托盘点击、IPC AppShowWindow 等“显示窗口”场景。
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 pub fn ensure_main_window(app_handle: AppHandle) -> Result<(), String> {
     use tauri::Manager;
     if let Some(w) = app_handle.get_webview_window("main") {
@@ -203,7 +205,7 @@ pub fn ensure_main_window(app_handle: AppHandle) -> Result<(), String> {
 }
 
 // 壁纸组件，壁纸设置、轮播等功能
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 pub fn init_wallpaper_controller(app: &mut tauri::App) {
     // 初始化全局壁纸控制器（基础 manager）
     // 使用全局单例（不再使用 manage）
@@ -272,20 +274,17 @@ pub fn init_wallpaper_controller(app: &mut tauri::App) {
 
 /// 启动事件转发任务（将同步广播和异步广播都收拢到一个接口处）
 pub fn start_event_forward_task() {
-    let task_future= async {
+    let task_future = async {
         EventBroadcaster::start_forward_task().await;
     };
-    #[cfg(feature = "local")]
+    #[cfg(not(feature = "web"))]
     tauri::async_runtime::spawn(task_future);
     #[cfg(feature = "web")]
     tokio::spawn(task_future);
 }
 
 /// 启动本地事件转发循环（将 Broadcaster 事件转发给 Tauri 前端，桌面与 Android 均需）
-pub fn start_event_loop(
-    #[cfg(feature = "local")]
-    app: AppHandle
-) {
+pub fn start_event_loop(#[cfg(not(feature = "web"))] app: AppHandle) {
     #[cfg(feature = "web")]
     let bus = event_bus().clone();
     #[cfg(feature = "web")]
@@ -298,20 +297,21 @@ pub fn start_event_loop(
         while let Some((_id, event)) = rx.recv().await {
             let kind = event.kind();
 
-            #[cfg(feature = "web")] {
+            #[cfg(feature = "web")]
+            {
                 counter += 1;
             }
 
             #[cfg(feature = "web")]
-            let _ = bus.send(SseMessage { 
-                event: kind.as_event_name(), 
-                data: serde_json::to_string(&*event).unwrap_or_else(|_| "null".into()), 
-                id: counter 
+            let _ = bus.send(SseMessage {
+                event: kind.as_event_name(),
+                data: serde_json::to_string(&*event).unwrap_or_else(|_| "null".into()),
+                id: counter,
             });
 
             match &*event {
                 DaemonEvent::Generic { event, payload } => {
-                    #[cfg(feature = "local")]
+                    #[cfg(not(feature = "web"))]
                     let _ = app.emit(event.as_str(), payload.clone());
                 }
                 DaemonEvent::SettingChange { changes } => {
@@ -319,7 +319,7 @@ pub fn start_event_loop(
                         eprintln!("保存设置失败 {}", e);
                     }
 
-                    #[cfg(feature = "local")]
+                    #[cfg(not(feature = "web"))]
                     let _ = app.emit("setting-change", changes.clone());
 
                     // maxConcurrentDownloads 变更时更新运行时调度器
@@ -335,28 +335,34 @@ pub fn start_event_loop(
                     }
 
                     // albumDriveEnabled 变更时挂载/卸载虚拟盘
-                    #[cfg(kabegame_mode = "standard")]
+                    #[cfg(feature = "standard")]
                     if let Some(enabled_val) = changes.get("albumDriveEnabled") {
                         if let Some(enabled) = enabled_val.as_bool() {
                             tokio::spawn(async move {
                                 if enabled {
-                                    let mount_point = Settings::global().get_album_drive_mount_point();
-                                    let vd_service = kabegame_core::virtual_driver::VirtualDriveService::global();
+                                    let mount_point =
+                                        Settings::global().get_album_drive_mount_point();
+                                    let vd_service =
+                                        kabegame_core::virtual_driver::VirtualDriveService::global(
+                                        );
                                     let _ = tokio::task::spawn_blocking(move || {
                                         vd_service.mount(mount_point.as_str())
-                                    }).await;
+                                    })
+                                    .await;
                                 } else {
-                                    let vd_service = kabegame_core::virtual_driver::VirtualDriveService::global();
-                                    let _ = tokio::task::spawn_blocking(move || {
-                                        vd_service.unmount()
-                                    }).await;
+                                    let vd_service =
+                                        kabegame_core::virtual_driver::VirtualDriveService::global(
+                                        );
+                                    let _ =
+                                        tokio::task::spawn_blocking(move || vd_service.unmount())
+                                            .await;
                                 }
                             });
                         }
                     }
 
                     // 语言变更时刷新托盘菜单、收藏画册/官方插件源 i18n 名称（与磁盘挂载等实现方式一致，在 setting 回调处处理）。web的语言在前端处理
-                    #[cfg(feature = "local")]
+                    #[cfg(not(feature = "web"))]
                     if changes.get("language").is_some() {
                         let raw = t!("albums.favorite");
                         let i18n_name = if raw == "albums.favorite" {
@@ -389,7 +395,7 @@ pub fn start_event_loop(
                         }
                     }
                 }
-                #[cfg(feature = "local")]
+                #[cfg(not(feature = "web"))]
                 DaemonEvent::WallpaperUpdateImage { image_path } => {
                     #[cfg(not(target_os = "android"))]
                     {
@@ -403,7 +409,7 @@ pub fn start_event_loop(
                         });
                     }
                 }
-                #[cfg(feature = "local")]
+                #[cfg(not(feature = "web"))]
                 DaemonEvent::TaskChanged { diff, .. } => {
                     let event_name = kind.as_event_name();
                     let payload =
@@ -425,17 +431,16 @@ pub fn start_event_loop(
                     }
                 }
                 _ => {
-                    #[cfg(feature = "local")]
+                    #[cfg(not(feature = "web"))]
                     let _ = app.emit(
-                        kind.as_event_name().as_str(), 
-                        serde_json::to_value(&event)
-                            .unwrap_or_else(|_| serde_json::Value::Null)
+                        kind.as_event_name().as_str(),
+                        serde_json::to_value(&event).unwrap_or_else(|_| serde_json::Value::Null),
                     );
                 }
             }
         }
     };
-    #[cfg(feature = "local")]
+    #[cfg(not(feature = "web"))]
     tauri::async_runtime::spawn(event_loop_future);
     #[cfg(feature = "web")]
     tokio::spawn(event_loop_future);
@@ -493,23 +498,22 @@ pub fn try_forward_to_existing_instance_and_exit() {
 
 /// 启动 IPC 服务（仅需 app_handle，DedupeService / VirtualDriveService 等由全局单例提供）
 #[cfg(not(target_os = "android"))]
-pub fn start_ipc_server(
-    #[cfg(feature = "local")]
-    app_handle: AppHandle
-) {
+pub fn start_ipc_server(#[cfg(not(feature = "web"))] app_handle: AppHandle) {
     println!("[IPC_SERVER] Starting IPC server...");
 
     let task_future = async move {
         // 启动服务器（app_handle 直接传入 dispatch_request）
         let res = kabegame_core::ipc::server::serve_with_events(move |req| {
-            #[cfg(feature = "local")]
+            #[cfg(not(feature = "web"))]
             let app_handle = app_handle.clone();
             async move {
                 use crate::ipc::dispatch_request;
-                dispatch_request(req, 
-                    #[cfg(feature = "local")]
-                    app_handle
-                ).await
+                dispatch_request(
+                    req,
+                    #[cfg(not(feature = "web"))]
+                    app_handle,
+                )
+                .await
             }
         })
         .await;
@@ -519,7 +523,7 @@ pub fn start_ipc_server(
         }
     };
 
-    #[cfg(feature = "local")]
+    #[cfg(not(feature = "web"))]
     tauri::async_runtime::spawn(task_future);
     #[cfg(feature = "web")]
     tokio::spawn(task_future);
@@ -540,7 +544,7 @@ pub fn init_download_workers() {
     let task_future = async {
         TaskScheduler::global().set_download_concurrency().await;
     };
-    #[cfg(feature = "local")]
+    #[cfg(not(feature = "web"))]
     tauri::async_runtime::spawn(task_future);
     #[cfg(feature = "web")]
     tokio::spawn(task_future);
@@ -552,13 +556,13 @@ pub fn start_download_workers() {
             .start_workers(kabegame_core::crawler::MAX_TASK_WORKER_LOOPS)
             .await;
     };
-    #[cfg(feature = "local")]
+    #[cfg(not(feature = "web"))]
     tauri::async_runtime::spawn(task_future);
     #[cfg(feature = "web")]
     tokio::spawn(task_future);
 }
 
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
     if app_handle.get_webview_window("crawler").is_some() {
         return Ok(());
@@ -697,13 +701,13 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 pub fn init_crawler_webview_handler(app_handle: AppHandle) -> Result<(), String> {
     let handler = Arc::new(AppCrawlerWebViewHandler { app: app_handle });
     set_webview_handler(handler)
 }
 
-#[cfg(all(not(target_os = "android"), feature = "local"))]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 pub fn init_crawler_window(app_handle: AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(e) = create_crawler_window(app_handle.clone()) {
@@ -721,7 +725,7 @@ pub fn start_task_scheduler() {
         TaskScheduler::global().start_download_workers_async().await;
         TaskScheduler::global().set_task_concurrency();
     };
-    #[cfg(feature = "local")]
+    #[cfg(not(feature = "web"))]
     tauri::async_runtime::spawn(task_future);
     #[cfg(feature = "web")]
     tokio::spawn(task_future);
@@ -732,7 +736,7 @@ pub fn start_task_scheduler() {
 /// 规则（按用户需求）：
 /// - 非轮播：尝试设置 currentWallpaperImageId；失败则清空并停止
 /// - 轮播：优先在轮播源中找到 currentWallpaperImageId；找不到则回退到轮播源的一张；源无可用则画册->画廊->关闭轮播并清空
-#[cfg(feature = "local")]
+#[cfg(not(feature = "web"))]
 pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     use std::path::Path;
 
@@ -741,7 +745,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     {
         use crate::linux_desktop::{linux_desktop, LinuxDesktop};
         use crate::wallpaper::manager::PlasmaPluginWallpaperManager;
-        let mode = Settings::global().get_wallpaper_mode();        
+        let mode = Settings::global().get_wallpaper_mode();
         if linux_desktop() == LinuxDesktop::Plasma && mode == "plasma-plugin" {
             if let Err(e) = PlasmaPluginWallpaperManager::ensure_plasma_plugin_aligned() {
                 eprintln!("[WARN] ensure_plasma_plugin_aligned failed: {}", e);

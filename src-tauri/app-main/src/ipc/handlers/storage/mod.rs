@@ -88,9 +88,6 @@ pub async fn handle_storage_request(req: &IpcRequest) -> Option<IpcResponse> {
             Some(images::get_gallery_plugin_groups().await)
         }
         IpcRequest::StorageGetTasksWithImages => Some(tasks::get_tasks_with_images().await),
-        IpcRequest::StorageGetImagesCountByQuery { query } => {
-            Some(images::get_images_count_by_query(query).await)
-        }
         _ => None,
     }
 }

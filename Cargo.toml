@@ -2,6 +2,7 @@
 members = [
   "src-tauri/core",
   "src-tauri/kabegame-i18n",
+  "src-tauri/pathql-rs",
   "src-tauri/app-main",
   "src-tauri/app-cli",
   "src-tauri-plugins/tauri-plugin-picker",
@@ -16,20 +17,30 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "4.0.1"
+version = "4.1.0"
 
 [workspace.dependencies]
+arc-swap= "1.7"
 async-trait = "0.1"
 base64 = "0.22"
 image = "0.24"
+include_dir = "0.7"
+json5 = "0.4"
 kabegame-core = {path = "./src-tauri/core", default-features = false}
 kabegame-i18n = {path = "./src-tauri/kabegame-i18n"}
+pathql-rs = {path = "./src-tauri/pathql-rs", default-features = false}
+regex = "1"
+regex-automata = "0.4"
+rusqlite = { version = "0.31", features = ["bundled", "functions"] }
+sqlparser = "0.51"
+thiserror = "1.0"
 rhai = {version = "1.24", features = ["sync"]}
 serde = {version = "1.0", features = ["derive"]}
 serde_bytes = "0.11"
 serde_cbor = "0.11"
 serde_json = "1.0"
 md5 = "0.7"
+percent-encoding = "2"
 sha2 = "0.10"
 tauri-build = {version = "2.5", features = []}
 tauri-plugin-archiver = {path = "./src-tauri-plugins/tauri-plugin-archiver"}

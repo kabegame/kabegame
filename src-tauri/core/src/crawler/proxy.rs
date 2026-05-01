@@ -96,7 +96,9 @@ fn get_windows_system_proxy() -> Option<String> {
     // HTTPS 请求连接代理时应使用 http://，由代理做 CONNECT 隧道
     Some(format!(
         "http://{}",
-        host_port.trim_start_matches("http://").trim_start_matches("https://")
+        host_port
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
     ))
 }
 

@@ -1,0 +1,25 @@
+[package]
+name = "pathql-rs"
+edition = { workspace = true }
+version = { workspace = true }
+description = "Path-folding query DSL — AST + Loader + Registry + template eval + SQL build + Provider runtime; json5 / validate features (dialect-agnostic, no driver dep)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+percent-encoding = { workspace = true }
+json5 = { workspace = true, optional = true }
+regex-automata = { workspace = true, optional = true }
+sqlparser = { workspace = true, optional = true }
+arc-swap = { workspace = true }
+
+[features]
+default = []
+json5 = ["dep:json5"]
+validate = ["dep:regex-automata", "dep:sqlparser"]
+
+[dev-dependencies]
+serde_json = { workspace = true }
+rusqlite = { workspace = true }

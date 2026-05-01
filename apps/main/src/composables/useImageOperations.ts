@@ -9,7 +9,7 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { fileToUrl } from "@kabegame/core/httpServer";
 import { IS_WEB } from "@kabegame/core/env";
 import { openLocalImage } from "@/utils/openLocalImage";
-import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
+import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { i18n } from "@kabegame/i18n";
 
 export type FavoriteStatusChangedDetail = {
@@ -316,6 +316,14 @@ export function useImageOperations(
   // 设置壁纸（单选或多选）
   const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
     try {
+      if (IS_WEB && imagesToProcess.length > 0) {
+        await setWallpaperOrBackground(imagesToProcess[0].id);
+        currentWallpaperImageId.value = imagesToProcess[0].id;
+        ElMessage.success(i18n.global.t("common.wallpaperSetSuccess"));
+        galleryViewRef.value?.clearSelection?.();
+        return;
+      }
+
       if (imagesToProcess.length > 1) {
         // 多选：创建"桌面画册x"，添加到画册，开启轮播
         // 1. 找到下一个可用的"桌面画册x"名称
@@ -367,7 +375,7 @@ export function useImageOperations(
         );
       } else {
         // 单选：直接设置壁纸
-        await setWallpaperByImageIdWithModeFallback(imagesToProcess[0].id);
+        await setWallpaperOrBackground(imagesToProcess[0].id);
         currentWallpaperImageId.value = imagesToProcess[0].id;
         ElMessage.success(i18n.global.t("common.wallpaperSetSuccess"));
       }

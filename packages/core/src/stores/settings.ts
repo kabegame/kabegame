@@ -60,6 +60,12 @@ export interface AppSettings {
   language: string | null;
 
   // --- 前端本地偏好（始终走 localStorage，所有平台一致）---
+  /** 应用内背景图开关 */
+  appBackgroundEnabled: boolean;
+  /** 应用内背景图模糊半径（px） */
+  appBackgroundBlur: number;
+  /** 应用内背景图透明度（0~1） */
+  appBackgroundOpacity: number;
   /** 画廊每页条数（100 / 500 / 1000） */
   galleryPageSize: number;
   /** 画廊布局模式："grid"=CSS 网格（现状）；"gallery"=瀑布流（N 列/行 masonry） */
@@ -91,13 +97,14 @@ const WEB_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
   { key: "imageClickAction", defaultValue: "preview", readonly: true },
   { key: "galleryImageAspectRatio", defaultValue: "16:10" },
   { key: "galleryImageObjectPosition", defaultValue: "center" },
-  // 壁纸能力：web 模式下只做 localStorage 占位，修改时弹 desktopOnlyGuard
+  // 壁纸轮播能力：web 模式下只做 localStorage 占位，修改时弹 desktopOnlyGuard
   { key: "wallpaperRotationEnabled", defaultValue: false, readonly: true },
   { key: "wallpaperRotationAlbumId", defaultValue: null, readonly: true },
   { key: "wallpaperRotationIncludeSubalbums", defaultValue: true, readonly: true },
   { key: "wallpaperRotationIntervalMinutes", defaultValue: 30, readonly: true },
   { key: "wallpaperRotationMode", defaultValue: "random", readonly: true },
-  { key: "currentWallpaperImageId", defaultValue: null, readonly: true },
+  // web 下作为应用内背景图来源，可写入 localStorage
+  { key: "currentWallpaperImageId", defaultValue: null },
   { key: "wallpaperVolume", defaultValue: 0.5, readonly: true },
   { key: "wallpaperVideoPlaybackRate", defaultValue: 1, readonly: true },
   // 壁纸样式/模式/过渡：web 不使用，readonly 占位防止 IPC 调用
@@ -162,6 +169,9 @@ function webReadonlyFeatureKey(key: AppSettingKey): string {
  * 两份列表会合并到同一个 localStorage 短路层，对消费者完全透明。
  */
 const FRONTEND_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
+  { key: "appBackgroundEnabled", defaultValue: true },
+  { key: "appBackgroundBlur", defaultValue: 2 },
+  { key: "appBackgroundOpacity", defaultValue: 0.25 },
   { key: "galleryPageSize", defaultValue: 100 },
   { key: "galleryGridColumns", defaultValue: 0 },
   { key: "galleryLayoutMode", defaultValue: "grid" },

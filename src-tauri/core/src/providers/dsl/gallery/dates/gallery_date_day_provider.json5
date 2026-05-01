@@ -1,0 +1,26 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_date_day_provider",
+    "properties": {
+        "ymd": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "strftime('%Y-%m-%d', crawled_at_seconds(images.crawled_at), 'unixepoch') = ${properties.ymd}"
+    },
+    "list": {},
+    "resolve": {
+        "desc": { "provider": "sort_router" },
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        },
+        "([1-9][0-9]*)": {
+            "provider": "gallery_page_router",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        }
+    }
+}

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub mod albums;
+pub mod dsl_funcs;
 pub mod gallery;
 pub mod gallery_time;
 pub mod image_events;
@@ -14,6 +15,7 @@ pub mod plugin_sources;
 pub mod run_configs;
 pub mod surf_records;
 pub mod tasks;
+pub(crate) mod template_bridge;
 
 pub use albums::Album;
 pub use gallery::GalleryMediaTypeCounts;
@@ -89,6 +91,10 @@ PRAGMA mmap_size = 268435456;
         } else {
             migrations::run_pending(&conn).expect("Failed to run pending DB migrations");
         }
+
+        // 7a: schema 就绪后注册 DSL 主机 SQL 函数 (get_plugin 等)。
+        // connection-scoped, 单连接架构注册一次即可。
+        dsl_funcs::register_dsl_functions(&conn).expect("Failed to register DSL scalar functions");
 
         Self {
             db: Arc::new(Mutex::new(conn)),

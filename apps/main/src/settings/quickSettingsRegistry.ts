@@ -8,6 +8,7 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
 import SettingRadioControl from "@kabegame/core/components/settings/controls/SettingRadioControl.vue";
+import SettingSliderControl from "@kabegame/core/components/settings/controls/SettingSliderControl.vue";
 
 import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
 import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
@@ -27,6 +28,15 @@ export function useQuickSettingsGroups() {
   const { t } = useI18n();
   const settingsStore = useSettingsStore();
   const isHorizontal = () => settingsStore.values.galleryLayoutDirection === "horizontal";
+  const allPages: QuickSettingsPageId[] = [
+    "gallery",
+    "albums",
+    "albumdetail",
+    "failedimages",
+    "pluginbrowser",
+    "settings",
+    "autoconfigs",
+  ];
 
   const translatedGroups = computed((): QuickSettingGroup<QuickSettingsPageId>[] => [
     {
@@ -108,6 +118,44 @@ export function useQuickSettingsGroups() {
           },
           pages: ["gallery", "albumdetail"],
         } as QuickSettingItem<QuickSettingsPageId>] : []),
+        {
+          key: "appBackgroundEnabled",
+          label: t("settings.appBackgroundEnabled"),
+          description: t("settings.appBackgroundEnabledDesc"),
+          comp: SettingSwitchControl,
+          props: {
+            settingKey: "appBackgroundEnabled",
+          },
+          pages: allPages,
+        } as QuickSettingItem<QuickSettingsPageId>,
+        {
+          key: "appBackgroundOpacity",
+          label: t("settings.appBackgroundOpacity"),
+          description: t("settings.appBackgroundOpacityDesc"),
+          comp: SettingSliderControl,
+          props: {
+            settingKey: "appBackgroundOpacity",
+            min: 0.05,
+            max: 0.6,
+            step: 0.05,
+            precision: 2,
+          },
+          pages: allPages,
+        } as QuickSettingItem<QuickSettingsPageId>,
+        {
+          key: "appBackgroundBlur",
+          label: t("settings.appBackgroundBlur"),
+          description: t("settings.appBackgroundBlurDesc"),
+          comp: SettingSliderControl,
+          props: {
+            settingKey: "appBackgroundBlur",
+            min: 0,
+            max: 20,
+            step: 1,
+            precision: 0,
+          },
+          pages: allPages,
+        } as QuickSettingItem<QuickSettingsPageId>,
       ],
     },
     {

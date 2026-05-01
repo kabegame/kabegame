@@ -1,11 +1,12 @@
 <template>
   <div ref="containerEl" class="image-grid-container" :class="[
       { 'hide-scrollbar': hideScrollbar },
+      { 'scrolls-whole-container': scrollWholeContainer && !isHorizontal },
       `layout-${layoutDirection}`,
     ]" v-bind="$attrs" tabindex="0" @keydown="handleKeyDown">
     <slot name="before-grid" />
 
-    <div ref="scrollEl" class="image-grid-scroll" :class="`layout-${layoutDirection}`">
+    <div ref="innerScrollEl" class="image-grid-scroll" :class="`layout-${layoutDirection}`">
       <div class="image-grid-root" v-loading="isLoadingOverlay" :class="{ 'is-zooming': isZoomingLayout }"
         @click="handleRootClick" @contextmenu.prevent>
         <!-- 关键：空/刷新时只隐藏 ImageItem 列表，避免 v-if 卸载导致"整页闪烁" -->
@@ -85,7 +86,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch, type Ref } from "vue";
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
 import ImageItem from "./ImageItem.vue";
 import type { ImageInfo } from "../../types/image";
 import EmptyState from "../common/EmptyState.vue";
@@ -163,6 +164,8 @@ interface Props {
   enableVirtualScroll?: boolean;
   virtualOverscan?: number;
   windowAspectRatio?: number; // 外部传入的窗口宽高比（可选，不传则使用实际窗口宽高比）
+  /** 让外层 image-grid-container 自己成为滚动容器，before-grid 与图片共享同一个 sticky 上下文。 */
+  scrollWholeContainer?: boolean;
   /** 插件列表（用于桌面预览内详情抽屉显示插件名称） */
   plugins?: Array<{ id: string; name?: string }>;
 }
@@ -176,6 +179,7 @@ const props = withDefaults(defineProps<Props>(), {
   enableScrollStableEmit: true,
   enableVirtualScroll: true,
   virtualOverscan: 2,
+  scrollWholeContainer: false,
 });
 
 const emit = defineEmits<{
@@ -259,10 +263,14 @@ const measuredItemHeight = ref<number | null>(null);
 const virtualStartRow = ref(0);
 const virtualEndRow = ref(0);
 
-// 外层容器：只做键盘/焦点/resize，不是滚动元素
+// 外层容器：默认只做键盘/焦点/resize；scrollWholeContainer 时也作为滚动元素。
 const containerEl = ref<HTMLElement | null>(null);
-// 实际滚动容器：垂直方向滚 Y，水平方向滚 X。与 before-grid / footer 插槽解耦。
-const scrollEl = ref<HTMLElement | null>(null);
+const innerScrollEl = ref<HTMLElement | null>(null);
+// 实际滚动容器：默认是内部 scroll；纵向整页滚动时切到外层容器让 before-grid 共享 sticky 上下文。
+// 水平布局依赖内部 scroll 的固定高度链条，仍保持旧滚动容器。
+const scrollEl = computed(() =>
+  props.scrollWholeContainer && !isHorizontal.value ? containerEl.value : innerScrollEl.value
+);
 
 // keep-alive/Tab 切换时，组件可能“已挂载但不可见/尺寸为 0”。
 // 此时若测量 ImageItem 高度，会得到 0 并被缓存，导致虚拟滚动 rowHeight 计算错误（滚动抖动）。
@@ -274,15 +282,19 @@ const canMeasureLayout = () => {
 
 // 监听容器尺寸变化：列数变化/侧栏伸缩/布局变化会影响 item 宽度->高度，需要触发虚拟滚动重算
 let containerResizeObserver: ResizeObserver | null = null;
-const setupContainerResizeObserver = () => {
-  if (containerResizeObserver) return;
-  const el = scrollEl.value;
+let observedResizeEl: HTMLElement | null = null;
+const setupContainerResizeObserver = (el = scrollEl.value) => {
   if (!el) return;
   if (typeof ResizeObserver === "undefined") return;
-  containerResizeObserver = new ResizeObserver(() => {
-    scheduleVirtualUpdate();
-  });
+  if (!containerResizeObserver) {
+    containerResizeObserver = new ResizeObserver(() => {
+      scheduleVirtualUpdate();
+    });
+  }
+  if (observedResizeEl === el) return;
+  if (observedResizeEl) containerResizeObserver.unobserve(observedResizeEl);
   containerResizeObserver.observe(el);
+  observedResizeEl = el;
 };
 
 // 让快捷键仅在 grid“有焦点”时生效（不使用 window 全局监听）
@@ -387,9 +399,9 @@ const layoutDirection = computed<"vertical" | "horizontal">(
 );
 const isHorizontal = computed(() => layoutDirection.value === "horizontal");
 
-// 虚拟滚动假设每行等高——仅在 grid+垂直 下启用；masonry/水平 都破坏该假设。
+// grid 布局可虚拟化：纵向按行，横向按列组；masonry/gallery 每项尺寸不定，不启用。
 const virtualScrollActive = computed(
-  () => props.enableVirtualScroll && layoutMode.value === "grid" && !isHorizontal.value
+  () => props.enableVirtualScroll && layoutMode.value === "grid"
 );
 
 // gallery 模式下每张图的宽高比（带 fallback）
@@ -433,11 +445,17 @@ const galleryStyle = computed<Record<string, string>>(() => ({
 const estimatedItemHeight = () => {
   const container = scrollEl.value;
   if (!container) return 240;
+  const ratio = effectiveAspectRatio.value || 16 / 9;
+  if (isHorizontal.value) {
+    const availableHeight =
+      container.clientHeight - BASE_GRID_PADDING_Y.value * 2 - gridGapPx.value * (gridColumnsCount.value - 1);
+    const rowHeight = Math.max(1, availableHeight / gridColumnsCount.value);
+    return rowHeight * ratio;
+  }
   const availableWidth =
     container.clientWidth - BASE_GRID_PADDING_X.value * 2 - gridGapPx.value * (gridColumnsCount.value - 1);
   const columnWidth = Math.max(1, availableWidth / gridColumnsCount.value);
   // 行高估算应与 ImageItem 实际使用的 aspectRatio 一致，否则虚拟滚动 paddingTop 会漂移
-  const ratio = effectiveAspectRatio.value || 16 / 9;
   return columnWidth / ratio;
 };
 
@@ -457,25 +475,49 @@ const totalRows = computed(() => {
 });
 
 const virtualPaddingTop = computed(() => {
-  if (!virtualScrollActive.value) return 0;
+  if (!virtualScrollActive.value || isHorizontal.value) return 0;
   return virtualStartRow.value * rowHeightWithGap.value;
 });
 
 const virtualPaddingBottom = computed(() => {
-  if (!virtualScrollActive.value) return 0;
+  if (!virtualScrollActive.value || isHorizontal.value) return 0;
   const rowsAfter = Math.max(0, totalRows.value - (virtualEndRow.value + 1));
   return rowsAfter * rowHeightWithGap.value;
 });
+
+const virtualPaddingLeft = computed(() => {
+  if (!virtualScrollActive.value || !isHorizontal.value) return 0;
+  return virtualStartRow.value * rowHeightWithGap.value;
+});
+
+const virtualPaddingRight = computed(() => {
+  if (!virtualScrollActive.value || !isHorizontal.value) return 0;
+  const groupsAfter = Math.max(0, totalRows.value - (virtualEndRow.value + 1));
+  return groupsAfter * rowHeightWithGap.value;
+});
+
+const getGridScrollOffset = () => {
+  const container = scrollEl.value;
+  const grid = container?.querySelector<HTMLElement>(".image-grid");
+  if (!container || !grid) return 0;
+  const containerRect = container.getBoundingClientRect();
+  const gridRect = grid.getBoundingClientRect();
+  if (isHorizontal.value) {
+    return Math.max(0, gridRect.left - containerRect.left + container.scrollLeft);
+  }
+  return Math.max(0, gridRect.top - containerRect.top + container.scrollTop);
+};
 
 const updateVirtualRange = () => {
   if (!virtualScrollActive.value) return;
   const container = scrollEl.value;
   if (!container) return;
   const rh = rowHeightWithGap.value || 1;
-  const scrollTop = Math.max(0, container.scrollTop);
-  const height = container.clientHeight || 0;
-  const startRow = Math.floor(scrollTop / rh);
-  const endRow = Math.ceil((scrollTop + height) / rh);
+  const gridOffset = getGridScrollOffset();
+  const scrollPos = Math.max(0, (isHorizontal.value ? container.scrollLeft : container.scrollTop) - gridOffset);
+  const viewportSize = (isHorizontal.value ? container.clientWidth : container.clientHeight) || 0;
+  const startRow = Math.floor(scrollPos / rh);
+  const endRow = Math.ceil((scrollPos + viewportSize) / rh);
   const overscan = virtualOverscanRows.value;
   const nextStart = Math.max(0, startRow - overscan);
   const nextEnd = Math.max(nextStart, Math.min(totalRows.value - 1, endRow + overscan));
@@ -489,7 +531,8 @@ const measureItemHeight = () => {
   const grid = scrollEl.value?.querySelector<HTMLElement>(".image-grid");
   const firstItem = grid?.querySelector<HTMLElement>(".image-item");
   if (firstItem) {
-    const h = firstItem.getBoundingClientRect().height;
+    const rect = firstItem.getBoundingClientRect();
+    const h = isHorizontal.value ? rect.width : rect.height;
     measuredItemHeight.value = h > 1 ? h : estimatedItemHeight();
   } else {
     measuredItemHeight.value = estimatedItemHeight();
@@ -527,12 +570,14 @@ const gridStyle = computed(() => {
   const gap = gridGapPx.value;
   const paddingTop = BASE_GRID_PADDING_Y.value + (virtualScrollActive.value ? virtualPaddingTop.value : 0);
   const paddingBottom = BASE_GRID_PADDING_Y.value + (virtualScrollActive.value ? virtualPaddingBottom.value : 0);
+  const paddingLeft = BASE_GRID_PADDING_X.value + (virtualScrollActive.value ? virtualPaddingLeft.value : 0);
+  const paddingRight = BASE_GRID_PADDING_X.value + (virtualScrollActive.value ? virtualPaddingRight.value : 0);
   const style: Record<string, string> = {
     gap: `${gap}px`,
     paddingTop: `${paddingTop}px`,
     paddingBottom: `${paddingBottom}px`,
-    paddingLeft: `${BASE_GRID_PADDING_X.value}px`,
-    paddingRight: `${BASE_GRID_PADDING_X.value}px`,
+    paddingLeft: `${paddingLeft}px`,
+    paddingRight: `${paddingRight}px`,
   };
   if (isHorizontal.value) {
     // 水平方向：N 行，按 aspect-ratio 自适应宽度，横向滚动
@@ -999,26 +1044,52 @@ const scheduleVirtualRangeUpdate = () => {
   });
 };
 
+let boundScrollEl: HTMLElement | null = null;
+
+const unbindScrollElement = () => {
+  const el = boundScrollEl;
+  if (!el) return;
+  el.removeEventListener("scroll", emitScrollStable as any);
+  el.removeEventListener("scroll", scheduleVirtualRangeUpdate as any);
+  el.removeEventListener("scroll", saveScrollPosition as any);
+  el.removeEventListener("wheel", handleSmoothWheel as any);
+  el.removeEventListener("scroll-buttons-scroll-command", cancelSmoothWheel as any);
+  el.removeEventListener("pointerdown", cancelSmoothWheel as any, { capture: true } as any);
+  boundScrollEl = null;
+};
+
+const bindScrollElement = (el: HTMLElement | null) => {
+  if (boundScrollEl === el) return;
+  unbindScrollElement();
+  if (!el) return;
+  boundScrollEl = el;
+  setupContainerResizeObserver(el);
+  // 1) scroll-stable（内部已用 setTimeout 防抖）
+  el.addEventListener("scroll", emitScrollStable, { passive: true } as any);
+  // 2) 虚拟滚动范围：每帧更新一次（避免空白）
+  el.addEventListener("scroll", scheduleVirtualRangeUpdate, { passive: true } as any);
+  // 记录滚动位置（rAF 节流，尽量便宜）
+  el.addEventListener("scroll", saveScrollPosition, { passive: true } as any);
+  // 丝滑滚轮：rAF + lerp 将离散 wheel 累加到目标位置（保留 Ctrl+Wheel 给列数调整）
+  el.addEventListener("wheel", handleSmoothWheel, { passive: false } as any);
+  // 外部滚动按钮发起程序化滚动时，也要停止当前 wheel 动画，避免下一帧把 scrollTop 拉回旧目标。
+  el.addEventListener("scroll-buttons-scroll-command", cancelSmoothWheel as any);
+  // 指针按下时终止 wheel 动画，避免与拖拽滚动/程序化滚动互相抢写 scrollLeft/Top
+  el.addEventListener("pointerdown", cancelSmoothWheel, { passive: true, capture: true } as any);
+  scheduleVirtualUpdate();
+};
+
+watch(
+  scrollEl,
+  (el) => {
+    bindScrollElement(el);
+  },
+  { immediate: true, flush: "post" },
+);
+
 onMounted(async () => {
   updateWindowAspectRatio();
   window.addEventListener("resize", updateWindowAspectRatio);
-
-  await nextTick();
-  const el = scrollEl.value;
-  if (el) {
-    setupContainerResizeObserver();
-    // 1) scroll-stable（内部已用 setTimeout 防抖）
-    el.addEventListener("scroll", emitScrollStable, { passive: true } as any);
-    // 2) 虚拟滚动范围：每帧更新一次（避免空白）
-    el.addEventListener("scroll", scheduleVirtualRangeUpdate, { passive: true } as any);
-    // 记录滚动位置（rAF 节流，尽量便宜）
-    el.addEventListener("scroll", saveScrollPosition, { passive: true } as any);
-    // 丝滑滚轮：rAF + lerp 将离散 wheel 累加到目标位置（保留 Ctrl+Wheel 给列数调整）
-    el.addEventListener("wheel", handleSmoothWheel, { passive: false } as any);
-    // 指针按下时终止 wheel 动画，避免与拖拽滚动/程序化滚动互相抢写 scrollLeft/Top
-    el.addEventListener("pointerdown", cancelSmoothWheel, { passive: true, capture: true } as any);
-    scheduleVirtualUpdate();
-  }
 
   // 紧凑模式下不允许通过 Ctrl+Wheel 调整列数
   if (!isCompact.value) {
@@ -1045,14 +1116,7 @@ onMounted(async () => {
 
 onUnmounted(async () => {
   window.removeEventListener("resize", updateWindowAspectRatio);
-  const el = scrollEl.value;
-  if (el) {
-    el.removeEventListener("scroll", emitScrollStable as any);
-    el.removeEventListener("scroll", scheduleVirtualRangeUpdate as any);
-    el.removeEventListener("scroll", saveScrollPosition as any);
-    el.removeEventListener("wheel", handleSmoothWheel as any);
-    el.removeEventListener("pointerdown", cancelSmoothWheel as any, { capture: true } as any);
-  }
+  unbindScrollElement();
   if (smoothWheel.raf != null) {
     cancelAnimationFrame(smoothWheel.raf);
     smoothWheel.raf = null;
@@ -1174,6 +1238,41 @@ const handleEnterAnimationEnd = (imageId: string) => {
   enteringIds.value.delete(imageId);
 };
 
+const scrollToVirtualGridIndex = (index: number) => {
+  const container = scrollEl.value;
+  if (!container) return false;
+  const cols = gridColumnsCount.value;
+  if (cols <= 0) return false;
+
+  const group = Math.floor(index / cols);
+  const gridOffset = getGridScrollOffset();
+  cancelSmoothWheel();
+
+  if (isHorizontal.value) {
+    const itemLeft = gridOffset + BASE_GRID_PADDING_X.value + group * rowHeightWithGap.value;
+    const itemRight = itemLeft + (measuredItemHeight.value ?? estimatedItemHeight());
+    const viewportLeft = container.scrollLeft;
+    const viewportRight = viewportLeft + container.clientWidth;
+    if (itemLeft < viewportLeft) {
+      container.scrollTo({ left: itemLeft, behavior: "smooth" });
+    } else if (itemRight > viewportRight) {
+      container.scrollTo({ left: itemRight - container.clientWidth, behavior: "smooth" });
+    }
+    return true;
+  }
+
+  const itemTop = gridOffset + BASE_GRID_PADDING_Y.value + group * rowHeightWithGap.value;
+  const itemBottom = itemTop + (measuredItemHeight.value ?? estimatedItemHeight());
+  const viewportTop = container.scrollTop;
+  const viewportBottom = viewportTop + container.clientHeight;
+  if (itemTop < viewportTop) {
+    container.scrollTo({ top: itemTop, behavior: "smooth" });
+  } else if (itemBottom > viewportBottom) {
+    container.scrollTo({ top: itemBottom - container.clientHeight, behavior: "smooth" });
+  }
+  return true;
+};
+
 // 滚动到指定索引的图片（基于 DOM 元素位置，兼容主轴方向）
 const scrollToIndex = (index: number) => {
   const container = scrollEl.value;
@@ -1183,11 +1282,17 @@ const scrollToIndex = (index: number) => {
 
   const imageId = list[index].id;
   const el = container.querySelector<HTMLElement>(`[data-id="${imageId}"]`);
-  if (!el) return;
+  if (!el) {
+    if (virtualScrollActive.value) {
+      scrollToVirtualGridIndex(index);
+    }
+    return;
+  }
 
   const containerRect = container.getBoundingClientRect();
   const elRect = el.getBoundingClientRect();
 
+  cancelSmoothWheel();
   if (isHorizontal.value) {
     const elLeft = elRect.left - containerRect.left + container.scrollLeft;
     const elRight = elLeft + elRect.width;
@@ -1266,6 +1371,23 @@ defineExpose({
   min-width: 0;
   overflow: hidden;
   outline: none;
+
+  &.scrolls-whole-container {
+    display: block;
+    overflow-y: auto;
+    overflow-x: hidden;
+
+    &.layout-horizontal {
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+
+    .image-grid-scroll {
+      overflow: visible;
+      height: auto;
+      min-height: 0;
+    }
+  }
 }
 
 .image-grid-container:focus {
@@ -1298,6 +1420,14 @@ defineExpose({
 }
 
 .hide-scrollbar .image-grid-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.hide-scrollbar.scrolls-whole-container {
+  scrollbar-width: none;
+}
+
+.hide-scrollbar.scrolls-whole-container::-webkit-scrollbar {
   display: none;
 }
 

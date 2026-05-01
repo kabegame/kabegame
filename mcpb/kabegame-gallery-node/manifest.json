@@ -3,9 +3,9 @@
   "manifest_version": "0.3",
   "name": "kabegame-gallery-local",
   "display_name": "Kabegame Gallery Local MCP",
-  "version": "1.0.0",
-  "description": "Local MCP bundle that exposes Kabegame gallery read and album ordering operations.",
-  "long_description": "This MCP Bundle connects to the local Kabegame MCP HTTP endpoint and exposes defensive, validated tools for gallery browsing, image metadata retrieval, and album image reordering. It is designed for local use with strict endpoint and timeout controls.",
+  "version": "1.1.0",
+  "description": "Local MCP bundle that bridges to the Kabegame app's MCP server (provider/album/task/surf/image/plugin resources + write tools).",
+  "long_description": "This MCP Bundle connects to the local Kabegame MCP HTTP endpoint (default http://127.0.0.1:7490/mcp) and exposes defensive, validated tools mirroring the upstream resource schemes (provider:// / album:// / task:// / surf:// / image:// / plugin://) plus the four write tools (set_album_images_order, create_album, add_images_to_album, rename_image). Strict endpoint and timeout controls keep it usable only for local Kabegame instances.",
   "author": {
     "name": "Kabegame Team"
   },
@@ -29,15 +29,47 @@
   "tools": [
     {
       "name": "read_gallery_provider",
-      "description": "Read a Kabegame provider path and return gallery entries for one page."
+      "description": "Read a Kabegame provider:// path (Entry / List / ListWithMeta), with optional `without=children|images` filter."
+    },
+    {
+      "name": "read_image",
+      "description": "Read full ImageInfo for an image (image://{id})."
     },
     {
       "name": "read_image_metadata",
-      "description": "Read metadata for a specific image ID from Kabegame local storage."
+      "description": "Read crawl-time metadata for an image (image://{id}/metadata)."
+    },
+    {
+      "name": "read_album",
+      "description": "List all albums (album://) or fetch one album (album://{id})."
+    },
+    {
+      "name": "read_task",
+      "description": "List all tasks (task://) or fetch one task (task://{id})."
+    },
+    {
+      "name": "read_surf",
+      "description": "List all surf records (surf://) or fetch one (surf://{host})."
+    },
+    {
+      "name": "read_plugin",
+      "description": "List all plugins (trimmed) or fetch a plugin's info / icon / description_template / doc / doc_resource."
     },
     {
       "name": "set_album_images_order",
       "description": "Set manual order for up to 100 images in one album operation."
+    },
+    {
+      "name": "create_album",
+      "description": "Create a new album, optionally nested under a parent album."
+    },
+    {
+      "name": "add_images_to_album",
+      "description": "Add images to an album (already-present images are skipped); optional explicit ordering."
+    },
+    {
+      "name": "rename_image",
+      "description": "Update the display name of an image."
     }
   ],
   "keywords": [

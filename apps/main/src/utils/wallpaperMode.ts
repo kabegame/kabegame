@@ -1,6 +1,8 @@
 import { invoke } from "@/api/rpc";
 import { ElMessageBox } from "element-plus";
 import { i18n } from "@kabegame/i18n";
+import { IS_WEB } from "@kabegame/core/env";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 function isRequiresWindowModeError(error: unknown): boolean {
   const msg =
@@ -66,3 +68,14 @@ export async function setWallpaperByImageIdWithModeFallback(
   }
 }
 
+export async function setWallpaperOrBackground(imageId: string): Promise<void> {
+  console.log("[AppBackground] setWallpaperOrBackground", { imageId, isWeb: IS_WEB });
+  if (IS_WEB) {
+    await useSettingsStore().save("currentWallpaperImageId", imageId);
+    console.log("[AppBackground] saved currentWallpaperImageId to local settings", { imageId });
+    return;
+  }
+
+  await setWallpaperByImageIdWithModeFallback(imageId);
+  console.log("[AppBackground] desktop wallpaper command completed", { imageId });
+}

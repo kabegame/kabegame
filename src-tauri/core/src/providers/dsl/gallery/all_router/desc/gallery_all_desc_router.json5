@@ -1,0 +1,29 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_all_desc_router",
+    // 仅翻转上游已声明的 ORDER 方向; 路径继续走分页链 (与 gallery_all_router 同构 resolve 表)
+    "query": {
+        "order": { "all": "revert" }
+    },
+    "list": {
+        "${all.name}": {
+            "child_var": "all",
+            "delegate": {
+                "provider": "gallery_all_router",
+            }
+        }
+    },
+    "resolve": {
+        // x{N}x → gallery_paginate_router (与 gallery_all_router 一致)
+        ".*": {
+            "delegate": {
+                "provider": "gallery_all_router",
+            },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    },
+    "note": "Descending sort + pagination; supports /<page> default 100/page or /xNx/<page>"
+}

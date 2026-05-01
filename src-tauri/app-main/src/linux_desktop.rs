@@ -3,8 +3,6 @@
 use std::env;
 use std::sync::OnceLock;
 
-
-
 /// 运行时检测到的 Linux 桌面环境
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinuxDesktop {
@@ -37,9 +35,7 @@ pub fn init_linux_desktop() -> LinuxDesktop {
 /// 业务代码读取缓存结果；若尚未初始化，则返回 Unknown
 #[cfg(target_os = "linux")]
 pub fn linux_desktop() -> LinuxDesktop {
-    *LINUX_DESKTOP
-        .get()
-        .unwrap_or(&LinuxDesktop::Unknown)
+    *LINUX_DESKTOP.get().unwrap_or(&LinuxDesktop::Unknown)
 }
 
 fn detect_linux_desktop() -> LinuxDesktop {
@@ -92,7 +88,10 @@ fn detect_from_env() -> Option<LinuxDesktop> {
     }
 
     // 环境变量中包含 plasma/kde
-    if all.iter().any(|v| v.contains("plasma") || v.contains("kde")) {
+    if all
+        .iter()
+        .any(|v| v.contains("plasma") || v.contains("kde"))
+    {
         return Some(LinuxDesktop::Plasma);
     }
 
@@ -135,11 +134,7 @@ fn detect_gnome_capability() -> bool {
     use std::process::Command;
 
     let output = Command::new("gsettings")
-        .args([
-            "get",
-            "org.gnome.desktop.background",
-            "picture-options",
-        ])
+        .args(["get", "org.gnome.desktop.background", "picture-options"])
         .output();
 
     match output {
@@ -167,4 +162,3 @@ fn detect_plasma_capability() -> bool {
 
     false
 }
-

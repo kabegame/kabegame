@@ -8,12 +8,12 @@
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::DaemonEvent;
 #[cfg(feature = "ipc-server")]
-use serde_json::json;
-#[cfg(feature = "ipc-server")]
 use crate::ipc::server::EventBroadcaster;
 use crate::storage::tasks::TaskFailedImage;
 #[cfg(feature = "ipc-server")]
 use crate::storage::Storage;
+#[cfg(feature = "ipc-server")]
+use serde_json::json;
 use std::sync::OnceLock;
 
 // ==================== IPC 实现 ====================
@@ -119,9 +119,7 @@ impl GlobalEmitter {
 
     /// 任务新增（完整任务 JSON）
     pub fn emit_task_added(&self, task: &serde_json::Value) {
-        let event = std::sync::Arc::new(DaemonEvent::TaskAdded {
-            task: task.clone(),
-        });
+        let event = std::sync::Arc::new(DaemonEvent::TaskAdded { task: task.clone() });
         EventBroadcaster::global().broadcast(event);
     }
 
@@ -215,21 +213,17 @@ impl GlobalEmitter {
         image_ids: &[String],
         task_ids: Option<&[String]>,
         surf_record_ids: Option<&[String]>,
+        plugin_ids: Option<&[String]>,
     ) {
         let opt_vec = |s: Option<&[String]>| {
-            s.and_then(|v| {
-                if v.is_empty() {
-                    None
-                } else {
-                    Some(v.to_vec())
-                }
-            })
+            s.and_then(|v| if v.is_empty() { None } else { Some(v.to_vec()) })
         };
         let event = std::sync::Arc::new(DaemonEvent::ImagesChange {
             reason: reason.to_string(),
             image_ids: image_ids.to_vec(),
             task_ids: opt_vec(task_ids),
             surf_record_ids: opt_vec(surf_record_ids),
+            plugin_ids: opt_vec(plugin_ids),
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -374,13 +368,7 @@ impl GlobalEmitter {
     }
 
     /// 发送画册添加事件（底层 DB 插入后由 storage 调用）
-    pub fn emit_album_added(
-        &self,
-        id: &str,
-        name: &str,
-        created_at: u64,
-        parent_id: Option<&str>,
-    ) {
+    pub fn emit_album_added(&self, id: &str, name: &str, created_at: u64, parent_id: Option<&str>) {
         let event = std::sync::Arc::new(DaemonEvent::AlbumAdded {
             id: id.to_string(),
             name: name.to_string(),
@@ -547,6 +535,7 @@ impl GlobalEmitter {
         _image_ids: &[String],
         _task_ids: Option<&[String]>,
         _surf_record_ids: Option<&[String]>,
+        _plugin_ids: Option<&[String]>,
     ) {
     }
 

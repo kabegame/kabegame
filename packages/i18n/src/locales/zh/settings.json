@@ -96,6 +96,12 @@
   "wallpaperModeDesc": "原生模式使用系统壁纸接口；窗口模式以独立窗口显示壁纸（支持过渡效果、视频壁纸等）",
   "wallpaperEngineDir": "Wallpaper Engine 目录",
   "wallpaperEngineDirDesc": "用于“导出并自动导入到 WE”",
+  "appBackgroundEnabled": "应用内背景",
+  "appBackgroundEnabledDesc": "把当前壁纸作为半透明的应用背景显示",
+  "appBackgroundOpacity": "背景透明度",
+  "appBackgroundOpacityDesc": "调整背景图片在应用界面中的显现强度",
+  "appBackgroundBlur": "背景模糊",
+  "appBackgroundBlurDesc": "调整应用内背景图片的模糊程度",
 
   "downloadSectionTitle": "下载设置",
   "maxConcurrentTasks": "同时运行任务数",

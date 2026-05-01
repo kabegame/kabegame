@@ -1,0 +1,22 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "images_id_provider",
+    "properties": {
+        "image_id": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "images.id = ${properties.image_id}",
+        "limit": 1
+    },
+    "list": {
+        "metadata": {
+            "provider": "images_metadata_provider"
+        }
+    },
+    "resolve": {
+        "metadata": {
+            "provider": "images_metadata_provider"
+        }
+    }
+}

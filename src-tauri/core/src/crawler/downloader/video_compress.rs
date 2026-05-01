@@ -61,9 +61,9 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
 
     #[cfg(target_os = "android")]
     let out_path = thumbnails_dir.join(format!("{}.gif", uuid::Uuid::new_v4()));
-    #[cfg(all(feature = "local", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     let out_path = thumbnails_dir.join(format!("{}.gif", uuid::Uuid::new_v4()));
-    #[cfg(not(any(target_os = "android", all(feature = "local"), target_os = "linux")))]
+    #[cfg(not(any(target_os = "android", target_os = "linux")))]
     let out_path = thumbnails_dir.join(format!("{}.mp4", uuid::Uuid::new_v4()));
 
     #[cfg(target_os = "android")]
@@ -112,26 +112,34 @@ fn run_ffmpeg_sidecar(input_path: &Path, output_path: &Path) -> Result<(), Strin
     cmd.creation_flags(0x0800_0000);
     cmd.arg("-y").arg("-i").arg(input_path);
 
-    #[cfg(all(feature = "local", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     {
-        cmd.arg("-t").arg("2.5")
+        cmd.arg("-t")
+            .arg("2.5")
             .arg("-vf")
             .arg("fps=4,scale=320:-1")
-            .arg("-loop").arg("0")
+            .arg("-loop")
+            .arg("0")
             .arg(output_path);
     }
 
-    #[cfg(any(feature = "web", not(target_os = "linux")))]
+    #[cfg(not(target_os = "linux"))]
     {
-        cmd.arg("-t").arg("2.5")
+        cmd.arg("-t")
+            .arg("2.5")
             .arg("-vf")
             .arg("scale='min(1280,iw)':-2")
-            .arg("-c:v").arg("libx264")
-            .arg("-preset").arg("veryfast")
-            .arg("-crf").arg("30")
-            .arg("-movflags").arg("+faststart")
+            .arg("-c:v")
+            .arg("libx264")
+            .arg("-preset")
+            .arg("veryfast")
+            .arg("-crf")
+            .arg("30")
+            .arg("-movflags")
+            .arg("+faststart")
             .arg("-an")
-            .arg("-f").arg("mov")
+            .arg("-f")
+            .arg("mov")
             .arg(output_path);
     }
 
@@ -166,15 +174,14 @@ fn resolve_ffmpeg_sidecar_path() -> Result<PathBuf, String> {
 
     // 2. 开发时：仅执行过 build-ffmpeg.sh、未 cargo build 时，二进制在 sidecar/ 下且带 target triple 名（ffmpeg-kb-{target}）
     if let Some(repo_root) = crate::app_paths::repo_root_dir() {
-        let sidecar_dir = repo_root
-            .join("src-tauri")
-            .join("app-main")
-            .join("sidecar");
+        let sidecar_dir = repo_root.join("src-tauri").join("app-main").join("sidecar");
         if let Ok(rd) = std::fs::read_dir(&sidecar_dir) {
             for e in rd.flatten() {
                 let name = e.file_name();
                 let name_str = name.to_string_lossy();
-                if name_str.starts_with("ffmpeg-kb-") && (name_str.ends_with(".exe") || !name_str.contains('.')) {
+                if name_str.starts_with("ffmpeg-kb-")
+                    && (name_str.ends_with(".exe") || !name_str.contains('.'))
+                {
                     let path = e.path();
                     if path.is_file() {
                         return Ok(path);
@@ -200,9 +207,7 @@ pub fn encode_frames_dir_to_gif(frame_dir: &Path, output_path: &Path) -> Result<
                 .extension()
                 .map(|x| x.eq_ignore_ascii_case("png"))
                 .unwrap_or(false)
-                && e.file_name()
-                    .to_string_lossy()
-                    .starts_with("frame_")
+                && e.file_name().to_string_lossy().starts_with("frame_")
         })
         .collect();
     entries.sort_by_key(|e| e.file_name());

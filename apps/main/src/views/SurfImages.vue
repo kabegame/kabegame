@@ -63,7 +63,7 @@
 import { onMounted, onActivated, onDeactivated, onBeforeUnmount, onUnmounted, ref, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
-import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
+import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { listen } from "@/api/rpc";
 import { ElMessage } from "element-plus";
 import { storeToRefs } from "pinia";
@@ -170,6 +170,14 @@ const toggleFavoriteForImages = async (imgs: ImageInfo[]) => {
 
 const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
   try {
+    if (IS_WEB && imagesToProcess.length > 0) {
+      await setWallpaperOrBackground(imagesToProcess[0].id);
+      currentWallpaperImageId.value = imagesToProcess[0].id;
+      ElMessage.success(t("surf.wallpaperSetSuccess"));
+      clearSelection();
+      return;
+    }
+
     if (imagesToProcess.length > 1) {
       await settingsStore.loadAll();
       await albumStore.loadAlbums();
@@ -189,7 +197,7 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
       await setWallpaperRotationAlbumId(createdAlbum.id);
       ElMessage.success(t("surf.rotationStarted", { name: albumName, count: imageIds.length }));
     } else {
-      await setWallpaperByImageIdWithModeFallback(imagesToProcess[0].id);
+      await setWallpaperOrBackground(imagesToProcess[0].id);
       currentWallpaperImageId.value = imagesToProcess[0].id;
       ElMessage.success(t("surf.wallpaperSetSuccess"));
     }
@@ -276,7 +284,6 @@ const handleImageMenuCommand = async (
       break;
     }
     case "wallpaper":
-      if (await guardDesktopOnly("wallpaper")) break;
       if (imagesToProcess.length > 0) await setWallpaper(imagesToProcess);
       break;
     case "share":

@@ -9,7 +9,18 @@ struct SupportedImageTypes {
 }
 
 pub fn get_build_mode() -> Result<Value, String> {
-    Ok(Value::String(env!("KABEGAME_BUILD_MODE").to_string()))
+    let mode = if cfg!(feature = "web") {
+        "web"
+    } else if cfg!(feature = "android") {
+        "android"
+    } else if cfg!(feature = "standard") {
+        "standard"
+    } else if cfg!(feature = "light") {
+        "light"
+    } else {
+        "unknown"
+    };
+    Ok(Value::String(mode.to_string()))
 }
 
 pub fn get_supported_image_types() -> Result<Value, String> {

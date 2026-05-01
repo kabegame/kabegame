@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use arc_swap::ArcSwap;
 use fuser::{spawn_mount2, BackgroundSession, MountOption};
 
-use crate::providers::ProviderRuntime;
+use crate::providers::provider_runtime;
 use crate::virtual_driver::fuse::KabegameFuseFs;
 
 use super::VirtualDriveServiceTrait;
@@ -180,7 +180,7 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
         }
 
         // 创建文件系统实例（基于 ProviderRuntime 统一根）
-        let _ = ProviderRuntime::global();
+        let _ = provider_runtime();
         let fs = KabegameFuseFs::new();
 
         // 挂载选项

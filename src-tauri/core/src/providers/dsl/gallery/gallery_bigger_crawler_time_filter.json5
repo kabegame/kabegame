@@ -1,0 +1,22 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_bigger_crawler_time_filter",
+    "properties": {
+        "time": { "type": "string", "default": "0", "optional": false }
+    },
+    "query": {
+        // 顺序模式: WHERE crawled_at > T, ORDER BY crawled_at ASC
+        "where": "images.crawled_at > ${properties.time}",
+        "order": [{ "images.crawled_at": "asc" }]
+    },
+    "resolve": {
+        // l<N>l: 纯 LIMIT N 叶子 (区别于 x<N>x 的 page_size 形态)
+        "l([0-9]+)l": {
+            "provider": "limit_leaf_provider",
+            "properties": {
+                "limit": "${capture[1]}"
+            }
+        }
+    }
+}

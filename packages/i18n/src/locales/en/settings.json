@@ -96,6 +96,12 @@
   "wallpaperModeDesc": "Native: system API; Window: standalone window (transitions, video, etc.)",
   "wallpaperEngineDir": "Wallpaper Engine directory",
   "wallpaperEngineDirDesc": "For \"Export and auto-import to WE\"",
+  "appBackgroundEnabled": "In-app background",
+  "appBackgroundEnabledDesc": "Show the current wallpaper as a translucent app background",
+  "appBackgroundOpacity": "Background opacity",
+  "appBackgroundOpacityDesc": "Control how strongly the background image shows through the app",
+  "appBackgroundBlur": "Background blur",
+  "appBackgroundBlurDesc": "Blur the in-app background image",
 
   "downloadSectionTitle": "Download settings",
   "maxConcurrentTasks": "Max concurrent tasks",

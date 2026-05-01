@@ -60,7 +60,6 @@ impl AppPaths {
         }
     }
 
-
     /// plugins-directory 目录（用户安装的插件）
     pub fn plugins_dir(&self) -> PathBuf {
         self.data_dir.join("plugins-directory")
@@ -73,7 +72,8 @@ impl AppPaths {
 
     /// 单个插件的默认配置文件：`default-configs/<plugin_id>.json`
     pub fn default_config_file(&self, plugin_id: &str) -> PathBuf {
-        self.default_configs_dir().join(format!("{}.json", plugin_id))
+        self.default_configs_dir()
+            .join(format!("{}.json", plugin_id))
     }
 
     /// .cleanup_marker 文件路径（仅桌面）
@@ -137,7 +137,8 @@ impl AppPaths {
 
     /// 特定商店源特定插件的缓存文件路径
     pub fn store_plugin_cache_file(&self, source_id: &str, plugin_id: &str) -> PathBuf {
-        self.store_plugin_cache_dir(source_id).join(format!("{}.kgpg", plugin_id))
+        self.store_plugin_cache_dir(source_id)
+            .join(format!("{}.kgpg", plugin_id))
     }
 
     // ========== 临时目录 ==========

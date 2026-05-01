@@ -1,21 +1,21 @@
+use crate::crawler::scheduler::PageStackEntry;
 use crate::crawler::xhh_sign;
+use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
 use crate::plugin::Plugin;
 use crate::settings::Settings;
 use crate::storage::Storage;
-use crate::crawler::scheduler::PageStackEntry;
-use crate::crawler::TaskScheduler;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rhai::packages::Package;
 use rhai::{Dynamic, Engine, Map, Position, Scope};
 use rhai_chrono::ChronoPackage;
 use scraper::{Html, Selector};
+use serde_json::{Map as JsonMap, Number, Value as JsonValue};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use url::Url;
-use serde_json::{Map as JsonMap, Number, Value as JsonValue};
 
 type Shared<T> = Arc<Mutex<T>>;
 
@@ -151,16 +151,11 @@ fn parse_download_image_opts_from_map(
             Some(d) if d.is_unit() => Ok(None),
             Some(d) if d.is_string() => {
                 let s = d.clone().into_string().unwrap();
-                Ok(if s.trim().is_empty() {
-                    None
-                } else {
-                    Some(s)
-                })
+                Ok(if s.trim().is_empty() { None } else { Some(s) })
             }
-            Some(_) => Err(format!(
-                "download_image opts: `{key}` must be a string if present"
-            )
-            .into()),
+            Some(_) => {
+                Err(format!("download_image opts: `{key}` must be a string if present").into())
+            }
         }
     };
     let metadata_id = match opts.get("metadata_id") {
@@ -394,10 +389,7 @@ fn create_blocking_client() -> Result<reqwest::blocking::Client, String> {
                 eprintln!("网络代理已配置 (blocking): {}", proxy_url);
             }
             Err(e) => {
-                eprintln!(
-                    "代理配置无效 ({}), 将使用直连 (blocking): {}",
-                    proxy_url, e
-                );
+                eprintln!("代理配置无效 ({}), 将使用直连 (blocking): {}", proxy_url, e);
             }
         }
     }
@@ -634,7 +626,9 @@ pub fn register_crawler_functions(
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_nanos() as u64)
                     .unwrap_or(12345678901234567);
-                if x == 0 { x = 1; }
+                if x == 0 {
+                    x = 1;
+                }
             }
             // XorShift64
             x ^= x << 13;
@@ -673,11 +667,14 @@ pub fn register_crawler_functions(
 
     // re_replace_all(pattern, replacement, text)：全局正则替换（Rust regex；replacement 可用 $0/$1 等）
     // pattern 无效时返回原文本
-    engine.register_fn("re_replace_all", |pattern: &str, replacement: &str, text: &str| -> String {
-        regex::Regex::new(pattern)
-            .map(|re| re.replace_all(text, replacement).into_owned())
-            .unwrap_or_else(|_| text.to_string())
-    });
+    engine.register_fn(
+        "re_replace_all",
+        |pattern: &str, replacement: &str, text: &str| -> String {
+            regex::Regex::new(pattern)
+                .map(|re| re.replace_all(text, replacement).into_owned())
+                .unwrap_or_else(|_| text.to_string())
+        },
+    );
 
     engine.register_fn("set_header", {
         let headers_holder = Arc::clone(&http_headers);

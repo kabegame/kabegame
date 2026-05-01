@@ -1,0 +1,36 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "images_root_provider",
+    "query": {
+        "from": "images",
+        "fields": [
+            "images.*"
+        ],
+        "order": [{ "images.id": "asc" }]
+    },
+    "list": {
+        "x100x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": 100 }
+        },
+        "x500x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": 500 }
+        },
+        "x1000x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": 1000 }
+        }
+    },
+    "resolve": {
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        },
+        "id_([^/]+)": {
+            "provider": "images_id_provider",
+            "properties": { "image_id": "${capture[1]}" }
+        }
+    }
+}

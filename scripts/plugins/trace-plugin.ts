@@ -11,7 +11,7 @@ export class TracePlugin extends BasePlugin {
     apply(bs: any): void {
         bs.hooks.parseParams.tap(this.name, () => {
             if (bs.options.trace) {
-                this.setEnv('RUST_BACKTRACE', "full")
+                this.setEnv('RUST_BACKTRACE', "1")
             }
         });
     }

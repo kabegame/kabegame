@@ -1,16 +1,15 @@
-use std::sync::Arc;
+#[cfg(not(target_os = "android"))]
+use kabegame_core::storage::organize::OrganizeService;
+#[cfg(all(not(target_os = "android"), feature = "standard"))]
+use kabegame_core::virtual_driver::VirtualDriveService;
 use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
     plugin::PluginManager,
-    providers::{ProviderCacheConfig, ProviderRuntime, VdNewUnifiedRoot},
     scheduler::Scheduler,
     settings::Settings,
     storage::Storage,
 };
-#[cfg(not(target_os = "android"))]
-use kabegame_core::storage::organize::OrganizeService;
-#[cfg(all(not(target_os = "android"), not(any(kabegame_mode = "light")), feature = "local"))]
-use kabegame_core::virtual_driver::VirtualDriveService;
+use std::sync::Arc;
 
 /// Feature-gated async spawn helper.
 /// In local (Tauri) mode tauri::async_runtime::spawn must be used — tokio::spawn
@@ -20,7 +19,7 @@ fn spawn_bg<F>(fut: F)
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
-    #[cfg(feature = "local")]
+    #[cfg(not(feature = "web"))]
     tauri::async_runtime::spawn(fut);
     #[cfg(feature = "web")]
     tokio::spawn(fut);
@@ -95,69 +94,58 @@ pub fn init_globals() -> Result<(), String> {
     });
     println!("  ✓ Auto scheduler initialized");
 
-    {
-        let cfg = ProviderCacheConfig::default();
-        let root = Arc::new(VdNewUnifiedRoot);
-        if let Err(e) = ProviderRuntime::init_global(root, cfg) {
-            return Err(format!("ProviderRuntime init failed: {}", e));
-        }
-    }
-    println!("  ✓ ProviderRuntime initialized");
+    println!("  ✓ ProviderRuntime deferred until kgpg plugin init");
 
     // OrganizeService 在 local 和 web 模式下均需要（非 Android）
     #[cfg(not(target_os = "android"))]
     OrganizeService::init_global(Arc::new(OrganizeService::new()))?;
 
-    // 桌面端 local mode：VD 等全局单例
-    #[cfg(all(not(target_os = "android"), feature = "local"))]
+    // 桌面端 standard mode：VD 等全局单例（light 与 android 桌面分支跳过 VD）
+    #[cfg(all(not(target_os = "android"), feature = "standard"))]
     {
-        #[cfg(not(kabegame_mode = "light"))]
+        VirtualDriveService::init_global()
+            .map_err(|e| format!("Failed to init VD service: {}", e))?;
+        let virtual_drive_service = VirtualDriveService::global();
+        println!("  ✓ Virtual drive support enabled");
+
+        #[cfg(target_os = "windows")]
         {
-            VirtualDriveService::init_global()
-                .map_err(|e| format!("Failed to init VD service: {}", e))?;
-            let virtual_drive_service = VirtualDriveService::global();
-            println!("  ✓ Virtual drive support enabled");
-
-            #[cfg(target_os = "windows")]
-            {
-                let vd_service_for_listener = virtual_drive_service.clone();
-                spawn_bg(async move {
-                    crate::vd_listener::start_vd_event_listener(vd_service_for_listener).await;
-                    println!("  ✓ Virtual drive event listener started");
-                });
-            }
-
-            let vd_service_for_mount = virtual_drive_service.clone();
+            let vd_service_for_listener = virtual_drive_service.clone();
             spawn_bg(async move {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                let enabled = Settings::global().get_album_drive_enabled();
-                let mount_point = Settings::global().get_album_drive_mount_point();
-                if enabled && !mount_point.is_empty() {
-                    use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-                    let mount_result = tokio::task::spawn_blocking({
-                        let vd_service = vd_service_for_mount.clone();
-                        let mount_point = mount_point.clone();
-                        move || vd_service.mount(mount_point.as_str())
-                    })
-                    .await;
-                    if let Err(e) = mount_result {
-                        eprintln!("Auto mount failed: {}", e);
-                    } else if let Ok(Err(e)) = mount_result {
-                        eprintln!("Auto mount failed: {}", e);
-                    }
-                }
+                crate::vd_listener::start_vd_event_listener(vd_service_for_listener).await;
+                println!("  ✓ Virtual drive event listener started");
             });
         }
 
-        return Ok(());
+        let vd_service_for_mount = virtual_drive_service.clone();
+        spawn_bg(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            let enabled = Settings::global().get_album_drive_enabled();
+            let mount_point = Settings::global().get_album_drive_mount_point();
+            if enabled && !mount_point.is_empty() {
+                use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+                let mount_result = tokio::task::spawn_blocking({
+                    let vd_service = vd_service_for_mount.clone();
+                    let mount_point = mount_point.clone();
+                    move || vd_service.mount(mount_point.as_str())
+                })
+                .await;
+                if let Err(e) = mount_result {
+                    eprintln!("Auto mount failed: {}", e);
+                } else if let Ok(Err(e)) = mount_result {
+                    eprintln!("Auto mount failed: {}", e);
+                }
+            }
+        });
     }
 
-    #[cfg(all(target_os = "android", feature = "local"))]
+    #[cfg(not(feature = "web"))]
     return Ok(());
 
-     #[cfg(feature = "web")] {
+    #[cfg(feature = "web")]
+    {
         crate::web::init_registry();
-        Ok(())    
+        Ok(())
     }
 }
 
@@ -168,14 +156,12 @@ pub fn init_app_paths_for_web() -> Result<(), String> {
     use kabegame_core::app_paths::{is_dev, repo_root_dir, AppPaths};
 
     let data_dir = if is_dev() {
-        repo_root_dir()
-            .map(|r| r.join("data"))
-            .unwrap_or_else(|| {
-                dirs::data_local_dir()
-                    .or_else(|| dirs::data_dir())
-                    .expect("cannot determine data dir")
-                    .join("Kabegame")
-            })
+        repo_root_dir().map(|r| r.join("data")).unwrap_or_else(|| {
+            dirs::data_local_dir()
+                .or_else(|| dirs::data_dir())
+                .expect("cannot determine data dir")
+                .join("Kabegame")
+        })
     } else {
         dirs::data_local_dir()
             .or_else(|| dirs::data_dir())
@@ -184,13 +170,11 @@ pub fn init_app_paths_for_web() -> Result<(), String> {
     };
 
     let cache_dir = if is_dev() {
-        repo_root_dir()
-            .map(|r| r.join("cache"))
-            .unwrap_or_else(|| {
-                dirs::cache_dir()
-                    .expect("cannot determine cache dir")
-                    .join("Kabegame")
-            })
+        repo_root_dir().map(|r| r.join("cache")).unwrap_or_else(|| {
+            dirs::cache_dir()
+                .expect("cannot determine cache dir")
+                .join("Kabegame")
+        })
     } else {
         dirs::cache_dir()
             .expect("cannot determine cache dir")

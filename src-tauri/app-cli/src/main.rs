@@ -40,7 +40,6 @@ enum Commands {
 
     /// 虚拟盘相关命令
     #[command(subcommand)]
-    #[cfg(not(kabegame_mode = "light"))]
     Vd(VdCommands),
 }
 
@@ -57,7 +56,6 @@ enum PluginCommands {
 }
 
 #[derive(Subcommand, Debug)]
-#[cfg(not(kabegame_mode = "light"))]
 enum VdCommands {
     /// 挂载虚拟盘（通过 daemon IPC 触发）
     Mount(VdMountArgs),
@@ -67,15 +65,12 @@ enum VdCommands {
     Status(VdStatusArgs),
 }
 
-#[cfg(not(kabegame_mode = "light"))]
 #[derive(Args, Debug)]
 struct VdMountArgs {}
 
-#[cfg(not(kabegame_mode = "light"))]
 #[derive(Args, Debug)]
 struct VdUnmountArgs {}
 
-#[cfg(not(kabegame_mode = "light"))]
 #[derive(Args, Debug)]
 struct VdStatusArgs {
     /// 挂载点（例如 K:\\ 或 K: 或 K）（Unix默认为 $HOME/kabegame-vd）
@@ -162,7 +157,6 @@ async fn main() {
             PluginCommands::Pack(args) => pack_plugin(args),
             PluginCommands::Import(args) => import_plugin(args).await,
         },
-        #[cfg(not(kabegame_mode = "light"))]
         Commands::Vd(cmd) => match cmd {
             VdCommands::Mount(args) => vd_mount(args),
             VdCommands::Unmount(args) => vd_unmount(args),
@@ -365,7 +359,6 @@ async fn resolve_album_name_to_id(name: &str) -> Result<Option<String>, String> 
     Ok(None)
 }
 
-#[cfg(not(kabegame_mode = "light"))]
 fn vd_mount(_args: VdMountArgs) -> Result<(), String> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
@@ -390,7 +383,6 @@ fn vd_mount(_args: VdMountArgs) -> Result<(), String> {
     }
 }
 
-#[cfg(not(kabegame_mode = "light"))]
 fn vd_unmount(_args: VdUnmountArgs) -> Result<(), String> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
@@ -415,7 +407,6 @@ fn vd_unmount(_args: VdUnmountArgs) -> Result<(), String> {
     }
 }
 
-#[cfg(not(kabegame_mode = "light"))]
 fn vd_status(args: VdStatusArgs) -> Result<(), String> {
     let _ = args;
     let rt =
@@ -688,6 +679,34 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf, backend: PluginBackend) -> Resul
                     .unwrap_or("")
                     .to_ascii_lowercase();
                 if ext == "json" {
+                    entries.push((rel, p));
+                }
+            }
+        }
+    }
+
+    // providers/：插件自定义 provider DSL（*.json / *.json5）
+    let providers_dir = plugin_dir.join("providers");
+    if providers_dir.is_dir() {
+        let mut stack = vec![providers_dir.clone()];
+        while let Some(dir) = stack.pop() {
+            let rd = std::fs::read_dir(&dir).map_err(|e| format!("读取 providers 失败: {}", e))?;
+            for ent in rd {
+                let ent = ent.map_err(|e| format!("读取 providers 失败: {}", e))?;
+                let p = ent.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                if !p.is_file() {
+                    continue;
+                }
+                let rel = p
+                    .strip_prefix(plugin_dir)
+                    .map_err(|_| "providers 路径异常".to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if kabegame_core::providers::is_provider_file_path(&rel) {
                     entries.push((rel, p));
                 }
             }

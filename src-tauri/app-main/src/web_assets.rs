@@ -1,13 +1,13 @@
-use axum::{
-    Router,
-    extract::Request,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
 #[cfg(not(debug_assertions))]
 use axum::{
     body::Body,
-    http::{HeaderValue, header::CONTENT_TYPE},
+    http::{header::CONTENT_TYPE, HeaderValue},
+};
+use axum::{
+    extract::Request,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Router,
 };
 
 /// Returns a Router that serves compiled Vue static assets via a fallback handler.

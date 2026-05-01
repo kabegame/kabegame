@@ -16,9 +16,7 @@ pub async fn get_all_tasks() -> IpcResponse {
 pub async fn get_task(task_id: &str) -> IpcResponse {
     let storage = Storage::global();
     match storage.get_task(task_id) {
-        Ok(task) => {
-            IpcResponse::ok_with_data("ok", serde_json::to_value(task).unwrap_or_default())
-        }
+        Ok(task) => IpcResponse::ok_with_data("ok", serde_json::to_value(task).unwrap_or_default()),
         Err(e) => IpcResponse::err(e),
     }
 }
@@ -56,9 +54,7 @@ pub async fn delete_task(task_id: &str) -> IpcResponse {
 pub async fn get_task_image_ids(task_id: &str) -> IpcResponse {
     let storage = Storage::global();
     match storage.get_task_image_ids(task_id) {
-        Ok(ids) => {
-            IpcResponse::ok_with_data("ok", serde_json::to_value(ids).unwrap_or_default())
-        }
+        Ok(ids) => IpcResponse::ok_with_data("ok", serde_json::to_value(ids).unwrap_or_default()),
         Err(e) => IpcResponse::err(e),
     }
 }

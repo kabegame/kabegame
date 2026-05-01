@@ -1,4 +1,4 @@
-﻿//! Events 命令处理器
+//! Events 命令处理器
 //!
 //! 注意：实际的事件订阅逻辑在 server.rs 中通过 SubscriptionManager 处理。
 //! 此模块仅负责返回订阅确认响应。
@@ -16,9 +16,7 @@ pub async fn handle_events_request(req: &IpcRequest) -> Option<IpcResponse> {
             // 返回成功后，连接保持打开，服务器会推送事件（每行一个 JSON）
             // 实际的订阅逻辑在 server.rs 中通过 SubscriptionManager 处理
             if kinds.is_empty() {
-                Some(IpcResponse::ok(
-                    "subscribed (streaming mode, all events)",
-                ))
+                Some(IpcResponse::ok("subscribed (streaming mode, all events)"))
             } else {
                 Some(IpcResponse::ok(&format!(
                     "subscribed (streaming mode, {} event types)",

@@ -34,7 +34,8 @@
           <div v-else>
             <transition-group name="fade-in-list" tag="div" class="plugin-grid"
               :class="{ 'plugin-grid-android': uiStore.isCompact }">
-              <el-card v-for="plugin in installedPlugins" :key="plugin.id" class="plugin-card" shadow="hover"
+              <el-card v-for="plugin in installedPlugins" :key="plugin.id"
+                :class="['plugin-card', appBackgroundCardClass]" shadow="hover"
                 @click="viewPluginDetails(plugin)">
                 <template v-if="uiStore.isCompact">
                   <div class="plugin-android-icon">
@@ -165,7 +166,8 @@
 
           <transition-group v-else name="fade-in-list" tag="div" class="plugin-grid"
             :class="{ 'plugin-grid-android': uiStore.isCompact }">
-            <el-card v-for="plugin in getStorePlugins(s.id)" :key="plugin.id" class="plugin-card" shadow="hover"
+            <el-card v-for="plugin in getStorePlugins(s.id)" :key="plugin.id"
+              :class="['plugin-card', appBackgroundCardClass]" shadow="hover"
               @click="viewPluginDetails(plugin)">
               <template v-if="uiStore.isCompact">
                 <div class="plugin-android-icon">
@@ -411,6 +413,7 @@ import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { storePluginCacheDb } from "@kabegame/core/cache/storePluginCache";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 interface PluginSource {
   id: string;
@@ -460,6 +463,12 @@ const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("pluginbrowser");
 
 const uiStore = useUiStore();
+const settingsStore = useSettingsStore();
+const appBackgroundCardClass = computed(() =>
+  settingsStore.values.appBackgroundEnabled
+    ? "!bg-transparent [--el-card-bg-color:transparent]"
+    : ""
+);
 
 /** 与后端 `plugin_sources::OFFICIAL_PLUGIN_SOURCE_ID` 一致 */
 const OFFICIAL_PLUGIN_SOURCE_ID = "official_github_release";

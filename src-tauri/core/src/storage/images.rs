@@ -1,5 +1,5 @@
 use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
-use rusqlite::{params, params_from_iter, OptionalExtension, ToSql};
+use rusqlite::{params, params_from_iter, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -60,6 +60,12 @@ pub struct ImageInfo {
     /// 图片磁盘大小（字节）；旧数据或无法获取时为 None。
     #[serde(default)]
     pub size: Option<u64>,
+    /// 仅在画册路径 (`/gallery/album/<id>/...`) 下被填: 该图片在 album_images 表中的 `order` 列。
+    /// 顺序壁纸轮播 (sequential mode) 用它定位 next 图片 (`bigger_order` 路径)。
+    /// 非画册路径的查询里恒为 None。
+    #[serde(rename = "albumOrder")]
+    #[serde(default)]
+    pub album_order: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -231,6 +237,7 @@ impl Storage {
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                         size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                        album_order: None,
                     })
                 },
             )
@@ -262,27 +269,7 @@ impl Storage {
 
     /// 读取 `image_metadata.data`，若无则回退 `images.metadata`（未迁移旧行）。
     pub fn get_image_metadata(&self, image_id: &str) -> Result<Option<Value>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let row: Option<(Option<String>, Option<String>)> = conn
-            .query_row(
-                "SELECT m.data, i.metadata
-                 FROM images i
-                 LEFT JOIN image_metadata m ON i.metadata_id = m.id
-                 WHERE i.id = ?1",
-                params![image_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(|e| format!("Failed to query metadata: {}", e))?;
-        let Some((from_table, legacy)) = row else {
-            return Ok(None);
-        };
-        if let Some(ref s) = from_table {
-            if let Some(v) = parse_image_metadata_json(Some(s.clone())) {
-                return Ok(Some(v));
-            }
-        }
-        Ok(parse_image_metadata_json(legacy))
+        crate::providers::image_metadata_at(image_id)
     }
 
     /// 按 `image_metadata.id` 直接取 JSON（前端按 metadataId 缓存时命中）。
@@ -351,6 +338,7 @@ impl Storage {
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                         size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                        album_order: None,
                     })
                 },
             )
@@ -424,6 +412,7 @@ impl Storage {
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                         size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                        album_order: None,
                     })
                 },
             )
@@ -493,6 +482,7 @@ impl Storage {
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                         size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                        album_order: None,
                     })
                 },
             )
@@ -565,6 +555,7 @@ impl Storage {
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                         size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                        album_order: None,
                     })
                 },
             )
@@ -694,6 +685,22 @@ impl Storage {
         for id in image_ids {
             if let Some(tid) = self.get_task_id_for_image(id)? {
                 set.insert(tid);
+            }
+        }
+        Ok(set.into_iter().collect())
+    }
+
+    /// 批量图片涉及的插件 id（去重）。
+    pub fn collect_plugin_ids_for_images(
+        &self,
+        image_ids: &[String],
+    ) -> Result<Vec<String>, String> {
+        let mut set = HashSet::new();
+        for id in image_ids {
+            if let Some(image) = self.find_image_by_id(id)? {
+                if !image.plugin_id.trim().is_empty() {
+                    set.insert(image.plugin_id);
+                }
             }
         }
         Ok(set.into_iter().collect())
@@ -1038,7 +1045,11 @@ impl Storage {
         Ok(())
     }
 
-    pub fn update_image_display_name(&self, image_id: &str, display_name: &str) -> Result<(), String> {
+    pub fn update_image_display_name(
+        &self,
+        image_id: &str,
+        display_name: &str,
+    ) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         conn.execute(
             "UPDATE images SET display_name = ?1 WHERE id = ?2",
