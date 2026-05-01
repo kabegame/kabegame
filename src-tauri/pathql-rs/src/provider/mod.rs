@@ -12,8 +12,8 @@ pub use runtime::{ProviderRuntime, ResolvedNode};
 
 use crate::compose::{BuildError, FoldError, ProviderQuery, RenderError};
 use crate::template::eval::TemplateValue;
-use crate::ProviderRegistry;
-use std::sync::Arc;
+use crate::{LoadError, ProviderRegistry, RegistryError};
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 /// SQL 方言标注。executor 通过 `dialect()` 暴露; build_sql 渲染期据此选 placeholder。
@@ -88,6 +88,29 @@ pub struct ProviderContext {
     pub registry: Arc<ProviderRegistry>,
     /// 由 runtime 内部 `Weak<Self>` 在入口 upgrade 而来。
     pub runtime: Arc<ProviderRuntime>,
+    provider_keys: Arc<Mutex<Vec<ProviderKey>>>,
+}
+
+impl ProviderContext {
+    pub fn new(registry: Arc<ProviderRegistry>, runtime: Arc<ProviderRuntime>) -> Self {
+        Self {
+            registry,
+            runtime,
+            provider_keys: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub(crate) fn provider_key_mark(&self) -> usize {
+        self.provider_keys.lock().unwrap().len()
+    }
+
+    pub(crate) fn record_provider_key(&self, key: ProviderKey) {
+        self.provider_keys.lock().unwrap().push(key);
+    }
+
+    pub(crate) fn provider_keys_since(&self, mark: usize) -> Vec<ProviderKey> {
+        self.provider_keys.lock().unwrap()[mark..].to_vec()
+    }
 }
 
 #[derive(Clone)]
@@ -104,6 +127,21 @@ impl std::fmt::Debug for ChildEntry {
             .field("provider", &self.provider.as_ref().map(|_| "<Provider>"))
             .field("meta", &self.meta)
             .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProviderKey {
+    pub namespace: String,
+    pub name: String,
+}
+
+impl ProviderKey {
+    pub fn new(namespace: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            namespace: namespace.into(),
+            name: name.into(),
+        }
     }
 }
 
@@ -127,7 +165,7 @@ pub trait Provider: Send + Sync {
         name: &str,
         composed: &ProviderQuery,
         ctx: &ProviderContext,
-    ) -> Option<Arc<dyn Provider>>;
+    ) -> Option<ChildEntry>;
 
     /// 自描述文本 (§12.2; note: 字段, 支持 ${properties.X} 等模板)。
     fn get_note(&self, _composed: &ProviderQuery, _ctx: &ProviderContext) -> Option<String> {
@@ -157,6 +195,14 @@ pub enum EngineError {
     InvalidPath(String),
     #[error("factory failed for `{0}.{1}`: {2}")]
     FactoryFailed(String, String, String),
+    #[error("Root provider has not been set, please call set_root first!")]
+    RootNotInitialized,
+    #[error("Root provider has already been set")]
+    RootAlreadyInitialized,
+    #[error("load provider error: {0}")]
+    Load(#[from] LoadError),
+    #[error("register provider error: {0}")]
+    Registry(#[from] RegistryError),
 }
 
 #[cfg(test)]
@@ -186,7 +232,7 @@ mod tests {
             _name: &str,
             _composed: &ProviderQuery,
             _ctx: &ProviderContext,
-        ) -> Option<Arc<dyn Provider>> {
+        ) -> Option<ChildEntry> {
             None
         }
     }

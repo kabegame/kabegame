@@ -2,7 +2,7 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "$id": "kabegame://provider/v0.7",
     "title": "Kabegame Provider Definition",
-    "description": "声明式 Provider — 路径折叠 × ProviderQuery 贡献 × 动态枚举。详细语义见 cocs/provider-dsl/RULES.md。\n\n与 Rust trait Provider 对齐:\n  query   ↔ apply_query   节点对累积 ProviderQuery 的贡献(或 delegate 委托另一 provider)\n  list    ↔ list_children 静态字面量 / 动态 SQL / 动态 delegate 子节点枚举\n  resolve ↔ get_child     正则解析单个子节点\n\nChildEntry 模型:\n  { name: string, provider?: ProviderInvocation, meta?: any }\n  - meta 为任意 JSON, 详见 RULES.md §4.5(字符串=SQL 或模板; 对象/数组/标量=直接作为 meta)\n  - provider 可缺省 — 当前层不挂下层 provider\n\n命名空间(Java 包风格):\n  顶层 namespace 字段, 形如 'kabegame' / 'kabegame.plugin' / 'pixiv'\n  全局名 = <namespace>.<name>; 同 namespace 内 provider 互相引用用 simple name\n  解析规则: 当前 namespace → 父 namespace → ... → root\n  ProviderInvocation.provider 可写 simple name 或绝对 'a.b.c.name'\n\n判别策略:\n  - Query 互斥: delegate ⊕ (from/join/where/fields/order/offset/limit)\n  - StaticListEntry 用 ProviderInvocation 二态: byName ⊕ Empty\n  - Resolve 用 ProviderInvocation 三态: byName ⊕ byDelegate ⊕ Empty (7b 起 byDelegate 复活, payload 为 ProviderCall)\n  - List entry 由 key 是否含 ${...} 判别 静态 / 动态\n  - DynamicListEntry 数据源互斥: sql ⊕ delegate\n  - order 形态: 数组(位置定序) ⊕ {all:...} 全局指令(二选一)\n\n6e 起: query.delegate / list dynamic delegate 字段类型为 ProviderCall { provider, properties? }; 不再是路径表达式 (PathExpr 整个删除)。Provider 是 path-unaware 的 — 引用其它 provider 走 namespace 链 + name + properties, 不混入路径概念。\n\nDelegate 对称转发 (7b 起三处对齐):\n  - query.delegate         → target.apply_query(current, ctx)  ; 借目标的 contrib 入 composed\n  - list[<dyn>].delegate   → target.list(composed, ctx)        ; 调目标的 list 取 children 序列\n  - resolve[].delegate     → target.resolve(name, composed, ctx); 把当前 segment 的 resolve 决定权转给目标\n每处 payload 都是 ProviderCall, 永远 path-unaware。\n\nContribQuery 拼接语义:\n  fields  → 累积到 SELECT; 用 as + in_need 解决冲突\n  from    → cascading-replace(注意: from 不应内嵌 JOIN, 见 RULES.md §3.1)\n  join    → 累积; 用 as + in_need 解决冲突\n  where   → 路径上各节点 where 用 AND 拼接\n  order   → 数组按位置定优先级(对象 {<field>: asc/desc/revert, ...}; 允许多键); 或 {all: asc/desc/revert} 全局指令\n  offset  → additive (+); 多次声明用 + 串接\n  limit   → last-wins\n\nas + in_need 别名共享机制:\n  as: 'ab'                → 字面别名; 路径累积时重名拒绝(默认 in_need=false)\n  as: 'ab', in_need: true → 重名时放弃本次贡献(用于跨 provider 共享同一 join/field)\n  as: '${ref:my_id}'      → 引擎自动分配唯一别名; 通过 ${ref:my_id} 在其他位置引用\n\nList 动态项的两种数据源:\n  sql 模式 (data_var 显式绑定):\n    SQL 每行 = 一项 child; ${<data_var>.<col>(.<sub>)*} 取 SQL 列(支持嵌套 JSON 列)\n  delegate 模式 (child_var 显式绑定):\n    调目标 ProviderCall list_children; ${<child_var>.name/provider/meta.X} 取 ChildEntry 字段\n\nResolve 全部按正则匹配(纯字面量是空元字符的合法子集); resolve 字段直接是 <regex>: ProviderInvocation 映射, 无 entries 包装。运行期解析顺序:\n  1) regex resolve → 2) 静态 list 字面 → 3) 动态 list 反查(默认开启, 命中进 LRU)\n\nResolve 加载期碰撞检查:\n  - 每条正则 vs 静态 list key 字面量: 任一匹配 → 拒绝\n  - 正则 vs 正则: regex_automata 求交集 → 非空则拒绝\n  - 动态 list 不参与碰撞检查(运行期碰撞按解析顺序覆写, 非正确性故障)\n\n模板变量 ${...} 语义(详见 RULES.md §6):\n  - ${<ns>(.<path>)*}      命名空间取值(properties / capture / data_var / child_var / composed)\n  - ${<ns>[<N>]}           索引访问(capture)\n  - ${<method>:<arg>}      方法标记 — 当前仅 ${ref:<ident>} 引擎分配别名\n\nDynamicListEntry.provider 字段语义:\n  - 缺省          → 当前层不挂 provider(默认; 大多数路由壳走这条)\n  - ProviderName  → 显式构造命名 provider, 用 properties 传参\n  - ${child_var.provider} → 透传 delegate 数据源返回的 child.provider (仅 delegate 模式)",
+    "description": "声明式 Provider — 路径折叠 × ProviderQuery 贡献 × 动态枚举。详细语义见 cocs/provider-dsl/RULES.md。\n\n与 Rust trait Provider 对齐:\n  query   ↔ apply_query   节点对累积 ProviderQuery 的贡献(或 delegate 委托另一 provider)\n  list    ↔ list_children 静态字面量 / 动态 SQL / 动态 delegate 子节点枚举\n  resolve ↔ get_child     正则解析单个子节点\n\nChildEntry 模型:\n  { name: string, provider?: ProviderInvocation, meta?: any }\n  - meta 为任意 JSON, 详见 RULES.md §4.5(字符串=SQL 或模板; 对象/数组/标量=直接作为 meta)\n  - provider 可缺省 — 当前层不挂下层 provider\n\n命名空间(Java 包风格):\n  顶层 namespace 字段, 形如 'kabegame' / 'kabegame.plugin' / 'pixiv'\n  全局名 = <namespace>.<name>; 同 namespace 内 provider 互相引用用 simple name\n  解析规则: 当前 namespace → 父 namespace → ... → root\n  ProviderInvocation.provider 可写 simple name 或绝对 'a.b.c.name'\n\n判别策略:\n  - Query 互斥: delegate ⊕ (from/join/where/fields/order/offset/limit)\n  - StaticListEntry 用 ProviderInvocation 二态: byName ⊕ Empty\n  - Resolve 用 ProviderInvocation 三态: byName ⊕ byDelegate ⊕ Empty (7b 起 byDelegate 复活, payload 为 ProviderCall)\n  - List entry 由 key 是否含 ${...} 判别 静态 / 动态\n  - DynamicListEntry 数据源互斥: sql ⊕ delegate\n  - order 形态: 数组(位置定序) ⊕ {all:...} 全局指令(二选一)\n\n6e 起: query.delegate / list dynamic delegate 字段类型为 ProviderCall { provider, properties? }; 不再是路径表达式 (PathExpr 整个删除)。Provider 是 path-unaware 的 — 引用其它 provider 走 namespace 链 + name + properties, 不混入路径概念。\n\nDelegate 对称转发 (7b 起三处对齐):\n  - query.delegate         → target.apply_query(current, ctx)  ; 借目标的 contrib 入 composed\n  - list[<dyn>].delegate   → target.list(composed, ctx)        ; 调目标的 list 取 children 序列\n  - resolve[].delegate     → target.resolve(name, composed, ctx); 把当前 segment 的 resolve 决定权转给目标\n每处 payload 都是 ProviderCall, 永远 path-unaware。\n\nContribQuery 拼接语义:\n  fields  → 累积到 SELECT; 用 as + in_need 解决冲突\n  from    → cascading-replace(注意: from 不应内嵌 JOIN, 见 RULES.md §3.1)\n  join    → 累积; 用 as + in_need 解决冲突\n  where   → 路径上各节点 where 用 AND 拼接\n  order   → 数组按位置定优先级(对象 {<field>: asc/desc/revert, ...}; 允许多键); 或 {all: asc/desc/revert} 全局指令\n  offset  → additive (+); 多次声明用 + 串接\n  limit   → last-wins\n\nas + in_need 别名共享机制:\n  as: 'ab'                → 字面别名; 路径累积时重名拒绝(默认 in_need=false)\n  as: 'ab', in_need: true → 重名时放弃本次贡献(用于跨 provider 共享同一 join/field)\n  as: '${ref:my_id}'      → 引擎自动分配唯一别名; 通过 ${ref:my_id} 在其他位置引用\n\nList 动态项的两种数据源:\n  sql 模式 (data_var 显式绑定):\n    SQL 每行 = 一项 child; ${<data_var>.<col>(.<sub>)*} 取 SQL 列(支持嵌套 JSON 列)\n  delegate 模式 (child_var 显式绑定):\n    调目标 ProviderCall list_children; ${<child_var>.name/provider/meta.X} 取 ChildEntry 字段\n\nResolve 全部按正则匹配(纯字面量是空元字符的合法子集); resolve 字段直接是 <regex>: ProviderInvocation 映射, 无 entries 包装。运行期解析顺序:\n  1) regex resolve → 2) 静态 list 字面 → 3) 动态 list 反查(默认开启, 命中进 LRU)\n\nResolve 加载期碰撞检查:\n  - 每条正则 vs 静态 list key 字面量: 任一匹配 → 拒绝\n  - 正则 vs 正则: regex_automata 求交集 → 非空则拒绝\n  - 动态 list 不参与碰撞检查(运行期碰撞按解析顺序覆写, 非正确性故障)\n\n模板变量 ${...} 语义(详见 RULES.md §6):\n  - ${<ns>(.<path>)*}      命名空间取值(properties / capture / data_var / child_var / composed)\n  - ${<ns>[<N>]}           索引访问(capture)\n  - ${<method>:<arg>}      方法标记 — 当前仅 ${ref:<ident>} 引擎分配别名\n\nDynamicListEntry.provider 字段语义:\n  - 缺省          → 当前层不挂 provider\n  - ProviderName  → 显式构造命名 provider, 用 properties 传参\n  - ${child_var.provider} → 透传 delegate 数据源返回的 child.provider",
 
     "type": "object",
     "required": ["name"],
@@ -80,7 +80,7 @@
         "ChildRefProvider": {
             "type": "string",
             "pattern": "^\\$\\{[a-z_][a-z0-9_]*\\.provider\\}$",
-            "description": "对 delegate 模式 child.provider 的整体对象引用; 仅 DynamicListEntry_Delegate.provider 字段位置合法。形如 ${<child_var>.provider}"
+                    "description": "对 delegate 模式 child.provider 的整体对象引用; 仅 DynamicListEntry_Delegate.provider / InvokeByDelegate.provider 字段位置合法。形如 ${<child_var>.provider}"
         },
 
         "Identifier": {
@@ -372,12 +372,12 @@
                         { "$ref": "#/definitions/ProviderName" },
                         { "$ref": "#/definitions/ChildRefProvider" }
                     ],
-                    "description": "缺省=不挂 provider(默认; provider常见); 字符串=显式构造(路由壳常见); ${<child_var>.provider}=透传 delegate 返回的 child.provider"
+                    "description": "缺省=不挂 provider; 字符串=显式构造(可搭配 properties 传参); ${<child_var>.provider}=透传 delegate 返回的 child.provider"
                 },
                 "properties": {
                     "type": "object",
                     "additionalProperties": { "$ref": "#/definitions/TemplateValue" },
-                    "description": "传给当前层 provider 的属性; 值可含 ${<child_var>.name|provider|meta.X} 引用"
+                    "description": "传给当前层 provider 的属性; 仅 provider 为显式 ProviderName 时使用; 值可含 ${<child_var>.name|provider|meta.X} 引用"
                 },
                 "meta": {
                     "$ref": "#/definitions/MetaValue",
@@ -398,7 +398,7 @@
                 { "$ref": "#/definitions/InvokeByDelegate" },
                 { "$ref": "#/definitions/EmptyInvocation" }
             ],
-            "description": "三态 (7b 起):\n  - InvokeByName  — `{provider, properties?, meta?}`; 实例化 provider, 它即为 resolve 结果\n  - InvokeByDelegate — `{delegate: ProviderCall, meta?}`; 实例化 ProviderCall.provider, 调 target.resolve(name) 转发, target 给出的内层 provider 为结果 (仅 Resolve 表有效; 静态 list 项不允许)\n  - EmptyInvocation — `{meta?}` 占位\n\n用于 StaticListEntry (仅 ByName / Empty) 与 Resolve 项 (三态全允许)。\n\nInvokeByDelegate 是 7b 补回的 — query.delegate / list[].delegate / resolve[].delegate 三处 delegate 形成对称: 每个都'调用其上下文对应的操作并转发'。"
+            "description": "三态 (7b 起):\n  - InvokeByName  — `{provider, properties?, meta?}`; 实例化 provider, 它即为 resolve 结果\n  - InvokeByDelegate — `{delegate, child_var?, provider?, properties?, meta?}`; 调 target.resolve(name) 得到 ChildEntry, 再按当前项 provider/meta 转换返回; 默认不透传 provider/meta\n  - EmptyInvocation — `{meta?}` 占位\n\n用于 StaticListEntry (仅 ByName / Empty) 与 Resolve 项 (三态全允许)。"
         },
 
         "InvokeByName": {
@@ -420,15 +420,40 @@
             "type": "object",
             "additionalProperties": false,
             "required": ["delegate"],
-            "not": { "required": ["provider"] },
+            "allOf": [{
+                "if": {
+                    "properties": {
+                        "provider": { "$ref": "#/definitions/ChildRefProvider" }
+                    }
+                },
+                "then": {
+                    "not": { "required": ["properties"] }
+                }
+            }],
             "properties": {
                 "delegate": {
                     "$ref": "#/definitions/ProviderCall",
-                    "description": "[操作转发 — 对称语义] 实例化 ProviderCall.provider; 在其上调用此上下文对应方法 (resolve 表里 → target.resolve(name)). 与 query.delegate (→ target.apply_query) / DynamicListEntry_Delegate.delegate (→ target.list) 形成三处对称"
+                    "description": "[操作转发 — 对称语义] 实例化 ProviderCall.provider; 在其上调用 target.resolve(name), 得到 ChildEntry 后再由当前项转换"
+                },
+                "child_var": {
+                    "$ref": "#/definitions/Identifier",
+                    "description": "target.resolve(name) 返回的 ChildEntry 绑定名。provider/properties/meta 可通过 ${<child_var>.name|provider|meta.X} 引用"
+                },
+                "provider": {
+                    "oneOf": [
+                        { "$ref": "#/definitions/ProviderName" },
+                        { "$ref": "#/definitions/ChildRefProvider" }
+                    ],
+                    "description": "字符串=显式构造 provider; ${<child_var>.provider}=透传 target child.provider"
+                },
+                "properties": {
+                    "type": "object",
+                    "additionalProperties": { "$ref": "#/definitions/TemplateValue" },
+                    "description": "传给当前层 provider 的属性; 值可含 ${<child_var>.name|provider|meta.X} 引用"
                 },
                 "meta": { "$ref": "#/definitions/MetaValue" }
             },
-            "description": "Resolve 表项的 ByDelegate 形态 — 7b 补回。仅 Resolve 表有效; 静态 list 项不允许 (因 list 项要求返回 ChildEntry, 转发语义不组合)"
+            "description": "Resolve 表项的 ByDelegate 形态。缺省 child_var/provider/meta 保持旧语义: 不透传 provider/meta, 返回 null provider/null meta; 需要透传时显式写 child_var/provider/meta。"
         },
 
         "ProviderCall": {

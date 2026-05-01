@@ -690,6 +690,22 @@ impl Storage {
         Ok(set.into_iter().collect())
     }
 
+    /// 批量图片涉及的插件 id（去重）。
+    pub fn collect_plugin_ids_for_images(
+        &self,
+        image_ids: &[String],
+    ) -> Result<Vec<String>, String> {
+        let mut set = HashSet::new();
+        for id in image_ids {
+            if let Some(image) = self.find_image_by_id(id)? {
+                if !image.plugin_id.trim().is_empty() {
+                    set.insert(image.plugin_id);
+                }
+            }
+        }
+        Ok(set.into_iter().collect())
+    }
+
     /// 批量图片在删除前按畅游记录 id 统计张数（用于 `deleted_count` 与 `images-change`）。
     pub fn collect_surf_record_counts_for_images(
         &self,

@@ -309,7 +309,8 @@ impl DslProvider {
 
     /// 动态 Delegate list 项: 解析 delegate 路径 → 列举其子节点 → 每个子节点 child_var 注入,
     /// 渲染 key/meta/properties。`provider` 字段决定输出 ChildEntry.provider:
-    /// - `None` 或 `ChildRef("${child_var.provider}")` → 透传 target child.provider
+    /// - `None` → 当前层不挂 provider
+    /// - `ChildRef("${child_var.provider}")` → 透传 target child.provider
     /// - `Name(prov)` → 用 provider name 实例化
     fn list_dynamic_delegate(
         &self,
@@ -344,7 +345,7 @@ impl DslProvider {
             let name = render_template_to_string(key_template, &tctx)?;
 
             let provider: Option<Arc<dyn Provider>> = match &entry.provider {
-                None => child.provider.clone(),
+                None => None,
                 Some(DelegateProviderField::ChildRef(_)) => child.provider.clone(),
                 Some(DelegateProviderField::Name(prov_name)) => {
                     let props = self.eval_properties_in_ctx(&entry.properties, &tctx)?;
@@ -362,8 +363,51 @@ impl DslProvider {
         Ok(out)
     }
 
+    fn child_entry_json(child: &ChildEntry) -> serde_json::Value {
+        serde_json::json!({
+            "name": child.name,
+            "provider": serde_json::Value::Null,
+            "meta": child.meta.clone().unwrap_or(serde_json::Value::Null),
+        })
+    }
+
+    fn materialize_delegate_child(
+        &self,
+        name: String,
+        child: &ChildEntry,
+        child_var_name: Option<&str>,
+        provider_field: Option<&DelegateProviderField>,
+        properties: &Option<HashMap<String, AstTemplateValue>>,
+        meta: Option<&serde_json::Value>,
+        ctx: &ProviderContext,
+    ) -> Result<ChildEntry, EngineError> {
+        let mut tctx = self.base_template_context(ctx, &[]);
+        if let Some(child_var_name) = child_var_name {
+            tctx.child_var = Some((child_var_name.to_string(), Self::child_entry_json(child)));
+        }
+
+        let provider = match provider_field {
+            None => None,
+            Some(DelegateProviderField::ChildRef(_)) => child.provider.clone(),
+            Some(DelegateProviderField::Name(prov_name)) => {
+                let props = self.eval_properties_in_ctx(properties, &tctx)?;
+                ctx.registry
+                    .instantiate(&self.current_namespace(), prov_name, &props, ctx)
+            }
+        };
+
+        let meta_owned = meta.cloned();
+        let meta = self.eval_meta_in_ctx(&meta_owned, &tctx)?;
+
+        Ok(ChildEntry {
+            name,
+            provider,
+            meta,
+        })
+    }
+
     /// 反查: 给定 name, 找到哪个 dynamic 项的 key 模板渲染后等于 name, 然后实例化对应 provider。
-    /// 返回 `Ok(None)` 表示该 dynamic 项不命中; `Ok(Some(p))` 命中。
+    /// 返回 `Ok(None)` 表示该 dynamic 项不命中; `Ok(Some(child))` 命中。
     fn reverse_lookup_dynamic(
         &self,
         name: &str,
@@ -371,7 +415,7 @@ impl DslProvider {
         entry: &DynamicListEntry,
         composed: &ProviderQuery,
         ctx: &ProviderContext,
-    ) -> Result<Option<Arc<dyn Provider>>, EngineError> {
+    ) -> Result<Option<ChildEntry>, EngineError> {
         match entry {
             DynamicListEntry::Sql(sql_entry) => {
                 let total_started = Instant::now();
@@ -513,7 +557,12 @@ impl DslProvider {
                             total_started,
                             format!("target={name:?} result=hit"),
                         );
-                        return Ok(provider);
+                        let meta = self.eval_meta_in_ctx(&sql_entry.meta, &row_ctx)?;
+                        return Ok(Some(ChildEntry {
+                            name: rendered,
+                            provider,
+                            meta,
+                        }));
                     }
                 }
                 self.profile_log(
@@ -542,29 +591,22 @@ impl DslProvider {
 
                 let child_var_name = del_entry.child_var.0.clone();
                 for child in target_children {
-                    let child_json = serde_json::json!({
-                        "name": child.name,
-                        "meta": child.meta.clone().unwrap_or(serde_json::Value::Null),
-                    });
+                    let child_json = Self::child_entry_json(&child);
                     let mut tctx = self.base_template_context(ctx, &[]);
                     tctx.child_var = Some((child_var_name.clone(), child_json));
                     let rendered = render_template_to_string(key_template, &tctx)?;
                     if rendered == name {
-                        let provider: Option<Arc<dyn Provider>> = match &del_entry.provider {
-                            None => child.provider.clone(),
-                            Some(DelegateProviderField::ChildRef(_)) => child.provider.clone(),
-                            Some(DelegateProviderField::Name(prov_name)) => {
-                                let props =
-                                    self.eval_properties_in_ctx(&del_entry.properties, &tctx)?;
-                                ctx.registry.instantiate(
-                                    &self.current_namespace(),
-                                    prov_name,
-                                    &props,
-                                    ctx,
-                                )
-                            }
-                        };
-                        return Ok(provider);
+                        return self
+                            .materialize_delegate_child(
+                                rendered,
+                                &child,
+                                Some(&child_var_name),
+                                del_entry.provider.as_ref(),
+                                &del_entry.properties,
+                                del_entry.meta.as_ref(),
+                                ctx,
+                            )
+                            .map(Some);
                     }
                 }
                 Ok(None)
@@ -572,12 +614,13 @@ impl DslProvider {
         }
     }
 
-    /// 把 ProviderInvocation 包成 ChildEntry (静态 list 项用)。
-    /// 7b: 拒绝 ByDelegate — list 静态项不支持转发语义 (只有 resolve 表里有意义)。
-    fn materialize_static(
+    /// 把 ProviderInvocation 包成 ChildEntry。
+    /// 7b: ByDelegate 由 resolve 调用点单独处理, 静态 list 项不支持转发语义。
+    fn materialize_invocation_child(
         &self,
         key: &str,
         inv: &ProviderInvocation,
+        captures: &[String],
         composed: &ProviderQuery,
         ctx: &ProviderContext,
     ) -> Result<Option<ChildEntry>, EngineError> {
@@ -591,11 +634,10 @@ impl DslProvider {
                 ),
             ));
         }
-        // 静态项无 capture; meta 在 self.properties 作用域下渲染
-        let provider = self.instantiate_invocation(inv, &[], composed, ctx)?;
+        let provider = self.instantiate_invocation(inv, captures, composed, ctx)?;
         let meta = match inv {
-            ProviderInvocation::ByName(b) => self.eval_meta(&b.meta, &[], ctx)?,
-            ProviderInvocation::Empty(b) => self.eval_meta(&b.meta, &[], ctx)?,
+            ProviderInvocation::ByName(b) => self.eval_meta(&b.meta, captures, ctx)?,
+            ProviderInvocation::Empty(b) => self.eval_meta(&b.meta, captures, ctx)?,
             ProviderInvocation::ByDelegate(_) => unreachable!("rejected above"),
         };
         Ok(Some(ChildEntry {
@@ -603,6 +645,16 @@ impl DslProvider {
             provider,
             meta,
         }))
+    }
+
+    fn materialize_static(
+        &self,
+        key: &str,
+        inv: &ProviderInvocation,
+        composed: &ProviderQuery,
+        ctx: &ProviderContext,
+    ) -> Result<Option<ChildEntry>, EngineError> {
+        self.materialize_invocation_child(key, inv, &[], composed, ctx)
     }
 }
 
@@ -684,7 +736,7 @@ impl Provider for DslProvider {
         name: &str,
         composed: &ProviderQuery,
         ctx: &ProviderContext,
-    ) -> Option<Arc<dyn Provider>> {
+    ) -> Option<ChildEntry> {
         let dbg = crate::provider::runtime::dbg_enabled();
         if dbg {
             let static_keys: Vec<&str> = self
@@ -739,7 +791,8 @@ impl Provider for DslProvider {
                         .iter()
                         .map(|m| m.map(|x| x.as_str().to_string()).unwrap_or_default())
                         .collect();
-                    // 7b: ByDelegate 在此 inline 处理 — 调 target.resolve(name) 转发解析责任
+                    // 7b: ByDelegate 在此 inline 处理 — 调 target.resolve(name) 转发解析责任,
+                    // 再把目标 ChildEntry 绑定到 child_var 并按当前层声明重新 materialize。
                     if let ProviderInvocation::ByDelegate(b) = invocation {
                         if dbg {
                             eprintln!(
@@ -753,10 +806,21 @@ impl Provider for DslProvider {
                         };
                         // target 的 contrib 借给本节点 (与路径自然下走对称)
                         let next_composed = target.apply_query(composed.clone(), ctx);
-                        return target.resolve(name, &next_composed, ctx);
+                        let target_child = target.resolve(name, &next_composed, ctx)?;
+                        return self
+                            .materialize_delegate_child(
+                                name.to_string(),
+                                &target_child,
+                                b.child_var.as_ref().map(|child_var| child_var.0.as_str()),
+                                b.provider.as_ref(),
+                                &b.properties,
+                                b.meta.as_ref(),
+                                ctx,
+                            )
+                            .ok();
                     }
                     return self
-                        .instantiate_invocation(invocation, &cap_vec, composed, ctx)
+                        .materialize_invocation_child(name, invocation, &cap_vec, composed, ctx)
                         .ok()
                         .flatten();
                 }
@@ -775,7 +839,7 @@ impl Provider for DslProvider {
                             );
                         }
                         return self
-                            .instantiate_invocation(inv, &[], composed, ctx)
+                            .materialize_invocation_child(name, inv, &[], composed, ctx)
                             .ok()
                             .flatten();
                     }
@@ -925,12 +989,7 @@ impl Provider for EmptyDslProvider {
     fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
         Ok(Vec::new())
     }
-    fn resolve(
-        &self,
-        _: &str,
-        _: &ProviderQuery,
-        _: &ProviderContext,
-    ) -> Option<Arc<dyn Provider>> {
+    fn resolve(&self, _: &str, _: &ProviderQuery, _: &ProviderContext) -> Option<ChildEntry> {
         None
     }
     fn is_empty(&self) -> bool {

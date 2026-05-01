@@ -371,7 +371,7 @@ mod tests {
     fn unicode_text() {
         let a = parse("按画册${properties.x}").unwrap();
         assert_eq!(a.segments.len(), 2);
-        assert_eq!(a.segments[0], Segment::Text("画册".into()));
+        assert_eq!(a.segments[0], Segment::Text("按画册".into()));
     }
 
     #[test]

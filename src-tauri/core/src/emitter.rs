@@ -213,6 +213,7 @@ impl GlobalEmitter {
         image_ids: &[String],
         task_ids: Option<&[String]>,
         surf_record_ids: Option<&[String]>,
+        plugin_ids: Option<&[String]>,
     ) {
         let opt_vec = |s: Option<&[String]>| {
             s.and_then(|v| if v.is_empty() { None } else { Some(v.to_vec()) })
@@ -222,6 +223,7 @@ impl GlobalEmitter {
             image_ids: image_ids.to_vec(),
             task_ids: opt_vec(task_ids),
             surf_record_ids: opt_vec(surf_record_ids),
+            plugin_ids: opt_vec(plugin_ids),
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -533,6 +535,7 @@ impl GlobalEmitter {
         _image_ids: &[String],
         _task_ids: Option<&[String]>,
         _surf_record_ids: Option<&[String]>,
+        _plugin_ids: Option<&[String]>,
     ) {
     }
 

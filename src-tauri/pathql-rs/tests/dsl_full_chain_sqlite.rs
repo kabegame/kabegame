@@ -9,7 +9,7 @@
 //! - `/gallery/all/x100x` 触发正则捕获 -> gallery_paginate_router{page_size=100}
 //! - `/gallery/all/x100x/1` 走动态反查 -> gallery_page_router{page_size=100, page_num=1}
 //!   再走 query.delegate ./__provider -> query_page_provider 贡献 OFFSET/LIMIT
-//! - `/vd/i18n-zh_CN/按画册` 中文路径段穿透 vd_root_router -> vd_zh_CN_root_router
+//! - `/vd/i18n-zh_CN/画册` 中文路径段穿透 vd_root_router -> vd_zh_CN_root_router
 
 #![cfg(feature = "json5")]
 
@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex};
 use pathql_rs::ast::{Namespace, SimpleName};
 use pathql_rs::compose::ProviderQuery;
 use pathql_rs::provider::{
-    ChildEntry, ClosureExecutor, DslProvider, EngineError, Provider, ProviderContext,
-    ProviderRuntime, SqlDialect, SqlExecutor,
+    ChildEntry, ClosureExecutor, EngineError, Provider, ProviderContext, ProviderRuntime,
+    SqlDialect, SqlExecutor,
 };
 use pathql_rs::template::eval::TemplateValue;
 use pathql_rs::{Json5Loader, Loader, ProviderRegistry, Source};
@@ -159,12 +159,7 @@ impl Provider for StubProvider {
     fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
         Ok(Vec::new())
     }
-    fn resolve(
-        &self,
-        _: &str,
-        _: &ProviderQuery,
-        _: &ProviderContext,
-    ) -> Option<Arc<dyn Provider>> {
+    fn resolve(&self, _: &str, _: &ProviderQuery, _: &ProviderContext) -> Option<ChildEntry> {
         None
     }
 }
@@ -222,10 +217,13 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         register_stub(&mut registry, "kabegame", name);
     }
 
-    let root: Arc<dyn Provider> = Arc::new(DslProvider {
-        def: root_def.expect("root_provider not in PROVIDER_FILES"),
-        properties: HashMap::new(),
-    });
+    let root_def = root_def.expect("root_provider not in PROVIDER_FILES");
+    let root_ns = root_def
+        .namespace
+        .as_ref()
+        .map(|ns| ns.0.clone())
+        .unwrap_or_default();
+    let root_name = root_def.name.0.clone();
     let globals = HashMap::from([
         (
             "favorite_album_id".to_string(),
@@ -236,7 +234,9 @@ fn build_runtime() -> Arc<ProviderRuntime> {
             TemplateValue::Text("hidden-album".to_string()),
         ),
     ]);
-    ProviderRuntime::new(Arc::new(registry), root, executor, globals)
+    let runtime = ProviderRuntime::with_registry(Arc::new(registry), executor, globals);
+    runtime.set_root(&root_ns, &root_name).unwrap();
+    runtime
 }
 
 #[test]
@@ -305,7 +305,7 @@ fn gallery_hide_all_page_resolves_and_builds_with_globals() {
 #[test]
 fn vd_zh_cn_chinese_segment_resolves() {
     let runtime = build_runtime();
-    let resolved = runtime.resolve("/vd/i18n-zh_CN/按画册").unwrap();
+    let resolved = runtime.resolve("/vd/i18n-zh_CN/画册").unwrap();
     let _ = resolved;
 }
 

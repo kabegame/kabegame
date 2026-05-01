@@ -8,6 +8,7 @@ export type ImagesChangePayload = {
   imageIds?: string[];
   taskIds?: string[];
   surfRecordIds?: string[];
+  pluginIds?: string[];
 };
 
 type UnlistenFn = () => void;

@@ -7,7 +7,7 @@ use crate::ast::{
 };
 use serde::{
     de::{self, MapAccess, Visitor},
-    Deserialize, Deserializer, Serialize,
+    Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::collections::HashMap;
 use std::fmt;
@@ -25,12 +25,47 @@ pub struct DynamicSqlEntry {
     pub meta: Option<MetaValue>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DelegateProviderField {
-    /// `${child_var.provider}` 字面值——Phase 1 不解析含义
+    /// `${child_var.provider}` 字面值。
     ChildRef(String),
     Name(ProviderName),
+}
+
+impl<'de> Deserialize<'de> for DelegateProviderField {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(de)?;
+        if is_child_provider_ref(&s) {
+            Ok(Self::ChildRef(s))
+        } else {
+            Ok(Self::Name(ProviderName(s)))
+        }
+    }
+}
+
+impl Serialize for DelegateProviderField {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::ChildRef(s) => serializer.serialize_str(s),
+            Self::Name(name) => serializer.serialize_str(&name.0),
+        }
+    }
+}
+
+fn is_child_provider_ref(s: &str) -> bool {
+    let Some(inner) = s.strip_prefix("${").and_then(|s| s.strip_suffix('}')) else {
+        return false;
+    };
+    let Some((ident, field)) = inner.split_once('.') else {
+        return false;
+    };
+    field == "provider"
+        && !ident.is_empty()
+        && ident
+            .chars()
+            .enumerate()
+            .all(|(i, c)| c == '_' || c.is_ascii_lowercase() || (i > 0 && c.is_ascii_digit()))
+        && !ident.chars().next().is_some_and(|c| c.is_ascii_digit())
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -288,7 +323,7 @@ mod tests {
         assert_eq!(v.entries.len(), 1);
         match &v.entries[0].1 {
             ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => {
-                assert!(e.provider.is_some());
+                assert!(matches!(e.provider, Some(DelegateProviderField::Name(_))));
                 assert_eq!(
                     e.delegate.provider,
                     ProviderName("page_size_provider".into())

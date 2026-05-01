@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 pub async fn get_plugins() -> Result<Value, String> {
     let pm = PluginManager::global();
     pm.ensure_installed_cache_initialized().await?;
-    let plugins = pm.get_all().await?;
+    let plugins = pm.get_all()?;
     let index: Vec<Value> = plugins
         .iter()
         .map(|p| json!({ "id": p.id, "version": p.version }))

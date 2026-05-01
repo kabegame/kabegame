@@ -14,6 +14,11 @@
         }
     },
     "resolve": {
-        ".*": { "delegate": { "provider": "gallery_dates_router" } }
+        ".*": {
+            "delegate": { "provider": "gallery_dates_router" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
     }
 }

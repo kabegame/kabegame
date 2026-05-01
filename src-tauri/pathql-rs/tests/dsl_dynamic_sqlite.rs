@@ -84,15 +84,32 @@ fn make_executor(conn: Arc<Mutex<Connection>>) -> Arc<dyn SqlExecutor> {
     ))
 }
 
-fn empty_registry() -> Arc<ProviderRegistry> {
-    Arc::new(ProviderRegistry::new())
-}
-
-/// 6d: 测试 nopop executor (供 ExecutorMissing 已删除后的"未注入"场景占位)。
 fn no_op_executor() -> Arc<dyn SqlExecutor> {
     Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, |_sql, _params| {
         Ok(Vec::new())
     }))
+}
+
+fn empty_registry() -> ProviderRegistry {
+    ProviderRegistry::new()
+}
+
+fn runtime_with_registry(
+    mut registry: ProviderRegistry,
+    root: Arc<dyn Provider>,
+    executor: Arc<dyn SqlExecutor>,
+) -> Arc<ProviderRuntime> {
+    let root_for_factory = root.clone();
+    registry
+        .register_provider(
+            pathql_rs::ast::Namespace(String::new()),
+            pathql_rs::ast::SimpleName("__root".into()),
+            move |_| Ok(root_for_factory.clone()),
+        )
+        .unwrap();
+    let runtime = ProviderRuntime::with_registry(Arc::new(registry), executor, Default::default());
+    runtime.set_root("", "__root").unwrap();
+    runtime
 }
 
 #[test]
@@ -116,7 +133,7 @@ fn dynamic_sql_list_enumerates_rows() {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
-    let runtime = ProviderRuntime::new(empty_registry(), root, executor, Default::default());
+    let runtime = runtime_with_registry(empty_registry(), root, executor);
 
     let children = runtime.list("/").unwrap();
     let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
@@ -165,7 +182,7 @@ fn dynamic_resolve_reverse_lookup_finds_match() {
             _: &str,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Option<Arc<dyn Provider>> {
+        ) -> Option<ChildEntry> {
             None
         }
     }
@@ -192,7 +209,7 @@ fn dynamic_resolve_reverse_lookup_finds_match() {
         def: Arc::new(def),
         properties: HashMap::new(),
     });
-    let runtime = ProviderRuntime::new(Arc::new(reg), root, executor, Default::default());
+    let runtime = runtime_with_registry(reg, root, executor);
 
     // Reverse-lookup for /p2 should hit the dynamic SQL entry's row id=p2 → pinger provider.
     let resolved = runtime.resolve("/p2").unwrap();
@@ -219,12 +236,12 @@ fn dynamic_delegate_list_enumerates_target_children() {
             Ok(vec![
                 ChildEntry {
                     name: "alpha".into(),
-                    provider: None,
+                    provider: Some(Arc::new(Self) as Arc<dyn Provider>),
                     meta: Some(serde_json::json!({"label":"A"})),
                 },
                 ChildEntry {
                     name: "beta".into(),
-                    provider: None,
+                    provider: Some(Arc::new(Self) as Arc<dyn Provider>),
                     meta: Some(serde_json::json!({"label":"B"})),
                 },
             ])
@@ -234,9 +251,15 @@ fn dynamic_delegate_list_enumerates_target_children() {
             name: &str,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Option<Arc<dyn Provider>> {
+        ) -> Option<ChildEntry> {
             if name == "alpha" || name == "beta" {
-                Some(Arc::new(Self) as Arc<dyn Provider>)
+                Some(ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(Arc::new(Self) as Arc<dyn Provider>),
+                    meta: Some(serde_json::json!({
+                        "label": if name == "alpha" { "A" } else { "B" }
+                    })),
+                })
             } else {
                 None
             }
@@ -286,10 +309,18 @@ fn dynamic_delegate_list_enumerates_target_children() {
             name: &str,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Option<Arc<dyn Provider>> {
+        ) -> Option<ChildEntry> {
             match name {
-                "src" => Some(self.src.clone()),
-                "facade" => Some(self.facade.clone()),
+                "src" => Some(ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(self.src.clone()),
+                    meta: None,
+                }),
+                "facade" => Some(ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(self.facade.clone()),
+                    meta: None,
+                }),
                 _ => None,
             }
         }
@@ -311,11 +342,12 @@ fn dynamic_delegate_list_enumerates_target_children() {
         properties: HashMap::new(),
     });
     let root: Arc<dyn Provider> = Arc::new(Root { src, facade });
-    let runtime = ProviderRuntime::new(Arc::new(reg), root, executor, Default::default());
+    let runtime = runtime_with_registry(reg, root, executor);
 
     let children = runtime.list("/facade").unwrap();
     let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec!["x-alpha", "x-beta"]);
+    assert!(children.iter().all(|c| c.provider.is_none()));
 
     let upstream: Vec<String> = children
         .iter()
@@ -329,4 +361,312 @@ fn dynamic_delegate_list_enumerates_target_children() {
         })
         .collect();
     assert_eq!(upstream, vec!["A", "B"]);
+}
+
+#[test]
+fn resolve_delegate_legacy_defaults_to_null_provider_and_meta() {
+    use pathql_rs::ast::{Namespace, SimpleName};
+
+    struct Leaf;
+    impl Provider for Leaf {
+        fn list(
+            &self,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Result<Vec<ChildEntry>, EngineError> {
+            Ok(Vec::new())
+        }
+        fn resolve(
+            &self,
+            _: &str,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Option<ChildEntry> {
+            None
+        }
+    }
+
+    struct Source {
+        provider: Arc<dyn Provider>,
+    }
+    impl Provider for Source {
+        fn list(
+            &self,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Result<Vec<ChildEntry>, EngineError> {
+            Ok(Vec::new())
+        }
+        fn resolve(
+            &self,
+            name: &str,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Option<ChildEntry> {
+            (name == "alpha").then(|| ChildEntry {
+                name: name.to_string(),
+                provider: Some(self.provider.clone()),
+                meta: Some(serde_json::json!({"label":"A"})),
+            })
+        }
+    }
+
+    let def_json = r#"{
+        "namespace": "test",
+        "name": "facade",
+        "resolve": {
+            ".*": {
+                "delegate": {"provider": "src_inner"}
+            }
+        }
+    }"#;
+    let def: ProviderDef = serde_json::from_str(def_json).unwrap();
+
+    let source_leaf: Arc<dyn Provider> = Arc::new(Leaf);
+    let mut reg = ProviderRegistry::new();
+    let source_leaf_for_factory = source_leaf.clone();
+    reg.register_provider(
+        Namespace("test".into()),
+        SimpleName("src_inner".into()),
+        move |_| {
+            Ok(Arc::new(Source {
+                provider: source_leaf_for_factory.clone(),
+            }) as Arc<dyn Provider>)
+        },
+    )
+    .unwrap();
+
+    let registry = Arc::new(reg);
+    let runtime =
+        ProviderRuntime::with_registry(registry.clone(), no_op_executor(), Default::default());
+    let ctx = ProviderContext::new(registry, runtime);
+    let facade = DslProvider {
+        def: Arc::new(def),
+        properties: HashMap::new(),
+    };
+
+    let child = facade
+        .resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx)
+        .unwrap();
+    assert_eq!(child.name, "alpha");
+    assert!(child.provider.is_none());
+    assert!(child.meta.is_none());
+}
+
+#[test]
+fn resolve_delegate_transforms_target_child_provider_and_meta() {
+    use pathql_rs::ast::{Namespace, SimpleName};
+
+    struct Leaf(&'static str);
+    impl Provider for Leaf {
+        fn list(
+            &self,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Result<Vec<ChildEntry>, EngineError> {
+            Ok(Vec::new())
+        }
+        fn resolve(
+            &self,
+            _: &str,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Option<ChildEntry> {
+            None
+        }
+        fn get_note(
+            &self,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Option<String> {
+            Some(self.0.into())
+        }
+    }
+
+    struct Source {
+        provider: Arc<dyn Provider>,
+    }
+    impl Provider for Source {
+        fn list(
+            &self,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Result<Vec<ChildEntry>, EngineError> {
+            Ok(Vec::new())
+        }
+        fn resolve(
+            &self,
+            name: &str,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Option<ChildEntry> {
+            (name == "alpha").then(|| ChildEntry {
+                name: name.to_string(),
+                provider: Some(self.provider.clone()),
+                meta: Some(serde_json::json!({"label":"A"})),
+            })
+        }
+    }
+
+    let def_json = r#"{
+        "namespace": "test",
+        "name": "facade",
+        "resolve": {
+            ".*": {
+                "delegate": {"provider": "src_inner"},
+                "child_var": "out",
+                "provider": "${out.provider}",
+                "meta": "${out.meta}"
+            }
+        }
+    }"#;
+    let def: ProviderDef = serde_json::from_str(def_json).unwrap();
+
+    let source_leaf: Arc<dyn Provider> = Arc::new(Leaf("source"));
+    let mut reg = ProviderRegistry::new();
+    let source_leaf_for_factory = source_leaf.clone();
+    reg.register_provider(
+        Namespace("test".into()),
+        SimpleName("src_inner".into()),
+        move |_| {
+            Ok(Arc::new(Source {
+                provider: source_leaf_for_factory.clone(),
+            }) as Arc<dyn Provider>)
+        },
+    )
+    .unwrap();
+
+    let registry = Arc::new(reg);
+    let runtime =
+        ProviderRuntime::with_registry(registry.clone(), no_op_executor(), Default::default());
+    let ctx = ProviderContext::new(registry, runtime);
+    let facade = DslProvider {
+        def: Arc::new(def),
+        properties: HashMap::new(),
+    };
+
+    let child = facade
+        .resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx)
+        .unwrap();
+    assert_eq!(child.name, "alpha");
+    assert_eq!(child.meta.unwrap(), serde_json::json!({"label":"A"}));
+    assert_eq!(
+        child
+            .provider
+            .unwrap()
+            .get_note(&pathql_rs::compose::ProviderQuery::new(), &ctx),
+        Some("source".into())
+    );
+}
+
+#[test]
+fn resolve_delegate_can_replace_target_child_provider() {
+    use pathql_rs::ast::{Namespace, SimpleName};
+
+    struct NamedLeaf(&'static str);
+    impl Provider for NamedLeaf {
+        fn list(
+            &self,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Result<Vec<ChildEntry>, EngineError> {
+            Ok(Vec::new())
+        }
+        fn resolve(
+            &self,
+            _: &str,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Option<ChildEntry> {
+            None
+        }
+        fn get_note(
+            &self,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Option<String> {
+            Some(self.0.into())
+        }
+    }
+
+    struct Source {
+        provider: Arc<dyn Provider>,
+    }
+    impl Provider for Source {
+        fn list(
+            &self,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Result<Vec<ChildEntry>, EngineError> {
+            Ok(Vec::new())
+        }
+        fn resolve(
+            &self,
+            name: &str,
+            _: &pathql_rs::compose::ProviderQuery,
+            _: &ProviderContext,
+        ) -> Option<ChildEntry> {
+            (name == "alpha").then(|| ChildEntry {
+                name: name.to_string(),
+                provider: Some(self.provider.clone()),
+                meta: Some(serde_json::json!({"id":"alpha"})),
+            })
+        }
+    }
+
+    let def_json = r#"{
+        "namespace": "test",
+        "name": "facade",
+        "resolve": {
+            ".*": {
+                "delegate": {"provider": "src_inner"},
+                "child_var": "out",
+                "provider": "replacement",
+                "properties": {"id": "${out.meta.id}"},
+                "meta": "${out.meta}"
+            }
+        }
+    }"#;
+    let def: ProviderDef = serde_json::from_str(def_json).unwrap();
+
+    let source_leaf: Arc<dyn Provider> = Arc::new(NamedLeaf("source"));
+    let mut reg = ProviderRegistry::new();
+    let source_leaf_for_factory = source_leaf.clone();
+    reg.register_provider(
+        Namespace("test".into()),
+        SimpleName("src_inner".into()),
+        move |_| {
+            Ok(Arc::new(Source {
+                provider: source_leaf_for_factory.clone(),
+            }) as Arc<dyn Provider>)
+        },
+    )
+    .unwrap();
+    reg.register_provider(
+        Namespace("test".into()),
+        SimpleName("replacement".into()),
+        |_| Ok(Arc::new(NamedLeaf("replacement")) as Arc<dyn Provider>),
+    )
+    .unwrap();
+
+    let registry = Arc::new(reg);
+    let runtime =
+        ProviderRuntime::with_registry(registry.clone(), no_op_executor(), Default::default());
+    let ctx = ProviderContext::new(registry, runtime);
+    let facade = DslProvider {
+        def: Arc::new(def),
+        properties: HashMap::new(),
+    };
+
+    let child = facade
+        .resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx)
+        .unwrap();
+    assert_eq!(child.meta.unwrap(), serde_json::json!({"id":"alpha"}));
+    assert_eq!(
+        child
+            .provider
+            .unwrap()
+            .get_note(&pathql_rs::compose::ProviderQuery::new(), &ctx),
+        Some("replacement".into())
+    );
 }

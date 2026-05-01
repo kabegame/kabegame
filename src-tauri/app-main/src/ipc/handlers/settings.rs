@@ -348,7 +348,19 @@ fn set_current_wallpaper_image_id(image_id: Option<String>) -> IpcResponse {
                     .unwrap_or_default()
                     .as_secs();
                 let _ = Storage::global().update_image_last_set_wallpaper_at(&id, now);
-                GlobalEmitter::global().emit_images_change("change", &[id], None, None);
+                let plugin_ids = Storage::global()
+                    .find_image_by_id(&id)
+                    .ok()
+                    .flatten()
+                    .map(|image| vec![image.plugin_id])
+                    .unwrap_or_default();
+                GlobalEmitter::global().emit_images_change(
+                    "change",
+                    &[id],
+                    None,
+                    None,
+                    Some(&plugin_ids),
+                );
             }
             IpcResponse::ok("updated")
         }

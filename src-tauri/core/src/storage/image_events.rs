@@ -21,6 +21,7 @@ pub fn delete_images_with_events(image_ids: &[String], delete_files: bool) -> Re
     let storage = Storage::global();
     let album_ids = storage.collect_album_ids_for_images(image_ids)?;
     let task_ids = storage.collect_task_ids_for_images(image_ids)?;
+    let plugin_ids = storage.collect_plugin_ids_for_images(image_ids)?;
     let surf_counts = storage.collect_surf_record_counts_for_images(image_ids)?;
     let surf_record_ids: Vec<String> = surf_counts.keys().cloned().collect();
     if delete_files {
@@ -49,6 +50,7 @@ pub fn delete_images_with_events(image_ids: &[String], delete_files: bool) -> Re
         image_ids,
         Some(&task_ids),
         Some(&surf_record_ids),
+        Some(&plugin_ids),
     );
     if !album_ids.is_empty() {
         GlobalEmitter::global().emit_album_images_change("delete", &album_ids, image_ids);

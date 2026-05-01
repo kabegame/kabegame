@@ -78,6 +78,9 @@ pub fn init_kgpg_plugin() {
         if let Err(e) = pm.ensure_installed_cache_initialized().await {
             eprintln!("Failed to initialize plugin cache: {}", e);
         }
+        if let Err(e) = pm.register_installed_plugin_providers().await {
+            eprintln!("Failed to register installed plugin providers: {}", e);
+        }
         // 初始化商店插件缓存（已下载到本地的 .kgpg）
         if let Err(e) = pm.init_store_plugin_cache().await {
             eprintln!("Failed to initialize store plugin cache: {}", e);

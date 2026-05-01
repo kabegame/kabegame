@@ -72,17 +72,17 @@
             <template #dropdown>
               <el-dropdown-menu class="plugin-submenu-menu">
                 <template v-if="pluginGroups.length">
-                  <el-dropdown-item
-                    v-for="g in pluginGroups"
-                    :key="g.plugin_id"
-                    :command="g.plugin_id"
-                    :class="{
-                      'is-active': currentPluginId === g.plugin_id,
-                    }"
-                  >
-                    {{ pluginStore.pluginLabel(g.plugin_id) }}
-                    <span class="plugin-count">({{ g.count }})</span>
-                  </el-dropdown-item>
+                  <template v-for="g in pluginGroups" :key="g.plugin_id">
+                    <el-dropdown-item
+                      :command="pluginCommand(g.plugin_id)"
+                      :class="{
+                        'is-active': isPluginCommandActive(g.plugin_id),
+                      }"
+                    >
+                      {{ pluginStore.pluginLabel(g.plugin_id) }}
+                      <span class="plugin-count">({{ g.count }})</span>
+                    </el-dropdown-item>
+                  </template>
                 </template>
                 <el-dropdown-item v-else disabled>
                   {{ t("gallery.filterByPluginEmpty") }}
@@ -203,6 +203,8 @@ const isMediaTypeFilterActive = computed(
 );
 
 const pluginGroups = ref<PluginGroupRow[]>([]);
+const pluginExtendChildren = ref<Record<string, ProviderChildDir[]>>({});
+const pluginExtendLoadingPaths = ref(new Set<string>());
 const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
   imageCount: 0,
   videoCount: 0,
@@ -250,8 +252,95 @@ async function loadPluginGroups() {
       }))
     );
     pluginGroups.value = groups.filter((r) => r.count > 0);
+    await Promise.all(pluginGroups.value.map((g) => loadPluginExtend(g.plugin_id)));
   } catch {
     pluginGroups.value = [];
+    pluginExtendChildren.value = {};
+  }
+}
+
+function normalizeExtendPath(path = "") {
+  return path.trim().replace(/^\/+|\/+$/g, "");
+}
+
+function pluginExtendKey(pluginId: string, extendPath = "") {
+  const path = normalizeExtendPath(extendPath);
+  return path ? `${pluginId}\t${path}` : pluginId;
+}
+
+function pluginExtendPathForProvider(extendPath = "") {
+  return normalizeExtendPath(extendPath)
+    .split("/")
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join("/");
+}
+
+function pluginExtendChildrenByPath(pluginId: string) {
+  const prefix = `${pluginId}\t`;
+  const out: Record<string, ProviderChildDir[]> = {};
+  for (const [key, children] of Object.entries(pluginExtendChildren.value)) {
+    if (key === pluginId) {
+      out[""] = children;
+    } else if (key.startsWith(prefix)) {
+      out[key.slice(prefix.length)] = children;
+    }
+  }
+  return out;
+}
+
+function activePluginExtendPath(pluginId: string) {
+  return galleryRouteStore.filter.type === "plugin" &&
+    galleryRouteStore.filter.pluginId === pluginId
+    ? normalizeExtendPath(galleryRouteStore.filter.extendPath ?? "")
+    : "";
+}
+
+function pluginCommand(pluginId: string, extendPath = "") {
+  return extendPath ? `${pluginId}\t${extendPath}` : pluginId;
+}
+
+function parsePluginCommand(command: string) {
+  const [pluginId, extendPath = ""] = String(command || "").split("\t");
+  return { pluginId: pluginId.trim(), extendPath: extendPath.trim() };
+}
+
+function isPluginCommandActive(pluginId: string, extendPath = "") {
+  return (
+    galleryRouteStore.filter.type === "plugin" &&
+    galleryRouteStore.filter.pluginId === pluginId &&
+    (galleryRouteStore.filter.extendPath ?? "") === extendPath
+  );
+}
+
+async function loadPluginExtend(pluginId: string, extendPath = "") {
+  const id = pluginId.trim();
+  if (!id) return;
+  const prefix = filterContextPrefix.value;
+  const path = normalizeExtendPath(extendPath);
+  const loadingKey = pluginExtendKey(id, path);
+  pluginExtendLoadingPaths.value = new Set([...pluginExtendLoadingPaths.value, path]);
+  try {
+    const providerPath = pluginExtendPathForProvider(path);
+    const entries = await listProviderDirs(
+      `${prefix}plugin/${encodeURIComponent(id)}/extend/${providerPath}`
+    );
+    if (prefix !== filterContextPrefix.value) return;
+    pluginExtendChildren.value = {
+      ...pluginExtendChildren.value,
+      [loadingKey]: entries,
+    };
+  } catch {
+    if (prefix === filterContextPrefix.value) {
+      pluginExtendChildren.value = {
+        ...pluginExtendChildren.value,
+        [loadingKey]: [],
+      };
+    }
+  } finally {
+    pluginExtendLoadingPaths.value = new Set(
+      [...pluginExtendLoadingPaths.value].filter((p) => p !== path)
+    );
   }
 }
 
@@ -383,6 +472,7 @@ async function loadTimeFilterData() {
 }
 
 async function loadFilterCounts() {
+  pluginExtendChildren.value = {};
   await Promise.all([loadPluginGroups(), loadMediaTypeCounts(), loadTimeFilterData()]);
 }
 
@@ -391,6 +481,22 @@ const isOnGalleryPage = computed(() => route.path === "/gallery");
 onMounted(() => void loadFilterCounts());
 
 watch(filterContextPrefix, () => void loadFilterCounts());
+
+const pluginSignature = computed(() =>
+  pluginStore.plugins.map((p) => `${p.id}:${p.version}`).join("|")
+);
+
+watch(pluginSignature, () => {
+  pluginGroups.value = [];
+  pluginExtendChildren.value = {};
+  const current =
+    galleryRouteStore.filter.type === "plugin" ? galleryRouteStore.filter.pluginId : "";
+  if (current && !pluginStore.plugins.some((p) => p.id === current)) {
+    void galleryRouteStore.navigate({ filter: { type: "all" }, page: 1 }, { push: true });
+    return;
+  }
+  void loadPluginGroups();
+});
 
 useImagesChangeRefresh({
   enabled: isOnGalleryPage,
@@ -413,7 +519,12 @@ const filterLabel = computed(() => {
   }
   const pid = currentPluginId.value;
   if (pid) {
-    return t("gallery.filterByPluginWithName", { name: pluginStore.pluginLabel(pid) });
+    const ext =
+      galleryRouteStore.filter.type === "plugin"
+        ? galleryRouteStore.filter.extendPath?.trim()
+        : "";
+    const name = pluginStore.pluginLabel(pid);
+    return ext ? `${name} / ${ext}` : t("gallery.filterByPluginWithName", { name });
   }
   const mk = filterMediaKind(galleryRouteStore.filter);
   if (mk === "image") {
@@ -440,10 +551,15 @@ function handleCommand(command: string) {
 }
 
 function handlePluginCommand(pluginId: string) {
-  const id = (pluginId || "").trim();
+  const { pluginId: id, extendPath } = parsePluginCommand(pluginId);
   if (!id) return;
   void galleryRouteStore.navigate(
-    { filter: { type: "plugin", pluginId: id }, page: 1 },
+    {
+      filter: extendPath
+        ? { type: "plugin", pluginId: id, extendPath }
+        : { type: "plugin", pluginId: id },
+      page: 1,
+    },
     { push: true }
   );
 }
@@ -508,5 +624,10 @@ function handleMediaTypeCommand(kind: string) {
   margin-left: 4px;
   opacity: 0.75;
   font-size: 12px;
+}
+
+.plugin-extend-item {
+  padding-left: 28px !important;
+  font-size: 13px;
 }
 </style>

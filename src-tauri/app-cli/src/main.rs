@@ -685,6 +685,34 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf, backend: PluginBackend) -> Resul
         }
     }
 
+    // providers/：插件自定义 provider DSL（*.json / *.json5）
+    let providers_dir = plugin_dir.join("providers");
+    if providers_dir.is_dir() {
+        let mut stack = vec![providers_dir.clone()];
+        while let Some(dir) = stack.pop() {
+            let rd = std::fs::read_dir(&dir).map_err(|e| format!("读取 providers 失败: {}", e))?;
+            for ent in rd {
+                let ent = ent.map_err(|e| format!("读取 providers 失败: {}", e))?;
+                let p = ent.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                if !p.is_file() {
+                    continue;
+                }
+                let rel = p
+                    .strip_prefix(plugin_dir)
+                    .map_err(|_| "providers 路径异常".to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if kabegame_core::providers::is_provider_file_path(&rel) {
+                    entries.push((rel, p));
+                }
+            }
+        }
+    }
+
     // doc_root（doc.md、doc.<lang>.md + 常见图片，图片可递归子目录）
     let doc_root = plugin_dir.join("doc_root");
     if doc_root.is_dir() {

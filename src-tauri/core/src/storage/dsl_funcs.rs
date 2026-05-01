@@ -129,7 +129,7 @@ fn get_plugin_json(plugin_id: &str, locale: Option<&str>) -> String {
     let Some(pm) = PluginManager::global_opt() else {
         return "null".into();
     };
-    let Some(plugin) = pm.get_sync(plugin_id) else {
+    let Some(plugin) = pm.get(plugin_id) else {
         return "null".into();
     };
     let locale_owned;

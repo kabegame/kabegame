@@ -16,6 +16,17 @@ use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use kabegame_core::virtual_driver::VirtualDriveService;
 use tauri::AppHandle;
 
+fn encode_provider_path_segment(s: &str) -> String {
+    s.bytes()
+        .flat_map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![b as char]
+            }
+            _ => format!("%{b:02X}").chars().collect(),
+        })
+        .collect()
+}
+
 /// Gallery provider 浏览。路径语法由调用方控制：
 /// - `album/xyz/1/`  → list（返回 entries + total + meta + note）
 /// - `album/xyz/1/*` → list with meta（Dir 条目带批量 meta）
@@ -53,8 +64,22 @@ pub async fn list_provider_children(path: String) -> Result<serde_json::Value, S
                 format!("/{}", full)
             };
             let children = rt.list(&path).map_err(|e| format!("list failed: {}", e))?;
-            let entries =
-                kabegame_core::gallery::browse_from_provider_jsonmeta(children, Vec::new())?;
+            let base = path.trim_end_matches('/').to_string();
+            let entries = children
+                .into_iter()
+                .map(|child| {
+                    let name = child.name;
+                    let meta = child.meta;
+                    let child_path = format!("{}/{}", base, encode_provider_path_segment(&name));
+                    let total = rt.count(&child_path).ok();
+                    serde_json::json!({
+                        "kind": "dir",
+                        "name": name,
+                        "meta": meta,
+                        "total": total,
+                    })
+                })
+                .collect::<Vec<_>>();
             serde_json::to_value(entries).map_err(|e| e.to_string())
         })
         .await

@@ -1,1 +1,36 @@
-{"$schema":"../schema.json5","namespace":"kabegame","name":"vd_zhtw_plugin_router","properties":{"plugin_id":{"type":"string","default":"","optional":false}},"query":{"delegate":{"provider":"plugin_provider","properties":{"plugin_id":"${properties.plugin_id}"}}},"list":{"擴展":{"provider":"plugins.${properties.plugin_id}.entry_provider"},"全部":{"provider":"vd_all_provider"}},"resolve":{"擴展":{"provider":"plugins.${properties.plugin_id}.entry_provider"},"全部":{"provider":"vd_all_provider"}}}
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_zhtw_plugin_router",
+    "properties": {
+        "plugin_id": {
+            "type": "string",
+            "default": "",
+            "optional": false
+        }
+    },
+    "query": {
+        "delegate": {
+            "provider": "plugin_provider",
+            "properties": {
+                "plugin_id": "${properties.plugin_id}"
+            }
+        }
+    },
+    "list": {
+        "擴展": {
+            "provider": "plugins.${properties.plugin_id}.entry_provider"
+        },
+        "全部": {
+            "provider": "vd_all_provider"
+        }
+    },
+    "resolve": {
+        "擴展": {
+            "provider": "plugins.${properties.plugin_id}.entry_provider"
+        },
+        "全部": {
+            "provider": "vd_all_provider"
+        }
+    }
+}

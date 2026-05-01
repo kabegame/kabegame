@@ -19,7 +19,10 @@
         ".*": {
             "delegate": {
                 "provider": "gallery_all_router",
-            }
+            },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
         }
     },
     "note": "Descending sort + pagination; supports /<page> default 100/page or /xNx/<page>"

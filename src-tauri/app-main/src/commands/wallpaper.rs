@@ -62,7 +62,13 @@ pub async fn set_wallpaper(file_path: String) -> Result<(), String> {
             .as_secs();
         let _ = Storage::global().update_image_last_set_wallpaper_at(&img.id, now);
         let ids = vec![img.id.clone()];
-        GlobalEmitter::global().emit_images_change("change", &ids, None, None);
+        GlobalEmitter::global().emit_images_change(
+            "change",
+            &ids,
+            None,
+            None,
+            Some(&[img.plugin_id.clone()]),
+        );
     }
     Ok(())
 }
@@ -80,6 +86,7 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
         return Err("图片不存在".to_string());
     };
     let local_path = info.local_path;
+    let plugin_id = info.plugin_id;
 
     let requires_window_mode =
         kabegame_core::image_type::requires_window_mode(Path::new(&local_path));
@@ -118,7 +125,7 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
         .as_secs();
     let _ = Storage::global().update_image_last_set_wallpaper_at(&image_id, now);
     let ids = vec![image_id];
-    GlobalEmitter::global().emit_images_change("change", &ids, None, None);
+    GlobalEmitter::global().emit_images_change("change", &ids, None, None, Some(&[plugin_id]));
     Ok(())
 }
 

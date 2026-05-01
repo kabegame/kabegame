@@ -78,6 +78,9 @@ fn collect_refs(def: &ProviderDef) -> Vec<(String, ProviderName)> {
                         format!("resolve[`{}`].delegate.provider", k),
                         b.delegate.provider.clone(),
                     ));
+                    if let Some(DelegateProviderField::Name(n)) = &b.provider {
+                        refs.push((format!("resolve[`{}`].provider", k), n.clone()));
+                    }
                 }
                 ProviderInvocation::Empty(_) => {}
             }

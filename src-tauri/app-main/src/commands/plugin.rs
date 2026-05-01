@@ -6,7 +6,7 @@ use kabegame_core::plugin::PluginManager;
 pub async fn get_plugins() -> Result<serde_json::Value, String> {
     let plugin_manager = PluginManager::global();
     plugin_manager.ensure_installed_cache_initialized().await?;
-    let plugins = plugin_manager.get_all().await?;
+    let plugins = plugin_manager.get_all()?;
     Ok(serde_json::to_value(plugins).map_err(|e| e.to_string())?)
 }
 
@@ -15,7 +15,7 @@ pub async fn get_plugins() -> Result<serde_json::Value, String> {
 pub async fn refresh_plugins() -> Result<serde_json::Value, String> {
     let plugin_manager = PluginManager::global();
     plugin_manager.refresh_plugins().await?;
-    let plugins = plugin_manager.get_all().await?;
+    let plugins = plugin_manager.get_all()?;
     Ok(serde_json::to_value(plugins).map_err(|e| e.to_string())?)
 }
 

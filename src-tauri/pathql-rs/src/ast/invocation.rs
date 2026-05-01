@@ -1,4 +1,4 @@
-use crate::ast::{names::*, property::TemplateValue, MetaValue};
+use crate::ast::{names::*, property::TemplateValue, DelegateProviderField, MetaValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -19,6 +19,12 @@ pub struct InvokeByName {
 #[serde(deny_unknown_fields)]
 pub struct InvokeByDelegate {
     pub delegate: ProviderCall,
+    #[serde(default)]
+    pub child_var: Option<Identifier>,
+    #[serde(default)]
+    pub provider: Option<DelegateProviderField>,
+    #[serde(default)]
+    pub properties: Option<HashMap<String, TemplateValue>>,
     #[serde(default)]
     pub meta: Option<MetaValue>,
 }
@@ -122,14 +128,21 @@ mod tests {
 
     #[test]
     fn by_delegate_provider_call_payload() {
-        // 7b: ByDelegate 复活, payload = ProviderCall {provider, properties?}
-        let v: ProviderInvocation =
-            serde_json::from_str(r#"{"delegate":{"provider":"foo"}}"#).unwrap();
+        // 7b: ByDelegate 复活, payload = ProviderCall + explicit child transform.
+        let v: ProviderInvocation = serde_json::from_str(
+            r#"{"delegate":{"provider":"foo"},"child_var":"out","provider":"${out.provider}","meta":"${out.meta}"}"#,
+        )
+        .unwrap();
         match v {
             ProviderInvocation::ByDelegate(b) => {
                 assert_eq!(b.delegate.provider, ProviderName("foo".into()));
                 assert!(b.delegate.properties.is_none());
-                assert!(b.meta.is_none());
+                assert_eq!(b.child_var, Some(Identifier("out".into())));
+                assert!(matches!(
+                    b.provider,
+                    Some(DelegateProviderField::ChildRef(_))
+                ));
+                assert_eq!(b.meta, Some(serde_json::json!("${out.meta}")));
             }
             _ => panic!("expected ByDelegate"),
         }
@@ -138,14 +151,16 @@ mod tests {
     #[test]
     fn by_delegate_with_properties_and_meta() {
         let v: ProviderInvocation = serde_json::from_str(
-            r#"{"delegate":{"provider":"foo","properties":{"k":"v"}},"meta":{"hint":"x"}}"#,
+            r#"{"delegate":{"provider":"foo","properties":{"k":"v"}},"child_var":"out","provider":"bar","properties":{"id":"${out.meta.id}"},"meta":{"hint":"${out.meta.hint}"}}"#,
         )
         .unwrap();
         match v {
             ProviderInvocation::ByDelegate(b) => {
                 assert_eq!(b.delegate.provider, ProviderName("foo".into()));
                 assert!(b.delegate.properties.is_some());
-                assert!(b.meta.is_some());
+                assert!(matches!(b.provider, Some(DelegateProviderField::Name(_))));
+                assert!(b.properties.is_some());
+                assert_eq!(b.meta, Some(serde_json::json!({"hint":"${out.meta.hint}"})));
             }
             _ => panic!("expected ByDelegate"),
         }
@@ -157,17 +172,41 @@ mod tests {
         let v: ProviderInvocation = serde_json::from_str(r#"{"provider":"X"}"#).unwrap();
         assert!(matches!(v, ProviderInvocation::ByName(_)));
         // {delegate:{provider:"X"}} → ByDelegate
-        let v: ProviderInvocation =
-            serde_json::from_str(r#"{"delegate":{"provider":"X"}}"#).unwrap();
+        let v: ProviderInvocation = serde_json::from_str(
+            r#"{"delegate":{"provider":"X"},"child_var":"out","provider":"${out.provider}","meta":"${out.meta}"}"#,
+        )
+        .unwrap();
         assert!(matches!(v, ProviderInvocation::ByDelegate(_)));
     }
 
     #[test]
-    fn provider_and_delegate_mutually_exclusive() {
-        // {provider:..., delegate:...} 两个都给 → 不属于任何 variant (deny_unknown_fields)
-        let r: Result<ProviderInvocation, _> =
-            serde_json::from_str(r#"{"provider":"foo","delegate":{"provider":"bar"}}"#);
-        assert!(r.is_err());
+    fn by_delegate_legacy_defaults_to_null_transform() {
+        let v: ProviderInvocation = serde_json::from_str(r#"{"delegate":{"provider":"foo"}}"#)
+            .expect("legacy resolve delegate remains accepted");
+        match v {
+            ProviderInvocation::ByDelegate(b) => {
+                assert_eq!(b.delegate.provider, ProviderName("foo".into()));
+                assert!(b.child_var.is_none());
+                assert!(b.provider.is_none());
+                assert!(b.properties.is_none());
+                assert!(b.meta.is_none());
+            }
+            _ => panic!("expected ByDelegate"),
+        }
+    }
+
+    #[test]
+    fn provider_and_delegate_is_delegate_with_output_provider() {
+        // In ByDelegate, top-level `provider` is the output transform provider.
+        let v: ProviderInvocation =
+            serde_json::from_str(r#"{"provider":"foo","delegate":{"provider":"bar"}}"#).unwrap();
+        match v {
+            ProviderInvocation::ByDelegate(b) => {
+                assert_eq!(b.delegate.provider, ProviderName("bar".into()));
+                assert!(matches!(b.provider, Some(DelegateProviderField::Name(_))));
+            }
+            _ => panic!("expected ByDelegate"),
+        }
     }
 
     #[test]

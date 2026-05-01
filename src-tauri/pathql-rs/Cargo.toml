@@ -13,6 +13,7 @@ percent-encoding = { workspace = true }
 json5 = { workspace = true, optional = true }
 regex-automata = { workspace = true, optional = true }
 sqlparser = { workspace = true, optional = true }
+arc-swap = { workspace = true }
 
 [features]
 default = []

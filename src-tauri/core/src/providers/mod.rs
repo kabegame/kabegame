@@ -17,6 +17,7 @@ pub(crate) mod vd_ops;
 
 // ── 公开 re-exports ──────────────────────────────────────────────────────────
 
+pub use dsl_loader::is_provider_file_path;
 pub use init::{provider_runtime, provider_template_context};
 pub use pathql_rs::ProviderRuntime;
 pub use query::{

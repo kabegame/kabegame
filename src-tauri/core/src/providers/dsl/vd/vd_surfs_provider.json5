@@ -11,6 +11,11 @@
         }
     },
     "resolve": {
-        ".*": { "delegate": { "provider": "gallery_surfs_router" } }
+        ".*": {
+            "delegate": { "provider": "gallery_surfs_router" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
     }
 }

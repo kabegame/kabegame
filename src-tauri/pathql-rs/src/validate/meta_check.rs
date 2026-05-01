@@ -70,7 +70,16 @@ pub fn validate_meta(
 
         if let Some(resolve) = &def.resolve {
             for (k, inv) in &resolve.0 {
-                let allowed_ns = vec!["properties", "capture", "composed", "global", "_"];
+                let allowed_ns = match inv {
+                    ProviderInvocation::ByDelegate(b) => {
+                        let mut ns = vec!["properties", "capture", "composed", "global", "_"];
+                        if let Some(child_var) = &b.child_var {
+                            ns.push(child_var.0.as_str());
+                        }
+                        ns
+                    }
+                    _ => vec!["properties", "capture", "composed", "global", "_"],
+                };
                 let allowed_methods = vec!["ref"];
                 let location = format!("resolve[`{}`]", k);
                 if let Some(m) = invocation_meta(inv) {

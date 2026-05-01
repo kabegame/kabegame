@@ -1,5 +1,5 @@
 use crate::ast::{Namespace, PropertyDecl, PropertySpec, ProviderDef, ProviderName, SimpleName};
-use crate::provider::{DslProvider, EngineError, Provider, ProviderContext};
+use crate::provider::{DslProvider, EngineError, Provider, ProviderContext, ProviderKey};
 use crate::template::eval::TemplateValue;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,6 +22,7 @@ pub type ProviderFactory = Arc<
         + 'static,
 >;
 
+#[derive(Clone)]
 pub enum RegistryEntry {
     Dsl(Arc<ProviderDef>),
     Programmatic(ProviderFactory),
@@ -38,7 +39,7 @@ impl std::fmt::Debug for RegistryEntry {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ProviderRegistry {
     defs: HashMap<(Namespace, SimpleName), RegistryEntry>,
 }
@@ -84,24 +85,38 @@ impl ProviderRegistry {
         Ok(())
     }
 
+    /// 注销一个 provider。返回 true 表示确实移除了条目。
+    pub fn unregister(&mut self, namespace: Namespace, name: SimpleName) -> bool {
+        self.defs.remove(&(namespace, name)).is_some()
+    }
+
     /// Java 包风格父链查找。
     pub fn lookup(
         &self,
         current_ns: &Namespace,
         reference: &ProviderName,
     ) -> Option<&RegistryEntry> {
+        self.lookup_with_key(current_ns, reference)
+            .map(|(_, entry)| entry)
+    }
+
+    fn lookup_with_key(
+        &self,
+        current_ns: &Namespace,
+        reference: &ProviderName,
+    ) -> Option<(&(Namespace, SimpleName), &RegistryEntry)> {
         let (ref_ns, simple) = reference.split();
         if let Some(abs_ns) = ref_ns {
-            return self.defs.get(&(abs_ns, simple));
+            return self.defs.get_key_value(&(abs_ns, simple));
         }
         let mut ns_opt = Some(current_ns.clone());
         while let Some(ns) = ns_opt {
-            if let Some(found) = self.defs.get(&(ns.clone(), simple.clone())) {
+            if let Some(found) = self.defs.get_key_value(&(ns.clone(), simple.clone())) {
                 return Some(found);
             }
             ns_opt = ns.parent();
         }
-        self.defs.get(&(Namespace(String::new()), simple))
+        self.defs.get_key_value(&(Namespace(String::new()), simple))
     }
 
     /// **统一的 provider 实例化入口** (供 runtime / 其他 provider 在 resolve 时用)。
@@ -114,11 +129,22 @@ impl ProviderRegistry {
         properties: &HashMap<String, TemplateValue>,
         _ctx: &ProviderContext,
     ) -> Option<Arc<dyn Provider>> {
-        let entry = self.lookup(current_ns, reference);
+        self.instantiate_result(current_ns, reference, properties, _ctx)
+            .ok()
+    }
+
+    pub fn instantiate_result(
+        &self,
+        current_ns: &Namespace,
+        reference: &ProviderName,
+        properties: &HashMap<String, TemplateValue>,
+        _ctx: &ProviderContext,
+    ) -> Result<Arc<dyn Provider>, EngineError> {
+        let found = self.lookup_with_key(current_ns, reference);
         if crate::provider::runtime::dbg_enabled() {
-            let kind = match &entry {
-                Some(RegistryEntry::Dsl(_)) => "Dsl",
-                Some(RegistryEntry::Programmatic(_)) => "Programmatic",
+            let kind = match &found {
+                Some((_, RegistryEntry::Dsl(_))) => "Dsl",
+                Some((_, RegistryEntry::Programmatic(_))) => "Programmatic",
                 None => "MISSING",
             };
             eprintln!(
@@ -126,7 +152,11 @@ impl ProviderRegistry {
                 current_ns.0, reference.0, kind
             );
         }
-        match entry? {
+        let (key, entry) = found.ok_or_else(|| {
+            EngineError::ProviderNotRegistered(current_ns.0.clone(), reference.0.clone())
+        })?;
+        let provider_key = ProviderKey::new(key.0 .0.clone(), key.1 .0.clone());
+        let inner = match entry {
             RegistryEntry::Programmatic(factory) => {
                 let r = factory(properties);
                 if crate::provider::runtime::dbg_enabled() && r.is_err() {
@@ -136,13 +166,15 @@ impl ProviderRegistry {
                         r.as_ref().err()
                     );
                 }
-                r.ok()
+                r?
             }
-            RegistryEntry::Dsl(def) => Some(Arc::new(DslProvider {
+            RegistryEntry::Dsl(def) => Arc::new(DslProvider {
                 def: def.clone(),
                 properties: fill_defaults(&def.properties, properties),
-            })),
-        }
+            }) as Arc<dyn Provider>,
+        };
+        _ctx.record_provider_key(provider_key);
+        Ok(inner)
     }
 
     /// 历史 API: 返回 DSL ProviderDef Arc (向后兼容; programmatic 项返回 None)。
@@ -269,7 +301,7 @@ mod tests {
                     _: &str,
                     _: &crate::compose::ProviderQuery,
                     _: &ProviderContext,
-                ) -> Option<Arc<dyn Provider>> {
+                ) -> Option<crate::provider::ChildEntry> {
                     None
                 }
             }

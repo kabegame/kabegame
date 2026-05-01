@@ -73,23 +73,24 @@ impl Provider for GalleryRoot {
             },
         ])
     }
-    fn resolve(
-        &self,
-        name: &str,
-        _: &ProviderQuery,
-        ctx: &ProviderContext,
-    ) -> Option<Arc<dyn Provider>> {
+    fn resolve(&self, name: &str, _: &ProviderQuery, ctx: &ProviderContext) -> Option<ChildEntry> {
         let target = match name {
             "albums" => "albums_router",
             "plugins" => "plugins_router",
             _ => return None,
         };
-        ctx.registry.instantiate(
-            &Namespace("test".into()),
-            &ProviderName(target.into()),
-            &HashMap::new(),
-            ctx,
-        )
+        ctx.registry
+            .instantiate(
+                &Namespace("test".into()),
+                &ProviderName(target.into()),
+                &HashMap::new(),
+                ctx,
+            )
+            .map(|provider| ChildEntry {
+                name: name.to_string(),
+                provider: Some(provider),
+                meta: None,
+            })
     }
 }
 
@@ -99,20 +100,21 @@ impl Provider for AlbumsRouter {
     fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
         Ok(Vec::new())
     }
-    fn resolve(
-        &self,
-        name: &str,
-        _: &ProviderQuery,
-        ctx: &ProviderContext,
-    ) -> Option<Arc<dyn Provider>> {
+    fn resolve(&self, name: &str, _: &ProviderQuery, ctx: &ProviderContext) -> Option<ChildEntry> {
         let mut props = HashMap::new();
         props.insert("album_id".into(), TemplateValue::Text(name.to_string()));
-        ctx.registry.instantiate(
-            &Namespace("test".into()),
-            &ProviderName("album_provider".into()),
-            &props,
-            ctx,
-        )
+        ctx.registry
+            .instantiate(
+                &Namespace("test".into()),
+                &ProviderName("album_provider".into()),
+                &props,
+                ctx,
+            )
+            .map(|provider| ChildEntry {
+                name: name.to_string(),
+                provider: Some(provider),
+                meta: None,
+            })
     }
 }
 
@@ -139,12 +141,7 @@ impl Provider for AlbumProvider {
     fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
         Ok(Vec::new())
     }
-    fn resolve(
-        &self,
-        _: &str,
-        _: &ProviderQuery,
-        _: &ProviderContext,
-    ) -> Option<Arc<dyn Provider>> {
+    fn resolve(&self, _: &str, _: &ProviderQuery, _: &ProviderContext) -> Option<ChildEntry> {
         None
     }
 }
@@ -187,12 +184,10 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         )
         .unwrap();
 
-    ProviderRuntime::new(
-        Arc::new(registry),
-        root,
-        no_op_executor(),
-        Default::default(),
-    )
+    let runtime =
+        ProviderRuntime::with_registry(Arc::new(registry), no_op_executor(), Default::default());
+    runtime.set_root("test", "root").unwrap();
+    runtime
 }
 
 fn execute_query(conn: &Connection, q: &ProviderQuery) -> Vec<i64> {
