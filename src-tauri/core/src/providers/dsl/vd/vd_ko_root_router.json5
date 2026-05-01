@@ -4,7 +4,7 @@
     "name": "vd_ko_root_router",
     "list": {
         "앨범":       { "provider": "vd_albums_provider" },
-        "플러그인별": { "provider": "vd_plugins_provider" },
+        "플러그인별": { "provider": "vd_ko_plugins_provider" },
         "작업별":     { "provider": "vd_tasks_provider" },
         "서프별":     { "provider": "vd_surfs_provider" },
         "종류별":     { "provider": "vd_media_type_provider" },
