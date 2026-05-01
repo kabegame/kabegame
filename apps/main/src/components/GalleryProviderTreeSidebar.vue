@@ -54,6 +54,10 @@ import { useI18n } from "@kabegame/i18n";
 import { invoke } from "@/api/rpc";
 import { usePluginStore } from "@/stores/plugins";
 import { filterDateSegment, filterMediaKind, type GalleryFilter } from "@/utils/galleryPath";
+import {
+  buildTimeMenuScopeLabels,
+  type TimeMenuScopeLabels,
+} from "@/utils/galleryTimeFilterMenu";
 
 interface ProviderChildDir {
   kind: "dir";
@@ -93,7 +97,7 @@ const emit = defineEmits<{
   "update:filter": [filter: GalleryFilter];
 }>();
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 const collapsed = ref(props.mode === "sidebar" ? false : false);
 const loadingGroups = ref(false);
@@ -104,6 +108,8 @@ const loadedKeys = ref(new Set<string>());
 const loadingKeys = ref(new Set<string>());
 const expandedKeys = ref(new Set<string>());
 let loadToken = 0;
+
+const timeLabels = computed(() => buildTimeMenuScopeLabels(t, String(locale.value)));
 
 const visibleRows = computed<TreeRow[]>(() => {
   const rows: TreeRow[] = [
@@ -181,6 +187,7 @@ function appendRootLoading(rows: TreeRow[], key: string, depth: number) {
 
 function appendProviderChildren(rows: TreeRow[], parentKey: string, depth: number) {
   if (!expandedKeys.value.has(parentKey)) return;
+  if (isKnownProviderLeafKey(parentKey)) return;
   if (loadingKeys.value.has(parentKey)) {
     rows.push({ kind: "loading", key: `${parentKey}:loading`, depth });
     return;
@@ -274,6 +281,7 @@ function isProviderLeaf(entry: ProviderChildDir) {
 function canExpand(row: TreeRow) {
   if (row.kind === "loading") return false;
   if (row.isLeaf) return false;
+  if (isKnownProviderLeafKey(row.key)) return false;
   if (row.key === "plugin-root") return loadingGroups.value || pluginGroups.value.length > 0;
   if (row.kind === "date" || row.kind === "media-type" || row.kind === "root") {
     return !loadedKeys.value.has(row.key) || hasListedChildren(row.key);
@@ -498,12 +506,43 @@ function labelForProviderChild(parentKey: string, name: string) {
     if (name === "video") return t("gallery.filterVideoOnly");
   }
   const year = /^(\d{4})y$/.exec(name)?.[1];
-  if (year) return year;
+  if (year) return timeLabels.value.labelFullYearRow(year);
   const month = /^(\d{2})m$/.exec(name)?.[1];
-  if (month) return month;
+  if (month) {
+    const parentYear = dateKeyParts(parentKey).year;
+    return parentYear
+      ? timeLabels.value.labelMonthRow(`${parentYear}-${month}`)
+      : formatMonthSegment(month, timeLabels.value);
+  }
   const day = /^(\d{2})d$/.exec(name)?.[1];
-  if (day) return day;
+  if (day) {
+    const { year: parentYear, month: parentMonth } = dateKeyParts(parentKey);
+    return parentYear && parentMonth
+      ? timeLabels.value.labelDayRow(`${parentYear}-${parentMonth}-${day}`)
+      : formatDaySegment(day, timeLabels.value);
+  }
   return name;
+}
+
+function dateKeyParts(key: string) {
+  const parts = key.split("/");
+  const year = /^(\d{4})y$/.exec(parts[1] ?? "")?.[1] ?? "";
+  const month = /^(\d{2})m$/.exec(parts[2] ?? "")?.[1] ?? "";
+  const day = /^(\d{2})d$/.exec(parts[3] ?? "")?.[1] ?? "";
+  return { year, month, day };
+}
+
+function formatMonthSegment(month: string, labels: TimeMenuScopeLabels) {
+  return labels.labelMonthRow(`2000-${month}`);
+}
+
+function formatDaySegment(day: string, labels: TimeMenuScopeLabels) {
+  return labels.labelDayRow(`2000-01-${day}`);
+}
+
+function isKnownProviderLeafKey(key: string) {
+  if (/^media-type\/(?:image|video)$/.test(key)) return true;
+  return /^date\/\d{4}y\/\d{2}m\/\d{2}d$/.test(key);
 }
 
 function filterForProviderKey(key: string): GalleryFilter | null {

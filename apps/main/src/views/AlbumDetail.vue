@@ -67,7 +67,7 @@
 
     <ImageGrid v-else ref="albumViewRef" class="detail-body" :images="images" :enable-ctrl-wheel-adjust-columns="!isCompact"
       :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
-      :loading="loading || isRefreshing" :loading-overlay="loading || isRefreshing" :actions="imageActions"
+      :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
       :on-context-command="handleImageMenuCommand" hide-scrollbar scroll-whole-container @added-to-album="handleAddedToAlbum">
 
       <template #empty>
@@ -202,7 +202,7 @@ import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, 
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
-import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
+import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Delete, Star, StarFilled, FolderAdd, Picture } from "@element-plus/icons-vue";
@@ -240,7 +240,7 @@ import { useImageOperations } from "@/composables/useImageOperations";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import {
-  buildAlbumCountPath,
+  buildAlbumCountPathFromCurrentPath,
   isAlbumWallpaperFilterPath,
 } from "@/utils/albumPath";
 import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
@@ -253,6 +253,7 @@ import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
+import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
@@ -523,7 +524,7 @@ const handleChildAlbumMenuCommand = async (
 };
 
 const albumName = ref<string>("");
-const loading = ref(false);
+const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay();
 const isRefreshing = ref(false);
 const currentWallpaperImageId = ref<string | null>(null);
 const images = ref<ImageInfo[]>([]);
@@ -564,12 +565,8 @@ const handleJumpToPage = async (page: number) => {
 
 const loadTotalImagesCount = async () => {
   if (!albumId.value) return;
-  const rootPath = buildAlbumCountPath(
-    albumDetailRouteStore.albumId,
-    albumDetailRouteStore.filter,
-    albumDetailRouteStore.search,
-  );
-  const countPath = currentPath.value.startsWith("hide/") ? `hide/${rootPath}` : rootPath;
+  const countPath = buildAlbumCountPathFromCurrentPath(currentPath.value);
+  if (!countPath) return;
   const res = await invoke<{ total: number | null }>("browse_gallery_provider", {
     path: countPath,
   });
@@ -736,7 +733,7 @@ const loadAlbum = async (opts?: { reset?: boolean; silent?: boolean }) => {
   if (!albumId.value) return;
   const reset = opts?.reset ?? false;
   const silent = opts?.silent ?? false;
-  if (!silent) loading.value = true;
+  if (!silent) startLoading();
   try {
     if (reset) {
       clearSelection();
@@ -769,7 +766,7 @@ const loadAlbum = async (opts?: { reset?: boolean; silent?: boolean }) => {
     leafAllImages = list;
     images.value = list;
   } finally {
-    if (!silent) loading.value = false;
+    if (!silent) finishLoading();
   }
 };
 
@@ -949,9 +946,8 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       }
       break;
     case "wallpaper":
-      if (await guardDesktopOnly("wallpaper")) break;
       if (!isMultiSelect) {
-        await setWallpaperByImageIdWithModeFallback(image.id);
+        await setWallpaperOrBackground(image.id);
         currentWallpaperImageId.value = image.id;
       }
       break;
@@ -1131,17 +1127,15 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
   return null;
 };
 
-// 初始化/刷新画册数据
+// 初始化画册数据
 const initAlbum = async (newAlbumId: string) => {
-  // 如果是同一个画册，检查是否需要重新加载
-  // 如果 store 中没有缓存（可能被刷新清除了），即使画册ID相同也要重新加载
-  const hasCache = !!albumStore.albumImages[newAlbumId];
-  if (albumId.value === newAlbumId && images.value.length > 0 && hasCache) {
+  // Provider 路径加载不再写入 albumStore.albumImages；当前页已有图片时即可跳过同画册初始化。
+  if (albumId.value === newAlbumId && images.value.length > 0) {
     return;
   }
 
   // 先设置 loading，避免显示空状态
-  loading.value = true;
+  startLoading();
 
   // 清理旧数据
   images.value = [];
@@ -1177,7 +1171,8 @@ watch(
     if (newId && typeof newId === "string") {
       await initAlbum(newId);
     }
-  }
+  },
+  { immediate: true }
 );
 
 onMounted(async () => {
@@ -1199,10 +1194,6 @@ onMounted(async () => {
   }
 
   await settingsStore.loadMany(["wallpaperRotationEnabled", "wallpaperRotationAlbumId"]);
-  const id = route.params.id as string;
-  if (id) {
-    await initAlbum(id);
-  }
 
   // 收藏状态以 store 为准：不再通过全局事件同步（favoriteChangedHandler 已移除）
 
@@ -1215,11 +1206,6 @@ onMounted(async () => {
 // 组件从缓存激活时检查是否需要刷新
 onActivated(async () => {
   isAlbumDetailActive.value = true;
-  const id = route.params.id as string;
-  if (id && id !== albumId.value) {
-    await initAlbum(id);
-    return;
-  }
 
   // 如果是收藏画册且标记为需要刷新，重新加载
   if (albumId.value === FAVORITE_ALBUM_ID && favoriteAlbumDirty.value) {

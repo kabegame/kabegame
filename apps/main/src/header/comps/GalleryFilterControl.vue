@@ -28,10 +28,12 @@
             trigger="hover"
             placement="right-start"
             @command="handleTimeCommand"
+            @visible-change="onTimeMenuVisible"
           >
             <span
               class="plugin-submenu-trigger"
               :class="{ 'is-active': isTimeFilterActive }"
+              @mouseenter="loadTimeRootData()"
             >
               {{ t("gallery.filterByTime") }}
               <el-icon class="plugin-submenu-chevron">
@@ -44,7 +46,10 @@
                   <GalleryTimeFilterSubmenu
                     :nodes="timeMenuRoots"
                     :date-tail="dateTail"
+                    :loading-names="timeLoadingNames"
+                    :loading-text="t('common.loading')"
                     @command="handleTimeCommand"
+                    @lazy-open="loadTimeNodeChildren"
                   />
                 </template>
                 <el-dropdown-item v-else disabled>
@@ -151,6 +156,7 @@ import {
 import {
   buildGalleryTimeMenuTree,
   buildTimeMenuScopeLabels,
+  formatTimeFilterDetail,
   type DateGroupRow,
   type DayGroupRow,
   type TimeMenuNode,
@@ -203,8 +209,6 @@ const isMediaTypeFilterActive = computed(
 );
 
 const pluginGroups = ref<PluginGroupRow[]>([]);
-const pluginExtendChildren = ref<Record<string, ProviderChildDir[]>>({});
-const pluginExtendLoadingPaths = ref(new Set<string>());
 const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
   imageCount: 0,
   videoCount: 0,
@@ -212,13 +216,16 @@ const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
 const monthGroups = ref<DateGroupRow[]>([]);
 const dayGroups = ref<DayGroupRow[]>([]);
 const yearGroups = ref<YearGroupRow[]>([]);
+const loadedTimeKeys = ref(new Set<string>());
+const timeLoadingNames = ref(new Set<string>());
 
 const timeMenuRoots = computed<TimeMenuNode[]>(() =>
   buildGalleryTimeMenuTree(
     monthGroups.value,
     dayGroups.value,
     buildTimeMenuScopeLabels(t, String(locale.value)),
-    yearGroups.value
+    yearGroups.value,
+    { collapse: false }
   )
 );
 
@@ -252,48 +259,9 @@ async function loadPluginGroups() {
       }))
     );
     pluginGroups.value = groups.filter((r) => r.count > 0);
-    await Promise.all(pluginGroups.value.map((g) => loadPluginExtend(g.plugin_id)));
   } catch {
     pluginGroups.value = [];
-    pluginExtendChildren.value = {};
   }
-}
-
-function normalizeExtendPath(path = "") {
-  return path.trim().replace(/^\/+|\/+$/g, "");
-}
-
-function pluginExtendKey(pluginId: string, extendPath = "") {
-  const path = normalizeExtendPath(extendPath);
-  return path ? `${pluginId}\t${path}` : pluginId;
-}
-
-function pluginExtendPathForProvider(extendPath = "") {
-  return normalizeExtendPath(extendPath)
-    .split("/")
-    .filter(Boolean)
-    .map(encodeURIComponent)
-    .join("/");
-}
-
-function pluginExtendChildrenByPath(pluginId: string) {
-  const prefix = `${pluginId}\t`;
-  const out: Record<string, ProviderChildDir[]> = {};
-  for (const [key, children] of Object.entries(pluginExtendChildren.value)) {
-    if (key === pluginId) {
-      out[""] = children;
-    } else if (key.startsWith(prefix)) {
-      out[key.slice(prefix.length)] = children;
-    }
-  }
-  return out;
-}
-
-function activePluginExtendPath(pluginId: string) {
-  return galleryRouteStore.filter.type === "plugin" &&
-    galleryRouteStore.filter.pluginId === pluginId
-    ? normalizeExtendPath(galleryRouteStore.filter.extendPath ?? "")
-    : "";
 }
 
 function pluginCommand(pluginId: string, extendPath = "") {
@@ -313,37 +281,6 @@ function isPluginCommandActive(pluginId: string, extendPath = "") {
   );
 }
 
-async function loadPluginExtend(pluginId: string, extendPath = "") {
-  const id = pluginId.trim();
-  if (!id) return;
-  const prefix = filterContextPrefix.value;
-  const path = normalizeExtendPath(extendPath);
-  const loadingKey = pluginExtendKey(id, path);
-  pluginExtendLoadingPaths.value = new Set([...pluginExtendLoadingPaths.value, path]);
-  try {
-    const providerPath = pluginExtendPathForProvider(path);
-    const entries = await listProviderDirs(
-      `${prefix}plugin/${encodeURIComponent(id)}/extend/${providerPath}`
-    );
-    if (prefix !== filterContextPrefix.value) return;
-    pluginExtendChildren.value = {
-      ...pluginExtendChildren.value,
-      [loadingKey]: entries,
-    };
-  } catch {
-    if (prefix === filterContextPrefix.value) {
-      pluginExtendChildren.value = {
-        ...pluginExtendChildren.value,
-        [loadingKey]: [],
-      };
-    }
-  } finally {
-    pluginExtendLoadingPaths.value = new Set(
-      [...pluginExtendLoadingPaths.value].filter((p) => p !== path)
-    );
-  }
-}
-
 async function loadMediaTypeCounts() {
   try {
     const prefix = filterContextPrefix.value;
@@ -361,8 +298,25 @@ const YEAR_SEG_RE = /^(\d{4})y$/;
 const MONTH_SEG_RE = /^(\d{2})m$/;
 const DAY_SEG_RE = /^(\d{2})d$/;
 
-async function loadTimeFilterData() {
+function replaceTimeSet(target: typeof loadedTimeKeys, op: (next: Set<string>) => void) {
+  const next = new Set(target.value);
+  op(next);
+  target.value = next;
+}
+
+async function withTimeLoading(name: string, task: () => Promise<void>) {
+  replaceTimeSet(timeLoadingNames, (next) => next.add(name));
+  try {
+    await task();
+  } finally {
+    replaceTimeSet(timeLoadingNames, (next) => next.delete(name));
+  }
+}
+
+async function loadTimeRootData() {
   const prefix = filterContextPrefix.value;
+  const key = `${prefix}|time-root`;
+  if (loadedTimeKeys.value.has(key)) return;
   try {
     const yearEntries = await listProviderDirs(`${prefix}date/`);
     const yearCandidates = yearEntries
@@ -380,90 +334,13 @@ async function loadTimeFilterData() {
         }))
       )
     ).filter((y) => y.total > 0);
+    if (prefix !== filterContextPrefix.value) return;
     yearGroups.value = years.map((y) => ({
       year: y.year,
       count: y.total,
     }));
-
-    const monthsPerYear = await Promise.all(
-      years.map(async (y) => {
-        try {
-          const monthEntries = await listProviderDirs(`${prefix}date/${y.seg}/`);
-          const monthCandidates = monthEntries
-            .map((e) => {
-              const m = MONTH_SEG_RE.exec(e.name);
-              return m
-                ? { year: y.year, month: m[1]!, yearSeg: y.seg, seg: e.name }
-                : null;
-            })
-            .filter(
-              (x): x is { year: string; month: string; yearSeg: string; seg: string } => !!x
-            );
-          return (
-            await Promise.all(
-              monthCandidates.map(async (mo) => ({
-                ...mo,
-                total: await countProviderPath(`${prefix}date/${mo.yearSeg}/${mo.seg}`),
-              }))
-            )
-          ).filter((x) => x.total > 0);
-        } catch {
-          return [];
-        }
-      })
-    );
-    const months = monthsPerYear.flat();
-
-    const daysPerMonth = await Promise.all(
-      months.map(async (mo) => {
-        try {
-          const dayEntries = await listProviderDirs(`${prefix}date/${mo.yearSeg}/${mo.seg}/`);
-          const dayCandidates = dayEntries
-            .map((e) => {
-              const m = DAY_SEG_RE.exec(e.name);
-              return m
-                ? {
-                    year: mo.year,
-                    month: mo.month,
-                    yearSeg: mo.yearSeg,
-                    monthSeg: mo.seg,
-                    day: m[1]!,
-                    seg: e.name,
-                  }
-                : null;
-            })
-            .filter(
-              (x): x is {
-                year: string;
-                month: string;
-                yearSeg: string;
-                monthSeg: string;
-                day: string;
-                seg: string;
-              } => !!x
-            );
-          return (
-            await Promise.all(
-              dayCandidates.map(async (d) => ({
-                ...d,
-                total: await countProviderPath(`${prefix}date/${d.yearSeg}/${d.monthSeg}/${d.seg}`),
-              }))
-            )
-          ).filter((x) => x.total > 0);
-        } catch {
-          return [];
-        }
-      })
-    );
-
-    monthGroups.value = months.map((mo) => ({
-      year_month: `${mo.year}-${mo.month}`,
-      count: mo.total,
-    }));
-    dayGroups.value = daysPerMonth.flat().map((d) => ({
-      ymd: `${d.year}-${d.month}-${d.day}`,
-      count: d.total,
-    }));
+    replaceTimeSet(loadedTimeKeys, (next) => next.add(key));
+    await ensureTimeTailLoaded(dateTail.value);
   } catch {
     monthGroups.value = [];
     dayGroups.value = [];
@@ -471,9 +348,113 @@ async function loadTimeFilterData() {
   }
 }
 
+async function ensureTimeYearMonthsLoaded(year: string) {
+  if (!/^\d{4}$/.test(year)) return;
+  const prefix = filterContextPrefix.value;
+  const key = `${prefix}|time-year:${year}`;
+  if (loadedTimeKeys.value.has(key)) return;
+  await withTimeLoading(year, async () => {
+    try {
+      const yearSeg = `${year}y`;
+      const monthEntries = await listProviderDirs(`${prefix}date/${yearSeg}/`);
+      const monthCandidates = monthEntries
+        .map((e) => {
+          const m = MONTH_SEG_RE.exec(e.name);
+          return m ? { month: m[1]!, seg: e.name } : null;
+        })
+        .filter((m): m is { month: string; seg: string } => !!m);
+      const months = (
+        await Promise.all(
+          monthCandidates.map(async (mo) => ({
+            year_month: `${year}-${mo.month}`,
+            count: await countProviderPath(`${prefix}date/${yearSeg}/${mo.seg}`),
+          }))
+        )
+      ).filter((mo) => mo.count > 0);
+      if (prefix !== filterContextPrefix.value) return;
+      monthGroups.value = [
+        ...monthGroups.value.filter((m) => !m.year_month.startsWith(`${year}-`)),
+        ...months,
+      ];
+      dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${year}-`));
+      replaceTimeSet(loadedTimeKeys, (next) => next.add(key));
+    } catch {
+      if (prefix === filterContextPrefix.value) {
+        monthGroups.value = monthGroups.value.filter((m) => !m.year_month.startsWith(`${year}-`));
+        dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${year}-`));
+      }
+    }
+  });
+}
+
+async function ensureTimeMonthDaysLoaded(yearMonth: string) {
+  const m = /^(\d{4})-(\d{2})$/.exec(yearMonth);
+  if (!m) return;
+  const [, year, month] = m;
+  const prefix = filterContextPrefix.value;
+  const key = `${prefix}|time-month:${yearMonth}`;
+  if (loadedTimeKeys.value.has(key)) return;
+  await withTimeLoading(yearMonth, async () => {
+    try {
+      const yearSeg = `${year}y`;
+      const monthSeg = `${month}m`;
+      const dayEntries = await listProviderDirs(`${prefix}date/${yearSeg}/${monthSeg}/`);
+      const dayCandidates = dayEntries
+        .map((e) => {
+          const dm = DAY_SEG_RE.exec(e.name);
+          return dm ? { day: dm[1]!, seg: e.name } : null;
+        })
+        .filter((d): d is { day: string; seg: string } => !!d);
+      const days = (
+        await Promise.all(
+          dayCandidates.map(async (d) => ({
+            ymd: `${yearMonth}-${d.day}`,
+            count: await countProviderPath(`${prefix}date/${yearSeg}/${monthSeg}/${d.seg}`),
+          }))
+        )
+      ).filter((d) => d.count > 0);
+      if (prefix !== filterContextPrefix.value) return;
+      dayGroups.value = [
+        ...dayGroups.value.filter((d) => !d.ymd.startsWith(`${yearMonth}-`)),
+        ...days,
+      ];
+      replaceTimeSet(loadedTimeKeys, (next) => next.add(key));
+    } catch {
+      if (prefix === filterContextPrefix.value) {
+        dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${yearMonth}-`));
+      }
+    }
+  });
+}
+
+async function loadTimeNodeChildren(node: TimeMenuNode) {
+  if (/^\d{4}$/.test(node.name)) {
+    await ensureTimeYearMonthsLoaded(node.name);
+  } else if (/^\d{4}-\d{2}$/.test(node.name)) {
+    await ensureTimeMonthDaysLoaded(node.name);
+  }
+}
+
+async function ensureTimeTailLoaded(tail: string | null) {
+  const s = tail?.trim();
+  if (!s) return;
+  const year = /^(\d{4})(?:-\d{2})?(?:-\d{2})?$/.exec(s)?.[1];
+  if (year) await ensureTimeYearMonthsLoaded(year);
+  const yearMonth = /^(\d{4}-\d{2})(?:-\d{2})?$/.exec(s)?.[1];
+  if (yearMonth) await ensureTimeMonthDaysLoaded(yearMonth);
+}
+
+function onTimeMenuVisible(open: boolean) {
+  if (open) void loadTimeRootData();
+}
+
 async function loadFilterCounts() {
-  pluginExtendChildren.value = {};
-  await Promise.all([loadPluginGroups(), loadMediaTypeCounts(), loadTimeFilterData()]);
+  loadedTimeKeys.value = new Set();
+  timeLoadingNames.value = new Set();
+  monthGroups.value = [];
+  dayGroups.value = [];
+  yearGroups.value = [];
+  await Promise.all([loadPluginGroups(), loadMediaTypeCounts(), loadTimeRootData()]);
 }
 
 const isOnGalleryPage = computed(() => route.path === "/gallery");
@@ -488,7 +469,6 @@ const pluginSignature = computed(() =>
 
 watch(pluginSignature, () => {
   pluginGroups.value = [];
-  pluginExtendChildren.value = {};
   const current =
     galleryRouteStore.filter.type === "plugin" ? galleryRouteStore.filter.pluginId : "";
   if (current && !pluginStore.plugins.some((p) => p.id === current)) {
@@ -515,7 +495,9 @@ const filterLabel = computed(() => {
   }
   const dt = dateTail.value;
   if (dt) {
-    return t("gallery.filterByTimeWithDetail", { detail: dt });
+    return t("gallery.filterByTimeWithDetail", {
+      detail: formatTimeFilterDetail(dt, String(locale.value), t),
+    });
   }
   const pid = currentPluginId.value;
   if (pid) {

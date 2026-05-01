@@ -27,21 +27,11 @@
                     "parentId": "${out.parent_id}"
                 }
             }
-        },
-        // 排序翻转
+        }
+    },
+    "resolve": {
+        // 控制段只用于路径解析, 不作为 gallery list children 暴露。
         "desc": { "provider": "sort_router" },
-        "${page.name}": {
-            "child_var": "page",
-            "delegate": {
-                "provider": "page_size_provider",
-                "properties": { "page_size": 100 }
-            },
-            "provider": "gallery_page_router",
-            "properties": {
-                "page_size": 100,
-                "page_num": "${page.meta.page_num}"
-            }
-        },
         "wallpaper-order": { "provider": "gallery_wallpaper_order_router" },
         // 兼容前端历史路径: image-only / video-only 是画册内媒体类型过滤。
         "image-only": {
@@ -59,21 +49,6 @@
         // 兼容前端历史路径: album-order 等价于 order。
         "album-order": { "provider": "gallery_album_order_provider" },
         "media-type": { "provider": "gallery_media_type_router" },
-        // 默认分页项 — 与 gallery_album_router (programmatic) 一致, 暴露 100/500/1000 三档
-        "x100x": {
-            "provider": "gallery_paginate_router",
-            "properties": { "page_size": 100 }
-        },
-        "x500x": {
-            "provider": "gallery_paginate_router",
-            "properties": { "page_size": 500 }
-        },
-        "x1000x": {
-            "provider": "gallery_paginate_router",
-            "properties": { "page_size": 1000 }
-        }
-    },
-    "resolve": {
         // 任意 xNNNx (NNN ≥ 1) → 自定义 page_size paginate
         "x([1-9][0-9]*)x": {
             "provider": "gallery_paginate_router",

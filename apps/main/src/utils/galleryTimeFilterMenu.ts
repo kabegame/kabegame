@@ -120,6 +120,31 @@ export function formatTimeMenuDayRow(
   return englishOrdinalDay(dayNum);
 }
 
+export function formatTimeFilterDetail(
+  segment: string,
+  locale: string,
+  t: TimeMenuTranslateFn
+): string {
+  const parts = segment.trim().split("-");
+  const year = parts[0] ?? "";
+  if (!/^\d{4}$/.test(year)) return segment;
+
+  const labels = buildTimeMenuScopeLabels(t, locale);
+  const month = parts[1] ?? "";
+  if (!month) return labels.labelFullYearRow(year);
+
+  const yearMonth = `${year}-${month}`;
+  if (!/^\d{4}-\d{2}$/.test(yearMonth)) return segment;
+  const monthLabel = labels.labelMonthRow(yearMonth);
+
+  const day = parts[2] ?? "";
+  if (!day) return `${year} ${monthLabel}`;
+
+  const ymd = `${yearMonth}-${day}`;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return segment;
+  return `${year} ${monthLabel} ${labels.labelDayRow(ymd)}`;
+}
+
 export interface DateGroupRow {
   year_month: string;
   count: number;

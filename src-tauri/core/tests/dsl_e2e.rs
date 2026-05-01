@@ -427,6 +427,17 @@ fn album_order_path_paginates_and_limit_leaf_only_limits() {
         .resolve("/gallery/album/33333333-3333-3333-3333-333333333333/order/l3l")
         .unwrap();
     assert!(limit_node.composed.offset_terms.is_empty());
+
+    let album_children = runtime
+        .list("/gallery/hide/album/33333333-3333-3333-3333-333333333333")
+        .unwrap();
+    let child_names: Vec<_> = album_children.iter().map(|c| c.name.as_str()).collect();
+    for control in ["1", "desc", "order", "album-order", "x100x"] {
+        assert!(
+            !child_names.contains(&control),
+            "gallery album list should not expose control segment {control}: {child_names:?}"
+        );
+    }
 }
 
 #[test]

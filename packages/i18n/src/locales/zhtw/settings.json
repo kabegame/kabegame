@@ -96,6 +96,12 @@
   "wallpaperModeDesc": "原生模式使用系統壁紙介面；視窗模式以獨立視窗顯示壁紙",
   "wallpaperEngineDir": "Wallpaper Engine 目錄",
   "wallpaperEngineDirDesc": "用於「匯出並自動匯入到 WE」",
+  "appBackgroundEnabled": "應用內背景",
+  "appBackgroundEnabledDesc": "將目前壁紙作為半透明的應用背景顯示",
+  "appBackgroundOpacity": "背景透明度",
+  "appBackgroundOpacityDesc": "調整背景圖片在應用介面中的顯現強度",
+  "appBackgroundBlur": "背景模糊",
+  "appBackgroundBlurDesc": "調整應用內背景圖片的模糊程度",
 
   "downloadSectionTitle": "下載設定",
   "maxConcurrentTasks": "同時執行任務數",

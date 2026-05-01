@@ -1,7 +1,18 @@
 <template>
   <el-config-provider :locale="elementPlusLocale">
   <!-- 主窗口 -->
-  <el-container class="app-container" :class="{ 'app-container-compact': uiStore.isCompact }">
+  <el-container class="app-container" :class="{ 'app-container-compact': uiStore.isCompact, 'has-app-background': bgVisible }">
+    <div
+      v-if="bgVisible"
+      class="app-background-layer"
+      aria-hidden="true"
+    >
+      <img
+        :src="bgImageUrl"
+        class="app-background-img"
+        :style="bgImageStyle"
+      />
+    </div>
     <!-- 全局文件拖拽提示层（仅非安卓平台） -->
     <FileDropOverlay v-if="!uiStore.isCompact" ref="fileDropOverlayRef" @click="handleOverlayClick" />
     <!-- 文件拖拽导入确认弹窗（仅非安卓平台） -->
@@ -144,7 +155,8 @@ import { listen, emit, UnlistenFn } from "@/api/rpc";
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from "@/api/rpc";
 import { IS_WINDOWS, IS_MACOS, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
-import { initHttpServerBaseUrl } from "@kabegame/core/httpServer";
+import { fileToUrl, initHttpServerBaseUrl } from "@kabegame/core/httpServer";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import { usePluginStore } from "./stores/plugins";
 import { useFailedImagesStore } from "./stores/failedImages";
 import { useCrawlerStore } from "./stores/crawler";
@@ -225,6 +237,17 @@ if (IS_WEB) {
 const missedRunsVisible = ref(false);
 const missedRunItems = ref<import("@kabegame/core/stores/crawler").MissedRunItem[]>([]);
 
+type GalleryBrowseEntry =
+  | { kind: "dir"; name: string }
+  | { kind: "image"; image: ImageInfo };
+
+type GalleryBrowseResult = {
+  entries: GalleryBrowseEntry[];
+  total: number | null;
+  meta?: { kind: string; data: unknown } | null;
+  note?: { title: string; content: string } | null;
+};
+
 // 窗口事件监听
 const { init: initWindowEvents } = useWindowEvents();
 
@@ -236,6 +259,99 @@ const { isCollapsed, toggleCollapse } = useSidebar();
 
 // 紧凑布局信号（Android 恒紧凑；web mode 跟随视口；Tauri 桌面永不紧凑）
 const uiStore = useUiStore();
+const settingsStore = useSettingsStore();
+
+const bgImageUrl = ref("");
+const isAbsoluteUrl = (url: string) => /^https?:\/\//i.test(url);
+let bgResolveToken = 0;
+
+watch(
+  () => settingsStore.values.currentWallpaperImageId,
+  async (id) => {
+    const token = ++bgResolveToken;
+    const imageId = typeof id === "string" ? id.trim() : "";
+    console.log("[AppBackground] wallpaper id changed", {
+      rawId: id,
+      imageId,
+      enabled: settingsStore.values.appBackgroundEnabled,
+      opacity: settingsStore.values.appBackgroundOpacity,
+      blur: settingsStore.values.appBackgroundBlur,
+    });
+    if (!imageId) {
+      bgImageUrl.value = "";
+      console.log("[AppBackground] cleared: empty currentWallpaperImageId");
+      return;
+    }
+
+    try {
+      console.log("[AppBackground] get_image_by_id start", { imageId });
+      let image = (await invoke<ImageInfo | null>("get_image_by_id", { imageId })) ?? undefined;
+      console.log("[AppBackground] get_image_by_id result", { image });
+
+      if (!image) {
+        const path = `/images/id_${imageId}/`;
+        console.log("[AppBackground] get_image_by_id empty, fallback query_provider start", { path });
+        const res = await invoke<GalleryBrowseResult>("query_provider", {
+          path,
+        });
+        console.log("[AppBackground] query_provider result", {
+          total: res.total,
+          entryCount: res.entries?.length ?? 0,
+          entries: res.entries,
+          meta: res.meta,
+          note: res.note,
+        });
+        image = (res.entries || []).find((entry) => entry.kind === "image")?.image;
+      }
+
+      const source = image?.url && isAbsoluteUrl(image.url)
+        ? image.url
+        : image?.localPath
+          ? fileToUrl(image.localPath)
+          : "";
+      if (token !== bgResolveToken) return;
+      bgImageUrl.value = source;
+      console.log("[AppBackground] resolved", {
+        imageId,
+        image,
+        source,
+        sourceIsEmpty: !source,
+      });
+    } catch (error) {
+      if (token !== bgResolveToken) return;
+      console.warn("[AppBackground] failed to resolve app background image", error);
+      bgImageUrl.value = "";
+    }
+  },
+  { immediate: true },
+);
+
+const bgVisible = computed(() =>
+  !!settingsStore.values.appBackgroundEnabled &&
+  !!settingsStore.values.currentWallpaperImageId &&
+  !!bgImageUrl.value
+);
+const bgOpacity = computed(() => settingsStore.values.appBackgroundOpacity ?? 0.25);
+const bgBlurPx = computed(() => settingsStore.values.appBackgroundBlur ?? 2);
+const bgImageStyle = computed(() => ({
+  opacity: bgOpacity.value,
+  filter: bgBlurPx.value > 0 ? `blur(${bgBlurPx.value}px)` : "none",
+}));
+
+watch(
+  () => ({
+    visible: bgVisible.value,
+    enabled: settingsStore.values.appBackgroundEnabled,
+    currentWallpaperImageId: settingsStore.values.currentWallpaperImageId,
+    url: bgImageUrl.value,
+    opacity: bgOpacity.value,
+    blur: bgBlurPx.value,
+  }),
+  (state) => {
+    console.log("[AppBackground] visibility state", state);
+  },
+  { immediate: true },
+);
 
 // 设置变更事件监听器
 let unlistenSettingChange: UnlistenFn | null = null;
@@ -296,9 +412,14 @@ onMounted(async () => {
     }
   }
 
-  const settingsStore = useSettingsStore();
   // 加载全部设置
   await settingsStore.loadAll();
+  console.log("[AppBackground] settings loaded", {
+    appBackgroundEnabled: settingsStore.values.appBackgroundEnabled,
+    appBackgroundOpacity: settingsStore.values.appBackgroundOpacity,
+    appBackgroundBlur: settingsStore.values.appBackgroundBlur,
+    currentWallpaperImageId: settingsStore.values.currentWallpaperImageId,
+  });
 
   // 从配置恢复语言：解析链生效后若与存储不一致则写回 canonical，避免长期为 null/别名/非法值
   {
@@ -485,12 +606,49 @@ body,
 .app-container {
   height: 100dvh;
   display: flex;
+  position: relative;
+  overflow: hidden;
   // 让窗口透明层透出（DWM blur behind 只在透明像素处可见）
   background: transparent;
 
   &.app-container-compact {
     flex-direction: column;
   }
+
+  &.has-app-background {
+    .app-main {
+      background: rgba(255, 255, 255, 0.65);
+    }
+
+    .app-sidebar {
+      background: transparent;
+    }
+
+    .app-bottom-tabs {
+      background: rgba(255, 255, 255, 0.7);
+    }
+  }
+
+  > :not(.app-background-layer) {
+    position: relative;
+    z-index: 1;
+  }
+}
+
+.app-background-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.app-background-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.04);
+  transition: opacity 0.25s ease, filter 0.25s ease;
 }
 
 // 紧凑布局：主内容区顶部留出状态栏高度，避免与 Android 系统状态栏重叠（桌面浏览器 env() 为 0）

@@ -10,7 +10,6 @@
     },
     // list: desc 静态 + 动态月份 + 默认分页静态 (与 programmatic 同; 用户在年下既可看月也可直接翻页)
     "list": {
-        "desc":   { "provider": "sort_router" },
         "${out.mm}m": {
             "sql": "SELECT DISTINCT substr(strftime('%Y-%m', crawled_at_seconds(sub.crawled_at), 'unixepoch'), 6, 2) AS mm FROM (${composed}) AS sub WHERE strftime('%Y-%m', crawled_at_seconds(sub.crawled_at), 'unixepoch') IS NOT NULL ORDER BY mm DESC",
             "data_var": "out",
@@ -18,24 +17,10 @@
             "properties": {
                 "year_month": "${properties.year}-${out.mm}"
             }
-        },
-        "${page.name}": {
-            "child_var": "page",
-            "delegate": {
-                "provider": "page_size_provider",
-                "properties": { "page_size": 100 }
-            },
-            "provider": "gallery_page_router",
-            "properties": {
-                "page_size": 100,
-                "page_num": "${page.meta.page_num}"
-            }
-        },
-        "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
-        "x500x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
-        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
+        }
     },
     "resolve": {
+        "desc":   { "provider": "sort_router" },
         "([0-9]{2})m": {
             "provider": "gallery_date_month_provider",
             "properties": {
