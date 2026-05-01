@@ -880,7 +880,6 @@ const handleGridContextCommand = async (
       }
       return null;
     case "wallpaper":
-      if (await guardDesktopOnly("wallpaper")) return null;
       if (imagesToProcess.length > 0) await setWallpaper(imagesToProcess);
       return null;
     case "exportToWE":

@@ -96,6 +96,12 @@
   "wallpaperModeDesc": "네이티브: 시스템 API; 창: 독립 창 (전환, 동영상 등)",
   "wallpaperEngineDir": "Wallpaper Engine 디렉터리",
   "wallpaperEngineDirDesc": "\"WE로 내보내기 및 자동 가져오기\"용",
+  "appBackgroundEnabled": "앱 내부 배경",
+  "appBackgroundEnabledDesc": "현재 배경화면을 반투명 앱 배경으로 표시합니다",
+  "appBackgroundOpacity": "배경 투명도",
+  "appBackgroundOpacityDesc": "앱 화면에 비치는 배경 이미지의 강도를 조절합니다",
+  "appBackgroundBlur": "배경 흐림",
+  "appBackgroundBlurDesc": "앱 내부 배경 이미지의 흐림 정도를 조절합니다",
 
   "downloadSectionTitle": "다운로드 설정",
   "maxConcurrentTasks": "동시 실행 작업 수",

@@ -183,6 +183,7 @@ import {
 import {
   buildGalleryTimeMenuTree,
   buildTimeMenuScopeLabels,
+  formatTimeFilterDetail,
   getTimeMenuMaxDepth,
   resolveInitialTimePickPath,
   resolveTimeMenuPickToDateTail,
@@ -849,7 +850,11 @@ const filterFoldLabel = computed(() => {
     return `${props.filter.start} ~ ${props.filter.end}`;
   }
   const dt = dateTail.value;
-  if (dt) return t("gallery.filterByTimeWithDetail", { detail: dt });
+  if (dt) {
+    return t("gallery.filterByTimeWithDetail", {
+      detail: formatTimeFilterDetail(dt, String(locale.value), t),
+    });
+  }
   const pid = currentPluginId.value;
   if (pid) {
     const ext = props.filter.type === "plugin" ? props.filter.extendPath?.trim() : "";

@@ -157,10 +157,13 @@ import SearchInput from "@/components/SearchInput.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import {
+  buildAlbumCountPathFromCurrentPath,
   type AlbumBrowseFilter,
   type AlbumBrowseSort,
 } from "@/utils/albumPath";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
+import { HIDDEN_ALBUM_ID } from "@/stores/albums";
 
 const props = defineProps<{
   albumId: string;
@@ -188,12 +191,38 @@ interface GalleryMediaTypeCountsPayload {
   videoCount: number;
 }
 
+interface ProviderCountResult {
+  total?: number | null;
+}
+
 const albumId = computed(() => (props.albumId ?? "").trim());
+const albumDetailRouteStore = useAlbumDetailRouteStore();
 
 const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
   imageCount: 0,
   videoCount: 0,
 });
+
+async function countProviderPath(path: string): Promise<number> {
+  const p = path.trim().replace(/\/+$/, "");
+  if (!p) return 0;
+  const res = await invoke<ProviderCountResult>("browse_gallery_provider", {
+    path: p,
+  });
+  return typeof res?.total === "number" ? res.total : 0;
+}
+
+function countPathForFilter(id: string, filter: Extract<AlbumBrowseFilter, "image-only" | "video-only">): string {
+  return buildAlbumCountPathFromCurrentPath(
+    albumDetailRouteStore.computePath({
+      albumId: id,
+      filter,
+      sort: "time-asc",
+      page: 1,
+      search: props.search ?? "",
+    }),
+  );
+}
 
 async function loadMediaTypeCounts(id: string) {
   if (!id) {
@@ -201,23 +230,19 @@ async function loadMediaTypeCounts(id: string) {
     return;
   }
   try {
-    const mt = await invoke<GalleryMediaTypeCountsPayload>("get_album_media_type_counts", {
-      albumId: id,
-    });
-    if (mt && typeof mt.imageCount === "number" && typeof mt.videoCount === "number") {
-      mediaTypeCounts.value = {
-        imageCount: mt.imageCount,
-        videoCount: mt.videoCount,
-      };
-    }
+    const [imageCount, videoCount] = await Promise.all([
+      countProviderPath(countPathForFilter(id, "image-only")),
+      countProviderPath(countPathForFilter(id, "video-only")),
+    ]);
+    mediaTypeCounts.value = { imageCount, videoCount };
   } catch {
     mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
   }
 }
 
 watch(
-  albumId,
-  (id) => void loadMediaTypeCounts(id || ""),
+  [albumId, () => props.search ?? "", () => albumDetailRouteStore.hide],
+  ([id]) => void loadMediaTypeCounts(id || ""),
   { immediate: true }
 );
 
@@ -256,7 +281,11 @@ useImagesChangeRefresh({
 useAlbumImagesChangeRefresh({
   enabled: computed(() => !!albumId.value),
   waitMs: 500,
-  filter: (p) => !!albumId.value && (p.albumIds ?? []).includes(albumId.value),
+  filter: (p) => {
+    if (!albumId.value) return false;
+    const ids = p.albumIds ?? [];
+    return ids.includes(albumId.value) || ids.includes(HIDDEN_ALBUM_ID);
+  },
   onRefresh: () => void loadMediaTypeCounts(albumId.value || ""),
 });
 

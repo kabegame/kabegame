@@ -80,7 +80,7 @@
                 <div v-for="item in virtualConfigRows" :key="item.data.id" class="auto-configs-vrow"
                   :style="{ height: `${configListItemHeightPx}px` }">
                   <AutoConfigListCard class="auto-configs-vrow-card" :config="item.data" :variant="configCardVariant"
-                    :schedule-toggling-id="scheduleTogglingId"
+                    :class="appBackgroundCardClass" :schedule-toggling-id="scheduleTogglingId"
                     @card-click="(cfg) => autoConfigDialog.openExisting(cfg.id, 'view')"
                     @open-view="(id: string) => autoConfigDialog.openExisting(id, 'view')"
                     @schedule-enabled="handleScheduleEnabled" @run-now="handleRunNow" @more-command="handleMoreCommand"
@@ -118,8 +118,8 @@
                   </div>
                 </template>
                 <div class="recommended-presets">
-                  <el-card v-for="preset in group.presets" :key="preset.filename" class="recommended-preset-card"
-                    shadow="hover">
+                  <el-card v-for="preset in group.presets" :key="preset.filename"
+                    :class="['recommended-preset-card', appBackgroundCardClass]" shadow="hover">
                     <div class="recommended-preset-head">
                       <span class="recommended-preset-name">{{ resolvePresetTitle(preset) }}</span>
                       <div class="recommended-preset-actions">
@@ -211,6 +211,7 @@ import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { checkRecommendedPresetCompatibility } from "@/composables/useConfigCompatibility";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import type { PluginRecommendedPreset, RunConfig } from "@kabegame/core/stores/crawler";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 const { t, locale } = useI18n();
 const route = useRoute();
@@ -220,6 +221,12 @@ const crawlerDrawerStore = useCrawlerDrawerStore();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
 const pluginStore = usePluginStore();
+const settingsStore = useSettingsStore();
+const appBackgroundCardClass = computed(() =>
+  settingsStore.values.appBackgroundEnabled
+    ? "!bg-transparent [--el-card-bg-color:transparent]"
+    : ""
+);
 
 const headerShowFeatures = [
   HeaderFeatureId.QuickSettings,

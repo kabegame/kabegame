@@ -96,6 +96,12 @@
   "wallpaperModeDesc": "ネイティブ：システムAPI；ウィンドウ：スタンドアロンウィンドウ（トランジション、動画など）",
   "wallpaperEngineDir": "Wallpaper Engine ディレクトリ",
   "wallpaperEngineDirDesc": "「WEにエクスポートして自動インポート」用",
+  "appBackgroundEnabled": "アプリ内背景",
+  "appBackgroundEnabledDesc": "現在の壁紙を半透明のアプリ背景として表示します",
+  "appBackgroundOpacity": "背景の不透明度",
+  "appBackgroundOpacityDesc": "アプリ画面に表示される背景画像の強さを調整します",
+  "appBackgroundBlur": "背景ぼかし",
+  "appBackgroundBlurDesc": "アプリ内背景画像のぼかし具合を調整します",
 
   "downloadSectionTitle": "ダウンロード設定",
   "maxConcurrentTasks": "同時実行タスク数",

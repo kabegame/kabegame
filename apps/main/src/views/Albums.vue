@@ -13,15 +13,15 @@
       <div v-loading="showLoading" style="min-height: 200px;">
         <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div"
           class="albums-grid" :class="{ 'albums-grid-compact': isCompact }">
-          <AlbumCard v-for="album in albumRoots" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
-            :count="albumCounts[album.id] || 0" :preview-images="albumPreviewImages[album.id] || []"
+          <AlbumCard v-for="album in displayedAlbumRoots" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
+            :count="displayedAlbumCounts[album.id] || 0" :preview-images="albumPreviewImages[album.id] || []"
             :video-preview-remount-key="albumVideoPreviewRemountKey"
             :is-loading="albumIsLoadingMap[album.id] || false"
             @click="openAlbum(album)" @visible="prefetchPreview(album)"
             @contextmenu="openAlbumContextMenu($event, album)" />
         </transition-group>
 
-        <div v-if="!loading && albumRoots.length === 0" class="empty-tip">{{ $t('albums.emptyTip') }}</div>
+        <div v-if="!loading && displayedAlbumRoots.length === 0" class="empty-tip">{{ $t('albums.emptyTip') }}</div>
       </div>
     </div>
 
@@ -50,7 +50,7 @@
         v-show="!moveToRoot"
         v-model="moveTargetParentId"
         :album-tree="moveAlbumTree"
-        :album-counts="albumCounts"
+        :album-counts="displayedAlbumCountsForPicker"
         :clearable="false"
         :placeholder="$t('albums.selectTargetAlbum')"
       />
@@ -100,10 +100,13 @@ import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeR
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { thumbnailToUrl } from "@kabegame/core/httpServer";
+import { useGlobalPathRoute } from "@/stores/pathRoute";
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
-const { albums, albumRoots, albumCounts } = storeToRefs(albumStore);
+const { albums, albumCounts } = storeToRefs(albumStore);
+const globalPathRoute = useGlobalPathRoute();
+const { hide: globalHide } = storeToRefs(globalPathRoute);
 const router = useRouter();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albums");
@@ -199,9 +202,103 @@ const albumCardRefs = ref<Record<string, any>>({});
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 // 用于强制重新挂载列表（让“刷新”能触发完整 enter 动画 + 重置卡片内部状态）
 const albumsListKey = ref(0);
+const albumListPath = computed(() => (globalHide.value ? "hide/album/" : "album/"));
 /** keep-alive 再次进入画册页时递增，作为视频预览 ImageItem 的 :key 后缀，强制重建以恢复桌面 <video> autoplay */
 const albumVideoPreviewRemountKey = ref(0);
 const albumsSkipFirstActivateForVideoRemount = ref(true);
+
+interface ProviderChildDir {
+  kind: "dir";
+  name: string;
+  meta?: {
+    kind?: string;
+    data?: Record<string, unknown>;
+  } | null;
+  total?: number | null;
+}
+
+interface GalleryBrowseResult {
+  entries?: Array<{ kind: string; image?: ImageInfo }>;
+}
+
+const displayedAlbumRoots = ref<Album[]>([]);
+const displayedAlbumCounts = ref<Record<string, number>>({});
+const displayedAlbumCountsForPicker = computed(() => ({
+  ...albumCounts.value,
+  ...displayedAlbumCounts.value,
+}));
+
+function albumFromProviderChild(child: ProviderChildDir): Album | null {
+  if (child.meta?.kind !== "album") return null;
+  const data = child.meta.data ?? {};
+  const id = String(data.id ?? child.name ?? "").trim();
+  if (!id || id === HIDDEN_ALBUM_ID) return null;
+  const createdAt = data.createdAt ?? data.created_at ?? 0;
+  return {
+    id,
+    name: String(data.name ?? child.name ?? ""),
+    parentId: data.parentId == null ? null : String(data.parentId),
+    createdAt: typeof createdAt === "number" ? createdAt : Number(createdAt) || 0,
+  };
+}
+
+async function loadProviderAlbumList() {
+  const entries = await invoke<ProviderChildDir[]>("list_provider_children", {
+    path: albumListPath.value,
+  });
+  const roots: Album[] = [];
+  const counts: Record<string, number> = {};
+  for (const child of Array.isArray(entries) ? entries : []) {
+    if (!child || child.kind !== "dir") continue;
+    const album = albumFromProviderChild(child);
+    if (!album) continue;
+    roots.push(album);
+    counts[album.id] = typeof child.total === "number" ? child.total : 0;
+  }
+  displayedAlbumRoots.value = roots;
+  displayedAlbumCounts.value = counts;
+}
+
+function albumBasePath(albumId: string): string {
+  const base = albumListPath.value.replace(/\/+$/, "");
+  return `${base}/${encodeURIComponent(albumId)}`;
+}
+
+function albumPreviewPath(albumId: string, limit = albumPreviewLimit): string {
+  return `${albumBasePath(albumId)}/order/x${limit}x/1/`;
+}
+
+async function listProviderDirs(path: string): Promise<ProviderChildDir[]> {
+  const entries = await invoke<ProviderChildDir[]>("list_provider_children", { path });
+  return (Array.isArray(entries) ? entries : []).filter(
+    (e): e is ProviderChildDir =>
+      !!e && e.kind === "dir" && typeof e.name === "string" && !!e.name,
+  );
+}
+
+async function fetchProviderImages(path: string): Promise<ImageInfo[]> {
+  const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", { path });
+  return (res?.entries ?? [])
+    .filter((e): e is { kind: string; image: ImageInfo } => e?.kind === "image" && !!e.image)
+    .map((e) => e.image);
+}
+
+async function loadAlbumPreviewFromProvider(albumId: string, limit = albumPreviewLimit): Promise<ImageInfo[]> {
+  const out = await fetchProviderImages(albumPreviewPath(albumId, limit));
+  if (out.length >= limit) return out.slice(0, limit);
+
+  const children = await listProviderDirs(`${albumBasePath(albumId)}/`);
+  for (const child of children) {
+    const childAlbum = albumFromProviderChild(child);
+    if (!childAlbum) continue;
+    const childImages = await fetchProviderImages(albumPreviewPath(childAlbum.id, 3));
+    for (const image of childImages) {
+      out.push(image);
+      if (out.length >= limit) return out.slice(0, limit);
+    }
+  }
+  return out;
+}
 
 // 如果删除的画册正在被“壁纸轮播”引用：自动关闭轮播，切回单张壁纸，并尽量保持当前壁纸不变
 const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
@@ -251,7 +348,9 @@ const albumIsLoading = ref<Set<string>>(new Set());
 
 // 刷新收藏画册的预览（用于收藏状态变化时）
 const refreshFavoriteAlbumPreview = async () => {
-  const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
+  const favoriteAlbum =
+    displayedAlbumRoots.value.find((a) => a.id === FAVORITE_ALBUM_ID) ??
+    albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
   if (!favoriteAlbum) return;
 
   // 清除收藏画册的预览缓存
@@ -269,15 +368,17 @@ useAlbumImagesChangeRefresh({
   waitMs: 1000,
   filter: (p) => {
     const ids = p.albumIds ?? [];
-    return ids.some((aid) => albums.value.some((a) => a.id === aid));
+    return ids.includes(HIDDEN_ALBUM_ID) || ids.some((aid) => albums.value.some((a) => a.id === aid));
   },
   onRefresh: async (p) => {
     const affected = new Set(p.albumIds ?? []);
-    for (const album of albums.value) {
-      if (!affected.has(album.id)) continue;
+    const hiddenAffected = affected.has(HIDDEN_ALBUM_ID);
+    await loadProviderAlbumList();
+    for (const album of displayedAlbumRoots.value) {
+      if (!affected.has(album.id) && !hiddenAffected) continue;
 
       const images = albumPreviewImages.value[album.id];
-      if (images && images.length >= albumPreviewLimit) {
+      if (!hiddenAffected && images && images.length >= albumPreviewLimit) {
         const allLoaded = images.every((img) => hasPreviewUrl(img));
         if (allLoaded) continue;
       }
@@ -292,14 +393,17 @@ useAlbumImagesChangeRefresh({
 onMounted(async () => {
   startLoading();
   try {
-    await albumStore.loadAlbums();
+    await Promise.all([
+      albumStore.loadAlbums(),
+      loadProviderAlbumList(),
+    ]);
   } finally {
     finishLoading();
   }
   // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
 
   // 初始化时加载前几个画册的预览图（前3张优先）
-  const albumsToPreload = albumRoots.value.slice(0, 3);
+  const albumsToPreload = displayedAlbumRoots.value.slice(0, 3);
   for (const album of albumsToPreload) {
     prefetchPreview(album);
   }
@@ -307,7 +411,7 @@ onMounted(async () => {
   // 监听收藏画册数量变化，刷新预览
   stopFavoriteCountWatch.value?.();
   stopFavoriteCountWatch.value = watch(
-    () => albumCounts.value[FAVORITE_ALBUM_ID],
+    () => displayedAlbumCounts.value[FAVORITE_ALBUM_ID],
     () => {
       refreshFavoriteAlbumPreview();
     }
@@ -318,7 +422,10 @@ onMounted(async () => {
 
 // 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表和轮播设置
 onActivated(async () => {
-  await albumStore.loadAlbums();
+  await Promise.all([
+    albumStore.loadAlbums(),
+    loadProviderAlbumList(),
+  ]);
   // 重新加载虚拟磁盘设置（可能在设置页修改后返回）
   await settingsStore.loadMany([
     "albumDriveEnabled",
@@ -328,9 +435,11 @@ onActivated(async () => {
   ]);
 
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
-  const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
+  const favoriteAlbum =
+    displayedAlbumRoots.value.find((a) => a.id === FAVORITE_ALBUM_ID) ??
+    albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
   if (favoriteAlbum) {
-    const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID] || 0;
+    const favoriteCount = displayedAlbumCounts.value[FAVORITE_ALBUM_ID] || 0;
     const images = albumPreviewImages.value[FAVORITE_ALBUM_ID];
     const hasValidPreview = images && images.length > 0 && images.some((img) => hasPreviewUrl(img));
 
@@ -343,7 +452,7 @@ onActivated(async () => {
   }
 
   // 检查是否有新画册需要加载预览（还没有预览数据的画册）
-  for (const album of albumRoots.value.slice(0, 6)) {
+  for (const album of displayedAlbumRoots.value.slice(0, 6)) {
     // 跳过收藏画册，因为上面已经处理过了
     if (album.id === FAVORITE_ALBUM_ID) continue;
 
@@ -365,10 +474,13 @@ onActivated(async () => {
 const handleRefresh = async () => {
   isRefreshing.value = true;
   try {
-    await albumStore.loadAlbums();
+    await Promise.all([
+      albumStore.loadAlbums(),
+      loadProviderAlbumList(),
+    ]);
     await settingsStore.loadMany(["wallpaperRotationEnabled", "wallpaperRotationAlbumId"]);
     // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来"没刷新"）
-    const albumsToPreload = albumRoots.value.slice(0, 6);
+    const albumsToPreload = displayedAlbumRoots.value.slice(0, 6);
     for (const album of albumsToPreload) {
       clearAlbumPreviewCache(album.id);
     }
@@ -398,12 +510,27 @@ const handleRefresh = async () => {
   }
 };
 
+watch(albumListPath, async () => {
+  albumPreviewImages.value = {};
+  albumIsLoading.value.clear();
+  albumsListKey.value++;
+  startLoading();
+  try {
+    await loadProviderAlbumList();
+    for (const album of displayedAlbumRoots.value.slice(0, 6)) {
+      prefetchPreview(album);
+    }
+  } finally {
+    finishLoading();
+  }
+});
+
 
 const handleCreateAlbum = async () => {
   if (!newAlbumName.value.trim()) return;
   try {
     const created = await albumStore.createAlbum(newAlbumName.value.trim());
-    await albumStore.loadAlbumPreview(created.id, albumPreviewLimit);
+    await loadProviderAlbumList();
     await prefetchPreview(created);
     newAlbumName.value = "";
     showCreateDialog.value = false;
@@ -455,7 +582,7 @@ const albumMenuContext = computed<AlbumActionContext>(() => {
     selectedCount: 0,
     currentRotationAlbumId: currentRotationAlbumId.value,
     wallpaperRotationEnabled: wallpaperRotationEnabled.value,
-    albumImageCount: album ? (albumCounts.value[album.id] || 0) : 0,
+    albumImageCount: album ? (displayedAlbumCounts.value[album.id] || 0) : 0,
     favoriteAlbumId: FAVORITE_ALBUM_ID,
   };
 });
@@ -463,7 +590,7 @@ const albumMenuContext = computed<AlbumActionContext>(() => {
 const prefetchPreview = async (album: { id: string }) => {
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
   if (album.id === FAVORITE_ALBUM_ID) {
-    const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID] || 0;
+    const favoriteCount = displayedAlbumCounts.value[FAVORITE_ALBUM_ID] || 0;
     const images = albumPreviewImages.value[FAVORITE_ALBUM_ID];
     const hasValidPreview = images && images.length > 0 && images.some((img) => hasPreviewUrl(img));
 
@@ -489,7 +616,7 @@ const prefetchPreview = async (album: { id: string }) => {
 
   try {
     // 加载预览图片列表（桌面 3 张，安卓 1 张）
-    const previewImages = await albumStore.loadAlbumPreview(album.id, albumPreviewLimit);
+    const previewImages = await loadAlbumPreviewFromProvider(album.id, albumPreviewLimit);
     albumPreviewImages.value[album.id] = previewImages;
   } catch (error) {
     console.error("加载画册预览失败:", error);
@@ -579,6 +706,7 @@ const handleAlbumMenuCommand = async (
     await handleDeletedRotationAlbum(id);
     clearAlbumPreviewCache(id);
     await albumStore.loadAlbums();
+    await loadProviderAlbumList();
     ElMessage.success(t("albums.albumDeleted"));
   } catch (error) {
     if (error !== "cancel") {

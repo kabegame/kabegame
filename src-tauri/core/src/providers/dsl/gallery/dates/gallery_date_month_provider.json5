@@ -9,7 +9,6 @@
         "where": "strftime('%Y-%m', crawled_at_seconds(images.crawled_at), 'unixepoch') = ${properties.year_month}"
     },
     "list": {
-        "desc":   { "provider": "sort_router" },
         "${out.dd}d": {
             "sql": "SELECT DISTINCT substr(strftime('%Y-%m-%d', crawled_at_seconds(sub.crawled_at), 'unixepoch'), 9, 2) AS dd FROM (${composed}) AS sub WHERE strftime('%Y-%m-%d', crawled_at_seconds(sub.crawled_at), 'unixepoch') IS NOT NULL ORDER BY dd DESC",
             "data_var": "out",
@@ -18,23 +17,9 @@
                 "ymd": "${properties.year_month}-${out.dd}"
             }
         },
-        "${page.name}": {
-            "child_var": "page",
-            "delegate": {
-                "provider": "page_size_provider",
-                "properties": { "page_size": 100 }
-            },
-            "provider": "gallery_page_router",
-            "properties": {
-                "page_size": 100,
-                "page_num": "${page.meta.page_num}"
-            }
-        },
-        "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
-        "x500x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
-        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
     },
     "resolve": {
+        "desc":   { "provider": "sort_router" },
         "([0-9]{2})d": {
             "provider": "gallery_date_day_provider",
             "properties": {

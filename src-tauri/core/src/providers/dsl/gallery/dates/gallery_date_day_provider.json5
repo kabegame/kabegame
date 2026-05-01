@@ -8,25 +8,9 @@
     "query": {
         "where": "strftime('%Y-%m-%d', crawled_at_seconds(images.crawled_at), 'unixepoch') = ${properties.ymd}"
     },
-    "list": {
-        "desc":   { "provider": "sort_router" },
-        "${page.name}": {
-            "child_var": "page",
-            "delegate": {
-                "provider": "page_size_provider",
-                "properties": { "page_size": 100 }
-            },
-            "provider": "gallery_page_router",
-            "properties": {
-                "page_size": 100,
-                "page_num": "${page.meta.page_num}"
-            }
-        },
-        "x100x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
-        "x500x":  { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
-        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
-    },
+    "list": {},
     "resolve": {
+        "desc": { "provider": "sort_router" },
         "x([1-9][0-9]*)x": {
             "provider": "gallery_paginate_router",
             "properties": { "page_size": "${capture[1]}" }

@@ -127,6 +127,22 @@ export function buildAlbumCountPath(
   return `${sp}album/${id}`;
 }
 
+/** 从当前画册 browse path 派生 COUNT path：保留 hide/search/filter/sort，去掉 pageSize/page。 */
+export function buildAlbumCountPathFromCurrentPath(path: string): string {
+  const trimmed = (path || "").trim().replace(/\/+$/g, "");
+  if (!trimmed) return "";
+  const segs = trimmed.split("/").filter(Boolean);
+  const last = segs[segs.length - 1] ?? "";
+  if (!/^[1-9][0-9]*$/.test(last)) return trimmed;
+
+  segs.pop();
+  const pageSize = segs[segs.length - 1] ?? "";
+  if (/^x[1-9][0-9]*x$/.test(pageSize)) {
+    segs.pop();
+  }
+  return segs.join("/");
+}
+
 export interface ParsedAlbumBrowsePath {
   albumId: string;
   filter: AlbumBrowseFilter;

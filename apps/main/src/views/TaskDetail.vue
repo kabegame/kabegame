@@ -119,7 +119,7 @@
 import { ref, computed, reactive, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
-import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
+import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { listen } from "@/api/rpc";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { VideoPause, Delete, Setting, Refresh, QuestionFilled, Star, StarFilled, InfoFilled, DocumentCopy, Picture, FolderAdd, MoreFilled } from "@element-plus/icons-vue";
@@ -683,6 +683,14 @@ const toggleFavoriteForImages = async (imgs: ImageInfo[]) => {
 // 设置壁纸（单选或多选）
 const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
     try {
+        if (IS_WEB && imagesToProcess.length > 0) {
+            await setWallpaperOrBackground(imagesToProcess[0].id);
+            currentWallpaperImageId.value = imagesToProcess[0].id;
+            ElMessage.success("壁纸设置成功");
+            clearSelection();
+            return;
+        }
+
         if (imagesToProcess.length > 1) {
             // 多选：创建"桌面画册x"，添加到画册，开启轮播
             // 1. 找到下一个可用的"桌面画册x"名称
@@ -725,7 +733,8 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
             );
         } else {
             // 单选：直接设置壁纸
-            await setWallpaperByImageIdWithModeFallback(imagesToProcess[0].id);
+            await setWallpaperOrBackground(imagesToProcess[0].id);
+            currentWallpaperImageId.value = imagesToProcess[0].id;
             ElMessage.success("壁纸设置成功");
         }
 
@@ -833,7 +842,6 @@ const handleImageMenuCommand = async (
             break;
         }
         case "wallpaper":
-            if (await guardDesktopOnly("wallpaper")) break;
             if (imagesToProcess.length > 0) {
                 await setWallpaper(imagesToProcess);
             }
