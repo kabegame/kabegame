@@ -43,7 +43,16 @@ pub(crate) fn is_valid_namespace(s: &str) -> bool {
     if s.is_empty() {
         return true; // root namespace
     }
-    s.split('.').all(is_valid_simple_name)
+    s.split('.').all(is_valid_namespace_segment)
+}
+fn is_valid_namespace_segment(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => return false,
+        Some(c) if !is_ident_start(c) => return false,
+        Some(_) => {}
+    }
+    chars.all(|c| is_ident_cont(c) || c == '-')
 }
 
 fn is_ident_start(c: char) -> bool {
