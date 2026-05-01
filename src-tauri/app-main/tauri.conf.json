@@ -5,7 +5,8 @@
   "identifier": "Kabegame",
   "build": {
     "beforeDevCommand": "bun run dev:frontend-main",
-    "devUrl": "http://localhost:1420"
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../../dist-main"
   },
   "app": {
     "windows": [],
@@ -59,9 +60,8 @@
     },
     "linux": {
       "deb": {
-        "depends": ["fuse3", "libayatana-appindicator3-1"],
+        "depends": ["libayatana-appindicator3-1"],
         "files": {
-          "/usr/bin/kabegame-cli": "../../target/release/kabegame-cli",
           "/usr/share/mime/packages/kabegame-kgpg.xml": "./deb/kabegame-kgpg.xml",
           "/usr/share/icons/hicolor/256x256/mimetypes/application-x-kabegame-kgpg.png": "./icons/icon.png"
         },
