@@ -4,7 +4,7 @@
     "name": "vd_zhtw_root_router",
     "list": {
         "畫冊":       { "provider": "vd_albums_provider" },
-        "按外掛":     { "provider": "vd_plugins_provider" },
+        "按外掛":     { "provider": "vd_zhtw_plugins_provider" },
         "按任務":     { "provider": "vd_tasks_provider" },
         "按暢遊":     { "provider": "vd_surfs_provider" },
         "按種類":     { "provider": "vd_media_type_provider" },

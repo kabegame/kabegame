@@ -9,7 +9,7 @@
         "${out.plugin_id}": {
             "sql": "SELECT p.plugin_id AS plugin_id, get_plugin(p.plugin_id) AS plugin_meta_json FROM (SELECT DISTINCT images.plugin_id AS plugin_id FROM images WHERE images.plugin_id IS NOT NULL AND images.plugin_id != '') p ORDER BY p.plugin_id ASC",
             "data_var": "out",
-            "provider": "gallery_plugin_provider",
+            "provider": "gallery_plugin_router",
             "properties": {
                 "plugin_id": "${out.plugin_id}"
             },
@@ -25,7 +25,7 @@
     // 这种短英文 slug, 与 "x100x" / 数字段不冲突。
     "resolve": {
         "([a-z][a-z0-9_-]*)": {
-            "provider": "gallery_plugin_provider",
+            "provider": "gallery_plugin_router",
             "properties": {
                 "plugin_id": "${capture[1]}"
             }
