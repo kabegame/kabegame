@@ -108,7 +108,7 @@ async function tryOpenVideo(path: string) {
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 
-// core 版：明确去掉 favorite/addToAlbum
+// core 版保留通用图片意图；favorite/addToAlbum 等 app-main 专属入口仍在 wrapper 层扩展。
 export type ContextCommand =
   | "detail"
   | "copy"
@@ -118,6 +118,7 @@ export type ContextCommand =
   | "wallpaper"
   | "exportToWE"
   | "exportToWEAuto"
+  | "addToHidden"
   | "remove"
   | "swipe-remove";
 
@@ -133,6 +134,7 @@ type ContextCommandPayloadMap = {
   share: ImagePayload;
   exportToWE: ImagePayload & MultiImagePayload;
   exportToWEAuto: ImagePayload & MultiImagePayload;
+  addToHidden: ImagePayload & MultiImagePayload;
   remove: ImagePayload & MultiImagePayload;
   "swipe-remove": ImagePayload;
 };
@@ -698,13 +700,14 @@ const handleKeyDown = (event: KeyboardEvent) => {
     return;
   }
 
-  // Backspace / Delete：交给父组件执行删除逻辑（grid 只负责发出意图）
+  // Backspace：隐藏；Delete：删除。grid 只负责发出意图，具体语义由父组件处理。
   if ((event.key === "Backspace" || event.key === "Delete") && selectedIds.value.size > 0) {
     event.preventDefault();
     const list = props.images ?? [];
     const first = list.find((img) => selectedIds.value.has(img.id)) || list[0];
     if (first) {
-      void dispatchContextCommand(buildContextPayload("remove", first));
+      const command = event.key === "Backspace" ? "addToHidden" : "remove";
+      void dispatchContextCommand(buildContextPayload(command, first));
     }
     return;
   }
