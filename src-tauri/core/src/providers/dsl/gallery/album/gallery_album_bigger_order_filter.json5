@@ -6,9 +6,10 @@
         "order": { "type": "string", "default": "0", "optional": false }
     },
     "query": {
-        // album 顺序模式: WHERE album_images.order > N, ORDER BY album_images.order ASC
-        "where": "album_images.order > ${properties.order}",
-        "order": [{ "album_images.order": "asc" }]
+        // album 顺序模式: WHERE ai."order" > N, ORDER BY ai."order" ASC
+        "order_clear": ["images.crawled_at"],
+        "where": "ai.\"order\" > ${properties.order}",
+        "order": [{ "ai.\"order\"": "asc" }]
     },
     "resolve": {
         "l([0-9]+)l": {

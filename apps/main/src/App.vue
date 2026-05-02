@@ -270,36 +270,18 @@ watch(
   async (id) => {
     const token = ++bgResolveToken;
     const imageId = typeof id === "string" ? id.trim() : "";
-    console.log("[AppBackground] wallpaper id changed", {
-      rawId: id,
-      imageId,
-      enabled: settingsStore.values.appBackgroundEnabled,
-      opacity: settingsStore.values.appBackgroundOpacity,
-      blur: settingsStore.values.appBackgroundBlur,
-    });
     if (!imageId) {
       bgImageUrl.value = "";
-      console.log("[AppBackground] cleared: empty currentWallpaperImageId");
       return;
     }
 
     try {
-      console.log("[AppBackground] get_image_by_id start", { imageId });
       let image = (await invoke<ImageInfo | null>("get_image_by_id", { imageId })) ?? undefined;
-      console.log("[AppBackground] get_image_by_id result", { image });
 
       if (!image) {
         const path = `/images/id_${imageId}/`;
-        console.log("[AppBackground] get_image_by_id empty, fallback query_provider start", { path });
         const res = await invoke<GalleryBrowseResult>("query_provider", {
           path,
-        });
-        console.log("[AppBackground] query_provider result", {
-          total: res.total,
-          entryCount: res.entries?.length ?? 0,
-          entries: res.entries,
-          meta: res.meta,
-          note: res.note,
         });
         image = (res.entries || []).find((entry) => entry.kind === "image")?.image;
       }
@@ -311,15 +293,8 @@ watch(
           : "";
       if (token !== bgResolveToken) return;
       bgImageUrl.value = source;
-      console.log("[AppBackground] resolved", {
-        imageId,
-        image,
-        source,
-        sourceIsEmpty: !source,
-      });
     } catch (error) {
       if (token !== bgResolveToken) return;
-      console.warn("[AppBackground] failed to resolve app background image", error);
       bgImageUrl.value = "";
     }
   },
@@ -337,21 +312,6 @@ const bgImageStyle = computed(() => ({
   opacity: bgOpacity.value,
   filter: bgBlurPx.value > 0 ? `blur(${bgBlurPx.value}px)` : "none",
 }));
-
-watch(
-  () => ({
-    visible: bgVisible.value,
-    enabled: settingsStore.values.appBackgroundEnabled,
-    currentWallpaperImageId: settingsStore.values.currentWallpaperImageId,
-    url: bgImageUrl.value,
-    opacity: bgOpacity.value,
-    blur: bgBlurPx.value,
-  }),
-  (state) => {
-    console.log("[AppBackground] visibility state", state);
-  },
-  { immediate: true },
-);
 
 // 设置变更事件监听器
 let unlistenSettingChange: UnlistenFn | null = null;
@@ -414,12 +374,6 @@ onMounted(async () => {
 
   // 加载全部设置
   await settingsStore.loadAll();
-  console.log("[AppBackground] settings loaded", {
-    appBackgroundEnabled: settingsStore.values.appBackgroundEnabled,
-    appBackgroundOpacity: settingsStore.values.appBackgroundOpacity,
-    appBackgroundBlur: settingsStore.values.appBackgroundBlur,
-    currentWallpaperImageId: settingsStore.values.currentWallpaperImageId,
-  });
 
   // 从配置恢复语言：解析链生效后若与存储不一致则写回 canonical，避免长期为 null/别名/非法值
   {

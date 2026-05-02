@@ -203,8 +203,6 @@ interface Props {
   isLoadingAll?: boolean;
   totalCount?: number;
   bigPageEnabled?: boolean;
-  monthOptions?: string[];
-  monthLoading?: boolean;
   selectedRange?: [string, string] | null; // YYYY-MM-DD
   filter?: GalleryFilter;
   sort?: GalleryTimeSort;
@@ -220,8 +218,6 @@ const props = withDefaults(defineProps<Props>(), {
   isLoadingAll: false,
   totalCount: 0,
   bigPageEnabled: false,
-  monthOptions: () => [],
-  monthLoading: false,
   selectedRange: null,
   filter: () => ({ type: "all" } as GalleryFilter),
   sort: "asc",

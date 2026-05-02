@@ -64,13 +64,26 @@ export class ModePlugin extends BasePlugin {
         throw new Error(`未知的模式，允许的列表：${Mode.modes}`);
       }
       const modeObj = new Mode(mode);
-      if ((modeObj.isLight || modeObj.isAndroid || modeObj.isWeb) && !bs.context.component!.isMain) {
+      if (
+        (modeObj.isLight || modeObj.isAndroid || modeObj.isWeb) &&
+        !bs.context.component!.isMain
+      ) {
         throw new Error(`${mode} mode 只支持main组件！`);
       }
-      if (modeObj.isAndroid && !(bs.context.cmd!.isDev || bs.context.cmd!.isBuild)) {
+      if (
+        modeObj.isAndroid &&
+        !(bs.context.cmd!.isDev || bs.context.cmd!.isBuild)
+      ) {
         throw new Error("android mode 仅支持 dev 与 build 命令");
       }
-      if (modeObj.isWeb && !(bs.context.cmd!.isDev || bs.context.cmd!.isBuild || bs.context.cmd!.isCheck)) {
+      if (
+        modeObj.isWeb &&
+        !(
+          bs.context.cmd!.isDev ||
+          bs.context.cmd!.isBuild ||
+          bs.context.cmd!.isCheck
+        )
+      ) {
         throw new Error("web mode 仅支持 dev、build 与 check 命令");
       }
       bs.context.mode = modeObj;
@@ -123,7 +136,8 @@ export class ModePlugin extends BasePlugin {
       ) => {
         const features: string[] = Array.isArray(nullOrCompOrFeatures)
           ? [...nullOrCompOrFeatures]
-          : typeof nullOrCompOrFeatures === "object" && nullOrCompOrFeatures !== null
+          : typeof nullOrCompOrFeatures === "object" &&
+              nullOrCompOrFeatures !== null
             ? [...(nullOrCompOrFeatures.features || [])]
             : [];
         const comp = nullOrCompOrFeatures
@@ -143,7 +157,7 @@ export class ModePlugin extends BasePlugin {
         // Mode → cargo feature 翻译。仅作用于 main 组件；cli 始终以 standard 等价
         // 编译，不感知 mode（mode-plugin.ts 顶部 parseParams 已强制 light/android/web
         // 只允许 main 组件）。
-        //   - standard：default = ["standard"]，无需额外参数
+        //   - standard：--features standard（默认特性也是 standard，显式传递便于 dev/check/build 行为一致）
         //   - light：--no-default-features --features light
         //   - android：--no-default-features --features android（不带 VD，含 android-only 插件）
         //   - web：--no-default-features --features web（不带 Tauri 栈）
@@ -158,8 +172,9 @@ export class ModePlugin extends BasePlugin {
           } else if (this.mode!.isLight) {
             finalArgs.push("--no-default-features");
             features.push("light");
+          } else if (this.mode!.isStandard) {
+            features.push("standard");
           }
-          // standard 模式走 cargo default features，无需注入。
         }
 
         return {
@@ -197,7 +212,11 @@ export class ModePlugin extends BasePlugin {
     const cmd = bs.context.cmd;
     const comp = bs.context.component!;
     if (comp.isMain && cmd.isDev) {
-      this.log(chalk.blue("打包插件到开发 data 目录: crawler-plugins:package-to-dev-data"));
+      this.log(
+        chalk.blue(
+          "打包插件到开发 data 目录: crawler-plugins:package-to-dev-data",
+        ),
+      );
       run("nx", ["run", "crawler-plugins:package-to-dev-data"], {
         bin: "bun",
       });

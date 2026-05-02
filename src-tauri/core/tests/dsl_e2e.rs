@@ -404,6 +404,9 @@ fn album_order_path_paginates_and_limit_leaf_only_limits() {
     let album_wallpaper_order = runtime
         .fetch("/gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/x3x/1")
         .unwrap();
+    let bigger_order = runtime
+        .fetch("/gallery/album/33333333-3333-3333-3333-333333333333/bigger_order/1/l100l")
+        .unwrap();
     let limited = runtime
         .fetch("/gallery/album/33333333-3333-3333-3333-333333333333/order/l3l")
         .unwrap();
@@ -417,6 +420,7 @@ fn album_order_path_paginates_and_limit_leaf_only_limits() {
     assert!(video_only.is_empty());
     assert!(image_only_wallpaper_order.is_empty());
     assert!(album_wallpaper_order.is_empty());
+    assert_eq!(ids(bigger_order), ["7", "6"]);
     assert_eq!(ids(limited), ["8", "7", "6"]);
 
     let page_node = runtime

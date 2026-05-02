@@ -191,17 +191,50 @@ pub fn is_auto_startup() -> bool {
 pub fn ensure_main_window(app_handle: AppHandle) -> Result<(), String> {
     use tauri::Manager;
     if let Some(w) = app_handle.get_webview_window("main") {
-        let _ = w.center();
+        if w.is_minimized().unwrap_or(false) {
+            let _ = w.unminimize();
+        }
         w.show().map_err(|e| format!("显示主窗口失败: {}", e))?;
         let _ = w.set_focus();
+        #[cfg(target_os = "macos")]
+        activate_macos_window(&w, &app_handle);
         return Ok(());
     }
     create_main_window(&app_handle)?;
     if let Some(w) = app_handle.get_webview_window("main") {
+        let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+        #[cfg(target_os = "macos")]
+        activate_macos_window(&w, &app_handle);
     }
     Ok(())
+}
+
+#[cfg(all(target_os = "macos", not(feature = "web")))]
+fn activate_macos_window(window: &tauri::WebviewWindow, app_handle: &AppHandle) {
+    let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Regular);
+
+    let Ok(ns_window_ptr) = window.ns_window() else {
+        return;
+    };
+    if ns_window_ptr.is_null() {
+        return;
+    }
+
+    let ptr_as_usize = ns_window_ptr as usize;
+    dispatch2::run_on_main(move |_| {
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        unsafe {
+            let ns_window: &objc2_app_kit::NSWindow =
+                &*(ptr_as_usize as *mut std::ffi::c_void).cast();
+            ns_window.makeKeyAndOrderFront(None);
+            let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+            app.activateIgnoringOtherApps(true);
+        }
+    });
 }
 
 // 壁纸组件，壁纸设置、轮播等功能
