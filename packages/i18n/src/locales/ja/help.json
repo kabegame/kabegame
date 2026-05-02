@@ -74,8 +74,8 @@
   "shortcutSelectAllDesc": "グリッドの現在ページの画像をすべて選択",
   "shortcutClearSelectionLabel": "選択を解除",
   "shortcutClearSelectionDesc": "選択を解除してコンテキストメニューを閉じる",
-  "shortcutDeleteLabel": "選択を削除",
-  "shortcutDeleteDesc": "選択した画像を削除（アプリの削除フロー/確認をトリガー）",
+  "shortcutDeleteLabel": "選択を非表示/削除",
+  "shortcutDeleteDesc": "Backspaceで選択した画像を非表示、Deleteで削除（アプリの削除フロー/確認をトリガー）",
   "shortcutRangeSelectLabel": "範囲選択",
   "shortcutRangeSelectDesc": "Shiftを押しながらクリックで最後の選択から範囲を選択",
   "shortcutToggleSelectLabel": "選択の切り替え",
@@ -84,7 +84,7 @@
   "shortcutPreviewPrevNextDesc": "プレビューダイアログで前/次の画像",
   "shortcutCopyImageLabel": "画像をコピー",
   "shortcutCopyImageDesc": "現在の画像をクリップボードにコピー（プレビューまたはグリッド）",
-  "shortcutPreviewDeleteLabel": "プレビューで削除",
-  "shortcutPreviewDeleteDesc": "プレビューで現在の画像を削除（削除フローをトリガー）",
+  "shortcutPreviewDeleteLabel": "プレビューで非表示/削除",
+  "shortcutPreviewDeleteDesc": "Backspaceで現在のプレビュー画像を非表示、Deleteで削除（削除フローをトリガー）",
   "noHelpContent": "このページにはヘルプコンテンツがありません"
 }

@@ -587,10 +587,17 @@ const handlePreviewKeyDown = (event: KeyboardEvent) => {
     void goNext();
     return;
   }
-  // Delete / Backspace：快速删除当前预览图片
+  // Backspace：隐藏当前预览图片；Delete：删除当前预览图片
   if ((event.key === "Delete" || event.key === "Backspace") && previewImage.value) {
     event.preventDefault();
-    emit("contextCommand", { command: "remove", image: previewImage.value });
+    event.stopPropagation();
+    if ("stopImmediatePropagation" in event) {
+      (event as any).stopImmediatePropagation();
+    }
+    emit("contextCommand", {
+      command: event.key === "Backspace" ? "addToHidden" : "remove",
+      image: previewImage.value,
+    });
     return;
   }
 };
