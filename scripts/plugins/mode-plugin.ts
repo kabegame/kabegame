@@ -164,13 +164,10 @@ export class ModePlugin extends BasePlugin {
         const finalArgs = args ? [...args] : [];
         if (comp.isMain) {
           if (this.mode!.isWeb) {
-            finalArgs.push("--no-default-features");
             features.push("web");
           } else if (this.mode!.isAndroid) {
-            finalArgs.push("--no-default-features");
             features.push("android");
           } else if (this.mode!.isLight) {
-            finalArgs.push("--no-default-features");
             features.push("light");
           } else if (this.mode!.isStandard) {
             features.push("standard");
