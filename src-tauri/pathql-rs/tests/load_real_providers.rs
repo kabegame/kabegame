@@ -1,4 +1,4 @@
-//! 端到端：用 Json5Loader 把真实 src-tauri/core/src/providers/**/*.json{,5}
+//! 端到端：用 Json5Loader 把真实 src-tauri/kabegame-core/src/providers/**/*.json{,5}
 //! 一份一份喂给 Loader, 再 register 到 ProviderRegistry。
 //!
 //! 这模拟 Phase 6 中 kabegame-core 用 include_dir 嵌入 + 运行期注册的

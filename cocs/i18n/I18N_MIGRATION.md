@@ -23,9 +23,9 @@
 ### 2.1 前端（Vue 3）
 
 - **依赖**：`vue-i18n`（Vue 3 兼容版本，如 `^10` 或 `^11`）。
-- **入口**：在 `apps/main`（或实际前端入口）的 `main.ts` 中创建 `createI18n` 实例，并 `app.use(i18n)`。
+- **入口**：在 `apps/kabegame`（或实际前端入口）的 `main.ts` 中创建 `createI18n` 实例，并 `app.use(i18n)`。
 - **结构**：
-  - 前端 i18n 统一放在 `apps/main/src/i18n/` 下，locales 置于 `i18n/locales/<lang>/`。
+  - 前端 i18n 统一放在 `apps/kabegame/src/i18n/` 下，locales 置于 `i18n/locales/<lang>/`。
   - 按命名空间拆分：如 `common.json`、`settings.json`、`gallery.json` 等，与 CVR 的 `home`/`settings`/`shared` 思路一致。
   - 每个语言一个目录：`i18n/locales/zh/`、`i18n/locales/en/` 等，其下各命名空间 JSON + 一个 `index.ts` 聚合导出。
 - **懒加载（可选）**：与 CVR 一致，可采用 `import.meta.glob('@/locales/*/index.ts')` 按需加载语言包，并在 `locale` 切换时再加载对应 bundle。
@@ -39,7 +39,7 @@
   - 使用 `rust_i18n::i18n!("locales", fallback = "en");`
   - 提供 `set_locale(lang)`、`sync_locale(Option<&str>)`（从配置恢复）、`system_language()`、以及封装好的 `t!(key)` 或 `translate(key)`，与 CVR 的 `clash-verge-i18n` 一致。
 - **YAML 放置**：`kabegame-i18n/locales/zh.yml`、`en.yml` 等；内容按模块分块（如 `tray:`、`notifications:`、`dialog:`），与 CVR 的 `clash-verge-i18n/locales/*.yml` 结构可对齐便于迁移。
-- **app-main 依赖**：在 `src-tauri/app-main/Cargo.toml` 中增加 `kabegame-i18n = { workspace = true }`（或 path 依赖），并在需要显示原生 UI 文案的地方调用 `kabegame_i18n::t!(...)` 或等价 API。
+- **kabegame 依赖**：在 `src-tauri/kabegame/Cargo.toml` 中增加 `kabegame-i18n = { workspace = true }`（或 path 依赖），并在需要显示原生 UI 文案的地方调用 `kabegame_i18n::t!(...)` 或等价 API。
 
 ### 2.3 配置与同步
 
@@ -57,12 +57,12 @@
 2. 在 crate 内创建 `locales` 目录，从 CVR 的 `crates/clash-verge-i18n/locales/` 复制或改写 `zh.yml`、`en.yml` 等；保留相同或相近的 key 结构（如 `tray:`、`notifications:`），删除与 Kabegame 无关的 key，并补充 Kabegame 专属文案。
 3. 在 `lib.rs` 中实现与 CVR 对齐的 API：`i18n!`、`set_locale`、`sync_locale`、`system_language`、`t!`/`translate`，以及语言别名（如 `zh` → `zh`、`zh-tw` → `zhtw`）。
 4. 在 workspace 的 `Cargo.toml` 的 `[workspace.members]` 中加入 `kabegame-i18n`。
-5. 在 `kabegame_core::settings` 中增加 `SettingKey::Language` 及 `get_language`/`set_language`，在 app-main 的 `init_globals()` 中调用 `sync_locale`；在 `set_language` 命令中保存后调用 `sync_locale`，并刷新托盘/通知等。
+5. 在 `kabegame_core::settings` 中增加 `SettingKey::Language` 及 `get_language`/`set_language`，在 kabegame 的 `init_globals()` 中调用 `sync_locale`；在 `set_language` 命令中保存后调用 `sync_locale`，并刷新托盘/通知等。
 
 ### 3.2 前端 i18n 与配置联动
 
-1. 在 `apps/main` 安装 `vue-i18n`，在入口中创建并挂载 i18n 实例；设定 `fallbackLocale`（如 `zh`）、`legacy: false`（Composition API 风格）。
-2. 建立目录结构 `apps/main/src/i18n/locales/<lang>/`，每个语言下按命名空间拆分为多个 JSON（如 `common.json`、`settings.json`），再通过 `index.ts` 聚合为 `messages`。
+1. 在 `apps/kabegame` 安装 `vue-i18n`，在入口中创建并挂载 i18n 实例；设定 `fallbackLocale`（如 `zh`）、`legacy: false`（Composition API 风格）。
+2. 建立目录结构 `apps/kabegame/src/i18n/locales/<lang>/`，每个语言下按命名空间拆分为多个 JSON（如 `common.json`、`settings.json`），再通过 `index.ts` 聚合为 `messages`。
 3. 实现「当前语言」与后端配置同步：
    - 应用启动时：在 `App.vue` 中 `settingsStore.loadAll()` 后，用 `resolveLanguage`（已保存且合法 → 系统 → `en`）得到 canonical 语种，调用 `setLocale`；若存储值与 canonical 不一致（含 `null`、别名、非法串），再 `save('language', canonical)` 写回持久化。
    - 用户切换语言时：通过 `LanguageSetting` 组件仅选择具体语种，调用 `settingsStore.save('language', value)`；保存后后端 `set_language` 会调用 `sync_locale`；`setting-change` 事件中同样会做 canonical 收敛。
@@ -80,7 +80,7 @@
 2. **i18n:check**：扫描前端 `$t`/`useI18n().t` 与后端 `t!(...)` 的 key，与 JSON/YAML 中的 key 做差集，发现缺失或多余 key。
 3. **i18n:types**（可选）：为前端生成 `i18n-keys.ts` 或类型定义，减少手写 key 的错误，参考 CVR 的 `scripts/generate-i18n-keys.mjs`。
 
-以上脚本可放在项目根或 `apps/main` 的 `scripts/` 下，并在 `package.json` 中增加 `i18n:format`、`i18n:check`、`i18n:types` 等命令。
+以上脚本可放在项目根或 `apps/kabegame` 的 `scripts/` 下，并在 `package.json` 中增加 `i18n:format`、`i18n:check`、`i18n:types` 等命令。
 
 ---
 
@@ -117,12 +117,12 @@
 
 | 层级 | 路径（示例） | 作用 |
 |------|----------------|------|
-| 前端入口 | `apps/main/src/main.ts` | 创建并挂载 vue-i18n |
-| 前端 i18n | `apps/main/src/i18n/index.ts` | createI18n、resolveLanguage、setLocale |
-| 前端 locales | `apps/main/src/i18n/locales/<lang>/*.json`、`index.ts` | 按命名空间的前端翻译 |
+| 前端入口 | `apps/kabegame/src/main.ts` | 创建并挂载 vue-i18n |
+| 前端 i18n | `apps/kabegame/src/i18n/index.ts` | createI18n、resolveLanguage、setLocale |
+| 前端 locales | `apps/kabegame/src/i18n/locales/<lang>/*.json`、`index.ts` | 按命名空间的前端翻译 |
 | 后端 i18n crate | `src-tauri/kabegame-i18n/` | `lib.rs`、`locales/*.yml` |
-| 后端配置 | app-main 中读取/保存 `language` 的模块 | 启动时 `sync_locale`，配置变更时 `set_locale` |
-| 后端托盘/通知 | app-main 中托盘菜单、通知、对话框 | 使用 `t!(...)` 输出文案 |
+| 后端配置 | kabegame 中读取/保存 `language` 的模块 | 启动时 `sync_locale`，配置变更时 `set_locale` |
+| 后端托盘/通知 | kabegame 中托盘菜单、通知、对话框 | 使用 `t!(...)` 输出文案 |
 | 脚本 | `scripts/i18n-*.mjs` 或等价 | format、check、types |
 
 实际路径以仓库最终结构为准；迁移时按上述角色对号入座即可。
@@ -155,7 +155,7 @@
 
 ### 7.1 前端待迁移清单
 
-**当前已有**：`apps/main/src/i18n/locales/<lang>/` 下 `common`、`settings`、`gallery` 三个命名空间，且 `Settings.vue` 中语言设置、部分 tab 已用 `$t('settings.xxx')`；Gallery 等少量组件已用 `$t('gallery.xxx')` / `$t('common.xxx')`。
+**当前已有**：`apps/kabegame/src/i18n/locales/<lang>/` 下 `common`、`settings`、`gallery` 三个命名空间，且 `Settings.vue` 中语言设置、部分 tab 已用 `$t('settings.xxx')`；Gallery 等少量组件已用 `$t('gallery.xxx')` / `$t('common.xxx')`。
 
 **需扩展的 locales**（在 `locales/<lang>/` 下新增或扩展现有 JSON，并在各语言 `index.ts` 中聚合）：
 
@@ -177,23 +177,23 @@
 
 | 文件 | 待迁移内容 |
 |------|------------|
-| `apps/main/src/router/index.ts` | 各路由 `meta.title`：画廊、源、画册、任务详情、源详情、设置、帮助、畅游、畅游图片 |
+| `apps/kabegame/src/router/index.ts` | 各路由 `meta.title`：画廊、源、画册、任务详情、源详情、设置、帮助、畅游、畅游图片 |
 
 #### 7.1.2 设置页与设置项组件
 
 | 文件 | 待迁移内容 |
 |------|------------|
-| `apps/main/src/views/Settings.vue` | `StyledTabs` 的 `title="设置"`；应用设置内所有 `SettingRow` 的 `label` / `description`（开机启动、画册盘、图片点击行为、应用内预览/系统默认打开、图片宽高比、画廊列数、图片对齐方式、居中/靠上/靠下、清理应用数据、自动打开 WebView、生成测试图片、桌面端开发 WebView 窗口、打开 WebView 窗口）；tab 标签「壁纸设置」「下载设置」；壁纸区块「壁纸轮播设置」「启用壁纸轮播」「选择画册」「当前壁纸：」；下载区块所有 label/description；清理数据等按钮与确认对话框文案 |
-| `apps/main/src/components/settings/items/WallpaperTransitionSetting.vue` | 过渡方式选项 label/文案 |
-| `apps/main/src/components/settings/items/WallpaperStyleSetting.vue` | 壁纸样式选项 |
-| `apps/main/src/components/settings/items/WallpaperRotationTargetSetting.vue` | 轮播目标选项 |
-| `apps/main/src/components/settings/items/WallpaperModeSetting.vue` | 壁纸模式选项 |
-| `apps/main/src/components/settings/items/GalleryGridColumnsSetting.vue` | 列数选项 label/描述 |
-| `apps/main/src/components/settings/items/DownloadIntervalSetting.vue` | 下载间隔选项 |
-| `apps/main/src/components/settings/items/GalleryImageAspectRatioSetting.vue` | 宽高比选项 |
-| `apps/main/src/components/settings/items/DebugGenerateImagesSetting.vue` | 调试用 label/描述 |
-| `apps/main/src/components/settings/QuickSettingsDrawer.vue` | 抽屉内标题、快捷项文案 |
-| `apps/main/src/components/settings/items/LanguageSetting.vue` | 已用 i18n 的可仅核对 key 是否与 settings 一致 |
+| `apps/kabegame/src/views/Settings.vue` | `StyledTabs` 的 `title="设置"`；应用设置内所有 `SettingRow` 的 `label` / `description`（开机启动、画册盘、图片点击行为、应用内预览/系统默认打开、图片宽高比、画廊列数、图片对齐方式、居中/靠上/靠下、清理应用数据、自动打开 WebView、生成测试图片、桌面端开发 WebView 窗口、打开 WebView 窗口）；tab 标签「壁纸设置」「下载设置」；壁纸区块「壁纸轮播设置」「启用壁纸轮播」「选择画册」「当前壁纸：」；下载区块所有 label/description；清理数据等按钮与确认对话框文案 |
+| `apps/kabegame/src/components/settings/items/WallpaperTransitionSetting.vue` | 过渡方式选项 label/文案 |
+| `apps/kabegame/src/components/settings/items/WallpaperStyleSetting.vue` | 壁纸样式选项 |
+| `apps/kabegame/src/components/settings/items/WallpaperRotationTargetSetting.vue` | 轮播目标选项 |
+| `apps/kabegame/src/components/settings/items/WallpaperModeSetting.vue` | 壁纸模式选项 |
+| `apps/kabegame/src/components/settings/items/GalleryGridColumnsSetting.vue` | 列数选项 label/描述 |
+| `apps/kabegame/src/components/settings/items/DownloadIntervalSetting.vue` | 下载间隔选项 |
+| `apps/kabegame/src/components/settings/items/GalleryImageAspectRatioSetting.vue` | 宽高比选项 |
+| `apps/kabegame/src/components/settings/items/DebugGenerateImagesSetting.vue` | 调试用 label/描述 |
+| `apps/kabegame/src/components/settings/QuickSettingsDrawer.vue` | 抽屉内标题、快捷项文案 |
+| `apps/kabegame/src/components/settings/items/LanguageSetting.vue` | 已用 i18n 的可仅核对 key 是否与 settings 一致 |
 
 #### 7.1.3 视图页（已完成）
 
@@ -201,16 +201,16 @@
 
 | 文件 | 迁移内容 |
 |------|------------|
-| `apps/main/src/views/Gallery.vue` | 开始收集、确认删除、选择收集方式、本地/网络、本地导入提示、滚动过快提示、删除等 |
-| `apps/main/src/views/Surf.vue` | 标题、占位符、按钮、Cookie 对话框、畅游说明、会话与错误提示等 |
-| `apps/main/src/views/SurfImages.vue` | 确认删除、收藏/轮播/壁纸/文件夹/分享/打开/移除等提示与副标题 |
-| `apps/main/src/views/TaskDetail.vue` | 确认删除、任务状态文案、刷新/加载失败、停止与删除任务确认及提示等 |
-| `apps/main/src/views/Albums.vue` | 空状态、新建画册对话框、刷新/创建/轮播/删除画册等提示与确认 |
-| `apps/main/src/views/AlbumDetail.vue` | （待补：从画册移除、收藏/加入画册等操作文案与对话框） |
-| `apps/main/src/views/PluginBrowser.vue` | （待补：已安装源、商店源、安装/更新/导入等 tab 与对话框） |
-| `apps/main/src/views/PluginDetail.vue` | （待补：源详情、确认安装/卸载等） |
-| `apps/main/src/views/Help.vue` | （待补：帮助标题、使用技巧、快捷键等） |
-| `apps/main/src/App.vue` | 侧栏与 Android 底部 Tab：画廊、画册、收集源、畅游、设置、帮助；退出确认对话框 |
+| `apps/kabegame/src/views/Gallery.vue` | 开始收集、确认删除、选择收集方式、本地/网络、本地导入提示、滚动过快提示、删除等 |
+| `apps/kabegame/src/views/Surf.vue` | 标题、占位符、按钮、Cookie 对话框、畅游说明、会话与错误提示等 |
+| `apps/kabegame/src/views/SurfImages.vue` | 确认删除、收藏/轮播/壁纸/文件夹/分享/打开/移除等提示与副标题 |
+| `apps/kabegame/src/views/TaskDetail.vue` | 确认删除、任务状态文案、刷新/加载失败、停止与删除任务确认及提示等 |
+| `apps/kabegame/src/views/Albums.vue` | 空状态、新建画册对话框、刷新/创建/轮播/删除画册等提示与确认 |
+| `apps/kabegame/src/views/AlbumDetail.vue` | （待补：从画册移除、收藏/加入画册等操作文案与对话框） |
+| `apps/kabegame/src/views/PluginBrowser.vue` | （待补：已安装源、商店源、安装/更新/导入等 tab 与对话框） |
+| `apps/kabegame/src/views/PluginDetail.vue` | （待补：源详情、确认安装/卸载等） |
+| `apps/kabegame/src/views/Help.vue` | （待补：帮助标题、使用技巧、快捷键等） |
+| `apps/kabegame/src/App.vue` | 侧栏与 Android 底部 Tab：画廊、画册、收集源、畅游、设置、帮助；退出确认对话框 |
 
 #### 7.1.4 通用组件与弹窗（已完成）
 
@@ -218,40 +218,40 @@
 
 | 文件 | 待迁移内容 |
 |------|------------|
-| `apps/main/src/components/TaskDrawer.vue` | 抽屉标题、状态、操作按钮 |
+| `apps/kabegame/src/components/TaskDrawer.vue` | 抽屉标题、状态、操作按钮 |
 | **`packages/core/.../TaskDrawerContent.vue`** | 任务抽屉内全部文案（**见 7.1.10**，位于 core 未迁移） |
-| `apps/main/src/components/MediaPicker.vue` | 标题、按钮、提示 |
-| `apps/main/src/components/LocalImportDialog.vue` | 标题、说明、按钮 |
-| `apps/main/src/components/CrawlerDialog.vue` | 爬虫/采集相关文案 |
-| `apps/main/src/components/OrganizeDialog.vue` | 整理相关 label/按钮 |
-| `apps/main/src/components/AddToAlbumDialog.vue` | 加入画册相关文案 |
-| `apps/main/src/components/import/PluginImportDialog.vue` | 插件导入说明与按钮 |
-| `apps/main/src/components/import/ImportConfirmContent.vue` | 导入确认说明 |
-| `apps/main/src/components/import/ImportConfirmDialog.vue` | 若有标题/按钮 |
-| `apps/main/src/components/CollectSourcePicker.vue` | 收藏来源选择文案 |
-| `apps/main/src/components/help/HelpDrawer.vue` | 帮助抽屉标题、分类 |
-| `apps/main/src/components/help/CodeBlock.vue` | 若有「复制」等按钮 |
-| `apps/main/src/components/common/EmptyState.vue` | 空状态标题/描述 |
-| `apps/main/src/components/common/OptionPickerDrawer.vue` | 选项标题、确认等 |
-| `apps/main/src/components/FileDropOverlay.vue` | 拖拽提示文案 |
-| `apps/main/src/components/ImageGrid.vue` | 加载中、错误提示等 |
+| `apps/kabegame/src/components/MediaPicker.vue` | 标题、按钮、提示 |
+| `apps/kabegame/src/components/LocalImportDialog.vue` | 标题、说明、按钮 |
+| `apps/kabegame/src/components/CrawlerDialog.vue` | 爬虫/采集相关文案 |
+| `apps/kabegame/src/components/OrganizeDialog.vue` | 整理相关 label/按钮 |
+| `apps/kabegame/src/components/AddToAlbumDialog.vue` | 加入画册相关文案 |
+| `apps/kabegame/src/components/import/PluginImportDialog.vue` | 插件导入说明与按钮 |
+| `apps/kabegame/src/components/import/ImportConfirmContent.vue` | 导入确认说明 |
+| `apps/kabegame/src/components/import/ImportConfirmDialog.vue` | 若有标题/按钮 |
+| `apps/kabegame/src/components/CollectSourcePicker.vue` | 收藏来源选择文案 |
+| `apps/kabegame/src/components/help/HelpDrawer.vue` | 帮助抽屉标题、分类 |
+| `apps/kabegame/src/components/help/CodeBlock.vue` | 若有「复制」等按钮 |
+| `apps/kabegame/src/components/common/EmptyState.vue` | 空状态标题/描述 |
+| `apps/kabegame/src/components/common/OptionPickerDrawer.vue` | 选项标题、确认等 |
+| `apps/kabegame/src/components/FileDropOverlay.vue` | 拖拽提示文案 |
+| `apps/kabegame/src/components/ImageGrid.vue` | 加载中、错误提示等 |
 | **`packages/core/.../ImageDetailDialog.vue`** | 图片详情弹窗标题与字段标签（**见 7.1.10**，位于 core 未迁移） |
-| `apps/main/src/components/GalleryBigPaginator.vue` | 上一页/下一页等 |
-| `apps/main/src/components/GalleryToolbar.vue` | 工具栏按钮、筛选文案 |
-| `apps/main/src/components/LoadMoreButton.vue` | 「加载更多」等 |
-| `apps/main/src/components/albums/AlbumCard.vue` | 画册卡标题、数量等 |
+| `apps/kabegame/src/components/GalleryBigPaginator.vue` | 上一页/下一页等 |
+| `apps/kabegame/src/components/GalleryToolbar.vue` | 工具栏按钮、筛选文案 |
+| `apps/kabegame/src/components/LoadMoreButton.vue` | 「加载更多」等 |
+| `apps/kabegame/src/components/albums/AlbumCard.vue` | 画册卡标题、数量等 |
 
 #### 7.1.5 页头与操作区（已完成）
 
 | 文件 | 待迁移内容 |
 |------|------------|
-| `apps/main/src/components/header/TaskDetailPageHeader.vue` | 返回、标题、操作按钮 |
-| `apps/main/src/components/header/PluginBrowserPageHeader.vue` | 同上 |
-| `apps/main/src/components/header/AlbumsPageHeader.vue` | 同上 |
-| `apps/main/src/components/header/AlbumDetailPageHeader.vue` | 同上 |
-| `apps/main/src/header/comps/GallerySortControl.vue` | 排序选项 |
-| `apps/main/src/header/comps/CollectAction.vue` | 收藏相关文案 |
-| `apps/main/src/header/comps/OrganizeHeaderControl.vue` | 整理相关文案 |
+| `apps/kabegame/src/components/header/TaskDetailPageHeader.vue` | 返回、标题、操作按钮 |
+| `apps/kabegame/src/components/header/PluginBrowserPageHeader.vue` | 同上 |
+| `apps/kabegame/src/components/header/AlbumsPageHeader.vue` | 同上 |
+| `apps/kabegame/src/components/header/AlbumDetailPageHeader.vue` | 同上 |
+| `apps/kabegame/src/header/comps/GallerySortControl.vue` | 排序选项 |
+| `apps/kabegame/src/header/comps/CollectAction.vue` | 收藏相关文案 |
+| `apps/kabegame/src/header/comps/OrganizeHeaderControl.vue` | 整理相关文案 |
 
 新增命名空间 `header`（`locales/<lang>/header.json`），用于页头功能按钮 label；`headerFeatures.ts` 使用 i18n，语言切换时调用 `registerHeaderFeatures()` 重新注册。
 
@@ -259,41 +259,41 @@
 
 | 文件 | 待迁移内容 |
 |------|------------|
-| `apps/main/src/components/contextMenu/TaskContextMenu.vue` | 菜单项文案 |
-| `apps/main/src/components/contextMenu/TaskImageContextMenu.vue` | 同上 |
-| `apps/main/src/components/contextMenu/SingleImageContextMenu.vue` | 同上 |
-| `apps/main/src/components/contextMenu/MultiImageContextMenu.vue` | 同上 |
-| `apps/main/src/components/contextMenu/GalleryContextMenu.vue` | 同上 |
-| `apps/main/src/components/contextMenu/AlbumImageContextMenu.vue` | 同上 |
-| `apps/main/src/components/contextMenu/AlbumContextMenu.vue` | 同上 |
+| `apps/kabegame/src/components/contextMenu/TaskContextMenu.vue` | 菜单项文案 |
+| `apps/kabegame/src/components/contextMenu/TaskImageContextMenu.vue` | 同上 |
+| `apps/kabegame/src/components/contextMenu/SingleImageContextMenu.vue` | 同上 |
+| `apps/kabegame/src/components/contextMenu/MultiImageContextMenu.vue` | 同上 |
+| `apps/kabegame/src/components/contextMenu/GalleryContextMenu.vue` | 同上 |
+| `apps/kabegame/src/components/contextMenu/AlbumImageContextMenu.vue` | 同上 |
+| `apps/kabegame/src/components/contextMenu/AlbumContextMenu.vue` | 同上 |
 
 #### 7.1.7 帮助与 Tip 文案 ✅ 已完成
 
 | 文件/目录 | 待迁移内容 | 状态 |
 |-----------|------------|------|
-| `apps/main/src/help/tipsRegistry.ts` | Tip 的 title/分类名 | ✅ 已迁移：getTipCategories(t) |
-| `apps/main/src/help/helpRegistry.ts` | 帮助侧栏分类、标题 | ✅ 已迁移：titleKey/labelKey/descriptionKey |
-| `apps/main/src/views/Help.vue` | 页面标题、tab、快捷键列表 | ✅ 已迁移 |
-| `apps/main/src/components/help/HelpDrawer.vue` | 抽屉内分组与项 | ✅ 已迁移 |
-| `apps/main/src/help/tips/**/*.vue` | 各 Tip 组件内全部说明正文 | ✅ 已迁移：21 个 Tip 组件均已使用 `$t('help.tipsContent.<tip-id>.<key>')`，zh/help.json 含完整 tipsContent |
+| `apps/kabegame/src/help/tipsRegistry.ts` | Tip 的 title/分类名 | ✅ 已迁移：getTipCategories(t) |
+| `apps/kabegame/src/help/helpRegistry.ts` | 帮助侧栏分类、标题 | ✅ 已迁移：titleKey/labelKey/descriptionKey |
+| `apps/kabegame/src/views/Help.vue` | 页面标题、tab、快捷键列表 | ✅ 已迁移 |
+| `apps/kabegame/src/components/help/HelpDrawer.vue` | 抽屉内分组与项 | ✅ 已迁移 |
+| `apps/kabegame/src/help/tips/**/*.vue` | 各 Tip 组件内全部说明正文 | ✅ 已迁移：21 个 Tip 组件均已使用 `$t('help.tipsContent.<tip-id>.<key>')`，zh/help.json 含完整 tipsContent |
 
 #### 7.1.8 TS/Composables/Stores/Actions（已完成）
 
 | 文件 | 待迁移内容 |
 |------|------------|
-| `apps/main/src/composables/useImageOperations.ts` | 消息提示、确认框文案（如删除成功、是否删除等） |
-| `apps/main/src/composables/useProviderPathRoute.ts` | 面包屑或路由展示用中文（若有） |
-| `apps/main/src/wallpaper.ts` | 壁纸相关 toast/错误提示 |
-| `apps/main/src/stores/albums.ts` | 默认画册名等用户可见字符串 |
-| `apps/main/src/stores/taskDrawer.ts` | 若有展示用文案 |
-| `apps/main/src/settings/quickSettingsRegistry.ts` | 快捷设置项 label/描述 |
-| `apps/main/src/header/headerFeatures.ts` | 页头功能名称（若硬编码） |
-| `apps/main/src/actions/imageActions.ts` | 操作结果提示文案 |
-| `apps/main/src/actions/albumActions.ts` | 同上 |
-| `apps/main/src/actions/surfRecordActions.ts` | 同上 |
-| `apps/main/src/utils/dragScroll.ts` | 若有用户可见提示 |
-| `apps/main/src/composables/useImagesChangeRefresh.ts` | 若有提示 |
-| `apps/main/src/composables/useFileDrop.ts` | 拖拽提示文案 |
+| `apps/kabegame/src/composables/useImageOperations.ts` | 消息提示、确认框文案（如删除成功、是否删除等） |
+| `apps/kabegame/src/composables/useProviderPathRoute.ts` | 面包屑或路由展示用中文（若有） |
+| `apps/kabegame/src/wallpaper.ts` | 壁纸相关 toast/错误提示 |
+| `apps/kabegame/src/stores/albums.ts` | 默认画册名等用户可见字符串 |
+| `apps/kabegame/src/stores/taskDrawer.ts` | 若有展示用文案 |
+| `apps/kabegame/src/settings/quickSettingsRegistry.ts` | 快捷设置项 label/描述 |
+| `apps/kabegame/src/header/headerFeatures.ts` | 页头功能名称（若硬编码） |
+| `apps/kabegame/src/actions/imageActions.ts` | 操作结果提示文案 |
+| `apps/kabegame/src/actions/albumActions.ts` | 同上 |
+| `apps/kabegame/src/actions/surfRecordActions.ts` | 同上 |
+| `apps/kabegame/src/utils/dragScroll.ts` | 若有用户可见提示 |
+| `apps/kabegame/src/composables/useImagesChangeRefresh.ts` | 若有提示 |
+| `apps/kabegame/src/composables/useFileDrop.ts` | 拖拽提示文案 |
 
 **说明**：TS 中需在调用处注入 `i18n`（如 `useI18n().t`）或通过 `import { i18n } from '@kabegame/i18n'` 使用 `i18n.global.t`，再替换硬编码字符串。
 
@@ -315,7 +315,7 @@
 |------|------------|------|
 | **`packages/core/.../ImageDetailDialog.vue`** | 弹窗标题、字段标签、无效时间占位、日期格式、错误提示 | ✅ 已迁移：`useI18n` + `@kabegame/i18n`，gallery.* + common.* |
 | **`packages/core/.../TaskDrawerContent.vue`** | 下载区、任务列表、参数标签、状态文案、时长格式、配置值等 | ✅ 已迁移：`useI18n` + resolve 函数，tasks.drawer* |
-| `apps/main/.../useFileDrop.ts` | 拖拽确认列表中「（插件包）」后缀 | ✅ 已迁移：import.pluginPackageSuffix |
+| `apps/kabegame/.../useFileDrop.ts` | 拖拽确认列表中「（插件包）」后缀 | ✅ 已迁移：import.pluginPackageSuffix |
 
 **实现方式**：主应用在 `main.ts` 中 `app.use(i18n)`（`i18n` 来自 `@kabegame/i18n`）；core 组件与 main 共用同一 `vue-i18n` 实例，直接 `useI18n()` 即可。
 
@@ -329,7 +329,7 @@
 
 ---
 
-#### 7.2.1 托盘菜单（`src-tauri/app-main/src/tray.rs`）✅ 已完成
+#### 7.2.1 托盘菜单（`src-tauri/kabegame/src/tray.rs`）✅ 已完成
 
 | 当前硬编码文案 | 建议 key | 说明 |
 |----------------|----------|------|
@@ -345,7 +345,7 @@
 
 ---
 
-#### 7.2.2 原生错误对话框（`src-tauri/app-main/src/utils/dialog.rs`）✅ 已完成
+#### 7.2.2 原生错误对话框（`src-tauri/kabegame/src/utils/dialog.rs`）✅ 已完成
 
 | 当前硬编码文案 | 建议 key | 说明 |
 |----------------|----------|------|
@@ -357,7 +357,7 @@
 
 ---
 
-#### 7.2.3 启动致命错误（`src-tauri/app-main/src/lib.rs`）✅ 已完成
+#### 7.2.3 启动致命错误（`src-tauri/kabegame/src/lib.rs`）✅ 已完成
 
 | 当前硬编码文案 | 建议 key | 说明 |
 |----------------|----------|------|
@@ -385,7 +385,7 @@
 
 #### 7.2.5 系统通知（若后端发送带文案的通知）✅ 已确认
 
-当前 `startup.rs` 中仅使用 `tauri_plugin_task_notification` 的「任务数量」等，未见后端发送带自定义标题/正文的系统通知。若后续在 app-main 或 core 中调用 `send_notification` 等并传入用户可见标题/正文，应改为 `t!("notifications.xxx")`，并在 `notifications:` 中补全 key。
+当前 `startup.rs` 中仅使用 `tauri_plugin_task_notification` 的「任务数量」等，未见后端发送带自定义标题/正文的系统通知。若后续在 kabegame 或 core 中调用 `send_notification` 等并传入用户可见标题/正文，应改为 `t!("notifications.xxx")`，并在 `notifications:` 中补全 key。
 
 ---
 
@@ -404,13 +404,13 @@
 | 文件 | 作用 | 状态 |
 |------|------|------|
 | `src-tauri/kabegame-i18n/locales/{zh,en,zhtw}.yml` | 后端翻译源，tray/dialog/window/surf key | ✅ |
-| `src-tauri/app-main/src/tray.rs` | 托盘菜单项与 tooltip 改为 `t!(...)` | ✅ |
-| `src-tauri/app-main/src/utils/dialog.rs` | 错误对话框标题改为 `t!("dialog.errorTitle")` | ✅ |
-| `src-tauri/app-main/src/lib.rs` | 初始化致命错误 `show_error` 文案改为 i18n | ✅ |
-| `src-tauri/app-main/src/startup.rs` | 主窗口/壁纸窗口/爬虫窗口标题改为 `t!(...)` | ✅ |
-| `src-tauri/app-main/src/commands/surf.rs` | 畅游窗口标题改为 `t!("surf.windowTitle", host = host)` | ✅ |
-| `src-tauri/app-main/src/commands/misc.rs` | 开发 WebView 窗口标题改为 `t!("window.devWebViewTitle")` | ✅ |
-| `src-tauri/app-main/src/commands/settings.rs` | `set_language` 仅 `sync_locale`；刷新由 setting-change 回调触发 | ✅（在 startup 事件循环中监听 language 变更后调用 `tray::update_tray_menu`） |
+| `src-tauri/kabegame/src/tray.rs` | 托盘菜单项与 tooltip 改为 `t!(...)` | ✅ |
+| `src-tauri/kabegame/src/utils/dialog.rs` | 错误对话框标题改为 `t!("dialog.errorTitle")` | ✅ |
+| `src-tauri/kabegame/src/lib.rs` | 初始化致命错误 `show_error` 文案改为 i18n | ✅ |
+| `src-tauri/kabegame/src/startup.rs` | 主窗口/壁纸窗口/爬虫窗口标题改为 `t!(...)` | ✅ |
+| `src-tauri/kabegame/src/commands/surf.rs` | 畅游窗口标题改为 `t!("surf.windowTitle", host = host)` | ✅ |
+| `src-tauri/kabegame/src/commands/misc.rs` | 开发 WebView 窗口标题改为 `t!("window.devWebViewTitle")` | ✅ |
+| `src-tauri/kabegame/src/commands/settings.rs` | `set_language` 仅 `sync_locale`；刷新由 setting-change 回调触发 | ✅（在 startup 事件循环中监听 language 变更后调用 `tray::update_tray_menu`） |
 
 ---
 
@@ -544,7 +544,7 @@
   - **解析**：`resolveConfigText(value, locale)` 与 manifest 的 `resolveManifestText` 同构，优先 `value[locale]`，否则 `value["default"]`；兼容 `value` 为 string。
   - **Composable**：`usePluginConfigI18n()`（`@kabegame/i18n`）提供 `varDisplayName(varDef)`、`varDescripts(varDef)`、`optionDisplayName(opt)`、`resolveConfigText`、`locale`，用于按当前语言解析并得到响应式展示文案。
   - **Record 存储与使用**：任务抽屉（TaskDrawerContent）中 `pluginVarMetaMap` 按插件存储原始变量定义（`name`/`optionNameByVariable` 为 record），展示时用 `resolveConfigText(..., locale.value)` 计算 `getVarDisplayName`/`formatConfigValue`；CrawlerDialog 中 `visiblePluginVars` 为 computed，在过滤 when 后对每条变量用 `varDisplayName`/`varDescripts`/`optionDisplayName` 解析为展示用字符串。
-- **涉及文件**：`src-tauri/core/src/plugin/mod.rs`（`var_definition_to_frontend_value`）、`src-tauri/app-main/src/commands/plugin.rs`（`get_plugin_vars` 返回前端结构）；`packages/core`（`PluginConfigText`、TaskDrawerContent 的 metaMap）；`@kabegame/i18n`（`resolve.ts`、`usePluginConfigI18n`）；`apps/main`（usePluginConfig 类型、CrawlerDialog 的 visiblePluginVars）。
+- **涉及文件**：`src-tauri/kabegame-core/src/plugin/mod.rs`（`var_definition_to_frontend_value`）、`src-tauri/kabegame/src/commands/plugin.rs`（`get_plugin_vars` 返回前端结构）；`packages/core`（`PluginConfigText`、TaskDrawerContent 的 metaMap）；`@kabegame/i18n`（`resolve.ts`、`usePluginConfigI18n`）；`apps/kabegame`（usePluginConfig 类型、CrawlerDialog 的 visiblePluginVars）。
 
 #### 8.6.2 config.json 扁平多语言键（已实现）
 

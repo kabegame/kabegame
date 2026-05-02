@@ -1,0 +1,5 @@
+//! Gallery 模块：给 kabegame 画廊复用 Provider 的查询能力（按 provider-path 浏览）。
+
+pub mod browse;
+
+pub use browse::{browse_from_provider, browse_from_provider_jsonmeta, GalleryBrowseEntry};

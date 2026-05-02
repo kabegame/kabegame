@@ -52,7 +52,7 @@ flowchart TD
 
 1. **包内路径**：`.kgpg`（ZIP）内 **`templates/description.ejs`**（模板逻辑名 `description`）。
 2. **后端**：`get_plugin_template(pluginId, templateName)` → `PluginManager::get_plugin_template_by_id` → **`read_plugin_template(zip_path, "description")`** 读 ZIP 条目。
-   - 实现：[src-tauri/app-main/src/commands/plugin.rs](../../src-tauri/app-main/src/commands/plugin.rs)（命令入口）、[src-tauri/core/src/plugin/mod.rs](../../src-tauri/core/src/plugin/mod.rs)（ZIP 读取）。
+   - 实现：[src-tauri/kabegame/src/commands/plugin.rs](../../src-tauri/kabegame/src/commands/plugin.rs)（命令入口）、[src-tauri/kabegame-core/src/plugin/mod.rs](../../src-tauri/kabegame-core/src/plugin/mod.rs)（ZIP 读取）。
 3. **前端缓存**：
    - **`usePluginStore`**（商店/预览等场景）、**`useInstalledPluginsStore`**（已安装插件）各自维护 `descriptionTemplates` / `pluginDescriptionTemplates`。
    - **`loadDescriptionTemplates()`**：对已列出的每个插件 `invoke("get_plugin_template", { pluginId, templateName: "description" })`，结果写入 `Record<pluginId, string | null>`。
@@ -93,7 +93,7 @@ flowchart TD
 4. 父窗口 **`invoke('proxy_fetch', { url, headers })`**（Rust `reqwest` GET，无浏览器 CORS；IPC 上响应体为 Base64 编码，见 `proxy.rs`）。
 5. 向 iframe **`postMessage({ type: 'ejs-fetch-response', id, data | error })`**，注入脚本中的 Promise 随之 resolve/reject。
 
-**Tauri 命令**：[src-tauri/app-main/src/commands/proxy.rs](../../src-tauri/app-main/src/commands/proxy.rs) → `proxy_fetch`。单响应体积上限约 **3MB**（`PROXY_FETCH_BYTES_MAX`）。
+**Tauri 命令**：[src-tauri/kabegame/src/commands/proxy.rs](../../src-tauri/kabegame/src/commands/proxy.rs) → `proxy_fetch`。单响应体积上限约 **3MB**（`PROXY_FETCH_BYTES_MAX`）。
 
 ### 4.2 `__bridge.getLocale` / `__bridge.openUrl` / 全局 `<a>` 点击桥接
 
@@ -126,7 +126,7 @@ flowchart TD
 | 阶段 | 路径 |
 |------|------|
 | 下载写入 metadata | 各插件 `crawl.rhai` / `crawl.js`，`kabegame_core` 下载链路 |
-| 读 ZIP 模板 | `src-tauri/core/src/plugin/mod.rs`（`read_plugin_template`） |
+| 读 ZIP 模板 | `src-tauri/kabegame-core/src/plugin/mod.rs`（`read_plugin_template`） |
 | Tauri 命令 | `get_plugin_template`、`proxy_fetch` |
 | 前端模板缓存与加载 | `packages/core/src/stores/plugins.ts` |
 | EJS 渲染与 iframe | `ImageDetailContent.vue`、`descriptionBridgeInject.body.js`（`?raw`）/`descriptionBridgeInjectScript.ts` |

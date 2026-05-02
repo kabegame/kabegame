@@ -56,7 +56,7 @@ function releaseAssetFileName(params: {
 }
 
 function findBundleDir(root: string): string | null {
-  const p = OSPlugin.isAndroid ? path.join(root, "src-tauri", "app-main", "gen", "android", "app", "build", "outputs", "apk", "universal", "release") 
+  const p = OSPlugin.isAndroid ? path.join(root, "src-tauri", "kabegame", "gen", "android", "app", "build", "outputs", "apk", "universal", "release") 
     : OSPlugin.isMacOS ? path.join(root, "target", "release", "bundle", "dmg")
     : OSPlugin.isWindows ? path.join(root, "target", "release", "bundle", "nsis")
     : OSPlugin.isLinux ? path.join(root, "target", "release", "bundle", "deb")

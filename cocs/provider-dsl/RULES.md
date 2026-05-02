@@ -1,7 +1,7 @@
 # Provider DSL — 加载期与运行期规则
 
 本文档定义 Provider DSL（v0.7）**schema 之外**的语义合约。
-[`schema.json5`](../../src-tauri/core/src/providers/schema.json5) 校验语法；本文档校验语义。
+[`schema.json5`](../../src-tauri/kabegame-core/src/providers/schema.json5) 校验语法；本文档校验语义。
 两者并列：schema 拒绝的，引擎也拒绝；schema 通过的，本文档列出的规则仍可能拒绝。
 
 ---
@@ -29,7 +29,7 @@ bridges, host SQL functions, and `where_clear`.
 
 - 后缀：`.json5`（推荐 `.provider.json5` 后缀以便 IDE 区分）
 - 顶层 `$schema` 字段建议指向 `./schema.json5` 相对路径，启用 IDE 补全
-- 位置约定：`src-tauri/core/src/providers/<scope>/<name>.json5`
+- 位置约定：`src-tauri/kabegame-core/src/providers/<scope>/<name>.json5`
   - `<scope>` 为 `root` / `shared` / `gallery` / `vd` 之一
   - 文件 `name` 字段必须等于文件名（不含后缀），便于反查
 - `__` 前缀路径段为**约定上的私有路径**（非引擎强制），不期望被外部 list 暴露
@@ -717,8 +717,8 @@ pathql 体系对终端暴露三个核心查询入口：
 
 ## 13. 引用
 
-- 语法 schema：[../../src-tauri/core/src/providers/schema.json5](../../src-tauri/core/src/providers/schema.json5)
+- 语法 schema：[../../src-tauri/kabegame-core/src/providers/schema.json5](../../src-tauri/kabegame-core/src/providers/schema.json5)
 - VD 消费者实现：[VD_INTEGRATION.md](./VD_INTEGRATION.md)
-- Rust trait 实现：[../../src-tauri/core/src/providers/provider.rs](../../src-tauri/core/src/providers/provider.rs)
-- Runtime LRU：[../../src-tauri/core/src/providers/runtime.rs](../../src-tauri/core/src/providers/runtime.rs)
+- Rust trait 实现：[../../src-tauri/kabegame-core/src/providers/provider.rs](../../src-tauri/kabegame-core/src/providers/provider.rs)
+- Runtime LRU：[../../src-tauri/kabegame-core/src/providers/runtime.rs](../../src-tauri/kabegame-core/src/providers/runtime.rs)
 - 旧文档（迁移前 ImageQuery 系统）：[../gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md](../gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md)

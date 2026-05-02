@@ -15,8 +15,8 @@ import Handlebars from "handlebars";
 
 // 组件对象
 export class Component {
-  static readonly MAIN = "main";
-  static readonly CLI = "cli";
+  static readonly MAIN = "kabegame";
+  static readonly CLI = "kabegame-cli";
 
   static readonly components = [this.MAIN, this.CLI];
 
@@ -39,7 +39,7 @@ export class Component {
   }
 
   static cargoComp(comp: string): string {
-    return comp === Component.MAIN ? "kabegame" : "kabegame-" + comp;
+    return comp;
   }
 
   get cargoComp(): string {
@@ -49,10 +49,10 @@ export class Component {
   static appDir(cmp: string): string {
     switch (cmp) {
       case this.MAIN: {
-        return path.join(SRC_TAURI_DIR, "app-main");
+        return path.join(SRC_TAURI_DIR, "kabegame");
       }
       case this.CLI: {
-        return path.join(SRC_TAURI_DIR, "app-cli");
+        return path.join(SRC_TAURI_DIR, "kabegame-cli");
       }
       default: {
         throw new Error(`未知的app: ${cmp}`);
@@ -101,7 +101,7 @@ export class ComponentPlugin extends BasePlugin {
       }
       const comp = new Component(component);
       if (bs.context.cmd!.isDev && comp.isCli) {
-        throw new Error(`当前 dev 不支持 cli ！cli请构建后测试运行`);
+        throw new Error(`当前 dev 不支持 kabegame-cli ！kabegame-cli 请构建后测试运行`);
       }
       // if (bs.context.cmd!.isStart && comp.isPluginEditor) {
       //   throw new Error(`当前 start 不支持 p`);

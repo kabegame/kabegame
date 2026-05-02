@@ -57,7 +57,7 @@ fn render_provider_name(
 
 ### 2. Schema 和校验
 
-- 修改 `src-tauri/core/src/providers/dsl/schema.json5`：
+- 修改 `src-tauri/kabegame-core/src/providers/dsl/schema.json5`：
   - `ProviderName` 允许普通全限定名或包含 `${...}` 的模板字符串。
   - `Namespace` 允许 hyphen segment，配合 phase1 的插件 id。
   - 最后一段 provider simple name 仍保持 snake_case；模板 provider name 的最终合法性在运行期渲染后检查。
@@ -67,7 +67,7 @@ fn render_provider_name(
 ### 3. 公共 plugin_provider
 
 - 新增或重命名 DSL 文件，建议：
-  - `src-tauri/core/src/providers/dsl/shared/plugin_provider.json5`
+  - `src-tauri/kabegame-core/src/providers/dsl/shared/plugin_provider.json5`
 
 ```json5
 {
@@ -87,7 +87,7 @@ fn render_provider_name(
 
 ### 4. Gallery router 拆分
 
-- 将现有 `src-tauri/core/src/providers/dsl/gallery/plugins/gallery_plugin_provider.json5` 改成 `gallery_plugin_router.json5`，或保留文件名但 provider `name` 改为 `gallery_plugin_router`。
+- 将现有 `src-tauri/kabegame-core/src/providers/dsl/gallery/plugins/gallery_plugin_provider.json5` 改成 `gallery_plugin_router.json5`，或保留文件名但 provider `name` 改为 `gallery_plugin_router`。
 - `gallery_plugin_router` 结构：
 
 ```json5
@@ -185,7 +185,7 @@ fn render_provider_name(
 
 ### 7. DSL 文件清单
 
-- 更新 `src-tauri/core/src/providers/dsl_loader.rs::DSL_FILES`：
+- 更新 `src-tauri/kabegame-core/src/providers/dsl_loader.rs::DSL_FILES`：
   - 加入 `shared/plugin_provider.json5`。
   - 加入或替换 `gallery/plugins/gallery_plugin_router.json5`。
   - 加入各语言 `vd_*_plugins_provider.json5` 和 `vd_*_plugin_router.json5`。
@@ -197,7 +197,7 @@ fn render_provider_name(
 - 搜索并清理：
 
 ```powershell
-rg -n "gallery_plugin_provider|gallery_plugin_router" src-tauri/core/src/providers/dsl/vd
+rg -n "gallery_plugin_provider|gallery_plugin_router" src-tauri/kabegame-core/src/providers/dsl/vd
 ```
 
 - VD DSL 中不能引用 Gallery router。允许引用：
@@ -232,5 +232,5 @@ rg -n "gallery_plugin_provider|gallery_plugin_router" src-tauri/core/src/provide
 cargo test -p pathql-rs --features "json5 validate"
 cargo test -p kabegame-core --test dsl_e2e
 cargo check -p kabegame
-rg -n "gallery_plugin_provider|gallery_plugin_router" src-tauri/core/src/providers/dsl/vd
+rg -n "gallery_plugin_provider|gallery_plugin_router" src-tauri/kabegame-core/src/providers/dsl/vd
 ```

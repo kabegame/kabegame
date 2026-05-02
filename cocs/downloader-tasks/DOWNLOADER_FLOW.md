@@ -22,12 +22,12 @@
 
 | 层级 | 文件路径 | 作用 |
 |------|----------|------|
-| 下载队列与 worker | `src-tauri/core/src/crawler/downloader/mod.rs` | DownloadQueue、DownloadPool、download_worker_loop、wait_after_download_if_needed；`DownloadRequest` 可携带 `custom_display_name` / `metadata`（`Option<serde_json::Value>`；来源可为 Rhai `download_image(url, #{ name, metadata })` 或 WebView `ctx.downloadImage` 的同名 opts 字段），入库时写入 `images.display_name` / `images.metadata`（JSON） |
-| 失败重试调度 | `src-tauri/core/src/crawler/scheduler.rs` | `retry_failed_image`、`download_handles`、批量重试/取消 |
-| 设置持久化 | `src-tauri/core/src/settings.rs` | SettingKey::DownloadIntervalMs、get/set_download_interval_ms |
-| 命令层 | `src-tauri/app-main/src/commands/settings.rs` | get_download_interval_ms、set_download_interval_ms |
+| 下载队列与 worker | `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | DownloadQueue、DownloadPool、download_worker_loop、wait_after_download_if_needed；`DownloadRequest` 可携带 `custom_display_name` / `metadata`（`Option<serde_json::Value>`；来源可为 Rhai `download_image(url, #{ name, metadata })` 或 WebView `ctx.downloadImage` 的同名 opts 字段），入库时写入 `images.display_name` / `images.metadata`（JSON） |
+| 失败重试调度 | `src-tauri/kabegame-core/src/crawler/scheduler.rs` | `retry_failed_image`、`download_handles`、批量重试/取消 |
+| 设置持久化 | `src-tauri/kabegame-core/src/settings.rs` | SettingKey::DownloadIntervalMs、get/set_download_interval_ms |
+| 命令层 | `src-tauri/kabegame/src/commands/settings.rs` | get_download_interval_ms、set_download_interval_ms |
 | 前端设置 | `packages/core/src/stores/settings.ts` | downloadIntervalMs、buildSettingKeyMap |
-| 设置项 UI | `apps/main/src/components/settings/items/DownloadIntervalSetting.vue` | 下载间隔设置（桌面 el-input-number，Android 两列 Picker） |
+| 设置项 UI | `apps/kabegame/src/components/settings/items/DownloadIntervalSetting.vue` | 下载间隔设置（桌面 el-input-number，Android 两列 Picker） |
 | 两列 Picker | `packages/core/src/components/AndroidPickerDuration.vue` | 秒+毫秒（100ms 步进）两列选择 |
 
 ---
@@ -58,7 +58,7 @@
 
 ### 与画廊监听相关的 `images-change` / `album-images-change`
 
-下载器在 `src-tauri/core/src/crawler/downloader/mod.rs` 入库时按表拆分广播：**仅影响 `images` 表**时发 `images-change`（`reason: add` 等）；**同时变更 `album_images`**（收藏画册、目标画册等）时另发 `album-images-change`。详见 [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](../gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)。
+下载器在 `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` 入库时按表拆分广播：**仅影响 `images` 表**时发 `images-change`（`reason: add` 等）；**同时变更 `album_images`**（收藏画册、目标画册等）时另发 `album-images-change`。详见 [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](../gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)。
 
 ---
 
@@ -75,8 +75,8 @@
   - `delete_failed_images(ids)`：先 `cancel_retry_failed_images` 再 `Storage::delete_failed_images`，按任务扣减 `failed_count` 并广播 `failed-images-change` + `task-image-counts`。
 - **单条删除**：`delete_task_failed_image(failed_id)` 删除记录后，发送 `removed` 细粒度事件，并广播 `task-image-counts` 更新 `failedCount`。任务删除（`delete_task`）和清除已完成任务（`clear_finished_tasks`）时，会同时删除该任务下所有失败图片记录并发送 `removed` 事件；启动时迁移会清理任务已不存在的孤儿失败图片。
 - **变更事件**：失败图片入库/更新/删除时，后端通过 `failed-images-change`（`DaemonEvent::FailedImagesChange`）广播细粒度 payload：`reason`（`added/removed/updated`）、`taskId`。其中 `added` 使用 `failedImages`（数组），`removed` 使用 `failedImageIds`（数组），`updated` 使用 `failedImage`（单条完整数据）。
-- **前端同步**：`apps/main/src/stores/failedImages.ts` 在 `App.vue` 顶层初始化监听后，不再防抖全量拉取；改为按事件 payload 在内存中做 diff（新增 `unshift`、删除 `splice`、更新按 id 替换），仅在异常 payload 下兜底 `loadAll`。
+- **前端同步**：`apps/kabegame/src/stores/failedImages.ts` 在 `App.vue` 顶层初始化监听后，不再防抖全量拉取；改为按事件 payload 在内存中做 diff（新增 `unshift`、删除 `splice`、更新按 id 替换），仅在异常 payload 下兜底 `loadAll`。
 - **排序**：失败列表统一按 `id DESC`（自增 id 倒序）返回，避免依赖时间字段排序。
 - **进度显示**：任务详情仍监听 `download-state`（preparing/downloading/processing/failed）与 `download-progress`（received_bytes/total_bytes），以 URL 为 key 在前端 `downloadStateMap` 中维护阶段与百分比，失败项卡片展示阶段标签与进度条。
 
-相关命令：[`src-tauri/app-main/src/commands/task.rs`](/src-tauri/app-main/src/commands/task.rs)；前端：`apps/main/src/views/TaskDetail.vue`、`apps/main/src/views/FailedImages.vue`、`apps/main/src/stores/failedImages.ts`。
+相关命令：[`src-tauri/kabegame/src/commands/task.rs`](/src-tauri/kabegame/src/commands/task.rs)；前端：`apps/kabegame/src/views/TaskDetail.vue`、`apps/kabegame/src/views/FailedImages.vue`、`apps/kabegame/src/stores/failedImages.ts`。

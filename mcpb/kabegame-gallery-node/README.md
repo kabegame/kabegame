@@ -4,7 +4,7 @@
 
 ## 功能
 
-桥接器一一映射 `src-tauri/app-main/src/mcp_server.rs` 暴露的资源 / 工具：
+桥接器一一映射 `src-tauri/kabegame/src/mcp_server.rs` 暴露的资源 / 工具：
 
 读类工具（包装 `resources/read`）：
 

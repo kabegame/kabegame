@@ -6,12 +6,12 @@ alwaysApply: false
 
 # 图片类型 / 后缀列表单一数据源
 
-所有需要「列出支持的图片后缀」或「判断是否为支持的图片」的逻辑，必须从 **`src-tauri/core/src/image_type.rs`** 获取，不得在其它文件中写死扩展名列表（如 `["jpg","png",...]`）。
+所有需要「列出支持的图片后缀」或「判断是否为支持的图片」的逻辑，必须从 **`src-tauri/kabegame-core/src/image_type.rs`** 获取，不得在其它文件中写死扩展名列表（如 `["jpg","png",...]`）。
 
 ## 数据源位置
 
-- **Rust 模块**：`crate::image_type`（在 core 内）或 `kabegame_core::image_type`（在 app-main 内）
-- **定义文件**：`src-tauri/core/src/image_type.rs`
+- **Rust 模块**：`crate::image_type`（在 core 内）或 `kabegame_core::image_type`（在 kabegame 内）
+- **定义文件**：`src-tauri/kabegame-core/src/image_type.rs`
 
 ## 应使用的 API（示例）
 

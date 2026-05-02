@@ -1,10 +1,10 @@
 [workspace]
 members = [
-  "src-tauri/core",
+  "src-tauri/kabegame-core",
   "src-tauri/kabegame-i18n",
   "src-tauri/pathql-rs",
-  "src-tauri/app-main",
-  "src-tauri/app-cli",
+  "src-tauri/kabegame",
+  "src-tauri/kabegame-cli",
   "src-tauri-plugins/tauri-plugin-picker",
   "src-tauri-plugins/tauri-plugin-archiver",
   "src-tauri-plugins/tauri-plugin-pathes",
@@ -26,7 +26,7 @@ base64 = "0.22"
 image = "0.24"
 include_dir = "0.7"
 json5 = "0.4"
-kabegame-core = {path = "./src-tauri/core", default-features = false}
+kabegame-core = {path = "./src-tauri/kabegame-core", default-features = false}
 kabegame-i18n = {path = "./src-tauri/kabegame-i18n"}
 pathql-rs = {path = "./src-tauri/pathql-rs", default-features = false}
 regex = "1"

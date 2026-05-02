@@ -108,7 +108,7 @@ async function tryOpenVideo(path: string) {
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 
-// core 版保留通用图片意图；favorite/addToAlbum 等 app-main 专属入口仍在 wrapper 层扩展。
+// core 版保留通用图片意图；favorite/addToAlbum 等 kabegame 专属入口仍在 wrapper 层扩展。
 export type ContextCommand =
   | "detail"
   | "copy"

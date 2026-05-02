@@ -5,5 +5,7 @@
     "rust-lang.rust-analyzer",
     "rhaiscript.vscode-rhai",
     "antfu.unocss"
-  ]
+  ],
+  "rust-analyzer.cargo.features": ["standard"],
+  "rust-analyzer.check.features": ["standard"]
 }

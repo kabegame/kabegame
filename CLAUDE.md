@@ -27,34 +27,34 @@ All top-level commands go through `scripts/run.ts` (a Tapable-based build system
 
 ### Development
 ```bash
-bun dev -c main                  # Start dev server (Vite + Tauri, port 1420)
-bun dev -c main --mode local     # Dev with all plugins bundled locally
-bun dev -c main --mode android   # Android dev
-bun dev -c main --data prod      # Dev against system data dirs (not repo-local data/)
-bun dev:frontend-main            # Frontend only (no Tauri, port 1420)
+bun dev -c kabegame                  # Start dev server (Vite + Tauri, port 1420)
+bun dev -c kabegame --mode local     # Dev with all plugins bundled locally
+bun dev -c kabegame --mode android   # Android dev
+bun dev -c kabegame --data prod      # Dev against system data dirs (not repo-local data/)
+bun dev:frontend            # Frontend only (no Tauri, port 1420)
 ```
 
 ### Build
 ```bash
-bun b                            # Build everything (main + CLI)
-bun b -c main                    # Build main app only
-bun b -c main --skip cargo       # Vue build only
-bun b -c main --skip vue         # Cargo build only
+bun b                            # Build everything (kabegame + kabegame-cli)
+bun b -c kabegame                    # Build main app only
+bun b -c kabegame --skip cargo       # Vue build only
+bun b -c kabegame --skip vue         # Cargo build only
 bun b --release                  # Copy artifacts to release/
-bun b -c main --mode android     # Build Android APK/AAB
+bun b -c kabegame --mode android     # Build Android APK/AAB
 ```
 
 ### Type Checking
 ```bash
-bun check -c main                # Check Vue types + Cargo
-bun check -c main --skip cargo   # Vue types only
+bun check -c kabegame                # Check Vue types + Cargo
+bun check -c kabegame --skip cargo   # Vue types only
 ```
 
 ### Data directory modes (`--data`)
 - `dev` (default for `bun dev`): repo-local `data/` and `cache/` dirs — isolated from installed app
 - `prod` (default for all other commands): system user data dirs (`%LOCALAPPDATA%\Kabegame` on Windows, `~/.local/share/Kabegame` on Linux/macOS)
 - Use `--data prod` during dev to test against real installed data; use `--data dev` in a release build for CI/testing isolation
-- Controlled via `kabegame_data` Rust cfg injected by `src-tauri/{core,app-main}/build.rs`
+- Controlled via `kabegame_data` Rust cfg injected by `src-tauri/{kabegame-core,kabegame}/build.rs`
 
 ### Other
 ```bash
@@ -68,11 +68,11 @@ bun run build:ffmpeg             # Build FFmpeg sidecar (requires libx264)
 ## Architecture
 
 ### Monorepo Layout
-- `apps/main/` — Vue 3 frontend (Vite, Element Plus, Pinia, UnoCSS)
+- `apps/kabegame/` — Vue 3 frontend (Vite, Element Plus, Pinia, UnoCSS)
 - `packages/` — Shared frontend packages (`core`, `i18n`, `image-type`, `photoswipe-vue`)
-- `src-tauri/core/` — `kabegame-core`: shared Rust library (crawler engine, plugin system, storage)
-- `src-tauri/app-main/` — Tauri GUI app (desktop + Android)
-- `src-tauri/app-cli/` — Headless CLI
+- `src-tauri/kabegame-core/` — `kabegame-core`: shared Rust library (crawler engine, plugin system, storage)
+- `src-tauri/kabegame/` — Tauri GUI app (desktop + Android)
+- `src-tauri/kabegame-cli/` — Headless CLI
 - `src-tauri-plugins/` — Custom Tauri plugins (picker, archiver, pathes, share, compress, wallpaper, task-notification)
 - `src-crawler-plugins/` — Rhai-based crawler plugins packaged as `.kgpg` archives
 
@@ -93,7 +93,7 @@ bun run build:ffmpeg             # Build FFmpeg sidecar (requires libx264)
 **Android modals** — Every overlay (dialog, drawer, ActionSheet, preview) must call `useModalBack(visibleRef)` from `@kabegame/core/composables/useModalBack` so the Android back button closes layers in stack order. The composable is a no-op on desktop; use it everywhere regardless of platform.
 
 ### Styling
-New styles should use **UnoCSS utility classes** (configured in `uno.config.pub.ts` and `apps/main/uno.config.ts`, using `presetWind3` — Tailwind-compatible syntax). Only write `<style>` blocks for complex animations or third-party overrides. Extract repeated class combinations into shortcuts in `uno.config.*.ts`.
+New styles should use **UnoCSS utility classes** (configured in `uno.config.pub.ts` and `apps/kabegame/uno.config.ts`, using `presetWind3` — Tailwind-compatible syntax). Only write `<style>` blocks for complex animations or third-party overrides. Extract repeated class combinations into shortcuts in `uno.config.*.ts`.
 
 ### Platform-Specific Notes
 - **Windows/macOS/Linux**: Virtual disk (Dokan / macFUSE / FUSE) for wallpaper mounting

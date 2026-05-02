@@ -6,7 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SIDECAR_DIR="${REPO_ROOT}/src-tauri/app-main/sidecar"
+SIDECAR_DIR="${REPO_ROOT}/src-tauri/kabegame/sidecar"
 
 # Windows/Git Bash/MSYS2：让 ffmpeg 能找到同目录的 libx264-165.dll
 export PATH="${SIDECAR_DIR}:$PATH"

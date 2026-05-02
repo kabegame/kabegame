@@ -30,8 +30,8 @@ services:
       - -lc
       - >-
         { [ -d node_modules ] && [ -n "$(ls -A node_modules 2>/dev/null)" ]; } || bun install --frozen-lockfile
-        && bun b -c cli
-        && bun b -c main --mode standard --release --no-nx
+        && bun b -c kabegame-cli
+        && bun b -c kabegame --mode standard --release --no-nx
 
   pack-light:
     <<: *linux-release
@@ -40,8 +40,8 @@ services:
       - -lc
       - >-
         { [ -d node_modules ] && [ -n "$(ls -A node_modules 2>/dev/null)" ]; } || bun install --frozen-lockfile
-        && bun b -c cli
-        && bun b -c main --mode light --release --no-nx
+        && bun b -c kabegame-cli
+        && bun b -c kabegame --mode light --release --no-nx
 
 volumes:
   linux-release-cargo-target:

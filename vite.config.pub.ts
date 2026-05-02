@@ -34,7 +34,7 @@ export default {
     __REBOOT__: true,
   },
 
-  // 使用 apps/main/public 作为 public 目录（main app 专用）
+  // 使用 apps/kabegame/public 作为 public 目录（main app 专用）
   // 根目录 static 的共享资源通过插件复制（见下方插件）
   publicDir: path.resolve(root, "static"),
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 一键编译 FFmpeg：仅生成「视频缩放 + mov/mp4 压缩」所需组件（最小化编译）。
 # 功能：读 mov/mp4/mkv 等 → scale 缩放 → libx264 编码 → 输出 mp4。
-# 输出到 src-tauri/app-main/sidecar/，供 Tauri externalBin（sidecar）使用。
+# 输出到 src-tauri/kabegame/sidecar/，供 Tauri externalBin（sidecar）使用。
 # 文件名须符合 Tauri 约定：ffmpeg-kb-{target_triple}[.exe]（如 ffmpeg-kb-x86_64-apple-darwin），避免与系统 /usr/bin/ffmpeg 冲突。
 # 在目标系统上直接执行即可（Windows/Linux/macOS 各在真实环境编译）。
 #
@@ -15,7 +15,7 @@ set -e
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FFMPEG_SRC="${REPO_ROOT}/third/FFmpeg"
-SIDECAR_DIR="${REPO_ROOT}/src-tauri/app-main/sidecar"
+SIDECAR_DIR="${REPO_ROOT}/src-tauri/kabegame/sidecar"
 BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build"
 
 # Tauri externalBin 约定：二进制名为 binary-{target_triple}[.exe]

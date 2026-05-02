@@ -74,13 +74,13 @@ jobs:
         run: cargo install tauri-cli --version 2.10.0
 
       - name: Build CLI (required before main packaging)
-        run: bun b -c cli
+        run: bun b -c kabegame-cli
 
       - name: Build main standard release package
-        run: bun b -c main --mode standard --release
+        run: bun b -c kabegame --mode standard --release
 
       - name: Build main light release package
-        run: bun b -c main --mode light --release
+        run: bun b -c kabegame --mode light --release
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
