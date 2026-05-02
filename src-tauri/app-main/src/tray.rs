@@ -203,15 +203,8 @@ fn handle_tray_icon_event(
             return;
         }
 
-        // 切换主窗口显示/隐藏
-        if let Some(main_window) = app.get_webview_window("main") {
-            let is_visible = main_window.is_visible().unwrap_or(false);
-            if is_visible {
-                let _ = main_window.hide();
-            } else if startup::ensure_main_window(app.clone()).is_err() {
-                eprintln!("[托盘] 显示窗口失败");
-            }
-        } else if startup::ensure_main_window(app.clone()).is_err() {
+        // 左键点击托盘总是显示并激活主窗口，不再切换隐藏。
+        if startup::ensure_main_window(app.clone()).is_err() {
             eprintln!("[托盘] 创建并显示窗口失败");
         }
     }

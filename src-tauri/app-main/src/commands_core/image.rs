@@ -14,9 +14,6 @@ use kabegame_core::providers::{
 use kabegame_core::storage::image_events::{
     delete_images_with_events, toggle_image_favorite_with_event,
 };
-use kabegame_core::storage::image_events::{
-    delete_images_with_events, toggle_image_favorite_with_event,
-};
 use kabegame_core::storage::Storage;
 use serde_json::Value;
 

@@ -69,13 +69,10 @@ export async function setWallpaperByImageIdWithModeFallback(
 }
 
 export async function setWallpaperOrBackground(imageId: string): Promise<void> {
-  console.log("[AppBackground] setWallpaperOrBackground", { imageId, isWeb: IS_WEB });
   if (IS_WEB) {
     await useSettingsStore().save("currentWallpaperImageId", imageId);
-    console.log("[AppBackground] saved currentWallpaperImageId to local settings", { imageId });
     return;
   }
 
   await setWallpaperByImageIdWithModeFallback(imageId);
-  console.log("[AppBackground] desktop wallpaper command completed", { imageId });
 }

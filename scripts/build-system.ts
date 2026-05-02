@@ -205,8 +205,8 @@ export class BuildSystem {
       const args = this.buildTauriArgs(
         ["android", "dev"],
         features,
-        compileArgs,
         this.options.args,
+        compileArgs,
       );
       run("tauri", args, { cwd, bin: "cargo" });
     } else if (this.context.mode!.isWeb) {
@@ -242,8 +242,8 @@ export class BuildSystem {
       const args = this.buildTauriArgs(
         ["dev"],
         features,
-        compileArgs,
         this.options.args,
+        compileArgs,
       );
       run("tauri", args, { cwd, bin: "cargo" });
     }

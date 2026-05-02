@@ -10,7 +10,7 @@
             <template #before-grid>
               <!-- 顶部工具栏 -->
               <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
-                :month-options="monthOptions" :month-loading="monthOptionsLoading" :filter="galleryRouteStore.filter"
+                :filter="galleryRouteStore.filter"
                 :sort="galleryRouteStore.sort" :page-size="pageSize" :search="search" v-model:selectedRange="selectedRange"
                 :provider-context-prefix="galleryRouteStore.contextPath"
                 @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
@@ -221,8 +221,6 @@ type GalleryBrowseResult = {
   note?: { title: string; content: string } | null;
 };
 
-const monthOptions = ref<string[]>([]);
-const monthOptionsLoading = ref(false);
 const selectedRange = ref<[string, string] | null>(null);
 
 const extractRangeFromProviderRoot = (
@@ -271,28 +269,6 @@ watch(
   },
   { immediate: true }
 );
-
-const loadMonthOptions = async () => {
-  monthOptionsLoading.value = true;
-  try {
-    const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
-      path: "date/",
-    });
-    const months = (res?.entries ?? [])
-      .filter((e) => e.kind === "dir")
-      .map((e) => (e as any).name as string)
-      .filter(Boolean)
-      .sort()
-      .reverse();
-
-    // 过滤掉范围入口（后端会额外插入“范围”目录）
-    monthOptions.value = months.filter((m) => m !== "范围");
-  } catch (e) {
-    console.error("加载月份列表失败:", e);
-  } finally {
-    monthOptionsLoading.value = false;
-  }
-};
 
 const listenersCreated = ref(false);
 const showCrawlerDialog = ref(false);
@@ -577,12 +553,9 @@ watch(
 );
 
 const handleManualRefresh = async () => {
-  // 手动刷新：刷新画廊数据 + 同步刷新月份下拉框选项
+  // 手动刷新：刷新画廊数据。
   clearImageStateCache();
-  await Promise.allSettled([
-    loadImages(true),
-    loadMonthOptions(),
-  ]);
+  await loadImages(true);
   await loadTotalImagesCount();
 };
 
@@ -1101,7 +1074,6 @@ onMounted(async () => {
   });
   // 注意：任务列表与运行配置在 crawler store 初始化时加载；已安装插件在 App.vue onMounted 中 loadPlugins
   loadTotalImagesCount(); // 加载总图片数
-  loadMonthOptions(); // 加载月份下拉框选项
 
   // 如果监听器已经创建，跳过重复创建
   if (listenersCreated.value) {

@@ -18,7 +18,7 @@ mod commands;
 
 mod commands_core;
 
-#[cfg(all(feature = "local", target_os = "android"))]
+#[cfg(all(not(feature = "web"), target_os = "android"))]
 mod compress_provider;
 #[cfg(all(not(feature = "web"), target_os = "android"))]
 mod content_io_provider;
@@ -173,7 +173,7 @@ fn init(
     // 初始化插件缓存
     init_kgpg_plugin();
 
-    #[cfg(all(not(target_os = "android"), feature = "local"))]
+    #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     tauri::async_runtime::block_on(http_server::start_http_server());
 
     Ok(())
@@ -548,25 +548,33 @@ pub fn run() {
 
     app.run(|app_handle: &tauri::AppHandle, event| {
         #[cfg(target_os = "macos")]
-        if let tauri::RunEvent::Opened { urls } = event {
-            for url in urls {
-                if let Ok(path) = url.to_file_path() {
-                    use std::ffi::OsStr;
-
-                    if path.extension() == Some(OsStr::new("kgpg")) {
-                        let _ = app_handle.emit(
-                            "app-import-plugin",
-                            serde_json::json!({
-                                "kgpgPath": path.to_string_lossy()
-                            }),
-                        );
-                    } else {
-                        eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法将路径转换为字符串: {:?}", path);
-                    }
-                } else {
-                    eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法从 URL 提取文件路径: {}", url);
+        match event {
+            tauri::RunEvent::Reopen { .. } => {
+                if let Err(e) = startup::ensure_main_window(app_handle.clone()) {
+                    eprintln!("[macOS] Dock 点击显示主窗口失败: {}", e);
                 }
             }
+            tauri::RunEvent::Opened { urls } => {
+                for url in urls {
+                    if let Ok(path) = url.to_file_path() {
+                        use std::ffi::OsStr;
+
+                        if path.extension() == Some(OsStr::new("kgpg")) {
+                            let _ = app_handle.emit(
+                                "app-import-plugin",
+                                serde_json::json!({
+                                    "kgpgPath": path.to_string_lossy()
+                                }),
+                            );
+                        } else {
+                            eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法将路径转换为字符串: {:?}", path);
+                        }
+                    } else {
+                        eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法从 URL 提取文件路径: {}", url);
+                    }
+                }
+            }
+            _ => {}
         }
     });
 }

@@ -5,10 +5,10 @@
   "identifier": "Kabegame",
   "build": {
     "beforeDevCommand": "bun run dev:frontend-main",
-    "devUrl": "http://localhost:1420",
-    "frontendDist": "../../dist-main"
+    "devUrl": "http://localhost:1420"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [],
     "security": {
       "capabilities": ["main-capability", "crawler-capability"],
@@ -22,7 +22,7 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis"
+      "dmg"
     ],
     "icon": [
       "./icons/32x32.png", 
@@ -60,8 +60,9 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libayatana-appindicator3-1"],
+        "depends": ["fuse3", "libayatana-appindicator3-1"],
         "files": {
+          "/usr/bin/kabegame-cli": "../../target/release/kabegame-cli",
           "/usr/share/mime/packages/kabegame-kgpg.xml": "./deb/kabegame-kgpg.xml",
           "/usr/share/icons/hicolor/256x256/mimetypes/application-x-kabegame-kgpg.png": "./icons/icon.png"
         },
