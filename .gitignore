@@ -9,7 +9,9 @@ lerna-debug.log*
 
 node_modules
 dist-*
-!dist-main/.gitkeep
+!dist-kabegame/
+dist-kabegame/*
+!dist-kabegame/.gitkeep
 *.local
 
 /release
@@ -21,19 +23,19 @@ dist-*
 .idea
 .DS_Store
 
-# app main 的 tauri config 是动态生成的
+# kabegame 的 tauri config 是动态生成的
 # src-tauri/*/tauri.conf.json
 
 # Tauri
 target
-# app-main capability 由 handlebars 生成
-src-tauri/app-main/capabilities/main.json
-# apps/main/index.html 由 handlebars 生成（见 index.html.handlebars）
-apps/main/index.html
+# kabegame capability 由 handlebars 生成
+src-tauri/kabegame/capabilities/main.json
+# apps/kabegame/index.html 由 handlebars 生成（见 index.html.handlebars）
+apps/kabegame/index.html
 src-tauri/*/gen/schemas/*
 # 插件 permissions 下的 schema.json 由 tauri_plugin::Builder 在 cargo build 时生成
 src-tauri-plugins/**/permissions/schemas/schema.json
-src-tauri/app-main/resources/bin/*
+src-tauri/kabegame/resources/bin/*
 
 # development data
 /data

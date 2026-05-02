@@ -23,9 +23,9 @@
 
 ### 命令：`browse_gallery_provider`
 
-- **位置**：[`src-tauri/app-main/src/commands/image.rs`](/src-tauri/app-main/src/commands/image.rs)（Tauri 命令，参数 `page_size`）。
+- **位置**：[`src-tauri/kabegame/src/commands/image.rs`](/src-tauri/kabegame/src/commands/image.rs)（Tauri 命令，参数 `page_size`）。
 - **前端 invoke**：必须使用 **camelCase** 参数名 **`pageSize`**（与 Tauri 对前端参数名的约定一致），否则会出现缺少参数错误。
-- **实现**：[`src-tauri/core/src/gallery/browse.rs`](/src-tauri/core/src/gallery/browse.rs) 的 `browse_gallery_provider(storage, provider_rt, path, page_size)`。
+- **实现**：[`src-tauri/kabegame-core/src/gallery/browse.rs`](/src-tauri/kabegame-core/src/gallery/browse.rs) 的 `browse_gallery_provider(storage, provider_rt, path, page_size)`。
 
 ### SimplePage 分支（可配置页大小）
 
@@ -37,13 +37,13 @@
 
 为减少翻页时读取/传输/解析整页 `images.metadata`（插件写入的 JSON），**浏览列表**路径统一不返回 metadata：
 
-- **`get_images_info_range_by_query`**（[`storage/gallery.rs`](/src-tauri/core/src/storage/gallery.rs)）：SELECT 中对 `metadata` 使用 `NULL`，构造的 `ImageInfo.metadata` 恒为 `None`。
-- **`fs_entries_to_gallery_browse`**（[`gallery/browse.rs`](/src-tauri/core/src/gallery/browse.rs)）：`find_image_by_id` 后把 `image.metadata` 置为 `None`，与 SimplePage 行为一致。
+- **`get_images_info_range_by_query`**（[`storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)）：SELECT 中对 `metadata` 使用 `NULL`，构造的 `ImageInfo.metadata` 恒为 `None`。
+- **`fs_entries_to_gallery_browse`**（[`gallery/browse.rs`](/src-tauri/kabegame-core/src/gallery/browse.rs)）：`find_image_by_id` 后把 `image.metadata` 置为 `None`，与 SimplePage 行为一致。
 
 详情区（EJS / 原始键值）按需加载：
 
-- **命令**：`get_image_metadata`（[`app-main/src/commands/image.rs`](/src-tauri/app-main/src/commands/image.rs)），参数 **`imageId`**（与前端 camelCase 一致）。
-- **实现**：[`Storage::get_image_metadata`](/src-tauri/core/src/storage/images.rs) 仅 `SELECT metadata FROM images WHERE id = ?`。
+- **命令**：`get_image_metadata`（[`kabegame/src/commands/image.rs`](/src-tauri/kabegame/src/commands/image.rs)），参数 **`imageId`**（与前端 camelCase 一致）。
+- **实现**：[`Storage::get_image_metadata`](/src-tauri/kabegame-core/src/storage/images.rs) 仅 `SELECT metadata FROM images WHERE id = ?`。
 
 ### 与 VD / Greedy 的区别
 
@@ -53,7 +53,7 @@
 ### 设置持久化
 
 - **Rust**：`SettingKey::GalleryPageSize`、getter/setter（与 `gallery_grid_columns` 同类模式）。
-- **CLI IPC**：[`src-tauri/app-main/src/ipc/handlers/gallery.rs`](/src-tauri/app-main/src/ipc/handlers/gallery.rs) 对 `browse_gallery_provider` 传固定 `100`（CLI 不需要可配页大小）。
+- **CLI IPC**：[`src-tauri/kabegame/src/ipc/handlers/gallery.rs`](/src-tauri/kabegame/src/ipc/handlers/gallery.rs) 对 `browse_gallery_provider` 传固定 `100`（CLI 不需要可配页大小）。
 
 ## 前端
 
@@ -65,13 +65,13 @@
 
 ### 路由与页码
 
-- **Composable**：[`apps/main/src/composables/useProviderPathRoute.ts`](/apps/main/src/composables/useProviderPathRoute.ts)  
+- **Composable**：[`apps/kabegame/src/composables/useProviderPathRoute.ts`](/apps/kabegame/src/composables/useProviderPathRoute.ts)  
   - 仅维护 `currentPath / providerRootPath / currentPage`，不再额外暴露 `currentOffset`。  
   - 大页分页器直接使用 `currentPage`，`pageSize` 只用于后端查询条数与翻页重载。
 
 ### 拉取当前页图片
 
-- **Composable**：[`apps/main/src/composables/useGalleryImages.ts`](/apps/main/src/composables/useGalleryImages.ts)  
+- **Composable**：[`apps/kabegame/src/composables/useGalleryImages.ts`](/apps/kabegame/src/composables/useGalleryImages.ts)  
   - `invoke("browse_gallery_provider", { path, pageSize: unref(pageSize) })`  
   - `jumpToBigPage` 等内部与 `pageSize` 对齐。
   - 可选第 4 个参数 `onBeforeFetch`：在每次 `browse_gallery_provider` 请求前调用；画廊页传入 **`useProvideImageMetadataCache` 的 `clearCache`**，换页时清空 per-page metadata 缓存。
@@ -80,25 +80,25 @@
 
 - **Composable**：[`packages/core/src/composables/useImageMetadataCache.ts`](/packages/core/src/composables/useImageMetadataCache.ts) — `useProvideImageMetadataCache()` 向子组件树 `provide` 懒加载解析器（内部 `Map` 缓存 + `invoke("get_image_metadata", { imageId })`）。
 - **详情 UI**：[`packages/core/src/components/common/ImageDetailContent.vue`](/packages/core/src/components/common/ImageDetailContent.vue) — `inject` 解析器；若列表项已有可渲染 `metadata` 则直接用，否则异步拉取并合并为 `effectiveMetadata`。
-- **接入视图**（在拉取当前 leaf 前 `clearCache`）：[`Gallery.vue`](/apps/main/src/views/Gallery.vue)（经 `useGalleryImages` 的 `onBeforeFetch`）、[`AlbumDetail.vue`](/apps/main/src/views/AlbumDetail.vue)、[`TaskDetail.vue`](/apps/main/src/views/TaskDetail.vue)、[`SurfImages.vue`](/apps/main/src/views/SurfImages.vue)。
+- **接入视图**（在拉取当前 leaf 前 `clearCache`）：[`Gallery.vue`](/apps/kabegame/src/views/Gallery.vue)（经 `useGalleryImages` 的 `onBeforeFetch`）、[`AlbumDetail.vue`](/apps/kabegame/src/views/AlbumDetail.vue)、[`TaskDetail.vue`](/apps/kabegame/src/views/TaskDetail.vue)、[`SurfImages.vue`](/apps/kabegame/src/views/SurfImages.vue)。
 
 ### 使用 SimplePage 列表的视图（需统一）
 
 以下视图从设置读取 `galleryPageSize`，传入 `useProviderPathRoute` 与 `useGalleryImages`，并在 **`pageSize` 变化时回到第 1 页并刷新**（`watch` 内 `navigateToPage(1)` 等）：
 
-- [`apps/main/src/views/Gallery.vue`](/apps/main/src/views/Gallery.vue)
-- [`apps/main/src/views/AlbumDetail.vue`](/apps/main/src/views/AlbumDetail.vue)
-- [`apps/main/src/views/TaskDetail.vue`](/apps/main/src/views/TaskDetail.vue)
-- [`apps/main/src/views/SurfImages.vue`](/apps/main/src/views/SurfImages.vue)
+- [`apps/kabegame/src/views/Gallery.vue`](/apps/kabegame/src/views/Gallery.vue)
+- [`apps/kabegame/src/views/AlbumDetail.vue`](/apps/kabegame/src/views/AlbumDetail.vue)
+- [`apps/kabegame/src/views/TaskDetail.vue`](/apps/kabegame/src/views/TaskDetail.vue)
+- [`apps/kabegame/src/views/SurfImages.vue`](/apps/kabegame/src/views/SurfImages.vue)
 
 部分视图还会直接 `invoke("browse_gallery_provider", { path, pageSize })` 做「仅取 total」或「月份列表」等辅助请求，**同样需要传 `pageSize`**。
 
 ### UI：每页条数入口
 
-- **画廊**：[`GalleryToolbar.vue`](/apps/main/src/components/GalleryToolbar.vue)（桌面下拉；Android：header fold + `van-picker`）。
-- **画册详情**：[`AlbumDetailBrowseToolbar.vue`](/apps/main/src/components/AlbumDetailBrowseToolbar.vue) + [`GalleryPageSizeControl.vue`](/apps/main/src/components/GalleryPageSizeControl.vue)；Android 在 [`AlbumDetailPageHeader.vue`](/apps/main/src/components/header/AlbumDetailPageHeader.vue) fold 中增加与画廊相同的 `HeaderFeatureId.GalleryPageSize`。
+- **画廊**：[`GalleryToolbar.vue`](/apps/kabegame/src/components/GalleryToolbar.vue)（桌面下拉；Android：header fold + `van-picker`）。
+- **画册详情**：[`AlbumDetailBrowseToolbar.vue`](/apps/kabegame/src/components/AlbumDetailBrowseToolbar.vue) + [`GalleryPageSizeControl.vue`](/apps/kabegame/src/components/GalleryPageSizeControl.vue)；Android 在 [`AlbumDetailPageHeader.vue`](/apps/kabegame/src/components/header/AlbumDetailPageHeader.vue) fold 中增加与画廊相同的 `HeaderFeatureId.GalleryPageSize`。
 - **任务 / 畅游**：分页器上方工具行内嵌 `GalleryPageSizeControl`（`android-ui="inline"`）。
-- **设置**：[`GalleryPageSizeSetting.vue`](/apps/main/src/components/settings/items/GalleryPageSizeSetting.vue)，[`Settings.vue`](/apps/main/src/views/Settings.vue) 应用设置区。
+- **设置**：[`GalleryPageSizeSetting.vue`](/apps/kabegame/src/components/settings/items/GalleryPageSizeSetting.vue)，[`Settings.vue`](/apps/kabegame/src/views/Settings.vue) 应用设置区。
 
 ### i18n
 
@@ -112,13 +112,13 @@
 
 - 后端通过 `GlobalEmitter::emit_images_change` 广播，**`reason` 仅为** `add` / `delete` / `change`（如原 `wallpaper-set` 已并入 `change`）。
 - Payload：`imageIds`，以及可选的 **`taskIds` / `surfRecordIds`**（用于任务详情 / 畅游等视图过滤）；**不再包含画册维度**（已拆出见下）。
-- 前端：`apps/main/src/composables/useImagesChangeRefresh.ts`。
+- 前端：`apps/kabegame/src/composables/useImagesChangeRefresh.ts`。
 
 ### `album-images-change`（`DaemonEvent::AlbumImagesChange`，`album_images` 表）
 
 - 后端通过 `emit_album_images_change`，`reason` 为 `add` / `delete`（对应收藏/画册增删成员等）。
 - Payload：`albumIds`、`imageIds`。
-- 前端：`apps/main/src/composables/useAlbumImagesChangeRefresh.ts`；画册列表预览、收藏星标就地更新等依赖此事件。
+- 前端：`apps/kabegame/src/composables/useAlbumImagesChangeRefresh.ts`；画册列表预览、收藏星标就地更新等依赖此事件。
 - Plasma 壁纸插件（`src-plasma-wallpaper-plugin/plugin/wallpaperbackend.cpp`）同时订阅上述两类事件：画册路径以 `album-images-change` 为主；`images-change` 在画册视图下主要响应 `delete`/`change`（删文件、壁纸顺序等）。
 
 ## 排查清单
@@ -131,10 +131,10 @@
 
 | 层级 | 文件 |
 |------|------|
-| Rust 浏览 | `src-tauri/core/src/gallery/browse.rs` |
-| Tauri 命令 | `src-tauri/app-main/src/commands/image.rs` |
-| IPC 默认页大小 | `src-tauri/app-main/src/ipc/handlers/gallery.rs` |
-| 设置 | `src-tauri/core/src/settings.rs` |
+| Rust 浏览 | `src-tauri/kabegame-core/src/gallery/browse.rs` |
+| Tauri 命令 | `src-tauri/kabegame/src/commands/image.rs` |
+| IPC 默认页大小 | `src-tauri/kabegame/src/ipc/handlers/gallery.rs` |
+| 设置 | `src-tauri/kabegame-core/src/settings.rs` |
 | 前端设置 | `packages/core/src/stores/settings.ts` |
-| 路由 offset | `apps/main/src/composables/useProviderPathRoute.ts` |
-| 列表加载 | `apps/main/src/composables/useGalleryImages.ts` |
+| 路由 offset | `apps/kabegame/src/composables/useProviderPathRoute.ts` |
+| 列表加载 | `apps/kabegame/src/composables/useGalleryImages.ts` |

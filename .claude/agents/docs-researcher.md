@@ -46,9 +46,9 @@ audience: <end user | plugin author | all users>
 <Every user-visible behavior, grouped. For each bullet include path:line citations.>
 
 - **<Capability name>** — <one-line description>
-  - Entry: `apps/main/src/views/Foo.vue:42`
-  - Store: `apps/main/src/stores/foo.ts:88`
-  - Backend: `src-tauri/app-main/src/commands/foo.rs:120`
+  - Entry: `apps/kabegame/src/views/Foo.vue:42`
+  - Store: `apps/kabegame/src/stores/foo.ts:88`
+  - Backend: `src-tauri/kabegame/src/commands/foo.rs:120`
   - UI text: `packages/i18n/src/locales/zh/foo.json` key `foo.bar` = "实际中文文案"
   - Platforms: Windows / macOS / Linux (not Android — gated by `#[cfg(...)]` at `...:NN`)
 

@@ -18,6 +18,7 @@
 
 ### Changed
 
+- **Kabegame workspace naming:** Renamed the remaining `app-main`, `app-cli`, `core`, and `apps/main` workspace directories to `kabegame`, `kabegame-cli`, `kabegame-core`, and `apps/kabegame`. Build component flags, `KABEGAME_COMPONENT` values, Nx targets, npm scripts, frontend package metadata, Tauri config paths, and release/build documentation now use the same `kabegame` / `kabegame-cli` naming as the Rust crate names. The desktop and Android product identifiers remain unchanged, so installed app data is not migrated.
 - **Provider path semantics:** Pagination, plain limit, ordering, count, child listing, and metadata lookup semantics are now represented consistently in provider paths. Page-list folders are exposed across equivalent gallery and virtual-disk branches rather than only under `all`.
 - **MCP/provider automation:** MCP-facing provider reads now have clearer path semantics and can use the DSL-backed provider tree directly for gallery browsing, raw image enumeration, image metadata, and album-order workflows.
 - **Gallery / AlbumDetail sticky scrolling:** Gallery and AlbumDetail now use the `ImageGrid` scroll context for their page header, browse toolbar, and big paginator, so sticky headers and paginators pin inside the same scroll container as the image grid. Horizontal layouts keep the inner horizontal scroll container to preserve item sizing.
@@ -55,7 +56,7 @@
 
 ### Fixed
 
-- **Drag-scroll silently no-op in horizontal layout:** `enableDragScroll` (`packages/core/src/utils/dragScroll.ts`) only wrote `container.scrollTop` during pointermove, so the "grab and pull" gesture did nothing in the new horizontal gallery layout. The handler now writes both `scrollLeft` and `scrollTop` from a single `(startScrollLeft - dx, startScrollTop - dy)` formula — unscrollable axes are naturally ignored by the browser so no axis detection is needed. Drag threshold switched to `Math.hypot(dx, dy)` so it triggers on any-direction motion; velocity is tracked per axis (`velocityX` / `velocityY`) and the overspeed hint dispatches on the velocity magnitude; release inertia decays on both axes with a shared `friction` tick. Pointer listeners moved to capture phase with `passive: false` on pointermove, matching the older `apps/main/src/utils/dragScroll.ts` convention — child components (ImageItem) can no longer swallow pointerdown before drag-scroll sees it.
+- **Drag-scroll silently no-op in horizontal layout:** `enableDragScroll` (`packages/core/src/utils/dragScroll.ts`) only wrote `container.scrollTop` during pointermove, so the "grab and pull" gesture did nothing in the new horizontal gallery layout. The handler now writes both `scrollLeft` and `scrollTop` from a single `(startScrollLeft - dx, startScrollTop - dy)` formula — unscrollable axes are naturally ignored by the browser so no axis detection is needed. Drag threshold switched to `Math.hypot(dx, dy)` so it triggers on any-direction motion; velocity is tracked per axis (`velocityX` / `velocityY`) and the overspeed hint dispatches on the velocity magnitude; release inertia decays on both axes with a shared `friction` tick. Pointer listeners moved to capture phase with `passive: false` on pointermove, matching the older `apps/kabegame/src/utils/dragScroll.ts` convention — child components (ImageItem) can no longer swallow pointerdown before drag-scroll sees it.
 - **Gallery filter dropdown counts ignored hide + search context:** "按插件 / 按媒体类型 / 按日期" option counts were fetched via the legacy aggregate SQL commands (`get_gallery_plugin_groups` / `get_gallery_media_type_counts` / `get_gallery_time_filter_data`), which ran over the whole `images` table regardless of active hide state or search query. When hide was on, the dropdown showed totals that included hidden images; when a search query was active, it showed totals that ignored the search. Counts now come from `list_provider_children` under `galleryRouteStore.contextPath`, so hide and search both flow through via the composed query. Plugin options with zero matches under the current context drop off the dropdown; date months/days with zero counts are pruned before descending.
 - **Gallery total count path:** `loadTotalImagesCount` now issues the no-suffix Entry-mode request via `asEntryPath(galleryRouteStore.currentPath)` — a single COUNT against the composed query instead of a trailing-slash List query that also triggered `list_children` + `list_images`. COUNT SQL already ignores `LIMIT`/`OFFSET`, so the page segment in `currentPath` is harmless.
 - **Android / add-to-album dialog:** The album picker popup (Vant `van-popup` inside `AndroidPickerSelect`) could be rendered below the surrounding `el-dialog` because Vant's default `z-index` (`2000`) matched Element Plus's initial popup counter. `AndroidPickerSelect` now pulls a fresh value from Element Plus's shared counter via `useZIndex().nextZIndex()` every time the picker opens and binds it to the popup, so the picker always stacks above any dialog/drawer that spawned it.
@@ -84,7 +85,7 @@
 - **Database migration overhaul** — The legacy inline migration code (hundreds of lines of `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ADD COLUMN` / `perform_complex_migrations` etc.) has been removed. The database schema is now defined in a single authoritative `migrations/init.rs`.
   - **Upgrade path**: Only users on **v3.5.x** (database `user_version = 7`) are supported for a seamless upgrade. Users on older versions will see an error on launch and must either upgrade to v3.5.x first, or delete their user data directory and re-import local images.
   - **Linux (deb)**: Running `apt purge kabegame` now also removes user data directories (`~/.local/share/com.kabegame`, `~/.config/com.kabegame`, `~/.cache/com.kabegame`). Use `apt remove` to uninstall without deleting data.
-- Future database migrations should be added as versioned files under `src-tauri/core/src/storage/migrations/` following the pattern described in `migrations/mod.rs`.
+- Future database migrations should be added as versioned files under `src-tauri/kabegame-core/src/storage/migrations/` following the pattern described in `migrations/mod.rs`.
 
 ### Added
 
@@ -530,9 +531,9 @@
 
 ### Changed
 
-- 经过各种考虑，去掉daemon，改成app-main内嵌服务，原因如下：
+- 经过各种考虑，去掉daemon，改成kabegame内嵌服务，原因如下：
   1. daemon状态管理太复杂
-  2. 与app-main的交互存在显著性能开销
+  2. 与kabegame的交互存在显著性能开销
   3. 未来做self-hosted不好迁移
   4. 用户无法轻易关闭的后台服务很令人反感。
 

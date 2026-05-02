@@ -45,7 +45,7 @@ useModalBack(visible);
 </script>
 
 <style lang="scss">
-/* 与 apps/main CrawlerDialog 一致：限制整窗高度，仅 body 内滚动（teleport 到 body，需非 scoped） */
+/* 与 apps/kabegame CrawlerDialog 一致：限制整窗高度，仅 body 内滚动（teleport 到 body，需非 scoped） */
 .image-detail-dialog.el-dialog {
   height: auto !important;
   max-height: 90vh !important;

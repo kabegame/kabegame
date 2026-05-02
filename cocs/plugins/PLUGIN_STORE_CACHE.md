@@ -12,7 +12,7 @@
 | **插件包缓存** | 磁盘 `cache_dir/store-cache/<source_id>/<plugin_id>.kgpg` | 安装/预览：在版本匹配时复用已下载的 `.kgpg`，减少重复下载 |
 | **已安装插件** | `data_dir/plugins-directory/*.kgpg` | 用户实际使用的插件，与商店缓存无关 |
 
-路径由 `AppPaths` 计算（`store_cache_dir`、`store_plugin_cache_file` 等），见 `src-tauri/core/src/app_paths.rs`。
+路径由 `AppPaths` 计算（`store_cache_dir`、`store_plugin_cache_file` 等），见 `src-tauri/kabegame-core/src/app_paths.rs`。
 
 ---
 
@@ -44,12 +44,12 @@
 
 | 层级 | 文件路径 | 作用 |
 |------|----------|------|
-| 列表 + 双级缓存核心 | `src-tauri/core/src/plugin/mod.rs` | `fetch_store_plugins`、`fetch_plugins_from_source_cached`、`fetch_plugins_from_source`、`ensure_plugin_cached`、`download_plugin_to_temp` |
-| index 持久化 | `src-tauri/core/src/storage/plugin_sources.rs` | `get_source_cache`、`get_source_cache_row`（含 `updated_at`）、`save_source_cache` |
-| 安装预览命令 | `src-tauri/app-main/src/commands/plugin.rs` | `preview_store_install`：有 `source_id`+`version` 时走 `ensure_plugin_cached` |
-| IPC | `src-tauri/app-main/src/ipc/handlers/plugin.rs` | CLI/侧车同源逻辑 |
-| 路径 | `src-tauri/core/src/app_paths.rs` | `store_cache_dir`、`store_plugin_cache_dir`、`store_plugin_cache_file` |
-| 前端 | `apps/main/src/views/PluginBrowser.vue` | `loadStorePlugins`；手动刷新 `forceRefresh: true`；`revalidateStorePluginsInBackground` 传 `revalidateIfStaleAfterSecs` |
+| 列表 + 双级缓存核心 | `src-tauri/kabegame-core/src/plugin/mod.rs` | `fetch_store_plugins`、`fetch_plugins_from_source_cached`、`fetch_plugins_from_source`、`ensure_plugin_cached`、`download_plugin_to_temp` |
+| index 持久化 | `src-tauri/kabegame-core/src/storage/plugin_sources.rs` | `get_source_cache`、`get_source_cache_row`（含 `updated_at`）、`save_source_cache` |
+| 安装预览命令 | `src-tauri/kabegame/src/commands/plugin.rs` | `preview_store_install`：有 `source_id`+`version` 时走 `ensure_plugin_cached` |
+| IPC | `src-tauri/kabegame/src/ipc/handlers/plugin.rs` | CLI/侧车同源逻辑 |
+| 路径 | `src-tauri/kabegame-core/src/app_paths.rs` | `store_cache_dir`、`store_plugin_cache_dir`、`store_plugin_cache_file` |
+| 前端 | `apps/kabegame/src/views/PluginBrowser.vue` | `loadStorePlugins`；手动刷新 `forceRefresh: true`；`revalidateStorePluginsInBackground` 传 `revalidateIfStaleAfterSecs` |
 
 ---
 

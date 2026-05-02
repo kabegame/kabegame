@@ -30,20 +30,20 @@ const root = path.resolve(__dirname, "..");
 export const RESOURCES_PLUGINS_DIR = path.join(
   root,
   "src-tauri",
-  "app-main",
+  "kabegame",
   "resources",
   "plugins",
 );
 export const RESOURCES_BIN_DIR = path.join(
   root,
   "src-tauri",
-  "app-main",
+  "kabegame",
   "resources",
   "bin",
 );
 export const SRC_TAURI_DIR = path.join(root, "src-tauri");
 export const SRC_FE_DIR = path.join(root, "apps");
-export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
+export const TAURI_KABEGAME_DIR = path.join(SRC_TAURI_DIR, "kabegame");
 
 interface BuildOptions {
   component?: string;
@@ -54,7 +54,7 @@ interface BuildOptions {
   skip?: string;
   release?: boolean;
   args?: string[];
-  /** false 表示 --no-nx：不经 nx 构建 main 前端 */
+  /** false 表示 --no-nx：不经 nx 构建 kabegame 前端 */
   nx?: boolean;
 }
 
@@ -304,9 +304,9 @@ export class BuildSystem {
       const cwd = Component.appDir(Component.MAIN);
       if (!this.context.skip?.isVue) {
         if (this.options.nx === false) {
-          run("bun", ["-b", "--cwd", "apps/main", "build"], {});
+          run("bun", ["-b", "--cwd", "apps/kabegame", "build"], {});
         } else {
-          run("nx", ["run", ".:build-main"], {
+          run("nx", ["run", ".:build-kabegame"], {
             bin: "bun",
           });
         }
@@ -321,11 +321,11 @@ export class BuildSystem {
           );
           run("tauri", args, { cwd, bin: "cargo" });
         } else if (this.context.mode!.isWeb) {
-          const distMain = path.join(root, "dist-main");
+          const distMain = path.join(root, "dist-kabegame");
           if (!existsSync(distMain)) {
             throw new Error(
-              `[web build] dist-main/ not found at ${distMain}.\n` +
-              `Run Vue build first: bun b -c main --mode web --skip cargo`,
+              `[web build] dist-kabegame/ not found at ${distMain}.\n` +
+              `Run Vue build first: bun b -c kabegame --mode web --skip cargo`,
             );
           }
           const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];

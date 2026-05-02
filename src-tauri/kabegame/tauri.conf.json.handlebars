@@ -1,0 +1,104 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kabegame",
+  "version": "4.1.0",
+  "identifier": {{#if isAndroid}}"app.kabegame"{{else}}"Kabegame"{{/if}},
+  "build": {
+    "beforeDevCommand": "bun run dev:frontend",
+    "devUrl": "http://{{devServerHost}}:1420"{{#unless isDev}},
+    "frontendDist": "../../dist-kabegame"{{/unless}}
+  },
+  "app": {
+    {{#if isMacOS}}
+    "macOSPrivateApi": true,
+    {{/if}}
+    {{#if isAndroid}}
+    {{!-- 注意：安卓必须有 windows 配置，否则白屏 --}}
+    "windows": [
+      {
+        "label": "main",
+        "visible": true,
+        "fullscreen": false,
+        "resizable": true,
+        "title": "Kabegame",
+        "devtools": {{isDev}}
+      }
+    ],
+    {{else}}
+    "windows": [],
+    {{/if}}
+    "security": {
+      "capabilities": ["main-capability"{{#unless isAndroid}}, "crawler-capability"{{/unless}}],
+      "csp": "default-src 'self' ipc: http://ipc.localhost{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; img-src * data: blob:; media-src * data: blob: ; connect-src 'self' ipc: http://ipc.localhost ws: wss:{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}} http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline' 'nonce-kabegame-ejs-bridge'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'self' blob: data: about:;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    {{#unless isAndroid}}
+    "targets": [
+      {{#if isWindows}}"nsis"{{else if isMacOS}}"dmg"{{else if isLinux}}"deb"{{/if}}
+    ],
+    {{/unless}}
+    "icon": [
+      "./icons/32x32.png", 
+      "./icons/64x64.png", 
+      "./icons/128x128.png", 
+      "./icons/128x128@2x.png", 
+      "./icons/icon.icns", 
+      "./icons/icon.ico",
+      "./icons/icon.png"
+    ],
+    {{!-- 只有非linux平台需要文件关联，linux用手动关联 desktop 文件 --}}
+    {{#unless isLinux}}
+    "fileAssociations": [
+      {
+        "ext": ["kgpg"],
+        "name": "Kabegame Plugin Package",
+        "description": "Kabegame Plugin Package",
+        "role": "Viewer",
+        "mimeType": "application/x-kabegame-kgpg"
+      }
+    ],
+    {{/unless}}
+    "resources": [
+      "resources/**/*"
+    ],
+    {{#unless isAndroid}}
+    "externalBin": ["./sidecar/ffmpeg-kb"],
+    {{/unless}}
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/installer-hooks.nsh",
+        "languages": ["SimpChinese"],
+        "installerIcon": "./icons/icon.ico"
+      }
+    },
+    "macOS": {
+      "dmg": {
+        "background": "dmg/background.jpg"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [{{#unless isLight}}"fuse3", {{/unless}}"libayatana-appindicator3-1"],
+        "files": {
+          {{#unless isLight}}
+          "/usr/bin/kabegame-cli": "../../target/release/kabegame-cli",
+          {{/unless}}
+          "/usr/share/mime/packages/kabegame-kgpg.xml": "./deb/kabegame-kgpg.xml",
+          "/usr/share/icons/hicolor/256x256/mimetypes/application-x-kabegame-kgpg.png": "./icons/icon.png"
+        },
+        "desktopTemplate": "./deb/kabegame.desktop",
+        "postInstallScript": "./deb/postinst.sh",
+        "postRemoveScript": "./deb/postrm.sh",
+        "provides": ["kabegame"],
+        "conflicts": ["kabegame"],
+        "replaces": ["kabegame"]
+      }
+    }
+  }
+}

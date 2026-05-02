@@ -86,7 +86,7 @@ function updateTauriConf(relPath: string, newVersion: string): void {
 // 更新所有 Tauri 配置文件
 function updateAllTauriConfs(newVersion: string): void {
   const tauriConfPaths = [
-    "src-tauri/app-main/tauri.conf.json.handlebars",
+    "src-tauri/kabegame/tauri.conf.json.handlebars",
   ];
 
   tauriConfPaths.forEach((relPath) => {
@@ -94,9 +94,9 @@ function updateAllTauriConfs(newVersion: string): void {
   });
 }
 
-// 更新 apps/main/.env 中的 VITE_APP_VERSION（Vite 编译期注入前端版本号）
+// 更新 apps/kabegame/.env 中的 VITE_APP_VERSION（Vite 编译期注入前端版本号）
 function updateMainEnvVersion(newVersion: string): void {
-  const envPath = path.join(ROOT, "apps", "main", ".env");
+  const envPath = path.join(ROOT, "apps", "kabegame", ".env");
   const line = `VITE_APP_VERSION=${newVersion}`;
   let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : "";
   if (/^VITE_APP_VERSION=.*$/m.test(content)) {
@@ -105,7 +105,7 @@ function updateMainEnvVersion(newVersion: string): void {
     content = (content && !content.endsWith("\n") ? content + "\n" : content) + line + "\n";
   }
   fs.writeFileSync(envPath, content);
-  console.log(`✓ Updated apps/main/.env to ${newVersion}`);
+  console.log(`✓ Updated apps/kabegame/.env to ${newVersion}`);
 }
 
 const README_RELEASE_FILES = [

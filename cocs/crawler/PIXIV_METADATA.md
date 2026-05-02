@@ -12,4 +12,4 @@
 |------|------|
 | 爬取入库 | `src-crawler-plugins/plugins/pixiv/crawl.rhai` |
 | 详情模板 | `src-crawler-plugins/plugins/pixiv/templates/description.ejs` |
-| 迁移 | `src-tauri/core/src/storage/mod.rs`、`src-tauri/core/src/storage/images.rs` |
+| 迁移 | `src-tauri/kabegame-core/src/storage/mod.rs`、`src-tauri/kabegame-core/src/storage/images.rs` |

@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 /**
  * Unified entry for Kabegame workspace:
- * - 1 个前端应用（main）跑在 1420
- * - 2 个 Rust crate：app-main / app-cli，共用 kabegame-core
+ * - 1 个前端应用（kabegame）跑在 1420
+ * - 2 个 Rust crate：kabegame / kabegame-cli，共用 kabegame-core
  *
  * 用法（PowerShell）：
- * - bun dev -c main
- * - bun b                             （默认构建全部：main + cli）
- * - bun b -c main|cli
+ * - bun dev -c kabegame
+ * - bun b                             （默认构建全部：kabegame + kabegame-cli）
+ * - bun b -c kabegame|kabegame-cli
  *
  * 说明：
- * - bun dev -c main 时由构建链打包爬虫插件到 data/plugins-directory（package-to-dev-data），不写入 app resources
- * - main 的前端由各自 tauri.conf.json 的 beforeDev/BuildCommand 触发
+ * - bun dev -c kabegame 时由构建链打包爬虫插件到 data/plugins-directory（package-to-dev-data），不写入 app resources
+ * - kabegame 的前端由各自 tauri.conf.json 的 beforeDev/BuildCommand 触发
  */
 
 import { Command } from "commander";
@@ -30,7 +30,7 @@ interface BuildOptions {
   skip?: string;
   args?: string[];
   release?: boolean;
-  /** false 表示传入 --no-nx，不经 nx 构建 main 前端 */
+  /** false 表示传入 --no-nx，不经 nx 构建 kabegame 前端 */
   nx?: boolean;
 }
 
@@ -70,7 +70,7 @@ program
   .description("启动开发模式")
   .requiredOption(
     "-c, --component <component>",
-    "要启动的组件：main",
+    "要启动的组件：kabegame",
     Component.MAIN,
   )
   .option(
@@ -92,7 +92,7 @@ program
   .description("启动")
   .option(
     "-c, --component <component>",
-    "要启动的组件：main | cli",
+    "要启动的组件：kabegame | kabegame-cli",
     Component.MAIN,
   )
   .option(
@@ -104,7 +104,7 @@ program
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
   .option(
     "--no-nx",
-    "构建 main 前端时不经 nx（不读写 .nx 缓存，适合 Docker）",
+    "构建 kabegame 前端时不经 nx（不读写 .nx 缓存，适合 Docker）",
   )
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {
@@ -118,12 +118,12 @@ program
   .description("构建生产版本")
   .option(
     "-c, --component <component>",
-    "要构建的组件：main | cli",
+    "要构建的组件：kabegame | kabegame-cli",
     "",
   )
   .option(
     "--skip <skip>",
-    "跳过流程：vue | cargo（只能一个值）。main：--skip vue 不跑前端构建；--skip cargo 不跑 tauri/cargo（流水线可只验前端）",
+    "跳过流程：vue | cargo（只能一个值）。kabegame：--skip vue 不跑前端构建；--skip cargo 不跑 tauri/cargo（流水线可只验前端）",
     "",
   )
   .option(
@@ -134,12 +134,12 @@ program
   .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
   .option(
     "--release",
-    "构建完成后复制安装包到 release/ 目录，只有构建main获取全量的情况下才可用",
+    "构建完成后复制安装包到 release/ 目录，只有构建 kabegame 获取全量的情况下才可用",
     false,
   )
   .option(
     "--no-nx",
-    "构建 main 前端时不经 nx（不读写 .nx 缓存，适合 Docker）",
+    "构建 kabegame 前端时不经 nx（不读写 .nx 缓存，适合 Docker）",
   )
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {
@@ -152,7 +152,7 @@ program
   .description("检查类型与 Rust Cargo")
   .requiredOption(
     "-c, --component <component>",
-    "要检查的组件：main | cli",
+    "要检查的组件：kabegame | kabegame-cli",
     Component.MAIN,
   )
   .option("--skip <skip>", "跳过检查项：vue/cargo（只能一个值）", "")

@@ -31,7 +31,7 @@
 
 ### 1. Provider 文件后缀与打包
 
-- 在 core 侧增加共享常量，建议位置：`src-tauri/core/src/providers/dsl_loader.rs` 或新的 `providers/plugin_dsl.rs`。
+- 在 core 侧增加共享常量，建议位置：`src-tauri/kabegame-core/src/providers/dsl_loader.rs` 或新的 `providers/plugin_dsl.rs`。
 
 ```rust
 pub const PROVIDER_FILE_EXTENSIONS: &[&str] = &["json", "json5"];
@@ -48,13 +48,13 @@ pub fn is_provider_file_path(path: &str) -> bool {
 }
 ```
 
-- 在 `src-tauri/app-cli/src/main.rs::build_plugin_zip_bytes` 中，沿用现有 `doc_root/` / `configs/` 递归写 zip 的方式，新增 `providers/` 递归写入。
+- 在 `src-tauri/kabegame-cli/src/main.rs::build_plugin_zip_bytes` 中，沿用现有 `doc_root/` / `configs/` 递归写 zip 的方式，新增 `providers/` 递归写入。
 - 保持 zip 内路径为正斜杠相对路径，例如 `providers/gallery/root.json5`。
 - 不要把目录项写成 provider；只写普通文件。
 
 ### 2. Plugin 数据结构
 
-- 在 `src-tauri/core/src/plugin/mod.rs::Plugin` 增加后端字段：
+- 在 `src-tauri/kabegame-core/src/plugin/mod.rs::Plugin` 增加后端字段：
 
 ```rust
 #[serde(skip)]
@@ -139,7 +139,7 @@ namespace == Some("plugins.{plugin_id}") && name == "entry_provider"
 
 ### 6. 显式注册表
 
-- 在 core provider 模块增加插件 provider 注册表，建议 `src-tauri/core/src/providers/plugin_registry.rs`：
+- 在 core provider 模块增加插件 provider 注册表，建议 `src-tauri/kabegame-core/src/providers/plugin_registry.rs`：
 
 ```rust
 static PLUGIN_PROVIDER_DEFS: OnceLock<Mutex<HashMap<String, Vec<ProviderDef>>>> = OnceLock::new();
@@ -159,12 +159,12 @@ pub fn registered_plugin_provider_defs() -> Vec<ProviderDef> {
 
 ### 7. Runtime 初始化合并
 
-- 在 `src-tauri/core/src/providers/init.rs::init_runtime` 中：
+- 在 `src-tauri/kabegame-core/src/providers/init.rs::init_runtime` 中：
   - 先 `load_dsl_into(&mut registry)` 注册内置 DSL。
   - 再遍历 `registered_plugin_provider_defs()` 注册插件 DSL。
   - 然后再 `validate_dsl(&registry)`。
 - 启动顺序需要保证本地插件 cache 先初始化并注册，再首次访问 `provider_runtime()`。
-  - 检查 `src-tauri/app-main/src/startup.rs` 中 `PluginManager::init_global()` / `ensure_installed_cache_initialized()` 与 provider runtime 首次访问的顺序。
+  - 检查 `src-tauri/kabegame/src/startup.rs` 中 `PluginManager::init_global()` / `ensure_installed_cache_initialized()` 与 provider runtime 首次访问的顺序。
   - 如果当前启动路径会先触发 provider runtime，要调整为先初始化本地插件。
 
 ### 8. parse 调用点处理
@@ -182,7 +182,7 @@ pub fn registered_plugin_provider_defs() -> Vec<ProviderDef> {
 ### 9. Name 校验
 
 - 修改 `src-tauri/pathql-rs/src/validate/names.rs` 的 namespace 校验，允许 namespace segment 内出现 `-`，但 simple name 不允许。
-- 修改 `src-tauri/core/src/providers/dsl/schema.json5`：
+- 修改 `src-tauri/kabegame-core/src/providers/dsl/schema.json5`：
   - `Namespace` pattern 允许 hyphen。
   - `ProviderName` 的 namespace segments 允许 hyphen，但最后 simple name 仍保持 snake_case。
 - 注意 `plugins.anime-pictures.entry_provider` 应合法，`entry-provider` 不合法。

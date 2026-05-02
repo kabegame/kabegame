@@ -192,10 +192,10 @@ for src in image_urls {
 ### 2. 启动开发服务
 
 ```bash
-bun dev -c main
+bun dev -c kabegame
 ```
 
-这条命令本身就会触发插件打包：构建系统在每次 `bun dev -c main` 启动时自动运行 `nx run crawler-plugins:package-to-dev-data`，把 `src-crawler-plugins/plugins/` 下的**每一个**插件打成 `.kgpg`，输出到 `<repo>/data/plugins-directory/`。应用启动时从该目录加载，你的插件会立刻出现在源列表里。
+这条命令本身就会触发插件打包：构建系统在每次 `bun dev -c kabegame` 启动时自动运行 `nx run crawler-plugins:package-to-dev-data`，把 `src-crawler-plugins/plugins/` 下的**每一个**插件打成 `.kgpg`，输出到 `<repo>/data/plugins-directory/`。应用启动时从该目录加载，你的插件会立刻出现在源列表里。
 
 :::note
 `--mode local` 是另一回事：它是 Rust 侧的构建开关，用于把所有插件**内嵌进发行版的二进制**，与开发循环无关。不加 `--mode local` 照样会打包插件到 `data/plugins-directory/`。
@@ -220,7 +220,7 @@ bun package --only <a> <b>     # 打指定子集
 bun package --out-dir <path>   # 改变输出目录
 ```
 
-打包依赖编译好的 `kabegame-cli`（由主仓库的 `bun dev -c main` 或 `bun b` 自动构建）。若你自建插件商店，还需要生成索引：
+打包依赖编译好的 `kabegame-cli`（由主仓库的 `bun dev -c kabegame` 或 `bun b` 自动构建）。若你自建插件商店，还需要生成索引：
 
 ```bash
 bun generate-index             # 读取 packed/*.kgpg，写出 packed/index.json

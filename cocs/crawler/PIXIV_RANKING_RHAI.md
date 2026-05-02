@@ -12,7 +12,7 @@
 |------|------|
 | `src-crawler-plugins/plugins/pixiv/config.json` | 表单变量与 `when` 条件 |
 | `src-crawler-plugins/plugins/pixiv/crawl.rhai` | 拼接 `mode`/`content`/`date`、按 JSON `next` 翻页、`warn` 数量不足 |
-| `src-tauri/core/src/plugin/rhai.rs` | 注册 Rhai `warn(msg)` → 任务日志 warn 级别 |
+| `src-tauri/kabegame-core/src/plugin/rhai.rs` | 注册 Rhai `warn(msg)` → 任务日志 warn 级别 |
 
 ## 分页
 

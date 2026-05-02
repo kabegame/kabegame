@@ -129,7 +129,7 @@ def should_exclude?(file_path, exclude_dirs)
   normalized_path = file_path.gsub(/^\.\//, '')
   
   exclude_dirs.any? do |dir|
-    # 匹配目录名（如 dist/ 或 dist-main/）
+    # 匹配目录名（如 dist/ 或 dist-kabegame/）
     # 使用路径分隔符确保精确匹配目录，而不是文件名中的字符串
     # 支持匹配 dist 和 dist-* 这样的模式
     pattern = /(^|\/)#{Regexp.escape(dir)}(-|\/|$)/

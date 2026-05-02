@@ -19,7 +19,7 @@ export const DATA_PLUGINS_DIR = path.join(ROOT, "data", "plugins-directory");
 export const RESOURCES_DIR = path.join(
   ROOT,
   "src-tauri",
-  "app-main",
+  "kabegame",
   "resources",
 );
 
@@ -35,7 +35,7 @@ export const ffmpegDlls = [
 export const RESOURCES_PLUGINS_DIR = path.join(RESOURCES_DIR, "plugins");
 export const RESOURCES_BIN_DIR = path.join(RESOURCES_DIR, "bin");
 export const SRC_TAURI_DIR = path.join(ROOT, "src-tauri");
-export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
+export const TAURI_KABEGAME_DIR = path.join(SRC_TAURI_DIR, "kabegame");
 
 /** 开发服务器 host：供 tauri.conf 的 devUrl / CSP 等使用；可被 TAURI_DEV_HOST / VITE_DEV_SERVER_HOST 覆盖 */
 export function getDevServerHost(): string {

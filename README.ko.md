@@ -205,29 +205,29 @@ FFmpeg는 `third/FFmpeg`의 Git 서브모듈. `bun run build:ffmpeg` 전에 `git
 ### 개발·빌드
 
 ```bash
-bun dev -c main              # 메인 앱
-bun dev -c main --mode local # 로컬 모드
-bun start -c cli             # CLI
+bun dev -c kabegame              # 메인 앱
+bun dev -c kabegame --mode local # 로컬 모드
+bun start -c kabegame-cli             # CLI
 bun b                        # 전체 빌드
-bun check -c main            # 검사
+bun check -c kabegame            # 검사
 ```
 
 ### Android
 
 - Android Studio, JAVA_HOME, ANDROID_HOME, NDK_HOME 필수
-- `bun dev -c main --mode android`（`--android`에서 변경）
+- `bun dev -c kabegame --mode android`（`--android`에서 변경）
 - 디버깅은 Chrome DevTools에서 `chrome://inspect/#devices`
 
 ## 프로젝트 구조
 
 ```
 .
-├── apps/main/
+├── apps/kabegame/
 ├── packages/core/
 ├── src-tauri/
-│   ├── core/
-│   ├── app-main/
-│   └── app-cli/
+│   ├── kabegame-core/
+│   ├── kabegame/
+│   └── kabegame-cli/
 ├── src-crawler-plugins/
 ├── docs/
 └── ...

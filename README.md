@@ -302,38 +302,38 @@ Husky runs before `git push`, reads `src-crawler-plugins/package.json` version, 
 ### Dev / build commands
 
 Cargo workspace with three apps:
-- **main**: Tauri GUI (frontend on port 1420)
-- **cli**: Headless CLI
+- **kabegame**: Tauri GUI (frontend on port 1420)
+- **kabegame-cli**: Headless CLI
 
 Both share `kabegame-core`.
 
 ```bash
 # Dev (watch, hot reload)
-bun dev -c main              # Main app (port 1420)
-bun dev -c main --mode local  # Local mode (no store, all plugins bundled)
+bun dev -c kabegame              # Main app (port 1420)
+bun dev -c kabegame --mode local  # Local mode (no store, all plugins bundled)
 
 # Run (no watch)
-bun start -c cli             # CLI
+bun start -c kabegame-cli             # CLI
 
 # Build
-bun b                    # All (main + cli)
-bun b -c main            # Main app
-bun b -c cli             # CLI
+bun b                    # All (kabegame + kabegame-cli)
+bun b -c kabegame            # Main app
+bun b -c kabegame-cli             # CLI
 
 # Check (no build output)
-bun check -c main                # Vue + cargo
-bun check -c main --skip cargo   # Vue only
+bun check -c kabegame                # Vue + cargo
+bun check -c kabegame --skip cargo   # Vue only
 
 # Build FFmpeg sidecar (desktop video preview compression, compile on target)
 bun run build:ffmpeg             # Needs libx264 (macOS: brew install x264, Ubuntu: libx264-dev)
 ```
 
-- `-c, --component`: `main` | `cli`
+- `-c, --component`: `kabegame` | `kabegame-cli`
 - `bun check` requires `-c`
 - `--mode`: `standard` (default, store + virtual disk + CLI) | `light` (store only) | `android` (Android target)
 - `--data`: `dev` (default for `bun dev` — uses repo-local `data/` and `cache/` dirs) | `prod` (default for all other commands — uses system data dirs). Use `--data prod` during `bun dev` to test against your installed Kabegame data.
 - `--skip`: `vue` | `cargo`
-- Main app `bun dev -c main` runs `crawler-plugins:package-to-dev-data` (NX) so packed `.kgpg` files land in `data/plugins-directory` for local testing; release builds do not bundle store plugins (users install from the GitHub store).
+- Kabegame app `bun dev -c kabegame` runs `crawler-plugins:package-to-dev-data` (NX) so packed `.kgpg` files land in `data/plugins-directory` for local testing; release builds do not bundle store plugins (users install from the GitHub store).
 
 ### Android development
 
@@ -353,13 +353,13 @@ See [Android migration guide](docs/TAURI_ANDROID_MIGRATION.md). Main requirement
 
 #### Run on device/emulator
 
-Use **`bun dev -c main --mode android`** (omit `--mode android` and it runs desktop). With multiple devices:
+Use **`bun dev -c kabegame --mode android`** (omit `--mode android` and it runs desktop). With multiple devices:
 
 ```bash
 adb devices
 
 # Specify device (replace <device-id> with first column from adb devices)
-bun dev -c main --mode android -- <device-id>
+bun dev -c kabegame --mode android -- <device-id>
 ```
 
 #### DevTools
@@ -389,13 +389,13 @@ adb forward tcp:9222 localabstract:chrome_devtools_remote
 ```
 .
 ├── apps/                  # Frontend (Nx)
-│   └── main/             # Main app (Vue 3 + TS, port 1420)
+│   └── kabegame/             # Main app (Vue 3 + TS, port 1420)
 ├── packages/
 │   └── core/             # Shared frontend
 ├── src-tauri/            # Rust (Cargo workspace)
-│   ├── core/             # kabegame-core
-│   ├── app-main/         # Tauri GUI
-│   ├── app-cli/          # CLI
+│   ├── kabegame-core/             # kabegame-core
+│   ├── kabegame/         # Tauri GUI
+│   ├── kabegame-cli/          # CLI
 │   └── icons/
 ├── src-crawler-plugins/  # Plugins
 ├── scripts/

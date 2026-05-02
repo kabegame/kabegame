@@ -23,13 +23,13 @@
 
 | 层级 | 文件路径 | 作用 |
 |------|----------|------|
-| 任务入口 | `src-tauri/core/src/crawler/scheduler.rs` | 解析插件、构建 JsTaskContext、assign_task、调用 setup_js_task |
-| 插件脚本读取 | `src-tauri/core/src/plugin/mod.rs` | `read_plugin_js_script(zip_path)` 从 .kgpg 内读 `crawl.js` |
-| 窗口状态 | `src-tauri/core/src/crawler/webview.rs` | CrawlerWindowState、JsTaskContext、assign_task、set_page_ready、try_dispatch_script |
-| 窗口创建与注入 | `src-tauri/app-main/src/startup.rs` | create_crawler_window（initialization_script 注入 bootstrap.js）、AppCrawlerWebViewHandler::setup_js_task（navigate） |
-| Bootstrap 脚本 | `src-tauri/app-main/resources/bootstrap.js` | 每次页面加载执行：get_context → page_ready → bindApi → run_script |
-| Tauri 命令 | `src-tauri/app-main/src/commands/crawler.rs` | crawl_get_context、crawl_page_ready、crawl_run_script、crawl_to、crawl_back、crawl_task_log 等 |
-| 权限 | `src-tauri/app-main/capabilities/crawler.json` | crawler 窗口/webview 的 Tauri 权限（remote URLs、events、window） |
+| 任务入口 | `src-tauri/kabegame-core/src/crawler/scheduler.rs` | 解析插件、构建 JsTaskContext、assign_task、调用 setup_js_task |
+| 插件脚本读取 | `src-tauri/kabegame-core/src/plugin/mod.rs` | `read_plugin_js_script(zip_path)` 从 .kgpg 内读 `crawl.js` |
+| 窗口状态 | `src-tauri/kabegame-core/src/crawler/webview.rs` | CrawlerWindowState、JsTaskContext、assign_task、set_page_ready、try_dispatch_script |
+| 窗口创建与注入 | `src-tauri/kabegame/src/startup.rs` | create_crawler_window（initialization_script 注入 bootstrap.js）、AppCrawlerWebViewHandler::setup_js_task（navigate） |
+| Bootstrap 脚本 | `src-tauri/kabegame/resources/bootstrap.js` | 每次页面加载执行：get_context → page_ready → bindApi → run_script |
+| Tauri 命令 | `src-tauri/kabegame/src/commands/crawler.rs` | crawl_get_context、crawl_page_ready、crawl_run_script、crawl_to、crawl_back、crawl_task_log 等 |
+| 权限 | `src-tauri/kabegame/capabilities/crawler.json` | crawler 窗口/webview 的 Tauri 权限（remote URLs、events、window） |
 | 插件脚本 | `src-crawler-plugins/plugins/<id>/crawl.js` | 业务逻辑，按 ctx.pageLabel 分支（initial/posts/detail/exit） |
 
 ---
@@ -38,7 +38,7 @@
 
 ### 3.1 应用启动：创建 Crawler 窗口并注入 Bootstrap
 
-- **文件**：`src-tauri/app-main/src/lib.rs`、`src-tauri/app-main/src/startup.rs`
+- **文件**：`src-tauri/kabegame/src/lib.rs`、`src-tauri/kabegame/src/startup.rs`
 - **时机**：桌面端在 `setup` 中调用 `init_crawler_window(app_handle)`。
 - **逻辑**：
   - `create_crawler_window`：用 `WebviewWindowBuilder::new(..., "crawler", WebviewUrl::External(about_blank))` 创建窗口；
@@ -47,24 +47,24 @@
 
 ### 3.2 任务创建与上下文分配（Rust）
 
-- **文件**：`src-tauri/core/src/crawler/scheduler.rs`（`run_task` 内）、`src-tauri/core/src/crawler/webview.rs`
+- **文件**：`src-tauri/kabegame-core/src/crawler/scheduler.rs`（`run_task` 内）、`src-tauri/kabegame-core/src/crawler/webview.rs`
 - **流程**：
   1. `resolve_plugin_for_task_request` 得到 `(plugin, plugin_file_path)`，`plugin_file` 为 .kgpg 路径（或临时路径）。
-  2. `read_plugin_js_script(&plugin_file)` 从插件 ZIP 内读取 **crawl.js** 全文（`src-tauri/core/src/plugin/mod.rs` 中实现，读 ZIP 内 `crawl.js` 条目）。
+  2. `read_plugin_js_script(&plugin_file)` 从插件 ZIP 内读取 **crawl.js** 全文（`src-tauri/kabegame-core/src/plugin/mod.rs` 中实现，读 ZIP 内 `crawl.js` 条目）。
   3. 若 `js_script.is_some()`（桌面）则走 WebView 分支：
      - 构建 **JsTaskContext**（含 task_id、plugin_id、**crawl_js**、merged_config、base_url、**page_label: "initial"**、page_state、state 等）。
      - `crawler_window_state().assign_task(context).await`：
        - 占位 semaphore，将 context 存入 `current_task`；
        - `page_ready_tx.send(false)`，便于后续等待“页面就绪”。
      - `get_webview_handler().setup_js_task(&task_id, &base_url)`：
-       - 实现位于 `src-tauri/app-main/src/startup.rs` 的 `AppCrawlerWebViewHandler`；
+       - 实现位于 `src-tauri/kabegame/src/startup.rs` 的 `AppCrawlerWebViewHandler`；
        - 获取 crawler 窗口并 **navigate(base_url)**（若为空则 about:blank）；
        - 可选根据设置自动 show/focus 窗口。
   4. 返回 `TaskOutcome::HandledOffToWebView`，任务由 WebView 端接管。
 
 ### 3.3 页面加载后：Bootstrap 执行（每页一次）
 
-- **文件**：`src-tauri/app-main/resources/bootstrap.js`
+- **文件**：`src-tauri/kabegame/resources/bootstrap.js`
 - **触发**：Tauri 的 **initialization_script** 在**每次** crawler WebView 的文档加载时执行（包括首次 about:blank 或 base_url，以及之后每次 `crawl_to` / `crawl_back` 导致的导航）。
 - **步骤**：
   1. **防重入**：`if (window.__crawl_starting__) return;`，`window.__crawl_starting__ = true`。
@@ -97,7 +97,7 @@
 
 ### 3.5 导航：ctx.to() 与 ctx.back()
 
-- **文件**：`src-tauri/app-main/src/commands/crawler.rs`（`crawl_to`、`crawl_back`）、`src-tauri/core/src/crawler/scheduler.rs`（page_stacks）、`src-tauri/core/src/crawler/webview.rs`（patch_context_for_task）。
+- **文件**：`src-tauri/kabegame/src/commands/crawler.rs`（`crawl_to`、`crawl_back`）、`src-tauri/kabegame-core/src/crawler/scheduler.rs`（page_stacks）、`src-tauri/kabegame-core/src/crawler/webview.rs`（patch_context_for_task）。
 - **ctx.to(payload)**：
   - 解析 URL，解析 page_label / page_state；
   - 在 **page_stacks** 中：先更新栈顶的 page_label/page_state，再 push 新条目（target_url, new_page_label, new_page_state）；
@@ -112,7 +112,7 @@
 
 ### 3.6 任务结束与释放
 
-- **文件**：`src-tauri/app-main/src/commands/crawler.rs`（`crawl_exit`、`crawl_error`）、`src-tauri/core/src/crawler/webview.rs`（`release_task`）。
+- **文件**：`src-tauri/kabegame/src/commands/crawler.rs`（`crawl_exit`、`crawl_error`）、`src-tauri/kabegame-core/src/crawler/webview.rs`（`release_task`）。
 - 脚本调用 `ctx.exit()` 或 `ctx.error(msg)`：
   - 更新任务状态、发送事件、移除 page_stack、**release_task** 释放 current_task 与 semaphore，并 `page_ready_tx.send(false)`。
 - 之后 crawler 窗口可能仍打开，但无任务占用；下次新任务会再次 assign_task 并 navigate。
@@ -132,7 +132,7 @@
 
 - **crawler 相关命令**（在 `lib.rs` 的 invoke_handler 中注册）：  
   `crawl_get_context`、`crawl_page_ready`、`crawl_run_script`、`crawl_to`、`crawl_back`、`crawl_task_log`、`crawl_add_progress`、`crawl_download_image`、`crawl_update_state`、`crawl_update_page_state`、`crawl_exit`、`crawl_error`、`crawl_clear_site_data`、`show_crawler_window` 等。
-- **crawler 窗口** 使用 capability：`src-tauri/app-main/capabilities/crawler.json`，允许的 remote urls 为 `https://*.*`、`http://*.*`，权限包括 core:event、core:window:allow-hide 等；确保加载目标站时 invoke 可被允许。
+- **crawler 窗口** 使用 capability：`src-tauri/kabegame/capabilities/crawler.json`，允许的 remote urls 为 `https://*.*`、`http://*.*`，权限包括 core:event、core:window:allow-hide 等；确保加载目标站时 invoke 可被允许。
 
 ---
 

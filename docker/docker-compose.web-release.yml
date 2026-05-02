@@ -23,7 +23,7 @@ services:
       - -lc
       - >-
         bun install --frozen-lockfile
-        && bun b -c main --mode web --no-nx
+        && bun b -c kabegame --mode web --no-nx
         && mkdir -p /dist
         && cp target/release/kabegame /dist/kabegame
         && echo "✓ 产物已写入 /dist/kabegame"
@@ -49,5 +49,5 @@ services:
         && git submodule update --init third/FFmpeg
         && bash scripts/build-ffmpeg.sh
         && mkdir -p /dist
-        && cp "src-tauri/app-main/sidecar/ffmpeg-kb-$(rustc -vV | sed -n 's/^host: //p')" /dist/ffmpeg-kb
+        && cp "src-tauri/kabegame/sidecar/ffmpeg-kb-$(rustc -vV | sed -n 's/^host: //p')" /dist/ffmpeg-kb
         && echo "✓ ffmpeg-kb 已写入 /dist/ffmpeg-kb"

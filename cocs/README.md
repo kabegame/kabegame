@@ -13,13 +13,13 @@
 
 ## Provider DSL（`provider-dsl/`）
 
-- 状态：Phase 7c 后内置 Provider 已全量 DSL 化，`src-tauri/core/src/providers/programmatic/`
+- 状态：Phase 7c 后内置 Provider 已全量 DSL 化，`src-tauri/kabegame-core/src/providers/programmatic/`
   已删除；core 启动时只加载 `dsl_loader::DSL_FILES` 中的 root/gallery/shared/VD provider。
 
 - [provider-dsl/RULES.md](provider-dsl/RULES.md)
   - 主题：声明式 Provider DSL（v0.7）的加载期与运行期语义合约 —— schema 之外的规则。涵盖路径折叠、ContribQuery 累积语义（fields/from/join/where/order 各自规则；offset 累加、limit 末次胜）、List 静态/动态项、Resolve 正则解析、`${...}` 模板语义（命名空间取值 + 方法标记）、`as + in_need` 共享机制、缓存契约（只缓存命中）、安全契约、保留标识符、主机协调模式抽象。
   - 适用场景：实现引擎 loader / 解析器；编写 *.provider.json5 文件；排查跨字段约束错误；设计第三方插件可贡献的 provider。
-  - 配套：[../src-tauri/core/src/providers/schema.json5](../src-tauri/core/src/providers/schema.json5) 为语法 schema。
+  - 配套：[../src-tauri/kabegame-core/src/providers/schema.json5](../src-tauri/kabegame-core/src/providers/schema.json5) 为语法 schema。
 
 - [provider-dsl/VD_INTEGRATION.md](provider-dsl/VD_INTEGRATION.md)
   - 主题：VD 作为 Provider DSL 引擎**消费者**的落地方案。涵盖 i18n 路径分发（`i18n-<locale>` 静态层 + 每语言独立 router）、插件维度的 `get_plugin` SQL 函数桥（主机注册的 SQL 函数把 PluginManager 元数据接入 SQL 上下文）、`vd_plugins_router` 与 `plugins_provider` 双层结构、典型路径折叠示例。
@@ -72,7 +72,7 @@
 ## Tauri（`tauri/`）
 
 - [tauri/TAURI_ACL_PERMISSION_SYSTEM.md](tauri/TAURI_ACL_PERMISSION_SYSTEM.md)
-  - 主题：Tauri v2 ACL（capability/permission）在 app-main 的运行机制与故障复盘。
+  - 主题：Tauri v2 ACL（capability/permission）在 kabegame 的运行机制与故障复盘。
   - 适用场景：新增窗口 IPC 权限、调整 capability/permission、排查“命令不可用/全部被拒绝”问题。
 
 ## 国际化（`i18n/`）

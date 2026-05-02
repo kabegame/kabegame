@@ -1,0 +1,78 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kabegame",
+  "version": "4.1.0",
+  "identifier": "Kabegame",
+  "build": {
+    "beforeDevCommand": "bun run dev:frontend",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../../dist-kabegame"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "capabilities": ["main-capability", "crawler-capability"],
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src * data: blob:; media-src * data: blob: ; connect-src 'self' ipc: http://ipc.localhost ws: wss: http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline' 'nonce-kabegame-ejs-bridge'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'self' blob: data: about:;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "./icons/32x32.png", 
+      "./icons/64x64.png", 
+      "./icons/128x128.png", 
+      "./icons/128x128@2x.png", 
+      "./icons/icon.icns", 
+      "./icons/icon.ico",
+      "./icons/icon.png"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["kgpg"],
+        "name": "Kabegame Plugin Package",
+        "description": "Kabegame Plugin Package",
+        "role": "Viewer",
+        "mimeType": "application/x-kabegame-kgpg"
+      }
+    ],
+    "resources": [
+      "resources/**/*"
+    ],
+    "externalBin": ["./sidecar/ffmpeg-kb"],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/installer-hooks.nsh",
+        "languages": ["SimpChinese"],
+        "installerIcon": "./icons/icon.ico"
+      }
+    },
+    "macOS": {
+      "dmg": {
+        "background": "dmg/background.jpg"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": ["fuse3", "libayatana-appindicator3-1"],
+        "files": {
+          "/usr/bin/kabegame-cli": "../../target/release/kabegame-cli",
+          "/usr/share/mime/packages/kabegame-kgpg.xml": "./deb/kabegame-kgpg.xml",
+          "/usr/share/icons/hicolor/256x256/mimetypes/application-x-kabegame-kgpg.png": "./icons/icon.png"
+        },
+        "desktopTemplate": "./deb/kabegame.desktop",
+        "postInstallScript": "./deb/postinst.sh",
+        "postRemoveScript": "./deb/postrm.sh",
+        "provides": ["kabegame"],
+        "conflicts": ["kabegame"],
+        "replaces": ["kabegame"]
+      }
+    }
+  }
+}

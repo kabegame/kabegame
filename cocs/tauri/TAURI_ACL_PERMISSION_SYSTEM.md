@@ -1,6 +1,6 @@
-# Tauri ACL 与权限系统（app-main）
+# Tauri ACL 与权限系统（kabegame）
 
-本文记录 `src-tauri/app-main` 的 Tauri v2 ACL（capability + permission）机制、常见坑位，以及一次“所有命令都找不到”的故障复盘。
+本文记录 `src-tauri/kabegame` 的 Tauri v2 ACL（capability + permission）机制、常见坑位，以及一次“所有命令都找不到”的故障复盘。
 
 ## 适用场景
 
@@ -10,13 +10,13 @@
 
 ## 涉及文件
 
-- `src-tauri/app-main/tauri.conf.json`
-- `src-tauri/app-main/tauri.conf.json.handlebars`
-- `src-tauri/app-main/capabilities/main.json`
-- `src-tauri/app-main/capabilities/main.json.handlebars`
-- `src-tauri/app-main/capabilities/crawler.json`
-- `src-tauri/app-main/build.rs`
-- `src-tauri/app-main/src/lib.rs`
+- `src-tauri/kabegame/tauri.conf.json`
+- `src-tauri/kabegame/tauri.conf.json.handlebars`
+- `src-tauri/kabegame/capabilities/main.json`
+- `src-tauri/kabegame/capabilities/main.json.handlebars`
+- `src-tauri/kabegame/capabilities/crawler.json`
+- `src-tauri/kabegame/build.rs`
+- `src-tauri/kabegame/src/lib.rs`
 
 参考（工作区 Tauri 源码）：
 
@@ -43,7 +43,7 @@
 
 ### 3) build 入口
 
-`src-tauri/app-main/build.rs` 当前使用 `tauri_build::build()`。
+`src-tauri/kabegame/build.rs` 当前使用 `tauri_build::build()`。
 
 这意味着 ACL 的行为由 Tauri 默认机制驱动：读取 capability 文件、处理 permission 文件，并生成运行时授权数据。
 

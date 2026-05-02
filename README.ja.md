@@ -217,29 +217,29 @@ FFmpeg は `third/FFmpeg` の Git サブモジュール。`bun run build:ffmpeg`
 ### 開発・ビルド
 
 ```bash
-bun dev -c main              # メインアプリ
-bun dev -c main --mode local # ローカルモード
-bun start -c cli             # CLI
+bun dev -c kabegame              # メインアプリ
+bun dev -c kabegame --mode local # ローカルモード
+bun start -c kabegame-cli             # CLI
 bun b                        # 全ビルド
-bun check -c main            # チェック
+bun check -c kabegame            # チェック
 ```
 
 ### Android
 
 - Android Studio、JAVA_HOME、ANDROID_HOME、NDK_HOME 必須
-- `bun dev -c main --mode android`（`--android` から変更）
+- `bun dev -c kabegame --mode android`（`--android` から変更）
 - デバッグは Chrome DevTools で `chrome://inspect/#devices`
 
 ## プロジェクト構造
 
 ```
 .
-├── apps/main/
+├── apps/kabegame/
 ├── packages/core/
 ├── src-tauri/
-│   ├── core/
-│   ├── app-main/
-│   └── app-cli/
+│   ├── kabegame-core/
+│   ├── kabegame/
+│   └── kabegame-cli/
 ├── src-crawler-plugins/
 ├── docs/
 └── ...

@@ -7,10 +7,10 @@
       "inputs": ["frontendDocs"],
       "outputs": ["{workspaceRoot}/apps/docs/dist/**/*"]
     },
-    "build-main": {
+    "build-kabegame": {
       "cache": true,
-      "inputs": ["frontendMain"],
-      "outputs": ["{workspaceRoot}/dist-main/**/*"]
+      "inputs": ["frontendKabegame"],
+      "outputs": ["{workspaceRoot}/dist-kabegame/**/*"]
     }
   },
   "namedInputs": {
@@ -22,8 +22,8 @@
       { "env": "TAURI_PLATFORM" },
       { "env": "TAURI_DEBUG" }
     ],
-    "frontendMain": [
-      "{workspaceRoot}/apps/main/**/*",
+    "frontendKabegame": [
+      "{workspaceRoot}/apps/kabegame/**/*",
       "{workspaceRoot}/packages/*/src/**/*",
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock",

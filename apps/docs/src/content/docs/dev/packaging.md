@@ -27,7 +27,7 @@ description: 把 Rhai 插件打成 .kgpg 并发布到商店或自建源的完整
 打包之前先在真机跑一遍。推荐的迭代流程：
 
 ```bash
-bun dev -c main --mode local
+bun dev -c kabegame --mode local
 ```
 
 `--mode local` 会在 dev 启动时自动把 `src-crawler-plugins/plugins/*` 打到仓库根的 `data/plugins-directory/`，应用启动即加载。这条路径只在 dev 下生效，`build` / `start` 不会触发。

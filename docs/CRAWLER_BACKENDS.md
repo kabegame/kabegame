@@ -149,7 +149,7 @@ await crawl.to(nextUrl, "detail");
 
 ## 6. Rhai API 与对等 JS API
 
-为实现“同一插件可提供 crawl.rhai 与 crawl.js、桌面优先 JS”的脚本可移植性，WebView 后端的 **crawl** 对象需提供与现有 Rhai 爬虫 API 对等的 JS 接口。以下列出当前 Rhai 侧已暴露的 API（参见 `src-tauri/core/src/plugin/rhai.rs` 中 `register_crawler_functions`），以及需要在 WebView 运行时实现的 **对等 JS API**；实现细节与代理/下载门控等见 [CRAWLER_WEBVIEW_DESIGN.md](./CRAWLER_WEBVIEW_DESIGN.md)。
+为实现“同一插件可提供 crawl.rhai 与 crawl.js、桌面优先 JS”的脚本可移植性，WebView 后端的 **crawl** 对象需提供与现有 Rhai 爬虫 API 对等的 JS 接口。以下列出当前 Rhai 侧已暴露的 API（参见 `src-tauri/kabegame-core/src/plugin/rhai.rs` 中 `register_crawler_functions`），以及需要在 WebView 运行时实现的 **对等 JS API**；实现细节与代理/下载门控等见 [CRAWLER_WEBVIEW_DESIGN.md](./CRAWLER_WEBVIEW_DESIGN.md)。
 
 ### 6.1 现有 Rhai API 一览
 

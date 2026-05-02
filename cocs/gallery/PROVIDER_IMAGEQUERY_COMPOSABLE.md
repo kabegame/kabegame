@@ -18,7 +18,7 @@
 
 对应实现位于：
 
-- [`src-tauri/core/src/storage/gallery.rs`](/src-tauri/core/src/storage/gallery.rs)
+- [`src-tauri/kabegame-core/src/storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)
   - `SqlFragment`
   - `ImageQuery`
   - builder API：`with_join` / `with_where` / `with_order` / `merge`
@@ -69,13 +69,13 @@
 
 关键文件：
 
-- [`src-tauri/core/src/providers/main_root.rs`](/src-tauri/core/src/providers/main_root.rs)
-- [`src-tauri/core/src/providers/common.rs`](/src-tauri/core/src/providers/common.rs)
-- [`src-tauri/core/src/gallery/browse.rs`](/src-tauri/core/src/gallery/browse.rs)
-- [`src-tauri/core/src/providers/vd_ops.rs`](/src-tauri/core/src/providers/vd_ops.rs)
-- [`src-tauri/core/src/storage/gallery.rs`](/src-tauri/core/src/storage/gallery.rs)
+- [`src-tauri/kabegame-core/src/providers/main_root.rs`](/src-tauri/kabegame-core/src/providers/main_root.rs)
+- [`src-tauri/kabegame-core/src/providers/common.rs`](/src-tauri/kabegame-core/src/providers/common.rs)
+- [`src-tauri/kabegame-core/src/gallery/browse.rs`](/src-tauri/kabegame-core/src/gallery/browse.rs)
+- [`src-tauri/kabegame-core/src/providers/vd_ops.rs`](/src-tauri/kabegame-core/src/providers/vd_ops.rs)
+- [`src-tauri/kabegame-core/src/storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)
 
-画册详情（`album/<albumId>/…`）在 `MainAlbumsProvider::resolve_child` 下挂 `MainAlbumEntryProvider`：默认分支按抓取时间排序（`album_source` + `sort_by_crawled_at`），与 `desc`、`album-order`（`album_source` + `sort_by_album_order`）、`wallpaper-order` 子目录（画册内仅「曾设为壁纸」+ `sort_by_wallpaper_set_at`）组合；`album-order` 与 `wallpaper-order` 均支持子目录 `desc` 表示倒序。另支持 `image-only` / `video-only` 根段（`MainAlbumMediaEntryProvider` 等），在画册内叠加 `media_type_filter`。语义与根级 `all` / `wallpaper-order` 对齐。前端路径拼装见 [`apps/main/src/utils/albumPath.ts`](/apps/main/src/utils/albumPath.ts)。
+画册详情（`album/<albumId>/…`）在 `MainAlbumsProvider::resolve_child` 下挂 `MainAlbumEntryProvider`：默认分支按抓取时间排序（`album_source` + `sort_by_crawled_at`），与 `desc`、`album-order`（`album_source` + `sort_by_album_order`）、`wallpaper-order` 子目录（画册内仅「曾设为壁纸」+ `sort_by_wallpaper_set_at`）组合；`album-order` 与 `wallpaper-order` 均支持子目录 `desc` 表示倒序。另支持 `image-only` / `video-only` 根段（`MainAlbumMediaEntryProvider` 等），在画册内叠加 `media_type_filter`。语义与根级 `all` / `wallpaper-order` 对齐。前端路径拼装见 [`apps/kabegame/src/utils/albumPath.ts`](/apps/kabegame/src/utils/albumPath.ts)。
 
 画廊根级另有 `media-type/image`、`media-type/video`（`MainMediaTypeGroupProvider`）；虚拟盘中文根目录在 `RootProvider` 中为「按种类」→「图片」/「视频」（`MediaTypeGroupProvider`）。
 
@@ -99,8 +99,8 @@
 
 `ImageQuery` 序列化结构改变后，必须提升 Provider 缓存 key 版本：
 
-- 位置：[`src-tauri/core/src/providers/cache.rs`](/src-tauri/core/src/providers/cache.rs)
-- `key_prefix` 已提升（当前 `v4`，见 [`cache.rs`](/src-tauri/core/src/providers/cache.rs) 默认值）
+- 位置：[`src-tauri/kabegame-core/src/providers/cache.rs`](/src-tauri/kabegame-core/src/providers/cache.rs)
+- `key_prefix` 已提升（当前 `v4`，见 [`cache.rs`](/src-tauri/kabegame-core/src/providers/cache.rs) 默认值）
 
 原则：只要 `ProviderDescriptor` 或 `ImageQuery` 的序列化字段语义变化，就 bump 版本，避免历史缓存污染运行时。
 
@@ -144,8 +144,8 @@
 
 ## 抓取时间分组（gallery_time / main_date_browse）
 
-- **唯一数据源**：`Storage::get_gallery_day_groups()`（按自然日 `YYYY-MM-DD` 聚合计数，SQL 在 [`storage/gallery.rs`](/src-tauri/core/src/storage/gallery.rs)）。
-- **月分组**：不再单独跑按月 `GROUP BY` SQL；由 [`storage/gallery_time.rs`](/src-tauri/core/src/storage/gallery_time.rs) 的 `gallery_month_groups_from_days` 从日列表聚合得到，与前端年/月/树一致。
+- **唯一数据源**：`Storage::get_gallery_day_groups()`（按自然日 `YYYY-MM-DD` 聚合计数，SQL 在 [`storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)）。
+- **月分组**：不再单独跑按月 `GROUP BY` SQL；由 [`storage/gallery_time.rs`](/src-tauri/kabegame-core/src/storage/gallery_time.rs) 的 `gallery_month_groups_from_days` 从日列表聚合得到，与前端年/月/树一致。
 - **`GalleryTimeFilterPayload`**：`{ months, days }`，一次返回给前端；Tauri 命令 `get_gallery_time_filter_data`。
 - **`providers` 对 `gallery_time` 的再导出**：`kabegame_core::providers` 仍导出 `GalleryTimeFilterPayload` 等与 `storage::gallery_time` 相同符号（便于与插件分组等并列使用）。
 - **Gallery Main `date/*`**：`MainDateGroupProvider` 根目录为**年份**（`main_date_browse::gallery_distinct_years`）；子路径解析为 `MainDateScopedProvider`（年→月→日），与画廊 `date/<YYYY|YYYY-MM|YYYY-MM-DD>` 一致。
@@ -153,21 +153,21 @@
 
 ## 前端（画廊路径控件位置）
 
-- 桌面：过滤 / 排序在 [`apps/main/src/components/GalleryToolbar.vue`](/apps/main/src/components/GalleryToolbar.vue) 中位于 `PageHeader` 与大页分页器之间的工具行（根路径为 `all` / `wallpaper-order` / `date/<YYYY|YYYY-MM|YYYY-MM-DD>` / `plugin/<id>` / `media-type/image|video` 时显示过滤；「按时间」为年→月→日嵌套子菜单，单链父级仅一项时在 [`apps/main/src/utils/galleryTimeFilterMenu.ts`](/apps/main/src/utils/galleryTimeFilterMenu.ts) 中折叠省略；数据来自 `get_gallery_time_filter_data`；「按插件」数据来自 `get_gallery_plugin_groups`；「按种类」为图片/视频子菜单；排序始终可用）。`PageHeader` 折叠栏中的过滤控件见 [`apps/main/src/header/comps/GalleryFilterControl.vue`](/apps/main/src/header/comps/GalleryFilterControl.vue)，行为一致。
+- 桌面：过滤 / 排序在 [`apps/kabegame/src/components/GalleryToolbar.vue`](/apps/kabegame/src/components/GalleryToolbar.vue) 中位于 `PageHeader` 与大页分页器之间的工具行（根路径为 `all` / `wallpaper-order` / `date/<YYYY|YYYY-MM|YYYY-MM-DD>` / `plugin/<id>` / `media-type/image|video` 时显示过滤；「按时间」为年→月→日嵌套子菜单，单链父级仅一项时在 [`apps/kabegame/src/utils/galleryTimeFilterMenu.ts`](/apps/kabegame/src/utils/galleryTimeFilterMenu.ts) 中折叠省略；数据来自 `get_gallery_time_filter_data`；「按插件」数据来自 `get_gallery_plugin_groups`；「按种类」为图片/视频子菜单；排序始终可用）。`PageHeader` 折叠栏中的过滤控件见 [`apps/kabegame/src/header/comps/GalleryFilterControl.vue`](/apps/kabegame/src/header/comps/GalleryFilterControl.vue)，行为一致。
 - Android：同一文件内仍通过 `PageHeader` 的 fold 打开 van-picker；选「按时间」时分步选择（与折叠后的层级一致）；选「按插件」时再弹出插件列表 picker；选「按种类」时再弹出图片/视频 picker。
-- 画册详情过滤条：[`apps/main/src/components/AlbumDetailBrowseToolbar.vue`](/apps/main/src/components/AlbumDetailBrowseToolbar.vue)，除全部 / 设置过壁纸外支持仅图片 / 仅视频（路径见 [`albumPath.ts`](/apps/main/src/utils/albumPath.ts)）。
-- 按种类数量：Tauri 命令 `get_gallery_media_type_counts`（全库）、`get_album_media_type_counts`（单画册）；数据来自 `Storage::get_gallery_media_type_counts` / `get_album_media_type_counts`（[`storage/gallery.rs`](/src-tauri/core/src/storage/gallery.rs)），过滤下拉与折叠标签旁展示 `(n)`。
+- 画册详情过滤条：[`apps/kabegame/src/components/AlbumDetailBrowseToolbar.vue`](/apps/kabegame/src/components/AlbumDetailBrowseToolbar.vue)，除全部 / 设置过壁纸外支持仅图片 / 仅视频（路径见 [`albumPath.ts`](/apps/kabegame/src/utils/albumPath.ts)）。
+- 按种类数量：Tauri 命令 `get_gallery_media_type_counts`（全库）、`get_album_media_type_counts`（单画册）；数据来自 `Storage::get_gallery_media_type_counts` / `get_album_media_type_counts`（[`storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)），过滤下拉与折叠标签旁展示 `(n)`。
 
 **分页与每页条数（SimplePage）**：路径末尾页码、`galleryPageSize` 设置与 `browse_gallery_provider` 调用链见 [`GALLERY_PAGINATION_AND_IMAGE_LOAD.md`](GALLERY_PAGINATION_AND_IMAGE_LOAD.md)（与本文的 ImageQuery 组合正交，可对照阅读）。
 
 ## 相关代码索引
 
-- [`src-tauri/core/src/storage/gallery.rs`](/src-tauri/core/src/storage/gallery.rs)
-- [`src-tauri/core/src/storage/gallery_time.rs`](/src-tauri/core/src/storage/gallery_time.rs)
-- [`src-tauri/core/src/providers/main_date_browse.rs`](/src-tauri/core/src/providers/main_date_browse.rs)
-- [`src-tauri/core/src/providers/common.rs`](/src-tauri/core/src/providers/common.rs)
-- [`src-tauri/core/src/providers/main_root.rs`](/src-tauri/core/src/providers/main_root.rs)
-- [`src-tauri/core/src/providers/date_group.rs`](/src-tauri/core/src/providers/date_group.rs)（`VdByDateProvider` + 范围）
-- [`src-tauri/core/src/gallery/browse.rs`](/src-tauri/core/src/gallery/browse.rs)
-- [`src-tauri/core/src/providers/vd_ops.rs`](/src-tauri/core/src/providers/vd_ops.rs)
-- [`src-tauri/core/src/providers/cache.rs`](/src-tauri/core/src/providers/cache.rs)
+- [`src-tauri/kabegame-core/src/storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)
+- [`src-tauri/kabegame-core/src/storage/gallery_time.rs`](/src-tauri/kabegame-core/src/storage/gallery_time.rs)
+- [`src-tauri/kabegame-core/src/providers/main_date_browse.rs`](/src-tauri/kabegame-core/src/providers/main_date_browse.rs)
+- [`src-tauri/kabegame-core/src/providers/common.rs`](/src-tauri/kabegame-core/src/providers/common.rs)
+- [`src-tauri/kabegame-core/src/providers/main_root.rs`](/src-tauri/kabegame-core/src/providers/main_root.rs)
+- [`src-tauri/kabegame-core/src/providers/date_group.rs`](/src-tauri/kabegame-core/src/providers/date_group.rs)（`VdByDateProvider` + 范围）
+- [`src-tauri/kabegame-core/src/gallery/browse.rs`](/src-tauri/kabegame-core/src/gallery/browse.rs)
+- [`src-tauri/kabegame-core/src/providers/vd_ops.rs`](/src-tauri/kabegame-core/src/providers/vd_ops.rs)
+- [`src-tauri/kabegame-core/src/providers/cache.rs`](/src-tauri/kabegame-core/src/providers/cache.rs)
