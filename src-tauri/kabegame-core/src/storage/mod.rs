@@ -11,6 +11,7 @@ pub mod image_events;
 pub mod images;
 pub mod migrations;
 pub mod organize;
+pub mod plugin_data;
 pub mod plugin_sources;
 pub mod run_configs;
 pub mod surf_records;
@@ -155,6 +156,11 @@ PRAGMA mmap_size = 268435456;
     /// 获取插件源存储接口
     pub fn plugin_sources(&self) -> plugin_sources::PluginSourcesStorage {
         plugin_sources::PluginSourcesStorage::new(Arc::clone(&self.db))
+    }
+
+    /// 获取插件私有 JSON 数据存储接口
+    pub fn plugin_data(&self) -> plugin_data::PluginDataStorage {
+        plugin_data::PluginDataStorage::new(Arc::clone(&self.db))
     }
 
     /// 初始化全局 Storage（必须在首次使用前调用）

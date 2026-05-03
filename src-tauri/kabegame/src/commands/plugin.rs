@@ -1,6 +1,7 @@
 // 謠剃ｻｶ逶ｸ蜈ｳ蜻ｽ莉､
 
 use kabegame_core::plugin::PluginManager;
+use kabegame_core::storage::Storage;
 
 #[tauri::command]
 pub async fn get_plugins() -> Result<serde_json::Value, String> {
@@ -87,6 +88,15 @@ pub async fn reset_plugin_default_config(plugin_id: String) -> Result<serde_json
 pub async fn get_plugin_sources() -> Result<serde_json::Value, String> {
     let sources = PluginManager::global().load_plugin_sources()?;
     Ok(serde_json::to_value(sources).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+pub async fn get_plugin_data(plugin_id: String) -> Result<serde_json::Value, String> {
+    Storage::global()
+        .plugin_data()
+        .get(&plugin_id)
+        .map_err(|e| e.to_string())
+        .map(|v| v.unwrap_or_else(|| serde_json::json!({})))
 }
 
 #[tauri::command]

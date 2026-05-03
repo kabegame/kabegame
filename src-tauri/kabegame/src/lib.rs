@@ -375,6 +375,7 @@ pub fn run() {
             delete_plugin,
             install_from_store,
             get_plugin_sources,
+            get_plugin_data,
             add_plugin_source,
             update_plugin_source,
             delete_plugin_source,

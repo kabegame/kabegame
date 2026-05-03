@@ -55,6 +55,36 @@
         );
       });
     },
+    getPluginData: function () {
+      return new Promise(function (resolve, reject) {
+        var id = ++_id;
+        _cbs[id] = { resolve: resolve, reject: reject };
+        window.parent.postMessage(
+          { type: "ejs-bridge", id: id, action: "getPluginData" },
+          "*"
+        );
+      });
+    },
+    getCache: function (key) {
+      return new Promise(function (resolve, reject) {
+        var id = ++_id;
+        _cbs[id] = { resolve: resolve, reject: reject };
+        window.parent.postMessage(
+          { type: "ejs-bridge", id: id, action: "getCache", key: String(key) },
+          "*"
+        );
+      });
+    },
+    setCache: function (key, data) {
+      return new Promise(function (resolve, reject) {
+        var id = ++_id;
+        _cbs[id] = { resolve: resolve, reject: reject };
+        window.parent.postMessage(
+          { type: "ejs-bridge", id: id, action: "setCache", key: String(key), data: data },
+          "*"
+        );
+      });
+    },
     openUrl: function (url) {
       return new Promise(function (resolve, reject) {
         var id = ++_id;

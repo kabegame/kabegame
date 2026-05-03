@@ -6,6 +6,15 @@
 
 **Changelog entries:** Write release notes in **English** (new sections and bullets from [3.4.5] onward).
 
+## [4.1.1]
+
+### Optimized
+- **Video Playing**: For performance consideration, image item will not play video automaticly, users should manually play one of them.
+
+### Fixed
+- **Background image**: Background image used the image.url fields which is not stable. Now use fileToUrl(image.localPath)
+
+
 ## [4.1.0]
 
 ### Added

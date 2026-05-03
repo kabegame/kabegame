@@ -158,6 +158,13 @@ CREATE TABLE plugin_source_cache (
     FOREIGN KEY (source_id) REFERENCES plugin_sources(id) ON DELETE CASCADE
 );
 
+-- ───────────── plugin_data ─────────────
+CREATE TABLE plugin_data (
+    plugin_id  TEXT    PRIMARY KEY,
+    data       TEXT    NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+);
+
 -- ───────────── task_logs ─────────────
 CREATE TABLE task_logs (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,

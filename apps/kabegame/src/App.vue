@@ -3,14 +3,17 @@
   <!-- 主窗口 -->
   <el-container class="app-container" :class="{ 'app-container-compact': uiStore.isCompact, 'has-app-background': bgVisible }">
     <div
-      v-if="bgVisible"
+      v-if="bgVisible && bgImageUrl"
       class="app-background-layer"
       aria-hidden="true"
     >
       <img
+        :key="bgImageUrl"
         :src="bgImageUrl"
         class="app-background-img"
         :style="bgImageStyle"
+        :data-bg-token="bgImageToken"
+        @error="handleBgImageError"
       />
     </div>
     <!-- 全局文件拖拽提示层（仅非安卓平台） -->
@@ -100,8 +103,6 @@
         </keep-alive>
       </router-view>
     </el-main>
-    <!-- Web mode：super 模式切换（左下角浮动） -->
-    <SuperModeToggle v-if="IS_WEB && !uiStore.isCompact" />
     <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
     <nav v-if="uiStore.isCompact" class="app-bottom-tabs" aria-label="主导航">
       <router-link
@@ -146,7 +147,6 @@ import PluginImportDialog from "./components/import/PluginImportDialog.vue";
 import CrawlerDialog from "./components/CrawlerDialog.vue";
 import MissedRunsDialog from "./components/scheduler/MissedRunsDialog.vue";
 import AutoConfigDialog from "./components/scheduler/AutoConfigDialog.vue";
-import SuperModeToggle from "./components/SuperModeToggle.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
 import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
@@ -262,8 +262,25 @@ const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
 
 const bgImageUrl = ref("");
-const isAbsoluteUrl = (url: string) => /^https?:\/\//i.test(url);
+const bgVisible = ref(false);
+const bgImageToken = ref(0);
 let bgResolveToken = 0;
+
+const shouldShowAppBackground = () =>
+  !!settingsStore.values.appBackgroundEnabled &&
+  !!settingsStore.values.currentWallpaperImageId &&
+  !!bgImageUrl.value;
+
+const syncBgVisible = () => {
+  bgVisible.value = shouldShowAppBackground();
+};
+
+const handleBgImageError = (event: Event) => {
+  const img = event.currentTarget as HTMLImageElement | null;
+  const failedToken = Number(img?.dataset.bgToken ?? NaN);
+  if (!Number.isFinite(failedToken) || failedToken !== bgImageToken.value) return;
+  bgVisible.value = false;
+};
 
 watch(
   () => settingsStore.values.currentWallpaperImageId,
@@ -272,6 +289,7 @@ watch(
     const imageId = typeof id === "string" ? id.trim() : "";
     if (!imageId) {
       bgImageUrl.value = "";
+      bgVisible.value = false;
       return;
     }
 
@@ -286,25 +304,27 @@ watch(
         image = (res.entries || []).find((entry) => entry.kind === "image")?.image;
       }
 
-      const source = image?.url && isAbsoluteUrl(image.url)
-        ? image.url
-        : image?.localPath
-          ? fileToUrl(image.localPath)
-          : "";
+      const source = image?.localPath ? fileToUrl(image.localPath) : "";
       if (token !== bgResolveToken) return;
       bgImageUrl.value = source;
+      bgImageToken.value = token;
+      syncBgVisible();
     } catch (error) {
       if (token !== bgResolveToken) return;
       bgImageUrl.value = "";
+      bgVisible.value = false;
     }
   },
   { immediate: true },
 );
 
-const bgVisible = computed(() =>
-  !!settingsStore.values.appBackgroundEnabled &&
-  !!settingsStore.values.currentWallpaperImageId &&
-  !!bgImageUrl.value
+watch(
+  () => [
+    settingsStore.values.appBackgroundEnabled,
+    settingsStore.values.currentWallpaperImageId,
+    bgImageUrl.value,
+  ],
+  syncBgVisible,
 );
 const bgOpacity = computed(() => settingsStore.values.appBackgroundOpacity ?? 0.25);
 const bgBlurPx = computed(() => settingsStore.values.appBackgroundBlur ?? 2);

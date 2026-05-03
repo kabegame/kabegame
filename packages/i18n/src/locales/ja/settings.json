@@ -6,6 +6,8 @@
 
   "autoLaunch": "起動時に起動",
   "autoLaunchDesc": "システム起動時に自動実行",
+  "superMode": "Superモード",
+  "superModeDesc": "有効にすると書き込み操作が可能；無効は読み取り専用",
   "albumDrive": "アルバムドライブ",
   "albumDriveDesc": "ファイルマネージャーで仮想ドライブとしてアルバムを閲覧（制限付き）",
   "albumDriveOpenButton": "開く",

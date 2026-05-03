@@ -59,6 +59,10 @@
   - 主题：Pixiv 排行榜模式的 `config.json` 三维度、`ranking_date`、Rhai 按接口 `next` 分页与 `warn`。
   - 适用场景：扩展/排查排行榜爬取、R18 与 `x-user-id`、理解列表分页语义。
 
+- [crawler/PLUGIN_DATA.md](crawler/PLUGIN_DATA.md)
+  - 主题：爬虫插件私有 JSON 缓存 `plugin_data`，含 Rhai 读写 API、`description.ejs` 只读 bridge、隔离和卸载清理语义。
+  - 适用场景：插件需要缓存 tag taxonomy、emoji 元数据、token、TTL 状态，或在描述模板中读取爬虫预先计算的数据。
+
 ## 插件（`plugins/`）
 
 - [plugins/PLUGIN_STORE_CACHE.md](plugins/PLUGIN_STORE_CACHE.md)

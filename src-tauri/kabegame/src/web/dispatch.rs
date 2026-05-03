@@ -579,6 +579,26 @@ pub fn init_registry() {
     );
 
     map.insert(
+        "get_plugin_data",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(serde::Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        plugin_id: String,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    crate::commands_core::plugin::get_plugin_data(args.plugin_id)
+                        .await
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
         "get_store_plugins",
         MethodEntry {
             requires_super: false,
