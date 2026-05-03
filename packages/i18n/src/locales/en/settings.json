@@ -6,6 +6,8 @@
 
   "autoLaunch": "Launch at startup",
   "autoLaunchDesc": "Run automatically when system starts",
+  "superMode": "Super mode",
+  "superModeDesc": "Enable write operations; off means read-only",
   "albumDrive": "Album drive",
   "albumDriveDesc": "Browse albums as a virtual drive in file manager (limited operations)",
   "albumDriveOpenButton": "Open",

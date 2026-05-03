@@ -1,12 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kabegame",
-  "version": "4.1.0",
+  "version": "4.1.1",
   "identifier": "Kabegame",
   "build": {
     "beforeDevCommand": "bun run dev:frontend",
-    "devUrl": "http://localhost:1420",
-    "frontendDist": "../../dist-kabegame"
+    "devUrl": "http://localhost:1420"
   },
   "app": {
     "windows": [],

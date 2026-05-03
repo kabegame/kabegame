@@ -13,7 +13,10 @@
       "Bash(node scripts/check-manifest.js)",
       "Bash(node --check server/index.js)",
       "Bash(grep -E \"\\\\.\\(rs|ts\\)$\")",
-      "Bash(grep -r \"interface.*Settings\\\\|type.*Settings\" --include=\"*.ts\" packages/core/src --include-dir=types)"
+      "Bash(grep -r \"interface.*Settings\\\\|type.*Settings\" --include=\"*.ts\" packages/core/src --include-dir=types)",
+      "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\" -Directory)",
+      "Bash(Select-Object Name)",
+      "Bash(grep -E \"\\\\.\\(ts|vue\\)$\")"
     ]
   }
 }

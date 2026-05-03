@@ -1,4 +1,5 @@
 use kabegame_core::plugin::PluginManager;
+use kabegame_core::storage::Storage;
 use serde_json::{json, Value};
 
 pub async fn get_plugins() -> Result<Value, String> {
@@ -33,6 +34,14 @@ pub async fn refresh_plugins() -> Result<Value, String> {
 pub async fn get_plugin_sources() -> Result<Value, String> {
     let sources = PluginManager::global().load_plugin_sources()?;
     serde_json::to_value(sources).map_err(|e| e.to_string())
+}
+
+pub async fn get_plugin_data(plugin_id: String) -> Result<Value, String> {
+    Storage::global()
+        .plugin_data()
+        .get(&plugin_id)
+        .map_err(|e| e.to_string())
+        .map(|v| v.unwrap_or_else(|| json!({})))
 }
 
 pub async fn get_store_plugins(

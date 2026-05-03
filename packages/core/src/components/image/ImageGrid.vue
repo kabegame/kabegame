@@ -18,9 +18,11 @@
                 :window-aspect-ratio="getEffectiveAspectRatioForItem(item.image)" :selected="selectedIds.has(item.image.id)"
                 :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
                 :horizontal="isHorizontal"
+                :video-playing="playingVideoId === item.image.id"
                 @click="(e) => handleItemClick(item.image, item.index, e)"
                 @dblclick="() => handleItemDblClick(item.image, item.index)"
                 @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
+                @toggle-video-play="() => handleToggleVideoPlay(item.image.id)"
                 @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
             </div>
 
@@ -30,9 +32,11 @@
                 :image-click-action="settingsStore.values.imageClickAction || 'none'"
                 :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="selectedIds.has(image.id)"
                 :grid-columns="gridColumnsCount" :grid-index="index" :horizontal="isHorizontal"
+                :video-playing="playingVideoId === image.id"
                 @click="(e) => handleItemClick(image, index, e)"
                 @dblclick="() => handleItemDblClick(image, index)"
-                @contextmenu="(e) => handleItemContextMenu(image, index, e)" />
+                @contextmenu="(e) => handleItemContextMenu(image, index, e)"
+                @toggle-video-play="() => handleToggleVideoPlay(image.id)" />
             </transition-group>
           </template>
 
@@ -44,9 +48,11 @@
                 :image-click-action="settingsStore.values.imageClickAction || 'none'"
                 :window-aspect-ratio="aspectRatioOf(entry.image)" :selected="selectedIds.has(entry.image.id)"
                 :grid-columns="gridColumnsCount" :grid-index="entry.index" fill-box :horizontal="isHorizontal"
+                :video-playing="playingVideoId === entry.image.id"
                 @click="(e) => handleItemClick(entry.image, entry.index, e)"
                 @dblclick="() => handleItemDblClick(entry.image, entry.index)"
-                @contextmenu="(e) => handleItemContextMenu(entry.image, entry.index, e)" />
+                @contextmenu="(e) => handleItemContextMenu(entry.image, entry.index, e)"
+                @toggle-video-play="() => handleToggleVideoPlay(entry.image.id)" />
             </div>
           </div>
         </div>
@@ -194,6 +200,11 @@ const emit = defineEmits<{
 const settingsStore = useSettingsStore();
 /** 本栅格实例内的选择集，不跨页面/路由共享 */
 const selectedIds = ref<Set<string>>(new Set());
+/** 当前正在播放的视频 id（同一时间最多一个），点击右上角按钮切换 */
+const playingVideoId = ref<string | null>(null);
+const handleToggleVideoPlay = (imageId: string) => {
+  playingVideoId.value = playingVideoId.value === imageId ? null : imageId;
+};
 const modalStackStore = useModalStackStore();
 const uiStore = useUiStore();
 
@@ -1175,6 +1186,11 @@ watch(
 
     const newIds = new Set((newImages ?? []).map((img) => img.id));
     const oldIds = previousImageIds.value;
+
+    // 列表里的播放目标如果被移除（换页/筛选/删除），重置播放状态，避免悬挂的"已播放但目标已不存在"
+    if (playingVideoId.value && !newIds.has(playingVideoId.value)) {
+      playingVideoId.value = null;
+    }
 
     // 判断是否是刷新/换页（新旧列表完全没有交集）还是图片增减
     const hasIntersection = oldIds.size > 0 && [...oldIds].some((id) => newIds.has(id));

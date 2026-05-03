@@ -19,8 +19,17 @@
         </el-icon>
       </div>
     </el-tooltip>
-    <!-- 视频标识：右上角播放三角 -->
-    <div v-if="isVideo" class="video-play-badge" aria-hidden="true">
+    <!-- 视频标识：右上角播放/暂停切换按钮（可控视频，video 元素） -->
+    <div v-if="isControllableVideo" class="video-play-badge video-play-badge-interactive"
+      role="button" :aria-label="videoPlaying ? '暂停' : '播放'"
+      @click.stop="handleToggleVideoPlay" @dblclick.stop @contextmenu.stop.prevent>
+      <el-icon :size="14">
+        <VideoPause v-if="videoPlaying" />
+        <VideoPlay v-else />
+      </el-icon>
+    </div>
+    <!-- 视频标识：GIF 等不可控形态，仅作为静态指示 -->
+    <div v-else-if="isVideo" class="video-play-badge" aria-hidden="true">
       <el-icon :size="14">
         <VideoPlay />
       </el-icon>
@@ -68,7 +77,7 @@
           :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': isCompact }]"
           :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
           @load="handleImageLoad" @error="handleImageError" />
-        <video v-else-if="isVideo" :src="displayUrl" class="thumbnail" draggable="false" muted autoplay loop poster=""
+        <video v-else-if="isVideo" ref="videoEl" :src="displayUrl" class="thumbnail" draggable="false" muted loop poster=""
           preload="auto" playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback=""
           @dragstart.prevent @mousedown.prevent />
         <!-- 单图（桌面无独立缩略图） -->
@@ -82,9 +91,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, watch } from "vue";
+import { computed, nextTick, onUnmounted, watch, watchEffect } from "vue";
 import { ref, toRef } from "vue";
-import { WarningFilled, VideoPlay } from "@element-plus/icons-vue";
+import { WarningFilled, VideoPlay, VideoPause } from "@element-plus/icons-vue";
 import type { ImageInfo } from "../../types/image";
 import type { ImageClickAction } from "../../stores/settings";
 import ImageNotFound from "../common/ImageNotFound.vue";
@@ -106,9 +115,12 @@ interface Props {
   isLeaving?: boolean; // 是否正在离开（用于虚拟滚动的动画）
   fillBox?: boolean; // gallery 布局：盒宽高比等于图片自然比，填满且不留 letterbox 背景
   horizontal?: boolean; // 水平方向：盒子用 height: 100% 撑满主轴，width 由 aspect-ratio 决定
+  videoPlaying?: boolean; // 视频是否正在播放（由上层控制，确保同一时间只有一个视频在播放）
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  videoPlaying: false,
+});
 
 const emit = defineEmits<{
   click: [event?: MouseEvent];
@@ -117,6 +129,7 @@ const emit = defineEmits<{
   longpress: []; // Android 长按事件
   enterAnimationEnd: []; // 入场动画结束
   leaveAnimationEnd: []; // 退场动画结束
+  toggleVideoPlay: []; // 用户点击右上角播放/暂停按钮，由上层决定是否切换播放状态
 }>();
 
 const imageRef = toRef(props, "image");
@@ -252,6 +265,26 @@ const rootStyle = computed<Record<string, string> | undefined>(() => {
   return aspectRatioStyle.value as Record<string, string>;
 });
 const isVideo = computed(() => isVideoMediaType(props.image.type));
+// 模板里 Android/Linux(非web) 用 <img>（GIF 形态），其余走 <video> 元素 —— 只有 <video> 路径可控播放/暂停
+const isControllableVideo = computed(() => isVideo.value && !(!IS_WEB && (IS_ANDROID || IS_LINUX)));
+
+const videoEl = ref<HTMLVideoElement | null>(null);
+
+// 同步 videoPlaying 到真实 video 元素：true → play()；false → pause() 并复位到起点
+watchEffect(() => {
+  const el = videoEl.value;
+  if (!el || !isControllableVideo.value) return;
+  if (props.videoPlaying) {
+    void el.play().catch(() => { /* 忽略浏览器拦截/卸载竞态 */ });
+  } else {
+    el.pause();
+    try { el.currentTime = 0; } catch { /* 部分平台 currentTime 写入会抛 */ }
+  }
+});
+
+const handleToggleVideoPlay = () => {
+  emit("toggleVideoPlay");
+};
 
 const handleWrapperClick = (event?: MouseEvent) => {
   // Android 下，如果刚触发了长按，跳过本次 click
@@ -564,6 +597,22 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   background: rgba(0, 0, 0, 0.5);
   border: 1px solid rgba(255, 255, 255, 0.4);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+/* 可控视频的播放/暂停按钮：让 badge 接收点击 */
+.video-play-badge-interactive {
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.7);
+    transform: scale(1.08);
+  }
+
+  &:active {
+    transform: scale(0.96);
+  }
 }
 
 .fade-in-enter-active {

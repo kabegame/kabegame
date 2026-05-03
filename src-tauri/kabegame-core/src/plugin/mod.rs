@@ -325,6 +325,9 @@ impl PluginManager {
             return Err(format!("插件 {} 不在用户插件目录中或不存在", id));
         }
         fs::remove_file(&path).map_err(|e| format!("Failed to delete plugin file: {}", e))?;
+        if let Err(e) = crate::storage::Storage::global().plugin_data().delete(id) {
+            eprintln!("[plugin-data] cleanup failed for {id}: {e}");
+        }
         // 删除后局部刷新缓存（避免前端仍看到旧列表/旧图标）
         self.refresh_plugin(id).await?;
 

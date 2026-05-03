@@ -70,7 +70,7 @@ flowchart TD
    - `body = ejs.render(tpl, { metadata: img.metadata }, { rmWhitespace: false })`
    - **CSP（生产 / WKWebView）**：Tauri 会为父文档注入 `script-src` 哈希，子文档 `about:srcdoc` 继承后内联脚本会被拒。应用层使用**固定 nonce**（常量 `kabegame-ejs-bridge`，与 `tauri.conf.json` 中 `script-src` 的 `'nonce-kabegame-ejs-bridge'` 一致），为 bridge 与 EJS 产出中所有 `<script>` 标签写入 `nonce="kabegame-ejs-bridge"`。
    - `descriptionSrcdoc = theme + '<script nonce="…">' + DESCRIPTION_BRIDGE_INJECT_SCRIPT + '</script>' + body`（`body` 内 `<script>` 同样注入 nonce）
-   - 注入脚本定义 **`window.__bridge.fetch`**、**`getLocale`**、**`openUrl`**，并全局监听 iframe 内 `<a>` 点击（见下节）。
+   - 注入脚本定义 **`window.__bridge.fetch`**、**`getLocale`**、**`getPluginData`**、**`getCache`**、**`setCache`**、**`openUrl`**，并全局监听 iframe 内 `<a>` 点击（见下节）。
 3. **展示**：`iframe :srcdoc="descriptionSrcdoc"`，`sandbox` 含 `allow-scripts`、`allow-same-origin` 等。
 4. **不经 DOMPurify**：信任已安装插件包内容；恶意模板风险见文末「安全说明」。
 5. **无模板时**：若 `metadata` 可展示但无 `description.ejs`，走 **`showRawMetadata`**，以键值形式展示原始 `metadata`（不经过 EJS）。
@@ -95,11 +95,13 @@ flowchart TD
 
 **Tauri 命令**：[src-tauri/kabegame/src/commands/proxy.rs](../../src-tauri/kabegame/src/commands/proxy.rs) → `proxy_fetch`。单响应体积上限约 **3MB**（`PROXY_FETCH_BYTES_MAX`）。
 
-### 4.2 `__bridge.getLocale` / `__bridge.openUrl` / 全局 `<a>` 点击桥接
+### 4.2 `__bridge.getLocale` / `__bridge.getPluginData` / `__bridge.getCache` / `__bridge.setCache` / `__bridge.openUrl` / 全局 `<a>` 点击桥接
 
 1. **`getLocale()`**：iframe 发送 `{ type: 'ejs-bridge', id, action: 'getLocale' }`；父窗口回 **`{ type: 'ejs-bridge-response', id, data }`**，`data` 为应用当前 i18n locale 字符串（如 `en`、`zh`、`ja`、`zhtw`）。
-2. **`openUrl(url)`**：iframe 发送 `{ type: 'ejs-bridge', id, action: 'openUrl', url }`；父窗口校验 **`http:` / `https:`** 后调用 **`@tauri-apps/plugin-opener` 的 `openUrl`**，成功回 **`{ type: 'ejs-bridge-response', id }`**，失败回 **`error`** 字符串。
-3. **全局 `<a>` 点击桥接**：注入脚本在 iframe 文档级监听点击事件，命中 `<a>` 后优先取 `data-url`，否则取 `href`（仅放行 `http` / `https`），再通过 `openUrl` 交给宿主打开。
+2. **`getPluginData()`**：iframe 发送 `{ type: 'ejs-bridge', id, action: 'getPluginData' }`；父窗口用当前图片的 `image.pluginId` 调用只读命令 `get_plugin_data`，回 **`{ type: 'ejs-bridge-response', id, data }`**。iframe 不能指定 plugin id，也没有写入 API。
+3. **`getCache(key)` / `setCache(key, data)`**：iframe 发送 `{ type: 'ejs-bridge', id, action: 'getCache' | 'setCache', key, data? }`；父窗口按当前图片的 `image.pluginId` 给 `key` 加插件作用域后读写宿主 IndexedDB + LRU 缓存。iframe 不能跨插件读取缓存。
+4. **`openUrl(url)`**：iframe 发送 `{ type: 'ejs-bridge', id, action: 'openUrl', url }`；父窗口校验 **`http:` / `https:`** 后调用 **`@tauri-apps/plugin-opener` 的 `openUrl`**，成功回 **`{ type: 'ejs-bridge-response', id }`**，失败回 **`error`** 字符串。
+5. **全局 `<a>` 点击桥接**：注入脚本在 iframe 文档级监听点击事件，命中 `<a>` 后优先取 `data-url`，否则取 `href`（仅放行 `http` / `https`），再通过 `openUrl` 交给宿主打开。
 4. 与 `ejs-fetch` 相同，仅当 **`event.source` 为详情 iframe** 时处理，避免其它窗口冒充。
 
 模板内可用二者实现与主应用语言一致的文案、以及在外部浏览器/系统打开链接（例如 PixAI 标签页）。
@@ -114,6 +116,8 @@ flowchart TD
 - 需要跨域 HTTP 时统一用 **`__bridge.fetch`**（`json: true` 解析 JSON；否则拿 `{ base64, contentType }`），不要假设 iframe 内直连 `fetch` 可伪造 `Referer`。
 - Pixiv 部分接口带 **`lang`** 查询参数时：应先用 **`__bridge.getLocale()`** 取应用语言，再在模板内映射为 Pixiv 接受的 `ja` / `zh` / `ko` / `en`（与作品页 ajax 一致），例如 `ajax/illust/{id}`、评论根列表等。
 - 需要与应用 UI 语言一致时可用 **`__bridge.getLocale()`**。
+- 需要读取爬虫提前写入的插件级缓存时可用 **`__bridge.getPluginData()`**；例如 PixAI tag 显示名缓存、米游社 emoji 元数据等。
+- 需要避免 iframe 反复桥接或重复网络请求时可用 **`__bridge.getCache(key)` / `setCache(key, data)`**；缓存由宿主 IndexedDB 管理并带 LRU 淘汰，key 会自动按插件隔离。
 - 模板中的外链优先直接写 `<a data-url="https://...">` 或 `<a href="https://...">`，由注入脚本统一桥接打开；通常不再需要在模板里手动绑定 `click` 调 `__bridge.openUrl`。
 - 可选 `templates/description.ejs`；无则详情区仅展示原始 metadata（若存在）。
 

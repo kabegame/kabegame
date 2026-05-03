@@ -6,6 +6,8 @@
 
   "autoLaunch": "开机启动",
   "autoLaunchDesc": "应用启动时自动运行",
+  "superMode": "Super 模式",
+  "superModeDesc": "启用后可执行写操作；关闭则为只读模式",
   "albumDrive": "画册盘",
   "albumDriveDesc": "在资源管理器中以虚拟盘方式浏览画册（只支持有限的操作）",
   "albumDriveOpenButton": "打开",

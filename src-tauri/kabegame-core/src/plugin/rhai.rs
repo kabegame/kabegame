@@ -47,16 +47,28 @@ fn rhai_dynamic_to_json_value(d: &Dynamic) -> Result<JsonValue, Box<rhai::EvalAl
         return Ok(JsonValue::Array(out));
     }
     if d.is_map() {
-        let m: Map = d.clone().try_cast::<Map>().ok_or_else(|| {
-            Box::<rhai::EvalAltResult>::from("download_image opts: metadata map cast failed")
-        })?;
+        let m: Map = d
+            .clone()
+            .try_cast::<Map>()
+            .ok_or_else(|| Box::<rhai::EvalAltResult>::from("Rhai value map cast failed"))?;
         let mut obj = JsonMap::new();
         for (k, v) in m {
             obj.insert(k.to_string(), rhai_dynamic_to_json_value(&v)?);
         }
         return Ok(JsonValue::Object(obj));
     }
-    Err("download_image opts: metadata contains unsupported Rhai type".into())
+    Err("Rhai value contains unsupported type for JSON serialization".into())
+}
+
+fn rhai_map_to_json_value(map: &Map) -> Result<JsonValue, String> {
+    let mut obj = JsonMap::new();
+    for (k, v) in map {
+        obj.insert(
+            k.to_string(),
+            rhai_dynamic_to_json_value(v).map_err(|e| e.to_string())?,
+        );
+    }
+    Ok(JsonValue::Object(obj))
 }
 
 fn safe_filename_component(input: &str) -> String {
@@ -647,6 +659,42 @@ pub fn register_crawler_functions(
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0)
+    });
+
+    engine.register_fn("plugin_data", {
+        let plugin_id_holder = Arc::clone(&plugin_id);
+        move || -> Result<Map, Box<rhai::EvalAltResult>> {
+            let pid = lock_or_inner(&plugin_id_holder).clone();
+            let value = Storage::global()
+                .plugin_data()
+                .get(&pid)
+                .map_err(|e| format!("plugin_data get: {e}"))?;
+            let mut map = Map::new();
+            if let Some(v) = value {
+                convert_json_to_rhai_map(&v, &mut map);
+            }
+            Ok(map)
+        }
+    });
+
+    engine.register_fn("set_plugin_data", {
+        let plugin_id_holder = Arc::clone(&plugin_id);
+        move |value: Dynamic| -> Result<(), Box<rhai::EvalAltResult>> {
+            if !value.is_map() {
+                return Err("set_plugin_data: value must be a Map".into());
+            }
+            let map = value.try_cast::<Map>().ok_or_else(|| {
+                Box::<rhai::EvalAltResult>::from("set_plugin_data: map cast failed")
+            })?;
+            let json = rhai_map_to_json_value(&map)
+                .map_err(|e| format!("set_plugin_data convert: {e}"))?;
+            let pid = lock_or_inner(&plugin_id_holder).clone();
+            Storage::global()
+                .plugin_data()
+                .set(&pid, &json)
+                .map_err(|e| format!("plugin_data set: {e}"))?;
+            Ok(())
+        }
     });
 
     // xhh_nonce(t) - 生成 XHH nonce（32位大写十六进制）
@@ -1589,11 +1637,8 @@ pub fn register_crawler_functions(
     engine.register_fn(
         "create_image_metadata",
         |m: Map| -> Result<i64, Box<rhai::EvalAltResult>> {
-            let mut obj = JsonMap::new();
-            for (k, v) in m {
-                obj.insert(k.to_string(), rhai_dynamic_to_json_value(&v)?);
-            }
-            let val = JsonValue::Object(obj);
+            let val =
+                rhai_map_to_json_value(&m).map_err(|e| format!("create_image_metadata: {e}"))?;
             Storage::global()
                 .insert_or_get_image_metadata_row(&val)
                 .map_err(|e| e.to_string().into())

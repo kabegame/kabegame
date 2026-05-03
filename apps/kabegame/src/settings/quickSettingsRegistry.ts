@@ -19,6 +19,7 @@ import WallpaperRotationEnabledSetting from "@/components/settings/items/Wallpap
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
+import SuperModeSetting from "@/components/settings/items/SuperModeSetting.vue";
 
 /**
  * 使用快捷设置分组：返回已按当前语言翻译的 groups，供 CoreQuickSettingsDrawer 使用。
@@ -334,6 +335,13 @@ export function useQuickSettingsGroups() {
             buildArgs: (value: boolean) => ({ enabled: value }),
           },
           pages: ["settings"],
+        } as QuickSettingItem<QuickSettingsPageId>] : []),
+        ...(IS_WEB ? [{
+          key: "superMode",
+          label: t("settings.superMode"),
+          description: t("settings.superModeDesc"),
+          comp: SuperModeSetting,
+          pages: allPages,
         } as QuickSettingItem<QuickSettingsPageId>] : []),
       ],
     },

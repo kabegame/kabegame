@@ -118,6 +118,7 @@ import {
   type ImageMetadataResolver,
 } from "../../composables/useImageMetadataCache";
 import { displayImageMimeType } from "../../utils/mediaMime";
+import { getEjsBridgeCache, setEjsBridgeCache } from "../../cache/ejsBridgeCache";
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
@@ -271,6 +272,62 @@ function onIframeBridgeMessage(event: MessageEvent) {
         { type: "ejs-bridge-response", id, data: locale.value ?? "en" },
         "*",
       );
+      return;
+    }
+    if (action === "getPluginData") {
+      const pluginId = props.image?.pluginId ?? "";
+      if (!pluginId) {
+        iframeWin.postMessage(
+          { type: "ejs-bridge-response", id, error: "missing plugin id" },
+          "*",
+        );
+        return;
+      }
+      void invoke("get_plugin_data", { pluginId })
+        .then((data: unknown) => {
+          iframeWin.postMessage({ type: "ejs-bridge-response", id, data }, "*");
+        })
+        .catch((err: unknown) => {
+          iframeWin.postMessage(
+            { type: "ejs-bridge-response", id, error: String(err) },
+            "*",
+          );
+      });
+      return;
+    }
+    if (action === "getCache" || action === "setCache") {
+      const pluginId = props.image?.pluginId ?? "";
+      const key = typeof d.key === "string" ? d.key.trim() : "";
+      if (!pluginId || !key || key.length > 200) {
+        iframeWin.postMessage(
+          { type: "ejs-bridge-response", id, error: "invalid cache key" },
+          "*",
+        );
+        return;
+      }
+      if (action === "getCache") {
+        void getEjsBridgeCache(pluginId, key)
+          .then((data: unknown) => {
+            iframeWin.postMessage({ type: "ejs-bridge-response", id, data }, "*");
+          })
+          .catch((err: unknown) => {
+            iframeWin.postMessage(
+              { type: "ejs-bridge-response", id, error: String(err) },
+              "*",
+            );
+          });
+        return;
+      }
+      void setEjsBridgeCache(pluginId, key, d.data ?? null)
+        .then(() => {
+          iframeWin.postMessage({ type: "ejs-bridge-response", id, data: true }, "*");
+        })
+        .catch((err: unknown) => {
+          iframeWin.postMessage(
+            { type: "ejs-bridge-response", id, error: String(err) },
+            "*",
+          );
+        });
       return;
     }
     if (action === "openUrl") {
