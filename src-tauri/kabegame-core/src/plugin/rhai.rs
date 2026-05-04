@@ -105,7 +105,6 @@ fn run_rhai_download_image_sync(
     http_headers: HashMap<String, String>,
     url: &str,
     custom_display_name: Option<String>,
-    metadata: Option<serde_json::Value>,
     metadata_id: Option<i64>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     if dq_handle.is_task_canceled_blocking(&task_id) {
@@ -145,7 +144,6 @@ fn run_rhai_download_image_sync(
         output_album_id,
         http_headers,
         custom_display_name,
-        metadata,
         metadata_id,
     );
     tokio::runtime::Handle::current()
@@ -153,10 +151,10 @@ fn run_rhai_download_image_sync(
         .map_err(|e| format!("Failed to download image: {}", e).into())
 }
 
-/// 从 Rhai `download_image(url, opts)` 的 `opts` map 解析 `name` / `metadata` / `metadata_id`。
+/// 从 Rhai `download_image(url, opts)` 的 `opts` map 解析 `name` / `metadata_id`。
 fn parse_download_image_opts_from_map(
     opts: &Map,
-) -> Result<(Option<String>, Option<serde_json::Value>, Option<i64>), Box<rhai::EvalAltResult>> {
+) -> Result<(Option<String>, Option<i64>), Box<rhai::EvalAltResult>> {
     let opt_str = |key: &str| -> Result<Option<String>, Box<rhai::EvalAltResult>> {
         match opts.get(key) {
             None => Ok(None),
@@ -183,12 +181,18 @@ fn parse_download_image_opts_from_map(
         Some(d) if d.is_unit() => None,
         Some(d) => Some(rhai_dynamic_to_json_value(d)?),
     };
-    let metadata = if metadata_id.is_some() {
-        None
+    let metadata_id = if let Some(id) = metadata_id {
+        Some(id)
+    } else if let Some(value) = metadata {
+        Some(
+            Storage::global()
+                .insert_or_get_image_metadata_row(&value)
+                .map_err(|e| e.to_string())?,
+        )
     } else {
-        metadata
+        None
     };
-    Ok((opt_str("name")?, metadata, metadata_id))
+    Ok((opt_str("name")?, metadata_id))
 }
 
 fn get_page_stack(
@@ -1600,7 +1604,6 @@ pub fn register_crawler_functions(
                 url,
                 None,
                 None,
-                None,
             )
         },
     );
@@ -1618,7 +1621,7 @@ pub fn register_crawler_functions(
             let task_id = lock_or_inner(&tid2).clone();
             let output_album_id = lock_or_inner(&oaid2).clone();
             let http_headers = lock_or_inner(&hdr2).clone();
-            let (custom_name, metadata, metadata_id) = parse_download_image_opts_from_map(&opts)?;
+            let (custom_name, metadata_id) = parse_download_image_opts_from_map(&opts)?;
             run_rhai_download_image_sync(
                 &dq2,
                 images_dir,
@@ -1628,7 +1631,6 @@ pub fn register_crawler_functions(
                 http_headers,
                 url,
                 custom_name,
-                metadata,
                 metadata_id,
             )
         },

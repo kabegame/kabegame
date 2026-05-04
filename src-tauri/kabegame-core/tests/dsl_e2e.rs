@@ -114,7 +114,6 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             task_id TEXT,
             surf_record_id TEXT,
             crawled_at INTEGER NOT NULL,
-            metadata TEXT,
             metadata_id INTEGER,
             thumbnail_path TEXT NOT NULL DEFAULT '',
             hash TEXT NOT NULL DEFAULT '',
@@ -172,19 +171,14 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         conn.execute(
             "INSERT INTO images
              (id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at,
-              metadata, metadata_id, thumbnail_path, hash, type, width, height, display_name, size)
-             VALUES (?1, ?2, ?3, 'pixiv', ?4, 'surf-a', ?5, ?6, ?7, '', ?8, 'image', 100, 100, ?9, 10)",
+              metadata_id, thumbnail_path, hash, type, width, height, display_name, size)
+             VALUES (?1, ?2, ?3, 'pixiv', ?4, 'surf-a', ?5, ?6, '', ?7, 'image', 100, 100, ?8, 10)",
             (
                 i,
                 format!("https://example.test/{i}.jpg"),
                 format!("D:/fixture/{i}.jpg"),
                 TASK_A_ID,
                 crawled_at,
-                if i == 2 {
-                    Some("{\"source\":\"legacy\"}".to_string())
-                } else {
-                    None
-                },
                 if i == 1 { Some(1_i64) } else { None },
                 format!("hash-{i}"),
                 format!("image-{i}"),
@@ -352,7 +346,7 @@ fn images_provider_pages_return_raw_image_rows() {
 }
 
 #[test]
-fn images_metadata_path_prefers_table_then_legacy_metadata() {
+fn images_metadata_path_reads_table_metadata() {
     let runtime = build_runtime();
     let table = runtime.fetch("/images/id_1/metadata").unwrap();
     assert_eq!(
@@ -362,10 +356,8 @@ fn images_metadata_path_prefers_table_then_legacy_metadata() {
 
     let legacy = runtime.fetch("/images/id_2/metadata").unwrap();
     assert_eq!(
-        legacy[0]
-            .get("legacy_metadata_json")
-            .and_then(|v| v.as_str()),
-        Some("{\"source\":\"legacy\"}")
+        legacy[0].get("metadata_json").and_then(|v| v.as_str()),
+        None
     );
 }
 

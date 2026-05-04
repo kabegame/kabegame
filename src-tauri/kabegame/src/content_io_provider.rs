@@ -34,6 +34,7 @@ enum Request {
     ReadFileBytes(String),
     TakePersistablePermission(String),
     GetImageDimensions(String),
+    GetVideoDimensions(String),
     GetContentSize(String),
     GetDisplayName(String),
     CopyImageToPictures {
@@ -52,6 +53,7 @@ enum Response {
     ReadFileBytes(Result<Vec<u8>, String>),
     TakePersistablePermission(Result<(), String>),
     GetImageDimensions(Result<(u32, u32), String>),
+    GetVideoDimensions(Result<(u32, u32), String>),
     GetContentSize(Result<u64, String>),
     GetDisplayName(Result<String, String>),
     CopyImageToPictures(Result<String, String>),
@@ -145,6 +147,18 @@ fn run_worker_loop<R: Runtime + 'static>(
                         .app_handle
                         .picker()
                         .get_image_dimensions(uri)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok((resp.width, resp.height))
+                }))
+            }
+            Request::GetVideoDimensions(uri) => {
+                let p = &provider;
+                Response::GetVideoDimensions(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .picker()
+                        .get_video_dimensions(uri)
                         .await
                         .map_err(|e| e.to_string())?;
                     Ok((resp.width, resp.height))
@@ -291,6 +305,17 @@ impl ContentIoProvider for ChannelContentIoProvider {
             .map_err(|e| e.to_string())?;
         match resp_rx.await.map_err(|e| e.to_string())? {
             Response::GetImageDimensions(r) => r,
+            _ => Err("unexpected response".to_string()),
+        }
+    }
+
+    async fn get_video_dimensions(&self, uri: &str) -> Result<(u32, u32), String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send((Request::GetVideoDimensions(uri.to_string()), resp_tx))
+            .map_err(|e| e.to_string())?;
+        match resp_rx.await.map_err(|e| e.to_string())? {
+            Response::GetVideoDimensions(r) => r,
             _ => Err("unexpected response".to_string()),
         }
     }

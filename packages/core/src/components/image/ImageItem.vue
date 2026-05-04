@@ -72,8 +72,8 @@
             :class="['thumbnail', 'original-layer', { 'original-layer-visible': originalLoaded }]" :alt="image.id"
             draggable="false" @load="handleOriginalLoad" @error="handleOriginalError" />
         </template>
-        <!-- Android/Linux(非web) 视频：用 GIF ；Windows/macOS/web 视频：用 video 元素 -->
-        <img v-else-if="isVideo && !IS_WEB && (IS_ANDROID || IS_LINUX)" :src="displayUrl" loading="lazy" decoding="async"
+        <!-- GIF 缩略图（历史数据与 Android）：用 img；mp4 缩略图：用 video 元素 -->
+        <img v-else-if="isVideoRenderedAsImage" :src="displayUrl" loading="lazy" decoding="async"
           :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': isCompact }]"
           :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
           @load="handleImageLoad" @error="handleImageError" />
@@ -99,7 +99,6 @@ import type { ImageClickAction } from "../../stores/settings";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import { useImageItemLoader } from "../../composables/useImageItemLoader";
 import { useSettingsStore } from "../../stores/settings";
-import { IS_ANDROID, IS_LINUX, IS_WEB } from "../../env";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -265,8 +264,38 @@ const rootStyle = computed<Record<string, string> | undefined>(() => {
   return aspectRatioStyle.value as Record<string, string>;
 });
 const isVideo = computed(() => isVideoMediaType(props.image.type));
-// 模板里 Android/Linux(非web) 用 <img>（GIF 形态），其余走 <video> 元素 —— 只有 <video> 路径可控播放/暂停
-const isControllableVideo = computed(() => isVideo.value && !(!IS_WEB && (IS_ANDROID || IS_LINUX)));
+
+function pathFromUrlLike(value: string | undefined): string {
+  const raw = (value || "").trim();
+  if (!raw) return "";
+  try {
+    const u = new URL(raw, window.location.origin);
+    const pathParam = u.searchParams.get("path");
+    if (pathParam) return pathParam;
+    return decodeURIComponent(u.pathname || raw);
+  } catch {
+    const noHash = raw.split("#", 1)[0] || "";
+    const noQuery = noHash.split("?", 1)[0] || noHash;
+    try {
+      return decodeURIComponent(noQuery);
+    } catch {
+      return noQuery;
+    }
+  }
+}
+
+function hasPathExtension(value: string | undefined, ext: string): boolean {
+  const path = pathFromUrlLike(value).trim().toLowerCase();
+  return path.endsWith(`.${ext.toLowerCase()}`);
+}
+
+const displayPreviewPath = computed(() =>
+  displayUrl.value || props.image.thumbnailPath || props.image.localPath
+);
+const isGifVideoPreview = computed(() => isVideo.value && hasPathExtension(displayPreviewPath.value, "gif"));
+const isVideoRenderedAsImage = computed(() => isVideo.value && isGifVideoPreview.value);
+// GIF 预览不可控；mp4 预览走 <video>，由上层统一控制播放/暂停。
+const isControllableVideo = computed(() => isVideo.value && !isVideoRenderedAsImage.value);
 
 const videoEl = ref<HTMLVideoElement | null>(null);
 

@@ -401,7 +401,16 @@ function handleSettingsAction(payload: { id: string; data: { type: string } }) {
 const loadSettings = async () => {
   startLoading();
   try {
-    await settingsStore.loadAll();
+    await settingsStore.ensureLoaded();
+  } finally {
+    finishLoading();
+  }
+};
+
+const refreshSettings = async () => {
+  startLoading();
+  try {
+    await settingsStore.refreshAll();
   } finally {
     finishLoading();
   }
@@ -411,7 +420,7 @@ const loadSettings = async () => {
 const handleRefresh = async () => {
   isRefreshing.value = true;
   try {
-    await loadSettings();
+    await refreshSettings();
     ElMessage.success(t("settings.messageRefreshSuccess"));
   } catch (error) {
     console.error("刷新失败:", error);

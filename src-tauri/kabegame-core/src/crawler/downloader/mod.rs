@@ -588,6 +588,7 @@ fn upsert_failed_image_on_failure(
     error: &str,
     http_headers: &HashMap<String, String>,
     metadata_id: Option<i64>,
+    custom_display_name: Option<&str>,
 ) {
     if let Some(fid) = failed_image_id {
         let _ = Storage::global().update_task_failed_image_attempt(fid, error);
@@ -605,6 +606,7 @@ fn upsert_failed_image_on_failure(
         Some(error),
         Some(http_headers),
         metadata_id,
+        custom_display_name,
     ) {
         GlobalEmitter::global().emit_failed_image_added(task_id, &failed_image);
         emit_task_image_counts_snapshot(task_id);
@@ -631,9 +633,7 @@ pub struct DownloadRequest {
     pub failed_image_id: Option<i64>,
     /// 脚本/爬虫指定的展示名；为空则沿用文件名或 URL 推断。
     pub custom_display_name: Option<String>,
-    /// 插件写入的任意 JSON，入库 `images.metadata`（前端用 EJS 模板渲染）。
-    pub metadata: Option<serde_json::Value>,
-    /// 已写入 `image_metadata` 的 id（与 `metadata` 二选一，优先于 `metadata`）。
+    /// 已写入 `image_metadata` 的 id。
     pub metadata_id: Option<i64>,
 }
 
@@ -745,7 +745,6 @@ impl DownloadQueue {
         output_album_id: Option<String>,
         http_headers: HashMap<String, String>,
         custom_display_name: Option<String>,
-        metadata: Option<serde_json::Value>,
         metadata_id: Option<i64>,
     ) -> Result<(), String> {
         self.download_with_mode(
@@ -761,7 +760,6 @@ impl DownloadQueue {
             true,
             None,
             custom_display_name,
-            metadata,
             metadata_id,
         )
         .await
@@ -778,6 +776,7 @@ impl DownloadQueue {
         output_album_id: Option<String>,
         http_headers: HashMap<String, String>,
         metadata_id: Option<i64>,
+        custom_display_name: Option<String>,
     ) -> Result<(), String> {
         self.download_with_mode(
             url,
@@ -791,8 +790,7 @@ impl DownloadQueue {
             false,
             true,
             Some(failed_image_id),
-            None,
-            None,
+            custom_display_name,
             metadata_id,
         )
         .await
@@ -823,7 +821,6 @@ impl DownloadQueue {
             None,
             None,
             None,
-            None,
         )
         .await
     }
@@ -842,7 +839,6 @@ impl DownloadQueue {
         with_credentials: bool,
         failed_image_id: Option<i64>,
         custom_display_name: Option<String>,
-        metadata: Option<serde_json::Value>,
         metadata_id: Option<i64>,
     ) -> Result<(), String> {
         self.download(
@@ -858,7 +854,6 @@ impl DownloadQueue {
             with_credentials,
             failed_image_id,
             custom_display_name,
-            metadata,
             metadata_id,
         )
         .await
@@ -911,7 +906,6 @@ impl DownloadQueue {
             None,
             None,
             None,
-            None,
         )
         .await
     }
@@ -930,7 +924,6 @@ impl DownloadQueue {
         with_credentials: bool,
         failed_image_id: Option<i64>,
         custom_display_name: Option<String>,
-        metadata: Option<serde_json::Value>,
         metadata_id: Option<i64>,
     ) -> Result<(), String> {
         // 检查任务是否取消
@@ -951,7 +944,6 @@ impl DownloadQueue {
             with_credentials,
             failed_image_id,
             custom_display_name,
-            metadata,
             metadata_id,
         };
 
@@ -1380,7 +1372,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                     None,
                                                                     None,
                                                                     None,
-                                                                    None,
                                                                 )
                                                                 .await;
                                                         }
@@ -1570,6 +1561,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                             e.as_str(),
                                             &job.http_headers,
                                             job.metadata_id,
+                                            job.custom_display_name.as_deref(),
                                         );
                                         GlobalEmitter::global().emit_download_state(
                                             &task_id_clone,
@@ -1656,7 +1648,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                     job.failed_image_id,
                                     &job.http_headers,
                                     job.custom_display_name.as_deref(),
-                                    job.metadata.clone(),
                                     job.metadata_id,
                                 )
                                 .await;
@@ -1750,7 +1741,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                             job.failed_image_id,
                                                             &job.http_headers,
                                                             job.custom_display_name.as_deref(),
-                                                            job.metadata.clone(),
                                                             job.metadata_id,
                                                         )
                                                         .await;
@@ -1768,6 +1758,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                             e.as_str(),
                                                             &job.http_headers,
                                                             job.metadata_id,
+                                                            job.custom_display_name.as_deref(),
                                                         );
                                                         GlobalEmitter::global()
                                                             .emit_download_state(
@@ -1797,6 +1788,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                     e.as_str(),
                                                     &job.http_headers,
                                                     job.metadata_id,
+                                                    job.custom_display_name.as_deref(),
                                                 );
                                                 GlobalEmitter::global().emit_download_state(
                                                     &task_id_clone,
@@ -1933,7 +1925,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                 job.failed_image_id,
                                                                 &job.http_headers,
                                                                 job.custom_display_name.as_deref(),
-                                                                job.metadata.clone(),
                                                                 job.metadata_id,
                                                             )
                                                             .await;
@@ -1952,6 +1943,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                 e.as_str(),
                                                                 &job.http_headers,
                                                                 job.metadata_id,
+                                                                job.custom_display_name.as_deref(),
                                                             );
                                                             GlobalEmitter::global()
                                                                 .emit_download_state(
@@ -1982,6 +1974,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                     e.as_str(),
                                                     &job.http_headers,
                                                     job.metadata_id,
+                                                    job.custom_display_name.as_deref(),
                                                 );
                                                 GlobalEmitter::global().emit_download_state(
                                                     &task_id_clone,
@@ -2013,7 +2006,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                         &job.http_headers,
                                         false,
                                         job.custom_display_name.as_deref(),
-                                        job.metadata.clone(),
                                         job.metadata_id,
                                     )
                                     .await;
@@ -2056,6 +2048,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             e.as_str(),
                             &job.http_headers,
                             job.metadata_id,
+                            job.custom_display_name.as_deref(),
                         );
                     }
                     GlobalEmitter::global().emit_download_state(
@@ -2107,15 +2100,8 @@ async fn process_downloaded_content_image_to_storage(
     failed_image_id: Option<i64>,
     http_headers: &HashMap<String, String>,
     custom_display_name: Option<&str>,
-    metadata: Option<serde_json::Value>,
     metadata_id: Option<i64>,
 ) -> Result<(), String> {
-    let (width, height) = get_content_io_provider()
-        .get_image_dimensions(content_uri)
-        .await
-        .map(|(w, h)| (Some(w), Some(h)))
-        .unwrap_or((None, None));
-
     let mut display_name = get_content_io_provider()
         .get_display_name(content_uri)
         .await
@@ -2154,6 +2140,18 @@ async fn process_downloaded_content_image_to_storage(
         Some(m) => m,
         None => crate::image_type::default_image_mime().to_string(),
     });
+    let (width, height) = if media_type
+        .as_deref()
+        .map(|m| m.starts_with("video/"))
+        .unwrap_or(false)
+    {
+        crate::media_dimensions::android::resolve_video_dimensions(content_uri).await
+    } else {
+        crate::media_dimensions::android::resolve_image_dimensions(content_uri).await
+    }
+    .map(|(w, h)| (Some(w), Some(h)))
+    .unwrap_or((None, None));
+    let size = crate::media_dimensions::android::resolve_content_size(content_uri).await;
 
     let image_info = ImageInfo {
         id: "".to_string(),
@@ -2163,11 +2161,6 @@ async fn process_downloaded_content_image_to_storage(
         task_id: Some(task_id.to_string()),
         surf_record_id: None,
         crawled_at: download_start_time,
-        metadata: if metadata_id.is_some() {
-            None
-        } else {
-            metadata
-        },
         metadata_id,
         thumbnail_path: thumbnail_path_str.to_string(),
         favorite: false,
@@ -2179,7 +2172,7 @@ async fn process_downloaded_content_image_to_storage(
         display_name,
         media_type,
         last_set_wallpaper_at: None,
-        size: None,
+        size,
         album_order: None,
     };
     match Storage::global().add_image(image_info) {
@@ -2229,6 +2222,7 @@ async fn process_downloaded_content_image_to_storage(
                 e.as_str(),
                 http_headers,
                 metadata_id,
+                custom_display_name,
             );
             GlobalEmitter::global().emit_download_state(
                 task_id,
@@ -2257,7 +2251,6 @@ pub async fn postprocess_downloaded_image(
     http_headers: &HashMap<String, String>,
     native: bool,
     custom_display_name: Option<&str>,
-    metadata: Option<serde_json::Value>,
     metadata_id: Option<i64>,
 ) -> Result<bool, String> {
     let inferred_mime = crate::image_type::mime_type_from_path(path);
@@ -2280,6 +2273,7 @@ pub async fn postprocess_downloaded_image(
                 err.as_str(),
                 http_headers,
                 metadata_id,
+                custom_display_name,
             );
         }
         GlobalEmitter::global().emit_download_state_with_native(
@@ -2315,6 +2309,7 @@ pub async fn postprocess_downloaded_image(
                         e.as_str(),
                         http_headers,
                         metadata_id,
+                        custom_display_name,
                     );
                 }
                 GlobalEmitter::global().emit_download_state_with_native(
@@ -2347,7 +2342,6 @@ pub async fn postprocess_downloaded_image(
             http_headers,
             native,
             custom_display_name,
-            metadata.clone(),
             metadata_id,
         )
         .await?;
@@ -2369,6 +2363,7 @@ pub async fn postprocess_downloaded_image(
                     e.as_str(),
                     http_headers,
                     metadata_id,
+                    custom_display_name,
                 );
             }
             GlobalEmitter::global().emit_download_state_with_native(
@@ -2514,7 +2509,6 @@ pub async fn postprocess_downloaded_image(
         http_headers,
         native,
         custom_display_name,
-        metadata,
         metadata_id,
     )
     .await?;
@@ -2569,7 +2563,6 @@ pub async fn process_downloaded_image_to_storage(
     http_headers: &HashMap<String, String>,
     native: bool,
     custom_display_name: Option<&str>,
-    metadata: Option<serde_json::Value>,
     metadata_id: Option<i64>,
 ) -> Result<bool, String> {
     let event_task_id = task_id.or(surf_record_id).unwrap_or_default();
@@ -2588,6 +2581,11 @@ pub async fn process_downloaded_image_to_storage(
         .to_string()
         .trim_start_matches("\\\\?\\")
         .to_string();
+    let (resolved_w, resolved_h) =
+        crate::media_dimensions::resolve_media_dimensions_sync(&local_path_str)
+            .map(|(w, h)| (Some(w), Some(h)))
+            .unwrap_or((None, None));
+    let resolved_size = crate::media_dimensions::resolve_file_size_sync(&local_path_str);
 
     #[cfg(target_os = "android")]
     let (thumbnail_path, thumbnail_path_str, thumb_ms): (Option<PathBuf>, String, Option<u64>) =
@@ -2620,6 +2618,7 @@ pub async fn process_downloaded_image_to_storage(
                         e.as_str(),
                         http_headers,
                         metadata_id,
+                        custom_display_name,
                     );
                 }
                 GlobalEmitter::global().emit_download_state_with_native(
@@ -2673,19 +2672,14 @@ pub async fn process_downloaded_image_to_storage(
         task_id: task_id.map(|v| v.to_string()),
         surf_record_id: surf_record_id.map(|v| v.to_string()),
         crawled_at: download_start_time,
-        metadata: if metadata_id.is_some() {
-            None
-        } else {
-            metadata
-        },
         metadata_id,
         thumbnail_path: thumbnail_path_str,
         favorite: false,
         is_hidden: false,
         hash: hash.to_string(),
         local_exists: true,
-        width: None,
-        height: None,
+        width: resolved_w,
+        height: resolved_h,
         display_name,
         media_type: Some(if is_video {
             crate::image_type::mime_type_from_path(path)
@@ -2695,7 +2689,7 @@ pub async fn process_downloaded_image_to_storage(
                 .unwrap_or_else(|| crate::image_type::default_image_mime().to_string())
         }),
         last_set_wallpaper_at: None,
-        size: None,
+        size: resolved_size,
         album_order: None,
     };
     let t_add = postprocess_timing_hash_ms.map(|_| Instant::now());
@@ -2773,6 +2767,7 @@ pub async fn process_downloaded_image_to_storage(
                     e.as_str(),
                     http_headers,
                     metadata_id,
+                    custom_display_name,
                 );
             }
             GlobalEmitter::global().emit_download_state_with_native(
@@ -2930,7 +2925,6 @@ pub(crate) async fn copy_extracted_images_and_enqueue(
                         None,
                         false,
                         true,
-                        None,
                         None,
                         None,
                         None,

@@ -28,6 +28,7 @@ pub trait ContentIoProvider: Send + Sync {
     async fn read_file_bytes(&self, uri: &str) -> Result<Vec<u8>, String>;
     async fn take_persistable_permission(&self, uri: &str) -> Result<(), String>;
     async fn get_image_dimensions(&self, uri: &str) -> Result<(u32, u32), String>;
+    async fn get_video_dimensions(&self, uri: &str) -> Result<(u32, u32), String>;
     /// content:// 文档的字节大小（通过 ContentResolver / OpenableColumns 等解析）。
     async fn get_content_size(&self, uri: &str) -> Result<u64, String>;
     async fn get_display_name(&self, uri: &str) -> Result<String, String>;

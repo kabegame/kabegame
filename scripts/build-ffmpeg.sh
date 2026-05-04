@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键编译 FFmpeg：仅生成「视频缩放 + mov/mp4 压缩」所需组件（最小化编译）。
+# 一键编译 FFmpeg：仅生成「视频缩放 + mp4 压缩」所需组件（最小化编译）。
 # 功能：读 mov/mp4/mkv 等 → scale 缩放 → libx264 编码 → 输出 mp4。
 # 输出到 src-tauri/kabegame/sidecar/，供 Tauri externalBin（sidecar）使用。
 # 文件名须符合 Tauri 约定：ffmpeg-kb-{target_triple}[.exe]（如 ffmpeg-kb-x86_64-apple-darwin），避免与系统 /usr/bin/ffmpeg 冲突。
@@ -63,90 +63,50 @@ case "$(uname -s)" in
       export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
     fi
     ;;
-  Linux)
-    # 桌面 Linux (Tauri)：GIF 多帧输出。服务器/web 模式设 KABEGAME_SERVER_BUILD=1 跳过，与 Windows/macOS 一致用 libx264。
-    if [[ -z "${KABEGAME_SERVER_BUILD:-}" ]]; then
-      CONFIGURE_LINUX_ONLY=1
-    fi
-    ;;
 esac
 
-# 最小化编译：输入一致（mov/mkv 解码 + scale）；输出 Linux 为 GIF，其它平台 mov+libx264。
-if [[ -n "${CONFIGURE_LINUX_ONLY:-}" ]]; then
-  "$FFMPEG_SRC/configure" \
-    --prefix="$BUILD_DIR/install" \
-    --disable-everything \
-    --enable-protocol=file \
-    --enable-demuxer=mov \
-    --enable-demuxer=matroska \
-    --enable-decoder=h264 \
-    --enable-decoder=hevc \
-    --enable-decoder=mpeg4 \
-    --enable-decoder=vp8 \
-    --enable-decoder=vp9 \
-    --enable-parser=h264 \
-    --enable-parser=hevc \
-    --enable-parser=mpeg4video \
-    --enable-parser=vp8 \
-    --enable-parser=vp9 \
-    --enable-encoder=gif \
-    --enable-muxer=gif \
-    --enable-filter=fps \
-    --enable-filter=scale \
-    --enable-swscale \
-    --disable-ffplay \
-    --disable-ffprobe \
-    --disable-doc \
-    --disable-avdevice \
-    --enable-small \
-    --disable-runtime-cpudetect \
-    --extra-cflags="-O2" \
-    "${CONFIGURE_EXTRA[@]}" \
-    "$@"
-else
-  # server build 时静态链接 x264，避免目标机器需要安装 libx264
-  _EXTRA_LDFLAGS="-O2"
-  _EXTRA_LIBS=""
-  _PKG_CONFIG_FLAGS=""
-  if [[ -n "${KABEGAME_SERVER_BUILD:-}" ]]; then
-    _PKG_CONFIG_FLAGS="--static"
-    _EXTRA_LIBS="-lpthread -lm -ldl"
-  fi
-
-  "$FFMPEG_SRC/configure" \
-    --prefix="$BUILD_DIR/install" \
-    --disable-everything \
-    --enable-gpl \
-    --enable-libx264 \
-    --enable-protocol=file \
-    --enable-demuxer=mov \
-    --enable-demuxer=matroska \
-    --enable-decoder=h264 \
-    --enable-decoder=hevc \
-    --enable-decoder=mpeg4 \
-    --enable-decoder=vp8 \
-    --enable-decoder=vp9 \
-    --enable-parser=h264 \
-    --enable-parser=hevc \
-    --enable-parser=mpeg4video \
-    --enable-parser=vp8 \
-    --enable-parser=vp9 \
-    --enable-encoder=libx264 \
-    --enable-muxer=mov \
-    --enable-filter=scale \
-    --enable-swscale \
-    --disable-ffplay \
-    --disable-ffprobe \
-    --disable-doc \
-    --disable-avdevice \
-    --enable-small \
-    --disable-runtime-cpudetect \
-    --extra-cflags="-O2" \
-    ${_PKG_CONFIG_FLAGS:+--pkg-config-flags="$_PKG_CONFIG_FLAGS"} \
-    ${_EXTRA_LIBS:+--extra-libs="$_EXTRA_LIBS"} \
-    "${CONFIGURE_EXTRA[@]}" \
-    "$@"
+# 最小化编译：mov/mkv 解码 + scale + libx264，统一输出短 mp4。
+# server build 时静态链接 x264，避免目标机器需要安装 libx264。
+_EXTRA_LIBS=""
+_PKG_CONFIG_FLAGS=""
+if [[ -n "${KABEGAME_SERVER_BUILD:-}" ]]; then
+  _PKG_CONFIG_FLAGS="--static"
+  _EXTRA_LIBS="-lpthread -lm -ldl"
 fi
+
+"$FFMPEG_SRC/configure" \
+  --prefix="$BUILD_DIR/install" \
+  --disable-everything \
+  --enable-gpl \
+  --enable-libx264 \
+  --enable-protocol=file \
+  --enable-demuxer=mov \
+  --enable-demuxer=matroska \
+  --enable-decoder=h264 \
+  --enable-decoder=hevc \
+  --enable-decoder=mpeg4 \
+  --enable-decoder=vp8 \
+  --enable-decoder=vp9 \
+  --enable-parser=h264 \
+  --enable-parser=hevc \
+  --enable-parser=mpeg4video \
+  --enable-parser=vp8 \
+  --enable-parser=vp9 \
+  --enable-encoder=libx264 \
+  --enable-muxer=mov \
+  --enable-filter=scale \
+  --enable-swscale \
+  --disable-ffplay \
+  --disable-ffprobe \
+  --disable-doc \
+  --disable-avdevice \
+  --enable-small \
+  --disable-runtime-cpudetect \
+  --extra-cflags="-O2" \
+  ${_PKG_CONFIG_FLAGS:+--pkg-config-flags="$_PKG_CONFIG_FLAGS"} \
+  ${_EXTRA_LIBS:+--extra-libs="$_EXTRA_LIBS"} \
+  "${CONFIGURE_EXTRA[@]}" \
+  "$@"
 
 # Windows：make 无法解析 /d/... 绝对路径，将 Makefile 与 config.mak 中的源码路径改为相对路径
 case "$(uname -s)" in

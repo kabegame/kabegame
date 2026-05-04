@@ -1,6 +1,32 @@
 use kabegame_core::settings::Settings;
 use serde_json::Value;
 
+const WEB_READABLE_SETTING_KEYS: &[&str] = &[
+    "importRecommendedScheduleEnabled",
+    "maxConcurrentDownloads",
+    "maxConcurrentTasks",
+    "downloadIntervalMs",
+    "networkRetryCount",
+    "autoDeduplicate",
+];
+
+pub fn get_settings(keys: Vec<String>) -> Result<Value, String> {
+    let snapshot = Settings::global().get_all_settings_json()?;
+    let mut filtered = serde_json::Map::new();
+
+    if let Some(map) = snapshot.as_object() {
+        for key in keys {
+            if WEB_READABLE_SETTING_KEYS.contains(&key.as_str()) {
+                if let Some(value) = map.get(&key) {
+                    filtered.insert(key, value.clone());
+                }
+            }
+        }
+    }
+
+    Ok(Value::Object(filtered))
+}
+
 pub fn get_favorite_album_id() -> Result<Value, String> {
     Ok(Value::String(
         "00000000-0000-0000-0000-000000000001".to_string(),

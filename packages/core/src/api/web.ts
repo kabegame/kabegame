@@ -1,4 +1,3 @@
-import { watch } from "vue";
 import { getIsSuper } from "../state/superState";
 
 export type UnlistenFn = () => void;
@@ -53,7 +52,6 @@ export async function invoke<T>(
 
 let eventSource: EventSource | null = null;
 const eventListeners = new Map<string, Set<EventCallback<unknown>>>();
-let sseWatcherInitialized = false;
 let sseFallbackId = 0;
 
 function attachSseListener(es: EventSource, eventName: string) {
@@ -89,17 +87,6 @@ function openEventSource() {
 
 function ensureEventSource() {
   if (eventSource) return;
-  openEventSource();
-  if (!sseWatcherInitialized) {
-    sseWatcherInitialized = true;
-    watch(() => getIsSuper(), () => reconnectSse());
-  }
-}
-
-function reconnectSse() {
-  if (!eventSource) return;
-  eventSource.close();
-  eventSource = null;
   openEventSource();
 }
 

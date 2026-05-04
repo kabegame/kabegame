@@ -12,9 +12,7 @@ export interface ImageInfo {
   pluginId?: string;
   taskId?: string;
   crawledAt?: number;
-  /** @deprecated 爬虫写入的任意 JSON，详情区由插件 `templates/description.ejs` 渲染，现已废弃 */
-  metadata?: Record<string, unknown>;
-  /** 外键 `image_metadata.id`；与 `metadata` 二选一，列表常带此字段以合并懒加载请求 */
+  /** 外键 `image_metadata.id`；列表常带此字段以合并懒加载请求 */
   metadataId?: number;
   hash?: string;
   order?: number;
@@ -51,4 +49,5 @@ export interface TaskFailedImage {
   headerSnapshot?: Record<string, string> | null;
   /** 外键 `image_metadata.id`；重试成功时写入新图片 */
   metadataId?: number | null;
+  displayName?: string | null;
 }

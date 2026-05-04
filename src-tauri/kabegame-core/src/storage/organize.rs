@@ -105,9 +105,10 @@ impl Storage {
         let pool: Vec<BaseImageRow> = {
             let mut pool_stmt = conn
                 .prepare(
-                    "SELECT url, local_path, plugin_id, task_id, crawled_at, metadata,
+                    "SELECT images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, m.data,
                             COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), COALESCE(type, 'image')
                      FROM images
+                     LEFT JOIN image_metadata m ON m.id = images.metadata_id
                      ORDER BY RANDOM()
                      LIMIT ?1",
                 )

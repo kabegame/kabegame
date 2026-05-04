@@ -10,10 +10,15 @@
 
 ### Optimized
 - **Video Playing**: For performance consideration, image item will not play video automaticly, users should manually play one of them.
+- **Setting**: Settings fetch all at first once. Then updated by events.
 
 ### Fixed
 - **Background image**: Background image used the image.url fields which is not stable. Now use fileToUrl(image.localPath)
-
+- web do not need front image type detection.
+- web is super state fix.
+- **Crawler metadata storage**: Raw crawler metadata is now normalized into `image_metadata` at Rhai/WebView ingress and the legacy `images.metadata` column is removed by migration. Failed-image retries keep the original `display_name` and `metadata_id`, and orphaned metadata rows are garbage-collected when images or failed-task records are deleted.
+- Video witdh and height fill back.
+- web download should not navigate to image url page.
 
 ## [4.1.0]
 

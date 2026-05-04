@@ -189,7 +189,7 @@ async function handleAddFiles() {
       }
       return;
     }
-    const exts = imageExtensions.value.length ? imageExtensions.value : ["jpg", "jpeg", "png", "gif", "webp", "bmp", "mp4", "mov"];
+    const exts = imageExtensions.value.length ? imageExtensions.value : ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "mp4", "mov"];
     const selected = await open({
       directory: false,
       multiple: true,

@@ -113,7 +113,12 @@ const record = ref<SurfRecord | null>(null);
 const surfHost = ref("");
 const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
 const surfViewRef = ref<InstanceType<typeof ImageGrid> | null>(null);
-const currentWallpaperImageId = ref<string | null>(null);
+const currentWallpaperImageId = computed<string | null>({
+  get: () => settingsStore.values.currentWallpaperImageId ?? null,
+  set: (value) => {
+    settingsStore.values.currentWallpaperImageId = value;
+  },
+});
 
 const showRemoveDialog = ref(false);
 const removeDialogMessage = ref("");
@@ -129,7 +134,7 @@ const imageActions = computed(() =>
 );
 
 const { load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
-const { handleCopyImage } = useImageOperations(
+const { handleDownloadImage, handleCopyImage } = useImageOperations(
   images,
   currentWallpaperImageId,
   surfViewRef,
@@ -179,7 +184,7 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
     }
 
     if (imagesToProcess.length > 1) {
-      await settingsStore.loadAll();
+      await settingsStore.ensureLoaded();
       await albumStore.loadAlbums();
       let albumName = t("surf.desktopAlbumName", { n: 1 });
       let counter = 1;
@@ -190,7 +195,7 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
       const createdAlbum = await albumStore.createAlbum(albumName);
       const imageIds = imagesToProcess.map((img) => img.id);
       await albumStore.addImagesToAlbum(createdAlbum.id, imageIds);
-      await settingsStore.loadMany(["wallpaperRotationEnabled", "wallpaperRotationAlbumId"]);
+      await settingsStore.ensureLoaded();
       if (!settingsStore.values.wallpaperRotationEnabled) {
         await setWallpaperRotationEnabled(true);
       }
@@ -233,9 +238,14 @@ const handleImageMenuCommand = async (
     : [image];
 
   switch (command) {
+    case "download":
+      for (const img of imagesToProcess) {
+        await handleDownloadImage(img);
+      }
+      break;
     case "copy":
       if (IS_WEB) {
-        for (const img of imagesToProcess) handleCopyImage(img);
+        if (imagesToProcess[0]) await handleCopyImage(imagesToProcess[0]);
       } else if (imagesToProcess[0]) {
         await handleCopyImage(imagesToProcess[0]);
       }

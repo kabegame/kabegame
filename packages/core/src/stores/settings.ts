@@ -307,62 +307,138 @@ export const useSettingsStore = defineStore("settings", () => {
   const isLoading = (key: AppSettingKey) => !!loadingByKey[key];
   const isSaving = (key: AppSettingKey) => !!savingByKey[key];
 
-  // 将 key 映射到对应的 getter 命令名
-  const getGetterCommand = (key: AppSettingKey): string | null => {
-    return SETTING_KEY_MAP[key]?.getter || null;
-  };
-
   // 将 key 映射到对应的 setter 命令名
   const getSetterCommand = (key: AppSettingKey): string | null => {
     return SETTING_KEY_MAP[key]?.setter || null;
   };
 
-  const load = async <K extends AppSettingKey>(key: K) => {
-    if (loadingByKey[key]) return;
-    loadingByKey[key] = true;
-    try {
-      // Web mode：直接从 localStorage 读取
-      if (isWebLocal(key)) {
-        (values as any)[key] = webLocalRefs[key]!.value;
-        return;
+  const backendKeys = () => Object.keys(SETTING_KEY_MAP) as AppSettingKey[];
+
+  let settingsLoaded = false;
+  let settingsLoadPromise: Promise<void> | null = null;
+
+  const applyAndroidDefaults = () => {
+    if (!IS_ANDROID) return;
+
+    // imageClickAction: 安卓下固定为应用内预览
+    (values as any).imageClickAction = "preview";
+
+    // galleryImageAspectRatio: 安卓下自动使用屏幕宽高比
+    const screenW = window.screen.width;
+    const screenH = window.screen.height;
+    (values as any).galleryImageAspectRatio = `custom:${screenW}:${screenH}`;
+
+    // defaultDownloadDir: 保持 null，后端自动使用默认目录
+    (values as any).defaultDownloadDir = null;
+  };
+
+  const setBackendLoading = (loading: boolean) => {
+    for (const key of backendKeys()) {
+      if (!isWebLocal(key)) {
+        loadingByKey[key] = loading;
       }
-      const command = getGetterCommand(key);
-      if (!command) {
-        console.warn(`No getter command found for key: ${key}`);
-        return;
-      }
-      const v = await invoke<any>(command);
-      (values as any)[key] = v;
-    } catch (error) {
-      console.error(`Failed to load setting ${key}:`, error);
-    } finally {
-      loadingByKey[key] = false;
     }
   };
 
-  const loadMany = async (keys: AppSettingKey[]) => {
-    await Promise.all(keys.map((k) => load(k)));
+  const syncLocalValue = (key: AppSettingKey) => {
+    if (isWebLocal(key)) {
+      (values as any)[key] = webLocalRefs[key]!.value;
+    }
   };
 
-  const loadAll = async () => {
-    // 从统一配置表中获取所有可用键
-    const allKeys = Object.keys(SETTING_KEY_MAP) as AppSettingKey[];
-    
-    // 并发加载所有设置
-    await Promise.all(allKeys.map((k) => load(k)));
+  const applySnapshot = (snapshot: Partial<AppSettings>) => {
+    const knownKeys = new Set(backendKeys());
+    for (const [rawKey, value] of Object.entries(snapshot)) {
+      const key = rawKey as AppSettingKey;
+      if (!knownKeys.has(key) || isWebLocal(key)) continue;
+      (values as any)[key] = value;
+    }
+    applyAndroidDefaults();
+  };
 
-    // 安卓下设置默认值（这些键不在配置表中，但需要在 values 中有默认值）
-    if (IS_ANDROID) {
-      // imageClickAction: 安卓下固定为应用内预览
-      (values as any).imageClickAction = "preview";
-      
-      // galleryImageAspectRatio: 安卓下自动使用屏幕宽高比
-      const screenW = window.screen.width;
-      const screenH = window.screen.height;
-      (values as any).galleryImageAspectRatio = `custom:${screenW}:${screenH}`;
-      
-      // defaultDownloadDir: 保持 null，后端自动使用默认目录
-      (values as any).defaultDownloadDir = null;
+  const fetchSettingsBatch = async () => {
+    const keys = backendKeys().filter((key) => !isWebLocal(key));
+    if (keys.length === 0) {
+      applyAndroidDefaults();
+      settingsLoaded = true;
+      return;
+    }
+
+    setBackendLoading(true);
+    try {
+      const snapshot = await invoke<Partial<AppSettings>>("get_settings", { keys });
+      applySnapshot(snapshot);
+      settingsLoaded = true;
+    } finally {
+      setBackendLoading(false);
+    }
+  };
+
+  const setSettingsLoadPromise = (promise: Promise<void>) => {
+    settingsLoadPromise = promise.finally(() => {
+      settingsLoadPromise = null;
+    });
+    return settingsLoadPromise;
+  };
+
+  const ensureLoaded = async () => {
+    if (settingsLoadPromise) {
+      await settingsLoadPromise.catch((error) => {
+        console.error("Failed to load settings:", error);
+      });
+      return;
+    }
+    if (settingsLoaded) return;
+    if (!settingsLoadPromise) {
+      setSettingsLoadPromise(
+        fetchSettingsBatch().catch((error) => {
+          console.error("Failed to load settings:", error);
+        }),
+      );
+    }
+    await settingsLoadPromise;
+  };
+
+  const refreshAll = async () => {
+    if (settingsLoadPromise) {
+      await settingsLoadPromise;
+    }
+    await setSettingsLoadPromise(fetchSettingsBatch());
+  };
+
+  const load = async <K extends AppSettingKey>(key: K) => {
+    if (isWebLocal(key)) {
+      syncLocalValue(key);
+      return;
+    }
+    if (!SETTING_KEY_MAP[key]) {
+      console.warn(`No settings entry found for key: ${key}`);
+      return;
+    }
+    await ensureLoaded();
+  };
+
+  const loadMany = async (keys: AppSettingKey[]) => {
+    for (const key of keys) {
+      syncLocalValue(key);
+    }
+
+    if (keys.some((key) => !isWebLocal(key) && SETTING_KEY_MAP[key])) {
+      await ensureLoaded();
+    }
+  };
+
+  // 兼容旧调用名：loadAll 只确保首次加载，不作为刷新入口。
+  const loadAll = ensureLoaded;
+
+  const applyChanges = (changes: Partial<AppSettings> | Record<string, unknown>) => {
+    for (const [rawKey, value] of Object.entries(changes)) {
+      const key = rawKey as AppSettingKey;
+      if (isWebLocal(key) && !isWebReadonly(key)) {
+        webLocalRefs[key]!.value = value;
+      } else {
+        (values as any)[key] = value;
+      }
     }
   };
 
@@ -467,6 +543,9 @@ export const useSettingsStore = defineStore("settings", () => {
     isSaving,
     isDown,
     isWebReadonly,
+    applyChanges,
+    ensureLoaded,
+    refreshAll,
     load,
     loadMany,
     loadAll,

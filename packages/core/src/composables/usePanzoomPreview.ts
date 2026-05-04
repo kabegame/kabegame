@@ -34,39 +34,61 @@ export function usePanzoomPreview(
 ) {
   const wrapperRef = ref<HTMLElement | null>(null);
   let instance: PanzoomObject | null = null;
+  let instanceEl: HTMLElement | null = null;
+
+  const handlePanzoomStart = () => {
+    options?.onPanzoomStart?.();
+  };
+
+  const handlePanzoomEnd = () => {
+    options?.onPanzoomEnd?.();
+  };
+
+  const handlePanzoomChange = () => {
+    if (!instance) return;
+    const scale = instance.getScale();
+    instance.setOptions({ cursor: scale > 1 ? "grab" : "default" });
+  };
 
   const destroy = () => {
+    if (instanceEl) {
+      instanceEl.removeEventListener("panzoomstart", handlePanzoomStart);
+      instanceEl.removeEventListener("panzoomend", handlePanzoomEnd);
+      instanceEl.removeEventListener("panzoomchange", handlePanzoomChange);
+    }
     if (instance) {
       instance.destroy();
       instance = null;
     }
+    instanceEl = null;
+  };
+
+  const create = (el: HTMLElement) => {
+    if (instance && instanceEl === el) return;
+    destroy();
+    instance = Panzoom(el, {
+      ...DEFAULT_OPTIONS,
+      ...options?.panzoomOptions,
+    });
+    instanceEl = el;
+    el.addEventListener("panzoomstart", handlePanzoomStart);
+    el.addEventListener("panzoomend", handlePanzoomEnd);
+    el.addEventListener("panzoomchange", handlePanzoomChange);
   };
 
   watch(
-    () => visible.value && enabled.value,
-    (shouldInit) => {
-      if (!shouldInit) {
+    () => [visible.value && enabled.value, wrapperRef.value] as const,
+    ([shouldInit, wrapper]) => {
+      if (!shouldInit || !wrapper) {
         destroy();
         return;
       }
+      if (instanceEl && instanceEl !== wrapper) {
+        destroy();
+      }
       nextTick(() => {
-        if (!visible.value || !enabled.value || !wrapperRef.value) return;
-        instance = Panzoom(wrapperRef.value, {
-          ...DEFAULT_OPTIONS,
-          ...options?.panzoomOptions,
-        });
-        const el = wrapperRef.value;
-        el.addEventListener("panzoomstart", () => {
-          options?.onPanzoomStart?.();
-        });
-        el.addEventListener("panzoomend", () => {
-          options?.onPanzoomEnd?.();
-        });
-        el.addEventListener("panzoomchange", () => {
-          if (!instance) return;
-          const scale = instance.getScale();
-          instance.setOptions({ cursor: scale > 1 ? "grab" : "default" });
-        });
+        if (!visible.value || !enabled.value || wrapperRef.value !== wrapper) return;
+        create(wrapper);
       });
     },
     { immediate: true }
@@ -75,12 +97,13 @@ export function usePanzoomPreview(
   onUnmounted(destroy);
 
   const handleWheel = (event: WheelEvent) => {
-    if (!instance || !visible.value || !enabled.value) return;
+    if (!instance || !instanceEl || wrapperRef.value !== instanceEl || !visible.value || !enabled.value) return;
     options?.onPanzoomStart?.();
     instance.zoomWithWheel(event, { animate: false });
   };
 
   const reset = () => {
+    if (!instance || !instanceEl || wrapperRef.value !== instanceEl) return;
     instance?.reset({ animate: false });
   };
 

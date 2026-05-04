@@ -132,7 +132,7 @@ pub async fn get_supported_image_types() -> Result<serde_json::Value, String> {
     Ok(serde_json::to_value(payload).map_err(|e| e.to_string())?)
 }
 
-/// 前端在启动时调用，上报当前 WebView 可解码的图片格式（如 webp、avif、heic、svg），用于扩展后端支持列表。
+/// 原生前端在启动时调用，上报当前 WebView 可解码的额外图片格式（如 heic），用于扩展后端支持列表。
 #[tauri::command]
 pub async fn set_supported_image_formats(formats: Vec<String>) -> Result<(), String> {
     kabegame_core::image_type::set_frontend_supported_image_formats(formats);

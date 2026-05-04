@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.content.ContentValues
 import android.content.Intent
 import android.Manifest
+import android.media.MediaMetadataRetriever
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -437,6 +438,68 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
         } catch (e: Exception) {
             Log.e("PickerPlugin", "getImageDimensions failed", e)
             invoke.reject("获取图片尺寸失败: ${e.message}", e)
+        }
+    }
+
+    @InvokeArg
+    class GetVideoDimensionsArgs {
+        var uri: String = ""
+    }
+
+    @Command
+    fun getVideoDimensions(invoke: Invoke) {
+        val args = invoke.parseArgs(GetVideoDimensionsArgs::class.java)
+        val uriStr = args.uri
+        if (uriStr.isBlank()) {
+            invoke.reject("uri 不能为空")
+            return
+        }
+        try {
+            val uri = Uri.parse(uriStr)
+            if (uri.scheme != "content") {
+                invoke.reject("仅支持 content:// URI")
+                return
+            }
+            val retriever = MediaMetadataRetriever()
+            try {
+                activity.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    retriever.setDataSource(pfd.fileDescriptor)
+                } ?: throw IllegalStateException("openFileDescriptor returned null")
+                val width = retriever
+                    .extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                    ?.toIntOrNull()
+                    ?: 0
+                val height = retriever
+                    .extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                    ?.toIntOrNull()
+                    ?: 0
+                val rotation = retriever
+                    .extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                    ?.toIntOrNull()
+                    ?: 0
+                val outWidth: Int
+                val outHeight: Int
+                if (rotation == 90 || rotation == 270) {
+                    outWidth = height
+                    outHeight = width
+                } else {
+                    outWidth = width
+                    outHeight = height
+                }
+                if (outWidth <= 0 || outHeight <= 0) {
+                    invoke.reject("无法获取视频尺寸")
+                    return
+                }
+                val result = JSObject()
+                result.put("width", outWidth)
+                result.put("height", outHeight)
+                invoke.resolve(result)
+            } finally {
+                retriever.release()
+            }
+        } catch (e: Exception) {
+            Log.e("PickerPlugin", "getVideoDimensions failed", e)
+            invoke.reject("获取视频尺寸失败: ${e.message}", e)
         }
     }
 

@@ -24,6 +24,8 @@ pub mod init;
 mod v008_flatten_favorite_album;
 mod v009_seed_hidden_album;
 mod v010_plugin_data;
+mod v011_consolidate_image_metadata_and_failed_display_name;
+mod v012_backfill_video_dimensions;
 
 use rusqlite::Connection;
 
@@ -54,13 +56,23 @@ const MIGRATIONS: &[Migration] = &[
         name: "plugin_data",
         up: v010_plugin_data::up,
     },
+    Migration {
+        version: 11,
+        name: "consolidate_image_metadata_and_failed_display_name",
+        up: v011_consolidate_image_metadata_and_failed_display_name::up,
+    },
+    Migration {
+        version: 12,
+        name: "backfill_video_dimensions",
+        up: v012_backfill_video_dimensions::up,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 10;
+pub const LATEST_VERSION: u32 = 12;
 
 fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

@@ -59,12 +59,11 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
         .await
         .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
 
+    let preview_id = uuid::Uuid::new_v4();
     #[cfg(target_os = "android")]
-    let out_path = thumbnails_dir.join(format!("{}.gif", uuid::Uuid::new_v4()));
-    #[cfg(target_os = "linux")]
-    let out_path = thumbnails_dir.join(format!("{}.gif", uuid::Uuid::new_v4()));
-    #[cfg(not(any(target_os = "android", target_os = "linux")))]
-    let out_path = thumbnails_dir.join(format!("{}.mp4", uuid::Uuid::new_v4()));
+    let out_path = thumbnails_dir.join(format!("{preview_id}.gif"));
+    #[cfg(not(target_os = "android"))]
+    let out_path = thumbnails_dir.join(format!("{preview_id}.mp4"));
 
     #[cfg(target_os = "android")]
     {
@@ -87,14 +86,35 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
 
     #[cfg(not(target_os = "android"))]
     {
+        let temp_dir = crate::app_paths::AppPaths::global().temp_dir.clone();
+        tokio::fs::create_dir_all(&temp_dir)
+            .await
+            .map_err(|e| format!("Failed to create temp directory: {e}"))?;
+        let temp_out_path = temp_dir.join(format!("{preview_id}.mp4"));
+
         let in_path = input_path.to_path_buf();
-        let out_path_for_task = out_path.clone();
-        tokio::task::spawn_blocking(move || {
-            run_ffmpeg_sidecar(&in_path, &out_path_for_task)?;
+        let temp_out_path_for_task = temp_out_path.clone();
+        let ffmpeg_result = tokio::task::spawn_blocking(move || {
+            run_ffmpeg_sidecar(&in_path, &temp_out_path_for_task)?;
             Ok::<(), String>(())
         })
         .await
-        .map_err(|e| format!("Video compress task join error: {e}"))??;
+        .map_err(|e| format!("Video compress task join error: {e}"))
+        .and_then(|r| r);
+
+        if let Err(e) = ffmpeg_result {
+            let _ = tokio::fs::remove_file(&temp_out_path).await;
+            return Err(e);
+        }
+
+        if let Err(e) = tokio::fs::copy(&temp_out_path, &out_path).await {
+            let _ = tokio::fs::remove_file(&temp_out_path).await;
+            let _ = tokio::fs::remove_file(&out_path).await;
+            return Err(format!(
+                "Failed to copy video preview to thumbnails directory: {e}"
+            ));
+        }
+        let _ = tokio::fs::remove_file(&temp_out_path).await;
 
         Ok(VideoCompressResult {
             preview_path: out_path,
@@ -112,36 +132,20 @@ fn run_ffmpeg_sidecar(input_path: &Path, output_path: &Path) -> Result<(), Strin
     cmd.creation_flags(0x0800_0000);
     cmd.arg("-y").arg("-i").arg(input_path);
 
-    #[cfg(target_os = "linux")]
-    {
-        cmd.arg("-t")
-            .arg("2.5")
-            .arg("-vf")
-            .arg("fps=4,scale=320:-1")
-            .arg("-loop")
-            .arg("0")
-            .arg(output_path);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        cmd.arg("-t")
-            .arg("2.5")
-            .arg("-vf")
-            .arg("scale='min(1280,iw)':-2")
-            .arg("-c:v")
-            .arg("libx264")
-            .arg("-preset")
-            .arg("veryfast")
-            .arg("-crf")
-            .arg("30")
-            .arg("-movflags")
-            .arg("+faststart")
-            .arg("-an")
-            .arg("-f")
-            .arg("mov")
-            .arg(output_path);
-    }
+    cmd.arg("-t")
+        .arg("2.5")
+        .arg("-vf")
+        .arg("scale='min(1280,iw)':-2")
+        .arg("-c:v")
+        .arg("libx264")
+        .arg("-preset")
+        .arg("veryfast")
+        .arg("-crf")
+        .arg("30")
+        .arg("-an")
+        .arg("-f")
+        .arg("mov")
+        .arg(output_path);
 
     let status = cmd
         .status()

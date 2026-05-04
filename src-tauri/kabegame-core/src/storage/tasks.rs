@@ -1,5 +1,5 @@
 use crate::emitter::GlobalEmitter;
-use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
+use crate::storage::Storage;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -59,6 +59,8 @@ pub struct TaskFailedImage {
     pub last_attempted_at: Option<i64>,
     pub header_snapshot: Option<HashMap<String, String>>,
     pub metadata_id: Option<i64>,
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -376,20 +378,28 @@ impl Storage {
     }
 
     pub fn delete_task(&self, task_id: &str) -> Result<(), String> {
-        let failed_image_ids: Vec<i64> = {
+        let (failed_image_ids, metadata_ids): (Vec<i64>, Vec<i64>) = {
             let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-            let ids = {
+            let rows = {
                 let mut stmt = conn
-                    .prepare("SELECT id FROM task_failed_images WHERE task_id = ?1")
+                    .prepare("SELECT id, metadata_id FROM task_failed_images WHERE task_id = ?1")
                     .map_err(|e| format!("Failed to prepare failed images query: {}", e))?;
                 let rows = stmt
-                    .query_map(params![task_id], |row| row.get::<_, i64>(0))
+                    .query_map(params![task_id], |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?))
+                    })
                     .map_err(|e| format!("Failed to query failed images: {}", e))?;
                 let mut ids = Vec::new();
+                let mut metadata_ids = Vec::new();
                 for row in rows {
-                    ids.push(row.map_err(|e| format!("Failed to read failed image row: {}", e))?);
+                    let (id, metadata_id) =
+                        row.map_err(|e| format!("Failed to read failed image row: {}", e))?;
+                    ids.push(id);
+                    if let Some(metadata_id) = metadata_id {
+                        metadata_ids.push(metadata_id);
+                    }
                 }
-                ids
+                (ids, metadata_ids)
             };
 
             // 先删除关联数据（日志、失败图片、任务主表）
@@ -402,12 +412,13 @@ impl Storage {
             .map_err(|e| format!("Failed to delete task failed images: {}", e))?;
             conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
                 .map_err(|e| format!("Failed to delete task: {}", e))?;
-            ids
+            rows
         };
 
         if !failed_image_ids.is_empty() {
             GlobalEmitter::global().emit_failed_images_removed(task_id, &failed_image_ids);
         }
+        let _ = self.gc_image_metadata(&metadata_ids);
         Ok(())
     }
 
@@ -479,12 +490,16 @@ impl Storage {
     }
 
     pub fn clear_finished_tasks(&self) -> Result<usize, String> {
-        let (count, removed_failed_by_task): (usize, Vec<(String, Vec<i64>)>) = {
+        let (count, removed_failed_by_task, metadata_ids): (
+            usize,
+            Vec<(String, Vec<i64>)>,
+            Vec<i64>,
+        ) = {
             let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-            let removed_failed_by_task: Vec<(String, Vec<i64>)> = {
+            let (removed_failed_by_task, metadata_ids): (Vec<(String, Vec<i64>)>, Vec<i64>) = {
                 let mut stmt = conn
                     .prepare(
-                        "SELECT tfi.task_id, tfi.id
+                        "SELECT tfi.task_id, tfi.id, tfi.metadata_id
                          FROM task_failed_images tfi
                          WHERE tfi.task_id IN (
                             SELECT id FROM tasks WHERE status IN ('completed', 'failed', 'canceled', 'cancelled')
@@ -496,16 +511,21 @@ impl Storage {
                     .query_map([], |row| {
                         let task_id: String = row.get(0)?;
                         let id: i64 = row.get(1)?;
-                        Ok((task_id, id))
+                        let metadata_id: Option<i64> = row.get(2)?;
+                        Ok((task_id, id, metadata_id))
                     })
                     .map_err(|e| {
                         format!("Failed to query failed images for finished tasks: {}", e)
                     })?;
 
                 let mut removed_failed_by_task: Vec<(String, Vec<i64>)> = Vec::new();
+                let mut metadata_ids = Vec::new();
                 for row in rows {
-                    let (task_id, id) =
+                    let (task_id, id, metadata_id) =
                         row.map_err(|e| format!("Failed to read failed image row: {}", e))?;
+                    if let Some(metadata_id) = metadata_id {
+                        metadata_ids.push(metadata_id);
+                    }
                     if let Some((last_task_id, ids)) = removed_failed_by_task.last_mut() {
                         if *last_task_id == task_id {
                             ids.push(id);
@@ -514,7 +534,7 @@ impl Storage {
                     }
                     removed_failed_by_task.push((task_id, vec![id]));
                 }
-                removed_failed_by_task
+                (removed_failed_by_task, metadata_ids)
             };
 
             let _ = conn.execute(
@@ -535,7 +555,7 @@ impl Storage {
                     [],
                 )
                 .map_err(|e| format!("Failed to clear finished tasks: {}", e))?;
-            (count, removed_failed_by_task)
+            (count, removed_failed_by_task, metadata_ids)
         };
 
         for (task_id, ids) in removed_failed_by_task {
@@ -543,6 +563,7 @@ impl Storage {
                 GlobalEmitter::global().emit_failed_images_removed(&task_id, &ids);
             }
         }
+        let _ = self.gc_image_metadata(&metadata_ids);
         Ok(count)
     }
 
@@ -599,6 +620,7 @@ impl Storage {
         error: Option<&str>,
         header_snapshot: Option<&HashMap<String, String>>,
         metadata_id: Option<i64>,
+        display_name: Option<&str>,
     ) -> Result<TaskFailedImage, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let now = std::time::SystemTime::now()
@@ -612,8 +634,8 @@ impl Storage {
             .transpose()
             .map_err(|e| format!("Failed to serialize failed image header snapshot: {}", e))?;
         conn.execute(
-            "INSERT INTO task_failed_images (task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO task_failed_images (task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id, display_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 task_id,
                 plugin_id,
@@ -623,7 +645,8 @@ impl Storage {
                 error_owned.as_deref(),
                 now,
                 header_snapshot_json,
-                metadata_id
+                metadata_id,
+                display_name
             ],
         )
         .map_err(|e| format!("Failed to add failed image: {}", e))?;
@@ -643,6 +666,7 @@ impl Storage {
             last_attempted_at: Some(now),
             header_snapshot: header_snapshot_owned,
             metadata_id,
+            display_name: display_name.map(str::to_string),
         })
     }
 
@@ -677,22 +701,30 @@ impl Storage {
     }
 
     pub fn delete_task_failed_image(&self, id: i64) -> Result<(), String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let task_id: Option<String> = conn
-            .query_row(
-                "SELECT task_id FROM task_failed_images WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| format!("Failed to query failed image: {}", e))?;
-        conn.execute("DELETE FROM task_failed_images WHERE id = ?1", params![id])
-            .map_err(|_e| format!("Failed to delete failed image: {}", id))?;
-        if let Some(tid) = task_id {
-            let _ = conn.execute(
-                "UPDATE tasks SET failed_count = MAX(0, failed_count - 1) WHERE id = ?1",
-                params![tid],
-            );
+        let metadata_id = {
+            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+            let row: Option<(String, Option<i64>)> = conn
+                .query_row(
+                    "SELECT task_id, metadata_id FROM task_failed_images WHERE id = ?1",
+                    params![id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|e| format!("Failed to query failed image: {}", e))?;
+            conn.execute("DELETE FROM task_failed_images WHERE id = ?1", params![id])
+                .map_err(|_e| format!("Failed to delete failed image: {}", id))?;
+            if let Some((tid, metadata_id)) = row {
+                let _ = conn.execute(
+                    "UPDATE tasks SET failed_count = MAX(0, failed_count - 1) WHERE id = ?1",
+                    params![tid],
+                );
+                metadata_id
+            } else {
+                None
+            }
+        };
+        if let Some(metadata_id) = metadata_id {
+            let _ = self.gc_image_metadata(&[metadata_id]);
         }
         Ok(())
     }
@@ -708,17 +740,21 @@ impl Storage {
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let mut by_task: HashMap<String, Vec<i64>> = HashMap::new();
+        let mut metadata_ids = Vec::new();
         for &id in &unique_ids {
-            let task_id: Option<String> = conn
+            let row: Option<(String, Option<i64>)> = conn
                 .query_row(
-                    "SELECT task_id FROM task_failed_images WHERE id = ?1",
+                    "SELECT task_id, metadata_id FROM task_failed_images WHERE id = ?1",
                     params![id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()
                 .map_err(|e| format!("Failed to query failed image: {}", e))?;
-            if let Some(tid) = task_id {
+            if let Some((tid, metadata_id)) = row {
                 by_task.entry(tid).or_default().push(id);
+                if let Some(metadata_id) = metadata_id {
+                    metadata_ids.push(metadata_id);
+                }
             }
         }
         if by_task.is_empty() {
@@ -745,13 +781,15 @@ impl Storage {
 
         tx.commit()
             .map_err(|e| format!("Failed to commit delete_failed_images: {}", e))?;
+        drop(conn);
+        let _ = self.gc_image_metadata(&metadata_ids);
         Ok(by_task.into_iter().collect())
     }
 
     pub fn get_task_failed_images(&self, task_id: &str) -> Result<Vec<TaskFailedImage>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id FROM task_failed_images WHERE task_id = ?1 ORDER BY id DESC")
+            .prepare("SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id, display_name FROM task_failed_images WHERE task_id = ?1 ORDER BY id DESC")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let rows = stmt
@@ -770,6 +808,7 @@ impl Storage {
                     last_attempted_at: row.get(7)?,
                     header_snapshot,
                     metadata_id: row.get(9)?,
+                    display_name: row.get(10)?,
                 })
             })
             .map_err(|e| format!("Failed to query failed images: {}", e))?;
@@ -785,7 +824,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id
+                "SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id, display_name
                  FROM task_failed_images
                  ORDER BY id DESC",
             )
@@ -807,6 +846,7 @@ impl Storage {
                     last_attempted_at: row.get(7)?,
                     header_snapshot,
                     metadata_id: row.get(9)?,
+                    display_name: row.get(10)?,
                 })
             })
             .map_err(|e| format!("Failed to query failed images: {}", e))?;
@@ -822,7 +862,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let image = conn
             .query_row(
-                "SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id FROM task_failed_images WHERE id = ?1",
+                "SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id, display_name FROM task_failed_images WHERE id = ?1",
                 params![id],
                 |row| {
                     let header_snapshot_json: Option<String> = row.get(8)?;
@@ -839,6 +879,7 @@ impl Storage {
                         last_attempted_at: row.get(7)?,
                         header_snapshot,
                         metadata_id: row.get(9)?,
+                        display_name: row.get(10)?,
                     })
                 },
             )

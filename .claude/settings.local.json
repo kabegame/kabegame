@@ -16,7 +16,10 @@
       "Bash(grep -r \"interface.*Settings\\\\|type.*Settings\" --include=\"*.ts\" packages/core/src --include-dir=types)",
       "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\" -Directory)",
       "Bash(Select-Object Name)",
-      "Bash(grep -E \"\\\\.\\(ts|vue\\)$\")"
+      "Bash(grep -E \"\\\\.\\(ts|vue\\)$\")",
+      "Bash(cd /d \"D:\\\\Codes\\\\kabegame\")",
+      "Bash(findstr /r /s \"ffmpeg\\\\|run_ffmpeg\\\\|resolve_ffmpeg\" src-tauri/)",
+      "Bash(awk *)"
     ]
   }
 }
