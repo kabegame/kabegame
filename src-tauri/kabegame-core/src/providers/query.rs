@@ -236,21 +236,14 @@ pub fn organize_batch_at(page_size: usize, page: usize) -> Result<Vec<OrganizeSc
         .collect()
 }
 
-/// `/images/id_{id}/metadata` → metadata JSON, matching the old fallback order:
-/// `image_metadata.data` first, then legacy `images.metadata`.
+/// `/images/id_{id}/metadata` → metadata JSON from `image_metadata.data`.
 pub fn image_metadata_at(image_id: &str) -> Result<Option<Value>, String> {
     let encoded = urlencoding::encode(image_id.trim());
     let rows = raw_rows_at(&format!("/images/id_{}/metadata", encoded))?;
     let Some(row) = rows.first() else {
         return Ok(None);
     };
-    if let Some(v) = parse_image_metadata_json(json_string(row, "metadata_json")) {
-        return Ok(Some(v));
-    }
-    Ok(parse_image_metadata_json(json_string(
-        row,
-        "legacy_metadata_json",
-    )))
+    Ok(parse_image_metadata_json(json_string(row, "metadata_json")))
 }
 
 pub fn gallery_total_count_at() -> Result<usize, String> {
@@ -442,7 +435,6 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
             .filter(|&t| t >= 0)
             .map(|t| t as u64)
             .unwrap_or(0),
-        metadata: None,
         metadata_id: i("metadata_id"),
         thumbnail_path: s("thumbnail_path").unwrap_or_default(),
         hash: s("hash").unwrap_or_default(),

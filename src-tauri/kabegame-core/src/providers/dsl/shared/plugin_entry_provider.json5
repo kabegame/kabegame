@@ -10,7 +10,7 @@
     },
     "query": {
         // Plugin extension providers often need crawl-time metadata. Resolve it
-        // once from images.metadata_id, falling back to legacy images.metadata.
+        // from images.metadata_id.
         "join": [{
             "kind": "LEFT",
             "table": "image_metadata",
@@ -20,12 +20,12 @@
         }],
         "fields": [
             {
-                "sql": "COALESCE(plugin_im.data, images.metadata)",
+                "sql": "plugin_im.data",
                 "as": "plugin_metadata",
                 "in_need": true
             },
             {
-                "sql": "COALESCE(plugin_im.data, images.metadata)",
+                "sql": "plugin_im.data",
                 "as": "metadata",
                 "in_need": true
             }

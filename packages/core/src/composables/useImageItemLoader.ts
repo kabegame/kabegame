@@ -1,6 +1,6 @@
 import { computed, ref, watch, type Ref } from "vue";
 import type { ImageInfo } from "../types/image";
-import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID, IS_LINUX, LOCAL_FILE_PROXY_PREFIX } from "../env";
+import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID, LOCAL_FILE_PROXY_PREFIX } from "../env";
 import { fileToUrl, thumbnailToUrl } from "../httpServer";
 import {
   getImageStateCache,
@@ -257,16 +257,7 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
       return;
     }
 
-    const image = options.image.value;
     const { fallbackUrl, primaryKind } = urlPlan.value;
-    // Linux 视频用 <img> 显示首帧 JPG；缩略图加载失败时不可回退到 fallbackUrl（mp4），否则会变成用 img 加载视频
-    if (IS_LINUX && isVideoMediaType(image.type) && currentStage.value === "primary") {
-      displayUrl.value = "";
-      isImageLoading.value = false;
-      isLost.value = true;
-      persistStableStateToCache();
-      return;
-    }
     if (currentStage.value === "primary" && fallbackUrl) {
       currentStage.value = "fallback";
       displayUrl.value = fallbackUrl;

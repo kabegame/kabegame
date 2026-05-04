@@ -526,7 +526,12 @@ const handleChildAlbumMenuCommand = async (
 const albumName = ref<string>("");
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay();
 const isRefreshing = ref(false);
-const currentWallpaperImageId = ref<string | null>(null);
+const currentWallpaperImageId = computed<string | null>({
+  get: () => settingsStore.values.currentWallpaperImageId ?? null,
+  set: (value) => {
+    settingsStore.values.currentWallpaperImageId = value;
+  },
+});
 const images = ref<ImageInfo[]>([]);
 let leafAllImages: ImageInfo[] = [];
 const totalImagesCount = ref<number>(0);
@@ -704,13 +709,8 @@ const handleRefresh = async () => {
     const found = albumStore.albums.find((a) => a.id === albumId.value);
     if (found) albumName.value = found.name;
 
-    // 2) 刷新轮播/当前壁纸状态（避免 UI 与后端设置不同步）
-    await settingsStore.loadMany(["wallpaperRotationEnabled", "wallpaperRotationAlbumId"]);
-    try {
-      currentWallpaperImageId.value = await invoke<string | null>("get_current_wallpaper_image_id");
-    } catch {
-      currentWallpaperImageId.value = null;
-    }
+    // 2) 确保设置缓存已初始化；设置刷新只由 Settings 页手动触发或 setting-change 驱动。
+    await settingsStore.ensureLoaded();
 
     // 3) 手动刷新：清缓存强制重载详情（否则 store 缓存会让 UI 看起来“没刷新”）
     delete albumStore.albumImages[albumId.value];
@@ -782,7 +782,7 @@ const handleAddedToAlbum = async () => {
   await albumStore.loadAlbums();
 };
 
-const { handleCopyImage } = useImageOperations(
+const { handleDownloadImage, handleCopyImage } = useImageOperations(
   images,
   currentWallpaperImageId,
   albumViewRef
@@ -922,9 +922,14 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       ElMessage.success(desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`);
       break;
     }
+    case "download":
+      for (const img of imagesToProcess) {
+        await handleDownloadImage(img);
+      }
+      break;
     case "copy":
       if (IS_WEB) {
-        for (const img of imagesToProcess) handleCopyImage(img);
+        if (imagesToProcess[0]) await handleCopyImage(imagesToProcess[0]);
       } else if (imagesToProcess[0]) {
         await handleCopyImage(imagesToProcess[0]);
       }
@@ -1180,20 +1185,10 @@ onMounted(async () => {
   // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
   // 与 Gallery 共用同一套设置
   try {
-    await settingsStore.loadAll();
-    // 加载虚拟磁盘设置
-    await settingsStore.loadMany(["albumDriveEnabled", "albumDriveMountPoint"]);
+    await settingsStore.ensureLoaded();
   } catch (e) {
     console.error("加载设置失败:", e);
   }
-
-  try {
-    currentWallpaperImageId.value = await invoke<string | null>("get_current_wallpaper_image_id");
-  } catch {
-    currentWallpaperImageId.value = null;
-  }
-
-  await settingsStore.loadMany(["wallpaperRotationEnabled", "wallpaperRotationAlbumId"]);
 
   // 收藏状态以 store 为准：不再通过全局事件同步（favoriteChangedHandler 已移除）
 

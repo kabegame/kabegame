@@ -690,7 +690,7 @@ del_header("Authorization");
 - `url` (string): 资源 URL（图片或视频等）
 - `opts` (map, 可选): 选项对象，键均可独立出现：
   - `name` (string): 图库中的**展示名称**。省略、不存在或空字符串时，使用保存后的**文件名**（与仅传 `url` 时一致）。
-  - `metadata` (map / 任意可序列化结构): 可选，会作为 JSON 写入 `images.metadata`。详情页由插件包内 `templates/description.ejs` 与 `ejs.render(template, { metadata })` 渲染（iframe `srcdoc`）。省略或空 map 表示无扩展元数据。
+  - `metadata` (map / 任意可序列化结构): 可选，会作为 JSON 写入 `image_metadata` 并转为 `metadata_id`。详情页由插件包内 `templates/description.ejs` 与 `ejs.render(template, { metadata })` 渲染（iframe `srcdoc`）。省略或空 map 表示无扩展元数据。
 
 在 Rhai 中 `opts` 使用 map 字面量，例如 `#{ name: "…", metadata: #{ source: "…", score: 12 } }`。
 
@@ -925,4 +925,3 @@ if type_of(result) == "string" {
 ---
 
 最后更新：2026年3月30日
-

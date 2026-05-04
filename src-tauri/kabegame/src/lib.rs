@@ -391,6 +391,7 @@ pub fn run() {
             reset_plugin_default_config,
             get_build_mode,
             // --- Settings ---
+            get_settings,
             get_language,
             set_language,
             get_auto_launch,

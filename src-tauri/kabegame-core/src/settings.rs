@@ -729,6 +729,11 @@ Write-Output "$style,$tile"
         Ok(serde_json::Value::Object(json_map))
     }
 
+    /// 获取当前所有设置的 JSON 快照（camelCase key）。
+    pub fn get_all_settings_json(&self) -> Result<serde_json::Value, String> {
+        Self::serialize_to_json()
+    }
+
     fn key_to_json_string(key: SettingKey) -> String {
         match key {
             SettingKey::AutoLaunch => "autoLaunch".to_string(),

@@ -23,9 +23,7 @@ pub struct ImageInfo {
     #[serde(default)]
     pub surf_record_id: Option<String>,
     pub crawled_at: u64,
-    /// 插件写入的任意 JSON（爬虫 `download_image` 的 `metadata`），用于 EJS 模板渲染详情。
-    pub metadata: Option<Value>,
-    /// 外键指向 `image_metadata.id`；与 `metadata` 二选一存储（入库后 `metadata` 常为 None）。
+    /// 外键指向 `image_metadata.id`；下载入口已将 raw metadata 预先归一化为该 id。
     #[serde(rename = "metadataId")]
     #[serde(default)]
     pub metadata_id: Option<i64>,
@@ -85,35 +83,6 @@ pub struct RangedImages {
     pub limit: usize,
 }
 
-/// 解析图片宽高：桌面端用 image crate，Android content:// URI 由前端通过 img 元素获取。
-/// Android content:// URI 直接返回 None，由前端异步加载并回写 DB。
-fn resolve_image_dimensions(local_path: &str) -> Option<(u32, u32)> {
-    #[cfg(target_os = "android")]
-    {
-        if local_path.starts_with("content://") {
-            // Android content:// URI 由前端通过 img.naturalWidth/Height 获取，不在此解析
-            return None;
-        }
-    }
-
-    // 桌面端或 Android file:// 路径：使用 image crate
-    match image::image_dimensions(local_path) {
-        Ok((w, h)) => Some((w, h)),
-        Err(e) => {
-            eprintln!("Failed to get image dimensions from image crate: {}", e);
-            None
-        }
-    }
-}
-
-fn resolve_file_size(local_path: &str) -> Option<u64> {
-    #[cfg(target_os = "android")]
-    if local_path.starts_with("content://") {
-        return None;
-    }
-    fs::metadata(local_path).ok().map(|m| m.len())
-}
-
 #[cfg(not(target_os = "android"))]
 fn remove_thumbnail_file_if_needed(local_path: Option<&str>, thumbnail_path: Option<&str>) {
     let Some(thumb) = thumbnail_path.map(str::trim).filter(|p| !p.is_empty()) else {
@@ -137,7 +106,7 @@ fn normalize_media_type(media_type: Option<String>) -> Option<String> {
     crate::image_type::normalize_stored_media_type(media_type)
 }
 
-/// 从 DB `images.metadata` 文本列解析为 JSON；空串或无效则 `None`。
+/// 从 DB `image_metadata.data` 文本列解析为 JSON；空串或无效则 `None`。
 pub(crate) fn parse_image_metadata_json(s: Option<String>) -> Option<Value> {
     s.and_then(|s| {
         let t = s.trim();
@@ -224,7 +193,6 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: None,
                         metadata_id: row.get::<_, Option<i64>>(7)?,
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
@@ -267,7 +235,7 @@ impl Storage {
         Ok(result)
     }
 
-    /// 读取 `image_metadata.data`，若无则回退 `images.metadata`（未迁移旧行）。
+    /// 读取 `image_metadata.data`。
     pub fn get_image_metadata(&self, image_id: &str) -> Result<Option<Value>, String> {
         crate::providers::image_metadata_at(image_id)
     }
@@ -295,6 +263,35 @@ impl Storage {
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         insert_or_get_image_metadata_id(&conn, &s)
+    }
+
+    pub fn gc_image_metadata(&self, candidate_ids: &[i64]) -> Result<usize, String> {
+        if candidate_ids.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut deleted = 0usize;
+        let mut seen = HashSet::new();
+        for &id in candidate_ids {
+            if !seen.insert(id) {
+                continue;
+            }
+            let used: i64 = conn
+                .query_row(
+                    "SELECT
+                        (SELECT COUNT(1) FROM images WHERE metadata_id = ?1)
+                      + (SELECT COUNT(1) FROM task_failed_images WHERE metadata_id = ?1)",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("gc_image_metadata count: {}", e))?;
+            if used == 0 {
+                conn.execute("DELETE FROM image_metadata WHERE id = ?1", params![id])
+                    .map_err(|e| format!("gc_image_metadata delete: {}", e))?;
+                deleted += 1;
+            }
+        }
+        Ok(deleted)
     }
 
     pub fn find_image_by_path(&self, local_path: &str) -> Result<Option<ImageInfo>, String> {
@@ -325,7 +322,6 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: None,
                         metadata_id: row.get::<_, Option<i64>>(7)?,
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
@@ -399,7 +395,6 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: None,
                         metadata_id: row.get::<_, Option<i64>>(7)?,
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
@@ -469,7 +464,6 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: None,
                         metadata_id: row.get::<_, Option<i64>>(7)?,
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
@@ -542,7 +536,6 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: None,
                         metadata_id: row.get::<_, Option<i64>>(7)?,
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
@@ -589,42 +582,16 @@ impl Storage {
 
         image.media_type = crate::image_type::normalize_stored_media_type(image.media_type.take());
 
-        let resolved_metadata_id = if image.metadata_id.is_some() {
-            image.metadata_id
-        } else if let Some(ref v) = image.metadata {
-            let s = serde_json::to_string(v)
-                .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-            Some(insert_or_get_image_metadata_id(&conn, &s)?)
-        } else {
-            None
-        };
-
-        image.metadata = None;
-        image.metadata_id = resolved_metadata_id;
-
         let thumbnail_path = if image.thumbnail_path.trim().is_empty() {
             image.local_path.clone()
         } else {
             image.thumbnail_path.clone()
         };
 
-        // 如果 width/height 为空，尝试解析
-        if image.width.is_none() || image.height.is_none() {
-            if let Some((w, h)) = resolve_image_dimensions(&image.local_path) {
-                image.width = Some(w);
-                image.height = Some(h);
-            }
-        }
-
-        // 如果 size 为空，从文件系统获取
-        if image.size.is_none() {
-            image.size = resolve_file_size(&image.local_path);
-        }
-
         let crawled_at_i64 = image.crawled_at as i64;
         conn.execute(
-            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata, metadata_id, thumbnail_path, hash, type, width, height, display_name, size)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata_id, thumbnail_path, hash, type, width, height, display_name, size)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 &image.url,
                 image.local_path,
@@ -632,7 +599,6 @@ impl Storage {
                 image.task_id,
                 image.surf_record_id,
                 crawled_at_i64,
-                None::<String>,
                 image.metadata_id,
                 thumbnail_path,
                 image.hash,
@@ -747,14 +713,15 @@ impl Storage {
     pub fn delete_image(&self, image_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let image_paths: Option<(String, String)> = conn
+        let image_paths: Option<(String, String, Option<i64>)> = conn
             .query_row(
-                "SELECT local_path, thumbnail_path FROM images WHERE id = ?1",
+                "SELECT local_path, thumbnail_path, metadata_id FROM images WHERE id = ?1",
                 params![image_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(|e| format!("Failed to query image path: {}", e))?;
+        let metadata_id = image_paths.as_ref().and_then(|(_, _, id)| *id);
 
         // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
         let task_ids: Vec<String> = conn
@@ -773,7 +740,7 @@ impl Storage {
             })
             .map_err(|e| format!("Failed to query task IDs: {}", e))?;
 
-        if let Some((local_path, thumbnail_path)) = image_paths {
+        if let Some((local_path, thumbnail_path, _)) = image_paths {
             remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
             let _ = fs::remove_file(local_path);
         }
@@ -795,6 +762,10 @@ impl Storage {
         }
 
         self.invalidate_images_total_cache();
+        drop(conn);
+        if let Some(metadata_id) = metadata_id {
+            let _ = self.gc_image_metadata(&[metadata_id]);
+        }
 
         Ok(())
     }
@@ -802,14 +773,15 @@ impl Storage {
     pub fn remove_image(&self, image_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let image_paths: Option<(String, String)> = conn
+        let image_paths: Option<(String, String, Option<i64>)> = conn
             .query_row(
-                "SELECT local_path, thumbnail_path FROM images WHERE id = ?1",
+                "SELECT local_path, thumbnail_path, metadata_id FROM images WHERE id = ?1",
                 params![image_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(|e| format!("Failed to query image path: {}", e))?;
+        let metadata_id = image_paths.as_ref().and_then(|(_, _, id)| *id);
 
         // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
         let task_ids: Vec<String> = conn
@@ -828,7 +800,7 @@ impl Storage {
             })
             .map_err(|e| format!("Failed to query task IDs: {}", e))?;
 
-        if let Some((local_path, thumbnail_path)) = image_paths {
+        if let Some((local_path, thumbnail_path, _)) = image_paths {
             remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
         }
 
@@ -849,6 +821,10 @@ impl Storage {
         }
 
         self.invalidate_images_total_cache();
+        drop(conn);
+        if let Some(metadata_id) = metadata_id {
+            let _ = self.gc_image_metadata(&[metadata_id]);
+        }
 
         Ok(())
     }
@@ -862,6 +838,7 @@ impl Storage {
         let tx = conn
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
+        let mut metadata_ids = Vec::new();
 
         // 在删除前，查询所有图片所属的任务，并统计每个任务需要增加的 deleted_count
         let mut task_deleted_counts: HashMap<String, i64> = HashMap::new();
@@ -888,16 +865,19 @@ impl Storage {
         }
 
         for id in image_ids {
-            let image_paths: Option<(String, String)> = tx
+            let image_paths: Option<(String, String, Option<i64>)> = tx
                 .query_row(
-                    "SELECT local_path, thumbnail_path FROM images WHERE id = ?1",
+                    "SELECT local_path, thumbnail_path, metadata_id FROM images WHERE id = ?1",
                     params![id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .optional()
                 .map_err(|e| format!("Failed to query image path: {}", e))?;
 
-            if let Some((local_path, thumbnail_path)) = image_paths {
+            if let Some((local_path, thumbnail_path, metadata_id)) = image_paths {
+                if let Some(metadata_id) = metadata_id {
+                    metadata_ids.push(metadata_id);
+                }
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
                 let _ = fs::remove_file(local_path);
             }
@@ -920,6 +900,8 @@ impl Storage {
             .map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
         self.invalidate_images_total_cache();
+        drop(conn);
+        let _ = self.gc_image_metadata(&metadata_ids);
 
         Ok(())
     }
@@ -933,6 +915,7 @@ impl Storage {
         let tx = conn
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
+        let mut metadata_ids = Vec::new();
 
         // 在删除前，查询所有图片所属的任务，并统计每个任务需要增加的 deleted_count
         let mut task_deleted_counts: HashMap<String, i64> = HashMap::new();
@@ -959,16 +942,19 @@ impl Storage {
         }
 
         for id in image_ids {
-            let image_paths: Option<(String, String)> = tx
+            let image_paths: Option<(String, String, Option<i64>)> = tx
                 .query_row(
-                    "SELECT local_path, thumbnail_path FROM images WHERE id = ?1",
+                    "SELECT local_path, thumbnail_path, metadata_id FROM images WHERE id = ?1",
                     params![id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .optional()
                 .map_err(|e| format!("Failed to query image path: {}", e))?;
 
-            if let Some((local_path, thumbnail_path)) = image_paths {
+            if let Some((local_path, thumbnail_path, metadata_id)) = image_paths {
+                if let Some(metadata_id) = metadata_id {
+                    metadata_ids.push(metadata_id);
+                }
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
             }
 
@@ -990,6 +976,8 @@ impl Storage {
             .map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
         self.invalidate_images_total_cache();
+        drop(conn);
+        let _ = self.gc_image_metadata(&metadata_ids);
 
         Ok(())
     }

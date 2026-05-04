@@ -8,7 +8,7 @@
 flowchart TD
   subgraph write ["写入"]
     crawl["crawl.rhai / crawl.js\ndownload_image(..., metadata)"]
-    db["images.metadata TEXT"]
+    db["image_metadata.data\nimages.metadata_id"]
   end
   subgraph load ["模板加载（应用/插件初始化）"]
     store["usePluginStore / useInstalledPluginsStore\nloadDescriptionTemplates"]
@@ -41,8 +41,8 @@ flowchart TD
 ## 一、数据：`metadata` 从哪里来
 
 - 爬虫在 `download_image` 的 opts 里传入 **`metadata`**（任意 JSON，由插件自行约定结构）。
-- 后端写入 `images.metadata` 列（`serde_json::Value`），前端 `ImageInfo.metadata` 为 `Record<string, unknown>` 等。
-- 详情区 EJS **仅接收** `ejs.render(tpl, { metadata: img.metadata })` 中的 `metadata`，与 `pluginId` 配合使用。
+- 后端在 Rhai/WebView 入口写入 `image_metadata`，后续 `images` / `task_failed_images` 只保存 `metadata_id`。
+- 详情区按需加载 metadata 后，EJS **仅接收** `ejs.render(tpl, { metadata })` 中的 `metadata`，与 `pluginId` 配合使用。
 
 详见 [DOWNLOADER_FLOW.md](../downloader-tasks/DOWNLOADER_FLOW.md)、[docs/RHAI_API.md](../../docs/RHAI_API.md) 中 `download_image` / `metadata` 说明。
 
@@ -67,7 +67,7 @@ flowchart TD
 
 1. **显示条件**：`image.pluginId` 存在，且 `metadata` 经 `isRenderableMetadata` 判断非空；且能取到非空模板字符串。
 2. **渲染**：
-   - `body = ejs.render(tpl, { metadata: img.metadata }, { rmWhitespace: false })`
+  - `body = ejs.render(tpl, { metadata }, { rmWhitespace: false })`
    - **CSP（生产 / WKWebView）**：Tauri 会为父文档注入 `script-src` 哈希，子文档 `about:srcdoc` 继承后内联脚本会被拒。应用层使用**固定 nonce**（常量 `kabegame-ejs-bridge`，与 `tauri.conf.json` 中 `script-src` 的 `'nonce-kabegame-ejs-bridge'` 一致），为 bridge 与 EJS 产出中所有 `<script>` 标签写入 `nonce="kabegame-ejs-bridge"`。
    - `descriptionSrcdoc = theme + '<script nonce="…">' + DESCRIPTION_BRIDGE_INJECT_SCRIPT + '</script>' + body`（`body` 内 `<script>` 同样注入 nonce）
    - 注入脚本定义 **`window.__bridge.fetch`**、**`getLocale`**、**`getPluginData`**、**`getCache`**、**`setCache`**、**`openUrl`**，并全局监听 iframe 内 `<a>` 点击（见下节）。
@@ -111,7 +111,7 @@ flowchart TD
 ## 五、插件模板编写要点
 
 - EJS 中通过 **`metadata`**（或 `<% const m = metadata || {} %>`）访问下载时写入的 JSON。
-- 模板可把 `metadata` 作为**首屏兜底**，再在 iframe 内通过 **`__bridge.fetch(..., { json: true })`** 拉取最新远端详情，仅**覆盖当前展示 DOM**；这不会回写 `images.metadata`，也不改变数据库中的原始元数据。
+- 模板可把 `metadata` 作为**首屏兜底**，再在 iframe 内通过 **`__bridge.fetch(..., { json: true })`** 拉取最新远端详情，仅**覆盖当前展示 DOM**；这不会回写 `image_metadata`，也不改变数据库中的原始元数据。
 - Pixiv 等插件可在模板内继续请求其它 JSON（例如 `GET /ajax/user/{tags.authorId}`），再用 **`json: false`** 的 `__bridge.fetch` 拉 `i.pximg.net/user-profile` 头像字节并转 Blob URL（与评论头像一致）。
 - 需要跨域 HTTP 时统一用 **`__bridge.fetch`**（`json: true` 解析 JSON；否则拿 `{ base64, contentType }`），不要假设 iframe 内直连 `fetch` 可伪造 `Referer`。
 - Pixiv 部分接口带 **`lang`** 查询参数时：应先用 **`__bridge.getLocale()`** 取应用语言，再在模板内映射为 Pixiv 接受的 `ja` / `zh` / `ko` / `en`（与作品页 ajax 一致），例如 `ajax/illust/{id}`、评论根列表等。

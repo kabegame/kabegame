@@ -41,6 +41,7 @@ export function useImageOperations(
     if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
     if (ext === "gif") return "image/gif";
     if (ext === "webp") return "image/webp";
+    if (ext === "avif") return "image/avif";
     if (ext === "bmp") return "image/bmp";
     return "";
   };
@@ -55,29 +56,47 @@ export function useImageOperations(
     }
   };
 
-  // web 模式：通过 <a download> 触发浏览器下载原图
-  const handleDownloadImage = (image: ImageInfo) => {
-    const url = fileToUrl(image.localPath) || image.url;
+  const getImageDownloadUrl = (image: ImageInfo) =>
+    fileToUrl(image.localPath) || fileToUrl(image.thumbnailPath || "") || image.url || "";
+
+  const getImageFileName = (image: ImageInfo) =>
+    image.displayName || image.localPath.split(/[\\/]/).pop() || image.url?.split(/[\\/]/).pop() || image.id;
+
+  // web 模式：先转成同源 blob URL 再 download，避免跨域直链忽略 download 后跳转到图片页。
+  const handleDownloadImage = async (image: ImageInfo) => {
+    const url = getImageDownloadUrl(image);
     if (!url) {
       ElMessage.warning(i18n.global.t("common.imageNotLoadedYet"));
       return;
     }
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = image.displayName || image.localPath.split(/[\\/]/).pop() || image.id;
-    a.rel = "noopener noreferrer";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    let objectUrl = "";
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Download fetch failed: ${response.status}`);
+      const blob = await response.blob();
+      objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = getImageFileName(image);
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error("下载图片失败:", error);
+      ElMessage.error(i18n.global.t("common.operationFailed"));
+    } finally {
+      if (objectUrl) window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    }
   };
 
   // 复制图片到剪贴板（不依赖 Tauri 剪贴板插件：本地文件用后端 copy_image_to_clipboard，否则用 navigator.clipboard）
   const handleCopyImage = async (image: ImageInfo) => {
-    if (IS_WEB) {
-      handleDownloadImage(image);
-      return;
-    }
     try {
+      if (IS_WEB && typeof ClipboardItem === "undefined") {
+        throw new Error("ClipboardItem is not supported");
+      }
+
       const writeImageBlobToClipboard = async (blob: Blob) => {
         const mime = blob.type || "image/png";
         await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
@@ -170,9 +189,9 @@ export function useImageOperations(
 
       const localPath = (image.localPath || "").trim();
       const thumbnailPath = (image.thumbnailPath || "").trim();
-      const imageUrl = fileToUrl(localPath) || fileToUrl(thumbnailPath);
+      const imageUrl = getImageDownloadUrl(image) || fileToUrl(localPath) || fileToUrl(thumbnailPath);
 
-      if (localPath) {
+      if (!IS_WEB && localPath) {
         try {
           await invoke("copy_image_to_clipboard", { imageId: image.id });
           ElMessage.success(i18n.global.t("common.copyImageSuccess"));
@@ -354,10 +373,7 @@ export function useImageOperations(
           throw error;
         }
 
-        await settingsStore.loadMany([
-          "wallpaperRotationEnabled",
-          "wallpaperRotationAlbumId",
-        ]);
+        await settingsStore.ensureLoaded();
 
         // 5. 如果轮播未开启，开启它
         if (!settingsStore.values.wallpaperRotationEnabled) {
@@ -469,6 +485,7 @@ export function useImageOperations(
 
   return {
     handleOpenImagePath,
+    handleDownloadImage,
     handleCopyImage,
     applyFavoriteChangeToGalleryCache,
     handleBatchDeleteImages,

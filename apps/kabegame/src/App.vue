@@ -393,7 +393,7 @@ onMounted(async () => {
   }
 
   // 加载全部设置
-  await settingsStore.loadAll();
+  await settingsStore.ensureLoaded();
 
   // 从配置恢复语言：解析链生效后若与存储不一致则写回 canonical，避免长期为 null/别名/非法值
   {
@@ -443,7 +443,7 @@ onMounted(async () => {
     const raw = event.payload as Record<string, unknown> | undefined;
     const changes = raw && typeof raw === "object" ? (raw.changes as Record<string, unknown> | undefined) ?? raw : undefined;
     if (changes && typeof changes === "object") {
-      Object.assign(settingsStore.values, changes);
+      settingsStore.applyChanges(changes);
       if ("language" in changes) {
         const raw = settingsStore.values.language;
         const canonical = resolveLanguage(raw ?? undefined);
@@ -603,7 +603,7 @@ body,
     }
   }
 
-  > :not(.app-background-layer) {
+  > :not(.app-background-layer):not(.file-drop-overlay) {
     position: relative;
     z-index: 1;
   }

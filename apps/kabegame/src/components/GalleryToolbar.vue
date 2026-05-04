@@ -26,8 +26,8 @@
           </el-icon>
         </el-button>
       </template>
-      <GalleryProviderTreeSidebar
-        mode="popover"
+      <GalleryFilterTree
+        ref="providerTreeRef"
         :context-prefix="providerContextPrefix"
         :filter="filter"
         @update:filter="onProviderTreeFilter"
@@ -168,7 +168,7 @@ import { useRouter } from "vue-router";
 import { ArrowDown, Filter, Histogram, Sort } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
 import SearchInput from "@/components/SearchInput.vue";
-import GalleryProviderTreeSidebar from "@/components/GalleryProviderTreeSidebar.vue";
+import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
@@ -297,6 +297,7 @@ const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
   videoCount: 0,
 });
 const showProviderTreePopover = ref(false);
+const providerTreeRef = ref<{ refresh: () => Promise<void> | void } | null>(null);
 const monthGroups = ref<DateGroupRow[]>([]);
 const dayGroups = ref<DayGroupRow[]>([]);
 const yearGroups = ref<YearGroupRow[]>([]);
@@ -882,6 +883,12 @@ function onProviderTreeFilter(filter: GalleryFilter) {
   emit("update:filter", filter);
   showProviderTreePopover.value = false;
 }
+
+async function refreshProviderFilterTree() {
+  await providerTreeRef.value?.refresh();
+}
+
+defineExpose({ refreshProviderFilterTree });
 
 function onDesktopSortCommand(cmd: string) {
   if (cmd !== "asc" && cmd !== "desc") return;

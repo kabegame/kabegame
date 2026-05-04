@@ -21,6 +21,7 @@ image = { workspace = true }
 infer = "0.19"
 lru = "0.12"
 md5 = { workspace = true }
+mp4 = { workspace = true }
 regex = "1.11"
 rhai = { workspace = true }
 rhai-chrono = { version = "0.1.1", default-features = false, features = ["sync"] }

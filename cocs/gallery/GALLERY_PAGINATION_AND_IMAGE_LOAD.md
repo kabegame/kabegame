@@ -35,15 +35,15 @@
 
 ### Metadata 懒加载（列表不带插件 JSON）
 
-为减少翻页时读取/传输/解析整页 `images.metadata`（插件写入的 JSON），**浏览列表**路径统一不返回 metadata：
+为减少翻页时读取/传输/解析整页插件 JSON，**浏览列表**路径统一不返回 metadata，只返回 `metadata_id`：
 
-- **`get_images_info_range_by_query`**（[`storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)）：SELECT 中对 `metadata` 使用 `NULL`，构造的 `ImageInfo.metadata` 恒为 `None`。
-- **`fs_entries_to_gallery_browse`**（[`gallery/browse.rs`](/src-tauri/kabegame-core/src/gallery/browse.rs)）：`find_image_by_id` 后把 `image.metadata` 置为 `None`，与 SimplePage 行为一致。
+- **Provider / storage 查询**：列表只带 `metadata_id`，不内联 `image_metadata.data`。
+- **详情区**：通过 `metadata_id` 或 `imageId` 懒加载 JSON。
 
 详情区（EJS / 原始键值）按需加载：
 
 - **命令**：`get_image_metadata`（[`kabegame/src/commands/image.rs`](/src-tauri/kabegame/src/commands/image.rs)），参数 **`imageId`**（与前端 camelCase 一致）。
-- **实现**：[`Storage::get_image_metadata`](/src-tauri/kabegame-core/src/storage/images.rs) 仅 `SELECT metadata FROM images WHERE id = ?`。
+- **实现**：[`Storage::get_image_metadata`](/src-tauri/kabegame-core/src/storage/images.rs) 通过 provider 路径读取 `image_metadata.data`。
 
 ### 与 VD / Greedy 的区别
 

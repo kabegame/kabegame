@@ -82,7 +82,7 @@ export function createImageActions(
       key: "copy",
       label: IS_WEB ? t("contextMenu.downloadImage") : t("contextMenu.copyImage"),
       icon: IS_WEB ? Download : DocumentCopy,
-      command: "copy",
+      command: IS_WEB ? "download" : "copy",
       visible: (ctx) => {
         if (hideSet.has("copy")) return false;
         const count = ctx.selectedCount ?? 1;
@@ -167,9 +167,9 @@ export function createImageActions(
             },
             {
               key: "copy",
-              label: t("contextMenu.copyImage"),
-              icon: DocumentCopy,
-              command: "copy",
+              label: IS_WEB ? t("contextMenu.downloadImage") : t("contextMenu.copyImage"),
+              icon: IS_WEB ? Download : DocumentCopy,
+              command: IS_WEB ? "download" : "copy",
               visible: () => !hideSet.has("copy"),
             },
             {

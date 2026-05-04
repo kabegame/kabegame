@@ -49,6 +49,18 @@ impl<R: Runtime> Picker<R> {
         Ok(result)
     }
 
+    pub async fn get_video_dimensions(
+        &self,
+        uri: String,
+    ) -> crate::Result<GetVideoDimensionsResponse> {
+        let result: GetVideoDimensionsResponse = self
+            .0
+            .run_mobile_plugin_async("getVideoDimensions", GetVideoDimensionsArgs { uri })
+            .await
+            .map_err(crate::Error::from)?;
+        Ok(result)
+    }
+
     pub async fn get_content_size(&self, uri: String) -> crate::Result<GetContentSizeResponse> {
         let result: GetContentSizeResponse = self
             .0

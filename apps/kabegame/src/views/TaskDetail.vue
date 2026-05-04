@@ -250,7 +250,12 @@ const failedLoading = computed(() => failedImagesStore.loading);
 const imageFilter = ref<"success" | "failed">("success");
 const taskViewRef = ref<any>(null);
 const taskContainerRef = ref<HTMLElement | null>(null);
-const currentWallpaperImageId = ref<string | null>(null);
+const currentWallpaperImageId = computed<string | null>({
+    get: () => settingsStore.values.currentWallpaperImageId ?? null,
+    set: (value) => {
+        settingsStore.values.currentWallpaperImageId = value;
+    },
+});
 
 const retryingFailedIds = ref(new Set<number>());
 
@@ -269,7 +274,7 @@ const imageActions = computed(() => createImageActions({
 }));
 
 const { load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
-const { handleCopyImage } = useImageOperations(
+const { handleDownloadImage, handleCopyImage } = useImageOperations(
     images,
     currentWallpaperImageId,
     taskViewRef,
@@ -718,7 +723,7 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
                 throw error;
             }
 
-            await settingsStore.loadMany(["wallpaperRotationEnabled", "wallpaperRotationAlbumId"]);
+            await settingsStore.ensureLoaded();
 
             // 5. 如果轮播未开启，开启它
             if (!settingsStore.values.wallpaperRotationEnabled) {
@@ -790,9 +795,14 @@ const handleImageMenuCommand = async (
         : [image];
 
     switch (command) {
+        case "download":
+            for (const img of imagesToProcess) {
+                await handleDownloadImage(img);
+            }
+            break;
         case "copy":
             if (IS_WEB) {
-              for (const img of imagesToProcess) handleCopyImage(img);
+              if (imagesToProcess[0]) await handleCopyImage(imagesToProcess[0]);
             } else if (imagesToProcess[0]) {
               await handleCopyImage(imagesToProcess[0]);
             }
@@ -941,7 +951,7 @@ const initTask = async (id: string) => {
         await taskDetailRouteStore.navigate({ taskId: id, page: 1 });
     }
     await failedImagesStore.initListeners();
-    await settingsStore.loadAll();
+    await settingsStore.ensureLoaded();
     await Promise.all([
         loadTaskImages(),
         failedImagesStore.loadAll(),

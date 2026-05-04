@@ -685,6 +685,24 @@ pub fn init_registry() {
     );
 
     map.insert(
+        "get_settings",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(serde::Deserialize)]
+                    struct Args {
+                        keys: Vec<String>,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    crate::commands_core::settings::get_settings(args.keys)
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
         "get_import_recommended_schedule_enabled",
         MethodEntry {
             requires_super: false,

@@ -79,6 +79,19 @@ pub struct GetImageDimensionsResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GetVideoDimensionsArgs {
+    pub uri: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetVideoDimensionsResponse {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GetContentSizeArgs {
     pub uri: String,
 }

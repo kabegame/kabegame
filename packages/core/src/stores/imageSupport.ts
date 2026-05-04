@@ -1,8 +1,8 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { invoke } from "../api";
+import { IS_WEB } from "../env";
 import type { ImageFormat, ImageSupportResult } from "@kabegame/image-type";
-import "../vendor/modernizr.js";
 
 function waitModernizr(feature: "webp" | "avif"): Promise<boolean> {
   return new Promise((resolve) => {
@@ -30,9 +30,10 @@ function waitModernizr(feature: "webp" | "avif"): Promise<boolean> {
 }
 
 async function detectViaModernizr(): Promise<ImageSupportResult> {
-  if (typeof window === "undefined") {
+  if (IS_WEB || typeof window === "undefined") {
     return { webp: false, avif: false, heic: false };
   }
+  await import("../vendor/modernizr.js");
   const [webp, avif] = await Promise.all([
     waitModernizr("webp"),
     waitModernizr("avif"),
@@ -80,6 +81,12 @@ export const useImageSupportStore = defineStore("imageSupport", () => {
     const run = (async () => {
       detecting.value = true;
       try {
+        if (IS_WEB) {
+          support.value = { webp: false, avif: false, heic: false };
+          formats.value = [];
+          ready.value = true;
+          return;
+        }
         const merged = await mergeDetect();
         support.value = merged;
         const list = toFormats(merged);

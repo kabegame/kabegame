@@ -364,7 +364,7 @@ MCPB 刻意**不**暴露以下 Rust 工具与 scheme：
 - **页大小上限 1000**；超出 100 / 500 / 1000 三档的自定义值会被规整回 100。
 - **`?without=` 最多携带一个**；同时指定两个键返回 `invalid_params`；要同时跳过，改用 Entry 模式（去掉尾斜杠）。
 - **不要批量拉 plugin meta**：`provider://plugin/*` 会把 `docResources` 一起带出，每个插件约 10 MB。应改用 `plugin://` 瘦身列表 + 按需子资源。
-- **`image.metadata` 懒加载**：`provider://` 列表结果永远不含 `metadata`，只有 `image://{id}` 与 `image://{id}/metadata` 会返回完整 metadata。
+- **metadata 懒加载**：`provider://` 列表结果只带 `metadataId`，只有 `image://{id}/metadata` 会返回完整 metadata。
 - **`surf://{host}` 以 host 为键**，不是数字 id。
 - **不提供删除工具**：MCP 没有 delete-image / delete-album。服务器 instructions 明确建议模型把想删的图片收集到一个「待删除」画册里，由用户最终确认。
 - **`set_album_images_order` 对用户不可见**：手动顺序要等用户把画册排序切到「加入顺序」才会显示；响应文本会提醒这一点。

@@ -413,7 +413,12 @@ const pendingRemoveImages = ref<ImageInfo[]>([]);
 const galleryContainerRef = ref<HTMLElement | null>(null);
 const galleryViewRef = ref<any>(null);
 // const showAlbumDialog = ref(false);
-const currentWallpaperImageId = ref<string | null>(null);
+const currentWallpaperImageId = computed<string | null>({
+  get: () => settingsStore.values.currentWallpaperImageId ?? null,
+  set: (value) => {
+    settingsStore.values.currentWallpaperImageId = value;
+  },
+});
 const totalImagesCount = ref<number>(0); // 总图片数（不受过滤器影响）
 
 // 滚动"太快"时的俏皮提示（画廊开启）
@@ -607,6 +612,7 @@ watch(
 // 使用图片操作 composable
 const {
   handleOpenImagePath,
+  handleDownloadImage,
   handleCopyImage,
   toggleFavorite,
   setWallpaper,
@@ -789,9 +795,14 @@ const handleGridContextCommand = async (
   switch (command) {
     case "detail":
       return "detail";
+    case "download":
+      for (const img of imagesToProcess) {
+        await handleDownloadImage(img);
+      }
+      return null;
     case "copy":
       if (IS_WEB) {
-        for (const img of imagesToProcess) handleCopyImage(img);
+        if (imagesToProcess[0]) await handleCopyImage(imagesToProcess[0]);
       } else if (imagesToProcess[0]) {
         await handleCopyImage(imagesToProcess[0]);
       }
@@ -1066,12 +1077,7 @@ useAlbumImagesChangeRefresh({
 });
 
 onMounted(async () => {
-  await settingsStore.loadAll();
-  invoke<string | null>("get_current_wallpaper_image_id").then(id => {
-    currentWallpaperImageId.value = id;
-  }).catch(() => {
-    currentWallpaperImageId.value = null;
-  });
+  await settingsStore.ensureLoaded();
   // 注意：任务列表与运行配置在 crawler store 初始化时加载；已安装插件在 App.vue onMounted 中 loadPlugins
   loadTotalImagesCount(); // 加载总图片数
 
@@ -1123,7 +1129,7 @@ onMounted(async () => {
 // 组件激活时（keep-alive 缓存后重新显示）：以路由为唯一真理，始终按当前路由 path 刷新列表，保证从任务页返回后顺序与路由、header 一致。
 onActivated(async () => {
   isGalleryActive.value = true;
-  await settingsStore.loadAll();
+  await settingsStore.ensureLoaded();
 
   const pathToLoad = currentPath.value;
   if (!pathToLoad) return;

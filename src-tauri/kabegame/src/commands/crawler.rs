@@ -330,6 +330,7 @@ pub async fn crawl_add_progress(percentage: f64) -> Result<(), String> {
 }
 
 /// WebView `ctx.downloadImage(url, opts)`：`opts.name` / `opts.metadata` 可单独或同时传入（与 Rhai `download_image(url, #{ ... })` 语义一致）。
+/// raw metadata 在入口处归一化为 `metadata_id`，下载队列只传 id。
 #[tauri::command]
 pub async fn crawl_download_image(
     app: AppHandle,
@@ -395,6 +396,11 @@ pub async fn crawl_download_image(
         }
     }
     let merged_headers = merge_task_headers(&ctx.task_id, Some(request_headers), cookie_header)?;
+    let metadata_id = if let Some(value) = metadata {
+        Some(Storage::global().insert_or_get_image_metadata_row(&value)?)
+    } else {
+        None
+    };
     dq.download_image(
         parsed,
         images_dir,
@@ -404,8 +410,7 @@ pub async fn crawl_download_image(
         ctx.output_album_id.clone(),
         merged_headers,
         name,
-        metadata,
-        None,
+        metadata_id,
     )
     .await
 }

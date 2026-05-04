@@ -1,16 +1,16 @@
 //! 支持的图片扩展名与 MIME 类型，集中定义供后端与前端一致使用。
-//! 后端初始支持常见类型；前端通过 Tauri 命令上报 WebView 可解码的格式（如 avif、heic）以扩展该列表。
+//! 后端固定支持常见类型和服务器可处理的现代格式；前端仍可通过 Tauri 命令上报额外 WebView 可解码格式。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{LazyLock, OnceLock, RwLock};
 
-/// 后端内置支持的图片扩展名（小写，不含点号）。前端可通过 set_frontend_supported_image_formats 扩展。
-const BUILTIN_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
+/// 后端内置支持的图片扩展名（小写，不含点号）。前端可通过 set_frontend_supported_image_formats 扩展额外格式。
+const BUILTIN_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp"];
 /// 后端内置支持的视频扩展名（小写，不含点号）。
 const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov"];
 
-/// 扩展名到 MIME 的映射（含前端可能上报的 avif、heic）。
+/// 扩展名到 MIME 的映射（含内置 avif，以及前端可能上报的 heic）。
 const EXT_MIME: &[(&str, &str)] = &[
     ("jpg", "image/jpeg"),
     ("jpeg", "image/jpeg"),
@@ -26,7 +26,7 @@ const EXT_MIME: &[(&str, &str)] = &[
 
 static MIME_BY_EXT: OnceLock<HashMap<String, String>> = OnceLock::new();
 
-/// 前端上报的、当前 WebView 支持解码的扩展名（在内置列表基础上扩展）。
+/// 前端上报的、当前 WebView 支持解码的额外扩展名（在内置列表基础上扩展）。
 static FRONTEND_EXTENSIONS: LazyLock<RwLock<HashSet<String>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
 
@@ -39,7 +39,7 @@ fn mime_by_ext_map() -> &'static HashMap<String, String> {
     })
 }
 
-/// 由前端在启动时调用（Tauri 命令），将当前 WebView 检测到的支持格式合并进支持列表。
+/// 由原生前端在启动时调用（Tauri 命令），将当前 WebView 检测到的额外支持格式合并进支持列表。
 pub fn set_frontend_supported_image_formats(formats: Vec<String>) {
     let mut set = match FRONTEND_EXTENSIONS.write() {
         Ok(s) => s,
@@ -391,4 +391,23 @@ pub fn is_archive_mime(mime: &Option<String>) -> bool {
             | "application/x-bzip2"
             | "application/x-xz"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_image_support_includes_webp_and_avif() {
+        let extensions = supported_image_extensions();
+        assert!(extensions.iter().any(|ext| ext == "webp"));
+        assert!(extensions.iter().any(|ext| ext == "avif"));
+        assert!(is_supported_image_ext("avif"));
+
+        let mime_by_ext = mime_by_ext();
+        assert_eq!(
+            mime_by_ext.get("avif").map(String::as_str),
+            Some("image/avif")
+        );
+    }
 }

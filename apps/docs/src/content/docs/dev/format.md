@@ -68,7 +68,7 @@ plugin-name.kgpg
 
 ### templates/description.ejs
 
-由 `ImageDetailContent.vue` 用 EJS 将 `metadata` 渲染为 HTML 后写入 iframe `srcdoc`。`metadata` 的来源是爬虫在 `download_image(..., { metadata })` 时写入的 `images.metadata` 列；描述页模板随插件元数据一起被加载到内存，由前端直接消费。
+由 `ImageDetailContent.vue` 用 EJS 将 `metadata` 渲染为 HTML 后写入 iframe `srcdoc`。`metadata` 的来源是爬虫在 `download_image(..., { metadata })` 时写入的 `image_metadata` 行；描述页模板随插件元数据一起被加载到内存，由前端直接消费。
 
 模板渲染时只有一个变量 `metadata`：
 

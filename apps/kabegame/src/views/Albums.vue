@@ -420,19 +420,13 @@ onMounted(async () => {
   // 画册成员变更的预览刷新由 `album-images-change` 驱动，统一节流处理。
 });
 
-// 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表和轮播设置
+// 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表，并等待设置缓存就绪。
 onActivated(async () => {
   await Promise.all([
     albumStore.loadAlbums(),
     loadProviderAlbumList(),
   ]);
-  // 重新加载虚拟磁盘设置（可能在设置页修改后返回）
-  await settingsStore.loadMany([
-    "albumDriveEnabled",
-    "albumDriveMountPoint",
-    "wallpaperRotationEnabled",
-    "wallpaperRotationAlbumId",
-  ]);
+  await settingsStore.ensureLoaded();
 
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
   const favoriteAlbum =
@@ -478,7 +472,7 @@ const handleRefresh = async () => {
       albumStore.loadAlbums(),
       loadProviderAlbumList(),
     ]);
-    await settingsStore.loadMany(["wallpaperRotationEnabled", "wallpaperRotationAlbumId"]);
+    await settingsStore.ensureLoaded();
     // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来"没刷新"）
     const albumsToPreload = displayedAlbumRoots.value.slice(0, 6);
     for (const album of albumsToPreload) {

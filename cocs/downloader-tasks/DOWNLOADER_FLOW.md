@@ -22,7 +22,7 @@
 
 | 层级 | 文件路径 | 作用 |
 |------|----------|------|
-| 下载队列与 worker | `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | DownloadQueue、DownloadPool、download_worker_loop、wait_after_download_if_needed；`DownloadRequest` 可携带 `custom_display_name` / `metadata`（`Option<serde_json::Value>`；来源可为 Rhai `download_image(url, #{ name, metadata })` 或 WebView `ctx.downloadImage` 的同名 opts 字段），入库时写入 `images.display_name` / `images.metadata`（JSON） |
+| 下载队列与 worker | `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | DownloadQueue、DownloadPool、download_worker_loop、wait_after_download_if_needed；Rhai/WebView 入口把 raw `metadata` 先写入 `image_metadata` 并转为 `metadata_id`，`DownloadRequest` 只携带 `custom_display_name` / `metadata_id`，入库时写入 `images.display_name` / `images.metadata_id` |
 | 失败重试调度 | `src-tauri/kabegame-core/src/crawler/scheduler.rs` | `retry_failed_image`、`download_handles`、批量重试/取消 |
 | 设置持久化 | `src-tauri/kabegame-core/src/settings.rs` | SettingKey::DownloadIntervalMs、get/set_download_interval_ms |
 | 命令层 | `src-tauri/kabegame/src/commands/settings.rs` | get_download_interval_ms、set_download_interval_ms |
@@ -67,6 +67,7 @@
 任务详情页的「失败图片」过滤视图与 **全部失败图片页**（`FailedImages.vue`，可按插件筛选）均展示 `task_failed_images` 表中的记录，支持：
 
 - **Header 快照**：失败写库时会把该图片当次下载的最终 `http_headers`（任务配置 + 脚本动态修改 + 默认流程后的最终值）序列化到 `header_snapshot`；老记录该字段可能为空。
+- **名称与 metadata 快照**：失败写库时会保存 `display_name` 与 `metadata_id`；重试成功后新 `images` 行沿用同一展示名与 metadata 引用，避免插件传入的名称或详情数据丢失。
 - **单次重试**：`retry_task_failed_image(failed_id)` → `TaskScheduler::retry_failed_image` **spawn** 异步任务调用 `download_image_retry`（入队前可能在 `download()` 内等待容量，可 `cancel_retry_failed_image` 通过 `JoinHandle::abort()` 取消等待）；优先使用失败记录里的 `header_snapshot`，为空时回退到任务级 `tasks.http_headers`；成功时删除记录、失败时更新 `last_error` 与 `header_snapshot`。不在重试前清空 `last_error`（由下载结果写回）。
 - **调度器句柄**：`TaskScheduler` 维护 `download_handles: HashMap<failed_id, JoinHandle>`，与单次/批量重试一一对应。
 - **批量重试 / 取消 / 删除（前端按当前插件筛选传 ID 列表）**：
@@ -74,6 +75,7 @@
   - `cancel_retry_failed_image` / `cancel_retry_failed_images(ids)`：移除并 abort 对应 `JoinHandle`（已入队完成的 handle 上 abort 为 no-op，正在下载的不受影响）。
   - `delete_failed_images(ids)`：先 `cancel_retry_failed_images` 再 `Storage::delete_failed_images`，按任务扣减 `failed_count` 并广播 `failed-images-change` + `task-image-counts`。
 - **单条删除**：`delete_task_failed_image(failed_id)` 删除记录后，发送 `removed` 细粒度事件，并广播 `task-image-counts` 更新 `failedCount`。任务删除（`delete_task`）和清除已完成任务（`clear_finished_tasks`）时，会同时删除该任务下所有失败图片记录并发送 `removed` 事件；启动时迁移会清理任务已不存在的孤儿失败图片。
+- **metadata GC**：删除 `images` 或 `task_failed_images` 后，storage 会内联检查候选 `metadata_id` 是否仍被引用；无人引用时立即删除对应 `image_metadata` 行。
 - **变更事件**：失败图片入库/更新/删除时，后端通过 `failed-images-change`（`DaemonEvent::FailedImagesChange`）广播细粒度 payload：`reason`（`added/removed/updated`）、`taskId`。其中 `added` 使用 `failedImages`（数组），`removed` 使用 `failedImageIds`（数组），`updated` 使用 `failedImage`（单条完整数据）。
 - **前端同步**：`apps/kabegame/src/stores/failedImages.ts` 在 `App.vue` 顶层初始化监听后，不再防抖全量拉取；改为按事件 payload 在内存中做 diff（新增 `unshift`、删除 `splice`、更新按 id 替换），仅在异常 payload 下兜底 `loadAll`。
 - **排序**：失败列表统一按 `id DESC`（自增 id 倒序）返回，避免依赖时间字段排序。

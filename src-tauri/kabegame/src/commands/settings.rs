@@ -10,6 +10,22 @@ use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
 
 // fields' getter commands
 #[tauri::command]
+pub fn get_settings(keys: Vec<String>) -> Result<serde_json::Value, String> {
+    let snapshot = Settings::global().get_all_settings_json()?;
+    let mut filtered = serde_json::Map::new();
+
+    if let Some(map) = snapshot.as_object() {
+        for key in keys {
+            if let Some(value) = map.get(&key) {
+                filtered.insert(key, value.clone());
+            }
+        }
+    }
+
+    Ok(serde_json::Value::Object(filtered))
+}
+
+#[tauri::command]
 pub fn get_auto_launch() -> bool {
     Settings::global().get_auto_launch()
 }

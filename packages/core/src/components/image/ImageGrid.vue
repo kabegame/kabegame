@@ -118,6 +118,7 @@ import type { ActionItem, ActionContext } from "../../actions/types";
 export type ContextCommand =
   | "detail"
   | "copy"
+  | "download"
   | "open"
   | "share"
   | "openFolder"
@@ -136,6 +137,7 @@ type ContextCommandPayloadMap = {
   openFolder: ImagePayload;
   detail: ImagePayload;
   copy: ImagePayload & MultiImagePayload;
+  download: ImagePayload & MultiImagePayload;
   wallpaper: ImagePayload & MultiImagePayload;
   share: ImagePayload;
   exportToWE: ImagePayload & MultiImagePayload;

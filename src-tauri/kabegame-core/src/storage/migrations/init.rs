@@ -54,7 +54,6 @@ CREATE TABLE images (
     task_id               TEXT    REFERENCES tasks(id) ON DELETE SET NULL,
     surf_record_id        TEXT,
     crawled_at            INTEGER NOT NULL,
-    metadata              TEXT,
     metadata_id           INTEGER REFERENCES image_metadata(id),
     thumbnail_path        TEXT    NOT NULL DEFAULT '',
     hash                  TEXT    NOT NULL DEFAULT '',
@@ -105,6 +104,7 @@ CREATE TABLE task_failed_images (
     last_error        TEXT,
     last_attempted_at INTEGER,
     metadata_id       INTEGER REFERENCES image_metadata(id),
+    display_name      TEXT,
     header_snapshot   TEXT
 );
 CREATE INDEX idx_task_failed_images_task ON task_failed_images(task_id);

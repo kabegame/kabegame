@@ -77,7 +77,7 @@ const MCP_INSTRUCTIONS: &str = r#"Kabegame MCP exposes six URI schemes plus writ
      provider://wallpaper-order/1/  wallpaper history, page 1
      provider://gallery/album/{id}/order/x50x/1/  album manual order, page 1
      provider://images/x100x/1      raw first 100 rows from images, SELECT images.*
-     provider://images/id_{id}/metadata  raw metadata row; image_metadata.data first, legacy images.metadata fallback
+     provider://images/id_{id}/metadata  raw metadata row from image_metadata.data
 
 2) album://              list ALL Albums       — returns Vec<Album>
    album://{id}          single Album          — returns Album
@@ -113,12 +113,10 @@ provider:// meta shapes (ProviderMeta tagged by kind/data):
 
 Image fields (entries[N].image — ImageInfo, camelCase via serde rename_all):
    id, url, localPath, pluginId, taskId, surfRecordId, crawledAt (unix sec),
-   metadata (crawl-time JSON; may be populated inline OR null with metadataId set — historically
-   large metadata is moved to the image_metadata table and exposed via metadataId),
    metadataId, thumbnailPath, favorite, localExists, hash, width, height, displayName,
    type ("image" | "video" — NOTE: serde key is `type`, not `mediaType`),
    lastSetWallpaperAt, size (bytes).
-   When metadata is null but metadataId is set, use image://{id}/metadata.
+   Use image://{id}/metadata to fetch crawl-time JSON metadata.
 
 Plugin package layout (for model-authored plugins): manifest.json, crawl.rhai, config.json,
 doc_root/doc.md, optional icon.png.

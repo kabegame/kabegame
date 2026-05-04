@@ -15,11 +15,6 @@
                 "sql": "im.data",
                 "as": "metadata_json",
                 "in_need": true
-            },
-            {
-                "sql": "images.metadata",
-                "as": "legacy_metadata_json",
-                "in_need": true
             }
         ],
         "limit": 1

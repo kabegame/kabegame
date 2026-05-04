@@ -163,6 +163,7 @@ const guessMime = (path: string): string => {
   if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
   if (ext === "gif") return "image/gif";
   if (ext === "webp") return "image/webp";
+  if (ext === "avif") return "image/avif";
   if (ext === "bmp") return "image/bmp";
   return "image/png";
 };
@@ -395,4 +396,3 @@ watchEffect(() => {
   cursor: zoom-in;
 }
 </style>
-

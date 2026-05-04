@@ -303,7 +303,6 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                                     true,
                                     None,
                                     None,
-                                    None,
                                 )
                                 .await
                                 {

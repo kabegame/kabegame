@@ -277,7 +277,7 @@ download_archive("D:\\Downloads\\pack.rar", "rar");
 
 ## 元数据白名单
 
-`metadata` 会被序列化后写入 `images.metadata`，并在插件详情面板由 `templates/description.ejs` 渲染。
+`metadata` 会在入口处写入 `image_metadata` 并转为 `metadata_id`，随后在插件详情面板由 `templates/description.ejs` 渲染。
 
 :::caution
 **只有你显式列出的字段会入库，请不要把上游 API 的整个 `body` 原样塞进去。**
