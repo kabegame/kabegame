@@ -1,6 +1,21 @@
 import { computed, watch } from "vue";
 import { AppSettingKey, AppSettings, useSettingsStore } from "../stores/settings";
 import { useLoadingDelay } from "./useLoadingDelay";
+import { IS_WEB } from "../env";
+import { trackEvent } from "../track/umami";
+
+function currentUrl() {
+  return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
+
+function trackSettingChange(key: string, value: unknown) {
+  if (!IS_WEB) return;
+  trackEvent("gallery_setting_change", {
+    key,
+    value,
+    url: currentUrl(),
+  });
+}
 
 /**
  * 封装设置键的状态管理
@@ -61,6 +76,7 @@ export function useSettingKeyState<K extends AppSettingKey>(key: K) {
     }
     console.log('set', key, value);
     await settingsStore.save(key, value, onAfterSave);
+    trackSettingChange(key, value);
   };
 
   return {

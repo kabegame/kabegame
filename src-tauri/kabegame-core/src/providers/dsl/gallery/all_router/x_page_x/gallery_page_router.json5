@@ -1,14 +1,13 @@
 {
-    "$schema": "../schema.json5",
+    "$schema": "../../../schema.json5",
     "namespace": "kabegame",
-    "name": "gallery_page_router",
+    "name": "query_page_provider",
     "properties": {
         "page_size": { "type": "number", "default": 1, "optional": false },
         "page_num":  { "type": "number", "default": 1, "optional": false }
     },
 
-    // 6e: delegate 直接命中 query_page_provider, 由它贡献 OFFSET/LIMIT。
-    // 原 __provider 私有 resolve 间接桥已删除。
+    // delegate 直接命中 query_page_provider, 由它贡献 OFFSET/LIMIT。
     "query": {
         "delegate": {
             "provider": "query_page_provider",

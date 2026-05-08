@@ -36,7 +36,7 @@ fn init_runtime() -> Arc<ProviderRuntime> {
     let executor: Arc<dyn SqlExecutor> = Arc::new(KabegameSqlExecutor::new(
         crate::storage::Storage::global().db.clone(),
     ));
-    let globals = HashMap::from([
+    let mut globals = HashMap::from([
         (
             "favorite_album_id".to_string(),
             TemplateValue::Text(crate::storage::FAVORITE_ALBUM_ID.to_string()),
@@ -46,6 +46,38 @@ fn init_runtime() -> Arc<ProviderRuntime> {
             TemplateValue::Text(crate::storage::HIDDEN_ALBUM_ID.to_string()),
         ),
     ]);
+    for (key, label) in [
+        ("01", "January"),
+        ("02", "February"),
+        ("03", "March"),
+        ("04", "April"),
+        ("05", "May"),
+        ("06", "June"),
+        ("07", "July"),
+        ("08", "August"),
+        ("09", "September"),
+        ("10", "October"),
+        ("11", "November"),
+        ("12", "December"),
+    ] {
+        globals.insert(
+            format!("vd_en_US_month.{}", key),
+            TemplateValue::Text(label.to_string()),
+        );
+    }
+    for day in 1..=31 {
+        let suffix = match day {
+            11 | 12 | 13 => "th",
+            _ if day % 10 == 1 => "st",
+            _ if day % 10 == 2 => "nd",
+            _ if day % 10 == 3 => "rd",
+            _ => "th",
+        };
+        globals.insert(
+            format!("vd_en_US_day.{:02}", day),
+            TemplateValue::Text(format!("{}{}", day, suffix)),
+        );
+    }
     let runtime = ProviderRuntime::new(executor, globals);
     register_embedded_dsl(&runtime);
     validate_dsl(&runtime);

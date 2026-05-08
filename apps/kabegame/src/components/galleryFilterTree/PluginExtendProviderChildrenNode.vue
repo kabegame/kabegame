@@ -7,6 +7,7 @@
     :active="active"
     :default-expanded="defaultExpanded"
     :filter="imagesChangeFilter"
+    :initial-count="initialCount"
     @select="$emit('select', filterForSelf)"
     @update:expanded="onExpanded"
   >
@@ -18,6 +19,7 @@
       :extend-path="childExtendPath(child.name)"
       :is-leaf="isProviderLeaf(child)"
       :depth="depth + 1"
+      :initial-count="child.total ?? undefined"
       @select="$emit('select', $event)"
     />
   </ProviderChildrenNode>
@@ -28,6 +30,7 @@
     :depth="depth"
     :active="active"
     :filter="imagesChangeFilter"
+    :initial-count="initialCount"
     @select="$emit('select', filterForSelf)"
   />
 </template>
@@ -59,6 +62,7 @@ const props = withDefaults(defineProps<{
   extendPath: string;
   isLeaf?: boolean;
   depth?: number;
+  initialCount?: number;
 }>(), {
   isLeaf: false,
   depth: 2,

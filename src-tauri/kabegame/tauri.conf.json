@@ -5,8 +5,7 @@
   "identifier": "Kabegame",
   "build": {
     "beforeDevCommand": "bun run dev:frontend",
-    "devUrl": "http://localhost:1420",
-    "frontendDist": "../../dist-kabegame"
+    "devUrl": "http://localhost:1420"
   },
   "app": {
     "windows": [],

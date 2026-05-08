@@ -1,0 +1,31 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_day_ko_provider",
+    "properties": {
+        "ymd": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "delegate": {
+            "provider": "day_provider",
+            "properties": {
+                "ymd": "${properties.ymd}"
+            }
+        }
+    },
+    "list": {
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
+            },
+            "meta": "${page.meta}"
+        }
+    }
+}

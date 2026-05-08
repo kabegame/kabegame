@@ -4,43 +4,14 @@
 //! Delegate query 闃らせ荳榊盾荳・fold・郁ｷｯ蠕・㍾螳壼髄・檎罰 Phase 6 ProviderRuntime 螟・炊・峨・//! 譛ｬ豬玖ｯ募宵蟇ｹ ContribQuery 闃らせ蛛・fold_contrib・悟ｯｹ扈捺棡 ProviderQuery 蟄玲ｮｵ蛛・snapshot 譬｡鬪後・
 #![cfg(feature = "json5")]
 
-use std::path::PathBuf;
+mod common;
 
 use pathql_rs::ast::{Namespace, NumberOrTemplate, ProviderName, Query, SqlExpr};
 use pathql_rs::compose::{fold_contrib, ProviderQuery};
-use pathql_rs::{Json5Loader, Loader, ProviderRegistry, Source};
-
-const PROVIDER_FILES: &[&str] = &[
-    "root_provider.json",
-    "gallery/gallery_route.json5",
-    "gallery/all_router/gallery_all_router.json5",
-    "gallery/all_router/x_page_x/gallery_paginate_router.json5",
-    "gallery/all_router/x_page_x/gallery_page_router.json5",
-    "shared/page_size_provider.json5",
-    "shared/query_page_provider.json5",
-    "vd/vd_root_router.json5",
-    "vd/vd_zh_CN_root_router.json5",
-];
+use pathql_rs::ProviderRegistry;
 
 fn build_full_registry() -> ProviderRegistry {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("core")
-        .join("src")
-        .join("providers")
-        .join("dsl");
-    let loader = Json5Loader;
-    let mut registry = ProviderRegistry::new();
-    for rel in PROVIDER_FILES {
-        let path = dir.join(rel);
-        let def = loader
-            .load(Source::Path(&path))
-            .unwrap_or_else(|e| panic!("load {}: {}", rel, e));
-        registry
-            .register(def)
-            .unwrap_or_else(|e| panic!("register {}: {}", rel, e));
-    }
-    registry
+    common::build_real_registry()
 }
 
 fn fold_provider_query(state: &mut ProviderQuery, registry: &ProviderRegistry, name: &str) {
@@ -66,8 +37,6 @@ fn fold_gallery_page_chain() {
     fold_provider_query(&mut state, &r, "gallery_all_router");
     // gallery_paginate_router.query: { limit: 0 }
     fold_provider_query(&mut state, &r, "gallery_paginate_router");
-    // gallery_page_router.query: { delegate: query_page_provider {ps,pn} } 窶・Delegate, skipped (fold 荳榊ｱ募ｼ)
-    fold_provider_query(&mut state, &r, "gallery_page_router");
     // query_page_provider.query: { offset: "${...} * (${...} - 1)", limit: "${properties.page_size}" }
     fold_provider_query(&mut state, &r, "query_page_provider");
 
@@ -114,7 +83,6 @@ fn fold_skipping_root_and_delegates_only_contrib_applies() {
     let mut state = ProviderQuery::new();
 
     fold_provider_query(&mut state, &r, "gallery_all_router"); // 7b: 譌 query, 譌雍｡迪ｮ
-    fold_provider_query(&mut state, &r, "gallery_page_router"); // delegate, skipped
     assert!(state.from.is_none());
     assert!(state.fields.is_empty());
     assert!(state.joins.is_empty());

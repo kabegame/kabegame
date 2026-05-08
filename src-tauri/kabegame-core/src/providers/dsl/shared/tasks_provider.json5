@@ -1,0 +1,43 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "tasks_provider",
+    // Shared task scan source. It enumerates task ids and task metadata only;
+    // gallery/vd routers decide the visible label and target task provider.
+    "list": {
+        "${out.id}": {
+            "sql": "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.output_album_id, t.run_config_id, COALESCE(NULLIF(t.trigger_source, ''), 'manual') AS trigger_source, t.status, t.progress, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.start_time, t.end_time, t.error, CASE WHEN IFNULL(json_extract(get_plugin(t.plugin_id), '$.name'), '') != '' THEN json_extract(get_plugin(t.plugin_id), '$.name') || ' - ' || t.id ELSE t.id END AS display FROM tasks t ORDER BY COALESCE(t.start_time, 0) DESC",
+            "data_var": "out",
+            "meta": {
+                "id": "${out.id}",
+                "display": "${out.display}",
+                "gallery": {
+                    "kind": "task",
+                    "data": {
+                        "id": "${out.id}",
+                        "pluginId": "${out.plugin_id}",
+                        "outputDir": "${out.output_dir}",
+                        "userConfig": "${out.user_config}",
+                        "httpHeaders": "${out.http_headers}",
+                        "outputAlbumId": "${out.output_album_id}",
+                        "runConfigId": "${out.run_config_id}",
+                        "triggerSource": "${out.trigger_source}",
+                        "status": "${out.status}",
+                        "progress": "${out.progress}",
+                        "deletedCount": "${out.deleted_count}",
+                        "dedupCount": "${out.dedup_count}",
+                        "successCount": "${out.success_count}",
+                        "failedCount": "${out.failed_count}",
+                        "startTime": "${out.start_time}",
+                        "endTime": "${out.end_time}",
+                        "error": "${out.error}"
+                    }
+                },
+                "vd": {
+                    "task_id": "${out.id}",
+                    "display": "${out.display}"
+                }
+            }
+        }
+    }
+}

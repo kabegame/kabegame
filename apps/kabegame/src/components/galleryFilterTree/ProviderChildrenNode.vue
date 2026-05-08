@@ -1,4 +1,5 @@
 <template>
+  <template v-if="!shouldHide">
   <div
     class="provider-tree-row"
     :class="{
@@ -44,10 +45,11 @@
   <div v-if="hasChildren && childrenMounted" v-show="isExpanded" class="tree-children">
     <slot />
   </div>
+  </template>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, useSlots } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, useSlots, watch } from "vue";
 import { ArrowRight } from "@element-plus/icons-vue";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh, type AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
@@ -67,12 +69,15 @@ const props = withDefaults(defineProps<{
   debounce?: number;
   filter?: (payload: ImagesChangePayload) => boolean;
   selectable?: boolean;
+  initialCount?: number;
+  hideWhenEmpty?: boolean;
 }>(), {
   depth: 0,
   active: false,
   defaultExpanded: false,
   debounce: 3000,
   selectable: true,
+  hideWhenEmpty: false,
 });
 
 const emit = defineEmits<{
@@ -81,7 +86,7 @@ const emit = defineEmits<{
 }>();
 
 const slots = useSlots();
-const { registerRefreshTarget } = useGalleryFilterTreeContext();
+const { registerRefreshTarget, visible } = useGalleryFilterTreeContext();
 const localExpanded = ref(props.defaultExpanded);
 const childrenMounted = ref(props.defaultExpanded);
 const count = ref<number | null>(null);
@@ -92,6 +97,7 @@ let unregisterRefresh: (() => void) | null = null;
 const hasChildren = computed(() => Boolean(slots.default));
 const isExpanded = computed(() => localExpanded.value);
 const displayCount = computed(() => (count.value == null ? "..." : String(count.value)));
+const shouldHide = computed(() => props.hideWhenEmpty && count.value !== null && count.value === 0);
 
 function setExpanded(value: boolean) {
   localExpanded.value = value;
@@ -127,7 +133,7 @@ function isHiddenAlbumChange(payload: AlbumImagesChangePayload) {
 }
 
 useImagesChangeRefresh({
-  enabled: ref(true),
+  enabled: visible,
   waitMs: props.debounce,
   filter: (payload) => {
     return props.filter ? props.filter(payload) : true;
@@ -136,14 +142,22 @@ useImagesChangeRefresh({
 });
 
 useAlbumImagesChangeRefresh({
-  enabled: ref(true),
+  enabled: visible,
   waitMs: props.debounce,
   filter: isHiddenAlbumChange,
   onRefresh: refresh,
 });
 
+watch(visible, (v) => {
+  if (v) void refresh();
+});
+
 onMounted(() => {
-  void refresh();
+  if (props.initialCount != null) {
+    count.value = props.initialCount;
+  } else if (visible.value) {
+    void refresh();
+  }
   const target: RefreshTarget = { refresh };
   unregisterRefresh = registerRefreshTarget(target);
 });

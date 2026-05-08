@@ -1,0 +1,19 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "year_provider",
+    "properties": {
+        "year": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "strftime('%Y', crawled_at_seconds(images.crawled_at), 'unixepoch') = CAST(${properties.year} AS TEXT)"
+    },
+    // list: desc 静态 + 动态月份 + 默认分页静态 (与 programmatic 同; 用户在年下既可看月也可直接翻页)
+    "list": {
+        "${out.mm}": {
+            "sql": "SELECT DISTINCT substr(strftime('%Y-%m', crawled_at_seconds(sub.crawled_at), 'unixepoch'), 6, 2) AS mm FROM (${composed}) AS sub WHERE strftime('%Y-%m', crawled_at_seconds(sub.crawled_at), 'unixepoch') IS NOT NULL ORDER BY mm DESC",
+            "data_var": "out",
+            "meta": "${out}"
+        }
+    }
+}

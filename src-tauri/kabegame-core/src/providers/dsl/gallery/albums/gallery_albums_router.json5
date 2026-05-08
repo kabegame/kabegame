@@ -18,26 +18,6 @@
         ],
         "order": [{ "images.crawled_at": "asc" }]
     },
-    "list": {
-        // 根画册 (parent_id IS NULL); meta 由 runtime 按 SQL 行字段构造。
-        "${out.id}": {
-            "sql": "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
-            "data_var": "out",
-            "provider": "gallery_album_provider",
-            "properties": {
-                "album_id": "${out.id}"
-            },
-            "meta": {
-                "kind": "album",
-                "data": {
-                    "id": "${out.id}",
-                    "name": "${out.name}",
-                    "createdAt": "${out.created_at}",
-                    "parentId": "${out.parent_id}"
-                }
-            }
-        }
-    },
     "resolve": {
         // album_id 是 UUID v4 (uuid::Uuid::new_v4()) 或 FAVORITE_ALBUM_ID/HIDDEN_ALBUM_ID
         // (亦 UUID 形态: 0...001 / 0...000)。用 UUID 正则避免与 "desc" / "x100x" 等

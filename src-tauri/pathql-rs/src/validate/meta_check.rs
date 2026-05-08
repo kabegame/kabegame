@@ -24,7 +24,7 @@ pub fn validate_meta(
                         let m = invocation_meta(inv);
                         (
                             vec!["properties", "capture", "composed", "global", "_"],
-                            vec!["ref"],
+                            vec!["ref", "global"],
                             m,
                         )
                     }
@@ -37,7 +37,7 @@ pub fn validate_meta(
                             "_",
                             e.data_var.0.as_str(),
                         ],
-                        vec!["ref"],
+                        vec!["ref", "global"],
                         e.meta.as_ref(),
                     ),
                     ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => (
@@ -49,7 +49,7 @@ pub fn validate_meta(
                             "_",
                             e.child_var.0.as_str(),
                         ],
-                        vec!["ref"],
+                        vec!["ref", "global"],
                         e.meta.as_ref(),
                     ),
                 };
@@ -80,7 +80,7 @@ pub fn validate_meta(
                     }
                     _ => vec!["properties", "capture", "composed", "global", "_"],
                 };
-                let allowed_methods = vec!["ref"];
+                let allowed_methods = vec!["ref", "global"];
                 let location = format!("resolve[`{}`]", k);
                 if let Some(m) = invocation_meta(inv) {
                     walk_meta(

@@ -94,6 +94,7 @@ import { Document, FolderOpened } from "@element-plus/icons-vue";
 import { ElDialog, ElMessage } from "element-plus";
 import { open } from "@tauri-apps/plugin-dialog";
 import { IS_WEB } from "@kabegame/core/env";
+import { trackEvent } from "@kabegame/core/track/umami";
 import { invoke, uploadImport } from "@/api/rpc";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useImageTypes } from "@/composables/useImageTypes";
@@ -137,6 +138,15 @@ const isCreatingNewOutputAlbum = computed(
 const displayItems = computed(() =>
   IS_WEB ? files.value.map((f) => f.name) : paths.value,
 );
+
+function trackLocalImportStart(data: Record<string, unknown>) {
+  if (!IS_WEB) return;
+  trackEvent("gallery_import_start", {
+    plugin_id: "local-import",
+    source: "local",
+    ...data,
+  });
+}
 
 function hasExplicitArchivePath(path: string): boolean {
   return /\.(zip|rar)$/i.test(path.trim());
@@ -303,6 +313,7 @@ async function handleSubmit() {
   if (IS_WEB) {
     const hasArchiveFiles = files.value.some((f) => hasExplicitArchivePath(f.name));
     const effectiveIncludeArchive = includeArchive.value || hasArchiveFiles;
+    const fileCount = files.value.length;
     try {
       await uploadImport(files.value, {
         outputAlbumId,
@@ -317,11 +328,19 @@ async function handleSubmit() {
     visible.value = false;
     files.value = [];
     ElMessage.success(t('gallery.localImportTaskAdded'));
+    trackLocalImportStart({
+      mode: "upload",
+      file_count: fileCount,
+      recursive: recursive.value,
+      include_archive: effectiveIncludeArchive,
+      output_album: outputAlbumId ? "existing" : "none",
+    });
     return;
   }
 
   const hasArchiveFiles = paths.value.some(hasExplicitArchivePath);
   const effectiveIncludeArchive = includeArchive.value || hasArchiveFiles;
+  const pathCount = paths.value.length;
 
   crawlerStore.addTask("local-import", undefined, {
     paths: paths.value,
@@ -332,6 +351,13 @@ async function handleSubmit() {
   visible.value = false;
   paths.value = [];
   ElMessage.success(t('gallery.localImportTaskAdded'));
+  trackLocalImportStart({
+    mode: "task",
+    path_count: pathCount,
+    recursive: recursive.value,
+    include_archive: effectiveIncludeArchive,
+    output_album: outputAlbumId ? "existing" : "none",
+  });
 }
 
 function handleOpen() {

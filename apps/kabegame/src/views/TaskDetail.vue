@@ -5,12 +5,17 @@
         </div>
         <ImageGrid v-else-if="imageFilter === 'success'" ref="taskViewRef" class="detail-body" :images="images"
             :enable-ctrl-wheel-adjust-columns="!isCompact" :enable-ctrl-key-adjust-columns="!isCompact"
-            :enable-virtual-scroll="!isCompact" :actions="imageActions" :on-context-command="handleImageMenuCommand">
+            :enable-virtual-scroll="!isCompact" :actions="imageActions" :on-context-command="handleImageMenuCommand" scroll-whole-container hide-scrollbar>
             <template #before-grid>
-                <TaskDetailPageHeader :task-name="taskName" :task-subtitle="taskSubtitle"
+                <TaskDetailPageHeader :task-name="taskName"
                     :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
                     @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum" @help="openHelpDrawer"
-                    @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @back="goBack" />
+                    @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @back="goBack">
+                    <template #subtitle>
+                        <TaskCountsInline :success="successN" :failed="failedN" :deleted="deletedN" :dedup="dedupN"
+                            :duration="durationText" />
+                    </template>
+                </TaskDetailPageHeader>
 
                     <div class="task-detail-page-size-toolbar">
                         <TaskFilterControl
@@ -39,10 +44,15 @@
             </template>
         </ImageGrid>
         <div v-else class="detail-body failed-mode-body">
-            <TaskDetailPageHeader :task-name="taskName" :task-subtitle="taskSubtitle"
+            <TaskDetailPageHeader :task-name="taskName"
                 :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
                 @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum" @help="openHelpDrawer"
-                @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @back="goBack" />
+                @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @back="goBack">
+                <template #subtitle>
+                    <TaskCountsInline :success="successN" :failed="failedN" :deleted="deletedN" :dedup="dedupN"
+                        :duration="durationText" />
+                </template>
+            </TaskDetailPageHeader>
 
             <div class="task-detail-page-size-toolbar">
                 <TaskFilterControl
@@ -141,6 +151,7 @@ import TaskDetailPageHeader from "@/components/header/TaskDetailPageHeader.vue";
 import TaskLogDialog from "@kabegame/core/components/task/TaskLogDialog.vue";
 import TaskParamsDialog from "@kabegame/core/components/task/TaskParamsDialog.vue";
 import type { TaskRunParamsTask } from "@kabegame/core/components/task/TaskRunParamsContent.vue";
+import TaskCountsInline from "@kabegame/core/components/task/TaskCountsInline.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import type { Component } from "vue";
@@ -296,36 +307,10 @@ let unlistenTasksChange: (() => void) | null = null;
 let unlistenDownloadState: (() => void) | null = null;
 let unlistenDownloadProgress: (() => void) | null = null;
 
-const taskSubtitle = computed(() => {
-    const parts: string[] = [];
-    const src = taskFromStore.value;
-    const okTotal =
-        src != null && typeof src.successCount === "number"
-            ? src.successCount
-            : totalImagesCount.value;
-    const failedTotal =
-        src != null && typeof src.failedCount === "number"
-            ? src.failedCount
-            : failedImages.value.length;
-    parts.push(t("tasks.totalCount", { n: okTotal }));
-    if (failedTotal > 0) parts.push(t("tasks.failedCount", { n: failedTotal }));
-    if (src?.deletedCount && src.deletedCount > 0) {
-        parts.push(t("tasks.deletedCount", { n: src.deletedCount }));
-    }
-    if (src?.dedupCount && src.dedupCount > 0) {
-        parts.push(t("tasks.dedupCount", { n: src.dedupCount }));
-    }
-    if (src?.startTime) {
-        const isRunning = taskStatusFromStore.value === "running";
-        const duration = formatDuration(
-            src.startTime,
-            src.endTime,
-            isRunning ? currentTime.value : undefined
-        );
-        parts.push(duration);
-    }
-    return parts.join(" · ") || "";
-});
+const successN = computed(() => taskFromStore.value?.successCount ?? 0);
+const failedN = computed(() => taskFromStore.value?.failedCount ?? failedImages.value.length);
+const deletedN = computed(() => taskFromStore.value?.deletedCount ?? 0);
+const dedupN = computed(() => taskFromStore.value?.dedupCount ?? 0);
 
 const formatDuration = (startTime: number, endTime?: number, currentTimeMs?: number) => {
     const startMs = startTime > 1e12 ? startTime : startTime * 1000;
@@ -345,6 +330,17 @@ const formatDuration = (startTime: number, endTime?: number, currentTimeMs?: num
         return t("tasks.runTimeSeconds", { seconds });
     }
 };
+
+const durationText = computed(() => {
+    const src = taskFromStore.value;
+    if (!src?.startTime) return "";
+    const isRunning = taskStatusFromStore.value === "running";
+    return formatDuration(
+        src.startTime,
+        src.endTime,
+        isRunning ? currentTime.value : undefined
+    );
+});
 
 
 // 监听路由参数变化，当切换到另一个任务时重新加载数据
@@ -374,8 +370,11 @@ const handleRefresh = async () => {
     isRefreshing.value = true;
     try {
         clearImageStateCache();
-        await loadTaskImages({ showSkeleton: false });
-        await failedImagesStore.loadAll();
+        await Promise.all([
+            loadTaskImages({ showSkeleton: false }),
+            loadTotalImagesCount(),
+            failedImagesStore.loadAll(),
+        ]);
         ElMessage.success(t("tasks.refreshSuccess"));
     } catch (error) {
         console.error("刷新失败:", error);
@@ -400,6 +399,22 @@ const handleJumpToPage = async (page: number) => {
     await taskDetailRouteStore.navigate({ page });
 };
 
+const loadTotalImagesCount = async () => {
+    if (!isOnTaskRoute.value) return;
+    if (!taskId.value) return;
+    try {
+        const path = taskDetailRouteStore.contextPath;
+        if (!path) return;
+        const res = await invoke<{ total: number | null }>(
+            "browse_gallery_provider",
+            { path }
+        );
+        totalImagesCount.value = res?.total ?? 0;
+    } catch (e) {
+        console.error("加载任务总图片数失败:", e);
+    }
+};
+
 // 跟随路径变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
 watch(
     () => currentPath.value,
@@ -408,6 +423,14 @@ watch(
         if (!taskId.value) return;
         if (!newPath) return;
         await loadTaskImages({ showSkeleton: false });
+    },
+    { immediate: true }
+);
+
+watch(
+    () => taskDetailRouteStore.contextPath,
+    () => {
+        void loadTotalImagesCount();
     },
     { immediate: true }
 );
@@ -440,7 +463,6 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
             "browse_gallery_provider",
             { path: pathToLoad }
         );
-        totalImagesCount.value = res?.total ?? 0;
         const imgs: ImageInfo[] = (res?.entries ?? [])
             .filter((e: any) => e?.kind === "image")
             .map((e: any) => e.image as ImageInfo);
@@ -954,6 +976,7 @@ const initTask = async (id: string) => {
     await settingsStore.ensureLoaded();
     await Promise.all([
         loadTaskImages(),
+        loadTotalImagesCount(),
         failedImagesStore.loadAll(),
     ]);
 };
@@ -1090,6 +1113,7 @@ useImagesChangeRefresh({
         const prevList = images.value.slice();
         await Promise.all([
             loadTaskImages({ showSkeleton: false }),
+            loadTotalImagesCount(),
             failedImagesStore.loadAll(),
         ]);
 
@@ -1109,7 +1133,10 @@ useAlbumImagesChangeRefresh({
     onRefresh: async () => {
         if (!isOnTaskRoute.value) return;
         if (!taskId.value) return;
-        await loadTaskImages({ showSkeleton: false });
+        await Promise.all([
+            loadTaskImages({ showSkeleton: false }),
+            loadTotalImagesCount(),
+        ]);
     },
 });
 
@@ -1134,7 +1161,10 @@ onActivated(async () => {
     } else if (taskId.value) {
         // keep-alive 场景：用户可能在别的页面切换了全局 hide（currentPath 的 watcher
         // 在本页未激活时会早退），回来时需要重新拉取当前页以反映最新的 hide 过滤。
-        await loadTaskImages({ showSkeleton: false });
+        await Promise.all([
+            loadTaskImages({ showSkeleton: false }),
+            loadTotalImagesCount(),
+        ]);
     }
     // 页面激活时启动定时器和监听器（keep-alive 场景）
     await startTimersAndListeners();

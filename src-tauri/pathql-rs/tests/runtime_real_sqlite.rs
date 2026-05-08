@@ -9,8 +9,8 @@ use std::sync::Arc;
 use pathql_rs::ast::{JoinKind, Namespace, ProviderName, SimpleName, SqlExpr};
 use pathql_rs::compose::ProviderQuery;
 use pathql_rs::provider::{
-    ChildEntry, ClosureExecutor, EngineError, Provider, ProviderContext, ProviderRuntime,
-    SqlDialect, SqlExecutor,
+    ChildEntry, ClosureExecutor, EngineError, ListRef, Provider, ProviderContext, ProviderRuntime,
+    ResolveRef, SqlDialect, SqlExecutor,
 };
 use pathql_rs::template::eval::{TemplateContext, TemplateValue};
 use pathql_rs::ProviderRegistry;
@@ -59,62 +59,66 @@ impl Provider for GalleryRoot {
         q.from = Some(SqlExpr("images".into()));
         q
     }
-    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
+    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ListRef>, EngineError> {
         Ok(vec![
-            ChildEntry {
+            ListRef::Direct(ChildEntry {
                 name: "albums".into(),
                 provider: None,
                 meta: None,
-            },
-            ChildEntry {
+            }),
+            ListRef::Direct(ChildEntry {
                 name: "plugins".into(),
                 provider: None,
                 meta: None,
-            },
+            }),
         ])
     }
-    fn resolve(&self, name: &str, _: &ProviderQuery, ctx: &ProviderContext) -> Option<ChildEntry> {
+    fn resolve(&self, name: &str, _: &ProviderQuery, ctx: &ProviderContext) -> ResolveRef {
         let target = match name {
             "albums" => "albums_router",
             "plugins" => "plugins_router",
-            _ => return None,
+            _ => return ResolveRef::Terminal(None),
         };
-        ctx.registry
-            .instantiate(
-                &Namespace("test".into()),
-                &ProviderName(target.into()),
-                &HashMap::new(),
-                ctx,
-            )
-            .map(|provider| ChildEntry {
-                name: name.to_string(),
-                provider: Some(provider),
-                meta: None,
-            })
+        ResolveRef::Terminal(
+            ctx.registry
+                .instantiate(
+                    &Namespace("test".into()),
+                    &ProviderName(target.into()),
+                    &HashMap::new(),
+                    ctx,
+                )
+                .map(|provider| ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(provider),
+                    meta: None,
+                }),
+        )
     }
 }
 
 /// AlbumsRouter: resolve album_id → AlbumProvider with where filter
 struct AlbumsRouter;
 impl Provider for AlbumsRouter {
-    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
+    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ListRef>, EngineError> {
         Ok(Vec::new())
     }
-    fn resolve(&self, name: &str, _: &ProviderQuery, ctx: &ProviderContext) -> Option<ChildEntry> {
+    fn resolve(&self, name: &str, _: &ProviderQuery, ctx: &ProviderContext) -> ResolveRef {
         let mut props = HashMap::new();
         props.insert("album_id".into(), TemplateValue::Text(name.to_string()));
-        ctx.registry
-            .instantiate(
-                &Namespace("test".into()),
-                &ProviderName("album_provider".into()),
-                &props,
-                ctx,
-            )
-            .map(|provider| ChildEntry {
-                name: name.to_string(),
-                provider: Some(provider),
-                meta: None,
-            })
+        ResolveRef::Terminal(
+            ctx.registry
+                .instantiate(
+                    &Namespace("test".into()),
+                    &ProviderName("album_provider".into()),
+                    &props,
+                    ctx,
+                )
+                .map(|provider| ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(provider),
+                    meta: None,
+                }),
+        )
     }
 }
 
@@ -138,11 +142,8 @@ impl Provider for AlbumProvider {
                 &[TemplateValue::Text(self.album_id.clone())],
             )
     }
-    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
+    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ListRef>, EngineError> {
         Ok(Vec::new())
-    }
-    fn resolve(&self, _: &str, _: &ProviderQuery, _: &ProviderContext) -> Option<ChildEntry> {
-        None
     }
 }
 

@@ -1,17 +1,17 @@
 //! 端到端：fold 真路径链 → build_sql → sqlite 执行。
 //!
 //! 路径：gallery_route → gallery_paginate_router → query_page_provider。
-//! Delegate 节点 (gallery_all_router, gallery_page_router) 跳过 (Phase 6 ProviderRuntime 处理)。
+//! Delegate 节点 (gallery_all_router, query_page_provider) 跳过 (Phase 6 ProviderRuntime 处理)。
 
 #![cfg(feature = "json5")]
 
-use std::path::PathBuf;
+mod common;
 
 use pathql_rs::ast::{Namespace, ProviderName, Query};
 use pathql_rs::compose::{fold_contrib, ProviderQuery};
 use pathql_rs::provider::SqlDialect;
 use pathql_rs::template::eval::{TemplateContext, TemplateValue};
-use pathql_rs::{Json5Loader, Loader, ProviderRegistry, Source};
+use pathql_rs::ProviderRegistry;
 
 /// 6d: pathql-rs 不再附 driver 桥; 集成测试本地内联 TemplateValue → rusqlite::Value 转换。
 fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
@@ -29,37 +29,8 @@ fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
         .collect()
 }
 
-const PROVIDER_FILES: &[&str] = &[
-    "root_provider.json",
-    "gallery/gallery_route.json5",
-    "gallery/all_router/gallery_all_router.json5",
-    "gallery/all_router/x_page_x/gallery_paginate_router.json5",
-    "gallery/all_router/x_page_x/gallery_page_router.json5",
-    "shared/page_size_provider.json5",
-    "shared/query_page_provider.json5",
-    "vd/vd_root_router.json5",
-    "vd/vd_zh_CN_root_router.json5",
-];
-
 fn build_full_registry() -> ProviderRegistry {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("core")
-        .join("src")
-        .join("providers")
-        .join("dsl");
-    let loader = Json5Loader;
-    let mut registry = ProviderRegistry::new();
-    for rel in PROVIDER_FILES {
-        let path = dir.join(rel);
-        let def = loader
-            .load(Source::Path(&path))
-            .unwrap_or_else(|e| panic!("load {}: {}", rel, e));
-        registry
-            .register(def)
-            .unwrap_or_else(|e| panic!("register {}: {}", rel, e));
-    }
-    registry
+    common::build_real_registry()
 }
 
 fn fold_provider_query(state: &mut ProviderQuery, registry: &ProviderRegistry, name: &str) {
@@ -77,7 +48,6 @@ fn fold_gallery_page_chain(registry: &ProviderRegistry) -> ProviderQuery {
     fold_provider_query(&mut state, registry, "gallery_route");
     fold_provider_query(&mut state, registry, "gallery_all_router"); // delegate, skipped
     fold_provider_query(&mut state, registry, "gallery_paginate_router");
-    fold_provider_query(&mut state, registry, "gallery_page_router"); // delegate, skipped
     fold_provider_query(&mut state, registry, "query_page_provider");
     state
 }

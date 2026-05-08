@@ -92,7 +92,7 @@
                 varDef.type === 'date'
                 ? `请选择${varDisplayName(varDef)}`
                 : `请输入${varDisplayName(varDef)}`)
-              " :allow-unset="!isRequired(varDef)" @update:model-value="(val) => (form.vars[varDef.key] = val)" />
+              " :allow-unset="!isRequired(varDef)" @update:model-value="(val) => onPluginVarChange(varDef, val)" />
           <div v-if="varDescripts(varDef)">
             {{ varDescripts(varDef) }}
           </div>
@@ -282,7 +282,7 @@
                 varDef.type === 'date'
                 ? `请选择${varDisplayName(varDef)}`
                 : `请输入${varDisplayName(varDef)}`)
-              " :allow-unset="!isRequired(varDef)" @update:model-value="(val) => (form.vars[varDef.key] = val)" />
+              " :allow-unset="!isRequired(varDef)" @update:model-value="(val) => onPluginVarChange(varDef, val)" />
           <div v-if="varDescripts(varDef)">
             {{ varDescripts(varDef) }}
           </div>
@@ -405,7 +405,8 @@ import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { trackEvent } from "@kabegame/core/track/umami";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import {
@@ -454,6 +455,11 @@ const appStore = useApp();
 const { version: crawlDialogAppVersion } = storeToRefs(appStore);
 const { pluginName } = usePluginManifestI18n();
 const { varDisplayName, varDescripts, optionDisplayName, resolveConfigText, locale } = usePluginConfigI18n();
+
+function trackCrawlerEvent(name: string, data: Record<string, unknown> = {}) {
+  if (!IS_WEB) return;
+  trackEvent(name, data);
+}
 
 function runConfigName(cfg: { name?: unknown }): string {
   return resolveConfigText(cfg.name as any, locale.value);
@@ -825,6 +831,10 @@ async function setRunConfigId(v: string | null) {
 async function onPluginChange(v: string | null | undefined) {
   const id = v ?? "";
   form.value.pluginId = id;
+  trackCrawlerEvent("gallery_import_plugin_select", {
+    plugin_id: id,
+    has_plugin: !!id,
+  });
   if (id) {
     const { httpHeaders } = await loadPluginVars(id);
     httpHeaderRows.value = Object.entries(httpHeaders).map(([k, v]) => ({ key: k, value: v }));
@@ -833,6 +843,50 @@ async function onPluginChange(v: string | null | undefined) {
     form.value.vars = {};
     httpHeaderRows.value = [];
   }
+}
+
+function summarizePluginVarValue(varDef: PluginVarDef, value: unknown): Record<string, unknown> {
+  const type = String(varDef.type ?? "");
+  if (Array.isArray(value)) {
+    const primitiveValues = value
+      .filter((item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean")
+      .slice(0, 5)
+      .map(String);
+    return {
+      has_value: value.length > 0,
+      value_count: value.length,
+      values: primitiveValues,
+    };
+  }
+  if (typeof value === "boolean") {
+    return { has_value: true, value };
+  }
+  if (type === "options" && (typeof value === "string" || typeof value === "number")) {
+    return { has_value: String(value).trim() !== "", value: String(value) };
+  }
+  if (value === null || value === undefined) {
+    return { has_value: false };
+  }
+  if (typeof value === "string") {
+    return { has_value: value.trim() !== "", value_length: value.length };
+  }
+  return { has_value: true };
+}
+
+const lastPluginVarTrackSignature = new Map<string, string>();
+
+function onPluginVarChange(varDef: PluginVarDef, value: unknown) {
+  form.value.vars[varDef.key] = value;
+  const summary = summarizePluginVarValue(varDef, value);
+  const signature = JSON.stringify(summary);
+  if (lastPluginVarTrackSignature.get(varDef.key) === signature) return;
+  lastPluginVarTrackSignature.set(varDef.key, signature);
+  trackCrawlerEvent("gallery_import_param_change", {
+    plugin_id: form.value.pluginId,
+    key: varDef.key,
+    type: varDef.type ?? "",
+    ...summary,
+  });
 }
 
 const visiblePluginVars = computed(() => {
@@ -1026,6 +1080,20 @@ const handleStartCrawl = async () => {
     );
     if (!taskAdded) return;
 
+    trackCrawlerEvent("gallery_import_start", {
+      source: "network",
+      plugin_id: form.value.pluginId,
+      has_output_dir: !!form.value.outputDir,
+      output_album: selectedOutputAlbumId.value
+        ? selectedOutputAlbumId.value === "__create_new__" ? "new" : "existing"
+        : "none",
+      run_config_id: runConfigIdForTask ?? selectedRunConfigId.value ?? null,
+      has_run_config: !!(runConfigIdForTask ?? selectedRunConfigId.value),
+      schedule_enabled: scheduleEnabled.value,
+      visible_param_count: visiblePluginVars.value.length,
+      http_header_count: Object.keys(httpHeaders).length,
+    });
+
     crawlerDrawerStore.setLastRunConfig({
       pluginId: form.value.pluginId,
       outputDir: form.value.outputDir || "",
@@ -1050,6 +1118,7 @@ const handleStartCrawl = async () => {
 
 watch(visible, async (open) => {
   if (!open) return;
+  lastPluginVarTrackSignature.clear();
   await crawlerStore.runConfigsReady;
   try {
     await pluginStore.loadPlugins();

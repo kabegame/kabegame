@@ -5,13 +5,20 @@
 
 use arc_swap::ArcSwap;
 
-use super::{ChildEntry, EngineError, Provider, ProviderContext, ProviderKey, SqlExecutor};
+use super::{
+    ChildEntry, EngineError, ListRef, Provider, ProviderContext, ProviderKey, ResolveRef,
+    SqlExecutor,
+};
 use crate::ast::{Namespace, ProviderName};
 use crate::compose::ProviderQuery;
 use crate::template::eval::{TemplateContext, TemplateValue};
 #[cfg(feature = "json5")]
+use crate::LoaderType;
+#[cfg(feature = "json5")]
+use crate::Source;
+#[cfg(feature = "json5")]
 use crate::{Json5Loader, Loader};
-use crate::{LoaderType, ProviderDef, ProviderRegistry, Source};
+use crate::{ProviderDef, ProviderRegistry};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
@@ -21,22 +28,24 @@ pub(crate) fn dbg_enabled() -> bool {
 }
 
 pub struct ResolvedNode {
-    pub provider: Arc<dyn Provider>,
+    pub provider: Option<Arc<dyn Provider>>,
     pub composed: ProviderQuery,
+    pub(crate) provider_keys: Vec<ProviderKey>,
 }
 
 impl std::fmt::Debug for ResolvedNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedNode")
-            .field("provider", &"<Provider>")
+            .field("provider", &self.provider.as_ref().map(|_| "<Provider>"))
             .field("composed", &self.composed)
+            .field("provider_keys", &self.provider_keys)
             .finish()
     }
 }
 
 #[derive(Clone)]
 struct CachedNode {
-    provider: Arc<dyn Provider>,
+    provider: Option<Arc<dyn Provider>>,
     composed: ProviderQuery,
     provider_keys: Vec<ProviderKey>,
 }
@@ -105,6 +114,7 @@ impl ProviderRuntime {
     }
 
     /// 动态注册一个dsl
+    #[cfg(feature = "json5")]
     pub fn register_provider_dsl(
         &self,
         loader_type: LoaderType,
@@ -207,36 +217,65 @@ impl ProviderRuntime {
             return Ok(ResolvedNode {
                 provider: current,
                 composed,
+                provider_keys,
             });
         }
 
         // Resume / cold-start: 从 start_idx 续 fold 剩余段
         let mut path_so_far = build_path_key(&segments[..start_idx]);
         for seg in &segments[start_idx..] {
+            let path_before_seg = path_so_far.clone();
             path_so_far.push('/');
             path_so_far.push_str(seg);
             let key_mark = ctx.provider_key_mark();
-            let resolved = current.resolve(seg, &composed, &ctx);
+            let c = current
+                .as_ref()
+                .ok_or_else(|| EngineError::PathNotFound(path_so_far.clone()))?;
+            ctx.set_current_path(path_before_seg);
+            let resolved = c.resolve(seg, &composed, &ctx);
             if dbg_enabled() {
                 eprintln!(
                     "[pathql]   step seg={:?} at path={:?} → {}",
                     seg,
                     path_so_far,
                     match &resolved {
-                        Some(child) if child.provider.is_some() => "Some(child.provider)",
-                        Some(_) => "Some(child without provider)",
-                        None => "None (PathNotFound)",
+                        ResolveRef::Terminal(Some(child)) if child.provider.is_some() => {
+                            "Terminal(Some(child.provider))"
+                        }
+                        ResolveRef::Terminal(Some(_)) => "Terminal(Some(child without provider))",
+                        ResolveRef::Terminal(None) => "Terminal(None) (PathNotFound)",
+                        ResolveRef::Delegate {
+                            final_provider: Some(_),
+                            ..
+                        } => "Delegate(final_provider)",
+                        ResolveRef::Delegate { .. } => "Delegate(no final provider)",
                     }
                 );
             }
-            let next = resolved
-                .and_then(|child| child.provider)
-                .ok_or_else(|| EngineError::PathNotFound(path_so_far.clone()))?;
-            composed = next.apply_query(composed, &ctx);
-            current = next;
+            let (next_opt, inter_composed) = match resolved {
+                ResolveRef::Terminal(None) => {
+                    return Err(EngineError::PathNotFound(path_so_far.clone()));
+                }
+                ResolveRef::Terminal(Some(child)) => (child.provider, composed.clone()),
+                ResolveRef::Delegate {
+                    target,
+                    final_provider,
+                    ..
+                } => {
+                    let ic = target.apply_query(composed.clone(), &ctx);
+                    (final_provider, ic)
+                }
+            };
+
+            if let Some(next) = &next_opt {
+                composed = next.apply_query(inter_composed, &ctx);
+            } else {
+                composed = inter_composed;
+            }
+            current = next_opt;
             extend_provider_keys(&mut provider_keys, ctx.provider_keys_since(key_mark));
-            // 缓存命中非 Empty 项写入; Empty 占位跳过。
-            if !current.is_empty() {
+            // 缓存命中非 Empty 项写入; no-provider 节点也缓存。
+            if current.as_ref().map(|p| !p.is_empty()).unwrap_or(true) {
                 self.cache.lock().unwrap().insert(
                     path_so_far.clone(),
                     CachedNode {
@@ -251,6 +290,7 @@ impl ProviderRuntime {
         Ok(ResolvedNode {
             provider: current,
             composed,
+            provider_keys,
         })
     }
 
@@ -271,7 +311,15 @@ impl ProviderRuntime {
         &self,
         segments: &[String],
         ctx: &ProviderContext,
-    ) -> Result<(usize, Arc<dyn Provider>, ProviderQuery, Vec<ProviderKey>), EngineError> {
+    ) -> Result<
+        (
+            usize,
+            Option<Arc<dyn Provider>>,
+            ProviderQuery,
+            Vec<ProviderKey>,
+        ),
+        EngineError,
+    > {
         let cache = self.cache.lock().unwrap();
         for prefix_len in (1..=segments.len()).rev() {
             let key = build_path_key(&segments[..prefix_len]);
@@ -293,19 +341,107 @@ impl ProviderRuntime {
             .apply_query(ProviderQuery::new(), ctx);
         let mut provider_keys = root_provider.provider_keys.clone();
         extend_provider_keys(&mut provider_keys, ctx.provider_keys_since(key_mark));
-        Ok((0, root_provider.provider, composed, provider_keys))
+        Ok((0, Some(root_provider.provider), composed, provider_keys))
     }
 
     /// 顶层 list 入口。
     pub fn list(&self, path: &str) -> Result<Vec<ChildEntry>, EngineError> {
         let node = self.resolve(path)?;
-        node.provider.list(&node.composed, &self.make_ctx())
+        let provider = node
+            .provider
+            .ok_or_else(|| EngineError::NoProvider(path.to_string()))?;
+        let ctx = self.make_ctx();
+        let key_mark = ctx.provider_key_mark();
+        let refs = provider.list(&node.composed, &ctx)?;
+        let list_provider_keys = ctx.provider_keys_since(key_mark);
+        self.expand_list_refs(
+            refs,
+            &canonical_path_key(path),
+            &node.composed,
+            &node.provider_keys,
+            &list_provider_keys,
+            &ctx,
+            true,
+        )
+    }
+
+    fn expand_list_refs(
+        &self,
+        list_refs: Vec<ListRef>,
+        parent_path: &str,
+        composed: &ProviderQuery,
+        parent_keys: &[ProviderKey],
+        list_provider_keys: &[ProviderKey],
+        ctx: &ProviderContext,
+        cache_expanded_children: bool,
+    ) -> Result<Vec<ChildEntry>, EngineError> {
+        let mut out = Vec::new();
+        for list_ref in list_refs {
+            match list_ref {
+                ListRef::Direct(child) => out.push(child),
+                ListRef::DelegateExpand { target, expand } => {
+                    let target_composed = target.apply_query(composed.clone(), ctx);
+                    let nested_key_mark = ctx.provider_key_mark();
+                    let target_refs = target.list(&target_composed, ctx)?;
+                    let mut inherited_keys = parent_keys.to_vec();
+                    extend_provider_keys(&mut inherited_keys, list_provider_keys.to_vec());
+                    extend_provider_keys(
+                        &mut inherited_keys,
+                        ctx.provider_keys_since(nested_key_mark),
+                    );
+                    let target_children = self.expand_list_refs(
+                        target_refs,
+                        parent_path,
+                        &target_composed,
+                        &inherited_keys,
+                        &[],
+                        ctx,
+                        false,
+                    )?;
+
+                    for target_child in &target_children {
+                        let child_key_mark = ctx.provider_key_mark();
+                        if let Some(outer_child) = (expand)(target_child, ctx)? {
+                            let mut child_keys = inherited_keys.clone();
+                            extend_provider_keys(
+                                &mut child_keys,
+                                ctx.provider_keys_since(child_key_mark),
+                            );
+                            let (child_provider, child_composed, cacheable) =
+                                if let Some(provider) = &outer_child.provider {
+                                    let child_composed =
+                                        provider.apply_query(target_composed.clone(), ctx);
+                                    (Some(provider.clone()), child_composed, !provider.is_empty())
+                                } else {
+                                    (None, target_composed.clone(), true)
+                                };
+
+                            if cache_expanded_children && cacheable {
+                                self.cache.lock().unwrap().insert(
+                                    child_path_key(parent_path, &outer_child.name),
+                                    CachedNode {
+                                        provider: child_provider,
+                                        composed: child_composed,
+                                        provider_keys: child_keys,
+                                    },
+                                );
+                            }
+                            out.push(outer_child);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// 顶层 get_note 入口。
     pub fn note(&self, path: &str) -> Result<Option<String>, EngineError> {
         let node = self.resolve(path)?;
-        Ok(node.provider.get_note(&node.composed, &self.make_ctx()))
+        let provider = node
+            .provider
+            .ok_or_else(|| EngineError::NoProvider(path.to_string()))?;
+        Ok(provider.get_note(&node.composed, &self.make_ctx()))
     }
 
     /// 顶层 meta 入口 (§12.3 typed meta wire 格式)。
@@ -341,6 +477,9 @@ impl ProviderRuntime {
     /// 内部链路: resolve(path) → composed.build_sql(globals ctx, dialect) → executor.execute。
     pub fn fetch(&self, path: &str) -> Result<Vec<serde_json::Value>, EngineError> {
         let node = self.resolve(path)?;
+        if node.provider.is_none() {
+            return Err(EngineError::NoProvider(path.to_string()));
+        }
         let ctx = self.template_context();
         let dialect = self.executor.dialect();
         let (sql, values) = node.composed.build_sql(&ctx, dialect).map_err(|e| {
@@ -353,6 +492,9 @@ impl ProviderRuntime {
     /// pq_sub 别名硬编码; 与用户表别名重名概率近 0。
     pub fn count(&self, path: &str) -> Result<usize, EngineError> {
         let node = self.resolve(path)?;
+        if node.provider.is_none() {
+            return Err(EngineError::NoProvider(path.to_string()));
+        }
         let ctx = self.template_context();
         let dialect = self.executor.dialect();
         let (inner_sql, values) = node.composed.build_sql(&ctx, dialect).map_err(|e| {
@@ -405,6 +547,23 @@ fn build_path_key(segments: &[String]) -> String {
     s
 }
 
+fn canonical_path_key(path: &str) -> String {
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
+fn child_path_key(parent_path: &str, child_name: &str) -> String {
+    if parent_path.is_empty() {
+        format!("/{child_name}")
+    } else {
+        format!("{parent_path}/{child_name}")
+    }
+}
+
 fn provider_key_from_def(def: &ProviderDef) -> ProviderKey {
     ProviderKey::new(
         def.namespace.as_ref().map(|ns| ns.0.as_str()).unwrap_or(""),
@@ -445,31 +604,27 @@ mod tests {
             &self,
             _: &ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(self
                 .children
                 .iter()
-                .map(|(name, p)| ChildEntry {
-                    name: name.clone(),
-                    provider: Some(p.clone()),
-                    meta: None,
+                .map(|(name, p)| {
+                    ListRef::Direct(ChildEntry {
+                        name: name.clone(),
+                        provider: Some(p.clone()),
+                        meta: None,
+                    })
                 })
                 .collect())
         }
-        fn resolve(
-            &self,
-            name: &str,
-            _: &ProviderQuery,
-            _: &ProviderContext,
-        ) -> Option<ChildEntry> {
-            self.children
-                .iter()
-                .find(|(n, _)| n == name)
-                .map(|(n, p)| ChildEntry {
+        fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+            ResolveRef::Terminal(self.children.iter().find(|(n, _)| n == name).map(|(n, p)| {
+                ChildEntry {
                     name: n.clone(),
                     provider: Some(p.clone()),
                     meta: None,
-                })
+                }
+            }))
         }
     }
 
@@ -764,6 +919,240 @@ mod tests {
     }
 
     #[test]
+    fn delegate_expand_lists_transformed_child_and_caches_path_with_target_contrib() {
+        struct Leaf;
+        impl Provider for Leaf {
+            fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+                q.from = Some(SqlExpr("leaf_table".into()));
+                q
+            }
+        }
+
+        struct Target;
+        impl Provider for Target {
+            fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+                q.fields.push(crate::compose::FieldFrag {
+                    sql: SqlExpr("target_tags.name".into()),
+                    alias: None,
+                    in_need: true,
+                });
+                q
+            }
+
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(vec![ListRef::Direct(ChildEntry {
+                    name: "x".into(),
+                    provider: None,
+                    meta: Some(serde_json::json!({"page_num": 1})),
+                })])
+            }
+        }
+
+        struct Parent {
+            target: Arc<dyn Provider>,
+            leaf: Arc<dyn Provider>,
+        }
+        impl Provider for Parent {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                let leaf = self.leaf.clone();
+                Ok(vec![ListRef::DelegateExpand {
+                    target: self.target.clone(),
+                    expand: Arc::new(move |child, _ctx| {
+                        let page = child
+                            .meta
+                            .as_ref()
+                            .and_then(|meta| meta.get("page_num"))
+                            .and_then(|value| value.as_i64())
+                            .unwrap();
+                        Ok(Some(ChildEntry {
+                            name: format!("page-{page}"),
+                            provider: Some(leaf.clone()),
+                            meta: child.meta.clone(),
+                        }))
+                    }),
+                }])
+            }
+        }
+
+        struct Root {
+            parent: Arc<dyn Provider>,
+        }
+        impl Provider for Root {
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal((name == "parent").then(|| ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(self.parent.clone()),
+                    meta: None,
+                }))
+            }
+        }
+
+        let parent: Arc<dyn Provider> = Arc::new(Parent {
+            target: Arc::new(Target),
+            leaf: Arc::new(Leaf),
+        });
+        let runtime = runtime_with_root(Arc::new(Root { parent }));
+
+        let children = runtime.list("/parent").unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].name, "page-1");
+        assert_eq!(runtime.cache_size(), 2);
+
+        let resolved = runtime.resolve("/parent/page-1").unwrap();
+        assert_eq!(resolved.composed.from.unwrap().0, "leaf_table");
+        assert!(resolved
+            .composed
+            .fields
+            .iter()
+            .any(|field| field.sql.0 == "target_tags.name"));
+    }
+
+    #[test]
+    fn delegate_expand_skips_child_cache_for_empty_provider() {
+        struct Target;
+        impl Provider for Target {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(vec![ListRef::Direct(ChildEntry {
+                    name: "x".into(),
+                    provider: None,
+                    meta: None,
+                })])
+            }
+        }
+
+        struct Parent {
+            target: Arc<dyn Provider>,
+        }
+        impl Provider for Parent {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(vec![ListRef::DelegateExpand {
+                    target: self.target.clone(),
+                    expand: Arc::new(|_, _| {
+                        Ok(Some(ChildEntry {
+                            name: "page-1".into(),
+                            provider: Some(Arc::new(
+                                crate::provider::dsl_provider::EmptyDslProvider,
+                            )),
+                            meta: None,
+                        }))
+                    }),
+                }])
+            }
+        }
+
+        struct Root {
+            parent: Arc<dyn Provider>,
+        }
+        impl Provider for Root {
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal((name == "parent").then(|| ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(self.parent.clone()),
+                    meta: None,
+                }))
+            }
+        }
+
+        let parent: Arc<dyn Provider> = Arc::new(Parent {
+            target: Arc::new(Target),
+        });
+        let runtime = runtime_with_root(Arc::new(Root { parent }));
+
+        let children = runtime.list("/parent").unwrap();
+        assert_eq!(children[0].name, "page-1");
+        assert_eq!(runtime.cache_size(), 1);
+    }
+
+    #[test]
+    fn delegate_expand_recurses_into_nested_delegate_refs() {
+        struct InnerTarget;
+        impl Provider for InnerTarget {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(vec![ListRef::Direct(ChildEntry {
+                    name: "inner".into(),
+                    provider: None,
+                    meta: None,
+                })])
+            }
+        }
+
+        struct OuterTarget {
+            inner: Arc<dyn Provider>,
+        }
+        impl Provider for OuterTarget {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(vec![ListRef::DelegateExpand {
+                    target: self.inner.clone(),
+                    expand: Arc::new(|child, _| {
+                        Ok(Some(ChildEntry {
+                            name: format!("mid-{}", child.name),
+                            provider: None,
+                            meta: None,
+                        }))
+                    }),
+                }])
+            }
+        }
+
+        struct Parent {
+            target: Arc<dyn Provider>,
+        }
+        impl Provider for Parent {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(vec![ListRef::DelegateExpand {
+                    target: self.target.clone(),
+                    expand: Arc::new(|child, _| {
+                        Ok(Some(ChildEntry {
+                            name: format!("page-{}", child.name),
+                            provider: None,
+                            meta: None,
+                        }))
+                    }),
+                }])
+            }
+        }
+
+        let runtime = runtime_with_root(Arc::new(Parent {
+            target: Arc::new(OuterTarget {
+                inner: Arc::new(InnerTarget),
+            }),
+        }));
+
+        let children = runtime.list("/").unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].name, "page-mid-inner");
+        assert_eq!(runtime.cache_size(), 1);
+    }
+
+    #[test]
     fn longest_prefix_full_path_hit_zero_apply() {
         let (runtime, counter) = three_layer_runtime();
         runtime.resolve("/b/c").unwrap();
@@ -820,23 +1209,17 @@ mod tests {
                 &self,
                 _: &ProviderQuery,
                 _: &ProviderContext,
-            ) -> Result<Vec<ChildEntry>, EngineError> {
+            ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(Vec::new())
             }
-            fn resolve(
-                &self,
-                name: &str,
-                _: &ProviderQuery,
-                _: &ProviderContext,
-            ) -> Option<ChildEntry> {
-                self.children
-                    .iter()
-                    .find(|(n, _)| n == name)
-                    .map(|(n, p)| ChildEntry {
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal(self.children.iter().find(|(n, _)| n == name).map(|(n, p)| {
+                    ChildEntry {
                         name: n.clone(),
                         provider: Some(p.clone()),
                         meta: None,
-                    })
+                    }
+                }))
             }
         }
         let empty_provider: Arc<dyn Provider> =
@@ -851,6 +1234,133 @@ mod tests {
     }
 
     #[test]
+    fn no_provider_child_resolves_and_is_cached() {
+        struct Root;
+        impl Provider for Root {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(Vec::new())
+            }
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal((name == "no_prov").then(|| ChildEntry {
+                    name: name.to_string(),
+                    provider: None,
+                    meta: None,
+                }))
+            }
+        }
+
+        let runtime = runtime_with_root(Arc::new(Root));
+        let resolved = runtime.resolve("/no_prov").unwrap();
+        assert!(resolved.provider.is_none());
+        assert_eq!(runtime.cache_size(), 1);
+    }
+
+    #[test]
+    fn operations_on_no_provider_return_no_provider() {
+        struct Root;
+        impl Provider for Root {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(Vec::new())
+            }
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal((name == "no_prov").then(|| ChildEntry {
+                    name: name.to_string(),
+                    provider: None,
+                    meta: None,
+                }))
+            }
+        }
+
+        let runtime = runtime_with_root(Arc::new(Root));
+        let err = runtime.list("/no_prov").unwrap_err();
+        assert!(matches!(err, EngineError::NoProvider(p) if p == "/no_prov"));
+    }
+
+    #[test]
+    fn navigation_past_no_provider_returns_path_not_found() {
+        struct Root;
+        impl Provider for Root {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(Vec::new())
+            }
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal((name == "no_prov").then(|| ChildEntry {
+                    name: name.to_string(),
+                    provider: None,
+                    meta: None,
+                }))
+            }
+        }
+
+        let runtime = runtime_with_root(Arc::new(Root));
+        let err = runtime.resolve("/no_prov/child").unwrap_err();
+        assert!(matches!(err, EngineError::PathNotFound(p) if p == "/no_prov/child"));
+    }
+
+    #[test]
+    fn delegate_with_no_final_provider_resolves_as_no_provider() {
+        struct Target;
+        impl Provider for Target {
+            fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+                q.from = Some(crate::ast::SqlExpr("target_table".into()));
+                q
+            }
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(Vec::new())
+            }
+        }
+
+        struct Root {
+            target: Arc<dyn Provider>,
+        }
+        impl Provider for Root {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(Vec::new())
+            }
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                if name == "delegated" {
+                    ResolveRef::Delegate {
+                        target: self.target.clone(),
+                        final_provider: None,
+                        final_meta: None,
+                    }
+                } else {
+                    ResolveRef::Terminal(None)
+                }
+            }
+        }
+
+        let runtime = runtime_with_root(Arc::new(Root {
+            target: Arc::new(Target),
+        }));
+        let resolved = runtime.resolve("/delegated").unwrap();
+        assert!(resolved.provider.is_none());
+        assert_eq!(resolved.composed.from.unwrap().0, "target_table");
+        let err = runtime.list("/delegated").unwrap_err();
+        assert!(matches!(err, EngineError::NoProvider(p) if p == "/delegated"));
+    }
+
+    #[test]
     fn note_dispatches_to_provider() {
         struct N;
         impl Provider for N {
@@ -858,16 +1368,8 @@ mod tests {
                 &self,
                 _: &ProviderQuery,
                 _: &ProviderContext,
-            ) -> Result<Vec<ChildEntry>, EngineError> {
+            ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(Vec::new())
-            }
-            fn resolve(
-                &self,
-                _: &str,
-                _: &ProviderQuery,
-                _: &ProviderContext,
-            ) -> Option<ChildEntry> {
-                None
             }
             fn get_note(&self, _: &ProviderQuery, _: &ProviderContext) -> Option<String> {
                 Some("hello".into())
@@ -894,16 +1396,8 @@ mod tests {
                 &self,
                 _: &ProviderQuery,
                 _: &ProviderContext,
-            ) -> Result<Vec<ChildEntry>, EngineError> {
+            ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(Vec::new())
-            }
-            fn resolve(
-                &self,
-                _: &str,
-                _: &ProviderQuery,
-                _: &ProviderContext,
-            ) -> Option<ChildEntry> {
-                None
             }
         }
         struct Holder {
@@ -914,20 +1408,15 @@ mod tests {
                 &self,
                 _: &ProviderQuery,
                 _: &ProviderContext,
-            ) -> Result<Vec<ChildEntry>, EngineError> {
-                Ok(vec![ChildEntry {
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(vec![ListRef::Direct(ChildEntry {
                     name: "k".into(),
                     provider: Some(self.child.clone()),
                     meta: Some(serde_json::json!({"foo":"bar"})),
-                }])
+                })])
             }
-            fn resolve(
-                &self,
-                name: &str,
-                _: &ProviderQuery,
-                _: &ProviderContext,
-            ) -> Option<ChildEntry> {
-                if name == "k" {
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal(if name == "k" {
                     Some(ChildEntry {
                         name: "k".into(),
                         provider: Some(self.child.clone()),
@@ -935,7 +1424,7 @@ mod tests {
                     })
                 } else {
                     None
-                }
+                })
             }
         }
         let leaf: Arc<dyn Provider> = Arc::new(Inner);
@@ -964,23 +1453,17 @@ mod tests {
                 &self,
                 _: &ProviderQuery,
                 _: &ProviderContext,
-            ) -> Result<Vec<ChildEntry>, EngineError> {
+            ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(Vec::new())
             }
-            fn resolve(
-                &self,
-                name: &str,
-                _: &ProviderQuery,
-                _: &ProviderContext,
-            ) -> Option<ChildEntry> {
-                self.children
-                    .iter()
-                    .find(|(n, _)| n == name)
-                    .map(|(n, p)| ChildEntry {
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal(self.children.iter().find(|(n, _)| n == name).map(|(n, p)| {
+                    ChildEntry {
                         name: n.clone(),
                         provider: Some(p.clone()),
                         meta: None,
-                    })
+                    }
+                }))
             }
         }
         let leaf: Arc<dyn Provider> = Arc::new(Inner { children: vec![] });
@@ -1007,11 +1490,8 @@ mod tests {
             &self,
             _: &ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(Vec::new())
-        }
-        fn resolve(&self, _: &str, _: &ProviderQuery, _: &ProviderContext) -> Option<ChildEntry> {
-            None
         }
     }
 
@@ -1114,16 +1594,8 @@ mod tests {
                 &self,
                 _: &ProviderQuery,
                 _: &ProviderContext,
-            ) -> Result<Vec<ChildEntry>, EngineError> {
+            ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(Vec::new())
-            }
-            fn resolve(
-                &self,
-                _: &str,
-                _: &ProviderQuery,
-                _: &ProviderContext,
-            ) -> Option<ChildEntry> {
-                None
             }
         }
         let exec = Arc::new(CapturingExecutor {

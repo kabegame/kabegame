@@ -19,7 +19,9 @@
       "Bash(grep -E \"\\\\.\\(ts|vue\\)$\")",
       "Bash(cd /d \"D:\\\\Codes\\\\kabegame\")",
       "Bash(findstr /r /s \"ffmpeg\\\\|run_ffmpeg\\\\|resolve_ffmpeg\" src-tauri/)",
-      "Bash(awk *)"
+      "Bash(awk *)",
+      "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\\\\apps\\\\kabegame\\\\src\\\\components\" -Filter \"Task*.vue\")",
+      "Bash(Select-Object FullName)"
     ]
   }
 }

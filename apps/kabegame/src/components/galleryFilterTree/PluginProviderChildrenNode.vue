@@ -6,6 +6,7 @@
     :active="active"
     :default-expanded="defaultExpanded"
     :filter="imagesChangeFilter"
+    :initial-count="initialCount"
     @select="$emit('select', { type: 'plugin', pluginId })"
     @update:expanded="onExpanded"
   >
@@ -17,6 +18,7 @@
       :extend-path="child.name"
       :is-leaf="isProviderLeaf(child)"
       :depth="2"
+      :initial-count="child.total ?? undefined"
       @select="$emit('select', $event)"
     />
   </ProviderChildrenNode>
@@ -46,6 +48,7 @@ import {
 
 const props = defineProps<{
   pluginId: string;
+  initialCount?: number;
 }>();
 
 defineEmits<{

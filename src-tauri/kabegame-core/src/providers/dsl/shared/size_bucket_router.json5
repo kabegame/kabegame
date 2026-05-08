@@ -1,0 +1,16 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "size_bucket_router",
+    // 从 ${composed} 统计各大小分桶的行数，只列出非空分组。
+    // SQL 结果列 min_bytes / max_bytes 由 runtime 自动作为 meta 暴露给上层（如 vd_size_router）。
+    // 不直接路由到任何 provider，由调用方决定路由策略（便于 VD 做独立 i18n 改造）。
+    // unknown 桶：min_bytes=max_bytes=-1，由 size_range_provider 的哨兵逻辑处理。
+    "list": {
+        "${out.bucket}": {
+            "sql": "SELECT bucket, min_bytes, max_bytes FROM (SELECT 0 AS ord, 'unknown' AS bucket, -1 AS min_bytes, -1 AS max_bytes, count(*) AS cnt FROM (${composed}) AS sub WHERE sub.size IS NULL OR sub.size <= 0 UNION ALL SELECT 1, '1B-512KB', 1, 524288, count(*) FROM (${composed}) AS sub WHERE sub.size >= 1 AND sub.size < 524288 UNION ALL SELECT 2, '512KB-1MB', 524288, 1048576, count(*) FROM (${composed}) AS sub WHERE sub.size >= 524288 AND sub.size < 1048576 UNION ALL SELECT 3, '1MB-2MB', 1048576, 2097152, count(*) FROM (${composed}) AS sub WHERE sub.size >= 1048576 AND sub.size < 2097152 UNION ALL SELECT 4, '2MB-5MB', 2097152, 5242880, count(*) FROM (${composed}) AS sub WHERE sub.size >= 2097152 AND sub.size < 5242880 UNION ALL SELECT 5, '5MB-10MB', 5242880, 10485760, count(*) FROM (${composed}) AS sub WHERE sub.size >= 5242880 AND sub.size < 10485760 UNION ALL SELECT 6, '10MB-50MB', 10485760, 52428800, count(*) FROM (${composed}) AS sub WHERE sub.size >= 10485760 AND sub.size < 52428800 UNION ALL SELECT 7, '50MB-', 52428800, 9007199254740991, count(*) FROM (${composed}) AS sub WHERE sub.size >= 52428800) WHERE cnt > 0 ORDER BY ord",
+            "data_var": "out",
+            "meta": "${out}"
+        }
+    }
+}

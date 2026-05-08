@@ -62,6 +62,11 @@ export const useTaskDetailRouteStore = createPathRouteStore<TaskDetailRouteState
       const sp = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
       return `${sp}task/${state.taskId}/${ps}${Math.max(1, state.page)}`;
     },
+    buildContext: (state) => {
+      const q = (state.search ?? "").trim();
+      const sp = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
+      return `${sp}task/${state.taskId}`;
+    },
     defaultState: createDefaultState,
     routeName: "TaskDetail",
     onStateChange: (state) => {

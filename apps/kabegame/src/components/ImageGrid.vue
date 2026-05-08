@@ -6,6 +6,7 @@
     :on-context-command="handleContextCommand"
     @scroll-stable="$emit('scroll-stable')"
     @open-task="handleOpenTask"
+    @image-dblclick="$emit('image-dblclick', $event)"
   >
     <template #before-grid>
       <slot name="before-grid" />
@@ -86,6 +87,7 @@ interface Props {
 const props = defineProps<Props>();
 defineEmits<{
   "scroll-stable": [];
+  "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
   // 兼容旧 API：右键已移除加入画册，但保留事件名不破坏上层模板
   addedToAlbum: [];
 }>();

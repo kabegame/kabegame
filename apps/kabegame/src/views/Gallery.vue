@@ -6,7 +6,7 @@
           <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!isCompact"
             hide-scrollbar :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
             :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
-            :on-context-command="handleGridContextCommand" scroll-whole-container>
+            :on-context-command="handleGridContextCommand" @image-dblclick="handleImageDoubleOpen" scroll-whole-container>
             <template #before-grid>
               <!-- 顶部工具栏 -->
               <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
@@ -14,8 +14,8 @@
                 :sort="galleryRouteStore.sort" :page-size="pageSize" :search="search" v-model:selectedRange="selectedRange"
                 :provider-context-prefix="galleryRouteStore.contextPath"
                 @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
-                @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
-                @open-collect-menu="showCollectSourcePicker = true"
+                @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="handleShowLocalImport"
+                @open-collect-menu="handleOpenCollectMenu"
                 @update:filter="(f) => galleryRouteStore.navigate({ filter: f, page: 1 })"
                 @update:sort="(sort) => galleryRouteStore.navigate({ sort })"
                 @update:pageSize="(ps) => galleryRouteStore.navigate({ page: 1, pageSize: ps })"
@@ -126,6 +126,7 @@ import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID, IS_WINDOWS, IS_WEB } from "@kabegame/core/env";
+import { trackEvent } from "@kabegame/core/track/umami";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
@@ -185,6 +186,50 @@ const bigPageEnabled = computed(() => {
 const currentPath = computed(() => galleryRouteStore.currentPath);
 const providerRootPath = computed(() => serializeFilter(galleryRouteStore.filter));
 const currentPage = computed(() => galleryRouteStore.page);
+let lastTrackedGalleryPath: string | null = null;
+
+function trackGalleryEvent(name: string, data: Record<string, unknown> = {}) {
+  if (!IS_WEB) return;
+  trackEvent(name, { path: currentPath.value, ...data });
+}
+
+function imageAnalyticsName(image: ImageInfo): string {
+  const displayName = image.displayName?.trim();
+  if (displayName) return displayName;
+  const localName = (image.localPath || "").split(/[\\/]/).pop()?.trim();
+  if (localName) return localName;
+  const urlName = (image.url || "").split(/[\\/]/).pop()?.trim();
+  return urlName || image.id;
+}
+
+function imageAnalyticsItem(image: ImageInfo) {
+  return {
+    id: image.id,
+    name: imageAnalyticsName(image),
+    localPath: image.localPath,
+  };
+}
+
+function imageAnalyticsPayload(images: ImageInfo[]): Record<string, unknown> {
+  const mode = images.length > 1 ? "batch" : "single";
+  const base = {
+    mode,
+    count: images.length,
+  };
+  if (mode === "single") {
+    const image = images[0];
+    return {
+      ...base,
+      image: image
+        ? imageAnalyticsItem(image)
+        : null,
+    };
+  }
+  return {
+    ...base,
+    images: images.map(imageAnalyticsItem),
+  };
+}
 
 const isWallpaperOrderEmpty = computed(
   () => galleryRouteStore.filter.type === "wallpaper-order"
@@ -206,6 +251,18 @@ watch(
     if (qp !== currentPath.value) {
       galleryRouteStore.syncFromUrl(qp);
     }
+  },
+  { immediate: true }
+);
+
+watch(
+  currentPath,
+  (path) => {
+    if (!IS_WEB) return;
+    if (!path) return;
+    if (path === lastTrackedGalleryPath) return;
+    lastTrackedGalleryPath = path;
+    trackEvent("gallery_path", { path });
   },
   { immediate: true }
 );
@@ -285,11 +342,23 @@ const crawlerDialogInitialConfig = ref<{
 
 // 桌面：打开收集（网络）对话框。Android 上由「开始收集」→ CollectSourcePicker → 远程 打开 drawer
 const handleShowCrawlerDialog = () => {
+  trackGalleryEvent("gallery_import_entry", { entry: "network" });
   showCrawlerDialog.value = true;
+};
+
+const handleShowLocalImport = () => {
+  trackGalleryEvent("gallery_import_entry", { entry: "local" });
+  showLocalImportDialog.value = true;
+};
+
+const handleOpenCollectMenu = () => {
+  trackGalleryEvent("gallery_import_entry", { entry: "collect_menu" });
+  showCollectSourcePicker.value = true;
 };
 
 // 空状态按钮：与工具栏一致，安卓打开「本地/远程」选择 picker，桌面打开选择对话框
 const handleEmptyStateCollect = () => {
+  trackGalleryEvent("gallery_import_entry", { entry: "empty_state" });
   if (isCompact.value) {
     showCollectSourcePicker.value = true;
   } else {
@@ -303,18 +372,24 @@ const handleWallpaperEmptyViewAll = () => {
 
 // 桌面：选择收集方式对话框 → 本地
 const onDesktopCollectLocal = () => {
+  trackGalleryEvent("gallery_import_entry", { entry: "local", source: "empty_state_dialog" });
   showCollectMenuDialog.value = false;
   showLocalImportDialog.value = true;
 };
 
 // 桌面：选择收集方式对话框 → 网络
 const onDesktopCollectNetwork = () => {
+  trackGalleryEvent("gallery_import_entry", { entry: "network", source: "empty_state_dialog" });
   showCollectMenuDialog.value = false;
   showCrawlerDialog.value = true;
 };
 
 // Android：收集方式选择器选「本地」→ MediaPicker，选「远程」→ 收集 drawer
 const handleCollectSourceSelect = (source: "local" | "remote") => {
+  trackGalleryEvent("gallery_import_entry", {
+    entry: source === "local" ? "local" : "network",
+    source: "compact_picker",
+  });
   showCollectSourcePicker.value = false;
   if (source === "local") {
     showMediaPicker.value = true;
@@ -409,6 +484,7 @@ const handleAndroidMediaSelection = async (
 const showRemoveDialog = ref(false);
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
+const pendingAddToAlbumImages = ref<ImageInfo[]>([]);
 // 详情/加入画册对话框已下沉到 ImageGrid
 const galleryContainerRef = ref<HTMLElement | null>(null);
 const galleryViewRef = ref<any>(null);
@@ -559,6 +635,7 @@ watch(
 
 const handleManualRefresh = async () => {
   // 手动刷新：刷新画廊数据。
+  trackGalleryEvent("gallery_manual_refresh");
   clearImageStateCache();
   await loadImages(true);
   await loadTotalImagesCount();
@@ -627,6 +704,11 @@ const {
 
 const albumStore = useAlbumStore();
 const handleAddedToAlbum = async () => {
+  trackGalleryEvent("gallery_image_action", {
+    command: "addToAlbum",
+    ...imageAnalyticsPayload(pendingAddToAlbumImages.value),
+  });
+  pendingAddToAlbumImages.value = [];
   // 画廊本身不依赖画册列表，但这里留个钩子以便其他页面/计数能及时刷新
   await albumStore.loadAlbums();
 };
@@ -794,11 +876,19 @@ const handleGridContextCommand = async (
 
   switch (command) {
     case "detail":
+      trackGalleryEvent("gallery_image_action", {
+        command: "detail",
+        ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
+      });
       return "detail";
     case "download":
       for (const img of imagesToProcess) {
         await handleDownloadImage(img);
       }
+      trackGalleryEvent("gallery_image_action", {
+        command: "download",
+        ...imageAnalyticsPayload(imagesToProcess),
+      });
       return null;
     case "copy":
       if (IS_WEB) {
@@ -806,6 +896,10 @@ const handleGridContextCommand = async (
       } else if (imagesToProcess[0]) {
         await handleCopyImage(imagesToProcess[0]);
       }
+      trackGalleryEvent("gallery_image_action", {
+        command: "copy",
+        ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
+      });
       return null;
     case "favorite":
       if (imagesToProcess.length === 1) {
@@ -842,13 +936,28 @@ const handleGridContextCommand = async (
             desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`
           );
           galleryViewRef.value?.clearSelection?.();
+          trackGalleryEvent("gallery_image_action", {
+            command: "favorite",
+            ...imageAnalyticsPayload(toChange.filter((img) => succeededIds.includes(img.id))),
+            value: desiredFavorite,
+          });
         }
+      }
+      if (imagesToProcess.length === 1) {
+        trackGalleryEvent("gallery_image_action", {
+          command: "favorite",
+          ...imageAnalyticsPayload(imagesToProcess),
+        });
       }
       return null;
     case "open":
       if (!isMultiSelect) {
         if (imagesToProcess[0]) await handleOpenImagePath(imagesToProcess[0].localPath);
       }
+      trackGalleryEvent("gallery_image_action", {
+        command: "open",
+        ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
+      });
       return null;
     case "openFolder":
       if (await guardDesktopOnly("openLocal")) return null;
@@ -856,6 +965,10 @@ const handleGridContextCommand = async (
         try {
           if (imagesToProcess[0]) {
             await invoke("open_file_folder", { filePath: imagesToProcess[0].localPath });
+            trackGalleryEvent("gallery_image_action", {
+              command: "openFolder",
+              ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
+            });
           }
         } catch (error) {
           console.error("打开文件夹失败:", error);
@@ -865,15 +978,24 @@ const handleGridContextCommand = async (
       return null;
     case "wallpaper":
       if (imagesToProcess.length > 0) await setWallpaper(imagesToProcess);
+      trackGalleryEvent("gallery_image_action", {
+        command: "wallpaper",
+        ...imageAnalyticsPayload(imagesToProcess),
+      });
       return null;
     case "exportToWE":
     case "exportToWEAuto":
       if (!isMultiSelect) {
         if (imagesToProcess[0]) await exportToWallpaperEngine(imagesToProcess[0]);
       }
+      trackGalleryEvent("gallery_image_action", {
+        command,
+        ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
+      });
       return null;
     case "addToAlbum":
       addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
+      pendingAddToAlbumImages.value = imagesToProcess.slice();
       showAddToAlbumDialog.value = true;
       return null;
     case "addToHidden": {
@@ -894,6 +1016,10 @@ const handleGridContextCommand = async (
           );
         }
         galleryViewRef.value?.clearSelection?.();
+        trackGalleryEvent("gallery_image_action", {
+          command: isUnhide ? "removeFromHidden" : "addToHidden",
+          ...imageAnalyticsPayload(imagesToProcess),
+        });
       } catch (e) {
         console.error(isUnhide ? "取消隐藏失败:" : "隐藏失败:", e);
         ElMessage.error(t(isUnhide ? "contextMenu.unhideFailed" : "contextMenu.hideFailed"));
@@ -915,6 +1041,10 @@ const handleGridContextCommand = async (
           await loadImageTypes();
           const mimeType = getMimeTypeForImage(image, ext);
           await invoke("share_file", { filePath, mimeType });
+          trackGalleryEvent("gallery_image_action", {
+            command: "share",
+            ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
+          });
         } catch (error) {
           console.error("分享失败:", error);
           ElMessage.error("分享失败");
@@ -934,6 +1064,10 @@ const handleGridContextCommand = async (
       // 上划手势：隐藏（加入隐藏画册，保留磁盘文件）
       if (imagesToProcess.length > 0) {
         void handleBatchHideImages(imagesToProcess);
+        trackGalleryEvent("gallery_image_action", {
+          command: "swipe-remove",
+          ...imageAnalyticsPayload(imagesToProcess),
+        });
       }
       return null;
     default:
@@ -953,6 +1087,17 @@ const confirmRemoveImages = async () => {
 
   showRemoveDialog.value = false;
   await handleBatchDeleteImages(imagesToRemove);
+  trackGalleryEvent("gallery_image_action", {
+    command: "remove",
+    ...imageAnalyticsPayload(imagesToRemove),
+  });
+};
+
+const handleImageDoubleOpen = (payload: { action: "preview" | "open"; image: ImageInfo }) => {
+  trackGalleryEvent("gallery_image_double_open", {
+    action: payload.action,
+    ...imageAnalyticsPayload([payload.image]),
+  });
 };
 
 // 监听 CrawlerDialog 关闭，清空初始配置

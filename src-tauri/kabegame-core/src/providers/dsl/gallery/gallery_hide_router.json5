@@ -5,16 +5,6 @@
     "query": {
         "where": "hid_ai.image_id IS NULL"
     },
-    "list": {
-        "${root.name}": {
-            "child_var": "root",
-            "delegate": {
-                "provider": "gallery_route"
-            },
-            "provider": "${root.provider}",
-            "meta": "${root.meta}"
-        }
-    },
     "resolve": {
         ".*": {
             "delegate": { "provider": "gallery_route" },

@@ -22,7 +22,8 @@ export type GalleryFilter =
   | { type: "plugin"; pluginId: string; extendPath?: string }
   | { type: "date"; segment: string }
   | { type: "date-range"; start: string; end: string }
-  | { type: "media-type"; kind: "image" | "video" };
+  | { type: "media-type"; kind: "image" | "video" }
+  | { type: "size"; range: string };
 
 /** parseGalleryPath 的返回值，仅用于解析/再拼装，不作为持久化模型 */
 export interface ParsedGalleryPath {
@@ -84,6 +85,8 @@ export function serializeFilter(filter: GalleryFilter): string {
       return `date-range/${filter.start}~${filter.end}`;
     case "media-type":
       return `media-type/${filter.kind}`;
+    case "size":
+      return `size/${filter.range}`;
   }
 }
 
@@ -155,6 +158,10 @@ export function parseFilter(root: string): GalleryFilter {
       return { type: "media-type", kind };
     }
   }
+  if (lr.startsWith("size/")) {
+    const range = r.slice("size/".length).trim().split("/")[0]?.trim();
+    if (range) return { type: "size", range };
+  }
   return DEFAULT_GALLERY_FILTER;
 }
 
@@ -170,6 +177,10 @@ export function filterMediaKind(f: GalleryFilter): "image" | "video" | null {
   return f.type === "media-type" ? f.kind : null;
 }
 
+export function filterSizeRange(f: GalleryFilter): string | null {
+  return f.type === "size" ? f.range : null;
+}
+
 /** 当前 filter 是否属于「全部 / 设置过壁纸 / 按插件 / 按时间 / 日期范围 / 媒体类型」等根级浏览过滤 */
 export function isSimpleFilter(f: GalleryFilter): boolean {
   switch (f.type) {
@@ -179,6 +190,7 @@ export function isSimpleFilter(f: GalleryFilter): boolean {
     case "date":
     case "date-range":
     case "media-type":
+    case "size":
       return true;
     default:
       return false;
@@ -223,6 +235,22 @@ function tryParseDateGalleryPath(segs: string[]): ParsedGalleryPath | null {
   }
   const { sort, pageSize, page } = parseTail(tail);
   return { filter, sort, page, pageSize, search: "" };
+}
+
+/**
+ * 解析 `size/<range>/[desc/][x{n}x/]<page>`。
+ * range 可以是 unknown 或 {min}-{max} 格式（如 512KB-1MB、1B-512KB、50MB-）。
+ */
+function tryParseSizeGalleryPath(segs: string[]): ParsedGalleryPath | null {
+  if (segs.length < 2 || segs[0]!.toLowerCase() !== "size") return null;
+  const range = segs[1]!.trim();
+  if (!range) return null;
+  const filter: GalleryFilter = { type: "size", range };
+  const tail = segs.slice(2);
+  if (tail.length === 0) {
+    return { filter, sort: "asc", page: DEFAULT_PAGE, pageSize: DEFAULT_PAGE_SIZE, search: "" };
+  }
+  return { filter, ...parseTail(tail), search: "" };
 }
 
 /**
@@ -370,6 +398,11 @@ export function parseGalleryPath(path: string): ParsedGalleryPath {
   const dateParsed = tryParseDateGalleryPath(segs);
   if (dateParsed) {
     return { ...dateParsed, search };
+  }
+
+  const sizeParsed = tryParseSizeGalleryPath(segs);
+  if (sizeParsed) {
+    return { ...sizeParsed, search };
   }
 
   const mediaParsed = tryParseMediaTypeGalleryPath(segs);

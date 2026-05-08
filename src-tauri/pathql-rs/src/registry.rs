@@ -293,16 +293,8 @@ mod tests {
                     &self,
                     _: &crate::compose::ProviderQuery,
                     _: &ProviderContext,
-                ) -> Result<Vec<crate::provider::ChildEntry>, EngineError> {
+                ) -> Result<Vec<crate::provider::ListRef>, EngineError> {
                     Ok(Vec::new())
-                }
-                fn resolve(
-                    &self,
-                    _: &str,
-                    _: &crate::compose::ProviderQuery,
-                    _: &ProviderContext,
-                ) -> Option<crate::provider::ChildEntry> {
-                    None
                 }
             }
             Ok(Arc::new(Stub) as Arc<dyn Provider>)

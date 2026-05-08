@@ -1,6 +1,6 @@
 //! DSL provider 实例。**不持 registry / runtime 字段**——所有外部状态由 ctx 注入。
 
-use super::{ChildEntry, EngineError, Provider, ProviderContext};
+use super::{ChildEntry, EngineError, ListRef, Provider, ProviderContext, ResolveRef};
 use crate::ast::{
     DelegateProviderField, DynamicDelegateEntry, DynamicListEntry, DynamicSqlEntry, ListEntry,
     Namespace, ProviderCall, ProviderDef, ProviderInvocation, Query,
@@ -13,7 +13,6 @@ use crate::compose::{
 use crate::template::{evaluate_var, parse, Segment, TemplateContext, TemplateValue, VarRef};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
 
 /// DSL provider 实例。
 pub struct DslProvider {
@@ -35,45 +34,6 @@ impl DslProvider {
         let rendered = render_template_to_string(&provider.0, &tctx)?;
         Ok(crate::ast::ProviderName(rendered))
     }
-    fn provider_label(&self) -> String {
-        format!(
-            "{}::{}",
-            self.def
-                .namespace
-                .as_ref()
-                .map(|n| n.0.as_str())
-                .unwrap_or(""),
-            self.def.name.0
-        )
-    }
-
-    fn profile_enabled(&self) -> bool {
-        let Ok(filter) = std::env::var("PATHQL_PROFILE") else {
-            return false;
-        };
-        let filter = filter.trim();
-        if filter.is_empty() || matches!(filter, "0" | "false" | "off") {
-            return false;
-        }
-        if matches!(filter, "1" | "true" | "all") {
-            return true;
-        }
-
-        self.provider_label().contains(filter) || self.def.name.0.contains(filter)
-    }
-
-    fn profile_log(&self, op: &str, started: Instant, detail: impl AsRef<str>) {
-        if self.profile_enabled() {
-            eprintln!(
-                "[pathql-profile] provider={} op={} elapsed_ms={} {}",
-                self.provider_label(),
-                op,
-                started.elapsed().as_millis(),
-                detail.as_ref()
-            );
-        }
-    }
-
     /// 自身 namespace (用于 instantiate 时的当前命名空间)。
     fn current_namespace(&self) -> Namespace {
         self.def
@@ -108,43 +68,12 @@ impl DslProvider {
         raw: &Option<HashMap<String, AstTemplateValue>>,
         tctx: &TemplateContext,
     ) -> Result<HashMap<String, TemplateValue>, EngineError> {
-        let Some(raw) = raw else {
-            return Ok(HashMap::new());
-        };
-        let mut out = HashMap::with_capacity(raw.len());
-        for (k, v) in raw {
-            let value = match v {
-                AstTemplateValue::String(s) => {
-                    if !s.contains("${") {
-                        TemplateValue::Text(s.clone())
-                    } else {
-                        // 字符串字面 → 求值后转 TemplateValue
-                        let rendered = render_template_to_string(s, tctx)?;
-                        // 尝试 int / real 解析；否则保留 Text
-                        if let Ok(i) = rendered.parse::<i64>() {
-                            TemplateValue::Int(i)
-                        } else if let Ok(f) = rendered.parse::<f64>() {
-                            TemplateValue::Real(f)
-                        } else {
-                            TemplateValue::Text(rendered)
-                        }
-                    }
-                }
-                AstTemplateValue::Number(n) => {
-                    if n.fract() == 0.0 {
-                        TemplateValue::Int(*n as i64)
-                    } else {
-                        TemplateValue::Real(*n)
-                    }
-                }
-                AstTemplateValue::Boolean(b) => TemplateValue::Bool(*b),
-            };
-            out.insert(k.clone(), value);
-        }
-        Ok(out)
+        eval_properties_in_ctx(raw, tctx)
     }
 
     /// 渲染 meta 值: 字符串走 template; object/array 递归; 标量原样。
+    /// RULES §4.5: 字符串 meta 启发式判别 — 渲染后若以 `select` 开头 + 含 ` from ` 则视为 SQL 执行,
+    /// 取首行结果作为 meta 对象；否则走普通模板渲染 (返回字符串)。
     fn eval_meta(
         &self,
         meta: &Option<serde_json::Value>,
@@ -152,6 +81,47 @@ impl DslProvider {
         ctx: &ProviderContext,
     ) -> Result<Option<serde_json::Value>, EngineError> {
         let tctx = self.base_template_context(ctx, captures);
+        let dbg = crate::provider::runtime::dbg_enabled();
+        // SQL meta 执行路径: 仅对含 `${...}` 的字符串 meta 尝试
+        if let Some(serde_json::Value::String(s)) = meta {
+            if s.contains("${") {
+                match render_template_to_string(s, &tctx) {
+                    Ok(rendered) => {
+                        let lower = rendered.trim_start().to_ascii_lowercase();
+                        if lower.starts_with("select") && lower.contains(" from ") {
+                            if dbg {
+                                eprintln!(
+                                    "[pathql] eval_meta SQL provider={}::{} sql={:?}",
+                                    self.def
+                                        .namespace
+                                        .as_ref()
+                                        .map(|n| n.0.as_str())
+                                        .unwrap_or(""),
+                                    self.def.name.0,
+                                    rendered
+                                );
+                            }
+                            match ctx.runtime.executor().execute(&rendered, &[]) {
+                                Ok(rows) => {
+                                    let result = rows.into_iter().next();
+                                    if dbg {
+                                        eprintln!("[pathql] eval_meta SQL result={:?}", result);
+                                    }
+                                    return Ok(result);
+                                }
+                                Err(e) => {
+                                    if dbg {
+                                        eprintln!("[pathql] eval_meta SQL error: {}", e);
+                                    }
+                                    // SQL 执行失败时回落到模板渲染
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {} // 渲染失败时回落到 eval_meta_in_ctx
+                }
+            }
+        }
         self.eval_meta_in_ctx(meta, &tctx)
     }
 
@@ -161,8 +131,7 @@ impl DslProvider {
         meta: &Option<serde_json::Value>,
         tctx: &TemplateContext,
     ) -> Result<Option<serde_json::Value>, EngineError> {
-        let Some(m) = meta else { return Ok(None) };
-        Ok(Some(walk_meta_value(m, tctx)?))
+        eval_meta_in_ctx(meta, tctx)
     }
 
     /// 实例化一个 ProviderInvocation 为 Provider 实例。
@@ -231,45 +200,22 @@ impl DslProvider {
         composed: &ProviderQuery,
         ctx: &ProviderContext,
     ) -> Result<Vec<ChildEntry>, EngineError> {
-        let total_started = Instant::now();
         let executor = ctx.runtime.executor().clone();
         let dialect = executor.dialect();
 
         // 渲染 SQL: properties 作用域 + 父 composed 内联 (供 ${composed} 子查询)。
-        let render_started = Instant::now();
         let aliases = AliasTable::new();
         let mut prop_ctx = self.base_template_context(ctx, &[]);
         if let Ok(composed_rendered) = composed.build_sql(&prop_ctx, dialect) {
             prop_ctx.composed = Some(composed_rendered);
         }
         let (sql, params) = render_to_owned(&entry.sql.0, &prop_ctx, &aliases, dialect)?;
-        self.profile_log(
-            "list.sql.render",
-            render_started,
-            format!("key_template={key_template:?} params={}", params.len()),
-        );
 
-        let execute_started = Instant::now();
         let rows = match executor.execute(&sql, &params) {
-            Ok(rows) => {
-                self.profile_log(
-                    "list.sql.execute",
-                    execute_started,
-                    format!("rows={} sql={sql:?}", rows.len()),
-                );
-                rows
-            }
-            Err(e) => {
-                self.profile_log(
-                    "list.sql.execute",
-                    execute_started,
-                    format!("err={e:?} sql={sql:?}"),
-                );
-                return Err(e);
-            }
+            Ok(rows) => rows,
+            Err(e) => return Err(e),
         };
 
-        let materialize_started = Instant::now();
         let data_var_name = entry.data_var.0.clone();
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
@@ -294,34 +240,18 @@ impl DslProvider {
                 meta,
             });
         }
-        self.profile_log(
-            "list.sql.materialize",
-            materialize_started,
-            format!("children={}", out.len()),
-        );
-        self.profile_log(
-            "list.sql.total",
-            total_started,
-            format!("key_template={key_template:?} children={}", out.len()),
-        );
         Ok(out)
     }
 
-    /// 动态 Delegate list 项: 解析 delegate 路径 → 列举其子节点 → 每个子节点 child_var 注入,
-    /// 渲染 key/meta/properties。`provider` 字段决定输出 ChildEntry.provider:
-    /// - `None` → 当前层不挂 provider
-    /// - `ChildRef("${child_var.provider}")` → 透传 target child.provider
-    /// - `Name(prov)` → 用 provider name 实例化
-    fn list_dynamic_delegate(
+    /// 动态 Delegate list 项: 返回延迟展开引用，由 runtime 负责折叠 target query、
+    /// 展开子节点并写 child cache。
+    fn list_dynamic_delegate_ref(
         &self,
         key_template: &str,
         entry: &DynamicDelegateEntry,
-        composed: &ProviderQuery,
         ctx: &ProviderContext,
-    ) -> Result<Vec<ChildEntry>, EngineError> {
-        // 6e: delegate 直接是 ProviderCall — 实例化目标 + apply_query 累计上游 composed,
-        //     再调它的 list 拿 children。
-        let target_provider = self
+    ) -> Result<ListRef, EngineError> {
+        let target = self
             .instantiate_call(&entry.delegate, ctx)?
             .ok_or_else(|| {
                 EngineError::ProviderNotRegistered(
@@ -329,38 +259,41 @@ impl DslProvider {
                     entry.delegate.provider.0.clone(),
                 )
             })?;
-        let target_composed = target_provider.apply_query(composed.clone(), ctx);
-        let target_children = target_provider.list(&target_composed, ctx)?;
 
+        let key_template = key_template.to_string();
         let child_var_name = entry.child_var.0.clone();
-        let mut out = Vec::with_capacity(target_children.len());
-        for child in target_children {
-            let child_json = serde_json::json!({
-                "name": child.name,
-                "meta": child.meta.clone().unwrap_or(serde_json::Value::Null),
-            });
-            let mut tctx = self.base_template_context(ctx, &[]);
+        let entry_provider = entry.provider.clone();
+        let entry_properties = entry.properties.clone();
+        let entry_meta = entry.meta.clone();
+        let self_properties = self.properties.clone();
+        let namespace = self.current_namespace();
+
+        let expand = Arc::new(move |child: &ChildEntry, ctx: &ProviderContext| {
+            let child_json = DslProvider::child_entry_json(child);
+            let mut tctx = TemplateContext::default();
+            tctx.properties = self_properties.clone();
+            tctx.globals = ctx.runtime.globals().clone();
             tctx.child_var = Some((child_var_name.clone(), child_json));
 
-            let name = render_template_to_string(key_template, &tctx)?;
+            let name = render_template_to_string(&key_template, &tctx)?;
 
-            let provider: Option<Arc<dyn Provider>> = match &entry.provider {
+            let provider: Option<Arc<dyn Provider>> = match &entry_provider {
                 None => None,
                 Some(DelegateProviderField::ChildRef(_)) => child.provider.clone(),
                 Some(DelegateProviderField::Name(prov_name)) => {
-                    let props = self.eval_properties_in_ctx(&entry.properties, &tctx)?;
-                    ctx.registry
-                        .instantiate(&self.current_namespace(), prov_name, &props, ctx)
+                    let props = eval_properties_in_ctx(&entry_properties, &tctx)?;
+                    ctx.registry.instantiate(&namespace, prov_name, &props, ctx)
                 }
             };
-            let meta = self.eval_meta_in_ctx(&entry.meta, &tctx)?;
-            out.push(ChildEntry {
+            let meta = eval_meta_in_ctx(&entry_meta, &tctx)?;
+            Ok(Some(ChildEntry {
                 name,
                 provider,
                 meta,
-            });
-        }
-        Ok(out)
+            }))
+        });
+
+        Ok(ListRef::DelegateExpand { target, expand })
     }
 
     fn child_entry_json(child: &ChildEntry) -> serde_json::Value {
@@ -371,39 +304,49 @@ impl DslProvider {
         })
     }
 
-    fn materialize_delegate_child(
+    fn child_from_resolve_ref(name: &str, resolved: &ResolveRef) -> Option<ChildEntry> {
+        match resolved {
+            ResolveRef::Terminal(child) => child.clone(),
+            ResolveRef::Delegate {
+                final_provider,
+                final_meta,
+                ..
+            } => Some(ChildEntry {
+                name: name.to_string(),
+                provider: final_provider.clone(),
+                meta: final_meta.clone(),
+            }),
+        }
+    }
+
+    fn extract_provider_from_ref(resolved: &ResolveRef) -> Option<Arc<dyn Provider>> {
+        match resolved {
+            ResolveRef::Terminal(Some(child)) => child.provider.clone(),
+            ResolveRef::Terminal(None) => None,
+            ResolveRef::Delegate { final_provider, .. } => final_provider.clone(),
+        }
+    }
+
+    fn final_provider_from_delegate_field(
         &self,
-        name: String,
-        child: &ChildEntry,
-        child_var_name: Option<&str>,
         provider_field: Option<&DelegateProviderField>,
         properties: &Option<HashMap<String, AstTemplateValue>>,
-        meta: Option<&serde_json::Value>,
+        target_ref: &ResolveRef,
+        tctx: &TemplateContext,
         ctx: &ProviderContext,
-    ) -> Result<ChildEntry, EngineError> {
-        let mut tctx = self.base_template_context(ctx, &[]);
-        if let Some(child_var_name) = child_var_name {
-            tctx.child_var = Some((child_var_name.to_string(), Self::child_entry_json(child)));
-        }
-
-        let provider = match provider_field {
-            None => None,
-            Some(DelegateProviderField::ChildRef(_)) => child.provider.clone(),
-            Some(DelegateProviderField::Name(prov_name)) => {
-                let props = self.eval_properties_in_ctx(properties, &tctx)?;
-                ctx.registry
-                    .instantiate(&self.current_namespace(), prov_name, &props, ctx)
+    ) -> Result<Option<Arc<dyn Provider>>, EngineError> {
+        match provider_field {
+            None => Ok(None),
+            Some(DelegateProviderField::ChildRef(_)) => {
+                Ok(Self::extract_provider_from_ref(target_ref))
             }
-        };
-
-        let meta_owned = meta.cloned();
-        let meta = self.eval_meta_in_ctx(&meta_owned, &tctx)?;
-
-        Ok(ChildEntry {
-            name,
-            provider,
-            meta,
-        })
+            Some(DelegateProviderField::Name(prov_name)) => {
+                let props = self.eval_properties_in_ctx(properties, tctx)?;
+                Ok(ctx
+                    .registry
+                    .instantiate(&self.current_namespace(), prov_name, &props, ctx))
+            }
+        }
     }
 
     /// 反查: 给定 name, 找到哪个 dynamic 项的 key 模板渲染后等于 name, 然后实例化对应 provider。
@@ -415,10 +358,9 @@ impl DslProvider {
         entry: &DynamicListEntry,
         composed: &ProviderQuery,
         ctx: &ProviderContext,
-    ) -> Result<Option<ChildEntry>, EngineError> {
+    ) -> Result<Option<ResolveRef>, EngineError> {
         match entry {
             DynamicListEntry::Sql(sql_entry) => {
-                let total_started = Instant::now();
                 let dbg = crate::provider::runtime::dbg_enabled();
                 let executor = ctx.runtime.executor().clone();
                 let dialect = executor.dialect();
@@ -456,17 +398,8 @@ impl DslProvider {
                         }
                     }
                 }
-                let render_started = Instant::now();
                 let (sql, params) =
                     render_to_owned(&sql_entry.sql.0, &prop_ctx, &aliases, dialect)?;
-                self.profile_log(
-                    "resolve.dynamic.sql.render",
-                    render_started,
-                    format!(
-                        "target={name:?} key_template={key_template:?} params={}",
-                        params.len()
-                    ),
-                );
                 if dbg {
                     eprintln!(
                         "[pathql]   reverse dynamic SQL provider={}::{} key_template={:?} sql={:?} params={:?}",
@@ -481,24 +414,9 @@ impl DslProvider {
                         params,
                     );
                 }
-                let execute_started = Instant::now();
                 let rows = match executor.execute(&sql, &params) {
-                    Ok(rows) => {
-                        self.profile_log(
-                            "resolve.dynamic.sql.execute",
-                            execute_started,
-                            format!("target={name:?} rows={} sql={sql:?}", rows.len()),
-                        );
-                        rows
-                    }
-                    Err(e) => {
-                        self.profile_log(
-                            "resolve.dynamic.sql.execute",
-                            execute_started,
-                            format!("target={name:?} err={e:?} sql={sql:?}"),
-                        );
-                        return Err(e);
-                    }
+                    Ok(rows) => rows,
+                    Err(e) => return Err(e),
                 };
                 if dbg {
                     eprintln!(
@@ -513,7 +431,6 @@ impl DslProvider {
                     );
                 }
 
-                let scan_started = Instant::now();
                 let data_var_name = sql_entry.data_var.0.clone();
                 for row in rows {
                     let mut row_ctx = self.base_template_context(ctx, &[]);
@@ -547,38 +464,18 @@ impl DslProvider {
                             }
                             None => None,
                         };
-                        self.profile_log(
-                            "resolve.dynamic.sql.scan",
-                            scan_started,
-                            format!("target={name:?} result=hit rendered={rendered:?}"),
-                        );
-                        self.profile_log(
-                            "resolve.dynamic.sql.total",
-                            total_started,
-                            format!("target={name:?} result=hit"),
-                        );
                         let meta = self.eval_meta_in_ctx(&sql_entry.meta, &row_ctx)?;
-                        return Ok(Some(ChildEntry {
+                        return Ok(Some(ResolveRef::Terminal(Some(ChildEntry {
                             name: rendered,
                             provider,
                             meta,
-                        }));
+                        }))));
                     }
                 }
-                self.profile_log(
-                    "resolve.dynamic.sql.scan",
-                    scan_started,
-                    format!("target={name:?} result=miss"),
-                );
-                self.profile_log(
-                    "resolve.dynamic.sql.total",
-                    total_started,
-                    format!("target={name:?} result=miss"),
-                );
                 Ok(None)
             }
             DynamicListEntry::Delegate(del_entry) => {
-                let target_provider = self
+                let target = self
                     .instantiate_call(&del_entry.delegate, ctx)?
                     .ok_or_else(|| {
                         EngineError::ProviderNotRegistered(
@@ -586,8 +483,7 @@ impl DslProvider {
                             del_entry.delegate.provider.0.clone(),
                         )
                     })?;
-                let target_composed = target_provider.apply_query(composed.clone(), ctx);
-                let target_children = target_provider.list(&target_composed, ctx)?;
+                let target_children = ctx.runtime.list(&ctx.current_path())?;
 
                 let child_var_name = del_entry.child_var.0.clone();
                 for child in target_children {
@@ -596,17 +492,26 @@ impl DslProvider {
                     tctx.child_var = Some((child_var_name.clone(), child_json));
                     let rendered = render_template_to_string(key_template, &tctx)?;
                     if rendered == name {
-                        return self
-                            .materialize_delegate_child(
-                                rendered,
-                                &child,
-                                Some(&child_var_name),
-                                del_entry.provider.as_ref(),
-                                &del_entry.properties,
-                                del_entry.meta.as_ref(),
-                                ctx,
-                            )
-                            .map(Some);
+                        let final_provider = match del_entry.provider.as_ref() {
+                            None => None,
+                            Some(DelegateProviderField::ChildRef(_)) => child.provider.clone(),
+                            Some(DelegateProviderField::Name(prov_name)) => {
+                                let props =
+                                    self.eval_properties_in_ctx(&del_entry.properties, &tctx)?;
+                                ctx.registry.instantiate(
+                                    &self.current_namespace(),
+                                    prov_name,
+                                    &props,
+                                    ctx,
+                                )
+                            }
+                        };
+                        let final_meta = self.eval_meta_in_ctx(&del_entry.meta, &tctx)?;
+                        return Ok(Some(ResolveRef::Delegate {
+                            target,
+                            final_provider,
+                            final_meta,
+                        }));
                     }
                 }
                 Ok(None)
@@ -634,15 +539,25 @@ impl DslProvider {
                 ),
             ));
         }
-        let provider = self.instantiate_invocation(inv, captures, composed, ctx)?;
         let meta = match inv {
-            ProviderInvocation::ByName(b) => self.eval_meta(&b.meta, captures, ctx)?,
+            ProviderInvocation::ByName(b) => {
+                let provider = self.instantiate_invocation(inv, captures, composed, ctx)?;
+                let Some(provider) = provider else {
+                    return Ok(None);
+                };
+                let meta = self.eval_meta(&b.meta, captures, ctx)?;
+                return Ok(Some(ChildEntry {
+                    name: key.to_string(),
+                    provider: Some(provider),
+                    meta,
+                }));
+            }
             ProviderInvocation::Empty(b) => self.eval_meta(&b.meta, captures, ctx)?,
             ProviderInvocation::ByDelegate(_) => unreachable!("rejected above"),
         };
         Ok(Some(ChildEntry {
             name: key.to_string(),
-            provider,
+            provider: Some(Arc::new(EmptyDslProvider) as Arc<dyn Provider>),
             meta,
         }))
     }
@@ -701,7 +616,7 @@ impl Provider for DslProvider {
         &self,
         composed: &ProviderQuery,
         ctx: &ProviderContext,
-    ) -> Result<Vec<ChildEntry>, EngineError> {
+    ) -> Result<Vec<ListRef>, EngineError> {
         let Some(list) = &self.def.list else {
             return Ok(Vec::new());
         };
@@ -714,29 +629,25 @@ impl Provider for DslProvider {
                     if let Some(child) =
                         self.materialize_static(&rendered_key, invocation, composed, ctx)?
                     {
-                        out.push(child);
+                        out.push(ListRef::Direct(child));
                     }
                 }
                 ListEntry::Dynamic(DynamicListEntry::Sql(e)) => {
-                    let mut children = self.list_dynamic_sql(key_template, e, composed, ctx)?;
-                    out.append(&mut children);
+                    out.extend(
+                        self.list_dynamic_sql(key_template, e, composed, ctx)?
+                            .into_iter()
+                            .map(ListRef::Direct),
+                    );
                 }
                 ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => {
-                    let mut children =
-                        self.list_dynamic_delegate(key_template, e, composed, ctx)?;
-                    out.append(&mut children);
+                    out.push(self.list_dynamic_delegate_ref(key_template, e, ctx)?);
                 }
             }
         }
         Ok(out)
     }
 
-    fn resolve(
-        &self,
-        name: &str,
-        composed: &ProviderQuery,
-        ctx: &ProviderContext,
-    ) -> Option<ChildEntry> {
+    fn resolve(&self, name: &str, composed: &ProviderQuery, ctx: &ProviderContext) -> ResolveRef {
         let dbg = crate::provider::runtime::dbg_enabled();
         if dbg {
             let static_keys: Vec<&str> = self
@@ -773,7 +684,7 @@ impl Provider for DslProvider {
         // 1. resolve.entries (regex)
         if let Some(resolve) = &self.def.resolve {
             for (pattern_template, invocation) in &resolve.0 {
-                // 7b: 渲染 pattern 中的 ${properties.X} (instance-static)
+                // 渲染 pattern 中的 ${properties.X} (instance-static)
                 let pattern = self.render_key_template(pattern_template, ctx);
                 let anchored = format!("^(?:{})$", pattern);
                 let re = match regex::Regex::new(&anchored) {
@@ -791,7 +702,7 @@ impl Provider for DslProvider {
                         .iter()
                         .map(|m| m.map(|x| x.as_str().to_string()).unwrap_or_default())
                         .collect();
-                    // 7b: ByDelegate 在此 inline 处理 — 调 target.resolve(name) 转发解析责任,
+                    // ByDelegate 在此 inline 处理 — 调 target.resolve(name) 转发解析责任,
                     // 再把目标 ChildEntry 绑定到 child_var 并按当前层声明重新 materialize。
                     if let ProviderInvocation::ByDelegate(b) = invocation {
                         if dbg {
@@ -802,27 +713,86 @@ impl Provider for DslProvider {
                         }
                         let target = match self.instantiate_call(&b.delegate, ctx).ok().flatten() {
                             Some(t) => t,
-                            None => return None,
+                            None => return ResolveRef::Terminal(None),
                         };
                         // target 的 contrib 借给本节点 (与路径自然下走对称)
                         let next_composed = target.apply_query(composed.clone(), ctx);
-                        let target_child = target.resolve(name, &next_composed, ctx)?;
-                        return self
-                            .materialize_delegate_child(
-                                name.to_string(),
-                                &target_child,
-                                b.child_var.as_ref().map(|child_var| child_var.0.as_str()),
-                                b.provider.as_ref(),
-                                &b.properties,
-                                b.meta.as_ref(),
-                                ctx,
-                            )
-                            .ok();
+                        let target_ref = target.resolve(name, &next_composed, ctx);
+                        let Some(target_child) = Self::child_from_resolve_ref(name, &target_ref)
+                        else {
+                            if dbg {
+                                eprintln!(
+                                    "[pathql]   ByDelegate target.resolve({:?}) → Terminal(None), returning None",
+                                    name
+                                );
+                            }
+                            return ResolveRef::Terminal(None);
+                        };
+
+                        let mut tctx = self.base_template_context(ctx, &[]);
+                        if let Some(child_var) = &b.child_var {
+                            let child_json = Self::child_entry_json(&target_child);
+                            if dbg {
+                                eprintln!(
+                                    "[pathql]   ByDelegate child_var={:?} meta={:?}",
+                                    child_var.0,
+                                    child_json.get("meta")
+                                );
+                            }
+                            tctx.child_var = Some((child_var.0.clone(), child_json));
+                        }
+                        let final_meta = match self.eval_meta_in_ctx(&b.meta, &tctx) {
+                            Ok(meta) => meta,
+                            Err(e) => {
+                                if dbg {
+                                    eprintln!(
+                                        "[pathql]   ByDelegate eval_meta_in_ctx error: {}",
+                                        e
+                                    );
+                                }
+                                return ResolveRef::Terminal(None);
+                            }
+                        };
+
+                        if b.provider.is_none() {
+                            return ResolveRef::Terminal(Some(ChildEntry {
+                                name: name.to_string(),
+                                provider: None,
+                                meta: final_meta,
+                            }));
+                        }
+
+                        let final_provider = match self.final_provider_from_delegate_field(
+                            b.provider.as_ref(),
+                            &b.properties,
+                            &target_ref,
+                            &tctx,
+                            ctx,
+                        ) {
+                            Ok(provider) => provider,
+                            Err(e) => {
+                                if dbg {
+                                    eprintln!(
+                                        "[pathql]   ByDelegate final_provider_from_delegate_field error: {}",
+                                        e
+                                    );
+                                }
+                                return ResolveRef::Terminal(None);
+                            }
+                        };
+                        return ResolveRef::Delegate {
+                            target,
+                            final_provider,
+                            final_meta,
+                        };
                     }
-                    return self
-                        .materialize_invocation_child(name, invocation, &cap_vec, composed, ctx)
+                    return ResolveRef::Terminal(
+                        self.materialize_invocation_child(
+                            name, invocation, &cap_vec, composed, ctx,
+                        )
                         .ok()
-                        .flatten();
+                        .flatten(),
+                    );
                 }
             }
         }
@@ -838,10 +808,11 @@ impl Provider for DslProvider {
                                 key_template, rendered_key
                             );
                         }
-                        return self
-                            .materialize_invocation_child(name, inv, &[], composed, ctx)
-                            .ok()
-                            .flatten();
+                        return ResolveRef::Terminal(
+                            self.materialize_invocation_child(name, inv, &[], composed, ctx)
+                                .ok()
+                                .flatten(),
+                        );
                     }
                 }
             }
@@ -857,7 +828,7 @@ impl Provider for DslProvider {
                                     key_template
                                 );
                             }
-                            return Some(p);
+                            return p;
                         }
                         Ok(None) => {
                             if dbg {
@@ -882,7 +853,7 @@ impl Provider for DslProvider {
         if dbg {
             eprintln!("[pathql]   ← no match, returning None");
         }
-        None
+        ResolveRef::Terminal(None)
     }
 
     fn get_note(&self, _composed: &ProviderQuery, ctx: &ProviderContext) -> Option<String> {
@@ -894,6 +865,52 @@ impl Provider for DslProvider {
         // 渲染失败时回落到原文 (note 是诊断字段，不应阻断 list)
         Some(render_template_to_string(raw, &tctx).unwrap_or_else(|_| raw.clone()))
     }
+}
+
+fn eval_properties_in_ctx(
+    raw: &Option<HashMap<String, AstTemplateValue>>,
+    tctx: &TemplateContext,
+) -> Result<HashMap<String, TemplateValue>, EngineError> {
+    let Some(raw) = raw else {
+        return Ok(HashMap::new());
+    };
+    let mut out = HashMap::with_capacity(raw.len());
+    for (k, v) in raw {
+        let value = match v {
+            AstTemplateValue::String(s) => {
+                if !s.contains("${") {
+                    TemplateValue::Text(s.clone())
+                } else {
+                    let rendered = render_template_to_string(s, tctx)?;
+                    if let Ok(i) = rendered.parse::<i64>() {
+                        TemplateValue::Int(i)
+                    } else if let Ok(f) = rendered.parse::<f64>() {
+                        TemplateValue::Real(f)
+                    } else {
+                        TemplateValue::Text(rendered)
+                    }
+                }
+            }
+            AstTemplateValue::Number(n) => {
+                if n.fract() == 0.0 {
+                    TemplateValue::Int(*n as i64)
+                } else {
+                    TemplateValue::Real(*n)
+                }
+            }
+            AstTemplateValue::Boolean(b) => TemplateValue::Bool(*b),
+        };
+        out.insert(k.clone(), value);
+    }
+    Ok(out)
+}
+
+fn eval_meta_in_ctx(
+    meta: &Option<serde_json::Value>,
+    tctx: &TemplateContext,
+) -> Result<Option<serde_json::Value>, EngineError> {
+    let Some(m) = meta else { return Ok(None) };
+    Ok(Some(walk_meta_value(m, tctx)?))
 }
 
 fn template_value_to_json(v: TemplateValue) -> serde_json::Value {
@@ -921,6 +938,10 @@ fn pure_meta_template_value(
     let Segment::Var(var) = &ast.segments[0] else {
         return Ok(None);
     };
+
+    if matches!(var, VarRef::Method { name, .. } if name == "global") {
+        return Ok(None);
+    }
 
     if let VarRef::Bare { ns } = var {
         if let Some((name, json)) = &tctx.data_var {
@@ -986,11 +1007,8 @@ fn walk_meta_value(
 pub struct EmptyDslProvider;
 
 impl Provider for EmptyDslProvider {
-    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
+    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ListRef>, EngineError> {
         Ok(Vec::new())
-    }
-    fn resolve(&self, _: &str, _: &ProviderQuery, _: &ProviderContext) -> Option<ChildEntry> {
-        None
     }
     fn is_empty(&self) -> bool {
         true

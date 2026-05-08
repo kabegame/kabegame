@@ -1,0 +1,19 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_desc_router",
+    // Router node for "desc": contribute sort reversal, then keep routing pagination.
+    "query": {
+        "delegate": { "provider": "desc_provider" }
+    },
+    "resolve": {
+        "x[1-9][0-9]*x|[1-9][0-9]*": {
+            "delegate": {
+                "provider": "kabegame.gallery_desc_pagination_page_comb"
+            },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        },
+    }
+}

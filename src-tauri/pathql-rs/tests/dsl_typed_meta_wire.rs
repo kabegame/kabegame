@@ -41,7 +41,6 @@ fn typed_meta_static_preserved_with_template_eval() {
         "properties": {"label": {"type": "string", "default": "hello"}},
         "list": {
             "child_a": {
-                "provider": "__empty",
                 "meta": {
                     "kind": "test_kind",
                     "data": {"label": "${properties.label}", "fixed": 42}
@@ -76,7 +75,6 @@ fn runtime_meta_path_matches_parent_list_child_meta() {
         "name": "router",
         "list": {
             "leaf_x": {
-                "provider": "__empty",
                 "meta": {"kind": "leaf", "data": {"id": "x"}}
             }
         }
@@ -115,7 +113,7 @@ fn root_meta_is_none() {
 fn meta_for_unknown_segment_returns_none() {
     let def_json = r#"{
         "name": "r",
-        "list": {"a": {"provider": "__empty", "meta": {"kind": "k"}}}
+        "list": {"a": {"meta": {"kind": "k"}}}
     }"#;
     let def: ProviderDef = serde_json::from_str(def_json).unwrap();
     let root: Arc<dyn Provider> = Arc::new(DslProvider {

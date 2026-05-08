@@ -1,5 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
+import { IS_WEB } from "@kabegame/core/env";
+import { trackEvent } from "@kabegame/core/track/umami";
 
 export type QuickSettingsPageId =
   | "gallery"
@@ -26,16 +28,34 @@ export function getQuickSettingsDrawerTitleKey(pageId: QuickSettingsPageId): str
 
 const defaultPageId: QuickSettingsPageId = "gallery";
 
+function currentUrl() {
+  return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
+
 export const useQuickSettingsDrawerStore = defineStore("quickSettingsDrawer", () => {
   const isOpen = ref(false);
   const pageId = ref<QuickSettingsPageId>(defaultPageId);
 
   const open = (p: QuickSettingsPageId = defaultPageId) => {
     pageId.value = p;
+    if (IS_WEB && !isOpen.value) {
+      trackEvent("quick_settings_drawer_toggle", {
+        action: "open",
+        page_id: p,
+        url: currentUrl(),
+      });
+    }
     isOpen.value = true;
   };
 
   const close = () => {
+    if (IS_WEB && isOpen.value) {
+      trackEvent("quick_settings_drawer_toggle", {
+        action: "close",
+        page_id: pageId.value,
+        url: currentUrl(),
+      });
+    }
     isOpen.value = false;
   };
 

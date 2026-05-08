@@ -105,7 +105,7 @@
             "in_need": true
         }]
     },
-    "list": {
+    "resolve": {
         "all": {
             "provider": "gallery_all_router"
         },
@@ -142,9 +142,6 @@
         "album": {
             "provider": "gallery_albums_router"
         },
-        "date-range": {
-            "provider": "gallery_date_range_router"
-        },
         "albums": {
             "provider": "gallery_albums_router"
         },
@@ -156,6 +153,9 @@
         },
         "bigger_crawler_time": {
             "provider": "gallery_bigger_crawler_time_router"
+        },
+        "size": {
+            "provider": "gallery_size_router"
         }
     }
 }

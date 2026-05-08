@@ -1,0 +1,11 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "day_provider",
+    "properties": {
+        "ymd": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "strftime('%Y-%m-%d', crawled_at_seconds(images.crawled_at), 'unixepoch') = ${properties.ymd}"
+    }
+}

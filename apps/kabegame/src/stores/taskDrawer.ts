@@ -1,6 +1,12 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { useCrawlerStore } from "./crawler";
+import { IS_WEB } from "@kabegame/core/env";
+import { trackEvent } from "@kabegame/core/track/umami";
+
+function currentUrl() {
+  return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
 
 export const useTaskDrawerStore = defineStore("taskDrawer", () => {
   const visible = ref(false);
@@ -26,15 +32,35 @@ export const useTaskDrawerStore = defineStore("taskDrawer", () => {
   });
 
   function open() {
+    if (IS_WEB && !visible.value) {
+      trackEvent("task_drawer_toggle", {
+        action: "open",
+        url: currentUrl(),
+        active_task_count: activeTasksCount.value,
+        task_count: tasks.value.length,
+      });
+    }
     visible.value = true;
   }
 
   function close() {
+    if (IS_WEB && visible.value) {
+      trackEvent("task_drawer_toggle", {
+        action: "close",
+        url: currentUrl(),
+        active_task_count: activeTasksCount.value,
+        task_count: tasks.value.length,
+      });
+    }
     visible.value = false;
   }
 
   function toggle() {
-    visible.value = !visible.value;
+    if (visible.value) {
+      close();
+    } else {
+      open();
+    }
   }
 
   return {
@@ -46,4 +72,3 @@ export const useTaskDrawerStore = defineStore("taskDrawer", () => {
     toggle,
   };
 });
-

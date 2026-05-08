@@ -1,0 +1,18 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "month_provider",
+    "properties": {
+        "year_month": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "strftime('%Y-%m', crawled_at_seconds(images.crawled_at), 'unixepoch') = ${properties.year_month}"
+    },
+    "list": {
+        "${out.dd}": {
+            "sql": "SELECT DISTINCT substr(strftime('%Y-%m-%d', crawled_at_seconds(sub.crawled_at), 'unixepoch'), 9, 2) AS dd FROM (${composed}) AS sub WHERE strftime('%Y-%m-%d', crawled_at_seconds(sub.crawled_at), 'unixepoch') IS NOT NULL ORDER BY dd DESC",
+            "data_var": "out",
+            "meta": "${out}"
+        },
+    }
+}

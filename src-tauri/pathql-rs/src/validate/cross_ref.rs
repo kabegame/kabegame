@@ -17,6 +17,9 @@ pub fn validate_cross_refs(
     for ((ns, name), def) in registry.iter_dsl() {
         let fqn = super::fqn(ns, name);
         for (field, refer) in collect_refs(def) {
+            if refer.0.contains("${") {
+                continue;
+            }
             if registry.resolve(ns, &refer).is_none() {
                 errors.push(ValidateError::new(
                     &fqn,
@@ -207,5 +210,19 @@ mod tests {
         assert!(errs
             .iter()
             .any(|e| matches!(e.kind, ValidateErrorKind::UnresolvedProviderRef(_, _))));
+    }
+
+    #[test]
+    fn templated_provider_refs_are_runtime_dynamic() {
+        let mut r = ProviderRegistry::new();
+        r.register(def_with_ref(
+            Some("k"),
+            "bar",
+            "plugins.${properties.plugin_id}.entry_provider",
+        ))
+        .unwrap();
+        let mut errs = Vec::new();
+        validate_cross_refs(&r, &cfg_strict(), &mut errs);
+        assert!(errs.is_empty());
     }
 }

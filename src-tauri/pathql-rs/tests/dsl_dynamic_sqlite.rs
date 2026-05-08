@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use pathql_rs::ast::ProviderDef;
 use pathql_rs::provider::{
-    ChildEntry, ClosureExecutor, DslProvider, EngineError, Provider, ProviderContext,
-    ProviderRuntime, SqlDialect, SqlExecutor,
+    ChildEntry, ClosureExecutor, DslProvider, EngineError, ListRef, Provider, ProviderContext,
+    ProviderRuntime, ResolveRef, SqlDialect, SqlExecutor,
 };
 use pathql_rs::template::eval::TemplateValue;
 use pathql_rs::ProviderRegistry;
@@ -174,16 +174,8 @@ fn dynamic_resolve_reverse_lookup_finds_match() {
             &self,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(Vec::new())
-        }
-        fn resolve(
-            &self,
-            _: &str,
-            _: &pathql_rs::compose::ProviderQuery,
-            _: &ProviderContext,
-        ) -> Option<ChildEntry> {
-            None
         }
     }
     reg.register_provider(
@@ -232,18 +224,18 @@ fn dynamic_delegate_list_enumerates_target_children() {
             &self,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(vec![
-                ChildEntry {
+                ListRef::Direct(ChildEntry {
                     name: "alpha".into(),
                     provider: Some(Arc::new(Self) as Arc<dyn Provider>),
                     meta: Some(serde_json::json!({"label":"A"})),
-                },
-                ChildEntry {
+                }),
+                ListRef::Direct(ChildEntry {
                     name: "beta".into(),
                     provider: Some(Arc::new(Self) as Arc<dyn Provider>),
                     meta: Some(serde_json::json!({"label":"B"})),
-                },
+                }),
             ])
         }
         fn resolve(
@@ -251,8 +243,8 @@ fn dynamic_delegate_list_enumerates_target_children() {
             name: &str,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Option<ChildEntry> {
-            if name == "alpha" || name == "beta" {
+        ) -> ResolveRef {
+            ResolveRef::Terminal(if name == "alpha" || name == "beta" {
                 Some(ChildEntry {
                     name: name.to_string(),
                     provider: Some(Arc::new(Self) as Arc<dyn Provider>),
@@ -262,7 +254,7 @@ fn dynamic_delegate_list_enumerates_target_children() {
                 })
             } else {
                 None
-            }
+            })
         }
     }
 
@@ -290,18 +282,18 @@ fn dynamic_delegate_list_enumerates_target_children() {
             &self,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(vec![
-                ChildEntry {
+                ListRef::Direct(ChildEntry {
                     name: "src".into(),
                     provider: Some(self.src.clone()),
                     meta: None,
-                },
-                ChildEntry {
+                }),
+                ListRef::Direct(ChildEntry {
                     name: "facade".into(),
                     provider: Some(self.facade.clone()),
                     meta: None,
-                },
+                }),
             ])
         }
         fn resolve(
@@ -309,8 +301,8 @@ fn dynamic_delegate_list_enumerates_target_children() {
             name: &str,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Option<ChildEntry> {
-            match name {
+        ) -> ResolveRef {
+            ResolveRef::Terminal(match name {
                 "src" => Some(ChildEntry {
                     name: name.to_string(),
                     provider: Some(self.src.clone()),
@@ -322,7 +314,7 @@ fn dynamic_delegate_list_enumerates_target_children() {
                     meta: None,
                 }),
                 _ => None,
-            }
+            })
         }
     }
 
@@ -364,6 +356,122 @@ fn dynamic_delegate_list_enumerates_target_children() {
 }
 
 #[test]
+fn resolve_delegate_child_ref_folds_target_contrib_on_descent() {
+    let parent_def: ProviderDef = serde_json::from_str(
+        r#"{
+            "namespace": "test",
+            "name": "parent",
+            "resolve": {
+                ".*": {
+                    "delegate": {"provider": "target"},
+                    "child_var": "out",
+                    "provider": "${out.provider}"
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+    let target_def: ProviderDef = serde_json::from_str(
+        r#"{
+            "namespace": "test",
+            "name": "target",
+            "query": {
+                "fields": [
+                    {"sql": "target_tags.name", "as": "tag_name", "in_need": true}
+                ]
+            },
+            "resolve": {
+                ".*": {"provider": "leaf"}
+            }
+        }"#,
+    )
+    .unwrap();
+    let leaf_def: ProviderDef = serde_json::from_str(
+        r#"{
+            "namespace": "test",
+            "name": "leaf",
+            "query": {"from": "leaf_table"}
+        }"#,
+    )
+    .unwrap();
+
+    let mut reg = ProviderRegistry::new();
+    reg.register(target_def).unwrap();
+    reg.register(leaf_def).unwrap();
+    let root: Arc<dyn Provider> = Arc::new(DslProvider {
+        def: Arc::new(parent_def),
+        properties: HashMap::new(),
+    });
+    let runtime = runtime_with_registry(reg, root, no_op_executor());
+
+    let resolved = runtime.resolve("/alpha").unwrap();
+    assert_eq!(resolved.composed.from.unwrap().0, "leaf_table");
+    assert!(resolved
+        .composed
+        .fields
+        .iter()
+        .any(|field| field.sql.0 == "target_tags.name"));
+}
+
+#[test]
+fn resolve_delegate_name_override_folds_target_contrib_on_descent() {
+    let parent_def: ProviderDef = serde_json::from_str(
+        r#"{
+            "namespace": "test",
+            "name": "parent",
+            "resolve": {
+                ".*": {
+                    "delegate": {"provider": "target"},
+                    "child_var": "out",
+                    "provider": "override_leaf"
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+    let target_def: ProviderDef = serde_json::from_str(
+        r#"{
+            "namespace": "test",
+            "name": "target",
+            "query": {
+                "fields": [
+                    {"sql": "target_tags.name", "as": "tag_name", "in_need": true}
+                ]
+            },
+            "resolve": {
+                ".*": {}
+            }
+        }"#,
+    )
+    .unwrap();
+    let override_def: ProviderDef = serde_json::from_str(
+        r#"{
+            "namespace": "test",
+            "name": "override_leaf",
+            "query": {"from": "override_table"}
+        }"#,
+    )
+    .unwrap();
+
+    let mut reg = ProviderRegistry::new();
+    reg.register(target_def).unwrap();
+    reg.register(override_def).unwrap();
+    let root: Arc<dyn Provider> = Arc::new(DslProvider {
+        def: Arc::new(parent_def),
+        properties: HashMap::new(),
+    });
+    let runtime = runtime_with_registry(reg, root, no_op_executor());
+
+    let resolved = runtime.resolve("/alpha").unwrap();
+    assert_eq!(resolved.composed.from.unwrap().0, "override_table");
+    assert!(resolved
+        .composed
+        .fields
+        .iter()
+        .any(|field| field.sql.0 == "target_tags.name"));
+}
+
+#[test]
 fn resolve_delegate_legacy_defaults_to_null_provider_and_meta() {
     use pathql_rs::ast::{Namespace, SimpleName};
 
@@ -373,16 +481,8 @@ fn resolve_delegate_legacy_defaults_to_null_provider_and_meta() {
             &self,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(Vec::new())
-        }
-        fn resolve(
-            &self,
-            _: &str,
-            _: &pathql_rs::compose::ProviderQuery,
-            _: &ProviderContext,
-        ) -> Option<ChildEntry> {
-            None
         }
     }
 
@@ -394,7 +494,7 @@ fn resolve_delegate_legacy_defaults_to_null_provider_and_meta() {
             &self,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(Vec::new())
         }
         fn resolve(
@@ -402,12 +502,12 @@ fn resolve_delegate_legacy_defaults_to_null_provider_and_meta() {
             name: &str,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Option<ChildEntry> {
-            (name == "alpha").then(|| ChildEntry {
+        ) -> ResolveRef {
+            ResolveRef::Terminal((name == "alpha").then(|| ChildEntry {
                 name: name.to_string(),
                 provider: Some(self.provider.clone()),
                 meta: Some(serde_json::json!({"label":"A"})),
-            })
+            }))
         }
     }
 
@@ -445,9 +545,10 @@ fn resolve_delegate_legacy_defaults_to_null_provider_and_meta() {
         properties: HashMap::new(),
     };
 
-    let child = facade
-        .resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx)
-        .unwrap();
+    let child = match facade.resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx) {
+        ResolveRef::Terminal(Some(child)) => child,
+        other => panic!("expected terminal child, got {other:?}"),
+    };
     assert_eq!(child.name, "alpha");
     assert!(child.provider.is_none());
     assert!(child.meta.is_none());
@@ -463,16 +564,8 @@ fn resolve_delegate_transforms_target_child_provider_and_meta() {
             &self,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(Vec::new())
-        }
-        fn resolve(
-            &self,
-            _: &str,
-            _: &pathql_rs::compose::ProviderQuery,
-            _: &ProviderContext,
-        ) -> Option<ChildEntry> {
-            None
         }
         fn get_note(
             &self,
@@ -491,7 +584,7 @@ fn resolve_delegate_transforms_target_child_provider_and_meta() {
             &self,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(Vec::new())
         }
         fn resolve(
@@ -499,12 +592,12 @@ fn resolve_delegate_transforms_target_child_provider_and_meta() {
             name: &str,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Option<ChildEntry> {
-            (name == "alpha").then(|| ChildEntry {
+        ) -> ResolveRef {
+            ResolveRef::Terminal((name == "alpha").then(|| ChildEntry {
                 name: name.to_string(),
                 provider: Some(self.provider.clone()),
                 meta: Some(serde_json::json!({"label":"A"})),
-            })
+            }))
         }
     }
 
@@ -545,16 +638,18 @@ fn resolve_delegate_transforms_target_child_provider_and_meta() {
         properties: HashMap::new(),
     };
 
-    let child = facade
-        .resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx)
-        .unwrap();
-    assert_eq!(child.name, "alpha");
-    assert_eq!(child.meta.unwrap(), serde_json::json!({"label":"A"}));
+    let (provider, meta) =
+        match facade.resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx) {
+            ResolveRef::Delegate {
+                final_provider,
+                final_meta,
+                ..
+            } => (final_provider.unwrap(), final_meta),
+            other => panic!("expected delegate, got {other:?}"),
+        };
+    assert_eq!(meta.unwrap(), serde_json::json!({"label":"A"}));
     assert_eq!(
-        child
-            .provider
-            .unwrap()
-            .get_note(&pathql_rs::compose::ProviderQuery::new(), &ctx),
+        provider.get_note(&pathql_rs::compose::ProviderQuery::new(), &ctx),
         Some("source".into())
     );
 }
@@ -569,16 +664,8 @@ fn resolve_delegate_can_replace_target_child_provider() {
             &self,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(Vec::new())
-        }
-        fn resolve(
-            &self,
-            _: &str,
-            _: &pathql_rs::compose::ProviderQuery,
-            _: &ProviderContext,
-        ) -> Option<ChildEntry> {
-            None
         }
         fn get_note(
             &self,
@@ -597,7 +684,7 @@ fn resolve_delegate_can_replace_target_child_provider() {
             &self,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(Vec::new())
         }
         fn resolve(
@@ -605,12 +692,12 @@ fn resolve_delegate_can_replace_target_child_provider() {
             name: &str,
             _: &pathql_rs::compose::ProviderQuery,
             _: &ProviderContext,
-        ) -> Option<ChildEntry> {
-            (name == "alpha").then(|| ChildEntry {
+        ) -> ResolveRef {
+            ResolveRef::Terminal((name == "alpha").then(|| ChildEntry {
                 name: name.to_string(),
                 provider: Some(self.provider.clone()),
                 meta: Some(serde_json::json!({"id":"alpha"})),
-            })
+            }))
         }
     }
 
@@ -658,15 +745,18 @@ fn resolve_delegate_can_replace_target_child_provider() {
         properties: HashMap::new(),
     };
 
-    let child = facade
-        .resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx)
-        .unwrap();
-    assert_eq!(child.meta.unwrap(), serde_json::json!({"id":"alpha"}));
+    let (provider, meta) =
+        match facade.resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx) {
+            ResolveRef::Delegate {
+                final_provider,
+                final_meta,
+                ..
+            } => (final_provider.unwrap(), final_meta),
+            other => panic!("expected delegate, got {other:?}"),
+        };
+    assert_eq!(meta.unwrap(), serde_json::json!({"id":"alpha"}));
     assert_eq!(
-        child
-            .provider
-            .unwrap()
-            .get_note(&pathql_rs::compose::ProviderQuery::new(), &ctx),
+        provider.get_note(&pathql_rs::compose::ProviderQuery::new(), &ctx),
         Some("replacement".into())
     );
 }

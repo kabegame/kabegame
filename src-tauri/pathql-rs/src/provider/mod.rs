@@ -13,7 +13,7 @@ pub use runtime::{ProviderRuntime, ResolvedNode};
 use crate::compose::{BuildError, FoldError, ProviderQuery, RenderError};
 use crate::template::eval::TemplateValue;
 use crate::{LoadError, ProviderRegistry, RegistryError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use thiserror::Error;
 
 /// SQL 方言标注。executor 通过 `dialect()` 暴露; build_sql 渲染期据此选 placeholder。
@@ -88,6 +88,9 @@ pub struct ProviderContext {
     pub registry: Arc<ProviderRegistry>,
     /// 由 runtime 内部 `Weak<Self>` 在入口 upgrade 而来。
     pub runtime: Arc<ProviderRuntime>,
+    /// 当前正在被 resolve 的 provider 所在路径。
+    /// runtime 在每段 resolve 前更新；dynamic delegate reverse lookup 用它回到运行时 list。
+    current_path: RwLock<String>,
     provider_keys: Arc<Mutex<Vec<ProviderKey>>>,
 }
 
@@ -96,8 +99,17 @@ impl ProviderContext {
         Self {
             registry,
             runtime,
+            current_path: RwLock::new(String::new()),
             provider_keys: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    pub fn current_path(&self) -> String {
+        self.current_path.read().unwrap().clone()
+    }
+
+    pub(crate) fn set_current_path(&self, path: String) {
+        *self.current_path.write().unwrap() = path;
     }
 
     pub(crate) fn provider_key_mark(&self) -> usize {
@@ -118,6 +130,76 @@ pub struct ChildEntry {
     pub name: String,
     pub provider: Option<Arc<dyn Provider>>,
     pub meta: Option<serde_json::Value>,
+}
+
+/// Result of Provider::resolve.
+/// DSL providers that delegate return Delegate; all others return Terminal.
+pub enum ResolveRef {
+    /// Direct result. None means the path segment was not found.
+    Terminal(Option<ChildEntry>),
+    /// Delegation reference. Runtime folds target.apply_query before applying final_provider.
+    Delegate {
+        target: Arc<dyn Provider>,
+        final_provider: Option<Arc<dyn Provider>>,
+        final_meta: Option<serde_json::Value>,
+    },
+}
+
+/// Result item of Provider::list.
+///
+/// Direct children can be returned as-is. Delegate expansions keep the target
+/// provider and the DSL-created child materializer separate so the runtime can
+/// fold the target query contribution and cache expanded child paths.
+pub enum ListRef {
+    Direct(ChildEntry),
+    DelegateExpand {
+        target: Arc<dyn Provider>,
+        expand: Arc<
+            dyn Fn(&ChildEntry, &ProviderContext) -> Result<Option<ChildEntry>, EngineError>
+                + Send
+                + Sync,
+        >,
+    },
+}
+
+impl From<ChildEntry> for ListRef {
+    fn from(value: ChildEntry) -> Self {
+        Self::Direct(value)
+    }
+}
+
+impl std::fmt::Debug for ListRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Direct(child) => f.debug_tuple("Direct").field(child).finish(),
+            Self::DelegateExpand { .. } => f
+                .debug_struct("DelegateExpand")
+                .field("target", &"<Provider>")
+                .field("expand", &"<Fn>")
+                .finish(),
+        }
+    }
+}
+
+impl std::fmt::Debug for ResolveRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Terminal(child) => f.debug_tuple("Terminal").field(child).finish(),
+            Self::Delegate {
+                final_provider,
+                final_meta,
+                ..
+            } => f
+                .debug_struct("Delegate")
+                .field("target", &"<Provider>")
+                .field(
+                    "final_provider",
+                    &final_provider.as_ref().map(|_| "<Provider>"),
+                )
+                .field("final_meta", final_meta)
+                .finish(),
+        }
+    }
 }
 
 impl std::fmt::Debug for ChildEntry {
@@ -155,17 +237,21 @@ pub trait Provider: Send + Sync {
     /// 枚举所有可见子节点。
     fn list(
         &self,
-        composed: &ProviderQuery,
-        ctx: &ProviderContext,
-    ) -> Result<Vec<ChildEntry>, EngineError>;
+        _composed: &ProviderQuery,
+        _ctx: &ProviderContext,
+    ) -> Result<Vec<ListRef>, EngineError> {
+        Ok(Vec::new())
+    }
 
     /// 给定段名定位单个子 provider。语义按 §5.2 (regex resolve → 静态 list 字面 → 动态反查)。
     fn resolve(
         &self,
-        name: &str,
-        composed: &ProviderQuery,
-        ctx: &ProviderContext,
-    ) -> Option<ChildEntry>;
+        _name: &str,
+        _composed: &ProviderQuery,
+        _ctx: &ProviderContext,
+    ) -> ResolveRef {
+        ResolveRef::Terminal(None)
+    }
 
     /// 自描述文本 (§12.2; note: 字段, 支持 ${properties.X} 等模板)。
     fn get_note(&self, _composed: &ProviderQuery, _ctx: &ProviderContext) -> Option<String> {
@@ -183,6 +269,8 @@ pub trait Provider: Send + Sync {
 pub enum EngineError {
     #[error("path not found: `{0}`")]
     PathNotFound(String),
+    #[error("path `{0}` has no provider; cannot perform routing operations")]
+    NoProvider(String),
     #[error("provider `{0}.{1}` not registered")]
     ProviderNotRegistered(String, String),
     #[error("fold error: {0}")]
@@ -220,20 +308,12 @@ mod tests {
             &self,
             _composed: &ProviderQuery,
             _ctx: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
-            Ok(vec![ChildEntry {
+        ) -> Result<Vec<ListRef>, EngineError> {
+            Ok(vec![ListRef::Direct(ChildEntry {
                 name: "child".into(),
                 provider: None,
                 meta: None,
-            }])
-        }
-        fn resolve(
-            &self,
-            _name: &str,
-            _composed: &ProviderQuery,
-            _ctx: &ProviderContext,
-        ) -> Option<ChildEntry> {
-            None
+            })])
         }
     }
 

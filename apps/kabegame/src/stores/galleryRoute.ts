@@ -37,7 +37,7 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
     buildContext: (state) => buildGalleryContextPrefix(state.search),
     defaultState: () => {
       const settings = useSettingsStore();
-      const stored = localStorage.getItem(GALLERY_STORAGE_KEY_PATH);
+      const stored = IS_WEB ? null : localStorage.getItem(GALLERY_STORAGE_KEY_PATH);
       const parsed = stored ? parseGalleryPath(stored) : null;
       const defaultSort: GalleryTimeSort = IS_WEB ? "desc" : "asc";
       return {
@@ -51,10 +51,12 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
     routeName: "Gallery",
     onStateChange: (state) => {
       // 仅持久化 filter/sort（page / search 不持久化，pageSize 交 settings 统一管理）
-      localStorage.setItem(
-        GALLERY_STORAGE_KEY_PATH,
-        buildGalleryPath(state.filter, state.sort, 1),
-      );
+      if (!IS_WEB) {
+        localStorage.setItem(
+          GALLERY_STORAGE_KEY_PATH,
+          buildGalleryPath(state.filter, state.sort, 1),
+        );
+      }
       const settings = useSettingsStore();
       if (state.pageSize !== settings.values.galleryPageSize) {
         void settings.save("galleryPageSize", state.pageSize);

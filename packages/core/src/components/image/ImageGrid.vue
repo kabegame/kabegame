@@ -197,6 +197,7 @@ const emit = defineEmits<{
   // 兼容旧 API（不再由 core 触发，但保留事件名避免上层 TS/模板报错）
   addedToAlbum: [];
   "open-task": [taskId: string];
+  "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
 }>();
 
 const settingsStore = useSettingsStore();
@@ -802,15 +803,18 @@ const handleItemDblClick = (image: ImageInfo, index: number) => {
     return;
   }
   if (isCompact.value || IS_WEB) {
+    emit("image-dblclick", { action: "preview", image });
     previewRef.value?.open(index);
     return;
   }
   const action = settingsStore.values.imageClickAction || "none";
   if (action === "preview") {
+    emit("image-dblclick", { action: "preview", image });
     previewRef.value?.open(index);
     return;
   }
   if (action === "open") {
+    emit("image-dblclick", { action: "open", image });
     void dispatchContextCommand(buildContextPayload("open", image));
   }
 };

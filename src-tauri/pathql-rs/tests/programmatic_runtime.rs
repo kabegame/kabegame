@@ -8,8 +8,8 @@ use std::sync::Arc;
 use pathql_rs::ast::{Namespace, ProviderName, SimpleName, SqlExpr};
 use pathql_rs::compose::ProviderQuery;
 use pathql_rs::provider::{
-    ChildEntry, ClosureExecutor, EngineError, Provider, ProviderContext, ProviderRuntime,
-    SqlDialect, SqlExecutor,
+    ChildEntry, ClosureExecutor, EngineError, ListRef, Provider, ProviderContext, ProviderRuntime,
+    ResolveRef, SqlDialect, SqlExecutor,
 };
 use pathql_rs::template::eval::TemplateValue;
 use pathql_rs::ProviderRegistry;
@@ -57,30 +57,27 @@ impl Provider for StaticProvider {
         }
         q
     }
-    fn list(
-        &self,
-        _: &ProviderQuery,
-        _ctx: &ProviderContext,
-    ) -> Result<Vec<ChildEntry>, EngineError> {
+    fn list(&self, _: &ProviderQuery, _ctx: &ProviderContext) -> Result<Vec<ListRef>, EngineError> {
         Ok(self
             .children
             .iter()
-            .map(|(name, p)| ChildEntry {
-                name: name.clone(),
-                provider: Some(p.clone()),
-                meta: None,
+            .map(|(name, p)| {
+                ListRef::Direct(ChildEntry {
+                    name: name.clone(),
+                    provider: Some(p.clone()),
+                    meta: None,
+                })
             })
             .collect())
     }
-    fn resolve(&self, name: &str, _: &ProviderQuery, _ctx: &ProviderContext) -> Option<ChildEntry> {
-        self.children
-            .iter()
-            .find(|(n, _)| n == name)
-            .map(|(n, p)| ChildEntry {
+    fn resolve(&self, name: &str, _: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
+        ResolveRef::Terminal(self.children.iter().find(|(n, _)| n == name).map(|(n, p)| {
+            ChildEntry {
                 name: n.clone(),
                 provider: Some(p.clone()),
                 meta: None,
-            })
+            }
+        }))
     }
     fn get_note(&self, _: &ProviderQuery, _: &ProviderContext) -> Option<String> {
         self.note.clone()
@@ -196,11 +193,8 @@ fn factory_uses_properties() {
             &self,
             _: &ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(Vec::new())
-        }
-        fn resolve(&self, _: &str, _: &ProviderQuery, _: &ProviderContext) -> Option<ChildEntry> {
-            None
         }
     }
 
@@ -211,29 +205,26 @@ fn factory_uses_properties() {
             &self,
             _: &ProviderQuery,
             _: &ProviderContext,
-        ) -> Result<Vec<ChildEntry>, EngineError> {
+        ) -> Result<Vec<ListRef>, EngineError> {
             Ok(Vec::new())
         }
-        fn resolve(
-            &self,
-            name: &str,
-            _: &ProviderQuery,
-            ctx: &ProviderContext,
-        ) -> Option<ChildEntry> {
+        fn resolve(&self, name: &str, _: &ProviderQuery, ctx: &ProviderContext) -> ResolveRef {
             let mut props = HashMap::new();
             props.insert("album_id".into(), TemplateValue::Text(name.to_string()));
-            ctx.registry
-                .instantiate(
-                    &Namespace("test".into()),
-                    &ProviderName("album_provider".into()),
-                    &props,
-                    ctx,
-                )
-                .map(|provider| ChildEntry {
-                    name: name.to_string(),
-                    provider: Some(provider),
-                    meta: None,
-                })
+            ResolveRef::Terminal(
+                ctx.registry
+                    .instantiate(
+                        &Namespace("test".into()),
+                        &ProviderName("album_provider".into()),
+                        &props,
+                        ctx,
+                    )
+                    .map(|provider| ChildEntry {
+                        name: name.to_string(),
+                        provider: Some(provider),
+                        meta: None,
+                    }),
+            )
         }
     }
 
@@ -298,16 +289,8 @@ fn programmatic_and_dsl_coexist_in_namespace_chain() {
                         &self,
                         _: &ProviderQuery,
                         _: &ProviderContext,
-                    ) -> Result<Vec<ChildEntry>, EngineError> {
+                    ) -> Result<Vec<ListRef>, EngineError> {
                         Ok(Vec::new())
-                    }
-                    fn resolve(
-                        &self,
-                        _: &str,
-                        _: &ProviderQuery,
-                        _: &ProviderContext,
-                    ) -> Option<ChildEntry> {
-                        None
                     }
                 }
                 Ok(Arc::new(Stub) as Arc<dyn Provider>)

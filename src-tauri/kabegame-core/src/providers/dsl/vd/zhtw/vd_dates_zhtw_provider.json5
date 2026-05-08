@@ -1,0 +1,19 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_dates_zhtw_provider",
+    "list": {
+        "${root.name}年": {
+            "delegate": { "provider": "dates_provider" },
+            "child_var": "root",
+            "provider": "vd_year_zhtw_provider",
+            "properties": {
+                "year": "${root.name}"
+            },
+            "meta": {
+                "year": "${root.name}",
+                "label": "${root.name}年"
+            }
+        }
+    }
+}

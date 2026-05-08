@@ -96,6 +96,35 @@
             </template>
           </el-dropdown>
         </el-dropdown-item>
+        <el-dropdown-item class="plugin-submenu-wrap" @click.stop>
+          <el-dropdown
+            trigger="hover"
+            placement="right-start"
+            @command="handleSizeCommand"
+          >
+            <span
+              class="plugin-submenu-trigger"
+              :class="{ 'is-active': isSizeFilterActive }"
+            >
+              {{ t("gallery.filterBySize") }}
+              <el-icon class="plugin-submenu-chevron">
+                <ArrowRight />
+              </el-icon>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu class="plugin-submenu-menu">
+                <el-dropdown-item
+                  v-for="b in SIZE_BUCKETS"
+                  :key="b.range"
+                  :command="b.range"
+                  :class="{ 'is-active': filterSizeRange(galleryRouteStore.filter) === b.range }"
+                >
+                  {{ t(`gallery.${b.labelKey}`) }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </el-dropdown-item>
         <el-dropdown-item divided class="plugin-submenu-wrap" @click.stop>
           <el-dropdown
             trigger="hover"
@@ -151,6 +180,7 @@ import {
   filterDateSegment,
   filterMediaKind,
   filterPluginId,
+  filterSizeRange,
   isSimpleFilter,
 } from "@/utils/galleryPath";
 import {
@@ -207,6 +237,21 @@ const isTimeFilterActive = computed(() => dateTail.value != null);
 const isMediaTypeFilterActive = computed(
   () => filterMediaKind(galleryRouteStore.filter) != null
 );
+
+const isSizeFilterActive = computed(
+  () => filterSizeRange(galleryRouteStore.filter) != null
+);
+
+const SIZE_BUCKETS: Array<{ range: string; labelKey: string }> = [
+  { range: "unknown",   labelKey: "filterSize_unknown" },
+  { range: "1B-512KB",  labelKey: "filterSize_lt512k" },
+  { range: "512KB-1MB", labelKey: "filterSize_512k_1m" },
+  { range: "1MB-2MB",   labelKey: "filterSize_1m_2m" },
+  { range: "2MB-5MB",   labelKey: "filterSize_2m_5m" },
+  { range: "5MB-10MB",  labelKey: "filterSize_5m_10m" },
+  { range: "10MB-50MB", labelKey: "filterSize_10m_50m" },
+  { range: "50MB-",     labelKey: "filterSize_gte50m" },
+];
 
 const pluginGroups = ref<PluginGroupRow[]>([]);
 const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
@@ -515,6 +560,12 @@ const filterLabel = computed(() => {
   if (mk === "video") {
     return `${t("gallery.filterVideoOnlyLabel")} (${mediaTypeCounts.value.videoCount})`;
   }
+  const sr = filterSizeRange(galleryRouteStore.filter);
+  if (sr) {
+    const bucket = SIZE_BUCKETS.find((b) => b.range === sr);
+    const label = bucket ? t(`gallery.${bucket.labelKey}`) : sr;
+    return `${t("gallery.filterBySize")}: ${label}`;
+  }
   return t("gallery.filterAll");
 });
 
@@ -559,6 +610,14 @@ function handleMediaTypeCommand(kind: string) {
   if (kind !== "image" && kind !== "video") return;
   void galleryRouteStore.navigate(
     { filter: { type: "media-type", kind }, page: 1 },
+    { push: true }
+  );
+}
+
+function handleSizeCommand(range: string) {
+  if (!range) return;
+  void galleryRouteStore.navigate(
+    { filter: { type: "size", range }, page: 1 },
     { push: true }
   );
 }

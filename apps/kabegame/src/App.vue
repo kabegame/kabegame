@@ -7,13 +7,31 @@
       class="app-background-layer"
       aria-hidden="true"
     >
-      <img
+      <video
+        v-if="bgMediaType === 'video'"
+        ref="bgVideoRef"
         :key="bgImageUrl"
         :src="bgImageUrl"
-        class="app-background-img"
+        class="app-background-media"
         :style="bgImageStyle"
         :data-bg-token="bgImageToken"
-        @error="handleBgImageError"
+        autoplay
+        loop
+        muted
+        playsinline
+        preload="auto"
+        @loadedmetadata="handleBgVideoReady"
+        @canplay="handleBgVideoReady"
+        @error="handleBgMediaError"
+      />
+      <img
+        v-else
+        :key="bgImageUrl"
+        :src="bgImageUrl"
+        class="app-background-media"
+        :style="bgImageStyle"
+        :data-bg-token="bgImageToken"
+        @error="handleBgMediaError"
       />
     </div>
     <!-- 全局文件拖拽提示层（仅非安卓平台） -->
@@ -157,6 +175,7 @@ import { invoke } from "@/api/rpc";
 import { IS_WINDOWS, IS_MACOS, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { fileToUrl, initHttpServerBaseUrl } from "@kabegame/core/httpServer";
 import type { ImageInfo } from "@kabegame/core/types/image";
+import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
 import { useFailedImagesStore } from "./stores/failedImages";
 import { useCrawlerStore } from "./stores/crawler";
@@ -261,10 +280,23 @@ const { isCollapsed, toggleCollapse } = useSidebar();
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
 
+type BgMediaType = "image" | "video";
+
 const bgImageUrl = ref("");
+const bgMediaType = ref<BgMediaType>("image");
 const bgVisible = ref(false);
 const bgImageToken = ref(0);
+const bgVideoRef = ref<HTMLVideoElement | null>(null);
 let bgResolveToken = 0;
+
+const getPathExtension = (path: string) =>
+  (path.split(/[?#]/)[0].split(".").pop() ?? "").toLowerCase();
+
+const isVideoBackground = (image: ImageInfo | undefined) => {
+  if (isVideoMediaType(image?.type)) return true;
+  const ext = getPathExtension(image?.localPath ?? "");
+  return ext === "mp4" || ext === "mov";
+};
 
 const shouldShowAppBackground = () =>
   !!settingsStore.values.appBackgroundEnabled &&
@@ -275,9 +307,25 @@ const syncBgVisible = () => {
   bgVisible.value = shouldShowAppBackground();
 };
 
-const handleBgImageError = (event: Event) => {
-  const img = event.currentTarget as HTMLImageElement | null;
-  const failedToken = Number(img?.dataset.bgToken ?? NaN);
+const getBgVideoPlaybackRate = () => {
+  const raw = settingsStore.values.wallpaperVideoPlaybackRate ?? 1;
+  return Math.min(3, Math.max(0.25, Number.isFinite(raw) ? raw : 1));
+};
+
+const handleBgVideoReady = (event?: Event) => {
+  const video = (event?.currentTarget as HTMLVideoElement | null) ?? bgVideoRef.value;
+  if (!video) return;
+  const readyToken = Number(video.dataset.bgToken ?? NaN);
+  if (!Number.isFinite(readyToken) || readyToken !== bgImageToken.value) return;
+  video.muted = true;
+  video.volume = 0;
+  video.playbackRate = getBgVideoPlaybackRate();
+  void video.play().catch(() => {});
+};
+
+const handleBgMediaError = (event: Event) => {
+  const media = event.currentTarget as HTMLImageElement | HTMLVideoElement | null;
+  const failedToken = Number(media?.dataset.bgToken ?? NaN);
   if (!Number.isFinite(failedToken) || failedToken !== bgImageToken.value) return;
   bgVisible.value = false;
 };
@@ -305,13 +353,19 @@ watch(
       }
 
       const source = image?.localPath ? fileToUrl(image.localPath) : "";
+      const mediaType = isVideoBackground(image) ? "video" : "image";
       if (token !== bgResolveToken) return;
       bgImageUrl.value = source;
+      bgMediaType.value = mediaType;
       bgImageToken.value = token;
       syncBgVisible();
+      if (mediaType === "video") {
+        requestAnimationFrame(() => handleBgVideoReady());
+      }
     } catch (error) {
       if (token !== bgResolveToken) return;
       bgImageUrl.value = "";
+      bgMediaType.value = "image";
       bgVisible.value = false;
     }
   },
@@ -332,6 +386,11 @@ const bgImageStyle = computed(() => ({
   opacity: bgOpacity.value,
   filter: bgBlurPx.value > 0 ? `blur(${bgBlurPx.value}px)` : "none",
 }));
+
+watch(
+  () => settingsStore.values.wallpaperVideoPlaybackRate,
+  () => handleBgVideoReady(),
+);
 
 // 设置变更事件监听器
 let unlistenSettingChange: UnlistenFn | null = null;
@@ -617,7 +676,7 @@ body,
   overflow: hidden;
 }
 
-.app-background-img {
+.app-background-media {
   width: 100%;
   height: 100%;
   object-fit: cover;

@@ -1,0 +1,20 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "surf_provider",
+    // 拼接surf 
+    "properties": {
+        "host": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        // host 与 record_id 一一对应 (Storage::add_surf_record 对 host 幂等)。
+        "join": [{
+            "kind": "INNER",
+            "table": "surf_records",
+            "as": "sr",
+            "on": "images.surf_record_id = sr.id",
+            "in_need": true
+        }],
+        "where": "sr.host = ${properties.host}"
+    },
+}

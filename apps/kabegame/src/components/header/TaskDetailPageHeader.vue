@@ -1,13 +1,16 @@
 <template>
   <PageHeader
     :title="taskName || t('tasks.task')"
-    :subtitle="taskSubtitle"
     :show="showIds"
     :fold="foldIds"
     @action="handleAction"
     show-back
     @back="handleBack"
-  />
+  >
+    <template v-if="$slots.subtitle" #subtitle>
+      <slot name="subtitle" />
+    </template>
+  </PageHeader>
 </template>
 
 <script setup lang="ts">
@@ -21,7 +24,6 @@ import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 
 interface Props {
   taskName?: string;
-  taskSubtitle?: string;
   /** 是否显示停止任务（仅当任务 running 时为 true，用于控制 Android fold 中是否显示停止） */
   showStopTask?: boolean;
 }
@@ -30,7 +32,6 @@ const { t } = useI18n();
 
 const props = withDefaults(defineProps<Props>(), {
   taskName: undefined,
-  taskSubtitle: undefined,
   showStopTask: true,
 });
 

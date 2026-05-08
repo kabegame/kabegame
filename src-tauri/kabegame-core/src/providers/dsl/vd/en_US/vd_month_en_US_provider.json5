@@ -1,0 +1,48 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_month_en_US_provider",
+    "properties": {
+        "year_month": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "delegate": {
+            "provider": "month_provider",
+            "properties": {
+                "year_month": "${properties.year_month}"
+            }
+        }
+    },
+    "list": {
+        "${global:vd_en_US_day|root.name}": {
+            "delegate": {
+                "provider": "month_provider",
+                "properties": {
+                    "year_month": "${properties.year_month}"
+                }
+            },
+            "child_var": "root",
+            "provider": "vd_day_en_US_provider",
+            "properties": {
+                "ymd": "${properties.year_month}-${root.name}"
+            },
+            "meta": {
+                "day": "${root.name}",
+                "label": "${global:vd_en_US_day|root.name}"
+            }
+        },
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
+            },
+            "meta": "${page.meta}"
+        }
+    }
+}

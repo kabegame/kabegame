@@ -1,0 +1,19 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_size_router",
+    // VD 按大小维度路由器。委托 size_bucket_router 进行 SQL 枚举，
+    // 读取 meta.min_bytes / meta.max_bytes 并路由到 gallery_size_range_router。
+    // 独立于 gallery_size_router，后续可在此层做路径段 i18n 改造。
+    "list": {
+        "${root.name}": {
+            "child_var": "root",
+            "delegate": { "provider": "size_bucket_router" },
+            "provider": "vd_size_range_router",
+            "properties": {
+                "min_size": "${root.meta.min_bytes}",
+                "max_size": "${root.meta.max_bytes}"
+            }
+        }
+    }
+}

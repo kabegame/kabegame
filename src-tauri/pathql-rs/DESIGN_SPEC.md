@@ -1,6 +1,6 @@
 # PathQL Design Specification
 
-Status: draft
+Status: stable contract
 
 This document defines the design contract of PathQL as a small provider query
 language. It is more stable than implementation notes and more conceptual than
@@ -219,38 +219,35 @@ precise as the implementation evolves.
 
 ### 8.1 Summary
 
-| Atom | Current expected behavior | Notes |
+| Atom | Behavior | Notes |
 |---|---|---|
-| `from` | One effective source | Override/inheritance policy must remain explicit |
-| `fields` | Append in chain order | Empty list uses default projection |
-| `joins` | Append in chain order | Join SQL is trusted DSL code |
-| `where` | Combine with `AND` | Prefer table-qualified predicates |
-| `order_by` | Design-sensitive | Must be specified before extending behavior |
-| `limit` | Design-sensitive | Must define override vs single-owner semantics |
-| `offset` | Design-sensitive | Should be considered with `limit` |
+| `from` | Cascading replace | Later declarations replace the effective source |
+| `fields` | Additive with alias sharing | Empty list uses default projection |
+| `joins` | Additive with alias sharing | Join SQL is trusted DSL code |
+| `where` | Additive `AND` | Prefer table-qualified predicates |
+| `order_by` | Ordered upsert plus global direction directive | See section 8.6 |
+| `limit` | Last-wins | `0` keeps normal SQL empty-result semantics |
+| `offset` | Additive `+` | Multiple offsets compose in chain order |
 
 ### 8.2 `from`
 
-The folded query has one effective `from` clause.
-
-Open questions to keep explicit:
-
-- Whether later providers may override an earlier `from`.
-- Whether providers without `from` inherit the current folded `from`.
-- Whether dynamic providers may contribute `from` only through delegated chains.
+The folded query has one effective `from` clause. A provider that declares
+`from` replaces the effective source for itself and downstream providers. A
+provider without `from` inherits the already folded source.
 
 ### 8.3 `fields`
 
-Fields accumulate in chain order.
-
-Field aliases are part of the exposed result contract. If two fields expose the
-same alias, the intended behavior must be explicit in tests and docs.
+Fields accumulate in chain order. A literal alias must be unique unless the
+incoming field marks `in_need: true`; in that case an existing alias satisfies
+the need and the duplicate contribution is skipped.
 
 Empty fields trigger the default projection described in section 7.
 
 ### 8.4 `joins`
 
-Joins accumulate in chain order.
+Joins accumulate in chain order. A literal join alias must be unique unless the
+incoming join marks `in_need: true`; in that case an existing alias satisfies
+the need and the duplicate contribution is skipped.
 
 Join conditions are trusted SQL fragments authored by provider definitions.
 Template values inside join conditions must follow normal template namespace and
@@ -266,17 +263,108 @@ may include joins.
 
 ### 8.6 `order_by`
 
-Ordering semantics must define whether fragments accumulate, override, or use a
-priority rule. Until the rule is documented here, new ordering behavior should
-be treated as a design change.
+Array-form ordering is an ordered upsert list. Earlier positions have higher
+priority; later declarations of the same field update its direction while
+preserving the original position. `revert` flips an existing direction and
+defaults to `asc` when the field is new.
+
+Object-form ordering with `{ "all": "revert" | "asc" | "desc" }` is a global
+direction directive. It applies to the accumulated order chain and is itself
+last-wins across the provider chain.
 
 ### 8.7 `limit` and `offset`
 
-Pagination semantics must define whether later providers override earlier
-providers or whether only one pagination contributor is valid.
+`limit` is last-wins. A later provider may intentionally replace an earlier
+limit, including replacing it with `0`.
 
-Provider tests should cover both default pagination and explicit caller-provided
-pagination.
+`offset` is additive. Each offset atom is parenthesized and combined with `+` in
+chain order, so nested pagination composes predictably.
+
+### 8.8 Delegate scope chain
+
+Delegation is a first-class provider reference, not a DSL-local shortcut.
+Whenever a path segment or listed child is produced through `delegate`, the
+runtime owns following the reference, folding the delegate target's query
+contribution, and caching the final visible path state.
+
+This rule is the same for `resolve` and `list`:
+
+List is usually used to discover all available services, and resolve is used for known services and dynamic services.
+
+- The DSL layer may return a typed reference instead of a direct child.
+- The runtime folds `target.apply_query(composed)` before applying the final
+  child provider.
+- The runtime stores the normal resolved path state: the final provider, if any,
+  the composed query, and the provider keys used for invalidation.
+- There is no wrapper-provider cache entry and no separate terminal-provider
+  concept.
+
+#### 8.8.1 `resolve` delegation
+
+`Provider::resolve` returns `ResolveRef`.
+
+`ResolveRef::Terminal(None)` means the segment was not found. This is the only
+resolve result that directly maps to `PathNotFound` for the current segment.
+
+`ResolveRef::Terminal(Some(child))` means the segment was found directly. The
+runtime continues with `child.provider`. A child with `provider: None` is a
+valid no-provider node.
+
+`ResolveRef::Delegate { target, final_provider, final_meta }` means the DSL
+layer resolved the segment through a delegate. The runtime handles it in two
+steps:
+
+1. Fold `target.apply_query(composed)` into the accumulated query state.
+2. Continue descent with `final_provider`, applying its query contribution as a
+   normal path step if it exists.
+
+There is no runtime-side recursive provider lookup through the delegation chain.
+The DSL layer sets `final_provider` explicitly. For child-provider references
+such as `${child.provider}`, the DSL shallowly extracts the provider from the
+target resolve result and stores it as `final_provider`.
+
+`final_provider` has no pass-through semantics. If the DSL entry specifies no
+provider, the resolved segment is a valid no-provider node: it can be cached,
+but routing operations such as `list` and `note` return `NoProvider`.
+
+#### 8.8.2 `list` delegation
+
+`Provider::list` returns `Vec<ListRef>`.
+
+`ListRef::Direct(child)` is an already materialized visible child. The runtime
+returns it as part of the list result.
+
+`ListRef::DelegateExpand { target, expand }` is a delegated child source. The
+runtime handles it in four steps:
+
+1. Fold `target.apply_query(composed)` into the parent composed query.
+2. Call `target.list(target_composed)` and recursively expand any nested
+   `ListRef` values.
+3. For each target child, call the DSL-provided `expand(child, ctx)` closure to
+   materialize the visible outer `ChildEntry`.
+4. Cache the visible child path using the composed query that contains the
+   target contribution and, when present, the visible child's own provider
+   contribution.
+
+The `expand` closure is created by the DSL layer. It captures the list key
+template, child variable name, provider selection rule, properties, metadata,
+provider instance properties, and current namespace. It does not receive or own
+the runtime cache; it only converts a target child into an optional visible
+outer child.
+
+Nested delegate-list expansion is flattened before returning to the caller.
+Intermediate target children used only as expansion input are not cached at the
+outer parent path. Only the final visible child paths are eligible for cache
+insertion.
+
+If the visible child provider is `None`, the child path is cached as a
+no-provider node. If the visible child provider is an `EmptyDslProvider`, the
+child is returned in the list result but the path is not cached.
+
+Direct list children are enumeration results. They do not by themselves imply a
+child-path cache write; child-path cache population is a runtime responsibility
+for delegated expansion because only the runtime has the composed state that
+includes the delegate target contribution.
 
 ## 9. Template Semantics
 
@@ -289,6 +377,19 @@ defaults.
 
 `${global.X}` reads a runtime global. Globals are injected by the host and are
 read-only for the lifetime of the runtime.
+
+`${global:prefix|selector}` is a string-template method for runtime global
+maps. The renderer evaluates `selector` in the current template context, builds
+the lookup key `prefix + "." + selector_value`, reads that key from runtime
+globals, and returns the global value as a string. This method is for path
+segments, labels, note text, properties, and object/array metadata templates. It
+is not an SQL inlining mechanism; SQL templates use `${global.X}` so the value
+is rendered as a bind parameter.
+
+If a list key uses `${global:prefix|selector}` and `selector` reads a dynamic
+row or child binding, the key is a dynamic list key and follows the same
+`data_var` or `child_var` ownership rules as `${row.name}` or
+`${child.name}`.
 
 `${ref:X}` and `${composed}` are query-fragment mechanisms. They are not ordinary
 caller values and must only inline trusted provider-composed SQL.
@@ -317,6 +418,10 @@ namespace should make its ownership and trust boundary obvious.
 | `meta` | Provider definition | Provider definition | Context-specific | Trusted DSL metadata |
 | `ref` | Provider registry | Runtime | Inline trusted query fragment | Trusted DSL code |
 | `composed` | PathQL composer | Composition step | Inline folded query fragment | Trusted DSL code |
+
+`global` also exposes the `${global:prefix|selector}` method in string-template
+rendering. The method performs a host-global lookup and returns display text or
+another host-provided string value; it does not create a new namespace.
 
 Adding a namespace is a language change. It requires validation, template
 evaluation, render behavior, tests, `RULES.md`, and this spec to be updated
@@ -383,7 +488,9 @@ or how result rows become application objects.
 Example runtime shape:
 
 ```rust
-ProviderRuntime::new(registry, root, executor, globals)
+let runtime = ProviderRuntime::new(executor, globals);
+runtime.register_provider(provider_def)?;
+runtime.set_root(namespace, simple_name)?;
 ```
 
 Project-specific globals such as `favorite_album_id` and `hidden_album_id`
@@ -436,6 +543,12 @@ Use full field objects for aliases or shared fields:
 
 Use `${global.X}` for host constants that are not true provider configuration.
 
+Use `${global:prefix|selector}` when a host-owned map should translate a stable
+runtime value into a path/display string. Example: a host may inject
+`vd_en_US_month.01 = "January"` and a provider may render
+`${global:vd_en_US_month|root.name}` while delegating to a shared month provider
+that still returns canonical month numbers.
+
 Use `${properties.X}` for provider parameters that callers may intentionally
 override.
 
@@ -468,6 +581,19 @@ The host is responsible for:
 
 The host may choose its own loading strategy. Examples include embedded bytes,
 development paths, generated provider registries, or test literals.
+
+For directory-based DSL assets, the host loader recursively scans provider
+files with supported provider extensions and applies an explicit exclusion list
+for non-provider assets such as schemas and intentionally retired compatibility
+shims. The root provider is registered first; all remaining provider files are
+registered deterministically. Duplicate provider names are loader errors, not
+override points.
+
+Provider names that contain template expressions are runtime-dynamic references.
+They are resolved when instantiated, after the provider's properties/captures
+have been rendered. Strict cross-reference validation checks only static
+provider names; templated names are validated by syntax and scope rules, then
+left to runtime registration.
 
 PathQL should expose stable engine primitives instead of requiring the host to
 depend on crate-internal file layout.
@@ -578,7 +704,35 @@ PathQL is not:
 }
 ```
 
-### 19.3 Full field object with alias
+### 19.3 Runtime global map for display labels
+
+```json5
+{
+  "list": {
+    "${global:vd_en_US_month|root.name}": {
+      "delegate": {
+        "provider": "year_provider",
+        "properties": { "year": "${properties.year}" }
+      },
+      "child_var": "root",
+      "provider": "vd_month_en_US_provider",
+      "properties": {
+        "year_month": "${properties.year}-${root.name}"
+      },
+      "meta": {
+        "month": "${root.name}",
+        "label": "${global:vd_en_US_month|root.name}"
+      }
+    }
+  }
+}
+```
+
+The host injects keys such as `vd_en_US_month.01 = "January"`. The shared
+provider keeps canonical month ids, while the visible path segment and metadata
+label use the host-owned display map.
+
+### 19.4 Full field object with alias
 
 ```json5
 {
@@ -591,7 +745,7 @@ PathQL is not:
 }
 ```
 
-### 19.4 Empty fields default projection
+### 19.5 Empty fields default projection
 
 ```json5
 {
@@ -614,14 +768,16 @@ If `from` is not a simple table identifier, the rendered projection is:
 SELECT *
 ```
 
-## 20. Open Design Questions
+## 20. Final Invariants
 
-These are intentionally tracked in the spec instead of being hidden in code
-comments.
+These invariants define compatibility for provider authors and host
+integrations:
 
-- Should `order_by` accumulate or override?
-- Should `limit` and `offset` be last-writer-wins or single-owner atoms?
-- Should field alias collisions be validation errors?
-- Should globals be validated against a host-declared schema?
-- Should join declarations eventually gain a shorthand form?
-- Should provider references expose typed result contracts?
+- Untrusted caller values render as bind parameters in SQL templates.
+- Trusted query fragments are the only template forms that inline SQL.
+- Provider chain folding is deterministic and follows section 8.
+- Runtime globals are host-owned read-only values.
+- Directory loaders must exclude non-provider assets explicitly.
+- Static provider references are validated eagerly in strict mode.
+- Templated provider references are runtime-dynamic and resolve at
+  instantiation time.

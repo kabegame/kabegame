@@ -1,0 +1,16 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "size_range_provider",
+    // 共享大小范围过滤器。接收字节数 min/max，添加 WHERE 并按 images.size 正序排列。
+    // min_size < 0 时匹配 unknown（size IS NULL OR size <= 0）；
+    // 否则匹配 images.size >= min_size AND images.size < max_size。
+    "properties": {
+        "min_size": { "type": "number", "default": 0, "optional": true },
+        "max_size": { "type": "number", "default": 9007199254740991, "optional": true }
+    },
+    "query": {
+        "where": "CASE WHEN ${properties.min_size} < 0 THEN (images.size IS NULL OR images.size <= 0) ELSE (images.size >= ${properties.min_size} AND images.size < ${properties.max_size}) END",
+        "order": [{ "images.size": "asc" }]
+    }
+}

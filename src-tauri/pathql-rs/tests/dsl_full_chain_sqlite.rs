@@ -4,12 +4,12 @@
 //! + 注入 SqlExecutor) 在 pathql-rs 这一层是可工作的端到端形态。
 //!
 //! 路径用例:
-//! - `/gallery` 列出 gallery_route 的所有 router (DSL + missing programmatic 共存)
+//! - `/gallery/<router>` 通过 gallery_route 的 resolve 表命中各业务 router
 //! - `/gallery/all` 列出 gallery_all_router 的静态 + 正则解析 (动态 xNNNx)
 //! - `/gallery/all/x100x` 触发正则捕获 -> gallery_paginate_router{page_size=100}
-//! - `/gallery/all/x100x/1` 走动态反查 -> gallery_page_router{page_size=100, page_num=1}
+//! - `/gallery/all/x100x/1` 走动态反查 -> query_page_provider{page_size=100, page_num=1}
 //!   再走 query.delegate ./__provider -> query_page_provider 贡献 OFFSET/LIMIT
-//! - `/vd/i18n-zh_CN/画册` 中文路径段穿透 vd_root_router -> vd_zh_CN_root_router
+//! - `/vd/i18n-zh_CN/画册` 中文路径段穿透 vd_root_router -> vd/zh_CN/vd_zh_CN_root_router
 
 #![cfg(feature = "json5")]
 
@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex};
 use pathql_rs::ast::{Namespace, SimpleName};
 use pathql_rs::compose::ProviderQuery;
 use pathql_rs::provider::{
-    ChildEntry, ClosureExecutor, EngineError, Provider, ProviderContext, ProviderRuntime,
-    SqlDialect, SqlExecutor,
+    ClosureExecutor, EngineError, ListRef, Provider, ProviderContext, ProviderRuntime, SqlDialect,
+    SqlExecutor,
 };
 use pathql_rs::template::eval::TemplateValue;
 use pathql_rs::{Json5Loader, Loader, ProviderRegistry, Source};
@@ -48,18 +48,18 @@ const PROVIDER_FILES: &[&str] = &[
     "gallery/gallery_route.json5",
     "gallery/gallery_hide_router.json5",
     "gallery/all_router/gallery_all_router.json5",
+    "gallery/gallery_desc_pagination_page_comb.json5",
     "gallery/all_router/x_page_x/gallery_paginate_router.json5",
-    "gallery/all_router/x_page_x/gallery_page_router.json5",
     "shared/page_size_provider.json5",
     "shared/query_page_provider.json5",
     "vd/vd_root_router.json5",
-    "vd/vd_zh_CN_root_router.json5",
+    "vd/zh_CN/vd_zh_CN_root_router.json5",
 ];
 
 fn providers_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
-        .join("core")
+        .join("kabegame-core")
         .join("src")
         .join("providers")
         .join("dsl")
@@ -156,11 +156,8 @@ fn make_executor(conn: Arc<Mutex<Connection>>) -> Arc<dyn SqlExecutor> {
 /// 引用但本测试范围外的 *_router 名字, 让 instantiate 不报 ProviderNotRegistered。
 struct StubProvider;
 impl Provider for StubProvider {
-    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ChildEntry>, EngineError> {
+    fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ListRef>, EngineError> {
         Ok(Vec::new())
-    }
-    fn resolve(&self, _: &str, _: &ProviderQuery, _: &ProviderContext) -> Option<ChildEntry> {
-        None
     }
 }
 
@@ -249,28 +246,23 @@ fn root_lists_gallery_and_vd() {
 }
 
 #[test]
-fn gallery_route_lists_all_routers() {
+fn gallery_route_resolves_known_routers() {
     let runtime = build_runtime();
-    let children = runtime.list("/gallery").unwrap();
-    let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
-    for expected in [
+    for path in [
         "all",
         "wallpaper-order",
-        "plugins",
-        "tasks",
+        "plugin",
+        "task",
         "surf",
         "media-type",
-        "dates",
-        "albums",
+        "date",
+        "album",
         "hide",
         "search",
     ] {
-        assert!(
-            names.contains(&expected),
-            "/gallery list missing {}: got {:?}",
-            expected,
-            names
-        );
+        runtime
+            .resolve(&format!("/gallery/{path}"))
+            .unwrap_or_else(|e| panic!("/gallery/{path} should resolve: {e}"));
     }
 }
 

@@ -5,6 +5,7 @@
       <WallpaperOrderProviderChildrenNode @select="selectFilter" />
       <DateProviderChildrenNode @select="selectFilter" />
       <MediaTypeProviderChildrenNode @select="selectFilter" />
+      <SizeProviderChildrenNode @select="selectFilter" />
       <PluginsProviderChildrenNode @select="selectFilter" />
     </div>
   </div>
@@ -16,6 +17,7 @@ import type { GalleryFilter } from "@/utils/galleryPath";
 import AllProviderChildrenNode from "./AllProviderChildrenNode.vue";
 import DateProviderChildrenNode from "./DateProviderChildrenNode.vue";
 import MediaTypeProviderChildrenNode from "./MediaTypeProviderChildrenNode.vue";
+import SizeProviderChildrenNode from "./SizeProviderChildrenNode.vue";
 import PluginsProviderChildrenNode from "./PluginsProviderChildrenNode.vue";
 import WallpaperOrderProviderChildrenNode from "./WallpaperOrderProviderChildrenNode.vue";
 import {
@@ -26,8 +28,10 @@ import {
 const props = withDefaults(defineProps<{
   contextPrefix?: string;
   filter: GalleryFilter;
+  visible?: boolean;
 }>(), {
   contextPrefix: "",
+  visible: true,
 });
 
 const emit = defineEmits<{
@@ -54,6 +58,7 @@ function selectFilter(filter: GalleryFilter) {
 provideGalleryFilterTreeContext({
   filter: computed(() => props.filter),
   prefix: computed(() => props.contextPrefix ?? ""),
+  visible: computed(() => props.visible),
   registerRefreshTarget,
 });
 

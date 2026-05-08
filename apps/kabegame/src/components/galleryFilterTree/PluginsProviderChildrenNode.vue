@@ -10,6 +10,7 @@
       v-for="entry in pluginEntries"
       :key="pluginKey(entry.pluginId)"
       :plugin-id="entry.pluginId"
+      :initial-count="entry.count"
       @select="$emit('select', $event)"
     />
   </ProviderChildrenNode>
@@ -45,7 +46,7 @@ type UnlistenFn = () => void;
 const { t } = useI18n();
 const pluginStore = usePluginStore();
 const { filter, prefix, registerRefreshTarget } = useGalleryFilterTreeContext();
-const pluginEntries = ref<Array<{ pluginId: string }>>([]);
+const pluginEntries = ref<Array<{ pluginId: string; count: number }>>([]);
 const loaded = ref(false);
 let listToken = 0;
 let unregisterRefresh: (() => void) | null = null;
@@ -76,9 +77,10 @@ async function refreshList() {
       }))
     );
     if (token !== listToken || expectedPrefix !== prefix.value) return;
+    console.log('groups', groups);
     pluginEntries.value = groups
       .filter((group) => group.pluginId && group.count > 0)
-      .map((group) => ({ pluginId: group.pluginId }));
+      .map((group) => ({ pluginId: group.pluginId, count: group.count }));
     loaded.value = true;
   } catch {
     if (token === listToken && expectedPrefix === prefix.value) {

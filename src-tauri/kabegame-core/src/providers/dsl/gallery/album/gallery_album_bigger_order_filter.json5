@@ -7,11 +7,18 @@
     },
     "query": {
         // album 顺序模式: WHERE ai."order" > N, ORDER BY ai."order" ASC
-        "order_clear": ["images.crawled_at"],
         "where": "ai.\"order\" > ${properties.order}",
         "order": [{ "ai.\"order\"": "asc" }]
     },
     "resolve": {
+        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
+            "delegate": {
+                "provider": "kabegame.gallery_desc_pagination_page_comb"
+            },
+            "child_var": "root",
+            "provider": "${root.provider}",
+            "meta": "${root.meta}"
+        },
         "l([0-9]+)l": {
             "provider": "limit_leaf_provider",
             "properties": {

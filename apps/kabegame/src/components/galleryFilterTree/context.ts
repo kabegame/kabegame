@@ -9,6 +9,7 @@ import { invoke } from "@/api/rpc";
 import {
   filterDateSegment,
   filterMediaKind,
+  filterSizeRange,
   type GalleryFilter,
 } from "@/utils/galleryPath";
 
@@ -32,6 +33,7 @@ export interface RefreshTarget {
 export interface GalleryFilterTreeContext {
   filter: ComputedRef<GalleryFilter>;
   prefix: ComputedRef<string>;
+  visible: ComputedRef<boolean>;
   registerRefreshTarget: (target: RefreshTarget) => () => void;
 }
 
@@ -130,6 +132,8 @@ export function isSameGalleryFilter(a: GalleryFilter, b: GalleryFilter) {
       return filterDateSegment(b) === a.segment;
     case "media-type":
       return filterMediaKind(b) === a.kind;
+    case "size":
+      return filterSizeRange(b) === a.range;
     case "plugin":
       return (
         b.type === "plugin" &&

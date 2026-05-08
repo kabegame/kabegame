@@ -42,25 +42,32 @@ const isWallpaperOrderRoot = computed(
   () => galleryRouteStore.filter.type === "wallpaper-order"
 );
 
+const isSizeRoot = computed(() => galleryRouteStore.filter.type === "size");
+
 const { t } = useI18n();
 
-const sortAscLabel = computed(() =>
-  isWallpaperOrderRoot.value
-    ? t("gallery.bySetTimeAsc")
-    : t("gallery.byTimeAsc")
-);
+const sortAscLabel = computed(() => {
+  if (isWallpaperOrderRoot.value) return t("gallery.bySetTimeAsc");
+  if (isSizeRoot.value) return t("gallery.bySizeAsc");
+  return t("gallery.byTimeAsc");
+});
 
-const sortDescLabel = computed(() =>
-  isWallpaperOrderRoot.value
-    ? t("gallery.bySetTimeDesc")
-    : t("gallery.byTimeDesc")
-);
+const sortDescLabel = computed(() => {
+  if (isWallpaperOrderRoot.value) return t("gallery.bySetTimeDesc");
+  if (isSizeRoot.value) return t("gallery.bySizeDesc");
+  return t("gallery.byTimeDesc");
+});
 
 const sortLabel = computed(() => {
   if (isWallpaperOrderRoot.value) {
     return galleryRouteStore.sort === "desc"
       ? t("gallery.bySetTimeDesc")
       : t("gallery.bySetTimeAsc");
+  }
+  if (isSizeRoot.value) {
+    return galleryRouteStore.sort === "desc"
+      ? t("gallery.bySizeDesc")
+      : t("gallery.bySizeAsc");
   }
   return galleryRouteStore.sort === "desc"
     ? t("gallery.byTimeDesc")

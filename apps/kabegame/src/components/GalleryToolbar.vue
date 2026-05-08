@@ -30,6 +30,7 @@
         ref="providerTreeRef"
         :context-prefix="providerContextPrefix"
         :filter="filter"
+        :visible="showProviderTreePopover"
         @update:filter="onProviderTreeFilter"
       />
     </el-popover>
@@ -176,6 +177,7 @@ import {
   filterDateSegment,
   filterMediaKind,
   filterPluginId,
+  filterSizeRange,
   isSimpleFilter,
   type GalleryFilter,
   type GalleryTimeSort,
@@ -244,6 +246,19 @@ const pluginStore = usePluginStore();
 const isWallpaperOrderBrowse = computed(
   () => props.filter.type === "wallpaper-order"
 );
+
+const isSizeBrowse = computed(() => filterSizeRange(props.filter) !== null);
+
+const SIZE_RANGE_LABEL_KEYS: Record<string, string> = {
+  "unknown":   "filterSize_unknown",
+  "1B-512KB":  "filterSize_lt512k",
+  "512KB-1MB": "filterSize_512k_1m",
+  "1MB-2MB":   "filterSize_1m_2m",
+  "2MB-5MB":   "filterSize_2m_5m",
+  "5MB-10MB":  "filterSize_5m_10m",
+  "10MB-50MB": "filterSize_10m_50m",
+  "50MB-":     "filterSize_gte50m",
+};
 
 const uiStore = useUiStore();
 
@@ -829,20 +844,26 @@ async function ensureTimeNodeChildrenLoaded(node: TimeMenuNode) {
   }
 }
 
-const sortOptionLabelAsc = computed(() =>
-  isWallpaperOrderBrowse.value
-    ? t("gallery.bySetTimeAsc")
-    : t("gallery.byTimeAsc")
-);
-const sortOptionLabelDesc = computed(() =>
-  isWallpaperOrderBrowse.value
-    ? t("gallery.bySetTimeDesc")
-    : t("gallery.byTimeDesc")
-);
+const sortOptionLabelAsc = computed(() => {
+  if (isWallpaperOrderBrowse.value) return t("gallery.bySetTimeAsc");
+  if (isSizeBrowse.value) return t("gallery.bySizeAsc");
+  return t("gallery.byTimeAsc");
+});
+const sortOptionLabelDesc = computed(() => {
+  if (isWallpaperOrderBrowse.value) return t("gallery.bySetTimeDesc");
+  if (isSizeBrowse.value) return t("gallery.bySizeDesc");
+  return t("gallery.byTimeDesc");
+});
 
 const filterFoldLabel = computed(() => {
   void locale.value;
   if (isWallpaperOrderBrowse.value) return t("gallery.filterWallpaperSet");
+  const sr = filterSizeRange(props.filter);
+  if (sr !== null) {
+    const key = SIZE_RANGE_LABEL_KEYS[sr];
+    const detail = key ? t(`gallery.${key}`) : sr;
+    return `${t("gallery.filterBySize")}: ${detail}`;
+  }
   if (props.filter.type === "date-range") {
     return `${props.filter.start} ~ ${props.filter.end}`;
   }

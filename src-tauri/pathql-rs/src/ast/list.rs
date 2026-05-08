@@ -172,6 +172,25 @@ pub(crate) fn key_uses_dynamic_var(key: &str) -> bool {
                 VarRef::Bare { ns } => Some(ns.as_str()),
                 VarRef::Path { ns, .. } => Some(ns.as_str()),
                 VarRef::Index { ns, .. } => Some(ns.as_str()),
+                VarRef::Method { name, arg } if name == "global" => {
+                    if let Some((_, selector)) = arg.split_once('|') {
+                        let selector_template = format!("${{{}}}", selector);
+                        if let Ok(selector_ast) = parse(&selector_template) {
+                            for selector_seg in selector_ast.segments {
+                                if let Segment::Var(VarRef::Path { ns, path }) = selector_seg {
+                                    let is_reserved = matches!(
+                                        ns.as_str(),
+                                        "properties" | "capture" | "composed" | "_"
+                                    );
+                                    if !is_reserved && !path.is_empty() {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    None
+                }
                 VarRef::Method { .. } => None,
             };
             if let Some(ns) = ns_opt {
@@ -217,6 +236,8 @@ mod tests {
         assert!(key_uses_dynamic_var("${a.b}-${c.d}"));
         assert!(key_uses_dynamic_var("${row.id}"));
         assert!(key_uses_dynamic_var("${child.meta.foo}"));
+        assert!(key_uses_dynamic_var("${global:vd_en_US_month|root.name}"));
+        assert!(!key_uses_dynamic_var("${global:vd_en_US_month.01}"));
 
         // 混: properties + data_var → 仍 dynamic (因含 data_var)
         assert!(key_uses_dynamic_var("${properties.x}-${row.id}"));
@@ -317,7 +338,7 @@ mod tests {
     #[test]
     fn dynamic_with_provider_child_ref() {
         let v: List = serde_json::from_str(
-            r#"{"${out.meta.page_num}":{"delegate":{"provider":"page_size_provider"},"child_var":"out","provider":"gallery_page_router"}}"#,
+            r#"{"${out.meta.page_num}":{"delegate":{"provider":"page_size_provider"},"child_var":"out","provider":"query_page_provider"}}"#,
         )
         .unwrap();
         assert_eq!(v.entries.len(), 1);

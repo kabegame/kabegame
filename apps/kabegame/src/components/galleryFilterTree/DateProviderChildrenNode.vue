@@ -11,6 +11,7 @@
       :key="year.seg"
       :segments="[year.seg]"
       :depth="1"
+      :initial-count="year.total"
       @select="$emit('select', $event)"
     />
   </ProviderChildrenNode>
@@ -38,7 +39,7 @@ defineEmits<{
 
 const { t } = useI18n();
 const { filter, prefix, registerRefreshTarget } = useGalleryFilterTreeContext();
-const years = ref<Array<{ seg: string; year: string }>>([]);
+const years = ref<Array<{ seg: string; year: string; total?: number }>>([]);
 const loaded = ref(false);
 let listToken = 0;
 let unregisterRefresh: (() => void) | null = null;
@@ -55,9 +56,9 @@ async function refreshList() {
     years.value = entries
       .map((entry) => {
         const year = /^(\d{4})y$/.exec(entry.name)?.[1];
-        return year ? { seg: entry.name, year } : null;
+        return year ? { seg: entry.name, year, total: entry.total ?? undefined } : null;
       })
-      .filter((row): row is { seg: string; year: string } => !!row);
+      .filter((row): row is { seg: string; year: string; total?: number } => !!row);
     loaded.value = true;
   } catch {
     if (token === listToken && expectedPrefix === prefix.value) {

@@ -11,16 +11,6 @@
         "where": "LOWER(images.display_name) LIKE LOWER('%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\'"
     },
     // list / resolve 都委派 gallery_route — 让搜索结果可以继续走 all/x100x/N 等分页或
-    // album/plugin 等过滤维度 (与 programmatic 等价: instantiate_named("gallery_route") +
-    // 转发 list/resolve)。
-    "list": {
-        "${root.name}": {
-            "child_var": "root",
-            "delegate": { "provider": "gallery_route" },
-            "provider": "${root.provider}",
-            "meta": "${root.meta}"
-        }
-    },
     "resolve": {
         ".*": {
             "delegate": { "provider": "gallery_route" },

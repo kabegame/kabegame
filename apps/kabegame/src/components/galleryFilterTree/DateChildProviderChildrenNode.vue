@@ -6,6 +6,7 @@
     :depth="depth"
     :active="active"
     :default-expanded="defaultExpanded"
+    :initial-count="initialCount"
     @select="$emit('select', filterForSelf)"
     @update:expanded="onExpanded"
   >
@@ -14,6 +15,7 @@
       :key="child.seg"
       :segments="[...segments, child.seg]"
       :depth="depth + 1"
+      :initial-count="child.total"
       @select="$emit('select', $event)"
     />
   </ProviderChildrenNode>
@@ -23,6 +25,7 @@
     :path="path"
     :depth="depth"
     :active="active"
+    :initial-count="initialCount"
     @select="$emit('select', filterForSelf)"
   />
 </template>
@@ -51,6 +54,7 @@ import {
 const props = withDefaults(defineProps<{
   segments: string[];
   depth?: number;
+  initialCount?: number;
 }>(), {
   depth: 1,
 });
@@ -61,7 +65,7 @@ defineEmits<{
 
 const { t, locale } = useI18n();
 const { filter, prefix, registerRefreshTarget } = useGalleryFilterTreeContext();
-const childRows = ref<Array<{ seg: string }>>([]);
+const childRows = ref<Array<{ seg: string; total?: number }>>([]);
 const loaded = ref(false);
 let listToken = 0;
 let unregisterRefresh: (() => void) | null = null;
@@ -114,7 +118,7 @@ async function refreshChildren() {
     const entries = await listProviderDirs(`${joinProviderPath(path.value)}/`);
     if (token !== listToken || expectedPrefix !== prefix.value) return;
     childRows.value = entries
-      .map((entry) => ({ seg: entry.name }))
+      .map((entry) => ({ seg: entry.name, total: entry.total ?? undefined }))
       .filter((row) => !pattern || pattern.test(row.seg));
     loaded.value = true;
   } catch {

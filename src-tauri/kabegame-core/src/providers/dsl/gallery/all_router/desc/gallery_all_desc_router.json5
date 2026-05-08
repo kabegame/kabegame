@@ -6,17 +6,9 @@
     "query": {
         "order": { "all": "revert" }
     },
-    "list": {
-        "${all.name}": {
-            "child_var": "all",
-            "delegate": {
-                "provider": "gallery_all_router",
-            }
-        }
-    },
     "resolve": {
         // x{N}x → gallery_paginate_router (与 gallery_all_router 一致)
-        ".*": {
+        "x[1-9][0-9]*x|[1-9][0-9]*": {
             "delegate": {
                 "provider": "gallery_all_router",
             },

@@ -113,6 +113,15 @@ pub fn render_template_to_string(
             Segment::Var(VarRef::Method { name, arg }) if name == "ref" => {
                 return Err(RenderError::UnknownRef(arg.clone()));
             }
+            Segment::Var(VarRef::Method { name, arg }) if name == "global" => {
+                let key = render_global_lookup_key(arg, ctx)?;
+                let value = ctx
+                    .globals
+                    .get(&key)
+                    .cloned()
+                    .ok_or(EvalError::UnboundGlobal(key))?;
+                out.push_str(&template_value_to_string(&value));
+            }
             Segment::Var(VarRef::Bare { ns }) if ns == "composed" => {
                 return Err(RenderError::MissingComposed);
             }
@@ -123,6 +132,15 @@ pub fn render_template_to_string(
         }
     }
     Ok(out)
+}
+
+fn render_global_lookup_key(arg: &str, ctx: &TemplateContext) -> Result<String, RenderError> {
+    let Some((prefix, selector)) = arg.split_once('|') else {
+        return render_template_to_string(arg, ctx);
+    };
+    let selector_template = format!("${{{}}}", selector);
+    let selector_value = render_template_to_string(&selector_template, ctx)?;
+    Ok(format!("{}.{}", prefix, selector_value))
 }
 
 fn template_value_to_string(v: &TemplateValue) -> String {
@@ -140,6 +158,7 @@ fn template_value_to_string(v: &TemplateValue) -> String {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     fn empty_ctx() -> TemplateContext {
         TemplateContext::default()
@@ -358,6 +377,38 @@ mod tests {
     fn to_string_composed_errors() {
         let r = render_template_to_string("${composed}", &empty_ctx());
         assert!(matches!(r, Err(RenderError::MissingComposed)));
+    }
+
+    #[test]
+    fn to_string_global_lookup_method_uses_dynamic_selector() {
+        let ctx = TemplateContext::new()
+            .with_globals(Arc::new(
+                [(
+                    "vd_en_US_month.05".to_string(),
+                    TemplateValue::Text("May".into()),
+                )]
+                .into_iter()
+                .collect(),
+            ))
+            .with_child_var("root", serde_json::json!({"name": "05"}));
+
+        let rendered =
+            render_template_to_string("${global:vd_en_US_month|root.name}", &ctx).unwrap();
+
+        assert_eq!(rendered, "May");
+    }
+
+    #[test]
+    fn to_string_global_lookup_method_reports_missing_mapped_key() {
+        let ctx = TemplateContext::new().with_child_var("root", serde_json::json!({"name": "13"}));
+        let err =
+            render_template_to_string("${global:vd_en_US_month|root.name}", &ctx).unwrap_err();
+
+        assert!(matches!(
+            err,
+            RenderError::Eval(EvalError::UnboundGlobal(key))
+                if key == "vd_en_US_month.13"
+        ));
     }
 
     // ===== dialect-aware placeholders =====
