@@ -52,17 +52,19 @@ import { useI18n } from "@kabegame/i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Lightning } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { IS_ANDROID } from "@kabegame/core/env";
+import { trackEvent } from "@kabegame/core/track/umami";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import TaskDrawerContent from "@kabegame/core/components/task/TaskDrawerContent.vue";
 import TaskContextMenu from "./contextMenu/TaskContextMenu.vue";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 interface Props {
   modelValue: boolean;
@@ -77,6 +79,7 @@ const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 const { t } = useI18n();
 
+const route = useRoute();
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
@@ -121,6 +124,22 @@ const nonRunningTasksCount = computed(() => props.tasks.filter((t) => t.status !
 
 
 const getPluginName = (pluginId: string) => pluginStore.pluginLabel(pluginId);
+
+function currentUrl() {
+  return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
+
+function trackTaskDrawerAction(action: "view_images" | "delete_task", task: any) {
+  trackEvent("task_drawer_task_action", {
+    action,
+    taskId: task.id,
+    pluginId: task.pluginId,
+    status: task.status,
+    triggerPage: route.path,
+    routeName: route.name ? String(route.name) : "",
+    url: currentUrl(),
+  });
+}
 
 // 右键菜单（由 TaskDrawerContent 转发）
 const openTaskContextMenu = (payload: { x: number; y: number; task: any }) => {
@@ -233,6 +252,8 @@ const handleCancelTaskById = async (taskId: string) => {
 const handleDeleteTaskById = async (taskId: string) => {
   const task = props.tasks.find((t) => t.id === taskId);
   if (!task) return;
+  trackTaskDrawerAction("delete_task", task);
+  if (await guardDesktopOnly("deleteTask", { needSuper: true })) return;
   try {
     const needStop = task.status === "running";
     const msg = needStop
@@ -262,6 +283,7 @@ const handleDeleteTaskById = async (taskId: string) => {
 const handleOpenTaskImagesById = (taskId: string) => {
   const task = props.tasks.find((t) => t.id === taskId);
   if (!task) return;
+  trackTaskDrawerAction("view_images", task);
   void router.push(`/tasks/${task.id}`);
   requestAnimationFrame(() => {
     visible.value = false;
@@ -287,6 +309,7 @@ const handleDeleteAllTasks = async () => {
     ElMessage.warning(t('tasks.noTasksToClear'));
     return;
   }
+  if (await guardDesktopOnly("deleteTask", { needSuper: true })) return;
   try {
     const pendingCount = props.tasks.filter((t) => t.status === "pending").length;
     const runningCount = props.tasks.filter((t) => t.status === "running").length;

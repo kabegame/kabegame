@@ -8,15 +8,9 @@
                 "provider": "plugins_provider"
             },
             "child_var": "plugin",
-            "provider": "gallery_plugin_router",
+            "provider": "vd_plugin_router",
             "properties": { "plugin_id": "${plugin.name}" },
             "meta": "${plugin.meta.plugin}"
-        }
-    },
-    "resolve": {
-        "(?:.* - )?([a-z][a-z0-9_-]*)": {
-            "provider": "gallery_plugin_router",
-            "properties": { "plugin_id": "${capture[1]}" }
         }
     }
 }

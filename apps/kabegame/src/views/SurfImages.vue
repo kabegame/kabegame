@@ -251,6 +251,7 @@ const handleImageMenuCommand = async (
       }
       break;
     case "favorite":
+      if (await guardDesktopOnly("favoriteImage", { needSuper: true })) break;
       if (imagesToProcess.length > 0) await toggleFavoriteForImages(imagesToProcess);
       break;
     case "openFolder":

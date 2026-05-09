@@ -100,7 +100,8 @@
             </el-empty>
           </div>
           <div v-else class="auto-configs-recommended">
-            <el-collapse v-model="activeRecommendedPluginId" accordion class="recommended-plugin-collapse">
+            <el-collapse v-model="activeRecommendedPluginId" accordion class="recommended-plugin-collapse"
+              @change="onRecommendedPluginChange">
               <el-collapse-item v-for="group in recommendedGrouped" :key="group.pluginId" :name="group.pluginId"
                 class="recommended-plugin-block">
                 <template #title>
@@ -212,6 +213,7 @@ import { checkRecommendedPresetCompatibility } from "@/composables/useConfigComp
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import type { PluginRecommendedPreset, RunConfig } from "@kabegame/core/stores/crawler";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { trackEvent } from "@kabegame/core/track/umami";
 
 const { t, locale } = useI18n();
 const route = useRoute();
@@ -252,6 +254,7 @@ const scheduleTogglingId = ref<string | null>(null);
 const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
 
 const listTab = ref<"mine" | "recommended">("mine");
+const lastTrackedListTab = ref<"mine" | "recommended">("mine");
 const activeRecommendedPluginId = ref("");
 const presetPreviewVisible = ref(false);
 const presetPreviewTarget = ref<PluginRecommendedPreset | null>(null);
@@ -295,6 +298,24 @@ const recommendedTabLabel = computed(() =>
   }),
 );
 
+function currentUrl() {
+  return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
+
+function autoConfigTabLabel(tab: "mine" | "recommended") {
+  return tab === "recommended" ? recommendedTabLabel.value : t("autoConfig.tabMine");
+}
+
+function recommendedPresetPayload(preset: PluginRecommendedPreset) {
+  return {
+    presetFilename: preset.filename,
+    presetName: resolvePresetTitle(preset),
+    pluginId: preset.pluginId,
+    pluginName: pluginName(preset.pluginId),
+    url: currentUrl(),
+  };
+}
+
 const recommendedGrouped = computed(() => {
   const map = new Map<string, PluginRecommendedPreset[]>();
   for (const p of crawlerStore.pluginRecommendedConfigs) {
@@ -323,6 +344,7 @@ function resolvePresetDesc(preset: PluginRecommendedPreset) {
 }
 
 function openPresetPreview(preset: PluginRecommendedPreset) {
+  trackEvent("auto_config_recommended_detail_open", recommendedPresetPayload(preset));
   presetPreviewTarget.value = preset;
   presetPreviewVisible.value = true;
 }
@@ -377,17 +399,43 @@ watch(
 watch(
   () => route.query.tab,
   (tab) => {
-    listTab.value = tab === "recommended" ? "recommended" : "mine";
+    const nextTab = tab === "recommended" ? "recommended" : "mine";
+    listTab.value = nextTab;
+    lastTrackedListTab.value = nextTab;
   },
   { immediate: true },
 );
 
 function onTabChange(name: string | number) {
   const tab = String(name);
+  const nextTab: "mine" | "recommended" = tab === "recommended" ? "recommended" : "mine";
+  const previousTab = lastTrackedListTab.value;
+  if (previousTab !== nextTab) {
+    trackEvent("auto_config_tab_change", {
+      tab: nextTab,
+      tabLabel: autoConfigTabLabel(nextTab),
+      previousTab,
+      previousTabLabel: autoConfigTabLabel(previousTab),
+      url: currentUrl(),
+    });
+    lastTrackedListTab.value = nextTab;
+  }
   const q = { ...route.query } as Record<string, string | string[]>;
   if (tab === "recommended") q.tab = "recommended";
   else delete q.tab;
   void router.replace({ path: route.path, query: q });
+}
+
+function onRecommendedPluginChange(name: string | string[] | number | number[]) {
+  const pluginId = Array.isArray(name) ? String(name[0] ?? "") : String(name ?? "");
+  if (!pluginId) return;
+  const group = recommendedGrouped.value.find((item) => item.pluginId === pluginId);
+  trackEvent("auto_config_recommended_plugin_expand", {
+    pluginId,
+    pluginName: pluginName(pluginId),
+    presetCount: group?.presets.length ?? 0,
+    url: currentUrl(),
+  });
 }
 
 onMounted(async () => {

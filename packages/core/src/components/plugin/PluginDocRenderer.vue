@@ -13,6 +13,7 @@
       :data-source="docPswpDataSource"
       :loop="false"
       :zIndex="2000"
+      @close="handleDocPreviewClose"
     />
 
     <!-- 桌面：Element Plus 图片查看器，不循环 -->
@@ -22,7 +23,7 @@
       :initial-index="docDesktopInitialIndex"
       :infinite="false"
       teleported
-      @close="docDesktopViewerVisible = false"
+      @close="handleDocPreviewClose"
     />
   </div>
 </template>
@@ -52,6 +53,18 @@ const props = withDefaults(
   }
 );
 
+const emit = defineEmits<{
+  (e: "image-preview-open", payload: DocImagePreviewPayload): void;
+  (e: "image-preview-close", payload: DocImagePreviewPayload): void;
+}>();
+
+type DocImagePreviewPayload = {
+  index: number;
+  count: number;
+  src: string;
+  alt: string;
+};
+
 const html = ref("");
 const docRootRef = ref<HTMLElement | null>(null);
 
@@ -66,6 +79,7 @@ const uiStore = useUiStore();
 const docDesktopViewerVisible = ref(false);
 const docDesktopUrlList = ref<string[]>([]);
 const docDesktopInitialIndex = ref(0);
+const currentDocPreview = ref<DocImagePreviewPayload | null>(null);
 
 useModalBack(docPswpOpen);
 
@@ -115,6 +129,15 @@ const handleDocClick = (e: MouseEvent) => {
     e.stopPropagation();
     void (async () => {
       const { items, urls } = await buildDocPreviewMeta(imgs);
+      const el = img as HTMLImageElement;
+      const previewPayload = {
+        index,
+        count: imgs.length,
+        src: el.getAttribute("src")?.trim() || "",
+        alt: el.getAttribute("alt")?.trim() || "",
+      };
+      currentDocPreview.value = previewPayload;
+      emit("image-preview-open", previewPayload);
       if (uiStore.isCompact) {
         docPswpDataSource.value = items;
         docPswpIndex.value = index;
@@ -137,6 +160,16 @@ const handleDocClick = (e: MouseEvent) => {
   if (IS_WEB) return;
   e.preventDefault();
   void openUrl(href);
+};
+
+const handleDocPreviewClose = () => {
+  if (!uiStore.isCompact) {
+    docDesktopViewerVisible.value = false;
+  }
+  if (currentDocPreview.value) {
+    emit("image-preview-close", currentDocPreview.value);
+    currentDocPreview.value = null;
+  }
 };
 
 onMounted(() => {

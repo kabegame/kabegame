@@ -32,10 +32,11 @@ const onChange = (v: string | number | boolean | undefined) => {
   if (n !== 100 && n !== 500 && n !== 1000) return;
   void settings.save("galleryPageSize", n).then(() => {
     if (!IS_WEB) return;
-    trackEvent("gallery_setting_change", {
+    trackEvent("setting_change", {
       key: "galleryPageSize",
       value: n,
       url: location.pathname + location.search,
+      source: location.pathname === "/settings" ? "settings_page" : "quick_settings_drawer",
     });
   });
 };

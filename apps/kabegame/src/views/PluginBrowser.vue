@@ -414,6 +414,7 @@ import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { storePluginCacheDb } from "@kabegame/core/cache/storePluginCache";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { trackEvent } from "@kabegame/core/track/umami";
 
 interface PluginSource {
   id: string;
@@ -469,6 +470,19 @@ const appBackgroundCardClass = computed(() =>
     ? "!bg-transparent [--el-card-bg-color:transparent]"
     : ""
 );
+
+function currentUrl() {
+  return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
+
+function trackPluginBrowserEvent(name: string, data: Record<string, unknown> = {}) {
+  if (!IS_WEB) return;
+  trackEvent(name, {
+    url: currentUrl(),
+    tab: activeTab.value,
+    ...data,
+  });
+}
 
 /** 与后端 `plugin_sources::OFFICIAL_PLUGIN_SOURCE_ID` 一致 */
 const OFFICIAL_PLUGIN_SOURCE_ID = "official_github_release";
@@ -576,6 +590,39 @@ const activeStoreSourceId = computed(() => {
 });
 
 const getStorePlugins = (sourceId: string) => storePluginsBySource.value[sourceId] || [];
+
+const sourceAnalyticsItem = (sourceId: string) => {
+  const source = sources.value.find((s) => s.id === sourceId);
+  return {
+    sourceId,
+    sourceName: source ? pluginSourceDisplayName(source) : sourceId,
+  };
+};
+
+const pluginAnalyticsItem = (plugin: PluginListItem) => {
+  const isStore = "sourceId" in plugin && typeof plugin.sourceId === "string";
+  return {
+    pluginId: plugin.id,
+    pluginName: pluginName(plugin),
+    version: plugin.version,
+    source: isStore ? "store" : "installed",
+    ...(isStore
+      ? {
+        sourceId: (plugin as StorePluginResolved).sourceId,
+        sourceName: (plugin as StorePluginResolved).sourceName,
+        installedVersion: (plugin as StorePluginResolved).installedVersion ?? null,
+      }
+      : {}),
+  };
+};
+
+const storePluginInstallAction = (
+  plugin: StorePluginResolved,
+  forceReinstall = false
+): "install" | "update" | "reinstall" => {
+  if (forceReinstall && plugin.installedVersion === plugin.version) return "reinstall";
+  return isUpdateAvailable(plugin.installedVersion, plugin.version) ? "update" : "install";
+};
 
 // 已安装版本索引：用于给商店列表补齐 installedVersion（按 id + version 判断状态）
 const installedVersionById = computed(() => {
@@ -1226,6 +1273,11 @@ const handleImport = async () => {
 };
 
 const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = false) => {
+  const action = storePluginInstallAction(plugin, forceReinstall);
+  trackPluginBrowserEvent("plugin_browser_store_plugin_install_attempt", {
+    action,
+    ...pluginAnalyticsItem(plugin),
+  });
   if (await guardDesktopOnly("installPlugin", { needSuper: true })) return;
   try {
     // 之所以先下载，是为了避免实际版本不一致
@@ -1292,6 +1344,7 @@ const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = 
 };
 
 const viewPluginDetails = (plugin: PluginListItem) => {
+  trackPluginBrowserEvent("plugin_browser_plugin_open", pluginAnalyticsItem(plugin));
   // 跳转到插件详情页面，对 ID 进行 URL 编码以支持中文字符
   // 商店/官方源条目：通过 mode=remote&sourceId 进入远程详情路径
   const path = `/plugin-detail/${encodeURIComponent(plugin.id)}`;
@@ -1316,6 +1369,7 @@ const viewPluginDetails = (plugin: PluginListItem) => {
 };
 
 const handleDelete = async (plugin: Plugin) => {
+  trackPluginBrowserEvent("plugin_browser_plugin_delete_attempt", pluginAnalyticsItem(plugin));
   if (await guardDesktopOnly("uninstallPlugin", { needSuper: true })) return;
   try {
     await ElMessageBox.confirm(t("plugins.confirmUninstall", { name: pluginName(plugin) }), t("plugins.confirmDelete"), {
@@ -1461,7 +1515,7 @@ onMounted(async () => {
 });
 
 // 首次切到“某个商店源 tab”时，才拉取该源的商店列表（懒加载）
-watch(activeTab, async (tab) => {
+watch(activeTab, async (tab, prevTab) => {
   if (!isStoreTab(tab)) return;
   const sourceId = tab.slice("store:".length);
   if (!sourceId) return;
@@ -1478,11 +1532,20 @@ watch(activeTab, async (tab) => {
     return;
   }
 
+  if (prevTab && prevTab !== tab) {
+    trackPluginBrowserEvent("plugin_browser_source_switch", sourceAnalyticsItem(sourceId));
+  }
+
   // 首次进入该源：优先本地缓存；之后每次切回该 tab 也会触发后台按时间静默重拉（见 revalidateStorePluginsInBackground）
   if (!storeLoadedBySource.value[sourceId]) {
     await loadStorePlugins(sourceId, { showMessage: false, forceRefresh: false });
     await refreshPluginIcons();
   }
+  trackPluginBrowserEvent("plugin_browser_store_plugins_view", {
+    ...sourceAnalyticsItem(sourceId),
+    count: getStorePlugins(sourceId).length,
+    loaded: !!storeLoadedBySource.value[sourceId],
+  });
   revalidateStorePluginsInBackground(sourceId);
 });
 

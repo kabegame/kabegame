@@ -3,6 +3,7 @@ export {
   SUPPORTED_LANGUAGES,
   type SupportedLocale,
   tryResolveStoredLanguage,
+  resolveBrowserLanguage,
   resolveLanguage,
   i18n,
   setLocale,

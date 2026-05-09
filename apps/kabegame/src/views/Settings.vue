@@ -253,6 +253,7 @@ import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import type { AppSettingKey } from "@kabegame/core/stores/settings";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
+import { trackEvent } from "@kabegame/core/track/umami";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
@@ -350,6 +351,21 @@ const activeTab = computed({
     storedSettingsTab.value = v;
   },
 });
+
+function currentUrl() {
+  return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
+
+watch(activeTab, (tab, previousTab) => {
+  if (!IS_WEB) return;
+  if (!previousTab || previousTab === tab) return;
+  trackEvent("settings_tab_change", {
+    tab,
+    previousTab,
+    url: currentUrl(),
+  });
+});
+
 const isRefreshing = ref(false);
 const wallpaperRotationTargetsAlbum = computed(() => {
   const raw = settingsStore.values.wallpaperRotationAlbumId as string | null | undefined;

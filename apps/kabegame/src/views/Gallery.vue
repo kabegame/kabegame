@@ -6,7 +6,9 @@
           <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!isCompact"
             hide-scrollbar :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
             :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
-            :on-context-command="handleGridContextCommand" @image-dblclick="handleImageDoubleOpen" scroll-whole-container>
+            :on-context-command="handleGridContextCommand" @image-dblclick="handleImageDoubleOpen"
+            @preview-navigate="handlePreviewNavigate" @preview-detail-toggle="handlePreviewDetailToggle"
+            @preview-close="handlePreviewClose" scroll-whole-container>
             <template #before-grid>
               <!-- 顶部工具栏 -->
               <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
@@ -188,9 +190,13 @@ const providerRootPath = computed(() => serializeFilter(galleryRouteStore.filter
 const currentPage = computed(() => galleryRouteStore.page);
 let lastTrackedGalleryPath: string | null = null;
 
+function currentUrl() {
+  return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
+
 function trackGalleryEvent(name: string, data: Record<string, unknown> = {}) {
   if (!IS_WEB) return;
-  trackEvent(name, { path: currentPath.value, ...data });
+  trackEvent(name, { path: currentPath.value, url: currentUrl(), ...data });
 }
 
 function imageAnalyticsName(image: ImageInfo): string {
@@ -262,7 +268,7 @@ watch(
     if (!path) return;
     if (path === lastTrackedGalleryPath) return;
     lastTrackedGalleryPath = path;
-    trackEvent("gallery_path", { path });
+    trackEvent("gallery_path", { path, url: currentUrl() });
   },
   { immediate: true }
 );
@@ -704,7 +710,7 @@ const {
 
 const albumStore = useAlbumStore();
 const handleAddedToAlbum = async () => {
-  trackGalleryEvent("gallery_image_action", {
+  trackGalleryEvent("image_action", {
     command: "addToAlbum",
     ...imageAnalyticsPayload(pendingAddToAlbumImages.value),
   });
@@ -876,7 +882,7 @@ const handleGridContextCommand = async (
 
   switch (command) {
     case "detail":
-      trackGalleryEvent("gallery_image_action", {
+      trackGalleryEvent("image_action", {
         command: "detail",
         ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
       });
@@ -885,7 +891,7 @@ const handleGridContextCommand = async (
       for (const img of imagesToProcess) {
         await handleDownloadImage(img);
       }
-      trackGalleryEvent("gallery_image_action", {
+      trackGalleryEvent("image_action", {
         command: "download",
         ...imageAnalyticsPayload(imagesToProcess),
       });
@@ -896,12 +902,13 @@ const handleGridContextCommand = async (
       } else if (imagesToProcess[0]) {
         await handleCopyImage(imagesToProcess[0]);
       }
-      trackGalleryEvent("gallery_image_action", {
+      trackGalleryEvent("image_action", {
         command: "copy",
         ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
       });
       return null;
     case "favorite":
+      if (await guardDesktopOnly("favoriteImage", { needSuper: true })) return null;
       if (imagesToProcess.length === 1) {
         // 单选：复用 composable（会同步收藏画册计数/缓存）
         await toggleFavorite(imagesToProcess[0]);
@@ -936,7 +943,7 @@ const handleGridContextCommand = async (
             desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`
           );
           galleryViewRef.value?.clearSelection?.();
-          trackGalleryEvent("gallery_image_action", {
+          trackGalleryEvent("image_action", {
             command: "favorite",
             ...imageAnalyticsPayload(toChange.filter((img) => succeededIds.includes(img.id))),
             value: desiredFavorite,
@@ -944,7 +951,7 @@ const handleGridContextCommand = async (
         }
       }
       if (imagesToProcess.length === 1) {
-        trackGalleryEvent("gallery_image_action", {
+        trackGalleryEvent("image_action", {
           command: "favorite",
           ...imageAnalyticsPayload(imagesToProcess),
         });
@@ -954,7 +961,7 @@ const handleGridContextCommand = async (
       if (!isMultiSelect) {
         if (imagesToProcess[0]) await handleOpenImagePath(imagesToProcess[0].localPath);
       }
-      trackGalleryEvent("gallery_image_action", {
+      trackGalleryEvent("image_action", {
         command: "open",
         ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
       });
@@ -965,7 +972,7 @@ const handleGridContextCommand = async (
         try {
           if (imagesToProcess[0]) {
             await invoke("open_file_folder", { filePath: imagesToProcess[0].localPath });
-            trackGalleryEvent("gallery_image_action", {
+            trackGalleryEvent("image_action", {
               command: "openFolder",
               ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
             });
@@ -978,7 +985,7 @@ const handleGridContextCommand = async (
       return null;
     case "wallpaper":
       if (imagesToProcess.length > 0) await setWallpaper(imagesToProcess);
-      trackGalleryEvent("gallery_image_action", {
+      trackGalleryEvent("image_action", {
         command: "wallpaper",
         ...imageAnalyticsPayload(imagesToProcess),
       });
@@ -988,7 +995,7 @@ const handleGridContextCommand = async (
       if (!isMultiSelect) {
         if (imagesToProcess[0]) await exportToWallpaperEngine(imagesToProcess[0]);
       }
-      trackGalleryEvent("gallery_image_action", {
+      trackGalleryEvent("image_action", {
         command,
         ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
       });
@@ -1016,7 +1023,7 @@ const handleGridContextCommand = async (
           );
         }
         galleryViewRef.value?.clearSelection?.();
-        trackGalleryEvent("gallery_image_action", {
+        trackGalleryEvent("image_action", {
           command: isUnhide ? "removeFromHidden" : "addToHidden",
           ...imageAnalyticsPayload(imagesToProcess),
         });
@@ -1041,7 +1048,7 @@ const handleGridContextCommand = async (
           await loadImageTypes();
           const mimeType = getMimeTypeForImage(image, ext);
           await invoke("share_file", { filePath, mimeType });
-          trackGalleryEvent("gallery_image_action", {
+          trackGalleryEvent("image_action", {
             command: "share",
             ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
           });
@@ -1064,7 +1071,7 @@ const handleGridContextCommand = async (
       // 上划手势：隐藏（加入隐藏画册，保留磁盘文件）
       if (imagesToProcess.length > 0) {
         void handleBatchHideImages(imagesToProcess);
-        trackGalleryEvent("gallery_image_action", {
+        trackGalleryEvent("image_action", {
           command: "swipe-remove",
           ...imageAnalyticsPayload(imagesToProcess),
         });
@@ -1087,16 +1094,45 @@ const confirmRemoveImages = async () => {
 
   showRemoveDialog.value = false;
   await handleBatchDeleteImages(imagesToRemove);
-  trackGalleryEvent("gallery_image_action", {
+  trackGalleryEvent("image_action", {
     command: "remove",
     ...imageAnalyticsPayload(imagesToRemove),
   });
 };
 
 const handleImageDoubleOpen = (payload: { action: "preview" | "open"; image: ImageInfo }) => {
-  trackGalleryEvent("gallery_image_double_open", {
+  trackGalleryEvent("image_double_open", {
     action: payload.action,
     ...imageAnalyticsPayload([payload.image]),
+  });
+};
+
+const handlePreviewNavigate = (payload: {
+  direction: "prev" | "next";
+  fromIndex: number;
+  toIndex: number;
+  wrapped: boolean;
+  image: ImageInfo;
+}) => {
+  trackGalleryEvent("image_preview_navigate", {
+    direction: payload.direction,
+    fromIndex: payload.fromIndex,
+    toIndex: payload.toIndex,
+    wrapped: payload.wrapped,
+    ...imageAnalyticsPayload([payload.image]),
+  });
+};
+
+const handlePreviewDetailToggle = (payload: { open: boolean; image: ImageInfo | null }) => {
+  trackGalleryEvent("image_preview_detail_toggle", {
+    open: payload.open,
+    ...imageAnalyticsPayload(payload.image ? [payload.image] : []),
+  });
+};
+
+const handlePreviewClose = (payload: { image: ImageInfo | null }) => {
+  trackGalleryEvent("image_preview_close", {
+    ...imageAnalyticsPayload(payload.image ? [payload.image] : []),
   });
 };
 

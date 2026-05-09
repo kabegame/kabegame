@@ -1,5 +1,5 @@
 {
-    "$schema": "../schema.json5",
+    "$schema": "../../schema.json5",
     "namespace": "kabegame",
     "name": "vd_year_en_US_provider",
     "properties": {
@@ -14,6 +14,10 @@
         }
     },
     "list": {
+        "All Year": {
+            "provider": "paginate100_provider",
+            "meta": { "label": "All Year" }
+        },
         "${global:vd_en_US_month|root.name}": {
             "delegate": {
                 "provider": "year_provider",
@@ -30,19 +34,6 @@
                 "month": "${root.name}",
                 "label": "${global:vd_en_US_month|root.name}"
             }
-        },
-        "${page.name}": {
-            "child_var": "page",
-            "delegate": {
-                "provider": "page_size_provider",
-                "properties": { "page_size": 100 }
-            },
-            "provider": "query_page_provider",
-            "properties": {
-                "page_size": 100,
-                "page_num": "${page.meta.page_num}"
-            },
-            "meta": "${page.meta}"
         }
     }
 }

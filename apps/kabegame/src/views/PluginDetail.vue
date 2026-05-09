@@ -12,7 +12,9 @@
         :app-version="appVersion"
         @back="goBack" @install="handleInstall"
         @uninstall="handleUninstall"
-        @copy-id="handleCopyPluginId" />
+        @copy-id="handleCopyPluginId"
+        @doc-image-preview-open="handleDocImagePreviewOpen"
+        @doc-image-preview-close="handleDocImagePreviewClose" />
 </template>
 
 <script setup lang="ts">
@@ -23,6 +25,7 @@ import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { invoke } from "@/api/rpc";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { storePluginCacheDb } from "@kabegame/core/cache/storePluginCache";
+import { trackEvent } from "@kabegame/core/track/umami";
 import { usePluginStore } from "@/stores/plugins";
 import { useApp } from "@/stores/app";
 import { storeToRefs } from "pinia";
@@ -56,6 +59,32 @@ const isInstalled = computed(() => {
     if (!plugin.value) return false;
     return pluginStore.plugins.some((p) => p.id === plugin.value!.id);
 });
+
+function currentUrl() {
+    return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
+
+function trackPluginDetailDocImageAction(
+    command: "previewOpen" | "previewClose",
+    payload: { index: number; count: number; src: string; alt: string }
+) {
+    if (!IS_WEB) return;
+    trackEvent("plugin_detail_doc_image_action", {
+        command,
+        url: currentUrl(),
+        pluginId: plugin.value?.id ?? pluginIdDecoded.value,
+        pluginName: plugin.value ? pluginName(plugin.value) : pluginIdDecoded.value,
+        mode: mode.value,
+        sourceId: sourceId.value,
+        version: plugin.value?.version ?? expectedVersion.value,
+        image: {
+            index: payload.index,
+            count: payload.count,
+            src: payload.src,
+            alt: payload.alt,
+        },
+    });
+}
 
 const loadPlugin = async () => {
     const pluginId = decodeURIComponent(route.params.id as string);
@@ -206,6 +235,14 @@ const handleCopyPluginId = async (id?: string) => {
     } catch (error) {
         ElMessage.error(t("plugins.copyFailed"));
     }
+};
+
+const handleDocImagePreviewOpen = (payload: { index: number; count: number; src: string; alt: string }) => {
+    trackPluginDetailDocImageAction("previewOpen", payload);
+};
+
+const handleDocImagePreviewClose = (payload: { index: number; count: number; src: string; alt: string }) => {
+    trackPluginDetailDocImageAction("previewClose", payload);
 };
 
 onMounted(async () => {

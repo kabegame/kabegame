@@ -1,5 +1,5 @@
 {
-    "$schema": "../schema.json5",
+    "$schema": "../../schema.json5",
     "namespace": "kabegame",
     "name": "vd_dates_ko_provider",
     "list": {

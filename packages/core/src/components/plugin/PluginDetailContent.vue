@@ -53,7 +53,9 @@
       <div class="plugin-doc-section">
         <PluginDocRenderer v-if="displayDoc" :markdown="displayDoc"
           :doc-resources="plugin?.docResources ?? null"
-          :empty-description="effectiveDocEmptyDescription" />
+          :empty-description="effectiveDocEmptyDescription"
+          @image-preview-open="$emit('doc-image-preview-open', $event)"
+          @image-preview-close="$emit('doc-image-preview-close', $event)" />
         <el-empty v-else :description="effectiveDocEmptyDescription" :image-size="100" />
       </div>
     </div>
@@ -133,6 +135,8 @@ defineEmits<{
   (e: "install"): void;
   (e: "uninstall"): void;
   (e: "copy-id", pluginId: string): void;
+  (e: "doc-image-preview-open", payload: { index: number; count: number; src: string; alt: string }): void;
+  (e: "doc-image-preview-close", payload: { index: number; count: number; src: string; alt: string }): void;
 }>();
 </script>
 

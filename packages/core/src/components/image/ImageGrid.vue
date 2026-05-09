@@ -81,6 +81,9 @@
           :actions="actions"
           :plugins="plugins"
           @context-command="handlePreviewContextCommand"
+          @preview-navigate="emit('preview-navigate', $event)"
+          @preview-detail-toggle="emit('preview-detail-toggle', $event)"
+          @preview-close="emit('preview-close', $event)"
           @open-task="emit('open-task', $event)" />
       </div>
     </div>
@@ -198,6 +201,15 @@ const emit = defineEmits<{
   addedToAlbum: [];
   "open-task": [taskId: string];
   "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
+  "preview-navigate": [payload: {
+    direction: "prev" | "next";
+    fromIndex: number;
+    toIndex: number;
+    wrapped: boolean;
+    image: ImageInfo;
+  }];
+  "preview-detail-toggle": [payload: { open: boolean; image: ImageInfo | null }];
+  "preview-close": [payload: { image: ImageInfo | null }];
 }>();
 
 const settingsStore = useSettingsStore();

@@ -15,7 +15,7 @@ export const SUPPORTED_LANGUAGES = [
 
 export type SupportedLocale = (typeof SUPPORTED_LANGUAGES)[number]["value"];
 
-const messages: Record<string, object> = {
+const messages: Record<string, any> = {
   zh,
   en,
   zhtw,
@@ -56,15 +56,28 @@ export function tryResolveStoredLanguage(lang: string | null | undefined): Suppo
 }
 
 /**
- * 生效语言：已保存且合法的语言 → 系统语言 → 英语。
+ * 浏览器语言：按浏览器偏好列表取第一个已安装语言包，否则英语。
+ */
+export function resolveBrowserLanguage(): SupportedLocale {
+  const candidates =
+    typeof navigator !== "undefined"
+      ? [
+          ...(Array.isArray(navigator.languages) ? navigator.languages : []),
+          navigator.language,
+        ]
+      : [];
+  for (const candidate of candidates) {
+    const resolved = tryResolveStoredLanguage(candidate);
+    if (resolved) return resolved;
+  }
+  return "en";
+}
+
+/**
+ * 生效语言：已保存且合法的语言 → 浏览器语言 → 英语。
  */
 export function resolveLanguage(lang: string | null | undefined): SupportedLocale {
-  const direct = tryResolveStoredLanguage(lang);
-  if (direct) return direct;
-  const nav = typeof navigator !== "undefined" ? navigator.language : "en";
-  const fromSystem = tryResolveStoredLanguage(nav);
-  if (fromSystem) return fromSystem;
-  return "en";
+  return tryResolveStoredLanguage(lang) ?? resolveBrowserLanguage();
 }
 
 export const i18n = createI18n({
@@ -76,5 +89,5 @@ export const i18n = createI18n({
 });
 
 export function setLocale(locale: SupportedLocale) {
-  i18n.global.locale.value = locale;
+  (i18n.global.locale as unknown as { value: SupportedLocale }).value = locale;
 }

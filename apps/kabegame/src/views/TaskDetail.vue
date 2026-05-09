@@ -180,6 +180,7 @@ import { openLocalImage } from "@/utils/openLocalImage";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { IS_WEB } from "@kabegame/core/env";
+import { trackEvent } from "@kabegame/core/track/umami";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { useFailedImagesStore } from "@/stores/failedImages";
 
@@ -361,6 +362,14 @@ watch(
     }
 );
 const goBack = () => {
+    if (IS_WEB) {
+        trackEvent("task_detail_exit", {
+            taskId: taskId.value,
+            taskName: taskName.value,
+            path: currentPath.value,
+            url: currentUrl(),
+        });
+    }
     router.back();
 };
 
@@ -394,6 +403,11 @@ const taskDetailRouteStore = useTaskDetailRouteStore();
 const { pageSize, search: searchQuery } = storeToRefs(taskDetailRouteStore);
 const currentPath = computed(() => taskDetailRouteStore.currentPath);
 const currentPage = computed(() => taskDetailRouteStore.page);
+let lastTrackedTaskPath: string | null = null;
+
+function currentUrl() {
+    return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
 
 const handleJumpToPage = async (page: number) => {
     await taskDetailRouteStore.navigate({ page });
@@ -414,6 +428,25 @@ const loadTotalImagesCount = async () => {
         console.error("加载任务总图片数失败:", e);
     }
 };
+
+watch(
+    () => [currentPath.value, taskId.value] as const,
+    ([path, id]) => {
+        if (!IS_WEB) return;
+        if (!isOnTaskRoute.value) return;
+        if (!path || !id) return;
+        const key = `${id}:${path}`;
+        if (key === lastTrackedTaskPath) return;
+        lastTrackedTaskPath = key;
+        trackEvent("task_path", {
+            taskId: id,
+            taskName: taskName.value,
+            path,
+            url: currentUrl(),
+        });
+    },
+    { immediate: true }
+);
 
 // 跟随路径变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
 watch(
@@ -830,6 +863,7 @@ const handleImageMenuCommand = async (
             }
             break;
         case "favorite":
+            if (await guardDesktopOnly("favoriteImage", { needSuper: true })) return null;
             if (imagesToProcess.length === 0) return null;
             await toggleFavoriteForImages(imagesToProcess);
             break;

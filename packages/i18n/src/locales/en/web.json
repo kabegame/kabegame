@@ -24,6 +24,8 @@
     "autoDeduplicate": "Auto-deduplication",
     "scheduler": "Scheduler",
     "deleteImages": "Delete images",
+    "deleteTask": "Delete task",
+    "favoriteImage": "Favorite image",
     "hideImage": "Hide image",
     "organize": "Organize library",
     "runConfig": "Run config",

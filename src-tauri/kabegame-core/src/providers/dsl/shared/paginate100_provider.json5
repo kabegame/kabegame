@@ -1,0 +1,22 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "paginate100_provider",
+    "properties": {
+        "page_size": { "type": "number", "default": 100, "min": 1, "optional": true }
+    },
+    "list": {
+        // 100 分页，输出 1..last_page
+        "${out.name}": {
+            "delegate": {
+                "provider": "paginate_provider",
+                "properties": {
+                    "page_size": 100,
+                }
+            },
+            "child_var": "out",
+            "provider": "${out.provider}",
+            "meta": "${out.meta}"
+        }
+    }
+}

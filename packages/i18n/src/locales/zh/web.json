@@ -24,6 +24,8 @@
     "autoDeduplicate": "自动去重",
     "scheduler": "定时任务",
     "deleteImages": "删除图片",
+    "deleteTask": "删除任务",
+    "favoriteImage": "收藏图片",
     "hideImage": "隐藏图片",
     "organize": "整理图库",
     "runConfig": "运行配置",

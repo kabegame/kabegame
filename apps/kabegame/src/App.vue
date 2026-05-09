@@ -151,7 +151,8 @@ import { Picture, Grid, Setting, Collection, QuestionFilled, Compass, AlarmClock
 import appLogoUrl from "@/assets/icon-small.png";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
-import { useI18n, setLocale, resolveLanguage, i18n } from "@kabegame/i18n";
+import { useI18n, setLocale, tryResolveStoredLanguage, resolveBrowserLanguage, i18n } from "@kabegame/i18n";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 import HelpDrawer from "./components/help/HelpDrawer.vue";
@@ -204,6 +205,26 @@ const elementPlusLocale = computed(() => {
       return en;
   }
 });
+
+function applyLanguageSetting(raw: string | null | undefined) {
+  const locale = tryResolveStoredLanguage(raw) ?? resolveBrowserLanguage();
+  setLocale(locale);
+  return locale;
+}
+
+async function initializeLanguageSetting() {
+  const raw = settingsStore.values.language;
+  const storedLocale = tryResolveStoredLanguage(raw ?? undefined);
+  console.log("set language stored", storedLocale)
+  if (storedLocale) {
+    setLocale(storedLocale);
+    return;
+  }
+  const detectedLocale = resolveBrowserLanguage();
+  console.log("set language detected", detectedLocale);
+  setLocale(detectedLocale);
+  await setLanguageSetting(detectedLocale, undefined, { source: "language_auto_init" });
+}
 
 // Android 底部 Tab 配置（均匀分布；爬虫仅桌面端有代理，故仅侧栏展示）
 // 依赖 locale 以便语言切换时标签立即更新
@@ -279,6 +300,7 @@ const { isCollapsed, toggleCollapse } = useSidebar();
 // 紧凑布局信号（Android 恒紧凑；web mode 跟随视口；Tauri 桌面永不紧凑）
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
+const { set: setLanguageSetting } = useSettingKeyState("language");
 
 type BgMediaType = "image" | "video";
 
@@ -454,15 +476,7 @@ onMounted(async () => {
   // 加载全部设置
   await settingsStore.ensureLoaded();
 
-  // 从配置恢复语言：解析链生效后若与存储不一致则写回 canonical，避免长期为 null/别名/非法值
-  {
-    const raw = settingsStore.values.language;
-    const canonical = resolveLanguage(raw ?? undefined);
-    setLocale(canonical);
-    if ((raw ?? "").trim() !== canonical) {
-      await settingsStore.save("language", canonical);
-    }
-  }
+  await initializeLanguageSetting();
   registerHeaderFeatures();
   console.log("[App.vue] about to call pluginStore.loadPlugins()");
   try {
@@ -504,12 +518,7 @@ onMounted(async () => {
     if (changes && typeof changes === "object") {
       settingsStore.applyChanges(changes);
       if ("language" in changes) {
-        const raw = settingsStore.values.language;
-        const canonical = resolveLanguage(raw ?? undefined);
-        setLocale(canonical);
-        if ((raw ?? "").trim() !== canonical) {
-          await settingsStore.save("language", canonical);
-        }
+        applyLanguageSetting(settingsStore.values.language);
         registerHeaderFeatures();
       }
       console.log("[Settings] 收到设置变更事件，已更新:", Object.keys(changes));
@@ -521,8 +530,7 @@ onMounted(async () => {
     watch(
       () => settingsStore.values.language,
       (raw) => {
-        const canonical = resolveLanguage(raw ?? undefined);
-        setLocale(canonical);
+        applyLanguageSetting(raw ?? undefined);
         registerHeaderFeatures();
       },
     );

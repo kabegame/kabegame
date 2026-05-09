@@ -166,6 +166,7 @@ import { useCrawlerStore } from "../../stores/crawler";
 import { LOCAL_IMPORT_PLUGIN_ID, usePluginStore } from "../../stores/plugins";
 import type { PluginManifestText } from "../../stores/plugins";
 import type { TaskRunParamsTask } from "./TaskRunParamsContent.vue";
+import { trackEvent } from "../../track/umami";
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
@@ -307,7 +308,27 @@ const { list: virtualList, containerProps, wrapperProps } = useVirtualList(tasks
 const runParamsDialogOpen = ref(false);
 const runParamsTask = ref<TaskRunParamsTask | null>(null);
 
+function currentUrl() {
+  return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
+
+function currentPagePath() {
+  return typeof location === "undefined" ? "" : location.pathname;
+}
+
+function trackTaskDrawerAction(action: "view_params" | "view_log", task: ScriptTask) {
+  trackEvent("task_drawer_task_action", {
+    action,
+    taskId: task.id,
+    pluginId: task.pluginId,
+    status: task.status,
+    triggerPage: currentPagePath(),
+    url: currentUrl(),
+  });
+}
+
 function openRunParamsDialog(task: ScriptTask) {
+  trackTaskDrawerAction("view_params", task);
   runParamsTask.value = task;
   runParamsDialogOpen.value = true;
 }
@@ -709,6 +730,8 @@ const handleOpenTaskScheduleConfig = (task: TaskSummaryRowTask) => {
 const openTaskLog = async (taskId: string) => {
   const id = String(taskId || "").trim();
   if (!id) return;
+  const task = props.tasks.find((t) => t.id === id);
+  if (task) trackTaskDrawerAction("view_log", task);
   await taskLogDialogRef.value?.openTaskLog(id);
 };
 

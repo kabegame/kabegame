@@ -93,7 +93,7 @@ type WebLocalSettingEntry = {
 }[AppSettingKey];
 
 const WEB_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
-  { key: "language", defaultValue: "en" },
+  { key: "language", defaultValue: null },
   { key: "imageClickAction", defaultValue: "preview", readonly: true },
   { key: "galleryImageAspectRatio", defaultValue: "16:10" },
   { key: "galleryImageObjectPosition", defaultValue: "center" },

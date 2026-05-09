@@ -7,6 +7,9 @@
     @scroll-stable="$emit('scroll-stable')"
     @open-task="handleOpenTask"
     @image-dblclick="$emit('image-dblclick', $event)"
+    @preview-navigate="$emit('preview-navigate', $event)"
+    @preview-detail-toggle="$emit('preview-detail-toggle', $event)"
+    @preview-close="$emit('preview-close', $event)"
   >
     <template #before-grid>
       <slot name="before-grid" />
@@ -88,6 +91,15 @@ const props = defineProps<Props>();
 defineEmits<{
   "scroll-stable": [];
   "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
+  "preview-navigate": [payload: {
+    direction: "prev" | "next";
+    fromIndex: number;
+    toIndex: number;
+    wrapped: boolean;
+    image: ImageInfo;
+  }];
+  "preview-detail-toggle": [payload: { open: boolean; image: ImageInfo | null }];
+  "preview-close": [payload: { image: ImageInfo | null }];
   // 兼容旧 API：右键已移除加入画册，但保留事件名不破坏上层模板
   addedToAlbum: [];
 }>();

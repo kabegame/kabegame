@@ -24,6 +24,8 @@
     "autoDeduplicate": "自動重複排除",
     "scheduler": "スケジューラ",
     "deleteImages": "画像を削除",
+    "deleteTask": "タスクを削除",
+    "favoriteImage": "画像をお気に入りに追加",
     "hideImage": "画像を非表示",
     "organize": "ライブラリを整理",
     "runConfig": "設定を実行",

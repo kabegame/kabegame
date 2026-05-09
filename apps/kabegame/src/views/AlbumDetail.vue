@@ -68,7 +68,10 @@
     <ImageGrid v-else ref="albumViewRef" class="detail-body" :images="images" :enable-ctrl-wheel-adjust-columns="!isCompact"
       :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
       :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
-      :on-context-command="handleImageMenuCommand" hide-scrollbar scroll-whole-container @added-to-album="handleAddedToAlbum">
+      :on-context-command="handleImageMenuCommand" hide-scrollbar scroll-whole-container
+      @added-to-album="handleAddedToAlbum" @image-dblclick="handleImageDoubleOpen"
+      @preview-navigate="handlePreviewNavigate" @preview-detail-toggle="handlePreviewDetailToggle"
+      @preview-close="handlePreviewClose">
 
       <template #empty>
         <div class="album-empty fade-in">
@@ -224,6 +227,7 @@ import AlbumDetailBrowseToolbar from "@/components/AlbumDetailBrowseToolbar.vue"
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { IS_LIGHT_MODE, IS_WEB } from "@kabegame/core/env";
+import { trackEvent } from "@kabegame/core/track/umami";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
@@ -392,7 +396,20 @@ const prefetchChildPreview = async (child: Album) => {
   childPreviewImages.value = { ...childPreviewImages.value, [child.id]: imgs };
 };
 
+function trackAlbumChildEnter(child: Album) {
+  if (!IS_WEB) return;
+  trackEvent("album_child_enter", {
+    parentAlbumId: albumId.value,
+    parentAlbumName: albumName.value,
+    childAlbumId: child.id,
+    childAlbumName: child.name,
+    path: currentPath.value,
+    url: currentUrl(),
+  });
+}
+
 const openChildAlbum = (child: Album) => {
+  trackAlbumChildEnter(child);
   router.push({ name: "AlbumDetail", params: { id: child.id } });
 };
 
@@ -555,6 +572,7 @@ const { pageSize, search } = storeToRefs(albumDetailRouteStore);
 
 const currentPath = computed(() => albumDetailRouteStore.currentPath);
 const currentPage = computed(() => albumDetailRouteStore.page);
+let lastTrackedAlbumPath: string | null = null;
 
 const isAlbumWallpaperFilterEmpty = computed(() =>
   albumDetailRouteStore.filter === "wallpaper-order"
@@ -577,6 +595,25 @@ const loadTotalImagesCount = async () => {
   });
   totalImagesCount.value = res?.total ?? 0;
 };
+
+watch(
+  () => [currentPath.value, albumId.value, albumName.value] as const,
+  ([path, id, name]) => {
+    if (!IS_WEB) return;
+    if (!isOnAlbumRoute.value) return;
+    if (!path || !id || !name) return;
+    const key = `${id}:${path}`;
+    if (key === lastTrackedAlbumPath) return;
+    lastTrackedAlbumPath = key;
+    trackEvent("album_path", {
+      albumId: id,
+      albumName: name,
+      path,
+      url: currentUrl(),
+    });
+  },
+  { immediate: true }
+);
 
 // 跟随路径变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
 watch(
@@ -693,10 +730,83 @@ const showRemoveDialog = ref(false);
 const removeDeleteFiles = ref(false);
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
+const pendingAddToAlbumImages = ref<ImageInfo[]>([]);
 const showAddToAlbumDialog = ref(false);
 const addToAlbumImageIds = ref<string[]>([]);
 
+function currentUrl() {
+  return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
+
+function imageAnalyticsName(image: ImageInfo): string {
+  const displayName = image.displayName?.trim();
+  if (displayName) return displayName;
+  const localName = (image.localPath || "").split(/[\\/]/).pop()?.trim();
+  if (localName) return localName;
+  const urlName = (image.url || "").split(/[\\/]/).pop()?.trim();
+  return urlName || image.id;
+}
+
+function imageAnalyticsItem(image: ImageInfo) {
+  return {
+    id: image.id,
+    name: imageAnalyticsName(image),
+    localPath: image.localPath,
+  };
+}
+
+function imageAnalyticsPayload(targets: ImageInfo[]): Record<string, unknown> {
+  const mode = targets.length > 1 ? "batch" : "single";
+  const base = {
+    mode,
+    count: targets.length,
+  };
+  if (mode === "single") {
+    const image = targets[0];
+    return {
+      ...base,
+      image: image ? imageAnalyticsItem(image) : null,
+    };
+  }
+  return {
+    ...base,
+    images: targets.map(imageAnalyticsItem),
+  };
+}
+
+function trackAlbumImageEvent(name: string, data: Record<string, unknown> = {}) {
+  if (!IS_WEB) return;
+  trackEvent(name, {
+    surface: "album_detail",
+    albumId: albumId.value,
+    albumName: albumName.value,
+    path: currentPath.value,
+    url: currentUrl(),
+    ...data,
+  });
+}
+
+function trackAlbumImageAction(
+  command: string,
+  targets: ImageInfo[],
+  data: Record<string, unknown> = {}
+) {
+  trackAlbumImageEvent("image_action", {
+    command,
+    ...imageAnalyticsPayload(targets),
+    ...data,
+  });
+}
+
 const goBack = () => {
+  if (IS_WEB) {
+    trackEvent("album_detail_exit", {
+      albumId: albumId.value,
+      albumName: albumName.value,
+      path: currentPath.value,
+      url: currentUrl(),
+    });
+  }
   router.back();
 };
 
@@ -779,6 +889,8 @@ watch(
 );
 
 const handleAddedToAlbum = async () => {
+  trackAlbumImageAction("addToAlbum", pendingAddToAlbumImages.value);
+  pendingAddToAlbumImages.value = [];
   await albumStore.loadAlbums();
 };
 
@@ -840,6 +952,7 @@ const confirmRemoveImages = async () => {
         count > 1 ? t("gallery.removedFromAlbumCountSuccess", { count }) : t("gallery.removedFromAlbumSuccess")
       );
     }
+    trackAlbumImageAction("remove", imagesToRemove, { deleteFiles: shouldDeleteFiles });
   } catch (error) {
     console.error("操作失败:", error);
     ElMessage.error(shouldDeleteFiles ? t("common.deleteFail") : t("common.removeFail"));
@@ -871,8 +984,6 @@ const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<s
 const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<import("@/components/ImageGrid.vue").ContextCommand | null> => {
   const command = payload.command;
   const image = payload.image;
-  // 让 ImageGrid 执行默认内置行为（详情）
-  if (command === "detail") return command;
 
   // 从本地列表中查找图片对象（确保获取完整的图片信息）
   const imageInList = images.value.find((img) => img.id === image.id);
@@ -887,9 +998,14 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
     : imageInList
       ? [imageInList]
       : [];
+  const primaryImageTargets = imageInList ? [imageInList] : [image];
 
   switch (command) {
+    case "detail":
+      trackAlbumImageAction("detail", primaryImageTargets);
+      return command;
     case "favorite": {
+      if (await guardDesktopOnly("favoriteImage", { needSuper: true })) break;
       const desiredFavorite = imagesToProcess.some((img) => !(img.favorite ?? false));
       const toChange = imagesToProcess.filter(
         (img) => (img.favorite ?? false) !== desiredFavorite
@@ -920,12 +1036,18 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
 
       clearSelection();
       ElMessage.success(desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`);
+      trackAlbumImageAction(
+        "favorite",
+        toChange.filter((img) => succeededIds.includes(img.id)),
+        { value: desiredFavorite }
+      );
       break;
     }
     case "download":
       for (const img of imagesToProcess) {
         await handleDownloadImage(img);
       }
+      trackAlbumImageAction("download", imagesToProcess);
       break;
     case "copy":
       if (IS_WEB) {
@@ -933,11 +1055,13 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       } else if (imagesToProcess[0]) {
         await handleCopyImage(imagesToProcess[0]);
       }
+      trackAlbumImageAction("copy", primaryImageTargets);
       break;
     case "open":
       if (!isMultiSelect && image.localPath) {
         try {
           await openLocalImage(image.localPath);
+          trackAlbumImageAction("open", primaryImageTargets);
         } catch (error) {
           console.error("打开文件失败:", error);
           ElMessage.error("打开文件失败");
@@ -948,6 +1072,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       if (await guardDesktopOnly("openLocal")) break;
       if (!isMultiSelect) {
         await invoke("open_file_folder", { filePath: image.localPath });
+        trackAlbumImageAction("openFolder", primaryImageTargets);
       }
       break;
     case "wallpaper":
@@ -955,6 +1080,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
         await setWallpaperOrBackground(image.id);
         currentWallpaperImageId.value = image.id;
       }
+      trackAlbumImageAction("wallpaper", primaryImageTargets);
       break;
     case "share":
       if (await guardDesktopOnly("share")) break;
@@ -970,6 +1096,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
           await loadImageTypes();
           const mimeType = getMimeTypeForImage(image, ext);
           await invoke("share_file", { filePath, mimeType });
+          trackAlbumImageAction("share", primaryImageTargets);
         } catch (error) {
           console.error("分享失败:", error);
           ElMessage.error("分享失败");
@@ -1055,6 +1182,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
           : `已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`;
         ElMessage.success(msg);
         await invoke("open_file_path", { filePath: res.projectDir });
+        trackAlbumImageAction(command, imagesToProcess);
       } catch (e) {
         if (e !== "cancel") {
           console.error("导出 Wallpaper Engine 工程失败:", e);
@@ -1065,6 +1193,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
     case "addToAlbum": {
       const ids = imagesToProcess.map((img) => img.id);
       addToAlbumImageIds.value = ids;
+      pendingAddToAlbumImages.value = imagesToProcess.slice();
       showAddToAlbumDialog.value = true;
       break;
     }
@@ -1086,6 +1215,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
           );
         }
         clearSelection();
+        trackAlbumImageAction(isUnhide ? "removeFromHidden" : "addToHidden", imagesToProcess);
       } catch (e) {
         console.error(isUnhide ? "取消隐藏失败:" : "隐藏失败:", e);
         ElMessage.error(t(isUnhide ? "contextMenu.unhideFailed" : "contextMenu.hideFailed"));
@@ -1122,6 +1252,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
           if (includesCurrentWallpaper) {
             currentWallpaperImageId.value = null;
           }
+          trackAlbumImageAction("swipe-remove", imagesToProcess);
         } catch (error) {
           console.error("移除图片失败:", error);
           ElMessage.error(t("gallery.removeImageFailed"));
@@ -1130,6 +1261,42 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       break;
   }
   return null;
+};
+
+const handleImageDoubleOpen = (payload: { action: "preview" | "open"; image: ImageInfo }) => {
+  trackAlbumImageEvent("image_double_open", {
+    action: payload.action,
+    ...imageAnalyticsPayload([payload.image]),
+  });
+};
+
+const handlePreviewNavigate = (payload: {
+  direction: "prev" | "next";
+  fromIndex: number;
+  toIndex: number;
+  wrapped: boolean;
+  image: ImageInfo;
+}) => {
+  trackAlbumImageEvent("image_preview_navigate", {
+    direction: payload.direction,
+    fromIndex: payload.fromIndex,
+    toIndex: payload.toIndex,
+    wrapped: payload.wrapped,
+    ...imageAnalyticsPayload([payload.image]),
+  });
+};
+
+const handlePreviewDetailToggle = (payload: { open: boolean; image: ImageInfo | null }) => {
+  trackAlbumImageEvent("image_preview_detail_toggle", {
+    open: payload.open,
+    ...imageAnalyticsPayload(payload.image ? [payload.image] : []),
+  });
+};
+
+const handlePreviewClose = (payload: { image: ImageInfo | null }) => {
+  trackAlbumImageEvent("image_preview_close", {
+    ...imageAnalyticsPayload(payload.image ? [payload.image] : []),
+  });
 };
 
 // 初始化画册数据

@@ -8,12 +8,24 @@ function currentUrl() {
   return typeof location === "undefined" ? "" : location.pathname + location.search;
 }
 
-function trackSettingChange(key: string, value: unknown) {
+function currentSettingsSource() {
+  if (typeof location === "undefined") return "unknown";
+  return location.pathname === "/settings" ? "settings_page" : "quick_settings_drawer";
+}
+
+function trackSettingChange(
+  key: string,
+  value: unknown,
+  source = currentSettingsSource(),
+  extra: Record<string, unknown> = {},
+) {
   if (!IS_WEB) return;
-  trackEvent("gallery_setting_change", {
+  trackEvent("setting_change", {
     key,
     value,
     url: currentUrl(),
+    source,
+    ...extra,
   });
 }
 
@@ -68,7 +80,8 @@ export function useSettingKeyState<K extends AppSettingKey>(key: K) {
    */
   const set = async (
     value: AppSettings[K],
-    onAfterSave?: () => Promise<void> | void
+    onAfterSave?: () => Promise<void> | void,
+    analytics?: { source?: string; extra?: Record<string, unknown> },
   ) => {
     // 如果不在 down 状态，不响应用户操作
     if (!isDown.value) {
@@ -76,7 +89,7 @@ export function useSettingKeyState<K extends AppSettingKey>(key: K) {
     }
     console.log('set', key, value);
     await settingsStore.save(key, value, onAfterSave);
-    trackSettingChange(key, value);
+    trackSettingChange(key, value, analytics?.source, analytics?.extra);
   };
 
   return {

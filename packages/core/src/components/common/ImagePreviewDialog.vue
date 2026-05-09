@@ -151,7 +151,18 @@ const detailDrawerOpen = useLocalStorage("kabegame-preview-detail-open", false, 
 const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
   (e: "open-task", taskId: string): void;
+  (e: "preview-navigate", payload: PreviewNavigatePayload): void;
+  (e: "preview-detail-toggle", payload: { open: boolean; image: ImageInfo | null }): void;
+  (e: "preview-close", payload: { image: ImageInfo | null }): void;
 }>();
+
+type PreviewNavigatePayload = {
+  direction: "prev" | "next";
+  fromIndex: number;
+  toIndex: number;
+  wrapped: boolean;
+  image: ImageInfo;
+};
 
 const previewVisible = ref(false);
 const previewImageUrl = ref("");
@@ -279,6 +290,10 @@ const markPreviewInteracting = () => {
 /** 切换详情抽屉并重置 Panzoom，使图片按新容器尺寸适配（含抽屉动画结束后再对齐一次） */
 const toggleDetailDrawer = () => {
   detailDrawerOpen.value = !detailDrawerOpen.value;
+  emit("preview-detail-toggle", {
+    open: detailDrawerOpen.value,
+    image: previewImage.value,
+  });
   panzoomReset();
   void nextTick(() => {
     requestAnimationFrame(() => {
@@ -413,6 +428,23 @@ let navThrottleTimer: ReturnType<typeof setTimeout> | null = null;
 let isNavThrottled = false;
 const NAV_THROTTLE_MS = 100;
 
+const emitPreviewNavigate = (
+  direction: "prev" | "next",
+  fromIndex: number,
+  toIndex: number,
+  wrapped: boolean,
+  image: ImageInfo | undefined
+) => {
+  if (!image) return;
+  emit("preview-navigate", {
+    direction,
+    fromIndex,
+    toIndex,
+    wrapped,
+    image,
+  });
+};
+
 const navigateWithPreloadGate = (targetIndex: number) => {
   if (!previewVisible.value) return;
   setPreviewByIndex(targetIndex);
@@ -437,6 +469,7 @@ const goPrev = () => {
   }, NAV_THROTTLE_MS);
 
   navigateWithPreloadGate(targetIndex);
+  emitPreviewNavigate("prev", idx, targetIndex, didWrap, props.images[targetIndex]);
 };
 
 const goNext = () => {
@@ -459,6 +492,7 @@ const goNext = () => {
   }, NAV_THROTTLE_MS);
 
   navigateWithPreloadGate(targetIndex);
+  emitPreviewNavigate("next", idx, targetIndex, didWrap, props.images[targetIndex]);
 };
 
 const handlePreviewDialogContextMenu = (event: MouseEvent) => {
@@ -615,10 +649,12 @@ function doAndroidPreviewCleanup() {
 }
 
 const closePreview = () => {
+  const closedImage = previewImage.value;
   if (uiStore.isCompact) {
     previewVisible.value = false;
     doAndroidPreviewCleanup();
     previewIndex.value = -1;
+    emit("preview-close", { image: closedImage });
     return;
   }
   previewVisible.value = false;
@@ -637,6 +673,7 @@ const closePreview = () => {
   if (navThrottleTimer) clearTimeout(navThrottleTimer);
   navThrottleTimer = null;
   isNavThrottled = false;
+  emit("preview-close", { image: closedImage });
 };
 
 const performSwipeDelete = () => {
@@ -801,6 +838,12 @@ const handlePswpBeforeClose = (source?: string): boolean => {
 const handlePswpChange = ({ index }: { index: number }) => {
   if (index < 0) return;
   if (uiStore.isCompact) {
+    const previousOrigIdx = currentImageId.value
+      ? props.images.findIndex((img) => img.id === currentImageId.value)
+      : -1;
+    const previousFilteredIdx = previousOrigIdx >= 0
+      ? androidFilteredIndices.value.indexOf(previousOrigIdx)
+      : -1;
     const origIdx = androidFilteredIndices.value[index];
     if (origIdx == null || origIdx >= props.images.length) return;
     initialPanY = null;
@@ -814,6 +857,13 @@ const handlePswpChange = ({ index }: { index: number }) => {
     previewIndex.value = index;
     const img = props.images[origIdx];
     if (img) currentImageId.value = img.id;
+    if (img && previousOrigIdx >= 0 && previousOrigIdx !== origIdx) {
+      const lastFilteredIdx = androidFilteredIndices.value.length - 1;
+      const wrappedNext = previousFilteredIdx === lastFilteredIdx && index === 0;
+      const wrappedPrev = previousFilteredIdx === 0 && index === lastFilteredIdx;
+      const direction = wrappedNext || (!wrappedPrev && index > previousFilteredIdx) ? "next" : "prev";
+      emitPreviewNavigate(direction, previousOrigIdx, origIdx, wrappedNext || wrappedPrev, img);
+    }
   } else {
     if (index >= props.images.length) return;
     previewIndex.value = index;
@@ -830,6 +880,7 @@ const handlePswpUiVisibleChange = ({ visible }: { visible: boolean }) => {
 };
 
 const handlePswpClose = () => {
+  const closedImage = previewImage.value;
   doAndroidPreviewCleanup();
   previewIndex.value = -1;
   swipeDeleteActive.value = false;
@@ -839,6 +890,7 @@ const handlePswpClose = () => {
     clearTimeout(verticalDragResetTimer);
     verticalDragResetTimer = null;
   }
+  emit("preview-close", { image: closedImage });
 };
 
 onMounted(() => {

@@ -1,0 +1,25 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_plugin_router",
+    "properties": {
+        "plugin_id": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "delegate": {
+            "provider": "plugin_provider",
+            "properties": { "plugin_id": "${properties.plugin_id}" }
+        }
+    },
+    "list": {
+        "Extend": {
+            "provider": "plugin_entry_provider",
+            "properties": {
+                "plugin_id": "${properties.plugin_id}"
+            }
+        },
+        "All": {
+            "provider": "vd_all_provider"
+        }
+    }
+}

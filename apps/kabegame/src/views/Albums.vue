@@ -90,6 +90,7 @@ import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
+import { trackEvent } from "@kabegame/core/track/umami";
 import AlbumsPageHeader from "@/components/header/AlbumsPageHeader.vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -120,6 +121,22 @@ const pullToRefreshOpts = computed(() =>
     ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
     : undefined
 );
+
+function currentUrl() {
+  return typeof location === "undefined" ? "" : location.pathname + location.search;
+}
+
+function trackAlbumEnter(album: { id: string; name: string }, source: "card" | "context_menu" | "hidden_button") {
+  if (!IS_WEB) return;
+  trackEvent("album_enter", {
+    albumId: album.id,
+    albumName: album.name,
+    isHidden: album.id === HIDDEN_ALBUM_ID,
+    source,
+    triggerPage: "albums",
+    url: currentUrl(),
+  });
+}
 
 
 // 虚拟磁盘
@@ -621,10 +638,12 @@ const prefetchPreview = async (album: { id: string }) => {
 };
 
 const openAlbum = (album: { id: string; name: string }) => {
+  trackAlbumEnter(album, "card");
   router.push(`/albums/${album.id}`);
 };
 
 const openHiddenAlbum = () => {
+  trackAlbumEnter({ id: HIDDEN_ALBUM_ID, name: t("albums.hiddenAlbumName") }, "hidden_button");
   router.push(`/albums/${HIDDEN_ALBUM_ID}`);
 };
 
@@ -649,6 +668,7 @@ const handleAlbumMenuCommand = async (
   albumMenu.hide();
 
   if (command === "browse") {
+    trackAlbumEnter({ id, name }, "context_menu");
     router.push(`/albums/${id}`);
     return;
   }

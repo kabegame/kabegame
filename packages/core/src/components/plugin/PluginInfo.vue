@@ -51,9 +51,11 @@
                                 <div>{{ appVersionTooltipLine }}</div>
                                 <a
                                     v-if="minAppBelowRequired"
-                                    href="#"
+                                    :href="KABEGAME_RELEASES_LATEST"
                                     class="detail-release-link"
-                                    @click.prevent="openLatestRelease"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    @click="handleOpenLatestRelease"
                                 >{{ t("plugins.docReleaseLinkText") }}</a>
                             </div>
                         </template>
@@ -78,9 +80,15 @@
                 </el-descriptions-item>
 
                 <el-descriptions-item v-if="baseUrl" :label="t('plugins.detailCrawlUrlLabel')">
-                    <span class="source-url-link" role="button" @click="handleOpenBaseUrl(baseUrl)">
+                    <a
+                        class="source-url-link"
+                        :href="baseUrl"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        @click="handleOpenBaseUrl($event, baseUrl)"
+                    >
                         {{ baseUrl }}
-                    </span>
+                    </a>
                 </el-descriptions-item>
 
                 <slot name="extra-items" />
@@ -112,6 +120,7 @@ import { useI18n } from "@kabegame/i18n";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ElMessage } from "element-plus";
 import { WarningFilled } from "@element-plus/icons-vue";
+import { IS_WEB } from "../../env";
 import { compareVersions } from "../../utils/version";
 
 const KABEGAME_RELEASES_LATEST = "https://github.com/kabegame/kabegame/releases/latest";
@@ -163,17 +172,23 @@ const minAppTagType = computed<"success" | "danger" | "info">(() => {
     return compareVersions(appV, minV) >= 0 ? "success" : "danger";
 });
 
-function openLatestRelease() {
-    void openUrl(KABEGAME_RELEASES_LATEST);
+function handleOpenLatestRelease(event: MouseEvent) {
+    void handleOpenExternalUrl(event, KABEGAME_RELEASES_LATEST);
 }
 
-const handleOpenBaseUrl = async (url: string) => {
-  try {
-    await openUrl(url);
-  } catch (error) {
-    console.error("打开链接失败:", error);
-    ElMessage.error(t("common.openUrlFailed"));
-  }
+const handleOpenBaseUrl = (event: MouseEvent, url: string) => {
+    void handleOpenExternalUrl(event, url);
+};
+
+const handleOpenExternalUrl = async (event: MouseEvent, url: string) => {
+    if (IS_WEB) return;
+    event.preventDefault();
+    try {
+        await openUrl(url);
+    } catch (error) {
+        console.error("打开链接失败:", error);
+        ElMessage.error(t("common.openUrlFailed"));
+    }
 };
 
 defineEmits<{

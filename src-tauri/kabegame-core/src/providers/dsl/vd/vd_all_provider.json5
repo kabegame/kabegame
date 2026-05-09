@@ -4,17 +4,13 @@
     "name": "vd_all_provider",
     // 固定 DEFAULT_PAGE_SIZE=100, 直接列页号; 不暴露 desc/xNNNx。
     "list": {
-        "${page.name}": {
-            "child_var": "page",
+        "${out.name}": {
+            "child_var": "out",
             "delegate": {
-                "provider": "page_size_provider",
-                "properties": { "page_size": 100 }
+                "provider": "paginate100_provider",
             },
-            "provider": "query_page_provider",
-            "properties": {
-                "page_size": 100,
-                "page_num": "${page.meta.page_num}"
-            }
+            "provider": "${out.provider}",
+            "meta": "${out.meta}"
         }
     }
 }

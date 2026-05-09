@@ -24,6 +24,8 @@
     "autoDeduplicate": "자동 중복 제거",
     "scheduler": "스케줄러",
     "deleteImages": "이미지 삭제",
+    "deleteTask": "작업 삭제",
+    "favoriteImage": "이미지 즐겨찾기",
     "hideImage": "이미지 숨기기",
     "organize": "라이브러리 정리",
     "runConfig": "구성 실행",

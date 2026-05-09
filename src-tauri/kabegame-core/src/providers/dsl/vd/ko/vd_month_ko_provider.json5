@@ -14,6 +14,10 @@
         }
     },
     "list": {
+        "전체 월": {
+            "provider": "paginate100_provider",
+            "meta": { "label": "전체 월" }
+        },
         "${root.name}일": {
             "delegate": {
                 "provider": "month_provider",
@@ -30,19 +34,6 @@
                 "day": "${root.name}",
                 "label": "${root.name}일"
             }
-        },
-        "${page.name}": {
-            "child_var": "page",
-            "delegate": {
-                "provider": "page_size_provider",
-                "properties": { "page_size": 100 }
-            },
-            "provider": "query_page_provider",
-            "properties": {
-                "page_size": 100,
-                "page_num": "${page.meta.page_num}"
-            },
-            "meta": "${page.meta}"
         }
     }
 }
