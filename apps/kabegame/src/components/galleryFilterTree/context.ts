@@ -8,6 +8,7 @@ import {
 import { invoke } from "@/api/rpc";
 import {
   filterDateSegment,
+  filterMediaFormat,
   filterMediaKind,
   filterSizeRange,
   type GalleryFilter,
@@ -18,6 +19,7 @@ export interface ProviderChildDir {
   name: string;
   meta?: {
     isLeaf?: boolean;
+    plain?: boolean;
   } | null;
   total?: number | null;
 }
@@ -100,6 +102,10 @@ export function isProviderLeaf(entry: ProviderChildDir) {
   return entry.meta?.isLeaf === true;
 }
 
+export function isProviderPlain(entry: ProviderChildDir) {
+  return entry.meta?.plain === true;
+}
+
 export async function listProviderDirs(path: string): Promise<ProviderChildDir[]> {
   const entries = await invoke<ProviderChildDir[]>("list_provider_children", {
     path,
@@ -131,7 +137,7 @@ export function isSameGalleryFilter(a: GalleryFilter, b: GalleryFilter) {
     case "date":
       return filterDateSegment(b) === a.segment;
     case "media-type":
-      return filterMediaKind(b) === a.kind;
+      return filterMediaKind(b) === a.kind && filterMediaFormat(b) === (a.format?.trim() || null);
     case "size":
       return filterSizeRange(b) === a.range;
     case "plugin":

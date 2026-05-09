@@ -13,7 +13,7 @@ pub use runtime::{ProviderRuntime, ResolvedNode};
 use crate::compose::{BuildError, FoldError, ProviderQuery, RenderError};
 use crate::template::eval::TemplateValue;
 use crate::{LoadError, ProviderRegistry, RegistryError};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 /// SQL 方言标注。executor 通过 `dialect()` 暴露; build_sql 渲染期据此选 placeholder。
@@ -88,9 +88,6 @@ pub struct ProviderContext {
     pub registry: Arc<ProviderRegistry>,
     /// 由 runtime 内部 `Weak<Self>` 在入口 upgrade 而来。
     pub runtime: Arc<ProviderRuntime>,
-    /// 当前正在被 resolve 的 provider 所在路径。
-    /// runtime 在每段 resolve 前更新；dynamic delegate reverse lookup 用它回到运行时 list。
-    current_path: RwLock<String>,
     provider_keys: Arc<Mutex<Vec<ProviderKey>>>,
 }
 
@@ -99,17 +96,8 @@ impl ProviderContext {
         Self {
             registry,
             runtime,
-            current_path: RwLock::new(String::new()),
             provider_keys: Arc::new(Mutex::new(Vec::new())),
         }
-    }
-
-    pub fn current_path(&self) -> String {
-        self.current_path.read().unwrap().clone()
-    }
-
-    pub(crate) fn set_current_path(&self, path: String) {
-        *self.current_path.write().unwrap() = path;
     }
 
     pub(crate) fn provider_key_mark(&self) -> usize {
@@ -132,16 +120,19 @@ pub struct ChildEntry {
     pub meta: Option<serde_json::Value>,
 }
 
+pub type DelegateTransform =
+    Arc<dyn Fn(Option<&ChildEntry>, &ProviderContext) -> Option<ChildEntry> + Send + Sync>;
+
 /// Result of Provider::resolve.
 /// DSL providers that delegate return Delegate; all others return Terminal.
 pub enum ResolveRef {
     /// Direct result. None means the path segment was not found.
     Terminal(Option<ChildEntry>),
-    /// Delegation reference. Runtime folds target.apply_query before applying final_provider.
+    /// Delegation reference. Runtime owns recursive target resolution and
+    /// unwinds transforms after the target chain bottoms out.
     Delegate {
         target: Arc<dyn Provider>,
-        final_provider: Option<Arc<dyn Provider>>,
-        final_meta: Option<serde_json::Value>,
+        transform: DelegateTransform,
     },
 }
 
@@ -185,18 +176,10 @@ impl std::fmt::Debug for ResolveRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Terminal(child) => f.debug_tuple("Terminal").field(child).finish(),
-            Self::Delegate {
-                final_provider,
-                final_meta,
-                ..
-            } => f
+            Self::Delegate { .. } => f
                 .debug_struct("Delegate")
                 .field("target", &"<Provider>")
-                .field(
-                    "final_provider",
-                    &final_provider.as_ref().map(|_| "<Provider>"),
-                )
-                .field("final_meta", final_meta)
+                .field("transform", &"<Fn>")
                 .finish(),
         }
     }
@@ -243,7 +226,8 @@ pub trait Provider: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// 给定段名定位单个子 provider。语义按 §5.2 (regex resolve → 静态 list 字面 → 动态反查)。
+    /// 给定段名定位单个子 provider。DSL provider 自身只检查显式 resolve
+    /// 规则和静态 list 字面；动态 list fallback 由 runtime 统一处理。
     fn resolve(
         &self,
         _name: &str,

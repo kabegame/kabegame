@@ -306,7 +306,7 @@ fn vd_zh_cn_chinese_segment_resolves() {
 // gallery_route 设置 `limit: 0` 限制根列举, 这个 limit 会级联进入 ${composed},
 // 导致内层 SQL 的 FROM 子查询命中 LIMIT 0 → 空集。也就是说测试这个层次的"真 SQL 反查"
 // 涉及 DSL 语义边界 (限制如何与 page_size_provider 交互), 不属于 6c S6 的整合范围。
-// dsl_dynamic_sqlite.rs 已经在受控环境下端到端验证了 list_dynamic_sql / reverse_lookup_dynamic
+// dsl_dynamic_sqlite.rs 已经在受控环境下端到端验证了 list_dynamic_sql / list fallback
 // 的执行链路, 这里集中验证 9 .json5 + 程序化 stub 共存时的路由与缓存。
 
 #[test]

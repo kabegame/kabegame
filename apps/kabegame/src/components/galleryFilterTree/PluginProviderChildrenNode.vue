@@ -17,6 +17,7 @@
       :name="child.name"
       :extend-path="child.name"
       :is-leaf="isProviderLeaf(child)"
+      :is-plain="isProviderPlain(child)"
       :depth="2"
       :initial-count="child.total ?? undefined"
       @select="$emit('select', $event)"
@@ -36,6 +37,7 @@ import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import PluginExtendProviderChildrenNode from "./PluginExtendProviderChildrenNode.vue";
 import {
   isProviderLeaf,
+  isProviderPlain,
   isSameGalleryFilter,
   listProviderDirs,
   pluginExtendPath,

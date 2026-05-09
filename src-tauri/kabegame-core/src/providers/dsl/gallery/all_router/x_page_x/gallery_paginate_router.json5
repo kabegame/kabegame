@@ -1,14 +1,12 @@
 {
-    "$schema": "../schema.json5",
+    "$schema": "../../../schema.json5",
     "namespace": "kabegame",
     "name": "gallery_paginate_router",
-    // 容器节点: 自身不列图片
-    "query": { "limit": 0 },
     "properties": {
         "page_size": { "type": "number", "default": 1, "optional": false }
     },
     "list": {
-        "${out.meta.page_num}": {
+        "${out.name}": {
             "delegate": {
                 "provider": "page_size_provider",
                 "properties": { "page_size": "${properties.page_size}" }
@@ -18,15 +16,6 @@
             "properties": {
                 "page_size": "${properties.page_size}",
                 "page_num":  "${out.meta.page_num}"
-            }
-        }
-    },
-    "resolve": {
-        "([1-9][0-9]*)": {
-            "provider": "query_page_provider",
-            "properties": {
-                "page_size": "${properties.page_size}",
-                "page_num": "${capture[1]}"
             }
         }
     }

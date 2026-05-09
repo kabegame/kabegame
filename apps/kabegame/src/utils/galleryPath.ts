@@ -22,7 +22,7 @@ export type GalleryFilter =
   | { type: "plugin"; pluginId: string; extendPath?: string }
   | { type: "date"; segment: string }
   | { type: "date-range"; start: string; end: string }
-  | { type: "media-type"; kind: "image" | "video" }
+  | { type: "media-type"; kind: "image" | "video"; format?: string }
   | { type: "size"; range: string };
 
 /** parseGalleryPath 的返回值，仅用于解析/再拼装，不作为持久化模型 */
@@ -84,7 +84,9 @@ export function serializeFilter(filter: GalleryFilter): string {
     case "date-range":
       return `date-range/${filter.start}~${filter.end}`;
     case "media-type":
-      return `media-type/${filter.kind}`;
+      return filter.format
+        ? `media-type/${filter.kind}/${encodeURIComponent(filter.format)}`
+        : `media-type/${filter.kind}`;
     case "size":
       return `size/${filter.range}`;
   }
@@ -109,6 +111,15 @@ function decodeDateSegments(
   const d = segs[2]?.match(/^(\d{2})d$/)?.[1];
   if (!d) return { segment: `${y}-${m}`, consumed: 2 };
   return { segment: `${y}-${m}-${d}`, consumed: 3 };
+}
+
+function decodePathSegment(segment: string): string {
+  if (!segment) return "";
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
 
 /**
@@ -151,11 +162,13 @@ export function parseFilter(root: string): GalleryFilter {
     if (decoded) return { type: "date", segment: decoded.segment };
   }
   if (lr.startsWith("media-type/")) {
-    const kind = (r.slice("media-type/".length).trim().split("/")[0] ?? "")
+    const parts = r.slice("media-type/".length).trim().split("/").filter(Boolean);
+    const kind = (parts[0] ?? "")
       .toLowerCase()
       .trim();
     if (kind === "image" || kind === "video") {
-      return { type: "media-type", kind };
+      const format = decodePathSegment(parts[1] ?? "").trim();
+      return format ? { type: "media-type", kind, format } : { type: "media-type", kind };
     }
   }
   if (lr.startsWith("size/")) {
@@ -175,6 +188,10 @@ export function filterDateSegment(f: GalleryFilter): string | null {
 
 export function filterMediaKind(f: GalleryFilter): "image" | "video" | null {
   return f.type === "media-type" ? f.kind : null;
+}
+
+export function filterMediaFormat(f: GalleryFilter): string | null {
+  return f.type === "media-type" ? f.format?.trim() || null : null;
 }
 
 export function filterSizeRange(f: GalleryFilter): string | null {
@@ -254,7 +271,7 @@ function tryParseSizeGalleryPath(segs: string[]): ParsedGalleryPath | null {
 }
 
 /**
- * 解析 `media-type/image|video/[/desc/][x{n}x/]<page>`。
+ * 解析 `media-type/image|video[/format]/[/desc/][x{n}x/]<page>`。
  */
 function tryParseMediaTypeGalleryPath(segs: string[]): ParsedGalleryPath | null {
   if (segs.length < 2 || segs[0]!.toLowerCase() !== "media-type") {
@@ -264,8 +281,11 @@ function tryParseMediaTypeGalleryPath(segs: string[]): ParsedGalleryPath | null 
   if (kind !== "image" && kind !== "video") {
     return null;
   }
-  const filter: GalleryFilter = { type: "media-type", kind };
-  const tail = segs.slice(2);
+  const { path, tail } = splitPathAndTail(segs.slice(2));
+  const format = decodePathSegment(path[0] ?? "").trim();
+  const filter: GalleryFilter = format
+    ? { type: "media-type", kind, format }
+    : { type: "media-type", kind };
   if (tail.length === 0) {
     return { filter, sort: "asc", page: DEFAULT_PAGE, pageSize: DEFAULT_PAGE_SIZE, search: "" };
   }

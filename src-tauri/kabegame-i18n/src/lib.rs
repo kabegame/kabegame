@@ -97,6 +97,7 @@ fn vd_flat_key_for_canonical(canonical: &str) -> Option<&'static str> {
         "desc" => Some("vd.desc"),
         "image" => Some("vd.image"),
         "video" => Some("vd.video"),
+        "all-formats" => Some("vd.allFormats"),
         "album-order" => Some("vd.albumOrder"),
         "image-only" => Some("vd.imageOnly"),
         "video-only" => Some("vd.videoOnly"),

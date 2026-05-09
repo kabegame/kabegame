@@ -61,7 +61,7 @@
           </div>
           <div v-if="image.size != null" class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailSize') }}</span>
-            <span class="detail-value">{{ formatBytes(image.size) }}</span>
+            <span class="detail-value">{{ imageSizeLabel }}</span>
           </div>
         </div>
       </CollapsibleDrawerPanel>
@@ -140,6 +140,8 @@ export type ImageDetailLike = {
   metadata?: Record<string, unknown> | unknown;
   metadataId?: number;
   size?: number;
+  width?: number;
+  height?: number;
   taskId?: string;
 };
 
@@ -162,6 +164,21 @@ function handleOpenTask() {
 const imageTypeLabel = computed((): string => {
   if (!props.image) return "";
   return displayImageMimeType(props.image.type);
+});
+
+const imageDimensionsLabel = computed((): string => {
+  const width = props.image?.width;
+  const height = props.image?.height;
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return "";
+  if ((width as number) <= 0 || (height as number) <= 0) return "";
+  return `${Math.round(width as number)} x ${Math.round(height as number)}`;
+});
+
+const imageSizeLabel = computed((): string => {
+  const size = props.image?.size;
+  if (size == null) return "";
+  const dimensions = imageDimensionsLabel.value;
+  return dimensions ? `${formatBytes(size)} (${dimensions})` : formatBytes(size);
 });
 
 function isRenderableMetadata(v: unknown): boolean {

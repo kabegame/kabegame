@@ -178,6 +178,7 @@ import { ArrowDown, ArrowRight, Filter } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
 import {
   filterDateSegment,
+  filterMediaFormat,
   filterMediaKind,
   filterPluginId,
   filterSizeRange,
@@ -554,10 +555,13 @@ const filterLabel = computed(() => {
     return ext ? `${name} / ${ext}` : t("gallery.filterByPluginWithName", { name });
   }
   const mk = filterMediaKind(galleryRouteStore.filter);
+  const mf = filterMediaFormat(galleryRouteStore.filter);
   if (mk === "image") {
+    if (mf) return `${t("gallery.filterImageOnlyLabel")} / ${mf}`;
     return `${t("gallery.filterImageOnlyLabel")} (${mediaTypeCounts.value.imageCount})`;
   }
   if (mk === "video") {
+    if (mf) return `${t("gallery.filterVideoOnlyLabel")} / ${mf}`;
     return `${t("gallery.filterVideoOnlyLabel")} (${mediaTypeCounts.value.videoCount})`;
   }
   const sr = filterSizeRange(galleryRouteStore.filter);

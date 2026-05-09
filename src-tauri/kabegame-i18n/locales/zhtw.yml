@@ -50,11 +50,12 @@ vd:
   album: 畫冊
   task: 按任務
   surf: 按暢遊
-  mediaType: 按種類
+  mediaType: 按媒體
   wallpaperOrder: 按壁紙順序
   desc: 倒序
   image: 圖片
   video: 影片
+  allFormats: 所有格式
   subAlbums: 子畫冊
   albumOrder: 按畫冊順序
   wallpaperOrderSub: 按壁紙順序

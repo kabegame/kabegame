@@ -55,6 +55,7 @@ vd:
   desc: 내림차순
   image: 이미지
   video: 비디오
+  allFormats: 모든 형식
   subAlbums: 하위 앨범
   albumOrder: 앨범 순서
   wallpaperOrderSub: 배경화면 순서

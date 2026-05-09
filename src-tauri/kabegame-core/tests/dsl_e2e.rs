@@ -4,7 +4,7 @@
 //! functions, so these tests do not touch the user's Kabegame data directory.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use kabegame_core::providers::dsl_loader::{register_embedded_dsl, validate_dsl};
 use pathql_rs::provider::{ClosureExecutor, EngineError, SqlDialect};
@@ -17,6 +17,14 @@ const FAVORITE_ALBUM_ID: &str = kabegame_core::storage::FAVORITE_ALBUM_ID;
 const HIDDEN_ALBUM_ID: &str = kabegame_core::storage::HIDDEN_ALBUM_ID;
 const ALBUM_A_ID: &str = "11111111-1111-1111-1111-111111111111";
 const TASK_A_ID: &str = "22222222-2222-2222-2222-222222222222";
+static LOCALE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn lock_locale_tests() -> MutexGuard<'static, ()> {
+    LOCALE_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap()
+}
 
 fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
     use rusqlite::types::Value;
@@ -168,11 +176,16 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
 
     for i in 1..=120 {
         let crawled_at = 1_680_652_800_i64 + (i as i64 * 60);
+        let media_type = match i {
+            118 => "video/mp4",
+            119 => "image/webp",
+            _ => "image/jpeg",
+        };
         conn.execute(
             "INSERT INTO images
              (id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at,
               metadata_id, thumbnail_path, hash, type, width, height, display_name, size)
-             VALUES (?1, ?2, ?3, 'pixiv', ?4, 'surf-a', ?5, ?6, '', ?7, 'image', 100, 100, ?8, 10)",
+             VALUES (?1, ?2, ?3, 'pixiv', ?4, 'surf-a', ?5, ?6, '', ?7, ?8, 100, 100, ?9, 10)",
             (
                 i,
                 format!("https://example.test/{i}.jpg"),
@@ -181,6 +194,7 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
                 crawled_at,
                 if i == 1 { Some(1_i64) } else { None },
                 format!("hash-{i}"),
+                media_type,
                 format!("image-{i}"),
             ),
         )
@@ -326,6 +340,30 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
         .unwrap();
     assert_eq!(ids(media_type), ["120", "119"]);
 
+    let webp = runtime
+        .fetch("/gallery/media-type/image/webp/desc/x2x/1")
+        .unwrap();
+    assert_eq!(ids(webp), ["119"]);
+
+    let mp4 = runtime
+        .fetch("/gallery/media-type/video/mp4/x2x/1")
+        .unwrap();
+    assert_eq!(ids(mp4), ["118"]);
+
+    let image_formats = runtime.list("/gallery/media-type/image").unwrap();
+    let image_format_names = image_formats
+        .iter()
+        .map(|child| child.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        image_format_names.contains(&"jpeg"),
+        "{image_format_names:?}"
+    );
+    assert!(
+        image_format_names.contains(&"webp"),
+        "{image_format_names:?}"
+    );
+
     let hidden_filtered = runtime
         .fetch("/gallery/hide/media-type/image/desc/x2x/1")
         .unwrap();
@@ -387,15 +425,13 @@ fn album_order_path_paginates_and_limit_leaf_only_limits() {
     let image_only_legacy_order_desc = runtime
         .fetch("/gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/album-order/desc/x3x/1")
         .unwrap();
-    let video_only = runtime
-        .fetch("/gallery/hide/album/33333333-3333-3333-3333-333333333333/video-only/x3x/1")
-        .unwrap();
-    let image_only_wallpaper_order = runtime
-        .fetch("/gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/wallpaper-order/x3x/1")
-        .unwrap();
+    let video_only =
+        runtime.fetch("/gallery/hide/album/33333333-3333-3333-3333-333333333333/video-only/x3x/1");
+    let image_only_wallpaper_order = runtime.fetch(
+        "/gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/wallpaper-order/x3x/1",
+    );
     let album_wallpaper_order = runtime
-        .fetch("/gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/x3x/1")
-        .unwrap();
+        .fetch("/gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/x3x/1");
     let bigger_order = runtime
         .fetch("/gallery/album/33333333-3333-3333-3333-333333333333/bigger_order/1/l100l")
         .unwrap();
@@ -409,9 +445,19 @@ fn album_order_path_paginates_and_limit_leaf_only_limits() {
     assert_eq!(ids(image_only), ["6", "7", "8"]);
     assert_eq!(ids(image_only_legacy_order), ["8", "7", "6"]);
     assert_eq!(ids(image_only_legacy_order_desc), ["6", "7", "8"]);
-    assert!(video_only.is_empty());
-    assert!(image_only_wallpaper_order.is_empty());
-    assert!(album_wallpaper_order.is_empty());
+    assert!(
+        matches!(video_only, Err(EngineError::PathNotFound(path)) if path == "/gallery/hide/album/33333333-3333-3333-3333-333333333333/video-only/x3x/1")
+    );
+    assert!(matches!(
+        image_only_wallpaper_order,
+        Err(EngineError::PathNotFound(path))
+            if path == "/gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/wallpaper-order/x3x/1"
+    ));
+    assert!(matches!(
+        album_wallpaper_order,
+        Err(EngineError::PathNotFound(path))
+            if path == "/gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/x3x/1"
+    ));
     assert_eq!(ids(bigger_order), ["7", "6"]);
     assert_eq!(ids(limited), ["8", "7", "6"]);
 
@@ -438,6 +484,7 @@ fn album_order_path_paginates_and_limit_leaf_only_limits() {
 
 #[test]
 fn vd_album_i18n_roots_resolve_to_same_image_set() {
+    let _locale_guard = lock_locale_tests();
     let runtime = build_runtime();
     kabegame_i18n::set_locale("zh");
     let zh = ids(runtime.fetch("/vd/i18n-zh_CN/画册/AlbumA/x100x/1").unwrap());
@@ -450,7 +497,22 @@ fn vd_album_i18n_roots_resolve_to_same_image_set() {
 }
 
 #[test]
+fn vd_media_type_lists_all_formats_and_specific_formats() {
+    let _locale_guard = lock_locale_tests();
+    let runtime = build_runtime();
+    kabegame_i18n::set_locale("zh");
+
+    let all = runtime.fetch("/vd/i18n-zh_CN/按媒体/所有格式/1").unwrap();
+    let all_ids = ids(all);
+    assert_eq!(&all_ids[..3], ["1", "2", "3"]);
+
+    let mp4 = runtime.fetch("/vd/i18n-zh_CN/按媒体/视频/mp4/1").unwrap();
+    assert_eq!(ids(mp4), ["118"]);
+}
+
+#[test]
 fn vd_plugin_meta_name_tracks_current_locale() {
+    let _locale_guard = lock_locale_tests();
     let runtime = build_runtime();
 
     kabegame_i18n::set_locale("zh");
@@ -475,6 +537,7 @@ fn vd_plugin_meta_name_tracks_current_locale() {
 
 #[test]
 fn vd_root_routers_cover_all_supported_locales() {
+    let _locale_guard = lock_locale_tests();
     let runtime = build_runtime();
 
     let cases = [
@@ -508,8 +571,11 @@ fn resolving_many_pages_uses_bounded_prefix_cache_shape() {
             .resolve(&format!("/gallery/all/x1x/{page}"))
             .unwrap();
     }
+    // The first list fallback at /gallery/all/x1x expands and caches all
+    // countable page nodes from the fixture (120), plus the three route
+    // prefixes used to reach them.
     assert!(
-        runtime.cache_size() <= 103,
+        runtime.cache_size() <= 123,
         "cache size={}",
         runtime.cache_size()
     );

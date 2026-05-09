@@ -47,7 +47,7 @@
   "filterByTime": "按时间",
   "filterByTimeEmpty": "暂无按时间分组的数据",
   "filterByTimeWithDetail": "按时间：{detail}",
-  "filterByMediaType": "按种类",
+  "filterByMediaType": "按媒体",
   "filterImageOnly": "仅图片",
   "filterVideoOnly": "仅视频",
   "filterImageOnlyLabel": "仅图片",

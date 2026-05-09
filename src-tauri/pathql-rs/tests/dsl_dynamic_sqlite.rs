@@ -1,7 +1,7 @@
 //! Phase 6c S0d: 真实 sqlite + DSL 动态 list 端到端。
 //!
 //! 验证: DslProvider 通过注入的 SqlExecutor 跑动态 SQL list 项, 行 → 子节点;
-//! `resolve` 走动态反查命中。Delegate 动态项委托另一路径并枚举。
+//! `resolve` miss 后由 runtime list fallback 命中。Delegate 动态项委托另一路径并枚举。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -112,6 +112,24 @@ fn runtime_with_registry(
     runtime
 }
 
+fn materialize_delegate_for_test(
+    resolved: ResolveRef,
+    name: &str,
+    ctx: &ProviderContext,
+) -> ChildEntry {
+    match resolved {
+        ResolveRef::Delegate { target, transform } => {
+            let target_composed = target.apply_query(pathql_rs::compose::ProviderQuery::new(), ctx);
+            let target_child = match target.resolve(name, &target_composed, ctx) {
+                ResolveRef::Terminal(child) => child,
+                other => panic!("expected terminal target resolve, got {other:?}"),
+            };
+            transform(target_child.as_ref(), ctx).expect("delegate transform should materialize")
+        }
+        other => panic!("expected delegate, got {other:?}"),
+    }
+}
+
 #[test]
 fn dynamic_sql_list_enumerates_rows() {
     let conn = fixture_db();
@@ -158,12 +176,12 @@ fn dynamic_sql_list_enumerates_rows() {
 // 此原 test (dynamic_sql_executor_missing_returns_error) 整个删除。
 
 #[test]
-fn dynamic_resolve_reverse_lookup_finds_match() {
+fn dynamic_resolve_list_fallback_finds_match() {
     let conn = fixture_db();
     let executor = make_executor(conn);
 
-    // No `provider` field on the dynamic entry → resolve returns Some(None) (matched but no concrete provider)
-    // To assert reverse-lookup correctness with non-None, register a leaf provider and reference by name.
+    // No `provider` field on the dynamic entry would resolve to no concrete provider.
+    // To assert list fallback correctness with non-None, register a leaf provider and reference by name.
     let mut reg = ProviderRegistry::new();
 
     // Register a "pinger" provider that materializes given any properties.
@@ -472,6 +490,55 @@ fn resolve_delegate_name_override_folds_target_contrib_on_descent() {
 }
 
 #[test]
+fn resolve_delegate_name_override_requires_target_child() {
+    let parent_def: ProviderDef = serde_json::from_str(
+        r#"{
+            "namespace": "test",
+            "name": "parent",
+            "resolve": {
+                ".*": {
+                    "delegate": {"provider": "target"},
+                    "provider": "override_leaf"
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+    let target_def: ProviderDef = serde_json::from_str(
+        r#"{
+            "namespace": "test",
+            "name": "target",
+            "query": {
+                "fields": [
+                    {"sql": "target_tags.name", "as": "tag_name", "in_need": true}
+                ]
+            }
+        }"#,
+    )
+    .unwrap();
+    let override_def: ProviderDef = serde_json::from_str(
+        r#"{
+            "namespace": "test",
+            "name": "override_leaf",
+            "query": {"from": "override_table"}
+        }"#,
+    )
+    .unwrap();
+
+    let mut reg = ProviderRegistry::new();
+    reg.register(target_def).unwrap();
+    reg.register(override_def).unwrap();
+    let root: Arc<dyn Provider> = Arc::new(DslProvider {
+        def: Arc::new(parent_def),
+        properties: HashMap::new(),
+    });
+    let runtime = runtime_with_registry(reg, root, no_op_executor());
+
+    let err = runtime.resolve("/alpha").unwrap_err();
+    assert!(matches!(err, EngineError::PathNotFound(path) if path == "/alpha"));
+}
+
+#[test]
 fn resolve_delegate_legacy_defaults_to_null_provider_and_meta() {
     use pathql_rs::ast::{Namespace, SimpleName};
 
@@ -545,10 +612,11 @@ fn resolve_delegate_legacy_defaults_to_null_provider_and_meta() {
         properties: HashMap::new(),
     };
 
-    let child = match facade.resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx) {
-        ResolveRef::Terminal(Some(child)) => child,
-        other => panic!("expected terminal child, got {other:?}"),
-    };
+    let child = materialize_delegate_for_test(
+        facade.resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx),
+        "alpha",
+        &ctx,
+    );
     assert_eq!(child.name, "alpha");
     assert!(child.provider.is_none());
     assert!(child.meta.is_none());
@@ -638,18 +706,17 @@ fn resolve_delegate_transforms_target_child_provider_and_meta() {
         properties: HashMap::new(),
     };
 
-    let (provider, meta) =
-        match facade.resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx) {
-            ResolveRef::Delegate {
-                final_provider,
-                final_meta,
-                ..
-            } => (final_provider.unwrap(), final_meta),
-            other => panic!("expected delegate, got {other:?}"),
-        };
-    assert_eq!(meta.unwrap(), serde_json::json!({"label":"A"}));
+    let child = materialize_delegate_for_test(
+        facade.resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx),
+        "alpha",
+        &ctx,
+    );
+    assert_eq!(child.meta.unwrap(), serde_json::json!({"label":"A"}));
     assert_eq!(
-        provider.get_note(&pathql_rs::compose::ProviderQuery::new(), &ctx),
+        child
+            .provider
+            .unwrap()
+            .get_note(&pathql_rs::compose::ProviderQuery::new(), &ctx),
         Some("source".into())
     );
 }
@@ -745,18 +812,17 @@ fn resolve_delegate_can_replace_target_child_provider() {
         properties: HashMap::new(),
     };
 
-    let (provider, meta) =
-        match facade.resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx) {
-            ResolveRef::Delegate {
-                final_provider,
-                final_meta,
-                ..
-            } => (final_provider.unwrap(), final_meta),
-            other => panic!("expected delegate, got {other:?}"),
-        };
-    assert_eq!(meta.unwrap(), serde_json::json!({"id":"alpha"}));
+    let child = materialize_delegate_for_test(
+        facade.resolve("alpha", &pathql_rs::compose::ProviderQuery::new(), &ctx),
+        "alpha",
+        &ctx,
+    );
+    assert_eq!(child.meta.unwrap(), serde_json::json!({"id":"alpha"}));
     assert_eq!(
-        provider.get_note(&pathql_rs::compose::ProviderQuery::new(), &ctx),
+        child
+            .provider
+            .unwrap()
+            .get_note(&pathql_rs::compose::ProviderQuery::new(), &ctx),
         Some("replacement".into())
     );
 }

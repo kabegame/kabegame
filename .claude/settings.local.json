@@ -21,7 +21,8 @@
       "Bash(findstr /r /s \"ffmpeg\\\\|run_ffmpeg\\\\|resolve_ffmpeg\" src-tauri/)",
       "Bash(awk *)",
       "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\\\\apps\\\\kabegame\\\\src\\\\components\" -Filter \"Task*.vue\")",
-      "Bash(Select-Object FullName)"
+      "Bash(Select-Object FullName)",
+      "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\\\\src-tauri\\\\pathql-rs\" -Recurse -Name)"
     ]
   }
 }

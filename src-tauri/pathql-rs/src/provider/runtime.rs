@@ -6,8 +6,8 @@
 use arc_swap::ArcSwap;
 
 use super::{
-    ChildEntry, EngineError, ListRef, Provider, ProviderContext, ProviderKey, ResolveRef,
-    SqlExecutor,
+    ChildEntry, DelegateTransform, EngineError, ListRef, Provider, ProviderContext, ProviderKey,
+    ResolveRef, SqlExecutor,
 };
 use crate::ast::{Namespace, ProviderName};
 use crate::compose::ProviderQuery;
@@ -50,7 +50,6 @@ struct CachedNode {
     provider_keys: Vec<ProviderKey>,
 }
 
-// TODO: 干掉这一坨
 #[derive(Clone)]
 struct RootNode {
     provider: Arc<dyn Provider>,
@@ -231,46 +230,86 @@ impl ProviderRuntime {
             let c = current
                 .as_ref()
                 .ok_or_else(|| EngineError::PathNotFound(path_so_far.clone()))?;
-            ctx.set_current_path(path_before_seg);
-            let resolved = c.resolve(seg, &composed, &ctx);
-            if dbg_enabled() {
-                eprintln!(
-                    "[pathql]   step seg={:?} at path={:?} → {}",
-                    seg,
-                    path_so_far,
-                    match &resolved {
-                        ResolveRef::Terminal(Some(child)) if child.provider.is_some() => {
-                            "Terminal(Some(child.provider))"
+
+            let mut resolve_provider: Arc<dyn Provider> = c.clone();
+            let mut seg_composed = composed.clone();
+            let mut transform_stack: Vec<DelegateTransform> = Vec::new();
+
+            let terminal: Option<ChildEntry> = loop {
+                let resolved = resolve_provider.resolve(seg, &seg_composed, &ctx);
+                if dbg_enabled() {
+                    eprintln!(
+                        "[pathql]   step seg={:?} at path={:?} → {}",
+                        seg,
+                        path_so_far,
+                        match &resolved {
+                            ResolveRef::Terminal(Some(child)) if child.provider.is_some() => {
+                                "Terminal(Some(child.provider))"
+                            }
+                            ResolveRef::Terminal(Some(_)) => {
+                                "Terminal(Some(child without provider))"
+                            }
+                            ResolveRef::Terminal(None) => "Terminal(None)",
+                            ResolveRef::Delegate { .. } => "Delegate",
                         }
-                        ResolveRef::Terminal(Some(_)) => "Terminal(Some(child without provider))",
-                        ResolveRef::Terminal(None) => "Terminal(None) (PathNotFound)",
-                        ResolveRef::Delegate {
-                            final_provider: Some(_),
-                            ..
-                        } => "Delegate(final_provider)",
-                        ResolveRef::Delegate { .. } => "Delegate(no final provider)",
-                    }
-                );
-            }
-            let (next_opt, inter_composed) = match resolved {
-                ResolveRef::Terminal(None) => {
-                    return Err(EngineError::PathNotFound(path_so_far.clone()));
+                    );
                 }
-                ResolveRef::Terminal(Some(child)) => (child.provider, composed.clone()),
-                ResolveRef::Delegate {
-                    target,
-                    final_provider,
-                    ..
-                } => {
-                    let ic = target.apply_query(composed.clone(), &ctx);
-                    (final_provider, ic)
+                match resolved {
+                    ResolveRef::Terminal(opt) => break opt,
+                    ResolveRef::Delegate { target, transform } => {
+                        transform_stack.push(transform);
+                        seg_composed = target.apply_query(seg_composed, &ctx);
+                        resolve_provider = target;
+                    }
                 }
             };
 
-            if let Some(next) = &next_opt {
-                composed = next.apply_query(inter_composed, &ctx);
+            let no_delegate = transform_stack.is_empty();
+            let mut from_list_fallback = false;
+            let raw_child = if terminal.is_some() {
+                terminal
             } else {
-                composed = inter_composed;
+                let list_key_mark = ctx.provider_key_mark();
+                let list_refs = resolve_provider.list(&seg_composed, &ctx)?;
+                let list_provider_keys = ctx.provider_keys_since(list_key_mark);
+                let expanded = self.expand_list_refs(
+                    list_refs,
+                    &path_before_seg,
+                    &seg_composed,
+                    &provider_keys,
+                    &list_provider_keys,
+                    &ctx,
+                    no_delegate,
+                )?;
+                let found = expanded.into_iter().find(|ch| ch.name == seg.as_str());
+                from_list_fallback = found.is_some();
+                found
+            };
+
+            let mut final_child = raw_child;
+            for transform in transform_stack.into_iter().rev() {
+                final_child = transform(final_child.as_ref(), &ctx);
+            }
+
+            if final_child.is_none() {
+                return Err(EngineError::PathNotFound(path_so_far.clone()));
+            }
+
+            if from_list_fallback && no_delegate {
+                let cached = self.cache.lock().unwrap().get(&path_so_far).cloned();
+                if let Some(cn) = cached {
+                    current = cn.provider;
+                    composed = cn.composed;
+                    extend_provider_keys(&mut provider_keys, cn.provider_keys);
+                    continue;
+                }
+            }
+
+            let next_opt = final_child.and_then(|ch| ch.provider);
+            if let Some(next) = &next_opt {
+                composed = next.apply_query(seg_composed, &ctx);
+            } else {
+                composed = seg_composed;
             }
             current = next_opt;
             extend_provider_keys(&mut provider_keys, ctx.provider_keys_since(key_mark));
@@ -302,7 +341,7 @@ impl ProviderRuntime {
             .clone())
     }
 
-    /// 从最长前缀向短回退, 找到第一个缓存命中点。
+    /// 从最长前缀向短回退, 找到第一个缓存命中点的下一个index（或者说命中seg段的长度）。
     /// 返回 (起点 segment 索引, 起点 provider, 起点 composed)。
     /// - prefix_len=N (== segments.len()) → 完整路径已缓存
     /// - prefix_len=K (0<K<N) → 命中 /seg₁/.../segₖ 缓存, 续 fold segₖ₊₁..
@@ -402,11 +441,6 @@ impl ProviderRuntime {
                     for target_child in &target_children {
                         let child_key_mark = ctx.provider_key_mark();
                         if let Some(outer_child) = (expand)(target_child, ctx)? {
-                            let mut child_keys = inherited_keys.clone();
-                            extend_provider_keys(
-                                &mut child_keys,
-                                ctx.provider_keys_since(child_key_mark),
-                            );
                             let (child_provider, child_composed, cacheable) =
                                 if let Some(provider) = &outer_child.provider {
                                     let child_composed =
@@ -415,6 +449,11 @@ impl ProviderRuntime {
                                 } else {
                                     (None, target_composed.clone(), true)
                                 };
+                            let mut child_keys = inherited_keys.clone();
+                            extend_provider_keys(
+                                &mut child_keys,
+                                ctx.provider_keys_since(child_key_mark),
+                            );
 
                             if cache_expanded_children && cacheable {
                                 self.cache.lock().unwrap().insert(
@@ -626,6 +665,28 @@ mod tests {
                 }
             }))
         }
+    }
+
+    struct NoteLeaf {
+        note: &'static str,
+        from: Option<&'static str>,
+    }
+
+    impl Provider for NoteLeaf {
+        fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+            if let Some(from) = self.from {
+                q.from = Some(SqlExpr(from.into()));
+            }
+            q
+        }
+
+        fn get_note(&self, _: &ProviderQuery, _: &ProviderContext) -> Option<String> {
+            Some(self.note.into())
+        }
+    }
+
+    fn note_leaf(note: &'static str, from: Option<&'static str>) -> Arc<dyn Provider> {
+        Arc::new(NoteLeaf { note, from })
     }
 
     /// 测试默认 executor: 不期望被调到 (无动态 SQL list 的纯路由测试场景)。
@@ -1341,8 +1402,13 @@ mod tests {
                 if name == "delegated" {
                     ResolveRef::Delegate {
                         target: self.target.clone(),
-                        final_provider: None,
-                        final_meta: None,
+                        transform: Arc::new(|_, _| {
+                            Some(ChildEntry {
+                                name: "delegated".to_string(),
+                                provider: None,
+                                meta: None,
+                            })
+                        }),
                     }
                 } else {
                     ResolveRef::Terminal(None)
@@ -1358,6 +1424,362 @@ mod tests {
         assert_eq!(resolved.composed.from.unwrap().0, "target_table");
         let err = runtime.list("/delegated").unwrap_err();
         assert!(matches!(err, EngineError::NoProvider(p) if p == "/delegated"));
+    }
+
+    #[test]
+    fn delegate_resolve_chain_unwinds_transforms_and_folds_each_target_query() {
+        struct TargetC {
+            leaf: Arc<dyn Provider>,
+        }
+        impl Provider for TargetC {
+            fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+                q.fields.push(crate::compose::FieldFrag {
+                    sql: SqlExpr("c_mark".into()),
+                    alias: None,
+                    in_need: true,
+                });
+                q
+            }
+
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal((name == "x").then(|| ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(self.leaf.clone()),
+                    meta: Some(serde_json::json!({"leaf": true})),
+                }))
+            }
+        }
+
+        struct TargetB {
+            target: Arc<dyn Provider>,
+            leaf: Arc<dyn Provider>,
+        }
+        impl Provider for TargetB {
+            fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+                q.fields.push(crate::compose::FieldFrag {
+                    sql: SqlExpr("b_mark".into()),
+                    alias: None,
+                    in_need: true,
+                });
+                q
+            }
+
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                if name != "x" {
+                    return ResolveRef::Terminal(None);
+                }
+                let leaf = self.leaf.clone();
+                ResolveRef::Delegate {
+                    target: self.target.clone(),
+                    transform: Arc::new(move |child, _| {
+                        let child = child?;
+                        child
+                            .meta
+                            .as_ref()
+                            .and_then(|meta| meta.get("leaf"))
+                            .and_then(|value| value.as_bool())
+                            .filter(|ok| *ok)?;
+                        Some(ChildEntry {
+                            name: child.name.clone(),
+                            provider: Some(leaf.clone()),
+                            meta: Some(serde_json::json!({"mid": true})),
+                        })
+                    }),
+                }
+            }
+        }
+
+        struct Root {
+            target: Arc<dyn Provider>,
+            leaf: Arc<dyn Provider>,
+        }
+        impl Provider for Root {
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                if name != "x" {
+                    return ResolveRef::Terminal(None);
+                }
+                let leaf = self.leaf.clone();
+                ResolveRef::Delegate {
+                    target: self.target.clone(),
+                    transform: Arc::new(move |child, _| {
+                        let child = child?;
+                        child
+                            .meta
+                            .as_ref()
+                            .and_then(|meta| meta.get("mid"))
+                            .and_then(|value| value.as_bool())
+                            .filter(|ok| *ok)?;
+                        Some(ChildEntry {
+                            name: "x".into(),
+                            provider: Some(leaf.clone()),
+                            meta: Some(serde_json::json!({"outer": true})),
+                        })
+                    }),
+                }
+            }
+        }
+
+        let target_c: Arc<dyn Provider> = Arc::new(TargetC {
+            leaf: note_leaf("raw-c", Some("raw_c_table")),
+        });
+        let target_b: Arc<dyn Provider> = Arc::new(TargetB {
+            target: target_c,
+            leaf: note_leaf("mid-b", Some("mid_b_table")),
+        });
+        let runtime = runtime_with_root(Arc::new(Root {
+            target: target_b,
+            leaf: note_leaf("outer-a", Some("outer_a_table")),
+        }));
+
+        let resolved = runtime.resolve("/x").unwrap();
+        assert_eq!(resolved.composed.from.unwrap().0, "outer_a_table");
+        assert!(resolved
+            .composed
+            .fields
+            .iter()
+            .any(|field| field.sql.0 == "b_mark"));
+        assert!(resolved
+            .composed
+            .fields
+            .iter()
+            .any(|field| field.sql.0 == "c_mark"));
+        assert_eq!(runtime.note("/x").unwrap(), Some("outer-a".into()));
+    }
+
+    #[test]
+    fn delegate_list_fallback_uses_deepest_target_and_unwinds_transforms() {
+        struct TargetC {
+            leaf: Arc<dyn Provider>,
+        }
+        impl Provider for TargetC {
+            fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+                q.fields.push(crate::compose::FieldFrag {
+                    sql: SqlExpr("c_list_scope".into()),
+                    alias: None,
+                    in_need: true,
+                });
+                q
+            }
+
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(vec![ListRef::Direct(ChildEntry {
+                    name: "x".into(),
+                    provider: Some(self.leaf.clone()),
+                    meta: Some(serde_json::json!({"origin": "c-list"})),
+                })])
+            }
+        }
+
+        struct TargetB {
+            target: Arc<dyn Provider>,
+            wrong_leaf: Arc<dyn Provider>,
+        }
+        impl Provider for TargetB {
+            fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+                q.fields.push(crate::compose::FieldFrag {
+                    sql: SqlExpr("b_delegate_scope".into()),
+                    alias: None,
+                    in_need: true,
+                });
+                q
+            }
+
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(vec![ListRef::Direct(ChildEntry {
+                    name: "x".into(),
+                    provider: Some(self.wrong_leaf.clone()),
+                    meta: Some(serde_json::json!({"origin": "b-list"})),
+                })])
+            }
+
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                if name != "x" {
+                    return ResolveRef::Terminal(None);
+                }
+                ResolveRef::Delegate {
+                    target: self.target.clone(),
+                    transform: Arc::new(move |child, _| {
+                        let child = child?;
+                        (child.meta.as_ref()?.get("origin")? == "c-list").then(|| ChildEntry {
+                            name: child.name.clone(),
+                            provider: child.provider.clone(),
+                            meta: Some(serde_json::json!({"via": "b"})),
+                        })
+                    }),
+                }
+            }
+        }
+
+        struct Root {
+            target: Arc<dyn Provider>,
+            leaf: Arc<dyn Provider>,
+        }
+        impl Provider for Root {
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                if name != "x" {
+                    return ResolveRef::Terminal(None);
+                }
+                let leaf = self.leaf.clone();
+                ResolveRef::Delegate {
+                    target: self.target.clone(),
+                    transform: Arc::new(move |child, _| {
+                        let child = child?;
+                        (child.meta.as_ref()?.get("via")? == "b").then(|| ChildEntry {
+                            name: "x".into(),
+                            provider: Some(leaf.clone()),
+                            meta: None,
+                        })
+                    }),
+                }
+            }
+        }
+
+        let target_c: Arc<dyn Provider> = Arc::new(TargetC {
+            leaf: note_leaf("raw-c", None),
+        });
+        let target_b: Arc<dyn Provider> = Arc::new(TargetB {
+            target: target_c,
+            wrong_leaf: note_leaf("wrong-b-list", None),
+        });
+        let runtime = runtime_with_root(Arc::new(Root {
+            target: target_b,
+            leaf: note_leaf("outer-a", Some("outer_a_table")),
+        }));
+
+        let resolved = runtime.resolve("/x").unwrap();
+        assert_eq!(resolved.composed.from.unwrap().0, "outer_a_table");
+        assert!(resolved
+            .composed
+            .fields
+            .iter()
+            .any(|field| field.sql.0 == "b_delegate_scope"));
+        assert!(resolved
+            .composed
+            .fields
+            .iter()
+            .any(|field| field.sql.0 == "c_list_scope"));
+        assert_eq!(runtime.note("/x").unwrap(), Some("outer-a".into()));
+    }
+
+    #[test]
+    fn delegate_transform_none_turns_list_fallback_match_into_path_not_found() {
+        struct Target {
+            leaf: Arc<dyn Provider>,
+        }
+        impl Provider for Target {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(vec![ListRef::Direct(ChildEntry {
+                    name: "x".into(),
+                    provider: Some(self.leaf.clone()),
+                    meta: None,
+                })])
+            }
+        }
+
+        struct Root {
+            target: Arc<dyn Provider>,
+        }
+        impl Provider for Root {
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                if name == "x" {
+                    ResolveRef::Delegate {
+                        target: self.target.clone(),
+                        transform: Arc::new(|_, _| None),
+                    }
+                } else {
+                    ResolveRef::Terminal(None)
+                }
+            }
+        }
+
+        let runtime = runtime_with_root(Arc::new(Root {
+            target: Arc::new(Target {
+                leaf: note_leaf("raw-target", None),
+            }),
+        }));
+
+        let err = runtime.resolve("/x").unwrap_err();
+        assert!(matches!(err, EngineError::PathNotFound(path) if path == "/x"));
+        assert_eq!(runtime.cache_size(), 0);
+    }
+
+    #[test]
+    fn delegate_list_fallback_does_not_cache_raw_siblings_at_outer_path() {
+        struct Target {
+            raw_leaf: Arc<dyn Provider>,
+        }
+        impl Provider for Target {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(["hit", "sibling"]
+                    .into_iter()
+                    .map(|name| {
+                        ListRef::Direct(ChildEntry {
+                            name: name.into(),
+                            provider: Some(self.raw_leaf.clone()),
+                            meta: None,
+                        })
+                    })
+                    .collect())
+            }
+        }
+
+        struct Root {
+            target: Arc<dyn Provider>,
+            outer_leaf: Arc<dyn Provider>,
+        }
+        impl Provider for Root {
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                if name != "hit" && name != "sibling" {
+                    return ResolveRef::Terminal(None);
+                }
+                let outer_leaf = self.outer_leaf.clone();
+                ResolveRef::Delegate {
+                    target: self.target.clone(),
+                    transform: Arc::new(move |child, _| {
+                        let child = child?;
+                        Some(ChildEntry {
+                            name: child.name.clone(),
+                            provider: Some(outer_leaf.clone()),
+                            meta: None,
+                        })
+                    }),
+                }
+            }
+        }
+
+        let runtime = runtime_with_root(Arc::new(Root {
+            target: Arc::new(Target {
+                raw_leaf: note_leaf("raw-target", None),
+            }),
+            outer_leaf: note_leaf("outer-transformed", None),
+        }));
+
+        assert_eq!(
+            runtime.note("/hit").unwrap(),
+            Some("outer-transformed".into())
+        );
+        assert_eq!(runtime.cache_size(), 1);
+        assert_eq!(
+            runtime.note("/sibling").unwrap(),
+            Some("outer-transformed".into())
+        );
+        assert_eq!(runtime.cache_size(), 2);
     }
 
     #[test]

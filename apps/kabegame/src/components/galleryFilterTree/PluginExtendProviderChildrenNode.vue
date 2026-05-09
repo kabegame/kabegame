@@ -8,6 +8,7 @@
     :default-expanded="defaultExpanded"
     :filter="imagesChangeFilter"
     :initial-count="initialCount"
+    :selectable="!isPlain"
     @select="$emit('select', filterForSelf)"
     @update:expanded="onExpanded"
   >
@@ -18,6 +19,7 @@
       :name="child.name"
       :extend-path="childExtendPath(child.name)"
       :is-leaf="isProviderLeaf(child)"
+      :is-plain="isProviderPlain(child)"
       :depth="depth + 1"
       :initial-count="child.total ?? undefined"
       @select="$emit('select', $event)"
@@ -31,6 +33,7 @@
     :active="active"
     :filter="imagesChangeFilter"
     :initial-count="initialCount"
+    :selectable="!isPlain"
     @select="$emit('select', filterForSelf)"
   />
 </template>
@@ -45,6 +48,7 @@ import type { GalleryFilter } from "@/utils/galleryPath";
 import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import {
   isProviderLeaf,
+  isProviderPlain,
   isSameGalleryFilter,
   joinProviderPath,
   listProviderDirs,
@@ -61,10 +65,12 @@ const props = withDefaults(defineProps<{
   name: string;
   extendPath: string;
   isLeaf?: boolean;
+  isPlain?: boolean;
   depth?: number;
   initialCount?: number;
 }>(), {
   isLeaf: false,
+  isPlain: false,
   depth: 2,
 });
 

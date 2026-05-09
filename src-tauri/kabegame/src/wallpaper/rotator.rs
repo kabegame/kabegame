@@ -68,21 +68,21 @@ fn extract_marker_from(source: &RotationSource, img: &ImageInfo) -> CurrentMarke
 fn sequential_path(source: &RotationSource, marker: Option<CurrentMarker>) -> String {
     match (source, marker) {
         (RotationSource::Album(id), Some(CurrentMarker::Order(o))) => {
-            format!("/gallery/album/{}/bigger_order/{}/l100l", id, o)
+            format!("/gallery/hide/album/{}/bigger_order/{}/l100l", id, o)
         }
         (RotationSource::Album(id), _) => {
-            format!("/gallery/album/{}/bigger_order/0/l100l", id)
+            format!("/gallery/hide/album/{}/bigger_order/0/l100l", id)
         }
         (RotationSource::Gallery, Some(CurrentMarker::Time(t))) => {
-            format!("/gallery/bigger_crawler_time/{}/l100l", t)
+            format!("/gallery/hide/bigger_crawler_time/{}/l100l", t)
         }
-        (RotationSource::Gallery, _) => "/gallery/bigger_crawler_time/0/l100l".to_string(),
+        (RotationSource::Gallery, _) => "/gallery/hide/bigger_crawler_time/0/l100l".to_string(),
     }
 }
 
 /// 顺序模式: 在 source 上从 current_marker 之后取下一批 100 张, 找首张可用图返回; 全 100 张
 /// 不可用则用最后一张的 marker 推进, 直到 path 返回空 (后面没有了) → None。
-pub(crate) fn load_next_sequential(
+fn load_next_sequential(
     source: &RotationSource,
     current_marker: Option<CurrentMarker>,
     wallpaper_mode: &str,
@@ -118,18 +118,19 @@ pub(crate) fn is_wallpaper_suitable(img: &ImageInfo, wallpaper_mode: &str) -> bo
     !kabegame_core::image_type::is_video_by_path(Path::new(&img.local_path))
 }
 
-/// 随机模式: 从 `<base>/x100x/` 随机抽一页, 取该页第一张可用图; 不可用则换下一页 (不重复抽);
+/// 随机模式: 从 `<base>/x100x/` 随机抽一页, 再从该页可用图中随机取一张;
+/// 该页没有可用图则换下一页 (不重复抽);
 /// 所有页都 try 完返回 None。base 由 source 决定:
 /// - Gallery → `/gallery/all/x100x`
 /// - Album(id) → `/gallery/album/<id>/x100x`
-pub(crate) fn load_random_image_for_wallpaper(
+fn load_random_image_for_wallpaper(
     source: &RotationSource,
     wallpaper_mode: &str,
 ) -> Result<Option<ImageInfo>, String> {
     let rt = provider_runtime();
     let base_path = match source {
-        RotationSource::Album(id) => format!("/gallery/album/{}/x100x", id),
-        RotationSource::Gallery => "/gallery/all/x100x".to_string(),
+        RotationSource::Album(id) => format!("/gallery/hide/album/{}/x100x", id),
+        RotationSource::Gallery => "/gallery/hide/all/x100x".to_string(),
     };
     let mut pages: Vec<String> = rt
         .list(&base_path)
@@ -139,16 +140,20 @@ pub(crate) fn load_random_image_for_wallpaper(
         .map(|c| c.name)
         .collect();
 
+    println!("{:?}", pages);
+
     while !pages.is_empty() {
         let idx = random_index(pages.len());
         let page = pages.swap_remove(idx);
         let path = format!("{}/{}", base_path, page);
         let images = images_at(&path)?;
-        if let Some(img) = images
+        let mut candidates: Vec<ImageInfo> = images
             .into_iter()
-            .find(|img| is_wallpaper_suitable(img, wallpaper_mode))
-        {
-            return Ok(Some(img));
+            .filter(|img| is_wallpaper_suitable(img, wallpaper_mode))
+            .collect();
+        if !candidates.is_empty() {
+            let idx = random_index(candidates.len());
+            return Ok(Some(candidates.swap_remove(idx)));
         }
     }
     Ok(None)
@@ -249,7 +254,7 @@ impl WallpaperRotator {
         rotation_mode: &str,
         wallpaper_mode: &str,
     ) -> Result<Vec<ImageLite>, String> {
-        // S1e S4: 两种模式都走 path-only API, 内置可用性过滤; loader 只返 0 / 1 张。
+        // 两种模式都走 path-only API, 内置可用性过滤; loader 只返 0 / 1 张。
         let picked = if rotation_mode == "sequential" {
             let current_id = Settings::global().get_current_wallpaper_image_id();
             let marker = current_marker_for_source(source, current_id.as_deref());

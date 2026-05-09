@@ -55,6 +55,7 @@ vd:
   desc: 降順
   image: 画像
   video: 動画
+  allFormats: すべての形式
   subAlbums: サブアルバム
   albumOrder: アルバム順
   wallpaperOrderSub: 壁紙順

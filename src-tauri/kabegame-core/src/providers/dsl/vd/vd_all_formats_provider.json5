@@ -1,0 +1,16 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_all_formats_provider",
+    "properties": {
+        "kind": { "type": "string", "default": "all-formats", "optional": true }
+    },
+    "list": {
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": { "provider": "vd_all_provider" },
+            "provider": "${page.provider}",
+            "meta": "${page.meta}"
+        }
+    }
+}

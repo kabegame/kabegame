@@ -11,6 +11,8 @@
 ### Added
 - **Provider DSL runtime globals**: PathQL string templates now support `${global:prefix|selector}` for host-owned display maps, enabling locale-specific VD date labels while keeping shared date providers on canonical year/month/day ids.
 - **Provider DSL plugin scan source**: Added a shared `plugins_provider` DSL provider so Gallery and Virtual Disk plugin browse trees reuse one plugin enumeration source instead of duplicating plugin scan SQL.
+- **Image Size**: Image Size ordering. And can see image dimension.
+- **Image format Provider**: Image format filtering for vd and gallery. 
 
 ### Changed
 - **Provider DSL loading**: Built-in DSL providers are now loaded by recursively scanning `src/providers/dsl` with an explicit non-provider exclusion list, keeping `schema.json5` and retired compatibility shims out of runtime registration.
@@ -34,6 +36,8 @@
 - **UI**: Task detail pagination logic now load from the provider path.
 - **PathQL**: Provider delegated cannot access fields contrib bug.
 - **Provider DSL routing**: Restored canonical pagination routing through `query_page_provider`, fixed desc-router provider naming, removed the unused date-range route, and kept dynamic plugin entry providers from being reported as missing built-in providers.
+- **Rotator**: random rotation shows no images to rotate.
+- **DSLProvider**: Reverse list wrong behavior causing bug. 
 
 ## [4.1.0]
 

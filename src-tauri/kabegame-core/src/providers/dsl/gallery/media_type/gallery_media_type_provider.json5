@@ -10,6 +10,19 @@
     "query": {
         "where": "CASE ${properties.kind} WHEN 'video' THEN (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') ELSE NOT (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') END"
     },
+    "list": {
+        "${fmt.format}": {
+            "sql": "SELECT format FROM (SELECT LOWER(SUBSTR(COALESCE(sub.media_type, ''), INSTR(COALESCE(sub.media_type, ''), '/') + 1)) AS format, COUNT(*) AS cnt FROM (${composed}) AS sub WHERE LOWER(COALESCE(sub.media_type, '')) LIKE '%/%' GROUP BY format) WHERE format != '' AND cnt > 0 ORDER BY format ASC",
+            "data_var": "fmt",
+            "provider": "gallery_media_format_provider",
+            "properties": {
+                "format": "${fmt.format}"
+            },
+            "meta": {
+                "format": "${fmt.format}"
+            }
+        }
+    },
     "resolve": {
         "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
             "delegate": {

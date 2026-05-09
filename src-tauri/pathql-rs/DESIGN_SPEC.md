@@ -292,7 +292,8 @@ This rule is the same for `resolve` and `list`:
 List is usually used to discover all available services, and resolve is used for known services and dynamic services.
 
 - The DSL layer may return a typed reference instead of a direct child.
-- The runtime folds `target.apply_query(composed)` before applying the final
+- For `resolve`, the runtime recursively follows the delegate chain and folds
+  each `target.apply_query(composed)` contribution before applying the final
   child provider.
 - The runtime stores the normal resolved path state: the final provider, if any,
   the composed query, and the provider keys used for invalidation.
@@ -303,29 +304,57 @@ List is usually used to discover all available services, and resolve is used for
 
 `Provider::resolve` returns `ResolveRef`.
 
-`ResolveRef::Terminal(None)` means the segment was not found. This is the only
-resolve result that directly maps to `PathNotFound` for the current segment.
+`ResolveRef::Terminal(None)` means the provider's explicit routing rules found
+nothing. The runtime then proceeds to the list fallback described below.
 
 `ResolveRef::Terminal(Some(child))` means the segment was found directly. The
 runtime continues with `child.provider`. A child with `provider: None` is a
 valid no-provider node.
 
-`ResolveRef::Delegate { target, final_provider, final_meta }` means the DSL
-layer resolved the segment through a delegate. The runtime handles it in two
-steps:
+`ResolveRef::Delegate { target, transform }` means this provider routed the
+segment through a delegate. The runtime owns the recursion:
 
-1. Fold `target.apply_query(composed)` into the accumulated query state.
-2. Continue descent with `final_provider`, applying its query contribution as a
-   normal path step if it exists.
+1. Accumulate query with `seg_composed = target.apply_query(seg_composed)`.
+2. Call `target.resolve(name, seg_composed)`.
+3. If the target also returns `Delegate`, repeat the process.
+4. When the chain bottoms out at `Terminal`, unwind transforms from innermost
+   to outermost. The final `ChildEntry` comes from the outermost transform.
 
-There is no runtime-side recursive provider lookup through the delegation chain.
-The DSL layer sets `final_provider` explicitly. For child-provider references
-such as `${child.provider}`, the DSL shallowly extracts the provider from the
-target resolve result and stores it as `final_provider`.
+`transform` has the shape
+`Fn(Option<&ChildEntry>, &ProviderContext) -> Option<ChildEntry>`. It receives
+the child resolved by the target chain, or `None` if the target chain found
+nothing, and returns this delegation level's visible child. `None` means this
+level is also a miss. Template evaluation or instantiation failures inside a
+transform are treated as misses.
 
-`final_provider` has no pass-through semantics. If the DSL entry specifies no
-provider, the resolved segment is a valid no-provider node: it can be cached,
-but routing operations such as `list` and `note` return `NoProvider`.
+The DSL layer creates the transform closure at resolve-call time, capturing
+template fields such as `child_var`, `provider`, `properties`, and `meta`. It
+does not call `target.resolve()` internally.
+
+If the resolve chain bottoms out at `Terminal(None)`, regardless of delegate
+depth, the runtime searches `resolve_provider.list(seg_composed)`, where
+`resolve_provider` is the deepest target in the chain. With no delegation this
+is the current provider. In an explicit chain such as `A -> B -> C`, only `C` is
+the correct fallback scope: `B.resolve()` already routed this name to `C`, so
+backtracking to `B.list()` would search unrelated siblings.
+
+The same transform-stack unwind is applied to children found through the list
+fallback. Items found in the deepest target's list are converted into the
+outermost visible `ChildEntry` before the final provider's query contribution is
+applied.
+
+Child caching during fallback depends on whether transforms are pending:
+
+- If the transform stack is empty, listed siblings are already at the visible
+  level. `expand_list_refs` may pre-cache them, and the outer segment loop reads
+  the authoritative cache entry back instead of overwriting it.
+- If the transform stack is non-empty, raw list items belong to the deepest
+  target. They must not be pre-cached at `path_before_seg/<name>`. The normal
+  cache write happens only after transforms are applied.
+
+`DslProvider::resolve` no longer inspects dynamic list entries. It returns
+`Terminal(None)` when explicit resolve rules and static list keys both miss,
+allowing the runtime list fallback to handle dynamic list entries uniformly.
 
 #### 8.8.2 `list` delegation
 
@@ -781,3 +810,7 @@ integrations:
 - Static provider references are validated eagerly in strict mode.
 - Templated provider references are runtime-dynamic and resolve at
   instantiation time.
+- `Provider::resolve` returns routing intent only. `ResolveRef::Delegate`
+  carries a deferred `transform` closure, not pre-computed provider or metadata.
+- The runtime owns recursive delegate-chain traversal for path segment
+  resolution.

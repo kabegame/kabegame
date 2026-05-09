@@ -19,7 +19,7 @@
             }
         },
         "All": {
-            "provider": "vd_all_provider"
+            "provider": "paginate100_provider"
         }
     }
 }

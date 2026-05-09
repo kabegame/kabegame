@@ -175,6 +175,7 @@ import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import {
   filterDateSegment,
+  filterMediaFormat,
   filterMediaKind,
   filterPluginId,
   filterSizeRange,
@@ -292,6 +293,7 @@ interface ProviderChildDir {
   name: string;
   meta?: {
     isLeaf?: boolean;
+    plain?: boolean;
   } | null;
   total?: number | null;
 }
@@ -633,6 +635,10 @@ function isProviderLeaf(entry: ProviderChildDir) {
   return entry.meta?.isLeaf === true;
 }
 
+function isProviderPlain(entry: ProviderChildDir) {
+  return entry.meta?.plain === true;
+}
+
 function activePluginExtendPath(pluginId: string) {
   return props.filter.type === "plugin" && props.filter.pluginId === pluginId
     ? normalizeExtendPath(props.filter.extendPath ?? "")
@@ -880,12 +886,15 @@ const filterFoldLabel = computed(() => {
     return ext ? `${name} / ${ext}` : t("gallery.filterByPluginWithName", { name });
   }
   const mk = filterMediaKind(props.filter);
+  const mf = filterMediaFormat(props.filter);
   if (mk === "image") {
     const label = t("gallery.filterImageOnlyLabel");
+    if (mf) return `${label} / ${mf}`;
     return isLazyLoaded("media-type") ? `${label} (${mediaTypeCounts.value.imageCount})` : label;
   }
   if (mk === "video") {
     const label = t("gallery.filterVideoOnlyLabel");
+    if (mf) return `${label} / ${mf}`;
     return isLazyLoaded("media-type") ? `${label} (${mediaTypeCounts.value.videoCount})` : label;
   }
   return t("gallery.filterAll");
@@ -1096,6 +1105,28 @@ function pluginExtendPickerOptions(pluginId: string, parentPath = ""): PickerCas
     };
   });
 }
+
+function pluginExtendChildByPath(pluginId: string, extendPath = "") {
+  const segments = normalizeExtendPath(extendPath).split("/").filter(Boolean);
+  let parentPath = "";
+  let found: ProviderChildDir | undefined;
+  for (const segment of segments) {
+    found = (pluginExtendChildren.value[pluginExtendKey(pluginId, parentPath)] ?? []).find(
+      (child) => child.name === segment
+    );
+    if (!found) return undefined;
+    parentPath = [parentPath, segment].filter(Boolean).join("/");
+  }
+  return found;
+}
+
+function isPluginCommandPlain(command: string) {
+  const { pluginId, extendPath } = parsePluginCommand(command);
+  if (!pluginId || !extendPath) return false;
+  const child = pluginExtendChildByPath(pluginId, extendPath);
+  return child ? isProviderPlain(child) : false;
+}
+
 const pluginFilterPickerSelected = ref<string[]>([]);
 watch(showPluginFilterPicker, (open) => {
   if (open) {
@@ -1105,9 +1136,10 @@ watch(showPluginFilterPicker, (open) => {
   }
 });
 function onPluginFilterPickerConfirm() {
-  showPluginFilterPicker.value = false;
   const selected = pluginFilterPickerSelected.value;
   const command = selected[selected.length - 1] ?? "";
+  if (isPluginCommandPlain(command)) return;
+  showPluginFilterPicker.value = false;
   const { pluginId: id, extendPath } = parsePluginCommand(command);
   if (!id) return;
   emit(

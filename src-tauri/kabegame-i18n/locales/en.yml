@@ -55,6 +55,7 @@ vd:
   desc: Descending
   image: Image
   video: Video
+  allFormats: All Formats
   subAlbums: Sub Albums
   albumOrder: By Album Order
   wallpaperOrderSub: By Wallpaper Order

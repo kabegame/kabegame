@@ -49,7 +49,7 @@
   "filterByTime": "依時間",
   "filterByTimeEmpty": "尚無依時間分組的資料",
   "filterByTimeWithDetail": "依時間：{detail}",
-  "filterByMediaType": "依種類",
+  "filterByMediaType": "依媒體",
   "filterImageOnly": "僅圖片",
   "filterVideoOnly": "僅影片",
   "filterImageOnlyLabel": "圖片",

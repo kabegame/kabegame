@@ -8,6 +8,7 @@
     "query": {
         // album 顺序模式: WHERE ai."order" > N, ORDER BY ai."order" ASC
         "where": "ai.\"order\" > ${properties.order}",
+        "order_clear": ["images.crawled_at"],
         "order": [{ "ai.\"order\"": "asc" }]
     },
     "resolve": {

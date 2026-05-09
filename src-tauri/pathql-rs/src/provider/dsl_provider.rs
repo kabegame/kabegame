@@ -1,6 +1,8 @@
 //! DSL provider 实例。**不持 registry / runtime 字段**——所有外部状态由 ctx 注入。
 
-use super::{ChildEntry, EngineError, ListRef, Provider, ProviderContext, ResolveRef};
+use super::{
+    ChildEntry, DelegateTransform, EngineError, ListRef, Provider, ProviderContext, ResolveRef,
+};
 use crate::ast::{
     DelegateProviderField, DynamicDelegateEntry, DynamicListEntry, DynamicSqlEntry, ListEntry,
     Namespace, ProviderCall, ProviderDef, ProviderInvocation, Query,
@@ -304,221 +306,6 @@ impl DslProvider {
         })
     }
 
-    fn child_from_resolve_ref(name: &str, resolved: &ResolveRef) -> Option<ChildEntry> {
-        match resolved {
-            ResolveRef::Terminal(child) => child.clone(),
-            ResolveRef::Delegate {
-                final_provider,
-                final_meta,
-                ..
-            } => Some(ChildEntry {
-                name: name.to_string(),
-                provider: final_provider.clone(),
-                meta: final_meta.clone(),
-            }),
-        }
-    }
-
-    fn extract_provider_from_ref(resolved: &ResolveRef) -> Option<Arc<dyn Provider>> {
-        match resolved {
-            ResolveRef::Terminal(Some(child)) => child.provider.clone(),
-            ResolveRef::Terminal(None) => None,
-            ResolveRef::Delegate { final_provider, .. } => final_provider.clone(),
-        }
-    }
-
-    fn final_provider_from_delegate_field(
-        &self,
-        provider_field: Option<&DelegateProviderField>,
-        properties: &Option<HashMap<String, AstTemplateValue>>,
-        target_ref: &ResolveRef,
-        tctx: &TemplateContext,
-        ctx: &ProviderContext,
-    ) -> Result<Option<Arc<dyn Provider>>, EngineError> {
-        match provider_field {
-            None => Ok(None),
-            Some(DelegateProviderField::ChildRef(_)) => {
-                Ok(Self::extract_provider_from_ref(target_ref))
-            }
-            Some(DelegateProviderField::Name(prov_name)) => {
-                let props = self.eval_properties_in_ctx(properties, tctx)?;
-                Ok(ctx
-                    .registry
-                    .instantiate(&self.current_namespace(), prov_name, &props, ctx))
-            }
-        }
-    }
-
-    /// 反查: 给定 name, 找到哪个 dynamic 项的 key 模板渲染后等于 name, 然后实例化对应 provider。
-    /// 返回 `Ok(None)` 表示该 dynamic 项不命中; `Ok(Some(child))` 命中。
-    fn reverse_lookup_dynamic(
-        &self,
-        name: &str,
-        key_template: &str,
-        entry: &DynamicListEntry,
-        composed: &ProviderQuery,
-        ctx: &ProviderContext,
-    ) -> Result<Option<ResolveRef>, EngineError> {
-        match entry {
-            DynamicListEntry::Sql(sql_entry) => {
-                let dbg = crate::provider::runtime::dbg_enabled();
-                let executor = ctx.runtime.executor().clone();
-                let dialect = executor.dialect();
-                let aliases = AliasTable::new();
-                let mut prop_ctx = self.base_template_context(ctx, &[]);
-                match composed.build_sql(&prop_ctx, dialect) {
-                    Ok(composed_rendered) => {
-                        if dbg {
-                            eprintln!(
-                                "[pathql]   reverse dynamic SQL composed provider={}::{} sql={:?} params={:?}",
-                                self.def
-                                    .namespace
-                                    .as_ref()
-                                    .map(|n| n.0.as_str())
-                                    .unwrap_or(""),
-                                self.def.name.0,
-                                composed_rendered.0,
-                                composed_rendered.1,
-                            );
-                        }
-                        prop_ctx.composed = Some(composed_rendered);
-                    }
-                    Err(e) => {
-                        if dbg {
-                            eprintln!(
-                                "[pathql]   reverse dynamic SQL composed render ERROR provider={}::{}: {}",
-                                self.def
-                                    .namespace
-                                    .as_ref()
-                                    .map(|n| n.0.as_str())
-                                    .unwrap_or(""),
-                                self.def.name.0,
-                                e,
-                            );
-                        }
-                    }
-                }
-                let (sql, params) =
-                    render_to_owned(&sql_entry.sql.0, &prop_ctx, &aliases, dialect)?;
-                if dbg {
-                    eprintln!(
-                        "[pathql]   reverse dynamic SQL provider={}::{} key_template={:?} sql={:?} params={:?}",
-                        self.def
-                            .namespace
-                            .as_ref()
-                            .map(|n| n.0.as_str())
-                            .unwrap_or(""),
-                        self.def.name.0,
-                        key_template,
-                        sql,
-                        params,
-                    );
-                }
-                let rows = match executor.execute(&sql, &params) {
-                    Ok(rows) => rows,
-                    Err(e) => return Err(e),
-                };
-                if dbg {
-                    eprintln!(
-                        "[pathql]   reverse dynamic SQL rows provider={}::{} count={}",
-                        self.def
-                            .namespace
-                            .as_ref()
-                            .map(|n| n.0.as_str())
-                            .unwrap_or(""),
-                        self.def.name.0,
-                        rows.len(),
-                    );
-                }
-
-                let data_var_name = sql_entry.data_var.0.clone();
-                for row in rows {
-                    let mut row_ctx = self.base_template_context(ctx, &[]);
-                    row_ctx.data_var = Some((data_var_name.clone(), row.clone()));
-                    let rendered = render_template_to_string(key_template, &row_ctx)?;
-                    if dbg {
-                        eprintln!(
-                            "[pathql]   reverse dynamic candidate provider={}::{} rendered={:?} target={:?} row={:?}",
-                            self.def
-                                .namespace
-                                .as_ref()
-                                .map(|n| n.0.as_str())
-                                .unwrap_or(""),
-                            self.def.name.0,
-                            rendered,
-                            name,
-                            row,
-                        );
-                    }
-                    if rendered == name {
-                        let provider: Option<Arc<dyn Provider>> = match &sql_entry.provider {
-                            Some(prov_name) => {
-                                let props =
-                                    self.eval_properties_in_ctx(&sql_entry.properties, &row_ctx)?;
-                                ctx.registry.instantiate(
-                                    &self.current_namespace(),
-                                    prov_name,
-                                    &props,
-                                    ctx,
-                                )
-                            }
-                            None => None,
-                        };
-                        let meta = self.eval_meta_in_ctx(&sql_entry.meta, &row_ctx)?;
-                        return Ok(Some(ResolveRef::Terminal(Some(ChildEntry {
-                            name: rendered,
-                            provider,
-                            meta,
-                        }))));
-                    }
-                }
-                Ok(None)
-            }
-            DynamicListEntry::Delegate(del_entry) => {
-                let target = self
-                    .instantiate_call(&del_entry.delegate, ctx)?
-                    .ok_or_else(|| {
-                        EngineError::ProviderNotRegistered(
-                            self.current_namespace().0.clone(),
-                            del_entry.delegate.provider.0.clone(),
-                        )
-                    })?;
-                let target_children = ctx.runtime.list(&ctx.current_path())?;
-
-                let child_var_name = del_entry.child_var.0.clone();
-                for child in target_children {
-                    let child_json = Self::child_entry_json(&child);
-                    let mut tctx = self.base_template_context(ctx, &[]);
-                    tctx.child_var = Some((child_var_name.clone(), child_json));
-                    let rendered = render_template_to_string(key_template, &tctx)?;
-                    if rendered == name {
-                        let final_provider = match del_entry.provider.as_ref() {
-                            None => None,
-                            Some(DelegateProviderField::ChildRef(_)) => child.provider.clone(),
-                            Some(DelegateProviderField::Name(prov_name)) => {
-                                let props =
-                                    self.eval_properties_in_ctx(&del_entry.properties, &tctx)?;
-                                ctx.registry.instantiate(
-                                    &self.current_namespace(),
-                                    prov_name,
-                                    &props,
-                                    ctx,
-                                )
-                            }
-                        };
-                        let final_meta = self.eval_meta_in_ctx(&del_entry.meta, &tctx)?;
-                        return Ok(Some(ResolveRef::Delegate {
-                            target,
-                            final_provider,
-                            final_meta,
-                        }));
-                    }
-                }
-                Ok(None)
-            }
-        }
-    }
-
     /// 把 ProviderInvocation 包成 ChildEntry。
     /// 7b: ByDelegate 由 resolve 调用点单独处理, 静态 list 项不支持转发语义。
     fn materialize_invocation_child(
@@ -702,12 +489,12 @@ impl Provider for DslProvider {
                         .iter()
                         .map(|m| m.map(|x| x.as_str().to_string()).unwrap_or_default())
                         .collect();
-                    // ByDelegate 在此 inline 处理 — 调 target.resolve(name) 转发解析责任,
-                    // 再把目标 ChildEntry 绑定到 child_var 并按当前层声明重新 materialize。
+                    // ByDelegate 只返回路由引用；target recursion 和 child materialize
+                    // 均由 runtime 通过 transform stack 延迟处理。
                     if let ProviderInvocation::ByDelegate(b) = invocation {
                         if dbg {
                             eprintln!(
-                                "[pathql]   regex matched ByDelegate; forwarding to {:?}.resolve({:?})",
+                                "[pathql]   regex matched ByDelegate; returning delegate target {:?} for {:?}",
                                 b.delegate.provider, name
                             );
                         }
@@ -715,76 +502,50 @@ impl Provider for DslProvider {
                             Some(t) => t,
                             None => return ResolveRef::Terminal(None),
                         };
-                        // target 的 contrib 借给本节点 (与路径自然下走对称)
-                        let next_composed = target.apply_query(composed.clone(), ctx);
-                        let target_ref = target.resolve(name, &next_composed, ctx);
-                        let Some(target_child) = Self::child_from_resolve_ref(name, &target_ref)
-                        else {
-                            if dbg {
-                                eprintln!(
-                                    "[pathql]   ByDelegate target.resolve({:?}) → Terminal(None), returning None",
-                                    name
-                                );
-                            }
-                            return ResolveRef::Terminal(None);
-                        };
 
-                        let mut tctx = self.base_template_context(ctx, &[]);
-                        if let Some(child_var) = &b.child_var {
-                            let child_json = Self::child_entry_json(&target_child);
-                            if dbg {
-                                eprintln!(
-                                    "[pathql]   ByDelegate child_var={:?} meta={:?}",
-                                    child_var.0,
-                                    child_json.get("meta")
-                                );
+                        let b_child_var = b.child_var.clone();
+                        let b_meta = b.meta.clone();
+                        let b_provider = b.provider.clone();
+                        let b_props = b.properties.clone();
+                        let name_owned = name.to_string();
+                        let self_props = self.properties.clone();
+                        let namespace = self.current_namespace();
+                        let globals = ctx.runtime.globals().clone();
+                        let cap_vec = cap_vec.clone();
+
+                        let transform: DelegateTransform = Arc::new(move |target_child, ctx| {
+                            let tc = target_child?;
+                            let mut tctx = TemplateContext::default();
+                            tctx.properties = self_props.clone();
+                            tctx.globals = globals.clone();
+                            tctx.capture = cap_vec.clone();
+                            if let Some(child_var) = &b_child_var {
+                                tctx.child_var =
+                                    Some((child_var.0.clone(), DslProvider::child_entry_json(tc)));
                             }
-                            tctx.child_var = Some((child_var.0.clone(), child_json));
-                        }
-                        let final_meta = match self.eval_meta_in_ctx(&b.meta, &tctx) {
-                            Ok(meta) => meta,
-                            Err(e) => {
-                                if dbg {
-                                    eprintln!(
-                                        "[pathql]   ByDelegate eval_meta_in_ctx error: {}",
-                                        e
-                                    );
+
+                            let final_meta = eval_meta_in_ctx(&b_meta, &tctx).ok()?;
+                            let final_provider = match &b_provider {
+                                None => None,
+                                Some(DelegateProviderField::ChildRef(_)) => tc.provider.clone(),
+                                Some(DelegateProviderField::Name(provider_name)) => {
+                                    let props = eval_properties_in_ctx(&b_props, &tctx).ok()?;
+                                    Some(ctx.registry.instantiate(
+                                        &namespace,
+                                        provider_name,
+                                        &props,
+                                        ctx,
+                                    )?)
                                 }
-                                return ResolveRef::Terminal(None);
-                            }
-                        };
+                            };
 
-                        if b.provider.is_none() {
-                            return ResolveRef::Terminal(Some(ChildEntry {
-                                name: name.to_string(),
-                                provider: None,
+                            Some(ChildEntry {
+                                name: name_owned.clone(),
+                                provider: final_provider,
                                 meta: final_meta,
-                            }));
-                        }
-
-                        let final_provider = match self.final_provider_from_delegate_field(
-                            b.provider.as_ref(),
-                            &b.properties,
-                            &target_ref,
-                            &tctx,
-                            ctx,
-                        ) {
-                            Ok(provider) => provider,
-                            Err(e) => {
-                                if dbg {
-                                    eprintln!(
-                                        "[pathql]   ByDelegate final_provider_from_delegate_field error: {}",
-                                        e
-                                    );
-                                }
-                                return ResolveRef::Terminal(None);
-                            }
-                        };
-                        return ResolveRef::Delegate {
-                            target,
-                            final_provider,
-                            final_meta,
-                        };
+                            })
+                        });
+                        return ResolveRef::Delegate { target, transform };
                     }
                     return ResolveRef::Terminal(
                         self.materialize_invocation_child(
@@ -813,39 +574,6 @@ impl Provider for DslProvider {
                                 .ok()
                                 .flatten(),
                         );
-                    }
-                }
-            }
-            // 3. 动态反查 (§5.2 第三步): 找哪个 dynamic 项渲染出 == name 的 key, 实例化对应 provider
-            for (key_template, entry) in &list.entries {
-                if let ListEntry::Dynamic(dyn_entry) = entry {
-                    match self.reverse_lookup_dynamic(name, key_template, dyn_entry, composed, ctx)
-                    {
-                        Ok(Some(p)) => {
-                            if dbg {
-                                eprintln!(
-                                    "[pathql]   dynamic reverse-lookup matched (key_template={:?})",
-                                    key_template
-                                );
-                            }
-                            return p;
-                        }
-                        Ok(None) => {
-                            if dbg {
-                                eprintln!(
-                                    "[pathql]   dynamic reverse-lookup miss (key_template={:?})",
-                                    key_template
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            if dbg {
-                                eprintln!(
-                                    "[pathql]   dynamic reverse-lookup ERROR (key_template={:?}): {}",
-                                    key_template, e
-                                );
-                            }
-                        }
                     }
                 }
             }
