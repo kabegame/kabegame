@@ -384,6 +384,11 @@ pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, 
 /// `/gallery/` 等根路径不带 limit, 直接 fetch 会拉百万级行 — 此处用 count + last-page-100
 /// 启发式选最后一页, 与前端默认行为对齐。
 fn images_for_listing(rt_path: &str) -> Result<Vec<ImageInfo>, String> {
+    let normalized = rt_path.trim_matches('/');
+    if normalized == "albums" || normalized.starts_with("albums/") {
+        return Ok(Vec::new());
+    }
+
     let rt = provider_runtime();
     let node = rt
         .resolve(rt_path)

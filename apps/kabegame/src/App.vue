@@ -180,6 +180,7 @@ import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
 import { useFailedImagesStore } from "./stores/failedImages";
 import { useCrawlerStore } from "./stores/crawler";
+import { useAlbumStore } from "./stores/albums";
 import { useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -256,6 +257,7 @@ const { visible: crawlerDrawerVisible, initialConfig: crawlerDrawerInitialConfig
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
 const crawlerStore = useCrawlerStore();
+const albumStore = useAlbumStore();
 
 const router = useRouter();
 const modalStack = useModalStackStore();
@@ -477,6 +479,11 @@ onMounted(async () => {
   await settingsStore.ensureLoaded();
 
   await initializeLanguageSetting();
+  try {
+    await albumStore.loadAlbums();
+  } catch (e) {
+    console.error("初始化画册树失败:", e);
+  }
   registerHeaderFeatures();
   console.log("[App.vue] about to call pluginStore.loadPlugins()");
   try {

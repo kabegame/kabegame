@@ -540,6 +540,47 @@ fn album_order_path_paginates_and_limit_leaf_only_limits() {
 }
 
 #[test]
+fn albums_root_all_lists_flat_album_tree_desc() {
+    let runtime = build_runtime();
+
+    let root_children = runtime.list("/albums").unwrap();
+    assert!(
+        root_children.iter().any(|child| child.name == "all"),
+        "albums root children={:?}",
+        root_children
+            .iter()
+            .map(|child| child.name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let albums = runtime.list("/albums/all").unwrap();
+    let names = albums
+        .iter()
+        .map(|child| child.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        [
+            "33333333-3333-3333-3333-333333333333",
+            "11111111-1111-1111-1111-111111111111",
+        ]
+    );
+    assert_eq!(runtime.count("/albums/all").unwrap(), 2);
+
+    let child_meta = albums[0].meta.as_ref().unwrap();
+    assert_eq!(child_meta.get("kind").and_then(|v| v.as_str()), Some("album"));
+    assert_eq!(
+        child_meta
+            .pointer("/data/parentId")
+            .and_then(|v| v.as_str()),
+        Some(ALBUM_A_ID)
+    );
+
+    let root_meta = albums[1].meta.as_ref().unwrap();
+    assert!(root_meta.pointer("/data/parentId").unwrap().is_null());
+}
+
+#[test]
 fn vd_album_i18n_roots_resolve_to_same_image_set() {
     let _locale_guard = lock_locale_tests();
     let runtime = build_runtime();

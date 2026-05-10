@@ -9,6 +9,26 @@
     "query": {
         "where": "ai.album_id = ${properties.album_id}"
     },
+    "list": {
+        // 子画册 (parent_id = ${properties.album_id}); meta 由 runtime 按 SQL 行字段构造。
+        "${out.id}": {
+            "sql": "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id = ${properties.album_id} ORDER BY created_at ASC",
+            "data_var": "out",
+            "provider": "gallery_album_provider",
+            "properties": {
+                "album_id": "${out.id}"
+            },
+            "meta": {
+                "kind": "album",
+                "data": {
+                    "id": "${out.id}",
+                    "name": "${out.name}",
+                    "createdAt": "${out.created_at}",
+                    "parentId": "${out.parent_id}"
+                }
+            }
+        }
+    },
     "resolve": {
         // 控制段只用于路径解析, 不作为 gallery list children 暴露。
         "wallpaper-order": { "provider": "gallery_wallpaper_order_router" },
@@ -37,12 +57,5 @@
             "provider": "${child.provider}",
             "meta": "${child.meta}"
         },
-        // sub-album: 用 UUID 正则锁定, 避免与静态 desc/bigger_order/xNNNx 及裸数字冲突。
-        // 不再校验 parent_id 关系 (programmatic 原检查 sub-album.parent_id == self.album_id);
-        // 不存在的 UUID 走空集而非 PathNotFound — 与 gallery_albums_router 一致。
-        "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}": {
-            "provider": "gallery_album_provider",
-            "properties": { "album_id": "${capture[0]}" }
-        }
     }
 }

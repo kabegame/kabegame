@@ -6,6 +6,7 @@
         "from": "images"
     },
     "list": {
+        "albums": { "provider": "albums_root_provider" },
         "gallery": { "provider": "gallery_route" },
         "images": { "provider": "images_root_provider" },
         "vd": { "provider": "vd_root_router" }
