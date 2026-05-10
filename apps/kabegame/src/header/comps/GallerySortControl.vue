@@ -43,18 +43,21 @@ const isWallpaperOrderRoot = computed(
 );
 
 const isSizeRoot = computed(() => galleryRouteStore.filter.type === "size");
+const isAspectRoot = computed(() => galleryRouteStore.filter.type === "aspect");
 
 const { t } = useI18n();
 
 const sortAscLabel = computed(() => {
   if (isWallpaperOrderRoot.value) return t("gallery.bySetTimeAsc");
   if (isSizeRoot.value) return t("gallery.bySizeAsc");
+  if (isAspectRoot.value) return t("gallery.byAspectWidthHeight");
   return t("gallery.byTimeAsc");
 });
 
 const sortDescLabel = computed(() => {
   if (isWallpaperOrderRoot.value) return t("gallery.bySetTimeDesc");
   if (isSizeRoot.value) return t("gallery.bySizeDesc");
+  if (isAspectRoot.value) return t("gallery.byAspectHeightWidth");
   return t("gallery.byTimeDesc");
 });
 
@@ -68,6 +71,11 @@ const sortLabel = computed(() => {
     return galleryRouteStore.sort === "desc"
       ? t("gallery.bySizeDesc")
       : t("gallery.bySizeAsc");
+  }
+  if (isAspectRoot.value) {
+    return galleryRouteStore.sort === "desc"
+      ? t("gallery.byAspectHeightWidth")
+      : t("gallery.byAspectWidthHeight");
   }
   return galleryRouteStore.sort === "desc"
     ? t("gallery.byTimeDesc")

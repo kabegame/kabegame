@@ -136,6 +136,17 @@
         @cancel="showMediaTypeFilterPicker = false"
       />
     </van-popup>
+    <van-popup v-model:show="showAspectFilterPicker" position="bottom" round>
+      <van-picker
+        v-model="aspectFilterPickerSelected"
+        :title="t('gallery.filterByAspect')"
+        :columns="aspectFilterPickerColumns"
+        :confirm-button-text="t('common.confirm')"
+        :cancel-button-text="t('common.cancel')"
+        @confirm="onAspectFilterPickerConfirm"
+        @cancel="showAspectFilterPicker = false"
+      />
+    </van-popup>
     <van-popup v-model:show="showSortPicker" position="bottom" round>
       <van-picker
         v-model="sortPickerSelected"
@@ -174,6 +185,8 @@ import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import {
+  GALLERY_ASPECT_BUCKETS,
+  filterAspectRange,
   filterDateSegment,
   filterMediaFormat,
   filterMediaKind,
@@ -249,6 +262,7 @@ const isWallpaperOrderBrowse = computed(
 );
 
 const isSizeBrowse = computed(() => filterSizeRange(props.filter) !== null);
+const isAspectBrowse = computed(() => filterAspectRange(props.filter) !== null);
 
 const SIZE_RANGE_LABEL_KEYS: Record<string, string> = {
   "unknown":   "filterSize_unknown",
@@ -260,6 +274,10 @@ const SIZE_RANGE_LABEL_KEYS: Record<string, string> = {
   "10MB-50MB": "filterSize_10m_50m",
   "50MB-":     "filterSize_gte50m",
 };
+
+const ASPECT_RANGE_LABEL_KEYS: Record<string, string> = Object.fromEntries(
+  GALLERY_ASPECT_BUCKETS.map((b) => [b.range, b.labelKey]),
+);
 
 const uiStore = useUiStore();
 
@@ -853,11 +871,13 @@ async function ensureTimeNodeChildrenLoaded(node: TimeMenuNode) {
 const sortOptionLabelAsc = computed(() => {
   if (isWallpaperOrderBrowse.value) return t("gallery.bySetTimeAsc");
   if (isSizeBrowse.value) return t("gallery.bySizeAsc");
+  if (isAspectBrowse.value) return t("gallery.byAspectWidthHeight");
   return t("gallery.byTimeAsc");
 });
 const sortOptionLabelDesc = computed(() => {
   if (isWallpaperOrderBrowse.value) return t("gallery.bySetTimeDesc");
   if (isSizeBrowse.value) return t("gallery.bySizeDesc");
+  if (isAspectBrowse.value) return t("gallery.byAspectHeightWidth");
   return t("gallery.byTimeDesc");
 });
 
@@ -869,6 +889,12 @@ const filterFoldLabel = computed(() => {
     const key = SIZE_RANGE_LABEL_KEYS[sr];
     const detail = key ? t(`gallery.${key}`) : sr;
     return `${t("gallery.filterBySize")}: ${detail}`;
+  }
+  const ar = filterAspectRange(props.filter);
+  if (ar !== null) {
+    const key = ASPECT_RANGE_LABEL_KEYS[ar];
+    const detail = key ? t(`gallery.${key}`) : ar;
+    return `${t("gallery.filterByAspect")}: ${detail}`;
   }
   if (props.filter.type === "date-range") {
     return `${props.filter.start} ~ ${props.filter.end}`;
@@ -939,12 +965,14 @@ const showFilterPicker = ref(false);
 const showTimeFilterPicker = ref(false);
 const showPluginFilterPicker = ref(false);
 const showMediaTypeFilterPicker = ref(false);
+const showAspectFilterPicker = ref(false);
 const showSortPicker = ref(false);
 const showPageSizePicker = ref(false);
 useModalBack(showFilterPicker);
 useModalBack(showTimeFilterPicker);
 useModalBack(showPluginFilterPicker);
 useModalBack(showMediaTypeFilterPicker);
+useModalBack(showAspectFilterPicker);
 useModalBack(showSortPicker);
 useModalBack(showPageSizePicker);
 
@@ -954,6 +982,7 @@ const filterPickerColumns = computed(() => [
   { text: t("gallery.filterByTime"), value: "time" },
   { text: t("gallery.filterByPlugin"), value: "plugin" },
   { text: t("gallery.filterByMediaType"), value: "media-type" },
+  { text: t("gallery.filterByAspect"), value: "aspect" },
 ]);
 const filterPickerSelected = ref<string[]>(["all"]);
 watch(showFilterPicker, (open) => {
@@ -966,6 +995,8 @@ watch(showFilterPicker, (open) => {
       filterPickerSelected.value = ["plugin"];
     } else if (isMediaTypeFilterBrowse.value) {
       filterPickerSelected.value = ["media-type"];
+    } else if (isAspectBrowse.value) {
+      filterPickerSelected.value = ["aspect"];
     } else {
       filterPickerSelected.value = ["all"];
     }
@@ -991,6 +1022,10 @@ async function onFilterPickerConfirm() {
   if (v === "media-type") {
     await ensureMediaTypeCountsLoaded();
     showMediaTypeFilterPicker.value = true;
+    return;
+  }
+  if (v === "aspect") {
+    showAspectFilterPicker.value = true;
     return;
   }
   if (v === "all" || v === "wallpaper-order") {
@@ -1174,6 +1209,27 @@ function onMediaTypeFilterPickerConfirm() {
   const kind = mediaTypeFilterPickerSelected.value[0];
   if (kind !== "image" && kind !== "video") return;
   emit("update:filter", { type: "media-type", kind });
+}
+
+const aspectFilterPickerColumns = computed(() =>
+  GALLERY_ASPECT_BUCKETS.map((b) => ({
+    text: t(`gallery.${b.labelKey}`),
+    value: b.range,
+  })),
+);
+const aspectFilterPickerSelected = ref<string[]>(["landscape-4x3-16x9"]);
+watch(showAspectFilterPicker, (open) => {
+  if (open) {
+    aspectFilterPickerSelected.value = [
+      filterAspectRange(props.filter) ?? GALLERY_ASPECT_BUCKETS[0].range,
+    ];
+  }
+});
+function onAspectFilterPickerConfirm() {
+  showAspectFilterPicker.value = false;
+  const range = aspectFilterPickerSelected.value[0]?.trim();
+  if (!range) return;
+  emit("update:filter", { type: "aspect", range });
 }
 
 const sortPickerColumns = computed(() => [

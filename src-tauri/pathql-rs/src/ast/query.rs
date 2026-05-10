@@ -25,8 +25,6 @@ pub struct ContribQuery {
     #[serde(default)]
     pub where_clear: Option<Vec<SqlExpr>>,
     #[serde(default)]
-    pub order_clear: Option<Vec<SqlExpr>>,
-    #[serde(default)]
     pub order: Option<OrderForm>,
     #[serde(default)]
     pub offset: Option<NumberOrTemplate>,
@@ -137,6 +135,12 @@ mod tests {
     #[test]
     fn contrib_unknown_field_rejected() {
         let r: Result<Query, _> = serde_json::from_str(r#"{"limit":0,"frob":1}"#);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn contrib_order_clear_rejected() {
+        let r: Result<Query, _> = serde_json::from_str(r#"{"order_clear":["images.crawled_at"]}"#);
         assert!(r.is_err());
     }
 }

@@ -11,6 +11,6 @@
     },
     "query": {
         "where": "CASE WHEN ${properties.min_size} < 0 THEN (images.size IS NULL OR images.size <= 0) ELSE (images.size >= ${properties.min_size} AND images.size < ${properties.max_size}) END",
-        "order": [{ "images.size": "asc" }]
+        "order": [{ "sql": "images.size", "order": "asc" }]
     }
 }

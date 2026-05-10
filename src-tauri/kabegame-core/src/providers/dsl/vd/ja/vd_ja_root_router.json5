@@ -10,6 +10,7 @@
         "種類別":         { "provider": "vd_media_type_provider" },
         "日付別":         { "provider": "vd_dates_ja_provider" },
         "サイズ別":       { "provider": "vd_size_router" },
+        "寸法別":         { "provider": "vd_aspect_ja_provider" },
         "すべて":         { "provider": "vd_all_provider" }
     }
 }

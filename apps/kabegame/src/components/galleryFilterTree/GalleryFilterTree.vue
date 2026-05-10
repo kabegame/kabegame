@@ -6,6 +6,7 @@
       <DateProviderChildrenNode @select="selectFilter" />
       <MediaTypeProviderChildrenNode @select="selectFilter" />
       <SizeProviderChildrenNode @select="selectFilter" />
+      <AspectProviderChildrenNode @select="selectFilter" />
       <PluginsProviderChildrenNode @select="selectFilter" />
     </div>
   </div>
@@ -18,6 +19,7 @@ import AllProviderChildrenNode from "./AllProviderChildrenNode.vue";
 import DateProviderChildrenNode from "./DateProviderChildrenNode.vue";
 import MediaTypeProviderChildrenNode from "./MediaTypeProviderChildrenNode.vue";
 import SizeProviderChildrenNode from "./SizeProviderChildrenNode.vue";
+import AspectProviderChildrenNode from "./AspectProviderChildrenNode.vue";
 import PluginsProviderChildrenNode from "./PluginsProviderChildrenNode.vue";
 import WallpaperOrderProviderChildrenNode from "./WallpaperOrderProviderChildrenNode.vue";
 import {

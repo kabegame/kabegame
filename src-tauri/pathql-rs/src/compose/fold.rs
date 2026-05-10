@@ -2,7 +2,9 @@ use thiserror::Error;
 
 use super::aliases::ResolvedAlias;
 use super::query::{FieldFrag, JoinFrag, ProviderQuery};
-use crate::ast::{ContribQuery, Field, Join, JoinKind, NumberOrTemplate, OrderForm, SqlExpr};
+use crate::ast::{
+    ClearMode, ContribQuery, Field, Join, JoinKind, NumberOrTemplate, OrderForm, SqlExpr,
+};
 
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum FoldError {
@@ -19,7 +21,6 @@ pub fn fold_contrib(state: &mut ProviderQuery, q: &ContribQuery) -> Result<(), F
     fold_joins(state, &q.join)?;
     fold_where_clear(state, &q.where_clear);
     fold_where(state, &q.where_);
-    fold_order_clear(state, &q.order_clear);
     fold_order(state, &q.order);
     fold_offset(state, &q.offset);
     fold_limit(state, &q.limit);
@@ -128,18 +129,6 @@ fn fold_where(state: &mut ProviderQuery, w: &Option<SqlExpr>) {
     }
 }
 
-fn fold_order_clear(state: &mut ProviderQuery, patterns: &Option<Vec<SqlExpr>>) {
-    let Some(patterns) = patterns else { return };
-    if patterns.is_empty() {
-        return;
-    }
-    state.order.entries.retain(|(field, _)| {
-        !patterns
-            .iter()
-            .any(|needle| !needle.0.is_empty() && field.contains(&needle.0))
-    });
-}
-
 fn fold_order(state: &mut ProviderQuery, order: &Option<OrderForm>) {
     let Some(form) = order else {
         return;
@@ -147,9 +136,12 @@ fn fold_order(state: &mut ProviderQuery, order: &Option<OrderForm>) {
     match form {
         OrderForm::Array(items) => {
             for item in items {
-                for (field, dir) in &item.0 {
-                    state.order.upsert(field.clone(), *dir);
+                if item.clear == Some(ClearMode::All) {
+                    state.order.clear_all();
                 }
+                state
+                    .order
+                    .insert(item.sql.0.clone(), item.order, item.prepend);
             }
         }
         OrderForm::Global(g) => {
@@ -175,8 +167,8 @@ fn fold_limit(state: &mut ProviderQuery, l: &Option<NumberOrTemplate>) {
 mod tests {
     use super::*;
     use crate::ast::{
-        AliasName, ContribQuery, Field, Join, JoinKind, NumberOrTemplate, OrderArrayItem,
-        OrderDirection, OrderForm, OrderGlobal, SqlExpr,
+        AliasName, ClearMode, ContribQuery, Field, Join, JoinKind, NumberOrTemplate,
+        OrderDirection, OrderForm, OrderGlobal, OrderItem, SqlExpr,
     };
 
     fn empty_q() -> ContribQuery {
@@ -403,13 +395,20 @@ mod tests {
 
     // ===== order =====
 
-    fn order_arr(items: Vec<Vec<(&str, OrderDirection)>>) -> OrderForm {
+    fn order_item(sql: &str, order: OrderDirection) -> OrderItem {
+        OrderItem {
+            sql: SqlExpr(sql.into()),
+            prepend: false,
+            order,
+            clear: None,
+        }
+    }
+
+    fn order_arr(items: Vec<(&str, OrderDirection)>) -> OrderForm {
         OrderForm::Array(
             items
                 .into_iter()
-                .map(|inner| {
-                    OrderArrayItem(inner.into_iter().map(|(f, d)| (f.into(), d)).collect())
-                })
+                .map(|(sql, order)| order_item(sql, order))
                 .collect(),
         )
     }
@@ -418,7 +417,7 @@ mod tests {
     fn order_array_single_field() {
         let mut s = ProviderQuery::new();
         let mut q = empty_q();
-        q.order = Some(order_arr(vec![vec![("title", OrderDirection::Asc)]]));
+        q.order = Some(order_arr(vec![("title", OrderDirection::Asc)]));
         fold_contrib(&mut s, &q).unwrap();
         assert_eq!(s.order.entries, vec![("title".into(), OrderDirection::Asc)]);
     }
@@ -428,8 +427,8 @@ mod tests {
         let mut s = ProviderQuery::new();
         let mut q = empty_q();
         q.order = Some(order_arr(vec![
-            vec![("a", OrderDirection::Asc)],
-            vec![("b", OrderDirection::Desc)],
+            ("a", OrderDirection::Asc),
+            ("b", OrderDirection::Desc),
         ]));
         fold_contrib(&mut s, &q).unwrap();
         assert_eq!(s.order.entries[0], ("a".into(), OrderDirection::Asc));
@@ -440,9 +439,9 @@ mod tests {
     fn order_array_overwrite_keeps_position() {
         let mut s = ProviderQuery::new();
         let mut q1 = empty_q();
-        q1.order = Some(order_arr(vec![vec![("a", OrderDirection::Asc)]]));
+        q1.order = Some(order_arr(vec![("a", OrderDirection::Asc)]));
         let mut q2 = empty_q();
-        q2.order = Some(order_arr(vec![vec![("a", OrderDirection::Desc)]]));
+        q2.order = Some(order_arr(vec![("a", OrderDirection::Desc)]));
         fold_contrib(&mut s, &q1).unwrap();
         fold_contrib(&mut s, &q2).unwrap();
         assert_eq!(s.order.entries.len(), 1);
@@ -470,18 +469,62 @@ mod tests {
     fn order_mixed_array_then_global_then_array() {
         let mut s = ProviderQuery::new();
         let mut q1 = empty_q();
-        q1.order = Some(order_arr(vec![vec![("a", OrderDirection::Asc)]]));
+        q1.order = Some(order_arr(vec![("a", OrderDirection::Asc)]));
         let mut q2 = empty_q();
         q2.order = Some(OrderForm::Global(OrderGlobal {
             all: OrderDirection::Revert,
         }));
         let mut q3 = empty_q();
-        q3.order = Some(order_arr(vec![vec![("b", OrderDirection::Desc)]]));
+        q3.order = Some(order_arr(vec![("b", OrderDirection::Desc)]));
         fold_contrib(&mut s, &q1).unwrap();
         fold_contrib(&mut s, &q2).unwrap();
         fold_contrib(&mut s, &q3).unwrap();
         assert_eq!(s.order.entries.len(), 2);
         assert_eq!(s.order.global, Some(OrderDirection::Revert));
+    }
+
+    #[test]
+    fn order_array_prepend_moves_existing_to_front() {
+        let mut s = ProviderQuery::new();
+        let mut q1 = empty_q();
+        q1.order = Some(order_arr(vec![
+            ("a", OrderDirection::Asc),
+            ("b", OrderDirection::Desc),
+        ]));
+        let mut q2 = empty_q();
+        let mut item = order_item("a", OrderDirection::Desc);
+        item.prepend = true;
+        q2.order = Some(OrderForm::Array(vec![item]));
+        fold_contrib(&mut s, &q1).unwrap();
+        fold_contrib(&mut s, &q2).unwrap();
+        assert_eq!(
+            s.order.entries,
+            vec![
+                ("a".into(), OrderDirection::Desc),
+                ("b".into(), OrderDirection::Desc),
+            ]
+        );
+    }
+
+    #[test]
+    fn order_item_clear_all_then_inserts_current_item() {
+        let mut s = ProviderQuery::new();
+        let mut q1 = empty_q();
+        q1.order = Some(order_arr(vec![
+            ("images.crawled_at", OrderDirection::Asc),
+            ("images.id", OrderDirection::Desc),
+        ]));
+        let mut q2 = empty_q();
+        let mut item = order_item("ai.\"order\"", OrderDirection::Asc);
+        item.prepend = true;
+        item.clear = Some(ClearMode::All);
+        q2.order = Some(OrderForm::Array(vec![item]));
+        fold_contrib(&mut s, &q1).unwrap();
+        fold_contrib(&mut s, &q2).unwrap();
+        assert_eq!(
+            s.order.entries,
+            vec![("ai.\"order\"".into(), OrderDirection::Asc)]
+        );
     }
 
     // ===== offset =====

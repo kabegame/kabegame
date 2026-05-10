@@ -26,7 +26,7 @@
             { "sql": "images.last_set_wallpaper_at", "as": "last_set_wallpaper_at", "in_need": true },
             { "sql": "images.size", "as": "size", "in_need": true }
         ],
-        "order": [{ "images.id": "asc" }],
+        "order": [{ "sql": "images.id", "order": "asc" }],
         "join": [{
             "kind": "LEFT",
             "table": "album_images",

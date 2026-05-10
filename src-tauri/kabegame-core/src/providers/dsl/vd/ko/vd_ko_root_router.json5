@@ -10,6 +10,7 @@
         "종류별":     { "provider": "vd_media_type_provider" },
         "날짜별":     { "provider": "vd_dates_ko_provider" },
         "크기별":     { "provider": "vd_size_router" },
+        "크기 비율별": { "provider": "vd_aspect_ko_provider" },
         "전체":       { "provider": "vd_all_provider" }
     }
 }

@@ -2,7 +2,7 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "$id": "kabegame://provider/v0.7",
     "title": "Kabegame Provider Definition",
-    "description": "声明式 Provider — 路径折叠 × ProviderQuery 贡献 × 动态枚举。详细语义见 cocs/provider-dsl/RULES.md。\n\n与 Rust trait Provider 对齐:\n  query   ↔ apply_query   节点对累积 ProviderQuery 的贡献(或 delegate 委托另一 provider)\n  list    ↔ list_children 静态字面量 / 动态 SQL / 动态 delegate 子节点枚举\n  resolve ↔ get_child     正则解析单个子节点\n\nChildEntry 模型:\n  { name: string, provider?: ProviderInvocation, meta?: any }\n  - meta 为任意 JSON, 详见 RULES.md §4.5(字符串=SQL 或模板; 对象/数组/标量=直接作为 meta)\n  - provider 可缺省 — 当前层不挂下层 provider\n\n命名空间(Java 包风格):\n  顶层 namespace 字段, 形如 'kabegame' / 'kabegame.plugin' / 'pixiv'\n  全局名 = <namespace>.<name>; 同 namespace 内 provider 互相引用用 simple name\n  解析规则: 当前 namespace → 父 namespace → ... → root\n  ProviderInvocation.provider 可写 simple name 或绝对 'a.b.c.name'\n\n判别策略:\n  - Query 互斥: delegate ⊕ (from/join/where/fields/order/offset/limit)\n  - StaticListEntry 用 ProviderInvocation 二态: byName ⊕ Empty\n  - Resolve 用 ProviderInvocation 三态: byName ⊕ byDelegate ⊕ Empty (7b 起 byDelegate 复活, payload 为 ProviderCall)\n  - List entry 由 key 是否含 ${...} 判别 静态 / 动态\n  - DynamicListEntry 数据源互斥: sql ⊕ delegate\n  - order 形态: 数组(位置定序) ⊕ {all:...} 全局指令(二选一)\n\n6e 起: query.delegate / list dynamic delegate 字段类型为 ProviderCall { provider, properties? }; 不再是路径表达式 (PathExpr 整个删除)。Provider 是 path-unaware 的 — 引用其它 provider 走 namespace 链 + name + properties, 不混入路径概念。\n\nDelegate 对称转发 (7b 起三处对齐):\n  - query.delegate         → target.apply_query(current, ctx)  ; 借目标的 contrib 入 composed\n  - list[<dyn>].delegate   → target.list(composed, ctx)        ; 调目标的 list 取 children 序列\n  - resolve[].delegate     → target.resolve(name, composed, ctx); 把当前 segment 的 resolve 决定权转给目标\n每处 payload 都是 ProviderCall, 永远 path-unaware。\n\nContribQuery 拼接语义:\n  fields  → 累积到 SELECT; 用 as + in_need 解决冲突\n  from    → cascading-replace(注意: from 不应内嵌 JOIN, 见 RULES.md §3.1)\n  join    → 累积; 用 as + in_need 解决冲突\n  where   → 路径上各节点 where 用 AND 拼接\n  order   → 数组按位置定优先级(对象 {<field>: asc/desc/revert, ...}; 允许多键); 或 {all: asc/desc/revert} 全局指令\n  offset  → additive (+); 多次声明用 + 串接\n  limit   → last-wins\n\nas + in_need 别名共享机制:\n  as: 'ab'                → 字面别名; 路径累积时重名拒绝(默认 in_need=false)\n  as: 'ab', in_need: true → 重名时放弃本次贡献(用于跨 provider 共享同一 join/field)\n  as: '${ref:my_id}'      → 引擎自动分配唯一别名; 通过 ${ref:my_id} 在其他位置引用\n\nList 动态项的两种数据源:\n  sql 模式 (data_var 显式绑定):\n    SQL 每行 = 一项 child; ${<data_var>.<col>(.<sub>)*} 取 SQL 列(支持嵌套 JSON 列)\n  delegate 模式 (child_var 显式绑定):\n    调目标 ProviderCall list_children; ${<child_var>.name/provider/meta.X} 取 ChildEntry 字段\n\nResolve 全部按正则匹配(纯字面量是空元字符的合法子集); resolve 字段直接是 <regex>: ProviderInvocation 映射, 无 entries 包装。运行期解析顺序:\n  1) regex resolve → 2) 静态 list 字面 → 3) 动态 list 反查(默认开启, 命中进 LRU)\n\nResolve 加载期碰撞检查:\n  - 每条正则 vs 静态 list key 字面量: 任一匹配 → 拒绝\n  - 正则 vs 正则: regex_automata 求交集 → 非空则拒绝\n  - 动态 list 不参与碰撞检查(运行期碰撞按解析顺序覆写, 非正确性故障)\n\n模板变量 ${...} 语义(详见 RULES.md §6):\n  - ${<ns>(.<path>)*}      命名空间取值(properties / capture / data_var / child_var / composed)\n  - ${<ns>[<N>]}           索引访问(capture)\n  - ${<method>:<arg>}      方法标记 — 当前仅 ${ref:<ident>} 引擎分配别名\n\nDynamicListEntry.provider 字段语义:\n  - 缺省          → 当前层不挂 provider\n  - ProviderName  → 显式构造命名 provider, 用 properties 传参\n  - ${child_var.provider} → 透传 delegate 数据源返回的 child.provider",
+    "description": "声明式 Provider — 路径折叠 × ProviderQuery 贡献 × 动态枚举。详细语义见 cocs/provider-dsl/RULES.md。\n\n与 Rust trait Provider 对齐:\n  query   ↔ apply_query   节点对累积 ProviderQuery 的贡献(或 delegate 委托另一 provider)\n  list    ↔ list_children 静态字面量 / 动态 SQL / 动态 delegate 子节点枚举\n  resolve ↔ get_child     正则解析单个子节点\n\nChildEntry 模型:\n  { name: string, provider?: ProviderInvocation, meta?: any }\n  - meta 为任意 JSON, 详见 RULES.md §4.5(字符串=SQL 或模板; 对象/数组/标量=直接作为 meta)\n  - provider 可缺省 — 当前层不挂下层 provider\n\n命名空间(Java 包风格):\n  顶层 namespace 字段, 形如 'kabegame' / 'kabegame.plugin' / 'pixiv'\n  全局名 = <namespace>.<name>; 同 namespace 内 provider 互相引用用 simple name\n  解析规则: 当前 namespace → 父 namespace → ... → root\n  ProviderInvocation.provider 可写 simple name 或绝对 'a.b.c.name'\n\n判别策略:\n  - Query 互斥: delegate ⊕ (from/join/where/fields/order/offset/limit)\n  - StaticListEntry 用 ProviderInvocation 二态: byName ⊕ Empty\n  - Resolve 用 ProviderInvocation 三态: byName ⊕ byDelegate ⊕ Empty (7b 起 byDelegate 复活, payload 为 ProviderCall)\n  - List entry 由 key 是否含 ${...} 判别 静态 / 动态\n  - DynamicListEntry 数据源互斥: sql ⊕ delegate\n  - order 形态: 数组项 {sql, order, prepend?, clear?} ⊕ {all:...} 全局指令(二选一)\n\n6e 起: query.delegate / list dynamic delegate 字段类型为 ProviderCall { provider, properties? }; 不再是路径表达式 (PathExpr 整个删除)。Provider 是 path-unaware 的 — 引用其它 provider 走 namespace 链 + name + properties, 不混入路径概念。\n\nDelegate 对称转发 (7b 起三处对齐):\n  - query.delegate         → target.apply_query(current, ctx)  ; 借目标的 contrib 入 composed\n  - list[<dyn>].delegate   → target.list(composed, ctx)        ; 调目标的 list 取 children 序列\n  - resolve[].delegate     → target.resolve(name, composed, ctx); 把当前 segment 的 resolve 决定权转给目标\n每处 payload 都是 ProviderCall, 永远 path-unaware。\n\nContribQuery 拼接语义:\n  fields  → 累积到 SELECT; 用 as + in_need 解决冲突\n  from    → cascading-replace(注意: from 不应内嵌 JOIN, 见 RULES.md §3.1)\n  join    → 累积; 用 as + in_need 解决冲突\n  where   → 路径上各节点 where 用 AND 拼接\n  order   → 数组项 {sql, order, prepend?, clear?} 按位置定优先级; 或 {all: asc/desc/revert} 全局指令\n  offset  → additive (+); 多次声明用 + 串接\n  limit   → last-wins\n\nas + in_need 别名共享机制:\n  as: 'ab'                → 字面别名; 路径累积时重名拒绝(默认 in_need=false)\n  as: 'ab', in_need: true → 重名时放弃本次贡献(用于跨 provider 共享同一 join/field)\n  as: '${ref:my_id}'      → 引擎自动分配唯一别名; 通过 ${ref:my_id} 在其他位置引用\n\nList 动态项的两种数据源:\n  sql 模式 (data_var 显式绑定):\n    SQL 每行 = 一项 child; ${<data_var>.<col>(.<sub>)*} 取 SQL 列(支持嵌套 JSON 列)\n  delegate 模式 (child_var 显式绑定):\n    调目标 ProviderCall list_children; ${<child_var>.name/provider/meta.X} 取 ChildEntry 字段\n\nResolve 全部按正则匹配(纯字面量是空元字符的合法子集); resolve 字段直接是 <regex>: ProviderInvocation 映射, 无 entries 包装。运行期解析顺序:\n  1) regex resolve → 2) 静态 list 字面 → 3) 动态 list 反查(默认开启, 命中进 LRU)\n\nResolve 加载期碰撞检查:\n  - 每条正则 vs 静态 list key 字面量: 任一匹配 → 拒绝\n  - 正则 vs 正则: regex_automata 求交集 → 非空则拒绝\n  - 动态 list 不参与碰撞检查(运行期碰撞按解析顺序覆写, 非正确性故障)\n\n模板变量 ${...} 语义(详见 RULES.md §6):\n  - ${<ns>(.<path>)*}      命名空间取值(properties / capture / data_var / child_var / composed)\n  - ${<ns>[<N>]}           索引访问(capture)\n  - ${<method>:<arg>}      方法标记 — 当前仅 ${ref:<ident>} 引擎分配别名\n\nDynamicListEntry.provider 字段语义:\n  - 缺省          → 当前层不挂 provider\n  - ProviderName  → 显式构造命名 provider, 用 properties 传参\n  - ${child_var.provider} → 透传 delegate 数据源返回的 child.provider",
 
     "type": "object",
     "required": ["name"],
@@ -182,8 +182,8 @@
                     "oneOf": [
                         {
                             "type": "array",
-                            "items": { "$ref": "#/definitions/OrderArrayItem" },
-                            "description": "形态 A: 数组按位置定优先级(低 index 优先)。每项是 {<field>: 'asc'|'desc'|'revert'} 单键对象; 'revert' 翻转该字段上游已声明的方向; 同名字段后声明覆盖前声明(不报错)"
+                            "items": { "$ref": "#/definitions/OrderItem" },
+                            "description": "形态 A: 数组按位置定优先级(低 index 优先)。每项是 {sql, order, prepend?, clear?}; prepend=true 将该项移动到 ORDER BY 链前端; clear:'all' 在插入当前项前清空上游 order entries"
                         },
                         { "$ref": "#/definitions/OrderGlobal" }
                     ],
@@ -254,13 +254,21 @@
             }
         },
 
-        "OrderArrayItem": {
+        "OrderItem": {
             "type": "object",
-            "minProperties": 1,
-            "additionalProperties": {
-                "enum": ["asc", "desc", "revert"]
+            "additionalProperties": false,
+            "required": ["sql", "order"],
+            "properties": {
+                "sql": { "$ref": "#/definitions/SqlExpr" },
+                "prepend": { "type": "boolean" },
+                "order": {
+                    "enum": ["asc", "desc", "revert"]
+                },
+                "clear": {
+                    "enum": ["all"]
+                }
             },
-            "description": "Order 数组项 — 对象 {<field_name>: 'asc'|'desc'|'revert', ...}。允许多键; field_name 是任意 SQL 列表达式(可含表前缀如 'images.crawled_at'); 'revert' 表示翻转该字段在上游的方向, 上游未声明则视为新增。多键时键间优先级按声明顺序。"
+            "description": "Order 数组项 — { sql, order, prepend?, clear? }。prepend=false(默认) 时新字段追加、已有字段保持位置更新方向; prepend=true 时新字段或重声明字段移动到最前。order:'revert' 翻转已有方向, 缺失时视为 asc。clear:'all' 在当前项插入前清空已累积的 order entries。"
         },
 
         "OrderGlobal": {
@@ -489,3 +497,4 @@
 
     }
 }
+

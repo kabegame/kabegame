@@ -23,7 +23,16 @@ export type GalleryFilter =
   | { type: "date"; segment: string }
   | { type: "date-range"; start: string; end: string }
   | { type: "media-type"; kind: "image" | "video"; format?: string }
-  | { type: "size"; range: string };
+  | { type: "size"; range: string }
+  | { type: "aspect"; range: string };
+
+export const GALLERY_ASPECT_BUCKETS = [
+  { range: "landscape-4x3-16x9", labelKey: "filterAspect_landscape" },
+  { range: "widescreen-16x9-21x9", labelKey: "filterAspect_widescreen" },
+  { range: "square-3x4-4x3", labelKey: "filterAspect_square" },
+  { range: "portrait-9x16-3x4", labelKey: "filterAspect_portrait" },
+  { range: "other", labelKey: "filterAspect_other" },
+] as const;
 
 /** parseGalleryPath 的返回值，仅用于解析/再拼装，不作为持久化模型 */
 export interface ParsedGalleryPath {
@@ -89,6 +98,8 @@ export function serializeFilter(filter: GalleryFilter): string {
         : `media-type/${filter.kind}`;
     case "size":
       return `size/${filter.range}`;
+    case "aspect":
+      return `aspect/${filter.range}`;
   }
 }
 
@@ -175,6 +186,12 @@ export function parseFilter(root: string): GalleryFilter {
     const range = r.slice("size/".length).trim().split("/")[0]?.trim();
     if (range) return { type: "size", range };
   }
+  for (const prefix of ["aspect/", "dimension/", "dimensions/"]) {
+    if (lr.startsWith(prefix)) {
+      const range = r.slice(prefix.length).trim().split("/")[0]?.trim();
+      if (range) return { type: "aspect", range };
+    }
+  }
   return DEFAULT_GALLERY_FILTER;
 }
 
@@ -198,6 +215,10 @@ export function filterSizeRange(f: GalleryFilter): string | null {
   return f.type === "size" ? f.range : null;
 }
 
+export function filterAspectRange(f: GalleryFilter): string | null {
+  return f.type === "aspect" ? f.range : null;
+}
+
 /** 当前 filter 是否属于「全部 / 设置过壁纸 / 按插件 / 按时间 / 日期范围 / 媒体类型」等根级浏览过滤 */
 export function isSimpleFilter(f: GalleryFilter): boolean {
   switch (f.type) {
@@ -208,6 +229,7 @@ export function isSimpleFilter(f: GalleryFilter): boolean {
     case "date-range":
     case "media-type":
     case "size":
+    case "aspect":
       return true;
     default:
       return false;
@@ -263,6 +285,25 @@ function tryParseSizeGalleryPath(segs: string[]): ParsedGalleryPath | null {
   const range = segs[1]!.trim();
   if (!range) return null;
   const filter: GalleryFilter = { type: "size", range };
+  const tail = segs.slice(2);
+  if (tail.length === 0) {
+    return { filter, sort: "asc", page: DEFAULT_PAGE, pageSize: DEFAULT_PAGE_SIZE, search: "" };
+  }
+  return { filter, ...parseTail(tail), search: "" };
+}
+
+/**
+ * 解析 `aspect/<range>/[desc/][x{n}x/]<page>`。
+ * range 是比例桶 slug，如 landscape-4x3-16x9。
+ */
+function tryParseAspectGalleryPath(segs: string[]): ParsedGalleryPath | null {
+  const root = segs[0]?.toLowerCase();
+  if (segs.length < 2 || (root !== "aspect" && root !== "dimension" && root !== "dimensions")) {
+    return null;
+  }
+  const range = segs[1]!.trim();
+  if (!range) return null;
+  const filter: GalleryFilter = { type: "aspect", range };
   const tail = segs.slice(2);
   if (tail.length === 0) {
     return { filter, sort: "asc", page: DEFAULT_PAGE, pageSize: DEFAULT_PAGE_SIZE, search: "" };
@@ -423,6 +464,11 @@ export function parseGalleryPath(path: string): ParsedGalleryPath {
   const sizeParsed = tryParseSizeGalleryPath(segs);
   if (sizeParsed) {
     return { ...sizeParsed, search };
+  }
+
+  const aspectParsed = tryParseAspectGalleryPath(segs);
+  if (aspectParsed) {
+    return { ...aspectParsed, search };
   }
 
   const mediaParsed = tryParseMediaTypeGalleryPath(segs);

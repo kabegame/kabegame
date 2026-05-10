@@ -10,6 +10,7 @@
         "按媒體":     { "provider": "vd_media_type_provider" },
         "按時間":     { "provider": "vd_dates_zhtw_provider" },
         "按大小":     { "provider": "vd_size_router" },
+        "按尺寸":     { "provider": "vd_aspect_zhtw_provider" },
         "全部":       { "provider": "vd_all_provider" }
     }
 }

@@ -125,6 +125,35 @@
             </template>
           </el-dropdown>
         </el-dropdown-item>
+        <el-dropdown-item class="plugin-submenu-wrap" @click.stop>
+          <el-dropdown
+            trigger="hover"
+            placement="right-start"
+            @command="handleAspectCommand"
+          >
+            <span
+              class="plugin-submenu-trigger"
+              :class="{ 'is-active': isAspectFilterActive }"
+            >
+              {{ t("gallery.filterByAspect") }}
+              <el-icon class="plugin-submenu-chevron">
+                <ArrowRight />
+              </el-icon>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu class="plugin-submenu-menu">
+                <el-dropdown-item
+                  v-for="b in GALLERY_ASPECT_BUCKETS"
+                  :key="b.range"
+                  :command="b.range"
+                  :class="{ 'is-active': filterAspectRange(galleryRouteStore.filter) === b.range }"
+                >
+                  {{ t(`gallery.${b.labelKey}`) }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </el-dropdown-item>
         <el-dropdown-item divided class="plugin-submenu-wrap" @click.stop>
           <el-dropdown
             trigger="hover"
@@ -177,6 +206,8 @@ import { useRoute } from "vue-router";
 import { ArrowDown, ArrowRight, Filter } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
 import {
+  GALLERY_ASPECT_BUCKETS,
+  filterAspectRange,
   filterDateSegment,
   filterMediaFormat,
   filterMediaKind,
@@ -241,6 +272,10 @@ const isMediaTypeFilterActive = computed(
 
 const isSizeFilterActive = computed(
   () => filterSizeRange(galleryRouteStore.filter) != null
+);
+
+const isAspectFilterActive = computed(
+  () => filterAspectRange(galleryRouteStore.filter) != null
 );
 
 const SIZE_BUCKETS: Array<{ range: string; labelKey: string }> = [
@@ -570,6 +605,12 @@ const filterLabel = computed(() => {
     const label = bucket ? t(`gallery.${bucket.labelKey}`) : sr;
     return `${t("gallery.filterBySize")}: ${label}`;
   }
+  const ar = filterAspectRange(galleryRouteStore.filter);
+  if (ar) {
+    const bucket = GALLERY_ASPECT_BUCKETS.find((b) => b.range === ar);
+    const label = bucket ? t(`gallery.${bucket.labelKey}`) : ar;
+    return `${t("gallery.filterByAspect")}: ${label}`;
+  }
   return t("gallery.filterAll");
 });
 
@@ -622,6 +663,14 @@ function handleSizeCommand(range: string) {
   if (!range) return;
   void galleryRouteStore.navigate(
     { filter: { type: "size", range }, page: 1 },
+    { push: true }
+  );
+}
+
+function handleAspectCommand(range: string) {
+  if (!range) return;
+  void galleryRouteStore.navigate(
+    { filter: { type: "aspect", range }, page: 1 },
     { push: true }
   );
 }

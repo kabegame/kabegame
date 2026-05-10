@@ -172,7 +172,7 @@ impl ProviderQuery {
                 OrderDirection::Asc => " ASC",
                 OrderDirection::Desc => " DESC",
                 OrderDirection::Revert => {
-                    unreachable!("Revert should be resolved during fold (see OrderState::upsert)")
+                    unreachable!("Revert should be resolved during fold (see OrderState::insert)")
                 }
             });
         }

@@ -1,9 +1,17 @@
 {
     "$schema": "../../schema.json5",
     "namespace": "kabegame",
-    "name": "gallery_album_order_provider",
+    "name": "gallery_aspect_bucket_router",
+    "properties": {
+        "bucket": { "type": "string", "default": "other", "optional": false }
+    },
     "query": {
-        "order": [{ "sql": "COALESCE(ai.\"order\", ai.rowid)", "order": "asc", "prepend": true, "clear": "all" }]
+        "delegate": {
+            "provider": "aspect_bucket_provider",
+            "properties": {
+                "bucket": "${properties.bucket}"
+            }
+        }
     },
     "resolve": {
         "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
@@ -13,10 +21,6 @@
             "child_var": "child",
             "provider": "${child.provider}",
             "meta": "${child.meta}"
-        },
-        "l([0-9]+)l": {
-            "provider": "limit_leaf_provider",
-            "properties": { "limit": "${capture[1]}" }
         }
     }
 }

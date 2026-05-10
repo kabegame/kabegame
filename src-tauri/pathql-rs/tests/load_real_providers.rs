@@ -70,9 +70,10 @@ fn vd_zh_cn_router_loads_via_loader() {
         .resolve(&root_ns, &ProviderName("vd_zh_CN_root_router".into()))
         .expect("vd_zh_CN_root_router");
     let list = vd.list.as_ref().expect("list");
-    assert_eq!(list.entries.len(), 8);
+    assert_eq!(list.entries.len(), 9);
     assert_eq!(list.entries[0].0, "画册");
     assert!(list.entries.iter().any(|(name, _)| name == "按时间"));
+    assert!(list.entries.iter().any(|(name, _)| name == "按尺寸"));
 }
 
 #[test]
@@ -85,7 +86,7 @@ fn gallery_paginate_router_dynamic_entry_loaded() {
     let list = p.list.as_ref().expect("list");
     assert_eq!(list.entries.len(), 1);
     let key = &list.entries[0].0;
-    assert_eq!(key, "${out.meta.page_num}");
+    assert_eq!(key, "${out.name}");
     match &list.entries[0].1 {
         pathql_rs::ListEntry::Dynamic(pathql_rs::DynamicListEntry::Delegate(_)) => {}
         _ => panic!("expected dynamic delegate entry"),

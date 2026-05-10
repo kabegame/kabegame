@@ -1,0 +1,27 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_aspect_ja_provider",
+    "list": {
+        "横長 (4x3-16x9)": {
+            "provider": "vd_aspect_bucket_router",
+            "properties": { "bucket": "landscape" }
+        },
+        "ワイド (16x9-21x9)": {
+            "provider": "vd_aspect_bucket_router",
+            "properties": { "bucket": "widescreen" }
+        },
+        "スクエア寄り (3x4-4x3)": {
+            "provider": "vd_aspect_bucket_router",
+            "properties": { "bucket": "square" }
+        },
+        "縦長 (9x16-3x4)": {
+            "provider": "vd_aspect_bucket_router",
+            "properties": { "bucket": "portrait" }
+        },
+        "その他 (広すぎ-細すぎ-不正)": {
+            "provider": "vd_aspect_bucket_router",
+            "properties": { "bucket": "other" }
+        }
+    }
+}

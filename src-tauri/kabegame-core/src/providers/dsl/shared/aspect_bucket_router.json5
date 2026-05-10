@@ -1,0 +1,13 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "aspect_bucket_router",
+    // Enumerate non-empty aspect-ratio buckets from the current composed gallery query.
+    "list": {
+        "${out.name}": {
+            "sql": "SELECT name, bucket FROM (SELECT 1 AS ord, 'landscape-4x3-16x9' AS name, 'landscape' AS bucket, count(*) AS cnt FROM (${composed}) AS sub WHERE sub.width IS NOT NULL AND sub.height IS NOT NULL AND sub.width > 0 AND sub.height > 0 AND sub.width * 3 > sub.height * 4 AND sub.width * 9 <= sub.height * 16 UNION ALL SELECT 2, 'widescreen-16x9-21x9', 'widescreen', count(*) FROM (${composed}) AS sub WHERE sub.width IS NOT NULL AND sub.height IS NOT NULL AND sub.width > 0 AND sub.height > 0 AND sub.width * 9 > sub.height * 16 AND sub.width * 3 <= sub.height * 7 UNION ALL SELECT 3, 'square-3x4-4x3', 'square', count(*) FROM (${composed}) AS sub WHERE sub.width IS NOT NULL AND sub.height IS NOT NULL AND sub.width > 0 AND sub.height > 0 AND sub.width * 4 >= sub.height * 3 AND sub.width * 3 <= sub.height * 4 UNION ALL SELECT 4, 'portrait-9x16-3x4', 'portrait', count(*) FROM (${composed}) AS sub WHERE sub.width IS NOT NULL AND sub.height IS NOT NULL AND sub.width > 0 AND sub.height > 0 AND sub.width * 16 >= sub.height * 9 AND sub.width * 4 < sub.height * 3 UNION ALL SELECT 5, 'other', 'other', count(*) FROM (${composed}) AS sub WHERE sub.width IS NULL OR sub.height IS NULL OR sub.width <= 0 OR sub.height <= 0 OR sub.width * 16 < sub.height * 9 OR sub.width * 3 > sub.height * 7) WHERE cnt > 0 ORDER BY ord",
+            "data_var": "out",
+            "meta": "${out}"
+        }
+    }
+}

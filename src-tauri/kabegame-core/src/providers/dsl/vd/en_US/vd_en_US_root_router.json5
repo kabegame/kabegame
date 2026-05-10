@@ -15,6 +15,7 @@
         "By Date":       { "provider": "vd_dates_en_US_provider" },
         "By Time":       { "provider": "vd_dates_en_US_provider" },
         "By Size":       { "provider": "vd_size_router" },
+        "By Dimensions": { "provider": "vd_aspect_en_US_provider" },
         "All":           { "provider": "vd_all_provider" }
     }
 }

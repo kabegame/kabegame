@@ -10,6 +10,7 @@ import {
   filterDateSegment,
   filterMediaFormat,
   filterMediaKind,
+  filterAspectRange,
   filterSizeRange,
   type GalleryFilter,
 } from "@/utils/galleryPath";
@@ -140,6 +141,8 @@ export function isSameGalleryFilter(a: GalleryFilter, b: GalleryFilter) {
       return filterMediaKind(b) === a.kind && filterMediaFormat(b) === (a.format?.trim() || null);
     case "size":
       return filterSizeRange(b) === a.range;
+    case "aspect":
+      return filterAspectRange(b) === a.range;
     case "plugin":
       return (
         b.type === "plugin" &&

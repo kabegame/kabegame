@@ -90,7 +90,7 @@
                 "in_need": true
             }
         ],
-        "order": [{"images.crawled_at": "asc"}],
+        "order": [{ "sql": "images.crawled_at", "order": "asc" }],
         "join": [{
             "kind": "LEFT",
             "table": "album_images",
@@ -156,6 +156,15 @@
         },
         "size": {
             "provider": "gallery_size_router"
+        },
+        "aspect": {
+            "provider": "gallery_aspect_router"
+        },
+        "dimension": {
+            "provider": "gallery_aspect_router"
+        },
+        "dimensions": {
+            "provider": "gallery_aspect_router"
         }
     }
 }

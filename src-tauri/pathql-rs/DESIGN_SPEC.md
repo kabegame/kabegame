@@ -263,10 +263,13 @@ may include joins.
 
 ### 8.6 `order_by`
 
-Array-form ordering is an ordered upsert list. Earlier positions have higher
-priority; later declarations of the same field update its direction while
-preserving the original position. `revert` flips an existing direction and
-defaults to `asc` when the field is new.
+Array-form ordering is an ordered list of `{ sql, order, prepend?, clear? }`
+items. Earlier positions have higher priority. With `prepend: false`, new
+fields append and later declarations of the same field update direction while
+preserving the original position. With `prepend: true`, new or repeated fields
+move to the front of the accumulated order chain. `revert` flips an existing
+direction and defaults to `asc` when the field is new. `clear: "all"` clears the
+accumulated order entries before inserting the current item.
 
 Object-form ordering with `{ "all": "revert" | "asc" | "desc" }` is a global
 direction directive. It applies to the accumulated order chain and is itself

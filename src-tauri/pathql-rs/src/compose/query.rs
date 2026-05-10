@@ -141,18 +141,16 @@ impl ProviderQuery {
         Ok(self)
     }
 
-    /// 追加一项 ORDER BY 字段；同名 field 后声明覆盖前 (fold upsert 语义)。
+    /// 追加一项 ORDER BY 字段；同名 field 后声明覆盖方向但保持原位置。
     pub fn with_order_raw(mut self, expr: &str, dir: OrderDirection) -> Self {
-        self.order.upsert(expr.to_string(), dir);
+        self.order.insert(expr.to_string(), dir, false);
         self
     }
 
-    /// 把 ORDER BY 项**插到最前**，绕开 upsert 的"位置保留"语义。
+    /// 把 ORDER BY 项插到最前。
     /// 用于上层 provider 想覆盖下游默认排序。
     pub fn prepend_order_raw(mut self, expr: &str, dir: OrderDirection) -> Self {
-        // 先移除已有同名 entry
-        self.order.entries.retain(|(f, _)| f != expr);
-        self.order.entries.insert(0, (expr.to_string(), dir));
+        self.order.insert(expr.to_string(), dir, true);
         self
     }
 

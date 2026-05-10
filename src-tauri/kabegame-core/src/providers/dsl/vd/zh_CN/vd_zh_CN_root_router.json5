@@ -12,6 +12,7 @@
         "按媒体":   { "provider": "vd_media_type_provider" },
         "按时间":   { "provider": "vd_dates_zh_CN_provider" },
         "按大小":   { "provider": "vd_size_router" },
+        "按尺寸":   { "provider": "vd_aspect_zh_CN_provider" },
         "全部":     { "provider": "vd_all_provider" }
     }
 }

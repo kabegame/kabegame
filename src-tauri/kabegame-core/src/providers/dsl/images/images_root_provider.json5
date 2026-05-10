@@ -7,7 +7,7 @@
         "fields": [
             "images.*"
         ],
-        "order": [{ "images.id": "asc" }]
+        "order": [{ "sql": "images.id", "order": "asc" }]
     },
     "list": {
         "x100x": {

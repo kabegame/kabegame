@@ -13,6 +13,7 @@
 - **Provider DSL plugin scan source**: Added a shared `plugins_provider` DSL provider so Gallery and Virtual Disk plugin browse trees reuse one plugin enumeration source instead of duplicating plugin scan SQL.
 - **Image Size**: Image Size ordering. And can see image dimension.
 - **Image format Provider**: Image format filtering for vd and gallery. 
+- **Image dimension Provider**: Image dimension filtering for vd and gallery.
 
 ### Changed
 - **Provider DSL loading**: Built-in DSL providers are now loaded by recursively scanning `src/providers/dsl` with an explicit non-provider exclusion list, keeping `schema.json5` and retired compatibility shims out of runtime registration.

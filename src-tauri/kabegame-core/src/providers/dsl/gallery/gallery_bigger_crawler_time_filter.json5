@@ -8,7 +8,7 @@
     "query": {
         // 顺序模式: WHERE crawled_at > T, ORDER BY crawled_at ASC
         "where": "images.crawled_at > ${properties.time}",
-        "order": [{ "images.crawled_at": "asc" }]
+        "order": [{ "sql": "images.crawled_at", "order": "asc" }]
     },
     "resolve": {
         // l<N>l: 纯 LIMIT N 叶子 (区别于 x<N>x 的 page_size 形态)

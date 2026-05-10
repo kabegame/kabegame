@@ -181,11 +181,23 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             119 => "image/webp",
             _ => "image/jpeg",
         };
+        let (width, height) = match i {
+            111 => (900, 1600),  // 9:16 portrait lower boundary
+            112 => (300, 400),   // 3:4 square lower boundary
+            113 => (400, 300),   // 4:3 square upper boundary
+            114 => (1600, 900),  // 16:9 landscape upper boundary
+            115 => (1920, 900),  // widescreen
+            116 => (3000, 1000), // too wide
+            117 => (100, 300),   // too narrow
+            118 => (1920, 1080), // 16:9 video, still landscape
+            119 => (1000, 1000),
+            _ => (100, 100),
+        };
         conn.execute(
             "INSERT INTO images
              (id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at,
               metadata_id, thumbnail_path, hash, type, width, height, display_name, size)
-             VALUES (?1, ?2, ?3, 'pixiv', ?4, 'surf-a', ?5, ?6, '', ?7, ?8, 100, 100, ?9, 10)",
+             VALUES (?1, ?2, ?3, 'pixiv', ?4, 'surf-a', ?5, ?6, '', ?7, ?8, ?9, ?10, ?11, 10)",
             (
                 i,
                 format!("https://example.test/{i}.jpg"),
@@ -195,6 +207,8 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
                 if i == 1 { Some(1_i64) } else { None },
                 format!("hash-{i}"),
                 media_type,
+                width,
+                height,
                 format!("image-{i}"),
             ),
         )
@@ -371,6 +385,49 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
 }
 
 #[test]
+fn gallery_aspect_buckets_filter_and_sort_by_ratio() {
+    let runtime = build_runtime();
+
+    let buckets = runtime.list("/gallery/aspect").unwrap();
+    let names = buckets
+        .iter()
+        .map(|child| child.name.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "landscape-4x3-16x9",
+        "widescreen-16x9-21x9",
+        "square-3x4-4x3",
+        "portrait-9x16-3x4",
+        "other",
+    ] {
+        assert!(names.contains(&expected), "aspect names={names:?}");
+    }
+
+    let portrait = runtime
+        .fetch("/gallery/aspect/portrait-9x16-3x4/x10x/1")
+        .unwrap();
+    assert_eq!(ids(portrait), ["111"]);
+
+    let landscape = runtime
+        .fetch("/gallery/aspect/landscape-4x3-16x9/x10x/1")
+        .unwrap();
+    assert_eq!(ids(landscape), ["114", "118"]);
+
+    let landscape_desc = runtime
+        .fetch("/gallery/aspect/landscape-4x3-16x9/desc/x10x/1")
+        .unwrap();
+    assert_eq!(ids(landscape_desc), ["118", "114"]);
+
+    let widescreen = runtime
+        .fetch("/gallery/aspect/widescreen-16x9-21x9/x10x/1")
+        .unwrap();
+    assert_eq!(ids(widescreen), ["115"]);
+
+    let other = runtime.fetch("/gallery/aspect/other/x10x/1").unwrap();
+    assert_eq!(ids(other), ["117", "116"]);
+}
+
+#[test]
 fn images_provider_pages_return_raw_image_rows() {
     let runtime = build_runtime();
     let rows = runtime.fetch("/images/x3x/2").unwrap();
@@ -511,6 +568,49 @@ fn vd_media_type_lists_all_formats_and_specific_formats() {
 }
 
 #[test]
+fn vd_aspect_i18n_roots_list_localized_ratio_buckets() {
+    let _locale_guard = lock_locale_tests();
+    let runtime = build_runtime();
+
+    kabegame_i18n::set_locale("zh");
+    let zh = runtime.list("/vd/i18n-zh_CN/按尺寸").unwrap();
+    let zh_names = zh.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
+    assert!(
+        zh_names.iter().all(|name| is_windows_safe_vd_dir_name(name)),
+        "{zh_names:?}"
+    );
+    assert!(zh_names.contains(&"横屏 (4x3-16x9)"), "{zh_names:?}");
+    assert!(zh_names.contains(&"宽屏 (16x9-21x9)"), "{zh_names:?}");
+    assert_eq!(zh_names.len(), 5, "{zh_names:?}");
+    assert_eq!(
+        ids(runtime
+            .fetch("/vd/i18n-zh_CN/按尺寸/横屏 (4x3-16x9)/x100x/1")
+            .unwrap()),
+        ["114", "118"]
+    );
+
+    kabegame_i18n::set_locale("en");
+    let en = runtime.list("/vd/i18n-en_US/By Dimensions").unwrap();
+    let en_names = en.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
+    assert!(
+        en_names.iter().all(|name| is_windows_safe_vd_dir_name(name)),
+        "{en_names:?}"
+    );
+    assert!(en_names.contains(&"Landscape (4x3-16x9)"), "{en_names:?}");
+    assert_eq!(en_names.len(), 5, "{en_names:?}");
+    assert_eq!(
+        ids(runtime
+            .fetch("/vd/i18n-en_US/By Dimensions/Landscape (4x3-16x9)/x100x/1")
+            .unwrap()),
+        ["114", "118"]
+    );
+}
+
+fn is_windows_safe_vd_dir_name(name: &str) -> bool {
+    !name.chars().any(|ch| matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
+}
+
+#[test]
 fn vd_plugin_meta_name_tracks_current_locale() {
     let _locale_guard = lock_locale_tests();
     let runtime = build_runtime();
@@ -541,19 +641,48 @@ fn vd_root_routers_cover_all_supported_locales() {
     let runtime = build_runtime();
 
     let cases = [
-        ("zh", "/vd/i18n-zh_CN", "画册", "按插件", "AlbumA"),
-        ("en", "/vd/i18n-en_US", "Albums", "By Plugin", "AlbumA"),
-        ("ja", "/vd/i18n-ja", "アルバム", "プラグイン別", "AlbumA"),
-        ("ko", "/vd/i18n-ko", "앨범", "플러그인별", "AlbumA"),
-        ("zhtw", "/vd/i18n-zhtw", "畫冊", "按外掛", "AlbumA"),
+        ("zh", "/vd/i18n-zh_CN", "画册", "按插件", "按尺寸", "AlbumA"),
+        (
+            "en",
+            "/vd/i18n-en_US",
+            "Albums",
+            "By Plugin",
+            "By Dimensions",
+            "AlbumA",
+        ),
+        (
+            "ja",
+            "/vd/i18n-ja",
+            "アルバム",
+            "プラグイン別",
+            "寸法別",
+            "AlbumA",
+        ),
+        (
+            "ko",
+            "/vd/i18n-ko",
+            "앨범",
+            "플러그인별",
+            "크기 비율별",
+            "AlbumA",
+        ),
+        (
+            "zhtw",
+            "/vd/i18n-zhtw",
+            "畫冊",
+            "按外掛",
+            "按尺寸",
+            "AlbumA",
+        ),
     ];
 
-    for (locale, root, album_root, plugin_root, album_name) in cases {
+    for (locale, root, album_root, plugin_root, aspect_root, album_name) in cases {
         kabegame_i18n::set_locale(locale);
         let children = runtime.list(root).unwrap();
         let names = children.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
         assert!(names.contains(&album_root), "{root} names={names:?}");
         assert!(names.contains(&plugin_root), "{root} names={names:?}");
+        assert!(names.contains(&aspect_root), "{root} names={names:?}");
 
         let album_path = format!("{root}/{album_root}/{album_name}/x100x/1");
         assert_eq!(

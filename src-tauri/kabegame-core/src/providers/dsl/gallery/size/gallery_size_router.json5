@@ -6,9 +6,9 @@
     // "unknown" 直接路由；其余路径段（如 512KB-1MB）委托给 gallery_size_range_provider.resolve
     // 解析为字节数，再传给 gallery_size_range_router。
     "query": {
-        "order_clear": ["images.crawled_at"],
         "order": [{
-            "images.size": "asc"
+            "sql": "images.size",
+            "order": "asc"
         }]
     },
     "resolve": {
