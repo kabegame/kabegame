@@ -2,6 +2,9 @@
     "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "vd_dates_zhtw_provider",
+    "query": {
+        "order": [{ "sql": "images.crawled_at", "order": "asc", "prepend": true }]
+    },
     "list": {
         "${root.name}年": {
             "delegate": { "provider": "dates_provider" },

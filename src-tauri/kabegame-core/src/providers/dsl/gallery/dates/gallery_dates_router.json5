@@ -5,7 +5,7 @@
     // 7c S7-b: programmatic GalleryDatesRouter 迁 DSL。年→月→日 三层结构,
     // 本层是年; apply_query 给上游加 crawled_at ASC 排序基线 (与 programmatic 同)。
     "query": {
-        "order": [{ "sql": "images.crawled_at", "order": "asc" }]
+        "order": [{ "sql": "images.crawled_at", "order": "asc", "prepend": true }]
     },
     "list": {
         // 从 composed 抽 distinct 年 (DESC, 最近的先)。${composed} 已带 gallery_route fields/joins。

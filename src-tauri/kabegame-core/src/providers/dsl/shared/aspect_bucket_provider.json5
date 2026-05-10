@@ -11,7 +11,7 @@
     "query": {
         "where": "CASE WHEN images.width IS NULL OR images.height IS NULL OR images.width <= 0 OR images.height <= 0 THEN 'other' WHEN images.width * 16 >= images.height * 9 AND images.width * 4 < images.height * 3 THEN 'portrait' WHEN images.width * 4 >= images.height * 3 AND images.width * 3 <= images.height * 4 THEN 'square' WHEN images.width * 3 > images.height * 4 AND images.width * 9 <= images.height * 16 THEN 'landscape' WHEN images.width * 9 > images.height * 16 AND images.width * 3 <= images.height * 7 THEN 'widescreen' ELSE 'other' END = ${properties.bucket}",
         "order": [
-            { "sql": "CAST(images.width AS REAL) / NULLIF(images.height, 0)", "order": "asc" },
+            { "sql": "CAST(images.width AS REAL) / NULLIF(images.height, 0)", "order": "asc", "prepend": true },
         ]
     }
 }

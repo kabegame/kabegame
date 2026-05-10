@@ -8,7 +8,8 @@
     "query": {
         "order": [{
             "sql": "images.size",
-            "order": "asc"
+            "order": "asc",
+            "prepend": true
         }]
     },
     "resolve": {
