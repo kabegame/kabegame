@@ -63,6 +63,35 @@
           <el-dropdown
             trigger="hover"
             placement="right-start"
+            @command="handleNameCommand"
+          >
+            <span
+              class="plugin-submenu-trigger"
+              :class="{ 'is-active': isNameFilterActive }"
+            >
+              {{ t("gallery.filterByName") }}
+              <el-icon class="plugin-submenu-chevron">
+                <ArrowRight />
+              </el-icon>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu class="plugin-submenu-menu">
+                <el-dropdown-item
+                  v-for="b in GALLERY_NAME_LANGUAGE_BUCKETS"
+                  :key="b.bucket"
+                  :command="b.bucket"
+                  :class="{ 'is-active': filterNameBucket(galleryRouteStore.filter) === b.bucket }"
+                >
+                  {{ t(`gallery.${b.labelKey}`) }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </el-dropdown-item>
+        <el-dropdown-item class="plugin-submenu-wrap" @click.stop>
+          <el-dropdown
+            trigger="hover"
+            placement="right-start"
             @command="handlePluginCommand"
           >
             <span
@@ -207,10 +236,12 @@ import { ArrowDown, ArrowRight, Filter } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
 import {
   GALLERY_ASPECT_BUCKETS,
+  GALLERY_NAME_LANGUAGE_BUCKETS,
   filterAspectRange,
   filterDateSegment,
   filterMediaFormat,
   filterMediaKind,
+  filterNameBucket,
   filterPluginId,
   filterSizeRange,
   isSimpleFilter,
@@ -268,6 +299,10 @@ const isTimeFilterActive = computed(() => dateTail.value != null);
 
 const isMediaTypeFilterActive = computed(
   () => filterMediaKind(galleryRouteStore.filter) != null
+);
+
+const isNameFilterActive = computed(
+  () => filterNameBucket(galleryRouteStore.filter) != null
 );
 
 const isSizeFilterActive = computed(
@@ -599,6 +634,12 @@ const filterLabel = computed(() => {
     if (mf) return `${t("gallery.filterVideoOnlyLabel")} / ${mf}`;
     return `${t("gallery.filterVideoOnlyLabel")} (${mediaTypeCounts.value.videoCount})`;
   }
+  const nb = filterNameBucket(galleryRouteStore.filter);
+  if (nb) {
+    const bucket = GALLERY_NAME_LANGUAGE_BUCKETS.find((b) => b.bucket === nb);
+    const label = bucket ? t(`gallery.${bucket.labelKey}`) : nb;
+    return `${t("gallery.filterByName")}: ${label}`;
+  }
   const sr = filterSizeRange(galleryRouteStore.filter);
   if (sr) {
     const bucket = SIZE_BUCKETS.find((b) => b.range === sr);
@@ -655,6 +696,14 @@ function handleMediaTypeCommand(kind: string) {
   if (kind !== "image" && kind !== "video") return;
   void galleryRouteStore.navigate(
     { filter: { type: "media-type", kind }, page: 1 },
+    { push: true }
+  );
+}
+
+function handleNameCommand(bucket: string) {
+  if (!bucket) return;
+  void galleryRouteStore.navigate(
+    { filter: { type: "name", bucket }, page: 1 },
     { push: true }
   );
 }

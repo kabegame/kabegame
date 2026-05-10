@@ -7,6 +7,8 @@
 //!   返回 `{"id","name","description","baseUrl"}`; plugin 不存在 → `"null"`。
 //!   name / description 按 locale 解析 (locale 缺省走 [`kabegame_i18n::current_vd_locale`])。
 //! - `vd_display_name(canonical)` → 当前 VD locale 下的路径显示名。
+//! - `name_language_bucket(name)` / `name_language_rank(bucket)` → 名称语种分组与
+//!   当前 locale 优先排序。
 //! - `crawled_at_seconds(timestamp)` → 规整秒/毫秒时间戳。
 //!
 //! 约束: host SQL function 不得访问当前 Storage/SQLite 连接。数据库中可查的数据应直接写
@@ -58,7 +60,173 @@ pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::
     register_get_plugin(conn)?;
     register_crawled_at_seconds(conn)?;
     register_vd_display_name(conn)?;
+    register_name_language_functions(conn)?;
     Ok(())
+}
+
+const NAME_LANG_ENGLISH: &str = "english";
+const NAME_LANG_CHINESE: &str = "chinese";
+const NAME_LANG_JAPANESE: &str = "japanese";
+const NAME_LANG_KOREAN: &str = "korean";
+const NAME_LANG_OTHER: &str = "other";
+
+fn register_name_language_functions(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.create_scalar_function(
+        "name_language_bucket",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
+        |ctx| -> rusqlite::Result<String> {
+            let name = sqlite_value_to_string(ctx.get(0)?);
+            Ok(name_language_bucket(&name).to_string())
+        },
+    )?;
+
+    conn.create_scalar_function(
+        "name_language_rank",
+        1,
+        FunctionFlags::SQLITE_UTF8,
+        |ctx| -> rusqlite::Result<i64> {
+            let bucket = sqlite_value_to_string(ctx.get(0)?);
+            Ok(name_language_rank_for_locale(
+                &bucket,
+                kabegame_i18n::current_vd_locale(),
+            ))
+        },
+    )
+}
+
+fn sqlite_value_to_string(value: rusqlite::types::Value) -> String {
+    match value {
+        rusqlite::types::Value::Null => String::new(),
+        rusqlite::types::Value::Integer(i) => i.to_string(),
+        rusqlite::types::Value::Real(f) => f.to_string(),
+        rusqlite::types::Value::Text(s) => s,
+        rusqlite::types::Value::Blob(_) => String::new(),
+    }
+}
+
+pub fn display_name_language_bucket(name: &str) -> &'static str {
+    name_language_bucket(name)
+}
+
+pub fn display_name_language_rank_for_locale(bucket: &str, locale: &str) -> i64 {
+    name_language_rank_for_locale(bucket, locale)
+}
+
+fn name_language_bucket(name: &str) -> &'static str {
+    let mut kana_count = 0;
+    let mut hangul_count = 0;
+    let mut han_count = 0;
+    let mut latin_count = 0;
+
+    for ch in name.chars() {
+        if is_kana(ch) {
+            kana_count += 1;
+        } else if is_hangul(ch) {
+            hangul_count += 1;
+        } else if is_han(ch) {
+            han_count += 1;
+        } else if is_latin(ch) {
+            latin_count += 1;
+        }
+    }
+
+    if kana_count > 0 {
+        NAME_LANG_JAPANESE
+    } else if han_count > 0 || hangul_count > 0 {
+        if han_count >= hangul_count {
+            NAME_LANG_CHINESE
+        } else {
+            NAME_LANG_KOREAN
+        }
+    } else if latin_count > 0 {
+        NAME_LANG_ENGLISH
+    } else {
+        NAME_LANG_OTHER
+    }
+}
+
+fn is_kana(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{3040}'..='\u{309F}'
+            | '\u{30A0}'..='\u{30FF}'
+            | '\u{31F0}'..='\u{31FF}'
+            | '\u{FF66}'..='\u{FF9F}'
+            | '\u{1B000}'..='\u{1B16F}'
+    )
+}
+
+fn is_hangul(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{1100}'..='\u{11FF}'
+            | '\u{3130}'..='\u{318F}'
+            | '\u{A960}'..='\u{A97F}'
+            | '\u{AC00}'..='\u{D7AF}'
+            | '\u{D7B0}'..='\u{D7FF}'
+    )
+}
+
+fn is_han(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{3400}'..='\u{4DBF}'
+            | '\u{4E00}'..='\u{9FFF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{20000}'..='\u{2EBEF}'
+            | '\u{3005}'
+            | '\u{3007}'
+    )
+}
+
+fn is_latin(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{0041}'..='\u{005A}'
+            | '\u{0061}'..='\u{007A}'
+            | '\u{00C0}'..='\u{024F}'
+            | '\u{1E00}'..='\u{1EFF}'
+            | '\u{FF21}'..='\u{FF3A}'
+            | '\u{FF41}'..='\u{FF5A}'
+    )
+}
+
+fn name_language_rank_for_locale(bucket: &str, locale: &str) -> i64 {
+    let normalized = normalize_name_language_bucket(bucket);
+    if normalized == preferred_name_language_bucket(locale) {
+        return 0;
+    }
+    default_name_language_rank(normalized) + 1
+}
+
+fn preferred_name_language_bucket(locale: &str) -> &'static str {
+    match locale {
+        "zh" | "zhtw" => NAME_LANG_CHINESE,
+        "ja" => NAME_LANG_JAPANESE,
+        "ko" => NAME_LANG_KOREAN,
+        _ => NAME_LANG_ENGLISH,
+    }
+}
+
+fn normalize_name_language_bucket(bucket: &str) -> &'static str {
+    match bucket {
+        NAME_LANG_ENGLISH | "en" => NAME_LANG_ENGLISH,
+        NAME_LANG_CHINESE | "zh" | "zhtw" => NAME_LANG_CHINESE,
+        NAME_LANG_JAPANESE | "ja" => NAME_LANG_JAPANESE,
+        NAME_LANG_KOREAN | "ko" => NAME_LANG_KOREAN,
+        _ => NAME_LANG_OTHER,
+    }
+}
+
+fn default_name_language_rank(bucket: &str) -> i64 {
+    match normalize_name_language_bucket(bucket) {
+        NAME_LANG_ENGLISH => 0,
+        NAME_LANG_CHINESE => 1,
+        NAME_LANG_JAPANESE => 2,
+        NAME_LANG_KOREAN => 3,
+        _ => 4,
+    }
 }
 
 /// `vd_display_name(canonical)` — 当前全局 locale 下 canonical 段名 (如
@@ -227,6 +395,29 @@ mod tests {
         assert_eq!(resolve_i18n_text(&v, "zh"), "");
         let v = json!(null);
         assert_eq!(resolve_i18n_text(&v, "zh"), "");
+    }
+
+    #[test]
+    fn name_language_bucket_uses_script_weighting_across_whole_name() {
+        assert_eq!(name_language_bucket("漢字かな"), NAME_LANG_JAPANESE);
+        assert_eq!(name_language_bucket("abc한글"), NAME_LANG_KOREAN);
+        assert_eq!(name_language_bucket("abc中文"), NAME_LANG_CHINESE);
+        assert_eq!(
+            name_language_bucket("Honkai Gakuen 2(崩壞学園-카와이헌터Z-崩壊学院2)"),
+            NAME_LANG_CHINESE
+        );
+        assert_eq!(name_language_bucket("한글한글漢字"), NAME_LANG_KOREAN);
+        assert_eq!(name_language_bucket("Alpha"), NAME_LANG_ENGLISH);
+        assert_eq!(name_language_bucket("123"), NAME_LANG_OTHER);
+    }
+
+    #[test]
+    fn name_language_rank_prefers_current_locale_bucket() {
+        assert_eq!(name_language_rank_for_locale(NAME_LANG_JAPANESE, "ja"), 0);
+        assert_eq!(name_language_rank_for_locale(NAME_LANG_KOREAN, "ko"), 0);
+        assert_eq!(name_language_rank_for_locale(NAME_LANG_CHINESE, "zhtw"), 0);
+        assert_eq!(name_language_rank_for_locale(NAME_LANG_ENGLISH, "en"), 0);
+        assert!(name_language_rank_for_locale(NAME_LANG_OTHER, "ja") > 0);
     }
 
     #[test]

@@ -65,6 +65,33 @@ fn register_fixture_functions(conn: &Connection) {
     .unwrap();
 
     conn.create_scalar_function(
+        "name_language_bucket",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
+        |ctx| -> rusqlite::Result<String> {
+            let name = sqlite_value_to_string(ctx.get(0)?);
+            Ok(kabegame_core::storage::dsl_funcs::display_name_language_bucket(&name).to_string())
+        },
+    )
+    .unwrap();
+
+    conn.create_scalar_function(
+        "name_language_rank",
+        1,
+        FunctionFlags::SQLITE_UTF8,
+        |ctx| -> rusqlite::Result<i64> {
+            let bucket = sqlite_value_to_string(ctx.get(0)?);
+            Ok(
+                kabegame_core::storage::dsl_funcs::display_name_language_rank_for_locale(
+                    &bucket,
+                    kabegame_i18n::current_vd_locale(),
+                ),
+            )
+        },
+    )
+    .unwrap();
+
+    conn.create_scalar_function(
         "get_plugin",
         -1,
         FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
@@ -106,6 +133,16 @@ fn register_fixture_functions(conn: &Connection) {
             },
         )
         .unwrap();
+    }
+}
+
+fn sqlite_value_to_string(value: rusqlite::types::Value) -> String {
+    match value {
+        rusqlite::types::Value::Null => String::new(),
+        rusqlite::types::Value::Integer(i) => i.to_string(),
+        rusqlite::types::Value::Real(f) => f.to_string(),
+        rusqlite::types::Value::Text(s) => s,
+        rusqlite::types::Value::Blob(_) => String::new(),
     }
 }
 
@@ -209,7 +246,14 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
                 media_type,
                 width,
                 height,
-                format!("image-{i}"),
+                match i {
+                    1 => "漢字かな".to_string(),
+                    2 => "한글".to_string(),
+                    3 => "漢字".to_string(),
+                    4 => "Alpha".to_string(),
+                    5 => "123".to_string(),
+                    _ => format!("image-{i}"),
+                },
             ),
         )
         .unwrap();
@@ -382,6 +426,89 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
         .fetch("/gallery/hide/media-type/image/desc/x2x/1")
         .unwrap();
     assert_eq!(ids(hidden_filtered), ["120", "119"]);
+}
+
+#[test]
+fn name_language_buckets_filter_and_follow_locale_priority() {
+    let _locale_guard = lock_locale_tests();
+    let runtime = build_runtime();
+
+    kabegame_i18n::set_locale("zh");
+    let gallery_zh = runtime.list("/gallery/name").unwrap();
+    let gallery_zh_names = gallery_zh
+        .iter()
+        .map(|child| child.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(gallery_zh_names.first(), Some(&"chinese"));
+    assert_eq!(
+        ids(runtime.fetch("/gallery/name/japanese/x10x/1").unwrap()),
+        ["1"]
+    );
+    assert_eq!(
+        ids(runtime.fetch("/gallery/name/korean/x10x/1").unwrap()),
+        ["2"]
+    );
+    assert_eq!(
+        ids(runtime.fetch("/gallery/name/chinese/x10x/1").unwrap()),
+        ["3"]
+    );
+    assert_eq!(
+        ids(runtime.fetch("/gallery/name/other/x10x/1").unwrap()),
+        ["5"]
+    );
+    let english = ids(runtime.fetch("/gallery/name/english/x3x/1").unwrap());
+    assert_eq!(english[0], "4");
+
+    let vd_zh = runtime.list("/vd/i18n-zh_CN/按名称").unwrap();
+    let vd_zh_names = vd_zh
+        .iter()
+        .map(|child| child.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(vd_zh_names.first(), Some(&"中文"));
+    assert_eq!(
+        ids(runtime.fetch("/vd/i18n-zh_CN/按名称/中文/x10x/1").unwrap()),
+        ["3"]
+    );
+
+    kabegame_i18n::set_locale("ja");
+    let gallery_ja = runtime.list("/gallery/name").unwrap();
+    assert_eq!(
+        gallery_ja.first().map(|child| child.name.as_str()),
+        Some("japanese")
+    );
+    let vd_ja = runtime.list("/vd/i18n-ja/名前別").unwrap();
+    assert_eq!(
+        vd_ja.first().map(|child| child.name.as_str()),
+        Some("日本語")
+    );
+    assert_eq!(
+        ids(runtime.fetch("/vd/i18n-ja/名前別/日本語/x10x/1").unwrap()),
+        ["1"]
+    );
+
+    kabegame_i18n::set_locale("ko");
+    let vd_ko = runtime.list("/vd/i18n-ko/이름별").unwrap();
+    assert_eq!(
+        vd_ko.first().map(|child| child.name.as_str()),
+        Some("한국어")
+    );
+    assert_eq!(
+        ids(runtime.fetch("/vd/i18n-ko/이름별/한국어/x10x/1").unwrap()),
+        ["2"]
+    );
+
+    kabegame_i18n::set_locale("en");
+    let vd_en = runtime.list("/vd/i18n-en_US/By Name").unwrap();
+    let vd_en_names = vd_en
+        .iter()
+        .map(|child| child.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(vd_en_names.contains(&"中文"), "{vd_en_names:?}");
+    assert!(!vd_en_names.contains(&"Chinese"), "{vd_en_names:?}");
+    assert_eq!(
+        ids(runtime.fetch("/vd/i18n-en_US/By Name/中文/x10x/1").unwrap()),
+        ["3"]
+    );
 }
 
 #[test]
@@ -568,7 +695,10 @@ fn albums_root_all_lists_flat_album_tree_desc() {
     assert_eq!(runtime.count("/albums/all").unwrap(), 2);
 
     let child_meta = albums[0].meta.as_ref().unwrap();
-    assert_eq!(child_meta.get("kind").and_then(|v| v.as_str()), Some("album"));
+    assert_eq!(
+        child_meta.get("kind").and_then(|v| v.as_str()),
+        Some("album")
+    );
     assert_eq!(
         child_meta
             .pointer("/data/parentId")
@@ -617,7 +747,9 @@ fn vd_aspect_i18n_roots_list_localized_ratio_buckets() {
     let zh = runtime.list("/vd/i18n-zh_CN/按尺寸").unwrap();
     let zh_names = zh.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
     assert!(
-        zh_names.iter().all(|name| is_windows_safe_vd_dir_name(name)),
+        zh_names
+            .iter()
+            .all(|name| is_windows_safe_vd_dir_name(name)),
         "{zh_names:?}"
     );
     assert!(zh_names.contains(&"横屏 (4x3-16x9)"), "{zh_names:?}");
@@ -634,7 +766,9 @@ fn vd_aspect_i18n_roots_list_localized_ratio_buckets() {
     let en = runtime.list("/vd/i18n-en_US/By Dimensions").unwrap();
     let en_names = en.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
     assert!(
-        en_names.iter().all(|name| is_windows_safe_vd_dir_name(name)),
+        en_names
+            .iter()
+            .all(|name| is_windows_safe_vd_dir_name(name)),
         "{en_names:?}"
     );
     assert!(en_names.contains(&"Landscape (4x3-16x9)"), "{en_names:?}");
@@ -648,7 +782,9 @@ fn vd_aspect_i18n_roots_list_localized_ratio_buckets() {
 }
 
 fn is_windows_safe_vd_dir_name(name: &str) -> bool {
-    !name.chars().any(|ch| matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
+    !name
+        .chars()
+        .any(|ch| matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
 }
 
 #[test]
@@ -682,11 +818,20 @@ fn vd_root_routers_cover_all_supported_locales() {
     let runtime = build_runtime();
 
     let cases = [
-        ("zh", "/vd/i18n-zh_CN", "画册", "按插件", "按尺寸", "AlbumA"),
+        (
+            "zh",
+            "/vd/i18n-zh_CN",
+            "画册",
+            "按名称",
+            "按插件",
+            "按尺寸",
+            "AlbumA",
+        ),
         (
             "en",
             "/vd/i18n-en_US",
             "Albums",
+            "By Name",
             "By Plugin",
             "By Dimensions",
             "AlbumA",
@@ -695,6 +840,7 @@ fn vd_root_routers_cover_all_supported_locales() {
             "ja",
             "/vd/i18n-ja",
             "アルバム",
+            "名前別",
             "プラグイン別",
             "寸法別",
             "AlbumA",
@@ -703,6 +849,7 @@ fn vd_root_routers_cover_all_supported_locales() {
             "ko",
             "/vd/i18n-ko",
             "앨범",
+            "이름별",
             "플러그인별",
             "크기 비율별",
             "AlbumA",
@@ -711,17 +858,19 @@ fn vd_root_routers_cover_all_supported_locales() {
             "zhtw",
             "/vd/i18n-zhtw",
             "畫冊",
+            "按名稱",
             "按外掛",
             "按尺寸",
             "AlbumA",
         ),
     ];
 
-    for (locale, root, album_root, plugin_root, aspect_root, album_name) in cases {
+    for (locale, root, album_root, name_root, plugin_root, aspect_root, album_name) in cases {
         kabegame_i18n::set_locale(locale);
         let children = runtime.list(root).unwrap();
         let names = children.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
         assert!(names.contains(&album_root), "{root} names={names:?}");
+        assert!(names.contains(&name_root), "{root} names={names:?}");
         assert!(names.contains(&plugin_root), "{root} names={names:?}");
         assert!(names.contains(&aspect_root), "{root} names={names:?}");
 

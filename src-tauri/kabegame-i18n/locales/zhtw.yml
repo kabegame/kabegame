@@ -45,6 +45,7 @@ plugins:
 vd:
   all: 全部
   plugin: 按外掛
+  name: 按名稱
   date: 按時間
   dateRange: 按時間範圍
   album: 畫冊

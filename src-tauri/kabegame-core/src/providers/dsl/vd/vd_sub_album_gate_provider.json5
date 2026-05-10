@@ -13,7 +13,7 @@
     // list 子画册: 从当前 composed 行集反查命中的子 album, 继承 VD 上游过滤。
     "list": {
         "${out.name}": {
-            "sql": "SELECT DISTINCT album.id, album.name, album.created_at, album.parent_id FROM (${composed}) AS sub JOIN album_images AS child_ai ON child_ai.image_id = sub.id JOIN albums AS album ON album.id = child_ai.album_id WHERE album.parent_id = ${properties.parent_album_id} ORDER BY album.created_at ASC",
+            "sql": "SELECT DISTINCT album.id, album.name, album.created_at, album.parent_id FROM (${composed}) AS sub JOIN album_images AS child_ai ON child_ai.image_id = sub.id JOIN albums AS album ON album.id = child_ai.album_id WHERE album.parent_id = ${properties.parent_album_id} ORDER BY name_language_rank(name_language_bucket(COALESCE(album.name, ''))) ASC, album.name COLLATE NOCASE ASC, album.created_at ASC",
             "data_var": "out",
             "provider": "vd_album_entry_provider",
             "properties": { "album_id": "${out.id}" },

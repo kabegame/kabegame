@@ -2,9 +2,9 @@ import { onBeforeUnmount, onMounted, watch, type Ref } from "vue";
 import { useTrailingThrottleFn } from "@/composables/useTrailingThrottle";
 import { listen } from "@/api/rpc";
 
-/** 后端 `DaemonEvent::ImagesChange` / `images` 表（reason: add | delete | change） */
+/** 后端 `DaemonEvent::ImagesChange` / `images` 表（reason: add | delete | change | rename） */
 export type ImagesChangePayload = {
-  reason?: "add" | "delete" | "change" | string;
+  reason?: "add" | "delete" | "change" | "rename" | string;
   imageIds?: string[];
   taskIds?: string[];
   surfRecordIds?: string[];

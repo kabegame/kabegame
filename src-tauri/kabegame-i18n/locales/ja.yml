@@ -45,6 +45,7 @@ plugins:
 vd:
   all: すべて
   plugin: プラグイン別
+  name: 名前別
   date: 日付別
   dateRange: 期間別
   album: アルバム

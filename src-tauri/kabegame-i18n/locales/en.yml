@@ -45,6 +45,7 @@ plugins:
 vd:
   all: All
   plugin: By Plugin
+  name: By Name
   date: By Date
   dateRange: By Date Range
   album: Albums

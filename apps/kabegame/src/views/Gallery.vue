@@ -245,6 +245,10 @@ const isWallpaperOrderBrowse = computed(
   () => galleryRouteStore.filter.type === "wallpaper-order"
 );
 
+const isNameBrowse = computed(
+  () => galleryRouteStore.filter.type === "name"
+);
+
 watch(
   () => route.query.path,
   (rawPath) => {
@@ -1227,6 +1231,10 @@ useImagesChangeRefresh({
     }
     if (reason === "change") {
       if (isWallpaperOrderBrowse.value) return true;
+      return ids.length === 0 || intersects;
+    }
+    if (reason === "rename") {
+      if (isNameBrowse.value) return true;
       return ids.length === 0 || intersects;
     }
     return true;

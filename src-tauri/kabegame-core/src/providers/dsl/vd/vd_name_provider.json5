@@ -1,0 +1,19 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "vd_name_provider",
+    // VD 按名称: 语种桶固定使用各语言自称显示, 过滤/排序逻辑复用 shared provider。
+    "list": {
+        "${out.display}": {
+            "sql": "SELECT bucket, CASE bucket WHEN 'english' THEN 'English' WHEN 'chinese' THEN '中文' WHEN 'japanese' THEN '日本語' WHEN 'korean' THEN '한국어' ELSE 'Other' END AS display FROM (SELECT name_language_bucket(COALESCE(sub.display_name, '')) AS bucket, COUNT(*) AS cnt FROM (${composed}) AS sub GROUP BY name_language_bucket(COALESCE(sub.display_name, ''))) WHERE cnt > 0 ORDER BY name_language_rank(bucket)",
+            "data_var": "out",
+            "provider": "name_language_bucket_provider",
+            "properties": {
+                "bucket": "${out.bucket}"
+            },
+            "meta": {
+                "bucket": "${out.bucket}"
+            }
+        }
+    }
+}

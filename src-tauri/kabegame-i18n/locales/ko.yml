@@ -45,6 +45,7 @@ plugins:
 vd:
   all: 전체
   plugin: 플러그인별
+  name: 이름별
   date: 날짜별
   dateRange: 기간별
   album: 앨범
