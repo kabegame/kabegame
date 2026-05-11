@@ -10,7 +10,7 @@
 //!         let client = IpcClient::new();
 //!         client.connect().await?;
 //!
-//!         let _images = client.storage_get_images().await?;
+//!         let _image_count = client.storage_get_images_count().await?;
 //!         let _albums = client.storage_get_albums().await?;
 //!         let _plugins = client.plugin_get_plugins().await?;
 //!         let _auto_launch = client.settings_get_auto_launch().await?;

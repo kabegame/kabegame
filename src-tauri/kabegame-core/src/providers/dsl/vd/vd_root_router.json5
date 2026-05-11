@@ -6,7 +6,6 @@
     // 详见 cocs/provider-dsl/RULES.md §11.1
     // 对齐旧版 VdRootProvider: 整个 VD 子树继承 gallery row fields + id ASC 基础排序。
     "query": {
-        "from": "images",
         "fields": [
             { "sql": "CAST(images.id AS TEXT)", "as": "id" },
             { "sql": "images.url", "as": "url", "in_need": true },

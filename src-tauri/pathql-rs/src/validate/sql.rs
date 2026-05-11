@@ -11,7 +11,7 @@ use sqlparser::parser::Parser;
 ///
 /// 策略：
 /// - **完整语句位置** (DynamicSqlEntry.sql)：经 sqlparser parse, 拒绝多语句 / DDL, 提取字面表名做白名单。
-/// - **片段位置** (ContribQuery from / join.table / join.on / where / fields.sql)：
+/// - **片段位置** (ContribQuery join.table / join.on / where / fields.sql)：
 ///   只做轻量字符串级 DDL 关键字 / 多语句分号检查（pathql 内部生成, 风险低）。
 pub fn validate_sql_exprs(
     registry: &crate::ProviderRegistry,
@@ -23,9 +23,6 @@ pub fn validate_sql_exprs(
 
         // ContribQuery fragments: light check
         if let Some(Query::Contrib(c)) = &def.query {
-            if let Some(from) = &c.from {
-                check_fragment(&fqn, "query.from", from, errors);
-            }
             if let Some(joins) = &c.join {
                 for (i, j) in joins.iter().enumerate() {
                     check_fragment(&fqn, &format!("query.join[{}].table", i), &j.table, errors);

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use kabegame_core::providers::dsl_loader::{register_embedded_dsl, validate_dsl};
 use pathql_rs::provider::{ClosureExecutor, EngineError, SqlDialect};
 use pathql_rs::template::eval::{TemplateContext, TemplateValue};
-use pathql_rs::ProviderRuntime;
+use pathql_rs::{LoaderType, ProviderRuntime, Source};
 use rusqlite::functions::FunctionFlags;
 use rusqlite::Connection;
 
@@ -287,7 +287,9 @@ fn build_runtime() -> Arc<ProviderRuntime> {
     let runtime = ProviderRuntime::new(make_executor(fixture_db()), globals);
     register_embedded_dsl(&runtime);
     validate_dsl(&runtime);
-    runtime.set_root("kabegame", "root_provider").unwrap();
+    runtime
+        .register_schema("images", "images", "kabegame", "images_root_provider")
+        .unwrap();
     runtime
 }
 
@@ -306,9 +308,88 @@ fn ids(rows: Vec<serde_json::Value>) -> Vec<String> {
 }
 
 #[test]
+fn schema_registration_smoke_and_schemaless_paths_fail() {
+    let runtime = build_runtime();
+
+    assert_eq!(runtime.registered_schemes(), vec!["images".to_string()]);
+    assert!(runtime.list("images://gallery").is_ok());
+
+    let err = runtime.list("/gallery").unwrap_err();
+    assert!(matches!(err, EngineError::MissingScheme(path) if path == "/gallery"));
+}
+
+#[test]
+fn root_gallery_and_vd_topology_uses_images_schema() {
+    let runtime = build_runtime();
+
+    assert_eq!(runtime.count("images://").unwrap(), 120);
+    assert_eq!(runtime.count("images://gallery/all").unwrap(), 120);
+
+    let plugins = runtime.list("images://gallery/plugin").unwrap();
+    assert_eq!(
+        plugins
+            .iter()
+            .map(|child| child.name.as_str())
+            .collect::<Vec<_>>(),
+        ["pixiv"]
+    );
+
+    let years = runtime.list("images://gallery/date").unwrap();
+    assert!(
+        years.iter().any(|child| child.name == "2023y"),
+        "years={:?}",
+        years.iter().map(|child| &child.name).collect::<Vec<_>>()
+    );
+
+    let vd = runtime.list("images://vd/i18n-en_US").unwrap();
+    let vd_names = vd
+        .iter()
+        .map(|child| child.name.as_str())
+        .collect::<Vec<_>>();
+    for expected in ["Albums", "By Plugin", "By Dimensions"] {
+        assert!(vd_names.contains(&expected), "vd names={vd_names:?}");
+    }
+}
+
+#[test]
+fn image_basic_delegate_contributes_fields_order_and_schema_from() {
+    let runtime = build_runtime();
+    let resolved = runtime.resolve("images://x100x/1").unwrap();
+    let mut ctx = TemplateContext::default();
+    ctx.globals = runtime.globals().clone();
+    let (sql, _) = resolved
+        .composed
+        .build_sql(&ctx, SqlDialect::Sqlite)
+        .unwrap();
+
+    assert!(sql.contains("SELECT images.*"), "{sql}");
+    assert!(sql.contains("FROM images"), "{sql}");
+    assert!(sql.contains("ORDER BY images.id ASC"), "{sql}");
+}
+
+#[test]
+fn dsl_loader_rejects_legacy_from_contribution() {
+    let runtime = ProviderRuntime::new(make_executor(fixture_db()), HashMap::new());
+    let err = runtime
+        .register_provider_dsl(
+            LoaderType::JSON5,
+            Source::Str(
+                r#"{
+                    "namespace": "kabegame",
+                    "name": "bad_from_provider",
+                    "query": { "from": "images" }
+                }"#,
+            ),
+        )
+        .unwrap_err();
+
+    assert!(matches!(err, EngineError::Load(_)), "{err}");
+}
+
+#[test]
 fn gallery_all_page_fetches_expected_image_set() {
     let runtime = build_runtime();
-    let rows = runtime.fetch("/gallery/all/x2x/1").unwrap();
+    let rows = runtime.fetch("images://gallery/all/x2x/1").unwrap();
     assert_eq!(ids(rows), ["1", "2"]);
 }
 
@@ -316,10 +397,16 @@ fn gallery_all_page_fetches_expected_image_set() {
 fn date_lists_expose_year_month_and_day_children() {
     let runtime = build_runtime();
 
-    assert_date_list_chain(&runtime, "/gallery/date");
-    assert_date_list_chain(&runtime, "/gallery/hide/date");
-    assert_date_list_chain(&runtime, "/gallery/search/display-name/image-1/date");
-    assert_date_list_chain(&runtime, "/gallery/hide/search/display-name/image-1/date");
+    assert_date_list_chain(&runtime, "images://gallery/date");
+    assert_date_list_chain(&runtime, "images://gallery/hide/date");
+    assert_date_list_chain(
+        &runtime,
+        "images://gallery/search/display-name/image-1/date",
+    );
+    assert_date_list_chain(
+        &runtime,
+        "images://gallery/hide/search/display-name/image-1/date",
+    );
 }
 
 fn assert_date_list_chain(runtime: &ProviderRuntime, root: &str) {
@@ -350,21 +437,21 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
     let runtime = build_runtime();
 
     let media_type = runtime
-        .fetch("/gallery/media-type/image/desc/x2x/1")
+        .fetch("images://gallery/media-type/image/desc/x2x/1")
         .unwrap();
     assert_eq!(ids(media_type), ["120", "119"]);
 
     let webp = runtime
-        .fetch("/gallery/media-type/image/webp/desc/x2x/1")
+        .fetch("images://gallery/media-type/image/webp/desc/x2x/1")
         .unwrap();
     assert_eq!(ids(webp), ["119"]);
 
     let mp4 = runtime
-        .fetch("/gallery/media-type/video/mp4/x2x/1")
+        .fetch("images://gallery/media-type/video/mp4/x2x/1")
         .unwrap();
     assert_eq!(ids(mp4), ["118"]);
 
-    let image_formats = runtime.list("/gallery/media-type/image").unwrap();
+    let image_formats = runtime.list("images://gallery/media-type/image").unwrap();
     let image_format_names = image_formats
         .iter()
         .map(|child| child.name.as_str())
@@ -379,7 +466,7 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
     );
 
     let hidden_filtered = runtime
-        .fetch("/gallery/hide/media-type/image/desc/x2x/1")
+        .fetch("images://gallery/hide/media-type/image/desc/x2x/1")
         .unwrap();
     assert_eq!(ids(hidden_filtered), ["120", "119"]);
 }
@@ -388,7 +475,7 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
 fn gallery_aspect_buckets_filter_and_sort_by_ratio() {
     let runtime = build_runtime();
 
-    let buckets = runtime.list("/gallery/aspect").unwrap();
+    let buckets = runtime.list("images://gallery/aspect").unwrap();
     let names = buckets
         .iter()
         .map(|child| child.name.as_str())
@@ -404,33 +491,35 @@ fn gallery_aspect_buckets_filter_and_sort_by_ratio() {
     }
 
     let portrait = runtime
-        .fetch("/gallery/aspect/portrait-9x16-3x4/x10x/1")
+        .fetch("images://gallery/aspect/portrait-9x16-3x4/x10x/1")
         .unwrap();
     assert_eq!(ids(portrait), ["111"]);
 
     let landscape = runtime
-        .fetch("/gallery/aspect/landscape-4x3-16x9/x10x/1")
+        .fetch("images://gallery/aspect/landscape-4x3-16x9/x10x/1")
         .unwrap();
     assert_eq!(ids(landscape), ["114", "118"]);
 
     let landscape_desc = runtime
-        .fetch("/gallery/aspect/landscape-4x3-16x9/desc/x10x/1")
+        .fetch("images://gallery/aspect/landscape-4x3-16x9/desc/x10x/1")
         .unwrap();
     assert_eq!(ids(landscape_desc), ["118", "114"]);
 
     let widescreen = runtime
-        .fetch("/gallery/aspect/widescreen-16x9-21x9/x10x/1")
+        .fetch("images://gallery/aspect/widescreen-16x9-21x9/x10x/1")
         .unwrap();
     assert_eq!(ids(widescreen), ["115"]);
 
-    let other = runtime.fetch("/gallery/aspect/other/x10x/1").unwrap();
+    let other = runtime
+        .fetch("images://gallery/aspect/other/x10x/1")
+        .unwrap();
     assert_eq!(ids(other), ["117", "116"]);
 }
 
 #[test]
 fn images_provider_pages_return_raw_image_rows() {
     let runtime = build_runtime();
-    let rows = runtime.fetch("/images/x3x/2").unwrap();
+    let rows = runtime.fetch("images://x3x/2").unwrap();
     assert_eq!(ids(rows.clone()), ["4", "5", "6"]);
     let first = rows.first().unwrap();
     assert_eq!(first.get("hash").and_then(|v| v.as_str()), Some("hash-4"));
@@ -443,13 +532,13 @@ fn images_provider_pages_return_raw_image_rows() {
 #[test]
 fn images_metadata_path_reads_table_metadata() {
     let runtime = build_runtime();
-    let table = runtime.fetch("/images/id_1/metadata").unwrap();
+    let table = runtime.fetch("images://id_1/metadata").unwrap();
     assert_eq!(
         table[0].get("metadata_json").and_then(|v| v.as_str()),
         Some("{\"source\":\"table\",\"tags\":[\"a\"]}")
     );
 
-    let legacy = runtime.fetch("/images/id_2/metadata").unwrap();
+    let legacy = runtime.fetch("images://id_2/metadata").unwrap();
     assert_eq!(
         legacy[0].get("metadata_json").and_then(|v| v.as_str()),
         None
@@ -460,40 +549,41 @@ fn images_metadata_path_reads_table_metadata() {
 fn album_order_path_paginates_and_limit_leaf_only_limits() {
     let runtime = build_runtime();
     let paged = runtime
-        .fetch("/gallery/album/33333333-3333-3333-3333-333333333333/order/x3x/1")
+        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/order/x3x/1")
         .unwrap();
     let legacy_paged = runtime
-        .fetch("/gallery/album/33333333-3333-3333-3333-333333333333/album-order/x3x/1")
+        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/album-order/x3x/1")
         .unwrap();
     let legacy_desc = runtime
-        .fetch("/gallery/album/33333333-3333-3333-3333-333333333333/album-order/desc/x3x/1")
+        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/album-order/desc/x3x/1")
         .unwrap();
     let legacy_hidden = runtime
-        .fetch("/gallery/hide/album/33333333-3333-3333-3333-333333333333/album-order/x3x/1")
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/album-order/x3x/1")
         .unwrap();
     let image_only = runtime
-        .fetch("/gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/x3x/1")
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/x3x/1")
         .unwrap();
     let image_only_legacy_order = runtime
         .fetch(
-            "/gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/album-order/x3x/1",
+            "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/album-order/x3x/1",
         )
         .unwrap();
     let image_only_legacy_order_desc = runtime
-        .fetch("/gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/album-order/desc/x3x/1")
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/album-order/desc/x3x/1")
         .unwrap();
-    let video_only =
-        runtime.fetch("/gallery/hide/album/33333333-3333-3333-3333-333333333333/video-only/x3x/1");
+    let video_only = runtime
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/video-only/x3x/1");
     let image_only_wallpaper_order = runtime.fetch(
-        "/gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/wallpaper-order/x3x/1",
+        "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/wallpaper-order/x3x/1",
     );
-    let album_wallpaper_order = runtime
-        .fetch("/gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/x3x/1");
+    let album_wallpaper_order = runtime.fetch(
+        "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/x3x/1",
+    );
     let bigger_order = runtime
-        .fetch("/gallery/album/33333333-3333-3333-3333-333333333333/bigger_order/1/l100l")
+        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/bigger_order/1/l100l")
         .unwrap();
     let limited = runtime
-        .fetch("/gallery/album/33333333-3333-3333-3333-333333333333/order/l3l")
+        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/order/l3l")
         .unwrap();
     assert_eq!(ids(paged), ["8", "7", "6"]);
     assert_eq!(ids(legacy_paged), ["8", "7", "6"]);
@@ -503,32 +593,32 @@ fn album_order_path_paginates_and_limit_leaf_only_limits() {
     assert_eq!(ids(image_only_legacy_order), ["8", "7", "6"]);
     assert_eq!(ids(image_only_legacy_order_desc), ["6", "7", "8"]);
     assert!(
-        matches!(video_only, Err(EngineError::PathNotFound(path)) if path == "/gallery/hide/album/33333333-3333-3333-3333-333333333333/video-only/x3x/1")
+        matches!(video_only, Err(EngineError::PathNotFound(path)) if path == "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/video-only/x3x/1")
     );
     assert!(matches!(
         image_only_wallpaper_order,
         Err(EngineError::PathNotFound(path))
-            if path == "/gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/wallpaper-order/x3x/1"
+            if path == "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/wallpaper-order/x3x/1"
     ));
     assert!(matches!(
         album_wallpaper_order,
         Err(EngineError::PathNotFound(path))
-            if path == "/gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/x3x/1"
+            if path == "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/x3x/1"
     ));
     assert_eq!(ids(bigger_order), ["7", "6"]);
     assert_eq!(ids(limited), ["8", "7", "6"]);
 
     let page_node = runtime
-        .resolve("/gallery/album/33333333-3333-3333-3333-333333333333/order/x3x/1")
+        .resolve("images://gallery/album/33333333-3333-3333-3333-333333333333/order/x3x/1")
         .unwrap();
     assert!(page_node.composed.offset_terms.len() == 1);
     let limit_node = runtime
-        .resolve("/gallery/album/33333333-3333-3333-3333-333333333333/order/l3l")
+        .resolve("images://gallery/album/33333333-3333-3333-3333-333333333333/order/l3l")
         .unwrap();
     assert!(limit_node.composed.offset_terms.is_empty());
 
     let album_children = runtime
-        .list("/gallery/hide/album/33333333-3333-3333-3333-333333333333")
+        .list("images://gallery/hide/album/33333333-3333-3333-3333-333333333333")
         .unwrap();
     let child_names: Vec<_> = album_children.iter().map(|c| c.name.as_str()).collect();
     for control in ["1", "desc", "order", "album-order", "x100x"] {
@@ -544,10 +634,12 @@ fn vd_album_i18n_roots_resolve_to_same_image_set() {
     let _locale_guard = lock_locale_tests();
     let runtime = build_runtime();
     kabegame_i18n::set_locale("zh");
-    let zh = ids(runtime.fetch("/vd/i18n-zh_CN/画册/AlbumA/x100x/1").unwrap());
+    let zh = ids(runtime
+        .fetch("images://vd/i18n-zh_CN/画册/AlbumA/x100x/1")
+        .unwrap());
     kabegame_i18n::set_locale("en");
     let en = ids(runtime
-        .fetch("/vd/i18n-en_US/By Album/AlbumA/x100x/1")
+        .fetch("images://vd/i18n-en_US/By Album/AlbumA/x100x/1")
         .unwrap());
     assert_eq!(zh, ["1", "2", "3", "4", "5"]);
     assert_eq!(zh, en);
@@ -559,11 +651,15 @@ fn vd_media_type_lists_all_formats_and_specific_formats() {
     let runtime = build_runtime();
     kabegame_i18n::set_locale("zh");
 
-    let all = runtime.fetch("/vd/i18n-zh_CN/按媒体/所有格式/1").unwrap();
+    let all = runtime
+        .fetch("images://vd/i18n-zh_CN/按媒体/所有格式/1")
+        .unwrap();
     let all_ids = ids(all);
     assert_eq!(&all_ids[..3], ["1", "2", "3"]);
 
-    let mp4 = runtime.fetch("/vd/i18n-zh_CN/按媒体/视频/mp4/1").unwrap();
+    let mp4 = runtime
+        .fetch("images://vd/i18n-zh_CN/按媒体/视频/mp4/1")
+        .unwrap();
     assert_eq!(ids(mp4), ["118"]);
 }
 
@@ -573,10 +669,12 @@ fn vd_aspect_i18n_roots_list_localized_ratio_buckets() {
     let runtime = build_runtime();
 
     kabegame_i18n::set_locale("zh");
-    let zh = runtime.list("/vd/i18n-zh_CN/按尺寸").unwrap();
+    let zh = runtime.list("images://vd/i18n-zh_CN/按尺寸").unwrap();
     let zh_names = zh.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
     assert!(
-        zh_names.iter().all(|name| is_windows_safe_vd_dir_name(name)),
+        zh_names
+            .iter()
+            .all(|name| is_windows_safe_vd_dir_name(name)),
         "{zh_names:?}"
     );
     assert!(zh_names.contains(&"横屏 (4x3-16x9)"), "{zh_names:?}");
@@ -584,30 +682,36 @@ fn vd_aspect_i18n_roots_list_localized_ratio_buckets() {
     assert_eq!(zh_names.len(), 5, "{zh_names:?}");
     assert_eq!(
         ids(runtime
-            .fetch("/vd/i18n-zh_CN/按尺寸/横屏 (4x3-16x9)/x100x/1")
+            .fetch("images://vd/i18n-zh_CN/按尺寸/横屏 (4x3-16x9)/x100x/1")
             .unwrap()),
         ["114", "118"]
     );
 
     kabegame_i18n::set_locale("en");
-    let en = runtime.list("/vd/i18n-en_US/By Dimensions").unwrap();
+    let en = runtime
+        .list("images://vd/i18n-en_US/By Dimensions")
+        .unwrap();
     let en_names = en.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
     assert!(
-        en_names.iter().all(|name| is_windows_safe_vd_dir_name(name)),
+        en_names
+            .iter()
+            .all(|name| is_windows_safe_vd_dir_name(name)),
         "{en_names:?}"
     );
     assert!(en_names.contains(&"Landscape (4x3-16x9)"), "{en_names:?}");
     assert_eq!(en_names.len(), 5, "{en_names:?}");
     assert_eq!(
         ids(runtime
-            .fetch("/vd/i18n-en_US/By Dimensions/Landscape (4x3-16x9)/x100x/1")
+            .fetch("images://vd/i18n-en_US/By Dimensions/Landscape (4x3-16x9)/x100x/1")
             .unwrap()),
         ["114", "118"]
     );
 }
 
 fn is_windows_safe_vd_dir_name(name: &str) -> bool {
-    !name.chars().any(|ch| matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
+    !name
+        .chars()
+        .any(|ch| matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
 }
 
 #[test]
@@ -616,7 +720,7 @@ fn vd_plugin_meta_name_tracks_current_locale() {
     let runtime = build_runtime();
 
     kabegame_i18n::set_locale("zh");
-    let zh = runtime.list("/vd/i18n-zh_CN/按插件").unwrap();
+    let zh = runtime.list("images://vd/i18n-zh_CN/按插件").unwrap();
     let zh_plugin = zh.iter().find(|c| c.name == "像素插件 - pixiv").unwrap();
     assert_eq!(
         zh_plugin.meta.as_ref().unwrap().get("name").unwrap(),
@@ -624,7 +728,7 @@ fn vd_plugin_meta_name_tracks_current_locale() {
     );
 
     kabegame_i18n::set_locale("en");
-    let en = runtime.list("/vd/i18n-en_US/By Plugin").unwrap();
+    let en = runtime.list("images://vd/i18n-en_US/By Plugin").unwrap();
     let en_plugin = en
         .iter()
         .find(|c| c.name == "Pixel Plugin - pixiv")
@@ -641,10 +745,17 @@ fn vd_root_routers_cover_all_supported_locales() {
     let runtime = build_runtime();
 
     let cases = [
-        ("zh", "/vd/i18n-zh_CN", "画册", "按插件", "按尺寸", "AlbumA"),
+        (
+            "zh",
+            "images://vd/i18n-zh_CN",
+            "画册",
+            "按插件",
+            "按尺寸",
+            "AlbumA",
+        ),
         (
             "en",
-            "/vd/i18n-en_US",
+            "images://vd/i18n-en_US",
             "Albums",
             "By Plugin",
             "By Dimensions",
@@ -652,7 +763,7 @@ fn vd_root_routers_cover_all_supported_locales() {
         ),
         (
             "ja",
-            "/vd/i18n-ja",
+            "images://vd/i18n-ja",
             "アルバム",
             "プラグイン別",
             "寸法別",
@@ -660,7 +771,7 @@ fn vd_root_routers_cover_all_supported_locales() {
         ),
         (
             "ko",
-            "/vd/i18n-ko",
+            "images://vd/i18n-ko",
             "앨범",
             "플러그인별",
             "크기 비율별",
@@ -668,7 +779,7 @@ fn vd_root_routers_cover_all_supported_locales() {
         ),
         (
             "zhtw",
-            "/vd/i18n-zhtw",
+            "images://vd/i18n-zhtw",
             "畫冊",
             "按外掛",
             "按尺寸",
@@ -697,7 +808,7 @@ fn resolving_many_pages_uses_bounded_prefix_cache_shape() {
     let runtime = build_runtime();
     for page in 1..=100 {
         runtime
-            .resolve(&format!("/gallery/all/x1x/{page}"))
+            .resolve(&format!("images://gallery/all/x1x/{page}"))
             .unwrap();
     }
     // The first list fallback at /gallery/all/x1x expands and caches all
@@ -714,7 +825,7 @@ fn resolving_many_pages_uses_bounded_prefix_cache_shape() {
 fn date_path_fold_builds_expected_sql_shape() {
     let runtime = build_runtime();
     let resolved = runtime
-        .resolve("/gallery/date/2023y/04m/05d/x2x/1")
+        .resolve("images://gallery/date/2023y/04m/05d/x2x/1")
         .unwrap();
     let mut ctx = TemplateContext::default();
     ctx.globals = runtime.globals().clone();

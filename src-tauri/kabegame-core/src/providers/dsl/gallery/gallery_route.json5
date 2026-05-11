@@ -3,7 +3,6 @@
     "namespace": "kabegame",
     "name": "gallery_route",
     "query": {
-        "from": "images",
         "fields": [
             {
                 "sql": "CAST(images.id AS TEXT)",

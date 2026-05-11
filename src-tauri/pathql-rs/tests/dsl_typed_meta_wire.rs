@@ -29,7 +29,9 @@ fn runtime_with_root(root: Arc<dyn Provider>) -> Arc<ProviderRuntime> {
         .unwrap();
     let runtime =
         ProviderRuntime::with_registry(Arc::new(registry), no_op_executor(), Default::default());
-    runtime.set_root("", "__root").unwrap();
+    runtime
+        .register_schema("test", "schema_table", "", "__root")
+        .unwrap();
     runtime
 }
 
@@ -60,7 +62,7 @@ fn typed_meta_static_preserved_with_template_eval() {
     });
     let runtime = runtime_with_root(root);
 
-    let children = runtime.list("/").unwrap();
+    let children = runtime.list("test://").unwrap();
     assert_eq!(children.len(), 1);
     let meta = children[0].meta.clone().unwrap();
     assert_eq!(meta["kind"], "test_kind");
@@ -87,11 +89,11 @@ fn runtime_meta_path_matches_parent_list_child_meta() {
     let runtime = runtime_with_root(root);
 
     // root list shows leaf_x with the typed meta
-    let listed = runtime.list("/").unwrap();
+    let listed = runtime.list("test://").unwrap();
     let listed_meta = listed[0].meta.clone().unwrap();
 
-    // runtime.meta("/leaf_x") = parent root's list output's leaf_x.meta
-    let meta_at = runtime.meta("/leaf_x").unwrap().unwrap();
+    // runtime.meta("test://leaf_x") = parent root's list output's leaf_x.meta
+    let meta_at = runtime.meta("test://leaf_x").unwrap().unwrap();
 
     assert_eq!(listed_meta, meta_at);
     assert_eq!(meta_at["kind"], "leaf");
@@ -106,7 +108,7 @@ fn root_meta_is_none() {
         properties: HashMap::new(),
     });
     let runtime = runtime_with_root(root);
-    assert!(runtime.meta("/").unwrap().is_none());
+    assert!(runtime.meta("test://").unwrap().is_none());
 }
 
 #[test]
@@ -122,5 +124,5 @@ fn meta_for_unknown_segment_returns_none() {
     });
     let runtime = runtime_with_root(root);
     // Path /a is in list -> meta exists
-    assert!(runtime.meta("/a").unwrap().is_some());
+    assert!(runtime.meta("test://a").unwrap().is_some());
 }

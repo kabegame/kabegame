@@ -524,7 +524,7 @@ impl Storage {
 
     pub fn get_album_images(&self, album_id: &str) -> Result<Vec<ImageInfo>, String> {
         crate::providers::images_at(&format!(
-            "/gallery/album/{}/order",
+            "images://gallery/album/{}/order",
             urlencoding::encode(album_id)
         ))
     }

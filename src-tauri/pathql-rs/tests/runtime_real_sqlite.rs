@@ -187,7 +187,9 @@ fn build_runtime() -> Arc<ProviderRuntime> {
 
     let runtime =
         ProviderRuntime::with_registry(Arc::new(registry), no_op_executor(), Default::default());
-    runtime.set_root("test", "root").unwrap();
+    runtime
+        .register_schema("test", "images", "test", "root")
+        .unwrap();
     runtime
 }
 
@@ -210,7 +212,7 @@ fn path_album_a_returns_three_image_ids() {
     let conn = fixture_db();
     let runtime = build_runtime();
 
-    let resolved = runtime.resolve("/albums/A").unwrap();
+    let resolved = runtime.resolve("test://albums/A").unwrap();
     let mut ids = execute_query(&conn, &resolved.composed);
     ids.sort();
     assert_eq!(ids, vec![1, 2, 3]);
@@ -221,7 +223,7 @@ fn path_album_b_returns_two_image_ids() {
     let conn = fixture_db();
     let runtime = build_runtime();
 
-    let resolved = runtime.resolve("/albums/B").unwrap();
+    let resolved = runtime.resolve("test://albums/B").unwrap();
     let mut ids = execute_query(&conn, &resolved.composed);
     ids.sort();
     assert_eq!(ids, vec![4, 5]);
@@ -232,20 +234,20 @@ fn longest_prefix_cache_skips_repeated_resolve() {
     let runtime = build_runtime();
 
     // First resolve populates cache for /albums and /albums/A
-    runtime.resolve("/albums/A").unwrap();
+    runtime.resolve("test://albums/A").unwrap();
     assert_eq!(runtime.cache_size(), 2);
 
     // Sibling /albums/B reuses /albums prefix; only adds /albums/B to cache
-    runtime.resolve("/albums/B").unwrap();
+    runtime.resolve("test://albums/B").unwrap();
     assert_eq!(runtime.cache_size(), 3);
 }
 
 #[test]
 fn path_not_found_no_cache_pollution() {
     let runtime = build_runtime();
-    let _ = runtime.resolve("/missing_route");
+    let _ = runtime.resolve("test://missing_route");
     assert_eq!(runtime.cache_size(), 0);
-    let err = runtime.resolve("/missing_route").unwrap_err();
+    let err = runtime.resolve("test://missing_route").unwrap_err();
     assert!(matches!(err, EngineError::PathNotFound(_)));
 }
 
@@ -253,7 +255,7 @@ fn path_not_found_no_cache_pollution() {
 fn build_sql_from_resolved_state_executes_cleanly() {
     let conn = fixture_db();
     let runtime = build_runtime();
-    let resolved = runtime.resolve("/albums/A").unwrap();
+    let resolved = runtime.resolve("test://albums/A").unwrap();
 
     let (sql, _params) = resolved
         .composed

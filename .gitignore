@@ -57,3 +57,5 @@ third/FFmpeg-build
 # Astro docs
 apps/docs/dist
 apps/docs/.astro
+
+__pycache__/

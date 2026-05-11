@@ -82,7 +82,7 @@ fn init_runtime() -> Arc<ProviderRuntime> {
     register_embedded_dsl(&runtime);
     validate_dsl(&runtime);
     runtime
-        .set_root("kabegame", "root_provider")
-        .unwrap_or_else(|e| panic!("set root provider failed: {}", e));
+        .register_schema("images", "images", "kabegame", "images_root_provider")
+        .unwrap_or_else(|e| panic!("register `images` schema failed: {}", e));
     runtime
 }

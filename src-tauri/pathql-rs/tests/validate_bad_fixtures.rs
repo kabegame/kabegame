@@ -80,7 +80,6 @@ fn bad_namespace() {
 #[test]
 fn undefined_ref_in_where() {
     let q = ContribQuery {
-        from: Some(SqlExpr("images".into())),
         where_: Some(SqlExpr("${ref:nope} > 0".into())),
         ..Default::default()
     };
@@ -113,24 +112,6 @@ fn ref_alias_with_in_need() {
         &errs,
         |k| matches!(k, ValidateErrorKind::RefAliasWithInNeed),
         "RefAliasWithInNeed",
-    );
-}
-
-#[test]
-fn from_contains_join_keyword() {
-    let q = ContribQuery {
-        from: Some(SqlExpr(
-            "images JOIN album_images ai ON ai.image_id = images.id".into(),
-        )),
-        ..Default::default()
-    };
-    let mut d = base_def("p");
-    d.query = Some(Query::Contrib(q));
-    let errs = run_one(d);
-    assert_kind(
-        &errs,
-        |k| matches!(k, ValidateErrorKind::FromContainsJoin),
-        "FromContainsJoin",
     );
 }
 

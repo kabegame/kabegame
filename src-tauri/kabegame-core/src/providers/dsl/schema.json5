@@ -165,10 +165,6 @@
                     "items": { "$ref": "#/definitions/Field" },
                     "description": "SELECT 列贡献(GraphQL 风格累积)。用 as + in_need 解决路径上的命名冲突"
                 },
-                "from": {
-                    "$ref": "#/definitions/SqlExpr",
-                    "description": "FROM 后的基础表达式。cascading-replace 语义: 一次声明影响下游所有节点; 子节点可重声明覆盖"
-                },
                 "join": {
                     "type": "array",
                     "items": { "$ref": "#/definitions/Join" },

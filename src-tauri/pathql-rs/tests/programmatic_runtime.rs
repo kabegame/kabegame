@@ -34,7 +34,9 @@ fn runtime_with_registry(
         .unwrap();
     let runtime =
         ProviderRuntime::with_registry(Arc::new(registry), no_op_executor(), Default::default());
-    runtime.set_root("", "__root").unwrap();
+    runtime
+        .register_schema("test", "schema_table", "", "__root")
+        .unwrap();
     runtime
 }
 
@@ -114,21 +116,21 @@ fn three_level_chain_via_register_provider() {
 
     let runtime = runtime_with_registry(registry, root);
 
-    let resolved = runtime.resolve("/b/c").unwrap();
+    let resolved = runtime.resolve("test://b/c").unwrap();
     assert_eq!(resolved.composed.from.unwrap().0, "leaf_table");
     assert_eq!(runtime.cache_size(), 2); // /b 和 /b/c
 
     // 第二次命中缓存 (cache size 不变)
-    let _ = runtime.resolve("/b/c").unwrap();
+    let _ = runtime.resolve("test://b/c").unwrap();
     assert_eq!(runtime.cache_size(), 2);
 
     // list
-    let children = runtime.list("/b").unwrap();
+    let children = runtime.list("test://b").unwrap();
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].name, "c");
 
     // note
-    let note = runtime.note("/").unwrap();
+    let note = runtime.note("test://").unwrap();
     assert_eq!(note, Some("root provider".into()));
 }
 
@@ -150,7 +152,7 @@ fn path_not_found_returns_error() {
         .unwrap();
 
     let runtime = runtime_with_registry(registry, root);
-    let err = runtime.resolve("/missing").unwrap_err();
+    let err = runtime.resolve("test://missing").unwrap_err();
     assert!(matches!(err, EngineError::PathNotFound(_)));
     assert_eq!(runtime.cache_size(), 0);
 }
@@ -170,10 +172,10 @@ fn case_sensitive_paths() {
     let runtime = runtime_with_root(root);
 
     // /Hello 命中
-    assert!(runtime.resolve("/Hello").is_ok());
+    assert!(runtime.resolve("test://Hello").is_ok());
     // /hello (小写) 不命中
     assert!(matches!(
-        runtime.resolve("/hello").unwrap_err(),
+        runtime.resolve("test://hello").unwrap_err(),
         EngineError::PathNotFound(_)
     ));
 }
@@ -252,8 +254,8 @@ fn factory_uses_properties() {
     let root: Arc<dyn Provider> = Arc::new(AlbumRouter);
     let runtime = runtime_with_registry(registry, root);
 
-    let r1 = runtime.resolve("/A1").unwrap();
-    let r2 = runtime.resolve("/B7").unwrap();
+    let r1 = runtime.resolve("test://A1").unwrap();
+    let r2 = runtime.resolve("test://B7").unwrap();
 
     assert_eq!(r1.composed.from.unwrap().0, "images_for_album_A1");
     assert_eq!(r2.composed.from.unwrap().0, "images_for_album_B7");

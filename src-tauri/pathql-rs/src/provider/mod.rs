@@ -8,7 +8,7 @@ pub mod dsl_provider;
 pub mod runtime;
 
 pub use dsl_provider::{DslProvider, EmptyDslProvider};
-pub use runtime::{ProviderRuntime, ResolvedNode};
+pub use runtime::{ProviderRuntime, ResolvedNode, SchemaRoot};
 
 use crate::compose::{BuildError, FoldError, ProviderQuery, RenderError};
 use crate::template::eval::TemplateValue;
@@ -267,10 +267,14 @@ pub enum EngineError {
     InvalidPath(String),
     #[error("factory failed for `{0}.{1}`: {2}")]
     FactoryFailed(String, String, String),
-    #[error("Root provider has not been set, please call set_root first!")]
-    RootNotInitialized,
-    #[error("Root provider has already been set")]
-    RootAlreadyInitialized,
+    #[error("schema `{0}` is not registered")]
+    SchemaNotFound(String),
+    #[error("schema `{0}` is already registered")]
+    SchemaAlreadyRegistered(String),
+    #[error("path is missing `scheme://` prefix: {0}")]
+    MissingScheme(String),
+    #[error("scheme `{0}` is not a valid identifier (must match [a-z][a-z0-9_]*)")]
+    InvalidScheme(String),
     #[error("load provider error: {0}")]
     Load(#[from] LoadError),
     #[error("register provider error: {0}")]

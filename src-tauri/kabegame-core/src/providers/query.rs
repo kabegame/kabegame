@@ -122,6 +122,8 @@ pub enum ProviderQueryTyped {
 fn normalize_for_runtime(path: &str) -> String {
     if path.is_empty() {
         "/".to_string()
+    } else if path.contains("://") {
+        path.to_string()
     } else if path.starts_with('/') {
         path.to_string()
     } else {
@@ -218,11 +220,11 @@ fn json_i64(row: &Value, key: &str) -> Option<i64> {
     })
 }
 
-/// `/images/x{N}x/{page}` → organize scan rows.
+/// `images://x{N}x/{page}` → organize scan rows.
 pub fn organize_batch_at(page_size: usize, page: usize) -> Result<Vec<OrganizeScanRow>, String> {
     let page_size = page_size.max(1);
     let page = page.max(1);
-    let rows = raw_rows_at(&format!("/images/x{}x/{}", page_size, page))?;
+    let rows = raw_rows_at(&format!("images://x{}x/{}", page_size, page))?;
     rows.iter()
         .map(|row| {
             Ok(OrganizeScanRow {
@@ -236,10 +238,10 @@ pub fn organize_batch_at(page_size: usize, page: usize) -> Result<Vec<OrganizeSc
         .collect()
 }
 
-/// `/images/id_{id}/metadata` → metadata JSON from `image_metadata.data`.
+/// `images://id_{id}/metadata` → metadata JSON from `image_metadata.data`.
 pub fn image_metadata_at(image_id: &str) -> Result<Option<Value>, String> {
     let encoded = urlencoding::encode(image_id.trim());
-    let rows = raw_rows_at(&format!("/images/id_{}/metadata", encoded))?;
+    let rows = raw_rows_at(&format!("images://id_{}/metadata", encoded))?;
     let Some(row) = rows.first() else {
         return Ok(None);
     };
@@ -247,19 +249,19 @@ pub fn image_metadata_at(image_id: &str) -> Result<Option<Value>, String> {
 }
 
 pub fn gallery_total_count_at() -> Result<usize, String> {
-    count_at("/gallery/all")
+    count_at("images://gallery/all")
 }
 
 pub fn gallery_plugin_groups_at() -> Result<Vec<PluginGroup>, String> {
     let rt = provider_runtime();
     let children = rt
-        .list("/gallery/plugin")
-        .map_err(|e| format!("list /gallery/plugin failed: {}", e))?;
+        .list("images://gallery/plugin")
+        .map_err(|e| format!("list images://gallery/plugin failed: {}", e))?;
     children
         .into_iter()
         .map(|child| {
             let count = count_at(&format!(
-                "/gallery/plugin/{}",
+                "images://gallery/plugin/{}",
                 urlencoding::encode(&child.name)
             ))?;
             Ok(PluginGroup {
@@ -284,8 +286,8 @@ pub fn gallery_day_groups_at() -> Result<Vec<DayGroup>, String> {
     let rt = provider_runtime();
     let mut days = Vec::new();
     for year in rt
-        .list("/gallery/date")
-        .map_err(|e| format!("list /gallery/date failed: {}", e))?
+        .list("images://gallery/date")
+        .map_err(|e| format!("list images://gallery/date failed: {}", e))?
     {
         let Some(y) = year.name.strip_suffix('y') else {
             continue;
@@ -293,7 +295,7 @@ pub fn gallery_day_groups_at() -> Result<Vec<DayGroup>, String> {
         if y.len() != 4 || !y.chars().all(|c| c.is_ascii_digit()) {
             continue;
         }
-        let year_path = format!("/gallery/date/{}", year.name);
+        let year_path = format!("images://gallery/date/{}", year.name);
         for month in rt
             .list(&year_path)
             .map_err(|e| format!("list {} failed: {}", year_path, e))?
@@ -339,7 +341,7 @@ pub fn gallery_time_filter_payload_at() -> Result<GalleryTimeFilterPayload, Stri
 pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, String> {
     let limit = limit.max(1);
     let encoded = urlencoding::encode(album_id.trim());
-    let base = format!("/gallery/album/{}", encoded);
+    let base = format!("images://gallery/album/{}", encoded);
     let mut out = images_at(&format!("{}/order/x{}x/1", base, limit))?;
     if out.len() >= limit {
         out.truncate(limit);
@@ -368,7 +370,7 @@ pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, 
             .and_then(|v| v.as_str())
             .unwrap_or(&child.name);
         let child_encoded = urlencoding::encode(child_id);
-        let child_path = format!("/gallery/album/{}/order/x3x/1", child_encoded);
+        let child_path = format!("images://gallery/album/{}/order/x3x/1", child_encoded);
         for image in images_at(&child_path)? {
             out.push(image);
             if out.len() >= limit {

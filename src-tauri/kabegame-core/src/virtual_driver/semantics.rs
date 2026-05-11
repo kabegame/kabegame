@@ -156,7 +156,7 @@ impl<'a> VfsSemantics<'a> {
     }
 
     fn vd_path(&self, segments: &[&str]) -> String {
-        let mut path = format!("/vd/{}", Self::locale_route_segment());
+        let mut path = format!("images://vd/{}", Self::locale_route_segment());
         for segment in segments {
             path.push('/');
             path.push_str(segment);

@@ -219,7 +219,7 @@ impl Storage {
 
     /// 获取总图片数（用于进度计算）
     pub fn get_images_total_count(&self) -> Result<usize, String> {
-        crate::providers::count_at("/images")
+        crate::providers::count_at("images://")
     }
 }
 
