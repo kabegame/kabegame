@@ -1,8 +1,8 @@
 # Linux 发布构建环境，与 .github/workflows/release.yml 中 `ubuntu-24.04` job 对齐：
 #   Bun 1.3.6、Rust 1.92.0、tauri-cli 2.10.0、同一套 apt 依赖。
 #
-# 用途：在较新桌面系统（例如 Ubuntu 25.10 + libfuse3 SONAME .4）上本机构建时，可在此镜像内构建，
-# 使产物链接的 libfuse3 与 CI 及更多仍带 libfuse3.so.3 的发行版一致。
+# Linux 版虚拟盘使用 fuser 的 pure-rust 后端，不链接系统 libfuse；
+# 因此此镜像只提供 Tauri/WebKit/GTK 等构建依赖，不安装 FUSE 开发包。
 #
 # 本镜像仅包含构建工具链（Bun、Rust、tauri-cli、apt 依赖），不打包源码。
 # 源码通过 docker-compose 以 bind mount 方式挂到 /src，这样修改源文件不会使镜像缓存失效，
@@ -79,8 +79,7 @@ RUN apt-get install -y --no-install-recommends \
 # 第 3 组：其他运行/测试依赖
 RUN apt-get install -y --no-install-recommends \
         xvfb \
-        libxdo-dev \
-        libfuse3-dev
+        libxdo-dev
 
 # 最后清理 apt 列表，缩小最终镜像
 RUN rm -rf /var/lib/apt/lists/*

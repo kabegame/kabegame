@@ -58,7 +58,6 @@ jobs:
             libgtk-3-dev \
             libsoup-3.0-dev \
             patchelf \
-            libfuse3-dev \
             pkg-config
 
       - name: macOS FUSE (for fuser crate)
