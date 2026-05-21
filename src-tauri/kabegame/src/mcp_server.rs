@@ -663,8 +663,7 @@ impl ServerHandler for KabegameMcpServer {
                 Storage::global()
                     .update_image_display_name(&args.image_id, &args.display_name)
                     .map_err(|e| McpError::internal_error(e, None))?;
-                let plugin_ids = Storage::global()
-                    .find_image_by_id(&args.image_id)
+                let plugin_ids = Storage::find_image_by_id(&args.image_id)
                     .ok()
                     .flatten()
                     .map(|image| vec![image.plugin_id])

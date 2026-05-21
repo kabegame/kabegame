@@ -121,7 +121,7 @@ async fn handle_file_query(
         return (StatusCode::NOT_FOUND, "file not found").into_response();
     }
 
-    let image_info = match kabegame_core::storage::Storage::global().find_image_by_path(path) {
+    let image_info = match kabegame_core::storage::Storage::find_image_by_path(path) {
         Ok(Some(info)) => info,
         _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
     };
@@ -152,7 +152,7 @@ async fn handle_thumbnail_query(
         return (StatusCode::NOT_FOUND, "file not found").into_response();
     }
 
-    match kabegame_core::storage::Storage::global().find_image_by_thumbnail_path(path) {
+    match kabegame_core::storage::Storage::find_image_by_thumbnail_path(path) {
         Ok(Some(_)) => {}
         _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
     }

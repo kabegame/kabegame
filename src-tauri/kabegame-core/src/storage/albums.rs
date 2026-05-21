@@ -79,18 +79,6 @@ impl Storage {
         Ok(exists)
     }
 
-    pub fn is_image_in_album(&self, album_id: &str, image_id: &str) -> Result<bool, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM album_images WHERE album_id = ?1 AND image_id = ?2)",
-                params![album_id, image_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("Failed to check image in album: {}", e))?;
-        Ok(exists)
-    }
-
     /// 7b S1e S4-b: 顺序壁纸轮播 marker 查询。给定 (album_id, image_id), 返回该图片在
     /// album_images 中的 `order` 值。Some(n) = 在画册里且 n 为 order；None = 不在画册。
     pub fn get_album_image_order(

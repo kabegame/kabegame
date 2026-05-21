@@ -417,8 +417,8 @@ fn images_for_listing(rt_path: &str) -> Result<Vec<ImageInfo>, String> {
     images_at(&last_page_path)
 }
 
-/// JSON 行 → ImageInfo (按 gallery_route 17 fields 的 alias 契约读列)。
-/// alias 名硬契约: id, url, local_path, plugin_id, task_id, crawled_at, metadata_id,
+/// JSON 行 → ImageInfo (按 gallery_route fields 的 alias 契约读列)。
+/// alias 名硬契约: id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata_id,
 /// thumbnail_path, hash, is_favorite, is_hidden, width, height, display_name,
 /// media_type, last_set_wallpaper_at, size。
 fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
@@ -436,7 +436,7 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
         local_path: s("local_path").ok_or("row missing `local_path`")?,
         plugin_id: s("plugin_id").ok_or("row missing `plugin_id`")?,
         task_id: s("task_id"),
-        surf_record_id: None,
+        surf_record_id: s("surf_record_id"),
         crawled_at: i("crawled_at")
             .filter(|&t| t >= 0)
             .map(|t| t as u64)

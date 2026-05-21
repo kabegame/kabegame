@@ -47,7 +47,7 @@ fn current_marker_for_source(
     }
     match source {
         RotationSource::Gallery => {
-            let img = Storage::global().find_image_by_id(id).ok().flatten()?;
+            let img = Storage::find_image_by_id(id).ok().flatten()?;
             Some(CurrentMarker::Time(img.crawled_at as i64))
         }
         RotationSource::Album(album_id) => Storage::global()
@@ -308,7 +308,7 @@ impl WallpaperRotator {
 
     async fn get_current_wallpaper_path(_app: &AppHandle) -> Option<String> {
         let id = Settings::global().get_current_wallpaper_image_id()?;
-        let img = Storage::global().find_image_by_id(&id).ok().flatten()?;
+        let img = Storage::find_image_by_id(&id).ok().flatten()?;
         let p = img.local_path;
         if Path::new(&p).exists() {
             Some(p)

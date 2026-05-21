@@ -95,7 +95,7 @@ pub async fn query_provider(path: String) -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn get_image_by_id(image_id: String) -> Result<serde_json::Value, String> {
-    let image = Storage::global().find_image_by_id(&image_id)?;
+    let image = Storage::find_image_by_id(&image_id)?;
     Ok(serde_json::to_value(image).map_err(|e| e.to_string())?)
 }
 

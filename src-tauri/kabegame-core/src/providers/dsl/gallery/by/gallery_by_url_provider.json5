@@ -1,0 +1,12 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_by_url_provider",
+    "properties": {
+        "url": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "images.url = ${properties.url}",
+        "limit": 1
+    }
+}

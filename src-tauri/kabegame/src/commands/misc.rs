@@ -284,8 +284,7 @@ pub async fn get_gallery_image(image_path: String) -> Result<Vec<u8>, String> {
 #[tauri::command]
 pub async fn copy_image_to_clipboard(app: AppHandle, image_id: String) -> Result<(), String> {
     let image_path = {
-        let info = Storage::global()
-            .find_image_by_id(&image_id)
+        let info = Storage::find_image_by_id(&image_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "Image not found".to_string())?;
         let path = info.local_path;

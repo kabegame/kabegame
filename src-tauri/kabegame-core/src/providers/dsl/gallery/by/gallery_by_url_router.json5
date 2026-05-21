@@ -1,0 +1,11 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_by_url_router",
+    "resolve": {
+        "(.+)": {
+            "provider": "gallery_by_url_provider",
+            "properties": { "url": "${capture[1]}" }
+        }
+    }
+}

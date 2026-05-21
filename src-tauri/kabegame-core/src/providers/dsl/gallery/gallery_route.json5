@@ -29,6 +29,11 @@
                 "in_need": true
             },
             {
+                "sql": "images.surf_record_id",
+                "as": "surf_record_id",
+                "in_need": true
+            },
+            {
                 "sql": "images.crawled_at",
                 "as": "crawled_at",
                 "in_need": true
@@ -155,6 +160,21 @@
         },
         "search": {
             "provider": "gallery_search_router"
+        },
+        "by_id": {
+            "provider": "gallery_by_id_router"
+        },
+        "by_path": {
+            "provider": "gallery_by_path_router"
+        },
+        "by_thumbnail_path": {
+            "provider": "gallery_by_thumbnail_path_router"
+        },
+        "by_url": {
+            "provider": "gallery_by_url_router"
+        },
+        "by_hash": {
+            "provider": "gallery_by_hash_router"
         },
         "bigger_crawler_time": {
             "provider": "gallery_bigger_crawler_time_router"

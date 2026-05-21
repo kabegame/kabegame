@@ -559,6 +559,35 @@ fn gallery_all_page_fetches_expected_image_set() {
 }
 
 #[test]
+fn gallery_by_routes_fetch_single_images() {
+    let runtime = build_runtime();
+    for (path, expected_id) in [
+        ("images://gallery/by_id/7", "7"),
+        ("images://gallery/by_path/D%3A%2Ffixture%2F8.jpg", "8"),
+        (
+            "images://gallery/by_thumbnail_path/D%3A%2Ffixture%2F9.jpg",
+            "9",
+        ),
+        (
+            "images://gallery/by_url/https%3A%2F%2Fexample.test%2F10.jpg",
+            "10",
+        ),
+        ("images://gallery/by_hash/hash-11", "11"),
+    ] {
+        let rows = runtime
+            .fetch(path)
+            .unwrap_or_else(|e| panic!("{path} should fetch: {e}"));
+        assert_eq!(ids(rows), [expected_id], "path={path}");
+    }
+
+    let rows = runtime.fetch("images://gallery/by_id/7").unwrap();
+    assert_eq!(
+        rows[0].get("surf_record_id").and_then(|v| v.as_str()),
+        Some("surf-a")
+    );
+}
+
+#[test]
 fn date_lists_expose_year_month_and_day_children() {
     let runtime = build_runtime();
 

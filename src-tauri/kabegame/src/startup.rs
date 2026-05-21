@@ -796,9 +796,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
         return Ok(());
     };
 
-    let img_v = Storage::global()
-        .find_image_by_id(&id)
-        .map_err(|e| format!("Storage error: {}", e))?;
+    let img_v = Storage::find_image_by_id(&id).map_err(|e| format!("Storage error: {}", e))?;
 
     let Some(img_info) = img_v else {
         let _ = settings.set_current_wallpaper_image_id(None);

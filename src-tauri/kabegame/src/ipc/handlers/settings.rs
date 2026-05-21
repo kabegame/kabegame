@@ -348,8 +348,7 @@ fn set_current_wallpaper_image_id(image_id: Option<String>) -> IpcResponse {
                     .unwrap_or_default()
                     .as_secs();
                 let _ = Storage::global().update_image_last_set_wallpaper_at(&id, now);
-                let plugin_ids = Storage::global()
-                    .find_image_by_id(&id)
+                let plugin_ids = Storage::find_image_by_id(&id)
                     .ok()
                     .flatten()
                     .map(|image| vec![image.plugin_id])

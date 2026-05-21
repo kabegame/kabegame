@@ -14,9 +14,7 @@ pub async fn get_current_wallpaper_path_from_settings(
 ) -> Result<Option<String>, String> {
     // 从 Settings 获取 settings + image localPath
     if let Some(id) = Settings::global().get_current_wallpaper_image_id() {
-        let img = Storage::global()
-            .find_image_by_id(&id)
-            .map_err(|e| format!("Storage error: {}", e))?;
+        let img = Storage::find_image_by_id(&id).map_err(|e| format!("Storage error: {}", e))?;
         if let Some(info) = img {
             Ok(Some(info.local_path))
         } else {
@@ -51,7 +49,7 @@ pub async fn set_wallpaper(file_path: String) -> Result<(), String> {
     controller.set_wallpaper(&abs, &style).await?;
 
     // 尽力同步更新"当前壁纸"（imageId）；失败不阻断
-    let found = Storage::global().find_image_by_path(&abs).ok().flatten();
+    let found = Storage::find_image_by_path(&abs).ok().flatten();
     let image_id = found.as_ref().map(|v| v.id.clone());
     let _ = settings.set_current_wallpaper_image_id(image_id);
 
@@ -78,9 +76,8 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
     let settings = Settings::global();
     let style = settings.get_wallpaper_rotation_style();
 
-    let image = Storage::global()
-        .find_image_by_id(&image_id)
-        .map_err(|e| format!("Storage error: {}", e))?;
+    let image =
+        Storage::find_image_by_id(&image_id).map_err(|e| format!("Storage error: {}", e))?;
 
     let Some(info) = image else {
         return Err("图片不存在".to_string());

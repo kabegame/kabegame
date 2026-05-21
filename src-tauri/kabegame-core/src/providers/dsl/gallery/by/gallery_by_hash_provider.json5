@@ -1,0 +1,12 @@
+{
+    "$schema": "../../schema.json5",
+    "namespace": "kabegame",
+    "name": "gallery_by_hash_provider",
+    "properties": {
+        "hash": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "images.hash = ${properties.hash}",
+        "limit": 1
+    }
+}

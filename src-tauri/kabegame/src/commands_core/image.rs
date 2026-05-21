@@ -126,7 +126,7 @@ pub async fn get_gallery_time_filter_data() -> Result<Value, String> {
 }
 
 pub async fn get_image_by_id(image_id: String) -> Result<Value, String> {
-    let mut image = Storage::global().find_image_by_id(&image_id)?;
+    let mut image = Storage::find_image_by_id(&image_id)?;
     #[cfg(feature = "web")]
     if let Some(info) = image.as_mut() {
         rewrite_image_info(info);

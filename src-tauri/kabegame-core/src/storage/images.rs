@@ -1,4 +1,4 @@
-use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
+use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
 use rusqlite::{params, params_from_iter, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -142,10 +142,6 @@ fn remove_thumbnail_file_if_needed(_local_path: Option<&str>, _thumbnail_path: O
 // v4.0 删除说明：resolve_file_size_for_backfill（含 Android / 桌面两个 cfg 版本）
 // 仅被 fill_missing_sizes 使用，随之一并删除。
 
-fn normalize_media_type(media_type: Option<String>) -> Option<String> {
-    crate::image_type::normalize_stored_media_type(media_type)
-}
-
 /// 从 DB `image_metadata.data` 文本列解析为 JSON；空串或无效则 `None`。
 pub(crate) fn parse_image_metadata_json(s: Option<String>) -> Option<Value> {
     s.and_then(|s| {
@@ -204,75 +200,27 @@ pub(crate) fn row_optional_u64_ts(
     Ok(v.filter(|&t| t >= 0).map(|t| t as u64))
 }
 
+fn first_gallery_image_at(path: &str) -> Result<Option<ImageInfo>, String> {
+    let mut image = crate::providers::images_at(path)?.into_iter().next();
+    if let Some(ref mut image) = image {
+        image.local_exists = PathBuf::from(&image.local_path).exists();
+    }
+    Ok(image)
+}
+
+fn encode_provider_segment(value: &str) -> String {
+    urlencoding::encode(value).into_owned()
+}
+
 impl Storage {
-    pub fn find_image_by_id(&self, image_id: &str) -> Result<Option<ImageInfo>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-
-        let mut result = conn
-            .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
-                 COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
-                 images.hash,
-                 images.width,
-                 images.height,
-                 images.display_name,
-                 COALESCE(images.type, 'image') as media_type,
-                 images.last_set_wallpaper_at,
-                 images.size
-                 FROM images
-                 WHERE images.id = ?1",
-                params![image_id],
-                |row| {
-                    let local_path: String = row.get(2)?;
-                    let local_exists = PathBuf::from(&local_path).exists();
-                    Ok(ImageInfo {
-                        id: row.get(0)?,
-                        url: row.get::<_, Option<String>>(1)?,
-                        local_path,
-                        plugin_id: row.get(3)?,
-                        task_id: row.get(4)?,
-                        surf_record_id: row.get(5)?,
-                        crawled_at: row.get(6)?,
-                        metadata_id: row.get::<_, Option<i64>>(7)?,
-                        thumbnail_path: row.get(8)?,
-                        hash: row.get(9)?,
-                        favorite: false,
-                        is_hidden: false,
-                        local_exists,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        display_name: row.get(12)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
-                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
-                        album_order: None,
-                    })
-                },
-            )
-            .ok();
-
-        if let Some(ref mut image_info) = result {
-            let is_favorite = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                    params![FAVORITE_ALBUM_ID, image_info.id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap_or(0)
-                > 0;
-            image_info.favorite = is_favorite;
-            let is_hidden = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                    params![HIDDEN_ALBUM_ID, image_info.id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap_or(0)
-                > 0;
-            image_info.is_hidden = is_hidden;
+    pub fn find_image_by_id(image_id: &str) -> Result<Option<ImageInfo>, String> {
+        if image_id.is_empty() {
+            return Ok(None);
         }
-
-        Ok(result)
+        first_gallery_image_at(&format!(
+            "images://gallery/by_id/{}",
+            encode_provider_segment(image_id)
+        ))
     }
 
     /// 读取 `image_metadata.data`。
@@ -334,287 +282,47 @@ impl Storage {
         Ok(deleted)
     }
 
-    pub fn find_image_by_path(&self, local_path: &str) -> Result<Option<ImageInfo>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-
-        let mut result = conn
-            .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
-                 COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
-                 images.hash,
-                 images.width,
-                 images.height,
-                 images.display_name,
-                 COALESCE(images.type, 'image') as media_type,
-                 images.last_set_wallpaper_at,
-                 images.size
-                 FROM images
-                 WHERE images.local_path = ?1",
-                params![local_path],
-                |row| {
-                    let local_path: String = row.get(2)?;
-                    let local_exists = PathBuf::from(&local_path).exists();
-                    Ok(ImageInfo {
-                        id: row.get(0)?,
-                        url: row.get::<_, Option<String>>(1)?,
-                        local_path,
-                        plugin_id: row.get(3)?,
-                        task_id: row.get(4)?,
-                        surf_record_id: row.get(5)?,
-                        crawled_at: row.get(6)?,
-                        metadata_id: row.get::<_, Option<i64>>(7)?,
-                        thumbnail_path: row.get(8)?,
-                        hash: row.get(9)?,
-                        favorite: false,
-                        is_hidden: false,
-                        local_exists,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        display_name: row.get(12)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
-                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
-                        album_order: None,
-                    })
-                },
-            )
-            .ok();
-
-        if let Some(ref mut image_info) = result {
-            let image_id = image_info.id.clone();
-            let is_favorite = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                    params![FAVORITE_ALBUM_ID, image_id],
-                    |row| Ok(row.get::<_, i64>(0)? != 0),
-                )
-                .unwrap_or(false);
-            image_info.favorite = is_favorite;
-            let is_hidden = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                    params![HIDDEN_ALBUM_ID, image_id],
-                    |row| Ok(row.get::<_, i64>(0)? != 0),
-                )
-                .unwrap_or(false);
-            image_info.is_hidden = is_hidden;
+    pub fn find_image_by_path(local_path: &str) -> Result<Option<ImageInfo>, String> {
+        if local_path.is_empty() {
+            return Ok(None);
         }
-
-        Ok(result)
+        first_gallery_image_at(&format!(
+            "images://gallery/by_path/{}",
+            encode_provider_segment(local_path)
+        ))
     }
 
     /// 按缩略图路径查找：path 可为 thumbnail_path 或（当 thumbnail_path 为空时）local_path。
     /// 查询时规范化路径（统一斜杠），与写入时 canonicalize 后的形式兼容。
-    pub fn find_image_by_thumbnail_path(&self, path: &str) -> Result<Option<ImageInfo>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let path_norm = path.trim().replace('/', std::path::MAIN_SEPARATOR_STR);
-
-        let mut result = conn
-            .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
-                 COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
-                 images.hash,
-                 images.width,
-                 images.height,
-                 images.display_name,
-                 COALESCE(images.type, 'image') as media_type,
-                 images.last_set_wallpaper_at,
-                 images.size
-                 FROM images
-                 WHERE REPLACE(TRIM(COALESCE(images.thumbnail_path, '')), '/', ?2) = ?1
-                    OR (TRIM(COALESCE(images.thumbnail_path, '')) = '' AND REPLACE(TRIM(images.local_path), '/', ?2) = ?1)",
-                params![path_norm, std::path::MAIN_SEPARATOR_STR],
-                |row| {
-                    let local_path: String = row.get(2)?;
-                    let local_exists = PathBuf::from(&local_path).exists();
-                    Ok(ImageInfo {
-                        id: row.get(0)?,
-                        url: row.get::<_, Option<String>>(1)?,
-                        local_path,
-                        plugin_id: row.get(3)?,
-                        task_id: row.get(4)?,
-                        surf_record_id: row.get(5)?,
-                        crawled_at: row.get(6)?,
-                        metadata_id: row.get::<_, Option<i64>>(7)?,
-                        thumbnail_path: row.get(8)?,
-                        hash: row.get(9)?,
-                        favorite: false,
-                        is_hidden: false,
-                        local_exists,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        display_name: row.get(12)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
-                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
-                        album_order: None,
-                    })
-                },
-            )
-            .ok();
-
-        if let Some(ref mut image_info) = result {
-            let image_id = image_info.id.clone();
-            let is_favorite = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                    params![FAVORITE_ALBUM_ID, image_id],
-                    |row| Ok(row.get::<_, i64>(0)? != 0),
-                )
-                .unwrap_or(false);
-            image_info.favorite = is_favorite;
-            let is_hidden = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                    params![HIDDEN_ALBUM_ID, image_id],
-                    |row| Ok(row.get::<_, i64>(0)? != 0),
-                )
-                .unwrap_or(false);
-            image_info.is_hidden = is_hidden;
+    pub fn find_image_by_thumbnail_path(path: &str) -> Result<Option<ImageInfo>, String> {
+        let path = path.trim();
+        if path.is_empty() {
+            return Ok(None);
         }
-
-        Ok(result)
+        first_gallery_image_at(&format!(
+            "images://gallery/by_thumbnail_path/{}",
+            encode_provider_segment(path)
+        ))
     }
 
-    pub fn find_image_by_url(&self, url: &str) -> Result<Option<ImageInfo>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-
-        let mut result = conn
-            .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
-                 COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
-                 images.hash,
-                 images.width,
-                 images.height,
-                 images.display_name,
-                 COALESCE(images.type, 'image') as media_type,
-                 images.last_set_wallpaper_at,
-                 images.size
-                 FROM images
-                 WHERE images.url = ?1",
-                params![url],
-                |row| {
-                    let local_path: String = row.get(2)?;
-                    let local_exists = PathBuf::from(&local_path).exists();
-                    Ok(ImageInfo {
-                        id: row.get(0)?,
-                        url: row.get::<_, Option<String>>(1)?,
-                        local_path,
-                        plugin_id: row.get(3)?,
-                        task_id: row.get(4)?,
-                        surf_record_id: row.get(5)?,
-                        crawled_at: row.get(6)?,
-                        metadata_id: row.get::<_, Option<i64>>(7)?,
-                        thumbnail_path: row.get(8)?,
-                        hash: row.get(9)?,
-                        favorite: false,
-                        is_hidden: false,
-                        local_exists,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        display_name: row.get(12)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
-                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
-                        album_order: None,
-                    })
-                },
-            )
-            .ok();
-
-        if let Some(ref mut image_info) = result {
-            let image_id = image_info.id.clone();
-            let is_favorite = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                    params![FAVORITE_ALBUM_ID, image_id],
-                    |row| Ok(row.get::<_, i64>(0)? != 0),
-                )
-                .unwrap_or(false);
-            image_info.favorite = is_favorite;
-            let is_hidden = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                    params![HIDDEN_ALBUM_ID, image_id],
-                    |row| Ok(row.get::<_, i64>(0)? != 0),
-                )
-                .unwrap_or(false);
-            image_info.is_hidden = is_hidden;
+    pub fn find_image_by_url(url: &str) -> Result<Option<ImageInfo>, String> {
+        if url.is_empty() {
+            return Ok(None);
         }
-
-        Ok(result)
+        first_gallery_image_at(&format!(
+            "images://gallery/by_url/{}",
+            encode_provider_segment(url)
+        ))
     }
 
-    pub fn find_image_by_hash(&self, hash: &str) -> Result<Option<ImageInfo>, String> {
+    pub fn find_image_by_hash(hash: &str) -> Result<Option<ImageInfo>, String> {
         if hash.is_empty() {
             return Ok(None);
         }
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-
-        let mut result = conn
-            .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
-                 COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
-                 images.hash,
-                 images.width,
-                 images.height,
-                 images.display_name,
-                 COALESCE(images.type, 'image') as media_type,
-                 images.last_set_wallpaper_at,
-                 images.size
-                 FROM images
-                 WHERE images.hash = ?1",
-                params![hash],
-                |row| {
-                    let local_path: String = row.get(2)?;
-                    let local_exists = PathBuf::from(&local_path).exists();
-                    Ok(ImageInfo {
-                        id: row.get(0)?,
-                        url: row.get::<_, Option<String>>(1)?,
-                        local_path,
-                        plugin_id: row.get(3)?,
-                        task_id: row.get(4)?,
-                        surf_record_id: row.get(5)?,
-                        crawled_at: row.get(6)?,
-                        metadata_id: row.get::<_, Option<i64>>(7)?,
-                        thumbnail_path: row.get(8)?,
-                        hash: row.get(9)?,
-                        favorite: false,
-                        is_hidden: false,
-                        local_exists,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        display_name: row.get(12)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
-                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
-                        album_order: None,
-                    })
-                },
-            )
-            .ok();
-
-        if let Some(ref mut image_info) = result {
-            let image_id = image_info.id.clone();
-            let is_favorite = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                    params![FAVORITE_ALBUM_ID, image_id],
-                    |row| Ok(row.get::<_, i64>(0)? != 0),
-                )
-                .unwrap_or(false);
-            image_info.favorite = is_favorite;
-            let is_hidden = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                    params![HIDDEN_ALBUM_ID, image_id],
-                    |row| Ok(row.get::<_, i64>(0)? != 0),
-                )
-                .unwrap_or(false);
-            image_info.is_hidden = is_hidden;
-        }
-
-        Ok(result)
+        first_gallery_image_at(&format!(
+            "images://gallery/by_hash/{}",
+            encode_provider_segment(hash)
+        ))
     }
 
     pub fn add_image(&self, mut image: ImageInfo) -> Result<ImageInfo, String> {
@@ -703,7 +411,7 @@ impl Storage {
     ) -> Result<Vec<String>, String> {
         let mut set = HashSet::new();
         for id in image_ids {
-            if let Some(image) = self.find_image_by_id(id)? {
+            if let Some(image) = Self::find_image_by_id(id)? {
                 if !image.plugin_id.trim().is_empty() {
                     set.insert(image.plugin_id);
                 }

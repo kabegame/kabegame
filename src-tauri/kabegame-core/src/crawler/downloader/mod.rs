@@ -1087,12 +1087,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
         if !is_archive {
             let existing_opt = Settings::global()
                 .get_auto_deduplicate()
-                .then(|| {
-                    Storage::global()
-                        .find_image_by_url(job.url.as_str())
-                        .ok()
-                        .flatten()
-                })
+                .then(|| Storage::find_image_by_url(job.url.as_str()).ok().flatten())
                 .flatten();
             if let Some(ref existing) = existing_opt {
                 let existing_path = PathBuf::from(&existing.local_path);
@@ -1805,10 +1800,10 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                     } else {
                                         match compute_file_hash(&path_for_post).await {
                                             Ok(hash) => {
-                                                let existing_by_hash = Storage::global()
-                                                    .find_image_by_hash(&hash)
-                                                    .ok()
-                                                    .flatten();
+                                                let existing_by_hash =
+                                                    Storage::find_image_by_hash(&hash)
+                                                        .ok()
+                                                        .flatten();
                                                 if let Some(ref existing) = existing_by_hash {
                                                     emit_task_log(
                                                         &task_id_clone,
@@ -2382,7 +2377,7 @@ pub async fn postprocess_downloaded_image(
         }
     };
 
-    let existing_by_hash = Storage::global().find_image_by_hash(&hash).ok().flatten();
+    let existing_by_hash = Storage::find_image_by_hash(&hash).ok().flatten();
     if let Some(ref existing) = existing_by_hash {
         if let Some(tid) = task_id {
             emit_task_log(
@@ -2406,8 +2401,7 @@ pub async fn postprocess_downloaded_image(
             .to_string()
             .trim_start_matches("\\\\?\\")
             .to_string();
-        let no_image_uses_path = Storage::global()
-            .find_image_by_path(&local_path_str)
+        let no_image_uses_path = Storage::find_image_by_path(&local_path_str)
             .ok()
             .flatten()
             .is_none();

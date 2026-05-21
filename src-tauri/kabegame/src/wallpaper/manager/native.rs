@@ -18,7 +18,7 @@ impl NativeWallpaperManager {
 
     fn current_wallpaper_path_from_settings(&self) -> Option<String> {
         let id = Settings::global().get_current_wallpaper_image_id()?;
-        let img = Storage::global().find_image_by_id(&id).ok().flatten()?;
+        let img = Storage::find_image_by_id(&id).ok().flatten()?;
         Some(img.local_path)
     }
 
