@@ -136,6 +136,17 @@
         @cancel="showMediaTypeFilterPicker = false"
       />
     </van-popup>
+    <van-popup v-model:show="showNameFilterPicker" position="bottom" round>
+      <van-picker
+        v-model="nameFilterPickerSelected"
+        :title="t('gallery.filterByName')"
+        :columns="nameFilterPickerColumns"
+        :confirm-button-text="t('common.confirm')"
+        :cancel-button-text="t('common.cancel')"
+        @confirm="onNameFilterPickerConfirm"
+        @cancel="showNameFilterPicker = false"
+      />
+    </van-popup>
     <van-popup v-model:show="showAspectFilterPicker" position="bottom" round>
       <van-picker
         v-model="aspectFilterPickerSelected"
@@ -186,10 +197,12 @@ import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import {
   GALLERY_ASPECT_BUCKETS,
+  GALLERY_NAME_LANGUAGE_BUCKETS,
   filterAspectRange,
   filterDateSegment,
   filterMediaFormat,
   filterMediaKind,
+  filterNameBucket,
   filterPluginId,
   filterSizeRange,
   isSimpleFilter,
@@ -263,6 +276,7 @@ const isWallpaperOrderBrowse = computed(
 
 const isSizeBrowse = computed(() => filterSizeRange(props.filter) !== null);
 const isAspectBrowse = computed(() => filterAspectRange(props.filter) !== null);
+const isNameBrowse = computed(() => filterNameBucket(props.filter) !== null);
 
 const SIZE_RANGE_LABEL_KEYS: Record<string, string> = {
   "unknown":   "filterSize_unknown",
@@ -277,6 +291,9 @@ const SIZE_RANGE_LABEL_KEYS: Record<string, string> = {
 
 const ASPECT_RANGE_LABEL_KEYS: Record<string, string> = Object.fromEntries(
   GALLERY_ASPECT_BUCKETS.map((b) => [b.range, b.labelKey]),
+);
+const NAME_BUCKET_AUTONYMS: Record<string, string> = Object.fromEntries(
+  GALLERY_NAME_LANGUAGE_BUCKETS.map((b) => [b.bucket, b.autonym]),
 );
 
 const uiStore = useUiStore();
@@ -870,12 +887,14 @@ async function ensureTimeNodeChildrenLoaded(node: TimeMenuNode) {
 
 const sortOptionLabelAsc = computed(() => {
   if (isWallpaperOrderBrowse.value) return t("gallery.bySetTimeAsc");
+  if (isNameBrowse.value) return t("gallery.byNameAsc");
   if (isSizeBrowse.value) return t("gallery.bySizeAsc");
   if (isAspectBrowse.value) return t("gallery.byAspectWidthHeight");
   return t("gallery.byTimeAsc");
 });
 const sortOptionLabelDesc = computed(() => {
   if (isWallpaperOrderBrowse.value) return t("gallery.bySetTimeDesc");
+  if (isNameBrowse.value) return t("gallery.byNameDesc");
   if (isSizeBrowse.value) return t("gallery.bySizeDesc");
   if (isAspectBrowse.value) return t("gallery.byAspectHeightWidth");
   return t("gallery.byTimeDesc");
@@ -884,6 +903,11 @@ const sortOptionLabelDesc = computed(() => {
 const filterFoldLabel = computed(() => {
   void locale.value;
   if (isWallpaperOrderBrowse.value) return t("gallery.filterWallpaperSet");
+  const nb = filterNameBucket(props.filter);
+  if (nb !== null) {
+    const detail = NAME_BUCKET_AUTONYMS[nb] ?? nb;
+    return `${t("gallery.filterByName")}: ${detail}`;
+  }
   const sr = filterSizeRange(props.filter);
   if (sr !== null) {
     const key = SIZE_RANGE_LABEL_KEYS[sr];
@@ -965,6 +989,7 @@ const showFilterPicker = ref(false);
 const showTimeFilterPicker = ref(false);
 const showPluginFilterPicker = ref(false);
 const showMediaTypeFilterPicker = ref(false);
+const showNameFilterPicker = ref(false);
 const showAspectFilterPicker = ref(false);
 const showSortPicker = ref(false);
 const showPageSizePicker = ref(false);
@@ -972,6 +997,7 @@ useModalBack(showFilterPicker);
 useModalBack(showTimeFilterPicker);
 useModalBack(showPluginFilterPicker);
 useModalBack(showMediaTypeFilterPicker);
+useModalBack(showNameFilterPicker);
 useModalBack(showAspectFilterPicker);
 useModalBack(showSortPicker);
 useModalBack(showPageSizePicker);
@@ -982,6 +1008,7 @@ const filterPickerColumns = computed(() => [
   { text: t("gallery.filterByTime"), value: "time" },
   { text: t("gallery.filterByPlugin"), value: "plugin" },
   { text: t("gallery.filterByMediaType"), value: "media-type" },
+  { text: t("gallery.filterByName"), value: "name" },
   { text: t("gallery.filterByAspect"), value: "aspect" },
 ]);
 const filterPickerSelected = ref<string[]>(["all"]);
@@ -995,6 +1022,8 @@ watch(showFilterPicker, (open) => {
       filterPickerSelected.value = ["plugin"];
     } else if (isMediaTypeFilterBrowse.value) {
       filterPickerSelected.value = ["media-type"];
+    } else if (isNameBrowse.value) {
+      filterPickerSelected.value = ["name"];
     } else if (isAspectBrowse.value) {
       filterPickerSelected.value = ["aspect"];
     } else {
@@ -1022,6 +1051,10 @@ async function onFilterPickerConfirm() {
   if (v === "media-type") {
     await ensureMediaTypeCountsLoaded();
     showMediaTypeFilterPicker.value = true;
+    return;
+  }
+  if (v === "name") {
+    showNameFilterPicker.value = true;
     return;
   }
   if (v === "aspect") {
@@ -1209,6 +1242,27 @@ function onMediaTypeFilterPickerConfirm() {
   const kind = mediaTypeFilterPickerSelected.value[0];
   if (kind !== "image" && kind !== "video") return;
   emit("update:filter", { type: "media-type", kind });
+}
+
+const nameFilterPickerColumns = computed(() =>
+  GALLERY_NAME_LANGUAGE_BUCKETS.map((b) => ({
+    text: b.autonym,
+    value: b.bucket,
+  })),
+);
+const nameFilterPickerSelected = ref<string[]>(["english"]);
+watch(showNameFilterPicker, (open) => {
+  if (open) {
+    nameFilterPickerSelected.value = [
+      filterNameBucket(props.filter) ?? GALLERY_NAME_LANGUAGE_BUCKETS[0].bucket,
+    ];
+  }
+});
+function onNameFilterPickerConfirm() {
+  showNameFilterPicker.value = false;
+  const bucket = nameFilterPickerSelected.value[0]?.trim();
+  if (!bucket) return;
+  emit("update:filter", { type: "name", bucket });
 }
 
 const aspectFilterPickerColumns = computed(() =>

@@ -3,6 +3,7 @@
     <div :key="contextPrefix" class="provider-tree">
       <AllProviderChildrenNode @select="selectFilter" />
       <WallpaperOrderProviderChildrenNode @select="selectFilter" />
+      <NameProviderChildrenNode @select="selectFilter" />
       <DateProviderChildrenNode @select="selectFilter" />
       <MediaTypeProviderChildrenNode @select="selectFilter" />
       <SizeProviderChildrenNode @select="selectFilter" />
@@ -16,6 +17,7 @@
 import { computed } from "vue";
 import type { GalleryFilter } from "@/utils/galleryPath";
 import AllProviderChildrenNode from "./AllProviderChildrenNode.vue";
+import NameProviderChildrenNode from "./NameProviderChildrenNode.vue";
 import DateProviderChildrenNode from "./DateProviderChildrenNode.vue";
 import MediaTypeProviderChildrenNode from "./MediaTypeProviderChildrenNode.vue";
 import SizeProviderChildrenNode from "./SizeProviderChildrenNode.vue";

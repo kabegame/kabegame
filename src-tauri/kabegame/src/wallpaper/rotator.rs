@@ -68,15 +68,20 @@ fn extract_marker_from(source: &RotationSource, img: &ImageInfo) -> CurrentMarke
 fn sequential_path(source: &RotationSource, marker: Option<CurrentMarker>) -> String {
     match (source, marker) {
         (RotationSource::Album(id), Some(CurrentMarker::Order(o))) => {
-            format!("/gallery/hide/album/{}/bigger_order/{}/l100l", id, o)
+            format!(
+                "images://gallery/hide/album/{}/bigger_order/{}/l100l",
+                id, o
+            )
         }
         (RotationSource::Album(id), _) => {
-            format!("/gallery/hide/album/{}/bigger_order/0/l100l", id)
+            format!("images://gallery/hide/album/{}/bigger_order/0/l100l", id)
         }
         (RotationSource::Gallery, Some(CurrentMarker::Time(t))) => {
-            format!("/gallery/hide/bigger_crawler_time/{}/l100l", t)
+            format!("images://gallery/hide/bigger_crawler_time/{}/l100l", t)
         }
-        (RotationSource::Gallery, _) => "/gallery/hide/bigger_crawler_time/0/l100l".to_string(),
+        (RotationSource::Gallery, _) => {
+            "images://gallery/hide/bigger_crawler_time/0/l100l".to_string()
+        }
     }
 }
 
@@ -121,17 +126,14 @@ pub(crate) fn is_wallpaper_suitable(img: &ImageInfo, wallpaper_mode: &str) -> bo
 /// 随机模式: 从 `<base>/x100x/` 随机抽一页, 再从该页可用图中随机取一张;
 /// 该页没有可用图则换下一页 (不重复抽);
 /// 所有页都 try 完返回 None。base 由 source 决定:
-/// - Gallery → `/gallery/all/x100x`
-/// - Album(id) → `/gallery/album/<id>/x100x`
+/// - Gallery → `images://gallery/hide/all/x100x`
+/// - Album(id) → `images://gallery/hide/album/<id>/x100x`
 fn load_random_image_for_wallpaper(
     source: &RotationSource,
     wallpaper_mode: &str,
 ) -> Result<Option<ImageInfo>, String> {
     let rt = provider_runtime();
-    let base_path = match source {
-        RotationSource::Album(id) => format!("/gallery/hide/album/{}/x100x", id),
-        RotationSource::Gallery => "/gallery/hide/all/x100x".to_string(),
-    };
+    let base_path = random_base_path(source);
     let mut pages: Vec<String> = rt
         .list(&base_path)
         .map_err(|e| format!("list {}: {}", base_path, e))?
@@ -157,6 +159,38 @@ fn load_random_image_for_wallpaper(
         }
     }
     Ok(None)
+}
+
+fn random_base_path(source: &RotationSource) -> String {
+    match source {
+        RotationSource::Album(id) => format!("images://gallery/hide/album/{}/x100x", id),
+        RotationSource::Gallery => "images://gallery/hide/all/x100x".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{random_base_path, sequential_path, CurrentMarker, RotationSource};
+
+    #[test]
+    fn gallery_source_paths_have_images_scheme() {
+        let album = RotationSource::Album("album-1".to_string());
+        let gallery = RotationSource::Gallery;
+
+        for path in [
+            sequential_path(&album, Some(CurrentMarker::Order(12))),
+            sequential_path(&album, None),
+            sequential_path(&gallery, Some(CurrentMarker::Time(34))),
+            sequential_path(&gallery, None),
+            random_base_path(&album),
+            random_base_path(&gallery),
+        ] {
+            assert!(
+                path.starts_with("images://gallery/hide/"),
+                "unexpected provider path: {path}"
+            );
+        }
+    }
 }
 
 /// 模式切换 / 兜底场景: 从画廊里随机取一张可作壁纸的图, 返回 local_path。

@@ -111,6 +111,12 @@
         "wallpaper-order": {
             "provider": "gallery_wallpaper_order_router"
         },
+        "name": {
+            "provider": "gallery_name_router"
+        },
+        "names": {
+            "provider": "gallery_name_router"
+        },
         "plugin": {
             "provider": "gallery_plugins_router"
         },

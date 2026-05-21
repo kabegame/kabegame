@@ -87,6 +87,7 @@ fn vd_flat_key_for_canonical(canonical: &str) -> Option<&'static str> {
     match canonical {
         "all" => Some("vd.all"),
         "plugin" => Some("vd.plugin"),
+        "name" => Some("vd.name"),
         "date" => Some("vd.date"),
         "date-range" => Some("vd.dateRange"),
         "album" => Some("vd.album"),

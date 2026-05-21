@@ -158,8 +158,10 @@ pub fn create_main_window(app_handle: &AppHandle) -> Result<(), String> {
             .resizable(true)
             .fullscreen(false)
             .visible(true)
-            .devtools(true)
-            .transparent(!cfg!(target_os = "linux"));
+            .devtools(true);
+
+    #[cfg(target_os = "windows")]
+    let builder = builder.transparent(true);
 
     // Windows/macOS: 添加窗口效果
     #[cfg(not(target_os = "linux"))]
@@ -258,7 +260,7 @@ pub fn init_wallpaper_controller(app: &mut tauri::App) {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         use tauri::{WebviewUrl, WebviewWindowBuilder};
-        let _ = WebviewWindowBuilder::new(
+        let builder = WebviewWindowBuilder::new(
             app,
             "wallpaper",
             // 使用独立的 wallpaper.html，只渲染 WallpaperLayer 组件
@@ -267,12 +269,12 @@ pub fn init_wallpaper_controller(app: &mut tauri::App) {
         // 给壁纸窗口一个固定标题，便于脚本/调试定位到正确窗口
         .title(t!("window.wallpaperTitle"))
         .fullscreen(true)
-        .decorations(false)
-        // 设置窗口为透明，背景为透明
-        .transparent(true)
-        .visible(false)
-        .skip_taskbar(true)
-        .build();
+        .decorations(false);
+
+        #[cfg(target_os = "windows")]
+        let builder = builder.transparent(true);
+
+        let _ = builder.visible(false).skip_taskbar(true).build();
 
         #[cfg(target_os = "macos")]
         if let Some(wallpaper_window) = app.get_webview_window("wallpaper") {

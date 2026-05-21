@@ -1,0 +1,16 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "tasks_root_provider",
+    "query": {},
+    "list": {
+        "all": { "provider": "tasks_all_provider" }
+    },
+    "resolve": {
+        "all": { "provider": "tasks_all_provider" },
+        "id_([^/]+)": {
+            "provider": "tasks_id_provider",
+            "properties": { "task_id": "${capture[1]}" }
+        }
+    }
+}

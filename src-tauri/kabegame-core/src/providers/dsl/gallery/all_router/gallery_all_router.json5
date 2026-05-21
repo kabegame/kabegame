@@ -4,7 +4,7 @@
     "name": "gallery_all_router",
     // 6e 起 Contrib 形态: 贡献 images.crawled_at ASC 基础排序 (从 v4.0.1 GalleryAllProvider
     // 迁移; 6c → 6d 之间的 delegate 写法漏掉了这条 ORDER BY); limit=100 + offset=0 提供
-    // 默认页 (/gallery/all 等价 /gallery/all/x100x/1/); 子路径 x100x/N 由 gallery_paginate_router
+    // 默认页 (images://gallery/all 等价 images://gallery/all/x100x/1/); 子路径 x100x/N 由 gallery_paginate_router
     // 重写 limit/offset, x500x/x1000x 同理。
     "list": {
         "${page.name}": {

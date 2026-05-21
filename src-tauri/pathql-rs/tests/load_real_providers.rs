@@ -74,8 +74,9 @@ fn vd_zh_cn_router_loads_via_loader() {
         .resolve(&root_ns, &ProviderName("vd_zh_CN_root_router".into()))
         .expect("vd_zh_CN_root_router");
     let list = vd.list.as_ref().expect("list");
-    assert_eq!(list.entries.len(), 9);
+    assert_eq!(list.entries.len(), 10);
     assert_eq!(list.entries[0].0, "画册");
+    assert!(list.entries.iter().any(|(name, _)| name == "按名称"));
     assert!(list.entries.iter().any(|(name, _)| name == "按时间"));
     assert!(list.entries.iter().any(|(name, _)| name == "按尺寸"));
 }

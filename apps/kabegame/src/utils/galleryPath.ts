@@ -23,8 +23,17 @@ export type GalleryFilter =
   | { type: "date"; segment: string }
   | { type: "date-range"; start: string; end: string }
   | { type: "media-type"; kind: "image" | "video"; format?: string }
+  | { type: "name"; bucket: string }
   | { type: "size"; range: string }
   | { type: "aspect"; range: string };
+
+export const GALLERY_NAME_LANGUAGE_BUCKETS = [
+  { bucket: "english", labelKey: "filterName_english", autonym: "English" },
+  { bucket: "chinese", labelKey: "filterName_chinese", autonym: "中文" },
+  { bucket: "japanese", labelKey: "filterName_japanese", autonym: "日本語" },
+  { bucket: "korean", labelKey: "filterName_korean", autonym: "한국어" },
+  { bucket: "other", labelKey: "filterName_other", autonym: "Other" },
+] as const;
 
 export const GALLERY_ASPECT_BUCKETS = [
   { range: "landscape-4x3-16x9", labelKey: "filterAspect_landscape" },
@@ -96,6 +105,8 @@ export function serializeFilter(filter: GalleryFilter): string {
       return filter.format
         ? `media-type/${filter.kind}/${encodeURIComponent(filter.format)}`
         : `media-type/${filter.kind}`;
+    case "name":
+      return `name/${filter.bucket}`;
     case "size":
       return `size/${filter.range}`;
     case "aspect":
@@ -182,6 +193,11 @@ export function parseFilter(root: string): GalleryFilter {
       return format ? { type: "media-type", kind, format } : { type: "media-type", kind };
     }
   }
+  if (lr.startsWith("name/") || lr.startsWith("names/")) {
+    const prefix = lr.startsWith("name/") ? "name/" : "names/";
+    const bucket = r.slice(prefix.length).trim().split("/")[0]?.trim();
+    if (bucket) return { type: "name", bucket };
+  }
   if (lr.startsWith("size/")) {
     const range = r.slice("size/".length).trim().split("/")[0]?.trim();
     if (range) return { type: "size", range };
@@ -211,6 +227,10 @@ export function filterMediaFormat(f: GalleryFilter): string | null {
   return f.type === "media-type" ? f.format?.trim() || null : null;
 }
 
+export function filterNameBucket(f: GalleryFilter): string | null {
+  return f.type === "name" ? f.bucket : null;
+}
+
 export function filterSizeRange(f: GalleryFilter): string | null {
   return f.type === "size" ? f.range : null;
 }
@@ -228,6 +248,7 @@ export function isSimpleFilter(f: GalleryFilter): boolean {
     case "date":
     case "date-range":
     case "media-type":
+    case "name":
     case "size":
     case "aspect":
       return true;
@@ -332,6 +353,24 @@ function tryParseMediaTypeGalleryPath(segs: string[]): ParsedGalleryPath | null 
   }
   const { sort, pageSize, page } = parseTail(tail);
   return { filter, sort, page, pageSize, search: "" };
+}
+
+/**
+ * 解析 `name/<bucket>/[desc/][x{n}x/]<page>`。
+ */
+function tryParseNameGalleryPath(segs: string[]): ParsedGalleryPath | null {
+  const root = segs[0]?.toLowerCase();
+  if (segs.length < 2 || (root !== "name" && root !== "names")) {
+    return null;
+  }
+  const bucket = segs[1]!.trim();
+  if (!bucket) return null;
+  const filter: GalleryFilter = { type: "name", bucket };
+  const tail = segs.slice(2);
+  if (tail.length === 0) {
+    return { filter, sort: "asc", page: DEFAULT_PAGE, pageSize: DEFAULT_PAGE_SIZE, search: "" };
+  }
+  return { filter, ...parseTail(tail), search: "" };
 }
 
 /**
@@ -474,6 +513,11 @@ export function parseGalleryPath(path: string): ParsedGalleryPath {
   const mediaParsed = tryParseMediaTypeGalleryPath(segs);
   if (mediaParsed) {
     return { ...mediaParsed, search };
+  }
+
+  const nameParsed = tryParseNameGalleryPath(segs);
+  if (nameParsed) {
+    return { ...nameParsed, search };
   }
 
   const dateRangeParsed = tryParseDateRangeGalleryPath(segs);

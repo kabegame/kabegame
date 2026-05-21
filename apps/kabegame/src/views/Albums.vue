@@ -102,10 +102,18 @@ import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { thumbnailToUrl } from "@kabegame/core/httpServer";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
+import {
+  albumSubtreeContainsAny,
+  buildAlbumMediaNodes,
+  fetchAlbumDirectCounts,
+  flattenAlbumMediaNodes,
+  loadAlbumMediaPreview,
+  type AlbumMediaNode,
+} from "@/utils/albumMediaTree";
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
-const { albums, albumCounts } = storeToRefs(albumStore);
+const { albums, albumRoots } = storeToRefs(albumStore);
 const globalPathRoute = useGlobalPathRoute();
 const { hide: globalHide } = storeToRefs(globalPathRoute);
 const router = useRouter();
@@ -224,97 +232,46 @@ const albumListPath = computed(() => (globalHide.value ? "hide/album/" : "album/
 const albumVideoPreviewRemountKey = ref(0);
 const albumsSkipFirstActivateForVideoRemount = ref(true);
 
-interface ProviderChildDir {
-  kind: "dir";
-  name: string;
-  meta?: {
-    kind?: string;
-    data?: Record<string, unknown>;
-  } | null;
-  total?: number | null;
-}
-
-interface GalleryBrowseResult {
-  entries?: Array<{ kind: string; image?: ImageInfo }>;
-}
-
-const displayedAlbumRoots = ref<Album[]>([]);
-const displayedAlbumCounts = ref<Record<string, number>>({});
+const displayedAlbumRoots = computed(() => albumRoots.value);
+const albumDirectCounts = ref<Record<string, number>>({});
+const displayedAlbumNodes = computed(() =>
+  buildAlbumMediaNodes(displayedAlbumRoots.value, albums.value, albumDirectCounts.value, globalHide.value),
+);
+const displayedAlbumNodeById = computed(() => {
+  const entries = displayedAlbumNodes.value
+    .flatMap((node) => flattenAlbumMediaNodes(node))
+    .map((node) => [node.album.id, node] as const);
+  return Object.fromEntries(entries) as Record<string, AlbumMediaNode>;
+});
+const displayedAlbumCounts = computed(() => {
+  const out: Record<string, number> = {};
+  for (const node of Object.values(displayedAlbumNodeById.value)) {
+    out[node.album.id] = node.aggregateTotal;
+  }
+  return out;
+});
 const displayedAlbumCountsForPicker = computed(() => ({
-  ...albumCounts.value,
   ...displayedAlbumCounts.value,
 }));
 
-function albumFromProviderChild(child: ProviderChildDir): Album | null {
-  if (child.meta?.kind !== "album") return null;
-  const data = child.meta.data ?? {};
-  const id = String(data.id ?? child.name ?? "").trim();
-  if (!id || id === HIDDEN_ALBUM_ID) return null;
-  const createdAt = data.createdAt ?? data.created_at ?? 0;
-  return {
-    id,
-    name: String(data.name ?? child.name ?? ""),
-    parentId: data.parentId == null ? null : String(data.parentId),
-    createdAt: typeof createdAt === "number" ? createdAt : Number(createdAt) || 0,
-  };
+async function refreshAlbumDirectCounts(albumIds?: Iterable<string>) {
+  const ids = albumIds ?? albums.value.map((album) => album.id);
+  const counts = await fetchAlbumDirectCounts(ids, globalHide.value);
+  albumDirectCounts.value = { ...albumDirectCounts.value, ...counts };
 }
 
-async function loadProviderAlbumList() {
-  const entries = await invoke<ProviderChildDir[]>("list_provider_children", {
-    path: albumListPath.value,
-  });
-  const roots: Album[] = [];
-  const counts: Record<string, number> = {};
-  for (const child of Array.isArray(entries) ? entries : []) {
-    if (!child || child.kind !== "dir") continue;
-    const album = albumFromProviderChild(child);
-    if (!album) continue;
-    roots.push(album);
-    counts[album.id] = typeof child.total === "number" ? child.total : 0;
+function removeLocalAlbumMediaState(albumIds: Iterable<string>) {
+  const ids = new Set(albumIds);
+  for (const id of ids) {
+    delete albumDirectCounts.value[id];
+    clearAlbumPreviewCache(id);
   }
-  displayedAlbumRoots.value = roots;
-  displayedAlbumCounts.value = counts;
 }
 
-function albumBasePath(albumId: string): string {
-  const base = albumListPath.value.replace(/\/+$/, "");
-  return `${base}/${encodeURIComponent(albumId)}`;
-}
-
-function albumPreviewPath(albumId: string, limit = albumPreviewLimit): string {
-  return `${albumBasePath(albumId)}/order/x${limit}x/1/`;
-}
-
-async function listProviderDirs(path: string): Promise<ProviderChildDir[]> {
-  const entries = await invoke<ProviderChildDir[]>("list_provider_children", { path });
-  return (Array.isArray(entries) ? entries : []).filter(
-    (e): e is ProviderChildDir =>
-      !!e && e.kind === "dir" && typeof e.name === "string" && !!e.name,
-  );
-}
-
-async function fetchProviderImages(path: string): Promise<ImageInfo[]> {
-  const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", { path });
-  return (res?.entries ?? [])
-    .filter((e): e is { kind: string; image: ImageInfo } => e?.kind === "image" && !!e.image)
-    .map((e) => e.image);
-}
-
-async function loadAlbumPreviewFromProvider(albumId: string, limit = albumPreviewLimit): Promise<ImageInfo[]> {
-  const out = await fetchProviderImages(albumPreviewPath(albumId, limit));
-  if (out.length >= limit) return out.slice(0, limit);
-
-  const children = await listProviderDirs(`${albumBasePath(albumId)}/`);
-  for (const child of children) {
-    const childAlbum = albumFromProviderChild(child);
-    if (!childAlbum) continue;
-    const childImages = await fetchProviderImages(albumPreviewPath(childAlbum.id, 3));
-    for (const image of childImages) {
-      out.push(image);
-      if (out.length >= limit) return out.slice(0, limit);
-    }
-  }
-  return out;
+async function loadAlbumPreviewFromProvider(album: { id: string }, limit = albumPreviewLimit): Promise<ImageInfo[]> {
+  const node = displayedAlbumNodeById.value[album.id];
+  if (!node) return [];
+  return loadAlbumMediaPreview(node, limit);
 }
 
 // 如果删除的画册正在被“壁纸轮播”引用：自动关闭轮播，切回单张壁纸，并尽量保持当前壁纸不变
@@ -385,23 +342,23 @@ useAlbumImagesChangeRefresh({
   waitMs: 1000,
   filter: (p) => {
     const ids = p.albumIds ?? [];
-    return ids.includes(HIDDEN_ALBUM_ID) || ids.some((aid) => albums.value.some((a) => a.id === aid));
+    return ids.length === 0 || ids.includes(HIDDEN_ALBUM_ID) || ids.some((aid) => albums.value.some((a) => a.id === aid));
   },
   onRefresh: async (p) => {
     const affected = new Set(p.albumIds ?? []);
+    const allAffected = affected.size === 0;
     const hiddenAffected = affected.has(HIDDEN_ALBUM_ID);
-    await loadProviderAlbumList();
-    for (const album of displayedAlbumRoots.value) {
-      if (!affected.has(album.id) && !hiddenAffected) continue;
+    const idsToRefresh = allAffected || hiddenAffected
+      ? albums.value.map((album) => album.id)
+      : albums.value.filter((album) => affected.has(album.id)).map((album) => album.id);
+    await refreshAlbumDirectCounts(idsToRefresh);
 
-      const images = albumPreviewImages.value[album.id];
-      if (!hiddenAffected && images && images.length >= albumPreviewLimit) {
-        const allLoaded = images.every((img) => hasPreviewUrl(img));
-        if (allLoaded) continue;
-      }
+    for (const node of displayedAlbumNodes.value) {
+      const album = node.album;
+      const subtreeAffected = albumSubtreeContainsAny(node, affected);
+      if (!allAffected && !subtreeAffected && !hiddenAffected) continue;
 
       clearAlbumPreviewCache(album.id);
-      delete albumStore.albumPreviews[album.id];
       await prefetchPreview(album);
     }
   },
@@ -410,10 +367,8 @@ useAlbumImagesChangeRefresh({
 onMounted(async () => {
   startLoading();
   try {
-    await Promise.all([
-      albumStore.loadAlbums(),
-      loadProviderAlbumList(),
-    ]);
+    await albumStore.loadAlbums();
+    await refreshAlbumDirectCounts();
   } finally {
     finishLoading();
   }
@@ -439,10 +394,7 @@ onMounted(async () => {
 
 // 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表，并等待设置缓存就绪。
 onActivated(async () => {
-  await Promise.all([
-    albumStore.loadAlbums(),
-    loadProviderAlbumList(),
-  ]);
+  await albumStore.loadAlbums();
   await settingsStore.ensureLoaded();
 
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
@@ -485,10 +437,8 @@ onActivated(async () => {
 const handleRefresh = async () => {
   isRefreshing.value = true;
   try {
-    await Promise.all([
-      albumStore.loadAlbums(),
-      loadProviderAlbumList(),
-    ]);
+    await albumStore.loadAlbums();
+    await refreshAlbumDirectCounts();
     await settingsStore.ensureLoaded();
     // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来"没刷新"）
     const albumsToPreload = displayedAlbumRoots.value.slice(0, 6);
@@ -521,13 +471,13 @@ const handleRefresh = async () => {
   }
 };
 
-watch(albumListPath, async () => {
+watch(globalHide, async () => {
   albumPreviewImages.value = {};
   albumIsLoading.value.clear();
   albumsListKey.value++;
   startLoading();
   try {
-    await loadProviderAlbumList();
+    await refreshAlbumDirectCounts();
     for (const album of displayedAlbumRoots.value.slice(0, 6)) {
       prefetchPreview(album);
     }
@@ -540,9 +490,7 @@ watch(albumListPath, async () => {
 const handleCreateAlbum = async () => {
   if (!newAlbumName.value.trim()) return;
   try {
-    const created = await albumStore.createAlbum(newAlbumName.value.trim());
-    await loadProviderAlbumList();
-    await prefetchPreview(created);
+    await albumStore.createAlbum(newAlbumName.value.trim(), { reload: false });
     newAlbumName.value = "";
     showCreateDialog.value = false;
     ElMessage.success("画册已创建");
@@ -627,7 +575,7 @@ const prefetchPreview = async (album: { id: string }) => {
 
   try {
     // 加载预览图片列表（桌面 3 张，安卓 1 张）
-    const previewImages = await loadAlbumPreviewFromProvider(album.id, albumPreviewLimit);
+    const previewImages = await loadAlbumPreviewFromProvider(album, albumPreviewLimit);
     albumPreviewImages.value[album.id] = previewImages;
   } catch (error) {
     console.error("加载画册预览失败:", error);
@@ -715,12 +663,11 @@ const handleAlbumMenuCommand = async (
       t("albums.confirmDelete"),
       { type: "warning" }
     );
+    const deletedIds = [id, ...albumStore.getDescendantIds(id)];
     await albumStore.deleteAlbum(id);
     // 如果删除的是当前轮播画册：自动关闭轮播并切回单张壁纸
     await handleDeletedRotationAlbum(id);
-    clearAlbumPreviewCache(id);
-    await albumStore.loadAlbums();
-    await loadProviderAlbumList();
+    removeLocalAlbumMediaState(deletedIds);
     ElMessage.success(t("albums.albumDeleted"));
   } catch (error) {
     if (error !== "cancel") {

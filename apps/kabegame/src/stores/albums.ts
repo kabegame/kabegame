@@ -25,9 +25,23 @@ export interface Album {
   createdAt: number;
 }
 
+type ProviderAlbumEntry = {
+  kind: "dir";
+  name: string;
+  meta?: {
+    kind?: string;
+    data?: Record<string, unknown>;
+  } | null;
+};
+
+type ProviderAlbumListing = {
+  entries?: ProviderAlbumEntry[];
+};
+
 function parseParentId(raw: unknown): string | null {
   if (raw === undefined || raw === null) return null;
   const s = String(raw).trim();
+  if (s === "null" || s === "undefined") return null;
   return s ? s : null;
 }
 
@@ -42,6 +56,19 @@ function normalizeAlbumRow(a: Record<string, unknown>): Album {
     parentId: parseParentId(a.parent_id ?? a.parentId),
     createdAt: typeof createdAt === "number" ? createdAt : Number(createdAt) || 0,
   };
+}
+
+function albumFromProviderEntry(entry: ProviderAlbumEntry): Album | null {
+  if (!entry || entry.kind !== "dir" || entry.meta?.kind !== "album") return null;
+  const data = entry.meta.data ?? {};
+  const id = String(data.id ?? entry.name ?? "").trim();
+  if (!id) return null;
+  return normalizeAlbumRow({
+    id,
+    name: data.name ?? entry.name,
+    parentId: data.parentId,
+    createdAt: data.createdAt,
+  });
 }
 
 export const useAlbumStore = defineStore("albums", () => {
@@ -137,13 +164,7 @@ export const useAlbumStore = defineStore("albums", () => {
       album.name = changes.name;
     }
     if (Object.prototype.hasOwnProperty.call(changes, "parentId")) {
-      const raw = changes.parentId;
-      if (raw === null || raw === undefined) {
-        album.parentId = null;
-      } else {
-        const s = String(raw).trim();
-        album.parentId = s ? s : null;
-      }
+      album.parentId = parseParentId(changes.parentId);
     }
   };
 
@@ -206,10 +227,12 @@ export const useAlbumStore = defineStore("albums", () => {
     await initEventListeners();
     loading.value = true;
     try {
-      const res = await invoke<Album[]>("get_albums");
-      const rows = (Array.isArray(res) ? res : []).map((a) =>
-        normalizeAlbumRow(a as unknown as Record<string, unknown>),
-      );
+      const res = await invoke<ProviderAlbumListing>("query_provider", {
+        path: "albums://all",
+      });
+      const rows = (res.entries ?? [])
+        .map(albumFromProviderEntry)
+        .filter((a): a is Album => !!a);
       albums.value = rows.sort((a, b) => b.createdAt - a.createdAt);
       try {
         const counts = await invoke<Record<string, number>>("get_album_counts");

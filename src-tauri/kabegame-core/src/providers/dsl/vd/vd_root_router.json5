@@ -2,7 +2,7 @@
     "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "vd_root_router",
-    // i18n 分发层: 主机读 locale 后拼路径 /vd/i18n-<locale>/<...> 进入对应翻译树
+    // i18n 分发层: 主机读 locale 后拼路径 images://vd/i18n-<locale>/<...> 进入对应翻译树
     // 详见 cocs/provider-dsl/RULES.md §11.1
     // 对齐旧版 VdRootProvider: 整个 VD 子树继承 gallery row fields + id ASC 基础排序。
     "query": {

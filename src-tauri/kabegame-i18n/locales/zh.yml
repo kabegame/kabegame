@@ -45,6 +45,7 @@ plugins:
 vd:
   all: 全部
   plugin: 按插件
+  name: 按名称
   date: 按时间
   dateRange: 按时间范围
   album: 画册

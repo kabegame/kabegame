@@ -13,7 +13,7 @@ use super::{
     ChildEntry, DelegateTransform, EngineError, ListRef, Provider, ProviderContext, ProviderKey,
     ResolveRef, SqlExecutor,
 };
-use crate::ast::{Namespace, ProviderName};
+use crate::ast::{Namespace, ProviderName, SimpleName};
 use crate::compose::ProviderQuery;
 use crate::template::eval::{TemplateContext, TemplateValue};
 #[cfg(feature = "json5")]
@@ -172,6 +172,31 @@ impl ProviderRuntime {
         let mut registry = (*self.registry.load_full()).clone();
         let key = provider_key_from_def(&provider);
         registry.register(provider)?;
+        self.registry.store(Arc::new(registry));
+        self.invalidate_provider_cache(&key);
+        Ok(())
+    }
+
+    /// Dynamically register a programmatic provider factory.
+    pub fn register_programmatic_provider<F>(
+        &self,
+        namespace: &str,
+        name: &str,
+        factory: F,
+    ) -> Result<(), EngineError>
+    where
+        F: Fn(&HashMap<String, TemplateValue>) -> Result<Arc<dyn Provider>, EngineError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        let mut registry = (*self.registry.load_full()).clone();
+        let key = ProviderKey::new(namespace, name);
+        registry.register_provider(
+            Namespace(namespace.to_string()),
+            SimpleName(name.to_string()),
+            factory,
+        )?;
         self.registry.store(Arc::new(registry));
         self.invalidate_provider_cache(&key);
         Ok(())
@@ -561,8 +586,14 @@ impl ProviderRuntime {
     /// 内部链路: resolve(path) → composed.build_sql(globals ctx, dialect) → executor.execute。
     pub fn fetch(&self, path: &str) -> Result<Vec<serde_json::Value>, EngineError> {
         let node = self.resolve(path)?;
-        if node.provider.is_none() {
+        let provider = if let Some(provider) = node.provider.as_ref() {
+            provider
+        } else {
             return Err(EngineError::NoProvider(path.to_string()));
+        };
+        let provider_ctx = self.make_ctx();
+        if let Some(rows) = provider.fetch_rows(&node.composed, &provider_ctx)? {
+            return Ok(rows);
         }
         let ctx = self.template_context();
         let dialect = self.executor.dialect();
@@ -873,6 +904,103 @@ mod tests {
     fn register_schema_basic() {
         let runtime = runtime_with_root(Arc::new(ImagesLeaf));
         assert_eq!(runtime.registered_schemes(), vec!["test".to_string()]);
+    }
+
+    #[test]
+    fn programmatic_provider_registered_and_resolvable() {
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        runtime
+            .register_programmatic_provider("", "__root", |_| Ok(Arc::new(ImagesLeaf)))
+            .unwrap();
+        runtime
+            .register_schema("test", "schema_table", "", "__root")
+            .unwrap();
+        let resolved = runtime.resolve("test://").unwrap();
+        assert_eq!(resolved.composed.from.unwrap().0, "images");
+    }
+
+    #[test]
+    fn programmatic_provider_can_return_rows_without_sql() {
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        runtime
+            .register_programmatic_provider("", "__root", |_| Ok(Arc::new(RowsProvider)))
+            .unwrap();
+        runtime
+            .register_schema("test", "(SELECT 1)", "", "__root")
+            .unwrap();
+        let rows = runtime.fetch("test://").unwrap();
+        assert_eq!(rows, vec![serde_json::json!({ "id": 1 })]);
+    }
+
+    #[test]
+    fn programmatic_provider_properties_passed_to_factory() {
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let seen_for_factory = seen.clone();
+        runtime
+            .register_programmatic_provider("test_ns", "rows", move |props| {
+                *seen_for_factory.lock().unwrap() = Some(props.clone());
+                Ok(Arc::new(RowsProvider))
+            })
+            .unwrap();
+        let root: ProviderDef = serde_json::from_str(
+            r#"{
+                "namespace": "test_ns",
+                "name": "root",
+                "resolve": {
+                    "id_([^/]+)": {
+                        "provider": "rows",
+                        "properties": { "row_id": "${capture[1]}" }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        runtime.register_provider(root).unwrap();
+        runtime
+            .register_schema("test", "(SELECT 1)", "test_ns", "root")
+            .unwrap();
+
+        let rows = runtime.fetch("test://id_abc").unwrap();
+        assert_eq!(rows, vec![serde_json::json!({ "id": 1 })]);
+        let seen = seen.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            seen.get("row_id"),
+            Some(&TemplateValue::Text("abc".to_string()))
+        );
+    }
+
+    #[test]
+    fn programmatic_and_dsl_coexist_in_registry() {
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        runtime
+            .register_programmatic_provider("test_ns", "programmatic_root", |_| {
+                Ok(Arc::new(RowsProvider))
+            })
+            .unwrap();
+        let dsl_root: ProviderDef = serde_json::from_str(
+            r#"{
+                "namespace": "test_ns",
+                "name": "dsl_root"
+            }"#,
+        )
+        .unwrap();
+        runtime.register_provider(dsl_root).unwrap();
+        runtime
+            .register_schema("prog", "(SELECT 1)", "test_ns", "programmatic_root")
+            .unwrap();
+        runtime
+            .register_schema("dsl", "dsl_table", "test_ns", "dsl_root")
+            .unwrap();
+
+        assert_eq!(
+            runtime.fetch("prog://").unwrap(),
+            vec![serde_json::json!({ "id": 1 })]
+        );
+        assert_eq!(
+            runtime.resolve("dsl://").unwrap().composed.from,
+            Some(SqlExpr("dsl_table".into()))
+        );
     }
 
     #[test]
@@ -2156,6 +2284,17 @@ mod tests {
             _: &ProviderContext,
         ) -> Result<Vec<ListRef>, EngineError> {
             Ok(Vec::new())
+        }
+    }
+
+    struct RowsProvider;
+    impl Provider for RowsProvider {
+        fn fetch_rows(
+            &self,
+            _: &ProviderQuery,
+            _: &ProviderContext,
+        ) -> Result<Option<Vec<serde_json::Value>>, EngineError> {
+            Ok(Some(vec![serde_json::json!({ "id": 1 })]))
         }
     }
 

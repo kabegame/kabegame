@@ -9,32 +9,42 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub struct ImageInfo {
+    #[serde(deserialize_with = "deserialize_stringish")]
     pub id: String,
     /// 图片源 URL，本地导入时可为空。
     pub url: Option<String>,
     pub local_path: String,
-    #[serde(rename = "pluginId")]
+    #[serde(rename(serialize = "pluginId"), alias = "pluginId")]
     pub plugin_id: String,
-    #[serde(rename = "taskId")]
+    #[serde(rename(serialize = "taskId"), alias = "taskId")]
     pub task_id: Option<String>,
-    #[serde(rename = "surfRecordId")]
+    #[serde(rename(serialize = "surfRecordId"), alias = "surfRecordId")]
     #[serde(default)]
     pub surf_record_id: Option<String>,
     pub crawled_at: u64,
     /// 外键指向 `image_metadata.id`；下载入口已将 raw metadata 预先归一化为该 id。
-    #[serde(rename = "metadataId")]
+    #[serde(rename(serialize = "metadataId"), alias = "metadataId")]
     #[serde(default)]
     pub metadata_id: Option<i64>,
-    #[serde(rename = "thumbnailPath")]
+    #[serde(rename(serialize = "thumbnailPath"), alias = "thumbnailPath")]
     #[serde(default)]
     pub thumbnail_path: String,
+    #[serde(
+        default,
+        alias = "is_favorite",
+        deserialize_with = "deserialize_boolish"
+    )]
     pub favorite: bool,
     /// 是否在隐藏画册（HIDDEN_ALBUM_ID）中。前端根据此值决定上下文菜单显示"隐藏"或"取消隐藏"。
     /// VD 据此给虚拟图片文件叠加 OS hidden 属性。衍生自统一 LEFT JOIN，不是 images 表列。
-    #[serde(rename = "isHidden")]
-    #[serde(default)]
+    #[serde(
+        rename(serialize = "isHidden"),
+        alias = "isHidden",
+        default,
+        deserialize_with = "deserialize_boolish"
+    )]
     pub is_hidden: bool,
     /// 本地文件是否存在（用于前端标记缺失文件：仍展示条目，但提示用户源文件已丢失/移动）
     #[serde(default = "default_true")]
@@ -45,14 +55,14 @@ pub struct ImageInfo {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
-    #[serde(rename = "displayName")]
+    #[serde(rename(serialize = "displayName"), alias = "displayName")]
     #[serde(default)]
     pub display_name: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", alias = "media_type")]
     #[serde(default)]
     pub media_type: Option<String>,
     /// 最后一次被设为壁纸的 Unix 时间戳（秒）；从未设为壁纸则为 None。
-    #[serde(rename = "lastSetWallpaperAt")]
+    #[serde(rename(serialize = "lastSetWallpaperAt"), alias = "lastSetWallpaperAt")]
     #[serde(default)]
     pub last_set_wallpaper_at: Option<u64>,
     /// 图片磁盘大小（字节）；旧数据或无法获取时为 None。
@@ -61,9 +71,39 @@ pub struct ImageInfo {
     /// 仅在画册路径 (`/gallery/album/<id>/...`) 下被填: 该图片在 album_images 表中的 `order` 列。
     /// 顺序壁纸轮播 (sequential mode) 用它定位 next 图片 (`bigger_order` 路径)。
     /// 非画册路径的查询里恒为 None。
-    #[serde(rename = "albumOrder")]
+    #[serde(rename(serialize = "albumOrder"), alias = "albumOrder")]
     #[serde(default)]
     pub album_order: Option<i64>,
+}
+
+fn deserialize_boolish<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Bool(v) => Ok(v),
+        serde_json::Value::Number(n) => Ok(n.as_i64().unwrap_or(0) != 0),
+        serde_json::Value::String(s) => Ok(matches!(s.as_str(), "1" | "true" | "TRUE" | "True")),
+        serde_json::Value::Null => Ok(false),
+        other => Err(serde::de::Error::custom(format!(
+            "cannot deserialize bool from {other}"
+        ))),
+    }
+}
+
+fn deserialize_stringish<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        other => Err(serde::de::Error::custom(format!(
+            "cannot deserialize string from {other}"
+        ))),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

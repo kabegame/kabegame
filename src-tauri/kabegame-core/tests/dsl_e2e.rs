@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use kabegame_core::providers::dsl_loader::{register_embedded_dsl, validate_dsl};
+use kabegame_core::providers::programmatic::plugin_resource::register_plugin_resource_provider;
+use kabegame_core::storage::{Album, ImageInfo, SurfRecord, TaskInfo};
 use pathql_rs::provider::{ClosureExecutor, EngineError, SqlDialect};
 use pathql_rs::template::eval::{TemplateContext, TemplateValue};
 use pathql_rs::{LoaderType, ProviderRuntime, Source};
@@ -95,6 +97,52 @@ fn register_fixture_functions(conn: &Connection) {
     )
     .unwrap();
 
+    conn.create_scalar_function(
+        "name_language_bucket",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| -> rusqlite::Result<String> {
+            let value: String = ctx.get(0)?;
+            let bucket = value
+                .chars()
+                .find_map(|ch| {
+                    let code = ch as u32;
+                    if (0x4E00..=0x9FFF).contains(&code) || (0x3400..=0x4DBF).contains(&code) {
+                        Some("chinese")
+                    } else if (0x3040..=0x30FF).contains(&code) {
+                        Some("japanese")
+                    } else if (0xAC00..=0xD7AF).contains(&code) || (0x1100..=0x11FF).contains(&code)
+                    {
+                        Some("korean")
+                    } else if ch.is_ascii_alphabetic() {
+                        Some("english")
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or("other");
+            Ok(bucket.to_string())
+        },
+    )
+    .unwrap();
+
+    conn.create_scalar_function(
+        "name_language_rank",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| -> rusqlite::Result<i64> {
+            let bucket: String = ctx.get(0)?;
+            Ok(match bucket.as_str() {
+                "english" => 0,
+                "chinese" => 1,
+                "japanese" => 2,
+                "korean" => 3,
+                _ => 4,
+            })
+        },
+    )
+    .unwrap();
+
     for fn_name in ["get_album", "get_task", "get_surf_record"] {
         conn.create_scalar_function(
             fn_name,
@@ -151,15 +199,33 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         CREATE TABLE tasks (
             id TEXT PRIMARY KEY,
             plugin_id TEXT NOT NULL,
-            start_time INTEGER
+            output_dir TEXT,
+            user_config TEXT,
+            http_headers TEXT,
+            output_album_id TEXT,
+            run_config_id TEXT,
+            trigger_source TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            progress REAL NOT NULL DEFAULT 0,
+            deleted_count INTEGER NOT NULL DEFAULT 0,
+            dedup_count INTEGER NOT NULL DEFAULT 0,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            failed_count INTEGER NOT NULL DEFAULT 0,
+            start_time INTEGER,
+            end_time INTEGER,
+            error TEXT
         );
         CREATE TABLE surf_records (
             id TEXT PRIMARY KEY,
             host TEXT NOT NULL UNIQUE,
             root_url TEXT NOT NULL,
+            icon BLOB,
             last_visit_at INTEGER NOT NULL,
+            download_count INTEGER NOT NULL DEFAULT 0,
+            deleted_count INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
-            name TEXT NOT NULL DEFAULT ''
+            name TEXT NOT NULL DEFAULT '',
+            cookie TEXT NOT NULL DEFAULT ''
         );
         INSERT INTO albums VALUES
             ('11111111-1111-1111-1111-111111111111', 'AlbumA', 1, NULL),
@@ -167,9 +233,27 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         INSERT INTO image_metadata VALUES
             (1, '{"source":"table","tags":["a"]}');
         INSERT INTO tasks VALUES
-            ('22222222-2222-2222-2222-222222222222', 'pixiv', 10);
+            (
+                '22222222-2222-2222-2222-222222222222',
+                'pixiv',
+                NULL,
+                '{"quality":"high"}',
+                '{"User-Agent":"Kabegame"}',
+                NULL,
+                NULL,
+                'manual',
+                'done',
+                100.0,
+                0,
+                1,
+                2,
+                0,
+                10,
+                11,
+                NULL
+            );
         INSERT INTO surf_records VALUES
-            ('surf-a', 'pixiv.test', 'https://pixiv.test', 20, 10, 'Pixiv Test');
+            ('surf-a', 'pixiv.test', 'https://pixiv.test', NULL, 20, 2, 0, 10, 'Pixiv Test', '');
         "#,
     )
     .unwrap();
@@ -291,6 +375,29 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         .register_schema("images", "images", "kabegame", "images_root_provider")
         .unwrap();
     runtime
+        .register_schema("albums", "albums", "kabegame", "albums_root_provider")
+        .unwrap();
+    runtime
+        .register_schema("tasks", "tasks", "kabegame", "tasks_root_provider")
+        .unwrap();
+    runtime
+        .register_schema(
+            "surf_records",
+            "surf_records",
+            "kabegame",
+            "surf_records_root_provider",
+        )
+        .unwrap();
+    register_plugin_resource_provider(&runtime).unwrap();
+    runtime
+        .register_schema(
+            "plugin",
+            "(SELECT 1)",
+            "kabegame",
+            "plugin_resource_root_provider",
+        )
+        .unwrap();
+    runtime
 }
 
 fn ids(rows: Vec<serde_json::Value>) -> Vec<String> {
@@ -311,11 +418,69 @@ fn ids(rows: Vec<serde_json::Value>) -> Vec<String> {
 fn schema_registration_smoke_and_schemaless_paths_fail() {
     let runtime = build_runtime();
 
-    assert_eq!(runtime.registered_schemes(), vec!["images".to_string()]);
+    assert_eq!(
+        runtime.registered_schemes(),
+        vec![
+            "albums".to_string(),
+            "images".to_string(),
+            "plugin".to_string(),
+            "surf_records".to_string(),
+            "tasks".to_string()
+        ]
+    );
     assert!(runtime.list("images://gallery").is_ok());
 
     let err = runtime.list("/gallery").unwrap_err();
     assert!(matches!(err, EngineError::MissingScheme(path) if path == "/gallery"));
+}
+
+#[test]
+fn plural_resource_schemas_fetch_and_deserialize_rows() {
+    let runtime = build_runtime();
+
+    let image = runtime
+        .fetch("images://id_1")
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let image: ImageInfo = serde_json::from_value(image).unwrap();
+    assert_eq!(image.id, "1");
+
+    let album = runtime
+        .fetch(&format!("albums://id_{ALBUM_A_ID}"))
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let album: Album = serde_json::from_value(album).unwrap();
+    assert_eq!(album.id, ALBUM_A_ID);
+
+    let task = runtime
+        .fetch(&format!("tasks://id_{TASK_A_ID}"))
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let task: TaskInfo = serde_json::from_value(task).unwrap();
+    assert_eq!(task.id, TASK_A_ID);
+    assert_eq!(
+        task.user_config
+            .as_ref()
+            .and_then(|config| config.get("quality"))
+            .and_then(|value| value.as_str()),
+        Some("high")
+    );
+
+    let surf = runtime
+        .fetch("surf_records://id_surf-a")
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let surf: SurfRecord = serde_json::from_value(surf).unwrap();
+    assert_eq!(surf.id, "surf-a");
+    assert_eq!(surf.image_count, 120);
 }
 
 #[test]

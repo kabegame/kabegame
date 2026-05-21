@@ -1,7 +1,7 @@
 // Image 相关命令
 
 use kabegame_core::providers::{
-    decode_provider_path_segments, execute_provider_query, provider_runtime,
+    decode_provider_path_segments, execute_provider_query, provider_runtime, runtime_path,
 };
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::image_events::{
@@ -58,11 +58,7 @@ pub async fn list_provider_children(path: String) -> Result<serde_json::Value, S
             let rt = provider_runtime();
             // 6b 简化版：list_children_with_totals 暂未实现 per-child total（Phase 7 补）；
             // 直接 list 子节点，total 字段为 None。
-            let path = if full.starts_with('/') {
-                full.clone()
-            } else {
-                format!("/{}", full)
-            };
+            let path = runtime_path(&full);
             let children = rt.list(&path).map_err(|e| format!("list failed: {}", e))?;
             let base = path.trim_end_matches('/').to_string();
             let entries = children

@@ -9,6 +9,26 @@
     "query": {
         "where": "ai.album_id = ${properties.album_id}"
     },
+    "list": {
+        // 子画册 (parent_id = ${properties.album_id}); meta 由 runtime 按 SQL 行字段构造。
+        "${out.id}": {
+            "sql": "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id = ${properties.album_id} ORDER BY name_language_rank(name_language_bucket(COALESCE(name, ''))) ASC, name COLLATE NOCASE ASC, created_at ASC",
+            "data_var": "out",
+            "provider": "gallery_album_provider",
+            "properties": {
+                "album_id": "${out.id}"
+            },
+            "meta": {
+                "kind": "album",
+                "data": {
+                    "id": "${out.id}",
+                    "name": "${out.name}",
+                    "createdAt": "${out.created_at}",
+                    "parentId": "${out.parent_id}"
+                }
+            }
+        }
+    },
     "resolve": {
         // 控制段只用于路径解析, 不作为 gallery list children 暴露。
         "wallpaper-order": { "provider": "gallery_wallpaper_order_router" },

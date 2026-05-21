@@ -112,6 +112,9 @@
             <span>{{ $t('route.help') }}</span>
           </el-menu-item>
         </el-menu>
+        <div class="w-full pos-sticky">
+          <KamechanMascot />
+        </div>
       </el-aside>
     </template>
     <el-main class="app-main">
@@ -123,6 +126,7 @@
     </el-main>
     <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
     <nav v-if="uiStore.isCompact" class="app-bottom-tabs" aria-label="主导航">
+      
       <router-link
         v-for="tab in bottomTabs"
         :key="tab.index"
@@ -135,6 +139,7 @@
         </el-icon>
         <span class="bottom-tab-label">{{ tab.label }}</span>
       </router-link>
+      
     </nav>
   </el-container>
   </el-config-provider>
@@ -166,6 +171,7 @@ import PluginImportDialog from "./components/import/PluginImportDialog.vue";
 import CrawlerDialog from "./components/CrawlerDialog.vue";
 import MissedRunsDialog from "./components/scheduler/MissedRunsDialog.vue";
 import AutoConfigDialog from "./components/scheduler/AutoConfigDialog.vue";
+import KamechanMascot from "./components/kamechan/KamechanMascot.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
 import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
@@ -180,6 +186,7 @@ import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
 import { useFailedImagesStore } from "./stores/failedImages";
 import { useCrawlerStore } from "./stores/crawler";
+import { useAlbumStore } from "./stores/albums";
 import { useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -256,6 +263,7 @@ const { visible: crawlerDrawerVisible, initialConfig: crawlerDrawerInitialConfig
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
 const crawlerStore = useCrawlerStore();
+const albumStore = useAlbumStore();
 
 const router = useRouter();
 const modalStack = useModalStackStore();
@@ -367,7 +375,7 @@ watch(
       let image = (await invoke<ImageInfo | null>("get_image_by_id", { imageId })) ?? undefined;
 
       if (!image) {
-        const path = `/images/id_${imageId}/`;
+        const path = `images://id_${imageId}/`;
         const res = await invoke<GalleryBrowseResult>("query_provider", {
           path,
         });
@@ -477,6 +485,11 @@ onMounted(async () => {
   await settingsStore.ensureLoaded();
 
   await initializeLanguageSetting();
+  try {
+    await albumStore.loadAlbums();
+  } catch (e) {
+    console.error("初始化画册树失败:", e);
+  }
   registerHeaderFeatures();
   console.log("[App.vue] about to call pluginStore.loadPlugins()");
   try {
@@ -709,6 +722,7 @@ body,
   flex: 0 0 auto;
   display: flex;
   flex-direction: row;
+  position: relative;
   width: 100%;
   border-top: 2px solid var(--anime-border);
   background: var(--anime-bg-card);

@@ -208,7 +208,7 @@ impl Storage {
         Ok(DebugCloneImagesResult { inserted })
     }
 
-    /// 获取整理用的分批图片数据（provider path: `/images/x{limit}x/{page}`）。
+    /// 获取整理用的分批图片数据（provider path: `images://x{limit}x/{page}`）。
     pub fn get_organize_batch(
         &self,
         page: usize,

@@ -54,7 +54,7 @@
           :key="child.id"
           class="child-album-card"
           :album="child"
-          :count="albumStore.albumCounts[child.id] || 0"
+          :count="childAlbumCounts[child.id] || 0"
           :preview-images="childPreviewImages[child.id] || []"
           :video-preview-remount-key="0"
           :is-loading="false"
@@ -188,7 +188,7 @@
         v-show="!moveToRoot"
         v-model="moveTargetParentId"
         :album-tree="moveAlbumTree"
-        :album-counts="albumStore.albumCounts"
+        :album-counts="childAlbumCountsForPicker"
         :clearable="false"
         :placeholder="t('albums.selectTargetAlbum')"
       />
@@ -251,7 +251,7 @@ import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
-import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
+import { useAlbumImagesChangeRefresh, type AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
@@ -261,6 +261,14 @@ import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
+import {
+  albumSubtreeContainsAny,
+  buildAlbumMediaNodes,
+  fetchAlbumDirectCounts,
+  flattenAlbumMediaNodes,
+  loadAlbumMediaPreview,
+  type AlbumMediaNode,
+} from "@/utils/albumMediaTree";
 
 const route = useRoute();
 const { t } = useI18n();
@@ -312,10 +320,37 @@ const openVirtualDriveAlbumFolder = async () => {
   }
 };
 
-const childAlbums = computed(() => {
+const childAlbumDirectCounts = ref<Record<string, number>>({});
+const childAlbumRoots = computed(() => {
   if (!albumId.value) return [];
   return albumStore.getChildren(albumId.value);
 });
+const albumMediaHide = computed(() => albumDetailRouteStore.currentPath.startsWith("hide/"));
+const childAlbumNodes = computed(() =>
+  buildAlbumMediaNodes(
+    childAlbumRoots.value,
+    albumStore.albums,
+    childAlbumDirectCounts.value,
+    albumMediaHide.value,
+  ),
+);
+const childAlbumNodeById = computed(() => {
+  const entries = childAlbumNodes.value
+    .flatMap((node) => flattenAlbumMediaNodes(node))
+    .map((node) => [node.album.id, node] as const);
+  return Object.fromEntries(entries) as Record<string, AlbumMediaNode>;
+});
+const childAlbums = computed(() => childAlbumNodes.value.map((node) => node.album));
+const childAlbumCounts = computed(() => {
+  const out: Record<string, number> = {};
+  for (const node of Object.values(childAlbumNodeById.value)) {
+    out[node.album.id] = node.aggregateTotal;
+  }
+  return out;
+});
+const childAlbumCountsForPicker = computed(() => ({
+  ...childAlbumCounts.value,
+}));
 const showAlbumDetailTabs = computed(() => childAlbums.value.length > 0);
 const activeAlbumDetailTab = ref<"images" | "subAlbums">("images");
 const imagesTabLabel = computed(() => `${t("albums.imagesTab")} (${totalImagesCount.value})`);
@@ -358,7 +393,7 @@ const childAlbumMenuContext = computed<AlbumActionContext>(() => {
     selectedCount: 0,
     currentRotationAlbumId: currentRotationAlbumId.value,
     wallpaperRotationEnabled: wallpaperRotationEnabled.value,
-    albumImageCount: album ? (albumStore.albumCounts[album.id] || 0) : 0,
+    albumImageCount: album ? (childAlbumCounts.value[album.id] || 0) : 0,
     favoriteAlbumId: FAVORITE_ALBUM_ID,
   };
 });
@@ -392,7 +427,9 @@ watch(showAlbumDetailTabs, (hasTabs) => {
 
 const prefetchChildPreview = async (child: Album) => {
   if (childPreviewImages.value[child.id]?.length) return;
-  const imgs = await albumStore.loadAlbumPreview(child.id, isCompact.value ? 1 : 3);
+  const limit = isCompact.value ? 1 : 3;
+  const node = childAlbumNodeById.value[child.id];
+  const imgs = node ? await loadAlbumMediaPreview(node, limit) : [];
   childPreviewImages.value = { ...childPreviewImages.value, [child.id]: imgs };
 };
 
@@ -426,7 +463,8 @@ const confirmCreateSubAlbum = async () => {
   const name = newSubAlbumName.value.trim();
   if (!name || !albumId.value) return;
   try {
-    await albumStore.createAlbum(name, { parentId: albumId.value, reload: true });
+    const created = await albumStore.createAlbum(name, { parentId: albumId.value, reload: false });
+    childAlbumDirectCounts.value = { ...childAlbumDirectCounts.value, [created.id]: 0 };
     showCreateSubAlbumDialog.value = false;
     newSubAlbumName.value = "";
     activeAlbumDetailTab.value = "subAlbums";
@@ -448,6 +486,7 @@ const confirmMoveAlbum = async () => {
   }
   try {
     await albumStore.moveAlbum(album.id, pid);
+    delete childPreviewImages.value[album.id];
     showMoveAlbumDialog.value = false;
     moveDlgAlbum.value = null;
     ElMessage.success(t("albums.moveSuccess"));
@@ -530,7 +569,13 @@ const handleChildAlbumMenuCommand = async (
       t("albums.confirmDelete"),
       { type: "warning" }
     );
+    const deletedIds = [id, ...albumStore.getDescendantIds(id)];
     await albumStore.deleteAlbum(id);
+    for (const deletedId of deletedIds) {
+      delete childAlbumDirectCounts.value[deletedId];
+      delete childPreviewImages.value[deletedId];
+    }
+    delete childPreviewImages.value[id];
     ElMessage.success(t("albums.albumDeleted"));
   } catch (error) {
     if (error !== "cancel") {
@@ -573,6 +618,20 @@ const { pageSize, search } = storeToRefs(albumDetailRouteStore);
 const currentPath = computed(() => albumDetailRouteStore.currentPath);
 const currentPage = computed(() => albumDetailRouteStore.page);
 let lastTrackedAlbumPath: string | null = null;
+
+function childAlbumScopeIds(): string[] {
+  if (!albumId.value) return [];
+  return childAlbumRoots.value.flatMap((album) => [
+    album.id,
+    ...albumStore.getDescendantIds(album.id),
+  ]);
+}
+
+async function refreshChildAlbumDirectCounts(albumIds?: Iterable<string>) {
+  const ids = albumIds ?? childAlbumScopeIds();
+  const counts = await fetchAlbumDirectCounts(ids, albumMediaHide.value);
+  childAlbumDirectCounts.value = { ...childAlbumDirectCounts.value, ...counts };
+}
 
 const isAlbumWallpaperFilterEmpty = computed(() =>
   albumDetailRouteStore.filter === "wallpaper-order"
@@ -626,6 +685,35 @@ watch(
     await loadAlbum({ reset: true });
   },
   { immediate: true }
+);
+
+watch(
+  () => `${albumMediaHide.value ? "hide" : "all"}:${childAlbumScopeIds().join("|")}`,
+  async (_key, prevKey) => {
+    if (!isOnAlbumRoute.value) return;
+    const ids = childAlbumScopeIds();
+    const keep = new Set(ids);
+    for (const id of Object.keys(childAlbumDirectCounts.value)) {
+      if (!keep.has(id)) delete childAlbumDirectCounts.value[id];
+    }
+    for (const id of Object.keys(childPreviewImages.value)) {
+      if (!keep.has(id)) delete childPreviewImages.value[id];
+    }
+
+    const hideChanged = !!prevKey && prevKey.split(":")[0] !== _key.split(":")[0];
+    if (hideChanged) {
+      childAlbumDirectCounts.value = {};
+      childPreviewImages.value = {};
+      await refreshChildAlbumDirectCounts(ids);
+      return;
+    }
+
+    const missing = ids.filter((id) => childAlbumDirectCounts.value[id] == null);
+    if (missing.length > 0) {
+      await refreshChildAlbumDirectCounts(missing);
+    }
+  },
+  { immediate: true },
 );
 
 watch(
@@ -816,6 +904,8 @@ const handleRefresh = async () => {
   try {
     // 1) 刷新画册列表（名称/计数等）
     await albumStore.loadAlbums();
+    await refreshChildAlbumDirectCounts();
+    childPreviewImages.value = {};
     const found = albumStore.albums.find((a) => a.id === albumId.value);
     if (found) albumName.value = found.name;
 
@@ -1327,6 +1417,7 @@ const initAlbum = async (newAlbumId: string) => {
     });
   }
   await albumStore.loadAlbums();
+  await refreshChildAlbumDirectCounts();
   const found = albumStore.albums.find((a) => a.id === newAlbumId);
   albumName.value = found?.name || "画册";
 
@@ -1525,12 +1616,50 @@ const refreshAlbumDetailPageFromEvents = async () => {
   if (!albumId.value) return;
   const prevList = images.value.slice();
   delete albumStore.albumImages[albumId.value];
-  delete albumStore.albumPreviews[albumId.value];
   clearSelection();
   await loadAlbum({ silent: true });
 
   const { removedIds } = diffById(prevList, images.value);
   if (removedIds.length > 0) clearSelection();
+};
+
+function childAlbumEventAffectsCurrentSubtree(albumIds: ReadonlySet<string>): boolean {
+  if (!albumId.value) return false;
+  if (albumIds.size === 0) return true;
+  if (albumIds.has(HIDDEN_ALBUM_ID)) return true;
+  if (childAlbumNodes.value.some((node) => albumSubtreeContainsAny(node, albumIds))) {
+    return true;
+  }
+  const descendants = new Set(albumStore.getDescendantIds(albumId.value));
+  return Array.from(albumIds).some((id) => descendants.has(id));
+}
+
+function clearAffectedChildPreviewCaches(albumIds: ReadonlySet<string>) {
+  const allAffected = albumIds.size === 0;
+  const hiddenAffected = albumIds.has(HIDDEN_ALBUM_ID);
+  for (const node of childAlbumNodes.value) {
+    if (!allAffected && !hiddenAffected && !albumSubtreeContainsAny(node, albumIds)) continue;
+    delete childPreviewImages.value[node.album.id];
+  }
+}
+
+const refreshAlbumDetailFromAlbumImagesChange = async (p: AlbumImagesChangePayload) => {
+  if (!albumId.value) return;
+  const affected = new Set((p.albumIds ?? []).map((id) => String(id).trim()).filter(Boolean));
+  const selfAffected = affected.size === 0 || affected.has(albumId.value) || affected.has(HIDDEN_ALBUM_ID);
+  const childAffected = childAlbumEventAffectsCurrentSubtree(affected);
+
+  if (childAffected) {
+    clearAffectedChildPreviewCaches(affected);
+    const idsToRefresh = affected.size === 0 || affected.has(HIDDEN_ALBUM_ID)
+      ? childAlbumScopeIds()
+      : childAlbumScopeIds().filter((id) => affected.has(id));
+    await refreshChildAlbumDirectCounts(idsToRefresh);
+  }
+
+  if (selfAffected) {
+    await refreshAlbumDetailPageFromEvents();
+  }
 };
 
 // images 表变更：1000ms trailing 节流
@@ -1562,10 +1691,10 @@ useAlbumImagesChangeRefresh({
   waitMs: 1000,
   filter: (p) => {
     if (!albumId.value) return false;
-    const ids = p.albumIds ?? [];
-    return ids.includes(albumId.value) || ids.includes(HIDDEN_ALBUM_ID);
+    const ids = new Set((p.albumIds ?? []).map((id) => String(id).trim()).filter(Boolean));
+    return ids.size === 0 || ids.has(albumId.value) || childAlbumEventAffectsCurrentSubtree(ids);
   },
-  onRefresh: refreshAlbumDetailPageFromEvents,
+  onRefresh: refreshAlbumDetailFromAlbumImagesChange,
 });
 
 onBeforeUnmount(() => {

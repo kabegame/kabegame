@@ -1,0 +1,41 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "name_language_bucket_provider",
+    "properties": {
+        "bucket": { "type": "string", "default": "other", "optional": false }
+    },
+    "query": {
+        "where": "name_language_bucket(COALESCE(images.display_name, '')) = ${properties.bucket}",
+        "order": [
+            { "sql": "name_language_rank(name_language_bucket(COALESCE(images.display_name, '')))", "order": "asc", "clear": "all" },
+            { "sql": "COALESCE(images.display_name, '') COLLATE NOCASE", "order": "asc" },
+            { "sql": "images.id", "order": "asc" }
+        ]
+    },
+    "list": {
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
+            },
+            "meta": "${page.meta}"
+        }
+    },
+    "resolve": {
+        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
+            "delegate": {
+                "provider": "kabegame.gallery_desc_pagination_page_comb"
+            },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

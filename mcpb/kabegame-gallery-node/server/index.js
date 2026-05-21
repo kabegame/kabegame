@@ -117,9 +117,36 @@ function assertProviderPath(path) {
   if (path.startsWith("/")) {
     throw makeError("INVALID_ARGUMENT", "path must be relative (no leading slash)");
   }
+  if (path.includes("?") || path.includes("#")) {
+    throw makeError("INVALID_ARGUMENT", "path must not contain query or fragment markers");
+  }
   if (path.length > 512) {
     throw makeError("INVALID_ARGUMENT", "path is too long (max 512)");
   }
+}
+
+function imagePathToUri(path) {
+  assertProviderPath(path);
+  const trimmed = path.trim().replace(/\/+$/, "");
+  if (trimmed.startsWith("images://")) {
+    return trimmed;
+  }
+  if (/^[a-z][a-z0-9_]*:\/\//.test(trimmed)) {
+    throw makeError("INVALID_ARGUMENT", "only images:// resource paths are supported here");
+  }
+  if (
+    trimmed.startsWith("gallery/") ||
+    trimmed.startsWith("vd/") ||
+    trimmed.startsWith("id_") ||
+    /^x[1-9][0-9]*x(\/|$)/.test(trimmed)
+  ) {
+    return `images://${trimmed}`;
+  }
+  return `images://gallery/${trimmed}`;
+}
+
+function idSegment(id) {
+  return id.startsWith("id_") ? id : `id_${id}`;
 }
 
 function assertOptionalIdentifier(value, field, max = 256) {
@@ -266,7 +293,7 @@ async function callUpstreamTool(name, args) {
 const server = new Server(
   {
     name: "kabegame-gallery-local-mcpb",
-    version: "1.1.0",
+    version: "1.1.1",
   },
   {
     capabilities: {
@@ -280,22 +307,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: TOOL_NAMES.READ_PROVIDER,
       description:
-        "Read a Kabegame provider:// path. " +
-        "Append '/' for List, '/*' for ListWithMeta. " +
-        "Pass `without` (children|images) to trim list output (mutually exclusive). " +
-        "Examples: 'all/desc/1/', 'album/{id}/', 'date/2024y/03m/', 'media-type/image/'.",
+        "Read a Kabegame images:// path. Relative gallery paths are mapped under images://gallery/. " +
+        "Examples: 'gallery/all', 'all/desc/x100x/1', 'album/{id}/x100x/1', 'date/2024y/03m/'.",
       inputSchema: {
         type: "object",
         properties: {
           path: {
             type: "string",
-            description: "Provider path without URI prefix (relative, no leading '/').",
-          },
-          without: {
-            type: "string",
-            enum: ["children", "images"],
             description:
-              "Optional list-mode filter. 'children' = images only; 'images' = structure only.",
+              "images:// path, or a relative path under images://gallery/ when no scheme is provided.",
           },
         },
         required: ["path"],
@@ -303,7 +323,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: TOOL_NAMES.READ_IMAGE,
-      description: "Read full ImageInfo for an image (image://{id}).",
+      description: "Read full ImageInfo for an image (images://id_{id}).",
       inputSchema: {
         type: "object",
         properties: {
@@ -314,7 +334,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: TOOL_NAMES.READ_IMAGE_METADATA,
-      description: "Read crawl-time metadata for an image (image://{id}/metadata).",
+      description: "Read crawl-time metadata for an image (images://id_{id}/metadata).",
       inputSchema: {
         type: "object",
         properties: {
@@ -326,7 +346,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: TOOL_NAMES.READ_ALBUM,
       description:
-        "Read album info. Omit album_id to list all albums (album://); pass album_id for a single album (album://{id}).",
+        "Read album info. Omit album_id to list all albums (albums://all); pass album_id for a single album (albums://id_{id}).",
       inputSchema: {
         type: "object",
         properties: {
@@ -340,7 +360,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: TOOL_NAMES.READ_TASK,
       description:
-        "Read task info. Omit task_id to list all tasks (task://); pass task_id for a single task (task://{id}).",
+        "Read task info. Omit task_id to list all tasks (tasks://all); pass task_id for a single task (tasks://id_{id}).",
       inputSchema: {
         type: "object",
         properties: {
@@ -354,13 +374,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: TOOL_NAMES.READ_SURF,
       description:
-        "Read surf record. Omit host to list all records (surf://); pass host for a single record (surf://{host}).",
+        "Read surf record. Omit surf_record_id to list all records (surf_records://all); pass surf_record_id for a single record (surf_records://id_{id}).",
       inputSchema: {
         type: "object",
         properties: {
-          host: {
+          surf_record_id: {
             type: "string",
-            description: "Surf record host. Omit to list all surf records.",
+            description: "Surf record ID. Omit to list all surf records.",
           },
         },
       },
@@ -486,8 +506,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (name) {
       case TOOL_NAMES.READ_PROVIDER: {
         const path = args.path;
-        assertProviderPath(path);
-        let uri = `provider://${path}`;
+        const uri = imagePathToUri(path);
         if (args.without !== undefined && args.without !== null && args.without !== "") {
           if (!ALLOWED_WITHOUT.has(args.without)) {
             throw makeError(
@@ -495,7 +514,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               "without must be 'children' or 'images'",
             );
           }
-          uri += `${path.includes("?") ? "&" : "?"}without=${args.without}`;
+          if (args.without === "images") {
+            throw makeError(
+              "INVALID_ARGUMENT",
+              "without=images is no longer supported; images:// resource reads return image rows",
+            );
+          }
         }
         const result = await readResource(uri);
         return toolResponse(makeSuccess(result));
@@ -503,21 +527,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case TOOL_NAMES.READ_IMAGE: {
         assertRequiredIdentifier(args.image_id, "image_id");
-        const result = await readResource(`image://${args.image_id}`);
+        const result = await readResource(`images://${idSegment(args.image_id)}`);
         return toolResponse(makeSuccess(result));
       }
 
       case TOOL_NAMES.READ_IMAGE_METADATA: {
         assertRequiredIdentifier(args.image_id, "image_id");
-        const result = await readResource(`image://${args.image_id}/metadata`);
+        const result = await readResource(`images://${idSegment(args.image_id)}/metadata`);
         return toolResponse(makeSuccess(result));
       }
 
       case TOOL_NAMES.READ_ALBUM: {
         assertOptionalIdentifier(args.album_id, "album_id");
         const uri = isNonEmptyString(args.album_id)
-          ? `album://${args.album_id}`
-          : "album://";
+          ? `albums://${idSegment(args.album_id)}`
+          : "albums://all";
         const result = await readResource(uri);
         return toolResponse(makeSuccess(result));
       }
@@ -525,17 +549,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case TOOL_NAMES.READ_TASK: {
         assertOptionalIdentifier(args.task_id, "task_id");
         const uri = isNonEmptyString(args.task_id)
-          ? `task://${args.task_id}`
-          : "task://";
+          ? `tasks://${idSegment(args.task_id)}`
+          : "tasks://all";
         const result = await readResource(uri);
         return toolResponse(makeSuccess(result));
       }
 
       case TOOL_NAMES.READ_SURF: {
-        assertOptionalIdentifier(args.host, "host");
-        const uri = isNonEmptyString(args.host)
-          ? `surf://${args.host}`
-          : "surf://";
+        const surfRecordId = args.surf_record_id ?? args.id;
+        if (!isNonEmptyString(surfRecordId) && isNonEmptyString(args.host)) {
+          throw makeError(
+            "INVALID_ARGUMENT",
+            "read_surf now uses surf_record_id; read surf_records://all first to find the id for a host",
+          );
+        }
+        assertOptionalIdentifier(surfRecordId, "surf_record_id");
+        const uri = isNonEmptyString(surfRecordId)
+          ? `surf_records://${idSegment(surfRecordId)}`
+          : "surf_records://all";
         const result = await readResource(uri);
         return toolResponse(makeSuccess(result));
       }

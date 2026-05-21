@@ -8,6 +8,7 @@
 
 pub mod dsl_loader;
 pub mod init;
+pub mod programmatic;
 pub mod provider;
 pub mod query;
 pub mod sql_executor;
@@ -25,7 +26,7 @@ pub use query::{
     execute_provider_query_typed, gallery_date_groups_at, gallery_day_groups_at,
     gallery_media_type_counts_at, gallery_plugin_groups_at, gallery_time_filter_payload_at,
     gallery_total_count_at, image_metadata_at, images_at, organize_batch_at, parse_provider_path,
-    provider_query_to_json, ProviderPathQuery, ProviderQueryTyped,
+    provider_query_to_json, runtime_path, ProviderPathQuery, ProviderQueryTyped,
 };
 
 /// VD 专用：从 PluginManager 缓存读取插件显示名（用于「按任务」目录名展示）。

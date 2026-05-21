@@ -120,15 +120,19 @@ pub enum ProviderQueryTyped {
 }
 
 fn normalize_for_runtime(path: &str) -> String {
-    if path.is_empty() {
-        "/".to_string()
-    } else if path.contains("://") {
-        path.to_string()
-    } else if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{}", path)
+    if path.contains("://") {
+        return path.to_string();
     }
+    let trimmed = path.trim_start_matches('/');
+    if trimmed.is_empty() {
+        "images://".to_string()
+    } else {
+        format!("images://{}", trimmed)
+    }
+}
+
+pub fn runtime_path(raw: &str) -> String {
+    normalize_for_runtime(raw)
 }
 
 /// Typed 入口：解析路径并执行查询，返回未序列化的 typed 结果。
@@ -187,7 +191,7 @@ pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped
 /// **Engine service**: 路径 → ImageInfo 列表。
 /// 内部：`runtime.fetch(path)` → JSON 行 → 按列名映射到 ImageInfo (gallery_route alias 契约)。
 /// 不带启发式分支；调用方负责传一个能限定范围的 path
-/// (例如 `/gallery/all/x100x/3`，避免在 `/gallery/` 等根路径上调本函数)。
+/// (例如 `images://gallery/all/x100x/3`，避免在 `images://gallery/` 等根路径上调本函数)。
 pub fn images_at(path: &str) -> Result<Vec<ImageInfo>, String> {
     let rt = provider_runtime();
     let rows = rt.fetch(path).map_err(|e| e.to_string())?;
@@ -383,7 +387,7 @@ pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, 
 }
 
 /// IPC business 包装: 在 listing 模式下挑一组合理的图片显示。
-/// `/gallery/` 等根路径不带 limit, 直接 fetch 会拉百万级行 — 此处用 count + last-page-100
+/// `images://gallery/` 等根路径不带 limit, 直接 fetch 会拉百万级行 — 此处用 count + last-page-100
 /// 启发式选最后一页, 与前端默认行为对齐。
 fn images_for_listing(rt_path: &str) -> Result<Vec<ImageInfo>, String> {
     let rt = provider_runtime();
@@ -489,4 +493,24 @@ pub fn provider_query_to_json(t: &ProviderQueryTyped) -> Result<Value, String> {
 pub fn execute_provider_query(raw_path: &str) -> Result<Value, String> {
     let typed = execute_provider_query_typed(raw_path)?;
     provider_query_to_json(&typed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_path;
+
+    #[test]
+    fn runtime_path_promotes_schemeless_paths_to_images_schema() {
+        assert_eq!(runtime_path(""), "images://");
+        assert_eq!(runtime_path("/"), "images://");
+        assert_eq!(runtime_path("gallery/all"), "images://gallery/all");
+        assert_eq!(runtime_path("/gallery/all"), "images://gallery/all");
+    }
+
+    #[test]
+    fn runtime_path_keeps_existing_scheme() {
+        assert_eq!(runtime_path("images://x100x/1"), "images://x100x/1");
+        assert_eq!(runtime_path("vd://locale"), "vd://locale");
+        assert_eq!(runtime_path("albums://all"), "albums://all");
+    }
 }

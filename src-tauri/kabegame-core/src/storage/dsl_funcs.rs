@@ -8,6 +8,7 @@
 //!   name / description 按 locale 解析 (locale 缺省走 [`kabegame_i18n::current_vd_locale`])。
 //! - `vd_display_name(canonical)` → 当前 VD locale 下的路径显示名。
 //! - `crawled_at_seconds(timestamp)` → 规整秒/毫秒时间戳。
+//! - `name_language_bucket(name)` / `name_language_rank(bucket)` → 名称语言分桶与排序。
 //!
 //! 约束: host SQL function 不得访问当前 Storage/SQLite 连接。数据库中可查的数据应直接写
 //! SQL；否则会在 `KabegameSqlExecutor` 持有连接 mutex 期间重入同一把锁。
@@ -58,7 +59,58 @@ pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::
     register_get_plugin(conn)?;
     register_crawled_at_seconds(conn)?;
     register_vd_display_name(conn)?;
+    register_name_language_functions(conn)?;
     Ok(())
+}
+
+fn register_name_language_functions(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.create_scalar_function(
+        "name_language_bucket",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| -> rusqlite::Result<String> {
+            let value: String = ctx.get(0)?;
+            Ok(name_language_bucket(&value).to_string())
+        },
+    )?;
+    conn.create_scalar_function(
+        "name_language_rank",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| -> rusqlite::Result<i64> {
+            let bucket: String = ctx.get(0)?;
+            Ok(name_language_rank(&bucket))
+        },
+    )
+}
+
+fn name_language_bucket(value: &str) -> &'static str {
+    for ch in value.chars().filter(|ch| ch.is_alphabetic()) {
+        let code = ch as u32;
+        if (0x4E00..=0x9FFF).contains(&code) || (0x3400..=0x4DBF).contains(&code) {
+            return "chinese";
+        }
+        if (0x3040..=0x30FF).contains(&code) {
+            return "japanese";
+        }
+        if (0xAC00..=0xD7AF).contains(&code) || (0x1100..=0x11FF).contains(&code) {
+            return "korean";
+        }
+        if ch.is_ascii_alphabetic() {
+            return "english";
+        }
+    }
+    "other"
+}
+
+fn name_language_rank(bucket: &str) -> i64 {
+    match bucket {
+        "english" => 0,
+        "chinese" => 1,
+        "japanese" => 2,
+        "korean" => 3,
+        _ => 4,
+    }
 }
 
 /// `vd_display_name(canonical)` — 当前全局 locale 下 canonical 段名 (如

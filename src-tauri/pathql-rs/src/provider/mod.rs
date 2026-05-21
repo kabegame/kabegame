@@ -242,6 +242,19 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// Optional non-SQL row source for programmatic providers.
+    ///
+    /// DSL providers return `Ok(None)` and let [`ProviderRuntime::fetch`] build SQL from the
+    /// composed query. Programmatic providers can return `Some(rows)` for resources that are
+    /// not SQL-shaped, such as host-managed plugin metadata.
+    fn fetch_rows(
+        &self,
+        _composed: &ProviderQuery,
+        _ctx: &ProviderContext,
+    ) -> Result<Option<Vec<serde_json::Value>>, EngineError> {
+        Ok(None)
+    }
+
     /// EmptyInvocation 占位识别 (§12.3 + §4.4 缓存契约)。
     /// runtime 见 true 时跳过缓存写入。
     fn is_empty(&self) -> bool {

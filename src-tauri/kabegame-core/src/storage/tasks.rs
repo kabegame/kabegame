@@ -5,45 +5,79 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub struct TaskInfo {
     pub id: String,
-    #[serde(rename = "pluginId")]
+    #[serde(rename(serialize = "pluginId"), alias = "pluginId")]
     pub plugin_id: String,
-    #[serde(rename = "outputDir")]
+    #[serde(rename(serialize = "outputDir"), alias = "outputDir")]
     pub output_dir: Option<String>,
-    #[serde(rename = "userConfig")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_json_string",
+        rename(serialize = "userConfig"),
+        alias = "userConfig"
+    )]
     pub user_config: Option<HashMap<String, serde_json::Value>>,
-    #[serde(rename = "httpHeaders")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_json_string",
+        rename(serialize = "httpHeaders"),
+        alias = "httpHeaders"
+    )]
     pub http_headers: Option<HashMap<String, String>>,
-    #[serde(rename = "outputAlbumId")]
+    #[serde(rename(serialize = "outputAlbumId"), alias = "outputAlbumId")]
     pub output_album_id: Option<String>,
-    #[serde(rename = "runConfigId")]
+    #[serde(rename(serialize = "runConfigId"), alias = "runConfigId")]
     #[serde(default)]
     pub run_config_id: Option<String>,
-    #[serde(rename = "triggerSource")]
+    #[serde(rename(serialize = "triggerSource"), alias = "triggerSource")]
     #[serde(default = "default_trigger_source")]
     pub trigger_source: String,
     pub status: String,
     pub progress: f64,
-    #[serde(rename = "deletedCount")]
+    #[serde(rename(serialize = "deletedCount"), alias = "deletedCount")]
     pub deleted_count: i64,
-    #[serde(rename = "dedupCount")]
+    #[serde(rename(serialize = "dedupCount"), alias = "dedupCount")]
     #[serde(default)]
     pub dedup_count: i64,
-    #[serde(rename = "successCount", default)]
+    #[serde(rename(serialize = "successCount"), alias = "successCount", default)]
     pub success_count: i64,
-    #[serde(rename = "failedCount", default)]
+    #[serde(rename(serialize = "failedCount"), alias = "failedCount", default)]
     pub failed_count: i64,
-    #[serde(rename = "startTime")]
+    #[serde(rename(serialize = "startTime"), alias = "startTime")]
     pub start_time: Option<u64>,
-    #[serde(rename = "endTime")]
+    #[serde(rename(serialize = "endTime"), alias = "endTime")]
     pub end_time: Option<u64>,
     pub error: Option<String>,
 }
 
 fn default_trigger_source() -> String {
     "manual".to_string()
+}
+
+fn deserialize_optional_json_string<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            serde_json::from_str::<Option<T>>(trimmed).map_err(serde::de::Error::custom)
+        }
+        other => serde_json::from_value(other)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

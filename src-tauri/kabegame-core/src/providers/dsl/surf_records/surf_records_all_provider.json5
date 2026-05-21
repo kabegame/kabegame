@@ -1,0 +1,25 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "surf_records_all_provider",
+    "query": {
+        "fields": [
+            { "sql": "surf_records.id", "as": "id" },
+            { "sql": "surf_records.host", "as": "host" },
+            { "sql": "surf_records.name", "as": "name" },
+            { "sql": "surf_records.root_url", "as": "root_url" },
+            { "sql": "surf_records.cookie", "as": "cookie" },
+            { "sql": "surf_records.icon", "as": "icon" },
+            { "sql": "surf_records.last_visit_at", "as": "last_visit_at" },
+            { "sql": "surf_records.download_count", "as": "download_count" },
+            { "sql": "surf_records.deleted_count", "as": "deleted_count" },
+            { "sql": "surf_records.created_at", "as": "created_at" },
+            {
+                "sql": "(SELECT COUNT(*) FROM images WHERE images.surf_record_id = surf_records.id)",
+                "as": "image_count"
+            },
+            { "sql": "NULL", "as": "last_image" }
+        ],
+        "order": [{ "sql": "surf_records.last_visit_at", "order": "desc" }]
+    }
+}

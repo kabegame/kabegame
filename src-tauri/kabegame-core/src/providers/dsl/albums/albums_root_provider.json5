@@ -1,0 +1,16 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "albums_root_provider",
+    "query": {},
+    "list": {
+        "all": { "provider": "albums_all_provider" }
+    },
+    "resolve": {
+        "all": { "provider": "albums_all_provider" },
+        "id_([^/]+)": {
+            "provider": "albums_id_provider",
+            "properties": { "album_id": "${capture[1]}" }
+        }
+    }
+}

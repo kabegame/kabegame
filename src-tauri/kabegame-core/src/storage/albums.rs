@@ -20,7 +20,7 @@ fn validate_album_name(name: &str) -> Result<&str, String> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub struct Album {
     pub id: String,
     pub name: String,

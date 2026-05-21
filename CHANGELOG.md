@@ -6,7 +6,21 @@
 
 **Changelog entries:** Write release notes in **English** (new sections and bullets from [3.4.5] onward).
 
+## [4.1.2]
+
+### Changed
+
+- **MCP resource schemes**: The public MCP read surface now uses `images://`, `albums://`, `tasks://`, `surf_records://`, and `plugin://`. The old `provider://`, `image://`, `album://`, `task://`, and `surf://` resource schemes are no longer supported.
+- **MCP Bundle compatibility**: Updated the `kabegame-gallery-node` MCPB bridge to forward read tools to the new resource schemes while keeping the existing tool names for host-side compatibility.
+- **Documentation**: Updated the public MCP guide, reference, and bundle guide to document the new `images://` and plural table resource paths.
+
 ## [4.1.1]
+
+Main updates for release manga: (only explore those related code changes)
+1. More filter for gallery.
+2. Video with & height fill back and video will not be played automatically.
+3. background image more stable url
+4. PathQL delegate more strong.
 
 ### Added
 - **Provider DSL runtime globals**: PathQL string templates now support `${global:prefix|selector}` for host-owned display maps, enabling locale-specific VD date labels while keeping shared date providers on canonical year/month/day ids.
@@ -14,6 +28,7 @@
 - **Image Size**: Image Size ordering. And can see image dimension.
 - **Image format Provider**: Image format filtering for vd and gallery. 
 - **Image dimension Provider**: Image dimension filtering for vd and gallery.
+- **Image by name Provider**: Image name filter and ranking providers for vd and gallery.
 
 ### Changed
 - **Provider DSL loading**: Built-in DSL providers are now loaded by recursively scanning `src/providers/dsl` with an explicit non-provider exclusion list, keeping `schema.json5` and retired compatibility shims out of runtime registration.

@@ -9,7 +9,7 @@
 use kabegame_core::gallery::GalleryBrowseEntry;
 use kabegame_core::providers::{
     decode_provider_path_segments, execute_provider_query_typed, provider_query_to_json,
-    provider_runtime, ProviderQueryTyped,
+    provider_runtime, runtime_path, ProviderQueryTyped,
 };
 use kabegame_core::storage::image_events::{
     delete_images_with_events, toggle_image_favorite_with_event,
@@ -62,11 +62,7 @@ pub async fn list_provider_children(path: String) -> Result<Value, String> {
     let full = decode_provider_path_segments(&full);
     let result = tokio::task::spawn_blocking(move || -> Result<Value, String> {
         let rt = provider_runtime();
-        let path = if full.starts_with('/') {
-            full.clone()
-        } else {
-            format!("/{}", full)
-        };
+        let path = runtime_path(&full);
         let children = rt.list(&path).map_err(|e| format!("list failed: {}", e))?;
         let base = path.trim_end_matches('/').to_string();
         let entries = children

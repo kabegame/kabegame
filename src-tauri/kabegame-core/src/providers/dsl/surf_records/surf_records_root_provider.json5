@@ -1,0 +1,16 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "surf_records_root_provider",
+    "query": {},
+    "list": {
+        "all": { "provider": "surf_records_all_provider" }
+    },
+    "resolve": {
+        "all": { "provider": "surf_records_all_provider" },
+        "id_([^/]+)": {
+            "provider": "surf_records_id_provider",
+            "properties": { "surf_record_id": "${capture[1]}" }
+        }
+    }
+}
