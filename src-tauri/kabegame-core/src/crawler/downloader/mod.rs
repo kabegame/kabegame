@@ -17,31 +17,22 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::{oneshot, Mutex, Notify, RwLock};
 use tokio::time::{sleep, Duration};
 use url::Url;
-use walkdir::WalkDir;
 
 mod browser_download;
-mod content;
-mod file;
 mod http;
 pub mod native_download;
 pub mod video_compress;
 
-pub use crate::crawler::archiver::{ArchiveProcessor, ArchiveType};
 pub use browser_download::{BrowserDownloadResult, BrowserDownloadState};
 pub use http::{build_reqwest_header_map_for_emitter, create_client};
 pub use native_download::{
     compute_native_download_destination, NativeDownloadEntry, NativeDownloadState,
 };
 
-/// 下载执行类型：按 scheme 选择 http / file / content 的具体实现。
+/// 下载执行类型：按 scheme 选择具体实现。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UrlDownloaderKind {
     Http,
-    /// file://：什么都不做，只返回本地路径（去掉 file 前缀）。
-    File,
-    /// content://（Android）：复制前需通过 [set_content_permission_register] 注册可访问权限
-    ///（如 Kotlin 侧调用 `contentResolver.takePersistableUriPermission(uri, FLAG_GRANT_READ_URI_PERMISSION)`）。
-    Content,
 }
 
 /// 下载进度上报上下文（仅 HTTP 等需要流式进度的 scheme 使用）。
@@ -134,8 +125,6 @@ macro_rules! define_scheme_downloader_registry {
 
 define_scheme_downloader_registry! {
     (&["http", "https"], Http, http::HttpSchemeDownloader),
-    (&["file"], File, file::FileSchemeDownloader),
-    (&["content"], Content, content::ContentSchemeDownloader),
 }
 
 fn get_downloader_by_scheme(scheme: &str) -> Option<&'static SchemeDownloaderEnum> {
@@ -150,7 +139,7 @@ fn get_downloader_for_url(url: &Url) -> Option<&'static SchemeDownloaderEnum> {
     get_downloader_by_scheme(url.scheme())
 }
 
-/// 返回当前支持的 URL scheme 列表（与 archive::supported_types() 类似）
+/// 返回当前支持的 URL scheme 列表。
 pub fn supported_url_schemes() -> Vec<String> {
     let mut out: Vec<String> = DOWNLOADER_REGISTRY
         .iter()
@@ -465,64 +454,38 @@ pub async fn resolve_display_name(url: &str, local_path: &str) -> String {
     downloader.display_name(&parsed, local_path).await
 }
 
-/// 准备下载目标：归档保存到 images_dir/.archives/；图片为 images_dir 内路径。
-async fn prepare_download_destination(
-    job: &DownloadRequest,
-    is_archive: bool,
-    processor_ext: Option<&str>,
-) -> Result<PathBuf, String> {
-    if is_archive {
-        let ext = processor_ext.unwrap_or("zip");
-        #[cfg(target_os = "android")]
-        {
-            let archive_dir = crate::app_paths::AppPaths::global()
-                .cache_dir
-                .join("archive-download");
-            tokio::fs::create_dir_all(&archive_dir)
-                .await
-                .map_err(|e| format!("Failed to create archive dir: {}", e))?;
-            return Ok(archive_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext)));
-        }
-        #[cfg(not(target_os = "android"))]
-        {
-            let archive_dir = job.images_dir.join(".archives");
-            tokio::fs::create_dir_all(&archive_dir)
-                .await
-                .map_err(|e| format!("Failed to create archive dir: {}", e))?;
-            return Ok(archive_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext)));
-        }
-    } else {
-        #[cfg(target_os = "android")]
-        {
-            let image_cache_dir = crate::app_paths::AppPaths::global()
-                .cache_dir
-                .join("image-download");
-            tokio::fs::create_dir_all(&image_cache_dir)
-                .await
-                .map_err(|e| format!("Failed to create image cache directory: {}", e))?;
-            let parsed = Url::parse(job.url.as_str()).map_err(|e| format!("Invalid URL: {}", e))?;
-            let url_path = parsed
-                .path_segments()
-                .and_then(|segments| segments.last())
-                .unwrap_or("image");
-            let ext = Path::new(url_path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or(crate::image_type::default_image_extension())
-                .trim_start_matches('.')
-                .to_ascii_lowercase();
-            return Ok(image_cache_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext)));
-        }
-        #[cfg(not(target_os = "android"))]
-        {
-            tokio::fs::create_dir_all(&job.images_dir)
-                .await
-                .map_err(|e| format!("Failed to create output directory: {}", e))?;
-            return Ok(compute_image_download_path(
-                job.url.as_str(),
-                &job.images_dir,
-            )?);
-        }
+/// 准备图片下载目标。
+async fn prepare_download_destination(job: &DownloadRequest) -> Result<PathBuf, String> {
+    #[cfg(target_os = "android")]
+    {
+        let image_cache_dir = crate::app_paths::AppPaths::global()
+            .cache_dir
+            .join("image-download");
+        tokio::fs::create_dir_all(&image_cache_dir)
+            .await
+            .map_err(|e| format!("Failed to create image cache directory: {}", e))?;
+        let parsed = Url::parse(job.url.as_str()).map_err(|e| format!("Invalid URL: {}", e))?;
+        let url_path = parsed
+            .path_segments()
+            .and_then(|segments| segments.last())
+            .unwrap_or("image");
+        let ext = Path::new(url_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or(crate::image_type::default_image_extension())
+            .trim_start_matches('.')
+            .to_ascii_lowercase();
+        return Ok(image_cache_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext)));
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        tokio::fs::create_dir_all(&job.images_dir)
+            .await
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+        return Ok(compute_image_download_path(
+            job.url.as_str(),
+            &job.images_dir,
+        )?);
     }
 }
 
@@ -566,8 +529,7 @@ fn emit_task_image_counts_snapshot(task_id: &str) {
 
 fn clear_failed_image_after_success(failed_image_id: Option<i64>) {
     if let Some(fid) = failed_image_id {
-        let task_id = Storage::global()
-            .get_task_failed_image_by_id(fid)
+        let task_id = Storage::get_task_failed_image_by_id(fid)
             .ok()
             .flatten()
             .map(|item| item.task_id);
@@ -593,7 +555,7 @@ fn upsert_failed_image_on_failure(
     if let Some(fid) = failed_image_id {
         let _ = Storage::global().update_task_failed_image_attempt(fid, error);
         let _ = Storage::global().update_task_failed_image_header_snapshot(fid, http_headers);
-        if let Ok(Some(failed_image)) = Storage::global().get_task_failed_image_by_id(fid) {
+        if let Ok(Some(failed_image)) = Storage::get_task_failed_image_by_id(fid) {
             GlobalEmitter::global().emit_failed_image_updated(task_id, &failed_image);
         }
         return;
@@ -626,7 +588,6 @@ pub struct DownloadRequest {
     pub download_start_time: u64,
     pub output_album_id: Option<String>,
     pub http_headers: HashMap<String, String>,
-    pub archive_type: Option<ArchiveType>,
     pub browser_download: bool,
     /// 仅 browser_download 时有效：fetch 是否带 credentials（默认 true）
     pub with_credentials: bool,
@@ -755,7 +716,6 @@ impl DownloadQueue {
             download_start_time,
             output_album_id,
             http_headers,
-            None,
             false,
             true,
             None,
@@ -786,7 +746,6 @@ impl DownloadQueue {
             download_start_time,
             output_album_id,
             http_headers,
-            None,
             false,
             true,
             Some(failed_image_id),
@@ -815,7 +774,6 @@ impl DownloadQueue {
             download_start_time,
             output_album_id,
             http_headers,
-            None,
             true,
             with_credentials,
             None,
@@ -834,7 +792,6 @@ impl DownloadQueue {
         download_start_time: u64,
         output_album_id: Option<String>,
         http_headers: HashMap<String, String>,
-        archive_type: Option<ArchiveType>,
         browser_download: bool,
         with_credentials: bool,
         failed_image_id: Option<i64>,
@@ -849,63 +806,11 @@ impl DownloadQueue {
             download_start_time,
             output_album_id,
             http_headers,
-            archive_type,
             browser_download,
             with_credentials,
             failed_image_id,
             custom_display_name,
             metadata_id,
-        )
-        .await
-    }
-
-    pub async fn download_archive(
-        &self,
-        url: Url,
-        archive_type: &str,
-        images_dir: PathBuf,
-        plugin_id: String,
-        task_id: String,
-        download_start_time: u64,
-        output_album_id: Option<String>,
-        http_headers: HashMap<String, String>,
-    ) -> Result<(), String> {
-        let t = if archive_type.trim().is_empty() || archive_type.eq_ignore_ascii_case("none") {
-            if let Some(processor) = crate::crawler::archiver::get_processor_by_url(&url, None) {
-                let types = processor.supported_types();
-                if types.contains(&"zip") {
-                    Some(ArchiveType::Zip)
-                } else if types.contains(&"rar") {
-                    Some(ArchiveType::Rar)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            ArchiveType::parse(archive_type)
-        };
-
-        let Some(t) = t else {
-            return Err(format!(
-                "Unsupported or undetectable archive type: {archive_type}"
-            ));
-        };
-        self.download(
-            url,
-            images_dir,
-            plugin_id,
-            task_id,
-            download_start_time,
-            output_album_id,
-            http_headers,
-            Some(t),
-            false,
-            true,
-            None,
-            None,
-            None,
         )
         .await
     }
@@ -919,7 +824,6 @@ impl DownloadQueue {
         download_start_time: u64,
         output_album_id: Option<String>,
         http_headers: HashMap<String, String>,
-        archive_type: Option<ArchiveType>,
         browser_download: bool,
         with_credentials: bool,
         failed_image_id: Option<i64>,
@@ -939,7 +843,6 @@ impl DownloadQueue {
             download_start_time,
             output_album_id,
             http_headers,
-            archive_type,
             browser_download,
             with_credentials,
             failed_image_id,
@@ -1051,12 +954,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             None,
         );
 
-        let processor = match job.archive_type {
-            Some(ty) => crate::crawler::archiver::get_processor(ty),
-            None => crate::crawler::archiver::get_processor_by_url(&job.url, None),
-        };
-
-        // 先计算下载位置并下载，再按类型分支（归档入解压队 / 图片读内容后处理）
+        // 先计算下载位置并下载，再执行图片后处理。
         let url_clone = job.url.clone();
         let plugin_id_clone = job.plugin_id.clone();
         let task_id_clone = job.task_id.clone();
@@ -1080,109 +978,102 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             None,
         );
 
-        let is_archive = processor.is_some();
-        let processor_ext = processor.map(|p| p.supported_types()[0]);
-
         // 图片且开启去重时：若 URL 已在库中且源文件存在于本机，则跳过下载，仅入画册+发事件
-        if !is_archive {
-            let existing_opt = Settings::global()
-                .get_auto_deduplicate()
-                .then(|| Storage::find_image_by_url(job.url.as_str()).ok().flatten())
-                .flatten();
-            if let Some(ref existing) = existing_opt {
-                let existing_path = PathBuf::from(&existing.local_path);
-                if existing_path.exists() {
-                    emit_task_log(
-                        &task_id_clone,
-                        "warn",
-                        task_log_i18n(
-                            "taskLogDedupByUrl",
-                            json!({
-                                "currentUrl": url_clone.as_str(),
-                                "existingId": &existing.id,
-                                "existingUrl": existing.url.as_deref().unwrap_or(""),
-                                "existingPath": &existing.local_path,
-                            }),
-                        ),
-                    );
-                    {
-                        let mut tasks = active_tasks.lock().await;
-                        if let Some(t) = tasks.iter_mut().find(|t| {
-                            t.url == url_clone.as_str() && t.start_time == download_start_time
-                        }) {
-                            t.state = "processing".to_string();
+        let existing_opt = Settings::global()
+            .get_auto_deduplicate()
+            .then(|| Storage::find_image_by_url(job.url.as_str()).ok().flatten())
+            .flatten();
+        if let Some(ref existing) = existing_opt {
+            let existing_path = PathBuf::from(&existing.local_path);
+            if existing_path.exists() {
+                emit_task_log(
+                    &task_id_clone,
+                    "warn",
+                    task_log_i18n(
+                        "taskLogDedupByUrl",
+                        json!({
+                            "currentUrl": url_clone.as_str(),
+                            "existingId": &existing.id,
+                            "existingUrl": existing.url.as_deref().unwrap_or(""),
+                            "existingPath": &existing.local_path,
+                        }),
+                    ),
+                );
+                {
+                    let mut tasks = active_tasks.lock().await;
+                    if let Some(t) = tasks.iter_mut().find(|t| {
+                        t.url == url_clone.as_str() && t.start_time == download_start_time
+                    }) {
+                        t.state = "processing".to_string();
+                    }
+                }
+                GlobalEmitter::global().emit_download_state(
+                    &task_id_clone,
+                    url_clone.as_str(),
+                    download_start_time,
+                    &plugin_id_clone,
+                    "processing",
+                    None,
+                );
+                if !dq.is_task_canceled(&task_id_clone).await {
+                    if let Some(ref album_id) = job.output_album_id {
+                        if !album_id.trim().is_empty() {
+                            let added = Storage::global()
+                                .add_images_to_album_silent(album_id, &[existing.id.clone()]);
+                            if added > 0 {
+                                let ids = vec![existing.id.clone()];
+                                let alb = vec![album_id.clone()];
+                                GlobalEmitter::global().emit_album_images_change("add", &alb, &ids);
+                            }
                         }
+                    }
+                    if let Ok(new_count) =
+                        Storage::global().increment_task_dedup_count(&task_id_clone)
+                    {
+                        GlobalEmitter::global().emit_task_image_counts(
+                            &task_id_clone,
+                            None,
+                            None,
+                            None,
+                            Some(new_count),
+                        );
                     }
                     GlobalEmitter::global().emit_download_state(
                         &task_id_clone,
                         url_clone.as_str(),
                         download_start_time,
                         &plugin_id_clone,
-                        "processing",
+                        "completed",
                         None,
                     );
-                    if !dq.is_task_canceled(&task_id_clone).await {
-                        if let Some(ref album_id) = job.output_album_id {
-                            if !album_id.trim().is_empty() {
-                                let added = Storage::global()
-                                    .add_images_to_album_silent(album_id, &[existing.id.clone()]);
-                                if added > 0 {
-                                    let ids = vec![existing.id.clone()];
-                                    let alb = vec![album_id.clone()];
-                                    GlobalEmitter::global()
-                                        .emit_album_images_change("add", &alb, &ids);
-                                }
-                            }
-                        }
-                        if let Ok(new_count) =
-                            Storage::global().increment_task_dedup_count(&task_id_clone)
-                        {
-                            GlobalEmitter::global().emit_task_image_counts(
-                                &task_id_clone,
-                                None,
-                                None,
-                                None,
-                                Some(new_count),
-                            );
-                        }
-                        GlobalEmitter::global().emit_download_state(
-                            &task_id_clone,
-                            url_clone.as_str(),
-                            download_start_time,
-                            &plugin_id_clone,
-                            "completed",
-                            None,
-                        );
-                        clear_failed_image_after_success(job.failed_image_id);
-                    } else {
-                        GlobalEmitter::global().emit_download_state(
-                            &task_id_clone,
-                            url_clone.as_str(),
-                            download_start_time,
-                            &plugin_id_clone,
-                            "canceled",
-                            None,
-                        );
-                    }
-                    ensure_minimum_duration(download_start_time, 500).await;
-                    let mut tasks = active_tasks.lock().await;
-                    tasks.retain(|t| {
-                        t.url != url_clone.as_str() || t.start_time != download_start_time
-                    });
-                    drop(tasks);
-                    let pool = Arc::clone(&dq.pool);
-                    let mut st = pool.state.lock().await;
-                    st.in_flight = st.in_flight.saturating_sub(1);
-                    drop(st);
-                    pool.capacity_notify.notify_waiters(); // 唤醒所有等待入队的 download() 调用
-                    pool.job_notify.notify_one();
-                    wait_after_download_if_needed(&pool).await;
-                    continue;
+                    clear_failed_image_after_success(job.failed_image_id);
+                } else {
+                    GlobalEmitter::global().emit_download_state(
+                        &task_id_clone,
+                        url_clone.as_str(),
+                        download_start_time,
+                        &plugin_id_clone,
+                        "canceled",
+                        None,
+                    );
                 }
+                ensure_minimum_duration(download_start_time, 500).await;
+                let mut tasks = active_tasks.lock().await;
+                tasks
+                    .retain(|t| t.url != url_clone.as_str() || t.start_time != download_start_time);
+                drop(tasks);
+                let pool = Arc::clone(&dq.pool);
+                let mut st = pool.state.lock().await;
+                st.in_flight = st.in_flight.saturating_sub(1);
+                drop(st);
+                pool.capacity_notify.notify_waiters(); // 唤醒所有等待入队的 download() 调用
+                pool.job_notify.notify_one();
+                wait_after_download_if_needed(&pool).await;
+                continue;
             }
         }
 
-        let dest = match prepare_download_destination(&job, is_archive, processor_ext).await {
+        let dest = match prepare_download_destination(&job).await {
             Ok(path) => Some(path),
             Err(e) => {
                 emit_task_log(
@@ -1302,397 +1193,392 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                 Ok(final_path) => {
                     #[cfg(not(target_os = "android"))]
                     let _ = &final_path;
-                    // 归档：解压到固定目录（Android 内部私有目录 / 桌面临时目录），再遍历入队图片
-                    if is_archive {
-                        let archive_url = Url::from_file_path(&download_path)
-                            .expect("download_path must be valid for archive");
+                    // 后处理。content:// 用 readFileBytes；file:// 用 path。
+                    let is_content = job.url.scheme() == "content";
+                    #[cfg(not(target_os = "android"))]
+                    let _ = is_content;
 
-                        let extract_base = crate::app_paths::AppPaths::global()
-                            .temp_dir
-                            .join("archive_extract");
-                        if let Err(e) = tokio::fs::create_dir_all(&extract_base).await {
-                            eprintln!(
-                                "[Download Worker] Failed to create archive extract dir: {}",
-                                e
-                            );
-                        }
+                    // 检查整理是否正在进行，如果是则等待
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        use crate::storage::organize::OrganizeService;
+                        OrganizeService::init_organize_barrier(); // 确保初始化
+                        let organize_running = OrganizeService::get_organize_running();
 
-                        // 获取对应的 processor
-                        let processor = match job.archive_type {
-                            Some(ty) => crate::crawler::archiver::get_processor(ty),
-                            None => {
-                                crate::crawler::archiver::get_processor_by_url(&archive_url, None)
+                        if organize_running.load(std::sync::atomic::Ordering::Relaxed) {
+                            // 发送等待整理状态
+                            {
+                                let download_info = ActiveDownloadInfo {
+                                    url: job.url.to_string(),
+                                    plugin_id: job.plugin_id.clone(),
+                                    start_time: job.download_start_time,
+                                    task_id: job.task_id.clone(),
+                                    state: "等待整理".to_string(),
+                                    native: false,
+                                };
+                                let mut tasks = active_tasks.lock().await;
+                                tasks.push(download_info);
                             }
-                        };
-
-                        if let Some(proc) = processor {
                             GlobalEmitter::global().emit_download_state(
-                                &task_id_clone,
-                                url_clone.as_str(),
-                                download_start_time,
-                                &plugin_id_clone,
-                                "extracting",
+                                &job.task_id,
+                                job.url.as_str(),
+                                job.download_start_time,
+                                &job.plugin_id,
+                                "等待整理",
                                 None,
                             );
-                            match proc.process(&archive_url, &extract_base).await {
-                                Ok(extract_dir) => {
-                                    #[cfg(target_os = "android")]
-                                    {
-                                        let source_dir = extract_dir.to_string_lossy().to_string();
-                                        let copy_result = get_content_io_provider()
-                                            .copy_extracted_images_to_pictures(&source_dir)
-                                            .await;
-                                        let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-                                        let _ = tokio::fs::remove_file(&download_path).await;
-                                        match copy_result {
-                                            Ok(entries) => {
-                                                for entry in entries {
-                                                    if dq.is_task_canceled(&task_id_clone).await {
-                                                        break;
-                                                    }
-                                                    match Url::parse(&entry.content_uri) {
-                                                        Ok(img_url) => {
-                                                            let _ = dq
-                                                                .download(
-                                                                    img_url,
-                                                                    job.images_dir.clone(),
-                                                                    plugin_id_clone.clone(),
-                                                                    task_id_clone.clone(),
-                                                                    download_start_time,
-                                                                    job.output_album_id.clone(),
-                                                                    job.http_headers.clone(),
-                                                                    None,
-                                                                    false,
-                                                                    true,
-                                                                    None,
-                                                                    None,
-                                                                    None,
-                                                                )
-                                                                .await;
-                                                        }
-                                                        Err(e) => {
-                                                            eprintln!(
-                                                                "[Download Worker] Invalid content URI from picker: {} ({})",
-                                                                entry.content_uri, e
-                                                            );
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                eprintln!(
-                                                    "[Download Worker] Failed to copy extracted images to Pictures: {}",
-                                                    e
-                                                );
-                                                GlobalEmitter::global().emit_download_state(
-                                                    &task_id_clone,
-                                                    url_clone.as_str(),
-                                                    download_start_time,
-                                                    &plugin_id_clone,
-                                                    "failed",
-                                                    Some(&e),
-                                                );
-                                            }
-                                        }
-                                    }
 
-                                    #[cfg(not(target_os = "android"))]
-                                    {
-                                        // 解析压缩包名称
-                                        let archive_name =
-                                            crate::crawler::archiver::resolve_archive_name(
-                                                &archive_url,
-                                            )
-                                            .await;
-                                        // 扁平复制图片到 images_dir 根目录并逐个入队
-                                        if let Err(e) = copy_extracted_images_and_enqueue(
-                                            &extract_dir,
-                                            &job.images_dir,
-                                            &archive_name,
-                                            &dq,
-                                            &task_id_clone,
-                                            &plugin_id_clone,
-                                            download_start_time,
-                                            &job.output_album_id,
-                                            &job.http_headers,
-                                        )
-                                        .await
-                                        {
-                                            eprintln!(
-                                                "[Download Worker] Failed to copy and enqueue extracted images: {}",
-                                                e
-                                            );
-                                        }
-                                    }
-                                }
+                            // 等待整理完成
+                            let barrier = OrganizeService::get_organize_barrier();
+                            barrier.notified().await;
+                        }
+                    }
+
+                    // 后处理：processing 状态、去重逻辑、缩略图、入库、入画册、发事件
+                    {
+                        let mut tasks = active_tasks.lock().await;
+                        if let Some(t) = tasks.iter_mut().find(|t| {
+                            t.url == url_clone.as_str() && t.start_time == download_start_time
+                        }) {
+                            t.state = "processing".to_string();
+                        }
+                    }
+                    if dq.is_task_canceled(&task_id_clone).await {
+                        GlobalEmitter::global().emit_download_state(
+                            &task_id_clone,
+                            url_clone.as_str(),
+                            download_start_time,
+                            &plugin_id_clone,
+                            "canceled",
+                            None,
+                        );
+                    } else {
+                        GlobalEmitter::global().emit_download_state(
+                            &task_id_clone,
+                            url_clone.as_str(),
+                            download_start_time,
+                            &plugin_id_clone,
+                            "processing",
+                            None,
+                        );
+                        let auto_deduplicate = Settings::global().get_auto_deduplicate();
+                        #[cfg(not(target_os = "android"))]
+                        let _ = auto_deduplicate;
+
+                        #[cfg(target_os = "android")]
+                        let use_path_flow = !is_content;
+                        #[cfg(not(target_os = "android"))]
+                        let use_path_flow = true;
+
+                        // Android content://：读字节 → 哈希 → 入库；视频则生成 GIF 缩略图（与下载视频一致，前端用 kbg-local 引用）
+                        #[cfg(target_os = "android")]
+                        if !use_path_flow {
+                            let bytes = match get_content_io_provider()
+                                .read_file_bytes(url_clone.as_str())
+                                .await
+                            {
+                                Ok(b) => b,
                                 Err(e) => {
-                                    eprintln!("[Download Worker] Decompression failed: {}", e);
+                                    upsert_failed_image_on_failure(
+                                        job.failed_image_id,
+                                        &task_id_clone,
+                                        &plugin_id_clone,
+                                        url_clone.as_str(),
+                                        download_start_time as i64,
+                                        e.as_str(),
+                                        &job.http_headers,
+                                        job.metadata_id,
+                                        job.custom_display_name.as_deref(),
+                                    );
                                     GlobalEmitter::global().emit_download_state(
                                         &task_id_clone,
                                         url_clone.as_str(),
                                         download_start_time,
                                         &plugin_id_clone,
                                         "failed",
-                                        Some(&e),
+                                        Some(e.as_str()),
                                     );
+                                    GlobalEmitter::global()
+                                        .emit_task_status_from_storage(&task_id_clone);
+                                    continue;
                                 }
-                            }
-                        } else {
-                            eprintln!(
-                                "[Download Worker] No processor found for archive: {}",
-                                archive_url
-                            );
-                            GlobalEmitter::global().emit_download_state(
-                                &task_id_clone,
-                                url_clone.as_str(),
-                                download_start_time,
-                                &plugin_id_clone,
-                                "failed",
-                                Some("No processor found for archive"),
-                            );
-                        }
+                            };
+                            ensure_minimum_duration(download_start_time, 500).await;
+                            let hash = compute_bytes_hash(&bytes);
 
-                        GlobalEmitter::global().emit_download_state(
-                            &task_id_clone,
-                            url_clone.as_str(),
-                            download_start_time,
-                            &plugin_id_clone,
-                            "completed",
-                            None,
-                        );
-                    } else {
-                        // 非归档：后处理。content:// 用 readFileBytes；file:// 用 path。
-                        let is_content = job.url.scheme() == "content";
-                        #[cfg(not(target_os = "android"))]
-                        let _ = is_content;
-
-                        // 检查整理是否正在进行，如果是则等待
-                        #[cfg(not(target_os = "android"))]
-                        {
-                            use crate::storage::organize::OrganizeService;
-                            OrganizeService::init_organize_barrier(); // 确保初始化
-                            let organize_running = OrganizeService::get_organize_running();
-
-                            if organize_running.load(std::sync::atomic::Ordering::Relaxed) {
-                                // 发送等待整理状态
-                                {
-                                    let download_info = ActiveDownloadInfo {
-                                        url: job.url.to_string(),
-                                        plugin_id: job.plugin_id.clone(),
-                                        start_time: job.download_start_time,
-                                        task_id: job.task_id.clone(),
-                                        state: "等待整理".to_string(),
-                                        native: false,
-                                    };
-                                    let mut tasks = active_tasks.lock().await;
-                                    tasks.push(download_info);
-                                }
-                                GlobalEmitter::global().emit_download_state(
-                                    &job.task_id,
-                                    job.url.as_str(),
-                                    job.download_start_time,
-                                    &job.plugin_id,
-                                    "等待整理",
-                                    None,
-                                );
-
-                                // 等待整理完成
-                                let barrier = OrganizeService::get_organize_barrier();
-                                barrier.notified().await;
-                            }
-                        }
-
-                        // 后处理：processing 状态、去重逻辑、缩略图、入库、入画册、发事件
-                        {
-                            let mut tasks = active_tasks.lock().await;
-                            if let Some(t) = tasks.iter_mut().find(|t| {
-                                t.url == url_clone.as_str() && t.start_time == download_start_time
-                            }) {
-                                t.state = "processing".to_string();
-                            }
-                        }
-                        if dq.is_task_canceled(&task_id_clone).await {
-                            GlobalEmitter::global().emit_download_state(
-                                &task_id_clone,
-                                url_clone.as_str(),
-                                download_start_time,
-                                &plugin_id_clone,
-                                "canceled",
-                                None,
-                            );
-                        } else {
-                            GlobalEmitter::global().emit_download_state(
-                                &task_id_clone,
-                                url_clone.as_str(),
-                                download_start_time,
-                                &plugin_id_clone,
-                                "processing",
-                                None,
-                            );
-                            let auto_deduplicate = Settings::global().get_auto_deduplicate();
-                            #[cfg(not(target_os = "android"))]
-                            let _ = auto_deduplicate;
-
-                            #[cfg(target_os = "android")]
-                            let use_path_flow = !is_content;
-                            #[cfg(not(target_os = "android"))]
-                            let use_path_flow = true;
-
-                            // Android content://：读字节 → 哈希 → 入库；视频则生成 GIF 缩略图（与下载视频一致，前端用 kbg-local 引用）
-                            #[cfg(target_os = "android")]
-                            if !use_path_flow {
-                                let bytes = match get_content_io_provider()
-                                    .read_file_bytes(url_clone.as_str())
-                                    .await
-                                {
-                                    Ok(b) => b,
-                                    Err(e) => {
-                                        upsert_failed_image_on_failure(
-                                            job.failed_image_id,
-                                            &task_id_clone,
-                                            &plugin_id_clone,
-                                            url_clone.as_str(),
-                                            download_start_time as i64,
-                                            e.as_str(),
-                                            &job.http_headers,
-                                            job.metadata_id,
-                                            job.custom_display_name.as_deref(),
-                                        );
-                                        GlobalEmitter::global().emit_download_state(
-                                            &task_id_clone,
-                                            url_clone.as_str(),
-                                            download_start_time,
-                                            &plugin_id_clone,
-                                            "failed",
-                                            Some(e.as_str()),
-                                        );
-                                        GlobalEmitter::global()
-                                            .emit_task_status_from_storage(&task_id_clone);
-                                        continue;
-                                    }
-                                };
-                                ensure_minimum_duration(download_start_time, 500).await;
-                                let hash = compute_bytes_hash(&bytes);
-
-                                // 判断类型：仅视频生成 GIF 缩略图，供列表 kbg-local 引用
-                                let mime = get_content_io_provider()
-                                    .get_mime_type(url_clone.as_str())
-                                    .await
-                                    .ok()
-                                    .flatten();
-                                let (video_thumb_path, video_thumb_str) =
-                                    if crate::image_type::is_video_mime(&mime) {
-                                        let ext = mime
-                                            .as_deref()
-                                            .and_then(|m| crate::image_type::ext_from_mime(m))
-                                            .unwrap_or_else(|| "mp4".to_string());
-                                        let temp_dir =
-                                            crate::app_paths::AppPaths::global().temp_dir.clone();
-                                        let _ = tokio::fs::create_dir_all(&temp_dir).await;
-                                        let temp_path = temp_dir.join(format!(
-                                            "{}.{}",
-                                            uuid::Uuid::new_v4(),
-                                            ext
-                                        ));
-                                        if let Err(e) = tokio::fs::write(&temp_path, &bytes).await {
-                                            eprintln!(
+                            // 判断类型：仅视频生成 GIF 缩略图，供列表 kbg-local 引用
+                            let mime = get_content_io_provider()
+                                .get_mime_type(url_clone.as_str())
+                                .await
+                                .ok()
+                                .flatten();
+                            let (video_thumb_path, video_thumb_str) =
+                                if crate::image_type::is_video_mime(&mime) {
+                                    let ext = mime
+                                        .as_deref()
+                                        .and_then(|m| crate::image_type::ext_from_mime(m))
+                                        .unwrap_or_else(|| "mp4".to_string());
+                                    let temp_dir =
+                                        crate::app_paths::AppPaths::global().temp_dir.clone();
+                                    let _ = tokio::fs::create_dir_all(&temp_dir).await;
+                                    let temp_path =
+                                        temp_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext));
+                                    if let Err(e) = tokio::fs::write(&temp_path, &bytes).await {
+                                        eprintln!(
                                                 "[Download Worker] Android content video temp write failed: {}",
                                                 e
                                             );
-                                            (None, String::new())
-                                        } else {
-                                            match video_compress::compress_video_for_preview(
-                                                &temp_path,
-                                            )
+                                        (None, String::new())
+                                    } else {
+                                        match video_compress::compress_video_for_preview(&temp_path)
                                             .await
-                                            {
-                                                Ok(r) => {
-                                                    let p = r.preview_path;
-                                                    let _ =
-                                                        tokio::fs::remove_file(&temp_path).await;
-                                                    (
-                                                        Some(p.clone()),
-                                                        p.to_string_lossy().to_string(),
-                                                    )
-                                                }
-                                                Err(e) => {
-                                                    eprintln!(
+                                        {
+                                            Ok(r) => {
+                                                let p = r.preview_path;
+                                                let _ = tokio::fs::remove_file(&temp_path).await;
+                                                (Some(p.clone()), p.to_string_lossy().to_string())
+                                            }
+                                            Err(e) => {
+                                                eprintln!(
                                                         "[Download Worker] Android content video GIF failed: {}",
                                                         e
                                                     );
-                                                    let _ =
-                                                        tokio::fs::remove_file(&temp_path).await;
-                                                    (None, String::new())
-                                                }
+                                                let _ = tokio::fs::remove_file(&temp_path).await;
+                                                (None, String::new())
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    (None, String::new())
+                                };
+
+                            let _ = process_downloaded_content_image_to_storage(
+                                url_clone.as_str(),
+                                &hash,
+                                video_thumb_path.as_ref(),
+                                video_thumb_str.as_str(),
+                                mime,
+                                &plugin_id_clone,
+                                &task_id_clone,
+                                download_start_time,
+                                job.output_album_id.as_deref(),
+                                job.failed_image_id,
+                                &job.http_headers,
+                                job.custom_display_name.as_deref(),
+                                job.metadata_id,
+                            )
+                            .await;
+                            ensure_minimum_duration(download_start_time, 500).await;
+                        }
+
+                        // 桌面或 Android 的 file 路径：用本地 path 做哈希/缩略图/入库
+                        if use_path_flow {
+                            // Android 上 file:// 的 prepare 给出的是 cache 占位路径，实际文件在下载器返回值里，需用返回值
+                            #[cfg(target_os = "android")]
+                            let path_for_post = if url_clone.scheme() == "file" {
+                                PathBuf::from(&final_path)
+                            } else {
+                                download_path.clone()
+                            };
+                            #[cfg(not(target_os = "android"))]
+                            let path_for_post = download_path.clone();
+
+                            #[cfg(target_os = "android")]
+                            {
+                                let source_path = path_for_post.to_string_lossy().to_string();
+                                // 视频：走插件压缩生成预览，供列表/预览用
+                                let (video_thumb_path, video_thumb_str) =
+                                    if crate::image_type::is_video_by_path(&path_for_post) {
+                                        match video_compress::compress_video_for_preview(
+                                            &path_for_post,
+                                        )
+                                        .await
+                                        {
+                                            Ok(r) => {
+                                                let p = r.preview_path;
+                                                (Some(p.clone()), p.to_string_lossy().to_string())
+                                            }
+                                            Err(e) => {
+                                                eprintln!("[Download Worker] Android video compress failed: {}", e);
+                                                (None, String::new())
                                             }
                                         }
                                     } else {
                                         (None, String::new())
                                     };
-
-                                let _ = process_downloaded_content_image_to_storage(
-                                    url_clone.as_str(),
-                                    &hash,
-                                    video_thumb_path.as_ref(),
-                                    video_thumb_str.as_str(),
-                                    mime,
-                                    &plugin_id_clone,
-                                    &task_id_clone,
-                                    download_start_time,
-                                    job.output_album_id.as_deref(),
-                                    job.failed_image_id,
-                                    &job.http_headers,
-                                    job.custom_display_name.as_deref(),
-                                    job.metadata_id,
-                                )
-                                .await;
-                                ensure_minimum_duration(download_start_time, 500).await;
-                            }
-
-                            // 桌面或 Android 的 file 路径：用本地 path 做哈希/缩略图/入库
-                            if use_path_flow {
-                                // Android 上 file:// 的 prepare 给出的是 cache 占位路径，实际文件在下载器返回值里，需用返回值
-                                #[cfg(target_os = "android")]
-                                let path_for_post = if url_clone.scheme() == "file" {
-                                    PathBuf::from(&final_path)
-                                } else {
-                                    download_path.clone()
-                                };
-                                #[cfg(not(target_os = "android"))]
-                                let path_for_post = download_path.clone();
-
-                                #[cfg(target_os = "android")]
-                                {
-                                    let source_path = path_for_post.to_string_lossy().to_string();
-                                    // 视频：走插件压缩生成预览，供列表/预览用
-                                    let (video_thumb_path, video_thumb_str) =
-                                        if crate::image_type::is_video_by_path(&path_for_post) {
-                                            match video_compress::compress_video_for_preview(
-                                                &path_for_post,
-                                            )
-                                            .await
+                                if !auto_deduplicate {
+                                    let post_start = Instant::now();
+                                    match compute_file_hash(&path_for_post).await {
+                                        Ok(hash) => {
+                                            let _hash_ms = post_start.elapsed().as_millis() as u64;
+                                            let display_name = job
+                                                .custom_display_name
+                                                .as_deref()
+                                                .filter(|s| !s.trim().is_empty())
+                                                .map(|s| s.to_string())
+                                                .unwrap_or_else(|| {
+                                                    derive_display_name_from_url(url_clone.as_str())
+                                                });
+                                            let inferred_mime =
+                                                crate::image_type::mime_type_from_path(
+                                                    &path_for_post,
+                                                );
+                                            let mime_type =
+                                                inferred_mime.clone().unwrap_or_else(|| {
+                                                    mime_type_from_filename(&source_path)
+                                                });
+                                            match get_content_io_provider()
+                                                .copy_image_to_pictures(
+                                                    &source_path,
+                                                    &mime_type,
+                                                    &display_name,
+                                                )
+                                                .await
                                             {
-                                                Ok(r) => {
-                                                    let p = r.preview_path;
-                                                    (
-                                                        Some(p.clone()),
-                                                        p.to_string_lossy().to_string(),
-                                                    )
+                                                Ok(content_uri) => {
+                                                    let _ = tokio::fs::remove_file(&path_for_post)
+                                                        .await;
+                                                    let _ = process_downloaded_content_image_to_storage(
+                                                            &content_uri,
+                                                            &hash,
+                                                            video_thumb_path.as_ref(),
+                                                            video_thumb_str.as_str(),
+                                                            inferred_mime,
+                                                            &plugin_id_clone,
+                                                            &task_id_clone,
+                                                            download_start_time,
+                                                            job.output_album_id.as_deref(),
+                                                            job.failed_image_id,
+                                                            &job.http_headers,
+                                                            job.custom_display_name.as_deref(),
+                                                            job.metadata_id,
+                                                        )
+                                                        .await;
                                                 }
                                                 Err(e) => {
-                                                    eprintln!("[Download Worker] Android video compress failed: {}", e);
-                                                    (None, String::new())
+                                                    let _ = tokio::fs::remove_file(&path_for_post)
+                                                        .await;
+                                                    upsert_failed_image_on_failure(
+                                                        job.failed_image_id,
+                                                        &task_id_clone,
+                                                        &plugin_id_clone,
+                                                        url_clone.as_str(),
+                                                        download_start_time as i64,
+                                                        e.as_str(),
+                                                        &job.http_headers,
+                                                        job.metadata_id,
+                                                        job.custom_display_name.as_deref(),
+                                                    );
+                                                    GlobalEmitter::global().emit_download_state(
+                                                        &task_id_clone,
+                                                        url_clone.as_str(),
+                                                        download_start_time,
+                                                        &plugin_id_clone,
+                                                        "failed",
+                                                        Some(e.as_str()),
+                                                    );
+                                                    GlobalEmitter::global()
+                                                        .emit_task_status_from_storage(
+                                                            &task_id_clone,
+                                                        );
                                                 }
                                             }
-                                        } else {
-                                            (None, String::new())
-                                        };
-                                    if !auto_deduplicate {
-                                        let post_start = Instant::now();
-                                        match compute_file_hash(&path_for_post).await {
-                                            Ok(hash) => {
-                                                let _hash_ms =
-                                                    post_start.elapsed().as_millis() as u64;
+                                        }
+                                        Err(e) => {
+                                            let _ = tokio::fs::remove_file(&path_for_post).await;
+                                            upsert_failed_image_on_failure(
+                                                job.failed_image_id,
+                                                &task_id_clone,
+                                                &plugin_id_clone,
+                                                url_clone.as_str(),
+                                                download_start_time as i64,
+                                                e.as_str(),
+                                                &job.http_headers,
+                                                job.metadata_id,
+                                                job.custom_display_name.as_deref(),
+                                            );
+                                            GlobalEmitter::global().emit_download_state(
+                                                &task_id_clone,
+                                                url_clone.as_str(),
+                                                download_start_time,
+                                                &plugin_id_clone,
+                                                "failed",
+                                                Some(e.as_str()),
+                                            );
+                                            GlobalEmitter::global()
+                                                .emit_task_status_from_storage(&task_id_clone);
+                                        }
+                                    }
+                                } else {
+                                    match compute_file_hash(&path_for_post).await {
+                                        Ok(hash) => {
+                                            let existing_by_hash =
+                                                Storage::find_image_by_hash(&hash).ok().flatten();
+                                            if let Some(ref existing) = existing_by_hash {
+                                                emit_task_log(
+                                                    &task_id_clone,
+                                                    "warn",
+                                                    task_log_i18n(
+                                                        "taskLogDedupByHash",
+                                                        json!({
+                                                            "currentUrl": url_clone.as_str(),
+                                                            "existingId": &existing.id,
+                                                            "existingUrl": existing.url.as_deref().unwrap_or(""),
+                                                            "existingPath": &existing.local_path,
+                                                        }),
+                                                    ),
+                                                );
+                                                let _ =
+                                                    tokio::fs::remove_file(&path_for_post).await;
+                                                if let Some(ref album_id) = job.output_album_id {
+                                                    if !album_id.trim().is_empty() {
+                                                        let added = Storage::global()
+                                                            .add_images_to_album_silent(
+                                                                album_id,
+                                                                &[existing.id.clone()],
+                                                            );
+                                                        if added > 0 {
+                                                            let ids = vec![existing.id.clone()];
+                                                            let alb = vec![album_id.clone()];
+                                                            GlobalEmitter::global()
+                                                                .emit_album_images_change(
+                                                                    "add", &alb, &ids,
+                                                                );
+                                                        }
+                                                    }
+                                                }
+                                                let ids_dup = vec![existing.id.clone()];
+                                                let tid_dup = vec![task_id_clone.clone()];
+                                                GlobalEmitter::global().emit_images_change(
+                                                    "change",
+                                                    &ids_dup,
+                                                    Some(&tid_dup),
+                                                    None,
+                                                    Some(&[plugin_id_clone.clone()]),
+                                                );
+                                                if let Ok(new_count) = Storage::global()
+                                                    .increment_task_dedup_count(&task_id_clone)
+                                                {
+                                                    GlobalEmitter::global().emit_task_image_counts(
+                                                        &task_id_clone,
+                                                        None,
+                                                        None,
+                                                        None,
+                                                        Some(new_count),
+                                                    );
+                                                }
+                                                GlobalEmitter::global().emit_download_state(
+                                                    &task_id_clone,
+                                                    url_clone.as_str(),
+                                                    download_start_time,
+                                                    &plugin_id_clone,
+                                                    "completed",
+                                                    None,
+                                                );
+                                                clear_failed_image_after_success(
+                                                    job.failed_image_id,
+                                                );
+                                            } else {
                                                 let display_name = job
                                                     .custom_display_name
                                                     .as_deref()
@@ -1709,7 +1595,11 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                     );
                                                 let mime_type =
                                                     inferred_mime.clone().unwrap_or_else(|| {
-                                                        mime_type_from_filename(&source_path)
+                                                        mime_type_from_filename(
+                                                            path_for_post
+                                                                .to_string_lossy()
+                                                                .as_ref(),
+                                                        )
                                                     });
                                                 match get_content_io_provider()
                                                     .copy_image_to_pictures(
@@ -1724,21 +1614,21 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                             tokio::fs::remove_file(&path_for_post)
                                                                 .await;
                                                         let _ = process_downloaded_content_image_to_storage(
-                                                            &content_uri,
-                                                            &hash,
-                                                            video_thumb_path.as_ref(),
-                                                            video_thumb_str.as_str(),
-                                                            inferred_mime,
-                                                            &plugin_id_clone,
-                                                            &task_id_clone,
-                                                            download_start_time,
-                                                            job.output_album_id.as_deref(),
-                                                            job.failed_image_id,
-                                                            &job.http_headers,
-                                                            job.custom_display_name.as_deref(),
-                                                            job.metadata_id,
-                                                        )
-                                                        .await;
+                                                                &content_uri,
+                                                                &hash,
+                                                                video_thumb_path.as_ref(),
+                                                                video_thumb_str.as_str(),
+                                                                inferred_mime,
+                                                                &plugin_id_clone,
+                                                                &task_id_clone,
+                                                                download_start_time,
+                                                                job.output_album_id.as_deref(),
+                                                                job.failed_image_id,
+                                                                &job.http_headers,
+                                                                job.custom_display_name.as_deref(),
+                                                                job.metadata_id,
+                                                            )
+                                                            .await;
                                                     }
                                                     Err(e) => {
                                                         let _ =
@@ -1771,240 +1661,53 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                     }
                                                 }
                                             }
-                                            Err(e) => {
-                                                let _ =
-                                                    tokio::fs::remove_file(&path_for_post).await;
-                                                upsert_failed_image_on_failure(
-                                                    job.failed_image_id,
-                                                    &task_id_clone,
-                                                    &plugin_id_clone,
-                                                    url_clone.as_str(),
-                                                    download_start_time as i64,
-                                                    e.as_str(),
-                                                    &job.http_headers,
-                                                    job.metadata_id,
-                                                    job.custom_display_name.as_deref(),
-                                                );
-                                                GlobalEmitter::global().emit_download_state(
-                                                    &task_id_clone,
-                                                    url_clone.as_str(),
-                                                    download_start_time,
-                                                    &plugin_id_clone,
-                                                    "failed",
-                                                    Some(e.as_str()),
-                                                );
-                                                GlobalEmitter::global()
-                                                    .emit_task_status_from_storage(&task_id_clone);
-                                            }
                                         }
-                                    } else {
-                                        match compute_file_hash(&path_for_post).await {
-                                            Ok(hash) => {
-                                                let existing_by_hash =
-                                                    Storage::find_image_by_hash(&hash)
-                                                        .ok()
-                                                        .flatten();
-                                                if let Some(ref existing) = existing_by_hash {
-                                                    emit_task_log(
-                                                        &task_id_clone,
-                                                        "warn",
-                                                        task_log_i18n(
-                                                            "taskLogDedupByHash",
-                                                            json!({
-                                                                "currentUrl": url_clone.as_str(),
-                                                                "existingId": &existing.id,
-                                                                "existingUrl": existing.url.as_deref().unwrap_or(""),
-                                                                "existingPath": &existing.local_path,
-                                                            }),
-                                                        ),
-                                                    );
-                                                    let _ = tokio::fs::remove_file(&path_for_post)
-                                                        .await;
-                                                    if let Some(ref album_id) = job.output_album_id
-                                                    {
-                                                        if !album_id.trim().is_empty() {
-                                                            let added = Storage::global()
-                                                                .add_images_to_album_silent(
-                                                                    album_id,
-                                                                    &[existing.id.clone()],
-                                                                );
-                                                            if added > 0 {
-                                                                let ids = vec![existing.id.clone()];
-                                                                let alb = vec![album_id.clone()];
-                                                                GlobalEmitter::global()
-                                                                    .emit_album_images_change(
-                                                                        "add", &alb, &ids,
-                                                                    );
-                                                            }
-                                                        }
-                                                    }
-                                                    let ids_dup = vec![existing.id.clone()];
-                                                    let tid_dup = vec![task_id_clone.clone()];
-                                                    GlobalEmitter::global().emit_images_change(
-                                                        "change",
-                                                        &ids_dup,
-                                                        Some(&tid_dup),
-                                                        None,
-                                                        Some(&[plugin_id_clone.clone()]),
-                                                    );
-                                                    if let Ok(new_count) = Storage::global()
-                                                        .increment_task_dedup_count(&task_id_clone)
-                                                    {
-                                                        GlobalEmitter::global()
-                                                            .emit_task_image_counts(
-                                                                &task_id_clone,
-                                                                None,
-                                                                None,
-                                                                None,
-                                                                Some(new_count),
-                                                            );
-                                                    }
-                                                    GlobalEmitter::global().emit_download_state(
-                                                        &task_id_clone,
-                                                        url_clone.as_str(),
-                                                        download_start_time,
-                                                        &plugin_id_clone,
-                                                        "completed",
-                                                        None,
-                                                    );
-                                                    clear_failed_image_after_success(
-                                                        job.failed_image_id,
-                                                    );
-                                                } else {
-                                                    let display_name = job
-                                                        .custom_display_name
-                                                        .as_deref()
-                                                        .filter(|s| !s.trim().is_empty())
-                                                        .map(|s| s.to_string())
-                                                        .unwrap_or_else(|| {
-                                                            derive_display_name_from_url(
-                                                                url_clone.as_str(),
-                                                            )
-                                                        });
-                                                    let inferred_mime =
-                                                        crate::image_type::mime_type_from_path(
-                                                            &path_for_post,
-                                                        );
-                                                    let mime_type = inferred_mime
-                                                        .clone()
-                                                        .unwrap_or_else(|| {
-                                                            mime_type_from_filename(
-                                                                path_for_post
-                                                                    .to_string_lossy()
-                                                                    .as_ref(),
-                                                            )
-                                                        });
-                                                    match get_content_io_provider()
-                                                        .copy_image_to_pictures(
-                                                            &source_path,
-                                                            &mime_type,
-                                                            &display_name,
-                                                        )
-                                                        .await
-                                                    {
-                                                        Ok(content_uri) => {
-                                                            let _ = tokio::fs::remove_file(
-                                                                &path_for_post,
-                                                            )
-                                                            .await;
-                                                            let _ = process_downloaded_content_image_to_storage(
-                                                                &content_uri,
-                                                                &hash,
-                                                                video_thumb_path.as_ref(),
-                                                                video_thumb_str.as_str(),
-                                                                inferred_mime,
-                                                                &plugin_id_clone,
-                                                                &task_id_clone,
-                                                                download_start_time,
-                                                                job.output_album_id.as_deref(),
-                                                                job.failed_image_id,
-                                                                &job.http_headers,
-                                                                job.custom_display_name.as_deref(),
-                                                                job.metadata_id,
-                                                            )
-                                                            .await;
-                                                        }
-                                                        Err(e) => {
-                                                            let _ = tokio::fs::remove_file(
-                                                                &path_for_post,
-                                                            )
-                                                            .await;
-                                                            upsert_failed_image_on_failure(
-                                                                job.failed_image_id,
-                                                                &task_id_clone,
-                                                                &plugin_id_clone,
-                                                                url_clone.as_str(),
-                                                                download_start_time as i64,
-                                                                e.as_str(),
-                                                                &job.http_headers,
-                                                                job.metadata_id,
-                                                                job.custom_display_name.as_deref(),
-                                                            );
-                                                            GlobalEmitter::global()
-                                                                .emit_download_state(
-                                                                    &task_id_clone,
-                                                                    url_clone.as_str(),
-                                                                    download_start_time,
-                                                                    &plugin_id_clone,
-                                                                    "failed",
-                                                                    Some(e.as_str()),
-                                                                );
-                                                            GlobalEmitter::global()
-                                                                .emit_task_status_from_storage(
-                                                                    &task_id_clone,
-                                                                );
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                let _ =
-                                                    tokio::fs::remove_file(&path_for_post).await;
-                                                upsert_failed_image_on_failure(
-                                                    job.failed_image_id,
-                                                    &task_id_clone,
-                                                    &plugin_id_clone,
-                                                    url_clone.as_str(),
-                                                    download_start_time as i64,
-                                                    e.as_str(),
-                                                    &job.http_headers,
-                                                    job.metadata_id,
-                                                    job.custom_display_name.as_deref(),
-                                                );
-                                                GlobalEmitter::global().emit_download_state(
-                                                    &task_id_clone,
-                                                    url_clone.as_str(),
-                                                    download_start_time,
-                                                    &plugin_id_clone,
-                                                    "failed",
-                                                    Some(e.as_str()),
-                                                );
-                                                GlobalEmitter::global()
-                                                    .emit_task_status_from_storage(&task_id_clone);
-                                            }
+                                        Err(e) => {
+                                            let _ = tokio::fs::remove_file(&path_for_post).await;
+                                            upsert_failed_image_on_failure(
+                                                job.failed_image_id,
+                                                &task_id_clone,
+                                                &plugin_id_clone,
+                                                url_clone.as_str(),
+                                                download_start_time as i64,
+                                                e.as_str(),
+                                                &job.http_headers,
+                                                job.metadata_id,
+                                                job.custom_display_name.as_deref(),
+                                            );
+                                            GlobalEmitter::global().emit_download_state(
+                                                &task_id_clone,
+                                                url_clone.as_str(),
+                                                download_start_time,
+                                                &plugin_id_clone,
+                                                "failed",
+                                                Some(e.as_str()),
+                                            );
+                                            GlobalEmitter::global()
+                                                .emit_task_status_from_storage(&task_id_clone);
                                         }
                                     }
-                                    ensure_minimum_duration(download_start_time, 500).await;
                                 }
+                                ensure_minimum_duration(download_start_time, 500).await;
+                            }
 
-                                #[cfg(not(target_os = "android"))]
-                                {
-                                    let _ = postprocess_downloaded_image(
-                                        &path_for_post,
-                                        url_clone.as_str(),
-                                        &plugin_id_clone,
-                                        Some(&task_id_clone),
-                                        job.failed_image_id,
-                                        None,
-                                        download_start_time,
-                                        job.output_album_id.as_deref(),
-                                        &job.http_headers,
-                                        false,
-                                        job.custom_display_name.as_deref(),
-                                        job.metadata_id,
-                                    )
-                                    .await;
-                                }
+                            #[cfg(not(target_os = "android"))]
+                            {
+                                let _ = postprocess_downloaded_image(
+                                    &path_for_post,
+                                    url_clone.as_str(),
+                                    &plugin_id_clone,
+                                    Some(&task_id_clone),
+                                    job.failed_image_id,
+                                    None,
+                                    download_start_time,
+                                    job.output_album_id.as_deref(),
+                                    &job.http_headers,
+                                    false,
+                                    job.custom_display_name.as_deref(),
+                                    job.metadata_id,
+                                )
+                                .await;
                             }
                         }
                     }
@@ -2014,12 +1717,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                     });
                 }
                 Err(e) => {
-                    if is_archive && !e.contains("Task canceled") {
-                        eprintln!(
-                            "[Archive Error] Task: {}, URL: {}, Error: {}",
-                            task_id_clone, url_clone, e
-                        );
-                    }
                     if !e.contains("Task canceled") {
                         emit_task_log(
                             &task_id_clone,
@@ -2033,7 +1730,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             ),
                         );
                     }
-                    if !is_archive && !e.contains("Task canceled") {
+                    if !e.contains("Task canceled") {
                         upsert_failed_image_on_failure(
                             job.failed_image_id,
                             &task_id_clone,
@@ -2082,7 +1779,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
 
 /// content:// 图片入库：local_path 存 URI，thumbnail_path 为本地路径。
 #[cfg(target_os = "android")]
-async fn process_downloaded_content_image_to_storage(
+pub(crate) async fn process_downloaded_content_image_to_storage(
     content_uri: &str,
     hash: &str,
     thumbnail_path: Option<&PathBuf>,
@@ -2858,78 +2555,4 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
         .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
 
     Ok(Some(thumbnail_path))
-}
-
-/// 扁平复制解压目录中的图片到 images_dir 根目录，并逐个入队下载请求。
-/// 完成后清理临时解压目录。
-pub(crate) async fn copy_extracted_images_and_enqueue(
-    extract_dir: &Path,
-    images_dir: &Path,
-    _archive_name: &str,
-    dq: &DownloadQueue,
-    task_id: &str,
-    plugin_id: &str,
-    download_start_time: u64,
-    output_album_id: &Option<String>,
-    http_headers: &HashMap<String, String>,
-) -> Result<(), String> {
-    tokio::fs::create_dir_all(images_dir)
-        .await
-        .map_err(|e| format!("Failed to create images directory: {}", e))?;
-
-    // 2. WalkDir 遍历解压目录，扁平复制图片
-    for entry in WalkDir::new(extract_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-    {
-        if dq.is_task_canceled(task_id).await {
-            return Err("Task canceled".to_string());
-        }
-
-        let source_path = entry.path();
-        if let Some(ext) = source_path.extension().and_then(|e| e.to_str()) {
-            if crate::image_type::is_supported_media_ext(ext) {
-                // 3. 扁平复制（只取文件名，unique_path 防重名）
-                let file_name = source_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("image");
-                let dest_path = unique_path(images_dir, file_name);
-
-                tokio::fs::copy(source_path, &dest_path)
-                    .await
-                    .map_err(|e| {
-                        format!("Failed to copy image {}: {}", source_path.display(), e)
-                    })?;
-
-                // 4. 入队下载请求
-                let img_url = url::Url::from_file_path(&dest_path).map_err(|_| {
-                    format!("Failed to convert path to URL: {}", dest_path.display())
-                })?;
-                let _ = dq
-                    .download(
-                        img_url,
-                        images_dir.to_path_buf(),
-                        plugin_id.to_string(),
-                        task_id.to_string(),
-                        download_start_time,
-                        output_album_id.clone(),
-                        http_headers.clone(),
-                        None,
-                        false,
-                        true,
-                        None,
-                        None,
-                        None,
-                    )
-                    .await;
-            }
-        }
-    }
-
-    // 5. 清理 UUID 临时目录
-    let _ = tokio::fs::remove_dir_all(extract_dir).await;
-
-    Ok(())
 }

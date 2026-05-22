@@ -1,15 +1,8 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "image_basic_provider",
     "query": {
-        "fields": ["images.*"],
         "order": [{ "sql": "images.id", "order": "asc" }]
-    },
-    "list": {
-        "x100x": { "provider": "gallery_paginate_router", "properties": { "page_size": 100 } },
-        "x500x": { "provider": "gallery_paginate_router", "properties": { "page_size": 500 } },
-        "x1000x": { "provider": "gallery_paginate_router", "properties": { "page_size": 1000 } }
     },
     "resolve": {
         "x([1-9][0-9]*)x": {

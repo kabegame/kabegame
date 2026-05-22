@@ -1,0 +1,25 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_aspect_bucket_router",
+    "properties": {
+        "bucket": { "type": "string", "default": "other", "optional": false }
+    },
+    "query": {
+        "delegate": {
+            "provider": "aspect_bucket_provider",
+            "properties": {
+                "bucket": "${properties.bucket}"
+            }
+        }
+    },
+    "resolve": {
+        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
+            "delegate": {
+                "provider": "kabegame.gallery_desc_pagination_page_comb"
+            },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

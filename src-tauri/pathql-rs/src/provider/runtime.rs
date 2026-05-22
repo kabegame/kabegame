@@ -101,7 +101,7 @@ impl ProviderRuntime {
 
     /// Register a schema root for paths beginning with `scheme://`.
     ///
-    /// `scheme` must match `[a-z][a-z0-9_]*`. The named provider is
+    /// `scheme` must match `[a-z][a-z0-9_-]*`. The named provider is
     /// instantiated immediately and used as the root for that scheme. During
     /// `resolve`, the schema's `from` value seeds `ProviderQuery.from` before
     /// the root provider's query contribution is folded.
@@ -701,7 +701,7 @@ fn is_valid_scheme(scheme: &str) -> bool {
         return false;
     };
     first.is_ascii_lowercase()
-        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
 }
 
 fn normalize_segments(path: &str) -> Vec<String> {
@@ -1015,12 +1015,23 @@ mod tests {
     #[test]
     fn register_schema_returns_invalid_scheme_for_bad_identifier() {
         let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
-        for scheme in ["Images", "1images", "im-ages", ""] {
+        for scheme in ["Images", "1images", ""] {
             let err = runtime
                 .register_schema(scheme, "images", "", "missing")
                 .unwrap_err();
             assert!(matches!(err, EngineError::InvalidScheme(s) if s == scheme));
         }
+    }
+
+    #[test]
+    fn register_schema_allows_dash_in_scheme() {
+        let runtime = runtime_with_root(Arc::new(ImagesLeaf));
+        runtime
+            .register_schema("fail-images", "task_failed_images", "", "__root")
+            .unwrap();
+        assert!(runtime
+            .registered_schemes()
+            .contains(&"fail-images".to_string()));
     }
 
     #[test]

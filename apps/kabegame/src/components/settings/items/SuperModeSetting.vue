@@ -1,5 +1,5 @@
 <template>
-  <el-switch :model-value="app.isSuper" @update:model-value="(v) => app.setSuper(!!v)" />
+  <el-switch :model-value="app.isSuper" @update:model-value="(v: boolean) => app.setSuper(!!v)" />
 </template>
 
 <script setup lang="ts">

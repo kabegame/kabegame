@@ -1,10 +1,16 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "albums_root_provider",
-    "query": {},
-    "list": {
-        "all": { "provider": "albums_all_provider" }
+    "query": {
+        "fields": [
+            { "sql": "albums.id", "as": "id" },
+            { "sql": "albums.name", "as": "name" },
+            { "sql": "albums.created_at", "as": "created_at" },
+            { "sql": "albums.parent_id", "as": "parent_id" },
+            { "sql": "albums.type", "as": "type" },
+            { "sql": "albums.sync_folder", "as": "sync_folder" },
+            { "sql": "albums.folder_status", "as": "folder_status" }
+        ],
     },
     "resolve": {
         "all": { "provider": "albums_all_provider" },

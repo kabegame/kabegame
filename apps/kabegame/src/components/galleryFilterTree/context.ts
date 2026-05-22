@@ -5,7 +5,8 @@ import {
   type ComputedRef,
   type InjectionKey,
 } from "vue";
-import { invoke } from "@/api/rpc";
+import { pathqlEntry, pathqlList } from "@/services/pathql";
+import { withGalleryPrefix } from "@/utils/path";
 import {
   filterDateSegment,
   filterMediaFormat,
@@ -17,17 +18,12 @@ import {
 } from "@/utils/galleryPath";
 
 export interface ProviderChildDir {
-  kind: "dir";
   name: string;
-  meta?: {
+  meta: {
     isLeaf?: boolean;
     plain?: boolean;
   } | null;
-  total?: number | null;
-}
-
-export interface ProviderCountResult {
-  total?: number | null;
+  total: number | null;
 }
 
 export interface RefreshTarget {
@@ -109,13 +105,10 @@ export function isProviderPlain(entry: ProviderChildDir) {
 }
 
 export async function listProviderDirs(path: string): Promise<ProviderChildDir[]> {
-  const entries = await invoke<ProviderChildDir[]>("list_provider_children", {
-    path,
-  });
+  const entries = await pathqlList(withGalleryPrefix(path), true);
   return (Array.isArray(entries) ? entries : []).filter(
     (entry): entry is ProviderChildDir =>
       !!entry &&
-      entry.kind === "dir" &&
       typeof entry.name === "string" &&
       entry.name.trim().length > 0
   );
@@ -124,9 +117,7 @@ export async function listProviderDirs(path: string): Promise<ProviderChildDir[]
 export async function countProviderPath(path: string): Promise<number> {
   const p = normalizeProviderPath(path);
   if (!p) return 0;
-  const res = await invoke<ProviderCountResult>("browse_gallery_provider", {
-    path: p,
-  });
+  const res = await pathqlEntry(withGalleryPrefix(p));
   return typeof res?.total === "number" ? res.total : 0;
 }
 

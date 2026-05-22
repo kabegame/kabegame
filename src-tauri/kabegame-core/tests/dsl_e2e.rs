@@ -215,6 +215,19 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             end_time INTEGER,
             error TEXT
         );
+        CREATE TABLE task_failed_images (
+            id INTEGER PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            plugin_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            "order" INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            last_error TEXT,
+            last_attempted_at INTEGER,
+            header_snapshot TEXT,
+            metadata_id INTEGER,
+            display_name TEXT
+        );
         CREATE TABLE surf_records (
             id TEXT PRIMARY KEY,
             host TEXT NOT NULL UNIQUE,
@@ -252,6 +265,9 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
                 11,
                 NULL
             );
+        INSERT INTO task_failed_images VALUES
+            (1, '22222222-2222-2222-2222-222222222222', 'pixiv', 'https://example.test/fail-1.jpg', 10, 30, 'network', 31, '{"User-Agent":"Kabegame"}', 1, 'failed-1'),
+            (2, 'other-task', 'pixiv', 'https://example.test/fail-2.jpg', 20, 32, 'timeout', NULL, NULL, NULL, 'failed-2');
         INSERT INTO surf_records VALUES
             ('surf-a', 'pixiv.test', 'https://pixiv.test', NULL, 20, 2, 0, 10, 'Pixiv Test', '');
         "#,
@@ -382,6 +398,14 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         .unwrap();
     runtime
         .register_schema(
+            "fail-images",
+            "task_failed_images",
+            "kabegame",
+            "fail_images_root_provider",
+        )
+        .unwrap();
+    runtime
+        .register_schema(
             "surf_records",
             "surf_records",
             "kabegame",
@@ -422,6 +446,7 @@ fn schema_registration_smoke_and_schemaless_paths_fail() {
         runtime.registered_schemes(),
         vec![
             "albums".to_string(),
+            "fail-images".to_string(),
             "images".to_string(),
             "plugin".to_string(),
             "surf_records".to_string(),
@@ -471,6 +496,25 @@ fn plural_resource_schemas_fetch_and_deserialize_rows() {
             .and_then(|value| value.as_str()),
         Some("high")
     );
+
+    let failed = runtime
+        .fetch("fail-images://id_1")
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(failed["id"], 1);
+    assert_eq!(failed["task_id"], TASK_A_ID);
+    let header_snapshot: serde_json::Value =
+        serde_json::from_str(failed["header_snapshot"].as_str().unwrap()).unwrap();
+    assert_eq!(header_snapshot["User-Agent"], "Kabegame");
+
+    let failed_ids = ids(runtime
+        .fetch("fail-images://tasks/id_22222222-2222-2222-2222-222222222222")
+        .unwrap());
+    assert_eq!(failed_ids, ["1"]);
+    let all_failed_ids = ids(runtime.fetch("fail-images://all").unwrap());
+    assert_eq!(all_failed_ids, ["2", "1"]);
 
     let surf = runtime
         .fetch("surf_records://id_surf-a")
@@ -801,6 +845,15 @@ fn album_order_path_paginates_and_limit_leaf_only_limits() {
     ));
     assert_eq!(ids(bigger_order), ["7", "6"]);
     assert_eq!(ids(limited), ["8", "7", "6"]);
+
+    let single = runtime
+        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/id_7")
+        .unwrap();
+    assert_eq!(ids(single.clone()), ["7"]);
+    assert_eq!(
+        single[0].get("album_order").and_then(|v| v.as_i64()),
+        Some(2)
+    );
 
     let page_node = runtime
         .resolve("images://gallery/album/33333333-3333-3333-3333-333333333333/order/x3x/1")

@@ -1,8 +1,9 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "images_root_provider",
-    "query": {},
+    "query": {
+        "fields": ["images.*"],
+    },
     "list": {
         "gallery": { "provider": "gallery_route" },
         "vd": { "provider": "vd_root_router" }

@@ -18,9 +18,3 @@ pub struct CachePathsResponse {
 pub struct ExternalDataDirResponse {
     pub dir: String,
 }
-
-/// 归档解压输出目录
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ArchiveExtractDirResponse {
-    pub dir: String,
-}

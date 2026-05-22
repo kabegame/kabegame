@@ -50,8 +50,6 @@
   "selectPath": "選擇路徑",
   "recursiveSubdirsLabel": "遞迴子資料夾",
   "recursiveSubdirs": "遞迴掃描子資料夾中的圖片/影片",
-  "includeArchiveLabel": "包含壓縮檔",
-  "includeArchiveScan": "掃描時包含支援的壓縮檔（zip、rar），加入解壓佇列",
   "startImport": "開始匯入",
   "addPathFirst": "請至少新增一個路徑",
   "selectFileFailed": "選擇檔案失敗",

@@ -1,0 +1,35 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_media_type_provider",
+    "properties": {
+        "kind": { "type": "string", "default": "image", "optional": false }
+    },
+    // WHERE 按 kind 分支: image = 非 video 媒体, video = video / video/* 媒体。
+    // 用 CASE 单条 SQL 同时表达两分支, kind 作为 bind 参数。
+    "query": {
+        "where": "CASE ${properties.kind} WHEN 'video' THEN (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') ELSE NOT (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') END"
+    },
+    "list": {
+        "${fmt.format}": {
+            "sql": "SELECT format FROM (SELECT LOWER(SUBSTR(COALESCE(sub.media_type, ''), INSTR(COALESCE(sub.media_type, ''), '/') + 1)) AS format, COUNT(*) AS cnt FROM (${composed}) AS sub WHERE LOWER(COALESCE(sub.media_type, '')) LIKE '%/%' GROUP BY format) WHERE format != '' AND cnt > 0 ORDER BY format ASC",
+            "data_var": "fmt",
+            "provider": "gallery_media_format_provider",
+            "properties": {
+                "format": "${fmt.format}"
+            },
+            "meta": {
+                "format": "${fmt.format}"
+            }
+        }
+    },
+    "resolve": {
+        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
+            "delegate": {
+                "provider": "kabegame.gallery_desc_pagination_page_comb"
+            },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }, 
+    }
+}

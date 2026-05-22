@@ -1,0 +1,21 @@
+{
+    "namespace": "kabegame",
+    "name": "vd_dates_ko_provider",
+    "query": {
+        "order": [{ "sql": "images.crawled_at", "order": "asc", "prepend": true }]
+    },
+    "list": {
+        "${root.name}년": {
+            "delegate": { "provider": "dates_provider" },
+            "child_var": "root",
+            "provider": "vd_year_ko_provider",
+            "properties": {
+                "year": "${root.name}"
+            },
+            "meta": {
+                "year": "${root.name}",
+                "label": "${root.name}년"
+            }
+        }
+    }
+}

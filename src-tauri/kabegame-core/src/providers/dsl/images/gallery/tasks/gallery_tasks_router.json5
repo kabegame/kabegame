@@ -1,0 +1,25 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_tasks_router",
+    // Gallery keeps full task metadata on child meta; shared tasks_provider owns the scan SQL.
+    "list": {
+        "${task.name}": {
+            "delegate": { "provider": "tasks_provider" },
+            "child_var": "task",
+            "provider": "gallery_task_provider",
+            "properties": {
+                "task_id": "${task.name}"
+            },
+            "meta": "${task.meta.gallery}"
+        }
+    },
+    // task_id 是 UUID v4; 与 plugins/albums 一致用 UUID 正则锁定段。
+    "resolve": {
+        "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}": {
+            "provider": "gallery_task_provider",
+            "properties": {
+                "task_id": "${capture[0]}"
+            }
+        }
+    }
+}

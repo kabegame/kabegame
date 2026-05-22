@@ -105,7 +105,6 @@ import { useGlobalPathRoute } from "@/stores/pathRoute";
 import {
   albumSubtreeContainsAny,
   buildAlbumMediaNodes,
-  fetchAlbumDirectCounts,
   flattenAlbumMediaNodes,
   loadAlbumMediaPreview,
   type AlbumMediaNode,
@@ -233,9 +232,13 @@ const albumVideoPreviewRemountKey = ref(0);
 const albumsSkipFirstActivateForVideoRemount = ref(true);
 
 const displayedAlbumRoots = computed(() => albumRoots.value);
-const albumDirectCounts = ref<Record<string, number>>({});
 const displayedAlbumNodes = computed(() =>
-  buildAlbumMediaNodes(displayedAlbumRoots.value, albums.value, albumDirectCounts.value, globalHide.value),
+  buildAlbumMediaNodes(
+    displayedAlbumRoots.value,
+    albums.value,
+    albumStore.getAlbumDirectCounts(globalHide.value),
+    globalHide.value,
+  ),
 );
 const displayedAlbumNodeById = computed(() => {
   const entries = displayedAlbumNodes.value
@@ -254,16 +257,9 @@ const displayedAlbumCountsForPicker = computed(() => ({
   ...displayedAlbumCounts.value,
 }));
 
-async function refreshAlbumDirectCounts(albumIds?: Iterable<string>) {
-  const ids = albumIds ?? albums.value.map((album) => album.id);
-  const counts = await fetchAlbumDirectCounts(ids, globalHide.value);
-  albumDirectCounts.value = { ...albumDirectCounts.value, ...counts };
-}
-
 function removeLocalAlbumMediaState(albumIds: Iterable<string>) {
   const ids = new Set(albumIds);
   for (const id of ids) {
-    delete albumDirectCounts.value[id];
     clearAlbumPreviewCache(id);
   }
 }
@@ -348,10 +344,6 @@ useAlbumImagesChangeRefresh({
     const affected = new Set(p.albumIds ?? []);
     const allAffected = affected.size === 0;
     const hiddenAffected = affected.has(HIDDEN_ALBUM_ID);
-    const idsToRefresh = allAffected || hiddenAffected
-      ? albums.value.map((album) => album.id)
-      : albums.value.filter((album) => affected.has(album.id)).map((album) => album.id);
-    await refreshAlbumDirectCounts(idsToRefresh);
 
     for (const node of displayedAlbumNodes.value) {
       const album = node.album;
@@ -368,7 +360,6 @@ onMounted(async () => {
   startLoading();
   try {
     await albumStore.loadAlbums();
-    await refreshAlbumDirectCounts();
   } finally {
     finishLoading();
   }
@@ -438,7 +429,6 @@ const handleRefresh = async () => {
   isRefreshing.value = true;
   try {
     await albumStore.loadAlbums();
-    await refreshAlbumDirectCounts();
     await settingsStore.ensureLoaded();
     // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来"没刷新"）
     const albumsToPreload = displayedAlbumRoots.value.slice(0, 6);
@@ -477,7 +467,6 @@ watch(globalHide, async () => {
   albumsListKey.value++;
   startLoading();
   try {
-    await refreshAlbumDirectCounts();
     for (const album of displayedAlbumRoots.value.slice(0, 6)) {
       prefetchPreview(album);
     }

@@ -1,11 +1,8 @@
-import { invoke } from "@/api/rpc";
+import { pathqlEntry, pathqlFetch } from "@/services/pathql";
+import { rowToImageInfo } from "@/utils/imageRow";
+import { withGalleryPrefix } from "@/utils/path";
 import type { Album } from "@/stores/albums";
 import type { ImageInfo } from "@kabegame/core/types/image";
-
-type GalleryBrowseResult = {
-  entries?: Array<{ kind: string; image?: ImageInfo }>;
-  total?: number | null;
-};
 
 export interface AlbumMediaNode {
   album: Album;
@@ -76,9 +73,7 @@ export function albumSubtreeContainsAny(
 }
 
 export async function fetchAlbumDirectCount(path: string): Promise<number> {
-  const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
-    path: normalizePath(path),
-  });
+  const res = await pathqlEntry(withGalleryPrefix(normalizePath(path)));
   const total = res?.total;
   return typeof total === "number" && Number.isFinite(total) ? Math.max(0, total) : 0;
 }
@@ -104,14 +99,12 @@ export async function fetchAlbumDirectCounts(
 }
 
 async function fetchProviderImages(path: string): Promise<ImageInfo[]> {
-  const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", { path });
-  return (res?.entries ?? [])
-    .filter((e): e is { kind: string; image: ImageInfo } => e?.kind === "image" && !!e.image)
-    .map((e) => e.image);
+  const rows = await pathqlFetch<Record<string, unknown>>(withGalleryPrefix(path));
+  return rows.map(rowToImageInfo);
 }
 
 function albumPreviewPath(path: string, limit: number): string {
-  return `${normalizePath(path)}/order/x${limit}x/1/`;
+  return `${normalizePath(path)}/order/x${limit}x/1`;
 }
 
 function pickRoundRobinImages(buckets: ImageInfo[][], limit: number): ImageInfo[] {

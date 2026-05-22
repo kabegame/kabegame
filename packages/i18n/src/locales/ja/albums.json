@@ -50,8 +50,6 @@
   "selectPath": "パスを選択",
   "recursiveSubdirsLabel": "サブフォルダを再帰",
   "recursiveSubdirs": "サブフォルダを再帰的にスキャンして画像/動画を検索",
-  "includeArchiveLabel": "アーカイブを含める",
-  "includeArchiveScan": "スキャン時にサポートアーカイブ（zip、rar）を含める；展開キューに追加",
   "startImport": "インポートを開始",
   "addPathFirst": "少なくとも1つのパスを追加してください",
   "selectFileFailed": "ファイルの選択に失敗しました",

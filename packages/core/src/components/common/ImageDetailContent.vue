@@ -112,7 +112,7 @@ import { ElMessage } from "element-plus";
 import { List } from "@element-plus/icons-vue";
 import { IS_ANDROID, IS_WEB } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
-import { usePluginStore } from "../../stores/plugins";
+import { Plugin, usePluginStore } from "../../stores/plugins";
 import {
   imageMetadataResolverKey,
   type ImageMetadataResolver,
@@ -147,7 +147,7 @@ export type ImageDetailLike = {
 
 interface Props {
   image: ImageDetailLike | null;
-  plugins?: Array<{ id: string; name?: string }>;
+  plugins?: Array<Plugin>;
 }
 
 const props = defineProps<Props>();
@@ -213,13 +213,9 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
   try {
     const fn =
       injectedResolveMetadata ??
-      (async (imageId: string, metadataId?: number) =>
-        metadataId != null
-          ? invoke<unknown | null>("get_image_metadata_by_metadata_id", {
-              metadataId,
-            })
-          : invoke<unknown | null>("get_image_metadata", { imageId }));
-    const m = await fn(img.id, img.metadataId);
+      (async (imageId: string) =>
+        invoke<unknown | null>("get_image_metadata", { imageId }));
+    const m = await fn(img.id);
     resolvedMetadata.value = m ?? null;
   } catch (e) {
     console.error("image detail metadata load failed", e);

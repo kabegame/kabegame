@@ -24,8 +24,6 @@ struct ImportQuery {
     output_album_id: Option<String>,
     #[serde(default)]
     recursive: Option<String>,
-    #[serde(default)]
-    include_archive: Option<String>,
     #[serde(default, rename = "super")]
     super_flag: Option<String>,
 }
@@ -147,16 +145,10 @@ async fn handle_import(Query(q): Query<ImportQuery>, mut multipart: Multipart) -
         .as_deref()
         .map(|v| v == "1" || v == "true")
         .unwrap_or(true);
-    let include_archive = truthy(&q.include_archive);
-
     let root_str = upload_root.to_string_lossy().to_string();
     let mut user_config: HashMap<String, serde_json::Value> = HashMap::new();
     user_config.insert("paths".to_string(), serde_json::json!([root_str]));
     user_config.insert("recursive".to_string(), serde_json::Value::Bool(recursive));
-    user_config.insert(
-        "include_archive".to_string(),
-        serde_json::Value::Bool(include_archive),
-    );
 
     let task_id = uuid::Uuid::new_v4().to_string();
     let now_ms = std::time::SystemTime::now()

@@ -110,7 +110,7 @@ await crawl.to(nextUrl, "detail");
    - 为爬虫 WebView 使用**固定或可识别的窗口 label**（如 `crawler`，或与任务绑定的 `crawler-{taskId}`），并**不**将其加入主窗口的 capability（如 `main-capability`）。  
    - 新建**仅用于爬虫窗口**的 capability 文件（如 `capabilities/crawler.json`），在 `windows` 中只匹配该 label（或 `crawler*` 等模式）。  
    - 该 capability 的 `permissions` **仅**包含爬虫相关权限，例如：
-     - 仅允许与 crawl 相关的 Tauri 命令：如 `crawl_add_progress`、`crawl_set_task_interval`、`crawl_prepare_download`、`crawl_prepare_download_archive`（若实现）、以及代理/任务上下文所需的 set_header/del_header 对应命令等。  
+     - 仅允许与 crawl 相关的 Tauri 命令：如 `crawl_add_progress`、`crawl_set_task_interval`、`crawl_prepare_download`、以及代理/任务上下文所需的 set_header/del_header 对应命令等。  
      - **不**包含 `core:default`、`shell:*`、`fs:*`、`dialog:*` 等主应用权限。  
    - 这样即使插件脚本内调用了 `invoke("open_explorer", ...)` 或其它未授权命令，Tauri 的 capability 检查会直接拒绝，命令不会执行。
 
@@ -179,8 +179,6 @@ await crawl.to(nextUrl, "detail");
 | **进度与下载** | |
 | `add_progress(percentage)` | 累加任务进度（%，0–99.9），并上报前端。 |
 | `download_image(url)` | 下载图片到任务目录并加入画廊（并发/间隔由下载队列与设置控制）。 |
-| `download_archive(url, archive_type)` | 下载压缩包并导入（如 zip）；archive_type 为字符串或空。 |
-| `get_supported_archive_types()` | 返回支持的压缩类型列表（如 `["zip", "rar"]`）。 |
 | **本地文件（桌面）** | |
 | `list_local_files(folder_url, extensions, recursive)` | 列出本地目录下指定扩展名的文件；folder_url 为 file://；recursive 是否递归。 |
 
@@ -208,8 +206,6 @@ WebView 运行时（如 `crawler-runtime.js`）应暴露 `window.crawl`，与 Rh
 | `set_header` / `del_header` | `crawl.set_header(key, value)` / `crawl.del_header(key)` | 设置/删除当前任务的 HTTP 头；代理请求时由 Rust 侧按任务合并这些头（见 CRAWLER_WEBVIEW_DESIGN 5.2）。需通过 invoke 写入任务上下文。 |
 | `add_progress(percentage)` | `crawl.add_progress(pct)` | 累加进度并上报；invoke `crawl_add_progress`。 |
 | `download_image(url)` | `crawl.download_image(url, filename)` | 门控由 Rust `crawl_prepare_download` 负责；若返回 useBrowser 则用 `<a download>` 经代理触发，否则 Rust 直接下载。见 CRAWLER_WEBVIEW_DESIGN 6.2。 |
-| `download_archive(url, type)` | `crawl.download_archive(url, archiveType)` | 需新增 Tauri 命令（如 `crawl_prepare_download_archive`），门控与路径逻辑与 Rhai 侧一致；JS 仅 invoke。 |
-| `get_supported_archive_types()` | `crawl.get_supported_archive_types()` | 返回支持的压缩类型数组；可 invoke 后端或使用前端已有列表。 |
 | `list_local_files(...)` | `crawl.list_local_files(folder_url, extensions, recursive)` | 桌面专用；WebView 环境通常不访问本地 file://，可选实现或返回空数组并注明仅 Rhai/桌面。 |
 
 

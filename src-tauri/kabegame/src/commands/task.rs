@@ -101,7 +101,7 @@ pub async fn clear_finished_tasks() -> Result<usize, String> {
     let task_ids = storage.get_finished_task_ids()?;
     let mut all_image_ids: Vec<String> = Vec::new();
     for tid in &task_ids {
-        let ids = storage.get_task_image_ids(tid)?;
+        let ids = Storage::get_task_image_ids(tid)?;
         all_image_ids.extend(ids);
     }
     let mut plugin_seen = HashSet::new();
@@ -199,9 +199,7 @@ pub async fn delete_failed_images(ids: Vec<i64>) -> Result<(), String> {
 #[tauri::command]
 pub async fn delete_task_failed_image(failed_id: i64) -> Result<(), String> {
     let storage = Storage::global();
-    let task_id = storage
-        .get_task_failed_image_by_id(failed_id)?
-        .map(|item| item.task_id);
+    let task_id = Storage::get_task_failed_image_by_id(failed_id)?.map(|item| item.task_id);
     storage.delete_task_failed_image(failed_id)?;
     if let Some(ref tid) = task_id {
         GlobalEmitter::global().emit_failed_images_removed(tid, &[failed_id]);
@@ -256,7 +254,7 @@ pub async fn update_task(task: serde_json::Value) -> Result<(), String> {
 #[tauri::command]
 pub async fn delete_task(task_id: String) -> Result<(), String> {
     let storage = Storage::global();
-    let image_ids = storage.get_task_image_ids(&task_id)?;
+    let image_ids = Storage::get_task_image_ids(&task_id)?;
     let plugin_ids = storage
         .get_task(&task_id)?
         .map(|t| vec![t.plugin_id])

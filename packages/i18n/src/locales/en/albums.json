@@ -50,8 +50,6 @@
   "selectPath": "Select path",
   "recursiveSubdirsLabel": "Recursive subfolders",
   "recursiveSubdirs": "Recursively scan subfolders for images/videos",
-  "includeArchiveLabel": "Include archives",
-  "includeArchiveScan": "Include supported archives (zip, rar) when scanning; add to extract queue",
   "startImport": "Start import",
   "addPathFirst": "Add at least one path",
   "selectFileFailed": "Failed to select file",

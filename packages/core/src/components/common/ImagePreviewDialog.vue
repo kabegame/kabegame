@@ -128,6 +128,7 @@ import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
 import { useModalBack } from "../../composables/useModalBack";
 import { fileToUrl, thumbnailToUrl } from "../../httpServer";
 import { isVideoMediaType } from "../../utils/mediaMime";
+import { Plugin } from "@kabegame/core/stores/plugins";
 
 const { t } = useI18n();
 const uiStore = useUiStore();
@@ -137,7 +138,7 @@ const props = withDefaults(defineProps<{
   /** Actions for context menu / action sheet. */
   actions?: ActionItem<ImageInfo>[];
   /** 用于预览内详情抽屉解析插件名（与 ImageDetailDialog 一致） */
-  plugins?: Array<{ id: string; name?: string }>;
+  plugins?: Array<Plugin>;
 }>(), {
   actions: () => [],
   plugins: () => [],

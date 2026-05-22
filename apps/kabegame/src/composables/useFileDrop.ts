@@ -11,7 +11,6 @@ import { i18n } from "@kabegame/i18n";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 // 支持的扩展名列表（用于默认提示文案），运行时由 updateSupportedTypes 从后端覆盖
-let SUPPORTED_ARCHIVE_EXTENSIONS = ["zip", "rar"];
 let SUPPORTED_KGPG_EXTENSIONS = ["kgpg"];
 
 /** 后端根据路径推断类型（扩展名 + infer），用于拖入文件分类 */
@@ -20,7 +19,6 @@ interface FileDropKindItem {
   isDirectory: boolean;
   isImage: boolean;
   isVideo: boolean;
-  isArchive: boolean;
   isKgpg: boolean;
 }
 
@@ -33,7 +31,6 @@ export interface ImportItem {
   path: string;
   name: string;
   isDirectory: boolean;
-  isArchive?: boolean;
   isKgpg?: boolean;
   isVideo?: boolean;
 }
@@ -68,9 +65,6 @@ const getExt = (name: string) => {
   return idx >= 0 ? name.slice(idx + 1).toLowerCase() : "";
 };
 
-const isArchiveName = (name: string) =>
-  SUPPORTED_ARCHIVE_EXTENSIONS.includes(getExt(name));
-
 const isKgpgName = (name: string) =>
   SUPPORTED_KGPG_EXTENSIONS.includes(getExt(name));
 
@@ -83,7 +77,7 @@ const isVideoFile = (file: File) =>
   ["mp4", "webm", "mkv", "mov", "avi"].includes(getExt(file.name));
 
 const isWebImportableFile = (file: File) =>
-  !isKgpgName(file.name) && (isImageFile(file) || isVideoFile(file) || isArchiveName(file.name));
+  !isKgpgName(file.name) && (isImageFile(file) || isVideoFile(file));
 
 const fileDisplayPath = (file: File) =>
   (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
@@ -186,12 +180,8 @@ export function useFileDrop(
   const updateSupportedTypes = async () => {
     try {
       const dropRes = await invoke<{
-        archiveExtensions: string[];
         pluginExtensions: string[];
       }>("get_file_drop_supported_types");
-      if (dropRes?.archiveExtensions) {
-        SUPPORTED_ARCHIVE_EXTENSIONS = dropRes.archiveExtensions;
-      }
       if (dropRes?.pluginExtensions) {
         SUPPORTED_KGPG_EXTENSIONS = dropRes.pluginExtensions;
       }
@@ -202,14 +192,12 @@ export function useFileDrop(
 
   const webDropText = (files?: File[]) => {
     const t = (key: string, params?: Record<string, string>) =>
-      i18n.global.t(key, params);
-    const exts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
+      params ? i18n.global.t(key, params) : i18n.global.t(key);
     const first = files?.[0];
     if (!first) return t("import.dropFileToImport");
-    if (isArchiveName(first.name)) return t("import.dropArchiveToImport", { exts });
     if (isImageFile(first)) return t("import.dropImageToImport");
     if (isVideoFile(first)) return t("import.dropVideoToImport");
-    return t("import.dropSupportedTypes", { exts });
+    return t("import.dropSupportedTypes");
   };
 
   const handleWebDrop = async (event: DragEvent) => {
@@ -233,7 +221,6 @@ export function useFileDrop(
           path,
           name: path.split("/").pop() || file.name,
           isDirectory: path.includes("/"),
-          isArchive: isArchiveName(file.name),
           isKgpg: false,
           isVideo: isVideoFile(file),
         };
@@ -255,7 +242,6 @@ export function useFileDrop(
 
       await uploadImport(files, {
         recursive: true,
-        includeArchive: files.some((file) => isArchiveName(file.name)),
       });
       ElMessage.success(i18n.global.t("import.addedLocalImport"));
     } catch (error) {
@@ -342,8 +328,7 @@ export function useFileDrop(
               const kinds = await getFileDropKinds(paths.slice(0, 1));
               const first = kinds[0];
               const t = (key: string, params?: Record<string, string>) =>
-                i18n.global.t(key, params);
-              const exts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
+                params ? i18n.global.t(key, params) : i18n.global.t(key);
               let text = t("import.dropFileToImport");
               let isImportable = false;
 
@@ -354,9 +339,6 @@ export function useFileDrop(
                 } else if (first.isKgpg) {
                   text = t("import.dropPluginToImport");
                   isImportable = true;
-                } else if (first.isArchive) {
-                  text = t("import.dropArchiveToImport", { exts });
-                  isImportable = true;
                 } else if (first.isImage) {
                   isImportable = true;
                   text = t("import.dropImageToImport");
@@ -364,7 +346,7 @@ export function useFileDrop(
                   isImportable = true;
                   text = t("import.dropVideoToImport");
                 } else {
-                  text = t("import.dropSupportedTypes", { exts });
+                  text = t("import.dropSupportedTypes");
                 }
               }
 
@@ -374,10 +356,7 @@ export function useFileDrop(
                 await bringWindowToFront();
               }
             } catch (error) {
-              const exts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
-              fileDropOverlayRef.value?.show(
-                i18n.global.t("import.dropSupportedTypes", { exts }),
-              );
+              fileDropOverlayRef.value?.show(i18n.global.t("import.dropSupportedTypes"));
               isOverlayVisible = true;
             }
           }
@@ -409,15 +388,13 @@ export function useFileDrop(
                     path: k.path,
                     name,
                     isDirectory: true,
-                    isArchive: false,
                     isKgpg: false,
                   });
-                } else if (k.isImage || k.isVideo || k.isArchive || k.isKgpg) {
+                } else if (k.isImage || k.isVideo || k.isKgpg) {
                   items.push({
                     path: k.path,
                     name: k.isKgpg ? `${name}${i18n.global.t("import.pluginPackageSuffix")}` : name,
                     isDirectory: false,
-                    isArchive: k.isArchive,
                     isKgpg: k.isKgpg,
                     isVideo: k.isVideo,
                   });
@@ -444,7 +421,7 @@ export function useFileDrop(
               const kgpgItems = items.filter((it) => it.isKgpg);
               const localImportItems = items.filter((it) => !it.isKgpg);
               const hasCrawlerImport = localImportItems.length > 0;
-              // 只有存在"图片/archive/文件夹导入任务"时才打开任务抽屉；仅导入 kgpg 时避免打扰
+              // 只有存在"图片/视频/文件夹导入任务"时才打开任务抽屉；仅导入 kgpg 时避免打扰
               if (hasCrawlerImport) {
                 try {
                   taskDrawerStore.open();
@@ -476,14 +453,12 @@ export function useFileDrop(
                 // 本地导入：单一任务，所有路径
                 if (localImportItems.length > 0) {
                   const allPaths = localImportItems.map((it) => it.path);
-                  const hasArchiveFiles = localImportItems.some((it) => it.isArchive);
                   crawlerStore.addTask(
                     "local-import",
                     undefined,
                     {
                       paths: allPaths,
                       recursive: true,
-                      include_archive: hasArchiveFiles,
                     },
                   );
                   console.log("[App] 已添加本地导入任务:", allPaths.length, "个路径");

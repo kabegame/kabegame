@@ -1,44 +1,21 @@
-//! Provider 路径查询语法 — Tauri/MCP 边界使用。
+//! Provider 路径查询语法 — Tauri 边界使用。
 //!
 //! 7b S1e 起：所有"路径 → 图片/计数"查询走 pathql Runtime 的 path-only API
 //! ([`images_at`] / [`count_at`])；core 不再持有 `ProviderQuery` /
 //! `TemplateContext`。
 
-use serde_json::{json, Value};
+use pathql_rs::ProviderRuntime;
+use serde::Serialize;
+use serde_json::Value;
 
-use crate::gallery::GalleryBrowseEntry;
 use crate::storage::gallery::{DateGroup, DayGroup, GalleryMediaTypeCounts, PluginGroup};
 use crate::storage::gallery_time::{gallery_month_groups_from_days, GalleryTimeFilterPayload};
 use crate::storage::images::parse_image_metadata_json;
 use crate::storage::organize::OrganizeScanRow;
+use crate::storage::tasks::TaskFailedImage;
 use crate::storage::ImageInfo;
 
 use super::init::provider_runtime;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderPathQuery {
-    Entry,
-    List,
-    ListWithMeta,
-}
-
-/// 解析路径语法：返回 (规范化 path, query 模式)。
-pub fn parse_provider_path(raw: &str) -> (String, ProviderPathQuery) {
-    let trimmed = raw.trim();
-    if let Some(stripped) = trimmed.strip_suffix("/*") {
-        return (
-            stripped.trim_end_matches('/').to_string(),
-            ProviderPathQuery::ListWithMeta,
-        );
-    }
-    if trimmed.ends_with('/') {
-        return (
-            trimmed.trim_end_matches('/').to_string(),
-            ProviderPathQuery::List,
-        );
-    }
-    (trimmed.to_string(), ProviderPathQuery::Entry)
-}
 
 /// 对 provider 路径逐段 percent-decode。
 pub fn decode_provider_path_segments(raw: &str) -> String {
@@ -84,39 +61,45 @@ fn split_last_segment(path: &str) -> (String, String) {
     }
 }
 
-/// 解析 get_note 的 JSON 字符串到 (title, content)；非 JSON 时把它当 title=content。
-fn parse_note(raw: Option<String>) -> Option<(String, String)> {
+/// 解析 get_note 的 JSON 字符串；非 JSON 时把它当 title=content。
+fn parse_note(raw: Option<String>) -> Option<ProviderNote> {
     let s = raw?;
     if let Ok(v) = serde_json::from_str::<Value>(&s) {
         if let (Some(t), Some(c)) = (
             v.get("title").and_then(|x| x.as_str()),
             v.get("content").and_then(|x| x.as_str()),
         ) {
-            return Some((t.to_string(), c.to_string()));
+            return Some(ProviderNote {
+                title: t.to_string(),
+                content: c.to_string(),
+            });
         }
     }
-    Some((s.clone(), s))
+    Some(ProviderNote {
+        title: s.clone(),
+        content: s,
+    })
 }
 
-fn note_value(note: Option<(String, String)>) -> Option<Value> {
-    note.map(|(title, content)| json!({ "title": title, "content": content }))
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderEntry {
+    pub name: String,
+    pub meta: Option<Value>,
+    pub note: Option<ProviderNote>,
+    pub total: Option<usize>,
 }
 
-/// Typed 版本的 provider 查询结果。
-#[derive(Debug)]
-pub enum ProviderQueryTyped {
-    Entry {
-        name: String,
-        meta: Option<Value>,
-        note: Option<(String, String)>,
-        total: Option<usize>,
-    },
-    Listing {
-        entries: Vec<GalleryBrowseEntry>,
-        total: Option<usize>,
-        meta: Option<Value>,
-        note: Option<(String, String)>,
-    },
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderNote {
+    pub title: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderListChild {
+    pub name: String,
+    pub meta: Option<Value>,
+    pub total: Option<usize>,
 }
 
 fn normalize_for_runtime(path: &str) -> String {
@@ -135,57 +118,107 @@ pub fn runtime_path(raw: &str) -> String {
     normalize_for_runtime(raw)
 }
 
-/// Typed 入口：解析路径并执行查询，返回未序列化的 typed 结果。
-pub fn execute_provider_query_typed(raw_path: &str) -> Result<ProviderQueryTyped, String> {
-    let (path, mode) = parse_provider_path(raw_path);
-    let rt = provider_runtime();
-    let rt_path = normalize_for_runtime(&path);
-
-    match mode {
-        ProviderPathQuery::Entry => {
-            let (_, last) = split_last_segment(&path);
-            if last.is_empty() {
-                return Err(format!("路径不完整: {}", raw_path));
-            }
-            let total = count_at(&rt_path).ok();
-            let raw_note = rt
-                .note(&rt_path)
-                .map_err(|e| format!("note failed: {}", e))?;
-            let meta = rt
-                .meta(&rt_path)
-                .map_err(|e| format!("meta failed: {}", e))?;
-            Ok(ProviderQueryTyped::Entry {
-                name: last,
-                meta,
-                note: parse_note(raw_note),
-                total,
-            })
-        }
-        ProviderPathQuery::List | ProviderPathQuery::ListWithMeta => {
-            let children = rt
-                .list(&rt_path)
-                .map_err(|e| format!("list children failed: {}", e))?;
-
-            let images = images_for_listing(&rt_path)?;
-            let entries = crate::gallery::browse_from_provider_jsonmeta(children, images)?;
-
-            let total = count_at(&rt_path).ok();
-
-            let raw_note = rt
-                .note(&rt_path)
-                .map_err(|e| format!("note failed: {}", e))?;
-            let meta = rt
-                .meta(&rt_path)
-                .map_err(|e| format!("meta failed: {}", e))?;
-
-            Ok(ProviderQueryTyped::Listing {
-                entries,
-                total,
-                meta,
-                note: parse_note(raw_note),
-            })
-        }
+fn trim_provider_path(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.ends_with("://") {
+        trimmed.to_string()
+    } else {
+        trimmed.trim_end_matches('/').to_string()
     }
+}
+
+fn encode_provider_path_segment(s: &str) -> String {
+    s.bytes()
+        .flat_map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![b as char]
+            }
+            _ => format!("%{b:02X}").chars().collect(),
+        })
+        .collect()
+}
+
+fn child_runtime_path(base: &str, child_name: &str) -> String {
+    if base.ends_with("://") {
+        format!("{}{}", base, encode_provider_path_segment(child_name))
+    } else {
+        format!(
+            "{}/{}",
+            base.trim_end_matches('/'),
+            encode_provider_path_segment(child_name)
+        )
+    }
+}
+
+fn query_entry_with_runtime(rt: &ProviderRuntime, raw_path: &str) -> Result<ProviderEntry, String> {
+    let path = trim_provider_path(raw_path);
+    let rt_path = normalize_for_runtime(&path);
+    let (_, last) = split_last_segment(&path);
+    if last.is_empty() {
+        return Err(format!("路径不完整: {}", raw_path));
+    }
+    let total = rt.count(&rt_path).ok();
+    let raw_note = rt
+        .note(&rt_path)
+        .map_err(|e| format!("note failed: {}", e))?;
+    let meta = rt
+        .meta(&rt_path)
+        .map_err(|e| format!("meta failed: {}", e))?;
+    Ok(ProviderEntry {
+        name: last,
+        meta,
+        note: parse_note(raw_note),
+        total,
+    })
+}
+
+pub fn query_entry(raw_path: &str) -> Result<ProviderEntry, String> {
+    query_entry_with_runtime(provider_runtime(), raw_path)
+}
+
+fn query_list_with_runtime(
+    rt: &ProviderRuntime,
+    raw_path: &str,
+    with_count: bool,
+) -> Result<Vec<ProviderListChild>, String> {
+    let rt_path = normalize_for_runtime(&trim_provider_path(raw_path));
+    let base = if rt_path.ends_with("://") {
+        rt_path.clone()
+    } else {
+        rt_path.trim_end_matches('/').to_string()
+    };
+    let children = rt
+        .list(&rt_path)
+        .map_err(|e| format!("list children failed: {}", e))?;
+
+    children
+        .into_iter()
+        .map(|child| {
+            let total = if with_count {
+                rt.count(&child_runtime_path(&base, &child.name)).ok()
+            } else {
+                None
+            };
+            Ok(ProviderListChild {
+                name: child.name,
+                meta: child.meta,
+                total,
+            })
+        })
+        .collect()
+}
+
+pub fn query_list(raw_path: &str, with_count: bool) -> Result<Vec<ProviderListChild>, String> {
+    query_list_with_runtime(provider_runtime(), raw_path, with_count)
+}
+
+fn query_fetch_with_runtime(rt: &ProviderRuntime, raw_path: &str) -> Result<Vec<Value>, String> {
+    let rt_path = normalize_for_runtime(&trim_provider_path(raw_path));
+    rt.fetch(&rt_path).map_err(|e| e.to_string())
+}
+
+pub fn query_fetch(raw_path: &str) -> Result<Vec<Value>, String> {
+    query_fetch_with_runtime(provider_runtime(), raw_path)
 }
 
 /// **Engine service**: 路径 → ImageInfo 列表。
@@ -222,6 +255,54 @@ fn json_i64(row: &Value, key: &str) -> Option<i64> {
             .or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok()))
             .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
     })
+}
+
+fn json_header_snapshot(
+    row: &Value,
+) -> Result<Option<std::collections::HashMap<String, String>>, String> {
+    let Some(value) = row.get("header_snapshot") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    match value {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                serde_json::from_str(trimmed)
+                    .map(Some)
+                    .map_err(|e| format!("invalid failed image header_snapshot: {}", e))
+            }
+        }
+        other => serde_json::from_value(other.clone())
+            .map(Some)
+            .map_err(|e| format!("invalid failed image header_snapshot: {}", e)),
+    }
+}
+
+fn json_row_to_task_failed_image(row: &Value) -> Result<TaskFailedImage, String> {
+    Ok(TaskFailedImage {
+        id: json_i64(row, "id").ok_or("failed image row missing `id`")?,
+        task_id: json_string(row, "task_id").ok_or("failed image row missing `task_id`")?,
+        plugin_id: json_string(row, "plugin_id").ok_or("failed image row missing `plugin_id`")?,
+        url: json_string(row, "url").ok_or("failed image row missing `url`")?,
+        order: json_i64(row, "order").unwrap_or_default(),
+        created_at: json_i64(row, "created_at").unwrap_or_default(),
+        last_error: json_string(row, "last_error"),
+        last_attempted_at: json_i64(row, "last_attempted_at"),
+        header_snapshot: json_header_snapshot(row)?,
+        metadata_id: json_i64(row, "metadata_id"),
+        display_name: json_string(row, "display_name"),
+    })
+}
+
+/// `fail-images://...` → task failed image rows.
+pub fn failed_images_at(path: &str) -> Result<Vec<TaskFailedImage>, String> {
+    let rows = raw_rows_at(path)?;
+    rows.iter().map(json_row_to_task_failed_image).collect()
 }
 
 /// `images://x{N}x/{page}` → organize scan rows.
@@ -386,37 +467,6 @@ pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, 
     Ok(out)
 }
 
-/// IPC business 包装: 在 listing 模式下挑一组合理的图片显示。
-/// `images://gallery/` 等根路径不带 limit, 直接 fetch 会拉百万级行 — 此处用 count + last-page-100
-/// 启发式选最后一页, 与前端默认行为对齐。
-fn images_for_listing(rt_path: &str) -> Result<Vec<ImageInfo>, String> {
-    let rt = provider_runtime();
-    let node = rt
-        .resolve(rt_path)
-        .map_err(|e| format!("resolve failed: {}", e))?;
-    if node.composed.from.is_none() {
-        return Ok(Vec::new());
-    }
-    if node.composed.limit.is_some() {
-        return images_at(rt_path);
-    }
-    // 无 limit: 取最后一页 100 (前端 root 路径默认期望)
-    let total = count_at(rt_path)?;
-    if total == 0 {
-        return Ok(Vec::new());
-    }
-    let page_size = 100usize;
-    let last_offset = ((total + page_size - 1) / page_size - 1) * page_size;
-    let last_page = last_offset / page_size + 1;
-    let last_page_path = format!(
-        "{}/x{}x/{}",
-        rt_path.trim_end_matches('/'),
-        page_size,
-        last_page
-    );
-    images_at(&last_page_path)
-}
-
 /// JSON 行 → ImageInfo (按 gallery_route fields 的 alias 契约读列)。
 /// alias 名硬契约: id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata_id,
 /// thumbnail_path, hash, is_favorite, is_hidden, width, height, display_name,
@@ -459,45 +509,175 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
     })
 }
 
-/// 把 typed 查询结果序列化为 Tauri / MCP / web 共用的 JSON envelope。
-pub fn provider_query_to_json(t: &ProviderQueryTyped) -> Result<Value, String> {
-    match t {
-        ProviderQueryTyped::Entry {
-            name,
-            meta,
-            note,
-            total,
-        } => Ok(json!({
-            "name": name,
-            "meta": meta,
-            "note": note_value(note.clone()),
-            "total": total,
-        })),
-        ProviderQueryTyped::Listing {
-            entries,
-            total,
-            meta,
-            note,
-        } => {
-            let entries_json = serde_json::to_value(entries).map_err(|e| e.to_string())?;
-            Ok(json!({
-                "entries": entries_json,
-                "total": total,
-                "meta": meta,
-                "note": note_value(note.clone()),
-            }))
-        }
-    }
-}
-
-pub fn execute_provider_query(raw_path: &str) -> Result<Value, String> {
-    let typed = execute_provider_query_typed(raw_path)?;
-    provider_query_to_json(&typed)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::runtime_path;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    use pathql_rs::provider::{ClosureExecutor, EngineError, SqlDialect};
+    use pathql_rs::template::eval::TemplateValue;
+    use pathql_rs::ProviderRuntime;
+    use rusqlite::functions::FunctionFlags;
+    use rusqlite::Connection;
+
+    use super::{
+        query_entry_with_runtime, query_fetch_with_runtime, query_list_with_runtime, runtime_path,
+    };
+    use crate::providers::dsl_loader::{register_embedded_dsl, validate_dsl};
+
+    fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
+        use rusqlite::types::Value;
+        values
+            .iter()
+            .map(|v| match v {
+                TemplateValue::Null => Value::Null,
+                TemplateValue::Bool(b) => Value::Integer(if *b { 1 } else { 0 }),
+                TemplateValue::Int(i) => Value::Integer(*i),
+                TemplateValue::Real(r) => Value::Real(*r),
+                TemplateValue::Text(s) => Value::Text(s.clone()),
+                TemplateValue::Json(v) => Value::Text(v.to_string()),
+            })
+            .collect()
+    }
+
+    fn fixture_db() -> Arc<Mutex<Connection>> {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.create_scalar_function(
+            "get_plugin",
+            -1,
+            FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
+            |ctx| -> rusqlite::Result<String> {
+                let plugin_id: String = ctx.get(0)?;
+                Ok(serde_json::json!({
+                    "id": plugin_id,
+                    "name": "Pixel Plugin",
+                    "description": "fixture"
+                })
+                .to_string())
+            },
+        )
+        .unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE images (
+                id INTEGER PRIMARY KEY,
+                url TEXT,
+                local_path TEXT NOT NULL,
+                plugin_id TEXT NOT NULL,
+                task_id TEXT,
+                surf_record_id TEXT,
+                crawled_at INTEGER NOT NULL,
+                metadata_id INTEGER,
+                thumbnail_path TEXT NOT NULL DEFAULT '',
+                hash TEXT NOT NULL DEFAULT '',
+                type TEXT DEFAULT 'image',
+                width INTEGER,
+                height INTEGER,
+                display_name TEXT NOT NULL DEFAULT '',
+                last_set_wallpaper_at INTEGER,
+                size INTEGER
+            );
+            CREATE TABLE album_images (
+                album_id TEXT NOT NULL,
+                image_id INTEGER NOT NULL,
+                "order" INTEGER,
+                PRIMARY KEY (album_id, image_id)
+            );
+            CREATE TABLE albums (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                parent_id TEXT
+            );
+            INSERT INTO albums VALUES
+                ('album-a', 'Album A', 1, NULL),
+                ('album-b', 'Album B', 2, NULL);
+            "#,
+        )
+        .unwrap();
+        for id in 1..=12 {
+            conn.execute(
+                "INSERT INTO images
+                 (id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at,
+                  metadata_id, thumbnail_path, hash, type, width, height, display_name, size)
+                 VALUES (?1, ?2, ?3, 'pixiv', NULL, NULL, ?4, NULL, '', ?5, 'image/jpeg', 100, 100, ?6, 10)",
+                (
+                    id,
+                    format!("https://example.test/{id}.jpg"),
+                    format!("D:/fixture/{id}.jpg"),
+                    id,
+                    format!("hash-{id}"),
+                    format!("image-{id}"),
+                ),
+            )
+            .unwrap();
+        }
+        Arc::new(Mutex::new(conn))
+    }
+
+    fn make_executor(conn: Arc<Mutex<Connection>>) -> Arc<dyn pathql_rs::SqlExecutor> {
+        Arc::new(ClosureExecutor::new(
+            SqlDialect::Sqlite,
+            move |sql: &str, params: &[TemplateValue]| {
+                let conn = conn.lock().unwrap();
+                let mut stmt = conn.prepare(sql).map_err(|e| {
+                    EngineError::FactoryFailed("sqlite".into(), "prepare".into(), e.to_string())
+                })?;
+                let rusq_params = local_params_for(params);
+                let col_names: Vec<String> = stmt
+                    .column_names()
+                    .into_iter()
+                    .map(|s| s.to_string())
+                    .collect();
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(rusq_params.iter()), |row| {
+                        let mut obj = serde_json::Map::new();
+                        for (i, name) in col_names.iter().enumerate() {
+                            let value = match row.get_ref_unwrap(i) {
+                                rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+                                rusqlite::types::ValueRef::Integer(i) => serde_json::Value::from(i),
+                                rusqlite::types::ValueRef::Real(f) => serde_json::json!(f),
+                                rusqlite::types::ValueRef::Text(t) => serde_json::Value::String(
+                                    String::from_utf8_lossy(t).into_owned(),
+                                ),
+                                rusqlite::types::ValueRef::Blob(_) => serde_json::Value::Null,
+                            };
+                            obj.insert(name.clone(), value);
+                        }
+                        Ok(serde_json::Value::Object(obj))
+                    })
+                    .map_err(|e| {
+                        EngineError::FactoryFailed("sqlite".into(), "query".into(), e.to_string())
+                    })?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+                    EngineError::FactoryFailed("sqlite".into(), "collect".into(), e.to_string())
+                })
+            },
+        ))
+    }
+
+    fn build_runtime() -> Arc<ProviderRuntime> {
+        let globals = HashMap::from([
+            (
+                "favorite_album_id".to_string(),
+                TemplateValue::Text(crate::storage::FAVORITE_ALBUM_ID.to_string()),
+            ),
+            (
+                "hidden_album_id".to_string(),
+                TemplateValue::Text(crate::storage::HIDDEN_ALBUM_ID.to_string()),
+            ),
+        ]);
+        let runtime = ProviderRuntime::new(make_executor(fixture_db()), globals);
+        register_embedded_dsl(&runtime);
+        validate_dsl(&runtime);
+        runtime
+            .register_schema("images", "images", "kabegame", "images_root_provider")
+            .unwrap();
+        runtime
+            .register_schema("albums", "albums", "kabegame", "albums_root_provider")
+            .unwrap();
+        runtime
+    }
 
     #[test]
     fn runtime_path_promotes_schemeless_paths_to_images_schema() {
@@ -512,5 +692,42 @@ mod tests {
         assert_eq!(runtime_path("images://x100x/1"), "images://x100x/1");
         assert_eq!(runtime_path("vd://locale"), "vd://locale");
         assert_eq!(runtime_path("albums://all"), "albums://all");
+    }
+
+    #[test]
+    fn query_entry_returns_metadata_note_and_total() {
+        let runtime = build_runtime();
+        let entry = query_entry_with_runtime(&runtime, "images://gallery/all").unwrap();
+        assert_eq!(entry.name, "all");
+        assert_eq!(entry.total, Some(12));
+        assert!(entry.note.is_some());
+    }
+
+    #[test]
+    fn query_list_can_include_or_skip_child_totals() {
+        let runtime = build_runtime();
+        let with_count =
+            query_list_with_runtime(&runtime, "images://gallery/plugin", true).unwrap();
+        assert_eq!(with_count.len(), 1);
+        assert_eq!(with_count[0].name, "pixiv");
+        assert_eq!(with_count[0].total, Some(12));
+
+        let without_count =
+            query_list_with_runtime(&runtime, "images://gallery/plugin", false).unwrap();
+        assert_eq!(without_count.len(), 1);
+        assert_eq!(without_count[0].name, "pixiv");
+        assert_eq!(without_count[0].total, None);
+    }
+
+    #[test]
+    fn query_fetch_returns_schema_agnostic_rows() {
+        let runtime = build_runtime();
+        let rows = query_fetch_with_runtime(&runtime, "images://gallery/all/x10x/1").unwrap();
+        assert_eq!(rows.len(), 10);
+        assert!(rows.iter().all(|row| row.get("id").is_some()));
+
+        let albums = query_fetch_with_runtime(&runtime, "albums://all").unwrap();
+        assert_eq!(albums.len(), 2);
+        assert!(albums.iter().all(|row| row.get("name").is_some()));
     }
 }

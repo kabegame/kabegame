@@ -190,6 +190,8 @@ import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
 import { ArrowDown, Filter, Histogram, Sort } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
+import { pathqlEntry, pathqlList } from "@/services/pathql";
+import { withGalleryPrefix } from "@/utils/path";
 import SearchInput from "@/components/SearchInput.vue";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
@@ -322,19 +324,13 @@ interface GalleryMediaTypeCountsPayload {
   videoCount: number;
 }
 
-/** list_provider_children 返回的子条目形状 */
 interface ProviderChildDir {
-  kind: "dir";
   name: string;
-  meta?: {
+  meta: {
     isLeaf?: boolean;
     plain?: boolean;
   } | null;
-  total?: number | null;
-}
-
-interface ProviderCountResult {
-  total?: number | null;
+  total: number | null;
 }
 
 interface PickerCascadeOption {
@@ -372,18 +368,14 @@ const { contextPath: filterContextPrefix } = storeToRefs(galleryRouteStore);
 async function countProviderPath(path: string): Promise<number> {
   const p = path.trim().replace(/\/+$/, "");
   if (!p) return 0;
-  const res = await invoke<ProviderCountResult>("browse_gallery_provider", {
-    path: p,
-  });
+  const res = await pathqlEntry(withGalleryPrefix(p));
   return typeof res?.total === "number" ? res.total : 0;
 }
 
 async function listProviderDirs(path: string): Promise<ProviderChildDir[]> {
-  const entries = await invoke<ProviderChildDir[]>("list_provider_children", {
-    path,
-  });
+  const entries = await pathqlList(withGalleryPrefix(path), true);
   return (Array.isArray(entries) ? entries : []).filter(
-    (e): e is ProviderChildDir => !!e && e.kind === "dir" && typeof e.name === "string" && !!e.name
+    (e): e is ProviderChildDir => !!e && typeof e.name === "string" && !!e.name
   );
 }
 

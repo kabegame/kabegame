@@ -1,5 +1,4 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "aspect_bucket_provider",
     // Shared aspect-ratio bucket filter. Boundaries are mutually exclusive:

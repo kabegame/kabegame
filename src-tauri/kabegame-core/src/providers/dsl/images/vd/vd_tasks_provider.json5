@@ -1,0 +1,20 @@
+{
+    "namespace": "kabegame",
+    "name": "vd_tasks_provider",
+    // VD task route uses localized/display labels but keeps VD-only pagination semantics.
+    "list": {
+        "${task.meta.display}": {
+            "delegate": { "provider": "tasks_provider" },
+            "child_var": "task",
+            "provider": "vd_task_provider",
+            "properties": { "task_id": "${task.name}" },
+            "meta": "${task.meta.vd}"
+        }
+    },
+    "resolve": {
+        "(?:.* - )?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})": {
+            "provider": "vd_task_provider",
+            "properties": { "task_id": "${capture[1]}" }
+        }
+    }
+}

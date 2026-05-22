@@ -6,7 +6,6 @@ members = [
   "src-tauri/kabegame",
   "src-tauri/kabegame-cli",
   "src-tauri-plugins/tauri-plugin-picker",
-  "src-tauri-plugins/tauri-plugin-archiver",
   "src-tauri-plugins/tauri-plugin-pathes",
   "src-tauri-plugins/tauri-plugin-share",
   "src-tauri-plugins/tauri-plugin-compress",
@@ -44,7 +43,6 @@ mp4 = "0.14"
 percent-encoding = "2"
 sha2 = "0.10"
 tauri-build = {version = "2.5", features = []}
-tauri-plugin-archiver = {path = "./src-tauri-plugins/tauri-plugin-archiver"}
 tauri-plugin-compress = {path = "./src-tauri-plugins/tauri-plugin-compress"}
 tauri-plugin-pathes = {path = "./src-tauri-plugins/tauri-plugin-pathes"}
 tauri-plugin-picker = {path = "./src-tauri-plugins/tauri-plugin-picker"}

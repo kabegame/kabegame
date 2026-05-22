@@ -50,8 +50,6 @@
   "selectPath": "경로 선택",
   "recursiveSubdirsLabel": "하위 폴더 재귀",
   "recursiveSubdirs": "이미지/동영상을 위해 하위 폴더 재귀 스캔",
-  "includeArchiveLabel": "압축 파일 포함",
-  "includeArchiveScan": "스캔 시 지원 압축 파일(zip, rar) 포함; 압축 해제 대기열에 추가",
   "startImport": "가져오기 시작",
   "addPathFirst": "최소 하나의 경로 추가",
   "selectFileFailed": "파일 선택 실패",

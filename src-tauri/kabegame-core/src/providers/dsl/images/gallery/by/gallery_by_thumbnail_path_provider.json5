@@ -1,0 +1,11 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_by_thumbnail_path_provider",
+    "properties": {
+        "path": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "(REPLACE(TRIM(COALESCE(images.thumbnail_path, '')), '\\', '/') = REPLACE(${properties.path}, '\\', '/') OR (TRIM(COALESCE(images.thumbnail_path, '')) = '' AND REPLACE(TRIM(images.local_path), '\\', '/') = REPLACE(${properties.path}, '\\', '/')))",
+        "limit": 1
+    }
+}

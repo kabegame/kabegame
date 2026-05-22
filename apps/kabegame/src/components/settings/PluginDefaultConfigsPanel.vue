@@ -247,7 +247,7 @@ watch(selectedPluginId, (id) => {
 watch(
   () => form.value.vars,
   () => {
-    coerceOptionsVarsToVisibleChoices(pluginVars.value as PluginVarDef[], form.value.vars);
+    coerceOptionsVarsToVisibleChoices(pluginVars.value, form.value.vars);
   },
   { deep: true },
 );

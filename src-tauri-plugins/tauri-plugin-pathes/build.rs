@@ -1,9 +1,4 @@
-const COMMANDS: &[&str] = &[
-    "getAppDataDir",
-    "getCachePaths",
-    "getExternalDataDir",
-    "getArchiveExtractDir",
-];
+const COMMANDS: &[&str] = &["getAppDataDir", "getCachePaths", "getExternalDataDir"];
 
 fn main() {
     tauri_plugin::Builder::new(COMMANDS)

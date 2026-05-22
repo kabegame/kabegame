@@ -52,16 +52,14 @@ pub async fn delete_task(task_id: &str) -> IpcResponse {
 }
 
 pub async fn get_task_image_ids(task_id: &str) -> IpcResponse {
-    let storage = Storage::global();
-    match storage.get_task_image_ids(task_id) {
+    match Storage::get_task_image_ids(task_id) {
         Ok(ids) => IpcResponse::ok_with_data("ok", serde_json::to_value(ids).unwrap_or_default()),
         Err(e) => IpcResponse::err(e),
     }
 }
 
 pub async fn get_task_failed_images(task_id: &str) -> IpcResponse {
-    let storage = Storage::global();
-    match storage.get_task_failed_images(task_id) {
+    match Storage::get_task_failed_images(task_id) {
         Ok(images) => {
             IpcResponse::ok_with_data("ok", serde_json::to_value(images).unwrap_or_default())
         }
@@ -70,8 +68,7 @@ pub async fn get_task_failed_images(task_id: &str) -> IpcResponse {
 }
 
 pub async fn get_all_failed_images() -> IpcResponse {
-    let storage = Storage::global();
-    match storage.get_all_failed_images() {
+    match Storage::get_all_failed_images() {
         Ok(images) => {
             IpcResponse::ok_with_data("ok", serde_json::to_value(images).unwrap_or_default())
         }

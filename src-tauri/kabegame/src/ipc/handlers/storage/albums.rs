@@ -78,14 +78,6 @@ pub async fn get_album_preview(album_id: &str, limit: usize) -> IpcResponse {
     }
 }
 
-pub async fn get_album_counts() -> IpcResponse {
-    let storage = Storage::global();
-    match storage.get_album_counts() {
-        Ok(m) => IpcResponse::ok_with_data("ok", serde_json::to_value(m).unwrap_or_default()),
-        Err(e) => IpcResponse::err(e),
-    }
-}
-
 pub async fn update_album_images_order(
     album_id: &str,
     image_orders: &[(String, i64)],
@@ -93,14 +85,6 @@ pub async fn update_album_images_order(
     let storage = Storage::global();
     match storage.update_album_images_order(album_id, image_orders) {
         Ok(()) => IpcResponse::ok("ok"),
-        Err(e) => IpcResponse::err(e),
-    }
-}
-
-pub async fn get_album_image_ids(album_id: &str) -> IpcResponse {
-    let storage = Storage::global();
-    match storage.get_album_image_ids(album_id) {
-        Ok(ids) => IpcResponse::ok_with_data("ok", serde_json::to_value(ids).unwrap_or_default()),
         Err(e) => IpcResponse::err(e),
     }
 }

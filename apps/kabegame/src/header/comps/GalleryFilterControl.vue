@@ -234,6 +234,8 @@ import { useI18n } from "@kabegame/i18n";
 import { useRoute } from "vue-router";
 import { ArrowDown, ArrowRight, Filter } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
+import { pathqlEntry, pathqlList } from "@/services/pathql";
+import { withGalleryPrefix } from "@/utils/path";
 import {
   GALLERY_ASPECT_BUCKETS,
   GALLERY_NAME_LANGUAGE_BUCKETS,
@@ -271,12 +273,9 @@ interface GalleryMediaTypeCountsPayload {
 }
 
 interface ProviderChildDir {
-  kind: "dir";
   name: string;
-}
-
-interface ProviderCountResult {
-  total?: number | null;
+  meta: unknown | null;
+  total: number | null;
 }
 
 const route = useRoute();
@@ -348,19 +347,15 @@ const timeMenuRoots = computed<TimeMenuNode[]>(() =>
 async function countProviderPath(path: string): Promise<number> {
   const p = path.trim().replace(/\/+$/, "");
   if (!p) return 0;
-  const res = await invoke<ProviderCountResult>("browse_gallery_provider", {
-    path: p,
-  });
+  const res = await pathqlEntry(withGalleryPrefix(p));
   return typeof res?.total === "number" ? res.total : 0;
 }
 
 async function listProviderDirs(path: string): Promise<ProviderChildDir[]> {
-  const entries = await invoke<ProviderChildDir[]>("list_provider_children", {
-    path,
-  });
+  const entries = await pathqlList(withGalleryPrefix(path), true);
   return (Array.isArray(entries) ? entries : []).filter(
     (e): e is ProviderChildDir =>
-      !!e && e.kind === "dir" && typeof e.name === "string" && !!e.name
+      !!e && typeof e.name === "string" && !!e.name
   );
 }
 

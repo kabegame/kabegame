@@ -20,11 +20,6 @@ pub async fn get_albums() -> Result<Value, String> {
     serde_json::to_value(albums).map_err(|e| e.to_string())
 }
 
-pub async fn get_album_counts() -> Result<Value, String> {
-    let counts = Storage::global().get_album_counts()?;
-    serde_json::to_value(counts).map_err(|e| e.to_string())
-}
-
 pub async fn get_album_preview(album_id: String, limit: usize) -> Result<Value, String> {
     let mut images = Storage::global().get_album_preview(&album_id, limit)?;
     #[cfg(feature = "web")]
@@ -32,11 +27,6 @@ pub async fn get_album_preview(album_id: String, limit: usize) -> Result<Value, 
         rewrite_image_info(info);
     }
     serde_json::to_value(images).map_err(|e| e.to_string())
-}
-
-pub async fn get_album_image_ids(album_id: String) -> Result<Value, String> {
-    let ids = Storage::global().get_album_image_ids(&album_id)?;
-    serde_json::to_value(ids).map_err(|e| e.to_string())
 }
 
 pub async fn rename_album(album_id: String, new_name: String) -> Result<Value, String> {
@@ -81,7 +71,7 @@ pub async fn add_images_to_album(
 }
 
 pub async fn add_task_images_to_album(task_id: String, album_id: String) -> Result<Value, String> {
-    let image_ids = Storage::global().get_task_image_ids(&task_id)?;
+    let image_ids = Storage::get_task_image_ids(&task_id)?;
     if image_ids.is_empty() {
         return Ok(serde_json::json!({
             "added": 0,

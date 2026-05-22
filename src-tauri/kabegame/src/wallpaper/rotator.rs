@@ -50,8 +50,7 @@ fn current_marker_for_source(
             let img = Storage::find_image_by_id(id).ok().flatten()?;
             Some(CurrentMarker::Time(img.crawled_at as i64))
         }
-        RotationSource::Album(album_id) => Storage::global()
-            .get_album_image_order(album_id, id)
+        RotationSource::Album(album_id) => Storage::get_album_image_order(album_id, id)
             .ok()
             .flatten()
             .map(CurrentMarker::Order),

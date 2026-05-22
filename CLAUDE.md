@@ -73,7 +73,7 @@ bun run build:ffmpeg             # Build FFmpeg sidecar (requires libx264)
 - `src-tauri/kabegame-core/` — `kabegame-core`: shared Rust library (crawler engine, plugin system, storage)
 - `src-tauri/kabegame/` — Tauri GUI app (desktop + Android)
 - `src-tauri/kabegame-cli/` — Headless CLI
-- `src-tauri-plugins/` — Custom Tauri plugins (picker, archiver, pathes, share, compress, wallpaper, task-notification)
+- `src-tauri-plugins/` — Custom Tauri plugins (picker, pathes, share, compress, wallpaper, task-notification)
 - `src-crawler-plugins/` — Rhai-based crawler plugins packaged as `.kgpg` archives
 
 ### Build Modes
@@ -88,7 +88,6 @@ bun run build:ffmpeg             # Build FFmpeg sidecar (requires libx264)
 
 **Single source of truth for file types:**
 - Image extensions/MIME: use `kabegame_core::image_type::*` (e.g. `is_image_by_path`, `supported_image_extensions`). Never hardcode `["jpg","png",...]` in Rust. Frontend uses the `get_supported_image_types` Tauri command.
-- Archive extensions: use `kabegame_core::archive::supported_types()` / `is_archive_by_path()`. Never hardcode `["zip","rar"]` in Rust. Frontend fetches via Tauri command.
 
 **Android modals** — Every overlay (dialog, drawer, ActionSheet, preview) must call `useModalBack(visibleRef)` from `@kabegame/core/composables/useModalBack` so the Android back button closes layers in stack order. The composable is a no-op on desktop; use it everywhere regardless of platform.
 

@@ -1,4 +1,3 @@
-pub mod archiver;
 pub mod content_io;
 pub mod downloader;
 pub mod favicon;

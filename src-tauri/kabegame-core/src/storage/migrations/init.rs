@@ -76,10 +76,13 @@ CREATE INDEX idx_images_last_set_wallpaper_at  ON images(last_set_wallpaper_at D
 
 -- ───────────── albums ─────────────
 CREATE TABLE albums (
-    id         TEXT    PRIMARY KEY,
-    name       TEXT    NOT NULL,
-    created_at INTEGER NOT NULL,
-    parent_id  TEXT    REFERENCES albums(id) ON DELETE CASCADE
+    id            TEXT    PRIMARY KEY,
+    name          TEXT    NOT NULL,
+    created_at    INTEGER NOT NULL,
+    parent_id     TEXT    REFERENCES albums(id) ON DELETE CASCADE,
+    type          TEXT    NOT NULL DEFAULT 'normal',
+    sync_folder   TEXT,
+    folder_status TEXT
 );
 CREATE UNIQUE INDEX idx_albums_name_scoped
     ON albums(COALESCE(parent_id, ''), LOWER(name));

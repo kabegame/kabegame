@@ -50,14 +50,10 @@ pub async fn handle_storage_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::StorageGetAlbumPreview { album_id, limit } => {
             Some(albums::get_album_preview(album_id, *limit).await)
         }
-        IpcRequest::StorageGetAlbumCounts => Some(albums::get_album_counts().await),
         IpcRequest::StorageUpdateAlbumImagesOrder {
             album_id,
             image_orders,
         } => Some(albums::update_album_images_order(album_id, image_orders).await),
-        IpcRequest::StorageGetAlbumImageIds { album_id } => {
-            Some(albums::get_album_image_ids(album_id).await)
-        }
 
         // Tasks
         IpcRequest::StorageGetAllTasks => Some(tasks::get_all_tasks().await),

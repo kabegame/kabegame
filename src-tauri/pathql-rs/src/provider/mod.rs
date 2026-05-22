@@ -286,7 +286,7 @@ pub enum EngineError {
     SchemaAlreadyRegistered(String),
     #[error("path is missing `scheme://` prefix: {0}")]
     MissingScheme(String),
-    #[error("scheme `{0}` is not a valid identifier (must match [a-z][a-z0-9_]*)")]
+    #[error("scheme `{0}` is not a valid identifier (must match [a-z][a-z0-9_-]*)")]
     InvalidScheme(String),
     #[error("load provider error: {0}")]
     Load(#[from] LoadError),

@@ -100,7 +100,7 @@ impl ProviderQuery {
             if let Some(alias) = &f.alias {
                 if let Some(lit) = alias.as_literal() {
                     sql.push_str(" AS ");
-                    sql.push_str(lit);
+                    render_alias_identifier(sql, lit, dialect);
                 }
             }
         }
@@ -125,7 +125,7 @@ impl ProviderQuery {
         render_template_sql(&j.table.0, ctx, &self.aliases, dialect, sql, params)?;
         if let Some(lit) = j.alias.as_literal() {
             sql.push_str(" AS ");
-            sql.push_str(lit);
+            render_alias_identifier(sql, lit, dialect);
         }
         if let Some(on) = &j.on {
             sql.push_str(" ON ");
@@ -251,6 +251,66 @@ fn is_simple_identifier(s: &str) -> bool {
     chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
+fn render_alias_identifier(sql: &mut String, alias: &str, dialect: SqlDialect) {
+    if is_simple_identifier(alias) && !is_sql_keyword(alias) {
+        sql.push_str(alias);
+        return;
+    }
+    let (quote, escaped_quote) = match dialect {
+        SqlDialect::Mysql => ('`', "``"),
+        SqlDialect::Sqlite | SqlDialect::Postgres => ('"', "\"\""),
+    };
+    sql.push(quote);
+    for ch in alias.chars() {
+        if ch == quote {
+            sql.push_str(escaped_quote);
+        } else {
+            sql.push(ch);
+        }
+    }
+    sql.push(quote);
+}
+
+fn is_sql_keyword(s: &str) -> bool {
+    matches!(
+        s.to_ascii_lowercase().as_str(),
+        "all"
+            | "and"
+            | "as"
+            | "by"
+            | "create"
+            | "delete"
+            | "distinct"
+            | "drop"
+            | "false"
+            | "from"
+            | "full"
+            | "group"
+            | "in"
+            | "index"
+            | "inner"
+            | "insert"
+            | "join"
+            | "left"
+            | "like"
+            | "limit"
+            | "not"
+            | "null"
+            | "offset"
+            | "on"
+            | "or"
+            | "order"
+            | "right"
+            | "select"
+            | "table"
+            | "true"
+            | "union"
+            | "update"
+            | "values"
+            | "where"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +386,20 @@ mod tests {
             .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
             .unwrap();
         assert_eq!(sql, "SELECT images.id AS img_id FROM images");
+    }
+
+    #[test]
+    fn select_field_with_reserved_alias_is_quoted() {
+        let mut q = q_with_from("images");
+        q.fields.push(FieldFrag {
+            sql: SqlExpr("images.\"order\"".into()),
+            alias: Some(ResolvedAlias::Literal("order".into())),
+            in_need: false,
+        });
+        let (sql, _) = q
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
+        assert_eq!(sql, "SELECT images.\"order\" AS \"order\" FROM images");
     }
 
     #[test]

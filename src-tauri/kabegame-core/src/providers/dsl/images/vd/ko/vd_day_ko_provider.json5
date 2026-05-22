@@ -1,0 +1,25 @@
+{
+    "namespace": "kabegame",
+    "name": "vd_day_ko_provider",
+    "properties": {
+        "ymd": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "delegate": {
+            "provider": "day_provider",
+            "properties": {
+                "ymd": "${properties.ymd}"
+            }
+        }
+    },
+    "list": {
+        "${out.name}": {
+            "child_var": "out",
+            "delegate": {
+                "provider": "paginate100_provider",
+            },
+            "provider": "${out.provider}",
+            "meta": "${out.meta}"
+        }
+    }
+}

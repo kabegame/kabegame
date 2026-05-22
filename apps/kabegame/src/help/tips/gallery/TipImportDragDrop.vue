@@ -35,13 +35,6 @@
     </section>
 
     <section class="section" v-if="!IS_ANDROID">
-      <h3>{{ $t('help.tipsContent.import-drag-drop.zipTitle') }}</h3>
-      <p>{{ $t('help.tipsContent.import-drag-drop.zipPara1') }}</p>
-      <p>{{ $t('help.tipsContent.import-drag-drop.zipPara2') }}</p>
-      <TipImageCarousel v-if="zipImages.length > 0" :images="zipImages" />
-    </section>
-
-    <section class="section" v-if="!IS_ANDROID">
       <h3>{{ $t('help.tipsContent.import-drag-drop.macosTitle') }}</h3>
       <p>{{ $t('help.tipsContent.import-drag-drop.macosPara1') }}</p>
       <p>{{ $t('help.tipsContent.import-drag-drop.macosPara2') }}</p>
@@ -75,9 +68,6 @@ const usageImages = ref<TipImage[]>([]);
 // 图片路径：/help-images/import/drag-drop-folder-*.png
 const folderImages = ref<TipImage[]>([]);
 
-// 压缩包导入示例图片
-// 图片路径：/help-images/import/drag-drop-zip-*.png
-const zipImages = ref<TipImage[]>([]);
 </script>
 
 <style scoped lang="scss">

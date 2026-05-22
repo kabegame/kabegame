@@ -150,7 +150,8 @@ import { computed, ref, watch, onUnmounted } from "vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
-import { invoke } from "@/api/rpc";
+import { pathqlEntry } from "@/services/pathql";
+import { withGalleryPrefix } from "@/utils/path";
 import { ArrowDown, Filter, Sort } from "@element-plus/icons-vue";
 import GalleryPageSizeControl from "@/components/GalleryPageSizeControl.vue";
 import SearchInput from "@/components/SearchInput.vue";
@@ -191,10 +192,6 @@ interface GalleryMediaTypeCountsPayload {
   videoCount: number;
 }
 
-interface ProviderCountResult {
-  total?: number | null;
-}
-
 const albumId = computed(() => (props.albumId ?? "").trim());
 const albumDetailRouteStore = useAlbumDetailRouteStore();
 
@@ -206,9 +203,7 @@ const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
 async function countProviderPath(path: string): Promise<number> {
   const p = path.trim().replace(/\/+$/, "");
   if (!p) return 0;
-  const res = await invoke<ProviderCountResult>("browse_gallery_provider", {
-    path: p,
-  });
+  const res = await pathqlEntry(withGalleryPrefix(p));
   return typeof res?.total === "number" ? res.total : 0;
 }
 

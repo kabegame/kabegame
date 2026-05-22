@@ -10,7 +10,7 @@
       <video
         v-if="bgMediaType === 'video'"
         ref="bgVideoRef"
-        :key="bgImageUrl"
+        :key="`video-${bgImageUrl}`"
         :src="bgImageUrl"
         class="app-background-media"
         :style="bgImageStyle"
@@ -112,7 +112,7 @@
             <span>{{ $t('route.help') }}</span>
           </el-menu-item>
         </el-menu>
-        <div class="w-full pos-sticky">
+        <div class="w-full pos-sticky bottom-0">
           <KamechanMascot />
         </div>
       </el-aside>
@@ -126,7 +126,6 @@
     </el-main>
     <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
     <nav v-if="uiStore.isCompact" class="app-bottom-tabs" aria-label="主导航">
-      
       <router-link
         v-for="tab in bottomTabs"
         :key="tab.index"
@@ -179,6 +178,8 @@ import { useSidebar } from "./composables/useSidebar";
 import { listen, emit, UnlistenFn } from "@/api/rpc";
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from "@/api/rpc";
+import { pathqlFetch } from "@/services/pathql";
+import { rowToImageInfo } from "@/utils/imageRow";
 import { IS_WINDOWS, IS_MACOS, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { fileToUrl, initHttpServerBaseUrl } from "@kabegame/core/httpServer";
 import type { ImageInfo } from "@kabegame/core/types/image";
@@ -285,17 +286,6 @@ if (IS_WEB) {
 const missedRunsVisible = ref(false);
 const missedRunItems = ref<import("@kabegame/core/stores/crawler").MissedRunItem[]>([]);
 
-type GalleryBrowseEntry =
-  | { kind: "dir"; name: string }
-  | { kind: "image"; image: ImageInfo };
-
-type GalleryBrowseResult = {
-  entries: GalleryBrowseEntry[];
-  total: number | null;
-  meta?: { kind: string; data: unknown } | null;
-  note?: { title: string; content: string } | null;
-};
-
 // 窗口事件监听
 const { init: initWindowEvents } = useWindowEvents();
 
@@ -375,11 +365,8 @@ watch(
       let image = (await invoke<ImageInfo | null>("get_image_by_id", { imageId })) ?? undefined;
 
       if (!image) {
-        const path = `images://id_${imageId}/`;
-        const res = await invoke<GalleryBrowseResult>("query_provider", {
-          path,
-        });
-        image = (res.entries || []).find((entry) => entry.kind === "image")?.image;
+        const path = `images://id_${encodeURIComponent(imageId)}`;
+        image = (await pathqlFetch<Record<string, unknown>>(path)).map(rowToImageInfo)[0];
       }
 
       const source = image?.localPath ? fileToUrl(image.localPath) : "";

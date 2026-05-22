@@ -14,7 +14,7 @@ description: 教你如何用 Rhai 编写 Kabegame 爬虫插件：脚本生命周
 `crawl.rhai` **没有 main 函数**，整份文件从上到下执行一次。顶层的 `set_header(...)`、`to(...)`、`for` 循环等都是脚本主体。
 
 - 脚本**不应返回值**；若需提前退出，使用 `return;`（不是 `return [];`）。
-- 下载类调用（`download_image` / `download_archive`）是**异步入队**：它们立即返回，真正的下载在后台工作线程进行。脚本无需等待即可继续。
+- `download_image` 是**异步入队**：它立即返回，真正的下载在后台工作线程进行。脚本无需等待即可继续。
 - 函数失败时会返回错误字符串，可用 `?` 操作符向外传播。
 - 任务被用户取消后，`add_progress` 与 `download_*` 的下一次调用会抛出 `"Task canceled"`，配合 `?` 可让脚本干净地中止。
 
@@ -256,24 +256,6 @@ download_image("https://example.com/a.jpg", #{
 // 也可下载视频
 download_image("https://example.com/video.mp4");
 ```
-
-### `download_archive(url, type)`
-
-导入压缩包（异步处理）。
-
-```rust
-// 自动检测类型（推荐）
-download_archive("https://example.com/pack.zip", ());
-
-// 指定类型
-download_archive("D:\\Downloads\\pack.rar", "rar");
-```
-
-### `get_supported_archive_types()`
-
-获取当前系统支持的压缩包类型列表，返回字符串数组（如 `["rar", "zip"]`）。
-
----
 
 ## 元数据白名单
 

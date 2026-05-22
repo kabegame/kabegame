@@ -97,6 +97,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { invoke } from "@/api/rpc";
+import { pathqlEntry } from "@/services/pathql";
+import { withGalleryPrefix } from "@/utils/path";
 import { useRouter, useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Plus, Picture, Star, StarFilled, FolderAdd, Delete, FolderOpened, Connection } from "@element-plus/icons-vue";
@@ -149,7 +151,6 @@ export interface SelectionAction {
   icon: Component;
   command: string;
 }
-import { open } from "@tauri-apps/plugin-dialog";
 import MediaPicker from "@/components/MediaPicker.vue";
 import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
 import { useImageTypes } from "@/composables/useImageTypes";
@@ -277,17 +278,6 @@ watch(
   { immediate: true }
 );
 
-type GalleryBrowseEntry =
-  | { kind: "dir"; name: string }
-  | { kind: "image"; image: ImageInfo };
-
-type GalleryBrowseResult = {
-  entries: GalleryBrowseEntry[];
-  total: number | null;
-  meta?: { kind: string; data: unknown } | null;
-  note?: { title: string; content: string } | null;
-};
-
 const selectedRange = ref<[string, string] | null>(null);
 
 const extractRangeFromProviderRoot = (
@@ -410,7 +400,7 @@ const handleCollectSourceSelect = (source: "local" | "remote") => {
 
 // 处理媒体选择器的选择事件（先关闭抽屉，再处理）
 const handleMediaPickerSelect = async (
-  type: "image" | "folder" | "video" | "archive",
+  type: "image" | "folder" | "video",
   payload?: PickFolderResult
 ) => {
   showMediaPicker.value = false;
@@ -419,7 +409,7 @@ const handleMediaPickerSelect = async (
 
 // 紧凑模式下的媒体选择处理函数；选文件夹时由 MediaPicker 调 pickFolder，结果通过 payload 传入
 const handleAndroidMediaSelection = async (
-  type: "image" | "folder" | "video" | "archive",
+  type: "image" | "folder" | "video",
   folderResult?: PickFolderResult
 ) => {
   if (await guardDesktopOnly("picker")) return;
@@ -432,7 +422,6 @@ const handleAndroidMediaSelection = async (
       crawlerStore.addTask("local-import", undefined, {
         paths: uris,
         recursive: false,
-        include_archive: false,
       });
       ElMessage.success(t("gallery.localImportTaskAdded"));
     } else if (type === 'video') {
@@ -443,34 +432,6 @@ const handleAndroidMediaSelection = async (
       crawlerStore.addTask("local-import", undefined, {
         paths: uris,
         recursive: false,
-        include_archive: false,
-      });
-      ElMessage.success(t("gallery.localImportTaskAdded"));
-    } else if (type === 'archive') {
-      console.log('选择压缩文件');
-      // 选择压缩文件（支持 .zip、.rar、.7z、.tar、.gz、.bz2、.xz）
-      const selected = await open({
-        directory: false,
-        multiple: false,
-        filters: [
-          {
-            name: t("gallery.compressFile"),
-            extensions: ['zip'],
-          },
-        ],
-      });
-
-      if (!selected) {
-        return;
-      }
-
-      const paths = Array.isArray(selected) ? selected : [selected];
-      if (paths.length === 0) return;
-
-      crawlerStore.addTask("local-import", undefined, {
-        paths,
-        recursive: false,
-        include_archive: true,
       });
       ElMessage.success(t("gallery.localImportTaskAdded"));
     } else if (type === 'folder' && folderResult) {
@@ -479,7 +440,6 @@ const handleAndroidMediaSelection = async (
       crawlerStore.addTask("local-import", undefined, {
         paths: [folderPath],
         recursive: true,
-        include_archive: false,
       });
       ElMessage.success(t("gallery.localImportTaskAdded"));
     }
@@ -740,9 +700,7 @@ const loadTotalImagesCount = async () => {
       galleryRouteStore.search
     );
     const countPath = galleryRouteStore.hide ? `hide/${rootPath}` : rootPath;
-    const res = await invoke<{ total: number | null }>("browse_gallery_provider", {
-      path: countPath,
-    });
+    const res = await pathqlEntry(withGalleryPrefix(countPath));
     totalImagesCount.value = res?.total ?? 0;
   } catch (error) {
     console.error("获取总图片数失败:", error);
@@ -1300,7 +1258,6 @@ onMounted(async () => {
         crawlerStore.addTask("local-import", undefined, {
           paths: [path],
           recursive: true,
-          include_archive: false,
         });
         ElMessage.success(t("gallery.localImportTaskAdded"));
       } catch (error) {

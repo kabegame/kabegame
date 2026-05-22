@@ -3,20 +3,16 @@ import { invoke } from "../api";
 import { IS_WEB } from "../env";
 import { imageMetadataCacheDb } from "../cache/imageMetadataCache";
 
-/** 按 imageId / metadataId 解析插件 metadata（全局 LRU + IndexedDB 缓存，最多 1024 条） */
-export type ImageMetadataResolver = (
-  imageId: string,
-  metadataId?: number,
-) => Promise<unknown | null>;
+/** 按 imageId 解析插件 metadata（全局 LRU + IndexedDB 缓存，最多 1024 条） */
+export type ImageMetadataResolver = (imageId: string) => Promise<unknown | null>;
 
 export const imageMetadataResolverKey: InjectionKey<ImageMetadataResolver> =
   Symbol("imageMetadataResolver");
 
 const MAX_CACHE_SIZE = 1024;
 
-/** metadataId 存在时用其字符串作 key，否则降级为 imageId */
-function cacheKeyFor(imageId: string, metadataId?: number): string {
-  return metadataId != null ? String(metadataId) : imageId;
+function cacheKeyFor(imageId: string): string {
+  return imageId;
 }
 
 class LruMap {
@@ -78,13 +74,10 @@ function ensureInit(): Promise<void> {
  * clearCache() 已为 no-op（全局 LRU + IndexedDB 自动管理容量，无需手动清空）。
  */
 export function useProvideImageMetadataCache() {
-  async function resolveMetadata(
-    imageId: string,
-    metadataId?: number,
-  ): Promise<unknown | null> {
+  async function resolveMetadata(imageId: string): Promise<unknown | null> {
     await ensureInit();
 
-    const key = cacheKeyFor(imageId, metadataId);
+    const key = cacheKeyFor(imageId);
 
     // 1. 内存 LRU 命中（初始化后与 Dexie 同步，命中内存即命中持久化层）
     if (mem.has(key)) {
@@ -92,12 +85,7 @@ export function useProvideImageMetadataCache() {
     }
 
     // 2. 后端 IPC 拉取
-    const raw =
-      metadataId != null
-        ? await invoke<unknown | null>("get_image_metadata_by_metadata_id", {
-            metadataId,
-          })
-        : await invoke<unknown | null>("get_image_metadata", { imageId });
+    const raw = await invoke<unknown | null>("get_image_metadata", { imageId });
     const v = raw ?? null;
 
     const evictedKey = mem.set(key, v);

@@ -35,9 +35,6 @@
                 </transition-group>
               </div>
             </div>
-            <div class="downloads-substatus" :title="archiverLogText">
-              {{ archiverLogText }}
-            </div>
           </div>
         </div>
       </CollapsibleDrawerPanel>
@@ -373,8 +370,6 @@ let unlistenDownloadProgress: null | (() => void) = null;
 const downloadStateByKey = ref<Record<string, { state: string; error?: string; updatedAt: number }>>({});
 let unlistenDownloadState: null | (() => void) = null;
 
-const archiverLogText = ref("");
-let unlistenArchiverLog: null | (() => void) = null;
 const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
 
 const downloadKey = (d: ActiveDownloadInfo) => `${d.task_id}::${d.start_time}::${d.url}`;
@@ -660,14 +655,6 @@ const initAllEventListeners = async () => {
   } catch (error) {
     console.error("监听下载状态失败:", error);
   }
-  try {
-    unlistenArchiverLog = await listen<{ text?: string }>("archiver-log", (event) => {
-      const next = String((event.payload as any)?.text ?? "").trim();
-      archiverLogText.value = next;
-    });
-  } catch (error) {
-    console.error("监听 archiver-log 失败:", error);
-  }
 };
 
 const stopAllEventListeners = () => {
@@ -684,13 +671,6 @@ const stopAllEventListeners = () => {
     // ignore
   } finally {
     unlistenDownloadState = null;
-  }
-  try {
-    unlistenArchiverLog?.();
-  } catch {
-    // ignore
-  } finally {
-    unlistenArchiverLog = null;
   }
   eventListenersInitialized = false;
 

@@ -116,6 +116,7 @@ async function tryOpenVideo(path: string) {
 }
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
+import { Plugin } from "@kabegame/core/stores/plugins";
 
 // core 版保留通用图片意图；favorite/addToAlbum 等 kabegame 专属入口仍在 wrapper 层扩展。
 export type ContextCommand =
@@ -180,7 +181,7 @@ interface Props {
   /** 让外层 image-grid-container 自己成为滚动容器，before-grid 与图片共享同一个 sticky 上下文。 */
   scrollWholeContainer?: boolean;
   /** 插件列表（用于桌面预览内详情抽屉显示插件名称） */
-  plugins?: Array<{ id: string; name?: string }>;
+  plugins?: Array<Plugin>;
 }
 
 const props = withDefaults(defineProps<Props>(), {

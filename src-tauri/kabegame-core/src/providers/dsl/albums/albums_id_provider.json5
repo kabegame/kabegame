@@ -1,17 +1,10 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "albums_id_provider",
     "properties": {
         "album_id": { "type": "string", "default": "", "optional": false }
     },
     "query": {
-        "fields": [
-            { "sql": "albums.id", "as": "id" },
-            { "sql": "albums.name", "as": "name" },
-            { "sql": "albums.created_at", "as": "created_at" },
-            { "sql": "albums.parent_id", "as": "parent_id" }
-        ],
         "where": "albums.id = ${properties.album_id}",
         "limit": 1
     }

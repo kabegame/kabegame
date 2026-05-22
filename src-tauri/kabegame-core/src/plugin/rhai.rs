@@ -113,8 +113,7 @@ fn run_rhai_download_image_sync(
 
     // 注意：不在 Rhai 层做「按本地路径已存在就跳过」的短路。
     const MAX_TASK_IMAGES: usize = 10000;
-    let storage = Storage::global();
-    match storage.get_task_image_ids(&task_id) {
+    match Storage::get_task_image_ids(&task_id) {
         Ok(image_ids) => {
             if image_ids.len() >= MAX_TASK_IMAGES {
                 return Err(format!(
@@ -1646,95 +1645,6 @@ pub fn register_crawler_functions(
                 .map_err(|e| e.to_string().into())
         },
     );
-
-    // download_archive(url, type) - 导入压缩包（目前仅支持 zip）
-    let dq_handle = Arc::clone(&download_queue);
-    let images_dir_holder = Arc::clone(&images_dir);
-    let plugin_id_holder = Arc::clone(&plugin_id);
-    let task_id_holder = Arc::clone(&task_id);
-    let output_album_id_holder = Arc::clone(&output_album_id);
-    let http_headers_holder = Arc::clone(&http_headers);
-    engine.register_fn(
-        "download_archive",
-        move |url: &str, archive_type: Dynamic| -> Result<(), Box<rhai::EvalAltResult>> {
-            let archive_type_str = if archive_type.is_unit() {
-                "none".to_string()
-            } else if archive_type.is_string() {
-                archive_type.into_string().unwrap()
-            } else {
-                return Err("archive_type must be a string or none".into());
-            };
-
-            let images_dir = {
-                let guard = match images_dir_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                guard.clone()
-            };
-            let plugin_id = {
-                let guard = match plugin_id_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                guard.clone()
-            };
-            let task_id_for_download = {
-                let guard = match task_id_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                guard.clone()
-            };
-            let output_album_id_for_download = {
-                let guard = match output_album_id_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                guard.clone()
-            };
-            let http_headers_for_download = {
-                let guard = match http_headers_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                guard.clone()
-            };
-
-            // 如果任务已被取消，让脚本失败退出
-            if dq_handle.is_task_canceled_blocking(&task_id_for_download) {
-                return Err("Task canceled".into());
-            }
-
-            // 记录“导入开始时间”（用于 UI 排序）
-            let download_start_time = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64;
-
-            let parsed_url = Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
-            let fut = dq_handle.download_archive(
-                parsed_url,
-                &archive_type_str,
-                images_dir,
-                plugin_id,
-                task_id_for_download,
-                download_start_time,
-                output_album_id_for_download,
-                http_headers_for_download,
-            );
-            tokio::runtime::Handle::current()
-                .block_on(fut)
-                .map_err(|e| format!("Failed to download archive: {}", e).into())
-        },
-    );
-
-    engine.register_fn("get_supported_archive_types", || -> Vec<Dynamic> {
-        crate::archive::supported_types()
-            .into_iter()
-            .map(Into::into)
-            .collect()
-    });
 }
 
 /// 执行 Rhai 爬虫脚本

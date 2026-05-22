@@ -1,0 +1,11 @@
+{
+    "namespace": "kabegame",
+    "name": "fail_images_id_provider",
+    "properties": {
+        "failed_id": { "type": "number", "default": 0, "optional": false }
+    },
+    "query": {
+        "where": "task_failed_images.id = ${properties.failed_id}",
+        "limit": 1
+    }
+}

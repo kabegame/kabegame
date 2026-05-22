@@ -69,11 +69,6 @@
           {{ $t('albums.recursiveSubdirs') }}
         </el-checkbox>
       </el-form-item>
-      <el-form-item :label="$t('albums.includeArchiveLabel')">
-        <el-checkbox v-model="includeArchive">
-          {{ $t('albums.includeArchiveScan') }}
-        </el-checkbox>
-      </el-form-item>
     </el-form>
 
     <template #footer>
@@ -131,7 +126,6 @@ const newOutputAlbumName = ref("");
 const paths = ref<string[]>([]);
 const files = ref<File[]>([]);
 const recursive = ref(true);
-const includeArchive = ref(false);
 const isCreatingNewOutputAlbum = computed(
   () => selectedOutputAlbumId.value === "__create_new__"
 );
@@ -146,10 +140,6 @@ function trackLocalImportStart(data: Record<string, unknown>) {
     source: "local",
     ...data,
   });
-}
-
-function hasExplicitArchivePath(path: string): boolean {
-  return /\.(zip|rar)$/i.test(path.trim());
 }
 
 function pickWebFiles(directory: boolean): Promise<File[]> {
@@ -205,7 +195,6 @@ async function handleAddFiles() {
       multiple: true,
       filters: [
         { name: t('common.media'), extensions: exts },
-        { name: t('common.archive'), extensions: ["zip", "rar"] },
       ],
     });
 
@@ -311,14 +300,11 @@ async function handleSubmit() {
   }
 
   if (IS_WEB) {
-    const hasArchiveFiles = files.value.some((f) => hasExplicitArchivePath(f.name));
-    const effectiveIncludeArchive = includeArchive.value || hasArchiveFiles;
     const fileCount = files.value.length;
     try {
       await uploadImport(files.value, {
         outputAlbumId,
         recursive: recursive.value,
-        includeArchive: effectiveIncludeArchive,
       });
     } catch (e) {
       console.error("上传导入失败:", e);
@@ -332,20 +318,16 @@ async function handleSubmit() {
       mode: "upload",
       file_count: fileCount,
       recursive: recursive.value,
-      include_archive: effectiveIncludeArchive,
       output_album: outputAlbumId ? "existing" : "none",
     });
     return;
   }
 
-  const hasArchiveFiles = paths.value.some(hasExplicitArchivePath);
-  const effectiveIncludeArchive = includeArchive.value || hasArchiveFiles;
   const pathCount = paths.value.length;
 
   crawlerStore.addTask("local-import", undefined, {
     paths: paths.value,
     recursive: recursive.value,
-    include_archive: effectiveIncludeArchive,
   }, outputAlbumId);
 
   visible.value = false;
@@ -355,7 +337,6 @@ async function handleSubmit() {
     mode: "task",
     path_count: pathCount,
     recursive: recursive.value,
-    include_archive: effectiveIncludeArchive,
     output_album: outputAlbumId ? "existing" : "none",
   });
 }

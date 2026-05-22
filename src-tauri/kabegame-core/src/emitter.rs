@@ -14,6 +14,9 @@ use crate::storage::tasks::TaskFailedImage;
 use crate::storage::Storage;
 #[cfg(feature = "ipc-server")]
 use serde_json::json;
+#[cfg(feature = "ipc-server")]
+use std::collections::HashMap;
+#[cfg(feature = "ipc-server")]
 use std::sync::OnceLock;
 
 // ==================== IPC 实现 ====================
@@ -235,10 +238,12 @@ impl GlobalEmitter {
         album_ids: &[String],
         image_ids: &[String],
     ) {
+        let direct_counts = album_direct_counts(album_ids);
         let event = std::sync::Arc::new(DaemonEvent::AlbumImagesChange {
             reason: reason.to_string(),
             album_ids: album_ids.to_vec(),
             image_ids: image_ids.to_vec(),
+            direct_counts,
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -438,6 +443,22 @@ impl GlobalEmitter {
             self.emit_task_changed(task_id, serde_json::Value::Object(diff));
         }
     }
+}
+
+#[cfg(feature = "ipc-server")]
+fn album_direct_counts(album_ids: &[String]) -> Option<HashMap<String, usize>> {
+    let mut counts = HashMap::new();
+    for id in album_ids {
+        let id = id.trim();
+        if id.is_empty() || counts.contains_key(id) {
+            continue;
+        }
+        let path = format!("images://gallery/album/{}", urlencoding::encode(id));
+        if let Ok(count) = crate::providers::count_at(&path) {
+            counts.insert(id.to_string(), count);
+        }
+    }
+    (!counts.is_empty()).then_some(counts)
 }
 
 /// 全局 emitter 单例存储

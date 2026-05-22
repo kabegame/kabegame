@@ -12,7 +12,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { Picture, FolderOpened, Box, VideoPlay } from "@element-plus/icons-vue";
+import { Picture, FolderOpened, VideoPlay } from "@element-plus/icons-vue";
 import OptionPickerDrawer from "@/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@/components/common/OptionPickerDrawer.vue";
 import { pickFolder, type PickFolderResult } from "tauri-plugin-picker-api";
@@ -35,7 +35,7 @@ const appStore = useApp();
 
 const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;
-  (e: "select", type: "image" | "folder" | "video" | "archive", payload?: PickFolderResult): void;
+  (e: "select", type: "image" | "folder" | "video", payload?: PickFolderResult): void;
 }>();
 
 const mediaOptions = computed<OptionItem[]>(() => [
@@ -57,19 +57,13 @@ const mediaOptions = computed<OptionItem[]>(() => [
     desc: t('gallery.selectFolderDesc'),
     icon: FolderOpened,
   }]),
-  {
-    id: "archive",
-    title: t('gallery.selectArchive'),
-    desc: t('gallery.selectArchiveDesc'),
-    icon: Box,
-  },
 ]);
 
 // 受控：仅通过 modelValue 控制显示；选择时发 select，由父组件关闭
 // 移动端选文件夹时在此调用 picker 插件并带上结果
 const handleSelect = async (id: string) => {
   if (!appStore.isSuper && await guardDesktopOnly("picker")) return;
-  const type = id as "image" | "folder" | "video" | "archive";
+  const type = id as "image" | "folder" | "video";
   if (type === "folder") {
     const result = await pickFolder();
     if (result?.uri ?? result?.path) {

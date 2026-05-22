@@ -22,7 +22,8 @@
       "Bash(awk *)",
       "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\\\\apps\\\\kabegame\\\\src\\\\components\" -Filter \"Task*.vue\")",
       "Bash(Select-Object FullName)",
-      "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\\\\src-tauri\\\\pathql-rs\" -Recurse -Name)"
+      "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\\\\src-tauri\\\\pathql-rs\" -Recurse -Name)",
+      "Bash(xargs basename -a)"
     ]
   }
 }

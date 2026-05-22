@@ -1,0 +1,27 @@
+[package]
+name = "native-auto-import-probe"
+version = "0.1.0"
+edition = "2021"
+
+# Keep this experimental tool out of the repository root workspace.
+[workspace]
+
+[dependencies]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", default-features = false }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSDate",
+  "NSDictionary",
+  "NSCompoundPredicate",
+  "NSMetadata",
+  "NSMetadataAttributes",
+  "NSObject",
+  "NSNotification",
+  "NSObjCRuntime",
+  "NSPredicate",
+  "NSRunLoop",
+  "NSString",
+] }

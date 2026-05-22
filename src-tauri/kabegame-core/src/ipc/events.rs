@@ -252,6 +252,8 @@ pub enum DaemonEvent {
         album_ids: Vec<String>,
         #[serde(rename = "imageIds")]
         image_ids: Vec<String>,
+        #[serde(rename = "directCounts", skip_serializing_if = "Option::is_none")]
+        direct_counts: Option<std::collections::HashMap<String, usize>>,
     },
 
     /// 壁纸图片更新事件

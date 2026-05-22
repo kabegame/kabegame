@@ -85,7 +85,7 @@ pub async fn add_task_images_to_album(
     task_id: String,
     album_id: String,
 ) -> Result<serde_json::Value, String> {
-    let image_ids = Storage::global().get_task_image_ids(&task_id)?;
+    let image_ids = Storage::get_task_image_ids(&task_id)?;
     if image_ids.is_empty() {
         return Ok(serde_json::to_value(serde_json::json!({
             "added": 0,
@@ -116,23 +116,12 @@ pub async fn remove_images_from_album(
 }
 
 #[tauri::command]
-pub async fn get_album_image_ids(album_id: String) -> Result<Vec<String>, String> {
-    Storage::global().get_album_image_ids(&album_id)
-}
-
-#[tauri::command]
 pub async fn get_album_preview(
     album_id: String,
     limit: usize,
 ) -> Result<serde_json::Value, String> {
     let images = Storage::global().get_album_preview(&album_id, limit)?;
     Ok(serde_json::to_value(images).map_err(|e| e.to_string())?)
-}
-
-#[tauri::command]
-pub async fn get_album_counts() -> Result<serde_json::Value, String> {
-    let counts = Storage::global().get_album_counts()?;
-    Ok(serde_json::to_value(counts).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]

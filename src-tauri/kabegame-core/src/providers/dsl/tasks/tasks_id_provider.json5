@@ -1,33 +1,10 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "tasks_id_provider",
     "properties": {
         "task_id": { "type": "string", "default": "", "optional": false }
     },
     "query": {
-        "fields": [
-            { "sql": "tasks.id", "as": "id" },
-            { "sql": "tasks.plugin_id", "as": "plugin_id" },
-            { "sql": "tasks.output_dir", "as": "output_dir" },
-            { "sql": "tasks.user_config", "as": "user_config" },
-            { "sql": "tasks.http_headers", "as": "http_headers" },
-            { "sql": "tasks.output_album_id", "as": "output_album_id" },
-            { "sql": "tasks.run_config_id", "as": "run_config_id" },
-            {
-                "sql": "COALESCE(NULLIF(tasks.trigger_source, ''), 'manual')",
-                "as": "trigger_source"
-            },
-            { "sql": "tasks.status", "as": "status" },
-            { "sql": "tasks.progress", "as": "progress" },
-            { "sql": "tasks.deleted_count", "as": "deleted_count" },
-            { "sql": "tasks.dedup_count", "as": "dedup_count" },
-            { "sql": "tasks.success_count", "as": "success_count" },
-            { "sql": "tasks.failed_count", "as": "failed_count" },
-            { "sql": "tasks.start_time", "as": "start_time" },
-            { "sql": "tasks.end_time", "as": "end_time" },
-            { "sql": "tasks.error", "as": "error" }
-        ],
         "where": "tasks.id = ${properties.task_id}",
         "limit": 1
     }

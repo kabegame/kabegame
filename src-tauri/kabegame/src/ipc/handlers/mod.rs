@@ -200,7 +200,7 @@ async fn handle_task_retry_failed_image(failed_id: i64) -> IpcResponse {
 
 async fn handle_task_delete_failed_image(failed_id: i64) -> IpcResponse {
     let storage = Storage::global();
-    let task_id = match storage.get_task_failed_image_by_id(failed_id) {
+    let task_id = match Storage::get_task_failed_image_by_id(failed_id) {
         Ok(item) => item.map(|item| item.task_id),
         Err(e) => return IpcResponse::err(e),
     };

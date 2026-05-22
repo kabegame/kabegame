@@ -30,31 +30,38 @@
 
 <script setup lang="ts">
 import PluginVarField from "../plugin/var-fields/PluginVarField.vue";
-
-type AnyVarDef = {
-  key: string;
-  type?: string;
-  min?: number;
-  max?: number;
-  format?: string;
-  dateMin?: string;
-  dateMax?: string;
-};
+import { usePluginConfigI18n } from "@kabegame/i18n";
+import { filterVarOptionsByWhen } from "../../utils/pluginVarWhen";
+import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
 
 const props = defineProps<{
-  pluginVars: AnyVarDef[];
+  pluginVars: PluginVarDef[];
   modelValue: Record<string, any>;
-  varDisplayName: (varDef: AnyVarDef) => string;
-  varDescripts: (varDef: AnyVarDef) => string;
-  optionsForVar: (varDef: AnyVarDef) => (string | { name: string; variable: string })[];
-  isRequired: (varDef: AnyVarDef) => boolean;
-  getValidationRules: (varDef: AnyVarDef, displayName?: string) => any[];
-  getFileExtensions: (varDef: AnyVarDef) => string[] | undefined;
 }>();
 
 const emit = defineEmits<{
   "update:modelValue": [value: Record<string, any>];
 }>();
+
+const { varDisplayName, varDescripts, optionDisplayName } = usePluginConfigI18n();
+const { isRequired, getValidationRules } = usePluginConfig();
+
+const optionsForVar = (varDef: PluginVarDef): (string | { name: string; variable: string })[] => {
+  const filtered = filterVarOptionsByWhen(varDef.options, props.modelValue ?? {});
+  return filtered.map((opt) =>
+    typeof opt === "string" ? opt : { name: optionDisplayName(opt), variable: opt.variable },
+  );
+};
+
+const getFileExtensions = (varDef: PluginVarDef): string[] | undefined => {
+  const opts = varDef.options;
+  if (!Array.isArray(opts)) return undefined;
+  const exts = opts
+    .map((o) => (typeof o === "string" ? o : o.variable))
+    .map((s) => s.trim().replace(/^\./, "").toLowerCase())
+    .filter(Boolean);
+  return exts.length > 0 ? exts : undefined;
+};
 
 const updateVar = (key: string, value: any) => {
   emit("update:modelValue", {

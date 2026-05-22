@@ -228,23 +228,6 @@ impl Storage {
         crate::providers::image_metadata_at(image_id)
     }
 
-    /// 按 `image_metadata.id` 直接取 JSON（前端按 metadataId 缓存时命中）。
-    pub fn get_image_metadata_by_metadata_id(
-        &self,
-        metadata_id: i64,
-    ) -> Result<Option<Value>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let meta: Option<String> = conn
-            .query_row(
-                "SELECT data FROM image_metadata WHERE id = ?1",
-                params![metadata_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| format!("Failed to query image_metadata: {}", e))?;
-        Ok(parse_image_metadata_json(meta))
-    }
-
     /// Rhai `create_image_metadata`：将 JSON 写入 `image_metadata` 并返回 id。
     pub fn insert_or_get_image_metadata_row(&self, value: &Value) -> Result<i64, String> {
         let s = serde_json::to_string(value)

@@ -177,8 +177,7 @@ impl TaskScheduler {
     /// 失败图片重试：spawn 异步任务入队，立即返回；可在等待容量期间 `cancel_retry_failed_image` abort。
     pub async fn retry_failed_image(&self, failed_id: i64) -> Result<(), String> {
         let storage = Storage::global();
-        let item = storage
-            .get_task_failed_image_by_id(failed_id)?
+        let item = Storage::get_task_failed_image_by_id(failed_id)?
             .ok_or_else(|| "失败图片记录不存在".to_string())?;
 
         let task = storage

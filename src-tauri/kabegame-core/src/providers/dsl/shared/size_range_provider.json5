@@ -1,5 +1,4 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "size_range_provider",
     // 共享大小范围过滤器。接收字节数 min/max，添加 WHERE 并按 images.size 正序排列。

@@ -308,13 +308,7 @@ export function useImageOperations(
       // 新策略：收藏状态以 store 为准，不再通过全局事件/清缓存同步
       // 1) 更新画廊缓存（就地更新，避免全量刷新导致“加载更多”图片丢失）
       applyFavoriteChangeToGalleryCache([image.id], newFavorite);
-      // 2) 更新收藏画册计数（用于画册页预览/计数显示）
-      const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID] || 0;
-      albumStore.albumCounts[FAVORITE_ALBUM_ID] = Math.max(
-        0,
-        currentCount + (newFavorite ? 1 : -1),
-      );
-      // 3) 若收藏画册图片缓存已加载：取消收藏应从缓存数组中移除（而不是清缓存）
+      // 2) 若收藏画册图片缓存已加载：取消收藏应从缓存数组中移除（而不是清缓存）
       const favList = albumStore.albumImages[FAVORITE_ALBUM_ID];
       if (Array.isArray(favList)) {
         const idx = favList.findIndex((i) => i.id === image.id);

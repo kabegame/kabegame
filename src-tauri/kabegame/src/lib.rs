@@ -11,8 +11,6 @@ mod web_assets;
 mod web_import;
 
 // Local (Tauri native) modules
-#[cfg(all(not(feature = "web"), target_os = "android"))]
-mod archiver_provider;
 #[cfg(not(feature = "web"))]
 mod commands;
 
@@ -150,12 +148,6 @@ fn init(
         let proxy = content_io_provider::ChannelContentIoProvider::new(provider);
         // 设置内容IO提供者
         kabegame_core::crawler::content_io::set_content_io_provider(Box::new(proxy));
-        // 设置归档提取提供者
-        let archiver_provider =
-            archiver_provider::ArchiverContentProvider::new(app.app_handle().clone());
-        let archiver_proxy =
-            archiver_provider::ChannelArchiveExtractProvider::new(archiver_provider);
-        kabegame_core::crawler::archiver::set_archive_extract_provider(Box::new(archiver_proxy));
 
         let compress_provider =
             compress_provider::PluginVideoCompressProvider::new(app.app_handle().clone());
@@ -245,7 +237,6 @@ pub fn run() {
     #[cfg(target_os = "android")]
     {
         builder = builder.plugin(tauri_plugin_picker::init());
-        builder = builder.plugin(tauri_plugin_archiver::init());
         builder = builder.plugin(tauri_plugin_share::init());
         builder = builder.plugin(tauri_plugin_compress::init());
         builder = builder.plugin(tauri_plugin_wallpaper::init());
@@ -285,13 +276,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // --- Albums ---
             get_albums,
-            get_album_counts,
             add_album,
             delete_album,
             rename_album,
             move_album,
             get_album_preview,
-            get_album_image_ids,
             add_images_to_album,
             add_task_images_to_album,
             remove_images_from_album,
@@ -300,7 +289,6 @@ pub fn run() {
             // --- Images ---
             get_image_by_id,
             get_image_metadata,
-            get_image_metadata_by_metadata_id,
             get_gallery_image,
             copy_image_to_clipboard,
             delete_image,
@@ -312,9 +300,9 @@ pub fn run() {
             get_gallery_media_type_counts,
             get_album_media_type_counts,
             get_gallery_time_filter_data,
-            browse_gallery_provider,
-            list_provider_children,
-            query_provider,
+            pathql_entry,
+            pathql_list,
+            pathql_fetch,
             toggle_image_favorite,
             // --- Tasks ---
             get_all_tasks,

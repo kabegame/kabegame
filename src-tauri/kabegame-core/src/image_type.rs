@@ -374,25 +374,6 @@ pub fn url_has_media_extension(url: &str) -> bool {
     url_has_image_extension(url) || url_has_video_extension(url)
 }
 
-/// 根据 MIME 类型判断是否为支持的压缩包（用于 Android content:// URI）。
-pub fn is_archive_mime(mime: &Option<String>) -> bool {
-    let Some(m) = mime else { return false };
-    let m = m.trim().to_lowercase();
-    matches!(
-        m.as_str(),
-        "application/zip"
-            | "application/x-zip-compressed"
-            | "application/x-rar-compressed"
-            | "application/vnd.rar"
-            | "application/x-7z-compressed"
-            | "application/x-tar"
-            | "application/gzip"
-            | "application/x-gzip"
-            | "application/x-bzip2"
-            | "application/x-xz"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

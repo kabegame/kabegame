@@ -229,10 +229,6 @@ impl IpcClient {
             .await
     }
 
-    pub async fn storage_get_album_counts(&self) -> Result<serde_json::Value, String> {
-        self.request_data(IpcRequest::StorageGetAlbumCounts).await
-    }
-
     pub async fn storage_update_album_images_order(
         &self,
         album_id: String,
@@ -243,17 +239,6 @@ impl IpcClient {
             image_orders,
         })
         .await
-    }
-
-    /// 获取画册图片 ID 列表
-    pub async fn storage_get_album_image_ids(
-        &self,
-        album_id: String,
-    ) -> Result<Vec<String>, String> {
-        let v = self
-            .request_data(IpcRequest::StorageGetAlbumImageIds { album_id })
-            .await?;
-        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     // ==================== Storage - Tasks ====================

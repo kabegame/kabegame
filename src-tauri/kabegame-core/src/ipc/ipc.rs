@@ -171,18 +171,10 @@ pub enum IpcRequest {
         limit: usize,
     },
 
-    /// 获取各画册图片数量（用于侧边栏/列表徽标）
-    StorageGetAlbumCounts,
-
     /// 更新画册内图片排序
     StorageUpdateAlbumImagesOrder {
         album_id: String,
         image_orders: Vec<(String, i64)>,
-    },
-
-    /// 获取画册图片 ID 列表
-    StorageGetAlbumImageIds {
-        album_id: String,
     },
 
     /// 获取所有任务

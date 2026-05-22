@@ -200,11 +200,29 @@
   </div>
 </template>
 
+<script lang="ts">
+type AlbumDetailTab = "images" | "subAlbums";
+
+type AlbumDetailSnapshot = {
+  albumId: string;
+  activeTab: AlbumDetailTab;
+  imagesScrollTop: number;
+  subAlbumsScrollTop: number;
+};
+
+const ALBUM_DETAIL_SNAPSHOT_LIMIT = 50;
+const albumDetailSnapshots = new Map<number, AlbumDetailSnapshot>();
+let lastAlbumDetailHistoryPosition = 0;
+</script>
+
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
+import { pathqlEntry, pathqlFetch } from "@/services/pathql";
+import { rowToImageInfo } from "@/utils/imageRow";
+import { withGalleryPrefix } from "@/utils/path";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -264,7 +282,6 @@ import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import {
   albumSubtreeContainsAny,
   buildAlbumMediaNodes,
-  fetchAlbumDirectCounts,
   flattenAlbumMediaNodes,
   loadAlbumMediaPreview,
   type AlbumMediaNode,
@@ -320,7 +337,6 @@ const openVirtualDriveAlbumFolder = async () => {
   }
 };
 
-const childAlbumDirectCounts = ref<Record<string, number>>({});
 const childAlbumRoots = computed(() => {
   if (!albumId.value) return [];
   return albumStore.getChildren(albumId.value);
@@ -330,7 +346,7 @@ const childAlbumNodes = computed(() =>
   buildAlbumMediaNodes(
     childAlbumRoots.value,
     albumStore.albums,
-    childAlbumDirectCounts.value,
+    albumStore.getAlbumDirectCounts(albumMediaHide.value),
     albumMediaHide.value,
   ),
 );
@@ -352,7 +368,7 @@ const childAlbumCountsForPicker = computed(() => ({
   ...childAlbumCounts.value,
 }));
 const showAlbumDetailTabs = computed(() => childAlbums.value.length > 0);
-const activeAlbumDetailTab = ref<"images" | "subAlbums">("images");
+const activeAlbumDetailTab = ref<AlbumDetailTab>("images");
 const imagesTabLabel = computed(() => `${t("albums.imagesTab")} (${totalImagesCount.value})`);
 const subAlbumsTabLabel = computed(() => `${t("albums.subAlbums")} (${childAlbums.value.length})`);
 
@@ -463,8 +479,7 @@ const confirmCreateSubAlbum = async () => {
   const name = newSubAlbumName.value.trim();
   if (!name || !albumId.value) return;
   try {
-    const created = await albumStore.createAlbum(name, { parentId: albumId.value, reload: false });
-    childAlbumDirectCounts.value = { ...childAlbumDirectCounts.value, [created.id]: 0 };
+    await albumStore.createAlbum(name, { parentId: albumId.value, reload: false });
     showCreateSubAlbumDialog.value = false;
     newSubAlbumName.value = "";
     activeAlbumDetailTab.value = "subAlbums";
@@ -572,7 +587,6 @@ const handleChildAlbumMenuCommand = async (
     const deletedIds = [id, ...albumStore.getDescendantIds(id)];
     await albumStore.deleteAlbum(id);
     for (const deletedId of deletedIds) {
-      delete childAlbumDirectCounts.value[deletedId];
       delete childPreviewImages.value[deletedId];
     }
     delete childPreviewImages.value[id];
@@ -606,6 +620,71 @@ const albumBrowseToolbarRef = ref<{
 } | null>(null);
 const albumContainerRef = ref<HTMLElement | null>(null);
 
+function getAlbumDetailHistoryPosition() {
+  const position = history.state?.position;
+  return typeof position === "number" ? position : 0;
+}
+
+function trimAlbumDetailSnapshots() {
+  while (albumDetailSnapshots.size > ALBUM_DETAIL_SNAPSHOT_LIMIT) {
+    const oldest = albumDetailSnapshots.keys().next();
+    if (oldest.done) return;
+    albumDetailSnapshots.delete(oldest.value);
+  }
+}
+
+function getImagesScrollEl(): HTMLElement | null {
+  return albumViewRef.value?.getContainerEl?.() ?? null;
+}
+
+function captureAlbumDetailSnapshot(): AlbumDetailSnapshot | null {
+  const currentAlbumId = albumId.value?.trim();
+  if (!currentAlbumId) return null;
+  return {
+    albumId: currentAlbumId,
+    activeTab: activeAlbumDetailTab.value,
+    imagesScrollTop: getImagesScrollEl()?.scrollTop ?? 0,
+    subAlbumsScrollTop: albumSubAlbumsScrollRef.value?.scrollTop ?? 0,
+  };
+}
+
+function waitForNextFrame() {
+  return new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => resolve());
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+}
+
+async function applyAlbumDetailSnapshot(snapshot: AlbumDetailSnapshot) {
+  if (snapshot.albumId !== albumId.value) return;
+  activeAlbumDetailTab.value =
+    snapshot.activeTab === "subAlbums" && !showAlbumDetailTabs.value
+      ? "images"
+      : snapshot.activeTab;
+
+  const restoreScroll = () => {
+    const target =
+      activeAlbumDetailTab.value === "subAlbums"
+        ? albumSubAlbumsScrollRef.value
+        : getImagesScrollEl();
+    if (!target) return;
+    target.scrollTop =
+      activeAlbumDetailTab.value === "subAlbums"
+        ? snapshot.subAlbumsScrollTop
+        : snapshot.imagesScrollTop;
+  };
+
+  await nextTick();
+  restoreScroll();
+  if (activeAlbumDetailTab.value === "images" && isCompact.value) {
+    await waitForNextFrame();
+    restoreScroll();
+  }
+}
+
 // 本地计算的 provider root path，用于初始化
 const localProviderRootPath = computed(() => {
   if (!albumId.value) return "";
@@ -627,12 +706,6 @@ function childAlbumScopeIds(): string[] {
   ]);
 }
 
-async function refreshChildAlbumDirectCounts(albumIds?: Iterable<string>) {
-  const ids = albumIds ?? childAlbumScopeIds();
-  const counts = await fetchAlbumDirectCounts(ids, albumMediaHide.value);
-  childAlbumDirectCounts.value = { ...childAlbumDirectCounts.value, ...counts };
-}
-
 const isAlbumWallpaperFilterEmpty = computed(() =>
   albumDetailRouteStore.filter === "wallpaper-order"
 );
@@ -649,9 +722,7 @@ const loadTotalImagesCount = async () => {
   if (!albumId.value) return;
   const countPath = buildAlbumCountPathFromCurrentPath(currentPath.value);
   if (!countPath) return;
-  const res = await invoke<{ total: number | null }>("browse_gallery_provider", {
-    path: countPath,
-  });
+  const res = await pathqlEntry(withGalleryPrefix(countPath));
   totalImagesCount.value = res?.total ?? 0;
 };
 
@@ -680,6 +751,8 @@ watch(
   async (newPath) => {
     if (!isOnAlbumRoute.value) return;
     if (!albumId.value) return;
+    const routeAlbumId = typeof route.params.id === "string" ? route.params.id : "";
+    if (routeAlbumId && routeAlbumId !== albumId.value) return;
     if (!albumName.value) return;
     if (!newPath) return;
     await loadAlbum({ reset: true });
@@ -693,24 +766,13 @@ watch(
     if (!isOnAlbumRoute.value) return;
     const ids = childAlbumScopeIds();
     const keep = new Set(ids);
-    for (const id of Object.keys(childAlbumDirectCounts.value)) {
-      if (!keep.has(id)) delete childAlbumDirectCounts.value[id];
-    }
     for (const id of Object.keys(childPreviewImages.value)) {
       if (!keep.has(id)) delete childPreviewImages.value[id];
     }
 
     const hideChanged = !!prevKey && prevKey.split(":")[0] !== _key.split(":")[0];
     if (hideChanged) {
-      childAlbumDirectCounts.value = {};
       childPreviewImages.value = {};
-      await refreshChildAlbumDirectCounts(ids);
-      return;
-    }
-
-    const missing = ids.filter((id) => childAlbumDirectCounts.value[id] == null);
-    if (missing.length > 0) {
-      await refreshChildAlbumDirectCounts(missing);
     }
   },
   { immediate: true },
@@ -904,7 +966,6 @@ const handleRefresh = async () => {
   try {
     // 1) 刷新画册列表（名称/计数等）
     await albumStore.loadAlbums();
-    await refreshChildAlbumDirectCounts();
     childPreviewImages.value = {};
     const found = albumStore.albums.find((a) => a.id === albumId.value);
     if (found) albumName.value = found.name;
@@ -948,21 +1009,16 @@ const loadAlbum = async (opts?: { reset?: boolean; silent?: boolean }) => {
     if (!inner.startsWith("album/") || inner.startsWith("album//")) {
       return;
     }
-    const pathToLoad = rawPath.endsWith("/") ? rawPath : `${rawPath}/`;
+    const pathToLoad = withGalleryPrefix(rawPath);
     clearImageMetadataCache();
-    const res = await invoke<{ total?: number; entries?: Array<{ kind: string; image?: ImageInfo }> }>(
-      "browse_gallery_provider",
-      { path: pathToLoad }
-    );
+    const rows = await pathqlFetch<Record<string, unknown>>(pathToLoad);
     try {
       await loadTotalImagesCount();
     } catch (error) {
       console.error("获取画册总图片数失败:", error);
-      totalImagesCount.value = res?.total ?? 0;
+      totalImagesCount.value = rows.length;
     }
-    const list: ImageInfo[] = (res?.entries ?? [])
-      .filter((e: any) => e?.kind === "image")
-      .map((e: any) => e.image as ImageInfo);
+    const list = rows.map(rowToImageInfo);
     leafAllImages = list;
     images.value = list;
   } finally {
@@ -1417,7 +1473,6 @@ const initAlbum = async (newAlbumId: string) => {
     });
   }
   await albumStore.loadAlbums();
-  await refreshChildAlbumDirectCounts();
   const found = albumStore.albums.find((a) => a.id === newAlbumId);
   albumName.value = found?.name || "画册";
 
@@ -1429,10 +1484,40 @@ const initAlbum = async (newAlbumId: string) => {
 // 监听路由参数变化
 watch(
   () => route.params.id,
-  async (newId) => {
+  async (newId, oldId) => {
     if (!isOnAlbumRoute.value) return;
-    if (newId && typeof newId === "string") {
+    if (!newId || typeof newId !== "string") return;
+
+    const currentHistoryPosition = getAlbumDetailHistoryPosition();
+    const oldAlbumId = typeof oldId === "string" ? oldId : undefined;
+    if (!oldAlbumId) {
+      lastAlbumDetailHistoryPosition = currentHistoryPosition;
       await initAlbum(newId);
+      const snapshot = albumDetailSnapshots.get(lastAlbumDetailHistoryPosition);
+      if (snapshot?.albumId === newId) {
+        await applyAlbumDetailSnapshot(snapshot);
+        albumDetailSnapshots.delete(lastAlbumDetailHistoryPosition);
+      }
+      return;
+    }
+
+    if (oldAlbumId === newId) {
+      lastAlbumDetailHistoryPosition = currentHistoryPosition;
+      return;
+    }
+
+    const snapshot = captureAlbumDetailSnapshot();
+    if (snapshot?.albumId === oldAlbumId) {
+      albumDetailSnapshots.set(lastAlbumDetailHistoryPosition, snapshot);
+      trimAlbumDetailSnapshots();
+    }
+
+    lastAlbumDetailHistoryPosition = currentHistoryPosition;
+    await initAlbum(newId);
+    const nextSnapshot = albumDetailSnapshots.get(lastAlbumDetailHistoryPosition);
+    if (nextSnapshot?.albumId === newId) {
+      await applyAlbumDetailSnapshot(nextSnapshot);
+      albumDetailSnapshots.delete(lastAlbumDetailHistoryPosition);
     }
   },
   { immediate: true }
@@ -1459,6 +1544,7 @@ onMounted(async () => {
 // 组件从缓存激活时检查是否需要刷新
 onActivated(async () => {
   isAlbumDetailActive.value = true;
+  lastAlbumDetailHistoryPosition = getAlbumDetailHistoryPosition();
 
   // 如果是收藏画册且标记为需要刷新，重新加载
   if (albumId.value === FAVORITE_ALBUM_ID && favoriteAlbumDirty.value) {
@@ -1651,10 +1737,6 @@ const refreshAlbumDetailFromAlbumImagesChange = async (p: AlbumImagesChangePaylo
 
   if (childAffected) {
     clearAffectedChildPreviewCaches(affected);
-    const idsToRefresh = affected.size === 0 || affected.has(HIDDEN_ALBUM_ID)
-      ? childAlbumScopeIds()
-      : childAlbumScopeIds().filter((id) => affected.has(id));
-    await refreshChildAlbumDirectCounts(idsToRefresh);
   }
 
   if (selfAffected) {

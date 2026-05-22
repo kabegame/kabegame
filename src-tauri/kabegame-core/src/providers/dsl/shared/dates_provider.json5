@@ -1,5 +1,4 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "dates_provider",
     // 7c S7-b: programmatic GalleryDatesRouter 迁 DSL。年→月→日 三层结构,

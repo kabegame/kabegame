@@ -342,7 +342,7 @@ export function useQuickSettingsGroups() {
           description: t("settings.superModeDesc"),
           comp: SuperModeSetting,
           pages: allPages,
-        } as QuickSettingItem<QuickSettingsPageId>] : []),
+        } as unknown as QuickSettingItem<QuickSettingsPageId>] : []),
       ],
     },
   ]);

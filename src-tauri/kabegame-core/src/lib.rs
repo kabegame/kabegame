@@ -7,9 +7,6 @@ pub mod ipc;
 
 pub mod crawler;
 
-/// 兼容旧路径：archive 已迁至 crawler::archiver
-pub use crawler::archiver as archive;
-
 pub mod gallery;
 pub mod kgpg;
 pub mod media_dimensions;

@@ -6,13 +6,21 @@
 
 **Changelog entries:** Write release notes in **English** (new sections and bullets from [3.4.5] onward).
 
-## [4.1.2]
+## [4.2.0]
+### Optimized
+- **Providers**: more query use pathql providers
+
+### Fixed
+- **By Wallpaper Order**: by wallpaper order perpend the ordering to sql in dsl.
 
 ### Changed
-
 - **MCP resource schemes**: The public MCP read surface now uses `images://`, `albums://`, `tasks://`, `surf_records://`, and `plugin://`. The old `provider://`, `image://`, `album://`, `task://`, and `surf://` resource schemes are no longer supported.
 - **MCP Bundle compatibility**: Updated the `kabegame-gallery-node` MCPB bridge to forward read tools to the new resource schemes while keeping the existing tool names for host-side compatibility.
 - **Documentation**: Updated the public MCP guide, reference, and bundle guide to document the new `images://` and plural table resource paths.
+- **Local import**: local import now will not use the download window.
+
+### Removed
+- **Archive**: Archive unzip feature removed from application completely. Including Rhai API and local import unarchiving behavior.
 
 ## [4.1.1]
 

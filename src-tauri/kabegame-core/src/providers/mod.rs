@@ -3,7 +3,7 @@
 //! - [`provider`] — pathql-rs 类型 reexport + 前端 wire format helper
 //! - [`dsl_loader`] — include_dir 嵌入的 dsl/**/*.json5 全量加载
 //! - [`init`] — provider_runtime() 单例
-//! - [`query`] — Tauri/MCP IPC 边界 (execute_provider_query / typed)
+//! - [`query`] — Tauri IPC 边界 (pathql_entry / pathql_list / pathql_fetch)
 //! - [`sql_executor`] — pathql_rs::SqlExecutor 的 rusqlite 实现 (注入 Storage db)
 
 pub mod dsl_loader;
@@ -22,11 +22,11 @@ pub use dsl_loader::is_provider_file_path;
 pub use init::{provider_runtime, provider_template_context};
 pub use pathql_rs::ProviderRuntime;
 pub use query::{
-    album_preview_at, count_at, decode_provider_path_segments, execute_provider_query,
-    execute_provider_query_typed, gallery_date_groups_at, gallery_day_groups_at,
-    gallery_media_type_counts_at, gallery_plugin_groups_at, gallery_time_filter_payload_at,
-    gallery_total_count_at, image_metadata_at, images_at, organize_batch_at, parse_provider_path,
-    provider_query_to_json, runtime_path, ProviderPathQuery, ProviderQueryTyped,
+    album_preview_at, count_at, decode_provider_path_segments, failed_images_at,
+    gallery_date_groups_at, gallery_day_groups_at, gallery_media_type_counts_at,
+    gallery_plugin_groups_at, gallery_time_filter_payload_at, gallery_total_count_at,
+    image_metadata_at, images_at, organize_batch_at, query_entry, query_fetch, query_list,
+    runtime_path, ProviderEntry, ProviderListChild, ProviderNote,
 };
 
 /// VD 专用：从 PluginManager 缓存读取插件显示名（用于「按任务」目录名展示）。

@@ -63,6 +63,9 @@
 import { onMounted, onActivated, onDeactivated, onBeforeUnmount, onUnmounted, ref, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
+import { pathqlEntry, pathqlFetch } from "@/services/pathql";
+import { rowToImageInfo } from "@/utils/imageRow";
+import { withGalleryPrefix } from "@/utils/path";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { listen } from "@/api/rpc";
 import { ElMessage } from "element-plus";
@@ -400,16 +403,13 @@ const lastVisitSubtitle = computed(() => {
 
 const fetchPageImages = async (path: string) => {
   clearImageMetadataCache();
-  const p = path.endsWith("/") || path.endsWith("/*") ? path : `${path}/`;
-  const res = await invoke<{
-    total?: number;
-    entries?: Array<{ kind: string; image?: ImageInfo }>;
-  }>("browse_gallery_provider", { path: p });
-  const list: ImageInfo[] = (res?.entries ?? [])
-    .filter((e: any) => e?.kind === "image")
-    .map((e: any) => e.image as ImageInfo);
+  const p = withGalleryPrefix(path);
+  const list = (await pathqlFetch<Record<string, unknown>>(p)).map(rowToImageInfo);
+  const total = await pathqlEntry(withGalleryPrefix(providerRootPath.value))
+    .then((entry) => entry.total ?? list.length)
+    .catch(() => list.length);
   return {
-    total: res?.total ?? 0,
+    total,
     images: list,
   };
 };

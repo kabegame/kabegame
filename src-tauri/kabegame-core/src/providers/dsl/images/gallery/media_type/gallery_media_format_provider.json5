@@ -1,0 +1,20 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_media_format_provider",
+    "properties": {
+        "format": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "LOWER(CASE WHEN INSTR(COALESCE(images.type, ''), '/') > 0 THEN SUBSTR(COALESCE(images.type, ''), INSTR(COALESCE(images.type, ''), '/') + 1) ELSE COALESCE(images.type, '') END) = ${properties.format}"
+    },
+    "resolve": {
+        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
+            "delegate": {
+                "provider": "kabegame.gallery_desc_pagination_page_comb"
+            },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

@@ -19,13 +19,14 @@ import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "../../composables/useModalBack";
 import ImageDetailContent, { type ImageDetailLike } from "./ImageDetailContent.vue";
+import { Plugin } from "@kabegame/core/stores/plugins";
 
 const { t } = useI18n();
 
 interface Props {
   modelValue: boolean;
   image: ImageDetailLike | null;
-  plugins?: Array<{ id: string; name?: string }>;
+  plugins?: Array<Plugin>;
 }
 
 interface Emits {

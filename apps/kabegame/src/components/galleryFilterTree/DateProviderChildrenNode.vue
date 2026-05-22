@@ -58,7 +58,7 @@ async function refreshList() {
         const year = /^(\d{4})y$/.exec(entry.name)?.[1];
         return year ? { seg: entry.name, year, total: entry.total ?? undefined } : null;
       })
-      .filter((row): row is { seg: string; year: string; total?: number } => !!row);
+      .filter((row): row is { seg: string; year: string; total: number } => !!row);
     loaded.value = true;
   } catch {
     if (token === listToken && expectedPrefix === prefix.value) {

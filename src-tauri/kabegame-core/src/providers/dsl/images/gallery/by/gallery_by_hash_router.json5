@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_by_hash_router",
+    "resolve": {
+        "(.+)": {
+            "provider": "gallery_by_hash_provider",
+            "properties": { "hash": "${capture[1]}" }
+        }
+    }
+}

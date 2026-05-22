@@ -1,0 +1,38 @@
+{
+    "namespace": "kabegame",
+    "name": "vd_month_ko_provider",
+    "properties": {
+        "year_month": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "delegate": {
+            "provider": "month_provider",
+            "properties": {
+                "year_month": "${properties.year_month}"
+            }
+        }
+    },
+    "list": {
+        "전체 월": {
+            "provider": "paginate100_provider",
+            "meta": { "label": "전체 월" }
+        },
+        "${root.name}일": {
+            "delegate": {
+                "provider": "month_provider",
+                "properties": {
+                    "year_month": "${properties.year_month}"
+                }
+            },
+            "child_var": "root",
+            "provider": "vd_day_ko_provider",
+            "properties": {
+                "ymd": "${properties.year_month}-${root.name}"
+            },
+            "meta": {
+                "day": "${root.name}",
+                "label": "${root.name}일"
+            }
+        }
+    }
+}

@@ -1,3 +1,5 @@
+import { PluginVarDef } from "../../../../apps/kabegame/src/composables/usePluginConfig";
+
 /**
  * Whether a plugin config var should be shown for the current `vars`,
  * matching CrawlerDialog `visiblePluginVars` / plugin config.json `when`.
@@ -31,16 +33,7 @@ export function filterVarOptionsByWhen<
 
 /** 当依赖项变化导致当前 options 值不在可见选项中时，回退到 default（若 default 仍合法）或第一个可见项。 */
 export function coerceOptionsVarsToVisibleChoices(
-  defs: Array<{
-    key: string;
-    type?: string;
-    default?: unknown;
-    options?: (
-      | string
-      | { variable?: string; when?: Record<string, string[]> }
-    )[];
-    when?: Record<string, (string | boolean)[]>;
-  }>,
+  defs: Array<PluginVarDef>,
   vars: Record<string, any>,
 ): void {
   for (const def of defs) {

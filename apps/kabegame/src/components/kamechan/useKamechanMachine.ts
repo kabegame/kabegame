@@ -7,7 +7,7 @@ const WAVE_DURATION_MS = 1200;
 
 export function useKamechanMachine() {
   const state = ref<KamechanState>("standing");
-  let waveTimer: ReturnType<typeof window.setTimeout> | null = null;
+  let waveTimer: ReturnType<typeof setTimeout> | null = null;
 
   const imageSrc = computed(() => {
     return state.value === "waving"
@@ -19,7 +19,7 @@ export function useKamechanMachine() {
     if (waveTimer === null) {
       return;
     }
-    window.clearTimeout(waveTimer);
+    clearTimeout(waveTimer);
     waveTimer = null;
   }
 
@@ -32,7 +32,7 @@ export function useKamechanMachine() {
 
     clearWaveTimer();
     state.value = "waving";
-    waveTimer = window.setTimeout(() => {
+    waveTimer = setTimeout(() => {
       state.value = "standing";
       waveTimer = null;
     }, WAVE_DURATION_MS);

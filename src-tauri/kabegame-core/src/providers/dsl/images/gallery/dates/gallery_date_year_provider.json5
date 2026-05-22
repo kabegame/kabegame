@@ -1,0 +1,33 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_date_year_provider",
+    "properties": {
+        "year": { "type": "string", "default": "", "optional": false }
+    },
+    // list: desc 静态 + 动态月份 + 默认分页静态 (与 programmatic 同; 用户在年下既可看月也可直接翻页)
+    "list": {
+        "${out.meta.mm}m": {
+            "delegate": {
+                "provider": "year_provider",
+                "properties": {
+                    "year": "${properties.year}"
+                }
+            },
+            "child_var": "out",
+            "provider": "gallery_date_month_provider",
+            "properties": {
+                "year_month": "${properties.year}-${out.meta.mm}"
+            }
+        }
+    },
+    "resolve": {
+        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
+            "delegate": {
+                "provider": "kabegame.gallery_desc_pagination_page_comb"
+            },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        },
+    }
+}

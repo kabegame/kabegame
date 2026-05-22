@@ -116,7 +116,7 @@ export function createPathRouteStore<TState extends object>(
      * 计算"**若用给定 overrides 调 navigate/push，最终会路由到哪条 path**"——
      * 不真正 mutate state、也不 replace URL。常见用途：想拿某个视图下的
      * provider path（例如在 currentPath 基础上去掉 search、或切换 filter）
-     * 交给后端做单独查询（如 `browse_gallery_provider` Entry 模式取 total）。
+     * 交给后端做单独查询（如 `pathql_entry` 取 total）。
      *
      * 行为与 `push` 内部计算的 path 完全一致：
      * - `overrideLocal` 里出现的字段覆盖 local state；未列出的字段沿用当前值

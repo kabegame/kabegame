@@ -26,6 +26,7 @@ mod v009_seed_hidden_album;
 mod v010_plugin_data;
 mod v011_consolidate_image_metadata_and_failed_display_name;
 mod v012_backfill_video_dimensions;
+mod v013_album_type_and_sync;
 
 use rusqlite::Connection;
 
@@ -66,13 +67,18 @@ const MIGRATIONS: &[Migration] = &[
         name: "backfill_video_dimensions",
         up: v012_backfill_video_dimensions::up,
     },
+    Migration {
+        version: 13,
+        name: "album_type_and_sync",
+        up: v013_album_type_and_sync::up,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 12;
+pub const LATEST_VERSION: u32 = 13;
 
 fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

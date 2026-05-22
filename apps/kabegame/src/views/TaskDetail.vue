@@ -129,6 +129,9 @@
 import { ref, computed, reactive, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
+import { pathqlEntry, pathqlFetch } from "@/services/pathql";
+import { rowToImageInfo } from "@/utils/imageRow";
+import { withGalleryPrefix } from "@/utils/path";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { listen } from "@/api/rpc";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -419,10 +422,7 @@ const loadTotalImagesCount = async () => {
     try {
         const path = taskDetailRouteStore.contextPath;
         if (!path) return;
-        const res = await invoke<{ total: number | null }>(
-            "browse_gallery_provider",
-            { path }
-        );
+        const res = await pathqlEntry(withGalleryPrefix(path));
         totalImagesCount.value = res?.total ?? 0;
     } catch (e) {
         console.error("加载任务总图片数失败:", e);
@@ -490,15 +490,10 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
     if (showSkeleton) loading.value = true;
     try {
         const rawPath = currentPath.value || localProviderRootPath.value || `task/${taskId.value}/1`;
-        const pathToLoad = rawPath.endsWith("/") ? rawPath : `${rawPath}/`;
+        const pathToLoad = withGalleryPrefix(rawPath);
         clearImageMetadataCache();
-        const res = await invoke<{ total?: number; entries?: Array<{ kind: string; image?: ImageInfo }> }>(
-            "browse_gallery_provider",
-            { path: pathToLoad }
-        );
-        const imgs: ImageInfo[] = (res?.entries ?? [])
-            .filter((e: any) => e?.kind === "image")
-            .map((e: any) => e.image as ImageInfo);
+        const rows = await pathqlFetch<Record<string, unknown>>(pathToLoad);
+        const imgs = rows.map(rowToImageInfo);
         images.value = imgs;
 
     } catch (e) {

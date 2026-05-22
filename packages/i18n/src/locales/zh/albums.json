@@ -50,8 +50,6 @@
   "selectPath": "选择路径",
   "recursiveSubdirsLabel": "递归子文件夹",
   "recursiveSubdirs": "递归扫描子文件夹中的图片/视频",
-  "includeArchiveLabel": "包含压缩包",
-  "includeArchiveScan": "扫描时包含支持的压缩文件（zip、rar），加入解压队列",
   "startImport": "开始导入",
   "addPathFirst": "请至少添加一个路径",
   "selectFileFailed": "选择文件失败",
