@@ -63,6 +63,7 @@ pub fn add_images_to_album_with_event(
     album_id: &str,
     image_ids: &[String],
 ) -> Result<AddToAlbumResult, String> {
+    Storage::global().ensure_album_is_writable(album_id)?;
     let r = Storage::global().add_images_to_album(album_id, image_ids)?;
     let aids = vec![album_id.to_string()];
     GlobalEmitter::global().emit_album_images_change("add", &aids, image_ids);
@@ -74,6 +75,7 @@ pub fn remove_images_from_album_with_event(
     album_id: &str,
     image_ids: &[String],
 ) -> Result<usize, String> {
+    Storage::global().ensure_album_is_writable(album_id)?;
     let removed = Storage::global().remove_images_from_album(album_id, image_ids)?;
     let aids = vec![album_id.to_string()];
     GlobalEmitter::global().emit_album_images_change("delete", &aids, image_ids);

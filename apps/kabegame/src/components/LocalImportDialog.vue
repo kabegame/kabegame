@@ -9,22 +9,15 @@
     @closed="handleClosed">
     <el-form label-width="110px" class="local-import-form">
       <el-form-item :label="$t('albums.outputAlbum')">
-        <el-select
+        <AlbumPickerField
           v-model="selectedOutputAlbumId"
+          :album-tree="outputAlbumTree"
+          :album-counts="albumCounts"
+          allow-create
           :placeholder="$t('albums.notSpecifiedAddToGallery')"
+          :picker-title="$t('albums.outputAlbum')"
           clearable
-          style="width: 100%"
-        >
-          <el-option
-            v-for="album in albums"
-            :key="album.id"
-            :label="album.name"
-            :value="album.id"
-          />
-          <el-option value="__create_new__" :label="$t('albums.createNewAlbum')">
-            <span style="color: var(--el-color-primary); font-weight: 500">{{ $t('albums.createNewAlbum') }}</span>
-          </el-option>
-        </el-select>
+        />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
         <el-input
@@ -33,6 +26,15 @@
           maxlength="50"
           show-word-limit
           @keyup.enter="handleCreateOutputAlbum"
+        />
+      </el-form-item>
+      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
+        <AlbumPickerField
+          v-model="newOutputAlbumParentId"
+          :album-tree="outputAlbumParentTree"
+          :album-counts="albumCounts"
+          :placeholder="$t('albums.selectParentAlbum')"
+          :picker-title="$t('albums.parentAlbum')"
         />
       </el-form-item>
 
@@ -83,23 +85,21 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Document, FolderOpened } from "@element-plus/icons-vue";
 import { ElDialog, ElMessage } from "element-plus";
 import { open } from "@tauri-apps/plugin-dialog";
+import { storeToRefs } from "pinia";
 import { IS_WEB } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
-import { invoke, uploadImport } from "@/api/rpc";
+import { uploadImport } from "@/api/rpc";
 import { useCrawlerStore } from "@/stores/crawler";
+import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
-
-interface Album {
-  id: string;
-  name: string;
-}
+import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 
 const { t } = useI18n();
 const props = defineProps<{
@@ -118,17 +118,29 @@ const visible = computed({
 useModalBack(visible);
 
 const crawlerStore = useCrawlerStore();
+const albumStore = useAlbumStore();
+const { albumCounts } = storeToRefs(albumStore);
 const { extensions: imageExtensions, load: loadImageTypes } = useImageTypes();
 
-const albums = ref<Album[]>([]);
-const selectedOutputAlbumId = ref<string | undefined>();
+const outputAlbumTree = computed(() => albumStore.getAlbumTreeExcluding([HIDDEN_ALBUM_ID]));
+const outputAlbumParentTree = computed(() =>
+  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID]),
+);
+const selectedOutputAlbumId = ref<string | null>(null);
 const newOutputAlbumName = ref("");
+const newOutputAlbumParentId = ref<string | null>(null);
 const paths = ref<string[]>([]);
 const files = ref<File[]>([]);
 const recursive = ref(true);
 const isCreatingNewOutputAlbum = computed(
   () => selectedOutputAlbumId.value === "__create_new__"
 );
+watch(selectedOutputAlbumId, (value) => {
+  if (value !== "__create_new__") {
+    newOutputAlbumName.value = "";
+    newOutputAlbumParentId.value = null;
+  }
+});
 const displayItems = computed(() =>
   IS_WEB ? files.value.map((f) => f.name) : paths.value,
 );
@@ -169,11 +181,9 @@ function pickWebFiles(directory: boolean): Promise<File[]> {
 
 async function loadAlbums() {
   try {
-    const list = await invoke<Album[]>("get_albums");
-    albums.value = list ?? [];
+    await albumStore.loadAlbums();
   } catch (e) {
     console.error("加载画册列表失败:", e);
-    albums.value = [];
   }
 }
 
@@ -253,22 +263,32 @@ function removeItem(idx: number) {
   }
 }
 
-async function handleCreateOutputAlbum() {
+async function createOutputAlbum(showSuccess = true) {
   const name = newOutputAlbumName.value.trim();
   if (!name) {
-          ElMessage.warning(t('albums.enterAlbumNameFirst'));
-    return;
+    ElMessage.warning(t('albums.enterAlbumNameFirst'));
+    return null;
   }
   try {
-    const album = await invoke<{ id: string; name: string }>("add_album", { name });
-    if (album?.id) {
-      albums.value.push({ id: album.id, name: album.name });
-      selectedOutputAlbumId.value = album.id;
-      newOutputAlbumName.value = "";
+    const parentId = newOutputAlbumParentId.value?.trim() || null;
+    const album = await albumStore.createAlbum(name, { parentId, reload: false });
+    newOutputAlbumName.value = "";
+    newOutputAlbumParentId.value = null;
+    if (showSuccess) {
+      ElMessage.success(t('albums.albumCreated'));
     }
+    return album;
   } catch (e) {
     console.error("创建画册失败:", e);
     ElMessage.error(t('albums.createAlbumFailed'));
+    return null;
+  }
+}
+
+async function handleCreateOutputAlbum() {
+  const album = await createOutputAlbum();
+  if (album?.id) {
+    selectedOutputAlbumId.value = album.id;
   }
 }
 
@@ -282,19 +302,9 @@ async function handleSubmit() {
 
   let outputAlbumId: string | undefined;
   if (selectedOutputAlbumId.value === "__create_new__") {
-    const name = newOutputAlbumName.value.trim();
-    if (!name) {
-      ElMessage.warning(t('albums.enterAlbumNameFirst'));
-      return;
-    }
-    try {
-      const album = await invoke<{ id: string; name: string }>("add_album", { name });
-      outputAlbumId = album?.id;
-    } catch (e) {
-      console.error("创建画册失败:", e);
-      ElMessage.error(t('albums.createAlbumFailed'));
-      return;
-    }
+    const album = await createOutputAlbum(false);
+    if (!album?.id) return;
+    outputAlbumId = album.id;
   } else if (selectedOutputAlbumId.value) {
     outputAlbumId = selectedOutputAlbumId.value;
   }
@@ -349,7 +359,8 @@ function handleClosed() {
   paths.value = [];
   files.value = [];
   newOutputAlbumName.value = "";
-  selectedOutputAlbumId.value = undefined;
+  newOutputAlbumParentId.value = null;
+  selectedOutputAlbumId.value = null;
 }
 </script>
 

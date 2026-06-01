@@ -73,6 +73,11 @@
           :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
           @keyup.enter="handleCreateOutputAlbum" />
       </el-form-item>
+      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
+        <AlbumPickerField v-model="newOutputAlbumParentId" :album-tree="outputAlbumParentTree"
+          :album-counts="albumCounts" :placeholder="$t('albums.selectParentAlbum')"
+          :picker-title="$t('albums.parentAlbum')" />
+      </el-form-item>
 
       <template v-if="pluginVars.length > 0">
         <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
@@ -263,6 +268,11 @@
           :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
           @keyup.enter="handleCreateOutputAlbum" />
       </el-form-item>
+      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
+        <AlbumPickerField v-model="newOutputAlbumParentId" :album-tree="outputAlbumParentTree"
+          :album-counts="albumCounts" :placeholder="$t('albums.selectParentAlbum')"
+          :picker-title="$t('albums.parentAlbum')" />
+      </el-form-item>
 
       <template v-if="pluginVars.length > 0">
         <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
@@ -401,7 +411,7 @@ import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
 import { useCrawlerStore, type RunConfig, type ScheduleSpec } from "@/stores/crawler";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { usePluginStore } from "@/stores/plugins";
-import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -758,6 +768,9 @@ const plugins = computed(() => pluginStore.plugins);
 const runConfigs = computed(() => crawlerStore.runConfigs);
 const { albumCounts } = storeToRefs(albumStore);
 const outputAlbumTree = computed(() => albumStore.getAlbumTreeExcluding([HIDDEN_ALBUM_ID]));
+const outputAlbumParentTree = computed(() =>
+  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID]),
+);
 
 const runConfigPickerOptions = computed(() =>
   runConfigs.value.map((cfg) => {
@@ -796,6 +809,7 @@ const crawlDialogMinAppErrorText = computed(() => {
 });
 const selectedOutputAlbumId = ref<string | null>(null);
 const newOutputAlbumName = ref<string>("");
+const newOutputAlbumParentId = ref<string | null>(null);
 const newOutputAlbumNameInputRef = ref<any>(null);
 const isCreatingNewOutputAlbum = computed(() => selectedOutputAlbumId.value === "__create_new__");
 
@@ -939,22 +953,34 @@ const handleDeleteConfig = async (configId: string) => {
   await confirmDeleteRunConfig(configId);
 };
 
-const handleCreateOutputAlbum = async () => {
+const createOutputAlbum = async (showSuccess = true) => {
   if (!newOutputAlbumName.value.trim()) {
     ElMessage.warning(t("albums.enterAlbumNameFirst"));
-    return;
+    return null;
   }
 
   try {
-    const created = await albumStore.createAlbum(newOutputAlbumName.value.trim());
-    selectedOutputAlbumId.value = created.id;
+    const parentId = newOutputAlbumParentId.value?.trim() || null;
+    const created = await albumStore.createAlbum(newOutputAlbumName.value.trim(), { parentId });
     newOutputAlbumName.value = "";
-    ElMessage.success(t("albums.albumCreated"));
+    newOutputAlbumParentId.value = null;
+    if (showSuccess) {
+      ElMessage.success(t("albums.albumCreated"));
+    }
+    return created;
   } catch (error: any) {
     console.error("创建画册失败:", error);
     const errorMessage =
       typeof error === "string" ? error : error?.message || String(error) || "创建画册失败";
     ElMessage.error(errorMessage);
+    return null;
+  }
+};
+
+const handleCreateOutputAlbum = async () => {
+  const created = await createOutputAlbum();
+  if (created) {
+    selectedOutputAlbumId.value = created.id;
   }
 };
 
@@ -976,20 +1002,11 @@ const handleStartCrawl = async () => {
     }
 
     if (selectedOutputAlbumId.value === "__create_new__") {
-      if (!newOutputAlbumName.value.trim()) {
-        ElMessage.warning(t("albums.enterAlbumNameFirst"));
+      const created = await createOutputAlbum(false);
+      if (!created) {
         return;
       }
-      try {
-        const created = await albumStore.createAlbum(newOutputAlbumName.value.trim());
-        selectedOutputAlbumId.value = created.id;
-        newOutputAlbumName.value = "";
-      } catch (error: any) {
-        const errorMessage =
-          typeof error === "string" ? error : error?.message || String(error) || "创建画册失败";
-        ElMessage.error(errorMessage);
-        return;
-      }
+      selectedOutputAlbumId.value = created.id;
     }
 
     if (formRef.value) {
@@ -1106,6 +1123,7 @@ const handleStartCrawl = async () => {
     resetForm();
     selectedOutputAlbumId.value = null;
     newOutputAlbumName.value = "";
+    newOutputAlbumParentId.value = null;
     visible.value = false;
     emit("started");
   } catch (error: any) {
@@ -1184,6 +1202,7 @@ watch(visible, (isOpen) => {
   if (!isOpen) {
     selectedOutputAlbumId.value = null;
     newOutputAlbumName.value = "";
+    newOutputAlbumParentId.value = null;
   }
 });
 
@@ -1194,6 +1213,7 @@ watch(selectedOutputAlbumId, (newValue) => {
     });
   } else {
     newOutputAlbumName.value = "";
+    newOutputAlbumParentId.value = null;
   }
 });
 </script>

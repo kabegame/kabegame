@@ -1,4 +1,6 @@
-use crate::crawler::downloader::generate_thumbnail;
+use crate::crawler::downloader::{
+    generate_thumbnail, image_needs_independent_thumbnail, image_thumbnail_size_is_target_sized,
+};
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::Storage;
@@ -487,6 +489,53 @@ fn row_in_organize_range(idx: usize, offset: Option<usize>, limit: Option<usize>
     }
 }
 
+#[derive(Debug, Clone)]
+enum ThumbnailRefreshAction {
+    UseOriginal { id: i64, local_path: String },
+    Regenerate { id: i64, local_path: String },
+}
+
+fn thumbnail_refresh_action(row: &OrganizeScanRow) -> Option<ThumbnailRefreshAction> {
+    let local_path = row.local_path.trim();
+    if local_path.is_empty() {
+        return None;
+    }
+
+    let local = Path::new(local_path);
+    if !local.exists() || !crate::image_type::is_image_by_path(local) {
+        return None;
+    }
+
+    let source_size = std::fs::metadata(local).ok()?.len();
+    let thumbnail_path = row.thumbnail_path.trim();
+
+    if !image_needs_independent_thumbnail(source_size) {
+        if thumbnail_path != local_path {
+            return Some(ThumbnailRefreshAction::UseOriginal {
+                id: row.id,
+                local_path: local_path.to_string(),
+            });
+        }
+        return None;
+    }
+
+    let needs_regen = thumbnail_path.is_empty()
+        || thumbnail_path == local_path
+        || !Path::new(thumbnail_path).exists()
+        || std::fs::metadata(thumbnail_path)
+            .map(|metadata| !image_thumbnail_size_is_target_sized(metadata.len()))
+            .unwrap_or(true);
+
+    if needs_regen {
+        Some(ThumbnailRefreshAction::Regenerate {
+            id: row.id,
+            local_path: local_path.to_string(),
+        })
+    } else {
+        None
+    }
+}
+
 fn run_organize(
     handle: &tokio::runtime::Handle,
     storage: Arc<Storage>,
@@ -517,7 +566,7 @@ fn run_organize(
         page += 1;
 
         let mut remove_ids: Vec<String> = Vec::new();
-        let mut regen_list: Vec<(i64, String)> = Vec::new();
+        let mut refresh_list: Vec<ThumbnailRefreshAction> = Vec::new();
         let mut should_remove: HashSet<i64> = HashSet::new();
 
         let upper = organize_range_upper_bound(options.offset, options.limit);
@@ -568,11 +617,8 @@ fn run_organize(
 
             // 4. 补充缩略图判断
             if options.regen_thumbnails && !should_remove.contains(&row.id) {
-                let needs_regen = row.thumbnail_path.is_empty()
-                    || row.thumbnail_path == row.local_path
-                    || !Path::new(&row.thumbnail_path).exists();
-                if needs_regen {
-                    regen_list.push((row.id, row.local_path.clone()));
+                if let Some(action) = thumbnail_refresh_action(row) {
+                    refresh_list.push(action);
                 }
             }
         }
@@ -620,18 +666,28 @@ fn run_organize(
         }
 
         // 执行缩略图补充（进度仅在整批——含缩略图——结束后发送，避免扫描已 100% 仍在补图）
-        for (id, path) in regen_list {
+        for action in refresh_list {
             if cancel.load(Ordering::Relaxed) {
                 emit_organize_finished(removed_total, regenerated_total, true);
                 return Ok(());
             }
-            let thumbnail_result =
-                handle.block_on(async { generate_thumbnail(Path::new(&path)).await });
+            match action {
+                ThumbnailRefreshAction::UseOriginal { id, local_path } => {
+                    storage.replace_image_thumbnail_path(&id.to_string(), &local_path)?;
+                    regenerated_total += 1;
+                }
+                ThumbnailRefreshAction::Regenerate { id, local_path } => {
+                    let thumbnail_result =
+                        handle.block_on(async { generate_thumbnail(Path::new(&local_path)).await });
 
-            if let Ok(Some(thumb_path)) = thumbnail_result {
-                let thumb_str = thumb_path.to_string_lossy().to_string();
-                storage.update_image_thumbnail_path(&id.to_string(), &thumb_str)?;
-                regenerated_total += 1;
+                    if let Ok(thumbnail_path) = thumbnail_result {
+                        let thumb_str = thumbnail_path
+                            .map(|path| path.to_string_lossy().to_string())
+                            .unwrap_or_else(|| local_path.clone());
+                        storage.replace_image_thumbnail_path(&id.to_string(), &thumb_str)?;
+                        regenerated_total += 1;
+                    }
+                }
             }
         }
 
@@ -645,4 +701,78 @@ fn run_organize(
 
     emit_organize_finished(removed_total, regenerated_total, false);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crawler::downloader::{
+        IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES, IMAGE_THUMBNAIL_TARGET_BYTES,
+    };
+
+    fn row(id: i64, local_path: &Path, thumbnail_path: &Path) -> OrganizeScanRow {
+        OrganizeScanRow {
+            id,
+            hash: String::new(),
+            local_path: local_path.to_string_lossy().to_string(),
+            thumbnail_path: thumbnail_path.to_string_lossy().to_string(),
+        }
+    }
+
+    #[test]
+    fn thumbnail_refresh_clears_small_image_to_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("small.png");
+        let thumb = dir.path().join("old.jpg");
+        std::fs::write(&local, [1u8; 16]).unwrap();
+        std::fs::write(&thumb, [2u8; 16]).unwrap();
+
+        let action = thumbnail_refresh_action(&row(7, &local, &thumb)).unwrap();
+
+        match action {
+            ThumbnailRefreshAction::UseOriginal { id, local_path } => {
+                assert_eq!(id, 7);
+                assert_eq!(local_path, local.to_string_lossy().to_string());
+            }
+            other => panic!("unexpected action: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn thumbnail_refresh_keeps_target_sized_large_thumbnail() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("large.png");
+        let thumb = dir.path().join("thumb.jpg");
+        std::fs::write(
+            &local,
+            vec![1u8; (IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES + 1) as usize],
+        )
+        .unwrap();
+        std::fs::write(&thumb, vec![2u8; IMAGE_THUMBNAIL_TARGET_BYTES as usize]).unwrap();
+
+        assert!(thumbnail_refresh_action(&row(8, &local, &thumb)).is_none());
+    }
+
+    #[test]
+    fn thumbnail_refresh_regenerates_off_target_large_thumbnail() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("large.png");
+        let thumb = dir.path().join("tiny.jpg");
+        std::fs::write(
+            &local,
+            vec![1u8; (IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES + 1) as usize],
+        )
+        .unwrap();
+        std::fs::write(&thumb, [2u8; 16]).unwrap();
+
+        let action = thumbnail_refresh_action(&row(9, &local, &thumb)).unwrap();
+
+        match action {
+            ThumbnailRefreshAction::Regenerate { id, local_path } => {
+                assert_eq!(id, 9);
+                assert_eq!(local_path, local.to_string_lossy().to_string());
+            }
+            other => panic!("unexpected action: {:?}", other),
+        }
+    }
 }

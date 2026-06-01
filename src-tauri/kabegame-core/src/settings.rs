@@ -94,6 +94,8 @@ pub enum SettingKey {
     GalleryImageObjectPosition,
     /// 自动去重
     AutoDeduplicate,
+    /// 实时监听本地文件夹画册源目录
+    RealtimeFolderSync,
     /// 默认下载目录
     DefaultDownloadDir,
     /// 壁纸引擎目录
@@ -292,6 +294,7 @@ impl Settings {
             SettingKey::GalleryImageAspectRatio => SettingValue::OptionString(None),
             SettingKey::GalleryImageObjectPosition => SettingValue::String("center".to_string()),
             SettingKey::AutoDeduplicate => SettingValue::Bool(false),
+            SettingKey::RealtimeFolderSync => SettingValue::Bool(false),
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
             SettingKey::WallpaperEngineDir => SettingValue::OptionString(None),
             SettingKey::WallpaperRotationEnabled => SettingValue::Bool(false),
@@ -513,6 +516,7 @@ Write-Output "$style,$tile"
             SettingKey::GalleryImageAspectRatio,
             SettingKey::GalleryImageObjectPosition,
             SettingKey::AutoDeduplicate,
+            SettingKey::RealtimeFolderSync,
             SettingKey::DefaultDownloadDir,
             SettingKey::WallpaperEngineDir,
             SettingKey::WallpaperRotationEnabled,
@@ -619,6 +623,7 @@ Write-Output "$style,$tile"
             SettingKey::AutoLaunch
             | SettingKey::AutoOpenCrawlerWebview
             | SettingKey::AutoDeduplicate
+            | SettingKey::RealtimeFolderSync
             | SettingKey::WallpaperRotationEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
@@ -746,6 +751,7 @@ Write-Output "$style,$tile"
             SettingKey::GalleryImageAspectRatio => "galleryImageAspectRatio".to_string(),
             SettingKey::GalleryImageObjectPosition => "galleryImageObjectPosition".to_string(),
             SettingKey::AutoDeduplicate => "autoDeduplicate".to_string(),
+            SettingKey::RealtimeFolderSync => "realtimeFolderSync".to_string(),
             SettingKey::DefaultDownloadDir => "defaultDownloadDir".to_string(),
             SettingKey::WallpaperEngineDir => "wallpaperEngineDir".to_string(),
             SettingKey::WallpaperRotationEnabled => "wallpaperRotationEnabled".to_string(),
@@ -974,6 +980,13 @@ Write-Output "$style,$tile"
     pub fn get_auto_deduplicate(&self) -> bool {
         Self::cells()
             .get(&SettingKey::AutoDeduplicate)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
+    }
+
+    pub fn get_realtime_folder_sync(&self) -> bool {
+        Self::cells()
+            .get(&SettingKey::RealtimeFolderSync)
             .map(|c| c.load().as_bool().unwrap_or(false))
             .unwrap_or(false)
     }
@@ -1272,6 +1285,16 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::AutoDeduplicate, &new_value);
+        Ok(())
+    }
+
+    pub fn set_realtime_folder_sync(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::RealtimeFolderSync) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::RealtimeFolderSync, &new_value);
         Ok(())
     }
 

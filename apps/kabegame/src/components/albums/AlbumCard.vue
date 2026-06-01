@@ -32,11 +32,29 @@
       <div class="title-wrapper">
         <el-input v-if="isRenaming" v-model="renameValue" ref="renameInputRef" size="small" @blur="handleRenameBlur"
           @keyup.enter="handleRenameConfirm" @keyup.esc="handleRenameCancel" class="rename-input" />
-        <div v-else class="title" @click.stop @dblclick="handleStartRename">{{ album.name }}</div>
+        <div
+          v-else
+          class="title"
+          :class="{ 'title-local-folder': isLocalFolder }"
+          @click.stop
+          @dblclick="handleStartRename"
+        >
+          <el-tooltip v-if="isLocalFolder && folderStatusBad" :content="folderStatusTooltip" placement="top">
+            <span class="status-dot" />
+          </el-tooltip>
+          <span class="title-text">{{ album.name }}</span>
+        </div>
       </div>
       <div class="meta">
-        <span>{{ $t('albums.albumCount', { count }) }}</span>
-        <span v-if="album.createdAt">{{ $t('albums.createdAtPrefix', { date: formatDate(album.createdAt) }) }}</span>
+        <span>{{ $t('albums.albumCardSummary', { subAlbumCount, imageCount: count }) }}</span>
+        <span
+          v-if="isLocalFolder && album.syncFolder"
+          class="sync-path"
+          :title="album.syncFolder"
+        >
+          · {{ formatPathForCard(album.syncFolder) }}
+        </span>
+        <span v-else-if="album.createdAt">{{ $t('albums.createdAtPrefix', { date: formatDate(album.createdAt) }) }}</span>
       </div>
     </div>
   </div>
@@ -61,6 +79,7 @@ interface Props {
   album: Album;
   previewImages: ImageInfo[];
   count: number;
+  subAlbumCount?: number;
   /** 画册页从 keep-alive 返回时递增，仅用于视频预览 ImageItem 的 key 后缀以强制重建 */
   videoPreviewRemountKey?: number;
   isLoading?: boolean;
@@ -68,6 +87,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   previewImages: () => [],
+  subAlbumCount: 0,
   videoPreviewRemountKey: 0,
   isLoading: false,
 });
@@ -257,6 +277,37 @@ const heroClass = (idx: number, hasContent: boolean) => {
 
   const state = hasContent ? "has-url" : "is-empty-url";
   return `${pos} ${state}`;
+};
+
+const isLocalFolder = computed(() => props.album.type === "local_folder");
+
+const folderStatusBad = computed(() => {
+  const status = props.album.folderStatus;
+  return !!status && status.state !== "ok";
+});
+
+const folderStatusTooltip = computed(() => {
+  const status = props.album.folderStatus;
+  if (!status) return "";
+  switch (status.state) {
+    case "missing":
+      return t("albums.localFolder.statusMissing");
+    case "denied":
+      return t("albums.localFolder.statusDenied", { message: status.message ?? "" });
+    case "not_a_dir":
+      return t("albums.localFolder.statusNotADir");
+    case "io_error":
+      return t("albums.localFolder.statusIoError", { message: status.message ?? "" });
+    default:
+      return "";
+  }
+});
+
+const formatPathForCard = (path: string): string => {
+  if (!path) return "";
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length <= 2) return path;
+  return `.../${parts.slice(-2).join("/")}`;
 };
 
 const formatDate = (ts?: number) => {
@@ -477,9 +528,52 @@ const formatDate = (ts?: number) => {
     text-shadow: 0 1px 3px rgba(255, 255, 255, 0.6);
     cursor: text;
     user-select: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
 
     &:hover {
       opacity: 0.8;
+    }
+
+    &.title-local-folder {
+      background: linear-gradient(135deg, #a78bfa, #7c3aed);
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+      text-shadow: none;
+    }
+  }
+
+  .title-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: #ef4444;
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45);
+    animation: status-dot-pulse 1.8s ease-out infinite;
+  }
+
+  @keyframes status-dot-pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45);
+    }
+
+    70% {
+      box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
+    }
+
+    100% {
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
     }
   }
 
@@ -500,6 +594,23 @@ const formatDate = (ts?: number) => {
   .meta {
     font-size: 12px;
     color: rgba(31, 42, 68, 0.8);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .sync-path {
+    min-width: 0;
+    max-width: 75%;
+    display: inline-block;
+    overflow: hidden;
+    color: rgba(124, 58, 237, 0.85);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+    white-space: nowrap;
   }
 }
 </style>

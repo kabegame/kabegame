@@ -12,13 +12,13 @@
             <template #before-grid>
               <!-- 顶部工具栏 -->
               <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
-                :filter="galleryRouteStore.filter"
-                :sort="galleryRouteStore.sort" :page-size="pageSize" :search="search" v-model:selectedRange="selectedRange"
+                :filters="galleryRouteStore.filters"
+                :sort="galleryRouteStore.sort" :page-size="pageSize" :search="search"
                 :provider-context-prefix="galleryRouteStore.contextPath"
                 @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
                 @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="handleShowLocalImport"
                 @open-collect-menu="handleOpenCollectMenu"
-                @update:filter="(f) => galleryRouteStore.navigate({ filter: f, page: 1 })"
+                @update:filters="(filters) => galleryRouteStore.navigate({ filters, page: 1 })"
                 @update:sort="(sort) => galleryRouteStore.navigate({ sort })"
                 @update:pageSize="(ps) => galleryRouteStore.navigate({ page: 1, pageSize: ps })"
                 @update:search="(s) => galleryRouteStore.navigate({ page: 1, search: s })" />
@@ -125,7 +125,7 @@ import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { storeToRefs } from "pinia";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galleryRoute";
-import { buildGalleryCountPath, serializeFilter } from "@/utils/galleryPath";
+import { buildGalleryCountPath, filterNoAlbum, hasActiveGalleryFilters, serializeFilterSet } from "@/utils/galleryPath";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
@@ -187,7 +187,7 @@ const bigPageEnabled = computed(() => {
 });
 
 const currentPath = computed(() => galleryRouteStore.currentPath);
-const providerRootPath = computed(() => serializeFilter(galleryRouteStore.filter));
+const providerRootPath = computed(() => serializeFilterSet(galleryRouteStore.filters) || "all");
 const currentPage = computed(() => galleryRouteStore.page);
 let lastTrackedGalleryPath: string | null = null;
 
@@ -239,15 +239,19 @@ function imageAnalyticsPayload(images: ImageInfo[]): Record<string, unknown> {
 }
 
 const isWallpaperOrderEmpty = computed(
-  () => galleryRouteStore.filter.type === "wallpaper-order"
+  () => !!galleryRouteStore.filters.wallpaperOrder
 );
 
 const isWallpaperOrderBrowse = computed(
-  () => galleryRouteStore.filter.type === "wallpaper-order"
+  () => !!galleryRouteStore.filters.wallpaperOrder
+);
+
+const isNoAlbumBrowse = computed(
+  () => filterNoAlbum(galleryRouteStore.filters)
 );
 
 const isNameBrowse = computed(
-  () => galleryRouteStore.filter.type === "name"
+  () => !!galleryRouteStore.filters.name
 );
 
 watch(
@@ -274,55 +278,6 @@ watch(
     if (path === lastTrackedGalleryPath) return;
     lastTrackedGalleryPath = path;
     trackEvent("gallery_path", { path, url: currentUrl() });
-  },
-  { immediate: true }
-);
-
-const selectedRange = ref<[string, string] | null>(null);
-
-const extractRangeFromProviderRoot = (
-  root: string
-): [string, string] | null => {
-  const segs = (root || "").split("/").map((s) => s.trim()).filter(Boolean);
-  // 按时间/范围/YYYY-MM-DD~YYYY-MM-DD
-  // 后端固定返回中文目录名，与 UI 语言无关
-  if (segs.length >= 3 && segs[0] === "按时间" && segs[1] === "范围") {
-    const raw = segs[2] ?? "";
-    const parts = raw.split("~").map((s) => s.trim()).filter(Boolean);
-    if (parts.length === 2) return [parts[0]!, parts[1]!] as [string, string];
-  }
-  return null;
-};
-
-watch(
-  () => [galleryRouteStore.filter, providerRootPath.value] as const,
-  ([filter, root]) => {
-    if (filter.type === "date-range") {
-      const range: [string, string] = [filter.start, filter.end];
-      if (
-        !selectedRange.value ||
-        selectedRange.value[0] !== range[0] ||
-        selectedRange.value[1] !== range[1]
-      ) {
-        selectedRange.value = range;
-      }
-      return;
-    }
-
-    const range = extractRangeFromProviderRoot(root);
-    if (range) {
-      if (
-        !selectedRange.value ||
-        selectedRange.value[0] !== range[0] ||
-        selectedRange.value[1] !== range[1]
-      ) {
-        selectedRange.value = range;
-      }
-      return;
-    }
-
-    // 不在范围路径：清空日历（但不强制改变当前 provider 路径，保持默认按月）
-    if (selectedRange.value !== null) selectedRange.value = null;
   },
   { immediate: true }
 );
@@ -367,7 +322,7 @@ const handleEmptyStateCollect = () => {
 };
 
 const handleWallpaperEmptyViewAll = () => {
-  void galleryRouteStore.navigate({ filter: { type: "all" }, page: 1 });
+  void galleryRouteStore.navigate({ filters: {}, page: 1 });
 };
 
 // 桌面：选择收集方式对话框 → 本地
@@ -560,7 +515,7 @@ const loadImages = async (reset?: boolean) => {
     await refreshImagesPreserveCache(currentPath.value);
     // reset 时导航到根路径的第 1 页
     if (reset) {
-      await galleryRouteStore.navigate({ filter: galleryRouteStore.filter, page: 1 });
+      await galleryRouteStore.navigate({ filters: galleryRouteStore.filters, page: 1 });
     }
   } finally {
     finishLoading();
@@ -575,32 +530,6 @@ watch(
     await loadTotalImagesCount();
     await loadImages(false);
   },
-);
-
-watch(
-  () => selectedRange.value,
-  async (r) => {
-    if (!r || r.length !== 2) {
-      return;
-    }
-    const start = (r[0] || "").trim();
-    const end = (r[1] || "").trim();
-    if (!start || !end) return;
-
-    const nextFilter = { type: "date-range" as const, start, end };
-    if (
-      galleryRouteStore.filter.type === "date-range" &&
-      galleryRouteStore.filter.start === start &&
-      galleryRouteStore.filter.end === end
-    ) {
-      return;
-    }
-
-    // 切换 provider：回到第 1 页，并重载
-    await galleryRouteStore.navigate({ filter: nextFilter, page: 1 });
-    await loadTotalImagesCount();
-    await loadImages(false);
-  }
 );
 
 const handleManualRefresh = async () => {
@@ -642,7 +571,7 @@ watch(
     } catch (error) {
       console.error("加载路径失败:", newPath, error);
       if (
-        galleryRouteStore.filter.type === "all" &&
+        !hasActiveGalleryFilters(galleryRouteStore.filters) &&
         galleryRouteStore.page === 1
       ) {
         return;
@@ -696,7 +625,7 @@ const loadTotalImagesCount = async () => {
     // 使用 provider 的无尾缀 Entry 语法：只算 composed query 的 COUNT，不触发 list_children / list_images。
     // 这里必须剥离排序和分页段；pathql count 会精确统计传入路径。
     const rootPath = buildGalleryCountPath(
-      galleryRouteStore.filter,
+      galleryRouteStore.filters,
       galleryRouteStore.search
     );
     const countPath = galleryRouteStore.hide ? `hide/${rootPath}` : rootPath;
@@ -705,7 +634,7 @@ const loadTotalImagesCount = async () => {
   } catch (error) {
     console.error("获取总图片数失败:", error);
     if (
-      galleryRouteStore.filter.type === "all" &&
+      !hasActiveGalleryFilters(galleryRouteStore.filters) &&
       galleryRouteStore.page === 1
     ) {
       return;
@@ -1200,17 +1129,17 @@ useImagesChangeRefresh({
   onRefresh: refreshGalleryPageFromEvents,
 });
 
-/** 画册成员变化：FAVORITE 就地更新星标；HIDDEN 全量刷新（HideGate 影响 gallery 可见性） */
+/** 画册成员变化：FAVORITE 就地更新星标；HIDDEN / no-album 影响 gallery 可见性，需全量刷新。 */
 useAlbumImagesChangeRefresh({
   enabled: ref(true),
   waitMs: 1000,
   filter: (p) => {
     const ids = p.albumIds ?? [];
-    return ids.includes(FAVORITE_ALBUM_ID) || ids.includes(HIDDEN_ALBUM_ID);
+    return isNoAlbumBrowse.value || ids.includes(FAVORITE_ALBUM_ID) || ids.includes(HIDDEN_ALBUM_ID);
   },
   onRefresh: async (p) => {
     const ids = p.albumIds ?? [];
-    if (ids.includes(HIDDEN_ALBUM_ID)) {
+    if (isNoAlbumBrowse.value || ids.includes(HIDDEN_ALBUM_ID)) {
       await refreshGalleryPageFromEvents();
       return;
     }

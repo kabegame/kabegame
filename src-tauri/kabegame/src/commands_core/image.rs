@@ -16,7 +16,7 @@ use kabegame_core::storage::Storage;
 use serde_json::Value;
 
 #[cfg(feature = "web")]
-use crate::web::image_rewrite::rewrite_fs_path;
+use crate::web::image_rewrite::{rewrite_fs_path, rewrite_image_info};
 
 #[cfg(feature = "web")]
 fn rewrite_pathql_image_rows(rows: &mut [Value]) {

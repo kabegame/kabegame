@@ -14,7 +14,6 @@ import type { GalleryFilter } from "@/utils/galleryPath";
 import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import {
   isSameGalleryFilter,
-  joinProviderPath,
   useGalleryFilterTreeContext,
 } from "./context";
 
@@ -23,6 +22,6 @@ defineEmits<{
 }>();
 
 const { t } = useI18n();
-const { filter, prefix } = useGalleryFilterTreeContext();
-const path = computed(() => joinProviderPath(prefix.value, "all"));
+const { filter, pathForSegment } = useGalleryFilterTreeContext();
+const path = computed(() => pathForSegment("all"));
 </script>

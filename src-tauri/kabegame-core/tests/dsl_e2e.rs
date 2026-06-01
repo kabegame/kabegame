@@ -194,7 +194,10 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             created_at INTEGER NOT NULL,
-            parent_id TEXT
+            parent_id TEXT,
+            type TEXT NOT NULL DEFAULT 'normal',
+            sync_folder TEXT,
+            folder_status TEXT
         );
         CREATE TABLE tasks (
             id TEXT PRIMARY KEY,
@@ -240,7 +243,7 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             name TEXT NOT NULL DEFAULT '',
             cookie TEXT NOT NULL DEFAULT ''
         );
-        INSERT INTO albums VALUES
+        INSERT INTO albums(id, name, created_at, parent_id) VALUES
             ('11111111-1111-1111-1111-111111111111', 'AlbumA', 1, NULL),
             ('33333333-3333-3333-3333-333333333333', 'AlbumChild', 2, '11111111-1111-1111-1111-111111111111');
         INSERT INTO image_metadata VALUES
@@ -324,6 +327,20 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             conn.execute(
                 "INSERT INTO album_images(album_id, image_id, \"order\") VALUES (?1, ?2, ?3)",
                 ("33333333-3333-3333-3333-333333333333", i, 9 - i),
+            )
+            .unwrap();
+        }
+        if i == 9 {
+            conn.execute(
+                "INSERT INTO album_images(album_id, image_id, \"order\") VALUES (?1, ?2, ?3)",
+                (HIDDEN_ALBUM_ID, i, i),
+            )
+            .unwrap();
+        }
+        if i == 10 {
+            conn.execute(
+                "INSERT INTO album_images(album_id, image_id, \"order\") VALUES (?1, ?2, ?3)",
+                (FAVORITE_ALBUM_ID, i, i),
             )
             .unwrap();
         }
@@ -710,7 +727,7 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
 }
 
 #[test]
-fn gallery_aspect_buckets_filter_and_sort_by_ratio() {
+fn gallery_aspect_buckets_filter_and_explicit_sort_by_ratio() {
     let runtime = build_runtime();
 
     let buckets = runtime.list("images://gallery/aspect").unwrap();
@@ -751,7 +768,68 @@ fn gallery_aspect_buckets_filter_and_sort_by_ratio() {
     let other = runtime
         .fetch("images://gallery/aspect/other/x10x/1")
         .unwrap();
-    assert_eq!(ids(other), ["117", "116"]);
+    assert_eq!(ids(other), ["116", "117"]);
+
+    let other_by_aspect = runtime
+        .fetch("images://gallery/aspect/other/filter_comb/sort/by-aspect/x10x/1")
+        .unwrap();
+    assert_eq!(ids(other_by_aspect), ["117", "116"]);
+
+    let other_by_aspect_desc = runtime
+        .fetch("images://gallery/aspect/other/filter_comb/sort/by-aspect/desc/x10x/1")
+        .unwrap();
+    assert_eq!(ids(other_by_aspect_desc), ["116", "117"]);
+}
+
+#[test]
+fn gallery_filter_combines_dimensions_and_sort() {
+    let runtime = build_runtime();
+
+    let image_landscape = runtime
+        .fetch("images://gallery/media-type/image/filter_comb/aspect/landscape-4x3-16x9/x10x/1")
+        .unwrap();
+    assert_eq!(ids(image_landscape), ["114"]);
+
+    let image_landscape_by_size_desc = runtime
+        .fetch("images://gallery/media-type/image/filter_comb/aspect/landscape-4x3-16x9/filter_comb/sort/by-size/desc/x10x/1")
+        .unwrap();
+    assert_eq!(ids(image_landscape_by_size_desc), ["114"]);
+
+    let plugin_image_webp = runtime
+        .fetch("images://gallery/plugin/pixiv/filter_comb/media-type/image/webp/x10x/1")
+        .unwrap();
+    assert_eq!(ids(plugin_image_webp), ["119"]);
+
+    let count = runtime
+        .count("images://gallery/media-type/image/filter_comb/aspect/other")
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[test]
+fn gallery_no_album_filter_excludes_non_hidden_album_memberships() {
+    let runtime = build_runtime();
+
+    let no_album = runtime.fetch("images://gallery/no-album/x10x/1").unwrap();
+    assert_eq!(
+        ids(no_album),
+        ["9", "11", "12", "13", "14", "15", "16", "17", "18", "19"]
+    );
+    assert_eq!(runtime.count("images://gallery/no-album").unwrap(), 111);
+
+    let combined = runtime
+        .fetch("images://gallery/media-type/image/filter_comb/no-album/filter_comb/sort/by-size/desc/x10x/1")
+        .unwrap();
+    let combined_ids = ids(combined);
+    assert_eq!(combined_ids.len(), 10);
+    assert!(!combined_ids.contains(&"10".to_string()));
+    assert!(!combined_ids.contains(&"1".to_string()));
+    assert_eq!(
+        runtime
+            .count("images://gallery/media-type/image/filter_comb/no-album/filter_comb/sort/by-size")
+            .unwrap(),
+        110
+    );
 }
 
 #[test]

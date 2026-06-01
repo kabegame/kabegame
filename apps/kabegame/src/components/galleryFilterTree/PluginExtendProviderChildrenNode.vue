@@ -53,7 +53,6 @@ import {
   joinProviderPath,
   listProviderDirs,
   normalizeProviderPath,
-  pluginExtendPath,
   unknownOrMatchingPlugin,
   useGalleryFilterTreeContext,
   type ProviderChildDir,
@@ -78,14 +77,27 @@ defineEmits<{
   select: [filter: GalleryFilter];
 }>();
 
-const { filter, prefix, registerRefreshTarget } = useGalleryFilterTreeContext();
+const { filter, prefix, pathForSegment, registerRefreshTarget } = useGalleryFilterTreeContext();
 const children = ref<ProviderChildDir[]>([]);
 const loaded = ref(false);
 let listToken = 0;
 let unregisterRefresh: (() => void) | null = null;
 
 const path = computed(() =>
-  pluginExtendPath(prefix.value, props.pluginId, props.extendPath)
+  pathForSegment(
+    [
+      "plugin",
+      encodeURIComponent(props.pluginId),
+      "extend",
+      normalizeProviderPath(props.extendPath)
+        .split("/")
+        .filter(Boolean)
+        .map(encodeURIComponent)
+        .join("/"),
+    ]
+      .filter(Boolean)
+      .join("/")
+  )
 );
 const filterForSelf = computed<GalleryFilter>(() => ({
   type: "plugin",

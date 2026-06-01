@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { nextTick, reactive, watch, type Ref } from "vue";
 import { useLocalStorage } from "@vueuse/core";
 import { invoke } from "../api";
-import { IS_DEV, IS_LIGHT_MODE, IS_ANDROID, IS_WINDOWS, IS_WEB } from "../env";
+import { IS_DEV, IS_LIGHT_MODE, IS_ANDROID, IS_LINUX, IS_MACOS, IS_WINDOWS, IS_WEB } from "../env";
 import { guardDesktopOnly } from "../utils/desktopOnlyGuard";
 import { guardSuperRequired } from "../utils/superModeGuard";
 import { getIsSuper } from "../state/superState";
@@ -17,12 +17,10 @@ export interface AppSettings {
   downloadIntervalMs: number;
   networkRetryCount: number;
   imageClickAction: "preview" | "open" | "none";
-  galleryImageAspectRatio: string | null;
-  /** 图片在方框内溢出时的垂直对齐（仅桌面端）：center | top | bottom */
-  galleryImageObjectPosition: "center" | "top" | "bottom";
   /** 画廊列数（0=动态；1-6=固定列数），前端本地偏好 */
   galleryGridColumns: number;
   autoDeduplicate: boolean;
+  realtimeFolderSync: boolean;
   defaultDownloadDir: string | null;
   wallpaperEngineDir: string | null;
   wallpaperRotationEnabled: boolean;
@@ -95,8 +93,6 @@ type WebLocalSettingEntry = {
 const WEB_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
   { key: "language", defaultValue: null },
   { key: "imageClickAction", defaultValue: "preview", readonly: true },
-  { key: "galleryImageAspectRatio", defaultValue: "16:10" },
-  { key: "galleryImageObjectPosition", defaultValue: "center" },
   // 壁纸轮播能力：web 模式下只做 localStorage 占位，修改时弹 desktopOnlyGuard
   { key: "wallpaperRotationEnabled", defaultValue: false, readonly: true },
   { key: "wallpaperRotationAlbumId", defaultValue: null, readonly: true },
@@ -153,10 +149,10 @@ const WEB_READONLY_FEATURE_KEY_MAP: Partial<Record<AppSettingKey, string>> = {
   maxConcurrentDownloads: "downloadSettings",
   maxConcurrentTasks: "downloadSettings",
   downloadIntervalMs: "downloadSettings",
-  networkRetryCount: "downloadSettings",
-  galleryImageObjectPosition: "gallerySettings",
-  autoDeduplicate: "autoDeduplicate",
-  importRecommendedScheduleEnabled: "scheduler",
+    networkRetryCount: "downloadSettings",
+    autoDeduplicate: "autoDeduplicate",
+    realtimeFolderSync: "localFolderSync",
+    importRecommendedScheduleEnabled: "scheduler",
 };
 
 function webReadonlyFeatureKey(key: AppSettingKey): string {
@@ -231,12 +227,18 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
   if (!IS_ANDROID) {
     map.autoLaunch = { getter: "get_auto_launch", setter: "set_auto_launch", param: "enabled" };
     map.imageClickAction = { getter: "get_image_click_action", setter: "set_image_click_action", param: "action" };
-    map.galleryImageAspectRatio = { getter: "get_gallery_image_aspect_ratio", setter: "set_gallery_image_aspect_ratio", param: "aspectRatio" };
-    map.galleryImageObjectPosition = { getter: "get_gallery_image_object_position", setter: "set_gallery_image_object_position", param: "position" };
     map.defaultDownloadDir = { getter: "get_default_download_dir", setter: "set_default_download_dir", param: "dir" };
     map.autoOpenCrawlerWebview = {
       getter: "get_auto_open_crawler_webview",
       setter: "set_auto_open_crawler_webview",
+      param: "enabled",
+    };
+  }
+
+  if (!IS_ANDROID && !IS_WEB && (IS_MACOS || IS_LINUX || IS_WINDOWS)) {
+    map.realtimeFolderSync = {
+      getter: "get_realtime_folder_sync",
+      setter: "set_realtime_folder_sync",
       param: "enabled",
     };
   }
@@ -322,11 +324,6 @@ export const useSettingsStore = defineStore("settings", () => {
 
     // imageClickAction: 安卓下固定为应用内预览
     (values as any).imageClickAction = "preview";
-
-    // galleryImageAspectRatio: 安卓下自动使用屏幕宽高比
-    const screenW = window.screen.width;
-    const screenH = window.screen.height;
-    (values as any).galleryImageAspectRatio = `custom:${screenW}:${screenH}`;
 
     // defaultDownloadDir: 保持 null，后端自动使用默认目录
     (values as any).defaultDownloadDir = null;

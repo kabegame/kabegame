@@ -13,13 +13,13 @@
       <el-dropdown-menu>
         <el-dropdown-item
           command="asc"
-          :class="{ 'is-active': galleryRouteStore.sort === 'asc' }"
+          :class="{ 'is-active': !galleryRouteStore.sort.desc }"
         >
           {{ sortAscLabel }}
         </el-dropdown-item>
         <el-dropdown-item
           command="desc"
-          :class="{ 'is-active': galleryRouteStore.sort === 'desc' }"
+          :class="{ 'is-active': galleryRouteStore.sort.desc }"
         >
           {{ sortDescLabel }}
         </el-dropdown-item>
@@ -39,11 +39,11 @@ const route = useRoute();
 const galleryRouteStore = useGalleryRouteStore();
 
 const isWallpaperOrderRoot = computed(
-  () => galleryRouteStore.filter.type === "wallpaper-order"
+  () => !!galleryRouteStore.filters.wallpaperOrder
 );
 
-const isSizeRoot = computed(() => galleryRouteStore.filter.type === "size");
-const isAspectRoot = computed(() => galleryRouteStore.filter.type === "aspect");
+const isSizeRoot = computed(() => !!galleryRouteStore.filters.size);
+const isAspectRoot = computed(() => !!galleryRouteStore.filters.aspect);
 
 const { t } = useI18n();
 
@@ -63,27 +63,27 @@ const sortDescLabel = computed(() => {
 
 const sortLabel = computed(() => {
   if (isWallpaperOrderRoot.value) {
-    return galleryRouteStore.sort === "desc"
+    return galleryRouteStore.sort.desc
       ? t("gallery.bySetTimeDesc")
       : t("gallery.bySetTimeAsc");
   }
   if (isSizeRoot.value) {
-    return galleryRouteStore.sort === "desc"
+    return galleryRouteStore.sort.desc
       ? t("gallery.bySizeDesc")
       : t("gallery.bySizeAsc");
   }
   if (isAspectRoot.value) {
-    return galleryRouteStore.sort === "desc"
+    return galleryRouteStore.sort.desc
       ? t("gallery.byAspectHeightWidth")
       : t("gallery.byAspectWidthHeight");
   }
-  return galleryRouteStore.sort === "desc"
+  return galleryRouteStore.sort.desc
     ? t("gallery.byTimeDesc")
     : t("gallery.byTimeAsc");
 });
 
 function handleCommand(command: string) {
-  const sort = command === "desc" ? "desc" : "asc";
+  const sort = { ...galleryRouteStore.sort, desc: command === "desc" };
   void galleryRouteStore.navigate({ sort }, { push: route.path !== "/gallery" });
 }
 </script>

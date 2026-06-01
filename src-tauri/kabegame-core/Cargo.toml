@@ -67,6 +67,7 @@ libc = "0.2"
 fuser = { version = "0.16", default-features = false, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
 fuser = { version = "0.16", features = ["libfuse"], optional = true }
 
 # Android 交叉编译时无系统 OpenSSL，使用 vendored 从源码编译
@@ -86,7 +87,9 @@ windows-sys = { version = "0.52", features = [
   "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_DataExchange",
+  "Win32_System_IO",
   "Win32_System_Memory",
+  "Win32_System_Threading",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
@@ -98,3 +101,6 @@ ipc-server = []
 virtual-driver = ["dep:fuser", "dep:dokan"]
 # Phase 6b: 6c 通过 SqlExecutor 接入后再启用 VD module
 vd-legacy = []
+
+[dev-dependencies]
+tempfile = "3"

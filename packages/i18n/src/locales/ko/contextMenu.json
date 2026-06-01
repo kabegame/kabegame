@@ -16,6 +16,7 @@
   "saveAsConfig": "설정으로 저장",
   "deleteTask": "작업 삭제",
   "browse": "탐색",
+  "syncNow": "지금 동기화",
   "setWallpaperRotation": "데스크톱 순환으로 설정",
   "setWallpaperRotationActive": "(활성)",
   "rename": "이름 변경",

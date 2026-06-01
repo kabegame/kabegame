@@ -38,6 +38,20 @@ window:
 
 albums:
   favorite: お気に入り
+  errors:
+    nameExists: 同じ名前のアルバムが既にあります。別の名前を選んでください
+    parentNotFound: "親アルバムが存在しません: {id}"
+  localFolderErrors:
+    macosOnly: このビルドではローカルフォルダ同期は macOS のみ対応です
+    nameRequired: アルバム名は空にできません
+    nameNoSlash: "アルバム名に '/' は使用できません"
+    parentReadonly: システムアルバムの下にはローカルフォルダ同期アルバムを作成できません
+    absolutePathRequired: sync_folder は絶対パスである必要があります
+    rootPathForbidden: "sync_folder にルートディレクトリ '/' は指定できません"
+    notDirectory: sync_folder はフォルダではありません
+    folderAccessFailed: "sync_folder にアクセスできません: {detail}"
+    virtualDrivePathForbidden: "仮想ドライブのマウント先（{path}）配下のパスは同期元にできません"
+    readOnly: ローカルフォルダ同期アルバムでは画像を手動で追加・削除できません
 
 plugins:
   officialGithubReleaseSourceName: 公式 GitHub Releases ソース

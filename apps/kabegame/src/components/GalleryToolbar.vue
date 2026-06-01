@@ -5,65 +5,86 @@
     </template>
   </PageHeader>
 
-  <!-- 桌面：过滤（provider tree）+ 排序（任意根路径），置于标题与分页器之间 -->
-  <div v-if="!uiStore.isCompact" class="gallery-browse-toolbar">
-    <el-popover
-      v-if="showGalleryFilterFold"
-      v-model:visible="showProviderTreePopover"
-      placement="bottom-start"
-      trigger="click"
-      width="auto"
-      popper-class="gallery-provider-tree-popover"
-    >
-      <template #reference>
-        <el-button class="gallery-browse-btn">
-          <el-icon class="gallery-browse-icon">
-            <Filter />
-          </el-icon>
-          <span>{{ filterFoldLabel }}</span>
-          <el-icon class="el-icon--right">
-            <ArrowDown />
-          </el-icon>
-        </el-button>
-      </template>
-      <GalleryFilterTree
-        ref="providerTreeRef"
-        :context-prefix="providerContextPrefix"
-        :filter="filter"
-        :visible="showProviderTreePopover"
-        @update:filter="onProviderTreeFilter"
-      />
-    </el-popover>
+  <!-- 桌面：组合过滤 + 独立排序，置于标题与分页器之间 -->
+  <div v-if="!uiStore.isCompact" class="flex flex-wrap items-center gap-2 mb-2">
+    <!-- 打开过滤行 -->
+    <div class="relative inline-flex max-w-[280px]">
+      <el-button
+        class="max-w-[280px] !pr-7"
+        :class="{
+          '!border-[rgba(255,107,157,0.55)] !bg-[rgba(255,107,157,0.12)] !text-[var(--anime-primary)] !shadow-[0_0_0_1px_rgba(255,107,157,0.20)]': isFilterIndicatorActive,
+        }"
+        @click="showDesktopFilterRow = !showDesktopFilterRow"
+      >
+        <el-icon class="mr-1.5 text-sm">
+          <Filter />
+        </el-icon>
+        <span>{{ t("gallery.filter") }} </span>
+        <el-icon
+          class="el-icon--right transition-transform duration-150 ease-[ease]"
+          :class="{ 'rotate-180': showDesktopFilterRow }"
+        >
+          <ArrowDown />
+        </el-icon>
+      </el-button>
+      <button
+        v-if="isFilterIndicatorActive"
+        type="button"
+        class="absolute -right-1 -top-1 z-10 inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border border-white bg-[var(--anime-primary)] p-0 text-[11px] text-white shadow-[0_2px_6px_rgba(255,107,157,0.35)] cursor-pointer"
+        :aria-label="t('gallery.clearAllFilters')"
+        :title="t('gallery.clearAllFilters')"
+        @click.stop.prevent="clearAllFilters"
+      >
+        <el-icon>
+          <Close />
+        </el-icon>
+      </button>
+    </div>
 
-    <el-dropdown trigger="click" @command="onDesktopSortCommand">
-      <el-button class="gallery-browse-btn">
-        <el-icon class="gallery-browse-icon">
+    <!-- 排序维度 -->
+    <el-dropdown trigger="click" @command="onDesktopSortFieldCommand">
+      <el-button class="max-w-[280px]">
+        <el-icon class="mr-1.5 text-sm">
           <Sort />
         </el-icon>
-        <span>{{ sortToolbarButtonLabel }}</span>
-        <el-icon class="el-icon--right">
+        <span>{{ sortFieldLabel(sortField) }} </span>
+        <el-icon class="el-icon--right transition-transform duration-150 ease-[ease]">
           <ArrowDown />
         </el-icon>
       </el-button>
       <template #dropdown>
         <el-dropdown-menu>
-          <el-dropdown-item command="asc" :class="{ 'is-active': sortOrder === 'asc' }">
-            {{ sortOptionLabelAsc }}
-          </el-dropdown-item>
-          <el-dropdown-item command="desc" :class="{ 'is-active': sortOrder === 'desc' }">
-            {{ sortOptionLabelDesc }}
+          <el-dropdown-item
+            v-for="field in sortFieldOptions"
+            :key="field"
+            :command="field"
+            :class="{ 'is-active': sortField === field }"
+          >
+            {{ sortFieldLabel(field) }}
           </el-dropdown-item>
         </el-dropdown-menu>
       </template>
     </el-dropdown>
 
+    <!-- 排序方向 -->
+    <el-button class="max-w-[280px]" @click="toggleDesktopSortDesc">
+      <el-icon
+        class="mr-1.5 text-sm transition-transform duration-150 ease-[ease]"
+        :class="{ 'rotate-180': sortOrder === 'desc' }"
+      >
+        <Sort />
+      </el-icon>
+      <span>{{ sortOrder === "desc" ? t("gallery.sortDescending") : t("gallery.sortAscending") }}</span>
+    </el-button>
+
+    <!-- 页面大小 -->
     <el-dropdown trigger="click" @command="onDesktopPageSizeCommand">
-      <el-button class="gallery-browse-btn">
-        <el-icon class="gallery-browse-icon">
+      <el-button class="max-w-[280px]">
+        <el-icon class="mr-1.5 text-sm">
           <Histogram />
         </el-icon>
         <span>{{ pageSizeLabel }}</span>
-        <el-icon class="el-icon--right">
+        <el-icon class="el-icon--right transition-transform duration-150 ease-[ease]">
           <ArrowDown />
         </el-icon>
       </el-button>
@@ -84,9 +105,84 @@
     <SearchInput
       :model-value="search"
       :placeholder="t('gallery.searchPlaceholder')"
-      class="gallery-browse-search"
+      class="ml-auto"
       @update:model-value="(v) => emit('update:search', v)"
     />
+  </div>
+
+  <!-- 桌面具体过滤行 -->
+  <div v-if="!uiStore.isCompact && showDesktopFilterRow" class="flex flex-wrap items-center gap-2 mb-2">
+    <div
+      v-for="dimension in filterDimensions"
+      :key="dimension.key"
+      class="relative inline-flex items-center max-w-[260px]"
+    >
+      <el-popover
+        :visible="!!dimensionPopoverOpen[dimension.key]"
+        placement="bottom-start"
+        trigger="click"
+        width="auto"
+        @update:visible="setDimensionPopoverOpen(dimension.key, $event)"
+      >
+        <template #reference>
+          <div class="relative inline-flex max-w-[240px]">
+            <el-button
+              class="max-w-[240px] !pr-7 [&_span]:min-w-0"
+              :class="{
+                '!border-[rgba(255,107,157,0.55)] !bg-[rgba(255,107,157,0.12)] !text-[var(--anime-primary)] !shadow-[0_0_0_1px_rgba(255,107,157,0.20)]': isDimensionActive(dimension.key),
+              }"
+              :aria-label="dimension.title"
+              :title="dimension.title"
+            >
+              <el-icon
+                class="mr-1.5 flex-none text-sm text-[var(--anime-text-secondary)]"
+                :class="{ '!text-[var(--anime-primary)]': isDimensionActive(dimension.key) }"
+              >
+                <component :is="dimension.icon" />
+              </el-icon>
+              <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+                {{ dimensionLabel(dimension.key) }}
+              </span>
+              <el-icon class="el-icon--right transition-transform duration-150 ease-[ease]">
+                <ArrowDown />
+              </el-icon>
+            </el-button>
+            <button
+              v-if="isDimensionActive(dimension.key)"
+              type="button"
+              class="absolute -right-1 -top-1 z-10 inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border border-white bg-[var(--anime-primary)] p-0 text-[11px] text-white shadow-[0_2px_6px_rgba(255,107,157,0.35)] cursor-pointer"
+              :aria-label="`${dimension.title}: ${t('gallery.filterAny')}`"
+              @click.stop.prevent="clearDimension(dimension.key)"
+            >
+              <el-icon>
+                <Close />
+              </el-icon>
+            </button>
+          </div>
+        </template>
+        <div class="w-[320px] max-w-[min(320px,80vw)]">
+          <button
+            type="button"
+            class="w-[calc(100%-12px)] m-[6px] min-h-8 border-0 rounded-[6px] bg-transparent text-[var(--anime-text-primary)] text-left px-3 cursor-pointer hover:bg-[var(--el-fill-color-light)]"
+            :class="{
+              '!bg-[rgba(255,107,157,0.14)] !text-[var(--anime-primary)]': !isDimensionActive(dimension.key),
+            }"
+            @click="clearDimension(dimension.key)"
+          >
+            {{ t("gallery.filterAny") }}
+          </button>
+          <GalleryFilterTree
+            ref="providerTreeRef"
+            :context-prefix="providerContextPrefix"
+            :filters="activeFilters"
+            :filter="filterForDimension(activeFilters, dimension.key)"
+            :dimension="dimension.key"
+            :visible="!!dimensionPopoverOpen[dimension.key]"
+            @update:filter="(f) => onDimensionFilter(dimension.key, f)"
+          />
+        </div>
+      </el-popover>
+    </div>
   </div>
 
   <!-- Android：fold 中「过滤」「排序」弹出的 van-picker -->
@@ -184,11 +280,24 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onUnmounted } from "vue";
+import { computed, markRaw, ref, watch, onUnmounted, type Component } from "vue";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
-import { ArrowDown, Filter, Histogram, Sort } from "@element-plus/icons-vue";
+import {
+  ArrowDown,
+  Calendar,
+  Close,
+  CollectionTag,
+  Connection,
+  Files,
+  Film,
+  Filter,
+  Histogram,
+  ScaleToOriginal,
+  Search,
+  Sort,
+} from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
 import { withGalleryPrefix } from "@/utils/path";
@@ -200,16 +309,26 @@ import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import {
   GALLERY_ASPECT_BUCKETS,
   GALLERY_NAME_LANGUAGE_BUCKETS,
+  filterForDimension,
   filterAspectRange,
   filterDateSegment,
   filterMediaFormat,
   filterMediaKind,
   filterNameBucket,
+  filterNoAlbum,
   filterPluginId,
   filterSizeRange,
+  filterSetToSingleFilter,
+  hasActiveGalleryFilters,
   isSimpleFilter,
+  removeFilterDimension,
+  setFilterDimension,
+  singleFilterToSet,
   type GalleryFilter,
-  type GalleryTimeSort,
+  type GalleryFilterDimension,
+  type GalleryFilterSet,
+  type GallerySort,
+  type GallerySortField,
 } from "@/utils/galleryPath";
 import {
   buildGalleryTimeMenuTree,
@@ -234,9 +353,9 @@ interface Props {
   isLoadingAll?: boolean;
   totalCount?: number;
   bigPageEnabled?: boolean;
-  selectedRange?: [string, string] | null; // YYYY-MM-DD
+  filters?: GalleryFilterSet;
   filter?: GalleryFilter;
-  sort?: GalleryTimeSort;
+  sort?: GallerySort;
   /** 每页条数（与设置同步，用于工具栏展示） */
   pageSize?: number;
   /** display_name 搜索词 */
@@ -249,9 +368,9 @@ const props = withDefaults(defineProps<Props>(), {
   isLoadingAll: false,
   totalCount: 0,
   bigPageEnabled: false,
-  selectedRange: null,
+  filters: () => ({} as GalleryFilterSet),
   filter: () => ({ type: "all" } as GalleryFilter),
-  sort: "asc",
+  sort: () => ({ field: "by-time", desc: false } as GallerySort),
   pageSize: 100,
   search: "",
   providerContextPrefix: "",
@@ -266,19 +385,22 @@ const failedCountFoldLabel = computed(() => {
   const suffix = n >= 99 ? "99+" : String(n);
   return `${t("header.failedImages")} (${suffix})`;
 });
-const sortOrder = computed<GalleryTimeSort>(() =>
-  props.sort === "desc" ? "desc" : "asc"
-);
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 
-const isWallpaperOrderBrowse = computed(
-  () => props.filter.type === "wallpaper-order"
-);
+const activeFilters = computed<GalleryFilterSet>(() => props.filters ?? singleFilterToSet(props.filter));
+const legacyFilter = computed<GalleryFilter>(() => filterSetToSingleFilter(activeFilters.value));
+const sortField = computed<GallerySortField>(() => props.sort.field);
+const sortOrder = computed<"asc" | "desc">(() => (props.sort.desc ? "desc" : "asc"));
 
-const isSizeBrowse = computed(() => filterSizeRange(props.filter) !== null);
-const isAspectBrowse = computed(() => filterAspectRange(props.filter) !== null);
-const isNameBrowse = computed(() => filterNameBucket(props.filter) !== null);
+const isWallpaperOrderBrowse = computed(
+  () => !!activeFilters.value.wallpaperOrder
+);
+const isNoAlbumBrowse = computed(() => filterNoAlbum(activeFilters.value));
+
+const isSizeBrowse = computed(() => filterSizeRange(activeFilters.value) !== null);
+const isAspectBrowse = computed(() => filterAspectRange(activeFilters.value) !== null);
+const isNameBrowse = computed(() => filterNameBucket(activeFilters.value) !== null);
 
 const SIZE_RANGE_LABEL_KEYS: Record<string, string> = {
   "unknown":   "filterSize_unknown",
@@ -300,19 +422,115 @@ const NAME_BUCKET_AUTONYMS: Record<string, string> = Object.fromEntries(
 
 const uiStore = useUiStore();
 
-const currentPluginId = computed(() => filterPluginId(props.filter));
+const currentPluginId = computed(() => filterPluginId(activeFilters.value));
 
-const dateTail = computed(() => filterDateSegment(props.filter));
+const dateTail = computed(() => filterDateSegment(activeFilters.value));
 
 const isPluginFilterBrowse = computed(() => currentPluginId.value != null);
 
 const isTimeFilterBrowse = computed(() => dateTail.value != null);
 
 const isMediaTypeFilterBrowse = computed(
-  () => filterMediaKind(props.filter) != null
+  () => filterMediaKind(activeFilters.value) != null
 );
 
-const showGalleryFilterFold = computed(() => isSimpleFilter(props.filter));
+const showGalleryFilterFold = computed(() => isSimpleFilter(activeFilters.value));
+
+const showDesktopFilterRow = ref(false);
+const dimensionPopoverOpen = ref<Partial<Record<GalleryFilterDimension, boolean>>>({});
+
+const sortFieldOptions: GallerySortField[] = [
+  "by-time",
+  "by-size",
+  "by-name",
+  "by-aspect",
+  "by-set-time",
+];
+
+// no-album 不是可浏览过滤维度（不进过滤行 / 不显示图标），故从图标表中排除。
+const FILTER_DIMENSION_ICONS: Record<Exclude<GalleryFilterDimension, "noAlbum">, Component> = {
+  wallpaperOrder: markRaw(CollectionTag),
+  plugin: markRaw(Connection),
+  mediaType: markRaw(Film),
+  date: markRaw(Calendar),
+  name: markRaw(Search),
+  size: markRaw(Files),
+  aspect: markRaw(ScaleToOriginal),
+};
+
+const filterDimensions = computed<Array<{
+  key: GalleryFilterDimension;
+  title: string;
+  icon: Component;
+}>>(() => [
+  { key: "wallpaperOrder", title: t("gallery.filterWallpaperSet"), icon: FILTER_DIMENSION_ICONS.wallpaperOrder },
+  { key: "plugin", title: t("gallery.filterByPlugin"), icon: FILTER_DIMENSION_ICONS.plugin },
+  { key: "mediaType", title: t("gallery.filterByMediaType"), icon: FILTER_DIMENSION_ICONS.mediaType },
+  { key: "date", title: t("gallery.filterByTime"), icon: FILTER_DIMENSION_ICONS.date },
+  { key: "name", title: t("gallery.filterByName"), icon: FILTER_DIMENSION_ICONS.name },
+  { key: "size", title: t("gallery.filterBySize"), icon: FILTER_DIMENSION_ICONS.size },
+  { key: "aspect", title: t("gallery.filterByAspect"), icon: FILTER_DIMENSION_ICONS.aspect },
+]);
+
+// no-album 是 header fold 的手动开关，不算「过滤」维度：不点亮过滤指示、也不显示清除叉号。
+const isFilterIndicatorActive = computed(
+  () =>
+    !!props.search.trim() ||
+    hasActiveGalleryFilters({ ...activeFilters.value, noAlbum: undefined })
+);
+
+function sortFieldLabel(field: GallerySortField) {
+  switch (field) {
+    case "by-time":
+      return t("gallery.sortByTime");
+    case "by-size":
+      return t("gallery.sortBySize");
+    case "by-name":
+      return t("gallery.sortByName");
+    case "by-aspect":
+      return t("gallery.sortByAspect");
+    case "by-set-time":
+      return t("gallery.sortBySetTime");
+  }
+}
+
+function setDimensionPopoverOpen(dimension: GalleryFilterDimension, open: boolean) {
+  dimensionPopoverOpen.value = { ...dimensionPopoverOpen.value, [dimension]: open };
+}
+
+function closeDimensionPopover(dimension: GalleryFilterDimension) {
+  setDimensionPopoverOpen(dimension, false);
+}
+
+function isDimensionActive(dimension: GalleryFilterDimension) {
+  return filterForDimension(activeFilters.value, dimension).type !== "all";
+}
+
+function clearDimension(dimension: GalleryFilterDimension) {
+  emit("update:filters", removeFilterDimension(activeFilters.value, dimension));
+  closeDimensionPopover(dimension);
+}
+
+function clearAllFilters() {
+  // no-album 仅由 header fold 开关控制，清除全部过滤时保留它。
+  emit("update:filters", activeFilters.value.noAlbum ? { noAlbum: true } : {});
+  emit("update:search", "");
+  dimensionPopoverOpen.value = {};
+}
+
+function onDimensionFilter(dimension: GalleryFilterDimension, filter: GalleryFilter) {
+  emit("update:filters", setFilterDimension(activeFilters.value, dimension, filter));
+  closeDimensionPopover(dimension);
+}
+
+function onDesktopSortFieldCommand(cmd: string) {
+  if (!sortFieldOptions.includes(cmd as GallerySortField)) return;
+  emit("update:sort", { ...props.sort, field: cmd as GallerySortField });
+}
+
+function toggleDesktopSortDesc() {
+  emit("update:sort", { ...props.sort, desc: !props.sort.desc });
+}
 
 interface PluginGroupRow {
   plugin_id: string;
@@ -344,8 +562,7 @@ const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
   imageCount: 0,
   videoCount: 0,
 });
-const showProviderTreePopover = ref(false);
-const providerTreeRef = ref<{ refresh: () => Promise<void> | void } | null>(null);
+const providerTreeRef = ref<any>(null);
 const monthGroups = ref<DateGroupRow[]>([]);
 const dayGroups = ref<DayGroupRow[]>([]);
 const yearGroups = ref<YearGroupRow[]>([]);
@@ -588,9 +805,9 @@ function resetPluginLazyData() {
 watch(pluginSignature, () => {
   const shouldReloadPlugins = isLazyLoaded("plugin");
   resetPluginLazyData();
-  const current = props.filter.type === "plugin" ? props.filter.pluginId : "";
+  const current = activeFilters.value.plugin?.pluginId ?? "";
   if (current && !pluginStore.plugins.some((p) => p.id === current)) {
-    emit("update:filter", { type: "all" });
+    clearDimension("plugin");
     return;
   }
   if (shouldReloadPlugins) {
@@ -667,8 +884,8 @@ function isProviderPlain(entry: ProviderChildDir) {
 }
 
 function activePluginExtendPath(pluginId: string) {
-  return props.filter.type === "plugin" && props.filter.pluginId === pluginId
-    ? normalizeExtendPath(props.filter.extendPath ?? "")
+  return activeFilters.value.plugin?.pluginId === pluginId
+    ? normalizeExtendPath(activeFilters.value.plugin.extendPath ?? "")
     : "";
 }
 
@@ -694,14 +911,13 @@ function parsePluginCommand(command: string) {
 
 function isPluginCommandActive(pluginId: string, extendPath = "") {
   return (
-    props.filter.type === "plugin" &&
-    props.filter.pluginId === pluginId &&
-    (props.filter.extendPath ?? "") === extendPath
+    activeFilters.value.plugin?.pluginId === pluginId &&
+    (activeFilters.value.plugin.extendPath ?? "") === extendPath
   );
 }
 
 function isPluginProviderCommandActive(pluginId: string) {
-  return props.filter.type === "plugin" && props.filter.pluginId === pluginId;
+  return activeFilters.value.plugin?.pluginId === pluginId;
 }
 
 async function ensurePluginExtendLoaded(pluginId: string, extendPath = "") {
@@ -878,57 +1094,72 @@ async function ensureTimeNodeChildrenLoaded(node: TimeMenuNode) {
 }
 
 const sortOptionLabelAsc = computed(() => {
-  if (isWallpaperOrderBrowse.value) return t("gallery.bySetTimeAsc");
-  if (isNameBrowse.value) return t("gallery.byNameAsc");
-  if (isSizeBrowse.value) return t("gallery.bySizeAsc");
-  if (isAspectBrowse.value) return t("gallery.byAspectWidthHeight");
-  return t("gallery.byTimeAsc");
+  switch (sortField.value) {
+    case "by-set-time":
+      return t("gallery.bySetTimeAsc");
+    case "by-name":
+      return t("gallery.byNameAsc");
+    case "by-size":
+      return t("gallery.bySizeAsc");
+    case "by-aspect":
+      return t("gallery.byAspectWidthHeight");
+    case "by-time":
+      return t("gallery.byTimeAsc");
+  }
 });
 const sortOptionLabelDesc = computed(() => {
-  if (isWallpaperOrderBrowse.value) return t("gallery.bySetTimeDesc");
-  if (isNameBrowse.value) return t("gallery.byNameDesc");
-  if (isSizeBrowse.value) return t("gallery.bySizeDesc");
-  if (isAspectBrowse.value) return t("gallery.byAspectHeightWidth");
-  return t("gallery.byTimeDesc");
+  switch (sortField.value) {
+    case "by-set-time":
+      return t("gallery.bySetTimeDesc");
+    case "by-name":
+      return t("gallery.byNameDesc");
+    case "by-size":
+      return t("gallery.bySizeDesc");
+    case "by-aspect":
+      return t("gallery.byAspectHeightWidth");
+    case "by-time":
+      return t("gallery.byTimeDesc");
+  }
 });
 
-const filterFoldLabel = computed(() => {
+function labelForFilter(filter: GalleryFilter) {
   void locale.value;
-  if (isWallpaperOrderBrowse.value) return t("gallery.filterWallpaperSet");
-  const nb = filterNameBucket(props.filter);
+  if (filter.type === "wallpaper-order") return t("gallery.filterWallpaperSet");
+  if (filter.type === "no-album") return t("gallery.filterNoAlbum");
+  const nb = filterNameBucket(filter);
   if (nb !== null) {
     const detail = NAME_BUCKET_AUTONYMS[nb] ?? nb;
     return `${t("gallery.filterByName")}: ${detail}`;
   }
-  const sr = filterSizeRange(props.filter);
+  const sr = filterSizeRange(filter);
   if (sr !== null) {
     const key = SIZE_RANGE_LABEL_KEYS[sr];
     const detail = key ? t(`gallery.${key}`) : sr;
     return `${t("gallery.filterBySize")}: ${detail}`;
   }
-  const ar = filterAspectRange(props.filter);
+  const ar = filterAspectRange(filter);
   if (ar !== null) {
     const key = ASPECT_RANGE_LABEL_KEYS[ar];
     const detail = key ? t(`gallery.${key}`) : ar;
     return `${t("gallery.filterByAspect")}: ${detail}`;
   }
-  if (props.filter.type === "date-range") {
-    return `${props.filter.start} ~ ${props.filter.end}`;
+  if (filter.type === "date-range") {
+    return `${filter.start} ~ ${filter.end}`;
   }
-  const dt = dateTail.value;
+  const dt = filterDateSegment(filter);
   if (dt) {
     return t("gallery.filterByTimeWithDetail", {
       detail: formatTimeFilterDetail(dt, String(locale.value), t),
     });
   }
-  const pid = currentPluginId.value;
+  const pid = filterPluginId(filter);
   if (pid) {
-    const ext = props.filter.type === "plugin" ? props.filter.extendPath?.trim() : "";
+    const ext = filter.type === "plugin" ? filter.extendPath?.trim() : "";
     const name = pluginStore.pluginLabel(pid);
     return ext ? `${name} / ${ext}` : t("gallery.filterByPluginWithName", { name });
   }
-  const mk = filterMediaKind(props.filter);
-  const mf = filterMediaFormat(props.filter);
+  const mk = filterMediaKind(filter);
+  const mf = filterMediaFormat(filter);
   if (mk === "image") {
     const label = t("gallery.filterImageOnlyLabel");
     if (mf) return `${label} / ${mf}`;
@@ -940,32 +1171,31 @@ const filterFoldLabel = computed(() => {
     return isLazyLoaded("media-type") ? `${label} (${mediaTypeCounts.value.videoCount})` : label;
   }
   return t("gallery.filterAll");
-});
+}
+
+const filterFoldLabel = computed(() => labelForFilter(legacyFilter.value));
+
+function dimensionLabel(dimension: GalleryFilterDimension) {
+  const filter = filterForDimension(activeFilters.value, dimension);
+  return filter.type === "all" ? t("gallery.filterAny") : labelForFilter(filter);
+}
 
 function onSortOrderChange(value: string) {
-  const sort = value === "desc" ? "desc" : "asc";
-  emit("update:sort", sort);
+  emit("update:sort", { ...props.sort, desc: value === "desc" });
 }
 
 const sortToolbarButtonLabel = computed(() =>
   sortOrder.value === "desc" ? sortOptionLabelDesc.value : sortOptionLabelAsc.value
 );
 
-function onProviderTreeFilter(filter: GalleryFilter) {
-  emit("update:filter", filter);
-  showProviderTreePopover.value = false;
-}
-
 async function refreshProviderFilterTree() {
-  await providerTreeRef.value?.refresh();
+  const target = Array.isArray(providerTreeRef.value)
+    ? providerTreeRef.value[0]
+    : providerTreeRef.value;
+  await target?.refresh?.();
 }
 
 defineExpose({ refreshProviderFilterTree });
-
-function onDesktopSortCommand(cmd: string) {
-  if (cmd !== "asc" && cmd !== "desc") return;
-  onSortOrderChange(cmd);
-}
 
 const pageSizeOptions = [100, 500, 1000] as const;
 const pageSizeLabel = computed(() => String(props.pageSize));
@@ -1055,8 +1285,8 @@ async function onFilterPickerConfirm() {
   }
   if (v === "all" || v === "wallpaper-order") {
     emit(
-      "update:filter",
-      v === "all" ? { type: "all" } : { type: "wallpaper-order" }
+      "update:filters",
+      v === "all" ? {} : { wallpaperOrder: true }
     );
   }
 }
@@ -1130,7 +1360,7 @@ function onTimeFilterPickerConfirm(payload: {
     payload.selectedValues.map(String)
   );
   if (!tail) return;
-  emit("update:filter", { type: "date", segment: tail });
+  emit("update:filters", singleFilterToSet({ type: "date", segment: tail }));
 }
 
 const pluginFilterPickerColumns = computed(() => {
@@ -1191,7 +1421,7 @@ const pluginFilterPickerSelected = ref<string[]>([]);
 watch(showPluginFilterPicker, (open) => {
   if (open) {
     const id = currentPluginId.value || pluginGroups.value[0]?.plugin_id || "";
-    const extendPath = props.filter.type === "plugin" ? props.filter.extendPath ?? "" : "";
+    const extendPath = activeFilters.value.plugin?.extendPath ?? "";
     pluginFilterPickerSelected.value = id ? [id, pluginCommand(id, extendPath)] : [];
   }
 });
@@ -1203,8 +1433,10 @@ function onPluginFilterPickerConfirm() {
   const { pluginId: id, extendPath } = parsePluginCommand(command);
   if (!id) return;
   emit(
-    "update:filter",
-    extendPath ? { type: "plugin", pluginId: id, extendPath } : { type: "plugin", pluginId: id }
+    "update:filters",
+    singleFilterToSet(
+      extendPath ? { type: "plugin", pluginId: id, extendPath } : { type: "plugin", pluginId: id }
+    )
   );
 }
 
@@ -1225,7 +1457,7 @@ const mediaTypeFilterPickerColumns = computed(() => {
 const mediaTypeFilterPickerSelected = ref<string[]>(["image"]);
 watch(showMediaTypeFilterPicker, (open) => {
   if (open) {
-    const k = filterMediaKind(props.filter);
+    const k = filterMediaKind(activeFilters.value);
     mediaTypeFilterPickerSelected.value = [k === "video" ? "video" : "image"];
   }
 });
@@ -1233,7 +1465,7 @@ function onMediaTypeFilterPickerConfirm() {
   showMediaTypeFilterPicker.value = false;
   const kind = mediaTypeFilterPickerSelected.value[0];
   if (kind !== "image" && kind !== "video") return;
-  emit("update:filter", { type: "media-type", kind });
+  emit("update:filters", singleFilterToSet({ type: "media-type", kind }));
 }
 
 const nameFilterPickerColumns = computed(() =>
@@ -1246,7 +1478,7 @@ const nameFilterPickerSelected = ref<string[]>(["english"]);
 watch(showNameFilterPicker, (open) => {
   if (open) {
     nameFilterPickerSelected.value = [
-      filterNameBucket(props.filter) ?? GALLERY_NAME_LANGUAGE_BUCKETS[0].bucket,
+      filterNameBucket(activeFilters.value) ?? GALLERY_NAME_LANGUAGE_BUCKETS[0].bucket,
     ];
   }
 });
@@ -1254,7 +1486,7 @@ function onNameFilterPickerConfirm() {
   showNameFilterPicker.value = false;
   const bucket = nameFilterPickerSelected.value[0]?.trim();
   if (!bucket) return;
-  emit("update:filter", { type: "name", bucket });
+  emit("update:filters", singleFilterToSet({ type: "name", bucket }));
 }
 
 const aspectFilterPickerColumns = computed(() =>
@@ -1267,7 +1499,7 @@ const aspectFilterPickerSelected = ref<string[]>(["landscape-4x3-16x9"]);
 watch(showAspectFilterPicker, (open) => {
   if (open) {
     aspectFilterPickerSelected.value = [
-      filterAspectRange(props.filter) ?? GALLERY_ASPECT_BUCKETS[0].range,
+      filterAspectRange(activeFilters.value) ?? GALLERY_ASPECT_BUCKETS[0].range,
     ];
   }
 });
@@ -1275,7 +1507,7 @@ function onAspectFilterPickerConfirm() {
   showAspectFilterPicker.value = false;
   const range = aspectFilterPickerSelected.value[0]?.trim();
   if (!range) return;
-  emit("update:filter", { type: "aspect", range });
+  emit("update:filters", singleFilterToSet({ type: "aspect", range }));
 }
 
 const sortPickerColumns = computed(() => [
@@ -1321,9 +1553,8 @@ const emit = defineEmits<{
   showCrawlerDialog: [];
   showLocalImport: [];
   openCollectMenu: [];
-  "update:filter": [value: GalleryFilter];
-  "update:sort": [value: GalleryTimeSort];
-  "update:selectedRange": [value: [string, string] | null];
+  "update:filters": [value: GalleryFilterSet];
+  "update:sort": [value: GallerySort];
   "update:pageSize": [value: number];
   "update:search": [value: string];
 }>();
@@ -1344,13 +1575,16 @@ const showIds = computed(() => {
 });
 
 const foldIds = computed(() => {
-  if (!uiStore.isCompact) return [HeaderFeatureId.ToggleShowHidden];
+  if (!uiStore.isCompact) {
+    return [HeaderFeatureId.ToggleShowAlbumImages, HeaderFeatureId.ToggleShowHidden];
+  }
   const ids: HeaderFeatureId[] = [HeaderFeatureId.FailedImages];
   if (showGalleryFilterFold.value) {
     ids.push(HeaderFeatureId.GalleryFilter);
   }
   ids.push(HeaderFeatureId.GallerySort);
   ids.push(HeaderFeatureId.GalleryPageSize);
+  ids.push(HeaderFeatureId.ToggleShowAlbumImages);
   ids.push(HeaderFeatureId.ToggleShowHidden);
   return ids;
 });
@@ -1366,8 +1600,13 @@ watch(
     () => props.pageSize,
     () => failedImagesStore.allFailed.length,
     galleryHide,
+    isNoAlbumBrowse,
   ],
   () => {
+    headerStore.setFoldLabel(
+      HeaderFeatureId.ToggleShowAlbumImages,
+      isNoAlbumBrowse.value ? t("header.showAlbumImages") : t("header.hideAlbumImages")
+    );
     headerStore.setFoldLabel(
       HeaderFeatureId.ToggleShowHidden,
       galleryHide.value ? t("header.showHidden") : t("header.hideHidden")
@@ -1388,6 +1627,7 @@ watch(
   { immediate: true }
 );
 onUnmounted(() => {
+  headerStore.setFoldLabel(HeaderFeatureId.ToggleShowAlbumImages, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.ToggleShowHidden, undefined);
   if (!uiStore.isCompact) return;
   headerStore.setFoldLabel(HeaderFeatureId.FailedImages, undefined);
@@ -1438,42 +1678,16 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
     case HeaderFeatureId.ToggleShowHidden:
       galleryRouteStore.hide = !galleryRouteStore.hide;
       break;
+    case HeaderFeatureId.ToggleShowAlbumImages: {
+      const next: GalleryFilterSet = { ...activeFilters.value };
+      if (next.noAlbum) {
+        delete next.noAlbum;
+      } else {
+        next.noAlbum = true;
+      }
+      emit("update:filters", next);
+      break;
+    }
   }
 };
 </script>
-
-<style scoped lang="scss">
-.gallery-browse-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.gallery-browse-btn {
-  .gallery-browse-icon {
-    margin-right: 6px;
-    font-size: 14px;
-  }
-}
-
-.gallery-browse-search {
-  margin-left: auto;
-}
-
-.date-range-filter {
-  width: 260px;
-  margin-left: 8px;
-}
-
-.add-task-btn {
-  box-shadow: var(--anime-shadow);
-
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--anime-shadow-hover);
-  }
-}
-
-</style>

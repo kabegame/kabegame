@@ -16,6 +16,7 @@
   "saveAsConfig": "設定として保存",
   "deleteTask": "タスクを削除",
   "browse": "閲覧",
+  "syncNow": "今すぐ同期",
   "setWallpaperRotation": "デスクトップローテーションに設定",
   "setWallpaperRotationActive": "（有効）",
   "rename": "名前を変更",

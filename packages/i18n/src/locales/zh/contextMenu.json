@@ -16,6 +16,7 @@
   "saveAsConfig": "保存为配置",
   "deleteTask": "删除任务",
   "browse": "浏览",
+  "syncNow": "立即同步",
   "setWallpaperRotation": "设为桌面轮播",
   "setWallpaperRotationActive": "（已设置）",
   "rename": "重命名",

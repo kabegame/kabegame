@@ -22,5 +22,7 @@
   "failedImagesDeleteAll": "Delete all",
   "failedImagesFilter": "Filter by plugin",
   "showHidden": "Show hidden images",
-  "hideHidden": "Hide hidden images"
+  "hideHidden": "Hide hidden images",
+  "showAlbumImages": "Show album images",
+  "hideAlbumImages": "Hide album images"
 }

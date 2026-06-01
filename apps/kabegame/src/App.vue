@@ -68,51 +68,53 @@
             <h1>Kabegame</h1>
           </div>
         </div>
-        <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
-          <el-menu-item :index="galleryMenuRoute">
-            <el-icon>
-              <Picture />
-            </el-icon>
-            <span>{{ $t('route.gallery') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/albums">
-            <el-icon>
-              <Collection />
-            </el-icon>
-            <span>{{ $t('route.albums') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/plugin-browser">
-            <el-icon>
-              <Grid />
-            </el-icon>
-            <span>{{ $t('route.pluginBrowser') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/surf" v-if="!IS_WEB">
-            <el-icon>
-              <Compass />
-            </el-icon>
-            <span>{{ $t('route.surf') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/auto-configs" v-if="!uiStore.isCompact">
-            <el-icon>
-              <AlarmClock />
-            </el-icon>
-            <span>{{ $t('route.autoConfigs') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/settings">
-            <el-icon>
-              <Setting />
-            </el-icon>
-            <span>{{ $t('route.settings') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/help">
-            <el-icon>
-              <QuestionFilled />
-            </el-icon>
-            <span>{{ $t('route.help') }}</span>
-          </el-menu-item>
-        </el-menu>
-        <div class="w-full pos-sticky bottom-0">
+        <div class="sidebar-menu-wrapper">
+          <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
+            <el-menu-item :index="galleryMenuRoute">
+              <el-icon>
+                <Picture />
+              </el-icon>
+              <span>{{ $t('route.gallery') }}</span>
+            </el-menu-item>
+            <el-menu-item index="/albums">
+              <el-icon>
+                <Collection />
+              </el-icon>
+              <span>{{ $t('route.albums') }}</span>
+            </el-menu-item>
+            <el-menu-item index="/plugin-browser">
+              <el-icon>
+                <Grid />
+              </el-icon>
+              <span>{{ $t('route.pluginBrowser') }}</span>
+            </el-menu-item>
+            <el-menu-item index="/surf" v-if="!IS_WEB">
+              <el-icon>
+                <Compass />
+              </el-icon>
+              <span>{{ $t('route.surf') }}</span>
+            </el-menu-item>
+            <el-menu-item index="/auto-configs" v-if="!uiStore.isCompact">
+              <el-icon>
+                <AlarmClock />
+              </el-icon>
+              <span>{{ $t('route.autoConfigs') }}</span>
+            </el-menu-item>
+            <el-menu-item index="/settings">
+              <el-icon>
+                <Setting />
+              </el-icon>
+              <span>{{ $t('route.settings') }}</span>
+            </el-menu-item>
+            <el-menu-item index="/help">
+              <el-icon>
+                <QuestionFilled />
+              </el-icon>
+              <span>{{ $t('route.help') }}</span>
+            </el-menu-item>
+          </el-menu>
+        </div>
+        <div class="w-full pos-absolute bottom-0">
           <KamechanMascot />
         </div>
       </el-aside>
@@ -636,6 +638,8 @@ body,
 #app {
   height: 100%;
   background: transparent;
+  overscroll-behavior: none;
+
 }
 
 * {
@@ -766,9 +770,8 @@ body,
   height: 100dvh;
   box-shadow: 4px 0 20px rgba(255, 107, 157, 0.1);
   transition: width 0.3s ease;
-  // 防止横向滚动条
-  overflow-x: hidden;
-  overflow-y: auto;
+  // 菜单区域单独负责滚动，侧栏本体只负责裁剪溢出内容
+  overflow: hidden;
 
   .sidebar-header {
     padding: 24px 20px;
@@ -778,7 +781,8 @@ body,
     flex-direction: row;
     align-items: center;
     gap: 12px;
-    position: relative;
+    position: sticky;
+    top: 0;
     min-height: 80px;
     justify-content: flex-start;
     transition: padding 0.3s ease;
@@ -908,13 +912,28 @@ body,
     }
   }
 
-  .sidebar-menu {
+  .sidebar-menu-wrapper {
     flex: 1;
+    min-height: 0;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .sidebar-menu {
+    height: 100%;
     border-right: none;
     padding: 10px 0;
     transition: padding 0.3s ease;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
     // Element Plus 默认给 el-menu 一个不透明背景，会把"半透明侧栏"盖住，导致看起来没有毛玻璃
     background: transparent;
+
+    &::-webkit-scrollbar {
+      display: none;
+    }
 
     // 覆盖 Element Plus 菜单的背景色（展开/折叠都需要）
     &.el-menu {

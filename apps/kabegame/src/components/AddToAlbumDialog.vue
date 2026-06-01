@@ -15,6 +15,15 @@
         <el-input v-model="newAlbumName" :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
           @keyup.enter="handleCreateAndAddAlbum" ref="newAlbumNameInputRef" />
       </el-form-item>
+      <el-form-item v-if="isCreatingNewAlbum" :label="$t('albums.parentAlbum')">
+        <AlbumPickerField
+          v-model="newAlbumParentId"
+          :album-tree="newAlbumParentTree"
+          :album-counts="albumCounts"
+          :placeholder="$t('albums.selectParentAlbum')"
+          :picker-title="$t('albums.parentAlbum')"
+        />
+      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
@@ -30,7 +39,7 @@ import { computed, ref, watch, nextTick } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ElMessage } from "element-plus";
 import { storeToRefs } from "pinia";
-import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 
@@ -58,12 +67,22 @@ const { t } = useI18n();
 const albumStore = useAlbumStore();
 const { albumCounts } = storeToRefs(albumStore);
 
+const excludedAlbumIds = computed(() => [
+  HIDDEN_ALBUM_ID,
+  ...albumStore.localFolderAlbumIds,
+  ...(props.excludeAlbumIds ?? []),
+]);
+
 const albumTreeForPicker = computed(() =>
-  albumStore.getAlbumTreeExcluding([HIDDEN_ALBUM_ID, ...(props.excludeAlbumIds ?? [])]),
+  albumStore.getAlbumTreeExcluding(excludedAlbumIds.value),
+);
+const newAlbumParentTree = computed(() =>
+  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID]),
 );
 
 const selectedAlbumId = ref<string | null>(null);
 const newAlbumName = ref<string>("");
+const newAlbumParentId = ref<string | null>(null);
 const newAlbumNameInputRef = ref<any>(null);
 
 // 是否正在创建新画册
@@ -85,16 +104,17 @@ watch(
     } else {
       selectedAlbumId.value = null;
       newAlbumName.value = "";
+      newAlbumParentId.value = null;
     }
   }
 );
 
 // 如果排除列表变化，且当前选中的 album 被排除了，则重置选择
 watch(
-  () => props.excludeAlbumIds,
+  excludedAlbumIds,
   (next) => {
     if (!selectedAlbumId.value) return;
-    const exclude = new Set(next || []);
+    const exclude = new Set(next);
     if (exclude.has(selectedAlbumId.value)) {
       selectedAlbumId.value = null;
     }
@@ -114,6 +134,7 @@ watch(selectedAlbumId, (newValue) => {
   } else {
     // 选择已有画册时清空新建名称
     newAlbumName.value = "";
+    newAlbumParentId.value = null;
   }
 });
 
@@ -131,7 +152,8 @@ const handleCreateAndAddAlbum = async () => {
   }
 
   try {
-    const created = await albumStore.createAlbum(newAlbumName.value.trim());
+    const parentId = newAlbumParentId.value?.trim() || null;
+    const created = await albumStore.createAlbum(newAlbumName.value.trim(), { parentId });
 
     if (isTaskMode) {
       const result = await albumStore.addTaskImagesToAlbum(props.taskId!, created.id);

@@ -5,12 +5,7 @@
         "bucket": { "type": "string", "default": "other", "optional": false }
     },
     "query": {
-        "where": "name_language_bucket(COALESCE(images.display_name, '')) = ${properties.bucket}",
-        "order": [
-            { "sql": "name_language_rank(name_language_bucket(COALESCE(images.display_name, '')))", "order": "asc", "clear": "all" },
-            { "sql": "COALESCE(images.display_name, '') COLLATE NOCASE", "order": "asc" },
-            { "sql": "images.id", "order": "asc" }
-        ]
+        "where": "name_language_bucket(COALESCE(images.display_name, '')) = ${properties.bucket}"
     },
     "list": {
         "${page.name}": {
@@ -28,6 +23,9 @@
         }
     },
     "resolve": {
+        "filter_comb": {
+            "provider": "gallery_filter_comb"
+        },
         "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
             "delegate": {
                 "provider": "kabegame.gallery_desc_pagination_page_comb"

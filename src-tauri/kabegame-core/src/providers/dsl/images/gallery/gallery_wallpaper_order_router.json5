@@ -2,12 +2,14 @@
     "namespace": "kabegame",
     "name": "gallery_wallpaper_order_router",
     // 7c S5: programmatic GalleryWallpaperOrderRouter 迁 DSL。
-    // 仅取被设过壁纸的图, 按 last_set_wallpaper_at ASC 排序 (最早被用作壁纸的排前)。
+    // 仅取被设过壁纸的图；排序由 gallery_sort_router 独立处理。
     "query": {
-        "where": "images.last_set_wallpaper_at IS NOT NULL",
-        "order": [{ "sql": "images.last_set_wallpaper_at", "order": "asc", "prepend": true }]
+        "where": "images.last_set_wallpaper_at IS NOT NULL"
     },
     "resolve": {
+        "filter_comb": {
+            "provider": "gallery_filter_comb"
+        },
         "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
             "delegate": {
                 "provider": "kabegame.gallery_desc_pagination_page_comb"

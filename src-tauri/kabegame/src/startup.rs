@@ -369,33 +369,6 @@ pub fn start_event_loop(#[cfg(not(feature = "web"))] app: AppHandle) {
                         TaskScheduler::global().set_task_concurrency();
                     }
 
-                    // albumDriveEnabled 变更时挂载/卸载虚拟盘
-                    #[cfg(feature = "standard")]
-                    if let Some(enabled_val) = changes.get("albumDriveEnabled") {
-                        if let Some(enabled) = enabled_val.as_bool() {
-                            tokio::spawn(async move {
-                                if enabled {
-                                    let mount_point =
-                                        Settings::global().get_album_drive_mount_point();
-                                    let vd_service =
-                                        kabegame_core::virtual_driver::VirtualDriveService::global(
-                                        );
-                                    let _ = tokio::task::spawn_blocking(move || {
-                                        vd_service.mount(mount_point.as_str())
-                                    })
-                                    .await;
-                                } else {
-                                    let vd_service =
-                                        kabegame_core::virtual_driver::VirtualDriveService::global(
-                                        );
-                                    let _ =
-                                        tokio::task::spawn_blocking(move || vd_service.unmount())
-                                            .await;
-                                }
-                            });
-                        }
-                    }
-
                     // 语言变更时刷新托盘菜单、收藏画册/官方插件源 i18n 名称（与磁盘挂载等实现方式一致，在 setting 回调处处理）。web的语言在前端处理
                     #[cfg(not(feature = "web"))]
                     if changes.get("language").is_some() {
@@ -430,38 +403,16 @@ pub fn start_event_loop(#[cfg(not(feature = "web"))] app: AppHandle) {
                         }
                     }
                 }
-                #[cfg(not(feature = "web"))]
-                DaemonEvent::WallpaperUpdateImage { image_path } => {
-                    #[cfg(not(target_os = "android"))]
-                    {
-                        let path = image_path.clone();
-                        let controller = crate::wallpaper::manager::WallpaperController::global();
-                        tokio::spawn(async move {
-                            let style = Settings::global().get_wallpaper_rotation_style();
-                            if let Err(e) = controller.set_wallpaper(&path, &style).await {
-                                eprintln!("[LocalEvent] Set wallpaper failed: {}", e);
-                            }
-                        });
-                    }
-                }
-                #[cfg(not(feature = "web"))]
-                DaemonEvent::TaskChanged { diff, .. } => {
-                    let event_name = kind.as_event_name();
-                    let payload =
-                        serde_json::to_value(&event).unwrap_or_else(|_| serde_json::Value::Null);
-                    let _ = app.emit(event_name.as_str(), payload);
-
-                    #[cfg(target_os = "android")]
-                    {
-                        if let Some(s) = diff.get("status").and_then(|v| v.as_str()) {
-                            use tauri_plugin_task_notification::TaskNotificationExt;
-                            let running = TaskScheduler::global().running_worker_count() as u32;
-                            let tn = app.task_notification();
-                            if running > 0 {
-                                let _ = tn.update_task_notification(running).await;
-                            } else if s == "completed" || s == "failed" || s == "canceled" {
-                                let _ = tn.clear_task_notification().await;
-                            }
+                #[cfg(all(target_os = "android", not(feature = "web")))]
+                DaemonEvent::TaskChanged { .. } => {
+                    if let Some(s) = diff.get("status").and_then(|v| v.as_str()) {
+                        use tauri_plugin_task_notification::TaskNotificationExt;
+                        let running = TaskScheduler::global().running_worker_count() as u32;
+                        let tn = app.task_notification();
+                        if running > 0 {
+                            let _ = tn.update_task_notification(running).await;
+                        } else if s == "completed" || s == "failed" || s == "canceled" {
+                            let _ = tn.clear_task_notification().await;
                         }
                     }
                 }

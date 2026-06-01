@@ -26,52 +26,6 @@ pub async fn get_current_wallpaper_path_from_settings(
 }
 
 #[tauri::command]
-pub async fn set_wallpaper(file_path: String) -> Result<(), String> {
-    // Android 上为 content:// URI，不能做 Path::exists/canonicalize
-    let abs = if file_path.starts_with("content://") {
-        file_path.clone()
-    } else {
-        let path = Path::new(&file_path);
-        if !path.exists() {
-            println!("DEBUG: File does not exist: {}", file_path);
-            return Err("File does not exist".to_string());
-        }
-        path.canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf())
-            .to_string_lossy()
-            .to_string()
-    };
-
-    let controller = WallpaperController::global();
-    let settings = Settings::global();
-    let style = settings.get_wallpaper_rotation_style();
-
-    controller.set_wallpaper(&abs, &style).await?;
-
-    // 尽力同步更新"当前壁纸"（imageId）；失败不阻断
-    let found = Storage::find_image_by_path(&abs).ok().flatten();
-    let image_id = found.as_ref().map(|v| v.id.clone());
-    let _ = settings.set_current_wallpaper_image_id(image_id);
-
-    if let Some(ref img) = found {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let _ = Storage::global().update_image_last_set_wallpaper_at(&img.id, now);
-        let ids = vec![img.id.clone()];
-        GlobalEmitter::global().emit_images_change(
-            "change",
-            &ids,
-            None,
-            None,
-            Some(&[img.plugin_id.clone()]),
-        );
-    }
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
     let settings = Settings::global();
     let style = settings.get_wallpaper_rotation_style();

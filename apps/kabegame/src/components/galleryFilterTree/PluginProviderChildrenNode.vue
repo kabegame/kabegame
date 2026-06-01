@@ -40,8 +40,6 @@ import {
   isProviderPlain,
   isSameGalleryFilter,
   listProviderDirs,
-  pluginExtendPath,
-  pluginPath,
   unknownOrMatchingPlugin,
   useGalleryFilterTreeContext,
   type ProviderChildDir,
@@ -58,14 +56,14 @@ defineEmits<{
 }>();
 
 const pluginStore = usePluginStore();
-const { filter, prefix, registerRefreshTarget } = useGalleryFilterTreeContext();
+const { filter, prefix, pathForSegment, registerRefreshTarget } = useGalleryFilterTreeContext();
 const children = ref<ProviderChildDir[]>([]);
 const loaded = ref(false);
 let listToken = 0;
 let unregisterRefresh: (() => void) | null = null;
 
 const label = computed(() => pluginStore.pluginLabel(props.pluginId));
-const path = computed(() => pluginPath(prefix.value, props.pluginId));
+const path = computed(() => pathForSegment(`plugin/${encodeURIComponent(props.pluginId)}`));
 const active = computed(() =>
   isSameGalleryFilter({ type: "plugin", pluginId: props.pluginId }, filter.value)
 );
@@ -83,7 +81,7 @@ async function refreshChildren() {
   const expectedPrefix = prefix.value;
   try {
     const entries = await listProviderDirs(
-      `${pluginExtendPath(prefix.value, props.pluginId)}/`
+      `${pathForSegment(`plugin/${encodeURIComponent(props.pluginId)}/extend`)}/`
     );
     if (token !== listToken || expectedPrefix !== prefix.value) return;
     children.value = entries;

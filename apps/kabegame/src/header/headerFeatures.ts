@@ -188,5 +188,10 @@ export function registerHeaderFeatures() {
       label: t("header.showHidden"),
       icon: View,
     },
+    {
+      id: HeaderFeatureId.ToggleShowAlbumImages,
+      label: t("header.hideAlbumImages"),
+      icon: FolderOpened,
+    },
   ]);
 }

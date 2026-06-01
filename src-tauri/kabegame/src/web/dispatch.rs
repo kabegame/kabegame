@@ -1035,6 +1035,62 @@ pub fn init_registry() {
     );
 
     map.insert(
+        "add_local_folder_album",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    let args: crate::commands_core::album::AddLocalFolderAlbumArgs =
+                        serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    crate::commands_core::album::add_local_folder_album(args)
+                        .await
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "sync_local_folder_album",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        album_id: String,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    crate::commands_core::album::sync_local_folder_album(args.album_id)
+                        .await
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "sync_local_folder_albums",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        album_ids: Vec<String>,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    crate::commands_core::album::sync_local_folder_albums(args.album_ids)
+                        .await
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
         "add_images_to_album",
         MethodEntry {
             requires_super: true,

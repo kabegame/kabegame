@@ -1,16 +1,13 @@
 <template>
-  <div ref="rootEl" class="image-item" :class="[
-    {
-      'image-item-selected': selected,
-      'item-entering': enteringClassActive,
-      'item-leaving': isLeaving,
-      'image-item-android': isCompact,
-      'image-item-hidden': image.isHidden,
-      'image-item-fill': fillBox,
-      'image-item-horizontal': horizontal,
-    },
-    thumbnailObjectPositionClass,
-  ]" :style="rootStyle" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
+  <div ref="rootEl" class="image-item" :class="{
+    'image-item-selected': selected,
+    'item-entering': enteringClassActive,
+    'item-leaving': isLeaving,
+    'image-item-android': isCompact,
+    'image-item-hidden': image.isHidden,
+    'image-item-fill': fillBox,
+    'image-item-horizontal': horizontal,
+  }" :style="rootStyle" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
     <!-- 本地文件缺失标识：不阻挡点击/选择/右键 -->
     <el-tooltip v-if="originalMissing && !isLost" content="这张图片找不到了" placement="top" :show-after="300">
       <div class="missing-file-badge">
@@ -98,7 +95,6 @@ import type { ImageInfo } from "../../types/image";
 import type { ImageClickAction } from "../../stores/settings";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import { useImageItemLoader } from "../../composables/useImageItemLoader";
-import { useSettingsStore } from "../../stores/settings";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -135,16 +131,7 @@ const imageRef = toRef(props, "image");
 const gridColumnsRef = toRef(props, "gridColumns");
 
 const rootEl = ref<HTMLElement | null>(null);
-const settingsStore = useSettingsStore();
 const { isCompact } = storeToRefs(useUiStore());
-// 仅桌面端视图：图片溢出方框时的垂直对齐（center/top/bottom），通过 class 控制 .thumbnail 的 object-position
-const thumbnailObjectPositionClass = computed(() => {
-  if (isCompact.value) return "";
-  const pos = settingsStore.values.galleryImageObjectPosition;
-  if (pos === "top") return "image-item--object-top";
-  if (pos === "bottom") return "image-item--object-bottom";
-  return "image-item--object-center";
-});
 
 // 虚拟滚动下挂载时已有 isEntering，若直接绑 class 浏览器可能不触发 CSS 动画；延迟一帧再加 class 以触发入场动画
 const enteringClassActive = ref(false);
@@ -252,6 +239,9 @@ onUnmounted(() => {
 });
 
 const aspectRatioStyle = computed(() => {
+  if (!props.fillBox && !isCompact.value) {
+    return { aspectRatio: "1 / 1" };
+  }
   // aspect-ratio = 宽 / 高；windowAspectRatio 本身就是宽/高
   const r = props.windowAspectRatio && props.windowAspectRatio > 0 ? props.windowAspectRatio : null;
   return r
@@ -335,14 +325,10 @@ const handleAnimationEnd = (event: AnimationEvent) => {
 
 <style scoped lang="scss">
 .image-item {
-  border: 2px solid var(--anime-border);
-  border-radius: 16px;
   overflow: hidden;
   cursor: pointer;
   position: relative;
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s ease, border-color 0.25s ease;
-  background: var(--anime-bg-card);
-  box-shadow: var(--anime-shadow);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s ease;
   box-sizing: border-box;
   will-change: transform, box-shadow;
   user-select: none;
@@ -399,8 +385,6 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   }
 
   &.image-item-selected {
-    border-color: #ff6b9d;
-    border-width: 2px;
     box-shadow:
       0 0 0 3px rgba(255, 107, 157, 0.4),
       0 0 20px rgba(255, 107, 157, 0.5),
@@ -409,7 +393,6 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     outline-offset: -2px;
 
     html:not(.platform-android) &:hover {
-      border-color: #ff4d8a;
       outline: 5px solid #ff4d8a;
       outline-offset: -2px;
       box-shadow:
@@ -425,7 +408,6 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     position: relative;
     cursor: pointer;
     overflow: hidden;
-    border-radius: 14px 14px 0 0;
     will-change: contents;
     -webkit-tap-highlight-color: transparent;
 
@@ -442,23 +424,9 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     left: 0;
     width: 100%;
     height: 100%;
-    border-radius: 14px 14px 0 0;
-    object-fit: cover;
+    object-fit: contain;
     will-change: contents, opacity;
     -webkit-tap-highlight-color: transparent;
-  }
-
-  /* 仅桌面端：图片溢出方框时的垂直对齐（Android 使用 contain，不适用） */
-  &.image-item--object-top .thumbnail:not(.thumbnail-android) {
-    object-position: center top;
-  }
-
-  &.image-item--object-bottom .thumbnail:not(.thumbnail-android) {
-    object-position: center bottom;
-  }
-
-  &.image-item--object-center .thumbnail:not(.thumbnail-android) {
-    object-position: center center;
   }
 
   .thumbnail {
@@ -509,6 +477,11 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   &.image-item-fill {
     border-radius: 0;
 
+    .thumbnail {
+      object-fit: cover;
+      border-radius: 0;
+    }
+
     .thumbnail.thumbnail-android {
       object-fit: cover;
       background: transparent;
@@ -516,10 +489,6 @@ const handleAnimationEnd = (event: AnimationEvent) => {
 
     .image-wrapper,
     .image-preview-wrapper {
-      border-radius: 0;
-    }
-
-    .thumbnail {
       border-radius: 0;
     }
   }
@@ -567,7 +536,6 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   color: rgba(255, 255, 255, 0.78);
   background: rgba(0, 0, 0, 0.18);
   border: 1px dashed rgba(255, 255, 255, 0.22);
-  border-radius: 14px 14px 0 0;
   user-select: none;
   text-align: center;
 }

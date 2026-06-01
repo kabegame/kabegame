@@ -11,6 +11,9 @@
         }
     },
     "resolve": {
+        "filter_comb": {
+            "provider": "gallery_filter_comb"
+        },
         "extend": {
             "provider": "plugin_entry_provider",
             "properties": { "plugin_id": "${properties.plugin_id}" }

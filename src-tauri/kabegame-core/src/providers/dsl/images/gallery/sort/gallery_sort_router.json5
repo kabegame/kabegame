@@ -1,0 +1,21 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_sort_router",
+    "resolve": {
+        "by-time": {
+            "provider": "gallery_sort_by_time_provider"
+        },
+        "by-size": {
+            "provider": "gallery_sort_by_size_provider"
+        },
+        "by-name": {
+            "provider": "gallery_sort_by_name_provider"
+        },
+        "by-aspect": {
+            "provider": "gallery_sort_by_aspect_provider"
+        },
+        "by-set-time": {
+            "provider": "gallery_sort_by_set_time_provider"
+        }
+    }
+}

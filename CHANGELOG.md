@@ -7,6 +7,11 @@
 **Changelog entries:** Write release notes in **English** (new sections and bullets from [3.4.5] onward).
 
 ## [4.2.0]
+### Added
+- **Folder Album**: Can create an album that keep syncing to a folder (Open a switch setting to keep in sync)
+- **Filter composiable**: Composiable filters, now can filter today's video.
+- **Father Album**: Now can point a father album when create an album.
+
 ### Optimized
 - **Providers**: more query use pathql providers
 
@@ -18,6 +23,8 @@
 - **MCP Bundle compatibility**: Updated the `kabegame-gallery-node` MCPB bridge to forward read tools to the new resource schemes while keeping the existing tool names for host-side compatibility.
 - **Documentation**: Updated the public MCP guide, reference, and bundle guide to document the new `images://` and plural table resource paths.
 - **Local import**: local import now will not use the download window.
+- **Grid Image View**: Grid image now show full content centered in an 1:1 container.
+- **Video play**: Can pause and change speed of video playing.
 
 ### Removed
 - **Archive**: Archive unzip feature removed from application completely. Including Rhai API and local import unarchiving behavior.

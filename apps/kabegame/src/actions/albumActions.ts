@@ -1,7 +1,8 @@
-import { FolderOpened, Picture, Edit, Rank, Delete } from "@element-plus/icons-vue";
+import { FolderOpened, Picture, Edit, Rank, Delete, Refresh } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { Album } from "@/stores/albums";
 import { i18n } from "@kabegame/i18n";
+import { IS_MACOS } from "@kabegame/core/env";
 
 /**
  * Extended context for album actions (context menu / action sheet on Albums page).
@@ -12,6 +13,7 @@ export interface AlbumActionContext extends ActionContext<Album> {
   wallpaperRotationEnabled: boolean;
   albumImageCount: number;
   favoriteAlbumId: string;
+  isLocalFolder: boolean;
 }
 
 /**
@@ -27,6 +29,14 @@ export function createAlbumActions(): ActionItem<Album>[] {
       icon: FolderOpened,
       command: "browse",
       visible: (ctx) => (ctx as AlbumActionContext).albumImageCount > 0,
+    },
+    {
+      key: "syncNow",
+      label: t("contextMenu.syncNow"),
+      icon: Refresh,
+      command: "syncNow",
+      visible: (ctx) => IS_MACOS && (ctx as AlbumActionContext).isLocalFolder,
+      dividerBefore: (ctx) => (ctx as AlbumActionContext).albumImageCount > 0,
     },
     {
       key: "setWallpaperRotation",

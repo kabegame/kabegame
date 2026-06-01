@@ -308,6 +308,38 @@ impl Storage {
         ))
     }
 
+    /// 为本地文件夹同步查询某 album 当前的图片快照。
+    pub fn list_album_images_for_sync(
+        &self,
+        album_id: &str,
+    ) -> Result<Vec<crate::local_folder::diff::DbImageRow>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT i.id, i.local_path, i.size, i.crawled_at, i.hash, i.metadata_id, i.display_name, ai.\"order\"
+                 FROM images i
+                 INNER JOIN album_images ai ON ai.image_id = i.id
+                 WHERE ai.album_id = ?1",
+            )
+            .map_err(|e| format!("prepare list_album_images_for_sync: {e}"))?;
+        let rows = stmt
+            .query_map(params![album_id], |row| {
+                Ok(crate::local_folder::diff::DbImageRow {
+                    image_id: row.get::<_, i64>(0)?.to_string(),
+                    local_path: row.get(1)?,
+                    size: row.get::<_, Option<i64>>(2)?.map(|v| v as u64),
+                    crawled_at: row.get::<_, i64>(3)? as u64,
+                    hash: row.get(4)?,
+                    metadata_id: row.get(5)?,
+                    display_name: row.get(6)?,
+                    order: row.get(7)?,
+                })
+            })
+            .map_err(|e| format!("query list_album_images_for_sync: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read list_album_images_for_sync: {e}"))
+    }
+
     pub fn add_image(&self, mut image: ImageInfo) -> Result<ImageInfo, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
@@ -747,6 +779,38 @@ impl Storage {
             params![thumbnail_path, image_id],
         )
         .map_err(|e| format!("Failed to update thumbnail path: {}", e))?;
+        Ok(())
+    }
+
+    pub fn replace_image_thumbnail_path(
+        &self,
+        image_id: &str,
+        thumbnail_path: &str,
+    ) -> Result<(), String> {
+        let old_paths = {
+            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+            let old_paths = conn
+                .query_row(
+                    "SELECT local_path, thumbnail_path FROM images WHERE id = ?1",
+                    params![image_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+                .map_err(|e| format!("Failed to query existing thumbnail path: {}", e))?;
+            conn.execute(
+                "UPDATE images SET thumbnail_path = ?1 WHERE id = ?2",
+                params![thumbnail_path, image_id],
+            )
+            .map_err(|e| format!("Failed to update thumbnail path: {}", e))?;
+            old_paths
+        };
+
+        if let Some((local_path, old_thumbnail_path)) = old_paths {
+            if old_thumbnail_path.trim() != thumbnail_path.trim() {
+                remove_thumbnail_file_if_needed(Some(&local_path), Some(&old_thumbnail_path));
+            }
+        }
+
         Ok(())
     }
 

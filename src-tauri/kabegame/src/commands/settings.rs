@@ -86,6 +86,11 @@ pub fn get_auto_deduplicate() -> bool {
 }
 
 #[tauri::command]
+pub fn get_realtime_folder_sync() -> bool {
+    Settings::global().get_realtime_folder_sync()
+}
+
+#[tauri::command]
 pub fn get_default_download_dir() -> Option<String> {
     Settings::global().get_default_download_dir()
 }
@@ -320,6 +325,13 @@ pub fn get_desktop_resolution(app: tauri::AppHandle) -> Result<(u32, u32), Strin
 #[tauri::command]
 pub fn set_auto_deduplicate(enabled: bool) -> Result<(), String> {
     Settings::global().set_auto_deduplicate(enabled)
+}
+
+#[tauri::command]
+pub async fn set_realtime_folder_sync(enabled: bool) -> Result<(), String> {
+    Settings::global().set_realtime_folder_sync(enabled)?;
+    kabegame_core::local_folder::watch::set_enabled(enabled).await;
+    Ok(())
 }
 
 #[tauri::command]

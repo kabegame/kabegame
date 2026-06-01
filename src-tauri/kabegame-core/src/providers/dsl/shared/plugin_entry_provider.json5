@@ -41,6 +41,9 @@
         }
     },
     "resolve": {
+        "filter_comb": {
+            "provider": "gallery_filter_comb"
+        },
         ".*": {
             "delegate": {
                 "provider": "plugins.${properties.plugin_id}.entry_provider"

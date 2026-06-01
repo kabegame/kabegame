@@ -16,7 +16,6 @@
         "fields": [
             { "sql": "ai.\"order\"", "as": "album_order" }
         ],
-        "order": [{ "sql": "images.crawled_at", "order": "asc" }]
     },
     "list": {
         // 根画册 (parent_id IS NULL); meta 由 runtime 按 SQL 行字段构造。

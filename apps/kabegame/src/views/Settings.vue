@@ -28,10 +28,6 @@
                   :description="$t('settings.imageClickActionDesc')">
                   <SettingRadioControl setting-key="imageClickAction" :options="imageClickActionOptions" />
                 </SettingRow>
-                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageAspectRatio')"
-                  :description="$t('settings.imageAspectRatioDesc')">
-                  <GalleryImageAspectRatioSetting />
-                </SettingRow>
                 <SettingRow v-if="!IS_ANDROID"
                   :label="isHorizontal ? $t('settings.galleryRows') : $t('settings.galleryColumns')"
                   :description="isHorizontal ? $t('settings.galleryRowsDesc') : $t('settings.galleryColumnsDesc')">
@@ -48,10 +44,6 @@
                 <SettingRow :label="$t('settings.galleryLayoutDirection')"
                   :description="$t('settings.galleryLayoutDirectionDesc')">
                   <SettingRadioControl setting-key="galleryLayoutDirection" :options="galleryLayoutDirectionOptions" />
-                </SettingRow>
-                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageObjectPosition')"
-                  :description="$t('settings.imageObjectPositionDesc')">
-                  <SettingRadioControl setting-key="galleryImageObjectPosition" :options="objectPositionOptions" />
                 </SettingRow>
                 <SettingRow :label="$t('settings.appBackgroundEnabled')"
                   :description="$t('settings.appBackgroundEnabledDesc')">
@@ -261,7 +253,6 @@ import SettingSliderControl from "@kabegame/core/components/settings/controls/Se
 import SettingRadioControl from "@kabegame/core/components/settings/controls/SettingRadioControl.vue";
 import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
 import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
-import GalleryImageAspectRatioSetting from "@/components/settings/items/GalleryImageAspectRatioSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import GalleryPageSizeSetting from "@/components/settings/items/GalleryPageSizeSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";
@@ -284,11 +275,6 @@ const { isPlasma } = useDesktop();
 const imageClickActionOptions = computed(() => [
   { label: t("settings.imageClickPreview"), value: "preview" },
   { label: t("settings.imageClickOpen"), value: "open" },
-]);
-const objectPositionOptions = computed(() => [
-  { label: t("settings.objectPositionCenter"), value: "center" },
-  { label: t("settings.objectPositionTop"), value: "top" },
-  { label: t("settings.objectPositionBottom"), value: "bottom" },
 ]);
 const wallpaperModeOptions = computed(() => [
   { label: t("settings.wallpaperModeRandom"), value: "random" },

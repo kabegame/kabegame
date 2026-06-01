@@ -18,7 +18,7 @@
         v-for="entry in imageFormats"
         :key="entry.name"
         :name="entry.name"
-        :path="joinProviderPath(imagePath, entry.name)"
+        :path="pathForSegment(`media-type/image/${entry.name}`)"
         :depth="2"
         :active="isSameGalleryFilter({ type: 'media-type', kind: 'image', format: entry.name }, filter)"
         :initial-count="entry.total ?? undefined"
@@ -38,7 +38,7 @@
         v-for="entry in videoFormats"
         :key="entry.name"
         :name="entry.name"
-        :path="joinProviderPath(videoPath, entry.name)"
+        :path="pathForSegment(`media-type/video/${entry.name}`)"
         :depth="2"
         :active="isSameGalleryFilter({ type: 'media-type', kind: 'video', format: entry.name }, filter)"
         :initial-count="entry.total ?? undefined"
@@ -58,7 +58,6 @@ import type { GalleryFilter } from "@/utils/galleryPath";
 import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import {
   isSameGalleryFilter,
-  joinProviderPath,
   listProviderDirs,
   useGalleryFilterTreeContext,
   type ProviderChildDir,
@@ -70,16 +69,16 @@ defineEmits<{
 }>();
 
 const { t } = useI18n();
-const { filter, prefix, registerRefreshTarget } = useGalleryFilterTreeContext();
+const { filter, prefix, pathForSegment, registerRefreshTarget } = useGalleryFilterTreeContext();
 const imageFormats = ref<ProviderChildDir[]>([]);
 const videoFormats = ref<ProviderChildDir[]>([]);
 const loadedKinds = ref(new Set<"image" | "video">());
 let listToken = 0;
 let unregisterRefresh: (() => void) | null = null;
 
-const rootCountPath = computed(() => joinProviderPath(prefix.value, "all"));
-const imagePath = computed(() => joinProviderPath(prefix.value, "media-type", "image"));
-const videoPath = computed(() => joinProviderPath(prefix.value, "media-type", "video"));
+const rootCountPath = computed(() => pathForSegment("all"));
+const imagePath = computed(() => pathForSegment("media-type/image"));
+const videoPath = computed(() => pathForSegment("media-type/video"));
 
 function formatsRef(kind: "image" | "video") {
   return kind === "image" ? imageFormats : videoFormats;

@@ -14,7 +14,9 @@
         <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div"
           class="albums-grid" :class="{ 'albums-grid-compact': isCompact }">
           <AlbumCard v-for="album in displayedAlbumRoots" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
-            :count="displayedAlbumCounts[album.id] || 0" :preview-images="albumPreviewImages[album.id] || []"
+            :count="displayedAlbumStats[album.id]?.imageCount || 0"
+            :sub-album-count="displayedAlbumStats[album.id]?.subAlbumCount || 0"
+            :preview-images="albumPreviewImages[album.id] || []"
             :video-preview-remount-key="albumVideoPreviewRemountKey"
             :is-loading="albumIsLoadingMap[album.id] || false"
             @click="openAlbum(album)" @visible="prefetchPreview(album)"
@@ -32,13 +34,67 @@
       :context="albumMenuContext"
       :z-index="3500"
       @close="albumMenu.hide"
-      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo')" />
+      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow')" />
 
-    <el-dialog v-model="showCreateDialog" :title="$t('albums.newAlbum')" width="360px">
-      <el-input v-model="newAlbumName" :placeholder="$t('albums.placeholderName')" />
+    <el-dialog
+      v-model="showCreateDialog"
+      :title="$t('albums.newAlbum')"
+      width="420px"
+      @closed="resetCreateAlbumDialog"
+    >
+      <el-form label-width="0" @submit.prevent>
+        <el-input
+          v-model="newAlbumName"
+          :placeholder="$t('albums.placeholderName')"
+          @keyup.enter="handleCreateAlbum"
+        />
+
+        <AlbumPickerField
+          v-model="newAlbumParentId"
+          class="mt-3"
+          :album-tree="createAlbumParentTree"
+          :album-counts="displayedAlbumCountsForPicker"
+          :placeholder="$t('albums.selectParentAlbum')"
+          :picker-title="$t('albums.parentAlbum')"
+        />
+
+        <el-checkbox v-if="IS_MACOS" v-model="newAlbumIsLocalFolder" class="mt-3">
+          {{ $t('albums.localFolder.create') }}
+        </el-checkbox>
+
+        <div v-if="newAlbumIsLocalFolder" class="mt-2 flex flex-col gap-2">
+          <div class="flex items-center gap-2">
+            <el-button size="small" @click="pickLocalFolder">
+              {{ $t('albums.localFolder.choosePath') }}
+            </el-button>
+            <span class="local-folder-path" :title="newAlbumSyncFolder">
+              {{ newAlbumSyncFolder || $t('albums.localFolder.noPathSelected') }}
+            </span>
+          </div>
+          <el-checkbox v-model="newAlbumRecursive">
+            {{ $t('albums.localFolder.recursive') }}
+          </el-checkbox>
+          <p class="local-folder-hint">
+            {{ $t('albums.localFolder.recursiveHint') }}
+          </p>
+          <p v-if="newAlbumRecursive" class="local-folder-hint">
+            {{ $t('albums.localFolder.recursiveLimits', { maxDepth: 16 }) }}
+          </p>
+          <p class="local-folder-hint">
+            {{ $t('albums.localFolder.skipNotice') }}
+          </p>
+        </div>
+      </el-form>
       <template #footer>
         <el-button @click="showCreateDialog = false">{{ $t('common.cancel') }}</el-button>
-        <el-button type="primary" :disabled="!newAlbumName.trim()" @click="handleCreateAlbum">{{ $t('albums.create') }}</el-button>
+        <el-button
+          type="primary"
+          :disabled="!canSubmitCreateAlbum"
+          :loading="creatingAlbum"
+          @click="handleCreateAlbum"
+        >
+          {{ $t('albums.create') }}
+        </el-button>
       </template>
     </el-dialog>
 
@@ -95,13 +151,21 @@ import AlbumsPageHeader from "@/components/header/AlbumsPageHeader.vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, IS_WEB, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, IS_WEB, IS_MACOS, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { thumbnailToUrl } from "@kabegame/core/httpServer";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
+import { openFilePicker } from "@/api/dialog";
+import {
+  syncLocalFolderAlbum,
+  syncLocalFolderAlbums,
+  type BatchSyncItem,
+  type FolderStatusState,
+  type SyncReport,
+} from "@/api/syncLocalFolder";
 import {
   albumSubtreeContainsAny,
   buildAlbumMediaNodes,
@@ -122,6 +186,87 @@ const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("albums");
 const uiStore = useUiStore();
 const { isCompact } = storeToRefs(uiStore);
+
+const syncStatusSuffix = (state: FolderStatusState) =>
+  state.replace(/(^|_)(\w)/g, (_, __, c: string) => c.toUpperCase());
+
+const reportBatchSyncResult = (results: BatchSyncItem[]) => {
+  if (results.length === 0) return;
+
+  const errors = results.filter((r) => r.err != null);
+  const badStatus = results.filter(
+    (r) => r.ok && r.ok.status && r.ok.status.state !== "ok",
+  );
+  const okResults = results.filter((r) => r.ok && (!r.ok.status || r.ok.status.state === "ok"));
+
+  let added = 0;
+  let deleted = 0;
+  let reimported = 0;
+  let skippedInFlight = 0;
+  for (const r of okResults) {
+    if (!r.ok) continue;
+    added += r.ok.added;
+    deleted += r.ok.deleted;
+    reimported += r.ok.reimported;
+    if (r.ok.skippedInFlight) skippedInFlight++;
+  }
+
+  if (errors.length > 0) {
+    console.warn("[local_folder] sync errors", errors);
+    ElMessage.error(
+      t("albums.localFolder.refreshSyncFailedSome", {
+        count: errors.length,
+        firstError: errors[0]?.err ?? "",
+      }),
+    );
+    return;
+  }
+
+  if (badStatus.length > 0) {
+    console.warn("[local_folder] sync bad status", badStatus);
+    ElMessage.warning(
+      t("albums.localFolder.refreshSyncBadStatus", { count: badStatus.length }),
+    );
+    return;
+  }
+
+  const skippedText =
+    skippedInFlight > 0
+      ? t("albums.localFolder.refreshSyncSkippedSuffix", { skipped: skippedInFlight })
+      : "";
+  ElMessage.success(
+    t("albums.localFolder.refreshSyncDone", {
+      added,
+      deleted,
+      reimported,
+      skippedText,
+    }),
+  );
+};
+
+const reportSingleSyncResult = (report: SyncReport) => {
+  if (report.skippedInFlight) {
+    ElMessage.info(t("albums.localFolder.syncInFlight"));
+    return;
+  }
+
+  if (report.status && report.status.state !== "ok") {
+    ElMessage.warning(
+      t(`albums.localFolder.status${syncStatusSuffix(report.status.state)}`, {
+        message: report.status.message ?? "",
+      }),
+    );
+    return;
+  }
+
+  ElMessage.success(
+    t("albums.localFolder.syncDone", {
+      added: report.added,
+      deleted: report.deleted,
+      reimported: report.reimported,
+    }),
+  );
+};
 
 const pullToRefreshOpts = computed(() =>
   IS_ANDROID
@@ -220,6 +365,17 @@ const confirmMoveAlbum = async () => {
   }
 };
 const newAlbumName = ref("");
+const newAlbumParentId = ref<string | null>(null);
+const newAlbumIsLocalFolder = ref(false);
+const newAlbumSyncFolder = ref("");
+const newAlbumRecursive = ref(false);
+const creatingAlbum = ref(false);
+const canSubmitCreateAlbum = computed(() => {
+  if (!newAlbumName.value.trim()) return false;
+  if (creatingAlbum.value) return false;
+  if (newAlbumIsLocalFolder.value && !newAlbumSyncFolder.value) return false;
+  return true;
+});
 const isRefreshing = ref(false);
 const albumCardRefs = ref<Record<string, any>>({});
 // 使用 300ms 防闪屏加载延迟
@@ -246,16 +402,13 @@ const displayedAlbumNodeById = computed(() => {
     .map((node) => [node.album.id, node] as const);
   return Object.fromEntries(entries) as Record<string, AlbumMediaNode>;
 });
-const displayedAlbumCounts = computed(() => {
-  const out: Record<string, number> = {};
-  for (const node of Object.values(displayedAlbumNodeById.value)) {
-    out[node.album.id] = node.aggregateTotal;
-  }
-  return out;
-});
+const displayedAlbumStats = computed(() => albumStore.getAlbumStats(globalHide.value));
 const displayedAlbumCountsForPicker = computed(() => ({
-  ...displayedAlbumCounts.value,
+  ...albumStore.getAlbumCounts(globalHide.value),
 }));
+const createAlbumParentTree = computed(() =>
+  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID]),
+);
 
 function removeLocalAlbumMediaState(albumIds: Iterable<string>) {
   const ids = new Set(albumIds);
@@ -374,7 +527,7 @@ onMounted(async () => {
   // 监听收藏画册数量变化，刷新预览
   stopFavoriteCountWatch.value?.();
   stopFavoriteCountWatch.value = watch(
-    () => displayedAlbumCounts.value[FAVORITE_ALBUM_ID],
+    () => displayedAlbumStats.value[FAVORITE_ALBUM_ID]?.imageCount,
     () => {
       refreshFavoriteAlbumPreview();
     }
@@ -393,7 +546,7 @@ onActivated(async () => {
     displayedAlbumRoots.value.find((a) => a.id === FAVORITE_ALBUM_ID) ??
     albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
   if (favoriteAlbum) {
-    const favoriteCount = displayedAlbumCounts.value[FAVORITE_ALBUM_ID] || 0;
+    const favoriteCount = displayedAlbumStats.value[FAVORITE_ALBUM_ID]?.imageCount || 0;
     const images = albumPreviewImages.value[FAVORITE_ALBUM_ID];
     const hasValidPreview = images && images.length > 0 && images.some((img) => hasPreviewUrl(img));
 
@@ -452,7 +605,18 @@ const handleRefresh = async () => {
     for (const album of albumsToPreload) {
       prefetchPreview(album);
     }
-    ElMessage.success(t("albums.refreshSuccess"));
+
+    const localFolderIdsOnPage = displayedAlbumRoots.value
+      .filter((a) => a.type === "local_folder")
+      .map((a) => a.id);
+
+    if (!IS_MACOS || localFolderIdsOnPage.length === 0) {
+      ElMessage.success(t("albums.refreshSuccess"));
+    } else {
+      ElMessage.warning(t("albums.localFolder.refreshSyncProgressing"));
+      const results = await syncLocalFolderAlbums(localFolderIdsOnPage);
+      reportBatchSyncResult(results);
+    }
   } catch (error) {
     console.error("刷新失败:", error);
     ElMessage.error(t("albums.refreshFailed"));
@@ -475,14 +639,48 @@ watch(globalHide, async () => {
   }
 });
 
+const resetCreateAlbumDialog = () => {
+  newAlbumName.value = "";
+  newAlbumParentId.value = null;
+  newAlbumIsLocalFolder.value = false;
+  newAlbumSyncFolder.value = "";
+  newAlbumRecursive.value = false;
+  creatingAlbum.value = false;
+};
+
+const pickLocalFolder = async () => {
+  try {
+    const selected = await openFilePicker({ directory: true, multiple: false });
+    const path = selected?.paths?.[0];
+    if (path) {
+      newAlbumSyncFolder.value = path;
+    }
+  } catch (error) {
+    console.warn("pick local folder failed", error);
+    ElMessage.error(t("albums.selectFolderFailed"));
+  }
+};
 
 const handleCreateAlbum = async () => {
-  if (!newAlbumName.value.trim()) return;
+  if (!canSubmitCreateAlbum.value) return;
+  creatingAlbum.value = true;
   try {
-    await albumStore.createAlbum(newAlbumName.value.trim(), { reload: false });
-    newAlbumName.value = "";
+    const parentId = newAlbumParentId.value?.trim() || null;
+    if (newAlbumIsLocalFolder.value) {
+      await albumStore.createLocalFolderAlbum(
+        {
+          name: newAlbumName.value.trim(),
+          parentId,
+          syncFolder: newAlbumSyncFolder.value,
+          recursive: newAlbumRecursive.value,
+        },
+        { reload: false },
+      );
+    } else {
+      await albumStore.createAlbum(newAlbumName.value.trim(), { parentId, reload: false });
+    }
     showCreateDialog.value = false;
-    ElMessage.success("画册已创建");
+    ElMessage.success(t("albums.albumCreated"));
   } catch (error: any) {
     console.error("创建画册失败:", error);
     // 提取友好的错误信息
@@ -490,6 +688,8 @@ const handleCreateAlbum = async () => {
       ? error
       : error?.message || String(error) || t("albums.createAlbumFailed");
     ElMessage.error(errorMessage);
+  } finally {
+    creatingAlbum.value = false;
   }
 };
 
@@ -530,15 +730,16 @@ const albumMenuContext = computed<AlbumActionContext>(() => {
     selectedCount: 0,
     currentRotationAlbumId: currentRotationAlbumId.value,
     wallpaperRotationEnabled: wallpaperRotationEnabled.value,
-    albumImageCount: album ? (displayedAlbumCounts.value[album.id] || 0) : 0,
+    albumImageCount: album ? (displayedAlbumStats.value[album.id]?.imageCount || 0) : 0,
     favoriteAlbumId: FAVORITE_ALBUM_ID,
+    isLocalFolder: album?.type === "local_folder",
   };
 });
 
 const prefetchPreview = async (album: { id: string }) => {
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
   if (album.id === FAVORITE_ALBUM_ID) {
-    const favoriteCount = displayedAlbumCounts.value[FAVORITE_ALBUM_ID] || 0;
+    const favoriteCount = displayedAlbumStats.value[FAVORITE_ALBUM_ID]?.imageCount || 0;
     const images = albumPreviewImages.value[FAVORITE_ALBUM_ID];
     const hasValidPreview = images && images.length > 0 && images.some((img) => hasPreviewUrl(img));
 
@@ -596,7 +797,7 @@ const openAlbumContextMenu = (event: MouseEvent, album: { id: string; name: stri
 };
 
 const handleAlbumMenuCommand = async (
-  command: "browse" | "delete" | "setWallpaperRotation" | "rename" | "moveTo",
+  command: "browse" | "delete" | "setWallpaperRotation" | "rename" | "moveTo" | "syncNow",
 ) => {
   const context = albumMenuContext.value;
   const album = context.target;
@@ -607,6 +808,16 @@ const handleAlbumMenuCommand = async (
   if (command === "browse") {
     trackAlbumEnter({ id, name }, "context_menu");
     router.push(`/albums/${id}`);
+    return;
+  }
+
+  if (command === "syncNow") {
+    try {
+      const report = await syncLocalFolderAlbum(id);
+      if (report) reportSingleSyncResult(report);
+    } catch (e: any) {
+      ElMessage.error(e?.message || String(e));
+    }
     return;
   }
 
@@ -648,7 +859,9 @@ const handleAlbumMenuCommand = async (
 
   try {
     await ElMessageBox.confirm(
-      t("albums.deleteAlbumConfirm", { name }),
+      albumStore.isLocalFolderAlbum(id)
+        ? t("albums.deleteLocalFolderAlbumConfirm", { name })
+        : t("albums.deleteAlbumConfirm", { name }),
       t("albums.confirmDelete"),
       { type: "warning" }
     );
@@ -731,6 +944,24 @@ const handleAlbumMenuCommand = async (
 .empty-tip {
   padding: 32px;
   color: var(--anime-text-muted);
+}
+
+.local-folder-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--anime-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-folder-hint {
+  margin: 0;
+  color: var(--anime-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .hidden-album-fab {

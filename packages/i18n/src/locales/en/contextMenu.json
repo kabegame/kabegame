@@ -16,6 +16,7 @@
   "saveAsConfig": "Save as config",
   "deleteTask": "Delete task",
   "browse": "Browse",
+  "syncNow": "Sync now",
   "setWallpaperRotation": "Set as desktop rotation",
   "setWallpaperRotationActive": "(Active)",
   "rename": "Rename",

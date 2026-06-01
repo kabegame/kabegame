@@ -8,6 +8,9 @@
         "where": "LOWER(CASE WHEN INSTR(COALESCE(images.type, ''), '/') > 0 THEN SUBSTR(COALESCE(images.type, ''), INSTR(COALESCE(images.type, ''), '/') + 1) ELSE COALESCE(images.type, '') END) = ${properties.format}"
     },
     "resolve": {
+        "filter_comb": {
+            "provider": "gallery_filter_comb"
+        },
         "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
             "delegate": {
                 "provider": "kabegame.gallery_desc_pagination_page_comb"

@@ -22,5 +22,7 @@
   "failedImagesDeleteAll": "全部删除",
   "failedImagesFilter": "按插件筛选",
   "showHidden": "显示隐藏图片",
-  "hideHidden": "隐藏隐藏图片"
+  "hideHidden": "隐藏隐藏图片",
+  "showAlbumImages": "显示画册图片",
+  "hideAlbumImages": "隐藏画册图片"
 }

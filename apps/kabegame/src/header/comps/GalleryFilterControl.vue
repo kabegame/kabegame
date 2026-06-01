@@ -13,13 +13,13 @@
       <el-dropdown-menu>
         <el-dropdown-item
           command="all"
-          :class="{ 'is-active': galleryRouteStore.filter.type === 'all' }"
+          :class="{ 'is-active': legacyFilter.type === 'all' }"
         >
           {{ t("gallery.filterAll") }}
         </el-dropdown-item>
         <el-dropdown-item
           command="wallpaper-order"
-          :class="{ 'is-active': galleryRouteStore.filter.type === 'wallpaper-order' }"
+          :class="{ 'is-active': legacyFilter.type === 'wallpaper-order' }"
         >
           {{ t("gallery.filterWallpaperSet") }}
         </el-dropdown-item>
@@ -80,7 +80,7 @@
                   v-for="b in GALLERY_NAME_LANGUAGE_BUCKETS"
                   :key="b.bucket"
                   :command="b.bucket"
-                  :class="{ 'is-active': filterNameBucket(galleryRouteStore.filter) === b.bucket }"
+                  :class="{ 'is-active': filterNameBucket(legacyFilter) === b.bucket }"
                 >
                   {{ t(`gallery.${b.labelKey}`) }}
                 </el-dropdown-item>
@@ -146,7 +146,7 @@
                   v-for="b in SIZE_BUCKETS"
                   :key="b.range"
                   :command="b.range"
-                  :class="{ 'is-active': filterSizeRange(galleryRouteStore.filter) === b.range }"
+                  :class="{ 'is-active': filterSizeRange(legacyFilter) === b.range }"
                 >
                   {{ t(`gallery.${b.labelKey}`) }}
                 </el-dropdown-item>
@@ -175,7 +175,7 @@
                   v-for="b in GALLERY_ASPECT_BUCKETS"
                   :key="b.range"
                   :command="b.range"
-                  :class="{ 'is-active': filterAspectRange(galleryRouteStore.filter) === b.range }"
+                  :class="{ 'is-active': filterAspectRange(legacyFilter) === b.range }"
                 >
                   {{ t(`gallery.${b.labelKey}`) }}
                 </el-dropdown-item>
@@ -203,7 +203,7 @@
                 <el-dropdown-item
                   command="image"
                   :class="{
-                    'is-active': filterMediaKind(galleryRouteStore.filter) === 'image',
+                    'is-active': filterMediaKind(legacyFilter) === 'image',
                   }"
                 >
                   {{ t("gallery.filterImageOnly") }}
@@ -212,7 +212,7 @@
                 <el-dropdown-item
                   command="video"
                   :class="{
-                    'is-active': filterMediaKind(galleryRouteStore.filter) === 'video',
+                    'is-active': filterMediaKind(legacyFilter) === 'video',
                   }"
                 >
                   {{ t("gallery.filterVideoOnly") }}
@@ -246,7 +246,9 @@ import {
   filterNameBucket,
   filterPluginId,
   filterSizeRange,
+  filterSetToSingleFilter,
   isSimpleFilter,
+  singleFilterToSet,
 } from "@/utils/galleryPath";
 import {
   buildGalleryTimeMenuTree,
@@ -283,33 +285,34 @@ const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 const galleryRouteStore = useGalleryRouteStore();
 const { contextPath: filterContextPrefix } = storeToRefs(galleryRouteStore);
+const legacyFilter = computed(() => filterSetToSingleFilter(galleryRouteStore.filters));
 
 const showSimpleFilter = computed(() =>
-  isSimpleFilter(galleryRouteStore.filter)
+  isSimpleFilter(legacyFilter.value)
 );
 
-const currentPluginId = computed(() => filterPluginId(galleryRouteStore.filter));
+const currentPluginId = computed(() => filterPluginId(legacyFilter.value));
 
-const dateTail = computed(() => filterDateSegment(galleryRouteStore.filter));
+const dateTail = computed(() => filterDateSegment(legacyFilter.value));
 
 const isPluginFilterActive = computed(() => currentPluginId.value != null);
 
 const isTimeFilterActive = computed(() => dateTail.value != null);
 
 const isMediaTypeFilterActive = computed(
-  () => filterMediaKind(galleryRouteStore.filter) != null
+  () => filterMediaKind(legacyFilter.value) != null
 );
 
 const isNameFilterActive = computed(
-  () => filterNameBucket(galleryRouteStore.filter) != null
+  () => filterNameBucket(legacyFilter.value) != null
 );
 
 const isSizeFilterActive = computed(
-  () => filterSizeRange(galleryRouteStore.filter) != null
+  () => filterSizeRange(legacyFilter.value) != null
 );
 
 const isAspectFilterActive = computed(
-  () => filterAspectRange(galleryRouteStore.filter) != null
+  () => filterAspectRange(legacyFilter.value) != null
 );
 
 const SIZE_BUCKETS: Array<{ range: string; labelKey: string }> = [
@@ -386,9 +389,9 @@ function parsePluginCommand(command: string) {
 
 function isPluginCommandActive(pluginId: string, extendPath = "") {
   return (
-    galleryRouteStore.filter.type === "plugin" &&
-    galleryRouteStore.filter.pluginId === pluginId &&
-    (galleryRouteStore.filter.extendPath ?? "") === extendPath
+    legacyFilter.value.type === "plugin" &&
+    legacyFilter.value.pluginId === pluginId &&
+    (legacyFilter.value.extendPath ?? "") === extendPath
   );
 }
 
@@ -581,9 +584,9 @@ const pluginSignature = computed(() =>
 watch(pluginSignature, () => {
   pluginGroups.value = [];
   const current =
-    galleryRouteStore.filter.type === "plugin" ? galleryRouteStore.filter.pluginId : "";
+    legacyFilter.value.type === "plugin" ? legacyFilter.value.pluginId : "";
   if (current && !pluginStore.plugins.some((p) => p.id === current)) {
-    void galleryRouteStore.navigate({ filter: { type: "all" }, page: 1 }, { push: true });
+    void galleryRouteStore.navigate({ filters: {}, page: 1 }, { push: true });
     return;
   }
   void loadPluginGroups();
@@ -597,11 +600,11 @@ useImagesChangeRefresh({
 
 const filterLabel = computed(() => {
   void locale.value;
-  if (galleryRouteStore.filter.type === "wallpaper-order") {
+  if (legacyFilter.value.type === "wallpaper-order") {
     return t("gallery.filterWallpaperSet");
   }
-  if (galleryRouteStore.filter.type === "date-range") {
-    const f = galleryRouteStore.filter;
+  if (legacyFilter.value.type === "date-range") {
+    const f = legacyFilter.value;
     return `${f.start} ~ ${f.end}`;
   }
   const dt = dateTail.value;
@@ -613,14 +616,14 @@ const filterLabel = computed(() => {
   const pid = currentPluginId.value;
   if (pid) {
     const ext =
-      galleryRouteStore.filter.type === "plugin"
-        ? galleryRouteStore.filter.extendPath?.trim()
+      legacyFilter.value.type === "plugin"
+        ? legacyFilter.value.extendPath?.trim()
         : "";
     const name = pluginStore.pluginLabel(pid);
     return ext ? `${name} / ${ext}` : t("gallery.filterByPluginWithName", { name });
   }
-  const mk = filterMediaKind(galleryRouteStore.filter);
-  const mf = filterMediaFormat(galleryRouteStore.filter);
+  const mk = filterMediaKind(legacyFilter.value);
+  const mf = filterMediaFormat(legacyFilter.value);
   if (mk === "image") {
     if (mf) return `${t("gallery.filterImageOnlyLabel")} / ${mf}`;
     return `${t("gallery.filterImageOnlyLabel")} (${mediaTypeCounts.value.imageCount})`;
@@ -629,19 +632,19 @@ const filterLabel = computed(() => {
     if (mf) return `${t("gallery.filterVideoOnlyLabel")} / ${mf}`;
     return `${t("gallery.filterVideoOnlyLabel")} (${mediaTypeCounts.value.videoCount})`;
   }
-  const nb = filterNameBucket(galleryRouteStore.filter);
+  const nb = filterNameBucket(legacyFilter.value);
   if (nb) {
     const bucket = GALLERY_NAME_LANGUAGE_BUCKETS.find((b) => b.bucket === nb);
     const label = bucket ? t(`gallery.${bucket.labelKey}`) : nb;
     return `${t("gallery.filterByName")}: ${label}`;
   }
-  const sr = filterSizeRange(galleryRouteStore.filter);
+  const sr = filterSizeRange(legacyFilter.value);
   if (sr) {
     const bucket = SIZE_BUCKETS.find((b) => b.range === sr);
     const label = bucket ? t(`gallery.${bucket.labelKey}`) : sr;
     return `${t("gallery.filterBySize")}: ${label}`;
   }
-  const ar = filterAspectRange(galleryRouteStore.filter);
+  const ar = filterAspectRange(legacyFilter.value);
   if (ar) {
     const bucket = GALLERY_ASPECT_BUCKETS.find((b) => b.range === ar);
     const label = bucket ? t(`gallery.${bucket.labelKey}`) : ar;
@@ -654,10 +657,10 @@ function handleCommand(command: string) {
   if (command !== "all" && command !== "wallpaper-order") return;
   void galleryRouteStore.navigate(
     {
-      filter:
+      filters:
         command === "all"
-          ? { type: "all" }
-          : { type: "wallpaper-order" },
+          ? {}
+          : { wallpaperOrder: true },
       page: 1,
     },
     { push: true }
@@ -669,9 +672,11 @@ function handlePluginCommand(pluginId: string) {
   if (!id) return;
   void galleryRouteStore.navigate(
     {
-      filter: extendPath
-        ? { type: "plugin", pluginId: id, extendPath }
-        : { type: "plugin", pluginId: id },
+      filters: singleFilterToSet(
+        extendPath
+          ? { type: "plugin", pluginId: id, extendPath }
+          : { type: "plugin", pluginId: id }
+      ),
       page: 1,
     },
     { push: true }
@@ -682,7 +687,7 @@ function handleTimeCommand(name: string) {
   const seg = (name || "").trim();
   if (!seg) return;
   void galleryRouteStore.navigate(
-    { filter: { type: "date", segment: seg }, page: 1 },
+    { filters: singleFilterToSet({ type: "date", segment: seg }), page: 1 },
     { push: true }
   );
 }
@@ -690,7 +695,7 @@ function handleTimeCommand(name: string) {
 function handleMediaTypeCommand(kind: string) {
   if (kind !== "image" && kind !== "video") return;
   void galleryRouteStore.navigate(
-    { filter: { type: "media-type", kind }, page: 1 },
+    { filters: singleFilterToSet({ type: "media-type", kind }), page: 1 },
     { push: true }
   );
 }
@@ -698,7 +703,7 @@ function handleMediaTypeCommand(kind: string) {
 function handleNameCommand(bucket: string) {
   if (!bucket) return;
   void galleryRouteStore.navigate(
-    { filter: { type: "name", bucket }, page: 1 },
+    { filters: singleFilterToSet({ type: "name", bucket }), page: 1 },
     { push: true }
   );
 }
@@ -706,7 +711,7 @@ function handleNameCommand(bucket: string) {
 function handleSizeCommand(range: string) {
   if (!range) return;
   void galleryRouteStore.navigate(
-    { filter: { type: "size", range }, page: 1 },
+    { filters: singleFilterToSet({ type: "size", range }), page: 1 },
     { push: true }
   );
 }
@@ -714,7 +719,7 @@ function handleSizeCommand(range: string) {
 function handleAspectCommand(range: string) {
   if (!range) return;
   void galleryRouteStore.navigate(
-    { filter: { type: "aspect", range }, page: 1 },
+    { filters: singleFilterToSet({ type: "aspect", range }), page: 1 },
     { push: true }
   );
 }

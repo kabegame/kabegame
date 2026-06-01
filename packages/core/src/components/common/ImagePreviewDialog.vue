@@ -77,7 +77,7 @@
             <video ref="previewVideoRef" :src="previewImageUrl" class="preview-video" :loop="!IS_LINUX" :autoplay="!IS_LINUX" poster="" preload="auto"
               playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback=""
               @dragstart.prevent />
-            <VideoControls :video="previewVideoRef" :show-play-pause="IS_LINUX" />
+            <VideoControls :video="previewVideoRef" :show-play-pause="true" />
           </div>
           <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
             <ImageNotFound />

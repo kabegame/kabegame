@@ -1,0 +1,48 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_filter_comb",
+    "resolve": {
+        "wallpaper-order": {
+            "provider": "gallery_wallpaper_order_router"
+        },
+        "no-album": {
+            "provider": "gallery_no_album_router"
+        },
+        "plugin": {
+            "provider": "gallery_plugins_router"
+        },
+        "plugins": {
+            "provider": "gallery_plugins_router"
+        },
+        "media-type": {
+            "provider": "gallery_media_type_router"
+        },
+        "date": {
+            "provider": "gallery_dates_router"
+        },
+        "dates": {
+            "provider": "gallery_dates_router"
+        },
+        "name": {
+            "provider": "gallery_name_router"
+        },
+        "names": {
+            "provider": "gallery_name_router"
+        },
+        "size": {
+            "provider": "gallery_size_router"
+        },
+        "aspect": {
+            "provider": "gallery_aspect_router"
+        },
+        "dimension": {
+            "provider": "gallery_aspect_router"
+        },
+        "dimensions": {
+            "provider": "gallery_aspect_router"
+        },
+        "sort": {
+            "provider": "gallery_sort_router"
+        }
+    }
+}

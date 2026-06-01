@@ -131,6 +131,7 @@ export type ContextCommand =
   | "exportToWEAuto"
   | "addToHidden"
   | "remove"
+  | "deleteFile"
   | "swipe-remove";
 
 type MultiImagePayload = { selectedImageIds: ReadonlySet<string> };
@@ -148,6 +149,7 @@ type ContextCommandPayloadMap = {
   exportToWEAuto: ImagePayload & MultiImagePayload;
   addToHidden: ImagePayload & MultiImagePayload;
   remove: ImagePayload & MultiImagePayload;
+  deleteFile: ImagePayload & MultiImagePayload;
   "swipe-remove": ImagePayload;
 };
 
@@ -226,33 +228,6 @@ const uiStore = useUiStore();
 
 const isLoading = computed(() => props.loading ?? false);
 const isLoadingOverlay = computed(() => props.loadingOverlay ?? isLoading.value);
-/*----------------- 宽高比相关 -----------------*/
-// 从 store 解析宽高比设置
-// 安卓不需要宽高比设置，图片自动适应
-const parseAspectRatioFromStore = (value: string | null | undefined): number | null => {
-  if (!value) return null;
-  // 解析 "16:9" 格式
-  if (value.includes(":") && !value.startsWith("custom:")) {
-    const [w, h] = value.split(":").map(Number);
-    if (w && h && h > 0) {
-      return w / h;
-    }
-  }
-  // 解析 "custom:1920:1080" 格式
-  if (value.startsWith("custom:")) {
-    const parts = value.replace("custom:", "").split(":");
-    const [w, h] = parts.map(Number);
-    if (w && h && h > 0) {
-      return w / h;
-    }
-  }
-  return null;
-};
-
-const storeAspectRatio = computed(() => {
-  return parseAspectRatioFromStore(settingsStore.values.galleryImageAspectRatio);
-});
-
 /*----------------- 虚拟滚动相关 -----------------*/
 const virtualOverscanRows = computed(() => Math.max(0, props.virtualOverscan));
 // const enableScrollButtons = computed(() => props.enableScrollButtons ?? true);
@@ -392,23 +367,8 @@ const currentPreviewIndex = computed(() => {
 // Android 系统返回键：预览打开时注册到 modalStack
 const modalStackId = ref<string | null>(null);
 
-// 窗口宽高比（用于 item aspect ratio）
-const windowAspectRatio = ref<number>(16 / 9);
-const updateWindowAspectRatio = () => {
-  windowAspectRatio.value = window.innerWidth / window.innerHeight;
-};
 const effectiveAspectRatio = computed(() => {
-  // 紧凑模式下不在此处固定 1:1，改为按单张图片在 getEffectiveAspectRatioForItem 里处理
-  if (!isCompact.value) {
-    if (storeAspectRatio.value !== null && storeAspectRatio.value > 0) {
-      return storeAspectRatio.value;
-    }
-    if (props.windowAspectRatio !== undefined && props.windowAspectRatio > 0) {
-      return props.windowAspectRatio;
-    }
-    return windowAspectRatio.value;
-  }
-  return 1; // 紧凑模式默认（无 width/height 时用）
+  return 1;
 });
 
 /** 紧凑模式：按该图 width/height 计算宽高比，行高由该行最高图自适应；宽屏用全局 effectiveAspectRatio */
@@ -438,7 +398,7 @@ const aspectRatioOf = (image: ImageInfo) => {
   if (image?.width != null && image?.height != null && image.width > 0 && image.height > 0) {
     return image.width / image.height;
   }
-  return effectiveAspectRatio.value || 16 / 10;
+  return 16 / 10;
 };
 
 /**
@@ -948,23 +908,6 @@ const scheduleVirtualUpdate = () => {
   });
 };
 
-// 关键：窗口/全屏切换会改变 ImageItem 的布局与实际高度（依赖 windowAspectRatio）。
-// 若不重测，虚拟 paddingTop 会与真实行高不一致，滚动时会出现"突然跳一段"的视觉跳动。
-watch(
-  () => windowAspectRatio.value,
-  () => {
-    scheduleVirtualUpdate();
-  }
-);
-
-// 监听 store 中的宽高比设置变化
-watch(
-  () => settingsStore.values.galleryImageAspectRatio,
-  () => {
-    scheduleVirtualUpdate();
-  }
-);
-
 watch(
   () => props.enableVirtualScroll,
   () => {
@@ -1121,9 +1064,6 @@ watch(
 );
 
 onMounted(async () => {
-  updateWindowAspectRatio();
-  window.addEventListener("resize", updateWindowAspectRatio);
-
   // 紧凑模式下不允许通过 Ctrl+Wheel 调整列数
   if (!isCompact.value) {
     window.addEventListener(
@@ -1148,7 +1088,6 @@ onMounted(async () => {
 });
 
 onUnmounted(async () => {
-  window.removeEventListener("resize", updateWindowAspectRatio);
   unbindScrollElement();
   if (smoothWheel.raf != null) {
     cancelAnimationFrame(smoothWheel.raf);

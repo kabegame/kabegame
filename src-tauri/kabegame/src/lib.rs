@@ -162,6 +162,9 @@ fn init(
         }
     }
 
+    spawn_startup_local_folder_sync();
+    spawn_realtime_folder_sync_if_enabled();
+
     // 初始化插件缓存
     init_kgpg_plugin();
 
@@ -170,6 +173,52 @@ fn init(
 
     Ok(())
 }
+
+#[cfg(target_os = "macos")]
+fn spawn_startup_local_folder_sync() {
+    let fut = async {
+        let reports = kabegame_core::local_folder::sync_all_local_folder_albums().await;
+        if !reports.is_empty() {
+            let added: usize = reports.iter().map(|report| report.added).sum();
+            let deleted: usize = reports.iter().map(|report| report.deleted).sum();
+            let reimported: usize = reports.iter().map(|report| report.reimported).sum();
+            let skipped_unchanged = reports
+                .iter()
+                .filter(|report| report.skipped_unchanged)
+                .count();
+            println!(
+                "[local_folder] startup sync done: {} albums, +{added}/-{deleted}/~{reimported}, skipped_unchanged={skipped_unchanged}",
+                reports.len()
+            );
+        }
+    };
+
+    #[cfg(feature = "web")]
+    tokio::spawn(fut);
+    #[cfg(not(feature = "web"))]
+    tauri::async_runtime::spawn(fut);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn spawn_startup_local_folder_sync() {}
+
+#[cfg(all(
+    not(feature = "web"),
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+fn spawn_realtime_folder_sync_if_enabled() {
+    tauri::async_runtime::spawn(async {
+        if kabegame_core::settings::Settings::global().get_realtime_folder_sync() {
+            kabegame_core::local_folder::watch::set_enabled(true).await;
+        }
+    });
+}
+
+#[cfg(not(all(
+    not(feature = "web"),
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+)))]
+fn spawn_realtime_folder_sync_if_enabled() {}
 
 // ---- web entry point ----
 #[cfg(feature = "web")]
@@ -286,6 +335,9 @@ pub fn run() {
             remove_images_from_album,
             update_album_images_order,
             get_favorite_album_id,
+            add_local_folder_album,
+            sync_local_folder_album,
+            sync_local_folder_albums,
             // --- Images ---
             get_image_by_id,
             get_image_metadata,
@@ -404,6 +456,8 @@ pub fn run() {
             set_gallery_image_object_position,
             get_auto_deduplicate,
             set_auto_deduplicate,
+            get_realtime_folder_sync,
+            set_realtime_folder_sync,
             get_default_download_dir,
             set_default_download_dir,
             get_default_images_dir,
@@ -411,7 +465,7 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             clear_user_data,
             // --- Wallpaper ---
-            set_wallpaper,
+            // set_wallpaper,
             set_wallpaper_mode,
             set_wallpaper_by_image_id,
             get_current_wallpaper_image_id,

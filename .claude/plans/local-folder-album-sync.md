@@ -1,6 +1,7 @@
 # 本地文件夹同步画册（local_folder album） — 根计划
 
-> macOS 优先；不抽象跨平台层（后续阶段再做）。
+> Phase 1~6：macOS-only 落地（创建 / 同步 / UI / 只读约束 / 手动刷新）。
+> Phase 7：跨平台实时监听（macOS / Windows / Linux），独立可选开关。
 > 每个 Phase 设计为可独立完成的提交单元：前一个 Phase 完成后，分支应可编译、可运行、可暂停，再开下一个 Phase。
 
 参考实现：[test/native-auto-import/src/main.rs](../../test/native-auto-import/src/main.rs)
@@ -258,13 +259,22 @@ src-tauri/kabegame-core/src/local_folder/
 
 ---
 
-## Phase 7（可选）— 原生实时监听接入
+## Phase 7 — 跨平台实时文件夹监听（详见 [phase7](./local-folder-album-sync-phase7.md)）
 
-不在本根计划的强制范围，但留位：
+**独立产出**：Albums 页 settings drawer 新增「实时同步文件夹」开关（默认关）；开启后后台 task 用平台原生 API 监听所有 local_folder album 的源目录，文件变化时自动调用 Phase 3 的 `sync_album`。
 
-- macOS：用 `NSMetadataQuery`（NSMetadataQueryIndexedLocalComputerScope）订阅 added/changed/removed，按 `path_in_scopes(sync_folder)` 过滤后，触发对应 album 的增量 sync。
-- 实现位置：`src-tauri/kabegame-core/src/local_folder/watch_macos.rs`（cfg-gated）。
-- 注意：watch 启动放在 app setup spawn 中，关闭走 Tauri exit hook；与启动期一次性同步**互不替代**。
+### 关键设计
+
+- **开关**：新 app 设置 `realtimeFolderSync: Bool = false`（opt-in），注册到 `pages: ["albums"]`。
+- **平台**：macOS / Windows / Linux 各自原生实现；Android / iOS noop。
+  - macOS：`FSEventStreamCreate` + 在回调过滤 `path.parent() == watched`（FSEvents 总是递归）。
+  - Windows：`ReadDirectoryChangesW` per album，`bWatchSubtree = FALSE`。
+  - Linux：单个 inotify fd + 多个 `inotify_add_watch`，mask 含 CREATE/DELETE/MOVED_*/CLOSE_WRITE/ATTRIB。
+- **零新依赖**：仅用项目已有 `windows-sys` / `core-foundation`（macOS target dep）/ `libc`；**不**引入 `notify`、`inotify-sys`、`fsevent-stream`。
+- **新 provider URI**：`albums://byType/{type}` — 通过扩展 `albums_root_provider.json5` 的 resolve 表 + 新建 `albums_by_type_provider.json5` 实现，供前端 / 跨模块按类型查 album。
+- **架构**：一个 `WatcherManager` async task 维护 `HashMap<album_id, PathBuf>` desired set；接收 `Reconcile / Event / Shutdown` 三类消息；event → 1500ms per-album 防抖窗口 → `sync_album(id)`（仍走 Phase 3 try_lock）。
+- **albums 变化触发 reconcile**：manager 直接订阅后端 `EventBroadcaster` 的 typed 事件 `AlbumAdded/AlbumChanged/AlbumDeleted`（与 [startup.rs `start_event_loop`](src-tauri/kabegame/src/startup.rs) 共用同一条总线）自动 reconcile。**不**散插 `bump_reconcile()`、**不**改 `commands_core/album.rs`——storage 层创建/删除/改名/移动后已发这三个事件。
+- **生命周期**：启动期读设置；开关切换 → 启停 manager；进程退出靠 OS 回收 fd（不写显式 hook）。
 
 ---
 
@@ -275,7 +285,8 @@ src-tauri/kabegame-core/src/local_folder/
 3. **稳定窗口**：`STABLE_FOR_MS = 3000`，写死，不开放配置。
 4. **删除整个 local_folder album**：仅删 album 与 album_images 关系，**不删** images 本体（磁盘文件归用户所有，画册只是同步视图）。
 5. **多个 local_folder album 指向同一路径**：**允许**；同步互不干扰；用户自负责重复展示。
-6. **平台范围**：本计划**仅 macOS**；其它平台（Windows/Linux/Android）所有同步入口在 `cfg(not(target_os = "macos"))` 下编译为空操作或返回 `Err("local folder sync is macOS-only in this build")`，UI 入口在非 macOS 隐藏。
+6. **平台范围**：Phase 1~6 **仅 macOS**（其它平台同步入口返回 `Err("local folder sync is macOS-only in this build")`，UI 入口在非 macOS 隐藏）。Phase 7 把范围**扩展**到 macOS / Windows / Linux（实时监听），Android / iOS 保持 noop。
+7. **Phase 7 实时监听**：默认 OFF（opt-in）；零新 crate 依赖（仅用已有 `windows-sys` / `core-foundation` / `libc`）；macOS FSEvents 在回调过滤实现非递归语义，Windows / Linux 平台原生支持非递归。详见 [phase7](./local-folder-album-sync-phase7.md)。
 
 ---
 
@@ -284,17 +295,26 @@ src-tauri/kabegame-core/src/local_folder/
 - 新增：
   - `src-tauri/kabegame-core/src/storage/migrations/v013_album_type_and_sync.rs` (P1)
   - `src-tauri/kabegame-core/src/local_folder/{mod,scan,sync,status}.rs` (P2)
-  - 前端 i18n 文件新增 key (P5)
+  - `src-tauri/kabegame-core/src/local_folder/watch/{mod,macos,windows,linux,noop}.rs` (P7)
+  - `src-tauri/kabegame-core/src/providers/dsl/albums/albums_by_type_provider.json5` (P7)
+  - `apps/kabegame/src/components/settings/items/RealtimeFolderSyncSetting.vue` (P7)
+  - 前端 i18n 文件新增 key (P5, P7)
 - 修改：
   - `src-tauri/kabegame-core/src/storage/migrations/{mod,init}.rs` (P1)
   - `src-tauri/kabegame-core/src/storage/albums.rs` (P1, P3, P4, P5)
   - `src-tauri/kabegame-core/src/storage/image_events.rs` (P5)
   - `src-tauri/kabegame-core/src/lib.rs` (P2 加 mod)
   - `src-tauri/kabegame-core/src/crawler/local_import.rs` (P2 抽函数)
-  - `src-tauri/kabegame-core/src/providers/dsl/albums/*.json5` (P1 扩字段)
+  - `src-tauri/kabegame-core/src/providers/dsl/albums/*.json5` (P1 扩字段, P7 加 byType 路由)
+  - `src-tauri/kabegame-core/src/local_folder/mod.rs` (P7 加 `pub mod watch;`)
+  - `src-tauri/kabegame-core/src/settings.rs` (P7 加 `SettingKey::RealtimeFolderSync`)
+  - `src-tauri/kabegame-core/Cargo.toml` (P7 加 `core-foundation` macOS target dep + `windows-sys` features)
   - `src-tauri/kabegame/src/commands/album.rs` (P3, P4)
-  - `src-tauri/kabegame/src/lib.rs` (P3 启动 spawn + handler 注册)
+  - `src-tauri/kabegame/src/commands/settings.rs` (P7 加 `set_realtime_folder_sync`)
+  - `src-tauri/kabegame/src/lib.rs` (P3 启动 spawn + handler 注册, P7 同上)
   - `apps/kabegame/src/stores/albums.ts` (P1, P4)
   - `apps/kabegame/src/views/Albums.vue` (P4, P6)
   - `apps/kabegame/src/views/AlbumDetail.vue` (P5, P6)
   - `apps/kabegame/src/components/albums/AlbumCard.vue` (P5)
+  - `apps/kabegame/src/settings/quickSettingsRegistry.ts` (P7 注册到 pages=["albums"])
+  - `packages/core/src/stores/settings.ts` (P7 加 `realtimeFolderSync` 到 AppSettings + SETTING_KEY_MAP)

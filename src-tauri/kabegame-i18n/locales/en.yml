@@ -38,6 +38,20 @@ window:
 
 albums:
   favorite: Favorites
+  errors:
+    nameExists: An album with this name already exists. Choose another name.
+    parentNotFound: "Parent album does not exist: {id}"
+  localFolderErrors:
+    macosOnly: Local folder sync is macOS-only in this build
+    nameRequired: Album name cannot be empty
+    nameNoSlash: "Album name cannot contain '/'"
+    parentReadonly: Cannot create a local folder sync album under a system album
+    absolutePathRequired: sync_folder must be an absolute path
+    rootPathForbidden: "sync_folder cannot be the root directory '/'"
+    notDirectory: sync_folder is not a directory
+    folderAccessFailed: "Cannot access sync_folder: {detail}"
+    virtualDrivePathForbidden: "Cannot use a path inside the virtual drive mount ({path}) as a sync source"
+    readOnly: Local folder sync albums cannot be edited manually
 
 plugins:
   officialGithubReleaseSourceName: Official GitHub Releases source

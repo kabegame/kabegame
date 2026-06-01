@@ -1,5 +1,6 @@
 use crate::emitter::GlobalEmitter;
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
+use kabegame_i18n::t;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -87,6 +88,26 @@ impl Storage {
             )
             .map_err(|e| format!("Failed to check album existence: {}", e))?;
         Ok(exists)
+    }
+
+    /// Guard user-facing write paths that mutate an album's image membership.
+    ///
+    /// Sync internals intentionally use the lower-level Storage APIs directly so a
+    /// local folder album can still be reconciled from its source directory.
+    pub fn ensure_album_is_writable(&self, album_id: &str) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let kind: Option<String> = conn
+            .query_row(
+                "SELECT type FROM albums WHERE id = ?1",
+                params![album_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query album kind: {}", e))?;
+        match kind.as_deref() {
+            Some("local_folder") => Err(t!("albums.localFolderErrors.readOnly").to_string()),
+            _ => Ok(()),
+        }
     }
 
     /// 顺序壁纸轮播 marker 查询。给定 (album_id, image_id), 返回该图片在
@@ -623,7 +644,7 @@ impl Storage {
         };
 
         if count > 0 {
-            return Err("画册名称已存在，请换一个名称".to_string());
+            return Err(t!("albums.errors.nameExists").to_string());
         }
         Ok(())
     }
@@ -639,6 +660,114 @@ impl Storage {
             .optional()
             .map_err(|e| format!("Failed to query album: {}", e))?;
         Ok(row)
+    }
+
+    pub fn update_album_folder_status(
+        &self,
+        album_id: &str,
+        status_json: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        conn.execute(
+            "UPDATE albums SET folder_status = ?1 WHERE id = ?2",
+            params![status_json, album_id],
+        )
+        .map_err(|e| format!("update_album_folder_status: {e}"))?;
+        Ok(())
+    }
+
+    pub fn list_local_folder_albums(&self) -> Result<Vec<Album>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status
+                 FROM albums WHERE type = 'local_folder' ORDER BY created_at ASC",
+            )
+            .map_err(|e| format!("prepare list_local_folder_albums: {e}"))?;
+        let rows = stmt
+            .query_map([], album_from_storage_row)
+            .map_err(|e| format!("query list_local_folder_albums: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read list_local_folder_albums: {e}"))
+    }
+
+    pub fn add_local_folder_albums_tx(
+        &self,
+        entries: &[crate::local_folder::create::NewLocalFolderEntry],
+    ) -> Result<Vec<Album>, String> {
+        if entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start transaction: {e}"))?;
+
+        let batch_ids: HashSet<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
+        for entry in entries {
+            if let Some(parent_id) = entry.parent_id.as_deref() {
+                if !batch_ids.contains(parent_id) {
+                    let exists: bool = tx
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM albums WHERE id = ?1)",
+                            params![parent_id],
+                            |row| row.get(0),
+                        )
+                        .map_err(|e| format!("verify external parent: {e}"))?;
+                    if !exists {
+                        return Err(t!("albums.errors.parentNotFound", id = parent_id).to_string());
+                    }
+                }
+            }
+        }
+
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("Time error: {e}"))?
+            .as_secs();
+
+        let mut created = Vec::with_capacity(entries.len());
+        for entry in entries {
+            Self::ensure_album_name_unique_ci(&tx, &entry.name, entry.parent_id.as_deref(), None)?;
+            tx.execute(
+                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
+                 VALUES (?1, ?2, ?3, ?4, 'local_folder', ?5, NULL)",
+                params![
+                    entry.id.as_str(),
+                    entry.name.as_str(),
+                    created_at as i64,
+                    entry.parent_id.as_deref(),
+                    entry.sync_folder.as_str(),
+                ],
+            )
+            .map_err(|e| format!("insert local_folder album: {e}"))?;
+
+            created.push(Album {
+                id: entry.id.clone(),
+                name: entry.name.clone(),
+                created_at,
+                parent_id: entry.parent_id.clone(),
+                kind: "local_folder".to_string(),
+                sync_folder: Some(entry.sync_folder.clone()),
+                folder_status: None,
+            });
+        }
+
+        tx.commit().map_err(|e| format!("commit: {e}"))?;
+
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            for album in &created {
+                emitter.emit_album_added(
+                    &album.id,
+                    &album.name,
+                    album.created_at,
+                    album.parent_id.as_deref(),
+                );
+            }
+        }
+
+        Ok(created)
     }
 
     pub fn find_child_album_by_name_ci(

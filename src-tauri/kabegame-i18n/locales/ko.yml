@@ -38,6 +38,20 @@ window:
 
 albums:
   favorite: 즐겨찾기
+  errors:
+    nameExists: 같은 이름의 앨범이 이미 있습니다. 다른 이름을 선택하세요.
+    parentNotFound: "상위 앨범이 존재하지 않습니다: {id}"
+  localFolderErrors:
+    macosOnly: 이 빌드에서는 로컬 폴더 동기화가 macOS에서만 지원됩니다
+    nameRequired: 앨범 이름은 비워둘 수 없습니다
+    nameNoSlash: "앨범 이름에는 '/'를 포함할 수 없습니다"
+    parentReadonly: 시스템 앨범 아래에는 로컬 폴더 동기화 앨범을 만들 수 없습니다
+    absolutePathRequired: sync_folder는 절대 경로여야 합니다
+    rootPathForbidden: "sync_folder는 루트 디렉터리 '/'일 수 없습니다"
+    notDirectory: sync_folder가 폴더가 아닙니다
+    folderAccessFailed: "sync_folder에 접근할 수 없습니다: {detail}"
+    virtualDrivePathForbidden: "가상 드라이브 마운트 경로({path}) 안의 경로는 동기화 원본으로 사용할 수 없습니다"
+    readOnly: 로컬 폴더 동기화 앨범은 이미지를 수동으로 추가하거나 제거할 수 없습니다
 
 plugins:
   officialGithubReleaseSourceName: 공식 GitHub Releases 소스

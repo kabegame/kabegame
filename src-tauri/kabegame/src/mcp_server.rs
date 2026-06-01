@@ -626,6 +626,10 @@ impl ServerHandler for KabegameMcpServer {
                 }
                 let args: Args = parse_args(request.arguments)?;
 
+                Storage::global()
+                    .ensure_album_is_writable(&args.album_id)
+                    .map_err(|e| McpError::internal_error(e, None))?;
+
                 let result = Storage::global()
                     .add_images_to_album(&args.album_id, &args.image_ids)
                     .map_err(|e| McpError::internal_error(e, None))?;

@@ -15,7 +15,7 @@ import { buildAlbumTreeFromFlat } from "@kabegame/core/utils/albumTree";
 import {
   buildAlbumMediaNodes,
   fetchAlbumDirectCounts,
-  flattenAlbumMediaNodes,
+  type AlbumMediaNode,
 } from "@/utils/albumMediaTree";
 
 export type { AlbumTreeNode };
@@ -31,6 +31,9 @@ export interface FolderStatus {
   state: "ok" | "missing" | "denied" | "not_a_dir" | "io_error";
   message?: string;
   checkedAt?: number;
+  checked_at?: number;
+  lastSyncedAtMs?: number;
+  last_synced_at_ms?: number;
 }
 
 export interface Album {
@@ -43,6 +46,12 @@ export interface Album {
   folderStatus: FolderStatus | null;
 }
 
+export interface AlbumStats {
+  directImageCount: number;
+  imageCount: number;
+  subAlbumCount: number;
+}
+
 type AlbumRow = Record<string, unknown>;
 
 function parseParentId(raw: unknown): string | null {
@@ -50,6 +59,17 @@ function parseParentId(raw: unknown): string | null {
   const s = String(raw).trim();
   if (s === "null" || s === "undefined") return null;
   return s ? s : null;
+}
+
+function parseFolderStatus(raw: unknown): FolderStatus | null {
+  if (raw == null) return null;
+  if (typeof raw === "object") return raw as FolderStatus;
+  try {
+    const parsed = JSON.parse(String(raw));
+    return parsed && typeof parsed === "object" ? (parsed as FolderStatus) : null;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeAlbumRow(a: Record<string, unknown>): Album {
@@ -65,14 +85,7 @@ function normalizeAlbumRow(a: Record<string, unknown>): Album {
   })();
   const folderStatus = ((): FolderStatus | null => {
     const raw = a.folder_status ?? a.folderStatus;
-    if (raw == null) return null;
-    if (typeof raw === "object") return raw as FolderStatus;
-    try {
-      const parsed = JSON.parse(String(raw));
-      return parsed && typeof parsed === "object" ? (parsed as FolderStatus) : null;
-    } catch {
-      return null;
-    }
+    return parseFolderStatus(raw);
   })();
   return {
     id: String(a.id ?? ""),
@@ -101,6 +114,8 @@ export const useAlbumStore = defineStore("albums", () => {
   const albumHiddenDirectCounts = ref<Record<string, number>>({});
   const albumCounts = ref<Record<string, number>>({});
   const albumHiddenCounts = ref<Record<string, number>>({});
+  const albumStats = ref<Record<string, AlbumStats>>({});
+  const albumHiddenStats = ref<Record<string, AlbumStats>>({});
   const loading = ref(false);
 
   let eventListenersInitialized = false;
@@ -125,6 +140,15 @@ export const useAlbumStore = defineStore("albums", () => {
     return out;
   };
 
+  const localFolderAlbumIds = computed<string[]>(() =>
+    albums.value.filter((a) => a.type === "local_folder").map((a) => a.id),
+  );
+
+  const isLocalFolderAlbum = (albumId: string | null | undefined): boolean => {
+    if (!albumId) return false;
+    return albums.value.some((a) => a.id === albumId && a.type === "local_folder");
+  };
+
   const albumTree = computed((): AlbumTreeNode[] => buildAlbumTreeFromFlat(albums.value));
 
   const directCountsRef = (hide: boolean) =>
@@ -133,14 +157,38 @@ export const useAlbumStore = defineStore("albums", () => {
   const aggregateCountsRef = (hide: boolean) =>
     hide ? albumHiddenCounts : albumCounts;
 
+  const aggregateStatsRef = (hide: boolean) =>
+    hide ? albumHiddenStats : albumStats;
+
   const recomputeAlbumCounts = (hide = false) => {
-    const roots = albums.value.filter((a) => a.parentId == null);
+    const albumIds = new Set(albums.value.map((a) => a.id));
+    const roots = albums.value.filter((a) => a.parentId == null || !albumIds.has(a.parentId));
     const nodes = buildAlbumMediaNodes(roots, albums.value, directCountsRef(hide).value, hide);
-    const next: Record<string, number> = {};
-    for (const node of nodes.flatMap((n) => flattenAlbumMediaNodes(n))) {
-      next[node.album.id] = node.aggregateTotal;
+    const nextCounts: Record<string, number> = {};
+    const nextStats: Record<string, AlbumStats> = {};
+
+    const collect = (node: AlbumMediaNode): AlbumStats => {
+      const childStats = node.children.map(collect);
+      const subAlbumCount = node.children.length + childStats.reduce(
+        (sum, stats) => sum + stats.subAlbumCount,
+        0,
+      );
+      const stats: AlbumStats = {
+        directImageCount: node.directTotal,
+        imageCount: node.aggregateTotal,
+        subAlbumCount,
+      };
+      nextCounts[node.album.id] = stats.imageCount;
+      nextStats[node.album.id] = stats;
+      return stats;
+    };
+
+    for (const node of nodes) {
+      collect(node);
     }
-    aggregateCountsRef(hide).value = next;
+
+    aggregateCountsRef(hide).value = nextCounts;
+    aggregateStatsRef(hide).value = nextStats;
   };
 
   const recomputeAllAlbumCounts = () => {
@@ -182,6 +230,8 @@ export const useAlbumStore = defineStore("albums", () => {
 
   const getAlbumCounts = (hide = false) => aggregateCountsRef(hide).value;
 
+  const getAlbumStats = (hide = false) => aggregateStatsRef(hide).value;
+
   const refreshAlbumDirectCounts = async (hide = false, albumIds?: Iterable<string>) => {
     const ids = albumIds ?? albums.value.map((album) => album.id);
     patchAlbumDirectCounts(await fetchAlbumDirectCounts(ids, hide), hide);
@@ -219,6 +269,8 @@ export const useAlbumStore = defineStore("albums", () => {
       delete albumHiddenDirectCounts.value[id];
       delete albumCounts.value[id];
       delete albumHiddenCounts.value[id];
+      delete albumStats.value[id];
+      delete albumHiddenStats.value[id];
     }
     recomputeAllAlbumCounts();
   };
@@ -235,6 +287,9 @@ export const useAlbumStore = defineStore("albums", () => {
     if (Object.prototype.hasOwnProperty.call(changes, "parentId")) {
       album.parentId = parseParentId(changes.parentId);
       recomputeAllAlbumCounts();
+    }
+    if (Object.prototype.hasOwnProperty.call(changes, "folderStatus")) {
+      album.folderStatus = parseFolderStatus(changes.folderStatus);
     }
   };
 
@@ -366,6 +421,51 @@ export const useAlbumStore = defineStore("albums", () => {
     }
   };
 
+  const createLocalFolderAlbum = async (
+    args: {
+      name: string;
+      syncFolder: string;
+      recursive: boolean;
+      parentId?: string | null;
+    },
+    opts: { reload?: boolean } = {},
+  ) => {
+    await initEventListeners();
+    try {
+      const createdRaw = await invoke<unknown>("add_local_folder_album", {
+        name: args.name,
+        parentId: args.parentId ?? null,
+        syncFolder: args.syncFolder,
+        recursive: args.recursive,
+      });
+      const rows = (Array.isArray(createdRaw) ? createdRaw : [createdRaw])
+        .map((row) => normalizeAlbumRow(row as Record<string, unknown>))
+        .filter((album) => !!album.id);
+
+      const reload = opts.reload ?? true;
+      if (reload) {
+        await loadAlbums();
+      } else {
+        for (const row of rows) {
+          const existingIndex = albums.value.findIndex((album) => album.id === row.id);
+          if (existingIndex >= 0) {
+            albums.value[existingIndex] = row;
+          } else {
+            albums.value.unshift(row);
+          }
+          albumDirectCounts.value[row.id] = albumDirectCounts.value[row.id] ?? 0;
+          albumHiddenDirectCounts.value[row.id] = albumHiddenDirectCounts.value[row.id] ?? 0;
+        }
+        recomputeAllAlbumCounts();
+      }
+      return rows;
+    } catch (error: any) {
+      const errorMessage =
+        typeof error === "string" ? error : error?.message || String(error);
+      throw new Error(errorMessage);
+    }
+  };
+
   const deleteAlbum = async (albumId: string) => {
     await initEventListeners();
     if (settingsStore.values.wallpaperRotationAlbumId == albumId) {
@@ -406,6 +506,7 @@ export const useAlbumStore = defineStore("albums", () => {
       const album = albums.value.find((a) => a.id === albumId);
       if (album) {
         album.parentId = newParentId;
+        recomputeAllAlbumCounts();
       }
     } catch (error: any) {
       const errorMessage =
@@ -489,13 +590,18 @@ export const useAlbumStore = defineStore("albums", () => {
     albumHiddenDirectCounts,
     albumCounts,
     albumHiddenCounts,
+    albumStats,
+    albumHiddenStats,
     loading,
     HIDDEN_ALBUM_ID,
     loadAlbums,
     getChildren,
     getDescendantIds,
+    localFolderAlbumIds,
+    isLocalFolderAlbum,
     getAlbumTreeExcluding,
     createAlbum,
+    createLocalFolderAlbum,
     deleteAlbum,
     renameAlbum,
     moveAlbum,
@@ -506,5 +612,6 @@ export const useAlbumStore = defineStore("albums", () => {
     getAlbumImageIds,
     getAlbumDirectCounts,
     getAlbumCounts,
+    getAlbumStats,
   };
 });

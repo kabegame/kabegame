@@ -1,0 +1,20 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_sort_by_name_provider",
+    "query": {
+        "order": [
+            { "sql": "COALESCE(images.display_name, '') COLLATE NOCASE", "order": "asc", "clear": "all" },
+            { "sql": "images.id", "order": "asc" }
+        ]
+    },
+    "resolve": {
+        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
+            "delegate": {
+                "provider": "kabegame.gallery_desc_pagination_page_comb"
+            },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}
