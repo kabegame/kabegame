@@ -4,8 +4,8 @@ use super::{
     ChildEntry, DelegateTransform, EngineError, ListRef, Provider, ProviderContext, ResolveRef,
 };
 use crate::ast::{
-    DelegateProviderField, DynamicDelegateEntry, DynamicListEntry, DynamicSqlEntry, ListEntry,
-    Namespace, ProviderCall, ProviderDef, ProviderInvocation, Query,
+    ContribQuery, DelegateProviderField, DynamicDelegateEntry, DynamicListEntry, DynamicSqlEntry,
+    ListEntry, Namespace, NumberOrTemplate, ProviderCall, ProviderDef, ProviderInvocation, Query,
     TemplateValue as AstTemplateValue,
 };
 use crate::compose::{
@@ -51,6 +51,46 @@ impl DslProvider {
         tctx.globals = ctx.runtime.globals().clone();
         tctx.capture = captures.to_vec();
         tctx
+    }
+
+    /// 折叠前把 contrib 中本 provider 实例 *自己声明* 的 `${properties.X}` intern 成唯一
+    /// adhoc key, 使每个 provider 的属性引用按实例隔离, 不再共用 `${properties.<原名>}`,
+    /// 从而消除路径上多 provider 同名属性 (如 `bucket`) 在 build 期合并表后写胜的串味。
+    ///
+    /// 只改写承载 SQL 值/bind 的位置 (where / join.on / fields.sql / offset / limit)。
+    /// `join.table` (白名单表名) / `fields|join.as` (别名/ref) / `order.sql` (排序去重键, 几乎不含
+    /// 属性) 保持不动。非 `properties.*` 引用 (composed/global/ref/capture/未声明属性) 原样保留,
+    /// 仍走 build 期解析。
+    fn intern_contrib_properties(
+        &self,
+        q: &ContribQuery,
+        tctx: &TemplateContext,
+        state: &mut ProviderQuery,
+    ) -> ContribQuery {
+        let mut out = q.clone();
+        if let Some(w) = out.where_.as_mut() {
+            w.0 = intern_props_in_sql(&w.0, tctx, state);
+        }
+        if let Some(fields) = out.fields.as_mut() {
+            for f in fields.iter_mut() {
+                f.sql.0 = intern_props_in_sql(&f.sql.0, tctx, state);
+            }
+        }
+        if let Some(joins) = out.join.as_mut() {
+            for j in joins.iter_mut() {
+                if let Some(on) = j.on.as_mut() {
+                    on.0 = intern_props_in_sql(&on.0, tctx, state);
+                }
+            }
+        }
+        if let Some(NumberOrTemplate::Template(t)) = out.offset.as_mut() {
+            t.0 = intern_props_in_sql(&t.0, tctx, state);
+        }
+        if let Some(NumberOrTemplate::Template(t)) = out.limit.as_mut() {
+            t.0 = intern_props_in_sql(&t.0, tctx, state);
+        }
+        // order.sql 保留原样 (排序字段几乎不含属性; 改写会扰动 OrderState 去重键)。
+        out
     }
 
     /// 求值一组 properties (`HashMap<String, AstTemplateValue>`) 在当前作用域。
@@ -366,13 +406,18 @@ impl Provider for DslProvider {
             None => current,
             Some(Query::Contrib(q)) => {
                 let mut state = current;
-                // 把当前 provider 的 properties 写入 adhoc_properties, 让后续 build_sql
-                // 渲染 contrib 中的 ${properties.X} 模板时能取到值。
-                // 注: 路径上多个 DslProvider 各自调 apply_query 时累积写入; 同名 key 后写胜
-                // (符合 fold 累积语义 — 链下游 provider 的 properties 应覆盖上游)。
+                // 把当前 provider 的 properties 写入 adhoc_properties, 作为兼容兜底:
+                // 下面会把本实例 contrib 里 *自己声明* 的 ${properties.X} 折叠期就 intern 成唯一
+                // key, 因此这张表里的同名值通常已无人引用; 仅当某 provider 引用了未声明的祖先属性
+                // (反模式) 时仍维持旧的 build 期解析行为, 避免回归。
                 for (k, v) in &self.properties {
                     state.adhoc_properties.insert(k.clone(), v.clone());
                 }
+                // 折叠期(组合过程中)就把本 provider 实例的 ${properties.X} 渲染/intern 成唯一
+                // adhoc key (${properties.__pq_prop_N}), 防止路径上不同 provider 共用同名属性
+                // (如 name 与 aspect 都用 `bucket`) 在 build 期被合并表后写胜而互相串味。
+                let tctx = self.base_template_context(ctx, &[]);
+                let q_interned = self.intern_contrib_properties(q, &tctx, &mut state);
                 if crate::provider::runtime::dbg_enabled() {
                     eprintln!(
                         "[pathql] DslProvider({}::{}).apply_query Contrib — properties={:?} adhoc_after={:?}",
@@ -383,7 +428,7 @@ impl Provider for DslProvider {
                     );
                 }
                 // fold 失败时静默返回原 state (apply_query 没有 Result 通道)
-                let _ = fold_contrib(&mut state, q);
+                let _ = fold_contrib(&mut state, &q_interned);
                 state
             }
             Some(Query::Delegate(d)) => {
@@ -740,6 +785,125 @@ impl Provider for EmptyDslProvider {
     }
     fn is_empty(&self) -> bool {
         true
+    }
+}
+
+/// 扫描 SQL 模板, 把其中 `${properties.<path>}` (且该属性在 `tctx.properties` 中已声明) intern 成
+/// 唯一 `${properties.__pq_prop_N}` 并把其值登记进 `state.adhoc_properties`; 其余 `${...}` (含
+/// composed/global/ref/capture/未声明属性, 以及 raw-bind 的 `__pq_raw_*`) 原样保留。
+fn intern_props_in_sql(sql: &str, tctx: &TemplateContext, state: &mut ProviderQuery) -> String {
+    if !sql.contains("${") {
+        return sql.to_string();
+    }
+    let bytes = sql.as_bytes();
+    let mut out = String::with_capacity(sql.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            // 模板不可嵌套, 第一个 `}` 即闭合。
+            if let Some(rel) = sql[i + 2..].find('}') {
+                let close = i + 2 + rel;
+                let inner = &sql[i + 2..close];
+                match eval_property_ref(inner, tctx) {
+                    Some(value) => {
+                        let key = format!("__pq_prop_{}", state.adhoc_counter);
+                        state.adhoc_counter += 1;
+                        state.adhoc_properties.insert(key.clone(), value);
+                        out.push_str("${properties.");
+                        out.push_str(&key);
+                        out.push('}');
+                    }
+                    None => out.push_str(&sql[i..=close]),
+                }
+                i = close + 1;
+                continue;
+            }
+        }
+        let ch = sql[i..].chars().next().expect("valid utf8 boundary");
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// 当 `inner` 形如 `properties.<dotted-key>` 且该 key 在 `tctx.properties` 中存在时返回其值;
+/// 否则返回 None (调用方原样保留该 `${...}`)。key 语义与 `evaluate_var` 的 properties 分支一致
+/// (path.join(".") 作为单一键)。
+fn eval_property_ref(inner: &str, tctx: &TemplateContext) -> Option<TemplateValue> {
+    let rest = inner.trim().strip_prefix("properties.")?;
+    if rest.is_empty() || rest.bytes().any(|b| b == b'{' || b == b'}' || b == b':') {
+        return None;
+    }
+    tctx.properties.get(rest).cloned()
+}
+
+#[cfg(test)]
+mod intern_props_tests {
+    use super::*;
+    use crate::ast::SqlExpr;
+    use crate::provider::SqlDialect;
+    use crate::template::eval::{TemplateContext, TemplateValue};
+
+    fn tctx_bucket(v: &str) -> TemplateContext {
+        TemplateContext::new().with_properties(
+            [("bucket".to_string(), TemplateValue::Text(v.into()))]
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    /// 复现并锁定 name+aspect 串味的修复: 两个 provider 都用属性 `bucket` 但值不同,
+    /// 组合后各自的 where 必须 intern 成不同 key 并 bind 各自的值。
+    #[test]
+    fn same_property_name_two_providers_keep_distinct_binds() {
+        let mut state = ProviderQuery::new();
+        state.from = Some(SqlExpr("images".into()));
+
+        let a = intern_props_in_sql(
+            "name_bucket = ${properties.bucket}",
+            &tctx_bucket("english"),
+            &mut state,
+        );
+        state.wheres.push(SqlExpr(a));
+        let b = intern_props_in_sql(
+            "aspect = ${properties.bucket}",
+            &tctx_bucket("landscape"),
+            &mut state,
+        );
+        state.wheres.push(SqlExpr(b));
+
+        assert_ne!(state.wheres[0].0, state.wheres[1].0);
+        assert!(state.wheres[0].0.contains("__pq_prop_0"));
+        assert!(state.wheres[1].0.contains("__pq_prop_1"));
+
+        let (sql, params) = state
+            .build_sql(&TemplateContext::new(), SqlDialect::Sqlite)
+            .unwrap();
+        let texts: Vec<&str> = params
+            .iter()
+            .filter_map(|p| match p {
+                TemplateValue::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.contains(&"english"), "params={params:?} sql={sql}");
+        assert!(texts.contains(&"landscape"), "params={params:?} sql={sql}");
+    }
+
+    /// 非 properties 引用 (global/composed) 与未声明属性原样保留, 不 intern。
+    #[test]
+    fn non_property_refs_are_preserved() {
+        let mut state = ProviderQuery::new();
+        let s = intern_props_in_sql(
+            "x = ${global.y} AND z IN (${composed}) AND w = ${properties.missing}",
+            &TemplateContext::new(),
+            &mut state,
+        );
+        assert_eq!(
+            s,
+            "x = ${global.y} AND z IN (${composed}) AND w = ${properties.missing}"
+        );
+        assert!(state.adhoc_properties.is_empty());
     }
 }
 

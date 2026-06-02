@@ -93,6 +93,7 @@
               :image="previewImage"
               :plugins="plugins"
               @open-task="emit('open-task', $event)"
+              @open-gallery-filter="handleOpenGalleryFilter"
             />
           </div>
         </aside>
@@ -115,7 +116,7 @@ import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
 import ImageNotFound from "./ImageNotFound.vue";
-import ImageDetailContent from "./ImageDetailContent.vue";
+import ImageDetailContent, { type ImageDetailGalleryFilterTarget } from "./ImageDetailContent.vue";
 import VideoControls from "./VideoControls.vue";
 import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX, IS_LINUX } from "../../env";
 import { useUiStore } from "../../stores/ui";
@@ -152,6 +153,7 @@ const detailDrawerOpen = useLocalStorage("kabegame-preview-detail-open", false, 
 const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
   (e: "open-task", taskId: string): void;
+  (e: "open-gallery-filter", target: ImageDetailGalleryFilterTarget): void;
   (e: "preview-navigate", payload: PreviewNavigatePayload): void;
   (e: "preview-detail-toggle", payload: { open: boolean; image: ImageInfo | null }): void;
   (e: "preview-close", payload: { image: ImageInfo | null }): void;
@@ -304,6 +306,13 @@ const toggleDetailDrawer = () => {
       panzoomReset();
     }, 240);
   });
+};
+
+const handleOpenGalleryFilter = (target: ImageDetailGalleryFilterTarget) => {
+  // 不在此处关闭预览：交由处理 open-gallery-filter 的上层在导航完成后再关闭
+  // （仅当为 gallery 内部导航时）。提前关闭会让 previewedId/pvwimgid 的写入与
+  // 上层的 push 导航在同一 tick 竞争，导致 filter 路径被旧 URL 覆盖。
+  emit("open-gallery-filter", target);
 };
 
 const measureContainerSize = () => {

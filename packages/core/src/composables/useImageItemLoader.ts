@@ -16,6 +16,7 @@ type UrlKind = "thumbnail" | "original";
 type UseImageItemLoaderOptions = {
   image: Ref<ImageInfo>;
   gridColumns: Ref<number | undefined>;
+  forceDesktopLayers?: Ref<boolean>;
 };
 
 function normalizeDesktopPath(path: string | undefined): string {
@@ -93,10 +94,11 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
     const thumbnailUrl = toDesktopThumbnailUrl(image.thumbnailPath || image.localPath);
     const originalUrl = toDesktopUrl(image.localPath);
     const cols = options.gridColumns.value ?? 0;
-    // 列数 >= 3：只显示缩略图（失败回退原图）；列数 1、2：双图策略（先缩略图再原图淡入）
-    const thumbnailOnly = cols >= 3;
+    const preferOriginalLayers = cols < 3 || options.forceDesktopLayers?.value === true;
+    // 默认列数 >= 3 只显示缩略图；列数 1、2 或 hover 强制预览时走双图策略（先缩略图再原图淡入）
+    const thumbnailOnly = !preferOriginalLayers;
     const useDesktopLayers =
-      !thumbnailOnly &&
+      preferOriginalLayers &&
       thumbnailUrl !== originalUrl &&
       !!thumbnailUrl &&
       !!originalUrl;
@@ -154,6 +156,8 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
       const image = options.image.value;
       const { primaryUrl, primaryKind, fallbackUrl, thumbnailUrl, originalUrl, useDesktopLayers } =
         urlPlan.value;
+      const previousDisplayUrl = displayUrl.value;
+      const previousDisplayReady = !!previousDisplayUrl && !isImageLoading.value && !isLost.value;
       const cached = getImageStateCache(image.id);
       const fromCache =
         !!(cached &&
@@ -177,13 +181,15 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
 
       currentStage.value = "primary";
       isLost.value = false;
-      thumbnailLoaded.value = false;
+      // hover 强制双图层时，displayUrl 通常仍是同一张缩略图。保留已完成状态，避免分支切换时闪 loading。
+      const displayUrlSet = useDesktopLayers ? thumbnailUrl : primaryUrl;
+      const keepVisibleDisplay = previousDisplayReady && previousDisplayUrl === displayUrlSet;
+      thumbnailLoaded.value = useDesktopLayers && keepVisibleDisplay;
       originalLoaded.value = false;
       thumbnailLoadFailed.value = false;
-      isImageLoading.value = true;
+      isImageLoading.value = !keepVisibleDisplay;
 
       // 桌面双图：用缩略图 URL 作为“有内容”依据，以便先显示缩略图层
-      const displayUrlSet = useDesktopLayers ? thumbnailUrl : primaryUrl;
       displayUrl.value = displayUrlSet;
 
       // localExists=false 表示原图缺失，若当前能展示缩略图则显示红色感叹号
@@ -232,8 +238,11 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
   }
 
   function handleThumbnailError() {
-    if (!urlPlan.value.useDesktopLayers) return;
     thumbnailLoadFailed.value = true;
+    if (!urlPlan.value.useDesktopLayers) {
+      handleImageError();
+      return;
+    }
     isImageLoading.value = false;
     isLost.value = false;
   }

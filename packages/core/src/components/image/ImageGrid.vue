@@ -23,6 +23,7 @@
                 @dblclick="() => handleItemDblClick(item.image, item.index)"
                 @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
                 @toggle-video-play="() => handleToggleVideoPlay(item.image.id)"
+                @hover-video-preview="(active) => handleHoverVideoPreview(item.image.id, active)"
                 @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
             </div>
 
@@ -36,7 +37,8 @@
                 @click="(e) => handleItemClick(image, index, e)"
                 @dblclick="() => handleItemDblClick(image, index)"
                 @contextmenu="(e) => handleItemContextMenu(image, index, e)"
-                @toggle-video-play="() => handleToggleVideoPlay(image.id)" />
+                @toggle-video-play="() => handleToggleVideoPlay(image.id)"
+                @hover-video-preview="(active) => handleHoverVideoPreview(image.id, active)" />
             </transition-group>
           </template>
 
@@ -52,7 +54,8 @@
                 @click="(e) => handleItemClick(entry.image, entry.index, e)"
                 @dblclick="() => handleItemDblClick(entry.image, entry.index)"
                 @contextmenu="(e) => handleItemContextMenu(entry.image, entry.index, e)"
-                @toggle-video-play="() => handleToggleVideoPlay(entry.image.id)" />
+                @toggle-video-play="() => handleToggleVideoPlay(entry.image.id)"
+                @hover-video-preview="(active) => handleHoverVideoPreview(entry.image.id, active)" />
             </div>
           </div>
         </div>
@@ -84,7 +87,8 @@
           @preview-navigate="emit('preview-navigate', $event)"
           @preview-detail-toggle="emit('preview-detail-toggle', $event)"
           @preview-close="emit('preview-close', $event)"
-          @open-task="emit('open-task', $event)" />
+          @open-task="emit('open-task', $event)"
+          @open-gallery-filter="emit('open-gallery-filter', $event)" />
       </div>
     </div>
 
@@ -100,6 +104,7 @@ import ImageItem from "./ImageItem.vue";
 import type { ImageInfo } from "../../types/image";
 import EmptyState from "../common/EmptyState.vue";
 import ImagePreviewDialog from "../common/ImagePreviewDialog.vue";
+import type { ImageDetailGalleryFilterTarget } from "../common/ImageDetailContent.vue";
 import ScrollButtons from "../common/ScrollButtons.vue";
 import { useSettingsStore } from "../../stores/settings";
 import { useModalBack } from "../../composables/useModalBack";
@@ -203,6 +208,7 @@ const emit = defineEmits<{
   // 兼容旧 API（不再由 core 触发，但保留事件名避免上层 TS/模板报错）
   addedToAlbum: [];
   "open-task": [taskId: string];
+  "open-gallery-filter": [target: ImageDetailGalleryFilterTarget];
   "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
   "preview-navigate": [payload: {
     direction: "prev" | "next";
@@ -213,15 +219,37 @@ const emit = defineEmits<{
   }];
   "preview-detail-toggle": [payload: { open: boolean; image: ImageInfo | null }];
   "preview-close": [payload: { image: ImageInfo | null }];
+  "preview-open": [payload: { image: ImageInfo }];
 }>();
 
 const settingsStore = useSettingsStore();
 /** 本栅格实例内的选择集，不跨页面/路由共享 */
 const selectedIds = ref<Set<string>>(new Set());
-/** 当前正在播放的视频 id（同一时间最多一个），点击右上角按钮切换 */
-const playingVideoId = ref<string | null>(null);
+/** 手动播放的视频 id：点击右上角按钮切换 */
+const manualPlayingVideoId = ref<string | null>(null);
+/** hover 预览临时接管播放，离开后恢复手动播放目标 */
+const hoverPlayingVideoId = ref<string | null>(null);
+/** 当前正在播放的视频 id（同一时间最多一个） */
+const playingVideoId = computed(() => hoverPlayingVideoId.value ?? manualPlayingVideoId.value);
 const handleToggleVideoPlay = (imageId: string) => {
-  playingVideoId.value = playingVideoId.value === imageId ? null : imageId;
+  if (manualPlayingVideoId.value === imageId) {
+    manualPlayingVideoId.value = null;
+    if (hoverPlayingVideoId.value === imageId) {
+      hoverPlayingVideoId.value = null;
+    }
+    return;
+  }
+  manualPlayingVideoId.value = imageId;
+  if (hoverPlayingVideoId.value === imageId) {
+    hoverPlayingVideoId.value = null;
+  }
+};
+const handleHoverVideoPreview = (imageId: string, active: boolean) => {
+  if (active) {
+    hoverPlayingVideoId.value = imageId;
+  } else if (hoverPlayingVideoId.value === imageId) {
+    hoverPlayingVideoId.value = null;
+  }
 };
 const modalStackStore = useModalStackStore();
 const uiStore = useUiStore();
@@ -745,7 +773,7 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
         void tryOpenVideo(image.localPath);
         return;
       }
-      previewRef.value?.open(index);
+      openPreview(index);
       return;
     }
     if (action === "open") {
@@ -770,6 +798,13 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
   setSingleSelection(image.id, index);
 };
 
+/** 打开预览并通知上层（用于 URL pvwimgid 双向同步）。index 为 props.images 原始索引。 */
+function openPreview(index: number) {
+  previewRef.value?.open(index);
+  const img = (props.images ?? [])[index];
+  if (img) emit("preview-open", { image: img });
+}
+
 const handleItemDblClick = (image: ImageInfo, index: number) => {
   // 紧凑模式选择中：快速连点会触发 dblclick，避免误开预览（单击已由 handleItemClick 处理）
   if (isCompact.value && androidSelectionMode.value) {
@@ -777,13 +812,13 @@ const handleItemDblClick = (image: ImageInfo, index: number) => {
   }
   if (isCompact.value || IS_WEB) {
     emit("image-dblclick", { action: "preview", image });
-    previewRef.value?.open(index);
+    openPreview(index);
     return;
   }
   const action = settingsStore.values.imageClickAction || "none";
   if (action === "preview") {
     emit("image-dblclick", { action: "preview", image });
-    previewRef.value?.open(index);
+    openPreview(index);
     return;
   }
   if (action === "open") {
@@ -799,7 +834,7 @@ const handleItemContextMenu = (image: ImageInfo, index: number, event: MouseEven
       void tryOpenVideo(image.localPath);
       return;
     }
-    previewRef.value?.open(index);
+    openPreview(index);
     return;
   }
   openContextMenu(image, index, event);
@@ -1146,8 +1181,11 @@ watch(
     const oldIds = previousImageIds.value;
 
     // 列表里的播放目标如果被移除（换页/筛选/删除），重置播放状态，避免悬挂的"已播放但目标已不存在"
-    if (playingVideoId.value && !newIds.has(playingVideoId.value)) {
-      playingVideoId.value = null;
+    if (manualPlayingVideoId.value && !newIds.has(manualPlayingVideoId.value)) {
+      manualPlayingVideoId.value = null;
+    }
+    if (hoverPlayingVideoId.value && !newIds.has(hoverPlayingVideoId.value)) {
+      hoverPlayingVideoId.value = null;
     }
 
     // 判断是否是刷新/换页（新旧列表完全没有交集）还是图片增减
@@ -1336,6 +1374,12 @@ defineExpose({
   getSelectedIds: () => new Set(selectedIds.value),
   clearSelection,
   exitAndroidSelectionMode,
+  /** 按图片 id 打开预览（用于 URL pvwimgid 同步）；id 不在当前列表时为 no-op。 */
+  openPreviewById: (id: string) => {
+    const idx = (props.images ?? []).findIndex((i) => i.id === id);
+    if (idx >= 0) openPreview(idx);
+  },
+  closePreview: () => previewRef.value?.close?.(),
 });
 </script>
 

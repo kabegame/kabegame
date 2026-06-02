@@ -12,12 +12,24 @@
         <div class="detail-fields-body">
           <div v-if="image.displayName" class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailDisplayName') }}</span>
-            <span class="detail-value line-clamp-2" :title="image.displayName">{{ image.displayName }}</span>
+            <button
+              type="button"
+              class="detail-value line-clamp-2 detail-filter-link"
+              :title="image.displayName"
+              @click="emitGalleryFilter(displayNameFilterTarget)"
+            >{{ image.displayName }}</button>
           </div>
           <div class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailSource') }}</span>
             <div class="detail-value-row">
-              <span class="detail-value">{{ getPluginName(image.pluginId) }}</span>
+              <button
+                v-if="pluginFilterTarget"
+                type="button"
+                class="detail-filter-link"
+                :title="t('gallery.filterByPlugin')"
+                @click="emitGalleryFilter(pluginFilterTarget)"
+              >{{ getPluginName(image.pluginId) }}</button>
+              <span v-else class="detail-value">{{ getPluginName(image.pluginId) }}</span>
               <el-button
                 v-if="image.taskId"
                 text
@@ -37,7 +49,23 @@
           </div>
           <div class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailType') }}</span>
-            <span class="detail-value">{{ imageTypeLabel }}</span>
+            <div class="detail-value detail-inline-links">
+              <button
+                type="button"
+                class="detail-filter-link"
+                :title="t('gallery.filterByMediaType')"
+                @click="emitGalleryFilter(mediaKindFilterTarget)"
+              >{{ mediaTypeParts.kind }}</button>
+              <template v-if="mediaTypeParts.format">
+                <span class="detail-link-separator">/</span>
+                <button
+                  type="button"
+                  class="detail-filter-link"
+                  :title="t('gallery.filterByMediaType')"
+                  @click="emitGalleryFilter(mediaFormatFilterTarget)"
+                >{{ mediaTypeParts.format }}</button>
+              </template>
+            </div>
           </div>
           <div v-if="image.url && !isFileUrl(image.url)" class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailUrl') }}</span>
@@ -57,11 +85,48 @@
           </div>
           <div class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailCrawledAt') }}</span>
-            <span class="detail-value">{{ formatDate(image.crawledAt) }}</span>
+            <div v-if="dateParts" class="detail-value detail-inline-links">
+              <button
+                type="button"
+                class="detail-filter-link"
+                :title="t('gallery.filterByTime')"
+                @click="emitGalleryFilter(dateYearFilterTarget)"
+              >{{ dateParts.year }}</button>
+              <span class="detail-link-separator">-</span>
+              <button
+                type="button"
+                class="detail-filter-link"
+                :title="t('gallery.filterByTime')"
+                @click="emitGalleryFilter(dateMonthFilterTarget)"
+              >{{ dateParts.month }}</button>
+              <span class="detail-link-separator">-</span>
+              <button
+                type="button"
+                class="detail-filter-link"
+                :title="t('gallery.filterByTime')"
+                @click="emitGalleryFilter(dateDayFilterTarget)"
+              >{{ dateParts.day }}</button>
+              <span v-if="dateParts.time" class="detail-date-time">{{ dateParts.time }}</span>
+            </div>
+            <span v-else class="detail-value">{{ formatDate(image.crawledAt) }}</span>
           </div>
           <div v-if="image.size != null" class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailSize') }}</span>
-            <span class="detail-value">{{ imageSizeLabel }}</span>
+            <div class="detail-value-row detail-value-row-wrap">
+              <button
+                type="button"
+                class="detail-filter-link"
+                :title="t('gallery.filterBySize')"
+                @click="emitGalleryFilter(sizeFilterTarget)"
+              >{{ imageFileSizeLabel }}</button>
+              <button
+                v-if="aspectFilterTarget"
+                type="button"
+                class="detail-filter-link detail-filter-link-muted"
+                :title="t('gallery.filterByAspect')"
+                @click="emitGalleryFilter(aspectFilterTarget)"
+              >({{ imageDimensionsLabel }})</button>
+            </div>
           </div>
         </div>
       </CollapsibleDrawerPanel>
@@ -117,7 +182,7 @@ import {
   imageMetadataResolverKey,
   type ImageMetadataResolver,
 } from "../../composables/useImageMetadataCache";
-import { displayImageMimeType } from "../../utils/mediaMime";
+import { displayImageMimeType, isVideoMediaType } from "../../utils/mediaMime";
 import { getEjsBridgeCache, setEjsBridgeCache } from "../../cache/ejsBridgeCache";
 
 const { t, locale } = useI18n();
@@ -145,6 +210,14 @@ export type ImageDetailLike = {
   taskId?: string;
 };
 
+export type ImageDetailGalleryFilterTarget =
+  | { type: "search"; search: string }
+  | { type: "plugin"; pluginId: string }
+  | { type: "media-type"; kind: "image" | "video"; format?: string }
+  | { type: "date"; segment: string }
+  | { type: "size"; range: string }
+  | { type: "aspect"; range: string };
+
 interface Props {
   image: ImageDetailLike | null;
   plugins?: Array<Plugin>;
@@ -154,6 +227,7 @@ const props = defineProps<Props>();
 
 const emit = defineEmits<{
   "open-task": [taskId: string];
+  "open-gallery-filter": [target: ImageDetailGalleryFilterTarget];
 }>();
 
 function handleOpenTask() {
@@ -161,9 +235,35 @@ function handleOpenTask() {
   if (tid) emit("open-task", tid);
 }
 
-const imageTypeLabel = computed((): string => {
-  if (!props.image) return "";
-  return displayImageMimeType(props.image.type);
+const displayNameFilterTarget = computed<ImageDetailGalleryFilterTarget | null>(() => {
+  const search = props.image?.displayName?.trim();
+  return search ? { type: "search", search } : null;
+});
+
+const pluginFilterTarget = computed<ImageDetailGalleryFilterTarget | null>(() => {
+  const pluginId = props.image?.pluginId?.trim();
+  return pluginId ? { type: "plugin", pluginId } : null;
+});
+
+const mediaTypeParts = computed((): { kind: "image" | "video"; format: string } => {
+  const raw = displayImageMimeType(props.image?.type).trim().toLowerCase();
+  const kind: "image" | "video" = isVideoMediaType(raw) ? "video" : "image";
+  const slash = raw.indexOf("/");
+  const format = slash >= 0 ? raw.slice(slash + 1).trim() : raw.trim();
+  return {
+    kind,
+    format: !format || format === "image" || format === "video" ? "" : format,
+  };
+});
+
+const mediaKindFilterTarget = computed<ImageDetailGalleryFilterTarget>(() => ({
+  type: "media-type",
+  kind: mediaTypeParts.value.kind,
+}));
+
+const mediaFormatFilterTarget = computed<ImageDetailGalleryFilterTarget | null>(() => {
+  const format = mediaTypeParts.value.format;
+  return format ? { type: "media-type", kind: mediaTypeParts.value.kind, format } : null;
 });
 
 const imageDimensionsLabel = computed((): string => {
@@ -174,12 +274,43 @@ const imageDimensionsLabel = computed((): string => {
   return `${Math.round(width as number)} x ${Math.round(height as number)}`;
 });
 
-const imageSizeLabel = computed((): string => {
+const imageFileSizeLabel = computed((): string => {
   const size = props.image?.size;
   if (size == null) return "";
-  const dimensions = imageDimensionsLabel.value;
-  return dimensions ? `${formatBytes(size)} (${dimensions})` : formatBytes(size);
+  return formatBytes(size);
 });
+
+const dateParts = computed(() => galleryDateParts(props.image?.crawledAt));
+
+const dateYearFilterTarget = computed<ImageDetailGalleryFilterTarget | null>(() => {
+  const parts = dateParts.value;
+  return parts ? { type: "date", segment: parts.year } : null;
+});
+
+const dateMonthFilterTarget = computed<ImageDetailGalleryFilterTarget | null>(() => {
+  const parts = dateParts.value;
+  return parts ? { type: "date", segment: `${parts.year}-${parts.month}` } : null;
+});
+
+const dateDayFilterTarget = computed<ImageDetailGalleryFilterTarget | null>(() => {
+  const parts = dateParts.value;
+  return parts ? { type: "date", segment: `${parts.year}-${parts.month}-${parts.day}` } : null;
+});
+
+const sizeFilterTarget = computed<ImageDetailGalleryFilterTarget>(() => ({
+  type: "size",
+  range: sizeRangeForBytes(props.image?.size),
+}));
+
+const aspectFilterTarget = computed<ImageDetailGalleryFilterTarget | null>(() => {
+  const range = aspectRangeForDimensions(props.image?.width, props.image?.height);
+  return range ? { type: "aspect", range } : null;
+});
+
+function emitGalleryFilter(target: ImageDetailGalleryFilterTarget | null) {
+  if (!target) return;
+  emit("open-gallery-filter", target);
+}
 
 function isRenderableMetadata(v: unknown): boolean {
   if (v == null) return false;
@@ -505,6 +636,50 @@ const formatBytes = (n: number): string => {
   return `${v.toFixed(fixed)} ${units[i]}`;
 };
 
+function galleryDateParts(timestamp?: number): {
+  year: string;
+  month: string;
+  day: string;
+  time: string;
+} | null {
+  if (!Number.isFinite(timestamp) || (timestamp as number) <= 0) return null;
+  const raw = Math.floor(timestamp as number);
+  const seconds = raw > 253_402_300_799 ? Math.floor(raw / 1000) : raw;
+  const d = new Date(seconds * 1000);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = `${d.getUTCFullYear()}`;
+  const m = `${d.getUTCMonth() + 1}`.padStart(2, "0");
+  const day = `${d.getUTCDate()}`.padStart(2, "0");
+  const hh = `${d.getUTCHours()}`.padStart(2, "0");
+  const mm = `${d.getUTCMinutes()}`.padStart(2, "0");
+  const ss = `${d.getUTCSeconds()}`.padStart(2, "0");
+  return { year: y, month: m, day, time: `${hh}:${mm}:${ss}` };
+}
+
+function sizeRangeForBytes(size?: number): string {
+  if (!Number.isFinite(size) || (size as number) <= 0) return "unknown";
+  const n = size as number;
+  if (n < 524_288) return "1B-512KB";
+  if (n < 1_048_576) return "512KB-1MB";
+  if (n < 2_097_152) return "1MB-2MB";
+  if (n < 5_242_880) return "2MB-5MB";
+  if (n < 10_485_760) return "5MB-10MB";
+  if (n < 52_428_800) return "10MB-50MB";
+  return "50MB-";
+}
+
+function aspectRangeForDimensions(width?: number, height?: number): string | null {
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  const w = Math.round(width as number);
+  const h = Math.round(height as number);
+  if (w <= 0 || h <= 0) return null;
+  if (w * 3 > h * 4 && w * 9 <= h * 16) return "landscape-4x3-16x9";
+  if (w * 9 > h * 16 && w * 3 <= h * 7) return "widescreen-16x9-21x9";
+  if (w * 4 >= h * 3 && w * 3 <= h * 4) return "square-3x4-4x3";
+  if (w * 16 >= h * 9 && w * 4 < h * 3) return "portrait-9x16-3x4";
+  return "other";
+}
+
 const formatDate = (timestamp?: number) => {
   if (!Number.isFinite(timestamp) || (timestamp as number) <= 0) return t("gallery.imageDetailInvalidDate");
   const ts = timestamp as number;
@@ -597,6 +772,27 @@ const handleOpenPath = async (path?: string) => {
     min-width: 0;
   }
 
+  .detail-value-row-wrap {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .detail-inline-links {
+    display: inline-flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0;
+  }
+
+  .detail-link-separator,
+  .detail-date-time {
+    color: var(--anime-text-primary);
+  }
+
+  .detail-date-time {
+    margin-left: 8px;
+  }
+
   .detail-open-task-btn {
     flex-shrink: 0;
   }
@@ -616,6 +812,40 @@ const handleOpenPath = async (path?: string) => {
       &:hover {
         color: var(--anime-primary-dark);
       }
+    }
+  }
+
+  .detail-filter-link {
+    min-width: 0;
+    max-width: 100%;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    word-break: break-all;    
+    transition: color 0.3s ease;
+
+    &:hover {
+      color: var(--anime-primary);
+      text-decoration-line: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--anime-primary);
+      outline-offset: 2px;
+      border-radius: 3px;
+    }
+  }
+
+  .detail-filter-link-muted {
+    color: var(--anime-text-secondary);
+
+    &:hover {
+      color: var(--anime-primary);
     }
   }
 

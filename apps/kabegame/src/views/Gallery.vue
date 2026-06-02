@@ -18,7 +18,7 @@
                 @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
                 @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="handleShowLocalImport"
                 @open-collect-menu="handleOpenCollectMenu"
-                @update:filters="(filters) => galleryRouteStore.navigate({ filters, page: 1 })"
+                @update:filters="(filters) => galleryRouteStore.navigate({ filters, page: 1 }, { push: true })"
                 @update:sort="(sort) => galleryRouteStore.navigate({ sort })"
                 @update:pageSize="(ps) => galleryRouteStore.navigate({ page: 1, pageSize: ps })"
                 @update:search="(s) => galleryRouteStore.navigate({ page: 1, search: s })" />
@@ -325,6 +325,20 @@ const handleWallpaperEmptyViewAll = () => {
   void galleryRouteStore.navigate({ filters: {}, page: 1 });
 };
 
+function isDefaultGalleryRoute() {
+  return (
+    !hasActiveGalleryFilters(galleryRouteStore.filters) &&
+    galleryRouteStore.page === 1 &&
+    !galleryRouteStore.search.trim()
+  );
+}
+
+async function resetGalleryRouteAfterLoadError() {
+  if (isDefaultGalleryRoute()) return;
+  ElMessage.warning(t("gallery.galleryPathLoadFailedClearFilters"));
+  await resetGalleryRouteToDefault();
+}
+
 // 桌面：选择收集方式对话框 → 本地
 const onDesktopCollectLocal = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "local", source: "empty_state_dialog" });
@@ -570,13 +584,7 @@ watch(
       await loadTotalImagesCount();
     } catch (error) {
       console.error("加载路径失败:", newPath, error);
-      if (
-        !hasActiveGalleryFilters(galleryRouteStore.filters) &&
-        galleryRouteStore.page === 1
-      ) {
-        return;
-      }
-      await resetGalleryRouteToDefault();
+      await resetGalleryRouteAfterLoadError();
     } finally {
       finishLoading();
     }
@@ -633,13 +641,7 @@ const loadTotalImagesCount = async () => {
     totalImagesCount.value = res?.total ?? 0;
   } catch (error) {
     console.error("获取总图片数失败:", error);
-    if (
-      !hasActiveGalleryFilters(galleryRouteStore.filters) &&
-      galleryRouteStore.page === 1
-    ) {
-      return;
-    }
-    await resetGalleryRouteToDefault();
+    await resetGalleryRouteAfterLoadError();
   }
 };
 

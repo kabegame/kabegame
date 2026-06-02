@@ -10,6 +10,7 @@
       :image="image"
       :plugins="plugins"
       @open-task="emit('open-task', $event)"
+      @open-gallery-filter="emit('open-gallery-filter', $event)"
     />
   </el-dialog>
 </template>
@@ -18,7 +19,10 @@
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "../../composables/useModalBack";
-import ImageDetailContent, { type ImageDetailLike } from "./ImageDetailContent.vue";
+import ImageDetailContent, {
+  type ImageDetailGalleryFilterTarget,
+  type ImageDetailLike,
+} from "./ImageDetailContent.vue";
 import { Plugin } from "@kabegame/core/stores/plugins";
 
 const { t } = useI18n();
@@ -32,6 +36,7 @@ interface Props {
 interface Emits {
   (e: "update:modelValue", value: boolean): void;
   (e: "open-task", taskId: string): void;
+  (e: "open-gallery-filter", target: ImageDetailGalleryFilterTarget): void;
 }
 
 const props = defineProps<Props>();

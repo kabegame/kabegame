@@ -210,7 +210,7 @@ export function createPathRouteStore<TState extends object>(
       }
     };
 
-    /** 跨页跳转：不 mutate local，直接 replace URL，由 URL→state watcher 回灌 */
+    /** 跨页跳转：push 一条新的 history 记录（可前进/后退），不 mutate local，由 URL→state watcher 回灌 */
     const push = async (u: Partial<TState & GlobalRouteState>) => {
       const overrideLocal: Record<string, unknown> = {};
       let overrideHide: boolean | undefined;
@@ -224,13 +224,13 @@ export function createPathRouteStore<TState extends object>(
       const path = pathFor(overrideLocal as Partial<TState>, overrideHide);
       console.log(`[${storeId}] push → name:${config.routeName}`, path);
       if (config.routeName) {
-        await router.replace({
+        await router.push({
           name: config.routeName,
           query: { path },
         });
       } else {
         const cur = router.currentRoute.value;
-        await router.replace({
+        await router.push({
           path: cur.path,
           query: { ...cur.query, path },
         });

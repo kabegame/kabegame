@@ -13,6 +13,7 @@ export type GalleryTimeSort = "asc" | "desc";
 export type GalleryStoredSort = GalleryTimeSort | "";
 
 export type GallerySortField =
+  | "by-id"
   | "by-time"
   | "by-size"
   | "by-name"
@@ -135,6 +136,7 @@ export function normalizeGallerySort(
 
 function isGallerySortField(field: string | undefined): field is GallerySortField {
   return (
+    field === "by-id" ||
     field === "by-time" ||
     field === "by-size" ||
     field === "by-name" ||
@@ -308,24 +310,14 @@ export function buildDimensionCountPath(
   if (!segment || segment === "all") {
     return buildFilterSetCountPath(filters);
   }
-  const rootOnlyDimension = dimensionForIncompletePathSegment(segment);
-  if (rootOnlyDimension) {
-    const base = serializeFilterSet(removeFilterDimension(filters, rootOnlyDimension));
-    return base ? `${base}/${FILTER_COMB}/${segment}` : segment;
-  }
-  const candidate = parseFilter(segment);
-  if (candidate.type === "all") {
-    const dimension = dimensionForPathSegment(segment);
-    if (!dimension) return buildFilterSetCountPath(filters);
-    const base = serializeFilterSet(removeFilterDimension(filters, dimension));
-    return base ? `${base}/${FILTER_COMB}/${segment}` : segment;
-  }
-  const dimension = dimensionForFilter(candidate);
-  if (!dimension) {
-    const base = serializeFilterSet(filters);
-    return base ? `${base}/${FILTER_COMB}/${segment}` : segment;
-  }
-  return buildFilterSetCountPath(setFilterDimension(filters, dimension, candidate));
+  // 本维度自身段必须是最后一段：引擎据此落到该维度 provider 去 list children；
+  // 其余已选维度作前缀（WHERE 可交换，结果不变）。
+  const dimension =
+    dimensionForIncompletePathSegment(segment) ?? dimensionForPathSegment(segment);
+  const base = dimension
+    ? serializeFilterSet(removeFilterDimension(filters, dimension))
+    : serializeFilterSet(filters);
+  return base ? `${base}/${FILTER_COMB}/${segment}` : segment;
 }
 
 function dimensionForIncompletePathSegment(segment: string): GalleryFilterDimension | null {
@@ -592,30 +584,6 @@ function parseDimensionChunk(
   }
 
   return null;
-}
-
-function dimensionForFilter(filter: GalleryFilter): GalleryFilterDimension | null {
-  switch (filter.type) {
-    case "wallpaper-order":
-      return "wallpaperOrder";
-    case "no-album":
-      return "noAlbum";
-    case "plugin":
-      return "plugin";
-    case "media-type":
-      return "mediaType";
-    case "date":
-    case "date-range":
-      return "date";
-    case "name":
-      return "name";
-    case "size":
-      return "size";
-    case "aspect":
-      return "aspect";
-    case "all":
-      return null;
-  }
 }
 
 function splitBodyAndTail(segs: string[]): { body: string[]; tail: string[] } {

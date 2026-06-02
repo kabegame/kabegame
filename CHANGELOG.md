@@ -25,6 +25,8 @@
 - **Local import**: local import now will not use the download window.
 - **Grid Image View**: Grid image now show full content centered in an 1:1 container.
 - **Video play**: Can pause and change speed of video playing.
+- **Image Thumbnail**: Now images that size smaller than 1MB's thumbnail will not generated, images that size bigger than 1MB will be generated a thumbnail that has a size about 500KB.
+- **Image item preview**: Image item load origin images when mouse hover over 200ms. Video start playing after that time too.
 
 ### Removed
 - **Archive**: Archive unzip feature removed from application completely. Including Rhai API and local import unarchiving behavior.

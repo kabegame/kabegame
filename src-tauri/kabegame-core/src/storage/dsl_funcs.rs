@@ -87,14 +87,14 @@ fn register_name_language_functions(conn: &Connection) -> Result<(), rusqlite::E
 fn name_language_bucket(value: &str) -> &'static str {
     for ch in value.chars().filter(|ch| ch.is_alphabetic()) {
         let code = ch as u32;
-        if (0x4E00..=0x9FFF).contains(&code) || (0x3400..=0x4DBF).contains(&code) {
-            return "chinese";
+        if (0xAC00..=0xD7AF).contains(&code) || (0x1100..=0x11FF).contains(&code) {
+            return "korean";
         }
         if (0x3040..=0x30FF).contains(&code) {
             return "japanese";
         }
-        if (0xAC00..=0xD7AF).contains(&code) || (0x1100..=0x11FF).contains(&code) {
-            return "korean";
+        if (0x4E00..=0x9FFF).contains(&code) || (0x3400..=0x4DBF).contains(&code) {
+            return "chinese";
         }
         if ch.is_ascii_alphabetic() {
             return "english";

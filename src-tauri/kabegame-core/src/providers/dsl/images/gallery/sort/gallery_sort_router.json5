@@ -2,6 +2,9 @@
     "namespace": "kabegame",
     "name": "gallery_sort_router",
     "resolve": {
+        "by-id": {
+            "provider": "gallery_sort_by_id_provider"
+        },
         "by-time": {
             "provider": "gallery_sort_by_time_provider"
         },

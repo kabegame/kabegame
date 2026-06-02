@@ -727,6 +727,46 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
 }
 
 #[test]
+fn gallery_sort_by_id_provider_orders_default_ids() {
+    let runtime = build_runtime();
+
+    let by_id = runtime
+        .fetch("images://gallery/sort/by-id/x3x/1")
+        .unwrap();
+    assert_eq!(ids(by_id), ["1", "2", "3"]);
+
+    let by_id_desc = runtime
+        .fetch("images://gallery/sort/by-id/desc/x3x/1")
+        .unwrap();
+    assert_eq!(ids(by_id_desc), ["120", "119", "118"]);
+}
+
+#[test]
+fn gallery_search_sort_paths_allow_empty_results() {
+    let runtime = build_runtime();
+
+    let rows = runtime
+        .fetch("images://gallery/search/display-name/image-1/sort/by-id/x3x/1")
+        .unwrap();
+    assert_eq!(ids(rows), ["1", "10", "11"]);
+
+    let hidden_rows = runtime
+        .fetch("images://gallery/hide/search/display-name/image-1/sort/by-id/x3x/1")
+        .unwrap();
+    assert_eq!(ids(hidden_rows), ["1", "10", "11"]);
+
+    let empty_rows = runtime
+        .fetch("images://gallery/search/display-name/not-found/sort/by-id/x3x/1")
+        .unwrap();
+    assert!(empty_rows.is_empty());
+
+    let hidden_empty_rows = runtime
+        .fetch("images://gallery/hide/search/display-name/not-found/sort/by-set-time/x3x/1")
+        .unwrap();
+    assert!(hidden_empty_rows.is_empty());
+}
+
+#[test]
 fn gallery_aspect_buckets_filter_and_explicit_sort_by_ratio() {
     let runtime = build_runtime();
 
@@ -826,7 +866,9 @@ fn gallery_no_album_filter_excludes_non_hidden_album_memberships() {
     assert!(!combined_ids.contains(&"1".to_string()));
     assert_eq!(
         runtime
-            .count("images://gallery/media-type/image/filter_comb/no-album/filter_comb/sort/by-size")
+            .count(
+                "images://gallery/media-type/image/filter_comb/no-album/filter_comb/sort/by-size"
+            )
             .unwrap(),
         110
     );

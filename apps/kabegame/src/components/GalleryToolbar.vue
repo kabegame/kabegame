@@ -370,7 +370,7 @@ const props = withDefaults(defineProps<Props>(), {
   bigPageEnabled: false,
   filters: () => ({} as GalleryFilterSet),
   filter: () => ({ type: "all" } as GalleryFilter),
-  sort: () => ({ field: "by-time", desc: false } as GallerySort),
+  sort: () => ({ field: "by-id", desc: false } as GallerySort),
   pageSize: 100,
   search: "",
   providerContextPrefix: "",
@@ -440,6 +440,7 @@ const showDesktopFilterRow = ref(false);
 const dimensionPopoverOpen = ref<Partial<Record<GalleryFilterDimension, boolean>>>({});
 
 const sortFieldOptions: GallerySortField[] = [
+  "by-id",
   "by-time",
   "by-size",
   "by-name",
@@ -481,6 +482,8 @@ const isFilterIndicatorActive = computed(
 
 function sortFieldLabel(field: GallerySortField) {
   switch (field) {
+    case "by-id":
+      return t("gallery.sortByDefault");
     case "by-time":
       return t("gallery.sortByTime");
     case "by-size":
@@ -1095,6 +1098,8 @@ async function ensureTimeNodeChildrenLoaded(node: TimeMenuNode) {
 
 const sortOptionLabelAsc = computed(() => {
   switch (sortField.value) {
+    case "by-id":
+      return t("gallery.byDefaultAsc");
     case "by-set-time":
       return t("gallery.bySetTimeAsc");
     case "by-name":
@@ -1109,6 +1114,8 @@ const sortOptionLabelAsc = computed(() => {
 });
 const sortOptionLabelDesc = computed(() => {
   switch (sortField.value) {
+    case "by-id":
+      return t("gallery.byDefaultDesc");
     case "by-set-time":
       return t("gallery.bySetTimeDesc");
     case "by-name":

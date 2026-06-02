@@ -11,7 +11,7 @@
       :name="t(`gallery.${b.labelKey}`)"
       :path="pathForSegment(`aspect/${b.range}`)"
       :depth="1"
-      :hide-when-empty="true"
+      empty-state="disable"
       :active="isSameGalleryFilter({ type: 'aspect', range: b.range }, filter)"
       @select="$emit('select', { type: 'aspect', range: b.range })"
     />

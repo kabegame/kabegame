@@ -39,7 +39,7 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
       const settings = useSettingsStore();
       const stored = IS_WEB ? null : localStorage.getItem(GALLERY_STORAGE_KEY_PATH);
       const parsed = stored ? parseGalleryPath(stored) : null;
-      const defaultSort: GallerySort = { field: "by-time", desc: IS_WEB };
+      const defaultSort: GallerySort = { field: "by-id", desc: IS_WEB };
       return {
         filters: parsed?.filters ?? DEFAULT_GALLERY_FILTER_SET,
         sort: parsed?.sort ?? defaultSort,
@@ -68,5 +68,5 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
 /** 回到默认「全部」第 1 页（用于错误兜底等） */
 export async function resetGalleryRouteToDefault() {
   const store = useGalleryRouteStore();
-  await store.navigate({ filters: {}, page: 1 });
+  await store.navigate({ filters: {}, page: 1, search: "" });
 }

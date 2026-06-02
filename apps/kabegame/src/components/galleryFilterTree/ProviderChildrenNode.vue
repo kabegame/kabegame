@@ -1,17 +1,28 @@
 <template>
-  <template v-if="!shouldHide">
+  <div
+    v-if="!shouldHide"
+    class="provider-tree-node"
+    :class="{
+      'provider-tree-node--sticky': hasStickyHeader,
+      'provider-tree-node--active': active,
+      'provider-tree-node--disabled': isDisabled,
+    }"
+    :style="nodeStyle"
+  >
     <div
-      class="min-h-8 flex items-center pl-[calc(var(--tree-depth)*16px)] rounded-[6px] text-[var(--anime-text-primary)] hover:bg-[var(--el-fill-color-light)]"
+      class="provider-tree-node__row min-h-8 flex items-center pl-[calc(var(--tree-depth)*16px)] rounded-[6px] text-[var(--anime-text-primary)] hover:bg-[var(--el-fill-color-light)]"
       :class="{
         '!bg-[rgba(255,107,157,0.14)] !text-[var(--anime-primary)]': active,
+        'opacity-50 hover:bg-transparent': isDisabled,
       }"
-      :style="{ '--tree-depth': depth }"
       :aria-busy="loading"
+      :aria-disabled="isDisabled"
     >
       <button
         v-if="hasChildren"
         class="w-[26px] h-[26px] flex-none inline-flex items-center justify-center border-0 bg-transparent text-inherit cursor-pointer transition-transform duration-150 ease-[ease]"
-        :class="{ 'rotate-90': isExpanded }"
+        :class="{ 'rotate-90': isExpanded, '!cursor-not-allowed': isDisabled }"
+        :disabled="isDisabled"
         type="button"
         @click.stop="setExpanded(!isExpanded)"
       >
@@ -23,7 +34,8 @@
 
       <button
         class="min-w-0 flex-1 h-[30px] flex items-center gap-1 border-0 bg-transparent text-inherit text-left cursor-pointer"
-        :class="{ 'cursor-default': !selectable }"
+        :class="{ 'cursor-default': !selectable, '!cursor-not-allowed': isDisabled }"
+        :disabled="isDisabled"
         type="button"
         @click="onLabelClick"
       >
@@ -32,10 +44,14 @@
       </button>
     </div>
 
-    <div v-if="hasChildren && childrenMounted" v-show="isExpanded">
+    <div
+      v-if="hasChildren && childrenMounted"
+      v-show="isExpanded"
+      class="provider-tree-node__children"
+    >
       <slot />
     </div>
-  </template>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -60,14 +76,14 @@ const props = withDefaults(defineProps<{
   filter?: (payload: ImagesChangePayload) => boolean;
   selectable?: boolean;
   initialCount?: number;
-  hideWhenEmpty?: boolean;
+  emptyState?: "hide" | "disable" | "show";
 }>(), {
   depth: 0,
   active: false,
   defaultExpanded: false,
   debounce: 3000,
   selectable: true,
-  hideWhenEmpty: false,
+  emptyState: "show",
 });
 
 const emit = defineEmits<{
@@ -86,10 +102,19 @@ let unregisterRefresh: (() => void) | null = null;
 
 const hasChildren = computed(() => Boolean(slots.default));
 const isExpanded = computed(() => localExpanded.value);
+const hasStickyHeader = computed(() => hasChildren.value && isExpanded.value);
 const displayCount = computed(() => (count.value == null ? "..." : String(count.value)));
-const shouldHide = computed(() => props.hideWhenEmpty && count.value !== null && count.value === 0);
+const isEmpty = computed(() => count.value !== null && count.value === 0);
+const shouldHide = computed(() => props.emptyState === "hide" && isEmpty.value);
+const isDisabled = computed(() => props.emptyState === "disable" && isEmpty.value);
+const nodeStyle = computed<Record<string, string | number>>(() => ({
+  "--tree-depth": props.depth,
+  "--tree-sticky-top": `${props.depth * 32}px`,
+  "--tree-sticky-z-index": String(100 - props.depth),
+}));
 
 function setExpanded(value: boolean) {
+  if (isDisabled.value) return;
   if (localExpanded.value === value && (!value || childrenMounted.value)) return;
   localExpanded.value = value;
   if (value) childrenMounted.value = true;
@@ -107,6 +132,7 @@ function syncAutoExpand() {
 }
 
 function onLabelClick() {
+  if (isDisabled.value) return;
   if (props.selectable) {
     emit("select");
     return;
@@ -175,3 +201,30 @@ onBeforeUnmount(() => {
 
 defineExpose({ refresh });
 </script>
+
+<style scoped lang="scss">
+.provider-tree-node {
+  position: relative;
+}
+
+.provider-tree-node__row {
+  position: relative;
+  z-index: 1;
+}
+
+.provider-tree-node--sticky > .provider-tree-node__row {
+  position: sticky;
+  // top: 30px;
+  top: calc(var(--provider-tree-sticky-offset, 0px) + var(--tree-sticky-top, 0px));
+  z-index: var(--tree-sticky-z-index);
+  background: var(--el-bg-color-overlay, rgba(255, 255, 255, 0.96));
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 0 rgba(255, 107, 157, 0.1);
+}
+
+.provider-tree-node__children {
+  position: relative;
+  z-index: 0;
+}
+</style>
+ 

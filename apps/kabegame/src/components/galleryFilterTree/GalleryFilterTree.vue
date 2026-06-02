@@ -101,15 +101,24 @@ defineExpose({ refresh });
 <style scoped lang="scss">
 .gallery-filter-tree {
   width: 320px;
-  height: min(60vh, 420px);
+  --gallery-filter-tree-max-height: min(60vh, 420px);
+  --provider-tree-row-height: 32px;
+  --provider-tree-sticky-offset: 0px;
+  max-height: var(--gallery-filter-tree-max-height);
   min-height: 0;
   background: transparent;
+  display: flex;
+  flex-direction: column;
 }
 
 .provider-tree {
-  height: 100%;
+  flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
-  padding: 6px;
+  max-height: var(--gallery-filter-tree-max-height);
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--provider-tree-sticky-offset);
+  scrollbar-gutter: stable;
 }
 </style>

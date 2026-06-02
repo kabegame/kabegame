@@ -559,7 +559,7 @@ fn run_organize(
             return Ok(());
         }
 
-        let batch = storage.get_organize_batch(page, 1000)?;
+        let batch = storage.get_organize_batch(page, 10)?;
         if batch.is_empty() {
             break;
         }

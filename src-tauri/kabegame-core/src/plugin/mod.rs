@@ -20,8 +20,8 @@ use uuid::Uuid;
 use zip::ZipArchive;
 
 use pathql_rs::{
-    ContribQuery, Json5Loader, List, Loader, Namespace, ProviderDef, Query, SimpleName, Source,
-    SqlExpr,
+    ContribQuery, InvokeByName, Json5Loader, List, Loader, Namespace, ProviderDef,
+    ProviderInvocation, ProviderName, Query, Resolve, SimpleName, Source, SqlExpr,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2169,11 +2169,26 @@ fn normalize_plugin_provider_def(
             ))
         }
     }
+    ensure_plugin_provider_filter_comb_resolve(&mut def);
     Ok(def)
 }
 
+fn ensure_plugin_provider_filter_comb_resolve(def: &mut ProviderDef) {
+    let resolve = def.resolve.get_or_insert_with(Resolve::default);
+    resolve
+        .0
+        .entry("filter_comb".to_string())
+        .or_insert_with(|| {
+            ProviderInvocation::ByName(InvokeByName {
+                provider: ProviderName("kabegame.gallery_filter_comb".to_string()),
+                properties: None,
+                meta: None,
+            })
+        });
+}
+
 fn default_plugin_entry_provider(plugin_id: &str) -> ProviderDef {
-    ProviderDef {
+    let mut def = ProviderDef {
         schema: None,
         namespace: Some(Namespace(format!("plugins.{}", plugin_id))),
         name: SimpleName("entry_provider".to_string()),
@@ -2185,7 +2200,9 @@ fn default_plugin_entry_provider(plugin_id: &str) -> ProviderDef {
         list: Some(List::default()),
         resolve: None,
         note: None,
-    }
+    };
+    ensure_plugin_provider_filter_comb_resolve(&mut def);
+    def
 }
 
 fn parse_plugin_provider_entries(

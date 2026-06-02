@@ -1,16 +1,10 @@
 {
     "namespace": "kabegame",
-    "name": "name_language_bucket_provider",
-    "properties": {
-        "bucket": { "type": "string", "default": "other", "optional": false }
-    },
+    "name": "gallery_sort_by_id_provider",
     "query": {
-        "where": "name_language_bucket(COALESCE(images.display_name, '')) = ${properties.bucket}"
+        "order": [{ "sql": "images.id", "order": "asc", "clear": "all" }]
     },
     "resolve": {
-        "filter_comb": {
-            "provider": "gallery_filter_comb"
-        },
         "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
             "delegate": {
                 "provider": "kabegame.gallery_desc_pagination_page_comb"

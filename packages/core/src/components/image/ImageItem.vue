@@ -7,7 +7,8 @@
     'image-item-hidden': image.isHidden,
     'image-item-fill': fillBox,
     'image-item-horizontal': horizontal,
-  }" :style="rootStyle" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
+  }" :style="rootStyle" :data-id="image.id" @mouseenter="handleMouseEnter" @mouseleave="handleMouseLeave"
+    @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
     <!-- 本地文件缺失标识：不阻挡点击/选择/右键 -->
     <el-tooltip v-if="originalMissing && !isLost" content="这张图片找不到了" placement="top" :show-after="300">
       <div class="missing-file-badge">
@@ -18,10 +19,10 @@
     </el-tooltip>
     <!-- 视频标识：右上角播放/暂停切换按钮（可控视频，video 元素） -->
     <div v-if="isControllableVideo" class="video-play-badge video-play-badge-interactive"
-      role="button" :aria-label="videoPlaying ? '暂停' : '播放'"
+      role="button" :aria-label="videoShouldPlay ? '暂停' : '播放'"
       @click.stop="handleToggleVideoPlay" @dblclick.stop @contextmenu.stop.prevent>
       <el-icon :size="14">
-        <VideoPause v-if="videoPlaying" />
+        <VideoPause v-if="videoShouldPlay" />
         <VideoPlay v-else />
       </el-icon>
     </div>
@@ -60,12 +61,12 @@
             </template>
           </el-skeleton>
         </div>
-        <!-- 桌面双图：先缩略图，原图加载后淡入 -->
-        <template v-if="!isCompact && useDesktopLayers && !isVideo">
+        <!-- 桌面双图外壳：保持缩略图 DOM 稳定，hover 时仅新增原图层并淡入 -->
+        <template v-if="useDesktopLayerShell">
           <img v-if="!thumbnailLoadFailed" :src="thumbnailUrl" loading="lazy" decoding="async"
             class="thumbnail thumbnail-layer" :alt="image.id" draggable="false" @load="handleThumbnailLoad"
             @error="handleThumbnailError" />
-          <img :src="originalUrl" loading="lazy" decoding="async"
+          <img v-if="useDesktopLayers" :src="originalUrl" loading="lazy" decoding="async"
             :class="['thumbnail', 'original-layer', { 'original-layer-visible': originalLoaded }]" :alt="image.id"
             draggable="false" @load="handleOriginalLoad" @error="handleOriginalError" />
         </template>
@@ -125,6 +126,7 @@ const emit = defineEmits<{
   enterAnimationEnd: []; // 入场动画结束
   leaveAnimationEnd: []; // 退场动画结束
   toggleVideoPlay: []; // 用户点击右上角播放/暂停按钮，由上层决定是否切换播放状态
+  hoverVideoPreview: [active: boolean]; // 鼠标悬停视频预览播放状态
 }>();
 
 const imageRef = toRef(props, "image");
@@ -132,6 +134,7 @@ const gridColumnsRef = toRef(props, "gridColumns");
 
 const rootEl = ref<HTMLElement | null>(null);
 const { isCompact } = storeToRefs(useUiStore());
+const hoverOriginalPreviewActive = ref(false);
 
 // 虚拟滚动下挂载时已有 isEntering，若直接绑 class 浏览器可能不触发 CSS 动画；延迟一帧再加 class 以触发入场动画
 const enteringClassActive = ref(false);
@@ -172,6 +175,7 @@ const {
 } = useImageItemLoader({
   image: imageRef,
   gridColumns: gridColumnsRef,
+  forceDesktopLayers: hoverOriginalPreviewActive,
 });
 
 // Android 长按检测
@@ -254,6 +258,14 @@ const rootStyle = computed<Record<string, string> | undefined>(() => {
   return aspectRatioStyle.value as Record<string, string>;
 });
 const isVideo = computed(() => isVideoMediaType(props.image.type));
+const useDesktopLayerShell = computed(() =>
+  !isCompact.value &&
+  !isVideo.value &&
+  !!thumbnailUrl.value &&
+  !!originalUrl.value &&
+  thumbnailUrl.value !== originalUrl.value &&
+  (!thumbnailLoadFailed.value || useDesktopLayers.value)
+);
 
 function pathFromUrlLike(value: string | undefined): string {
   const raw = (value || "").trim();
@@ -288,12 +300,79 @@ const isVideoRenderedAsImage = computed(() => isVideo.value && isGifVideoPreview
 const isControllableVideo = computed(() => isVideo.value && !isVideoRenderedAsImage.value);
 
 const videoEl = ref<HTMLVideoElement | null>(null);
+const hoverVideoPreviewActive = ref(false);
+const videoShouldPlay = computed(() => props.videoPlaying || hoverVideoPreviewActive.value);
+const HOVER_PREVIEW_DELAY_MS = 200;
+let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+
+const canHoverOriginalPreview = computed(() =>
+  !isCompact.value &&
+  !isVideo.value &&
+  !useDesktopLayers.value &&
+  !!thumbnailUrl.value &&
+  !!originalUrl.value &&
+  thumbnailUrl.value !== originalUrl.value &&
+  !originalMissing.value
+);
+
+const clearHoverPreviewTimer = () => {
+  if (hoverPreviewTimer) {
+    clearTimeout(hoverPreviewTimer);
+    hoverPreviewTimer = null;
+  }
+};
+
+const stopHoverPreview = () => {
+  clearHoverPreviewTimer();
+  if (hoverVideoPreviewActive.value) {
+    hoverVideoPreviewActive.value = false;
+    emit("hoverVideoPreview", false);
+  }
+  hoverOriginalPreviewActive.value = false;
+};
+
+const handleMouseEnter = () => {
+  if (isCompact.value) return;
+  clearHoverPreviewTimer();
+  hoverPreviewTimer = setTimeout(() => {
+    hoverPreviewTimer = null;
+    if (isCompact.value) return;
+    if (isControllableVideo.value) {
+      hoverVideoPreviewActive.value = true;
+      emit("hoverVideoPreview", true);
+      return;
+    }
+    if (canHoverOriginalPreview.value) {
+      hoverOriginalPreviewActive.value = true;
+    }
+  }, HOVER_PREVIEW_DELAY_MS);
+};
+
+const handleMouseLeave = () => {
+  stopHoverPreview();
+};
+
+watch(
+  [
+    () => props.image.id,
+    () => props.image.localPath,
+    () => props.image.thumbnailPath,
+    () => props.image.type,
+  ],
+  () => {
+    stopHoverPreview();
+  }
+);
+
+watch(isCompact, (compact) => {
+  if (compact) stopHoverPreview();
+});
 
 // 同步 videoPlaying 到真实 video 元素：true → play()；false → pause() 并复位到起点
 watchEffect(() => {
   const el = videoEl.value;
   if (!el || !isControllableVideo.value) return;
-  if (props.videoPlaying) {
+  if (videoShouldPlay.value) {
     void el.play().catch(() => { /* 忽略浏览器拦截/卸载竞态 */ });
   } else {
     el.pause();
@@ -301,7 +380,13 @@ watchEffect(() => {
   }
 });
 
+onUnmounted(stopHoverPreview);
+
 const handleToggleVideoPlay = () => {
+  if (hoverVideoPreviewActive.value) {
+    hoverVideoPreviewActive.value = false;
+    emit("hoverVideoPreview", false);
+  }
   emit("toggleVideoPlay");
 };
 
