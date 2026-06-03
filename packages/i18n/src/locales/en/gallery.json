@@ -1,6 +1,11 @@
 {
   "imageDetailTitle": "Image Details",
   "toggleDetailPanel": "Details panel",
+  "zoomIn": "Zoom in",
+  "zoomOut": "Zoom out",
+  "zoomRatio": "Zoom ratio",
+  "fullscreen": "Fullscreen",
+  "exitFullscreen": "Exit fullscreen",
   "imageDetailDisplayName": "Name:",
   "imageDetailDescription": "Description:",
   "imageDetailPluginInfoToggle": "Show or hide plugin description",

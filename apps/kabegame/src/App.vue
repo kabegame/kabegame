@@ -45,6 +45,11 @@
     />
     <!-- 全局唯一的快捷设置抽屉（桌面与安卓均挂载，安卓用 useModalBack 处理返回键） -->
     <QuickSettingsDrawer />
+    <!-- 桌面端自动更新：更新日志弹窗 + 下载进度弹窗（全局唯一，常驻以便下载中刷新存活） -->
+    <template v-if="!uiStore.isCompact && !IS_WEB">
+      <UpdateDialog />
+      <DownloadProgressDialog />
+    </template>
     <!-- 全局唯一的帮助抽屉（按页面展示帮助内容） -->
     <HelpDrawer />
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
@@ -56,6 +61,7 @@
     <MissedRunsDialog
       v-model="missedRunsVisible"
       :items="missedRunItems"
+      :system-sleep="wasSystemSleep"
       @run-now="handleRunMissedNow"
       @dismiss="handleDismissMissed"
     />
@@ -63,9 +69,13 @@
     <template v-if="!uiStore.isCompact">
       <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed, 'bg-transparent': (IS_WINDOWS || IS_MACOS) && !IS_WEB, 'bg-white': !IS_WINDOWS && !IS_MACOS || IS_WEB }" :width="isCollapsed ? '64px' : '200px'">
         <div class="sidebar-header">
-          <img :src="appLogoUrl" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
+          <span class="app-logo-wrap">
+            <img :src="appLogoUrl" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
+            <UpdateButton v-if="isCollapsed" :collapsed="true" />
+          </span>
           <div v-if="!isCollapsed" class="sidebar-title-section">
             <h1>Kabegame</h1>
+            <UpdateButton :collapsed="false" />
           </div>
         </div>
         <div class="sidebar-menu-wrapper">
@@ -114,9 +124,6 @@
             </el-menu-item>
           </el-menu>
         </div>
-        <div class="w-full pos-absolute bottom-0">
-          <KamechanMascot />
-        </div>
       </el-aside>
     </template>
     <el-main class="app-main">
@@ -142,6 +149,7 @@
       </router-link>
       
     </nav>
+    <KamechanMascot />
   </el-container>
   </el-config-provider>
 </template>
@@ -188,17 +196,21 @@ import type { ImageInfo } from "@kabegame/core/types/image";
 import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
 import { useFailedImagesStore } from "./stores/failedImages";
-import { useCrawlerStore } from "./stores/crawler";
 import { useAlbumStore } from "./stores/albums";
 import { useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
 import { useThrottleFn } from "@vueuse/core";
 import { useApp } from "@/stores/app";
+import { useMissedRunsWatch } from "./composables/useMissedRunsWatch";
+import * as updaterService from "@/services/updater";
+import UpdateButton from "./components/updater/UpdateButton.vue";
+import UpdateDialog from "./components/updater/UpdateDialog.vue";
+import DownloadProgressDialog from "./components/updater/DownloadProgressDialog.vue";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
-const { t, locale } = useI18n();
+const { locale } = useI18n();
 
 /** Element Plus 组件（含 DatePicker 面板文案）与 vue-i18n 语言对齐 */
 const elementPlusLocale = computed(() => {
@@ -265,7 +277,6 @@ const { visible: crawlerDrawerVisible, initialConfig: crawlerDrawerInitialConfig
 
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
-const crawlerStore = useCrawlerStore();
 const albumStore = useAlbumStore();
 
 const router = useRouter();
@@ -285,8 +296,15 @@ const appStore = useApp();
 if (IS_WEB) {
   watch(() => appStore.isSuper, () => { routerViewKey.value += 1; });
 }
-const missedRunsVisible = ref(false);
-const missedRunItems = ref<import("@kabegame/core/stores/crawler").MissedRunItem[]>([]);
+// 漏跑任务检测（启动检查 + 休眠/恢复后自动重查），逻辑集中在 composable 内
+const {
+  missedRunItems,
+  missedRunsVisible,
+  wasSystemSleep,
+  handleRunMissedNow,
+  handleDismissMissed,
+  init: initMissedRunsWatch,
+} = useMissedRunsWatch();
 
 // 窗口事件监听
 const { init: initWindowEvents } = useWindowEvents();
@@ -488,7 +506,7 @@ onMounted(async () => {
     console.error("加载已安装插件列表失败:", e);
   }
   await failedImagesStore.initListeners();
-  await checkMissedRunsAtStartup();
+  await initMissedRunsWatch();
 
   // 初始化各个 composables
   await initWindowEvents();
@@ -577,46 +595,12 @@ onMounted(async () => {
     };
   }
   
+  // 桌面端应用自动更新：hydrate 后端状态 + 订阅事件（调度在后端；web / android 内部 noop）
+  void updaterService.init();
+
   // 通知后端已准备好接收事件
   emit('app-ready');
 });
-
-const checkMissedRunsAtStartup = async () => {
-  if (IS_WEB) return; // web mode: backend auto-runs missed configs on startup
-  try {
-    await crawlerStore.runConfigsReady;
-    const items = await crawlerStore.getMissedRuns();
-    if (!items.length) return;
-    missedRunItems.value = items;
-    missedRunsVisible.value = true;
-  } catch (error) {
-    console.warn("检查漏跑任务失败:", error);
-  }
-};
-
-const handleRunMissedNow = async () => {
-  const ids = missedRunItems.value.map((item) => item.configId);
-  if (!ids.length) {
-    missedRunsVisible.value = false;
-    return;
-  }
-  await crawlerStore.runMissedConfigs(ids);
-  missedRunsVisible.value = false;
-  missedRunItems.value = [];
-  ElMessage.success(t("autoConfig.missedRuns.runNowSuccess"));
-};
-
-const handleDismissMissed = async () => {
-  const ids = missedRunItems.value.map((item) => item.configId);
-  if (!ids.length) {
-    missedRunsVisible.value = false;
-    return;
-  }
-  await crawlerStore.dismissMissedConfigs(ids);
-  missedRunsVisible.value = false;
-  missedRunItems.value = [];
-  ElMessage.info(t("autoConfig.missedRuns.dismissed"));
-};
 
 onUnmounted(() => {
   // 清理设置变更事件监听器
@@ -628,6 +612,8 @@ onUnmounted(() => {
     removeF11Listener();
     removeF11Listener = null;
   }
+  // 注销更新事件订阅
+  updaterService.dispose();
 });
 
 </script>
@@ -786,6 +772,12 @@ body,
     min-height: 80px;
     justify-content: flex-start;
     transition: padding 0.3s ease;
+
+    .app-logo-wrap {
+      position: relative;
+      display: inline-flex;
+      flex-shrink: 0;
+    }
 
     .app-logo {
       width: 56px;

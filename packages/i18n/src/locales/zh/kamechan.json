@@ -1,0 +1,9 @@
+{
+  "history": "消息历史",
+  "minimize": "最小化",
+  "disable": "关闭 Kamechan",
+  "historyTitle": "消息历史",
+  "historyEmpty": "还没有消息",
+  "historyClear": "清空",
+  "moreMessages": "还有 {count} 条消息"
+}

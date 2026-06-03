@@ -7,7 +7,7 @@
     :before-close="handleBeforeClose"
   >
     <div class="missed-runs-desc">
-      {{ $t("autoConfig.missedRuns.desc") }}
+      {{ systemSleep ? $t("autoConfig.missedRuns.sleepDesc") : $t("autoConfig.missedRuns.desc") }}
     </div>
     <div class="missed-runs-list">
       <div v-for="item in items" :key="item.configId" class="missed-runs-item">
@@ -35,6 +35,8 @@ import type { MissedRunItem } from "@kabegame/core/stores/crawler";
 const props = defineProps<{
   modelValue: boolean;
   items: MissedRunItem[];
+  /** 触发来源为「系统休眠期间漏跑」时为 true，用于切换提示文案 */
+  systemSleep?: boolean;
 }>();
 
 const emit = defineEmits<{

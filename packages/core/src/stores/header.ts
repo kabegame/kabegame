@@ -47,6 +47,8 @@ export enum HeaderFeatureId {
   ToggleShowHidden = "toggleShowHidden",
   /** 画廊页：显示/隐藏已有非隐藏画册归属的图片 */
   ToggleShowAlbumImages = "toggleShowAlbumImages",
+  /** 设置页：手动检查应用更新（仅桌面） */
+  CheckUpdate = "checkUpdate",
 }
 
 export interface HeaderFeatureDef {

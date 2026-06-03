@@ -1,7 +1,7 @@
 <template>
   <!-- Android 全屏预览：使用 photoswipe-vue 组件，关闭按钮用组件自带的 -->
   <PhotoSwipe v-if="uiStore.isCompact" ref="pswpRef" v-model:open="previewVisible" v-model:index="previewIndex"
-    :data-source="pswpDataSource" :loop="true" :zIndex="2000" :close-on-vertical-drag="true"
+    :data-source="pswpDataSource" :loop="true" :zIndex="previewFullscreenZIndex" :close-on-vertical-drag="true"
     :on-vertical-drag="handlePswpVerticalDrag" :on-before-close="handlePswpBeforeClose" @change="handlePswpChange"
     @close="handlePswpClose" @ui-visible-change="handlePswpUiVisibleChange">
     <!-- 安卓：显示名称用 fixed 定位，与叉号同 top/高度，限制宽度并换行 -->
@@ -16,7 +16,7 @@
     <!-- visible 为true，与ui一起显隐，ui显隐由 photoswipe-vue 组件自动管理 -->
     <ActionRenderer v-if="actions.length > 0" visible :position="previewContextMenuPosition" :actions="actions"
       :context="previewActionContext" mode="actionsheet" :teleport="false" :no-transition="true"
-      @close="handlePswpActionClose" @command="handlePreviewActionCommand" :zIndex="2100" :modal-back="false" />
+      @close="handlePswpActionClose" @command="handlePreviewActionCommand" :zIndex="previewControlZIndex" :modal-back="false" />
     <!-- 上划删除区域通过 overlay slot 放入 .pswp 根级 -->
     <template #overlay>
       <Transition name="swipe-delete-zone">
@@ -38,12 +38,13 @@
   <!-- 桌面端 Dialog 预览 -->
   <template v-else>
     <el-dialog v-model="previewVisible" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
-      class="image-preview-dialog" :show-close="true" :lock-scroll="true" @close="closePreview">
+      class="image-preview-dialog" :show-close="true" :lock-scroll="true"
+      :z-index="isAppFullscreen ? previewFullscreenZIndex : undefined" @close="closePreview">
       <div v-if="previewVisible" class="preview-desktop-body">
-        <div ref="previewContainerRef" class="preview-container"
+        <div ref="previewContainerRef" class="preview-container" :class="{ 'is-app-fullscreen': isAppFullscreen }"
           @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
           @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePreviewWheel">
-          <button type="button" class="preview-detail-toggle"
+          <button v-if="!isAppFullscreen" type="button" class="preview-detail-toggle"
             :class="{ visible: previewHoverSide === 'right' || detailDrawerOpen }"
             :title="t('gallery.toggleDetailPanel')" :aria-expanded="detailDrawerOpen" aria-label="toggle detail panel"
             @click.stop="toggleDetailDrawer">
@@ -51,6 +52,12 @@
               aria-hidden="true">
               <path fill="currentColor"
                 d="M176 752a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h672a16 16 0 0 0 16-16v-64a16 16 0 0 0-16-16H176zm240-192a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432a16 16 0 0 0 16-16V576a16 16 0 0 0-16-16H416zM299.264 395.392a16 16 0 0 0-22.592.064L171.264 501.376a16 16 0 0 0 .064 22.592l105.408 104.896a16 16 0 0 0 27.264-11.328V406.784a16 16 0 0 0-4.736-11.392zM416 368a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432A16 16 0 0 0 864 448V384a16 16 0 0 0-16-16H416zm-240-192A16 16 0 0 0 160 192v64c0 8.832 7.168 16 16 16h672A16 16 0 0 0 864 256V192a16 16 0 0 0-16-16H176z" />
+            </svg>
+          </button>
+          <button v-if="isAppFullscreen" type="button" class="preview-fullscreen-close"
+            :aria-label="t('gallery.exitFullscreen')" @click.stop="toggleAppFullscreen">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.3 19.7 2.89 18.29 9.17 12 2.89 5.71 4.3 4.3l6.29 6.29 6.3-6.29z" />
             </svg>
           </button>
           <div v-if="props.images.length > 1" class="preview-nav-zone left"
@@ -73,11 +80,51 @@
             <img ref="previewImageRef" :src="previewImageUrl" class="preview-image" alt="预览图片"
               @load="handlePreviewImageLoad" @error="handlePreviewImageError" @dragstart.prevent />
           </div>
-          <div v-else-if="previewImageUrl && isPreviewVideo" class="preview-video-wrapper">
+          <PreviewControlBar
+            v-if="previewImageUrl && !isPreviewVideo"
+            :is-fullscreen="isAppFullscreen"
+            :keep-visible="zoomSliderDragging"
+          >
+            <button class="control-btn" type="button" :aria-label="t('gallery.zoomOut')" @click="panzoomZoomOut">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 11h14v2H5z" />
+              </svg>
+            </button>
+            <button class="control-btn" type="button" :aria-label="t('gallery.zoomIn')" @click="panzoomZoomIn">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M19 11h-6V5h-2v6H5v2h6v6h2v-6h6z" />
+              </svg>
+            </button>
+            <div class="zoom-progress-wrap">
+              <PreviewRangeSlider
+                :model-value="zoomSliderValue"
+                :min="100"
+                :max="1000"
+                :step="1"
+                :aria-label="t('gallery.zoomRatio')"
+                @drag-start="handleZoomSliderDragStart"
+                @update:model-value="handleZoomSliderInput"
+                @change="handleZoomSliderCommit"
+              />
+              <span class="zoom-progress-text">{{ zoomPercentText }}</span>
+            </div>
+            <button class="control-btn" type="button"
+              :aria-label="isAppFullscreen ? t('gallery.exitFullscreen') : t('gallery.fullscreen')"
+              @click="toggleAppFullscreen">
+              <svg v-if="!isAppFullscreen" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 14H5v5h5v-2H7v-3zm0-4h2V7h3V5H5v5zm10 7h-3v2h5v-5h-2v3zm0-12v3h2V5h-5v2h3z" />
+              </svg>
+              <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm8 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z" />
+              </svg>
+            </button>
+          </PreviewControlBar>
+          <div v-if="previewImageUrl && isPreviewVideo" class="preview-video-wrapper">
             <video ref="previewVideoRef" :src="previewImageUrl" class="preview-video" :loop="!IS_LINUX" :autoplay="!IS_LINUX" poster="" preload="auto"
               playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback=""
               @dragstart.prevent />
-            <VideoControls :video="previewVideoRef" :show-play-pause="true" />
+            <VideoControls :video="previewVideoRef" :show-play-pause="true" :is-fullscreen="isAppFullscreen"
+              @toggle-fullscreen="toggleAppFullscreen" />
           </div>
           <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
             <ImageNotFound />
@@ -102,7 +149,7 @@
     <!-- 桌面端预览内右键：与单张图片相同的上下文菜单（z-index 高于 el-dialog 以免被遮） -->
     <ActionRenderer v-if="actions.length > 0" :visible="previewContextMenuVisible"
       :position="previewContextMenuPosition" :actions="actions" :context="previewActionContext" mode="contextmenu"
-      :z-index="5000" @close="closePreviewContextMenu" @command="handlePreviewActionCommand" />
+      :z-index="previewControlZIndex" @close="closePreviewContextMenu" @command="handlePreviewActionCommand" />
   </template>
 
 </template>
@@ -110,13 +157,15 @@
 <script setup lang="ts">
 import type { Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
 import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
 import ImageNotFound from "./ImageNotFound.vue";
 import ImageDetailContent, { type ImageDetailGalleryFilterTarget } from "./ImageDetailContent.vue";
+import PreviewControlBar from "./PreviewControlBar.vue";
+import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 import VideoControls from "./VideoControls.vue";
 import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX, IS_LINUX } from "../../env";
 import { useUiStore } from "../../stores/ui";
@@ -133,6 +182,9 @@ import { Plugin } from "@kabegame/core/stores/plugins";
 
 const { t } = useI18n();
 const uiStore = useUiStore();
+const previewFullscreenZIndex = 6000;
+const previewOverlayZIndex = 6100;
+const previewControlZIndex = 6200;
 
 const props = withDefaults(defineProps<{
   images: ImageInfo[];
@@ -192,6 +244,7 @@ const previewImage = computed<ImageInfo | null>(() => {
 const isPreviewVideo = computed(() => isVideoMediaType(previewImage.value?.type));
 const previewHoverSide = ref<"left" | "right" | null>(null);
 const previewNotFound = ref(false);
+const isAppFullscreen = ref(false);
 
 const previewContainerRef = ref<HTMLElement | null>(null);
 const previewImageRef = ref<HTMLImageElement | null>(null);
@@ -202,6 +255,10 @@ let panzoomWrapperRef!: Ref<HTMLElement | null>;
 let handlePanzoomWheel!: (event: WheelEvent) => void;
 let panzoomReset!: () => void;
 let panzoomDestroy!: () => void;
+let panzoomZoomIn!: () => void;
+let panzoomZoomOut!: () => void;
+let panzoomZoomTo!: (scale: number, animate?: boolean) => void;
+let panzoomScale!: Ref<number>;
 // Android 上划删除相关状态
 const swipeDeleteActive = ref(false);
 const swipeDeleteReady = ref(false);
@@ -213,6 +270,7 @@ const previewContainerRect = ref({ left: 0, top: 0, width: 0, height: 0 });
 const previewImageLoading = ref(false);
 const previewContextMenuVisible = ref(false);
 const previewContextMenuPosition = ref({ x: 0, y: 0 });
+const zoomSliderDragging = ref(false);
 
 // Android 触摸手势状态
 
@@ -278,9 +336,13 @@ const markPreviewInteracting = () => {
 // 初始化 Panzoom（需在 markPreviewInteracting 之后，以便传入回调）
 ({
   wrapperRef: panzoomWrapperRef,
+  scale: panzoomScale,
   handleWheel: handlePanzoomWheel,
   reset: panzoomReset,
   destroy: panzoomDestroy,
+  zoomIn: panzoomZoomIn,
+  zoomOut: panzoomZoomOut,
+  zoomTo: panzoomZoomTo,
 } = usePanzoomPreview(
   previewVisible,
   computed(() => !uiStore.isCompact),
@@ -289,6 +351,33 @@ const markPreviewInteracting = () => {
     onPanzoomEnd: markPreviewInteracting,
   }
 ));
+
+const zoomPercent = computed(() => Math.round((panzoomScale?.value ?? 1) * 100));
+const zoomPercentText = computed(() => `${zoomPercent.value}%`);
+const zoomSliderValue = computed(() => Math.min(1000, Math.max(100, zoomPercent.value)));
+
+const handleZoomSliderDragStart = () => {
+  zoomSliderDragging.value = true;
+  notifyPreviewInteracting(true);
+};
+
+const handleZoomSliderInput = (value: number) => {
+  zoomSliderDragging.value = true;
+  panzoomZoomTo(value / 100);
+  markPreviewInteracting();
+};
+
+const handleZoomSliderCommit = (value: number) => {
+  panzoomZoomTo(value / 100);
+  zoomSliderDragging.value = false;
+  markPreviewInteracting();
+};
+
+const handleDocumentZoomPointerUp = () => {
+  if (!zoomSliderDragging.value) return;
+  zoomSliderDragging.value = false;
+  markPreviewInteracting();
+};
 
 /** 切换详情抽屉并重置 Panzoom，使图片按新容器尺寸适配（含抽屉动画结束后再对齐一次） */
 const toggleDetailDrawer = () => {
@@ -331,6 +420,16 @@ const measureContainerAfterRender = async () => {
   await nextTick();
   await new Promise((resolve) => requestAnimationFrame(resolve));
   measureContainerSize();
+};
+
+const toggleAppFullscreen = () => {
+  isAppFullscreen.value = !isAppFullscreen.value;
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      measureContainerSize();
+      panzoomReset();
+    });
+  });
 };
 
 const previewDialogTitle = computed(() => {
@@ -660,6 +759,7 @@ function doAndroidPreviewCleanup() {
 
 const closePreview = () => {
   const closedImage = previewImage.value;
+  isAppFullscreen.value = false;
   if (uiStore.isCompact) {
     previewVisible.value = false;
     doAndroidPreviewCleanup();
@@ -905,10 +1005,14 @@ const handlePswpClose = () => {
 
 onMounted(() => {
   window.addEventListener("keydown", handlePreviewKeyDown, true);
+  document.addEventListener("mouseup", handleDocumentZoomPointerUp);
+  document.addEventListener("touchend", handleDocumentZoomPointerUp, { passive: true });
 });
 
 onUnmounted(() => {
   window.removeEventListener("keydown", handlePreviewKeyDown, true);
+  document.removeEventListener("mouseup", handleDocumentZoomPointerUp);
+  document.removeEventListener("touchend", handleDocumentZoomPointerUp);
   panzoomDestroy();
   if (previewInteractTimer) {
     clearTimeout(previewInteractTimer);
@@ -970,6 +1074,10 @@ defineExpose({
 </script>
 
 <style lang="scss">
+.pswp {
+  z-index: v-bind(previewFullscreenZIndex) !important;
+}
+
 .image-preview-dialog.el-dialog {
   width: 90vw !important;
   height: 90vh !important;
@@ -1028,9 +1136,17 @@ defineExpose({
     overflow: hidden;
     box-sizing: border-box;
     position: relative;
+
+    &.is-app-fullscreen {
+      position: fixed;
+      inset: 0;
+      z-index: v-bind(previewFullscreenZIndex);
+      background: #000;
+    }
   }
 
-  .preview-detail-toggle {
+  .preview-detail-toggle,
+  .preview-fullscreen-close {
     position: absolute;
     top: 12px;
     right: 12px;
@@ -1069,6 +1185,23 @@ defineExpose({
       height: 18px;
       flex-shrink: 0;
       display: block;
+    }
+
+    svg {
+      width: 18px;
+      height: 18px;
+      fill: currentColor;
+    }
+  }
+
+  .preview-fullscreen-close {
+    opacity: 0.72;
+    pointer-events: auto;
+
+    &:hover {
+      opacity: 1;
+      background: rgba(0, 0, 0, 0.52);
+      transform: scale(1.04);
     }
   }
 
@@ -1153,6 +1286,24 @@ defineExpose({
     max-height: 100% !important;
     object-fit: contain;
     display: block;
+  }
+
+  .zoom-progress-wrap {
+    flex: 1;
+    min-width: 120px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    user-select: none;
+  }
+
+  .zoom-progress-text {
+    width: 44px;
+    font-size: 12px;
+    line-height: 1;
+    text-align: right;
+    color: rgba(255, 255, 255, 0.92);
+    font-variant-numeric: tabular-nums;
   }
 
   .preview-image {
@@ -1240,13 +1391,13 @@ defineExpose({
   }
 }
 
-// Android 上划删除警告区域（z-index 需在 photoswipe-vue 的 .pswp (1500) 之上）
+// Android 上划删除警告区域（z-index 需在 photoswipe-vue 根层之上）
 .swipe-delete-zone {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  z-index: 2000;
+  z-index: v-bind(previewOverlayZIndex);
   height: 80px;
   display: flex;
   align-items: center;
@@ -1300,7 +1451,7 @@ defineExpose({
 .image-preview-fullscreen:not(.image-preview-pswp-root) {
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  z-index: v-bind(previewFullscreenZIndex);
   background: rgba(0, 0, 0, 0.85);
   display: flex;
   align-items: center;

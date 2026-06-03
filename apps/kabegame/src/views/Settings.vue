@@ -16,6 +16,10 @@
                 <SettingRow :label="$t('settings.language')" :description="$t('settings.languageDesc')">
                   <LanguageSetting />
                 </SettingRow>
+                <SettingRow :label="$t('settings.kamechanEnabled')"
+                  :description="$t('settings.kamechanEnabledDesc')">
+                  <SettingSwitchControl setting-key="kamechanEnabled" />
+                </SettingRow>
                 <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.autoLaunch')"
                   :description="$t('settings.autoLaunchDesc')">
                   <SettingSwitchControl setting-key="autoLaunch" />
@@ -237,7 +241,7 @@
 import { ref, onMounted, onActivated, computed, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useLocalStorage } from "@vueuse/core";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
@@ -387,7 +391,13 @@ const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("settings");
 const isLightMode = IS_LIGHT_MODE;
 
-const settingsShowIds = computed(() => (IS_ANDROID ? [] : [HeaderFeatureId.Refresh, HeaderFeatureId.Help]));
+const settingsShowIds = computed(() => {
+  if (IS_ANDROID) return [];
+  const ids = [HeaderFeatureId.Help];
+  // 桌面端（非 web）显示「检查更新」按钮
+  if (!IS_WEB) ids.unshift(HeaderFeatureId.CheckUpdate);
+  return ids;
+});
 const pullToRefreshOpts = computed(() =>
   IS_ANDROID
     ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
@@ -395,8 +405,7 @@ const pullToRefreshOpts = computed(() =>
 );
 
 function handleSettingsAction(payload: { id: string; data: { type: string } }) {
-  if (payload.id === HeaderFeatureId.Refresh) handleRefresh();
-  else if (payload.id === HeaderFeatureId.Help) openHelpDrawer();
+  if (payload.id === HeaderFeatureId.Help) openHelpDrawer();
 }
 
 

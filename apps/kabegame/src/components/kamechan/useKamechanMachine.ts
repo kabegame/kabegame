@@ -9,11 +9,11 @@ export function useKamechanMachine() {
   const state = ref<KamechanState>("standing");
   let waveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const imageSrc = computed(() => {
-    return state.value === "waving"
+  const imageSrc = computed(() =>
+    state.value === "waving"
       ? "/kamechan/wave/wave.png"
-      : "/kamechan/stand/stand.png";
-  });
+      : "/kamechan/stand/stand.png"
+  );
 
   function clearWaveTimer() {
     if (waveTimer === null) {
@@ -23,13 +23,16 @@ export function useKamechanMachine() {
     waveTimer = null;
   }
 
+  function reset() {
+    clearWaveTimer();
+    state.value = "standing";
+  }
+
   function send(event: KamechanEvent) {
     if (event === "reset") {
-      clearWaveTimer();
-      state.value = "standing";
+      reset();
       return;
     }
-
     clearWaveTimer();
     state.value = "waving";
     waveTimer = setTimeout(() => {
@@ -45,6 +48,6 @@ export function useKamechanMachine() {
     imageSrc,
     send,
     wave: () => send("wave"),
-    reset: () => send("reset"),
+    reset,
   };
 }

@@ -32,6 +32,8 @@ pub mod startup;
 mod tray;
 #[cfg(not(feature = "web"))]
 mod utils;
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
+mod updater;
 #[cfg(feature = "standard")]
 mod vd_listener;
 #[cfg(not(feature = "web"))]
@@ -164,6 +166,15 @@ fn init(
 
     spawn_startup_local_folder_sync();
     spawn_realtime_folder_sync_if_enabled();
+
+    // 桌面端自动更新：初始化后端权威状态机单例 + 启动首检&24h 调度
+    #[cfg(all(not(feature = "web"), not(target_os = "android")))]
+    {
+        let _ = updater::UpdaterService::init_global(std::sync::Arc::new(
+            updater::UpdaterService::new(),
+        ));
+        updater::spawn_schedule();
+    }
 
     // 初始化插件缓存
     init_kgpg_plugin();
@@ -532,6 +543,16 @@ pub fn run() {
             open_album_virtual_drive_folder,
             // --- Misc ---
             exit_app,
+            #[cfg(not(target_os = "android"))]
+            check_for_updates,
+            #[cfg(not(target_os = "android"))]
+            get_updater_state,
+            #[cfg(not(target_os = "android"))]
+            download_update,
+            #[cfg(not(target_os = "android"))]
+            cancel_download,
+            #[cfg(not(target_os = "android"))]
+            apply_update_and_restart,
             #[cfg(not(target_os = "android"))]
             open_dev_webview,
             #[cfg(not(target_os = "android"))]

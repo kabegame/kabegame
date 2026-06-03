@@ -1,6 +1,7 @@
 import { computed, type Ref } from "vue";
 import { invoke } from "@/api/rpc";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { storeToRefs } from "pinia";

@@ -70,6 +70,8 @@ export interface AppSettings {
   galleryLayoutMode: "grid" | "gallery";
   /** 布局方向："vertical"=从上到下滚动（现状）；"horizontal"=从左到右滚动 */
   galleryLayoutDirection: "vertical" | "horizontal";
+  /** 是否启用 Kamechan；关闭后消息走普通弹出提示 */
+  kamechanEnabled: boolean;
 }
 
 export type AppSettingKey = keyof AppSettings;
@@ -172,6 +174,7 @@ const FRONTEND_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
   { key: "galleryGridColumns", defaultValue: 0 },
   { key: "galleryLayoutMode", defaultValue: "grid" },
   { key: "galleryLayoutDirection", defaultValue: "vertical" },
+  { key: "kamechanEnabled", defaultValue: true },
 ];
 
 /** 旧键 → 新键（`${WEB_LOCAL_STORAGE_PREFIX}${key}`）一次性迁移表。 */

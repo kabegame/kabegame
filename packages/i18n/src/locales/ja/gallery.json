@@ -1,6 +1,11 @@
 {
   "imageDetailTitle": "画像詳細",
   "toggleDetailPanel": "詳細パネル",
+  "zoomIn": "拡大",
+  "zoomOut": "縮小",
+  "zoomRatio": "拡大率",
+  "fullscreen": "全画面",
+  "exitFullscreen": "全画面を終了",
   "imageDetailDisplayName": "名前: ",
   "imageDetailDescription": "説明: ",
   "imageDetailPluginInfoToggle": "プラグイン説明を表示または非表示",

@@ -140,7 +140,8 @@ import {
 } from "vue";
 import { useVirtualList } from "@vueuse/core";
 import { useRouter } from "vue-router";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { CopyDocument, Loading, Picture, WarningFilled } from "@element-plus/icons-vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { listen, type UnlistenFn } from "@/api/rpc";

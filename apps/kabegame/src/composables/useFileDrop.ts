@@ -1,5 +1,5 @@
 import { ref, Ref, onUnmounted } from "vue";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke, uploadImport } from "@/api/rpc";
 import FileDropOverlay from "@/components/FileDropOverlay.vue";

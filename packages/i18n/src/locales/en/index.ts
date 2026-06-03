@@ -12,6 +12,8 @@ import import_ from "./import.json";
 import contextMenu from "./contextMenu.json";
 import autoConfig from "./autoConfig.json";
 import web from "./web.json";
+import kamechan from "./kamechan.json";
+import updater from "./updater.json";
 
 export default {
   common,
@@ -28,4 +30,6 @@ export default {
   contextMenu,
   autoConfig,
   web,
+  kamechan,
+  updater,
 };

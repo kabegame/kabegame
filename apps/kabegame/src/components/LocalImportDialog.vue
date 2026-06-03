@@ -88,7 +88,8 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Document, FolderOpened } from "@element-plus/icons-vue";
-import { ElDialog, ElMessage } from "element-plus";
+import { ElDialog } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { open } from "@tauri-apps/plugin-dialog";
 import { storeToRefs } from "pinia";
 import { IS_WEB } from "@kabegame/core/env";

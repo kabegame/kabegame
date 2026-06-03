@@ -61,7 +61,7 @@ import { ref, computed, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useI18n, usePluginManifestI18n } from '@kabegame/i18n';
 import { invoke } from "@/api/rpc";
-import { ElMessage } from 'element-plus';
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import type { Plugin } from '@kabegame/core/stores/plugins';
 import { usePluginStore } from '@/stores/plugins';
 import { useApp } from '@/stores/app';

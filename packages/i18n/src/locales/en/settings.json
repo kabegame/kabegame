@@ -3,6 +3,8 @@
   "appSettings": "App Settings",
   "language": "Language",
   "languageDesc": "Interface language",
+  "kamechanEnabled": "Enable Kamechan",
+  "kamechanEnabledDesc": "Show app messages through Kamechan. When off, messages use standard popups.",
 
   "autoLaunch": "Launch at startup",
   "autoLaunchDesc": "Run automatically when system starts",

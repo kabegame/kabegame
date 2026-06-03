@@ -63,7 +63,7 @@
 <script setup lang="ts">
 import { computed, ref, nextTick, onMounted, onUnmounted } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import type { Album } from "@/stores/albums";
 import { Loading } from "@element-plus/icons-vue";
 import { useAlbumStore } from "@/stores/albums";

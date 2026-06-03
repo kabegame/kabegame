@@ -95,7 +95,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { Clock, CopyDocument, Grid, WarningFilled } from "@element-plus/icons-vue";
 import {
   LOCAL_IMPORT_PLUGIN_ID,

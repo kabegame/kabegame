@@ -1,6 +1,11 @@
 {
   "imageDetailTitle": "圖片詳情",
   "toggleDetailPanel": "詳情面板",
+  "zoomIn": "放大",
+  "zoomOut": "縮小",
+  "zoomRatio": "縮放比例",
+  "fullscreen": "全螢幕",
+  "exitFullscreen": "退出全螢幕",
   "imageDetailDisplayName": "名稱：",
   "imageDetailDescription": "描述：",
   "imageDetailPluginInfoToggle": "顯示或隱藏外掛說明",

@@ -54,6 +54,9 @@ third/FFmpeg-build
 # 一些临时文件
 /ignore
 
+# 临时忽略 kamechan emotion 图片资源
+apps/kabegame/public/kamechan/emotion*/**/*.png
+
 # Astro docs
 apps/docs/dist
 apps/docs/.astro

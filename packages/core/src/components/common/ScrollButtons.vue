@@ -1,5 +1,5 @@
 <template>
-    <Teleport to="body">
+    <div class="scroll-btn-root">
         <Transition name="scroll-btn-fade">
             <div v-if="showTopButton" class="scroll-btn scroll-btn-top" :style="buttonStyle" @click="scrollToTop">
                 <el-icon :size="20">
@@ -7,8 +7,6 @@
                 </el-icon>
             </div>
         </Transition>
-    </Teleport>
-    <Teleport to="body">
         <Transition name="scroll-btn-fade">
             <div v-if="showBottomButton" class="scroll-btn scroll-btn-bottom" :style="buttonStyle"
                 @click="scrollToBottom">
@@ -17,8 +15,6 @@
                 </el-icon>
             </div>
         </Transition>
-    </Teleport>
-    <Teleport to="body">
         <Transition name="scroll-btn-fade">
             <div v-if="showLeftButton" class="scroll-btn scroll-btn-left" :style="buttonStyle" @click="scrollToLeft">
                 <el-icon :size="20">
@@ -26,8 +22,6 @@
                 </el-icon>
             </div>
         </Transition>
-    </Teleport>
-    <Teleport to="body">
         <Transition name="scroll-btn-fade">
             <div v-if="showRightButton" class="scroll-btn scroll-btn-right" :style="buttonStyle" @click="scrollToRight">
                 <el-icon :size="20">
@@ -35,7 +29,7 @@
                 </el-icon>
             </div>
         </Transition>
-    </Teleport>
+    </div>
 </template>
 
 <script setup lang="ts">
@@ -237,6 +231,10 @@ defineExpose({
 </script>
 
 <style scoped lang="scss">
+.scroll-btn-root {
+    display: contents;
+}
+
 .scroll-btn {
     position: fixed;
     right: var(--scroll-btn-right, 24px);
@@ -250,10 +248,11 @@ defineExpose({
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    z-index: 1000;
+    z-index: 20;
     transition: all 0.2s ease;
     box-shadow: 0 2px 12px rgba(100, 108, 255, 0.4);
     backdrop-filter: blur(8px);
+    pointer-events: auto;
 
     &:hover {
         background: var(--anime-primary, #646cff);

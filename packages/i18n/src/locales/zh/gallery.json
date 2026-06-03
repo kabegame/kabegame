@@ -1,6 +1,11 @@
 {
   "imageDetailTitle": "图片详情",
   "toggleDetailPanel": "详情面板",
+  "zoomIn": "放大",
+  "zoomOut": "缩小",
+  "zoomRatio": "缩放比例",
+  "fullscreen": "全屏",
+  "exitFullscreen": "退出全屏",
   "imageDetailDisplayName": "名称：",
   "imageDetailDescription": "描述：",
   "imageDetailPluginInfoToggle": "显示或隐藏插件说明",

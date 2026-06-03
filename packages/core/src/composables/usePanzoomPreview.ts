@@ -12,11 +12,14 @@ export interface UsePanzoomPreviewOptions {
   panzoomOptions?: Partial<Parameters<typeof Panzoom>[1]>;
 }
 
-const DEFAULT_OPTIONS: Parameters<typeof Panzoom>[1] = {
+const DEFAULT_MIN_SCALE = 1;
+const DEFAULT_MAX_SCALE = 10;
+
+const DEFAULT_OPTIONS: NonNullable<Parameters<typeof Panzoom>[1]> = {
   contain: "outside",
   panOnlyWhenZoomed: true,
-  minScale: 1,
-  maxScale: 10,
+  minScale: DEFAULT_MIN_SCALE,
+  maxScale: DEFAULT_MAX_SCALE,
   step: 0.3,
   animate: false,
   cursor: "default",
@@ -33,6 +36,7 @@ export function usePanzoomPreview(
   options?: UsePanzoomPreviewOptions
 ) {
   const wrapperRef = ref<HTMLElement | null>(null);
+  const scale = ref(1);
   let instance: PanzoomObject | null = null;
   let instanceEl: HTMLElement | null = null;
 
@@ -46,8 +50,8 @@ export function usePanzoomPreview(
 
   const handlePanzoomChange = () => {
     if (!instance) return;
-    const scale = instance.getScale();
-    instance.setOptions({ cursor: scale > 1 ? "grab" : "default" });
+    scale.value = instance.getScale();
+    instance.setOptions({ cursor: scale.value > 1 ? "grab" : "default" });
   };
 
   const destroy = () => {
@@ -61,6 +65,7 @@ export function usePanzoomPreview(
       instance = null;
     }
     instanceEl = null;
+    scale.value = 1;
   };
 
   const create = (el: HTMLElement) => {
@@ -71,6 +76,7 @@ export function usePanzoomPreview(
       ...options?.panzoomOptions,
     });
     instanceEl = el;
+    scale.value = instance.getScale();
     el.addEventListener("panzoomstart", handlePanzoomStart);
     el.addEventListener("panzoomend", handlePanzoomEnd);
     el.addEventListener("panzoomchange", handlePanzoomChange);
@@ -100,17 +106,44 @@ export function usePanzoomPreview(
     if (!instance || !instanceEl || wrapperRef.value !== instanceEl || !visible.value || !enabled.value) return;
     options?.onPanzoomStart?.();
     instance.zoomWithWheel(event, { animate: false });
+    scale.value = instance.getScale();
   };
 
   const reset = () => {
     if (!instance || !instanceEl || wrapperRef.value !== instanceEl) return;
     instance?.reset({ animate: false });
+    scale.value = instance.getScale();
+  };
+
+  const zoomIn = () => {
+    if (!instance || !instanceEl || wrapperRef.value !== instanceEl) return;
+    instance.zoomIn({ step: 0.2, animate: true });
+    scale.value = instance.getScale();
+  };
+
+  const zoomOut = () => {
+    if (!instance || !instanceEl || wrapperRef.value !== instanceEl) return;
+    instance.zoomOut({ step: 0.2, animate: true });
+    scale.value = instance.getScale();
+  };
+
+  const zoomTo = (nextScale: number, animate = false) => {
+    if (!instance || !instanceEl || wrapperRef.value !== instanceEl) return;
+    const minScale = Number(instance.getOptions().minScale ?? DEFAULT_MIN_SCALE);
+    const maxScale = Number(instance.getOptions().maxScale ?? DEFAULT_MAX_SCALE);
+    const safeScale = Math.min(maxScale, Math.max(minScale, Number.isFinite(nextScale) ? nextScale : minScale));
+    instance.zoom(safeScale, { animate });
+    scale.value = instance.getScale();
   };
 
   return {
     wrapperRef,
+    scale,
     handleWheel,
     reset,
     destroy,
+    zoomIn,
+    zoomOut,
+    zoomTo,
   };
 }

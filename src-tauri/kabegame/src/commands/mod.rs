@@ -11,6 +11,8 @@ pub mod settings;
 #[cfg(not(target_os = "android"))]
 pub mod surf;
 pub mod task;
+#[cfg(not(target_os = "android"))]
+pub mod updater;
 pub mod wallpaper;
 #[cfg(target_os = "windows")]
 pub mod wallpaper_engine;
@@ -28,6 +30,8 @@ pub use settings::*;
 #[cfg(not(target_os = "android"))]
 pub use surf::*;
 pub use task::*;
+#[cfg(not(target_os = "android"))]
+pub use updater::*;
 pub use wallpaper::*;
 #[cfg(target_os = "windows")]
 pub use wallpaper_engine::*;

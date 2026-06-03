@@ -24,13 +24,13 @@
 - [x] `4.2.0` 自动同步文件夹画册
 - [ ] 图片标签
 - [ ] 图片评分
-- [ ] 组合式搜索排序，在header下用一整行io组件来实现
-    - [ ] 插件provider所有自动加上filter_comb目标
-    - [ ] 插件provider的resolve最好为了避免歧义，用tag_之类的前缀
+- [x] `4.2.0` 组合式搜索排序，在header下用一整行io组件来实现
+    - [x] 插件provider所有自动加上filter_comb目标
+    - [x] 插件provider的resolve最好为了避免歧义，用tag_之类的前缀
 - [ ] 自动github更新，浏览小漫画查看更新日志
 - [x] 图片详情处点击跳转过滤器功能
 
 ## refactor
-
+- [ ] 吉祥物气泡消息
 
 ## stash

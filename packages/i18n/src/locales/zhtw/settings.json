@@ -3,6 +3,8 @@
   "appSettings": "應用程式設定",
   "language": "語言",
   "languageDesc": "介面顯示語言",
+  "kamechanEnabled": "啟用 Kamechan",
+  "kamechanEnabledDesc": "開啟後由 Kamechan 顯示應用訊息；關閉後改用一般彈出提示",
 
   "autoLaunch": "開機啟動",
   "autoLaunchDesc": "應用啟動時自動執行",

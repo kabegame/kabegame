@@ -13,7 +13,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { storeToRefs } from "pinia";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { Lightning } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";

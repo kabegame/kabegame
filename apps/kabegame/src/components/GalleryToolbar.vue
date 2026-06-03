@@ -322,6 +322,7 @@ import {
   hasActiveGalleryFilters,
   isSimpleFilter,
   removeFilterDimension,
+  serializeFilterSet,
   setFilterDimension,
   singleFilterToSet,
   type GalleryFilter,
@@ -478,6 +479,26 @@ const isFilterIndicatorActive = computed(
   () =>
     !!props.search.trim() ||
     hasActiveGalleryFilters({ ...activeFilters.value, noAlbum: undefined })
+);
+
+const visibleFilterSignature = computed(() =>
+  serializeFilterSet({ ...activeFilters.value, noAlbum: undefined })
+);
+
+const lastAutoOpenedFilterSignature = ref<string | null>(null);
+watch(
+  [visibleFilterSignature, () => uiStore.isCompact],
+  ([signature, isCompact]) => {
+    if (!signature) {
+      lastAutoOpenedFilterSignature.value = null;
+      return;
+    }
+    if (!isCompact && signature !== lastAutoOpenedFilterSignature.value) {
+      showDesktopFilterRow.value = true;
+    }
+    lastAutoOpenedFilterSignature.value = signature;
+  },
+  { immediate: true }
 );
 
 function sortFieldLabel(field: GallerySortField) {

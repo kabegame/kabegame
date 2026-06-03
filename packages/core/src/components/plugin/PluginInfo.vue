@@ -118,7 +118,7 @@
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { WarningFilled } from "@element-plus/icons-vue";
 import { IS_WEB } from "../../env";
 import { compareVersions } from "../../utils/version";

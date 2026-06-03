@@ -3,6 +3,8 @@
   "appSettings": "アプリ設定",
   "language": "言語",
   "languageDesc": "インターフェースの言語",
+  "kamechanEnabled": "Kamechan を有効化",
+  "kamechanEnabledDesc": "有効時はアプリ通知を Kamechan で表示します。無効時は通常のポップアップを使います。",
 
   "autoLaunch": "起動時に起動",
   "autoLaunchDesc": "システム起動時に自動実行",

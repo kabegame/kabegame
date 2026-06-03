@@ -37,7 +37,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onMounted, ref, useAttrs, watch } from "vue";
+import { computed, nextTick, onActivated, onDeactivated, onMounted, ref, useAttrs, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import CoreImageGrid from "@kabegame/core/components/image/ImageGrid.vue";
 import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
@@ -215,23 +215,30 @@ watch(previewedId, (id) => {
 });
 
 // URL -> state
-const applyPreviewFromUrl = () => {
+const applyPreviewFromUrl = async () => {
   if (!isRouteActive.value) return; // 仅激活视图响应全局 pvwimgid
   const id = readPreviewId();
   if (id) {
     if (id === previewedId.value) return;
+    // 等待 CoreImageGrid 接收最新的 images prop：父→子传播滞后一帧（本 watch 是 pre
+    // flush，先于子组件重渲染）。若不等，刚加载进列表的目标图片在子组件里仍是旧列表 →
+    // openPreviewById 的 findIndex 返回 -1，而本组件 watch 是一次性的 → 预览再也无法恢复。
+    // await nextTick();
+    if (readPreviewId() !== id || previewedId.value != null || !isRouteActive.value) return;
     coreRef.value?.openPreviewById?.(id); // id 不在当前列表时为 no-op
   } else if (previewedId.value != null) {
     coreRef.value?.closePreview?.();
   }
 };
 onMounted(applyPreviewFromUrl);
-onActivated(() => { isRouteActive.value = true; applyPreviewFromUrl(); });
+onActivated(() => { isRouteActive.value = true; void applyPreviewFromUrl(); });
 onDeactivated(() => { isRouteActive.value = false; });
 watch(() => readPreviewId(), applyPreviewFromUrl); // 前进/后退、外部改动
 watch(() => props.images, () => {
   // 列表异步加载完成后再尝试一次（仅在仍有待打开 id 且未预览时）
-  if (readPreviewId() && previewedId.value == null) applyPreviewFromUrl();
+  if (readPreviewId() && previewedId.value == null) void applyPreviewFromUrl();
+}, {
+  flush: 'post'
 });
 
 function handlePreviewOpen(payload: { image: ImageInfo }) {

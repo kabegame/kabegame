@@ -3,6 +3,8 @@
   "appSettings": "앱 설정",
   "language": "언어",
   "languageDesc": "인터페이스 언어",
+  "kamechanEnabled": "Kamechan 사용",
+  "kamechanEnabledDesc": "켜면 앱 메시지를 Kamechan으로 표시하고, 끄면 일반 팝업으로 표시합니다.",
 
   "autoLaunch": "시작 시 실행",
   "autoLaunchDesc": "시스템 시작 시 자동 실행",

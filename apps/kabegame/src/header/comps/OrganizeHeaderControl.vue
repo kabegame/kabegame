@@ -64,7 +64,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { FolderOpened } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import { listen } from "@/api/rpc";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";

@@ -1,6 +1,11 @@
 {
   "imageDetailTitle": "이미지 상세",
   "toggleDetailPanel": "상세 패널",
+  "zoomIn": "확대",
+  "zoomOut": "축소",
+  "zoomRatio": "확대 비율",
+  "fullscreen": "전체 화면",
+  "exitFullscreen": "전체 화면 종료",
   "imageDetailDisplayName": "이름: ",
   "imageDetailDescription": "설명: ",
   "imageDetailPluginInfoToggle": "플러그인 설명 표시 또는 숨기기",
