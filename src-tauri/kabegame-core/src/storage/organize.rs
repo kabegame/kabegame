@@ -1,5 +1,5 @@
 use crate::crawler::downloader::{
-    generate_thumbnail, image_needs_independent_thumbnail, image_thumbnail_size_is_target_sized,
+    generate_thumbnail, image_needs_independent_thumbnail, image_thumbnail_dimensions_acceptable,
 };
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
@@ -233,8 +233,6 @@ pub struct OrganizeOptions {
     pub regen_thumbnails: bool,
     /// 在 DB 记录删除后是否同时删除磁盘上的源文件
     pub delete_source_files: bool,
-    /// 删除文件前查询是否仍有其它 DB 行引用同一 `local_path`
-    pub safe_delete: bool,
     /// 从有序列表（按 id ASC）中跳过的前若干条
     pub offset: Option<usize>,
     /// 在 offset 之后最多处理的条数（与 offset 成对使用时表示区间）
@@ -257,7 +255,6 @@ pub struct OrganizeRunState {
     pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
     pub delete_source_files: bool,
-    pub safe_delete: bool,
 }
 
 static GLOBAL_ORGANIZE: OnceLock<Arc<OrganizeService>> = OnceLock::new();
@@ -327,7 +324,6 @@ impl OrganizeService {
             remove_unrecognized: options.remove_unrecognized,
             regen_thumbnails: options.regen_thumbnails,
             delete_source_files: options.delete_source_files,
-            safe_delete: options.safe_delete,
         };
         let mut g = self
             .run_state
@@ -519,11 +515,12 @@ fn thumbnail_refresh_action(row: &OrganizeScanRow) -> Option<ThumbnailRefreshAct
         return None;
     }
 
+    // 按尺寸判断：最长边超过上限（或读不出尺寸/已损坏）才重生成；与生成策略一致，避免无谓重生成。
     let needs_regen = thumbnail_path.is_empty()
         || thumbnail_path == local_path
         || !Path::new(thumbnail_path).exists()
-        || std::fs::metadata(thumbnail_path)
-            .map(|metadata| !image_thumbnail_size_is_target_sized(metadata.len()))
+        || image::image_dimensions(thumbnail_path)
+            .map(|(w, h)| !image_thumbnail_dimensions_acceptable(w, h))
             .unwrap_or(true);
 
     if needs_regen {
@@ -644,23 +641,11 @@ fn run_organize(
                     .map(|r| r.local_path.as_str())
                     .collect();
 
-                if options.safe_delete {
-                    let still_referenced = storage.paths_still_referenced(&paths_to_delete)?;
-                    for path in paths_to_delete {
-                        if path.is_empty() {
-                            continue;
-                        }
-                        if !still_referenced.contains(path) {
-                            let _ = std::fs::remove_file(path);
-                        }
+                for path in paths_to_delete {
+                    if path.is_empty() {
+                        continue;
                     }
-                } else {
-                    for path in paths_to_delete {
-                        if path.is_empty() {
-                            continue;
-                        }
-                        let _ = std::fs::remove_file(path);
-                    }
+                    let _ = std::fs::remove_file(path);
                 }
             }
         }
@@ -707,7 +692,7 @@ fn run_organize(
 mod tests {
     use super::*;
     use crate::crawler::downloader::{
-        IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES, IMAGE_THUMBNAIL_TARGET_BYTES,
+        IMAGE_THUMBNAIL_MAX_DIM, IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES,
     };
 
     fn row(id: i64, local_path: &Path, thumbnail_path: &Path) -> OrganizeScanRow {
@@ -739,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_refresh_keeps_target_sized_large_thumbnail() {
+    fn thumbnail_refresh_keeps_in_dimension_thumbnail() {
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("large.png");
         let thumb = dir.path().join("thumb.jpg");
@@ -748,22 +733,26 @@ mod tests {
             vec![1u8; (IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES + 1) as usize],
         )
         .unwrap();
-        std::fs::write(&thumb, vec![2u8; IMAGE_THUMBNAIL_TARGET_BYTES as usize]).unwrap();
+        // 缩略图最长边 ≤ 上限 → 不需重生成。
+        image::RgbImage::new(800, 600).save(&thumb).unwrap();
 
         assert!(thumbnail_refresh_action(&row(8, &local, &thumb)).is_none());
     }
 
     #[test]
-    fn thumbnail_refresh_regenerates_off_target_large_thumbnail() {
+    fn thumbnail_refresh_regenerates_oversized_thumbnail() {
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("large.png");
-        let thumb = dir.path().join("tiny.jpg");
+        let thumb = dir.path().join("oversized.jpg");
         std::fs::write(
             &local,
             vec![1u8; (IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES + 1) as usize],
         )
         .unwrap();
-        std::fs::write(&thumb, [2u8; 16]).unwrap();
+        // 缩略图最长边超过上限 → 需重生成。
+        image::RgbImage::new(IMAGE_THUMBNAIL_MAX_DIM + 100, 600)
+            .save(&thumb)
+            .unwrap();
 
         let action = thumbnail_refresh_action(&row(9, &local, &thumb)).unwrap();
 

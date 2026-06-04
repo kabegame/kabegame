@@ -60,7 +60,6 @@
           :video-preview-remount-key="0"
           :is-loading="false"
           @click="openChildAlbum(child)"
-          @visible="prefetchChildPreview(child)"
           @contextmenu="openChildAlbumContextMenu($event, child)"
         />
       </div>
@@ -173,7 +172,7 @@
       :context="childAlbumMenuContext"
       :z-index="3500"
       @close="childAlbumMenu.hide"
-      @command="(cmd) => handleChildAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursive')"
+      @command="(cmd) => handleChildAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursive' | 'openLocalFolder')"
     />
 
     <el-dialog
@@ -211,9 +210,10 @@ type AlbumDetailSnapshot = {
   subAlbumsScrollTop: number;
 };
 
-const ALBUM_DETAIL_SNAPSHOT_LIMIT = 50;
-const albumDetailSnapshots = new Map<number, AlbumDetailSnapshot>();
-let lastAlbumDetailHistoryPosition = 0;
+// 画册访问栈：保存「当前画册祖先链」上每个画册的视图状态（滚动位置 / 选项卡）。
+// 与浏览器前进后退无关：进入画册时按其祖先链重建该数组（沿用已有快照），
+// 回到曾访问过的祖先时恢复其状态；跳到其它分支或经面包屑上溯时，被丢弃的画册状态自然出栈。
+const albumDetailStack: AlbumDetailSnapshot[] = [];
 </script>
 
 <script setup lang="ts">
@@ -536,6 +536,17 @@ const prefetchChildPreview = async (child: Album) => {
   childPreviewImages.value = { ...childPreviewImages.value, [child.id]: imgs };
 };
 
+// 直接为所有子画册加载预览（不再用视口懒加载；列表变化时自动补齐）
+watch(
+  () => childAlbums.value.map((a) => a.id).join("|"),
+  () => {
+    for (const child of childAlbums.value) {
+      prefetchChildPreview(child);
+    }
+  },
+  { immediate: true },
+);
+
 function trackAlbumChildEnter(child: Album) {
   if (!IS_WEB) return;
   trackEvent("album_child_enter", {
@@ -609,7 +620,8 @@ const handleChildAlbumMenuCommand = async (
     | "rename"
     | "moveTo"
     | "syncNow"
-    | "syncNowRecursive",
+    | "syncNowRecursive"
+    | "openLocalFolder",
 ) => {
   const context = childAlbumMenuContext.value;
   const album = context.target;
@@ -619,6 +631,18 @@ const handleChildAlbumMenuCommand = async (
 
   if (command === "browse") {
     openChildAlbum(album);
+    return;
+  }
+
+  if (command === "openLocalFolder") {
+    const folder = album.syncFolder?.trim();
+    if (!folder) return;
+    try {
+      await invoke("open_explorer", { path: folder });
+    } catch (e: any) {
+      console.error("打开本地文件夹失败:", e);
+      ElMessage.error(e?.message || String(e));
+    }
     return;
   }
 
@@ -747,19 +771,6 @@ const albumBrowseToolbarRef = ref<{
 } | null>(null);
 const albumContainerRef = ref<HTMLElement | null>(null);
 
-function getAlbumDetailHistoryPosition() {
-  const position = history.state?.position;
-  return typeof position === "number" ? position : 0;
-}
-
-function trimAlbumDetailSnapshots() {
-  while (albumDetailSnapshots.size > ALBUM_DETAIL_SNAPSHOT_LIMIT) {
-    const oldest = albumDetailSnapshots.keys().next();
-    if (oldest.done) return;
-    albumDetailSnapshots.delete(oldest.value);
-  }
-}
-
 function getImagesScrollEl(): HTMLElement | null {
   return albumViewRef.value?.getContainerEl?.() ?? null;
 }
@@ -810,6 +821,44 @@ async function applyAlbumDetailSnapshot(snapshot: AlbumDetailSnapshot) {
     await waitForNextFrame();
     restoreScroll();
   }
+}
+
+/** 计算某画册的祖先链 ID（从根到直接父级，不含自身）。 */
+function getAlbumAncestorIds(id: string): string[] {
+  const map = new Map(albumStore.albums.map((a) => [a.id, a]));
+  const chain: string[] = [];
+  let cur = map.get(id);
+  if (!cur) return chain;
+  while (cur.parentId) {
+    const p = map.get(cur.parentId);
+    if (!p) break;
+    chain.push(p.id);
+    cur = p;
+  }
+  chain.reverse();
+  return chain;
+}
+
+/**
+ * 维护访问栈，原则「跳后保存，跳前丢弃」：
+ * - 跳后保存：若刚离开的画册是新画册的祖先（向更深层跳转），把它入栈；
+ *   仅保存「真正停留过」的画册，被跳过的中间层级不入栈。
+ * - 跳前丢弃：剔除所有不在新画册祖先链上的画册状态（新画册自身、其它分支、上溯越过的层级）。
+ *
+ * 例：直接跳到 A/B/C/D 再跳到 A/B/C/D/E/F，栈为 |D（仅停留过的 D，跳过的 E 不入栈）；
+ * 再跳到 A/B/C/D/E，栈仍为 |D（不保存 F，但 D 仍是祖先故保留）；再进入 F 则为 |D|E。
+ */
+function maintainAlbumDetailStack(
+  newAlbumId: string,
+  leaving: AlbumDetailSnapshot | null,
+) {
+  const ancestors = new Set(getAlbumAncestorIds(newAlbumId));
+  if (leaving && ancestors.has(leaving.albumId)) {
+    albumDetailStack.push(leaving);
+  }
+  const kept = albumDetailStack.filter((s) => ancestors.has(s.albumId));
+  albumDetailStack.length = 0;
+  albumDetailStack.push(...kept);
 }
 
 // 本地计算的 provider root path，用于初始化
@@ -1113,7 +1162,8 @@ const handleRefresh = async () => {
   try {
     // 1) 刷新画册列表（名称/计数等）
     await albumStore.loadAlbums();
-    childPreviewImages.value = {};
+    // 直接重新拉取并覆写子画册预览（不清空，避免清空后不再出现 / 闪屏）
+    await refreshAffectedChildPreviews(new Set());
     const found = albumStore.albums.find((a) => a.id === albumId.value);
     if (found) albumName.value = found.name;
 
@@ -1674,36 +1724,25 @@ watch(
     if (!isOnAlbumRoute.value) return;
     if (!newId || typeof newId !== "string") return;
 
-    const currentHistoryPosition = getAlbumDetailHistoryPosition();
     const oldAlbumId = typeof oldId === "string" ? oldId : undefined;
-    if (!oldAlbumId) {
-      lastAlbumDetailHistoryPosition = currentHistoryPosition;
-      await initAlbum(newId);
-      const snapshot = albumDetailSnapshots.get(lastAlbumDetailHistoryPosition);
-      if (snapshot?.albumId === newId) {
-        await applyAlbumDetailSnapshot(snapshot);
-        albumDetailSnapshots.delete(lastAlbumDetailHistoryPosition);
-      }
-      return;
-    }
+    if (oldAlbumId === newId) return;
 
-    if (oldAlbumId === newId) {
-      lastAlbumDetailHistoryPosition = currentHistoryPosition;
-      return;
-    }
+    // 1) 离开旧画册前，捕获其当前视图状态（滚动 / 选项卡）。
+    const leaving = oldAlbumId ? captureAlbumDetailSnapshot() : null;
 
-    const snapshot = captureAlbumDetailSnapshot();
-    if (snapshot?.albumId === oldAlbumId) {
-      albumDetailSnapshots.set(lastAlbumDetailHistoryPosition, snapshot);
-      trimAlbumDetailSnapshots();
-    }
+    // 2) 维护栈之前，查看新画册是否已在栈中。
+    //    只有「沿祖先链向上」回到曾停留过的画册时才存在（如面包屑上溯）。
+    const restored = albumDetailStack.find((s) => s.albumId === newId) ?? null;
 
-    lastAlbumDetailHistoryPosition = currentHistoryPosition;
+    // 3) 初始化新画册（会加载 albums，使祖先链可计算）。
     await initAlbum(newId);
-    const nextSnapshot = albumDetailSnapshots.get(lastAlbumDetailHistoryPosition);
-    if (nextSnapshot?.albumId === newId) {
-      await applyAlbumDetailSnapshot(nextSnapshot);
-      albumDetailSnapshots.delete(lastAlbumDetailHistoryPosition);
+
+    // 4) 跳后保存、跳前丢弃地维护访问栈。
+    maintainAlbumDetailStack(newId, leaving);
+
+    // 5) 若回到一个曾停留过的祖先，恢复它当时的滚动 / 选项卡。
+    if (restored) {
+      await applyAlbumDetailSnapshot(restored);
     }
   },
   { immediate: true }
@@ -1730,7 +1769,6 @@ onMounted(async () => {
 // 组件从缓存激活时检查是否需要刷新
 onActivated(async () => {
   isAlbumDetailActive.value = true;
-  lastAlbumDetailHistoryPosition = getAlbumDetailHistoryPosition();
 
   // 如果是收藏画册且标记为需要刷新，重新加载
   if (albumId.value === FAVORITE_ALBUM_ID && favoriteAlbumDirty.value) {
@@ -1907,12 +1945,15 @@ function childAlbumEventAffectsCurrentSubtree(albumIds: ReadonlySet<string>): bo
   return Array.from(albumIds).some((id) => descendants.has(id));
 }
 
-function clearAffectedChildPreviewCaches(albumIds: ReadonlySet<string>) {
+// 受影响子画册预览：直接拉取并覆写，不先清空（既补上缺失的重新拉取，又避免闪屏）
+async function refreshAffectedChildPreviews(albumIds: ReadonlySet<string>) {
   const allAffected = albumIds.size === 0;
   const hiddenAffected = albumIds.has(HIDDEN_ALBUM_ID);
+  const limit = isCompact.value ? 1 : 3;
   for (const node of childAlbumNodes.value) {
     if (!allAffected && !hiddenAffected && !albumSubtreeContainsAny(node, albumIds)) continue;
-    delete childPreviewImages.value[node.album.id];
+    const next = await loadAlbumMediaPreview(node, limit);
+    childPreviewImages.value = { ...childPreviewImages.value, [node.album.id]: next };
   }
 }
 
@@ -1923,7 +1964,7 @@ const refreshAlbumDetailFromAlbumImagesChange = async (p: AlbumImagesChangePaylo
   const childAffected = childAlbumEventAffectsCurrentSubtree(affected);
 
   if (childAffected) {
-    clearAffectedChildPreviewCaches(affected);
+    await refreshAffectedChildPreviews(affected);
   }
 
   if (selfAffected) {

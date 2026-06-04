@@ -31,9 +31,14 @@ pub use native_download::{
     compute_native_download_destination, NativeDownloadEntry, NativeDownloadState,
 };
 
+/// 仅当原图文件大于此阈值才生成独立预览缩略图；否则前端直接用原图。
 pub const IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES: u64 = 1024 * 1024;
-pub const IMAGE_THUMBNAIL_TARGET_BYTES: u64 = 500 * 1024;
-pub const IMAGE_THUMBNAIL_TARGET_TOLERANCE_BYTES: u64 = 100 * 1024;
+/// 预览缩略图最长边像素上限。缩略图仅用于 UI（画廊网格 + 预览渐进占位），
+/// 全屏查看与设壁纸都用原图，所以无需接近原图分辨率。1600 兼顾高 DPI 网格清晰度与编码速度/体积。
+pub const IMAGE_THUMBNAIL_MAX_DIM: u32 = 1600;
+/// 预览缩略图固定 JPEG 质量（80~85 区间视觉接近无损，压缩与速度均衡）。
+#[cfg(not(target_os = "android"))]
+const IMAGE_THUMBNAIL_JPEG_QUALITY: u8 = 82;
 
 /// 下载执行类型：按 scheme 选择具体实现。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2570,14 +2575,10 @@ pub fn image_needs_independent_thumbnail(source_size: u64) -> bool {
     source_size > IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES
 }
 
-pub fn image_thumbnail_size_is_target_sized(size: u64) -> bool {
-    size.abs_diff(IMAGE_THUMBNAIL_TARGET_BYTES) < IMAGE_THUMBNAIL_TARGET_TOLERANCE_BYTES
-}
-
-#[cfg(not(target_os = "android"))]
-struct EncodedThumbnail {
-    bytes: Vec<u8>,
-    size: u64,
+/// 缩略图尺寸是否「可接受」：最长边不超过上限。
+/// 生成时据此决定是否缩放；organize 维护时据此判断既有缩略图是否需要重生成。
+pub fn image_thumbnail_dimensions_acceptable(width: u32, height: u32) -> bool {
+    width.max(height) <= IMAGE_THUMBNAIL_MAX_DIM
 }
 
 #[cfg(not(target_os = "android"))]
@@ -2595,86 +2596,10 @@ fn encode_jpeg_rgb(rgb: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String
     Ok(cursor.into_inner())
 }
 
+/// 生成预览缩略图字节：按最长边 ≤ `IMAGE_THUMBNAIL_MAX_DIM` 缩放一次，再以固定质量编码一次。
+/// 不再按字节大小做「缩放×质量」二分搜索——单次重采样 + 单次编码，避免在超大原图上反复重采样。
 #[cfg(not(target_os = "android"))]
-fn scaled_dimensions(width: u32, height: u32, scale: f64) -> (u32, u32) {
-    let max_dim = width.max(height).max(1);
-    let min_scale = (1.0 / max_dim as f64).max(0.01).min(1.0);
-    let scale = scale.clamp(min_scale, 1.0);
-    let w = ((width as f64) * scale).round().clamp(1.0, width as f64) as u32;
-    let h = ((height as f64) * scale).round().clamp(1.0, height as f64) as u32;
-    (w, h)
-}
-
-#[cfg(not(target_os = "android"))]
-fn resized_rgb_for_scale(img: &image::DynamicImage, scale: f64) -> image::RgbImage {
-    use image::GenericImageView;
-    let (width, height) = img.dimensions();
-    let (target_width, target_height) = scaled_dimensions(width, height, scale);
-    if target_width == width && target_height == height {
-        img.to_rgb8()
-    } else {
-        img.resize(
-            target_width,
-            target_height,
-            image::imageops::FilterType::Lanczos3,
-        )
-        .to_rgb8()
-    }
-}
-
-#[cfg(not(target_os = "android"))]
-fn better_thumbnail_candidate(
-    candidate: EncodedThumbnail,
-    best: Option<EncodedThumbnail>,
-) -> Option<EncodedThumbnail> {
-    match best {
-        Some(current) => {
-            let candidate_delta = candidate.size.abs_diff(IMAGE_THUMBNAIL_TARGET_BYTES);
-            let current_delta = current.size.abs_diff(IMAGE_THUMBNAIL_TARGET_BYTES);
-            if candidate_delta < current_delta {
-                Some(candidate)
-            } else {
-                Some(current)
-            }
-        }
-        None => Some(candidate),
-    }
-}
-
-#[cfg(not(target_os = "android"))]
-fn best_quality_for_scale(
-    img: &image::DynamicImage,
-    scale: f64,
-) -> Result<EncodedThumbnail, String> {
-    const MIN_QUALITY: u8 = 45;
-    const MAX_QUALITY: u8 = 92;
-
-    let rgb = resized_rgb_for_scale(img, scale);
-    let mut best: Option<EncodedThumbnail> = None;
-    let mut low = MIN_QUALITY as i32;
-    let mut high = MAX_QUALITY as i32;
-
-    while low <= high {
-        let quality = ((low + high) / 2) as u8;
-        let bytes = encode_jpeg_rgb(&rgb, quality)?;
-        let size = bytes.len() as u64;
-        best = better_thumbnail_candidate(EncodedThumbnail { bytes, size }, best);
-
-        if size > IMAGE_THUMBNAIL_TARGET_BYTES {
-            high = quality as i32 - 1;
-        } else {
-            low = quality as i32 + 1;
-        }
-    }
-
-    best.ok_or_else(|| "Failed to encode thumbnail candidates".to_string())
-}
-
-#[cfg(not(target_os = "android"))]
-fn build_compressed_thumbnail_bytes(
-    img: &image::DynamicImage,
-    source_size: u64,
-) -> Result<Vec<u8>, String> {
+fn build_compressed_thumbnail_bytes(img: &image::DynamicImage) -> Result<Vec<u8>, String> {
     use image::GenericImageView;
 
     let (width, height) = img.dimensions();
@@ -2682,47 +2607,17 @@ fn build_compressed_thumbnail_bytes(
         return Err("Image has invalid dimensions".to_string());
     }
 
-    let max_dim = width.max(height).max(1);
-    let min_scale = (1.0 / max_dim as f64).max(0.01).min(1.0);
-    let guess = ((IMAGE_THUMBNAIL_TARGET_BYTES as f64) / (source_size.max(1) as f64))
-        .sqrt()
-        .clamp(min_scale, 1.0);
-
-    let mut best = best_quality_for_scale(img, guess)?;
-    if image_thumbnail_size_is_target_sized(best.size) {
-        return Ok(best.bytes);
-    }
-
-    let (mut low, mut high) = if best.size > IMAGE_THUMBNAIL_TARGET_BYTES {
-        (min_scale, guess)
+    let rgb = if width.max(height) > IMAGE_THUMBNAIL_MAX_DIM {
+        let scale = IMAGE_THUMBNAIL_MAX_DIM as f64 / width.max(height) as f64;
+        let target_w = ((width as f64) * scale).round().clamp(1.0, width as f64) as u32;
+        let target_h = ((height as f64) * scale).round().clamp(1.0, height as f64) as u32;
+        img.resize(target_w, target_h, image::imageops::FilterType::Lanczos3)
+            .to_rgb8()
     } else {
-        (guess, 1.0)
+        img.to_rgb8()
     };
 
-    for _ in 0..8 {
-        if (high - low).abs() < f64::EPSILON {
-            break;
-        }
-        let scale = (low + high) / 2.0;
-        let candidate = best_quality_for_scale(img, scale)?;
-        let candidate_size = candidate.size;
-        let candidate_delta = candidate_size.abs_diff(IMAGE_THUMBNAIL_TARGET_BYTES);
-        let best_delta = best.size.abs_diff(IMAGE_THUMBNAIL_TARGET_BYTES);
-        if candidate_delta < best_delta {
-            best = candidate;
-        }
-
-        if image_thumbnail_size_is_target_sized(best.size) {
-            break;
-        }
-        if candidate_size > IMAGE_THUMBNAIL_TARGET_BYTES {
-            high = scale;
-        } else {
-            low = scale;
-        }
-    }
-
-    Ok(best.bytes)
+    encode_jpeg_rgb(&rgb, IMAGE_THUMBNAIL_JPEG_QUALITY)
 }
 
 #[cfg(not(target_os = "android"))]
@@ -2754,7 +2649,7 @@ pub async fn generate_thumbnail_from_bytes(bytes: &[u8]) -> Result<Option<PathBu
         Ok(img) => img,
         Err(_) => return Ok(None),
     };
-    let thumbnail_bytes = build_compressed_thumbnail_bytes(&img, bytes.len() as u64)?;
+    let thumbnail_bytes = build_compressed_thumbnail_bytes(&img)?;
     write_thumbnail_bytes(thumbnail_bytes).await.map(Some)
 }
 
@@ -2764,7 +2659,7 @@ pub async fn generate_thumbnail(_image_path: &Path) -> Result<Option<PathBuf>, S
     Ok(None)
 }
 
-/// 桌面端图片缩略图策略：小图直接用原图，大图生成约 500KiB 的 JPEG 预览图。
+/// 桌面端图片缩略图策略：小文件直接用原图，大文件生成最长边 ≤ IMAGE_THUMBNAIL_MAX_DIM 的 JPEG 预览图。
 #[cfg(not(target_os = "android"))]
 pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, String> {
     if !crate::image_type::is_image_by_path(image_path) {
@@ -2782,6 +2677,6 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
         Ok(img) => img,
         Err(_) => return Ok(None),
     };
-    let thumbnail_bytes = build_compressed_thumbnail_bytes(&img, source_size)?;
+    let thumbnail_bytes = build_compressed_thumbnail_bytes(&img)?;
     write_thumbnail_bytes(thumbnail_bytes).await.map(Some)
 }

@@ -90,7 +90,6 @@ pub async fn dispatch_request(
         range_start,
         range_end,
         delete_source_files,
-        safe_delete,
     } = req
     {
         return handle_organize_start(
@@ -101,7 +100,6 @@ pub async fn dispatch_request(
             range_start,
             range_end,
             delete_source_files,
-            safe_delete,
         )
         .await;
     }
@@ -232,7 +230,6 @@ async fn handle_organize_start(
     range_start: Option<usize>,
     range_end: Option<usize>,
     delete_source_files: bool,
-    safe_delete: bool,
 ) -> IpcResponse {
     use kabegame_core::storage::organize::OrganizeOptions;
     let (offset, limit) = match (range_start, range_end) {
@@ -249,7 +246,6 @@ async fn handle_organize_start(
                 remove_unrecognized,
                 regen_thumbnails,
                 delete_source_files,
-                safe_delete,
                 offset,
                 limit,
             },

@@ -16,6 +16,8 @@ description: kabegame 爬虫插件可调用的 Rhai 函数速查
 
 `metadata_migrations/v{N}.rhai` 脚本必须提供 `fn migrate(metadata)`，入参和返回值都是 JSON 字符串。运行时按连续版本从 `v1.rhai` 开始执行，失败的行会停在已成功版本，并在后续安装、更新或启动时重试。迁移后的行按 `(plugin_id, version, content_hash)` 去重；迁移成功会发出作用域为该插件的 `metadata-migrate` 图片变更事件。
 
+迁移脚本可用纯数据辅助函数：`parse_json(text)`、`to_json(value)`、`re_is_match(pattern, text)`、`re_replace_all(pattern, replacement, text)`、`re_find_all(pattern, text)`。`re_find_all` 返回 capture map 数组，包含 `"0"`、`"1"` 等数字捕获键和命名捕获键。
+
 ## 延伸阅读
 
 - [Rhai 脚本](/dev/rhai-api/)

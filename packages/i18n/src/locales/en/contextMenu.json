@@ -18,6 +18,7 @@
   "browse": "Browse",
   "syncNow": "Sync now",
   "syncNowRecursive": "Sync now (recursive)",
+  "openLocalFolder": "Open local folder",
   "setWallpaperRotation": "Set as desktop rotation",
   "setWallpaperRotationActive": "(Active)",
   "rename": "Rename",

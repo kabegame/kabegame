@@ -18,6 +18,7 @@
   "browse": "浏览",
   "syncNow": "立即同步",
   "syncNowRecursive": "立即同步（递归）",
+  "openLocalFolder": "打开本地文件夹",
   "setWallpaperRotation": "设为桌面轮播",
   "setWallpaperRotationActive": "（已设置）",
   "rename": "重命名",

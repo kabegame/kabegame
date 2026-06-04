@@ -44,16 +44,6 @@
                         <div class="option-desc">{{ $t('gallery.deleteSourceFilesDesc') }}</div>
                     </div>
                 </div>
-                <div v-if="options.deleteSourceFiles" class="option-sub-block">
-                    <div class="option-item">
-                        <el-checkbox v-model="options.safeDelete" />
-                        <div class="option-content">
-                            <div class="option-title">{{ $t('gallery.safeDelete') }}</div>
-                            <div class="option-desc">{{ $t('gallery.safeDeleteDesc') }}</div>
-                            <div class="option-slow-hint">{{ $t('gallery.safeDeleteSlowHint') }}</div>
-                        </div>
-                    </div>
-                </div>
             </div>
             <div v-if="showRangeSlider" class="organize-range">
                 <div class="option-title">{{ $t('gallery.organizeRange') }}</div>
@@ -114,16 +104,6 @@
                         <div class="option-desc">{{ $t('gallery.deleteSourceFilesDescDesktop') }}</div>
                     </div>
                 </div>
-                <div v-if="options.deleteSourceFiles" class="option-sub-block">
-                    <div class="option-item">
-                        <el-checkbox v-model="options.safeDelete" />
-                        <div class="option-content">
-                            <div class="option-title">{{ $t('gallery.safeDelete') }}</div>
-                            <div class="option-desc">{{ $t('gallery.safeDeleteDesc') }}</div>
-                            <div class="option-slow-hint">{{ $t('gallery.safeDeleteSlowHint') }}</div>
-                        </div>
-                    </div>
-                </div>
             </div>
             <div v-if="showRangeSlider" class="organize-range">
                 <div class="option-title">{{ $t('gallery.organizeRange') }}</div>
@@ -164,7 +144,6 @@ interface OrganizeOptions {
     removeUnrecognized: boolean;
     regenThumbnails: boolean;
     deleteSourceFiles: boolean;
-    safeDelete: boolean;
     rangeStart: number | null;
     rangeEnd: number | null;
 }
@@ -190,7 +169,6 @@ const options = reactive({
     removeUnrecognized: false,
     regenThumbnails: true, // 默认开启补充缩略图
     deleteSourceFiles: false,
-    safeDelete: true,
 });
 
 const showRangeSlider = computed(() => totalCount.value > 4000);
@@ -254,7 +232,6 @@ const handleConfirm = async () => {
         removeUnrecognized: options.removeUnrecognized,
         regenThumbnails: options.regenThumbnails,
         deleteSourceFiles: options.deleteSourceFiles,
-        safeDelete: options.safeDelete,
         rangeStart: null,
         rangeEnd: null,
     };

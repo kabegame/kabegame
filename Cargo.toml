@@ -70,3 +70,12 @@ zip = "0.6"
 # on when release
 # codegen-units = 1
 # lto = "thin"
+
+# dev/debug 构建下，把所有第三方依赖按 opt-level 2 编译（工作区成员不受影响，仍 opt-level 0、可调试）。
+# 原因：image crate 的缩放/解码是纯 Rust 像素运算，未优化的 debug 下慢几十倍
+# （实测 1737x1500 缩略图 Lanczos3 缩放：debug ~3.4s vs release ~50ms）。
+# 这样 `bun dev` 下大图缩略图也能快到几十~几百毫秒，而本地 crate 编译/调试体验不变。
+[profile.dev.package."*"]
+opt-level = 2
+debug-assertions = false
+overflow-checks = false

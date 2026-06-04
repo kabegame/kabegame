@@ -1,4 +1,4 @@
-import { FolderOpened, Picture, Edit, Rank, Delete, Refresh } from "@element-plus/icons-vue";
+import { FolderOpened, Folder, Picture, Edit, Rank, Delete, Refresh } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { Album } from "@/stores/albums";
 import { i18n } from "@kabegame/i18n";
@@ -47,6 +47,16 @@ export function createAlbumActions(): ActionItem<Album>[] {
       icon: Refresh,
       command: "syncNowRecursive",
       visible: (ctx) => LOCAL_FOLDER_SUPPORTED && (ctx as AlbumActionContext).isLocalFolder,
+    },
+    {
+      key: "openLocalFolder",
+      label: t("contextMenu.openLocalFolder"),
+      icon: Folder,
+      command: "openLocalFolder",
+      visible: (ctx) => {
+        const ext = ctx as AlbumActionContext;
+        return LOCAL_FOLDER_SUPPORTED && ext.isLocalFolder && !!ext.target?.syncFolder;
+      },
     },
     {
       key: "setWallpaperRotation",

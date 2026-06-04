@@ -280,6 +280,21 @@ mod tests {
         d
     }
 
+    #[test]
+    fn lookup_absolute_provider_name_supports_kebab_namespace_segment() {
+        let mut registry = ProviderRegistry::new();
+        registry
+            .register(def(Some("plugins.anime-pictures"), "entry_provider"))
+            .unwrap();
+
+        let found = registry.resolve(
+            &Namespace("kabegame".into()),
+            &ProviderName("plugins.anime-pictures.entry_provider".into()),
+        );
+
+        assert!(found.is_some());
+    }
+
     fn dummy_factory(
     ) -> impl Fn(&HashMap<String, TemplateValue>) -> Result<Arc<dyn Provider>, EngineError>
            + Send

@@ -19,7 +19,7 @@
             :preview-images="albumPreviewImages[album.id] || []"
             :video-preview-remount-key="albumVideoPreviewRemountKey"
             :is-loading="albumIsLoadingMap[album.id] || false"
-            @click="openAlbum(album)" @visible="prefetchPreview(album)"
+            @click="openAlbum(album)"
             @contextmenu="openAlbumContextMenu($event, album)" />
         </transition-group>
 
@@ -34,7 +34,7 @@
       :context="albumMenuContext"
       :z-index="3500"
       @close="albumMenu.hide"
-      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursive')" />
+      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursive' | 'openLocalFolder')" />
 
     <el-dialog
       v-model="showCreateDialog"
@@ -497,17 +497,27 @@ const albumPreviewImages = ref<Record<string, ImageInfo[]>>({});
 // 正在加载预览的画册 ID 集合
 const albumIsLoading = ref<Set<string>>(new Set());
 
+// 刷新单个画册预览：直接拉取并覆写，不先清空（清空到空数组再回填才是闪屏根因）
+const refreshAlbumPreview = async (album: { id: string }) => {
+  if (albumIsLoading.value.has(album.id)) return;
+  albumIsLoading.value.add(album.id);
+  try {
+    const next = await loadAlbumPreviewFromProvider(album, albumPreviewLimit);
+    albumPreviewImages.value[album.id] = next;
+  } catch (error) {
+    console.error("刷新画册预览失败:", error);
+  } finally {
+    albumIsLoading.value.delete(album.id);
+  }
+};
+
 // 刷新收藏画册的预览（用于收藏状态变化时）
 const refreshFavoriteAlbumPreview = async () => {
   const favoriteAlbum =
     displayedAlbumRoots.value.find((a) => a.id === FAVORITE_ALBUM_ID) ??
     albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
   if (!favoriteAlbum) return;
-
-  // 清除收藏画册的预览缓存
-  clearAlbumPreviewCache(FAVORITE_ALBUM_ID);
-  // 重新加载预览
-  await prefetchPreview(favoriteAlbum);
+  await refreshAlbumPreview(favoriteAlbum);
 };
 
 // 收藏状态以 store 为准：通过收藏画册计数变化触发预览刷新
@@ -531,8 +541,7 @@ useAlbumImagesChangeRefresh({
       const subtreeAffected = albumSubtreeContainsAny(node, affected);
       if (!allAffected && !subtreeAffected && !hiddenAffected) continue;
 
-      clearAlbumPreviewCache(album.id);
-      await prefetchPreview(album);
+      await refreshAlbumPreview(album);
     }
   },
 });
@@ -545,12 +554,7 @@ onMounted(async () => {
     finishLoading();
   }
   // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
-
-  // 初始化时加载前几个画册的预览图（前3张优先）
-  const albumsToPreload = displayedAlbumRoots.value.slice(0, 3);
-  for (const album of albumsToPreload) {
-    prefetchPreview(album);
-  }
+  // 预览图加载由上方 watch(displayedAlbumRoots) 统一驱动，无需在此手动预载。
 
   // 监听收藏画册数量变化，刷新预览
   stopFavoriteCountWatch.value?.();
@@ -586,16 +590,8 @@ onActivated(async () => {
     }
   }
 
-  // 检查是否有新画册需要加载预览（还没有预览数据的画册）
-  for (const album of displayedAlbumRoots.value.slice(0, 6)) {
-    // 跳过收藏画册，因为上面已经处理过了
-    if (album.id === FAVORITE_ALBUM_ID) continue;
-
-    const images = albumPreviewImages.value[album.id];
-    if (!images || images.length === 0 || !images.some((img) => hasPreviewUrl(img))) {
-      prefetchPreview(album);
-    }
-  }
+  // 为所有画册补齐预览（prefetchPreview 自带去重/已加载短路）
+  ensureAllAlbumPreviews();
 
   // 首次 onActivated 不递增，避免刚进页就多挂一次视频；从其它页返回时再递增以重建 ImageItem
   if (albumsSkipFirstActivateForVideoRemount.value) {
@@ -612,8 +608,7 @@ const handleRefresh = async () => {
     await albumStore.loadAlbums();
     await settingsStore.ensureLoaded();
     // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来"没刷新"）
-    const albumsToPreload = displayedAlbumRoots.value.slice(0, 6);
-    for (const album of albumsToPreload) {
+    for (const album of displayedAlbumRoots.value) {
       clearAlbumPreviewCache(album.id);
     }
     // 收藏画册也强制重载一次（收藏状态变化会影响预览）
@@ -629,10 +624,8 @@ const handleRefresh = async () => {
     // 强制重新挂载列表，让每个卡片的 enter 动画和内部状态都重置
     albumsListKey.value++;
 
-    // 重新加载预览图（前 6 张优先）
-    for (const album of albumsToPreload) {
-      prefetchPreview(album);
-    }
+    // 重新加载所有画册预览
+    ensureAllAlbumPreviews();
 
     const localFolderIdsOnPage = displayedAlbumRoots.value
       .filter((a) => a.type === "local_folder")
@@ -659,9 +652,7 @@ watch(globalHide, async () => {
   albumsListKey.value++;
   startLoading();
   try {
-    for (const album of displayedAlbumRoots.value.slice(0, 6)) {
-      prefetchPreview(album);
-    }
+    ensureAllAlbumPreviews();
   } finally {
     finishLoading();
   }
@@ -807,6 +798,19 @@ const prefetchPreview = async (album: { id: string }) => {
   }
 };
 
+// 直接为所有展示中的画册加载预览（不再用视口懒加载，新增画册经下方 watch 自动补齐）
+const ensureAllAlbumPreviews = () => {
+  for (const album of displayedAlbumRoots.value) {
+    prefetchPreview(album);
+  }
+};
+
+watch(
+  () => displayedAlbumRoots.value.map((a) => a.id).join("|"),
+  () => ensureAllAlbumPreviews(),
+  { immediate: true },
+);
+
 const openAlbum = (album: { id: string; name: string }) => {
   trackAlbumEnter(album, "card");
   router.push(`/albums/${album.id}`);
@@ -836,7 +840,8 @@ const handleAlbumMenuCommand = async (
     | "rename"
     | "moveTo"
     | "syncNow"
-    | "syncNowRecursive",
+    | "syncNowRecursive"
+    | "openLocalFolder",
 ) => {
   const context = albumMenuContext.value;
   const album = context.target;
@@ -847,6 +852,18 @@ const handleAlbumMenuCommand = async (
   if (command === "browse") {
     trackAlbumEnter({ id, name }, "context_menu");
     router.push(`/albums/${id}`);
+    return;
+  }
+
+  if (command === "openLocalFolder") {
+    const folder = album.syncFolder?.trim();
+    if (!folder) return;
+    try {
+      await invoke("open_explorer", { path: folder });
+    } catch (e: any) {
+      console.error("打开本地文件夹失败:", e);
+      ElMessage.error(e?.message || String(e));
+    }
     return;
   }
 

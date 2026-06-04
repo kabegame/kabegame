@@ -1,6 +1,6 @@
 ## bug
 - [x] `4.2.0` 下载过程中，task页面的图片选择老是被打断
-- [ ] 画册面包屑点击应该replace而不是push
+- [x] `4.2.0` 画册面包屑点击应该replace而不是push
 
 ## issue
 - [ ] 扩展cli功能，修复cli bug
@@ -12,27 +12,37 @@
 - [ ] 整理过程中，如果生成缩略图可能较慢，需要更细粒度的进度指示
 
 ## feat
+- [x] `4.2.0` 自动同步文件夹画册
+
+### 图片
+- [ ] 图片标签
+- [ ] 图片评分
+- [ ] 图片改名
+- [x] `4.2.0` 图片详情处点击跳转过滤器功能
+
+- [x] `4.2.0` 组合式搜索排序，在header下用一整行io组件来实现
+    - [x] 插件provider所有自动加上filter_comb目标
+    - [x] 插件provider的resolve最好为了避免歧义，用tag_之类的前缀
+
+### 画册
+- [ ] 画册搜索功能
+- [ ] 画册更多排序方法
+
+### 应用
+- [ ] 操作撤销功能
 - [ ] 添加托盘操作
     - [ ] 壁纸过渡方式切换
     - [ ] 壁纸填充方式切换
-- [ ] 安卓 photoswipe 管理错误状态（图片丢失占位）和加载中状态
+- [x] `4.2.0` 自动github更新，浏览小漫画查看更新日志
 - [ ] ! 局域网数据共享（复用爬虫插件，通过http访问peer，并提供可扩展的发现协议）
 - [ ] 应用数据导出、导入功能
 - [ ] ! Provider 支持远程 URL（Provider 可以返回远程图片 URL，支持预览模式和按需下载）
 桌面右键菜单下一张图片（windows用nsis脚本，plasma用desktop文件），并且做好错误处理
-- [ ] 文件资源管理器快速预览插件（macos quiklook, windows preview handler，gnome sushi, KDE KIOpreview）
+
+### 杂项
+- [ ] 安卓 photoswipe 管理错误状态（图片丢失占位）和加载中状态
 - [ ] 安卓用桌面小组件代替桌面上系统托盘功能。
-- [x] `4.2.0` 自动同步文件夹画册
-- [ ] 图片标签
-- [ ] 图片评分
-- [x] `4.2.0` 组合式搜索排序，在header下用一整行io组件来实现
-    - [x] 插件provider所有自动加上filter_comb目标
-    - [x] 插件provider的resolve最好为了避免歧义，用tag_之类的前缀
-- [x] `4.2.0` 自动github更新，浏览小漫画查看更新日志
-- [x] 图片详情处点击跳转过滤器功能
-- [ ] 操作撤销功能
-- [ ] 画册搜索功能
-- [ ] 画册更多排序方法
+- [ ] 文件资源管理器快速预览插件（macos quiklook, windows preview handler，gnome sushi, KDE KIOpreview）
 
 ## refactor
 - [x] `4.2.0` 吉祥物气泡消息

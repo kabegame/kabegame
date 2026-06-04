@@ -76,7 +76,6 @@ type OrganizeOptions = {
   removeUnrecognized: boolean;
   regenThumbnails: boolean;
   deleteSourceFiles: boolean;
-  safeDelete: boolean;
   rangeStart: number | null;
   rangeEnd: number | null;
 };
@@ -98,7 +97,6 @@ type OrganizeRunStatePayload = OrganizeProgressState & {
   removeUnrecognized: boolean;
   regenThumbnails: boolean;
   deleteSourceFiles: boolean;
-  safeDelete: boolean;
 };
 
 const { t } = useI18n();
@@ -166,11 +164,6 @@ const optionRows = computed(() => {
     { key: "removeUnrecognized", label: t("gallery.removeUnrecognized"), enabled: options.removeUnrecognized },
     { key: "regenThumbnails", label: t("gallery.regenThumbnails"), enabled: options.regenThumbnails },
     { key: "deleteSourceFiles", label: t("gallery.deleteSourceFiles"), enabled: options.deleteSourceFiles },
-    {
-      key: "safeDelete",
-      label: t("gallery.safeDelete"),
-      enabled: options.deleteSourceFiles ? options.safeDelete : false,
-    },
   ];
 });
 
@@ -209,7 +202,6 @@ async function syncOrganizeRunStateFromBackend() {
       removeUnrecognized: s.removeUnrecognized,
       regenThumbnails: s.regenThumbnails,
       deleteSourceFiles: s.deleteSourceFiles,
-      safeDelete: s.safeDelete,
       rangeStart: s.rangeStart ?? null,
       rangeEnd: s.rangeEnd ?? null,
     };
@@ -264,7 +256,6 @@ async function handleConfirm(options: {
   removeUnrecognized: boolean;
   regenThumbnails: boolean;
   deleteSourceFiles: boolean;
-  safeDelete: boolean;
   rangeStart: number | null;
   rangeEnd: number | null;
 }) {
@@ -289,7 +280,6 @@ async function handleConfirm(options: {
         removeUnrecognized: options.removeUnrecognized,
         regenThumbnails: options.regenThumbnails,
         deleteSourceFiles: options.deleteSourceFiles,
-        safeDelete: options.safeDelete,
         rangeStart: options.rangeStart,
         rangeEnd: options.rangeEnd,
       },

@@ -38,8 +38,8 @@
 
         "ProviderName": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
-            "description": "Provider 引用名: 简单名(同 namespace 内查找) 或绝对名 'a.b.c.name'。引擎按当前 namespace → 父 namespace → ... → root 逐级解析"
+            "pattern": "^([a-z][a-z0-9_-]*\\.)*[a-z][a-z0-9_]*$",
+            "description": "Provider 引用名: 简单名(同 namespace 内查找) 或绝对名 'a.b-c.c.name'。绝对名的 namespace 段允许 '-' 以支持 kebab-case 插件 ID；最终 provider 简单名仍为 snake_case。引擎按当前 namespace → 父 namespace → ... → root 逐级解析"
         },
 
         "SimpleName": {
@@ -50,8 +50,8 @@
 
         "Namespace": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
-            "description": "Java 包风格命名空间; 点分隔多段"
+            "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)*$",
+            "description": "Java 包风格命名空间; 点分隔多段。段内允许 '-' 以支持 kebab-case 插件 ID"
         },
 
         "TemplateExpr": {

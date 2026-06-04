@@ -316,6 +316,7 @@ fn migrate(metadata) {
 契约如下：
 
 - `migrate(metadata)` 的入参和返回值都是 JSON 字符串；脚本内可用 `parse_json(text)` 转为 Rhai 值，用 `to_json(value)` 转回字符串。
+- 迁移脚本还可使用纯文本正则辅助函数：`re_is_match(pattern, text)`、`re_replace_all(pattern, replacement, text)`、`re_find_all(pattern, text)`。`re_find_all` 返回 capture map 数组，每个 map 包含 `"0"`、`"1"` 等数字捕获键，也会包含命名捕获键。
 - 迁移版本必须连续。运行时只会执行从 `v1.rhai` 开始的连续版本；如果缺少 `v2.rhai`，即使存在 `v3.rhai` 也不会越级执行。
 - 每条 metadata 会从当前 `image_metadata.version` 的下一个版本开始依次执行，成功到哪一版就写回哪一版。某一版编译或执行失败时，该行停止在已成功版本，后续安装、更新或启动时会再次尝试。
 - 迁移后的 metadata 仍按 `(plugin_id, version, content_hash)` 复合键去重；写回时如果目标版本和内容已存在，会把引用合并到既有行。
@@ -444,7 +445,7 @@ let files = list_local_files("file:///D:/images", ["jpg", "png"], true);
 | 方法 | 说明 |
 |------|------|
 | `ctx.addProgress(percentage)` | 累加任务进度 |
-| `ctx.downloadImage(url, opts?)` | 加入下载队列，`opts` 支持 `cookie`、`headers`、`name`、`metadata` |
+| `ctx.downloadImage(url, opts?)` | 加入下载队列，`opts` 支持 `cookie`、`headers`、`name`、`metadata`、`metadata_version` |
 
 ### 日志与生命周期
 

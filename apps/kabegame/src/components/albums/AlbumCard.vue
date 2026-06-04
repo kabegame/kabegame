@@ -1,5 +1,5 @@
 <template>
-  <div ref="cardRef" class="album-card" :data-album-id="album.id" @click="handleCardClick"
+  <div class="album-card" :data-album-id="album.id" @click="handleCardClick"
     @contextmenu.prevent="(e) => emit('contextmenu', e)">
     <div class="hero">
       <div v-for="(slot, idx) in heroSlots" :key="slot.key" class="hero-img" :class="heroClass(idx, slot.hasContent)">
@@ -46,7 +46,8 @@
         </div>
       </div>
       <div class="meta">
-        <span>{{ $t('albums.albumCardSummary', { subAlbumCount, imageCount: count }) }}</span>
+        <span>{{ $t('albums.albumCardImageCount', { imageCount: count }) }}</span>
+        <span v-if="subAlbumCount > 0">{{ $t('albums.albumCardSubAlbums', { subAlbumCount }) }}</span>
         <span
           v-if="isLocalFolder && album.syncFolder"
           class="sync-path"
@@ -61,7 +62,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, nextTick, onMounted, onUnmounted } from "vue";
+import { computed, ref, nextTick } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import type { Album } from "@/stores/albums";
@@ -100,12 +101,9 @@ const imageClickAction = computed(() => settingsStore.values.imageClickAction ||
 const isRenaming = ref(false);
 const renameValue = ref("");
 const renameInputRef = ref<any>(null);
-const cardRef = ref<HTMLElement | null>(null);
-const hasBeenVisible = ref(false);
 
 const emit = defineEmits<{
   click: [];
-  visible: [];
   contextmenu: [event: MouseEvent];
 }>();
 
@@ -126,35 +124,6 @@ const hasRenderablePreview = (img: ImageInfo) => !!toPreviewUrl(img);
 /** 视频在返回画册页后需换 key 重建，否则桌面 WebView 内 <video> 常不再 autoplay */
 const previewImageItemKey = (img: ImageInfo) =>
   isVideoMediaType(img.type) ? `${img.id}-${props.videoPreviewRemountKey}` : img.id;
-
-// Intersection Observer：卡片进入视口时触发 visible 事件
-let observer: IntersectionObserver | null = null;
-
-onMounted(() => {
-  if (!cardRef.value) return;
-
-  observer = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (entry.isIntersecting && !hasBeenVisible.value) {
-          hasBeenVisible.value = true;
-          emit("visible");
-          observer?.disconnect();
-        }
-      }
-    },
-    {
-      rootMargin: "100px",
-      threshold: 0,
-    }
-  );
-
-  observer.observe(cardRef.value);
-});
-
-onUnmounted(() => {
-  observer?.disconnect();
-});
 
 defineExpose({
   startRename: () => {

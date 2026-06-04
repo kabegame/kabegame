@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use rhai::packages::Package;
-use rhai::{Dynamic, Engine, Scope, AST};
+use rhai::{Array, Dynamic, Engine, Map, Scope, AST};
 use rhai_chrono::ChronoPackage;
 
 use super::rhai::{json_value_to_rhai_dynamic, rhai_dynamic_to_json_value};
@@ -86,6 +86,31 @@ pub fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, Strin
     Ok(changed)
 }
 
+pub fn test_metadata_migrations(
+    input: String,
+    scripts: BTreeMap<u32, String>,
+) -> Result<String, String> {
+    let latest = latest_continuous_version(&scripts);
+    if latest == 0 {
+        return Err("未找到连续迁移脚本：需要 v1.rhai".to_string());
+    }
+
+    let mut engine = migration_engine();
+    let compiled = compile_migrations(&engine, &scripts, latest);
+    let mut data = input;
+    for version in 1..=latest {
+        let compiled_script = compiled
+            .get(&version)
+            .ok_or_else(|| format!("缺少已计划的迁移脚本 v{version}.rhai"))?;
+        let ast = compiled_script
+            .as_ref()
+            .map_err(|e| format!("v{version} 编译失败: {e}"))?;
+        data = call_migrate(&mut engine, ast, data)
+            .map_err(|e| format!("v{version} 执行失败: {e}"))?;
+    }
+    Ok(data)
+}
+
 fn migration_engine() -> Engine {
     let mut engine = Engine::new();
     engine.set_max_expr_depths(128, 64);
@@ -107,6 +132,51 @@ fn migration_engine() -> Engine {
                 .map_err(|e| Box::<rhai::EvalAltResult>::from(format!("to_json: {e}")))
         },
     );
+    engine.register_fn("re_is_match", |pattern: &str, text: &str| -> bool {
+        regex::Regex::new(pattern)
+            .map(|re| re.is_match(text))
+            .unwrap_or(false)
+    });
+    engine.register_fn(
+        "re_replace_all",
+        |pattern: &str, replacement: &str, text: &str| -> String {
+            regex::Regex::new(pattern)
+                .map(|re| re.replace_all(text, replacement).into_owned())
+                .unwrap_or_else(|_| text.to_string())
+        },
+    );
+    engine.register_fn("re_find_all", |pattern: &str, text: &str| -> Array {
+        let Ok(re) = regex::Regex::new(pattern) else {
+            return Array::new();
+        };
+        let capture_names: Vec<String> = re
+            .capture_names()
+            .flatten()
+            .map(|name| name.to_string())
+            .collect();
+        let mut matches = Array::new();
+        for captures in re.captures_iter(text) {
+            let mut item = Map::new();
+            for index in 0..captures.len() {
+                if let Some(matched) = captures.get(index) {
+                    item.insert(
+                        index.to_string().into(),
+                        Dynamic::from(matched.as_str().to_string()),
+                    );
+                }
+            }
+            for name in &capture_names {
+                if let Some(matched) = captures.name(name) {
+                    item.insert(
+                        name.as_str().into(),
+                        Dynamic::from(matched.as_str().to_string()),
+                    );
+                }
+            }
+            matches.push(Dynamic::from_map(item));
+        }
+        matches
+    });
     engine
 }
 
@@ -155,4 +225,35 @@ fn call_migrate(engine: &mut Engine, ast: &AST, input: String) -> Result<String,
     engine
         .call_fn::<String>(&mut scope, ast, "migrate", (input,))
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_engine_re_find_all_returns_capture_maps() {
+        let mut engine = migration_engine();
+        let ast = engine
+            .compile(
+                r#"
+                fn migrate(text) {
+                    let captures = re_find_all("(?P<name>[a-z]+):(\\d+)", text);
+                    to_json(captures)
+                }
+                "#,
+            )
+            .expect("test migration script should compile");
+
+        let output = call_migrate(&mut engine, &ast, "alpha:12 beta:34".to_string())
+            .expect("test migration script should run");
+        let value: serde_json::Value =
+            serde_json::from_str(&output).expect("captures should serialize to JSON");
+
+        assert_eq!(value[0]["0"], "alpha:12");
+        assert_eq!(value[0]["1"], "alpha");
+        assert_eq!(value[0]["2"], "12");
+        assert_eq!(value[0]["name"], "alpha");
+        assert_eq!(value[1]["name"], "beta");
+    }
 }

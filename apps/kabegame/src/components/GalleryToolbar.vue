@@ -465,13 +465,13 @@ const filterDimensions = computed<Array<{
   title: string;
   icon: Component;
 }>>(() => [
-  { key: "wallpaperOrder", title: t("gallery.filterWallpaperSet"), icon: FILTER_DIMENSION_ICONS.wallpaperOrder },
+  { key: "date", title: t("gallery.filterByTime"), icon: FILTER_DIMENSION_ICONS.date },
   { key: "plugin", title: t("gallery.filterByPlugin"), icon: FILTER_DIMENSION_ICONS.plugin },
   { key: "mediaType", title: t("gallery.filterByMediaType"), icon: FILTER_DIMENSION_ICONS.mediaType },
-  { key: "date", title: t("gallery.filterByTime"), icon: FILTER_DIMENSION_ICONS.date },
-  { key: "name", title: t("gallery.filterByName"), icon: FILTER_DIMENSION_ICONS.name },
-  { key: "size", title: t("gallery.filterBySize"), icon: FILTER_DIMENSION_ICONS.size },
   { key: "aspect", title: t("gallery.filterByAspect"), icon: FILTER_DIMENSION_ICONS.aspect },
+  { key: "size", title: t("gallery.filterBySize"), icon: FILTER_DIMENSION_ICONS.size },
+  { key: "name", title: t("gallery.filterByName"), icon: FILTER_DIMENSION_ICONS.name },
+  { key: "wallpaperOrder", title: t("gallery.filterWallpaperSet"), icon: FILTER_DIMENSION_ICONS.wallpaperOrder },
 ]);
 
 // no-album 是 header fold 的手动开关，不算「过滤」维度：不点亮过滤指示、也不显示清除叉号。
@@ -1254,12 +1254,12 @@ useModalBack(showPageSizePicker);
 
 const filterPickerColumns = computed(() => [
   { text: t("gallery.filterAll"), value: "all" },
-  { text: t("gallery.filterWallpaperSet"), value: "wallpaper-order" },
   { text: t("gallery.filterByTime"), value: "time" },
   { text: t("gallery.filterByPlugin"), value: "plugin" },
   { text: t("gallery.filterByMediaType"), value: "media-type" },
-  { text: t("gallery.filterByName"), value: "name" },
   { text: t("gallery.filterByAspect"), value: "aspect" },
+  { text: t("gallery.filterByName"), value: "name" },
+  { text: t("gallery.filterWallpaperSet"), value: "wallpaper-order" },
 ]);
 const filterPickerSelected = ref<string[]>(["all"]);
 watch(showFilterPicker, (open) => {

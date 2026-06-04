@@ -195,10 +195,6 @@ pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn default_safe_delete_organize() -> bool {
-    true
-}
-
 /// 与前端 `invoke` 对象字段一致（camelCase）；勿改用平铺 `bool` 参数，否则 serde 无法匹配 `removeUnrecognized` 等键，会得到默认值 false。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -209,8 +205,6 @@ pub struct StartOrganizeArgs {
     pub regen_thumbnails: bool,
     #[serde(default)]
     pub delete_source_files: bool,
-    #[serde(default = "default_safe_delete_organize")]
-    pub safe_delete: bool,
     pub range_start: Option<usize>,
     pub range_end: Option<usize>,
 }
@@ -233,7 +227,6 @@ pub async fn start_organize(args: StartOrganizeArgs) -> Result<(), String> {
                 remove_unrecognized: args.remove_unrecognized,
                 regen_thumbnails: args.regen_thumbnails,
                 delete_source_files: args.delete_source_files,
-                safe_delete: args.safe_delete,
                 offset,
                 limit,
             },

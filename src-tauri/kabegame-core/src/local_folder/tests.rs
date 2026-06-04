@@ -2,10 +2,7 @@ use super::status::FolderStatus;
 use super::sync::sync_album_if_folder_changed;
 use super::sync_album;
 use crate::app_paths::AppPaths;
-use crate::crawler::downloader::{
-    IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES, IMAGE_THUMBNAIL_TARGET_BYTES,
-    IMAGE_THUMBNAIL_TARGET_TOLERANCE_BYTES,
-};
+use crate::crawler::downloader::{IMAGE_THUMBNAIL_MAX_DIM, IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES};
 use crate::storage::{ImageInfo, Storage};
 use image::{Rgb, RgbImage};
 use rusqlite::{params, OptionalExtension};
@@ -343,12 +340,12 @@ async fn sync_large_image_creates_target_sized_thumbnail() {
     assert_eq!(report.added, 1);
     let thumbnail = image_thumbnail_for_path(&file).unwrap();
     assert_ne!(thumbnail, file.to_string_lossy());
-    let thumbnail_size = fs::metadata(&thumbnail).unwrap().len();
+    let (tw, th) = image::image_dimensions(&thumbnail).unwrap();
     assert!(
-        thumbnail_size.abs_diff(IMAGE_THUMBNAIL_TARGET_BYTES)
-            < IMAGE_THUMBNAIL_TARGET_TOLERANCE_BYTES,
-        "thumbnail size {} was not within target range",
-        thumbnail_size
+        tw.max(th) <= IMAGE_THUMBNAIL_MAX_DIM,
+        "thumbnail longest side {} exceeds cap {}",
+        tw.max(th),
+        IMAGE_THUMBNAIL_MAX_DIM
     );
 }
 

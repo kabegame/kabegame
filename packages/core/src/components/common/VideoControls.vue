@@ -68,6 +68,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { useLocalStorage } from "@vueuse/core";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 
@@ -89,9 +90,12 @@ const barRef = ref<InstanceType<typeof PreviewControlBar> | null>(null);
 const isPlaying = ref(false);
 const currentTime = ref(0);
 const duration = ref(0);
+// 视频音量 / 静音状态持久化，跨视频与会话保留用户偏好。
+const storedVolume = useLocalStorage("kabegame-video-volume", 1);
+const storedMuted = useLocalStorage("kabegame-video-muted", false);
 const isMuted = ref(false);
 const volume = ref(1);
-const lastVolume = ref(1);
+const lastVolume = ref(storedVolume.value > 0 ? storedVolume.value : 1);
 const isSeekDragging = ref(false);
 const seekDraftTime = ref<number | null>(null);
 const volumePanelActive = ref(false);
@@ -207,6 +211,19 @@ const handleMetadata = () => {
 
 const handleVolumeUpdate = () => {
   syncFromVideo();
+  if (currentVideo) {
+    storedVolume.value = currentVideo.volume;
+    storedMuted.value = currentVideo.muted;
+  }
+};
+
+// 应用持久化的音量 / 静音偏好到当前视频元素。
+const applyStoredVolume = () => {
+  if (!currentVideo) return;
+  const restored = Math.min(1, Math.max(0, Number.isFinite(storedVolume.value) ? storedVolume.value : 1));
+  currentVideo.volume = restored;
+  currentVideo.muted = storedMuted.value || restored === 0;
+  if (restored > 0) lastVolume.value = restored;
 };
 
 const handleVideoClick = () => {
@@ -254,6 +271,7 @@ const attachVideo = (video: HTMLVideoElement | null) => {
   currentVideo.addEventListener("volumechange", handleVolumeUpdate);
   currentVideo.addEventListener("click", handleVideoClick);
   currentVideo.addEventListener("dblclick", handleVideoDblClick);
+  applyStoredVolume();
   syncFromVideo();
   if (!currentVideo.paused && !currentVideo.ended) {
     startProgressRaf();

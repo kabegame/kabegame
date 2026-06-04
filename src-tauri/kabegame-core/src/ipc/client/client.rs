@@ -893,7 +893,6 @@ impl IpcClient {
         range_start: Option<usize>,
         range_end: Option<usize>,
         delete_source_files: bool,
-        safe_delete: bool,
     ) -> Result<(), String> {
         self.request_ok(IpcRequest::OrganizeStart {
             dedupe,
@@ -903,7 +902,6 @@ impl IpcClient {
             range_start,
             range_end,
             delete_source_files,
-            safe_delete,
         })
         .await
     }

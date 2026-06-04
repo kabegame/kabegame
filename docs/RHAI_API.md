@@ -787,6 +787,9 @@ fn migrate(metadata) {
 |------|------|
 | `parse_json(text)` | 将 JSON 字符串转为 Rhai 值。 |
 | `to_json(value)` | 将 Rhai 值序列化为 JSON 字符串，作为 `migrate` 返回值。 |
+| `re_is_match(pattern, text)` | 使用 Rust regex 判断文本是否匹配；非法 pattern 返回 `false`。 |
+| `re_replace_all(pattern, replacement, text)` | 使用 Rust regex 全局替换；replacement 支持 `$1` 等捕获组；非法 pattern 返回原文本。 |
+| `re_find_all(pattern, text)` | 返回所有匹配的 capture map 数组；每个 map 包含 `"0"`、`"1"` 等数字捕获键，也包含命名捕获键。非法 pattern 返回空数组。 |
 
 执行语义：
 
@@ -829,7 +832,7 @@ fn migrate(metadata) {
 | 方法 | 说明 |
 |------|------|
 | `ctx.addProgress(percentage)` | 累加任务进度（0–99.9），并上报前端。 |
-| `ctx.downloadImage(url, opts?)` | 将 URL 加入下载队列。`opts` 为可选 plain object：`cookie`、`headers`；`name` / `metadata` 可单独或同时传入（与 Rhai `download_image(url, #{ … })` 一致）。支持图片与视频。 |
+| `ctx.downloadImage(url, opts?)` | 将 URL 加入下载队列。`opts` 为可选 plain object：`cookie`、`headers`；`name` / `metadata` / `metadata_version` 可单独或同时传入（与 Rhai `download_image(url, #{ … })` 一致）。支持图片与视频。 |
 
 ### 日志与生命周期
 

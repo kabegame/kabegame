@@ -4,10 +4,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
 
-fn default_safe_delete_organize() -> bool {
-    true
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartOrganizeArgs {
@@ -17,8 +13,6 @@ pub struct StartOrganizeArgs {
     pub regen_thumbnails: bool,
     #[serde(default)]
     pub delete_source_files: bool,
-    #[serde(default = "default_safe_delete_organize")]
-    pub safe_delete: bool,
     pub range_start: Option<usize>,
     pub range_end: Option<usize>,
 }
@@ -38,7 +32,6 @@ pub async fn start_organize(args: StartOrganizeArgs) -> Result<Value, String> {
                 remove_unrecognized: args.remove_unrecognized,
                 regen_thumbnails: args.regen_thumbnails,
                 delete_source_files: args.delete_source_files,
-                safe_delete: args.safe_delete,
                 offset,
                 limit,
             },

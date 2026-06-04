@@ -12,10 +12,6 @@ use serde_bytes::ByteBuf;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-fn ipc_default_safe_delete() -> bool {
-    true
-}
-
 pub fn ipc_debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| match std::env::var("KABEGAME_IPC_DEBUG") {
@@ -277,8 +273,6 @@ pub enum IpcRequest {
         range_end: Option<usize>,
         #[serde(default)]
         delete_source_files: bool,
-        #[serde(default = "ipc_default_safe_delete")]
-        safe_delete: bool,
     },
 
     /// 取消整理任务
