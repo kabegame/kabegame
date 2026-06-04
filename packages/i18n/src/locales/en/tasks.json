@@ -159,5 +159,6 @@
   "taskLogLocalImportEnqueuedSummary": "local-import: imported {count} file(s)",
   "taskLogDedupByUrl": "URL deduplication: skipped download. {currentUrl} matches stored image id={existingId}; stored URL: {existingUrl}; path: {existingPath}",
   "taskLogDedupByHash": "Hash deduplication: {currentUrl} matches existing image id={existingId}; existing URL: {existingUrl}; local path: {existingPath}",
+  "taskLogDedupByPath": "Path deduplication: skipped, the local path is already used by image id={existingId} ({existingPath}). Source: {currentUrl}",
   "taskLogDedupSurfDuplicate": "Surf: duplicate hash filtered vs image id={existingId}. Current: {currentUrl}; existing URL: {existingUrl}; local path: {existingPath}"
 }

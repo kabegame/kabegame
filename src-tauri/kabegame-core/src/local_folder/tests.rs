@@ -1,6 +1,6 @@
 use super::status::FolderStatus;
 use super::sync::sync_album_if_folder_changed;
-use super::{build_entries_recursive, sync_album};
+use super::sync_album;
 use crate::app_paths::AppPaths;
 use crate::crawler::downloader::{
     IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES, IMAGE_THUMBNAIL_TARGET_BYTES,
@@ -117,30 +117,111 @@ fn writable_guard_rejects_local_folder_albums_only() {
         .is_ok());
 }
 
-#[test]
-fn build_entries_recursive_builds_dfs_names_and_parents() {
+#[tokio::test(flavor = "current_thread")]
+async fn scan_service_recursive_filters_and_hidden() {
+    use super::scan_service::{
+        scan_and_visit, FolderScanHook, ScanOptions, ScannedDir, ScannedFile,
+    };
+    use url::Url;
+
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("Pictures");
-    fs::create_dir_all(root.join("person/girl")).unwrap();
+    let root = tmp.path().join("Pics");
+    fs::create_dir_all(root.join("sub/deep")).unwrap();
     fs::create_dir_all(root.join(".hidden")).unwrap();
-    fs::write(root.join("person/girl/a.txt"), "ignored").unwrap();
+    write_png(&root.join("a.png"), [1, 2, 3]);
+    write_png(&root.join("sub/b.png"), [4, 5, 6]);
+    write_png(&root.join("sub/deep/c.png"), [7, 8, 9]);
+    write_png(&root.join(".hidden/h.png"), [0, 0, 0]);
+    fs::write(root.join("note.txt"), "x").unwrap(); // 非媒体
 
-    let entries = build_entries_recursive("图片", &root, None).unwrap();
+    struct CollectHook {
+        files: Vec<String>,
+        dirs: Vec<String>,
+    }
+    #[async_trait::async_trait]
+    impl FolderScanHook for CollectHook {
+        type DirCtx = ();
+        async fn on_enter_dir(
+            &mut self,
+            dir: &ScannedDir,
+            _parent: &(),
+        ) -> Result<Option<()>, String> {
+            self.dirs.push(dir.name.clone());
+            Ok(Some(()))
+        }
+        async fn on_file(&mut self, file: &ScannedFile, _ctx: &()) -> Result<(), String> {
+            self.files.push(file.name.clone());
+            Ok(())
+        }
+    }
 
-    assert_eq!(entries.len(), 3);
-    assert_eq!(entries[0].name, "图片");
-    assert_eq!(entries[1].name, "图片-person");
-    assert_eq!(entries[2].name, "图片-person-girl");
-    assert_eq!(entries[0].parent_id, None);
+    let root_url = Url::from_file_path(&root).unwrap();
+
+    // 非递归：仅根层 a.png（note.txt 非媒体被过滤）。
+    let mut h = CollectHook {
+        files: vec![],
+        dirs: vec![],
+    };
+    scan_and_visit(&[root_url.clone()], (), &ScanOptions::default(), &mut h)
+        .await
+        .unwrap();
+    assert_eq!(h.files, vec!["a.png".to_string()]);
+    assert!(h.dirs.is_empty());
+
+    // 递归 + 跳过隐藏目录：a/b/c.png；进入 sub、deep（.hidden 跳过）。
+    let mut h2 = CollectHook {
+        files: vec![],
+        dirs: vec![],
+    };
+    let opts = ScanOptions {
+        recursive: true,
+        skip_hidden_dirs: true,
+        ..Default::default()
+    };
+    scan_and_visit(&[root_url], (), &opts, &mut h2)
+        .await
+        .unwrap();
+    h2.files.sort();
     assert_eq!(
-        entries[1].parent_id.as_deref(),
-        Some(entries[0].id.as_str())
+        h2.files,
+        vec![
+            "a.png".to_string(),
+            "b.png".to_string(),
+            "c.png".to_string()
+        ]
     );
-    assert_eq!(
-        entries[2].parent_id.as_deref(),
-        Some(entries[1].id.as_str())
-    );
-    assert_eq!(entries[0].sync_folder, root.to_string_lossy());
+    h2.dirs.sort();
+    assert_eq!(h2.dirs, vec!["deep".to_string(), "sub".to_string()]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recursive_sync_creates_subalbums_and_imports() {
+    let _guard = test_guard();
+    let (_tmp, dir) = temp_album_dir();
+    write_png(&dir.join("root.png"), [1, 1, 1]);
+    fs::create_dir_all(dir.join("cats")).unwrap();
+    write_png(&dir.join("cats/cat.png"), [2, 2, 2]);
+    wait_for_stable_window();
+    let album_id = create_sync_album(&dir);
+
+    let report = super::sync_album_recursive(&album_id, vec![])
+        .await
+        .unwrap();
+
+    assert_eq!(report.created_albums, 1, "应为 cats 子目录建一个子画册");
+    assert_eq!(report.added, 2);
+    assert_eq!(album_image_count(&album_id), 1, "根画册装 root.png");
+
+    let child_id: String = {
+        let conn = Storage::global().db.lock().unwrap();
+        conn.query_row(
+            "SELECT id FROM albums WHERE parent_id = ?1",
+            params![album_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(album_image_count(&child_id), 1, "子画册装 cat.png");
 }
 
 fn image_row_for_path(
@@ -292,6 +373,7 @@ fn replace_image_thumbnail_path_deletes_old_independent_thumbnail() {
             surf_record_id: None,
             crawled_at: now_secs() as u64,
             metadata_id: None,
+            metadata_version: 0,
             thumbnail_path: old_thumb_str,
             favorite: false,
             is_hidden: false,
@@ -374,12 +456,24 @@ async fn sync_reimports_changed_file_and_carries_user_fields() {
     let new = image_row_for_path(&file).unwrap();
     assert_ne!(new.0, old.0);
     assert_eq!(new.3, "edited-name.png");
-    assert_eq!(new.4, Some(metadata_id));
-    let rows = Storage::global()
-        .list_album_images_for_sync(&album_id)
+    // 重导入「保存再写入」metadata：内容必须保留；id 可能变化（旧行被 GC 后重建）均可。
+    let new_metadata_id = new.4.expect("reimport should carry metadata");
+    assert_eq!(
+        Storage::global()
+            .read_image_metadata_text(new_metadata_id)
+            .unwrap()
+            .unwrap(),
+        r#"{"edited":true}"#
+    );
+    let _ = metadata_id;
+    let ids = Storage::global()
+        .list_album_image_ids_for_sync(&album_id)
         .unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].order, Some(42));
+    assert_eq!(ids.len(), 1);
+    assert_eq!(
+        Storage::get_album_image_order(&album_id, &new.0).unwrap(),
+        Some(42)
+    );
     assert_ne!(image_hash_for_path(&file).unwrap(), old_hash);
     assert!(file.exists(), "reimport must not delete the source file");
 }

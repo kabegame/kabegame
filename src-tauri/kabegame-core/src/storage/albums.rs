@@ -536,6 +536,11 @@ impl Storage {
         ))
     }
 
+    /// 按 BFS 顺序收集某画册子树内的所有画册 id（含根）。根在前，子画册按 `created_at`。
+    pub fn list_subtree_album_ids(&self, root_id: &str) -> Result<Vec<String>, String> {
+        self.collect_subtree_album_ids_bfs(root_id)
+    }
+
     fn collect_subtree_album_ids_bfs(&self, root_id: &str) -> Result<Vec<String>, String> {
         let mut out = Vec::new();
         let mut queue = VecDeque::new();

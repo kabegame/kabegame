@@ -3,7 +3,7 @@
 > 主题：桌面端（Windows / macOS / Linux）通过 GitHub Release 做应用自动更新的全链路。
 > **状态机 + 调度 + 下载 + 安装全部归后端权威**，前端只是「镜像」（启动 hydrate 一次 + 事件被动刷新），与 `OrganizeService` 同构。
 > Android / iOS / Web **不编译**该后端模块、前端服务全程 noop（Web 因 GitHub 不发布对应包）。
-> 设计与分期落地详见 [.claude/plans/desktop-auto-update.md](../../.claude/plans/desktop-auto-update.md) 及 `desktop-auto-update-phase{1..4}.md`。
+> 设计与分期落地详见 [.claude/plans/desktop-auto-update/desktop-auto-update.md](../../.claude/plans/desktop-auto-update/desktop-auto-update.md) 及 `.claude/plans/desktop-auto-update/desktop-auto-update-phase{1..4}.md`。
 
 ## 更新源与版本判定
 

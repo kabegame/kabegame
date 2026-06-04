@@ -12,6 +12,16 @@
       @touchend.passive="cancelLongPress"
       @touchcancel.passive="cancelLongPress"
     >
+      <KameBubble
+        :text="currentMessage?.text ?? ''"
+        :type="currentMessage?.type ?? 'info'"
+        :visible="!!currentMessage"
+        :more-text="moreText"
+        :side="bubbleSide"
+        :max-width="bubbleMaxWidth"
+        :compact="minimized"
+      />
+
       <button
         v-if="minimized"
         class="kamechan-minimized"
@@ -24,32 +34,23 @@
         <img :src="appLogoUrl" alt="" draggable="false" />
       </button>
 
-      <template v-else>
-        <KameBubble
-          :text="currentMessage?.text ?? ''"
-          :type="currentMessage?.type ?? 'info'"
-          :visible="!!currentMessage"
-          :more-text="moreText"
-          :side="bubbleSide"
-          :max-width="bubbleMaxWidth"
+      <button
+        v-else
+        class="kamechan-mascot"
+        :class="`is-${state}`"
+        type="button"
+        aria-label="Kamechan"
+        title="Kamechan"
+        @pointerdown="startDrag"
+        @click="handleMascotClick"
+      >
+        <img
+          class="kamechan-mascot__image"
+          :src="imageSrc"
+          alt=""
+          draggable="false"
         />
-        <button
-          class="kamechan-mascot"
-          :class="`is-${state}`"
-          type="button"
-          aria-label="Kamechan"
-          title="Kamechan"
-          @pointerdown="startDrag"
-          @click="handleMascotClick"
-        >
-          <img
-            class="kamechan-mascot__image"
-            :src="imageSrc"
-            alt=""
-            draggable="false"
-          />
-        </button>
-      </template>
+      </button>
 
     </div>
     <ActionRenderer
@@ -102,6 +103,7 @@ const viewportSize = ref({
 let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
 const positionStorageKey = "kabegame:kamechan-position";
+const minimizedStorageKey = "kabegame:kamechan-minimized";
 const dragThresholdPx = 5;
 const viewportMarginPx = 8;
 const bubbleViewportMarginPx = 12;
@@ -354,6 +356,22 @@ function persistPosition() {
   }
 }
 
+function persistMinimized() {
+  try {
+    localStorage.setItem(minimizedStorageKey, minimized.value ? "1" : "0");
+  } catch {
+    // Ignore storage failures; minimizing should still work for the current session.
+  }
+}
+
+function restorePersistedMinimized() {
+  try {
+    minimized.value = localStorage.getItem(minimizedStorageKey) === "1";
+  } catch {
+    minimized.value = false;
+  }
+}
+
 function restorePersistedPosition() {
   try {
     const raw = localStorage.getItem(positionStorageKey);
@@ -385,6 +403,7 @@ function getBubbleAnchorInset(hostWidth: number) {
 }
 
 watch(minimized, async () => {
+  persistMinimized();
   await nextTick();
   clampCurrentPosition();
 });
@@ -399,6 +418,7 @@ watch(kamechanEnabled, (enabled) => {
 onMounted(() => {
   updateViewportSize();
   void settingsStore.load("kamechanEnabled");
+  restorePersistedMinimized();
   restorePersistedPosition();
   window.addEventListener("resize", clampCurrentPosition, { passive: true });
 

@@ -134,21 +134,15 @@ pub async fn update_album_images_order(
 }
 
 #[tauri::command]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 pub async fn add_local_folder_album(
     name: String,
     parent_id: Option<String>,
     sync_folder: String,
     recursive: bool,
 ) -> Result<serde_json::Value, String> {
-    crate::commands_core::album::add_local_folder_album(
-        crate::commands_core::album::AddLocalFolderAlbumArgs {
-            name,
-            parent_id,
-            sync_folder,
-            recursive,
-        },
-    )
-    .await
+    crate::commands_core::album::add_local_folder_album(name, parent_id, sync_folder, recursive)
+        .await
 }
 
 #[tauri::command]
@@ -159,4 +153,11 @@ pub async fn sync_local_folder_album(album_id: String) -> Result<serde_json::Val
 #[tauri::command]
 pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<serde_json::Value, String> {
     crate::commands_core::album::sync_local_folder_albums(album_ids).await
+}
+
+#[tauri::command]
+pub async fn sync_local_folder_album_recursive(
+    album_id: String,
+) -> Result<serde_json::Value, String> {
+    crate::commands_core::album::sync_local_folder_album_recursive(album_id).await
 }

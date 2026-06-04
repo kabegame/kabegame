@@ -42,7 +42,7 @@ albums:
     nameExists: 畫冊名稱已存在，請換一個名稱
     parentNotFound: "父畫冊不存在: {id}"
   localFolderErrors:
-    macosOnly: 此建置中的本機資料夾同步僅支援 macOS
+    androidUnsupported: Android 平台不支援本機資料夾同步
     nameRequired: 畫冊名稱不能為空
     nameNoSlash: "畫冊名稱不能包含 '/'"
     parentReadonly: 不能在系統畫冊下建立本機資料夾同步畫冊
@@ -51,6 +51,7 @@ albums:
     notDirectory: sync_folder 不是資料夾
     folderAccessFailed: "無法存取 sync_folder: {detail}"
     virtualDrivePathForbidden: "不能選擇虛擬磁碟掛載目錄內的路徑（{path}）作為同步來源"
+    duplicateSyncFolder: 此路徑已存在對應的本機資料夾同步畫冊
     readOnly: 本機資料夾同步畫冊不可手動新增或移除圖片
 
 plugins:

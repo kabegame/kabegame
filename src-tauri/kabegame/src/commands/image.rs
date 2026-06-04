@@ -53,6 +53,17 @@ pub async fn get_image_metadata(image_id: String) -> Result<Option<serde_json::V
 }
 
 #[tauri::command]
+pub async fn get_image_metadata_full(
+    image_id: String,
+) -> Result<Option<serde_json::Value>, String> {
+    Storage::global()
+        .get_image_metadata_full(&image_id)?
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_images_count() -> Result<usize, String> {
     Storage::global().get_total_count()
 }

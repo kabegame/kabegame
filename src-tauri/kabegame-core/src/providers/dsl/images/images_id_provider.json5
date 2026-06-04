@@ -11,6 +11,9 @@
     "resolve": {
         "metadata": {
             "provider": "images_metadata_provider"
+        },
+        "metadata_full": {
+            "provider": "images_metadata_full_provider"
         }
     }
 }

@@ -19,7 +19,9 @@ use url::Url;
 
 type Shared<T> = Arc<Mutex<T>>;
 
-fn rhai_dynamic_to_json_value(d: &Dynamic) -> Result<JsonValue, Box<rhai::EvalAltResult>> {
+pub(crate) fn rhai_dynamic_to_json_value(
+    d: &Dynamic,
+) -> Result<JsonValue, Box<rhai::EvalAltResult>> {
     if d.is_unit() {
         return Ok(JsonValue::Null);
     }
@@ -60,7 +62,7 @@ fn rhai_dynamic_to_json_value(d: &Dynamic) -> Result<JsonValue, Box<rhai::EvalAl
     Err("Rhai value contains unsupported type for JSON serialization".into())
 }
 
-fn rhai_map_to_json_value(map: &Map) -> Result<JsonValue, String> {
+pub(crate) fn rhai_map_to_json_value(map: &Map) -> Result<JsonValue, String> {
     let mut obj = JsonMap::new();
     for (k, v) in map {
         obj.insert(
@@ -69,6 +71,36 @@ fn rhai_map_to_json_value(map: &Map) -> Result<JsonValue, String> {
         );
     }
     Ok(JsonValue::Object(obj))
+}
+
+pub(crate) fn json_value_to_rhai_dynamic(value: &JsonValue) -> Dynamic {
+    match value {
+        JsonValue::Null => Dynamic::UNIT,
+        JsonValue::Bool(v) => Dynamic::from(*v),
+        JsonValue::Number(n) => {
+            if let Some(v) = n.as_i64() {
+                Dynamic::from(v)
+            } else if let Some(v) = n.as_u64() {
+                Dynamic::from(v as i64)
+            } else if let Some(v) = n.as_f64() {
+                Dynamic::from(v)
+            } else {
+                Dynamic::UNIT
+            }
+        }
+        JsonValue::String(v) => Dynamic::from(v.clone()),
+        JsonValue::Array(items) => {
+            let arr: rhai::Array = items.iter().map(json_value_to_rhai_dynamic).collect();
+            Dynamic::from(arr)
+        }
+        JsonValue::Object(obj) => {
+            let mut map = Map::new();
+            for (key, value) in obj {
+                map.insert(key.clone().into(), json_value_to_rhai_dynamic(value));
+            }
+            Dynamic::from(map)
+        }
+    }
 }
 
 fn safe_filename_component(input: &str) -> String {
@@ -153,6 +185,7 @@ fn run_rhai_download_image_sync(
 /// 从 Rhai `download_image(url, opts)` 的 `opts` map 解析 `name` / `metadata_id`。
 fn parse_download_image_opts_from_map(
     opts: &Map,
+    plugin_id: &str,
 ) -> Result<(Option<String>, Option<i64>), Box<rhai::EvalAltResult>> {
     let opt_str = |key: &str| -> Result<Option<String>, Box<rhai::EvalAltResult>> {
         match opts.get(key) {
@@ -164,6 +197,24 @@ fn parse_download_image_opts_from_map(
             }
             Some(_) => {
                 Err(format!("download_image opts: `{key}` must be a string if present").into())
+            }
+        }
+    };
+    let opt_version = |key: &str| -> Result<u32, Box<rhai::EvalAltResult>> {
+        match opts.get(key) {
+            None => Ok(0),
+            Some(d) if d.is_unit() => Ok(0),
+            Some(d) if d.is_int() => {
+                let v = d.as_int().unwrap();
+                if v < 0 {
+                    Err(format!("download_image opts: `{key}` must be >= 0").into())
+                } else {
+                    u32::try_from(v)
+                        .map_err(|_| format!("download_image opts: `{key}` is too large").into())
+                }
+            }
+            Some(_) => {
+                Err(format!("download_image opts: `{key}` must be an integer if present").into())
             }
         }
     };
@@ -180,18 +231,38 @@ fn parse_download_image_opts_from_map(
         Some(d) if d.is_unit() => None,
         Some(d) => Some(rhai_dynamic_to_json_value(d)?),
     };
+    let metadata_version = opt_version("metadata_version")?;
     let metadata_id = if let Some(id) = metadata_id {
         Some(id)
     } else if let Some(value) = metadata {
         Some(
             Storage::global()
-                .insert_or_get_image_metadata_row(&value)
+                .insert_or_get_image_metadata_row(&value, plugin_id, metadata_version)
                 .map_err(|e| e.to_string())?,
         )
     } else {
         None
     };
     Ok((opt_str("name")?, metadata_id))
+}
+
+fn parse_create_image_metadata_version(opts: &Map) -> Result<u32, Box<rhai::EvalAltResult>> {
+    match opts.get("version") {
+        None => Ok(0),
+        Some(d) if d.is_unit() => Ok(0),
+        Some(d) if d.is_int() => {
+            let v = d.as_int().unwrap();
+            if v < 0 {
+                Err("create_image_metadata opts: `version` must be >= 0".into())
+            } else {
+                u32::try_from(v)
+                    .map_err(|_| "create_image_metadata opts: `version` is too large".into())
+            }
+        }
+        Some(_) => {
+            Err("create_image_metadata opts: `version` must be an integer if present".into())
+        }
+    }
 }
 
 fn get_page_stack(
@@ -1620,7 +1691,7 @@ pub fn register_crawler_functions(
             let task_id = lock_or_inner(&tid2).clone();
             let output_album_id = lock_or_inner(&oaid2).clone();
             let http_headers = lock_or_inner(&hdr2).clone();
-            let (custom_name, metadata_id) = parse_download_image_opts_from_map(&opts)?;
+            let (custom_name, metadata_id) = parse_download_image_opts_from_map(&opts, &plugin_id)?;
             run_rhai_download_image_sync(
                 &dq2,
                 images_dir,
@@ -1635,16 +1706,29 @@ pub fn register_crawler_functions(
         },
     );
 
-    engine.register_fn(
-        "create_image_metadata",
-        |m: Map| -> Result<i64, Box<rhai::EvalAltResult>> {
+    engine.register_fn("create_image_metadata", {
+        let plugin_id_holder = Arc::clone(&plugin_id);
+        move |m: Map| -> Result<i64, Box<rhai::EvalAltResult>> {
             let val =
                 rhai_map_to_json_value(&m).map_err(|e| format!("create_image_metadata: {e}"))?;
+            let plugin_id = lock_or_inner(&plugin_id_holder).clone();
             Storage::global()
-                .insert_or_get_image_metadata_row(&val)
+                .insert_or_get_image_metadata_row(&val, &plugin_id, 0)
                 .map_err(|e| e.to_string().into())
-        },
-    );
+        }
+    });
+    engine.register_fn("create_image_metadata", {
+        let plugin_id_holder = Arc::clone(&plugin_id);
+        move |m: Map, opts: Map| -> Result<i64, Box<rhai::EvalAltResult>> {
+            let val =
+                rhai_map_to_json_value(&m).map_err(|e| format!("create_image_metadata: {e}"))?;
+            let version = parse_create_image_metadata_version(&opts)?;
+            let plugin_id = lock_or_inner(&plugin_id_holder).clone();
+            Storage::global()
+                .insert_or_get_image_metadata_row(&val, &plugin_id, version)
+                .map_err(|e| e.to_string().into())
+        }
+    });
 }
 
 /// 执行 Rhai 爬虫脚本

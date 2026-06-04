@@ -34,7 +34,7 @@
       :context="albumMenuContext"
       :z-index="3500"
       @close="albumMenu.hide"
-      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow')" />
+      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursive')" />
 
     <el-dialog
       v-model="showCreateDialog"
@@ -58,7 +58,7 @@
           :picker-title="$t('albums.parentAlbum')"
         />
 
-        <el-checkbox v-if="IS_MACOS" v-model="newAlbumIsLocalFolder" class="mt-3">
+        <el-checkbox v-if="!IS_ANDROID" v-model="newAlbumIsLocalFolder" class="mt-3">
           {{ $t('albums.localFolder.create') }}
         </el-checkbox>
 
@@ -71,6 +71,9 @@
               {{ newAlbumSyncFolder || $t('albums.localFolder.noPathSelected') }}
             </span>
           </div>
+          <p v-if="syncFolderDuplicate" class="local-folder-error">
+            {{ $t('albums.localFolder.duplicatePathHint') }}
+          </p>
           <el-checkbox v-model="newAlbumRecursive">
             {{ $t('albums.localFolder.recursive') }}
           </el-checkbox>
@@ -152,7 +155,7 @@ import AlbumsPageHeader from "@/components/header/AlbumsPageHeader.vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, IS_WEB, IS_MACOS, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, IS_WEB, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
@@ -162,6 +165,7 @@ import { useGlobalPathRoute } from "@/stores/pathRoute";
 import { openFilePicker } from "@/api/dialog";
 import {
   syncLocalFolderAlbum,
+  syncLocalFolderAlbumRecursive,
   syncLocalFolderAlbums,
   type BatchSyncItem,
   type FolderStatusState,
@@ -174,6 +178,7 @@ import {
   loadAlbumMediaPreview,
   type AlbumMediaNode,
 } from "@/utils/albumMediaTree";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
@@ -371,10 +376,32 @@ const newAlbumIsLocalFolder = ref(false);
 const newAlbumSyncFolder = ref("");
 const newAlbumRecursive = ref(false);
 const creatingAlbum = ref(false);
+/** 规范化本地路径用于比较：去除尾部分隔符（根目录除外）。 */
+const normalizeSyncPath = (p: string): string => {
+  const trimmed = p.trim();
+  if (!trimmed) return "";
+  const stripped = trimmed.replace(/[/\\]+$/, "");
+  return stripped || trimmed;
+};
+const existingSyncFolders = computed(() => {
+  const set = new Set<string>();
+  for (const a of albums.value) {
+    if (a.type === "local_folder" && a.syncFolder) {
+      set.add(normalizeSyncPath(a.syncFolder));
+    }
+  }
+  return set;
+});
+/** 选中的同步目录已存在对应的本地文件夹画册：禁用创建并在弹窗提示。 */
+const syncFolderDuplicate = computed(() => {
+  if (!newAlbumIsLocalFolder.value || !newAlbumSyncFolder.value) return false;
+  return existingSyncFolders.value.has(normalizeSyncPath(newAlbumSyncFolder.value));
+});
 const canSubmitCreateAlbum = computed(() => {
   if (!newAlbumName.value.trim()) return false;
   if (creatingAlbum.value) return false;
   if (newAlbumIsLocalFolder.value && !newAlbumSyncFolder.value) return false;
+  if (syncFolderDuplicate.value) return false;
   return true;
 });
 const isRefreshing = ref(false);
@@ -611,7 +638,7 @@ const handleRefresh = async () => {
       .filter((a) => a.type === "local_folder")
       .map((a) => a.id);
 
-    if (!IS_MACOS || localFolderIdsOnPage.length === 0) {
+    if (IS_ANDROID || IS_WEB || localFolderIdsOnPage.length === 0) {
       ElMessage.success(t("albums.refreshSuccess"));
     } else {
       ElMessage.warning(t("albums.localFolder.refreshSyncProgressing"));
@@ -664,6 +691,10 @@ const pickLocalFolder = async () => {
 
 const handleCreateAlbum = async () => {
   if (!canSubmitCreateAlbum.value) return;
+  // 本地文件夹同步仅桌面端支持：Web 端（无论是否管理员）选择本地文件夹后点击创建，引导前往桌面版。
+  if (newAlbumIsLocalFolder.value && (await guardDesktopOnly("localFolderSync"))) {
+    return;
+  }
   creatingAlbum.value = true;
   try {
     const parentId = newAlbumParentId.value?.trim() || null;
@@ -798,7 +829,14 @@ const openAlbumContextMenu = (event: MouseEvent, album: { id: string; name: stri
 };
 
 const handleAlbumMenuCommand = async (
-  command: "browse" | "delete" | "setWallpaperRotation" | "rename" | "moveTo" | "syncNow",
+  command:
+    | "browse"
+    | "delete"
+    | "setWallpaperRotation"
+    | "rename"
+    | "moveTo"
+    | "syncNow"
+    | "syncNowRecursive",
 ) => {
   const context = albumMenuContext.value;
   const album = context.target;
@@ -816,6 +854,27 @@ const handleAlbumMenuCommand = async (
     try {
       const report = await syncLocalFolderAlbum(id);
       if (report) reportSingleSyncResult(report);
+    } catch (e: any) {
+      ElMessage.error(e?.message || String(e));
+    }
+    return;
+  }
+
+  if (command === "syncNowRecursive") {
+    ElMessage.info(t("albums.localFolder.recursiveSyncing", { name }));
+    try {
+      const report = await syncLocalFolderAlbumRecursive(id);
+      if (report) {
+        await albumStore.loadAlbums();
+        ElMessage.success(
+          t("albums.localFolder.recursiveSyncDone", {
+            createdAlbums: report.createdAlbums,
+            syncedAlbums: report.syncedAlbums,
+            added: report.added,
+            deleted: report.deleted,
+          }),
+        );
+      }
     } catch (e: any) {
       ElMessage.error(e?.message || String(e));
     }
@@ -961,6 +1020,13 @@ const handleAlbumMenuCommand = async (
 .local-folder-hint {
   margin: 0;
   color: var(--anime-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.local-folder-error {
+  margin: 0;
+  color: var(--el-color-danger);
   font-size: 12px;
   line-height: 1.45;
 }

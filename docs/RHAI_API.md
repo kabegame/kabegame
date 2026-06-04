@@ -691,6 +691,7 @@ del_header("Authorization");
 - `opts` (map, 可选): 选项对象，键均可独立出现：
   - `name` (string): 图库中的**展示名称**。省略、不存在或空字符串时，使用保存后的**文件名**（与仅传 `url` 时一致）。
   - `metadata` (map / 任意可序列化结构): 可选，会作为 JSON 写入 `image_metadata` 并转为 `metadata_id`。详情页由插件包内 `templates/description.ejs` 与 `ejs.render(template, { metadata })` 渲染（iframe `srcdoc`）。省略或空 map 表示无扩展元数据。
+  - `metadata_version` (int): 可选，`metadata` 写入 `image_metadata` 时使用的版本号。必须是纯自然数；省略、不存在或 `()` 时为 `0`。
 
 在 Rhai 中 `opts` 使用 map 字面量，例如 `#{ name: "…", metadata: #{ source: "…", score: 12 } }`。
 
@@ -712,7 +713,8 @@ download_image("https://example.com/a.jpg", #{ metadata: #{ note: "剧情节选"
 // 名称 + metadata
 download_image("https://example.com/a.jpg", #{
     name: "角色名 - 场景标题",
-    metadata: #{ note: "剧情节选" }
+    metadata: #{ note: "剧情节选" },
+    metadata_version: 1
 });
 
 // 获取所有图片 URL
@@ -733,6 +735,66 @@ download_image("https://example.com/video.mp4");
 - 支持下载**图片**与**视频**：按 URL 扩展名保存到插件对应目录，图片与视频会加入图库。
 - 资源会被添加到下载队列，由后台线程异步下载。
 - 下载的图片与视频会自动保存到插件目录并加入图库。
+- `metadata` 会按 `(plugin_id, version, content_hash)` 复合键去重；同一插件、同一版本、相同 JSON 内容会复用同一行。
+
+### `create_image_metadata(map)` / `create_image_metadata(map, opts)`
+
+预先写入一行 metadata 并返回 `metadata_id`，适合一份 metadata 被多张图片或视频复用的场景。
+
+**参数：**
+- `map` (map): 可序列化的 metadata 内容。
+- `opts.version` (int, 可选): metadata 版本号。必须是纯自然数；省略、不存在或 `()` 时为 `0`。
+
+**返回值：**
+- `i64`: `image_metadata.id`
+- 失败时返回错误信息字符串（可用 `?` 传播）
+
+**示例：**
+```rhai
+let metadata_id = create_image_metadata(#{
+    title: "角色名 - 场景标题",
+    source: "example"
+}, #{ version: 1 });
+
+download_image("https://example.com/a.jpg", #{ metadata_id: metadata_id });
+```
+
+---
+
+## Metadata 迁移脚本
+
+插件包可以提供 `metadata_migrations/v{N}.rhai`，用于在插件升级后迁移历史图片 metadata。`N` 是从 `1` 开始的正整数版本号：
+
+```text
+metadata_migrations/
+  v1.rhai
+  v2.rhai
+```
+
+每个脚本必须定义 `fn migrate(metadata)`，入参和返回值都是 JSON 字符串：
+
+```rhai
+fn migrate(metadata) {
+    let m = parse_json(metadata);
+    m["schema"] = 1;
+    to_json(m)
+}
+```
+
+迁移上下文只提供必要的纯数据辅助函数：
+
+| 函数 | 说明 |
+|------|------|
+| `parse_json(text)` | 将 JSON 字符串转为 Rhai 值。 |
+| `to_json(value)` | 将 Rhai 值序列化为 JSON 字符串，作为 `migrate` 返回值。 |
+
+执行语义：
+
+- 版本必须连续。运行时只执行从 `v1.rhai` 开始的连续脚本；若缺少 `v2.rhai`，即使存在 `v3.rhai` 也不会执行 `v3`。
+- 每行 metadata 从当前 `image_metadata.version + 1` 开始逐版执行，成功到哪一版就写回哪一版。
+- 某一版编译或执行失败时，该行停止在已成功版本；后续插件安装、更新或应用启动时会再次尝试。
+- 写回时按 `(plugin_id, version, content_hash)` 复合键去重；目标行已存在时会把引用合并到既有 metadata 行。
+- 执行时机为插件安装 / 更新后，以及应用启动加载已安装插件时。迁移成功后会发出作用域为该插件的 `metadata-migrate` 图片变更事件。
 
 ---
 

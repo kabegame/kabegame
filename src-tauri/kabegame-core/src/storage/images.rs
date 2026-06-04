@@ -28,6 +28,10 @@ pub struct ImageInfo {
     #[serde(rename(serialize = "metadataId"), alias = "metadataId")]
     #[serde(default)]
     pub metadata_id: Option<i64>,
+    /// `image_metadata.version`；用于前端 metadata 缓存失效。
+    #[serde(rename(serialize = "metadataVersion"), alias = "metadataVersion")]
+    #[serde(default)]
+    pub metadata_version: u32,
     #[serde(rename(serialize = "thumbnailPath"), alias = "thumbnailPath")]
     #[serde(default)]
     pub thumbnail_path: String,
@@ -123,6 +127,16 @@ pub struct RangedImages {
     pub limit: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageMetadataFull {
+    pub id: i64,
+    pub data: Option<Value>,
+    pub version: u32,
+    pub plugin_id: String,
+    pub content_hash: String,
+}
+
 #[cfg(not(target_os = "android"))]
 fn remove_thumbnail_file_if_needed(local_path: Option<&str>, thumbnail_path: Option<&str>) {
     let Some(thumb) = thumbnail_path.map(str::trim).filter(|p| !p.is_empty()) else {
@@ -167,20 +181,25 @@ pub(crate) fn metadata_content_hash_hex(bytes: &[u8]) -> String {
     s
 }
 
-/// 将 JSON 文本写入 `image_metadata`（按 content_hash 去重）并返回行 id。
+/// 将 JSON 文本写入 `image_metadata`（按 plugin_id + version + content_hash 去重）并返回行 id。
 pub(crate) fn insert_or_get_image_metadata_id(
     conn: &rusqlite::Connection,
     data_json: &str,
+    plugin_id: &str,
+    version: u32,
 ) -> Result<i64, String> {
     let hash = metadata_content_hash_hex(data_json.as_bytes());
+    let version_i64 = i64::from(version);
     conn.execute(
-        "INSERT OR IGNORE INTO image_metadata (data, content_hash) VALUES (?1, ?2)",
-        params![data_json, hash],
+        "INSERT OR IGNORE INTO image_metadata (data, content_hash, plugin_id, version)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![data_json, hash, plugin_id, version_i64],
     )
     .map_err(|e| format!("insert image_metadata: {}", e))?;
     conn.query_row(
-        "SELECT id FROM image_metadata WHERE content_hash = ?1",
-        params![hash],
+        "SELECT id FROM image_metadata
+         WHERE plugin_id = ?1 AND version = ?2 AND content_hash = ?3",
+        params![plugin_id, version_i64, hash],
         |r| r.get(0),
     )
     .map_err(|e| format!("select image_metadata id: {}", e))
@@ -228,12 +247,159 @@ impl Storage {
         crate::providers::image_metadata_at(image_id)
     }
 
+    /// 读取 metadata 的完整行信息（含 version/plugin_id/content_hash）。
+    pub fn get_image_metadata_full(
+        &self,
+        image_id: &str,
+    ) -> Result<Option<ImageMetadataFull>, String> {
+        crate::providers::image_metadata_full_at(image_id)
+    }
+
     /// Rhai `create_image_metadata`：将 JSON 写入 `image_metadata` 并返回 id。
-    pub fn insert_or_get_image_metadata_row(&self, value: &Value) -> Result<i64, String> {
+    pub fn insert_or_get_image_metadata_row(
+        &self,
+        value: &Value,
+        plugin_id: &str,
+        version: u32,
+    ) -> Result<i64, String> {
         let s = serde_json::to_string(value)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        insert_or_get_image_metadata_id(&conn, &s)
+        insert_or_get_image_metadata_id(&conn, &s, plugin_id, version)
+    }
+
+    /// 读取某 metadata 行的原始 `data` 文本（用于文件夹同步重导入前「保存」内容）。
+    pub fn read_image_metadata_text(&self, metadata_id: i64) -> Result<Option<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.query_row(
+            "SELECT data FROM image_metadata WHERE id = ?1",
+            params![metadata_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| format!("read_image_metadata_text: {}", e))
+    }
+
+    /// 按原始 JSON 文本写入/复用 metadata 行并返回 id（content_hash 去重）。
+    /// 文件夹同步重导入用：删旧行后重写——若内容仍在则拿回原 id，若已被 GC 则得新 id。
+    pub fn insert_or_get_image_metadata_text(&self, data_json: &str) -> Result<i64, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        insert_or_get_image_metadata_id(&conn, data_json, "", 0)
+    }
+
+    /// 扫描某插件低于目标版本的 metadata 行，供迁移运行器逐行升级。
+    pub fn metadata_rows_below_version(
+        &self,
+        plugin_id: &str,
+        max_version: u32,
+    ) -> Result<Vec<(i64, String, u32)>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, data, version
+                 FROM image_metadata
+                 WHERE plugin_id = ?1 AND version < ?2
+                 ORDER BY id",
+            )
+            .map_err(|e| format!("prepare metadata_rows_below_version: {e}"))?;
+        let rows = stmt
+            .query_map(params![plugin_id, i64::from(max_version)], |row| {
+                let version: i64 = row.get(2)?;
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    version.max(0) as u32,
+                ))
+            })
+            .map_err(|e| format!("query metadata_rows_below_version: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("collect metadata_rows_below_version: {e}"))
+    }
+
+    /// 写回迁移后的 metadata 行；如命中已有复合键，则重定向引用并删除当前行。
+    pub fn writeback_migrated_metadata_row(
+        &self,
+        row_id: i64,
+        plugin_id: &str,
+        new_version: u32,
+        new_data: &str,
+    ) -> Result<bool, String> {
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("begin writeback_migrated_metadata_row: {e}"))?;
+
+        let current: Option<(String, String, i64)> = tx
+            .query_row(
+                "SELECT data, content_hash, version
+                 FROM image_metadata
+                 WHERE id = ?1 AND plugin_id = ?2",
+                params![row_id, plugin_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| format!("select metadata row for writeback: {e}"))?;
+        let Some((current_data, current_hash, current_version)) = current else {
+            tx.commit()
+                .map_err(|e| format!("commit metadata writeback no-op: {e}"))?;
+            return Ok(false);
+        };
+
+        let new_hash = metadata_content_hash_hex(new_data.as_bytes());
+        let new_version_i64 = i64::from(new_version);
+        if current_data == new_data
+            && current_hash == new_hash
+            && current_version == new_version_i64
+        {
+            tx.commit()
+                .map_err(|e| format!("commit metadata writeback unchanged: {e}"))?;
+            return Ok(false);
+        }
+
+        let target_id: Option<i64> = tx
+            .query_row(
+                "SELECT id
+                 FROM image_metadata
+                 WHERE plugin_id = ?1 AND version = ?2 AND content_hash = ?3 AND id <> ?4
+                 LIMIT 1",
+                params![plugin_id, new_version_i64, new_hash, row_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("select metadata merge target: {e}"))?;
+
+        if let Some(target_id) = target_id {
+            tx.execute(
+                "UPDATE images SET metadata_id = ?1 WHERE metadata_id = ?2",
+                params![target_id, row_id],
+            )
+            .map_err(|e| format!("repoint images.metadata_id: {e}"))?;
+            tx.execute(
+                "UPDATE task_failed_images SET metadata_id = ?1 WHERE metadata_id = ?2",
+                params![target_id, row_id],
+            )
+            .map_err(|e| format!("repoint task_failed_images.metadata_id: {e}"))?;
+            tx.execute("DELETE FROM image_metadata WHERE id = ?1", params![row_id])
+                .map_err(|e| format!("delete merged image_metadata row: {e}"))?;
+        } else {
+            tx.execute(
+                "UPDATE image_metadata
+                 SET data = ?1, content_hash = ?2, version = ?3
+                 WHERE id = ?4",
+                params![new_data, new_hash, new_version_i64, row_id],
+            )
+            .map_err(|e| format!("update migrated image_metadata row: {e}"))?;
+        }
+
+        tx.commit()
+            .map_err(|e| format!("commit metadata writeback: {e}"))?;
+        Ok(true)
     }
 
     pub fn gc_image_metadata(&self, candidate_ids: &[i64]) -> Result<usize, String> {
@@ -308,36 +474,24 @@ impl Storage {
         ))
     }
 
-    /// 为本地文件夹同步查询某 album 当前的图片快照。
-    pub fn list_album_images_for_sync(
-        &self,
-        album_id: &str,
-    ) -> Result<Vec<crate::local_folder::diff::DbImageRow>, String> {
+    /// 为本地文件夹同步查询某 album 当前的图片 id 快照（作为「待删除候选」基线）。
+    pub fn list_album_image_ids_for_sync(&self, album_id: &str) -> Result<Vec<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
         let mut stmt = conn
             .prepare(
-                "SELECT i.id, i.local_path, i.size, i.crawled_at, i.hash, i.metadata_id, i.display_name, ai.\"order\"
+                "SELECT i.id
                  FROM images i
                  INNER JOIN album_images ai ON ai.image_id = i.id
                  WHERE ai.album_id = ?1",
             )
-            .map_err(|e| format!("prepare list_album_images_for_sync: {e}"))?;
+            .map_err(|e| format!("prepare list_album_image_ids_for_sync: {e}"))?;
         let rows = stmt
             .query_map(params![album_id], |row| {
-                Ok(crate::local_folder::diff::DbImageRow {
-                    image_id: row.get::<_, i64>(0)?.to_string(),
-                    local_path: row.get(1)?,
-                    size: row.get::<_, Option<i64>>(2)?.map(|v| v as u64),
-                    crawled_at: row.get::<_, i64>(3)? as u64,
-                    hash: row.get(4)?,
-                    metadata_id: row.get(5)?,
-                    display_name: row.get(6)?,
-                    order: row.get(7)?,
-                })
+                Ok(row.get::<_, i64>(0)?.to_string())
             })
-            .map_err(|e| format!("query list_album_images_for_sync: {e}"))?;
+            .map_err(|e| format!("query list_album_image_ids_for_sync: {e}"))?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("read list_album_images_for_sync: {e}"))
+            .map_err(|e| format!("read list_album_image_ids_for_sync: {e}"))
     }
 
     pub fn add_image(&self, mut image: ImageInfo) -> Result<ImageInfo, String> {

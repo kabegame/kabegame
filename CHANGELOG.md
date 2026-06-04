@@ -11,6 +11,9 @@
 - **Folder Album**: Can create an album that keep syncing to a folder (Open a switch setting to keep in sync)
 - **Filter composiable**: Composiable filters, now can filter today's video.
 - **Father Album**: Now can point a father album when create an album.
+- **Kamechan mascot**: kamechan mascot
+- **Quick filter**: click one specific image's property to filter those images quikly. 
+- **Plugin metadata migrations**: Crawler plugins can ship `metadata_migrations/v{N}.rhai` scripts to migrate historical image metadata on install, update, and startup. Rhai `download_image` now accepts `metadata_version`, and `create_image_metadata` supports the `#{ version: N }` overload.
 
 ### Optimized
 - **Providers**: more query use pathql providers
@@ -27,6 +30,7 @@
 - **Video play**: Can pause and change speed of video playing.
 - **Image Thumbnail**: Now images that size smaller than 1MB's thumbnail will not generated, images that size bigger than 1MB will be generated a thumbnail that has a size about 500KB.
 - **Image item preview**: Image item load origin images when mouse hover over 200ms. Video start playing after that time too.
+- **Wheel zoom**: Zoom only triggered when ctrl + wheel, common wheel event will cause a viewport movement.
 
 ### Removed
 - **Archive**: Archive unzip feature removed from application completely. Including Rhai API and local import unarchiving behavior.

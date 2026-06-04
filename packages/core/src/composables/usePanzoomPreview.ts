@@ -14,6 +14,9 @@ export interface UsePanzoomPreviewOptions {
 
 const DEFAULT_MIN_SCALE = 1;
 const DEFAULT_MAX_SCALE = 10;
+const WHEEL_DELTA_LINE = 1;
+const WHEEL_DELTA_PAGE = 2;
+const WHEEL_LINE_HEIGHT = 16;
 
 const DEFAULT_OPTIONS: NonNullable<Parameters<typeof Panzoom>[1]> = {
   contain: "outside",
@@ -102,11 +105,42 @@ export function usePanzoomPreview(
 
   onUnmounted(destroy);
 
+  const getWheelDelta = (event: WheelEvent) => {
+    if (event.deltaMode === WHEEL_DELTA_LINE) {
+      return {
+        x: event.deltaX * WHEEL_LINE_HEIGHT,
+        y: event.deltaY * WHEEL_LINE_HEIGHT,
+      };
+    }
+    if (event.deltaMode === WHEEL_DELTA_PAGE) {
+      const rect = instanceEl?.parentElement?.getBoundingClientRect();
+      return {
+        x: event.deltaX * (rect?.width || window.innerWidth),
+        y: event.deltaY * (rect?.height || window.innerHeight),
+      };
+    }
+    return {
+      x: event.deltaX,
+      y: event.deltaY,
+    };
+  };
+
   const handleWheel = (event: WheelEvent) => {
     if (!instance || !instanceEl || wrapperRef.value !== instanceEl || !visible.value || !enabled.value) return;
-    options?.onPanzoomStart?.();
-    instance.zoomWithWheel(event, { animate: false });
+    let handled = false;
+    if (event.ctrlKey) {
+      options?.onPanzoomStart?.();
+      instance.zoomWithWheel(event, { animate: false });
+      handled = true;
+    } else if (!event.altKey && !event.metaKey && !event.shiftKey) {
+      options?.onPanzoomStart?.();
+      const { x, y } = getWheelDelta(event);
+      const currentScale = instance.getScale();
+      instance.pan(-x / currentScale, -y / currentScale, { animate: false, relative: true });
+      handled = true;
+    }
     scale.value = instance.getScale();
+    if (handled) options?.onPanzoomEnd?.();
   };
 
   const reset = () => {

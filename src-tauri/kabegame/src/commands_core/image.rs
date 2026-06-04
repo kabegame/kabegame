@@ -104,6 +104,11 @@ pub async fn get_image_metadata(image_id: String) -> Result<Value, String> {
     serde_json::to_value(meta).map_err(|e| e.to_string())
 }
 
+pub async fn get_image_metadata_full(image_id: String) -> Result<Value, String> {
+    let meta = Storage::global().get_image_metadata_full(&image_id)?;
+    serde_json::to_value(meta).map_err(|e| e.to_string())
+}
+
 pub async fn toggle_image_favorite(image_id: String, favorite: bool) -> Result<Value, String> {
     toggle_image_favorite_with_event(&image_id, favorite)?;
     #[cfg(all(feature = "standard", feature = "vd-legacy"))]

@@ -34,6 +34,7 @@
     "saveRunConfig": "保存运行配置",
     "installPlugin": "安装插件",
     "uninstallPlugin": "卸载插件",
-    "addPluginSource": "添加商店源"
+    "addPluginSource": "添加商店源",
+    "localFolderSync": "本地文件夹同步"
   }
 }

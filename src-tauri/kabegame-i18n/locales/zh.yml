@@ -42,7 +42,7 @@ albums:
     nameExists: 画册名称已存在，请换一个名称
     parentNotFound: "父画册不存在: {id}"
   localFolderErrors:
-    macosOnly: 此构建中本地文件夹同步仅支持 macOS
+    androidUnsupported: 安卓平台不支持本地文件夹同步
     nameRequired: 画册名称不能为空
     nameNoSlash: "画册名称不能包含 '/'"
     parentReadonly: 不能在系统画册下创建本地文件夹同步画册
@@ -51,6 +51,7 @@ albums:
     notDirectory: sync_folder 不是目录
     folderAccessFailed: "无法访问 sync_folder: {detail}"
     virtualDrivePathForbidden: "不能选择虚拟磁盘挂载目录内的路径（{path}）作为同步源"
+    duplicateSyncFolder: 该路径已存在对应的本地文件夹同步画册
     readOnly: 本地文件夹同步画册不可手动增删图片
 
 plugins:

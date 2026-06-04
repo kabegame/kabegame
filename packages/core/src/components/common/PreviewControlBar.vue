@@ -1,11 +1,13 @@
 <template>
   <div
+    ref="hotzoneRef"
     class="preview-control-bar-hover-zone"
     :class="{ 'is-fullscreen': isFullscreen }"
     @mouseenter="handleHotzoneEnter"
     @mouseleave="handleHotzoneLeave"
   />
   <div
+    ref="controlsRef"
     class="preview-control-bar"
     :class="{ hidden: !controlsVisible, 'is-fullscreen': isFullscreen }"
     @mouseenter="handleControlsEnter"
@@ -31,6 +33,8 @@ const props = withDefaults(
 
 const controlsVisible = ref(false);
 const isPointerInside = ref(false);
+const hotzoneRef = ref<HTMLElement | null>(null);
+const controlsRef = ref<HTMLElement | null>(null);
 
 let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -53,6 +57,30 @@ const scheduleHideControls = (delay = 1000) => {
 const showControls = () => {
   controlsVisible.value = true;
   clearHideTimer();
+};
+
+const pointInRect = (x: number, y: number, rect: DOMRect) =>
+  x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+
+const isPointerInInteractiveArea = (x: number, y: number) => {
+  const hotzoneRect = hotzoneRef.value?.getBoundingClientRect();
+  if (hotzoneRect && pointInRect(x, y, hotzoneRect)) return true;
+  const controlsRect = controlsRef.value?.getBoundingClientRect();
+  return !!controlsRect && pointInRect(x, y, controlsRect);
+};
+
+const refreshPointerPosition = (event?: MouseEvent | PointerEvent | null, delay = 1000) => {
+  if (!event) {
+    isPointerInside.value = false;
+    scheduleHideControls(delay);
+    return;
+  }
+  isPointerInside.value = isPointerInInteractiveArea(event.clientX, event.clientY);
+  if (isPointerInside.value) {
+    showControls();
+  } else {
+    scheduleHideControls(delay);
+  }
 };
 
 function handleHotzoneEnter() {
@@ -82,6 +110,7 @@ onBeforeUnmount(() => {
 defineExpose({
   show: showControls,
   scheduleHide: scheduleHideControls,
+  refreshPointerPosition,
 });
 </script>
 

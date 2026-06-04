@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::storage::gallery::{DateGroup, DayGroup, GalleryMediaTypeCounts, PluginGroup};
 use crate::storage::gallery_time::{gallery_month_groups_from_days, GalleryTimeFilterPayload};
-use crate::storage::images::parse_image_metadata_json;
+use crate::storage::images::{parse_image_metadata_json, ImageMetadataFull};
 use crate::storage::organize::OrganizeScanRow;
 use crate::storage::tasks::TaskFailedImage;
 use crate::storage::ImageInfo;
@@ -333,6 +333,26 @@ pub fn image_metadata_at(image_id: &str) -> Result<Option<Value>, String> {
     Ok(parse_image_metadata_json(json_string(row, "metadata_json")))
 }
 
+/// `images://id_{id}/metadata_full` → full metadata row from `image_metadata`.
+pub fn image_metadata_full_at(image_id: &str) -> Result<Option<ImageMetadataFull>, String> {
+    let encoded = urlencoding::encode(image_id.trim());
+    let rows = raw_rows_at(&format!("images://id_{}/metadata_full", encoded))?;
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    let Some(id) = json_i64(row, "id") else {
+        return Ok(None);
+    };
+    let version = json_i64(row, "version").unwrap_or_default().max(0) as u32;
+    Ok(Some(ImageMetadataFull {
+        id,
+        data: parse_image_metadata_json(json_string(row, "data")),
+        version,
+        plugin_id: json_string(row, "plugin_id").unwrap_or_default(),
+        content_hash: json_string(row, "content_hash").unwrap_or_default(),
+    }))
+}
+
 pub fn gallery_total_count_at() -> Result<usize, String> {
     count_at("images://gallery/all")
 }
@@ -468,8 +488,8 @@ pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, 
 }
 
 /// JSON 行 → ImageInfo (按 gallery_route fields 的 alias 契约读列)。
-/// alias 名硬契约: id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata_id,
-/// thumbnail_path, hash, is_favorite, is_hidden, width, height, display_name,
+/// alias 名硬契约: id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at,
+/// metadata_id, metadata_version, thumbnail_path, hash, is_favorite, is_hidden, width, height, display_name,
 /// media_type, last_set_wallpaper_at, size。
 fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
     let obj = row.as_object().ok_or("executor row not a JSON object")?;
@@ -492,6 +512,10 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
             .map(|t| t as u64)
             .unwrap_or(0),
         metadata_id: i("metadata_id"),
+        metadata_version: i("metadata_version")
+            .filter(|&v| v >= 0)
+            .map(|v| v as u32)
+            .unwrap_or(0),
         thumbnail_path: s("thumbnail_path").unwrap_or_default(),
         hash: s("hash").unwrap_or_default(),
         favorite: b("is_favorite"),
@@ -582,6 +606,13 @@ mod tests {
                 image_id INTEGER NOT NULL,
                 "order" INTEGER,
                 PRIMARY KEY (album_id, image_id)
+            );
+            CREATE TABLE image_metadata (
+                id INTEGER PRIMARY KEY,
+                data TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 0,
+                plugin_id TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE albums (
                 id TEXT PRIMARY KEY,

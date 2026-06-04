@@ -63,6 +63,10 @@
   - 主题：爬虫插件私有 JSON 缓存 `plugin_data`，含 Rhai 读写 API、`description.ejs` 只读 bridge、隔离和卸载清理语义。
   - 适用场景：插件需要缓存 tag taxonomy、emoji 元数据、token、TTL 状态，或在描述模板中读取爬虫预先计算的数据。
 
+- [crawler/METADATA_MIGRATION.md](crawler/METADATA_MIGRATION.md)
+  - 主题：插件图片 metadata 版本化迁移流程，含 `metadata_migrations/v{N}.rhai` 脚本契约、`download_image` / `create_image_metadata` 版本写入、`image_metadata` 复合去重、`metadata_full` 查询路径与 `metadata-migrate` 事件作用域。
+  - 适用场景：插件升级后历史图片详情结构变化；排查 metadata 迁移失败、缓存未刷新、去重合并或版本断档问题。
+
 ## 插件（`plugins/`）
 
 - [plugins/PLUGIN_STORE_CACHE.md](plugins/PLUGIN_STORE_CACHE.md)

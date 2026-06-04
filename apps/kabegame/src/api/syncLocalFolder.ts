@@ -1,5 +1,8 @@
 import { invoke } from "@/api/rpc";
-import { IS_MACOS } from "@kabegame/core/env";
+import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+
+/** 本地文件夹同步仅桌面端支持（排除 Android 与 Web）。 */
+const LOCAL_FOLDER_UNSUPPORTED = IS_ANDROID || IS_WEB;
 
 export type FolderStatusState =
   | "ok"
@@ -34,10 +37,20 @@ export interface BatchSyncItem {
   err: string | null;
 }
 
+export interface RecursiveSyncReport {
+  albumId: string;
+  createdAlbums: number;
+  syncedAlbums: number;
+  added: number;
+  deleted: number;
+  reimported: number;
+  failed: number;
+}
+
 export async function syncLocalFolderAlbum(
   albumId: string,
 ): Promise<SyncReport | null> {
-  if (!IS_MACOS) return null;
+  if (LOCAL_FOLDER_UNSUPPORTED) return null;
   try {
     return await invoke<SyncReport>("sync_local_folder_album", { albumId });
   } catch (e) {
@@ -46,10 +59,28 @@ export async function syncLocalFolderAlbum(
   }
 }
 
+export async function syncLocalFolderAlbumRecursive(
+  albumId: string,
+): Promise<RecursiveSyncReport | null> {
+  if (LOCAL_FOLDER_UNSUPPORTED) return null;
+  try {
+    return await invoke<RecursiveSyncReport>("sync_local_folder_album_recursive", {
+      albumId,
+    });
+  } catch (e) {
+    console.warn(
+      "[local_folder] sync_local_folder_album_recursive failed",
+      albumId,
+      e,
+    );
+    throw e;
+  }
+}
+
 export async function syncLocalFolderAlbums(
   albumIds: string[],
 ): Promise<BatchSyncItem[]> {
-  if (!IS_MACOS || albumIds.length === 0) return [];
+  if (LOCAL_FOLDER_UNSUPPORTED || albumIds.length === 0) return [];
   try {
     return await invoke<BatchSyncItem[]>("sync_local_folder_albums", { albumIds });
   } catch (e) {

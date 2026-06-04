@@ -28,6 +28,8 @@ plugin-name.kgpg
     ├── icon.png                   # 插件图标（可选；v2 另存于固定头部）
     ├── config.json                # 插件运行时变量与 baseUrl（可选）
     ├── configs/*.json             # 推荐运行配置预设（可选）
+    ├── metadata_migrations/
+    │   └── v{N}.rhai              # 图片 metadata 迁移脚本（可选）
     ├── doc_root/                  # 插件文档目录（可选）
     │   ├── doc.md                 # 默认语言文档（GFM Markdown）
     │   ├── doc.<lang>.md          # 其它语言文档，如 doc.zh.md / doc.en.md
@@ -45,6 +47,7 @@ plugin-name.kgpg
 | `icon.png` | 否 | 插件图标；v2 若头部已有 icon 则优先使用头部数据 |
 | `config.json` | 否 | 定义 `baseUrl` 与用户可配置变量（`var[]`） |
 | `configs/*.json` | 否 | 一组推荐预设，按文件名排序展示给用户一键应用 |
+| `metadata_migrations/v{N}.rhai` | 否 | 历史图片 metadata 迁移脚本；`N` 为从 1 开始的连续自然数版本 |
 | `templates/description.ejs` | 否 | 图片详情区 HTML 模板；缺失时降级为原始 metadata 列表 |
 | `doc_root/doc.md` · `doc_root/doc.<lang>.md` | 否 | 插件文档，多语言按文件名后缀区分（`default` / `zh` / `en` / `ja` / `ko` …） |
 | `doc_root/<image>` | 否 | 文档引用的图片资源 |

@@ -1,0 +1,41 @@
+{
+    "namespace": "kabegame",
+    "name": "images_metadata_full_provider",
+    "query": {
+        "join": [{
+            "kind": "LEFT",
+            "table": "image_metadata",
+            "as": "im",
+            "on": "images.metadata_id = im.id",
+            "in_need": true
+        }],
+        "fields": [
+            {
+                "sql": "im.id",
+                "as": "id",
+                "in_need": true
+            },
+            {
+                "sql": "im.data",
+                "as": "data",
+                "in_need": true
+            },
+            {
+                "sql": "im.version",
+                "as": "version",
+                "in_need": true
+            },
+            {
+                "sql": "im.plugin_id",
+                "as": "plugin_id",
+                "in_need": true
+            },
+            {
+                "sql": "im.content_hash",
+                "as": "content_hash",
+                "in_need": true
+            }
+        ],
+        "limit": 1
+    }
+}

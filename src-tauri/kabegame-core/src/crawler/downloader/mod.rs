@@ -1860,6 +1860,7 @@ pub(crate) async fn process_downloaded_content_image_to_storage(
         surf_record_id: None,
         crawled_at: download_start_time,
         metadata_id,
+        metadata_version: 0,
         thumbnail_path: thumbnail_path_str.to_string(),
         favorite: false,
         is_hidden: false,
@@ -1873,6 +1874,31 @@ pub(crate) async fn process_downloaded_content_image_to_storage(
         size,
         album_order: None,
     };
+    // local_path 唯一性硬约束：同一 content URI 已入库则放弃，发送下载错误事件。
+    if let Some(existing) = Storage::find_image_by_path(content_uri).ok().flatten() {
+        emit_task_log(
+            task_id,
+            "warn",
+            task_log_i18n(
+                "taskLogDedupByPath",
+                json!({
+                    "currentUrl": content_uri,
+                    "existingId": &existing.id,
+                    "existingPath": &existing.local_path,
+                }),
+            ),
+        );
+        GlobalEmitter::global().emit_download_state(
+            task_id,
+            content_uri,
+            download_start_time,
+            plugin_id,
+            "failed",
+            Some("duplicate path"),
+        );
+        GlobalEmitter::global().emit_task_status_from_storage(task_id);
+        return Ok(());
+    }
     match Storage::global().add_image(image_info) {
         Ok(inserted) => {
             let image_id = inserted.id.clone();
@@ -2278,6 +2304,38 @@ pub async fn process_downloaded_image_to_storage(
         .to_string()
         .trim_start_matches("\\\\?\\")
         .to_string();
+    // local_path 唯一性硬约束：同一磁盘路径已入库则放弃，发送下载错误事件。
+    // 本地导入（file://）重复扫描同一文件夹时最常触发；此处不删除文件，避免误删用户原文件。
+    if let Some(existing) = Storage::find_image_by_path(&local_path_str).ok().flatten() {
+        if let Some(tid) = task_id {
+            emit_task_log(
+                tid,
+                "warn",
+                task_log_i18n(
+                    "taskLogDedupByPath",
+                    json!({
+                        "currentUrl": url,
+                        "existingId": &existing.id,
+                        "existingPath": &existing.local_path,
+                    }),
+                ),
+            );
+        }
+        GlobalEmitter::global().emit_download_state_with_native(
+            event_task_id,
+            url,
+            download_start_time,
+            plugin_id,
+            "failed",
+            Some("duplicate path"),
+            native,
+        );
+        if let Some(task_id) = task_id {
+            GlobalEmitter::global().emit_task_status_from_storage(task_id);
+        }
+        ensure_minimum_duration(download_start_time, 500).await;
+        return Ok(false);
+    }
     let (resolved_w, resolved_h) =
         crate::media_dimensions::resolve_media_dimensions_sync(&local_path_str)
             .map(|(w, h)| (Some(w), Some(h)))
@@ -2370,6 +2428,7 @@ pub async fn process_downloaded_image_to_storage(
         surf_record_id: surf_record_id.map(|v| v.to_string()),
         crawled_at: download_start_time,
         metadata_id,
+        metadata_version: 0,
         thumbnail_path: thumbnail_path_str,
         favorite: false,
         is_hidden: false,

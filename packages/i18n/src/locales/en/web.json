@@ -34,6 +34,7 @@
     "saveRunConfig": "Save run config",
     "installPlugin": "Install plugin",
     "uninstallPlugin": "Uninstall plugin",
-    "addPluginSource": "Add plugin source"
+    "addPluginSource": "Add plugin source",
+    "localFolderSync": "Local folder sync"
   }
 }

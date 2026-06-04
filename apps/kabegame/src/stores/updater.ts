@@ -50,7 +50,7 @@ export interface DownloadProgress {
 /**
  * 应用自动更新 store —— **后端权威状态的前端镜像**（不含状态机）。
  * 启动时 `get_updater_state` hydrate，之后靠 `updater-state-change` 等事件刷新。
- * 详见 `.claude/plans/desktop-auto-update.md`。
+ * 详见 `.claude/plans/desktop-auto-update/desktop-auto-update.md`。
  */
 export const useUpdaterStore = defineStore("updater", () => {
   const phase = ref<UpdaterPhase>("unchecked");

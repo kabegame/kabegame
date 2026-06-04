@@ -34,6 +34,7 @@
     "saveRunConfig": "실행 구성 저장",
     "installPlugin": "플러그인 설치",
     "uninstallPlugin": "플러그인 제거",
-    "addPluginSource": "플러그인 소스 추가"
+    "addPluginSource": "플러그인 소스 추가",
+    "localFolderSync": "로컬 폴더 동기화"
   }
 }

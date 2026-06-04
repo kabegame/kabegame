@@ -43,6 +43,11 @@
                 "in_need": true
             },
             {
+                "sql": "COALESCE(metadata_im.version, 0)",
+                "as": "metadata_version",
+                "in_need": true
+            },
+            {
                 "sql": "COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path)",
                 "as": "thumbnail_path",
                 "in_need": true
@@ -105,6 +110,12 @@
             "table": "album_images",
             "as": "hid_ai",
             "on": "images.id = hid_ai.image_id and hid_ai.album_id = ${global.hidden_album_id}",
+            "in_need": true
+        }, {
+            "kind": "LEFT",
+            "table": "image_metadata",
+            "as": "metadata_im",
+            "on": "images.metadata_id = metadata_im.id",
             "in_need": true
         }]
     },

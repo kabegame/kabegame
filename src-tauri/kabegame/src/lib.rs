@@ -30,10 +30,10 @@ mod mcp_server;
 pub mod startup;
 #[cfg(all(not(feature = "web"), not(mobile)))]
 mod tray;
-#[cfg(not(feature = "web"))]
-mod utils;
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
 mod updater;
+#[cfg(not(feature = "web"))]
+mod utils;
 #[cfg(feature = "standard")]
 mod vd_listener;
 #[cfg(not(feature = "web"))]
@@ -346,12 +346,15 @@ pub fn run() {
             remove_images_from_album,
             update_album_images_order,
             get_favorite_album_id,
+            #[cfg(all(not(target_os = "android"), not(feature = "web")))]
             add_local_folder_album,
             sync_local_folder_album,
             sync_local_folder_albums,
+            sync_local_folder_album_recursive,
             // --- Images ---
             get_image_by_id,
             get_image_metadata,
+            get_image_metadata_full,
             get_gallery_image,
             copy_image_to_clipboard,
             delete_image,

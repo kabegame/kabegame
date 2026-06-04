@@ -2,7 +2,10 @@ import { FolderOpened, Picture, Edit, Rank, Delete, Refresh } from "@element-plu
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { Album } from "@/stores/albums";
 import { i18n } from "@kabegame/i18n";
-import { IS_MACOS } from "@kabegame/core/env";
+import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+
+/** 本地文件夹同步仅桌面端支持（排除 Android 与 Web）。 */
+const LOCAL_FOLDER_SUPPORTED = !IS_ANDROID && !IS_WEB;
 
 /**
  * Extended context for album actions (context menu / action sheet on Albums page).
@@ -35,8 +38,15 @@ export function createAlbumActions(): ActionItem<Album>[] {
       label: t("contextMenu.syncNow"),
       icon: Refresh,
       command: "syncNow",
-      visible: (ctx) => IS_MACOS && (ctx as AlbumActionContext).isLocalFolder,
+      visible: (ctx) => LOCAL_FOLDER_SUPPORTED && (ctx as AlbumActionContext).isLocalFolder,
       dividerBefore: (ctx) => (ctx as AlbumActionContext).albumImageCount > 0,
+    },
+    {
+      key: "syncNowRecursive",
+      label: t("contextMenu.syncNowRecursive"),
+      icon: Refresh,
+      command: "syncNowRecursive",
+      visible: (ctx) => LOCAL_FOLDER_SUPPORTED && (ctx as AlbumActionContext).isLocalFolder,
     },
     {
       key: "setWallpaperRotation",

@@ -339,6 +339,7 @@ pub async fn crawl_download_image(
     headers: Option<HashMap<String, String>>,
     name: Option<String>,
     metadata: Option<Value>,
+    metadata_version: Option<i64>,
 ) -> Result<(), String> {
     let state = crawler_window_state();
     let Some(ctx) = state.get_context().await else {
@@ -396,8 +397,19 @@ pub async fn crawl_download_image(
         }
     }
     let merged_headers = merge_task_headers(&ctx.task_id, Some(request_headers), cookie_header)?;
+    let metadata_version = match metadata_version {
+        None => 0,
+        Some(v) if v >= 0 => {
+            u32::try_from(v).map_err(|_| "metadata_version is too large".to_string())?
+        }
+        Some(_) => return Err("metadata_version must be >= 0".to_string()),
+    };
     let metadata_id = if let Some(value) = metadata {
-        Some(Storage::global().insert_or_get_image_metadata_row(&value)?)
+        Some(Storage::global().insert_or_get_image_metadata_row(
+            &value,
+            &ctx.plugin_id,
+            metadata_version,
+        )?)
     } else {
         None
     };

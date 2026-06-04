@@ -23,6 +23,25 @@ pub async fn import_local_file(
     size: u64,
     carry: Option<CarryFromOld>,
 ) -> Result<String, String> {
+    // local_path 唯一约束：若该路径已入库（来自其它导入途径或画册），
+    // 不再重复插入，而是把既有图片关联到本画册（幂等）。reimport 已在调用方先删旧行，
+    // 因此这里不会误命中旧记录。
+    let path_str = path.to_string_lossy();
+    if let Some(existing) = Storage::find_image_by_path(&path_str).ok().flatten() {
+        let storage = Storage::global();
+        let image_id = existing.id.clone();
+        let added = storage.add_images_to_album_silent(album_id, &[image_id.clone()]);
+        if let Some(order) = carry.as_ref().and_then(|old| old.order) {
+            storage.update_album_images_order(album_id, &[(image_id.clone(), order)])?;
+        }
+        if added > 0 {
+            let album_ids = vec![album_id.to_string()];
+            let image_ids = vec![image_id.clone()];
+            GlobalEmitter::global().emit_album_images_change("add", &album_ids, &image_ids);
+        }
+        return Ok(image_id);
+    }
+
     let hash = compute_file_hash(path).await?;
     let is_video = is_video_by_path(path);
     let thumbnail_path = build_thumbnail_path(path, is_video).await;
@@ -66,6 +85,7 @@ pub async fn import_local_file(
         surf_record_id: None,
         crawled_at,
         metadata_id,
+        metadata_version: 0,
         thumbnail_path,
         favorite: false,
         is_hidden: false,

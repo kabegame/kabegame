@@ -188,8 +188,13 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         );
         CREATE TABLE image_metadata (
             id INTEGER PRIMARY KEY,
-            data TEXT NOT NULL
+            data TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 0,
+            plugin_id TEXT NOT NULL DEFAULT ''
         );
+        CREATE UNIQUE INDEX idx_image_metadata_dedup
+            ON image_metadata(plugin_id, version, content_hash);
         CREATE TABLE albums (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -246,8 +251,8 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         INSERT INTO albums(id, name, created_at, parent_id) VALUES
             ('11111111-1111-1111-1111-111111111111', 'AlbumA', 1, NULL),
             ('33333333-3333-3333-3333-333333333333', 'AlbumChild', 2, '11111111-1111-1111-1111-111111111111');
-        INSERT INTO image_metadata VALUES
-            (1, '{"source":"table","tags":["a"]}');
+        INSERT INTO image_metadata(id, data, content_hash, version, plugin_id) VALUES
+            (1, '{"source":"table","tags":["a"]}', 'fixture-hash-1', 0, 'pixiv');
         INSERT INTO tasks VALUES
             (
                 '22222222-2222-2222-2222-222222222222',
@@ -730,9 +735,7 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
 fn gallery_sort_by_id_provider_orders_default_ids() {
     let runtime = build_runtime();
 
-    let by_id = runtime
-        .fetch("images://gallery/sort/by-id/x3x/1")
-        .unwrap();
+    let by_id = runtime.fetch("images://gallery/sort/by-id/x3x/1").unwrap();
     assert_eq!(ids(by_id), ["1", "2", "3"]);
 
     let by_id_desc = runtime

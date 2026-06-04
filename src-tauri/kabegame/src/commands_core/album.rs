@@ -106,21 +106,17 @@ pub async fn update_album_images_order(
     Ok(Value::Null)
 }
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AddLocalFolderAlbumArgs {
-    pub name: String,
-    pub parent_id: Option<String>,
-    pub sync_folder: String,
-    pub recursive: bool,
-}
-
-#[cfg(target_os = "macos")]
-pub async fn add_local_folder_album(args: AddLocalFolderAlbumArgs) -> Result<Value, String> {
-    use kabegame_core::local_folder::{build_entries_non_recursive, build_entries_recursive};
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
+pub async fn add_local_folder_album(
+    name: String,
+    parent_id: Option<String>,
+    sync_folder: String,
+    recursive: bool,
+) -> Result<Value, String> {
+    use kabegame_core::local_folder::build_entries_non_recursive;
     use std::path::Path;
-
-    let name = args.name.trim();
+    // 检查画册名称
+    let name = name.trim();
     if name.is_empty() {
         return Err(t!("albums.localFolderErrors.nameRequired").to_string());
     }
@@ -128,13 +124,14 @@ pub async fn add_local_folder_album(args: AddLocalFolderAlbumArgs) -> Result<Val
         return Err(t!("albums.localFolderErrors.nameNoSlash").to_string());
     }
     if matches!(
-        args.parent_id.as_deref(),
+        parent_id.as_deref(),
         Some(HIDDEN_ALBUM_ID) | Some(FAVORITE_ALBUM_ID)
     ) {
         return Err(t!("albums.localFolderErrors.parentReadonly").to_string());
     }
 
-    let sync_folder_raw = args.sync_folder.trim();
+    // 检查同步文件夹是否可用
+    let sync_folder_raw = sync_folder.trim();
     let sync_folder = Path::new(sync_folder_raw);
     if !sync_folder.is_absolute() {
         return Err(t!("albums.localFolderErrors.absolutePathRequired").to_string());
@@ -154,6 +151,14 @@ pub async fn add_local_folder_album(args: AddLocalFolderAlbumArgs) -> Result<Val
         }
     }
 
+    let sync_canon = sync_folder
+        .canonicalize()
+        .unwrap_or_else(|_| sync_folder.to_path_buf());
+
+    // 唯一需要刻意避开的「禁区根」：VD 挂载点。根命中直接报错；递归子目录由同步钩子 forbidden_roots 静默剪枝。
+    // （下载输出目录不再禁止：同步时按路径复用图库已有图片，不会产生 local_path 冲突。）
+    let mut forbidden_roots: Vec<std::path::PathBuf> = Vec::new();
+
     #[cfg(feature = "standard")]
     {
         if let Some(mount_point) = VirtualDriveService::global().current_mount_point() {
@@ -161,9 +166,6 @@ pub async fn add_local_folder_album(args: AddLocalFolderAlbumArgs) -> Result<Val
             let mount_canon = mount_path
                 .canonicalize()
                 .unwrap_or_else(|_| mount_path.to_path_buf());
-            let sync_canon = sync_folder
-                .canonicalize()
-                .unwrap_or_else(|_| sync_folder.to_path_buf());
             if sync_canon == mount_canon || sync_canon.starts_with(&mount_canon) {
                 return Err(t!(
                     "albums.localFolderErrors.virtualDrivePathForbidden",
@@ -171,45 +173,55 @@ pub async fn add_local_folder_album(args: AddLocalFolderAlbumArgs) -> Result<Val
                 )
                 .to_string());
             }
+            forbidden_roots.push(mount_canon);
         }
     }
 
-    let entries = if args.recursive {
-        build_entries_recursive(name, sync_folder, args.parent_id.as_deref())?
-    } else {
-        vec![build_entries_non_recursive(
-            name,
-            sync_folder,
-            args.parent_id.as_deref(),
-        )]
-    };
+    // 已存在同步画册的目录：根目录重复直接报错（前端亦会禁用创建按钮）。
+    let existing_sync_folders: Vec<std::path::PathBuf> = Storage::global()
+        .list_local_folder_albums()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|album| album.sync_folder.map(std::path::PathBuf::from))
+        .collect();
+    let duplicate_root = existing_sync_folders.iter().any(|p| {
+        let pc = p.canonicalize().unwrap_or_else(|_| p.clone());
+        pc == sync_canon
+    });
+    if duplicate_root {
+        return Err(t!("albums.localFolderErrors.duplicateSyncFolder").to_string());
+    }
 
-    let created = Storage::global().add_local_folder_albums_tx(&entries)?;
-    let created_ids: Vec<String> = created.iter().map(|album| album.id.clone()).collect();
+    // 只建**根画册**；子画册与文件由后台同步（递归/非递归）经扫描钩子按需产生。
+    let root_entry = build_entries_non_recursive(name, sync_folder, parent_id.as_deref());
+    let root_id = root_entry.id.clone();
+    let created =
+        Storage::global().add_local_folder_albums_tx(std::slice::from_ref(&root_entry))?;
+
     tokio::spawn(async move {
-        let _ = kabegame_core::local_folder::sync_albums_by_ids(&created_ids).await;
+        if recursive {
+            let _ =
+                kabegame_core::local_folder::sync_album_recursive(&root_id, forbidden_roots).await;
+        } else {
+            let _ = kabegame_core::local_folder::sync_album(&root_id).await;
+        }
     });
 
     serde_json::to_value(created).map_err(|e| e.to_string())
 }
 
-#[cfg(not(target_os = "macos"))]
-pub async fn add_local_folder_album(_args: AddLocalFolderAlbumArgs) -> Result<Value, String> {
-    Err(t!("albums.localFolderErrors.macosOnly").to_string())
-}
-
-#[cfg(target_os = "macos")]
+#[cfg(not(target_os = "android"))]
 pub async fn sync_local_folder_album(album_id: String) -> Result<Value, String> {
     let report = kabegame_core::local_folder::sync_album(&album_id).await?;
     serde_json::to_value(report).map_err(|e| e.to_string())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "android")]
 pub async fn sync_local_folder_album(_album_id: String) -> Result<Value, String> {
-    Err(t!("albums.localFolderErrors.macosOnly").to_string())
+    Err(t!("albums.localFolderErrors.androidUnsupported").to_string())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(not(target_os = "android"))]
 pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<Value, String> {
     let results = kabegame_core::local_folder::sync_albums_by_ids(&album_ids).await;
     let payload: Vec<Value> = album_ids
@@ -231,7 +243,34 @@ pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<Value, S
     Ok(Value::Array(payload))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "android")]
 pub async fn sync_local_folder_albums(_album_ids: Vec<String>) -> Result<Value, String> {
-    Err(t!("albums.localFolderErrors.macosOnly").to_string())
+    Err(t!("albums.localFolderErrors.androidUnsupported").to_string())
+}
+
+/// 递归同步/创建时需要刻意避开的「禁区根」（规范化）：仅 VD 挂载点。
+#[cfg(not(target_os = "android"))]
+fn local_folder_forbidden_roots() -> Vec<std::path::PathBuf> {
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    #[cfg(feature = "standard")]
+    {
+        if let Some(mount_point) = VirtualDriveService::global().current_mount_point() {
+            let p = std::path::Path::new(&mount_point);
+            roots.push(p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
+        }
+    }
+    roots
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn sync_local_folder_album_recursive(album_id: String) -> Result<Value, String> {
+    let forbidden_roots = local_folder_forbidden_roots();
+    let report =
+        kabegame_core::local_folder::sync_album_recursive(&album_id, forbidden_roots).await?;
+    serde_json::to_value(report).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "android")]
+pub async fn sync_local_folder_album_recursive(_album_id: String) -> Result<Value, String> {
+    Err(t!("albums.localFolderErrors.androidUnsupported").to_string())
 }

@@ -42,7 +42,7 @@ albums:
     nameExists: 同じ名前のアルバムが既にあります。別の名前を選んでください
     parentNotFound: "親アルバムが存在しません: {id}"
   localFolderErrors:
-    macosOnly: このビルドではローカルフォルダ同期は macOS のみ対応です
+    androidUnsupported: Android ではローカルフォルダ同期に対応していません
     nameRequired: アルバム名は空にできません
     nameNoSlash: "アルバム名に '/' は使用できません"
     parentReadonly: システムアルバムの下にはローカルフォルダ同期アルバムを作成できません
@@ -51,6 +51,7 @@ albums:
     notDirectory: sync_folder はフォルダではありません
     folderAccessFailed: "sync_folder にアクセスできません: {detail}"
     virtualDrivePathForbidden: "仮想ドライブのマウント先（{path}）配下のパスは同期元にできません"
+    duplicateSyncFolder: このパスのローカルフォルダ同期アルバムは既に存在します
     readOnly: ローカルフォルダ同期アルバムでは画像を手動で追加・削除できません
 
 plugins:

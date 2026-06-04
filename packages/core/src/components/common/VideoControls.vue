@@ -67,7 +67,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 
@@ -82,7 +82,7 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
-  (e: "toggle-fullscreen"): void;
+  (e: "toggle-fullscreen", event?: MouseEvent): void;
 }>();
 
 const barRef = ref<InstanceType<typeof PreviewControlBar> | null>(null);
@@ -214,8 +214,8 @@ const handleVideoClick = () => {
   void togglePlay();
 };
 
-const handleVideoDblClick = () => {
-  void toggleFullscreen();
+const handleVideoDblClick = (event: MouseEvent) => {
+  void toggleFullscreen(event);
 };
 
 const attachVideo = (video: HTMLVideoElement | null) => {
@@ -363,9 +363,18 @@ const toggleMute = () => {
   showControls();
 };
 
-const toggleFullscreen = () => {
-  emit("toggle-fullscreen");
+const refreshControlsPointerAfterLayout = (event?: MouseEvent) => {
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      barRef.value?.refreshPointerPosition(event);
+    });
+  });
+};
+
+const toggleFullscreen = (event?: MouseEvent) => {
+  emit("toggle-fullscreen", event);
   showControls();
+  refreshControlsPointerAfterLayout(event);
 };
 
 const handleVolumeEnter = () => {

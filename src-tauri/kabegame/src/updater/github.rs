@@ -5,8 +5,7 @@ use std::time::Duration;
 
 use super::{asset, norm_tag, ReleaseInfo, MAX_RELEASES};
 
-const RELEASES_API: &str =
-    "https://api.github.com/repos/kabegame/kabegame/releases?per_page=30";
+const RELEASES_API: &str = "https://api.github.com/repos/kabegame/kabegame/releases?per_page=30";
 const USER_AGENT: &str = "kabegame-updater";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -97,7 +96,11 @@ pub fn compute_missed(
 fn to_release_info(r: &RawRelease, platform: &str, mode: &str, arch: &str) -> ReleaseInfo {
     let matched = asset::match_asset(&r.assets, platform, mode, arch);
     let tag = r.tag_name.clone();
-    let name = r.name.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| tag.clone());
+    let name = r
+        .name
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| tag.clone());
     ReleaseInfo {
         tag,
         name,

@@ -17,6 +17,7 @@
   "deleteTask": "Delete task",
   "browse": "Browse",
   "syncNow": "Sync now",
+  "syncNowRecursive": "Sync now (recursive)",
   "setWallpaperRotation": "Set as desktop rotation",
   "setWallpaperRotationActive": "(Active)",
   "rename": "Rename",

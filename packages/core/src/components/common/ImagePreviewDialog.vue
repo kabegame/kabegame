@@ -81,6 +81,7 @@
               @load="handlePreviewImageLoad" @error="handlePreviewImageError" @dragstart.prevent />
           </div>
           <PreviewControlBar
+            ref="imageControlBarRef"
             v-if="previewImageUrl && !isPreviewVideo"
             :is-fullscreen="isAppFullscreen"
             :keep-visible="zoomSliderDragging"
@@ -185,6 +186,7 @@ const uiStore = useUiStore();
 const previewFullscreenZIndex = 6000;
 const previewOverlayZIndex = 6100;
 const previewControlZIndex = 6200;
+const previewHidesKamechanClass = "image-preview-hides-kamechan";
 
 const props = withDefaults(defineProps<{
   images: ImageInfo[];
@@ -245,10 +247,14 @@ const isPreviewVideo = computed(() => isVideoMediaType(previewImage.value?.type)
 const previewHoverSide = ref<"left" | "right" | null>(null);
 const previewNotFound = ref(false);
 const isAppFullscreen = ref(false);
+const previewShouldHideKamechan = computed(() =>
+  uiStore.isCompact ? previewVisible.value : isAppFullscreen.value
+);
 
 const previewContainerRef = ref<HTMLElement | null>(null);
 const previewImageRef = ref<HTMLImageElement | null>(null);
 const previewVideoRef = ref<HTMLVideoElement | null>(null);
+const imageControlBarRef = ref<InstanceType<typeof PreviewControlBar> | null>(null);
 const pswpRef = ref<InstanceType<typeof PhotoSwipe> | null>(null);
 // Panzoom 由 usePanzoomPreview 提供，在 notifyPreviewInteracting / markPreviewInteracting 定义后初始化
 let panzoomWrapperRef!: Ref<HTMLElement | null>;
@@ -422,14 +428,20 @@ const measureContainerAfterRender = async () => {
   measureContainerSize();
 };
 
-const toggleAppFullscreen = () => {
+const toggleAppFullscreen = (event?: MouseEvent) => {
   isAppFullscreen.value = !isAppFullscreen.value;
   void nextTick(() => {
     requestAnimationFrame(() => {
       measureContainerSize();
       panzoomReset();
+      imageControlBarRef.value?.refreshPointerPosition(event);
     });
   });
+};
+
+const syncKamechanVisibilityForPreview = (hidden: boolean) => {
+  if (typeof document === "undefined") return;
+  document.body.classList.toggle(previewHidesKamechanClass, hidden);
 };
 
 const previewDialogTitle = computed(() => {
@@ -922,6 +934,8 @@ watch(() => previewVisible.value, (visible) => {
   }
 });
 
+watch(previewShouldHideKamechan, syncKamechanVisibilityForPreview, { immediate: true });
+
 const handlePswpBeforeClose = (source?: string): boolean => {
   if (source === 'verticalDrag') {
     if (isFromVerticalDrag) {
@@ -1013,6 +1027,7 @@ onUnmounted(() => {
   window.removeEventListener("keydown", handlePreviewKeyDown, true);
   document.removeEventListener("mouseup", handleDocumentZoomPointerUp);
   document.removeEventListener("touchend", handleDocumentZoomPointerUp);
+  syncKamechanVisibilityForPreview(false);
   panzoomDestroy();
   if (previewInteractTimer) {
     clearTimeout(previewInteractTimer);
@@ -1076,6 +1091,10 @@ defineExpose({
 <style lang="scss">
 .pswp {
   z-index: v-bind(previewFullscreenZIndex) !important;
+}
+
+body.image-preview-hides-kamechan .kamechan-host {
+  display: none !important;
 }
 
 .image-preview-dialog.el-dialog {

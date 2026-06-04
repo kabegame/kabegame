@@ -3,7 +3,7 @@
     <div
       v-if="visible"
       class="kame-bubble"
-      :class="[`is-${type}`, `is-side-${side}`]"
+      :class="[`is-${type}`, `is-side-${side}`, { 'is-compact': compact }]"
       :style="bubbleStyle"
     >
       <el-icon class="kame-bubble__icon">
@@ -29,10 +29,12 @@ const props = withDefaults(defineProps<{
   moreText?: string;
   side?: "left" | "right";
   maxWidth?: string;
+  compact?: boolean;
 }>(), {
   moreText: "",
   side: "right",
   maxWidth: "320px",
+  compact: false,
 });
 
 const iconComponent = computed(() => {
@@ -84,6 +86,10 @@ const bubbleStyle = computed(() => ({
     background: rgba(255, 255, 255, 0.94);
     transform: rotate(45deg);
   }
+}
+
+.kame-bubble.is-compact {
+  bottom: 4px;
 }
 
 .kame-bubble.is-side-right {

@@ -34,6 +34,7 @@
     "saveRunConfig": "設定を保存",
     "installPlugin": "プラグインをインストール",
     "uninstallPlugin": "プラグインをアンインストール",
-    "addPluginSource": "プラグインソースを追加"
+    "addPluginSource": "プラグインソースを追加",
+    "localFolderSync": "ローカルフォルダ同期"
   }
 }

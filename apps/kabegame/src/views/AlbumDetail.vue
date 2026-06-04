@@ -173,7 +173,7 @@
       :context="childAlbumMenuContext"
       :z-index="3500"
       @close="childAlbumMenu.hide"
-      @command="(cmd) => handleChildAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow')"
+      @command="(cmd) => handleChildAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursive')"
     />
 
     <el-dialog
@@ -246,7 +246,7 @@ import AlbumDetailPageHeader from "@/components/header/AlbumDetailPageHeader.vue
 import AlbumDetailBrowseToolbar from "@/components/AlbumDetailBrowseToolbar.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
-import { IS_LIGHT_MODE, IS_WEB, IS_MACOS } from "@kabegame/core/env";
+import { IS_LIGHT_MODE, IS_WEB, IS_ANDROID } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
@@ -290,6 +290,7 @@ import {
 } from "@/utils/albumMediaTree";
 import {
   syncLocalFolderAlbum,
+  syncLocalFolderAlbumRecursive,
   syncLocalFolderAlbums,
   type BatchSyncItem,
   type FolderStatusState,
@@ -601,7 +602,14 @@ const confirmMoveAlbum = async () => {
 };
 
 const handleChildAlbumMenuCommand = async (
-  command: "browse" | "delete" | "setWallpaperRotation" | "rename" | "moveTo" | "syncNow",
+  command:
+    | "browse"
+    | "delete"
+    | "setWallpaperRotation"
+    | "rename"
+    | "moveTo"
+    | "syncNow"
+    | "syncNowRecursive",
 ) => {
   const context = childAlbumMenuContext.value;
   const album = context.target;
@@ -618,6 +626,27 @@ const handleChildAlbumMenuCommand = async (
     try {
       const report = await syncLocalFolderAlbum(id);
       if (report) reportSingleSyncResult(report);
+    } catch (e: any) {
+      ElMessage.error(e?.message || String(e));
+    }
+    return;
+  }
+
+  if (command === "syncNowRecursive") {
+    ElMessage.info(t("albums.localFolder.recursiveSyncing", { name }));
+    try {
+      const report = await syncLocalFolderAlbumRecursive(id);
+      if (report) {
+        await albumStore.loadAlbums();
+        ElMessage.success(
+          t("albums.localFolder.recursiveSyncDone", {
+            createdAlbums: report.createdAlbums,
+            syncedAlbums: report.syncedAlbums,
+            added: report.added,
+            deleted: report.deleted,
+          }),
+        );
+      }
     } catch (e: any) {
       ElMessage.error(e?.message || String(e));
     }
@@ -1110,7 +1139,7 @@ const handleRefresh = async () => {
       }
     }
 
-    if (!IS_MACOS || idsToSync.size === 0) {
+    if (IS_ANDROID || IS_WEB || idsToSync.size === 0) {
       ElMessage.success(t("albums.refreshSuccess"));
     } else {
       ElMessage.warning(t("albums.localFolder.refreshSyncProgressing"));

@@ -3,9 +3,22 @@ title: 插件清单与格式字段
 description: kabegame 插件 `manifest.json` / `config.json` 字段速查
 ---
 
-:::caution
-本页为占位文档，字段定义仍在整理中。完整格式教程见 [插件格式](/dev/format/)。
-:::
+## .kgpg 目录结构
+
+```text
+plugin-name.kgpg
+    ├── manifest.json
+    ├── crawl.rhai 或 crawl.js
+    ├── icon.png
+    ├── config.json
+    ├── configs/*.json
+    ├── metadata_migrations/
+    │   └── v{N}.rhai
+    ├── doc_root/
+    └── templates/description.ejs
+```
+
+`metadata_migrations/v{N}.rhai` 是可选的图片 metadata 迁移脚本，`N` 为从 `1` 开始的连续自然数版本。脚本契约见 [Rhai 脚本指南](/dev/rhai-api/#元数据迁移)。
 
 ## manifest.json 字段
 
