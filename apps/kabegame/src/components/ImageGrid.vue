@@ -28,9 +28,11 @@
 
   <!-- 详情弹窗：保持 main 旧行为（view 层仍可 return 'detail'） -->
   <ImageDetailDialog
-    v-model="showImageDetail"
+    :open="imageDetailDialog.isOpen.value"
+    :z-index="imageDetailDialog.zIndex.value"
     :image="detailImage"
     :plugins="plugins"
+    @close="imageDetailDialog.close()"
     @open-task="handleOpenTask"
     @open-gallery-filter="handleOpenGalleryFilter"
   />
@@ -38,6 +40,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onDeactivated, onMounted, ref, useAttrs, watch } from "vue";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import CoreImageGrid from "@kabegame/core/components/image/ImageGrid.vue";
 import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
@@ -160,7 +163,7 @@ async function handleOpenGalleryFilter(target: ImageDetailGalleryFilterTarget) {
     { ...routeState, page: 1 },
     { push: true },
   );
-  showImageDetail.value = false;
+  imageDetailDialog.close();
   coreRef.value?.closePreview?.();
 }
 
@@ -254,7 +257,7 @@ function handlePreviewClose(payload: { image: ImageInfo | null }) {
 }
 
 // 旧 ImageGrid 的"内置详情弹窗"改为 wrapper 层实现
-const showImageDetail = ref(false);
+const imageDetailDialog = useModal();
 const detailImage = ref<CoreImageInfo | null>(null);
 
 async function handleContextCommand(payload: CoreContextCommandPayload): Promise<CoreContextCommand | null | undefined> {
@@ -270,7 +273,7 @@ async function handleContextCommand(payload: CoreContextCommandPayload): Promise
   if (res === "detail") {
     // payload.image 是 CoreImageInfo（url 可选），直接赋值即可
     detailImage.value = payload.image;
-    showImageDetail.value = true;
+    imageDetailDialog.open();
   }
 
   // 将 core 命令的结果返回给 core

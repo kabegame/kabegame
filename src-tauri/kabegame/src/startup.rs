@@ -401,7 +401,7 @@ pub fn start_event_loop(#[cfg(not(feature = "web"))] app: AppHandle) {
                     }
                 }
                 #[cfg(all(target_os = "android", not(feature = "web")))]
-                DaemonEvent::TaskChanged { .. } => {
+                DaemonEvent::TaskChanged { diff, .. } => {
                     if let Some(s) = diff.get("status").and_then(|v| v.as_str()) {
                         use tauri_plugin_task_notification::TaskNotificationExt;
                         let running = TaskScheduler::global().running_worker_count() as u32;
@@ -721,6 +721,11 @@ pub fn start_task_scheduler() {
 #[cfg(not(feature = "web"))]
 pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     use std::path::Path;
+
+    // 壁纸功能已关闭：启动时不恢复壁纸。
+    if Settings::global().get_wallpaper_disabled() {
+        return Ok(());
+    }
 
     // Linux Plasma + 插件模式：若当前系统壁纸插件不是 Kabegame，自动切到 Kabegame（与 Windows/macOS 窗口模式启动时对齐）
     #[cfg(target_os = "linux")]

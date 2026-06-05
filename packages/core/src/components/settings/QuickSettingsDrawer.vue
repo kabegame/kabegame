@@ -1,5 +1,5 @@
 <template>
-    <el-drawer :model-value="isOpen" @update:model-value="onDrawerModelValue" :title="title" :size="drawerSize" :append-to-body="appendToBody" class="quick-settings-drawer drawer-max-width">
+    <el-drawer :model-value="isOpen" :z-index="zIndex" @update:model-value="onDrawerModelValue" :title="title" :size="drawerSize" :append-to-body="appendToBody" class="quick-settings-drawer drawer-max-width">
         <div v-loading="loading" style="min-height: 120px;">
             <div v-if="filteredGroups.length === 0" class="empty">
                 <el-empty :description="emptyDescription" :image-size="100" />
@@ -36,6 +36,7 @@ import type {
 
 interface Props {
     isOpen: boolean;
+    zIndex?: number;
     title: string;
     pageId: string;
     groups: Array<QuickSettingGroup<string>>;

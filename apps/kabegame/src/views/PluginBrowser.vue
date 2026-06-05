@@ -307,8 +307,8 @@
     </div>
 
     <!-- 商店源管理 -->
-    <el-dialog v-if="!IS_LIGHT_MODE" v-model="showSourcesDialog" :title="$t('plugins.sourcesDialogTitle')"
-      width="720px">
+    <el-dialog v-if="!IS_LIGHT_MODE" :model-value="sourcesDialog.isOpen.value" :z-index="sourcesDialog.zIndex.value" :title="$t('plugins.sourcesDialogTitle')"
+      width="720px" @update:model-value="sourcesDialog.close">
       <div class="sources-hint">
         {{ $t('plugins.sourcesIntro') }}
       </div>
@@ -329,14 +329,14 @@
       </el-table>
 
       <template #footer>
-        <el-button @click="showSourcesDialog = false">{{ $t('common.close') }}</el-button>
+        <el-button @click="sourcesDialog.close()">{{ $t('common.close') }}</el-button>
         <el-button @click="addSource">{{ $t('plugins.newSource') }}</el-button>
       </template>
     </el-dialog>
 
     <!-- 新增/编辑源 -->
-    <el-dialog v-if="!IS_LIGHT_MODE" v-model="showEditSourceDialog"
-      :title="editingSourceIndex === null ? $t('plugins.newSource') : $t('plugins.editSource')" width="620px">
+    <el-dialog v-if="!IS_LIGHT_MODE" :model-value="editSourceDialog.isOpen.value" :z-index="editSourceDialog.zIndex.value"
+      :title="editingSourceIndex === null ? $t('plugins.newSource') : $t('plugins.editSource')" width="620px" @update:model-value="editSourceDialog.close">
       <el-form label-width="110px">
         <el-form-item label="ID">
           <el-input v-model="editSourceForm.id" :placeholder="$t('plugins.idPlaceholder')" />
@@ -350,7 +350,7 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="showEditSourceDialog = false">{{ $t('common.cancel') }}</el-button>
+        <el-button @click="editSourceDialog.close()">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" :loading="isValidatingSource" :disabled="isValidatingSource"
           @click="confirmEditSource">
           {{ $t('common.confirm') }}
@@ -359,7 +359,7 @@
     </el-dialog>
 
     <!-- 导入源对话框 -->
-    <el-dialog v-model="showImportDialog" :title="$t('plugins.importDialogTitle')" width="500px">
+    <el-dialog :model-value="importDialog.isOpen.value" :z-index="importDialog.zIndex.value" :title="$t('plugins.importDialogTitle')" width="500px" @update:model-value="importDialog.close">
       <div class="import-instructions">
         <p>{{ $t('plugins.selectFileHint') }}</p>
         <el-button type="primary" @click="selectPluginFile">
@@ -373,7 +373,7 @@
         </p>
       </div>
       <template #footer>
-        <el-button @click="showImportDialog = false">{{ $t('common.cancel') }}</el-button>
+        <el-button @click="importDialog.close()">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" @click="handleImport" :disabled="!selectedFilePath">
           {{ $t('plugins.importButton') }}
         </el-button>
@@ -411,7 +411,7 @@ import { isUpdateAvailable } from "@/utils/version";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { storePluginCacheDb } from "@kabegame/core/cache/storePluginCache";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
@@ -511,12 +511,12 @@ const handleImportSource = () => {
   if (uiStore.isCompact) {
     triggerImportDirect();
   } else {
-    showImportDialog.value = true;
+    importDialog.open();
   }
 };
 
 const openManageSources = () => {
-  showSourcesDialog.value = true;
+  sourcesDialog.open();
 };
 
 
@@ -524,8 +524,7 @@ const loadingBySource = ref<Record<string, boolean>>({}); // 按源区分的load
 const showSkeletonBySource = ref<Record<string, boolean>>({}); // 按源区分的骨架屏状态
 const skeletonTimersBySource = ref<Record<string, ReturnType<typeof setTimeout>>>({}); // 按源区分的骨架屏定时器
 const activeTab = ref<string>("installed");
-const showImportDialog = ref(false);
-useModalBack(showImportDialog);
+const importDialog = useModal();
 const selectedFilePath = ref<string | null>(null);
 const isRefreshing = ref(false);
 
@@ -569,10 +568,8 @@ const storeLoadedBySource = ref<Record<string, boolean>>({});
 const sources = ref<PluginSource[]>([]);
 const storeSourcesToRender = computed(() => sources.value);
 const sourcesLoadedOnce = ref(false); // 是否已加载过商店源（仅用于避免重复拉取）
-const showSourcesDialog = ref(false);
-useModalBack(showSourcesDialog);
-const showEditSourceDialog = ref(false);
-useModalBack(showEditSourceDialog);
+const sourcesDialog = useModal();
+const editSourceDialog = useModal();
 const isValidatingSource = ref(false);
 const editingSourceIndex = ref<number | null>(null);
 const editSourceForm = reactive<{ id: string; name: string; indexUrl: string }>({
@@ -897,7 +894,7 @@ const addSource = () => {
   editSourceForm.id = `src_${Date.now()}`;
   editSourceForm.name = "";
   editSourceForm.indexUrl = "";
-  showEditSourceDialog.value = true;
+  editSourceDialog.open();
 };
 
 // 阻止切换到“添加源”这个伪 tab（避免出现空白 tab 闪烁）
@@ -918,7 +915,7 @@ const editSource = (idx: number) => {
   editSourceForm.id = s.id;
   editSourceForm.name = pluginSourceDisplayName(s);
   editSourceForm.indexUrl = s.indexUrl;
-  showEditSourceDialog.value = true;
+  editSourceDialog.open();
 };
 
 const confirmEditSource = async () => {
@@ -1000,7 +997,7 @@ const confirmEditSource = async () => {
 
     await loadSources();
     ElMessage.success(editingSourceIndex.value === null ? t("plugins.sourceAdded") : t("plugins.sourceUpdated"));
-    showEditSourceDialog.value = false;
+    editSourceDialog.close();
   } catch (e) {
     console.error("保存商店源失败:", e);
     let errorMessage = t("plugins.saveSourceFailed");
@@ -1257,7 +1254,7 @@ const handleImport = async () => {
     }
 
     ElMessage.success(t("plugins.importSuccess"));
-    showImportDialog.value = false;
+    importDialog.close();
     selectedFilePath.value = null;
     // plugin-added / plugin-updated event auto-updates the store
     // 若当前在某个商店源 tab，导入后顺手刷新当前源列表（否则只刷新已安装即可）

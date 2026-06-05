@@ -5,7 +5,6 @@
         ref="surfViewRef"
         class="surf-grid"
         :images="images"
-        :enable-virtual-scroll="!isCompact"
         :enable-ctrl-wheel-adjust-columns="!isCompact"
         :enable-ctrl-key-adjust-columns="!isCompact"
         :actions="imageActions"
@@ -44,16 +43,20 @@
     </div>
 
     <RemoveImagesConfirmDialog
-      v-model="showRemoveDialog"
+      :open="removeDialog.isOpen.value"
+      :z-index="removeDialog.zIndex.value"
       :message="removeDialogMessage"
       :title="$t('surf.confirmDelete')"
       hide-checkbox
+      @close="removeDialog.close()"
       @confirm="confirmRemoveImages"
     />
 
     <AddToAlbumDialog
-      v-model="showAddToAlbumDialog"
+      :open="addToAlbumDialog.isOpen.value"
+      :z-index="addToAlbumDialog.zIndex.value"
       :image-ids="addToAlbumImageIds"
+      @close="addToAlbumDialog.close()"
       @added="handleAddedToAlbum"
     />
   </div>
@@ -95,6 +98,7 @@ import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { IS_WEB } from "@kabegame/core/env";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useI18n } from "@kabegame/i18n";
+import { useModal } from "@kabegame/core/composables/useModal";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -123,10 +127,10 @@ const currentWallpaperImageId = computed<string | null>({
   },
 });
 
-const showRemoveDialog = ref(false);
+const removeDialog = useModal();
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
-const showAddToAlbumDialog = ref(false);
+const addToAlbumDialog = useModal();
 const addToAlbumImageIds = ref<string[]>([]);
 
 const imageActions = computed(() =>
@@ -270,7 +274,7 @@ const handleImageMenuCommand = async (
     case "addToAlbum":
       if (imagesToProcess.length > 0) {
         addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
-        showAddToAlbumDialog.value = true;
+        addToAlbumDialog.open();
       }
       break;
     case "addToHidden": {
@@ -335,7 +339,7 @@ const handleImageMenuCommand = async (
       pendingRemoveImages.value = imagesToProcess;
       const count = imagesToProcess.length;
       removeDialogMessage.value = count > 1 ? t("surf.removeMessageMulti", { count }) : t("surf.removeMessageSingle");
-      showRemoveDialog.value = true;
+      removeDialog.open();
       break;
   }
   return null;
@@ -344,12 +348,12 @@ const handleImageMenuCommand = async (
 const confirmRemoveImages = async () => {
   const imagesToRemove = pendingRemoveImages.value;
   if (imagesToRemove.length === 0) {
-    showRemoveDialog.value = false;
+    removeDialog.close();
     return;
   }
 
   const count = imagesToRemove.length;
-  showRemoveDialog.value = false;
+  removeDialog.close();
 
   try {
     const imageIds = imagesToRemove.map((img) => img.id);

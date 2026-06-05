@@ -1,12 +1,14 @@
 <template>
   <el-dialog
-    v-model="visible"
+    :model-value="isOpen"
+    :z-index="zIndex"
     :title="t('updater.downloadingTitle')"
     width="420px"
     append-to-body
     :close-on-click-modal="false"
     :show-close="!store.isDownloading"
     class="download-progress-dialog"
+    @update:model-value="v => { if (!v) close() }"
   >
     <div class="dl-body">
       <el-progress
@@ -22,24 +24,23 @@
 
     <template #footer>
       <el-button v-if="store.isDownloading" @click="onCancel">{{ t('common.cancel') }}</el-button>
-      <el-button v-else type="primary" @click="visible = false">{{ t('common.close') }}</el-button>
+      <el-button v-else type="primary" @click="close()">{{ t('common.close') }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, watch } from "vue";
 import { ElButton, ElDialog, ElMessageBox, ElProgress } from "element-plus";
 import { useI18n } from "@kabegame/i18n";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import * as updaterService from "@/services/updater";
 import { useUpdaterStore } from "@/stores/updater";
 
 const { t } = useI18n();
 const store = useUpdaterStore();
 
-const visible = ref(false);
-useModalBack(visible);
+const { isOpen, zIndex, open, close } = useModal();
 
 function formatBytes(n: number): string {
   if (n <= 0) return "0 MB";
@@ -57,16 +58,16 @@ watch(
   () => store.phase,
   (now, prev) => {
     if (now === "downloading") {
-      visible.value = true;
+      open();
       return;
     }
     if (prev === "downloading") {
       if (now === "restartable") {
-        visible.value = false;
+        close();
         void promptRestart();
       } else if (now === "updateAvailable") {
         // 失败：留弹窗展示错误；取消：直接关
-        if (!store.lastDownloadError) visible.value = false;
+        if (!store.lastDownloadError) close();
       }
     }
   },

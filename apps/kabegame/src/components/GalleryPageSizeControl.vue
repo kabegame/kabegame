@@ -35,7 +35,7 @@
     </el-button>
 
     <Teleport v-if="uiStore.isCompact" to="body">
-      <van-popup v-model:show="showPicker" position="bottom" round>
+      <van-popup :show="isOpen" position="bottom" round :z-index="zIndex" @update:show="v => { if (!v) close() }">
         <van-picker
           v-model="pickerSelected"
           :title="$t('gallery.pageSize')"
@@ -43,7 +43,7 @@
           :confirm-button-text="t('common.confirm')"
           :cancel-button-text="t('common.cancel')"
           @confirm="onPickerConfirm"
-          @cancel="showPicker = false"
+          @cancel="close()"
         />
       </van-popup>
     </Teleport>
@@ -54,7 +54,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ArrowDown, Histogram } from "@element-plus/icons-vue";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = withDefaults(
@@ -96,19 +96,18 @@ async function onDesktopCommand(cmd: string) {
   emit("update:pageSize", n);
 }
 
-const showPicker = ref(false);
-useModalBack(showPicker);
+const { isOpen, zIndex, open, close } = useModal();
 
 const pickerColumns = computed(() =>
   options.map((n) => ({ text: String(n), value: String(n) })),
 );
 const pickerSelected = ref<string[]>(["100"]);
-watch(showPicker, (open) => {
-  if (open) pickerSelected.value = [String(props.pageSize)];
+watch(isOpen, (v) => {
+  if (v) pickerSelected.value = [String(props.pageSize)];
 });
 
 async function onPickerConfirm() {
-  showPicker.value = false;
+  close();
   const v = pickerSelected.value[0];
   const n = Number(v);
   if (n !== 100 && n !== 500 && n !== 1000) return;
@@ -117,7 +116,7 @@ async function onPickerConfirm() {
 
 function openPicker() {
   pickerSelected.value = [String(props.pageSize)];
-  showPicker.value = true;
+  open();
 }
 
 defineExpose({ openPicker });

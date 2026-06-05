@@ -37,16 +37,28 @@ export function createAlbumActions(): ActionItem<Album>[] {
       key: "syncNow",
       label: t("contextMenu.syncNow"),
       icon: Refresh,
-      command: "syncNow",
       visible: (ctx) => LOCAL_FOLDER_SUPPORTED && (ctx as AlbumActionContext).isLocalFolder,
       dividerBefore: (ctx) => (ctx as AlbumActionContext).albumImageCount > 0,
-    },
-    {
-      key: "syncNowRecursive",
-      label: t("contextMenu.syncNowRecursive"),
-      icon: Refresh,
-      command: "syncNowRecursive",
-      visible: (ctx) => LOCAL_FOLDER_SUPPORTED && (ctx as AlbumActionContext).isLocalFolder,
+      children: [
+        {
+          key: "syncFolderOnly",
+          label: t("contextMenu.syncFolderOnly"),
+          icon: Refresh,
+          command: "syncNow",
+        },
+        {
+          key: "syncNowRecursiveExisting",
+          label: t("contextMenu.syncNowRecursiveExisting"),
+          icon: Refresh,
+          command: "syncNowRecursiveExisting",
+        },
+        {
+          key: "syncNowRecursiveFull",
+          label: t("contextMenu.syncNowRecursiveFull"),
+          icon: Refresh,
+          command: "syncNowRecursiveFull",
+        },
+      ],
     },
     {
       key: "openLocalFolder",

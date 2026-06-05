@@ -1,6 +1,7 @@
 <template>
   <el-dialog
-    v-model="visible"
+    :model-value="modal.isOpen.value"
+    :z-index="modal.zIndex.value"
     :title="pageTitle"
     :width="IS_ANDROID ? '100%' : '800px'"
     :top="IS_ANDROID ? '0' : '5vh'"
@@ -9,6 +10,7 @@
     append-to-body
     class="plugin-import-dialog"
     :class="{ 'mobile-fullscreen': IS_ANDROID }"
+    @update:model-value="modal.close"
     @close="handleClose"
   >
     <PluginDetailContent
@@ -67,7 +69,7 @@ import { usePluginStore } from '@/stores/plugins';
 import { useApp } from '@/stores/app';
 import { isUpdateAvailable } from '@kabegame/core/utils/version';
 import { IS_ANDROID, IS_WEB } from '@kabegame/core/env';
-import { useModalBack } from '@kabegame/core/composables/useModalBack';
+import { useModal } from '@kabegame/core/composables/useModal';
 import PluginDetailContent from '@kabegame/core/components/plugin/PluginDetailContent.vue';
 
 const props = defineProps<{
@@ -90,10 +92,8 @@ const handleBack = () => {
   }
 };
 
-const visible = computed({
-  get: () => props.visible,
-  set: (val) => emit('update:visible', val),
-});
+const modal = useModal({ onClose: () => emit('update:visible', false) });
+watch(() => props.visible, (v) => v ? modal.open() : modal.close(), { immediate: true });
 
 const loading = ref(false);
 const errorMsg = ref<string | null>(null);
@@ -102,8 +102,6 @@ const preview = ref<Plugin | null>(null);
 const installing = ref(false);
 const pluginStore = usePluginStore();
 
-useModalBack(visible);
-
 const existingPlugin = computed(() =>
   preview.value ? pluginStore.plugins.find(p => p.id === preview.value!.id) : undefined
 );
@@ -111,12 +109,12 @@ const installed = computed(() => !!existingPlugin.value);
 const existingVersion = computed(() => existingPlugin.value?.version ?? null);
 
 watch(() => props.kgpgPath, async (newPath) => {
-  if (newPath && visible.value) {
+  if (newPath && modal.isOpen) {
     await loadPreview(newPath);
   }
 });
 
-watch(() => visible.value, async (val) => {
+watch(modal.isOpen, async (val) => {
   if (val && props.kgpgPath) {
     await loadPreview(props.kgpgPath);
   } else if (!val) {
@@ -157,7 +155,7 @@ const doInstall = async () => {
     ElMessage.success(t('common.importSuccess'));
     // plugin-added / plugin-updated event auto-updates the store
     emit('success');
-    visible.value = false;
+    modal.close();
   } catch (e: any) {
     ElMessage.error(typeof e === 'string' ? e : String(e?.message || e));
   } finally {

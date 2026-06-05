@@ -1,14 +1,15 @@
 //! 通用「文件夹扫描服务」：可配置是否递归，遍历 `file://` / `content://` 目录树。
 //!
-//! 服务只负责「发现」——扫到媒体文件回调 [`FolderScanHook::on_file`]，进入/离开子目录回调
-//! [`FolderScanHook::on_enter_dir`] / [`FolderScanHook::on_exit_dir`]——具体用途（导入 / 发事件 /
-//! 建子画册 / 收集）由钩子决定。本地导入、文件夹同步、画册创建均复用本服务。
+//! 服务只负责「发现」和框架级健康过滤：扫到健康的媒体文件回调
+//! [`FolderScanHook::on_file`]，进入/离开健康子目录回调 [`FolderScanHook::on_enter_dir`] /
+//! [`FolderScanHook::on_exit_dir`]。具体用途（导入 / 发事件 / 建子画册 / 收集）由钩子决定。
 //!
 //! 设计要点：
 //! - 泛型单态化（非 dyn）以支持钩子的关联类型 `DirCtx`（目录上下文，DFS 中由父向子传递）。
 //! - 来源抽象：`file://` 走文件系统，`content://`（Android）走 `ContentIoProvider`。
-//! - 媒体过滤、稳定性过滤、递归深度、进度份额、取消，全部收敛在服务里。
-//! - 根目录**不**触发 on_enter_dir/on_exit_dir（根上下文由调用方提供并自行收尾）；仅子目录触发。
+//! - 框架统一处理媒体过滤、稳定性过滤、递归深度、进度份额、symlink 和基础 IO 健康过滤。
+//! - [`ScanCtx`] 在一次扫描中贯穿始终，记录当前目录栈和带位置的非致命错误。
+//! - 根目录不触发 `on_enter_dir`/`on_exit_dir`；根上下文由调用方提供并自行收尾。
 
 use crate::image_type::is_media_by_path;
 use std::path::PathBuf;
@@ -47,7 +48,7 @@ pub struct ScannedDir {
 pub struct ScanOptions {
     /// 是否递归进入子目录。
     pub recursive: bool,
-    /// 文件「稳定」最小年龄（毫秒）：`now - mtime < age` 的文件跳过并计入 `skipped_unstable`。
+    /// 文件「稳定」最小年龄（毫秒）：`now - mtime < age` 的文件跳过，并通知 hook 自行统计。
     /// 仅对有 mtime 的 `file://` 生效；同步传 `Some(3000)`，本地导入传 `None`。
     pub min_stable_age_ms: Option<u64>,
     /// 跳过以 `.` 开头的隐藏目录（同步建子画册时为 true）。
@@ -70,13 +71,113 @@ impl Default for ScanOptions {
     }
 }
 
-/// 扫描汇总。
-#[derive(Debug, Default, Clone)]
-pub struct ScanSummary {
-    pub files: usize,
-    pub dirs: usize,
-    pub skipped_unstable: usize,
-    pub skipped_missing: usize,
+/// Hook 返回的扫描错误，以及上下文中记录的错误本体。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScanError {
+    /// 中止整次扫描，向 `scan_and_visit` 调用方返回 `Err(String)`。
+    Fatal(String),
+    /// 停止当前目录的后续条目，父目录继续。
+    Interrupt(String),
+    /// 跳过当前条目，继续扫描。
+    Skip(String),
+}
+
+impl ScanError {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Fatal(message) | Self::Interrupt(message) | Self::Skip(message) => message,
+        }
+    }
+
+    fn into_message(self) -> String {
+        match self {
+            Self::Fatal(message) | Self::Interrupt(message) | Self::Skip(message) => message,
+        }
+    }
+}
+
+/// 带目录位置的非致命扫描错误。
+#[derive(Debug, Clone)]
+pub struct ScanIssue {
+    /// 错误本体。框架只记录 `Skip` / `Interrupt`；`Fatal` 会直接返回。
+    pub error: ScanError,
+    /// 错误归属的目录，用于按 album / 子树判断是否可以 finalize。
+    pub dir: Url,
+    /// 精确条目位置（文件或子目录）可用时记录。
+    pub entry: Option<Url>,
+}
+
+/// 一次完整扫描的上下文：当前递归栈 + 已记录的非致命错误。
+#[derive(Debug, Clone)]
+pub struct ScanCtx<C> {
+    stack: Vec<(ScannedDir, C)>,
+    issues: Vec<ScanIssue>,
+}
+
+impl<C> ScanCtx<C> {
+    fn new() -> Self {
+        Self {
+            stack: Vec::new(),
+            issues: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, dir: ScannedDir, payload: C) {
+        self.stack.push((dir, payload));
+    }
+
+    fn pop(&mut self) {
+        self.stack.pop();
+    }
+
+    pub fn take_issues(&mut self) -> Vec<ScanIssue> {
+        std::mem::take(&mut self.issues)
+    }
+
+    /// 当前所在目录。
+    pub fn current_dir(&self) -> &ScannedDir {
+        &self.stack.last().expect("scan stack").0
+    }
+
+    /// 当前目录的 hook 载荷。
+    pub fn ctx(&self) -> &C {
+        &self.stack.last().expect("scan stack").1
+    }
+
+    pub fn depth(&self) -> usize {
+        self.stack.len()
+    }
+
+    /// 完整祖先链：root -> current。
+    pub fn frames(&self) -> &[(ScannedDir, C)] {
+        &self.stack
+    }
+
+    /// 已记录的所有非致命错误。
+    pub fn issues(&self) -> &[ScanIssue] {
+        &self.issues
+    }
+
+    /// 指定目录是否有直接归属的错误（不包含子目录错误）。
+    pub fn dir_had_errors(&self, dir: &Url) -> bool {
+        self.issues.iter().any(|issue| &issue.dir == dir)
+    }
+
+    /// 当前目录是否有直接归属的错误（不包含子目录错误）。
+    pub fn current_had_errors(&self) -> bool {
+        self.dir_had_errors(&self.current_dir().url)
+    }
+
+    fn record_here(&mut self, entry: Option<Url>, error: ScanError) {
+        let dir = self.current_dir().url.clone();
+        self.record_at(dir, entry, error);
+    }
+
+    /// 记录到指定目录；用于子目录进入失败，避免污染父目录。
+    fn record_at(&mut self, dir: Url, entry: Option<Url>, error: ScanError) {
+        debug_assert!(!matches!(error, ScanError::Fatal(_)));
+        self.issues.push(ScanIssue { error, dir, entry });
+    }
 }
 
 /// 扫描钩子：遍历期对每个媒体文件 / 子目录回调，由消费者决定用途。
@@ -85,26 +186,28 @@ pub trait FolderScanHook: Send + Sync {
     /// 目录上下文：DFS 中由父向子传递（如：同步用「所属画册 id+名」）。
     type DirCtx: Clone + Send + Sync;
 
-    /// 进入一个**子**目录时调用，`parent` 为父目录上下文。
+    /// 进入一个健康的**子**目录时调用，`ctx` 当前帧为父目录。
     /// 返回该目录的上下文（传给其子文件/子目录），或 `None` 表示**跳过整棵子树**。
     async fn on_enter_dir(
         &mut self,
-        dir: &ScannedDir,
-        parent: &Self::DirCtx,
-    ) -> Result<Option<Self::DirCtx>, String>;
+        enter: &ScannedDir,
+        ctx: &ScanCtx<Self::DirCtx>,
+    ) -> Result<Option<Self::DirCtx>, ScanError>;
 
-    /// 离开一个**子**目录时调用（DFS 出栈），用于收尾。默认 no-op。
-    async fn on_exit_dir(&mut self, _dir: &ScannedDir, _ctx: &Self::DirCtx) -> Result<(), String> {
+    /// 离开当前目录时调用（DFS 出栈前），用于收尾。默认 no-op。
+    async fn on_exit_dir(&mut self, _ctx: &ScanCtx<Self::DirCtx>) -> Result<(), ScanError> {
         Ok(())
     }
 
-    /// 发现一个媒体文件时调用，`ctx` 为其所在目录上下文。
-    async fn on_file(&mut self, file: &ScannedFile, ctx: &Self::DirCtx) -> Result<(), String>;
+    /// 发现一个健康、稳定的媒体文件时调用，`ctx` 当前帧为其所在目录。
+    async fn on_file(
+        &mut self,
+        file: &ScannedFile,
+        ctx: &ScanCtx<Self::DirCtx>,
+    ) -> Result<(), ScanError>;
 
-    /// 是否取消（每个条目处理前检查）。
-    async fn is_canceled(&self) -> bool {
-        false
-    }
+    /// 媒体文件尚未稳定时调用；是否统计由具体服务决定。
+    fn on_unstable_file(&mut self, _file: &ScannedFile, _ctx: &ScanCtx<Self::DirCtx>) {}
 
     /// 进度上报（份额增量）。
     fn on_progress(&mut self, _delta: f64) {}
@@ -115,6 +218,7 @@ struct RawEntry {
     url: Url,
     name: String,
     is_dir: bool,
+    is_symlink: bool,
 }
 
 fn now_ms() -> u128 {
@@ -142,7 +246,9 @@ async fn url_is_dir(url: &Url) -> Result<bool, String> {
             let path = url
                 .to_file_path()
                 .map_err(|_| format!("invalid file URL: {url}"))?;
-            Ok(std::fs::metadata(&path).map_err(|e| e.to_string())?.is_dir())
+            Ok(std::fs::metadata(&path)
+                .map_err(|e| e.to_string())?
+                .is_dir())
         }
         "content" => {
             #[cfg(target_os = "android")]
@@ -158,7 +264,7 @@ async fn url_is_dir(url: &Url) -> Result<bool, String> {
     }
 }
 
-/// 列出目录直接子项（不分媒体/稳定性，统一由 walk 阶段分类）。symlink 一律跳过。
+/// 列出目录直接子项（不分媒体/稳定性，统一由 walk 阶段分类）。
 async fn read_dir_entries(dir_url: &Url, skip_hidden_dirs: bool) -> Result<Vec<RawEntry>, String> {
     match dir_url.scheme() {
         "file" => {
@@ -172,11 +278,16 @@ async fn read_dir_entries(dir_url: &Url, skip_hidden_dirs: bool) -> Result<Vec<R
                     Ok(ft) => ft,
                     Err(_) => continue,
                 };
-                if ft.is_symlink() {
-                    continue;
-                }
                 let name = ent.file_name().to_string_lossy().into_owned();
-                if ft.is_dir() && skip_hidden_dirs && name.starts_with('.') {
+                let is_symlink = ft.is_symlink();
+                let is_dir = if is_symlink {
+                    std::fs::metadata(ent.path())
+                        .map(|metadata| metadata.is_dir())
+                        .unwrap_or(false)
+                } else {
+                    ft.is_dir()
+                };
+                if is_dir && skip_hidden_dirs && name.starts_with('.') {
                     continue;
                 }
                 let path = ent.path();
@@ -186,7 +297,8 @@ async fn read_dir_entries(dir_url: &Url, skip_hidden_dirs: bool) -> Result<Vec<R
                 out.push(RawEntry {
                     url,
                     name,
-                    is_dir: ft.is_dir(),
+                    is_dir,
+                    is_symlink,
                 });
             }
             Ok(out)
@@ -209,6 +321,7 @@ async fn read_dir_entries(dir_url: &Url, skip_hidden_dirs: bool) -> Result<Vec<R
                         url,
                         name: child.name,
                         is_dir: child.is_directory,
+                        is_symlink: false,
                     });
                 }
                 Ok(out)
@@ -226,43 +339,39 @@ async fn read_dir_entries(dir_url: &Url, skip_hidden_dirs: bool) -> Result<Vec<R
 /// 对一个媒体文件项分类（媒体过滤 + 稳定性过滤），命中则回调 `on_file`。
 async fn process_file<H: FolderScanHook>(
     raw: &RawEntry,
-    ctx: &H::DirCtx,
+    ctx: &ScanCtx<H::DirCtx>,
     depth: usize,
     options: &ScanOptions,
     hook: &mut H,
-    summary: &mut ScanSummary,
-) -> Result<(), String> {
+) -> Result<(), ScanError> {
     match raw.url.scheme() {
         "file" => {
             let path = raw
                 .url
                 .to_file_path()
-                .map_err(|_| format!("invalid file URL: {}", raw.url))?;
+                .map_err(|_| ScanError::Skip(format!("invalid file URL: {}", raw.url)))?;
             if !is_media_by_path(&path) {
                 return Ok(());
             }
             let (size, mtime) = match std::fs::metadata(&path) {
-                Ok(m) => {
-                    let mtime = m
+                Ok(metadata) => {
+                    let mtime = metadata
                         .modified()
                         .ok()
                         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                         .map(|d| d.as_millis());
-                    (Some(m.len()), mtime)
+                    (Some(metadata.len()), mtime)
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    summary.skipped_missing += 1;
-                    return Ok(());
+                    return Err(ScanError::Skip(format!("missing file: {}", path.display())));
                 }
-                Err(_) => return Ok(()),
+                Err(err) => {
+                    return Err(ScanError::Skip(format!(
+                        "unreadable file {}: {err}",
+                        path.display()
+                    )));
+                }
             };
-            if let (Some(age_ms), Some(mt)) = (options.min_stable_age_ms, mtime) {
-                if now_ms().saturating_sub(mt) < age_ms as u128 {
-                    summary.skipped_unstable += 1;
-                    return Ok(());
-                }
-            }
-            summary.files += 1;
             let file = ScannedFile {
                 url: raw.url.clone(),
                 path: Some(path),
@@ -271,8 +380,13 @@ async fn process_file<H: FolderScanHook>(
                 mtime_unix_ms: mtime,
                 depth,
             };
-            hook.on_file(&file, ctx).await?;
-            Ok(())
+            if let (Some(age_ms), Some(mt)) = (options.min_stable_age_ms, mtime) {
+                if now_ms().saturating_sub(mt) < age_ms as u128 {
+                    hook.on_unstable_file(&file, ctx);
+                    return Ok(());
+                }
+            }
+            hook.on_file(&file, ctx).await
         }
         "content" => {
             #[cfg(target_os = "android")]
@@ -290,7 +404,6 @@ async fn process_file<H: FolderScanHook>(
                     .get_content_size(raw.url.as_str())
                     .await
                     .ok();
-                summary.files += 1;
                 let file = ScannedFile {
                     url: raw.url.clone(),
                     path: None,
@@ -299,36 +412,38 @@ async fn process_file<H: FolderScanHook>(
                     mtime_unix_ms: None,
                     depth,
                 };
-                hook.on_file(&file, ctx).await?;
-                Ok(())
+                hook.on_file(&file, ctx).await
             }
             #[cfg(not(target_os = "android"))]
             {
-                Err("content:// scan is only supported on Android".to_string())
+                Err(ScanError::Skip(
+                    "content:// scan is only supported on Android".to_string(),
+                ))
             }
         }
-        scheme => Err(format!("unsupported scheme for scan: {scheme}")),
+        scheme => Err(ScanError::Skip(format!(
+            "unsupported scheme for scan: {scheme}"
+        ))),
     }
 }
 
-/// 处理一个目录（其直接子项 + 递归子目录）。进度份额 `share` 在子项间均分。
+/// 处理当前栈顶目录（其直接子项 + 递归子目录）。返回 `Err` 仅表示 Fatal。
 async fn process_dir<H: FolderScanHook>(
-    dir: &ScannedDir,
-    ctx: &H::DirCtx,
+    ctx: &mut ScanCtx<H::DirCtx>,
     share: f64,
     options: &ScanOptions,
     hook: &mut H,
-    summary: &mut ScanSummary,
-) -> Result<(), String> {
-    if hook.is_canceled().await {
-        return Err("Task canceled".to_string());
-    }
-    summary.dirs += 1;
+) -> Result<(), ScanError> {
+    let dir_url = ctx.current_dir().url.clone();
+    let depth = ctx.current_dir().depth;
 
-    let mut entries = match read_dir_entries(&dir.url, options.skip_hidden_dirs).await {
+    let mut entries = match read_dir_entries(&dir_url, options.skip_hidden_dirs).await {
         Ok(entries) => entries,
         Err(err) => {
-            eprintln!("[scan_service] skip dir {}: {err}", dir.url);
+            ctx.record_here(
+                Some(dir_url.clone()),
+                ScanError::Skip(format!("read dir: {err}")),
+            );
             hook.on_progress(share);
             return Ok(());
         }
@@ -343,32 +458,101 @@ async fn process_dir<H: FolderScanHook>(
     let per = share / n as f64;
 
     for raw in &entries {
-        if hook.is_canceled().await {
-            return Err("Task canceled".to_string());
+        if raw.is_symlink {
+            if raw.is_dir {
+                ctx.record_at(
+                    raw.url.clone(),
+                    Some(raw.url.clone()),
+                    ScanError::Skip("linked folder not followed".to_string()),
+                );
+            }
+            hook.on_progress(per);
+            continue;
         }
+
         if raw.is_dir {
-            let can_recurse = options.recursive && dir.depth + 1 < options.max_depth;
-            if can_recurse {
-                let sub = ScannedDir {
-                    url: raw.url.clone(),
-                    path: raw.url.to_file_path().ok(),
-                    name: raw.name.clone(),
-                    depth: dir.depth + 1,
-                };
-                match hook.on_enter_dir(&sub, ctx).await? {
-                    Some(sub_ctx) => {
-                        // 递归会把 `per` 份额再均分给孙级；此处不再额外计进度。
-                        Box::pin(process_dir(&sub, &sub_ctx, per, options, hook, summary)).await?;
-                        hook.on_exit_dir(&sub, &sub_ctx).await?;
-                    }
-                    None => hook.on_progress(per),
-                }
-            } else {
+            let can_recurse = options.recursive && depth + 1 < options.max_depth;
+            if !can_recurse {
                 hook.on_progress(per);
+                continue;
+            }
+
+            let sub = ScannedDir {
+                url: raw.url.clone(),
+                path: raw.url.to_file_path().ok(),
+                name: raw.name.clone(),
+                depth: depth + 1,
+            };
+            let sub_url = sub.url.clone();
+            match url_is_dir(&sub_url).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    ctx.record_at(
+                        sub_url.clone(),
+                        Some(sub_url),
+                        ScanError::Skip("non-enterable dir".to_string()),
+                    );
+                    hook.on_progress(per);
+                    continue;
+                }
+                Err(err) => {
+                    ctx.record_at(
+                        sub_url.clone(),
+                        Some(sub_url),
+                        ScanError::Skip(format!("non-enterable dir: {err}")),
+                    );
+                    hook.on_progress(per);
+                    continue;
+                }
+            }
+
+            match hook.on_enter_dir(&sub, &*ctx).await {
+                Ok(Some(payload)) => {
+                    ctx.push(sub, payload);
+                    let res = Box::pin(process_dir(ctx, per, options, hook)).await;
+                    let exit = if res.is_ok() {
+                        hook.on_exit_dir(&*ctx).await
+                    } else {
+                        Ok(())
+                    };
+                    ctx.pop();
+
+                    if let Err(error) = res {
+                        return Err(error);
+                    }
+                    match exit {
+                        Ok(()) => {}
+                        Err(ScanError::Fatal(message)) => return Err(ScanError::Fatal(message)),
+                        Err(error @ ScanError::Skip(_)) | Err(error @ ScanError::Interrupt(_)) => {
+                            ctx.record_at(sub_url.clone(), Some(sub_url), error);
+                        }
+                    }
+                }
+                Ok(None) => hook.on_progress(per),
+                Err(ScanError::Fatal(message)) => return Err(ScanError::Fatal(message)),
+                Err(error @ ScanError::Skip(_)) | Err(error @ ScanError::Interrupt(_)) => {
+                    ctx.record_at(sub_url.clone(), Some(sub_url), error);
+                    hook.on_progress(per);
+                }
             }
         } else {
-            process_file(raw, ctx, dir.depth + 1, options, hook, summary).await?;
+            let entry_url = raw.url.clone();
+            let interrupted = match process_file(raw, &*ctx, depth + 1, options, hook).await {
+                Ok(()) => false,
+                Err(ScanError::Fatal(message)) => return Err(ScanError::Fatal(message)),
+                Err(error @ ScanError::Skip(_)) => {
+                    ctx.record_here(Some(entry_url), error);
+                    false
+                }
+                Err(error @ ScanError::Interrupt(_)) => {
+                    ctx.record_here(Some(entry_url), error);
+                    true
+                }
+            };
             hook.on_progress(per);
+            if interrupted {
+                break;
+            }
         }
     }
     Ok(())
@@ -383,34 +567,63 @@ pub async fn scan_and_visit<H: FolderScanHook>(
     root_ctx: H::DirCtx,
     options: &ScanOptions,
     hook: &mut H,
-) -> Result<ScanSummary, String> {
-    let mut summary = ScanSummary::default();
+) -> Result<ScanCtx<H::DirCtx>, String> {
+    let mut ctx = ScanCtx::new();
     if roots.is_empty() {
-        return Ok(summary);
+        return Ok(ctx);
     }
     let share = options.total_progress_share / roots.len() as f64;
 
     for root in roots {
-        if hook.is_canceled().await {
-            return Err("Task canceled".to_string());
-        }
-        if url_is_dir(root).await? {
-            let dir = ScannedDir {
-                url: root.clone(),
-                path: root.to_file_path().ok(),
-                name: url_file_name(root),
-                depth: 0,
-            };
-            process_dir(&dir, &root_ctx, share, options, hook, &mut summary).await?;
-        } else {
-            let raw = RawEntry {
-                url: root.clone(),
-                name: url_file_name(root),
-                is_dir: false,
-            };
-            process_file(&raw, &root_ctx, 0, options, hook, &mut summary).await?;
-            hook.on_progress(share);
+        let dir = ScannedDir {
+            url: root.clone(),
+            path: root.to_file_path().ok(),
+            name: url_file_name(root),
+            depth: 0,
+        };
+
+        match url_is_dir(root).await {
+            Ok(true) => {
+                ctx.push(dir, root_ctx.clone());
+                let res = process_dir(&mut ctx, share, options, hook).await;
+                ctx.pop();
+                if let Err(error) = res {
+                    return Err(error.into_message());
+                }
+            }
+            Ok(false) => {
+                ctx.push(dir, root_ctx.clone());
+                let raw = RawEntry {
+                    url: root.clone(),
+                    name: url_file_name(root),
+                    is_dir: false,
+                    is_symlink: false,
+                };
+                let res = process_file(&raw, &ctx, 0, options, hook).await;
+                hook.on_progress(share);
+                let fatal = match res {
+                    Ok(()) => None,
+                    Err(ScanError::Fatal(message)) => Some(message),
+                    Err(error @ ScanError::Skip(_)) | Err(error @ ScanError::Interrupt(_)) => {
+                        ctx.record_here(Some(root.clone()), error);
+                        None
+                    }
+                };
+                ctx.pop();
+                if let Some(message) = fatal {
+                    return Err(message);
+                }
+            }
+            Err(err) => {
+                ctx.record_at(
+                    root.clone(),
+                    Some(root.clone()),
+                    ScanError::Skip(format!("skip root: {err}")),
+                );
+                hook.on_progress(share);
+            }
         }
     }
-    Ok(summary)
+
+    Ok(ctx)
 }

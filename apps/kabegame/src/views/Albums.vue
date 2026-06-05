@@ -5,7 +5,7 @@
         :album-drive-enabled="albumDriveEnabled"
         @view-vd="openVirtualDrive"
         @refresh="handleRefresh"
-        @create-album="showCreateDialog = true"
+        @create-album="createDialog.open()"
         @help="openHelpDrawer"
         @quick-settings="openQuickSettings"
       />
@@ -32,14 +32,16 @@
       :position="albumMenu.position.value"
       :actions="(albumActions as import('@kabegame/core/actions/types').ActionItem<unknown>[])"
       :context="albumMenuContext"
-      :z-index="3500"
+      :z-index="albumMenu.zIndex.value"
       @close="albumMenu.hide"
-      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursive' | 'openLocalFolder')" />
+      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursiveExisting' | 'syncNowRecursiveFull' | 'openLocalFolder')" />
 
     <el-dialog
-      v-model="showCreateDialog"
+      :model-value="createDialog.isOpen.value"
+      :z-index="createDialog.zIndex.value"
       :title="$t('albums.newAlbum')"
       width="420px"
+      @update:model-value="createDialog.close"
       @closed="resetCreateAlbumDialog"
     >
       <el-form label-width="0" @submit.prevent>
@@ -89,7 +91,7 @@
         </div>
       </el-form>
       <template #footer>
-        <el-button @click="showCreateDialog = false">{{ $t('common.cancel') }}</el-button>
+        <el-button @click="createDialog.close()">{{ $t('common.cancel') }}</el-button>
         <el-button
           type="primary"
           :disabled="!canSubmitCreateAlbum"
@@ -101,7 +103,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showMoveAlbumDialog" :title="$t('albums.moveToTitle')" width="420px" @closed="onMoveAlbumDialogClosed">
+    <el-dialog :model-value="moveDialog.isOpen.value" :z-index="moveDialog.zIndex.value" :title="$t('albums.moveToTitle')" width="420px" @update:model-value="moveDialog.close" @closed="onMoveAlbumDialogClosed">
       <div class="mb-3">
         <el-checkbox v-model="moveToRoot">{{ $t('albums.moveToRoot') }}</el-checkbox>
       </div>
@@ -114,7 +116,7 @@
         :placeholder="$t('albums.selectTargetAlbum')"
       />
       <template #footer>
-        <el-button @click="showMoveAlbumDialog = false">{{ $t('common.cancel') }}</el-button>
+        <el-button @click="moveDialog.close()">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" @click="confirmMoveAlbum">{{ $t('common.ok') }}</el-button>
       </template>
     </el-dialog>
@@ -156,16 +158,15 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, IS_WEB, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { thumbnailToUrl } from "@kabegame/core/httpServer";
+import { fileToUrl, thumbnailToUrl } from "@kabegame/core/httpServer";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
 import { openFilePicker } from "@/api/dialog";
 import {
   syncLocalFolderAlbum,
-  syncLocalFolderAlbumRecursive,
   syncLocalFolderAlbums,
   type BatchSyncItem,
   type FolderStatusState,
@@ -322,12 +323,10 @@ const currentRotationAlbumId = computed(() => {
 // 轮播是否开启
 const wallpaperRotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 
-const showCreateDialog = ref(false);
-useModalBack(showCreateDialog);
+const createDialog = useModal();
 
 const moveDlgAlbum = ref<Album | null>(null);
-const showMoveAlbumDialog = ref(false);
-useModalBack(showMoveAlbumDialog);
+const moveDialog = useModal();
 const moveToRoot = ref(false);
 const moveTargetParentId = ref<string | null>(null);
 
@@ -338,7 +337,7 @@ const moveAlbumTree = computed(() => {
   return albumStore.getAlbumTreeExcluding(exclude);
 });
 
-watch(showMoveAlbumDialog, (open) => {
+watch(moveDialog.isOpen, (open) => {
   if (open) {
     moveToRoot.value = false;
     moveTargetParentId.value = null;
@@ -359,7 +358,7 @@ const confirmMoveAlbum = async () => {
   }
   try {
     await albumStore.moveAlbum(album.id, pid);
-    showMoveAlbumDialog.value = false;
+    moveDialog.close();
     moveDlgAlbum.value = null;
     ElMessage.success(t("albums.moveSuccess"));
   } catch (e: unknown) {
@@ -476,14 +475,16 @@ const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
 };
 
 const toPreviewUrl = (img: ImageInfo): string => {
-  const thumbPath = (img.thumbnailPath || img.localPath || "").trim();
-  if (!thumbPath) return "";
+  const thumbPath = (img.thumbnailPath || "").trim();
+  const localPath = (img.localPath || "").trim();
+  const path = thumbPath || localPath;
+  if (!path) return "";
   if (IS_ANDROID) {
-    return thumbPath.startsWith("content://")
-      ? thumbPath.replace("content://", CONTENT_URI_PROXY_PREFIX)
+    return path.startsWith("content://")
+      ? path.replace("content://", CONTENT_URI_PROXY_PREFIX)
       : "";
   }
-  return thumbnailToUrl(thumbPath);
+  return thumbPath ? thumbnailToUrl(thumbPath) : fileToUrl(localPath);
 };
 
 const hasPreviewUrl = (img: ImageInfo) => !!toPreviewUrl(img);
@@ -702,7 +703,7 @@ const handleCreateAlbum = async () => {
     } else {
       await albumStore.createAlbum(newAlbumName.value.trim(), { parentId, reload: false });
     }
-    showCreateDialog.value = false;
+    createDialog.close();
     ElMessage.success(t("albums.albumCreated"));
   } catch (error: any) {
     console.error("创建画册失败:", error);
@@ -840,7 +841,8 @@ const handleAlbumMenuCommand = async (
     | "rename"
     | "moveTo"
     | "syncNow"
-    | "syncNowRecursive"
+    | "syncNowRecursiveExisting"
+    | "syncNowRecursiveFull"
     | "openLocalFolder",
 ) => {
   const context = albumMenuContext.value;
@@ -877,10 +879,13 @@ const handleAlbumMenuCommand = async (
     return;
   }
 
-  if (command === "syncNowRecursive") {
+  if (command === "syncNowRecursiveExisting" || command === "syncNowRecursiveFull") {
     ElMessage.info(t("albums.localFolder.recursiveSyncing", { name }));
     try {
-      const report = await syncLocalFolderAlbumRecursive(id);
+      const report = await syncLocalFolderAlbum(id, {
+        recursive: true,
+        createMissingAlbums: command === "syncNowRecursiveFull",
+      });
       if (report) {
         await albumStore.loadAlbums();
         ElMessage.success(
@@ -924,7 +929,7 @@ const handleAlbumMenuCommand = async (
 
   if (command === "moveTo") {
     moveDlgAlbum.value = album;
-    showMoveAlbumDialog.value = true;
+    moveDialog.open();
     return;
   }
 

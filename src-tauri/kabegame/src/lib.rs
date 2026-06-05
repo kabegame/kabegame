@@ -15,6 +15,7 @@ mod web_import;
 mod commands;
 
 mod commands_core;
+mod debug_ingest;
 
 #[cfg(all(not(feature = "web"), target_os = "android"))]
 mod compress_provider;
@@ -83,6 +84,15 @@ fn init(
 
     // 启动内置 Backend
     crate::core_init::init_globals()?;
+    crate::debug_ingest::spawn_debug_event(
+        std::env::var("KABEGAME_DEBUG_SESSION_ID").unwrap_or_else(|_| "backend".to_string()),
+        "backend_started",
+        serde_json::json!({
+            "pid": process::id(),
+            "feature_web": cfg!(feature = "web"),
+            "debug_assertions": cfg!(debug_assertions),
+        }),
+    );
     // 在初始化全局状态后、初始化壁纸控制器前，检测并缓存 Linux 桌面环境
     #[cfg(all(target_os = "linux", not(feature = "web")))]
     {
@@ -350,7 +360,6 @@ pub fn run() {
             add_local_folder_album,
             sync_local_folder_album,
             sync_local_folder_albums,
-            sync_local_folder_album_recursive,
             // --- Images ---
             get_image_by_id,
             get_image_metadata,
@@ -508,6 +517,8 @@ pub fn run() {
             get_wallpaper_video_playback_rate,
             set_wallpaper_video_playback_rate,
             get_wallpaper_rotator_status,
+            get_wallpaper_disabled,
+            set_wallpaper_disabled,
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             fix_wallpaper_zorder,
             // --- Wallpaper Engine (Windows) ---

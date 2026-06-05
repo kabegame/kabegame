@@ -66,7 +66,7 @@
     </div>
 
     <ImageGrid v-else ref="albumViewRef" class="detail-body" :images="images" :enable-ctrl-wheel-adjust-columns="!isCompact"
-      :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
+      :enable-ctrl-key-adjust-columns="!isCompact"
       :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
       :on-context-command="handleImageMenuCommand" hide-scrollbar scroll-whole-container
       @added-to-album="handleAddedToAlbum" @image-dblclick="handleImageDoubleOpen"
@@ -149,18 +149,18 @@
       </template>
     </ImageGrid>
 
-    <RemoveImagesConfirmDialog v-model="showRemoveDialog"
+    <RemoveImagesConfirmDialog :open="removeDialog.isOpen.value" :z-index="removeDialog.zIndex.value"
       :message="removeDialogMessage" :title="removeDialogTitle" :hide-checkbox="true"
       :confirm-text="removeDialogConfirmText"
-      @confirm="confirmRemoveImages" />
+      @close="removeDialog.close()" @confirm="confirmRemoveImages" />
 
-    <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds"
-      :exclude-album-ids="albumId ? [albumId] : []" @added="handleAddedToAlbum" />
+    <AddToAlbumDialog :open="addToAlbumDialog.isOpen.value" :z-index="addToAlbumDialog.zIndex.value" :image-ids="addToAlbumImageIds"
+      :exclude-album-ids="albumId ? [albumId] : []" @close="addToAlbumDialog.close()" @added="handleAddedToAlbum" />
 
-    <el-dialog v-model="showCreateSubAlbumDialog" :title="t('albums.newAlbum')" width="360px">
+    <el-dialog :model-value="createSubAlbumDialog.isOpen.value" :z-index="createSubAlbumDialog.zIndex.value" :title="t('albums.newAlbum')" width="360px" @update:model-value="createSubAlbumDialog.close">
       <el-input v-model="newSubAlbumName" :placeholder="t('albums.placeholderName')" />
       <template #footer>
-        <el-button @click="showCreateSubAlbumDialog = false">{{ t("common.cancel") }}</el-button>
+        <el-button @click="createSubAlbumDialog.close()">{{ t("common.cancel") }}</el-button>
         <el-button type="primary" :disabled="!newSubAlbumName.trim()" @click="confirmCreateSubAlbum">{{ t("albums.create") }}</el-button>
       </template>
     </el-dialog>
@@ -170,15 +170,17 @@
       :position="childAlbumMenu.position.value"
       :actions="(albumActions as import('@kabegame/core/actions/types').ActionItem<unknown>[])"
       :context="childAlbumMenuContext"
-      :z-index="3500"
+      :z-index="childAlbumMenu.zIndex.value"
       @close="childAlbumMenu.hide"
-      @command="(cmd) => handleChildAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursive' | 'openLocalFolder')"
+      @command="(cmd) => handleChildAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursiveExisting' | 'syncNowRecursiveFull' | 'openLocalFolder')"
     />
 
     <el-dialog
-      v-model="showMoveAlbumDialog"
+      :model-value="moveAlbumDialog.isOpen.value"
+      :z-index="moveAlbumDialog.zIndex.value"
       :title="t('albums.moveToTitle')"
       width="420px"
+      @update:model-value="moveAlbumDialog.close"
       @closed="onMoveAlbumDialogClosed"
     >
       <div class="mb-3">
@@ -193,7 +195,7 @@
         :placeholder="t('albums.selectTargetAlbum')"
       />
       <template #footer>
-        <el-button @click="showMoveAlbumDialog = false">{{ t("common.cancel") }}</el-button>
+        <el-button @click="moveAlbumDialog.close()">{{ t("common.cancel") }}</el-button>
         <el-button type="primary" @click="confirmMoveAlbum">{{ t("common.ok") }}</el-button>
       </template>
     </el-dialog>
@@ -279,7 +281,7 @@ import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCa
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useI18n } from "@kabegame/i18n";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import {
   albumSubtreeContainsAny,
@@ -290,7 +292,6 @@ import {
 } from "@/utils/albumMediaTree";
 import {
   syncLocalFolderAlbum,
-  syncLocalFolderAlbumRecursive,
   syncLocalFolderAlbums,
   type BatchSyncItem,
   type FolderStatusState,
@@ -476,11 +477,9 @@ const albumAncestorCrumbs = computed((): { id: string; name: string }[] => {
   return up;
 });
 const childPreviewImages = ref<Record<string, ImageInfo[]>>({});
-const showCreateSubAlbumDialog = ref(false);
+const createSubAlbumDialog = useModal();
 const newSubAlbumName = ref("");
-useModalBack(showCreateSubAlbumDialog);
-const showMoveAlbumDialog = ref(false);
-useModalBack(showMoveAlbumDialog);
+const moveAlbumDialog = useModal();
 const moveDlgAlbum = ref<Album | null>(null);
 const moveToRoot = ref(false);
 const moveTargetParentId = ref<string | null>(null);
@@ -508,7 +507,7 @@ const moveAlbumTree = computed(() => {
   return albumStore.getAlbumTreeExcluding(exclude);
 });
 
-watch(showMoveAlbumDialog, (open) => {
+watch(moveAlbumDialog.isOpen, (open) => {
   if (open) {
     moveToRoot.value = false;
     moveTargetParentId.value = null;
@@ -570,7 +569,7 @@ const openChildAlbumContextMenu = (event: MouseEvent, child: Album) => {
 
 const openCreateSubAlbumDialog = () => {
   newSubAlbumName.value = "";
-  showCreateSubAlbumDialog.value = true;
+  createSubAlbumDialog.open();
 };
 
 const confirmCreateSubAlbum = async () => {
@@ -578,7 +577,7 @@ const confirmCreateSubAlbum = async () => {
   if (!name || !albumId.value) return;
   try {
     await albumStore.createAlbum(name, { parentId: albumId.value, reload: false });
-    showCreateSubAlbumDialog.value = false;
+    createSubAlbumDialog.close();
     newSubAlbumName.value = "";
     activeAlbumDetailTab.value = "subAlbums";
     ElMessage.success(t("albums.albumCreated"));
@@ -600,7 +599,7 @@ const confirmMoveAlbum = async () => {
   try {
     await albumStore.moveAlbum(album.id, pid);
     delete childPreviewImages.value[album.id];
-    showMoveAlbumDialog.value = false;
+    moveAlbumDialog.close();
     moveDlgAlbum.value = null;
     ElMessage.success(t("albums.moveSuccess"));
   } catch (e: unknown) {
@@ -620,7 +619,8 @@ const handleChildAlbumMenuCommand = async (
     | "rename"
     | "moveTo"
     | "syncNow"
-    | "syncNowRecursive"
+    | "syncNowRecursiveExisting"
+    | "syncNowRecursiveFull"
     | "openLocalFolder",
 ) => {
   const context = childAlbumMenuContext.value;
@@ -656,10 +656,13 @@ const handleChildAlbumMenuCommand = async (
     return;
   }
 
-  if (command === "syncNowRecursive") {
+  if (command === "syncNowRecursiveExisting" || command === "syncNowRecursiveFull") {
     ElMessage.info(t("albums.localFolder.recursiveSyncing", { name }));
     try {
-      const report = await syncLocalFolderAlbumRecursive(id);
+      const report = await syncLocalFolderAlbum(id, {
+        recursive: true,
+        createMissingAlbums: command === "syncNowRecursiveFull",
+      });
       if (report) {
         await albumStore.loadAlbums();
         ElMessage.success(
@@ -718,7 +721,7 @@ const handleChildAlbumMenuCommand = async (
 
   if (command === "moveTo") {
     moveDlgAlbum.value = album;
-    showMoveAlbumDialog.value = true;
+    moveAlbumDialog.open();
     return;
   }
 
@@ -1064,12 +1067,12 @@ const currentRotationAlbumId = computed(() => {
 const favoriteAlbumDirty = ref(false);
 
 // 移除/删除对话框相关
-const showRemoveDialog = ref(false);
+const removeDialog = useModal();
 const pendingRemoveMode = ref<"remove" | "delete">("remove");
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
 const pendingAddToAlbumImages = ref<ImageInfo[]>([]);
-const showAddToAlbumDialog = ref(false);
+const addToAlbumDialog = useModal();
 const addToAlbumImageIds = ref<string[]>([]);
 const removeDialogTitle = computed(() =>
   pendingRemoveMode.value === "delete"
@@ -1264,16 +1267,16 @@ const { handleDownloadImage, handleCopyImage } = useImageOperations(
 const confirmRemoveImages = async () => {
   const imagesToRemove = pendingRemoveImages.value;
   if (imagesToRemove.length === 0) {
-    showRemoveDialog.value = false;
+    removeDialog.close();
     return;
   }
   if (!albumId.value) {
-    showRemoveDialog.value = false;
+    removeDialog.close();
     return;
   }
   const shouldDeleteFiles = pendingRemoveMode.value === "delete";
   if (!shouldDeleteFiles && isLocalFolderDetail.value) {
-    showRemoveDialog.value = false;
+    removeDialog.close();
     ElMessage.info(t("albums.localFolder.readOnlyHint"));
     return;
   }
@@ -1282,7 +1285,7 @@ const confirmRemoveImages = async () => {
   const includesCurrent =
     !!currentWallpaperImageId.value &&
     imagesToRemove.some((img) => img.id === currentWallpaperImageId.value);
-  showRemoveDialog.value = false;
+  removeDialog.close();
 
   try {
     const idsArr = imagesToRemove.map((i) => i.id);
@@ -1553,7 +1556,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       const ids = imagesToProcess.map((img) => img.id);
       addToAlbumImageIds.value = ids;
       pendingAddToAlbumImages.value = imagesToProcess.slice();
-      showAddToAlbumDialog.value = true;
+      addToAlbumDialog.open();
       break;
     }
     case "addToHidden": {
@@ -1594,7 +1597,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
         imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
       const currentHint = includesCurrent ? `\n\n${t("gallery.removeDialogWallpaperHint")}` : "";
       removeDialogMessage.value = (count > 1 ? t("gallery.removeDialogMessageMulti", { count }) : t("gallery.removeDialogMessageSingle")) + currentHint;
-      showRemoveDialog.value = true;
+      removeDialog.open();
       break;
     case "deleteFile": {
       if (imagesToProcess.length === 0) break;
@@ -1609,7 +1612,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
         (count > 1
           ? t("gallery.deleteDialogMessageMulti", { count })
           : t("gallery.deleteDialogMessageSingle")) + currentHint;
-      showRemoveDialog.value = true;
+      removeDialog.open();
       break;
     }
     case "swipe-remove" as any:

@@ -1,10 +1,12 @@
 <template>
   <ElDialog
-    v-model="visible"
+    :model-value="modal.isOpen.value"
+    :z-index="modal.zIndex.value"
     :title="$t('albums.localImport')"
     width="560px"
     class="local-import-dialog"
     :show-close="true"
+    @update:model-value="modal.close"
     @open="handleOpen"
     @closed="handleClosed">
     <el-form label-width="110px" class="local-import-form">
@@ -75,7 +77,7 @@
 
     <template #footer>
       <div class="dialog-footer">
-        <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
+        <el-button @click="modal.close()">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" :disabled="displayItems.length === 0" @click="handleSubmit">
           {{ $t('albums.startImport') }}
         </el-button>
@@ -98,7 +100,7 @@ import { uploadImport } from "@/api/rpc";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useImageTypes } from "@/composables/useImageTypes";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 
@@ -111,12 +113,8 @@ const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;
 }>();
 
-const visible = computed({
-  get: () => props.modelValue,
-  set: (v) => emit("update:modelValue", v),
-});
-
-useModalBack(visible);
+const modal = useModal({ onClose: () => emit("update:modelValue", false) });
+watch(() => props.modelValue, (v) => v ? modal.open() : modal.close(), { immediate: true });
 
 const crawlerStore = useCrawlerStore();
 const albumStore = useAlbumStore();
@@ -322,7 +320,7 @@ async function handleSubmit() {
       ElMessage.error(t('albums.selectFileFailed'));
       return;
     }
-    visible.value = false;
+    modal.close();
     files.value = [];
     ElMessage.success(t('gallery.localImportTaskAdded'));
     trackLocalImportStart({
@@ -341,7 +339,7 @@ async function handleSubmit() {
     recursive: recursive.value,
   }, outputAlbumId);
 
-  visible.value = false;
+  modal.close();
   paths.value = [];
   ElMessage.success(t('gallery.localImportTaskAdded'));
   trackLocalImportStart({

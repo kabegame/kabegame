@@ -58,16 +58,17 @@
       :position="menuPosition"
       :actions="actions"
       :context="actionContext"
-      :z-index="2000"
+      :z-index="menuZIndex"
       @close="hideMenu"
       @command="handleCommand"
     />
-    <KamechanHistoryDialog v-model="historyVisible" />
+    <KamechanHistoryDialog :open="historyModal.isOpen.value" :z-index="historyModal.zIndex.value" @close="historyModal.close()" />
   </Teleport>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from "vue";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { storeToRefs } from "pinia";
 import { Clock, Hide, Minus } from "@element-plus/icons-vue";
 import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
@@ -92,7 +93,7 @@ const {
 } = useKamechanMachine();
 
 const minimized = ref(false);
-const historyVisible = ref(false);
+const historyModal = useModal();
 const hostEl = ref<HTMLElement | null>(null);
 const position = ref<{ left: number; bottom: number } | null>(null);
 const isDragging = ref(false);
@@ -125,6 +126,7 @@ let suppressNextClick = false;
 
 const {
   visible: menuVisible,
+  zIndex: menuZIndex,
   position: menuPosition,
   show: showActionMenu,
   hide: hideMenu,
@@ -224,7 +226,7 @@ function handleMinimizedClick(event: MouseEvent) {
 function handleCommand(command: string) {
   hideMenu();
   if (command === "history") {
-    historyVisible.value = true;
+    historyModal.open();
     return;
   }
   if (command === "minimize") {

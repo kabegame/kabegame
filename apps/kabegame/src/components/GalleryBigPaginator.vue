@@ -23,7 +23,7 @@
                     </div>
                 </template>
                 <!-- Android：点击打开 Vant Picker，按总页数位数多列选择 -->
-                <div v-else class="page-number page-number-android" @click="showPagePicker = true">
+                <div v-else class="page-number page-number-android" @click="pagePicker.open()">
                     <div class="part part-current">
                         <span class="current-page">{{ currentBigPage }}</span>
                     </div>
@@ -44,7 +44,7 @@
 
         <!-- Android：页码选择器（Vant Picker）；Teleport 到 body 避免受父级 sticky 影响，从页面最底部弹出 -->
         <Teleport v-if="isCompact" to="body">
-            <van-popup v-model:show="showPagePicker" position="bottom" round>
+            <van-popup :show="pagePicker.isOpen.value" position="bottom" round :z-index="pagePicker.zIndex.value" @update:show="pagePicker.close">
                 <van-picker
                     v-model="pickerSelectedValues"
                     :title="$t('gallery.jumpToPage')"
@@ -52,7 +52,7 @@
                     :confirm-button-text="t('common.confirm')"
                     :cancel-button-text="t('common.cancel')"
                     @confirm="onPickerConfirm"
-                    @cancel="showPagePicker = false"
+                    @cancel="pagePicker.close()"
                 />
             </van-popup>
         </Teleport>
@@ -63,7 +63,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
@@ -119,9 +119,7 @@ watch(
 );
 
 // --- Android：Vant Picker 按总页数每 10 倍一列 ---
-const showPagePicker = ref(false);
-
-useModalBack(showPagePicker);
+const pagePicker = useModal();
 
 /** 总页数的位数，即 Picker 列数（1–9→1 列，10–99→2 列，100–999→3 列…） */
 const pickerDigitCount = computed(() => {
@@ -225,20 +223,20 @@ function digitValuesToPage(values: (string | number)[]): number {
 /** Picker 当前选中值（与 currentBigPage 同步，打开时写入） */
 const pickerSelectedValues = ref<number[]>([]);
 
-watch(showPagePicker, (open) => {
-    if (open) {
+watch(pagePicker.isOpen, (v) => {
+    if (v) {
         pickerSelectedValues.value = pageToDigitValues(currentBigPage.value, pickerDigitCount.value);
     }
 });
 
 watch([currentBigPage, pickerDigitCount], () => {
-    if (showPagePicker.value) {
+    if (pagePicker.isOpen) {
         pickerSelectedValues.value = pageToDigitValues(currentBigPage.value, pickerDigitCount.value);
     }
 });
 
 const onPickerConfirm = ({ selectedValues }: { selectedValues: (string | number)[] }) => {
-    showPagePicker.value = false;
+    pagePicker.close();
     let page = digitValuesToPage(selectedValues);
     page = Math.max(1, Math.min(totalBigPages.value, page));
     if (page !== currentBigPage.value) {

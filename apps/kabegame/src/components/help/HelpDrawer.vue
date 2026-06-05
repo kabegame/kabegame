@@ -1,5 +1,5 @@
 <template>
-  <el-drawer v-model="drawer.isOpen" :title="$t(helpDrawerTitleKey)" :size="drawerSize" append-to-body class="help-drawer drawer-max-width">
+  <el-drawer :model-value="drawer.isOpen" :z-index="modal.zIndex.value" :title="$t(helpDrawerTitleKey)" :size="drawerSize" append-to-body class="help-drawer drawer-max-width" @update:model-value="modal.close">
     <div v-if="filteredGroups.length === 0" class="empty">
       <el-empty :description="$t('help.noHelpContent')" :image-size="100" />
     </div>
@@ -30,20 +30,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 import { useHelpDrawerStore, getHelpDrawerTitleKey } from "@/stores/helpDrawer";
 import { HELP_GROUPS } from "@/help/helpRegistry";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
 const drawer = useHelpDrawerStore();
 
-const helpDrawerOpen = computed({
-  get: () => drawer.isOpen,
-  set: (v) => { if (!v) drawer.close(); },
-});
-useModalBack(helpDrawerOpen);
+const modal = useModal({ onClose: () => drawer.close() });
+watch(() => drawer.isOpen, (v) => v ? modal.open() : modal.close(), { immediate: true });
 const uiStore = useUiStore();
 
 const drawerSize = computed(() => uiStore.isCompact ? "70%" : "420px");

@@ -67,34 +67,36 @@ export function useQuickSettingsGroups() {
           comp: GalleryGridColumnsSetting,
           pages: ["gallery", "albumdetail"],
         } as QuickSettingItem<QuickSettingsPageId>] : []),
-        {
-          key: "galleryLayoutMode",
-          label: t("settings.galleryLayoutMode"),
-          description: t("settings.galleryLayoutModeDesc"),
-          comp: SettingRadioControl,
-          props: {
-            settingKey: "galleryLayoutMode",
-            options: [
-              { label: t("settings.galleryLayoutModeGrid"), value: "grid" },
-              { label: t("settings.galleryLayoutModeGallery"), value: "gallery" },
-            ],
-          },
-          pages: ["gallery", "albumdetail"],
-        } as QuickSettingItem<QuickSettingsPageId>,
-        {
-          key: "galleryLayoutDirection",
-          label: t("settings.galleryLayoutDirection"),
-          description: t("settings.galleryLayoutDirectionDesc"),
-          comp: SettingRadioControl,
-          props: {
-            settingKey: "galleryLayoutDirection",
-            options: [
-              { label: t("settings.galleryLayoutDirectionVertical"), value: "vertical" },
-              { label: t("settings.galleryLayoutDirectionHorizontal"), value: "horizontal" },
-            ],
-          },
-          pages: ["gallery", "albumdetail"],
-        } as QuickSettingItem<QuickSettingsPageId>,
+        ...(!IS_ANDROID ? [
+          {
+            key: "galleryLayoutMode",
+            label: t("settings.galleryLayoutMode"),
+            description: t("settings.galleryLayoutModeDesc"),
+            comp: SettingRadioControl,
+            props: {
+              settingKey: "galleryLayoutMode",
+              options: [
+                { label: t("settings.galleryLayoutModeGrid"), value: "grid" },
+                { label: t("settings.galleryLayoutModeGallery"), value: "gallery" },
+              ],
+            },
+            pages: ["gallery", "albumdetail"],
+          } as QuickSettingItem<QuickSettingsPageId>,
+          {
+            key: "galleryLayoutDirection",
+            label: t("settings.galleryLayoutDirection"),
+            description: t("settings.galleryLayoutDirectionDesc"),
+            comp: SettingRadioControl,
+            props: {
+              settingKey: "galleryLayoutDirection",
+              options: [
+                { label: t("settings.galleryLayoutDirectionVertical"), value: "vertical" },
+                { label: t("settings.galleryLayoutDirectionHorizontal"), value: "horizontal" },
+              ],
+            },
+            pages: ["gallery", "albumdetail"],
+          } as QuickSettingItem<QuickSettingsPageId>,
+        ] : []),
         {
           key: "appBackgroundEnabled",
           label: t("settings.appBackgroundEnabled"),

@@ -646,6 +646,10 @@ impl WallpaperRotator {
     /// - start_from_current=true：当轮播来源为“画廊”（album_id="") 时，优先从当前壁纸开始（不立刻换壁纸）。
     /// - 注意：开启/切换轮播不会立刻切换当前壁纸；首次自动切换发生在 interval 到期后（或用户手动触发 rotate）。
     pub async fn ensure_running(&self, _start_from_current: bool) -> Result<(), String> {
+        // 壁纸功能已关闭：静默跳过，不启动轮播线程。
+        if Settings::global().get_wallpaper_disabled() {
+            return Ok(());
+        }
         // 已在运行：切换轮播来源时不应报错，直接 reset 让任务按新设置继续运行即可。
         // 画廊顺序模式由 `current_wallpaper_image_id` 在 DB 层面定位下一张（`images.id > ?`），
         // 不再需要预加载全画廊并对齐 `current_index`。
@@ -753,6 +757,10 @@ impl WallpaperRotator {
     /// - 如果轮播未启用，执行一次壁纸切换（需要画册ID）
     /// - 依赖当前设置：画册、随机/顺序、原生/窗口模式、style/transition
     pub async fn rotate(&self) -> Result<(), String> {
+        // 壁纸功能已关闭：静默跳过，不切换壁纸。
+        if Settings::global().get_wallpaper_disabled() {
+            return Ok(());
+        }
         // 检查轮播器是否正在运行
         if self.running.load(Ordering::Relaxed) {
             // 轮播线程里可能正在 await tick；如果这里去抢 std::sync::Mutex 会卡住很久。

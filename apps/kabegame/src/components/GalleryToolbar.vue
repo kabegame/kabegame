@@ -187,7 +187,7 @@
 
   <!-- Android：fold 中「过滤」「排序」弹出的 van-picker -->
   <Teleport v-if="uiStore.isCompact" to="body">
-    <van-popup v-model:show="showFilterPicker" position="bottom" round>
+    <van-popup :show="filterPicker.isOpen.value" position="bottom" round :z-index="filterPicker.zIndex.value" @update:show="filterPicker.close">
       <van-picker
         v-model="filterPickerSelected"
         :title="$t('gallery.filter')"
@@ -195,10 +195,10 @@
         :confirm-button-text="t('common.confirm')"
         :cancel-button-text="t('common.cancel')"
         @confirm="onFilterPickerConfirm"
-        @cancel="showFilterPicker = false"
+        @cancel="filterPicker.close()"
       />
     </van-popup>
-    <van-popup v-model:show="showTimeFilterPicker" position="bottom" round>
+    <van-popup :show="timeFilterPicker.isOpen.value" position="bottom" round :z-index="timeFilterPicker.zIndex.value" @update:show="timeFilterPicker.close">
       <van-picker
         v-model="timeFilterPickerSelected"
         :title="timeFilterPickerTitle"
@@ -207,10 +207,10 @@
         :cancel-button-text="t('common.cancel')"
         @confirm="onTimeFilterPickerConfirm"
         @change="onTimeFilterPickerChange"
-        @cancel="showTimeFilterPicker = false"
+        @cancel="timeFilterPicker.close()"
       />
     </van-popup>
-    <van-popup v-model:show="showPluginFilterPicker" position="bottom" round>
+    <van-popup :show="pluginFilterPicker.isOpen.value" position="bottom" round :z-index="pluginFilterPicker.zIndex.value" @update:show="pluginFilterPicker.close">
       <van-picker
         v-model="pluginFilterPickerSelected"
         :title="t('gallery.filterByPlugin')"
@@ -218,10 +218,10 @@
         :confirm-button-text="t('common.confirm')"
         :cancel-button-text="t('common.cancel')"
         @confirm="onPluginFilterPickerConfirm"
-        @cancel="showPluginFilterPicker = false"
+        @cancel="pluginFilterPicker.close()"
       />
     </van-popup>
-    <van-popup v-model:show="showMediaTypeFilterPicker" position="bottom" round>
+    <van-popup :show="mediaTypeFilterPicker.isOpen.value" position="bottom" round :z-index="mediaTypeFilterPicker.zIndex.value" @update:show="mediaTypeFilterPicker.close">
       <van-picker
         v-model="mediaTypeFilterPickerSelected"
         :title="t('gallery.filterByMediaType')"
@@ -229,10 +229,10 @@
         :confirm-button-text="t('common.confirm')"
         :cancel-button-text="t('common.cancel')"
         @confirm="onMediaTypeFilterPickerConfirm"
-        @cancel="showMediaTypeFilterPicker = false"
+        @cancel="mediaTypeFilterPicker.close()"
       />
     </van-popup>
-    <van-popup v-model:show="showNameFilterPicker" position="bottom" round>
+    <van-popup :show="nameFilterPicker.isOpen.value" position="bottom" round :z-index="nameFilterPicker.zIndex.value" @update:show="nameFilterPicker.close">
       <van-picker
         v-model="nameFilterPickerSelected"
         :title="t('gallery.filterByName')"
@@ -240,10 +240,10 @@
         :confirm-button-text="t('common.confirm')"
         :cancel-button-text="t('common.cancel')"
         @confirm="onNameFilterPickerConfirm"
-        @cancel="showNameFilterPicker = false"
+        @cancel="nameFilterPicker.close()"
       />
     </van-popup>
-    <van-popup v-model:show="showAspectFilterPicker" position="bottom" round>
+    <van-popup :show="aspectFilterPicker.isOpen.value" position="bottom" round :z-index="aspectFilterPicker.zIndex.value" @update:show="aspectFilterPicker.close">
       <van-picker
         v-model="aspectFilterPickerSelected"
         :title="t('gallery.filterByAspect')"
@@ -251,10 +251,10 @@
         :confirm-button-text="t('common.confirm')"
         :cancel-button-text="t('common.cancel')"
         @confirm="onAspectFilterPickerConfirm"
-        @cancel="showAspectFilterPicker = false"
+        @cancel="aspectFilterPicker.close()"
       />
     </van-popup>
-    <van-popup v-model:show="showSortPicker" position="bottom" round>
+    <van-popup :show="sortPicker.isOpen.value" position="bottom" round :z-index="sortPicker.zIndex.value" @update:show="sortPicker.close">
       <van-picker
         v-model="sortPickerSelected"
         :title="$t('gallery.byTime')"
@@ -262,10 +262,10 @@
         :confirm-button-text="t('common.confirm')"
         :cancel-button-text="t('common.cancel')"
         @confirm="onSortPickerConfirm"
-        @cancel="showSortPicker = false"
+        @cancel="sortPicker.close()"
       />
     </van-popup>
-    <van-popup v-model:show="showPageSizePicker" position="bottom" round>
+    <van-popup :show="pageSizePicker.isOpen.value" position="bottom" round :z-index="pageSizePicker.zIndex.value" @update:show="pageSizePicker.close">
       <van-picker
         v-model="pageSizePickerSelected"
         :title="$t('gallery.pageSize')"
@@ -273,7 +273,7 @@
         :confirm-button-text="t('common.confirm')"
         :cancel-button-text="t('common.cancel')"
         @confirm="onPageSizePickerConfirm"
-        @cancel="showPageSizePicker = false"
+        @cancel="pageSizePicker.close()"
       />
     </van-popup>
   </Teleport>
@@ -305,7 +305,7 @@ import SearchInput from "@/components/SearchInput.vue";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import {
   GALLERY_ASPECT_BUCKETS,
   GALLERY_NAME_LANGUAGE_BUCKETS,
@@ -1235,22 +1235,14 @@ async function onDesktopPageSizeCommand(cmd: string) {
 }
 
 // Android：fold 中过滤 / 排序弹出的 picker
-const showFilterPicker = ref(false);
-const showTimeFilterPicker = ref(false);
-const showPluginFilterPicker = ref(false);
-const showMediaTypeFilterPicker = ref(false);
-const showNameFilterPicker = ref(false);
-const showAspectFilterPicker = ref(false);
-const showSortPicker = ref(false);
-const showPageSizePicker = ref(false);
-useModalBack(showFilterPicker);
-useModalBack(showTimeFilterPicker);
-useModalBack(showPluginFilterPicker);
-useModalBack(showMediaTypeFilterPicker);
-useModalBack(showNameFilterPicker);
-useModalBack(showAspectFilterPicker);
-useModalBack(showSortPicker);
-useModalBack(showPageSizePicker);
+const filterPicker = useModal();
+const timeFilterPicker = useModal();
+const pluginFilterPicker = useModal();
+const mediaTypeFilterPicker = useModal();
+const nameFilterPicker = useModal();
+const aspectFilterPicker = useModal();
+const sortPicker = useModal();
+const pageSizePicker = useModal();
 
 const filterPickerColumns = computed(() => [
   { text: t("gallery.filterAll"), value: "all" },
@@ -1262,7 +1254,7 @@ const filterPickerColumns = computed(() => [
   { text: t("gallery.filterWallpaperSet"), value: "wallpaper-order" },
 ]);
 const filterPickerSelected = ref<string[]>(["all"]);
-watch(showFilterPicker, (open) => {
+watch(filterPicker.isOpen, (open) => {
   if (open) {
     if (isWallpaperOrderBrowse.value) {
       filterPickerSelected.value = ["wallpaper-order"];
@@ -1282,33 +1274,33 @@ watch(showFilterPicker, (open) => {
   }
 });
 async function onFilterPickerConfirm() {
-  showFilterPicker.value = false;
+  filterPicker.close();
   const v = filterPickerSelected.value[0];
   if (v === "time") {
     await ensureTimeRootLoaded();
     await ensureTimeTailLoaded(dateTail.value);
     if (!timeMenuRoots.value.length) return;
-    showTimeFilterPicker.value = true;
+    timeFilterPicker.open();
     return;
   }
   if (v === "plugin") {
     await ensurePluginGroupsLoaded();
     await ensureAllPluginExtendsLoaded();
     if (!pluginGroups.value.length) return;
-    showPluginFilterPicker.value = true;
+    pluginFilterPicker.open();
     return;
   }
   if (v === "media-type") {
     await ensureMediaTypeCountsLoaded();
-    showMediaTypeFilterPicker.value = true;
+    mediaTypeFilterPicker.open();
     return;
   }
   if (v === "name") {
-    showNameFilterPicker.value = true;
+    nameFilterPicker.open();
     return;
   }
   if (v === "aspect") {
-    showAspectFilterPicker.value = true;
+    aspectFilterPicker.open();
     return;
   }
   if (v === "all" || v === "wallpaper-order") {
@@ -1356,7 +1348,7 @@ async function ensureTimeTailLoaded(tail: string | null) {
   }
 }
 
-watch(showTimeFilterPicker, (open) => {
+watch(timeFilterPicker.isOpen, (open) => {
   if (!open) return;
   const roots = timeMenuRoots.value;
   const initial = resolveInitialTimePickPath(roots, dateTail.value);
@@ -1381,7 +1373,7 @@ async function onTimeFilterPickerChange(payload: {
 function onTimeFilterPickerConfirm(payload: {
   selectedValues: (string | number)[];
 }) {
-  showTimeFilterPicker.value = false;
+  timeFilterPicker.close();
   const roots = timeMenuRoots.value;
   const tail = resolveTimeMenuPickToDateTail(
     roots,
@@ -1446,7 +1438,7 @@ function isPluginCommandPlain(command: string) {
 }
 
 const pluginFilterPickerSelected = ref<string[]>([]);
-watch(showPluginFilterPicker, (open) => {
+watch(pluginFilterPicker.isOpen, (open) => {
   if (open) {
     const id = currentPluginId.value || pluginGroups.value[0]?.plugin_id || "";
     const extendPath = activeFilters.value.plugin?.extendPath ?? "";
@@ -1457,7 +1449,7 @@ function onPluginFilterPickerConfirm() {
   const selected = pluginFilterPickerSelected.value;
   const command = selected[selected.length - 1] ?? "";
   if (isPluginCommandPlain(command)) return;
-  showPluginFilterPicker.value = false;
+  pluginFilterPicker.close();
   const { pluginId: id, extendPath } = parsePluginCommand(command);
   if (!id) return;
   emit(
@@ -1483,14 +1475,14 @@ const mediaTypeFilterPickerColumns = computed(() => {
   ];
 });
 const mediaTypeFilterPickerSelected = ref<string[]>(["image"]);
-watch(showMediaTypeFilterPicker, (open) => {
+watch(mediaTypeFilterPicker.isOpen, (open) => {
   if (open) {
     const k = filterMediaKind(activeFilters.value);
     mediaTypeFilterPickerSelected.value = [k === "video" ? "video" : "image"];
   }
 });
 function onMediaTypeFilterPickerConfirm() {
-  showMediaTypeFilterPicker.value = false;
+  mediaTypeFilterPicker.close();
   const kind = mediaTypeFilterPickerSelected.value[0];
   if (kind !== "image" && kind !== "video") return;
   emit("update:filters", singleFilterToSet({ type: "media-type", kind }));
@@ -1503,7 +1495,7 @@ const nameFilterPickerColumns = computed(() =>
   })),
 );
 const nameFilterPickerSelected = ref<string[]>(["english"]);
-watch(showNameFilterPicker, (open) => {
+watch(nameFilterPicker.isOpen, (open) => {
   if (open) {
     nameFilterPickerSelected.value = [
       filterNameBucket(activeFilters.value) ?? GALLERY_NAME_LANGUAGE_BUCKETS[0].bucket,
@@ -1511,7 +1503,7 @@ watch(showNameFilterPicker, (open) => {
   }
 });
 function onNameFilterPickerConfirm() {
-  showNameFilterPicker.value = false;
+  nameFilterPicker.close();
   const bucket = nameFilterPickerSelected.value[0]?.trim();
   if (!bucket) return;
   emit("update:filters", singleFilterToSet({ type: "name", bucket }));
@@ -1524,7 +1516,7 @@ const aspectFilterPickerColumns = computed(() =>
   })),
 );
 const aspectFilterPickerSelected = ref<string[]>(["landscape-4x3-16x9"]);
-watch(showAspectFilterPicker, (open) => {
+watch(aspectFilterPicker.isOpen, (open) => {
   if (open) {
     aspectFilterPickerSelected.value = [
       filterAspectRange(activeFilters.value) ?? GALLERY_ASPECT_BUCKETS[0].range,
@@ -1532,7 +1524,7 @@ watch(showAspectFilterPicker, (open) => {
   }
 });
 function onAspectFilterPickerConfirm() {
-  showAspectFilterPicker.value = false;
+  aspectFilterPicker.close();
   const range = aspectFilterPickerSelected.value[0]?.trim();
   if (!range) return;
   emit("update:filters", singleFilterToSet({ type: "aspect", range }));
@@ -1543,11 +1535,11 @@ const sortPickerColumns = computed(() => [
   { text: sortOptionLabelDesc.value, value: "desc" },
 ]);
 const sortPickerSelected = ref<string[]>(["asc"]);
-watch(showSortPicker, (open) => {
+watch(sortPicker.isOpen, (open) => {
   if (open) sortPickerSelected.value = [sortOrder.value];
 });
 function onSortPickerConfirm() {
-  showSortPicker.value = false;
+  sortPicker.close();
   const v = sortPickerSelected.value[0];
   if (v === "asc" || v === "desc") onSortOrderChange(v);
 }
@@ -1556,11 +1548,11 @@ const pageSizePickerColumns = computed(() =>
   pageSizeOptions.map((n) => ({ text: String(n), value: String(n) })),
 );
 const pageSizePickerSelected = ref<string[]>(["100"]);
-watch(showPageSizePicker, (open) => {
+watch(pageSizePicker.isOpen, (open) => {
   if (open) pageSizePickerSelected.value = [String(props.pageSize)];
 });
 async function onPageSizePickerConfirm() {
-  showPageSizePicker.value = false;
+  pageSizePicker.close();
   const v = pageSizePickerSelected.value[0];
   const n = Number(v);
   if (n !== 100 && n !== 500 && n !== 1000) return;
@@ -1688,14 +1680,14 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
       emit("showQuickSettings");
       break;
     case HeaderFeatureId.GalleryFilter:
-      showFilterPicker.value = true;
+      filterPicker.open();
       break;
     case HeaderFeatureId.GallerySort:
-      showSortPicker.value = true;
+      sortPicker.open();
       break;
     case HeaderFeatureId.GalleryPageSize:
       pageSizePickerSelected.value = [String(props.pageSize)];
-      showPageSizePicker.value = true;
+      pageSizePicker.open();
       break;
     case HeaderFeatureId.Organize:
       // 整理由 header 的 OrganizeHeaderControl 处理，此处不会触发（Organize 在 show 中）

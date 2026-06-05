@@ -91,8 +91,9 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
       };
     }
 
-    const thumbnailUrl = toDesktopThumbnailUrl(image.thumbnailPath || image.localPath);
     const originalUrl = toDesktopUrl(image.localPath);
+    const hasThumbnail = !!normalizeDesktopPath(image.thumbnailPath);
+    const thumbnailUrl = hasThumbnail ? toDesktopThumbnailUrl(image.thumbnailPath) : originalUrl;
     const cols = options.gridColumns.value ?? 0;
     const preferOriginalLayers = cols < 3 || options.forceDesktopLayers?.value === true;
     // 默认列数 >= 3 只显示缩略图；列数 1、2 或 hover 强制预览时走双图策略（先缩略图再原图淡入）
@@ -107,7 +108,7 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
       return {
         primaryUrl: thumbnailUrl,
         fallbackUrl: thumbnailUrl !== originalUrl ? originalUrl : "",
-        primaryKind: "thumbnail" as UrlKind,
+        primaryKind: hasThumbnail ? ("thumbnail" as UrlKind) : ("original" as UrlKind),
         thumbnailUrl,
         originalUrl,
         useDesktopLayers: false,

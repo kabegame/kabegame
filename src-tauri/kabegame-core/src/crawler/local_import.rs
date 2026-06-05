@@ -12,7 +12,7 @@ use crate::crawler::downloader::{build_safe_filename, unique_path};
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::scan_service::{
-    scan_and_visit, FolderScanHook, ScanOptions, ScannedDir, ScannedFile,
+    scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile,
 };
 use crate::settings::Settings;
 use crate::storage::Storage;
@@ -153,7 +153,8 @@ impl LocalImportHook<'_> {
             .copy_image_to_pictures(src.to_string_lossy().as_ref(), &mime, &display_name)
             .await?;
         let copied_url = Url::parse(&copied_uri).map_err(|e| e.to_string())?;
-        self.import_content_url(&copied_url, download_start_time).await
+        self.import_content_url(&copied_url, download_start_time)
+            .await
     }
 
     #[cfg(target_os = "android")]
@@ -210,18 +211,27 @@ impl FolderScanHook for LocalImportHook<'_> {
 
     async fn on_enter_dir(
         &mut self,
-        _dir: &ScannedDir,
-        _parent: &(),
-    ) -> Result<Option<()>, String> {
+        _enter: &ScannedDir,
+        _ctx: &ScanCtx<()>,
+    ) -> Result<Option<()>, ScanError> {
+        if self.download_queue.is_task_canceled(self.task_id).await {
+            return Err(ScanError::Fatal("Task canceled".to_string()));
+        }
         Ok(Some(()))
     }
 
-    async fn on_file(&mut self, file: &ScannedFile, _ctx: &()) -> Result<(), String> {
+    async fn on_file(&mut self, file: &ScannedFile, _ctx: &ScanCtx<()>) -> Result<(), ScanError> {
+        if self.download_queue.is_task_canceled(self.task_id).await {
+            return Err(ScanError::Fatal("Task canceled".to_string()));
+        }
         let download_start_time = self.next_download_start_time();
         let result = match file.url.scheme() {
             "file" => self.import_file_url(file, download_start_time).await,
             #[cfg(target_os = "android")]
-            "content" => self.import_content_url(&file.url, download_start_time).await,
+            "content" => {
+                self.import_content_url(&file.url, download_start_time)
+                    .await
+            }
             _ => Ok(()),
         };
         if let Err(e) = result {
@@ -235,10 +245,6 @@ impl FolderScanHook for LocalImportHook<'_> {
             );
         }
         Ok(())
-    }
-
-    async fn is_canceled(&self) -> bool {
-        self.download_queue.is_task_canceled(self.task_id).await
     }
 
     fn on_progress(&mut self, delta: f64) {

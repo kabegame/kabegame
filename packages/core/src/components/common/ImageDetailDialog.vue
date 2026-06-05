@@ -1,10 +1,13 @@
 <template>
   <el-dialog
-    v-model="visible"
+    :model-value="open"
+    :z-index="zIndex"
     :title="t('gallery.imageDetailTitle')"
     width="600px"
     class="image-detail-dialog"
     align-center
+    append-to-body
+    @update:model-value="(v: boolean) => { if (!v) emit('close') }"
   >
     <ImageDetailContent
       :image="image"
@@ -16,9 +19,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { useModalBack } from "../../composables/useModalBack";
 import ImageDetailContent, {
   type ImageDetailGalleryFilterTarget,
   type ImageDetailLike,
@@ -28,26 +29,20 @@ import { Plugin } from "@kabegame/core/stores/plugins";
 const { t } = useI18n();
 
 interface Props {
-  modelValue: boolean;
+  open: boolean;
+  zIndex: number;
   image: ImageDetailLike | null;
   plugins?: Array<Plugin>;
 }
 
 interface Emits {
-  (e: "update:modelValue", value: boolean): void;
   (e: "open-task", taskId: string): void;
   (e: "open-gallery-filter", target: ImageDetailGalleryFilterTarget): void;
+  (e: "close"): void;
 }
 
-const props = defineProps<Props>();
+defineProps<Props>();
 const emit = defineEmits<Emits>();
-
-const visible = computed({
-  get: () => props.modelValue,
-  set: (value) => emit("update:modelValue", value),
-});
-
-useModalBack(visible);
 </script>
 
 <style lang="scss">

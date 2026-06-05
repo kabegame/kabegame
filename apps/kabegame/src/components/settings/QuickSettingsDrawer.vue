@@ -1,17 +1,17 @@
 <template>
-    <CoreQuickSettingsDrawer :is-open="drawer.isOpen" :title="drawerTitle" :page-id="drawer.pageId" :groups="translatedGroups" :get-item-disabled="isItemDisabled"
+    <CoreQuickSettingsDrawer :is-open="drawer.isOpen" :z-index="modal.zIndex.value" :title="drawerTitle" :page-id="drawer.pageId" :groups="translatedGroups" :get-item-disabled="isItemDisabled"
         :get-item-props="getEffectiveProps" :get-item-description="getEffectiveDescription" :drawer-size="drawerSize"
-        :empty-description="t('settings.quickEmpty')" @on-close="drawer.close" />
+        :empty-description="t('settings.quickEmpty')" @on-close="modal.close()" />
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useQuickSettingsDrawerStore, getQuickSettingsDrawerTitleKey } from "@/stores/quickSettingsDrawer";
 import { useSettingsStore, type AppSettingKey } from "@kabegame/core/stores/settings";
 import CoreQuickSettingsDrawer from "@kabegame/core/components/settings/QuickSettingsDrawer.vue";
 import { useQuickSettingsGroups } from "@/settings/quickSettingsRegistry";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
 const { t } = useI18n();
@@ -19,11 +19,8 @@ const drawer = useQuickSettingsDrawerStore();
 const settingsStore = useSettingsStore();
 const { translatedGroups } = useQuickSettingsGroups();
 
-const quickSettingsOpen = computed({
-  get: () => drawer.isOpen,
-  set: (v) => { if (!v) drawer.close(); },
-});
-useModalBack(quickSettingsOpen);
+const modal = useModal({ onClose: () => drawer.close() });
+watch(() => drawer.isOpen, (v) => v ? modal.open() : modal.close(), { immediate: true });
 
 const uiStore = useUiStore();
 

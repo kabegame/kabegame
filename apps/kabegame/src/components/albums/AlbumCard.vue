@@ -72,7 +72,7 @@ import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID } from "@kabegame/core/env";
 import ImageItem from "@kabegame/core/components/image/ImageItem.vue";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { thumbnailToUrl } from "@kabegame/core/httpServer";
+import { fileToUrl, thumbnailToUrl } from "@kabegame/core/httpServer";
 import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
@@ -109,14 +109,16 @@ const emit = defineEmits<{
 
 /** 与 Albums.vue 中 toPreviewUrl 一致，用于判断是否有可展示的预览 */
 const toPreviewUrl = (img: ImageInfo): string => {
-  const thumbPath = (img.thumbnailPath || img.localPath || "").trim();
-  if (!thumbPath) return "";
+  const thumbPath = (img.thumbnailPath || "").trim();
+  const localPath = (img.localPath || "").trim();
+  const path = thumbPath || localPath;
+  if (!path) return "";
   if (IS_ANDROID) {
-    return thumbPath.startsWith("content://")
-      ? thumbPath.replace("content://", CONTENT_URI_PROXY_PREFIX)
+    return path.startsWith("content://")
+      ? path.replace("content://", CONTENT_URI_PROXY_PREFIX)
       : "";
   }
-  return thumbnailToUrl(thumbPath);
+  return thumbPath ? thumbnailToUrl(thumbPath) : fileToUrl(localPath);
 };
 
 const hasRenderablePreview = (img: ImageInfo) => !!toPreviewUrl(img);

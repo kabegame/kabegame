@@ -33,7 +33,7 @@ function boolField(row: Row, snake: string, camel?: string): boolean | undefined
 
 export function rowToImageInfo(row: Row): ImageInfo {
   const localPath = stringField(row, "local_path", "localPath") ?? "";
-  const thumbnailPath = stringField(row, "thumbnail_path", "thumbnailPath") || localPath;
+  const thumbnailPath = stringField(row, "thumbnail_path", "thumbnailPath") ?? "";
   const image: ImageInfo = {
     id: stringField(row, "id") ?? "",
     localPath,

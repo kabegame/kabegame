@@ -23,7 +23,9 @@
       "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\\\\apps\\\\kabegame\\\\src\\\\components\" -Filter \"Task*.vue\")",
       "Bash(Select-Object FullName)",
       "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\\\\src-tauri\\\\pathql-rs\" -Recurse -Name)",
-      "Bash(xargs basename -a)"
+      "Bash(xargs basename -a)",
+      "Bash(kill -0 31566)",
+      "Read(//tmp/**)"
     ]
   }
 }

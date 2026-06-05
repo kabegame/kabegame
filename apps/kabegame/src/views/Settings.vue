@@ -41,11 +41,13 @@
                   :description="$t('settings.galleryPageSizeDesc')">
                   <GalleryPageSizeSetting />
                 </SettingRow>
-                <SettingRow :label="$t('settings.galleryLayoutMode')"
+                <SettingRow v-if="!IS_ANDROID"
+                  :label="$t('settings.galleryLayoutMode')"
                   :description="$t('settings.galleryLayoutModeDesc')">
                   <SettingRadioControl setting-key="galleryLayoutMode" :options="galleryLayoutModeOptions" />
                 </SettingRow>
-                <SettingRow :label="$t('settings.galleryLayoutDirection')"
+                <SettingRow v-if="!IS_ANDROID"
+                  :label="$t('settings.galleryLayoutDirection')"
                   :description="$t('settings.galleryLayoutDirectionDesc')">
                   <SettingRadioControl setting-key="galleryLayoutDirection" :options="galleryLayoutDirectionOptions" />
                 </SettingRow>
@@ -100,6 +102,12 @@
 
             <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
               <div v-if="!loading" class="settings-list">
+                <SettingRow :label="$t('settings.wallpaperDisabled')"
+                  :description="$t('settings.wallpaperDisabledDesc')">
+                  <SettingSwitchControl setting-key="wallpaperDisabled" />
+                </SettingRow>
+
+                <div :class="{ 'pointer-events-none opacity-50': wallpaperDisabled }">
                 <SettingRow :label="$t('settings.wallpaperRotationEnabled')"
                   :description="$t('settings.wallpaperRotationEnabledDesc')">
                   <WallpaperRotationEnabledSetting />
@@ -168,6 +176,7 @@
                   :description="$t('settings.wallpaperEngineDirDesc')">
                   <WallpaperEngineDirSetting />
                 </SettingRow>
+                </div>
               </div>
             </div>
           </el-card>
@@ -387,6 +396,14 @@ watch(
   }
 );
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
+// 关闭壁纸：禁用期间将其余壁纸控件置灰
+const wallpaperDisabled = computed(() => settingsStore.values.wallpaperDisabled === true);
+// native 模式下开启"关闭壁纸"时提示用户系统壁纸保持现状、无法自动还原
+watch(wallpaperDisabled, (disabled, prev) => {
+  if (disabled && !prev && wallpaperMode.value === "native") {
+    ElMessage.warning(t("settings.wallpaperDisabledNativeWarning"));
+  }
+});
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("settings");
 const isLightMode = IS_LIGHT_MODE;

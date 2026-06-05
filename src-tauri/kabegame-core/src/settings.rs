@@ -120,6 +120,8 @@ pub enum SettingKey {
     WallpaperTransitionByMode,
     /// 壁纸模式（原生等）
     WallpaperMode,
+    /// 关闭壁纸（整体禁用壁纸功能：拒绝壁纸相关操作、隐藏壁纸窗口、启动不恢复）
+    WallpaperDisabled,
     /// 视频壁纸音量（0~1）
     WallpaperVolume,
     /// 视频壁纸播放速率（0.25～3）
@@ -313,6 +315,7 @@ impl Settings {
                 SettingValue::HashMapStringString(HashMap::new())
             }
             SettingKey::WallpaperMode => SettingValue::String(Self::default_wallpaper_mode()),
+            SettingKey::WallpaperDisabled => SettingValue::Bool(false),
             SettingKey::WallpaperVolume => SettingValue::F64(1.0),
             SettingKey::WallpaperVideoPlaybackRate => SettingValue::F64(1.0),
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
@@ -529,6 +532,7 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperStyleByMode,
             SettingKey::WallpaperTransitionByMode,
             SettingKey::WallpaperMode,
+            SettingKey::WallpaperDisabled,
             SettingKey::WallpaperVolume,
             SettingKey::WallpaperVideoPlaybackRate,
             SettingKey::WindowState,
@@ -624,7 +628,8 @@ Write-Output "$style,$tile"
             | SettingKey::AutoOpenCrawlerWebview
             | SettingKey::AutoDeduplicate
             | SettingKey::RealtimeFolderSync
-            | SettingKey::WallpaperRotationEnabled => {
+            | SettingKey::WallpaperRotationEnabled
+            | SettingKey::WallpaperDisabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
             SettingKey::ImportRecommendedScheduleEnabled => {
@@ -768,6 +773,7 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperStyleByMode => "wallpaperStyleByMode".to_string(),
             SettingKey::WallpaperTransitionByMode => "wallpaperTransitionByMode".to_string(),
             SettingKey::WallpaperMode => "wallpaperMode".to_string(),
+            SettingKey::WallpaperDisabled => "wallpaperDisabled".to_string(),
             SettingKey::WallpaperVolume => "wallpaperVolume".to_string(),
             SettingKey::WallpaperVideoPlaybackRate => "wallpaperVideoPlaybackRate".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
@@ -1024,6 +1030,13 @@ Write-Output "$style,$tile"
             .get(&SettingKey::WallpaperRotationIncludeSubalbums)
             .map(|c| c.load().as_bool().unwrap_or(true))
             .unwrap_or(true)
+    }
+
+    pub fn get_wallpaper_disabled(&self) -> bool {
+        Self::cells()
+            .get(&SettingKey::WallpaperDisabled)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
     }
 
     pub fn get_wallpaper_rotation_interval_minutes(&self) -> u32 {
@@ -1435,6 +1448,16 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperRotationIncludeSubalbums, &new_value);
+        Ok(())
+    }
+
+    pub fn set_wallpaper_disabled(&self, disabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(disabled);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperDisabled) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::WallpaperDisabled, &new_value);
         Ok(())
     }
 

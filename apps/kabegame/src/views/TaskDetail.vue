@@ -5,7 +5,7 @@
         </div>
         <ImageGrid v-else-if="imageFilter === 'success'" ref="taskViewRef" class="detail-body" :images="images"
             :enable-ctrl-wheel-adjust-columns="!isCompact" :enable-ctrl-key-adjust-columns="!isCompact"
-            :enable-virtual-scroll="!isCompact" :actions="imageActions" :on-context-command="handleImageMenuCommand" scroll-whole-container hide-scrollbar>
+            :actions="imageActions" :on-context-command="handleImageMenuCommand" scroll-whole-container hide-scrollbar>
             <template #before-grid>
                 <TaskDetailPageHeader :task-name="taskName"
                     :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
@@ -114,19 +114,20 @@
             </TransitionGroup>
         </div>
 
-        <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" :task-id="addToAlbumTaskId"
-            @added="handleAddedToAlbum" />
+        <AddToAlbumDialog :open="addToAlbumDialog.isOpen.value" :z-index="addToAlbumDialog.zIndex.value" :image-ids="addToAlbumImageIds" :task-id="addToAlbumTaskId"
+            @close="addToAlbumDialog.close()" @added="handleAddedToAlbum" />
 
-        <RemoveImagesConfirmDialog v-model="showRemoveDialog" :message="removeDialogMessage"
-            :title="$t('tasks.confirmDelete')" hide-checkbox @confirm="confirmRemoveImages" />
+        <RemoveImagesConfirmDialog :open="removeDialog.isOpen.value" :z-index="removeDialog.zIndex.value" :message="removeDialogMessage"
+            :title="$t('tasks.confirmDelete')" hide-checkbox @close="removeDialog.close()" @confirm="confirmRemoveImages" />
 
         <TaskLogDialog ref="taskLogDialogRef" />
-        <TaskParamsDialog v-model="showTaskParamsDialog" :task="taskParamsTask" />
+        <TaskParamsDialog :open="taskParamsDialog.isOpen.value" :z-index="taskParamsDialog.zIndex.value" :task="taskParamsTask" @close="taskParamsDialog.close()" />
     </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, reactive, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
 import { pathqlEntry, pathqlFetch } from "@/services/pathql";
@@ -222,11 +223,11 @@ const handleViewTaskLog = () => {
     taskLogDialogRef.value?.openTaskLog(id);
 };
 
-const showTaskParamsDialog = ref(false);
+const taskParamsDialog = useModal();
 const taskParamsTask = computed<TaskRunParamsTask | null>(() => taskFromStore.value ?? null);
 const handleViewTaskParams = () => {
     if (!taskId.value) return;
-    showTaskParamsDialog.value = true;
+    taskParamsDialog.open();
 };
 
 const taskId = ref<string>("");
@@ -682,7 +683,7 @@ const handleDeleteTask = async () => {
 };
 
 // 永久删除确认对话框相关
-const showRemoveDialog = ref(false);
+const removeDialog = useModal();
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
 
@@ -691,7 +692,7 @@ const clearSelection = () => {
 };
 
 // 加入画册对话框（右键菜单用 imageIds，header 一键加入用 taskId）
-const showAddToAlbumDialog = ref(false);
+const addToAlbumDialog = useModal();
 const addToAlbumImageIds = ref<string[]>([]);
 const addToAlbumTaskId = ref<string | undefined>(undefined);
 const handleAddedToAlbum = () => {
@@ -703,7 +704,7 @@ const handleAddedToAlbum = () => {
 const handleHeaderAddToAlbum = () => {
     addToAlbumTaskId.value = taskId.value;
     addToAlbumImageIds.value = [];
-    showAddToAlbumDialog.value = true;
+    addToAlbumDialog.open();
 };
 
 // 切换收藏（仅更新本页 images + 收藏画册缓存/计数）
@@ -877,7 +878,7 @@ const handleImageMenuCommand = async (
             if (imagesToProcess.length === 0) return null;
             addToAlbumTaskId.value = undefined;
             addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
-            showAddToAlbumDialog.value = true;
+            addToAlbumDialog.open();
             break;
         case "addToHidden": {
             if (await guardDesktopOnly("hideImage", { needSuper: true })) return null;
@@ -945,7 +946,7 @@ const handleImageMenuCommand = async (
             pendingRemoveImages.value = imagesToProcess;
             const count = imagesToProcess.length;
             removeDialogMessage.value = count > 1 ? t("tasks.removeDialogMessageMulti", { count }) : t("tasks.removeDialogMessageSingle");
-            showRemoveDialog.value = true;
+            removeDialog.open();
             break;
         case "swipe-remove" as any:
             // 上划手势：隐藏（加入隐藏画册，保留磁盘文件）
@@ -974,12 +975,12 @@ const handleImageMenuCommand = async (
 const confirmRemoveImages = async () => {
     const imagesToRemove = pendingRemoveImages.value;
     if (imagesToRemove.length === 0) {
-        showRemoveDialog.value = false;
+        removeDialog.close();
         return;
     }
 
     const count = imagesToRemove.length;
-    showRemoveDialog.value = false;
+    removeDialog.close();
 
     try {
         const imageIds = imagesToRemove.map(img => img.id);

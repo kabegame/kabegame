@@ -1,6 +1,6 @@
 <template>
   <!-- Android：自研全宽抽屉 -->
-  <AndroidDrawer v-if="uiStore.isCompact" v-model="visible" show-close-button class="crawl-dialog">
+  <AndroidDrawer v-if="uiStore.isCompact" :model-value="modal.isOpen.value" :z-index="modal.zIndex.value" show-close-button class="crawl-dialog" @update:model-value="modal.close">
     <template #header>
       <div class="crawl-drawer-header">
         <h3>{{ $t("plugins.startCollect") }}</h3>
@@ -12,7 +12,7 @@
           <AndroidPickerSelect :model-value="selectedRunConfigId ?? null" :options="runConfigPickerOptions"
             :title="$t('plugins.runConfig')" :placeholder="$t('plugins.selectConfigOptional')" clearable
             @update:model-value="setRunConfigId" />
-          <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="showAddConfigDialog = true">
+          <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="addConfigModal.open()">
             {{ $t("plugins.addConfig") }}
           </el-button>
           <el-button v-else class="run-config-btn" @click="updateCurrentConfig">
@@ -180,8 +180,8 @@
     </div>
   </AndroidDrawer>
 
-  <ElDialog v-else v-model="visible" :title="$t('plugins.startCollect')" width="600px" class="crawl-dialog" align-center
-    :show-close="true">
+  <ElDialog v-else :model-value="modal.isOpen.value" :z-index="modal.zIndex.value" :title="$t('plugins.startCollect')" width="600px" class="crawl-dialog" align-center
+    :show-close="true" @update:model-value="modal.close">
     <el-form ref="formRef" :model="form" label-position="top" class="crawl-form">
       <el-form-item :label="$t('plugins.runConfig')">
         <div class="run-config-row">
@@ -212,7 +212,7 @@
               </div>
             </el-option>
           </el-select>
-          <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="showAddConfigDialog = true">
+          <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="addConfigModal.open()">
             {{ $t("plugins.saveToConfig") }}
           </el-button>
           <el-button v-else class="run-config-btn" @click="updateCurrentConfig">
@@ -370,7 +370,7 @@
     </el-form>
 
     <template #footer>
-      <el-button @click="visible = false">{{ $t("common.close") }}</el-button>
+      <el-button @click="modal.close()">{{ $t("common.close") }}</el-button>
       <el-button type="primary" :disabled="!selectedRunConfigId && !form.pluginId" @click="handleStartCrawl">
         {{ $t("plugins.startCollect") }}
       </el-button>
@@ -378,8 +378,8 @@
   </ElDialog>
 
   <!-- 新增配置弹窗 -->
-  <ElDialog v-model="showAddConfigDialog" :title="$t('plugins.newConfig')" width="400px" :close-on-click-modal="false"
-    @closed="onAddConfigDialogClosed">
+  <ElDialog :model-value="addConfigModal.isOpen.value" :z-index="addConfigModal.zIndex.value" :title="$t('plugins.newConfig')" width="400px" :close-on-click-modal="false"
+    @update:model-value="addConfigModal.close" @closed="onAddConfigDialogClosed">
     <el-form label-width="80px">
       <el-form-item :label="$t('common.name')" required>
         <el-input v-model="newConfigName" :placeholder="$t('common.configNamePlaceholder')" maxlength="80"
@@ -391,7 +391,7 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="showAddConfigDialog = false">{{ $t("common.cancel") }}</el-button>
+      <el-button @click="addConfigModal.close()">{{ $t("common.cancel") }}</el-button>
       <el-button type="primary" @click="handleAddConfig">{{ $t("common.save") }}</el-button>
     </template>
   </ElDialog>
@@ -418,7 +418,7 @@ import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import {
   matchesPluginVarWhen,
@@ -457,7 +457,7 @@ const recommendedPresetCount = computed(
 );
 
 function goImportRecommendedPresets() {
-  visible.value = false;
+  modal.close();
   void router.push({ name: "AutoConfigs", query: { tab: "recommended" } });
 }
 const pluginStore = usePluginStore();
@@ -511,10 +511,9 @@ const loadHeadersFromConfig = (cfgId: string | null) => {
   httpHeaderRows.value = Object.entries(headers).map(([k, v]) => ({ key: k, value: v }));
 };
 
-const showAddConfigDialog = ref(false);
+const addConfigModal = useModal();
 const newConfigName = ref("");
 const newConfigDescription = ref("");
-useModalBack(showAddConfigDialog);
 
 function onAddConfigDialogClosed() {
   newConfigName.value = "";
@@ -720,7 +719,7 @@ async function handleAddConfig() {
       httpHeaders,
       scheduleEnabled: false,
     });
-    showAddConfigDialog.value = false;
+    addConfigModal.close();
     selectedRunConfigId.value = cfg.id;
   } catch (e) {
     console.error("新增配置失败:", e);
@@ -758,12 +757,8 @@ async function updateCurrentConfig() {
   }
 }
 
-const visible = computed({
-  get: () => props.modelValue,
-  set: (v) => emit("update:modelValue", v),
-});
-
-useModalBack(visible);
+const modal = useModal({ onClose: () => emit("update:modelValue", false) });
+watch(() => props.modelValue, (v) => v ? modal.open() : modal.close(), { immediate: true });
 
 const plugins = computed(() => pluginStore.plugins);
 const runConfigs = computed(() => crawlerStore.runConfigs);
@@ -947,7 +942,7 @@ const {
   loadPluginVarDefs,
   normalizeVarsForUI,
   isRequired,
-  visible,
+  modal.isOpen,
 );
 
 const handleDeleteConfig = async (configId: string) => {
@@ -1125,7 +1120,7 @@ const handleStartCrawl = async () => {
     selectedOutputAlbumId.value = null;
     newOutputAlbumName.value = "";
     newOutputAlbumParentId.value = null;
-    visible.value = false;
+    modal.close();
     emit("started");
   } catch (error: any) {
     console.error("添加任务失败:", error);
@@ -1135,7 +1130,7 @@ const handleStartCrawl = async () => {
   }
 };
 
-watch(visible, async (open) => {
+watch(modal.isOpen, async (open) => {
   if (!open) return;
   lastPluginVarTrackSignature.clear();
   await crawlerStore.runConfigsReady;
@@ -1199,7 +1194,7 @@ watch(visible, async (open) => {
   await checkAllConfigsCompatibility();
 });
 
-watch(visible, (isOpen) => {
+watch(modal.isOpen, (isOpen) => {
   if (!isOpen) {
     selectedOutputAlbumId.value = null;
     newOutputAlbumName.value = "";

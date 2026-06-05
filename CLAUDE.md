@@ -69,7 +69,7 @@ bun run build:ffmpeg             # Build FFmpeg sidecar (requires libx264)
 
 ### Monorepo Layout
 - `apps/kabegame/` — Vue 3 frontend (Vite, Element Plus, Pinia, UnoCSS)
-- `packages/` — Shared frontend packages (`core`, `i18n`, `image-type`, `photoswipe-vue`)
+- `packages/` — Shared frontend packages (`core`, `i18n`, `image-type`)
 - `src-tauri/kabegame-core/` — `kabegame-core`: shared Rust library (crawler engine, plugin system, storage)
 - `src-tauri/kabegame/` — Tauri GUI app (desktop + Android)
 - `src-tauri/kabegame-cli/` — Headless CLI

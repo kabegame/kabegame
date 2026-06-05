@@ -1,10 +1,11 @@
 <template>
   <div class="organize-header-control">
     <el-popover
-      v-model:visible="showProgressPopover"
+      :visible="progressPopover.isOpen.value"
       trigger="manual"
       placement="bottom-end"
       :width="340"
+      @update:visible="progressPopover.close"
     >
       <template #reference>
         <!-- 单层组件根非原生节点时，ElPopover 的运行时指令无法正确挂载，需包一层元素 -->
@@ -49,13 +50,13 @@
 
         <div class="popover-actions">
           <el-button type="danger" link @click="handleCancel">{{ t("common.cancel") }}</el-button>
-          <el-button size="small" type="primary" @click="showProgressPopover = false">{{ t("common.confirm") }}</el-button>
+          <el-button size="small" type="primary" @click="progressPopover.close()">{{ t("common.confirm") }}</el-button>
         </div>
       </div>
     </el-popover>
 
     <Teleport to="body">
-      <OrganizeDialog v-model="showDialog" :loading="loading" @confirm="handleConfirm" />
+      <OrganizeDialog v-model="organizeDialog.isOpen.value" :loading="loading" @confirm="handleConfirm" @update:model-value="organizeDialog.close" />
     </Teleport>
   </div>
 </template>
@@ -67,7 +68,7 @@ import { FolderOpened } from "@element-plus/icons-vue";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import { listen } from "@/api/rpc";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import OrganizeDialog from "@/components/OrganizeDialog.vue";
 
 type OrganizeOptions = {
@@ -101,8 +102,8 @@ type OrganizeRunStatePayload = OrganizeProgressState & {
 
 const { t } = useI18n();
 const loading = ref(false);
-const showDialog = ref(false);
-const showProgressPopover = ref(false);
+const organizeDialog = useModal();
+const progressPopover = useModal();
 const progress = ref<OrganizeProgressState>({
   processedGlobal: 0,
   libraryTotal: 0,
@@ -115,7 +116,6 @@ const lastRunOptions = ref<OrganizeOptions | null>(null);
 
 let unlistenProgress: (() => void) | undefined;
 let unlistenFinished: (() => void) | undefined;
-useModalBack(showProgressPopover);
 
 /** 区间模式：分母为所选终点 end（与对话框一致）；全量：分母为全库张数 */
 const progressSummaryText = computed(() => {
@@ -205,7 +205,7 @@ async function syncOrganizeRunStateFromBackend() {
       rangeStart: s.rangeStart ?? null,
       rangeEnd: s.rangeEnd ?? null,
     };
-    showProgressPopover.value = true;
+    progressPopover.open();
   } catch {
     /* 无该命令或非桌面端 */
   }
@@ -225,7 +225,7 @@ onMounted(async () => {
   }>("organize-finished", (event) => {
     const p = event.payload;
     loading.value = false;
-    showProgressPopover.value = false;
+    progressPopover.close();
     lastRunOptions.value = null;
     progress.value = {
       processedGlobal: 0,
@@ -259,11 +259,11 @@ async function handleConfirm(options: {
   rangeStart: number | null;
   rangeEnd: number | null;
 }) {
-  showDialog.value = false;
+  organizeDialog.close();
   if (loading.value) return;
   try {
     loading.value = true;
-    showProgressPopover.value = false;
+    progressPopover.close();
     progress.value = {
       processedGlobal: 0,
       libraryTotal: 0,
@@ -293,10 +293,10 @@ async function handleConfirm(options: {
 
 function handleOrganizeButtonClick() {
   if (loading.value) {
-    showProgressPopover.value = !showProgressPopover.value;
+    progressPopover.toggle();
     return;
   }
-  showDialog.value = true;
+  organizeDialog.open();
 }
 
 async function handleCancel() {

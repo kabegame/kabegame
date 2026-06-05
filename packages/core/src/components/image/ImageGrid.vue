@@ -15,7 +15,7 @@
             <div v-if="virtualScrollActive" class="image-grid" :class="`layout-${layoutDirection}`" :style="gridStyle">
               <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
                 :image-click-action="settingsStore.values.imageClickAction || 'none'"
-                :window-aspect-ratio="getEffectiveAspectRatioForItem(item.image)" :selected="selectedIds.has(item.image.id)"
+                :window-aspect-ratio="effectiveAspectRatio" :selected="selectedIds.has(item.image.id)"
                 :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
                 :horizontal="isHorizontal"
                 :video-playing="playingVideoId === item.image.id"
@@ -31,7 +31,7 @@
               :class="`layout-${layoutDirection}`" :style="gridStyle">
               <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
                 :image-click-action="settingsStore.values.imageClickAction || 'none'"
-                :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="selectedIds.has(image.id)"
+                :window-aspect-ratio="effectiveAspectRatio" :selected="selectedIds.has(image.id)"
                 :grid-columns="gridColumnsCount" :grid-index="index" :horizontal="isHorizontal"
                 :video-playing="playingVideoId === image.id"
                 @click="(e) => handleItemClick(image, index, e)"
@@ -48,7 +48,7 @@
               :style="{ gap: gridGapPx + 'px' }">
               <ImageItem v-for="entry in bucket" :key="entry.image.id" :image="entry.image"
                 :image-click-action="settingsStore.values.imageClickAction || 'none'"
-                :window-aspect-ratio="aspectRatioOf(entry.image)" :selected="selectedIds.has(entry.image.id)"
+                :window-aspect-ratio="effectiveAspectRatio" :selected="selectedIds.has(entry.image.id)"
                 :grid-columns="gridColumnsCount" :grid-index="entry.index" fill-box :horizontal="isHorizontal"
                 :video-playing="playingVideoId === entry.image.id"
                 @click="(e) => handleItemClick(entry.image, entry.index, e)"
@@ -70,11 +70,11 @@
         <!-- New action-based context menu -->
         <ActionRenderer
           v-if="enableContextMenu && actions && actions.length > 0"
-          :visible="contextMenuVisible"
+          :visible="contextMenu.isOpen.value"
           :position="contextMenuPosition"
           :actions="actions"
           :context="contextMenuActionContext"
-          :zIndex="1900"
+          :zIndex="contextMenu.zIndex.value"
           @close="closeContextMenu"
           @command="handleContextMenuCommand" />
 
@@ -107,18 +107,10 @@ import ImagePreviewDialog from "../common/ImagePreviewDialog.vue";
 import type { ImageDetailGalleryFilterTarget } from "../common/ImageDetailContent.vue";
 import ScrollButtons from "../common/ScrollButtons.vue";
 import { useSettingsStore } from "../../stores/settings";
-import { useModalBack } from "../../composables/useModalBack";
-import { useModalStackStore } from "../../stores/modalStack";
+import { useModal } from "../../composables/useModal";
 import { useUiStore } from "../../stores/ui";
 import { useDragScroll } from "../../composables/useDragScroll";
-import { IS_ANDROID, IS_WEB } from "../../env";
-import { isVideoMediaType } from "../../utils/mediaMime";
-import { openVideo } from "tauri-plugin-picker-api";
-
-async function tryOpenVideo(path: string) {
-  if (IS_WEB) return;
-  await openVideo(path);
-}
+import { IS_WEB, IS_ANDROID } from "../../env";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 import { Plugin } from "@kabegame/core/stores/plugins";
@@ -251,7 +243,6 @@ const handleHoverVideoPreview = (imageId: string, active: boolean) => {
     hoverPlayingVideoId.value = null;
   }
 };
-const modalStackStore = useModalStackStore();
 const uiStore = useUiStore();
 
 const isLoading = computed(() => props.loading ?? false);
@@ -279,7 +270,10 @@ const previousImageIds = ref<Set<string>>(new Set());
 const isZoomingLayout = ref(false);
 let zoomAnimTimer: ReturnType<typeof setTimeout> | null = null;
 
-const gridColumnsCount = computed(() => (imageGridColumns.value > 0 ? imageGridColumns.value : 1));
+const gridColumnsCount = computed(() => {
+  if (isCompact.value) return 2;
+  return imageGridColumns.value > 0 ? imageGridColumns.value : 1;
+});
 // 紧凑布局：栅格更紧凑，空白更少。整体间距为历史值的 1/3，让网格更紧凑。
 const gridGapPx = computed(() => {
   const base = isCompact.value
@@ -365,7 +359,7 @@ const androidSelectionMode = computed(() => selectedIds.value.size > 0);
 
 // 预览与 context menu
 const previewRef = ref<InstanceType<typeof ImagePreviewDialog> | null>(null);
-const contextMenuVisible = ref(false);
+const contextMenu = useModal();
 const contextMenuImage = ref<ImageInfo | null>(null);
 const contextMenuPosition = ref({ x: 0, y: 0 });
 
@@ -392,28 +386,20 @@ const currentPreviewIndex = computed(() => {
   return previewRef.value?.previewIndex ?? -1;
 });
 
-// Android 系统返回键：预览打开时注册到 modalStack
-const modalStackId = ref<string | null>(null);
-
 const effectiveAspectRatio = computed(() => {
   return 1;
 });
 
-/** 紧凑模式：按该图 width/height 计算宽高比，行高由该行最高图自适应；宽屏用全局 effectiveAspectRatio */
-const getEffectiveAspectRatioForItem = (image: ImageInfo) => {
-  if (isCompact.value && image?.width != null && image?.height != null && image.width > 0 && image.height > 0) {
-    return image.width / image.height;
-  }
-  return effectiveAspectRatio.value;
-};
-
 /*----------------- Gallery（masonry）布局 + 方向 -----------------*/
-const layoutMode = computed<"grid" | "gallery">(
-  () => (settingsStore.values.galleryLayoutMode as "grid" | "gallery") ?? "grid"
-);
-const layoutDirection = computed<"vertical" | "horizontal">(
-  () => (settingsStore.values.galleryLayoutDirection as "vertical" | "horizontal") ?? "vertical"
-);
+// Android/紧凑端固定为两列纵向 grid，配合虚拟滚动降低移动端长列表开销；桌面端仍使用设置项。
+const layoutMode = computed<"grid" | "gallery">(() => {
+  if (isCompact.value) return "grid";
+  return (settingsStore.values.galleryLayoutMode as "grid" | "gallery") ?? "grid";
+});
+const layoutDirection = computed<"vertical" | "horizontal">(() => {
+  if (isCompact.value) return "vertical";
+  return (settingsStore.values.galleryLayoutDirection as "vertical" | "horizontal") ?? "vertical";
+});
 const isHorizontal = computed(() => layoutDirection.value === "horizontal");
 
 // grid 布局可虚拟化：纵向按行，横向按列组；masonry/gallery 每项尺寸不定，不启用。
@@ -421,32 +407,20 @@ const virtualScrollActive = computed(
   () => props.enableVirtualScroll && layoutMode.value === "grid"
 );
 
-// gallery 模式下每张图的宽高比（带 fallback）
-const aspectRatioOf = (image: ImageInfo) => {
-  if (image?.width != null && image?.height != null && image.width > 0 && image.height > 0) {
-    return image.width / image.height;
-  }
-  return 16 / 10;
-};
-
 /**
  * 均衡分配 masonry 项到 N 个桶（列或行）。
- * 垂直方向：桶=列，列宽相等，项高度 ∝ 1/ratio → 选择累计高度最小的桶。
- * 水平方向：桶=行，行高相等，项宽度 ∝ ratio     → 选择累计宽度最小的桶。
+ * 固定 item 比例，分桶只按数量均衡，避免长图把列表撑高。
  */
 const galleryBuckets = computed<Array<Array<{ image: ImageInfo; index: number }>>>(() => {
   const n = Math.max(1, gridColumnsCount.value);
   const buckets: Array<Array<{ image: ImageInfo; index: number }>> = Array.from({ length: n }, () => []);
   const loads = new Array(n).fill(0);
   const list = props.images ?? [];
-  const horizontal = isHorizontal.value;
   list.forEach((image, index) => {
-    const ratio = aspectRatioOf(image);
-    const weight = horizontal ? (ratio > 0 ? ratio : 1) : 1 / (ratio > 0 ? ratio : 1);
     let target = 0;
     for (let i = 1; i < n; i++) if (loads[i] < loads[target]) target = i;
     buckets[target].push({ image, index });
-    loads[target] += weight;
+    loads[target] += 1;
   });
   return buckets;
 });
@@ -604,17 +578,13 @@ const gridStyle = computed(() => {
     style.height = "100%";
   } else {
     style.gridTemplateColumns = `repeat(${n}, 1fr)`;
-    // 紧凑模式：行高由该行最高图决定，格子不拉伸
-    if (isCompact.value) {
-      style.alignItems = "start";
-    }
   }
   return style as any;
 });
 
 const closeContextMenu = () => {
   selectedIds.value = new Set();
-  contextMenuVisible.value = false;
+  contextMenu.close();
   contextMenuImage.value = null;
 };
 
@@ -625,7 +595,7 @@ watch(() => selectedIds.value.size, (size) => {
 const openContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
   contextMenuImage.value = image;
   contextMenuPosition.value = { x: event.clientX, y: event.clientY };
-  contextMenuVisible.value = true;
+  contextMenu.open();
   // 右键时同步选择逻辑
   const current = selectedIds.value;
   if (current.size === 0 || !current.has(image.id)) {
@@ -732,7 +702,7 @@ const handleRootClick = (event: MouseEvent) => {
   const target = event.target as HTMLElement | null;
   const clickedOutside = !target?.closest(".image-item") && !target?.closest(".context-menu");
 
-  if (contextMenuVisible.value) {
+  if (contextMenu.isOpen.value) {
     closeContextMenu();
     return;
   }
@@ -769,10 +739,6 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
   if (isCompact.value && !androidSelectionMode.value) {
     const action = settingsStore.values.imageClickAction || "none";
     if (action === "preview") {
-      if (IS_ANDROID && isVideoMediaType(image.type) && image.localPath) {
-        void tryOpenVideo(image.localPath);
-        return;
-      }
       openPreview(index);
       return;
     }
@@ -830,10 +796,6 @@ const handleItemDblClick = (image: ImageInfo, index: number) => {
 const handleItemContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
   if (!enableContextMenu.value) return;
   if (isCompact.value && androidSelectionMode.value) {
-    if (IS_ANDROID && isVideoMediaType(image.type) && image.localPath) {
-      void tryOpenVideo(image.localPath);
-      return;
-    }
     openPreview(index);
     return;
   }
@@ -1129,10 +1091,6 @@ onUnmounted(async () => {
     smoothWheel.raf = null;
   }
   smoothWheel.active = false;
-  if (modalStackId.value) {
-    modalStackStore.remove(modalStackId.value);
-    modalStackId.value = null;
-  }
   if (scrollStableTimer) window.clearTimeout(scrollStableTimer);
   if (zoomAnimTimer) clearTimeout(zoomAnimTimer);
   if (saveScrollRaf != null) cancelAnimationFrame(saveScrollRaf);
@@ -1364,8 +1322,9 @@ const exitAndroidSelectionMode = () => {
   clearSelection();
 };
 
-// Android：选择模式用 useModalBack，弹栈时通过 onClose 清除选择状态
-useModalBack(androidSelectionMode, { onClose: clearSelection });
+// Android：选择模式用 useModal bridge，弹栈时通过 onClose 清除选择状态
+const androidSelectionModal = useModal({ onClose: clearSelection });
+watch(androidSelectionMode, (v) => { if (IS_ANDROID) v ? androidSelectionModal.open() : androidSelectionModal.close(); }, { immediate: true });
 
 const getContainerEl = () => scrollEl.value ?? containerEl.value;
 

@@ -9,7 +9,7 @@
     </div>
 
     <Teleport to="body">
-        <van-popup v-model:show="showPicker" position="bottom" round>
+        <van-popup :show="isOpen" position="bottom" round :z-index="zIndex" @update:show="v => { if (!v) close() }">
             <van-picker
                 v-model="pickerSelectedValues"
                 :title="resolvedTitle"
@@ -17,7 +17,7 @@
                 :confirm-button-text="t('common.confirm')"
                 :cancel-button-text="t('common.cancel')"
                 @confirm="onPickerConfirm"
-                @cancel="showPicker = false"
+                @cancel="close()"
             />
         </van-popup>
     </Teleport>
@@ -27,7 +27,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ArrowDown } from "@element-plus/icons-vue";
-import { useModalBack } from "../composables/useModalBack";
+import { useModal } from "../composables/useModal";
 
 const props = withDefaults(
     defineProps<{
@@ -50,8 +50,7 @@ const emit = defineEmits<{
     "update:modelValue": [value: number | undefined];
 }>();
 
-const showPicker = ref(false);
-useModalBack(showPicker);
+const { isOpen, zIndex, open, close } = useModal();
 
 const numberValue = computed(() => {
     const v = props.modelValue;
@@ -72,8 +71,8 @@ const pickerColumns = computed(() => {
 
 const pickerSelectedValues = ref<number[]>([]);
 
-watch(showPicker, (open) => {
-    if (open) {
+watch(isOpen, (v) => {
+    if (v) {
         const v = props.modelValue;
         const num = typeof v === "number" && !Number.isNaN(v) ? v : props.min ?? 0;
         const clamped = Math.max(props.min ?? 0, Math.min(props.max ?? 100, num));
@@ -87,7 +86,7 @@ watch(showPicker, (open) => {
 watch(
     () => [props.modelValue, props.min, props.max, props.step] as const,
     () => {
-        if (showPicker.value) {
+        if (isOpen.value) {
             const v = props.modelValue;
             const num = typeof v === "number" && !Number.isNaN(v) ? v : props.min ?? 0;
             const clamped = Math.max(props.min ?? 0, Math.min(props.max ?? 100, num));
@@ -101,11 +100,11 @@ watch(
 
 function onTriggerClick() {
     if (props.disabled) return;
-    showPicker.value = true;
+    open();
 }
 
 function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)[] }) {
-    showPicker.value = false;
+    close();
     const raw = selectedValues[0];
     if (raw === undefined || raw === null) return;
     const value = Number(raw);

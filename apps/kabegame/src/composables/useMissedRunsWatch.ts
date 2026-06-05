@@ -1,4 +1,5 @@
 import { onUnmounted, ref } from "vue";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useI18n } from "@kabegame/i18n";
 import { IS_WEB, IS_ANDROID } from "@kabegame/core/env";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
@@ -33,7 +34,7 @@ export function useMissedRunsWatch() {
   const { t } = useI18n();
 
   const missedRunItems = ref<MissedRunItem[]>([]);
-  const missedRunsVisible = ref(false);
+  const missedRunsModal = useModal();
   // 本次漏跑是否在系统休眠期间发生（用于切换弹窗文案）。
   const wasSystemSleep = ref(false);
 
@@ -59,7 +60,7 @@ export function useMissedRunsWatch() {
       if (!items.length) return;
       missedRunItems.value = items;
       wasSystemSleep.value = reason === "sleep";
-      missedRunsVisible.value = true;
+      missedRunsModal.open();
       // 仅在「确认是系统休眠」时争取注意力；普通切换/启动不打扰。
       if (reason === "sleep" && !IS_ANDROID) {
         try {
@@ -143,11 +144,11 @@ export function useMissedRunsWatch() {
   async function handleRunMissedNow() {
     const ids = missedRunItems.value.map((item) => item.configId);
     if (!ids.length) {
-      missedRunsVisible.value = false;
+      missedRunsModal.close();
       return;
     }
     await crawlerStore.runMissedConfigs(ids);
-    missedRunsVisible.value = false;
+    missedRunsModal.close();
     missedRunItems.value = [];
     wasSystemSleep.value = false;
     kameMessage.success(t("autoConfig.missedRuns.runNowSuccess"));
@@ -156,11 +157,11 @@ export function useMissedRunsWatch() {
   async function handleDismissMissed() {
     const ids = missedRunItems.value.map((item) => item.configId);
     if (!ids.length) {
-      missedRunsVisible.value = false;
+      missedRunsModal.close();
       return;
     }
     await crawlerStore.dismissMissedConfigs(ids);
-    missedRunsVisible.value = false;
+    missedRunsModal.close();
     missedRunItems.value = [];
     wasSystemSleep.value = false;
     kameMessage.info(t("autoConfig.missedRuns.dismissed"));
@@ -170,7 +171,7 @@ export function useMissedRunsWatch() {
 
   return {
     missedRunItems,
-    missedRunsVisible,
+    missedRunsModal,
     wasSystemSleep,
     handleRunMissedNow,
     handleDismissMissed,

@@ -9,12 +9,12 @@
     </div>
 
     <Teleport to="body">
-        <van-popup v-model:show="showPicker" position="bottom" round :z-index="popupZIndex">
+        <van-popup :show="isOpen" position="bottom" round :z-index="zIndex" @update:show="v => { if (!v) close() }">
             <!-- 有 option 插槽时用自定义列表，可渲染叹号等 -->
             <template v-if="useOptionSlot">
                 <div class="android-picker-select__header">
                     <span class="android-picker-select__title">{{ resolvedTitle }}</span>
-                    <van-button type="default" size="small" @click="showPicker = false">{{ t('common.cancel') }}</van-button>
+                    <van-button type="default" size="small" @click="close()">{{ t('common.cancel') }}</van-button>
                 </div>
                 <div class="android-picker-select__list">
                     <div
@@ -36,7 +36,7 @@
                 :confirm-button-text="t('common.confirm')"
                 :cancel-button-text="t('common.cancel')"
                 @confirm="onPickerConfirm"
-                @cancel="showPicker = false"
+                @cancel="close()"
             />
         </van-popup>
     </Teleport>
@@ -46,8 +46,7 @@
 import { computed, ref, useSlots, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ArrowDown } from "@element-plus/icons-vue";
-import { useZIndex } from "element-plus";
-import { useModalBack } from "../composables/useModalBack";
+import { useModal } from "../composables/useModal";
 
 export interface AndroidPickerSelectOption {
     label: string;
@@ -81,13 +80,7 @@ const emit = defineEmits<{
 const slots = useSlots();
 const useOptionSlot = computed(() => !!slots.option);
 
-const showPicker = ref(false);
-useModalBack(showPicker);
-
-const { nextZIndex } = useZIndex();
-// 与 Element Plus 共用 z-index 计数器；每次打开取比当前 el-dialog 更高的值，
-// 避免 Vant 默认 z-index(2000) 低于上层 el-dialog 导致被覆盖。
-const popupZIndex = ref(nextZIndex());
+const { isOpen, zIndex, open, close } = useModal();
 
 const displayLabel = computed(() => {
     const v = props.modelValue;
@@ -109,20 +102,19 @@ const pickerColumns = computed(() =>
 
 const pickerSelectedValues = ref<string[]>([]);
 
-watch(showPicker, (open) => {
-    if (open) {
-        popupZIndex.value = nextZIndex();
-        const v = props.modelValue;
-        const val =
-            v !== null && v !== undefined && v !== "" ? v : (props.clearable ? "" : optionsWithClear.value[0]?.value ?? "");
-        pickerSelectedValues.value = [val];
+watch(isOpen, (v) => {
+    if (v) {
+        const val = props.modelValue;
+        const selected =
+            val !== null && val !== undefined && val !== "" ? val : (props.clearable ? "" : optionsWithClear.value[0]?.value ?? "");
+        pickerSelectedValues.value = [selected];
     }
 });
 
 watch(
     () => [props.modelValue, optionsWithClear.value] as const,
     () => {
-        if (showPicker.value) {
+        if (isOpen.value) {
             const v = props.modelValue;
             const val =
                 v !== null && v !== undefined && v !== "" ? v : (props.clearable ? "" : optionsWithClear.value[0]?.value ?? "");
@@ -133,18 +125,18 @@ watch(
 
 function onTriggerClick() {
     if (props.disabled) return;
-    showPicker.value = true;
+    open();
 }
 
 function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)[] }) {
-    showPicker.value = false;
+    close();
     const raw = selectedValues[0];
     const value = raw === "" || raw === null || raw === undefined ? null : String(raw);
     emit("update:modelValue", value);
 }
 
 function onSelectOption(opt: AndroidPickerSelectOption) {
-    showPicker.value = false;
+    close();
     const value = opt.value === "" || opt.value === null || opt.value === undefined ? null : opt.value;
     emit("update:modelValue", value);
 }

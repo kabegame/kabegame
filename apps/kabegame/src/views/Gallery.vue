@@ -4,7 +4,7 @@
       <div class="gallery-content-layout">
         <div class="gallery-grid-pane">
           <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!isCompact"
-            hide-scrollbar :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
+            hide-scrollbar :enable-ctrl-key-adjust-columns="!isCompact"
             :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
             :on-context-command="handleGridContextCommand" @image-dblclick="handleImageDoubleOpen"
             @preview-navigate="handlePreviewNavigate" @preview-detail-toggle="handlePreviewDetailToggle"
@@ -58,19 +58,19 @@
     </div>
 
     <!-- 收集对话框（非 Android：本地渲染；Android：由 App.vue 全局承载） -->
-    <CrawlerDialog v-if="!isCompact" v-model="showCrawlerDialog" :initial-config="crawlerDialogInitialConfig" />
-    <LocalImportDialog v-if="!isCompact" v-model="showLocalImportDialog" />
+    <CrawlerDialog v-if="!isCompact" :model-value="crawlerDialog.isOpen.value" :initial-config="crawlerDialogInitialConfig" @update:model-value="crawlerDialog.close" />
+    <LocalImportDialog v-if="!isCompact" :model-value="localImportDialog.isOpen.value" @update:model-value="localImportDialog.close" />
 
 
     <!-- 永久删除确认对话框 -->
-    <RemoveImagesConfirmDialog v-model="showRemoveDialog" :message="removeDialogMessage"
-      :title="$t('gallery.confirmDelete')" hide-checkbox @confirm="confirmRemoveImages" />
+    <RemoveImagesConfirmDialog :open="removeDialog.isOpen.value" :z-index="removeDialog.zIndex.value" :message="removeDialogMessage"
+      :title="$t('gallery.confirmDelete')" hide-checkbox @close="removeDialog.close()" @confirm="confirmRemoveImages" />
 
-    <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
+    <AddToAlbumDialog :open="addToAlbumDialog.isOpen.value" :z-index="addToAlbumDialog.zIndex.value" :image-ids="addToAlbumImageIds" @close="addToAlbumDialog.close()" @added="handleAddedToAlbum" />
 
     <!-- 桌面：空状态/无下拉时用对话框选择 本地/网络 -->
-    <el-dialog v-model="showCollectMenuDialog" :title="$t('gallery.chooseCollectMethod')" width="360px" destroy-on-close
-      class="collect-menu-dialog">
+    <el-dialog :model-value="collectMenuDialog.isOpen.value" :z-index="collectMenuDialog.zIndex.value" :title="$t('gallery.chooseCollectMethod')" width="360px" destroy-on-close
+      class="collect-menu-dialog" @update:model-value="collectMenuDialog.close">
       <div class="collect-menu-options">
         <div class="collect-menu-option" @click="onDesktopCollectLocal">
           <el-icon>
@@ -88,9 +88,9 @@
     </el-dialog>
 
     <!-- Android：收集方式选择器（本地 → MediaPicker，远程 → 收集 drawer） -->
-    <CollectSourcePicker v-if="uiStore.isCompact" v-model="showCollectSourcePicker" @select="handleCollectSourceSelect" />
+    <CollectSourcePicker v-if="uiStore.isCompact" :model-value="collectSourcePicker.isOpen.value" @update:model-value="collectSourcePicker.close" @select="handleCollectSourceSelect" />
     <!-- 安卓媒体选择器（本地导入） -->
-    <MediaPicker v-if="uiStore.isCompact" v-model="showMediaPicker" @select="handleMediaPickerSelect" />
+    <MediaPicker v-if="uiStore.isCompact" :model-value="mediaPicker.isOpen.value" @update:model-value="mediaPicker.close" @select="handleMediaPickerSelect" />
   </div>
 </template>
 
@@ -133,7 +133,7 @@ import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID, IS_WINDOWS, IS_WEB } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import type { Component } from "vue";
@@ -284,12 +284,11 @@ watch(
 );
 
 const listenersCreated = ref(false);
-const showCrawlerDialog = ref(false);
-const showLocalImportDialog = ref(false);
-const showMediaPicker = ref(false);
-const showCollectSourcePicker = ref(false);
-const showCollectMenuDialog = ref(false);
-useModalBack(showCollectMenuDialog);
+const crawlerDialog = useModal();
+const localImportDialog = useModal();
+const mediaPicker = useModal();
+const collectSourcePicker = useModal();
+const collectMenuDialog = useModal();
 const crawlerDialogInitialConfig = ref<{
   pluginId?: string;
   outputDir?: string;
@@ -299,26 +298,26 @@ const crawlerDialogInitialConfig = ref<{
 // 桌面：打开收集（网络）对话框。Android 上由「开始收集」→ CollectSourcePicker → 远程 打开 drawer
 const handleShowCrawlerDialog = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "network" });
-  showCrawlerDialog.value = true;
+  crawlerDialog.open();
 };
 
 const handleShowLocalImport = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "local" });
-  showLocalImportDialog.value = true;
+  localImportDialog.open();
 };
 
 const handleOpenCollectMenu = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "collect_menu" });
-  showCollectSourcePicker.value = true;
+  collectSourcePicker.open();
 };
 
 // 空状态按钮：与工具栏一致，安卓打开「本地/远程」选择 picker，桌面打开选择对话框
 const handleEmptyStateCollect = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "empty_state" });
   if (isCompact.value) {
-    showCollectSourcePicker.value = true;
+    collectSourcePicker.open();
   } else {
-    showCollectMenuDialog.value = true;
+    collectMenuDialog.open();
   }
 };
 
@@ -343,15 +342,15 @@ async function resetGalleryRouteAfterLoadError() {
 // 桌面：选择收集方式对话框 → 本地
 const onDesktopCollectLocal = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "local", source: "empty_state_dialog" });
-  showCollectMenuDialog.value = false;
-  showLocalImportDialog.value = true;
+  collectMenuDialog.close();
+  localImportDialog.open();
 };
 
 // 桌面：选择收集方式对话框 → 网络
 const onDesktopCollectNetwork = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "network", source: "empty_state_dialog" });
-  showCollectMenuDialog.value = false;
-  showCrawlerDialog.value = true;
+  collectMenuDialog.close();
+  crawlerDialog.open();
 };
 
 // Android：收集方式选择器选「本地」→ MediaPicker，选「远程」→ 收集 drawer
@@ -360,9 +359,9 @@ const handleCollectSourceSelect = (source: "local" | "remote") => {
     entry: source === "local" ? "local" : "network",
     source: "compact_picker",
   });
-  showCollectSourcePicker.value = false;
+  collectSourcePicker.close();
   if (source === "local") {
-    showMediaPicker.value = true;
+    mediaPicker.open();
   } else {
     crawlerDrawerStore.open();
   }
@@ -373,7 +372,7 @@ const handleMediaPickerSelect = async (
   type: "image" | "folder" | "video",
   payload?: PickFolderResult
 ) => {
-  showMediaPicker.value = false;
+  mediaPicker.close();
   await handleAndroidMediaSelection(type, payload);
 };
 
@@ -421,7 +420,7 @@ const handleAndroidMediaSelection = async (
   }
 };
 // 永久删除确认对话框相关
-const showRemoveDialog = ref(false);
+const removeDialog = useModal();
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
 const pendingAddToAlbumImages = ref<ImageInfo[]>([]);
@@ -462,7 +461,7 @@ const onScrollOverspeed = () => {
 // 整个页面的loading状态
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay();
 
-const showAddToAlbumDialog = ref(false);
+const addToAlbumDialog = useModal();
 const addToAlbumImageIds = ref<string[]>([]);
 // TODO:
 const isRefreshing = ref(false); // 刷新中状态，用于阻止刷新时 EmptyState 闪烁
@@ -897,7 +896,7 @@ const handleGridContextCommand = async (
     case "addToAlbum":
       addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
       pendingAddToAlbumImages.value = imagesToProcess.slice();
-      showAddToAlbumDialog.value = true;
+      addToAlbumDialog.open();
       return null;
     case "addToHidden": {
       if (await guardDesktopOnly("hideImage", { needSuper: true })) return null;
@@ -959,7 +958,7 @@ const handleGridContextCommand = async (
       pendingRemoveImages.value = imagesToProcess;
       const count = imagesToProcess.length;
       removeDialogMessage.value = count > 1 ? t("gallery.removeFromGalleryMessageMulti", { count }) : t("gallery.removeFromGalleryMessageSingle");
-      showRemoveDialog.value = true;
+      removeDialog.open();
       return null;
     case "swipe-remove" as any:
       // 上划手势：隐藏（加入隐藏画册，保留磁盘文件）
@@ -982,11 +981,11 @@ const handleGridContextCommand = async (
 const confirmRemoveImages = async () => {
   const imagesToRemove = pendingRemoveImages.value;
   if (imagesToRemove.length === 0) {
-    showRemoveDialog.value = false;
+    removeDialog.close();
     return;
   }
 
-  showRemoveDialog.value = false;
+  removeDialog.close();
   await handleBatchDeleteImages(imagesToRemove);
   trackGalleryEvent("image_action", {
     command: "remove",
@@ -1031,7 +1030,7 @@ const handlePreviewClose = (payload: { image: ImageInfo | null }) => {
 };
 
 // 监听 CrawlerDialog 关闭，清空初始配置
-watch(showCrawlerDialog, (isOpen) => {
+watch(crawlerDialog.isOpen, (isOpen) => {
   if (!isOpen) {
     // 延迟清空，确保对话框已经处理完初始配置
     nextTick(() => {
@@ -1297,7 +1296,6 @@ onDeactivated(() => {
     left: 0;
     right: 0;
     bottom: 0;
-    z-index: 9998;
   }
 
   .context-menu {

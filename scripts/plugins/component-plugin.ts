@@ -112,6 +112,9 @@ export class ComponentPlugin extends BasePlugin {
 
     bs.hooks.prepareEnv.tap(this.name, () => {
       this.setEnv("KABEGAME_COMPONENT", this.component?.comp || "");
+      const devServerHost = bs.context.mode?.isAndroid ? getDevServerHost() : "127.0.0.1";
+      this.setEnv("KABEGAME_DEV_SERVER_HOST", devServerHost);
+      this.setEnv("KABEGAME_DEV_SERVER_PORT", "1420");
       if (bs.context.cmd!.isDev && this.component && !this.component.isCli) {
         this.setEnv(
           "TAURI_CLI_WATCHER_IGNORE_FILENAME",

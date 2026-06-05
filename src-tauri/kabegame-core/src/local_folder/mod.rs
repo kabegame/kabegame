@@ -13,10 +13,11 @@ mod tests;
 
 pub use create::{build_entries_non_recursive, NewLocalFolderEntry};
 pub use scan_service::{
-    scan_and_visit, FolderScanHook, ScanOptions, ScanSummary, ScannedDir, ScannedFile,
+    scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanIssue, ScanOptions, ScannedDir,
+    ScannedFile,
 };
 pub use status::FolderStatus;
 pub use sync::{
-    sync_album, sync_album_recursive, sync_albums_by_ids, sync_all_local_folder_albums,
-    RecursiveSyncReport, SyncReport,
+    sync_album, sync_album_recursive, sync_album_recursive_with_options, sync_albums_by_ids,
+    sync_all_local_folder_albums, RecursiveSyncOptions, RecursiveSyncReport, SyncReport,
 };

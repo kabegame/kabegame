@@ -144,13 +144,14 @@
       </CollapsibleDrawerPanel>
     </div>
 
-    <TaskParamsDialog v-model="runParamsDialogOpen" :task="runParamsTask" @closed="runParamsTask = null" />
+    <TaskParamsDialog :open="runParamsDialog.isOpen.value" :z-index="runParamsDialog.zIndex.value" :task="runParamsTask" @close="runParamsDialog.close()" @closed="runParamsTask = null" />
     <TaskLogDialog ref="taskLogDialogRef" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useModal } from "../../composables/useModal";
 import { useVirtualList } from "@vueuse/core";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { Close, Grid, Loading } from "@element-plus/icons-vue";
@@ -302,7 +303,7 @@ const { list: virtualList, containerProps, wrapperProps } = useVirtualList(tasks
   overscan: 6,
 });
 
-const runParamsDialogOpen = ref(false);
+const runParamsDialog = useModal();
 const runParamsTask = ref<TaskRunParamsTask | null>(null);
 
 function currentUrl() {
@@ -327,7 +328,7 @@ function trackTaskDrawerAction(action: "view_params" | "view_log", task: ScriptT
 function openRunParamsDialog(task: ScriptTask) {
   trackTaskDrawerAction("view_params", task);
   runParamsTask.value = task;
-  runParamsDialogOpen.value = true;
+  runParamsDialog.open();
 }
 
 async function loadMoreTasks() {

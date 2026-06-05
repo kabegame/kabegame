@@ -4,7 +4,7 @@ use crate::local_folder::create::build_entries_non_recursive;
 use crate::local_folder::import::{import_local_file, CarryFromOld};
 use crate::local_folder::scan::{dir_mtime_unix_ms, STABLE_FOR_MS};
 use crate::local_folder::scan_service::{
-    scan_and_visit, FolderScanHook, ScanOptions, ScannedDir, ScannedFile,
+    scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile,
 };
 use crate::local_folder::status::{now_millis, FolderStatus};
 use crate::storage::image_events::delete_images_with_events;
@@ -108,6 +108,19 @@ pub struct RecursiveSyncReport {
     pub failed: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct RecursiveSyncOptions {
+    pub create_missing_albums: bool,
+}
+
+impl Default for RecursiveSyncOptions {
+    fn default() -> Self {
+        Self {
+            create_missing_albums: true,
+        }
+    }
+}
+
 // ───────────────────────── 同步钩子 ─────────────────────────
 
 /// 同步用目录上下文：当前目录所归属的画册。
@@ -134,8 +147,11 @@ struct SyncHook {
     added: usize,
     deleted: usize,
     reimported: usize,
+    skipped_unstable: usize,
     /// 收尾落 ok 状态用的时间戳。
     finalize_synced_at_ms: u64,
+    /// 递归同步时是否为尚不存在的子目录创建本地文件夹画册。
+    create_missing_albums: bool,
 }
 
 impl SyncHook {
@@ -143,6 +159,7 @@ impl SyncHook {
         forbidden_roots: Vec<PathBuf>,
         existing: HashMap<PathBuf, (String, String)>,
         finalize_synced_at_ms: u64,
+        options: RecursiveSyncOptions,
     ) -> Self {
         Self {
             forbidden_roots,
@@ -153,7 +170,9 @@ impl SyncHook {
             added: 0,
             deleted: 0,
             reimported: 0,
+            skipped_unstable: 0,
             finalize_synced_at_ms,
+            create_missing_albums: options.create_missing_albums,
         }
     }
 
@@ -233,13 +252,18 @@ impl SyncHook {
         Ok(())
     }
 
-    /// 收尾一个 album：删除未见的旧行 + 落 ok 状态。
+    /// 收尾一个 album：移除未见旧图的画册关联 + 落 ok 状态。
     fn finalize_album(&mut self, album_id: &str, synced_at_ms: u64) -> Result<(), String> {
         if let Some(set) = self.pending_delete.remove(album_id) {
             if !set.is_empty() {
                 let ids: Vec<String> = set.into_iter().collect();
                 self.deleted += ids.len();
-                delete_images_with_events(&ids, true)?;
+                Storage::global().remove_images_from_album(album_id, &ids)?;
+                GlobalEmitter::global().emit_album_images_change(
+                    "delete",
+                    &[album_id.to_string()],
+                    &ids,
+                );
             }
         }
         let ok = FolderStatus::ok_synced_at_ms(synced_at_ms);
@@ -254,10 +278,11 @@ impl FolderScanHook for SyncHook {
 
     async fn on_enter_dir(
         &mut self,
-        dir: &ScannedDir,
-        parent: &SyncDirCtx,
-    ) -> Result<Option<SyncDirCtx>, String> {
-        let Some(dir_path) = dir.path.as_deref() else {
+        enter: &ScannedDir,
+        ctx: &ScanCtx<SyncDirCtx>,
+    ) -> Result<Option<SyncDirCtx>, ScanError> {
+        let parent = ctx.ctx();
+        let Some(dir_path) = enter.path.as_deref() else {
             return Ok(None); // 同步只处理 file:// 目录
         };
         let canon = dir_path
@@ -280,10 +305,15 @@ impl FolderScanHook for SyncHook {
                 album_name: name,
             }
         } else {
+            if !self.create_missing_albums {
+                return Ok(None);
+            }
             // 新子目录：在父画册下创建子画册。
-            let name = format!("{}{}{}", parent.album_name, NAME_SEPARATOR, dir.name);
+            let name = format!("{}{}{}", parent.album_name, NAME_SEPARATOR, enter.name);
             let entry = build_entries_non_recursive(&name, dir_path, Some(&parent.album_id));
-            Storage::global().add_local_folder_albums_tx(std::slice::from_ref(&entry))?;
+            Storage::global()
+                .add_local_folder_albums_tx(std::slice::from_ref(&entry))
+                .map_err(ScanError::Skip)?;
             self.created_albums += 1;
             self.existing
                 .insert(canon, (entry.id.clone(), name.clone()));
@@ -293,17 +323,41 @@ impl FolderScanHook for SyncHook {
             }
         };
 
-        self.load_album(&ctx.album_id)?;
+        self.load_album(&ctx.album_id).map_err(ScanError::Skip)?;
         Ok(Some(ctx))
     }
 
-    async fn on_exit_dir(&mut self, _dir: &ScannedDir, ctx: &SyncDirCtx) -> Result<(), String> {
+    async fn on_exit_dir(&mut self, ctx: &ScanCtx<SyncDirCtx>) -> Result<(), ScanError> {
+        if ctx.current_had_errors() {
+            return Ok(());
+        }
         let ts = self.finalize_synced_at_ms;
-        self.finalize_album(&ctx.album_id, ts)
+        self.finalize_album(&ctx.ctx().album_id, ts)
+            .map_err(ScanError::Skip)
     }
 
-    async fn on_file(&mut self, file: &ScannedFile, ctx: &SyncDirCtx) -> Result<(), String> {
-        self.import_one(file, &ctx.album_id).await
+    async fn on_file(
+        &mut self,
+        file: &ScannedFile,
+        ctx: &ScanCtx<SyncDirCtx>,
+    ) -> Result<(), ScanError> {
+        let album_id = &ctx.ctx().album_id;
+        match Storage::global().album_exists(album_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(ScanError::Interrupt(format!(
+                    "album {album_id} deleted during sync"
+                )));
+            }
+            Err(err) => return Err(ScanError::Skip(err)),
+        }
+        self.import_one(file, album_id)
+            .await
+            .map_err(ScanError::Skip)
+    }
+
+    fn on_unstable_file(&mut self, _file: &ScannedFile, _ctx: &ScanCtx<SyncDirCtx>) {
+        self.skipped_unstable += 1;
     }
 }
 
@@ -370,7 +424,12 @@ async fn sync_album_inner(album_id: &str, scan_mode: ScanMode) -> Result<SyncRep
         .map_err(|_| format!("invalid sync_folder path: {sync_folder}"))?;
 
     // 非递归：仅扫本层文件；不建子画册。
-    let mut hook = SyncHook::new(Vec::new(), HashMap::new(), scan_started_at_ms);
+    let mut hook = SyncHook::new(
+        Vec::new(),
+        HashMap::new(),
+        scan_started_at_ms,
+        RecursiveSyncOptions::default(),
+    );
     hook.load_album(album_id)?;
     let root_ctx = SyncDirCtx {
         album_id: album_id.to_string(),
@@ -381,10 +440,11 @@ async fn sync_album_inner(album_id: &str, scan_mode: ScanMode) -> Result<SyncRep
         min_stable_age_ms: Some(STABLE_FOR_MS),
         ..Default::default()
     };
-    let summary = scan_and_visit(&[root_url], root_ctx, &options, &mut hook).await?;
+    let scan_ctx = scan_and_visit(&[root_url.clone()], root_ctx, &options, &mut hook).await?;
+    let root_had_errors = scan_ctx.dir_had_errors(&root_url);
 
     // 仅当没有跳过（不稳定/缺失）时才推进 last_synced，以便 SkipUnchangedFolder 下次复查。
-    let last_synced_at_ms = if summary.skipped_unstable == 0 && summary.skipped_missing == 0 {
+    let last_synced_at_ms = if hook.skipped_unstable == 0 {
         scan_started_at_ms
     } else {
         previous_status
@@ -392,13 +452,17 @@ async fn sync_album_inner(album_id: &str, scan_mode: ScanMode) -> Result<SyncRep
             .and_then(FolderStatus::last_synced_at_ms)
             .unwrap_or(0)
     };
-    hook.finalize_album(album_id, last_synced_at_ms)?;
+    if !root_had_errors {
+        hook.finalize_album(album_id, last_synced_at_ms)?;
+        report.status = Some(FolderStatus::ok_synced_at_ms(last_synced_at_ms));
+    } else {
+        report.status = previous_status;
+    }
 
     report.added = hook.added;
     report.deleted = hook.deleted;
     report.reimported = hook.reimported;
-    report.skipped_unstable = summary.skipped_unstable;
-    report.status = Some(FolderStatus::ok_synced_at_ms(last_synced_at_ms));
+    report.skipped_unstable = hook.skipped_unstable;
     Ok(report)
 }
 
@@ -407,6 +471,15 @@ async fn sync_album_inner(album_id: &str, scan_mode: ScanMode) -> Result<SyncRep
 pub async fn sync_album_recursive(
     album_id: &str,
     forbidden_roots: Vec<PathBuf>,
+) -> Result<RecursiveSyncReport, String> {
+    sync_album_recursive_with_options(album_id, forbidden_roots, RecursiveSyncOptions::default())
+        .await
+}
+
+pub async fn sync_album_recursive_with_options(
+    album_id: &str,
+    forbidden_roots: Vec<PathBuf>,
+    options: RecursiveSyncOptions,
 ) -> Result<RecursiveSyncReport, String> {
     let storage = Storage::global();
     let album = storage
@@ -446,7 +519,7 @@ pub async fn sync_album_recursive(
     let root_url = Url::from_file_path(&root_path)
         .map_err(|_| format!("invalid sync_folder path: {root_folder}"))?;
 
-    let mut hook = SyncHook::new(forbidden_roots, existing, run_started_ms);
+    let mut hook = SyncHook::new(forbidden_roots, existing, run_started_ms, options);
     hook.load_album(&album.id)?;
     let root_ctx = SyncDirCtx {
         album_id: album.id.clone(),
@@ -458,10 +531,12 @@ pub async fn sync_album_recursive(
         skip_hidden_dirs: true,
         ..Default::default()
     };
-    scan_and_visit(&[root_url], root_ctx, &options, &mut hook).await?;
+    let scan_ctx = scan_and_visit(&[root_url.clone()], root_ctx, &options, &mut hook).await?;
 
     // 根画册不经 on_exit_dir，显式收尾。
-    hook.finalize_album(&album.id, run_started_ms)?;
+    if !scan_ctx.dir_had_errors(&root_url) {
+        hook.finalize_album(&album.id, run_started_ms)?;
+    }
 
     report.created_albums = hook.created_albums;
     report.added = hook.added;

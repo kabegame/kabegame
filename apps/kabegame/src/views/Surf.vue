@@ -112,16 +112,18 @@
       :position="recordMenu.position.value"
       :actions="(surfRecordActions as import('@kabegame/core/actions/types').ActionItem<unknown>[])"
       :context="recordMenuContext"
-      :z-index="3500"
+      :z-index="recordMenu.zIndex.value"
       @close="recordMenu.hide"
       @command="(cmd) => handleRecordMenuCommand(cmd as 'viewImages' | 'details' | 'delete')"
     />
 
     <ElDialog
-      v-model="detailDialogVisible"
+      :model-value="detailDialog.isOpen.value"
+      :z-index="detailDialog.zIndex.value"
       :title="detailRecord?.name || detailRecord?.host || $t('surf.recordDetails')"
       width="600px"
       class="surf-detail-dialog"
+      @update:model-value="detailDialog.close"
       @closed="resetDetailDialog"
     >
       <div v-if="detailRecord" class="surf-detail-content">
@@ -175,7 +177,7 @@
             {{ $t("surf.deleteRecordDanger") }}
           </el-button>
           <div class="surf-detail-footer-right">
-            <el-button @click="detailDialogVisible = false">{{ $t("common.close") }}</el-button>
+            <el-button @click="detailDialog.close()">{{ $t("common.close") }}</el-button>
             <el-button type="primary" :disabled="!(detailRecord?.cookie || '').trim()" @click="copyDetailCookie">
               {{ detailCopyDone ? $t("surf.copied") : $t("surf.copy") }}
             </el-button>
@@ -185,10 +187,12 @@
     </ElDialog>
 
     <ElDialog
-      v-model="surfHelpVisible"
+      :model-value="helpDialog.isOpen.value"
+      :z-index="helpDialog.zIndex.value"
       :title="$t('surf.surfHelpTitle')"
       width="420px"
       class="surf-help-dialog"
+      @update:model-value="helpDialog.close"
     >
       <p class="surf-help-p">
         {{ $t('surf.surfHelpIntro') }}
@@ -200,7 +204,7 @@
         {{ $t('surf.linuxHintHelp') }}
       </p>
       <template #footer>
-        <el-button type="primary" @click="surfHelpVisible = false">{{ $t('surf.gotIt') }}</el-button>
+        <el-button type="primary" @click="helpDialog.close()">{{ $t('surf.gotIt') }}</el-button>
       </template>
     </ElDialog>
   </div>
@@ -214,7 +218,7 @@ import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { ElDialog } from "element-plus";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_ANDROID, IS_LINUX, IS_WEB } from "@kabegame/core/env";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
@@ -242,11 +246,8 @@ const surfHeaderShowIds = computed(() =>
     : [HeaderFeatureId.Help, HeaderFeatureId.OpenCrawlerWebview]
 );
 
-const surfHelpVisible = ref(false);
-useModalBack(surfHelpVisible);
-
-const detailDialogVisible = ref(false);
-useModalBack(detailDialogVisible);
+const helpDialog = useModal();
+const detailDialog = useModal();
 const detailRecord = ref<SurfRecord | null>(null);
 const detailName = ref("");
 const detailEntryPath = ref("/");
@@ -269,7 +270,7 @@ async function openCrawlerWindow() {
 }
 
 function handleSurfHeaderAction(payload: { id: string; data: { type: string } }) {
-  if (payload.id === HeaderFeatureId.Help) surfHelpVisible.value = true;
+  if (payload.id === HeaderFeatureId.Help) helpDialog.open();
   else if (payload.id === HeaderFeatureId.OpenCrawlerWebview) openCrawlerWindow();
 }
 
@@ -401,7 +402,7 @@ async function openDetailDialog(record: SurfRecord) {
     detailName.value = target.name || "";
     detailEntryPath.value = extractEntryPath(target);
     detailCopyDone.value = false;
-    detailDialogVisible.value = true;
+    detailDialog.open();
   } catch (e: any) {
     ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
   }
@@ -471,7 +472,7 @@ async function deleteRecordFromDetail() {
   if (!record) return;
   try {
     await confirmAndDeleteRecord(record);
-    detailDialogVisible.value = false;
+    detailDialog.close();
   } catch (e: any) {
     if (e !== "cancel") {
       ElMessage.error(e?.message || String(e) || t("surf.deleteFailed"));

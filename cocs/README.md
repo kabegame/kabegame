@@ -83,6 +83,12 @@
   - 主题：Tauri v2 ACL（capability/permission）在 kabegame 的运行机制与故障复盘。
   - 适用场景：新增窗口 IPC 权限、调整 capability/permission、排查“命令不可用/全部被拒绝”问题。
 
+## 调试（`debug/`）
+
+- [debug/DEBUG_INGEST.md](debug/DEBUG_INGEST.md)
+  - 主题：开发期 runtime debug ingest 方法。Vite dev server 提供 `POST /__kabegame_debug/ingest`，前端与 Rust 后端按 `session_id` 发送调试事件，middleware tee 到 `.kabegame/debug/debug-<session_id>.ndjson`。
+  - 适用场景：仿 Cursor Debug Mode 的插桩式排查；需要把前端和 Rust 后端运行时状态汇总到同一个 NDJSON 会话文件；用 curl 验证 debug endpoint 或读取 session 日志。
+
 ## 国际化（`i18n/`）
 
 - [i18n/I18N_MIGRATION.md](i18n/I18N_MIGRATION.md)

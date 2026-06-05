@@ -146,18 +146,16 @@ pub async fn add_local_folder_album(
 }
 
 #[tauri::command]
-pub async fn sync_local_folder_album(album_id: String) -> Result<serde_json::Value, String> {
-    crate::commands_core::album::sync_local_folder_album(album_id).await
+pub async fn sync_local_folder_album(
+    album_id: String,
+    recursive: Option<bool>,
+    create_missing_albums: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    crate::commands_core::album::sync_local_folder_album(album_id, recursive, create_missing_albums)
+        .await
 }
 
 #[tauri::command]
 pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<serde_json::Value, String> {
     crate::commands_core::album::sync_local_folder_albums(album_ids).await
-}
-
-#[tauri::command]
-pub async fn sync_local_folder_album_recursive(
-    album_id: String,
-) -> Result<serde_json::Value, String> {
-    crate::commands_core::album::sync_local_folder_album_recursive(album_id).await
 }

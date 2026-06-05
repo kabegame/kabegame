@@ -1,10 +1,12 @@
 <template>
   <el-dialog
-    v-model="visible"
+    :model-value="open"
+    :z-index="zIndex"
     :title="t('kamechan.historyTitle')"
     width="640px"
     :append-to-body="true"
     class="kamechan-history-dialog"
+    @update:model-value="$event || emit('close')"
   >
     <div class="kamechan-history-list">
       <div v-if="messages.length === 0" class="kamechan-history-empty">
@@ -38,15 +40,13 @@ import { computed } from "vue";
 import { storeToRefs } from "pinia";
 import { useI18n } from "@kabegame/i18n";
 import { useKameMessageStore, type KameMessageType } from "@kabegame/core/stores/kameMessage";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
-const visible = defineModel<boolean>({ default: false });
+defineProps<{ open: boolean; zIndex: number }>();
+const emit = defineEmits<{ close: [] }>();
 
 const { t, locale } = useI18n();
 const store = useKameMessageStore();
 const { history } = storeToRefs(store);
-
-useModalBack(visible);
 
 const messages = computed(() => [...history.value].reverse());
 

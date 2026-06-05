@@ -211,13 +211,35 @@ pub async fn add_local_folder_album(
 }
 
 #[cfg(not(target_os = "android"))]
-pub async fn sync_local_folder_album(album_id: String) -> Result<Value, String> {
-    let report = kabegame_core::local_folder::sync_album(&album_id).await?;
-    serde_json::to_value(report).map_err(|e| e.to_string())
+pub async fn sync_local_folder_album(
+    album_id: String,
+    recursive: Option<bool>,
+    create_missing_albums: Option<bool>,
+) -> Result<Value, String> {
+    if recursive.unwrap_or(false) {
+        let forbidden_roots = local_folder_forbidden_roots();
+        let options = kabegame_core::local_folder::RecursiveSyncOptions {
+            create_missing_albums: create_missing_albums.unwrap_or(true),
+        };
+        let report = kabegame_core::local_folder::sync_album_recursive_with_options(
+            &album_id,
+            forbidden_roots,
+            options,
+        )
+        .await?;
+        serde_json::to_value(report).map_err(|e| e.to_string())
+    } else {
+        let report = kabegame_core::local_folder::sync_album(&album_id).await?;
+        serde_json::to_value(report).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(target_os = "android")]
-pub async fn sync_local_folder_album(_album_id: String) -> Result<Value, String> {
+pub async fn sync_local_folder_album(
+    _album_id: String,
+    _recursive: Option<bool>,
+    _create_missing_albums: Option<bool>,
+) -> Result<Value, String> {
     Err(t!("albums.localFolderErrors.androidUnsupported").to_string())
 }
 
@@ -260,17 +282,4 @@ fn local_folder_forbidden_roots() -> Vec<std::path::PathBuf> {
         }
     }
     roots
-}
-
-#[cfg(not(target_os = "android"))]
-pub async fn sync_local_folder_album_recursive(album_id: String) -> Result<Value, String> {
-    let forbidden_roots = local_folder_forbidden_roots();
-    let report =
-        kabegame_core::local_folder::sync_album_recursive(&album_id, forbidden_roots).await?;
-    serde_json::to_value(report).map_err(|e| e.to_string())
-}
-
-#[cfg(target_os = "android")]
-pub async fn sync_local_folder_album_recursive(_album_id: String) -> Result<Value, String> {
-    Err(t!("albums.localFolderErrors.androidUnsupported").to_string())
 }

@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" :title="$t('albums.addToAlbumTitle')" width="420px">
+  <el-dialog append-to-body :model-value="open" :z-index="zIndex" :title="$t('albums.addToAlbumTitle')" width="420px" @update:model-value="(v: boolean) => { if (!v) emit('close') }">
     <el-form label-width="80px">
       <el-form-item :label="$t('albums.selectAlbum')">
         <AlbumPickerField
@@ -26,7 +26,7 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
+      <el-button @click="emit('close')">{{ $t('common.cancel') }}</el-button>
       <el-button v-if="isCreatingNewAlbum" type="primary" :disabled="!newAlbumName.trim()"
         @click="handleCreateAndAddAlbum">{{ $t('common.confirm') }}</el-button>
       <el-button v-else type="primary" :disabled="!selectedAlbumId" @click="confirmAddToAlbum">{{ $t('common.confirm') }}</el-button>
@@ -40,11 +40,11 @@ import { useI18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { storeToRefs } from "pinia";
 import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 
 interface Props {
-  modelValue: boolean;
+  open: boolean;
+  zIndex: number;
   /** 要加入画册的图片 id；在任务一键加入时可不传，改传 taskId 由后端取任务全部图片 */
   imageIds: string[];
   /**
@@ -59,7 +59,7 @@ interface Props {
 
 const props = defineProps<Props>();
 const emit = defineEmits<{
-  (e: "update:modelValue", v: boolean): void;
+  (e: "close"): void;
   (e: "added"): void;
 }>();
 
@@ -88,15 +88,8 @@ const newAlbumNameInputRef = ref<any>(null);
 // 是否正在创建新画册
 const isCreatingNewAlbum = computed(() => selectedAlbumId.value === "__create_new__");
 
-const visible = computed({
-  get: () => props.modelValue,
-  set: (v) => emit("update:modelValue", v),
-});
-
-useModalBack(visible);
-
 watch(
-  () => props.modelValue,
+  () => props.open,
   async (v) => {
     if (v) {
       // 确保画册列表可用
@@ -142,7 +135,7 @@ watch(selectedAlbumId, (newValue) => {
 const handleCreateAndAddAlbum = async () => {
   const isTaskMode = !!props.taskId;
   if (!isTaskMode && props.imageIds.length === 0) {
-    visible.value = false;
+    emit("close");
     return;
   }
 
@@ -163,7 +156,7 @@ const handleCreateAndAddAlbum = async () => {
       ElMessage.success(t('albums.createAlbumAndAdd', { name: created.name, count: props.imageIds.length }));
     }
 
-    visible.value = false;
+    emit("close");
     emit("added");
   } catch (error: any) {
     console.error("创建画册并加入图片失败:", error);
@@ -177,7 +170,7 @@ const handleCreateAndAddAlbum = async () => {
 const confirmAddToAlbum = async () => {
   const isTaskMode = !!props.taskId;
   if (!isTaskMode && props.imageIds.length === 0) {
-    visible.value = false;
+    emit("close");
     return;
   }
 
@@ -195,7 +188,7 @@ const confirmAddToAlbum = async () => {
       } else {
         ElMessage.success(t('albums.addedToAlbum', { count: result.added }));
       }
-      visible.value = false;
+      emit("close");
       emit("added");
       return;
     }
@@ -209,7 +202,7 @@ const confirmAddToAlbum = async () => {
 
       if (idsToAdd.length === 0) {
         ElMessage.info(t('albums.allInAlbum'));
-        visible.value = false;
+        emit("close");
         emit("added");
         return;
       }
@@ -224,7 +217,7 @@ const confirmAddToAlbum = async () => {
 
     await albumStore.addImagesToAlbum(albumId, idsToAdd);
     ElMessage.success(t('albums.addedToAlbum', { count: idsToAdd.length }));
-    visible.value = false;
+    emit("close");
     emit("added");
   } catch (error: any) {
     console.error("加入画册失败:", error);

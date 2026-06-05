@@ -1,10 +1,12 @@
 <template>
   <el-dialog
-    v-model="visibleModel"
+    :model-value="store.dialogOpen"
+    :z-index="modal.zIndex.value"
     :title="t('updater.dialogTitle')"
     width="640px"
     append-to-body
     class="update-dialog"
+    @update:model-value="modal.close"
   >
     <el-tabs v-if="releases.length" v-model="activeTab" type="card" class="update-tabs">
       <el-tab-pane v-for="r in releases" :key="r.tag" :name="r.tag" :label="r.tag">
@@ -41,7 +43,7 @@ import { ElButton, ElDialog, ElTabPane, ElTabs } from "element-plus";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useI18n } from "@kabegame/i18n";
 import { IS_LINUX } from "@kabegame/core/env";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { renderBasicMarkdown } from "@kabegame/core/utils/renderMarkdown";
 import * as updaterService from "@/services/updater";
 import { useUpdaterStore, type ReleaseInfo } from "@/stores/updater";
@@ -49,19 +51,16 @@ import { useUpdaterStore, type ReleaseInfo } from "@/stores/updater";
 const { t } = useI18n();
 const store = useUpdaterStore();
 
-const visibleModel = computed({
-  get: () => store.dialogOpen,
-  set: (v) => (v ? store.openDialog() : store.closeDialog()),
-});
-useModalBack(visibleModel);
+const modal = useModal({ onClose: () => store.closeDialog() });
+watch(() => store.dialogOpen, (v) => v ? modal.open() : modal.close(), { immediate: true });
 
 const releases = computed(() => store.releases);
 const activeTab = ref("");
 
 // 打开时 / 列表变化时，默认选中最新（第一个）版本
 watch(
-  [visibleModel, releases],
-  ([open, list]) => {
+  [() => store.dialogOpen, releases],
+  ([open, list]: [boolean, ReleaseInfo[]]) => {
     if (open && list.length && !list.some((r) => r.tag === activeTab.value)) {
       activeTab.value = list[0].tag;
     }

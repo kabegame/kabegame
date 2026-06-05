@@ -40,6 +40,7 @@ src-tauri/kabegame/resources/bin/*
 # development data
 /data
 /cache
+/.kabegame/debug
 
 # Nx
 .nx/cache

@@ -109,7 +109,7 @@ interface Props {
   gridIndex?: number; // 在网格中的索引
   isEntering?: boolean; // 是否正在入场（用于虚拟滚动的动画）
   isLeaving?: boolean; // 是否正在离开（用于虚拟滚动的动画）
-  fillBox?: boolean; // gallery 布局：盒宽高比等于图片自然比，填满且不留 letterbox 背景
+  fillBox?: boolean; // gallery 布局：固定盒比例，缩略图填满且不留 letterbox 背景
   horizontal?: boolean; // 水平方向：盒子用 height: 100% 撑满主轴，width 由 aspect-ratio 决定
   videoPlaying?: boolean; // 视频是否正在播放（由上层控制，确保同一时间只有一个视频在播放）
 }
@@ -556,8 +556,8 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     }
   }
 
-  /* gallery 填充模式：盒宽高比 = 图片自然比，用 cover 即可无裁切地铺满，
-     且不需要 letterbox 背景色——避免加载过程中露出卡片色块。
+  /* gallery 填充模式：固定盒比例，用 cover 铺满，
+     且不需要 letterbox 背景色，避免加载过程中露出卡片色块。
      同时去掉所有圆角，让画廊列的瓷砖完全贴合。 */
   &.image-item-fill {
     border-radius: 0;

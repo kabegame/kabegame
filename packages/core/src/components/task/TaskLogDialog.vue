@@ -1,10 +1,12 @@
 <template>
   <el-dialog
-    v-model="taskLogVisible"
+    :model-value="isOpen"
+    :z-index="zIndex"
     :title="t('tasks.drawerTaskLogTitle')"
     width="640px"
     :append-to-body="true"
     class="task-log-dialog"
+    @update:model-value="(v: boolean) => { if (!v) close() }"
   >
     <div class="task-log-list">
       <div v-if="currentTaskLogs.length === 0" class="task-log-empty">{{ t('tasks.drawerNoLogs') }}</div>
@@ -31,7 +33,7 @@ import { onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke, listen } from "../../api";
-import { useModalBack } from "../../composables/useModalBack";
+import { useModal } from "../../composables/useModal";
 
 type TaskLogEntry = {
   id: number;
@@ -49,12 +51,10 @@ type TaskLogEventPayload = {
 
 const { t, locale } = useI18n();
 
-const taskLogVisible = ref(false);
+const { isOpen, zIndex, open, close } = useModal();
 const currentTaskId = ref("");
 const currentTaskLogs = ref<TaskLogEntry[]>([]);
 const taskLogSeed = ref(0);
-
-useModalBack(taskLogVisible);
 
 let unlistenTaskLog: null | (() => void) = null;
 
@@ -103,7 +103,7 @@ const openTaskLog = async (taskId: string) => {
   const id = String(taskId || "").trim();
   if (!id) return;
   currentTaskId.value = id;
-  taskLogVisible.value = true;
+  open();
   try {
     const logs = await invoke<any[]>("get_task_logs", { taskId: id });
     currentTaskLogs.value = (Array.isArray(logs) ? logs : []).map((log, idx) => ({

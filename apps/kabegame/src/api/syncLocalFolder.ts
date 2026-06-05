@@ -47,32 +47,32 @@ export interface RecursiveSyncReport {
   failed: number;
 }
 
-export async function syncLocalFolderAlbum(
-  albumId: string,
-): Promise<SyncReport | null> {
-  if (LOCAL_FOLDER_UNSUPPORTED) return null;
-  try {
-    return await invoke<SyncReport>("sync_local_folder_album", { albumId });
-  } catch (e) {
-    console.warn("[local_folder] sync_local_folder_album failed", albumId, e);
-    throw e;
-  }
+export interface SyncLocalFolderAlbumOptions {
+  recursive?: boolean;
+  createMissingAlbums?: boolean;
 }
 
-export async function syncLocalFolderAlbumRecursive(
+export function syncLocalFolderAlbum(
   albumId: string,
-): Promise<RecursiveSyncReport | null> {
+  options: { recursive: true; createMissingAlbums?: boolean },
+): Promise<RecursiveSyncReport | null>;
+export function syncLocalFolderAlbum(
+  albumId: string,
+  options?: { recursive?: false; createMissingAlbums?: boolean },
+): Promise<SyncReport | null>;
+export async function syncLocalFolderAlbum(
+  albumId: string,
+  options: SyncLocalFolderAlbumOptions = {},
+): Promise<SyncReport | RecursiveSyncReport | null> {
   if (LOCAL_FOLDER_UNSUPPORTED) return null;
   try {
-    return await invoke<RecursiveSyncReport>("sync_local_folder_album_recursive", {
+    return await invoke<SyncReport | RecursiveSyncReport>("sync_local_folder_album", {
       albumId,
+      recursive: options.recursive ?? false,
+      createMissingAlbums: options.createMissingAlbums ?? true,
     });
   } catch (e) {
-    console.warn(
-      "[local_folder] sync_local_folder_album_recursive failed",
-      albumId,
-      e,
-    );
+    console.warn("[local_folder] sync_local_folder_album failed", albumId, e);
     throw e;
   }
 }

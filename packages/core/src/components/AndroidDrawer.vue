@@ -50,6 +50,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { Close } from "@element-plus/icons-vue";
+import { useModal } from "../composables/useModal";
 
 defineOptions({ inheritAttrs: false });
 
@@ -60,6 +61,7 @@ const props = withDefaults(
     closeThreshold?: number;
     /** 是否显示右上角关闭按钮，默认 true */
     showCloseButton?: boolean;
+    zIndex?: number;
   }>(),
   { closeThreshold: 0.25, showCloseButton: true }
 );
@@ -71,6 +73,14 @@ const emit = defineEmits<{
   close: [];
   closed: [];
 }>();
+
+const fallbackModal = useModal({ onClose: () => emit("update:modelValue", false) });
+watch(
+  () => props.modelValue && props.zIndex == null,
+  (v) => v ? fallbackModal.open() : fallbackModal.close(),
+  { immediate: true }
+);
+const effectiveZIndex = computed(() => props.zIndex ?? fallbackModal.zIndex.value);
 
 const panelRef = ref<HTMLElement | null>(null);
 const panelWidthPx = ref(400);
@@ -239,7 +249,7 @@ onUnmounted(() => {
 .android-drawer-wrap {
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  z-index: v-bind(effectiveZIndex);
   pointer-events: auto;
 }
 

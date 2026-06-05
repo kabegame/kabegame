@@ -77,16 +77,21 @@ fn write_large_png(path: &Path) {
 }
 
 fn create_sync_album(sync_folder: &Path) -> String {
+    create_sync_album_with_parent(sync_folder, None)
+}
+
+fn create_sync_album_with_parent(sync_folder: &Path, parent_id: Option<&str>) -> String {
     let album_id = uuid::Uuid::new_v4().to_string();
     let storage = Storage::global();
     let conn = storage.db.lock().unwrap();
     conn.execute(
         "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
-         VALUES (?1, ?2, ?3, NULL, 'local_folder', ?4, NULL)",
+         VALUES (?1, ?2, ?3, ?4, 'local_folder', ?5, NULL)",
         params![
             album_id,
             format!("sync-{}", uuid::Uuid::new_v4().simple()),
             now_secs(),
+            parent_id,
             sync_folder.to_string_lossy().as_ref()
         ],
     )
@@ -117,7 +122,7 @@ fn writable_guard_rejects_local_folder_albums_only() {
 #[tokio::test(flavor = "current_thread")]
 async fn scan_service_recursive_filters_and_hidden() {
     use super::scan_service::{
-        scan_and_visit, FolderScanHook, ScanOptions, ScannedDir, ScannedFile,
+        scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile,
     };
     use url::Url;
 
@@ -141,12 +146,16 @@ async fn scan_service_recursive_filters_and_hidden() {
         async fn on_enter_dir(
             &mut self,
             dir: &ScannedDir,
-            _parent: &(),
-        ) -> Result<Option<()>, String> {
+            _ctx: &ScanCtx<()>,
+        ) -> Result<Option<()>, ScanError> {
             self.dirs.push(dir.name.clone());
             Ok(Some(()))
         }
-        async fn on_file(&mut self, file: &ScannedFile, _ctx: &()) -> Result<(), String> {
+        async fn on_file(
+            &mut self,
+            file: &ScannedFile,
+            _ctx: &ScanCtx<()>,
+        ) -> Result<(), ScanError> {
             self.files.push(file.name.clone());
             Ok(())
         }
@@ -191,6 +200,77 @@ async fn scan_service_recursive_filters_and_hidden() {
     assert_eq!(h2.dirs, vec!["deep".to_string(), "sub".to_string()]);
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn scan_service_skips_linked_folder() {
+    use super::scan_service::{
+        scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile,
+    };
+    use std::os::unix::fs::symlink;
+    use url::Url;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let linked_target = tmp.path().join("linked-target");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&linked_target).unwrap();
+    write_png(&linked_target.join("inside.png"), [9, 9, 9]);
+    let link = root.join("linked");
+    symlink(&linked_target, &link).unwrap();
+
+    struct CollectHook {
+        files: Vec<String>,
+        dirs: Vec<String>,
+    }
+    #[async_trait::async_trait]
+    impl FolderScanHook for CollectHook {
+        type DirCtx = ();
+        async fn on_enter_dir(
+            &mut self,
+            enter: &ScannedDir,
+            _ctx: &ScanCtx<()>,
+        ) -> Result<Option<()>, ScanError> {
+            self.dirs.push(enter.name.clone());
+            Ok(Some(()))
+        }
+        async fn on_file(
+            &mut self,
+            file: &ScannedFile,
+            _ctx: &ScanCtx<()>,
+        ) -> Result<(), ScanError> {
+            self.files.push(file.name.clone());
+            Ok(())
+        }
+    }
+
+    let mut hook = CollectHook {
+        files: vec![],
+        dirs: vec![],
+    };
+    let opts = ScanOptions {
+        recursive: true,
+        ..Default::default()
+    };
+    let root_url = Url::from_file_path(&root).unwrap();
+    let scan_ctx = scan_and_visit(&[root_url], (), &opts, &mut hook)
+        .await
+        .unwrap();
+
+    assert!(hook.files.is_empty());
+    assert!(hook.dirs.is_empty());
+
+    let link_url = Url::from_file_path(&link).unwrap();
+    let issue = scan_ctx
+        .issues()
+        .iter()
+        .find(|issue| issue.dir == link_url && issue.entry.as_ref() == Some(&link_url))
+        .expect("linked folder should be recorded as a scan issue");
+    assert!(matches!(
+        &issue.error,
+        ScanError::Skip(message) if message.contains("linked folder")
+    ));
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn recursive_sync_creates_subalbums_and_imports() {
     let _guard = test_guard();
@@ -219,6 +299,100 @@ async fn recursive_sync_creates_subalbums_and_imports() {
         .unwrap()
     };
     assert_eq!(album_image_count(&child_id), 1, "子画册装 cat.png");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recursive_sync_without_create_skips_new_subalbum_dirs() {
+    let _guard = test_guard();
+    let (_tmp, dir) = temp_album_dir();
+    let cats_dir = dir.join("cats");
+    let dogs_dir = dir.join("dogs");
+    fs::create_dir_all(&cats_dir).unwrap();
+    fs::create_dir_all(&dogs_dir).unwrap();
+    write_png(&cats_dir.join("cat.png"), [2, 2, 2]);
+    write_png(&dogs_dir.join("dog.png"), [3, 3, 3]);
+    wait_for_stable_window();
+
+    let album_id = create_sync_album(&dir);
+    let cats_album_id = create_sync_album_with_parent(&cats_dir, Some(&album_id));
+
+    let report = super::sync_album_recursive_with_options(
+        &album_id,
+        vec![],
+        super::RecursiveSyncOptions {
+            create_missing_albums: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(report.created_albums, 0);
+    assert_eq!(album_image_count(&cats_album_id), 1);
+    assert!(
+        !album_exists_for_sync_folder(&dogs_dir),
+        "new subdirectories should be skipped when create_missing_albums=false"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn sync_skips_finalize_for_album_with_errored_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = test_guard();
+    let (_tmp, dir) = temp_album_dir();
+    let bad_dir = dir.join("bad");
+    let clean_dir = dir.join("clean");
+    fs::create_dir_all(&bad_dir).unwrap();
+    fs::create_dir_all(&clean_dir).unwrap();
+
+    let bad_stale = bad_dir.join("stale.png");
+    let clean_stale = clean_dir.join("stale.png");
+    write_png(&bad_stale, [1, 1, 1]);
+    write_png(&clean_stale, [2, 2, 2]);
+    wait_for_stable_window();
+
+    let album_id = create_sync_album(&dir);
+    let first = super::sync_album_recursive(&album_id, vec![])
+        .await
+        .unwrap();
+    assert_eq!(first.added, 2);
+
+    let bad_album_id = album_id_for_sync_folder(&bad_dir);
+    let clean_album_id = album_id_for_sync_folder(&clean_dir);
+    assert_eq!(album_image_count(&bad_album_id), 1);
+    assert_eq!(album_image_count(&clean_album_id), 1);
+
+    fs::remove_file(&bad_stale).unwrap();
+    fs::remove_file(&clean_stale).unwrap();
+    let broken = bad_dir.join("broken.png");
+    write_png(&broken, [3, 3, 3]);
+    let mut perms = fs::metadata(&broken).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&broken, perms).unwrap();
+    wait_for_stable_window();
+
+    let second = super::sync_album_recursive(&album_id, vec![])
+        .await
+        .unwrap();
+
+    let mut restore = fs::metadata(&broken).unwrap().permissions();
+    restore.set_mode(0o644);
+    fs::set_permissions(&broken, restore).unwrap();
+
+    assert_eq!(second.deleted, 1, "clean sibling should still reconcile");
+    assert_eq!(
+        album_image_count(&bad_album_id),
+        1,
+        "errored album keeps stale image linked"
+    );
+    assert_eq!(
+        album_image_count(&clean_album_id),
+        0,
+        "clean sibling unlinks stale image"
+    );
+    assert_eq!(image_count_for_path(&bad_stale), 1);
+    assert_eq!(image_count_for_path(&clean_stale), 1);
 }
 
 fn image_row_for_path(
@@ -283,6 +457,28 @@ fn album_image_count(album_id: &str) -> i64 {
         |row| row.get(0),
     )
     .unwrap()
+}
+
+fn album_id_for_sync_folder(path: &Path) -> String {
+    let conn = Storage::global().db.lock().unwrap();
+    conn.query_row(
+        "SELECT id FROM albums WHERE sync_folder = ?1",
+        params![path.to_string_lossy().as_ref()],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+fn album_exists_for_sync_folder(path: &Path) -> bool {
+    let conn = Storage::global().db.lock().unwrap();
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM albums WHERE sync_folder = ?1",
+            params![path.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    count > 0
 }
 
 fn folder_status_json(album_id: &str) -> Option<String> {
@@ -395,7 +591,7 @@ fn replace_image_thumbnail_path_deletes_old_independent_thumbnail() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn sync_deletes_db_row_when_file_disappears() {
+async fn sync_unlinks_from_album_when_file_disappears() {
     let _guard = test_guard();
     let (_tmp, dir) = temp_album_dir();
     let file = dir.join("gone.png");
@@ -408,7 +604,7 @@ async fn sync_deletes_db_row_when_file_disappears() {
     let report = sync_album(&album_id).await.unwrap();
 
     assert_eq!(report.deleted, 1);
-    assert_eq!(image_count_for_path(&file), 0);
+    assert_eq!(image_count_for_path(&file), 1);
     assert_eq!(album_image_count(&album_id), 0);
 }
 

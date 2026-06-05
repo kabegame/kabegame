@@ -8,17 +8,18 @@
     <!-- Android：photoswipe-vue 底层组件，不循环 -->
     <PhotoSwipe
       v-if="uiStore.isCompact"
-      v-model:open="docPswpOpen"
+      :open="pswpModal.isOpen.value"
       v-model:index="docPswpIndex"
       :data-source="docPswpDataSource"
       :loop="false"
-      :zIndex="2000"
+      :z-index="pswpModal.zIndex.value"
+      @update:open="pswpModal.close"
       @close="handleDocPreviewClose"
     />
 
     <!-- 桌面：Element Plus 图片查看器，不循环 -->
     <ElImageViewer
-      v-if="!uiStore.isCompact && docDesktopViewerVisible"
+      v-if="!uiStore.isCompact && desktopViewerModal.isOpen.value"
       :url-list="docDesktopUrlList"
       :initial-index="docDesktopInitialIndex"
       :infinite="false"
@@ -38,7 +39,7 @@ import { marked } from "marked";
 import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
 import { IS_WEB } from "../../env";
-import { useModalBack } from "../../composables/useModalBack";
+import { useModal } from "../../composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = withDefaults(
@@ -69,19 +70,17 @@ const html = ref("");
 const docRootRef = ref<HTMLElement | null>(null);
 
 /** Android PhotoSwipe */
-const docPswpOpen = ref(false);
+const pswpModal = useModal();
 const docPswpIndex = ref(0);
 const docPswpDataSource = ref<Array<{ src: string; width: number; height: number }>>([]);
 
 const uiStore = useUiStore();
 
 /** 桌面 ElImageViewer */
-const docDesktopViewerVisible = ref(false);
+const desktopViewerModal = useModal();
 const docDesktopUrlList = ref<string[]>([]);
 const docDesktopInitialIndex = ref(0);
 const currentDocPreview = ref<DocImagePreviewPayload | null>(null);
-
-useModalBack(docPswpOpen);
 
 const PSWP_FALLBACK_W = 1920;
 const PSWP_FALLBACK_H = 1080;
@@ -142,11 +141,11 @@ const handleDocClick = (e: MouseEvent) => {
         docPswpDataSource.value = items;
         docPswpIndex.value = index;
         await nextTick();
-        docPswpOpen.value = true;
+        pswpModal.open();
       } else {
         docDesktopUrlList.value = urls;
         docDesktopInitialIndex.value = index;
-        docDesktopViewerVisible.value = true;
+        desktopViewerModal.open();
       }
     })();
     return;
@@ -164,7 +163,7 @@ const handleDocClick = (e: MouseEvent) => {
 
 const handleDocPreviewClose = () => {
   if (!uiStore.isCompact) {
-    docDesktopViewerVisible.value = false;
+    desktopViewerModal.close();
   }
   if (currentDocPreview.value) {
     emit("image-preview-close", currentDocPreview.value);

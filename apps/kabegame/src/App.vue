@@ -1,5 +1,5 @@
 <template>
-  <el-config-provider :locale="elementPlusLocale">
+  <el-config-provider :locale="elementPlusLocale" :z-index="3000">
   <!-- 主窗口 -->
   <el-container class="app-container" :class="{ 'app-container-compact': uiStore.isCompact, 'has-app-background': bgVisible }">
     <div
@@ -39,11 +39,12 @@
     <!-- 文件拖拽导入确认弹窗（仅非安卓平台） -->
     <ImportConfirmDialog v-if="!uiStore.isCompact" ref="importConfirmDialogRef" />
     <!-- 外部插件导入弹窗 -->
-    <PluginImportDialog 
-      v-model:visible="showImportDialog" 
+    <PluginImportDialog
+      :visible="importDialog.isOpen.value"
       :kgpg-path="importKgpgPath"
+      @update:visible="importDialog.close"
     />
-    <!-- 全局唯一的快捷设置抽屉（桌面与安卓均挂载，安卓用 useModalBack 处理返回键） -->
+    <!-- 全局唯一的快捷设置抽屉（桌面与安卓均挂载） -->
     <QuickSettingsDrawer />
     <!-- 桌面端自动更新：更新日志弹窗 + 下载进度弹窗（全局唯一，常驻以便下载中刷新存活） -->
     <template v-if="!uiStore.isCompact && !IS_WEB">
@@ -59,9 +60,11 @@
     <CrawlerDialog v-if="uiStore.isCompact" v-model="crawlerDrawerVisible"
       :initial-config="crawlerDrawerInitialConfig" />
     <MissedRunsDialog
-      v-model="missedRunsVisible"
+      :open="missedRunsModal.isOpen.value"
+      :z-index="missedRunsModal.zIndex.value"
       :items="missedRunItems"
       :system-sleep="wasSystemSleep"
+      @close="missedRunsModal.close()"
       @run-now="handleRunMissedNow"
       @dismiss="handleDismissMissed"
     />
@@ -199,6 +202,7 @@ import { useFailedImagesStore } from "./stores/failedImages";
 import { useAlbumStore } from "./stores/albums";
 import { useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { ElMessageBox } from "element-plus";
 import { useThrottleFn } from "@vueuse/core";
 import { useApp } from "@/stores/app";
@@ -287,7 +291,7 @@ const fileDropOverlayRef = ref<any>(null);
 const importConfirmDialogRef = ref<any>(null);
 
 // 外部导入插件对话框
-const showImportDialog = ref(false);
+const importDialog = useModal();
 const importKgpgPath = ref<string | null>(null);
 
 // 路由视图 key，用于强制刷新组件
@@ -299,7 +303,7 @@ if (IS_WEB) {
 // 漏跑任务检测（启动检查 + 休眠/恢复后自动重查），逻辑集中在 composable 内
 const {
   missedRunItems,
-  missedRunsVisible,
+  missedRunsModal,
   wasSystemSleep,
   handleRunMissedNow,
   handleDismissMissed,
@@ -582,7 +586,7 @@ onMounted(async () => {
     }
     
     importKgpgPath.value = event.payload.kgpgPath;
-    showImportDialog.value = true;
+    importDialog.open();
   });
 
   // Android 适配：供原生代码调用的全局方法
@@ -591,7 +595,7 @@ onMounted(async () => {
       console.log("[Android] Received import request:", path);
       // 触发相同的逻辑
       importKgpgPath.value = path;
-      showImportDialog.value = true;
+      importDialog.open();
     };
   }
   

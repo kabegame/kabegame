@@ -1,5 +1,5 @@
 <template>
-  <ContextMenu :visible="visible" :position="position" :items="menuItems" :z-index="3000"
+  <ContextMenu :visible="visible" :position="position" :items="menuItems" :z-index="zIndex"
     @close="$emit('close')" @command="$emit('command', $event)" />
 </template>
 
@@ -11,6 +11,7 @@ import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMen
 
 interface Props {
   visible: boolean;
+  zIndex: number;
   position: { x: number; y: number };
   task: any | null;
 }

@@ -1,14 +1,14 @@
 <template>
   <!-- Android 全屏预览：使用 photoswipe-vue 组件，关闭按钮用组件自带的 -->
-  <PhotoSwipe v-if="uiStore.isCompact" ref="pswpRef" v-model:open="previewVisible" v-model:index="previewIndex"
-    :data-source="pswpDataSource" :loop="true" :zIndex="previewFullscreenZIndex" :close-on-vertical-drag="true"
+  <PhotoSwipe v-if="uiStore.isCompact" ref="pswpRef" :open="previewModal.isOpen.value" v-model:index="previewIndex"
+    :data-source="pswpDataSource" :loop="true" :z-index="previewFullscreenZIndex" :close-on-vertical-drag="true"
+    @update:open="previewModal.close"
     :on-vertical-drag="handlePswpVerticalDrag" :on-before-close="handlePswpBeforeClose" @change="handlePswpChange"
     @close="handlePswpClose" @ui-visible-change="handlePswpUiVisibleChange">
-    <!-- 安卓：显示名称用 fixed 定位，与叉号同 top/高度，限制宽度并换行 -->
+    <!-- 安卓：图片标题居中覆盖显示 -->
     <div v-if="previewImage?.displayName"
-      class="fixed left-0 right-0 top-0 flex min-h-[60px] items-center z-[-1] justify-center px-4 pt-[var(--sat,env(safe-area-inset-top,0px))]">
-      <span class="max-w-[70vw] break-all text-center text-sm font-medium text-white/90"
-        style="text-shadow: 0 1px 2px rgba(0,0,0,0.3)">
+      class="pswp-image-title-container">
+      <span class="pswp-image-title-text">
         {{ previewImage.displayName }}
       </span>
     </div>
@@ -16,7 +16,7 @@
     <!-- visible 为true，与ui一起显隐，ui显隐由 photoswipe-vue 组件自动管理 -->
     <ActionRenderer v-if="actions.length > 0" visible :position="previewContextMenuPosition" :actions="actions"
       :context="previewActionContext" mode="actionsheet" :teleport="false" :no-transition="true"
-      @close="handlePswpActionClose" @command="handlePreviewActionCommand" :zIndex="previewControlZIndex" :modal-back="false" />
+      :zIndex="previewControlZIndex" :modal-back="false" @close="handlePswpActionClose" @command="handlePreviewActionCommand" />
     <!-- 上划删除区域通过 overlay slot 放入 .pswp 根级 -->
     <template #overlay>
       <Transition name="swipe-delete-zone">
@@ -37,10 +37,10 @@
 
   <!-- 桌面端 Dialog 预览 -->
   <template v-else>
-    <el-dialog v-model="previewVisible" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
+    <el-dialog :model-value="previewModal.isOpen.value" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
       class="image-preview-dialog" :show-close="true" :lock-scroll="true"
-      :z-index="isAppFullscreen ? previewFullscreenZIndex : undefined" @close="closePreview">
-      <div v-if="previewVisible" class="preview-desktop-body">
+      :z-index="previewFullscreenZIndex" @update:model-value="previewModal.close" @close="closePreview">
+      <div v-if="previewModal.isOpen.value" class="preview-desktop-body">
         <div ref="previewContainerRef" class="preview-container" :class="{ 'is-app-fullscreen': isAppFullscreen }"
           @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
           @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePreviewWheel">
@@ -148,9 +148,9 @@
       </div>
     </el-dialog>
     <!-- 桌面端预览内右键：与单张图片相同的上下文菜单（z-index 高于 el-dialog 以免被遮） -->
-    <ActionRenderer v-if="actions.length > 0" :visible="previewContextMenuVisible"
+    <ActionRenderer v-if="actions.length > 0" :visible="previewContextMenu.isOpen.value"
       :position="previewContextMenuPosition" :actions="actions" :context="previewActionContext" mode="contextmenu"
-      :z-index="previewControlZIndex" @close="closePreviewContextMenu" @command="handlePreviewActionCommand" />
+      :z-index="previewContextMenu.zIndex.value" @close="closePreviewContextMenu" @command="handlePreviewActionCommand" />
   </template>
 
 </template>
@@ -176,16 +176,18 @@ import type { ActionItem, ActionContext } from "../../actions/types";
 import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
 import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
-import { useModalBack } from "../../composables/useModalBack";
+import { useModal } from "../../composables/useModal";
 import { fileToUrl, thumbnailToUrl } from "../../httpServer";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { Plugin } from "@kabegame/core/stores/plugins";
 
 const { t } = useI18n();
 const uiStore = useUiStore();
-const previewFullscreenZIndex = 6000;
-const previewOverlayZIndex = 6100;
-const previewControlZIndex = 6200;
+const previewModal = useModal({ layers: 3 });
+const previewContextMenu = useModal();
+const previewFullscreenZIndex = computed(() => previewModal.zIndex.value);
+const previewOverlayZIndex = computed(() => previewModal.zIndex.value + 10);
+const previewControlZIndex = computed(() => previewModal.zIndex.value + 20);
 const previewHidesKamechanClass = "image-preview-hides-kamechan";
 
 const props = withDefaults(defineProps<{
@@ -221,14 +223,14 @@ type PreviewNavigatePayload = {
   image: ImageInfo;
 };
 
-const previewVisible = ref(false);
+const previewVisible = previewModal.isOpen;
 const previewImageUrl = ref("");
 const previewImagePath = ref("");
 const previewIndex = ref<number>(-1);
 const currentImageId = ref<string | null>(null);
-/** 紧凑模式（Android/web 窄屏）：仅图片的索引列表（用于过滤 PhotoSwipe 中的视频，视频改用系统播放器打开） */
+/** 紧凑模式（Android/web 窄屏）：PhotoSwipe 使用的索引列表，映射回 props.images 原始索引。 */
 const androidFilteredIndices = computed(() =>
-  props.images.map((img, i) => (!isVideoMediaType(img.type) ? i : -1)).filter((i) => i >= 0),
+  props.images.map((_, i) => i),
 );
 
 // previewImage 改为 computed，确保始终反映 props.images 的最新数据（如收藏状态变化）
@@ -274,7 +276,7 @@ let verticalDragResetTimer: ReturnType<typeof setTimeout> | null = null;
 const previewContainerRect = ref({ left: 0, top: 0, width: 0, height: 0 });
 // previewDragging、previewDragStart、previewDragStartTranslate 已删除，由 Panzoom 替代（仅桌面端）
 const previewImageLoading = ref(false);
-const previewContextMenuVisible = ref(false);
+const previewContextMenuVisible = previewContextMenu.isOpen;
 const previewContextMenuPosition = ref({ x: 0, y: 0 });
 const zoomSliderDragging = ref(false);
 
@@ -284,8 +286,6 @@ const zoomSliderDragging = ref(false);
 const pswpUiVisible = ref(false);
 let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Android: 使用 useModalBack 管理预览的返回键行为（不使用 close-on-back prop）
-useModalBack(previewVisible);
 
 const normalizeDesktopPath = (path: string | undefined) =>
   (path || "").trimStart().replace(/^\\\\\?\\/, "").trim();
@@ -306,10 +306,10 @@ const getOriginalPreviewUrl = (image: ImageInfo) =>
   IS_ANDROID ? toAndroidProxyUrl(image.localPath) : toDesktopUrl(image.localPath);
 
 const getThumbnailPreviewUrl = (image: ImageInfo) => {
-  const thumbPath = image.thumbnailPath || image.localPath;
+  const thumbPath = image.thumbnailPath;
   if (IS_ANDROID) return toAndroidProxyUrl(thumbPath);
   const normalized = normalizeDesktopPath(thumbPath);
-  return normalized ? thumbnailToUrl(normalized) : "";
+  return normalized ? thumbnailToUrl(normalized) : getOriginalPreviewUrl(image);
 };
 
 // 计算 cover scale（填满屏幕的缩放比例）
@@ -462,17 +462,23 @@ const isTextInputLike = (target: EventTarget | null) => {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el?.isContentEditable;
 };
 
-/** 紧凑模式 PhotoSwipe：根据当前 images 构建 dataSource 数组（只读 URL）。紧凑模式下过滤掉视频，视频改用系统播放器打开。 */
+/** 紧凑模式 PhotoSwipe：根据当前 images 构建 dataSource 数组（只读 URL）。 */
 const pswpDataSource = computed(() => {
   const fallbackW = 1920;
   const fallbackH = 1080;
   const source = uiStore.isCompact
-    ? props.images.filter((img) => !isVideoMediaType(img.type))
+    ? androidFilteredIndices.value.map((idx) => props.images[idx]).filter(Boolean)
     : props.images;
   return source.map((img) => {
     const url = getOriginalPreviewUrl(img) || getThumbnailPreviewUrl(img) || "";
+    const isVideo = isVideoMediaType(img.type);
     return {
       src: url,
+      type: isVideo ? "video" : "image",
+      mime: isVideo && img.type?.startsWith("video/") ? img.type : undefined,
+      poster: isVideo ? getThumbnailPreviewUrl(img) : undefined,
+      controls: isVideo ? true : undefined,
+      playsInline: isVideo ? true : undefined,
       width: img.width || fallbackW,
       height: img.height || fallbackH,
       id: img.id,
@@ -620,11 +626,11 @@ const handlePreviewDialogContextMenu = (event: MouseEvent) => {
   if (!previewImage.value) return;
   if (!props.actions?.length) return;
   previewContextMenuPosition.value = { x: event.clientX, y: event.clientY };
-  previewContextMenuVisible.value = true;
+  previewContextMenu.open();
 };
 
 const closePreviewContextMenu = () => {
-  previewContextMenuVisible.value = false;
+  previewContextMenu.close();
 };
 
 const previewActionContext = computed<ActionContext<ImageInfo>>(() => ({
@@ -760,7 +766,7 @@ const handlePreviewKeyDown = (event: KeyboardEvent) => {
 /** 紧凑模式预览关闭后的清理（不调用 pswp.close），避免 destroy 时重复关闭且确保遮罩移除 */
 function doAndroidPreviewCleanup() {
   if (!uiStore.isCompact) return;
-  previewVisible.value = false;
+  previewModal.close();
   pswpUiVisible.value = false;
   if (longPressTimer) {
     clearTimeout(longPressTimer);
@@ -773,13 +779,13 @@ const closePreview = () => {
   const closedImage = previewImage.value;
   isAppFullscreen.value = false;
   if (uiStore.isCompact) {
-    previewVisible.value = false;
+    previewModal.close();
     doAndroidPreviewCleanup();
     previewIndex.value = -1;
     emit("preview-close", { image: closedImage });
     return;
   }
-  previewVisible.value = false;
+  previewModal.close();
   previewImageUrl.value = "";
   previewImagePath.value = "";
   previewIndex.value = -1;
@@ -1063,20 +1069,20 @@ if (!uiStore.isCompact) {
 
 const open = (index: number) => {
   if (uiStore.isCompact) {
+    console.log('open preview');
     const img = props.images[index];
-    if (IS_ANDROID && isVideoMediaType(img?.type)) return; // Android 视频由 ImageGrid 调用 openVideo
     const pswpIndex = androidFilteredIndices.value.indexOf(index);
     if (pswpIndex < 0) return;
     previewIndex.value = pswpIndex;
     if (img) {
       currentImageId.value = img.id;
     }
-    previewVisible.value = true;
+    previewModal.open();
     pswpUiVisible.value = false;
     return;
   }
   // 桌面端：先打开 dialog，再触发 setPreviewByIndex
-  previewVisible.value = true;
+  previewModal.open();
   setPreviewByIndex(index);
 };
 
@@ -1089,10 +1095,6 @@ defineExpose({
 </script>
 
 <style lang="scss">
-.pswp {
-  z-index: v-bind(previewFullscreenZIndex) !important;
-}
-
 body.image-preview-hides-kamechan .kamechan-host {
   display: none !important;
 }
@@ -1620,5 +1622,30 @@ body.image-preview-hides-kamechan .kamechan-host {
     }
   }
 
+}
+
+.pswp-image-title-container {
+  color: var(--anime-secondary-light);
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  display: flex;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  text-align: center;
+}
+
+.pswp-image-title-text {
+  width: 60%;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 </style>
