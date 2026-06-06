@@ -7,10 +7,7 @@
           v-if="slot.image"
           :key="previewImageItemKey(slot.image)"
           :image="slot.image"
-          :image-click-action="imageClickAction"
-          :window-aspect-ratio="1"
-          :grid-columns="3"
-          :grid-index="idx"
+          :prefer="'thumbnail'"
           class="album-hero-image-item"
           @click="handleHeroImageClick"
           @contextmenu="(e) => emit('contextmenu', e)"
@@ -71,7 +68,6 @@ import { useAlbumStore } from "@/stores/albums";
 import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID } from "@kabegame/core/env";
 import ImageItem from "@kabegame/core/components/image/ImageItem.vue";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { fileToUrl, thumbnailToUrl } from "@kabegame/core/httpServer";
 import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -95,8 +91,6 @@ const props = withDefaults(defineProps<Props>(), {
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
-const settingsStore = useSettingsStore();
-const imageClickAction = computed(() => settingsStore.values.imageClickAction || "none");
 
 const isRenaming = ref(false);
 const renameValue = ref("");

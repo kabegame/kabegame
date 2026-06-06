@@ -9,6 +9,7 @@
     @image-dblclick="$emit('image-dblclick', $event)"
     @preview-open="handlePreviewOpen"
     @preview-navigate="handlePreviewNavigate"
+    @preview-page-boundary="$emit('preview-page-boundary', $event)"
     @preview-detail-toggle="$emit('preview-detail-toggle', $event)"
     @preview-close="handlePreviewClose"
     @open-gallery-filter="handleOpenGalleryFilter"
@@ -104,10 +105,16 @@ type PreviewNavigatePayload = {
   wrapped: boolean;
   image: ImageInfo;
 };
+type PreviewPageBoundaryPayload = {
+  direction: "prev" | "next";
+  index: number;
+  image: ImageInfo;
+};
 const emit = defineEmits<{
   "scroll-stable": [];
   "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
   "preview-navigate": [payload: PreviewNavigatePayload];
+  "preview-page-boundary": [payload: PreviewPageBoundaryPayload];
   "preview-detail-toggle": [payload: { open: boolean; image: ImageInfo | null }];
   "preview-close": [payload: { image: ImageInfo | null }];
   // 兼容旧 API：右键已移除加入画册，但保留事件名不破坏上层模板
@@ -285,5 +292,7 @@ defineExpose({
   getSelectedIds: () => coreRef.value?.getSelectedIds?.(),
   clearSelection: () => coreRef.value?.clearSelection?.(),
   exitAndroidSelectionMode: () => coreRef.value?.exitAndroidSelectionMode?.(),
+  openPreviewById: (id: string) => coreRef.value?.openPreviewById?.(id),
+  closePreview: () => coreRef.value?.closePreview?.(),
 });
 </script>

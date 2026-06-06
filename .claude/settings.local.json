@@ -25,7 +25,11 @@
       "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\\\\src-tauri\\\\pathql-rs\" -Recurse -Name)",
       "Bash(xargs basename -a)",
       "Bash(kill -0 31566)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(curl -s https://crates.io/api/v1/crates/tauri-build)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('tauri-build max:', d['crate']['max_stable_version']\\)\")",
+      "Bash(curl -s https://crates.io/api/v1/crates/tauri)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('tauri max:', d['crate']['max_stable_version']\\)\")"
     ]
   }
 }

@@ -5,7 +5,6 @@
     'item-leaving': isLeaving,
     'image-item-android': isCompact,
     'image-item-hidden': image.isHidden,
-    'image-item-fill': fillBox,
     'image-item-horizontal': horizontal,
   }" :style="rootStyle" :data-id="image.id" @mouseenter="handleMouseEnter" @mouseleave="handleMouseLeave"
     @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
@@ -17,7 +16,7 @@
         </el-icon>
       </div>
     </el-tooltip>
-    <!-- 视频标识：右上角播放/暂停切换按钮（可控视频，video 元素） -->
+    <!-- 视频标识：右上角播放/暂停切换按钮（可控视频） -->
     <div v-if="isControllableVideo" class="video-play-badge video-play-badge-interactive"
       role="button" :aria-label="videoShouldPlay ? '暂停' : '播放'"
       @click.stop="handleToggleVideoPlay" @dblclick.stop @contextmenu.stop.prevent>
@@ -32,86 +31,35 @@
         <VideoPlay />
       </el-icon>
     </div>
-    <transition name="fade-in" mode="out-in">
-      <div v-if="!displayUrl" key="loading" class="image-wrapper" :style="aspectRatioStyle"
-        @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)"
-        @click.stop="handleWrapperClick" @touchstart="handleTouchStart" @touchmove="handleTouchMove"
-        @touchend="handleTouchEnd">
-        <div v-if="isLost" class="thumbnail-lost">
-          <ImageNotFound :show-image="false" />
-        </div>
-        <!-- 与 content 分支一致：loading 骨架使用 overlay 绝对铺满；视频不用 image 形骨架，避免中央出现图片占位 -->
-        <div v-else class="thumbnail-loading thumbnail-loading-overlay">
-          <el-skeleton v-if="!isVideo" :rows="0" animated>
-            <template #template>
-              <el-skeleton-item variant="image" :style="{ width: '100%', height: '100%' }" />
-            </template>
-          </el-skeleton>
-        </div>
-      </div>
-      <div v-else key="content" class="image-wrapper" :style="aspectRatioStyle"
-        @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)"
-        @click.stop="handleWrapperClick" @touchstart="handleTouchStart" @touchmove="handleTouchMove"
-        @touchend="handleTouchEnd">
-        <!-- 加载期间显示骨架覆盖层；视频不叠 image 形骨架（与预览弹窗一致，避免中央图片占位） -->
-        <div v-if="isImageLoading && !isVideo" class="thumbnail-loading thumbnail-loading-overlay">
-          <el-skeleton :rows="0" animated>
-            <template #template>
-              <el-skeleton-item variant="image" :style="{ width: '100%', height: '100%' }" />
-            </template>
-          </el-skeleton>
-        </div>
-        <!-- 桌面双图外壳：保持缩略图 DOM 稳定，hover 时仅新增原图层并淡入 -->
-        <template v-if="useDesktopLayerShell">
-          <img v-if="!thumbnailLoadFailed" :src="thumbnailUrl" loading="lazy" decoding="async"
-            class="thumbnail thumbnail-layer" :alt="image.id" draggable="false" @load="handleThumbnailLoad"
-            @error="handleThumbnailError" />
-          <img v-if="useDesktopLayers" :src="originalUrl" loading="lazy" decoding="async"
-            :class="['thumbnail', 'original-layer', { 'original-layer-visible': originalLoaded }]" :alt="image.id"
-            draggable="false" @load="handleOriginalLoad" @error="handleOriginalError" />
-        </template>
-        <!-- GIF 缩略图（历史数据与 Android）：用 img；mp4 缩略图：用 video 元素 -->
-        <img v-else-if="isVideoRenderedAsImage" :src="displayUrl" loading="lazy" decoding="async"
-          :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': isCompact }]"
-          :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
-          @load="handleImageLoad" @error="handleImageError" />
-        <video v-else-if="isVideo" ref="videoEl" :src="displayUrl" class="thumbnail" draggable="false" muted loop poster=""
-          preload="auto" playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback=""
-          @dragstart.prevent @mousedown.prevent />
-        <!-- 单图（桌面无独立缩略图） -->
-        <img v-else-if="true" :src="displayUrl" loading="lazy" decoding="async"
-          :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': isCompact }]"
-          :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
-          @load="handleImageLoad" @error="handleImageError" />
-      </div>
-    </transition>
+    <div class="image-wrapper" :style="aspectRatioStyle"
+      @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)"
+      @click.stop="handleWrapperClick" @touchstart="handleTouchStart" @touchmove="handleTouchMove"
+      @touchend="handleTouchEnd">
+      <ImageContent ref="contentRef" :image="image" :prefer="effectivePrefer"
+        :video-playing="videoShouldPlay" video-muted reset-video-on-pause />
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, watch, watchEffect } from "vue";
+import { computed, nextTick, onUnmounted, watch } from "vue";
 import { ref, toRef } from "vue";
 import { WarningFilled, VideoPlay, VideoPause } from "@element-plus/icons-vue";
 import type { ImageInfo } from "../../types/image";
-import type { ImageClickAction } from "../../stores/settings";
-import ImageNotFound from "../common/ImageNotFound.vue";
-import { useImageItemLoader } from "../../composables/useImageItemLoader";
+import ImageContent from "./ImageContent.vue";
+import type { ImagePrefer } from "../../composables/useImageItemLoader";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
 interface Props {
   image: ImageInfo;
-  imageClickAction: ImageClickAction;
-  windowAspectRatio?: number; // 窗口宽高比
+  prefer: ImagePrefer; // 优先原图还是缩略图（透传 ImageContent）
   selected?: boolean; // 是否被选中
-  gridColumns?: number; // 网格列数
-  gridIndex?: number; // 在网格中的索引
   isEntering?: boolean; // 是否正在入场（用于虚拟滚动的动画）
   isLeaving?: boolean; // 是否正在离开（用于虚拟滚动的动画）
-  fillBox?: boolean; // gallery 布局：固定盒比例，缩略图填满且不留 letterbox 背景
   horizontal?: boolean; // 水平方向：盒子用 height: 100% 撑满主轴，width 由 aspect-ratio 决定
-  videoPlaying?: boolean; // 视频是否正在播放（由上层控制，确保同一时间只有一个视频在播放）
+  videoPlaying?: boolean; // 视频是否正在播放（由上层协调，确保同一时间只有一个视频在播放）
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -129,12 +77,13 @@ const emit = defineEmits<{
   hoverVideoPreview: [active: boolean]; // 鼠标悬停视频预览播放状态
 }>();
 
-const imageRef = toRef(props, "image");
-const gridColumnsRef = toRef(props, "gridColumns");
-
 const rootEl = ref<HTMLElement | null>(null);
+const contentRef = ref<InstanceType<typeof ImageContent> | null>(null);
 const { isCompact } = storeToRefs(useUiStore());
-const hoverOriginalPreviewActive = ref(false);
+
+// 缺失/丢失状态来自 ImageContent（用于角标显示）
+const originalMissing = computed(() => contentRef.value?.originalMissing ?? false);
+const isLost = computed(() => contentRef.value?.isLost ?? false);
 
 // 虚拟滚动下挂载时已有 isEntering，若直接绑 class 浏览器可能不触发 CSS 动画；延迟一帧再加 class 以触发入场动画
 const enteringClassActive = ref(false);
@@ -155,29 +104,6 @@ watch(
   { immediate: true }
 );
 
-const {
-  displayUrl,
-  isImageLoading,
-  isLost,
-  originalMissing,
-  thumbnailUrl,
-  originalUrl,
-  useDesktopLayers,
-  thumbnailLoaded,
-  originalLoaded,
-  thumbnailLoadFailed,
-  handleImageLoad,
-  handleImageError,
-  handleThumbnailLoad,
-  handleOriginalLoad,
-  handleThumbnailError,
-  handleOriginalError,
-} = useImageItemLoader({
-  image: imageRef,
-  gridColumns: gridColumnsRef,
-  forceDesktopLayers: hoverOriginalPreviewActive,
-});
-
 // Android 长按检测
 let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 let longPressFired = false;
@@ -187,7 +113,6 @@ let touchMoved = false;
 const handleTouchStart = (event: TouchEvent) => {
   if (!isCompact.value) return;
   if (event.touches.length !== 1) {
-    // 多指触摸，取消长按检测
     if (longPressTimer) {
       clearTimeout(longPressTimer);
       longPressTimer = null;
@@ -210,7 +135,6 @@ const handleTouchStart = (event: TouchEvent) => {
 
 const handleTouchMove = (event: TouchEvent) => {
   if (!isCompact.value) return;
-  // 检测移动距离，超过阈值则取消长按
   if (event.touches.length === 1 && longPressTimer) {
     const touch = event.touches[0];
     const dx = Math.abs(touch.clientX - touchStartPos.x);
@@ -231,8 +155,6 @@ const handleTouchEnd = () => {
     clearTimeout(longPressTimer);
     longPressTimer = null;
   }
-  // 如果长按已触发，标记需要跳过本次 click
-  // 标记会在 handleWrapperClick 中使用，然后重置
 };
 
 onUnmounted(() => {
@@ -242,30 +164,15 @@ onUnmounted(() => {
   }
 });
 
-const aspectRatioStyle = computed(() => {
-  if (!props.fillBox && !isCompact.value) {
-    return { aspectRatio: "1 / 1" };
-  }
-  // aspect-ratio = 宽 / 高；windowAspectRatio 本身就是宽/高
-  const r = props.windowAspectRatio && props.windowAspectRatio > 0 ? props.windowAspectRatio : null;
-  return r
-    ? { aspectRatio: `${r}` }
-    : { aspectRatio: "16 / 9" };
-});
+// 非画廊网格盒子恒为正方形；画廊布局由上层按图片比例给盒子尺寸。ImageContent 始终 contain。
+const aspectRatioStyle = computed(() => ({ aspectRatio: "1 / 1" }));
 // 水平方向：把 aspect-ratio 也挂在 root 上，这样 flex 能基于 height 推导 width。
 const rootStyle = computed<Record<string, string> | undefined>(() => {
   if (!props.horizontal) return undefined;
   return aspectRatioStyle.value as Record<string, string>;
 });
+
 const isVideo = computed(() => isVideoMediaType(props.image.type));
-const useDesktopLayerShell = computed(() =>
-  !isCompact.value &&
-  !isVideo.value &&
-  !!thumbnailUrl.value &&
-  !!originalUrl.value &&
-  thumbnailUrl.value !== originalUrl.value &&
-  (!thumbnailLoadFailed.value || useDesktopLayers.value)
-);
 
 function pathFromUrlLike(value: string | undefined): string {
   const raw = (value || "").trim();
@@ -291,27 +198,27 @@ function hasPathExtension(value: string | undefined, ext: string): boolean {
   return path.endsWith(`.${ext.toLowerCase()}`);
 }
 
-const displayPreviewPath = computed(() =>
-  displayUrl.value || props.image.thumbnailPath || props.image.localPath
-);
-const isGifVideoPreview = computed(() => isVideo.value && hasPathExtension(displayPreviewPath.value, "gif"));
-const isVideoRenderedAsImage = computed(() => isVideo.value && isGifVideoPreview.value);
+const previewPath = computed(() => props.image.thumbnailPath || props.image.localPath);
+const isVideoRenderedAsImage = computed(() => isVideo.value && hasPathExtension(previewPath.value, "gif"));
 // GIF 预览不可控；mp4 预览走 <video>，由上层统一控制播放/暂停。
 const isControllableVideo = computed(() => isVideo.value && !isVideoRenderedAsImage.value);
 
-const videoEl = ref<HTMLVideoElement | null>(null);
 const hoverVideoPreviewActive = ref(false);
+const hoverOriginalActive = ref(false);
 const videoShouldPlay = computed(() => props.videoPlaying || hoverVideoPreviewActive.value);
 const HOVER_PREVIEW_DELAY_MS = 200;
 let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
 
+// 视频始终用缩略（压缩短视频），不在网格里加载原视频；
+// 图片在 hover 时把 prefer 临时升级为 original（替代旧的 forceDesktopLayers）。
+const effectivePrefer = computed<ImagePrefer>(() => {
+  if (isVideo.value) return "thumbnail";
+  return hoverOriginalActive.value && props.prefer === "thumbnail" ? "original" : props.prefer;
+});
 const canHoverOriginalPreview = computed(() =>
   !isCompact.value &&
   !isVideo.value &&
-  !useDesktopLayers.value &&
-  !!thumbnailUrl.value &&
-  !!originalUrl.value &&
-  thumbnailUrl.value !== originalUrl.value &&
+  props.prefer === "thumbnail" &&
   !originalMissing.value
 );
 
@@ -328,7 +235,7 @@ const stopHoverPreview = () => {
     hoverVideoPreviewActive.value = false;
     emit("hoverVideoPreview", false);
   }
-  hoverOriginalPreviewActive.value = false;
+  hoverOriginalActive.value = false;
 };
 
 const handleMouseEnter = () => {
@@ -343,7 +250,7 @@ const handleMouseEnter = () => {
       return;
     }
     if (canHoverOriginalPreview.value) {
-      hoverOriginalPreviewActive.value = true;
+      hoverOriginalActive.value = true;
     }
   }, HOVER_PREVIEW_DELAY_MS);
 };
@@ -366,18 +273,6 @@ watch(
 
 watch(isCompact, (compact) => {
   if (compact) stopHoverPreview();
-});
-
-// 同步 videoPlaying 到真实 video 元素：true → play()；false → pause() 并复位到起点
-watchEffect(() => {
-  const el = videoEl.value;
-  if (!el || !isControllableVideo.value) return;
-  if (videoShouldPlay.value) {
-    void el.play().catch(() => { /* 忽略浏览器拦截/卸载竞态 */ });
-  } else {
-    el.pause();
-    try { el.currentTime = 0; } catch { /* 部分平台 currentTime 写入会抛 */ }
-  }
 });
 
 onUnmounted(stopHoverPreview);
@@ -419,7 +314,7 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   user-select: none;
   -webkit-tap-highlight-color: transparent;
 
-  /* 隐藏图片：盖在所有图层（含桌面双图的原图 original-layer z-index:2 以及 video/GIF）最上面的半透明遮罩。
+  /* 隐藏图片：盖在所有图层最上面的半透明遮罩。
      `isolation: isolate` 让 image-wrapper 自成一层独立 stacking context，遮罩只在 wrapper 内部生效，
      而 .image-item 上的角标（video-play-badge / missing-file-badge）作为 wrapper 的兄弟节点仍显示在遮罩之上。 */
   &.image-item-hidden {
@@ -445,14 +340,8 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     box-shadow: none;
     border-radius: 0;
 
-    .image-wrapper,
-    .image-preview-wrapper {
+    .image-wrapper {
       border-radius: 0;
-    }
-
-    .thumbnail.thumbnail-android {
-      border-radius: 0;
-      background: transparent;
     }
 
     &.image-item-selected {
@@ -463,8 +352,6 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   }
 
   html:not(.platform-android) &:hover {
-    // transform: translateY(-6px) scale(1.015);
-    // box-shadow: var(--anime-shadow-hover);
     outline: 3px solid var(--anime-primary-light);
     outline-offset: -2px;
   }
@@ -487,59 +374,13 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     }
   }
 
-  .image-wrapper,
-  .image-preview-wrapper {
+  .image-wrapper {
     width: 100%;
     position: relative;
     cursor: pointer;
     overflow: hidden;
     will-change: contents;
     -webkit-tap-highlight-color: transparent;
-
-    &::before {
-      content: '';
-      display: block;
-      width: 100%;
-    }
-  }
-
-  .thumbnail {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    will-change: contents, opacity;
-    -webkit-tap-highlight-color: transparent;
-  }
-
-  .thumbnail {
-    &.thumbnail-loading {
-      animation: fadeInImage 0.4s ease-in;
-    }
-
-    // 桌面双图：底层缩略图
-    &.thumbnail-layer {
-      z-index: 1;
-    }
-
-    // 桌面双图：顶层原图，加载完成后淡入
-    &.original-layer {
-      z-index: 2;
-      opacity: 0;
-      transition: opacity 0.35s ease-in;
-
-      &.original-layer-visible {
-        opacity: 1;
-      }
-    }
-
-    // Android 下使用 contain 模式，完整展示图片
-    &.thumbnail-android {
-      object-fit: contain;
-      background: var(--anime-bg-card);
-    }
   }
 
   /* 水平方向：item 在横向滚动容器里作为"列/行"的单元，
@@ -549,94 +390,12 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     height: 100%;
     width: auto;
     flex-shrink: 0;
-    .image-wrapper,
-    .image-preview-wrapper {
+    .image-wrapper {
       height: 100%;
       width: auto;
     }
   }
 
-  /* gallery 填充模式：固定盒比例，用 cover 铺满，
-     且不需要 letterbox 背景色，避免加载过程中露出卡片色块。
-     同时去掉所有圆角，让画廊列的瓷砖完全贴合。 */
-  &.image-item-fill {
-    border-radius: 0;
-
-    .thumbnail {
-      object-fit: cover;
-      border-radius: 0;
-    }
-
-    .thumbnail.thumbnail-android {
-      object-fit: cover;
-      background: transparent;
-    }
-
-    .image-wrapper,
-    .image-preview-wrapper {
-      border-radius: 0;
-    }
-  }
-
-  .thumbnail-loading {
-    width: 100%;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    >* {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-    }
-  }
-
-  /* 加载骨架覆盖层：不阻挡点击/选择；避免破裂图闪现 */
-  .thumbnail-loading-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 2;
-    pointer-events: none;
-  }
-
-  .thumbnail-hidden {
-    opacity: 0;
-  }
-}
-
-.thumbnail-lost {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px;
-  box-sizing: border-box;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.78);
-  background: rgba(0, 0, 0, 0.18);
-  border: 1px dashed rgba(255, 255, 255, 0.22);
-  user-select: none;
-  text-align: center;
-}
-
-.lost-text {
-  width: 100%;
-  max-width: 100%;
-  font-size: 12px;
-  line-height: 1.35;
-  color: rgba(255, 255, 255, 0.88);
-  word-break: break-word;
-  line-clamp: 3;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 .missing-file-badge {
@@ -694,36 +453,6 @@ const handleAnimationEnd = (event: AnimationEvent) => {
 
   &:active {
     transform: scale(0.96);
-  }
-}
-
-.fade-in-enter-active {
-  transition: opacity 0.3s ease-in, transform 0.3s ease-out;
-}
-
-.fade-in-leave-active {
-  transition: opacity 0.2s ease-out, transform 0.2s ease-in;
-}
-
-.fade-in-enter-from,
-.fade-in-leave-to {
-  opacity: 0;
-  transform: scale(0.95);
-}
-
-.fade-in-enter-to,
-.fade-in-leave-from {
-  opacity: 1;
-  transform: scale(1);
-}
-
-@keyframes fadeInImage {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
   }
 }
 

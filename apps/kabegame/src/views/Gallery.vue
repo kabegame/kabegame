@@ -7,7 +7,8 @@
             hide-scrollbar :enable-ctrl-key-adjust-columns="!isCompact"
             :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
             :on-context-command="handleGridContextCommand" @image-dblclick="handleImageDoubleOpen"
-            @preview-navigate="handlePreviewNavigate" @preview-detail-toggle="handlePreviewDetailToggle"
+            @preview-navigate="handlePreviewNavigate" @preview-page-boundary="handlePreviewPageBoundary"
+            @preview-detail-toggle="handlePreviewDetailToggle"
             @preview-close="handlePreviewClose" scroll-whole-container>
             <template #before-grid>
               <!-- 顶部工具栏 -->
@@ -435,6 +436,10 @@ const currentWallpaperImageId = computed<string | null>({
   },
 });
 const totalImagesCount = ref<number>(0); // 总图片数（不受过滤器影响）
+const pendingPreviewBoundary = ref<{
+  direction: "prev" | "next";
+  targetPage: number;
+} | null>(null);
 
 // 滚动"太快"时的俏皮提示（画廊开启）
 const scrollTooFastMessages = [
@@ -1015,6 +1020,47 @@ const handlePreviewNavigate = (payload: {
     ...imageAnalyticsPayload([payload.image]),
   });
 };
+
+const handlePreviewPageBoundary = async (payload: {
+  direction: "prev" | "next";
+  index: number;
+  image: ImageInfo;
+}) => {
+  const totalPages = Math.max(1, Math.ceil((totalImagesCount.value || 0) / pageSize.value));
+  const targetPage = payload.direction === "next"
+    ? currentPage.value + 1
+    : currentPage.value - 1;
+  if (targetPage < 1 || targetPage > totalPages) return;
+
+  pendingPreviewBoundary.value = {
+    direction: payload.direction,
+    targetPage,
+  };
+  try {
+    await handleJumpToBigPage(targetPage);
+  } catch (error) {
+    pendingPreviewBoundary.value = null;
+    throw error;
+  }
+};
+
+watch(
+  () => [displayedImages.value, loadedKey.value] as const,
+  async ([list]) => {
+    const pending = pendingPreviewBoundary.value;
+    if (!pending) return;
+    if (currentPage.value !== pending.targetPage) return;
+    if (loadedKey.value !== currentPath.value) return;
+    const image = pending.direction === "next" ? list[0] : list[list.length - 1];
+    if (!image) return;
+
+    pendingPreviewBoundary.value = null;
+    await nextTick();
+    galleryViewRef.value?.openPreviewById?.(image.id);
+    ElMessage.info(pending.direction === "next" ? "已进入下一页" : "已进入上一页");
+  },
+  { flush: "post" }
+);
 
 const handlePreviewDetailToggle = (payload: { open: boolean; image: ImageInfo | null }) => {
   trackGalleryEvent("image_preview_detail_toggle", {

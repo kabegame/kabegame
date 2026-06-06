@@ -5,7 +5,8 @@
         </div>
         <ImageGrid v-else-if="imageFilter === 'success'" ref="taskViewRef" class="detail-body" :images="images"
             :enable-ctrl-wheel-adjust-columns="!isCompact" :enable-ctrl-key-adjust-columns="!isCompact"
-            :actions="imageActions" :on-context-command="handleImageMenuCommand" scroll-whole-container hide-scrollbar>
+            :actions="imageActions" :on-context-command="handleImageMenuCommand" scroll-whole-container hide-scrollbar
+            @preview-page-boundary="handlePreviewPageBoundary">
             <template #before-grid>
                 <TaskDetailPageHeader :task-name="taskName"
                     :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
@@ -232,6 +233,10 @@ const handleViewTaskParams = () => {
 
 const taskId = ref<string>("");
 const totalImagesCount = ref<number>(0); // provider.total（用于分页器）
+const pendingPreviewBoundary = ref<{
+    direction: "prev" | "next";
+    targetPage: number;
+} | null>(null);
 
 // 任务数据一律从 crawlerStore 读取；用户进入 TaskDetail 必然经过 TaskDrawer，数据已加载
 const taskFromStore = computed(() => {
@@ -417,6 +422,46 @@ function currentUrl() {
 const handleJumpToPage = async (page: number) => {
     await taskDetailRouteStore.navigate({ page });
 };
+
+const handlePreviewPageBoundary = async (payload: {
+    direction: "prev" | "next";
+    index: number;
+    image: ImageInfo;
+}) => {
+    const totalPages = Math.max(1, Math.ceil((totalImagesCount.value || 0) / pageSize.value));
+    const targetPage = payload.direction === "next"
+        ? currentPage.value + 1
+        : currentPage.value - 1;
+    if (targetPage < 1 || targetPage > totalPages) return;
+
+    pendingPreviewBoundary.value = {
+        direction: payload.direction,
+        targetPage,
+    };
+    try {
+        await handleJumpToPage(targetPage);
+    } catch (error) {
+        pendingPreviewBoundary.value = null;
+        throw error;
+    }
+};
+
+watch(
+    () => images.value,
+    async (list) => {
+        const pending = pendingPreviewBoundary.value;
+        if (!pending) return;
+        if (currentPage.value !== pending.targetPage) return;
+        const image = pending.direction === "next" ? list[0] : list[list.length - 1];
+        if (!image) return;
+
+        pendingPreviewBoundary.value = null;
+        await nextTick();
+        taskViewRef.value?.openPreviewById?.(image.id);
+        ElMessage.info(pending.direction === "next" ? "已进入下一页" : "已进入上一页");
+    },
+    { flush: "post" }
+);
 
 const loadTotalImagesCount = async () => {
     if (!isOnTaskRoute.value) return;

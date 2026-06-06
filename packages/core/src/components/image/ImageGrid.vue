@@ -14,9 +14,8 @@
           <template v-if="layoutMode === 'grid'">
             <div v-if="virtualScrollActive" class="image-grid" :class="`layout-${layoutDirection}`" :style="gridStyle">
               <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
-                :image-click-action="settingsStore.values.imageClickAction || 'none'"
-                :window-aspect-ratio="effectiveAspectRatio" :selected="selectedIds.has(item.image.id)"
-                :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
+                :prefer="gridPrefer" :selected="selectedIds.has(item.image.id)"
+                :is-entering="item.isEntering"
                 :horizontal="isHorizontal"
                 :video-playing="playingVideoId === item.image.id"
                 @click="(e) => handleItemClick(item.image, item.index, e)"
@@ -30,9 +29,8 @@
             <transition-group v-else name="fade-in-list" tag="div" class="image-grid"
               :class="`layout-${layoutDirection}`" :style="gridStyle">
               <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
-                :image-click-action="settingsStore.values.imageClickAction || 'none'"
-                :window-aspect-ratio="effectiveAspectRatio" :selected="selectedIds.has(image.id)"
-                :grid-columns="gridColumnsCount" :grid-index="index" :horizontal="isHorizontal"
+                :prefer="gridPrefer" :selected="selectedIds.has(image.id)"
+                :horizontal="isHorizontal"
                 :video-playing="playingVideoId === image.id"
                 @click="(e) => handleItemClick(image, index, e)"
                 @dblclick="() => handleItemDblClick(image, index)"
@@ -47,9 +45,8 @@
               :class="isHorizontal ? 'image-gallery-row' : 'image-gallery-column'"
               :style="{ gap: gridGapPx + 'px' }">
               <ImageItem v-for="entry in bucket" :key="entry.image.id" :image="entry.image"
-                :image-click-action="settingsStore.values.imageClickAction || 'none'"
-                :window-aspect-ratio="effectiveAspectRatio" :selected="selectedIds.has(entry.image.id)"
-                :grid-columns="gridColumnsCount" :grid-index="entry.index" fill-box :horizontal="isHorizontal"
+                :prefer="gridPrefer" :selected="selectedIds.has(entry.image.id)"
+                :horizontal="isHorizontal"
                 :video-playing="playingVideoId === entry.image.id"
                 @click="(e) => handleItemClick(entry.image, entry.index, e)"
                 @dblclick="() => handleItemDblClick(entry.image, entry.index)"
@@ -85,6 +82,7 @@
           :plugins="plugins"
           @context-command="handlePreviewContextCommand"
           @preview-navigate="emit('preview-navigate', $event)"
+          @preview-page-boundary="emit('preview-page-boundary', $event)"
           @preview-detail-toggle="emit('preview-detail-toggle', $event)"
           @preview-close="emit('preview-close', $event)"
           @open-task="emit('open-task', $event)"
@@ -209,6 +207,11 @@ const emit = defineEmits<{
     wrapped: boolean;
     image: ImageInfo;
   }];
+  "preview-page-boundary": [payload: {
+    direction: "prev" | "next";
+    index: number;
+    image: ImageInfo;
+  }];
   "preview-detail-toggle": [payload: { open: boolean; image: ImageInfo | null }];
   "preview-close": [payload: { image: ImageInfo | null }];
   "preview-open": [payload: { image: ImageInfo }];
@@ -274,6 +277,10 @@ const gridColumnsCount = computed(() => {
   if (isCompact.value) return 2;
   return imageGridColumns.value > 0 ? imageGridColumns.value : 1;
 });
+// 列数少（<3）时优先加载原图（缩略图打底，原图流式覆盖）；列数多则只用缩略图省带宽。
+const gridPrefer = computed<"original" | "thumbnail">(() =>
+  gridColumnsCount.value < 3 ? "original" : "thumbnail"
+);
 // 紧凑布局：栅格更紧凑，空白更少。整体间距为历史值的 1/3，让网格更紧凑。
 const gridGapPx = computed(() => {
   const base = isCompact.value
@@ -1336,6 +1343,7 @@ defineExpose({
   /** 按图片 id 打开预览（用于 URL pvwimgid 同步）；id 不在当前列表时为 no-op。 */
   openPreviewById: (id: string) => {
     const idx = (props.images ?? []).findIndex((i) => i.id === id);
+    console.log('open preview', id);
     if (idx >= 0) openPreview(idx);
   },
   closePreview: () => previewRef.value?.close?.(),

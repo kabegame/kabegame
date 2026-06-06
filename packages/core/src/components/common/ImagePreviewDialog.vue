@@ -1,10 +1,15 @@
 <template>
   <!-- Android 全屏预览：使用 photoswipe-vue 组件，关闭按钮用组件自带的 -->
   <PhotoSwipe v-if="uiStore.isCompact" ref="pswpRef" :open="previewModal.isOpen.value" v-model:index="previewIndex"
-    :data-source="pswpDataSource" :loop="true" :z-index="previewFullscreenZIndex" :close-on-vertical-drag="true"
+    :data-source="pswpDataSource" :loop="false" :z-index="previewFullscreenZIndex" :close-on-vertical-drag="true"
     @update:open="previewModal.close"
     :on-vertical-drag="handlePswpVerticalDrag" :on-before-close="handlePswpBeforeClose" @change="handlePswpChange"
-    @close="handlePswpClose" @ui-visible-change="handlePswpUiVisibleChange">
+    @close="handlePswpClose" @ui-visible-change="handlePswpUiVisibleChange" @reach-boundary="handlePswpReachBoundary">
+    <!-- 每张幻灯片统一用 PswpSlideContent 渲染（缩略图→原图流式覆盖；视频随控件显隐播放/暂停） -->
+    <template #slide="{ item, active, onReady, onError }">
+      <PswpSlideContent v-if="imageById(item.id)" :image="imageById(item.id)!" :active="active"
+        :ui-visible="pswpUiVisible" @ready="onReady" @error="onError" />
+    </template>
     <!-- 安卓：图片标题居中覆盖显示 -->
     <div v-if="previewImage?.displayName"
       class="pswp-image-title-container">
@@ -76,13 +81,13 @@
               </el-icon>
             </button>
           </div>
-          <div v-if="previewImageUrl && !isPreviewVideo" ref="panzoomWrapperRef" class="panzoom-wrapper">
-            <img ref="previewImageRef" :src="previewImageUrl" class="preview-image" alt="预览图片"
-              @load="handlePreviewImageLoad" @error="handlePreviewImageError" @dragstart.prevent />
+          <div v-if="previewImage && !isPreviewVideo" ref="panzoomWrapperRef" class="panzoom-wrapper">
+            <ImageContent ref="previewContentRef" :image="previewImage" prefer="original"
+              @ready="handlePreviewReady" />
           </div>
           <PreviewControlBar
             ref="imageControlBarRef"
-            v-if="previewImageUrl && !isPreviewVideo"
+            v-if="previewImage && !isPreviewVideo"
             :is-fullscreen="isAppFullscreen"
             :keep-visible="zoomSliderDragging"
           >
@@ -120,18 +125,11 @@
               </svg>
             </button>
           </PreviewControlBar>
-          <div v-if="previewImageUrl && isPreviewVideo" class="preview-video-wrapper">
-            <video ref="previewVideoRef" :src="previewImageUrl" class="preview-video" :loop="!IS_LINUX" :autoplay="!IS_LINUX" poster="" preload="auto"
-              playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback=""
-              @dragstart.prevent />
-            <VideoControls :video="previewVideoRef" :show-play-pause="true" :is-fullscreen="isAppFullscreen"
+          <div v-if="previewImage && isPreviewVideo" class="preview-video-wrapper">
+            <ImageContent ref="previewContentRef" :image="previewImage" prefer="original"
+              :video-playing="!IS_LINUX" :video-loop="!IS_LINUX" @ready="handlePreviewReady" />
+            <VideoControls :video="previewVideoEl" :show-play-pause="true" :is-fullscreen="isAppFullscreen"
               @toggle-fullscreen="toggleAppFullscreen" />
-          </div>
-          <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
-            <ImageNotFound />
-          </div>
-          <div v-if="previewImageLoading" class="preview-loading">
-            <div class="preview-loading-inner">正在加载原图…</div>
           </div>
         </div>
         <aside class="preview-detail-drawer" :class="{ 'is-open': detailDrawerOpen }" @click.stop
@@ -158,12 +156,12 @@
 <script setup lang="ts">
 import type { Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
 import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
-import ImageNotFound from "./ImageNotFound.vue";
+import ImageContent from "../image/ImageContent.vue";
+import PswpSlideContent from "./PswpSlideContent.vue";
 import ImageDetailContent, { type ImageDetailGalleryFilterTarget } from "./ImageDetailContent.vue";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
@@ -211,6 +209,7 @@ const emit = defineEmits<{
   (e: "open-task", taskId: string): void;
   (e: "open-gallery-filter", target: ImageDetailGalleryFilterTarget): void;
   (e: "preview-navigate", payload: PreviewNavigatePayload): void;
+  (e: "preview-page-boundary", payload: PreviewPageBoundaryPayload): void;
   (e: "preview-detail-toggle", payload: { open: boolean; image: ImageInfo | null }): void;
   (e: "preview-close", payload: { image: ImageInfo | null }): void;
 }>();
@@ -220,6 +219,12 @@ type PreviewNavigatePayload = {
   fromIndex: number;
   toIndex: number;
   wrapped: boolean;
+  image: ImageInfo;
+};
+
+type PreviewPageBoundaryPayload = {
+  direction: "prev" | "next";
+  index: number;
   image: ImageInfo;
 };
 
@@ -254,8 +259,12 @@ const previewShouldHideKamechan = computed(() =>
 );
 
 const previewContainerRef = ref<HTMLElement | null>(null);
-const previewImageRef = ref<HTMLImageElement | null>(null);
-const previewVideoRef = ref<HTMLVideoElement | null>(null);
+const previewContentRef = ref<InstanceType<typeof ImageContent> | null>(null);
+/** 桌面预览视频：从 ImageContent 暴露的 videoEl 取，供 VideoControls 绑定 */
+const previewVideoEl = computed<HTMLVideoElement | null>(() => previewContentRef.value?.videoEl ?? null);
+/** 紧凑模式 PhotoSwipe slot：用 item.id 反查 props.images */
+const imageById = (id: string | number | undefined): ImageInfo | null =>
+  props.images.find((img) => img.id === id) ?? null;
 const imageControlBarRef = ref<InstanceType<typeof PreviewControlBar> | null>(null);
 const pswpRef = ref<InstanceType<typeof PhotoSwipe> | null>(null);
 // Panzoom 由 usePanzoomPreview 提供，在 notifyPreviewInteracting / markPreviewInteracting 定义后初始化
@@ -555,6 +564,15 @@ let navThrottleTimer: ReturnType<typeof setTimeout> | null = null;
 let isNavThrottled = false;
 const NAV_THROTTLE_MS = 100;
 
+const startNavThrottle = () => {
+  isNavThrottled = true;
+  if (navThrottleTimer) clearTimeout(navThrottleTimer);
+  navThrottleTimer = setTimeout(() => {
+    navThrottleTimer = null;
+    isNavThrottled = false;
+  }, NAV_THROTTLE_MS);
+};
+
 const emitPreviewNavigate = (
   direction: "prev" | "next",
   fromIndex: number,
@@ -572,6 +590,25 @@ const emitPreviewNavigate = (
   });
 };
 
+const getOriginalIndexForPreviewIndex = (index: number) => {
+  if (!uiStore.isCompact) return index;
+  return androidFilteredIndices.value[index] ?? -1;
+};
+
+const emitPreviewPageBoundary = (
+  direction: "prev" | "next",
+  previewListIndex = previewIndex.value
+) => {
+  const origIndex = getOriginalIndexForPreviewIndex(previewListIndex);
+  const image = origIndex >= 0 ? props.images[origIndex] : undefined;
+  if (!image) return;
+  emit("preview-page-boundary", {
+    direction,
+    index: origIndex,
+    image,
+  });
+};
+
 const navigateWithPreloadGate = (targetIndex: number) => {
   if (!previewVisible.value) return;
   setPreviewByIndex(targetIndex);
@@ -581,22 +618,17 @@ const goPrev = () => {
   if (!previewVisible.value) return;
   if (isNavThrottled) return;
   const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
-  const targetIndex = idx > 0 ? idx - 1 : props.images.length - 1;
-  const didWrap = idx === 0;
-  if (didWrap) {
-    ElMessage.info("一下子跳到最后一张啦");
+  if (idx <= 0) {
+    startNavThrottle();
+    emitPreviewPageBoundary("prev", idx);
+    return;
   }
+  const targetIndex = idx - 1;
 
-  // 开启节流
-  isNavThrottled = true;
-  if (navThrottleTimer) clearTimeout(navThrottleTimer);
-  navThrottleTimer = setTimeout(() => {
-    navThrottleTimer = null;
-    isNavThrottled = false;
-  }, NAV_THROTTLE_MS);
+  startNavThrottle();
 
   navigateWithPreloadGate(targetIndex);
-  emitPreviewNavigate("prev", idx, targetIndex, didWrap, props.images[targetIndex]);
+  emitPreviewNavigate("prev", idx, targetIndex, false, props.images[targetIndex]);
 };
 
 const goNext = () => {
@@ -604,22 +636,17 @@ const goNext = () => {
   if (isNavThrottled) return;
   const lastIndex = props.images.length - 1;
   const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
-  const targetIndex = idx < lastIndex ? idx + 1 : 0;
-  const didWrap = idx === lastIndex;
-  if (didWrap) {
-    ElMessage.info("回到第一张啦");
+  if (idx >= lastIndex) {
+    startNavThrottle();
+    emitPreviewPageBoundary("next", idx);
+    return;
   }
+  const targetIndex = idx + 1;
 
-  // 开启节流
-  isNavThrottled = true;
-  if (navThrottleTimer) clearTimeout(navThrottleTimer);
-  navThrottleTimer = setTimeout(() => {
-    navThrottleTimer = null;
-    isNavThrottled = false;
-  }, NAV_THROTTLE_MS);
+  startNavThrottle();
 
   navigateWithPreloadGate(targetIndex);
-  emitPreviewNavigate("next", idx, targetIndex, didWrap, props.images[targetIndex]);
+  emitPreviewNavigate("next", idx, targetIndex, false, props.images[targetIndex]);
 };
 
 const handlePreviewDialogContextMenu = (event: MouseEvent) => {
@@ -693,36 +720,13 @@ const handlePreviewWheel = (event: WheelEvent) => {
 // Android 触摸手势处理
 
 
-const handlePreviewImageLoad = async () => {
-  await measureContainerAfterRender();
+// ImageContent 内部已处理缩略图→原图流式覆盖与丢失态显示；这里只在内容就绪后对齐 Panzoom（桌面图片）。
+const handlePreviewReady = () => {
   previewImageLoading.value = false;
-};
-
-const handlePreviewImageError = () => {
-  // 预览图加载失败（常见：original 文件被删/路径失效/权限问题）：
-  // 回落到 thumbnail，避免预览一直空白/破图。
-  const img = previewImage.value;
-  if (!previewVisible.value || !img) {
-    previewImageLoading.value = false;
-    return;
-  }
-
-  const thumb = getThumbnailPreviewUrl(img);
-  const current = previewImageUrl.value || "";
-
-  // 避免死循环：如果已经在用 thumbnail 仍失败，则只结束 loading
-  if (!thumb || current === thumb) {
-    previewImageLoading.value = false;
-    previewImageUrl.value = "";
-    previewNotFound.value = true;
-    return;
-  }
-
-  previewImageUrl.value = thumb;
-  previewImageLoading.value = false;
-  previewNotFound.value = false;
-  // 图片加载完成后重置缩放（仅桌面端）
-  panzoomReset();
+  if (uiStore.isCompact || isPreviewVideo.value) return;
+  void measureContainerAfterRender().then(() => {
+    panzoomReset();
+  });
 };
 
 const handlePreviewKeyDown = (event: KeyboardEvent) => {
@@ -789,7 +793,6 @@ const closePreview = () => {
   previewImageUrl.value = "";
   previewImagePath.value = "";
   previewIndex.value = -1;
-  previewVideoRef.value = null;
   // previewImage 现在是 computed，设置 previewIndex = -1 即可
   previewHoverSide.value = null;
   closePreviewContextMenu();
@@ -869,9 +872,9 @@ watch(
 );
 
 watch(
-  () => previewImageUrl.value,
-  (url) => {
-    if (url && !uiStore.isCompact) {
+  () => previewImage.value?.id,
+  (id) => {
+    if (id && !uiStore.isCompact) {
       if (isPreviewVideo.value) return;
       panzoomReset();
     }
@@ -988,11 +991,8 @@ const handlePswpChange = ({ index }: { index: number }) => {
     const img = props.images[origIdx];
     if (img) currentImageId.value = img.id;
     if (img && previousOrigIdx >= 0 && previousOrigIdx !== origIdx) {
-      const lastFilteredIdx = androidFilteredIndices.value.length - 1;
-      const wrappedNext = previousFilteredIdx === lastFilteredIdx && index === 0;
-      const wrappedPrev = previousFilteredIdx === 0 && index === lastFilteredIdx;
-      const direction = wrappedNext || (!wrappedPrev && index > previousFilteredIdx) ? "next" : "prev";
-      emitPreviewNavigate(direction, previousOrigIdx, origIdx, wrappedNext || wrappedPrev, img);
+      const direction = index > previousFilteredIdx ? "next" : "prev";
+      emitPreviewNavigate(direction, previousOrigIdx, origIdx, false, img);
     }
   } else {
     if (index >= props.images.length) return;
@@ -1000,6 +1000,11 @@ const handlePswpChange = ({ index }: { index: number }) => {
     const img = props.images[index];
     if (img) currentImageId.value = img.id;
   }
+};
+
+const handlePswpReachBoundary = ({ direction, index }: { direction: "prev" | "next"; index: number }) => {
+  if (!uiStore.isCompact) return;
+  emitPreviewPageBoundary(direction, index);
 };
 
 /** 紧凑模式切换控件（点击显示顶部栏）时，更新 UI 可见性状态 */

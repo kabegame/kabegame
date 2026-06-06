@@ -31,6 +31,7 @@
 - **Image Thumbnail**: Now images that size smaller than 1MB's thumbnail will not generated, images that size bigger than 1MB will be generated a thumbnail that has a size about 500KB.
 - **Image item preview**: Image item load origin images when mouse hover over 200ms. Video start playing after that time too.
 - **Wheel zoom**: Zoom only triggered when ctrl + wheel, common wheel event will cause a viewport movement.
+- **Image Preview**: Next image will try to switch to next page.  
 
 ### Removed
 - **Archive**: Archive unzip feature removed from application completely. Including Rhai API and local import unarchiving behavior.

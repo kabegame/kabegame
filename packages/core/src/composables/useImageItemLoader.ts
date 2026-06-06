@@ -13,10 +13,12 @@ import { useUiStore } from "../stores/ui";
 
 type UrlKind = "thumbnail" | "original";
 
+export type ImagePrefer = "original" | "thumbnail";
+
 type UseImageItemLoaderOptions = {
   image: Ref<ImageInfo>;
-  gridColumns: Ref<number | undefined>;
-  forceDesktopLayers?: Ref<boolean>;
+  /** 优先展示原图还是缩略图（替代旧的 gridColumns/forceDesktopLayers 判定） */
+  prefer: Ref<ImagePrefer>;
 };
 
 function normalizeDesktopPath(path: string | undefined): string {
@@ -94,9 +96,8 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
     const originalUrl = toDesktopUrl(image.localPath);
     const hasThumbnail = !!normalizeDesktopPath(image.thumbnailPath);
     const thumbnailUrl = hasThumbnail ? toDesktopThumbnailUrl(image.thumbnailPath) : originalUrl;
-    const cols = options.gridColumns.value ?? 0;
-    const preferOriginalLayers = cols < 3 || options.forceDesktopLayers?.value === true;
-    // 默认列数 >= 3 只显示缩略图；列数 1、2 或 hover 强制预览时走双图策略（先缩略图再原图淡入）
+    const preferOriginalLayers = options.prefer.value === "original";
+    // prefer=thumbnail 只显示缩略图；prefer=original（列数少 / hover 预览）走双图策略（缩略图打底，原图流式覆盖）
     const thumbnailOnly = !preferOriginalLayers;
     const useDesktopLayers =
       preferOriginalLayers &&

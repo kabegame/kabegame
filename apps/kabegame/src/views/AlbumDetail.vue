@@ -70,7 +70,8 @@
       :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
       :on-context-command="handleImageMenuCommand" hide-scrollbar scroll-whole-container
       @added-to-album="handleAddedToAlbum" @image-dblclick="handleImageDoubleOpen"
-      @preview-navigate="handlePreviewNavigate" @preview-detail-toggle="handlePreviewDetailToggle"
+      @preview-navigate="handlePreviewNavigate" @preview-page-boundary="handlePreviewPageBoundary"
+      @preview-detail-toggle="handlePreviewDetailToggle"
       @preview-close="handlePreviewClose">
 
       <template #empty>
@@ -765,6 +766,10 @@ const currentWallpaperImageId = computed<string | null>({
 const images = ref<ImageInfo[]>([]);
 let leafAllImages: ImageInfo[] = [];
 const totalImagesCount = ref<number>(0);
+const pendingPreviewBoundary = ref<{
+  direction: "prev" | "next";
+  targetPage: number;
+} | null>(null);
 const albumViewRef = ref<any>(null);
 const albumSubAlbumsScrollRef = ref<HTMLElement | null>(null);
 const albumBrowseToolbarRef = ref<{
@@ -1670,6 +1675,46 @@ const handlePreviewNavigate = (payload: {
     ...imageAnalyticsPayload([payload.image]),
   });
 };
+
+const handlePreviewPageBoundary = async (payload: {
+  direction: "prev" | "next";
+  index: number;
+  image: ImageInfo;
+}) => {
+  const totalPages = Math.max(1, Math.ceil((totalImagesCount.value || 0) / pageSize.value));
+  const targetPage = payload.direction === "next"
+    ? currentPage.value + 1
+    : currentPage.value - 1;
+  if (targetPage < 1 || targetPage > totalPages) return;
+
+  pendingPreviewBoundary.value = {
+    direction: payload.direction,
+    targetPage,
+  };
+  try {
+    await handleJumpToPage(targetPage);
+  } catch (error) {
+    pendingPreviewBoundary.value = null;
+    throw error;
+  }
+};
+
+watch(
+  () => images.value,
+  async (list) => {
+    const pending = pendingPreviewBoundary.value;
+    if (!pending) return;
+    if (currentPage.value !== pending.targetPage) return;
+    const image = pending.direction === "next" ? list[0] : list[list.length - 1];
+    if (!image) return;
+
+    pendingPreviewBoundary.value = null;
+    await nextTick();
+    albumViewRef.value?.openPreviewById?.(image.id);
+    ElMessage.info(pending.direction === "next" ? "已进入下一页" : "已进入上一页");
+  },
+  { flush: "post" }
+);
 
 const handlePreviewDetailToggle = (payload: { open: boolean; image: ImageInfo | null }) => {
   trackAlbumImageEvent("image_preview_detail_toggle", {

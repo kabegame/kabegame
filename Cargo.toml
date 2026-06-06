@@ -42,7 +42,7 @@ md5 = "0.7"
 mp4 = "0.14"
 percent-encoding = "2"
 sha2 = "0.10"
-tauri-build = {version = "2.5", features = []}
+tauri-build = {version = "2.6.2", features = []}
 tauri-plugin-compress = {path = "./src-tauri-plugins/tauri-plugin-compress"}
 tauri-plugin-pathes = {path = "./src-tauri-plugins/tauri-plugin-pathes"}
 tauri-plugin-picker = {path = "./src-tauri-plugins/tauri-plugin-picker"}
