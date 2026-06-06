@@ -109,6 +109,37 @@ pub fn norm_tag(tag: &str) -> &str {
     tag.strip_prefix('v').unwrap_or(tag)
 }
 
+/// 语义化版本比较（两边可带或不带 `v` 前缀）。
+///
+/// 仅做发布版本的数值比较：按 `.` 分段，取各段前导数字逐段比较，缺失段视为 0，
+/// 忽略 `-pre`/`+build` 等后缀（剥到首个 `-`/`+`）。用于判断某 release 是否
+/// **严格新于**当前运行版本——仅靠 tag 相等无法处理「当前版本高于线上最新」
+/// （此时不应把任何旧版本当作更新）的场景。
+pub fn cmp_version(a: &str, b: &str) -> std::cmp::Ordering {
+    fn core(v: &str) -> &str {
+        let v = v.strip_prefix('v').unwrap_or(v);
+        v.split(['-', '+']).next().unwrap_or(v)
+    }
+    fn seg(s: &str) -> u64 {
+        let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse().unwrap_or(0)
+    }
+    let (a, b) = (core(a), core(b));
+    let mut ai = a.split('.');
+    let mut bi = b.split('.');
+    loop {
+        match (ai.next(), bi.next()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (av, bv) => {
+                let ord = seg(av.unwrap_or("0")).cmp(&seg(bv.unwrap_or("0")));
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
+            }
+        }
+    }
+}
+
 /// 查询更新：拉取 releases → 计算错过版本（含 asset 匹配）→ 组装结果。
 pub async fn check_updates() -> Result<UpdateCheckResult, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();

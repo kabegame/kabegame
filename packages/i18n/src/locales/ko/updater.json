@@ -2,6 +2,7 @@
   "new": "NEW",
   "restartUpdate": "재시작하여 업데이트",
   "dialogTitle": "새 버전이 있습니다",
+  "currentVersion": "현재 버전: {version}",
   "viewOnGithub": "GitHub에서 보기",
   "download": "다운로드",
   "openReleasePage": "릴리스 페이지 열기",

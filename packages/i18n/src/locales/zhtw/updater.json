@@ -2,6 +2,7 @@
   "new": "NEW",
   "restartUpdate": "重啟更新",
   "dialogTitle": "發現新版本",
+  "currentVersion": "目前版本：{version}",
   "viewOnGithub": "在 GitHub 檢視",
   "download": "下載",
   "openReleasePage": "開啟發佈頁",

@@ -2,6 +2,7 @@
   "new": "NEW",
   "restartUpdate": "再起動して更新",
   "dialogTitle": "新しいバージョンがあります",
+  "currentVersion": "現在のバージョン：{version}",
   "viewOnGithub": "GitHub で見る",
   "download": "ダウンロード",
   "openReleasePage": "リリースページを開く",

@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use std::time::Duration;
 
-use super::{asset, norm_tag, ReleaseInfo, MAX_RELEASES};
+use super::{asset, cmp_version, ReleaseInfo, MAX_RELEASES};
 
 const RELEASES_API: &str = "https://api.github.com/repos/kabegame/kabegame/releases?per_page=30";
 const USER_AGENT: &str = "kabegame-updater";
@@ -67,8 +67,12 @@ pub async fn fetch_releases() -> Result<Vec<RawRelease>, String> {
         .map_err(|e| format!("解析 GitHub releases 失败: {e}"))
 }
 
-/// 计算错过版本：从最新向下收集 tag 不等于当前版本的 release，遇到当前版本即停，
-/// 跳过草稿，最多 [`MAX_RELEASES`] 个。
+/// 计算错过版本：从最新向下收集**严格新于**当前版本的 release，跳过草稿，
+/// 最多 [`MAX_RELEASES`] 个。
+///
+/// 用语义化比较而非 tag 相等，避免当前版本高于线上最新时（如本地 4.2.0、
+/// 线上仅到 v4.1.1）把一串旧版本误当作更新列出。GitHub 默认按发布时间倒序，
+/// 一般与版本序一致；为稳妥起见对每个 release 单独比较，而非命中即停。
 pub fn compute_missed(
     current: &str,
     raw_list: &[RawRelease],
@@ -76,14 +80,13 @@ pub fn compute_missed(
     mode: &str,
     arch: &str,
 ) -> Vec<ReleaseInfo> {
-    let cur = norm_tag(current);
     let mut out = Vec::new();
     for r in raw_list {
         if r.draft {
             continue;
         }
-        if norm_tag(&r.tag_name) == cur {
-            break; // 之后都是更旧的版本
+        if cmp_version(&r.tag_name, current) != std::cmp::Ordering::Greater {
+            continue; // 与当前版本相同或更旧，不算更新
         }
         out.push(to_release_info(r, platform, mode, arch));
         if out.len() == MAX_RELEASES {

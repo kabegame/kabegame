@@ -16,8 +16,13 @@
 
     <template #footer>
       <div class="update-footer">
-        <span v-if="store.lastDownloadError" class="download-error">{{ store.lastDownloadError }}</span>
-        <span v-else-if="showNoAssetHint" class="no-asset-hint">{{ t('updater.noAssetHint') }}</span>
+        <span class="footer-info">
+          <span v-if="store.currentVersion" class="current-version">
+            {{ t('updater.currentVersion', { version: store.currentVersion }) }}
+          </span>
+          <span v-if="store.lastDownloadError" class="download-error">{{ store.lastDownloadError }}</span>
+          <span v-else-if="showNoAssetHint" class="no-asset-hint">{{ t('updater.noAssetHint') }}</span>
+        </span>
         <span class="footer-actions">
           <el-button text @click="active && openRelease(active)">{{ t('updater.viewOnGithub') }}</el-button>
           <el-button
@@ -179,18 +184,28 @@ function onBodyClick(e: MouseEvent) {
   justify-content: space-between;
   gap: 12px;
 
+  .footer-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+  }
+
+  .current-version {
+    font-size: 12px;
+    color: var(--anime-text-secondary);
+  }
+
   .no-asset-hint {
     font-size: 12px;
     color: var(--anime-text-secondary);
-    text-align: left;
-    flex: 1;
   }
 
   .download-error {
     font-size: 12px;
     color: var(--el-color-danger);
-    text-align: left;
-    flex: 1;
     word-break: break-word;
   }
 
