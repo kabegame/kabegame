@@ -404,7 +404,7 @@ pub async fn run_builtin_local_import(
     };
     let options = ScanOptions {
         recursive,
-        min_stable_age_ms: None,
+        min_collect_interval_ms: Some(100),
         total_progress_share: 100.0,
         ..Default::default()
     };

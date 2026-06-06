@@ -3,8 +3,13 @@
     <div class="gallery-container" v-pull-to-refresh="pullToRefreshOpts">
       <div class="gallery-content-layout">
         <div class="gallery-grid-pane">
-          <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!isCompact"
-            hide-scrollbar :enable-ctrl-key-adjust-columns="!isCompact"
+          <ImageGrid 
+            ref="galleryViewRef" 
+            :images="displayedImages" 
+            :enable-ctrl-wheel-adjust-columns="!isCompact"
+            hide-scrollbar 
+            :enable-ctrl-key-adjust-columns="!isCompact"
+            enable-virtual-scroll
             :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
             :on-context-command="handleGridContextCommand" @image-dblclick="handleImageDoubleOpen"
             @preview-navigate="handlePreviewNavigate" @preview-page-boundary="handlePreviewPageBoundary"

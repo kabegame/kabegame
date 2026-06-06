@@ -9,7 +9,7 @@ use rusqlite::{params, OptionalExtension};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static TEST_INIT: OnceLock<()> = OnceLock::new();
@@ -53,10 +53,6 @@ fn now_secs() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
-}
-
-fn wait_for_stable_window() {
-    std::thread::sleep(Duration::from_millis(3200));
 }
 
 fn write_png(path: &Path, color: [u8; 3]) {
@@ -278,7 +274,6 @@ async fn recursive_sync_creates_subalbums_and_imports() {
     write_png(&dir.join("root.png"), [1, 1, 1]);
     fs::create_dir_all(dir.join("cats")).unwrap();
     write_png(&dir.join("cats/cat.png"), [2, 2, 2]);
-    wait_for_stable_window();
     let album_id = create_sync_album(&dir);
 
     let report = super::sync_album_recursive(&album_id, vec![])
@@ -311,7 +306,6 @@ async fn recursive_sync_without_create_skips_new_subalbum_dirs() {
     fs::create_dir_all(&dogs_dir).unwrap();
     write_png(&cats_dir.join("cat.png"), [2, 2, 2]);
     write_png(&dogs_dir.join("dog.png"), [3, 3, 3]);
-    wait_for_stable_window();
 
     let album_id = create_sync_album(&dir);
     let cats_album_id = create_sync_album_with_parent(&cats_dir, Some(&album_id));
@@ -350,7 +344,6 @@ async fn sync_skips_finalize_for_album_with_errored_file() {
     let clean_stale = clean_dir.join("stale.png");
     write_png(&bad_stale, [1, 1, 1]);
     write_png(&clean_stale, [2, 2, 2]);
-    wait_for_stable_window();
 
     let album_id = create_sync_album(&dir);
     let first = super::sync_album_recursive(&album_id, vec![])
@@ -370,7 +363,6 @@ async fn sync_skips_finalize_for_album_with_errored_file() {
     let mut perms = fs::metadata(&broken).unwrap().permissions();
     perms.set_mode(0o000);
     fs::set_permissions(&broken, perms).unwrap();
-    wait_for_stable_window();
 
     let second = super::sync_album_recursive(&album_id, vec![])
         .await
@@ -503,7 +495,6 @@ async fn sync_adds_stable_media_file() {
     let (_tmp, dir) = temp_album_dir();
     let file = dir.join("wall.png");
     write_png(&file, [255, 0, 0]);
-    wait_for_stable_window();
     let album_id = create_sync_album(&dir);
 
     let report = sync_album(&album_id).await.unwrap();
@@ -528,7 +519,6 @@ async fn sync_large_image_creates_target_sized_thumbnail() {
     let (_tmp, dir) = temp_album_dir();
     let file = dir.join("large.png");
     write_large_png(&file);
-    wait_for_stable_window();
     let album_id = create_sync_album(&dir);
 
     let report = sync_album(&album_id).await.unwrap();
@@ -596,7 +586,6 @@ async fn sync_unlinks_from_album_when_file_disappears() {
     let (_tmp, dir) = temp_album_dir();
     let file = dir.join("gone.png");
     write_png(&file, [0, 255, 0]);
-    wait_for_stable_window();
     let album_id = create_sync_album(&dir);
     assert_eq!(sync_album(&album_id).await.unwrap().added, 1);
 
@@ -614,7 +603,6 @@ async fn sync_reimports_changed_file_and_carries_user_fields() {
     let (_tmp, dir) = temp_album_dir();
     let file = dir.join("changed.png");
     write_png(&file, [0, 0, 255]);
-    wait_for_stable_window();
     let album_id = create_sync_album(&dir);
     assert_eq!(sync_album(&album_id).await.unwrap().added, 1);
 
@@ -641,7 +629,6 @@ async fn sync_reimports_changed_file_and_carries_user_fields() {
     };
 
     write_png(&file, [255, 255, 0]);
-    wait_for_stable_window();
     let report = sync_album(&album_id).await.unwrap();
 
     assert_eq!(report.reimported, 1);
@@ -672,25 +659,6 @@ async fn sync_reimports_changed_file_and_carries_user_fields() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn sync_skips_unstable_file_then_adds_later() {
-    let _guard = test_guard();
-    let (_tmp, dir) = temp_album_dir();
-    let file = dir.join("fresh.png");
-    write_png(&file, [128, 128, 128]);
-    let album_id = create_sync_album(&dir);
-
-    let first = sync_album(&album_id).await.unwrap();
-    assert_eq!(first.added, 0);
-    assert_eq!(first.skipped_unstable, 1);
-    assert_eq!(image_count_for_path(&file), 0);
-
-    wait_for_stable_window();
-    let second = sync_album(&album_id).await.unwrap();
-    assert_eq!(second.added, 1);
-    assert_eq!(second.skipped_unstable, 0);
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn sync_persists_missing_folder_status() {
     let _guard = test_guard();
     let dir = tempfile::tempdir().unwrap();
@@ -711,7 +679,6 @@ async fn startup_sync_skips_when_folder_mtime_is_unchanged() {
     let (_tmp, dir) = temp_album_dir();
     let file = dir.join("wall.png");
     write_png(&file, [255, 0, 0]);
-    wait_for_stable_window();
     let album_id = create_sync_album(&dir);
 
     let first = sync_album(&album_id).await.unwrap();
@@ -730,25 +697,3 @@ async fn startup_sync_skips_when_folder_mtime_is_unchanged() {
     assert_eq!(second.reimported, 0);
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn skipped_unstable_file_does_not_advance_skip_marker() {
-    let _guard = test_guard();
-    let (_tmp, dir) = temp_album_dir();
-    let file = dir.join("fresh.png");
-    write_png(&file, [128, 128, 128]);
-    let album_id = create_sync_album(&dir);
-
-    let first = sync_album_if_folder_changed(&album_id).await.unwrap();
-    assert_eq!(first.added, 0);
-    assert_eq!(first.skipped_unstable, 1);
-    assert!(first
-        .status
-        .as_ref()
-        .and_then(FolderStatus::last_synced_at_ms)
-        .is_none());
-
-    wait_for_stable_window();
-    let second = sync_album_if_folder_changed(&album_id).await.unwrap();
-    assert!(!second.skipped_unchanged);
-    assert_eq!(second.added, 1);
-}

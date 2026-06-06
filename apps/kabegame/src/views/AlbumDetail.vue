@@ -65,7 +65,10 @@
       </div>
     </div>
 
-    <ImageGrid v-else ref="albumViewRef" class="detail-body" :images="images" :enable-ctrl-wheel-adjust-columns="!isCompact"
+    <ImageGrid v-else 
+      ref="albumViewRef" class="detail-body" :images="images" 
+      :enable-ctrl-wheel-adjust-columns="!isCompact"
+      enable-virtual-scroll
       :enable-ctrl-key-adjust-columns="!isCompact"
       :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
       :on-context-command="handleImageMenuCommand" hide-scrollbar scroll-whole-container

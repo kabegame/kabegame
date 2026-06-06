@@ -39,7 +39,7 @@
         <img v-if="!thumbnailLoadFailed" :key="`thumb:${thumbnailUrl}`" :src="thumbnailUrl" loading="lazy"
           decoding="async" class="ic-img thumbnail-layer" :alt="image.id" draggable="false"
           @load="handleThumbnailLoad" @error="handleThumbnailError" @dragstart.prevent />
-        <img v-if="useDesktopLayers && !originalFailed" :key="`orig:${originalUrl}`" :src="originalUrl"
+        <img v-if="useDesktopLayers && !originalFailed && preferOriginal" :key="`orig:${originalUrl}`" :src="originalUrl"
           loading="lazy" decoding="async" class="ic-img original-layer" :alt="image.id" draggable="false"
           @load="onOriginalLoad" @error="onOriginalError" @dragstart.prevent />
       </template>
@@ -81,7 +81,7 @@ interface Props {
   videoPlaying?: boolean;
   /** 视频使用原生 controls（一般不用，PhotoSwipe 用点击切换） */
   nativeVideoControls?: boolean;
-  /** 视频静音（grid 为 true；想自动播放也需静音） */
+  /** 视频静音（grid 为 true） */
   videoMuted?: boolean;
   /** 视频循环 */
   videoLoop?: boolean;
@@ -91,6 +91,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   videoPlaying: false,
+  clickToPlayVideo: false,
   nativeVideoControls: false,
   videoMuted: false,
   videoLoop: true,
@@ -102,6 +103,12 @@ const emit = defineEmits<{
   ready: [];
   /** 加载彻底失败（lost） */
   error: [];
+  /** 用户直接点击视频后开始播放 */
+  videoUserPlay: [];
+  /** 用户直接点击视频后暂停 */
+  videoUserPause: [];
+  /** 播放失败 */
+  videoPlayFail: [];
 }>();
 
 const imageRef = toRef(props, "image");
@@ -130,6 +137,7 @@ const videoEl = ref<HTMLVideoElement | null>(null);
 const videoReady = ref(false);
 /** 原图加载失败：隐藏 original-layer，回落到缩略图，避免破碎图 */
 const originalFailed = ref(false);
+const preferOriginal = computed(() => props.prefer == 'original');
 
 const isVideo = computed(() => isVideoMediaType(props.image.type));
 /** 视频源随 prefer：original→原视频（预览）；thumbnail→压缩短视频缩略（grid/gallery）。
@@ -173,7 +181,6 @@ const isVideoRenderedAsImage = computed(
 
 /** 桌面双图外壳：与 ImageItem 同条件——非视频、有独立缩略图与原图 */
 const useLayerShell = computed(() =>
-  !isCompact.value &&
   !isVideo.value &&
   !!thumbnailUrl.value &&
   !!originalUrl.value &&
@@ -232,7 +239,10 @@ watchEffect(() => {
   const el = videoEl.value;
   if (!el || !isVideo.value || isVideoRenderedAsImage.value || props.nativeVideoControls) return;
   if (props.videoPlaying) {
-    void el.play().catch(() => { /* 忽略浏览器拦截/卸载竞态 */ });
+    void el.play().catch(() => {
+      console.log('auto play blocked');
+      emit("videoPlayFail");
+    });
   } else {
     el.pause();
     if (props.resetVideoOnPause) {

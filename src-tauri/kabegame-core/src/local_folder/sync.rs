@@ -2,7 +2,7 @@ use crate::crawler::downloader::compute_file_hash;
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::create::build_entries_non_recursive;
 use crate::local_folder::import::{import_local_file, CarryFromOld};
-use crate::local_folder::scan::{dir_mtime_unix_ms, STABLE_FOR_MS};
+use crate::local_folder::scan::dir_mtime_unix_ms;
 use crate::local_folder::scan_service::{
     scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile,
 };
@@ -26,7 +26,6 @@ pub struct SyncReport {
     pub added: usize,
     pub deleted: usize,
     pub reimported: usize,
-    pub skipped_unstable: usize,
     pub skipped_in_flight: bool,
     pub skipped_unchanged: bool,
 }
@@ -147,7 +146,6 @@ struct SyncHook {
     added: usize,
     deleted: usize,
     reimported: usize,
-    skipped_unstable: usize,
     /// 收尾落 ok 状态用的时间戳。
     finalize_synced_at_ms: u64,
     /// 递归同步时是否为尚不存在的子目录创建本地文件夹画册。
@@ -170,7 +168,6 @@ impl SyncHook {
             added: 0,
             deleted: 0,
             reimported: 0,
-            skipped_unstable: 0,
             finalize_synced_at_ms,
             create_missing_albums: options.create_missing_albums,
         }
@@ -355,10 +352,6 @@ impl FolderScanHook for SyncHook {
             .await
             .map_err(ScanError::Skip)
     }
-
-    fn on_unstable_file(&mut self, _file: &ScannedFile, _ctx: &ScanCtx<SyncDirCtx>) {
-        self.skipped_unstable += 1;
-    }
 }
 
 // ───────────────────────── 编排 ─────────────────────────
@@ -437,21 +430,13 @@ async fn sync_album_inner(album_id: &str, scan_mode: ScanMode) -> Result<SyncRep
     };
     let options = ScanOptions {
         recursive: false,
-        min_stable_age_ms: Some(STABLE_FOR_MS),
+        min_collect_interval_ms: Some(300),
         ..Default::default()
     };
     let scan_ctx = scan_and_visit(&[root_url.clone()], root_ctx, &options, &mut hook).await?;
     let root_had_errors = scan_ctx.dir_had_errors(&root_url);
 
-    // 仅当没有跳过（不稳定/缺失）时才推进 last_synced，以便 SkipUnchangedFolder 下次复查。
-    let last_synced_at_ms = if hook.skipped_unstable == 0 {
-        scan_started_at_ms
-    } else {
-        previous_status
-            .as_ref()
-            .and_then(FolderStatus::last_synced_at_ms)
-            .unwrap_or(0)
-    };
+    let last_synced_at_ms = scan_started_at_ms;
     if !root_had_errors {
         hook.finalize_album(album_id, last_synced_at_ms)?;
         report.status = Some(FolderStatus::ok_synced_at_ms(last_synced_at_ms));
@@ -462,7 +447,6 @@ async fn sync_album_inner(album_id: &str, scan_mode: ScanMode) -> Result<SyncRep
     report.added = hook.added;
     report.deleted = hook.deleted;
     report.reimported = hook.reimported;
-    report.skipped_unstable = hook.skipped_unstable;
     Ok(report)
 }
 
@@ -527,7 +511,7 @@ pub async fn sync_album_recursive_with_options(
     };
     let options = ScanOptions {
         recursive: true,
-        min_stable_age_ms: Some(STABLE_FOR_MS),
+        min_collect_interval_ms: Some(300),
         skip_hidden_dirs: true,
         ..Default::default()
     };

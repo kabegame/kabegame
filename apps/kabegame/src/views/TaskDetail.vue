@@ -4,7 +4,7 @@
             <el-skeleton :rows="8" animated />
         </div>
         <ImageGrid v-else-if="imageFilter === 'success'" ref="taskViewRef" class="detail-body" :images="images"
-            :enable-ctrl-wheel-adjust-columns="!isCompact" :enable-ctrl-key-adjust-columns="!isCompact"
+            :enable-ctrl-wheel-adjust-columns="!isCompact" :enable-ctrl-key-adjust-columns="!isCompact" enable-virtual-scroll
             :actions="imageActions" :on-context-command="handleImageMenuCommand" scroll-whole-container hide-scrollbar
             @preview-page-boundary="handlePreviewPageBoundary">
             <template #before-grid>

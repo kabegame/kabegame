@@ -46,7 +46,6 @@ const clearHideTimer = () => {
 
 const scheduleHideControls = (delay = 1000) => {
   clearHideTimer();
-  if (isPointerInside.value || props.keepVisible) return;
   hideTimer = setTimeout(() => {
     if (isPointerInside.value || props.keepVisible) return;
     controlsVisible.value = false;

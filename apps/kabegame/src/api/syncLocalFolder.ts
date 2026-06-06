@@ -26,7 +26,6 @@ export interface SyncReport {
   added: number;
   deleted: number;
   reimported: number;
-  skippedUnstable: number;
   skippedInFlight: boolean;
   skippedUnchanged: boolean;
 }

@@ -7,13 +7,13 @@
 //! 设计要点：
 //! - 泛型单态化（非 dyn）以支持钩子的关联类型 `DirCtx`（目录上下文，DFS 中由父向子传递）。
 //! - 来源抽象：`file://` 走文件系统，`content://`（Android）走 `ContentIoProvider`。
-//! - 框架统一处理媒体过滤、稳定性过滤、递归深度、进度份额、symlink 和基础 IO 健康过滤。
+//! - 框架统一处理媒体过滤、收集节流、递归深度、进度份额、symlink 和基础 IO 健康过滤。
 //! - [`ScanCtx`] 在一次扫描中贯穿始终，记录当前目录栈和带位置的非致命错误。
 //! - 根目录不触发 `on_enter_dir`/`on_exit_dir`；根上下文由调用方提供并自行收尾。
 
 use crate::image_type::is_media_by_path;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use url::Url;
 
 #[cfg(target_os = "android")]
@@ -48,9 +48,10 @@ pub struct ScannedDir {
 pub struct ScanOptions {
     /// 是否递归进入子目录。
     pub recursive: bool,
-    /// 文件「稳定」最小年龄（毫秒）：`now - mtime < age` 的文件跳过，并通知 hook 自行统计。
-    /// 仅对有 mtime 的 `file://` 生效；同步传 `Some(3000)`，本地导入传 `None`。
-    pub min_stable_age_ms: Option<u64>,
+    /// 收集节流：相邻两次 `on_file` 之间的最小间隔（毫秒）。命中媒体文件交给 hook 前，
+    /// 若距上次 `on_file` 不足该值则 sleep 补足，避免逐文件入库把系统压垮。
+    /// `None`（或 `0`）= 全速无节流；建议消费者传 ≥100ms（同步用 300，本地导入用 100）。
+    pub min_collect_interval_ms: Option<u64>,
     /// 跳过以 `.` 开头的隐藏目录（同步建子画册时为 true）。
     pub skip_hidden_dirs: bool,
     /// 进度总份额（一般 100.0）。份额按目录子项数逐层均分。
@@ -63,7 +64,7 @@ impl Default for ScanOptions {
     fn default() -> Self {
         Self {
             recursive: false,
-            min_stable_age_ms: None,
+            min_collect_interval_ms: None,
             skip_hidden_dirs: false,
             total_progress_share: 100.0,
             max_depth: DEFAULT_MAX_DEPTH,
@@ -206,9 +207,6 @@ pub trait FolderScanHook: Send + Sync {
         ctx: &ScanCtx<Self::DirCtx>,
     ) -> Result<(), ScanError>;
 
-    /// 媒体文件尚未稳定时调用；是否统计由具体服务决定。
-    fn on_unstable_file(&mut self, _file: &ScannedFile, _ctx: &ScanCtx<Self::DirCtx>) {}
-
     /// 进度上报（份额增量）。
     fn on_progress(&mut self, _delta: f64) {}
 }
@@ -221,11 +219,20 @@ struct RawEntry {
     is_symlink: bool,
 }
 
-fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
+/// 收集节流：相邻两次 `on_file` 之间至少间隔 `interval_ms`，不足则 sleep 补足。
+/// `None`/`0` 表示全速无节流。`last` 跨整次扫描贯穿（DFS 全局）。
+async fn throttle_collect(last: &mut Option<Instant>, interval_ms: Option<u64>) {
+    let Some(ms) = interval_ms.filter(|ms| *ms > 0) else {
+        return;
+    };
+    let interval = Duration::from_millis(ms);
+    if let Some(prev) = *last {
+        let elapsed = prev.elapsed();
+        if elapsed < interval {
+            tokio::time::sleep(interval - elapsed).await;
+        }
+    }
+    *last = Some(Instant::now());
 }
 
 fn url_file_name(url: &Url) -> String {
@@ -336,12 +343,13 @@ async fn read_dir_entries(dir_url: &Url, skip_hidden_dirs: bool) -> Result<Vec<R
     }
 }
 
-/// 对一个媒体文件项分类（媒体过滤 + 稳定性过滤），命中则回调 `on_file`。
+/// 对一个媒体文件项分类（媒体过滤），命中则按收集节流间隔回调 `on_file`。
 async fn process_file<H: FolderScanHook>(
     raw: &RawEntry,
     ctx: &ScanCtx<H::DirCtx>,
     depth: usize,
     options: &ScanOptions,
+    last_collect: &mut Option<Instant>,
     hook: &mut H,
 ) -> Result<(), ScanError> {
     match raw.url.scheme() {
@@ -380,12 +388,7 @@ async fn process_file<H: FolderScanHook>(
                 mtime_unix_ms: mtime,
                 depth,
             };
-            if let (Some(age_ms), Some(mt)) = (options.min_stable_age_ms, mtime) {
-                if now_ms().saturating_sub(mt) < age_ms as u128 {
-                    hook.on_unstable_file(&file, ctx);
-                    return Ok(());
-                }
-            }
+            throttle_collect(last_collect, options.min_collect_interval_ms).await;
             hook.on_file(&file, ctx).await
         }
         "content" => {
@@ -412,6 +415,7 @@ async fn process_file<H: FolderScanHook>(
                     mtime_unix_ms: None,
                     depth,
                 };
+                throttle_collect(last_collect, options.min_collect_interval_ms).await;
                 hook.on_file(&file, ctx).await
             }
             #[cfg(not(target_os = "android"))]
@@ -432,6 +436,7 @@ async fn process_dir<H: FolderScanHook>(
     ctx: &mut ScanCtx<H::DirCtx>,
     share: f64,
     options: &ScanOptions,
+    last_collect: &mut Option<Instant>,
     hook: &mut H,
 ) -> Result<(), ScanError> {
     let dir_url = ctx.current_dir().url.clone();
@@ -509,7 +514,7 @@ async fn process_dir<H: FolderScanHook>(
             match hook.on_enter_dir(&sub, &*ctx).await {
                 Ok(Some(payload)) => {
                     ctx.push(sub, payload);
-                    let res = Box::pin(process_dir(ctx, per, options, hook)).await;
+                    let res = Box::pin(process_dir(ctx, per, options, last_collect, hook)).await;
                     let exit = if res.is_ok() {
                         hook.on_exit_dir(&*ctx).await
                     } else {
@@ -537,7 +542,8 @@ async fn process_dir<H: FolderScanHook>(
             }
         } else {
             let entry_url = raw.url.clone();
-            let interrupted = match process_file(raw, &*ctx, depth + 1, options, hook).await {
+            let interrupted = match process_file(raw, &*ctx, depth + 1, options, last_collect, hook).await
+            {
                 Ok(()) => false,
                 Err(ScanError::Fatal(message)) => return Err(ScanError::Fatal(message)),
                 Err(error @ ScanError::Skip(_)) => {
@@ -573,6 +579,8 @@ pub async fn scan_and_visit<H: FolderScanHook>(
         return Ok(ctx);
     }
     let share = options.total_progress_share / roots.len() as f64;
+    // 收集节流时间戳：贯穿整次扫描（跨根、跨目录），相邻 on_file 至少间隔配置值。
+    let mut last_collect: Option<Instant> = None;
 
     for root in roots {
         let dir = ScannedDir {
@@ -585,7 +593,7 @@ pub async fn scan_and_visit<H: FolderScanHook>(
         match url_is_dir(root).await {
             Ok(true) => {
                 ctx.push(dir, root_ctx.clone());
-                let res = process_dir(&mut ctx, share, options, hook).await;
+                let res = process_dir(&mut ctx, share, options, &mut last_collect, hook).await;
                 ctx.pop();
                 if let Err(error) = res {
                     return Err(error.into_message());
@@ -599,7 +607,7 @@ pub async fn scan_and_visit<H: FolderScanHook>(
                     is_dir: false,
                     is_symlink: false,
                 };
-                let res = process_file(&raw, &ctx, 0, options, hook).await;
+                let res = process_file(&raw, &ctx, 0, options, &mut last_collect, hook).await;
                 hook.on_progress(share);
                 let fatal = match res {
                     Ok(()) => None,

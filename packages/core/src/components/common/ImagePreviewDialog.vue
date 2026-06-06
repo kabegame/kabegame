@@ -5,11 +5,11 @@
     @update:open="previewModal.close"
     :on-vertical-drag="handlePswpVerticalDrag" :on-before-close="handlePswpBeforeClose" @change="handlePswpChange"
     @close="handlePswpClose" @ui-visible-change="handlePswpUiVisibleChange" @reach-boundary="handlePswpReachBoundary">
-    <!-- 每张幻灯片统一用 PswpSlideContent 渲染（缩略图→原图流式覆盖；视频随控件显隐播放/暂停） -->
-    <template #slide="{ item, active, onReady, onError }">
-      <PswpSlideContent v-if="imageById(item.id)" :image="imageById(item.id)!" :active="active"
-        :ui-visible="pswpUiVisible" @ready="onReady" @error="onError" />
-    </template>
+	    <!-- 每张幻灯片统一用 PswpSlideContent 渲染（缩略图→原图流式覆盖；视频随控件显隐播放/暂停） -->
+	    <template #slide="{ item, active, onReady, onError }">
+	      <PswpSlideContent v-if="imageById(item.id)" :image="imageById(item.id)!" :active="active"
+	        :ui-visible="pswpUiVisible" @ready="onReady" @error="onError" @video-play-fail="handleVideoPlayFail" />
+	    </template>
     <!-- 安卓：图片标题居中覆盖显示 -->
     <div v-if="previewImage?.displayName"
       class="pswp-image-title-container">
@@ -125,6 +125,7 @@
               </svg>
             </button>
           </PreviewControlBar>
+          <!-- TODO 确认linux可用 -->
           <div v-if="previewImage && isPreviewVideo" class="preview-video-wrapper">
             <ImageContent ref="previewContentRef" :image="previewImage" prefer="original"
               :video-playing="!IS_LINUX" :video-loop="!IS_LINUX" @ready="handlePreviewReady" />
@@ -1012,6 +1013,11 @@ const handlePswpUiVisibleChange = ({ visible }: { visible: boolean }) => {
   if (uiStore.isCompact) {
     pswpUiVisible.value = visible;
   }
+};
+
+const handleVideoPlayFail = () => {
+  if (!uiStore.isCompact) return;
+  pswpRef.value?.setUiVisible(true);
 };
 
 const handlePswpClose = () => {

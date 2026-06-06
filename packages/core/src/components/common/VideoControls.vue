@@ -322,7 +322,7 @@ const togglePlay = async () => {
   } else {
     currentVideo.pause();
   }
-  showControls();
+  // showControls();
 };
 
 const handleSeekDragStart = () => {
