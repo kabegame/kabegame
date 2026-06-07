@@ -54,32 +54,18 @@
         </div>
       </div>
     </el-popover>
-
-    <Teleport to="body">
-      <OrganizeDialog v-model="organizeDialog.isOpen.value" :loading="loading" @confirm="handleConfirm" @update:model-value="organizeDialog.close" />
-    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { FolderOpened } from "@element-plus/icons-vue";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import { listen } from "@/api/rpc";
 import { useModal } from "@kabegame/core/composables/useModal";
-import OrganizeDialog from "@/components/OrganizeDialog.vue";
-
-type OrganizeOptions = {
-  dedupe: boolean;
-  removeMissing: boolean;
-  removeUnrecognized: boolean;
-  regenThumbnails: boolean;
-  deleteSourceFiles: boolean;
-  rangeStart: number | null;
-  rangeEnd: number | null;
-};
+import { useOrganizeStore, type OrganizeOptions } from "@/stores/organize";
 
 /** 与后端 `OrganizeRunState` / `organize-progress` 字段一致 */
 type OrganizeProgressState = {
@@ -102,7 +88,7 @@ type OrganizeRunStatePayload = OrganizeProgressState & {
 
 const { t } = useI18n();
 const loading = ref(false);
-const organizeDialog = useModal();
+const organizeStore = useOrganizeStore();
 const progressPopover = useModal();
 const progress = ref<OrganizeProgressState>({
   processedGlobal: 0,
@@ -250,16 +236,17 @@ onUnmounted(() => {
   unlistenFinished?.();
 });
 
-async function handleConfirm(options: {
-  dedupe: boolean;
-  removeMissing: boolean;
-  removeUnrecognized: boolean;
-  regenThumbnails: boolean;
-  deleteSourceFiles: boolean;
-  rangeStart: number | null;
-  rangeEnd: number | null;
-}) {
-  organizeDialog.close();
+// Gallery 确认整理后回传参数，这里真正启动整理（进度/popover 仍由本组件承载）
+watch(
+  () => organizeStore.pendingOptions,
+  (opts) => {
+    if (!opts) return;
+    const consumed = organizeStore.consumeStart();
+    if (consumed) void runOrganize(consumed);
+  }
+);
+
+async function runOrganize(options: OrganizeOptions) {
   if (loading.value) return;
   try {
     loading.value = true;
@@ -296,7 +283,7 @@ function handleOrganizeButtonClick() {
     progressPopover.toggle();
     return;
   }
-  organizeDialog.open();
+  organizeStore.openDialog();
 }
 
 async function handleCancel() {

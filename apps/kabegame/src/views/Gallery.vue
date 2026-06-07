@@ -97,6 +97,9 @@
     <CollectSourcePicker v-if="uiStore.isCompact" :model-value="collectSourcePicker.isOpen.value" @update:model-value="collectSourcePicker.close" @select="handleCollectSourceSelect" />
     <!-- 安卓媒体选择器（本地导入） -->
     <MediaPicker v-if="uiStore.isCompact" :model-value="mediaPicker.isOpen.value" @update:model-value="mediaPicker.close" @select="handleMediaPickerSelect" />
+
+    <!-- 整理对话框：由 header 的 OrganizeHeaderControl 触发打开，确认后回传参数给 header 启动整理 -->
+    <OrganizeDialog :model-value="organizeStore.dialogOpen" @update:model-value="onOrganizeDialogVisible" @confirm="onOrganizeConfirm" />
   </div>
 </template>
 
@@ -118,6 +121,8 @@ import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
 import LocalImportDialog from "@/components/LocalImportDialog.vue";
+import OrganizeDialog from "@/components/OrganizeDialog.vue";
+import { useOrganizeStore, type OrganizeOptions } from "@/stores/organize";
 import { createImageActions } from "@/actions/imageActions";
 import EmptyState from "@/components/common/EmptyState.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
@@ -315,6 +320,17 @@ const handleShowLocalImport = () => {
 const handleOpenCollectMenu = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "collect_menu" });
   collectSourcePicker.open();
+};
+
+// 整理对话框：本体渲染在 Gallery，开关与确认通过 organize store 与 header 桥接
+const organizeStore = useOrganizeStore();
+const onOrganizeDialogVisible = (visible: boolean) => {
+  if (visible) organizeStore.openDialog();
+  else organizeStore.closeDialog();
+};
+const onOrganizeConfirm = (options: OrganizeOptions) => {
+  organizeStore.closeDialog();
+  organizeStore.requestStart(options);
 };
 
 // 空状态按钮：与工具栏一致，安卓打开「本地/远程」选择 picker，桌面打开选择对话框

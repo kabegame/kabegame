@@ -193,6 +193,9 @@ impl SyncHook {
             // 同步只走 file://；content:// 无 mtime/size，忽略。
             return Ok(());
         };
+        // organize gate：整理进行中先等待其结束再入库，避免与去重 / 删除 / 重建缩略图并发竞态。
+        // 在触碰 DB 前等待，避免持有任何数据库状态空等；醒来后下方按路径 + mtime + 哈希重新校验是否仍需导入。
+        crate::storage::organize::OrganizeService::wait_until_idle().await;
         let path_str = path.to_string_lossy();
         let storage = Storage::global();
 

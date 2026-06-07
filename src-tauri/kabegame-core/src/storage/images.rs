@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
+// `fs` 仅用于桌面/iOS 的缩略图删除（remove_thumbnail_file_if_needed）；Android 无此用法。
+#[cfg(not(target_os = "android"))]
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -659,7 +661,12 @@ impl Storage {
 
         if let Some((local_path, thumbnail_path, _)) = image_paths {
             remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
-            let _ = fs::remove_file(local_path);
+            // 原始文件移入系统回收站（桌面，带护栏，绝不永久删除）；失败/不安全则保留磁盘文件。
+            // Android 的 content:// 删除走内容提供方，这里不处理。
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                crate::storage::safe_delete::trash_source_file(std::path::Path::new(&local_path));
+            }
         }
 
         conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
@@ -796,7 +803,15 @@ impl Storage {
                     metadata_ids.push(metadata_id);
                 }
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
-                let _ = fs::remove_file(local_path);
+                // 原始文件移入系统回收站（桌面，带软链接/异构盘护栏，绝不永久删除）；
+                // 失败或路径不安全时保留磁盘文件，数据库记录仍会删除。
+                // Android 的 content:// 删除走内容提供方，这里不处理。
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                {
+                    crate::storage::safe_delete::trash_source_file(std::path::Path::new(
+                        &local_path,
+                    ));
+                }
             }
 
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])

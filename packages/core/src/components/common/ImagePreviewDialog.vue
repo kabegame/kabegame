@@ -167,7 +167,7 @@ import ImageDetailContent, { type ImageDetailGalleryFilterTarget } from "./Image
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 import VideoControls from "./VideoControls.vue";
-import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX, IS_LINUX } from "../../env";
+import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX, LOCAL_FILE_PROXY_PREFIX, IS_LINUX } from "../../env";
 import { useUiStore } from "../../stores/ui";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
@@ -175,6 +175,7 @@ import type { ActionItem, ActionContext } from "../../actions/types";
 import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
 import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
+import { useAudioKeepAlive } from "../../composables/useAudioKeepAlive";
 import { useModal } from "../../composables/useModal";
 import { fileToUrl, thumbnailToUrl } from "../../httpServer";
 import { isVideoMediaType } from "../../utils/mediaMime";
@@ -252,6 +253,16 @@ const previewImage = computed<ImageInfo | null>(() => {
   return props.images[idx] ?? null;
 });
 const isPreviewVideo = computed(() => isVideoMediaType(previewImage.value?.type));
+
+// 桌面预览视频期间保持音频输出设备常驻，避免暂停后恢复播放漏掉开头声音
+const audioKeepAlive = useAudioKeepAlive();
+const desktopVideoActive = computed(
+  () => !uiStore.isCompact && previewVisible.value && isPreviewVideo.value
+);
+watch(desktopVideoActive, (active) => {
+  if (active) audioKeepAlive.start();
+  else audioKeepAlive.stop();
+});
 const previewHoverSide = ref<"left" | "right" | null>(null);
 const previewNotFound = ref(false);
 const isAppFullscreen = ref(false);
@@ -317,7 +328,12 @@ const getOriginalPreviewUrl = (image: ImageInfo) =>
 
 const getThumbnailPreviewUrl = (image: ImageInfo) => {
   const thumbPath = image.thumbnailPath;
-  if (IS_ANDROID) return toAndroidProxyUrl(thumbPath);
+  if (IS_ANDROID) {
+    // 缩略图为应用私有目录下的本地文件（非 content://），经 kbg-local 代理加载；无缩略图则回退原图。
+    const raw = (thumbPath || "").trim();
+    if (raw && !raw.startsWith("content://")) return LOCAL_FILE_PROXY_PREFIX + raw;
+    return toAndroidProxyUrl(thumbPath) || getOriginalPreviewUrl(image);
+  }
   const normalized = normalizeDesktopPath(thumbPath);
   return normalized ? thumbnailToUrl(normalized) : getOriginalPreviewUrl(image);
 };

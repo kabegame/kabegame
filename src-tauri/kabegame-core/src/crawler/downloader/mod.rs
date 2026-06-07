@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
-#[cfg(not(target_os = "android"))]
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -32,12 +31,11 @@ pub use native_download::{
 };
 
 /// 仅当原图文件大于此阈值才生成独立预览缩略图；否则前端直接用原图。
-pub const IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES: u64 = 1024 * 1024;
+pub const IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES: u64 = 512 * 1024;
 /// 预览缩略图最长边像素上限。缩略图仅用于 UI（画廊网格 + 预览渐进占位），
 /// 全屏查看与设壁纸都用原图，所以无需接近原图分辨率。1600 兼顾高 DPI 网格清晰度与编码速度/体积。
-pub const IMAGE_THUMBNAIL_MAX_DIM: u32 = 1600;
+pub const IMAGE_THUMBNAIL_MAX_DIM: u32 = 768;
 /// 预览缩略图固定 JPEG 质量（80~85 区间视觉接近无损，压缩与速度均衡）。
-#[cfg(not(target_os = "android"))]
 const IMAGE_THUMBNAIL_JPEG_QUALITY: u8 = 82;
 
 /// 下载执行类型：按 scheme 选择具体实现。
@@ -1281,7 +1279,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         #[cfg(not(target_os = "android"))]
                         let use_path_flow = true;
 
-                        // Android content://：读字节 → 哈希 → 入库；视频则生成 GIF 缩略图（与下载视频一致，前端用 kbg-local 引用）
+                        // Android content://：读字节 → 哈希 → 入库；视频生成 GIF 缩略图、大图生成 JPEG 预览缩略图（前端用 kbg-local 引用）
                         #[cfg(target_os = "android")]
                         if !use_path_flow {
                             let bytes = match get_content_io_provider()
@@ -1317,7 +1315,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             ensure_minimum_duration(download_start_time, 500).await;
                             let hash = compute_bytes_hash(&bytes);
 
-                            // 判断类型：仅视频生成 GIF 缩略图，供列表 kbg-local 引用
+                            // 判断类型：视频生成 GIF 缩略图，图片生成 JPEG 预览缩略图，供列表 kbg-local 引用
                             let mime = get_content_io_provider()
                                 .get_mime_type(url_clone.as_str())
                                 .await
@@ -1360,7 +1358,21 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                         }
                                     }
                                 } else {
-                                    (None, String::new())
+                                    // 图片：从已读取的字节生成预览缩略图（小图返回 None，前端回退原图/content URI）。
+                                    match generate_thumbnail_from_bytes(&bytes).await {
+                                        Ok(Some(p)) => {
+                                            let s = p.to_string_lossy().to_string();
+                                            (Some(p), s)
+                                        }
+                                        Ok(None) => (None, String::new()),
+                                        Err(e) => {
+                                            eprintln!(
+                                                "[Download Worker] Android content image thumbnail failed: {}",
+                                                e
+                                            );
+                                            (None, String::new())
+                                        }
+                                    }
                                 };
 
                             let _ = process_downloaded_content_image_to_storage(
@@ -1415,7 +1427,18 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                             }
                                         }
                                     } else {
-                                        (None, String::new())
+                                        // 图片：从下载到的本地文件生成预览缩略图（小图返回 None）。
+                                        match generate_thumbnail(&path_for_post).await {
+                                            Ok(Some(p)) => {
+                                                let s = p.to_string_lossy().to_string();
+                                                (Some(p), s)
+                                            }
+                                            Ok(None) => (None, String::new()),
+                                            Err(e) => {
+                                                eprintln!("[Download Worker] Android image thumbnail failed: {}", e);
+                                                (None, String::new())
+                                            }
+                                        }
                                     };
                                 if !auto_deduplicate {
                                     let post_start = Instant::now();
@@ -2275,7 +2298,8 @@ async fn ensure_media_extension_by_infer(path: &Path) -> PathBuf {
 }
 
 /// 对新下载的图片做完整入库流程：生成缩略图、入库、入画册、发事件。失败时已做清理并发送 failed。
-/// Android 不生成缩略图，thumbnail_path 存为 local_path（前端永远用原图）。
+/// 仅桌面端走此路径（经 `postprocess_downloaded_image`）；Android 用 `process_downloaded_content_image_to_storage`，
+/// 缩略图在下载 worker 中生成后传入。小图无独立缩略图时 thumbnail_path 回退为 local_path。
 /// `postprocess_timing_hash_ms`: 当为 Some 时表示来自「未去重」分支，在成功结束时 print 各步骤耗时（含传入的算哈希耗时）。
 pub async fn process_downloaded_image_to_storage(
     path: &Path,
@@ -2347,11 +2371,6 @@ pub async fn process_downloaded_image_to_storage(
             .unwrap_or((None, None));
     let resolved_size = crate::media_dimensions::resolve_file_size_sync(&local_path_str);
 
-    #[cfg(target_os = "android")]
-    let (thumbnail_path, thumbnail_path_str, thumb_ms): (Option<PathBuf>, String, Option<u64>) =
-        (None, local_path_str.clone(), None);
-
-    #[cfg(not(target_os = "android"))]
     let (thumbnail_path, thumbnail_path_str, thumb_ms) = {
         let t_thumb = if postprocess_timing_hash_ms.is_some() {
             Some(Instant::now())
@@ -2581,7 +2600,6 @@ pub fn image_thumbnail_dimensions_acceptable(width: u32, height: u32) -> bool {
     width.max(height) <= IMAGE_THUMBNAIL_MAX_DIM
 }
 
-#[cfg(not(target_os = "android"))]
 fn encode_jpeg_rgb(rgb: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String> {
     let mut cursor = Cursor::new(Vec::new());
     let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality);
@@ -2598,7 +2616,6 @@ fn encode_jpeg_rgb(rgb: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String
 
 /// 生成预览缩略图字节：按最长边 ≤ `IMAGE_THUMBNAIL_MAX_DIM` 缩放一次，再以固定质量编码一次。
 /// 不再按字节大小做「缩放×质量」二分搜索——单次重采样 + 单次编码，避免在超大原图上反复重采样。
-#[cfg(not(target_os = "android"))]
 fn build_compressed_thumbnail_bytes(img: &image::DynamicImage) -> Result<Vec<u8>, String> {
     use image::GenericImageView;
 
@@ -2620,7 +2637,6 @@ fn build_compressed_thumbnail_bytes(img: &image::DynamicImage) -> Result<Vec<u8>
     encode_jpeg_rgb(&rgb, IMAGE_THUMBNAIL_JPEG_QUALITY)
 }
 
-#[cfg(not(target_os = "android"))]
 async fn write_thumbnail_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
     let thumbnails_dir = crate::app_paths::AppPaths::global().thumbnails_dir();
     tokio::fs::create_dir_all(&thumbnails_dir)
@@ -2633,14 +2649,7 @@ async fn write_thumbnail_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
     Ok(thumbnail_path)
 }
 
-/// 从字节生成缩略图。Android 图片不生成缩略图，直接回退到原图/content URI。
-#[cfg(target_os = "android")]
-pub async fn generate_thumbnail_from_bytes(_bytes: &[u8]) -> Result<Option<PathBuf>, String> {
-    Ok(None)
-}
-
-/// 从字节生成桌面端图片预览图；小于等于 1MiB 时返回 None，让调用方使用原图路径。
-#[cfg(not(target_os = "android"))]
+/// 从字节生成图片预览图；小于等于 1MiB 时返回 None，让调用方使用原图路径。
 pub async fn generate_thumbnail_from_bytes(bytes: &[u8]) -> Result<Option<PathBuf>, String> {
     if !image_needs_independent_thumbnail(bytes.len() as u64) {
         return Ok(None);
@@ -2653,14 +2662,7 @@ pub async fn generate_thumbnail_from_bytes(bytes: &[u8]) -> Result<Option<PathBu
     write_thumbnail_bytes(thumbnail_bytes).await.map(Some)
 }
 
-/// Android 图片不生成缩略图，thumbnail_path 由调用方回退为原图/content URI。
-#[cfg(target_os = "android")]
-pub async fn generate_thumbnail(_image_path: &Path) -> Result<Option<PathBuf>, String> {
-    Ok(None)
-}
-
-/// 桌面端图片缩略图策略：小文件直接用原图，大文件生成最长边 ≤ IMAGE_THUMBNAIL_MAX_DIM 的 JPEG 预览图。
-#[cfg(not(target_os = "android"))]
+/// 图片缩略图策略：小文件直接用原图，大文件生成最长边 ≤ IMAGE_THUMBNAIL_MAX_DIM 的 JPEG 预览图。
 pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, String> {
     if !crate::image_type::is_image_by_path(image_path) {
         return Ok(None);

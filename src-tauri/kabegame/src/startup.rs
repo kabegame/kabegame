@@ -157,7 +157,7 @@ pub fn create_main_window(app_handle: &AppHandle) -> Result<(), String> {
             .visible(true)
             .devtools(true);
 
-    #[cfg(target_os = "windows")]
+    #[cfg(not(target_os = "linux"))]
     let builder = builder.transparent(true);
 
     // Windows/macOS: 添加窗口效果

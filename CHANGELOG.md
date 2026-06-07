@@ -17,11 +17,17 @@
 
 ### Optimized
 - **Providers**: more query use pathql providers
+- **ElSelect Filterable**: AlbumSelectField and long plugin option field can filter by input string.
+- **Android Thumbnail**: Android now use thumbnail in gallery for new pictures.
 
 ### Fixed
+- **Organize image-file killer bug (data loss)**: A single Organize run could permanently delete thousands of original image files. Three causes, all fixed: (1) "delete source files" used a hard `remove_file`, bypassing the Trash; (2) when a library folder was reached through a **symlink** (e.g. `~/Pictures` → an external drive), deduplication treated the two path spellings of the same physical file as duplicates and deleted the **shared** file, taking down the surviving copy too; (3) Organize paginated with `OFFSET` while deleting rows mid-scan, so the window shifted and rows were skipped — making Organize non-idempotent ("every run still removes items") and never converging.
+- **Organize pagination**: switched batch paging from `OFFSET` to an **`id > last_id` keyset cursor**, so deleting already-scanned rows can no longer shift the window. Organize now scans the whole library in one pass and is idempotent.
 - **By Wallpaper Order**: by wallpaper order perpend the ordering to sql in dsl.
 
 ### Changed
+- **Deletion now goes to the system Trash (non-configurable)**: Deleting original image/video files — whether via Organize's "delete source files" or the gallery delete action — now moves them to the OS Trash via the `trash` crate (recoverable) instead of permanently unlinking. If trashing fails, the file is kept on disk and only the database record is removed; there is no option to permanently delete. App-maintained thumbnails are still removed directly.
+- **Never auto-delete files on symlink/network/virtual paths**: Source-file deletion now refuses any path that passes through a symlink, or lives on a network/virtual/unknown filesystem (allowlist of normal local filesystems); such files are only removed from the library and kept on disk. Organize and delete dialog texts explain this.
 - **MCP resource schemes**: The public MCP read surface now uses `images://`, `albums://`, `tasks://`, `surf_records://`, and `plugin://`. The old `provider://`, `image://`, `album://`, `task://`, and `surf://` resource schemes are no longer supported.
 - **MCP Bundle compatibility**: Updated the `kabegame-gallery-node` MCPB bridge to forward read tools to the new resource schemes while keeping the existing tool names for host-side compatibility.
 - **Documentation**: Updated the public MCP guide, reference, and bundle guide to document the new `images://` and plural table resource paths.

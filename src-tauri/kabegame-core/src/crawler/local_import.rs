@@ -224,6 +224,12 @@ impl FolderScanHook for LocalImportHook<'_> {
         if self.download_queue.is_task_canceled(self.task_id).await {
             return Err(ScanError::Fatal("Task canceled".to_string()));
         }
+        // organize gate：整理进行中先等待其结束，醒来后重新校验取消状态再尝试导入。
+        // 下游入库会按路径 / 哈希去重，故「图片是否仍可导入」由后续逻辑兜底。
+        crate::storage::organize::OrganizeService::wait_until_idle().await;
+        if self.download_queue.is_task_canceled(self.task_id).await {
+            return Err(ScanError::Fatal("Task canceled".to_string()));
+        }
         let download_start_time = self.next_download_start_time();
         let result = match file.url.scheme() {
             "file" => self.import_file_url(file, download_start_time).await,

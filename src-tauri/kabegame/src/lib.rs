@@ -190,8 +190,9 @@ fn init(
     init_kgpg_plugin();
 
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-    tauri::async_runtime::block_on(http_server::start_http_server());
-
+    tauri::async_runtime::block_on(http_server::start_http_server()).map_err(|e| {
+        format!("Cannot start http server: {}", e)
+    })?;
     Ok(())
 }
 

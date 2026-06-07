@@ -79,6 +79,18 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
           useDesktopLayers: false,
         };
       }
+      // 图片：缩略图是本地文件路径（非 content://），grid 经 kbg-local 代理加载，content URI 作回退。
+      // prefer=original（全屏预览/hover 升级）跳过，走下方 content 原图分支，避免全屏显示低清缩略图。
+      if (localFileUrl && options.prefer.value !== "original") {
+        return {
+          primaryUrl: localFileUrl,
+          fallbackUrl: contentUrl,
+          primaryKind: "thumbnail" as UrlKind,
+          thumbnailUrl: localFileUrl,
+          originalUrl: contentUrl,
+          useDesktopLayers: false,
+        };
+      }
       return {
         primaryUrl: contentUrl,
         fallbackUrl: "",

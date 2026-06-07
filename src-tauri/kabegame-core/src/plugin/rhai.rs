@@ -1860,31 +1860,6 @@ pub fn execute_crawler_script_with_runtime(
     Ok(())
 }
 
-/// 执行 Rhai 爬虫脚本（兼容旧调用：每次调用创建独立 runtime）
-pub fn execute_crawler_script(
-    _plugin: &Plugin,
-    images_dir: &Path,
-    download_queue: Arc<crate::crawler::DownloadQueue>,
-    plugin_id: &str,
-    task_id: &str,
-    script_content: &str,
-    merged_config: HashMap<String, serde_json::Value>,
-    output_album_id: Option<String>, // 输出画册ID，如果指定则下载完成后自动添加到画册
-) -> Result<(), String> {
-    let mut runtime = RhaiCrawlerRuntime::new(download_queue);
-    execute_crawler_script_with_runtime(
-        &mut runtime,
-        _plugin,
-        images_dir,
-        plugin_id,
-        task_id,
-        script_content,
-        merged_config,
-        output_album_id,
-        None,
-    )
-}
-
 /// 将 serde_json::Value 转换为 rhai::Map
 fn convert_json_to_rhai_map(json: &serde_json::Value, map: &mut Map) {
     match json {

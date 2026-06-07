@@ -210,13 +210,38 @@ impl Storage {
         Ok(DebugCloneImagesResult { inserted })
     }
 
-    /// 获取整理用的分批图片数据（provider path: `images://x{limit}x/{page}`）。
-    pub fn get_organize_batch(
+    /// 获取整理用的分批图片数据，按 **id 游标**翻页：`id > after_id ORDER BY id ASC LIMIT limit`。
+    ///
+    /// 必须用游标而非 OFFSET 分页：整理会边扫边删，OFFSET 会随删除而漂移、跳过未扫的行，
+    /// 导致漏扫与「每次执行都还有移除项」的不幂等（曾误删大量文件的连锁根因之一）。
+    /// 游标只依赖 `id > after_id`，删除已扫过的行（id ≤ after_id）不影响后续批次。
+    pub fn get_organize_batch_after(
         &self,
-        page: usize,
+        after_id: i64,
         limit: usize,
     ) -> Result<Vec<OrganizeScanRow>, String> {
-        crate::providers::organize_batch_at(limit, page)
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, COALESCE(hash, ''), local_path, COALESCE(thumbnail_path, '') \
+                 FROM images WHERE id > ?1 ORDER BY id ASC LIMIT ?2",
+            )
+            .map_err(|e| format!("Failed to prepare organize batch: {}", e))?;
+        let rows = stmt
+            .query_map(params![after_id, limit as i64], |row| {
+                Ok(OrganizeScanRow {
+                    id: row.get(0)?,
+                    hash: row.get(1)?,
+                    local_path: row.get(2)?,
+                    thumbnail_path: row.get(3)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query organize batch: {}", e))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| format!("organize row error: {}", e))?);
+        }
+        Ok(out)
     }
 
     /// 获取总图片数（用于进度计算）
@@ -303,6 +328,28 @@ impl OrganizeService {
         ORGANIZE_RUNNING
             .get_or_init(|| Arc::new(AtomicBool::new(false)))
             .clone()
+    }
+
+    /// 整理（organize）进行中时异步等待其结束后再返回；否则立即返回。
+    ///
+    /// 用作导入 / 下载前的 gate：避免新图入库与整理（去重 / 删除缺失 / 重建缩略图）并发产生竞态。
+    /// 采用「先注册 notify 再检查 running」的顺序，避免错过整理结束时的 `notify_waiters`；
+    /// 循环重检以兼容伪唤醒与「等待期间又开始一轮整理」的情况。调用方在本函数返回后应自行重新
+    /// 校验目标是否仍可导入（文件是否仍存在、是否已被入库等）。
+    pub async fn wait_until_idle() {
+        Self::init_organize_barrier();
+        let running = Self::get_organize_running();
+        let barrier = Self::get_organize_barrier();
+        loop {
+            let notified = barrier.notified();
+            tokio::pin!(notified);
+            // 在检查 running 前先登记等待者，确保此后到来的 notify 不会丢失。
+            notified.as_mut().enable();
+            if !running.load(Ordering::Relaxed) {
+                return;
+            }
+            notified.await;
+        }
     }
 
     fn init_run_state_from_start(
@@ -545,7 +592,8 @@ fn run_organize(
     let mut row_index: usize = 0;
     let mut removed_total: usize = 0;
     let mut regenerated_total: usize = 0;
-    let mut page: usize = 1;
+    // id 游标：上一批处理到的最大 id。用游标分页而非 OFFSET，避免边扫边删导致漏扫。
+    let mut last_id: i64 = 0;
 
     // 当前壁纸 id：若被移除则清空（与历史行为保持一致）
     let mut current_wallpaper_id = Settings::global().get_current_wallpaper_image_id();
@@ -556,11 +604,10 @@ fn run_organize(
             return Ok(());
         }
 
-        let batch = storage.get_organize_batch(page, 10)?;
+        let batch = storage.get_organize_batch_after(last_id, 10)?;
         if batch.is_empty() {
             break;
         }
-        page += 1;
 
         let mut remove_ids: Vec<String> = Vec::new();
         let mut refresh_list: Vec<ThumbnailRefreshAction> = Vec::new();
@@ -570,6 +617,8 @@ fn run_organize(
         let mut finish_organize = false;
 
         for row in &batch {
+            // 推进游标：即使本行因区间上界跳过，也已"看过"，下一批从其后继续。
+            last_id = row.id;
             if let Some(ub) = upper {
                 if row_index >= ub {
                     finish_organize = true;
@@ -634,18 +683,18 @@ fn run_organize(
 
             removed_total += remove_ids.len();
 
+            // 「删除源文件」=移入系统回收站（带软链接/异构盘护栏，绝不永久删除）。
+            // 历史事故：`~/Pictures` 软链到外置盘后，删除穿过软链误删共享物理文件。
+            // 现在软链接 / 网络盘 / 虚拟盘上的文件只移出图库、保留磁盘文件（见 safe_delete）。
+            // Android 的 content:// 删除不在此处。
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if options.delete_source_files {
-                let paths_to_delete: Vec<&str> = batch
-                    .iter()
-                    .filter(|r| should_remove.contains(&r.id))
-                    .map(|r| r.local_path.as_str())
-                    .collect();
-
-                for path in paths_to_delete {
-                    if path.is_empty() {
+                for r in batch.iter().filter(|r| should_remove.contains(&r.id)) {
+                    let p = r.local_path.trim();
+                    if p.is_empty() {
                         continue;
                     }
-                    let _ = std::fs::remove_file(path);
+                    crate::storage::safe_delete::trash_source_file(std::path::Path::new(p));
                 }
             }
         }
