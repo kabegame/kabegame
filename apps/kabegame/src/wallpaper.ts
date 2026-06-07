@@ -67,7 +67,7 @@ function getPathExt(path: string): string {
 
 function isVideoPath(path: string): boolean {
     const ext = getPathExt(path);
-    return ext === "mp4" || ext === "mov";
+    return ["mp4", "mov", "wmv", "webm", "mkv"].includes(ext);
 }
 
 async function getVideoUrl(path: string): Promise<string> {

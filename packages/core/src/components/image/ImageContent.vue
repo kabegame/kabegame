@@ -6,13 +6,13 @@
         <ImageNotFound :show-image="false" />
       </div>
       <!-- 视频不叠 image 形骨架，避免中央出现图片占位 -->
-      <div v-else-if="!isVideo" class="ic-loading ic-loading-overlay">
+      <!-- <div v-else-if="!isVideo" class="ic-loading ic-loading-overlay">
         <el-skeleton :rows="0" animated>
           <template #template>
             <el-skeleton-item variant="image" :style="{ width: '100%', height: '100%' }" />
           </template>
         </el-skeleton>
-      </div>
+      </div> -->
     </template>
 
     <template v-else>

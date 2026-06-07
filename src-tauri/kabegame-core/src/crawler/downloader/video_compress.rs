@@ -1,8 +1,5 @@
 use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
 #[cfg(target_os = "android")]
 use async_trait::async_trait;
 #[cfg(target_os = "android")]
@@ -95,17 +92,19 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
         let in_path = input_path.to_path_buf();
         let temp_out_path_for_task = temp_out_path.clone();
         let ffmpeg_result = tokio::task::spawn_blocking(move || {
-            run_ffmpeg_sidecar(&in_path, &temp_out_path_for_task)?;
-            Ok::<(), String>(())
+            run_ffmpeg_transcode(&in_path, &temp_out_path_for_task)
         })
         .await
         .map_err(|e| format!("Video compress task join error: {e}"))
         .and_then(|r| r);
 
-        if let Err(e) = ffmpeg_result {
-            let _ = tokio::fs::remove_file(&temp_out_path).await;
-            return Err(e);
-        }
+        let (width, height) = match ffmpeg_result {
+            Ok(dims) => dims,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&temp_out_path).await;
+                return Err(e);
+            }
+        };
 
         if let Err(e) = tokio::fs::copy(&temp_out_path, &out_path).await {
             let _ = tokio::fs::remove_file(&temp_out_path).await;
@@ -118,86 +117,250 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
 
         Ok(VideoCompressResult {
             preview_path: out_path,
-            width: None,
-            height: None,
+            width: Some(width),
+            height: Some(height),
         })
     }
 }
 
+/// 进程内 FFmpeg（rsmpeg/libav*）转码：解码首个视频流 → scale 缩放 → libx264 编码（无音轨，截取前 2.5s）→ 输出 mp4。
+/// 返回输出视频的宽高（缩放后）。替代旧的 ffmpeg sidecar 进程调用。
 #[cfg(not(target_os = "android"))]
-fn run_ffmpeg_sidecar(input_path: &Path, output_path: &Path) -> Result<(), String> {
-    let ffmpeg_path = resolve_ffmpeg_sidecar_path()?;
-    let mut cmd = std::process::Command::new(&ffmpeg_path);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x0800_0000);
-    cmd.arg("-y").arg("-i").arg(input_path);
+fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u32), String> {
+    use rsmpeg::avcodec::{AVCodec, AVCodecContext};
+    use rsmpeg::avfilter::{AVFilter, AVFilterGraph, AVFilterInOut};
+    use rsmpeg::avformat::{AVFormatContextInput, AVFormatContextOutput};
+    use rsmpeg::avutil::{av_inv_q, ra, AVDictionary};
+    use rsmpeg::error::RsmpegError;
+    use rsmpeg::ffi;
+    use std::ffi::CString;
 
-    cmd.arg("-t")
-        .arg("2.5")
-        .arg("-vf")
-        .arg("scale='min(1280,iw)':-2")
-        .arg("-c:v")
-        .arg("libx264")
-        .arg("-preset")
-        .arg("veryfast")
-        .arg("-crf")
-        .arg("30")
-        .arg("-an")
-        .arg("-f")
-        .arg("mov")
-        .arg(output_path);
+    // 预览只取前 2.5s（与旧 ffmpeg `-t 2.5` 一致）。
+    const PREVIEW_SECONDS: f64 = 2.5;
 
-    let status = cmd
-        .status()
-        .map_err(|e| format!("Failed to run ffmpeg sidecar: {e}"))?;
-    if !status.success() {
-        return Err(format!(
-            "ffmpeg sidecar exited with non-zero status: {status}"
-        ));
+    let to_cstring = |p: &Path| -> Result<CString, String> {
+        CString::new(p.to_string_lossy().as_ref())
+            .map_err(|e| format!("path contains NUL byte: {e}"))
+    };
+    let input_c = to_cstring(input_path)?;
+    let output_c = to_cstring(output_path)?;
+
+    // ---- 输入 + 解码器 ----
+    let mut ifmt =
+        AVFormatContextInput::open(&input_c).map_err(|e| format!("open input failed: {e:?}"))?;
+    let (video_idx, decoder) = ifmt
+        .find_best_stream(ffi::AVMEDIA_TYPE_VIDEO)
+        .map_err(|e| format!("find_best_stream failed: {e:?}"))?
+        .ok_or_else(|| "no video stream in input".to_string())?;
+    let in_tb = ifmt.streams()[video_idx].time_base;
+    let framerate = ifmt.streams()[video_idx]
+        .guess_framerate()
+        .unwrap_or_else(|| ra(25, 1));
+
+    let mut dec_ctx = AVCodecContext::new(&decoder);
+    dec_ctx
+        .apply_codecpar(&ifmt.streams()[video_idx].codecpar())
+        .map_err(|e| format!("apply_codecpar failed: {e:?}"))?;
+    dec_ctx.set_pkt_timebase(in_tb);
+    dec_ctx
+        .open(None)
+        .map_err(|e| format!("open decoder failed: {e:?}"))?;
+
+    // ---- 滤镜图：buffer → scale='min(1280,iw)':-2 → buffersink(yuv420p) ----
+    let filter_graph = AVFilterGraph::new();
+    let buffersrc = AVFilter::get_by_name(c"buffer").ok_or("buffer filter missing")?;
+    let buffersink = AVFilter::get_by_name(c"buffersink").ok_or("buffersink filter missing")?;
+    let args = format!(
+        "video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",
+        dec_ctx.width,
+        dec_ctx.height,
+        dec_ctx.pix_fmt,
+        in_tb.num,
+        in_tb.den,
+        dec_ctx.sample_aspect_ratio.num,
+        dec_ctx.sample_aspect_ratio.den,
+    );
+    let args_c = CString::new(args).map_err(|e| format!("filter args NUL: {e}"))?;
+    {
+        let mut src = filter_graph
+            .create_filter_context(&buffersrc, c"in", Some(&args_c))
+            .map_err(|e| format!("create buffersrc failed: {e:?}"))?;
+        let mut sink = filter_graph
+            .alloc_filter_context(&buffersink, c"out")
+            .ok_or("alloc buffersink failed")?;
+        // libx264 需要 yuv420p 输入
+        sink.opt_set(c"pixel_formats", c"yuv420p")
+            .map_err(|e| format!("set sink pix_fmt failed: {e:?}"))?;
+        sink.init_str(None)
+            .map_err(|e| format!("init buffersink failed: {e:?}"))?;
+
+        let outputs = AVFilterInOut::new(c"in", &mut src, 0);
+        let inputs = AVFilterInOut::new(c"out", &mut sink, 0);
+        filter_graph
+            .parse_ptr(c"scale='min(1280,iw)':-2", Some(inputs), Some(outputs))
+            .map_err(|e| format!("parse filter graph failed: {e:?}"))?;
+        filter_graph
+            .config()
+            .map_err(|e| format!("config filter graph failed: {e:?}"))?;
+    }
+    let mut buffersrc_ctx = filter_graph.get_filter(c"in").ok_or("buffersrc missing")?;
+    let mut buffersink_ctx = filter_graph.get_filter(c"out").ok_or("buffersink missing")?;
+    let out_w = buffersink_ctx.get_w();
+    let out_h = buffersink_ctx.get_h();
+    let sink_tb = buffersink_ctx.get_time_base();
+
+    // ---- 编码器 libx264 ----
+    let encoder =
+        AVCodec::find_encoder_by_name(c"libx264").ok_or("libx264 encoder not found")?;
+    let mut enc_ctx = AVCodecContext::new(&encoder);
+    enc_ctx.set_width(out_w);
+    enc_ctx.set_height(out_h);
+    enc_ctx.set_pix_fmt(ffi::AV_PIX_FMT_YUV420P);
+    enc_ctx.set_time_base(av_inv_q(framerate));
+    enc_ctx.set_framerate(framerate);
+
+    // ---- 输出（mp4 muxer，按扩展名推断）----
+    let mut ofmt = AVFormatContextOutput::create(&output_c)
+        .map_err(|e| format!("create output failed: {e:?}"))?;
+    if ofmt.oformat().flags & ffi::AVFMT_GLOBALHEADER as i32 != 0 {
+        enc_ctx.set_flags(enc_ctx.flags | ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
+    }
+    let enc_opts = AVDictionary::new(c"preset", c"veryfast", 0).set(c"crf", c"30", 0);
+    enc_ctx
+        .open(Some(enc_opts))
+        .map_err(|e| format!("open encoder failed: {e:?}"))?;
+
+    let stream_index;
+    {
+        let mut out_stream = ofmt.new_stream();
+        out_stream.set_codecpar(enc_ctx.extract_codecpar());
+        out_stream.set_time_base(enc_ctx.time_base);
+        stream_index = out_stream.index as usize;
+    }
+    ofmt.write_header(&mut None)
+        .map_err(|e| format!("write_header failed: {e:?}"))?;
+
+    let in_tb_secs = in_tb.num as f64 / in_tb.den as f64;
+
+    // ---- 主循环：读包 → 解码 → （2.5s 截断）→ 滤镜 → 编码 → 写出 ----
+    'outer: loop {
+        let packet = match ifmt.read_packet() {
+            Ok(Some(p)) => p,
+            Ok(None) => break,
+            Err(e) => return Err(format!("read_packet failed: {e:?}")),
+        };
+        if packet.stream_index as usize != video_idx {
+            continue;
+        }
+        dec_ctx
+            .send_packet(Some(&packet))
+            .map_err(|e| format!("send_packet failed: {e:?}"))?;
+        loop {
+            let mut frame = match dec_ctx.receive_frame() {
+                Ok(f) => f,
+                Err(RsmpegError::DecoderDrainError) | Err(RsmpegError::DecoderFlushedError) => {
+                    break
+                }
+                Err(e) => return Err(format!("receive_frame failed: {e:?}")),
+            };
+            let ts = frame.best_effort_timestamp;
+            if ts != ffi::AV_NOPTS_VALUE && (ts as f64) * in_tb_secs >= PREVIEW_SECONDS {
+                break 'outer;
+            }
+            frame.set_pts(ts);
+            filter_encode_write(
+                &mut buffersrc_ctx,
+                &mut buffersink_ctx,
+                &mut enc_ctx,
+                &mut ofmt,
+                stream_index,
+                sink_tb,
+                Some(frame),
+            )?;
+        }
+    }
+
+    // 冲洗滤镜与编码器
+    filter_encode_write(
+        &mut buffersrc_ctx,
+        &mut buffersink_ctx,
+        &mut enc_ctx,
+        &mut ofmt,
+        stream_index,
+        sink_tb,
+        None,
+    )?;
+    encode_write(&mut enc_ctx, &mut ofmt, stream_index, None)?;
+    ofmt.write_trailer()
+        .map_err(|e| format!("write_trailer failed: {e:?}"))?;
+
+    Ok((out_w as u32, out_h as u32))
+}
+
+/// 编码一帧并交错写入输出（frame=None 表示冲洗编码器）。
+#[cfg(not(target_os = "android"))]
+fn encode_write(
+    enc_ctx: &mut rsmpeg::avcodec::AVCodecContext,
+    ofmt_ctx: &mut rsmpeg::avformat::AVFormatContextOutput,
+    stream_index: usize,
+    mut frame: Option<rsmpeg::avutil::AVFrame>,
+) -> Result<(), String> {
+    use rsmpeg::avutil::av_rescale_q;
+    use rsmpeg::error::RsmpegError;
+    use rsmpeg::ffi;
+
+    if let Some(f) = frame.as_mut() {
+        if f.pts != ffi::AV_NOPTS_VALUE {
+            f.set_pts(av_rescale_q(f.pts, f.time_base, enc_ctx.time_base));
+        }
+    }
+    enc_ctx
+        .send_frame(frame.as_ref())
+        .map_err(|e| format!("send_frame failed: {e:?}"))?;
+    loop {
+        let mut pkt = match enc_ctx.receive_packet() {
+            Ok(p) => p,
+            Err(RsmpegError::EncoderDrainError) | Err(RsmpegError::EncoderFlushedError) => break,
+            Err(e) => return Err(format!("receive_packet failed: {e:?}")),
+        };
+        pkt.set_stream_index(stream_index as i32);
+        pkt.rescale_ts(enc_ctx.time_base, ofmt_ctx.streams()[stream_index].time_base);
+        ofmt_ctx
+            .interleaved_write_frame(&mut pkt)
+            .map_err(|e| format!("interleaved_write_frame failed: {e:?}"))?;
     }
     Ok(())
 }
 
-/// 解析 ffmpeg sidecar 路径。Tauri externalBin 会将二进制复制到与主程序同目录，且去掉 target triple 后缀，故运行时名为 `ffmpeg-kb` 或 `ffmpeg-kb.exe`（避免与系统 /usr/bin/ffmpeg 冲突）。
+/// 将一帧送入滤镜图，取出滤镜输出帧并编码写出（frame=None 表示冲洗滤镜）。
 #[cfg(not(target_os = "android"))]
-fn resolve_ffmpeg_sidecar_path() -> Result<PathBuf, String> {
-    let app_paths = crate::app_paths::AppPaths::global();
-    let exe_name = if cfg!(target_os = "windows") {
-        "ffmpeg-kb.exe"
-    } else {
-        "ffmpeg-kb"
-    };
+#[allow(clippy::too_many_arguments)]
+fn filter_encode_write(
+    buffersrc_ctx: &mut rsmpeg::avfilter::AVFilterContextMut,
+    buffersink_ctx: &mut rsmpeg::avfilter::AVFilterContextMut,
+    enc_ctx: &mut rsmpeg::avcodec::AVCodecContext,
+    ofmt_ctx: &mut rsmpeg::avformat::AVFormatContextOutput,
+    stream_index: usize,
+    sink_tb: rsmpeg::ffi::AVRational,
+    frame: Option<rsmpeg::avutil::AVFrame>,
+) -> Result<(), String> {
+    use rsmpeg::error::RsmpegError;
+    use rsmpeg::ffi;
 
-    // 1. 与主程序同目录（Tauri externalBin 复制目标）
-    if let Some(exe_dir) = app_paths.exe_dir() {
-        let p = exe_dir.join(exe_name);
-        if p.is_file() {
-            return Ok(p);
-        }
+    buffersrc_ctx
+        .buffersrc_add_frame(frame, None)
+        .map_err(|e| format!("buffersrc_add_frame failed: {e:?}"))?;
+    loop {
+        let mut filtered = match buffersink_ctx.buffersink_get_frame(None) {
+            Ok(f) => f,
+            Err(RsmpegError::BufferSinkDrainError) | Err(RsmpegError::BufferSinkEofError) => break,
+            Err(e) => return Err(format!("buffersink_get_frame failed: {e:?}")),
+        };
+        filtered.set_time_base(sink_tb);
+        filtered.set_pict_type(ffi::AV_PICTURE_TYPE_NONE);
+        encode_write(enc_ctx, ofmt_ctx, stream_index, Some(filtered))?;
     }
-
-    // 2. 开发时：仅执行过 build-ffmpeg.sh、未 cargo build 时，二进制在 sidecar/ 下且带 target triple 名（ffmpeg-kb-{target}）
-    if let Some(repo_root) = crate::app_paths::repo_root_dir() {
-        let sidecar_dir = repo_root.join("src-tauri").join("kabegame").join("sidecar");
-        if let Ok(rd) = std::fs::read_dir(&sidecar_dir) {
-            for e in rd.flatten() {
-                let name = e.file_name();
-                let name_str = name.to_string_lossy();
-                if name_str.starts_with("ffmpeg-kb-")
-                    && (name_str.ends_with(".exe") || !name_str.contains('.'))
-                {
-                    let path = e.path();
-                    if path.is_file() {
-                        return Ok(path);
-                    }
-                }
-            }
-        }
-    }
-
-    Err(format!(
-        "ffmpeg-kb sidecar not found. Run `bun run build:ffmpeg` and ensure `externalBin` is set in tauri.conf (non-light mode)."
-    ))
+    Ok(())
 }
 
 /// 将目录下 frame_000.png, frame_001.png, ... 编码为动图 GIF（4fps），仅 Android 使用。

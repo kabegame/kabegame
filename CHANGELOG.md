@@ -38,6 +38,7 @@
 - **Image item preview**: Image item load origin images when mouse hover over 200ms. Video start playing after that time too.
 - **Wheel zoom**: Zoom only triggered when ctrl + wheel, common wheel event will cause a viewport movement.
 - **Image Preview**: Next image will try to switch to next page.  
+- **FFmpeg binding**: FFmpeg now embeded or dynamic linked instead of a cli usage.
 
 ### Removed
 - **Archive**: Archive unzip feature removed from application completely. Including Rhai API and local import unarchiving behavior.

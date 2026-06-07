@@ -21,7 +21,6 @@ image = { workspace = true }
 infer = "0.19"
 lru = "0.12"
 md5 = { workspace = true }
-mp4 = { workspace = true }
 regex = "1.11"
 rhai = { workspace = true }
 rhai-chrono = { version = "0.1.1", default-features = false, features = ["sync"] }
@@ -51,6 +50,9 @@ reqwest = { version = "0.11", features = [
 ] }
 # 桌面端删除原始文件时移入系统回收站（可恢复）；Android/iOS 不支持，单独处理。
 trash = "5"
+# 进程内 FFmpeg：视频预览压缩 + 维度读取（Android 走 Kotlin provider，无需）。
+# 链接依赖构建环境 FFMPEG_PKG_CONFIG_PATH 指向 third/FFmpeg-build/install/lib/pkgconfig。
+rsmpeg = { workspace = true }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 reqwest = { version = "0.11", features = [

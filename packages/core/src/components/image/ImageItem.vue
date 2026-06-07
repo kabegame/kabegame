@@ -5,6 +5,7 @@
     'item-leaving': isLeaving,
     'image-item-android': isCompact,
     'image-item-hidden': image.isHidden,
+    'image-item-fill': fillBox,
     'image-item-horizontal': horizontal,
   }" :style="rootStyle" :data-id="image.id" @mouseenter="handleMouseEnter" @mouseleave="handleMouseLeave"
     @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
@@ -58,6 +59,8 @@ interface Props {
   selected?: boolean; // 是否被选中
   isEntering?: boolean; // 是否正在入场（用于虚拟滚动的动画）
   isLeaving?: boolean; // 是否正在离开（用于虚拟滚动的动画）
+  windowAspectRatio?: number; // gallery 布局：盒子宽高比（宽/高）
+  fillBox?: boolean; // gallery 布局：盒宽高比等于图片自然比，填满且不留 letterbox 背景
   horizontal?: boolean; // 水平方向：盒子用 height: 100% 撑满主轴，width 由 aspect-ratio 决定
   videoPlaying?: boolean; // 视频是否正在播放（由上层协调，确保同一时间只有一个视频在播放）
 }
@@ -165,7 +168,13 @@ onUnmounted(() => {
 });
 
 // 非画廊网格盒子恒为正方形；画廊布局由上层按图片比例给盒子尺寸。ImageContent 始终 contain。
-const aspectRatioStyle = computed(() => ({ aspectRatio: "1 / 1" }));
+const aspectRatioStyle = computed(() => {
+  if (props.fillBox) {
+    const r = props.windowAspectRatio && props.windowAspectRatio > 0 ? props.windowAspectRatio : null;
+    return r ? { aspectRatio: `${r}` } : { aspectRatio: "16 / 9" };
+  }
+  return { aspectRatio: "1 / 1" };
+});
 // 水平方向：把 aspect-ratio 也挂在 root 上，这样 flex 能基于 height 推导 width。
 const rootStyle = computed<Record<string, string> | undefined>(() => {
   if (!props.horizontal) return undefined;
@@ -213,7 +222,7 @@ let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
 // 图片在 hover 时把 prefer 临时升级为 original（替代旧的 forceDesktopLayers）。
 const effectivePrefer = computed<ImagePrefer>(() => {
   if (isVideo.value) return "thumbnail";
-  return hoverOriginalActive.value && props.prefer === "thumbnail" ? "original" : props.prefer;
+  return hoverOriginalActive.value ? "original" : props.prefer;
 });
 const canHoverOriginalPreview = computed(() =>
   !isCompact.value &&
@@ -393,6 +402,14 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     .image-wrapper {
       height: 100%;
       width: auto;
+    }
+  }
+
+  &.image-item-fill {
+    border-radius: 0;
+
+    .image-wrapper {
+      border-radius: 0;
     }
   }
 

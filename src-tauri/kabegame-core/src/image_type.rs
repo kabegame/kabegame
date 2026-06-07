@@ -8,7 +8,7 @@ use std::sync::{LazyLock, OnceLock, RwLock};
 /// 后端内置支持的图片扩展名（小写，不含点号）。前端可通过 set_frontend_supported_image_formats 扩展额外格式。
 const BUILTIN_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp"];
 /// 后端内置支持的视频扩展名（小写，不含点号）。
-const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov"];
+const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "wmv", "webm", "mkv"];
 
 /// 扩展名到 MIME 的映射（含内置 avif，以及前端可能上报的 heic）。
 const EXT_MIME: &[(&str, &str)] = &[
@@ -22,6 +22,9 @@ const EXT_MIME: &[(&str, &str)] = &[
     ("heic", "image/heic"),
     ("mp4", "video/mp4"),
     ("mov", "video/quicktime"),
+    ("wmv", "video/x-ms-wmv"),
+    ("webm", "video/webm"),
+    ("mkv", "video/x-matroska"),
 ];
 
 static MIME_BY_EXT: OnceLock<HashMap<String, String>> = OnceLock::new();
@@ -194,6 +197,9 @@ const MIME_TO_EXT: &[(&str, &str)] = &[
     ("image/heic", "heic"),
     ("video/mp4", "mp4"),
     ("video/quicktime", "mov"),
+    ("video/x-ms-wmv", "wmv"),
+    ("video/webm", "webm"),
+    ("video/x-matroska", "mkv"),
 ];
 
 static EXT_BY_MIME: OnceLock<HashMap<String, String>> = OnceLock::new();

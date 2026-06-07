@@ -33,6 +33,9 @@ export function useImageTypes() {
             "bmp",
             "mp4",
             "mov",
+            "wmv",
+            "webm",
+            "mkv",
           ];
           mimeByExt.value = {
             jpg: "image/jpeg",
@@ -44,6 +47,9 @@ export function useImageTypes() {
             bmp: "image/bmp",
             mp4: "video/mp4",
             mov: "video/quicktime",
+            wmv: "video/x-ms-wmv",
+            webm: "video/webm",
+            mkv: "video/x-matroska",
           };
         });
     }

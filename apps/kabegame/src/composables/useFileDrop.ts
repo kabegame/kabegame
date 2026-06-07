@@ -9,6 +9,10 @@ import { useCrawlerStore } from "@/stores/crawler";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { i18n } from "@kabegame/i18n";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import { useImageTypes } from "@/composables/useImageTypes";
+
+// 媒体类型真理源：扩展名→MIME 由后端经 useImageTypes 提供（load 后填充）
+const { mimeByExt, load: loadImageTypes } = useImageTypes();
 
 // 支持的扩展名列表（用于默认提示文案），运行时由 updateSupportedTypes 从后端覆盖
 let SUPPORTED_KGPG_EXTENSIONS = ["kgpg"];
@@ -74,7 +78,7 @@ const isImageFile = (file: File) =>
 
 const isVideoFile = (file: File) =>
   file.type.startsWith("video/") ||
-  ["mp4", "webm", "mkv", "mov", "avi"].includes(getExt(file.name));
+  (mimeByExt.value[getExt(file.name)] ?? "").startsWith("video/");
 
 const isWebImportableFile = (file: File) =>
   !isKgpgName(file.name) && (isImageFile(file) || isVideoFile(file));
@@ -179,6 +183,8 @@ export function useFileDrop(
 
   const updateSupportedTypes = async () => {
     try {
+      // 确保 mimeByExt 真理源已加载（用于 isVideoFile/isImageFile 按扩展名分类）
+      await loadImageTypes();
       const dropRes = await invoke<{
         pluginExtensions: string[];
       }>("get_file_drop_supported_types");

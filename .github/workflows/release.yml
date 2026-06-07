@@ -58,19 +58,56 @@ jobs:
             libgtk-3-dev \
             libsoup-3.0-dev \
             patchelf \
-            pkg-config
+            pkg-config \
+            nasm \
+            libx264-dev
 
-      - name: macOS FUSE (for fuser crate)
+      - name: macOS FUSE (for fuser crate) + x264 (for FFmpeg/rsmpeg)
         if: runner.os == 'macOS'
         run: |
-          brew install macfuse
+          brew install macfuse x264 nasm
           echo "PKG_CONFIG_PATH=$(brew --prefix macfuse)/lib/pkgconfig" >> $GITHUB_ENV
+
+      # Windows：FFmpeg 须用 MinGW 编出动态库（libav* DLL），并用 gendef + MSVC lib.exe 生成导入库。
+      # 主程序仍是 windows-msvc（Dokan 兼容），经导入库链接这些 DLL。
+      - name: Setup MSYS2 (MinGW x264 + gendef) [Windows]
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          # 继承 Windows PATH，使 msvc-dev-cmd 设置的 lib.exe 在 MSYS2 shell 中可用
+          path-type: inherit
+          install: >-
+            base-devel
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-x264
+            mingw-w64-x86_64-tools-git
+            nasm
+            make
+            pkgconf
+
+      - name: Setup MSVC environment (lib.exe for import libs) [Windows]
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install JavaScript dependencies (frozen lockfile)
         run: bun install --frozen-lockfile
 
       - name: Install tauri-cli 2.10.0
         run: cargo install tauri-cli --version 2.10.0
+
+      # 构建 libav*（rsmpeg 链接所需）。须在 cargo 构建之前执行：
+      #   - Unix：静态库 third/FFmpeg-build/install/lib/*.a
+      #   - Windows：动态库 bin/avcodec-*.dll 等 + install/lib/*.lib 导入库（MSYS2 + lib.exe）
+      - name: Build FFmpeg libraries (rsmpeg) [Unix]
+        if: runner.os != 'Windows'
+        run: bun run build:ffmpeg
+
+      - name: Build FFmpeg libraries (rsmpeg) [Windows]
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/build-ffmpeg.sh
 
       - name: Build CLI (required before main packaging)
         run: bun b -c kabegame-cli

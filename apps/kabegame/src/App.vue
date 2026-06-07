@@ -333,14 +333,8 @@ const bgImageToken = ref(0);
 const bgVideoRef = ref<HTMLVideoElement | null>(null);
 let bgResolveToken = 0;
 
-const getPathExtension = (path: string) =>
-  (path.split(/[?#]/)[0].split(".").pop() ?? "").toLowerCase();
-
-const isVideoBackground = (image: ImageInfo | undefined) => {
-  if (isVideoMediaType(image?.type)) return true;
-  const ext = getPathExtension(image?.localPath ?? "");
-  return ext === "mp4" || ext === "mov";
-};
+const isVideoBackground = (image: ImageInfo | undefined) =>
+  isVideoMediaType(image?.type);
 
 const shouldShowAppBackground = () =>
   !!settingsStore.values.appBackgroundEnabled &&

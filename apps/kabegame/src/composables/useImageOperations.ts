@@ -8,6 +8,7 @@ import { storeToRefs } from "pinia";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { fileToUrl } from "@kabegame/core/httpServer";
+import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { IS_WEB } from "@kabegame/core/env";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
@@ -403,12 +404,6 @@ export function useImageOperations(
     }
   };
 
-  // 判断是否为支持的视频路径（与 wallpaper 及后端 image_type 一致）
-  const isVideoPath = (path: string) => {
-    const ext = (path.split(".").pop() || "").toLowerCase();
-    return ext === "mp4" || ext === "mov";
-  };
-
   // 导出到 Wallpaper Engine（图片轮播或单视频）
   const exportToWallpaperEngine = async (image: ImageInfo) => {
     try {
@@ -441,7 +436,7 @@ export function useImageOperations(
       }
 
       const finalName = projectName?.trim() || defaultName;
-      const isVideo = isVideoPath(image.localPath);
+      const isVideo = isVideoMediaType(image.type);
 
       const res = await invoke<{
         projectDir: string;

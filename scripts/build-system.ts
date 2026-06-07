@@ -45,6 +45,11 @@ export const SRC_TAURI_DIR = path.join(root, "src-tauri");
 export const SRC_FE_DIR = path.join(root, "apps");
 export const TAURI_KABEGAME_DIR = path.join(SRC_TAURI_DIR, "kabegame");
 
+export const THIRD_DIR = path.join(
+  root,
+  "third",
+);
+
 interface BuildOptions {
   component?: string;
   mode?: string;

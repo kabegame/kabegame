@@ -25,7 +25,7 @@
     <!-- 上划删除区域通过 overlay slot 放入 .pswp 根级 -->
     <template #overlay>
       <Transition name="swipe-delete-zone">
-        <div v-show="swipeDeleteActive" class="swipe-delete-zone" :class="{ ready: swipeDeleteReady }">
+        <div v-show="swipeDeleteActive" class="swipe-delete-zone" :class="{ ready: swipeDeleteReady }" :style="{ zIndex: previewOverlayZIndex + 10 }">
           <div class="swipe-delete-zone-content">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1445,7 +1445,6 @@ body.image-preview-hides-kamechan .kamechan-host {
   top: 0;
   left: 0;
   right: 0;
-  z-index: v-bind(previewOverlayZIndex);
   height: 80px;
   display: flex;
   align-items: center;

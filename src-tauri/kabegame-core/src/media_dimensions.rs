@@ -32,57 +32,61 @@ pub fn resolve_image_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// Video dimensions for a desktop or `file://` path. mp4/mov are supported
-/// through the `mp4` crate. Returns `None` on error.
+/// Video dimensions for a desktop or `file://` path. Reads the first video
+/// stream's `codecpar` width/height via libavformat (rsmpeg), so it works
+/// uniformly for mp4/mov/wmv/webm/mkv. Returns `None` on error.
+///
+/// Android does not link FFmpeg (it uses the Kotlin ContentIoProvider for
+/// `content://` media), so the sync desktop path is a no-op there.
+#[cfg(not(target_os = "android"))]
 pub fn resolve_video_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
-    let path = local_path_to_path_buf(local_path);
-    let file = match std::fs::File::open(&path) {
-        Ok(file) => file,
-        Err(e) => {
-            eprintln!(
-                "[media-dimensions] failed to open video {}: {}",
-                path.display(),
-                e
-            );
-            return None;
-        }
-    };
-    let size = match file.metadata() {
-        Ok(metadata) => metadata.len(),
-        Err(e) => {
-            eprintln!(
-                "[media-dimensions] failed to stat video {}: {}",
-                path.display(),
-                e
-            );
-            return None;
-        }
-    };
-    let reader = match mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size) {
-        Ok(reader) => reader,
-        Err(e) => {
-            eprintln!(
-                "[media-dimensions] failed to parse video {}: {}",
-                path.display(),
-                e
-            );
-            return None;
-        }
-    };
+    use rsmpeg::avformat::AVFormatContextInput;
+    use rsmpeg::ffi;
+    use std::ffi::CString;
 
-    for track in reader.tracks().values() {
-        if track.track_type().ok() == Some(mp4::TrackType::Video) {
-            let width = track.width() as u32;
-            let height = track.height() as u32;
-            if width > 0 && height > 0 {
-                return Some((width, height));
-            }
+    let path = local_path_to_path_buf(local_path);
+    let path_c = match CString::new(path.to_string_lossy().as_ref()) {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    let fmt = match AVFormatContextInput::open(&path_c) {
+        Ok(fmt) => fmt,
+        Err(e) => {
+            eprintln!(
+                "[media-dimensions] failed to open video {}: {:?}",
+                path.display(),
+                e
+            );
+            return None;
         }
+    };
+    let video_idx = match fmt.find_best_stream(ffi::AVMEDIA_TYPE_VIDEO) {
+        Ok(Some((idx, _dec))) => idx,
+        _ => {
+            eprintln!(
+                "[media-dimensions] no video stream found in {}",
+                path.display()
+            );
+            return None;
+        }
+    };
+    let codecpar = fmt.streams()[video_idx].codecpar();
+    let (width, height) = (codecpar.width, codecpar.height);
+    if width > 0 && height > 0 {
+        Some((width as u32, height as u32))
+    } else {
+        eprintln!(
+            "[media-dimensions] no video stream dimensions in {}",
+            path.display()
+        );
+        None
     }
-    eprintln!(
-        "[media-dimensions] no video track dimensions found in {}",
-        path.display()
-    );
+}
+
+/// Android stub: FFmpeg is not linked; real `content://` video dimensions come
+/// from the async ContentIoProvider path in the `android` submodule.
+#[cfg(target_os = "android")]
+pub fn resolve_video_dimensions_sync(_local_path: &str) -> Option<(u32, u32)> {
     None
 }
 
@@ -144,7 +148,7 @@ pub mod android {
         if crate::image_type::is_image_mime(&mime) {
             return resolve_image_dimensions(uri).await;
         }
-        if uri.to_ascii_lowercase().contains(".mp4") || uri.to_ascii_lowercase().contains(".mov") {
+        if crate::image_type::url_has_video_extension(uri) {
             resolve_video_dimensions(uri).await
         } else {
             resolve_image_dimensions(uri).await

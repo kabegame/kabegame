@@ -23,6 +23,9 @@ export const RESOURCES_DIR = path.join(
   "resources",
 );
 
+// Windows 运行时 DLL 清单（位于仓库根 bin/，构建时复制到 resources/bin）。
+// 含 MinGW 运行时 + libx264 + libav*（由 scripts/build-ffmpeg.sh 产出，FFmpeg 8.x 主版本后缀）。
+// 注意：实际复制以 bin/ 下发现的所有 *.dll 为准（见 copyFFmpegDllsToResources），本清单为预期 manifest。
 export const ffmpegDlls = [
   "libbz2-1.dll",
   "libgcc_s_seh-1.dll",
@@ -30,6 +33,13 @@ export const ffmpegDlls = [
   "libva.dll",
   "libwinpthread-1.dll",
   "libx264-165.dll",
+  // libav*（FFmpeg 8.2：avcodec/avformat 62、avutil 60、avfilter 11、swscale 9、swresample 6）
+  "avcodec-62.dll",
+  "avformat-62.dll",
+  "avutil-60.dll",
+  "avfilter-11.dll",
+  "swscale-9.dll",
+  "swresample-6.dll",
 ];
 
 export const RESOURCES_PLUGINS_DIR = path.join(RESOURCES_DIR, "plugins");
@@ -275,9 +285,18 @@ export function copyFFmpegDllsToResources(): void {
   );
   if (dlls.length === 0) return;
   ensureDir(RESOURCES_BIN_DIR);
-  for (const e of ffmpegDlls) {
-    const src = path.join(BIN_DIR, e);
-    stageResourceFile(src, e);
+  // 复制 bin/ 下实际存在的所有 *.dll（含 libav* 及其 MinGW 传递依赖），避免漏掉间接依赖。
+  for (const e of dlls) {
+    stageResourceFile(path.join(BIN_DIR, e.name), e.name);
+  }
+  // 预期 manifest 缺失告警（便于发现 build-ffmpeg.sh 未产出某 DLL）。
+  const present = new Set(dlls.map((e) => e.name.toLowerCase()));
+  for (const expected of ffmpegDlls) {
+    if (!present.has(expected.toLowerCase())) {
+      console.warn(
+        chalk.yellow(`[build] 预期 DLL 缺失（未在 bin/ 找到）: ${expected}`),
+      );
+    }
   }
 }
 

@@ -33,8 +33,8 @@ pub use native_download::{
 /// 仅当原图文件大于此阈值才生成独立预览缩略图；否则前端直接用原图。
 pub const IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES: u64 = 512 * 1024;
 /// 预览缩略图最长边像素上限。缩略图仅用于 UI（画廊网格 + 预览渐进占位），
-/// 全屏查看与设壁纸都用原图，所以无需接近原图分辨率。1600 兼顾高 DPI 网格清晰度与编码速度/体积。
-pub const IMAGE_THUMBNAIL_MAX_DIM: u32 = 768;
+/// 全屏查看与设壁纸都用原图，所以无需接近原图分辨率。
+pub const IMAGE_THUMBNAIL_MAX_DIM: u32 = 512;
 /// 预览缩略图固定 JPEG 质量（80~85 区间视觉接近无损，压缩与速度均衡）。
 const IMAGE_THUMBNAIL_JPEG_QUALITY: u8 = 82;
 

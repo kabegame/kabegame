@@ -45,7 +45,6 @@
     "resources": [
       "resources/**/*"
     ],
-    "externalBin": ["./sidecar/ffmpeg-kb"],
     "windows": {
       "nsis": {
         "installerHooks": "nsis/installer-hooks.nsh",

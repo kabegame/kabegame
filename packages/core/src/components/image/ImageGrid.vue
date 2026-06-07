@@ -46,7 +46,7 @@
               :style="{ gap: gridGapPx + 'px' }">
               <ImageItem v-for="entry in bucket" :key="entry.image.id" :image="entry.image"
                 :prefer="gridPrefer" :selected="selectedIds.has(entry.image.id)"
-                :horizontal="isHorizontal"
+                :window-aspect-ratio="aspectRatioOf(entry.image)" fill-box :horizontal="isHorizontal"
                 :video-playing="playingVideoId === entry.image.id"
                 @click="(e) => handleItemClick(entry.image, entry.index, e)"
                 @dblclick="() => handleItemDblClick(entry.image, entry.index)"
@@ -277,9 +277,9 @@ const gridColumnsCount = computed(() => {
   if (isCompact.value) return 2;
   return imageGridColumns.value > 0 ? imageGridColumns.value : 1;
 });
-// 列数少（<3）时优先加载原图（缩略图打底，原图流式覆盖）；列数多则只用缩略图省带宽。
+// 非web且列数少（<3）时优先加载原图（缩略图打底，原图流式覆盖）；列数多则只用缩略图省带宽。
 const gridPrefer = computed<"original" | "thumbnail">(() =>
-  gridColumnsCount.value < 3 ? "original" : "thumbnail"
+  (gridColumnsCount.value < 3 && !IS_WEB) ? "original" : "thumbnail"
 );
 // 紧凑布局：栅格更紧凑，空白更少。整体间距为历史值的 1/3，让网格更紧凑。
 const gridGapPx = computed(() => {
@@ -393,7 +393,40 @@ const currentPreviewIndex = computed(() => {
   return previewRef.value?.previewIndex ?? -1;
 });
 
+// 从 store 解析宽高比设置（画廊分桶 fallback、无尺寸图片占位）
+const parseAspectRatioFromStore = (value: string | null | undefined): number | null => {
+  if (!value) return null;
+  if (value.includes(":") && !value.startsWith("custom:")) {
+    const [w, h] = value.split(":").map(Number);
+    if (w && h && h > 0) return w / h;
+  }
+  if (value.startsWith("custom:")) {
+    const parts = value.replace("custom:", "").split(":");
+    const [w, h] = parts.map(Number);
+    if (w && h && h > 0) return w / h;
+  }
+  return null;
+};
+
+const storeAspectRatio = computed(() =>
+  parseAspectRatioFromStore(settingsStore.values.galleryImageAspectRatio)
+);
+
+const windowAspectRatio = ref<number>(16 / 9);
+const updateWindowAspectRatio = () => {
+  windowAspectRatio.value = window.innerWidth / window.innerHeight;
+};
+
 const effectiveAspectRatio = computed(() => {
+  if (!isCompact.value) {
+    if (storeAspectRatio.value !== null && storeAspectRatio.value > 0) {
+      return storeAspectRatio.value;
+    }
+    if (props.windowAspectRatio !== undefined && props.windowAspectRatio > 0) {
+      return props.windowAspectRatio;
+    }
+    return windowAspectRatio.value;
+  }
   return 1;
 });
 
@@ -414,20 +447,32 @@ const virtualScrollActive = computed(
   () => props.enableVirtualScroll && layoutMode.value === "grid"
 );
 
+// gallery 模式下每张图的宽高比（带 fallback）
+const aspectRatioOf = (image: ImageInfo) => {
+  if (image?.width != null && image?.height != null && image.width > 0 && image.height > 0) {
+    return image.width / image.height;
+  }
+  return effectiveAspectRatio.value || 16 / 10;
+};
+
 /**
  * 均衡分配 masonry 项到 N 个桶（列或行）。
- * 固定 item 比例，分桶只按数量均衡，避免长图把列表撑高。
+ * 垂直方向：桶=列，列宽相等，项高度 ∝ 1/ratio → 选择累计高度最小的桶。
+ * 水平方向：桶=行，行高相等，项宽度 ∝ ratio     → 选择累计宽度最小的桶。
  */
 const galleryBuckets = computed<Array<Array<{ image: ImageInfo; index: number }>>>(() => {
   const n = Math.max(1, gridColumnsCount.value);
   const buckets: Array<Array<{ image: ImageInfo; index: number }>> = Array.from({ length: n }, () => []);
   const loads = new Array(n).fill(0);
   const list = props.images ?? [];
+  const horizontal = isHorizontal.value;
   list.forEach((image, index) => {
+    const ratio = aspectRatioOf(image);
+    const weight = horizontal ? (ratio > 0 ? ratio : 1) : 1 / (ratio > 0 ? ratio : 1);
     let target = 0;
     for (let i = 1; i < n; i++) if (loads[i] < loads[target]) target = i;
     buckets[target].push({ image, index });
-    loads[target] += 1;
+    loads[target] += weight;
   });
   return buckets;
 });
@@ -443,7 +488,8 @@ const galleryStyle = computed<Record<string, string>>(() => ({
 const estimatedItemHeight = () => {
   const container = scrollEl.value;
   if (!container) return 240;
-  const ratio = effectiveAspectRatio.value || 16 / 9;
+  // grid 模式 ImageItem 恒为 1:1，虚拟滚动行高估算须与此一致
+  const ratio = 1;
   if (isHorizontal.value) {
     const availableHeight =
       container.clientHeight - BASE_GRID_PADDING_Y.value * 2 - gridGapPx.value * (gridColumnsCount.value - 1);
@@ -1068,6 +1114,9 @@ watch(
 );
 
 onMounted(async () => {
+  updateWindowAspectRatio();
+  window.addEventListener("resize", updateWindowAspectRatio);
+
   // 紧凑模式下不允许通过 Ctrl+Wheel 调整列数
   if (!isCompact.value) {
     window.addEventListener(
@@ -1092,6 +1141,7 @@ onMounted(async () => {
 });
 
 onUnmounted(async () => {
+  window.removeEventListener("resize", updateWindowAspectRatio);
   unbindScrollElement();
   if (smoothWheel.raf != null) {
     cancelAnimationFrame(smoothWheel.raf);
