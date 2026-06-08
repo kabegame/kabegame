@@ -48,10 +48,13 @@ require 'tmpdir'
 # 默认配置
 DEFAULT_PATH = '.'
 DEFAULT_EXCLUDE = 'node_modules,dist,build,.git,target,.nx,public,data,release,photoswipe-vue/src/js,third,ignore'
-DEFAULT_INCLUDE_EXT = 'ts,tsx,js,mjs,vue,rs,py,java,kt,swift,cs,cpp,c,cmake,h,cc,hpp,rb,html,css,scss,rhai,kt,kts,handlebars,prisma,Dockerfile,sh,ejs'
+DEFAULT_INCLUDE_EXT = 'ts,tsx,js,mjs,vue,rs,py,java,kt,swift,cs,cpp,c,cmake,h,cc,hpp,rb,html,css,scss,rhai,json5,kt,kts,handlebars,prisma,Dockerfile,sh,ejs'
 
 # Linguist 未支持的语言在此指定颜色（hex，如 #F67702）
-CUSTOM_LANG_COLORS = { 'Rhai' => '#F67702' }.freeze
+CUSTOM_LANG_COLORS = {
+  'Rhai' => '#F67702',
+  'PathQL Provider' => '#a78bfa'
+}.freeze
 
 def usage
   puts <<~USAGE
@@ -147,6 +150,95 @@ def should_include?(file_path, include_exts)
   include_exts.include?(ext)
 end
 
+def skip_json5_ws_comments(content, index)
+  i = index
+  loop do
+    i += 1 while i < content.length && content[i].match?(/\s/)
+
+    if content[i, 2] == '//'
+      line_end = content.index("\n", i + 2)
+      i = line_end ? line_end + 1 : content.length
+    elsif content[i, 2] == '/*'
+      block_end = content.index('*/', i + 2)
+      i = block_end ? block_end + 2 : content.length
+    else
+      break
+    end
+  end
+  i
+end
+
+def parse_json5_string(content, index)
+  quote = content[index]
+  i = index + 1
+  out = +''
+  while i < content.length
+    ch = content[i]
+    if ch == '\\'
+      i += 2
+      next
+    end
+    return [out, i + 1] if ch == quote
+
+    out << ch
+    i += 1
+  end
+  [nil, i]
+end
+
+def json5_top_level_keys(file_path)
+  content = File.read(file_path, encoding: 'UTF-8')
+  keys = []
+  depth = 0
+  i = 0
+
+  while i < content.length
+    if content[i, 2] == '//'
+      i = skip_json5_ws_comments(content, i)
+      next
+    end
+    if content[i, 2] == '/*'
+      i = skip_json5_ws_comments(content, i)
+      next
+    end
+
+    ch = content[i]
+    if ch == '"' || ch == "'"
+      parsed, next_i = parse_json5_string(content, i)
+      if depth == 1 && parsed
+        after_key = skip_json5_ws_comments(content, next_i)
+        keys << parsed if content[after_key] == ':'
+      end
+      i = next_i
+      next
+    end
+
+    depth += 1 if ch == '{' || ch == '['
+    depth -= 1 if ch == '}' || ch == ']'
+    i += 1
+  end
+
+  keys.uniq
+rescue StandardError
+  []
+end
+
+def pathql_provider_file?(file_path)
+  return false unless File.extname(file_path).downcase == '.json5'
+
+  normalized_path = file_path.tr('\\', '/').sub(%r{^\./}, '')
+  return false unless normalized_path.match?(%r{(^|/)src-tauri/}) ||
+                      normalized_path.match?(%r{(^|/)src-crawler-plugins/})
+
+  keys = json5_top_level_keys(file_path)
+  provider_keys = %w[$schema namespace name properties query list resolve note]
+  signature_keys = %w[namespace properties query list resolve note]
+
+  keys.include?('name') &&
+    (keys & signature_keys).any? &&
+    (keys - provider_keys).empty?
+end
+
 def count_lines(file_path, _language)
   return { total: 0, code: 0, comment: 0, blank: 0 } unless File.file?(file_path)
 
@@ -198,14 +290,19 @@ def scan_directory(dir_path, exclude_dirs, include_exts, stats, counters)
 
     begin
       abs_file_path = File.expand_path(file_path)
-      blob = Linguist::FileBlob.new(abs_file_path, abs_dir_path)
-      language = Linguist.detect(blob)
       ext = File.extname(file_path).downcase.delete('.')
-      if ext == 'rhai' && (language.nil? || language.name != 'Rhai')
-        lang_name = 'Rhai'
+      if pathql_provider_file?(file_path)
+        language = nil
+        lang_name = 'PathQL Provider'
       else
-        next unless language
-        lang_name = language.name
+        blob = Linguist::FileBlob.new(abs_file_path, abs_dir_path)
+        language = Linguist.detect(blob)
+        if ext == 'rhai' && (language.nil? || language.name != 'Rhai')
+          lang_name = 'Rhai'
+        else
+          next unless language
+          lang_name = language.name
+        end
       end
       stats[lang_name] ||= { files: 0, lines: 0, code: 0, comment: 0, blank: 0 }
 

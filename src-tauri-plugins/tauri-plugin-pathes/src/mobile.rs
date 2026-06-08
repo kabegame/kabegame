@@ -36,10 +36,4 @@ impl<R: Runtime> Pathes<R> {
             .run_mobile_plugin("getExternalDataDir", ())
             .map_err(Into::into)
     }
-
-    pub fn get_archive_extract_dir(&self) -> crate::Result<ArchiveExtractDirResponse> {
-        self.0
-            .run_mobile_plugin("getArchiveExtractDir", ())
-            .map_err(Into::into)
-    }
 }

@@ -12,10 +12,6 @@ use serde_bytes::ByteBuf;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-fn ipc_default_safe_delete() -> bool {
-    true
-}
-
 pub fn ipc_debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| match std::env::var("KABEGAME_IPC_DEBUG") {
@@ -171,18 +167,10 @@ pub enum IpcRequest {
         limit: usize,
     },
 
-    /// 获取各画册图片数量（用于侧边栏/列表徽标）
-    StorageGetAlbumCounts,
-
     /// 更新画册内图片排序
     StorageUpdateAlbumImagesOrder {
         album_id: String,
         image_orders: Vec<(String, i64)>,
-    },
-
-    /// 获取画册图片 ID 列表
-    StorageGetAlbumImageIds {
-        album_id: String,
     },
 
     /// 获取所有任务
@@ -275,6 +263,8 @@ pub enum IpcRequest {
     /// 启动整理任务
     OrganizeStart {
         dedupe: bool,
+        #[serde(default)]
+        dedupe_keep_new: bool,
         remove_missing: bool,
         regen_thumbnails: bool,
         #[serde(default)]
@@ -285,8 +275,6 @@ pub enum IpcRequest {
         range_end: Option<usize>,
         #[serde(default)]
         delete_source_files: bool,
-        #[serde(default = "ipc_default_safe_delete")]
-        safe_delete: bool,
     },
 
     /// 取消整理任务
@@ -381,7 +369,6 @@ pub enum IpcRequest {
     SettingsGetGalleryImageAspectRatio,
     SettingsGetAutoDeduplicate,
     SettingsGetDefaultDownloadDir,
-    SettingsGetWallpaperEngineDir,
     SettingsGetWallpaperRotationEnabled,
     SettingsGetWallpaperRotationAlbumId,
     SettingsGetWallpaperRotationIncludeSubalbums,
@@ -406,10 +393,6 @@ pub enum IpcRequest {
     SettingsSetGalleryImageAspectRatio {
         aspect_ratio: Option<String>,
     },
-    SettingsSetWallpaperEngineDir {
-        dir: Option<String>,
-    },
-    SettingsGetWallpaperEngineMyprojectsDir,
     SettingsSetWallpaperRotationEnabled {
         enabled: bool,
     },

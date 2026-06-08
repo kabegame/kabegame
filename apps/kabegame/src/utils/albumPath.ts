@@ -153,7 +153,7 @@ export interface ParsedAlbumBrowsePath {
   search: string;
 }
 
-/** 解析 browse_gallery_provider 用的画册路径；无法识别时返回 null */
+/** 解析画册 provider 路径；无法识别时返回 null */
 export function parseAlbumBrowsePath(path: string): ParsedAlbumBrowsePath | null {
   const trimmed = (path || "").trim();
   const allSegs = trimmed.split("/").map((s) => s.trim()).filter(Boolean);

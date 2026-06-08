@@ -1,0 +1,9 @@
+{
+  "history": "Message history",
+  "minimize": "Minimize",
+  "disable": "Disable Kamechan",
+  "historyTitle": "Message History",
+  "historyEmpty": "No messages yet",
+  "historyClear": "Clear",
+  "moreMessages": "{count} more messages"
+}

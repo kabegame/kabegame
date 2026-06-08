@@ -6,7 +6,6 @@ members = [
   "src-tauri/kabegame",
   "src-tauri/kabegame-cli",
   "src-tauri-plugins/tauri-plugin-picker",
-  "src-tauri-plugins/tauri-plugin-archiver",
   "src-tauri-plugins/tauri-plugin-pathes",
   "src-tauri-plugins/tauri-plugin-share",
   "src-tauri-plugins/tauri-plugin-compress",
@@ -17,7 +16,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "4.1.1"
+version = "4.2.0"
 
 [workspace.dependencies]
 arc-swap= "1.7"
@@ -40,11 +39,13 @@ serde_bytes = "0.11"
 serde_cbor = "0.11"
 serde_json = "1.0"
 md5 = "0.7"
-mp4 = "0.14"
+# 进程内 FFmpeg（libav*）绑定：替代旧的 ffmpeg sidecar 进程调用与 mp4 crate。
+# feature 须匹配 third/FFmpeg 子模块的 FFmpeg 主版本（当前 n8.2 → ffmpeg8）。
+# 链接经 rusty_ffmpeg：由构建环境的 FFMPEG_PKG_CONFIG_PATH 指向 third/FFmpeg-build/install/lib/pkgconfig。
+rsmpeg = { version = "0.18.0+ffmpeg.8.0", default-features = false, features = ["ffmpeg8"] }
 percent-encoding = "2"
 sha2 = "0.10"
-tauri-build = {version = "2.5", features = []}
-tauri-plugin-archiver = {path = "./src-tauri-plugins/tauri-plugin-archiver"}
+tauri-build = {version = "2.6.2", features = []}
 tauri-plugin-compress = {path = "./src-tauri-plugins/tauri-plugin-compress"}
 tauri-plugin-pathes = {path = "./src-tauri-plugins/tauri-plugin-pathes"}
 tauri-plugin-picker = {path = "./src-tauri-plugins/tauri-plugin-picker"}
@@ -60,7 +61,9 @@ windows-sys = {version = "0.52", features = [
   "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_DataExchange",
+  "Win32_System_IO",
   "Win32_System_Memory",
+  "Win32_System_Threading",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ]}
@@ -70,3 +73,12 @@ zip = "0.6"
 # on when release
 # codegen-units = 1
 # lto = "thin"
+
+# dev/debug 构建下，把所有第三方依赖按 opt-level 2 编译（工作区成员不受影响，仍 opt-level 0、可调试）。
+# 原因：image crate 的缩放/解码是纯 Rust 像素运算，未优化的 debug 下慢几十倍
+# （实测 1737x1500 缩略图 Lanczos3 缩放：debug ~3.4s vs release ~50ms）。
+# 这样 `bun dev` 下大图缩略图也能快到几十~几百毫秒，而本地 crate 编译/调试体验不变。
+[profile.dev.package."*"]
+opt-level = 2
+debug-assertions = false
+overflow-checks = false

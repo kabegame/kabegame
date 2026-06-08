@@ -32,7 +32,7 @@ const tooltipText = computed(() =>
   position: fixed;
   left: 12px;
   bottom: 12px;
-  z-index: 2000;
+  z-index: 100;
   padding: 6px 8px;
   border-radius: 999px;
   background: var(--el-bg-color-overlay);

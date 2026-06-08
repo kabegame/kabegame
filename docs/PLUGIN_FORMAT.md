@@ -17,6 +17,8 @@ plugin-name.kgpg
     - doc_root/              # 文档目录（可选）
         └── doc.md           # 插件文档，给用户查看。使用标准 Markdown 渲染（GFM），文档中的根目录为 doc_root，路径解析只允许在 doc_root 之下
     - configs/               # 推荐配置
+    - metadata_migrations/    # 图片 metadata 迁移脚本（可选）
+        └── v{N}.rhai         # N 为从 1 开始的连续自然数版本
     - templates/             # 插件提供模板
 ```
 
@@ -77,6 +79,7 @@ plugin-name.kgpg
 - `crawl.rhai` - 必需，爬取脚本（Rhai 脚本格式）
 - `icon.png` - 可选，插件图标（仅支持 PNG）
 - `config.json` - 可选，插件配置
+- `metadata_migrations/v{N}.rhai` - 可选，图片 metadata 迁移脚本；`N` 为从 1 开始的连续自然数版本
 - `doc_root/doc.md` - 可选，用户文档（基于标准 Markdown/GFM 渲染，图片路径仅允许 doc_root 内相对路径）
 - `doc_root/<image>` - 可选，文档引用的图片资源（jpg/jpeg/png/gif/webp/bmp）
 
@@ -98,4 +101,3 @@ plugin-name.kgpg
 - **一次性加载**：已安装插件在首次列出时（或通过 `refresh_plugins`）被 `parse_kgpg` 一次性解析：`manifest.json`、`config.json`、`doc_root/*.md`、`doc_root/*` 图片资源、`crawl.rhai` / `crawl.js` 脚本内容、`templates/description.ejs`、`configs/*.json` 均被读入内存并挂在 `Plugin` 结构体上。
 - **运行阶段**：爬取任务、文档图片、变量定义等均直接从内存读取，不再重新打开 `.kgpg` ZIP（临时预览/导入时例外）。
 - **磁盘保留**：`.kgpg` 文件仍保留在插件目录（`Plugin.file_path`），用于插件升级、导出等操作。
-

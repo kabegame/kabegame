@@ -10,7 +10,7 @@
 import { ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { DocumentCopy, Check } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { IS_WEB } from "@kabegame/core/env";
 
 const { t } = useI18n();

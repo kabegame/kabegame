@@ -1,0 +1,7 @@
+{
+    "namespace": "kabegame",
+    "name": "tasks_all_provider",
+    "query": {
+        "order": [{ "sql": "tasks.start_time", "order": "desc" }]
+    }
+}

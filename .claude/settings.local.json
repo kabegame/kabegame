@@ -22,7 +22,18 @@
       "Bash(awk *)",
       "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\\\\apps\\\\kabegame\\\\src\\\\components\" -Filter \"Task*.vue\")",
       "Bash(Select-Object FullName)",
-      "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\\\\src-tauri\\\\pathql-rs\" -Recurse -Name)"
+      "Bash(Get-ChildItem -Path \"D:\\\\Codes\\\\kabegame\\\\src-tauri\\\\pathql-rs\" -Recurse -Name)",
+      "Bash(xargs basename -a)",
+      "Bash(kill -0 31566)",
+      "Read(//tmp/**)",
+      "Bash(curl -s https://crates.io/api/v1/crates/tauri-build)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('tauri-build max:', d['crate']['max_stable_version']\\)\")",
+      "Bash(curl -s https://crates.io/api/v1/crates/tauri)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('tauri max:', d['crate']['max_stable_version']\\)\")",
+      "WebFetch(domain:anihonetwallpaper.com)",
+      "Bash(bash -n scripts/build-ffmpeg.sh)",
+      "Read(//Users/cmtheit/code/**)",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('src-tauri/kabegame/tauri.conf.json','utf8'\\)\\); console.log\\('OK'\\)\")"
     ]
   }
 }

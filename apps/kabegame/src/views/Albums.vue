@@ -5,7 +5,7 @@
         :album-drive-enabled="albumDriveEnabled"
         @view-vd="openVirtualDrive"
         @refresh="handleRefresh"
-        @create-album="showCreateDialog = true"
+        @create-album="createDialog.open()"
         @help="openHelpDrawer"
         @quick-settings="openQuickSettings"
       />
@@ -14,10 +14,12 @@
         <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div"
           class="albums-grid" :class="{ 'albums-grid-compact': isCompact }">
           <AlbumCard v-for="album in displayedAlbumRoots" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
-            :count="displayedAlbumCounts[album.id] || 0" :preview-images="albumPreviewImages[album.id] || []"
+            :count="displayedAlbumStats[album.id]?.imageCount || 0"
+            :sub-album-count="displayedAlbumStats[album.id]?.subAlbumCount || 0"
+            :preview-images="albumPreviewImages[album.id] || []"
             :video-preview-remount-key="albumVideoPreviewRemountKey"
             :is-loading="albumIsLoadingMap[album.id] || false"
-            @click="openAlbum(album)" @visible="prefetchPreview(album)"
+            @click="openAlbum(album)"
             @contextmenu="openAlbumContextMenu($event, album)" />
         </transition-group>
 
@@ -30,19 +32,78 @@
       :position="albumMenu.position.value"
       :actions="(albumActions as import('@kabegame/core/actions/types').ActionItem<unknown>[])"
       :context="albumMenuContext"
-      :z-index="3500"
+      :z-index="albumMenu.zIndex.value"
       @close="albumMenu.hide"
-      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo')" />
+      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursiveExisting' | 'syncNowRecursiveFull' | 'openLocalFolder')" />
 
-    <el-dialog v-model="showCreateDialog" :title="$t('albums.newAlbum')" width="360px">
-      <el-input v-model="newAlbumName" :placeholder="$t('albums.placeholderName')" />
+    <el-dialog
+      :model-value="createDialog.isOpen.value"
+      :z-index="createDialog.zIndex.value"
+      :title="$t('albums.newAlbum')"
+      width="420px"
+      @update:model-value="createDialog.close"
+      @closed="resetCreateAlbumDialog"
+    >
+      <el-form label-width="0" @submit.prevent>
+        <el-input
+          v-model="newAlbumName"
+          :placeholder="$t('albums.placeholderName')"
+          @keyup.enter="handleCreateAlbum"
+        />
+
+        <AlbumPickerField
+          v-model="newAlbumParentId"
+          class="mt-3"
+          :album-tree="createAlbumParentTree"
+          :album-counts="displayedAlbumCountsForPicker"
+          :placeholder="$t('albums.selectParentAlbum')"
+          :picker-title="$t('albums.parentAlbum')"
+        />
+
+        <el-checkbox v-if="!IS_ANDROID" v-model="newAlbumIsLocalFolder" class="mt-3">
+          {{ $t('albums.localFolder.create') }}
+        </el-checkbox>
+
+        <div v-if="newAlbumIsLocalFolder" class="mt-2 flex flex-col gap-2">
+          <div class="flex items-center gap-2">
+            <el-button size="small" @click="pickLocalFolder">
+              {{ $t('albums.localFolder.choosePath') }}
+            </el-button>
+            <span class="local-folder-path" :title="newAlbumSyncFolder">
+              {{ newAlbumSyncFolder || $t('albums.localFolder.noPathSelected') }}
+            </span>
+          </div>
+          <p v-if="syncFolderDuplicate" class="local-folder-error">
+            {{ $t('albums.localFolder.duplicatePathHint') }}
+          </p>
+          <el-checkbox v-model="newAlbumRecursive">
+            {{ $t('albums.localFolder.recursive') }}
+          </el-checkbox>
+          <p class="local-folder-hint">
+            {{ $t('albums.localFolder.recursiveHint') }}
+          </p>
+          <p v-if="newAlbumRecursive" class="local-folder-hint">
+            {{ $t('albums.localFolder.recursiveLimits', { maxDepth: 16 }) }}
+          </p>
+          <p class="local-folder-hint">
+            {{ $t('albums.localFolder.skipNotice') }}
+          </p>
+        </div>
+      </el-form>
       <template #footer>
-        <el-button @click="showCreateDialog = false">{{ $t('common.cancel') }}</el-button>
-        <el-button type="primary" :disabled="!newAlbumName.trim()" @click="handleCreateAlbum">{{ $t('albums.create') }}</el-button>
+        <el-button @click="createDialog.close()">{{ $t('common.cancel') }}</el-button>
+        <el-button
+          type="primary"
+          :disabled="!canSubmitCreateAlbum"
+          :loading="creatingAlbum"
+          @click="handleCreateAlbum"
+        >
+          {{ $t('albums.create') }}
+        </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showMoveAlbumDialog" :title="$t('albums.moveToTitle')" width="420px" @closed="onMoveAlbumDialogClosed">
+    <el-dialog :model-value="moveDialog.isOpen.value" :z-index="moveDialog.zIndex.value" :title="$t('albums.moveToTitle')" width="420px" @update:model-value="moveDialog.close" @closed="onMoveAlbumDialogClosed">
       <div class="mb-3">
         <el-checkbox v-model="moveToRoot">{{ $t('albums.moveToRoot') }}</el-checkbox>
       </div>
@@ -55,7 +116,7 @@
         :placeholder="$t('albums.selectTargetAlbum')"
       />
       <template #footer>
-        <el-button @click="showMoveAlbumDialog = false">{{ $t('common.cancel') }}</el-button>
+        <el-button @click="moveDialog.close()">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" @click="confirmMoveAlbum">{{ $t('common.ok') }}</el-button>
       </template>
     </el-dialog>
@@ -74,7 +135,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, watch } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { Refresh, Setting, QuestionFilled, Delete } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
@@ -96,20 +158,28 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, IS_WEB, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { thumbnailToUrl } from "@kabegame/core/httpServer";
+import { fileToUrl, thumbnailToUrl } from "@kabegame/core/httpServer";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
+import { openFilePicker } from "@/api/dialog";
+import {
+  syncLocalFolderAlbum,
+  syncLocalFolderAlbums,
+  type BatchSyncItem,
+  type FolderStatusState,
+  type SyncReport,
+} from "@/api/syncLocalFolder";
 import {
   albumSubtreeContainsAny,
   buildAlbumMediaNodes,
-  fetchAlbumDirectCounts,
   flattenAlbumMediaNodes,
   loadAlbumMediaPreview,
   type AlbumMediaNode,
 } from "@/utils/albumMediaTree";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
@@ -123,6 +193,87 @@ const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("albums");
 const uiStore = useUiStore();
 const { isCompact } = storeToRefs(uiStore);
+
+const syncStatusSuffix = (state: FolderStatusState) =>
+  state.replace(/(^|_)(\w)/g, (_, __, c: string) => c.toUpperCase());
+
+const reportBatchSyncResult = (results: BatchSyncItem[]) => {
+  if (results.length === 0) return;
+
+  const errors = results.filter((r) => r.err != null);
+  const badStatus = results.filter(
+    (r) => r.ok && r.ok.status && r.ok.status.state !== "ok",
+  );
+  const okResults = results.filter((r) => r.ok && (!r.ok.status || r.ok.status.state === "ok"));
+
+  let added = 0;
+  let deleted = 0;
+  let reimported = 0;
+  let skippedInFlight = 0;
+  for (const r of okResults) {
+    if (!r.ok) continue;
+    added += r.ok.added;
+    deleted += r.ok.deleted;
+    reimported += r.ok.reimported;
+    if (r.ok.skippedInFlight) skippedInFlight++;
+  }
+
+  if (errors.length > 0) {
+    console.warn("[local_folder] sync errors", errors);
+    ElMessage.error(
+      t("albums.localFolder.refreshSyncFailedSome", {
+        count: errors.length,
+        firstError: errors[0]?.err ?? "",
+      }),
+    );
+    return;
+  }
+
+  if (badStatus.length > 0) {
+    console.warn("[local_folder] sync bad status", badStatus);
+    ElMessage.warning(
+      t("albums.localFolder.refreshSyncBadStatus", { count: badStatus.length }),
+    );
+    return;
+  }
+
+  const skippedText =
+    skippedInFlight > 0
+      ? t("albums.localFolder.refreshSyncSkippedSuffix", { skipped: skippedInFlight })
+      : "";
+  ElMessage.success(
+    t("albums.localFolder.refreshSyncDone", {
+      added,
+      deleted,
+      reimported,
+      skippedText,
+    }),
+  );
+};
+
+const reportSingleSyncResult = (report: SyncReport) => {
+  if (report.skippedInFlight) {
+    ElMessage.info(t("albums.localFolder.syncInFlight"));
+    return;
+  }
+
+  if (report.status && report.status.state !== "ok") {
+    ElMessage.warning(
+      t(`albums.localFolder.status${syncStatusSuffix(report.status.state)}`, {
+        message: report.status.message ?? "",
+      }),
+    );
+    return;
+  }
+
+  ElMessage.success(
+    t("albums.localFolder.syncDone", {
+      added: report.added,
+      deleted: report.deleted,
+      reimported: report.reimported,
+    }),
+  );
+};
 
 const pullToRefreshOpts = computed(() =>
   IS_ANDROID
@@ -172,12 +323,10 @@ const currentRotationAlbumId = computed(() => {
 // 轮播是否开启
 const wallpaperRotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 
-const showCreateDialog = ref(false);
-useModalBack(showCreateDialog);
+const createDialog = useModal();
 
 const moveDlgAlbum = ref<Album | null>(null);
-const showMoveAlbumDialog = ref(false);
-useModalBack(showMoveAlbumDialog);
+const moveDialog = useModal();
 const moveToRoot = ref(false);
 const moveTargetParentId = ref<string | null>(null);
 
@@ -188,7 +337,7 @@ const moveAlbumTree = computed(() => {
   return albumStore.getAlbumTreeExcluding(exclude);
 });
 
-watch(showMoveAlbumDialog, (open) => {
+watch(moveDialog.isOpen, (open) => {
   if (open) {
     moveToRoot.value = false;
     moveTargetParentId.value = null;
@@ -209,7 +358,7 @@ const confirmMoveAlbum = async () => {
   }
   try {
     await albumStore.moveAlbum(album.id, pid);
-    showMoveAlbumDialog.value = false;
+    moveDialog.close();
     moveDlgAlbum.value = null;
     ElMessage.success(t("albums.moveSuccess"));
   } catch (e: unknown) {
@@ -221,20 +370,58 @@ const confirmMoveAlbum = async () => {
   }
 };
 const newAlbumName = ref("");
+const newAlbumParentId = ref<string | null>(null);
+const newAlbumIsLocalFolder = ref(false);
+const newAlbumSyncFolder = ref("");
+const newAlbumRecursive = ref(false);
+const creatingAlbum = ref(false);
+/** 规范化本地路径用于比较：去除尾部分隔符（根目录除外）。 */
+const normalizeSyncPath = (p: string): string => {
+  const trimmed = p.trim();
+  if (!trimmed) return "";
+  const stripped = trimmed.replace(/[/\\]+$/, "");
+  return stripped || trimmed;
+};
+const existingSyncFolders = computed(() => {
+  const set = new Set<string>();
+  for (const a of albums.value) {
+    if (a.type === "local_folder" && a.syncFolder) {
+      set.add(normalizeSyncPath(a.syncFolder));
+    }
+  }
+  return set;
+});
+/** 选中的同步目录已存在对应的本地文件夹画册：禁用创建并在弹窗提示。 */
+const syncFolderDuplicate = computed(() => {
+  if (!newAlbumIsLocalFolder.value || !newAlbumSyncFolder.value) return false;
+  return existingSyncFolders.value.has(normalizeSyncPath(newAlbumSyncFolder.value));
+});
+const canSubmitCreateAlbum = computed(() => {
+  if (!newAlbumName.value.trim()) return false;
+  if (creatingAlbum.value) return false;
+  if (newAlbumIsLocalFolder.value && !newAlbumSyncFolder.value) return false;
+  if (syncFolderDuplicate.value) return false;
+  return true;
+});
 const isRefreshing = ref(false);
 const albumCardRefs = ref<Record<string, any>>({});
 // 使用 300ms 防闪屏加载延迟
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 // 用于强制重新挂载列表（让“刷新”能触发完整 enter 动画 + 重置卡片内部状态）
 const albumsListKey = ref(0);
+const albumListPath = computed(() => (globalHide.value ? "hide/album/" : "album/"));
 /** keep-alive 再次进入画册页时递增，作为视频预览 ImageItem 的 :key 后缀，强制重建以恢复桌面 <video> autoplay */
 const albumVideoPreviewRemountKey = ref(0);
 const albumsSkipFirstActivateForVideoRemount = ref(true);
 
 const displayedAlbumRoots = computed(() => albumRoots.value);
-const albumDirectCounts = ref<Record<string, number>>({});
 const displayedAlbumNodes = computed(() =>
-  buildAlbumMediaNodes(displayedAlbumRoots.value, albums.value, albumDirectCounts.value, globalHide.value),
+  buildAlbumMediaNodes(
+    displayedAlbumRoots.value,
+    albums.value,
+    albumStore.getAlbumDirectCounts(globalHide.value),
+    globalHide.value,
+  ),
 );
 const displayedAlbumNodeById = computed(() => {
   const entries = displayedAlbumNodes.value
@@ -242,27 +429,17 @@ const displayedAlbumNodeById = computed(() => {
     .map((node) => [node.album.id, node] as const);
   return Object.fromEntries(entries) as Record<string, AlbumMediaNode>;
 });
-const displayedAlbumCounts = computed(() => {
-  const out: Record<string, number> = {};
-  for (const node of Object.values(displayedAlbumNodeById.value)) {
-    out[node.album.id] = node.aggregateTotal;
-  }
-  return out;
-});
+const displayedAlbumStats = computed(() => albumStore.getAlbumStats(globalHide.value));
 const displayedAlbumCountsForPicker = computed(() => ({
-  ...displayedAlbumCounts.value,
+  ...albumStore.getAlbumCounts(globalHide.value),
 }));
-
-async function refreshAlbumDirectCounts(albumIds?: Iterable<string>) {
-  const ids = albumIds ?? albums.value.map((album) => album.id);
-  const counts = await fetchAlbumDirectCounts(ids, globalHide.value);
-  albumDirectCounts.value = { ...albumDirectCounts.value, ...counts };
-}
+const createAlbumParentTree = computed(() =>
+  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID]),
+);
 
 function removeLocalAlbumMediaState(albumIds: Iterable<string>) {
   const ids = new Set(albumIds);
   for (const id of ids) {
-    delete albumDirectCounts.value[id];
     clearAlbumPreviewCache(id);
   }
 }
@@ -298,14 +475,16 @@ const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
 };
 
 const toPreviewUrl = (img: ImageInfo): string => {
-  const thumbPath = (img.thumbnailPath || img.localPath || "").trim();
-  if (!thumbPath) return "";
+  const thumbPath = (img.thumbnailPath || "").trim();
+  const localPath = (img.localPath || "").trim();
+  const path = thumbPath || localPath;
+  if (!path) return "";
   if (IS_ANDROID) {
-    return thumbPath.startsWith("content://")
-      ? thumbPath.replace("content://", CONTENT_URI_PROXY_PREFIX)
+    return path.startsWith("content://")
+      ? path.replace("content://", CONTENT_URI_PROXY_PREFIX)
       : "";
   }
-  return thumbnailToUrl(thumbPath);
+  return thumbPath ? thumbnailToUrl(thumbPath) : fileToUrl(localPath);
 };
 
 const hasPreviewUrl = (img: ImageInfo) => !!toPreviewUrl(img);
@@ -319,17 +498,27 @@ const albumPreviewImages = ref<Record<string, ImageInfo[]>>({});
 // 正在加载预览的画册 ID 集合
 const albumIsLoading = ref<Set<string>>(new Set());
 
+// 刷新单个画册预览：直接拉取并覆写，不先清空（清空到空数组再回填才是闪屏根因）
+const refreshAlbumPreview = async (album: { id: string }) => {
+  if (albumIsLoading.value.has(album.id)) return;
+  albumIsLoading.value.add(album.id);
+  try {
+    const next = await loadAlbumPreviewFromProvider(album, albumPreviewLimit);
+    albumPreviewImages.value[album.id] = next;
+  } catch (error) {
+    console.error("刷新画册预览失败:", error);
+  } finally {
+    albumIsLoading.value.delete(album.id);
+  }
+};
+
 // 刷新收藏画册的预览（用于收藏状态变化时）
 const refreshFavoriteAlbumPreview = async () => {
   const favoriteAlbum =
     displayedAlbumRoots.value.find((a) => a.id === FAVORITE_ALBUM_ID) ??
     albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
   if (!favoriteAlbum) return;
-
-  // 清除收藏画册的预览缓存
-  clearAlbumPreviewCache(FAVORITE_ALBUM_ID);
-  // 重新加载预览
-  await prefetchPreview(favoriteAlbum);
+  await refreshAlbumPreview(favoriteAlbum);
 };
 
 // 收藏状态以 store 为准：通过收藏画册计数变化触发预览刷新
@@ -347,18 +536,13 @@ useAlbumImagesChangeRefresh({
     const affected = new Set(p.albumIds ?? []);
     const allAffected = affected.size === 0;
     const hiddenAffected = affected.has(HIDDEN_ALBUM_ID);
-    const idsToRefresh = allAffected || hiddenAffected
-      ? albums.value.map((album) => album.id)
-      : albums.value.filter((album) => affected.has(album.id)).map((album) => album.id);
-    await refreshAlbumDirectCounts(idsToRefresh);
 
     for (const node of displayedAlbumNodes.value) {
       const album = node.album;
       const subtreeAffected = albumSubtreeContainsAny(node, affected);
       if (!allAffected && !subtreeAffected && !hiddenAffected) continue;
 
-      clearAlbumPreviewCache(album.id);
-      await prefetchPreview(album);
+      await refreshAlbumPreview(album);
     }
   },
 });
@@ -367,22 +551,16 @@ onMounted(async () => {
   startLoading();
   try {
     await albumStore.loadAlbums();
-    await refreshAlbumDirectCounts();
   } finally {
     finishLoading();
   }
   // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
-
-  // 初始化时加载前几个画册的预览图（前3张优先）
-  const albumsToPreload = displayedAlbumRoots.value.slice(0, 3);
-  for (const album of albumsToPreload) {
-    prefetchPreview(album);
-  }
+  // 预览图加载由上方 watch(displayedAlbumRoots) 统一驱动，无需在此手动预载。
 
   // 监听收藏画册数量变化，刷新预览
   stopFavoriteCountWatch.value?.();
   stopFavoriteCountWatch.value = watch(
-    () => displayedAlbumCounts.value[FAVORITE_ALBUM_ID],
+    () => displayedAlbumStats.value[FAVORITE_ALBUM_ID]?.imageCount,
     () => {
       refreshFavoriteAlbumPreview();
     }
@@ -393,6 +571,7 @@ onMounted(async () => {
 
 // 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表，并等待设置缓存就绪。
 onActivated(async () => {
+  await albumStore.loadAlbums();
   await settingsStore.ensureLoaded();
 
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
@@ -400,7 +579,7 @@ onActivated(async () => {
     displayedAlbumRoots.value.find((a) => a.id === FAVORITE_ALBUM_ID) ??
     albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
   if (favoriteAlbum) {
-    const favoriteCount = displayedAlbumCounts.value[FAVORITE_ALBUM_ID] || 0;
+    const favoriteCount = displayedAlbumStats.value[FAVORITE_ALBUM_ID]?.imageCount || 0;
     const images = albumPreviewImages.value[FAVORITE_ALBUM_ID];
     const hasValidPreview = images && images.length > 0 && images.some((img) => hasPreviewUrl(img));
 
@@ -412,16 +591,8 @@ onActivated(async () => {
     }
   }
 
-  // 检查是否有新画册需要加载预览（还没有预览数据的画册）
-  for (const album of displayedAlbumRoots.value.slice(0, 6)) {
-    // 跳过收藏画册，因为上面已经处理过了
-    if (album.id === FAVORITE_ALBUM_ID) continue;
-
-    const images = albumPreviewImages.value[album.id];
-    if (!images || images.length === 0 || !images.some((img) => hasPreviewUrl(img))) {
-      prefetchPreview(album);
-    }
-  }
+  // 为所有画册补齐预览（prefetchPreview 自带去重/已加载短路）
+  ensureAllAlbumPreviews();
 
   // 首次 onActivated 不递增，避免刚进页就多挂一次视频；从其它页返回时再递增以重建 ImageItem
   if (albumsSkipFirstActivateForVideoRemount.value) {
@@ -436,11 +607,9 @@ const handleRefresh = async () => {
   isRefreshing.value = true;
   try {
     await albumStore.loadAlbums();
-    await refreshAlbumDirectCounts();
     await settingsStore.ensureLoaded();
     // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来"没刷新"）
-    const albumsToPreload = displayedAlbumRoots.value.slice(0, 6);
-    for (const album of albumsToPreload) {
+    for (const album of displayedAlbumRoots.value) {
       clearAlbumPreviewCache(album.id);
     }
     // 收藏画册也强制重载一次（收藏状态变化会影响预览）
@@ -456,11 +625,20 @@ const handleRefresh = async () => {
     // 强制重新挂载列表，让每个卡片的 enter 动画和内部状态都重置
     albumsListKey.value++;
 
-    // 重新加载预览图（前 6 张优先）
-    for (const album of albumsToPreload) {
-      prefetchPreview(album);
+    // 重新加载所有画册预览
+    ensureAllAlbumPreviews();
+
+    const localFolderIdsOnPage = displayedAlbumRoots.value
+      .filter((a) => a.type === "local_folder")
+      .map((a) => a.id);
+
+    if (IS_ANDROID || IS_WEB || localFolderIdsOnPage.length === 0) {
+      ElMessage.success(t("albums.refreshSuccess"));
+    } else {
+      ElMessage.warning(t("albums.localFolder.refreshSyncProgressing"));
+      const results = await syncLocalFolderAlbums(localFolderIdsOnPage);
+      reportBatchSyncResult(results);
     }
-    ElMessage.success(t("albums.refreshSuccess"));
   } catch (error) {
     console.error("刷新失败:", error);
     ElMessage.error(t("albums.refreshFailed"));
@@ -475,23 +653,58 @@ watch(globalHide, async () => {
   albumsListKey.value++;
   startLoading();
   try {
-    await refreshAlbumDirectCounts();
-    for (const album of displayedAlbumRoots.value.slice(0, 6)) {
-      prefetchPreview(album);
-    }
+    ensureAllAlbumPreviews();
   } finally {
     finishLoading();
   }
 });
 
+const resetCreateAlbumDialog = () => {
+  newAlbumName.value = "";
+  newAlbumParentId.value = null;
+  newAlbumIsLocalFolder.value = false;
+  newAlbumSyncFolder.value = "";
+  newAlbumRecursive.value = false;
+  creatingAlbum.value = false;
+};
+
+const pickLocalFolder = async () => {
+  try {
+    const selected = await openFilePicker({ directory: true, multiple: false });
+    const path = selected?.paths?.[0];
+    if (path) {
+      newAlbumSyncFolder.value = path;
+    }
+  } catch (error) {
+    console.warn("pick local folder failed", error);
+    ElMessage.error(t("albums.selectFolderFailed"));
+  }
+};
 
 const handleCreateAlbum = async () => {
-  if (!newAlbumName.value.trim()) return;
+  if (!canSubmitCreateAlbum.value) return;
+  // 本地文件夹同步仅桌面端支持：Web 端（无论是否管理员）选择本地文件夹后点击创建，引导前往桌面版。
+  if (newAlbumIsLocalFolder.value && (await guardDesktopOnly("localFolderSync"))) {
+    return;
+  }
+  creatingAlbum.value = true;
   try {
-    await albumStore.createAlbum(newAlbumName.value.trim(), { reload: false });
-    newAlbumName.value = "";
-    showCreateDialog.value = false;
-    ElMessage.success("画册已创建");
+    const parentId = newAlbumParentId.value?.trim() || null;
+    if (newAlbumIsLocalFolder.value) {
+      await albumStore.createLocalFolderAlbum(
+        {
+          name: newAlbumName.value.trim(),
+          parentId,
+          syncFolder: newAlbumSyncFolder.value,
+          recursive: newAlbumRecursive.value,
+        },
+        { reload: false },
+      );
+    } else {
+      await albumStore.createAlbum(newAlbumName.value.trim(), { parentId, reload: false });
+    }
+    createDialog.close();
+    ElMessage.success(t("albums.albumCreated"));
   } catch (error: any) {
     console.error("创建画册失败:", error);
     // 提取友好的错误信息
@@ -499,6 +712,8 @@ const handleCreateAlbum = async () => {
       ? error
       : error?.message || String(error) || t("albums.createAlbumFailed");
     ElMessage.error(errorMessage);
+  } finally {
+    creatingAlbum.value = false;
   }
 };
 
@@ -514,6 +729,8 @@ const albumIsLoadingMap = computed(() => {
 const clearAlbumPreviewCache = (albumId: string) => {
   delete albumPreviewImages.value[albumId];
   albumIsLoading.value.delete(albumId);
+  // 清除 store 中的预览缓存（强制下一次重新拉取预览图片列表）
+  delete albumStore.albumPreviews[albumId];
 };
 
 // 画册右键菜单状态
@@ -537,15 +754,16 @@ const albumMenuContext = computed<AlbumActionContext>(() => {
     selectedCount: 0,
     currentRotationAlbumId: currentRotationAlbumId.value,
     wallpaperRotationEnabled: wallpaperRotationEnabled.value,
-    albumImageCount: album ? (displayedAlbumCounts.value[album.id] || 0) : 0,
+    albumImageCount: album ? (displayedAlbumStats.value[album.id]?.imageCount || 0) : 0,
     favoriteAlbumId: FAVORITE_ALBUM_ID,
+    isLocalFolder: album?.type === "local_folder",
   };
 });
 
 const prefetchPreview = async (album: { id: string }) => {
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
   if (album.id === FAVORITE_ALBUM_ID) {
-    const favoriteCount = displayedAlbumCounts.value[FAVORITE_ALBUM_ID] || 0;
+    const favoriteCount = displayedAlbumStats.value[FAVORITE_ALBUM_ID]?.imageCount || 0;
     const images = albumPreviewImages.value[FAVORITE_ALBUM_ID];
     const hasValidPreview = images && images.length > 0 && images.some((img) => hasPreviewUrl(img));
 
@@ -581,6 +799,19 @@ const prefetchPreview = async (album: { id: string }) => {
   }
 };
 
+// 直接为所有展示中的画册加载预览（不再用视口懒加载，新增画册经下方 watch 自动补齐）
+const ensureAllAlbumPreviews = () => {
+  for (const album of displayedAlbumRoots.value) {
+    prefetchPreview(album);
+  }
+};
+
+watch(
+  () => displayedAlbumRoots.value.map((a) => a.id).join("|"),
+  () => ensureAllAlbumPreviews(),
+  { immediate: true },
+);
+
 const openAlbum = (album: { id: string; name: string }) => {
   trackAlbumEnter(album, "card");
   router.push(`/albums/${album.id}`);
@@ -603,7 +834,16 @@ const openAlbumContextMenu = (event: MouseEvent, album: { id: string; name: stri
 };
 
 const handleAlbumMenuCommand = async (
-  command: "browse" | "delete" | "setWallpaperRotation" | "rename" | "moveTo",
+  command:
+    | "browse"
+    | "delete"
+    | "setWallpaperRotation"
+    | "rename"
+    | "moveTo"
+    | "syncNow"
+    | "syncNowRecursiveExisting"
+    | "syncNowRecursiveFull"
+    | "openLocalFolder",
 ) => {
   const context = albumMenuContext.value;
   const album = context.target;
@@ -614,6 +854,52 @@ const handleAlbumMenuCommand = async (
   if (command === "browse") {
     trackAlbumEnter({ id, name }, "context_menu");
     router.push(`/albums/${id}`);
+    return;
+  }
+
+  if (command === "openLocalFolder") {
+    const folder = album.syncFolder?.trim();
+    if (!folder) return;
+    try {
+      await invoke("open_explorer", { path: folder });
+    } catch (e: any) {
+      console.error("打开本地文件夹失败:", e);
+      ElMessage.error(e?.message || String(e));
+    }
+    return;
+  }
+
+  if (command === "syncNow") {
+    try {
+      const report = await syncLocalFolderAlbum(id);
+      if (report) reportSingleSyncResult(report);
+    } catch (e: any) {
+      ElMessage.error(e?.message || String(e));
+    }
+    return;
+  }
+
+  if (command === "syncNowRecursiveExisting" || command === "syncNowRecursiveFull") {
+    ElMessage.info(t("albums.localFolder.recursiveSyncing", { name }));
+    try {
+      const report = await syncLocalFolderAlbum(id, {
+        recursive: true,
+        createMissingAlbums: command === "syncNowRecursiveFull",
+      });
+      if (report) {
+        await albumStore.loadAlbums();
+        ElMessage.success(
+          t("albums.localFolder.recursiveSyncDone", {
+            createdAlbums: report.createdAlbums,
+            syncedAlbums: report.syncedAlbums,
+            added: report.added,
+            deleted: report.deleted,
+          }),
+        );
+      }
+    } catch (e: any) {
+      ElMessage.error(e?.message || String(e));
+    }
     return;
   }
 
@@ -643,7 +929,7 @@ const handleAlbumMenuCommand = async (
 
   if (command === "moveTo") {
     moveDlgAlbum.value = album;
-    showMoveAlbumDialog.value = true;
+    moveDialog.open();
     return;
   }
 
@@ -655,7 +941,9 @@ const handleAlbumMenuCommand = async (
 
   try {
     await ElMessageBox.confirm(
-      t("albums.deleteAlbumConfirm", { name }),
+      albumStore.isLocalFolderAlbum(id)
+        ? t("albums.deleteLocalFolderAlbumConfirm", { name })
+        : t("albums.deleteAlbumConfirm", { name }),
       t("albums.confirmDelete"),
       { type: "warning" }
     );
@@ -738,6 +1026,31 @@ const handleAlbumMenuCommand = async (
 .empty-tip {
   padding: 32px;
   color: var(--anime-text-muted);
+}
+
+.local-folder-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--anime-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-folder-hint {
+  margin: 0;
+  color: var(--anime-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.local-folder-error {
+  margin: 0;
+  color: var(--el-color-danger);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .hidden-album-fab {

@@ -1,10 +1,11 @@
 use crate::emitter::GlobalEmitter;
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
+use kabegame_i18n::t;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     fs,
 };
 
@@ -20,12 +21,19 @@ fn validate_album_name(name: &str) -> Result<&str, String> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub struct Album {
     pub id: String,
     pub name: String,
     pub created_at: u64,
     pub parent_id: Option<String>,
+    /// "normal" | "local_folder"（未来可扩展）
+    #[serde(rename(serialize = "type"), alias = "type")]
+    pub kind: String,
+    /// 仅 kind=="local_folder" 时为 Some，存绝对路径
+    pub sync_folder: Option<String>,
+    /// 仅 kind=="local_folder" 时使用，JSON 字符串，Phase 2 起填充
+    pub folder_status: Option<String>,
 }
 
 fn album_from_storage_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Album> {
@@ -34,6 +42,9 @@ fn album_from_storage_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Album> {
         name: row.get(1)?,
         created_at: row.get::<_, i64>(2)? as u64,
         parent_id: row.get(3)?,
+        kind: row.get(4)?,
+        sync_folder: row.get(5)?,
+        folder_status: row.get(6)?,
     })
 }
 
@@ -79,33 +90,41 @@ impl Storage {
         Ok(exists)
     }
 
-    pub fn is_image_in_album(&self, album_id: &str, image_id: &str) -> Result<bool, String> {
+    /// Guard user-facing write paths that mutate an album's image membership.
+    ///
+    /// Sync internals intentionally use the lower-level Storage APIs directly so a
+    /// local folder album can still be reconciled from its source directory.
+    pub fn ensure_album_is_writable(&self, album_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let exists: bool = conn
+        let kind: Option<String> = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM album_images WHERE album_id = ?1 AND image_id = ?2)",
-                params![album_id, image_id],
+                "SELECT type FROM albums WHERE id = ?1",
+                params![album_id],
                 |row| row.get(0),
             )
-            .map_err(|e| format!("Failed to check image in album: {}", e))?;
-        Ok(exists)
+            .optional()
+            .map_err(|e| format!("Failed to query album kind: {}", e))?;
+        match kind.as_deref() {
+            Some("local_folder") => Err(t!("albums.localFolderErrors.readOnly").to_string()),
+            _ => Ok(()),
+        }
     }
 
-    /// 7b S1e S4-b: 顺序壁纸轮播 marker 查询。给定 (album_id, image_id), 返回该图片在
+    /// 顺序壁纸轮播 marker 查询。给定 (album_id, image_id), 返回该图片在
     /// album_images 中的 `order` 值。Some(n) = 在画册里且 n 为 order；None = 不在画册。
-    pub fn get_album_image_order(
-        &self,
-        album_id: &str,
-        image_id: &str,
-    ) -> Result<Option<i64>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.query_row(
-            "SELECT \"order\" FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-            params![album_id, image_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .map_err(|e| format!("Failed to query album image order: {}", e))
+    pub fn get_album_image_order(album_id: &str, image_id: &str) -> Result<Option<i64>, String> {
+        if album_id.trim().is_empty() || image_id.trim().is_empty() {
+            return Ok(None);
+        }
+        let path = format!(
+            "images://gallery/album/{}/id_{}",
+            urlencoding::encode(album_id.trim()),
+            urlencoding::encode(image_id.trim())
+        );
+        Ok(crate::providers::images_at(&path)?
+            .into_iter()
+            .next()
+            .and_then(|image| image.album_order))
     }
 
     /// 批量图片在删除/移除前涉及的画册 id（去重），用于 `images-change` 事件。
@@ -134,26 +153,7 @@ impl Storage {
         Ok(set.into_iter().collect())
     }
 
-    pub fn pick_existing_album_image_id(
-        &self,
-        album_id: &str,
-        mode: &str,
-    ) -> Result<Option<String>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-
-        let sql = match mode {
-            "random" => "SELECT CAST(image_id AS TEXT) FROM album_images WHERE album_id = ?1 ORDER BY RANDOM() LIMIT 1",
-            _ => "SELECT CAST(image_id AS TEXT) FROM album_images WHERE album_id = ?1 ORDER BY COALESCE(\"order\", rowid) ASC LIMIT 1",
-        };
-
-        let id: Option<String> = conn
-            .query_row(sql, params![album_id], |row| row.get(0))
-            .optional()
-            .map_err(|e| format!("Failed to pick album image: {}", e))?;
-
-        Ok(id)
-    }
-
+    // 确保收藏文件夹存在，可以不用走provider
     pub fn ensure_favorite_album(&self) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
@@ -171,7 +171,8 @@ impl Storage {
                 .map_err(|e| format!("Time error: {}", e))?
                 .as_secs();
             conn.execute(
-                "INSERT INTO albums (id, name, created_at, parent_id) VALUES (?1, ?2, ?3, NULL)",
+                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
+                 VALUES (?1, ?2, ?3, NULL, 'normal', NULL, NULL)",
                 params![FAVORITE_ALBUM_ID, "收藏", created_at as i64],
             )
             .map_err(|e| format!("Failed to create default '收藏' album: {}", e))?;
@@ -182,7 +183,7 @@ impl Storage {
 
     /// 确保隐藏画册存在。名称采用 `hidden-{8hex}` 形式（取自 UUID v4 前 8 字符），
     /// 便于大模型通过 `hidden-` 前缀识别，同时几乎不会与用户自定义画册重名。
-    /// 幂等：若记录已存在则不动（保留既有名称）。
+    /// 幂等：若记录已存在则不动（保留既有名称）。可以不用走provider
     pub fn ensure_hidden_album(&self) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
@@ -202,7 +203,8 @@ impl Storage {
                 .map_err(|e| format!("Time error: {}", e))?
                 .as_secs();
             conn.execute(
-                "INSERT INTO albums (id, name, created_at, parent_id) VALUES (?1, ?2, ?3, NULL)",
+                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
+                 VALUES (?1, ?2, ?3, NULL, 'normal', NULL, NULL)",
                 params![HIDDEN_ALBUM_ID, name, created_at as i64],
             )
             .map_err(|e| format!("Failed to create hidden album: {}", e))?;
@@ -239,11 +241,13 @@ impl Storage {
 
         match parent_id {
             None => conn.execute(
-                "INSERT INTO albums (id, name, created_at, parent_id) VALUES (?1, ?2, ?3, NULL)",
+                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
+                 VALUES (?1, ?2, ?3, NULL, 'normal', NULL, NULL)",
                 params![id, name_trimmed, created_at as i64],
             ),
             Some(pid) => conn.execute(
-                "INSERT INTO albums (id, name, created_at, parent_id) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
+                 VALUES (?1, ?2, ?3, ?4, 'normal', NULL, NULL)",
                 params![id, name_trimmed, created_at as i64, pid],
             ),
         }
@@ -254,6 +258,9 @@ impl Storage {
             name: name_trimmed.to_string(),
             created_at,
             parent_id: parent_id.map(|s| s.to_string()),
+            kind: "normal".to_string(),
+            sync_folder: None,
+            folder_status: None,
         };
         if let Some(emitter) = GlobalEmitter::try_global() {
             emitter.emit_album_added(
@@ -270,10 +277,10 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = match parent_id {
             None => conn.prepare(
-                "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
             ),
-            Some(pid) => conn.prepare(
-                "SELECT id, name, created_at, parent_id FROM albums WHERE parent_id = ?1 ORDER BY created_at ASC",
+            Some(_) => conn.prepare(
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status FROM albums WHERE parent_id = ?1 ORDER BY created_at ASC",
             ),
         }
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -296,7 +303,7 @@ impl Storage {
     pub fn list_all_albums(&self) -> Result<Vec<Album>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT id, name, created_at, parent_id FROM albums ORDER BY created_at DESC")
+            .prepare("SELECT id, name, created_at, parent_id, type, sync_folder, folder_status FROM albums ORDER BY created_at DESC")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
         let rows = stmt
             .query_map([], album_from_storage_row)
@@ -524,9 +531,14 @@ impl Storage {
 
     pub fn get_album_images(&self, album_id: &str) -> Result<Vec<ImageInfo>, String> {
         crate::providers::images_at(&format!(
-            "/gallery/album/{}/order",
+            "images://gallery/album/{}/order",
             urlencoding::encode(album_id)
         ))
+    }
+
+    /// 按 BFS 顺序收集某画册子树内的所有画册 id（含根）。根在前，子画册按 `created_at`。
+    pub fn list_subtree_album_ids(&self, root_id: &str) -> Result<Vec<String>, String> {
+        self.collect_subtree_album_ids_bfs(root_id)
     }
 
     fn collect_subtree_album_ids_bfs(&self, root_id: &str) -> Result<Vec<String>, String> {
@@ -574,84 +586,6 @@ impl Storage {
         limit: usize,
     ) -> Result<Vec<ImageInfo>, String> {
         crate::providers::album_preview_at(album_id, limit)
-    }
-
-    pub fn get_album_image_ids(&self, album_id: &str) -> Result<Vec<String>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut stmt = conn
-            .prepare("SELECT CAST(image_id AS TEXT) FROM album_images WHERE album_id = ?1 ORDER BY COALESCE(\"order\", rowid) ASC")
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let rows = stmt
-            .query_map(params![album_id], |row| row.get(0))
-            .map_err(|e| format!("Failed to query album image IDs: {}", e))?;
-
-        let mut ids = Vec::new();
-        for r in rows {
-            ids.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
-        }
-        Ok(ids)
-    }
-
-    // TODO: 改为前端计算，后端只需要返回各画册下图片数量即可
-    /// 每个画册的图片总数 = 该画册内直接关联的图片数 + 所有子画册（递归）的图片总数。
-    pub fn get_album_counts(&self) -> Result<HashMap<String, usize>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-
-        let mut direct: HashMap<String, usize> = HashMap::new();
-        let mut stmt = conn
-            .prepare("SELECT album_id, COUNT(*) FROM album_images GROUP BY album_id")
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
-            })
-            .map_err(|e| format!("Failed to query album counts: {}", e))?;
-        for r in rows {
-            let (id, count) = r.map_err(|e| format!("Failed to read row: {}", e))?;
-            direct.insert(id, count);
-        }
-
-        let mut children: HashMap<Option<String>, Vec<String>> = HashMap::new();
-        let mut all_ids: Vec<String> = Vec::new();
-        let mut stmt2 = conn
-            .prepare("SELECT id, parent_id FROM albums")
-            .map_err(|e| format!("Failed to prepare album tree: {}", e))?;
-        let rows2 = stmt2
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-            })
-            .map_err(|e| format!("Failed to query albums: {}", e))?;
-        for r in rows2 {
-            let (id, parent_id) = r.map_err(|e| format!("Failed to read row: {}", e))?;
-            all_ids.push(id.clone());
-            children.entry(parent_id).or_default().push(id);
-        }
-
-        fn recursive_total(
-            id: &str,
-            children: &HashMap<Option<String>, Vec<String>>,
-            direct: &HashMap<String, usize>,
-            memo: &mut HashMap<String, usize>,
-        ) -> usize {
-            if let Some(&v) = memo.get(id) {
-                return v;
-            }
-            let mut sum = *direct.get(id).unwrap_or(&0);
-            if let Some(kids) = children.get(&Some(id.to_string())) {
-                for kid in kids {
-                    sum += recursive_total(kid, children, direct, memo);
-                }
-            }
-            memo.insert(id.to_string(), sum);
-            sum
-        }
-
-        let mut memo = HashMap::new();
-        for id in &all_ids {
-            recursive_total(id, &children, &direct, &mut memo);
-        }
-        Ok(memo)
     }
 
     pub fn update_album_images_order(
@@ -715,7 +649,7 @@ impl Storage {
         };
 
         if count > 0 {
-            return Err("画册名称已存在，请换一个名称".to_string());
+            return Err(t!("albums.errors.nameExists").to_string());
         }
         Ok(())
     }
@@ -724,32 +658,121 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let row = conn
             .query_row(
-                "SELECT id, name, created_at, parent_id FROM albums WHERE id = ?1",
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status FROM albums WHERE id = ?1",
                 params![id],
-                |row| {
-                    Ok(Album {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        created_at: row.get::<_, i64>(2)? as u64,
-                        parent_id: row.get(3)?,
-                    })
-                },
+                album_from_storage_row,
             )
             .optional()
             .map_err(|e| format!("Failed to query album: {}", e))?;
         Ok(row)
     }
 
-    pub fn get_album_image_count(&self, album_id: &str) -> Result<usize, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let n: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM album_images WHERE album_id = ?1",
-                params![album_id],
-                |row| row.get(0),
+    pub fn update_album_folder_status(
+        &self,
+        album_id: &str,
+        status_json: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        conn.execute(
+            "UPDATE albums SET folder_status = ?1 WHERE id = ?2",
+            params![status_json, album_id],
+        )
+        .map_err(|e| format!("update_album_folder_status: {e}"))?;
+        Ok(())
+    }
+
+    pub fn list_local_folder_albums(&self) -> Result<Vec<Album>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status
+                 FROM albums WHERE type = 'local_folder' ORDER BY created_at ASC",
             )
-            .map_err(|e| format!("Failed to count album images: {}", e))?;
-        Ok(n as usize)
+            .map_err(|e| format!("prepare list_local_folder_albums: {e}"))?;
+        let rows = stmt
+            .query_map([], album_from_storage_row)
+            .map_err(|e| format!("query list_local_folder_albums: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read list_local_folder_albums: {e}"))
+    }
+
+    pub fn add_local_folder_albums_tx(
+        &self,
+        entries: &[crate::local_folder::create::NewLocalFolderEntry],
+    ) -> Result<Vec<Album>, String> {
+        if entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start transaction: {e}"))?;
+
+        let batch_ids: HashSet<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
+        for entry in entries {
+            if let Some(parent_id) = entry.parent_id.as_deref() {
+                if !batch_ids.contains(parent_id) {
+                    let exists: bool = tx
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM albums WHERE id = ?1)",
+                            params![parent_id],
+                            |row| row.get(0),
+                        )
+                        .map_err(|e| format!("verify external parent: {e}"))?;
+                    if !exists {
+                        return Err(t!("albums.errors.parentNotFound", id = parent_id).to_string());
+                    }
+                }
+            }
+        }
+
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("Time error: {e}"))?
+            .as_secs();
+
+        let mut created = Vec::with_capacity(entries.len());
+        for entry in entries {
+            Self::ensure_album_name_unique_ci(&tx, &entry.name, entry.parent_id.as_deref(), None)?;
+            tx.execute(
+                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
+                 VALUES (?1, ?2, ?3, ?4, 'local_folder', ?5, NULL)",
+                params![
+                    entry.id.as_str(),
+                    entry.name.as_str(),
+                    created_at as i64,
+                    entry.parent_id.as_deref(),
+                    entry.sync_folder.as_str(),
+                ],
+            )
+            .map_err(|e| format!("insert local_folder album: {e}"))?;
+
+            created.push(Album {
+                id: entry.id.clone(),
+                name: entry.name.clone(),
+                created_at,
+                parent_id: entry.parent_id.clone(),
+                kind: "local_folder".to_string(),
+                sync_folder: Some(entry.sync_folder.clone()),
+                folder_status: None,
+            });
+        }
+
+        tx.commit().map_err(|e| format!("commit: {e}"))?;
+
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            for album in &created {
+                emitter.emit_album_added(
+                    &album.id,
+                    &album.name,
+                    album.created_at,
+                    album.parent_id.as_deref(),
+                );
+            }
+        }
+
+        Ok(created)
     }
 
     pub fn find_child_album_by_name_ci(

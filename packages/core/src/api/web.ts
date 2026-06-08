@@ -117,7 +117,6 @@ export async function listen<T>(
 export interface ImportUploadParams {
   outputAlbumId?: string;
   recursive: boolean;
-  includeArchive: boolean;
 }
 
 export interface ImportUploadResult {
@@ -136,7 +135,6 @@ export async function uploadImport(
   const qs = new URLSearchParams();
   if (params.outputAlbumId) qs.set("output_album_id", params.outputAlbumId);
   qs.set("recursive", params.recursive ? "1" : "0");
-  qs.set("include_archive", params.includeArchive ? "1" : "0");
   if (getIsSuper()) qs.set("super", "1");
   const res = await fetch(`${UPLOAD_URL}?${qs.toString()}`, {
     method: "POST",

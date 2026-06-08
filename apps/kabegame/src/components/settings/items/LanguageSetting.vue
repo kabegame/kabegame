@@ -11,7 +11,7 @@
       </el-icon>
     </div>
     <Teleport to="body">
-      <van-popup v-model:show="showLanguagePicker" position="bottom" round>
+      <van-popup :show="isOpen" position="bottom" round :z-index="zIndex" @update:show="v => { if (!v) close() }">
         <van-picker
           v-model="languagePickerSelected"
           :title="$t('settings.language')"
@@ -19,7 +19,7 @@
           :confirm-button-text="$t('common.confirm')"
           :cancel-button-text="$t('common.cancel')"
           @confirm="onLanguagePickerConfirm"
-          @cancel="showLanguagePicker = false"
+          @cancel="close()"
         />
       </van-popup>
     </Teleport>
@@ -45,7 +45,7 @@
 import { computed, ref, watch } from "vue";
 import { ArrowDown } from "@element-plus/icons-vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { SUPPORTED_LANGUAGES, resolveLanguage } from "@kabegame/i18n";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
@@ -76,19 +76,18 @@ const languagePickerColumns = computed(() =>
   options.value.map((o) => ({ text: o.label, value: o.value })),
 );
 
-const showLanguagePicker = ref(false);
-useModalBack(showLanguagePicker);
+const { isOpen, zIndex, open, close } = useModal();
 
 const languagePickerSelected = ref<string[]>([effectiveLocale.value]);
 
-watch(showLanguagePicker, (open) => {
-  if (open) languagePickerSelected.value = [effectiveLocale.value];
+watch(isOpen, (v) => {
+  if (v) languagePickerSelected.value = [effectiveLocale.value];
 });
 
 watch(
-  () => [effectiveLocale.value, showLanguagePicker.value] as const,
+  () => [effectiveLocale.value, isOpen.value] as const,
   () => {
-    if (showLanguagePicker.value) {
+    if (isOpen.value) {
       languagePickerSelected.value = [effectiveLocale.value];
     }
   }
@@ -96,7 +95,7 @@ watch(
 
 function onAndroidTriggerClick() {
   if (props.disabled || disabled.value) return;
-  showLanguagePicker.value = true;
+  open();
 }
 
 function onLanguagePickerConfirm({
@@ -104,7 +103,7 @@ function onLanguagePickerConfirm({
 }: {
   selectedValues: (string | number)[];
 }) {
-  showLanguagePicker.value = false;
+  close();
   const raw = selectedValues[0];
   if (raw === null || raw === undefined) return;
   void set(String(raw));

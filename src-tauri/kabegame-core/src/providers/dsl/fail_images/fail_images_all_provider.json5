@@ -1,0 +1,7 @@
+{
+    "namespace": "kabegame",
+    "name": "fail_images_all_provider",
+    "query": {
+        "order": [{ "sql": "task_failed_images.id", "order": "desc" }]
+    }
+}

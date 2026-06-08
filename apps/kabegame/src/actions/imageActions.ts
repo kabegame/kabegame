@@ -16,13 +16,17 @@ import {
 } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { IS_WINDOWS, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { i18n } from "@kabegame/i18n";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
 export interface CreateImageActionsOptions {
   /** Custom text for remove action (e.g., "删除" | "从画册移除") */
   removeText?: string;
+  /** Custom text for deleting image files from disk. */
+  deleteText?: string;
+  /** Whether to show a separate destructive delete action. */
+  showDelete?: boolean;
   /** Keys to hide in single-select mode */
   hide?: string[];
   /** Additional keys to hide in multi-select mode */
@@ -44,6 +48,8 @@ export function createImageActions(
   const t = (key: string) => i18n.global.t(key);
   const {
     removeText = t("common.delete"),
+    deleteText = t("common.delete"),
+    showDelete = false,
     hide = [],
     multiHide = [],
     simplified = false,
@@ -146,8 +152,8 @@ export function createImageActions(
       command: "more",
       visible: (ctx) => {
         if (hideSet.has("more")) return false;
-        // Show on Windows (single-select) or Android (single-select)
-        return (IS_WINDOWS || uiStore.isCompact) && (!ctx.selectedCount || ctx.selectedCount === 1);
+        // Show on Android (single-select)
+        return uiStore.isCompact && (!ctx.selectedCount || ctx.selectedCount === 1);
       },
       children: uiStore.isCompact
         ? [
@@ -195,15 +201,13 @@ export function createImageActions(
               dividerBefore: true,
               visible: () => !hideSet.has("remove"),
             },
-          ]
-        : IS_WINDOWS
-        ? [
             {
-              key: "exportToWEAuto",
-              label: t("contextMenu.exportToWE"),
-              icon: Download,
-              command: "exportToWEAuto",
-              visible: () => !hideSet.has("exportToWEAuto"),
+              key: "deleteFile",
+              label: deleteText,
+              icon: Delete,
+              command: "deleteFile",
+              dividerBefore: () => hideSet.has("remove"),
+              visible: () => showDelete && !hideSet.has("deleteFile"),
             },
           ]
         : [],
@@ -216,6 +220,26 @@ export function createImageActions(
       dividerBefore: true,
       // On Android single-select: only in more submenu
       visible: (ctx) => !hideSet.has("remove") && (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
+      suffix: (ctx) => {
+        const count = ctx.selectedCount ?? 1;
+        return count > 1 ? `(${count})` : "";
+      },
+    },
+    {
+      key: "deleteFile",
+      label: deleteText,
+      icon: Delete,
+      command: "deleteFile",
+      dividerBefore: (ctx) => {
+        const removeVisible =
+          !hideSet.has("remove") &&
+          (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1));
+        return !removeVisible;
+      },
+      visible: (ctx) =>
+        showDelete &&
+        !hideSet.has("deleteFile") &&
+        (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
       suffix: (ctx) => {
         const count = ctx.selectedCount ?? 1;
         return count > 1 ? `(${count})` : "";
@@ -292,12 +316,27 @@ export function createImageActions(
       },
       suffix: (ctx) => ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : "",
     },
+    {
+      key: "deleteFile",
+      label: deleteText,
+      icon: Delete,
+      command: "deleteFile",
+      dividerBefore: (ctx) => {
+        if (hideSet.has("remove")) return true;
+        return !(ctx.selectedCount !== undefined && ctx.selectedCount > 1);
+      },
+      visible: (ctx) => {
+        if (!showDelete || hideSet.has("deleteFile")) return false;
+        return ctx.selectedCount !== undefined && ctx.selectedCount > 1;
+      },
+      suffix: (ctx) => ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : "",
+    },
   ];
 
   // Return combined actions - visibility logic will filter appropriately
   if (simplified) {
     // Simplified mode: only show remove
-    return singleActions.filter((item) => item.key === "remove");
+    return singleActions.filter((item) => item.key === "remove" || (showDelete && item.key === "deleteFile"));
   }
 
   // Combine single and multi actions - visibility predicates handle the filtering

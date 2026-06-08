@@ -10,7 +10,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";

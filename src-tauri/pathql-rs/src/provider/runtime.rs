@@ -1,7 +1,11 @@
-//! ProviderRuntime — 路径解析 + longest-prefix cache。
+//! ProviderRuntime — schema-based path routing + longest-prefix cache.
 //!
-//! ctx-passing 设计：runtime 持 `Weak<Self>`，方法入口构造 `ProviderContext`
-//! (含 `Arc<Self>`) 在调用栈生命周期内传递；调用返回后 ctx drop，**不形成长期循环引用**。
+//! Hosts register schema roots keyed by a `scheme://` prefix. Resolution starts
+//! from the matching schema root, seeds `ProviderQuery.from` from that schema,
+//! then folds provider contributions along the path. ctx-passing keeps runtime
+//! state out of provider instances: runtime holds `Weak<Self>`, entrypoints
+//! build a short-lived `ProviderContext`, and calls do not create long-lived
+//! reference cycles.
 
 use arc_swap::ArcSwap;
 
@@ -9,7 +13,7 @@ use super::{
     ChildEntry, DelegateTransform, EngineError, ListRef, Provider, ProviderContext, ProviderKey,
     ResolveRef, SqlExecutor,
 };
-use crate::ast::{Namespace, ProviderName};
+use crate::ast::{Namespace, ProviderName, SimpleName};
 use crate::compose::ProviderQuery;
 use crate::template::eval::{TemplateContext, TemplateValue};
 #[cfg(feature = "json5")]
@@ -20,7 +24,7 @@ use crate::Source;
 use crate::{Json5Loader, Loader};
 use crate::{ProviderDef, ProviderRegistry};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 /// 调试开关: 设环境变量 `PATHQL_DEBUG=1` 启用。
 pub(crate) fn dbg_enabled() -> bool {
@@ -51,15 +55,15 @@ struct CachedNode {
 }
 
 #[derive(Clone)]
-struct RootNode {
-    provider: Arc<dyn Provider>,
-    provider_keys: Vec<ProviderKey>,
+pub struct SchemaRoot {
+    pub from: crate::ast::SqlExpr,
+    pub(crate) provider: Arc<dyn Provider>,
+    pub(crate) provider_keys: Vec<ProviderKey>,
 }
 
 pub struct ProviderRuntime {
     registry: ArcSwap<ProviderRegistry>,
-    // 只能定义一次的root
-    root: OnceLock<RootNode>,
+    schemas: Mutex<HashMap<String, SchemaRoot>>,
     // 用来构建上下文
     weak_self: Weak<Self>,
     /// 注入的 SQL 执行能力 (6d 起强制必填; DSL 动态 list SQL 项 + 反查需要它)。
@@ -87,7 +91,7 @@ impl ProviderRuntime {
         let globals = Arc::new(globals);
         Arc::new_cyclic(|weak| Self {
             registry: ArcSwap::from(registry),
-            root: OnceLock::new(),
+            schemas: Mutex::new(HashMap::new()),
             weak_self: weak.clone(),
             executor,
             globals,
@@ -95,21 +99,52 @@ impl ProviderRuntime {
         })
     }
 
-    pub fn set_root(&self, namespace: &str, simple_name: &str) -> Result<(), EngineError> {
+    /// Register a schema root for paths beginning with `scheme://`.
+    ///
+    /// `scheme` must match `[a-z][a-z0-9_-]*`. The named provider is
+    /// instantiated immediately and used as the root for that scheme. During
+    /// `resolve`, the schema's `from` value seeds `ProviderQuery.from` before
+    /// the root provider's query contribution is folded.
+    pub fn register_schema(
+        &self,
+        scheme: &str,
+        from: impl Into<crate::ast::SqlExpr>,
+        namespace: &str,
+        provider_name: &str,
+    ) -> Result<(), EngineError> {
+        if !is_valid_scheme(scheme) {
+            return Err(EngineError::InvalidScheme(scheme.to_string()));
+        }
+        if self.schemas.lock().unwrap().contains_key(scheme) {
+            return Err(EngineError::SchemaAlreadyRegistered(scheme.to_string()));
+        }
+
         let ctx = self.make_ctx();
         let key_mark = ctx.provider_key_mark();
-        let root = ctx.registry.instantiate_result(
+        let provider = ctx.registry.instantiate_result(
             &Namespace(namespace.to_string()),
-            &ProviderName(simple_name.to_string()),
+            &ProviderName(provider_name.to_string()),
             &HashMap::new(),
             &ctx,
         )?;
-        self.root
-            .set(RootNode {
-                provider: root,
-                provider_keys: ctx.provider_keys_since(key_mark),
-            })
-            .map_err(|_| EngineError::RootAlreadyInitialized)
+        let schema = SchemaRoot {
+            from: from.into(),
+            provider,
+            provider_keys: ctx.provider_keys_since(key_mark),
+        };
+
+        let mut schemas = self.schemas.lock().unwrap();
+        if schemas.contains_key(scheme) {
+            return Err(EngineError::SchemaAlreadyRegistered(scheme.to_string()));
+        }
+        schemas.insert(scheme.to_string(), schema);
+        Ok(())
+    }
+
+    pub fn registered_schemes(&self) -> Vec<String> {
+        let mut schemes: Vec<String> = self.schemas.lock().unwrap().keys().cloned().collect();
+        schemes.sort();
+        schemes
     }
 
     /// 动态注册一个dsl
@@ -137,6 +172,31 @@ impl ProviderRuntime {
         let mut registry = (*self.registry.load_full()).clone();
         let key = provider_key_from_def(&provider);
         registry.register(provider)?;
+        self.registry.store(Arc::new(registry));
+        self.invalidate_provider_cache(&key);
+        Ok(())
+    }
+
+    /// Dynamically register a programmatic provider factory.
+    pub fn register_programmatic_provider<F>(
+        &self,
+        namespace: &str,
+        name: &str,
+        factory: F,
+    ) -> Result<(), EngineError>
+    where
+        F: Fn(&HashMap<String, TemplateValue>) -> Result<Arc<dyn Provider>, EngineError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        let mut registry = (*self.registry.load_full()).clone();
+        let key = ProviderKey::new(namespace, name);
+        registry.register_provider(
+            Namespace(namespace.to_string()),
+            SimpleName(name.to_string()),
+            factory,
+        )?;
         self.registry.store(Arc::new(registry));
         self.invalidate_provider_cache(&key);
         Ok(())
@@ -192,14 +252,27 @@ impl ProviderRuntime {
         )
     }
 
-    /// 顶层路径解析 (6e: 移除 `resolve_with_initial`; 路径解析始终从 root cold-start
-    /// 或命中 longest-prefix cache 续 fold; delegate 不再绕过缓存)。
+    /// Resolve a `scheme://path` into a provider and folded query state.
+    ///
+    /// The scheme must be registered with [`ProviderRuntime::register_schema`].
+    /// Schemeless paths return [`EngineError::MissingScheme`], unknown schemes
+    /// return [`EngineError::SchemaNotFound`], and valid schema roots seed
+    /// `ProviderQuery.from` before the provider chain is folded.
     pub fn resolve(&self, path: &str) -> Result<ResolvedNode, EngineError> {
-        let segments = self.normalize_path(path);
+        let (scheme, rest) =
+            parse_scheme(path)?.ok_or_else(|| EngineError::MissingScheme(path.to_string()))?;
+        let schema = self
+            .schemas
+            .lock()
+            .unwrap()
+            .get(scheme)
+            .cloned()
+            .ok_or_else(|| EngineError::SchemaNotFound(scheme.to_string()))?;
+        let segments = self.normalize_path(rest);
         let ctx = self.make_ctx();
 
         let (start_idx, mut current, mut composed, mut provider_keys) =
-            self.find_longest_cached_prefix(&segments, &ctx)?;
+            self.find_longest_cached_prefix(scheme, &schema, &segments, &ctx)?;
 
         if dbg_enabled() {
             eprintln!(
@@ -221,10 +294,12 @@ impl ProviderRuntime {
         }
 
         // Resume / cold-start: 从 start_idx 续 fold 剩余段
-        let mut path_so_far = build_path_key(&segments[..start_idx]);
+        let mut path_so_far = build_path_key(scheme, &segments[..start_idx]);
         for seg in &segments[start_idx..] {
             let path_before_seg = path_so_far.clone();
-            path_so_far.push('/');
+            if !path_so_far.ends_with("://") {
+                path_so_far.push('/');
+            }
             path_so_far.push_str(seg);
             let key_mark = ctx.provider_key_mark();
             let c = current
@@ -333,14 +408,6 @@ impl ProviderRuntime {
         })
     }
 
-    fn get_root(&self) -> Result<RootNode, EngineError> {
-        Ok(self
-            .root
-            .get()
-            .ok_or(EngineError::RootNotInitialized)?
-            .clone())
-    }
-
     /// 从最长前缀向短回退, 找到第一个缓存命中点的下一个index（或者说命中seg段的长度）。
     /// 返回 (起点 segment 索引, 起点 provider, 起点 composed)。
     /// - prefix_len=N (== segments.len()) → 完整路径已缓存
@@ -348,6 +415,8 @@ impl ProviderRuntime {
     /// - prefix_len=0 → 全 miss, cold start (从 root 起 fold)
     fn find_longest_cached_prefix(
         &self,
+        scheme: &str,
+        schema: &SchemaRoot,
         segments: &[String],
         ctx: &ProviderContext,
     ) -> Result<
@@ -361,7 +430,7 @@ impl ProviderRuntime {
     > {
         let cache = self.cache.lock().unwrap();
         for prefix_len in (1..=segments.len()).rev() {
-            let key = build_path_key(&segments[..prefix_len]);
+            let key = build_path_key(scheme, &segments[..prefix_len]);
             if let Some(cached) = cache.get(&key) {
                 return Ok((
                     prefix_len,
@@ -372,15 +441,14 @@ impl ProviderRuntime {
             }
         }
         drop(cache);
-        let root_provider = self.get_root()?;
         // 全 miss: 从 root cold start
         let key_mark = ctx.provider_key_mark();
-        let composed = root_provider
-            .provider
-            .apply_query(ProviderQuery::new(), ctx);
-        let mut provider_keys = root_provider.provider_keys.clone();
+        let mut initial = ProviderQuery::new();
+        initial.from = Some(schema.from.clone());
+        let composed = schema.provider.apply_query(initial, ctx);
+        let mut provider_keys = schema.provider_keys.clone();
         extend_provider_keys(&mut provider_keys, ctx.provider_keys_since(key_mark));
-        Ok((0, Some(root_provider.provider), composed, provider_keys))
+        Ok((0, Some(schema.provider.clone()), composed, provider_keys))
     }
 
     /// 顶层 list 入口。
@@ -487,15 +555,17 @@ impl ProviderRuntime {
     /// 语义: `/a/b/c` 的 meta = 父路径 `/a/b` list 输出中 `name == c` 的 ChildEntry.meta。
     /// root (`/`) 无父, 返回 None。
     pub fn meta(&self, path: &str) -> Result<Option<serde_json::Value>, EngineError> {
-        let segments = self.normalize_path(path);
+        let (scheme, rest) =
+            parse_scheme(path)?.ok_or_else(|| EngineError::MissingScheme(path.to_string()))?;
+        let segments = self.normalize_path(rest);
         if segments.is_empty() {
             return Ok(None);
         }
         let last = segments.last().unwrap().clone();
         let parent_path = if segments.len() == 1 {
-            "/".to_string()
+            format!("{scheme}://")
         } else {
-            build_path_key(&segments[..segments.len() - 1])
+            build_path_key(scheme, &segments[..segments.len() - 1])
         };
         let children = self.list(&parent_path)?;
         Ok(children
@@ -516,8 +586,14 @@ impl ProviderRuntime {
     /// 内部链路: resolve(path) → composed.build_sql(globals ctx, dialect) → executor.execute。
     pub fn fetch(&self, path: &str) -> Result<Vec<serde_json::Value>, EngineError> {
         let node = self.resolve(path)?;
-        if node.provider.is_none() {
+        let provider = if let Some(provider) = node.provider.as_ref() {
+            provider
+        } else {
             return Err(EngineError::NoProvider(path.to_string()));
+        };
+        let provider_ctx = self.make_ctx();
+        if let Some(rows) = provider.fetch_rows(&node.composed, &provider_ctx)? {
+            return Ok(rows);
         }
         let ctx = self.template_context();
         let dialect = self.executor.dialect();
@@ -557,15 +633,7 @@ impl ProviderRuntime {
 
     /// 路径段 normalize: percent-decode, 不做 lowercase 折叠 (§2 大小写敏感)。
     fn normalize_path(&self, path: &str) -> Vec<String> {
-        path.trim_matches('/')
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .map(|s| {
-                percent_encoding::percent_decode_str(s)
-                    .decode_utf8_lossy()
-                    .into_owned()
-            })
-            .collect()
+        normalize_segments(path)
     }
 
     pub fn cache_size(&self) -> usize {
@@ -577,30 +645,75 @@ impl ProviderRuntime {
     }
 }
 
-fn build_path_key(segments: &[String]) -> String {
-    let mut s = String::new();
+fn build_path_key(scheme: &str, segments: &[String]) -> String {
+    let mut s = format!("{scheme}://");
     for seg in segments {
-        s.push('/');
+        if !s.ends_with("://") {
+            s.push('/');
+        }
         s.push_str(seg);
     }
     s
 }
 
 fn canonical_path_key(path: &str) -> String {
-    let trimmed = path.trim_matches('/');
-    if trimmed.is_empty() {
-        String::new()
-    } else {
-        format!("/{trimmed}")
+    match parse_scheme(path) {
+        Ok(Some((scheme, rest))) => build_path_key(scheme, &normalize_segments(rest)),
+        _ => {
+            let trimmed = path.trim_matches('/');
+            if trimmed.is_empty() {
+                String::new()
+            } else {
+                format!("/{trimmed}")
+            }
+        }
     }
 }
 
 fn child_path_key(parent_path: &str, child_name: &str) -> String {
     if parent_path.is_empty() {
         format!("/{child_name}")
+    } else if parent_path.ends_with("://") {
+        format!("{parent_path}{child_name}")
     } else {
         format!("{parent_path}/{child_name}")
     }
+}
+
+fn parse_scheme(path: &str) -> Result<Option<(&str, &str)>, EngineError> {
+    let Some(pos) = path.find("://") else {
+        return Ok(None);
+    };
+    let first_slash = path.find('/').unwrap_or(path.len());
+    if pos >= first_slash {
+        return Ok(None);
+    }
+    let scheme = &path[..pos];
+    if !is_valid_scheme(scheme) {
+        return Err(EngineError::InvalidScheme(scheme.to_string()));
+    }
+    Ok(Some((scheme, &path[pos + 3..])))
+}
+
+fn is_valid_scheme(scheme: &str) -> bool {
+    let mut chars = scheme.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_lowercase()
+        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
+}
+
+fn normalize_segments(path: &str) -> Vec<String> {
+    path.trim_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            percent_encoding::percent_decode_str(s)
+                .decode_utf8_lossy()
+                .into_owned()
+        })
+        .collect()
 }
 
 fn provider_key_from_def(def: &ProviderDef) -> ProviderKey {
@@ -715,7 +828,9 @@ mod tests {
             )
             .unwrap();
         let runtime = ProviderRuntime::with_registry(Arc::new(registry), executor, HashMap::new());
-        runtime.set_root("", "__root").unwrap();
+        runtime
+            .register_schema("test", "schema_table", "", "__root")
+            .unwrap();
         runtime
     }
 
@@ -730,7 +845,9 @@ mod tests {
         registry.register(def).unwrap();
         let runtime =
             ProviderRuntime::with_registry(Arc::new(registry), no_op_executor(), HashMap::new());
-        runtime.set_root(&root_ns, &root_name).unwrap();
+        runtime
+            .register_schema("test", "schema_table", &root_ns, &root_name)
+            .unwrap();
         runtime
     }
 
@@ -756,14 +873,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_before_set_root_returns_error() {
+    fn missing_scheme_errors() {
         let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
         let err = runtime.resolve("/").unwrap_err();
-        assert!(matches!(err, EngineError::RootNotInitialized));
+        assert!(matches!(err, EngineError::MissingScheme(p) if p == "/"));
     }
 
     #[test]
-    fn set_root_only_once() {
+    fn schema_already_registered_errors() {
         let mut registry = ProviderRegistry::new();
         registry
             .register_provider(
@@ -774,9 +891,279 @@ mod tests {
             .unwrap();
         let runtime =
             ProviderRuntime::with_registry(Arc::new(registry), no_op_executor(), HashMap::new());
-        runtime.set_root("", "__root").unwrap();
-        let err = runtime.set_root("", "__root").unwrap_err();
-        assert!(matches!(err, EngineError::RootAlreadyInitialized));
+        runtime
+            .register_schema("images", "images", "", "__root")
+            .unwrap();
+        let err = runtime
+            .register_schema("images", "images", "", "__root")
+            .unwrap_err();
+        assert!(matches!(err, EngineError::SchemaAlreadyRegistered(s) if s == "images"));
+    }
+
+    #[test]
+    fn register_schema_basic() {
+        let runtime = runtime_with_root(Arc::new(ImagesLeaf));
+        assert_eq!(runtime.registered_schemes(), vec!["test".to_string()]);
+    }
+
+    #[test]
+    fn programmatic_provider_registered_and_resolvable() {
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        runtime
+            .register_programmatic_provider("", "__root", |_| Ok(Arc::new(ImagesLeaf)))
+            .unwrap();
+        runtime
+            .register_schema("test", "schema_table", "", "__root")
+            .unwrap();
+        let resolved = runtime.resolve("test://").unwrap();
+        assert_eq!(resolved.composed.from.unwrap().0, "images");
+    }
+
+    #[test]
+    fn programmatic_provider_can_return_rows_without_sql() {
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        runtime
+            .register_programmatic_provider("", "__root", |_| Ok(Arc::new(RowsProvider)))
+            .unwrap();
+        runtime
+            .register_schema("test", "(SELECT 1)", "", "__root")
+            .unwrap();
+        let rows = runtime.fetch("test://").unwrap();
+        assert_eq!(rows, vec![serde_json::json!({ "id": 1 })]);
+    }
+
+    #[test]
+    fn programmatic_provider_properties_passed_to_factory() {
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let seen_for_factory = seen.clone();
+        runtime
+            .register_programmatic_provider("test_ns", "rows", move |props| {
+                *seen_for_factory.lock().unwrap() = Some(props.clone());
+                Ok(Arc::new(RowsProvider))
+            })
+            .unwrap();
+        let root: ProviderDef = serde_json::from_str(
+            r#"{
+                "namespace": "test_ns",
+                "name": "root",
+                "resolve": {
+                    "id_([^/]+)": {
+                        "provider": "rows",
+                        "properties": { "row_id": "${capture[1]}" }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        runtime.register_provider(root).unwrap();
+        runtime
+            .register_schema("test", "(SELECT 1)", "test_ns", "root")
+            .unwrap();
+
+        let rows = runtime.fetch("test://id_abc").unwrap();
+        assert_eq!(rows, vec![serde_json::json!({ "id": 1 })]);
+        let seen = seen.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            seen.get("row_id"),
+            Some(&TemplateValue::Text("abc".to_string()))
+        );
+    }
+
+    #[test]
+    fn programmatic_and_dsl_coexist_in_registry() {
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        runtime
+            .register_programmatic_provider("test_ns", "programmatic_root", |_| {
+                Ok(Arc::new(RowsProvider))
+            })
+            .unwrap();
+        let dsl_root: ProviderDef = serde_json::from_str(
+            r#"{
+                "namespace": "test_ns",
+                "name": "dsl_root"
+            }"#,
+        )
+        .unwrap();
+        runtime.register_provider(dsl_root).unwrap();
+        runtime
+            .register_schema("prog", "(SELECT 1)", "test_ns", "programmatic_root")
+            .unwrap();
+        runtime
+            .register_schema("dsl", "dsl_table", "test_ns", "dsl_root")
+            .unwrap();
+
+        assert_eq!(
+            runtime.fetch("prog://").unwrap(),
+            vec![serde_json::json!({ "id": 1 })]
+        );
+        assert_eq!(
+            runtime.resolve("dsl://").unwrap().composed.from,
+            Some(SqlExpr("dsl_table".into()))
+        );
+    }
+
+    #[test]
+    fn register_schema_returns_provider_not_registered_for_unknown_provider() {
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        let err = runtime
+            .register_schema("images", "images", "", "missing")
+            .unwrap_err();
+        assert!(matches!(err, EngineError::ProviderNotRegistered(_, name) if name == "missing"));
+    }
+
+    #[test]
+    fn register_schema_returns_invalid_scheme_for_bad_identifier() {
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        for scheme in ["Images", "1images", ""] {
+            let err = runtime
+                .register_schema(scheme, "images", "", "missing")
+                .unwrap_err();
+            assert!(matches!(err, EngineError::InvalidScheme(s) if s == scheme));
+        }
+    }
+
+    #[test]
+    fn register_schema_allows_dash_in_scheme() {
+        let runtime = runtime_with_root(Arc::new(ImagesLeaf));
+        runtime
+            .register_schema("fail-images", "task_failed_images", "", "__root")
+            .unwrap();
+        assert!(runtime
+            .registered_schemes()
+            .contains(&"fail-images".to_string()));
+    }
+
+    #[test]
+    fn resolve_with_unknown_scheme_errors() {
+        let runtime = runtime_with_root(Arc::new(ImagesLeaf));
+        let err = runtime.list("ghost://x").unwrap_err();
+        assert!(matches!(err, EngineError::SchemaNotFound(s) if s == "ghost"));
+    }
+
+    #[test]
+    fn resolve_with_scheme_seeds_from_in_built_sql() {
+        struct Root;
+        impl Provider for Root {}
+
+        let exec = Arc::new(CapturingExecutor {
+            captured: std::sync::Mutex::new(Vec::new()),
+            rows_for_inner: vec![serde_json::json!({"id": 1})],
+            rows_for_count: vec![],
+        });
+        let runtime = runtime_with_root_and_executor(
+            Arc::new(Root),
+            exec.clone() as Arc<dyn crate::provider::SqlExecutor>,
+        );
+
+        runtime.fetch("test://").unwrap();
+        let captured = exec.captured.lock().unwrap();
+        assert!(captured[0].0.contains("FROM schema_table"));
+    }
+
+    #[test]
+    fn resolve_cache_keys_isolated_per_scheme() {
+        struct Root {
+            child: Arc<dyn Provider>,
+        }
+        impl Provider for Root {
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal((name == "x").then(|| ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(self.child.clone()),
+                    meta: None,
+                }))
+            }
+        }
+        struct Leaf;
+        impl Provider for Leaf {}
+
+        let root: Arc<dyn Provider> = Arc::new(Root {
+            child: Arc::new(Leaf),
+        });
+        let mut registry = ProviderRegistry::new();
+        let root_for_factory = root.clone();
+        registry
+            .register_provider(
+                Namespace(String::new()),
+                crate::ast::SimpleName("__root".into()),
+                move |_| Ok(root_for_factory.clone()),
+            )
+            .unwrap();
+        let runtime =
+            ProviderRuntime::with_registry(Arc::new(registry), no_op_executor(), HashMap::new());
+        runtime
+            .register_schema("images", "images", "", "__root")
+            .unwrap();
+        runtime
+            .register_schema("albums", "albums_test", "", "__root")
+            .unwrap();
+
+        let images = runtime.resolve("images://x").unwrap();
+        let albums = runtime.resolve("albums://x").unwrap();
+
+        assert_eq!(runtime.cache_size(), 2);
+        assert_eq!(images.composed.from, Some(SqlExpr("images".into())));
+        assert_eq!(albums.composed.from, Some(SqlExpr("albums_test".into())));
+        let cache = runtime.cache.lock().unwrap();
+        assert!(cache.contains_key("images://x"));
+        assert!(cache.contains_key("albums://x"));
+    }
+
+    #[test]
+    fn schema_from_survives_through_full_fold() {
+        struct Leaf;
+        impl Provider for Leaf {
+            fn apply_query(&self, q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+                q.with_where_raw("images.id > ?", &[TemplateValue::Int(0)])
+                    .with_order_raw("images.id", crate::ast::OrderDirection::Asc)
+            }
+        }
+        struct Mid {
+            leaf: Arc<dyn Provider>,
+        }
+        impl Provider for Mid {
+            fn apply_query(&self, q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+                q.with_join_raw(
+                    crate::ast::JoinKind::Left,
+                    "album_images",
+                    "ai",
+                    Some("ai.image_id = images.id"),
+                    &[],
+                )
+                .unwrap()
+            }
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal((name == "leaf").then(|| ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(self.leaf.clone()),
+                    meta: None,
+                }))
+            }
+        }
+        struct Root {
+            mid: Arc<dyn Provider>,
+        }
+        impl Provider for Root {
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal((name == "mid").then(|| ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(self.mid.clone()),
+                    meta: None,
+                }))
+            }
+        }
+
+        let runtime = runtime_with_root(Arc::new(Root {
+            mid: Arc::new(Mid {
+                leaf: Arc::new(Leaf),
+            }),
+        }));
+        let resolved = runtime.resolve("test://mid/leaf").unwrap();
+        assert_eq!(resolved.composed.from, Some(SqlExpr("schema_table".into())));
+        assert_eq!(resolved.composed.joins.len(), 1);
+        assert_eq!(resolved.composed.wheres.len(), 1);
+        assert_eq!(resolved.composed.order.entries.len(), 1);
     }
 
     #[test]
@@ -792,19 +1179,18 @@ mod tests {
         .unwrap();
         let child_def: ProviderDef = serde_json::from_str(
             r#"{
-                "name": "child",
-                "query": { "from": "dynamic_child_table" }
+                "name": "child"
             }"#,
         )
         .unwrap();
         let runtime = runtime_with_root_def(root_def);
 
-        let err = runtime.resolve("/child").unwrap_err();
-        assert!(matches!(err, EngineError::PathNotFound(p) if p == "/child"));
+        let err = runtime.resolve("test://child").unwrap_err();
+        assert!(matches!(err, EngineError::PathNotFound(p) if p == "test://child"));
 
         runtime.register_provider(child_def).unwrap();
-        let resolved = runtime.resolve("/child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "dynamic_child_table");
+        let resolved = runtime.resolve("test://child").unwrap();
+        assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
     }
 
     #[test]
@@ -820,30 +1206,28 @@ mod tests {
         .unwrap();
         let child_v1: ProviderDef = serde_json::from_str(
             r#"{
-                "name": "child",
-                "query": { "from": "child_v1" }
+                "name": "child"
             }"#,
         )
         .unwrap();
         let child_v2: ProviderDef = serde_json::from_str(
             r#"{
-                "name": "child",
-                "query": { "from": "child_v2" }
+                "name": "child"
             }"#,
         )
         .unwrap();
         let runtime = runtime_with_root_def(root_def);
 
         runtime.register_provider(child_v1).unwrap();
-        let resolved = runtime.resolve("/child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "child_v1");
+        let resolved = runtime.resolve("test://child").unwrap();
+        assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
 
         assert!(runtime.unregister_provider("", "child"));
         assert!(!runtime.unregister_provider("", "child"));
         runtime.register_provider(child_v2).unwrap();
 
-        let resolved = runtime.resolve("/child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "child_v2");
+        let resolved = runtime.resolve("test://child").unwrap();
+        assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
     }
 
     #[test]
@@ -858,22 +1242,20 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let one_def: ProviderDef =
-            serde_json::from_str(r#"{ "name": "one", "query": { "from": "one_table" } }"#).unwrap();
-        let two_def: ProviderDef =
-            serde_json::from_str(r#"{ "name": "two", "query": { "from": "two_table" } }"#).unwrap();
+        let one_def: ProviderDef = serde_json::from_str(r#"{ "name": "one" }"#).unwrap();
+        let two_def: ProviderDef = serde_json::from_str(r#"{ "name": "two" }"#).unwrap();
         let runtime = runtime_with_root_def(root_def);
         runtime.register_provider(one_def).unwrap();
         runtime.register_provider(two_def).unwrap();
 
-        runtime.resolve("/one").unwrap();
-        runtime.resolve("/two").unwrap();
+        runtime.resolve("test://one").unwrap();
+        runtime.resolve("test://two").unwrap();
         assert_eq!(runtime.cache_size(), 2);
 
         assert!(runtime.unregister_provider("", "one"));
         assert_eq!(runtime.cache_size(), 1);
-        let resolved = runtime.resolve("/two").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "two_table");
+        let resolved = runtime.resolve("test://two").unwrap();
+        assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
     }
 
     #[cfg(feature = "json5")]
@@ -897,27 +1279,26 @@ mod tests {
                     r#"{
                         // exercise JSON5 loader path
                         name: "json5_child",
-                        query: { from: "json5_child_table" },
                     }"#,
                 ),
             )
             .unwrap();
 
-        let resolved = runtime.resolve("/json5_child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "json5_child_table");
+        let resolved = runtime.resolve("test://json5_child").unwrap();
+        assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
     }
 
     #[test]
     fn resolves_root() {
         let (runtime, _) = three_layer_runtime();
-        let r = runtime.resolve("/").unwrap();
+        let r = runtime.resolve("test://").unwrap();
         assert_eq!(r.composed.from.unwrap().0, "root_table");
     }
 
     #[test]
     fn resolves_one_level() {
         let (runtime, _) = three_layer_runtime();
-        let r = runtime.resolve("/b").unwrap();
+        let r = runtime.resolve("test://b").unwrap();
         // mid has from=None, so root_table cascades through (mid does set q.from to None? No: it sets from only if Some)
         // Actually mid's apply_query keeps current.from since its from is None
         assert_eq!(r.composed.from.unwrap().0, "root_table");
@@ -926,7 +1307,7 @@ mod tests {
     #[test]
     fn resolves_three_levels() {
         let (runtime, _) = three_layer_runtime();
-        let r = runtime.resolve("/b/c").unwrap();
+        let r = runtime.resolve("test://b/c").unwrap();
         // leaf overrides from to "leaf_table"
         assert_eq!(r.composed.from.unwrap().0, "leaf_table");
     }
@@ -934,32 +1315,32 @@ mod tests {
     #[test]
     fn path_not_found_at_first_level() {
         let (runtime, _) = three_layer_runtime();
-        let err = runtime.resolve("/missing").unwrap_err();
-        assert!(matches!(err, EngineError::PathNotFound(p) if p == "/missing"));
+        let err = runtime.resolve("test://missing").unwrap_err();
+        assert!(matches!(err, EngineError::PathNotFound(p) if p == "test://missing"));
     }
 
     #[test]
     fn path_not_found_at_deeper_level() {
         let (runtime, _) = three_layer_runtime();
-        let err = runtime.resolve("/b/missing").unwrap_err();
-        assert!(matches!(err, EngineError::PathNotFound(p) if p == "/b/missing"));
+        let err = runtime.resolve("test://b/missing").unwrap_err();
+        assert!(matches!(err, EngineError::PathNotFound(p) if p == "test://b/missing"));
     }
 
     #[test]
     fn caches_resolves_correctly() {
         let (runtime, _) = three_layer_runtime();
-        runtime.resolve("/b/c").unwrap();
+        runtime.resolve("test://b/c").unwrap();
         // /b and /b/c cached
         assert_eq!(runtime.cache_size(), 2);
         // re-resolve doesn't grow cache
-        runtime.resolve("/b/c").unwrap();
+        runtime.resolve("test://b/c").unwrap();
         assert_eq!(runtime.cache_size(), 2);
     }
 
     #[test]
     fn no_cache_pollution_on_path_not_found() {
         let (runtime, _) = three_layer_runtime();
-        let _ = runtime.resolve("/missing");
+        let _ = runtime.resolve("test://missing");
         assert_eq!(runtime.cache_size(), 0);
     }
 
@@ -967,14 +1348,14 @@ mod tests {
     fn case_sensitive_paths() {
         let (runtime, _) = three_layer_runtime();
         // children["b"] exists, /B does not
-        let err = runtime.resolve("/B").unwrap_err();
+        let err = runtime.resolve("test://B").unwrap_err();
         assert!(matches!(err, EngineError::PathNotFound(_)));
     }
 
     #[test]
     fn list_dispatches_to_provider() {
         let (runtime, _) = three_layer_runtime();
-        let children = runtime.list("/b").unwrap();
+        let children = runtime.list("test://b").unwrap();
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].name, "c");
     }
@@ -1062,12 +1443,12 @@ mod tests {
         });
         let runtime = runtime_with_root(Arc::new(Root { parent }));
 
-        let children = runtime.list("/parent").unwrap();
+        let children = runtime.list("test://parent").unwrap();
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].name, "page-1");
         assert_eq!(runtime.cache_size(), 2);
 
-        let resolved = runtime.resolve("/parent/page-1").unwrap();
+        let resolved = runtime.resolve("test://parent/page-1").unwrap();
         assert_eq!(resolved.composed.from.unwrap().0, "leaf_table");
         assert!(resolved
             .composed
@@ -1135,7 +1516,7 @@ mod tests {
         });
         let runtime = runtime_with_root(Arc::new(Root { parent }));
 
-        let children = runtime.list("/parent").unwrap();
+        let children = runtime.list("test://parent").unwrap();
         assert_eq!(children[0].name, "page-1");
         assert_eq!(runtime.cache_size(), 1);
     }
@@ -1207,7 +1588,7 @@ mod tests {
             }),
         }));
 
-        let children = runtime.list("/").unwrap();
+        let children = runtime.list("test://").unwrap();
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].name, "page-mid-inner");
         assert_eq!(runtime.cache_size(), 1);
@@ -1216,9 +1597,9 @@ mod tests {
     #[test]
     fn longest_prefix_full_path_hit_zero_apply() {
         let (runtime, counter) = three_layer_runtime();
-        runtime.resolve("/b/c").unwrap();
+        runtime.resolve("test://b/c").unwrap();
         let after_first = counter.load(Ordering::SeqCst);
-        runtime.resolve("/b/c").unwrap();
+        runtime.resolve("test://b/c").unwrap();
         let after_second = counter.load(Ordering::SeqCst);
         // second call hits cached /b/c; no apply_query needed
         assert_eq!(after_second - after_first, 0);
@@ -1227,9 +1608,9 @@ mod tests {
     #[test]
     fn longest_prefix_partial_hit_resumes() {
         let (runtime, counter) = three_layer_runtime();
-        runtime.resolve("/b").unwrap(); // caches /b
+        runtime.resolve("test://b").unwrap(); // caches /b
         let after_first = counter.load(Ordering::SeqCst);
-        runtime.resolve("/b/c").unwrap(); // resumes from /b
+        runtime.resolve("test://b/c").unwrap(); // resumes from /b
         let after_second = counter.load(Ordering::SeqCst);
         // only c segment's apply_query runs
         assert_eq!(after_second - after_first, 1);
@@ -1238,11 +1619,11 @@ mod tests {
     #[test]
     fn longest_prefix_finds_longest_not_first() {
         let (runtime, counter) = three_layer_runtime();
-        runtime.resolve("/b").unwrap();
-        runtime.resolve("/b/c").unwrap();
+        runtime.resolve("test://b").unwrap();
+        runtime.resolve("test://b/c").unwrap();
         let before = counter.load(Ordering::SeqCst);
         // resolve /b/c again — should hit the LONGEST cache (/b/c), not /b
-        runtime.resolve("/b/c").unwrap();
+        runtime.resolve("test://b/c").unwrap();
         let after = counter.load(Ordering::SeqCst);
         assert_eq!(after - before, 0);
     }
@@ -1250,10 +1631,10 @@ mod tests {
     #[test]
     fn longest_prefix_cache_invalidates_after_clear() {
         let (runtime, counter) = three_layer_runtime();
-        runtime.resolve("/b/c").unwrap();
+        runtime.resolve("test://b/c").unwrap();
         let cold_count = counter.load(Ordering::SeqCst);
         runtime.clear_cache();
-        runtime.resolve("/b/c").unwrap();
+        runtime.resolve("test://b/c").unwrap();
         let after_clear = counter.load(Ordering::SeqCst);
         // after clearing cache, full cold start again — same number of apply_query calls
         assert_eq!(after_clear - cold_count, cold_count);
@@ -1289,7 +1670,7 @@ mod tests {
             children: vec![("e".into(), empty_provider.clone())],
         });
         let runtime = runtime_with_root(root);
-        runtime.resolve("/e").unwrap();
+        runtime.resolve("test://e").unwrap();
         // Empty provider hit doesn't cache
         assert_eq!(runtime.cache_size(), 0);
     }
@@ -1315,7 +1696,7 @@ mod tests {
         }
 
         let runtime = runtime_with_root(Arc::new(Root));
-        let resolved = runtime.resolve("/no_prov").unwrap();
+        let resolved = runtime.resolve("test://no_prov").unwrap();
         assert!(resolved.provider.is_none());
         assert_eq!(runtime.cache_size(), 1);
     }
@@ -1341,8 +1722,8 @@ mod tests {
         }
 
         let runtime = runtime_with_root(Arc::new(Root));
-        let err = runtime.list("/no_prov").unwrap_err();
-        assert!(matches!(err, EngineError::NoProvider(p) if p == "/no_prov"));
+        let err = runtime.list("test://no_prov").unwrap_err();
+        assert!(matches!(err, EngineError::NoProvider(p) if p == "test://no_prov"));
     }
 
     #[test]
@@ -1366,8 +1747,8 @@ mod tests {
         }
 
         let runtime = runtime_with_root(Arc::new(Root));
-        let err = runtime.resolve("/no_prov/child").unwrap_err();
-        assert!(matches!(err, EngineError::PathNotFound(p) if p == "/no_prov/child"));
+        let err = runtime.resolve("test://no_prov/child").unwrap_err();
+        assert!(matches!(err, EngineError::PathNotFound(p) if p == "test://no_prov/child"));
     }
 
     #[test]
@@ -1419,11 +1800,11 @@ mod tests {
         let runtime = runtime_with_root(Arc::new(Root {
             target: Arc::new(Target),
         }));
-        let resolved = runtime.resolve("/delegated").unwrap();
+        let resolved = runtime.resolve("test://delegated").unwrap();
         assert!(resolved.provider.is_none());
         assert_eq!(resolved.composed.from.unwrap().0, "target_table");
-        let err = runtime.list("/delegated").unwrap_err();
-        assert!(matches!(err, EngineError::NoProvider(p) if p == "/delegated"));
+        let err = runtime.list("test://delegated").unwrap_err();
+        assert!(matches!(err, EngineError::NoProvider(p) if p == "test://delegated"));
     }
 
     #[test]
@@ -1531,7 +1912,7 @@ mod tests {
             leaf: note_leaf("outer-a", Some("outer_a_table")),
         }));
 
-        let resolved = runtime.resolve("/x").unwrap();
+        let resolved = runtime.resolve("test://x").unwrap();
         assert_eq!(resolved.composed.from.unwrap().0, "outer_a_table");
         assert!(resolved
             .composed
@@ -1543,7 +1924,7 @@ mod tests {
             .fields
             .iter()
             .any(|field| field.sql.0 == "c_mark"));
-        assert_eq!(runtime.note("/x").unwrap(), Some("outer-a".into()));
+        assert_eq!(runtime.note("test://x").unwrap(), Some("outer-a".into()));
     }
 
     #[test]
@@ -1654,7 +2035,7 @@ mod tests {
             leaf: note_leaf("outer-a", Some("outer_a_table")),
         }));
 
-        let resolved = runtime.resolve("/x").unwrap();
+        let resolved = runtime.resolve("test://x").unwrap();
         assert_eq!(resolved.composed.from.unwrap().0, "outer_a_table");
         assert!(resolved
             .composed
@@ -1666,7 +2047,7 @@ mod tests {
             .fields
             .iter()
             .any(|field| field.sql.0 == "c_list_scope"));
-        assert_eq!(runtime.note("/x").unwrap(), Some("outer-a".into()));
+        assert_eq!(runtime.note("test://x").unwrap(), Some("outer-a".into()));
     }
 
     #[test]
@@ -1710,8 +2091,8 @@ mod tests {
             }),
         }));
 
-        let err = runtime.resolve("/x").unwrap_err();
-        assert!(matches!(err, EngineError::PathNotFound(path) if path == "/x"));
+        let err = runtime.resolve("test://x").unwrap_err();
+        assert!(matches!(err, EngineError::PathNotFound(path) if path == "test://x"));
         assert_eq!(runtime.cache_size(), 0);
     }
 
@@ -1771,12 +2152,12 @@ mod tests {
         }));
 
         assert_eq!(
-            runtime.note("/hit").unwrap(),
+            runtime.note("test://hit").unwrap(),
             Some("outer-transformed".into())
         );
         assert_eq!(runtime.cache_size(), 1);
         assert_eq!(
-            runtime.note("/sibling").unwrap(),
+            runtime.note("test://sibling").unwrap(),
             Some("outer-transformed".into())
         );
         assert_eq!(runtime.cache_size(), 2);
@@ -1798,14 +2179,14 @@ mod tests {
             }
         }
         let runtime = runtime_with_root(Arc::new(N));
-        let n = runtime.note("/").unwrap();
+        let n = runtime.note("test://").unwrap();
         assert_eq!(n, Some("hello".into()));
     }
 
     #[test]
     fn meta_returns_none_for_root() {
         let (runtime, _) = three_layer_runtime();
-        let m = runtime.meta("/").unwrap();
+        let m = runtime.meta("test://").unwrap();
         assert!(m.is_none());
     }
 
@@ -1852,7 +2233,7 @@ mod tests {
         let leaf: Arc<dyn Provider> = Arc::new(Inner);
         let root = Arc::new(Holder { child: leaf });
         let runtime = runtime_with_root(root);
-        let m = runtime.meta("/k").unwrap();
+        let m = runtime.meta("test://k").unwrap();
         assert_eq!(m.unwrap(), serde_json::json!({"foo":"bar"}));
     }
 
@@ -1860,7 +2241,7 @@ mod tests {
     fn meta_returns_none_when_child_meta_unset() {
         let (runtime, _) = three_layer_runtime();
         // CountingProvider.list returns ChildEntry with meta=None
-        let m = runtime.meta("/b").unwrap();
+        let m = runtime.meta("test://b").unwrap();
         assert!(m.is_none());
     }
 
@@ -1894,7 +2275,7 @@ mod tests {
         });
         let runtime = runtime_with_root(root);
         let _ = runtime
-            .resolve("/%E6%8C%89%E7%94%BB%E5%86%8C")
+            .resolve("test://%E6%8C%89%E7%94%BB%E5%86%8C")
             .expect("percent-decoded path should resolve");
     }
 
@@ -1914,6 +2295,17 @@ mod tests {
             _: &ProviderContext,
         ) -> Result<Vec<ListRef>, EngineError> {
             Ok(Vec::new())
+        }
+    }
+
+    struct RowsProvider;
+    impl Provider for RowsProvider {
+        fn fetch_rows(
+            &self,
+            _: &ProviderQuery,
+            _: &ProviderContext,
+        ) -> Result<Option<Vec<serde_json::Value>>, EngineError> {
+            Ok(Some(vec![serde_json::json!({ "id": 1 })]))
         }
     }
 
@@ -1958,7 +2350,7 @@ mod tests {
             exec.clone() as Arc<dyn crate::provider::SqlExecutor>,
         );
 
-        let rows = runtime.fetch("/").expect("fetch ok");
+        let rows = runtime.fetch("test://").expect("fetch ok");
         assert_eq!(rows.len(), 2);
         let captured = exec.captured.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1988,7 +2380,7 @@ mod tests {
             exec.clone() as Arc<dyn crate::provider::SqlExecutor>,
         );
 
-        let n = runtime.count("/").expect("count ok");
+        let n = runtime.count("test://").expect("count ok");
         assert_eq!(n, 42);
         let captured = exec.captured.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -2031,7 +2423,7 @@ mod tests {
             exec.clone() as Arc<dyn crate::provider::SqlExecutor>,
         );
 
-        let rows = runtime.fetch("/").expect("fetch ok");
+        let rows = runtime.fetch("test://").expect("fetch ok");
         assert!(rows.is_empty());
         let captured = exec.captured.lock().unwrap();
         assert!(captured[0].0.contains("LIMIT"), "sql: {}", captured[0].0);

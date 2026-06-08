@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
 use kabegame_core::{
     emitter::GlobalEmitter,
-    plugin::{Plugin, PluginManager},
-    providers::{execute_provider_query, parse_provider_path, provider_runtime, ProviderPathQuery},
-    storage::Storage,
+    providers::provider_runtime,
+    storage::{Album, ImageInfo, Storage, SurfRecord, TaskInfo},
 };
+use pathql_rs::EngineError;
 use rmcp::{
     model::{
         object, AnnotateAble, CallToolRequestParams, CallToolResult, Content, ErrorCode,
@@ -17,81 +15,32 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
 };
 use serde_json::{json, Value};
-use url::Url;
 
 pub const MCP_PORT: u16 = 7490;
 
-const PROVIDER_URI_PREFIX: &str = "provider://";
-const IMAGE_URI_PREFIX: &str = "image://";
-const ALBUM_URI_PREFIX: &str = "album://";
-const TASK_URI_PREFIX: &str = "task://";
-const SURF_URI_PREFIX: &str = "surf://";
-const PLUGIN_URI_PREFIX: &str = "plugin://";
+const MCP_INSTRUCTIONS: &str = r#"Kabegame MCP exposes PathQL-backed read resources plus write tools.
 
-const MCP_INSTRUCTIONS: &str = r#"Kabegame MCP exposes six URI schemes plus write tools.
+Use these read schemes:
 
-1) provider:// — PathQL provider path access
-   provider://<path>           Entry       : { name, meta, note }           (single node; never images)
-   provider://<path>/          List        : { entries, total, meta, note } (Dir entries + Image entries)
-   provider://<path>/*         ListWithMeta: same as List, but every Dir entry also carries its entity meta
+1) images://
+   images://id_{id}              full ImageInfo (including metadataId)
+   images://id_{id}/metadata     crawl-time metadata (tags, author, URLs; can be 10s of KB)
+   images://gallery/all          gallery collection from the existing images tree
+   images://x100x/1              first 100 raw image rows
 
-   Path roots:
-     provider://all/...             legacy shorthand for provider://gallery/all/...
-     provider://gallery/...         gallery browse tree: filters, albums, dates, wallpaper history
-     provider://images/...          raw image entity rows for automation/MCP. This root returns
-                                    { rows, children, total } instead of gallery { entries, ... }.
+2) albums://
+   albums://all                  list ALL Albums — returns Vec<Album>
+   albums://id_{id}              single Album
 
-   PathQL segment semantics:
-     x{N}x/{page}   pagination. LIMIT N plus OFFSET (page-1)*N. Page starts at 1.
-     l{N}l          plain LIMIT N leaf. It is NOT a page and does not expose child pages.
-     desc           reverses the current path's ordering when that router supports it.
-     order          album-only manual order path: /gallery/album/{id}/order/x{N}x/{page}
+3) tasks://
+   tasks://all                   list ALL Tasks — returns Vec<TaskInfo>
+   tasks://id_{id}               single TaskInfo
 
-   Query parameter (only on List / ListWithMeta; at most ONE without=):
-     ?without=children   omit Dir entries — pure image slice
-     ?without=images     omit Image entries — structure-only listing
-     NOTE: specifying both is rejected (invalid_params). To skip both, use Entry mode.
+4) surf_records://
+   surf_records://all            list ALL SurfRecords — returns Vec<SurfRecord>
+   surf_records://id_{id}        single SurfRecord
 
-   entries[N] shape:
-     { "kind": "dir",   "name": "...", "meta": <ProviderMeta|null> }
-     { "kind": "image", "image": <ImageInfo> }
-
-   total      — total image count for the current query scope (null when not applicable).
-   meta / note — present when the node itself represents a stored entity.
-
-   Pagination: page size follows user setting (default 100). Page N starts at (N-1)*pageSize.
-   IMPORTANT: page 0 is invalid — always start from page 1.
-
-   Examples:
-     provider://album/              list all albums (Dir entries; name = album id)
-     provider://album/*             same + Album meta on each Dir
-     provider://album/{id}          Entry: meta + note for this album (no images)
-     provider://album/{id}/         List:  sub-dirs + page-1 images
-     provider://album/{id}/1/       page 1 images (ascending by crawled_at)
-     provider://album/{id}/desc/1/  page 1 images (newest first)
-     provider://all/                all images, page 1
-     provider://all/desc/1/         all images, page 1, newest-first
-     provider://all/?without=children  page 1 images only, no page dirs
-     provider://date/2024y/03m/     images crawled in 2024-03, page 1
-     provider://media-type/image/   images only, page 1
-     provider://wallpaper-order/1/  wallpaper history, page 1
-     provider://gallery/album/{id}/order/x50x/1/  album manual order, page 1
-     provider://images/x100x/1      raw first 100 rows from images, SELECT images.*
-     provider://images/id_{id}/metadata  raw metadata row from image_metadata.data
-
-2) album://              list ALL Albums       — returns Vec<Album>
-   album://{id}          single Album          — returns Album
-
-3) task://               list ALL Tasks        — returns Vec<TaskInfo>
-   task://{id}           single TaskInfo
-
-4) surf://               list ALL SurfRecords  — returns Vec<SurfRecord>
-   surf://{host}         single SurfRecord
-
-5) image://{id}              full ImageInfo (including metadataId)
-   image://{id}/metadata     crawl-time metadata (tags, author, URLs; can be 10s of KB)
-
-6) plugin://                              list ALL Plugins (trimmed — see note below)
+5) plugin://                              list ALL Plugins (trimmed — see note below)
    plugin://{id}                          single Plugin (trimmed)
    plugin://{id}/icon                     base64 icon PNG                (image/png, blob)
    plugin://{id}/description_template     EJS description template       (text/plain)
@@ -102,21 +51,14 @@ const MCP_INSTRUCTIONS: &str = r#"Kabegame MCP exposes six URI schemes plus writ
    `iconPngBase64`, and `descriptionTemplate` stripped out. Fetch each heavy resource on
    demand via the sub-paths above.
 
-provider:// meta shapes (ProviderMeta tagged by kind/data):
-   kind: "album"   data: Album      { id, name, createdAt, parentId }
-   kind: "task"    data: TaskInfo   { id, pluginId, status, progress, counts, … }
-   kind: "surf"    data: SurfRecord { id, host, name, rootUrl, imageCount, lastVisitAt, … }
-   kind: "plugin"  data: Plugin     — may include docResources up to ~10 MB total.
-       DO NOT request `provider://plugin/*` (batch plugin meta) — use `plugin://` instead,
-       which returns trimmed plugin JSON; fetch heavy resources via the `plugin://{id}/{icon|
-       description_template|doc|doc_resource/{key}}` sub-paths only when needed.
+Do not use provider://, image://, album://, task://, or surf://. They are not supported.
 
-Image fields (entries[N].image — ImageInfo, camelCase via serde rename_all):
+Image fields (ImageInfo, camelCase via serde rename_all):
    id, url, localPath, pluginId, taskId, surfRecordId, crawledAt (unix sec),
    metadataId, thumbnailPath, favorite, localExists, hash, width, height, displayName,
    type ("image" | "video" — NOTE: serde key is `type`, not `mediaType`),
    lastSetWallpaperAt, size (bytes).
-   Use image://{id}/metadata to fetch crawl-time JSON metadata.
+   Use images://id_{id}/metadata to fetch crawl-time JSON metadata.
 
 Plugin package layout (for model-authored plugins): manifest.json, crawl.rhai, config.json,
 doc_root/doc.md, optional icon.png.
@@ -135,98 +77,97 @@ IMPORTANT — actions that are NOT supported:
 - No other destructive or write operations beyond the tools listed above are supported.
 "#;
 
-/// Trim large Plugin fields (docResources / iconPngBase64 / descriptionTemplate) before returning
-/// over MCP. Heavy resources are accessible via dedicated sub-paths on demand.
-fn serialize_plugin_lite(plugin: &Arc<Plugin>) -> Value {
-    let mut v = serde_json::to_value(plugin).unwrap_or(Value::Null);
-    if let Value::Object(ref mut map) = v {
-        map.remove("docResources");
-        map.remove("iconPngBase64");
-        map.remove("descriptionTemplate");
+fn resource_scheme(uri: &str) -> Result<&str, McpError> {
+    let (scheme, _) = uri
+        .split_once("://")
+        .ok_or_else(|| McpError::resource_not_found("invalid_uri", Some(json!({ "uri": uri }))))?;
+    if scheme.is_empty() {
+        return Err(McpError::resource_not_found(
+            "invalid_uri",
+            Some(json!({ "uri": uri })),
+        ));
     }
-    v
+    Ok(scheme)
 }
 
-/// Single allowed `without=` query value for provider:// list modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum McpWithout {
-    None,
-    Children,
-    Images,
+fn resource_segments(uri: &str) -> Vec<&str> {
+    uri.split_once("://")
+        .map(|(_, rest)| {
+            rest.trim_matches('/')
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
-/// Parse provider:// query string. Accepts at most one `without=children|images`.
-fn parse_mcp_without(query: Option<&str>) -> Result<McpWithout, McpError> {
-    let Some(q) = query.filter(|s| !s.is_empty()) else {
-        return Ok(McpWithout::None);
-    };
-    let mut seen: Option<McpWithout> = None;
-    for pair in q.split('&') {
-        if pair.is_empty() {
-            continue;
-        }
-        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        if k != "without" {
-            // unknown keys are ignored for forward-compat
-            continue;
-        }
-        let parsed = match v {
-            "children" => McpWithout::Children,
-            "images" => McpWithout::Images,
-            other => {
-                return Err(McpError::invalid_params(
-                    format!("unknown without value: {other}"),
-                    Some(json!({ "allowed": ["children", "images"] })),
-                ));
+async fn fetch_resource_rows(uri: &str) -> Result<Vec<Value>, McpError> {
+    let rt = provider_runtime().clone();
+    let uri = uri.to_string();
+    tokio::task::spawn_blocking(move || rt.fetch(&uri))
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        .map_err(|e| match e {
+            EngineError::PathNotFound(_)
+            | EngineError::NoProvider(_)
+            | EngineError::SchemaNotFound(_) => {
+                McpError::resource_not_found("resource_not_found", None)
             }
-        };
-        if seen.is_some() {
-            return Err(McpError::invalid_params(
-                "without can only appear once; use Entry mode (provider://<path>) to skip both",
-                None,
-            ));
-        }
-        seen = Some(parsed);
-    }
-    Ok(seen.unwrap_or(McpWithout::None))
+            other => McpError::internal_error(format!("pathql: {other}"), None),
+        })
 }
 
-fn normalize_mcp_provider_path(path: &str) -> String {
-    let trimmed = path.trim().trim_start_matches('/').trim_end_matches('/');
-    if trimmed.starts_with("gallery/")
-        || trimmed == "gallery"
-        || trimmed.starts_with("images/")
-        || trimmed == "images"
-        || trimmed.starts_with("vd/")
-        || trimmed == "vd"
-    {
-        trimmed.to_string()
+fn rows_to_value<T>(rows: Vec<Value>, single: bool, uri: &str) -> Result<Value, McpError>
+where
+    T: serde::de::DeserializeOwned + serde::Serialize,
+{
+    let mut values = Vec::with_capacity(rows.len());
+    for row in rows {
+        let item: T = serde_json::from_value(row)
+            .map_err(|e| McpError::internal_error(format!("row decode: {e}"), None))?;
+        values.push(
+            serde_json::to_value(item)
+                .map_err(|e| McpError::internal_error(format!("row encode: {e}"), None))?,
+        );
+    }
+    if single {
+        values.into_iter().next().ok_or_else(|| {
+            McpError::resource_not_found("resource_not_found", Some(json!({ "uri": uri })))
+        })
     } else {
-        format!("gallery/{}", trimmed)
+        Ok(Value::Array(values))
     }
 }
 
-fn provider_path_for_runtime(path: &str) -> String {
-    if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{}", path)
+fn image_rows_to_value(rows: Vec<Value>, single: bool, uri: &str) -> Result<Value, McpError> {
+    rows_to_value::<ImageInfo>(rows, single, uri)
+}
+
+fn metadata_rows_to_value(rows: Vec<Value>, uri: &str) -> Result<Value, McpError> {
+    let row = rows.into_iter().next().ok_or_else(|| {
+        McpError::resource_not_found("metadata_not_found", Some(json!({ "uri": uri })))
+    })?;
+    let Some(metadata) = row.get("metadata_json") else {
+        return Ok(row);
+    };
+    match metadata {
+        Value::String(s) => serde_json::from_str::<Value>(s)
+            .map_err(|e| McpError::internal_error(format!("metadata decode: {e}"), None)),
+        Value::Null => Err(McpError::resource_not_found(
+            "metadata_not_found",
+            Some(json!({ "uri": uri })),
+        )),
+        other => Ok(other.clone()),
     }
 }
 
-fn mime_for_key(key: &str) -> &'static str {
-    let ext = std::path::Path::new(key)
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-    match ext.as_deref() {
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("webp") => "image/webp",
-        Some("svg") => "image/svg+xml",
-        Some("gif") => "image/gif",
-        _ => "application/octet-stream",
-    }
+fn json_value_resource(
+    value: Value,
+    uri: impl Into<String>,
+) -> Result<ReadResourceResult, McpError> {
+    let json =
+        serde_json::to_string(&value).map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    json_resource(json, uri)
 }
 
 fn parse_args<T: serde::de::DeserializeOwned>(
@@ -264,31 +205,23 @@ impl ServerHandler for KabegameMcpServer {
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         let resources = vec![
-            RawResource::new("provider://all/", "All images")
-                .with_description("All images in the gallery, ordered by crawl time (ascending)")
+            RawResource::new("images://gallery/all", "Gallery images")
+                .with_description("Gallery collection from the images PathQL tree")
                 .with_mime_type("application/json")
                 .no_annotation(),
-            RawResource::new("provider://all/desc/", "All images (newest first)")
-                .with_description("All images in the gallery, ordered by crawl time (descending)")
+            RawResource::new("images://x100x/1", "Raw image rows")
+                .with_description("First 100 raw rows from images")
                 .with_mime_type("application/json")
                 .no_annotation(),
-            RawResource::new("provider://wallpaper-order/", "Wallpaper history")
-                .with_description("Images that have been set as wallpaper, ordered by set-time")
-                .with_mime_type("application/json")
-                .no_annotation(),
-            RawResource::new("provider://images/x100x/1", "Raw image rows")
-                .with_description("First 100 raw rows from the images provider path")
-                .with_mime_type("application/json")
-                .no_annotation(),
-            RawResource::new("album://", "All albums")
+            RawResource::new("albums://all", "All albums")
                 .with_description("Full list of albums (Vec<Album>)")
                 .with_mime_type("application/json")
                 .no_annotation(),
-            RawResource::new("task://", "All tasks")
+            RawResource::new("tasks://all", "All tasks")
                 .with_description("Full list of tasks (Vec<TaskInfo>)")
                 .with_mime_type("application/json")
                 .no_annotation(),
-            RawResource::new("surf://", "All surf records")
+            RawResource::new("surf_records://all", "All surf records")
                 .with_description("Full list of surf records (Vec<SurfRecord>)")
                 .with_mime_type("application/json")
                 .no_annotation(),
@@ -313,234 +246,149 @@ impl ServerHandler for KabegameMcpServer {
         request: ReadResourceRequestParams,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
-        let parsed = Url::parse(&request.uri).map_err(|_| {
-            McpError::resource_not_found("invalid_uri", Some(json!({ "uri": request.uri })))
-        })?;
-        let id = parsed.host_str().unwrap_or("");
-        let sub = parsed.path(); // "" | "/" | "/metadata" | "/doc" | "/doc_resource/..." etc.
+        let scheme = resource_scheme(&request.uri)?;
+        let segments = resource_segments(&request.uri);
 
-        match parsed.scheme() {
-            // image://{id}  /  image://{id}/metadata
-            "image" => {
-                if id.is_empty() {
-                    return Err(McpError::resource_not_found(
-                        "empty_image_id",
-                        Some(json!({ "uri": request.uri })),
-                    ));
-                }
-                if sub == "/metadata" {
-                    let meta = Storage::global()
-                        .get_image_metadata(id)
-                        .map_err(|e| {
-                            McpError::internal_error(format!("metadata error: {e}"), None)
-                        })?
-                        .ok_or_else(|| {
-                            McpError::resource_not_found(
-                                "no_metadata",
-                                Some(json!({ "imageId": id })),
-                            )
-                        })?;
-                    let json = serde_json::to_string(&meta)
-                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                    return json_resource(json, request.uri);
-                }
-                let image = Storage::global()
-                    .find_image_by_id(id)
-                    .map_err(|e| McpError::internal_error(e, None))?
-                    .ok_or_else(|| {
-                        McpError::resource_not_found(
-                            "image_not_found",
-                            Some(json!({ "imageId": id })),
-                        )
-                    })?;
-                let json = serde_json::to_string(&image)
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                json_resource(json, request.uri)
+        match scheme {
+            "images" => {
+                let is_metadata = segments.len() == 2
+                    && segments.first().is_some_and(|seg| seg.starts_with("id_"))
+                    && segments[1] == "metadata";
+                let is_single = segments.len() == 1
+                    && segments.first().is_some_and(|seg| seg.starts_with("id_"));
+                let rows = fetch_resource_rows(&request.uri).await?;
+                let value = if is_metadata {
+                    metadata_rows_to_value(rows, &request.uri)?
+                } else {
+                    image_rows_to_value(rows, is_single, &request.uri)?
+                };
+                json_value_resource(value, request.uri)
             }
-
-            // album://  (list all)  /  album://{id}
-            "album" => {
-                if id.is_empty() {
-                    let albums = Storage::global()
-                        .list_all_albums()
-                        .map_err(|e| McpError::internal_error(e, None))?;
-                    let json = serde_json::to_string(&albums)
-                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                    return json_resource(json, request.uri);
-                }
-                let album = Storage::global()
-                    .list_all_albums()
-                    .map_err(|e| McpError::internal_error(e, None))?
-                    .into_iter()
-                    .find(|a| a.id == id)
-                    .ok_or_else(|| {
-                        McpError::resource_not_found(
-                            "album_not_found",
-                            Some(json!({ "albumId": id })),
-                        )
-                    })?;
-                let json = serde_json::to_string(&album)
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                json_resource(json, request.uri)
+            "albums" => {
+                let is_single = matches!(segments.as_slice(), [seg] if seg.starts_with("id_"));
+                let rows = fetch_resource_rows(&request.uri).await?;
+                json_value_resource(
+                    rows_to_value::<Album>(rows, is_single, &request.uri)?,
+                    request.uri,
+                )
             }
-
-            // task://  (list all)  /  task://{id}
-            "task" => {
-                if id.is_empty() {
-                    let tasks = Storage::global()
-                        .get_all_tasks()
-                        .map_err(|e| McpError::internal_error(e, None))?;
-                    let json = serde_json::to_string(&tasks)
-                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                    return json_resource(json, request.uri);
-                }
-                let task = Storage::global()
-                    .get_task(id)
-                    .map_err(|e| McpError::internal_error(e, None))?
-                    .ok_or_else(|| {
-                        McpError::resource_not_found(
-                            "task_not_found",
-                            Some(json!({ "taskId": id })),
-                        )
-                    })?;
-                let json = serde_json::to_string(&task)
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                json_resource(json, request.uri)
+            "tasks" => {
+                let is_single = matches!(segments.as_slice(), [seg] if seg.starts_with("id_"));
+                let rows = fetch_resource_rows(&request.uri).await?;
+                json_value_resource(
+                    rows_to_value::<TaskInfo>(rows, is_single, &request.uri)?,
+                    request.uri,
+                )
             }
-
-            // surf://  (list all)  /  surf://{host}
-            "surf" => {
-                if id.is_empty() {
-                    let records = Storage::global()
-                        .list_all_surf_records()
-                        .map_err(|e| McpError::internal_error(e, None))?;
-                    let json = serde_json::to_string(&records)
-                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                    return json_resource(json, request.uri);
-                }
-                let record = Storage::global()
-                    .get_surf_record_by_host(id)
-                    .map_err(|e| McpError::internal_error(e, None))?
-                    .ok_or_else(|| {
-                        McpError::resource_not_found("surf_not_found", Some(json!({ "host": id })))
-                    })?;
-                let json = serde_json::to_string(&record)
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                json_resource(json, request.uri)
+            "surf_records" => {
+                let is_single = matches!(segments.as_slice(), [seg] if seg.starts_with("id_"));
+                let rows = fetch_resource_rows(&request.uri).await?;
+                json_value_resource(
+                    rows_to_value::<SurfRecord>(rows, is_single, &request.uri)?,
+                    request.uri,
+                )
             }
-
-            // plugin://                            list all (trimmed)
-            // plugin://{id}                        single (trimmed)
-            // plugin://{id}/icon                   base64 PNG blob
-            // plugin://{id}/description_template   EJS text/plain
-            // plugin://{id}/doc                    doc.md text/markdown
-            // plugin://{id}/doc_resource/{key}     blob by extension mime
             "plugin" => {
-                if id.is_empty() {
-                    let plugins = PluginManager::global()
-                        .get_all()
-                        .map_err(|e| McpError::internal_error(e, None))?;
-                    let arr: Vec<Value> = plugins.iter().map(serialize_plugin_lite).collect();
-                    let json = serde_json::to_string(&arr)
-                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                    return json_resource(json, request.uri);
-                }
-
-                if let Some(key) = sub.strip_prefix("/doc_resource/") {
-                    if key.is_empty() {
-                        return Err(McpError::resource_not_found(
-                            "invalid_doc_resource",
-                            Some(json!({ "uri": request.uri })),
-                        ));
-                    }
-                    let resources = PluginManager::global()
-                        .get(id)
-                        .and_then(|p| p.doc_resources.clone())
-                        .ok_or_else(|| {
+                let rows = fetch_resource_rows(&request.uri).await?;
+                match segments.as_slice() {
+                    [] => json_value_resource(Value::Array(rows), request.uri),
+                    [_plugin_id] => {
+                        let value = rows.into_iter().next().ok_or_else(|| {
                             McpError::resource_not_found(
-                                "no_doc_resources",
-                                Some(json!({ "pluginId": id })),
+                                "plugin_not_found",
+                                Some(json!({ "uri": request.uri })),
                             )
                         })?;
-                    let data = resources.get(key).ok_or_else(|| {
-                        McpError::resource_not_found(
-                            "doc_resource_not_found",
-                            Some(json!({ "pluginId": id, "key": key })),
-                        )
-                    })?;
-                    let mime = mime_for_key(key);
-                    return Ok(ReadResourceResult::new(vec![ResourceContents::blob(
-                        data.clone(),
-                        request.uri,
-                    )
-                    .with_mime_type(mime)]));
-                }
-
-                match sub {
-                    "/description_template" => {
-                        let tpl = PluginManager::global()
-                            .get(id)
-                            .and_then(|p| p.description_template.clone())
-                            .ok_or_else(|| {
-                                McpError::resource_not_found(
-                                    "no_description_template",
-                                    Some(json!({ "pluginId": id })),
-                                )
-                            })?;
-                        Ok(ReadResourceResult::new(vec![ResourceContents::text(
-                            tpl,
-                            request.uri,
-                        )
-                        .with_mime_type("text/plain")]))
+                        json_value_resource(value, request.uri)
                     }
-                    "/icon" => {
-                        let icon = PluginManager::global()
-                            .get(id)
-                            .and_then(|p| p.icon_png_base64.clone())
+                    [_plugin_id, "icon"] => {
+                        let row = rows.into_iter().next().ok_or_else(|| {
+                            McpError::resource_not_found(
+                                "no_icon",
+                                Some(json!({ "uri": request.uri })),
+                            )
+                        })?;
+                        let data = row
+                            .get("iconPngBase64")
+                            .and_then(Value::as_str)
                             .ok_or_else(|| {
                                 McpError::resource_not_found(
                                     "no_icon",
-                                    Some(json!({ "pluginId": id })),
+                                    Some(json!({ "uri": request.uri })),
                                 )
                             })?;
                         Ok(ReadResourceResult::new(vec![ResourceContents::blob(
-                            icon,
+                            data.to_string(),
                             request.uri,
                         )
                         .with_mime_type("image/png")]))
                     }
-                    "/doc" => {
-                        let doc = PluginManager::global()
-                            .get(id)
-                            .and_then(|p| p.doc.clone())
+                    [_plugin_id, "description_template"] => {
+                        let row = rows.into_iter().next().ok_or_else(|| {
+                            McpError::resource_not_found(
+                                "no_description_template",
+                                Some(json!({ "uri": request.uri })),
+                            )
+                        })?;
+                        let text = row
+                            .get("descriptionTemplate")
+                            .and_then(Value::as_str)
                             .ok_or_else(|| {
                                 McpError::resource_not_found(
-                                    "no_plugin_doc",
-                                    Some(json!({ "pluginId": id })),
+                                    "no_description_template",
+                                    Some(json!({ "uri": request.uri })),
                                 )
                             })?;
-                        let content = doc.get("default").ok_or_else(|| {
+                        Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                            text.to_string(),
+                            request.uri,
+                        )
+                        .with_mime_type("text/plain")]))
+                    }
+                    [_plugin_id, "doc"] => {
+                        let row = rows.into_iter().next().ok_or_else(|| {
                             McpError::resource_not_found(
-                                "no_default_doc",
-                                Some(json!({ "pluginId": id })),
+                                "no_plugin_doc",
+                                Some(json!({ "uri": request.uri })),
+                            )
+                        })?;
+                        let text = row.get("doc").and_then(Value::as_str).ok_or_else(|| {
+                            McpError::resource_not_found(
+                                "no_plugin_doc",
+                                Some(json!({ "uri": request.uri })),
                             )
                         })?;
                         Ok(ReadResourceResult::new(vec![ResourceContents::text(
-                            content.clone(),
+                            text.to_string(),
                             request.uri,
                         )
                         .with_mime_type("text/markdown")]))
                     }
-                    "" | "/" => {
-                        let plugin = PluginManager::global().get(id).ok_or_else(|| {
+                    [_plugin_id, "doc_resource", _key] => {
+                        let row = rows.into_iter().next().ok_or_else(|| {
                             McpError::resource_not_found(
-                                "plugin_not_found",
-                                Some(json!({ "pluginId": id })),
+                                "doc_resource_not_found",
+                                Some(json!({ "uri": request.uri })),
                             )
                         })?;
-                        let json = serde_json::to_string(&serialize_plugin_lite(&plugin))
-                            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                        json_resource(json, request.uri)
+                        let data =
+                            row.get("dataBase64")
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| {
+                                    McpError::resource_not_found(
+                                        "doc_resource_not_found",
+                                        Some(json!({ "uri": request.uri })),
+                                    )
+                                })?;
+                        let mime = row
+                            .get("mime")
+                            .and_then(Value::as_str)
+                            .unwrap_or("application/octet-stream");
+                        Ok(ReadResourceResult::new(vec![ResourceContents::blob(
+                            data.to_string(),
+                            request.uri,
+                        )
+                        .with_mime_type(mime)]))
                     }
                     _ => Err(McpError::resource_not_found(
                         "invalid_plugin_path",
@@ -548,161 +396,6 @@ impl ServerHandler for KabegameMcpServer {
                     )),
                 }
             }
-
-            // provider://<path>[?without=children|images]
-            // URL components: host = first path segment, path = rest
-            "provider" => {
-                let path_part = format!("{}{}", id, sub);
-                if path_part.is_empty() || path_part == "/" {
-                    return Err(McpError::resource_not_found(
-                        "empty_path",
-                        Some(json!({ "uri": request.uri })),
-                    ));
-                }
-
-                let without = parse_mcp_without(parsed.query())?;
-                let (path, mode) = parse_provider_path(&path_part);
-                let full = normalize_mcp_provider_path(&path);
-                let is_images_path = full == "images" || full.starts_with("images/");
-
-                let result_json: Value = match mode {
-                    ProviderPathQuery::Entry if !is_images_path => execute_provider_query(&full)
-                        .map_err(|e| {
-                            McpError::internal_error(
-                                format!("provider error: {e}"),
-                                Some(json!({ "path": path_part })),
-                            )
-                        })?,
-                    ProviderPathQuery::Entry => {
-                        let rt = provider_runtime();
-                        let path_for_runtime = provider_path_for_runtime(&full);
-                        let node = rt.resolve(&path_for_runtime).map_err(|e| {
-                            McpError::internal_error(
-                                format!("resolve error: {e}"),
-                                Some(json!({ "path": path_part })),
-                            )
-                        })?;
-                        let rows = if node.composed.limit.is_some() {
-                            rt.fetch(&path_for_runtime).map_err(|e| {
-                                McpError::internal_error(format!("fetch: {e}"), None)
-                            })?
-                        } else {
-                            Vec::new()
-                        };
-                        let total: Option<usize> =
-                            kabegame_core::providers::count_at(&path_for_runtime).ok();
-                        json!({
-                            "path": path_for_runtime,
-                            "rows": rows,
-                            "children": [],
-                            "total": total,
-                            "note": Value::Null,
-                        })
-                    }
-                    ProviderPathQuery::List | ProviderPathQuery::ListWithMeta => {
-                        let rt = provider_runtime();
-                        let path_for_runtime = provider_path_for_runtime(&full);
-
-                        let children = if without == McpWithout::Children {
-                            Vec::new()
-                        } else {
-                            rt.list(&path_for_runtime)
-                                .map_err(|e| McpError::internal_error(format!("list: {e}"), None))?
-                        };
-
-                        if is_images_path {
-                            let rows = if without == McpWithout::Images {
-                                Vec::new()
-                            } else {
-                                let node = rt.resolve(&path_for_runtime).map_err(|e| {
-                                    McpError::internal_error(
-                                        format!("resolve error: {e}"),
-                                        Some(json!({ "path": path_part })),
-                                    )
-                                })?;
-                                if node.composed.limit.is_some() {
-                                    rt.fetch(&path_for_runtime).map_err(|e| {
-                                        McpError::internal_error(format!("fetch: {e}"), None)
-                                    })?
-                                } else {
-                                    Vec::new()
-                                }
-                            };
-                            let children_json: Vec<Value> = children
-                                .into_iter()
-                                .map(|child| {
-                                    json!({
-                                        "name": child.name,
-                                        "meta": child.meta,
-                                    })
-                                })
-                                .collect();
-                            let total: Option<usize> =
-                                kabegame_core::providers::count_at(&path_for_runtime).ok();
-                            json!({
-                                "path": path_for_runtime,
-                                "children": children_json,
-                                "rows": rows,
-                                "total": total,
-                                "meta": Value::Null,
-                                "note": Value::Null,
-                            })
-                        } else {
-                            let images = if without == McpWithout::Images {
-                                Vec::new()
-                            } else {
-                                // S1e: path-only fetch; 仅在 path 有显式 limit 时取图 (避免根路径百万级行)
-                                let node = rt.resolve(&path_for_runtime).map_err(|e| {
-                                    McpError::internal_error(
-                                        format!("resolve error: {e}"),
-                                        Some(json!({ "path": path_part })),
-                                    )
-                                })?;
-                                if node.composed.limit.is_some() {
-                                    kabegame_core::providers::images_at(&path_for_runtime)
-                                        .map_err(|e| McpError::internal_error(e, None))?
-                                } else {
-                                    Vec::new()
-                                }
-                            };
-
-                            let entries = kabegame_core::gallery::browse_from_provider_jsonmeta(
-                                children, images,
-                            )
-                            .map_err(|e| McpError::internal_error(e, None))?;
-                            let entries_json = serde_json::to_value(&entries)
-                                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-                            let raw_note = rt.note(&path_for_runtime).map_err(|e| {
-                                McpError::internal_error(format!("note: {e}"), None)
-                            })?;
-                            let note = raw_note.and_then(|s| {
-                                serde_json::from_str::<Value>(&s).ok().map(|v| {
-                                    json!({
-                                        "title": v.get("title").cloned().unwrap_or(Value::Null),
-                                        "content": v.get("content").cloned().unwrap_or(Value::Null),
-                                    })
-                                })
-                            });
-                            let total: Option<usize> =
-                                kabegame_core::providers::count_at(&path_for_runtime).ok();
-
-                            json!({
-                                "entries": entries_json,
-                                "total": total,
-                                "meta": Value::Null,
-                                "note": note,
-                            })
-                        }
-                    }
-                };
-
-                let json_str = serde_json::to_string(&result_json).map_err(|e| {
-                    McpError::internal_error(format!("serialization error: {e}"), None)
-                })?;
-                json_resource(json_str, request.uri)
-            }
-
             _ => Err(McpError::resource_not_found(
                 "unknown_scheme",
                 Some(json!({ "uri": request.uri })),
@@ -718,36 +411,29 @@ impl ServerHandler for KabegameMcpServer {
         Ok(ListResourceTemplatesResult {
             next_cursor: None,
             resource_templates: vec![
-                RawResourceTemplate::new("provider://{+path}", "Gallery provider path")
+                RawResourceTemplate::new("images://id_{imageId}", "Image info")
+                    .with_description("Full ImageInfo for a single image including metadataId.")
+                    .with_mime_type("application/json")
+                    .no_annotation(),
+                RawResourceTemplate::new("images://id_{imageId}/metadata", "Image metadata")
                     .with_description(
-                        "Any gallery provider path. Append '/' for List, '/*' for ListWithMeta; \
-                         add ?without=children or ?without=images (at most one) to trim output.",
+                        "Crawl-time metadata — can be 10s of KB (tags, author, URLs, etc.).",
                     )
                     .with_mime_type("application/json")
                     .no_annotation(),
-                RawResourceTemplate::new("album://{albumId}", "Album info")
+                RawResourceTemplate::new("albums://id_{albumId}", "Album info")
                     .with_description("Full album object: id, name, parentId, createdAt.")
                     .with_mime_type("application/json")
                     .no_annotation(),
-                RawResourceTemplate::new("task://{taskId}", "Task info")
+                RawResourceTemplate::new("tasks://id_{taskId}", "Task info")
                     .with_description(
                         "Full task object: id, pluginId, status, progress, counts, etc.",
                     )
                     .with_mime_type("application/json")
                     .no_annotation(),
-                RawResourceTemplate::new("surf://{host}", "Surf record info")
+                RawResourceTemplate::new("surf_records://id_{surfRecordId}", "Surf record info")
                     .with_description(
                         "Full surf record: id, host, name, imageCount, lastVisitAt, etc.",
-                    )
-                    .with_mime_type("application/json")
-                    .no_annotation(),
-                RawResourceTemplate::new("image://{imageId}", "Image info")
-                    .with_description("Full ImageInfo for a single image including metadataId.")
-                    .with_mime_type("application/json")
-                    .no_annotation(),
-                RawResourceTemplate::new("image://{imageId}/metadata", "Image metadata")
-                    .with_description(
-                        "Crawl-time metadata — can be 10s of KB (tags, author, URLs, etc.).",
                     )
                     .with_mime_type("application/json")
                     .no_annotation(),
@@ -940,6 +626,10 @@ impl ServerHandler for KabegameMcpServer {
                 }
                 let args: Args = parse_args(request.arguments)?;
 
+                Storage::global()
+                    .ensure_album_is_writable(&args.album_id)
+                    .map_err(|e| McpError::internal_error(e, None))?;
+
                 let result = Storage::global()
                     .add_images_to_album(&args.album_id, &args.image_ids)
                     .map_err(|e| McpError::internal_error(e, None))?;
@@ -977,8 +667,7 @@ impl ServerHandler for KabegameMcpServer {
                 Storage::global()
                     .update_image_display_name(&args.image_id, &args.display_name)
                     .map_err(|e| McpError::internal_error(e, None))?;
-                let plugin_ids = Storage::global()
-                    .find_image_by_id(&args.image_id)
+                let plugin_ids = Storage::find_image_by_id(&args.image_id)
                     .ok()
                     .flatten()
                     .map(|image| vec![image.plugin_id])
@@ -1001,6 +690,26 @@ impl ServerHandler for KabegameMcpServer {
                 None,
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resource_scheme, resource_segments};
+
+    #[test]
+    fn resource_scheme_parses_scheme_prefix() {
+        assert_eq!(resource_scheme("images://id_1").unwrap(), "images");
+        assert!(resource_scheme("id_1").is_err());
+    }
+
+    #[test]
+    fn resource_segments_split_after_scheme() {
+        assert_eq!(
+            resource_segments("plugin://pixiv/doc_resource/readme.png"),
+            vec!["pixiv", "doc_resource", "readme.png"]
+        );
+        assert!(resource_segments("plugin://").is_empty());
     }
 }
 

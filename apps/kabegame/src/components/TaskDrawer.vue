@@ -1,6 +1,6 @@
 <template>
   <!-- Android：自研全宽抽屉，支持划入动画与拖拽滑出、背景透明度随拖拽变化 -->
-  <AndroidDrawer v-if="uiStore.isCompact" v-model="visible">
+  <AndroidDrawer v-if="uiStore.isCompact" :model-value="modal.isOpen.value" :z-index="modal.zIndex.value" @update:model-value="modal.close">
     <template #header>
       <div class="task-drawer-android-header">
         <h3 class="task-drawer-android-title">{{ $t('tasks.taskList') }}</h3>
@@ -11,21 +11,21 @@
         </el-tooltip>
       </div>
     </template>
-    <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
+    <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="modal.isOpen.value" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
       @cancel-task="handleCancelTaskById" @open-task-schedule-config="handleOpenTaskScheduleConfig"
       @task-contextmenu="openTaskContextMenu" />
   </AndroidDrawer>
-  <el-drawer v-else v-model="visible" :title="$t('tasks.taskList')" size="460px" direction="rtl" :with-header="true"
-    :append-to-body="true" :modal-class="'task-drawer-modal'" class="task-drawer drawer-max-width">
-    <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
+  <el-drawer v-else :model-value="modal.isOpen.value" :z-index="modal.zIndex.value" :title="$t('tasks.taskList')" size="460px" direction="rtl" :with-header="true"
+    :append-to-body="true" :modal-class="'task-drawer-modal'" class="task-drawer drawer-max-width" @update:model-value="modal.close">
+    <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="modal.isOpen.value" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
       @cancel-task="handleCancelTaskById" @open-task-schedule-config="handleOpenTaskScheduleConfig"
       @task-contextmenu="openTaskContextMenu" />
   </el-drawer>
 
-  <el-dialog v-model="saveConfigVisible" :title="$t('tasks.saveAsConfig')" width="520px" :close-on-click-modal="false"
-    class="save-config-dialog" @close="resetSaveConfigForm">
+  <el-dialog :model-value="saveConfigModal.isOpen.value" :z-index="saveConfigModal.zIndex.value" :title="$t('tasks.saveAsConfig')" width="520px" :close-on-click-modal="false"
+    class="save-config-dialog" @update:model-value="saveConfigModal.close" @close="resetSaveConfigForm">
     <el-form label-width="80px">
       <el-form-item :label="$t('common.name')" required>
         <el-input v-model="saveConfigName" :placeholder="$t('common.configNamePlaceholder')" />
@@ -35,13 +35,13 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="saveConfigVisible = false">{{ $t('common.cancel') }}</el-button>
+      <el-button @click="saveConfigModal.close()">{{ $t('common.cancel') }}</el-button>
       <el-button type="primary" :loading="savingConfig" @click="confirmSaveTaskAsConfig">{{ $t('common.save')
         }}</el-button>
     </template>
   </el-dialog>
 
-  <TaskContextMenu :visible="contextMenuVisible" :position="contextMenuPos" :task="contextMenuTask"
+  <TaskContextMenu :visible="contextMenuModal.isOpen.value" :z-index="contextMenuModal.zIndex.value" :position="contextMenuPos" :task="contextMenuTask"
     @close="closeContextMenu" @command="handleContextAction" />
 </template>
 
@@ -49,7 +49,8 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { storeToRefs } from "pinia";
 import { useI18n } from "@kabegame/i18n";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { Lightning } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
 import { useRoute, useRouter } from "vue-router";
@@ -61,7 +62,7 @@ import { trackEvent } from "@kabegame/core/track/umami";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import TaskDrawerContent from "@kabegame/core/components/task/TaskDrawerContent.vue";
 import TaskContextMenu from "./contextMenu/TaskContextMenu.vue";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
@@ -86,17 +87,13 @@ const autoConfigDialog = useAutoConfigDialogStore();
 const pluginStore = usePluginStore();
 const uiStore = useUiStore();
 
-const visible = computed({
-  get: () => props.modelValue,
-  set: (value) => emit('update:modelValue', value)
-});
-
-useModalBack(visible);
+const modal = useModal({ onClose: () => emit('update:modelValue', false) });
+watch(() => props.modelValue, (v) => v ? modal.open() : modal.close(), { immediate: true });
 
 const batteryStore = useBatteryOptimizationStore();
 const { isOptimized } = storeToRefs(batteryStore);
 
-watch(visible, (open) => {
+watch(modal.isOpen, (open) => {
   if (open && IS_ANDROID) {
     void batteryStore.checkAndPromptIfNeeded();
   }
@@ -107,13 +104,12 @@ async function onBatteryIconClick() {
 }
 
 // 任务右键菜单
-const contextMenuVisible = ref(false);
+const contextMenuModal = useModal({ onClose: () => { contextMenuTask.value = null; } });
 const contextMenuPos = ref({ x: 0, y: 0 });
 const contextMenuTask = ref<any | null>(null);
 
 // 保存为运行配置弹窗
-const saveConfigVisible = ref(false);
-useModalBack(saveConfigVisible);
+const saveConfigModal = useModal();
 const savingConfig = ref(false);
 const saveConfigTask = ref<any | null>(null);
 const saveConfigName = ref("");
@@ -144,13 +140,12 @@ function trackTaskDrawerAction(action: "view_images" | "delete_task", task: any)
 // 右键菜单（由 TaskDrawerContent 转发）
 const openTaskContextMenu = (payload: { x: number; y: number; task: any }) => {
   contextMenuTask.value = payload.task;
-  contextMenuVisible.value = true;
   contextMenuPos.value = { x: payload.x, y: payload.y };
+  contextMenuModal.open();
 };
 
 const closeContextMenu = () => {
-  contextMenuVisible.value = false;
-  contextMenuTask.value = null;
+  contextMenuModal.close();
 };
 
 const handleContextAction = async (action: string) => {
@@ -182,7 +177,7 @@ const openSaveConfigDialog = (task: any) => {
   saveConfigTask.value = task;
   saveConfigName.value = pluginName;
   saveConfigDescription.value = "";
-  saveConfigVisible.value = true;
+  saveConfigModal.open();
 };
 
 const confirmSaveTaskAsConfig = async () => {
@@ -206,7 +201,7 @@ const confirmSaveTaskAsConfig = async () => {
       scheduleEnabled: false,
     });
     ElMessage.success(t('tasks.saveConfigSuccess'));
-    saveConfigVisible.value = false;
+    saveConfigModal.close();
     resetSaveConfigForm();
   } catch (error) {
     console.error("保存为配置失败:", error);
@@ -217,7 +212,7 @@ const confirmSaveTaskAsConfig = async () => {
 };
 
 const handleGlobalClick = () => {
-  if (contextMenuVisible.value) {
+  if (contextMenuModal.isOpen.value) {
     closeContextMenu();
   }
 };
@@ -286,7 +281,7 @@ const handleOpenTaskImagesById = (taskId: string) => {
   trackTaskDrawerAction("view_images", task);
   void router.push(`/tasks/${task.id}`);
   requestAnimationFrame(() => {
-    visible.value = false;
+    modal.close();
   });
 };
 

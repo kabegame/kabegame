@@ -1,51 +1,57 @@
 <template>
-  <template v-if="!shouldHide">
   <div
-    class="provider-tree-row"
+    v-if="!shouldHide"
+    class="provider-tree-node"
     :class="{
-      'is-active': active,
-      'is-disabled': !selectable,
-      'is-loading': loading,
+      'provider-tree-node--sticky': hasStickyHeader,
+      'provider-tree-node--active': active,
+      'provider-tree-node--disabled': isDisabled,
     }"
-    :style="{ '--tree-depth': depth }"
+    :style="nodeStyle"
   >
-    <button
-      v-if="hasChildren"
-      class="tree-toggle"
-      :class="{ 'is-expanded': isExpanded }"
-      type="button"
-      @click.stop="setExpanded(!isExpanded)"
+    <div
+      class="provider-tree-node__row min-h-8 flex items-center pl-[calc(var(--tree-depth)*16px)] rounded-[6px] text-[var(--anime-text-primary)] hover:bg-[var(--el-fill-color-light)]"
+      :class="{
+        '!bg-[rgba(255,107,157,0.14)] !text-[var(--anime-primary)]': active,
+        'opacity-50 hover:bg-transparent': isDisabled,
+      }"
+      :aria-busy="loading"
+      :aria-disabled="isDisabled"
     >
-      <el-icon>
-        <ArrowRight />
-      </el-icon>
-    </button>
-    <span v-else class="tree-toggle-spacer" />
+      <button
+        v-if="hasChildren"
+        class="w-[26px] h-[26px] flex-none inline-flex items-center justify-center border-0 bg-transparent text-inherit cursor-pointer transition-transform duration-150 ease-[ease]"
+        :class="{ 'rotate-90': isExpanded, '!cursor-not-allowed': isDisabled }"
+        :disabled="isDisabled"
+        type="button"
+        @click.stop="setExpanded(!isExpanded)"
+      >
+        <el-icon>
+          <ArrowRight />
+        </el-icon>
+      </button>
+      <span v-else class="flex-none w-[26px]" />
 
-    <button
-      v-if="selectable"
-      class="tree-select"
-      type="button"
-      @click="onLabelClick"
-    >
-      <span class="tree-label">{{ name }}</span>
-      <span class="tree-count">({{ displayCount }})</span>
-    </button>
-    <button
-      v-else
-      class="tree-select is-static"
-      type="button"
-      @click="onLabelClick"
-    >
-      <span class="tree-label">{{ name }}</span>
-      <span class="tree-count">({{ displayCount }})</span>
-    </button>
-  </div>
+      <button
+        class="min-w-0 flex-1 h-[30px] flex items-center gap-1 border-0 bg-transparent text-inherit text-left cursor-pointer"
+        :class="{ 'cursor-default': !selectable, '!cursor-not-allowed': isDisabled }"
+        :disabled="isDisabled"
+        type="button"
+        @click="onLabelClick"
+      >
+        <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{{ name }}</span>
+        <span class="flex-none text-[var(--anime-text-secondary)] text-xs">({{ displayCount }})</span>
+      </button>
+    </div>
 
-  <div v-if="hasChildren && childrenMounted" v-show="isExpanded" class="tree-children">
-    <slot />
+    <div
+      v-if="hasChildren && childrenMounted"
+      v-show="isExpanded"
+      class="provider-tree-node__children"
+    >
+      <slot />
+    </div>
   </div>
-  </template>
 </template>
 
 <script setup lang="ts">
@@ -70,14 +76,14 @@ const props = withDefaults(defineProps<{
   filter?: (payload: ImagesChangePayload) => boolean;
   selectable?: boolean;
   initialCount?: number;
-  hideWhenEmpty?: boolean;
+  emptyState?: "hide" | "disable" | "show";
 }>(), {
   depth: 0,
   active: false,
   defaultExpanded: false,
   debounce: 3000,
   selectable: true,
-  hideWhenEmpty: false,
+  emptyState: "show",
 });
 
 const emit = defineEmits<{
@@ -86,7 +92,7 @@ const emit = defineEmits<{
 }>();
 
 const slots = useSlots();
-const { registerRefreshTarget, visible } = useGalleryFilterTreeContext();
+const { autoExpandRoot, registerRefreshTarget, visible } = useGalleryFilterTreeContext();
 const localExpanded = ref(props.defaultExpanded);
 const childrenMounted = ref(props.defaultExpanded);
 const count = ref<number | null>(null);
@@ -96,16 +102,37 @@ let unregisterRefresh: (() => void) | null = null;
 
 const hasChildren = computed(() => Boolean(slots.default));
 const isExpanded = computed(() => localExpanded.value);
+const hasStickyHeader = computed(() => hasChildren.value && isExpanded.value);
 const displayCount = computed(() => (count.value == null ? "..." : String(count.value)));
-const shouldHide = computed(() => props.hideWhenEmpty && count.value !== null && count.value === 0);
+const isEmpty = computed(() => count.value !== null && count.value === 0);
+const shouldHide = computed(() => props.emptyState === "hide" && isEmpty.value);
+const isDisabled = computed(() => props.emptyState === "disable" && isEmpty.value);
+const nodeStyle = computed<Record<string, string | number>>(() => ({
+  "--tree-depth": props.depth,
+  "--tree-sticky-top": `${props.depth * 32}px`,
+  "--tree-sticky-z-index": String(100 - props.depth),
+}));
 
 function setExpanded(value: boolean) {
+  if (isDisabled.value) return;
+  if (localExpanded.value === value && (!value || childrenMounted.value)) return;
   localExpanded.value = value;
   if (value) childrenMounted.value = true;
   emit("update:expanded", value);
 }
 
+function shouldAutoExpand() {
+  return props.defaultExpanded || (autoExpandRoot.value && props.depth === 0 && hasChildren.value);
+}
+
+function syncAutoExpand() {
+  if (visible.value && shouldAutoExpand()) {
+    setExpanded(true);
+  }
+}
+
 function onLabelClick() {
+  if (isDisabled.value) return;
   if (props.selectable) {
     emit("select");
     return;
@@ -149,10 +176,15 @@ useAlbumImagesChangeRefresh({
 });
 
 watch(visible, (v) => {
-  if (v) void refresh();
+  if (!v) return;
+  syncAutoExpand();
+  void refresh();
 });
 
+watch([autoExpandRoot, hasChildren, () => props.defaultExpanded], syncAutoExpand);
+
 onMounted(() => {
+  syncAutoExpand();
   if (props.initialCount != null) {
     count.value = props.initialCount;
   } else if (visible.value) {
@@ -171,79 +203,28 @@ defineExpose({ refresh });
 </script>
 
 <style scoped lang="scss">
-.provider-tree-row {
-  min-height: 32px;
-  display: flex;
-  align-items: center;
-  padding-left: calc(var(--tree-depth) * 16px);
-  border-radius: 6px;
-  color: var(--anime-text-primary);
-
-  &:hover {
-    background: var(--el-fill-color-light);
-  }
-
-  &.is-active {
-    background: rgba(255, 107, 157, 0.14);
-    color: var(--anime-primary);
-  }
-
-  &.is-disabled {
-    color: var(--anime-text-primary);
-  }
+.provider-tree-node {
+  position: relative;
 }
 
-.tree-toggle,
-.tree-select {
-  border: 0;
-  background: transparent;
-  color: inherit;
+.provider-tree-node__row {
+  position: relative;
+  z-index: 1;
 }
 
-.tree-toggle {
-  width: 26px;
-  height: 26px;
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: transform 0.15s ease;
-
-  &.is-expanded {
-    transform: rotate(90deg);
-  }
+.provider-tree-node--sticky > .provider-tree-node__row {
+  position: sticky;
+  // top: 30px;
+  top: calc(var(--provider-tree-sticky-offset, 0px) + var(--tree-sticky-top, 0px));
+  z-index: var(--tree-sticky-z-index);
+  background: var(--el-bg-color-overlay, rgba(255, 255, 255, 0.96));
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 0 rgba(255, 107, 157, 0.1);
 }
 
-.tree-toggle-spacer {
-  flex: 0 0 26px;
-}
-
-.tree-select {
-  min-width: 0;
-  flex: 1;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  text-align: left;
-  cursor: pointer;
-
-  &.is-static {
-    cursor: default;
-  }
-}
-
-.tree-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tree-count {
-  flex: 0 0 auto;
-  color: var(--anime-text-secondary);
-  font-size: 12px;
+.provider-tree-node__children {
+  position: relative;
+  z-index: 0;
 }
 </style>
+ 

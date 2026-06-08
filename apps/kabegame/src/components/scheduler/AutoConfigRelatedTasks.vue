@@ -29,8 +29,10 @@
       </div>
     </div>
     <TaskParamsDialog
-      v-model="runParamsDialogOpen"
+      :open="runParamsDialog.isOpen.value"
+      :z-index="runParamsDialog.zIndex.value"
       :task="runParamsTask"
+      @close="runParamsDialog.close()"
       @closed="runParamsTask = null"
     />
   </template>
@@ -38,6 +40,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useVirtualList } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import { useCrawlerStore } from "@/stores/crawler";
@@ -84,12 +87,12 @@ const { list: virtualList, containerProps, wrapperProps } = useVirtualList(tasks
   overscan: 6,
 });
 
-const runParamsDialogOpen = ref(false);
+const runParamsDialog = useModal();
 const runParamsTask = ref<CrawlTask | null>(null);
 
 function openRunParams(task: CrawlTask) {
   runParamsTask.value = task;
-  runParamsDialogOpen.value = true;
+  runParamsDialog.open();
 }
 </script>
 

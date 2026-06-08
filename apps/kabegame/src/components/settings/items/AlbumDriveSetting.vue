@@ -17,7 +17,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { invoke } from "@/api/rpc";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 

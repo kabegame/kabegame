@@ -108,7 +108,9 @@ fn runtime_with_registry(
         )
         .unwrap();
     let runtime = ProviderRuntime::with_registry(Arc::new(registry), executor, Default::default());
-    runtime.set_root("", "__root").unwrap();
+    runtime
+        .register_schema("test", "plugins", "", "__root")
+        .unwrap();
     runtime
 }
 
@@ -153,7 +155,7 @@ fn dynamic_sql_list_enumerates_rows() {
     });
     let runtime = runtime_with_registry(empty_registry(), root, executor);
 
-    let children = runtime.list("/").unwrap();
+    let children = runtime.list("test://").unwrap();
     let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec!["p1", "p2", "p3"]);
 
@@ -222,11 +224,11 @@ fn dynamic_resolve_list_fallback_finds_match() {
     let runtime = runtime_with_registry(reg, root, executor);
 
     // Reverse-lookup for /p2 should hit the dynamic SQL entry's row id=p2 → pinger provider.
-    let resolved = runtime.resolve("/p2").unwrap();
+    let resolved = runtime.resolve("test://p2").unwrap();
     let _ = resolved.provider;
 
     // Non-matching name should produce PathNotFound.
-    let err = runtime.resolve("/notfound").unwrap_err();
+    let err = runtime.resolve("test://notfound").unwrap_err();
     assert!(matches!(err, EngineError::PathNotFound(_)));
 }
 
@@ -354,7 +356,7 @@ fn dynamic_delegate_list_enumerates_target_children() {
     let root: Arc<dyn Provider> = Arc::new(Root { src, facade });
     let runtime = runtime_with_registry(reg, root, executor);
 
-    let children = runtime.list("/facade").unwrap();
+    let children = runtime.list("test://facade").unwrap();
     let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec!["x-alpha", "x-beta"]);
     assert!(children.iter().all(|c| c.provider.is_none()));
@@ -407,8 +409,7 @@ fn resolve_delegate_child_ref_folds_target_contrib_on_descent() {
     let leaf_def: ProviderDef = serde_json::from_str(
         r#"{
             "namespace": "test",
-            "name": "leaf",
-            "query": {"from": "leaf_table"}
+            "name": "leaf"
         }"#,
     )
     .unwrap();
@@ -422,8 +423,8 @@ fn resolve_delegate_child_ref_folds_target_contrib_on_descent() {
     });
     let runtime = runtime_with_registry(reg, root, no_op_executor());
 
-    let resolved = runtime.resolve("/alpha").unwrap();
-    assert_eq!(resolved.composed.from.unwrap().0, "leaf_table");
+    let resolved = runtime.resolve("test://alpha").unwrap();
+    assert_eq!(resolved.composed.from.unwrap().0, "plugins");
     assert!(resolved
         .composed
         .fields
@@ -465,8 +466,7 @@ fn resolve_delegate_name_override_folds_target_contrib_on_descent() {
     let override_def: ProviderDef = serde_json::from_str(
         r#"{
             "namespace": "test",
-            "name": "override_leaf",
-            "query": {"from": "override_table"}
+            "name": "override_leaf"
         }"#,
     )
     .unwrap();
@@ -480,8 +480,8 @@ fn resolve_delegate_name_override_folds_target_contrib_on_descent() {
     });
     let runtime = runtime_with_registry(reg, root, no_op_executor());
 
-    let resolved = runtime.resolve("/alpha").unwrap();
-    assert_eq!(resolved.composed.from.unwrap().0, "override_table");
+    let resolved = runtime.resolve("test://alpha").unwrap();
+    assert_eq!(resolved.composed.from.unwrap().0, "plugins");
     assert!(resolved
         .composed
         .fields
@@ -519,8 +519,7 @@ fn resolve_delegate_name_override_requires_target_child() {
     let override_def: ProviderDef = serde_json::from_str(
         r#"{
             "namespace": "test",
-            "name": "override_leaf",
-            "query": {"from": "override_table"}
+            "name": "override_leaf"
         }"#,
     )
     .unwrap();
@@ -534,8 +533,8 @@ fn resolve_delegate_name_override_requires_target_child() {
     });
     let runtime = runtime_with_registry(reg, root, no_op_executor());
 
-    let err = runtime.resolve("/alpha").unwrap_err();
-    assert!(matches!(err, EngineError::PathNotFound(path) if path == "/alpha"));
+    let err = runtime.resolve("test://alpha").unwrap_err();
+    assert!(matches!(err, EngineError::PathNotFound(path) if path == "test://alpha"));
 }
 
 #[test]

@@ -16,6 +16,10 @@
                 <SettingRow :label="$t('settings.language')" :description="$t('settings.languageDesc')">
                   <LanguageSetting />
                 </SettingRow>
+                <SettingRow :label="$t('settings.kamechanEnabled')"
+                  :description="$t('settings.kamechanEnabledDesc')">
+                  <SettingSwitchControl setting-key="kamechanEnabled" />
+                </SettingRow>
                 <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.autoLaunch')"
                   :description="$t('settings.autoLaunchDesc')">
                   <SettingSwitchControl setting-key="autoLaunch" />
@@ -28,10 +32,6 @@
                   :description="$t('settings.imageClickActionDesc')">
                   <SettingRadioControl setting-key="imageClickAction" :options="imageClickActionOptions" />
                 </SettingRow>
-                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageAspectRatio')"
-                  :description="$t('settings.imageAspectRatioDesc')">
-                  <GalleryImageAspectRatioSetting />
-                </SettingRow>
                 <SettingRow v-if="!IS_ANDROID"
                   :label="isHorizontal ? $t('settings.galleryRows') : $t('settings.galleryColumns')"
                   :description="isHorizontal ? $t('settings.galleryRowsDesc') : $t('settings.galleryColumnsDesc')">
@@ -41,17 +41,15 @@
                   :description="$t('settings.galleryPageSizeDesc')">
                   <GalleryPageSizeSetting />
                 </SettingRow>
-                <SettingRow :label="$t('settings.galleryLayoutMode')"
+                <SettingRow v-if="!IS_ANDROID"
+                  :label="$t('settings.galleryLayoutMode')"
                   :description="$t('settings.galleryLayoutModeDesc')">
                   <SettingRadioControl setting-key="galleryLayoutMode" :options="galleryLayoutModeOptions" />
                 </SettingRow>
-                <SettingRow :label="$t('settings.galleryLayoutDirection')"
+                <SettingRow v-if="!IS_ANDROID"
+                  :label="$t('settings.galleryLayoutDirection')"
                   :description="$t('settings.galleryLayoutDirectionDesc')">
                   <SettingRadioControl setting-key="galleryLayoutDirection" :options="galleryLayoutDirectionOptions" />
-                </SettingRow>
-                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageObjectPosition')"
-                  :description="$t('settings.imageObjectPositionDesc')">
-                  <SettingRadioControl setting-key="galleryImageObjectPosition" :options="objectPositionOptions" />
                 </SettingRow>
                 <SettingRow :label="$t('settings.appBackgroundEnabled')"
                   :description="$t('settings.appBackgroundEnabledDesc')">
@@ -104,6 +102,12 @@
 
             <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
               <div v-if="!loading" class="settings-list">
+                <SettingRow :label="$t('settings.wallpaperDisabled')"
+                  :description="$t('settings.wallpaperDisabledDesc')">
+                  <SettingSwitchControl setting-key="wallpaperDisabled" />
+                </SettingRow>
+
+                <div :class="{ 'pointer-events-none opacity-50': wallpaperDisabled }">
                 <SettingRow :label="$t('settings.wallpaperRotationEnabled')"
                   :description="$t('settings.wallpaperRotationEnabledDesc')">
                   <WallpaperRotationEnabledSetting />
@@ -168,10 +172,7 @@
                   <WallpaperModeSetting />
                 </SettingRow>
 
-                <SettingRow v-if="IS_WINDOWS" :label="$t('settings.wallpaperEngineDir')"
-                  :description="$t('settings.wallpaperEngineDirDesc')">
-                  <WallpaperEngineDirSetting />
-                </SettingRow>
+                </div>
               </div>
             </div>
           </el-card>
@@ -245,7 +246,7 @@
 import { ref, onMounted, onActivated, computed, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useLocalStorage } from "@vueuse/core";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
@@ -261,7 +262,6 @@ import SettingSliderControl from "@kabegame/core/components/settings/controls/Se
 import SettingRadioControl from "@kabegame/core/components/settings/controls/SettingRadioControl.vue";
 import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
 import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
-import GalleryImageAspectRatioSetting from "@/components/settings/items/GalleryImageAspectRatioSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import GalleryPageSizeSetting from "@/components/settings/items/GalleryPageSizeSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";
@@ -269,7 +269,6 @@ import WallpaperRotationTargetSetting from "@/components/settings/items/Wallpape
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
-import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngineDirSetting.vue";
 import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetting.vue";
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
@@ -284,11 +283,6 @@ const { isPlasma } = useDesktop();
 const imageClickActionOptions = computed(() => [
   { label: t("settings.imageClickPreview"), value: "preview" },
   { label: t("settings.imageClickOpen"), value: "open" },
-]);
-const objectPositionOptions = computed(() => [
-  { label: t("settings.objectPositionCenter"), value: "center" },
-  { label: t("settings.objectPositionTop"), value: "top" },
-  { label: t("settings.objectPositionBottom"), value: "bottom" },
 ]);
 const wallpaperModeOptions = computed(() => [
   { label: t("settings.wallpaperModeRandom"), value: "random" },
@@ -397,11 +391,25 @@ watch(
   }
 );
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
+// 关闭壁纸：禁用期间将其余壁纸控件置灰
+const wallpaperDisabled = computed(() => settingsStore.values.wallpaperDisabled === true);
+// native 模式下开启"关闭壁纸"时提示用户系统壁纸保持现状、无法自动还原
+watch(wallpaperDisabled, (disabled, prev) => {
+  if (disabled && !prev && wallpaperMode.value === "native") {
+    ElMessage.warning(t("settings.wallpaperDisabledNativeWarning"));
+  }
+});
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("settings");
 const isLightMode = IS_LIGHT_MODE;
 
-const settingsShowIds = computed(() => (IS_ANDROID ? [] : [HeaderFeatureId.Refresh, HeaderFeatureId.Help]));
+const settingsShowIds = computed(() => {
+  if (IS_ANDROID) return [];
+  const ids = [HeaderFeatureId.Help];
+  // 桌面端（非 web）显示「检查更新」按钮
+  if (!IS_WEB) ids.unshift(HeaderFeatureId.CheckUpdate);
+  return ids;
+});
 const pullToRefreshOpts = computed(() =>
   IS_ANDROID
     ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
@@ -409,8 +417,7 @@ const pullToRefreshOpts = computed(() =>
 );
 
 function handleSettingsAction(payload: { id: string; data: { type: string } }) {
-  if (payload.id === HeaderFeatureId.Refresh) handleRefresh();
-  else if (payload.id === HeaderFeatureId.Help) openHelpDrawer();
+  if (payload.id === HeaderFeatureId.Help) openHelpDrawer();
 }
 
 

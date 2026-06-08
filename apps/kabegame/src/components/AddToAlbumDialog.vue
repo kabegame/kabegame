@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" :title="$t('albums.addToAlbumTitle')" width="420px">
+  <el-dialog append-to-body :model-value="open" :z-index="zIndex" :title="$t('albums.addToAlbumTitle')" width="420px" @update:model-value="(v: boolean) => { if (!v) emit('close') }">
     <el-form label-width="80px">
       <el-form-item :label="$t('albums.selectAlbum')">
         <AlbumPickerField
@@ -15,9 +15,18 @@
         <el-input v-model="newAlbumName" :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
           @keyup.enter="handleCreateAndAddAlbum" ref="newAlbumNameInputRef" />
       </el-form-item>
+      <el-form-item v-if="isCreatingNewAlbum" :label="$t('albums.parentAlbum')">
+        <AlbumPickerField
+          v-model="newAlbumParentId"
+          :album-tree="newAlbumParentTree"
+          :album-counts="albumCounts"
+          :placeholder="$t('albums.selectParentAlbum')"
+          :picker-title="$t('albums.parentAlbum')"
+        />
+      </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
+      <el-button @click="emit('close')">{{ $t('common.cancel') }}</el-button>
       <el-button v-if="isCreatingNewAlbum" type="primary" :disabled="!newAlbumName.trim()"
         @click="handleCreateAndAddAlbum">{{ $t('common.confirm') }}</el-button>
       <el-button v-else type="primary" :disabled="!selectedAlbumId" @click="confirmAddToAlbum">{{ $t('common.confirm') }}</el-button>
@@ -28,14 +37,14 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { storeToRefs } from "pinia";
-import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 
 interface Props {
-  modelValue: boolean;
+  open: boolean;
+  zIndex: number;
   /** 要加入画册的图片 id；在任务一键加入时可不传，改传 taskId 由后端取任务全部图片 */
   imageIds: string[];
   /**
@@ -50,7 +59,7 @@ interface Props {
 
 const props = defineProps<Props>();
 const emit = defineEmits<{
-  (e: "update:modelValue", v: boolean): void;
+  (e: "close"): void;
   (e: "added"): void;
 }>();
 
@@ -58,26 +67,29 @@ const { t } = useI18n();
 const albumStore = useAlbumStore();
 const { albumCounts } = storeToRefs(albumStore);
 
+const excludedAlbumIds = computed(() => [
+  HIDDEN_ALBUM_ID,
+  ...albumStore.localFolderAlbumIds,
+  ...(props.excludeAlbumIds ?? []),
+]);
+
 const albumTreeForPicker = computed(() =>
-  albumStore.getAlbumTreeExcluding([HIDDEN_ALBUM_ID, ...(props.excludeAlbumIds ?? [])]),
+  albumStore.getAlbumTreeExcluding(excludedAlbumIds.value),
+);
+const newAlbumParentTree = computed(() =>
+  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID]),
 );
 
 const selectedAlbumId = ref<string | null>(null);
 const newAlbumName = ref<string>("");
+const newAlbumParentId = ref<string | null>(null);
 const newAlbumNameInputRef = ref<any>(null);
 
 // 是否正在创建新画册
 const isCreatingNewAlbum = computed(() => selectedAlbumId.value === "__create_new__");
 
-const visible = computed({
-  get: () => props.modelValue,
-  set: (v) => emit("update:modelValue", v),
-});
-
-useModalBack(visible);
-
 watch(
-  () => props.modelValue,
+  () => props.open,
   async (v) => {
     if (v) {
       // 确保画册列表可用
@@ -85,16 +97,17 @@ watch(
     } else {
       selectedAlbumId.value = null;
       newAlbumName.value = "";
+      newAlbumParentId.value = null;
     }
   }
 );
 
 // 如果排除列表变化，且当前选中的 album 被排除了，则重置选择
 watch(
-  () => props.excludeAlbumIds,
+  excludedAlbumIds,
   (next) => {
     if (!selectedAlbumId.value) return;
-    const exclude = new Set(next || []);
+    const exclude = new Set(next);
     if (exclude.has(selectedAlbumId.value)) {
       selectedAlbumId.value = null;
     }
@@ -114,6 +127,7 @@ watch(selectedAlbumId, (newValue) => {
   } else {
     // 选择已有画册时清空新建名称
     newAlbumName.value = "";
+    newAlbumParentId.value = null;
   }
 });
 
@@ -121,7 +135,7 @@ watch(selectedAlbumId, (newValue) => {
 const handleCreateAndAddAlbum = async () => {
   const isTaskMode = !!props.taskId;
   if (!isTaskMode && props.imageIds.length === 0) {
-    visible.value = false;
+    emit("close");
     return;
   }
 
@@ -131,7 +145,8 @@ const handleCreateAndAddAlbum = async () => {
   }
 
   try {
-    const created = await albumStore.createAlbum(newAlbumName.value.trim());
+    const parentId = newAlbumParentId.value?.trim() || null;
+    const created = await albumStore.createAlbum(newAlbumName.value.trim(), { parentId });
 
     if (isTaskMode) {
       const result = await albumStore.addTaskImagesToAlbum(props.taskId!, created.id);
@@ -141,7 +156,7 @@ const handleCreateAndAddAlbum = async () => {
       ElMessage.success(t('albums.createAlbumAndAdd', { name: created.name, count: props.imageIds.length }));
     }
 
-    visible.value = false;
+    emit("close");
     emit("added");
   } catch (error: any) {
     console.error("创建画册并加入图片失败:", error);
@@ -155,7 +170,7 @@ const handleCreateAndAddAlbum = async () => {
 const confirmAddToAlbum = async () => {
   const isTaskMode = !!props.taskId;
   if (!isTaskMode && props.imageIds.length === 0) {
-    visible.value = false;
+    emit("close");
     return;
   }
 
@@ -173,7 +188,7 @@ const confirmAddToAlbum = async () => {
       } else {
         ElMessage.success(t('albums.addedToAlbum', { count: result.added }));
       }
-      visible.value = false;
+      emit("close");
       emit("added");
       return;
     }
@@ -187,7 +202,7 @@ const confirmAddToAlbum = async () => {
 
       if (idsToAdd.length === 0) {
         ElMessage.info(t('albums.allInAlbum'));
-        visible.value = false;
+        emit("close");
         emit("added");
         return;
       }
@@ -202,7 +217,7 @@ const confirmAddToAlbum = async () => {
 
     await albumStore.addImagesToAlbum(albumId, idsToAdd);
     ElMessage.success(t('albums.addedToAlbum', { count: idsToAdd.length }));
-    visible.value = false;
+    emit("close");
     emit("added");
   } catch (error: any) {
     console.error("加入画册失败:", error);

@@ -1,5 +1,4 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "size_bucket_router",
     // 从 ${composed} 统计各大小分桶的行数，只列出非空分组。

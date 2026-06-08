@@ -1,0 +1,27 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_no_album_router",
+    "query": {
+        "join": [{
+            "kind": "LEFT",
+            "table": "album_images",
+            "as": "no_album_ai",
+            "on": "no_album_ai.image_id = images.id and no_album_ai.album_id <> ${global.hidden_album_id}",
+            "in_need": true
+        }],
+        "where": "no_album_ai.image_id IS NULL"
+    },
+    "resolve": {
+        "filter_comb": {
+            "provider": "gallery_filter_comb"
+        },
+        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
+            "delegate": {
+                "provider": "kabegame.gallery_desc_pagination_page_comb"
+            },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

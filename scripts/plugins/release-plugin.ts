@@ -2,6 +2,8 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { glob } from "glob";
+import os from "os";
+import { spawnSync } from "child_process";
 import { BasePlugin } from "./base-plugin";
 import { BuildSystem } from "../build-system";
 import { Component } from "./component-plugin";
@@ -102,6 +104,50 @@ function isReleaseBuild(bs: BuildSystem): boolean {
   return Boolean(bs.context.cmd?.isBuild && bs.options.release);
 }
 
+function commandOutput(cmd: string, args: string[], cwd?: string): string {
+  const res = spawnSync(cmd, args, {
+    cwd,
+    encoding: "utf8",
+  });
+  if (res.status !== 0) {
+    const output = `${res.stdout ?? ""}${res.stderr ?? ""}`.trim();
+    throw new Error(
+      `${cmd} ${args.join(" ")} failed${output ? `:\n${output}` : ""}`,
+    );
+  }
+  return `${res.stdout ?? ""}${res.stderr ?? ""}`;
+}
+
+function assertNoLinuxLibfuseLink(debPath: string): void {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "kabegame-deb-check-"));
+  try {
+    commandOutput("dpkg-deb", ["-x", debPath, tmpDir]);
+    const binDir = path.join(tmpDir, "usr", "bin");
+    const binaries = ["kabegame", "kabegame-cli"]
+      .map((name) => path.join(binDir, name))
+      .filter((p) => fs.existsSync(p) && fs.statSync(p).isFile());
+
+    for (const binary of binaries) {
+      const dynamicSection = commandOutput("readelf", ["-d", binary]);
+      const fuseNeeded = dynamicSection
+        .split(/\r?\n/)
+        .filter((line) => /NEEDED.*libfuse/i.test(line));
+      if (fuseNeeded.length > 0) {
+        throw new Error(
+          [
+            `Linux release binary must not dynamically link libfuse: ${path.relative(ROOT, debPath)}`,
+            `binary: ${path.relative(tmpDir, binary)}`,
+            ...fuseNeeded,
+            "Use fuser without the libfuse feature on Linux; runtime should depend on fuse3/fusermount3 instead.",
+          ].join("\n"),
+        );
+      }
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 export class ReleasePlugin extends BasePlugin {
   static readonly NAME = "ReleasePlugin";
 
@@ -136,6 +182,9 @@ export class ReleasePlugin extends BasePlugin {
       const releaseDir = path.join(ROOT, "release");
       ensureDir(releaseDir);
       for (const srcPath of assets) {
+        if (OSPlugin.isLinux && srcPath.endsWith(".deb")) {
+          assertNoLinuxLibfuseLink(srcPath);
+        }
         const dstName = releaseAssetFileName({
           mode,
           version,

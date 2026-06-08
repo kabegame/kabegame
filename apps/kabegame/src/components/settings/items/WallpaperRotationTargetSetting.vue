@@ -17,7 +17,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import { useAlbumStore } from "@/stores/albums";

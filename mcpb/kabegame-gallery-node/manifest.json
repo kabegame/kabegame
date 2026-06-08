@@ -3,9 +3,9 @@
   "manifest_version": "0.3",
   "name": "kabegame-gallery-local",
   "display_name": "Kabegame Gallery Local MCP",
-  "version": "1.1.0",
-  "description": "Local MCP bundle that bridges to the Kabegame app's MCP server (provider/album/task/surf/image/plugin resources + write tools).",
-  "long_description": "This MCP Bundle connects to the local Kabegame MCP HTTP endpoint (default http://127.0.0.1:7490/mcp) and exposes defensive, validated tools mirroring the upstream resource schemes (provider:// / album:// / task:// / surf:// / image:// / plugin://) plus the four write tools (set_album_images_order, create_album, add_images_to_album, rename_image). Strict endpoint and timeout controls keep it usable only for local Kabegame instances.",
+  "version": "1.1.1",
+  "description": "Local MCP bundle that bridges to the Kabegame app's MCP server (images/albums/tasks/surf_records/plugin resources + write tools).",
+  "long_description": "This MCP Bundle connects to the local Kabegame MCP HTTP endpoint (default http://127.0.0.1:7490/mcp) and exposes defensive, validated tools mirroring the upstream resource schemes (images:// / albums:// / tasks:// / surf_records:// / plugin://) plus the four write tools (set_album_images_order, create_album, add_images_to_album, rename_image). Strict endpoint and timeout controls keep it usable only for local Kabegame instances.",
   "author": {
     "name": "Kabegame Team"
   },
@@ -29,27 +29,27 @@
   "tools": [
     {
       "name": "read_gallery_provider",
-      "description": "Read a Kabegame provider:// path (Entry / List / ListWithMeta), with optional `without=children|images` filter."
+      "description": "Read a Kabegame images:// path. Relative gallery paths are mapped under images://gallery/."
     },
     {
       "name": "read_image",
-      "description": "Read full ImageInfo for an image (image://{id})."
+      "description": "Read full ImageInfo for an image (images://id_{id})."
     },
     {
       "name": "read_image_metadata",
-      "description": "Read crawl-time metadata for an image (image://{id}/metadata)."
+      "description": "Read crawl-time metadata for an image (images://id_{id}/metadata)."
     },
     {
       "name": "read_album",
-      "description": "List all albums (album://) or fetch one album (album://{id})."
+      "description": "List all albums (albums://all) or fetch one album (albums://id_{id})."
     },
     {
       "name": "read_task",
-      "description": "List all tasks (task://) or fetch one task (task://{id})."
+      "description": "List all tasks (tasks://all) or fetch one task (tasks://id_{id})."
     },
     {
       "name": "read_surf",
-      "description": "List all surf records (surf://) or fetch one (surf://{host})."
+      "description": "List all surf records (surf_records://all) or fetch one (surf_records://id_{id})."
     },
     {
       "name": "read_plugin",

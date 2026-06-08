@@ -1,5 +1,5 @@
 <template>
-  <div ref="cardRef" class="album-card" :data-album-id="album.id" @click="handleCardClick"
+  <div class="album-card" :data-album-id="album.id" @click="handleCardClick"
     @contextmenu.prevent="(e) => emit('contextmenu', e)">
     <div class="hero">
       <div v-for="(slot, idx) in heroSlots" :key="slot.key" class="hero-img" :class="heroClass(idx, slot.hasContent)">
@@ -7,10 +7,7 @@
           v-if="slot.image"
           :key="previewImageItemKey(slot.image)"
           :image="slot.image"
-          :image-click-action="imageClickAction"
-          :window-aspect-ratio="1"
-          :grid-columns="3"
-          :grid-index="idx"
+          :prefer="'thumbnail'"
           class="album-hero-image-item"
           @click="handleHeroImageClick"
           @contextmenu="(e) => emit('contextmenu', e)"
@@ -32,28 +29,46 @@
       <div class="title-wrapper">
         <el-input v-if="isRenaming" v-model="renameValue" ref="renameInputRef" size="small" @blur="handleRenameBlur"
           @keyup.enter="handleRenameConfirm" @keyup.esc="handleRenameCancel" class="rename-input" />
-        <div v-else class="title" @click.stop @dblclick="handleStartRename">{{ album.name }}</div>
+        <div
+          v-else
+          class="title"
+          :class="{ 'title-local-folder': isLocalFolder }"
+          @click.stop
+          @dblclick="handleStartRename"
+        >
+          <el-tooltip v-if="isLocalFolder && folderStatusBad" :content="folderStatusTooltip" placement="top">
+            <span class="status-dot" />
+          </el-tooltip>
+          <span class="title-text">{{ album.name }}</span>
+        </div>
       </div>
       <div class="meta">
-        <span>{{ $t('albums.albumCount', { count }) }}</span>
-        <span v-if="album.createdAt">{{ $t('albums.createdAtPrefix', { date: formatDate(album.createdAt) }) }}</span>
+        <span>{{ $t('albums.albumCardImageCount', { imageCount: count }) }}</span>
+        <span v-if="subAlbumCount > 0">{{ $t('albums.albumCardSubAlbums', { subAlbumCount }) }}</span>
+        <span
+          v-if="isLocalFolder && album.syncFolder"
+          class="sync-path"
+          :title="album.syncFolder"
+        >
+          · {{ formatPathForCard(album.syncFolder) }}
+        </span>
+        <span v-else-if="album.createdAt">{{ $t('albums.createdAtPrefix', { date: formatDate(album.createdAt) }) }}</span>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, nextTick, onMounted, onUnmounted } from "vue";
+import { computed, ref, nextTick } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import type { Album } from "@/stores/albums";
 import { Loading } from "@element-plus/icons-vue";
 import { useAlbumStore } from "@/stores/albums";
 import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID } from "@kabegame/core/env";
 import ImageItem from "@kabegame/core/components/image/ImageItem.vue";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { thumbnailToUrl } from "@kabegame/core/httpServer";
+import { fileToUrl, thumbnailToUrl } from "@kabegame/core/httpServer";
 import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
@@ -61,6 +76,7 @@ interface Props {
   album: Album;
   previewImages: ImageInfo[];
   count: number;
+  subAlbumCount?: number;
   /** 画册页从 keep-alive 返回时递增，仅用于视频预览 ImageItem 的 key 后缀以强制重建 */
   videoPreviewRemountKey?: number;
   isLoading?: boolean;
@@ -68,37 +84,35 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   previewImages: () => [],
+  subAlbumCount: 0,
   videoPreviewRemountKey: 0,
   isLoading: false,
 });
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
-const settingsStore = useSettingsStore();
-const imageClickAction = computed(() => settingsStore.values.imageClickAction || "none");
 
 const isRenaming = ref(false);
 const renameValue = ref("");
 const renameInputRef = ref<any>(null);
-const cardRef = ref<HTMLElement | null>(null);
-const hasBeenVisible = ref(false);
 
 const emit = defineEmits<{
   click: [];
-  visible: [];
   contextmenu: [event: MouseEvent];
 }>();
 
 /** 与 Albums.vue 中 toPreviewUrl 一致，用于判断是否有可展示的预览 */
 const toPreviewUrl = (img: ImageInfo): string => {
-  const thumbPath = (img.thumbnailPath || img.localPath || "").trim();
-  if (!thumbPath) return "";
+  const thumbPath = (img.thumbnailPath || "").trim();
+  const localPath = (img.localPath || "").trim();
+  const path = thumbPath || localPath;
+  if (!path) return "";
   if (IS_ANDROID) {
-    return thumbPath.startsWith("content://")
-      ? thumbPath.replace("content://", CONTENT_URI_PROXY_PREFIX)
+    return path.startsWith("content://")
+      ? path.replace("content://", CONTENT_URI_PROXY_PREFIX)
       : "";
   }
-  return thumbnailToUrl(thumbPath);
+  return thumbPath ? thumbnailToUrl(thumbPath) : fileToUrl(localPath);
 };
 
 const hasRenderablePreview = (img: ImageInfo) => !!toPreviewUrl(img);
@@ -106,35 +120,6 @@ const hasRenderablePreview = (img: ImageInfo) => !!toPreviewUrl(img);
 /** 视频在返回画册页后需换 key 重建，否则桌面 WebView 内 <video> 常不再 autoplay */
 const previewImageItemKey = (img: ImageInfo) =>
   isVideoMediaType(img.type) ? `${img.id}-${props.videoPreviewRemountKey}` : img.id;
-
-// Intersection Observer：卡片进入视口时触发 visible 事件
-let observer: IntersectionObserver | null = null;
-
-onMounted(() => {
-  if (!cardRef.value) return;
-
-  observer = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (entry.isIntersecting && !hasBeenVisible.value) {
-          hasBeenVisible.value = true;
-          emit("visible");
-          observer?.disconnect();
-        }
-      }
-    },
-    {
-      rootMargin: "100px",
-      threshold: 0,
-    }
-  );
-
-  observer.observe(cardRef.value);
-});
-
-onUnmounted(() => {
-  observer?.disconnect();
-});
 
 defineExpose({
   startRename: () => {
@@ -257,6 +242,37 @@ const heroClass = (idx: number, hasContent: boolean) => {
 
   const state = hasContent ? "has-url" : "is-empty-url";
   return `${pos} ${state}`;
+};
+
+const isLocalFolder = computed(() => props.album.type === "local_folder");
+
+const folderStatusBad = computed(() => {
+  const status = props.album.folderStatus;
+  return !!status && status.state !== "ok";
+});
+
+const folderStatusTooltip = computed(() => {
+  const status = props.album.folderStatus;
+  if (!status) return "";
+  switch (status.state) {
+    case "missing":
+      return t("albums.localFolder.statusMissing");
+    case "denied":
+      return t("albums.localFolder.statusDenied", { message: status.message ?? "" });
+    case "not_a_dir":
+      return t("albums.localFolder.statusNotADir");
+    case "io_error":
+      return t("albums.localFolder.statusIoError", { message: status.message ?? "" });
+    default:
+      return "";
+  }
+});
+
+const formatPathForCard = (path: string): string => {
+  if (!path) return "";
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length <= 2) return path;
+  return `.../${parts.slice(-2).join("/")}`;
 };
 
 const formatDate = (ts?: number) => {
@@ -477,9 +493,52 @@ const formatDate = (ts?: number) => {
     text-shadow: 0 1px 3px rgba(255, 255, 255, 0.6);
     cursor: text;
     user-select: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
 
     &:hover {
       opacity: 0.8;
+    }
+
+    &.title-local-folder {
+      background: linear-gradient(135deg, #a78bfa, #7c3aed);
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+      text-shadow: none;
+    }
+  }
+
+  .title-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: #ef4444;
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45);
+    animation: status-dot-pulse 1.8s ease-out infinite;
+  }
+
+  @keyframes status-dot-pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45);
+    }
+
+    70% {
+      box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
+    }
+
+    100% {
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
     }
   }
 
@@ -500,6 +559,23 @@ const formatDate = (ts?: number) => {
   .meta {
     font-size: 12px;
     color: rgba(31, 42, 68, 0.8);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .sync-path {
+    min-width: 0;
+    max-width: 75%;
+    display: inline-block;
+    overflow: hidden;
+    color: rgba(124, 58, 237, 0.85);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+    white-space: nowrap;
   }
 }
 </style>

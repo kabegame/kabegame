@@ -1,12 +1,14 @@
 import { computed, type Ref } from "vue";
 import { invoke } from "@/api/rpc";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { storeToRefs } from "pinia";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { fileToUrl } from "@kabegame/core/httpServer";
+import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { IS_WEB } from "@kabegame/core/env";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
@@ -340,13 +342,7 @@ export function useImageOperations(
       // 新策略：收藏状态以 store 为准，不再通过全局事件/清缓存同步
       // 1) 更新画廊缓存（就地更新，避免全量刷新导致“加载更多”图片丢失）
       applyFavoriteChangeToGalleryCache([image.id], newFavorite);
-      // 2) 更新收藏画册计数（用于画册页预览/计数显示）
-      const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID] || 0;
-      albumStore.albumCounts[FAVORITE_ALBUM_ID] = Math.max(
-        0,
-        currentCount + (newFavorite ? 1 : -1),
-      );
-      // 3) 若收藏画册图片缓存已加载：取消收藏应从缓存数组中移除（而不是清缓存）
+      // 2) 若收藏画册图片缓存已加载：取消收藏应从缓存数组中移除（而不是清缓存）
       const favList = albumStore.albumImages[FAVORITE_ALBUM_ID];
       if (Array.isArray(favList)) {
         const idx = favList.findIndex((i) => i.id === image.id);
@@ -440,81 +436,6 @@ export function useImageOperations(
     }
   };
 
-  // 判断是否为支持的视频路径（与 wallpaper 及后端 image_type 一致）
-  const isVideoPath = (path: string) => {
-    const ext = (path.split(".").pop() || "").toLowerCase();
-    return ext === "mp4" || ext === "mov";
-  };
-
-  // 导出到 Wallpaper Engine（图片轮播或单视频）
-  const exportToWallpaperEngine = async (image: ImageInfo) => {
-    try {
-      const defaultName = `Kabegame_${image.id}`;
-
-      const { value: projectName } = await ElMessageBox.prompt(
-        i18n.global.t("gallery.weProjectNamePrompt"),
-        i18n.global.t("gallery.exportToWE"),
-        {
-          confirmButtonText: i18n.global.t("gallery.export"),
-          cancelButtonText: i18n.global.t("common.cancel"),
-          inputPlaceholder: defaultName,
-          inputValidator: (value) => {
-            if (value && value.trim().length > 64) {
-              return i18n.global.t("gallery.weNameTooLong");
-            }
-            return true;
-          },
-        },
-      ).catch(() => ({ value: null }));
-
-      if (projectName === null) return;
-
-      const mp = await invoke<string | null>(
-        "get_wallpaper_engine_myprojects_dir",
-      );
-      if (!mp) {
-        ElMessage.warning(i18n.global.t("gallery.weDirNotConfigured"));
-        return;
-      }
-
-      const finalName = projectName?.trim() || defaultName;
-      const isVideo = isVideoPath(image.localPath);
-
-      const res = await invoke<{
-        projectDir: string;
-        imageCount: number;
-        videoCount?: number;
-      }>(
-        isVideo ? "export_video_to_we_project" : "export_images_to_we_project",
-        isVideo
-          ? {
-              videoPath: image.localPath,
-              title: finalName,
-              outputParentDir: mp,
-            }
-          : {
-              imagePaths: [image.localPath],
-              title: finalName,
-              outputParentDir: mp,
-              options: null,
-            },
-      );
-      const msg = res.videoCount
-        ? i18n.global.t("gallery.weExportVideoSuccess", { path: res.projectDir })
-        : i18n.global.t("gallery.weExportSuccess", {
-            count: res.imageCount,
-            path: res.projectDir,
-          });
-      ElMessage.success(msg);
-      await invoke("open_file_path", { filePath: res.projectDir });
-    } catch (error) {
-      if (error !== "cancel") {
-        console.error("导出 Wallpaper Engine 工程失败:", error);
-        ElMessage.error(i18n.global.t("common.exportFailed"));
-      }
-    }
-  };
-
   return {
     handleOpenImagePath,
     handleDownloadImage,
@@ -524,6 +445,5 @@ export function useImageOperations(
     handleBatchHideImages,
     toggleFavorite,
     setWallpaper,
-    exportToWallpaperEngine,
   };
 }

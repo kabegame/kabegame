@@ -1,0 +1,11 @@
+{
+    "namespace": "kabegame",
+    "name": "albums_id_provider",
+    "properties": {
+        "album_id": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "albums.id = ${properties.album_id}",
+        "limit": 1
+    }
+}

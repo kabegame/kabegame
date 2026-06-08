@@ -10,9 +10,9 @@
       v-for="b in GALLERY_NAME_LANGUAGE_BUCKETS"
       :key="b.bucket"
       :name="b.autonym"
-      :path="joinProviderPath(prefix, 'name', b.bucket)"
+      :path="pathForSegment(`name/${b.bucket}`)"
       :depth="1"
-      :hide-when-empty="true"
+      empty-state="disable"
       :active="isSameGalleryFilter({ type: 'name', bucket: b.bucket }, filter)"
       :filter="nameChangeFilter"
       @select="$emit('select', { type: 'name', bucket: b.bucket })"
@@ -28,7 +28,6 @@ import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import {
   isSameGalleryFilter,
-  joinProviderPath,
   useGalleryFilterTreeContext,
 } from "./context";
 
@@ -37,8 +36,8 @@ defineEmits<{
 }>();
 
 const { t } = useI18n();
-const { filter, prefix } = useGalleryFilterTreeContext();
-const rootCountPath = computed(() => joinProviderPath(prefix.value, "all"));
+const { filter, pathForSegment } = useGalleryFilterTreeContext();
+const rootCountPath = computed(() => pathForSegment("all"));
 const nameChangeFilter = (payload: ImagesChangePayload) =>
   payload.reason === "add" || payload.reason === "delete" || payload.reason === "rename";
 </script>

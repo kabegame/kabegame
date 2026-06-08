@@ -1,11 +1,13 @@
 <template>
   <el-dialog
-    v-model="visible"
+    :model-value="open"
+    :z-index="zIndex"
     :title="t('tasks.taskRunParamsTitle')"
     width="580px"
     :append-to-body="true"
     class="task-params-dialog"
     destroy-on-close
+    @update:model-value="(v: boolean) => { if (!v) emit('close') }"
     @closed="emit('closed')"
   >
     <TaskRunParamsContent v-if="task" :key="task.id" :task="task" />
@@ -13,28 +15,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { useModalBack } from "../../composables/useModalBack";
 import TaskRunParamsContent from "./TaskRunParamsContent.vue";
 import type { TaskRunParamsTask } from "./TaskRunParamsContent.vue";
 
-const props = defineProps<{
-  modelValue: boolean;
+defineProps<{
+  open: boolean;
+  zIndex: number;
   task: TaskRunParamsTask | null;
 }>();
 
 const emit = defineEmits<{
-  (e: "update:modelValue", v: boolean): void;
+  (e: "close"): void;
   (e: "closed"): void;
 }>();
 
 const { t } = useI18n();
-
-const visible = computed({
-  get: () => props.modelValue,
-  set: (v: boolean) => emit("update:modelValue", v),
-});
-
-useModalBack(visible);
 </script>

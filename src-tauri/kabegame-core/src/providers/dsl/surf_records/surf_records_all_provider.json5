@@ -1,0 +1,7 @@
+{
+    "namespace": "kabegame",
+    "name": "surf_records_all_provider",
+    "query": {
+        "order": [{ "sql": "surf_records.last_visit_at", "order": "desc" }]
+    }
+}

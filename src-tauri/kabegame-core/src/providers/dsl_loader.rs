@@ -25,7 +25,6 @@ pub fn is_provider_file_path(path: &str) -> bool {
 /// 编译期嵌入的 DSL 资产根。布局必须与 `core/src/providers/dsl/` 同构。
 pub static DSL_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/providers/dsl");
 
-pub const ROOT_PROVIDER: &str = "root_provider.json";
 pub const EXCLUDED_DSL_FILES: &[&str] = &[
     "schema.json5",
     // Legacy shim kept on disk for compatibility notes; shared/query_page_provider.json5
@@ -62,16 +61,8 @@ fn collect_embedded_dsl_files<'a>(dir: &'a Dir<'a>, out: &mut Vec<&'a File<'a>>)
 }
 
 fn embedded_dsl_files() -> Vec<&'static File<'static>> {
-    let root = DSL_DIR.get_file(ROOT_PROVIDER).unwrap_or_else(|| {
-        panic!(
-            "DSL file `{}` not found in include_dir embed",
-            ROOT_PROVIDER
-        )
-    });
     let mut files = Vec::new();
     collect_embedded_dsl_files(&DSL_DIR, &mut files);
-    files.retain(|file| file.path() != Path::new(ROOT_PROVIDER));
-    files.insert(0, root);
     files
 }
 

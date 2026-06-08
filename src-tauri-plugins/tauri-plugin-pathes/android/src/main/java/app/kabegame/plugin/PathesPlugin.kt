@@ -53,19 +53,4 @@ class PathesPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    /** 归档解压输出目录：内部私有目录下的固定子目录，用于 ZIP/RAR 解压临时输出。 */
-    @Command
-    fun getArchiveExtractDir(invoke: Invoke) {
-        try {
-            val dir = java.io.File(activity.filesDir, "archive_extract")
-            if (!dir.exists()) {
-                dir.mkdirs()
-            }
-            val result = JSObject()
-            result.put("dir", dir.absolutePath)
-            invoke.resolve(result)
-        } catch (e: Exception) {
-            invoke.reject("Failed to get archive extract dir: ${e.message}", e)
-        }
-    }
 }

@@ -28,9 +28,9 @@ fn fold_provider_query(state: &mut ProviderQuery, registry: &ProviderRegistry, n
 fn fold_gallery_page_chain() {
     let r = build_full_registry();
     let mut state = ProviderQuery::new();
+    state.from = Some(SqlExpr("images".into()));
 
-    // 7b: gallery_route.query 邇ｰ蝨ｨ蜷ｫ order=[crawled_at asc] (莉・gallery_all_router 荳顔ｧｻ),
-    // from=images, limit=0
+    // Schema seeds from=images; gallery_route contributes fields, joins, and order.
     fold_provider_query(&mut state, &r, "gallery_route");
     // 7b: gallery_all_router 遘ｻ髯､莠・query 蟄玲ｮｵ (莉・Contrib 謾ｹ荳ｺ郤ｯ router; order/limit/offset 荳顔ｧｻ蛻ｰ
     // gallery_route, 蛻・｡ｵ騾夊ｿ・list 蜉ｨ諤・｡ｹ蟋疲汚 page_size_provider + gallery_page_router)
@@ -42,7 +42,7 @@ fn fold_gallery_page_chain() {
 
     // ----- snapshot -----
 
-    // from cascaded from gallery_route (no later override)
+    // from is owned by the schema seed; child contribs cannot replace it.
     assert_eq!(state.from, Some(SqlExpr("images".into())));
 
     // limit last-wins: query_page_provider's "${properties.page_size}"
@@ -93,9 +93,10 @@ fn fold_skipping_root_and_delegates_only_contrib_applies() {
 }
 
 #[test]
-fn fold_gallery_route_alone_sets_from_and_limit_zero() {
+fn fold_gallery_route_alone_keeps_schema_from() {
     let r = build_full_registry();
     let mut state = ProviderQuery::new();
+    state.from = Some(SqlExpr("images".into()));
     fold_provider_query(&mut state, &r, "gallery_route");
     assert_eq!(state.from, Some(SqlExpr("images".into())));
     assert_eq!(state.limit, None);

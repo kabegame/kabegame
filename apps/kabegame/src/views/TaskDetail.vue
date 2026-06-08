@@ -4,8 +4,9 @@
             <el-skeleton :rows="8" animated />
         </div>
         <ImageGrid v-else-if="imageFilter === 'success'" ref="taskViewRef" class="detail-body" :images="images"
-            :enable-ctrl-wheel-adjust-columns="!isCompact" :enable-ctrl-key-adjust-columns="!isCompact"
-            :enable-virtual-scroll="!isCompact" :actions="imageActions" :on-context-command="handleImageMenuCommand" scroll-whole-container hide-scrollbar>
+            :enable-ctrl-wheel-adjust-columns="!isCompact" :enable-ctrl-key-adjust-columns="!isCompact" enable-virtual-scroll
+            :actions="imageActions" :on-context-command="handleImageMenuCommand" scroll-whole-container hide-scrollbar
+            @preview-page-boundary="handlePreviewPageBoundary">
             <template #before-grid>
                 <TaskDetailPageHeader :task-name="taskName"
                     :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
@@ -114,24 +115,29 @@
             </TransitionGroup>
         </div>
 
-        <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" :task-id="addToAlbumTaskId"
-            @added="handleAddedToAlbum" />
+        <AddToAlbumDialog :open="addToAlbumDialog.isOpen.value" :z-index="addToAlbumDialog.zIndex.value" :image-ids="addToAlbumImageIds" :task-id="addToAlbumTaskId"
+            @close="addToAlbumDialog.close()" @added="handleAddedToAlbum" />
 
-        <RemoveImagesConfirmDialog v-model="showRemoveDialog" :message="removeDialogMessage"
-            :title="$t('tasks.confirmDelete')" hide-checkbox @confirm="confirmRemoveImages" />
+        <RemoveImagesConfirmDialog :open="removeDialog.isOpen.value" :z-index="removeDialog.zIndex.value" :message="removeDialogMessage"
+            :title="$t('tasks.confirmDelete')" hide-checkbox @close="removeDialog.close()" @confirm="confirmRemoveImages" />
 
         <TaskLogDialog ref="taskLogDialogRef" />
-        <TaskParamsDialog v-model="showTaskParamsDialog" :task="taskParamsTask" />
+        <TaskParamsDialog :open="taskParamsDialog.isOpen.value" :z-index="taskParamsDialog.zIndex.value" :task="taskParamsTask" @close="taskParamsDialog.close()" />
     </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, reactive, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
+import { pathqlEntry, pathqlFetch } from "@/services/pathql";
+import { rowToImageInfo } from "@/utils/imageRow";
+import { withGalleryPrefix } from "@/utils/path";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { listen } from "@/api/rpc";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { VideoPause, Delete, Setting, Refresh, QuestionFilled, Star, StarFilled, InfoFilled, DocumentCopy, Picture, FolderAdd, MoreFilled } from "@element-plus/icons-vue";
 import { createImageActions } from "@/actions/imageActions";
 import ImageGrid from "@/components/ImageGrid.vue";
@@ -173,7 +179,6 @@ import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
-import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
@@ -218,15 +223,19 @@ const handleViewTaskLog = () => {
     taskLogDialogRef.value?.openTaskLog(id);
 };
 
-const showTaskParamsDialog = ref(false);
+const taskParamsDialog = useModal();
 const taskParamsTask = computed<TaskRunParamsTask | null>(() => taskFromStore.value ?? null);
 const handleViewTaskParams = () => {
     if (!taskId.value) return;
-    showTaskParamsDialog.value = true;
+    taskParamsDialog.open();
 };
 
 const taskId = ref<string>("");
 const totalImagesCount = ref<number>(0); // provider.total（用于分页器）
+const pendingPreviewBoundary = ref<{
+    direction: "prev" | "next";
+    targetPage: number;
+} | null>(null);
 
 // 任务数据一律从 crawlerStore 读取；用户进入 TaskDetail 必然经过 TaskDrawer，数据已加载
 const taskFromStore = computed(() => {
@@ -378,7 +387,6 @@ const handleRefresh = async () => {
     if (!taskId.value) return;
     isRefreshing.value = true;
     try {
-        clearImageStateCache();
         await Promise.all([
             loadTaskImages({ showSkeleton: false }),
             loadTotalImagesCount(),
@@ -413,16 +421,53 @@ const handleJumpToPage = async (page: number) => {
     await taskDetailRouteStore.navigate({ page });
 };
 
+const handlePreviewPageBoundary = async (payload: {
+    direction: "prev" | "next";
+    index: number;
+    image: ImageInfo;
+}) => {
+    const totalPages = Math.max(1, Math.ceil((totalImagesCount.value || 0) / pageSize.value));
+    const targetPage = payload.direction === "next"
+        ? currentPage.value + 1
+        : currentPage.value - 1;
+    if (targetPage < 1 || targetPage > totalPages) return;
+
+    pendingPreviewBoundary.value = {
+        direction: payload.direction,
+        targetPage,
+    };
+    try {
+        await handleJumpToPage(targetPage);
+    } catch (error) {
+        pendingPreviewBoundary.value = null;
+        throw error;
+    }
+};
+
+watch(
+    () => images.value,
+    async (list) => {
+        const pending = pendingPreviewBoundary.value;
+        if (!pending) return;
+        if (currentPage.value !== pending.targetPage) return;
+        const image = pending.direction === "next" ? list[0] : list[list.length - 1];
+        if (!image) return;
+
+        pendingPreviewBoundary.value = null;
+        await nextTick();
+        taskViewRef.value?.openPreviewById?.(image.id);
+        ElMessage.info(pending.direction === "next" ? "已进入下一页" : "已进入上一页");
+    },
+    { flush: "post" }
+);
+
 const loadTotalImagesCount = async () => {
     if (!isOnTaskRoute.value) return;
     if (!taskId.value) return;
     try {
         const path = taskDetailRouteStore.contextPath;
         if (!path) return;
-        const res = await invoke<{ total: number | null }>(
-            "browse_gallery_provider",
-            { path }
-        );
+        const res = await pathqlEntry(withGalleryPrefix(path));
         totalImagesCount.value = res?.total ?? 0;
     } catch (e) {
         console.error("加载任务总图片数失败:", e);
@@ -490,15 +535,10 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
     if (showSkeleton) loading.value = true;
     try {
         const rawPath = currentPath.value || localProviderRootPath.value || `task/${taskId.value}/1`;
-        const pathToLoad = rawPath.endsWith("/") ? rawPath : `${rawPath}/`;
+        const pathToLoad = withGalleryPrefix(rawPath);
         clearImageMetadataCache();
-        const res = await invoke<{ total?: number; entries?: Array<{ kind: string; image?: ImageInfo }> }>(
-            "browse_gallery_provider",
-            { path: pathToLoad }
-        );
-        const imgs: ImageInfo[] = (res?.entries ?? [])
-            .filter((e: any) => e?.kind === "image")
-            .map((e: any) => e.image as ImageInfo);
+        const rows = await pathqlFetch<Record<string, unknown>>(pathToLoad);
+        const imgs = rows.map(rowToImageInfo);
         images.value = imgs;
 
     } catch (e) {
@@ -686,7 +726,7 @@ const handleDeleteTask = async () => {
 };
 
 // 永久删除确认对话框相关
-const showRemoveDialog = ref(false);
+const removeDialog = useModal();
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
 
@@ -695,7 +735,7 @@ const clearSelection = () => {
 };
 
 // 加入画册对话框（右键菜单用 imageIds，header 一键加入用 taskId）
-const showAddToAlbumDialog = ref(false);
+const addToAlbumDialog = useModal();
 const addToAlbumImageIds = ref<string[]>([]);
 const addToAlbumTaskId = ref<string | undefined>(undefined);
 const handleAddedToAlbum = () => {
@@ -707,7 +747,7 @@ const handleAddedToAlbum = () => {
 const handleHeaderAddToAlbum = () => {
     addToAlbumTaskId.value = taskId.value;
     addToAlbumImageIds.value = [];
-    showAddToAlbumDialog.value = true;
+    addToAlbumDialog.open();
 };
 
 // 切换收藏（仅更新本页 images + 收藏画册缓存/计数）
@@ -881,7 +921,7 @@ const handleImageMenuCommand = async (
             if (imagesToProcess.length === 0) return null;
             addToAlbumTaskId.value = undefined;
             addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
-            showAddToAlbumDialog.value = true;
+            addToAlbumDialog.open();
             break;
         case "addToHidden": {
             if (await guardDesktopOnly("hideImage", { needSuper: true })) return null;
@@ -949,7 +989,7 @@ const handleImageMenuCommand = async (
             pendingRemoveImages.value = imagesToProcess;
             const count = imagesToProcess.length;
             removeDialogMessage.value = count > 1 ? t("tasks.removeDialogMessageMulti", { count }) : t("tasks.removeDialogMessageSingle");
-            showRemoveDialog.value = true;
+            removeDialog.open();
             break;
         case "swipe-remove" as any:
             // 上划手势：隐藏（加入隐藏画册，保留磁盘文件）
@@ -978,12 +1018,12 @@ const handleImageMenuCommand = async (
 const confirmRemoveImages = async () => {
     const imagesToRemove = pendingRemoveImages.value;
     if (imagesToRemove.length === 0) {
-        showRemoveDialog.value = false;
+        removeDialog.close();
         return;
     }
 
     const count = imagesToRemove.length;
-    showRemoveDialog.value = false;
+    removeDialog.close();
 
     try {
         const imageIds = imagesToRemove.map(img => img.id);

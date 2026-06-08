@@ -120,7 +120,7 @@
 
   <!-- Android：fold 内点选后弹出 van-picker -->
   <Teleport v-if="uiStore.isCompact" to="body">
-    <van-popup v-model:show="showFilterPicker" position="bottom" round>
+    <van-popup :show="filterPicker.isOpen.value" position="bottom" round :z-index="filterPicker.zIndex.value" @update:show="filterPicker.close">
       <van-picker
         v-model="filterPickerSelected"
         :title="t('gallery.filter')"
@@ -128,10 +128,10 @@
         :confirm-button-text="t('common.confirm')"
         :cancel-button-text="t('common.cancel')"
         @confirm="onFilterPickerConfirm"
-        @cancel="showFilterPicker = false"
+        @cancel="filterPicker.close()"
       />
     </van-popup>
-    <van-popup v-model:show="showSortPicker" position="bottom" round>
+    <van-popup :show="sortPicker.isOpen.value" position="bottom" round :z-index="sortPicker.zIndex.value" @update:show="sortPicker.close">
       <van-picker
         v-model="sortPickerSelected"
         :title="sortPickerTitle"
@@ -139,7 +139,7 @@
         :confirm-button-text="t('common.confirm')"
         :cancel-button-text="t('common.cancel')"
         @confirm="onSortPickerConfirm"
-        @cancel="showSortPicker = false"
+        @cancel="sortPicker.close()"
       />
     </van-popup>
   </Teleport>
@@ -150,12 +150,13 @@ import { computed, ref, watch, onUnmounted } from "vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
-import { invoke } from "@/api/rpc";
+import { pathqlEntry } from "@/services/pathql";
+import { withGalleryPrefix } from "@/utils/path";
 import { ArrowDown, Filter, Sort } from "@element-plus/icons-vue";
 import GalleryPageSizeControl from "@/components/GalleryPageSizeControl.vue";
 import SearchInput from "@/components/SearchInput.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import {
   buildAlbumCountPathFromCurrentPath,
   type AlbumBrowseFilter,
@@ -191,10 +192,6 @@ interface GalleryMediaTypeCountsPayload {
   videoCount: number;
 }
 
-interface ProviderCountResult {
-  total?: number | null;
-}
-
 const albumId = computed(() => (props.albumId ?? "").trim());
 const albumDetailRouteStore = useAlbumDetailRouteStore();
 
@@ -206,9 +203,7 @@ const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
 async function countProviderPath(path: string): Promise<number> {
   const p = path.trim().replace(/\/+$/, "");
   if (!p) return 0;
-  const res = await invoke<ProviderCountResult>("browse_gallery_provider", {
-    path: p,
-  });
+  const res = await pathqlEntry(withGalleryPrefix(p));
   return typeof res?.total === "number" ? res.total : 0;
 }
 
@@ -362,10 +357,8 @@ function onSortCommand(cmd: string) {
 }
 
 // Android pickers
-const showFilterPicker = ref(false);
-const showSortPicker = ref(false);
-useModalBack(showFilterPicker);
-useModalBack(showSortPicker);
+const filterPicker = useModal();
+const sortPicker = useModal();
 
 const filterPickerColumns = computed(() => {
   void locale.value;
@@ -379,14 +372,14 @@ const filterPickerColumns = computed(() => {
   ];
 });
 const filterPickerSelected = ref<string[]>(["all"]);
-watch(showFilterPicker, (open) => {
-  if (open) {
+watch(filterPicker.isOpen, (v) => {
+  if (v) {
     filterPickerSelected.value = [filterMode.value];
   }
 });
 
 function onFilterPickerConfirm() {
-  showFilterPicker.value = false;
+  filterPicker.close();
   const v = filterPickerSelected.value[0];
   if (
     v === "all" ||
@@ -421,21 +414,21 @@ const sortPickerColumns = computed(() => {
   ];
 });
 const sortPickerSelected = ref<string[]>(["join-asc"]);
-watch(showSortPicker, (open) => {
-  if (open) sortPickerSelected.value = [currentSortKey.value];
+watch(sortPicker.isOpen, (v) => {
+  if (v) sortPickerSelected.value = [currentSortKey.value];
 });
 
 function onSortPickerConfirm() {
-  showSortPicker.value = false;
+  sortPicker.close();
   const v = sortPickerSelected.value[0] as AlbumBrowseSort;
   onSortCommand(v);
 }
 
 function openFilterPicker() {
-  showFilterPicker.value = true;
+  filterPicker.open();
 }
 function openSortPicker() {
-  showSortPicker.value = true;
+  sortPicker.open();
 }
 
 const pageSizeControlRef = ref<{ openPicker: () => void } | null>(null);

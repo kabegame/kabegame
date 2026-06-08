@@ -1,13 +1,15 @@
 <template>
   <el-drawer
-    :model-value="modelValue"
+    append-to-body
+    :model-value="modal.isOpen.value"
+    :z-index="modal.zIndex.value"
     :title="resolvedTitle"
     :size="uiStore.isCompact ? 'auto' : '400px'"
     :direction="uiStore.isCompact ? 'btt' : 'rtl'"
     :close-on-click-modal="true"
     :with-header="!uiStore.isCompact"
     class="option-picker-drawer"
-    @update:model-value="$emit('update:modelValue', $event)"
+    @update:model-value="modal.close"
   >
     <div class="option-picker-content">
       <div class="picker-options">
@@ -39,9 +41,9 @@
 import type { Component } from "vue";
 import { ArrowRight } from "@element-plus/icons-vue";
 import { ElDrawer, ElIcon } from "element-plus";
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
 export interface OptionItem {
@@ -70,11 +72,8 @@ const emit = defineEmits<{
   (e: "select", id: string): void;
 }>();
 
-const optionPickerOpen = computed({
-  get: () => props.modelValue,
-  set: (v) => emit("update:modelValue", v),
-});
-useModalBack(optionPickerOpen);
+const modal = useModal({ onClose: () => emit("update:modelValue", false) });
+watch(() => props.modelValue, (v) => v ? modal.open() : modal.close(), { immediate: true });
 
 const handleSelect = (id: string) => {
   emit("select", id);

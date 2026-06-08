@@ -27,7 +27,6 @@ import type { GalleryFilter } from "@/utils/galleryPath";
 import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import DateChildProviderChildrenNode from "./DateChildProviderChildrenNode.vue";
 import {
-  joinProviderPath,
   listProviderDirs,
   useGalleryFilterTreeContext,
   type RefreshTarget,
@@ -38,27 +37,27 @@ defineEmits<{
 }>();
 
 const { t } = useI18n();
-const { filter, prefix, registerRefreshTarget } = useGalleryFilterTreeContext();
+const { filter, prefix, pathForSegment, registerRefreshTarget } = useGalleryFilterTreeContext();
 const years = ref<Array<{ seg: string; year: string; total?: number }>>([]);
 const loaded = ref(false);
 let listToken = 0;
 let unregisterRefresh: (() => void) | null = null;
 
-const rootCountPath = computed(() => joinProviderPath(prefix.value, "all"));
+const rootCountPath = computed(() => pathForSegment("all"));
 const defaultExpanded = computed(() => filter.value.type === "date");
 
 async function refreshList() {
   const token = ++listToken;
   const expectedPrefix = prefix.value;
   try {
-    const entries = await listProviderDirs(`${joinProviderPath(prefix.value, "date")}/`);
+    const entries = await listProviderDirs(`${pathForSegment("date")}/`);
     if (token !== listToken || expectedPrefix !== prefix.value) return;
     years.value = entries
       .map((entry) => {
         const year = /^(\d{4})y$/.exec(entry.name)?.[1];
         return year ? { seg: entry.name, year, total: entry.total ?? undefined } : null;
       })
-      .filter((row): row is { seg: string; year: string; total?: number } => !!row);
+      .filter((row): row is { seg: string; year: string; total: number } => !!row);
     loaded.value = true;
   } catch {
     if (token === listToken && expectedPrefix === prefix.value) {

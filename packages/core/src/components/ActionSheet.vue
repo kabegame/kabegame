@@ -2,7 +2,7 @@
   <Teleport to="body" :disabled="!teleport">
     <!-- Main action sheet -->
     <Transition :name="noTransition ? '' : 'action-sheet-slide'">
-      <div v-if="visible && resolvedActions.length > 0 && !expandedItem" class="action-sheet">
+      <div v-if="visible && resolvedActions.length > 0 && !expandedItem" class="action-sheet" :style="actionSheetStyle">
         <button
           v-for="item in resolvedActions"
           :key="item.key"
@@ -34,7 +34,11 @@
 
     <!-- Submenu overlay (when expandedItem has children) -->
     <Transition :name="noTransition ? '' : 'submenu-slide'">
-      <div v-if="visible && expandedItem && expandedChildren.length > 0" class="submenu-overlay" @click.stop="closeSubmenu">
+      <div
+        v-if="visible && expandedItem && expandedChildren.length > 0"
+        class="submenu-overlay"
+        :style="submenuOverlayStyle"
+        @click.stop="closeSubmenu">
         <div class="submenu-panel" @click.stop>
           <div
             v-for="child in expandedChildren"
@@ -65,10 +69,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, ref, toRaw, type Component } from "vue";
+import { computed, markRaw, ref, toRaw, watch, type Component, type CSSProperties } from "vue";
 import { CloseBold, Select } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "../actions/types";
-import { useModalBack } from "../composables/useModalBack";
+import { useModal } from "../composables/useModal";
 import { useUiStore } from "../stores/ui";
 
 interface Props {
@@ -80,7 +84,7 @@ interface Props {
   /** Whether to disable transition animations. Default false. */
   noTransition?: boolean;
   modalBack?: boolean;
-  /** Override z-index of the action sheet. Default 2100. */
+  /** Override z-index of the action sheet. Defaults to the modal counter. */
   zIndex?: number;
 }
 
@@ -88,7 +92,6 @@ const props = withDefaults(defineProps<Props>(), {
   teleport: true,
   noTransition: false,
   modalBack: true,
-  zIndex: 2100,
 });
 
 const emit = defineEmits<{
@@ -99,19 +102,23 @@ const emit = defineEmits<{
 // Track which item's submenu is expanded
 const expandedItem = ref<ActionItem | null>(null);
 
-// Android: two useModalBack — sheet visibility and submenu. Back closes submenu first, then sheet.
-const sheetOpen = computed({
-  get: () => props.visible,
-  set: (v) => { if (!v) emit("close"); },
-});
-if (props.modalBack) {
-  useModalBack(sheetOpen, { onClose: () => { expandedItem.value = null; } });
-}
-const submenuOpen = computed({
-  get: () => !!expandedItem.value,
-  set: (v) => { if (!v) expandedItem.value = null; },
-});
-useModalBack(submenuOpen);
+// Android: sheet is parent-controlled; submenu uses useModal for back-stack ordering.
+const sheetModal = useModal({ onClose: () => { expandedItem.value = null; if (props.modalBack) emit("close"); } });
+watch(
+  () => props.visible && (props.modalBack || props.zIndex == null),
+  (v) => v ? sheetModal.open() : sheetModal.close(),
+  { immediate: true }
+);
+const submenuModal = useModal({ onClose: () => { expandedItem.value = null; } });
+watch(() => !!expandedItem.value, (v) => v ? submenuModal.open() : submenuModal.close());
+const actionSheetZIndex = computed(() => props.zIndex ?? sheetModal.zIndex.value);
+const submenuOverlayZIndex = computed(() => submenuModal.zIndex.value || actionSheetZIndex.value + 10);
+const actionSheetStyle = computed<CSSProperties>(() => ({
+  zIndex: actionSheetZIndex.value,
+}));
+const submenuOverlayStyle = computed<CSSProperties>(() => ({
+  zIndex: submenuOverlayZIndex.value,
+}));
 
 // Resolve actions with visibility filtering
 const resolvedActions = computed(() => {
@@ -277,7 +284,6 @@ const closeSubmenu = () => {
   background: var(--anime-bg-card);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  z-index: v-bind(zIndex); /* 高于图片预览 modal（.image-preview-fullscreen 为 2000） */
   border-top: 1px solid var(--anime-border);
   box-shadow: 0 -4px 20px rgba(255, 107, 157, 0.12);
 }
@@ -338,7 +344,6 @@ const closeSubmenu = () => {
   right: 0;
   bottom: 0;
   background: rgba(74, 21, 75, 0.25);
-  z-index: v-bind(zIndex + 1); /* 高于主 action sheet (2100) */
   display: flex;
   align-items: flex-end;
   justify-content: center;

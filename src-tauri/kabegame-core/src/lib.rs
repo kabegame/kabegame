@@ -7,11 +7,9 @@ pub mod ipc;
 
 pub mod crawler;
 
-/// 兼容旧路径：archive 已迁至 crawler::archiver
-pub use crawler::archiver as archive;
-
 pub mod gallery;
 pub mod kgpg;
+pub mod local_folder;
 pub mod media_dimensions;
 pub mod plugin;
 pub mod providers;
@@ -24,9 +22,6 @@ pub mod shell_open;
 pub mod storage;
 pub mod workarounds;
 
-// 只有 Windows 平台需要导出 wallpaper_engine_export 模块
-#[cfg(target_os = "windows")]
-pub mod wallpaper_engine_export;
 
 /// 虚拟盘。
 ///

@@ -1,11 +1,13 @@
 <template>
   <el-dialog
-    v-model="dialogVisible"
+    :model-value="dialogStore.visible"
+    :z-index="modal.zIndex.value"
     :title="dialogTitle"
     width="600px"
     :append-to-body="true"
     class="auto-config-dialog task-params-dialog"
     destroy-on-close
+    @update:model-value="modal.close"
     @closed="onDialogClosed"
   >
     <div v-if="showMissing" class="acd-missing">
@@ -56,12 +58,6 @@
         v-if="visiblePluginVars.length > 0"
         v-model="form.vars"
         :plugin-vars="visiblePluginVars"
-        :var-display-name="varDisplayName"
-        :var-descripts="varDescripts"
-        :options-for-var="optionsForVar"
-        :is-required="isRequired"
-        :get-validation-rules="getValidationRules"
-        :get-file-extensions="getFileExtensions"
       />
 
       <el-form-item :label="t('plugins.httpHeaders')">
@@ -179,29 +175,27 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
-import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { useI18n } from "@kabegame/i18n";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import AutoConfigDetailContent from "@kabegame/core/components/scheduler/AutoConfigDetailContent.vue";
 import ScheduleProgressBar from "@kabegame/core/components/scheduler/ScheduleProgressBar.vue";
 import OutputDirSelect from "@kabegame/core/components/crawler/OutputDirSelect.vue";
 import PluginVarsForm from "@kabegame/core/components/crawler/PluginVarsForm.vue";
 import HttpHeadersEditor from "@kabegame/core/components/crawler/HttpHeadersEditor.vue";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
 import {
   matchesPluginVarWhen,
-  filterVarOptionsByWhen,
   coerceOptionsVarsToVisibleChoices,
 } from "@kabegame/core/utils/pluginVarWhen";
 import type { RunConfig, ScheduleSpec } from "@kabegame/core/stores/crawler";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 const { t } = useI18n();
-const { varDisplayName, varDescripts, optionDisplayName } = usePluginConfigI18n();
 const crawlerStore = useCrawlerStore();
 const pluginStore = usePluginStore();
 const dialogStore = useAutoConfigDialogStore();
@@ -210,8 +204,6 @@ const {
   form,
   formRef,
   pluginVars,
-  isRequired,
-  getValidationRules,
   loadPluginVarDefs,
   loadPluginVars,
   normalizeVarsForUI,
@@ -234,14 +226,8 @@ const dailyMinute = ref(0);
 const weeklyWeekday = ref(0);
 const headersModel = ref<Record<string, string>>({});
 
-const dialogVisible = computed({
-  get: () => dialogStore.visible,
-  set: (v: boolean) => {
-    if (!v) dialogStore.close();
-  },
-});
-
-useModalBack(dialogVisible);
+const modal = useModal({ onClose: () => dialogStore.close() });
+watch(() => dialogStore.visible, (v) => v ? modal.open() : modal.close(), { immediate: true });
 
 const viewConfig = computed(() => {
   const id = dialogStore.configId;
@@ -289,13 +275,6 @@ const secondsByUnit = (unit: "minutes" | "hours" | "days") => {
   return 60;
 };
 
-const optionsForVar = (varDef: PluginVarDef): (string | { name: string; variable: string })[] => {
-  const filtered = filterVarOptionsByWhen(varDef.options, form.value.vars);
-  return filtered.map((opt) =>
-    typeof opt === "string" ? opt : { name: optionDisplayName(opt), variable: opt.variable },
-  );
-};
-
 const visiblePluginVars = computed(() =>
   pluginVars.value.filter((varDef) => matchesPluginVarWhen(varDef.when, form.value.vars)),
 );
@@ -303,20 +282,10 @@ const visiblePluginVars = computed(() =>
 watch(
   () => form.value.vars,
   () => {
-    coerceOptionsVarsToVisibleChoices(pluginVars.value as PluginVarDef[], form.value.vars);
+    coerceOptionsVarsToVisibleChoices(pluginVars.value, form.value.vars);
   },
   { deep: true },
 );
-
-const getFileExtensions = (varDef: PluginVarDef): string[] | undefined => {
-  const opts = varDef.options;
-  if (!Array.isArray(opts)) return undefined;
-  const exts = opts
-    .map((o) => (typeof o === "string" ? o : o.variable))
-    .map((s) => s.trim().replace(/^\./, "").toLowerCase())
-    .filter(Boolean);
-  return exts.length > 0 ? exts : undefined;
-};
 
 const schedulePreview = computed(() => {
   if (!scheduleEnabled.value) return t("autoConfig.scheduleDisabled");

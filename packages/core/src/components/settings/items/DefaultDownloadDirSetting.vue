@@ -28,7 +28,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { FolderOpened } from "@element-plus/icons-vue";
 import { invoke } from "../../../api";
 import { open } from "@tauri-apps/plugin-dialog";

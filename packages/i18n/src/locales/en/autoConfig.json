@@ -75,6 +75,7 @@
   "missedRuns": {
     "title": "Missed runs detected",
     "desc": "While the app was not running, the following run configs missed their scheduled times. You can run them now, or dismiss and resume future schedules from now.",
+    "sleepDesc": "While the system was asleep, the following run configs missed their scheduled times. You can run them now, or dismiss and resume future schedules from now.",
     "runNow": "Run now",
     "dismiss": "Dismiss",
     "missedCount": "{n} missed run(s)",

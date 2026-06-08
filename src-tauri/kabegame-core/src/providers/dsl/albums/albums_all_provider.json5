@@ -1,30 +1,7 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "albums_all_provider",
     "query": {
-        "from": "albums",
-        "fields": [
-            { "sql": "albums.id", "as": "id" },
-            { "sql": "albums.name", "as": "name" },
-            { "sql": "albums.created_at", "as": "created_at" },
-            { "sql": "albums.parent_id", "as": "parent_id" }
-        ],
         "order": [{ "sql": "albums.created_at", "order": "desc" }]
     },
-    "list": {
-        "${album.id}": {
-            "sql": "SELECT id, name, created_at, parent_id FROM albums ORDER BY created_at DESC",
-            "data_var": "album",
-            "meta": {
-                "kind": "album",
-                "data": {
-                    "id": "${album.id}",
-                    "name": "${album.name}",
-                    "createdAt": "${album.created_at}",
-                    "parentId": "${album.parent_id}"
-                }
-            }
-        }
-    }
 }

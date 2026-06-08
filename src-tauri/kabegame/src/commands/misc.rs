@@ -51,14 +51,12 @@ pub fn exit_app(app: AppHandle) {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FileDropSupportedTypes {
-    archive_extensions: Vec<String>,
     plugin_extensions: Vec<String>,
 }
 
 #[tauri::command]
 pub async fn get_file_drop_supported_types() -> Result<serde_json::Value, String> {
     let payload = FileDropSupportedTypes {
-        archive_extensions: kabegame_core::archive::supported_types(),
         plugin_extensions: vec!["kgpg".to_string()],
     };
     Ok(serde_json::to_value(payload).map_err(|e| e.to_string())?)
@@ -71,11 +69,10 @@ pub struct FileDropKindItem {
     is_directory: bool,
     is_image: bool,
     is_video: bool,
-    is_archive: bool,
     is_kgpg: bool,
 }
 
-/// 根据本地路径推断文件类型（图片/视频/压缩包/kgpg），用于前端拖入文件分类。使用扩展名 + infer 内容推断。
+/// 根据本地路径推断文件类型（图片/视频/kgpg），用于前端拖入文件分类。使用扩展名 + infer 内容推断。
 #[tauri::command]
 pub async fn get_file_drop_kinds(paths: Vec<String>) -> Result<Vec<FileDropKindItem>, String> {
     let mut out = Vec::with_capacity(paths.len());
@@ -89,7 +86,6 @@ pub async fn get_file_drop_kinds(paths: Vec<String>) -> Result<Vec<FileDropKindI
                     is_directory: false,
                     is_image: false,
                     is_video: false,
-                    is_archive: false,
                     is_kgpg: false,
                 });
                 continue;
@@ -98,7 +94,6 @@ pub async fn get_file_drop_kinds(paths: Vec<String>) -> Result<Vec<FileDropKindI
         let is_directory = meta.is_dir();
         let is_image = !is_directory && kabegame_core::image_type::is_image_by_path(path);
         let is_video = !is_directory && kabegame_core::image_type::is_video_by_path(path);
-        let is_archive = !is_directory && kabegame_core::archive::is_archive_by_path(path);
         let is_kgpg = !is_directory
             && path_str
                 .rsplit_once('.')
@@ -109,7 +104,6 @@ pub async fn get_file_drop_kinds(paths: Vec<String>) -> Result<Vec<FileDropKindI
             is_directory,
             is_image,
             is_video,
-            is_archive,
             is_kgpg,
         });
     }
@@ -201,22 +195,19 @@ pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn default_safe_delete_organize() -> bool {
-    true
-}
-
 /// 与前端 `invoke` 对象字段一致（camelCase）；勿改用平铺 `bool` 参数，否则 serde 无法匹配 `removeUnrecognized` 等键，会得到默认值 false。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartOrganizeArgs {
     pub dedupe: bool,
+    /// 去重保留策略：true 保留最新，false 保留最旧（缺省保留最新）
+    #[serde(default)]
+    pub dedupe_keep_new: bool,
     pub remove_missing: bool,
     pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
     #[serde(default)]
     pub delete_source_files: bool,
-    #[serde(default = "default_safe_delete_organize")]
-    pub safe_delete: bool,
     pub range_start: Option<usize>,
     pub range_end: Option<usize>,
 }
@@ -235,11 +226,11 @@ pub async fn start_organize(args: StartOrganizeArgs) -> Result<(), String> {
             std::sync::Arc::new(kabegame_core::storage::Storage::global().clone()),
             OrganizeOptions {
                 dedupe: args.dedupe,
+                dedupe_keep_new: args.dedupe_keep_new,
                 remove_missing: args.remove_missing,
                 remove_unrecognized: args.remove_unrecognized,
                 regen_thumbnails: args.regen_thumbnails,
                 delete_source_files: args.delete_source_files,
-                safe_delete: args.safe_delete,
                 offset,
                 limit,
             },
@@ -284,8 +275,7 @@ pub async fn get_gallery_image(image_path: String) -> Result<Vec<u8>, String> {
 #[tauri::command]
 pub async fn copy_image_to_clipboard(app: AppHandle, image_id: String) -> Result<(), String> {
     let image_path = {
-        let info = Storage::global()
-            .find_image_by_id(&image_id)
+        let info = Storage::find_image_by_id(&image_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "Image not found".to_string())?;
         let path = info.local_path;

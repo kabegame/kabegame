@@ -6,10 +6,8 @@
 //! 把 `local_path` / `thumbnail_path` 改写成 CDN 绝对 URL。否则 web 客户端拿到
 //! 的是服务器本地路径，浏览器没法直接加载。
 
-use kabegame_core::gallery::GalleryBrowseEntry;
 use kabegame_core::providers::{
-    decode_provider_path_segments, execute_provider_query_typed, provider_query_to_json,
-    provider_runtime, ProviderQueryTyped,
+    decode_provider_path_segments, query_entry, query_fetch, query_list,
 };
 use kabegame_core::storage::image_events::{
     delete_images_with_events, toggle_image_favorite_with_event,
@@ -18,90 +16,53 @@ use kabegame_core::storage::Storage;
 use serde_json::Value;
 
 #[cfg(feature = "web")]
-use crate::web::image_rewrite::rewrite_image_info;
+use crate::web::image_rewrite::{rewrite_fs_path, rewrite_image_info};
 
-fn encode_provider_path_segment(s: &str) -> String {
-    s.bytes()
-        .flat_map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                vec![b as char]
-            }
-            _ => format!("%{b:02X}").chars().collect(),
-        })
-        .collect()
-}
-
-/// 对 typed provider 查询结果里的每个 Image 条目做 CDN URL 改写。
 #[cfg(feature = "web")]
-fn rewrite_provider_query(t: &mut ProviderQueryTyped) {
-    if let ProviderQueryTyped::Listing { entries, .. } = t {
-        for entry in entries.iter_mut() {
-            if let GalleryBrowseEntry::Image { image } = entry {
-                rewrite_image_info(image);
+fn rewrite_pathql_image_rows(rows: &mut [Value]) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    for row in rows {
+        let Some(obj) = row.as_object_mut() else {
+            continue;
+        };
+        for key in ["local_path", "thumbnail_path"] {
+            if let Some(Value::String(path)) = obj.get_mut(key) {
+                *path = rewrite_fs_path(path);
             }
         }
     }
 }
 
-pub async fn browse_gallery_provider(path: String) -> Result<Value, String> {
-    let full = format!("gallery/{}", path.trim().trim_start_matches('/'));
-    let full = decode_provider_path_segments(&full);
-    let result = tokio::task::spawn_blocking(move || {
-        let mut typed = execute_provider_query_typed(&full)?;
-        #[cfg(feature = "web")]
-        rewrite_provider_query(&mut typed);
-        provider_query_to_json(&typed)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    Ok(result)
+pub async fn pathql_entry(path: String) -> Result<Value, String> {
+    let path = decode_provider_path_segments(&path);
+    let result = tokio::task::spawn_blocking(move || query_entry(&path))
+        .await
+        .map_err(|e| e.to_string())??;
+    serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
-pub async fn list_provider_children(path: String) -> Result<Value, String> {
-    let full = format!("gallery/{}", path.trim().trim_start_matches('/'));
-    let full = decode_provider_path_segments(&full);
-    let result = tokio::task::spawn_blocking(move || -> Result<Value, String> {
-        let rt = provider_runtime();
-        let path = if full.starts_with('/') {
-            full.clone()
-        } else {
-            format!("/{}", full)
-        };
-        let children = rt.list(&path).map_err(|e| format!("list failed: {}", e))?;
-        let base = path.trim_end_matches('/').to_string();
-        let entries = children
-            .into_iter()
-            .map(|child| {
-                let name = child.name;
-                let meta = child.meta;
-                let child_path = format!("{}/{}", base, encode_provider_path_segment(&name));
-                let total = rt.count(&child_path).ok();
-                serde_json::json!({
-                    "kind": "dir",
-                    "name": name,
-                    "meta": meta,
-                    "total": total,
-                })
-            })
-            .collect::<Vec<_>>();
-        serde_json::to_value(entries).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    Ok(result)
+pub async fn pathql_list(path: String, with_count: bool) -> Result<Value, String> {
+    let path = decode_provider_path_segments(&path);
+    let result = tokio::task::spawn_blocking(move || query_list(&path, with_count))
+        .await
+        .map_err(|e| e.to_string())??;
+    serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
-pub async fn query_provider(path: String) -> Result<Value, String> {
-    let p = path.trim().to_string();
-    let result = tokio::task::spawn_blocking(move || {
-        let mut typed = execute_provider_query_typed(&p)?;
-        #[cfg(feature = "web")]
-        rewrite_provider_query(&mut typed);
-        provider_query_to_json(&typed)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    Ok(result)
+pub async fn pathql_fetch(path: String) -> Result<Value, String> {
+    let path = decode_provider_path_segments(&path);
+    let result = tokio::task::spawn_blocking(move || query_fetch(&path))
+        .await
+        .map_err(|e| e.to_string())??;
+    #[cfg(feature = "web")]
+    {
+        let mut result = result;
+        rewrite_pathql_image_rows(&mut result);
+        return serde_json::to_value(result).map_err(|e| e.to_string());
+    }
+    serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
 pub async fn get_images_count() -> Result<Value, String> {
@@ -130,7 +91,7 @@ pub async fn get_gallery_time_filter_data() -> Result<Value, String> {
 }
 
 pub async fn get_image_by_id(image_id: String) -> Result<Value, String> {
-    let mut image = Storage::global().find_image_by_id(&image_id)?;
+    let mut image = Storage::find_image_by_id(&image_id)?;
     #[cfg(feature = "web")]
     if let Some(info) = image.as_mut() {
         rewrite_image_info(info);
@@ -143,8 +104,8 @@ pub async fn get_image_metadata(image_id: String) -> Result<Value, String> {
     serde_json::to_value(meta).map_err(|e| e.to_string())
 }
 
-pub async fn get_image_metadata_by_metadata_id(metadata_id: i64) -> Result<Value, String> {
-    let meta = Storage::global().get_image_metadata_by_metadata_id(metadata_id)?;
+pub async fn get_image_metadata_full(image_id: String) -> Result<Value, String> {
+    let meta = Storage::global().get_image_metadata_full(&image_id)?;
     serde_json::to_value(meta).map_err(|e| e.to_string())
 }
 

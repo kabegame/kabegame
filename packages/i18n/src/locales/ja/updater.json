@@ -1,0 +1,21 @@
+{
+  "new": "NEW",
+  "restartUpdate": "再起動して更新",
+  "dialogTitle": "新しいバージョンがあります",
+  "currentVersion": "現在のバージョン：{version}",
+  "viewOnGithub": "GitHub で見る",
+  "download": "ダウンロード",
+  "openReleasePage": "リリースページを開く",
+  "noAssetHint": "このプラットフォーム向けのインストーラーがありません。リリースページから手動でダウンロードしてください",
+  "downloadComingSoon": "ダウンロード機能は近日公開",
+  "restartConfirmTitle": "再起動して更新",
+  "restartConfirmMessage": "新しいバージョンの準備ができました。今すぐ再起動して更新を完了しますか？",
+  "downloadingTitle": "アップデートをダウンロード中",
+  "restartReadyTitle": "新しいバージョンの準備完了",
+  "restartReadyMessage": "新しいバージョンのダウンロードが完了しました。今すぐ再起動してインストールを完了しますか？",
+  "restartNow": "今すぐ再起動",
+  "restartLater": "後で",
+  "checkUpdate": "アップデートを確認",
+  "alreadyLatest": "最新バージョンです",
+  "foundUpdate": "新しいバージョンがあります"
+}

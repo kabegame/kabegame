@@ -1,5 +1,5 @@
 import { ref, computed } from "vue";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useAlbumStore } from "@/stores/albums";
 import type { ImageInfo } from "@kabegame/core/types/image";
 

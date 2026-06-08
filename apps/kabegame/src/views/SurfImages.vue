@@ -5,7 +5,6 @@
         ref="surfViewRef"
         class="surf-grid"
         :images="images"
-        :enable-virtual-scroll="!isCompact"
         :enable-ctrl-wheel-adjust-columns="!isCompact"
         :enable-ctrl-key-adjust-columns="!isCompact"
         :actions="imageActions"
@@ -44,16 +43,20 @@
     </div>
 
     <RemoveImagesConfirmDialog
-      v-model="showRemoveDialog"
+      :open="removeDialog.isOpen.value"
+      :z-index="removeDialog.zIndex.value"
       :message="removeDialogMessage"
       :title="$t('surf.confirmDelete')"
       hide-checkbox
+      @close="removeDialog.close()"
       @confirm="confirmRemoveImages"
     />
 
     <AddToAlbumDialog
-      v-model="showAddToAlbumDialog"
+      :open="addToAlbumDialog.isOpen.value"
+      :z-index="addToAlbumDialog.zIndex.value"
       :image-ids="addToAlbumImageIds"
+      @close="addToAlbumDialog.close()"
       @added="handleAddedToAlbum"
     />
   </div>
@@ -63,9 +66,12 @@
 import { onMounted, onActivated, onDeactivated, onBeforeUnmount, onUnmounted, ref, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
+import { pathqlEntry, pathqlFetch } from "@/services/pathql";
+import { rowToImageInfo } from "@/utils/imageRow";
+import { withGalleryPrefix } from "@/utils/path";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { listen } from "@/api/rpc";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { storeToRefs } from "pinia";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
@@ -92,6 +98,7 @@ import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { IS_WEB } from "@kabegame/core/env";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useI18n } from "@kabegame/i18n";
+import { useModal } from "@kabegame/core/composables/useModal";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -120,10 +127,10 @@ const currentWallpaperImageId = computed<string | null>({
   },
 });
 
-const showRemoveDialog = ref(false);
+const removeDialog = useModal();
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
-const showAddToAlbumDialog = ref(false);
+const addToAlbumDialog = useModal();
 const addToAlbumImageIds = ref<string[]>([]);
 
 const imageActions = computed(() =>
@@ -267,7 +274,7 @@ const handleImageMenuCommand = async (
     case "addToAlbum":
       if (imagesToProcess.length > 0) {
         addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
-        showAddToAlbumDialog.value = true;
+        addToAlbumDialog.open();
       }
       break;
     case "addToHidden": {
@@ -332,7 +339,7 @@ const handleImageMenuCommand = async (
       pendingRemoveImages.value = imagesToProcess;
       const count = imagesToProcess.length;
       removeDialogMessage.value = count > 1 ? t("surf.removeMessageMulti", { count }) : t("surf.removeMessageSingle");
-      showRemoveDialog.value = true;
+      removeDialog.open();
       break;
   }
   return null;
@@ -341,12 +348,12 @@ const handleImageMenuCommand = async (
 const confirmRemoveImages = async () => {
   const imagesToRemove = pendingRemoveImages.value;
   if (imagesToRemove.length === 0) {
-    showRemoveDialog.value = false;
+    removeDialog.close();
     return;
   }
 
   const count = imagesToRemove.length;
-  showRemoveDialog.value = false;
+  removeDialog.close();
 
   try {
     const imageIds = imagesToRemove.map((img) => img.id);
@@ -400,16 +407,13 @@ const lastVisitSubtitle = computed(() => {
 
 const fetchPageImages = async (path: string) => {
   clearImageMetadataCache();
-  const p = path.endsWith("/") || path.endsWith("/*") ? path : `${path}/`;
-  const res = await invoke<{
-    total?: number;
-    entries?: Array<{ kind: string; image?: ImageInfo }>;
-  }>("browse_gallery_provider", { path: p });
-  const list: ImageInfo[] = (res?.entries ?? [])
-    .filter((e: any) => e?.kind === "image")
-    .map((e: any) => e.image as ImageInfo);
+  const p = withGalleryPrefix(path);
+  const list = (await pathqlFetch<Record<string, unknown>>(p)).map(rowToImageInfo);
+  const total = await pathqlEntry(withGalleryPrefix(providerRootPath.value))
+    .then((entry) => entry.total ?? list.length)
+    .catch(() => list.length);
   return {
-    total: res?.total ?? 0,
+    total,
     images: list,
   };
 };

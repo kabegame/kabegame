@@ -144,44 +144,44 @@
       </el-tab-pane>
     </el-tabs>
 
-    <el-dialog v-model="presetPreviewVisible" :title="$t('autoConfig.recommendedPreviewTitle')"
+    <el-dialog :model-value="presetPreviewDialog.isOpen.value" :z-index="presetPreviewDialog.zIndex.value" :title="$t('autoConfig.recommendedPreviewTitle')"
       class="auto-config-dialog task-params-dialog auto-config-preset-preview-dialog" width="min(560px, 92vw)"
-      destroy-on-close append-to-body>
+      destroy-on-close append-to-body @update:model-value="presetPreviewDialog.close">
       <AutoConfigDetailContent v-if="presetPreviewRunConfig" :config="presetPreviewRunConfig"
         :show-schedule-last-run="false" />
       <template #footer>
-        <el-button @click="presetPreviewVisible = false">{{ $t("common.cancel") }}</el-button>
+        <el-button @click="presetPreviewDialog.close()">{{ $t("common.cancel") }}</el-button>
         <el-button v-if="presetPreviewTarget" type="primary"
-          @click="importPreset(presetPreviewTarget); presetPreviewVisible = false">
+          @click="importPreset(presetPreviewTarget); presetPreviewDialog.close()">
           {{ $t("autoConfig.importRecommended") }}
         </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="scheduleHelpVisible" :title="$t('autoConfig.scheduleHelpTitle')"
+    <el-dialog :model-value="scheduleHelpDialog.isOpen.value" :z-index="scheduleHelpDialog.zIndex.value" :title="$t('autoConfig.scheduleHelpTitle')"
       class="auto-config-dialog task-params-dialog auto-config-schedule-help-dialog" width="min(480px, 92vw)"
-      destroy-on-close append-to-body>
+      destroy-on-close append-to-body @update:model-value="scheduleHelpDialog.close">
       <p class="acd-schedule-help-p">{{ $t("autoConfig.scheduleHelpP1") }}</p>
       <p class="acd-schedule-help-p">{{ $t("autoConfig.scheduleHelpP2") }}</p>
       <p class="acd-schedule-help-p">{{ $t("autoConfig.scheduleHelpP3") }}</p>
       <template #footer>
-        <el-button type="primary" @click="scheduleHelpVisible = false">{{ $t("common.ok") }}</el-button>
+        <el-button type="primary" @click="scheduleHelpDialog.close()">{{ $t("common.ok") }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="recommendedHelpVisible" :title="$t('autoConfig.recommendedHelpTitle')"
+    <el-dialog :model-value="recommendedHelpDialog.isOpen.value" :z-index="recommendedHelpDialog.zIndex.value" :title="$t('autoConfig.recommendedHelpTitle')"
       class="auto-config-dialog task-params-dialog auto-config-recommended-help-dialog" width="min(480px, 92vw)"
-      destroy-on-close append-to-body>
+      destroy-on-close append-to-body @update:model-value="recommendedHelpDialog.close">
       <p class="acd-schedule-help-p">{{ $t("autoConfig.recommendedHelpP1") }}</p>
       <p class="acd-schedule-help-p">{{ $t("autoConfig.recommendedHelpP2") }}</p>
       <template #footer>
-        <el-button type="primary" @click="recommendedHelpVisible = false">{{ $t("common.ok") }}</el-button>
+        <el-button type="primary" @click="recommendedHelpDialog.close()">{{ $t("common.ok") }}</el-button>
       </template>
     </el-dialog>
 
     <!-- 安卓不显示这个页面，所以不做判断.收集（与画廊页一致：桌面 CrawlerDialog / 本地导入；安卓 CollectSourcePicker / drawer / MediaPicker） -->
-    <CrawlerDialog v-model="showCrawlerDialog" :initial-config="crawlerDialogInitialConfig" />
-    <LocalImportDialog v-model="showLocalImportDialog" />
+    <CrawlerDialog :model-value="crawlerDialog.isOpen.value" :initial-config="crawlerDialogInitialConfig" @update:model-value="crawlerDialog.close" />
+    <LocalImportDialog :model-value="localImportDialog.isOpen.value" @update:model-value="localImportDialog.close" />
 
     <!-- <CollectSourcePicker v-if="IS_ANDROID" v-model="showCollectSourcePicker" @select="handleCollectSourceSelect" /> -->
     <!-- <MediaPicker v-if="IS_ANDROID" v-model="showMediaPicker" @select="handleMediaPickerSelect" /> -->
@@ -192,12 +192,13 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useVirtualList } from "@vueuse/core";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { AlarmClock, ArrowDown, Filter, Timer } from "@element-plus/icons-vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import AutoConfigDetailContent from "@kabegame/core/components/scheduler/AutoConfigDetailContent.vue";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { IS_ANDROID } from "@kabegame/core/env";
 import TaskLogDialog from "@kabegame/core/components/task/TaskLogDialog.vue";
 import AutoConfigListCard from "@/components/scheduler/AutoConfigListCard.vue";
@@ -237,8 +238,8 @@ const headerShowFeatures = [
   HeaderFeatureId.Help,
 ];
 
-const showCrawlerDialog = ref(false);
-const showLocalImportDialog = ref(false);
+const crawlerDialog = useModal();
+const localImportDialog = useModal();
 const showMediaPicker = ref(false);
 const showCollectSourcePicker = ref(false);
 const crawlerDialogInitialConfig = ref<{
@@ -256,16 +257,10 @@ const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
 const listTab = ref<"mine" | "recommended">("mine");
 const lastTrackedListTab = ref<"mine" | "recommended">("mine");
 const activeRecommendedPluginId = ref("");
-const presetPreviewVisible = ref(false);
+const presetPreviewDialog = useModal();
 const presetPreviewTarget = ref<PluginRecommendedPreset | null>(null);
-const scheduleHelpVisible = ref(false);
-const recommendedHelpVisible = ref(false);
-
-if (IS_ANDROID) {
-  useModalBack(presetPreviewVisible);
-  useModalBack(scheduleHelpVisible);
-  useModalBack(recommendedHelpVisible);
-}
+const scheduleHelpDialog = useModal();
+const recommendedHelpDialog = useModal();
 
 const presetPreviewRunConfig = computed((): RunConfig | null => {
   const preset = presetPreviewTarget.value;
@@ -346,7 +341,7 @@ function resolvePresetDesc(preset: PluginRecommendedPreset) {
 function openPresetPreview(preset: PluginRecommendedPreset) {
   trackEvent("auto_config_recommended_detail_open", recommendedPresetPayload(preset));
   presetPreviewTarget.value = preset;
-  presetPreviewVisible.value = true;
+  presetPreviewDialog.open();
 }
 
 async function importPreset(preset: PluginRecommendedPreset) {
@@ -627,9 +622,9 @@ const handleScheduleEnabled = async (cfg: RunConfig, enabled: boolean) => {
 const handleHeaderAction = (payload: { id: string; data?: { type: string; value?: string } }) => {
   if (payload.id === HeaderFeatureId.Help) {
     if (listTab.value === "recommended") {
-      recommendedHelpVisible.value = true;
+      recommendedHelpDialog.open();
     } else {
-      scheduleHelpVisible.value = true;
+      scheduleHelpDialog.open();
     }
     return;
   }
@@ -643,9 +638,9 @@ const handleHeaderAction = (payload: { id: string; data?: { type: string; value?
       showCollectSourcePicker.value = true;
     } else if (d?.type === "select") {
       if (d.value === "local") {
-        showLocalImportDialog.value = true;
+        localImportDialog.open();
       } else if (d.value === "network") {
-        showCrawlerDialog.value = true;
+        crawlerDialog.open();
       }
     }
   }

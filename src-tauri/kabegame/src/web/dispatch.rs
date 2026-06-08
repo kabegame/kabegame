@@ -83,20 +83,6 @@ pub fn init_registry() {
     );
 
     map.insert(
-        "get_album_counts",
-        MethodEntry {
-            requires_super: false,
-            handler: Arc::new(|_p| {
-                Box::pin(async move {
-                    crate::commands_core::album::get_album_counts()
-                        .await
-                        .map_err(RpcError::internal)
-                })
-            }),
-        },
-    );
-
-    map.insert(
         "get_album_preview",
         MethodEntry {
             requires_super: false,
@@ -118,27 +104,7 @@ pub fn init_registry() {
     );
 
     map.insert(
-        "get_album_image_ids",
-        MethodEntry {
-            requires_super: false,
-            handler: Arc::new(|p| {
-                Box::pin(async move {
-                    #[derive(serde::Deserialize)]
-                    #[serde(rename_all = "camelCase")]
-                    struct Args {
-                        album_id: String,
-                    }
-                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::album::get_album_image_ids(args.album_id)
-                        .await
-                        .map_err(RpcError::internal)
-                })
-            }),
-        },
-    );
-
-    map.insert(
-        "browse_gallery_provider",
+        "pathql_entry",
         MethodEntry {
             requires_super: false,
             handler: Arc::new(|p| {
@@ -149,7 +115,7 @@ pub fn init_registry() {
                         path: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::browse_gallery_provider(args.path)
+                    crate::commands_core::image::pathql_entry(args.path)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -158,7 +124,29 @@ pub fn init_registry() {
     );
 
     map.insert(
-        "list_provider_children",
+        "pathql_list",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(serde::Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        path: String,
+                        #[serde(default)]
+                        with_count: bool,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    crate::commands_core::image::pathql_list(args.path, args.with_count)
+                        .await
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "pathql_fetch",
         MethodEntry {
             requires_super: false,
             handler: Arc::new(|p| {
@@ -169,27 +157,7 @@ pub fn init_registry() {
                         path: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::list_provider_children(args.path)
-                        .await
-                        .map_err(RpcError::internal)
-                })
-            }),
-        },
-    );
-
-    map.insert(
-        "query_provider",
-        MethodEntry {
-            requires_super: false,
-            handler: Arc::new(|p| {
-                Box::pin(async move {
-                    #[derive(serde::Deserialize)]
-                    #[serde(rename_all = "camelCase")]
-                    struct Args {
-                        path: String,
-                    }
-                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::query_provider(args.path)
+                    crate::commands_core::image::pathql_fetch(args.path)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -314,7 +282,7 @@ pub fn init_registry() {
     );
 
     map.insert(
-        "get_image_metadata_by_metadata_id",
+        "get_image_metadata_full",
         MethodEntry {
             requires_super: false,
             handler: Arc::new(|p| {
@@ -322,10 +290,10 @@ pub fn init_registry() {
                     #[derive(serde::Deserialize)]
                     #[serde(rename_all = "camelCase")]
                     struct Args {
-                        metadata_id: i64,
+                        image_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::get_image_metadata_by_metadata_id(args.metadata_id)
+                    crate::commands_core::image::get_image_metadata_full(args.image_id)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1079,6 +1047,52 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::album::add_album(args.name, args.parent_id)
+                        .await
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "sync_local_folder_album",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        album_id: String,
+                        recursive: Option<bool>,
+                        create_missing_albums: Option<bool>,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    crate::commands_core::album::sync_local_folder_album(
+                        args.album_id,
+                        args.recursive,
+                        args.create_missing_albums,
+                    )
+                    .await
+                    .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "sync_local_folder_albums",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        album_ids: Vec<String>,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    crate::commands_core::album::sync_local_folder_albums(args.album_ids)
                         .await
                         .map_err(RpcError::internal)
                 })

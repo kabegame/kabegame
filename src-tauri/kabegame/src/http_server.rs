@@ -56,15 +56,6 @@ struct PluginDocImageQuery {
     path: String,
 }
 
-#[cfg(not(target_os = "android"))]
-fn is_allowed_media_ext(path: &str) -> bool {
-    let ext = Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default();
-    kabegame_core::image_type::is_supported_media_ext(ext)
-}
-
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
 fn build_serve_dir_request(path: &str) -> Option<Request<Body>> {
     let uri = Uri::from_str(path).ok()?;
@@ -112,16 +103,13 @@ async fn handle_file_query(
     if path.is_empty() {
         return (StatusCode::BAD_REQUEST, "missing path").into_response();
     }
-    if !is_allowed_media_ext(path) {
-        return (StatusCode::FORBIDDEN, "file extension not allowed").into_response();
-    }
 
     // 先检查本地文件是否存在，找不到则不查表直接 404
     if tokio::fs::metadata(path).await.is_err() {
         return (StatusCode::NOT_FOUND, "file not found").into_response();
     }
 
-    let image_info = match kabegame_core::storage::Storage::global().find_image_by_path(path) {
+    let image_info = match kabegame_core::storage::Storage::find_image_by_path(path) {
         Ok(Some(info)) => info,
         _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
     };
@@ -144,15 +132,12 @@ async fn handle_thumbnail_query(
     if path.is_empty() {
         return (StatusCode::BAD_REQUEST, "missing path").into_response();
     }
-    if !is_allowed_media_ext(path) {
-        return (StatusCode::FORBIDDEN, "file extension not allowed").into_response();
-    }
 
     if tokio::fs::metadata(path).await.is_err() {
         return (StatusCode::NOT_FOUND, "file not found").into_response();
     }
 
-    match kabegame_core::storage::Storage::global().find_image_by_thumbnail_path(path) {
+    match kabegame_core::storage::Storage::find_image_by_thumbnail_path(path) {
         Ok(Some(_)) => {}
         _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
     }

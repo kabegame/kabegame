@@ -1,6 +1,6 @@
 <template>
   <!-- Android：自研全宽抽屉 -->
-  <AndroidDrawer v-if="uiStore.isCompact" v-model="visible" show-close-button class="crawl-dialog">
+  <AndroidDrawer v-if="uiStore.isCompact" :model-value="modal.isOpen.value" :z-index="modal.zIndex.value" show-close-button class="crawl-dialog" @update:model-value="modal.close">
     <template #header>
       <div class="crawl-drawer-header">
         <h3>{{ $t("plugins.startCollect") }}</h3>
@@ -12,7 +12,7 @@
           <AndroidPickerSelect :model-value="selectedRunConfigId ?? null" :options="runConfigPickerOptions"
             :title="$t('plugins.runConfig')" :placeholder="$t('plugins.selectConfigOptional')" clearable
             @update:model-value="setRunConfigId" />
-          <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="showAddConfigDialog = true">
+          <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="addConfigModal.open()">
             {{ $t("plugins.addConfig") }}
           </el-button>
           <el-button v-else class="run-config-btn" @click="updateCurrentConfig">
@@ -72,6 +72,11 @@
         <el-input ref="newOutputAlbumNameInputRef" v-model="newOutputAlbumName"
           :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
           @keyup.enter="handleCreateOutputAlbum" />
+      </el-form-item>
+      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
+        <AlbumPickerField v-model="newOutputAlbumParentId" :album-tree="outputAlbumParentTree"
+          :album-counts="albumCounts" :placeholder="$t('albums.selectParentAlbum')"
+          :picker-title="$t('albums.parentAlbum')" />
       </el-form-item>
 
       <template v-if="pluginVars.length > 0">
@@ -175,8 +180,8 @@
     </div>
   </AndroidDrawer>
 
-  <ElDialog v-else v-model="visible" :title="$t('plugins.startCollect')" width="600px" class="crawl-dialog" align-center
-    :show-close="true">
+  <ElDialog v-else :model-value="modal.isOpen.value" :z-index="modal.zIndex.value" :title="$t('plugins.startCollect')" width="600px" class="crawl-dialog" align-center
+    :show-close="true" @update:model-value="modal.close">
     <el-form ref="formRef" :model="form" label-position="top" class="crawl-form">
       <el-form-item :label="$t('plugins.runConfig')">
         <div class="run-config-row">
@@ -207,7 +212,7 @@
               </div>
             </el-option>
           </el-select>
-          <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="showAddConfigDialog = true">
+          <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="addConfigModal.open()">
             {{ $t("plugins.saveToConfig") }}
           </el-button>
           <el-button v-else class="run-config-btn" @click="updateCurrentConfig">
@@ -262,6 +267,11 @@
         <el-input ref="newOutputAlbumNameInputRef" v-model="newOutputAlbumName"
           :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
           @keyup.enter="handleCreateOutputAlbum" />
+      </el-form-item>
+      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
+        <AlbumPickerField v-model="newOutputAlbumParentId" :album-tree="outputAlbumParentTree"
+          :album-counts="albumCounts" :placeholder="$t('albums.selectParentAlbum')"
+          :picker-title="$t('albums.parentAlbum')" />
       </el-form-item>
 
       <template v-if="pluginVars.length > 0">
@@ -360,7 +370,7 @@
     </el-form>
 
     <template #footer>
-      <el-button @click="visible = false">{{ $t("common.close") }}</el-button>
+      <el-button @click="modal.close()">{{ $t("common.close") }}</el-button>
       <el-button type="primary" :disabled="!selectedRunConfigId && !form.pluginId" @click="handleStartCrawl">
         {{ $t("plugins.startCollect") }}
       </el-button>
@@ -368,8 +378,8 @@
   </ElDialog>
 
   <!-- 新增配置弹窗 -->
-  <ElDialog v-model="showAddConfigDialog" :title="$t('plugins.newConfig')" width="400px" :close-on-click-modal="false"
-    @closed="onAddConfigDialogClosed">
+  <ElDialog :model-value="addConfigModal.isOpen.value" :z-index="addConfigModal.zIndex.value" :title="$t('plugins.newConfig')" width="400px" :close-on-click-modal="false"
+    @update:model-value="addConfigModal.close" @closed="onAddConfigDialogClosed">
     <el-form label-width="80px">
       <el-form-item :label="$t('common.name')" required>
         <el-input v-model="newConfigName" :placeholder="$t('common.configNamePlaceholder')" maxlength="80"
@@ -381,7 +391,7 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="showAddConfigDialog = false">{{ $t("common.cancel") }}</el-button>
+      <el-button @click="addConfigModal.close()">{{ $t("common.cancel") }}</el-button>
       <el-button type="primary" @click="handleAddConfig">{{ $t("common.save") }}</el-button>
     </template>
   </ElDialog>
@@ -401,13 +411,14 @@ import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
 import { useCrawlerStore, type RunConfig, type ScheduleSpec } from "@/stores/crawler";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { usePluginStore } from "@/stores/plugins";
-import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import {
   matchesPluginVarWhen,
@@ -446,7 +457,7 @@ const recommendedPresetCount = computed(
 );
 
 function goImportRecommendedPresets() {
-  visible.value = false;
+  modal.close();
   void router.push({ name: "AutoConfigs", query: { tab: "recommended" } });
 }
 const pluginStore = usePluginStore();
@@ -500,10 +511,9 @@ const loadHeadersFromConfig = (cfgId: string | null) => {
   httpHeaderRows.value = Object.entries(headers).map(([k, v]) => ({ key: k, value: v }));
 };
 
-const showAddConfigDialog = ref(false);
+const addConfigModal = useModal();
 const newConfigName = ref("");
 const newConfigDescription = ref("");
-useModalBack(showAddConfigDialog);
 
 function onAddConfigDialogClosed() {
   newConfigName.value = "";
@@ -709,7 +719,7 @@ async function handleAddConfig() {
       httpHeaders,
       scheduleEnabled: false,
     });
-    showAddConfigDialog.value = false;
+    addConfigModal.close();
     selectedRunConfigId.value = cfg.id;
   } catch (e) {
     console.error("新增配置失败:", e);
@@ -747,17 +757,16 @@ async function updateCurrentConfig() {
   }
 }
 
-const visible = computed({
-  get: () => props.modelValue,
-  set: (v) => emit("update:modelValue", v),
-});
-
-useModalBack(visible);
+const modal = useModal({ onClose: () => emit("update:modelValue", false) });
+watch(() => props.modelValue, (v) => v ? modal.open() : modal.close(), { immediate: true });
 
 const plugins = computed(() => pluginStore.plugins);
 const runConfigs = computed(() => crawlerStore.runConfigs);
 const { albumCounts } = storeToRefs(albumStore);
 const outputAlbumTree = computed(() => albumStore.getAlbumTreeExcluding([HIDDEN_ALBUM_ID]));
+const outputAlbumParentTree = computed(() =>
+  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID]),
+);
 
 const runConfigPickerOptions = computed(() =>
   runConfigs.value.map((cfg) => {
@@ -796,6 +805,7 @@ const crawlDialogMinAppErrorText = computed(() => {
 });
 const selectedOutputAlbumId = ref<string | null>(null);
 const newOutputAlbumName = ref<string>("");
+const newOutputAlbumParentId = ref<string | null>(null);
 const newOutputAlbumNameInputRef = ref<any>(null);
 const isCreatingNewOutputAlbum = computed(() => selectedOutputAlbumId.value === "__create_new__");
 
@@ -904,7 +914,7 @@ const visiblePluginVars = computed(() => {
 watch(
   () => form.value.vars,
   () => {
-    coerceOptionsVarsToVisibleChoices(pluginVars.value as PluginVarDef[], form.value.vars);
+    coerceOptionsVarsToVisibleChoices(pluginVars.value, form.value.vars);
   },
   { deep: true },
 );
@@ -932,29 +942,41 @@ const {
   loadPluginVarDefs,
   normalizeVarsForUI,
   isRequired,
-  visible,
+  modal.isOpen,
 );
 
 const handleDeleteConfig = async (configId: string) => {
   await confirmDeleteRunConfig(configId);
 };
 
-const handleCreateOutputAlbum = async () => {
+const createOutputAlbum = async (showSuccess = true) => {
   if (!newOutputAlbumName.value.trim()) {
     ElMessage.warning(t("albums.enterAlbumNameFirst"));
-    return;
+    return null;
   }
 
   try {
-    const created = await albumStore.createAlbum(newOutputAlbumName.value.trim());
-    selectedOutputAlbumId.value = created.id;
+    const parentId = newOutputAlbumParentId.value?.trim() || null;
+    const created = await albumStore.createAlbum(newOutputAlbumName.value.trim(), { parentId });
     newOutputAlbumName.value = "";
-    ElMessage.success(t("albums.albumCreated"));
+    newOutputAlbumParentId.value = null;
+    if (showSuccess) {
+      ElMessage.success(t("albums.albumCreated"));
+    }
+    return created;
   } catch (error: any) {
     console.error("创建画册失败:", error);
     const errorMessage =
       typeof error === "string" ? error : error?.message || String(error) || "创建画册失败";
     ElMessage.error(errorMessage);
+    return null;
+  }
+};
+
+const handleCreateOutputAlbum = async () => {
+  const created = await createOutputAlbum();
+  if (created) {
+    selectedOutputAlbumId.value = created.id;
   }
 };
 
@@ -976,20 +998,11 @@ const handleStartCrawl = async () => {
     }
 
     if (selectedOutputAlbumId.value === "__create_new__") {
-      if (!newOutputAlbumName.value.trim()) {
-        ElMessage.warning(t("albums.enterAlbumNameFirst"));
+      const created = await createOutputAlbum(false);
+      if (!created) {
         return;
       }
-      try {
-        const created = await albumStore.createAlbum(newOutputAlbumName.value.trim());
-        selectedOutputAlbumId.value = created.id;
-        newOutputAlbumName.value = "";
-      } catch (error: any) {
-        const errorMessage =
-          typeof error === "string" ? error : error?.message || String(error) || "创建画册失败";
-        ElMessage.error(errorMessage);
-        return;
-      }
+      selectedOutputAlbumId.value = created.id;
     }
 
     if (formRef.value) {
@@ -1106,7 +1119,8 @@ const handleStartCrawl = async () => {
     resetForm();
     selectedOutputAlbumId.value = null;
     newOutputAlbumName.value = "";
-    visible.value = false;
+    newOutputAlbumParentId.value = null;
+    modal.close();
     emit("started");
   } catch (error: any) {
     console.error("添加任务失败:", error);
@@ -1116,7 +1130,7 @@ const handleStartCrawl = async () => {
   }
 };
 
-watch(visible, async (open) => {
+watch(modal.isOpen, async (open) => {
   if (!open) return;
   lastPluginVarTrackSignature.clear();
   await crawlerStore.runConfigsReady;
@@ -1180,10 +1194,11 @@ watch(visible, async (open) => {
   await checkAllConfigsCompatibility();
 });
 
-watch(visible, (isOpen) => {
+watch(modal.isOpen, (isOpen) => {
   if (!isOpen) {
     selectedOutputAlbumId.value = null;
     newOutputAlbumName.value = "";
+    newOutputAlbumParentId.value = null;
   }
 });
 
@@ -1194,6 +1209,7 @@ watch(selectedOutputAlbumId, (newValue) => {
     });
   } else {
     newOutputAlbumName.value = "";
+    newOutputAlbumParentId.value = null;
   }
 });
 </script>

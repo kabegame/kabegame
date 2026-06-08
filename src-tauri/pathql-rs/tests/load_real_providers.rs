@@ -24,19 +24,20 @@ fn recursive_scan_excludes_non_provider_files() {
         .map(|path| common::relative_provider_path(path))
         .collect();
 
-    assert!(rels.contains(&"root_provider.json".to_string()));
+    assert!(rels.contains(&"images/images_root_provider.json5".to_string()));
+    assert!(rels.contains(&"images/image_basic_provider.json5".to_string()));
     assert!(rels.contains(&"vd/zh_CN/vd_zh_CN_root_router.json5".to_string()));
     assert!(!rels.contains(&"schema.json5".to_string()));
     assert!(!rels.contains(&"gallery/all_router/x_page_x/gallery_page_router.json5".to_string()));
 }
 
 #[test]
-fn root_provider_routes_to_gallery_and_vd() {
+fn images_root_provider_routes_to_gallery_and_vd() {
     let r = common::build_real_registry();
     let root_ns = Namespace("kabegame".into());
     let root = r
-        .resolve(&root_ns, &ProviderName("root_provider".into()))
-        .expect("root_provider");
+        .resolve(&root_ns, &ProviderName("images_root_provider".into()))
+        .expect("images_root_provider");
     let list = root.list.as_ref().expect("root list");
     let names: Vec<&str> = list.entries.iter().map(|(k, _)| k.as_str()).collect();
     assert!(names.contains(&"gallery"));
@@ -57,9 +58,12 @@ fn gallery_route_resolves_in_namespace_chain() {
 fn loads_with_bytes_source() {
     // 模拟 include_dir 路径：用 read 拿到 bytes, 然后 Source::Bytes
     let dir = common::providers_dir();
-    let raw = std::fs::read(dir.join("root_provider.json")).unwrap();
-    let def = Json5Loader.load(Source::Bytes(&raw)).expect("bytes load");
-    assert_eq!(def.name.0, "root_provider");
+    let raw = std::fs::read(dir.join("images/images_root_provider.json5")).unwrap();
+    let sanitized = common::strip_legacy_from_fields(std::str::from_utf8(&raw).unwrap());
+    let def = Json5Loader
+        .load(Source::Bytes(sanitized.as_bytes()))
+        .expect("bytes load");
+    assert_eq!(def.name.0, "images_root_provider");
 }
 
 #[test]

@@ -1,67 +1,54 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref } from "vue";
 
 export type ModalCloseCallback = () => void | Promise<void>;
 
-export interface ModalEntry {
+const MODAL_Z_BASE = 2000;
+const MODAL_Z_STEP = 10;
+
+interface SlotEntry {
   id: string;
-  close: ModalCloseCallback;
+  slotIndex: number;
+  layers: number;
+  close?: ModalCloseCallback;
 }
 
 export const useModalStackStore = defineStore("modalStack", () => {
-  const stack = ref<ModalEntry[]>([]);
+  const slots = ref<SlotEntry[]>([]);
 
-  const isEmpty = computed(() => stack.value.length === 0);
-  const count = computed(() => stack.value.length);
+  function _nextTopSlot(): number {
+    if (slots.value.length === 0) return 0;
+    return Math.max(...slots.value.map((e) => e.slotIndex + e.layers));
+  }
 
-  /**
-   * Push a close callback to the stack.
-   * Returns a unique ID that can be used to remove the entry manually (though pop is preferred).
-   */
-  function push(close: ModalCloseCallback): string {
+  function acquire(layers = 1, close?: ModalCloseCallback): { id: string; zIndex: number } {
     const id = crypto.randomUUID();
-    stack.value.push({ id, close });
-    return id;
+    const safeLayers = Math.max(1, Math.floor(layers));
+    const slotIndex = _nextTopSlot();
+    slots.value.push({ id, slotIndex, layers: safeLayers, close });
+    return { id, zIndex: MODAL_Z_BASE + slotIndex * MODAL_Z_STEP };
   }
 
-  /**
-   * Pop the top entry from the stack (without calling close).
-   * Useful if the modal was closed by other means (e.g. close button).
-   */
-  function pop(): ModalEntry | undefined {
-    return stack.value.pop();
+  function release(id: string) {
+    const idx = slots.value.findIndex((e) => e.id === id);
+    if (idx !== -1) slots.value.splice(idx, 1);
   }
 
-  /**
-   * Remove a specific entry by ID (if it exists).
-   */
-  function remove(id: string) {
-    const index = stack.value.findIndex((entry) => entry.id === id);
-    if (index !== -1) {
-      stack.value.splice(index, 1);
-    }
+  function zIndexForSlot(slotIndex: number): number {
+    return MODAL_Z_BASE + slotIndex * MODAL_Z_STEP;
   }
 
-  /**
-   * Close the top modal: execute its close callback and pop it.
-   * Returns true if a modal was closed, false if stack was empty.
-   */
+  // Android back button: close the topmost modal (highest reserved layer)
   async function closeTop(): Promise<boolean> {
-    const entry = stack.value.pop();
-    if (entry) {
-      await entry.close();
-      return true;
-    }
-    return false;
+    if (slots.value.length === 0) return false;
+    const top = slots.value.reduce((a, b) =>
+      a.slotIndex + a.layers - 1 > b.slotIndex + b.layers - 1 ? a : b
+    );
+    if (top.close) await top.close();
+    return true;
   }
 
-  return {
-    stack,
-    isEmpty,
-    count,
-    push,
-    pop,
-    remove,
-    closeTop,
-  };
+  const isEmpty = () => slots.value.length === 0;
+
+  return { slots, acquire, release, zIndexForSlot, closeTop, isEmpty };
 });

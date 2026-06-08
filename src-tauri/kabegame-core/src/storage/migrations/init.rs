@@ -42,8 +42,12 @@ CREATE INDEX idx_tasks_start_time ON tasks(start_time DESC);
 CREATE TABLE image_metadata (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     data         TEXT    NOT NULL,
-    content_hash TEXT    NOT NULL UNIQUE
+    content_hash TEXT    NOT NULL,
+    version      INTEGER NOT NULL DEFAULT 0,
+    plugin_id    TEXT    NOT NULL DEFAULT ''
 );
+CREATE UNIQUE INDEX idx_image_metadata_dedup
+    ON image_metadata(plugin_id, version, content_hash);
 
 -- ───────────── images ─────────────
 CREATE TABLE images (
@@ -70,19 +74,25 @@ CREATE INDEX idx_plugin_id                     ON images(plugin_id);
 CREATE INDEX idx_task_id                       ON images(task_id);
 CREATE INDEX idx_images_surf_record_id         ON images(surf_record_id);
 CREATE INDEX idx_images_hash                   ON images(hash);
-CREATE INDEX idx_images_local_path             ON images(local_path);
+CREATE UNIQUE INDEX idx_images_local_path      ON images(local_path);
 CREATE INDEX idx_images_thumbnail_path         ON images(thumbnail_path);
 CREATE INDEX idx_images_last_set_wallpaper_at  ON images(last_set_wallpaper_at DESC);
 
 -- ───────────── albums ─────────────
 CREATE TABLE albums (
-    id         TEXT    PRIMARY KEY,
-    name       TEXT    NOT NULL,
-    created_at INTEGER NOT NULL,
-    parent_id  TEXT    REFERENCES albums(id) ON DELETE CASCADE
+    id            TEXT    PRIMARY KEY,
+    name          TEXT    NOT NULL,
+    created_at    INTEGER NOT NULL,
+    parent_id     TEXT    REFERENCES albums(id) ON DELETE CASCADE,
+    type          TEXT    NOT NULL DEFAULT 'normal',
+    sync_folder   TEXT,
+    folder_status TEXT
 );
 CREATE UNIQUE INDEX idx_albums_name_scoped
     ON albums(COALESCE(parent_id, ''), LOWER(name));
+-- 本地文件夹同步画册：同一物理目录只能对应一个同步画册
+CREATE UNIQUE INDEX idx_albums_sync_folder
+    ON albums(sync_folder) WHERE sync_folder IS NOT NULL;
 
 -- ───────────── album_images ─────────────
 CREATE TABLE album_images (
@@ -92,6 +102,7 @@ CREATE TABLE album_images (
     PRIMARY KEY (album_id, image_id)
 );
 CREATE INDEX idx_album_images_album ON album_images(album_id);
+CREATE INDEX idx_album_images_image ON album_images(image_id);
 
 -- ───────────── task_failed_images ─────────────
 CREATE TABLE task_failed_images (

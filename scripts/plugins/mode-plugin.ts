@@ -8,10 +8,11 @@ import { BasePlugin } from "./base-plugin";
 import { run } from "../utils";
 import { Component } from "./component-plugin";
 import chalk from "chalk";
-import { BuildSystem } from "../build-system";
+import { BuildSystem, THIRD_DIR } from "../build-system";
 import { OSPlugin } from "./os-plugin";
 import path from "path";
 import fs from "fs";
+import { execSync } from "child_process";
 
 export class Mode {
   static readonly STANDARD = "standard";
@@ -100,6 +101,27 @@ export class ModePlugin extends BasePlugin {
       if (this.mode!.isAndroid) {
         this.setEnv("VITE_ANDROID", "true");
         this.setEnv("TAURI_PLATFORM", "android");
+      } else if (!this.mode!.isLight) {
+        // light mode 不链接 rsmpeg，无需 FFmpeg 构建输出。
+        this.setEnv("FFMPEG_PKG_CONFIG_PATH", path.join(
+            THIRD_DIR,
+            "FFmpeg-build",
+            "install",
+            "lib",
+            "pkgconfig",
+          )
+        );
+        // macOS: clang (used by bindgen/rusty_ffmpeg) cannot find system headers like
+        // errno.h without an explicit sysroot. BINDGEN_EXTRA_CLANG_ARGS is read by
+        // bindgen and passed straight to clang before binding generation.
+        if (OSPlugin.isMacOS) {
+          try {
+            const sdkPath = execSync("xcrun --sdk macosx --show-sdk-path", { encoding: "utf8" }).trim();
+            this.setEnv("BINDGEN_EXTRA_CLANG_ARGS", `-isysroot ${sdkPath}`);
+          } catch {
+            this.log(chalk.yellow("Warning: xcrun failed — BINDGEN_EXTRA_CLANG_ARGS not set. bindgen may fail to find system headers."));
+          }
+        }
       }
 
       // 开发/start 时通过 PATH 让主进程及 sidecar（如 ffmpeg）找到 kabegame/bin 下的 DLL，无需复制
@@ -195,12 +217,13 @@ export class ModePlugin extends BasePlugin {
 
     // 仅在 main 组件构建时才需要处理 dokan 与 bin 下 DLL 资源
     if (bs.context.component!.isMain && OSPlugin.isWindows) {
-      this.log("Copy Dokan and FFmpeg DLLs resources...");
       if (this.mode!.isStandard) {
+        this.log("Copy Dokan and FFmpeg DLLs resources...");
         copyDokan2DllToResources();
         copyDokanInstallerToResources();
+        copyFFmpegDllsToResources();
       }
-      copyFFmpegDllsToResources();
+      // light mode: no FFmpeg DLLs needed (rsmpeg not linked)
     }
   }
 

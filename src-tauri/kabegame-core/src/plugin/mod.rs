@@ -1,4 +1,5 @@
 // Rhai 爬虫运行时/脚本执行
+pub mod metadata_migration;
 pub mod rhai;
 
 use arc_swap::ArcSwap;
@@ -6,7 +7,7 @@ use futures_util::StreamExt;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -20,8 +21,8 @@ use uuid::Uuid;
 use zip::ZipArchive;
 
 use pathql_rs::{
-    ContribQuery, Json5Loader, List, Loader, Namespace, ProviderDef, Query, SimpleName, Source,
-    SqlExpr,
+    ContribQuery, InvokeByName, Json5Loader, List, Loader, Namespace, ProviderDef,
+    ProviderInvocation, ProviderName, Query, Resolve, SimpleName, Source, SqlExpr,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +97,9 @@ pub struct Plugin {
     /// 插件内 providers/ 解析出的 DSL，仅后端使用，不序列化到前端。
     #[serde(skip)]
     pub providers: Vec<PluginProviderDef>,
+    /// metadata_migrations/vN.rhai 迁移脚本，仅后端使用，不序列化到前端。
+    #[serde(skip)]
+    pub metadata_migrations: Vec<(u32, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -343,15 +347,6 @@ impl PluginManager {
         crate::app_paths::AppPaths::global().plugins_dir()
     }
 
-    pub async fn register_installed_plugin_providers(&self) -> Result<(), String> {
-        let plugins: InstalledPlugins = self
-            .get_all()?
-            .into_iter()
-            .map(|plugin| (plugin.id.clone(), plugin))
-            .collect();
-        self.replace_all_plugin_providers(&plugins)
-    }
-
     fn register_plugin_providers(&self, plugin: &Plugin) -> Result<(), String> {
         let defs: Vec<ProviderDef> = plugin.providers.iter().map(|p| p.def.clone()).collect();
         validate_plugin_provider_defs(&plugin.id, &defs)?;
@@ -364,23 +359,6 @@ impl PluginManager {
             runtime
                 .register_provider(def)
                 .map_err(|e| format!("register plugin `{}` provider failed: {}", plugin.id, e))?;
-        }
-        Ok(())
-    }
-
-    fn replace_all_plugin_providers(&self, plugins: &InstalledPlugins) -> Result<(), String> {
-        for (plugin_id, plugin) in plugins {
-            let defs: Vec<ProviderDef> = plugin.providers.iter().map(|p| p.def.clone()).collect();
-            validate_plugin_provider_defs(plugin_id, &defs)?;
-        }
-        let current = self.plugins.load();
-        if let Some(old_plugins) = current.as_ref().as_ref() {
-            for plugin in old_plugins.values() {
-                self.unregister_plugin_providers(plugin)?;
-            }
-        }
-        for plugin in plugins.values() {
-            self.register_plugin_providers(plugin)?;
         }
         Ok(())
     }
@@ -508,7 +486,7 @@ impl PluginManager {
         Ok(Some(config))
     }
 
-    /// 安装 .kgpg 插件（复制文件到插件目录）
+    /// 安装 .kgpg 插件（复制文件到插件目录；若源文件已在插件目录则直接复用）
     pub async fn install_plugin_from_kgpg(&self, zip_path: &Path) -> Result<Plugin, String> {
         // 获取插件目录
         let plugins_dir = self.get_plugins_directory();
@@ -524,15 +502,25 @@ impl PluginManager {
         // 目标文件路径
         let target_path = plugins_dir.join(file_name);
 
-        // 如果目标文件已存在，先删除
-        if target_path.exists() {
-            fs::remove_file(&target_path)
-                .map_err(|e| format!("Failed to remove existing plugin file: {}", e))?;
-        }
+        let source_canon =
+            fs::canonicalize(zip_path).map_err(|e| format!("Failed to access plugin file: {e}"))?;
+        let target_canon = fs::canonicalize(&target_path).ok();
+        let already_installed = target_canon
+            .as_ref()
+            .map(|target| *target == source_canon)
+            .unwrap_or(false);
 
-        // 复制 .kgpg 文件到插件目录
-        fs::copy(zip_path, &target_path)
-            .map_err(|e| format!("Failed to copy plugin file: {}", e))?;
+        if !already_installed {
+            // 如果目标文件已存在，先删除
+            if target_path.exists() {
+                fs::remove_file(&target_path)
+                    .map_err(|e| format!("Failed to remove existing plugin file: {}", e))?;
+            }
+
+            // 复制 .kgpg 文件到插件目录
+            fs::copy(zip_path, &target_path)
+                .map_err(|e| format!("Failed to copy plugin file: {}", e))?;
+        }
 
         // 从目标路径解析完整 Plugin 并更新缓存
         let plugin = self.parse_kgpg(&target_path).await?;
@@ -565,6 +553,8 @@ impl PluginManager {
                 }
             }
         }
+
+        crate::plugin::metadata_migration::spawn_metadata_migrations_for_plugin(plugin.clone());
 
         Ok(plugin)
     }
@@ -1711,7 +1701,7 @@ impl PluginManager {
     /// 仅读取用户目录（data）下的 .kgpg
     pub async fn refresh_plugins(&self) -> Result<(), String> {
         let user_plugins_dir = self.get_plugins_directory();
-        let mut plugins: InstalledPlugins = HashMap::new();
+        let mut seen_plugin_ids = HashSet::new();
 
         // 仅扫描用户目录（data）
         if user_plugins_dir.exists() {
@@ -1723,14 +1713,24 @@ impl PluginManager {
                 if !(path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg")) {
                     continue;
                 }
-                let plugin = self.parse_kgpg(&path).await?;
-                let plugin_id = plugin.id.clone();
-                plugins.insert(plugin_id, Arc::new(plugin));
+                let plugin = self.install_plugin_from_kgpg(&path).await?;
+                seen_plugin_ids.insert(plugin.id);
             }
         }
 
-        self.replace_all_plugin_providers(&plugins)?;
-        self.plugins.store(Arc::new(Some(plugins)));
+        let current = self.plugins.load();
+        let mut plugins_map = current.as_ref().as_ref().cloned().unwrap_or_default();
+        let stale_ids: Vec<String> = plugins_map
+            .keys()
+            .filter(|id| !seen_plugin_ids.contains(*id))
+            .cloned()
+            .collect();
+        for id in stale_ids {
+            if let Some(old_plugin) = plugins_map.remove(&id) {
+                self.unregister_plugin_providers(&old_plugin)?;
+            }
+        }
+        self.plugins.store(Arc::new(Some(plugins_map)));
         Ok(())
     }
 
@@ -1770,19 +1770,7 @@ impl PluginManager {
 
         // 找到文件：重新解析（不持锁做 IO），然后 clone 当前缓存 + 更新 + store
         if let Some(path) = found_path {
-            let plugin = self.parse_kgpg(&path).await?;
-
-            // clone 当前快照（仅 Arc 指针），更新一条，原子替换
-            let current = self.plugins.load();
-            let old_plugin = current
-                .as_ref()
-                .as_ref()
-                .and_then(|m| m.get(plugin_id))
-                .map(|p| (**p).clone());
-            self.replace_plugin_providers(old_plugin.as_ref(), &plugin)?;
-            let mut plugins_map = current.as_ref().as_ref().cloned().unwrap_or_default();
-            plugins_map.insert(plugin_id.to_string(), Arc::new(plugin));
-            self.plugins.store(Arc::new(Some(plugins_map)));
+            self.install_plugin_from_kgpg(&path).await?;
             return Ok(());
         }
 
@@ -1872,6 +1860,7 @@ impl PluginManager {
             js_script_content,
             doc_resource_entries,
             provider_entries,
+            metadata_migration_entries,
         ) = tokio::task::spawn_blocking(move || -> Result<_, String> {
             let file = fs::File::open(&zip_path)
                 .map_err(|e| format!("Failed to open plugin file: {}", e))?;
@@ -1890,12 +1879,15 @@ impl PluginManager {
             let mut doc_resource_entries: Vec<(String, Vec<u8>)> = Vec::new();
             let mut doc_resource_total_size: usize = 0;
             let mut provider_entries: Vec<(String, String)> = Vec::new();
+            let mut metadata_migration_entries: Vec<(u32, String)> = Vec::new();
 
             for i in 0..archive.len() {
                 let mut f = archive
                     .by_index(i)
                     .map_err(|e| format!("读取 ZIP 条目失败: {}", e))?;
                 let name = f.name().to_string();
+
+                let normalized_name = name.replace('\\', "/");
 
                 if name == "manifest.json" {
                     let mut s = String::new();
@@ -1987,6 +1979,14 @@ impl PluginManager {
                             doc_resource_entries.push((rel_path, bytes));
                         }
                     }
+                } else if let Some(version) = metadata_migration_version_from_path(&normalized_name)
+                {
+                    let mut s = String::new();
+                    f.read_to_string(&mut s)
+                        .map_err(|e| format!("读取 metadata migration `{}` 失败: {}", name, e))?;
+                    if !s.trim().is_empty() {
+                        metadata_migration_entries.push((version, s));
+                    }
                 } else if crate::providers::is_provider_file_path(&name) {
                     let mut s = String::new();
                     f.read_to_string(&mut s)
@@ -2051,6 +2051,7 @@ impl PluginManager {
                 js_script_content,
                 doc_resource_entries,
                 provider_entries,
+                metadata_migration_entries,
             ))
         })
         .await
@@ -2126,8 +2127,19 @@ impl PluginManager {
             js_script: js_script_content,
             doc_resources,
             providers,
+            metadata_migrations: metadata_migration_entries,
         })
     }
+}
+
+fn metadata_migration_version_from_path(path: &str) -> Option<u32> {
+    let file = path.strip_prefix("metadata_migrations/")?;
+    let version = file.strip_prefix('v')?.strip_suffix(".rhai")?;
+    if version.is_empty() || !version.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let parsed = version.parse::<u32>().ok()?;
+    (parsed > 0).then_some(parsed)
 }
 
 fn plugin_provider_namespace_allowed(plugin_id: &str, def: &ProviderDef) -> bool {
@@ -2169,11 +2181,26 @@ fn normalize_plugin_provider_def(
             ))
         }
     }
+    ensure_plugin_provider_filter_comb_resolve(&mut def);
     Ok(def)
 }
 
+fn ensure_plugin_provider_filter_comb_resolve(def: &mut ProviderDef) {
+    let resolve = def.resolve.get_or_insert_with(Resolve::default);
+    resolve
+        .0
+        .entry("filter_comb".to_string())
+        .or_insert_with(|| {
+            ProviderInvocation::ByName(InvokeByName {
+                provider: ProviderName("kabegame.gallery_filter_comb".to_string()),
+                properties: None,
+                meta: None,
+            })
+        });
+}
+
 fn default_plugin_entry_provider(plugin_id: &str) -> ProviderDef {
-    ProviderDef {
+    let mut def = ProviderDef {
         schema: None,
         namespace: Some(Namespace(format!("plugins.{}", plugin_id))),
         name: SimpleName("entry_provider".to_string()),
@@ -2185,7 +2212,9 @@ fn default_plugin_entry_provider(plugin_id: &str) -> ProviderDef {
         list: Some(List::default()),
         resolve: None,
         note: None,
-    }
+    };
+    ensure_plugin_provider_filter_comb_resolve(&mut def);
+    def
 }
 
 fn parse_plugin_provider_entries(
@@ -2217,6 +2246,7 @@ fn parse_plugin_provider_entries(
         providers.push(PluginProviderDef {
             source_path: "<default entry_provider>".to_string(),
             def: default_plugin_entry_provider(plugin_id),
+            
         });
     }
 

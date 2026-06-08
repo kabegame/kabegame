@@ -1,5 +1,4 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "query_page_provider",
     "properties": {

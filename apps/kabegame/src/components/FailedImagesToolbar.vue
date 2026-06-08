@@ -44,7 +44,7 @@
 
   <!-- Android：fold 内点选「筛选」弹出 van-picker -->
   <Teleport v-if="uiStore.isCompact" to="body">
-    <van-popup v-model:show="showFilterPicker" position="bottom" round>
+    <van-popup :show="filterPicker.isOpen.value" position="bottom" round :z-index="filterPicker.zIndex.value" @update:show="filterPicker.close">
       <van-picker
         v-model="filterPickerSelected"
         :title="$t('gallery.filter')"
@@ -52,7 +52,7 @@
         :confirm-button-text="t('common.confirm')"
         :cancel-button-text="t('common.cancel')"
         @confirm="onFilterPickerConfirm"
-        @cancel="showFilterPicker = false"
+        @cancel="filterPicker.close()"
       />
     </van-popup>
   </Teleport>
@@ -64,7 +64,7 @@ import { useI18n } from "@kabegame/i18n";
 import { ArrowDown, Filter } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import type { usePluginStore } from "@/stores/plugins";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
@@ -103,8 +103,7 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const headerStore = useHeaderStore();
 const uiStore = useUiStore();
-const showFilterPicker = ref(false);
-useModalBack(showFilterPicker);
+const filterPicker = useModal();
 const filterPickerSelected = ref<string[]>([""]);
 
 const showIds = computed(() => {
@@ -179,7 +178,7 @@ function onDesktopFilterCommand(cmd: string) {
 function onFilterPickerConfirm() {
   const val = filterPickerSelected.value[0] ?? "";
   emit("filterCommand", val);
-  showFilterPicker.value = false;
+  filterPicker.close();
 }
 
 function handleAction(payload: { id: string; data: { type: string } }) {
@@ -198,7 +197,7 @@ function handleAction(payload: { id: string; data: { type: string } }) {
         filterPickerSelected.value = [
           props.filterPluginId ?? "",
         ];
-        showFilterPicker.value = true;
+        filterPicker.open();
       }
       break;
     case HeaderFeatureId.TaskDrawer:

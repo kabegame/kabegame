@@ -8,7 +8,7 @@ pub mod dsl_provider;
 pub mod runtime;
 
 pub use dsl_provider::{DslProvider, EmptyDslProvider};
-pub use runtime::{ProviderRuntime, ResolvedNode};
+pub use runtime::{ProviderRuntime, ResolvedNode, SchemaRoot};
 
 use crate::compose::{BuildError, FoldError, ProviderQuery, RenderError};
 use crate::template::eval::TemplateValue;
@@ -242,6 +242,19 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// Optional non-SQL row source for programmatic providers.
+    ///
+    /// DSL providers return `Ok(None)` and let [`ProviderRuntime::fetch`] build SQL from the
+    /// composed query. Programmatic providers can return `Some(rows)` for resources that are
+    /// not SQL-shaped, such as host-managed plugin metadata.
+    fn fetch_rows(
+        &self,
+        _composed: &ProviderQuery,
+        _ctx: &ProviderContext,
+    ) -> Result<Option<Vec<serde_json::Value>>, EngineError> {
+        Ok(None)
+    }
+
     /// EmptyInvocation 占位识别 (§12.3 + §4.4 缓存契约)。
     /// runtime 见 true 时跳过缓存写入。
     fn is_empty(&self) -> bool {
@@ -267,10 +280,14 @@ pub enum EngineError {
     InvalidPath(String),
     #[error("factory failed for `{0}.{1}`: {2}")]
     FactoryFailed(String, String, String),
-    #[error("Root provider has not been set, please call set_root first!")]
-    RootNotInitialized,
-    #[error("Root provider has already been set")]
-    RootAlreadyInitialized,
+    #[error("schema `{0}` is not registered")]
+    SchemaNotFound(String),
+    #[error("schema `{0}` is already registered")]
+    SchemaAlreadyRegistered(String),
+    #[error("path is missing `scheme://` prefix: {0}")]
+    MissingScheme(String),
+    #[error("scheme `{0}` is not a valid identifier (must match [a-z][a-z0-9_-]*)")]
+    InvalidScheme(String),
     #[error("load provider error: {0}")]
     Load(#[from] LoadError),
     #[error("register provider error: {0}")]

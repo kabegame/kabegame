@@ -14,7 +14,7 @@ description: 教你如何用 Rhai 编写 Kabegame 爬虫插件：脚本生命周
 `crawl.rhai` **没有 main 函数**，整份文件从上到下执行一次。顶层的 `set_header(...)`、`to(...)`、`for` 循环等都是脚本主体。
 
 - 脚本**不应返回值**；若需提前退出，使用 `return;`（不是 `return [];`）。
-- 下载类调用（`download_image` / `download_archive`）是**异步入队**：它们立即返回，真正的下载在后台工作线程进行。脚本无需等待即可继续。
+- `download_image` 是**异步入队**：它立即返回，真正的下载在后台工作线程进行。脚本无需等待即可继续。
 - 函数失败时会返回错误字符串，可用 `?` 操作符向外传播。
 - 任务被用户取消后，`add_progress` 与 `download_*` 的下一次调用会抛出 `"Task canceled"`，配合 `?` 可让脚本干净地中止。
 
@@ -239,6 +239,7 @@ set_header("Authorization", "Bearer " + token);
 | `url` (string) | 资源 URL |
 | `opts.name` (string, 可选) | 图库中的展示名称，省略时使用文件名 |
 | `opts.metadata` (map, 可选) | 可序列化的元数据，由插件详情模板渲染 |
+| `opts.metadata_version` (int, 可选) | `opts.metadata` 写入 `image_metadata` 时使用的版本号；必须是纯自然数，省略为 `0` |
 
 ```rust
 // 仅 URL
@@ -250,30 +251,13 @@ download_image("https://example.com/a.jpg", #{ name: "角色名 - 场景标题" 
 // 带 metadata
 download_image("https://example.com/a.jpg", #{
     name: "标题",
-    metadata: #{ source: "某站", score: 95 }
+    metadata: #{ source: "某站", score: 95 },
+    metadata_version: 1
 });
 
 // 也可下载视频
 download_image("https://example.com/video.mp4");
 ```
-
-### `download_archive(url, type)`
-
-导入压缩包（异步处理）。
-
-```rust
-// 自动检测类型（推荐）
-download_archive("https://example.com/pack.zip", ());
-
-// 指定类型
-download_archive("D:\\Downloads\\pack.rar", "rar");
-```
-
-### `get_supported_archive_types()`
-
-获取当前系统支持的压缩包类型列表，返回字符串数组（如 `["rar", "zip"]`）。
-
----
 
 ## 元数据白名单
 
@@ -306,6 +290,53 @@ download_image(url, #{
 :::note
 对 Pixiv 插件的历史数据，运行时会执行一次 `pixiv_metadata_trim_v1` 迁移自动收敛；但**新插件必须在写入时就完成裁剪**，不要依赖迁移。
 :::
+
+---
+
+## 元数据迁移
+
+插件可以在包内提供 `metadata_migrations/v{N}.rhai`，用于在插件升级后迁移历史图片元数据。`N` 是从 `1` 开始的正整数版本号，例如：
+
+```text
+metadata_migrations/
+    v1.rhai
+    v2.rhai
+```
+
+每个迁移脚本必须定义：
+
+```rust
+fn migrate(metadata) {
+    let m = parse_json(metadata);
+    m["schema"] = 1;
+    to_json(m)
+}
+```
+
+契约如下：
+
+- `migrate(metadata)` 的入参和返回值都是 JSON 字符串；脚本内可用 `parse_json(text)` 转为 Rhai 值，用 `to_json(value)` 转回字符串。
+- 迁移脚本还可使用纯文本正则辅助函数：`re_is_match(pattern, text)`、`re_replace_all(pattern, replacement, text)`、`re_find_all(pattern, text)`。`re_find_all` 返回 capture map 数组，每个 map 包含 `"0"`、`"1"` 等数字捕获键，也会包含命名捕获键。
+- 迁移版本必须连续。运行时只会执行从 `v1.rhai` 开始的连续版本；如果缺少 `v2.rhai`，即使存在 `v3.rhai` 也不会越级执行。
+- 每条 metadata 会从当前 `image_metadata.version` 的下一个版本开始依次执行，成功到哪一版就写回哪一版。某一版编译或执行失败时，该行停止在已成功版本，后续安装、更新或启动时会再次尝试。
+- 迁移后的 metadata 仍按 `(plugin_id, version, content_hash)` 复合键去重；写回时如果目标版本和内容已存在，会把引用合并到既有行。
+- 执行时机是插件安装 / 更新后，以及应用启动加载已安装插件时。迁移成功后会发出作用域为该插件的 `metadata-migrate` 图片变更事件，前端只需刷新受影响插件的 metadata 缓存。
+
+写新 metadata 时应同步设置版本：
+
+```rust
+download_image(url, #{
+    metadata: trim_body(raw),
+    metadata_version: 2
+});
+```
+
+如果你需要先创建 metadata 行再复用它，也可以使用 `create_image_metadata` 的 opts 重载：
+
+```rust
+let metadata_id = create_image_metadata(trim_body(raw), #{ version: 2 });
+download_image(url, #{ metadata_id: metadata_id });
+```
 
 ---
 
@@ -360,7 +391,7 @@ if done < num_artworks {
 | `unix_time_ms()` | 当前 Unix 毫秒时间戳，适合生成签名、nonce |
 | `xhh_nonce(t)` / `xhh_hkey(path, t, nonce)` | 小红书 X-s / X-t 签名算法（插件自用） |
 | `is_video_url(url)` / `is_media_url(url)` | `is_image_url` 的同族判断，用于区分视频或通用媒体 |
-| `create_image_metadata(map)` | 预先往 `images_metadata` 表插入一行并返回 `i64`；可作为 `download_image(url, #{ metadata_id })` 的高级用法，适合一份 metadata 被多张图片共享的场景 |
+| `create_image_metadata(map)` / `create_image_metadata(map, #{ version: N })` | 预先往 `image_metadata` 表插入一行并返回 `i64`；`version` 必须是纯自然数，省略为 `0`。可作为 `download_image(url, #{ metadata_id })` 的高级用法，适合一份 metadata 被多张图片共享的场景 |
 
 :::note
 `download_image` 能接受视频 URL——函数名仅为历史遗留。不要用 `is_image_url` 过滤视频资源。
@@ -414,7 +445,7 @@ let files = list_local_files("file:///D:/images", ["jpg", "png"], true);
 | 方法 | 说明 |
 |------|------|
 | `ctx.addProgress(percentage)` | 累加任务进度 |
-| `ctx.downloadImage(url, opts?)` | 加入下载队列，`opts` 支持 `cookie`、`headers`、`name`、`metadata` |
+| `ctx.downloadImage(url, opts?)` | 加入下载队列，`opts` 支持 `cookie`、`headers`、`name`、`metadata`、`metadata_version` |
 
 ### 日志与生命周期
 

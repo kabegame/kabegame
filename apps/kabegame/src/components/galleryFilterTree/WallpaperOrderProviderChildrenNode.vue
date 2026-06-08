@@ -16,7 +16,6 @@ import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import {
   isSameGalleryFilter,
-  joinProviderPath,
   useGalleryFilterTreeContext,
 } from "./context";
 
@@ -25,8 +24,8 @@ defineEmits<{
 }>();
 
 const { t } = useI18n();
-const { filter, prefix } = useGalleryFilterTreeContext();
-const path = computed(() => joinProviderPath(prefix.value, "wallpaper-order"));
+const { filter, pathForSegment } = useGalleryFilterTreeContext();
+const path = computed(() => pathForSegment("wallpaper-order"));
 const wallpaperChangeFilter = (payload: ImagesChangePayload) =>
   payload.reason === "change";
 </script>

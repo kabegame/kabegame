@@ -45,6 +45,7 @@ fn fold_provider_query(state: &mut ProviderQuery, registry: &ProviderRegistry, n
 
 fn fold_gallery_page_chain(registry: &ProviderRegistry) -> ProviderQuery {
     let mut state = ProviderQuery::new();
+    state.from = Some(pathql_rs::ast::SqlExpr("images".into()));
     fold_provider_query(&mut state, registry, "gallery_route");
     fold_provider_query(&mut state, registry, "gallery_all_router"); // delegate, skipped
     fold_provider_query(&mut state, registry, "gallery_paginate_router");

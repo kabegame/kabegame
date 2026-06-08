@@ -1,5 +1,4 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "plugins_provider",
     // Shared plugin scan source. It only enumerates plugin ids and plugin meta;

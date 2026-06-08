@@ -1,0 +1,27 @@
+{
+    "namespace": "kabegame",
+    "name": "fail_images_root_provider",
+    "query": {
+        "fields": [
+            { "sql": "task_failed_images.id", "as": "id" },
+            { "sql": "task_failed_images.task_id", "as": "task_id" },
+            { "sql": "task_failed_images.plugin_id", "as": "plugin_id" },
+            { "sql": "task_failed_images.url", "as": "url" },
+            { "sql": "task_failed_images.\"order\"", "as": "order" },
+            { "sql": "task_failed_images.created_at", "as": "created_at" },
+            { "sql": "task_failed_images.last_error", "as": "last_error" },
+            { "sql": "task_failed_images.last_attempted_at", "as": "last_attempted_at" },
+            { "sql": "task_failed_images.header_snapshot", "as": "header_snapshot" },
+            { "sql": "task_failed_images.metadata_id", "as": "metadata_id" },
+            { "sql": "task_failed_images.display_name", "as": "display_name" }
+        ],
+    },
+    "resolve": {
+        "all": { "provider": "fail_images_all_provider" },
+        "tasks": { "provider": "fail_images_tasks_router" },
+        "id_([1-9][0-9]*)": {
+            "provider": "fail_images_id_provider",
+            "properties": { "failed_id": "${capture[1]}" }
+        }
+    }
+}

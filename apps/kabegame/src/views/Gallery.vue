@@ -3,22 +3,28 @@
     <div class="gallery-container" v-pull-to-refresh="pullToRefreshOpts">
       <div class="gallery-content-layout">
         <div class="gallery-grid-pane">
-          <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!isCompact"
-            hide-scrollbar :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
+          <ImageGrid 
+            ref="galleryViewRef" 
+            :images="displayedImages" 
+            :enable-ctrl-wheel-adjust-columns="!isCompact"
+            hide-scrollbar 
+            :enable-ctrl-key-adjust-columns="!isCompact"
+            enable-virtual-scroll
             :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
             :on-context-command="handleGridContextCommand" @image-dblclick="handleImageDoubleOpen"
-            @preview-navigate="handlePreviewNavigate" @preview-detail-toggle="handlePreviewDetailToggle"
+            @preview-navigate="handlePreviewNavigate" @preview-page-boundary="handlePreviewPageBoundary"
+            @preview-detail-toggle="handlePreviewDetailToggle"
             @preview-close="handlePreviewClose" scroll-whole-container>
             <template #before-grid>
               <!-- 顶部工具栏 -->
               <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
-                :filter="galleryRouteStore.filter"
-                :sort="galleryRouteStore.sort" :page-size="pageSize" :search="search" v-model:selectedRange="selectedRange"
+                :filters="galleryRouteStore.filters"
+                :sort="galleryRouteStore.sort" :page-size="pageSize" :search="search"
                 :provider-context-prefix="galleryRouteStore.contextPath"
                 @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
                 @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="handleShowLocalImport"
                 @open-collect-menu="handleOpenCollectMenu"
-                @update:filter="(f) => galleryRouteStore.navigate({ filter: f, page: 1 })"
+                @update:filters="(filters) => galleryRouteStore.navigate({ filters, page: 1 }, { push: true })"
                 @update:sort="(sort) => galleryRouteStore.navigate({ sort })"
                 @update:pageSize="(ps) => galleryRouteStore.navigate({ page: 1, pageSize: ps })"
                 @update:search="(s) => galleryRouteStore.navigate({ page: 1, search: s })" />
@@ -58,19 +64,19 @@
     </div>
 
     <!-- 收集对话框（非 Android：本地渲染；Android：由 App.vue 全局承载） -->
-    <CrawlerDialog v-if="!isCompact" v-model="showCrawlerDialog" :initial-config="crawlerDialogInitialConfig" />
-    <LocalImportDialog v-if="!isCompact" v-model="showLocalImportDialog" />
+    <CrawlerDialog v-if="!isCompact" :model-value="crawlerDialog.isOpen.value" :initial-config="crawlerDialogInitialConfig" @update:model-value="crawlerDialog.close" />
+    <LocalImportDialog v-if="!isCompact" :model-value="localImportDialog.isOpen.value" @update:model-value="localImportDialog.close" />
 
 
     <!-- 永久删除确认对话框 -->
-    <RemoveImagesConfirmDialog v-model="showRemoveDialog" :message="removeDialogMessage"
-      :title="$t('gallery.confirmDelete')" hide-checkbox @confirm="confirmRemoveImages" />
+    <RemoveImagesConfirmDialog :open="removeDialog.isOpen.value" :z-index="removeDialog.zIndex.value" :message="removeDialogMessage"
+      :title="$t('gallery.confirmDelete')" hide-checkbox @close="removeDialog.close()" @confirm="confirmRemoveImages" />
 
-    <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
+    <AddToAlbumDialog :open="addToAlbumDialog.isOpen.value" :z-index="addToAlbumDialog.zIndex.value" :image-ids="addToAlbumImageIds" @close="addToAlbumDialog.close()" @added="handleAddedToAlbum" />
 
     <!-- 桌面：空状态/无下拉时用对话框选择 本地/网络 -->
-    <el-dialog v-model="showCollectMenuDialog" :title="$t('gallery.chooseCollectMethod')" width="360px" destroy-on-close
-      class="collect-menu-dialog">
+    <el-dialog :model-value="collectMenuDialog.isOpen.value" :z-index="collectMenuDialog.zIndex.value" :title="$t('gallery.chooseCollectMethod')" width="360px" destroy-on-close
+      class="collect-menu-dialog" @update:model-value="collectMenuDialog.close">
       <div class="collect-menu-options">
         <div class="collect-menu-option" @click="onDesktopCollectLocal">
           <el-icon>
@@ -88,17 +94,23 @@
     </el-dialog>
 
     <!-- Android：收集方式选择器（本地 → MediaPicker，远程 → 收集 drawer） -->
-    <CollectSourcePicker v-if="uiStore.isCompact" v-model="showCollectSourcePicker" @select="handleCollectSourceSelect" />
+    <CollectSourcePicker v-if="uiStore.isCompact" :model-value="collectSourcePicker.isOpen.value" @update:model-value="collectSourcePicker.close" @select="handleCollectSourceSelect" />
     <!-- 安卓媒体选择器（本地导入） -->
-    <MediaPicker v-if="uiStore.isCompact" v-model="showMediaPicker" @select="handleMediaPickerSelect" />
+    <MediaPicker v-if="uiStore.isCompact" :model-value="mediaPicker.isOpen.value" @update:model-value="mediaPicker.close" @select="handleMediaPickerSelect" />
+
+    <!-- 整理对话框：由 header 的 OrganizeHeaderControl 触发打开，确认后回传参数给 header 启动整理 -->
+    <OrganizeDialog :model-value="organizeStore.dialogOpen" @update:model-value="onOrganizeDialogVisible" @confirm="onOrganizeConfirm" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { invoke } from "@/api/rpc";
+import { pathqlEntry } from "@/services/pathql";
+import { withGalleryPrefix } from "@/utils/path";
 import { useRouter, useRoute } from "vue-router";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { Plus, Picture, Star, StarFilled, FolderAdd, Delete, FolderOpened, Connection } from "@element-plus/icons-vue";
 import { useCrawlerStore } from "@/stores/crawler";
 import type { ImageInfo } from "@kabegame/core/types/image";
@@ -109,6 +121,8 @@ import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
 import LocalImportDialog from "@/components/LocalImportDialog.vue";
+import OrganizeDialog from "@/components/OrganizeDialog.vue";
+import { useOrganizeStore, type OrganizeOptions } from "@/stores/organize";
 import { createImageActions } from "@/actions/imageActions";
 import EmptyState from "@/components/common/EmptyState.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
@@ -123,14 +137,13 @@ import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { storeToRefs } from "pinia";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galleryRoute";
-import { buildGalleryCountPath, serializeFilter } from "@/utils/galleryPath";
+import { buildGalleryCountPath, filterNoAlbum, hasActiveGalleryFilters, serializeFilterSet } from "@/utils/galleryPath";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID, IS_WINDOWS, IS_WEB } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
-import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import type { Component } from "vue";
@@ -149,7 +162,6 @@ export interface SelectionAction {
   icon: Component;
   command: string;
 }
-import { open } from "@tauri-apps/plugin-dialog";
 import MediaPicker from "@/components/MediaPicker.vue";
 import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
 import { useImageTypes } from "@/composables/useImageTypes";
@@ -186,7 +198,7 @@ const bigPageEnabled = computed(() => {
 });
 
 const currentPath = computed(() => galleryRouteStore.currentPath);
-const providerRootPath = computed(() => serializeFilter(galleryRouteStore.filter));
+const providerRootPath = computed(() => serializeFilterSet(galleryRouteStore.filters) || "all");
 const currentPage = computed(() => galleryRouteStore.page);
 let lastTrackedGalleryPath: string | null = null;
 
@@ -238,15 +250,19 @@ function imageAnalyticsPayload(images: ImageInfo[]): Record<string, unknown> {
 }
 
 const isWallpaperOrderEmpty = computed(
-  () => galleryRouteStore.filter.type === "wallpaper-order"
+  () => !!galleryRouteStore.filters.wallpaperOrder
 );
 
 const isWallpaperOrderBrowse = computed(
-  () => galleryRouteStore.filter.type === "wallpaper-order"
+  () => !!galleryRouteStore.filters.wallpaperOrder
+);
+
+const isNoAlbumBrowse = computed(
+  () => filterNoAlbum(galleryRouteStore.filters)
 );
 
 const isNameBrowse = computed(
-  () => galleryRouteStore.filter.type === "name"
+  () => !!galleryRouteStore.filters.name
 );
 
 watch(
@@ -277,73 +293,12 @@ watch(
   { immediate: true }
 );
 
-type GalleryBrowseEntry =
-  | { kind: "dir"; name: string }
-  | { kind: "image"; image: ImageInfo };
-
-type GalleryBrowseResult = {
-  entries: GalleryBrowseEntry[];
-  total: number | null;
-  meta?: { kind: string; data: unknown } | null;
-  note?: { title: string; content: string } | null;
-};
-
-const selectedRange = ref<[string, string] | null>(null);
-
-const extractRangeFromProviderRoot = (
-  root: string
-): [string, string] | null => {
-  const segs = (root || "").split("/").map((s) => s.trim()).filter(Boolean);
-  // 按时间/范围/YYYY-MM-DD~YYYY-MM-DD
-  // 后端固定返回中文目录名，与 UI 语言无关
-  if (segs.length >= 3 && segs[0] === "按时间" && segs[1] === "范围") {
-    const raw = segs[2] ?? "";
-    const parts = raw.split("~").map((s) => s.trim()).filter(Boolean);
-    if (parts.length === 2) return [parts[0]!, parts[1]!] as [string, string];
-  }
-  return null;
-};
-
-watch(
-  () => [galleryRouteStore.filter, providerRootPath.value] as const,
-  ([filter, root]) => {
-    if (filter.type === "date-range") {
-      const range: [string, string] = [filter.start, filter.end];
-      if (
-        !selectedRange.value ||
-        selectedRange.value[0] !== range[0] ||
-        selectedRange.value[1] !== range[1]
-      ) {
-        selectedRange.value = range;
-      }
-      return;
-    }
-
-    const range = extractRangeFromProviderRoot(root);
-    if (range) {
-      if (
-        !selectedRange.value ||
-        selectedRange.value[0] !== range[0] ||
-        selectedRange.value[1] !== range[1]
-      ) {
-        selectedRange.value = range;
-      }
-      return;
-    }
-
-    // 不在范围路径：清空日历（但不强制改变当前 provider 路径，保持默认按月）
-    if (selectedRange.value !== null) selectedRange.value = null;
-  },
-  { immediate: true }
-);
-
 const listenersCreated = ref(false);
-const showCrawlerDialog = ref(false);
-const showLocalImportDialog = ref(false);
-const showMediaPicker = ref(false);
-const showCollectSourcePicker = ref(false);
-const showCollectMenuDialog = ref(false);
-useModalBack(showCollectMenuDialog);
+const crawlerDialog = useModal();
+const localImportDialog = useModal();
+const mediaPicker = useModal();
+const collectSourcePicker = useModal();
+const collectMenuDialog = useModal();
 const crawlerDialogInitialConfig = ref<{
   pluginId?: string;
   outputDir?: string;
@@ -353,45 +308,70 @@ const crawlerDialogInitialConfig = ref<{
 // 桌面：打开收集（网络）对话框。Android 上由「开始收集」→ CollectSourcePicker → 远程 打开 drawer
 const handleShowCrawlerDialog = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "network" });
-  showCrawlerDialog.value = true;
+  crawlerDialog.open();
 };
 
 const handleShowLocalImport = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "local" });
-  showLocalImportDialog.value = true;
+  localImportDialog.open();
 };
 
 const handleOpenCollectMenu = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "collect_menu" });
-  showCollectSourcePicker.value = true;
+  collectSourcePicker.open();
+};
+
+// 整理对话框：本体渲染在 Gallery，开关与确认通过 organize store 与 header 桥接
+const organizeStore = useOrganizeStore();
+const onOrganizeDialogVisible = (visible: boolean) => {
+  if (visible) organizeStore.openDialog();
+  else organizeStore.closeDialog();
+};
+const onOrganizeConfirm = (options: OrganizeOptions) => {
+  organizeStore.closeDialog();
+  organizeStore.requestStart(options);
 };
 
 // 空状态按钮：与工具栏一致，安卓打开「本地/远程」选择 picker，桌面打开选择对话框
 const handleEmptyStateCollect = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "empty_state" });
   if (isCompact.value) {
-    showCollectSourcePicker.value = true;
+    collectSourcePicker.open();
   } else {
-    showCollectMenuDialog.value = true;
+    collectMenuDialog.open();
   }
 };
 
 const handleWallpaperEmptyViewAll = () => {
-  void galleryRouteStore.navigate({ filter: { type: "all" }, page: 1 });
+  void galleryRouteStore.navigate({ filters: {}, page: 1 });
 };
+
+function isDefaultGalleryRoute() {
+  return (
+    !hasActiveGalleryFilters(galleryRouteStore.filters) &&
+    galleryRouteStore.page === 1 &&
+    !galleryRouteStore.search.trim()
+  );
+}
+
+async function resetGalleryRouteAfterLoadError() {
+  if (isDefaultGalleryRoute()) return;
+  ElMessage.warning(t("gallery.galleryPathLoadFailedClearFilters"));
+  await resetGalleryRouteToDefault();
+}
 
 // 桌面：选择收集方式对话框 → 本地
 const onDesktopCollectLocal = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "local", source: "empty_state_dialog" });
-  showCollectMenuDialog.value = false;
-  showLocalImportDialog.value = true;
+  collectMenuDialog.close();
+  localImportDialog.open();
 };
 
 // 桌面：选择收集方式对话框 → 网络
 const onDesktopCollectNetwork = () => {
   trackGalleryEvent("gallery_import_entry", { entry: "network", source: "empty_state_dialog" });
-  showCollectMenuDialog.value = false;
-  showCrawlerDialog.value = true;
+  collectMenuDialog.close();
+  crawlerDialog.open();
 };
 
 // Android：收集方式选择器选「本地」→ MediaPicker，选「远程」→ 收集 drawer
@@ -400,9 +380,9 @@ const handleCollectSourceSelect = (source: "local" | "remote") => {
     entry: source === "local" ? "local" : "network",
     source: "compact_picker",
   });
-  showCollectSourcePicker.value = false;
+  collectSourcePicker.close();
   if (source === "local") {
-    showMediaPicker.value = true;
+    mediaPicker.open();
   } else {
     crawlerDrawerStore.open();
   }
@@ -410,16 +390,16 @@ const handleCollectSourceSelect = (source: "local" | "remote") => {
 
 // 处理媒体选择器的选择事件（先关闭抽屉，再处理）
 const handleMediaPickerSelect = async (
-  type: "image" | "folder" | "video" | "archive",
+  type: "image" | "folder" | "video",
   payload?: PickFolderResult
 ) => {
-  showMediaPicker.value = false;
+  mediaPicker.close();
   await handleAndroidMediaSelection(type, payload);
 };
 
 // 紧凑模式下的媒体选择处理函数；选文件夹时由 MediaPicker 调 pickFolder，结果通过 payload 传入
 const handleAndroidMediaSelection = async (
-  type: "image" | "folder" | "video" | "archive",
+  type: "image" | "folder" | "video",
   folderResult?: PickFolderResult
 ) => {
   if (await guardDesktopOnly("picker")) return;
@@ -432,7 +412,6 @@ const handleAndroidMediaSelection = async (
       crawlerStore.addTask("local-import", undefined, {
         paths: uris,
         recursive: false,
-        include_archive: false,
       });
       ElMessage.success(t("gallery.localImportTaskAdded"));
     } else if (type === 'video') {
@@ -443,34 +422,6 @@ const handleAndroidMediaSelection = async (
       crawlerStore.addTask("local-import", undefined, {
         paths: uris,
         recursive: false,
-        include_archive: false,
-      });
-      ElMessage.success(t("gallery.localImportTaskAdded"));
-    } else if (type === 'archive') {
-      console.log('选择压缩文件');
-      // 选择压缩文件（支持 .zip、.rar、.7z、.tar、.gz、.bz2、.xz）
-      const selected = await open({
-        directory: false,
-        multiple: false,
-        filters: [
-          {
-            name: t("gallery.compressFile"),
-            extensions: ['zip'],
-          },
-        ],
-      });
-
-      if (!selected) {
-        return;
-      }
-
-      const paths = Array.isArray(selected) ? selected : [selected];
-      if (paths.length === 0) return;
-
-      crawlerStore.addTask("local-import", undefined, {
-        paths,
-        recursive: false,
-        include_archive: true,
       });
       ElMessage.success(t("gallery.localImportTaskAdded"));
     } else if (type === 'folder' && folderResult) {
@@ -479,7 +430,6 @@ const handleAndroidMediaSelection = async (
       crawlerStore.addTask("local-import", undefined, {
         paths: [folderPath],
         recursive: true,
-        include_archive: false,
       });
       ElMessage.success(t("gallery.localImportTaskAdded"));
     }
@@ -491,7 +441,7 @@ const handleAndroidMediaSelection = async (
   }
 };
 // 永久删除确认对话框相关
-const showRemoveDialog = ref(false);
+const removeDialog = useModal();
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
 const pendingAddToAlbumImages = ref<ImageInfo[]>([]);
@@ -506,6 +456,10 @@ const currentWallpaperImageId = computed<string | null>({
   },
 });
 const totalImagesCount = ref<number>(0); // 总图片数（不受过滤器影响）
+const pendingPreviewBoundary = ref<{
+  direction: "prev" | "next";
+  targetPage: number;
+} | null>(null);
 
 // 滚动"太快"时的俏皮提示（画廊开启）
 const scrollTooFastMessages = [
@@ -532,7 +486,7 @@ const onScrollOverspeed = () => {
 // 整个页面的loading状态
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay();
 
-const showAddToAlbumDialog = ref(false);
+const addToAlbumDialog = useModal();
 const addToAlbumImageIds = ref<string[]>([]);
 // TODO:
 const isRefreshing = ref(false); // 刷新中状态，用于阻止刷新时 EmptyState 闪烁
@@ -600,7 +554,7 @@ const loadImages = async (reset?: boolean) => {
     await refreshImagesPreserveCache(currentPath.value);
     // reset 时导航到根路径的第 1 页
     if (reset) {
-      await galleryRouteStore.navigate({ filter: galleryRouteStore.filter, page: 1 });
+      await galleryRouteStore.navigate({ filters: galleryRouteStore.filters, page: 1 });
     }
   } finally {
     finishLoading();
@@ -617,36 +571,9 @@ watch(
   },
 );
 
-watch(
-  () => selectedRange.value,
-  async (r) => {
-    if (!r || r.length !== 2) {
-      return;
-    }
-    const start = (r[0] || "").trim();
-    const end = (r[1] || "").trim();
-    if (!start || !end) return;
-
-    const nextFilter = { type: "date-range" as const, start, end };
-    if (
-      galleryRouteStore.filter.type === "date-range" &&
-      galleryRouteStore.filter.start === start &&
-      galleryRouteStore.filter.end === end
-    ) {
-      return;
-    }
-
-    // 切换 provider：回到第 1 页，并重载
-    await galleryRouteStore.navigate({ filter: nextFilter, page: 1 });
-    await loadTotalImagesCount();
-    await loadImages(false);
-  }
-);
-
 const handleManualRefresh = async () => {
   // 手动刷新：刷新画廊数据。
   trackGalleryEvent("gallery_manual_refresh");
-  clearImageStateCache();
   await loadImages(true);
   await loadTotalImagesCount();
 };
@@ -681,13 +608,7 @@ watch(
       await loadTotalImagesCount();
     } catch (error) {
       console.error("加载路径失败:", newPath, error);
-      if (
-        galleryRouteStore.filter.type === "all" &&
-        galleryRouteStore.page === 1
-      ) {
-        return;
-      }
-      await resetGalleryRouteToDefault();
+      await resetGalleryRouteAfterLoadError();
     } finally {
       finishLoading();
     }
@@ -703,7 +624,6 @@ const {
   handleCopyImage,
   toggleFavorite,
   setWallpaper,
-  exportToWallpaperEngine,
   handleBatchDeleteImages,
   handleBatchHideImages,
 } = useImageOperations(
@@ -736,23 +656,15 @@ const loadTotalImagesCount = async () => {
     // 使用 provider 的无尾缀 Entry 语法：只算 composed query 的 COUNT，不触发 list_children / list_images。
     // 这里必须剥离排序和分页段；pathql count 会精确统计传入路径。
     const rootPath = buildGalleryCountPath(
-      galleryRouteStore.filter,
+      galleryRouteStore.filters,
       galleryRouteStore.search
     );
     const countPath = galleryRouteStore.hide ? `hide/${rootPath}` : rootPath;
-    const res = await invoke<{ total: number | null }>("browse_gallery_provider", {
-      path: countPath,
-    });
+    const res = await pathqlEntry(withGalleryPrefix(countPath));
     totalImagesCount.value = res?.total ?? 0;
   } catch (error) {
     console.error("获取总图片数失败:", error);
-    if (
-      galleryRouteStore.filter.type === "all" &&
-      galleryRouteStore.page === 1
-    ) {
-      return;
-    }
-    await resetGalleryRouteToDefault();
+    await resetGalleryRouteAfterLoadError();
   }
 };
 
@@ -994,20 +906,10 @@ const handleGridContextCommand = async (
         ...imageAnalyticsPayload(imagesToProcess),
       });
       return null;
-    case "exportToWE":
-    case "exportToWEAuto":
-      if (!isMultiSelect) {
-        if (imagesToProcess[0]) await exportToWallpaperEngine(imagesToProcess[0]);
-      }
-      trackGalleryEvent("image_action", {
-        command,
-        ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
-      });
-      return null;
     case "addToAlbum":
       addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
       pendingAddToAlbumImages.value = imagesToProcess.slice();
-      showAddToAlbumDialog.value = true;
+      addToAlbumDialog.open();
       return null;
     case "addToHidden": {
       if (await guardDesktopOnly("hideImage", { needSuper: true })) return null;
@@ -1069,7 +971,7 @@ const handleGridContextCommand = async (
       pendingRemoveImages.value = imagesToProcess;
       const count = imagesToProcess.length;
       removeDialogMessage.value = count > 1 ? t("gallery.removeFromGalleryMessageMulti", { count }) : t("gallery.removeFromGalleryMessageSingle");
-      showRemoveDialog.value = true;
+      removeDialog.open();
       return null;
     case "swipe-remove" as any:
       // 上划手势：隐藏（加入隐藏画册，保留磁盘文件）
@@ -1092,11 +994,11 @@ const handleGridContextCommand = async (
 const confirmRemoveImages = async () => {
   const imagesToRemove = pendingRemoveImages.value;
   if (imagesToRemove.length === 0) {
-    showRemoveDialog.value = false;
+    removeDialog.close();
     return;
   }
 
-  showRemoveDialog.value = false;
+  removeDialog.close();
   await handleBatchDeleteImages(imagesToRemove);
   trackGalleryEvent("image_action", {
     command: "remove",
@@ -1127,6 +1029,47 @@ const handlePreviewNavigate = (payload: {
   });
 };
 
+const handlePreviewPageBoundary = async (payload: {
+  direction: "prev" | "next";
+  index: number;
+  image: ImageInfo;
+}) => {
+  const totalPages = Math.max(1, Math.ceil((totalImagesCount.value || 0) / pageSize.value));
+  const targetPage = payload.direction === "next"
+    ? currentPage.value + 1
+    : currentPage.value - 1;
+  if (targetPage < 1 || targetPage > totalPages) return;
+
+  pendingPreviewBoundary.value = {
+    direction: payload.direction,
+    targetPage,
+  };
+  try {
+    await handleJumpToBigPage(targetPage);
+  } catch (error) {
+    pendingPreviewBoundary.value = null;
+    throw error;
+  }
+};
+
+watch(
+  () => [displayedImages.value, loadedKey.value] as const,
+  async ([list]) => {
+    const pending = pendingPreviewBoundary.value;
+    if (!pending) return;
+    if (currentPage.value !== pending.targetPage) return;
+    if (loadedKey.value !== currentPath.value) return;
+    const image = pending.direction === "next" ? list[0] : list[list.length - 1];
+    if (!image) return;
+
+    pendingPreviewBoundary.value = null;
+    await nextTick();
+    galleryViewRef.value?.openPreviewById?.(image.id);
+    ElMessage.info(pending.direction === "next" ? "已进入下一页" : "已进入上一页");
+  },
+  { flush: "post" }
+);
+
 const handlePreviewDetailToggle = (payload: { open: boolean; image: ImageInfo | null }) => {
   trackGalleryEvent("image_preview_detail_toggle", {
     open: payload.open,
@@ -1141,7 +1084,7 @@ const handlePreviewClose = (payload: { image: ImageInfo | null }) => {
 };
 
 // 监听 CrawlerDialog 关闭，清空初始配置
-watch(showCrawlerDialog, (isOpen) => {
+watch(crawlerDialog.isOpen, (isOpen) => {
   if (!isOpen) {
     // 延迟清空，确保对话框已经处理完初始配置
     nextTick(() => {
@@ -1242,17 +1185,17 @@ useImagesChangeRefresh({
   onRefresh: refreshGalleryPageFromEvents,
 });
 
-/** 画册成员变化：FAVORITE 就地更新星标；HIDDEN 全量刷新（HideGate 影响 gallery 可见性） */
+/** 画册成员变化：FAVORITE 就地更新星标；HIDDEN / no-album 影响 gallery 可见性，需全量刷新。 */
 useAlbumImagesChangeRefresh({
   enabled: ref(true),
   waitMs: 1000,
   filter: (p) => {
     const ids = p.albumIds ?? [];
-    return ids.includes(FAVORITE_ALBUM_ID) || ids.includes(HIDDEN_ALBUM_ID);
+    return isNoAlbumBrowse.value || ids.includes(FAVORITE_ALBUM_ID) || ids.includes(HIDDEN_ALBUM_ID);
   },
   onRefresh: async (p) => {
     const ids = p.albumIds ?? [];
-    if (ids.includes(HIDDEN_ALBUM_ID)) {
+    if (isNoAlbumBrowse.value || ids.includes(HIDDEN_ALBUM_ID)) {
       await refreshGalleryPageFromEvents();
       return;
     }
@@ -1300,7 +1243,6 @@ onMounted(async () => {
         crawlerStore.addTask("local-import", undefined, {
           paths: [path],
           recursive: true,
-          include_archive: false,
         });
         ElMessage.success(t("gallery.localImportTaskAdded"));
       } catch (error) {
@@ -1408,7 +1350,6 @@ onDeactivated(() => {
     left: 0;
     right: 0;
     bottom: 0;
-    z-index: 9998;
   }
 
   .context-menu {

@@ -1,6 +1,6 @@
 <template>
   <Transition name="fade">
-    <div v-if="isDragging" class="file-drop-overlay" @click="handleOverlayClick">
+    <div v-if="isDragging" class="file-drop-overlay" :style="{ zIndex: fileDropModal.zIndex.value }" @click="handleOverlayClick">
       <div class="drop-zone" @click.stop>
         <div class="drop-icon">
           <el-icon :size="64">
@@ -19,9 +19,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Upload } from "@element-plus/icons-vue";
+import { useModal } from "@kabegame/core/composables/useModal";
 
 const emit = defineEmits<{
   click: [];
@@ -30,13 +31,14 @@ const emit = defineEmits<{
 const isDragging = ref(false);
 const { t } = useI18n();
 const dropText = ref(t('common.dragDropText'));
+const fileDropModal = useModal();
 
-// 处理遮罩层点击事件
+watch(isDragging, (v) => v ? fileDropModal.open() : fileDropModal.close());
+
 const handleOverlayClick = () => {
   emit('click');
 };
 
-// 暴露给外部使用的方法
 const show = (text?: string) => {
   dropText.value = text ?? t('common.dragDropText');
   isDragging.value = true;
@@ -63,7 +65,6 @@ defineExpose({
       rgba(255, 107, 157, 0.15) 0%,
       rgba(167, 139, 250, 0.15) 100%);
   backdrop-filter: blur(12px);
-  z-index: 9999;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -87,7 +88,6 @@ defineExpose({
   animation: pulse 2s ease-in-out infinite;
   backdrop-filter: blur(10px);
 
-  // 使用伪元素实现渐变边框效果
   &::before {
     content: '';
     position: absolute;
@@ -127,33 +127,19 @@ defineExpose({
 }
 
 @keyframes pulse {
-
-  0%,
-  100% {
+  0%, 100% {
     transform: scale(1);
-    box-shadow:
-      0 8px 32px rgba(255, 107, 157, 0.2),
-      0 0 0 1px rgba(255, 107, 157, 0.1) inset;
+    box-shadow: 0 8px 32px rgba(255, 107, 157, 0.2), 0 0 0 1px rgba(255, 107, 157, 0.1) inset;
   }
-
   50% {
     transform: scale(1.02);
-    box-shadow:
-      0 12px 40px rgba(255, 107, 157, 0.35),
-      0 0 0 1px rgba(255, 107, 157, 0.2) inset;
+    box-shadow: 0 12px 40px rgba(255, 107, 157, 0.35), 0 0 0 1px rgba(255, 107, 157, 0.2) inset;
   }
 }
 
 @keyframes borderPulse {
-
-  0%,
-  100% {
-    opacity: 0.6;
-  }
-
-  50% {
-    opacity: 0.8;
-  }
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.8; }
 }
 
 .fade-enter-active,

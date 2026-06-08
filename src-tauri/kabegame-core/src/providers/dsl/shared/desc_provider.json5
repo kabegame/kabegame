@@ -1,5 +1,4 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "desc_provider",
     // 7a: 纯 contrib leaf — 仅翻转累积 ORDER 方向; 无 list / resolve。

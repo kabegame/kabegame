@@ -34,6 +34,7 @@
     "saveRunConfig": "儲存執行設定",
     "installPlugin": "安裝外掛",
     "uninstallPlugin": "解除安裝外掛",
-    "addPluginSource": "新增商店來源"
+    "addPluginSource": "新增商店來源",
+    "localFolderSync": "本機資料夾同步"
   }
 }

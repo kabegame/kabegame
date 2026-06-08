@@ -11,12 +11,11 @@ mod web_assets;
 mod web_import;
 
 // Local (Tauri native) modules
-#[cfg(all(not(feature = "web"), target_os = "android"))]
-mod archiver_provider;
 #[cfg(not(feature = "web"))]
 mod commands;
 
 mod commands_core;
+mod debug_ingest;
 
 #[cfg(all(not(feature = "web"), target_os = "android"))]
 mod compress_provider;
@@ -32,6 +31,8 @@ mod mcp_server;
 pub mod startup;
 #[cfg(all(not(feature = "web"), not(mobile)))]
 mod tray;
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
+mod updater;
 #[cfg(not(feature = "web"))]
 mod utils;
 #[cfg(feature = "standard")]
@@ -83,6 +84,15 @@ fn init(
 
     // 启动内置 Backend
     crate::core_init::init_globals()?;
+    crate::debug_ingest::spawn_debug_event(
+        std::env::var("KABEGAME_DEBUG_SESSION_ID").unwrap_or_else(|_| "backend".to_string()),
+        "backend_started",
+        serde_json::json!({
+            "pid": process::id(),
+            "feature_web": cfg!(feature = "web"),
+            "debug_assertions": cfg!(debug_assertions),
+        }),
+    );
     // 在初始化全局状态后、初始化壁纸控制器前，检测并缓存 Linux 桌面环境
     #[cfg(all(target_os = "linux", not(feature = "web")))]
     {
@@ -150,12 +160,6 @@ fn init(
         let proxy = content_io_provider::ChannelContentIoProvider::new(provider);
         // 设置内容IO提供者
         kabegame_core::crawler::content_io::set_content_io_provider(Box::new(proxy));
-        // 设置归档提取提供者
-        let archiver_provider =
-            archiver_provider::ArchiverContentProvider::new(app.app_handle().clone());
-        let archiver_proxy =
-            archiver_provider::ChannelArchiveExtractProvider::new(archiver_provider);
-        kabegame_core::crawler::archiver::set_archive_extract_provider(Box::new(archiver_proxy));
 
         let compress_provider =
             compress_provider::PluginVideoCompressProvider::new(app.app_handle().clone());
@@ -170,14 +174,73 @@ fn init(
         }
     }
 
+    spawn_startup_local_folder_sync();
+    spawn_realtime_folder_sync_if_enabled();
+
+    // 桌面端自动更新：初始化后端权威状态机单例 + 启动首检&24h 调度
+    #[cfg(all(not(feature = "web"), not(target_os = "android")))]
+    {
+        let _ = updater::UpdaterService::init_global(std::sync::Arc::new(
+            updater::UpdaterService::new(),
+        ));
+        updater::spawn_schedule();
+    }
+
     // 初始化插件缓存
     init_kgpg_plugin();
 
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-    tauri::async_runtime::block_on(http_server::start_http_server());
-
+    tauri::async_runtime::block_on(http_server::start_http_server()).map_err(|e| {
+        format!("Cannot start http server: {}", e)
+    })?;
     Ok(())
 }
+
+#[cfg(target_os = "macos")]
+fn spawn_startup_local_folder_sync() {
+    let fut = async {
+        let reports = kabegame_core::local_folder::sync_all_local_folder_albums().await;
+        if !reports.is_empty() {
+            let added: usize = reports.iter().map(|report| report.added).sum();
+            let deleted: usize = reports.iter().map(|report| report.deleted).sum();
+            let reimported: usize = reports.iter().map(|report| report.reimported).sum();
+            let skipped_unchanged = reports
+                .iter()
+                .filter(|report| report.skipped_unchanged)
+                .count();
+            println!(
+                "[local_folder] startup sync done: {} albums, +{added}/-{deleted}/~{reimported}, skipped_unchanged={skipped_unchanged}",
+                reports.len()
+            );
+        }
+    };
+
+    #[cfg(feature = "web")]
+    tokio::spawn(fut);
+    #[cfg(not(feature = "web"))]
+    tauri::async_runtime::spawn(fut);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn spawn_startup_local_folder_sync() {}
+
+#[cfg(all(
+    not(feature = "web"),
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+fn spawn_realtime_folder_sync_if_enabled() {
+    tauri::async_runtime::spawn(async {
+        if kabegame_core::settings::Settings::global().get_realtime_folder_sync() {
+            kabegame_core::local_folder::watch::set_enabled(true).await;
+        }
+    });
+}
+
+#[cfg(not(all(
+    not(feature = "web"),
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+)))]
+fn spawn_realtime_folder_sync_if_enabled() {}
 
 // ---- web entry point ----
 #[cfg(feature = "web")]
@@ -245,7 +308,6 @@ pub fn run() {
     #[cfg(target_os = "android")]
     {
         builder = builder.plugin(tauri_plugin_picker::init());
-        builder = builder.plugin(tauri_plugin_archiver::init());
         builder = builder.plugin(tauri_plugin_share::init());
         builder = builder.plugin(tauri_plugin_compress::init());
         builder = builder.plugin(tauri_plugin_wallpaper::init());
@@ -285,22 +347,24 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // --- Albums ---
             get_albums,
-            get_album_counts,
             add_album,
             delete_album,
             rename_album,
             move_album,
             get_album_preview,
-            get_album_image_ids,
             add_images_to_album,
             add_task_images_to_album,
             remove_images_from_album,
             update_album_images_order,
             get_favorite_album_id,
+            #[cfg(all(not(target_os = "android"), not(feature = "web")))]
+            add_local_folder_album,
+            sync_local_folder_album,
+            sync_local_folder_albums,
             // --- Images ---
             get_image_by_id,
             get_image_metadata,
-            get_image_metadata_by_metadata_id,
+            get_image_metadata_full,
             get_gallery_image,
             copy_image_to_clipboard,
             delete_image,
@@ -312,9 +376,9 @@ pub fn run() {
             get_gallery_media_type_counts,
             get_album_media_type_counts,
             get_gallery_time_filter_data,
-            browse_gallery_provider,
-            list_provider_children,
-            query_provider,
+            pathql_entry,
+            pathql_list,
+            pathql_fetch,
             toggle_image_favorite,
             // --- Tasks ---
             get_all_tasks,
@@ -416,6 +480,8 @@ pub fn run() {
             set_gallery_image_object_position,
             get_auto_deduplicate,
             set_auto_deduplicate,
+            get_realtime_folder_sync,
+            set_realtime_folder_sync,
             get_default_download_dir,
             set_default_download_dir,
             get_default_images_dir,
@@ -423,7 +489,7 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             clear_user_data,
             // --- Wallpaper ---
-            set_wallpaper,
+            // set_wallpaper,
             set_wallpaper_mode,
             set_wallpaper_by_image_id,
             get_current_wallpaper_image_id,
@@ -452,21 +518,10 @@ pub fn run() {
             get_wallpaper_video_playback_rate,
             set_wallpaper_video_playback_rate,
             get_wallpaper_rotator_status,
+            get_wallpaper_disabled,
+            set_wallpaper_disabled,
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             fix_wallpaper_zorder,
-            // --- Wallpaper Engine (Windows) ---
-            #[cfg(target_os = "windows")]
-            get_wallpaper_engine_dir,
-            #[cfg(target_os = "windows")]
-            set_wallpaper_engine_dir,
-            #[cfg(target_os = "windows")]
-            get_wallpaper_engine_myprojects_dir,
-            #[cfg(target_os = "windows")]
-            export_album_to_we_project,
-            #[cfg(target_os = "windows")]
-            export_images_to_we_project,
-            #[cfg(target_os = "windows")]
-            export_video_to_we_project,
             // --- Virtual Drive ---
             #[cfg(feature = "standard")]
             get_album_drive_enabled,
@@ -490,6 +545,16 @@ pub fn run() {
             open_album_virtual_drive_folder,
             // --- Misc ---
             exit_app,
+            #[cfg(not(target_os = "android"))]
+            check_for_updates,
+            #[cfg(not(target_os = "android"))]
+            get_updater_state,
+            #[cfg(not(target_os = "android"))]
+            download_update,
+            #[cfg(not(target_os = "android"))]
+            cancel_download,
+            #[cfg(not(target_os = "android"))]
+            apply_update_and_restart,
             #[cfg(not(target_os = "android"))]
             open_dev_webview,
             #[cfg(not(target_os = "android"))]

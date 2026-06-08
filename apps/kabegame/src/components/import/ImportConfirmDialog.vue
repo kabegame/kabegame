@@ -13,7 +13,6 @@ export type ImportItem = {
     path: string;
     name: string;
     isDirectory: boolean;
-    isArchive?: boolean;
     isKgpg?: boolean;
     isVideo?: boolean;
 };

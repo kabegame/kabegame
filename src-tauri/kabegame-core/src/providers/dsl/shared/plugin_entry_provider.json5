@@ -1,5 +1,4 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "plugin_entry_provider",
     "properties": {
@@ -42,6 +41,9 @@
         }
     },
     "resolve": {
+        "filter_comb": {
+            "provider": "gallery_filter_comb"
+        },
         ".*": {
             "delegate": {
                 "provider": "plugins.${properties.plugin_id}.entry_provider"

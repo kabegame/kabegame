@@ -30,9 +30,7 @@ import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import PluginProviderChildrenNode from "./PluginProviderChildrenNode.vue";
 import {
   countProviderPath,
-  joinProviderPath,
   listProviderDirs,
-  pluginPath,
   useGalleryFilterTreeContext,
   type RefreshTarget,
 } from "./context";
@@ -45,14 +43,14 @@ type UnlistenFn = () => void;
 
 const { t } = useI18n();
 const pluginStore = usePluginStore();
-const { filter, prefix, registerRefreshTarget } = useGalleryFilterTreeContext();
+const { filter, prefix, pathForSegment, registerRefreshTarget } = useGalleryFilterTreeContext();
 const pluginEntries = ref<Array<{ pluginId: string; count: number }>>([]);
 const loaded = ref(false);
 let listToken = 0;
 let unregisterRefresh: (() => void) | null = null;
 const unlistenFns: UnlistenFn[] = [];
 
-const rootCountPath = computed(() => joinProviderPath(prefix.value, "all"));
+const rootCountPath = computed(() => pathForSegment("all"));
 const throttledRefreshList = useTrailingThrottleFn(async () => {
   if (loaded.value) await refreshList();
 }, 3000);
@@ -66,18 +64,17 @@ async function refreshList() {
   const token = ++listToken;
   const expectedPrefix = prefix.value;
   try {
-    const entries = await listProviderDirs(`${joinProviderPath(prefix.value, "plugin")}/`);
+    const entries = await listProviderDirs(`${pathForSegment("plugin")}/`);
     const groups = await Promise.all(
       entries.map(async (entry) => ({
         pluginId: entry.name,
         count:
           typeof entry.total === "number"
             ? entry.total
-            : await countProviderPath(pluginPath(expectedPrefix, entry.name)),
+            : await countProviderPath(pathForSegment(`plugin/${encodeURIComponent(entry.name)}`)),
       }))
     );
     if (token !== listToken || expectedPrefix !== prefix.value) return;
-    console.log('groups', groups);
     pluginEntries.value = groups
       .filter((group) => group.pluginId && group.count > 0)
       .map((group) => ({ pluginId: group.pluginId, count: group.count }));

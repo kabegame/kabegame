@@ -1,8 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use pathql_rs::{Json5Loader, Loader, ProviderRegistry, Source};
+use pathql_rs::{Json5Loader, Loader, ProviderDef, ProviderRegistry, Source};
 
-pub const ROOT_PROVIDER: &str = "root_provider.json";
 pub const PROVIDER_FILE_EXTENSIONS: &[&str] = &["json", "json5"];
 
 // Keep this list aligned with kabegame-core's embedded DSL loader. These files
@@ -32,44 +31,42 @@ pub fn relative_provider_path(path: &Path) -> String {
 
 pub fn provider_file_paths() -> Vec<PathBuf> {
     let root = providers_dir();
-    let root_provider = root.join(ROOT_PROVIDER);
-    if !root_provider.is_file() {
-        panic!(
-            "root DSL provider `{}` not found under {}",
-            ROOT_PROVIDER,
-            root.display()
-        );
-    }
-
     let mut paths = Vec::new();
     collect_provider_files(&root, &root, &mut paths);
-    paths.retain(|path| {
-        let rel = relative_provider_path(path);
-        !rel.eq_ignore_ascii_case(ROOT_PROVIDER)
-    });
     paths.sort_by_key(|path| relative_provider_path(path));
-
-    let mut ordered = Vec::with_capacity(paths.len() + 1);
-    ordered.push(root_provider);
-    ordered.extend(paths);
-    ordered
+    paths
 }
 
 pub fn build_real_registry() -> ProviderRegistry {
-    let loader = Json5Loader;
     let mut registry = ProviderRegistry::new();
 
     for path in provider_file_paths() {
         let rel = relative_provider_path(&path);
-        let def = loader
-            .load(Source::Path(&path))
-            .unwrap_or_else(|e| panic!("load {}: {}", rel, e));
+        let def = load_provider_for_phase1(&path).unwrap_or_else(|e| panic!("load {}: {}", rel, e));
         registry
             .register(def)
             .unwrap_or_else(|e| panic!("register {}: {}", rel, e));
     }
 
     registry
+}
+
+pub fn load_provider_for_phase1(path: &Path) -> Result<ProviderDef, pathql_rs::LoadError> {
+    let raw = std::fs::read_to_string(path).map_err(|source| pathql_rs::LoadError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Json5Loader.load(Source::Str(&strip_legacy_from_fields(&raw)))
+}
+
+pub fn strip_legacy_from_fields(raw: &str) -> String {
+    raw.lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !(trimmed.starts_with("\"from\"") && trimmed.contains(':'))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn collect_provider_files(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {

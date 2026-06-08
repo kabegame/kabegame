@@ -1,0 +1,21 @@
+{
+  "new": "NEW",
+  "restartUpdate": "重啟更新",
+  "dialogTitle": "發現新版本",
+  "currentVersion": "目前版本：{version}",
+  "viewOnGithub": "在 GitHub 檢視",
+  "download": "下載",
+  "openReleasePage": "開啟發佈頁",
+  "noAssetHint": "目前平台暫無安裝包，請前往發佈頁手動下載",
+  "downloadComingSoon": "下載功能即將上線",
+  "restartConfirmTitle": "重啟更新",
+  "restartConfirmMessage": "新版本已就緒，是否立即重啟以完成更新？",
+  "downloadingTitle": "正在下載更新",
+  "restartReadyTitle": "新版本已就緒",
+  "restartReadyMessage": "新版本已下載完成，是否立即重啟以完成安裝？",
+  "restartNow": "立即重啟",
+  "restartLater": "稍後",
+  "checkUpdate": "檢查更新",
+  "alreadyLatest": "已是最新版本",
+  "foundUpdate": "發現新版本"
+}

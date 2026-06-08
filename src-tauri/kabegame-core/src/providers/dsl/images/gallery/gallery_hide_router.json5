@@ -1,0 +1,15 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_hide_router",
+    "query": {
+        "where": "hid_ai.image_id IS NULL"
+    },
+    "resolve": {
+        ".*": {
+            "delegate": { "provider": "gallery_route" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

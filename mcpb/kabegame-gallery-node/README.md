@@ -8,12 +8,12 @@
 
 读类工具（包装 `resources/read`）：
 
-- `read_gallery_provider(path, without?)`：`provider://<path>`，支持 `?without=children|images`
-- `read_image(image_id)`：`image://{id}` 完整 ImageInfo
-- `read_image_metadata(image_id)`：`image://{id}/metadata` 爬取期 metadata
-- `read_album(album_id?)`：`album://` 列表 / `album://{id}` 单条
-- `read_task(task_id?)`：`task://` 列表 / `task://{id}` 单条
-- `read_surf(host?)`：`surf://` 列表 / `surf://{host}` 单条
+- `read_gallery_provider(path)`：`images://...`；未带 scheme 的路径会映射到 `images://gallery/...`
+- `read_image(image_id)`：`images://id_{id}` 完整 ImageInfo
+- `read_image_metadata(image_id)`：`images://id_{id}/metadata` 爬取期 metadata
+- `read_album(album_id?)`：`albums://all` 列表 / `albums://id_{id}` 单条
+- `read_task(task_id?)`：`tasks://all` 列表 / `tasks://id_{id}` 单条
+- `read_surf(surf_record_id?)`：`surf_records://all` 列表 / `surf_records://id_{id}` 单条
 - `read_plugin(plugin_id?, resource?, key?)`：`plugin://` 列表（trimmed）；`resource` 取
   `info`(默认) | `icon` | `description_template` | `doc` | `doc_resource`（需 `key`）
 
@@ -63,12 +63,12 @@ mcpb pack .
 ## 工具输入约束（防御性）
 
 - `read_gallery_provider.path`
-  - 必填，非空字符串；禁止 `..`；禁止以 `/` 开头；长度 <= 512
-  - `without` 可选，仅允许 `children` 或 `images`（互斥）
+  - 必填，非空字符串；禁止 `..`；禁止以 `/` 开头；禁止 `?` / `#`；长度 <= 512
+  - 可传完整 `images://...`，也可传相对路径（如 `all/desc/x100x/1`，自动映射到 `images://gallery/all/desc/x100x/1`）
 - `read_image` / `read_image_metadata`
   - `image_id` 必填，非空字符串，长度 <= 256
 - `read_album` / `read_task` / `read_surf`
-  - 对应 id（`album_id` / `task_id` / `host`）可选；省略即列出全部
+  - 对应 id（`album_id` / `task_id` / `surf_record_id`）可选；省略即列出全部
 - `read_plugin`
   - `plugin_id` 可选；`resource` 默认 `info`，可选
     `info` | `icon` | `description_template` | `doc` | `doc_resource`

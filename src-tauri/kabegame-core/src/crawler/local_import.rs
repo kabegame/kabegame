@@ -1,35 +1,30 @@
 //! Built-in local import routine. Runs when plugin_id == "local-import".
-//! Streams over URLs (file:// on desktop, content:// on Android): each image is enqueued
-//! to the download queue immediately; archives are enqueued as decompression jobs.
 //!
-//! On desktop, paths are converted to file:// URLs and processed via fs::metadata/read_dir.
-//! On Android, content:// URIs are processed via ContentIoProvider (listContentChildren,
-//! isDirectory, getMimeType).
+//! 遍历由通用 `local_folder::scan_service` 负责（可配置递归、跨 file:// / content://）；
+//! 本模块只实现「发现媒体文件后如何导入」的钩子：桌面走下载后处理管线，Android 走 content 入库。
+//! 任务进度 / 取消语义保留，但不再占用 DownloadQueue 槽位。
 
-use crate::crawler::archiver::ArchiveProcessor;
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
 use crate::crawler::downloader::DownloadQueue;
+#[cfg(not(target_os = "android"))]
+use crate::crawler::downloader::{build_safe_filename, unique_path};
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
-use crate::image_type;
+use crate::local_folder::scan_service::{
+    scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile,
+};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use url::Url;
 
-const PLUGIN_ID: &'static str = "local-import";
-
-/// 将当前路径/文件对应的进度份额累加并上报。每个子文件夹和子文件在递归中均分父级份额，完成一项即增加相应百分比。
-fn add_progress_and_emit(ctx: &mut LocalImportContext<'_>, share: f64) {
-    *ctx.progress = (*ctx.progress + share).min(99.9);
-    GlobalEmitter::global().emit_task_progress(ctx.task_id, *ctx.progress);
-}
+const PLUGIN_ID: &str = "local-import";
 
 /// On macOS, map permission-denied (EPERM) to a user-friendly message with drag-drop hint and System Settings instructions.
 fn map_io_error_for_user(e: io::Error, context: &str) -> String {
@@ -51,369 +46,277 @@ fn map_io_error_for_user(e: io::Error, context: &str) -> String {
     format!("{}: {}", context, e)
 }
 
-/// 流式遍历并处理 URL：content:// 用 ContentIoProvider，file:// 转 Path 用 fs。
-/// `share` 为本路径在本次任务中应占的总进度百分比（0..100），完成本路径后累加该份额。
-async fn process_url(
-    url: &Url,
-    ctx: &mut LocalImportContext<'_>,
-    share: f64,
-    image_count: &mut usize,
-    archive_count: &mut usize,
-) -> Result<(), String> {
-    if ctx.download_queue.is_task_canceled(ctx.task_id).await {
-        return Err("Task canceled".to_string());
-    }
-
-    #[cfg(target_os = "android")]
-    if url.scheme() == "content" {
-        return process_content_url(url, ctx, share, image_count, archive_count).await;
-    }
-
-    // file:// 或桌面：转 Path 处理
-    let path = url
-        .to_file_path()
-        .map_err(|_| format!("Invalid file URL: {}", url))?;
-    process_path(path.as_path(), ctx, share, image_count, archive_count).await
-}
-
-#[cfg(target_os = "android")]
-async fn process_content_url(
-    url: &Url,
-    ctx: &mut LocalImportContext<'_>,
-    share: f64,
-    image_count: &mut usize,
-    archive_count: &mut usize,
-) -> Result<(), String> {
-    let uri = url.as_str();
-    let io = get_content_io_provider();
-
-    let is_dir = io.is_directory(uri).await?;
-    if is_dir {
-        let children = io.list_children(uri).await?;
-        let n = children.len();
-        if n == 0 {
-            add_progress_and_emit(ctx, share);
-            return Ok(());
-        }
-        let per_child = share / n as f64;
-        for child in children {
-            if ctx.download_queue.is_task_canceled(ctx.task_id).await {
-                return Err("Task canceled".to_string());
-            }
-            let child_url =
-                Url::parse(&child.uri).map_err(|e| format!("Invalid child URI: {}", e))?;
-            if child.is_directory {
-                if ctx.recursive {
-                    Box::pin(process_url(
-                        &child_url,
-                        ctx,
-                        per_child,
-                        image_count,
-                        archive_count,
-                    ))
-                    .await?;
-                } else {
-                    add_progress_and_emit(ctx, per_child);
-                }
-            } else {
-                process_file_url(&child_url, ctx, image_count, archive_count).await?;
-                add_progress_and_emit(ctx, per_child);
-            }
-        }
-    } else {
-        process_file_url(url, ctx, image_count, archive_count).await?;
-        add_progress_and_emit(ctx, share);
-    }
-    Ok(())
-}
-
-/// 桌面：流式遍历 Path，遇到图片入队下载，遇到压缩包入队解压。
-/// `share` 为本路径在本次任务中应占的总进度百分比，完成本路径（或本目录下所有子项）后累加该份额。
-async fn process_path(
-    path: &Path,
-    ctx: &mut LocalImportContext<'_>,
-    share: f64,
-    image_count: &mut usize,
-    archive_count: &mut usize,
-) -> Result<(), String> {
-    if ctx.download_queue.is_task_canceled(ctx.task_id).await {
-        return Err("Task canceled".to_string());
-    }
-    let meta = fs::metadata(path)
-        .await
-        .map_err(|e| map_io_error_for_user(e, "Failed to read path metadata"))?;
-    if meta.is_dir() {
-        let mut entries = fs::read_dir(path)
-            .await
-            .map_err(|e| map_io_error_for_user(e, "Failed to read directory"))?;
-        let mut children: Vec<(PathBuf, bool)> = Vec::new();
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| map_io_error_for_user(e, "Failed to read directory entry"))?
-        {
-            let p = entry.path();
-            let entry_meta = entry
-                .metadata()
-                .await
-                .map_err(|e| map_io_error_for_user(e, "Failed to read entry metadata"))?;
-            children.push((p, entry_meta.is_dir()));
-        }
-        let n = children.len();
-        if n == 0 {
-            add_progress_and_emit(ctx, share);
-            return Ok(());
-        }
-        let per_child = share / n as f64;
-        for (p, is_dir) in children {
-            if ctx.download_queue.is_task_canceled(ctx.task_id).await {
-                return Err("Task canceled".to_string());
-            }
-            if is_dir {
-                if ctx.recursive {
-                    Box::pin(process_path(&p, ctx, per_child, image_count, archive_count)).await?;
-                } else {
-                    add_progress_and_emit(ctx, per_child);
-                }
-            } else {
-                let url = Url::from_file_path(&p)
-                    .map_err(|_| format!("Invalid path: {}", p.display()))?;
-                process_file_url(&url, ctx, image_count, archive_count).await?;
-                add_progress_and_emit(ctx, per_child);
-            }
-        }
-        return Ok(());
-    }
-    if meta.is_file() {
-        let url =
-            Url::from_file_path(path).map_err(|_| format!("Invalid path: {}", path.display()))?;
-        process_file_url(&url, ctx, image_count, archive_count).await?;
-        add_progress_and_emit(ctx, share);
-    }
-    Ok(())
-}
-
-/// 处理单个文件 URL：图片入队下载，压缩包入队解压。
-async fn process_file_url(
-    url: &Url,
-    ctx: &mut LocalImportContext<'_>,
-    image_count: &mut usize,
-    archive_count: &mut usize,
-) -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    if url.scheme() == "content" {
-        return process_content_file_url(url, ctx, image_count, archive_count).await;
-    }
-
-    // file://：用 path 判断类型
-    let path = url
-        .to_file_path()
-        .map_err(|_| format!("Invalid file URL: {}", url))?;
-    if image_type::is_media_by_path(&path) {
-        enqueue_image(url.clone(), ctx, image_count).await?;
-        return Ok(());
-    }
-    if crate::archive::is_archive_by_path(&path) && ctx.include_archive {
-        if crate::archive::get_processor_by_path(&path).is_none() {
-            return Err(format!("不支持的压缩格式: {}", path.display()));
-        }
-        enqueue_archive(url.clone(), ctx, archive_count, None).await?;
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "android")]
-async fn process_content_file_url(
-    url: &Url,
-    ctx: &mut LocalImportContext<'_>,
-    image_count: &mut usize,
-    archive_count: &mut usize,
-) -> Result<(), String> {
-    let uri = url.as_str();
-    let io = get_content_io_provider();
-
-    let mime = io.get_mime_type(uri).await?;
-    if image_type::is_image_mime(&mime) || image_type::is_video_mime(&mime) {
-        enqueue_image(url.clone(), ctx, image_count).await?;
-        return Ok(());
-    }
-    if image_type::is_archive_mime(&mime) && ctx.include_archive {
-        enqueue_archive(url.clone(), ctx, archive_count, mime.as_deref()).await?;
-    }
-    Ok(())
-}
-
-async fn enqueue_image(
-    url: Url,
-    ctx: &mut LocalImportContext<'_>,
-    image_count: &mut usize,
-) -> Result<(), String> {
-    let download_start_time = ctx.next_download_start_time();
-    match ctx
-        .download_queue
-        .download_image(
-            url.clone(),
-            ctx.images_dir.clone(),
-            PLUGIN_ID.to_string(),
-            ctx.task_id.to_string(),
-            download_start_time,
-            ctx.output_album_id.clone(),
-            HashMap::new(),
-            None,
-            None,
-        )
-        .await
-    {
-        Ok(()) => {
-            *image_count += 1;
-        }
-        Err(e) => {
-            GlobalEmitter::global().emit_task_log(
-                ctx.task_id,
-                "warn",
-                &task_log_i18n(
-                    "taskLogEnqueueFailed",
-                    json!({ "url": url.as_str(), "detail": e.to_string() }),
-                ),
-            );
-        }
-    }
-    Ok(())
-}
-
-async fn enqueue_archive(
-    url: Url,
-    ctx: &mut LocalImportContext<'_>,
-    archive_count: &mut usize,
-    mime: Option<&str>,
-) -> Result<(), String> {
-    // 获取对应的 processor，解压到固定目录（Android 内部私有目录 / 桌面临时目录）
-    let processor = crate::crawler::archiver::get_processor_by_url(&url, mime);
-    let extract_base = crate::app_paths::AppPaths::global()
-        .temp_dir
-        .join("archive_extract");
-    if let Err(e) = tokio::fs::create_dir_all(&extract_base).await {
-        return Err(format!("Failed to create archive extract dir: {}", e));
-    }
-
-    if let Some(proc) = processor {
-        match proc.process(&url, &extract_base).await {
-            Ok(extract_dir) => {
-                // 解析压缩包名称
-                let archive_name = crate::crawler::archiver::resolve_archive_name(&url).await;
-                #[cfg(target_os = "android")]
-                {
-                    let source_dir = extract_dir.to_string_lossy().to_string();
-                    let copy_result = get_content_io_provider()
-                        .copy_extracted_images_to_pictures(&source_dir)
-                        .await;
-                    let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-
-                    let entries = copy_result.map_err(|e| {
-                        format!("Failed to copy extracted images to Pictures: {}", e)
-                    })?;
-                    for (idx, entry) in entries.into_iter().enumerate() {
-                        if ctx.download_queue.is_task_canceled(ctx.task_id).await {
-                            return Err("Task canceled".to_string());
-                        }
-
-                        let img_url = Url::parse(&entry.content_uri)
-                            .map_err(|e| format!("Invalid content URI from picker: {}", e))?;
-                        match ctx
-                            .download_queue
-                            .download_image(
-                                img_url.clone(),
-                                ctx.images_dir.clone(),
-                                PLUGIN_ID.to_string(),
-                                ctx.task_id.to_string(),
-                                ctx.next_download_start_time(),
-                                ctx.output_album_id.clone(),
-                                HashMap::new(),
-                                None,
-                                None,
-                            )
-                            .await
-                        {
-                            Ok(()) => {}
-                            Err(e) => {
-                                GlobalEmitter::global().emit_task_log(
-                                    ctx.task_id,
-                                    "warn",
-                                    &task_log_i18n(
-                                        "taskLogEnqueueFailed",
-                                        json!({
-                                            "url": img_url.as_str(),
-                                            "detail": e.to_string(),
-                                        }),
-                                    ),
-                                );
-                            }
-                        }
-                    }
-                }
-
-                #[cfg(not(target_os = "android"))]
-                {
-                    // 扁平复制图片到 images_dir 子文件夹并逐个入队
-                    use crate::crawler::downloader::copy_extracted_images_and_enqueue;
-                    let archive_download_start_time = ctx.next_download_start_time();
-                    if let Err(e) = copy_extracted_images_and_enqueue(
-                        &extract_dir,
-                        &ctx.images_dir,
-                        &archive_name,
-                        ctx.download_queue,
-                        ctx.task_id,
-                        PLUGIN_ID,
-                        archive_download_start_time,
-                        &ctx.output_album_id,
-                        &HashMap::new(),
-                    )
-                    .await
-                    {
-                        return Err(format!(
-                            "Failed to copy and enqueue extracted images: {}",
-                            e
-                        ));
-                    }
-                }
-                *archive_count += 1;
-            }
-            Err(e) => {
-                return Err(format!("Decompression failed: {}", e));
-            }
-        }
-    } else {
-        return Err(format!("No processor found for archive: {}", url));
-    }
-
-    Ok(())
-}
-
-struct LocalImportContext<'a> {
+/// 本地导入钩子：`DirCtx = ()`（输出画册固定在钩子里）。
+struct LocalImportHook<'a> {
     task_id: &'a str,
-    progress: &'a mut f64,
-    images_dir: PathBuf,
-    last_download_start_time: &'a mut u64,
-    output_album_id: Option<String>,
     download_queue: &'a DownloadQueue,
-    recursive: bool,
-    include_archive: bool,
+    output_album_id: Option<String>,
+    #[cfg(not(target_os = "android"))]
+    images_dir: PathBuf,
+    #[cfg(not(target_os = "android"))]
+    copy_to_dir: bool,
+    #[cfg(not(target_os = "android"))]
+    copy_dest: Option<PathBuf>,
+    progress: f64,
+    image_count: usize,
+    last_download_start_time: u64,
 }
 
-impl LocalImportContext<'_> {
+impl LocalImportHook<'_> {
     fn next_download_start_time(&mut self) -> u64 {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let next = if now <= *self.last_download_start_time {
+        let next = if now <= self.last_download_start_time {
             self.last_download_start_time.saturating_add(1)
         } else {
             now
         };
-        *self.last_download_start_time = next;
+        self.last_download_start_time = next;
         next
     }
+
+    #[cfg(not(target_os = "android"))]
+    async fn import_file_url(
+        &mut self,
+        file: &ScannedFile,
+        download_start_time: u64,
+    ) -> Result<(), String> {
+        let src = file
+            .path
+            .clone()
+            .ok_or_else(|| format!("Invalid file URL: {}", file.url))?;
+
+        let final_path = if self.copy_to_dir {
+            let dest_dir = self.copy_dest.as_ref().unwrap_or(&self.images_dir);
+            fs::create_dir_all(dest_dir)
+                .await
+                .map_err(|e| format!("Failed to create output directory: {}", e))?;
+            let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("image");
+            let hash_source = src.to_string_lossy();
+            let safe = build_safe_filename(name, "bin", hash_source.as_ref());
+            let dest = unique_path(dest_dir, &safe);
+            fs::copy(&src, &dest)
+                .await
+                .map_err(|e| format!("Failed to copy local file: {}", e))?;
+            dest
+        } else {
+            src.clone()
+        };
+        let headers: HashMap<String, String> = HashMap::new();
+        let imported = crate::crawler::downloader::postprocess_downloaded_image(
+            &final_path,
+            file.url.as_str(),
+            PLUGIN_ID,
+            Some(self.task_id),
+            None,
+            None,
+            download_start_time,
+            self.output_album_id.as_deref(),
+            &headers,
+            false,
+            None,
+            None,
+        )
+        .await?;
+        if imported {
+            self.image_count += 1;
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "android")]
+    async fn import_file_url(
+        &mut self,
+        file: &ScannedFile,
+        download_start_time: u64,
+    ) -> Result<(), String> {
+        let src = file
+            .path
+            .clone()
+            .ok_or_else(|| format!("Invalid file URL: {}", file.url))?;
+        let inferred = crate::image_type::mime_type_from_path(&src);
+        let mime = inferred.unwrap_or_else(|| {
+            if crate::image_type::is_video_by_path(&src) {
+                crate::image_type::default_video_mime().to_string()
+            } else {
+                crate::image_type::default_image_mime().to_string()
+            }
+        });
+        let display_name = src
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("image")
+            .to_string();
+        let copied_uri = get_content_io_provider()
+            .copy_image_to_pictures(src.to_string_lossy().as_ref(), &mime, &display_name)
+            .await?;
+        let copied_url = Url::parse(&copied_uri).map_err(|e| e.to_string())?;
+        self.import_content_url(&copied_url, download_start_time)
+            .await
+    }
+
+    #[cfg(target_os = "android")]
+    async fn import_content_url(
+        &mut self,
+        url: &Url,
+        download_start_time: u64,
+    ) -> Result<(), String> {
+        let uri = url.as_str();
+        let io = get_content_io_provider();
+        let _ = io.take_persistable_permission(uri).await;
+        let mime = io.get_mime_type(uri).await?;
+
+        let is_image = crate::image_type::is_image_mime(&mime);
+        let is_video = crate::image_type::is_video_mime(&mime);
+        if !is_image && !is_video {
+            return Ok(());
+        }
+
+        let bytes = io.read_file_bytes(uri).await?;
+        let hash = crate::crawler::downloader::compute_bytes_hash(&bytes);
+        let (video_thumb_path, video_thumb_str) = if is_video {
+            prepare_android_video_thumb(&bytes, &mime).await
+        } else {
+            (None, String::new())
+        };
+        let headers: HashMap<String, String> = HashMap::new();
+
+        crate::crawler::downloader::process_downloaded_content_image_to_storage(
+            uri,
+            &hash,
+            video_thumb_path.as_ref(),
+            video_thumb_str.as_str(),
+            mime,
+            PLUGIN_ID,
+            self.task_id,
+            download_start_time,
+            self.output_album_id.as_deref(),
+            None,
+            &headers,
+            None,
+            None,
+        )
+        .await?;
+
+        self.image_count += 1;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl FolderScanHook for LocalImportHook<'_> {
+    type DirCtx = ();
+
+    async fn on_enter_dir(
+        &mut self,
+        _enter: &ScannedDir,
+        _ctx: &ScanCtx<()>,
+    ) -> Result<Option<()>, ScanError> {
+        if self.download_queue.is_task_canceled(self.task_id).await {
+            return Err(ScanError::Fatal("Task canceled".to_string()));
+        }
+        Ok(Some(()))
+    }
+
+    async fn on_file(&mut self, file: &ScannedFile, _ctx: &ScanCtx<()>) -> Result<(), ScanError> {
+        if self.download_queue.is_task_canceled(self.task_id).await {
+            return Err(ScanError::Fatal("Task canceled".to_string()));
+        }
+        let download_start_time = self.next_download_start_time();
+        let result = match file.url.scheme() {
+            "file" => self.import_file_url(file, download_start_time).await,
+            #[cfg(target_os = "android")]
+            "content" => {
+                self.import_content_url(&file.url, download_start_time)
+                    .await
+            }
+            _ => Ok(()),
+        };
+        if let Err(e) = result {
+            GlobalEmitter::global().emit_task_log(
+                self.task_id,
+                "warn",
+                &task_log_i18n(
+                    "taskLogEnqueueFailed",
+                    json!({ "url": file.url.as_str(), "detail": e }),
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    fn on_progress(&mut self, delta: f64) {
+        self.progress = (self.progress + delta).min(99.9);
+        GlobalEmitter::global().emit_task_progress(self.task_id, self.progress);
+    }
+}
+
+#[cfg(target_os = "android")]
+async fn prepare_android_video_thumb(
+    bytes: &[u8],
+    mime: &Option<String>,
+) -> (Option<PathBuf>, String) {
+    let ext = mime
+        .as_deref()
+        .and_then(crate::image_type::ext_from_mime)
+        .unwrap_or_else(|| "mp4".to_string());
+    let temp_dir = crate::app_paths::AppPaths::global().temp_dir.clone();
+    let _ = fs::create_dir_all(&temp_dir).await;
+    let temp_path = temp_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext));
+
+    if let Err(e) = fs::write(&temp_path, bytes).await {
+        eprintln!(
+            "[Local Import] Android content video temp write failed: {}",
+            e
+        );
+        return (None, String::new());
+    }
+
+    let result =
+        match crate::crawler::downloader::video_compress::compress_video_for_preview(&temp_path)
+            .await
+        {
+            Ok(r) => {
+                let path = r.preview_path;
+                (Some(path.clone()), path.to_string_lossy().to_string())
+            }
+            Err(e) => {
+                eprintln!("[Local Import] Android content video GIF failed: {}", e);
+                (None, String::new())
+            }
+        };
+    let _ = fs::remove_file(&temp_path).await;
+    result
+}
+
+/// 把输入字符串路径解析为 `Url`（file:// 或 content://），并校验存在性、规范化。
+async fn parse_input_url(path_str: &str) -> Result<Url, String> {
+    if path_str.starts_with("content://") {
+        return Url::parse(path_str).map_err(|e| format!("Invalid content URI: {}", e));
+    }
+
+    let path = if path_str.starts_with("file://") {
+        Url::parse(path_str)
+            .map_err(|e| format!("Invalid file URL: {}", e))?
+            .to_file_path()
+            .map_err(|_| format!("Invalid file URL: {}", path_str))?
+    } else {
+        PathBuf::from(path_str)
+    };
+
+    if !fs::try_exists(&path)
+        .await
+        .map_err(|e| map_io_error_for_user(e, "Failed to check path"))?
+    {
+        return Err(format!("路径不存在: {}", path_str));
+    }
+
+    let path = fs::canonicalize(&path)
+        .await
+        .map_err(|e| map_io_error_for_user(e, &format!("无法解析路径 {}", path_str)))?;
+    Url::from_file_path(&path).map_err(|_| format!("Invalid path: {}", path_str))
 }
 
 pub async fn run_builtin_local_import(
@@ -434,15 +337,28 @@ pub async fn run_builtin_local_import(
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
-    let include_archive = cfg
-        .get("include_archive")
+    #[cfg(not(target_os = "android"))]
+    let copy_to_dir = cfg
+        .get("copy_to_dir")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+
+    #[cfg(not(target_os = "android"))]
+    let copy_dest = if copy_to_dir {
+        cfg.get("output_dir")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+    } else {
+        None
+    };
 
     if paths.is_empty() {
         return Err("未指定任何路径".to_string());
     }
 
+    #[cfg(not(target_os = "android"))]
     let images_dir = {
         let storage = Storage::global();
         match Settings::global().get_default_download_dir() {
@@ -456,20 +372,11 @@ pub async fn run_builtin_local_import(
         .unwrap_or_default()
         .as_millis() as u64;
 
-    let mut progress = 0.0_f64;
-    let share_per_path = 100.0 / paths.len() as f64;
-
-    let mut last_download_start_time = download_start_time;
-    let mut ctx = LocalImportContext {
-        task_id,
-        progress: &mut progress,
-        images_dir,
-        last_download_start_time: &mut last_download_start_time,
-        output_album_id: output_album_id.clone(),
-        download_queue,
-        recursive,
-        include_archive,
-    };
+    // 把输入路径解析为 URL（同时校验存在性）。
+    let mut roots: Vec<Url> = Vec::with_capacity(paths.len());
+    for path_str in &paths {
+        roots.push(parse_input_url(path_str).await?);
+    }
 
     GlobalEmitter::global().emit_task_log(
         task_id,
@@ -481,40 +388,29 @@ pub async fn run_builtin_local_import(
     );
     GlobalEmitter::global().emit_task_progress(task_id, 0.0);
 
-    let mut image_count = 0usize;
-    let mut archive_count = 0usize;
+    let mut hook = LocalImportHook {
+        task_id,
+        download_queue,
+        output_album_id,
+        #[cfg(not(target_os = "android"))]
+        images_dir,
+        #[cfg(not(target_os = "android"))]
+        copy_to_dir,
+        #[cfg(not(target_os = "android"))]
+        copy_dest,
+        progress: 0.0,
+        image_count: 0,
+        last_download_start_time: download_start_time,
+    };
+    let options = ScanOptions {
+        recursive,
+        min_collect_interval_ms: Some(100),
+        total_progress_share: 100.0,
+        ..Default::default()
+    };
+    scan_and_visit(&roots, (), &options, &mut hook).await?;
 
-    for path_str in &paths {
-        if download_queue.is_task_canceled(task_id).await {
-            return Err("Task canceled".to_string());
-        }
-
-        let url = if path_str.starts_with("content://") {
-            Url::parse(path_str).map_err(|e| format!("Invalid content URI: {}", e))?
-        } else {
-            let path = PathBuf::from(path_str);
-            if !fs::try_exists(&path)
-                .await
-                .map_err(|e| map_io_error_for_user(e, "Failed to check path"))?
-            {
-                return Err(format!("路径不存在: {}", path_str));
-            }
-            let path = fs::canonicalize(&path)
-                .await
-                .map_err(|e| map_io_error_for_user(e, &format!("无法解析路径 {}", path_str)))?;
-            Url::from_file_path(&path).map_err(|_| format!("Invalid path: {}", path_str))?
-        };
-
-        process_url(
-            &url,
-            &mut ctx,
-            share_per_path,
-            &mut image_count,
-            &mut archive_count,
-        )
-        .await?;
-    }
-
+    let image_count = hook.image_count;
     GlobalEmitter::global().emit_task_progress(task_id, 100.0);
     GlobalEmitter::global().emit_task_log(
         task_id,
@@ -522,8 +418,8 @@ pub async fn run_builtin_local_import(
         &task_log_i18n(
             "taskLogLocalImportEnqueuedSummary",
             json!({
+                "count": image_count,
                 "downloads": image_count,
-                "archives": archive_count,
             }),
         ),
     );

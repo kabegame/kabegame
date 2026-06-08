@@ -54,23 +54,27 @@
           :key="child.id"
           class="child-album-card"
           :album="child"
-          :count="childAlbumCounts[child.id] || 0"
+          :count="childAlbumStats[child.id]?.imageCount || 0"
+          :sub-album-count="childAlbumStats[child.id]?.subAlbumCount || 0"
           :preview-images="childPreviewImages[child.id] || []"
           :video-preview-remount-key="0"
           :is-loading="false"
           @click="openChildAlbum(child)"
-          @visible="prefetchChildPreview(child)"
           @contextmenu="openChildAlbumContextMenu($event, child)"
         />
       </div>
     </div>
 
-    <ImageGrid v-else ref="albumViewRef" class="detail-body" :images="images" :enable-ctrl-wheel-adjust-columns="!isCompact"
-      :enable-ctrl-key-adjust-columns="!isCompact" :enable-virtual-scroll="!isCompact"
+    <ImageGrid v-else 
+      ref="albumViewRef" class="detail-body" :images="images" 
+      :enable-ctrl-wheel-adjust-columns="!isCompact"
+      enable-virtual-scroll
+      :enable-ctrl-key-adjust-columns="!isCompact"
       :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
       :on-context-command="handleImageMenuCommand" hide-scrollbar scroll-whole-container
       @added-to-album="handleAddedToAlbum" @image-dblclick="handleImageDoubleOpen"
-      @preview-navigate="handlePreviewNavigate" @preview-detail-toggle="handlePreviewDetailToggle"
+      @preview-navigate="handlePreviewNavigate" @preview-page-boundary="handlePreviewPageBoundary"
+      @preview-detail-toggle="handlePreviewDetailToggle"
       @preview-close="handlePreviewClose">
 
       <template #empty>
@@ -149,18 +153,18 @@
       </template>
     </ImageGrid>
 
-    <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-      :message="removeDialogMessage" :title="t('gallery.removeFromAlbum')" :checkbox-label="t('gallery.removeDialogCheckboxLabel')" :hide-checkbox="isCompact"
-      :danger-text="t('gallery.removeDialogDangerText')" :safe-text="t('gallery.removeDialogSafeText')"
-      @confirm="confirmRemoveImages" />
+    <RemoveImagesConfirmDialog :open="removeDialog.isOpen.value" :z-index="removeDialog.zIndex.value"
+      :message="removeDialogMessage" :title="removeDialogTitle" :hide-checkbox="true"
+      :confirm-text="removeDialogConfirmText"
+      @close="removeDialog.close()" @confirm="confirmRemoveImages" />
 
-    <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds"
-      :exclude-album-ids="albumId ? [albumId] : []" @added="handleAddedToAlbum" />
+    <AddToAlbumDialog :open="addToAlbumDialog.isOpen.value" :z-index="addToAlbumDialog.zIndex.value" :image-ids="addToAlbumImageIds"
+      :exclude-album-ids="albumId ? [albumId] : []" @close="addToAlbumDialog.close()" @added="handleAddedToAlbum" />
 
-    <el-dialog v-model="showCreateSubAlbumDialog" :title="t('albums.newAlbum')" width="360px">
+    <el-dialog :model-value="createSubAlbumDialog.isOpen.value" :z-index="createSubAlbumDialog.zIndex.value" :title="t('albums.newAlbum')" width="360px" @update:model-value="createSubAlbumDialog.close">
       <el-input v-model="newSubAlbumName" :placeholder="t('albums.placeholderName')" />
       <template #footer>
-        <el-button @click="showCreateSubAlbumDialog = false">{{ t("common.cancel") }}</el-button>
+        <el-button @click="createSubAlbumDialog.close()">{{ t("common.cancel") }}</el-button>
         <el-button type="primary" :disabled="!newSubAlbumName.trim()" @click="confirmCreateSubAlbum">{{ t("albums.create") }}</el-button>
       </template>
     </el-dialog>
@@ -170,15 +174,17 @@
       :position="childAlbumMenu.position.value"
       :actions="(albumActions as import('@kabegame/core/actions/types').ActionItem<unknown>[])"
       :context="childAlbumMenuContext"
-      :z-index="3500"
+      :z-index="childAlbumMenu.zIndex.value"
       @close="childAlbumMenu.hide"
-      @command="(cmd) => handleChildAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo')"
+      @command="(cmd) => handleChildAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursiveExisting' | 'syncNowRecursiveFull' | 'openLocalFolder')"
     />
 
     <el-dialog
-      v-model="showMoveAlbumDialog"
+      :model-value="moveAlbumDialog.isOpen.value"
+      :z-index="moveAlbumDialog.zIndex.value"
       :title="t('albums.moveToTitle')"
       width="420px"
+      @update:model-value="moveAlbumDialog.close"
       @closed="onMoveAlbumDialogClosed"
     >
       <div class="mb-3">
@@ -193,21 +199,41 @@
         :placeholder="t('albums.selectTargetAlbum')"
       />
       <template #footer>
-        <el-button @click="showMoveAlbumDialog = false">{{ t("common.cancel") }}</el-button>
+        <el-button @click="moveAlbumDialog.close()">{{ t("common.cancel") }}</el-button>
         <el-button type="primary" @click="confirmMoveAlbum">{{ t("common.ok") }}</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
+<script lang="ts">
+type AlbumDetailTab = "images" | "subAlbums";
+
+type AlbumDetailSnapshot = {
+  albumId: string;
+  activeTab: AlbumDetailTab;
+  imagesScrollTop: number;
+  subAlbumsScrollTop: number;
+};
+
+// 画册访问栈：保存「当前画册祖先链」上每个画册的视图状态（滚动位置 / 选项卡）。
+// 与浏览器前进后退无关：进入画册时按其祖先链重建该数组（沿用已有快照），
+// 回到曾访问过的祖先时恢复其状态；跳到其它分支或经面包屑上溯时，被丢弃的画册状态自然出栈。
+const albumDetailStack: AlbumDetailSnapshot[] = [];
+</script>
+
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
+import { pathqlEntry, pathqlFetch } from "@/services/pathql";
+import { rowToImageInfo } from "@/utils/imageRow";
+import { withGalleryPrefix } from "@/utils/path";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { Delete, Star, StarFilled, FolderAdd, Picture } from "@element-plus/icons-vue";
 import { createImageActions } from "@/actions/imageActions";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
@@ -226,7 +252,7 @@ import AlbumDetailPageHeader from "@/components/header/AlbumDetailPageHeader.vue
 import AlbumDetailBrowseToolbar from "@/components/AlbumDetailBrowseToolbar.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
-import { IS_LIGHT_MODE, IS_WEB } from "@kabegame/core/env";
+import { IS_LIGHT_MODE, IS_WEB, IS_ANDROID } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
@@ -255,20 +281,25 @@ import { useAlbumImagesChangeRefresh, type AlbumImagesChangePayload } from "@/co
 import { diffById } from "@/utils/listDiff";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
-import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useI18n } from "@kabegame/i18n";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import {
   albumSubtreeContainsAny,
   buildAlbumMediaNodes,
-  fetchAlbumDirectCounts,
   flattenAlbumMediaNodes,
   loadAlbumMediaPreview,
   type AlbumMediaNode,
 } from "@/utils/albumMediaTree";
+import {
+  syncLocalFolderAlbum,
+  syncLocalFolderAlbums,
+  type BatchSyncItem,
+  type FolderStatusState,
+  type SyncReport,
+} from "@/api/syncLocalFolder";
 
 const route = useRoute();
 const { t } = useI18n();
@@ -299,12 +330,94 @@ const pullToRefreshOpts = computed(() =>
 
 const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
 
+const syncStatusSuffix = (state: FolderStatusState) =>
+  state.replace(/(^|_)(\w)/g, (_, __, c: string) => c.toUpperCase());
+
+const reportBatchSyncResult = (results: BatchSyncItem[]) => {
+  if (results.length === 0) return;
+
+  const errors = results.filter((r) => r.err != null);
+  const badStatus = results.filter(
+    (r) => r.ok && r.ok.status && r.ok.status.state !== "ok",
+  );
+  const okResults = results.filter((r) => r.ok && (!r.ok.status || r.ok.status.state === "ok"));
+
+  let added = 0;
+  let deleted = 0;
+  let reimported = 0;
+  let skippedInFlight = 0;
+  for (const r of okResults) {
+    if (!r.ok) continue;
+    added += r.ok.added;
+    deleted += r.ok.deleted;
+    reimported += r.ok.reimported;
+    if (r.ok.skippedInFlight) skippedInFlight++;
+  }
+
+  if (errors.length > 0) {
+    console.warn("[local_folder] sync errors", errors);
+    ElMessage.error(
+      t("albums.localFolder.refreshSyncFailedSome", {
+        count: errors.length,
+        firstError: errors[0]?.err ?? "",
+      }),
+    );
+    return;
+  }
+
+  if (badStatus.length > 0) {
+    console.warn("[local_folder] sync bad status", badStatus);
+    ElMessage.warning(
+      t("albums.localFolder.refreshSyncBadStatus", { count: badStatus.length }),
+    );
+    return;
+  }
+
+  const skippedText =
+    skippedInFlight > 0
+      ? t("albums.localFolder.refreshSyncSkippedSuffix", { skipped: skippedInFlight })
+      : "";
+  ElMessage.success(
+    t("albums.localFolder.refreshSyncDone", {
+      added,
+      deleted,
+      reimported,
+      skippedText,
+    }),
+  );
+};
+
+const reportSingleSyncResult = (report: SyncReport) => {
+  if (report.skippedInFlight) {
+    ElMessage.info(t("albums.localFolder.syncInFlight"));
+    return;
+  }
+
+  if (report.status && report.status.state !== "ok") {
+    ElMessage.warning(
+      t(`albums.localFolder.status${syncStatusSuffix(report.status.state)}`, {
+        message: report.status.message ?? "",
+      }),
+    );
+    return;
+  }
+
+  ElMessage.success(
+    t("albums.localFolder.syncDone", {
+      added: report.added,
+      deleted: report.deleted,
+      reimported: report.reimported,
+    }),
+  );
+};
+
 
 // 虚拟磁盘
 const isLightMode = IS_LIGHT_MODE;
 const albumDriveEnabled = computed(() => !isLightMode && !!settingsStore.values.albumDriveEnabled);
 
 const albumId = ref<string>("");
+const isLocalFolderDetail = computed(() => albumStore.isLocalFolderAlbum(albumId.value));
 
 const openVirtualDriveAlbumFolder = async () => {
   const id = albumId.value?.trim();
@@ -320,7 +433,6 @@ const openVirtualDriveAlbumFolder = async () => {
   }
 };
 
-const childAlbumDirectCounts = ref<Record<string, number>>({});
 const childAlbumRoots = computed(() => {
   if (!albumId.value) return [];
   return albumStore.getChildren(albumId.value);
@@ -330,7 +442,7 @@ const childAlbumNodes = computed(() =>
   buildAlbumMediaNodes(
     childAlbumRoots.value,
     albumStore.albums,
-    childAlbumDirectCounts.value,
+    albumStore.getAlbumDirectCounts(albumMediaHide.value),
     albumMediaHide.value,
   ),
 );
@@ -341,18 +453,12 @@ const childAlbumNodeById = computed(() => {
   return Object.fromEntries(entries) as Record<string, AlbumMediaNode>;
 });
 const childAlbums = computed(() => childAlbumNodes.value.map((node) => node.album));
-const childAlbumCounts = computed(() => {
-  const out: Record<string, number> = {};
-  for (const node of Object.values(childAlbumNodeById.value)) {
-    out[node.album.id] = node.aggregateTotal;
-  }
-  return out;
-});
+const childAlbumStats = computed(() => albumStore.getAlbumStats(albumMediaHide.value));
 const childAlbumCountsForPicker = computed(() => ({
-  ...childAlbumCounts.value,
+  ...albumStore.getAlbumCounts(albumMediaHide.value),
 }));
 const showAlbumDetailTabs = computed(() => childAlbums.value.length > 0);
-const activeAlbumDetailTab = ref<"images" | "subAlbums">("images");
+const activeAlbumDetailTab = ref<AlbumDetailTab>("images");
 const imagesTabLabel = computed(() => `${t("albums.imagesTab")} (${totalImagesCount.value})`);
 const subAlbumsTabLabel = computed(() => `${t("albums.subAlbums")} (${childAlbums.value.length})`);
 
@@ -374,11 +480,9 @@ const albumAncestorCrumbs = computed((): { id: string; name: string }[] => {
   return up;
 });
 const childPreviewImages = ref<Record<string, ImageInfo[]>>({});
-const showCreateSubAlbumDialog = ref(false);
+const createSubAlbumDialog = useModal();
 const newSubAlbumName = ref("");
-useModalBack(showCreateSubAlbumDialog);
-const showMoveAlbumDialog = ref(false);
-useModalBack(showMoveAlbumDialog);
+const moveAlbumDialog = useModal();
 const moveDlgAlbum = ref<Album | null>(null);
 const moveToRoot = ref(false);
 const moveTargetParentId = ref<string | null>(null);
@@ -393,8 +497,9 @@ const childAlbumMenuContext = computed<AlbumActionContext>(() => {
     selectedCount: 0,
     currentRotationAlbumId: currentRotationAlbumId.value,
     wallpaperRotationEnabled: wallpaperRotationEnabled.value,
-    albumImageCount: album ? (childAlbumCounts.value[album.id] || 0) : 0,
+    albumImageCount: album ? (childAlbumStats.value[album.id]?.imageCount || 0) : 0,
     favoriteAlbumId: FAVORITE_ALBUM_ID,
+    isLocalFolder: album?.type === "local_folder",
   };
 });
 
@@ -405,7 +510,7 @@ const moveAlbumTree = computed(() => {
   return albumStore.getAlbumTreeExcluding(exclude);
 });
 
-watch(showMoveAlbumDialog, (open) => {
+watch(moveAlbumDialog.isOpen, (open) => {
   if (open) {
     moveToRoot.value = false;
     moveTargetParentId.value = null;
@@ -433,6 +538,17 @@ const prefetchChildPreview = async (child: Album) => {
   childPreviewImages.value = { ...childPreviewImages.value, [child.id]: imgs };
 };
 
+// 直接为所有子画册加载预览（不再用视口懒加载；列表变化时自动补齐）
+watch(
+  () => childAlbums.value.map((a) => a.id).join("|"),
+  () => {
+    for (const child of childAlbums.value) {
+      prefetchChildPreview(child);
+    }
+  },
+  { immediate: true },
+);
+
 function trackAlbumChildEnter(child: Album) {
   if (!IS_WEB) return;
   trackEvent("album_child_enter", {
@@ -456,16 +572,15 @@ const openChildAlbumContextMenu = (event: MouseEvent, child: Album) => {
 
 const openCreateSubAlbumDialog = () => {
   newSubAlbumName.value = "";
-  showCreateSubAlbumDialog.value = true;
+  createSubAlbumDialog.open();
 };
 
 const confirmCreateSubAlbum = async () => {
   const name = newSubAlbumName.value.trim();
   if (!name || !albumId.value) return;
   try {
-    const created = await albumStore.createAlbum(name, { parentId: albumId.value, reload: false });
-    childAlbumDirectCounts.value = { ...childAlbumDirectCounts.value, [created.id]: 0 };
-    showCreateSubAlbumDialog.value = false;
+    await albumStore.createAlbum(name, { parentId: albumId.value, reload: false });
+    createSubAlbumDialog.close();
     newSubAlbumName.value = "";
     activeAlbumDetailTab.value = "subAlbums";
     ElMessage.success(t("albums.albumCreated"));
@@ -487,7 +602,7 @@ const confirmMoveAlbum = async () => {
   try {
     await albumStore.moveAlbum(album.id, pid);
     delete childPreviewImages.value[album.id];
-    showMoveAlbumDialog.value = false;
+    moveAlbumDialog.close();
     moveDlgAlbum.value = null;
     ElMessage.success(t("albums.moveSuccess"));
   } catch (e: unknown) {
@@ -500,7 +615,16 @@ const confirmMoveAlbum = async () => {
 };
 
 const handleChildAlbumMenuCommand = async (
-  command: "browse" | "delete" | "setWallpaperRotation" | "rename" | "moveTo",
+  command:
+    | "browse"
+    | "delete"
+    | "setWallpaperRotation"
+    | "rename"
+    | "moveTo"
+    | "syncNow"
+    | "syncNowRecursiveExisting"
+    | "syncNowRecursiveFull"
+    | "openLocalFolder",
 ) => {
   const context = childAlbumMenuContext.value;
   const album = context.target;
@@ -510,6 +634,52 @@ const handleChildAlbumMenuCommand = async (
 
   if (command === "browse") {
     openChildAlbum(album);
+    return;
+  }
+
+  if (command === "openLocalFolder") {
+    const folder = album.syncFolder?.trim();
+    if (!folder) return;
+    try {
+      await invoke("open_explorer", { path: folder });
+    } catch (e: any) {
+      console.error("打开本地文件夹失败:", e);
+      ElMessage.error(e?.message || String(e));
+    }
+    return;
+  }
+
+  if (command === "syncNow") {
+    try {
+      const report = await syncLocalFolderAlbum(id);
+      if (report) reportSingleSyncResult(report);
+    } catch (e: any) {
+      ElMessage.error(e?.message || String(e));
+    }
+    return;
+  }
+
+  if (command === "syncNowRecursiveExisting" || command === "syncNowRecursiveFull") {
+    ElMessage.info(t("albums.localFolder.recursiveSyncing", { name }));
+    try {
+      const report = await syncLocalFolderAlbum(id, {
+        recursive: true,
+        createMissingAlbums: command === "syncNowRecursiveFull",
+      });
+      if (report) {
+        await albumStore.loadAlbums();
+        ElMessage.success(
+          t("albums.localFolder.recursiveSyncDone", {
+            createdAlbums: report.createdAlbums,
+            syncedAlbums: report.syncedAlbums,
+            added: report.added,
+            deleted: report.deleted,
+          }),
+        );
+      }
+    } catch (e: any) {
+      ElMessage.error(e?.message || String(e));
+    }
     return;
   }
 
@@ -554,7 +724,7 @@ const handleChildAlbumMenuCommand = async (
 
   if (command === "moveTo") {
     moveDlgAlbum.value = album;
-    showMoveAlbumDialog.value = true;
+    moveAlbumDialog.open();
     return;
   }
 
@@ -565,14 +735,15 @@ const handleChildAlbumMenuCommand = async (
 
   try {
     await ElMessageBox.confirm(
-      t("albums.deleteAlbumConfirm", { name }),
+      album.type === "local_folder" || albumStore.isLocalFolderAlbum(id)
+        ? t("albums.deleteLocalFolderAlbumConfirm", { name })
+        : t("albums.deleteAlbumConfirm", { name }),
       t("albums.confirmDelete"),
       { type: "warning" }
     );
     const deletedIds = [id, ...albumStore.getDescendantIds(id)];
     await albumStore.deleteAlbum(id);
     for (const deletedId of deletedIds) {
-      delete childAlbumDirectCounts.value[deletedId];
       delete childPreviewImages.value[deletedId];
     }
     delete childPreviewImages.value[id];
@@ -597,6 +768,10 @@ const currentWallpaperImageId = computed<string | null>({
 const images = ref<ImageInfo[]>([]);
 let leafAllImages: ImageInfo[] = [];
 const totalImagesCount = ref<number>(0);
+const pendingPreviewBoundary = ref<{
+  direction: "prev" | "next";
+  targetPage: number;
+} | null>(null);
 const albumViewRef = ref<any>(null);
 const albumSubAlbumsScrollRef = ref<HTMLElement | null>(null);
 const albumBrowseToolbarRef = ref<{
@@ -605,6 +780,96 @@ const albumBrowseToolbarRef = ref<{
   openPageSizePicker: () => void;
 } | null>(null);
 const albumContainerRef = ref<HTMLElement | null>(null);
+
+function getImagesScrollEl(): HTMLElement | null {
+  return albumViewRef.value?.getContainerEl?.() ?? null;
+}
+
+function captureAlbumDetailSnapshot(): AlbumDetailSnapshot | null {
+  const currentAlbumId = albumId.value?.trim();
+  if (!currentAlbumId) return null;
+  return {
+    albumId: currentAlbumId,
+    activeTab: activeAlbumDetailTab.value,
+    imagesScrollTop: getImagesScrollEl()?.scrollTop ?? 0,
+    subAlbumsScrollTop: albumSubAlbumsScrollRef.value?.scrollTop ?? 0,
+  };
+}
+
+function waitForNextFrame() {
+  return new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => resolve());
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+}
+
+async function applyAlbumDetailSnapshot(snapshot: AlbumDetailSnapshot) {
+  if (snapshot.albumId !== albumId.value) return;
+  activeAlbumDetailTab.value =
+    snapshot.activeTab === "subAlbums" && !showAlbumDetailTabs.value
+      ? "images"
+      : snapshot.activeTab;
+
+  const restoreScroll = () => {
+    const target =
+      activeAlbumDetailTab.value === "subAlbums"
+        ? albumSubAlbumsScrollRef.value
+        : getImagesScrollEl();
+    if (!target) return;
+    target.scrollTop =
+      activeAlbumDetailTab.value === "subAlbums"
+        ? snapshot.subAlbumsScrollTop
+        : snapshot.imagesScrollTop;
+  };
+
+  await nextTick();
+  restoreScroll();
+  if (activeAlbumDetailTab.value === "images" && isCompact.value) {
+    await waitForNextFrame();
+    restoreScroll();
+  }
+}
+
+/** 计算某画册的祖先链 ID（从根到直接父级，不含自身）。 */
+function getAlbumAncestorIds(id: string): string[] {
+  const map = new Map(albumStore.albums.map((a) => [a.id, a]));
+  const chain: string[] = [];
+  let cur = map.get(id);
+  if (!cur) return chain;
+  while (cur.parentId) {
+    const p = map.get(cur.parentId);
+    if (!p) break;
+    chain.push(p.id);
+    cur = p;
+  }
+  chain.reverse();
+  return chain;
+}
+
+/**
+ * 维护访问栈，原则「跳后保存，跳前丢弃」：
+ * - 跳后保存：若刚离开的画册是新画册的祖先（向更深层跳转），把它入栈；
+ *   仅保存「真正停留过」的画册，被跳过的中间层级不入栈。
+ * - 跳前丢弃：剔除所有不在新画册祖先链上的画册状态（新画册自身、其它分支、上溯越过的层级）。
+ *
+ * 例：直接跳到 A/B/C/D 再跳到 A/B/C/D/E/F，栈为 |D（仅停留过的 D，跳过的 E 不入栈）；
+ * 再跳到 A/B/C/D/E，栈仍为 |D（不保存 F，但 D 仍是祖先故保留）；再进入 F 则为 |D|E。
+ */
+function maintainAlbumDetailStack(
+  newAlbumId: string,
+  leaving: AlbumDetailSnapshot | null,
+) {
+  const ancestors = new Set(getAlbumAncestorIds(newAlbumId));
+  if (leaving && ancestors.has(leaving.albumId)) {
+    albumDetailStack.push(leaving);
+  }
+  const kept = albumDetailStack.filter((s) => ancestors.has(s.albumId));
+  albumDetailStack.length = 0;
+  albumDetailStack.push(...kept);
+}
 
 // 本地计算的 provider root path，用于初始化
 const localProviderRootPath = computed(() => {
@@ -627,12 +892,6 @@ function childAlbumScopeIds(): string[] {
   ]);
 }
 
-async function refreshChildAlbumDirectCounts(albumIds?: Iterable<string>) {
-  const ids = albumIds ?? childAlbumScopeIds();
-  const counts = await fetchAlbumDirectCounts(ids, albumMediaHide.value);
-  childAlbumDirectCounts.value = { ...childAlbumDirectCounts.value, ...counts };
-}
-
 const isAlbumWallpaperFilterEmpty = computed(() =>
   albumDetailRouteStore.filter === "wallpaper-order"
 );
@@ -649,9 +908,7 @@ const loadTotalImagesCount = async () => {
   if (!albumId.value) return;
   const countPath = buildAlbumCountPathFromCurrentPath(currentPath.value);
   if (!countPath) return;
-  const res = await invoke<{ total: number | null }>("browse_gallery_provider", {
-    path: countPath,
-  });
+  const res = await pathqlEntry(withGalleryPrefix(countPath));
   totalImagesCount.value = res?.total ?? 0;
 };
 
@@ -680,6 +937,8 @@ watch(
   async (newPath) => {
     if (!isOnAlbumRoute.value) return;
     if (!albumId.value) return;
+    const routeAlbumId = typeof route.params.id === "string" ? route.params.id : "";
+    if (routeAlbumId && routeAlbumId !== albumId.value) return;
     if (!albumName.value) return;
     if (!newPath) return;
     await loadAlbum({ reset: true });
@@ -693,24 +952,13 @@ watch(
     if (!isOnAlbumRoute.value) return;
     const ids = childAlbumScopeIds();
     const keep = new Set(ids);
-    for (const id of Object.keys(childAlbumDirectCounts.value)) {
-      if (!keep.has(id)) delete childAlbumDirectCounts.value[id];
-    }
     for (const id of Object.keys(childPreviewImages.value)) {
       if (!keep.has(id)) delete childPreviewImages.value[id];
     }
 
     const hideChanged = !!prevKey && prevKey.split(":")[0] !== _key.split(":")[0];
     if (hideChanged) {
-      childAlbumDirectCounts.value = {};
       childPreviewImages.value = {};
-      await refreshChildAlbumDirectCounts(ids);
-      return;
-    }
-
-    const missing = ids.filter((id) => childAlbumDirectCounts.value[id] == null);
-    if (missing.length > 0) {
-      await refreshChildAlbumDirectCounts(missing);
     }
   },
   { immediate: true },
@@ -779,6 +1027,9 @@ useImageGridAutoLoad({
 const imageActions = computed(() =>
   createImageActions({
     removeText: t("gallery.removeFromAlbum"),
+    deleteText: t("gallery.deleteImageFiles"),
+    showDelete: true,
+    hide: isLocalFolderDetail.value ? ["remove"] : [],
   }),
 );
 
@@ -798,6 +1049,15 @@ const clearSelection = () => {
   albumViewRef.value?.clearSelection?.();
 };
 
+const clearSelectionIfRemoved = (removedIds: readonly string[]) => {
+  if (removedIds.length === 0) return;
+  const selectedIds = albumViewRef.value?.getSelectedIds?.() as Set<string> | undefined;
+  if (!selectedIds || selectedIds.size === 0) return;
+  if (removedIds.some((id) => selectedIds.has(id))) {
+    clearSelection();
+  }
+};
+
 // 重命名相关
 const isRenaming = ref(false);
 const editingName = ref("");
@@ -814,13 +1074,21 @@ const currentRotationAlbumId = computed(() => {
 const favoriteAlbumDirty = ref(false);
 
 // 移除/删除对话框相关
-const showRemoveDialog = ref(false);
-const removeDeleteFiles = ref(false);
+const removeDialog = useModal();
+const pendingRemoveMode = ref<"remove" | "delete">("remove");
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
 const pendingAddToAlbumImages = ref<ImageInfo[]>([]);
-const showAddToAlbumDialog = ref(false);
+const addToAlbumDialog = useModal();
 const addToAlbumImageIds = ref<string[]>([]);
+const removeDialogTitle = computed(() =>
+  pendingRemoveMode.value === "delete"
+    ? t("gallery.deleteImageFiles")
+    : t("gallery.removeFromAlbum")
+);
+const removeDialogConfirmText = computed(() =>
+  pendingRemoveMode.value === "delete" ? t("common.delete") : t("common.remove")
+);
 
 function currentUrl() {
   return typeof location === "undefined" ? "" : location.pathname + location.search;
@@ -904,8 +1172,8 @@ const handleRefresh = async () => {
   try {
     // 1) 刷新画册列表（名称/计数等）
     await albumStore.loadAlbums();
-    await refreshChildAlbumDirectCounts();
-    childPreviewImages.value = {};
+    // 直接重新拉取并覆写子画册预览（不清空，避免清空后不再出现 / 闪屏）
+    await refreshAffectedChildPreviews(new Set());
     const found = albumStore.albums.find((a) => a.id === albumId.value);
     if (found) albumName.value = found.name;
 
@@ -914,15 +1182,31 @@ const handleRefresh = async () => {
 
     // 3) 手动刷新：清缓存强制重载详情（否则 store 缓存会让 UI 看起来“没刷新”）
     delete albumStore.albumImages[albumId.value];
-    clearImageStateCache();
-
+    delete albumStore.albumPreviews[albumId.value];
     // 4) 重新拉取图片列表 + 清理本地选择/URL 缓存
     clearSelection();
     await loadAlbum();
-    ElMessage.success("刷新成功");
+
+    const idsToSync = new Set<string>();
+    if (albumStore.isLocalFolderAlbum(albumId.value)) {
+      idsToSync.add(albumId.value);
+    }
+    for (const a of albumStore.albums) {
+      if (a.parentId === albumId.value && a.type === "local_folder") {
+        idsToSync.add(a.id);
+      }
+    }
+
+    if (IS_ANDROID || IS_WEB || idsToSync.size === 0) {
+      ElMessage.success(t("albums.refreshSuccess"));
+    } else {
+      ElMessage.warning(t("albums.localFolder.refreshSyncProgressing"));
+      const results = await syncLocalFolderAlbums(Array.from(idsToSync));
+      reportBatchSyncResult(results);
+    }
   } catch (error) {
     console.error("刷新失败:", error);
-    ElMessage.error("刷新失败");
+    ElMessage.error(t("albums.refreshFailed"));
   } finally {
     isRefreshing.value = false;
   }
@@ -947,21 +1231,16 @@ const loadAlbum = async (opts?: { reset?: boolean; silent?: boolean }) => {
     if (!inner.startsWith("album/") || inner.startsWith("album//")) {
       return;
     }
-    const pathToLoad = rawPath.endsWith("/") ? rawPath : `${rawPath}/`;
+    const pathToLoad = withGalleryPrefix(rawPath);
     clearImageMetadataCache();
-    const res = await invoke<{ total?: number; entries?: Array<{ kind: string; image?: ImageInfo }> }>(
-      "browse_gallery_provider",
-      { path: pathToLoad }
-    );
+    const rows = await pathqlFetch<Record<string, unknown>>(pathToLoad);
     try {
       await loadTotalImagesCount();
     } catch (error) {
       console.error("获取画册总图片数失败:", error);
-      totalImagesCount.value = res?.total ?? 0;
+      totalImagesCount.value = rows.length;
     }
-    const list: ImageInfo[] = (res?.entries ?? [])
-      .filter((e: any) => e?.kind === "image")
-      .map((e: any) => e.image as ImageInfo);
+    const list = rows.map(rowToImageInfo);
     leafAllImages = list;
     images.value = list;
   } finally {
@@ -989,15 +1268,21 @@ const { handleDownloadImage, handleCopyImage } = useImageOperations(
   albumViewRef
 );
 
-// 确认移除图片（合并了原来的 remove 和 delete 逻辑）
+// 确认移除图片或删除文件。两者是独立动作，不再由 checkbox 切换语义。
 const confirmRemoveImages = async () => {
   const imagesToRemove = pendingRemoveImages.value;
   if (imagesToRemove.length === 0) {
-    showRemoveDialog.value = false;
+    removeDialog.close();
     return;
   }
   if (!albumId.value) {
-    showRemoveDialog.value = false;
+    removeDialog.close();
+    return;
+  }
+  const shouldDeleteFiles = pendingRemoveMode.value === "delete";
+  if (!shouldDeleteFiles && isLocalFolderDetail.value) {
+    removeDialog.close();
+    ElMessage.info(t("albums.localFolder.readOnlyHint"));
     return;
   }
 
@@ -1005,23 +1290,14 @@ const confirmRemoveImages = async () => {
   const includesCurrent =
     !!currentWallpaperImageId.value &&
     imagesToRemove.some((img) => img.id === currentWallpaperImageId.value);
-  const shouldDeleteFiles = removeDeleteFiles.value;
-
-  showRemoveDialog.value = false;
+  removeDialog.close();
 
   try {
     const idsArr = imagesToRemove.map((i) => i.id);
 
-    // 如果勾选了删除文件，则调用 deleteImage（会自动从所有画册移除并删除文件）
-    // 否则只从当前画册移除，保留文件和其他画册中的记录
     if (shouldDeleteFiles) {
-      // 删除图片：deleteImage 会从所有画册中移除并删除文件
-      for (const img of imagesToRemove) {
-        await invoke("delete_image", { imageId: img.id });
-      }
-      // 注意：deleteImage 已经会从所有画册中移除图片，不需要再调用 removeImagesFromAlbum
+      await invoke("batch_delete_images", { imageIds: idsArr });
     } else {
-      // 只从当前画册移除，不删除文件
       await albumStore.removeImagesFromAlbum(albumId.value, idsArr);
     }
 
@@ -1031,7 +1307,6 @@ const confirmRemoveImages = async () => {
 
     // 列表由 images-change / album-images-change 事件驱动刷新，不做乐观更新
 
-    // 根据操作类型显示不同的成功消息
     if (shouldDeleteFiles) {
       ElMessage.success(
         count > 1 ? t("gallery.deletedAndRemovedCountSuccess", { count }) : t("gallery.deletedAndRemovedSuccess")
@@ -1041,7 +1316,7 @@ const confirmRemoveImages = async () => {
         count > 1 ? t("gallery.removedFromAlbumCountSuccess", { count }) : t("gallery.removedFromAlbumSuccess")
       );
     }
-    trackAlbumImageAction("remove", imagesToRemove, { deleteFiles: shouldDeleteFiles });
+    trackAlbumImageAction(shouldDeleteFiles ? "deleteFile" : "remove", imagesToRemove);
   } catch (error) {
     console.error("操作失败:", error);
     ElMessage.error(shouldDeleteFiles ? t("common.deleteFail") : t("common.removeFail"));
@@ -1054,19 +1329,22 @@ const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<s
   const firstSelectedImage = images.value.find(img => selectedIds.has(img.id));
   const isFavorite = firstSelectedImage?.favorite ?? false;
 
-  if (selectedCount === 1) {
-    return [
+  const actions: SelectionAction[] = selectedCount === 1
+    ? [
       { key: "favorite", label: isFavorite ? t("contextMenu.unfavorite") : t("contextMenu.favorite"), icon: isFavorite ? StarFilled : Star, command: "favorite" },
       { key: "addToAlbum", label: t("contextMenu.addToAlbum"), icon: FolderAdd, command: "addToAlbum" },
       { key: "remove", label: t("gallery.removeFromAlbum"), icon: Delete, command: "remove" },
-    ];
-  } else {
-    return [
+      { key: "deleteFile", label: t("gallery.deleteImageFiles"), icon: Delete, command: "deleteFile" },
+    ]
+    : [
       { key: "favorite", label: `${t("contextMenu.favorite")}${countText}`, icon: Star, command: "favorite" },
       { key: "addToAlbum", label: `${t("contextMenu.addToAlbum")}${countText}`, icon: FolderAdd, command: "addToAlbum" },
       { key: "remove", label: `${t("gallery.removeFromAlbum")}${countText}`, icon: Delete, command: "remove" },
+      { key: "deleteFile", label: `${t("gallery.deleteImageFiles")}${countText}`, icon: Delete, command: "deleteFile" },
     ];
-  }
+  return isLocalFolderDetail.value
+    ? actions.filter((action) => action.key !== "remove")
+    : actions;
 };
 
 
@@ -1192,98 +1470,11 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
         }
       }
       break;
-    case "exportToWE":
-    case "exportToWEAuto":
-      try {
-        // 让用户输入工程名称
-        const defaultName =
-          imagesToProcess.length > 1
-            ? `Kabegame_AlbumDetailSelection_${imagesToProcess.length}_Images`
-            : `Kabegame_${image.id}`;
-
-        const { value: projectName } = await ElMessageBox.prompt(
-          `请输入 WE 工程名称（留空使用默认名称）`,
-          "导出到 Wallpaper Engine",
-          {
-            confirmButtonText: "导出",
-            cancelButtonText: "取消",
-            inputPlaceholder: defaultName,
-            inputValidator: (value) => {
-              if (value && value.trim().length > 64) {
-                return "名称不能超过 64 个字符";
-              }
-              return true;
-            },
-          }
-        ).catch(() => ({ value: null })); // 用户取消时返回 null
-
-        if (projectName === null) break; // 用户取消
-
-        let outputParentDir = "";
-        if (command === "exportToWEAuto") {
-          const mp = await invoke<string | null>("get_wallpaper_engine_myprojects_dir");
-          if (!mp) {
-            ElMessage.warning("未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择");
-            break;
-          }
-          outputParentDir = mp;
-        } else {
-          const selected = await open({
-            directory: true,
-            multiple: false,
-            title: "选择导出目录（将自动创建 Wallpaper Engine 工程文件夹）",
-          });
-          if (!selected || Array.isArray(selected)) break;
-          outputParentDir = selected;
-        }
-
-        const finalName = projectName?.trim() || defaultName;
-
-        const isVideoPath = (path: string) => {
-          const ext = (path.split(".").pop() || "").toLowerCase();
-          return ext === "mp4" || ext === "mov";
-        };
-        const isSingleVideo =
-          imagesToProcess.length === 1 &&
-          isVideoPath(imagesToProcess[0].localPath);
-
-        const res = await invoke<{
-          projectDir: string;
-          imageCount: number;
-          videoCount?: number;
-        }>(
-          isSingleVideo ? "export_video_to_we_project" : "export_images_to_we_project",
-          isSingleVideo
-            ? {
-                videoPath: imagesToProcess[0].localPath,
-                title: finalName,
-                outputParentDir,
-              }
-            : {
-                imagePaths: imagesToProcess.map((img) => img.localPath),
-                title: finalName,
-                outputParentDir,
-                options: null,
-              }
-        );
-        const msg = res.videoCount
-          ? `已导出 WE 视频工程：${res.projectDir}`
-          : `已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`;
-        ElMessage.success(msg);
-        await invoke("open_file_path", { filePath: res.projectDir });
-        trackAlbumImageAction(command, imagesToProcess);
-      } catch (e) {
-        if (e !== "cancel") {
-          console.error("导出 Wallpaper Engine 工程失败:", e);
-          ElMessage.error("导出失败");
-        }
-      }
-      break;
     case "addToAlbum": {
       const ids = imagesToProcess.map((img) => img.id);
       addToAlbumImageIds.value = ids;
       pendingAddToAlbumImages.value = imagesToProcess.slice();
-      showAddToAlbumDialog.value = true;
+      addToAlbumDialog.open();
       break;
     }
     case "addToHidden": {
@@ -1312,18 +1503,41 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       break;
     }
     case "remove":
-      // 显示移除对话框，让用户选择是否删除文件
+      if (isLocalFolderDetail.value) {
+        ElMessage.info(t("albums.localFolder.readOnlyHint"));
+        break;
+      }
       pendingRemoveImages.value = imagesToProcess;
+      pendingRemoveMode.value = "remove";
       const count = imagesToProcess.length;
       const includesCurrent =
         !!currentWallpaperImageId.value &&
         imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
       const currentHint = includesCurrent ? `\n\n${t("gallery.removeDialogWallpaperHint")}` : "";
       removeDialogMessage.value = (count > 1 ? t("gallery.removeDialogMessageMulti", { count }) : t("gallery.removeDialogMessageSingle")) + currentHint;
-      removeDeleteFiles.value = false;
-      showRemoveDialog.value = true;
+      removeDialog.open();
       break;
+    case "deleteFile": {
+      if (imagesToProcess.length === 0) break;
+      pendingRemoveImages.value = imagesToProcess;
+      pendingRemoveMode.value = "delete";
+      const count = imagesToProcess.length;
+      const includesCurrent =
+        !!currentWallpaperImageId.value &&
+        imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
+      const currentHint = includesCurrent ? `\n\n${t("gallery.removeDialogWallpaperHint")}` : "";
+      removeDialogMessage.value =
+        (count > 1
+          ? t("gallery.deleteDialogMessageMulti", { count })
+          : t("gallery.deleteDialogMessageSingle")) + currentHint;
+      removeDialog.open();
+      break;
+    }
     case "swipe-remove" as any:
+      if (isLocalFolderDetail.value) {
+        ElMessage.info(t("albums.localFolder.readOnlyHint"));
+        break;
+      }
       // 上划删除：直接从画册移除，不删除文件，不显示确认对话框
       if (imagesToProcess.length === 0 || !albumId.value) break;
       void (async () => {
@@ -1375,6 +1589,46 @@ const handlePreviewNavigate = (payload: {
   });
 };
 
+const handlePreviewPageBoundary = async (payload: {
+  direction: "prev" | "next";
+  index: number;
+  image: ImageInfo;
+}) => {
+  const totalPages = Math.max(1, Math.ceil((totalImagesCount.value || 0) / pageSize.value));
+  const targetPage = payload.direction === "next"
+    ? currentPage.value + 1
+    : currentPage.value - 1;
+  if (targetPage < 1 || targetPage > totalPages) return;
+
+  pendingPreviewBoundary.value = {
+    direction: payload.direction,
+    targetPage,
+  };
+  try {
+    await handleJumpToPage(targetPage);
+  } catch (error) {
+    pendingPreviewBoundary.value = null;
+    throw error;
+  }
+};
+
+watch(
+  () => images.value,
+  async (list) => {
+    const pending = pendingPreviewBoundary.value;
+    if (!pending) return;
+    if (currentPage.value !== pending.targetPage) return;
+    const image = pending.direction === "next" ? list[0] : list[list.length - 1];
+    if (!image) return;
+
+    pendingPreviewBoundary.value = null;
+    await nextTick();
+    albumViewRef.value?.openPreviewById?.(image.id);
+    ElMessage.info(pending.direction === "next" ? "已进入下一页" : "已进入上一页");
+  },
+  { flush: "post" }
+);
+
 const handlePreviewDetailToggle = (payload: { open: boolean; image: ImageInfo | null }) => {
   trackAlbumImageEvent("image_preview_detail_toggle", {
     open: payload.open,
@@ -1416,7 +1670,6 @@ const initAlbum = async (newAlbumId: string) => {
     });
   }
   await albumStore.loadAlbums();
-  await refreshChildAlbumDirectCounts();
   const found = albumStore.albums.find((a) => a.id === newAlbumId);
   albumName.value = found?.name || "画册";
 
@@ -1428,10 +1681,29 @@ const initAlbum = async (newAlbumId: string) => {
 // 监听路由参数变化
 watch(
   () => route.params.id,
-  async (newId) => {
+  async (newId, oldId) => {
     if (!isOnAlbumRoute.value) return;
-    if (newId && typeof newId === "string") {
-      await initAlbum(newId);
+    if (!newId || typeof newId !== "string") return;
+
+    const oldAlbumId = typeof oldId === "string" ? oldId : undefined;
+    if (oldAlbumId === newId) return;
+
+    // 1) 离开旧画册前，捕获其当前视图状态（滚动 / 选项卡）。
+    const leaving = oldAlbumId ? captureAlbumDetailSnapshot() : null;
+
+    // 2) 维护栈之前，查看新画册是否已在栈中。
+    //    只有「沿祖先链向上」回到曾停留过的画册时才存在（如面包屑上溯）。
+    const restored = albumDetailStack.find((s) => s.albumId === newId) ?? null;
+
+    // 3) 初始化新画册（会加载 albums，使祖先链可计算）。
+    await initAlbum(newId);
+
+    // 4) 跳后保存、跳前丢弃地维护访问栈。
+    maintainAlbumDetailStack(newId, leaving);
+
+    // 5) 若回到一个曾停留过的祖先，恢复它当时的滚动 / 选项卡。
+    if (restored) {
+      await applyAlbumDetailSnapshot(restored);
     }
   },
   { immediate: true }
@@ -1562,8 +1834,10 @@ const handleDeleteAlbum = async () => {
     const deletedAlbumId = albumId.value;
 
     await ElMessageBox.confirm(
-      `确定要删除画册"${albumName.value}"吗？此操作仅删除画册及其关联，不会删除图片文件。`,
-      "确认删除",
+      isLocalFolderDetail.value
+        ? t("albums.deleteLocalFolderAlbumConfirm", { name: albumName.value })
+        : t("albums.deleteAlbumConfirm", { name: albumName.value }),
+      t("albums.confirmDelete"),
       { type: "warning" }
     );
 
@@ -1615,11 +1889,10 @@ const refreshAlbumDetailPageFromEvents = async () => {
   if (!albumId.value) return;
   const prevList = images.value.slice();
   delete albumStore.albumImages[albumId.value];
-  clearSelection();
   await loadAlbum({ silent: true });
 
   const { removedIds } = diffById(prevList, images.value);
-  if (removedIds.length > 0) clearSelection();
+  clearSelectionIfRemoved(removedIds);
 };
 
 function childAlbumEventAffectsCurrentSubtree(albumIds: ReadonlySet<string>): boolean {
@@ -1633,12 +1906,15 @@ function childAlbumEventAffectsCurrentSubtree(albumIds: ReadonlySet<string>): bo
   return Array.from(albumIds).some((id) => descendants.has(id));
 }
 
-function clearAffectedChildPreviewCaches(albumIds: ReadonlySet<string>) {
+// 受影响子画册预览：直接拉取并覆写，不先清空（既补上缺失的重新拉取，又避免闪屏）
+async function refreshAffectedChildPreviews(albumIds: ReadonlySet<string>) {
   const allAffected = albumIds.size === 0;
   const hiddenAffected = albumIds.has(HIDDEN_ALBUM_ID);
+  const limit = isCompact.value ? 1 : 3;
   for (const node of childAlbumNodes.value) {
     if (!allAffected && !hiddenAffected && !albumSubtreeContainsAny(node, albumIds)) continue;
-    delete childPreviewImages.value[node.album.id];
+    const next = await loadAlbumMediaPreview(node, limit);
+    childPreviewImages.value = { ...childPreviewImages.value, [node.album.id]: next };
   }
 }
 
@@ -1649,11 +1925,7 @@ const refreshAlbumDetailFromAlbumImagesChange = async (p: AlbumImagesChangePaylo
   const childAffected = childAlbumEventAffectsCurrentSubtree(affected);
 
   if (childAffected) {
-    clearAffectedChildPreviewCaches(affected);
-    const idsToRefresh = affected.size === 0 || affected.has(HIDDEN_ALBUM_ID)
-      ? childAlbumScopeIds()
-      : childAlbumScopeIds().filter((id) => affected.has(id));
-    await refreshChildAlbumDirectCounts(idsToRefresh);
+    await refreshAffectedChildPreviews(affected);
   }
 
   if (selfAffected) {

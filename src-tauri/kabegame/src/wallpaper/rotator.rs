@@ -47,11 +47,10 @@ fn current_marker_for_source(
     }
     match source {
         RotationSource::Gallery => {
-            let img = Storage::global().find_image_by_id(id).ok().flatten()?;
+            let img = Storage::find_image_by_id(id).ok().flatten()?;
             Some(CurrentMarker::Time(img.crawled_at as i64))
         }
-        RotationSource::Album(album_id) => Storage::global()
-            .get_album_image_order(album_id, id)
+        RotationSource::Album(album_id) => Storage::get_album_image_order(album_id, id)
             .ok()
             .flatten()
             .map(CurrentMarker::Order),
@@ -68,15 +67,20 @@ fn extract_marker_from(source: &RotationSource, img: &ImageInfo) -> CurrentMarke
 fn sequential_path(source: &RotationSource, marker: Option<CurrentMarker>) -> String {
     match (source, marker) {
         (RotationSource::Album(id), Some(CurrentMarker::Order(o))) => {
-            format!("/gallery/hide/album/{}/bigger_order/{}/l100l", id, o)
+            format!(
+                "images://gallery/hide/album/{}/bigger_order/{}/l100l",
+                id, o
+            )
         }
         (RotationSource::Album(id), _) => {
-            format!("/gallery/hide/album/{}/bigger_order/0/l100l", id)
+            format!("images://gallery/hide/album/{}/bigger_order/0/l100l", id)
         }
         (RotationSource::Gallery, Some(CurrentMarker::Time(t))) => {
-            format!("/gallery/hide/bigger_crawler_time/{}/l100l", t)
+            format!("images://gallery/hide/bigger_crawler_time/{}/l100l", t)
         }
-        (RotationSource::Gallery, _) => "/gallery/hide/bigger_crawler_time/0/l100l".to_string(),
+        (RotationSource::Gallery, _) => {
+            "images://gallery/hide/bigger_crawler_time/0/l100l".to_string()
+        }
     }
 }
 
@@ -121,17 +125,14 @@ pub(crate) fn is_wallpaper_suitable(img: &ImageInfo, wallpaper_mode: &str) -> bo
 /// 随机模式: 从 `<base>/x100x/` 随机抽一页, 再从该页可用图中随机取一张;
 /// 该页没有可用图则换下一页 (不重复抽);
 /// 所有页都 try 完返回 None。base 由 source 决定:
-/// - Gallery → `/gallery/all/x100x`
-/// - Album(id) → `/gallery/album/<id>/x100x`
+/// - Gallery → `images://gallery/hide/all/x100x`
+/// - Album(id) → `images://gallery/hide/album/<id>/x100x`
 fn load_random_image_for_wallpaper(
     source: &RotationSource,
     wallpaper_mode: &str,
 ) -> Result<Option<ImageInfo>, String> {
     let rt = provider_runtime();
-    let base_path = match source {
-        RotationSource::Album(id) => format!("/gallery/hide/album/{}/x100x", id),
-        RotationSource::Gallery => "/gallery/hide/all/x100x".to_string(),
-    };
+    let base_path = random_base_path(source);
     let mut pages: Vec<String> = rt
         .list(&base_path)
         .map_err(|e| format!("list {}: {}", base_path, e))?
@@ -157,6 +158,38 @@ fn load_random_image_for_wallpaper(
         }
     }
     Ok(None)
+}
+
+fn random_base_path(source: &RotationSource) -> String {
+    match source {
+        RotationSource::Album(id) => format!("images://gallery/hide/album/{}/x100x", id),
+        RotationSource::Gallery => "images://gallery/hide/all/x100x".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{random_base_path, sequential_path, CurrentMarker, RotationSource};
+
+    #[test]
+    fn gallery_source_paths_have_images_scheme() {
+        let album = RotationSource::Album("album-1".to_string());
+        let gallery = RotationSource::Gallery;
+
+        for path in [
+            sequential_path(&album, Some(CurrentMarker::Order(12))),
+            sequential_path(&album, None),
+            sequential_path(&gallery, Some(CurrentMarker::Time(34))),
+            sequential_path(&gallery, None),
+            random_base_path(&album),
+            random_base_path(&gallery),
+        ] {
+            assert!(
+                path.starts_with("images://gallery/hide/"),
+                "unexpected provider path: {path}"
+            );
+        }
+    }
 }
 
 /// 模式切换 / 兜底场景: 从画廊里随机取一张可作壁纸的图, 返回 local_path。
@@ -274,7 +307,7 @@ impl WallpaperRotator {
 
     async fn get_current_wallpaper_path(_app: &AppHandle) -> Option<String> {
         let id = Settings::global().get_current_wallpaper_image_id()?;
-        let img = Storage::global().find_image_by_id(&id).ok().flatten()?;
+        let img = Storage::find_image_by_id(&id).ok().flatten()?;
         let p = img.local_path;
         if Path::new(&p).exists() {
             Some(p)
@@ -613,6 +646,10 @@ impl WallpaperRotator {
     /// - start_from_current=true：当轮播来源为“画廊”（album_id="") 时，优先从当前壁纸开始（不立刻换壁纸）。
     /// - 注意：开启/切换轮播不会立刻切换当前壁纸；首次自动切换发生在 interval 到期后（或用户手动触发 rotate）。
     pub async fn ensure_running(&self, _start_from_current: bool) -> Result<(), String> {
+        // 壁纸功能已关闭：静默跳过，不启动轮播线程。
+        if Settings::global().get_wallpaper_disabled() {
+            return Ok(());
+        }
         // 已在运行：切换轮播来源时不应报错，直接 reset 让任务按新设置继续运行即可。
         // 画廊顺序模式由 `current_wallpaper_image_id` 在 DB 层面定位下一张（`images.id > ?`），
         // 不再需要预加载全画廊并对齐 `current_index`。
@@ -720,6 +757,10 @@ impl WallpaperRotator {
     /// - 如果轮播未启用，执行一次壁纸切换（需要画册ID）
     /// - 依赖当前设置：画册、随机/顺序、原生/窗口模式、style/transition
     pub async fn rotate(&self) -> Result<(), String> {
+        // 壁纸功能已关闭：静默跳过，不切换壁纸。
+        if Settings::global().get_wallpaper_disabled() {
+            return Ok(());
+        }
         // 检查轮播器是否正在运行
         if self.running.load(Ordering::Relaxed) {
             // 轮播线程里可能正在 await tick；如果这里去抢 std::sync::Mutex 会卡住很久。

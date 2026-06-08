@@ -6,6 +6,7 @@
 //!   - required 规则：与前端一致，`default` 不存在即视为 required
 //! - `plugin pack`：打包单个插件目录为 `.kgpg`（KGPG v2：固定头部 + ZIP，ZIP 内不含 icon.png）
 //! - `plugin import`：导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
+//! - `plugin run migrate`：本地执行插件包内 metadata_migrations/vN.rhai，输入 JSON，输出 JSON
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use include_dir::{include_dir, Dir};
@@ -121,9 +122,17 @@ struct ImportPluginArgs {
 
 #[derive(Args, Debug)]
 struct RunPluginArgs {
+    /// 特殊运行模式；`migrate` 表示本地测试 metadata_migrations
+    #[arg(value_name = "RUN_COMMAND")]
+    run_command: Option<String>,
+
     /// 插件 ID（已安装的 .kgpg 文件名，不含扩展名）或插件文件路径（.kgpg）
     #[arg(short = 'p', long = "plugin")]
-    plugin: String,
+    plugin: Option<String>,
+
+    /// `plugin run migrate` 的输入 metadata JSON 字符串
+    #[arg(long = "input")]
+    migrate_input: Option<String>,
 
     /// 输出目录（下载图片保存目录）。不指定则使用默认图片目录（Pictures/Kabegame 或数据目录）。
     #[arg(short = 'o', long = "output-dir")]
@@ -153,7 +162,7 @@ async fn main() {
         Commands::IpcStatus => ipc_status().await,
         Commands::Plugin(cmd) => match cmd {
             PluginCommands::New(args) => new_plugin(args),
-            PluginCommands::Run(args) => run_plugin(args),
+            PluginCommands::Run(args) => run_plugin(args).await,
             PluginCommands::Pack(args) => pack_plugin(args),
             PluginCommands::Import(args) => import_plugin(args).await,
         },
@@ -275,15 +284,22 @@ fn write_template_binary_to(template_rel_path: &str, out_path: &Path) -> Result<
 // NOTE: build_minimal_app / run_plugin 等"后台能力"已迁移到独立的 `kabegame-daemon` 中。
 
 /// 运行插件命令
-fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
-    // 仅通过 daemon IPC 执行（CLI 不再本地直跑，避免多进程争抢数据目录/DB）
-    let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
-        eprintln!("创建 Tokio Runtime 失败: {e}");
-        std::process::exit(1);
-    });
+async fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
+    if args.run_command.as_deref() == Some("migrate") {
+        return run_plugin_migrate(args).await;
+    }
+    if let Some(command) = args.run_command.as_deref() {
+        return Err(format!("未知 plugin run 子命令 `{command}`"));
+    }
+    if args.migrate_input.is_some() {
+        return Err("`--input` 只能用于 `plugin run migrate`".to_string());
+    }
+    let plugin = args
+        .plugin
+        .ok_or_else(|| "缺少必需参数：--plugin <PLUGIN>".to_string())?;
 
     // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
-    if !rt.block_on(is_daemon_available()) {
+    if !is_daemon_available().await {
         let daemon_path = find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
         return Err(format!(
@@ -294,7 +310,7 @@ fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
 
     // 将画册名称转换为 ID（如果提供了名称）
     let output_album_id = match args.output_album {
-        Some(name) => match rt.block_on(resolve_album_name_to_id(&name)) {
+        Some(name) => match resolve_album_name_to_id(&name).await {
             Ok(Some(id)) => Some(id),
             Ok(None) => {
                 return Err(format!("未找到名称为 \"{}\" 的画册", name));
@@ -307,7 +323,7 @@ fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
     };
 
     let req = kabegame_core::ipc::ipc::IpcRequest::PluginRun {
-        plugin: args.plugin,
+        plugin,
         output_dir: args
             .output_dir
             .as_ref()
@@ -317,7 +333,7 @@ fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
         plugin_args: args.plugin_args,
         http_headers: None,
     };
-    match rt.block_on(kabegame_core::ipc::ipc::request(req)) {
+    match kabegame_core::ipc::ipc::request(req).await {
         Ok(resp) if resp.ok => {
             if let Some(msg) = resp.message {
                 println!("{msg}");
@@ -334,6 +350,34 @@ fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
             e
         )),
     }
+}
+
+async fn run_plugin_migrate(args: RunPluginArgs) -> Result<(), String> {
+    if args.output_dir.is_some()
+        || args.task_id.is_some()
+        || args.output_album.is_some()
+        || !args.plugin_args.is_empty()
+    {
+        return Err(
+            "`plugin run migrate` 只接受 `--input <JSON>` 和 `--plugin <plugin.kgpg>`".to_string(),
+        );
+    }
+
+    let input = args
+        .migrate_input
+        .ok_or_else(|| "缺少必需参数：--input <JSON>".to_string())?;
+    let plugin_path = args
+        .plugin
+        .map(PathBuf::from)
+        .ok_or_else(|| "缺少必需参数：--plugin <plugin.kgpg>".to_string())?;
+
+    let pm = PluginManager::new();
+    let plugin = pm.preview_import_from_kgpg(&plugin_path).await?;
+    let scripts = plugin.metadata_migrations.into_iter().collect();
+    let output =
+        kabegame_core::plugin::metadata_migration::test_metadata_migrations(input, scripts)?;
+    println!("{output}");
+    Ok(())
 }
 
 /// 将画册名称转换为 ID（通过 IPC 查询）
@@ -709,6 +753,34 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf, backend: PluginBackend) -> Resul
                 if kabegame_core::providers::is_provider_file_path(&rel) {
                     entries.push((rel, p));
                 }
+            }
+        }
+    }
+
+    // metadata_migrations/：图片 metadata 版本迁移脚本（v{N}.rhai）
+    let metadata_migrations_dir = plugin_dir.join("metadata_migrations");
+    if metadata_migrations_dir.is_dir() {
+        let rd = std::fs::read_dir(&metadata_migrations_dir)
+            .map_err(|e| format!("读取 metadata_migrations 失败: {}", e))?;
+        for ent in rd {
+            let ent = ent.map_err(|e| format!("读取 metadata_migrations 失败: {}", e))?;
+            let p = ent.path();
+            if !p.is_file() {
+                continue;
+            }
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            let is_versioned_rhai = name
+                .strip_prefix('v')
+                .and_then(|s| s.strip_suffix(".rhai"))
+                .map(|version| !version.is_empty() && version.chars().all(|ch| ch.is_ascii_digit()))
+                .unwrap_or(false);
+            if is_versioned_rhai {
+                let rel = p
+                    .strip_prefix(plugin_dir)
+                    .map_err(|_| "metadata_migrations 路径异常".to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                entries.push((rel, p));
             }
         }
     }

@@ -99,8 +99,9 @@
                     </el-alert>
 
                     <div class="help-list">
-                        <SettingRow v-for="item in shortcutItems" :key="item.id" :label="$t(item.labelKey)"
-                            :description="$t(item.descriptionKey)">
+                        <SettingRow v-for="item in shortcutItems" :key="item.id"
+                            :label="item.labelKey ? $t(item.labelKey) : ''"
+                            :description="item.descriptionKey ? $t(item.descriptionKey) : ''">
                             <div class="shortcut-keys">
                                 <span v-for="(k, idx) in item.keys" :key="idx" class="kbd">{{ k }}</span>
                             </div>

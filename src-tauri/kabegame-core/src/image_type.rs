@@ -8,7 +8,7 @@ use std::sync::{LazyLock, OnceLock, RwLock};
 /// 后端内置支持的图片扩展名（小写，不含点号）。前端可通过 set_frontend_supported_image_formats 扩展额外格式。
 const BUILTIN_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp"];
 /// 后端内置支持的视频扩展名（小写，不含点号）。
-const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov"];
+const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "wmv", "webm", "mkv"];
 
 /// 扩展名到 MIME 的映射（含内置 avif，以及前端可能上报的 heic）。
 const EXT_MIME: &[(&str, &str)] = &[
@@ -22,6 +22,9 @@ const EXT_MIME: &[(&str, &str)] = &[
     ("heic", "image/heic"),
     ("mp4", "video/mp4"),
     ("mov", "video/quicktime"),
+    ("wmv", "video/x-ms-wmv"),
+    ("webm", "video/webm"),
+    ("mkv", "video/x-matroska"),
 ];
 
 static MIME_BY_EXT: OnceLock<HashMap<String, String>> = OnceLock::new();
@@ -150,14 +153,22 @@ pub fn supported_image_extensions() -> Vec<String> {
 }
 
 /// 返回支持的视频扩展名列表（内置，去重）。
+/// light 模式（无 video feature）返回空列表，使前端不把视频视为可导入类型。
 pub fn supported_video_extensions() -> Vec<String> {
-    let mut out: Vec<String> = BUILTIN_VIDEO_EXTENSIONS
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    out.sort();
-    out.dedup();
-    out
+    #[cfg(feature = "video")]
+    {
+        let mut out: Vec<String> = BUILTIN_VIDEO_EXTENSIONS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+    #[cfg(not(feature = "video"))]
+    {
+        vec![]
+    }
 }
 
 /// 返回支持的媒体扩展名（图片 + 视频）。
@@ -194,6 +205,9 @@ const MIME_TO_EXT: &[(&str, &str)] = &[
     ("image/heic", "heic"),
     ("video/mp4", "mp4"),
     ("video/quicktime", "mov"),
+    ("video/x-ms-wmv", "wmv"),
+    ("video/webm", "webm"),
+    ("video/x-matroska", "mkv"),
 ];
 
 static EXT_BY_MIME: OnceLock<HashMap<String, String>> = OnceLock::new();
@@ -372,25 +386,6 @@ pub fn url_has_video_extension(url: &str) -> bool {
 /// 判断 URL 是否以支持的媒体扩展名结尾。
 pub fn url_has_media_extension(url: &str) -> bool {
     url_has_image_extension(url) || url_has_video_extension(url)
-}
-
-/// 根据 MIME 类型判断是否为支持的压缩包（用于 Android content:// URI）。
-pub fn is_archive_mime(mime: &Option<String>) -> bool {
-    let Some(m) = mime else { return false };
-    let m = m.trim().to_lowercase();
-    matches!(
-        m.as_str(),
-        "application/zip"
-            | "application/x-zip-compressed"
-            | "application/x-rar-compressed"
-            | "application/vnd.rar"
-            | "application/x-7z-compressed"
-            | "application/x-tar"
-            | "application/gzip"
-            | "application/x-gzip"
-            | "application/x-bzip2"
-            | "application/x-xz"
-    )
 }
 
 #[cfg(test)]

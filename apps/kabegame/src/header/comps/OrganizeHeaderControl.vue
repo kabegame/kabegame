@@ -1,10 +1,11 @@
 <template>
   <div class="organize-header-control">
     <el-popover
-      v-model:visible="showProgressPopover"
+      :visible="progressPopover.isOpen.value"
       trigger="manual"
       placement="bottom-end"
       :width="340"
+      @update:visible="progressPopover.close"
     >
       <template #reference>
         <!-- 单层组件根非原生节点时，ElPopover 的运行时指令无法正确挂载，需包一层元素 -->
@@ -49,37 +50,22 @@
 
         <div class="popover-actions">
           <el-button type="danger" link @click="handleCancel">{{ t("common.cancel") }}</el-button>
-          <el-button size="small" type="primary" @click="showProgressPopover = false">{{ t("common.confirm") }}</el-button>
+          <el-button size="small" type="primary" @click="progressPopover.close()">{{ t("common.confirm") }}</el-button>
         </div>
       </div>
     </el-popover>
-
-    <Teleport to="body">
-      <OrganizeDialog v-model="showDialog" :loading="loading" @confirm="handleConfirm" />
-    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { FolderOpened } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import { listen } from "@/api/rpc";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
-import OrganizeDialog from "@/components/OrganizeDialog.vue";
-
-type OrganizeOptions = {
-  dedupe: boolean;
-  removeMissing: boolean;
-  removeUnrecognized: boolean;
-  regenThumbnails: boolean;
-  deleteSourceFiles: boolean;
-  safeDelete: boolean;
-  rangeStart: number | null;
-  rangeEnd: number | null;
-};
+import { useModal } from "@kabegame/core/composables/useModal";
+import { useOrganizeStore, type OrganizeOptions } from "@/stores/organize";
 
 /** 与后端 `OrganizeRunState` / `organize-progress` 字段一致 */
 type OrganizeProgressState = {
@@ -94,17 +80,17 @@ type OrganizeProgressState = {
 type OrganizeRunStatePayload = OrganizeProgressState & {
   running: boolean;
   dedupe: boolean;
+  dedupeKeepNew: boolean;
   removeMissing: boolean;
   removeUnrecognized: boolean;
   regenThumbnails: boolean;
   deleteSourceFiles: boolean;
-  safeDelete: boolean;
 };
 
 const { t } = useI18n();
 const loading = ref(false);
-const showDialog = ref(false);
-const showProgressPopover = ref(false);
+const organizeStore = useOrganizeStore();
+const progressPopover = useModal();
 const progress = ref<OrganizeProgressState>({
   processedGlobal: 0,
   libraryTotal: 0,
@@ -117,7 +103,6 @@ const lastRunOptions = ref<OrganizeOptions | null>(null);
 
 let unlistenProgress: (() => void) | undefined;
 let unlistenFinished: (() => void) | undefined;
-useModalBack(showProgressPopover);
 
 /** 区间模式：分母为所选终点 end（与对话框一致）；全量：分母为全库张数 */
 const progressSummaryText = computed(() => {
@@ -166,11 +151,6 @@ const optionRows = computed(() => {
     { key: "removeUnrecognized", label: t("gallery.removeUnrecognized"), enabled: options.removeUnrecognized },
     { key: "regenThumbnails", label: t("gallery.regenThumbnails"), enabled: options.regenThumbnails },
     { key: "deleteSourceFiles", label: t("gallery.deleteSourceFiles"), enabled: options.deleteSourceFiles },
-    {
-      key: "safeDelete",
-      label: t("gallery.safeDelete"),
-      enabled: options.deleteSourceFiles ? options.safeDelete : false,
-    },
   ];
 });
 
@@ -205,15 +185,15 @@ async function syncOrganizeRunStateFromBackend() {
     applyProgressPayload(s);
     lastRunOptions.value = {
       dedupe: s.dedupe,
+      dedupeKeepNew: s.dedupeKeepNew,
       removeMissing: s.removeMissing,
       removeUnrecognized: s.removeUnrecognized,
       regenThumbnails: s.regenThumbnails,
       deleteSourceFiles: s.deleteSourceFiles,
-      safeDelete: s.safeDelete,
       rangeStart: s.rangeStart ?? null,
       rangeEnd: s.rangeEnd ?? null,
     };
-    showProgressPopover.value = true;
+    progressPopover.open();
   } catch {
     /* 无该命令或非桌面端 */
   }
@@ -233,7 +213,7 @@ onMounted(async () => {
   }>("organize-finished", (event) => {
     const p = event.payload;
     loading.value = false;
-    showProgressPopover.value = false;
+    progressPopover.close();
     lastRunOptions.value = null;
     progress.value = {
       processedGlobal: 0,
@@ -258,21 +238,21 @@ onUnmounted(() => {
   unlistenFinished?.();
 });
 
-async function handleConfirm(options: {
-  dedupe: boolean;
-  removeMissing: boolean;
-  removeUnrecognized: boolean;
-  regenThumbnails: boolean;
-  deleteSourceFiles: boolean;
-  safeDelete: boolean;
-  rangeStart: number | null;
-  rangeEnd: number | null;
-}) {
-  showDialog.value = false;
+// Gallery 确认整理后回传参数，这里真正启动整理（进度/popover 仍由本组件承载）
+watch(
+  () => organizeStore.pendingOptions,
+  (opts) => {
+    if (!opts) return;
+    const consumed = organizeStore.consumeStart();
+    if (consumed) void runOrganize(consumed);
+  }
+);
+
+async function runOrganize(options: OrganizeOptions) {
   if (loading.value) return;
   try {
     loading.value = true;
-    showProgressPopover.value = false;
+    progressPopover.close();
     progress.value = {
       processedGlobal: 0,
       libraryTotal: 0,
@@ -285,11 +265,11 @@ async function handleConfirm(options: {
     await invoke("start_organize", {
       args: {
         dedupe: options.dedupe,
+        dedupeKeepNew: options.dedupeKeepNew,
         removeMissing: options.removeMissing,
         removeUnrecognized: options.removeUnrecognized,
         regenThumbnails: options.regenThumbnails,
         deleteSourceFiles: options.deleteSourceFiles,
-        safeDelete: options.safeDelete,
         rangeStart: options.rangeStart,
         rangeEnd: options.rangeEnd,
       },
@@ -303,10 +283,10 @@ async function handleConfirm(options: {
 
 function handleOrganizeButtonClick() {
   if (loading.value) {
-    showProgressPopover.value = !showProgressPopover.value;
+    progressPopover.toggle();
     return;
   }
-  showDialog.value = true;
+  organizeStore.openDialog();
 }
 
 async function handleCancel() {

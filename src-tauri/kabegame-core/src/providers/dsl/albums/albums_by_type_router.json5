@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "albums_by_type_router",
+    "resolve": {
+        "([a-z_]+)": {
+            "provider": "albums_by_type_provider",
+            "properties": { "type": "${capture[1]}" }
+        }
+    }
+}

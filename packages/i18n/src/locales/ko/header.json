@@ -22,5 +22,7 @@
   "failedImagesDeleteAll": "모두 삭제",
   "failedImagesFilter": "플러그인별 필터",
   "showHidden": "숨김 이미지 표시",
-  "hideHidden": "숨김 이미지 숨기기"
+  "hideHidden": "숨김 이미지 숨기기",
+  "showAlbumImages": "앨범 이미지 표시",
+  "hideAlbumImages": "앨범 이미지 숨기기"
 }

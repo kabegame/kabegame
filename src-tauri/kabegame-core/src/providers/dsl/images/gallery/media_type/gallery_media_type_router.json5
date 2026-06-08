@@ -1,0 +1,15 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_media_type_router",
+    // 7c S5: 静态二选一: image / video。
+    "resolve": {
+        "image": {
+            "provider": "gallery_media_type_provider",
+            "properties": { "kind": "image" }
+        },
+        "video": {
+            "provider": "gallery_media_type_provider",
+            "properties": { "kind": "video" }
+        }
+    }
+}

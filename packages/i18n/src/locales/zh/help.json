@@ -9,7 +9,6 @@
   "noTips": "暂无技巧",
   "shortcutHelpTitle": "快捷键帮助",
   "shortcutNote": "说明：部分快捷键仅在图片网格获得焦点时生效（先在网格空白处/图片上点一下）。",
-
   "drawerTitleGallery": "画廊帮助",
   "drawerTitleAlbumDetail": "画册帮助",
   "drawerTitleAlbums": "画册列表帮助",
@@ -17,45 +16,134 @@
   "drawerTitlePluginBrowser": "源管理帮助",
   "drawerTitleSettings": "设置帮助",
   "drawerTitleDefault": "帮助",
-
   "tips": {
     "tag": {
       "androidUnavailable": "安卓无",
       "lightModeUnavailable": "Light 模式不可用"
     },
     "category": {
-      "gallery": { "title": "画廊", "description": "查看和管理收集到的图片" },
-      "albums": { "title": "画册", "description": "创建和管理画册，整理和分类图片" },
-      "wallpaper": { "title": "壁纸", "description": "设置桌面壁纸、轮播和显示模式" },
-      "plugins": { "title": "插件", "description": "源插件的安装、商店源与插件编辑器" },
-      "tasks": { "title": "任务", "description": "查看和管理收集任务" },
-      "tray": { "title": "托盘", "description": "系统托盘图标的位置和功能说明" },
-      "virtual-driver": { "title": "虚拟盘（VD）", "description": "在资源管理器里像磁盘一样浏览画册（Windows）" },
-      "command-line": { "title": "命令行", "description": "使用命令行工具运行插件、打包和导入插件" },
-      "easter-egg": { "title": "彩蛋", "description": "一些不影响功能的小惊喜" }
+      "gallery": {
+        "title": "画廊",
+        "description": "查看和管理收集到的图片"
+      },
+      "albums": {
+        "title": "画册",
+        "description": "创建和管理画册，整理和分类图片"
+      },
+      "wallpaper": {
+        "title": "壁纸",
+        "description": "设置桌面壁纸、轮播和显示模式"
+      },
+      "plugins": {
+        "title": "插件",
+        "description": "源插件的安装、商店源与插件编辑器"
+      },
+      "tasks": {
+        "title": "任务",
+        "description": "查看和管理收集任务"
+      },
+      "tray": {
+        "title": "托盘",
+        "description": "系统托盘图标的位置和功能说明"
+      },
+      "virtual-driver": {
+        "title": "虚拟盘（VD）",
+        "description": "在资源管理器里像磁盘一样浏览画册（Windows）"
+      },
+      "command-line": {
+        "title": "命令行",
+        "description": "使用命令行工具运行插件、打包和导入插件"
+      },
+      "easter-egg": {
+        "title": "彩蛋",
+        "description": "一些不影响功能的小惊喜"
+      }
     },
     "item": {
-      "import-drag-drop": { "title": "拖入本地文件快速导入", "summary": "拖入窗口或画廊右上角「开始收集」→ 本地，将图片/文件夹导入到画廊（可选同时创建画册）。桌面支持拖入与选择文件，安卓通过媒体选择器导入。" },
-      "gallery-browsing": { "title": "画廊浏览方法", "summary": "了解如何查看图片总数、使用分页浏览大量图片，以及使用去重功能清理重复图片。" },
-      "gallery-preview": { "title": "双击应用内预览", "summary": "启用后双击图片即可在应用内查看大图，支持缩放、拖拽、切换图片等操作，无需打开系统图片查看器。" },
-      "albums-introduction": { "title": "画册说明", "summary": "画册用于整理和分类图片，可以创建画册、添加图片、设为壁纸轮播等。" },
-      "wallpaper-basic": { "title": "基本壁纸设置方法", "summary": "右键图片选择「抱到桌面上」，快速设置单张壁纸。" },
-      "wallpaper-rotation": { "title": "轮播 vs 非轮播", "summary": "了解轮播模式和非轮播模式的区别，以及如何开启/关闭轮播。" },
-      "wallpaper-mode": { "title": "原生模式 vs 窗口模式", "summary": "两种壁纸显示模式的区别：原生模式性能好，窗口模式功能更丰富；Windows / macOS 支持窗口模式。" },
-      "wallpaper-window-video": { "title": "窗口模式与视频壁纸、应用关闭说明", "summary": "窗口模式下可设置视频/GIF 壁纸；应用完全退出后壁纸会消失，保持运行即可持续显示。" },
-      "plugin-introduction": { "title": "什么是插件？", "summary": "插件是 Kabegame 的核心功能，用于从各种网站收集图片资源。了解插件的基本概念、文件格式、类型和作用。" },
-      "plugin-store-basics": { "title": "插件商店与商店源怎么用", "summary": "在\"源管理\"里安装/更新源插件，并通过添加商店源获得可安装列表。" },
-      "plugin-import": { "title": "插件导入方法", "summary": "四种方式导入 .kgpg 插件文件：双击文件、拖入窗口、从源管理页面导入、通过插件编辑器编写并导入。" },
-      "plugin-usage": { "title": "如何使用插件收集图片", "summary": "在画廊页面打开收集对话框，选择插件、配置参数、设置输出目录和画册，然后开始收集任务。" },
-      "task-introduction": { "title": "任务说明", "summary": "了解任务是什么、任务做了什么，以及最大运行任务数量和并发下载限制。" },
-      "task-viewing": { "title": "查看任务信息、状态以及图片", "summary": "了解如何通过任务抽屉和任务详情页查看任务信息、状态以及已收集的图片。" },
-      "task-management": { "title": "任务的创建、删除和终止方法", "summary": "了解如何创建收集任务、终止正在运行的任务，以及删除任务（包括批量删除）。" },
-      "tray-introduction": { "title": "托盘位置及功能", "summary": "了解系统托盘图标的位置、左键/右键功能，以及托盘菜单的各项功能。" },
-      "virtual-driver-basics": { "title": "用虚拟盘在资源管理器里浏览图片", "summary": "开启\"画册盘\"后，可在资源管理器中文件方式浏览画册与图片文件。" },
-      "virtual-driver-directories": { "title": "虚拟盘各目录说明", "summary": "了解虚拟盘根目录下的各个目录（全部、按插件、按时间、按任务、画册）的用途和使用场景。" },
-      "command-line-basics": { "title": "命令行基本说明", "summary": "了解 Kabegame CLI 工具的基本用法，包括如何运行插件、打包插件和导入插件。" },
-      "command-line-examples": { "title": "常用命令示例", "summary": "实用的命令行操作示例：导入单张图片、导入文件夹到画廊等常用场景。" },
-      "easter-egg-turtle-complaint": { "title": "快速滑动会触发龟龟的埋怨", "summary": "在画廊/画册里滑得太快，会出现「龟龟跟不上」的俏皮提示。" }
+      "import-drag-drop": {
+        "title": "拖入本地文件快速导入",
+        "summary": "拖入窗口或画廊右上角「开始收集」→ 本地，将图片/文件夹导入到画廊（可选同时创建画册）。桌面支持拖入与选择文件，安卓通过媒体选择器导入。"
+      },
+      "gallery-browsing": {
+        "title": "画廊浏览方法",
+        "summary": "了解如何查看图片总数、使用分页浏览大量图片，以及使用去重功能清理重复图片。"
+      },
+      "gallery-preview": {
+        "title": "双击应用内预览",
+        "summary": "启用后双击图片即可在应用内查看大图，支持缩放、拖拽、切换图片等操作，无需打开系统图片查看器。"
+      },
+      "albums-introduction": {
+        "title": "画册说明",
+        "summary": "画册用于整理和分类图片，可以创建画册、添加图片、设为壁纸轮播等。"
+      },
+      "wallpaper-basic": {
+        "title": "基本壁纸设置方法",
+        "summary": "右键图片选择「抱到桌面上」，快速设置单张壁纸。"
+      },
+      "wallpaper-rotation": {
+        "title": "轮播 vs 非轮播",
+        "summary": "了解轮播模式和非轮播模式的区别，以及如何开启/关闭轮播。"
+      },
+      "wallpaper-mode": {
+        "title": "原生模式 vs 窗口模式",
+        "summary": "两种壁纸显示模式的区别：原生模式性能好，窗口模式功能更丰富；Windows / macOS 支持窗口模式。"
+      },
+      "wallpaper-window-video": {
+        "title": "窗口模式与视频壁纸、应用关闭说明",
+        "summary": "窗口模式下可设置视频/GIF 壁纸；应用完全退出后壁纸会消失，保持运行即可持续显示。"
+      },
+      "plugin-introduction": {
+        "title": "什么是插件？",
+        "summary": "插件是 Kabegame 的核心功能，用于从各种网站收集图片资源。了解插件的基本概念、文件格式、类型和作用。"
+      },
+      "plugin-store-basics": {
+        "title": "插件商店与商店源怎么用",
+        "summary": "在\"源管理\"里安装/更新源插件，并通过添加商店源获得可安装列表。"
+      },
+      "plugin-import": {
+        "title": "插件导入方法",
+        "summary": "四种方式导入 .kgpg 插件文件：双击文件、拖入窗口、从源管理页面导入、通过插件编辑器编写并导入。"
+      },
+      "plugin-usage": {
+        "title": "如何使用插件收集图片",
+        "summary": "在画廊页面打开收集对话框，选择插件、配置参数、设置输出目录和画册，然后开始收集任务。"
+      },
+      "task-introduction": {
+        "title": "任务说明",
+        "summary": "了解任务是什么、任务做了什么，以及最大运行任务数量和并发下载限制。"
+      },
+      "task-viewing": {
+        "title": "查看任务信息、状态以及图片",
+        "summary": "了解如何通过任务抽屉和任务详情页查看任务信息、状态以及已收集的图片。"
+      },
+      "task-management": {
+        "title": "任务的创建、删除和终止方法",
+        "summary": "了解如何创建收集任务、终止正在运行的任务，以及删除任务（包括批量删除）。"
+      },
+      "tray-introduction": {
+        "title": "托盘位置及功能",
+        "summary": "了解系统托盘图标的位置、左键/右键功能，以及托盘菜单的各项功能。"
+      },
+      "virtual-driver-basics": {
+        "title": "用虚拟盘在资源管理器里浏览图片",
+        "summary": "开启\"画册盘\"后，可在资源管理器中文件方式浏览画册与图片文件。"
+      },
+      "virtual-driver-directories": {
+        "title": "虚拟盘各目录说明",
+        "summary": "了解虚拟盘根目录下的各个目录（全部、按插件、按时间、按任务、画册）的用途和使用场景。"
+      },
+      "command-line-basics": {
+        "title": "命令行基本说明",
+        "summary": "了解 Kabegame CLI 工具的基本用法，包括如何运行插件、打包插件和导入插件。"
+      },
+      "command-line-examples": {
+        "title": "常用命令示例",
+        "summary": "实用的命令行操作示例：导入单张图片、导入文件夹到画廊等常用场景。"
+      },
+      "easter-egg-turtle-complaint": {
+        "title": "快速滑动会触发龟龟的埋怨",
+        "summary": "在画廊/画册里滑得太快，会出现「龟龟跟不上」的俏皮提示。"
+      }
     }
   },
   "groups": {
@@ -68,11 +156,11 @@
     "import-drag-drop": {
       "overviewTitle": "导入方式概览",
       "overviewPara": "本地导入功能已内置，无需单独安装「本地导入」插件。你可以通过以下方式将本地图片加入画廊：",
-      "overviewItem1": "桌面：将图片/文件夹/压缩包拖入窗口，或在画廊右上角点击「开始收集」→ 选择「本地」打开导入对话框。",
+      "overviewItem1": "桌面：将图片/文件夹拖入窗口，或在画廊右上角点击「开始收集」→ 选择「本地」打开导入对话框。",
       "overviewItem2": "安卓：在画廊右上角点击「开始收集」→ 选择「本地」，通过系统媒体选择器勾选要导入的图片。",
       "desktopDragTitle": "桌面：拖入导入",
-      "desktopDragPara1": "把本地图片文件、包含图片的文件夹，或图片压缩包（zip）直接拖到主窗口中。",
-      "desktopDragPara2": "可以同时拖入多种类型：你可以一次性选择并拖入多个图片文件、多个文件夹、多个压缩包，或它们的任意组合。应用会统一处理并显示在导入确认窗口中。",
+      "desktopDragPara1": "把本地图片文件或包含图片的文件夹直接拖到主窗口中。",
+      "desktopDragPara2": "可以同时拖入多个图片文件、多个文件夹，或它们的组合。应用会统一处理并显示在导入确认窗口中。",
       "desktopDragPara3": "应用会弹出导入确认窗口，你可以选择是否为每个来源创建画册（推荐：导入大批量素材时更好管理）。",
       "desktopStartCollectTitle": "桌面：右上角「开始收集」→ 本地",
       "desktopStartCollectPara": "在画廊页面点击右上角「开始收集」按钮，在下拉菜单中选择「本地」，会打开本地导入对话框。你可以通过「添加文件」「添加文件夹」选择要导入的内容，同样支持为每个来源创建画册。",
@@ -81,9 +169,6 @@
       "folderTitle": "文件夹导入",
       "folderPara1": "拖入文件夹时，会递归扫描子目录并导入其中的图片。",
       "folderPara2": "如果开启了\"为每个来源创建画册\"，会为该文件夹创建一个同名画册，并把导入结果放入该画册。",
-      "zipTitle": "压缩包导入（zip）",
-      "zipPara1": "拖入 zip 时，后端会智能导入其中的图片，无需手动解压。",
-      "zipPara2": "导入时如果勾选了\"为每个来源创建画册\"，会为该 zip 创建一个同名画册，并把导入结果放入该画册。",
       "macosTitle": "macOS：若导入「图片」「桌面」等文件夹失败",
       "macosPara1": "在 macOS 上，「图片」「桌面」「文稿」「下载」等为系统受保护文件夹。拖拽导入可能无法访问这些目录（会提示\"权限不足\"）。",
       "macosPara2": "解决办法：",
@@ -141,9 +226,9 @@
       "usageSwitchItem2": "点击预览对话框左右两侧的导航按钮",
       "usageSwitchItem3": "在图片左右边缘悬停，会出现半透明的导航按钮",
       "usageZoom": "缩放图片：",
-      "usageZoomItem1": "使用鼠标滚轮向上/向下滚动",
+      "usageZoomItem1": "按住 Ctrl 并使用鼠标滚轮向上/向下滚动",
       "usageZoomItem2": "使用触摸板手势（双指捏合）",
-      "usageDrag": "拖拽图片：放大后，按住鼠标左键并拖拽可以移动图片查看不同区域",
+      "usageDrag": "移动图片：放大后，按住鼠标左键拖拽，或无修饰键滚动鼠标滚轮/触摸板双指同向滑动，可以查看不同区域",
       "usageDelete": "隐藏/删除图片：在预览中按 Backspace 隐藏当前图片，按 Delete 删除当前图片",
       "scenariosTitle": "适用场景",
       "scenariosPara": "应用内预览特别适合以下场景：",
@@ -371,7 +456,7 @@
       "outputTitle": "设置输出目录和画册",
       "outputPara1": "输出目录：指定图片保存位置。留空则使用默认下载目录（可在设置中配置）。",
       "outputPara2": "输出画册：选择将收集的图片添加到哪个画册，或选择\"+ 新建画册\"创建新画册。留空则仅添加到画廊。",
-      "outputPara3": "对于本地导入（local-import 插件），还可以勾选为该文件夹/压缩包创建画册，自动为每个导入来源创建同名画册。",
+      "outputPara3": "对于本地导入（local-import 插件），还可以勾选为该文件夹创建画册，自动为每个导入来源创建同名画册。",
       "saveTitle": "保存运行配置（可选）",
       "savePara1": "在运行配置下拉菜单中，可以保存当前的任务配置，方便下次快速复用。",
       "savePara2": "保存配置后，下次创建任务时可以直接选择该配置，无需重新填写所有参数。",
@@ -478,10 +563,9 @@
       "createMethod1Item5": "运行配置：可选，选择之前保存的运行配置快速复用参数",
       "createMethod1Para2": "配置完成后，点击\"开始收集\"按钮即可创建任务。",
       "createMethod2": "方式二：拖入文件自动创建导入任务",
-      "createMethod2Para": "将本地图片文件、文件夹或压缩包（zip）直接拖入应用窗口，会自动创建本地导入任务：",
+      "createMethod2Para": "将本地图片文件或文件夹直接拖入应用窗口，会自动创建本地导入任务：",
       "createMethod2Item1": "拖入图片文件：自动创建导入任务，将图片添加到画廊",
       "createMethod2Item2": "拖入文件夹：递归扫描文件夹中的所有图片并导入",
-      "createMethod2Item3": "拖入压缩包：自动解压并导入其中的图片",
       "createMethod2Item4": "可选创建画册：在导入确认窗口中可以选择\"为每个来源创建画册\"",
       "stopTitle": "终止任务",
       "stopPara": "如果任务正在运行，你可以随时终止它：",

@@ -7,7 +7,7 @@ use serde_json::json;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub struct SurfRecord {
     pub id: String,
     pub host: String,
@@ -20,8 +20,10 @@ pub struct SurfRecord {
     /// 累计删除张数（存储）
     pub deleted_count: i64,
     /// 当前关联 `images` 行数（由查询计算，非存储列）
+    #[serde(default)]
     pub image_count: i64,
     pub created_at: u64,
+    #[serde(default)]
     pub last_image: Option<ImageInfo>,
 }
 
@@ -591,6 +593,7 @@ impl Storage {
                         surf_record_id: Some(surf_record_id.to_string()),
                         crawled_at: row.get(5)?,
                         metadata_id: row.get::<_, Option<i64>>(6)?,
+                        metadata_version: 0,
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
                         favorite: row.get::<_, i64>(9)? != 0,
@@ -661,6 +664,7 @@ impl Storage {
                     surf_record_id: Some(surf_record_id.to_string()),
                     crawled_at: row.get(5)?,
                     metadata_id: row.get::<_, Option<i64>>(6)?,
+                    metadata_version: 0,
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
                     favorite: row.get::<_, i64>(9)? != 0,

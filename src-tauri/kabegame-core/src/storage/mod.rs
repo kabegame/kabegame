@@ -14,6 +14,8 @@ pub mod organize;
 pub mod plugin_data;
 pub mod plugin_sources;
 pub mod run_configs;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod safe_delete;
 pub mod surf_records;
 pub mod tasks;
 pub(crate) mod template_bridge;

@@ -8,7 +8,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { Delete } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
 const { t } = useI18n();

@@ -170,7 +170,7 @@ The IR is SQL-shaped but not a SQL string. It contains these atoms:
 
 | Atom | Meaning | Composition shape |
 |---|---|---|
-| `from` | Primary query source | One effective source |
+| schema `from` | Primary query source | Seeded by the host schema |
 | `fields` | Projection list | Accumulates |
 | `joins` | Joined sources | Accumulates in order |
 | `where` | Predicates | Conjoins unless specified otherwise |
@@ -206,7 +206,7 @@ or other field metadata.
 
 When a query has no declared fields, the renderer emits a default projection:
 
-- If `from` is a simple ASCII identifier, render `SELECT <from>.*`.
+- If the effective `from` is a simple ASCII identifier, render `SELECT <from>.*`.
 - Otherwise, render `SELECT *`.
 
 This default belongs in PathQL composition/rendering, not in storage-layer caller
@@ -221,7 +221,7 @@ precise as the implementation evolves.
 
 | Atom | Behavior | Notes |
 |---|---|---|
-| `from` | Cascading replace | Later declarations replace the effective source |
+| schema `from` | Seeded once | Provider contribs cannot replace it |
 | `fields` | Additive with alias sharing | Empty list uses default projection |
 | `joins` | Additive with alias sharing | Join SQL is trusted DSL code |
 | `where` | Additive `AND` | Prefer table-qualified predicates |
@@ -229,11 +229,12 @@ precise as the implementation evolves.
 | `limit` | Last-wins | `0` keeps normal SQL empty-result semantics |
 | `offset` | Additive `+` | Multiple offsets compose in chain order |
 
-### 8.2 `from`
+### 8.2 Schema `from`
 
-The folded query has one effective `from` clause. A provider that declares
-`from` replaces the effective source for itself and downstream providers. A
-provider without `from` inherits the already folded source.
+The folded query has one effective `from` clause. The host registers it with
+the schema for a `scheme://` path prefix before provider contributions are
+folded. `ContribQuery` does not contain `from`, so child providers cannot
+replace the schema source.
 
 ### 8.3 `fields`
 
@@ -707,7 +708,6 @@ PathQL is not:
 {
   "name": "gallery_route",
   "query": {
-    "from": "images",
     "fields": [
       "images.id",
       "images.url",
@@ -723,7 +723,6 @@ PathQL is not:
 ```json5
 {
   "query": {
-    "from": "images",
     "joins": [
       {
         "kind": "left",
@@ -777,24 +776,24 @@ label use the host-owned display map.
 }
 ```
 
-### 19.5 Empty fields default projection
+### 19.5 Schema-seeded default projection
 
 ```json5
 {
   "query": {
-    "from": "images",
     "where": "images.deleted_at IS NULL",
   },
 }
 ```
 
-The rendered projection is:
+When the host registers the path schema with `from = "images"`, the rendered
+projection is:
 
 ```sql
 SELECT images.*
 ```
 
-If `from` is not a simple table identifier, the rendered projection is:
+If the schema `from` is not a simple table identifier, the rendered projection is:
 
 ```sql
 SELECT *

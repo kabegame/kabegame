@@ -1,21 +1,12 @@
 import { nextTick, ref, shallowRef, type Ref } from "vue";
-import { invoke } from "@/api/rpc";
+import { pathqlEntry, pathqlFetch } from "@/services/pathql";
+import { rowToImageInfo } from "@/utils/imageRow";
+import { withGalleryPrefix } from "@/utils/path";
 import type { ImageInfo } from "@kabegame/core/types/image";
-
-type GalleryBrowseEntry =
-  | { kind: "dir"; name: string }
-  | { kind: "image"; image: ImageInfo };
-
-type GalleryBrowseResult = {
-  entries: GalleryBrowseEntry[];
-  total: number | null;
-  meta?: { kind: string; data: unknown } | null;
-  note?: { title: string; content: string } | null;
-};
 
 /**
  * 画廊图片列表管理（基于路径的查询）。
- * @param onBeforeFetch 每次 `browse_gallery_provider` 拉取前调用（如清空 per-page metadata 缓存）
+ * @param onBeforeFetch 每次拉取前调用（如清空 per-page metadata 缓存）
  */
 export function useGalleryImages(
   galleryContainerRef: Ref<HTMLElement | null>,
@@ -51,15 +42,14 @@ export function useGalleryImages(
     opts?: { loadKey?: string },
   ) => {
     onBeforeFetch?.();
-    const p = path.endsWith("/") || path.endsWith("/*") ? path : `${path}/`;
-    const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
-      path: p,
-    });
-    totalImages.value = res.total ?? 0;
+    const p = withGalleryPrefix(path);
+    const [rows, entry] = await Promise.all([
+      pathqlFetch<Record<string, unknown>>(p),
+      pathqlEntry(p).catch(() => null),
+    ]);
+    totalImages.value = entry?.total ?? rows.length;
 
-    const images = (res.entries || [])
-      .filter((e) => e.kind === "image")
-      .map((e) => (e as any).image as ImageInfo);
+    const images = rows.map(rowToImageInfo);
 
     await setLeafAndResetDisplay(images);
     loadedKey.value = opts?.loadKey ?? path;

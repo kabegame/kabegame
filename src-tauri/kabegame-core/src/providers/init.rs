@@ -13,6 +13,7 @@ use pathql_rs::template::eval::{TemplateContext, TemplateValue};
 use pathql_rs::ProviderRuntime;
 
 use super::dsl_loader::{register_embedded_dsl, validate_dsl};
+use super::programmatic::plugin_resource::register_plugin_resource_provider;
 use super::sql_executor::KabegameSqlExecutor;
 
 static RUNTIME: OnceLock<Arc<ProviderRuntime>> = OnceLock::new();
@@ -82,7 +83,39 @@ fn init_runtime() -> Arc<ProviderRuntime> {
     register_embedded_dsl(&runtime);
     validate_dsl(&runtime);
     runtime
-        .set_root("kabegame", "root_provider")
-        .unwrap_or_else(|e| panic!("set root provider failed: {}", e));
+        .register_schema("images", "images", "kabegame", "images_root_provider")
+        .unwrap_or_else(|e| panic!("register `images` schema failed: {}", e));
+    runtime
+        .register_schema("albums", "albums", "kabegame", "albums_root_provider")
+        .unwrap_or_else(|e| panic!("register `albums` schema failed: {}", e));
+    runtime
+        .register_schema("tasks", "tasks", "kabegame", "tasks_root_provider")
+        .unwrap_or_else(|e| panic!("register `tasks` schema failed: {}", e));
+    runtime
+        .register_schema(
+            "fail-images",
+            "task_failed_images",
+            "kabegame",
+            "fail_images_root_provider",
+        )
+        .unwrap_or_else(|e| panic!("register `fail-images` schema failed: {}", e));
+    runtime
+        .register_schema(
+            "surf_records",
+            "surf_records",
+            "kabegame",
+            "surf_records_root_provider",
+        )
+        .unwrap_or_else(|e| panic!("register `surf_records` schema failed: {}", e));
+    register_plugin_resource_provider(&runtime)
+        .unwrap_or_else(|e| panic!("register `plugin` provider failed: {}", e));
+    runtime
+        .register_schema(
+            "plugin",
+            "(SELECT 1)",
+            "kabegame",
+            "plugin_resource_root_provider",
+        )
+        .unwrap_or_else(|e| panic!("register `plugin` schema failed: {}", e));
     runtime
 }

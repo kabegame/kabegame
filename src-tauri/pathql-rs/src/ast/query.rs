@@ -13,8 +13,6 @@ pub struct ContribQuery {
     #[serde(default)]
     pub fields: Option<Vec<Field>>,
     #[serde(default)]
-    pub from: Option<SqlExpr>,
-    #[serde(default)]
     pub join: Option<Vec<Join>>,
     #[serde(default, rename = "where")]
     pub where_: Option<SqlExpr>,
@@ -75,22 +73,15 @@ mod tests {
         match v {
             Query::Contrib(c) => {
                 assert_eq!(c.limit, Some(NumberOrTemplate::Number(0.0)));
-                assert_eq!(c.from, None);
             }
             _ => panic!("expected Contrib"),
         }
     }
 
     #[test]
-    fn contrib_from_and_limit() {
-        let v: Query = serde_json::from_str(r#"{"from":"images","limit":0}"#).unwrap();
-        match v {
-            Query::Contrib(c) => {
-                assert_eq!(c.from, Some(SqlExpr("images".into())));
-                assert_eq!(c.limit, Some(NumberOrTemplate::Number(0.0)));
-            }
-            _ => panic!("expected Contrib"),
-        }
+    fn contrib_rejects_from_field() {
+        let r: Result<Query, _> = serde_json::from_str(r#"{"from":"images"}"#);
+        assert!(r.is_err());
     }
 
     #[test]

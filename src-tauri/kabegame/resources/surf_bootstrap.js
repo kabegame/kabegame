@@ -32,10 +32,10 @@
     }
   }
 
-  function isMediaOrArchiveUrl(url) {
+  function isMediaUrl(url) {
     try {
       const path = new URL(url).pathname.toLowerCase().split("?")[0];
-      return /\.(jpe?g|png|gif|webp|bmp|avif|tiff?|svg|mp4|mov|webm|mkv|avi|zip|rar|7z|tar|gz)$/.test(
+      return /\.(jpe?g|png|gif|webp|bmp|avif|tiff?|svg|mp4|mov|webm|mkv|avi)$/.test(
         path,
       );
     } catch {
@@ -58,7 +58,7 @@
       }
 
       if (!name || name === "_blank" || name === "_new") {
-        if (isMediaOrArchiveUrl(absolute)) {
+        if (isMediaUrl(absolute)) {
           triggerDownload(absolute);
         } else {
           location.href = absolute;
@@ -89,7 +89,7 @@
           triggerDownload(absolute);
           return;
         }
-        if (isMediaOrArchiveUrl(absolute)) {
+        if (isMediaUrl(absolute)) {
           triggerDownload(absolute);
           return;
         }

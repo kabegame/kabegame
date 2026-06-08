@@ -16,7 +16,6 @@ pub enum FoldError {
 
 /// 把一份 ContribQuery 累积到 ProviderQuery 中。
 pub fn fold_contrib(state: &mut ProviderQuery, q: &ContribQuery) -> Result<(), FoldError> {
-    fold_from(state, &q.from);
     fold_fields(state, &q.fields)?;
     fold_joins(state, &q.join)?;
     fold_where_clear(state, &q.where_clear);
@@ -35,12 +34,6 @@ fn fold_where_clear(state: &mut ProviderQuery, patterns: &Option<Vec<SqlExpr>>) 
     state
         .wheres
         .retain(|w| !patterns.iter().any(|p| w.0.contains(&p.0)));
-}
-
-fn fold_from(state: &mut ProviderQuery, from: &Option<SqlExpr>) {
-    if let Some(new_from) = from {
-        state.from = Some(new_from.clone());
-    }
 }
 
 fn fold_fields(state: &mut ProviderQuery, fields: &Option<Vec<Field>>) -> Result<(), FoldError> {
@@ -175,34 +168,13 @@ mod tests {
         ContribQuery::default()
     }
 
-    // ===== from =====
+    // ===== schema-provided from =====
 
     #[test]
-    fn from_first_time() {
+    fn child_contrib_cannot_change_from() {
         let mut s = ProviderQuery::new();
-        let mut q = empty_q();
-        q.from = Some(SqlExpr("images".into()));
-        fold_contrib(&mut s, &q).unwrap();
-        assert_eq!(s.from, Some(SqlExpr("images".into())));
-    }
-
-    #[test]
-    fn from_cascading_replace() {
-        let mut s = ProviderQuery::new();
-        let mut q1 = empty_q();
-        q1.from = Some(SqlExpr("images".into()));
-        let mut q2 = empty_q();
-        q2.from = Some(SqlExpr("vd_images".into()));
-        fold_contrib(&mut s, &q1).unwrap();
-        fold_contrib(&mut s, &q2).unwrap();
-        assert_eq!(s.from, Some(SqlExpr("vd_images".into())));
-    }
-
-    #[test]
-    fn from_none_keeps_existing() {
-        let mut s = ProviderQuery::new();
-        let mut q1 = empty_q();
-        q1.from = Some(SqlExpr("images".into()));
+        s.from = Some(SqlExpr("images".into()));
+        let q1 = empty_q();
         let q2 = empty_q();
         fold_contrib(&mut s, &q1).unwrap();
         fold_contrib(&mut s, &q2).unwrap();

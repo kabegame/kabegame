@@ -45,6 +45,10 @@ export enum HeaderFeatureId {
   FailedImagesFilter = "failedImagesFilter",
   /** 显示/隐藏「隐藏画册」成员：Gallery / 画册详情 / 畅游 都在 fold 里展示 */
   ToggleShowHidden = "toggleShowHidden",
+  /** 画廊页：显示/隐藏已有非隐藏画册归属的图片 */
+  ToggleShowAlbumImages = "toggleShowAlbumImages",
+  /** 设置页：手动检查应用更新（仅桌面） */
+  CheckUpdate = "checkUpdate",
 }
 
 export interface HeaderFeatureDef {

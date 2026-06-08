@@ -1,7 +1,11 @@
-import { FolderOpened, Picture, Edit, Rank, Delete } from "@element-plus/icons-vue";
+import { FolderOpened, Folder, Picture, Edit, Rank, Delete, Refresh } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { Album } from "@/stores/albums";
 import { i18n } from "@kabegame/i18n";
+import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+
+/** 本地文件夹同步仅桌面端支持（排除 Android 与 Web）。 */
+const LOCAL_FOLDER_SUPPORTED = !IS_ANDROID && !IS_WEB;
 
 /**
  * Extended context for album actions (context menu / action sheet on Albums page).
@@ -12,6 +16,7 @@ export interface AlbumActionContext extends ActionContext<Album> {
   wallpaperRotationEnabled: boolean;
   albumImageCount: number;
   favoriteAlbumId: string;
+  isLocalFolder: boolean;
 }
 
 /**
@@ -27,6 +32,43 @@ export function createAlbumActions(): ActionItem<Album>[] {
       icon: FolderOpened,
       command: "browse",
       visible: (ctx) => (ctx as AlbumActionContext).albumImageCount > 0,
+    },
+    {
+      key: "syncNow",
+      label: t("contextMenu.syncNow"),
+      icon: Refresh,
+      visible: (ctx) => LOCAL_FOLDER_SUPPORTED && (ctx as AlbumActionContext).isLocalFolder,
+      dividerBefore: (ctx) => (ctx as AlbumActionContext).albumImageCount > 0,
+      children: [
+        {
+          key: "syncFolderOnly",
+          label: t("contextMenu.syncFolderOnly"),
+          icon: Refresh,
+          command: "syncNow",
+        },
+        {
+          key: "syncNowRecursiveExisting",
+          label: t("contextMenu.syncNowRecursiveExisting"),
+          icon: Refresh,
+          command: "syncNowRecursiveExisting",
+        },
+        {
+          key: "syncNowRecursiveFull",
+          label: t("contextMenu.syncNowRecursiveFull"),
+          icon: Refresh,
+          command: "syncNowRecursiveFull",
+        },
+      ],
+    },
+    {
+      key: "openLocalFolder",
+      label: t("contextMenu.openLocalFolder"),
+      icon: Folder,
+      command: "openLocalFolder",
+      visible: (ctx) => {
+        const ext = ctx as AlbumActionContext;
+        return LOCAL_FOLDER_SUPPORTED && ext.isLocalFolder && !!ext.target?.syncFolder;
+      },
     },
     {
       key: "setWallpaperRotation",

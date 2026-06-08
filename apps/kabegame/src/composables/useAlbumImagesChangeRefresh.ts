@@ -7,6 +7,7 @@ export type AlbumImagesChangePayload = {
   reason: "add" | "delete" | string;
   albumIds: string[];
   imageIds: string[];
+  directCounts?: Record<string, number>;
 };
 
 type UnlistenFn = () => void;

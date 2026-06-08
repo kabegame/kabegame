@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" :title="title" :width="width" destroy-on-close>
+  <el-dialog :model-value="open" :z-index="zIndex" :title="title" :width="width" destroy-on-close @update:model-value="(v: boolean) => { if (!v) emit('close') }">
     <div style="margin-bottom: 16px;">
       <p style="margin-bottom: 8px;">{{ message }}</p>
       <el-checkbox v-model="deleteFiles" :label="checkboxLabel" v-if="!hideCheckbox" />
@@ -8,7 +8,7 @@
       </p>
     </div>
     <template #footer>
-      <el-button @click="visible = false">{{ cancelText }}</el-button>
+      <el-button @click="emit('close')">{{ cancelText }}</el-button>
       <el-button type="primary" :loading="confirmLoading" @click="emitConfirm">{{ confirmText }}</el-button>
     </template>
   </el-dialog>
@@ -16,11 +16,11 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, watch } from "vue";
-import { useModalBack } from "../../composables/useModalBack";
 import { guardDesktopOnly } from "@kabegame/core/utils/desktopOnlyGuard";
 
 interface Props {
-  modelValue: boolean;
+  open: boolean;
+  zIndex: number;
   deleteFiles?: boolean;
   message: string;
   title?: string;
@@ -48,17 +48,10 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const emit = defineEmits<{
-  (e: "update:modelValue", v: boolean): void;
   (e: "update:deleteFiles", v: boolean): void;
+  (e: "close"): void;
   (e: "confirm"): void;
 }>();
-
-const visible = computed({
-  get: () => props.modelValue,
-  set: (v) => emit("update:modelValue", v),
-});
-
-useModalBack(visible);
 
 const deleteFiles = computed({
   get: () => props.deleteFiles,
@@ -79,7 +72,7 @@ const removeKeyHandler = () => {
   }
 };
 
-watch(visible, (isOpen) => {
+watch(() => props.open, (isOpen) => {
   if (!isOpen) {
     removeKeyHandler();
     return;
@@ -87,7 +80,6 @@ watch(visible, (isOpen) => {
 
   keyHandler = (e: KeyboardEvent) => {
     if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
-    // 如果焦点在复选框 input 上，不触发确认（允许空格切换）
     const activeElement = document.activeElement;
     if (activeElement?.tagName === "INPUT" && (activeElement as HTMLInputElement).type === "checkbox") return;
     e.preventDefault();
@@ -105,4 +97,3 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="scss"></style>
-

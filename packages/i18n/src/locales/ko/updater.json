@@ -1,0 +1,21 @@
+{
+  "new": "NEW",
+  "restartUpdate": "재시작하여 업데이트",
+  "dialogTitle": "새 버전이 있습니다",
+  "currentVersion": "현재 버전: {version}",
+  "viewOnGithub": "GitHub에서 보기",
+  "download": "다운로드",
+  "openReleasePage": "릴리스 페이지 열기",
+  "noAssetHint": "이 플랫폼용 설치 파일이 없습니다. 릴리스 페이지에서 직접 다운로드하세요",
+  "downloadComingSoon": "다운로드 기능 곧 제공",
+  "restartConfirmTitle": "재시작하여 업데이트",
+  "restartConfirmMessage": "새 버전이 준비되었습니다. 지금 재시작하여 업데이트를 완료하시겠습니까?",
+  "downloadingTitle": "업데이트 다운로드 중",
+  "restartReadyTitle": "새 버전 준비 완료",
+  "restartReadyMessage": "새 버전 다운로드가 완료되었습니다. 지금 재시작하여 설치를 완료하시겠습니까?",
+  "restartNow": "지금 재시작",
+  "restartLater": "나중에",
+  "checkUpdate": "업데이트 확인",
+  "alreadyLatest": "최신 버전입니다",
+  "foundUpdate": "새 버전이 있습니다"
+}

@@ -1,4 +1,5 @@
-import { ref, type Ref } from "vue";
+import { ref, type ComputedRef, type Ref } from "vue";
+import { useModal } from "./useModal";
 
 export interface ActionMenuContext<T> {
   target: T | null;
@@ -11,6 +12,7 @@ export interface UseActionMenuOptions<T> {
 
 export interface UseActionMenuReturn<T> {
   visible: Ref<boolean>;
+  zIndex: ComputedRef<number>;
   position: Ref<{ x: number; y: number }>;
   context: Ref<ActionMenuContext<T>>;
   show: (target: T, event: MouseEvent) => void;
@@ -25,19 +27,23 @@ export function useActionMenu<T>(_options?: UseActionMenuOptions<T>): UseActionM
   const visible = ref(false);
   const position = ref({ x: 0, y: 0 });
   const context = ref<ActionMenuContext<T>>({ target: null });
+  const modal = useModal({ onClose: () => { visible.value = false; } });
 
   const show = (target: T, event: MouseEvent) => {
     context.value = { target };
     position.value = { x: event.clientX, y: event.clientY };
     visible.value = true;
+    modal.open();
   };
 
   const hide = () => {
     visible.value = false;
+    modal.close();
   };
 
   return {
     visible,
+    zIndex: modal.zIndex,
     position,
     context,
     show,

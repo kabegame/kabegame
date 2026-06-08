@@ -3,10 +3,10 @@ import { invoke } from "../api";
 import { IS_WEB } from "../env";
 import { imageMetadataCacheDb } from "../cache/imageMetadataCache";
 
-/** 按 imageId / metadataId 解析插件 metadata（全局 LRU + IndexedDB 缓存，最多 1024 条） */
+/** 按 imageId + metadataVersion 解析插件 metadata（全局 LRU + IndexedDB 缓存，最多 1024 条） */
 export type ImageMetadataResolver = (
   imageId: string,
-  metadataId?: number,
+  metadataVersion?: number | null,
 ) => Promise<unknown | null>;
 
 export const imageMetadataResolverKey: InjectionKey<ImageMetadataResolver> =
@@ -14,9 +14,14 @@ export const imageMetadataResolverKey: InjectionKey<ImageMetadataResolver> =
 
 const MAX_CACHE_SIZE = 1024;
 
-/** metadataId 存在时用其字符串作 key，否则降级为 imageId */
-function cacheKeyFor(imageId: string, metadataId?: number): string {
-  return metadataId != null ? String(metadataId) : imageId;
+function normalizeMetadataVersion(version: number | null | undefined): number {
+  return typeof version === "number" && Number.isFinite(version) && version >= 0
+    ? Math.floor(version)
+    : 0;
+}
+
+function cacheKeyFor(imageId: string, metadataVersion?: number | null): string {
+  return `${imageId}@v${normalizeMetadataVersion(metadataVersion)}`;
 }
 
 class LruMap {
@@ -80,11 +85,11 @@ function ensureInit(): Promise<void> {
 export function useProvideImageMetadataCache() {
   async function resolveMetadata(
     imageId: string,
-    metadataId?: number,
+    metadataVersion?: number | null,
   ): Promise<unknown | null> {
     await ensureInit();
 
-    const key = cacheKeyFor(imageId, metadataId);
+    const key = cacheKeyFor(imageId, metadataVersion);
 
     // 1. 内存 LRU 命中（初始化后与 Dexie 同步，命中内存即命中持久化层）
     if (mem.has(key)) {
@@ -92,12 +97,7 @@ export function useProvideImageMetadataCache() {
     }
 
     // 2. 后端 IPC 拉取
-    const raw =
-      metadataId != null
-        ? await invoke<unknown | null>("get_image_metadata_by_metadata_id", {
-            metadataId,
-          })
-        : await invoke<unknown | null>("get_image_metadata", { imageId });
+    const raw = await invoke<unknown | null>("get_image_metadata", { imageId });
     const v = raw ?? null;
 
     const evictedKey = mem.set(key, v);

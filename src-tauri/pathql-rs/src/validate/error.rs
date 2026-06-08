@@ -36,8 +36,6 @@ pub enum ValidateErrorKind {
     UndefinedRef(String),
     #[error("`as: ${{ref:...}}` cannot coexist with `in_need: true`")]
     RefAliasWithInNeed,
-    #[error("`from` clause should not contain JOIN keyword (use `join[]` instead)")]
-    FromContainsJoin,
     #[error("dynamic list entry: ${{X.Y}} prefix `{0}` does not match {1}_var `{2}`")]
     DynamicVarMismatch(String, &'static str, String),
     #[error("dynamic SQL list entry cannot reference ${{data_var.provider}}")]

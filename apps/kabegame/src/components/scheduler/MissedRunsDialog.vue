@@ -1,13 +1,15 @@
 <template>
   <el-dialog
-    v-model="visible"
+    :model-value="open"
+    :z-index="zIndex"
     :title="$t('autoConfig.missedRuns.title')"
     width="560px"
     :close-on-click-modal="false"
     :before-close="handleBeforeClose"
+    @update:model-value="$event || $emit('close')"
   >
     <div class="missed-runs-desc">
-      {{ $t("autoConfig.missedRuns.desc") }}
+      {{ systemSleep ? $t("autoConfig.missedRuns.sleepDesc") : $t("autoConfig.missedRuns.desc") }}
     </div>
     <div class="missed-runs-list">
       <div v-for="item in items" :key="item.configId" class="missed-runs-item">
@@ -27,30 +29,24 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import type { MissedRunItem } from "@kabegame/core/stores/crawler";
 
-const props = defineProps<{
-  modelValue: boolean;
+defineProps<{
+  open: boolean;
+  zIndex: number;
   items: MissedRunItem[];
+  /** 触发来源为「系统休眠期间漏跑」时为 true，用于切换提示文案 */
+  systemSleep?: boolean;
 }>();
 
 const emit = defineEmits<{
-  "update:modelValue": [value: boolean];
+  close: [];
   "run-now": [];
   dismiss: [];
 }>();
 
 const { t } = useI18n();
-
-const visible = computed({
-  get: () => props.modelValue,
-  set: (value: boolean) => emit("update:modelValue", value),
-});
-
-useModalBack(visible);
 
 const handleBeforeClose = (done: () => void) => {
   emit("dismiss");

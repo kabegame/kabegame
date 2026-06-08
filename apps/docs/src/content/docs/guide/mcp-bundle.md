@@ -16,8 +16,8 @@ Kabegame 提供的 Bundle（`kabegame-gallery-node`）做两件事：
 
 Bundle 只是桥接，**数据源仍然是桌面版**；使用前请先熟悉 [MCP 服务](/guide/mcp/)。
 
-:::caution
-Bundle 只对上游 MCP 暴露 3 个工具：`read_gallery_provider`、`read_image_metadata`、`set_album_images_order`。即使上游 HTTP MCP 支持创建画册、添加图片、重命名、删除等操作，Bundle 侧也**不会**透传——这是刻意的收窄。
+:::note
+Bundle 对外暴露的是一组经过参数校验的工具包装：读资源时转发到 `images://`、`albums://`、`tasks://`、`surf_records://`、`plugin://`，写操作则只透传 HTTP MCP 已支持的四个非删除工具。
 :::
 
 ## 前置要求
@@ -63,22 +63,30 @@ npx @anthropic-ai/mcpb pack .
 
 导入并启用 Bundle 后，在 Host 中确认以下两步：
 
-1. 工具列表里应出现 3 个工具：`read_gallery_provider`、`read_image_metadata`、`set_album_images_order`。
-2. 让助手调用 `read_gallery_provider`，参数 `path` 传 `all/0`，应返回首页画廊数据的 JSON。若返回 `UPSTREAM_REQUEST_FAILED`，说明桌面版没在跑或端口不通。
+1. 工具列表里应出现读资源工具（`read_gallery_provider`、`read_image`、`read_album` 等）和四个写工具。
+2. 让助手调用 `read_gallery_provider`，参数 `path` 传 `all/desc/x100x/1`，应返回首页画廊数据的 JSON。若返回 `UPSTREAM_REQUEST_FAILED`，说明桌面版没在跑或端口不通。
 
 每个工具的简要职责：
 
-- **`read_gallery_provider`** — 读一页画廊 provider 路径（例如 `all/0`、`album/{id}/album-order/0`）。上游映射到 `provider://<path>`，`path` 语义见 [MCP 参考](/reference/mcp/)。
+- **`read_gallery_provider`** — 读一页画廊图片路径（例如 `all/desc/x100x/1`、`album/{id}/album-order/x100x/1`）。上游映射到 `images://gallery/...`，`path` 语义见 [MCP 参考](/reference/mcp/)。
+- **`read_image`** — 按 `image_id` 读单张图片的基础字段。
 - **`read_image_metadata`** — 按 `image_id` 读单张图片的 metadata（标签、作者、来源 URL 等）。
+- **`read_album` / `read_task` / `read_surf`** — 分别读取复数表资源；省略 id 时列出全部。
+- **`read_plugin`** — 读取瘦身插件信息或插件图标、描述模板、文档资源。
 - **`set_album_images_order`** — 为一个画册设置手动顺序，单次最多 100 条；超过的话需要分批调用。
+- **`create_album` / `add_images_to_album` / `rename_image`** — 透传 HTTP MCP 的非删除写工具。
 
 ### 工具输入约束
 
 | 工具 | 约束 |
 |---|---|
-| `read_gallery_provider` | `path` 必填，禁止包含 `..`，不能以 `/` 开头，长度 ≤ 512。 |
+| `read_gallery_provider` | `path` 必填，禁止包含 `..`，不能以 `/` 开头，不能包含 `?` / `#`，长度 ≤ 512。未带 scheme 时映射到 `images://gallery/...`。 |
+| `read_image` | `image_id` 必填，长度 ≤ 256。 |
 | `read_image_metadata` | `image_id` 必填，长度 ≤ 256。 |
+| `read_album` / `read_task` / `read_surf` | 对应 id 可选；省略即列出全部。`read_surf` 使用 `surf_record_id`，不是 host。 |
+| `read_plugin` | `plugin_id` 可选；`resource=doc_resource` 时 `key` 必填。 |
 | `set_album_images_order` | `image_orders` 长度 `1..100`，每项为 `{image_id, order}`。 |
+| `create_album` / `add_images_to_album` / `rename_image` | 与 HTTP MCP 同名工具一致；`add_images_to_album.image_ids` 单次 ≤ 1000。 |
 
 ## 安全边界
 
@@ -114,5 +122,5 @@ Bundle 在启动时对 endpoint 做强校验：
 ## 延伸阅读
 
 - [MCP 服务](/guide/mcp/) —— Bundle 背后的 HTTP MCP 服务与能力全集。
-- [MCP 参考](/reference/mcp/) —— `provider://` URI 语义、分页与字段清单。
-- [画廊](/guide/gallery/) —— 理解 `provider://all/...` 对应应用内的哪些视图。
+- [MCP 参考](/reference/mcp/) —— `images://`、复数表 URI、分页与字段清单。
+- [画廊](/guide/gallery/) —— 理解 `images://gallery/all/...` 对应应用内的哪些视图。

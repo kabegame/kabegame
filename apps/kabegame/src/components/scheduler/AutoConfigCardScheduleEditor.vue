@@ -98,7 +98,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
 import { useCrawlerStore } from "@/stores/crawler";
 import type { RunConfig, ScheduleSpec } from "@kabegame/core/stores/crawler";

@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { nextTick, reactive, watch, type Ref } from "vue";
 import { useLocalStorage } from "@vueuse/core";
 import { invoke } from "../api";
-import { IS_DEV, IS_LIGHT_MODE, IS_ANDROID, IS_WINDOWS, IS_WEB } from "../env";
+import { IS_DEV, IS_LIGHT_MODE, IS_ANDROID, IS_LINUX, IS_MACOS, IS_WINDOWS, IS_WEB } from "../env";
 import { guardDesktopOnly } from "../utils/desktopOnlyGuard";
 import { guardSuperRequired } from "../utils/superModeGuard";
 import { getIsSuper } from "../state/superState";
@@ -17,14 +17,11 @@ export interface AppSettings {
   downloadIntervalMs: number;
   networkRetryCount: number;
   imageClickAction: "preview" | "open" | "none";
-  galleryImageAspectRatio: string | null;
-  /** 图片在方框内溢出时的垂直对齐（仅桌面端）：center | top | bottom */
-  galleryImageObjectPosition: "center" | "top" | "bottom";
   /** 画廊列数（0=动态；1-6=固定列数），前端本地偏好 */
   galleryGridColumns: number;
   autoDeduplicate: boolean;
+  realtimeFolderSync: boolean;
   defaultDownloadDir: string | null;
-  wallpaperEngineDir: string | null;
   wallpaperRotationEnabled: boolean;
   wallpaperRotationAlbumId: string | null;
   /** 轮播指定画册时是否包含子画册（默认 true，与 07-wallpaper 设计一致） */
@@ -37,6 +34,8 @@ export interface AppSettings {
   wallpaperStyleByMode: Record<string, string>;
   wallpaperTransitionByMode: Record<string, string>;
   wallpaperMode: "native" | "window" | string;
+  /** 关闭壁纸：整体禁用壁纸功能（后端拒绝壁纸操作、隐藏壁纸窗口、启动不恢复） */
+  wallpaperDisabled: boolean;
   /** 视频壁纸音量 0~1 */
   wallpaperVolume: number;
   /** 视频壁纸播放速率 0.25～3 */
@@ -72,6 +71,8 @@ export interface AppSettings {
   galleryLayoutMode: "grid" | "gallery";
   /** 布局方向："vertical"=从上到下滚动（现状）；"horizontal"=从左到右滚动 */
   galleryLayoutDirection: "vertical" | "horizontal";
+  /** 是否启用 Kamechan；关闭后消息走普通弹出提示 */
+  kamechanEnabled: boolean;
 }
 
 export type AppSettingKey = keyof AppSettings;
@@ -95,8 +96,6 @@ type WebLocalSettingEntry = {
 const WEB_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
   { key: "language", defaultValue: null },
   { key: "imageClickAction", defaultValue: "preview", readonly: true },
-  { key: "galleryImageAspectRatio", defaultValue: "16:10" },
-  { key: "galleryImageObjectPosition", defaultValue: "center" },
   // 壁纸轮播能力：web 模式下只做 localStorage 占位，修改时弹 desktopOnlyGuard
   { key: "wallpaperRotationEnabled", defaultValue: false, readonly: true },
   { key: "wallpaperRotationAlbumId", defaultValue: null, readonly: true },
@@ -142,7 +141,6 @@ const WEB_READONLY_FEATURE_KEY_MAP: Partial<Record<AppSettingKey, string>> = {
   wallpaperStyleByMode: "wallpaper",
   wallpaperTransitionByMode: "wallpaper",
   wallpaperMode: "wallpaper",
-  wallpaperEngineDir: "wallpaper",
   albumDriveEnabled: "albumDrive",
   albumDriveMountPoint: "albumDrive",
   autoOpenCrawlerWebview: "openCrawlerWindow",
@@ -153,10 +151,10 @@ const WEB_READONLY_FEATURE_KEY_MAP: Partial<Record<AppSettingKey, string>> = {
   maxConcurrentDownloads: "downloadSettings",
   maxConcurrentTasks: "downloadSettings",
   downloadIntervalMs: "downloadSettings",
-  networkRetryCount: "downloadSettings",
-  galleryImageObjectPosition: "gallerySettings",
-  autoDeduplicate: "autoDeduplicate",
-  importRecommendedScheduleEnabled: "scheduler",
+    networkRetryCount: "downloadSettings",
+    autoDeduplicate: "autoDeduplicate",
+    realtimeFolderSync: "localFolderSync",
+    importRecommendedScheduleEnabled: "scheduler",
 };
 
 function webReadonlyFeatureKey(key: AppSettingKey): string {
@@ -176,6 +174,7 @@ const FRONTEND_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
   { key: "galleryGridColumns", defaultValue: 0 },
   { key: "galleryLayoutMode", defaultValue: "grid" },
   { key: "galleryLayoutDirection", defaultValue: "vertical" },
+  { key: "kamechanEnabled", defaultValue: true },
 ];
 
 /** 旧键 → 新键（`${WEB_LOCAL_STORAGE_PREFIX}${key}`）一次性迁移表。 */
@@ -221,6 +220,7 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
     wallpaperStyleByMode: { getter: "get_wallpaper_style_by_mode", setter: "set_wallpaper_style_by_mode" },
     wallpaperTransitionByMode: { getter: "get_wallpaper_transition_by_mode", setter: "set_wallpaper_transition_by_mode" },
     wallpaperMode: { getter: "get_wallpaper_mode", setter: "set_wallpaper_mode", param: "mode" },
+    wallpaperDisabled: { getter: "get_wallpaper_disabled", setter: "set_wallpaper_disabled", param: "disabled" },
     wallpaperVolume: { getter: "get_wallpaper_volume", setter: "set_wallpaper_volume", param: "volume" },
     wallpaperVideoPlaybackRate: { getter: "get_wallpaper_video_playback_rate", setter: "set_wallpaper_video_playback_rate", param: "rate" },
     windowState: { getter: "get_window_state", setter: "set_window_state" },
@@ -231,8 +231,6 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
   if (!IS_ANDROID) {
     map.autoLaunch = { getter: "get_auto_launch", setter: "set_auto_launch", param: "enabled" };
     map.imageClickAction = { getter: "get_image_click_action", setter: "set_image_click_action", param: "action" };
-    map.galleryImageAspectRatio = { getter: "get_gallery_image_aspect_ratio", setter: "set_gallery_image_aspect_ratio", param: "aspectRatio" };
-    map.galleryImageObjectPosition = { getter: "get_gallery_image_object_position", setter: "set_gallery_image_object_position", param: "position" };
     map.defaultDownloadDir = { getter: "get_default_download_dir", setter: "set_default_download_dir", param: "dir" };
     map.autoOpenCrawlerWebview = {
       getter: "get_auto_open_crawler_webview",
@@ -241,9 +239,12 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
     };
   }
 
-  // 仅 Windows
-  if (IS_WINDOWS) {
-    map.wallpaperEngineDir = { getter: "get_wallpaper_engine_dir", setter: "set_wallpaper_engine_dir", param: "dir" };
+  if (!IS_ANDROID && !IS_WEB && (IS_MACOS || IS_LINUX || IS_WINDOWS)) {
+    map.realtimeFolderSync = {
+      getter: "get_realtime_folder_sync",
+      setter: "set_realtime_folder_sync",
+      param: "enabled",
+    };
   }
 
   // 非安卓 + 非 light 模式
@@ -322,11 +323,6 @@ export const useSettingsStore = defineStore("settings", () => {
 
     // imageClickAction: 安卓下固定为应用内预览
     (values as any).imageClickAction = "preview";
-
-    // galleryImageAspectRatio: 安卓下自动使用屏幕宽高比
-    const screenW = window.screen.width;
-    const screenH = window.screen.height;
-    (values as any).galleryImageAspectRatio = `custom:${screenW}:${screenH}`;
 
     // defaultDownloadDir: 保持 null，后端自动使用默认目录
     (values as any).defaultDownloadDir = null;

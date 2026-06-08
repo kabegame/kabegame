@@ -9,14 +9,24 @@ use kabegame_core::storage::Storage;
 use std::path::Path;
 use tauri::AppHandle;
 
+/// 当"关闭壁纸"开关开启时，对用户主动发起的壁纸操作返回的提示文案。
+/// 直接作为错误信息透传给前端展示（不使用专用错误码）。
+const WALLPAPER_DISABLED_MSG: &str = "壁纸功能已关闭，请先在设置中重新开启";
+
+/// 若已关闭壁纸功能，则返回错误以拒绝该操作。
+fn reject_if_wallpaper_disabled() -> Result<(), String> {
+    if Settings::global().get_wallpaper_disabled() {
+        return Err(WALLPAPER_DISABLED_MSG.to_string());
+    }
+    Ok(())
+}
+
 pub async fn get_current_wallpaper_path_from_settings(
     _app: &tauri::AppHandle,
 ) -> Result<Option<String>, String> {
     // 从 Settings 获取 settings + image localPath
     if let Some(id) = Settings::global().get_current_wallpaper_image_id() {
-        let img = Storage::global()
-            .find_image_by_id(&id)
-            .map_err(|e| format!("Storage error: {}", e))?;
+        let img = Storage::find_image_by_id(&id).map_err(|e| format!("Storage error: {}", e))?;
         if let Some(info) = img {
             Ok(Some(info.local_path))
         } else {
@@ -28,59 +38,13 @@ pub async fn get_current_wallpaper_path_from_settings(
 }
 
 #[tauri::command]
-pub async fn set_wallpaper(file_path: String) -> Result<(), String> {
-    // Android 上为 content:// URI，不能做 Path::exists/canonicalize
-    let abs = if file_path.starts_with("content://") {
-        file_path.clone()
-    } else {
-        let path = Path::new(&file_path);
-        if !path.exists() {
-            println!("DEBUG: File does not exist: {}", file_path);
-            return Err("File does not exist".to_string());
-        }
-        path.canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf())
-            .to_string_lossy()
-            .to_string()
-    };
-
-    let controller = WallpaperController::global();
-    let settings = Settings::global();
-    let style = settings.get_wallpaper_rotation_style();
-
-    controller.set_wallpaper(&abs, &style).await?;
-
-    // 尽力同步更新"当前壁纸"（imageId）；失败不阻断
-    let found = Storage::global().find_image_by_path(&abs).ok().flatten();
-    let image_id = found.as_ref().map(|v| v.id.clone());
-    let _ = settings.set_current_wallpaper_image_id(image_id);
-
-    if let Some(ref img) = found {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let _ = Storage::global().update_image_last_set_wallpaper_at(&img.id, now);
-        let ids = vec![img.id.clone()];
-        GlobalEmitter::global().emit_images_change(
-            "change",
-            &ids,
-            None,
-            None,
-            Some(&[img.plugin_id.clone()]),
-        );
-    }
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
+    reject_if_wallpaper_disabled()?;
     let settings = Settings::global();
     let style = settings.get_wallpaper_rotation_style();
 
-    let image = Storage::global()
-        .find_image_by_id(&image_id)
-        .map_err(|e| format!("Storage error: {}", e))?;
+    let image =
+        Storage::find_image_by_id(&image_id).map_err(|e| format!("Storage error: {}", e))?;
 
     let Some(info) = image else {
         return Err("图片不存在".to_string());
@@ -157,6 +121,9 @@ pub struct RotationStartResult {
 // TODO: setting-change event driven
 #[tauri::command]
 pub fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String> {
+    if enabled {
+        reject_if_wallpaper_disabled()?;
+    }
     Settings::global()
         .set_wallpaper_rotation_enabled(enabled)
         .map_err(|e| format!("Settings error: {}", e))?;
@@ -171,6 +138,7 @@ pub fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn set_wallpaper_rotation_album_id(album_id: String) -> Result<(), String> {
+    reject_if_wallpaper_disabled()?;
     if album_id != "" {
         let include = Settings::global().get_wallpaper_rotation_include_subalbums();
         let images = Storage::global()
@@ -214,6 +182,7 @@ pub async fn set_wallpaper_rotation_album_id(album_id: String) -> Result<(), Str
 
 #[tauri::command]
 pub fn set_wallpaper_rotation_include_subalbums(include_subalbums: bool) -> Result<(), String> {
+    reject_if_wallpaper_disabled()?;
     Settings::global()
         .set_wallpaper_rotation_include_subalbums(include_subalbums)
         .map_err(|e| format!("Settings error: {}", e))?;
@@ -228,6 +197,7 @@ pub fn set_wallpaper_rotation_include_subalbums(include_subalbums: bool) -> Resu
 
 #[tauri::command]
 pub async fn start_wallpaper_rotation() -> Result<RotationStartResult, String> {
+    reject_if_wallpaper_disabled()?;
     let settings = Settings::global();
     let enabled = settings.get_wallpaper_rotation_enabled();
     let album_id_opt = settings.get_wallpaper_rotation_album_id();
@@ -287,6 +257,7 @@ pub async fn start_wallpaper_rotation() -> Result<RotationStartResult, String> {
 
 #[tauri::command]
 pub fn set_wallpaper_rotation_interval_minutes(minutes: u32) -> Result<(), String> {
+    reject_if_wallpaper_disabled()?;
     #[cfg(target_os = "android")]
     let minutes = minutes.max(15);
     #[cfg(not(target_os = "android"))]
@@ -306,6 +277,7 @@ pub fn set_wallpaper_rotation_interval_minutes(minutes: u32) -> Result<(), Strin
 
 #[tauri::command]
 pub fn set_wallpaper_rotation_mode(mode: String) -> Result<(), String> {
+    reject_if_wallpaper_disabled()?;
     Settings::global()
         .set_wallpaper_rotation_mode(mode)
         .map_err(|e| format!("Settings error: {}", e))
@@ -313,6 +285,7 @@ pub fn set_wallpaper_rotation_mode(mode: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn set_wallpaper_style(style: String, app: AppHandle) -> Result<(), String> {
+    reject_if_wallpaper_disabled()?;
     Settings::global().set_wallpaper_style(style.clone())?;
 
     let app_clone = app.clone();
@@ -330,6 +303,7 @@ pub async fn set_wallpaper_style(style: String, app: AppHandle) -> Result<(), St
 
 #[tauri::command]
 pub async fn set_wallpaper_rotation_transition(transition: String) -> Result<(), String> {
+    reject_if_wallpaper_disabled()?;
     let enabled = Settings::global().get_wallpaper_rotation_enabled();
 
     Settings::global()
@@ -350,6 +324,7 @@ pub async fn set_wallpaper_rotation_transition(transition: String) -> Result<(),
 
 #[tauri::command]
 pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), String> {
+    reject_if_wallpaper_disabled()?;
     let settings = Settings::global();
     let old_mode = settings.get_wallpaper_mode();
 
@@ -478,4 +453,58 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
 pub fn get_wallpaper_rotator_status() -> Result<String, String> {
     let rotator = WallpaperRotator::global();
     Ok(rotator.get_status())
+}
+
+#[tauri::command]
+pub fn get_wallpaper_disabled() -> bool {
+    Settings::global().get_wallpaper_disabled()
+}
+
+/// 切换"关闭壁纸"开关，并执行副作用：
+/// - 开启时：停止轮播，隐藏壁纸窗口（window 模式）/ 切回 org.kde.image（plasma-plugin 模式）；
+///   native 模式保持系统壁纸现状不动（无法自动还原）。保留 currentWallpaperImageId。
+/// - 关闭时：复用启动逻辑恢复上次壁纸，并在轮播启用时恢复轮播。
+#[tauri::command]
+pub async fn set_wallpaper_disabled(disabled: bool, _app: AppHandle) -> Result<(), String> {
+    let settings = Settings::global();
+    settings
+        .set_wallpaper_disabled(disabled)
+        .map_err(|e| format!("Settings error: {}", e))?;
+
+    let rotator = WallpaperRotator::global();
+
+    if disabled {
+        // 停止轮播
+        rotator.stop();
+        // 隐藏/还原各模式（保留 currentWallpaperImageId）
+        // native 模式：保持系统壁纸现状不动（无法自动还原，警告由前端提示）
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        {
+            let controller = WallpaperController::global();
+            match settings.get_wallpaper_mode().as_str() {
+                #[cfg(any(target_os = "windows", target_os = "macos"))]
+                "window" => {
+                    let _ = controller.manager_for_mode("window").cleanup();
+                }
+                #[cfg(target_os = "linux")]
+                "plasma-plugin" => {
+                    let _ = controller.manager_for_mode("plasma-plugin").cleanup();
+                }
+                _ => {}
+            }
+        }
+    } else {
+        // 重新启用：恢复上次壁纸（复用启动恢复逻辑）
+        if let Err(e) = crate::startup::init_wallpaper_on_startup().await {
+            eprintln!("[WARN] set_wallpaper_disabled: 恢复壁纸失败: {}", e);
+        }
+        // 之前开启过轮播则恢复轮播
+        if settings.get_wallpaper_rotation_enabled() {
+            if let Err(e) = rotator.ensure_running(true).await {
+                eprintln!("[WARN] set_wallpaper_disabled: 恢复轮播失败: {}", e);
+            }
+        }
+    }
+
+    Ok(())
 }

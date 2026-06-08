@@ -8,6 +8,18 @@ pub struct TemplateExpr(pub String);
 #[serde(transparent)]
 pub struct SqlExpr(pub String);
 
+impl From<String> for SqlExpr {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for SqlExpr {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct PathExpr(pub String);

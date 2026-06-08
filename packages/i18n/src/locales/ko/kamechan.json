@@ -1,0 +1,9 @@
+{
+  "history": "메시지 기록",
+  "minimize": "최소화",
+  "disable": "Kamechan 끄기",
+  "historyTitle": "메시지 기록",
+  "historyEmpty": "아직 메시지가 없습니다",
+  "historyClear": "지우기",
+  "moreMessages": "{count}개 메시지 더 있음"
+}

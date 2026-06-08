@@ -12,13 +12,12 @@ import SettingSliderControl from "@kabegame/core/components/settings/controls/Se
 
 import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
 import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
-import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngineDirSetting.vue";
-import GalleryImageAspectRatioSetting from "@/components/settings/items/GalleryImageAspectRatioSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
+import RealtimeFolderSyncSetting from "@/components/settings/items/RealtimeFolderSyncSetting.vue";
 import SuperModeSetting from "@/components/settings/items/SuperModeSetting.vue";
 
 /**
@@ -45,13 +44,6 @@ export function useQuickSettingsGroups() {
       title: t("settings.quickDisplay"),
       items: [
         ...(!IS_ANDROID ? [{
-          key: "galleryImageAspectRatio",
-          label: t("settings.imageAspectRatio"),
-          description: t("settings.imageAspectRatioDesc"),
-          comp: GalleryImageAspectRatioSetting,
-          pages: ["gallery", "albumdetail"],
-        } as QuickSettingItem<QuickSettingsPageId>] : []),
-        ...(!IS_ANDROID ? [{
           key: "imageClickAction",
           label: t("settings.quickDoubleClickImage"),
           description: t("settings.quickDoubleClickImageDesc"),
@@ -74,51 +66,36 @@ export function useQuickSettingsGroups() {
           comp: GalleryGridColumnsSetting,
           pages: ["gallery", "albumdetail"],
         } as QuickSettingItem<QuickSettingsPageId>] : []),
-        {
-          key: "galleryLayoutMode",
-          label: t("settings.galleryLayoutMode"),
-          description: t("settings.galleryLayoutModeDesc"),
-          comp: SettingRadioControl,
-          props: {
-            settingKey: "galleryLayoutMode",
-            options: [
-              { label: t("settings.galleryLayoutModeGrid"), value: "grid" },
-              { label: t("settings.galleryLayoutModeGallery"), value: "gallery" },
-            ],
-          },
-          pages: ["gallery", "albumdetail"],
-        } as QuickSettingItem<QuickSettingsPageId>,
-        {
-          key: "galleryLayoutDirection",
-          label: t("settings.galleryLayoutDirection"),
-          description: t("settings.galleryLayoutDirectionDesc"),
-          comp: SettingRadioControl,
-          props: {
-            settingKey: "galleryLayoutDirection",
-            options: [
-              { label: t("settings.galleryLayoutDirectionVertical"), value: "vertical" },
-              { label: t("settings.galleryLayoutDirectionHorizontal"), value: "horizontal" },
-            ],
-          },
-          pages: ["gallery", "albumdetail"],
-        } as QuickSettingItem<QuickSettingsPageId>,
-        ...(!IS_ANDROID ? [{
-          key: "galleryImageObjectPosition",
-          label: t("settings.imageObjectPosition"),
-          description: t("settings.imageObjectPositionDesc"),
-          comp: SettingRadioControl,
-          props: {
-            settingKey: "galleryImageObjectPosition",
-            command: "set_gallery_image_object_position",
-            buildArgs: (value: string) => ({ position: value }),
-            options: [
-              { label: t("settings.objectPositionCenter"), value: "center" },
-              { label: t("settings.objectPositionTop"), value: "top" },
-              { label: t("settings.objectPositionBottom"), value: "bottom" },
-            ],
-          },
-          pages: ["gallery", "albumdetail"],
-        } as QuickSettingItem<QuickSettingsPageId>] : []),
+        ...(!IS_ANDROID ? [
+          {
+            key: "galleryLayoutMode",
+            label: t("settings.galleryLayoutMode"),
+            description: t("settings.galleryLayoutModeDesc"),
+            comp: SettingRadioControl,
+            props: {
+              settingKey: "galleryLayoutMode",
+              options: [
+                { label: t("settings.galleryLayoutModeGrid"), value: "grid" },
+                { label: t("settings.galleryLayoutModeGallery"), value: "gallery" },
+              ],
+            },
+            pages: ["gallery", "albumdetail"],
+          } as QuickSettingItem<QuickSettingsPageId>,
+          {
+            key: "galleryLayoutDirection",
+            label: t("settings.galleryLayoutDirection"),
+            description: t("settings.galleryLayoutDirectionDesc"),
+            comp: SettingRadioControl,
+            props: {
+              settingKey: "galleryLayoutDirection",
+              options: [
+                { label: t("settings.galleryLayoutDirectionVertical"), value: "vertical" },
+                { label: t("settings.galleryLayoutDirectionHorizontal"), value: "horizontal" },
+              ],
+            },
+            pages: ["gallery", "albumdetail"],
+          } as QuickSettingItem<QuickSettingsPageId>,
+        ] : []),
         {
           key: "appBackgroundEnabled",
           label: t("settings.appBackgroundEnabled"),
@@ -159,6 +136,19 @@ export function useQuickSettingsGroups() {
         } as QuickSettingItem<QuickSettingsPageId>,
       ],
     },
+    ...((IS_MACOS || IS_LINUX || IS_WINDOWS) && !IS_WEB && !IS_ANDROID ? [{
+      id: "localFolderSync" as const,
+      title: t("settings.quickLocalFolderSync"),
+      items: [
+        {
+          key: "realtimeFolderSync",
+          label: t("settings.realtimeFolderSync"),
+          description: t("settings.realtimeFolderSyncDesc"),
+          comp: RealtimeFolderSyncSetting,
+          pages: ["albums"],
+        } as QuickSettingItem<QuickSettingsPageId>,
+      ],
+    }] : []),
     {
       id: "download",
       title: t("settings.quickDownload"),
@@ -311,13 +301,6 @@ export function useQuickSettingsGroups() {
           comp: WallpaperModeSetting,
           pages: ["gallery", "albumdetail", "albums"],
         } as QuickSettingItem<QuickSettingsPageId>] : []),
-        ...(IS_WINDOWS ? [{
-          key: "wallpaperEngineDir",
-          label: t("settings.wallpaperEngineDir"),
-          description: t("settings.wallpaperEngineDirDesc"),
-          comp: WallpaperEngineDirSetting,
-          pages: [],
-        } as QuickSettingItem<QuickSettingsPageId>] : []),
       ],
     }]),
     {
@@ -342,7 +325,7 @@ export function useQuickSettingsGroups() {
           description: t("settings.superModeDesc"),
           comp: SuperModeSetting,
           pages: allPages,
-        } as QuickSettingItem<QuickSettingsPageId>] : []),
+        } as unknown as QuickSettingItem<QuickSettingsPageId>] : []),
       ],
     },
   ]);

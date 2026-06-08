@@ -1,16 +1,17 @@
-use crate::crawler::downloader::generate_thumbnail;
+use crate::crawler::downloader::{
+    generate_thumbnail, image_needs_independent_thumbnail, image_thumbnail_dimensions_acceptable,
+};
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::Storage;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
 };
-use tokio::sync::Notify;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -208,31 +209,95 @@ impl Storage {
         Ok(DebugCloneImagesResult { inserted })
     }
 
-    /// 获取整理用的分批图片数据（provider path: `/images/x{limit}x/{page}`）。
-    pub fn get_organize_batch(
+    /// 获取整理用的分批图片数据，按 **id 游标**翻页：`id > after_id ORDER BY id ASC LIMIT limit`。
+    ///
+    /// 必须用游标而非 OFFSET 分页：整理会边扫边删，OFFSET 会随删除而漂移、跳过未扫的行，
+    /// 导致漏扫与「每次执行都还有移除项」的不幂等（曾误删大量文件的连锁根因之一）。
+    /// 游标只依赖 `id > after_id`，删除已扫过的行（id ≤ after_id）不影响后续批次。
+    pub fn get_organize_batch_after(
         &self,
-        page: usize,
+        after_id: i64,
         limit: usize,
     ) -> Result<Vec<OrganizeScanRow>, String> {
-        crate::providers::organize_batch_at(limit, page)
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, COALESCE(hash, ''), local_path, COALESCE(thumbnail_path, '') \
+                 FROM images WHERE id > ?1 ORDER BY id ASC LIMIT ?2",
+            )
+            .map_err(|e| format!("Failed to prepare organize batch: {}", e))?;
+        let rows = stmt
+            .query_map(params![after_id, limit as i64], |row| {
+                Ok(OrganizeScanRow {
+                    id: row.get(0)?,
+                    hash: row.get(1)?,
+                    local_path: row.get(2)?,
+                    thumbnail_path: row.get(3)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query organize batch: {}", e))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| format!("organize row error: {}", e))?);
+        }
+        Ok(out)
+    }
+
+    /// 对一批 hash，返回每个 hash 在整张表中的「胜者 id」（去重时唯一保留的那张）：
+    /// `keep_new == true` → `MAX(id)`（保留最新）；否则 `MIN(id)`（保留最旧）。
+    ///
+    /// 一条聚合查询完成整批比对，避免逐图查表。IN 占位符按 `hashes` 长度动态拼接
+    /// （整理批次 ≤100，占位符数量安全）；空 hash 不参与。
+    pub fn get_hash_winner_ids(
+        &self,
+        hashes: &[String],
+        keep_new: bool,
+    ) -> Result<HashMap<String, i64>, String> {
+        if hashes.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let placeholders = std::iter::repeat("?")
+            .take(hashes.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let agg = if keep_new { "MAX(id)" } else { "MIN(id)" };
+        let sql = format!(
+            "SELECT hash, {agg} FROM images WHERE hash != '' AND hash IN ({placeholders}) GROUP BY hash"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("Failed to prepare winner query: {}", e))?;
+        let params = rusqlite::params_from_iter(hashes.iter());
+        let rows = stmt
+            .query_map(params, |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| format!("Failed to query winner ids: {}", e))?;
+        let mut out = HashMap::new();
+        for r in rows {
+            let (hash, id) = r.map_err(|e| format!("winner row error: {}", e))?;
+            out.insert(hash, id);
+        }
+        Ok(out)
     }
 
     /// 获取总图片数（用于进度计算）
     pub fn get_images_total_count(&self) -> Result<usize, String> {
-        crate::providers::count_at("/images")
+        crate::providers::count_at("images://")
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct OrganizeOptions {
     pub dedupe: bool,
+    /// 去重保留策略：`true` 保留最新（最大 id），`false` 保留最旧（最小 id）
+    pub dedupe_keep_new: bool,
     pub remove_missing: bool,
     pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
     /// 在 DB 记录删除后是否同时删除磁盘上的源文件
     pub delete_source_files: bool,
-    /// 删除文件前查询是否仍有其它 DB 行引用同一 `local_path`
-    pub safe_delete: bool,
     /// 从有序列表（按 id ASC）中跳过的前若干条
     pub offset: Option<usize>,
     /// 在 offset 之后最多处理的条数（与 offset 成对使用时表示区间）
@@ -251,18 +316,14 @@ pub struct OrganizeRunState {
     pub range_start: Option<usize>,
     pub range_end: Option<usize>,
     pub dedupe: bool,
+    pub dedupe_keep_new: bool,
     pub remove_missing: bool,
     pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
     pub delete_source_files: bool,
-    pub safe_delete: bool,
 }
 
 static GLOBAL_ORGANIZE: OnceLock<Arc<OrganizeService>> = OnceLock::new();
-
-// 整理期间阻塞下载的全局状态
-static ORGANIZE_BARRIER: OnceLock<Arc<Notify>> = OnceLock::new();
-static ORGANIZE_RUNNING: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
 #[derive(Default)]
 pub struct OrganizeService {
@@ -288,24 +349,6 @@ impl OrganizeService {
             .clone()
     }
 
-    // 初始化整理阻塞机制的全局状态
-    pub fn init_organize_barrier() {
-        ORGANIZE_BARRIER.get_or_init(|| Arc::new(Notify::new()));
-        ORGANIZE_RUNNING.get_or_init(|| Arc::new(AtomicBool::new(false)));
-    }
-
-    pub fn get_organize_barrier() -> Arc<Notify> {
-        ORGANIZE_BARRIER
-            .get_or_init(|| Arc::new(Notify::new()))
-            .clone()
-    }
-
-    pub fn get_organize_running() -> Arc<AtomicBool> {
-        ORGANIZE_RUNNING
-            .get_or_init(|| Arc::new(AtomicBool::new(false)))
-            .clone()
-    }
-
     fn init_run_state_from_start(
         &self,
         options: &OrganizeOptions,
@@ -321,11 +364,11 @@ impl OrganizeService {
             range_start,
             range_end,
             dedupe: options.dedupe,
+            dedupe_keep_new: options.dedupe_keep_new,
             remove_missing: options.remove_missing,
             remove_unrecognized: options.remove_unrecognized,
             regen_thumbnails: options.regen_thumbnails,
             delete_source_files: options.delete_source_files,
-            safe_delete: options.safe_delete,
         };
         let mut g = self
             .run_state
@@ -354,20 +397,13 @@ impl OrganizeService {
         }
     }
 
-    /// 与 `get_organize_running()` 一致：`running == false` 时返回默认空状态
+    /// `running == false` 时返回默认空状态（`run_state.running` 由 start/reset 维护）
     pub fn get_run_state(&self) -> OrganizeRunState {
-        let running = Self::get_organize_running().load(Ordering::Relaxed);
-        if !running {
-            return OrganizeRunState::default();
-        }
-        let mut s = self
-            .run_state
+        self.run_state
             .lock()
             .ok()
             .map(|m| (*m).clone())
-            .unwrap_or_default();
-        s.running = true;
-        s
+            .unwrap_or_default()
     }
 
     pub async fn start(
@@ -375,9 +411,6 @@ impl OrganizeService {
         storage: Arc<Storage>,
         options: OrganizeOptions,
     ) -> Result<(), String> {
-        // Ensure organize barrier state is ready no matter which call path starts organize.
-        Self::init_organize_barrier();
-
         let mut guard = self
             .cancel_flag
             .lock()
@@ -389,9 +422,6 @@ impl OrganizeService {
         let cancel = Arc::new(AtomicBool::new(false));
         *guard = Some(cancel.clone());
         drop(guard);
-
-        // 设置整理阻塞状态
-        Self::get_organize_running().store(true, Ordering::Relaxed);
 
         let library_total = storage.get_images_total_count()?;
         self.init_run_state_from_start(&options, library_total)?;
@@ -406,11 +436,9 @@ impl OrganizeService {
                 eprintln!("[organize] 任务失败: {}", e);
             }
 
-            // 清理运行状态和唤醒等待的下载任务
+            // 清理运行状态
             svc.clear_running();
             svc.reset_run_state();
-            Self::get_organize_running().store(false, Ordering::Relaxed);
-            Self::get_organize_barrier().notify_waiters();
         });
 
         Ok(())
@@ -487,6 +515,54 @@ fn row_in_organize_range(idx: usize, offset: Option<usize>, limit: Option<usize>
     }
 }
 
+#[derive(Debug, Clone)]
+enum ThumbnailRefreshAction {
+    UseOriginal { id: i64, local_path: String },
+    Regenerate { id: i64, local_path: String },
+}
+
+fn thumbnail_refresh_action(row: &OrganizeScanRow) -> Option<ThumbnailRefreshAction> {
+    let local_path = row.local_path.trim();
+    if local_path.is_empty() {
+        return None;
+    }
+
+    let local = Path::new(local_path);
+    if !local.exists() || !crate::image_type::is_image_by_path(local) {
+        return None;
+    }
+
+    let source_size = std::fs::metadata(local).ok()?.len();
+    let thumbnail_path = row.thumbnail_path.trim();
+
+    if !image_needs_independent_thumbnail(source_size) {
+        if thumbnail_path != local_path {
+            return Some(ThumbnailRefreshAction::UseOriginal {
+                id: row.id,
+                local_path: local_path.to_string(),
+            });
+        }
+        return None;
+    }
+
+    // 按尺寸判断：最长边超过上限（或读不出尺寸/已损坏）才重生成；与生成策略一致，避免无谓重生成。
+    let needs_regen = thumbnail_path.is_empty()
+        || thumbnail_path == local_path
+        || !Path::new(thumbnail_path).exists()
+        || image::image_dimensions(thumbnail_path)
+            .map(|(w, h)| !image_thumbnail_dimensions_acceptable(w, h))
+            .unwrap_or(true);
+
+    if needs_regen {
+        Some(ThumbnailRefreshAction::Regenerate {
+            id: row.id,
+            local_path: local_path.to_string(),
+        })
+    } else {
+        None
+    }
+}
+
 fn run_organize(
     handle: &tokio::runtime::Handle,
     storage: Arc<Storage>,
@@ -495,11 +571,14 @@ fn run_organize(
 ) -> Result<(), String> {
     let total = storage.get_images_total_count()?; // 总图片数
 
-    let mut seen_hashes: HashSet<String> = HashSet::new();
     let mut row_index: usize = 0;
     let mut removed_total: usize = 0;
     let mut regenerated_total: usize = 0;
-    let mut page: usize = 1;
+    // id 游标：上一批处理到的最大 id。用游标分页而非 OFFSET，避免边扫边删导致漏扫。
+    let mut last_id: i64 = 0;
+
+    // 缩略图重生成重（解码 + 写文件），保持小批；其余只读判断 + 删除，用大批减少往返。
+    let batch_size = if options.regen_thumbnails { 10 } else { 100 };
 
     // 当前壁纸 id：若被移除则清空（与历史行为保持一致）
     let mut current_wallpaper_id = Settings::global().get_current_wallpaper_image_id();
@@ -510,20 +589,36 @@ fn run_organize(
             return Ok(());
         }
 
-        let batch = storage.get_organize_batch(page, 1000)?;
+        let batch = storage.get_organize_batch_after(last_id, batch_size)?;
         if batch.is_empty() {
             break;
         }
-        page += 1;
+
+        // 去重：每批一条聚合查询拿到每个 hash 在整张表的「胜者 id」。
+        // 胜者（保新=MAX / 保旧=MIN）永不被删，故跨批次稳定；批内同 hash 也只留胜者。
+        let winner_ids: HashMap<String, i64> = if options.dedupe {
+            let mut hashes: Vec<String> = batch
+                .iter()
+                .filter(|r| !r.hash.is_empty())
+                .map(|r| r.hash.clone())
+                .collect();
+            hashes.sort();
+            hashes.dedup();
+            storage.get_hash_winner_ids(&hashes, options.dedupe_keep_new)?
+        } else {
+            HashMap::new()
+        };
 
         let mut remove_ids: Vec<String> = Vec::new();
-        let mut regen_list: Vec<(i64, String)> = Vec::new();
+        let mut refresh_list: Vec<ThumbnailRefreshAction> = Vec::new();
         let mut should_remove: HashSet<i64> = HashSet::new();
 
         let upper = organize_range_upper_bound(options.offset, options.limit);
         let mut finish_organize = false;
 
         for row in &batch {
+            // 推进游标：即使本行因区间上界跳过，也已"看过"，下一批从其后继续。
+            last_id = row.id;
             if let Some(ub) = upper {
                 if row_index >= ub {
                     finish_organize = true;
@@ -537,13 +632,13 @@ fn run_organize(
                 continue;
             }
 
-            // 1. 去重判断
+            // 1. 去重判断：非胜者 id 即重复项，移除。
             if options.dedupe && !row.hash.is_empty() {
-                if seen_hashes.contains(&row.hash) {
-                    remove_ids.push(row.id.to_string());
-                    should_remove.insert(row.id);
-                } else {
-                    seen_hashes.insert(row.hash.clone());
+                if let Some(&winner) = winner_ids.get(&row.hash) {
+                    if row.id != winner {
+                        remove_ids.push(row.id.to_string());
+                        should_remove.insert(row.id);
+                    }
                 }
             }
 
@@ -568,11 +663,8 @@ fn run_organize(
 
             // 4. 补充缩略图判断
             if options.regen_thumbnails && !should_remove.contains(&row.id) {
-                let needs_regen = row.thumbnail_path.is_empty()
-                    || row.thumbnail_path == row.local_path
-                    || !Path::new(&row.thumbnail_path).exists();
-                if needs_regen {
-                    regen_list.push((row.id, row.local_path.clone()));
+                if let Some(action) = thumbnail_refresh_action(row) {
+                    refresh_list.push(action);
                 }
             }
         }
@@ -591,47 +683,46 @@ fn run_organize(
 
             removed_total += remove_ids.len();
 
+            // 「删除源文件」=移入系统回收站（带软链接/异构盘护栏，绝不永久删除）。
+            // 历史事故：`~/Pictures` 软链到外置盘后，删除穿过软链误删共享物理文件。
+            // 现在软链接 / 网络盘 / 虚拟盘上的文件只移出图库、保留磁盘文件（见 safe_delete）。
+            // Android 的 content:// 删除不在此处。
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if options.delete_source_files {
-                let paths_to_delete: Vec<&str> = batch
+                let paths: Vec<&Path> = batch
                     .iter()
                     .filter(|r| should_remove.contains(&r.id))
-                    .map(|r| r.local_path.as_str())
+                    .map(|r| r.local_path.trim())
+                    .filter(|p| !p.is_empty())
+                    .map(Path::new)
                     .collect();
-
-                if options.safe_delete {
-                    let still_referenced = storage.paths_still_referenced(&paths_to_delete)?;
-                    for path in paths_to_delete {
-                        if path.is_empty() {
-                            continue;
-                        }
-                        if !still_referenced.contains(path) {
-                            let _ = std::fs::remove_file(path);
-                        }
-                    }
-                } else {
-                    for path in paths_to_delete {
-                        if path.is_empty() {
-                            continue;
-                        }
-                        let _ = std::fs::remove_file(path);
-                    }
-                }
+                crate::storage::safe_delete::trash_source_files_batch(&paths);
             }
         }
 
         // 执行缩略图补充（进度仅在整批——含缩略图——结束后发送，避免扫描已 100% 仍在补图）
-        for (id, path) in regen_list {
+        for action in refresh_list {
             if cancel.load(Ordering::Relaxed) {
                 emit_organize_finished(removed_total, regenerated_total, true);
                 return Ok(());
             }
-            let thumbnail_result =
-                handle.block_on(async { generate_thumbnail(Path::new(&path)).await });
+            match action {
+                ThumbnailRefreshAction::UseOriginal { id, local_path } => {
+                    storage.replace_image_thumbnail_path(&id.to_string(), &local_path)?;
+                    regenerated_total += 1;
+                }
+                ThumbnailRefreshAction::Regenerate { id, local_path } => {
+                    let thumbnail_result =
+                        handle.block_on(async { generate_thumbnail(Path::new(&local_path)).await });
 
-            if let Ok(Some(thumb_path)) = thumbnail_result {
-                let thumb_str = thumb_path.to_string_lossy().to_string();
-                storage.update_image_thumbnail_path(&id.to_string(), &thumb_str)?;
-                regenerated_total += 1;
+                    if let Ok(thumbnail_path) = thumbnail_result {
+                        let thumb_str = thumbnail_path
+                            .map(|path| path.to_string_lossy().to_string())
+                            .unwrap_or_else(|| local_path.clone());
+                        storage.replace_image_thumbnail_path(&id.to_string(), &thumb_str)?;
+                        regenerated_total += 1;
+                    }
+                }
             }
         }
 
@@ -645,4 +736,82 @@ fn run_organize(
 
     emit_organize_finished(removed_total, regenerated_total, false);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crawler::downloader::{
+        IMAGE_THUMBNAIL_MAX_DIM, IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES,
+    };
+
+    fn row(id: i64, local_path: &Path, thumbnail_path: &Path) -> OrganizeScanRow {
+        OrganizeScanRow {
+            id,
+            hash: String::new(),
+            local_path: local_path.to_string_lossy().to_string(),
+            thumbnail_path: thumbnail_path.to_string_lossy().to_string(),
+        }
+    }
+
+    #[test]
+    fn thumbnail_refresh_clears_small_image_to_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("small.png");
+        let thumb = dir.path().join("old.jpg");
+        std::fs::write(&local, [1u8; 16]).unwrap();
+        std::fs::write(&thumb, [2u8; 16]).unwrap();
+
+        let action = thumbnail_refresh_action(&row(7, &local, &thumb)).unwrap();
+
+        match action {
+            ThumbnailRefreshAction::UseOriginal { id, local_path } => {
+                assert_eq!(id, 7);
+                assert_eq!(local_path, local.to_string_lossy().to_string());
+            }
+            other => panic!("unexpected action: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn thumbnail_refresh_keeps_in_dimension_thumbnail() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("large.png");
+        let thumb = dir.path().join("thumb.jpg");
+        std::fs::write(
+            &local,
+            vec![1u8; (IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES + 1) as usize],
+        )
+        .unwrap();
+        // 缩略图最长边 ≤ 上限 → 不需重生成。
+        image::RgbImage::new(800, 600).save(&thumb).unwrap();
+
+        assert!(thumbnail_refresh_action(&row(8, &local, &thumb)).is_none());
+    }
+
+    #[test]
+    fn thumbnail_refresh_regenerates_oversized_thumbnail() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("large.png");
+        let thumb = dir.path().join("oversized.jpg");
+        std::fs::write(
+            &local,
+            vec![1u8; (IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES + 1) as usize],
+        )
+        .unwrap();
+        // 缩略图最长边超过上限 → 需重生成。
+        image::RgbImage::new(IMAGE_THUMBNAIL_MAX_DIM + 100, 600)
+            .save(&thumb)
+            .unwrap();
+
+        let action = thumbnail_refresh_action(&row(9, &local, &thumb)).unwrap();
+
+        match action {
+            ThumbnailRefreshAction::Regenerate { id, local_path } => {
+                assert_eq!(id, 9);
+                assert_eq!(local_path, local.to_string_lossy().to_string());
+            }
+            other => panic!("unexpected action: {:?}", other),
+        }
+    }
 }

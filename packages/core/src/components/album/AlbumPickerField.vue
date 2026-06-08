@@ -15,6 +15,7 @@
     :data="treeData"
     :props="treeProps"
     check-strictly
+    filterable
     :clearable="clearable"
     :disabled="disabled"
     :placeholder="placeholder || $t('common.selectPlaceholder')"

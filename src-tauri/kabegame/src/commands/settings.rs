@@ -86,6 +86,11 @@ pub fn get_auto_deduplicate() -> bool {
 }
 
 #[tauri::command]
+pub fn get_realtime_folder_sync() -> bool {
+    Settings::global().get_realtime_folder_sync()
+}
+
+#[tauri::command]
 pub fn get_default_download_dir() -> Option<String> {
     Settings::global().get_default_download_dir()
 }
@@ -93,12 +98,6 @@ pub fn get_default_download_dir() -> Option<String> {
 #[tauri::command]
 pub fn get_language() -> Option<String> {
     Settings::global().get_language()
-}
-
-#[tauri::command]
-#[cfg(target_os = "windows")]
-pub fn get_wallpaper_engine_dir() -> Option<String> {
-    Settings::global().get_wallpaper_engine_dir()
 }
 
 #[tauri::command]
@@ -323,20 +322,15 @@ pub fn set_auto_deduplicate(enabled: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn set_realtime_folder_sync(enabled: bool) -> Result<(), String> {
+    Settings::global().set_realtime_folder_sync(enabled)?;
+    kabegame_core::local_folder::watch::set_enabled(enabled).await;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn set_default_download_dir(dir: Option<String>) -> Result<(), String> {
     Settings::global().set_default_download_dir(dir)
-}
-
-#[tauri::command]
-#[cfg(target_os = "windows")]
-pub fn set_wallpaper_engine_dir(dir: Option<String>) -> Result<(), String> {
-    Settings::global().set_wallpaper_engine_dir(dir)
-}
-
-#[tauri::command]
-#[cfg(target_os = "windows")]
-pub fn get_wallpaper_engine_myprojects_dir() -> Result<Option<String>, String> {
-    Settings::global().get_wallpaper_engine_myprojects_dir()
 }
 
 #[tauri::command]

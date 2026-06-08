@@ -1,0 +1,15 @@
+{
+    "namespace": "kabegame",
+    "name": "vd_plugins_provider",
+    "list": {
+        "${plugin.meta.display}": {
+            "delegate": {
+                "provider": "plugins_provider"
+            },
+            "child_var": "plugin",
+            "provider": "vd_plugin_router",
+            "properties": { "plugin_id": "${plugin.name}" },
+            "meta": "${plugin.meta.plugin}"
+        }
+    }
+}

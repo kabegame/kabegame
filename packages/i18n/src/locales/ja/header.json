@@ -22,5 +22,7 @@
   "failedImagesDeleteAll": "すべて削除",
   "failedImagesFilter": "プラグインでフィルター",
   "showHidden": "非表示画像を表示",
-  "hideHidden": "非表示画像を隠す"
+  "hideHidden": "非表示画像を隠す",
+  "showAlbumImages": "アルバム画像を表示",
+  "hideAlbumImages": "アルバム画像を隠す"
 }

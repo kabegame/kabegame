@@ -1,0 +1,22 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_size_router",
+    // 画廊文件大小 router。
+    // "unknown" 直接路由；其余路径段（如 512KB-1MB）委托给 gallery_size_range_provider.resolve
+    // 解析为字节数，再传给 gallery_size_range_router。
+    "resolve": {
+        "unknown": {
+            "provider": "gallery_size_range_router",
+            "properties": { "min_size": -1, "max_size": -1 }
+        },
+        ".*": {
+            "delegate": { "provider": "gallery_size_range_provider" },
+            "child_var": "computed",
+            "provider": "gallery_size_range_router",
+            "properties": {
+                "min_size": "${computed.meta.min_bytes}",
+                "max_size": "${computed.meta.max_bytes}"
+            }
+        }
+    }
+}

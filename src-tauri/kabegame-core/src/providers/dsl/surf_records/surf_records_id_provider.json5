@@ -1,0 +1,11 @@
+{
+    "namespace": "kabegame",
+    "name": "surf_records_id_provider",
+    "properties": {
+        "surf_record_id": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "surf_records.id = ${properties.surf_record_id}",
+        "limit": 1
+    }
+}

@@ -9,9 +9,9 @@
       v-for="b in BUCKETS"
       :key="b.range"
       :name="t(`gallery.${b.labelKey}`)"
-      :path="joinProviderPath(prefix, 'size', b.range)"
+      :path="pathForSegment(`size/${b.range}`)"
       :depth="1"
-      :hide-when-empty="true"
+      empty-state="disable"
       :active="isSameGalleryFilter({ type: 'size', range: b.range }, filter)"
       @select="$emit('select', { type: 'size', range: b.range })"
     />
@@ -25,7 +25,6 @@ import type { GalleryFilter } from "@/utils/galleryPath";
 import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import {
   isSameGalleryFilter,
-  joinProviderPath,
   useGalleryFilterTreeContext,
 } from "./context";
 
@@ -45,6 +44,6 @@ defineEmits<{
 }>();
 
 const { t } = useI18n();
-const { filter, prefix } = useGalleryFilterTreeContext();
-const rootCountPath = computed(() => joinProviderPath(prefix.value, "all"));
+const { filter, pathForSegment } = useGalleryFilterTreeContext();
+const rootCountPath = computed(() => pathForSegment("all"));
 </script>

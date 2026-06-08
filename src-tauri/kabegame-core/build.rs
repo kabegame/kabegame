@@ -8,6 +8,8 @@ fn main() {
     // on the consumer crate (kabegame). Core only sees feature flags like `virtual-driver`.
     println!("cargo:rerun-if-env-changed=KABEGAME_COMPONENT");
     println!("cargo:rerun-if-env-changed=KABEGAME_DATA");
+    // rsmpeg/rusty_ffmpeg 经此环境变量定位 third/FFmpeg-build/install 的 libav* 库（由 scripts 注入）。
+    println!("cargo:rerun-if-env-changed=FFMPEG_PKG_CONFIG_PATH");
 
     println!(
         "cargo:rustc-check-cfg=cfg(kabegame_component, values(\"kabegame\", \"kabegame-cli\", \"unknown\"))"

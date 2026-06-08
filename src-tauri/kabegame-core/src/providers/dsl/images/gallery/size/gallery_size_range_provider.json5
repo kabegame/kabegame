@@ -1,0 +1,14 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_size_range_provider",
+    // 字符串大小标记 → 字节数转换器。作为 delegate 被 gallery_size_router resolve 调用。
+    // 路径段格式："{min}-{max}"（如 512KB-1MB、1B-512KB、50MB-）。
+    // resolve 命中后通过 SQL meta 返回 min_bytes / max_bytes 供调用方读取。
+    // 支持单位：B / KB / MB / GB（不区分大小写）。
+    // 空字符串 min → min_bytes=1；空字符串 max → max_bytes=9007199254740991（约 8 PB）。
+    "resolve": {
+        "([0-9]+[A-Za-z]+)?-([0-9]+[A-Za-z]+)?": {
+            "meta": "SELECT CASE WHEN mn = '' THEN 1 WHEN mn LIKE '%GB' THEN CAST(REPLACE(mn, 'GB', '') AS INTEGER) * 1073741824 WHEN mn LIKE '%MB' THEN CAST(REPLACE(mn, 'MB', '') AS INTEGER) * 1048576 WHEN mn LIKE '%KB' THEN CAST(REPLACE(mn, 'KB', '') AS INTEGER) * 1024 ELSE CAST(REPLACE(mn, 'B', '') AS INTEGER) END AS min_bytes, CASE WHEN mx = '' THEN 9007199254740991 WHEN mx LIKE '%GB' THEN CAST(REPLACE(mx, 'GB', '') AS INTEGER) * 1073741824 WHEN mx LIKE '%MB' THEN CAST(REPLACE(mx, 'MB', '') AS INTEGER) * 1048576 WHEN mx LIKE '%KB' THEN CAST(REPLACE(mx, 'KB', '') AS INTEGER) * 1024 ELSE CAST(REPLACE(mx, 'B', '') AS INTEGER) END AS max_bytes FROM (SELECT UPPER('${capture[1]}') AS mn, UPPER('${capture[2]}') AS mx)"
+        }
+    }
+}

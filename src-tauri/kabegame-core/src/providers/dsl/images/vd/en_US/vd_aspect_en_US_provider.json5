@@ -1,0 +1,26 @@
+{
+    "namespace": "kabegame",
+    "name": "vd_aspect_en_US_provider",
+    "list": {
+        "Landscape (4x3-16x9)": {
+            "provider": "vd_aspect_bucket_router",
+            "properties": { "bucket": "landscape" }
+        },
+        "Widescreen (16x9-21x9)": {
+            "provider": "vd_aspect_bucket_router",
+            "properties": { "bucket": "widescreen" }
+        },
+        "Square-ish (3x4-4x3)": {
+            "provider": "vd_aspect_bucket_router",
+            "properties": { "bucket": "square" }
+        },
+        "Portrait (9x16-3x4)": {
+            "provider": "vd_aspect_bucket_router",
+            "properties": { "bucket": "portrait" }
+        },
+        "Other (too wide-narrow-invalid)": {
+            "provider": "vd_aspect_bucket_router",
+            "properties": { "bucket": "other" }
+        }
+    }
+}

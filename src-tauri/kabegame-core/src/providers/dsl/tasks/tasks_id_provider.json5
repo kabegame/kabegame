@@ -1,0 +1,11 @@
+{
+    "namespace": "kabegame",
+    "name": "tasks_id_provider",
+    "properties": {
+        "task_id": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "tasks.id = ${properties.task_id}",
+        "limit": 1
+    }
+}

@@ -143,11 +143,6 @@ impl AppPaths {
 
     // ========== 临时目录 ==========
 
-    /// 归档下载临时目录
-    pub fn archive_download_temp(&self) -> PathBuf {
-        self.temp_dir.join("archive-download")
-    }
-
     /// 插件下载临时目录（返回 temp_dir 根目录）
     pub fn plugin_download_temp(&self) -> PathBuf {
         self.temp_dir.clone()

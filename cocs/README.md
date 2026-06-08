@@ -41,6 +41,10 @@
   - 主题：下载器流程与关键调用路径；含 `task-image-counts` 任务图片计数事件说明；入库时 **`images-change` / `album-images-change`** 与画廊监听的对应关系（见文内 §5 子节）。
   - 适用场景：下载任务生命周期、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
 
+- [downloader-tasks/VIDEO_INGEST.md](downloader-tasks/VIDEO_INGEST.md)
+  - 主题：视频摄入（下载/导入压缩）的 Cargo feature 门控机制。`video-ingest` feature 由 `standard`/CLI 启用，`light` 不启用；rsmpeg 进程内转码（`video_compress.rs`）与维度读取（`media_dimensions.rs`）均在此 feature 下，调用方须显式 `#[cfg]` 门控。画廊播放始终可用（HTML `<video>`，无需 FFmpeg）。
+  - 适用场景：新增视频处理调用点须先加 `#[cfg(feature = "video-ingest")]`；排查 light 模式下视频不可导入；理解 FFmpeg 构建（`bun run build:ffmpeg`）与 standard 构建的依赖关系。
+
 - [downloader-tasks/TASK_DRAWER_LOAD.md](downloader-tasks/TASK_DRAWER_LOAD.md)
   - 主题：任务抽屉分页加载、触底加载与相关数据流。
   - 适用场景：任务数量多时打开抽屉卡顿、loadTasksPage 与 get_tasks_page 行为。
@@ -63,6 +67,10 @@
   - 主题：爬虫插件私有 JSON 缓存 `plugin_data`，含 Rhai 读写 API、`description.ejs` 只读 bridge、隔离和卸载清理语义。
   - 适用场景：插件需要缓存 tag taxonomy、emoji 元数据、token、TTL 状态，或在描述模板中读取爬虫预先计算的数据。
 
+- [crawler/METADATA_MIGRATION.md](crawler/METADATA_MIGRATION.md)
+  - 主题：插件图片 metadata 版本化迁移流程，含 `metadata_migrations/v{N}.rhai` 脚本契约、`download_image` / `create_image_metadata` 版本写入、`image_metadata` 复合去重、`metadata_full` 查询路径与 `metadata-migrate` 事件作用域。
+  - 适用场景：插件升级后历史图片详情结构变化；排查 metadata 迁移失败、缓存未刷新、去重合并或版本断档问题。
+
 ## 插件（`plugins/`）
 
 - [plugins/PLUGIN_STORE_CACHE.md](plugins/PLUGIN_STORE_CACHE.md)
@@ -79,11 +87,23 @@
   - 主题：Tauri v2 ACL（capability/permission）在 kabegame 的运行机制与故障复盘。
   - 适用场景：新增窗口 IPC 权限、调整 capability/permission、排查“命令不可用/全部被拒绝”问题。
 
+## 调试（`debug/`）
+
+- [debug/DEBUG_INGEST.md](debug/DEBUG_INGEST.md)
+  - 主题：开发期 runtime debug ingest 方法。Vite dev server 提供 `POST /__kabegame_debug/ingest`，前端与 Rust 后端按 `session_id` 发送调试事件，middleware tee 到 `.kabegame/debug/debug-<session_id>.ndjson`。
+  - 适用场景：仿 Cursor Debug Mode 的插桩式排查；需要把前端和 Rust 后端运行时状态汇总到同一个 NDJSON 会话文件；用 curl 验证 debug endpoint 或读取 session 日志。
+
 ## 国际化（`i18n/`）
 
 - [i18n/I18N_MIGRATION.md](i18n/I18N_MIGRATION.md)
   - 主题：i18n 迁移约束、命名空间规范与落地状态。
   - 适用场景：新增国际化 key、迁移旧文案、核对多语言覆盖。
+
+## 应用更新（`updater/`）
+
+- [updater/AUTO_UPDATE_FLOW.md](updater/AUTO_UPDATE_FLOW.md)
+  - 主题：桌面端 GitHub Release 自动更新全链路。**状态机 + 调度 + 下载 + 安装归后端权威**（`UpdaterService` 单例，仿 `OrganizeService`），前端镜像（`get_updater_state` hydrate + 事件刷新）。涵盖 6-phase 状态机（unchecked/checking/checked/updateAvailable/downloading/restartable）、`checking`/`downloading` 独占不可重入、restartable 重检保留、tag-only 版本比较 + `v` 前缀归一化、asset 平台/模式匹配、三事件（`updater-state-change`/`update-download-progress`/`update-download-error`）、平台安装差异（macOS `open` dmg 后退出 / Windows 跑 setup.exe / Linux 仅跳转）。
+  - 适用场景：新增/排查更新流程与状态机；排查「下载途中刷新丢状态」「下载中仍能触发检查」「restartable 误降级」；调整 asset 匹配 / 平台安装；排查 NEW/重启按钮、changelog 弹窗、检查更新转圈。
 
 ## 维护规则
 

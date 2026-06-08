@@ -45,7 +45,6 @@ import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import {
   dateFilterSegment,
   isSameGalleryFilter,
-  joinProviderPath,
   listProviderDirs,
   useGalleryFilterTreeContext,
   type RefreshTarget,
@@ -64,7 +63,7 @@ defineEmits<{
 }>();
 
 const { t, locale } = useI18n();
-const { filter, prefix, registerRefreshTarget } = useGalleryFilterTreeContext();
+const { filter, prefix, pathForSegment, registerRefreshTarget } = useGalleryFilterTreeContext();
 const childRows = ref<Array<{ seg: string; total?: number }>>([]);
 const loaded = ref(false);
 let listToken = 0;
@@ -76,7 +75,7 @@ const filterForSelf = computed<GalleryFilter>(() => ({
   type: "date",
   segment: segment.value,
 }));
-const path = computed(() => joinProviderPath(prefix.value, "date", ...props.segments));
+const path = computed(() => pathForSegment(["date", ...props.segments].join("/")));
 const canHaveChildren = computed(() => props.segments.length < 3);
 const active = computed(() => isSameGalleryFilter(filterForSelf.value, filter.value));
 const defaultExpanded = computed(() => {
@@ -115,7 +114,7 @@ async function refreshChildren() {
   const expectedPrefix = prefix.value;
   try {
     const pattern = childSegmentPattern();
-    const entries = await listProviderDirs(`${joinProviderPath(path.value)}/`);
+    const entries = await listProviderDirs(`${path.value}/`);
     if (token !== listToken || expectedPrefix !== prefix.value) return;
     childRows.value = entries
       .map((entry) => ({ seg: entry.name, total: entry.total ?? undefined }))

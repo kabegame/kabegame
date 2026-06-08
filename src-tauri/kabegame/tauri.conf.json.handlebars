@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kabegame",
-  "version": "4.1.1",
+  "version": "4.2.0",
   "identifier": {{#if isAndroid}}"app.kabegame"{{else}}"Kabegame"{{/if}},
   "build": {
     "beforeDevCommand": "bun run dev:frontend",
@@ -67,9 +67,6 @@
     "resources": [
       "resources/**/*"
     ],
-    {{#unless isAndroid}}
-    "externalBin": ["./sidecar/ffmpeg-kb"],
-    {{/unless}}
     "windows": {
       "nsis": {
         "installerHooks": "nsis/installer-hooks.nsh",

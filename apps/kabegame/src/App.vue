@@ -1,5 +1,5 @@
 <template>
-  <el-config-provider :locale="elementPlusLocale">
+  <el-config-provider :locale="elementPlusLocale" :z-index="3000">
   <!-- 主窗口 -->
   <el-container class="app-container" :class="{ 'app-container-compact': uiStore.isCompact, 'has-app-background': bgVisible }">
     <div
@@ -10,7 +10,7 @@
       <video
         v-if="bgMediaType === 'video'"
         ref="bgVideoRef"
-        :key="bgImageUrl"
+        :key="`video-${bgImageUrl}`"
         :src="bgImageUrl"
         class="app-background-media"
         :style="bgImageStyle"
@@ -39,12 +39,18 @@
     <!-- 文件拖拽导入确认弹窗（仅非安卓平台） -->
     <ImportConfirmDialog v-if="!uiStore.isCompact" ref="importConfirmDialogRef" />
     <!-- 外部插件导入弹窗 -->
-    <PluginImportDialog 
-      v-model:visible="showImportDialog" 
+    <PluginImportDialog
+      :visible="importDialog.isOpen.value"
       :kgpg-path="importKgpgPath"
+      @update:visible="importDialog.close"
     />
-    <!-- 全局唯一的快捷设置抽屉（桌面与安卓均挂载，安卓用 useModalBack 处理返回键） -->
+    <!-- 全局唯一的快捷设置抽屉（桌面与安卓均挂载） -->
     <QuickSettingsDrawer />
+    <!-- 桌面端自动更新：更新日志弹窗 + 下载进度弹窗（全局唯一，常驻以便下载中刷新存活） -->
+    <template v-if="!uiStore.isCompact && !IS_WEB">
+      <UpdateDialog />
+      <DownloadProgressDialog />
+    </template>
     <!-- 全局唯一的帮助抽屉（按页面展示帮助内容） -->
     <HelpDrawer />
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
@@ -54,8 +60,11 @@
     <CrawlerDialog v-if="uiStore.isCompact" v-model="crawlerDrawerVisible"
       :initial-config="crawlerDrawerInitialConfig" />
     <MissedRunsDialog
-      v-model="missedRunsVisible"
+      :open="missedRunsModal.isOpen.value"
+      :z-index="missedRunsModal.zIndex.value"
       :items="missedRunItems"
+      :system-sleep="wasSystemSleep"
+      @close="missedRunsModal.close()"
       @run-now="handleRunMissedNow"
       @dismiss="handleDismissMissed"
     />
@@ -63,55 +72,61 @@
     <template v-if="!uiStore.isCompact">
       <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed, 'bg-transparent': (IS_WINDOWS || IS_MACOS) && !IS_WEB, 'bg-white': !IS_WINDOWS && !IS_MACOS || IS_WEB }" :width="isCollapsed ? '64px' : '200px'">
         <div class="sidebar-header">
-          <img :src="appLogoUrl" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
+          <span class="app-logo-wrap">
+            <img :src="appLogoUrl" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
+            <UpdateButton v-if="isCollapsed" :collapsed="true" />
+          </span>
           <div v-if="!isCollapsed" class="sidebar-title-section">
             <h1>Kabegame</h1>
+            <UpdateButton :collapsed="false" />
           </div>
         </div>
-        <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
-          <el-menu-item :index="galleryMenuRoute">
-            <el-icon>
-              <Picture />
-            </el-icon>
-            <span>{{ $t('route.gallery') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/albums">
-            <el-icon>
-              <Collection />
-            </el-icon>
-            <span>{{ $t('route.albums') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/plugin-browser">
-            <el-icon>
-              <Grid />
-            </el-icon>
-            <span>{{ $t('route.pluginBrowser') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/surf" v-if="!IS_WEB">
-            <el-icon>
-              <Compass />
-            </el-icon>
-            <span>{{ $t('route.surf') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/auto-configs" v-if="!uiStore.isCompact">
-            <el-icon>
-              <AlarmClock />
-            </el-icon>
-            <span>{{ $t('route.autoConfigs') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/settings">
-            <el-icon>
-              <Setting />
-            </el-icon>
-            <span>{{ $t('route.settings') }}</span>
-          </el-menu-item>
-          <el-menu-item index="/help">
-            <el-icon>
-              <QuestionFilled />
-            </el-icon>
-            <span>{{ $t('route.help') }}</span>
-          </el-menu-item>
-        </el-menu>
+        <div class="sidebar-menu-wrapper">
+          <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
+            <el-menu-item :index="galleryMenuRoute">
+              <el-icon>
+                <Picture />
+              </el-icon>
+              <span>{{ $t('route.gallery') }}</span>
+            </el-menu-item>
+            <el-menu-item index="/albums">
+              <el-icon>
+                <Collection />
+              </el-icon>
+              <span>{{ $t('route.albums') }}</span>
+            </el-menu-item>
+            <el-menu-item index="/plugin-browser">
+              <el-icon>
+                <Grid />
+              </el-icon>
+              <span>{{ $t('route.pluginBrowser') }}</span>
+            </el-menu-item>
+            <el-menu-item index="/surf" v-if="!IS_WEB">
+              <el-icon>
+                <Compass />
+              </el-icon>
+              <span>{{ $t('route.surf') }}</span>
+            </el-menu-item>
+            <el-menu-item index="/auto-configs" v-if="!uiStore.isCompact">
+              <el-icon>
+                <AlarmClock />
+              </el-icon>
+              <span>{{ $t('route.autoConfigs') }}</span>
+            </el-menu-item>
+            <el-menu-item index="/settings">
+              <el-icon>
+                <Setting />
+              </el-icon>
+              <span>{{ $t('route.settings') }}</span>
+            </el-menu-item>
+            <el-menu-item index="/help">
+              <el-icon>
+                <QuestionFilled />
+              </el-icon>
+              <span>{{ $t('route.help') }}</span>
+            </el-menu-item>
+          </el-menu>
+        </div>
       </el-aside>
     </template>
     <el-main class="app-main">
@@ -135,7 +150,9 @@
         </el-icon>
         <span class="bottom-tab-label">{{ tab.label }}</span>
       </router-link>
+      
     </nav>
+    <KamechanMascot />
   </el-container>
   </el-config-provider>
 </template>
@@ -166,6 +183,7 @@ import PluginImportDialog from "./components/import/PluginImportDialog.vue";
 import CrawlerDialog from "./components/CrawlerDialog.vue";
 import MissedRunsDialog from "./components/scheduler/MissedRunsDialog.vue";
 import AutoConfigDialog from "./components/scheduler/AutoConfigDialog.vue";
+import KamechanMascot from "./components/kamechan/KamechanMascot.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
 import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
@@ -173,23 +191,30 @@ import { useSidebar } from "./composables/useSidebar";
 import { listen, emit, UnlistenFn } from "@/api/rpc";
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from "@/api/rpc";
+import { pathqlFetch } from "@/services/pathql";
+import { rowToImageInfo } from "@/utils/imageRow";
 import { IS_WINDOWS, IS_MACOS, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { fileToUrl, initHttpServerBaseUrl } from "@kabegame/core/httpServer";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
 import { useFailedImagesStore } from "./stores/failedImages";
-import { useCrawlerStore } from "./stores/crawler";
 import { useAlbumStore } from "./stores/albums";
 import { useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { useModal } from "@kabegame/core/composables/useModal";
+import { ElMessageBox } from "element-plus";
 import { useThrottleFn } from "@vueuse/core";
 import { useApp } from "@/stores/app";
+import { useMissedRunsWatch } from "./composables/useMissedRunsWatch";
+import * as updaterService from "@/services/updater";
+import UpdateButton from "./components/updater/UpdateButton.vue";
+import UpdateDialog from "./components/updater/UpdateDialog.vue";
+import DownloadProgressDialog from "./components/updater/DownloadProgressDialog.vue";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
-const { t, locale } = useI18n();
+const { locale } = useI18n();
 
 /** Element Plus 组件（含 DatePicker 面板文案）与 vue-i18n 语言对齐 */
 const elementPlusLocale = computed(() => {
@@ -256,7 +281,6 @@ const { visible: crawlerDrawerVisible, initialConfig: crawlerDrawerInitialConfig
 
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
-const crawlerStore = useCrawlerStore();
 const albumStore = useAlbumStore();
 
 const router = useRouter();
@@ -267,7 +291,7 @@ const fileDropOverlayRef = ref<any>(null);
 const importConfirmDialogRef = ref<any>(null);
 
 // 外部导入插件对话框
-const showImportDialog = ref(false);
+const importDialog = useModal();
 const importKgpgPath = ref<string | null>(null);
 
 // 路由视图 key，用于强制刷新组件
@@ -276,19 +300,15 @@ const appStore = useApp();
 if (IS_WEB) {
   watch(() => appStore.isSuper, () => { routerViewKey.value += 1; });
 }
-const missedRunsVisible = ref(false);
-const missedRunItems = ref<import("@kabegame/core/stores/crawler").MissedRunItem[]>([]);
-
-type GalleryBrowseEntry =
-  | { kind: "dir"; name: string }
-  | { kind: "image"; image: ImageInfo };
-
-type GalleryBrowseResult = {
-  entries: GalleryBrowseEntry[];
-  total: number | null;
-  meta?: { kind: string; data: unknown } | null;
-  note?: { title: string; content: string } | null;
-};
+// 漏跑任务检测（启动检查 + 休眠/恢复后自动重查），逻辑集中在 composable 内
+const {
+  missedRunItems,
+  missedRunsModal,
+  wasSystemSleep,
+  handleRunMissedNow,
+  handleDismissMissed,
+  init: initMissedRunsWatch,
+} = useMissedRunsWatch();
 
 // 窗口事件监听
 const { init: initWindowEvents } = useWindowEvents();
@@ -313,14 +333,8 @@ const bgImageToken = ref(0);
 const bgVideoRef = ref<HTMLVideoElement | null>(null);
 let bgResolveToken = 0;
 
-const getPathExtension = (path: string) =>
-  (path.split(/[?#]/)[0].split(".").pop() ?? "").toLowerCase();
-
-const isVideoBackground = (image: ImageInfo | undefined) => {
-  if (isVideoMediaType(image?.type)) return true;
-  const ext = getPathExtension(image?.localPath ?? "");
-  return ext === "mp4" || ext === "mov";
-};
+const isVideoBackground = (image: ImageInfo | undefined) =>
+  isVideoMediaType(image?.type);
 
 const shouldShowAppBackground = () =>
   !!settingsStore.values.appBackgroundEnabled &&
@@ -369,11 +383,8 @@ watch(
       let image = (await invoke<ImageInfo | null>("get_image_by_id", { imageId })) ?? undefined;
 
       if (!image) {
-        const path = `/images/id_${imageId}/`;
-        const res = await invoke<GalleryBrowseResult>("query_provider", {
-          path,
-        });
-        image = (res.entries || []).find((entry) => entry.kind === "image")?.image;
+        const path = `images://id_${encodeURIComponent(imageId)}`;
+        image = (await pathqlFetch<Record<string, unknown>>(path)).map(rowToImageInfo)[0];
       }
 
       const source = image?.localPath ? fileToUrl(image.localPath) : "";
@@ -493,7 +504,7 @@ onMounted(async () => {
     console.error("加载已安装插件列表失败:", e);
   }
   await failedImagesStore.initListeners();
-  await checkMissedRunsAtStartup();
+  await initMissedRunsWatch();
 
   // 初始化各个 composables
   await initWindowEvents();
@@ -569,7 +580,7 @@ onMounted(async () => {
     }
     
     importKgpgPath.value = event.payload.kgpgPath;
-    showImportDialog.value = true;
+    importDialog.open();
   });
 
   // Android 适配：供原生代码调用的全局方法
@@ -578,50 +589,16 @@ onMounted(async () => {
       console.log("[Android] Received import request:", path);
       // 触发相同的逻辑
       importKgpgPath.value = path;
-      showImportDialog.value = true;
+      importDialog.open();
     };
   }
   
+  // 桌面端应用自动更新：hydrate 后端状态 + 订阅事件（调度在后端；web / android 内部 noop）
+  void updaterService.init();
+
   // 通知后端已准备好接收事件
   emit('app-ready');
 });
-
-const checkMissedRunsAtStartup = async () => {
-  if (IS_WEB) return; // web mode: backend auto-runs missed configs on startup
-  try {
-    await crawlerStore.runConfigsReady;
-    const items = await crawlerStore.getMissedRuns();
-    if (!items.length) return;
-    missedRunItems.value = items;
-    missedRunsVisible.value = true;
-  } catch (error) {
-    console.warn("检查漏跑任务失败:", error);
-  }
-};
-
-const handleRunMissedNow = async () => {
-  const ids = missedRunItems.value.map((item) => item.configId);
-  if (!ids.length) {
-    missedRunsVisible.value = false;
-    return;
-  }
-  await crawlerStore.runMissedConfigs(ids);
-  missedRunsVisible.value = false;
-  missedRunItems.value = [];
-  ElMessage.success(t("autoConfig.missedRuns.runNowSuccess"));
-};
-
-const handleDismissMissed = async () => {
-  const ids = missedRunItems.value.map((item) => item.configId);
-  if (!ids.length) {
-    missedRunsVisible.value = false;
-    return;
-  }
-  await crawlerStore.dismissMissedConfigs(ids);
-  missedRunsVisible.value = false;
-  missedRunItems.value = [];
-  ElMessage.info(t("autoConfig.missedRuns.dismissed"));
-};
 
 onUnmounted(() => {
   // 清理设置变更事件监听器
@@ -633,6 +610,8 @@ onUnmounted(() => {
     removeF11Listener();
     removeF11Listener = null;
   }
+  // 注销更新事件订阅
+  updaterService.dispose();
 });
 
 </script>
@@ -643,6 +622,8 @@ body,
 #app {
   height: 100%;
   background: transparent;
+  overscroll-behavior: none;
+
 }
 
 * {
@@ -716,6 +697,7 @@ body,
   flex: 0 0 auto;
   display: flex;
   flex-direction: row;
+  position: relative;
   width: 100%;
   border-top: 2px solid var(--anime-border);
   background: var(--anime-bg-card);
@@ -772,9 +754,8 @@ body,
   height: 100dvh;
   box-shadow: 4px 0 20px rgba(255, 107, 157, 0.1);
   transition: width 0.3s ease;
-  // 防止横向滚动条
-  overflow-x: hidden;
-  overflow-y: auto;
+  // 菜单区域单独负责滚动，侧栏本体只负责裁剪溢出内容
+  overflow: hidden;
 
   .sidebar-header {
     padding: 24px 20px;
@@ -784,10 +765,17 @@ body,
     flex-direction: row;
     align-items: center;
     gap: 12px;
-    position: relative;
+    position: sticky;
+    top: 0;
     min-height: 80px;
     justify-content: flex-start;
     transition: padding 0.3s ease;
+
+    .app-logo-wrap {
+      position: relative;
+      display: inline-flex;
+      flex-shrink: 0;
+    }
 
     .app-logo {
       width: 56px;
@@ -914,13 +902,28 @@ body,
     }
   }
 
-  .sidebar-menu {
+  .sidebar-menu-wrapper {
     flex: 1;
+    min-height: 0;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .sidebar-menu {
+    height: 100%;
     border-right: none;
     padding: 10px 0;
     transition: padding 0.3s ease;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
     // Element Plus 默认给 el-menu 一个不透明背景，会把"半透明侧栏"盖住，导致看起来没有毛玻璃
     background: transparent;
+
+    &::-webkit-scrollbar {
+      display: none;
+    }
 
     // 覆盖 Element Plus 菜单的背景色（展开/折叠都需要）
     &.el-menu {

@@ -1,6 +1,8 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { invoke, listen } from "@/api/rpc";
+import { pathqlFetch } from "@/services/pathql";
+import { rowToImageInfo } from "@/utils/imageRow";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import type { UnlistenFn } from "@/api/rpc";
@@ -10,6 +12,11 @@ import { ElMessageBox } from "element-plus";
 import { i18n } from "@kabegame/i18n";
 import type { AlbumTreeNode } from "@kabegame/core/types/album";
 import { buildAlbumTreeFromFlat } from "@kabegame/core/utils/albumTree";
+import {
+  buildAlbumMediaNodes,
+  fetchAlbumDirectCounts,
+  type AlbumMediaNode,
+} from "@/utils/albumMediaTree";
 
 export type { AlbumTreeNode };
 
@@ -18,25 +25,34 @@ export const HIDDEN_ALBUM_ID = "00000000-0000-0000-0000-000000000000";
 /** 收藏画册的固定 UUID（与后端 `FAVORITE_ALBUM_ID` 常量一致） */
 export const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
 
+export type AlbumKind = "normal" | "local_folder";
+
+export interface FolderStatus {
+  state: "ok" | "missing" | "denied" | "not_a_dir" | "io_error";
+  message?: string;
+  checkedAt?: number;
+  checked_at?: number;
+  lastSyncedAtMs?: number;
+  last_synced_at_ms?: number;
+}
+
 export interface Album {
   id: string;
   name: string;
   parentId: string | null;
   createdAt: number;
+  type: AlbumKind;
+  syncFolder: string | null;
+  folderStatus: FolderStatus | null;
 }
 
-type ProviderAlbumEntry = {
-  kind: "dir";
-  name: string;
-  meta?: {
-    kind?: string;
-    data?: Record<string, unknown>;
-  } | null;
-};
+export interface AlbumStats {
+  directImageCount: number;
+  imageCount: number;
+  subAlbumCount: number;
+}
 
-type ProviderAlbumListing = {
-  entries?: ProviderAlbumEntry[];
-};
+type AlbumRow = Record<string, unknown>;
 
 function parseParentId(raw: unknown): string | null {
   if (raw === undefined || raw === null) return null;
@@ -45,30 +61,47 @@ function parseParentId(raw: unknown): string | null {
   return s ? s : null;
 }
 
+function parseFolderStatus(raw: unknown): FolderStatus | null {
+  if (raw == null) return null;
+  if (typeof raw === "object") return raw as FolderStatus;
+  try {
+    const parsed = JSON.parse(String(raw));
+    return parsed && typeof parsed === "object" ? (parsed as FolderStatus) : null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeAlbumRow(a: Record<string, unknown>): Album {
   const createdAt =
     (a.created_at as number | undefined) ??
     (a.createdAt as number | undefined) ??
     0;
+  const rawType = String(a.type ?? "normal");
+  const type: AlbumKind = rawType === "local_folder" ? "local_folder" : "normal";
+  const syncFolder = ((): string | null => {
+    const v = a.sync_folder ?? a.syncFolder;
+    return v == null ? null : String(v);
+  })();
+  const folderStatus = ((): FolderStatus | null => {
+    const raw = a.folder_status ?? a.folderStatus;
+    return parseFolderStatus(raw);
+  })();
   return {
     id: String(a.id ?? ""),
     name: String(a.name ?? ""),
     parentId: parseParentId(a.parent_id ?? a.parentId),
     createdAt: typeof createdAt === "number" ? createdAt : Number(createdAt) || 0,
+    type,
+    syncFolder,
+    folderStatus,
   };
 }
 
-function albumFromProviderEntry(entry: ProviderAlbumEntry): Album | null {
-  if (!entry || entry.kind !== "dir" || entry.meta?.kind !== "album") return null;
-  const data = entry.meta.data ?? {};
-  const id = String(data.id ?? entry.name ?? "").trim();
+function albumFromProviderRow(row: AlbumRow): Album | null {
+  const id = String(row.id ?? "").trim();
   if (!id) return null;
-  return normalizeAlbumRow({
-    id,
-    name: data.name ?? entry.name,
-    parentId: data.parentId,
-    createdAt: data.createdAt,
-  });
+  return normalizeAlbumRow(row);
 }
 
 export const useAlbumStore = defineStore("albums", () => {
@@ -77,7 +110,12 @@ export const useAlbumStore = defineStore("albums", () => {
   const albums = ref<Album[]>([]);
   const albumImages = ref<Record<string, ImageInfo[]>>({});
   const albumPreviews = ref<Record<string, ImageInfo[]>>({});
+  const albumDirectCounts = ref<Record<string, number>>({});
+  const albumHiddenDirectCounts = ref<Record<string, number>>({});
   const albumCounts = ref<Record<string, number>>({});
+  const albumHiddenCounts = ref<Record<string, number>>({});
+  const albumStats = ref<Record<string, AlbumStats>>({});
+  const albumHiddenStats = ref<Record<string, AlbumStats>>({});
   const loading = ref(false);
 
   let eventListenersInitialized = false;
@@ -85,23 +123,6 @@ export const useAlbumStore = defineStore("albums", () => {
   let unlistenAlbumDeleted: UnlistenFn | null = null;
   let unlistenAlbumChanged: UnlistenFn | null = null;
   let unlistenImagesChange: UnlistenFn | null = null;
-  let reloadCountsTimer: number | null = null;
-
-  const scheduleReloadAlbumCounts = () => {
-    if (reloadCountsTimer !== null) {
-      clearTimeout(reloadCountsTimer);
-    }
-    reloadCountsTimer = window.setTimeout(async () => {
-      reloadCountsTimer = null;
-      try {
-        const counts = await invoke<Record<string, number>>("get_album_counts");
-        albumCounts.value = counts;
-      } catch (e) {
-        console.warn("reload album counts failed", e);
-      }
-    }, 250);
-  };
-
   const getChildren = (albumId: string): Album[] =>
     albums.value.filter((a) => a.parentId === albumId);
 
@@ -119,7 +140,102 @@ export const useAlbumStore = defineStore("albums", () => {
     return out;
   };
 
+  const localFolderAlbumIds = computed<string[]>(() =>
+    albums.value.filter((a) => a.type === "local_folder").map((a) => a.id),
+  );
+
+  const isLocalFolderAlbum = (albumId: string | null | undefined): boolean => {
+    if (!albumId) return false;
+    return albums.value.some((a) => a.id === albumId && a.type === "local_folder");
+  };
+
   const albumTree = computed((): AlbumTreeNode[] => buildAlbumTreeFromFlat(albums.value));
+
+  const directCountsRef = (hide: boolean) =>
+    hide ? albumHiddenDirectCounts : albumDirectCounts;
+
+  const aggregateCountsRef = (hide: boolean) =>
+    hide ? albumHiddenCounts : albumCounts;
+
+  const aggregateStatsRef = (hide: boolean) =>
+    hide ? albumHiddenStats : albumStats;
+
+  const recomputeAlbumCounts = (hide = false) => {
+    const albumIds = new Set(albums.value.map((a) => a.id));
+    const roots = albums.value.filter((a) => a.parentId == null || !albumIds.has(a.parentId));
+    const nodes = buildAlbumMediaNodes(roots, albums.value, directCountsRef(hide).value, hide);
+    const nextCounts: Record<string, number> = {};
+    const nextStats: Record<string, AlbumStats> = {};
+
+    const collect = (node: AlbumMediaNode): AlbumStats => {
+      const childStats = node.children.map(collect);
+      const subAlbumCount = node.children.length + childStats.reduce(
+        (sum, stats) => sum + stats.subAlbumCount,
+        0,
+      );
+      const stats: AlbumStats = {
+        directImageCount: node.directTotal,
+        imageCount: node.aggregateTotal,
+        subAlbumCount,
+      };
+      nextCounts[node.album.id] = stats.imageCount;
+      nextStats[node.album.id] = stats;
+      return stats;
+    };
+
+    for (const node of nodes) {
+      collect(node);
+    }
+
+    aggregateCountsRef(hide).value = nextCounts;
+    aggregateStatsRef(hide).value = nextStats;
+  };
+
+  const recomputeAllAlbumCounts = () => {
+    recomputeAlbumCounts(false);
+    recomputeAlbumCounts(true);
+  };
+
+  const setAlbumDirectCounts = (counts: Record<string, number>, hide = false) => {
+    const next: Record<string, number> = {};
+    for (const album of albums.value) {
+      const raw = counts[album.id] ?? 0;
+      next[album.id] = Number.isFinite(raw) ? Math.max(0, Number(raw)) : 0;
+    }
+    directCountsRef(hide).value = next;
+    recomputeAlbumCounts(hide);
+  };
+
+  const patchAlbumDirectCounts = (counts: Record<string, number>, hide = false) => {
+    const next = { ...directCountsRef(hide).value };
+    for (const [id, raw] of Object.entries(counts)) {
+      if (!id) continue;
+      next[id] = Number.isFinite(raw) ? Math.max(0, Number(raw)) : 0;
+    }
+    directCountsRef(hide).value = next;
+    recomputeAlbumCounts(hide);
+  };
+
+  const adjustAlbumDirectCounts = (albumIds: string[], delta: number, hide = false) => {
+    if (albumIds.length === 0 || delta === 0) return;
+    const next = { ...directCountsRef(hide).value };
+    for (const id of albumIds) {
+      next[id] = Math.max(0, (next[id] ?? 0) + delta);
+    }
+    directCountsRef(hide).value = next;
+    recomputeAlbumCounts(hide);
+  };
+
+  const getAlbumDirectCounts = (hide = false) => directCountsRef(hide).value;
+
+  const getAlbumCounts = (hide = false) => aggregateCountsRef(hide).value;
+
+  const getAlbumStats = (hide = false) => aggregateStatsRef(hide).value;
+
+  const refreshAlbumDirectCounts = async (hide = false, albumIds?: Iterable<string>) => {
+    const ids = albumIds ?? albums.value.map((album) => album.id);
+    patchAlbumDirectCounts(await fetchAlbumDirectCounts(ids, hide), hide);
+  };
 
   /** 排除若干画册（及不需要单独处理：仅从扁平列表过滤后再建树） */
   const getAlbumTreeExcluding = (excludeIds: string[]): AlbumTreeNode[] => {
@@ -137,9 +253,9 @@ export const useAlbumStore = defineStore("albums", () => {
     if (!row.id) return;
     if (albums.value.some((a) => a.id === row.id)) return;
     albums.value.unshift(row);
-    if (albumCounts.value[row.id] == null) {
-      albumCounts.value[row.id] = 0;
-    }
+    albumDirectCounts.value[row.id] = 0;
+    albumHiddenDirectCounts.value[row.id] = 0;
+    recomputeAllAlbumCounts();
   };
 
   const applyAlbumDeletedPayload = (albumId: string) => {
@@ -149,9 +265,14 @@ export const useAlbumStore = defineStore("albums", () => {
     for (const id of removeIds) {
       delete albumImages.value[id];
       delete albumPreviews.value[id];
+      delete albumDirectCounts.value[id];
+      delete albumHiddenDirectCounts.value[id];
       delete albumCounts.value[id];
+      delete albumHiddenCounts.value[id];
+      delete albumStats.value[id];
+      delete albumHiddenStats.value[id];
     }
-    scheduleReloadAlbumCounts();
+    recomputeAllAlbumCounts();
   };
 
   const applyAlbumChangedPayload = (
@@ -165,6 +286,10 @@ export const useAlbumStore = defineStore("albums", () => {
     }
     if (Object.prototype.hasOwnProperty.call(changes, "parentId")) {
       album.parentId = parseParentId(changes.parentId);
+      recomputeAllAlbumCounts();
+    }
+    if (Object.prototype.hasOwnProperty.call(changes, "folderStatus")) {
+      album.folderStatus = parseFolderStatus(changes.folderStatus);
     }
   };
 
@@ -198,7 +323,6 @@ export const useAlbumStore = defineStore("albums", () => {
       unlistenImagesChange = await listen<ImagesChangePayload>("images-change", async () => {
         albumImages.value = {};
         albumPreviews.value = {};
-        scheduleReloadAlbumCounts();
       });
       // `album_images` 表变更：按 albumIds 精准失效
       await listen<AlbumImagesChangePayload>(
@@ -215,7 +339,23 @@ export const useAlbumStore = defineStore("albums", () => {
               delete albumPreviews.value[aid];
             }
           }
-          scheduleReloadAlbumCounts();
+          if (p.directCounts && Object.keys(p.directCounts).length > 0) {
+            patchAlbumDirectCounts(p.directCounts, false);
+          } else {
+            const uniqueImageCount = new Set(
+              (p.imageIds ?? []).map((x) => String(x).trim()).filter(Boolean),
+            ).size;
+            if (p.reason === "add") {
+              adjustAlbumDirectCounts(ids, uniqueImageCount, false);
+            } else if (p.reason === "delete") {
+              adjustAlbumDirectCounts(ids, -uniqueImageCount, false);
+            }
+          }
+          const hiddenCountIds =
+            ids.length === 0 || ids.includes(HIDDEN_ALBUM_ID)
+              ? albums.value.map((album) => album.id)
+              : ids;
+          await refreshAlbumDirectCounts(true, hiddenCountIds);
         }
       );
     } catch (e) {
@@ -227,18 +367,22 @@ export const useAlbumStore = defineStore("albums", () => {
     await initEventListeners();
     loading.value = true;
     try {
-      const res = await invoke<ProviderAlbumListing>("query_provider", {
-        path: "albums/all/",
-      });
-      const rows = (res.entries ?? [])
-        .map(albumFromProviderEntry)
+      const rows = (await pathqlFetch<AlbumRow>("albums://all"))
+        .map(albumFromProviderRow)
         .filter((a): a is Album => !!a);
       albums.value = rows.sort((a, b) => b.createdAt - a.createdAt);
+      const ids = rows.map((a) => a.id);
       try {
-        const counts = await invoke<Record<string, number>>("get_album_counts");
-        albumCounts.value = counts;
+        setAlbumDirectCounts(await fetchAlbumDirectCounts(ids, false), false);
       } catch (e) {
-        console.warn("load album counts failed", e);
+        console.warn("load album direct counts failed", e);
+        setAlbumDirectCounts({}, false);
+      }
+      try {
+        setAlbumDirectCounts(await fetchAlbumDirectCounts(ids, true), true);
+      } catch (e) {
+        console.warn("load hidden-filtered album direct counts failed", e);
+        setAlbumDirectCounts({}, true);
       }
     } finally {
       loading.value = false;
@@ -265,11 +409,56 @@ export const useAlbumStore = defineStore("albums", () => {
         if (!albums.value.some((a) => a.id === row.id)) {
           albums.value.unshift(row);
         }
-        if (albumCounts.value[row.id] == null) {
-          albumCounts.value[row.id] = 0;
-        }
+        albumDirectCounts.value[row.id] = albumDirectCounts.value[row.id] ?? 0;
+        albumHiddenDirectCounts.value[row.id] = albumHiddenDirectCounts.value[row.id] ?? 0;
+        recomputeAllAlbumCounts();
       }
       return created;
+    } catch (error: any) {
+      const errorMessage =
+        typeof error === "string" ? error : error?.message || String(error);
+      throw new Error(errorMessage);
+    }
+  };
+
+  const createLocalFolderAlbum = async (
+    args: {
+      name: string;
+      syncFolder: string;
+      recursive: boolean;
+      parentId?: string | null;
+    },
+    opts: { reload?: boolean } = {},
+  ) => {
+    await initEventListeners();
+    try {
+      const createdRaw = await invoke<unknown>("add_local_folder_album", {
+        name: args.name,
+        parentId: args.parentId ?? null,
+        syncFolder: args.syncFolder,
+        recursive: args.recursive,
+      });
+      const rows = (Array.isArray(createdRaw) ? createdRaw : [createdRaw])
+        .map((row) => normalizeAlbumRow(row as Record<string, unknown>))
+        .filter((album) => !!album.id);
+
+      const reload = opts.reload ?? true;
+      if (reload) {
+        await loadAlbums();
+      } else {
+        for (const row of rows) {
+          const existingIndex = albums.value.findIndex((album) => album.id === row.id);
+          if (existingIndex >= 0) {
+            albums.value[existingIndex] = row;
+          } else {
+            albums.value.unshift(row);
+          }
+          albumDirectCounts.value[row.id] = albumDirectCounts.value[row.id] ?? 0;
+          albumHiddenDirectCounts.value[row.id] = albumHiddenDirectCounts.value[row.id] ?? 0;
+        }
+        recomputeAllAlbumCounts();
+      }
+      return rows;
     } catch (error: any) {
       const errorMessage =
         typeof error === "string" ? error : error?.message || String(error);
@@ -317,6 +506,7 @@ export const useAlbumStore = defineStore("albums", () => {
       const album = albums.value.find((a) => a.id === albumId);
       if (album) {
         album.parentId = newParentId;
+        recomputeAllAlbumCounts();
       }
     } catch (error: any) {
       const errorMessage =
@@ -328,7 +518,7 @@ export const useAlbumStore = defineStore("albums", () => {
   const addImagesToAlbum = async (albumId: string, imageIds: string[]) => {
     await initEventListeners();
     try {
-      const result = await invoke<{
+      await invoke<{
         added: number;
         attempted: number;
         canAdd: number;
@@ -338,8 +528,6 @@ export const useAlbumStore = defineStore("albums", () => {
       // 清除缓存，下一次自动刷新
       delete albumImages.value[albumId];
       delete albumPreviews.value[albumId];
-      // 更新计数（使用后端返回的实际数量）
-      albumCounts.value[albumId] = result.currentCount;
     } catch (error: any) {
       throw error;
     }
@@ -356,7 +544,6 @@ export const useAlbumStore = defineStore("albums", () => {
     }>("add_task_images_to_album", { taskId, albumId });
     delete albumImages.value[albumId];
     delete albumPreviews.value[albumId];
-    albumCounts.value[albumId] = result.currentCount;
     return result;
   };
 
@@ -370,9 +557,6 @@ export const useAlbumStore = defineStore("albums", () => {
     // 清除缓存，下一次自动刷新
     delete albumImages.value[albumId];
     delete albumPreviews.value[albumId];
-    // 更新计数（本地 - removed，兜底不小于 0）
-    const prev = albumCounts.value[albumId] || 0;
-    albumCounts.value[albumId] = Math.max(0, prev - removed);
 
     return removed;
   };
@@ -390,7 +574,10 @@ export const useAlbumStore = defineStore("albums", () => {
 
   const getAlbumImageIds = async (albumId: string): Promise<string[]> => {
     await initEventListeners();
-    return await invoke<string[]>("get_album_image_ids", { albumId });
+    const rows = await pathqlFetch<Record<string, unknown>>(
+      `gallery/album/${encodeURIComponent(albumId)}/order`
+    );
+    return rows.map(rowToImageInfo).filter((image) => !!image.id).map((image) => image.id);
   };
 
   return {
@@ -399,14 +586,22 @@ export const useAlbumStore = defineStore("albums", () => {
     albumTree,
     albumImages,
     albumPreviews,
+    albumDirectCounts,
+    albumHiddenDirectCounts,
     albumCounts,
+    albumHiddenCounts,
+    albumStats,
+    albumHiddenStats,
     loading,
     HIDDEN_ALBUM_ID,
     loadAlbums,
     getChildren,
     getDescendantIds,
+    localFolderAlbumIds,
+    isLocalFolderAlbum,
     getAlbumTreeExcluding,
     createAlbum,
+    createLocalFolderAlbum,
     deleteAlbum,
     renameAlbum,
     moveAlbum,
@@ -415,5 +610,8 @@ export const useAlbumStore = defineStore("albums", () => {
     removeImagesFromAlbum,
     loadAlbumPreview,
     getAlbumImageIds,
+    getAlbumDirectCounts,
+    getAlbumCounts,
+    getAlbumStats,
   };
 });

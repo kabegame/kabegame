@@ -3,7 +3,7 @@
 //! 目标：
 //! - 提供跨平台的文件系统操作语义：read_dir/read_file/create_dir/delete/rename 等。
 //! - 平台层（Windows Dokan handler）只负责把平台参数映射到这些原语，并将结果映射回平台返回值。
-//! - 目录树通过 pathql `/vd/i18n-*/...` DSL 解析，图片文件由叶子 provider 的 fetch 行生成。
+//! - 目录树通过 pathql `images://vd/i18n-*/...` DSL 解析，图片文件由叶子 provider 的 fetch 行生成。
 
 #![allow(dead_code)]
 
@@ -156,7 +156,7 @@ impl<'a> VfsSemantics<'a> {
     }
 
     fn vd_path(&self, segments: &[&str]) -> String {
-        let mut path = format!("/vd/{}", Self::locale_route_segment());
+        let mut path = format!("images://vd/{}", Self::locale_route_segment());
         for segment in segments {
             path.push('/');
             path.push_str(segment);

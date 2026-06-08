@@ -94,10 +94,10 @@ pub enum SettingKey {
     GalleryImageObjectPosition,
     /// 自动去重
     AutoDeduplicate,
+    /// 实时监听本地文件夹画册源目录
+    RealtimeFolderSync,
     /// 默认下载目录
     DefaultDownloadDir,
-    /// 壁纸引擎目录
-    WallpaperEngineDir,
     /// 壁纸轮播启用
     WallpaperRotationEnabled,
     /// 壁纸轮播画册ID，为空则为画廊
@@ -118,6 +118,8 @@ pub enum SettingKey {
     WallpaperTransitionByMode,
     /// 壁纸模式（原生等）
     WallpaperMode,
+    /// 关闭壁纸（整体禁用壁纸功能：拒绝壁纸相关操作、隐藏壁纸窗口、启动不恢复）
+    WallpaperDisabled,
     /// 视频壁纸音量（0~1）
     WallpaperVolume,
     /// 视频壁纸播放速率（0.25～3）
@@ -292,8 +294,8 @@ impl Settings {
             SettingKey::GalleryImageAspectRatio => SettingValue::OptionString(None),
             SettingKey::GalleryImageObjectPosition => SettingValue::String("center".to_string()),
             SettingKey::AutoDeduplicate => SettingValue::Bool(false),
+            SettingKey::RealtimeFolderSync => SettingValue::Bool(false),
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
-            SettingKey::WallpaperEngineDir => SettingValue::OptionString(None),
             SettingKey::WallpaperRotationEnabled => SettingValue::Bool(false),
             SettingKey::WallpaperRotationAlbumId => SettingValue::OptionString(None),
             SettingKey::WallpaperRotationIncludeSubalbums => SettingValue::Bool(true),
@@ -310,6 +312,7 @@ impl Settings {
                 SettingValue::HashMapStringString(HashMap::new())
             }
             SettingKey::WallpaperMode => SettingValue::String(Self::default_wallpaper_mode()),
+            SettingKey::WallpaperDisabled => SettingValue::Bool(false),
             SettingKey::WallpaperVolume => SettingValue::F64(1.0),
             SettingKey::WallpaperVideoPlaybackRate => SettingValue::F64(1.0),
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
@@ -513,8 +516,8 @@ Write-Output "$style,$tile"
             SettingKey::GalleryImageAspectRatio,
             SettingKey::GalleryImageObjectPosition,
             SettingKey::AutoDeduplicate,
+            SettingKey::RealtimeFolderSync,
             SettingKey::DefaultDownloadDir,
-            SettingKey::WallpaperEngineDir,
             SettingKey::WallpaperRotationEnabled,
             SettingKey::WallpaperRotationAlbumId,
             SettingKey::WallpaperRotationIncludeSubalbums,
@@ -525,6 +528,7 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperStyleByMode,
             SettingKey::WallpaperTransitionByMode,
             SettingKey::WallpaperMode,
+            SettingKey::WallpaperDisabled,
             SettingKey::WallpaperVolume,
             SettingKey::WallpaperVideoPlaybackRate,
             SettingKey::WindowState,
@@ -619,7 +623,9 @@ Write-Output "$style,$tile"
             SettingKey::AutoLaunch
             | SettingKey::AutoOpenCrawlerWebview
             | SettingKey::AutoDeduplicate
-            | SettingKey::WallpaperRotationEnabled => {
+            | SettingKey::RealtimeFolderSync
+            | SettingKey::WallpaperRotationEnabled
+            | SettingKey::WallpaperDisabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
             SettingKey::ImportRecommendedScheduleEnabled => {
@@ -667,7 +673,6 @@ Write-Output "$style,$tile"
             )),
             SettingKey::GalleryImageAspectRatio
             | SettingKey::DefaultDownloadDir
-            | SettingKey::WallpaperEngineDir
             | SettingKey::CurrentWallpaperImageId => match json {
                 serde_json::Value::String(s) if !s.trim().is_empty() => {
                     Ok(SettingValue::OptionString(Some(s.clone())))
@@ -746,8 +751,8 @@ Write-Output "$style,$tile"
             SettingKey::GalleryImageAspectRatio => "galleryImageAspectRatio".to_string(),
             SettingKey::GalleryImageObjectPosition => "galleryImageObjectPosition".to_string(),
             SettingKey::AutoDeduplicate => "autoDeduplicate".to_string(),
+            SettingKey::RealtimeFolderSync => "realtimeFolderSync".to_string(),
             SettingKey::DefaultDownloadDir => "defaultDownloadDir".to_string(),
-            SettingKey::WallpaperEngineDir => "wallpaperEngineDir".to_string(),
             SettingKey::WallpaperRotationEnabled => "wallpaperRotationEnabled".to_string(),
             SettingKey::WallpaperRotationAlbumId => "wallpaperRotationAlbumId".to_string(),
             SettingKey::WallpaperRotationIncludeSubalbums => {
@@ -762,6 +767,7 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperStyleByMode => "wallpaperStyleByMode".to_string(),
             SettingKey::WallpaperTransitionByMode => "wallpaperTransitionByMode".to_string(),
             SettingKey::WallpaperMode => "wallpaperMode".to_string(),
+            SettingKey::WallpaperDisabled => "wallpaperDisabled".to_string(),
             SettingKey::WallpaperVolume => "wallpaperVolume".to_string(),
             SettingKey::WallpaperVideoPlaybackRate => "wallpaperVideoPlaybackRate".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
@@ -978,16 +984,16 @@ Write-Output "$style,$tile"
             .unwrap_or(false)
     }
 
+    pub fn get_realtime_folder_sync(&self) -> bool {
+        Self::cells()
+            .get(&SettingKey::RealtimeFolderSync)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
+    }
+
     pub fn get_default_download_dir(&self) -> Option<String> {
         Self::cells()
             .get(&SettingKey::DefaultDownloadDir)
-            .and_then(|c| c.load().as_option_string())
-            .flatten()
-    }
-
-    pub fn get_wallpaper_engine_dir(&self) -> Option<String> {
-        Self::cells()
-            .get(&SettingKey::WallpaperEngineDir)
             .and_then(|c| c.load().as_option_string())
             .flatten()
     }
@@ -1011,6 +1017,13 @@ Write-Output "$style,$tile"
             .get(&SettingKey::WallpaperRotationIncludeSubalbums)
             .map(|c| c.load().as_bool().unwrap_or(true))
             .unwrap_or(true)
+    }
+
+    pub fn get_wallpaper_disabled(&self) -> bool {
+        Self::cells()
+            .get(&SettingKey::WallpaperDisabled)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
     }
 
     pub fn get_wallpaper_rotation_interval_minutes(&self) -> u32 {
@@ -1275,6 +1288,16 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
+    pub fn set_realtime_folder_sync(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::RealtimeFolderSync) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::RealtimeFolderSync, &new_value);
+        Ok(())
+    }
+
     pub fn set_default_download_dir(&self, dir: Option<String>) -> Result<(), String> {
         let normalized = dir.and_then(|s| {
             let t = s.trim().to_string();
@@ -1306,85 +1329,6 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    pub fn set_wallpaper_engine_dir(&self, dir: Option<String>) -> Result<(), String> {
-        let normalized = dir.and_then(|s| {
-            let t = s.trim().to_string();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
-        });
-
-        if let Some(ref path) = normalized {
-            let p = PathBuf::from(path);
-            if !p.exists() || !p.is_dir() {
-                return Err("Wallpaper Engine 目录不存在或不是文件夹".to_string());
-            }
-        }
-
-        let cells = Self::cells();
-        let new_value = SettingValue::OptionString(normalized);
-        if let Some(cell) = cells.get(&SettingKey::WallpaperEngineDir) {
-            cell.store(Arc::new(new_value.clone()));
-        }
-        Self::emit_setting_change(SettingKey::WallpaperEngineDir, &new_value);
-        Ok(())
-    }
-
-    pub fn get_wallpaper_engine_myprojects_dir(&self) -> Result<Option<String>, String> {
-        let base = self.get_wallpaper_engine_dir();
-        let Some(ref base) = base else {
-            return Ok(None);
-        };
-
-        let base = base.trim().trim_start_matches("\\\\?\\");
-        if base.is_empty() {
-            return Ok(None);
-        }
-
-        let p = PathBuf::from(base);
-        if !p.exists() || !p.is_dir() {
-            return Ok(None);
-        }
-
-        // 如果用户直接选到了 myprojects
-        if p.file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.eq_ignore_ascii_case("myprojects"))
-            .unwrap_or(false)
-        {
-            return Ok(Some(p.to_string_lossy().to_string()));
-        }
-
-        // 如果用户选到了 projects
-        if p.file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.eq_ignore_ascii_case("projects"))
-            .unwrap_or(false)
-        {
-            let mp = p.join("myprojects");
-            if mp.exists() && mp.is_dir() {
-                return Ok(Some(mp.to_string_lossy().to_string()));
-            }
-            fs::create_dir_all(&mp).map_err(|e| format!("创建 myprojects 目录失败: {}", e))?;
-            return Ok(Some(mp.to_string_lossy().to_string()));
-        }
-
-        // 默认：当作 WE 根目录
-        let projects = p.join("projects");
-        let mp = projects.join("myprojects");
-        if mp.exists() && mp.is_dir() {
-            return Ok(Some(mp.to_string_lossy().to_string()));
-        }
-        if projects.exists() && projects.is_dir() {
-            fs::create_dir_all(&mp).map_err(|e| format!("创建 myprojects 目录失败: {}", e))?;
-            return Ok(Some(mp.to_string_lossy().to_string()));
-        }
-
-        Ok(None)
-    }
-
     pub fn set_wallpaper_rotation_enabled(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
@@ -1412,6 +1356,16 @@ Write-Output "$style,$tile"
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperRotationIncludeSubalbums, &new_value);
+        Ok(())
+    }
+
+    pub fn set_wallpaper_disabled(&self, disabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(disabled);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperDisabled) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::WallpaperDisabled, &new_value);
         Ok(())
     }
 

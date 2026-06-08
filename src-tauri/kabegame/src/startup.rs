@@ -78,9 +78,6 @@ pub fn init_kgpg_plugin() {
         if let Err(e) = pm.ensure_installed_cache_initialized().await {
             eprintln!("Failed to initialize plugin cache: {}", e);
         }
-        if let Err(e) = pm.register_installed_plugin_providers().await {
-            eprintln!("Failed to register installed plugin providers: {}", e);
-        }
         // 初始化商店插件缓存（已下载到本地的 .kgpg）
         if let Err(e) = pm.init_store_plugin_cache().await {
             eprintln!("Failed to initialize store plugin cache: {}", e);
@@ -158,8 +155,10 @@ pub fn create_main_window(app_handle: &AppHandle) -> Result<(), String> {
             .resizable(true)
             .fullscreen(false)
             .visible(true)
-            .devtools(true)
-            .transparent(!cfg!(target_os = "linux"));
+            .devtools(true);
+
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder.transparent(true);
 
     // Windows/macOS: 添加窗口效果
     #[cfg(not(target_os = "linux"))]
@@ -258,7 +257,7 @@ pub fn init_wallpaper_controller(app: &mut tauri::App) {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         use tauri::{WebviewUrl, WebviewWindowBuilder};
-        let _ = WebviewWindowBuilder::new(
+        let builder = WebviewWindowBuilder::new(
             app,
             "wallpaper",
             // 使用独立的 wallpaper.html，只渲染 WallpaperLayer 组件
@@ -267,12 +266,12 @@ pub fn init_wallpaper_controller(app: &mut tauri::App) {
         // 给壁纸窗口一个固定标题，便于脚本/调试定位到正确窗口
         .title(t!("window.wallpaperTitle"))
         .fullscreen(true)
-        .decorations(false)
-        // 设置窗口为透明，背景为透明
-        .transparent(true)
-        .visible(false)
-        .skip_taskbar(true)
-        .build();
+        .decorations(false);
+
+        #[cfg(target_os = "windows")]
+        let builder = builder.transparent(true);
+
+        let _ = builder.visible(false).skip_taskbar(true).build();
 
         #[cfg(target_os = "macos")]
         if let Some(wallpaper_window) = app.get_webview_window("wallpaper") {
@@ -367,33 +366,6 @@ pub fn start_event_loop(#[cfg(not(feature = "web"))] app: AppHandle) {
                         TaskScheduler::global().set_task_concurrency();
                     }
 
-                    // albumDriveEnabled 变更时挂载/卸载虚拟盘
-                    #[cfg(feature = "standard")]
-                    if let Some(enabled_val) = changes.get("albumDriveEnabled") {
-                        if let Some(enabled) = enabled_val.as_bool() {
-                            tokio::spawn(async move {
-                                if enabled {
-                                    let mount_point =
-                                        Settings::global().get_album_drive_mount_point();
-                                    let vd_service =
-                                        kabegame_core::virtual_driver::VirtualDriveService::global(
-                                        );
-                                    let _ = tokio::task::spawn_blocking(move || {
-                                        vd_service.mount(mount_point.as_str())
-                                    })
-                                    .await;
-                                } else {
-                                    let vd_service =
-                                        kabegame_core::virtual_driver::VirtualDriveService::global(
-                                        );
-                                    let _ =
-                                        tokio::task::spawn_blocking(move || vd_service.unmount())
-                                            .await;
-                                }
-                            });
-                        }
-                    }
-
                     // 语言变更时刷新托盘菜单、收藏画册/官方插件源 i18n 名称（与磁盘挂载等实现方式一致，在 setting 回调处处理）。web的语言在前端处理
                     #[cfg(not(feature = "web"))]
                     if changes.get("language").is_some() {
@@ -428,38 +400,16 @@ pub fn start_event_loop(#[cfg(not(feature = "web"))] app: AppHandle) {
                         }
                     }
                 }
-                #[cfg(not(feature = "web"))]
-                DaemonEvent::WallpaperUpdateImage { image_path } => {
-                    #[cfg(not(target_os = "android"))]
-                    {
-                        let path = image_path.clone();
-                        let controller = crate::wallpaper::manager::WallpaperController::global();
-                        tokio::spawn(async move {
-                            let style = Settings::global().get_wallpaper_rotation_style();
-                            if let Err(e) = controller.set_wallpaper(&path, &style).await {
-                                eprintln!("[LocalEvent] Set wallpaper failed: {}", e);
-                            }
-                        });
-                    }
-                }
-                #[cfg(not(feature = "web"))]
+                #[cfg(all(target_os = "android", not(feature = "web")))]
                 DaemonEvent::TaskChanged { diff, .. } => {
-                    let event_name = kind.as_event_name();
-                    let payload =
-                        serde_json::to_value(&event).unwrap_or_else(|_| serde_json::Value::Null);
-                    let _ = app.emit(event_name.as_str(), payload);
-
-                    #[cfg(target_os = "android")]
-                    {
-                        if let Some(s) = diff.get("status").and_then(|v| v.as_str()) {
-                            use tauri_plugin_task_notification::TaskNotificationExt;
-                            let running = TaskScheduler::global().running_worker_count() as u32;
-                            let tn = app.task_notification();
-                            if running > 0 {
-                                let _ = tn.update_task_notification(running).await;
-                            } else if s == "completed" || s == "failed" || s == "canceled" {
-                                let _ = tn.clear_task_notification().await;
-                            }
+                    if let Some(s) = diff.get("status").and_then(|v| v.as_str()) {
+                        use tauri_plugin_task_notification::TaskNotificationExt;
+                        let running = TaskScheduler::global().running_worker_count() as u32;
+                        let tn = app.task_notification();
+                        if running > 0 {
+                            let _ = tn.update_task_notification(running).await;
+                        } else if s == "completed" || s == "failed" || s == "canceled" {
+                            let _ = tn.clear_task_notification().await;
                         }
                     }
                 }
@@ -772,6 +722,11 @@ pub fn start_task_scheduler() {
 pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     use std::path::Path;
 
+    // 壁纸功能已关闭：启动时不恢复壁纸。
+    if Settings::global().get_wallpaper_disabled() {
+        return Ok(());
+    }
+
     // Linux Plasma + 插件模式：若当前系统壁纸插件不是 Kabegame，自动切到 Kabegame（与 Windows/macOS 窗口模式启动时对齐）
     #[cfg(target_os = "linux")]
     {
@@ -794,9 +749,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
         return Ok(());
     };
 
-    let img_v = Storage::global()
-        .find_image_by_id(&id)
-        .map_err(|e| format!("Storage error: {}", e))?;
+    let img_v = Storage::find_image_by_id(&id).map_err(|e| format!("Storage error: {}", e))?;
 
     let Some(img_info) = img_v else {
         let _ = settings.set_current_wallpaper_image_id(None);

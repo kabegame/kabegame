@@ -22,7 +22,6 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::SettingsGetGalleryImageAspectRatio => Some(get_gallery_image_aspect_ratio()),
         IpcRequest::SettingsGetAutoDeduplicate => Some(get_auto_deduplicate()),
         IpcRequest::SettingsGetDefaultDownloadDir => Some(get_default_download_dir()),
-        IpcRequest::SettingsGetWallpaperEngineDir => Some(get_wallpaper_engine_dir()),
         IpcRequest::SettingsGetWallpaperRotationEnabled => Some(get_wallpaper_rotation_enabled()),
         IpcRequest::SettingsGetWallpaperRotationAlbumId => Some(get_wallpaper_rotation_album_id()),
         IpcRequest::SettingsGetWallpaperRotationIncludeSubalbums => {
@@ -55,12 +54,6 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
 
         IpcRequest::SettingsSetGalleryImageAspectRatio { aspect_ratio } => {
             Some(set_gallery_image_aspect_ratio(aspect_ratio.clone()))
-        }
-        IpcRequest::SettingsSetWallpaperEngineDir { dir } => {
-            Some(set_wallpaper_engine_dir(dir.clone()))
-        }
-        IpcRequest::SettingsGetWallpaperEngineMyprojectsDir => {
-            Some(get_wallpaper_engine_myprojects_dir())
         }
         IpcRequest::SettingsSetWallpaperRotationEnabled { enabled } => {
             Some(set_wallpaper_rotation_enabled(*enabled))
@@ -119,20 +112,6 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
 fn set_gallery_image_aspect_ratio(aspect_ratio: Option<String>) -> IpcResponse {
     match Settings::global().set_gallery_image_aspect_ratio(aspect_ratio) {
         Ok(()) => IpcResponse::ok("updated"),
-        Err(e) => IpcResponse::err(e),
-    }
-}
-
-fn set_wallpaper_engine_dir(dir: Option<String>) -> IpcResponse {
-    match Settings::global().set_wallpaper_engine_dir(dir) {
-        Ok(()) => IpcResponse::ok("updated"),
-        Err(e) => IpcResponse::err(e),
-    }
-}
-
-fn get_wallpaper_engine_myprojects_dir() -> IpcResponse {
-    match Settings::global().get_wallpaper_engine_myprojects_dir() {
-        Ok(v) => IpcResponse::ok_with_data("ok", serde_json::to_value(v).unwrap_or_default()),
         Err(e) => IpcResponse::err(e),
     }
 }
@@ -348,8 +327,7 @@ fn set_current_wallpaper_image_id(image_id: Option<String>) -> IpcResponse {
                     .unwrap_or_default()
                     .as_secs();
                 let _ = Storage::global().update_image_last_set_wallpaper_at(&id, now);
-                let plugin_ids = Storage::global()
-                    .find_image_by_id(&id)
+                let plugin_ids = Storage::find_image_by_id(&id)
                     .ok()
                     .flatten()
                     .map(|image| vec![image.plugin_id])
@@ -420,14 +398,6 @@ fn get_auto_deduplicate() -> IpcResponse {
 
 fn get_default_download_dir() -> IpcResponse {
     let v = Settings::global().get_default_download_dir();
-    IpcResponse::ok_with_data(
-        "ok",
-        serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-    )
-}
-
-fn get_wallpaper_engine_dir() -> IpcResponse {
-    let v = Settings::global().get_wallpaper_engine_dir();
     IpcResponse::ok_with_data(
         "ok",
         serde_json::to_value(v).unwrap_or(serde_json::Value::Null),

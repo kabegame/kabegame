@@ -5,45 +5,79 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub struct TaskInfo {
     pub id: String,
-    #[serde(rename = "pluginId")]
+    #[serde(rename(serialize = "pluginId"), alias = "pluginId")]
     pub plugin_id: String,
-    #[serde(rename = "outputDir")]
+    #[serde(rename(serialize = "outputDir"), alias = "outputDir")]
     pub output_dir: Option<String>,
-    #[serde(rename = "userConfig")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_json_string",
+        rename(serialize = "userConfig"),
+        alias = "userConfig"
+    )]
     pub user_config: Option<HashMap<String, serde_json::Value>>,
-    #[serde(rename = "httpHeaders")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_json_string",
+        rename(serialize = "httpHeaders"),
+        alias = "httpHeaders"
+    )]
     pub http_headers: Option<HashMap<String, String>>,
-    #[serde(rename = "outputAlbumId")]
+    #[serde(rename(serialize = "outputAlbumId"), alias = "outputAlbumId")]
     pub output_album_id: Option<String>,
-    #[serde(rename = "runConfigId")]
+    #[serde(rename(serialize = "runConfigId"), alias = "runConfigId")]
     #[serde(default)]
     pub run_config_id: Option<String>,
-    #[serde(rename = "triggerSource")]
+    #[serde(rename(serialize = "triggerSource"), alias = "triggerSource")]
     #[serde(default = "default_trigger_source")]
     pub trigger_source: String,
     pub status: String,
     pub progress: f64,
-    #[serde(rename = "deletedCount")]
+    #[serde(rename(serialize = "deletedCount"), alias = "deletedCount")]
     pub deleted_count: i64,
-    #[serde(rename = "dedupCount")]
+    #[serde(rename(serialize = "dedupCount"), alias = "dedupCount")]
     #[serde(default)]
     pub dedup_count: i64,
-    #[serde(rename = "successCount", default)]
+    #[serde(rename(serialize = "successCount"), alias = "successCount", default)]
     pub success_count: i64,
-    #[serde(rename = "failedCount", default)]
+    #[serde(rename(serialize = "failedCount"), alias = "failedCount", default)]
     pub failed_count: i64,
-    #[serde(rename = "startTime")]
+    #[serde(rename(serialize = "startTime"), alias = "startTime")]
     pub start_time: Option<u64>,
-    #[serde(rename = "endTime")]
+    #[serde(rename(serialize = "endTime"), alias = "endTime")]
     pub end_time: Option<u64>,
     pub error: Option<String>,
 }
 
 fn default_trigger_source() -> String {
     "manual".to_string()
+}
+
+fn deserialize_optional_json_string<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            serde_json::from_str::<Option<T>>(trimmed).map_err(serde::de::Error::custom)
+        }
+        other => serde_json::from_value(other)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -786,124 +820,41 @@ impl Storage {
         Ok(by_task.into_iter().collect())
     }
 
-    pub fn get_task_failed_images(&self, task_id: &str) -> Result<Vec<TaskFailedImage>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut stmt = conn
-            .prepare("SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id, display_name FROM task_failed_images WHERE task_id = ?1 ORDER BY id DESC")
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let rows = stmt
-            .query_map(params![task_id], |row| {
-                let header_snapshot_json: Option<String> = row.get(8)?;
-                let header_snapshot =
-                    header_snapshot_json.and_then(|s| serde_json::from_str(&s).ok());
-                Ok(TaskFailedImage {
-                    id: row.get(0)?,
-                    task_id: row.get(1)?,
-                    plugin_id: row.get(2)?,
-                    url: row.get(3)?,
-                    order: row.get(4)?,
-                    created_at: row.get(5)?,
-                    last_error: row.get(6)?,
-                    last_attempted_at: row.get(7)?,
-                    header_snapshot,
-                    metadata_id: row.get(9)?,
-                    display_name: row.get(10)?,
-                })
-            })
-            .map_err(|e| format!("Failed to query failed images: {}", e))?;
-
-        let mut images = Vec::new();
-        for r in rows {
-            images.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
+    pub fn get_task_failed_images(task_id: &str) -> Result<Vec<TaskFailedImage>, String> {
+        let task_id = task_id.trim();
+        if task_id.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(images)
+        crate::providers::failed_images_at(&format!(
+            "fail-images://tasks/id_{}",
+            urlencoding::encode(task_id)
+        ))
     }
 
-    pub fn get_all_failed_images(&self) -> Result<Vec<TaskFailedImage>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id, display_name
-                 FROM task_failed_images
-                 ORDER BY id DESC",
-            )
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                let header_snapshot_json: Option<String> = row.get(8)?;
-                let header_snapshot =
-                    header_snapshot_json.and_then(|s| serde_json::from_str(&s).ok());
-                Ok(TaskFailedImage {
-                    id: row.get(0)?,
-                    task_id: row.get(1)?,
-                    plugin_id: row.get(2)?,
-                    url: row.get(3)?,
-                    order: row.get(4)?,
-                    created_at: row.get(5)?,
-                    last_error: row.get(6)?,
-                    last_attempted_at: row.get(7)?,
-                    header_snapshot,
-                    metadata_id: row.get(9)?,
-                    display_name: row.get(10)?,
-                })
-            })
-            .map_err(|e| format!("Failed to query failed images: {}", e))?;
-
-        let mut images = Vec::new();
-        for r in rows {
-            images.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
-        }
-        Ok(images)
+    pub fn get_all_failed_images() -> Result<Vec<TaskFailedImage>, String> {
+        crate::providers::failed_images_at("fail-images://all")
     }
 
-    pub fn get_task_failed_image_by_id(&self, id: i64) -> Result<Option<TaskFailedImage>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let image = conn
-            .query_row(
-                "SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id, display_name FROM task_failed_images WHERE id = ?1",
-                params![id],
-                |row| {
-                    let header_snapshot_json: Option<String> = row.get(8)?;
-                    let header_snapshot = header_snapshot_json
-                        .and_then(|s| serde_json::from_str(&s).ok());
-                    Ok(TaskFailedImage {
-                        id: row.get(0)?,
-                        task_id: row.get(1)?,
-                        plugin_id: row.get(2)?,
-                        url: row.get(3)?,
-                        order: row.get(4)?,
-                        created_at: row.get(5)?,
-                        last_error: row.get(6)?,
-                        last_attempted_at: row.get(7)?,
-                        header_snapshot,
-                        metadata_id: row.get(9)?,
-                        display_name: row.get(10)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(|e| format!("Failed to query failed image: {}", e))?;
-        Ok(image)
+    pub fn get_task_failed_image_by_id(id: i64) -> Result<Option<TaskFailedImage>, String> {
+        if id <= 0 {
+            return Ok(None);
+        }
+        Ok(
+            crate::providers::failed_images_at(&format!("fail-images://id_{}", id))?
+                .into_iter()
+                .next(),
+        )
     }
 
-    pub fn get_task_image_ids(&self, task_id: &str) -> Result<Vec<String>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT CAST(id AS TEXT) FROM images WHERE task_id = ?1 ORDER BY crawled_at ASC",
-            )
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let rows = stmt
-            .query_map(params![task_id], |row: &rusqlite::Row<'_>| row.get(0))
-            .map_err(|e| format!("Failed to query task image IDs: {}", e))?;
-
-        let mut ids = Vec::new();
-        for r in rows {
-            ids.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
+    pub fn get_task_image_ids(task_id: &str) -> Result<Vec<String>, String> {
+        let task_id = task_id.trim();
+        if task_id.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(ids)
+        let path = format!("images://gallery/task/{}", urlencoding::encode(task_id));
+        Ok(crate::providers::images_at(&path)?
+            .into_iter()
+            .map(|image| image.id)
+            .collect())
     }
 }

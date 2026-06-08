@@ -6,8 +6,6 @@ use kabegame_core::storage::image_events::{
 };
 use kabegame_core::storage::Storage;
 #[cfg(feature = "standard")]
-use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use tauri::AppHandle;
 
@@ -71,6 +69,7 @@ pub async fn add_images_to_album(
     album_id: String,
     image_ids: Vec<String>,
 ) -> Result<serde_json::Value, String> {
+    Storage::global().ensure_album_is_writable(&album_id)?;
     let r = add_images_to_album_with_event(&album_id, &image_ids)?;
     #[cfg(feature = "standard")]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
@@ -85,7 +84,8 @@ pub async fn add_task_images_to_album(
     task_id: String,
     album_id: String,
 ) -> Result<serde_json::Value, String> {
-    let image_ids = Storage::global().get_task_image_ids(&task_id)?;
+    Storage::global().ensure_album_is_writable(&album_id)?;
+    let image_ids = Storage::get_task_image_ids(&task_id)?;
     if image_ids.is_empty() {
         return Ok(serde_json::to_value(serde_json::json!({
             "added": 0,
@@ -108,16 +108,12 @@ pub async fn remove_images_from_album(
     album_id: String,
     image_ids: Vec<String>,
 ) -> Result<usize, String> {
+    Storage::global().ensure_album_is_writable(&album_id)?;
     let removed = remove_images_from_album_with_event(&album_id, &image_ids)?;
     #[cfg(feature = "standard")]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
 
     Ok(removed)
-}
-
-#[tauri::command]
-pub async fn get_album_image_ids(album_id: String) -> Result<Vec<String>, String> {
-    Storage::global().get_album_image_ids(&album_id)
 }
 
 #[tauri::command]
@@ -130,15 +126,36 @@ pub async fn get_album_preview(
 }
 
 #[tauri::command]
-pub async fn get_album_counts() -> Result<serde_json::Value, String> {
-    let counts = Storage::global().get_album_counts()?;
-    Ok(serde_json::to_value(counts).map_err(|e| e.to_string())?)
-}
-
-#[tauri::command]
 pub async fn update_album_images_order(
     album_id: String,
     image_orders: Vec<(String, i64)>,
 ) -> Result<(), String> {
     Storage::global().update_album_images_order(&album_id, &image_orders)
+}
+
+#[tauri::command]
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
+pub async fn add_local_folder_album(
+    name: String,
+    parent_id: Option<String>,
+    sync_folder: String,
+    recursive: bool,
+) -> Result<serde_json::Value, String> {
+    crate::commands_core::album::add_local_folder_album(name, parent_id, sync_folder, recursive)
+        .await
+}
+
+#[tauri::command]
+pub async fn sync_local_folder_album(
+    album_id: String,
+    recursive: Option<bool>,
+    create_missing_albums: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    crate::commands_core::album::sync_local_folder_album(album_id, recursive, create_missing_albums)
+        .await
+}
+
+#[tauri::command]
+pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<serde_json::Value, String> {
+    crate::commands_core::album::sync_local_folder_albums(album_ids).await
 }

@@ -13,13 +13,13 @@
       <el-dropdown-menu>
         <el-dropdown-item
           command="asc"
-          :class="{ 'is-active': galleryRouteStore.sort === 'asc' }"
+          :class="{ 'is-active': !galleryRouteStore.sort.desc }"
         >
           {{ sortAscLabel }}
         </el-dropdown-item>
         <el-dropdown-item
           command="desc"
-          :class="{ 'is-active': galleryRouteStore.sort === 'desc' }"
+          :class="{ 'is-active': galleryRouteStore.sort.desc }"
         >
           {{ sortDescLabel }}
         </el-dropdown-item>
@@ -39,15 +39,21 @@ const route = useRoute();
 const galleryRouteStore = useGalleryRouteStore();
 
 const isWallpaperOrderRoot = computed(
-  () => galleryRouteStore.filter.type === "wallpaper-order"
+  () => !!galleryRouteStore.filters.wallpaperOrder
 );
 
-const isSizeRoot = computed(() => galleryRouteStore.filter.type === "size");
-const isAspectRoot = computed(() => galleryRouteStore.filter.type === "aspect");
+const isSizeRoot = computed(() => !!galleryRouteStore.filters.size);
+const isAspectRoot = computed(() => !!galleryRouteStore.filters.aspect);
 
 const { t } = useI18n();
 
 const sortAscLabel = computed(() => {
+  if (galleryRouteStore.sort.field === "by-id") return t("gallery.byDefaultAsc");
+  if (galleryRouteStore.sort.field === "by-time") return t("gallery.byTimeAsc");
+  if (galleryRouteStore.sort.field === "by-name") return t("gallery.byNameAsc");
+  if (galleryRouteStore.sort.field === "by-size") return t("gallery.bySizeAsc");
+  if (galleryRouteStore.sort.field === "by-aspect") return t("gallery.byAspectWidthHeight");
+  if (galleryRouteStore.sort.field === "by-set-time") return t("gallery.bySetTimeAsc");
   if (isWallpaperOrderRoot.value) return t("gallery.bySetTimeAsc");
   if (isSizeRoot.value) return t("gallery.bySizeAsc");
   if (isAspectRoot.value) return t("gallery.byAspectWidthHeight");
@@ -55,6 +61,12 @@ const sortAscLabel = computed(() => {
 });
 
 const sortDescLabel = computed(() => {
+  if (galleryRouteStore.sort.field === "by-id") return t("gallery.byDefaultDesc");
+  if (galleryRouteStore.sort.field === "by-time") return t("gallery.byTimeDesc");
+  if (galleryRouteStore.sort.field === "by-name") return t("gallery.byNameDesc");
+  if (galleryRouteStore.sort.field === "by-size") return t("gallery.bySizeDesc");
+  if (galleryRouteStore.sort.field === "by-aspect") return t("gallery.byAspectHeightWidth");
+  if (galleryRouteStore.sort.field === "by-set-time") return t("gallery.bySetTimeDesc");
   if (isWallpaperOrderRoot.value) return t("gallery.bySetTimeDesc");
   if (isSizeRoot.value) return t("gallery.bySizeDesc");
   if (isAspectRoot.value) return t("gallery.byAspectHeightWidth");
@@ -62,28 +74,12 @@ const sortDescLabel = computed(() => {
 });
 
 const sortLabel = computed(() => {
-  if (isWallpaperOrderRoot.value) {
-    return galleryRouteStore.sort === "desc"
-      ? t("gallery.bySetTimeDesc")
-      : t("gallery.bySetTimeAsc");
-  }
-  if (isSizeRoot.value) {
-    return galleryRouteStore.sort === "desc"
-      ? t("gallery.bySizeDesc")
-      : t("gallery.bySizeAsc");
-  }
-  if (isAspectRoot.value) {
-    return galleryRouteStore.sort === "desc"
-      ? t("gallery.byAspectHeightWidth")
-      : t("gallery.byAspectWidthHeight");
-  }
-  return galleryRouteStore.sort === "desc"
-    ? t("gallery.byTimeDesc")
-    : t("gallery.byTimeAsc");
+  if (galleryRouteStore.sort.desc) return sortDescLabel.value;
+  return sortAscLabel.value;
 });
 
 function handleCommand(command: string) {
-  const sort = command === "desc" ? "desc" : "asc";
+  const sort = { ...galleryRouteStore.sort, desc: command === "desc" };
   void galleryRouteStore.navigate({ sort }, { push: route.path !== "/gallery" });
 }
 </script>

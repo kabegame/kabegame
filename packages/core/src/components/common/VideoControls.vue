@@ -1,16 +1,5 @@
 <template>
-  <div
-    class="video-controls-hover-zone"
-    :class="{ 'is-fullscreen': isFullscreen }"
-    @mouseenter="handleHotzoneEnter"
-    @mouseleave="handleHotzoneLeave"
-  />
-  <div
-    class="video-controls"
-    :class="{ hidden: !controlsVisible, 'is-fullscreen': isFullscreen }"
-    @mouseenter="handleControlsEnter"
-    @mouseleave="handleControlsLeave"
-  >
+  <PreviewControlBar ref="barRef" :is-fullscreen="isFullscreen" :keep-visible="keepVisible">
     <button v-if="showPlayPause" class="control-btn" type="button" :aria-label="isPlaying ? 'Pause' : 'Play'" @click="togglePlay">
       <svg v-if="!isPlaying" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M8 5v14l11-7z" />
@@ -23,19 +12,15 @@
     <div class="time-text">{{ displayTime }}</div>
 
     <div class="seek-wrap">
-      <input
-        class="seek-range"
-        type="range"
-        min="0"
-        max="100"
-        step="0.1"
-        :value="seekPercent"
+      <PreviewRangeSlider
+        :model-value="seekPercent"
+        :min="0"
+        :max="100"
+        :step="0.1"
         aria-label="Seek"
-        @mousedown="handleSeekDragStart"
-        @touchstart="handleSeekDragStart"
-        @input="handleSeekInput"
+        @drag-start="handleSeekDragStart"
+        @update:model-value="handleSeekInput"
         @change="commitSeek"
-        @click.stop
       />
     </div>
 
@@ -58,16 +43,14 @@
         @mouseleave="handleVolumeLeave"
         @click.stop
       >
-        <input
-          class="volume-range vertical"
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          :value="volume"
+        <PreviewRangeSlider
+          :model-value="volume"
+          :min="0"
+          :max="1"
+          :step="0.01"
           aria-label="Volume"
-          @input="handleVolumeInput"
-          @mousedown.stop
+          vertical
+          @update:model-value="handleVolumeInput"
         />
       </div>
     </div>
@@ -80,36 +63,43 @@
         <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm8 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z" />
       </svg>
     </button>
-  </div>
+  </PreviewControlBar>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { useLocalStorage } from "@vueuse/core";
+import PreviewControlBar from "./PreviewControlBar.vue";
+import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 
 const props = withDefaults(
   defineProps<{
     video: HTMLVideoElement | null;
     /** When false, hide play/pause button (e.g. preview dialog: video always plays, no pause to avoid white frame). */
     showPlayPause?: boolean;
+    isFullscreen?: boolean;
   }>(),
-  { showPlayPause: true }
+  { showPlayPause: true, isFullscreen: false }
 );
 
+const emit = defineEmits<{
+  (e: "toggle-fullscreen", event?: MouseEvent): void;
+}>();
+
+const barRef = ref<InstanceType<typeof PreviewControlBar> | null>(null);
 const isPlaying = ref(false);
 const currentTime = ref(0);
 const duration = ref(0);
+// 视频音量 / 静音状态持久化，跨视频与会话保留用户偏好。
+const storedVolume = useLocalStorage("kabegame-video-volume", 1);
+const storedMuted = useLocalStorage("kabegame-video-muted", false);
 const isMuted = ref(false);
 const volume = ref(1);
-const lastVolume = ref(1);
-const isFullscreen = ref(false);
-const controlsVisible = ref(true);
-const isPointerInside = ref(false);
+const lastVolume = ref(storedVolume.value > 0 ? storedVolume.value : 1);
 const isSeekDragging = ref(false);
 const seekDraftTime = ref<number | null>(null);
-const isVolumeHover = ref(false);
 const volumePanelActive = ref(false);
 
-let hideTimer: ReturnType<typeof setTimeout> | null = null;
 let volumePanelTimer: ReturnType<typeof setTimeout> | null = null;
 let progressRaf: number | null = null;
 let currentVideo: HTMLVideoElement | null = null;
@@ -142,13 +132,8 @@ const seekPercent = computed(() => {
   if (!duration.value) return 0;
   return Math.min(100, Math.max(0, (effectiveCurrentTime.value / duration.value) * 100));
 });
-const volumePanelVisible = computed(() => controlsVisible.value && volumePanelActive.value);
-
-const clearHideTimer = () => {
-  if (!hideTimer) return;
-  clearTimeout(hideTimer);
-  hideTimer = null;
-};
+const keepVisible = computed(() => !isPlaying.value || isSeekDragging.value || volumePanelActive.value);
+const volumePanelVisible = computed(() => volumePanelActive.value);
 
 const clearVolumePanelTimer = () => {
   if (!volumePanelTimer) return;
@@ -156,19 +141,12 @@ const clearVolumePanelTimer = () => {
   volumePanelTimer = null;
 };
 
-const scheduleHideControls = (delay = 1000) => {
-  clearHideTimer();
-  if (isPointerInside.value || isSeekDragging.value || volumePanelActive.value) return;
-  hideTimer = setTimeout(() => {
-    if (isPointerInside.value || isSeekDragging.value || volumePanelActive.value) return;
-    controlsVisible.value = false;
-    hideTimer = null;
-  }, delay);
+const showControls = () => {
+  barRef.value?.show();
 };
 
-const showControls = () => {
-  controlsVisible.value = true;
-  clearHideTimer();
+const scheduleHideControls = (delay = 1000) => {
+  barRef.value?.scheduleHide(delay);
 };
 
 const stopProgressRaf = () => {
@@ -207,22 +185,19 @@ const syncFromVideo = () => {
 const handlePlay = () => {
   syncFromVideo();
   startProgressRaf();
-  showControls();
   scheduleHideControls(1000);
 };
 
 const handlePause = () => {
   syncFromVideo();
   stopProgressRaf();
-  controlsVisible.value = true;
-  clearHideTimer();
+  showControls();
 };
 
 const handleEnded = () => {
   syncFromVideo();
   stopProgressRaf();
-  controlsVisible.value = true;
-  clearHideTimer();
+  showControls();
 };
 
 const handleTimeUpdate = () => {
@@ -236,6 +211,19 @@ const handleMetadata = () => {
 
 const handleVolumeUpdate = () => {
   syncFromVideo();
+  if (currentVideo) {
+    storedVolume.value = currentVideo.volume;
+    storedMuted.value = currentVideo.muted;
+  }
+};
+
+// 应用持久化的音量 / 静音偏好到当前视频元素。
+const applyStoredVolume = () => {
+  if (!currentVideo) return;
+  const restored = Math.min(1, Math.max(0, Number.isFinite(storedVolume.value) ? storedVolume.value : 1));
+  currentVideo.volume = restored;
+  currentVideo.muted = storedMuted.value || restored === 0;
+  if (restored > 0) lastVolume.value = restored;
 };
 
 const handleVideoClick = () => {
@@ -243,8 +231,8 @@ const handleVideoClick = () => {
   void togglePlay();
 };
 
-const handleVideoDblClick = () => {
-  void toggleFullscreen();
+const handleVideoDblClick = (event: MouseEvent) => {
+  void toggleFullscreen(event);
 };
 
 const attachVideo = (video: HTMLVideoElement | null) => {
@@ -264,11 +252,8 @@ const attachVideo = (video: HTMLVideoElement | null) => {
 
   currentVideo = video;
   stopProgressRaf();
-  clearHideTimer();
   clearVolumePanelTimer();
   volumePanelActive.value = false;
-  controlsVisible.value = true;
-
   if (!currentVideo) {
     isPlaying.value = false;
     currentTime.value = 0;
@@ -286,10 +271,10 @@ const attachVideo = (video: HTMLVideoElement | null) => {
   currentVideo.addEventListener("volumechange", handleVolumeUpdate);
   currentVideo.addEventListener("click", handleVideoClick);
   currentVideo.addEventListener("dblclick", handleVideoDblClick);
+  applyStoredVolume();
   syncFromVideo();
   if (!currentVideo.paused && !currentVideo.ended) {
     startProgressRaf();
-    showControls();
   }
 };
 
@@ -306,15 +291,7 @@ const handleDocumentPointerUp = () => {
     startProgressRaf();
   }
   showControls();
-};
-
-const handleFullscreenChange = () => {
-  if (!currentVideo) {
-    isFullscreen.value = false;
-    return;
-  }
-  const wrapper = currentVideo.closest(".preview-video-wrapper");
-  isFullscreen.value = !!wrapper && document.fullscreenElement === wrapper;
+  scheduleHideControls(1000);
 };
 
 watch(
@@ -345,7 +322,7 @@ const togglePlay = async () => {
   } else {
     currentVideo.pause();
   }
-  showControls();
+  // showControls();
 };
 
 const handleSeekDragStart = () => {
@@ -355,9 +332,8 @@ const handleSeekDragStart = () => {
   showControls();
 };
 
-const handleSeekInput = (event: Event) => {
+const handleSeekInput = (value: number) => {
   if (!currentVideo || !duration.value) return;
-  const value = Number((event.target as HTMLInputElement).value);
   const nextTime = (value / 100) * duration.value;
   const safeTime = Number.isFinite(nextTime) ? nextTime : 0;
   seekDraftTime.value = safeTime;
@@ -366,9 +342,8 @@ const handleSeekInput = (event: Event) => {
   showControls();
 };
 
-const commitSeek = (event: Event) => {
+const commitSeek = (value: number) => {
   if (!currentVideo || !duration.value) return;
-  const value = Number((event.target as HTMLInputElement).value);
   const nextTime = (value / 100) * duration.value;
   currentVideo.currentTime = Number.isFinite(nextTime) ? nextTime : 0;
   currentTime.value = currentVideo.currentTime || 0;
@@ -380,9 +355,8 @@ const commitSeek = (event: Event) => {
   showControls();
 };
 
-const handleVolumeInput = (event: Event) => {
+const handleVolumeInput = (value: number) => {
   if (!currentVideo) return;
-  const value = Number((event.target as HTMLInputElement).value);
   const nextVolume = Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
   currentVideo.volume = nextVolume;
   currentVideo.muted = nextVolume === 0;
@@ -407,51 +381,27 @@ const toggleMute = () => {
   showControls();
 };
 
-const toggleFullscreen = async () => {
-  if (!currentVideo) return;
-  const wrapper = currentVideo.closest(".preview-video-wrapper") as HTMLElement | null;
-  if (!wrapper) return;
-  try {
-    if (document.fullscreenElement === wrapper) {
-      await document.exitFullscreen();
-    } else if (!document.fullscreenElement) {
-      await wrapper.requestFullscreen();
-    }
-  } catch {
-    // ignore unsupported fullscreen transitions
-  }
-  showControls();
+const refreshControlsPointerAfterLayout = (event?: MouseEvent) => {
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      barRef.value?.refreshPointerPosition(event);
+    });
+  });
 };
 
-function handleHotzoneEnter() {
-  isPointerInside.value = true;
+const toggleFullscreen = (event?: MouseEvent) => {
+  emit("toggle-fullscreen", event);
   showControls();
-}
-
-function handleHotzoneLeave() {
-  isPointerInside.value = false;
-  scheduleHideControls(1000);
-}
-
-function handleControlsEnter() {
-  isPointerInside.value = true;
-  showControls();
-}
-
-function handleControlsLeave() {
-  isPointerInside.value = false;
-  scheduleHideControls(1000);
-}
+  refreshControlsPointerAfterLayout(event);
+};
 
 const handleVolumeEnter = () => {
   clearVolumePanelTimer();
-  isVolumeHover.value = true;
   volumePanelActive.value = true;
   showControls();
 };
 
 const handleVolumeLeave = () => {
-  isVolumeHover.value = false;
   clearVolumePanelTimer();
   volumePanelTimer = setTimeout(() => {
     volumePanelActive.value = false;
@@ -459,112 +409,23 @@ const handleVolumeLeave = () => {
     scheduleHideControls(1000);
   }, 180);
   scheduleHideControls(1000);
-}
+};
 
 onBeforeUnmount(() => {
-  clearHideTimer();
   clearVolumePanelTimer();
   stopProgressRaf();
   attachVideo(null);
   document.removeEventListener("mouseup", handleDocumentPointerUp);
   document.removeEventListener("touchend", handleDocumentPointerUp);
-  document.removeEventListener("fullscreenchange", handleFullscreenChange);
 });
 
 document.addEventListener("mouseup", handleDocumentPointerUp);
 document.addEventListener("touchend", handleDocumentPointerUp, { passive: true });
-document.addEventListener("fullscreenchange", handleFullscreenChange);
 </script>
 
 <style scoped lang="scss">
-.video-controls-hover-zone {
-  position: absolute;
-  left: 20%;
-  right: 20%;
-  bottom: 0;
-  height: 76px;
-  z-index: 3;
-
-  &.is-fullscreen {
-    left: 5%;
-    right: 5%;
-  }
-}
-
-.video-controls {
-  position: absolute;
-  left: 20%;
-  right: 20%;
-  bottom: 16px;
-  z-index: 4;
-  min-height: 44px;
-  padding: 8px 10px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: #fff;
-  background: rgba(15, 16, 20, 0.56);
-  backdrop-filter: blur(8px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  opacity: 1;
-  pointer-events: auto;
-  transition: opacity 0.2s ease;
-
-  &.hidden {
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  &.is-fullscreen {
-    left: 5%;
-    right: 5%;
-  }
-}
-
-.control-btn {
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: inherit;
-  background: rgba(255, 255, 255, 0.1);
-  cursor: pointer;
-  transition: background-color 0.16s ease;
-
-  &:hover {
-    background: rgba(255, 255, 255, 0.2);
-  }
-
-  svg {
-    width: 18px;
-    height: 18px;
-    fill: currentColor;
-  }
-}
-
-.time-text {
-  width: 110px;
-  font-size: 12px;
-  line-height: 1;
-  text-align: center;
-  user-select: none;
-  color: rgba(255, 255, 255, 0.92);
-}
-
 .seek-wrap {
   flex: 1;
-}
-
-.seek-range,
-.volume-range {
-  width: 100%;
-  margin: 0;
-  cursor: pointer;
-  accent-color: #ff5fb8;
 }
 
 .volume-wrap {
@@ -600,9 +461,4 @@ document.addEventListener("fullscreenchange", handleFullscreenChange);
   }
 }
 
-.volume-range.vertical {
-  width: 104px;
-  transform: rotate(-90deg);
-  transform-origin: center;
-}
 </style>

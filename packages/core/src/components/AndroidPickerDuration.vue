@@ -9,7 +9,7 @@
     </div>
 
     <Teleport to="body">
-        <van-popup v-model:show="showPicker" position="bottom" round>
+        <van-popup :show="isOpen" position="bottom" round :z-index="zIndex" @update:show="v => { if (!v) close() }">
             <van-picker
                 v-model="pickerSelectedValues"
                 :title="resolvedTitle"
@@ -17,7 +17,7 @@
                 :confirm-button-text="t('common.confirm')"
                 :cancel-button-text="t('common.cancel')"
                 @confirm="onPickerConfirm"
-                @cancel="showPicker = false"
+                @cancel="close()"
             />
         </van-popup>
     </Teleport>
@@ -27,7 +27,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ArrowDown } from "@element-plus/icons-vue";
-import { useModalBack } from "../composables/useModalBack";
+import { useModal } from "../composables/useModal";
 
 const MIN_MS = 100;
 const MAX_MS = 10000;
@@ -51,8 +51,7 @@ const emit = defineEmits<{
     "update:modelValue": [value: number | undefined];
 }>();
 
-const showPicker = ref(false);
-useModalBack(showPicker);
+const { isOpen, zIndex, open, close } = useModal();
 
 function msToSecAndMs(totalMs: number): [number, number] {
     const clamped = Math.max(MIN_MS, Math.min(MAX_MS, totalMs));
@@ -94,7 +93,7 @@ const pickerColumns = computed(() => {
 
 const pickerSelectedValues = ref<[number, number]>([0, 500]);
 
-watch(showPicker, (open) => {
+watch(isOpen, (open) => {
     if (open) {
         const v = props.modelValue;
         const num = typeof v === "number" && !Number.isNaN(v) ? v : 500;
@@ -106,7 +105,7 @@ watch(showPicker, (open) => {
 watch(
     () => props.modelValue,
     () => {
-        if (showPicker.value) {
+        if (isOpen.value) {
             const v = props.modelValue;
             const num = typeof v === "number" && !Number.isNaN(v) ? v : 500;
             const [sec, ms] = msToSecAndMs(num);
@@ -117,11 +116,11 @@ watch(
 
 function onTriggerClick() {
     if (props.disabled) return;
-    showPicker.value = true;
+    open();
 }
 
 function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)[] }) {
-    showPicker.value = false;
+    close();
     const secRaw = selectedValues[0];
     const msRaw = selectedValues[1];
     if (secRaw === undefined || secRaw === null || msRaw === undefined || msRaw === null) return;

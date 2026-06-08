@@ -7,7 +7,7 @@
       :visible="visible"
       :position="position"
       :items="menuItems"
-      :z-index="zIndex"
+      :z-index="effectiveZIndex"
       @close="$emit('close')"
       @command="handleCommand" />
 
@@ -20,18 +20,19 @@
       :teleport="teleport"
       :no-transition="noTransition"
       :modal-back="modalBack"
-      :z-index="zIndex"
+      :z-index="effectiveZIndex"
       @close="$emit('close')"
       @command="handleCommand" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import ActionSheet from "./ActionSheet.vue";
 import type { ActionItem, ActionContext } from "../actions/types";
 import { useUiStore } from "../stores/ui";
+import { useModal } from "../composables/useModal";
 
 interface Props {
   visible: boolean;
@@ -47,7 +48,7 @@ interface Props {
   noTransition?: boolean;
   /** Whether to enable modal back behavior. Default true. */
   modalBack?: boolean;
-  /** Override z-index of the action renderer. Default 2000. */
+  /** Override z-index of the action renderer. Defaults to the modal counter. */
   zIndex?: number;
 }
 
@@ -56,7 +57,6 @@ const props = withDefaults(defineProps<Props>(), {
   teleport: true,
   noTransition: false,
   modalBack: true,
-  zIndex: 2000,
 });
 
 const emit = defineEmits<{
@@ -65,6 +65,14 @@ const emit = defineEmits<{
 }>();
 
 const uiStore = useUiStore();
+const fallbackModal = useModal();
+watch(
+  () => props.visible && props.zIndex == null,
+  (v) => v ? fallbackModal.open() : fallbackModal.close(),
+  { immediate: true }
+);
+const effectiveZIndex = computed(() => props.zIndex ?? fallbackModal.zIndex.value);
+
 const renderMode = computed<"contextmenu" | "actionsheet">(() => {
   if (props.mode === "contextmenu") return "contextmenu";
   if (props.mode === "actionsheet") return "actionsheet";

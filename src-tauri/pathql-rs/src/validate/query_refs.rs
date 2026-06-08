@@ -6,7 +6,6 @@ use crate::validate::{ValidateError, ValidateErrorKind};
 /// - X 必须在同一 query 的 `join.as` / `fields.as` 字面别名集合里
 /// - 别名本身若是 `${ref:...}` 不算字面别名（不能给自己/他人定义）
 /// - `as: ${ref:...}` 不与 `in_need: true` 共存
-/// - `from` 不应含 ` JOIN ` 关键字（应改用 `join[]`）
 pub fn validate_query_refs(
     ns: &Namespace,
     name: &SimpleName,
@@ -90,15 +89,6 @@ fn check_contrib(fqn: &str, c: &ContribQuery, errors: &mut Vec<ValidateError>) {
     }
     if let Some(w) = &c.where_ {
         check_refs(&w.0, "query.where", errors);
-    }
-    if let Some(from) = &c.from {
-        if from.0.to_uppercase().contains(" JOIN ") {
-            errors.push(ValidateError::new(
-                fqn,
-                "query.from",
-                ValidateErrorKind::FromContainsJoin,
-            ));
-        }
     }
 }
 
@@ -193,27 +183,6 @@ mod tests {
         assert!(errs
             .iter()
             .any(|e| matches!(e.kind, ValidateErrorKind::RefAliasWithInNeed)));
-    }
-
-    #[test]
-    fn from_with_join_warns() {
-        let q = ContribQuery {
-            from: Some(SqlExpr("images JOIN album_images ai".into())),
-            ..Default::default()
-        };
-        let errs = run(q);
-        assert!(errs
-            .iter()
-            .any(|e| matches!(e.kind, ValidateErrorKind::FromContainsJoin)));
-    }
-
-    #[test]
-    fn from_without_join_ok() {
-        let q = ContribQuery {
-            from: Some(SqlExpr("images".into())),
-            ..Default::default()
-        };
-        assert!(run(q).is_empty());
     }
 
     #[test]

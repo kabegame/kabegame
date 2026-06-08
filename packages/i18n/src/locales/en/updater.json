@@ -1,0 +1,21 @@
+{
+  "new": "NEW",
+  "restartUpdate": "Restart to update",
+  "dialogTitle": "Update available",
+  "currentVersion": "Current version: {version}",
+  "viewOnGithub": "View on GitHub",
+  "download": "Download",
+  "openReleasePage": "Open release page",
+  "noAssetHint": "No installer for this platform; download from the release page",
+  "downloadComingSoon": "Download coming soon",
+  "restartConfirmTitle": "Restart to update",
+  "restartConfirmMessage": "A new version is ready. Restart now to finish updating?",
+  "downloadingTitle": "Downloading update",
+  "restartReadyTitle": "New version ready",
+  "restartReadyMessage": "The new version has been downloaded. Restart now to finish installing?",
+  "restartNow": "Restart now",
+  "restartLater": "Later",
+  "checkUpdate": "Check for updates",
+  "alreadyLatest": "You're on the latest version",
+  "foundUpdate": "Update available"
+}

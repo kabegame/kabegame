@@ -1,0 +1,11 @@
+{
+    "namespace": "kabegame",
+    "name": "fail_images_tasks_router",
+    "query": {},
+    "resolve": {
+        "id_([^/]+)": {
+            "provider": "fail_images_task_provider",
+            "properties": { "task_id": "${capture[1]}" }
+        }
+    }
+}

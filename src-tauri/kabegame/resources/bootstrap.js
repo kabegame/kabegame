@@ -21,7 +21,7 @@
         return invoke("crawl_add_progress", { percentage });
       },
       // 统一下载 API：走 Rust download_worker。opts 为 plain object，可选键：
-      // cookie、headers、name（展示名）、metadata（任意 JSON，与 Rhai opts 一致）。
+      // cookie、headers、name（展示名）、metadata（任意 JSON）、metadata_version（与 Rhai opts 一致）。
       downloadImage(url, opts) {
         const o = typeof opts === "object" && opts !== null ? opts : {};
         return invoke("crawl_download_image", {
@@ -30,6 +30,7 @@
           headers: o.headers ?? undefined,
           name: o.name ?? undefined,
           metadata: o.metadata ?? undefined,
+          metadata_version: o.metadata_version ?? undefined,
         });
       },
       async to(payload, opts) {

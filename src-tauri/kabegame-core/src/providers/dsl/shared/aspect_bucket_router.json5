@@ -1,5 +1,4 @@
 {
-    "$schema": "../schema.json5",
     "namespace": "kabegame",
     "name": "aspect_bucket_router",
     // Enumerate non-empty aspect-ratio buckets from the current composed gallery query.

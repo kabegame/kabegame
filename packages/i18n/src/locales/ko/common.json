@@ -44,7 +44,6 @@
   "selectedPaths": "선택된 경로",
   "chooseFolder": "폴더 선택",
   "media": "미디어",
-  "archive": "압축 파일",
   "parseFailed": "파싱 실패",
   "importPlugin": "플러그인 가져오기",
   "noFilePath": "(파일 경로 없음)",

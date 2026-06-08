@@ -12,7 +12,7 @@ import "vant/lib/toast/style";
 /** Vant 使用项目配色。若使用 Vant，请在其样式之后引入，顺序：anime-theme → vant 样式 → vant-theme */
 import "@kabegame/core/styles/vant-theme.css";
 import { vPullToRefresh } from "@kabegame/core/directives/pullToRefresh";
-import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { IS_ANDROID, IS_MACOS, IS_WEB } from "@kabegame/core/env";
 import { Toast, Picker, Popup } from "vant";
 import "vant/lib/picker/style";
 import "vant/lib/popup/style";
@@ -25,6 +25,22 @@ import { i18n } from "@kabegame/i18n";
 if (IS_ANDROID) {
   document.documentElement.classList.add("platform-android");
 }
+
+// 强制重新加载 WebView（拦截默认行为，确保在 Tauri 内可用）。
+// macOS 用 Cmd+Shift+R，其余平台用 Ctrl+Shift+R。
+
+window.addEventListener(
+  "keydown",
+  (e) => {
+    const modifier = IS_MACOS ? e.metaKey : e.ctrlKey;
+    if (modifier && e.shiftKey && (e.key === "R" || e.key === "r")) {
+      e.preventDefault();
+      window.location.reload();
+    }
+  },
+  { capture: true },
+);
+
 
 const app = createApp(App);
 

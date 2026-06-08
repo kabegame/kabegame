@@ -3,6 +3,7 @@ import vue from "@vitejs/plugin-vue";
 import path from "path";
 import UnoCSS from "unocss/vite";
 import { getDevServerHost } from "./scripts/utils";
+import { kabegameDebugServer } from "./scripts/vite-debug-server";
 
 export const root = __dirname;
 
@@ -17,10 +18,19 @@ export const isAndroid =
 
 export const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
 export const isWeb = process.env.KABEGAME_MODE === "web";
+export const isDebugIngestEnabled = process.env.KABEGAME_DEBUG_INGEST !== "false";
 
 
 export default {
-  plugins: [vue(), UnoCSS()],
+  plugins: [
+    vue(),
+    UnoCSS(),
+    kabegameDebugServer({
+      workspaceRoot: root,
+      enabled: isDebugIngestEnabled,
+      allowRemote: isAndroid || isWeb,
+    }),
+  ],
 
   define: {
     __DEV__: process.env.NODE_ENV === "development",

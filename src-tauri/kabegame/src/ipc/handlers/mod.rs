@@ -84,24 +84,24 @@ pub async fn dispatch_request(
     }
     if let IpcRequest::OrganizeStart {
         dedupe,
+        dedupe_keep_new,
         remove_missing,
         regen_thumbnails,
         remove_unrecognized,
         range_start,
         range_end,
         delete_source_files,
-        safe_delete,
     } = req
     {
         return handle_organize_start(
             dedupe,
+            dedupe_keep_new,
             remove_missing,
             regen_thumbnails,
             remove_unrecognized,
             range_start,
             range_end,
             delete_source_files,
-            safe_delete,
         )
         .await;
     }
@@ -200,7 +200,7 @@ async fn handle_task_retry_failed_image(failed_id: i64) -> IpcResponse {
 
 async fn handle_task_delete_failed_image(failed_id: i64) -> IpcResponse {
     let storage = Storage::global();
-    let task_id = match storage.get_task_failed_image_by_id(failed_id) {
+    let task_id = match Storage::get_task_failed_image_by_id(failed_id) {
         Ok(item) => item.map(|item| item.task_id),
         Err(e) => return IpcResponse::err(e),
     };
@@ -226,13 +226,13 @@ async fn handle_get_active_downloads() -> IpcResponse {
 
 async fn handle_organize_start(
     dedupe: bool,
+    dedupe_keep_new: bool,
     remove_missing: bool,
     regen_thumbnails: bool,
     remove_unrecognized: bool,
     range_start: Option<usize>,
     range_end: Option<usize>,
     delete_source_files: bool,
-    safe_delete: bool,
 ) -> IpcResponse {
     use kabegame_core::storage::organize::OrganizeOptions;
     let (offset, limit) = match (range_start, range_end) {
@@ -245,11 +245,11 @@ async fn handle_organize_start(
             Arc::new(Storage::global().clone()),
             OrganizeOptions {
                 dedupe,
+                dedupe_keep_new,
                 remove_missing,
                 remove_unrecognized,
                 regen_thumbnails,
                 delete_source_files,
-                safe_delete,
                 offset,
                 limit,
             },

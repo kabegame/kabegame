@@ -94,7 +94,7 @@ impl Storage {
 
     /// 画廊全局：按 `images.type` 统计图片与视频条数
     pub fn get_gallery_media_type_counts(&self) -> Result<GalleryMediaTypeCounts, String> {
-        crate::providers::gallery_media_type_counts_at("/gallery")
+        crate::providers::gallery_media_type_counts_at("images://gallery")
     }
 
     /// 指定画册内：按媒体类型统计条数
@@ -110,7 +110,7 @@ impl Storage {
             });
         }
         crate::providers::gallery_media_type_counts_at(&format!(
-            "/gallery/album/{}",
+            "images://gallery/album/{}",
             urlencoding::encode(id)
         ))
     }

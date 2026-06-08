@@ -13,6 +13,7 @@
     :model-value="valueForSelect"
     :placeholder="placeholder"
     :clearable="allowUnset"
+    :filterable="normalizedOptions.length > 10"
     style="width: 100%"
     @update:model-value="$emit('update:modelValue', $event)"
   >

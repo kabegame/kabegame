@@ -35,7 +35,7 @@
     </el-button>
 
     <Teleport v-if="uiStore.isCompact" to="body">
-      <van-popup v-model:show="showPicker" position="bottom" round>
+      <van-popup :show="isOpen" position="bottom" round :z-index="zIndex" @update:show="v => { if (!v) close() }">
         <van-picker
           v-model="pickerSelected"
           :title="$t('tasks.filterMode')"
@@ -43,7 +43,7 @@
           :confirm-button-text="t('common.confirm')"
           :cancel-button-text="t('common.cancel')"
           @confirm="onPickerConfirm"
-          @cancel="showPicker = false"
+          @cancel="close()"
         />
       </van-popup>
     </Teleport>
@@ -54,7 +54,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ArrowDown, Filter } from "@element-plus/icons-vue";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModal } from "@kabegame/core/composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = withDefaults(
@@ -101,19 +101,18 @@ function onDesktopCommand(cmd: string) {
   }
 }
 
-const showPicker = ref(false);
-useModalBack(showPicker);
+const { isOpen, zIndex, open, close } = useModal();
 
 const pickerColumns = computed(() =>
   options.value.map((o) => ({ text: o.label, value: o.value })),
 );
 const pickerSelected = ref<string[]>(["success"]);
-watch(showPicker, (open) => {
-  if (open) pickerSelected.value = [props.modelValue];
+watch(isOpen, (v) => {
+  if (v) pickerSelected.value = [props.modelValue];
 });
 
 function onPickerConfirm() {
-  showPicker.value = false;
+  close();
   const v = pickerSelected.value[0];
   if (v === "success" || v === "failed") {
     emit("update:modelValue", v);
@@ -122,7 +121,7 @@ function onPickerConfirm() {
 
 function openPicker() {
   pickerSelected.value = [props.modelValue];
-  showPicker.value = true;
+  open();
 }
 
 defineExpose({ openPicker });

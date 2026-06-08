@@ -14,29 +14,29 @@
           <template v-if="layoutMode === 'grid'">
             <div v-if="virtualScrollActive" class="image-grid" :class="`layout-${layoutDirection}`" :style="gridStyle">
               <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
-                :image-click-action="settingsStore.values.imageClickAction || 'none'"
-                :window-aspect-ratio="getEffectiveAspectRatioForItem(item.image)" :selected="selectedIds.has(item.image.id)"
-                :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
+                :prefer="gridPrefer" :selected="selectedIds.has(item.image.id)"
+                :is-entering="item.isEntering"
                 :horizontal="isHorizontal"
                 :video-playing="playingVideoId === item.image.id"
                 @click="(e) => handleItemClick(item.image, item.index, e)"
                 @dblclick="() => handleItemDblClick(item.image, item.index)"
                 @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
                 @toggle-video-play="() => handleToggleVideoPlay(item.image.id)"
+                @hover-video-preview="(active) => handleHoverVideoPreview(item.image.id, active)"
                 @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
             </div>
 
             <transition-group v-else name="fade-in-list" tag="div" class="image-grid"
               :class="`layout-${layoutDirection}`" :style="gridStyle">
               <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
-                :image-click-action="settingsStore.values.imageClickAction || 'none'"
-                :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="selectedIds.has(image.id)"
-                :grid-columns="gridColumnsCount" :grid-index="index" :horizontal="isHorizontal"
+                :prefer="gridPrefer" :selected="selectedIds.has(image.id)"
+                :horizontal="isHorizontal"
                 :video-playing="playingVideoId === image.id"
                 @click="(e) => handleItemClick(image, index, e)"
                 @dblclick="() => handleItemDblClick(image, index)"
                 @contextmenu="(e) => handleItemContextMenu(image, index, e)"
-                @toggle-video-play="() => handleToggleVideoPlay(image.id)" />
+                @toggle-video-play="() => handleToggleVideoPlay(image.id)"
+                @hover-video-preview="(active) => handleHoverVideoPreview(image.id, active)" />
             </transition-group>
           </template>
 
@@ -45,14 +45,14 @@
               :class="isHorizontal ? 'image-gallery-row' : 'image-gallery-column'"
               :style="{ gap: gridGapPx + 'px' }">
               <ImageItem v-for="entry in bucket" :key="entry.image.id" :image="entry.image"
-                :image-click-action="settingsStore.values.imageClickAction || 'none'"
-                :window-aspect-ratio="aspectRatioOf(entry.image)" :selected="selectedIds.has(entry.image.id)"
-                :grid-columns="gridColumnsCount" :grid-index="entry.index" fill-box :horizontal="isHorizontal"
+                :prefer="gridPrefer" :selected="selectedIds.has(entry.image.id)"
+                :window-aspect-ratio="aspectRatioOf(entry.image)" fill-box :horizontal="isHorizontal"
                 :video-playing="playingVideoId === entry.image.id"
                 @click="(e) => handleItemClick(entry.image, entry.index, e)"
                 @dblclick="() => handleItemDblClick(entry.image, entry.index)"
                 @contextmenu="(e) => handleItemContextMenu(entry.image, entry.index, e)"
-                @toggle-video-play="() => handleToggleVideoPlay(entry.image.id)" />
+                @toggle-video-play="() => handleToggleVideoPlay(entry.image.id)"
+                @hover-video-preview="(active) => handleHoverVideoPreview(entry.image.id, active)" />
             </div>
           </div>
         </div>
@@ -67,11 +67,11 @@
         <!-- New action-based context menu -->
         <ActionRenderer
           v-if="enableContextMenu && actions && actions.length > 0"
-          :visible="contextMenuVisible"
+          :visible="contextMenu.isOpen.value"
           :position="contextMenuPosition"
           :actions="actions"
           :context="contextMenuActionContext"
-          :zIndex="1900"
+          :zIndex="contextMenu.zIndex.value"
           @close="closeContextMenu"
           @command="handleContextMenuCommand" />
 
@@ -82,9 +82,11 @@
           :plugins="plugins"
           @context-command="handlePreviewContextCommand"
           @preview-navigate="emit('preview-navigate', $event)"
+          @preview-page-boundary="emit('preview-page-boundary', $event)"
           @preview-detail-toggle="emit('preview-detail-toggle', $event)"
           @preview-close="emit('preview-close', $event)"
-          @open-task="emit('open-task', $event)" />
+          @open-task="emit('open-task', $event)"
+          @open-gallery-filter="emit('open-gallery-filter', $event)" />
       </div>
     </div>
 
@@ -100,22 +102,16 @@ import ImageItem from "./ImageItem.vue";
 import type { ImageInfo } from "../../types/image";
 import EmptyState from "../common/EmptyState.vue";
 import ImagePreviewDialog from "../common/ImagePreviewDialog.vue";
+import type { ImageDetailGalleryFilterTarget } from "../common/ImageDetailContent.vue";
 import ScrollButtons from "../common/ScrollButtons.vue";
 import { useSettingsStore } from "../../stores/settings";
-import { useModalBack } from "../../composables/useModalBack";
-import { useModalStackStore } from "../../stores/modalStack";
+import { useModal } from "../../composables/useModal";
 import { useUiStore } from "../../stores/ui";
 import { useDragScroll } from "../../composables/useDragScroll";
-import { IS_ANDROID, IS_WEB } from "../../env";
-import { isVideoMediaType } from "../../utils/mediaMime";
-import { openVideo } from "tauri-plugin-picker-api";
-
-async function tryOpenVideo(path: string) {
-  if (IS_WEB) return;
-  await openVideo(path);
-}
+import { IS_WEB, IS_ANDROID } from "../../env";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
+import { Plugin } from "@kabegame/core/stores/plugins";
 
 // core 版保留通用图片意图；favorite/addToAlbum 等 kabegame 专属入口仍在 wrapper 层扩展。
 export type ContextCommand =
@@ -126,10 +122,9 @@ export type ContextCommand =
   | "share"
   | "openFolder"
   | "wallpaper"
-  | "exportToWE"
-  | "exportToWEAuto"
   | "addToHidden"
   | "remove"
+  | "deleteFile"
   | "swipe-remove";
 
 type MultiImagePayload = { selectedImageIds: ReadonlySet<string> };
@@ -143,10 +138,9 @@ type ContextCommandPayloadMap = {
   download: ImagePayload & MultiImagePayload;
   wallpaper: ImagePayload & MultiImagePayload;
   share: ImagePayload;
-  exportToWE: ImagePayload & MultiImagePayload;
-  exportToWEAuto: ImagePayload & MultiImagePayload;
   addToHidden: ImagePayload & MultiImagePayload;
   remove: ImagePayload & MultiImagePayload;
+  deleteFile: ImagePayload & MultiImagePayload;
   "swipe-remove": ImagePayload;
 };
 
@@ -180,7 +174,7 @@ interface Props {
   /** 让外层 image-grid-container 自己成为滚动容器，before-grid 与图片共享同一个 sticky 上下文。 */
   scrollWholeContainer?: boolean;
   /** 插件列表（用于桌面预览内详情抽屉显示插件名称） */
-  plugins?: Array<{ id: string; name?: string }>;
+  plugins?: Array<Plugin>;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -200,6 +194,7 @@ const emit = defineEmits<{
   // 兼容旧 API（不再由 core 触发，但保留事件名避免上层 TS/模板报错）
   addedToAlbum: [];
   "open-task": [taskId: string];
+  "open-gallery-filter": [target: ImageDetailGalleryFilterTarget];
   "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
   "preview-navigate": [payload: {
     direction: "prev" | "next";
@@ -208,50 +203,49 @@ const emit = defineEmits<{
     wrapped: boolean;
     image: ImageInfo;
   }];
+  "preview-page-boundary": [payload: {
+    direction: "prev" | "next";
+    index: number;
+    image: ImageInfo;
+  }];
   "preview-detail-toggle": [payload: { open: boolean; image: ImageInfo | null }];
   "preview-close": [payload: { image: ImageInfo | null }];
+  "preview-open": [payload: { image: ImageInfo }];
 }>();
 
 const settingsStore = useSettingsStore();
 /** 本栅格实例内的选择集，不跨页面/路由共享 */
 const selectedIds = ref<Set<string>>(new Set());
-/** 当前正在播放的视频 id（同一时间最多一个），点击右上角按钮切换 */
-const playingVideoId = ref<string | null>(null);
+/** 手动播放的视频 id：点击右上角按钮切换 */
+const manualPlayingVideoId = ref<string | null>(null);
+/** hover 预览临时接管播放，离开后恢复手动播放目标 */
+const hoverPlayingVideoId = ref<string | null>(null);
+/** 当前正在播放的视频 id（同一时间最多一个） */
+const playingVideoId = computed(() => hoverPlayingVideoId.value ?? manualPlayingVideoId.value);
 const handleToggleVideoPlay = (imageId: string) => {
-  playingVideoId.value = playingVideoId.value === imageId ? null : imageId;
+  if (manualPlayingVideoId.value === imageId) {
+    manualPlayingVideoId.value = null;
+    if (hoverPlayingVideoId.value === imageId) {
+      hoverPlayingVideoId.value = null;
+    }
+    return;
+  }
+  manualPlayingVideoId.value = imageId;
+  if (hoverPlayingVideoId.value === imageId) {
+    hoverPlayingVideoId.value = null;
+  }
 };
-const modalStackStore = useModalStackStore();
+const handleHoverVideoPreview = (imageId: string, active: boolean) => {
+  if (active) {
+    hoverPlayingVideoId.value = imageId;
+  } else if (hoverPlayingVideoId.value === imageId) {
+    hoverPlayingVideoId.value = null;
+  }
+};
 const uiStore = useUiStore();
 
 const isLoading = computed(() => props.loading ?? false);
 const isLoadingOverlay = computed(() => props.loadingOverlay ?? isLoading.value);
-/*----------------- 宽高比相关 -----------------*/
-// 从 store 解析宽高比设置
-// 安卓不需要宽高比设置，图片自动适应
-const parseAspectRatioFromStore = (value: string | null | undefined): number | null => {
-  if (!value) return null;
-  // 解析 "16:9" 格式
-  if (value.includes(":") && !value.startsWith("custom:")) {
-    const [w, h] = value.split(":").map(Number);
-    if (w && h && h > 0) {
-      return w / h;
-    }
-  }
-  // 解析 "custom:1920:1080" 格式
-  if (value.startsWith("custom:")) {
-    const parts = value.replace("custom:", "").split(":");
-    const [w, h] = parts.map(Number);
-    if (w && h && h > 0) {
-      return w / h;
-    }
-  }
-  return null;
-};
-
-const storeAspectRatio = computed(() => {
-  return parseAspectRatioFromStore(settingsStore.values.galleryImageAspectRatio);
-});
-
 /*----------------- 虚拟滚动相关 -----------------*/
 const virtualOverscanRows = computed(() => Math.max(0, props.virtualOverscan));
 // const enableScrollButtons = computed(() => props.enableScrollButtons ?? true);
@@ -275,7 +269,14 @@ const previousImageIds = ref<Set<string>>(new Set());
 const isZoomingLayout = ref(false);
 let zoomAnimTimer: ReturnType<typeof setTimeout> | null = null;
 
-const gridColumnsCount = computed(() => (imageGridColumns.value > 0 ? imageGridColumns.value : 1));
+const gridColumnsCount = computed(() => {
+  if (isCompact.value) return 2;
+  return imageGridColumns.value > 0 ? imageGridColumns.value : 1;
+});
+// 非web且列数少（<3）时优先加载原图（缩略图打底，原图流式覆盖）；列数多则只用缩略图省带宽。
+const gridPrefer = computed<"original" | "thumbnail">(() =>
+  (gridColumnsCount.value < 3 && !IS_WEB) ? "original" : "thumbnail"
+);
 // 紧凑布局：栅格更紧凑，空白更少。整体间距为历史值的 1/3，让网格更紧凑。
 const gridGapPx = computed(() => {
   const base = isCompact.value
@@ -361,7 +362,7 @@ const androidSelectionMode = computed(() => selectedIds.value.size > 0);
 
 // 预览与 context menu
 const previewRef = ref<InstanceType<typeof ImagePreviewDialog> | null>(null);
-const contextMenuVisible = ref(false);
+const contextMenu = useModal();
 const contextMenuImage = ref<ImageInfo | null>(null);
 const contextMenuPosition = ref({ x: 0, y: 0 });
 
@@ -388,43 +389,16 @@ const currentPreviewIndex = computed(() => {
   return previewRef.value?.previewIndex ?? -1;
 });
 
-// Android 系统返回键：预览打开时注册到 modalStack
-const modalStackId = ref<string | null>(null);
-
-// 窗口宽高比（用于 item aspect ratio）
-const windowAspectRatio = ref<number>(16 / 9);
-const updateWindowAspectRatio = () => {
-  windowAspectRatio.value = window.innerWidth / window.innerHeight;
-};
-const effectiveAspectRatio = computed(() => {
-  // 紧凑模式下不在此处固定 1:1，改为按单张图片在 getEffectiveAspectRatioForItem 里处理
-  if (!isCompact.value) {
-    if (storeAspectRatio.value !== null && storeAspectRatio.value > 0) {
-      return storeAspectRatio.value;
-    }
-    if (props.windowAspectRatio !== undefined && props.windowAspectRatio > 0) {
-      return props.windowAspectRatio;
-    }
-    return windowAspectRatio.value;
-  }
-  return 1; // 紧凑模式默认（无 width/height 时用）
-});
-
-/** 紧凑模式：按该图 width/height 计算宽高比，行高由该行最高图自适应；宽屏用全局 effectiveAspectRatio */
-const getEffectiveAspectRatioForItem = (image: ImageInfo) => {
-  if (isCompact.value && image?.width != null && image?.height != null && image.width > 0 && image.height > 0) {
-    return image.width / image.height;
-  }
-  return effectiveAspectRatio.value;
-};
-
 /*----------------- Gallery（masonry）布局 + 方向 -----------------*/
-const layoutMode = computed<"grid" | "gallery">(
-  () => (settingsStore.values.galleryLayoutMode as "grid" | "gallery") ?? "grid"
-);
-const layoutDirection = computed<"vertical" | "horizontal">(
-  () => (settingsStore.values.galleryLayoutDirection as "vertical" | "horizontal") ?? "vertical"
-);
+// Android/紧凑端固定为两列纵向 grid，配合虚拟滚动降低移动端长列表开销；桌面端仍使用设置项。
+const layoutMode = computed<"grid" | "gallery">(() => {
+  if (isCompact.value) return "grid";
+  return (settingsStore.values.galleryLayoutMode as "grid" | "gallery") ?? "grid";
+});
+const layoutDirection = computed<"vertical" | "horizontal">(() => {
+  if (isCompact.value) return "vertical";
+  return (settingsStore.values.galleryLayoutDirection as "vertical" | "horizontal") ?? "vertical";
+});
 const isHorizontal = computed(() => layoutDirection.value === "horizontal");
 
 // grid 布局可虚拟化：纵向按行，横向按列组；masonry/gallery 每项尺寸不定，不启用。
@@ -437,7 +411,7 @@ const aspectRatioOf = (image: ImageInfo) => {
   if (image?.width != null && image?.height != null && image.width > 0 && image.height > 0) {
     return image.width / image.height;
   }
-  return effectiveAspectRatio.value || 16 / 10;
+  return 1;
 };
 
 /**
@@ -473,7 +447,8 @@ const galleryStyle = computed<Record<string, string>>(() => ({
 const estimatedItemHeight = () => {
   const container = scrollEl.value;
   if (!container) return 240;
-  const ratio = effectiveAspectRatio.value || 16 / 9;
+  // grid 模式 ImageItem 恒为 1:1，虚拟滚动行高估算须与此一致
+  const ratio = 1;
   if (isHorizontal.value) {
     const availableHeight =
       container.clientHeight - BASE_GRID_PADDING_Y.value * 2 - gridGapPx.value * (gridColumnsCount.value - 1);
@@ -615,17 +590,13 @@ const gridStyle = computed(() => {
     style.height = "100%";
   } else {
     style.gridTemplateColumns = `repeat(${n}, 1fr)`;
-    // 紧凑模式：行高由该行最高图决定，格子不拉伸
-    if (isCompact.value) {
-      style.alignItems = "start";
-    }
   }
   return style as any;
 });
 
 const closeContextMenu = () => {
   selectedIds.value = new Set();
-  contextMenuVisible.value = false;
+  contextMenu.close();
   contextMenuImage.value = null;
 };
 
@@ -636,7 +607,7 @@ watch(() => selectedIds.value.size, (size) => {
 const openContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
   contextMenuImage.value = image;
   contextMenuPosition.value = { x: event.clientX, y: event.clientY };
-  contextMenuVisible.value = true;
+  contextMenu.open();
   // 右键时同步选择逻辑
   const current = selectedIds.value;
   if (current.size === 0 || !current.has(image.id)) {
@@ -743,7 +714,7 @@ const handleRootClick = (event: MouseEvent) => {
   const target = event.target as HTMLElement | null;
   const clickedOutside = !target?.closest(".image-item") && !target?.closest(".context-menu");
 
-  if (contextMenuVisible.value) {
+  if (contextMenu.isOpen.value) {
     closeContextMenu();
     return;
   }
@@ -780,11 +751,7 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
   if (isCompact.value && !androidSelectionMode.value) {
     const action = settingsStore.values.imageClickAction || "none";
     if (action === "preview") {
-      if (IS_ANDROID && isVideoMediaType(image.type) && image.localPath) {
-        void tryOpenVideo(image.localPath);
-        return;
-      }
-      previewRef.value?.open(index);
+      openPreview(index);
       return;
     }
     if (action === "open") {
@@ -809,6 +776,13 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
   setSingleSelection(image.id, index);
 };
 
+/** 打开预览并通知上层（用于 URL pvwimgid 双向同步）。index 为 props.images 原始索引。 */
+function openPreview(index: number) {
+  previewRef.value?.open(index);
+  const img = (props.images ?? [])[index];
+  if (img) emit("preview-open", { image: img });
+}
+
 const handleItemDblClick = (image: ImageInfo, index: number) => {
   // 紧凑模式选择中：快速连点会触发 dblclick，避免误开预览（单击已由 handleItemClick 处理）
   if (isCompact.value && androidSelectionMode.value) {
@@ -816,13 +790,13 @@ const handleItemDblClick = (image: ImageInfo, index: number) => {
   }
   if (isCompact.value || IS_WEB) {
     emit("image-dblclick", { action: "preview", image });
-    previewRef.value?.open(index);
+    openPreview(index);
     return;
   }
   const action = settingsStore.values.imageClickAction || "none";
   if (action === "preview") {
     emit("image-dblclick", { action: "preview", image });
-    previewRef.value?.open(index);
+    openPreview(index);
     return;
   }
   if (action === "open") {
@@ -834,11 +808,7 @@ const handleItemDblClick = (image: ImageInfo, index: number) => {
 const handleItemContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
   if (!enableContextMenu.value) return;
   if (isCompact.value && androidSelectionMode.value) {
-    if (IS_ANDROID && isVideoMediaType(image.type) && image.localPath) {
-      void tryOpenVideo(image.localPath);
-      return;
-    }
-    previewRef.value?.open(index);
+    openPreview(index);
     return;
   }
   openContextMenu(image, index, event);
@@ -946,23 +916,6 @@ const scheduleVirtualUpdate = () => {
     updateVirtualRange();
   });
 };
-
-// 关键：窗口/全屏切换会改变 ImageItem 的布局与实际高度（依赖 windowAspectRatio）。
-// 若不重测，虚拟 paddingTop 会与真实行高不一致，滚动时会出现"突然跳一段"的视觉跳动。
-watch(
-  () => windowAspectRatio.value,
-  () => {
-    scheduleVirtualUpdate();
-  }
-);
-
-// 监听 store 中的宽高比设置变化
-watch(
-  () => settingsStore.values.galleryImageAspectRatio,
-  () => {
-    scheduleVirtualUpdate();
-  }
-);
 
 watch(
   () => props.enableVirtualScroll,
@@ -1120,9 +1073,6 @@ watch(
 );
 
 onMounted(async () => {
-  updateWindowAspectRatio();
-  window.addEventListener("resize", updateWindowAspectRatio);
-
   // 紧凑模式下不允许通过 Ctrl+Wheel 调整列数
   if (!isCompact.value) {
     window.addEventListener(
@@ -1147,17 +1097,12 @@ onMounted(async () => {
 });
 
 onUnmounted(async () => {
-  window.removeEventListener("resize", updateWindowAspectRatio);
   unbindScrollElement();
   if (smoothWheel.raf != null) {
     cancelAnimationFrame(smoothWheel.raf);
     smoothWheel.raf = null;
   }
   smoothWheel.active = false;
-  if (modalStackId.value) {
-    modalStackStore.remove(modalStackId.value);
-    modalStackId.value = null;
-  }
   if (scrollStableTimer) window.clearTimeout(scrollStableTimer);
   if (zoomAnimTimer) clearTimeout(zoomAnimTimer);
   if (saveScrollRaf != null) cancelAnimationFrame(saveScrollRaf);
@@ -1206,8 +1151,11 @@ watch(
     const oldIds = previousImageIds.value;
 
     // 列表里的播放目标如果被移除（换页/筛选/删除），重置播放状态，避免悬挂的"已播放但目标已不存在"
-    if (playingVideoId.value && !newIds.has(playingVideoId.value)) {
-      playingVideoId.value = null;
+    if (manualPlayingVideoId.value && !newIds.has(manualPlayingVideoId.value)) {
+      manualPlayingVideoId.value = null;
+    }
+    if (hoverPlayingVideoId.value && !newIds.has(hoverPlayingVideoId.value)) {
+      hoverPlayingVideoId.value = null;
     }
 
     // 判断是否是刷新/换页（新旧列表完全没有交集）还是图片增减
@@ -1386,8 +1334,9 @@ const exitAndroidSelectionMode = () => {
   clearSelection();
 };
 
-// Android：选择模式用 useModalBack，弹栈时通过 onClose 清除选择状态
-useModalBack(androidSelectionMode, { onClose: clearSelection });
+// Android：选择模式用 useModal bridge，弹栈时通过 onClose 清除选择状态
+const androidSelectionModal = useModal({ onClose: clearSelection });
+watch(androidSelectionMode, (v) => { if (IS_ANDROID) v ? androidSelectionModal.open() : androidSelectionModal.close(); }, { immediate: true });
 
 const getContainerEl = () => scrollEl.value ?? containerEl.value;
 
@@ -1396,6 +1345,13 @@ defineExpose({
   getSelectedIds: () => new Set(selectedIds.value),
   clearSelection,
   exitAndroidSelectionMode,
+  /** 按图片 id 打开预览（用于 URL pvwimgid 同步）；id 不在当前列表时为 no-op。 */
+  openPreviewById: (id: string) => {
+    const idx = (props.images ?? []).findIndex((i) => i.id === id);
+    console.log('open preview', id);
+    if (idx >= 0) openPreview(idx);
+  },
+  closePreview: () => previewRef.value?.close?.(),
 });
 </script>
 

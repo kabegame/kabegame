@@ -13,6 +13,10 @@
                     <div class="option-content">
                         <div class="option-title">{{ $t('gallery.dedupe') }}</div>
                         <div class="option-desc">{{ $t('gallery.dedupeDesc') }}</div>
+                        <el-radio-group v-if="options.dedupe" v-model="options.dedupeKeepNew" class="option-sub-block" size="small">
+                            <el-radio-button :value="true">{{ $t('gallery.dedupeKeepNew') }}</el-radio-button>
+                            <el-radio-button :value="false">{{ $t('gallery.dedupeKeepOld') }}</el-radio-button>
+                        </el-radio-group>
                     </div>
                 </div>
                 <div class="option-item">
@@ -44,16 +48,6 @@
                         <div class="option-desc">{{ $t('gallery.deleteSourceFilesDesc') }}</div>
                     </div>
                 </div>
-                <div v-if="options.deleteSourceFiles" class="option-sub-block">
-                    <div class="option-item">
-                        <el-checkbox v-model="options.safeDelete" />
-                        <div class="option-content">
-                            <div class="option-title">{{ $t('gallery.safeDelete') }}</div>
-                            <div class="option-desc">{{ $t('gallery.safeDeleteDesc') }}</div>
-                            <div class="option-slow-hint">{{ $t('gallery.safeDeleteSlowHint') }}</div>
-                        </div>
-                    </div>
-                </div>
             </div>
             <div v-if="showRangeSlider" class="organize-range">
                 <div class="option-title">{{ $t('gallery.organizeRange') }}</div>
@@ -83,6 +77,10 @@
                     <div class="option-content">
                         <div class="option-title">{{ $t('gallery.dedupe') }}</div>
                         <div class="option-desc">{{ $t('gallery.dedupeDescDesktop') }}</div>
+                        <el-radio-group v-if="options.dedupe" v-model="options.dedupeKeepNew" class="option-sub-block" size="small">
+                            <el-radio-button :value="true">{{ $t('gallery.dedupeKeepNew') }}</el-radio-button>
+                            <el-radio-button :value="false">{{ $t('gallery.dedupeKeepOld') }}</el-radio-button>
+                        </el-radio-group>
                     </div>
                 </div>
                 <div class="option-item">
@@ -112,16 +110,6 @@
                     <div class="option-content">
                         <div class="option-title">{{ $t('gallery.deleteSourceFiles') }}</div>
                         <div class="option-desc">{{ $t('gallery.deleteSourceFilesDescDesktop') }}</div>
-                    </div>
-                </div>
-                <div v-if="options.deleteSourceFiles" class="option-sub-block">
-                    <div class="option-item">
-                        <el-checkbox v-model="options.safeDelete" />
-                        <div class="option-content">
-                            <div class="option-title">{{ $t('gallery.safeDelete') }}</div>
-                            <div class="option-desc">{{ $t('gallery.safeDeleteDesc') }}</div>
-                            <div class="option-slow-hint">{{ $t('gallery.safeDeleteSlowHint') }}</div>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -160,11 +148,11 @@ interface Props {
 
 interface OrganizeOptions {
     dedupe: boolean;
+    dedupeKeepNew: boolean;
     removeMissing: boolean;
     removeUnrecognized: boolean;
     regenThumbnails: boolean;
     deleteSourceFiles: boolean;
-    safeDelete: boolean;
     rangeStart: number | null;
     rangeEnd: number | null;
 }
@@ -186,11 +174,11 @@ const uiStore = useUiStore();
 
 const options = reactive({
     dedupe: true, // 默认开启去重
+    dedupeKeepNew: true, // 默认保留最新（最大 id）
     removeMissing: true, // 默认开启清除失效
     removeUnrecognized: false,
     regenThumbnails: true, // 默认开启补充缩略图
     deleteSourceFiles: false,
-    safeDelete: true,
 });
 
 const showRangeSlider = computed(() => totalCount.value > 4000);
@@ -250,11 +238,11 @@ const handleConfirm = async () => {
     }
     const payload: OrganizeOptions = {
         dedupe: options.dedupe,
+        dedupeKeepNew: options.dedupeKeepNew,
         removeMissing: options.removeMissing,
         removeUnrecognized: options.removeUnrecognized,
         regenThumbnails: options.regenThumbnails,
         deleteSourceFiles: options.deleteSourceFiles,
-        safeDelete: options.safeDelete,
         rangeStart: null,
         rangeEnd: null,
     };

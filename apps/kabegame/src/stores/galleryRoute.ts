@@ -4,16 +4,16 @@ import {
   buildGalleryPath,
   parseGalleryPath,
   GALLERY_STORAGE_KEY_PATH,
-  DEFAULT_GALLERY_FILTER,
-  type GalleryFilter,
-  type GalleryTimeSort,
+  DEFAULT_GALLERY_FILTER_SET,
+  type GalleryFilterSet,
+  type GallerySort,
 } from "@/utils/galleryPath";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_WEB } from "@kabegame/core/env";
 
 type GalleryRouteState = {
-  filter: GalleryFilter;
-  sort: GalleryTimeSort;
+  filters: GalleryFilterSet;
+  sort: GallerySort;
   page: number;
   pageSize: number;
   search: string;
@@ -25,7 +25,7 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
     parse: (path) => {
       const parsed = parseGalleryPath(path);
       return {
-        filter: parsed.filter,
+        filters: parsed.filters,
         sort: parsed.sort,
         page: parsed.page,
         pageSize: parsed.pageSize,
@@ -33,15 +33,15 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
       };
     },
     build: (state) =>
-      buildGalleryPath(state.filter, state.sort, state.page, state.pageSize, state.search),
+      buildGalleryPath(state.filters, state.sort, state.page, state.pageSize, state.search),
     buildContext: (state) => buildGalleryContextPrefix(state.search),
     defaultState: () => {
       const settings = useSettingsStore();
       const stored = IS_WEB ? null : localStorage.getItem(GALLERY_STORAGE_KEY_PATH);
       const parsed = stored ? parseGalleryPath(stored) : null;
-      const defaultSort: GalleryTimeSort = IS_WEB ? "desc" : "asc";
+      const defaultSort: GallerySort = { field: "by-id", desc: IS_WEB };
       return {
-        filter: parsed?.filter ?? DEFAULT_GALLERY_FILTER,
+        filters: parsed?.filters ?? DEFAULT_GALLERY_FILTER_SET,
         sort: parsed?.sort ?? defaultSort,
         page: 1, // 页码不持久化，由当前页面状态/URL 驱动
         pageSize: (settings.values.galleryPageSize as number | undefined) ?? 100,
@@ -54,7 +54,7 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
       if (!IS_WEB) {
         localStorage.setItem(
           GALLERY_STORAGE_KEY_PATH,
-          buildGalleryPath(state.filter, state.sort, 1),
+          buildGalleryPath(state.filters, state.sort, 1),
         );
       }
       const settings = useSettingsStore();
@@ -68,5 +68,5 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
 /** 回到默认「全部」第 1 页（用于错误兜底等） */
 export async function resetGalleryRouteToDefault() {
   const store = useGalleryRouteStore();
-  await store.navigate({ filter: { type: "all" }, page: 1 });
+  await store.navigate({ filters: {}, page: 1, search: "" });
 }
