@@ -42,6 +42,19 @@ function Escape-Attribute {
     return (Escape-Html $Value).Replace("'", "&#39;")
 }
 
+function Get-OptionalProperty {
+    param(
+        [Parameter(Mandatory = $true)] [object]$Object,
+        [Parameter(Mandatory = $true)] [string]$Name
+    )
+
+    $prop = $Object.PSObject.Properties[$Name]
+    if ($null -eq $prop) {
+        return $null
+    }
+    return $prop.Value
+}
+
 function Get-LatestArticlePath {
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
     $root = Join-Path $repoRoot "ignore\wechat-daily-codex"
@@ -111,6 +124,9 @@ $uploadItems = New-Object System.Collections.Generic.List[object]
 
 for ($i = 0; $i -lt $images.Count; $i++) {
     $image = $images[$i]
+    $publicSourceLabel = Get-OptionalProperty -Object $image -Name "public_source_label"
+    $sourceSite = Get-OptionalProperty -Object $image -Name "source_site"
+    $author = Get-OptionalProperty -Object $image -Name "author"
     $assetName = Get-AssetFileName -Image $image -Index ($i + 1)
     $localPath = if ($image.local_path) { [string]$image.local_path } else { "" }
     $imageSrc = $image.image_uri
@@ -143,8 +159,9 @@ for ($i = 0; $i -lt $images.Count; $i++) {
         copied_path = $copiedPath
         exists = $exists
         caption = [string]$image.caption
-        source_url = $image.source_url
-        author = $image.author
+        public_source_label = $publicSourceLabel
+        source_site = $sourceSite
+        author = $author
         risk_level = [string]$image.risk_level
         risk_notes = @($image.risk_notes)
     }) | Out-Null
@@ -160,19 +177,26 @@ $markdown = New-Object System.Text.StringBuilder
 
 foreach ($item in $renderItems) {
     $image = $item.image
+    $publicSourceLabel = Get-OptionalProperty -Object $image -Name "public_source_label"
+    $sourceSite = Get-OptionalProperty -Object $image -Name "source_site"
+    $author = Get-OptionalProperty -Object $image -Name "author"
     [void]$markdown.AppendLine("![$($image.caption)]($($item.markdown_image_src))")
     [void]$markdown.AppendLine()
     [void]$markdown.AppendLine($image.caption)
-    if ($image.author -or $image.source_url) {
-        $sourceParts = @()
-        if ($image.author) {
-            $sourceParts += "Author: $($image.author)"
-        }
-        if ($image.source_url) {
-            $sourceParts += "Source: $($image.source_url)"
+    if ($publicSourceLabel -or $author -or $sourceSite) {
+        $sourceLine = [string]$publicSourceLabel
+        if ([string]::IsNullOrWhiteSpace($sourceLine)) {
+            $sourceParts = @()
+            if ($sourceSite) {
+                $sourceParts += "Source: $sourceSite"
+            }
+            if ($author) {
+                $sourceParts += "Author: $author"
+            }
+            $sourceLine = $sourceParts -join " | "
         }
         [void]$markdown.AppendLine()
-        [void]$markdown.AppendLine(($sourceParts -join " | "))
+        [void]$markdown.AppendLine($sourceLine)
     }
     [void]$markdown.AppendLine()
 }
@@ -187,15 +211,29 @@ $bodySections = New-Object System.Text.StringBuilder
 
 foreach ($item in $renderItems) {
     $image = $item.image
+    $publicSourceLabel = Get-OptionalProperty -Object $image -Name "public_source_label"
+    $sourceSite = Get-OptionalProperty -Object $image -Name "source_site"
+    $author = Get-OptionalProperty -Object $image -Name "author"
     $riskClass = if ($image.risk_level -eq "ok") { "risk-ok" } else { "risk-review" }
     $riskText = Escape-Html $image.risk_level
     if (@($image.risk_notes).Count -gt 0) {
         $riskText = "$riskText - $(Escape-Html (@($image.risk_notes) -join '; '))"
     }
+    $sourceLine = [string]$publicSourceLabel
+    if ([string]::IsNullOrWhiteSpace($sourceLine)) {
+        $sourceParts = @()
+        if ($sourceSite) {
+            $sourceParts += "Source: $sourceSite"
+        }
+        if ($author) {
+            $sourceParts += "Author: $author"
+        }
+        $sourceLine = $sourceParts -join " | "
+    }
     [void]$bodySections.AppendLine("<section class='image-block'>")
     [void]$bodySections.AppendLine("  <img src='$(Escape-Attribute $item.image_src)' alt='$(Escape-Attribute $image.caption)' />")
     [void]$bodySections.AppendLine("  <p class='caption'>$(Escape-Html $image.caption)</p>")
-    [void]$bodySections.AppendLine("  <p class='source'>Author: $(Escape-Html $image.author) | Source: $(Escape-Html $image.source_url)</p>")
+    [void]$bodySections.AppendLine("  <p class='source'>$(Escape-Html $sourceLine)</p>")
     [void]$bodySections.AppendLine("  <p class='risk $riskClass'>Risk: $riskText</p>")
     [void]$bodySections.AppendLine("</section>")
 }

@@ -2,10 +2,10 @@ param(
     [datetime]$Date = (Get-Date),
     [string]$BasePath = "hide/date",
     [string]$TargetPath = "",
-    [int]$MinImages = 6,
-    [int]$MaxImages = 10,
+    [int]$MinImages = 12,
+    [int]$MaxImages = 12,
     [int]$PageSize = 40,
-    [int]$MaxFallbackDays = 7,
+    [int]$MaxFallbackDays = 14,
     [string]$OutputRoot = "ignore\wechat-daily-codex",
     [string]$CodexCommand = "codex",
     [string]$Model = "",
@@ -134,8 +134,9 @@ $schemaObject = [ordered]@{
                     "plugin_id",
                     "local_path",
                     "metadata_summary",
-                    "source_url",
+                    "source_site",
                     "author",
+                    "public_source_label",
                     "caption",
                     "selection_reason",
                     "risk_level",
@@ -149,8 +150,9 @@ $schemaObject = [ordered]@{
                     plugin_id = [ordered]@{ type = @("string", "null") }
                     local_path = [ordered]@{ type = @("string", "null") }
                     metadata_summary = [ordered]@{ type = "string" }
-                    source_url = [ordered]@{ type = @("string", "null") }
+                    source_site = [ordered]@{ type = @("string", "null") }
                     author = [ordered]@{ type = @("string", "null") }
+                    public_source_label = [ordered]@{ type = "string" }
                     caption = [ordered]@{ type = "string" }
                     selection_reason = [ordered]@{ type = "string" }
                     risk_level = [ordered]@{
@@ -177,7 +179,9 @@ $schemaObject = [ordered]@{
 Write-JsonFile -Value $schemaObject -Path $schemaPath
 
 $prompt = @"
-You are the daily editor for a WeChat Official Account that shares curated visual-asset/image posts from a local Kabegame gallery.
+You are the author of a WeChat Official Account that shares a daily small gallery of curated images from a local Kabegame collection.
+
+Write as the account author speaking to real WeChat readers. The article should feel like a publishable post, not an internal selection report, not an automation log, and not a technical analysis.
 
 Use the configured Kabegame MCP server. Read only. Do not run shell commands, do not edit files, do not call WeChat APIs, and do not publish anything.
 
@@ -186,7 +190,8 @@ Your output must be valid JSON matching the provided schema. Do not wrap it in M
 Run settings:
 - run_date: $runDate
 - target_path: $TargetPath
-- minimum useful images: $MinImages
+- target selected image count: $MaxImages
+- minimum useful images before returning ok: $MinImages
 - maximum selected images: $MaxImages
 - page size for MCP image reads: $PageSize
 - maximum fallback date folders to scan: $MaxFallbackDays
@@ -199,29 +204,40 @@ Kabegame MCP provider rules:
 - To inspect folders only, use:
   provider://<path>/?without=images
 - Directory names are date segments such as 2026y, 05m, 09d. Sort them numerically, not lexicographically by the whole string.
-- For selected images, read image://{id}/metadata to summarize source/author/tags when available.
+- For selected images, read image://{id}/metadata to summarize source site, author, and tags when available.
 - Do not request provider://plugin/*.
 
 Workflow:
 1. First read:
    provider://$TargetPath/desc/x${PageSize}x/1/?without=children
-2. If this path has fewer than $MinImages usable images, discover the latest available date folders yourself:
+2. Treat the target date as a starting point, not a hard boundary. If today/the target path has no images or fewer than $MinImages usable images, discover previous date folders and use the newest available images:
    - read provider://$BasePath/?without=images for years
    - read provider://$BasePath/{year}/?without=images for months
    - read provider://$BasePath/{year}/{month}/?without=images for days
-   - scan newest days first with provider://$BasePath/{year}/{month}/{day}/desc/x${PageSize}x/1/?without=children
+   - build a date-folder list sorted newest to oldest by actual date
+   - prefer dates on or before run_date ($runDate); if there are no such folders, use the latest folders available
+   - scan newest usable days first with provider://$BasePath/{year}/{month}/{day}/desc/x${PageSize}x/1/?without=children
    - stop once you have enough good candidates or after $MaxFallbackDays day folders
+   - the article may be based on the most recent available date(s), even when run_date itself has no images
 3. Prefer images that are local, exist locally, are type=image, have reasonable dimensions, and have usable source metadata.
 4. Exclude or mark as reject/review anything that appears unsafe for a public WeChat post, has missing or suspicious source data, appears NSFW, or looks like it may involve minors.
-5. Do not invent author names, source URLs, titles, or licensing. Use null when unknown.
-6. Produce a concise Chinese article plan:
+5. Do not invent author names, source sites, titles, or licensing. Use null when unknown.
+6. Source display rule for public text:
+   - Do not include external URLs in title, digest, opening, captions, closing, public_source_label, or article_markdown.
+   - Do not write "原帖", "链接", or full domains such as pixiv.net in public-facing text.
+   - For Pixiv images, show only the author, for example: 作者：rsln
+   - For non-Pixiv images, show the source site and author when available, for example: 源站：Konachan；作者：marutenmaruten
+   - If a non-Pixiv author is unknown but the metadata has a post/page id, show source site plus id, for example: 源站：2DWallpapers；页面 ID：49696
+   - Put this exact public-facing source line in public_source_label.
+7. Produce concise Chinese WeChat copy:
    - natural title, not clickbait
    - digest under 54 Chinese characters when possible
-   - opening paragraph
-   - one short caption per selected image
-   - closing paragraph
-   - article_markdown that can later be rendered into WeChat HTML
-7. Include every MCP URI you read in mcp_reads. Include every dated provider image path that contributed candidates in source_paths.
+   - opening paragraph written for readers
+   - one short reader-facing caption per selected image
+   - a soft closing paragraph
+   - article_markdown that can later be rendered into WeChat HTML, with images and public_source_label lines, but with no external URLs
+8. If status is "ok", selected_images must contain exactly $MaxImages images. If fewer than $MinImages acceptable images are available after fallback scanning, use status="insufficient_data" and explain the shortfall.
+9. Include every MCP URI you read in mcp_reads. Include every dated provider image path that contributed candidates in source_paths.
 
 If MCP access fails, output status="mcp_error" and put the error in error_message. If there are not enough acceptable images after fallback scanning, output status="insufficient_data", keep the usable selections, and explain the shortfall in fallback_reason.
 "@
@@ -280,6 +296,9 @@ try {
 $selectedCount = @($article.selected_images).Count
 if ($article.status -eq "ok" -and $selectedCount -lt $MinImages) {
     Write-Warning "Codex returned status=ok but selected only $selectedCount images; expected at least $MinImages."
+}
+if ($article.status -eq "ok" -and $selectedCount -ne $MaxImages) {
+    Write-Warning "Codex returned status=ok with $selectedCount images; target count is $MaxImages."
 }
 
 Write-Host "Codex article status: $($article.status)"
