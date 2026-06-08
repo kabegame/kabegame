@@ -53,8 +53,11 @@ export function buildImageUrlPlan(image: ImageInfo, prefer: ImagePrefer): ImageU
     return { thumbnailUrl: "", originalUrl: contentUrl };
   }
 
-  const originalUrl = toDesktopUrl(image.localPath);
-  const hasThumbnail = !!normalizeDesktopPath(image.thumbnailPath);
-  const thumbnailUrl = hasThumbnail ? toDesktopThumbnailUrl(image.thumbnailPath) : originalUrl;
-  return { thumbnailUrl, originalUrl };
+  // const originalUrl = toDesktopUrl(image.localPath);
+  // const hasThumbnail = !!normalizeDesktopPath(image.thumbnailPath);
+  // const thumbnailUrl = hasThumbnail ? toDesktopThumbnailUrl(image.thumbnailPath) : originalUrl;
+  return { 
+    thumbnailUrl: toDesktopThumbnailUrl(image.thumbnailPath), 
+    originalUrl: toDesktopUrl(image.localPath) 
+  };
 }

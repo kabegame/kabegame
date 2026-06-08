@@ -8,6 +8,8 @@ use kabegame_core::storage::image_events::{
 use kabegame_core::storage::{Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
+#[cfg(feature = "standard")]
+use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use kabegame_i18n::t;
 use serde_json::Value;
 

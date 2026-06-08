@@ -1,7 +1,7 @@
 (function () {
   const _tauri = window.__TAURI_INTERNALS__;
   const invoke = (cmd, args) => _tauri.invoke(cmd, args || {});
-
+  // 扩展api要维护 permissions/crawler.toml
   function createApi(ctx) {
     return {
       vars: Object.freeze(ctx.vars || {}),
@@ -131,12 +131,7 @@
   async function start() {
     if (window.__crawl_starting__) return;
     window.__crawl_starting__ = true;
-    let ctx;
-    try {
-      ctx = await invoke("crawl_get_context");
-    } catch (_) {
-      return;
-    }
+    let ctx = await invoke("crawl_get_context");
     if (!ctx || !ctx.crawlJs) return;
     if (!ctx.state) ctx.state = {};
     await invoke("crawl_page_ready");
@@ -152,7 +147,9 @@
   }
 
   delete window.__TAURI_INTERNALS__;
+  console.log('[kabegame] script runing...');
   start().catch((e) => {
     console.error("[crawler-bootstrap] failed:", e);
+    ctx.error(e?.toString() || "Script execution failed");
   });
 })();

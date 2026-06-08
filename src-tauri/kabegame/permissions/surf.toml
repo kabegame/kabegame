@@ -1,0 +1,6 @@
+[[permission]]
+identifier = "surf"
+description = "Surf allowed commands"
+command.allow = [
+    "surf_open_devtools",
+]

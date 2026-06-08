@@ -55,8 +55,9 @@ impl PlatformWatcher for PlatformImpl {
         let path_buf = path.to_path_buf();
         let out_tx = self.out_tx.clone();
         let thread_name = format!("kabegame-rdcw-{album_id}");
+        let album_id_for_loop = album_id.clone();
         let join = match thread::Builder::new().name(thread_name).spawn(move || {
-            read_directory_changes_loop(album_id, path_buf, stop_event, out_tx);
+            read_directory_changes_loop(album_id_for_loop, path_buf, stop_event, out_tx);
         }) {
             Ok(join) => join,
             Err(err) => {

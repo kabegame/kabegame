@@ -10,6 +10,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=KABEGAME_DATA");
     // rsmpeg/rusty_ffmpeg 经此环境变量定位 third/FFmpeg-build/install 的 libav* 库（由 scripts 注入）。
     println!("cargo:rerun-if-env-changed=FFMPEG_PKG_CONFIG_PATH");
+    // ffmpeg lib
+    println!("cargo:rerun-if-changed=../../third/FFmpeg-build/install/lib");
 
     println!(
         "cargo:rustc-check-cfg=cfg(kabegame_component, values(\"kabegame\", \"kabegame-cli\", \"unknown\"))"

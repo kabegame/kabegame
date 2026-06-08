@@ -81,8 +81,10 @@ fn is_local_filesystem(path: &Path) -> bool {
     use std::os::windows::ffi::OsStrExt;
     use std::path::{Component, PathBuf};
     use windows_sys::Win32::Storage::FileSystem::{
-        GetDriveTypeW, DRIVE_FIXED, DRIVE_REMOVABLE,
+        GetDriveTypeW,
     };
+    const DRIVE_REMOVABLE: u32 = 2;
+    const DRIVE_FIXED: u32 = 3;
     // 从路径取卷根（如 "C:\"）。无盘符前缀（UNC \\server\share 等）一律视为非本机。
     let mut root = PathBuf::new();
     let mut have_prefix = false;

@@ -183,8 +183,8 @@ pub(crate) fn metadata_content_hash_hex(bytes: &[u8]) -> String {
     s
 }
 
-/// 将 JSON 文本写入 `image_metadata`（按 plugin_id + version + content_hash 去重）并返回行 id。
-pub(crate) fn insert_or_get_image_metadata_id(
+/// 将 JSON 文本写入 `image_metadata` 并返回新插入的行 id。
+pub(crate) fn insert_image_metadata_id(
     conn: &rusqlite::Connection,
     data_json: &str,
     plugin_id: &str,
@@ -192,19 +192,15 @@ pub(crate) fn insert_or_get_image_metadata_id(
 ) -> Result<i64, String> {
     let hash = metadata_content_hash_hex(data_json.as_bytes());
     let version_i64 = i64::from(version);
+
     conn.execute(
-        "INSERT OR IGNORE INTO image_metadata (data, content_hash, plugin_id, version)
+        "INSERT INTO image_metadata (data, content_hash, plugin_id, version)
          VALUES (?1, ?2, ?3, ?4)",
         params![data_json, hash, plugin_id, version_i64],
     )
     .map_err(|e| format!("insert image_metadata: {}", e))?;
-    conn.query_row(
-        "SELECT id FROM image_metadata
-         WHERE plugin_id = ?1 AND version = ?2 AND content_hash = ?3",
-        params![plugin_id, version_i64, hash],
-        |r| r.get(0),
-    )
-    .map_err(|e| format!("select image_metadata id: {}", e))
+
+    Ok(conn.last_insert_rowid())
 }
 
 // v4.0 删除说明：以下内容已随 perform_complex_migrations 的移除一并删除。
@@ -258,7 +254,7 @@ impl Storage {
     }
 
     /// Rhai `create_image_metadata`：将 JSON 写入 `image_metadata` 并返回 id。
-    pub fn insert_or_get_image_metadata_row(
+    pub fn insert_image_metadata_row(
         &self,
         value: &Value,
         plugin_id: &str,
@@ -267,7 +263,7 @@ impl Storage {
         let s = serde_json::to_string(value)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        insert_or_get_image_metadata_id(&conn, &s, plugin_id, version)
+        insert_image_metadata_id(&conn, &s, plugin_id, version)
     }
 
     /// 读取某 metadata 行的原始 `data` 文本（用于文件夹同步重导入前「保存」内容）。
@@ -284,9 +280,9 @@ impl Storage {
 
     /// 按原始 JSON 文本写入/复用 metadata 行并返回 id（content_hash 去重）。
     /// 文件夹同步重导入用：删旧行后重写——若内容仍在则拿回原 id，若已被 GC 则得新 id。
-    pub fn insert_or_get_image_metadata_text(&self, data_json: &str) -> Result<i64, String> {
+    pub fn insert_image_metadata_text(&self, data_json: &str) -> Result<i64, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        insert_or_get_image_metadata_id(&conn, data_json, "", 0)
+        insert_image_metadata_id(&conn, data_json, "", 0)
     }
 
     /// 扫描某插件低于目标版本的 metadata 行，供迁移运行器逐行升级。

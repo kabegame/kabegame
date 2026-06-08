@@ -1,0 +1,20 @@
+[[permission]]
+identifier = "crawler"
+description = "Crawler window permissions"
+commands.allow = [
+    "crawl_get_context",
+    "crawl_page_ready",
+    # apis
+    "crawl_task_log",
+    "crawl_add_progress",
+    "crawl_download_image",
+    "crawl_to",
+    "crawl_back",
+    "crawl_update_page_state",
+    "crawl_update_state",
+    "crawl_exit",
+    "crawl_error",
+    "show_crawler_window",
+    "crawl_clear_site_data",
+    "crawl_run_script",
+]

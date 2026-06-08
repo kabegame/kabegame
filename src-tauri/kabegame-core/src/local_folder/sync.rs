@@ -227,7 +227,7 @@ impl SyncHook {
                         };
                         delete_images_with_events(&[existing.id.clone()], false)?;
                         let metadata_id = match metadata_text {
-                            Some(text) => Some(storage.insert_or_get_image_metadata_text(&text)?),
+                            Some(text) => Some(storage.insert_image_metadata_text(&text)?),
                             None => None,
                         };
                         let carry = CarryFromOld {

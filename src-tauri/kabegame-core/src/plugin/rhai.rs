@@ -237,7 +237,7 @@ fn parse_download_image_opts_from_map(
     } else if let Some(value) = metadata {
         Some(
             Storage::global()
-                .insert_or_get_image_metadata_row(&value, plugin_id, metadata_version)
+                .insert_image_metadata_row(&value, plugin_id, metadata_version)
                 .map_err(|e| e.to_string())?,
         )
     } else {
@@ -1464,133 +1464,6 @@ pub fn register_crawler_functions(
     // is_media_url(url) - 检查是否是图片或视频 URL
     engine.register_fn("is_media_url", crate::image_type::url_has_media_extension);
 
-    // 辅助函数：递归扫描目录
-    fn scan_directory_recursive(
-        dir: &std::path::Path,
-        extensions: &std::collections::HashSet<String>,
-        file_list: &mut rhai::Array,
-    ) -> Result<(), Box<rhai::EvalAltResult>> {
-        let entries =
-            std::fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))?;
-
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-            let path = entry.path();
-
-            if path.is_file() {
-                // 检查文件扩展名
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    let ext_with_dot = format!(".{}", ext.to_lowercase());
-                    if extensions.contains(&ext_with_dot) {
-                        // 返回文件的完整路径（使用 file:// 协议）
-                        let file_path_str = path.to_string_lossy().replace("\\", "/");
-                        let file_url = format!("file:///{}", file_path_str);
-                        file_list.push(Dynamic::from(file_url));
-                    }
-                }
-            } else if path.is_dir() {
-                // 递归处理子目录
-                scan_directory_recursive(&path, extensions, file_list)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    // list_local_files(folder_url, extensions, recursive) - 列出本地文件夹内的文件
-    // recursive 为可选参数，默认为 false（非递归）
-    engine.register_fn(
-        "list_local_files",
-        |folder_url: &str,
-         extensions: rhai::Array,
-         recursive: bool|
-         -> Result<rhai::Array, Box<rhai::EvalAltResult>> {
-            // 解析文件夹路径
-            let folder_path_str = if folder_url.starts_with("file:///") {
-                &folder_url[8..]
-            } else if folder_url.starts_with("file://") {
-                &folder_url[7..]
-            } else {
-                folder_url
-            };
-
-            // 检查路径是否为空
-            if folder_path_str.is_empty() {
-                return Err(format!("Empty folder path. Original URL: {}", folder_url).into());
-            }
-
-            // 处理 Windows 路径分隔符
-            // 先统一处理：将正斜杠替换为反斜杠（Windows 标准）
-            // 如果路径中已经有反斜杠，它们会保持不变
-            #[cfg(windows)]
-            let folder_path_str = folder_path_str.replace("/", "\\");
-            #[cfg(not(windows))]
-            let folder_path_str = folder_path_str;
-
-            let folder_path = std::path::PathBuf::from(&folder_path_str);
-
-            // 检查文件夹是否存在
-            if !folder_path.exists() {
-                return Err(format!(
-                    "Folder does not exist: {} (original URL: {}, parsed path: {})",
-                    folder_path.display(),
-                    folder_url,
-                    folder_path_str
-                )
-                .into());
-            }
-
-            if !folder_path.is_dir() {
-                return Err(format!("Path is not a directory: {}", folder_path.display()).into());
-            }
-
-            let mut file_list = rhai::Array::new();
-            let extensions_set: std::collections::HashSet<String> = extensions
-                .into_iter()
-                .map(|ext| {
-                    let ext_str = ext.to_string().to_lowercase();
-                    // 确保扩展名包含点号
-                    if ext_str.starts_with(".") {
-                        ext_str
-                    } else {
-                        format!(".{}", ext_str)
-                    }
-                })
-                .collect();
-
-            // 递归或非递归扫描
-            if recursive {
-                scan_directory_recursive(&folder_path, &extensions_set, &mut file_list)?;
-            } else {
-                // 非递归扫描：只读取当前文件夹
-                let entries = std::fs::read_dir(&folder_path)
-                    .map_err(|e| format!("Failed to read directory: {}", e))?;
-
-                for entry in entries {
-                    let entry =
-                        entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-                    let path = entry.path();
-
-                    // 只处理文件，不处理目录
-                    if path.is_file() {
-                        // 检查文件扩展名
-                        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                            let ext_with_dot = format!(".{}", ext.to_lowercase());
-                            if extensions_set.contains(&ext_with_dot) {
-                                // 返回文件的完整路径（使用 file:// 协议）
-                                let file_path_str = path.to_string_lossy().replace("\\", "/");
-                                let file_url = format!("file:///{}", file_path_str);
-                                file_list.push(Dynamic::from(file_url));
-                            }
-                        }
-                    }
-                }
-            }
-
-            Ok(file_list)
-        },
-    );
-
     // add_progress(percentage) - 增加任务运行进度（单位为%，累加）
     let dq_handle = Arc::clone(&download_queue);
     let task_id_holder = Arc::clone(&task_id);
@@ -1713,7 +1586,7 @@ pub fn register_crawler_functions(
                 rhai_map_to_json_value(&m).map_err(|e| format!("create_image_metadata: {e}"))?;
             let plugin_id = lock_or_inner(&plugin_id_holder).clone();
             Storage::global()
-                .insert_or_get_image_metadata_row(&val, &plugin_id, 0)
+                .insert_image_metadata_row(&val, &plugin_id, 0)
                 .map_err(|e| e.to_string().into())
         }
     });
@@ -1725,7 +1598,7 @@ pub fn register_crawler_functions(
             let version = parse_create_image_metadata_version(&opts)?;
             let plugin_id = lock_or_inner(&plugin_id_holder).clone();
             Storage::global()
-                .insert_or_get_image_metadata_row(&val, &plugin_id, version)
+                .insert_image_metadata_row(&val, &plugin_id, version)
                 .map_err(|e| e.to_string().into())
         }
     });

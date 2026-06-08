@@ -29,7 +29,7 @@
         <div v-if="progress.removed > 0 || progress.regenerated > 0" class="popover-progress-detail">
           {{ t("gallery.organizingDetail", { removed: progress.removed, regenerated: progress.regenerated }) }}
         </div>
-        <div class="popover-note">{{ t("gallery.organizeNoNewDownloadHint") }}</div>
+        <!-- <div class="popover-note">{{ t("gallery.organizeNoNewDownloadHint") }}</div> -->
 
         <div class="popover-subtitle">{{ t("gallery.organizeRunOptions") }}</div>
         <div class="popover-options">

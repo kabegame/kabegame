@@ -216,7 +216,9 @@ const hoverVideoPreviewActive = ref(false);
 const hoverOriginalActive = ref(false);
 const videoShouldPlay = computed(() => props.videoPlaying || hoverVideoPreviewActive.value);
 const HOVER_PREVIEW_DELAY_MS = 200;
+const HOVER_IMAGE_ORIGINAL_DELAY_MS = 500;
 let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+let hoverImageOriginalTimer: ReturnType<typeof setTimeout> | null = null;
 
 // 视频始终用缩略（压缩短视频），不在网格里加载原视频；
 // 图片在 hover 时把 prefer 临时升级为 original（替代旧的 forceDesktopLayers）。
@@ -238,6 +240,13 @@ const clearHoverPreviewTimer = () => {
   }
 };
 
+const clearHoverImageOriginalTimer = () => {
+  if (hoverImageOriginalTimer) {
+    clearTimeout(hoverImageOriginalTimer);
+    hoverImageOriginalTimer = null;
+  }
+}
+
 const stopHoverPreview = () => {
   clearHoverPreviewTimer();
   if (hoverVideoPreviewActive.value) {
@@ -250,18 +259,24 @@ const stopHoverPreview = () => {
 const handleMouseEnter = () => {
   if (isCompact.value) return;
   clearHoverPreviewTimer();
-  hoverPreviewTimer = setTimeout(() => {
-    hoverPreviewTimer = null;
-    if (isCompact.value) return;
-    if (isControllableVideo.value) {
-      hoverVideoPreviewActive.value = true;
-      emit("hoverVideoPreview", true);
-      return;
-    }
-    if (canHoverOriginalPreview.value) {
-      hoverOriginalActive.value = true;
-    }
-  }, HOVER_PREVIEW_DELAY_MS);
+  clearHoverImageOriginalTimer();
+  if (isVideo.value) {
+    hoverPreviewTimer = setTimeout(() => {
+      hoverPreviewTimer = null;
+      if (isControllableVideo.value) {
+        hoverVideoPreviewActive.value = true;
+        emit("hoverVideoPreview", true);
+        return;
+      }
+      
+    }, HOVER_PREVIEW_DELAY_MS);
+  } else {
+    hoverImageOriginalTimer = setTimeout(() => {
+      if (canHoverOriginalPreview.value) {
+        hoverOriginalActive.value = true;
+      }
+    }, HOVER_IMAGE_ORIGINAL_DELAY_MS);
+  }
 };
 
 const handleMouseLeave = () => {

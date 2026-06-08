@@ -112,6 +112,7 @@ import { IS_WEB, IS_ANDROID } from "../../env";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 import { Plugin } from "@kabegame/core/stores/plugins";
+import { ImagePrefer } from "@kabegame/core/composables/imageUrlPlan.ts";
 
 // core 版保留通用图片意图；favorite/addToAlbum 等 kabegame 专属入口仍在 wrapper 层扩展。
 export type ContextCommand =
@@ -274,7 +275,7 @@ const gridColumnsCount = computed(() => {
   return imageGridColumns.value > 0 ? imageGridColumns.value : 1;
 });
 // 非web且列数少（<3）时优先加载原图（缩略图打底，原图流式覆盖）；列数多则只用缩略图省带宽。
-const gridPrefer = computed<"original" | "thumbnail">(() =>
+const gridPrefer = computed<ImagePrefer>(() =>
   (gridColumnsCount.value < 3 && !IS_WEB) ? "original" : "thumbnail"
 );
 // 紧凑布局：栅格更紧凑，空白更少。整体间距为历史值的 1/3，让网格更紧凑。

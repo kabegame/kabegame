@@ -16,7 +16,8 @@
 #   Windows: 必须在 MSYS2 MinGW 64-bit 中安装：pacman -S mingw-w64-x86_64-x264 mingw-w64-x86_64-tools-git
 #             （tools-git 提供 gendef；生成 MSVC 导入库还需 PATH 上有 VS 的 lib.exe，即在 VS Developer 环境运行）
 #             （Git Bash 无 pacman，无法直接安装 x264，请改用 MSYS2 终端再执行本脚本）
-set -e
+#            1. 打开 x64 Native Tools Command Prompt for VS 
+#            2. 执行 D:\Programs\MSYS2\msys2_shell.cmd -mingw64 -use-full-path -defterm -no-start -here -c "cd /d/Codes/kabegame && ./scripts/build-ffmpeg.sh"
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -75,46 +76,55 @@ else
   _LINK_FLAGS=(--enable-static --disable-shared --enable-pic)
 fi
 
+CONFIG_FLAGS=(
+  "--disable-everything"
+  "--disable-programs"
+  "--enable-gpl"
+  "--enable-libx264"
+
+  "--enable-protocol=file"
+  "--enable-demuxer=mov"
+  "--enable-demuxer=matroska"
+  "--enable-demuxer=asf"
+  "--enable-decoder=h264"
+  "--enable-decoder=hevc"
+  "--enable-decoder=mpeg4"
+  "--enable-decoder=vp8"
+  "--enable-decoder=vp9"
+  "--enable-decoder=wmv1"
+  "--enable-decoder=wmv2"
+  "--enable-decoder=wmv3"
+  "--enable-decoder=vc1"
+  "--enable-decoder=msmpeg4v1"
+  "--enable-decoder=msmpeg4v2"
+  "--enable-decoder=msmpeg4v3"
+  "--enable-parser=h264"
+  "--enable-parser=hevc"
+  "--enable-parser=mpeg4video"
+  "--enable-parser=vp8"
+  "--enable-parser=vp9"
+  "--enable-parser=vc1"
+  "--enable-encoder=libx264"
+  "--enable-muxer=mov"
+  "--enable-muxer=mp4"
+  "--enable-filter=scale"
+  "--enable-filter=buffer"
+  "--enable-filter=buffersink"
+  "--enable-filter=format"
+  
+  "--enable-swscale"
+
+  # binding里引用了符号，但没有调用，所以去掉这玩意没影响
+  "--disable-avdevice"
+  "--disable-doc"
+  "--enable-small"
+  "--disable-runtime-cpudetect"
+)
+
+
 "$FFMPEG_SRC/configure" \
   --prefix="$INSTALL_DIR" \
-  --disable-everything \
-  --disable-programs \
-  --enable-gpl \
-  --enable-libx264 \
-  --enable-protocol=file \
-  --enable-demuxer=mov \
-  --enable-demuxer=matroska \
-  --enable-demuxer=asf \
-  --enable-decoder=h264 \
-  --enable-decoder=hevc \
-  --enable-decoder=mpeg4 \
-  --enable-decoder=vp8 \
-  --enable-decoder=vp9 \
-  --enable-decoder=wmv1 \
-  --enable-decoder=wmv2 \
-  --enable-decoder=wmv3 \
-  --enable-decoder=vc1 \
-  --enable-decoder=msmpeg4v1 \
-  --enable-decoder=msmpeg4v2 \
-  --enable-decoder=msmpeg4v3 \
-  --enable-parser=h264 \
-  --enable-parser=hevc \
-  --enable-parser=mpeg4video \
-  --enable-parser=vp8 \
-  --enable-parser=vp9 \
-  --enable-parser=vc1 \
-  --enable-encoder=libx264 \
-  --enable-muxer=mov \
-  --enable-muxer=mp4 \
-  --enable-filter=scale \
-  --enable-filter=buffer \
-  --enable-filter=buffersink \
-  --enable-filter=format \
-  --enable-swscale \
-  --enable-avdevice \
-  --disable-doc \
-  --enable-small \
-  --disable-runtime-cpudetect \
+  "${CONFIG_FLAGS[@]}" \
   --extra-cflags="-O2" \
   "${_LINK_FLAGS[@]}" \
   "${CONFIGURE_EXTRA[@]}" \

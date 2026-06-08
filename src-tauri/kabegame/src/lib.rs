@@ -317,7 +317,7 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     {
-        builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+        // builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
         // 爬虫窗口关闭时仅隐藏不销毁，便于设置中再次打开；遨游窗口关闭时清除会话状态并通知前端
         builder = builder.on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -344,6 +344,7 @@ pub fn run() {
             }
             Ok(())
         })
+        // 维护这些命令还要维护 permissions/main.toml
         .invoke_handler(tauri::generate_handler![
             // --- Albums ---
             get_albums,

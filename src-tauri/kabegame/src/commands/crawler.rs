@@ -405,7 +405,7 @@ pub async fn crawl_download_image(
         Some(_) => return Err("metadata_version must be >= 0".to_string()),
     };
     let metadata_id = if let Some(value) = metadata {
-        Some(Storage::global().insert_or_get_image_metadata_row(
+        Some(Storage::global().insert_image_metadata_row(
             &value,
             &ctx.plugin_id,
             metadata_version,

@@ -7,7 +7,7 @@
 
     <template v-else>
       <!-- 骨架覆盖层：delayed 防止快速解码时闪烁；GIF 以 <img> 渲染，不需要独立骨架 -->
-      <div v-if="showLoading && !isVideoRenderedAsImage" class="ic-loading ic-loading-overlay">
+      <div v-if="showLoading" class="ic-loading ic-loading-overlay">
         <el-skeleton :rows="0" animated>
           <template #template>
             <el-skeleton-item
@@ -19,12 +19,12 @@
       </div>
 
       <!-- 双图层：prefer=original 且缩略图与原图 URL 不同 -->
-      <template v-if="dualLayer">
+      <template v-if="!isVideo || isVideo && prefer === 'thumbnail' && IS_ANDROID">
         <img
-          v-if="!thumbFailed"
+          v-if="!IS_ANDROID && !thumbFailed"
           :key="`thumb:${plan.thumbnailUrl}`"
           :src="plan.thumbnailUrl"
-          loading="lazy"
+          loading="eager"
           decoding="async"
           class="ic-img thumbnail-layer"
           :alt="image.id"
@@ -34,7 +34,7 @@
           @dragstart.prevent
         />
         <img
-          v-if="!originalFailed"
+          v-if="!originalFailed && prefer === 'original'"
           :key="`orig:${plan.originalUrl}`"
           :src="plan.originalUrl"
           loading="lazy"
@@ -48,24 +48,9 @@
         />
       </template>
 
-      <!-- GIF 等以图片形态渲染的"视频" -->
-      <img
-        v-else-if="isVideoRenderedAsImage"
-        :key="`gif:${singleUrl}`"
-        :src="singleUrl"
-        loading="lazy"
-        decoding="async"
-        class="ic-img"
-        :alt="image.id"
-        draggable="false"
-        @load="onSingleLoad"
-        @error="onSingleError"
-        @dragstart.prevent
-      />
-
       <!-- 视频 -->
       <video
-        v-else-if="isVideo"
+        v-else
         :key="`video:${videoSrc}`"
         ref="videoEl"
         :src="videoSrc"
@@ -85,21 +70,6 @@
         @error="onVideoError"
         @dragstart.prevent
         @mousedown.prevent
-      />
-
-      <!-- 单图（prefer=thumbnail，或 prefer=original 但无独立缩略图） -->
-      <img
-        v-else
-        :key="`img:${singleUrl}`"
-        :src="singleUrl"
-        loading="lazy"
-        decoding="async"
-        class="ic-img"
-        :alt="image.id"
-        draggable="false"
-        @load="onSingleLoad"
-        @error="onSingleError"
-        @dragstart.prevent
       />
     </template>
   </div>
@@ -149,41 +119,6 @@ const plan = computed(() => buildImageUrlPlan(props.image, props.prefer));
 // ---- Media type ----
 const isVideo = computed(() => isVideoMediaType(props.image.type));
 
-function pathFromUrlLike(value: string | undefined): string {
-  const raw = (value || "").trim();
-  if (!raw) return "";
-  try {
-    const u = new URL(raw, window.location.origin);
-    const pathParam = u.searchParams.get("path");
-    if (pathParam) return pathParam;
-    return decodeURIComponent(u.pathname || raw);
-  } catch {
-    const noHash = raw.split("#", 1)[0] || "";
-    const noQuery = noHash.split("?", 1)[0] || noHash;
-    try { return decodeURIComponent(noQuery); } catch { return noQuery; }
-  }
-}
-
-function hasPathExtension(value: string | undefined, ext: string): boolean {
-  return pathFromUrlLike(value).trim().toLowerCase().endsWith(`.${ext.toLowerCase()}`);
-}
-
-const displayPreviewPath = computed(() =>
-  plan.value.thumbnailUrl || props.image.thumbnailPath || props.image.localPath
-);
-const isVideoRenderedAsImage = computed(
-  () => isVideo.value && hasPathExtension(displayPreviewPath.value, "gif")
-);
-
-// ---- Dual layer: prefer=original with distinct thumbnail & original ----
-const dualLayer = computed(() =>
-  !isVideo.value &&
-  props.prefer === "original" &&
-  !!plan.value.thumbnailUrl &&
-  !!plan.value.originalUrl &&
-  plan.value.thumbnailUrl !== plan.value.originalUrl
-);
-
 // ---- Single-image URL derivation ----
 const singlePrimaryUrl = computed(() =>
   props.prefer === "original"
@@ -197,16 +132,12 @@ const singleFallbackUrl = computed(() => {
 
 // ---- Mutable load state ----
 const useFallback    = ref(false);
-const singleLost     = ref(false);
 const thumbFailed    = ref(false);
 const originalFailed = ref(false);
 const videoFailed    = ref(false);
 
 const videoEl  = ref<HTMLVideoElement | null>(null);
 
-const singleUrl = computed(() =>
-  useFallback.value ? singleFallbackUrl.value : singlePrimaryUrl.value
-);
 const videoSrc = computed(() =>
   props.prefer === "original"
     ? (plan.value.originalUrl || plan.value.thumbnailUrl)
@@ -215,30 +146,22 @@ const videoSrc = computed(() =>
 
 // ---- Derived exposed state ----
 const isLost = computed(() =>
-  isVideo.value
-    ? videoFailed.value
-    : dualLayer.value
-      ? (thumbFailed.value && originalFailed.value)
-      : singleLost.value
+  // 安卓下只要图片丢失
+  IS_ANDROID ?
+    !isVideo.value && originalFailed.value || isVideo.value && (thumbFailed.value || originalFailed.value)
+    // 非安卓，视频不回退，图片回退
+    : isVideo.value && (thumbFailed.value || originalFailed.value) || !isVideo.value && thumbFailed.value && originalFailed.value 
 );
 
-const originalMissing = computed(() => {
-  if (IS_ANDROID || isVideo.value) return false;
-  if (dualLayer.value) return originalFailed.value;
-  if (props.prefer === "thumbnail" && props.image.localExists === false && !!plan.value.thumbnailUrl)
-    return true;
-  if (useFallback.value && props.prefer === "original") return true;
-  return false;
-});
+const originalMissing = computed(() => originalFailed.value);
 
 // ---- Reset on image identity change (NOT on prefer — preserves hover no-flash) ----
 // When ImageItem flips effectivePrefer thumbnail→original, the two URLs don't change, so this
 // watch doesn't fire, showLoading stays false, and the already-cached thumbnail layer is instant.
 watch(
-  () => [props.image.id, plan.value.thumbnailUrl, plan.value.originalUrl] as const,
+  () => props.image.id,
   () => {
     useFallback.value    = false;
-    singleLost.value     = false;
     thumbFailed.value    = false;
     originalFailed.value = false;
     videoFailed.value    = false;
@@ -249,7 +172,6 @@ watch(
            plan.value.thumbnailUrl || plan.value.originalUrl);
 
     if (!hasAnyUrl) {
-      singleLost.value = true;
       finishLoading();
       return;
     }
@@ -259,23 +181,6 @@ watch(
 );
 
 watch(isLost, (lost) => { if (lost) emit("error"); });
-
-// ---- Handlers: single image / GIF ----
-const onSingleLoad = (event: Event) => {
-  const img = event.target as HTMLImageElement;
-  if (img.complete && img.naturalHeight !== 0) {
-    finishLoading();
-    emit("ready");
-  }
-};
-const onSingleError = () => {
-  if (!useFallback.value && singleFallbackUrl.value) {
-    useFallback.value = true;
-  } else {
-    singleLost.value = true;
-    finishLoading();
-  }
-};
 
 // ---- Handlers: dual layer ----
 const onThumbLoad = () => {
@@ -310,10 +215,9 @@ const onVideoError = () => {
 // ---- Video playback control (unchanged) ----
 watchEffect(() => {
   const el = videoEl.value;
-  if (!el || !isVideo.value || isVideoRenderedAsImage.value || props.nativeVideoControls) return;
+  if (!el || !isVideo.value || (isVideo.value && IS_ANDROID) || props.nativeVideoControls) return;
   if (props.videoPlaying) {
     void el.play().catch(() => {
-      console.log("auto play blocked");
       emit("videoPlayFail");
     });
   } else {

@@ -1,0 +1,12 @@
+{
+  "identifier": "surf-capability",
+  "description": "Surf webview window",
+  "windows": ["surf"],
+  "webviews": ["surf"],
+  "remote": {
+    "urls": ["http://*.*"]
+  },
+  "permissions": [
+    "surf"
+  ]
+}
