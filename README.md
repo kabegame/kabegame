@@ -65,7 +65,7 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers�
 - 🎨 **Wallpaper setter (image/video)**: Collect, manage, and rotate anime wallpapers; auto-switch desktop wallpaper from albums (random or sequential)
 - 🖼️ **Image manager (image/video)**: Gallery browsing, album organization, virtual disk (drive letter on Windows, virtual folder on macOS/Linux), drag-and-drop import for local images/videos/folders/archives or kgpg plugins
 
-(Video support: mp4 and mov only as of v3.2.2)
+(Video support: mp4, mov, wmv, webm, mkv — standard build only; light build displays existing videos but does not support new video downloads/imports)
 
 ## Installation
 
@@ -75,6 +75,7 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers�
 |---------|----------|-------|
 | **Virtual disk** | ✅ | ❌ |
 | **CLI** | ✅ | ❌ |
+| **Video ingestion** | ✅ (download/import mp4/mov/wmv/webm/mkv) | ❌ (existing videos still play; no new ingestion) |
 | **Use case** | Daily use, CLI/virtual disk needed | Lightweight, basic features only |
 | **Size** | Larger | Smaller |
 | **Trade-off** | Full features, but OS-specific deps (see [Installation](#installation-1)) | Install and go, no virtual disk or CLI |
@@ -324,7 +325,7 @@ bun b -c kabegame-cli             # CLI
 bun check -c kabegame                # Vue + cargo
 bun check -c kabegame --skip cargo   # Vue only
 
-# Build FFmpeg sidecar (desktop video preview compression, compile on target)
+# Build FFmpeg libav* libraries (required for standard/CLI; not needed for light mode)
 bun run build:ffmpeg             # Needs libx264 (macOS: brew install x264, Ubuntu: libx264-dev)
 ```
 
@@ -446,7 +447,7 @@ Built on these open-source projects:
 - [**Scraper**](https://github.com/causal-agent/scraper) - HTML parsing
 - [**Rusqlite**](https://github.com/rusqlite/rusqlite) - SQLite
 - [**Image**](https://github.com/image-rs/image) - Image processing
-- [**FFmpeg**](https://ffmpeg.org/) - Video (sidecar for desktop preview compression)
+- [**FFmpeg**](https://ffmpeg.org/) / [**rsmpeg**](https://github.com/larksuite/rsmpeg) - Video ingestion (in-process via rsmpeg; standard/CLI only)
 - [**Prisma**](https://github.com/prisma/prisma) - DB schema docs
 
 ### Build

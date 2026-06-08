@@ -522,19 +522,6 @@ pub fn run() {
             set_wallpaper_disabled,
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             fix_wallpaper_zorder,
-            // --- Wallpaper Engine (Windows) ---
-            #[cfg(target_os = "windows")]
-            get_wallpaper_engine_dir,
-            #[cfg(target_os = "windows")]
-            set_wallpaper_engine_dir,
-            #[cfg(target_os = "windows")]
-            get_wallpaper_engine_myprojects_dir,
-            #[cfg(target_os = "windows")]
-            export_album_to_we_project,
-            #[cfg(target_os = "windows")]
-            export_images_to_we_project,
-            #[cfg(target_os = "windows")]
-            export_video_to_we_project,
             // --- Virtual Drive ---
             #[cfg(feature = "standard")]
             get_album_drive_enabled,

@@ -3,7 +3,7 @@
     <!-- 无内容 / 加载 / 丢失 -->
     <template v-if="!displayUrl">
       <div v-if="isLost" class="ic-lost">
-        <ImageNotFound :show-image="false" />
+        <ImageNotFound show-image />
       </div>
       <!-- 视频不叠 image 形骨架，避免中央出现图片占位 -->
       <!-- <div v-else-if="!isVideo" class="ic-loading ic-loading-overlay">
@@ -53,8 +53,8 @@
       <video v-else-if="isVideo" :key="`video:${videoSrc}`" ref="videoEl" :src="videoSrc" class="ic-img ic-video"
         draggable="false" :muted="videoMuted" :loop="videoLoop" :controls="nativeVideoControls" poster=""
         preload="auto" playsinline webkit-playsinline="true" disablepictureinpicture="true"
-        disableremoteplayback="" @loadeddata="onVideoReady" @error="onImageError" @dragstart.prevent
-        @mousedown.prevent />
+        disableremoteplayback="" @loadeddata="onVideoReady" @canplay="onVideoReady" @error="onImageError"
+        @dragstart.prevent @mousedown.prevent />
 
       <!-- 单图 -->
       <img v-else :key="`img:${displayUrl}`" :src="displayUrl" loading="lazy" decoding="async" class="ic-img"
@@ -207,17 +207,21 @@ const onOriginalError = () => {
   handleOriginalError();
 };
 const onVideoReady = () => {
+  if (videoReady.value) return;
   videoReady.value = true;
   emit("ready");
 };
 
-// 切换媒体时重置视频骨架 / 原图失败状态
+// TODO: 两个补丁
+// videoReady 只跟 videoSrc 走——key 与 videoSrc 绑定，videoSrc 不变则元素不重建，loadeddata 不会重发
+watch(
+  () => [props.image.id, videoSrc.value] as const,
+  () => { videoReady.value = false; }
+);
+// originalFailed 跟 displayUrl/originalUrl 走，与图片加载策略一致
 watch(
   () => [props.image.id, displayUrl.value, originalUrl.value] as const,
-  () => {
-    videoReady.value = false;
-    originalFailed.value = false;
-  }
+  () => { originalFailed.value = false; }
 );
 
 // 缩略图打底就绪即视为“有可见内容”

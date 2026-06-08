@@ -4,6 +4,8 @@ import { ref } from "vue";
 /** 与 OrganizeDialog 的 confirm 载荷 / 后端 start_organize 参数一致 */
 export interface OrganizeOptions {
   dedupe: boolean;
+  /** 去重保留策略：true 保留最新，false 保留最旧 */
+  dedupeKeepNew: boolean;
   removeMissing: boolean;
   removeUnrecognized: boolean;
   regenThumbnails: boolean;

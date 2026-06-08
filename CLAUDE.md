@@ -59,7 +59,8 @@ bun check -c kabegame --skip cargo   # Vue types only
 ### Other
 ```bash
 bun run set-version              # Bump version across workspace
-bun run build:ffmpeg             # Build FFmpeg sidecar (requires libx264)
+bun run build:ffmpeg             # Build FFmpeg libav* libs (static on macOS/Linux, DLLs on Windows)
+                                 # Required before standard/CLI cargo build; NOT needed for light mode
 ```
 
 ### Verification workflow
@@ -79,8 +80,8 @@ bun run build:ffmpeg             # Build FFmpeg sidecar (requires libx264)
 ### Build Modes
 | Mode | Features |
 |------|----------|
-| Standard (default) | Virtual disk, CLI, store plugins |
-| Light (`--mode light`) | Store only, no virtual disk/CLI |
+| Standard (default) | Virtual disk, CLI, store plugins, **video ingestion** (rsmpeg/FFmpeg) |
+| Light (`--mode light`) | Store only, no virtual disk/CLI, **no video ingestion** (no FFmpeg compile) |
 | Local (`--mode local`, dev) | All plugins bundled locally |
 
 ### Key Architecture Rules
@@ -88,6 +89,13 @@ bun run build:ffmpeg             # Build FFmpeg sidecar (requires libx264)
 
 **Single source of truth for file types:**
 - Image extensions/MIME: use `kabegame_core::image_type::*` (e.g. `is_image_by_path`, `supported_image_extensions`). Never hardcode `["jpg","png",...]` in Rust. Frontend uses the `get_supported_image_types` Tauri command.
+- `supported_video_extensions()` returns an empty list in light mode (`video-ingest` feature absent). Frontend `isVideoMediaType` (checks `type.startsWith("video/")`) still works for gallery display of existing records.
+
+**Video ingestion is Cargo-feature-gated (`video-ingest`):**
+- Standard and CLI enable `kabegame-core/video-ingest`; light mode does not.
+- All rsmpeg usage (`video_compress.rs`, `media_dimensions.rs`) is gated `#[cfg(feature = "video-ingest")]` or `#[cfg(any(target_os="android", feature="video-ingest"))]`.
+- Call sites in `downloader/mod.rs` and `local_folder/import.rs` must also carry `#[cfg(feature = "video-ingest")]` guards — never call `compress_video_for_preview` or `resolve_video_dimensions_sync` without them.
+- Gallery playback of stored videos is always supported (uses the HTML `<video>` element, no FFmpeg needed).
 
 **Android modals** — Every overlay (dialog, drawer, ActionSheet, preview) must call `useModalBack(visibleRef)` from `@kabegame/core/composables/useModalBack` so the Android back button closes layers in stack order. The composable is a no-op on desktop; use it everywhere regardless of platform.
 

@@ -12,7 +12,6 @@ import SettingSliderControl from "@kabegame/core/components/settings/controls/Se
 
 import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
 import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
-import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngineDirSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
@@ -301,13 +300,6 @@ export function useQuickSettingsGroups() {
           description: t("settings.wallpaperModeDesc"),
           comp: WallpaperModeSetting,
           pages: ["gallery", "albumdetail", "albums"],
-        } as QuickSettingItem<QuickSettingsPageId>] : []),
-        ...(IS_WINDOWS ? [{
-          key: "wallpaperEngineDir",
-          label: t("settings.wallpaperEngineDir"),
-          description: t("settings.wallpaperEngineDirDesc"),
-          comp: WallpaperEngineDirSetting,
-          pages: [],
         } as QuickSettingItem<QuickSettingsPageId>] : []),
       ],
     }]),

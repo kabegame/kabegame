@@ -788,6 +788,10 @@ impl Storage {
             }
         }
 
+        // 收集所有需要删除的原始文件路径，事后批量扔回收站。
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let mut local_paths_to_trash: Vec<String> = Vec::new();
+
         for id in image_ids {
             let image_paths: Option<(String, String, Option<i64>)> = tx
                 .query_row(
@@ -803,21 +807,28 @@ impl Storage {
                     metadata_ids.push(metadata_id);
                 }
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
-                // 原始文件移入系统回收站（桌面，带软链接/异构盘护栏，绝不永久删除）；
-                // 失败或路径不安全时保留磁盘文件，数据库记录仍会删除。
                 // Android 的 content:// 删除走内容提供方，这里不处理。
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                {
-                    crate::storage::safe_delete::trash_source_file(std::path::Path::new(
-                        &local_path,
-                    ));
-                }
+                local_paths_to_trash.push(local_path);
             }
 
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])
                 .map_err(|e| format!("Failed to delete image: {}", e))?;
 
             let _ = tx.execute("DELETE FROM album_images WHERE image_id = ?1", params![id]);
+        }
+
+        // 原始文件一次性批量移入系统回收站（带软链接/异构盘护栏，绝不永久删除）；
+        // 失败或路径不安全时保留磁盘文件，数据库记录已删除。
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let paths: Vec<std::path::PathBuf> = local_paths_to_trash
+                .iter()
+                .map(|s| std::path::PathBuf::from(s))
+                .collect();
+            let path_refs: Vec<&std::path::Path> =
+                paths.iter().map(|p| p.as_path()).collect();
+            crate::storage::safe_delete::trash_source_files_batch(&path_refs);
         }
 
         // 更新所有相关任务的 deleted_count 与 success_count

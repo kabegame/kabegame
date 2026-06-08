@@ -94,8 +94,6 @@
   "wallpaperDisabled": "關閉壁紙",
   "wallpaperDisabledDesc": "整體停用壁紙功能：拒絕壁紙相關操作、隱藏壁紙視窗、啟動時不還原壁紙",
   "wallpaperDisabledNativeWarning": "原生模式下系統壁紙將保持目前畫面，關閉壁紙不會自動還原原本的壁紙",
-  "wallpaperEngineDir": "Wallpaper Engine 目錄",
-  "wallpaperEngineDirDesc": "用於「匯出並自動匯入到 WE」",
   "appBackgroundEnabled": "應用內背景",
   "appBackgroundEnabledDesc": "將目前壁紙作為半透明的應用背景顯示",
   "appBackgroundOpacity": "背景透明度",

@@ -8,6 +8,8 @@ use std::sync::Arc;
 #[serde(rename_all = "camelCase")]
 pub struct StartOrganizeArgs {
     pub dedupe: bool,
+    #[serde(default)]
+    pub dedupe_keep_new: bool,
     pub remove_missing: bool,
     pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
@@ -28,6 +30,7 @@ pub async fn start_organize(args: StartOrganizeArgs) -> Result<Value, String> {
             Arc::new(Storage::global().clone()),
             OrganizeOptions {
                 dedupe: args.dedupe,
+                dedupe_keep_new: args.dedupe_keep_new,
                 remove_missing: args.remove_missing,
                 remove_unrecognized: args.remove_unrecognized,
                 regen_thumbnails: args.regen_thumbnails,

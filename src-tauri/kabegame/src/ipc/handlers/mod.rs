@@ -84,6 +84,7 @@ pub async fn dispatch_request(
     }
     if let IpcRequest::OrganizeStart {
         dedupe,
+        dedupe_keep_new,
         remove_missing,
         regen_thumbnails,
         remove_unrecognized,
@@ -94,6 +95,7 @@ pub async fn dispatch_request(
     {
         return handle_organize_start(
             dedupe,
+            dedupe_keep_new,
             remove_missing,
             regen_thumbnails,
             remove_unrecognized,
@@ -224,6 +226,7 @@ async fn handle_get_active_downloads() -> IpcResponse {
 
 async fn handle_organize_start(
     dedupe: bool,
+    dedupe_keep_new: bool,
     remove_missing: bool,
     regen_thumbnails: bool,
     remove_unrecognized: bool,
@@ -242,6 +245,7 @@ async fn handle_organize_start(
             Arc::new(Storage::global().clone()),
             OrganizeOptions {
                 dedupe,
+                dedupe_keep_new,
                 remove_missing,
                 remove_unrecognized,
                 regen_thumbnails,

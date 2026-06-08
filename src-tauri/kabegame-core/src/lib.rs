@@ -22,9 +22,6 @@ pub mod shell_open;
 pub mod storage;
 pub mod workarounds;
 
-// 只有 Windows 平台需要导出 wallpaper_engine_export 模块
-#[cfg(target_os = "windows")]
-pub mod wallpaper_engine_export;
 
 /// 虚拟盘。
 ///

@@ -16,7 +16,7 @@ import {
 } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { IS_WINDOWS, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { i18n } from "@kabegame/i18n";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
@@ -152,8 +152,8 @@ export function createImageActions(
       command: "more",
       visible: (ctx) => {
         if (hideSet.has("more")) return false;
-        // Show on Windows (single-select) or Android (single-select)
-        return (IS_WINDOWS || uiStore.isCompact) && (!ctx.selectedCount || ctx.selectedCount === 1);
+        // Show on Android (single-select)
+        return uiStore.isCompact && (!ctx.selectedCount || ctx.selectedCount === 1);
       },
       children: uiStore.isCompact
         ? [
@@ -208,16 +208,6 @@ export function createImageActions(
               command: "deleteFile",
               dividerBefore: () => hideSet.has("remove"),
               visible: () => showDelete && !hideSet.has("deleteFile"),
-            },
-          ]
-        : IS_WINDOWS
-        ? [
-            {
-              key: "exportToWEAuto",
-              label: t("contextMenu.exportToWE"),
-              icon: Download,
-              command: "exportToWEAuto",
-              visible: () => !hideSet.has("exportToWEAuto"),
             },
           ]
         : [],

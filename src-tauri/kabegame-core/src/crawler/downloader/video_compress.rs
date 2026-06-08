@@ -50,6 +50,9 @@ fn get_android_video_compress_provider() -> Option<Arc<dyn AndroidVideoCompressP
 }
 
 /// 将视频转换为用于列表/预览的小 mp4。
+/// 仅在 Android（走 Kotlin provider）或启用 video feature（standard 模式）时可用。
+/// light 模式不链接 rsmpeg，此函数不存在，调用方须用 #[cfg(feature = "video")] 门控。
+#[cfg(any(target_os = "android", feature = "video"))]
 pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompressResult, String> {
     let thumbnails_dir = crate::app_paths::AppPaths::global().thumbnails_dir();
     tokio::fs::create_dir_all(&thumbnails_dir)
@@ -125,7 +128,7 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
 
 /// 进程内 FFmpeg（rsmpeg/libav*）转码：解码首个视频流 → scale 缩放 → libx264 编码（无音轨，截取前 2.5s）→ 输出 mp4。
 /// 返回输出视频的宽高（缩放后）。替代旧的 ffmpeg sidecar 进程调用。
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), feature = "video"))]
 fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u32), String> {
     use rsmpeg::avcodec::{AVCodec, AVCodecContext};
     use rsmpeg::avfilter::{AVFilter, AVFilterGraph, AVFilterInOut};
@@ -298,7 +301,7 @@ fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u
 }
 
 /// 编码一帧并交错写入输出（frame=None 表示冲洗编码器）。
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), feature = "video"))]
 fn encode_write(
     enc_ctx: &mut rsmpeg::avcodec::AVCodecContext,
     ofmt_ctx: &mut rsmpeg::avformat::AVFormatContextOutput,
@@ -333,7 +336,7 @@ fn encode_write(
 }
 
 /// 将一帧送入滤镜图，取出滤镜输出帧并编码写出（frame=None 表示冲洗滤镜）。
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), feature = "video"))]
 #[allow(clippy::too_many_arguments)]
 fn filter_encode_write(
     buffersrc_ctx: &mut rsmpeg::avfilter::AVFilterContextMut,

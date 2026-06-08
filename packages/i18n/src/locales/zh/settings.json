@@ -94,8 +94,6 @@
   "wallpaperDisabled": "关闭壁纸",
   "wallpaperDisabledDesc": "整体禁用壁纸功能：拒绝壁纸相关操作、隐藏壁纸窗口、启动时不恢复壁纸",
   "wallpaperDisabledNativeWarning": "原生模式下系统壁纸将保持当前画面，关闭壁纸不会自动还原原来的壁纸",
-  "wallpaperEngineDir": "Wallpaper Engine 目录",
-  "wallpaperEngineDirDesc": "用于“导出并自动导入到 WE”",
   "appBackgroundEnabled": "应用内背景",
   "appBackgroundEnabledDesc": "把当前壁纸作为半透明的应用背景显示",
   "appBackgroundOpacity": "背景透明度",

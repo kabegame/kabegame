@@ -6,13 +6,12 @@ use crate::settings::Settings;
 use crate::storage::Storage;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
 };
-use tokio::sync::Notify;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -244,6 +243,45 @@ impl Storage {
         Ok(out)
     }
 
+    /// 对一批 hash，返回每个 hash 在整张表中的「胜者 id」（去重时唯一保留的那张）：
+    /// `keep_new == true` → `MAX(id)`（保留最新）；否则 `MIN(id)`（保留最旧）。
+    ///
+    /// 一条聚合查询完成整批比对，避免逐图查表。IN 占位符按 `hashes` 长度动态拼接
+    /// （整理批次 ≤100，占位符数量安全）；空 hash 不参与。
+    pub fn get_hash_winner_ids(
+        &self,
+        hashes: &[String],
+        keep_new: bool,
+    ) -> Result<HashMap<String, i64>, String> {
+        if hashes.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let placeholders = std::iter::repeat("?")
+            .take(hashes.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let agg = if keep_new { "MAX(id)" } else { "MIN(id)" };
+        let sql = format!(
+            "SELECT hash, {agg} FROM images WHERE hash != '' AND hash IN ({placeholders}) GROUP BY hash"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("Failed to prepare winner query: {}", e))?;
+        let params = rusqlite::params_from_iter(hashes.iter());
+        let rows = stmt
+            .query_map(params, |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| format!("Failed to query winner ids: {}", e))?;
+        let mut out = HashMap::new();
+        for r in rows {
+            let (hash, id) = r.map_err(|e| format!("winner row error: {}", e))?;
+            out.insert(hash, id);
+        }
+        Ok(out)
+    }
+
     /// 获取总图片数（用于进度计算）
     pub fn get_images_total_count(&self) -> Result<usize, String> {
         crate::providers::count_at("images://")
@@ -253,6 +291,8 @@ impl Storage {
 #[derive(Debug, Clone)]
 pub struct OrganizeOptions {
     pub dedupe: bool,
+    /// 去重保留策略：`true` 保留最新（最大 id），`false` 保留最旧（最小 id）
+    pub dedupe_keep_new: bool,
     pub remove_missing: bool,
     pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
@@ -276,6 +316,7 @@ pub struct OrganizeRunState {
     pub range_start: Option<usize>,
     pub range_end: Option<usize>,
     pub dedupe: bool,
+    pub dedupe_keep_new: bool,
     pub remove_missing: bool,
     pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
@@ -283,10 +324,6 @@ pub struct OrganizeRunState {
 }
 
 static GLOBAL_ORGANIZE: OnceLock<Arc<OrganizeService>> = OnceLock::new();
-
-// 整理期间阻塞下载的全局状态
-static ORGANIZE_BARRIER: OnceLock<Arc<Notify>> = OnceLock::new();
-static ORGANIZE_RUNNING: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
 #[derive(Default)]
 pub struct OrganizeService {
@@ -312,46 +349,6 @@ impl OrganizeService {
             .clone()
     }
 
-    // 初始化整理阻塞机制的全局状态
-    pub fn init_organize_barrier() {
-        ORGANIZE_BARRIER.get_or_init(|| Arc::new(Notify::new()));
-        ORGANIZE_RUNNING.get_or_init(|| Arc::new(AtomicBool::new(false)));
-    }
-
-    pub fn get_organize_barrier() -> Arc<Notify> {
-        ORGANIZE_BARRIER
-            .get_or_init(|| Arc::new(Notify::new()))
-            .clone()
-    }
-
-    pub fn get_organize_running() -> Arc<AtomicBool> {
-        ORGANIZE_RUNNING
-            .get_or_init(|| Arc::new(AtomicBool::new(false)))
-            .clone()
-    }
-
-    /// 整理（organize）进行中时异步等待其结束后再返回；否则立即返回。
-    ///
-    /// 用作导入 / 下载前的 gate：避免新图入库与整理（去重 / 删除缺失 / 重建缩略图）并发产生竞态。
-    /// 采用「先注册 notify 再检查 running」的顺序，避免错过整理结束时的 `notify_waiters`；
-    /// 循环重检以兼容伪唤醒与「等待期间又开始一轮整理」的情况。调用方在本函数返回后应自行重新
-    /// 校验目标是否仍可导入（文件是否仍存在、是否已被入库等）。
-    pub async fn wait_until_idle() {
-        Self::init_organize_barrier();
-        let running = Self::get_organize_running();
-        let barrier = Self::get_organize_barrier();
-        loop {
-            let notified = barrier.notified();
-            tokio::pin!(notified);
-            // 在检查 running 前先登记等待者，确保此后到来的 notify 不会丢失。
-            notified.as_mut().enable();
-            if !running.load(Ordering::Relaxed) {
-                return;
-            }
-            notified.await;
-        }
-    }
-
     fn init_run_state_from_start(
         &self,
         options: &OrganizeOptions,
@@ -367,6 +364,7 @@ impl OrganizeService {
             range_start,
             range_end,
             dedupe: options.dedupe,
+            dedupe_keep_new: options.dedupe_keep_new,
             remove_missing: options.remove_missing,
             remove_unrecognized: options.remove_unrecognized,
             regen_thumbnails: options.regen_thumbnails,
@@ -399,20 +397,13 @@ impl OrganizeService {
         }
     }
 
-    /// 与 `get_organize_running()` 一致：`running == false` 时返回默认空状态
+    /// `running == false` 时返回默认空状态（`run_state.running` 由 start/reset 维护）
     pub fn get_run_state(&self) -> OrganizeRunState {
-        let running = Self::get_organize_running().load(Ordering::Relaxed);
-        if !running {
-            return OrganizeRunState::default();
-        }
-        let mut s = self
-            .run_state
+        self.run_state
             .lock()
             .ok()
             .map(|m| (*m).clone())
-            .unwrap_or_default();
-        s.running = true;
-        s
+            .unwrap_or_default()
     }
 
     pub async fn start(
@@ -420,9 +411,6 @@ impl OrganizeService {
         storage: Arc<Storage>,
         options: OrganizeOptions,
     ) -> Result<(), String> {
-        // Ensure organize barrier state is ready no matter which call path starts organize.
-        Self::init_organize_barrier();
-
         let mut guard = self
             .cancel_flag
             .lock()
@@ -434,9 +422,6 @@ impl OrganizeService {
         let cancel = Arc::new(AtomicBool::new(false));
         *guard = Some(cancel.clone());
         drop(guard);
-
-        // 设置整理阻塞状态
-        Self::get_organize_running().store(true, Ordering::Relaxed);
 
         let library_total = storage.get_images_total_count()?;
         self.init_run_state_from_start(&options, library_total)?;
@@ -451,11 +436,9 @@ impl OrganizeService {
                 eprintln!("[organize] 任务失败: {}", e);
             }
 
-            // 清理运行状态和唤醒等待的下载任务
+            // 清理运行状态
             svc.clear_running();
             svc.reset_run_state();
-            Self::get_organize_running().store(false, Ordering::Relaxed);
-            Self::get_organize_barrier().notify_waiters();
         });
 
         Ok(())
@@ -588,12 +571,14 @@ fn run_organize(
 ) -> Result<(), String> {
     let total = storage.get_images_total_count()?; // 总图片数
 
-    let mut seen_hashes: HashSet<String> = HashSet::new();
     let mut row_index: usize = 0;
     let mut removed_total: usize = 0;
     let mut regenerated_total: usize = 0;
     // id 游标：上一批处理到的最大 id。用游标分页而非 OFFSET，避免边扫边删导致漏扫。
     let mut last_id: i64 = 0;
+
+    // 缩略图重生成重（解码 + 写文件），保持小批；其余只读判断 + 删除，用大批减少往返。
+    let batch_size = if options.regen_thumbnails { 10 } else { 100 };
 
     // 当前壁纸 id：若被移除则清空（与历史行为保持一致）
     let mut current_wallpaper_id = Settings::global().get_current_wallpaper_image_id();
@@ -604,10 +589,25 @@ fn run_organize(
             return Ok(());
         }
 
-        let batch = storage.get_organize_batch_after(last_id, 10)?;
+        let batch = storage.get_organize_batch_after(last_id, batch_size)?;
         if batch.is_empty() {
             break;
         }
+
+        // 去重：每批一条聚合查询拿到每个 hash 在整张表的「胜者 id」。
+        // 胜者（保新=MAX / 保旧=MIN）永不被删，故跨批次稳定；批内同 hash 也只留胜者。
+        let winner_ids: HashMap<String, i64> = if options.dedupe {
+            let mut hashes: Vec<String> = batch
+                .iter()
+                .filter(|r| !r.hash.is_empty())
+                .map(|r| r.hash.clone())
+                .collect();
+            hashes.sort();
+            hashes.dedup();
+            storage.get_hash_winner_ids(&hashes, options.dedupe_keep_new)?
+        } else {
+            HashMap::new()
+        };
 
         let mut remove_ids: Vec<String> = Vec::new();
         let mut refresh_list: Vec<ThumbnailRefreshAction> = Vec::new();
@@ -632,13 +632,13 @@ fn run_organize(
                 continue;
             }
 
-            // 1. 去重判断
+            // 1. 去重判断：非胜者 id 即重复项，移除。
             if options.dedupe && !row.hash.is_empty() {
-                if seen_hashes.contains(&row.hash) {
-                    remove_ids.push(row.id.to_string());
-                    should_remove.insert(row.id);
-                } else {
-                    seen_hashes.insert(row.hash.clone());
+                if let Some(&winner) = winner_ids.get(&row.hash) {
+                    if row.id != winner {
+                        remove_ids.push(row.id.to_string());
+                        should_remove.insert(row.id);
+                    }
                 }
             }
 
@@ -689,13 +689,14 @@ fn run_organize(
             // Android 的 content:// 删除不在此处。
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if options.delete_source_files {
-                for r in batch.iter().filter(|r| should_remove.contains(&r.id)) {
-                    let p = r.local_path.trim();
-                    if p.is_empty() {
-                        continue;
-                    }
-                    crate::storage::safe_delete::trash_source_file(std::path::Path::new(p));
-                }
+                let paths: Vec<&Path> = batch
+                    .iter()
+                    .filter(|r| should_remove.contains(&r.id))
+                    .map(|r| r.local_path.trim())
+                    .filter(|p| !p.is_empty())
+                    .map(Path::new)
+                    .collect();
+                crate::storage::safe_delete::trash_source_files_batch(&paths);
             }
         }
 

@@ -153,14 +153,22 @@ pub fn supported_image_extensions() -> Vec<String> {
 }
 
 /// 返回支持的视频扩展名列表（内置，去重）。
+/// light 模式（无 video feature）返回空列表，使前端不把视频视为可导入类型。
 pub fn supported_video_extensions() -> Vec<String> {
-    let mut out: Vec<String> = BUILTIN_VIDEO_EXTENSIONS
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    out.sort();
-    out.dedup();
-    out
+    #[cfg(feature = "video")]
+    {
+        let mut out: Vec<String> = BUILTIN_VIDEO_EXTENSIONS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+    #[cfg(not(feature = "video"))]
+    {
+        vec![]
+    }
 }
 
 /// 返回支持的媒体扩展名（图片 + 视频）。

@@ -13,6 +13,10 @@
                     <div class="option-content">
                         <div class="option-title">{{ $t('gallery.dedupe') }}</div>
                         <div class="option-desc">{{ $t('gallery.dedupeDesc') }}</div>
+                        <el-radio-group v-if="options.dedupe" v-model="options.dedupeKeepNew" class="option-sub-block" size="small">
+                            <el-radio-button :value="true">{{ $t('gallery.dedupeKeepNew') }}</el-radio-button>
+                            <el-radio-button :value="false">{{ $t('gallery.dedupeKeepOld') }}</el-radio-button>
+                        </el-radio-group>
                     </div>
                 </div>
                 <div class="option-item">
@@ -73,6 +77,10 @@
                     <div class="option-content">
                         <div class="option-title">{{ $t('gallery.dedupe') }}</div>
                         <div class="option-desc">{{ $t('gallery.dedupeDescDesktop') }}</div>
+                        <el-radio-group v-if="options.dedupe" v-model="options.dedupeKeepNew" class="option-sub-block" size="small">
+                            <el-radio-button :value="true">{{ $t('gallery.dedupeKeepNew') }}</el-radio-button>
+                            <el-radio-button :value="false">{{ $t('gallery.dedupeKeepOld') }}</el-radio-button>
+                        </el-radio-group>
                     </div>
                 </div>
                 <div class="option-item">
@@ -140,6 +148,7 @@ interface Props {
 
 interface OrganizeOptions {
     dedupe: boolean;
+    dedupeKeepNew: boolean;
     removeMissing: boolean;
     removeUnrecognized: boolean;
     regenThumbnails: boolean;
@@ -165,6 +174,7 @@ const uiStore = useUiStore();
 
 const options = reactive({
     dedupe: true, // 默认开启去重
+    dedupeKeepNew: true, // 默认保留最新（最大 id）
     removeMissing: true, // 默认开启清除失效
     removeUnrecognized: false,
     regenThumbnails: true, // 默认开启补充缩略图
@@ -228,6 +238,7 @@ const handleConfirm = async () => {
     }
     const payload: OrganizeOptions = {
         dedupe: options.dedupe,
+        dedupeKeepNew: options.dedupeKeepNew,
         removeMissing: options.removeMissing,
         removeUnrecognized: options.removeUnrecognized,
         regenThumbnails: options.regenThumbnails,

@@ -101,9 +101,10 @@ tauri-build = {workspace = true, optional = true}
 [features]
 default = []
 
-# Standard desktop build: shared Tauri stack + virtual driver
+# Standard desktop build: shared Tauri stack + virtual driver + video ingestion
 standard = [
     "kabegame-core/virtual-driver",
+    "kabegame-core/video",
     "dep:tauri",
     "dep:tauri-plugin-clipboard-manager",
     "dep:tauri-plugin-dialog",

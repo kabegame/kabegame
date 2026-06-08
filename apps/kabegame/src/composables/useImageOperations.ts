@@ -404,75 +404,6 @@ export function useImageOperations(
     }
   };
 
-  // 导出到 Wallpaper Engine（图片轮播或单视频）
-  const exportToWallpaperEngine = async (image: ImageInfo) => {
-    try {
-      const defaultName = `Kabegame_${image.id}`;
-
-      const { value: projectName } = await ElMessageBox.prompt(
-        i18n.global.t("gallery.weProjectNamePrompt"),
-        i18n.global.t("gallery.exportToWE"),
-        {
-          confirmButtonText: i18n.global.t("gallery.export"),
-          cancelButtonText: i18n.global.t("common.cancel"),
-          inputPlaceholder: defaultName,
-          inputValidator: (value) => {
-            if (value && value.trim().length > 64) {
-              return i18n.global.t("gallery.weNameTooLong");
-            }
-            return true;
-          },
-        },
-      ).catch(() => ({ value: null }));
-
-      if (projectName === null) return;
-
-      const mp = await invoke<string | null>(
-        "get_wallpaper_engine_myprojects_dir",
-      );
-      if (!mp) {
-        ElMessage.warning(i18n.global.t("gallery.weDirNotConfigured"));
-        return;
-      }
-
-      const finalName = projectName?.trim() || defaultName;
-      const isVideo = isVideoMediaType(image.type);
-
-      const res = await invoke<{
-        projectDir: string;
-        imageCount: number;
-        videoCount?: number;
-      }>(
-        isVideo ? "export_video_to_we_project" : "export_images_to_we_project",
-        isVideo
-          ? {
-              videoPath: image.localPath,
-              title: finalName,
-              outputParentDir: mp,
-            }
-          : {
-              imagePaths: [image.localPath],
-              title: finalName,
-              outputParentDir: mp,
-              options: null,
-            },
-      );
-      const msg = res.videoCount
-        ? i18n.global.t("gallery.weExportVideoSuccess", { path: res.projectDir })
-        : i18n.global.t("gallery.weExportSuccess", {
-            count: res.imageCount,
-            path: res.projectDir,
-          });
-      ElMessage.success(msg);
-      await invoke("open_file_path", { filePath: res.projectDir });
-    } catch (error) {
-      if (error !== "cancel") {
-        console.error("导出 Wallpaper Engine 工程失败:", error);
-        ElMessage.error(i18n.global.t("common.exportFailed"));
-      }
-    }
-  };
-
   return {
     handleOpenImagePath,
     handleDownloadImage,
@@ -482,6 +413,5 @@ export function useImageOperations(
     handleBatchHideImages,
     toggleFavorite,
     setWallpaper,
-    exportToWallpaperEngine,
   };
 }

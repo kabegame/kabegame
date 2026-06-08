@@ -172,10 +172,6 @@
                   <WallpaperModeSetting />
                 </SettingRow>
 
-                <SettingRow v-if="IS_WINDOWS" :label="$t('settings.wallpaperEngineDir')"
-                  :description="$t('settings.wallpaperEngineDirDesc')">
-                  <WallpaperEngineDirSetting />
-                </SettingRow>
                 </div>
               </div>
             </div>
@@ -273,7 +269,6 @@ import WallpaperRotationTargetSetting from "@/components/settings/items/Wallpape
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
-import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngineDirSetting.vue";
 import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetting.vue";
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";

@@ -263,6 +263,8 @@ pub enum IpcRequest {
     /// 启动整理任务
     OrganizeStart {
         dedupe: bool,
+        #[serde(default)]
+        dedupe_keep_new: bool,
         remove_missing: bool,
         regen_thumbnails: bool,
         #[serde(default)]
@@ -367,7 +369,6 @@ pub enum IpcRequest {
     SettingsGetGalleryImageAspectRatio,
     SettingsGetAutoDeduplicate,
     SettingsGetDefaultDownloadDir,
-    SettingsGetWallpaperEngineDir,
     SettingsGetWallpaperRotationEnabled,
     SettingsGetWallpaperRotationAlbumId,
     SettingsGetWallpaperRotationIncludeSubalbums,
@@ -392,10 +393,6 @@ pub enum IpcRequest {
     SettingsSetGalleryImageAspectRatio {
         aspect_ratio: Option<String>,
     },
-    SettingsSetWallpaperEngineDir {
-        dir: Option<String>,
-    },
-    SettingsGetWallpaperEngineMyprojectsDir,
     SettingsSetWallpaperRotationEnabled {
         enabled: bool,
     },

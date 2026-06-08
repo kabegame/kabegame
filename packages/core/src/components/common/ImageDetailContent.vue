@@ -676,9 +676,9 @@ function galleryDateParts(timestamp?: number): {
   const y = `${d.getUTCFullYear()}`;
   const m = `${d.getUTCMonth() + 1}`.padStart(2, "0");
   const day = `${d.getUTCDate()}`.padStart(2, "0");
-  const hh = `${d.getUTCHours()}`.padStart(2, "0");
-  const mm = `${d.getUTCMinutes()}`.padStart(2, "0");
-  const ss = `${d.getUTCSeconds()}`.padStart(2, "0");
+  const hh = `${d.getHours()}`.padStart(2, "0");
+  const mm = `${d.getMinutes()}`.padStart(2, "0");
+  const ss = `${d.getSeconds()}`.padStart(2, "0");
   return { year: y, month: m, day, time: `${hh}:${mm}:${ss}` };
 }
 

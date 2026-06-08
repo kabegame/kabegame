@@ -122,8 +122,6 @@ export type ContextCommand =
   | "share"
   | "openFolder"
   | "wallpaper"
-  | "exportToWE"
-  | "exportToWEAuto"
   | "addToHidden"
   | "remove"
   | "deleteFile"
@@ -140,8 +138,6 @@ type ContextCommandPayloadMap = {
   download: ImagePayload & MultiImagePayload;
   wallpaper: ImagePayload & MultiImagePayload;
   share: ImagePayload;
-  exportToWE: ImagePayload & MultiImagePayload;
-  exportToWEAuto: ImagePayload & MultiImagePayload;
   addToHidden: ImagePayload & MultiImagePayload;
   remove: ImagePayload & MultiImagePayload;
   deleteFile: ImagePayload & MultiImagePayload;
@@ -393,43 +389,6 @@ const currentPreviewIndex = computed(() => {
   return previewRef.value?.previewIndex ?? -1;
 });
 
-// 从 store 解析宽高比设置（画廊分桶 fallback、无尺寸图片占位）
-const parseAspectRatioFromStore = (value: string | null | undefined): number | null => {
-  if (!value) return null;
-  if (value.includes(":") && !value.startsWith("custom:")) {
-    const [w, h] = value.split(":").map(Number);
-    if (w && h && h > 0) return w / h;
-  }
-  if (value.startsWith("custom:")) {
-    const parts = value.replace("custom:", "").split(":");
-    const [w, h] = parts.map(Number);
-    if (w && h && h > 0) return w / h;
-  }
-  return null;
-};
-
-const storeAspectRatio = computed(() =>
-  parseAspectRatioFromStore(settingsStore.values.galleryImageAspectRatio)
-);
-
-const windowAspectRatio = ref<number>(16 / 9);
-const updateWindowAspectRatio = () => {
-  windowAspectRatio.value = window.innerWidth / window.innerHeight;
-};
-
-const effectiveAspectRatio = computed(() => {
-  if (!isCompact.value) {
-    if (storeAspectRatio.value !== null && storeAspectRatio.value > 0) {
-      return storeAspectRatio.value;
-    }
-    if (props.windowAspectRatio !== undefined && props.windowAspectRatio > 0) {
-      return props.windowAspectRatio;
-    }
-    return windowAspectRatio.value;
-  }
-  return 1;
-});
-
 /*----------------- Gallery（masonry）布局 + 方向 -----------------*/
 // Android/紧凑端固定为两列纵向 grid，配合虚拟滚动降低移动端长列表开销；桌面端仍使用设置项。
 const layoutMode = computed<"grid" | "gallery">(() => {
@@ -452,7 +411,7 @@ const aspectRatioOf = (image: ImageInfo) => {
   if (image?.width != null && image?.height != null && image.width > 0 && image.height > 0) {
     return image.width / image.height;
   }
-  return effectiveAspectRatio.value || 16 / 10;
+  return 1;
 };
 
 /**
@@ -1114,9 +1073,6 @@ watch(
 );
 
 onMounted(async () => {
-  updateWindowAspectRatio();
-  window.addEventListener("resize", updateWindowAspectRatio);
-
   // 紧凑模式下不允许通过 Ctrl+Wheel 调整列数
   if (!isCompact.value) {
     window.addEventListener(
@@ -1141,7 +1097,6 @@ onMounted(async () => {
 });
 
 onUnmounted(async () => {
-  window.removeEventListener("resize", updateWindowAspectRatio);
   unbindScrollElement();
   if (smoothWheel.raf != null) {
     cancelAnimationFrame(smoothWheel.raf);

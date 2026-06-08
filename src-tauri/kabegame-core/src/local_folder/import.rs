@@ -1,4 +1,4 @@
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), feature = "video"))]
 use crate::crawler::downloader::video_compress::compress_video_for_preview;
 use crate::crawler::downloader::{compute_file_hash, generate_thumbnail};
 use crate::emitter::GlobalEmitter;
@@ -44,6 +44,10 @@ pub async fn import_local_file(
 
     let hash = compute_file_hash(path).await?;
     let is_video = is_video_by_path(path);
+    #[cfg(not(feature = "video"))]
+    if is_video {
+        return Err("video ingestion not supported in this build".to_string());
+    }
     let thumbnail_path = build_thumbnail_path(path, is_video).await;
     let (width, height) = resolve_media_dimensions_sync(&path.to_string_lossy())
         .map(|(w, h)| (Some(w), Some(h)))
@@ -120,9 +124,17 @@ pub async fn import_local_file(
 #[cfg(not(target_os = "android"))]
 async fn build_thumbnail_path(path: &Path, is_video: bool) -> String {
     let result = if is_video {
-        compress_video_for_preview(path)
-            .await
-            .map(|result| Some(result.preview_path))
+        #[cfg(feature = "video")]
+        {
+            compress_video_for_preview(path)
+                .await
+                .map(|result| Some(result.preview_path))
+        }
+        #[cfg(not(feature = "video"))]
+        {
+            // Guarded upstream: import_local_file rejects video before reaching here.
+            Err("video ingestion not supported in this build".to_string())
+        }
     } else {
         generate_thumbnail(path).await
     };

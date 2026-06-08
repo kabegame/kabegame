@@ -560,17 +560,6 @@ impl IpcClient {
         }
     }
 
-    pub async fn settings_get_wallpaper_engine_dir(&self) -> Result<Option<String>, String> {
-        let v = self
-            .request_data(IpcRequest::SettingsGetWallpaperEngineDir)
-            .await?;
-        if v.is_null() {
-            Ok(None)
-        } else {
-            serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
-        }
-    }
-
     pub async fn settings_get_wallpaper_rotation_enabled(&self) -> Result<bool, String> {
         let v = self
             .request_data(IpcRequest::SettingsGetWallpaperRotationEnabled)
@@ -701,21 +690,6 @@ impl IpcClient {
         aspect_ratio: Option<String>,
     ) -> Result<(), String> {
         self.request_ok(IpcRequest::SettingsSetGalleryImageAspectRatio { aspect_ratio })
-            .await
-    }
-
-    pub async fn settings_set_wallpaper_engine_dir(
-        &self,
-        dir: Option<String>,
-    ) -> Result<(), String> {
-        self.request_ok(IpcRequest::SettingsSetWallpaperEngineDir { dir })
-            .await
-    }
-
-    pub async fn settings_get_wallpaper_engine_myprojects_dir(
-        &self,
-    ) -> Result<serde_json::Value, String> {
-        self.request_data(IpcRequest::SettingsGetWallpaperEngineMyprojectsDir)
             .await
     }
 
@@ -887,6 +861,7 @@ impl IpcClient {
     pub async fn organize_start(
         &self,
         dedupe: bool,
+        dedupe_keep_new: bool,
         remove_missing: bool,
         regen_thumbnails: bool,
         remove_unrecognized: bool,
@@ -896,6 +871,7 @@ impl IpcClient {
     ) -> Result<(), String> {
         self.request_ok(IpcRequest::OrganizeStart {
             dedupe,
+            dedupe_keep_new,
             remove_missing,
             regen_thumbnails,
             remove_unrecognized,

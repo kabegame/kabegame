@@ -14,11 +14,13 @@
 - **Kamechan mascot**: kamechan mascot
 - **Quick filter**: click one specific image's property to filter those images quikly. 
 - **Plugin metadata migrations**: Crawler plugins can ship `metadata_migrations/v{N}.rhai` scripts to migrate historical image metadata on install, update, and startup. Rhai `download_image` now accepts `metadata_version`, and `create_image_metadata` supports the `#{ version: N }` overload.
+- **Video support**: mkv, webm
 
 ### Optimized
 - **Providers**: more query use pathql providers
 - **ElSelect Filterable**: AlbumSelectField and long plugin option field can filter by input string.
 - **Android Thumbnail**: Android now use thumbnail in gallery for new pictures.
+- **Organize gate**: organize now won't gate any tasks.
 
 ### Fixed
 - **Organize image-file killer bug (data loss)**: A single Organize run could permanently delete thousands of original image files. Three causes, all fixed: (1) "delete source files" used a hard `remove_file`, bypassing the Trash; (2) when a library folder was reached through a **symlink** (e.g. `~/Pictures` → an external drive), deduplication treated the two path spellings of the same physical file as duplicates and deleted the **shared** file, taking down the surviving copy too; (3) Organize paginated with `OFFSET` while deleting rows mid-scan, so the window shifted and rows were skipped — making Organize non-idempotent ("every run still removes items") and never converging.
@@ -42,6 +44,8 @@
 
 ### Removed
 - **Archive**: Archive unzip feature removed from application completely. Including Rhai API and local import unarchiving behavior.
+- **WE export**: wallpaper engine exporting dropped.
+- **Light mode video**: video support dropped on light mode.
 
 ## [4.1.1]
 

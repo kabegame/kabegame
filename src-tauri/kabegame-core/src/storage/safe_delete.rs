@@ -156,3 +156,32 @@ pub fn trash_source_file(path: &Path) -> bool {
         }
     }
 }
+
+/// 把多个原始文件一次性移入系统回收站（`trash::delete_all`）。
+///
+/// 过滤掉不安全路径后，对剩余路径调用一次 `delete_all`，减少回收站交互次数。
+/// 无论成功与否，调用方都应照常删除数据库记录。
+pub fn trash_source_files_batch(paths: &[&Path]) {
+    let safe: Vec<&Path> = paths
+        .iter()
+        .copied()
+        .filter(|p| {
+            if let Err(reason) = path_is_normal_local(p) {
+                eprintln!(
+                    "[safe_delete] 保留磁盘文件（仅移出图库）: {} — {}",
+                    p.display(),
+                    reason
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+    if safe.is_empty() {
+        return;
+    }
+    if let Err(e) = trash::delete_all(&safe) {
+        eprintln!("[safe_delete] 批量移入回收站失败，保留磁盘文件: {}", e);
+    }
+}

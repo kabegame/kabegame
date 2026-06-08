@@ -1207,42 +1207,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                     #[cfg(not(target_os = "android"))]
                     let _ = is_content;
 
-                    // 检查整理是否正在进行，如果是则等待
-                    #[cfg(not(target_os = "android"))]
-                    {
-                        use crate::storage::organize::OrganizeService;
-                        OrganizeService::init_organize_barrier(); // 确保初始化
-                        let organize_running = OrganizeService::get_organize_running();
-
-                        if organize_running.load(std::sync::atomic::Ordering::Relaxed) {
-                            // 发送等待整理状态
-                            {
-                                let download_info = ActiveDownloadInfo {
-                                    url: job.url.to_string(),
-                                    plugin_id: job.plugin_id.clone(),
-                                    start_time: job.download_start_time,
-                                    task_id: job.task_id.clone(),
-                                    state: "等待整理".to_string(),
-                                    native: false,
-                                };
-                                let mut tasks = active_tasks.lock().await;
-                                tasks.push(download_info);
-                            }
-                            GlobalEmitter::global().emit_download_state(
-                                &job.task_id,
-                                job.url.as_str(),
-                                job.download_start_time,
-                                &job.plugin_id,
-                                "等待整理",
-                                None,
-                            );
-
-                            // 等待整理完成
-                            let barrier = OrganizeService::get_organize_barrier();
-                            barrier.notified().await;
-                        }
-                    }
-
                     // 后处理：processing 状态、去重逻辑、缩略图、入库、入画册、发事件
                     {
                         let mut tasks = active_tasks.lock().await;
@@ -2377,13 +2341,21 @@ pub async fn process_downloaded_image_to_storage(
         } else {
             None
         };
-        let thumbnail_path = match if is_video {
-            video_compress::compress_video_for_preview(path)
-                .await
-                .map(|r| Some(r.preview_path))
+        let thumbnail_result: Result<Option<std::path::PathBuf>, String> = if is_video {
+            #[cfg(feature = "video")]
+            {
+                video_compress::compress_video_for_preview(path)
+                    .await
+                    .map(|r| Some(r.preview_path))
+            }
+            #[cfg(not(feature = "video"))]
+            {
+                Err("video ingestion not supported in this build".to_string())
+            }
         } else {
             generate_thumbnail(path).await
-        } {
+        };
+        let thumbnail_path = match thumbnail_result {
             Ok(t) => t,
             Err(e) => {
                 let _ = tokio::fs::remove_file(path).await;

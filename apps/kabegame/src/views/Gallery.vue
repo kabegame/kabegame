@@ -626,7 +626,6 @@ const {
   handleCopyImage,
   toggleFavorite,
   setWallpaper,
-  exportToWallpaperEngine,
   handleBatchDeleteImages,
   handleBatchHideImages,
 } = useImageOperations(
@@ -907,16 +906,6 @@ const handleGridContextCommand = async (
       trackGalleryEvent("image_action", {
         command: "wallpaper",
         ...imageAnalyticsPayload(imagesToProcess),
-      });
-      return null;
-    case "exportToWE":
-    case "exportToWEAuto":
-      if (!isMultiSelect) {
-        if (imagesToProcess[0]) await exportToWallpaperEngine(imagesToProcess[0]);
-      }
-      trackGalleryEvent("image_action", {
-        command,
-        ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
       });
       return null;
     case "addToAlbum":

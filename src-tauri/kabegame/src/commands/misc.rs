@@ -200,6 +200,9 @@ pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
 #[serde(rename_all = "camelCase")]
 pub struct StartOrganizeArgs {
     pub dedupe: bool,
+    /// 去重保留策略：true 保留最新，false 保留最旧（缺省保留最新）
+    #[serde(default)]
+    pub dedupe_keep_new: bool,
     pub remove_missing: bool,
     pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
@@ -223,6 +226,7 @@ pub async fn start_organize(args: StartOrganizeArgs) -> Result<(), String> {
             std::sync::Arc::new(kabegame_core::storage::Storage::global().clone()),
             OrganizeOptions {
                 dedupe: args.dedupe,
+                dedupe_keep_new: args.dedupe_keep_new,
                 remove_missing: args.remove_missing,
                 remove_unrecognized: args.remove_unrecognized,
                 regen_thumbnails: args.regen_thumbnails,

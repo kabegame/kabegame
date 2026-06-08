@@ -25,34 +25,43 @@ pub fn up(conn: &Connection) -> Result<(), String> {
         return Ok(());
     }
 
-    conn.execute_batch("BEGIN")
-        .map_err(|e| format!("begin: {e}"))?;
-    let mut updated = 0usize;
-    for (id, path) in &rows {
-        if path.starts_with("content://") {
-            eprintln!("[v012] skip id={id} (content:// handled by live path)");
-            continue;
-        }
-        match crate::media_dimensions::resolve_video_dimensions_sync(path) {
-            Some((w, h)) => {
-                if let Err(e) = conn.execute(
-                    "UPDATE images SET width = ?1, height = ?2 WHERE id = ?3",
-                    params![w as i64, h as i64, id],
-                ) {
-                    eprintln!("[v012] update id={id} failed: {e}");
-                } else {
-                    updated += 1;
-                }
-            }
-            None => eprintln!("[v012] skip id={id} path={path} (unreadable/unparseable)"),
-        }
+    #[cfg(not(feature = "video"))]
+    {
+        eprintln!("[v012] video size fill back skipped cause this is light release!");
+        return Ok(());
     }
-    conn.execute_batch("COMMIT")
-        .map_err(|e| format!("commit: {e}"))?;
-    println!(
-        "[v012] backfilled {}/{} video dimensions",
-        updated,
-        rows.len()
-    );
-    Ok(())
+
+    #[cfg(feature =  "video")]
+    {
+        conn.execute_batch("BEGIN")
+            .map_err(|e| format!("begin: {e}"))?;
+        let mut updated = 0usize;
+        for (id, path) in &rows {
+            if path.starts_with("content://") {
+                eprintln!("[v012] skip id={id} (content:// handled by live path)");
+                continue;
+            }
+            match crate::media_dimensions::resolve_video_dimensions_sync(path) {
+                Some((w, h)) => {
+                    if let Err(e) = conn.execute(
+                        "UPDATE images SET width = ?1, height = ?2 WHERE id = ?3",
+                        params![w as i64, h as i64, id],
+                    ) {
+                        eprintln!("[v012] update id={id} failed: {e}");
+                    } else {
+                        updated += 1;
+                    }
+                }
+                None => eprintln!("[v012] skip id={id} path={path} (unreadable/unparseable)"),
+            }
+        }
+        conn.execute_batch("COMMIT")
+            .map_err(|e| format!("commit: {e}"))?;
+        println!(
+            "[v012] backfilled {}/{} video dimensions",
+            updated,
+            rows.len()
+        );
+        Ok(())
+    }
 }

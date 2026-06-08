@@ -22,7 +22,6 @@ export interface AppSettings {
   autoDeduplicate: boolean;
   realtimeFolderSync: boolean;
   defaultDownloadDir: string | null;
-  wallpaperEngineDir: string | null;
   wallpaperRotationEnabled: boolean;
   wallpaperRotationAlbumId: string | null;
   /** 轮播指定画册时是否包含子画册（默认 true，与 07-wallpaper 设计一致） */
@@ -142,7 +141,6 @@ const WEB_READONLY_FEATURE_KEY_MAP: Partial<Record<AppSettingKey, string>> = {
   wallpaperStyleByMode: "wallpaper",
   wallpaperTransitionByMode: "wallpaper",
   wallpaperMode: "wallpaper",
-  wallpaperEngineDir: "wallpaper",
   albumDriveEnabled: "albumDrive",
   albumDriveMountPoint: "albumDrive",
   autoOpenCrawlerWebview: "openCrawlerWindow",
@@ -247,11 +245,6 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
       setter: "set_realtime_folder_sync",
       param: "enabled",
     };
-  }
-
-  // 仅 Windows
-  if (IS_WINDOWS) {
-    map.wallpaperEngineDir = { getter: "get_wallpaper_engine_dir", setter: "set_wallpaper_engine_dir", param: "dir" };
   }
 
   // 非安卓 + 非 light 模式

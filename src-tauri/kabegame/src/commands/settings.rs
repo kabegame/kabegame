@@ -101,12 +101,6 @@ pub fn get_language() -> Option<String> {
 }
 
 #[tauri::command]
-#[cfg(target_os = "windows")]
-pub fn get_wallpaper_engine_dir() -> Option<String> {
-    Settings::global().get_wallpaper_engine_dir()
-}
-
-#[tauri::command]
 pub fn get_wallpaper_rotation_enabled() -> bool {
     Settings::global().get_wallpaper_rotation_enabled()
 }
@@ -337,18 +331,6 @@ pub async fn set_realtime_folder_sync(enabled: bool) -> Result<(), String> {
 #[tauri::command]
 pub fn set_default_download_dir(dir: Option<String>) -> Result<(), String> {
     Settings::global().set_default_download_dir(dir)
-}
-
-#[tauri::command]
-#[cfg(target_os = "windows")]
-pub fn set_wallpaper_engine_dir(dir: Option<String>) -> Result<(), String> {
-    Settings::global().set_wallpaper_engine_dir(dir)
-}
-
-#[tauri::command]
-#[cfg(target_os = "windows")]
-pub fn get_wallpaper_engine_myprojects_dir() -> Result<Option<String>, String> {
-    Settings::global().get_wallpaper_engine_myprojects_dir()
 }
 
 #[tauri::command]

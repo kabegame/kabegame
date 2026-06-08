@@ -1,3 +1,5 @@
+// TODO: 这里太不贴合业务实际，优化掉这里
+
 type UrlKind = "thumbnail" | "original";
 type ImageStage = "primary" | "fallback";
 

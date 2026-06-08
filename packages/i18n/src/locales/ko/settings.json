@@ -94,8 +94,6 @@
   "wallpaperDisabled": "배경화면 끄기",
   "wallpaperDisabledDesc": "배경화면 기능을 전체적으로 비활성화합니다: 배경화면 관련 작업을 거부하고, 배경화면 창을 숨기며, 시작 시 복원하지 않습니다",
   "wallpaperDisabledNativeWarning": "네이티브 모드에서는 시스템 배경화면이 현재 상태로 유지되며, 끄더라도 이전 배경화면이 자동으로 복원되지 않습니다",
-  "wallpaperEngineDir": "Wallpaper Engine 디렉터리",
-  "wallpaperEngineDirDesc": "\"WE로 내보내기 및 자동 가져오기\"용",
   "appBackgroundEnabled": "앱 내부 배경",
   "appBackgroundEnabledDesc": "현재 배경화면을 반투명 앱 배경으로 표시합니다",
   "appBackgroundOpacity": "배경 투명도",

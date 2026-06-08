@@ -50,9 +50,10 @@ reqwest = { version = "0.11", features = [
 ] }
 # 桌面端删除原始文件时移入系统回收站（可恢复）；Android/iOS 不支持，单独处理。
 trash = "5"
-# 进程内 FFmpeg：视频预览压缩 + 维度读取（Android 走 Kotlin provider，无需）。
+# 进程内 FFmpeg：视频预览压缩 + 维度读取（Android 走 Kotlin provider，无需；light mode 不含）。
 # 链接依赖构建环境 FFMPEG_PKG_CONFIG_PATH 指向 third/FFmpeg-build/install/lib/pkgconfig。
-rsmpeg = { workspace = true }
+# optional = true：由 video feature 激活（standard 启用，light 不启用）。
+rsmpeg = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 reqwest = { version = "0.11", features = [
@@ -105,6 +106,8 @@ ipc-server = []
 virtual-driver = ["dep:fuser", "dep:dokan"]
 # Phase 6b: 6c 通过 SqlExecutor 接入后再启用 VD module
 vd-legacy = []
+# 视频下载/导入支持（需要 FFmpeg rsmpeg）。standard 启用，light 不启用。
+video = ["dep:rsmpeg"]
 
 [dev-dependencies]
 tempfile = "3"

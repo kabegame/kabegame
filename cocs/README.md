@@ -41,6 +41,10 @@
   - 主题：下载器流程与关键调用路径；含 `task-image-counts` 任务图片计数事件说明；入库时 **`images-change` / `album-images-change`** 与画廊监听的对应关系（见文内 §5 子节）。
   - 适用场景：下载任务生命周期、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
 
+- [downloader-tasks/VIDEO_INGEST.md](downloader-tasks/VIDEO_INGEST.md)
+  - 主题：视频摄入（下载/导入压缩）的 Cargo feature 门控机制。`video-ingest` feature 由 `standard`/CLI 启用，`light` 不启用；rsmpeg 进程内转码（`video_compress.rs`）与维度读取（`media_dimensions.rs`）均在此 feature 下，调用方须显式 `#[cfg]` 门控。画廊播放始终可用（HTML `<video>`，无需 FFmpeg）。
+  - 适用场景：新增视频处理调用点须先加 `#[cfg(feature = "video-ingest")]`；排查 light 模式下视频不可导入；理解 FFmpeg 构建（`bun run build:ffmpeg`）与 standard 构建的依赖关系。
+
 - [downloader-tasks/TASK_DRAWER_LOAD.md](downloader-tasks/TASK_DRAWER_LOAD.md)
   - 主题：任务抽屉分页加载、触底加载与相关数据流。
   - 适用场景：任务数量多时打开抽屉卡顿、loadTasksPage 与 get_tasks_page 行为。

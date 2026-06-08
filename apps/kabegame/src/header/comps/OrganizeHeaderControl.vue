@@ -80,6 +80,7 @@ type OrganizeProgressState = {
 type OrganizeRunStatePayload = OrganizeProgressState & {
   running: boolean;
   dedupe: boolean;
+  dedupeKeepNew: boolean;
   removeMissing: boolean;
   removeUnrecognized: boolean;
   regenThumbnails: boolean;
@@ -184,6 +185,7 @@ async function syncOrganizeRunStateFromBackend() {
     applyProgressPayload(s);
     lastRunOptions.value = {
       dedupe: s.dedupe,
+      dedupeKeepNew: s.dedupeKeepNew,
       removeMissing: s.removeMissing,
       removeUnrecognized: s.removeUnrecognized,
       regenThumbnails: s.regenThumbnails,
@@ -263,6 +265,7 @@ async function runOrganize(options: OrganizeOptions) {
     await invoke("start_organize", {
       args: {
         dedupe: options.dedupe,
+        dedupeKeepNew: options.dedupeKeepNew,
         removeMissing: options.removeMissing,
         removeUnrecognized: options.removeUnrecognized,
         regenThumbnails: options.regenThumbnails,

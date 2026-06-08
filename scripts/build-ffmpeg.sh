@@ -111,14 +111,15 @@ fi
   --enable-filter=buffersink \
   --enable-filter=format \
   --enable-swscale \
+  --enable-avdevice \
   --disable-doc \
-  --disable-avdevice \
   --enable-small \
   --disable-runtime-cpudetect \
   --extra-cflags="-O2" \
   "${_LINK_FLAGS[@]}" \
   "${CONFIGURE_EXTRA[@]}" \
   "$@"
+
 
 # Windows：make 无法解析 /d/... 绝对路径，将 Makefile 与 config.mak 中的源码路径改为相对路径
 case "$(uname -s)" in
