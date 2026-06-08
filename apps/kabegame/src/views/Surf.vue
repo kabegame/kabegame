@@ -12,7 +12,7 @@
         <!-- Logo：搜索栏上方 -->
         <div class="surf-logo">
           <img
-            src="/swim.jpeg"
+            src="/swim.png"
             :alt="$t('surf.title')"
             class="surf-logo-img"
             :style="hasRecords ? { height: logoHeight + 'px' } : undefined"

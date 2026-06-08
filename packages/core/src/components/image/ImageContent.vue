@@ -1,97 +1,133 @@
 <template>
   <div class="image-content" :class="{ 'is-compact': isCompact }">
-    <!-- 无内容 / 加载 / 丢失 -->
-    <template v-if="!displayUrl">
-      <div v-if="isLost" class="ic-lost">
-        <ImageNotFound show-image />
-      </div>
-      <!-- 视频不叠 image 形骨架，避免中央出现图片占位 -->
-      <!-- <div v-else-if="!isVideo" class="ic-loading ic-loading-overlay">
-        <el-skeleton :rows="0" animated>
-          <template #template>
-            <el-skeleton-item variant="image" :style="{ width: '100%', height: '100%' }" />
-          </template>
-        </el-skeleton>
-      </div> -->
-    </template>
+    <!-- 彻底加载失败 -->
+    <div v-if="isLost" class="ic-lost">
+      <ImageNotFound :show-image="false" />
+    </div>
 
     <template v-else>
-      <!-- 加载期间的骨架覆盖层（仅图片） -->
-      <div v-if="isImageLoading && !isVideo && !useLayerShell" class="ic-loading ic-loading-overlay">
+      <!-- 骨架覆盖层：delayed 防止快速解码时闪烁；GIF 以 <img> 渲染，不需要独立骨架 -->
+      <div v-if="showLoading && !isVideoRenderedAsImage" class="ic-loading ic-loading-overlay">
         <el-skeleton :rows="0" animated>
           <template #template>
-            <el-skeleton-item variant="image" :style="{ width: '100%', height: '100%' }" />
-          </template>
-        </el-skeleton>
-      </div>
-      <!-- 视频加载骨架：用纯矩形 shimmer 避免首帧前全白 -->
-      <div v-if="isVideo && !isVideoRenderedAsImage && !videoReady" class="ic-loading ic-loading-overlay">
-        <el-skeleton :rows="0" animated>
-          <template #template>
-            <el-skeleton-item variant="rect" :style="{ width: '100%', height: '100%' }" />
+            <el-skeleton-item
+              :variant="isVideo ? 'rect' : 'image'"
+              :style="{ width: '100%', height: '100%' }"
+            />
           </template>
         </el-skeleton>
       </div>
 
-      <!-- 桌面双图外壳：缩略图打底，原图盖在其上，原图流式解码自然覆盖缩略图（无 opacity gate）。
-           key 绑定 src：切换图片时强制换新元素，避免旧图残留（互斥显示）。原图加载失败则隐藏该层，避免破碎图。 -->
-      <template v-if="useLayerShell">
-        <img v-if="!thumbnailLoadFailed" :key="`thumb:${thumbnailUrl}`" :src="thumbnailUrl" loading="lazy"
-          decoding="async" class="ic-img thumbnail-layer" :alt="image.id" draggable="false"
-          @load="handleThumbnailLoad" @error="handleThumbnailError" @dragstart.prevent />
-        <img v-if="useDesktopLayers && !originalFailed && preferOriginal" :key="`orig:${originalUrl}`" :src="originalUrl"
-          loading="lazy" decoding="async" class="ic-img original-layer" :alt="image.id" draggable="false"
-          @load="onOriginalLoad" @error="onOriginalError" @dragstart.prevent />
+      <!-- 双图层：prefer=original 且缩略图与原图 URL 不同 -->
+      <template v-if="dualLayer">
+        <img
+          v-if="!thumbFailed"
+          :key="`thumb:${plan.thumbnailUrl}`"
+          :src="plan.thumbnailUrl"
+          loading="lazy"
+          decoding="async"
+          class="ic-img thumbnail-layer"
+          :alt="image.id"
+          draggable="false"
+          @load="onThumbLoad"
+          @error="onThumbError"
+          @dragstart.prevent
+        />
+        <img
+          v-if="!originalFailed"
+          :key="`orig:${plan.originalUrl}`"
+          :src="plan.originalUrl"
+          loading="lazy"
+          decoding="async"
+          class="ic-img original-layer"
+          :alt="image.id"
+          draggable="false"
+          @load="onOriginalLoad"
+          @error="onOriginalError"
+          @dragstart.prevent
+        />
       </template>
 
-      <!-- GIF 等以图片形态渲染的“视频” -->
-      <img v-else-if="isVideoRenderedAsImage" :key="`gif:${displayUrl}`" :src="displayUrl" loading="lazy"
-        decoding="async" class="ic-img" :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }"
-        :alt="image.id" draggable="false" @load="onImageLoad" @error="onImageError" @dragstart.prevent />
+      <!-- GIF 等以图片形态渲染的"视频" -->
+      <img
+        v-else-if="isVideoRenderedAsImage"
+        :key="`gif:${singleUrl}`"
+        :src="singleUrl"
+        loading="lazy"
+        decoding="async"
+        class="ic-img"
+        :alt="image.id"
+        draggable="false"
+        @load="onSingleLoad"
+        @error="onSingleError"
+        @dragstart.prevent
+      />
 
-      <!-- 视频：用 videoSrc——grid/gallery 用压缩短视频缩略（prefer=thumbnail），预览用原视频（prefer=original） -->
-      <video v-else-if="isVideo" :key="`video:${videoSrc}`" ref="videoEl" :src="videoSrc" class="ic-img ic-video"
-        draggable="false" :muted="videoMuted" :loop="videoLoop" :controls="nativeVideoControls" poster=""
-        preload="auto" playsinline webkit-playsinline="true" disablepictureinpicture="true"
-        disableremoteplayback="" @loadeddata="onVideoReady" @canplay="onVideoReady" @error="onImageError"
-        @dragstart.prevent @mousedown.prevent />
+      <!-- 视频 -->
+      <video
+        v-else-if="isVideo"
+        :key="`video:${videoSrc}`"
+        ref="videoEl"
+        :src="videoSrc"
+        class="ic-img ic-video"
+        draggable="false"
+        :muted="videoMuted"
+        :loop="videoLoop"
+        :controls="nativeVideoControls"
+        poster=""
+        preload="auto"
+        playsinline
+        webkit-playsinline="true"
+        disablepictureinpicture="true"
+        disableremoteplayback=""
+        @loadeddata="onVideoReady"
+        @canplay="onVideoReady"
+        @error="onVideoError"
+        @dragstart.prevent
+        @mousedown.prevent
+      />
 
-      <!-- 单图 -->
-      <img v-else :key="`img:${displayUrl}`" :src="displayUrl" loading="lazy" decoding="async" class="ic-img"
-        :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
-        @load="onImageLoad" @error="onImageError" @dragstart.prevent />
+      <!-- 单图（prefer=thumbnail，或 prefer=original 但无独立缩略图） -->
+      <img
+        v-else
+        :key="`img:${singleUrl}`"
+        :src="singleUrl"
+        loading="lazy"
+        decoding="async"
+        class="ic-img"
+        :alt="image.id"
+        draggable="false"
+        @load="onSingleLoad"
+        @error="onSingleError"
+        @dragstart.prevent
+      />
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, toRef, watch, watchEffect } from "vue";
+import { computed, ref, watch, watchEffect } from "vue";
 import { storeToRefs } from "pinia";
 import type { ImageInfo } from "../../types/image";
 import ImageNotFound from "../common/ImageNotFound.vue";
-import { useImageItemLoader, type ImagePrefer } from "../../composables/useImageItemLoader";
+import { buildImageUrlPlan, type ImagePrefer } from "../../composables/imageUrlPlan";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { useUiStore } from "../../stores/ui";
+import { useLoadingDelay } from "../../composables/useLoadingDelay";
+import { IS_ANDROID } from "../../env";
 
 interface Props {
   image: ImageInfo;
-  /** 优先展示原图还是缩略图（透传给 loader）。盒子始终 contain（盒子比例由上层决定）。 */
   prefer: ImagePrefer;
-  /** 外部控制视频播放意图（grid: 由上层协调；预览/PhotoSwipe: 作为 autoplay 触发） */
   videoPlaying?: boolean;
-  /** 视频使用原生 controls（一般不用，PhotoSwipe 用点击切换） */
   nativeVideoControls?: boolean;
-  /** 视频静音（grid 为 true） */
   videoMuted?: boolean;
-  /** 视频循环 */
   videoLoop?: boolean;
-  /** 暂停时是否复位到起点（grid hover 结束复位；播放器场景保持进度） */
   resetVideoOnPause?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   videoPlaying: false,
-  clickToPlayVideo: false,
   nativeVideoControls: false,
   videoMuted: false,
   videoLoop: true,
@@ -99,54 +135,19 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const emit = defineEmits<{
-  /** 已有可见内容（缩略图/单图/视频就绪） */
   ready: [];
-  /** 加载彻底失败（lost） */
   error: [];
-  /** 用户直接点击视频后开始播放 */
-  videoUserPlay: [];
-  /** 用户直接点击视频后暂停 */
-  videoUserPause: [];
-  /** 播放失败 */
   videoPlayFail: [];
 }>();
 
-const imageRef = toRef(props, "image");
-const preferRef = toRef(props, "prefer");
 const { isCompact } = storeToRefs(useUiStore());
+const { showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 
-const {
-  displayUrl,
-  isImageLoading,
-  isLost,
-  originalMissing,
-  thumbnailUrl,
-  originalUrl,
-  useDesktopLayers,
-  thumbnailLoadFailed,
-  handleImageLoad,
-  handleImageError,
-  handleThumbnailLoad,
-  handleOriginalLoad,
-  handleThumbnailError,
-  handleOriginalError,
-} = useImageItemLoader({ image: imageRef, prefer: preferRef });
+// ---- URL plan (pure, synchronous) ----
+const plan = computed(() => buildImageUrlPlan(props.image, props.prefer));
 
-const videoEl = ref<HTMLVideoElement | null>(null);
-/** 视频首帧是否就绪（loadeddata），未就绪时显示视频骨架避免全白 */
-const videoReady = ref(false);
-/** 原图加载失败：隐藏 original-layer，回落到缩略图，避免破碎图 */
-const originalFailed = ref(false);
-const preferOriginal = computed(() => props.prefer == 'original');
-
+// ---- Media type ----
 const isVideo = computed(() => isVideoMediaType(props.image.type));
-/** 视频源随 prefer：original→原视频（预览）；thumbnail→压缩短视频缩略（grid/gallery）。
- *  注意不能用 loader 的 displayUrl——双图策略下它会被置为缩略图 URL。 */
-const videoSrc = computed(() =>
-  props.prefer === "original"
-    ? originalUrl.value || thumbnailUrl.value
-    : thumbnailUrl.value || originalUrl.value
-);
 
 function pathFromUrlLike(value: string | undefined): string {
   const raw = (value || "").trim();
@@ -159,107 +160,171 @@ function pathFromUrlLike(value: string | undefined): string {
   } catch {
     const noHash = raw.split("#", 1)[0] || "";
     const noQuery = noHash.split("?", 1)[0] || noHash;
-    try {
-      return decodeURIComponent(noQuery);
-    } catch {
-      return noQuery;
-    }
+    try { return decodeURIComponent(noQuery); } catch { return noQuery; }
   }
 }
 
 function hasPathExtension(value: string | undefined, ext: string): boolean {
-  const path = pathFromUrlLike(value).trim().toLowerCase();
-  return path.endsWith(`.${ext.toLowerCase()}`);
+  return pathFromUrlLike(value).trim().toLowerCase().endsWith(`.${ext.toLowerCase()}`);
 }
 
 const displayPreviewPath = computed(() =>
-  displayUrl.value || props.image.thumbnailPath || props.image.localPath
+  plan.value.thumbnailUrl || props.image.thumbnailPath || props.image.localPath
 );
 const isVideoRenderedAsImage = computed(
   () => isVideo.value && hasPathExtension(displayPreviewPath.value, "gif")
 );
 
-/** 桌面双图外壳：与 ImageItem 同条件——非视频、有独立缩略图与原图 */
-const useLayerShell = computed(() =>
+// ---- Dual layer: prefer=original with distinct thumbnail & original ----
+const dualLayer = computed(() =>
   !isVideo.value &&
-  !!thumbnailUrl.value &&
-  !!originalUrl.value &&
-  thumbnailUrl.value !== originalUrl.value &&
-  (!thumbnailLoadFailed.value || useDesktopLayers.value)
+  props.prefer === "original" &&
+  !!plan.value.thumbnailUrl &&
+  !!plan.value.originalUrl &&
+  plan.value.thumbnailUrl !== plan.value.originalUrl
 );
 
-// ---- ready / error 上报（供 PhotoSwipe slot 与预览清除 loading 用） ----
-const onImageLoad = (event: Event) => {
-  handleImageLoad(event);
+// ---- Single-image URL derivation ----
+const singlePrimaryUrl = computed(() =>
+  props.prefer === "original"
+    ? (plan.value.originalUrl || plan.value.thumbnailUrl)
+    : (plan.value.thumbnailUrl || plan.value.originalUrl)
+);
+const singleFallbackUrl = computed(() => {
+  const alt = props.prefer === "original" ? plan.value.thumbnailUrl : plan.value.originalUrl;
+  return alt && alt !== singlePrimaryUrl.value ? alt : "";
+});
+
+// ---- Mutable load state ----
+const useFallback    = ref(false);
+const singleLost     = ref(false);
+const thumbFailed    = ref(false);
+const originalFailed = ref(false);
+const videoFailed    = ref(false);
+
+const videoEl  = ref<HTMLVideoElement | null>(null);
+
+const singleUrl = computed(() =>
+  useFallback.value ? singleFallbackUrl.value : singlePrimaryUrl.value
+);
+const videoSrc = computed(() =>
+  props.prefer === "original"
+    ? (plan.value.originalUrl || plan.value.thumbnailUrl)
+    : (plan.value.thumbnailUrl || plan.value.originalUrl)
+);
+
+// ---- Derived exposed state ----
+const isLost = computed(() =>
+  isVideo.value
+    ? videoFailed.value
+    : dualLayer.value
+      ? (thumbFailed.value && originalFailed.value)
+      : singleLost.value
+);
+
+const originalMissing = computed(() => {
+  if (IS_ANDROID || isVideo.value) return false;
+  if (dualLayer.value) return originalFailed.value;
+  if (props.prefer === "thumbnail" && props.image.localExists === false && !!plan.value.thumbnailUrl)
+    return true;
+  if (useFallback.value && props.prefer === "original") return true;
+  return false;
+});
+
+// ---- Reset on image identity change (NOT on prefer — preserves hover no-flash) ----
+// When ImageItem flips effectivePrefer thumbnail→original, the two URLs don't change, so this
+// watch doesn't fire, showLoading stays false, and the already-cached thumbnail layer is instant.
+watch(
+  () => [props.image.id, plan.value.thumbnailUrl, plan.value.originalUrl] as const,
+  () => {
+    useFallback.value    = false;
+    singleLost.value     = false;
+    thumbFailed.value    = false;
+    originalFailed.value = false;
+    videoFailed.value    = false;
+
+    const hasAnyUrl = isVideo.value
+      ? !!videoSrc.value
+      : !!(singlePrimaryUrl.value || singleFallbackUrl.value ||
+           plan.value.thumbnailUrl || plan.value.originalUrl);
+
+    if (!hasAnyUrl) {
+      singleLost.value = true;
+      finishLoading();
+      return;
+    }
+    startLoading();
+  },
+  { immediate: true }
+);
+
+watch(isLost, (lost) => { if (lost) emit("error"); });
+
+// ---- Handlers: single image / GIF ----
+const onSingleLoad = (event: Event) => {
+  const img = event.target as HTMLImageElement;
+  if (img.complete && img.naturalHeight !== 0) {
+    finishLoading();
+    emit("ready");
+  }
+};
+const onSingleError = () => {
+  if (!useFallback.value && singleFallbackUrl.value) {
+    useFallback.value = true;
+  } else {
+    singleLost.value = true;
+    finishLoading();
+  }
+};
+
+// ---- Handlers: dual layer ----
+const onThumbLoad = () => {
+  finishLoading();
   emit("ready");
 };
-const onImageError = (event: Event) => {
-  handleImageError();
-  // handleImageError 会在彻底失败时置 isLost；fallback 时仍在加载
-  void event;
+const onThumbError = () => {
+  thumbFailed.value = true;
+  // If original also failed, both layers gone → isLost fires error via watch
+  if (originalFailed.value) finishLoading();
 };
 const onOriginalLoad = () => {
-  handleOriginalLoad();
+  finishLoading();
   emit("ready");
 };
 const onOriginalError = () => {
   originalFailed.value = true;
-  handleOriginalError();
+  // Thumbnail layer still visible; skeleton clears only when thumb also done
+  if (thumbFailed.value) finishLoading();
 };
+
+// ---- Handlers: video ----
 const onVideoReady = () => {
-  if (videoReady.value) return;
-  videoReady.value = true;
+  finishLoading();
   emit("ready");
 };
+const onVideoError = () => {
+  videoFailed.value = true;
+  finishLoading();
+};
 
-// TODO: 两个补丁
-// videoReady 只跟 videoSrc 走——key 与 videoSrc 绑定，videoSrc 不变则元素不重建，loadeddata 不会重发
-watch(
-  () => [props.image.id, videoSrc.value] as const,
-  () => { videoReady.value = false; }
-);
-// originalFailed 跟 displayUrl/originalUrl 走，与图片加载策略一致
-watch(
-  () => [props.image.id, displayUrl.value, originalUrl.value] as const,
-  () => { originalFailed.value = false; }
-);
-
-// 缩略图打底就绪即视为“有可见内容”
-watch(
-  () => isImageLoading.value,
-  (loading) => {
-    if (!loading && !isLost.value && displayUrl.value) emit("ready");
-  }
-);
-watch(
-  () => isLost.value,
-  (lost) => {
-    if (lost) emit("error");
-  }
-);
-
-// 视频播放：外部 videoPlaying 驱动；使用原生 controls 时不介入，交给用户/浏览器
+// ---- Video playback control (unchanged) ----
 watchEffect(() => {
   const el = videoEl.value;
   if (!el || !isVideo.value || isVideoRenderedAsImage.value || props.nativeVideoControls) return;
   if (props.videoPlaying) {
     void el.play().catch(() => {
-      console.log('auto play blocked');
+      console.log("auto play blocked");
       emit("videoPlayFail");
     });
   } else {
     el.pause();
     if (props.resetVideoOnPause) {
-      try { el.currentTime = 0; } catch { /* 部分平台 currentTime 写入会抛 */ }
+      try { el.currentTime = 0; } catch { /* some platforms throw on currentTime write */ }
     }
   }
 });
 
-defineExpose({
-  videoEl,
-  originalMissing,
-  isLost,
-});
+defineExpose({ videoEl, originalMissing, isLost });
 </script>
 
 <style scoped lang="scss">
@@ -280,12 +345,10 @@ defineExpose({
     -webkit-tap-highlight-color: transparent;
   }
 
-  // 桌面双图：底层缩略图
   .thumbnail-layer {
     z-index: 1;
   }
 
-  // 桌面双图：顶层原图，始终不透明，流式解码自然覆盖缩略图
   .original-layer {
     z-index: 2;
   }

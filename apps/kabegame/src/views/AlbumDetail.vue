@@ -281,7 +281,6 @@ import { useAlbumImagesChangeRefresh, type AlbumImagesChangePayload } from "@/co
 import { diffById } from "@/utils/listDiff";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
-import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useI18n } from "@kabegame/i18n";
@@ -1184,8 +1183,6 @@ const handleRefresh = async () => {
     // 3) 手动刷新：清缓存强制重载详情（否则 store 缓存会让 UI 看起来“没刷新”）
     delete albumStore.albumImages[albumId.value];
     delete albumStore.albumPreviews[albumId.value];
-    clearImageStateCache();
-
     // 4) 重新拉取图片列表 + 清理本地选择/URL 缓存
     clearSelection();
     await loadAlbum();

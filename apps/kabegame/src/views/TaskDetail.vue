@@ -179,7 +179,6 @@ import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
-import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
@@ -388,7 +387,6 @@ const handleRefresh = async () => {
     if (!taskId.value) return;
     isRefreshing.value = true;
     try {
-        clearImageStateCache();
         await Promise.all([
             loadTaskImages({ showSkeleton: false }),
             loadTotalImagesCount(),

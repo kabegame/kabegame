@@ -143,7 +143,6 @@ import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeR
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID, IS_WINDOWS, IS_WEB } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
-import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
@@ -575,7 +574,6 @@ watch(
 const handleManualRefresh = async () => {
   // 手动刷新：刷新画廊数据。
   trackGalleryEvent("gallery_manual_refresh");
-  clearImageStateCache();
   await loadImages(true);
   await loadTotalImagesCount();
 };

@@ -48,7 +48,7 @@ import { ref, toRef } from "vue";
 import { WarningFilled, VideoPlay, VideoPause } from "@element-plus/icons-vue";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "./ImageContent.vue";
-import type { ImagePrefer } from "../../composables/useImageItemLoader";
+import type { ImagePrefer } from "../../composables/imageUrlPlan";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";
