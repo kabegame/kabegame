@@ -30,20 +30,20 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # 换源（Ubuntu 24.04 使用 deb822 格式 /etc/apt/sources.list.d/ubuntu.sources）
 # 直接重写整个文件，避免 sed 转义坑
-RUN printf '%s\n' \
-        'Types: deb' \
-        "URIs: ${APT_MIRROR}" \
-        'Suites: noble noble-updates noble-backports' \
-        'Components: main restricted universe multiverse' \
-        'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
-        '' \
-        'Types: deb' \
-        "URIs: ${APT_MIRROR}" \
-        'Suites: noble-security' \
-        'Components: main restricted universe multiverse' \
-        'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
-    > /etc/apt/sources.list.d/ubuntu.sources \
- && cat /etc/apt/sources.list.d/ubuntu.sources
+# RUN printf '%s\n' \
+#         'Types: deb' \
+#         "URIs: ${APT_MIRROR}" \
+#         'Suites: noble noble-updates noble-backports' \
+#         'Components: main restricted universe multiverse' \
+#         'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+#         '' \
+#         'Types: deb' \
+#         "URIs: ${APT_MIRROR}" \
+#         'Suites: noble-security' \
+#         'Components: main restricted universe multiverse' \
+#         'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+#     > /etc/apt/sources.list.d/ubuntu.sources \
+#  && cat /etc/apt/sources.list.d/ubuntu.sources
 
 # 全局重试/超时配置，对后续所有 apt-get 生效
 RUN printf '%s\n' \
@@ -80,6 +80,10 @@ RUN apt-get install -y --no-install-recommends \
 RUN apt-get install -y --no-install-recommends \
         xvfb \
         libxdo-dev
+
+# 第 4 组：FFmpeg 依赖
+RUN apt-get install -y --no-install-recommends \
+    libx264-dev 
 
 # 最后清理 apt 列表，缩小最终镜像
 RUN rm -rf /var/lib/apt/lists/*

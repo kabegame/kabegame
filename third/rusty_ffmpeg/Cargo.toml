@@ -1,0 +1,56 @@
+[package]
+name = "rusty_ffmpeg"
+version = "0.17.0+ffmpeg.8.1"
+authors = ["ldm0 <ldm2993593805@163.com>"]
+edition = "2021"
+description = "A library that provides Rust bindings for FFmpeg"
+documentation = "https://docs.rs/rusty_ffmpeg"
+readme = "README.md"
+homepage = "https://github.com/CCExtractor/rusty_ffmpeg/"
+repository = "https://github.com/CCExtractor/rusty_ffmpeg/"
+license = "MIT"
+
+keywords = ["ffmpeg", "ffi", "binding", "video", "audio"]
+categories = ["external-ffi-bindings", "multimedia"]
+
+build = "build.rs"
+links = "ffmpeg"
+exclude = [".github"]
+
+# Doc test of generated binding is non-sense https://github.com/rust-lang/cargo/issues/3720
+[lib]
+doctest = false
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.72"
+camino = "1.1"
+once_cell = "1.12"
+vcpkg = { version = "0.2", optional = true }
+
+[target.'cfg(not(windows))'.build-dependencies]
+pkg-config = "0.3"
+
+[features]
+# Probe and link FFmpeg with pkg-config
+link_system_ffmpeg = []
+# Probe and link FFmpeg with vcpkg
+link_vcpkg_ffmpeg = ["vcpkg"]
+# Use the prebuilt FFmpeg 7 bindings from src/binding.rs instead of generating at build time
+# This ensures consistent API signatures across all platforms
+use_prebuilt_binding = []
+# FFmpeg 5.* support
+ffmpeg5 = []
+# FFmpeg 6.* support
+ffmpeg6 = ["ffmpeg5"]
+# FFmpeg 6.1+ support
+ffmpeg6_1 = ["ffmpeg6"]
+# FFmpeg 7.* support
+ffmpeg7 = ["ffmpeg6_1"]
+# FFmpeg 7.1+ support
+ffmpeg7_1 = ["ffmpeg7"]
+# FFmpeg 8.* support
+ffmpeg8 = ["ffmpeg7_1"]
+# FFmpeg 8.1+ support
+ffmpeg8_1 = ["ffmpeg8"]

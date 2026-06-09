@@ -30,6 +30,7 @@ services:
       - -lc
       - >-
         { [ -d node_modules ] && [ -n "$(ls -A node_modules 2>/dev/null)" ]; } || bun install --frozen-lockfile
+        && ./scripts/build-ffmpeg.sh
         && bun b -c kabegame-cli
         && bun b -c kabegame --mode standard --release --no-nx
 

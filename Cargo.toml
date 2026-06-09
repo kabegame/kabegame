@@ -42,7 +42,8 @@ md5 = "0.7"
 # 进程内 FFmpeg（libav*）绑定：替代旧的 ffmpeg sidecar 进程调用与 mp4 crate。
 # feature 须匹配 third/FFmpeg 子模块的 FFmpeg 主版本（当前 n8.2 → ffmpeg8）。
 # 链接经 rusty_ffmpeg：由构建环境的 FFMPEG_PKG_CONFIG_PATH 指向 third/FFmpeg-build/install/lib/pkgconfig。
-rsmpeg = { version = "=0.18.0+ffmpeg.8.0", default-features = false, features = ["ffmpeg8"] }
+rsmpeg = { path="./third/rsmpeg", default-features = false, features = ["ffmpeg8_1"] }
+rusty_ffmpeg = { path="./third/rusty_ffmpeg", default-features = false, features = ["ffmpeg8_1"]}
 percent-encoding = "2"
 sha2 = "0.10"
 tauri-build = {version = "2.6.2", features = []}

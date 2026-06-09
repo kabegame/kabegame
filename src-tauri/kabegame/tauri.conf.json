@@ -8,6 +8,7 @@
     "devUrl": "http://localhost:1420"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [],
     "security": {
       "capabilities": ["main-capability", "crawler-capability"],
@@ -21,7 +22,7 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis"
+      "dmg"
     ],
     "icon": [
       "./icons/32x32.png", 

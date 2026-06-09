@@ -111,11 +111,6 @@ export class ModePlugin extends BasePlugin {
             "pkgconfig",
           )
         );
-        this.setEnv("FFMPEG_BINDING_PATH", path.join(
-            THIRD_DIR,
-            "FFmpeg-binding",
-            "binding.rs",
-        ))
         // macOS: clang (used by bindgen/rusty_ffmpeg) cannot find system headers like
         // errno.h without an explicit sysroot. BINDGEN_EXTRA_CLANG_ARGS is read by
         // bindgen and passed straight to clang before binding generation.
@@ -128,7 +123,7 @@ export class ModePlugin extends BasePlugin {
           }
         }
         // windows: libs dir
-        if (OSPlugin.isWindows) {
+        else if (OSPlugin.isWindows) {
           this.setEnv("FFMPEG_LIBS_DIR", path.join(
             THIRD_DIR,
             "FFmpeg-build",

@@ -447,9 +447,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bindgen"
-version = "0.71.1"
+version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"
+checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
 dependencies = [
  "bitflags 2.10.0",
  "cexpr",
@@ -5199,10 +5199,13 @@ dependencies = [
 [[package]]
 name = "rsmpeg"
 version = "0.18.0+ffmpeg.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "523351495c9ff0bf4b99ed1f42f1415fc709526ddb63526cff85022b387c5811"
 dependencies = [
+ "anyhow",
  "bon",
+ "camino",
+ "image 0.25.9",
+ "libc",
+ "once_cell",
  "paste",
  "rusty_ffmpeg",
  "thiserror 2.0.18",
@@ -5356,14 +5359,13 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rusty_ffmpeg"
-version = "0.16.7+ffmpeg.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f25d40a46450059278c9f9f2616018910b647877a66a2093a83f115f59763967"
+version = "0.17.0+ffmpeg.8.1"
 dependencies = [
  "bindgen",
  "camino",
  "once_cell",
  "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]

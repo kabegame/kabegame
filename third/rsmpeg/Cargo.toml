@@ -1,0 +1,44 @@
+[package]
+name = "rsmpeg"
+version = "0.18.0+ffmpeg.8.0"
+authors = ["liudingming <liudingming@bytedance.com>"]
+edition = "2021"
+license = "MIT"
+description = "A Rust crate that exposes FFmpeg's power as much as possible."
+keywords = ["ffmpeg", "ffi", "binding", "audio", "video"]
+homepage = "https://github.com/larksuite/rsmpeg"
+documentation = "https://docs.rs/rsmpeg"
+repository = "https://github.com/larksuite/rsmpeg"
+readme = "README.md"
+exclude = ["/.github", "/tests", "/utils"]
+rust-version = "1.81.0"
+
+[dependencies]
+rusty_ffmpeg = { workspace = true }
+paste = "1.0"
+thiserror = "2.0"
+bon = "3"
+
+[dev-dependencies]
+libc = "0.2"
+anyhow = "1.0.98"
+camino = "1.1.10"
+once_cell = "1"
+image = { version = "0.25.6", default-features = false, features = ["png"] }
+
+[features]
+# Use FFmpeg 8 by default
+default = ["ffmpeg8"]
+
+# Note that ffmpeg{x} feature is designed to be addable (If it's not, compilation with all-features won't pass)
+ffmpeg6 = ["rusty_ffmpeg/ffmpeg6"]
+ffmpeg7 = ["ffmpeg6", "rusty_ffmpeg/ffmpeg7"]
+# ffmpeg 7.1+
+ffmpeg7_1 = ["ffmpeg7"]
+ffmpeg8 = ["ffmpeg7_1", "rusty_ffmpeg/ffmpeg8"]
+ffmpeg8_1 = ["ffmpeg8", "rusty_ffmpeg/ffmpeg8_1"]
+
+# Try linking ffmpeg with pkg-config.
+link_system_ffmpeg = ["rusty_ffmpeg/link_system_ffmpeg"]
+# Try linking ffmpeg with vcpkg.
+link_vcpkg_ffmpeg = ["rusty_ffmpeg/link_vcpkg_ffmpeg"]
