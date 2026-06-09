@@ -13,6 +13,7 @@ ENV PATH="/root/.cargo/bin:/root/.bun/bin:${PATH}"
 RUN dnf install -y \
     epel-release \
     dnf-plugins-core \
+ && dnf config-manager --set-enabled powertools \
  && dnf install -y \
     https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-$(rpm -E %rhel).noarch.rpm \
  && dnf install -y \
@@ -26,6 +27,7 @@ RUN dnf install -y \
     pkgconfig \
     openssl-devel \
     x264-devel \
+    nasm \
  && dnf clean all
 
 RUN ln -sf /bin/bash /bash

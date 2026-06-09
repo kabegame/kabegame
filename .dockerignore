@@ -3,6 +3,5 @@
 **/node_modules
 release
 .git/worktrees
-third/
-!third/FFmpeg
+third/FFmpeg-build
 test
