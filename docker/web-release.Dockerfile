@@ -11,6 +11,11 @@ ARG RUST_TOOLCHAIN=1.92.0
 ENV PATH="/root/.cargo/bin:/root/.bun/bin:${PATH}"
 
 RUN dnf install -y \
+    epel-release \
+    dnf-plugins-core \
+ && dnf install -y \
+    https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-$(rpm -E %rhel).noarch.rpm \
+ && dnf install -y \
     ca-certificates \
     curl \
     git \
@@ -20,7 +25,8 @@ RUN dnf install -y \
     make \
     pkgconfig \
     openssl-devel \
-    && dnf clean all
+    x264-devel \
+ && dnf clean all
 
 RUN ln -sf /bin/bash /bash
 
