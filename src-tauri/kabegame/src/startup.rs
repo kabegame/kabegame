@@ -26,8 +26,8 @@ use tauri::{AppHandle, Emitter, Listener, Manager};
 use crate::web::server::*;
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::downloader::{
-    compute_native_download_destination, postprocess_downloaded_image, BrowserDownloadState,
-    NativeDownloadEntry, NativeDownloadState,
+    compute_native_download_destination, next_download_id, postprocess_downloaded_image,
+    BrowserDownloadState, DownloadState, NativeDownloadEntry, NativeDownloadState,
 };
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::webview::{
@@ -602,7 +602,9 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as u64)
                         .unwrap_or(0);
+                    let download_id = next_download_id();
                     let entry = NativeDownloadEntry {
+                        id: download_id,
                         destination: native_dest.clone(),
                         task_id: Some(ctx.task_id.clone()),
                         surf_record_id: None,
@@ -616,10 +618,12 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
                     }
                     GlobalEmitter::global().emit_download_state_with_native(
                         &ctx.task_id,
+                        download_id,
                         url.as_str(),
                         download_start_time,
                         &ctx.plugin_id,
-                        "downloading",
+                        DownloadState::Downloading,
+                        None,
                         None,
                         true,
                     );
@@ -641,8 +645,11 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
                     let final_path = path.unwrap_or_else(|| entry.destination.clone());
                     let url_str = url.to_string();
                     tauri::async_runtime::spawn(async move {
+                        let dq = TaskScheduler::global().download_queue();
                         let empty_headers = std::collections::HashMap::new();
                         let _ = postprocess_downloaded_image(
+                            &*dq,
+                            entry.id,
                             &final_path,
                             &url_str,
                             &entry.plugin_id,
@@ -666,11 +673,13 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
                         .unwrap_or_default();
                     GlobalEmitter::global().emit_download_state_with_native(
                         event_task_id,
+                        entry.id,
                         url.as_str(),
                         entry.download_start_time,
                         &entry.plugin_id,
-                        "failed",
+                        DownloadState::Failed,
                         Some("Native download finished with failure"),
+                        None,
                         true,
                     );
                 }

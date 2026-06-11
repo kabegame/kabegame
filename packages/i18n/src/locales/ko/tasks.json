@@ -84,6 +84,7 @@
   "filterSuccess": "성공 이미지",
   "filterFailed": "실패 이미지",
   "allFailedImages": "전체 실패 이미지",
+  "failedImagesForTask": "이 작업의 실패 이미지",
   "allFailedImagesEmpty": "실패 이미지가 없습니다",
   "failedFilterEmpty": "현재 필터에 실패 이미지가 없습니다",
   "viewTask": "작업 보기",

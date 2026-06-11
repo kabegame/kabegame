@@ -1,4 +1,5 @@
 use super::ActiveDownloadInfo;
+use super::DownloadState;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -6,6 +7,7 @@ use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone)]
 pub struct NativeDownloadEntry {
+    pub id: u64,
     pub destination: PathBuf,
     pub task_id: Option<String>,
     pub surf_record_id: Option<String>,
@@ -49,6 +51,7 @@ impl NativeDownloadState {
         pending
             .iter()
             .map(|(url, entry)| ActiveDownloadInfo {
+                id: entry.id,
                 url: url.clone(),
                 plugin_id: entry.plugin_id.clone(),
                 start_time: entry.download_start_time,
@@ -57,8 +60,9 @@ impl NativeDownloadState {
                     .clone()
                     .or_else(|| entry.surf_record_id.clone())
                     .unwrap_or_default(),
-                state: "downloading".to_string(),
+                state: DownloadState::Downloading,
                 native: true,
+                retried_for: None,
             })
             .collect()
     }

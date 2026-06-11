@@ -1,7 +1,8 @@
 use kabegame_core::crawler::downloader::{
-    compute_native_download_destination, get_default_images_dir, postprocess_downloaded_image,
-    NativeDownloadEntry, NativeDownloadState,
+    compute_native_download_destination, get_default_images_dir, next_download_id,
+    postprocess_downloaded_image, DownloadState, NativeDownloadEntry, NativeDownloadState,
 };
+use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::crawler::favicon::fetch_favicon;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::storage::{RangedSurfRecords, Storage, SurfRecord};
@@ -249,7 +250,9 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis() as u64)
                             .unwrap_or(0);
+                        let download_id = next_download_id();
                         let entry = NativeDownloadEntry {
+                            id: download_id,
                             destination: native_dest.clone(),
                             task_id: None,
                             surf_record_id: Some(surf_record_id.clone()),
@@ -267,10 +270,12 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
 
                         GlobalEmitter::global().emit_download_state_with_native(
                             &surf_record_id,
+                            download_id,
                             url.as_str(),
                             download_start_time,
                             "",
-                            "downloading",
+                            DownloadState::Downloading,
+                            None,
                             None,
                             true,
                         );
@@ -288,9 +293,12 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                             let final_path = path.unwrap_or_else(|| entry.destination.clone());
                             let url_str = url.to_string();
                             tauri::async_runtime::spawn(async move {
+                                let dq = TaskScheduler::global().download_queue();
                                 let surf_record_id = entry.surf_record_id.clone();
                                 let empty_headers = std::collections::HashMap::new();
                                 match postprocess_downloaded_image(
+                                    &*dq,
+                                    entry.id,
                                     &final_path,
                                     &url_str,
                                     &entry.plugin_id,
@@ -336,11 +344,13 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                                 .unwrap_or_default();
                             GlobalEmitter::global().emit_download_state_with_native(
                                 event_task_id,
+                                entry.id,
                                 url.as_str(),
                                 entry.download_start_time,
                                 &entry.plugin_id,
-                                "failed",
+                                DownloadState::Failed,
                                 Some("Native download finished with failure"),
+                                None,
                                 true,
                             );
                             eval_surf_toast(&app, "下载失败", "failed");

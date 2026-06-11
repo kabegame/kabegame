@@ -84,6 +84,7 @@
   "filterSuccess": "Successful images",
   "filterFailed": "Failed images",
   "allFailedImages": "All failed images",
+  "failedImagesForTask": "Failed images for task",
   "allFailedImagesEmpty": "No failed images",
   "failedFilterEmpty": "No failed images in current filter",
   "viewTask": "View task",

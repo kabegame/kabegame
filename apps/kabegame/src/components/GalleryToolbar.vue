@@ -1693,7 +1693,7 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
       // 整理由 header 的 OrganizeHeaderControl 处理，此处不会触发（Organize 在 show 中）
       break;
     case HeaderFeatureId.FailedImages:
-      void router.push({ path: "/failed-images" });
+      // handled by FailedImagesHeaderButton comp directly
       break;
     case HeaderFeatureId.ToggleShowHidden:
       galleryRouteStore.hide = !galleryRouteStore.hide;

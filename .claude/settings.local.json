@@ -33,7 +33,28 @@
       "WebFetch(domain:anihonetwallpaper.com)",
       "Bash(bash -n scripts/build-ffmpeg.sh)",
       "Read(//Users/cmtheit/code/**)",
-      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('src-tauri/kabegame/tauri.conf.json','utf8'\\)\\); console.log\\('OK'\\)\")"
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('src-tauri/kabegame/tauri.conf.json','utf8'\\)\\); console.log\\('OK'\\)\")",
+      "Bash(python *)",
+      "PowerShell(python \"D:\\\\Codes\\\\kabegame\\\\scripts\\\\check_png_meta.py\")",
+      "PowerShell(wsl --shutdown 2>&1)",
+      "PowerShell(wsl --mount --vhd \"D:\\\\WSL\\\\Ubuntu\\\\ext4.vhdx\" --bare 2>&1)",
+      "Bash(wsl -d docker-desktop -- ls /dev/sd*)",
+      "Bash(wsl --list --running)",
+      "Bash(wsl --unmount \"D:\\\\WSL\\\\Ubuntu\\\\ext4.vhdx\")",
+      "Bash(wsl --list --online)",
+      "Bash(wsl --install -d Debian --no-launch)",
+      "Bash(wsl -d Debian -- echo \"Debian is working\")",
+      "Bash(wsl --mount --vhd \"D:\\\\WSL\\\\Ubuntu\\\\ext4.vhdx\" --bare)",
+      "Bash(wsl -d Debian -- ls /dev/sd*)",
+      "Bash(wsl -d Debian -- bash -c \"ls /dev/ | grep -E 'sd|hd|vd|loop|nvme'\")",
+      "Bash(wsl -d Debian -- lsblk)",
+      "Bash(wsl -d Debian -- bash -c \"apt-get update -qq && apt-get install -y -qq e2fsprogs 2>&1 | tail -5\")",
+      "Bash(wsl -d Debian -u root -- fsck.ext4 --version)",
+      "Bash(wsl -d Debian -u root -- fsck.ext4 -y /dev/sde)",
+      "PowerShell(wsl -d Debian -u root -- fsck.ext4 -y /dev/sde 2>&1)",
+      "PowerShell(wsl --unmount \"D:\\\\WSL\\\\Ubuntu\\\\ext4.vhdx\" 2>&1)",
+      "PowerShell(wsl -d Ubuntu -- echo \"Ubuntu is back!\" 2>&1)",
+      "PowerShell(wsl -d Ubuntu -- echo \"Ubuntu with mirrored network OK\" 2>&1)"
     ]
   }
 }

@@ -25,6 +25,7 @@
 
 #[cfg(feature = "ipc-client")]
 use crate::ipc::client::daemon_startup;
+use crate::crawler::downloader::DownloadState;
 use crate::storage::tasks::TaskFailedImage;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -177,20 +178,25 @@ pub enum DaemonEvent {
     },
 
     /// 下载状态事件
+    #[serde(rename_all = "camelCase")]
     DownloadState {
         task_id: String,
+        id: u64,
         url: String,
         start_time: u64,
         plugin_id: String,
-        state: String,
+        state: DownloadState,
         error: Option<String>,
         #[serde(default)]
         native: bool,
+        retried_for: Option<i64>,
     },
 
     /// 下载进度事件（细粒度进度更新）
+    #[serde(rename_all = "camelCase")]
     DownloadProgress {
         task_id: String,
+        id: u64,
         url: String,
         start_time: u64,
         plugin_id: String,

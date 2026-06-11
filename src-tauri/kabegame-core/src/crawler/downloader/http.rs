@@ -518,6 +518,7 @@ async fn download_http(
                 last_emit = Instant::now();
                 GlobalEmitter::global().emit_download_progress(
                     task_id,
+                    progress.download_id,
                     current_url.as_str(),
                     progress.start_time,
                     progress.plugin_id,
@@ -529,6 +530,7 @@ async fn download_http(
 
         GlobalEmitter::global().emit_download_progress(
             task_id,
+            progress.download_id,
             current_url.as_str(),
             progress.start_time,
             progress.plugin_id,

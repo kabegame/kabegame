@@ -114,8 +114,9 @@ standard = [
     "dep:tauri-build",
 ]
 
-# Light desktop build: shared Tauri stack, no virtual driver
+# Light desktop build: shared Tauri stack + video ingestion, no virtual driver
 light = [
+    "kabegame-core/video",
     "dep:tauri",
     "dep:tauri-plugin-clipboard-manager",
     "dep:tauri-plugin-dialog",

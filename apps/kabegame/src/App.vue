@@ -199,6 +199,7 @@ import type { ImageInfo } from "@kabegame/core/types/image";
 import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
 import { useFailedImagesStore } from "./stores/failedImages";
+import { useDownloadStateStore } from "./stores/downloadState";
 import { useAlbumStore } from "./stores/albums";
 import { useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
@@ -281,6 +282,7 @@ const { visible: crawlerDrawerVisible, initialConfig: crawlerDrawerInitialConfig
 
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
+const downloadStateStore = useDownloadStateStore();
 const albumStore = useAlbumStore();
 
 const router = useRouter();
@@ -504,6 +506,7 @@ onMounted(async () => {
     console.error("加载已安装插件列表失败:", e);
   }
   await failedImagesStore.initListeners();
+  await downloadStateStore.init();
   await initMissedRunsWatch();
 
   // 初始化各个 composables
@@ -612,6 +615,7 @@ onUnmounted(() => {
   }
   // 注销更新事件订阅
   updaterService.dispose();
+  downloadStateStore.dispose();
 });
 
 </script>

@@ -40,12 +40,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "route.taskDetail" },
   },
   {
-    path: "/failed-images",
-    name: "FailedImages",
-    component: () => import("@/views/FailedImages.vue"),
-    meta: { title: "route.failedImages" },
-  },
-  {
     path: "/plugin-detail/:id",
     name: "PluginDetail",
     component: () => import("@/views/PluginDetail.vue"),

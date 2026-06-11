@@ -1,4 +1,3 @@
-#!/usr/bin/env zsh
 set -euo pipefail
 
 plans_dir="${CLAUDE_PLANS_DIR:-$HOME/.claude/plans}"

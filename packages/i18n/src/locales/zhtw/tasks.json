@@ -84,6 +84,7 @@
   "filterSuccess": "成功圖片",
   "filterFailed": "失敗圖片",
   "allFailedImages": "全部失敗圖片",
+  "failedImagesForTask": "此任務的失敗圖片",
   "allFailedImagesEmpty": "暫無失敗圖片",
   "failedFilterEmpty": "目前篩選下無失敗圖片",
   "viewTask": "查看任務",

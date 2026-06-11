@@ -20,7 +20,7 @@
                     <div class="download-info">
                       <div class="download-url" :title="download.url">{{ download.url }}</div>
                       <div class="download-meta">
-                        <el-tag size="small" type="info">{{ getPluginName(download.plugin_id) }}</el-tag>
+                        <el-tag size="small" type="info">{{ getPluginName(download.pluginId) }}</el-tag>
                         <el-tag size="small" :type="downloadStateTagType(download)">
                           {{ downloadStateText(download) }}
                         </el-tag>
@@ -192,15 +192,17 @@ type ScriptTask = {
 };
 
 type ActiveDownloadInfo = {
+  id: number;
   url: string;
-  plugin_id: string;
-  start_time: number;
-  task_id: string;
+  pluginId: string;
+  startTime: number;
+  taskId: string;
   state?: string;
   native?: boolean;
 };
 
 type DownloadProgressPayload = {
+  id: number;
   taskId: string;
   url: string;
   startTime: number;
@@ -216,6 +218,7 @@ type DownloadProgressState = {
 };
 
 type DownloadStatePayload = {
+  id: number;
   taskId: string;
   url: string;
   startTime: number;
@@ -373,9 +376,9 @@ let unlistenDownloadState: null | (() => void) = null;
 
 const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
 
-const downloadKey = (d: ActiveDownloadInfo) => `${d.task_id}::${d.start_time}::${d.url}`;
-const downloadKeyFromPayload = (p: DownloadProgressPayload) => `${p.taskId}::${p.startTime}::${p.url}`;
-const downloadStateKeyFromPayload = (p: DownloadStatePayload) => `${p.taskId}::${p.startTime}::${p.url}`;
+const downloadKey = (d: ActiveDownloadInfo) => String(d.id);
+const downloadKeyFromPayload = (p: DownloadProgressPayload) => String(p.id);
+const downloadStateKeyFromPayload = (p: DownloadStatePayload) => String(p.id);
 
 const getEffectiveDownloadState = (d: ActiveDownloadInfo) => {
   const key = downloadKey(d);
@@ -437,10 +440,11 @@ const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
     if (st === "completed") {
       // completed：短暂展示后移除（不计入运行中）
       const nextItem: ActiveDownloadInfo = {
-        task_id: p.taskId,
-        start_time: p.startTime,
+        id: p.id,
+        taskId: p.taskId,
+        startTime: p.startTime,
         url: p.url,
-        plugin_id: p.pluginId,
+        pluginId: p.pluginId,
         state: p.state || "completed",
         native: !!p.native,
       };
@@ -465,10 +469,11 @@ const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
   }
 
   const nextItem: ActiveDownloadInfo = {
-    task_id: p.taskId,
-    start_time: p.startTime,
+    id: p.id,
+    taskId: p.taskId,
+    startTime: p.startTime,
     url: p.url,
-    plugin_id: p.pluginId,
+    pluginId: p.pluginId,
     state: p.state || "downloading",
     native: !!p.native,
   };
@@ -586,30 +591,33 @@ const initAllEventListeners = async () => {
   if (eventListenersInitialized) return;
   eventListenersInitialized = true;
   const normalizeDownloadProgressPayload = (raw: any): DownloadProgressPayload | null => {
-    const taskId = String(raw?.taskId ?? raw?.task_id ?? "").trim();
+    const id = Number(raw?.id);
+    const taskId = String(raw?.taskId ?? "").trim();
     const url = String(raw?.url ?? "").trim();
-    const startTime = Number(raw?.startTime ?? raw?.start_time ?? NaN);
-    const pluginId = String(raw?.pluginId ?? raw?.plugin_id ?? "").trim();
-    if (!taskId || !url || !Number.isFinite(startTime) || !pluginId) return null;
+    const startTime = Number(raw?.startTime ?? NaN);
+    const pluginId = String(raw?.pluginId ?? "").trim();
+    if (isNaN(id) || !taskId || !url || !Number.isFinite(startTime) || !pluginId) return null;
     return {
+      id,
       taskId,
       url,
       startTime,
       pluginId,
-      receivedBytes: Number(raw?.receivedBytes ?? raw?.received_bytes ?? 0),
-      totalBytes: raw?.totalBytes ?? raw?.total_bytes ?? null,
+      receivedBytes: Number(raw?.receivedBytes ?? 0),
+      totalBytes: raw?.totalBytes ?? null,
     };
   };
 
   const normalizeDownloadStatePayload = (raw: any): DownloadStatePayload | null => {
-    const taskId = String(raw?.taskId ?? raw?.task_id ?? "").trim();
+    const id = Number(raw?.id);
+    const taskId = String(raw?.taskId ?? "").trim();
     const url = String(raw?.url ?? "").trim();
-    const startTime = Number(raw?.startTime ?? raw?.start_time ?? NaN);
-    const pluginId = String(raw?.pluginId ?? raw?.plugin_id ?? "").trim();
+    const startTime = Number(raw?.startTime ?? NaN);
+    const pluginId = String(raw?.pluginId ?? "").trim();
     const state = String(raw?.state ?? "").trim();
-    if (!taskId || !url || !Number.isFinite(startTime) || !pluginId || !state) return null;
+    if (isNaN(id) || !taskId || !url || !Number.isFinite(startTime) || !pluginId || !state) return null;
     const error = raw?.error != null ? String(raw.error) : undefined;
-    return { taskId, url, startTime, pluginId, state, error, native: !!raw?.native };
+    return { id, taskId, url, startTime, pluginId, state, error, native: !!raw?.native };
   };
   try {
     unlistenDownloadProgress = await listen<DownloadProgressPayload>("download-progress", (event) => {
@@ -622,10 +630,11 @@ const initAllEventListeners = async () => {
         activeDownloadKeysSnapshot.has(key)
       ) {
         activeDownloads.value.push({
-          task_id: p.taskId,
-          start_time: p.startTime,
+          id: p.id,
+          taskId: p.taskId,
+          startTime: p.startTime,
           url: p.url,
-          plugin_id: p.pluginId,
+          pluginId: p.pluginId,
           state: "downloading",
         });
       }

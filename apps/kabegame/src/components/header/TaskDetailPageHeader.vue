@@ -75,6 +75,7 @@ const showIds = computed(() => {
       HeaderFeatureId.Refresh,
       HeaderFeatureId.DeleteTask,
       HeaderFeatureId.AddToAlbum,
+      HeaderFeatureId.FailedImages,
       HeaderFeatureId.TaskDrawer,
       HeaderFeatureId.TaskViewLog,
       HeaderFeatureId.TaskViewParams,
@@ -91,6 +92,7 @@ const foldIds = computed(() => {
   const ids = [
     HeaderFeatureId.DeleteTask,
     HeaderFeatureId.AddToAlbum,
+    HeaderFeatureId.FailedImages,
     HeaderFeatureId.TaskViewLog,
     HeaderFeatureId.TaskViewParams,
     HeaderFeatureId.Help,

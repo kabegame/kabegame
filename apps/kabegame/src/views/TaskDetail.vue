@@ -87,13 +87,13 @@
                             </el-tag>
                             <span class="failed-time">{{ formatFailedTime(failed.createdAt) }}</span>
                         </div>
-                        <div v-if="getFailedItemState(failed.url).isDownloading" class="failed-progress-row">
-                            <el-tag size="small" :type="getStateTagType(getFailedItemState(failed.url).state)">
-                                {{ getStateLabel(getFailedItemState(failed.url).state) }}
+                        <div v-if="getFailedItemState(failed.id).isDownloading" class="failed-progress-row">
+                            <el-tag size="small" :type="getStateTagType(getFailedItemState(failed.id).state)">
+                                {{ getStateLabel(getFailedItemState(failed.id).state) }}
                             </el-tag>
                             <el-progress
-                                :percentage="getFailedItemState(failed.url).progress ?? 0"
-                                :indeterminate="getFailedItemState(failed.url).state !== 'downloading' || getFailedItemState(failed.url).progress == null"
+                                :percentage="getFailedItemState(failed.id).progress ?? 0"
+                                :indeterminate="getFailedItemState(failed.id).state !== 'downloading' || getFailedItemState(failed.id).progress == null"
                                 :stroke-width="8"
                                 class="failed-progress-bar"
                             />
@@ -101,12 +101,12 @@
                     </div>
                     <div class="failed-actions">
                         <el-button type="primary" size="small" :loading="retryingFailedIds.has(failed.id)"
-                            :disabled="getFailedItemState(failed.url).isDownloading"
+                            :disabled="getFailedItemState(failed.id).isDownloading"
                             @click="handleRetryFailedImage(failed.id)">
                             {{ t("tasks.retryDownload") }}
                         </el-button>
                         <el-button size="small" type="danger" plain
-                            :disabled="getFailedItemState(failed.url).isDownloading"
+                            :disabled="getFailedItemState(failed.id).isDownloading"
                             @click="handleDeleteFailedImage(failed.id)">
                             {{ t("tasks.deleteFailedRecord") }}
                         </el-button>
@@ -127,7 +127,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
@@ -160,6 +160,7 @@ import type { TaskRunParamsTask } from "@kabegame/core/components/task/TaskRunPa
 import TaskCountsInline from "@kabegame/core/components/task/TaskCountsInline.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
+import { useDownloadStateStore } from "@/stores/downloadState";
 import type { Component } from "vue";
 
 // 选择操作项类型（用于本页选择栏）
@@ -279,9 +280,7 @@ const currentWallpaperImageId = computed<string | null>({
 });
 
 const retryingFailedIds = ref(new Set<number>());
-
-// 下载状态/进度追踪：url -> { state, progress? }
-const downloadStateMap = reactive<Record<string, { state: string; progress?: number }>>({});
+const downloadStore = useDownloadStateStore();
 
 useImageGridAutoLoad({
     containerRef: taskContainerRef,
@@ -314,8 +313,6 @@ watch(
 const currentTime = ref<number>(Date.now());
 let timeUpdateInterval: number | null = null;
 let unlistenTasksChange: (() => void) | null = null;
-let unlistenDownloadState: (() => void) | null = null;
-let unlistenDownloadProgress: (() => void) | null = null;
 
 const successN = computed(() => taskFromStore.value?.successCount ?? 0);
 const failedN = computed(() => taskFromStore.value?.failedCount ?? failedImages.value.length);
@@ -570,23 +567,12 @@ watch(
     }
 );
 
-const getFailedItemState = (url: string) => {
-    const entry = downloadStateMap[url];
+const getFailedItemState = (failedId: number) => {
+    const entry = downloadStore.getByFailedImageId(failedId);
     if (!entry) return { isDownloading: false } as const;
     const isDownloading = ["preparing", "downloading", "processing"].includes(entry.state);
     return { isDownloading, state: entry.state, progress: entry.progress } as const;
 };
-
-watch(
-    () => failedImages.value,
-    (list) => {
-        const urlSet = new Set((list || []).map((f) => f.url));
-        for (const url of Object.keys(downloadStateMap)) {
-            if (!urlSet.has(url)) delete downloadStateMap[url];
-        }
-    },
-    { deep: true }
-);
 
 const getStateTagType = (state?: string) => {
     if (state === "preparing") return "info";
@@ -618,10 +604,9 @@ const handleRetryFailedImage = async (failedId: number) => {
 const handleDeleteFailedImage = async (failedId: number) => {
     const failed = failedImages.value.find((f) => f.id === failedId);
     if (!failed) return;
-    if (getFailedItemState(failed.url).isDownloading) return;
+    if (getFailedItemState(failed.id).isDownloading) return;
     try {
         await failedImagesStore.deleteFailed(failedId);
-        delete downloadStateMap[failed.url];
         ElMessage.success(t("tasks.deleteFailedRecordSuccess"));
     } catch (error) {
         console.error("删除失败记录失败:", error);
@@ -1087,39 +1072,6 @@ const startTimersAndListeners = async () => {
         });
     }
 
-    // 监听下载状态：更新 downloadStateMap + 刷新失败列表
-    if (!unlistenDownloadState) {
-        unlistenDownloadState = await listen("download-state", async (event) => {
-            const payload: any = event.payload as any;
-            const tid = String(payload?.task_id ?? payload?.taskId ?? "").trim();
-            const url = String(payload?.url ?? "").trim();
-            const state = String(payload?.state ?? "").trim();
-            if (!tid || tid !== taskId.value) return;
-            if (url && state) {
-                if (["preparing", "downloading", "processing"].includes(state)) {
-                    downloadStateMap[url] = { ...(downloadStateMap[url] || {}), state };
-                } else {
-                    delete downloadStateMap[url];
-                }
-            }
-        });
-    }
-
-    // 监听下载进度：更新 downloadStateMap 的 progress
-    if (!unlistenDownloadProgress) {
-        unlistenDownloadProgress = await listen("download-progress", (event) => {
-            const payload: any = event.payload as any;
-            const tid = String(payload?.task_id ?? payload?.taskId ?? "").trim();
-            const url = String(payload?.url ?? "").trim();
-            const received = Number(payload?.received_bytes ?? payload?.receivedBytes ?? 0);
-            const total = payload?.total_bytes ?? payload?.totalBytes ?? null;
-            if (!tid || tid !== taskId.value || !url) return;
-            if (!downloadStateMap[url]) return;
-            const pct = total != null && Number(total) > 0 ? Math.round((received / Number(total)) * 100) : undefined;
-            downloadStateMap[url] = { ...downloadStateMap[url], state: "downloading", progress: pct };
-        });
-    }
-
 };
 
 // 清理定时器的函数（页面失活时调用，节省资源）
@@ -1140,14 +1092,6 @@ const stopTimersAndListeners = () => {
     if (unlistenTasksChange) {
         unlistenTasksChange();
         unlistenTasksChange = null;
-    }
-    if (unlistenDownloadState) {
-        unlistenDownloadState();
-        unlistenDownloadState = null;
-    }
-    if (unlistenDownloadProgress) {
-        unlistenDownloadProgress();
-        unlistenDownloadProgress = null;
     }
 };
 

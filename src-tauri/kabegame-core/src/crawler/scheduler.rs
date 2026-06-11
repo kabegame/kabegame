@@ -546,7 +546,6 @@ async fn run_task(
             &req.task_id,
             req.user_config.clone(),
             req.output_album_id.clone(),
-            &*download_queue,
         )
         .await?;
         return Ok(TaskOutcome::Completed);

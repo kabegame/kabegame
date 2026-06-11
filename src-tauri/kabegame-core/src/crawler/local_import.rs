@@ -6,10 +6,11 @@
 
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
-use crate::crawler::downloader::DownloadQueue;
+use crate::crawler::downloader::{next_download_id, DownloadQueue};
 #[cfg(not(target_os = "android"))]
 use crate::crawler::downloader::{build_safe_filename, unique_path};
 use crate::crawler::task_log_i18n::task_log_i18n;
+use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::scan_service::{
     scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile,
@@ -20,6 +21,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use url::Url;
@@ -47,9 +49,9 @@ fn map_io_error_for_user(e: io::Error, context: &str) -> String {
 }
 
 /// 本地导入钩子：`DirCtx = ()`（输出画册固定在钩子里）。
-struct LocalImportHook<'a> {
-    task_id: &'a str,
-    download_queue: &'a DownloadQueue,
+struct LocalImportHook {
+    task_id: String,
+    download_queue: Arc<DownloadQueue>,
     output_album_id: Option<String>,
     #[cfg(not(target_os = "android"))]
     images_dir: PathBuf,
@@ -62,7 +64,7 @@ struct LocalImportHook<'a> {
     last_download_start_time: u64,
 }
 
-impl LocalImportHook<'_> {
+impl LocalImportHook {
     fn next_download_start_time(&mut self) -> u64 {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -106,10 +108,12 @@ impl LocalImportHook<'_> {
         };
         let headers: HashMap<String, String> = HashMap::new();
         let imported = crate::crawler::downloader::postprocess_downloaded_image(
+            &*self.download_queue,
+            next_download_id(),
             &final_path,
             file.url.as_str(),
             PLUGIN_ID,
-            Some(self.task_id),
+            Some(&self.task_id),
             None,
             None,
             download_start_time,
@@ -184,6 +188,8 @@ impl LocalImportHook<'_> {
         let headers: HashMap<String, String> = HashMap::new();
 
         crate::crawler::downloader::process_downloaded_content_image_to_storage(
+            &*self.download_queue,
+            next_download_id(),
             uri,
             &hash,
             video_thumb_path.as_ref(),
@@ -206,7 +212,7 @@ impl LocalImportHook<'_> {
 }
 
 #[async_trait::async_trait]
-impl FolderScanHook for LocalImportHook<'_> {
+impl FolderScanHook for LocalImportHook {
     type DirCtx = ();
 
     async fn on_enter_dir(
@@ -214,14 +220,14 @@ impl FolderScanHook for LocalImportHook<'_> {
         _enter: &ScannedDir,
         _ctx: &ScanCtx<()>,
     ) -> Result<Option<()>, ScanError> {
-        if self.download_queue.is_task_canceled(self.task_id).await {
+        if self.download_queue.is_task_canceled(&self.task_id).await {
             return Err(ScanError::Fatal("Task canceled".to_string()));
         }
         Ok(Some(()))
     }
 
     async fn on_file(&mut self, file: &ScannedFile, _ctx: &ScanCtx<()>) -> Result<(), ScanError> {
-        if self.download_queue.is_task_canceled(self.task_id).await {
+        if self.download_queue.is_task_canceled(&self.task_id).await {
             return Err(ScanError::Fatal("Task canceled".to_string()));
         }
         let download_start_time = self.next_download_start_time();
@@ -236,7 +242,7 @@ impl FolderScanHook for LocalImportHook<'_> {
         };
         if let Err(e) = result {
             GlobalEmitter::global().emit_task_log(
-                self.task_id,
+                &self.task_id,
                 "warn",
                 &task_log_i18n(
                     "taskLogEnqueueFailed",
@@ -249,7 +255,7 @@ impl FolderScanHook for LocalImportHook<'_> {
 
     fn on_progress(&mut self, delta: f64) {
         self.progress = (self.progress + delta).min(99.9);
-        GlobalEmitter::global().emit_task_progress(self.task_id, self.progress);
+        GlobalEmitter::global().emit_task_progress(&self.task_id, self.progress);
     }
 }
 
@@ -323,7 +329,6 @@ pub async fn run_builtin_local_import(
     task_id: &str,
     user_config: Option<HashMap<String, Value>>,
     output_album_id: Option<String>,
-    download_queue: &DownloadQueue,
 ) -> Result<(), String> {
     let cfg = user_config.unwrap_or_default();
 
@@ -389,8 +394,8 @@ pub async fn run_builtin_local_import(
     GlobalEmitter::global().emit_task_progress(task_id, 0.0);
 
     let mut hook = LocalImportHook {
-        task_id,
-        download_queue,
+        task_id: task_id.to_string(),
+        download_queue: TaskScheduler::global().download_queue(),
         output_album_id,
         #[cfg(not(target_os = "android"))]
         images_dir,

@@ -101,8 +101,7 @@ export class ModePlugin extends BasePlugin {
       if (this.mode!.isAndroid) {
         this.setEnv("VITE_ANDROID", "true");
         this.setEnv("TAURI_PLATFORM", "android");
-      } else if (!this.mode!.isLight) {
-        // light mode 不链接 rsmpeg，无需 FFmpeg 构建输出。
+      } else if (this.mode!.isStandard || this.mode!.isLight) {
         this.setEnv("FFMPEG_PKG_CONFIG_PATH", path.join(
             THIRD_DIR,
             "FFmpeg-build",
@@ -238,8 +237,10 @@ export class ModePlugin extends BasePlugin {
         copyDokan2DllToResources();
         copyDokanInstallerToResources();
         copyFFmpegDllsToResources();
+      } else if (this.mode!.isLight) {
+        this.log("Copy FFmpeg DLLs resources (light mode)...");
+        copyFFmpegDllsToResources();
       }
-      // light mode: no FFmpeg DLLs needed (rsmpeg not linked)
     }
   }
 

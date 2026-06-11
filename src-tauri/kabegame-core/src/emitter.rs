@@ -5,6 +5,7 @@
 //!
 //! 注意：此模块需要 `ipc-server` feature，因为它依赖于 EventBroadcaster。
 
+use crate::crawler::downloader::DownloadState;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::DaemonEvent;
 #[cfg(feature = "ipc-server")]
@@ -73,35 +74,49 @@ impl GlobalEmitter {
     pub fn emit_download_state(
         &self,
         task_id: &str,
+        id: u64,
         url: &str,
         start_time: u64,
         plugin_id: &str,
-        state: &str,
+        state: DownloadState,
         error: Option<&str>,
+        retried_for: Option<i64>,
     ) {
         self.emit_download_state_with_native(
-            task_id, url, start_time, plugin_id, state, error, false,
+            task_id,
+            id,
+            url,
+            start_time,
+            plugin_id,
+            state,
+            error,
+            retried_for,
+            false,
         );
     }
 
     pub fn emit_download_state_with_native(
         &self,
         task_id: &str,
+        id: u64,
         url: &str,
         start_time: u64,
         plugin_id: &str,
-        state: &str,
+        state: DownloadState,
         error: Option<&str>,
+        retried_for: Option<i64>,
         native: bool,
     ) {
         let event = std::sync::Arc::new(DaemonEvent::DownloadState {
             task_id: task_id.to_string(),
+            id,
             url: url.to_string(),
             start_time,
             plugin_id: plugin_id.to_string(),
-            state: state.to_string(),
+            state,
             error: error.map(|e| e.to_string()),
             native,
+            retried_for,
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -147,6 +162,7 @@ impl GlobalEmitter {
     pub fn emit_download_progress(
         &self,
         task_id: &str,
+        id: u64,
         url: &str,
         start_time: u64,
         plugin_id: &str,
@@ -155,6 +171,7 @@ impl GlobalEmitter {
     ) {
         let event = std::sync::Arc::new(DaemonEvent::DownloadProgress {
             task_id: task_id.to_string(),
+            id,
             url: url.to_string(),
             start_time,
             plugin_id: plugin_id.to_string(),
@@ -492,22 +509,26 @@ impl GlobalEmitter {
     pub fn emit_download_state(
         &self,
         _task_id: &str,
+        _id: u64,
         _url: &str,
         _start_time: u64,
         _plugin_id: &str,
-        _state: &str,
+        _state: DownloadState,
         _error: Option<&str>,
+        _retried_for: Option<i64>,
     ) {
     }
 
     pub fn emit_download_state_with_native(
         &self,
         _task_id: &str,
+        _id: u64,
         _url: &str,
         _start_time: u64,
         _plugin_id: &str,
-        _state: &str,
+        _state: DownloadState,
         _error: Option<&str>,
+        _retried_for: Option<i64>,
         _native: bool,
     ) {
     }
@@ -525,6 +546,7 @@ impl GlobalEmitter {
     pub fn emit_download_progress(
         &self,
         _task_id: &str,
+        _id: u64,
         _url: &str,
         _start_time: u64,
         _plugin_id: &str,

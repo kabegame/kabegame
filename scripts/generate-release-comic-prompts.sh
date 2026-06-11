@@ -20,12 +20,14 @@ Options:
                    Number of no-gag/explanatory story candidates per comic. Defaults to 1 and must be >= 1.
   --gag-candidates N
                    Number of gag / 小コント candidates per comic. Defaults to 1 and may be 0.
-  --out FILE       Raw Codex JSON response. Defaults to 4masu/vVERSION/generated-prompts.json.
+  --out FILE       Raw JSON response. Defaults to 4masu/vVERSION/generated-prompts.json.
   --out-dir DIR    Directory for split prompts. Defaults to 4masu/vVERSION/generated-prompts.
-  --model MODEL    Model for codex exec. Defaults to gpt-5.5.
+  --backend BACKEND
+                   AI backend to use. One of: codex, claude. Defaults to codex.
+  --model MODEL    Model for the backend. Defaults to gpt-5.5 (codex) or claude-opus-4-8 (claude).
   --reasoning-effort EFFORT
-                   Reasoning effort / thinking level for codex exec. Defaults to high.
-  --dry-run        Build context and print the codex command, but do not call codex.
+                   Reasoning effort / thinking level. Codex only; ignored for claude. Defaults to high.
+  --dry-run        Build context and print the backend command, but do not call it.
   -h, --help       Show this help.
 
 The script combines:
@@ -63,7 +65,8 @@ story_candidates="1"
 gag_candidates="1"
 out_file="4masu/${tag}/generated-prompts.json"
 out_dir="4masu/${tag}/generated-prompts"
-model="gpt-5.5"
+backend="codex"
+model=""
 reasoning_effort="high"
 dry_run="0"
 panel_width="1536"
@@ -119,6 +122,11 @@ while [[ $# -gt 0 ]]; do
       [[ "$reasoning_effort" =~ ^(none|minimal|low|medium|high|xhigh)$ ]] || die "--reasoning-effort must be one of: none, minimal, low, medium, high, xhigh"
       shift 2
       ;;
+    --backend)
+      backend="${2:-}"
+      [[ "$backend" =~ ^(codex|claude)$ ]] || die "--backend must be one of: codex, claude"
+      shift 2
+      ;;
     --dry-run)
       dry_run="1"
       shift
@@ -135,8 +143,17 @@ done
 
 candidates=$((story_candidates + gag_candidates))
 
-command -v codex >/dev/null 2>&1 || die "codex command not found"
-command -v node >/dev/null 2>&1 || die "node command not found"
+if [[ -z "$model" ]]; then
+  [[ "$backend" == "claude" ]] && model="claude-opus-4-8" || model="gpt-5.5"
+fi
+
+if [[ "$backend" == "claude" ]]; then
+  command -v claude >/dev/null 2>&1 || die "claude command not found"
+else
+  command -v codex >/dev/null 2>&1 || die "codex command not found"
+fi
+command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 || die "python3/python command not found"
+python_cmd="$(command -v python3 2>/dev/null || command -v python)"
 [[ -f CHANGELOG.md ]] || die "CHANGELOG.md not found"
 [[ -d 4masu ]] || die "4masu directory not found"
 
@@ -181,7 +198,6 @@ diffstat_file="$tmp_dir/diffstat-${base_ref//\//_}-${head_ref//\//_}.txt"
 commits_file="$tmp_dir/commits-${base_ref//\//_}-${head_ref//\//_}.txt"
 patch_file="$tmp_dir/selected-patch-${base_ref//\//_}-${head_ref//\//_}.diff"
 prompt_file="$tmp_dir/codex-prompt.md"
-parser_file="$tmp_dir/parse-release-comic-prompts.js"
 
 awk -v ver="$version" '
   $0 ~ "^## \\[?" ver "\\]?" { in_section=1; print; next }
@@ -240,7 +256,7 @@ cat > "$prompt_file" <<EOF
 - 每个 candidate 的 prompt 字段必须是可直接复制给图片生成 AI 的最终 prompt 正文。
 - 脚本会自动把 4masu/bo.prompt.md、4masu/app-ui-setting.prompt.md、以及 layouts 字段引用的布局文件全文复制到每个 prompt.md 头部。
 - 因为脚本会复制布局文件全文，所以不要在 title、reason、prompt、dialogue 里提到布局文件名，例如不要写“layout-01-gallery.prompt.md”。如果需要描述布局，请直接说“画廊页”“插件页”“任务详情页”等自然语言。
-- 你输出的每个 candidate.prompt 字段不要重复 bo.prompt.md 的通用四格格式和角色固定段落，也不要重复布局文件全文；只写该剧情候选独有的应用场景、版本主题、四格剧情、对白建议、避免项。
+- 你输出的每个 candidate.prompt 字段不要重复 bo.prompt.md 的通用四格格式和角色固定段落，也不要重复布局文件全文；只写该剧情候选独有的应用场景、版本主题、四格剧情（每格逐格说明）、避免项。对白建议不要写在 prompt 字段里，脚本会从 candidate.dialogue 字段单独追加到 prompt 文件末尾。
 - 同一 comic 的不同 candidate.prompt 里，版本主题和对应更新点要保持一致。story candidate 的最后一格可以是温柔收束、说明完成或轻微反差，不需要搞笑；gag candidate 的最后一格需要有明确笑点、吐槽、误会或反差オチ。
 - 每个 candidate.prompt 的四格剧情必须逐格说明登场人物、站位、动作、表情、UI 背景、画面变化，以及每格在最终 2x2 中的位置。每一格都要能作为一张 ${panel_width}x${panel_height} px 单格图独立生成；不要只写台词。对白只能作为补充。
 - 不要要求用户再补充“这是吉祥物”“请画四格漫画”“参考之前的角色”等前置语。
@@ -300,7 +316,7 @@ JSON 结构：
           "tone": "story",
           "title": "具体剧情候选标题",
           "angle": "无笑点/说明型短故事。说明同一更新内容如何发生，最后一格温柔收束或说明完成。",
-          "prompt": "完整可复制的最终图片生成 prompt 的剧情候选正文。不要提布局文件名。不要重复 bo.prompt.md 和布局文件全文。必须包含 Kabegame 是什么、本漫画主题、四格剧情、版本更新点、对白建议、避免项。",
+          "prompt": "完整可复制的最终图片生成 prompt 的剧情候选正文。不要提布局文件名。不要重复 bo.prompt.md 和布局文件全文。必须包含 Kabegame 是什么、本漫画主题、四格剧情（每格逐格说明）、版本更新点、避免项。不要在此字段里写对白建议，对白已通过 dialogue 字段单独输出。",
           "dialogue": [
             "第 1 格：...",
             "第 2 格：...",
@@ -344,28 +360,28 @@ layouts 只能从以下文件中选择，至少 1 个，最多 3 个：
 - 不要编造不存在的大功能。如果根据代码推断，请标注为“视觉隐喻”，不要当成真实 UI 功能。
 EOF
 
-codex_args=(
-  --ask-for-approval never
-  --config "model_reasoning_effort=\"${reasoning_effort}\""
-  exec
-  --cd "$repo_root"
-  --sandbox read-only
-  --output-last-message "$out_file"
-)
-
-if [[ -n "$model" ]]; then
-  codex_args+=(--model "$model")
+if [[ "$backend" == "claude" ]]; then
+  claude_args=(--print --dangerously-skip-permissions --output-format text)
+  [[ -n "$model" ]] && claude_args+=(--model "$model")
+  [[ -f "4masu/character.png" ]] && claude_args+=(--image "4masu/character.png")
+else
+  codex_args=(
+    --ask-for-approval never
+    --config "model_reasoning_effort=\"${reasoning_effort}\""
+    exec
+    --cd "$repo_root"
+    --sandbox read-only
+    --output-last-message "$out_file"
+  )
+  [[ -n "$model" ]] && codex_args+=(--model "$model")
+  [[ -f "4masu/character.png" ]] && codex_args+=(--image "4masu/character.png")
+  codex_args+=("-")
 fi
-
-if [[ -f "4masu/character.png" ]]; then
-  codex_args+=(--image "4masu/character.png")
-fi
-
-codex_args+=("-")
 
 echo "version: ${tag}"
 echo "base:    ${base_ref}"
 echo "head:    ${head_ref}"
+echo "backend: ${backend}"
 echo "comics:  ${count}"
 echo "story:   ${story_candidates}"
 echo "gag:     ${gag_candidates}"
@@ -373,197 +389,41 @@ echo "cands:   ${candidates}"
 echo "panel:   ${panel_width}x${panel_height}"
 echo "final:   ${final_width}x${final_height}"
 echo "model:   ${model}"
-echo "effort:  ${reasoning_effort}"
+[[ "$backend" == "codex" ]] && echo "effort:  ${reasoning_effort}"
 echo "raw:     ${out_file}"
 echo "out dir: ${out_dir}"
 echo "context: ${tmp_dir}"
 
 if [[ "$dry_run" == "1" ]]; then
   trap - EXIT
-  printf 'codex'
-  printf ' %q' "${codex_args[@]}"
-  printf ' < %q\n' "$prompt_file"
+  if [[ "$backend" == "claude" ]]; then
+    printf 'claude'
+    printf ' %q' "${claude_args[@]}"
+    printf ' < %q > %q\n' "$prompt_file" "$out_file"
+  else
+    printf 'codex'
+    printf ' %q' "${codex_args[@]}"
+    printf ' < %q\n' "$prompt_file"
+  fi
   echo
   echo "Prompt file:"
   echo "$prompt_file"
   exit 0
 fi
 
-codex "${codex_args[@]}" < "$prompt_file"
+if [[ "$backend" == "claude" ]]; then
+  claude "${claude_args[@]}" < "$prompt_file" > "$out_file"
+else
+  codex "${codex_args[@]}" < "$prompt_file"
+fi
 
-cat > "$parser_file" <<'NODE'
-const fs = require("fs");
-const path = require("path");
-
-const [rawFile, outDir, tag, expectedCandidatesRaw, expectedStoryRaw, expectedGagRaw] = process.argv.slice(2);
-const expectedCandidates = Number.parseInt(expectedCandidatesRaw, 10);
-if (!Number.isInteger(expectedCandidates) || expectedCandidates < 1) {
-  throw new Error(`invalid candidates count: ${expectedCandidatesRaw}`);
-}
-const expectedStory = Number.parseInt(expectedStoryRaw, 10);
-const expectedGag = Number.parseInt(expectedGagRaw, 10);
-if (!Number.isInteger(expectedStory) || expectedStory < 1) {
-  throw new Error(`invalid story candidates count: ${expectedStoryRaw}`);
-}
-if (!Number.isInteger(expectedGag) || expectedGag < 0) {
-  throw new Error(`invalid gag candidates count: ${expectedGagRaw}`);
-}
-const repoRoot = process.cwd();
-const allowedLayouts = new Set([
-  "4masu/layout-00-app-shell.prompt.md",
-  "4masu/layout-01-gallery.prompt.md",
-  "4masu/layout-02-filter-preview.prompt.md",
-  "4masu/layout-03-albums.prompt.md",
-  "4masu/layout-04-plugins.prompt.md",
-  "4masu/layout-05-tasks-auto-configs.prompt.md",
-  "4masu/layout-06-settings-help.prompt.md",
-  "4masu/layout-07-mobile-compact.prompt.md",
-]);
-
-function read(rel) {
-  return fs.readFileSync(path.join(repoRoot, rel), "utf8").trimEnd();
-}
-
-function extractJson(raw) {
-  let s = raw.trim();
-  const fence = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
-  if (fence) s = fence[1].trim();
-  try {
-    return JSON.parse(s);
-  } catch (_err) {
-    const start = s.indexOf("{");
-    const end = s.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      return JSON.parse(s.slice(start, end + 1));
-    }
-    throw _err;
-  }
-}
-
-function safeId(id, index) {
-  const fallback = `comic-${String(index + 1).padStart(2, "0")}`;
-  const value = String(id || fallback)
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
-  return value || fallback;
-}
-
-function safeFileStem(title, fallback) {
-  let value = String(title || fallback)
-    .trim()
-    .replace(/[\\/:*?"<>|]+/g, "-")
-    .replace(/\s+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
-  return value || fallback;
-}
-
-function asList(value) {
-  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
-}
-
-const raw = fs.readFileSync(rawFile, "utf8");
-const data = extractJson(raw);
-if (!data || !Array.isArray(data.comics) || data.comics.length === 0) {
-  throw new Error("JSON must contain a non-empty comics array");
-}
-
-fs.mkdirSync(outDir, { recursive: true });
-fs.writeFileSync(
-  path.join(outDir, "series.md"),
-  `# ${tag} 发布漫画系列\n\n${String(data.series || "").trim()}\n`,
-);
-
-const bo = read("4masu/bo.prompt.md");
-const worldview = fs.existsSync(path.join(repoRoot, "4masu/worldview.prompt.md"))
-  ? read("4masu/worldview.prompt.md")
-  : "";
-const app = read("4masu/app-ui-setting.prompt.md");
-
-for (const [index, comic] of data.comics.entries()) {
-  const id = safeId(comic.id, index);
-  const dir = path.join(outDir, id);
-  fs.mkdirSync(dir, { recursive: true });
-
-  const layouts = asList(comic.layouts);
-  if (layouts.length === 0) {
-    throw new Error(`${id}: layouts must contain at least one layout file`);
-  }
-  for (const layout of layouts) {
-    if (!allowedLayouts.has(layout)) {
-      throw new Error(`${id}: unsupported layout file: ${layout}`);
-    }
-  }
-
-  const updates = asList(comic.updates);
-  const candidates = Array.isArray(comic.candidates) ? comic.candidates : [];
-  if (candidates.length !== expectedCandidates) {
-    throw new Error(`${id}: candidates must contain exactly ${expectedCandidates} item(s)`);
-  }
-  const storyCount = candidates.filter((candidate) => String(candidate.tone || "").toLowerCase() === "story").length;
-  const gagCount = candidates.filter((candidate) => String(candidate.tone || "").toLowerCase() === "gag").length;
-  if (storyCount !== expectedStory || gagCount !== expectedGag) {
-    throw new Error(`${id}: expected ${expectedStory} story candidate(s) and ${expectedGag} gag candidate(s), got ${storyCount} story and ${gagCount} gag`);
-  }
-
-  const layoutText = layouts
-    .map((layout) => `## 页面布局设定\n\n${read(layout)}`)
-    .join("\n\n---\n\n");
-
-  const usedNames = new Set();
-  for (const [candidateIndex, candidate] of candidates.entries()) {
-    const title = String(candidate.title || comic.title || `剧情${candidateIndex + 1}`).trim();
-    const tone = String(candidate.tone || "").toLowerCase();
-    const dialogue = asList(candidate.dialogue);
-    const prompt = String(candidate.prompt || "").trim();
-    if (!prompt) {
-      throw new Error(`${id}/剧情${candidateIndex + 1}: prompt is empty`);
-    }
-
-    const body = [
-      worldview,
-      "",
-      "---",
-      "",
-      layoutText,
-      "",
-      "---",
-      "",
-      `# ${title}`,
-      "",
-      comic.title ? `漫画主题：${String(comic.title).trim()}\n` : "",
-      tone ? `候选类型：${tone === "story" ? "无笑点说明型短故事" : "有笑点小コント"}\n` : "",
-      comic.reason ? `为什么适合画：${String(comic.reason).trim()}\n` : "",
-      candidate.angle ? `剧情角度：${String(candidate.angle).trim()}\n` : "",
-      updates.length ? `对应更新点：\n${updates.map((u) => `- ${u}`).join("\n")}\n` : "",
-      "```text",
-      prompt,
-      "```",
-      "",
-      dialogue.length ? `可选对白：\n${dialogue.map((d) => `- ${d}`).join("\n")}\n` : "",
-      "---",
-      bo,
-      "",
-    ].filter((part) => part !== "").join("\n");
-
-    const fallbackStem = String(candidate.id || `candidate-${candidateIndex + 1}`);
-    let stem = safeFileStem(title, fallbackStem);
-    if (usedNames.has(stem)) {
-      stem = `${stem}-${candidateIndex + 1}`;
-    }
-    usedNames.add(stem);
-    fs.writeFileSync(path.join(dir, `${stem}.prompt.md`), body);
-  }
-}
-NODE
-
-node "$parser_file" "$out_file" "$out_dir" "$tag" "$candidates" "$story_candidates" "$gag_candidates"
+"$python_cmd" "$repo_root/scripts/regenerate-comic-prompts.py" "$version" \
+  --raw "$out_file" \
+  --out-dir "$out_dir" \
+  --expected-candidates "$candidates" \
+  --expected-story "$story_candidates" \
+  --expected-gag "$gag_candidates"
 
 echo
-echo "Raw Codex JSON response:"
+echo "Raw JSON response:"
 echo "$out_file"
-echo
-echo "Split prompt files:"
-find "$out_dir" -type f -name '*.prompt.md' | sort
