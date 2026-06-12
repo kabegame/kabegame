@@ -28,7 +28,6 @@ export type DownloadStatePayload = {
 
 export type DownloadProgressPayload = {
   id: number;
-  url: string;
   receivedBytes: number;
   totalBytes?: number;
 };

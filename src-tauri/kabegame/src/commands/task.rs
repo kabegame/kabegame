@@ -81,11 +81,11 @@ pub async fn dismiss_missed_configs(config_ids: Vec<String>) -> Result<(), Strin
 
 #[tauri::command]
 pub async fn cancel_task(task_id: String) {
-    use kabegame_core::crawler::TaskScheduler;
+    use kabegame_core::{crawler::TaskScheduler, storage::tasks::TaskStatus};
     TaskScheduler::global().cancel_task(&task_id).await;
-    // WebView 任务：立即以“已取消”结束并更新 DB，避免脚本后续调用 ctx.error 时被写成 failed
+    // WebView 任务：立即以"已取消"结束并更新 DB，避免脚本后续调用 ctx.error 时被写成 failed
     #[cfg(not(target_os = "android"))]
-    super::crawler::crawl_exit_with_status("canceled", Some(&task_id)).await;
+    super::crawler::crawl_exit_with_status(TaskStatus::Canceled, Some(&task_id)).await;
 }
 
 #[tauri::command]
@@ -216,7 +216,7 @@ pub async fn delete_task_failed_image(failed_id: i64) -> Result<(), String> {
     Ok(())
 }
 
-// 补充：add_task, update_task, delete_task, start_task (之前在 daemon.rs 里的)
+// 补充：add_task, delete_task, start_task (之前在 daemon.rs 里的)
 #[tauri::command]
 pub async fn get_all_tasks() -> Result<serde_json::Value, String> {
     let tasks = Storage::global().get_all_tasks()?;
@@ -246,12 +246,6 @@ pub async fn add_task(task: serde_json::Value) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn update_task(task: serde_json::Value) -> Result<(), String> {
-    let task_info: TaskInfo = serde_json::from_value(task).map_err(|e| e.to_string())?;
-    Storage::global().update_task(task_info)
-}
-
-#[tauri::command]
 pub async fn delete_task(task_id: String) -> Result<(), String> {
     let storage = Storage::global();
     let image_ids = Storage::get_task_image_ids(&task_id)?;
@@ -275,6 +269,6 @@ pub async fn delete_task(task_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn start_task(task: serde_json::Value) -> Result<(), String> {
+pub async fn start_task(task: serde_json::Value) -> Result<String, String> {
     crate::commands_core::task::start_task(task).await
 }

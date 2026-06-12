@@ -6,9 +6,9 @@ use kabegame_core::storage::image_events::{
 };
 use kabegame_core::storage::Storage;
 #[cfg(feature = "standard")]
-use kabegame_core::virtual_driver::VirtualDriveService;
-#[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+#[cfg(feature = "standard")]
+use kabegame_core::virtual_driver::VirtualDriveService;
 use tauri::AppHandle;
 
 #[tauri::command]

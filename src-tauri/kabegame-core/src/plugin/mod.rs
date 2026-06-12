@@ -2246,7 +2246,6 @@ fn parse_plugin_provider_entries(
         providers.push(PluginProviderDef {
             source_path: "<default entry_provider>".to_string(),
             def: default_plugin_entry_provider(plugin_id),
-            
         });
     }
 

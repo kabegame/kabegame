@@ -70,32 +70,7 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送下载状态事件
     pub fn emit_download_state(
-        &self,
-        task_id: &str,
-        id: u64,
-        url: &str,
-        start_time: u64,
-        plugin_id: &str,
-        state: DownloadState,
-        error: Option<&str>,
-        retried_for: Option<i64>,
-    ) {
-        self.emit_download_state_with_native(
-            task_id,
-            id,
-            url,
-            start_time,
-            plugin_id,
-            state,
-            error,
-            retried_for,
-            false,
-        );
-    }
-
-    pub fn emit_download_state_with_native(
         &self,
         task_id: &str,
         id: u64,
@@ -117,6 +92,15 @@ impl GlobalEmitter {
             error: error.map(|e| e.to_string()),
             native,
             retried_for,
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 发送下载条目移除事件（后端 wait 完成后调用，前端据此从活跃列表删除）
+    pub fn emit_download_removed(&self, task_id: &str, id: u64) {
+        let event = std::sync::Arc::new(DaemonEvent::DownloadRemoved {
+            task_id: task_id.to_string(),
+            id,
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -159,22 +143,9 @@ impl GlobalEmitter {
     }
 
     /// 发送下载进度事件
-    pub fn emit_download_progress(
-        &self,
-        task_id: &str,
-        id: u64,
-        url: &str,
-        start_time: u64,
-        plugin_id: &str,
-        received_bytes: u64,
-        total_bytes: Option<u64>,
-    ) {
+    pub fn emit_download_progress(&self, id: u64, received_bytes: u64, total_bytes: Option<u64>) {
         let event = std::sync::Arc::new(DaemonEvent::DownloadProgress {
-            task_id: task_id.to_string(),
             id,
-            url: url.to_string(),
-            start_time,
-            plugin_id: plugin_id.to_string(),
             received_bytes,
             total_bytes,
         });
@@ -516,6 +487,7 @@ impl GlobalEmitter {
         _state: DownloadState,
         _error: Option<&str>,
         _retried_for: Option<i64>,
+        _native: bool,
     ) {
     }
 
@@ -533,6 +505,8 @@ impl GlobalEmitter {
     ) {
     }
 
+    pub fn emit_download_removed(&self, _task_id: &str, _id: u64) {}
+
     pub fn emit(&self, _event: &str, _payload: serde_json::Value) {}
 
     pub fn emit_task_progress(&self, _task_id: &str, _progress: f64) {}
@@ -545,11 +519,7 @@ impl GlobalEmitter {
 
     pub fn emit_download_progress(
         &self,
-        _task_id: &str,
         _id: u64,
-        _url: &str,
-        _start_time: u64,
-        _plugin_id: &str,
         _received_bytes: u64,
         _total_bytes: Option<u64>,
     ) {

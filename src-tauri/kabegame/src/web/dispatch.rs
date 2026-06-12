@@ -761,10 +761,10 @@ pub fn init_registry() {
                         task: Value,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::start_task(args.task)
+                    let task_id = crate::commands_core::task::start_task(args.task)
                         .await
                         .map_err(RpcError::internal)?;
-                    Ok(Value::Null)
+                    Ok(Value::String(task_id))
                 })
             }),
         },
@@ -1247,25 +1247,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::task::add_task(args.task)
-                        .await
-                        .map_err(RpcError::internal)
-                })
-            }),
-        },
-    );
-
-    map.insert(
-        "update_task",
-        MethodEntry {
-            requires_super: true,
-            handler: Arc::new(|p| {
-                Box::pin(async move {
-                    #[derive(serde::Deserialize)]
-                    struct Args {
-                        task: Value,
-                    }
-                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::update_task(args.task)
                         .await
                         .map_err(RpcError::internal)
                 })

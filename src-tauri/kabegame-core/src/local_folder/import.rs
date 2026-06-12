@@ -1,6 +1,8 @@
 #[cfg(all(not(target_os = "android"), feature = "video"))]
-use crate::crawler::downloader::video_compress::compress_video_for_preview;
-use crate::crawler::downloader::{compute_file_hash, generate_thumbnail};
+use crate::crawler::downloader::compress::compress_video_for_preview;
+use crate::crawler::downloader::{
+    compute_file_hash, generate_thumbnail, wait_after_non_pool_download_if_needed,
+};
 use crate::emitter::GlobalEmitter;
 use crate::image_type::{is_video_by_path, mime_type_from_path};
 use crate::media_dimensions::{resolve_file_size_sync, resolve_media_dimensions_sync};
@@ -23,6 +25,11 @@ pub async fn import_local_file(
     size: u64,
     carry: Option<CarryFromOld>,
 ) -> Result<String, String> {
+    let import_start_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
     // local_path 唯一约束：若该路径已入库（来自其它导入途径或画册），
     // 不再重复插入，而是把既有图片关联到本画册（幂等）。reimport 已在调用方先删旧行，
     // 因此这里不会误命中旧记录。
@@ -39,6 +46,7 @@ pub async fn import_local_file(
             let image_ids = vec![image_id.clone()];
             GlobalEmitter::global().emit_album_images_change("add", &album_ids, &image_ids);
         }
+        wait_after_non_pool_download_if_needed(import_start_time).await;
         return Ok(image_id);
     }
 
@@ -118,6 +126,7 @@ pub async fn import_local_file(
     GlobalEmitter::global().emit_images_change("add", &image_ids, None, None, Some(&plugin_ids));
     GlobalEmitter::global().emit_album_images_change("add", &album_ids, &image_ids);
 
+    wait_after_non_pool_download_if_needed(import_start_time).await;
     Ok(image_id)
 }
 

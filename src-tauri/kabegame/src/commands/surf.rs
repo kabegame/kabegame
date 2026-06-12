@@ -1,9 +1,10 @@
 use kabegame_core::crawler::downloader::{
-    compute_native_download_destination, get_default_images_dir, next_download_id,
-    postprocess_downloaded_image, DownloadState, NativeDownloadEntry, NativeDownloadState,
+    compute_unique_download_path, get_default_images_dir, next_download_id,
+    postprocess_downloaded_image, wait_after_non_pool_download_if_needed, DownloadState,
+    NativeDownloadEntry, NativeDownloadState,
 };
-use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::crawler::favicon::fetch_favicon;
+use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::storage::{RangedSurfRecords, Storage, SurfRecord};
 use kabegame_i18n::t;
@@ -12,6 +13,7 @@ use std::sync::{Mutex, OnceLock};
 use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent};
 use tauri::Emitter;
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use url::Url;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -229,23 +231,20 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                             return false;
                         }
                         let effective_url = if url.scheme() == "blob" {
-                            url.as_str()
+                            Url::parse(url.as_str()
                                 .strip_prefix("blob:")
-                                .unwrap_or(url.as_str())
-                                .to_string()
+                                .unwrap_or(url.as_str())).unwrap()
                         } else {
-                            url.as_str().to_string()
+                            url.clone()
                         };
 
-                        let native_dest = match compute_native_download_destination(
-                            &effective_url,
-                            &images_dir,
-                        ) {
-                            Ok(p) => p,
-                            Err(_) => {
-                                return false;
-                            }
-                        };
+                        let native_dest =
+                            match compute_unique_download_path(&images_dir, &effective_url, None) {
+                                Ok(p) => p,
+                                Err(_) => {
+                                    return false;
+                                }
+                            };
                         let download_start_time = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis() as u64)
@@ -268,7 +267,7 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                             return false;
                         }
 
-                        GlobalEmitter::global().emit_download_state_with_native(
+                        GlobalEmitter::global().emit_download_state(
                             &surf_record_id,
                             download_id,
                             url.as_str(),
@@ -296,11 +295,15 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                                 let dq = TaskScheduler::global().download_queue();
                                 let surf_record_id = entry.surf_record_id.clone();
                                 let empty_headers = std::collections::HashMap::new();
-                                match postprocess_downloaded_image(
+                                let result = postprocess_downloaded_image(
                                     &*dq,
                                     entry.id,
-                                    &final_path,
-                                    &url_str,
+                                    kabegame_core::crawler::downloader::PostprocessSource::Path {
+                                        path: &final_path,
+                                        relocate_to: None,
+                                    },
+                                    false,
+                                    &url,
                                     &entry.plugin_id,
                                     entry.task_id.as_deref(),
                                     None,
@@ -312,8 +315,10 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                                     None,
                                     None,
                                 )
-                                .await
-                                {
+                                .await;
+                                wait_after_non_pool_download_if_needed(entry.download_start_time)
+                                    .await;
+                                match result {
                                     Ok(inserted) => {
                                         if let Some(id) = surf_record_id.as_deref() {
                                             if inserted {
@@ -342,7 +347,7 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                                 .as_deref()
                                 .or(entry.surf_record_id.as_deref())
                                 .unwrap_or_default();
-                            GlobalEmitter::global().emit_download_state_with_native(
+                            GlobalEmitter::global().emit_download_state(
                                 event_task_id,
                                 entry.id,
                                 url.as_str(),

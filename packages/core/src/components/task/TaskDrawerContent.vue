@@ -203,10 +203,6 @@ type ActiveDownloadInfo = {
 
 type DownloadProgressPayload = {
   id: number;
-  taskId: string;
-  url: string;
-  startTime: number;
-  pluginId: string;
   receivedBytes: number;
   totalBytes?: number | null;
 };
@@ -356,10 +352,9 @@ function handleTasksListScroll(e: Event) {
 
 // 下载信息
 const activeDownloads = ref<ActiveDownloadInfo[]>([]);
-let activeDownloadKeysSnapshot = new Set<string>();
 const activeDownloadsRunningCount = computed(() => {
-  // completed 为“短暂展示态”，不计入运行中
-  return activeDownloads.value.filter((d) => getEffectiveDownloadState(d) !== "completed").length;
+  // completed/failed/canceled 为池终态停留态，不计入运行中
+  return activeDownloads.value.filter((d) => !isTerminalDownloadState(getEffectiveDownloadState(d))).length;
 });
 const orderedActiveDownloads = computed(() => {
   // worker 在上，native 叠在下方
@@ -373,6 +368,8 @@ let unlistenDownloadProgress: null | (() => void) = null;
 
 const downloadStateByKey = ref<Record<string, { state: string; error?: string; updatedAt: number }>>({});
 let unlistenDownloadState: null | (() => void) = null;
+
+let unlistenDownloadRemoved: null | (() => void) = null;
 
 const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
 
@@ -395,40 +392,17 @@ const isTerminalDownloadState = (state: string) => {
   return st === "completed" || st === "failed" || st === "canceled";
 };
 
-// completed 状态短暂展示后自动移除（ms）
-const COMPLETED_HOLD_MS = 200;
-const completedRemovalTimers = new Map<string, number>();
+const removeDownloadByKey = (key: string) => {
+  const idx = activeDownloads.value.findIndex((d) => downloadKey(d) === key);
+  if (idx !== -1) activeDownloads.value.splice(idx, 1);
 
-const scheduleRemoveCompleted = (key: string) => {
-  if (completedRemovalTimers.has(key)) return;
-  const timer = window.setTimeout(() => {
-    completedRemovalTimers.delete(key);
+  const nextProgress = { ...downloadProgressByKey.value };
+  delete nextProgress[key];
+  downloadProgressByKey.value = nextProgress;
 
-    const idx = activeDownloads.value.findIndex((d) => downloadKey(d) === key);
-    if (idx !== -1) activeDownloads.value.splice(idx, 1);
-
-    // 同时清理缓存，避免内存增长
-    const nextProgress = { ...downloadProgressByKey.value };
-    delete nextProgress[key];
-    downloadProgressByKey.value = nextProgress;
-
-    const nextState = { ...downloadStateByKey.value };
-    delete nextState[key];
-    downloadStateByKey.value = nextState;
-  }, COMPLETED_HOLD_MS);
-  completedRemovalTimers.set(key, timer);
-};
-
-const cancelRemoveCompleted = (key: string) => {
-  const t = completedRemovalTimers.get(key);
-  if (t != null) {
-    try {
-      clearTimeout(t);
-    } catch {
-      // ignore
-    }
-    completedRemovalTimers.delete(key);
-  }
+  const nextState = { ...downloadStateByKey.value };
+  delete nextState[key];
+  downloadStateByKey.value = nextState;
 };
 
 const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
@@ -436,35 +410,24 @@ const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
   const idx = activeDownloads.value.findIndex((d) => downloadKey(d) === key);
 
   if (isTerminalDownloadState(p.state)) {
-    const st = String(p.state || "").toLowerCase();
-    if (st === "completed") {
-      // completed：短暂展示后移除（不计入运行中）
-      const nextItem: ActiveDownloadInfo = {
-        id: p.id,
-        taskId: p.taskId,
-        startTime: p.startTime,
-        url: p.url,
-        pluginId: p.pluginId,
-        state: p.state || "completed",
-        native: !!p.native,
-      };
-      if (idx === -1) activeDownloads.value.push(nextItem);
-      else activeDownloads.value[idx] = { ...activeDownloads.value[idx], ...nextItem };
-      scheduleRemoveCompleted(key);
+    // native/surf 路径：终态事件到达即立即移除
+    if (p.native) {
+      if (idx !== -1) removeDownloadByKey(key);
       return;
     }
-
-    // failed/canceled：立即移除
-    cancelRemoveCompleted(key);
-    if (idx !== -1) activeDownloads.value.splice(idx, 1);
-    // 同时清理缓存，避免内存增长
-    const nextProgress = { ...downloadProgressByKey.value };
-    delete nextProgress[key];
-    downloadProgressByKey.value = nextProgress;
-
-    const nextState = { ...downloadStateByKey.value };
-    delete nextState[key];
-    downloadStateByKey.value = nextState;
+    // 下载池路径：仅更新条目状态以展示 completed/failed/canceled 标签
+    // 不移除——等后端 wait 完成后发 download-removed 事件再移除
+    const nextItem: ActiveDownloadInfo = {
+      id: p.id,
+      taskId: p.taskId,
+      startTime: p.startTime,
+      url: p.url,
+      pluginId: p.pluginId,
+      state: p.state,
+      native: false,
+    };
+    if (idx === -1) activeDownloads.value.push(nextItem);
+    else activeDownloads.value[idx] = { ...activeDownloads.value[idx], ...nextItem };
     return;
   }
 
@@ -479,9 +442,6 @@ const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
   };
   if (idx === -1) activeDownloads.value.push(nextItem);
   else activeDownloads.value[idx] = { ...activeDownloads.value[idx], ...nextItem };
-
-  // 非 completed：确保不会误触发延迟移除
-  cancelRemoveCompleted(key);
 };
 
 const downloadStateText = (d: ActiveDownloadInfo) => {
@@ -547,7 +507,6 @@ const loadDownloads = async () => {
 
     // 清理已不在 active 列表里的进度，避免内存增长
     const aliveKeys = new Set(downloads.map(downloadKey));
-    activeDownloadKeysSnapshot = aliveKeys;
     const next: Record<string, DownloadProgressState> = {};
     for (const [k, v] of Object.entries(downloadProgressByKey.value)) {
       if (aliveKeys.has(k)) next[k] = v;
@@ -568,17 +527,6 @@ const loadDownloads = async () => {
       }
     }
     downloadStateByKey.value = nextState;
-
-    for (const d of downloads) {
-      const key = downloadKey(d);
-      const st = String(d.state || "").toLowerCase();
-      if (st === "completed") scheduleRemoveCompleted(key);
-      if (st === "failed" || st === "canceled") {
-        cancelRemoveCompleted(key);
-        const idx = activeDownloads.value.findIndex((x) => downloadKey(x) === key);
-        if (idx !== -1) activeDownloads.value.splice(idx, 1);
-      }
-    }
   } catch (error) {
     console.error("加载下载列表失败:", error);
   }
@@ -592,17 +540,9 @@ const initAllEventListeners = async () => {
   eventListenersInitialized = true;
   const normalizeDownloadProgressPayload = (raw: any): DownloadProgressPayload | null => {
     const id = Number(raw?.id);
-    const taskId = String(raw?.taskId ?? "").trim();
-    const url = String(raw?.url ?? "").trim();
-    const startTime = Number(raw?.startTime ?? NaN);
-    const pluginId = String(raw?.pluginId ?? "").trim();
-    if (isNaN(id) || !taskId || !url || !Number.isFinite(startTime) || !pluginId) return null;
+    if (isNaN(id)) return null;
     return {
       id,
-      taskId,
-      url,
-      startTime,
-      pluginId,
       receivedBytes: Number(raw?.receivedBytes ?? 0),
       totalBytes: raw?.totalBytes ?? null,
     };
@@ -624,20 +564,7 @@ const initAllEventListeners = async () => {
       const p = normalizeDownloadProgressPayload(event.payload as any);
       if (!p) return;
       const key = downloadKeyFromPayload(p);
-
-      if (
-        !activeDownloads.value.some((d) => downloadKey(d) === key) &&
-        activeDownloadKeysSnapshot.has(key)
-      ) {
-        activeDownloads.value.push({
-          id: p.id,
-          taskId: p.taskId,
-          startTime: p.startTime,
-          url: p.url,
-          pluginId: p.pluginId,
-          state: "downloading",
-        });
-      }
+      if (!activeDownloads.value.some((d) => downloadKey(d) === key)) return;
 
       downloadProgressByKey.value = {
         ...downloadProgressByKey.value,
@@ -665,6 +592,15 @@ const initAllEventListeners = async () => {
   } catch (error) {
     console.error("监听下载状态失败:", error);
   }
+  try {
+    unlistenDownloadRemoved = await listen<{ id: number; taskId?: string }>("download-removed", (event) => {
+      const id = Number((event.payload as any)?.id);
+      if (isNaN(id)) return;
+      removeDownloadByKey(String(id));
+    });
+  } catch (error) {
+    console.error("监听下载移除失败:", error);
+  }
 };
 
 const stopAllEventListeners = () => {
@@ -682,16 +618,14 @@ const stopAllEventListeners = () => {
   } finally {
     unlistenDownloadState = null;
   }
-  eventListenersInitialized = false;
-
-  for (const t of completedRemovalTimers.values()) {
-    try {
-      clearTimeout(t);
-    } catch {
-      // ignore
-    }
+  try {
+    unlistenDownloadRemoved?.();
+  } catch {
+    // ignore
+  } finally {
+    unlistenDownloadRemoved = null;
   }
-  completedRemovalTimers.clear();
+  eventListenersInitialized = false;
 };
 
 /** 抽屉打开时同步一次快照，纠正可能错过的事件 */

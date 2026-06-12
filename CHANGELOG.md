@@ -6,6 +6,10 @@
 
 **Changelog entries:** Write release notes in **English** (new sections and bullets from [3.4.5] onward).
 
+## [4.2.1]
+### Changed
+- **Failed Image**: now operate them in a dialog not in a new page. 
+
 ## [4.2.0]
 ### Added
 - **Folder Album**: Can create an album that keep syncing to a folder (Open a switch setting to keep in sync)

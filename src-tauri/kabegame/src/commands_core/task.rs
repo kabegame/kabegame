@@ -1,6 +1,6 @@
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::scheduler::Scheduler;
-use kabegame_core::storage::{RunConfig, Storage, TaskInfo};
+use kabegame_core::storage::{RunConfig, Storage, TaskInfo, TaskStatus};
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -46,52 +46,78 @@ pub async fn get_active_downloads() -> Result<Value, String> {
     serde_json::to_value(downloads).map_err(|e| e.to_string())
 }
 
-pub async fn start_task(task: Value) -> Result<(), String> {
-    use kabegame_core::crawler::CrawlTaskRequest;
-    use kabegame_core::crawler::TaskScheduler;
+pub async fn start_task(task: Value) -> Result<String, String> {
+    use std::collections::HashMap;
 
-    let req: CrawlTaskRequest = serde_json::from_value(task).map_err(|e| e.to_string())?;
-
-    match Storage::global().get_task(&req.task_id)? {
-        Some(_) => {}
-        None => {
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            let t = TaskInfo {
-                id: req.task_id.clone(),
-                plugin_id: req.plugin_id.clone(),
-                output_dir: req.output_dir.clone(),
-                user_config: req.user_config.clone(),
-                http_headers: req.http_headers.clone(),
-                output_album_id: req.output_album_id.clone(),
-                run_config_id: req.run_config_id.clone(),
-                trigger_source: if req.trigger_source.is_empty() {
-                    "manual".to_string()
-                } else {
-                    req.trigger_source.clone()
-                },
-                status: "pending".to_string(),
-                progress: 0.0,
-                deleted_count: 0,
-                dedup_count: 0,
-                success_count: 0,
-                failed_count: 0,
-                start_time: Some(now_ms),
-                end_time: None,
-                error: None,
-            };
-            let payload = serde_json::to_value(&t).map_err(|e| e.to_string())?;
-            Storage::global().add_task(t)?;
-            GlobalEmitter::global().emit_task_added(&payload);
-        }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StartTaskParams {
+        plugin_id: String,
+        output_dir: Option<String>,
+        user_config: Option<HashMap<String, Value>>,
+        #[serde(default)]
+        http_headers: Option<HashMap<String, String>>,
+        output_album_id: Option<String>,
+        plugin_file_path: Option<String>,
+        run_config_id: Option<String>,
+        #[serde(default = "default_trigger_source")]
+        trigger_source: String,
     }
 
-    TaskScheduler::global()
-        .submit_task(req)
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    fn default_trigger_source() -> String {
+        "manual".to_string()
+    }
+
+    let p: StartTaskParams = serde_json::from_value(task).map_err(|e| e.to_string())?;
+
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let images_dir =
+        kabegame_core::crawler::downloader::resolve_crawl_output_dir(p.output_dir.as_deref());
+    let output_dir = Some(images_dir.to_string_lossy().into_owned());
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let t = TaskInfo {
+        id: task_id.clone(),
+        plugin_id: p.plugin_id,
+        output_dir,
+        user_config: p.user_config,
+        http_headers: p.http_headers,
+        output_album_id: p.output_album_id,
+        run_config_id: p.run_config_id,
+        trigger_source: p.trigger_source,
+        status: TaskStatus::Pending,
+        progress: 0.0,
+        deleted_count: 0,
+        dedup_count: 0,
+        success_count: 0,
+        failed_count: 0,
+        start_time: Some(now_ms),
+        end_time: None,
+        error: None,
+    };
+    let payload = serde_json::to_value(&t).map_err(|e| e.to_string())?;
+    Storage::global().add_task(t)?;
+    GlobalEmitter::global().emit_task_added(&payload);
+
+    let req = kabegame_core::crawler::CrawlTaskRequest {
+        task_id: task_id.clone(),
+        plugin_file_path: p.plugin_file_path,
+    };
+    if let Err(e) = kabegame_core::crawler::TaskScheduler::global().submit_task(req) {
+        // 入队失败：将 DB 记录标记为 Failed
+        if let Ok(Some(mut failed_task)) = Storage::global().get_task(&task_id) {
+            failed_task.status = TaskStatus::Failed;
+            failed_task.end_time = Some(now_ms);
+            failed_task.error = Some(e.clone());
+            let _ = Storage::global().update_task(failed_task);
+        }
+        return Err(e);
+    }
+    Ok(task_id)
 }
 
 pub async fn cancel_task(task_id: String) -> Result<Value, String> {
@@ -235,12 +261,6 @@ pub async fn add_task(task: Value) -> Result<Value, String> {
     Storage::global().add_task(task_info.clone())?;
     let payload = serde_json::to_value(&task_info).map_err(|e| e.to_string())?;
     GlobalEmitter::global().emit_task_added(&payload);
-    Ok(Value::Null)
-}
-
-pub async fn update_task(task: Value) -> Result<Value, String> {
-    let task_info: TaskInfo = serde_json::from_value(task).map_err(|e| e.to_string())?;
-    Storage::global().update_task(task_info)?;
     Ok(Value::Null)
 }
 

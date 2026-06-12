@@ -166,7 +166,7 @@ fn init(
         let compress_proxy =
             compress_provider::ChannelVideoCompressProvider::new(compress_provider);
         if let Err(e) =
-            kabegame_core::crawler::downloader::video_compress::set_android_video_compress_provider(
+            kabegame_core::crawler::downloader::compress::set_android_video_compress_provider(
                 Arc::new(compress_proxy),
             )
         {
@@ -190,9 +190,8 @@ fn init(
     init_kgpg_plugin();
 
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-    tauri::async_runtime::block_on(http_server::start_http_server()).map_err(|e| {
-        format!("Cannot start http server: {}", e)
-    })?;
+    tauri::async_runtime::block_on(http_server::start_http_server())
+        .map_err(|e| format!("Cannot start http server: {}", e))?;
     Ok(())
 }
 
@@ -386,7 +385,6 @@ pub fn run() {
             get_tasks_page,
             get_task,
             add_task,
-            update_task,
             delete_task,
             start_task,
             cancel_task,
@@ -572,10 +570,6 @@ pub fn run() {
             crawl_add_progress,
             #[cfg(not(target_os = "android"))]
             crawl_download_image,
-            #[cfg(not(target_os = "android"))]
-            crawl_register_blob_download,
-            #[cfg(not(target_os = "android"))]
-            crawl_browser_download_failed,
             #[cfg(not(target_os = "android"))]
             crawl_to,
             #[cfg(not(target_os = "android"))]

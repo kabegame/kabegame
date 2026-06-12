@@ -822,8 +822,7 @@ impl Storage {
                 .iter()
                 .map(|s| std::path::PathBuf::from(s))
                 .collect();
-            let path_refs: Vec<&std::path::Path> =
-                paths.iter().map(|p| p.as_path()).collect();
+            let path_refs: Vec<&std::path::Path> = paths.iter().map(|p| p.as_path()).collect();
             crate::storage::safe_delete::trash_source_files_batch(&path_refs);
         }
 

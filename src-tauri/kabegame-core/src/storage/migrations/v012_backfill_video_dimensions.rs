@@ -31,7 +31,7 @@ pub fn up(conn: &Connection) -> Result<(), String> {
         return Ok(());
     }
 
-    #[cfg(feature =  "video")]
+    #[cfg(feature = "video")]
     {
         conn.execute_batch("BEGIN")
             .map_err(|e| format!("begin: {e}"))?;

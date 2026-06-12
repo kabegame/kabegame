@@ -1,9 +1,12 @@
-use crate::crawler::downloader::{get_default_images_dir, ActiveDownloadInfo, DownloadQueue};
+use crate::crawler::downloader::{
+    get_default_images_dir, resolve_crawl_output_dir, ActiveDownloadInfo, DownloadQueue,
+};
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::plugin::{check_min_app_version, PluginManager, VarDefinition, VarOption};
 use crate::schedule_sync::on_crawl_task_reached_terminal;
 use crate::settings::Settings;
+use crate::storage::tasks::TaskStatus;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -33,24 +36,18 @@ use crate::crawler::webview::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CrawlTaskRequest {
-    pub plugin_id: String,
+    /// 数据库任务记录 id；run_task 通过它从 Storage 读取完整 TaskInfo
     pub task_id: String,
-    pub output_dir: Option<String>,
-    pub user_config: Option<HashMap<String, serde_json::Value>>,
-    #[serde(default)]
-    pub http_headers: Option<HashMap<String, String>>,
-    pub output_album_id: Option<String>,
     /// 可选：直接从指定 .kgpg 文件运行（用于插件编辑器/临时插件）
     #[serde(default)]
     pub plugin_file_path: Option<String>,
-    #[serde(default)]
-    pub run_config_id: Option<String>,
-    #[serde(default = "default_trigger_source")]
-    pub trigger_source: String,
 }
 
-fn default_trigger_source() -> String {
-    "manual".to_string()
+/// 一次状态跳转附带的元数据（时间戳、错误信息）。
+pub struct TaskTransition {
+    pub start_time: Option<u64>,
+    pub end_time: Option<u64>,
+    pub error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -145,7 +142,7 @@ impl TaskScheduler {
         // 先保证 DB 状态为 pending（前端也会写，但这里做幂等兜底）
         let storage = Storage::global();
         // let emitter = GlobalEmitter::global();
-        let _ = persist_task_status(storage, &req.task_id, "pending", None, None, None);
+        let _ = persist_task_status(storage, &req.task_id, TaskStatus::Pending, None, None, None);
         GlobalEmitter::global().emit_task_changed(&req.task_id, json!({ "status": "pending" }));
 
         self.queue_tx
@@ -171,7 +168,7 @@ impl TaskScheduler {
 
     /// 取消任务（标记取消 + 唤醒等待中的下载）
     pub async fn cancel_task(&self, task_id: &str) {
-        self.download_queue.cancel_task(task_id).await;
+        self.download_queue.cancel_download(task_id).await;
     }
 
     /// 失败图片重试：spawn 异步任务入队，立即返回；可在等待容量期间 `cancel_retry_failed_image` abort。
@@ -312,9 +309,46 @@ impl TaskScheduler {
 
     /// 启动下载 worker（先根据设置设置并发数并 spawn 对应数量，避免 total_workers 仍为 0 时 spawn 0 个 worker）
     pub async fn start_download_workers_async(&self) {
+        // 启动时清理上次残留下的溢写临时文件
+        crate::crawler::downloader::clear_downloads_temp_dir().await;
         let dq = self.download_queue();
         dq.set_desired_concurrency_from_settings().await;
         dq.notify_all_waiting();
+    }
+
+    /// 校验并执行一次任务状态跳转：FSM 合法才持久化 + 终态钩子 + 发事件。
+    /// 非法跳转：warn 记录 `current -> next`，不改不发，返回 false。
+    pub fn transition(&self, task_id: &str, next: TaskStatus, t: TaskTransition) -> bool {
+        let storage = Storage::global();
+        let Ok(Some(mut task)) = storage.get_task(task_id) else {
+            return false;
+        };
+        let current = task.status;
+        if !current.can_transition_to(next) {
+            eprintln!("[Task FSM] reject {task_id}: {current:?} -> {next:?}");
+            return false;
+        }
+        task.status = next;
+        if t.start_time.is_some() {
+            task.start_time = t.start_time;
+        }
+        if t.end_time.is_some() {
+            task.end_time = t.end_time;
+        }
+        if t.error.is_some() {
+            task.error = t.error;
+        }
+        if next == TaskStatus::Completed {
+            task.progress = 100.0;
+        }
+        if storage.update_task(task).is_err() {
+            return false;
+        }
+        if next.is_terminal() {
+            on_crawl_task_reached_terminal(task_id);
+        }
+        GlobalEmitter::global().emit_task_status_from_storage(task_id);
+        true
     }
 }
 
@@ -328,7 +362,7 @@ fn now_ms() -> u64 {
 fn persist_task_status(
     storage: &Storage,
     task_id: &str,
-    status: &str,
+    status: TaskStatus,
     start_time: Option<u64>,
     end_time: Option<u64>,
     error: Option<String>,
@@ -337,7 +371,7 @@ fn persist_task_status(
         return Ok(());
     };
 
-    task.status = status.to_string();
+    task.status = status;
     if start_time.is_some() {
         task.start_time = start_time;
     }
@@ -348,7 +382,7 @@ fn persist_task_status(
         task.error = error;
     }
     storage.update_task(task)?;
-    if matches!(status, "completed" | "failed" | "canceled" | "cancelled") {
+    if status.is_terminal() {
         on_crawl_task_reached_terminal(task_id);
     }
     Ok(())
@@ -396,24 +430,16 @@ async fn worker_loop(
         };
 
         // 若任务已取消（排队期间），直接 canceled
-        if download_queue.is_task_canceled(&req.task_id).await {
+        if download_queue.is_download_canceled(&req.task_id).await {
             let end = now_ms();
-            let e = "Task canceled".to_string();
-            let _ = persist_task_status(
-                &storage,
+            scheduler.transition(
                 &req.task_id,
-                "canceled",
-                None,
-                Some(end),
-                Some(e.clone()),
-            );
-            GlobalEmitter::global().emit_task_changed(
-                &req.task_id,
-                json!({
-                    "status": "canceled",
-                    "endTime": end,
-                    "error": e,
-                }),
+                TaskStatus::Canceled,
+                TaskTransition {
+                    start_time: None,
+                    end_time: Some(end),
+                    error: Some("Task canceled".to_string()),
+                },
             );
             continue;
         }
@@ -422,13 +448,14 @@ async fn worker_loop(
 
         // running
         let start = now_ms();
-        let _ = persist_task_status(&storage, &req.task_id, "running", Some(start), None, None);
-        GlobalEmitter::global().emit_task_changed(
+        scheduler.transition(
             &req.task_id,
-            json!({
-                "status": "running",
-                "startTime": start,
-            }),
+            TaskStatus::Running,
+            TaskTransition {
+                start_time: Some(start),
+                end_time: None,
+                error: None,
+            },
         );
 
         let page_stacks = scheduler.page_stacks();
@@ -439,40 +466,25 @@ async fn worker_loop(
         match res {
             Ok(TaskOutcome::Completed) => {
                 let end = now_ms();
-                if download_queue.is_task_canceled(&req.task_id).await {
-                    let e = "Task canceled".to_string();
-                    let _ = persist_task_status(
-                        &storage,
+                if download_queue.is_download_canceled(&req.task_id).await {
+                    scheduler.transition(
                         &req.task_id,
-                        "canceled",
-                        None,
-                        Some(end),
-                        Some(e.clone()),
-                    );
-                    GlobalEmitter::global().emit_task_changed(
-                        &req.task_id,
-                        json!({
-                            "status": "canceled",
-                            "endTime": end,
-                            "error": e,
-                        }),
+                        TaskStatus::Canceled,
+                        TaskTransition {
+                            start_time: None,
+                            end_time: Some(end),
+                            error: Some("Task canceled".to_string()),
+                        },
                     );
                 } else {
-                    let _ = persist_task_status(
-                        &storage,
+                    scheduler.transition(
                         &req.task_id,
-                        "completed",
-                        None,
-                        Some(end),
-                        None,
-                    );
-                    GlobalEmitter::global().emit_task_changed(
-                        &req.task_id,
-                        json!({
-                            "status": "completed",
-                            "progress": 100,
-                            "endTime": end,
-                        }),
+                        TaskStatus::Completed,
+                        TaskTransition {
+                            start_time: None,
+                            end_time: Some(end),
+                            error: None,
+                        },
                     );
                 }
             }
@@ -487,23 +499,19 @@ async fn worker_loop(
             Err(e) => {
                 let is_canceled = e.contains("Task canceled");
                 let end = now_ms();
-                let status = if is_canceled { "canceled" } else { "failed" };
-
-                let _ = persist_task_status(
-                    &storage,
+                let next = if is_canceled {
+                    TaskStatus::Canceled
+                } else {
+                    TaskStatus::Failed
+                };
+                scheduler.transition(
                     &req.task_id,
-                    status,
-                    None,
-                    Some(end),
-                    Some(e.clone()),
-                );
-                GlobalEmitter::global().emit_task_changed(
-                    &req.task_id,
-                    json!({
-                        "status": status,
-                        "endTime": end,
-                        "error": e,
-                    }),
+                    next,
+                    TaskTransition {
+                        start_time: None,
+                        end_time: Some(end),
+                        error: Some(e),
+                    },
                 );
             }
         }
@@ -524,28 +532,29 @@ enum TaskOutcome {
 
 async fn run_task(
     storage: &Storage,
-    // PluginManager 现在是全局单例，不需要传递
-    // Settings 现在是全局单例，不需要传递
     download_queue: Arc<DownloadQueue>,
-    // emitter 现在是全局单例，不需要传递
     req: &CrawlTaskRequest,
 ) -> Result<TaskOutcome, String> {
+    let task = storage
+        .get_task(&req.task_id)?
+        .ok_or_else(|| format!("任务记录不存在: {}", req.task_id))?;
+
     let plugin_manager = PluginManager::global();
     GlobalEmitter::global().emit_task_log(
         &req.task_id,
         "info",
         &task_log_i18n(
             "taskLogSchedulerStart",
-            json!({ "pluginId": req.plugin_id, "taskId": req.task_id }),
+            json!({ "pluginId": task.plugin_id, "taskId": req.task_id }),
         ),
     );
 
     // 内置本地导入：不运行 Rhai，直接执行内置例程
-    if req.plugin_id == "local-import" {
+    if task.plugin_id == "local-import" {
         crate::crawler::local_import::run_builtin_local_import(
             &req.task_id,
-            req.user_config.clone(),
-            req.output_album_id.clone(),
+            task.user_config.clone(),
+            task.output_album_id.clone(),
         )
         .await?;
         return Ok(TaskOutcome::Completed);
@@ -553,22 +562,14 @@ async fn run_task(
 
     // 两种运行模式：
     // 1) 已安装插件：通过 plugin_id 查找并运行
-    // 2) 临时插件文件：通过 plugin_file_path 读取 manifest/config 并运行（不要求安装）
+    // 2) TODO: 临时插件文件：通过 plugin_file_path 读取 manifest/config 并运行（不要求安装）
     let (plugin, _plugin_file_path) = plugin_manager
-        .resolve_plugin_for_task_request(&req.plugin_id, req.plugin_file_path.as_deref())
+        .resolve_plugin_for_task_request(&task.plugin_id, req.plugin_file_path.as_deref())
         .await?;
     if let Some(ref min_ver) = plugin.min_app_version {
         check_min_app_version(env!("CARGO_PKG_VERSION"), min_ver)?;
     }
-    // 如果指定了输出目录，使用指定目录；否则使用默认下载目录（若配置）或回退到 Storage 的 images_dir
-    let images_dir = if let Some(ref dir) = req.output_dir {
-        PathBuf::from(dir)
-    } else {
-        match Settings::global().get_default_download_dir() {
-            Some(dir) => PathBuf::from(dir),
-            None => storage.get_images_dir(),
-        }
-    };
+    let images_dir = resolve_crawl_output_dir(task.output_dir.as_deref());
 
     // 从 Plugin 结构读取脚本和变量定义（已在 parse_kgpg 阶段加载到内存）
     let rhai_script = plugin.rhai_script.clone();
@@ -576,7 +577,7 @@ async fn run_task(
     let js_script = plugin.js_script.clone();
 
     // merged_config：默认值 -> 用户覆盖 -> checkbox 规范化（与 crawl_images 保持一致）
-    let user_cfg = req.user_config.clone().unwrap_or_default();
+    let user_cfg = task.user_config.clone().unwrap_or_default();
     let var_defs = plugin.var_defs.clone();
     let merged_config = build_effective_user_config_from_var_defs(&var_defs, user_cfg);
 
@@ -595,8 +596,8 @@ async fn run_task(
             state: Some(serde_json::Value::Object(serde_json::Map::new())),
             resume_mode: INITIAL_PAGE_LABEL.to_string(),
             images_dir: pathbuf_to_string(&images_dir),
-            output_album_id: req.output_album_id.clone(),
-            http_headers: req.http_headers.clone().unwrap_or_default(),
+            output_album_id: task.output_album_id.clone(),
+            http_headers: task.http_headers.clone().unwrap_or_default(),
         };
 
         state.assign_task(context).await?;
@@ -624,8 +625,8 @@ async fn run_task(
     let plugin_for_exec = plugin.clone();
     let task_id = req.task_id.clone();
     let merged_config_for_exec = merged_config;
-    let output_album_id = req.output_album_id.clone();
-    let http_headers = req.http_headers.clone();
+    let output_album_id = task.output_album_id.clone();
+    let http_headers = task.http_headers.clone();
 
     tokio::task::spawn_blocking(move || {
         let mut rhai_runtime = crate::plugin::rhai::RhaiCrawlerRuntime::new(download_queue);

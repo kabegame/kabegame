@@ -16,11 +16,7 @@ struct DebugIngestEvent {
 }
 
 #[cfg(debug_assertions)]
-pub fn spawn_debug_event(
-    session_id: impl Into<String>,
-    name: impl Into<String>,
-    payload: Value,
-) {
+pub fn spawn_debug_event(session_id: impl Into<String>, name: impl Into<String>, payload: Value) {
     spawn_debug_event_with_level(session_id, "debug", name, payload);
 }
 
@@ -139,29 +135,35 @@ fn debug_ingest_enabled() -> bool {
 
 #[cfg(debug_assertions)]
 fn debug_ingest_url() -> String {
-    configured_value("KABEGAME_DEBUG_INGEST_URL", option_env!("KABEGAME_DEBUG_INGEST_URL"))
-        .unwrap_or_else(|| {
-            format!(
-                "http://{}:{}{}",
-                dev_server_host(),
-                dev_server_port(),
-                DEBUG_INGEST_PATH
-            )
-        })
+    configured_value(
+        "KABEGAME_DEBUG_INGEST_URL",
+        option_env!("KABEGAME_DEBUG_INGEST_URL"),
+    )
+    .unwrap_or_else(|| {
+        format!(
+            "http://{}:{}{}",
+            dev_server_host(),
+            dev_server_port(),
+            DEBUG_INGEST_PATH
+        )
+    })
 }
 
 #[cfg(debug_assertions)]
 fn dev_server_host() -> String {
-    configured_value("KABEGAME_DEV_SERVER_HOST", option_env!("KABEGAME_DEV_SERVER_HOST"))
-        .or_else(|| configured_value("TAURI_DEV_HOST", option_env!("TAURI_DEV_HOST")))
-        .or_else(|| configured_value("VITE_DEV_SERVER_HOST", option_env!("VITE_DEV_SERVER_HOST")))
-        .unwrap_or_else(|| {
-            if cfg!(target_os = "android") {
-                "10.0.2.2".to_string()
-            } else {
-                "127.0.0.1".to_string()
-            }
-        })
+    configured_value(
+        "KABEGAME_DEV_SERVER_HOST",
+        option_env!("KABEGAME_DEV_SERVER_HOST"),
+    )
+    .or_else(|| configured_value("TAURI_DEV_HOST", option_env!("TAURI_DEV_HOST")))
+    .or_else(|| configured_value("VITE_DEV_SERVER_HOST", option_env!("VITE_DEV_SERVER_HOST")))
+    .unwrap_or_else(|| {
+        if cfg!(target_os = "android") {
+            "10.0.2.2".to_string()
+        } else {
+            "127.0.0.1".to_string()
+        }
+    })
 }
 
 #[cfg(debug_assertions)]

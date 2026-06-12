@@ -696,4 +696,3 @@ async fn startup_sync_skips_when_folder_mtime_is_unchanged() {
     assert_eq!(second.deleted, 0);
     assert_eq!(second.reimported, 0);
 }
-

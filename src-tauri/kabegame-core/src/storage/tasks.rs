@@ -4,6 +4,39 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// 任务状态枚举，带 FSM 校验。
+/// serde `rename_all="lowercase"` 产生与现有线上一致的字符串；
+/// `#[serde(alias = "cancelled")]` 兼容历史双拼写入。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatus {
+    #[default]
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    #[serde(alias = "cancelled")]
+    Canceled,
+}
+
+impl TaskStatus {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Canceled
+        )
+    }
+    /// 合法跳转：pending/running → 终态；终态不可再切。
+    pub fn can_transition_to(self, next: TaskStatus) -> bool {
+        use TaskStatus::*;
+        match self {
+            Pending => matches!(next, Running | Canceled | Failed),
+            Running => matches!(next, Completed | Canceled | Failed),
+            Completed | Canceled | Failed => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub struct TaskInfo {
@@ -34,7 +67,7 @@ pub struct TaskInfo {
     #[serde(rename(serialize = "triggerSource"), alias = "triggerSource")]
     #[serde(default = "default_trigger_source")]
     pub trigger_source: String,
-    pub status: String,
+    pub status: TaskStatus,
     pub progress: f64,
     #[serde(rename(serialize = "deletedCount"), alias = "deletedCount")]
     pub deleted_count: i64,
@@ -105,6 +138,31 @@ pub struct TaskLogEntry {
     pub level: String,
     pub content: String,
     pub time: i64,
+}
+
+// ── rusqlite 转换（委托 serde，不手写状态名 match）──────────────────────────
+
+impl rusqlite::types::FromSql for TaskStatus {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = String::column_result(value)?;
+        let v = serde_json::Value::String(s);
+        serde_json::from_value(v).map_err(|e| rusqlite::types::FromSqlError::Other(Box::new(e)))
+    }
+}
+
+impl rusqlite::types::ToSql for TaskStatus {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        let v = serde_json::to_value(self)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let s = v.as_str().ok_or_else(|| {
+            rusqlite::Error::ToSqlConversionFailure(
+                format!("TaskStatus serialized to non-string: {v}").into(),
+            )
+        })?;
+        Ok(rusqlite::types::ToSqlOutput::Owned(
+            rusqlite::types::Value::Text(s.to_string()),
+        ))
+    }
 }
 
 impl Storage {
@@ -379,6 +437,8 @@ impl Storage {
         Ok((tasks, total))
     }
 
+    // 启动期批量失效 pending/running 任务（FSM 合法跳转 pending|running→failed，
+    // 但走批量 SQL 而非 transition 入口：此时无前端监听且处于启动清理阶段）。
     pub fn mark_pending_running_tasks_as_failed(&self) -> Result<usize, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let now = std::time::SystemTime::now()

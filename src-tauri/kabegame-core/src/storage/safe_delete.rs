@@ -80,9 +80,7 @@ fn is_local_filesystem(path: &Path) -> bool {
 fn is_local_filesystem(path: &Path) -> bool {
     use std::os::windows::ffi::OsStrExt;
     use std::path::{Component, PathBuf};
-    use windows_sys::Win32::Storage::FileSystem::{
-        GetDriveTypeW,
-    };
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
     const DRIVE_REMOVABLE: u32 = 2;
     const DRIVE_FIXED: u32 = 3;
     // 从路径取卷根（如 "C:\"）。无盘符前缀（UNC \\server\share 等）一律视为非本机。
@@ -118,8 +116,7 @@ fn is_local_filesystem(path: &Path) -> bool {
 
 /// 判定路径是否为「可安全自动删除的正常本机文件」。
 fn path_is_normal_local(path: &Path) -> Result<(), String> {
-    let meta =
-        std::fs::symlink_metadata(path).map_err(|e| format!("无法读取文件信息: {e}"))?;
+    let meta = std::fs::symlink_metadata(path).map_err(|e| format!("无法读取文件信息: {e}"))?;
     if !meta.is_file() {
         return Err("不是普通文件（可能是符号链接或目录）".to_string());
     }

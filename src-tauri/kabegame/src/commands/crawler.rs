@@ -1,12 +1,11 @@
-use kabegame_core::crawler::downloader::BrowserDownloadState;
-use kabegame_core::crawler::scheduler::PageStackEntry;
+use kabegame_core::crawler::scheduler::{PageStackEntry, TaskTransition};
 use kabegame_core::crawler::webview::{crawler_window_state, JsTaskPatch};
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::schedule_sync::on_crawl_task_reached_terminal;
+use kabegame_core::storage::tasks::TaskStatus;
 use kabegame_core::storage::Storage;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
@@ -35,41 +34,11 @@ pub struct CrawlToPayload {
     pub page_state: Option<Value>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CrawlRegisterBlobDownloadPayload {
-    pub download_id: String,
-    pub blob_url: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CrawlBrowserDownloadFailedPayload {
-    pub download_id: String,
-    pub error: Option<String>,
-}
-
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
-}
-
-fn update_task_status(task_id: &str, status: &str, end_time: Option<u64>, error: Option<String>) {
-    if let Ok(Some(mut task)) = Storage::global().get_task(task_id) {
-        task.status = status.to_string();
-        if let Some(end) = end_time {
-            task.end_time = Some(end);
-        }
-        if let Some(err) = error.clone() {
-            task.error = Some(err);
-        }
-        let _ = Storage::global().update_task(task);
-        if matches!(status, "completed" | "failed" | "canceled" | "cancelled") {
-            on_crawl_task_reached_terminal(task_id);
-        }
-    }
 }
 
 /// 仅接受 plain object：是 Object 则克隆返回，否则返回空对象。
@@ -233,7 +202,7 @@ pub async fn crawl_run_script(app: AppHandle) -> Result<(), String> {
 
 /// 内部：按给定状态结束当前 webview 任务并释放。若 only_for_task_id 为 Some，
 /// 仅当当前上下文为该任务时执行，否则直接返回（用于取消时只释放对应任务）。
-pub async fn crawl_exit_with_status(status: &str, only_for_task_id: Option<&str>) {
+pub async fn crawl_exit_with_status(status: TaskStatus, only_for_task_id: Option<&str>) {
     let state = crawler_window_state();
     let Some(ctx) = state.get_context().await else {
         return;
@@ -245,15 +214,15 @@ pub async fn crawl_exit_with_status(status: &str, only_for_task_id: Option<&str>
     }
 
     let end = now_ms();
-    update_task_status(&ctx.task_id, status, Some(end), None);
-    let mut diff = json!({
-        "status": status,
-        "endTime": end,
-    });
-    if status == "completed" {
-        diff["progress"] = json!(100);
-    }
-    GlobalEmitter::global().emit_task_changed(&ctx.task_id, diff);
+    TaskScheduler::global().transition(
+        &ctx.task_id,
+        status,
+        TaskTransition {
+            start_time: None,
+            end_time: Some(end),
+            error: None,
+        },
+    );
     TaskScheduler::global()
         .page_stacks()
         .remove_stack(&ctx.task_id);
@@ -262,7 +231,7 @@ pub async fn crawl_exit_with_status(status: &str, only_for_task_id: Option<&str>
 
 #[tauri::command]
 pub async fn crawl_exit() -> Result<(), String> {
-    crawl_exit_with_status("completed", None).await;
+    crawl_exit_with_status(TaskStatus::Completed, None).await;
     Ok(())
 }
 
@@ -279,20 +248,20 @@ pub async fn crawl_error(message: String) -> Result<(), String> {
     } else {
         message
     };
-    // 用户取消时脚本可能调用 ctx.error("Task canceled")，应显示为“已取消”而非“失败”
-    let status = if err.contains("Task canceled") {
-        "canceled"
+    // 用户取消时脚本可能调用 ctx.error("Task canceled")，应显示为"已取消"而非"失败"
+    let next = if err.contains("Task canceled") {
+        TaskStatus::Canceled
     } else {
-        "failed"
+        TaskStatus::Failed
     };
-    update_task_status(&ctx.task_id, status, Some(end), Some(err.clone()));
-    GlobalEmitter::global().emit_task_changed(
+    TaskScheduler::global().transition(
         &ctx.task_id,
-        json!({
-            "status": status,
-            "endTime": end,
-            "error": err,
-        }),
+        next,
+        TaskTransition {
+            start_time: None,
+            end_time: Some(end),
+            error: Some(err),
+        },
     );
     TaskScheduler::global()
         .page_stacks()
@@ -347,7 +316,7 @@ pub async fn crawl_download_image(
     };
 
     let dq = TaskScheduler::global().download_queue();
-    if dq.is_task_canceled(&ctx.task_id).await {
+    if dq.is_download_canceled(&ctx.task_id).await {
         return Err("Task canceled".to_string());
     }
 
@@ -425,46 +394,6 @@ pub async fn crawl_download_image(
         metadata_id,
     )
     .await
-}
-
-#[tauri::command]
-pub async fn crawl_register_blob_download(
-    payload: CrawlRegisterBlobDownloadPayload,
-) -> Result<(), String> {
-    let state = crawler_window_state();
-    let Some(ctx) = state.get_context().await else {
-        return Err("Crawler context not found".to_string());
-    };
-    if !BrowserDownloadState::global().is_pending_for_task(&payload.download_id, &ctx.task_id) {
-        return Err(format!(
-            "Browser download {} does not belong to current task {}",
-            payload.download_id, ctx.task_id
-        ));
-    }
-    let result =
-        BrowserDownloadState::global().register_blob_url(&payload.download_id, &payload.blob_url);
-    result
-}
-
-#[tauri::command]
-pub async fn crawl_browser_download_failed(
-    payload: CrawlBrowserDownloadFailedPayload,
-) -> Result<(), String> {
-    let state = crawler_window_state();
-    let Some(ctx) = state.get_context().await else {
-        return Err("Crawler context not found".to_string());
-    };
-    if !BrowserDownloadState::global().is_pending_for_task(&payload.download_id, &ctx.task_id) {
-        return Err(format!(
-            "Browser download {} does not belong to current task {}",
-            payload.download_id, ctx.task_id
-        ));
-    }
-    let msg = payload
-        .error
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "Browser download failed".to_string());
-    BrowserDownloadState::global().signal_failure(&payload.download_id, msg)
 }
 
 #[tauri::command]

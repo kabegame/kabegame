@@ -17,7 +17,7 @@ use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
 #[cfg(not(target_os = "android"))]
 use kabegame_core::storage::organize::OrganizeService;
-use kabegame_core::storage::tasks::TaskInfo;
+use kabegame_core::storage::tasks::{TaskInfo, TaskStatus};
 use kabegame_core::storage::Storage;
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
@@ -164,15 +164,8 @@ async fn handle_task_start(task: serde_json::Value) -> IpcResponse {
     }
 
     let req = CrawlTaskRequest {
-        plugin_id: t.plugin_id.clone(),
         task_id: t.id.clone(),
-        output_dir: t.output_dir.clone(),
-        user_config: t.user_config.clone(),
-        http_headers: t.http_headers.clone(),
-        output_album_id: t.output_album_id.clone(),
         plugin_file_path: None,
-        run_config_id: t.run_config_id.clone(),
-        trigger_source: t.trigger_source.clone(),
     };
 
     if let Err(e) = TaskScheduler::global().enqueue(req) {
@@ -187,7 +180,7 @@ async fn handle_task_start(task: serde_json::Value) -> IpcResponse {
 async fn handle_task_cancel(task_id: String) -> IpcResponse {
     TaskScheduler::global().cancel_task(&task_id).await;
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-    crate::commands::crawl_exit_with_status("canceled", Some(&task_id)).await;
+    crate::commands::crawl_exit_with_status(TaskStatus::Canceled, Some(&task_id)).await;
     IpcResponse::ok("ok")
 }
 
@@ -311,7 +304,7 @@ async fn handle_plugin_run(
                 output_album_id: output_album_id.clone(),
                 run_config_id: None,
                 trigger_source: "manual".to_string(),
-                status: "pending".to_string(),
+                status: TaskStatus::Pending,
                 progress: 0.0,
                 deleted_count: 0,
                 dedup_count: 0,
@@ -330,15 +323,8 @@ async fn handle_plugin_run(
 
     // 入队执行
     let req = CrawlTaskRequest {
-        plugin_id: plugin_obj.id,
         task_id: task_id.clone(),
-        output_dir,
-        user_config,
-        http_headers,
-        output_album_id,
         plugin_file_path: plugin_file_path.map(|p| p.to_string_lossy().to_string()),
-        run_config_id: None,
-        trigger_source: "manual".to_string(),
     };
 
     if let Err(e) = TaskScheduler::global().enqueue(req) {

@@ -148,6 +148,11 @@ impl AppPaths {
         self.temp_dir.clone()
     }
 
+    /// 下载器溢写临时目录（cache_dir/downloads）
+    pub fn downloads_temp_dir(&self) -> PathBuf {
+        self.cache_dir.join("downloads")
+    }
+
     // ========== 虚拟驱动相关（仅桌面） ==========
 
     /// 虚拟驱动备注文件目录

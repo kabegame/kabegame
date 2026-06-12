@@ -46,8 +46,8 @@ CREATE TABLE image_metadata (
     version      INTEGER NOT NULL DEFAULT 0,
     plugin_id    TEXT    NOT NULL DEFAULT ''
 );
-CREATE UNIQUE INDEX idx_image_metadata_dedup
-    ON image_metadata(plugin_id, version, content_hash);
+CREATE INDEX idx_image_metadata_dedup
+    ON image_metadata(plugin_id, version);
 
 -- ───────────── images ─────────────
 CREATE TABLE images (

@@ -23,9 +23,9 @@
 //! }
 //! ```
 
+use crate::crawler::downloader::DownloadState;
 #[cfg(feature = "ipc-client")]
 use crate::ipc::client::daemon_startup;
-use crate::crawler::downloader::DownloadState;
 use crate::storage::tasks::TaskFailedImage;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -87,6 +87,7 @@ daemon_event_kinds! {
     PluginAdded,
     PluginDeleted,
     PluginUpdated,
+    DownloadRemoved,
 }
 
 impl DaemonEventKind {
@@ -121,6 +122,7 @@ impl DaemonEventKind {
             DaemonEventKind::PluginAdded => "plugin-added",
             DaemonEventKind::PluginDeleted => "plugin-deleted",
             DaemonEventKind::PluginUpdated => "plugin-updated",
+            DaemonEventKind::DownloadRemoved => "download-removed",
         }
         .to_string()
     }
@@ -150,6 +152,7 @@ impl DaemonEventKind {
             "plugin-added" => Some(DaemonEventKind::PluginAdded),
             "plugin-deleted" => Some(DaemonEventKind::PluginDeleted),
             "plugin-updated" => Some(DaemonEventKind::PluginUpdated),
+            "download-removed" => Some(DaemonEventKind::DownloadRemoved),
             "TaskAdded" | "TaskDeleted" | "TaskChanged" => Some(DaemonEventKind::TasksChange),
             _ => None,
         }
@@ -195,11 +198,7 @@ pub enum DaemonEvent {
     /// 下载进度事件（细粒度进度更新）
     #[serde(rename_all = "camelCase")]
     DownloadProgress {
-        task_id: String,
         id: u64,
-        url: String,
-        start_time: u64,
-        plugin_id: String,
         received_bytes: u64,
         total_bytes: Option<u64>,
     },
@@ -357,6 +356,10 @@ pub enum DaemonEvent {
     },
     /// 插件更新/重装（同 ID 覆盖安装）
     PluginUpdated { plugin: serde_json::Value },
+
+    /// 下载条目移除（后端 wait 完成后发出，前端据此从活跃列表删除）
+    #[serde(rename_all = "camelCase")]
+    DownloadRemoved { task_id: String, id: u64 },
 }
 
 /// 包装在 Arc 中的 Daemon 事件，用于零拷贝传递
@@ -394,6 +397,7 @@ impl DaemonEvent {
             DaemonEvent::PluginAdded { .. } => DaemonEventKind::PluginAdded,
             DaemonEvent::PluginDeleted { .. } => DaemonEventKind::PluginDeleted,
             DaemonEvent::PluginUpdated { .. } => DaemonEventKind::PluginUpdated,
+            DaemonEvent::DownloadRemoved { .. } => DaemonEventKind::DownloadRemoved,
         }
     }
 }

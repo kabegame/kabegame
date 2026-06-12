@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "android")]
@@ -207,14 +208,15 @@ fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u
             .map_err(|e| format!("config filter graph failed: {e:?}"))?;
     }
     let mut buffersrc_ctx = filter_graph.get_filter(c"in").ok_or("buffersrc missing")?;
-    let mut buffersink_ctx = filter_graph.get_filter(c"out").ok_or("buffersink missing")?;
+    let mut buffersink_ctx = filter_graph
+        .get_filter(c"out")
+        .ok_or("buffersink missing")?;
     let out_w = buffersink_ctx.get_w();
     let out_h = buffersink_ctx.get_h();
     let sink_tb = buffersink_ctx.get_time_base();
 
     // ---- 编码器 libx264 ----
-    let encoder =
-        AVCodec::find_encoder_by_name(c"libx264").ok_or("libx264 encoder not found")?;
+    let encoder = AVCodec::find_encoder_by_name(c"libx264").ok_or("libx264 encoder not found")?;
     let mut enc_ctx = AVCodecContext::new(&encoder);
     enc_ctx.set_width(out_w);
     enc_ctx.set_height(out_h);
@@ -327,7 +329,10 @@ fn encode_write(
             Err(e) => return Err(format!("receive_packet failed: {e:?}")),
         };
         pkt.set_stream_index(stream_index as i32);
-        pkt.rescale_ts(enc_ctx.time_base, ofmt_ctx.streams()[stream_index].time_base);
+        pkt.rescale_ts(
+            enc_ctx.time_base,
+            ofmt_ctx.streams()[stream_index].time_base,
+        );
         ofmt_ctx
             .interleaved_write_frame(&mut pkt)
             .map_err(|e| format!("interleaved_write_frame failed: {e:?}"))?;
@@ -410,4 +415,104 @@ pub fn encode_frames_dir_to_gif(frame_dir: &Path, output_path: &Path) -> Result<
     }
 
     Ok(())
+}
+
+/// 仅当原图文件大于此阈值才生成独立预览缩略图；否则前端直接用原图。
+pub const IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES: u64 = 512 * 1024;
+/// 预览缩略图最长边像素上限。缩略图仅用于 UI（画廊网格 + 预览渐进占位），
+/// 全屏查看与设壁纸都用原图，所以无需接近原图分辨率。
+pub const IMAGE_THUMBNAIL_MAX_DIM: u32 = 512;
+/// 预览缩略图固定 JPEG 质量（80~85 区间视觉接近无损，压缩与速度均衡）。
+const IMAGE_THUMBNAIL_JPEG_QUALITY: u8 = 82;
+pub fn image_needs_independent_thumbnail(source_size: u64) -> bool {
+    source_size > IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES
+}
+
+/// 缩略图尺寸是否「可接受」：最长边不超过上限。
+/// 生成时据此决定是否缩放；organize 维护时据此判断既有缩略图是否需要重生成。
+pub fn image_thumbnail_dimensions_acceptable(width: u32, height: u32) -> bool {
+    width.max(height) <= IMAGE_THUMBNAIL_MAX_DIM
+}
+
+fn encode_jpeg_rgb(rgb: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String> {
+    let mut cursor = Cursor::new(Vec::new());
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality);
+    encoder
+        .encode(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            image::ColorType::Rgb8,
+        )
+        .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
+    Ok(cursor.into_inner())
+}
+
+/// 生成预览缩略图字节：按最长边 ≤ `IMAGE_THUMBNAIL_MAX_DIM` 缩放一次，再以固定质量编码一次。
+/// 不再按字节大小做「缩放×质量」二分搜索——单次重采样 + 单次编码，避免在超大原图上反复重采样。
+fn build_compressed_thumbnail_bytes(img: &image::DynamicImage) -> Result<Vec<u8>, String> {
+    use image::GenericImageView;
+
+    let (width, height) = img.dimensions();
+    if width == 0 || height == 0 {
+        return Err("Image has invalid dimensions".to_string());
+    }
+
+    let rgb = if width.max(height) > IMAGE_THUMBNAIL_MAX_DIM {
+        let scale = IMAGE_THUMBNAIL_MAX_DIM as f64 / width.max(height) as f64;
+        let target_w = ((width as f64) * scale).round().clamp(1.0, width as f64) as u32;
+        let target_h = ((height as f64) * scale).round().clamp(1.0, height as f64) as u32;
+        img.resize(target_w, target_h, image::imageops::FilterType::Lanczos3)
+            .to_rgb8()
+    } else {
+        img.to_rgb8()
+    };
+
+    encode_jpeg_rgb(&rgb, IMAGE_THUMBNAIL_JPEG_QUALITY)
+}
+
+async fn write_thumbnail_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
+    let thumbnails_dir = crate::app_paths::AppPaths::global().thumbnails_dir();
+    tokio::fs::create_dir_all(&thumbnails_dir)
+        .await
+        .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
+    let thumbnail_path = thumbnails_dir.join(format!("{}.jpg", uuid::Uuid::new_v4()));
+    tokio::fs::write(&thumbnail_path, bytes)
+        .await
+        .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
+    Ok(thumbnail_path)
+}
+
+/// 从字节生成图片预览图；小于等于 1MiB 时返回 None，让调用方使用原图路径。
+pub async fn generate_thumbnail_from_bytes(bytes: &[u8]) -> Result<Option<PathBuf>, String> {
+    if !image_needs_independent_thumbnail(bytes.len() as u64) {
+        return Ok(None);
+    }
+    let img = match image::load_from_memory(bytes) {
+        Ok(img) => img,
+        Err(_) => return Ok(None),
+    };
+    let thumbnail_bytes = build_compressed_thumbnail_bytes(&img)?;
+    write_thumbnail_bytes(thumbnail_bytes).await.map(Some)
+}
+
+/// 图片缩略图策略：小文件直接用原图，大文件生成最长边 ≤ IMAGE_THUMBNAIL_MAX_DIM 的 JPEG 预览图。
+pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, String> {
+    if !crate::image_type::is_image_by_path(image_path) {
+        return Ok(None);
+    }
+    let source_size = match tokio::fs::metadata(image_path).await {
+        Ok(metadata) => metadata.len(),
+        Err(_) => return Ok(None),
+    };
+    if !image_needs_independent_thumbnail(source_size) {
+        return Ok(None);
+    }
+
+    let img = match image::open(image_path) {
+        Ok(img) => img,
+        Err(_) => return Ok(None),
+    };
+    let thumbnail_bytes = build_compressed_thumbnail_bytes(&img)?;
+    write_thumbnail_bytes(thumbnail_bytes).await.map(Some)
 }

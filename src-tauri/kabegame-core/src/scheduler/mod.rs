@@ -1,6 +1,6 @@
 use crate::crawler::{CrawlTaskRequest, TaskScheduler};
 use crate::emitter::GlobalEmitter;
-use crate::storage::{RunConfig, ScheduleSpec, Storage, TaskInfo};
+use crate::storage::{RunConfig, ScheduleSpec, Storage, TaskInfo, TaskStatus};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -132,7 +132,7 @@ async fn schedule_trigger_once(config: &RunConfig) -> Result<String, String> {
         output_album_id: None,
         run_config_id: Some(config.id.clone()),
         trigger_source: "scheduled".to_string(),
-        status: "pending".to_string(),
+        status: TaskStatus::Pending,
         progress: 0.0,
         deleted_count: 0,
         dedup_count: 0,
@@ -145,15 +145,8 @@ async fn schedule_trigger_once(config: &RunConfig) -> Result<String, String> {
     Storage::global().add_task(task)?;
 
     let req = CrawlTaskRequest {
-        plugin_id: config.plugin_id.clone(),
         task_id: task_id.clone(),
-        output_dir: config.output_dir.clone(),
-        user_config: config.user_config.clone(),
-        http_headers: config.http_headers.clone(),
-        output_album_id: None,
         plugin_file_path: None,
-        run_config_id: Some(config.id.clone()),
-        trigger_source: "scheduled".to_string(),
     };
     TaskScheduler::global().submit_task(req)?;
     let now_s = now_secs();
@@ -288,7 +281,7 @@ pub fn recalc_all_planned_at(now_ts: i64) -> Result<Vec<MissedRunItem>, String> 
         .into_iter()
         .filter(|t| {
             t.trigger_source == "scheduled"
-                && matches!(t.status.as_str(), "pending" | "running")
+                && matches!(t.status, TaskStatus::Pending | TaskStatus::Running)
                 && t.run_config_id.is_some()
         })
         .filter_map(|t| t.run_config_id)

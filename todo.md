@@ -34,6 +34,7 @@
 - [x] `4.2.0` 组合式搜索排序，在header下用一整行io组件来实现
     - [x] 插件provider所有自动加上filter_comb目标
     - [x] 插件provider的resolve最好为了避免歧义，用tag_之类的前缀
+- [ ] 图片内容特征（rgb颜色特征）+ 按特征排序
 
 ### 画册
 - [ ] 画册搜索功能
@@ -58,6 +59,7 @@
     > 直接用自定义html解决问题
 - [ ] 安卓用桌面小组件代替桌面上系统托盘功能。
 - [ ] 文件资源管理器快速预览插件（macos quiklook, windows preview handler，gnome sushi, KDE KIOpreview）
+- [ ] 安卓前台服务
 
 ## refactor
 - [x] `4.2.0` 吉祥物气泡消息
@@ -66,6 +68,5 @@
     const { url , metadata } = useImage();
     ```
     这种简洁的接口
+
 ## stash
-- image content loading 态补丁
-- image grid 的aspect来源确认

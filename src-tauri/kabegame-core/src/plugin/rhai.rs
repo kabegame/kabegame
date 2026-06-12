@@ -139,7 +139,7 @@ fn run_rhai_download_image_sync(
     custom_display_name: Option<String>,
     metadata_id: Option<i64>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    if dq_handle.is_task_canceled_blocking(&task_id) {
+    if dq_handle.is_download_canceled_blocking(&task_id) {
         return Err("Task canceled".into());
     }
 
@@ -335,7 +335,7 @@ fn http_get_text_with_retry(
         let mut redirect_count = 0;
 
         let response = loop {
-            if dq.is_task_canceled_blocking(task_id) {
+            if dq.is_download_canceled_blocking(task_id) {
                 return Err("Task canceled".to_string());
             }
 
@@ -1487,7 +1487,7 @@ pub fn register_crawler_functions(
             };
 
             // 若任务已被取消，直接让脚本失败退出
-            if dq_handle.is_task_canceled_blocking(&task_id) {
+            if dq_handle.is_download_canceled_blocking(&task_id) {
                 return Err("Task canceled".into());
             }
 

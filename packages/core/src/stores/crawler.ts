@@ -535,103 +535,22 @@ export const useCrawlerStore = defineStore("crawler", () => {
       }
     }
 
-    const task: CrawlTask = {
-      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      pluginId,
-      outputDir,
-      userConfig,
-      httpHeaders,
-      outputAlbumId,
-      runConfigId,
-      triggerSource,
-      status: "pending",
-      progress: 0,
-      deletedCount: 0,
-      dedupCount: 0,
-      successCount: 0,
-      failedCount: 0,
-      startTime: Date.now(),
-    };
-
-    tasks.value.unshift(task);
-
-    startCrawl(task).catch(async (error) => {
-      const taskIndex = tasks.value.findIndex((t) => t.id === task.id);
-      if (
-        taskIndex !== -1 &&
-        tasks.value[taskIndex].status !== "failed" &&
-        tasks.value[taskIndex].status !== "canceled"
-      ) {
-        tasks.value[taskIndex] = {
-          ...tasks.value[taskIndex],
-          status: "failed",
-          error: error instanceof Error ? error.message : "未知错误",
-          endTime: Date.now(),
-        };
-
-        try {
-          await invoke("update_task", {
-            task: {
-              id: tasks.value[taskIndex].id,
-              pluginId: tasks.value[taskIndex].pluginId,
-              outputDir: tasks.value[taskIndex].outputDir,
-              userConfig: tasks.value[taskIndex].userConfig,
-              outputAlbumId: tasks.value[taskIndex].outputAlbumId,
-              runConfigId: tasks.value[taskIndex].runConfigId,
-              triggerSource: tasks.value[taskIndex].triggerSource,
-              status: tasks.value[taskIndex].status,
-              progress: tasks.value[taskIndex].progress,
-              deletedCount: tasks.value[taskIndex].deletedCount || 0,
-              dedupCount: tasks.value[taskIndex].dedupCount || 0,
-              startTime: tasks.value[taskIndex].startTime,
-              endTime: tasks.value[taskIndex].endTime,
-              error: tasks.value[taskIndex].error,
-            },
-          });
-        } catch (dbError) {
-          console.error("更新任务失败状态到数据库失败:", dbError);
-        }
-      }
-      console.error("任务执行失败:", error);
-    });
-    return true;
-  }
-
-  async function startCrawl(task: CrawlTask) {
-    if (task.status === "failed" || task.status === "canceled") {
-      console.log(
-        `任务 ${task.id} 已经是${
-          task.status === "canceled" ? "取消" : "失败"
-        }状态，不重新启动`,
-      );
-      return;
-    }
-
     try {
       await invoke("start_task", {
         task: {
-          taskId: task.id,
-          pluginId: task.pluginId,
-          outputDir: task.outputDir,
-          userConfig: task.userConfig,
-          httpHeaders: task.httpHeaders,
-          outputAlbumId: task.outputAlbumId,
-          runConfigId: task.runConfigId,
-          triggerSource: task.triggerSource,
-          status: task.status,
-          progress: task.progress,
-          deletedCount: task.deletedCount || 0,
-          dedupCount: task.dedupCount || 0,
-          startTime: task.startTime,
-          endTime: task.endTime,
-          error: task.error,
+          pluginId,
+          outputDir,
+          userConfig,
+          httpHeaders,
+          outputAlbumId,
+          runConfigId,
+          triggerSource,
         },
       });
+      return true;
     } catch (error) {
       console.error("任务入队失败:", error);
-      throw error;
-    } finally {
-      isCrawling.value = false;
+      return false;
     }
   }
 

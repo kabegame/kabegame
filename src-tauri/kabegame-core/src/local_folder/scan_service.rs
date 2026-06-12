@@ -542,19 +542,19 @@ async fn process_dir<H: FolderScanHook>(
             }
         } else {
             let entry_url = raw.url.clone();
-            let interrupted = match process_file(raw, &*ctx, depth + 1, options, last_collect, hook).await
-            {
-                Ok(()) => false,
-                Err(ScanError::Fatal(message)) => return Err(ScanError::Fatal(message)),
-                Err(error @ ScanError::Skip(_)) => {
-                    ctx.record_here(Some(entry_url), error);
-                    false
-                }
-                Err(error @ ScanError::Interrupt(_)) => {
-                    ctx.record_here(Some(entry_url), error);
-                    true
-                }
-            };
+            let interrupted =
+                match process_file(raw, &*ctx, depth + 1, options, last_collect, hook).await {
+                    Ok(()) => false,
+                    Err(ScanError::Fatal(message)) => return Err(ScanError::Fatal(message)),
+                    Err(error @ ScanError::Skip(_)) => {
+                        ctx.record_here(Some(entry_url), error);
+                        false
+                    }
+                    Err(error @ ScanError::Interrupt(_)) => {
+                        ctx.record_here(Some(entry_url), error);
+                        true
+                    }
+                };
             hook.on_progress(per);
             if interrupted {
                 break;

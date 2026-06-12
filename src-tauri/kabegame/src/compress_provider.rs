@@ -1,7 +1,7 @@
 #![cfg(target_os = "android")]
 
 use async_trait::async_trait;
-use kabegame_core::crawler::downloader::video_compress::{
+use kabegame_core::crawler::downloader::compress::{
     AndroidVideoCompressProvider, VideoCompressResult,
 };
 use std::path::Path;
@@ -98,7 +98,7 @@ fn run_worker_loop<R: Runtime + 'static>(
                         .map_err(|e| e.to_string())?;
                     let frame_dir_path = std::path::Path::new(&extract_result.frame_dir);
                     let out_path = std::path::PathBuf::from(&output_path);
-                    kabegame_core::crawler::downloader::video_compress::encode_frames_dir_to_gif(
+                    kabegame_core::crawler::downloader::compress::encode_frames_dir_to_gif(
                         frame_dir_path,
                         &out_path,
                     )?;

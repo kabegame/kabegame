@@ -22,7 +22,6 @@ pub mod shell_open;
 pub mod storage;
 pub mod workarounds;
 
-
 /// 虚拟盘。
 ///
 /// 注意：该模块仅在启用 feature `virtual-driver` 时编译，避免在不需要 VD 的 app 里引入相关依赖。

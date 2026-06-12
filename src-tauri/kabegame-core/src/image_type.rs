@@ -127,6 +127,17 @@ pub fn mime_type_from_path(path: &Path) -> Option<String> {
     }
 }
 
+/// 根据内存字节用 infer 推断 MIME 类型；仅当推断结果在支持列表中时返回 `Some(mime)`。
+pub fn mime_type_from_bytes(bytes: &[u8]) -> Option<String> {
+    let kind = infer::get(bytes)?;
+    let mime = kind.mime_type().to_lowercase();
+    if supported_media_mime_types().contains(&mime) {
+        Some(mime)
+    } else {
+        None
+    }
+}
+
 /// 判断 URL 是否以支持的图片扩展名结尾（用于 Rhai `is_image_url` 等）。
 pub fn url_has_image_extension(url: &str) -> bool {
     let url_lower = url.to_lowercase();

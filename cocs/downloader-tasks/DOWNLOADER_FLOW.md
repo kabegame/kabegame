@@ -1,84 +1,306 @@
-# 下载器流程与设置
+# 下载器流程与任务计数
 
-本文档描述下载队列、worker 循环、以及相关设置的流程与涉及代码文件。
+本文档描述下载队列、scheme downloader、DownloadSink 溢写、worker 后处理、失败重试与任务图片计数事件的流程。
 
 ---
 
-## 1. 流程总览
+## 1. 总览
 
 ```
-用户/任务发起下载
-    → DownloadQueue::download() 入队
-    → job_notify 唤醒 worker
-    → download_worker_loop 取 job、执行下载
-    → 完成后：in_flight--、capacity_notify、job_notify
-    → wait_after_download_if_needed（按 downloadIntervalMs 等待，可被 exit_notify 中断）
-    → 回到 loop 顶部继续取下一 job
+任务/脚本发起 download_image
+    -> 写入 image_metadata，DownloadRequest 只携带 metadata_id 与 display_name
+    -> DownloadQueue::download 等待下载池容量并入队
+    -> download_worker_loop 取 job，发送 Preparing -> Downloading
+    -> URL 前置去重：命中已有图片时跳过读取，只补画册/计数/事件
+    -> download_with_retry 按 URL scheme 读取，写入 DownloadSink（内存 ≤5 MiB，超阈溢写到临时文件）
+    -> 后处理：postprocess_downloaded_image 统一入口，按 PostprocessSource 处理 Bytes/Path
+    -> 成功、失败、取消或去重终态后，等待 downloadIntervalMs 并释放下载池槽位
 ```
 
----
-
-## 2. 涉及代码文件
-
-| 层级 | 文件路径 | 作用 |
-|------|----------|------|
-| 下载队列与 worker | `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | DownloadQueue、DownloadPool、download_worker_loop、wait_after_download_if_needed；Rhai/WebView 入口把 raw `metadata` 先写入 `image_metadata` 并转为 `metadata_id`，`DownloadRequest` 只携带 `custom_display_name` / `metadata_id`，入库时写入 `images.display_name` / `images.metadata_id` |
-| 失败重试调度 | `src-tauri/kabegame-core/src/crawler/scheduler.rs` | `retry_failed_image`、`download_handles`、批量重试/取消 |
-| 设置持久化 | `src-tauri/kabegame-core/src/settings.rs` | SettingKey::DownloadIntervalMs、get/set_download_interval_ms |
-| 命令层 | `src-tauri/kabegame/src/commands/settings.rs` | get_download_interval_ms、set_download_interval_ms |
-| 前端设置 | `packages/core/src/stores/settings.ts` | downloadIntervalMs、buildSettingKeyMap |
-| 设置项 UI | `apps/kabegame/src/components/settings/items/DownloadIntervalSetting.vue` | 下载间隔设置（桌面 el-input-number，Android 两列 Picker） |
-| 两列 Picker | `packages/core/src/components/AndroidPickerDuration.vue` | 秒+毫秒（100ms 步进）两列选择 |
+下载阶段通过 `DownloadSink` 管理内存/磁盘缓冲，下载结果为 `DownloadOutcome`（`Bytes` 或 `Path`）。后处理由统一的 `postprocess_downloaded_image` 函数完成，根据 `PostprocessSource` 枚举（`Bytes` 或 `Path`）自适应处理路径。Android 本地 `content://` 导入不走下载池后处理，直接走 content URI 入库。
 
 ---
 
-## 3. 下载间隔设置（downloadIntervalMs）
+## 2. 代码位置
 
-- **范围**：100～10000 ms
-- **默认**：500 ms
-- **语义**：每次下载完成后，worker 在进入下一轮取 job 前等待该时长
-- **中断**：等待期间监听 `pool.exit_notify`，缩容或停止时可立即响应
+| 文件 | 责任 |
+|------|------|
+| `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | downloader 模块门面；scheme downloader trait/注册表；`download_with_retry`；下载间隔 helper；统一 `postprocess_downloaded_image`；`DownloadSink` / `DownloadOutcome` / `PostprocessSource` 定义；最终目标路径与 Android Pictures copy / content URI 入库 |
+| `src-tauri/kabegame-core/src/crawler/downloader/queue.rs` | `DownloadQueue`、下载池、active download 状态机、worker loop、URL 前置去重、失败记录 upsert、任务图片计数快照 |
+| `src-tauri/kabegame-core/src/crawler/downloader/http.rs` | HTTP/HTTPS scheme downloader；响应流读取写入 `DownloadSink`、Range 续传、进度事件、请求头处理 |
+| `src-tauri/kabegame-core/src/crawler/downloader/content.rs` | Android-only `content://` scheme downloader；从 ContentResolver 读取 bytes 写入 `DownloadSink` |
+| `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | 图片缩略图、视频预览压缩、缩略图尺寸策略 |
+| `src-tauri/kabegame-core/src/crawler/downloader/util.rs` | 安全文件名、唯一下载路径、hash、MIME/文件名辅助 |
+| `src-tauri/kabegame-core/src/crawler/downloader/native_download.rs` | native/browser 下载状态并入 active downloads 展示 |
+| `src-tauri/kabegame-core/src/crawler/scheduler.rs` | crawl task 调度；失败图片重试句柄；任务级 header/display_name/metadata 快照回放 |
+| `src-tauri/kabegame/src/commands/task.rs` | 失败项重试、取消重试、删除失败项等命令入口 |
+| `apps/kabegame/src/stores/failedImages.ts` | 前端失败图片事件增量同步 |
+| `apps/kabegame/src/views/TaskDetail.vue`、`apps/kabegame/src/views/FailedImages.vue` | 任务详情与失败图片列表展示 |
 
----
-
-## 4. worker 循环关键点
-
-- **完成后等待**：`wait_after_download_if_needed` 在 `in_flight` 扣减与 `notify` 之后执行，不阻塞入队容量
-- **去重短路分支**：命中已存在图片时同样走统一收尾（in_flight--、notify）并执行 `wait_after_download_if_needed` 后 `continue`；同时会将任务 `tasks.dedup_count` 自增，并广播 `task-image-counts`（按需携带 `dedupCount` 等字段，见下文）。
-- **退出信号**：`exit_notify` 用于缩容；worker 在 `select!` 中可被唤醒并退出
-
----
-
-## 5. 任务图片数量事件（task-image-counts）
-
-- **事件名**：`task-image-counts`（`DaemonEvent::TaskImageCounts`）。
-- **载荷**：`taskId` 与下列字段中**出现的一个或多个**（均为当前绝对值）：`successCount`、`deletedCount`、`failedCount`、`dedupCount`。
-- **持久化**：`tasks.success_count` / `tasks.failed_count` 与 `images` / `task_failed_images` 保持同步；`deleted_count`、`dedup_count` 仍为任务表列。
-- **发送时机示例**：下载成功 `add_image` 后；去重命中 `increment_task_dedup_count` 后；失败记录新增/删除后；前端/整理删除图片后（`commands/image.rs`、`organize.rs` 等）。
-
-### 与画廊监听相关的 `images-change` / `album-images-change`
-
-下载器在 `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` 入库时按表拆分广播：**仅影响 `images` 表**时发 `images-change`（`reason: add` 等）；**同时变更 `album_images`**（收藏画册、目标画册等）时另发 `album-images-change`。详见 [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](../gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)。
+额外涉及：
+| `src-tauri/kabegame-core/src/app_paths.rs` | `downloads_temp_dir()` 提供溢写临时目录；`temp_dir` 提供通用临时目录；启动时临时文件清理逻辑 |
 
 ---
 
-## 6. 失败图片列表（TaskDetail / FailedImages）
+## 3. Scheme Downloader
 
-任务详情页的「失败图片」过滤视图与 **全部失败图片页**（`FailedImages.vue`，可按插件筛选）均展示 `task_failed_images` 表中的记录，支持：
+### 下载器选择
 
-- **Header 快照**：失败写库时会把该图片当次下载的最终 `http_headers`（任务配置 + 脚本动态修改 + 默认流程后的最终值）序列化到 `header_snapshot`；老记录该字段可能为空。
-- **名称与 metadata 快照**：失败写库时会保存 `display_name` 与 `metadata_id`；重试成功后新 `images` 行沿用同一展示名与 metadata 引用，避免插件传入的名称或详情数据丢失。
-- **单次重试**：`retry_task_failed_image(failed_id)` → `TaskScheduler::retry_failed_image` **spawn** 异步任务调用 `download_image_retry`（入队前可能在 `download()` 内等待容量，可 `cancel_retry_failed_image` 通过 `JoinHandle::abort()` 取消等待）；优先使用失败记录里的 `header_snapshot`，为空时回退到任务级 `tasks.http_headers`；成功时删除记录、失败时更新 `last_error` 与 `header_snapshot`。不在重试前清空 `last_error`（由下载结果写回）。
-- **调度器句柄**：`TaskScheduler` 维护 `download_handles: HashMap<failed_id, JoinHandle>`，与单次/批量重试一一对应。
-- **批量重试 / 取消 / 删除（前端按当前插件筛选传 ID 列表）**：
-  - `retry_failed_images(ids)`：对给定 id 逐个 `retry_failed_image`，跳过已有 handle 的 id。
-  - `cancel_retry_failed_image` / `cancel_retry_failed_images(ids)`：移除并 abort 对应 `JoinHandle`（已入队完成的 handle 上 abort 为 no-op，正在下载的不受影响）。
-  - `delete_failed_images(ids)`：先 `cancel_retry_failed_images` 再 `Storage::delete_failed_images`，按任务扣减 `failed_count` 并广播 `failed-images-change` + `task-image-counts`。
-- **单条删除**：`delete_task_failed_image(failed_id)` 删除记录后，发送 `removed` 细粒度事件，并广播 `task-image-counts` 更新 `failedCount`。任务删除（`delete_task`）和清除已完成任务（`clear_finished_tasks`）时，会同时删除该任务下所有失败图片记录并发送 `removed` 事件；启动时迁移会清理任务已不存在的孤儿失败图片。
-- **metadata GC**：删除 `images` 或 `task_failed_images` 后，storage 会内联检查候选 `metadata_id` 是否仍被引用；无人引用时立即删除对应 `image_metadata` 行。
-- **变更事件**：失败图片入库/更新/删除时，后端通过 `failed-images-change`（`DaemonEvent::FailedImagesChange`）广播细粒度 payload：`reason`（`added/removed/updated`）、`taskId`。其中 `added` 使用 `failedImages`（数组），`removed` 使用 `failedImageIds`（数组），`updated` 使用 `failedImage`（单条完整数据）。
-- **前端同步**：`apps/kabegame/src/stores/failedImages.ts` 在 `App.vue` 顶层初始化监听后，不再防抖全量拉取；改为按事件 payload 在内存中做 diff（新增 `unshift`、删除 `splice`、更新按 id 替换），仅在异常 payload 下兜底 `loadAll`。
-- **排序**：失败列表统一按 `id DESC`（自增 id 倒序）返回，避免依赖时间字段排序。
-- **进度显示**：任务详情仍监听 `download-state`（preparing/downloading/processing/failed）与 `download-progress`（received_bytes/total_bytes），以 URL 为 key 在前端 `downloadStateMap` 中维护阶段与百分比，失败项卡片展示阶段标签与进度条。
+`download_with_retry` 解析 URL 后从静态 registry 选择 downloader：
 
-相关命令：[`src-tauri/kabegame/src/commands/task.rs`](/src-tauri/kabegame/src/commands/task.rs)；前端：`apps/kabegame/src/views/TaskDetail.vue`、`apps/kabegame/src/views/FailedImages.vue`、`apps/kabegame/src/stores/failedImages.ts`。
+- 桌面：`http` / `https`
+- Android：`content` / `http` / `https`
+
+### DownloadSink：内存溢写磁盘
+
+下载不再简单返回 `Vec<u8>`。`download_with_retry` 内部创建 `DownloadSink`：
+
+- **阈值**：5 MiB（`DOWNLOAD_SINK_MEMORY_THRESHOLD`）。
+- 接收到的 chunk 先写入内存缓冲区。
+- 当内存缓冲超过 5 MiB 时，自动将已缓冲数据写入临时文件（`downloads_temp_dir()` 下以 `download_id` 命名的文件），后续 chunk 直接追加到临时文件。
+- 下载完成后，`DownloadSink` 产出 `DownloadOutcome`：
+  - `DownloadOutcome::Bytes(Vec<u8>)` — 数据未超过阈值，全部在内存。
+  - `DownloadOutcome::Path(PathBuf)` — 数据已溢写到临时文件。
+
+Scheme downloader trait 签名也有所调整：`download` 方法不再接收 `&mut Vec<u8>`，而是接收 `&mut DownloadSink`。这样：
+
+- HTTP/HTTPS downloader 流式写入 sink，读流中断时利用 sink 中已缓冲的字节数（`sink.received()`）发送 `Range` 续传请求。
+- `content://` downloader 一次性读取全部 bytes 写入 sink；失败按 fatal 返回，不做 HTTP 式重试。
+
+重试时 `DownloadSink` 的状态得以保留：若前次尝试已将部分数据溢写到磁盘，`received` 计数仍准确，允许 HTTP downloader 从断点续传。
+
+### 错误分类：Fatal / Retriable / Resumable
+
+`DownloadAttemptError` 提供三种错误构建方式，对应三类重试策略：
+
+| 种类 | 方法 | 语义 | 示例 |
+|------|------|------|------|
+| **Fatal** | `fatal(msg)` | 不可重试，直接向上传播为最终失败 | 过多重定向、任务取消、不支持的 MIME |
+| **Retriable** | `retryable_request(msg)` / `retryable_status(status)` | 从头重试（清空 sink，重新请求） | 连接被拒、503/429、DNS 解析失败 |
+| **Resumable** | `retryable_read_body(msg)` | 续传重试（保留 sink 已有数据，Range 从 received 继续） | 流读取超时、连接中断、body error |
+
+重试循环逻辑：
+
+1. Fatal 错误立即返回。
+2. Retriable 错误：清空 sink，退避后重新发起请求（最多 `networkRetryCount + 1` 次）。
+3. Resumable 错误：保留 sink 内容，退避后以 `Range: bytes={received}-` 续传；若服务端不支持 Range（返回 200 而非 206），则回退为 Retriable 从头重试。
+
+### DownloadOutcome 与后处理衔接
+
+`download_with_retry` 成功后返回 `DownloadOutcome`。worker 随后调用统一的 `postprocess_downloaded_image`，传入 `PostprocessSource`：
+
+```rust
+pub enum PostprocessSource<'a> {
+    Bytes(&'a [u8]),
+    Path(&'a Path),
+}
+```
+
+- `DownloadOutcome::Bytes` → `PostprocessSource::Bytes`
+- `DownloadOutcome::Path` → `PostprocessSource::Path`
+
+后处理内部根据 source 类型决定如何计算 hash、推断 MIME 和落盘：
+- `Bytes` 路径：直接从内存计算 hash/MIME，未去重时写入目标文件。
+- `Path` 路径：从临时文件读取计算 hash/MIME，未去重时将临时文件移动到目标位置（或 Android 上复制到 MediaStore），完成后删除临时文件。
+
+---
+
+## 4. 队列与并发
+
+`DownloadQueue::download` 做三件事：
+
+- 若任务已取消，直接返回 `Task canceled`。
+- 若这是失败图片重试且相同 `failed_image_id` 已在 active downloads 中，跳过重复入队。
+- 等待下载池容量。容量由 `Settings::get_max_concurrent_downloads()` 动态决定；满载时等待 `capacity_notify`，被取消时退出等待。
+
+worker 数量由 `start_download_workers` 与设置缩容逻辑维护。worker loop 同时监听：
+
+- `job_notify`：取下一个 `DownloadRequest`
+- `exit_notify`：当当前 worker 数量大于设置并发时退出
+
+每个 job 进入 active downloads 后按状态机发送：
+
+`Preparing -> Downloading -> Processing -> Completed/Failed/Canceled`
+
+终态后调用 `wait_then_finish_download`：先按 `downloadIntervalMs` 等待，再 `in_flight--`、发送 `download-removed`、唤醒等待容量的入队者。
+
+---
+
+## 5. 去重流程
+
+去重受 `Settings::get_auto_deduplicate()` 控制。
+
+### URL 前置去重
+
+worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中时：
+
+- 记录 `taskLogDedupByUrl`
+- 如果指定了输出画册，把已存在图片加入该画册并发送 `album-images-change`
+- 增加 `tasks.dedup_count` 并发送 `task-image-counts`
+- 发送 Completed，清理对应失败记录，跳过下载读取
+
+### Hash 后置去重
+
+未被 URL 去重命中时，worker 下载完成获得 `DownloadOutcome`，调用统一后处理 `postprocess_downloaded_image`，内部先推断 MIME 并计算 hash，再查 `Storage::find_image_by_hash`。命中时：
+
+- 记录 `taskLogDedupByHash`
+- 按需加入输出画册
+- 发送 `images-change` reason `change`，让前端刷新既有记录关联视图
+- 后处理最终分支收到 `imported = false` 后增加 `tasks.dedup_count`
+- 发送 Completed，清理对应失败记录
+
+Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
+
+---
+
+## 6. 入库与落盘
+
+### 统一后处理入口
+
+下载池 worker 调用统一的 `postprocess_downloaded_image`，不区分 `_bytes` / `_path` 变体。该函数接收 `PostprocessSource`，内部按 source 分发：
+
+1. 推断 MIME（`Bytes` 用 `mime_type_from_bytes`；`Path` 用 `mime_type_from_path`）。
+2. 计算 hash（同 source 分发）。
+3. 查 `Storage::find_image_by_hash` 做 hash 去重。
+4. 未命中去重时，根据 MIME 计算最终目标路径/文件名，落盘（或 Android MediaStore copy）。
+5. 生成缩略图/预览，写入 `images` 表，广播事件。
+
+### 桌面
+
+桌面后处理（`PostprocessSource::Bytes` 或 `Path`）：
+
+- 从 source 推断 MIME，并在函数内计算最终文件名和扩展名
+- 未重复时写入最终文件
+- 生成缩略图或视频预览
+- 写入 `images`，其中 `local_path` 是磁盘路径，`thumbnail_path` 是缩略图路径或回退本地路径
+- 按需写入目标画册并广播事件
+
+桌面的 `file://` 或其他本地导入路径也通过 `PostprocessSource::Path` 走统一后处理。
+
+### Android
+
+Android 下载池也走 `postprocess_downloaded_image`：
+
+- 未命中去重时：
+  - `Bytes` 源：写入内部临时文件，调用 `copy_image_to_pictures` 复制到 MediaStore Pictures，得到最终 content URI，再删除临时文件。
+  - `Path` 源（溢写文件）：直接从此临时文件复制到 MediaStore Pictures，完成后删除临时文件。
+- Pictures 内的最终命名与冲突处理交给 Android 系统。
+- hash 去重发生在复制或写临时文件之前。
+- 图片缩略图：`Bytes` 源直接从内存生成；`Path` 源从临时文件生成。
+- 视频预览使用同一个临时源文件压缩，完成后删除临时源文件。
+- 宽高与大小优先从 bytes/Rust 侧取得。
+- 入库后 `images.local_path` 存最终 content URI，缩略图仍是本地路径。
+
+本地 `content://` 导入走独立路径：`local_import.rs` 提前解析/传入 `display_name`，直接调用 `process_downloaded_content_image_to_storage`，不经过下载池的统一后处理。
+
+---
+
+## 7. 失败记录与重试
+
+失败记录写入 `task_failed_images`，核心字段包括：
+
+- `url`
+- `plugin_id`
+- `task_id`
+- `order`，下载时沿用 `download_start_time`
+- `last_error`
+- `header_snapshot`
+- `display_name`
+- `metadata_id`
+
+失败时 `upsert_failed_image_on_failure`：
+
+- 普通失败新增失败记录并发送 `failed-images-change` added
+- 重试失败更新原失败记录的 attempt/error/header snapshot，并发送 updated
+- 同步发送 `task-image-counts`，让 `failedCount` 与任务表保持一致
+
+重试入口在 `TaskScheduler::retry_failed_image`。它读取失败记录与任务：
+
+- header 优先使用失败记录的 `header_snapshot`，为空时回退任务级 headers
+- display name 与 metadata_id 从失败记录回放
+- 每个 failed image id 维护一个 `download_handles` 句柄，防止重复重试并支持等待入队时取消
+- 重试成功后清理失败记录并发送 removed/count 事件
+
+批量重试、取消重试、删除失败项都通过命令层按 failed image id 操作；删除前会先取消对应重试句柄。
+
+---
+
+## 8. 事件
+
+### 下载状态事件
+
+`download-state` 记录单个 active download 的阶段：
+
+- `preparing`
+- `downloading`
+- `processing`
+- `completed`
+- `canceled`
+- `failed`
+
+`download-progress` 由 HTTP/HTTPS downloader 在读取响应流时发送。`content://` 读取当前没有分块进度事件。
+
+`download-removed` 在终态等待下载间隔后发送，前端据此从 active 列表移除。
+
+### 图片与画册事件
+
+下载器入库时按表拆分事件：
+
+- 新增或刷新 `images`：发送 `images-change`
+- 输出画册或去重补画册影响 `album_images`：发送 `album-images-change`
+
+画廊分页、任务视图和 Plasma 依赖这两个事件区分刷新范围。详情见 [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](../gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)。
+
+### 任务图片计数
+
+事件名：`task-image-counts`（`DaemonEvent::TaskImageCounts`）。
+
+载荷始终带 `taskId`，并按需携带当前绝对值：
+
+- `successCount`
+- `deletedCount`
+- `failedCount`
+- `dedupCount`
+
+典型发送时机：
+
+- 成功入库后，后处理最终分支收到 `imported = true` 并同步任务 success/failed 状态快照
+- URL 前置去重命中或后处理最终分支收到 `imported = false` 后发送新的 `dedupCount`；`imported = false` 只表示后置 hash/path 去重
+- 失败记录新增、更新、删除后刷新 `failedCount`
+- 图片删除、整理删除后刷新 `deletedCount` 或相关计数
+
+---
+
+## 9. 设置
+
+### 下载并发
+
+`maxConcurrentDownloads` 控制下载池 in-flight 上限。入队时读取当前设置；worker 缩容通过 `exit_notify` 唤醒，多余 worker 在下一轮退出。
+
+### 下载间隔
+
+`downloadIntervalMs`：
+
+- 范围：100 到 10000 ms
+- 默认：500 ms
+- 语义：每个下载 job 到达终态后，释放槽位前等待该时长
+- 中断：等待期间监听 `exit_notify`，缩容时可提前结束等待
+
+非下载池路径（本地导入、本地文件夹同步、native/surf 下载）使用 `wait_after_non_pool_download_if_needed`，保证单个处理流程也遵守同一下载间隔。
+
+### 自动去重
+
+`autoDeduplicate` 打开时启用 URL 前置去重和 hash 后置去重；关闭时仍会受 `local_path` 唯一约束保护，避免同一磁盘路径或同一 content URI 重复入库。
+
+---
+
+## 10. 启动临时文件清理
+
+应用启动时执行临时文件清理，防止溢写残留占用磁盘：
+
+- **清理范围**：`downloads_temp_dir()`（溢写目录 `cache_dir/downloads`）和通用 `temp_dir` 下的 `kabegame-*` 前缀文件。
+- **清理时机**：`AppPaths::init()` 之后、下载池启动之前，由启动流程中专门的清理步骤完成。
+- **清理策略**：删除目录内所有文件及子目录（不递归到系统其他路径）。
+- **容错**：清理失败（权限不足、文件被占用）记录 warn 日志，不阻塞启动。
+
+这确保上次异常退出（崩溃、强杀）遗留的溢写临时文件不会无限堆积。

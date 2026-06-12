@@ -6,9 +6,11 @@
 
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
-use crate::crawler::downloader::{next_download_id, DownloadQueue};
 #[cfg(not(target_os = "android"))]
 use crate::crawler::downloader::{build_safe_filename, unique_path};
+use crate::crawler::downloader::{
+    next_download_id, wait_after_non_pool_download_if_needed, DownloadQueue,
+};
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
@@ -96,8 +98,7 @@ impl LocalImportHook {
                 .await
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
             let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("image");
-            let hash_source = src.to_string_lossy();
-            let safe = build_safe_filename(name, "bin", hash_source.as_ref());
+            let safe = build_safe_filename(name, "bin");
             let dest = unique_path(dest_dir, &safe);
             fs::copy(&src, &dest)
                 .await
@@ -110,8 +111,12 @@ impl LocalImportHook {
         let imported = crate::crawler::downloader::postprocess_downloaded_image(
             &*self.download_queue,
             next_download_id(),
-            &final_path,
-            file.url.as_str(),
+            crate::crawler::downloader::PostprocessSource::Path {
+                path: &final_path,
+                relocate_to: None,
+            },
+            false,
+            &file.url,
             PLUGIN_ID,
             Some(&self.task_id),
             None,
@@ -123,7 +128,9 @@ impl LocalImportHook {
             None,
             None,
         )
-        .await?;
+        .await;
+        wait_after_non_pool_download_if_needed(download_start_time).await;
+        let imported = imported?;
         if imported {
             self.image_count += 1;
         }
@@ -157,7 +164,7 @@ impl LocalImportHook {
             .copy_image_to_pictures(src.to_string_lossy().as_ref(), &mime, &display_name)
             .await?;
         let copied_url = Url::parse(&copied_uri).map_err(|e| e.to_string())?;
-        self.import_content_url(&copied_url, download_start_time)
+        self.import_content_url(&copied_url, download_start_time, Some(display_name))
             .await
     }
 
@@ -166,6 +173,7 @@ impl LocalImportHook {
         &mut self,
         url: &Url,
         download_start_time: u64,
+        custom_display_name: Option<String>,
     ) -> Result<(), String> {
         let uri = url.as_str();
         let io = get_content_io_provider();
@@ -180,20 +188,27 @@ impl LocalImportHook {
 
         let bytes = io.read_file_bytes(uri).await?;
         let hash = crate::crawler::downloader::compute_bytes_hash(&bytes);
-        let (video_thumb_path, video_thumb_str) = if is_video {
+        let thumbnail_path = if is_video {
             prepare_android_video_thumb(&bytes, &mime).await
         } else {
-            (None, String::new())
+            None
+        };
+        let display_name = match custom_display_name {
+            Some(name) if !name.trim().is_empty() => Some(name),
+            _ => io
+                .get_display_name(uri)
+                .await
+                .ok()
+                .filter(|name| !name.trim().is_empty()),
         };
         let headers: HashMap<String, String> = HashMap::new();
 
-        crate::crawler::downloader::process_downloaded_content_image_to_storage(
+        let result = crate::crawler::downloader::process_downloaded_content_image_to_storage(
             &*self.download_queue,
             next_download_id(),
             uri,
             &hash,
-            video_thumb_path.as_ref(),
-            video_thumb_str.as_str(),
+            thumbnail_path.as_deref(),
             mime,
             PLUGIN_ID,
             self.task_id,
@@ -201,10 +216,12 @@ impl LocalImportHook {
             self.output_album_id.as_deref(),
             None,
             &headers,
-            None,
+            display_name.as_deref(),
             None,
         )
-        .await?;
+        .await;
+        wait_after_non_pool_download_if_needed(download_start_time).await;
+        result?;
 
         self.image_count += 1;
         Ok(())
@@ -220,14 +237,22 @@ impl FolderScanHook for LocalImportHook {
         _enter: &ScannedDir,
         _ctx: &ScanCtx<()>,
     ) -> Result<Option<()>, ScanError> {
-        if self.download_queue.is_task_canceled(&self.task_id).await {
+        if self
+            .download_queue
+            .is_download_canceled(&self.task_id)
+            .await
+        {
             return Err(ScanError::Fatal("Task canceled".to_string()));
         }
         Ok(Some(()))
     }
 
     async fn on_file(&mut self, file: &ScannedFile, _ctx: &ScanCtx<()>) -> Result<(), ScanError> {
-        if self.download_queue.is_task_canceled(&self.task_id).await {
+        if self
+            .download_queue
+            .is_download_canceled(&self.task_id)
+            .await
+        {
             return Err(ScanError::Fatal("Task canceled".to_string()));
         }
         let download_start_time = self.next_download_start_time();
@@ -235,7 +260,7 @@ impl FolderScanHook for LocalImportHook {
             "file" => self.import_file_url(file, download_start_time).await,
             #[cfg(target_os = "android")]
             "content" => {
-                self.import_content_url(&file.url, download_start_time)
+                self.import_content_url(&file.url, download_start_time, None)
                     .await
             }
             _ => Ok(()),
@@ -260,10 +285,7 @@ impl FolderScanHook for LocalImportHook {
 }
 
 #[cfg(target_os = "android")]
-async fn prepare_android_video_thumb(
-    bytes: &[u8],
-    mime: &Option<String>,
-) -> (Option<PathBuf>, String) {
+async fn prepare_android_video_thumb(bytes: &[u8], mime: &Option<String>) -> Option<PathBuf> {
     let ext = mime
         .as_deref()
         .and_then(crate::image_type::ext_from_mime)
@@ -277,20 +299,15 @@ async fn prepare_android_video_thumb(
             "[Local Import] Android content video temp write failed: {}",
             e
         );
-        return (None, String::new());
+        return None;
     }
 
     let result =
-        match crate::crawler::downloader::video_compress::compress_video_for_preview(&temp_path)
-            .await
-        {
-            Ok(r) => {
-                let path = r.preview_path;
-                (Some(path.clone()), path.to_string_lossy().to_string())
-            }
+        match crate::crawler::downloader::compress::compress_video_for_preview(&temp_path).await {
+            Ok(r) => Some(r.preview_path),
             Err(e) => {
                 eprintln!("[Local Import] Android content video GIF failed: {}", e);
-                (None, String::new())
+                None
             }
         };
     let _ = fs::remove_file(&temp_path).await;

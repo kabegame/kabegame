@@ -17,7 +17,7 @@ use tokio::io::AsyncWriteExt;
 use kabegame_core::app_paths::AppPaths;
 use kabegame_core::crawler::{CrawlTaskRequest, TaskScheduler};
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::storage::{Storage, TaskInfo};
+use kabegame_core::storage::{Storage, TaskInfo, TaskStatus};
 
 #[derive(Debug, Deserialize)]
 struct ImportQuery {
@@ -165,7 +165,7 @@ async fn handle_import(Query(q): Query<ImportQuery>, mut multipart: Multipart) -
         output_album_id: q.output_album_id.clone(),
         run_config_id: None,
         trigger_source: "web-upload".to_string(),
-        status: "pending".to_string(),
+        status: TaskStatus::Pending,
         progress: 0.0,
         deleted_count: 0,
         dedup_count: 0,
@@ -183,15 +183,8 @@ async fn handle_import(Query(q): Query<ImportQuery>, mut multipart: Multipart) -
     }
 
     let req = CrawlTaskRequest {
-        plugin_id: "local-import".to_string(),
         task_id: task_id.clone(),
-        output_dir: None,
-        user_config: Some(user_config),
-        http_headers: None,
-        output_album_id: q.output_album_id,
         plugin_file_path: None,
-        run_config_id: None,
-        trigger_source: "web-upload".to_string(),
     };
     if let Err(e) = TaskScheduler::global().submit_task(req) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();

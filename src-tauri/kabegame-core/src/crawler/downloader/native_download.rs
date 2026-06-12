@@ -1,7 +1,6 @@
 use super::ActiveDownloadInfo;
 use super::DownloadState;
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -66,11 +65,4 @@ impl NativeDownloadState {
             })
             .collect()
     }
-}
-
-pub fn compute_native_download_destination(
-    url: &str,
-    images_dir: &Path,
-) -> Result<PathBuf, String> {
-    super::compute_image_download_path(url, images_dir)
 }

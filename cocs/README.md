@@ -38,8 +38,8 @@
 ## 下载与任务（`downloader-tasks/`）
 
 - [downloader-tasks/DOWNLOADER_FLOW.md](downloader-tasks/DOWNLOADER_FLOW.md)
-  - 主题：下载器流程与关键调用路径；含 `task-image-counts` 任务图片计数事件说明；入库时 **`images-change` / `album-images-change`** 与画廊监听的对应关系（见文内 §5 子节）。
-  - 适用场景：下载任务生命周期、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
+  - 主题：当前下载器全链路与模块边界。涵盖 `mod.rs` scheme registry / `queue.rs` worker / `content.rs` Android content downloader 的分工，`download_with_retry` 通过 `DownloadSink` 溢写（5 MiB 阈值）返回 `DownloadOutcome`（Bytes/Path）、Fatal/Retriable/Resumable 三级错误重试、统一 `postprocess_downloaded_image`（`PostprocessSource` 枚举）、URL 与 hash 两级去重、桌面落盘、Android MediaStore copy 与 content URI 沿用、失败重试、`task-image-counts`、启动临时文件清理以及 **`images-change` / `album-images-change`** 事件。
+  - 适用场景：下载任务生命周期、Android `content://` 与 HTTP/HTTPS 下载差异、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
 
 - [downloader-tasks/VIDEO_INGEST.md](downloader-tasks/VIDEO_INGEST.md)
   - 主题：视频摄入（下载/导入压缩）的 Cargo feature 门控机制。`video-ingest` feature 由 `standard`/CLI 启用，`light` 不启用；rsmpeg 进程内转码（`video_compress.rs`）与维度读取（`media_dimensions.rs`）均在此 feature 下，调用方须显式 `#[cfg]` 门控。画廊播放始终可用（HTML `<video>`，无需 FFmpeg）。

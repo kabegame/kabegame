@@ -28,7 +28,7 @@ pub use gallery_time::{
 pub use images::ImageInfo;
 pub use run_configs::{RunConfig, ScheduleSpec};
 pub use surf_records::{RangedSurfRecords, SurfRecord};
-pub use tasks::TaskInfo;
+pub use tasks::{TaskInfo, TaskStatus};
 
 // 收藏画册的固定ID
 pub const FAVORITE_ALBUM_ID: &str = "00000000-0000-0000-0000-000000000001";
