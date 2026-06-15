@@ -5,6 +5,19 @@ const COMMANDS: &[&str] = &[
     "pickKgpgFile",
     "openImage",
     "openVideo",
+    "getImageThumbnail",
+    "computeHash",
+    "getMimeType",
+    "getDisplayName",
+    "getContentSize",
+    "getImageDimensions",
+    "getVideoDimensions",
+    "isDirectory",
+    "listContentChildren",
+    "readFileBytes",
+    "takePersistablePermission",
+    "copyImageToPictures",
+    "copyExtractedImagesToPictures",
 ];
 
 fn main() {

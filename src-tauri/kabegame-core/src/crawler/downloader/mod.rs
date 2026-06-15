@@ -9,8 +9,13 @@ use crate::storage::{ImageInfo, Storage};
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::task::{ready, Context, Poll};
 use std::time::Instant;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::sync::Notify;
 use tokio::time::{sleep, Duration};
 use url::Url;
 
@@ -27,10 +32,10 @@ pub use compress::{
     image_thumbnail_dimensions_acceptable, IMAGE_THUMBNAIL_MAX_DIM,
     IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES,
 };
-pub use http::{build_reqwest_header_map_for_emitter, create_client};
+pub use http::{build_reqwest_header_map, create_client};
 pub use native_download::{NativeDownloadEntry, NativeDownloadState};
 pub use queue::{
-    next_download_id, ActiveDownloadInfo, DownloadPool, DownloadQueue, DownloadRequest,
+    next_download_id, ActiveDownloadInfo, DownloadQueue, DownloadRequest,
     DownloadState,
 };
 pub use util::{
@@ -43,7 +48,7 @@ use queue::{
     upsert_failed_image_on_failure,
 };
 #[cfg(target_os = "android")]
-use util::{derive_display_name_from_url, mime_type_from_filename};
+use util::derive_display_name_from_url;
 /// 下载错误分类
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DownloadErrorKind {
@@ -116,27 +121,51 @@ pub(crate) enum DownloadOutcome {
 /// 溢写阈值：内存缓冲累计达到该大小即把这一段落盘并清空，使大文件常驻内存维持在阈值附近。
 pub(crate) const DOWNLOAD_SPILL_THRESHOLD: usize = 5 * 1024 * 1024;
 
-/// 下载写入目标，实现 [`std::io::Write`]，对下载器透明。
+/// 进度上报节流间隔（毫秒）：writer 在写路径上每隔该时长才上报一次。
+pub(crate) const PROGRESS_EMIT_INTERVAL_MS: u64 = 200;
+
+/// 下载写入目标抽象：下载器只见 `&mut dyn DownloadWriter`，只管写字节 + 声明大小，
+/// **不感知溢写 / 进度 / 队列**。`set_total` 用于声明 Content-Length 以得到确定进度。
+pub(crate) trait DownloadWriter: AsyncWrite + Send + Unpin {
+    /// 声明总字节数（HTTP Content-Length / content 已知大小）；未知传 None。
+    fn set_total(&mut self, total: Option<u64>);
+    /// 向任务日志发送 warn 级消息；默认空实现（测试 writer 不需要上报）。
+    fn warn(&mut self, _message: String) {}
+}
+
+/// [`DownloadWriter`] 的实现：内存缓冲 + 溢写临时文件，并在写路径上把进度经
+/// [`DownloadQueue::report_progress`] 上报（更新 `ActiveDownloadInfo` + 发 `download-progress`）。
 ///
-/// **由 `download_with_retry` 私有持有，以抽象 `&mut dyn Write` 形式传给 `download`。**
-/// 下载器只管往里写，并不知道是否落盘；内存缓冲累计到 [`DOWNLOAD_SPILL_THRESHOLD`] 时，
-/// `write` 内部把这一段同步落盘到 `downloads_temp_dir()/{id}.part` 并清空缓冲。续传 /
-/// 截断 / 收尾由外部通过 [`Self::received`] / [`Self::clear`] / [`Self::finalize`] 决定。
+/// **由 `download_with_retry` 私有持有，以 `&mut dyn DownloadWriter` 形式传给 `download`。**
+/// 内存缓冲累计到 [`DOWNLOAD_SPILL_THRESHOLD`] 时落盘到 `downloads_temp_dir()/{id}.part` 并清空缓冲。
+/// 续传 / 截断 / 收尾由外部通过 [`Self::received`] / [`Self::clear`] / [`Self::finalize`] 决定。
 struct SpillWriter {
     buffer: Vec<u8>,
     spilled_len: u64,
-    file: Option<std::fs::File>,
+    file: Option<tokio::fs::File>,
     path: Option<PathBuf>,
     download_id: u64,
     downloads_dir: PathBuf,
+    /// 总字节数（由 `set_total` 声明）。
+    total: Option<u64>,
+    /// 进度上报节流时间戳。
+    last_emit: Instant,
+    /// 队列句柄（cheap Clone，仅持 Arc）；测试构造时为 None，跳过上报。
+    dq: Option<DownloadQueue>,
+    /// 正在把 `buffer` 落盘:置位时 `poll_write` 先把缓冲写完再接收新输入。
+    spilling: bool,
+    /// 本次落盘已写入文件的字节数（跨多次 poll 续写）。
+    spill_pos: usize,
 }
 
 impl SpillWriter {
-    fn new(download_id: u64) -> Self {
-        Self::new_in(
+    fn new(download_id: u64, dq: &DownloadQueue) -> Self {
+        let mut w = Self::new_in(
             download_id,
             crate::app_paths::AppPaths::global().downloads_temp_dir(),
-        )
+        );
+        w.dq = Some(dq.clone());
+        w
     }
 
     fn new_in(download_id: u64, downloads_dir: PathBuf) -> Self {
@@ -147,6 +176,11 @@ impl SpillWriter {
             path: None,
             download_id,
             downloads_dir,
+            total: None,
+            last_emit: Instant::now(),
+            dq: None,
+            spilling: false,
+            spill_pos: 0,
         }
     }
 
@@ -155,37 +189,62 @@ impl SpillWriter {
         self.spilled_len + self.buffer.len() as u64
     }
 
-    /// 无条件把当前缓冲写入临时文件（必要时创建）并清空缓冲。
-    /// 供收尾 / flush 刷残余缓冲使用。
-    fn flush_buffer_to_file(&mut self) -> std::io::Result<()> {
-        if self.buffer.is_empty() {
-            return Ok(());
+    /// 节流上报进度（写路径调用）。
+    fn maybe_report(&mut self) {
+        if self.dq.is_none() {
+            return;
         }
+        if self.last_emit.elapsed().as_millis() as u64 >= PROGRESS_EMIT_INTERVAL_MS {
+            self.last_emit = Instant::now();
+            let (id, received, total) = (self.download_id, self.received(), self.total);
+            if let Some(dq) = &self.dq {
+                dq.report_progress(id, received, total);
+            }
+        }
+    }
+
+    /// 强制上报一次当前进度（set_total / 收尾用）。
+    fn report_now(&self) {
+        if let Some(dq) = &self.dq {
+            dq.report_progress(self.download_id, self.received(), self.total);
+        }
+    }
+
+    /// 把 `buffer` 落盘到临时文件（跨多次 poll 续写,完成后清空缓冲并累加 `spilled_len`）。
+    fn poll_drive_spill(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         if self.file.is_none() {
             std::fs::create_dir_all(&self.downloads_dir)?;
             let path = self.downloads_dir.join(format!("{}.part", self.download_id));
-            self.file = Some(std::fs::File::create(&path)?);
+            let std_file = std::fs::File::create(&path)?;
+            self.file = Some(tokio::fs::File::from_std(std_file));
             self.path = Some(path);
         }
-        use std::io::Write as _;
-        self.file.as_mut().unwrap().write_all(&self.buffer)?;
-        self.spilled_len += self.buffer.len() as u64;
-        self.buffer.clear();
-        Ok(())
-    }
-
-    /// 仅在确有必要（缓冲已满到阈值）时落盘，否则保留在内存。
-    fn spill(&mut self) -> std::io::Result<()> {
-        if self.buffer.len() >= DOWNLOAD_SPILL_THRESHOLD {
-            self.flush_buffer_to_file()?;
+        let Self {
+            file,
+            buffer,
+            spill_pos,
+            spilled_len,
+            spilling,
+            ..
+        } = self;
+        let file = file.as_mut().unwrap();
+        while *spill_pos < buffer.len() {
+            let n = ready!(Pin::new(&mut *file).poll_write(cx, &buffer[*spill_pos..]))?;
+            *spill_pos += n;
         }
-        Ok(())
+        *spilled_len += buffer.len() as u64;
+        buffer.clear();
+        *spill_pos = 0;
+        *spilling = false;
+        Poll::Ready(Ok(()))
     }
 
     /// 截断：丢弃缓冲与临时文件并归零（服务端不支持 Range、需从头重下时）。
     fn clear(&mut self) {
         self.buffer.clear();
         self.spilled_len = 0;
+        self.spill_pos = 0;
+        self.spilling = false;
         self.file = None; // 先释放句柄再删文件（Windows 要求）
         if let Some(path) = self.path.take() {
             let _ = std::fs::remove_file(path);
@@ -193,39 +252,98 @@ impl SpillWriter {
     }
 
     /// 收尾：曾落盘 → 刷入剩余缓冲并返回 Path；否则返回内存 Bytes。
-    fn finalize(mut self) -> std::io::Result<DownloadOutcome> {
+    /// 注意:`poll_write` 可能在落盘未完成（`spilling` 仍为 true、已写到 `spill_pos`）时就返回,
+    /// 因此这里要从 `spill_pos` 续写剩余缓冲,不能整段重写。
+    async fn finalize(mut self) -> std::io::Result<DownloadOutcome> {
         if self.file.is_some() {
-            self.flush_buffer_to_file()?;
-            if let Some(mut f) = self.file.take() {
-                use std::io::Write as _;
-                f.flush()?;
+            // 未落盘起点:进行中的落盘从 spill_pos 续写,否则整段缓冲都要追加。
+            let from = if self.spilling { self.spill_pos } else { 0 };
+            if from < self.buffer.len() {
+                let f = self.file.as_mut().unwrap();
+                f.write_all(&self.buffer[from..]).await?;
             }
+            self.spilled_len += self.buffer.len() as u64;
+            self.buffer.clear();
+            self.spill_pos = 0;
+            self.spilling = false;
+            if let Some(mut f) = self.file.take() {
+                f.flush().await?;
+            }
+            self.report_now();
             return Ok(DownloadOutcome::Path(self.path.take().unwrap()));
         }
+        self.report_now();
         Ok(DownloadOutcome::Bytes(self.buffer))
     }
 }
 
-impl std::io::Write for SpillWriter {
-    /// 每次最多往缓冲写入 `阈值 - 当前缓冲长度` 字节并返回写入量，使缓冲严格不超过阈值；
-    /// 写满即落盘腾空间。调用方用 `write_all` 循环写完整块数据。
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let space = DOWNLOAD_SPILL_THRESHOLD - self.buffer.len();
+impl AsyncWrite for SpillWriter {
+    /// 先把内存缓冲写满到阈值再落盘:正在落盘时返回 Pending（不接收新输入,防缓冲越界）;
+    /// 落盘完成后接收新输入,达到阈值则开始下一轮落盘。进度按间隔节流上报。
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let download_id = self.download_id;
+        if let Some(dq) = self.dq.as_ref() {
+            if dq.is_download_canceled_sync(download_id) {
+                return Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted, "Task canceled",
+                )));
+            }
+        }
+        let this = self.get_mut();
+        // 1. 若有进行中的落盘,先驱动完成(未完成则 Pending,本次不接收新输入)。
+        if this.spilling {
+            ready!(this.poll_drive_spill(cx))?;
+        }
+        // 2. 接收输入到缓冲(限制不超过阈值)。
+        let space = DOWNLOAD_SPILL_THRESHOLD - this.buffer.len();
         let n = buf.len().min(space);
-        self.buffer.extend_from_slice(&buf[..n]);
-        self.spill()?; // 缓冲达到阈值才落盘
-        Ok(n)
+        this.buffer.extend_from_slice(&buf[..n]);
+        this.maybe_report();
+        // 3. 缓冲满阈值则开始落盘;Pending 也无妨,已消费 n,下次 poll 会先续写。
+        if this.buffer.len() >= DOWNLOAD_SPILL_THRESHOLD {
+            this.spilling = true;
+            let _ = this.poll_drive_spill(cx)?;
+        }
+        Poll::Ready(Ok(n))
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
-        // 已落盘时，把缓冲里未落盘的尾部刷入文件再 flush 文件，避免丢数据。
-        // 尚未落盘（小文件）时数据留在内存即为最终形态，flush 为 no-op，不提前建文件。
-        if self.file.is_some() {
-            self.flush_buffer_to_file()?;
-            use std::io::Write as _;
-            self.file.as_mut().unwrap().flush()?;
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.spilling {
+            ready!(this.poll_drive_spill(cx))?;
         }
-        Ok(())
+        if let Some(f) = this.file.as_mut() {
+            ready!(Pin::new(f).poll_flush(cx))?;
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.spilling {
+            ready!(this.poll_drive_spill(cx))?;
+        }
+        if let Some(f) = this.file.as_mut() {
+            ready!(Pin::new(f).poll_shutdown(cx))?;
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl DownloadWriter for SpillWriter {
+    fn set_total(&mut self, total: Option<u64>) {
+        self.total = total;
+        self.report_now();
+    }
+
+    fn warn(&mut self, message: String) {
+        if let Some(dq) = &self.dq {
+            dq.emit_log_by_download_id(self.download_id, "warn", message);
+        }
     }
 }
 
@@ -241,13 +359,10 @@ pub(crate) trait SchemeDownloader: Send + Sync {
     /// [`DownloadAttemptError::retriable`]（截断）让外部清空缓冲后从头重下。
     async fn download(
         &self,
-        dq: &DownloadQueue,
         url: &Url,
-        task_id: &str,
         headers: &HashMap<String, String>,
-        out: &mut (dyn std::io::Write + Send),
+        out: &mut dyn DownloadWriter,
         already_received: u64,
-        download_id: u64,
     ) -> Result<(), DownloadAttemptError>;
     /// 根据最终本地路径计算显示名称。
     /// `final_local_path`: 入库时的 local_path（桌面端为文件路径，Android 为 content URI）。
@@ -265,16 +380,13 @@ macro_rules! define_scheme_downloader_registry {
         impl SchemeDownloader for SchemeDownloaderEnum {
             async fn download(
                 &self,
-                dq: &DownloadQueue,
                 url: &Url,
-                task_id: &str,
                 headers: &HashMap<String, String>,
-                out: &mut (dyn std::io::Write + Send),
+                out: &mut dyn DownloadWriter,
                 already_received: u64,
-                download_id: u64,
             ) -> Result<(), DownloadAttemptError> {
                 match self {
-                    $(SchemeDownloaderEnum::$variant(d) => d.download(dq, url, task_id, headers, out, already_received, download_id).await,)*
+                    $(SchemeDownloaderEnum::$variant(d) => d.download(url, headers, out, already_received).await,)*
                 }
             }
 
@@ -354,34 +466,27 @@ pub async fn download_with_retry(
         .get_network_retry_count()
         .saturating_add(1)
         .max(1);
-    // download_with_retry 私有持有溢写状态：以抽象 Write 形式传给 download，
+    // download_with_retry 私有持有溢写状态：以抽象 DownloadWriter 形式传给 download，
     // 何时清空 / 落盘 / 收尾都在 download 返回后由本函数决定。
-    let mut writer = SpillWriter::new(download_id);
+    let mut writer = SpillWriter::new(download_id, dq);
 
     for attempt in 1..=max_attempts {
-        if dq.is_download_canceled(task_id).await {
+        if dq.is_download_canceled(download_id).await {
             writer.clear();
-            return Err("Task canceled".to_string());
+            return Err("Task canceled".into());
         }
 
         // 已接收量 >0 表示续传：download 据此发送 Range。
         let already_received = writer.received();
         match downloader
-            .download(
-                dq,
-                &parsed,
-                task_id,
-                headers,
-                &mut writer,
-                already_received,
-                download_id,
-            )
+            .download( &parsed, headers, &mut writer, already_received)
             .await
         {
             // 流结束：曾落盘 → Path，否则 → Bytes。
             Ok(()) => {
                 return writer
                     .finalize()
+                    .await
                     .map_err(|e| format!("finalize download: {e}"))
             }
             Err(e) => {
@@ -427,12 +532,11 @@ pub async fn wait_after_non_pool_download_if_needed(download_start_time: u64) {
 }
 
 /// 每次下载完成后，按设置等待一段时间再进入下一轮；等待期间可被 exit_notify 中断。
-async fn wait_after_pool_download_if_needed(pool: &DownloadPool) {
+async fn wait_after_download_if_needed(exit_notify: &Notify) {
     let interval_ms = download_interval_ms();
     if interval_ms == 0 {
         return;
     }
-    let exit_notify = &pool.exit_notify;
     tokio::select! {
         _ = sleep(Duration::from_millis(interval_ms)) => {}
         _ = exit_notify.notified() => {}
@@ -468,203 +572,15 @@ pub async fn resolve_display_name(url: &str, local_path: &str) -> String {
     downloader.display_name(&parsed, local_path).await
 }
 
-/// 准备图片下载目标。
-/// content:// 图片入库：local_path 存 URI，thumbnail_path 为本地路径。
-#[cfg(target_os = "android")]
-pub(crate) async fn process_downloaded_content_image_to_storage(
-    dq: &DownloadQueue,
-    id: u64,
-    content_uri: &str,
-    hash: &str,
-    thumbnail_path: Option<&Path>,
-    inferred_mime_type: Option<String>,
-    plugin_id: &str,
-    task_id: &str,
-    download_start_time: u64,
-    output_album_id: Option<&str>,
-    failed_image_id: Option<i64>,
-    http_headers: &HashMap<String, String>,
-    custom_display_name: Option<&str>,
-    metadata_id: Option<i64>,
-) -> Result<(), String> {
-    let mut display_name = get_content_io_provider()
-        .get_display_name(content_uri)
-        .await
-        .unwrap_or_else(|_| "image".to_string());
-    if let Some(n) = custom_display_name {
-        if !n.trim().is_empty() {
-            display_name = n.to_string();
-        }
-    }
-    let mime_line = inferred_mime_type
-        .as_ref()
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            let from_fn = mime_type_from_filename(&display_name);
-            let f = from_fn.to_lowercase();
-            if f != "application/octet-stream" && !f.is_empty() {
-                Some(f)
-            } else {
-                None
-            }
-        });
-    let media_type = Some(match mime_line {
-        Some(m)
-            if m.starts_with("video/") || crate::image_type::is_video_mime(&Some(m.clone())) =>
-        {
-            m
-        }
-        Some(m)
-            if m.starts_with("image/") || crate::image_type::is_image_mime(&Some(m.clone())) =>
-        {
-            m
-        }
-        Some(m) if m == "video" => crate::image_type::default_video_mime().to_string(),
-        Some(m) if m == "image" => crate::image_type::default_image_mime().to_string(),
-        Some(m) => m,
-        None => crate::image_type::default_image_mime().to_string(),
-    });
-    let (width, height) = if media_type
-        .as_deref()
-        .map(|m| m.starts_with("video/"))
-        .unwrap_or(false)
-    {
-        crate::media_dimensions::android::resolve_video_dimensions(content_uri).await
-    } else {
-        crate::media_dimensions::android::resolve_image_dimensions(content_uri).await
-    }
-    .map(|(w, h)| (Some(w), Some(h)))
-    .unwrap_or((None, None));
-    let size = crate::media_dimensions::android::resolve_content_size(content_uri).await;
-
-    let image_info = ImageInfo {
-        id: "".to_string(),
-        url: None,
-        local_path: content_uri.to_string(),
-        plugin_id: plugin_id.to_string(),
-        task_id: Some(task_id.to_string()),
-        surf_record_id: None,
-        crawled_at: download_start_time,
-        metadata_id,
-        metadata_version: 0,
-        thumbnail_path: thumbnail_path
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        favorite: false,
-        is_hidden: false,
-        hash: hash.to_string(),
-        local_exists: true,
-        width,
-        height,
-        display_name,
-        media_type,
-        last_set_wallpaper_at: None,
-        size,
-        album_order: None,
-    };
-    // local_path 唯一性硬约束：同一 content URI 已入库则放弃，发送下载错误事件。
-    if let Some(existing) = Storage::find_image_by_path(content_uri).ok().flatten() {
-        emit_task_log(
-            task_id,
-            "warn",
-            task_log_i18n(
-                "taskLogDedupByPath",
-                json!({
-                    "currentUrl": content_uri,
-                    "existingId": &existing.id,
-                    "existingPath": &existing.local_path,
-                }),
-            ),
-        );
-        dq.emit_state(
-            task_id,
-            id,
-            content_uri,
-            download_start_time,
-            plugin_id,
-            DownloadState::Failed,
-            Some("duplicate path"),
-            failed_image_id,
-            false,
-        );
-        GlobalEmitter::global().emit_task_status_from_storage(task_id);
-        return Ok(());
-    }
-    match Storage::global().add_image(image_info) {
-        Ok(inserted) => {
-            let image_id = inserted.id.clone();
-            let ids = vec![image_id.clone()];
-            let tid_add = vec![task_id.to_string()];
-            GlobalEmitter::global().emit_images_change(
-                "add",
-                &ids,
-                Some(&tid_add),
-                None,
-                Some(&[plugin_id.to_string()]),
-            );
-            if let Some(album_id) = output_album_id {
-                if !album_id.trim().is_empty() {
-                    let added =
-                        Storage::global().add_images_to_album_silent(album_id, &[image_id.clone()]);
-                    if added > 0 {
-                        let alb = vec![album_id.to_string()];
-                        GlobalEmitter::global().emit_album_images_change("add", &alb, &ids);
-                    }
-                }
-            }
-            dq.emit_state(
-                task_id,
-                id,
-                content_uri,
-                download_start_time,
-                plugin_id,
-                DownloadState::Completed,
-                None,
-                failed_image_id,
-                false,
-            );
-            emit_task_image_counts_snapshot(task_id);
-            clear_failed_image_after_success(failed_image_id);
-            Ok(())
-        }
-        Err(e) => {
-            if let Some(thumb) = thumbnail_path {
-                let _ = tokio::fs::remove_file(thumb).await;
-            }
-            upsert_failed_image_on_failure(
-                failed_image_id,
-                task_id,
-                plugin_id,
-                content_uri,
-                download_start_time as i64,
-                e.as_str(),
-                http_headers,
-                metadata_id,
-                custom_display_name,
-            );
-            dq.emit_state(
-                task_id,
-                id,
-                content_uri,
-                download_start_time,
-                plugin_id,
-                DownloadState::Failed,
-                Some(e.as_str()),
-                failed_image_id,
-                false,
-            );
-            GlobalEmitter::global().emit_task_status_from_storage(task_id);
-            Err(e)
-        }
-    }
-}
 
 pub enum PostprocessSource<'a> {
     /// 小文件/内存下载 → 写入 output_dir
     Bytes { output_dir: &'a Path, bytes: &'a [u8] },
     /// 文件已在磁盘上；relocate_to = Some(dir) → 移动到 dir；None → 原地处理
     Path { path: &'a Path, relocate_to: Option<&'a Path> },
+    /// Android content:// URI —— url 参数即为 URI；所有元数据通过 ContentIoProvider 解析，不在 Rust 持有字节。
+    #[cfg(target_os = "android")]
+    ContentUri,
 }
 
 /// 对图片数据处理，提取入库需要的参数，并在必要的时候落盘，最后入库
@@ -724,6 +640,24 @@ pub async fn postprocess_downloaded_image(
                 let hash_ms = hash_start.elapsed().as_millis() as u64;
                 (inferred_mime, hash, hash_ms)
             }
+            #[cfg(target_os = "android")]
+            PostprocessSource::ContentUri => {
+                use crate::crawler::content_io::get_content_io_provider;
+                let io = get_content_io_provider();
+                let inferred_mime = io
+                    .get_mime_type(url.as_str())
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| crate::image_type::default_image_mime().to_string());
+                let hash_start = Instant::now();
+                let hash = match io.compute_hash(url.as_str()).await {
+                    Ok(h) => h,
+                    Err(e) => return Err(format!("content URI 哈希计算出错：{e}")),
+                };
+                let hash_ms = hash_start.elapsed().as_millis() as u64;
+                (inferred_mime, hash, hash_ms)
+            }
         };
         // 算正确的扩展名，稍后用来给新文件添加扩展名，如果没有新文件就没有用。
         let inferred_ext = crate::image_type::ext_from_mime(&inferred_mime);
@@ -772,9 +706,11 @@ pub async fn postprocess_downloaded_image(
         // Save bytes reference for thumbnail generation (only available for Bytes source).
         let bytes: Option<&[u8]> = match &source {
             PostprocessSource::Bytes { bytes, .. } => Some(bytes),
+            #[cfg(target_os = "android")]
+            PostprocessSource::ContentUri => None,
             _ => None,
         };
-         // Materialize final path; track whether a temp file was created (for Android cleanup).
+        // Materialize final path; track whether a temp file was created (for Android cleanup).
         let mut file_created = false;
         let path = match &source {
             PostprocessSource::Bytes { output_dir, bytes } => {
@@ -834,15 +770,17 @@ pub async fn postprocess_downloaded_image(
                 file_created = true;
                 path
             }
+
             PostprocessSource::Path {
                 path: src_path,
                 relocate_to: None,
             } => {
-                #[cfg(target_os = "android")]
-                {
-                    output_dir_target = false;
-                }
-                ensure_media_extension_by_infer(src_path).await
+                src_path.to_path_buf().clone()
+            }
+            #[cfg(target_os = "android")]
+            PostprocessSource::ContentUri => {
+                // URI 作为 "path"；canonicalize 会失败并回退到原字符串，local_path 即为 URI。
+                PathBuf::from(url.as_str())
             }
         };
 
@@ -904,10 +842,37 @@ pub async fn postprocess_downloaded_image(
                 return Ok(false);
             }
 
+            #[cfg(target_os = "android")]
+            let (resolved_w, resolved_h) = if let PostprocessSource::ContentUri = &source {
+                use crate::crawler::content_io::get_content_io_provider;
+                let io = get_content_io_provider();
+                let r = if is_video {
+                    io.get_video_dimensions(url.as_str()).await
+                } else {
+                    io.get_image_dimensions(url.as_str()).await
+                };
+                r.ok().map(|(w, h)| (Some(w), Some(h))).unwrap_or((None, None))
+            } else {
+                crate::media_dimensions::resolve_media_dimensions_sync(&local_path)
+                    .map(|(w, h)| (Some(w), Some(h)))
+                    .unwrap_or((None, None))
+            };
+            #[cfg(not(target_os = "android"))]
             let (resolved_w, resolved_h) =
                 crate::media_dimensions::resolve_media_dimensions_sync(&local_path)
                     .map(|(w, h)| (Some(w), Some(h)))
                     .unwrap_or((None, None));
+
+            #[cfg(target_os = "android")]
+            let resolved_size = if let PostprocessSource::ContentUri = &source {
+                use crate::crawler::content_io::get_content_io_provider;
+                get_content_io_provider().get_content_size(url.as_str()).await.ok()
+            } else if let Some(b) = bytes {
+                Some(b.len() as u64)
+            } else {
+                crate::media_dimensions::resolve_file_size_sync(&local_path)
+            };
+            #[cfg(not(target_os = "android"))]
             let resolved_size = if let Some(b) = bytes {
                 Some(b.len() as u64)
             } else {
@@ -917,18 +882,43 @@ pub async fn postprocess_downloaded_image(
             let t_thumb = (!auto_deduplicate).then(Instant::now);
 
             let thumbnail_result: Result<Option<PathBuf>, String> = if is_video {
-                #[cfg(feature = "video")]
+                #[cfg(target_os = "android")]
+                if let PostprocessSource::ContentUri = &source {
+                    // 安卓 content URI：直接传 URI 给 Kotlin，不落盘
+                    compress::compress_video_for_preview(url.as_str())
+                        .await
+                        .map(|r| Some(r.preview_path))
+                } else {
+                    Err("video ingestion not supported for non-content-uri on android".to_string())
+                }
+                #[cfg(not(target_os = "android"))]
                 {
-                    // 安卓内部处理
                     compress::compress_video_for_preview(&path)
                         .await
                         .map(|r| Some(r.preview_path))
                 }
-                #[cfg(not(feature = "video"))]
-                {
-                    Err("video ingestion not supported in this build".to_string())
-                }
             } else {
+                #[cfg(target_os = "android")]
+                if let PostprocessSource::ContentUri = &source {
+                    // 安卓 content URI：获取系统已计算好的图片缩略图
+                    use crate::crawler::content_io::get_content_io_provider;
+                    let thumbnails_dir = crate::app_paths::AppPaths::global().thumbnails_dir();
+                    let _ = tokio::fs::create_dir_all(&thumbnails_dir).await;
+                    let thumb_path = thumbnails_dir
+                        .join(format!("{}.jpg", uuid::Uuid::new_v4()));
+                    match get_content_io_provider()
+                        .get_image_thumbnail(url.as_str(), thumb_path.to_str().unwrap_or(""))
+                        .await
+                    {
+                        Ok(()) => Ok(Some(thumb_path)),
+                        Err(_) => Ok(None),
+                    }
+                } else if let Some(b) = bytes {
+                    generate_thumbnail_from_bytes(b).await
+                } else {
+                    generate_thumbnail(&path).await
+                }
+                #[cfg(not(target_os = "android"))]
                 if let Some(b) = bytes {
                     generate_thumbnail_from_bytes(b).await
                 } else {
@@ -970,6 +960,20 @@ pub async fn postprocess_downloaded_image(
                 })
                 .unwrap_or_else(|| local_path.clone());
 
+            #[cfg(target_os = "android")]
+            let default_name = if let PostprocessSource::ContentUri = &source {
+                use crate::crawler::content_io::get_content_io_provider;
+                get_content_io_provider()
+                    .get_display_name(url.as_str())
+                    .await
+                    .unwrap_or_else(|_| "image".to_string())
+            } else {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("image")
+                    .to_string()
+            };
+            #[cfg(not(target_os = "android"))]
             let default_name = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -1182,8 +1186,8 @@ pub async fn clear_downloads_temp_dir() {
 #[cfg(test)]
 mod spill_writer_tests {
     use super::{DownloadOutcome, SpillWriter, DOWNLOAD_SPILL_THRESHOLD};
-    use std::io::Write;
     use std::path::PathBuf;
+    use tokio::io::AsyncWriteExt;
 
     const MIB: usize = 1024 * 1024;
 
@@ -1202,18 +1206,20 @@ mod spill_writer_tests {
     }
 
     /// 写入 `total` 字节（递增模式，便于校验内容），返回写入的原始数据。
-    fn write_pattern(w: &mut SpillWriter, total: usize) -> Vec<u8> {
+    /// 写完 `flush` 以把进行中的落盘驱动完成,使后续中间态断言确定。
+    async fn write_pattern(w: &mut SpillWriter, total: usize) -> Vec<u8> {
         let data: Vec<u8> = (0..total).map(|i| (i % 251) as u8).collect();
-        w.write_all(&data).unwrap();
+        w.write_all(&data).await.unwrap();
+        w.flush().await.unwrap();
         data
     }
 
     /// 小于阈值（400 KiB）：全程留在内存，不建文件，收尾为 Bytes。
-    #[test]
-    fn under_threshold_stays_in_memory() {
+    #[tokio::test]
+    async fn under_threshold_stays_in_memory() {
         let dir = temp_dir("400kb");
         let mut w = SpillWriter::new_in(1, dir.clone());
-        let data = write_pattern(&mut w, 400 * 1024);
+        let data = write_pattern(&mut w, 400 * 1024).await;
 
         assert_eq!(w.spilled_len, 0, "不应落盘");
         assert!(w.file.is_none(), "不应建临时文件");
@@ -1221,7 +1227,7 @@ mod spill_writer_tests {
         // 目录不应被创建。
         assert!(!dir.exists(), "未落盘不应创建目录");
 
-        match w.finalize().unwrap() {
+        match w.finalize().await.unwrap() {
             DownloadOutcome::Bytes(b) => assert_eq!(b, data),
             DownloadOutcome::Path(_) => panic!("expected Bytes"),
         }
@@ -1229,17 +1235,17 @@ mod spill_writer_tests {
     }
 
     /// 恰好等于阈值（5 MiB）：落盘一次，收尾为 Path。
-    #[test]
-    fn exactly_threshold_spills_once() {
+    #[tokio::test]
+    async fn exactly_threshold_spills_once() {
         let dir = temp_dir("5mb");
         let mut w = SpillWriter::new_in(2, dir.clone());
-        write_pattern(&mut w, DOWNLOAD_SPILL_THRESHOLD);
+        write_pattern(&mut w, DOWNLOAD_SPILL_THRESHOLD).await;
 
         assert_eq!(w.spilled_len as usize, DOWNLOAD_SPILL_THRESHOLD, "落盘一次");
         assert!(w.file.is_some());
         assert_eq!(w.received() as usize, DOWNLOAD_SPILL_THRESHOLD);
 
-        match w.finalize().unwrap() {
+        match w.finalize().await.unwrap() {
             DownloadOutcome::Path(p) => {
                 assert_eq!(
                     std::fs::metadata(&p).unwrap().len() as usize,
@@ -1252,17 +1258,17 @@ mod spill_writer_tests {
     }
 
     /// 6 MiB：落盘一次（5 MiB），残余 1 MiB 收尾时刷盘，合计 6 MiB 的 Path。
-    #[test]
-    fn six_mib_spills_once() {
+    #[tokio::test]
+    async fn six_mib_spills_once() {
         let dir = temp_dir("6mb");
         let mut w = SpillWriter::new_in(3, dir.clone());
-        let data = write_pattern(&mut w, 6 * MIB);
+        let data = write_pattern(&mut w, 6 * MIB).await;
 
         assert_eq!(w.spilled_len as usize, DOWNLOAD_SPILL_THRESHOLD, "仅一次 5 MiB 溢写");
         assert_eq!(w.buffer.len(), 6 * MIB - DOWNLOAD_SPILL_THRESHOLD, "残余 1 MiB 仍在内存");
         assert_eq!(w.received() as usize, 6 * MIB);
 
-        match w.finalize().unwrap() {
+        match w.finalize().await.unwrap() {
             DownloadOutcome::Path(p) => {
                 assert_eq!(std::fs::metadata(&p).unwrap().len() as usize, 6 * MIB);
                 assert_eq!(std::fs::read(&p).unwrap(), data, "落盘内容应与写入一致");
@@ -1273,11 +1279,11 @@ mod spill_writer_tests {
     }
 
     /// 12 MiB：落盘两次（各 5 MiB），残余 2 MiB 收尾刷盘，合计 12 MiB 的 Path。
-    #[test]
-    fn twelve_mib_spills_twice() {
+    #[tokio::test]
+    async fn twelve_mib_spills_twice() {
         let dir = temp_dir("12mb");
         let mut w = SpillWriter::new_in(4, dir.clone());
-        let data = write_pattern(&mut w, 12 * MIB);
+        let data = write_pattern(&mut w, 12 * MIB).await;
 
         assert_eq!(
             w.spilled_len as usize,
@@ -1287,7 +1293,7 @@ mod spill_writer_tests {
         assert_eq!(w.buffer.len(), 12 * MIB - 2 * DOWNLOAD_SPILL_THRESHOLD);
         assert_eq!(w.received() as usize, 12 * MIB);
 
-        match w.finalize().unwrap() {
+        match w.finalize().await.unwrap() {
             DownloadOutcome::Path(p) => {
                 assert_eq!(std::fs::metadata(&p).unwrap().len() as usize, 12 * MIB);
                 assert_eq!(std::fs::read(&p).unwrap(), data);
@@ -1298,12 +1304,12 @@ mod spill_writer_tests {
     }
 
     /// 空下载：返回空 Bytes，不建文件。
-    #[test]
-    fn empty_download_returns_empty_bytes() {
+    #[tokio::test]
+    async fn empty_download_returns_empty_bytes() {
         let dir = temp_dir("empty");
         let w = SpillWriter::new_in(5, dir.clone());
         assert_eq!(w.received(), 0);
-        match w.finalize().unwrap() {
+        match w.finalize().await.unwrap() {
             DownloadOutcome::Bytes(b) => assert!(b.is_empty()),
             DownloadOutcome::Path(_) => panic!("expected Bytes"),
         }
@@ -1311,35 +1317,37 @@ mod spill_writer_tests {
     }
 
     /// 单次 `write` 最多写入 `阈值 - 缓冲长度` 字节并返回写入量，确保缓冲不超过阈值。
-    #[test]
-    fn single_write_is_capped_at_remaining_space() {
+    #[tokio::test]
+    async fn single_write_is_capped_at_remaining_space() {
         let dir = temp_dir("cap");
         let mut w = SpillWriter::new_in(6, dir.clone());
         // 缓冲空 → 可写空间恰为阈值；给一个超大切片，应只接收阈值大小。
         let big = vec![1u8; 12 * MIB];
-        let n = w.write(&big).unwrap();
+        let n = w.write(&big).await.unwrap();
         assert_eq!(n, DOWNLOAD_SPILL_THRESHOLD, "单次 write 应被截到剩余空间");
-        // 写满即落盘，缓冲被清空。
+        // 写满即落盘（flush 驱动完成），缓冲被清空。
+        w.flush().await.unwrap();
         assert_eq!(w.spilled_len as usize, DOWNLOAD_SPILL_THRESHOLD);
         assert!(w.buffer.len() < DOWNLOAD_SPILL_THRESHOLD);
-        let _ = w.finalize();
+        let _ = w.finalize().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 多次小块写入跨过阈值（6×1 MiB，模拟流式 / 续传累积）：仍只在累计到阈值时落盘一次。
-    #[test]
-    fn many_small_writes_accumulate_then_spill() {
+    #[tokio::test]
+    async fn many_small_writes_accumulate_then_spill() {
         let dir = temp_dir("small-writes");
         let mut w = SpillWriter::new_in(7, dir.clone());
         let mut expected = Vec::new();
         for _ in 0..6 {
             let chunk = vec![5u8; MIB];
-            w.write_all(&chunk).unwrap();
+            w.write_all(&chunk).await.unwrap();
             expected.extend_from_slice(&chunk);
         }
+        w.flush().await.unwrap();
         assert_eq!(w.spilled_len as usize, DOWNLOAD_SPILL_THRESHOLD, "累计到 5 MiB 落盘一次");
         assert_eq!(w.received() as usize, 6 * MIB);
-        match w.finalize().unwrap() {
+        match w.finalize().await.unwrap() {
             DownloadOutcome::Path(p) => assert_eq!(std::fs::read(&p).unwrap(), expected),
             DownloadOutcome::Bytes(_) => panic!("expected Path"),
         }
@@ -1347,11 +1355,11 @@ mod spill_writer_tests {
     }
 
     /// 截断 `clear`：删除已落盘的临时文件并把状态归零（服务端不支持 Range 的场景）。
-    #[test]
-    fn clear_truncates_and_removes_temp_file() {
+    #[tokio::test]
+    async fn clear_truncates_and_removes_temp_file() {
         let dir = temp_dir("clear");
         let mut w = SpillWriter::new_in(8, dir.clone());
-        write_pattern(&mut w, 6 * MIB);
+        write_pattern(&mut w, 6 * MIB).await;
         let spilled_path = w.path.clone().expect("应已落盘建文件");
         assert!(spilled_path.exists());
 
@@ -1361,8 +1369,8 @@ mod spill_writer_tests {
         assert!(w.file.is_none() && w.path.is_none());
 
         // 截断后可重新下载并独立收尾为内存 Bytes。
-        let data = write_pattern(&mut w, 400 * 1024);
-        match w.finalize().unwrap() {
+        let data = write_pattern(&mut w, 400 * 1024).await;
+        match w.finalize().await.unwrap() {
             DownloadOutcome::Bytes(b) => assert_eq!(b, data),
             DownloadOutcome::Path(_) => panic!("expected Bytes after clear"),
         }

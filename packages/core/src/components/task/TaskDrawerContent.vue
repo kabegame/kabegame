@@ -10,7 +10,7 @@
         </template>
         <div class="drawer-panel-body drawer-panel-body--downloads">
           <div class="downloads-section">
-            <div v-if="activeDownloads.length === 0" class="downloads-empty">
+            <div v-if="orderedActiveDownloads.length === 0" class="downloads-empty">
               <el-empty :description="t('tasks.drawerNoDownloads')" :image-size="60" />
             </div>
             <div v-else class="downloads-content">
@@ -150,7 +150,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useModal } from "../../composables/useModal";
 import { useVirtualList } from "@vueuse/core";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
@@ -205,12 +205,6 @@ type DownloadProgressPayload = {
   id: number;
   receivedBytes: number;
   totalBytes?: number | null;
-};
-
-type DownloadProgressState = {
-  receivedBytes: number;
-  totalBytes?: number | null;
-  updatedAt: number;
 };
 
 type DownloadStatePayload = {
@@ -350,102 +344,31 @@ function handleTasksListScroll(e: Event) {
   }
 }
 
-// 下载信息
-const activeDownloads = ref<ActiveDownloadInfo[]>([]);
-const activeDownloadsRunningCount = computed(() => {
-  // completed/failed/canceled 为池终态停留态，不计入运行中
-  return activeDownloads.value.filter((d) => !isTerminalDownloadState(getEffectiveDownloadState(d))).length;
-});
-const orderedActiveDownloads = computed(() => {
-  // worker 在上，native 叠在下方
-  const worker = activeDownloads.value.filter((d) => !d.native);
-  const native = activeDownloads.value.filter((d) => !!d.native);
-  return [...worker, ...native];
-});
+// 下载信息：单一 map，download-state 到达 upsert，download-removed 到达删除
+type DownloadItem = ActiveDownloadInfo & { received?: number; total?: number | null };
+const downloadsMap = reactive<Record<number, DownloadItem>>({});
 
-const downloadProgressByKey = ref<Record<string, DownloadProgressState>>({});
+const allDownloads = computed(() => Object.values(downloadsMap) as DownloadItem[]);
+const activeDownloadsRunningCount = computed(() =>
+  allDownloads.value.filter((d) => {
+    const st = d.state ?? "";
+    return st !== "completed" && st !== "failed" && st !== "canceled";
+  }).length
+);
+const orderedActiveDownloads = computed(() => [
+  ...allDownloads.value.filter((d) => !d.native),
+  ...allDownloads.value.filter((d) => !!d.native),
+]);
+
 let unlistenDownloadProgress: null | (() => void) = null;
-
-const downloadStateByKey = ref<Record<string, { state: string; error?: string; updatedAt: number }>>({});
 let unlistenDownloadState: null | (() => void) = null;
-
 let unlistenDownloadRemoved: null | (() => void) = null;
 
 const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
 
 const downloadKey = (d: ActiveDownloadInfo) => String(d.id);
-const downloadKeyFromPayload = (p: DownloadProgressPayload) => String(p.id);
-const downloadStateKeyFromPayload = (p: DownloadStatePayload) => String(p.id);
 
-const getEffectiveDownloadState = (d: ActiveDownloadInfo) => {
-  const key = downloadKey(d);
-  return downloadStateByKey.value[key]?.state || d.state || "downloading";
-};
-
-const shouldShowDownloadProgress = (d: ActiveDownloadInfo) => {
-  const st = getEffectiveDownloadState(d);
-  return st === "downloading";
-};
-
-const isTerminalDownloadState = (state: string) => {
-  const st = String(state || "").toLowerCase();
-  return st === "completed" || st === "failed" || st === "canceled";
-};
-
-const removeDownloadByKey = (key: string) => {
-  const idx = activeDownloads.value.findIndex((d) => downloadKey(d) === key);
-  if (idx !== -1) activeDownloads.value.splice(idx, 1);
-
-  const nextProgress = { ...downloadProgressByKey.value };
-  delete nextProgress[key];
-  downloadProgressByKey.value = nextProgress;
-
-  const nextState = { ...downloadStateByKey.value };
-  delete nextState[key];
-  downloadStateByKey.value = nextState;
-};
-
-const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
-  const key = downloadStateKeyFromPayload(p);
-  const idx = activeDownloads.value.findIndex((d) => downloadKey(d) === key);
-
-  if (isTerminalDownloadState(p.state)) {
-    // native/surf 路径：终态事件到达即立即移除
-    if (p.native) {
-      if (idx !== -1) removeDownloadByKey(key);
-      return;
-    }
-    // 下载池路径：仅更新条目状态以展示 completed/failed/canceled 标签
-    // 不移除——等后端 wait 完成后发 download-removed 事件再移除
-    const nextItem: ActiveDownloadInfo = {
-      id: p.id,
-      taskId: p.taskId,
-      startTime: p.startTime,
-      url: p.url,
-      pluginId: p.pluginId,
-      state: p.state,
-      native: false,
-    };
-    if (idx === -1) activeDownloads.value.push(nextItem);
-    else activeDownloads.value[idx] = { ...activeDownloads.value[idx], ...nextItem };
-    return;
-  }
-
-  const nextItem: ActiveDownloadInfo = {
-    id: p.id,
-    taskId: p.taskId,
-    startTime: p.startTime,
-    url: p.url,
-    pluginId: p.pluginId,
-    state: p.state || "downloading",
-    native: !!p.native,
-  };
-  if (idx === -1) activeDownloads.value.push(nextItem);
-  else activeDownloads.value[idx] = { ...activeDownloads.value[idx], ...nextItem };
-};
-
-const downloadStateText = (d: ActiveDownloadInfo) => {
-  const st = getEffectiveDownloadState(d);
+const downloadStateText = (d: DownloadItem) => {
   const keyMap: Record<string, string> = {
     preparing: "tasks.drawerStatusPreparing",
     downloading: "tasks.drawerStatusDownloading",
@@ -455,18 +378,16 @@ const downloadStateText = (d: ActiveDownloadInfo) => {
     failed: "tasks.drawerStatusFailed",
     canceled: "tasks.drawerStatusCanceled",
   };
-  const key = keyMap[st];
-  return key ? t(key) : st;
+  const st = d.state ?? "downloading";
+  return keyMap[st] ? t(keyMap[st]) : st;
 };
 
-const downloadStateTagType = (d: ActiveDownloadInfo) => {
-  const st = getEffectiveDownloadState(d);
+const downloadStateTagType = (d: DownloadItem) => {
+  const st = d.state ?? "";
   if (st === "failed") return "danger";
-  if (st === "canceled") return "info";
-  if (st === "completed") return "success";
-  if (st === "processing") return "success";
-  if (st === "extracting") return "warning";
-  if (st === "downloading") return "warning";
+  if (st === "canceled" || st === "preparing") return "info";
+  if (st === "completed" || st === "processing") return "success";
+  if (st === "extracting" || st === "downloading") return "warning";
   return "info";
 };
 
@@ -475,58 +396,41 @@ const formatBytes = (n: number) => {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let v = n;
   let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
   const fixed = i === 0 ? 0 : v >= 100 ? 0 : v >= 10 ? 1 : 2;
   return `${v.toFixed(fixed)} ${units[i]}`;
 };
 
-const downloadProgressPercent = (d: ActiveDownloadInfo) => {
-  const p = downloadProgressByKey.value[downloadKey(d)];
-  if (!p) return 0;
-  const total = p.totalBytes ?? null;
-  if (!total || total <= 0) return 0;
-  const pct = Math.floor((p.receivedBytes / total) * 100);
-  return Math.max(0, Math.min(100, pct));
+const shouldShowDownloadProgress = (d: DownloadItem) => (d.state ?? "") === "downloading";
+
+const downloadProgressPercent = (d: DownloadItem) => {
+  const total = d.total ?? null;
+  if (!total || total <= 0 || d.received == null) return 0;
+  return Math.max(0, Math.min(100, Math.floor((d.received / total) * 100)));
 };
 
-const downloadProgressText = (d: ActiveDownloadInfo) => {
-  const p = downloadProgressByKey.value[downloadKey(d)];
-  if (!p) return null;
-  const total = p.totalBytes ?? null;
-  if (!total || total <= 0) return `${formatBytes(p.receivedBytes)} / ?`;
-  return `${formatBytes(p.receivedBytes)} / ${formatBytes(total)}`;
+const downloadProgressText = (d: DownloadItem) => {
+  if (d.received == null) return null;
+  const total = d.total ?? null;
+  if (!total || total <= 0) return `${formatBytes(d.received)} / ?`;
+  return `${formatBytes(d.received)} / ${formatBytes(total)}`;
 };
 
 const loadDownloads = async () => {
   try {
     const downloads = await invoke<ActiveDownloadInfo[]>("get_active_downloads");
-    activeDownloads.value = downloads;
-
-    // 清理已不在 active 列表里的进度，避免内存增长
-    const aliveKeys = new Set(downloads.map(downloadKey));
-    const next: Record<string, DownloadProgressState> = {};
-    for (const [k, v] of Object.entries(downloadProgressByKey.value)) {
-      if (aliveKeys.has(k)) next[k] = v;
-    }
-    downloadProgressByKey.value = next;
-
-    // 状态缓存：保留活跃项，同时用后端快照纠正“错过事件”导致的状态卡死
-    const nextState: Record<string, { state: string; error?: string; updatedAt: number }> = {};
-    for (const [k, v] of Object.entries(downloadStateByKey.value)) {
-      if (aliveKeys.has(k)) nextState[k] = v;
+    const aliveIds = new Set(downloads.map((d) => d.id));
+    for (const id of (Object.keys(downloadsMap) as unknown as number[])) {
+      if (!aliveIds.has(Number(id))) delete downloadsMap[id];
     }
     for (const d of downloads) {
-      const k = downloadKey(d);
-      const snapshotState = d.state || "downloading";
-      const cached = nextState[k];
-      if (!cached || cached.state !== snapshotState) {
-        nextState[k] = { state: snapshotState, error: cached?.error, updatedAt: Date.now() };
-      }
+      downloadsMap[d.id] = {
+        ...downloadsMap[d.id],
+        id: d.id, url: d.url, pluginId: d.pluginId,
+        startTime: d.startTime, taskId: d.taskId,
+        state: d.state ?? "downloading", native: d.native,
+      };
     }
-    downloadStateByKey.value = nextState;
   } catch (error) {
     console.error("加载下载列表失败:", error);
   }
@@ -538,41 +442,18 @@ let eventListenersInitialized = false;
 const initAllEventListeners = async () => {
   if (eventListenersInitialized) return;
   eventListenersInitialized = true;
-  const normalizeDownloadProgressPayload = (raw: any): DownloadProgressPayload | null => {
-    const id = Number(raw?.id);
-    if (isNaN(id)) return null;
-    return {
-      id,
-      receivedBytes: Number(raw?.receivedBytes ?? 0),
-      totalBytes: raw?.totalBytes ?? null,
-    };
-  };
 
-  const normalizeDownloadStatePayload = (raw: any): DownloadStatePayload | null => {
-    const id = Number(raw?.id);
-    const taskId = String(raw?.taskId ?? "").trim();
-    const url = String(raw?.url ?? "").trim();
-    const startTime = Number(raw?.startTime ?? NaN);
-    const pluginId = String(raw?.pluginId ?? "").trim();
-    const state = String(raw?.state ?? "").trim();
-    if (isNaN(id) || !taskId || !url || !Number.isFinite(startTime) || !pluginId || !state) return null;
-    const error = raw?.error != null ? String(raw.error) : undefined;
-    return { id, taskId, url, startTime, pluginId, state, error, native: !!raw?.native };
-  };
+  const toId = (raw: any) => { const id = Number(raw?.id); return isNaN(id) ? null : id; };
+
   try {
     unlistenDownloadProgress = await listen<DownloadProgressPayload>("download-progress", (event) => {
-      const p = normalizeDownloadProgressPayload(event.payload as any);
-      if (!p) return;
-      const key = downloadKeyFromPayload(p);
-      if (!activeDownloads.value.some((d) => downloadKey(d) === key)) return;
-
-      downloadProgressByKey.value = {
-        ...downloadProgressByKey.value,
-        [key]: {
-          receivedBytes: Number(p.receivedBytes || 0),
-          totalBytes: p.totalBytes ?? null,
-          updatedAt: Date.now(),
-        },
+      const raw = event.payload as any;
+      const id = toId(raw);
+      if (id == null || !downloadsMap[id]) return;
+      downloadsMap[id] = {
+        ...downloadsMap[id],
+        received: Number(raw.receivedBytes ?? 0),
+        total: raw.totalBytes ?? null,
       };
     });
   } catch (error) {
@@ -580,23 +461,29 @@ const initAllEventListeners = async () => {
   }
   try {
     unlistenDownloadState = await listen<DownloadStatePayload>("download-state", (event) => {
-      const p = normalizeDownloadStatePayload(event.payload as any);
-      if (!p) return;
-      const key = downloadStateKeyFromPayload(p);
-      downloadStateByKey.value = {
-        ...downloadStateByKey.value,
-        [key]: { state: p.state, error: p.error, updatedAt: Date.now() },
+      const raw = event.payload as any;
+      const id = toId(raw);
+      if (id == null) return;
+      const state = String(raw?.state ?? "").trim();
+      if (!state) return;
+      downloadsMap[id] = {
+        ...downloadsMap[id],
+        id,
+        url: String(raw.url ?? ""),
+        pluginId: String(raw.pluginId ?? ""),
+        startTime: Number(raw.startTime ?? 0),
+        taskId: String(raw.taskId ?? ""),
+        state,
+        native: !!raw.native,
       };
-      upsertActiveDownloadFromPayload(p);
     });
   } catch (error) {
     console.error("监听下载状态失败:", error);
   }
   try {
     unlistenDownloadRemoved = await listen<{ id: number; taskId?: string }>("download-removed", (event) => {
-      const id = Number((event.payload as any)?.id);
-      if (isNaN(id)) return;
-      removeDownloadByKey(String(id));
+      const id = toId(event.payload as any);
+      if (id != null) delete downloadsMap[id];
     });
   } catch (error) {
     console.error("监听下载移除失败:", error);
@@ -604,27 +491,12 @@ const initAllEventListeners = async () => {
 };
 
 const stopAllEventListeners = () => {
-  try {
-    unlistenDownloadProgress?.();
-  } catch {
-    // ignore
-  } finally {
-    unlistenDownloadProgress = null;
-  }
-  try {
-    unlistenDownloadState?.();
-  } catch {
-    // ignore
-  } finally {
-    unlistenDownloadState = null;
-  }
-  try {
-    unlistenDownloadRemoved?.();
-  } catch {
-    // ignore
-  } finally {
-    unlistenDownloadRemoved = null;
-  }
+  unlistenDownloadProgress?.();
+  unlistenDownloadState?.();
+  unlistenDownloadRemoved?.();
+  unlistenDownloadProgress = null;
+  unlistenDownloadState = null;
+  unlistenDownloadRemoved = null;
   eventListenersInitialized = false;
 };
 

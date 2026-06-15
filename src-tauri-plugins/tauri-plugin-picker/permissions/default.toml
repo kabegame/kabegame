@@ -1,4 +1,23 @@
 [default]
-description = "Default permissions for the picker plugin (folder, images, videos, kgpg file)."
-permissions = ["allow-pickFolder", "allow-pickImages", "allow-pickVideos", "allow-pickKgpgFile", "allow-openImage", "allow-openVideo"]
-
+description = "Default permissions for the picker plugin."
+permissions = [
+  "allow-pickFolder",
+  "allow-pickImages",
+  "allow-pickVideos",
+  "allow-pickKgpgFile",
+  "allow-openImage",
+  "allow-openVideo",
+  "allow-getImageThumbnail",
+  "allow-computeHash",
+  "allow-getMimeType",
+  "allow-getDisplayName",
+  "allow-getContentSize",
+  "allow-getImageDimensions",
+  "allow-getVideoDimensions",
+  "allow-isDirectory",
+  "allow-listContentChildren",
+  "allow-readFileBytes",
+  "allow-takePersistablePermission",
+  "allow-copyImageToPictures",
+  "allow-copyExtractedImagesToPictures",
+]

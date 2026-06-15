@@ -38,16 +38,7 @@
             <template #empty>
               <div v-if="displayedImages.length === 0 && !loading && !isRefreshing" :key="'empty-' + refreshKey"
                 class="empty fade-in">
-                <template v-if="isWallpaperOrderEmpty">
-                  <EmptyState :primary-tip="$t('gallery.wallpaperOrderEmptyTip')" />
-                  <el-button type="primary" class="empty-action-btn" @click="handleWallpaperEmptyViewAll">
-                    <el-icon>
-                      <Picture />
-                    </el-icon>
-                    {{ $t('gallery.viewAllImages') }}
-                  </el-button>
-                </template>
-                <template v-else>
+                <template>
                   <EmptyState />
                   <el-button type="primary" class="empty-action-btn" @click="handleEmptyStateCollect">
                     <el-icon>
@@ -105,22 +96,21 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick } from "vue";
-import { invoke } from "@/api/rpc";
-import { pathqlEntry } from "@/services/pathql";
-import { withGalleryPrefix } from "@/utils/path";
 import { useRouter, useRoute } from "vue-router";
-import { ElMessageBox } from "element-plus";
+import { storeToRefs } from "pinia";
+import { invoke } from "@/api/rpc";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { Plus, Picture, Star, StarFilled, FolderAdd, Delete, FolderOpened, Connection } from "@element-plus/icons-vue";
+import { Plus, Picture, FolderOpened, Connection } from "@element-plus/icons-vue";
 import { useCrawlerStore } from "@/stores/crawler";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { usePluginStore } from "@/stores/plugins";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
 import LocalImportDialog from "@/components/LocalImportDialog.vue";
+import MediaPicker from "@/components/MediaPicker.vue";
+import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
 import OrganizeDialog from "@/components/OrganizeDialog.vue";
 import { useOrganizeStore, type OrganizeOptions } from "@/stores/organize";
 import { createImageActions } from "@/actions/imageActions";
@@ -133,126 +123,68 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
-import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
-import { storeToRefs } from "pinia";
-import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
+import type { ContextCommand, ContextCommandPayload } from "@/components/ImageGrid.vue";
+import { usePagedGallery } from "@/composables/usePagedGallery";
 import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galleryRoute";
-import { buildGalleryCountPath, filterNoAlbum, hasActiveGalleryFilters, serializeFilterSet } from "@/utils/galleryPath";
+import { buildGalleryCountPath, filterNoAlbum, hasActiveGalleryFilters } from "@/utils/galleryPath";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
-import { IS_ANDROID, IS_WINDOWS, IS_WEB } from "@kabegame/core/env";
-import { trackEvent } from "@kabegame/core/track/umami";
+import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
-import type { Component } from "vue";
 import { useAlbumStore, HIDDEN_ALBUM_ID, FAVORITE_ALBUM_ID } from "@/stores/albums";
-import { type ContextCommand } from "@/components/ImageGrid.vue";
-import { listen } from "@/api/rpc";
-import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
-
-const { t } = useI18n();
-const { pluginName: resolvePluginName } = usePluginManifestI18n();
-
-// 选择操作项类型（用于本页选择栏）
-export interface SelectionAction {
-  key: string;
-  label: string;
-  icon: Component;
-  command: string;
-}
-import MediaPicker from "@/components/MediaPicker.vue";
-import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { pickImages, pickVideos, type PickFolderResult } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import { useI18n } from "@kabegame/i18n";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
   name: "Gallery",
 });
 
+// ---------- Component setup ----------
+const { t } = useI18n();
+
+// ---------- Stores and route state ----------
+const uiStore = useUiStore();
+const { isCompact } = storeToRefs(uiStore);
 const crawlerStore = useCrawlerStore();
 const crawlerDrawerStore = useCrawlerDrawerStore();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettingsDrawer = () => quickSettingsDrawer.open("gallery");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("gallery");
-const pluginStore = usePluginStore();
-const { imageGridColumns, isCompact } = storeToRefs(useUiStore());
-const { extensions: imageExtensions, load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
-const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
-
-const uiStore = useUiStore();
-
 const settingsStore = useSettingsStore();
+const albumStore = useAlbumStore();
+const { load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
 const route = useRoute();
 const router = useRouter();
 const galleryRouteStore = useGalleryRouteStore();
 const { pageSize, search } = storeToRefs(galleryRouteStore);
 
-// 是否启用分页（总数超过一页）
-const bigPageEnabled = computed(() => {
-  return totalImagesCount.value > pageSize.value;
-});
-
 const currentPath = computed(() => galleryRouteStore.currentPath);
-const providerRootPath = computed(() => serializeFilterSet(galleryRouteStore.filters) || "all");
-const currentPage = computed(() => galleryRouteStore.page);
 let lastTrackedGalleryPath: string | null = null;
 
-function currentUrl() {
-  return typeof location === "undefined" ? "" : location.pathname + location.search;
-}
+// ---------- Analytics ----------
+const analytics = createImageAnalytics(() => ({ path: currentPath.value }));
 
-function trackGalleryEvent(name: string, data: Record<string, unknown> = {}) {
-  if (!IS_WEB) return;
-  trackEvent(name, { path: currentPath.value, url: currentUrl(), ...data });
-}
-
-function imageAnalyticsName(image: ImageInfo): string {
-  const displayName = image.displayName?.trim();
-  if (displayName) return displayName;
-  const localName = (image.localPath || "").split(/[\\/]/).pop()?.trim();
-  if (localName) return localName;
-  const urlName = (image.url || "").split(/[\\/]/).pop()?.trim();
-  return urlName || image.id;
-}
-
-function imageAnalyticsItem(image: ImageInfo) {
-  return {
-    id: image.id,
-    name: imageAnalyticsName(image),
-    localPath: image.localPath,
-  };
-}
-
-function imageAnalyticsPayload(images: ImageInfo[]): Record<string, unknown> {
-  const mode = images.length > 1 ? "batch" : "single";
-  const base = {
-    mode,
-    count: images.length,
-  };
-  if (mode === "single") {
-    const image = images[0];
-    return {
-      ...base,
-      image: image
-        ? imageAnalyticsItem(image)
-        : null,
-    };
-  }
-  return {
-    ...base,
-    images: images.map(imageAnalyticsItem),
-  };
-}
-
-const isWallpaperOrderEmpty = computed(
-  () => !!galleryRouteStore.filters.wallpaperOrder
+watch(
+  currentPath,
+  (path) => {
+    if (!IS_WEB) return;
+    if (!path) return;
+    if (path === lastTrackedGalleryPath) return;
+    lastTrackedGalleryPath = path;
+    analytics.track("gallery_path");
+  },
+  { immediate: true }
 );
 
+// ---------- Filter flags ----------
 const isWallpaperOrderBrowse = computed(
   () => !!galleryRouteStore.filters.wallpaperOrder
 );
@@ -265,6 +197,7 @@ const isNameBrowse = computed(
   () => !!galleryRouteStore.filters.name
 );
 
+// ---------- Route synchronization ----------
 watch(
   () => route.query.path,
   (rawPath) => {
@@ -281,18 +214,7 @@ watch(
   { immediate: true }
 );
 
-watch(
-  currentPath,
-  (path) => {
-    if (!IS_WEB) return;
-    if (!path) return;
-    if (path === lastTrackedGalleryPath) return;
-    lastTrackedGalleryPath = path;
-    trackEvent("gallery_path", { path, url: currentUrl() });
-  },
-  { immediate: true }
-);
-
+// ---------- Dialog and import flow ----------
 const listenersCreated = ref(false);
 const crawlerDialog = useModal();
 const localImportDialog = useModal();
@@ -307,17 +229,17 @@ const crawlerDialogInitialConfig = ref<{
 
 // 桌面：打开收集（网络）对话框。Android 上由「开始收集」→ CollectSourcePicker → 远程 打开 drawer
 const handleShowCrawlerDialog = () => {
-  trackGalleryEvent("gallery_import_entry", { entry: "network" });
+  analytics.track("gallery_import_entry", { entry: "network" });
   crawlerDialog.open();
 };
 
 const handleShowLocalImport = () => {
-  trackGalleryEvent("gallery_import_entry", { entry: "local" });
+  analytics.track("gallery_import_entry", { entry: "local" });
   localImportDialog.open();
 };
 
 const handleOpenCollectMenu = () => {
-  trackGalleryEvent("gallery_import_entry", { entry: "collect_menu" });
+  analytics.track("gallery_import_entry", { entry: "collect_menu" });
   collectSourcePicker.open();
 };
 
@@ -334,16 +256,12 @@ const onOrganizeConfirm = (options: OrganizeOptions) => {
 
 // 空状态按钮：与工具栏一致，安卓打开「本地/远程」选择 picker，桌面打开选择对话框
 const handleEmptyStateCollect = () => {
-  trackGalleryEvent("gallery_import_entry", { entry: "empty_state" });
+  analytics.track("gallery_import_entry", { entry: "empty_state" });
   if (isCompact.value) {
     collectSourcePicker.open();
   } else {
     collectMenuDialog.open();
   }
-};
-
-const handleWallpaperEmptyViewAll = () => {
-  void galleryRouteStore.navigate({ filters: {}, page: 1 });
 };
 
 function isDefaultGalleryRoute() {
@@ -362,21 +280,21 @@ async function resetGalleryRouteAfterLoadError() {
 
 // 桌面：选择收集方式对话框 → 本地
 const onDesktopCollectLocal = () => {
-  trackGalleryEvent("gallery_import_entry", { entry: "local", source: "empty_state_dialog" });
+  analytics.track("gallery_import_entry", { entry: "local", source: "empty_state_dialog" });
   collectMenuDialog.close();
   localImportDialog.open();
 };
 
 // 桌面：选择收集方式对话框 → 网络
 const onDesktopCollectNetwork = () => {
-  trackGalleryEvent("gallery_import_entry", { entry: "network", source: "empty_state_dialog" });
+  analytics.track("gallery_import_entry", { entry: "network", source: "empty_state_dialog" });
   collectMenuDialog.close();
   crawlerDialog.open();
 };
 
 // Android：收集方式选择器选「本地」→ MediaPicker，选「远程」→ 收集 drawer
 const handleCollectSourceSelect = (source: "local" | "remote") => {
-  trackGalleryEvent("gallery_import_entry", {
+  analytics.track("gallery_import_entry", {
     entry: source === "local" ? "local" : "network",
     source: "compact_picker",
   });
@@ -440,6 +358,8 @@ const handleAndroidMediaSelection = async (
     }
   }
 };
+
+// ---------- Gallery state and loading ----------
 // 永久删除确认对话框相关
 const removeDialog = useModal();
 const removeDialogMessage = ref("");
@@ -455,12 +375,6 @@ const currentWallpaperImageId = computed<string | null>({
     settingsStore.values.currentWallpaperImageId = value;
   },
 });
-const totalImagesCount = ref<number>(0); // 总图片数（不受过滤器影响）
-const pendingPreviewBoundary = ref<{
-  direction: "prev" | "next";
-  targetPage: number;
-} | null>(null);
-
 // 滚动"太快"时的俏皮提示（画廊开启）
 const scrollTooFastMessages = [
   () => t("gallery.scrollTooFast1"),
@@ -498,14 +412,8 @@ const pullToRefreshOpts = computed(() => undefined);
 // Image actions for context menu / action sheet
 const imageActions = computed(() => createImageActions({ removeText: t("gallery.delete") }));
 
-// dragScroll 拖拽滚动期间：暂停实时 loadImageUrls，优先保证滚动帧率
-const isInteracting = ref(false);
 // 始终启用 images-change 监听，不管是否在前台（用于同步删除等操作）
 const isGalleryActive = ref(true);
-const plugins = computed(() => pluginStore.plugins);
-const tasks = computed(() => crawlerStore.tasks);
-
-// 插件配置相关的变量和函数已移至 CrawlerDialog 组件
 
 const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
 
@@ -529,19 +437,35 @@ watch(
   { immediate: true }
 );
 
-const { isInteracting: autoIsInteracting } = useImageGridAutoLoad({
-  containerRef: galleryContainerRef,
-  onLoad: () => { },
-  onOverspeed: onScrollOverspeed,
+const pagedGallery = usePagedGallery({
+  routeStore: galleryRouteStore,
+  images: displayedImages,
+  loadedKey,
+  viewRef: galleryViewRef,
+  loading: { startLoading, finishLoading },
+  load: (path) => fetchByPath(path, { loadKey: path }).then(() => undefined),
+  computeCountPath: () => {
+    const rootPath = buildGalleryCountPath(
+      galleryRouteStore.filters,
+      galleryRouteStore.search
+    );
+    return galleryRouteStore.hide ? `hide/${rootPath}` : rootPath;
+  },
+  isActive: () => route.path === "/gallery" && isGalleryActive.value,
+  onCountError: resetGalleryRouteAfterLoadError,
+  onLoadError: async (error, path) => {
+    console.error("加载路径失败:", path, error);
+    await resetGalleryRouteAfterLoadError();
+  },
 });
 
-watch(
-  () => autoIsInteracting.value,
-  (v) => {
-    isInteracting.value = v;
-  },
-  { immediate: true }
-);
+const totalImagesCount = pagedGallery.totalImagesCount;
+const currentPage = pagedGallery.currentPage;
+const bigPageEnabled = pagedGallery.bigPageEnabled;
+const loadTotalImagesCount = pagedGallery.loadTotalImagesCount;
+const handleJumpToBigPage = pagedGallery.handleJumpToPage;
+const handlePreviewPageBoundary = pagedGallery.handlePreviewPageBoundary;
+const ensureValidGalleryPageAfterMassRemoval = pagedGallery.ensureValidPageAfterMassRemoval;
 
 const loadImages = async (reset?: boolean) => {
   // 如果强制刷新，递增刷新计数器以触发空占位符重新挂载
@@ -562,62 +486,14 @@ const loadImages = async (reset?: boolean) => {
   }
 };
 
-watch(
-  pageSize,
-  async (_v, prev) => {
-    if (prev === undefined) return;
-    await loadTotalImagesCount();
-    await loadImages(false);
-  },
-);
-
 const handleManualRefresh = async () => {
   // 手动刷新：刷新画廊数据。
-  trackGalleryEvent("gallery_manual_refresh");
+  analytics.track("gallery_manual_refresh");
   await loadImages(true);
   await loadTotalImagesCount();
 };
 
-
-// 处理大页跳转
-const handleJumpToBigPage = async (bigPage: number) => {
-  startLoading();
-  try {
-    await galleryRouteStore.navigate({ page: bigPage });
-  } finally {
-    finishLoading();
-  }
-};
-
-// 监听路径变化，自动加载图片。以路由为唯一真理：仅在画廊页且当前路径变化时加载，避免在任务页等误用 defaultPath 导致正序覆盖倒序。
-watch(
-  () => currentPath.value,
-  async (newPath) => {
-    if (route.path !== "/gallery") return;
-    if (!isGalleryActive.value) return;
-    if (!newPath) return;
-
-    // 如果路径已加载过，跳过
-    if (loadedKey.value === newPath) return;
-
-    startLoading();
-    try {
-      await fetchByPath(newPath, {
-        loadKey: newPath,
-      });
-      await loadTotalImagesCount();
-    } catch (error) {
-      console.error("加载路径失败:", newPath, error);
-      await resetGalleryRouteAfterLoadError();
-    } finally {
-      finishLoading();
-    }
-  },
-  { immediate: true }
-);
-
-
-// 使用图片操作 composable
+// ---------- Image operations ----------
 const {
   handleOpenImagePath,
   handleDownloadImage,
@@ -632,144 +508,9 @@ const {
   galleryViewRef
 );
 
-const albumStore = useAlbumStore();
 const handleAddedToAlbum = async () => {
-  trackGalleryEvent("image_action", {
-    command: "addToAlbum",
-    ...imageAnalyticsPayload(pendingAddToAlbumImages.value),
-  });
+  analytics.trackAction("addToAlbum", pendingAddToAlbumImages.value);
   pendingAddToAlbumImages.value = [];
-  // 画廊本身不依赖画册列表，但这里留个钩子以便其他页面/计数能及时刷新
-  await albumStore.loadAlbums();
-};
-
-// getImageUrl 和 loadImageUrls 已移至 useGalleryImages composable
-
-const getPluginName = (pluginId: string) => {
-  const plugin = plugins.value.find((p) => p.id === pluginId);
-  return plugin ? (resolvePluginName(plugin) || pluginId) : pluginId;
-};
-
-// 获取总图片数（随 currentPath 变化，含 filter / search / hide）
-const loadTotalImagesCount = async () => {
-  try {
-    // 使用 provider 的无尾缀 Entry 语法：只算 composed query 的 COUNT，不触发 list_children / list_images。
-    // 这里必须剥离排序和分页段；pathql count 会精确统计传入路径。
-    const rootPath = buildGalleryCountPath(
-      galleryRouteStore.filters,
-      galleryRouteStore.search
-    );
-    const countPath = galleryRouteStore.hide ? `hide/${rootPath}` : rootPath;
-    const res = await pathqlEntry(withGalleryPrefix(countPath));
-    totalImagesCount.value = res?.total ?? 0;
-  } catch (error) {
-    console.error("获取总图片数失败:", error);
-    await resetGalleryRouteAfterLoadError();
-  }
-};
-
-// 兜底：当去重等操作导致 total 下降，当前页码可能越界 -> 自动跳到最后一页并重载
-watch(
-  () => totalImagesCount.value,
-  async (total) => {
-    if (!bigPageEnabled.value) {
-      // total <= pageSize 时只允许 page=1
-      if (currentPage.value !== 1) {
-        await handleJumpToBigPage(1);
-      }
-      return;
-    }
-    const totalPages = Math.max(1, Math.ceil((total || 0) / pageSize.value));
-    if (currentPage.value > totalPages) {
-      await handleJumpToBigPage(totalPages);
-    }
-  }
-);
-
-// 去重/批量移除后：若当前页被清空，但图库仍有图，则尽量留在当前大页；
-// 若当前页码越界（总页数变少），则跳转到仍可用的最大页。
-let ensuringGalleryPage = false;
-const ensureValidGalleryPageAfterMassRemoval = async () => {
-  if (ensuringGalleryPage) return;
-  ensuringGalleryPage = true;
-  try {
-    await loadTotalImagesCount();
-
-    // 当前页仍有图：不处理
-    if (displayedImages.value.length > 0) return;
-
-    // 全部没图：回到根路径
-    if (totalImagesCount.value <= 0) {
-      await galleryRouteStore.navigate({ page: 1 });
-      return;
-    }
-
-    const currentBigPage = currentPage.value;
-    const totalBigPages = Math.max(
-      1,
-      Math.ceil(totalImagesCount.value / pageSize.value)
-    );
-    const targetBigPage = Math.min(currentBigPage, totalBigPages);
-
-    await handleJumpToBigPage(targetBigPage);
-  } finally {
-    ensuringGalleryPage = false;
-  }
-};
-
-// Android 选择模式：构建操作栏 actions
-const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<string>): SelectionAction[] => {
-  const countText = selectedCount > 1 ? `(${selectedCount})` : "";
-
-  // 获取第一个选中图片的状态（用于判断收藏状态）
-  const firstSelectedImage = displayedImages.value.find(img => selectedIds.has(img.id));
-  const isFavorite = firstSelectedImage?.favorite ?? false;
-
-  if (selectedCount === 1) {
-    // 单选
-    return [
-      {
-        key: "favorite",
-        label: isFavorite ? "取消收藏" : "收藏",
-        icon: isFavorite ? StarFilled : Star,
-        command: "favorite",
-      },
-      {
-        key: "addToAlbum",
-        label: "加入画册",
-        icon: FolderAdd,
-        command: "addToAlbum",
-      },
-      {
-        key: "remove",
-        label: "删除",
-        icon: Delete,
-        command: "remove",
-      },
-    ];
-  } else {
-    // 多选
-    return [
-      {
-        key: "favorite",
-        label: `收藏${countText}`,
-        icon: Star,
-        command: "favorite",
-      },
-      {
-        key: "addToAlbum",
-        label: `加入画册${countText}`,
-        icon: FolderAdd,
-        command: "addToAlbum",
-      },
-      {
-        key: "remove",
-        label: `删除${countText}`,
-        icon: Delete,
-        command: "remove",
-      },
-    ];
-  }
 };
 
 // 统一关闭/清理 Android 选择模式：清空选择（Grid 与 store 共用同一 ref，效果一致）
@@ -798,19 +539,13 @@ const handleGridContextCommand = async (
 
   switch (command) {
     case "detail":
-      trackGalleryEvent("image_action", {
-        command: "detail",
-        ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
-      });
+      analytics.trackAction("detail", imagesToProcess.slice(0, 1));
       return "detail";
     case "download":
       for (const img of imagesToProcess) {
         await handleDownloadImage(img);
       }
-      trackGalleryEvent("image_action", {
-        command: "download",
-        ...imageAnalyticsPayload(imagesToProcess),
-      });
+      analytics.trackAction("download", imagesToProcess);
       return null;
     case "copy":
       if (IS_WEB) {
@@ -818,10 +553,7 @@ const handleGridContextCommand = async (
       } else if (imagesToProcess[0]) {
         await handleCopyImage(imagesToProcess[0]);
       }
-      trackGalleryEvent("image_action", {
-        command: "copy",
-        ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
-      });
+      analytics.trackAction("copy", imagesToProcess.slice(0, 1));
       return null;
     case "favorite":
       if (await guardDesktopOnly("favoriteImage", { needSuper: true })) return null;
@@ -859,28 +591,22 @@ const handleGridContextCommand = async (
             desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`
           );
           galleryViewRef.value?.clearSelection?.();
-          trackGalleryEvent("image_action", {
-            command: "favorite",
-            ...imageAnalyticsPayload(toChange.filter((img) => succeededIds.includes(img.id))),
-            value: desiredFavorite,
-          });
+          analytics.trackAction(
+            "favorite",
+            toChange.filter((img) => succeededIds.includes(img.id)),
+            { value: desiredFavorite },
+          );
         }
       }
       if (imagesToProcess.length === 1) {
-        trackGalleryEvent("image_action", {
-          command: "favorite",
-          ...imageAnalyticsPayload(imagesToProcess),
-        });
+        analytics.trackAction("favorite", imagesToProcess);
       }
       return null;
     case "open":
       if (!isMultiSelect) {
         if (imagesToProcess[0]) await handleOpenImagePath(imagesToProcess[0].localPath);
       }
-      trackGalleryEvent("image_action", {
-        command: "open",
-        ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
-      });
+      analytics.trackAction("open", imagesToProcess.slice(0, 1));
       return null;
     case "openFolder":
       if (await guardDesktopOnly("openLocal")) return null;
@@ -888,10 +614,7 @@ const handleGridContextCommand = async (
         try {
           if (imagesToProcess[0]) {
             await invoke("open_file_folder", { filePath: imagesToProcess[0].localPath });
-            trackGalleryEvent("image_action", {
-              command: "openFolder",
-              ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
-            });
+            analytics.trackAction("openFolder", imagesToProcess.slice(0, 1));
           }
         } catch (error) {
           console.error("打开文件夹失败:", error);
@@ -901,10 +624,7 @@ const handleGridContextCommand = async (
       return null;
     case "wallpaper":
       if (imagesToProcess.length > 0) await setWallpaper(imagesToProcess);
-      trackGalleryEvent("image_action", {
-        command: "wallpaper",
-        ...imageAnalyticsPayload(imagesToProcess),
-      });
+      analytics.trackAction("wallpaper", imagesToProcess);
       return null;
     case "addToAlbum":
       addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
@@ -929,10 +649,7 @@ const handleGridContextCommand = async (
           );
         }
         galleryViewRef.value?.clearSelection?.();
-        trackGalleryEvent("image_action", {
-          command: isUnhide ? "removeFromHidden" : "addToHidden",
-          ...imageAnalyticsPayload(imagesToProcess),
-        });
+        analytics.trackAction(isUnhide ? "removeFromHidden" : "addToHidden", imagesToProcess);
       } catch (e) {
         console.error(isUnhide ? "取消隐藏失败:" : "隐藏失败:", e);
         ElMessage.error(t(isUnhide ? "contextMenu.unhideFailed" : "contextMenu.hideFailed"));
@@ -954,10 +671,7 @@ const handleGridContextCommand = async (
           await loadImageTypes();
           const mimeType = getMimeTypeForImage(image, ext);
           await invoke("share_file", { filePath, mimeType });
-          trackGalleryEvent("image_action", {
-            command: "share",
-            ...imageAnalyticsPayload(imagesToProcess.slice(0, 1)),
-          });
+          analytics.trackAction("share", imagesToProcess.slice(0, 1));
         } catch (error) {
           console.error("分享失败:", error);
           ElMessage.error("分享失败");
@@ -977,10 +691,7 @@ const handleGridContextCommand = async (
       // 上划手势：隐藏（加入隐藏画册，保留磁盘文件）
       if (imagesToProcess.length > 0) {
         void handleBatchHideImages(imagesToProcess);
-        trackGalleryEvent("image_action", {
-          command: "swipe-remove",
-          ...imageAnalyticsPayload(imagesToProcess),
-        });
+        analytics.trackAction("swipe-remove", imagesToProcess);
       }
       return null;
     default:
@@ -988,9 +699,7 @@ const handleGridContextCommand = async (
   }
 };
 
-// removeFromUiCacheByIds 已移至 useGalleryImages composable
-
-// 确认永久删除
+// 确认移到垃圾桶
 const confirmRemoveImages = async () => {
   const imagesToRemove = pendingRemoveImages.value;
   if (imagesToRemove.length === 0) {
@@ -1000,17 +709,12 @@ const confirmRemoveImages = async () => {
 
   removeDialog.close();
   await handleBatchDeleteImages(imagesToRemove);
-  trackGalleryEvent("image_action", {
-    command: "remove",
-    ...imageAnalyticsPayload(imagesToRemove),
-  });
+  analytics.trackAction("remove", imagesToRemove);
 };
 
+// ---------- Preview flow ----------
 const handleImageDoubleOpen = (payload: { action: "preview" | "open"; image: ImageInfo }) => {
-  trackGalleryEvent("image_double_open", {
-    action: payload.action,
-    ...imageAnalyticsPayload([payload.image]),
-  });
+  analytics.trackDoubleOpen(payload);
 };
 
 const handlePreviewNavigate = (payload: {
@@ -1020,69 +724,18 @@ const handlePreviewNavigate = (payload: {
   wrapped: boolean;
   image: ImageInfo;
 }) => {
-  trackGalleryEvent("image_preview_navigate", {
-    direction: payload.direction,
-    fromIndex: payload.fromIndex,
-    toIndex: payload.toIndex,
-    wrapped: payload.wrapped,
-    ...imageAnalyticsPayload([payload.image]),
-  });
+  analytics.trackPreviewNavigate(payload);
 };
-
-const handlePreviewPageBoundary = async (payload: {
-  direction: "prev" | "next";
-  index: number;
-  image: ImageInfo;
-}) => {
-  const totalPages = Math.max(1, Math.ceil((totalImagesCount.value || 0) / pageSize.value));
-  const targetPage = payload.direction === "next"
-    ? currentPage.value + 1
-    : currentPage.value - 1;
-  if (targetPage < 1 || targetPage > totalPages) return;
-
-  pendingPreviewBoundary.value = {
-    direction: payload.direction,
-    targetPage,
-  };
-  try {
-    await handleJumpToBigPage(targetPage);
-  } catch (error) {
-    pendingPreviewBoundary.value = null;
-    throw error;
-  }
-};
-
-watch(
-  () => [displayedImages.value, loadedKey.value] as const,
-  async ([list]) => {
-    const pending = pendingPreviewBoundary.value;
-    if (!pending) return;
-    if (currentPage.value !== pending.targetPage) return;
-    if (loadedKey.value !== currentPath.value) return;
-    const image = pending.direction === "next" ? list[0] : list[list.length - 1];
-    if (!image) return;
-
-    pendingPreviewBoundary.value = null;
-    await nextTick();
-    galleryViewRef.value?.openPreviewById?.(image.id);
-    ElMessage.info(pending.direction === "next" ? "已进入下一页" : "已进入上一页");
-  },
-  { flush: "post" }
-);
 
 const handlePreviewDetailToggle = (payload: { open: boolean; image: ImageInfo | null }) => {
-  trackGalleryEvent("image_preview_detail_toggle", {
-    open: payload.open,
-    ...imageAnalyticsPayload(payload.image ? [payload.image] : []),
-  });
+  analytics.trackPreviewDetailToggle(payload);
 };
 
 const handlePreviewClose = (payload: { image: ImageInfo | null }) => {
-  trackGalleryEvent("image_preview_close", {
-    ...imageAnalyticsPayload(payload.image ? [payload.image] : []),
-  });
+  analytics.trackPreviewClose(payload);
 };
 
+// ---------- Event-driven refresh ----------
 // 监听 CrawlerDialog 关闭，清空初始配置
 watch(crawlerDialog.isOpen, (isOpen) => {
   if (!isOpen) {
@@ -1092,46 +745,6 @@ watch(crawlerDialog.isOpen, (isOpen) => {
     });
   }
 });
-
-
-
-// 记录已经显示过弹窗的任务ID，避免重复弹窗
-const shownErrorTasks = new Set<string>();
-
-// 监听任务状态变化，在失败时弹窗显示错误（仅作为兜底，主要通过事件触发）
-watch(tasks, (newTasks, oldTasks) => {
-  if (!oldTasks || oldTasks.length === 0) return;
-
-  // 检查是否有新失败的任务
-  newTasks.forEach(task => {
-    const oldTask = oldTasks.find(t => t.id === task.id);
-    if (oldTask && oldTask.status !== 'failed' && task.status === 'failed') {
-      // 如果已经通过事件显示过弹窗，不再显示
-      if (shownErrorTasks.has(task.id)) {
-        return;
-      }
-
-      // 标记为已显示
-      shownErrorTasks.add(task.id);
-
-      // 任务失败，弹窗显示错误（仅作为兜底，如果事件没有触发）
-      const pluginName = getPluginName(task.pluginId);
-
-      // 如果进度为0%或错误信息包含"Script execution error"，说明脚本执行出错，使用弹窗显示详细错误信息
-      if (task.progress === 0 || (task.error && task.error.includes("Script execution error"))) {
-        // 使用 nextTick 确保在下一个事件循环中显示弹窗，避免阻塞
-        nextTick(() => {
-          ElMessage.error(
-            `${pluginName} 执行失败: ${task.error || '未知错误'}`
-          );
-        });
-      } else {
-        // 其他错误使用消息提示
-        ElMessage.error(`${pluginName} 执行失败: ${task.error || '未知错误'}`);
-      }
-    }
-  });
-}, { deep: true });
 
 const refreshGalleryPageFromEvents = async () => {
   const prevList = displayedImages.value.slice();
@@ -1143,7 +756,7 @@ const refreshGalleryPageFromEvents = async () => {
   // 刷新"当前页"数据：不 reset，不卸载组件，只替换 images 数组引用
   await refreshImagesPreserveCache(currentPath.value, { preserveScroll: true });
 
-  const { addedIds, removedIds } = diffById(prevList, displayedImages.value);
+  const { removedIds } = diffById(prevList, displayedImages.value);
 
   // 当前壁纸被删/移除：前端清空当前选中（后端也会清空设置，这里是 UI 兜底）
   if (
@@ -1208,6 +821,7 @@ useAlbumImagesChangeRefresh({
   },
 });
 
+// ---------- Lifecycle ----------
 onMounted(async () => {
   await settingsStore.ensureLoaded();
   // 注意：任务列表与运行配置在 crawler store 初始化时加载；已安装插件在 App.vue onMounted 中 loadPlugins
@@ -1253,9 +867,6 @@ onMounted(async () => {
     window.addEventListener('file-drop', handleFileDrop);
   }
 });
-
-// 在开发环境中监控组件更新，帮助调试重新渲染问题
-// 开发期调试日志已移除，保持生产干净输出
 
 // 组件激活时（keep-alive 缓存后重新显示）：以路由为唯一真理，始终按当前路由 path 刷新列表，保证从任务页返回后顺序与路由、header 一致。
 onActivated(async () => {

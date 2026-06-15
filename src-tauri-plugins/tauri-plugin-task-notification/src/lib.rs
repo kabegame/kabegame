@@ -10,6 +10,7 @@ mod mobile;
 mod models;
 
 pub use error::{Error, Result};
+pub use models::DownloadNotificationItem;
 
 use mobile::TaskNotification;
 

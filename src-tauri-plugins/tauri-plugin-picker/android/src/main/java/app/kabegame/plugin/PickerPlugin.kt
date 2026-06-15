@@ -733,6 +733,92 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    @InvokeArg
+    class ComputeHashArgs {
+        var uri: String = ""
+    }
+
+    @Command
+    fun computeHash(invoke: Invoke) {
+        val args = invoke.parseArgs(ComputeHashArgs::class.java)
+        val uriStr = args.uri
+        if (uriStr.isBlank()) {
+            invoke.reject("uri 不能为空")
+            return
+        }
+        try {
+            val uri = Uri.parse(uriStr)
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            activity.contentResolver.openInputStream(uri)?.use { inputStream ->
+                val buffer = ByteArray(65536)
+                var n: Int
+                while (inputStream.read(buffer).also { n = it } != -1) {
+                    digest.update(buffer, 0, n)
+                }
+            } ?: run {
+                invoke.reject("无法打开 URI: $uriStr")
+                return
+            }
+            val hash = digest.digest().joinToString("") { "%02x".format(it) }
+            val result = JSObject()
+            result.put("hash", hash)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            Log.e("PickerPlugin", "computeHash failed", e)
+            invoke.reject("哈希计算失败: ${e.message}", e)
+        }
+    }
+
+    @InvokeArg
+    class GetImageThumbnailArgs {
+        var uri: String = ""
+        var outputPath: String = ""
+    }
+
+    @Command
+    fun getImageThumbnail(invoke: Invoke) {
+        val args = invoke.parseArgs(GetImageThumbnailArgs::class.java)
+        val uriStr = args.uri
+        val outputPath = args.outputPath
+        if (uriStr.isBlank() || outputPath.isBlank()) {
+            invoke.reject("uri/outputPath 不能为空")
+            return
+        }
+        try {
+            val uri = Uri.parse(uriStr)
+            val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                activity.contentResolver.loadThumbnail(uri, android.util.Size(512, 512), null)
+            } else {
+                val opts = android.graphics.BitmapFactory.Options().apply {
+                    inJustDecodeBounds = true
+                }
+                activity.contentResolver.openInputStream(uri)?.use {
+                    android.graphics.BitmapFactory.decodeStream(it, null, opts)
+                }
+                val scale = maxOf(opts.outWidth, opts.outHeight) / 512
+                val finalOpts = android.graphics.BitmapFactory.Options().apply {
+                    inSampleSize = maxOf(1, scale)
+                }
+                activity.contentResolver.openInputStream(uri)?.use {
+                    android.graphics.BitmapFactory.decodeStream(it, null, finalOpts)
+                } ?: run {
+                    invoke.reject("无法打开 URI: $uriStr")
+                    return
+                }
+            }
+            val outputFile = File(outputPath)
+            outputFile.parentFile?.mkdirs()
+            outputFile.outputStream().use { out ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, out)
+            }
+            bitmap.recycle()
+            invoke.resolve(JSObject())
+        } catch (e: Exception) {
+            Log.e("PickerPlugin", "getImageThumbnail failed", e)
+            invoke.reject("获取图片缩略图失败: ${e.message}", e)
+        }
+    }
+
     @Command
     fun pickImages(invoke: Invoke) {
         pendingImagesInvoke = invoke

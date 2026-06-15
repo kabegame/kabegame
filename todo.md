@@ -21,6 +21,7 @@
 - [ ] 优化事件转发管线（节流+队列），避免事件风暴
 - [ ] 图片详情 ImageDetailContent路径上的每一段都能直接点，打开对应文件夹
     - 进一步地，直接抽象一个anchor组件，可以用来打开本地和远程路径，适配各种url
+- [ ] 美化应用图标体系（Recraft AI ）
 
 ## feat
 - [x] `4.2.0` 自动同步文件夹画册
@@ -63,10 +64,7 @@
 
 ## refactor
 - [x] `4.2.0` 吉祥物气泡消息
-- [ ] 整理前端画廊用
-    ```ts
-    const { url , metadata } = useImage();
-    ```
-    这种简洁的接口
 
 ## stash
+- [ ] 将 download_queue 改成 tx rx. 因为实际上不需要队列
+

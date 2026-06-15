@@ -3,7 +3,7 @@
         <div v-if="loading" class="detail-body detail-body-loading">
             <el-skeleton :rows="8" animated />
         </div>
-        <ImageGrid v-else-if="imageFilter === 'success'" ref="taskViewRef" class="detail-body" :images="images"
+        <ImageGrid v-else ref="taskViewRef" class="detail-body" :images="images"
             :enable-ctrl-wheel-adjust-columns="!isCompact" :enable-ctrl-key-adjust-columns="!isCompact" enable-virtual-scroll
             :actions="imageActions" :on-context-command="handleImageMenuCommand" scroll-whole-container hide-scrollbar
             @preview-page-boundary="handlePreviewPageBoundary">
@@ -19,12 +19,6 @@
                 </TaskDetailPageHeader>
 
                     <div class="task-detail-page-size-toolbar">
-                        <TaskFilterControl
-                            v-model="imageFilter"
-                            :failed-count="taskFromStore?.failedCount ?? failedImages.length"
-                            variant="gallery"
-                            android-ui="inline"
-                        />
                         <GalleryPageSizeControl
                             :page-size="pageSize"
                             variant="gallery"
@@ -44,76 +38,6 @@
                     :big-page-size="pageSize" :is-sticky="true" @jump-to-page="handleJumpToPage" />
             </template>
         </ImageGrid>
-        <div v-else class="detail-body failed-mode-body">
-            <TaskDetailPageHeader :task-name="taskName"
-                :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
-                @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum" @help="openHelpDrawer"
-                @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @back="goBack">
-                <template #subtitle>
-                    <TaskCountsInline :success="successN" :failed="failedN" :deleted="deletedN" :dedup="dedupN"
-                        :duration="durationText" />
-                </template>
-            </TaskDetailPageHeader>
-
-            <div class="task-detail-page-size-toolbar">
-                <TaskFilterControl
-                    v-model="imageFilter"
-                    :failed-count="taskFromStore?.failedCount ?? failedImages.length"
-                    variant="gallery"
-                    android-ui="inline"
-                />
-            </div>
-
-            <el-skeleton v-if="failedLoading" :rows="6" animated />
-            <el-empty v-else-if="failedImages.length === 0" :description="t('gallery.emptyHint')" />
-            <TransitionGroup v-else name="task-failed-list" tag="div" class="failed-list" :class="{ 'failed-list-android': isCompact }">
-                <div v-for="failed in failedImages" :key="failed.id" class="failed-item">
-                    <div class="failed-meta">
-                        <div class="failed-url-block">
-                            <span class="failed-url-link" @click="openFailedUrl(failed.url)">{{ failed.url }}</span>
-                        </div>
-                        <div class="failed-error-block">
-                            <span class="failed-key">{{ t("tasks.failedError") }}</span>
-                            <span class="failed-error">{{ failed.lastError || "-" }}</span>
-                            <el-tooltip :content="t('tasks.copyErrorDetails')" placement="top">
-                                <el-button text size="small" class="failed-copy-btn" @click="copyFailedError(failed)">
-                                    <el-icon><DocumentCopy /></el-icon>
-                                </el-button>
-                            </el-tooltip>
-                        </div>
-                        <div class="failed-meta-row">
-                            <el-tag size="small" type="info" class="failed-plugin-tag">
-                                {{ getFailedPluginName(failed.pluginId) }}
-                            </el-tag>
-                            <span class="failed-time">{{ formatFailedTime(failed.createdAt) }}</span>
-                        </div>
-                        <div v-if="getFailedItemState(failed.id).isDownloading" class="failed-progress-row">
-                            <el-tag size="small" :type="getStateTagType(getFailedItemState(failed.id).state)">
-                                {{ getStateLabel(getFailedItemState(failed.id).state) }}
-                            </el-tag>
-                            <el-progress
-                                :percentage="getFailedItemState(failed.id).progress ?? 0"
-                                :indeterminate="getFailedItemState(failed.id).state !== 'downloading' || getFailedItemState(failed.id).progress == null"
-                                :stroke-width="8"
-                                class="failed-progress-bar"
-                            />
-                        </div>
-                    </div>
-                    <div class="failed-actions">
-                        <el-button type="primary" size="small" :loading="retryingFailedIds.has(failed.id)"
-                            :disabled="getFailedItemState(failed.id).isDownloading"
-                            @click="handleRetryFailedImage(failed.id)">
-                            {{ t("tasks.retryDownload") }}
-                        </el-button>
-                        <el-button size="small" type="danger" plain
-                            :disabled="getFailedItemState(failed.id).isDownloading"
-                            @click="handleDeleteFailedImage(failed.id)">
-                            {{ t("tasks.deleteFailedRecord") }}
-                        </el-button>
-                    </div>
-                </div>
-            </TransitionGroup>
-        </div>
 
         <AddToAlbumDialog :open="addToAlbumDialog.isOpen.value" :z-index="addToAlbumDialog.zIndex.value" :image-ids="addToAlbumImageIds" :task-id="addToAlbumTaskId"
             @close="addToAlbumDialog.close()" @added="handleAddedToAlbum" />
@@ -131,20 +55,19 @@ import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, 
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
-import { pathqlEntry, pathqlFetch } from "@/services/pathql";
+import { pathqlFetch } from "@/services/pathql";
 import { rowToImageInfo } from "@/utils/imageRow";
 import { withGalleryPrefix } from "@/utils/path";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { listen } from "@/api/rpc";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { VideoPause, Delete, Setting, Refresh, QuestionFilled, Star, StarFilled, InfoFilled, DocumentCopy, Picture, FolderAdd, MoreFilled } from "@element-plus/icons-vue";
+import { Delete, Star, StarFilled } from "@element-plus/icons-vue";
 import { createImageActions } from "@/actions/imageActions";
 import ImageGrid from "@/components/ImageGrid.vue";
 import GalleryPageSizeControl from "@/components/GalleryPageSizeControl.vue";
 import SearchInput from "@/components/SearchInput.vue";
-import TaskFilterControl from "@/components/TaskFilterControl.vue";
-import type { ImageInfo, TaskFailedImage } from "@kabegame/core/types/image";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import { useCrawlerStore } from "@/stores/crawler";
@@ -160,7 +83,6 @@ import type { TaskRunParamsTask } from "@kabegame/core/components/task/TaskRunPa
 import TaskCountsInline from "@kabegame/core/components/task/TaskCountsInline.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { useDownloadStateStore } from "@/stores/downloadState";
 import type { Component } from "vue";
 
 // 选择操作项类型（用于本页选择栏）
@@ -171,22 +93,20 @@ export interface SelectionAction {
     command: string;
 }
 import { useImageOperations } from "@/composables/useImageOperations";
-import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
-import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
+import type { ContextCommand } from "@/components/ImageGrid.vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
+import { usePagedGallery } from "@/composables/usePagedGallery";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { IS_WEB } from "@kabegame/core/env";
-import { trackEvent } from "@kabegame/core/track/umami";
+import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { useFailedImagesStore } from "@/stores/failedImages";
 
@@ -201,7 +121,6 @@ const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
 const albumStore = useAlbumStore();
 const uiStore = useUiStore();
-const { imageGridColumns } = storeToRefs(uiStore);
 const isCompact = computed(() => uiStore.isCompact);
 
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
@@ -232,11 +151,6 @@ const handleViewTaskParams = () => {
 };
 
 const taskId = ref<string>("");
-const totalImagesCount = ref<number>(0); // provider.total（用于分页器）
-const pendingPreviewBoundary = ref<{
-    direction: "prev" | "next";
-    targetPage: number;
-} | null>(null);
 
 // 任务数据一律从 crawlerStore 读取；用户进入 TaskDetail 必然经过 TaskDrawer，数据已加载
 const taskFromStore = computed(() => {
@@ -267,9 +181,8 @@ const pullToRefreshOpts = computed(() =>
 );
 const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
 const images = ref<ImageInfo[]>([]);
+const loadedKey = ref("");
 const failedImages = computed(() => failedImagesStore.byTaskId(taskId.value));
-const failedLoading = computed(() => failedImagesStore.loading);
-const imageFilter = ref<"success" | "failed">("success");
 const taskViewRef = ref<any>(null);
 const taskContainerRef = ref<HTMLElement | null>(null);
 const currentWallpaperImageId = computed<string | null>({
@@ -277,14 +190,6 @@ const currentWallpaperImageId = computed<string | null>({
     set: (value) => {
         settingsStore.values.currentWallpaperImageId = value;
     },
-});
-
-const retryingFailedIds = ref(new Set<number>());
-const downloadStore = useDownloadStateStore();
-
-useImageGridAutoLoad({
-    containerRef: taskContainerRef,
-    onLoad: () => { },
 });
 
 // Image actions for context menu / action sheet
@@ -368,14 +273,7 @@ watch(
     }
 );
 const goBack = () => {
-    if (IS_WEB) {
-        trackEvent("task_detail_exit", {
-            taskId: taskId.value,
-            taskName: taskName.value,
-            path: currentPath.value,
-            url: currentUrl(),
-        });
-    }
+    analytics.track("task_detail_exit");
     router.back();
 };
 
@@ -405,71 +303,36 @@ const localProviderRootPath = computed(() => {
 });
 
 const taskDetailRouteStore = useTaskDetailRouteStore();
-const { pageSize, search: searchQuery } = storeToRefs(taskDetailRouteStore);
-const currentPath = computed(() => taskDetailRouteStore.currentPath);
-const currentPage = computed(() => taskDetailRouteStore.page);
+const { search: searchQuery } = storeToRefs(taskDetailRouteStore);
 let lastTrackedTaskPath: string | null = null;
 
-function currentUrl() {
-    return typeof location === "undefined" ? "" : location.pathname + location.search;
-}
-
-const handleJumpToPage = async (page: number) => {
-    await taskDetailRouteStore.navigate({ page });
-};
-
-const handlePreviewPageBoundary = async (payload: {
-    direction: "prev" | "next";
-    index: number;
-    image: ImageInfo;
-}) => {
-    const totalPages = Math.max(1, Math.ceil((totalImagesCount.value || 0) / pageSize.value));
-    const targetPage = payload.direction === "next"
-        ? currentPage.value + 1
-        : currentPage.value - 1;
-    if (targetPage < 1 || targetPage > totalPages) return;
-
-    pendingPreviewBoundary.value = {
-        direction: payload.direction,
-        targetPage,
-    };
-    try {
-        await handleJumpToPage(targetPage);
-    } catch (error) {
-        pendingPreviewBoundary.value = null;
-        throw error;
-    }
-};
-
-watch(
-    () => images.value,
-    async (list) => {
-        const pending = pendingPreviewBoundary.value;
-        if (!pending) return;
-        if (currentPage.value !== pending.targetPage) return;
-        const image = pending.direction === "next" ? list[0] : list[list.length - 1];
-        if (!image) return;
-
-        pendingPreviewBoundary.value = null;
-        await nextTick();
-        taskViewRef.value?.openPreviewById?.(image.id);
-        ElMessage.info(pending.direction === "next" ? "已进入下一页" : "已进入上一页");
+const pagedTask = usePagedGallery({
+    routeStore: taskDetailRouteStore,
+    images,
+    loadedKey,
+    viewRef: taskViewRef,
+    loading: { startLoading: () => { }, finishLoading: () => { } },
+    load: (path) => loadTaskImages({ showSkeleton: false, path }),
+    computeCountPath: () => taskDetailRouteStore.contextPath,
+    isActive: () => isOnTaskRoute.value && !!taskId.value,
+    onCountError: (error) => {
+        console.error("加载任务总图片数失败:", error);
     },
-    { flush: "post" }
-);
+});
 
-const loadTotalImagesCount = async () => {
-    if (!isOnTaskRoute.value) return;
-    if (!taskId.value) return;
-    try {
-        const path = taskDetailRouteStore.contextPath;
-        if (!path) return;
-        const res = await pathqlEntry(withGalleryPrefix(path));
-        totalImagesCount.value = res?.total ?? 0;
-    } catch (e) {
-        console.error("加载任务总图片数失败:", e);
-    }
-};
+const totalImagesCount = pagedTask.totalImagesCount;
+const currentPath = pagedTask.currentPath;
+const currentPage = pagedTask.currentPage;
+const pageSize = pagedTask.pageSize;
+const loadTotalImagesCount = pagedTask.loadTotalImagesCount;
+const handleJumpToPage = pagedTask.handleJumpToPage;
+const handlePreviewPageBoundary = pagedTask.handlePreviewPageBoundary;
+const ensureValidTaskPageAfterMassRemoval = pagedTask.ensureValidPageAfterMassRemoval;
+const analytics = createImageAnalytics(() => ({
+    taskId: taskId.value,
+    taskName: taskName.value,
+    path: currentPath.value,
+}));
 
 watch(
     () => [currentPath.value, taskId.value] as const,
@@ -480,32 +343,7 @@ watch(
         const key = `${id}:${path}`;
         if (key === lastTrackedTaskPath) return;
         lastTrackedTaskPath = key;
-        trackEvent("task_path", {
-            taskId: id,
-            taskName: taskName.value,
-            path,
-            url: currentUrl(),
-        });
-    },
-    { immediate: true }
-);
-
-// 跟随路径变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
-watch(
-    () => currentPath.value,
-    async (newPath) => {
-        if (!isOnTaskRoute.value) return;
-        if (!taskId.value) return;
-        if (!newPath) return;
-        await loadTaskImages({ showSkeleton: false });
-    },
-    { immediate: true }
-);
-
-watch(
-    () => taskDetailRouteStore.contextPath,
-    () => {
-        void loadTotalImagesCount();
+        analytics.track("task_path");
     },
     { immediate: true }
 );
@@ -524,19 +362,19 @@ watch(
     { immediate: true }
 );
 
-const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
+const loadTaskImages = async (options?: { showSkeleton?: boolean; path?: string }) => {
     if (!isOnTaskRoute.value) return;
     if (!taskId.value) return;
-    if (imageFilter.value !== "success") return;
     const showSkeleton = options?.showSkeleton ?? true;
     if (showSkeleton) loading.value = true;
     try {
-        const rawPath = currentPath.value || localProviderRootPath.value || `task/${taskId.value}/1`;
+        const rawPath = options?.path || currentPath.value || localProviderRootPath.value || `task/${taskId.value}/1`;
         const pathToLoad = withGalleryPrefix(rawPath);
         clearImageMetadataCache();
         const rows = await pathqlFetch<Record<string, unknown>>(pathToLoad);
         const imgs = rows.map(rowToImageInfo);
         images.value = imgs;
+        loadedKey.value = rawPath;
 
     } catch (e) {
         console.error("加载任务图片失败:", e);
@@ -545,122 +383,6 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
     } finally {
         if (showSkeleton) loading.value = false;
     }
-};
-
-watch(
-    pageSize,
-    async (_v, prev) => {
-        if (prev === undefined) return;
-        if (!isOnTaskRoute.value) return;
-        await loadTaskImages({ showSkeleton: false });
-    },
-);
-
-watch(
-    () => imageFilter.value,
-    async (next) => {
-        if (next === "failed") {
-            return;
-        }
-        if (!isOnTaskRoute.value) return;
-        await loadTaskImages({ showSkeleton: false });
-    }
-);
-
-const getFailedItemState = (failedId: number) => {
-    const entry = downloadStore.getByFailedImageId(failedId);
-    if (!entry) return { isDownloading: false } as const;
-    const isDownloading = ["preparing", "downloading", "processing"].includes(entry.state);
-    return { isDownloading, state: entry.state, progress: entry.progress } as const;
-};
-
-const getStateTagType = (state?: string) => {
-    if (state === "preparing") return "info";
-    if (state === "downloading") return "primary";
-    if (state === "processing") return "warning";
-    return "info";
-};
-
-const getStateLabel = (state?: string) => {
-    if (state === "preparing") return t("tasks.statePreparing");
-    if (state === "downloading") return t("tasks.stateDownloading");
-    if (state === "processing") return t("tasks.stateProcessing");
-    return state ?? "";
-};
-
-const handleRetryFailedImage = async (failedId: number) => {
-    if (retryingFailedIds.value.has(failedId)) return;
-    retryingFailedIds.value.add(failedId);
-    try {
-        await failedImagesStore.retryFailed(failedId);
-    } catch (error) {
-        console.error("重试下载失败:", error);
-        ElMessage.error(t("tasks.retryDownloadFailed"));
-    } finally {
-        retryingFailedIds.value.delete(failedId);
-    }
-};
-
-const handleDeleteFailedImage = async (failedId: number) => {
-    const failed = failedImages.value.find((f) => f.id === failedId);
-    if (!failed) return;
-    if (getFailedItemState(failed.id).isDownloading) return;
-    try {
-        await failedImagesStore.deleteFailed(failedId);
-        ElMessage.success(t("tasks.deleteFailedRecordSuccess"));
-    } catch (error) {
-        console.error("删除失败记录失败:", error);
-        ElMessage.error(t("tasks.deleteFailedRecordFailed"));
-    }
-};
-
-const openFailedUrl = async (url: string) => {
-    try {
-        if (IS_WEB) {
-            window.open(url, "_blank", "noopener,noreferrer");
-        } else {
-            await openUrl(url);
-        }
-    } catch {
-        ElMessage.error(t("common.openUrlFailed"));
-    }
-};
-
-const getFailedPluginName = (pluginId: string) => {
-    if (pluginId === "local-import") return t("tasks.drawerLocalImport");
-    const plugin = pluginStore.plugins.find((p) => p.id === pluginId);
-    return plugin ? (resolvePluginName(plugin) || pluginId) : pluginId;
-};
-
-const copyFailedError = async (failed: TaskFailedImage) => {
-    const pluginName = getFailedPluginName(failed.pluginId);
-    const timeStr = formatFailedTime(failed.createdAt);
-    const text = [
-        `[${t("tasks.filterFailed")}]`,
-        `${t("tasks.failedUrl")}: ${failed.url}`,
-        `${t("tasks.failedError")}: ${failed.lastError || "-"}`,
-        `${t("tasks.failedPlugin")}: ${pluginName}`,
-        `${t("tasks.failedTime")}: ${timeStr}`,
-    ].join("\n");
-    try {
-        const { isTauri } = await import("@tauri-apps/api/core");
-        if (isTauri()) {
-            const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
-            await writeText(text);
-        } else {
-            await navigator.clipboard.writeText(text);
-        }
-        ElMessage.success(t("common.copySuccess"));
-    } catch (error) {
-        console.error("复制失败:", error);
-        ElMessage.error(t("common.copyFailed"));
-    }
-};
-
-const formatFailedTime = (value: number) => {
-    if (!value) return "";
-    const ms = value > 1e12 ? value : value * 1000;
-    return new Date(ms).toLocaleString();
 };
 
 const handleStopTask = async () => {
@@ -855,7 +577,7 @@ const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<s
 
 const handleImageMenuCommand = async (
     payload: any
-): Promise<import("@/components/ImageGrid.vue").ContextCommand | null> => {
+): Promise<ContextCommand | null> => {
     const command = payload.command as string;
     // 注意：core 的 ContextCommandPayload.image 使用的是 core ImageInfo（url 可选），
     // 这里以当前页面的 images 列表为准，避免 TS 类型冲突并确保字段完整。
@@ -1138,6 +860,7 @@ useImagesChangeRefresh({
         const { removedIds } = diffById(prevList, images.value);
         if (removedIds.length > 0) {
             taskViewRef.value?.clearSelection?.();
+            await ensureValidTaskPageAfterMassRemoval();
         }
     },
 });
@@ -1227,169 +950,6 @@ onDeactivated(() => {
 
     .task-detail-search {
         margin-left: auto;
-    }
-
-    .failed-mode-body {
-        padding: 0 8px 8px;
-    }
-
-    .failed-list {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-        gap: 20px;
-    }
-
-    .task-failed-list-enter-active,
-    .task-failed-list-leave-active {
-        transition: all 0.3s ease;
-    }
-
-    .task-failed-list-enter-from {
-        opacity: 0;
-        transform: translateY(-20px);
-    }
-
-    .task-failed-list-leave-to {
-        opacity: 0;
-        transform: translateX(30px);
-    }
-
-    .task-failed-list-move {
-        transition: transform 0.3s ease;
-    }
-
-    .failed-list-android {
-        grid-template-columns: repeat(2, 1fr);
-        gap: 10px;
-
-        .failed-item {
-            padding: 10px 12px;
-            min-height: 0;
-
-            .failed-key,
-            .failed-time {
-                font-size: 11px;
-            }
-            .failed-error {
-                font-size: 12px;
-            }
-            .failed-actions {
-                gap: 4px;
-                .el-button {
-                    padding: 4px 8px;
-                    font-size: 12px;
-                }
-            }
-            .failed-progress-row .el-progress {
-                --el-progress-text-size: 10px;
-            }
-        }
-    }
-
-    .failed-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 14px;
-        border: 2px solid var(--anime-border, var(--el-border-color));
-        border-radius: 12px;
-        padding: 14px 16px;
-        background: var(--anime-bg-card, var(--el-bg-color-overlay));
-        box-shadow: var(--anime-shadow, 0 1px 3px rgba(0, 0, 0, 0.08));
-        transition: box-shadow 0.25s ease, border-color 0.2s ease;
-
-        &:hover {
-            box-shadow: var(--anime-shadow-hover, 0 4px 12px rgba(0, 0, 0, 0.12));
-            border-color: var(--anime-primary-light, var(--el-color-primary-light-5));
-        }
-    }
-
-    .failed-meta {
-        flex: 1;
-        min-width: 0;
-    }
-
-    .failed-url-block {
-        min-width: 0;
-        margin-bottom: 8px;
-
-        .failed-url-link {
-            display: block;
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            color: var(--el-color-primary);
-            cursor: pointer;
-            font-size: 13px;
-
-            &:hover {
-                color: var(--el-color-primary-light-3);
-                text-decoration: underline;
-            }
-        }
-    }
-
-    .failed-error-block {
-        display: flex;
-        align-items: flex-start;
-        gap: 8px;
-        margin-bottom: 8px;
-
-        .failed-key {
-            flex-shrink: 0;
-        }
-        .failed-error {
-            flex: 1;
-            min-width: 0;
-            word-break: break-word;
-            font-size: 13px;
-            color: var(--el-color-danger);
-        }
-        .failed-copy-btn {
-            flex-shrink: 0;
-            margin: -4px -4px -4px 0;
-        }
-    }
-
-    .failed-meta-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 4px;
-
-        .failed-plugin-tag {
-            flex-shrink: 0;
-        }
-    }
-
-    .failed-key {
-        color: var(--el-text-color-secondary);
-        font-size: 12px;
-        font-weight: 500;
-    }
-
-    .failed-time {
-        color: var(--el-text-color-secondary);
-        font-size: 12px;
-    }
-
-    .failed-progress-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-top: 6px;
-        .failed-progress-bar {
-            flex: 1;
-            min-width: 0;
-        }
-    }
-
-    .failed-actions {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        flex-shrink: 0;
     }
 }
 </style>

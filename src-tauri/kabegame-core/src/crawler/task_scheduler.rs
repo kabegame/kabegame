@@ -10,14 +10,14 @@ use crate::storage::tasks::TaskStatus;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 use tokio::runtime::Handle;
-use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::sync::{mpsc, Mutex, Notify, RwLock};
 use tokio::task::JoinHandle;
 use url::Url;
 
@@ -52,7 +52,7 @@ pub struct TaskTransition {
 
 #[derive(Clone)]
 pub struct TaskScheduler {
-    // PluginManager 现在是全局单例，不需要存储
+    // 下载队列
     download_queue: Arc<DownloadQueue>,
     queue_tx: mpsc::UnboundedSender<CrawlTaskRequest>,
     queue_rx: Arc<Mutex<mpsc::UnboundedReceiver<CrawlTaskRequest>>>,
@@ -60,8 +60,8 @@ pub struct TaskScheduler {
     page_stacks: Arc<PageStackStore>,
     /// 有任务结束或「同时运行任务数」设置变更时唤醒，避免等待槽位时忙等。
     task_slot_notify: Arc<Notify>,
-    /// 失败图片重试：每条记录一个 tokio 任务，可在入队等待期间 abort。
-    download_handles: Arc<Mutex<HashMap<i64, JoinHandle<()>>>>,
+    /// 待取消的任务列表
+    pub canceled_tasks: Arc<RwLock<HashSet<String>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,20 +87,24 @@ impl PageStackStore {
         }
     }
 
-    pub fn create_stack(&self, task_id: &str) -> PageStack {
+    pub async fn create_stack(&self, task_id: &str) -> PageStack {
         let stack = Arc::new(StdMutex::new(Vec::new()));
-        let mut guard = self.stacks.write().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.stacks.write().await;
         guard.insert(task_id.to_string(), Arc::clone(&stack));
         stack
     }
 
-    pub fn get_stack(&self, task_id: &str) -> Option<PageStack> {
-        let guard = self.stacks.read().unwrap_or_else(|e| e.into_inner());
+    pub async fn get_stack(&self, task_id: &str) -> Option<PageStack> {
+        let guard = self.stacks.read().await;
         guard.get(task_id).cloned()
     }
 
-    pub fn remove_stack(&self, task_id: &str) {
-        let mut guard = self.stacks.write().unwrap_or_else(|e| e.into_inner());
+    pub fn get_stack_sync(&self, task_id: &str) -> Option<PageStack> {
+        tokio::runtime::Handle::current().block_on(self.get_stack(task_id))
+    }
+
+    pub async fn remove_stack(&self, task_id: &str) {
+        let mut guard = self.stacks.write().await;
         guard.remove(task_id);
     }
 }
@@ -118,7 +122,7 @@ impl TaskScheduler {
             running_workers: Arc::new(AtomicUsize::new(0)),
             page_stacks: Arc::new(PageStackStore::new()),
             task_slot_notify: Arc::new(Notify::new()),
-            download_handles: Arc::new(Mutex::new(HashMap::new())),
+            canceled_tasks: Arc::new(RwLock::new(HashSet::new()))
         };
         s
     }
@@ -139,7 +143,7 @@ impl TaskScheduler {
     /// - 若有空闲 task worker，会很快被取走并进入 running
     /// - 若当前 10 个 worker 都忙，则任务保持 pending 并排队等待
     pub fn enqueue(&self, req: CrawlTaskRequest) -> Result<(), String> {
-        // 先保证 DB 状态为 pending（前端也会写，但这里做幂等兜底）
+        // 先保证 DB 状态为 pending（创建任务默认是Pending，但这里做幂等兜底）
         let storage = Storage::global();
         // let emitter = GlobalEmitter::global();
         let _ = persist_task_status(storage, &req.task_id, TaskStatus::Pending, None, None, None);
@@ -161,14 +165,26 @@ impl TaskScheduler {
         Ok(req.task_id)
     }
 
+    /// 取消任务（标记取消 + 唤醒等待中的下载）
+    pub async fn cancel_task(&self, task_id: &str) {
+        // 这里用active_downloads，存在竞态：不在该列表，但即将进入该列表的下载
+        self.download_queue.cancel_task_downloads(task_id).await;
+        self.canceled_tasks.write().await.insert(task_id.into());
+        self.download_queue.capacity_notify.notify_waiters(); // 唤醒被阻塞的 download() 调用，让它们检查取消状态
+    }
+
+    pub async fn is_task_canceled(&self, task_id: &str) -> bool {
+        self.canceled_tasks.read().await.contains(task_id)
+    }
+
+    /// 同步版本，供非 async 上下文调用（内部 block_on）。
+    pub fn is_task_canceled_blocking(&self, task_id: &str) -> bool {
+        tokio::runtime::Handle::current().block_on(self.is_task_canceled(task_id))
+    }
+
     #[allow(dead_code)]
     pub fn running_worker_count(&self) -> usize {
         self.running_workers.load(Ordering::Relaxed)
-    }
-
-    /// 取消任务（标记取消 + 唤醒等待中的下载）
-    pub async fn cancel_task(&self, task_id: &str) {
-        self.download_queue.cancel_download(task_id).await;
     }
 
     /// 失败图片重试：spawn 异步任务入队，立即返回；可在等待容量期间 `cancel_retry_failed_image` abort。
@@ -177,14 +193,14 @@ impl TaskScheduler {
         let item = Storage::get_task_failed_image_by_id(failed_id)?
             .ok_or_else(|| "失败图片记录不存在".to_string())?;
 
-        let task = storage
-            .get_task(&item.task_id)?
-            .ok_or_else(|| "任务不存在".to_string())?;
+        let task_opt = storage
+            .get_task(&item.task_id)?;
 
-        let images_dir = task
-            .output_dir
-            .as_deref()
-            .map(std::path::PathBuf::from)
+        let images_dir = task_opt
+            .clone()
+            .and_then(|t| 
+                t.output_dir.as_deref().map(std::path::PathBuf::from)
+            )
             .unwrap_or_else(|| get_default_images_dir());
 
         let start_time = if item.order > 0 {
@@ -197,56 +213,39 @@ impl TaskScheduler {
         };
 
         let url = Url::parse(&item.url).map_err(|e| format!("Invalid URL: {}", e))?;
+        let task_opt_for_headers = task_opt.clone();
         let retry_headers = item
             .header_snapshot
             .filter(|headers| !headers.is_empty())
-            .unwrap_or_else(|| task.http_headers.unwrap_or_default());
+            .unwrap_or_else(|| task_opt_for_headers
+                .and_then(
+                    |t| {
+                        t.http_headers.clone()
+                    }).unwrap_or_default()
+                );
 
-        let plugin_id = item.plugin_id.clone();
-        let task_id = item.task_id.clone();
-        let output_album_id = task.output_album_id.clone();
-        let metadata_id = item.metadata_id;
-        let display_name = item.display_name.clone();
+        let output_album_id = task_opt.clone().and_then(|t| 
+            t.output_album_id.clone()
+        );
 
-        let mut handles = self.download_handles.lock().await;
-        if handles.contains_key(&failed_id) {
-            return Err("该失败记录已在重试队列中".to_string());
-        }
-
-        let dq = Arc::clone(&self.download_queue);
-        let dh = Arc::clone(&self.download_handles);
-        let join = tokio::spawn(async move {
-            let res = dq
-                .download_image_retry(
-                    failed_id,
-                    url,
-                    images_dir,
-                    plugin_id,
-                    task_id,
-                    start_time,
-                    output_album_id,
-                    retry_headers,
-                    metadata_id,
-                    display_name,
-                )
-                .await;
-            let mut g = dh.lock().await;
-            g.remove(&failed_id);
-            if let Err(e) = res {
-                eprintln!("[retry_failed_image] {}", e);
-            }
-        });
-        handles.insert(failed_id, join);
-        Ok(())
+        self.download_queue.download_image_retry(
+            failed_id,
+            url,
+            images_dir,
+            item.plugin_id,
+            item.task_id,
+            start_time,
+            output_album_id,
+            retry_headers,
+            item.metadata_id,
+            item.display_name,
+        ).await
     }
 
     /// 批量重试（前端已按插件筛选）；跳过已有 handle 的 id。
     pub async fn retry_failed_images(&self, failed_ids: &[i64]) -> Result<Vec<i64>, String> {
         let mut retried = Vec::new();
         for &id in failed_ids {
-            if self.download_handles.lock().await.contains_key(&id) {
-                continue;
-            }
             if self.retry_failed_image(id).await.is_ok() {
                 retried.push(id);
             }
@@ -254,18 +253,14 @@ impl TaskScheduler {
         Ok(retried)
     }
 
-    pub async fn cancel_retry_failed_image(&self, failed_id: i64) {
-        if let Some(h) = self.download_handles.lock().await.remove(&failed_id) {
-            h.abort();
-        }
+    // 取消重试图片
+    pub async fn cancel_retry_failed_image(&self, failed_id: i64) -> bool {
+        self.download_queue.cancel_retried_download(failed_id).await
     }
 
     pub async fn cancel_retry_failed_images(&self, failed_ids: &[i64]) {
-        let mut map = self.download_handles.lock().await;
         for &id in failed_ids {
-            if let Some(h) = map.remove(&id) {
-                h.abort();
-            }
+            self.download_queue.cancel_retried_download(id).await;
         }
     }
 
@@ -430,7 +425,7 @@ async fn worker_loop(
         };
 
         // 若任务已取消（排队期间），直接 canceled
-        if download_queue.is_download_canceled(&req.task_id).await {
+        if scheduler.is_task_canceled(&req.task_id).await {
             let end = now_ms();
             scheduler.transition(
                 &req.task_id,
@@ -459,14 +454,14 @@ async fn worker_loop(
         );
 
         let page_stacks = scheduler.page_stacks();
-        page_stacks.create_stack(&req.task_id);
+        page_stacks.create_stack(&req.task_id).await;
         let res = run_task(&storage, Arc::clone(&download_queue), &req).await;
         let mut keep_page_stack = false;
 
         match res {
             Ok(TaskOutcome::Completed) => {
                 let end = now_ms();
-                if download_queue.is_download_canceled(&req.task_id).await {
+                if scheduler.is_task_canceled(&req.task_id).await {
                     scheduler.transition(
                         &req.task_id,
                         TaskStatus::Canceled,
@@ -476,6 +471,8 @@ async fn worker_loop(
                             error: Some("Task canceled".to_string()),
                         },
                     );
+                    // 清理canceled_tasks
+                    scheduler.canceled_tasks.write().await.retain(|d| *d != req.task_id);
                 } else {
                     scheduler.transition(
                         &req.task_id,
@@ -497,9 +494,10 @@ async fn worker_loop(
                 );
             }
             Err(e) => {
-                let is_canceled = e.contains("Task canceled");
+                let is_canceled = scheduler.is_task_canceled(&req.task_id).await;
                 let end = now_ms();
                 let next = if is_canceled {
+                    scheduler.canceled_tasks.write().await.retain(|d| *d != req.task_id);
                     TaskStatus::Canceled
                 } else {
                     TaskStatus::Failed
@@ -516,7 +514,7 @@ async fn worker_loop(
             }
         }
         if !keep_page_stack {
-            page_stacks.remove_stack(&req.task_id);
+            page_stacks.remove_stack(&req.task_id).await;
         }
 
         running.fetch_sub(1, Ordering::Relaxed);

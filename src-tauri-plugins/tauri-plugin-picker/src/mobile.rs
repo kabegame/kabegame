@@ -4,7 +4,16 @@ use tauri::{
     AppHandle, Runtime,
 };
 
-use crate::models::*;
+use crate::models::{
+    ComputeHashArgs, ComputeHashResponse, CopyExtractedImagesToPicturesArgs,
+    CopyExtractedImagesToPicturesResponse, CopyImageToPicturesArgs, CopyImageToPicturesResponse,
+    GetContentSizeArgs, GetContentSizeResponse, GetDisplayNameArgs, GetDisplayNameResponse,
+    GetImageDimensionsArgs, GetImageDimensionsResponse, GetImageThumbnailArgs,
+    GetMimeTypeArgs, GetMimeTypeResponse,
+    GetVideoDimensionsArgs, GetVideoDimensionsResponse, IsDirectoryArgs, IsDirectoryResponse,
+    ListContentChildrenArgs, ListContentChildrenResponse, ReadFileBytesArgs, ReadFileBytesResponse,
+    TakePersistablePermissionArgs,
+};
 
 // initializes the Kotlin or Swift plugin classes
 pub fn init<R: Runtime, C: DeserializeOwned>(
@@ -130,6 +139,30 @@ impl<R: Runtime> Picker<R> {
             .await
             .map_err(crate::Error::from)?;
         Ok(result)
+    }
+
+    pub async fn compute_hash(&self, uri: String) -> crate::Result<ComputeHashResponse> {
+        let result: ComputeHashResponse = self
+            .0
+            .run_mobile_plugin_async("computeHash", ComputeHashArgs { uri })
+            .await
+            .map_err(crate::Error::from)?;
+        Ok(result)
+    }
+
+    pub async fn get_image_thumbnail(
+        &self,
+        uri: String,
+        output_path: String,
+    ) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin_async::<()>(
+                "getImageThumbnail",
+                GetImageThumbnailArgs { uri, output_path },
+            )
+            .await
+            .map_err(crate::Error::from)?;
+        Ok(())
     }
 
     pub async fn copy_extracted_images_to_pictures(

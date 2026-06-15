@@ -97,7 +97,7 @@
               <div class="fid-info-head">
                 <div class="fid-tags">
                   <el-tag size="small" type="warning">{{ getFailedPluginName(failed.pluginId) }}</el-tag>
-                  <el-tag v-if="itemStateTag(failed)" size="small" type="info">{{ itemStateTag(failed) }}</el-tag>
+                  <el-tag v-if="itemStateTag(failed)" size="small" :type="itemStateTagType(failed)">{{ itemStateTag(failed) }}</el-tag>
                   <span class="fid-time">{{ formatFailedTime(failed.createdAt) }}</span>
                 </div>
                 <el-button link size="small" type="primary" @click="openTaskDetail(failed.taskId)">
@@ -122,7 +122,7 @@
               </div>
 
               <div class="fid-actions">
-                <template v-if="getItemState(failed).isActive && getItemState(failed).state === 'waiting'">
+                <template v-if="getItemState(failed).isActive && getItemState(failed).state === 'preparing'">
                   <el-button size="small" @click="handleCancelRetry(failed.id)">
                     {{ t('tasks.cancelRetry') }}
                   </el-button>
@@ -131,7 +131,7 @@
                   <el-button
                     type="primary"
                     size="small"
-                    :loading="pendingRetryIds.has(failed.id)"
+                    :loading="getItemState(failed).isActive"
                     @click="handleRetryFailedImage(failed)"
                   >{{ t('tasks.retryDownload') }}</el-button>
                   <el-button
@@ -175,6 +175,8 @@ import {
   WarningFilled,
 } from "@element-plus/icons-vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { isTauri } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
@@ -214,19 +216,22 @@ watch(
   { immediate: true }
 );
 
-// Imperative API: open(taskId?) — used by refs (e.g. TaskDetail), bypasses v-model
 const activeTaskId = ref<string | undefined>(undefined);
 const effectiveTaskId = computed(() => activeTaskId.value ?? props.taskId);
 
-const open = (taskId?: string) => {
+const setTaskId = (taskId?: string) => {
   activeTaskId.value = taskId;
+  filterPluginId.value = null;
+};
+
+// Imperative API used by refs; scope is set separately via setTaskId().
+const open = () => {
   modal.open();
 };
 
-defineExpose({ open });
+defineExpose({ open, setTaskId });
 
 const filterPluginId = ref<string | null>(null);
-const pendingRetryIds = ref(new Set<number>());
 const bulkRetryLoading = ref(false);
 const bulkDeleteLoading = ref(false);
 
@@ -270,44 +275,41 @@ const pluginFilterLabel = computed(() => {
 
 const getItemState = (item: TaskFailedImage) => {
   const ds = downloadStore.getByFailedImageId(item.id);
-  if (ds && ["preparing", "downloading", "processing"].includes(ds.state)) {
-    return { isActive: true, state: ds.state, progress: ds.progress } as const;
-  }
-  if (pendingRetryIds.value.has(item.id)) {
-    return { isActive: true, state: "waiting" as const };
-  }
+  if (ds) return { isActive: true, state: ds.state, progress: ds.progress } as const;
   return { isActive: false } as const;
 };
 
 const itemStateTag = (item: TaskFailedImage) => {
   const s = getItemState(item);
   if (!s.isActive) return "";
-  if (s.state === "waiting") return t("tasks.stateWaiting");
-  if (s.state === "preparing") return t("tasks.statePreparing");
-  if (s.state === "downloading") return t("tasks.stateDownloading");
-  if (s.state === "processing") return t("tasks.stateProcessing");
-  return "";
+  const labels: Record<string, string> = {
+    preparing: t("tasks.drawerStatusPreparing"),
+    downloading: t("tasks.drawerStatusDownloading"),
+    processing: t("tasks.drawerStatusProcessing"),
+    completed: t("tasks.drawerStatusCompleted"),
+    failed: t("tasks.drawerStatusFailed"),
+    canceled: t("tasks.drawerStatusCanceled"),
+  };
+  return labels[s.state] ?? s.state;
+};
+
+const itemStateTagType = (item: TaskFailedImage): "info" | "warning" | "success" | "danger" => {
+  const s = getItemState(item);
+  if (!s.isActive) return "info";
+  if (s.state === "failed") return "danger";
+  if (s.state === "completed" || s.state === "processing") return "success";
+  if (s.state === "downloading" || s.state === "preparing") return "warning";
+  return "info";
 };
 
 const hasIdleInFilter = computed(() => filteredFailed.value.some((f) => !getItemState(f).isActive));
 const hasPendingInFilter = computed(() =>
-  filteredFailed.value.some((f) => pendingRetryIds.value.has(f.id))
+  filteredFailed.value.some((f) => downloadStore.getByFailedImageId(f.id)?.state === "preparing")
 );
 
 function onPluginFilterCommand(cmd: string) {
   filterPluginId.value = cmd === "" ? null : cmd || null;
 }
-
-watch(
-  () => failedImagesStore.allFailed,
-  (list) => {
-    const ids = new Set(list.map((f) => f.id));
-    for (const id of Array.from(pendingRetryIds.value)) {
-      if (!ids.has(id)) pendingRetryIds.value.delete(id);
-    }
-  },
-  { deep: true }
-);
 
 const FAILED_ITEM_HEIGHT = 140;
 const { list: virtualList, containerProps, wrapperProps } = useVirtualList(filteredFailed, {
@@ -351,9 +353,7 @@ const copyFailedError = async (failed: TaskFailedImage) => {
     `${t("tasks.failedTime")}: ${timeStr}`,
   ].join("\n");
   try {
-    const { isTauri } = await import("@tauri-apps/api/core");
     if (isTauri()) {
-      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
       await writeText(text);
     } else {
       await navigator.clipboard.writeText(text);
@@ -366,14 +366,12 @@ const copyFailedError = async (failed: TaskFailedImage) => {
 };
 
 const handleRetryFailedImage = async (failed: TaskFailedImage) => {
-  if (pendingRetryIds.value.has(failed.id)) return;
-  pendingRetryIds.value.add(failed.id);
+  if (getItemState(failed).isActive) return;
   try {
     await failedImagesStore.retryFailed(failed.id);
     ElMessage.success(t("tasks.retryDownloadSent"));
   } catch (error) {
     console.error("重试下载失败:", error);
-    pendingRetryIds.value.delete(failed.id);
     ElMessage.error(t("tasks.retryDownloadFailed"));
   }
 };
@@ -381,7 +379,6 @@ const handleRetryFailedImage = async (failed: TaskFailedImage) => {
 const handleCancelRetry = async (failedId: number) => {
   try {
     await failedImagesStore.cancelRetry(failedId);
-    pendingRetryIds.value.delete(failedId);
   } catch (e) {
     console.error(e);
     ElMessage.error(t("tasks.cancelRetryFailed"));
@@ -391,19 +388,12 @@ const handleCancelRetry = async (failedId: number) => {
 const handleRetryAll = async () => {
   const idleItems = filteredFailed.value.filter((f) => !getItemState(f).isActive);
   if (!idleItems.length) return;
-  const ids = idleItems.map((f) => f.id);
-  idleItems.forEach((f) => pendingRetryIds.value.add(f.id));
   bulkRetryLoading.value = true;
   try {
-    const submitted = await failedImagesStore.retryMany(ids);
-    const submittedSet = new Set(submitted);
-    idleItems.forEach((f) => {
-      if (!submittedSet.has(f.id)) pendingRetryIds.value.delete(f.id);
-    });
+    await failedImagesStore.retryMany(idleItems.map((f) => f.id));
     ElMessage.success(t("tasks.retryAllSent"));
   } catch (error) {
     console.error(error);
-    idleItems.forEach((f) => pendingRetryIds.value.delete(f.id));
     ElMessage.error(t("tasks.retryDownloadFailed"));
   } finally {
     bulkRetryLoading.value = false;
@@ -411,12 +401,12 @@ const handleRetryAll = async () => {
 };
 
 const handleCancelAll = async () => {
-  const pendingItems = filteredFailed.value.filter((f) => pendingRetryIds.value.has(f.id));
-  if (!pendingItems.length) return;
-  const ids = pendingItems.map((f) => f.id);
+  const preparingItems = filteredFailed.value.filter(
+    (f) => downloadStore.getByFailedImageId(f.id)?.state === "preparing"
+  );
+  if (!preparingItems.length) return;
   try {
-    await failedImagesStore.cancelRetryMany(ids);
-    ids.forEach((id) => pendingRetryIds.value.delete(id));
+    await failedImagesStore.cancelRetryMany(preparingItems.map((f) => f.id));
   } catch (e) {
     console.error(e);
     ElMessage.error(t("tasks.cancelRetryFailed"));

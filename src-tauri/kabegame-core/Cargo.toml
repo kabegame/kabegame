@@ -52,8 +52,7 @@ reqwest = { version = "0.11", features = [
 trash = "5"
 # 进程内 FFmpeg：视频预览压缩 + 维度读取（Android 走 Kotlin provider，无需）。
 # 链接依赖构建环境 FFMPEG_PKG_CONFIG_PATH 指向 third/FFmpeg-build/install/lib/pkgconfig。
-# optional = true：由 video feature 激活（standard/light 均启用）。
-rsmpeg = { workspace = true, optional = true }
+rsmpeg = { workspace = true }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 reqwest = { version = "0.11", features = [
@@ -106,8 +105,6 @@ ipc-server = []
 virtual-driver = ["dep:fuser", "dep:dokan"]
 # Phase 6b: 6c 通过 SqlExecutor 接入后再启用 VD module
 vd-legacy = []
-# 视频下载/导入支持（需要 FFmpeg rsmpeg）。standard/light 均启用。
-video = ["dep:rsmpeg"]
 
 [dev-dependencies]
 tempfile = "3"

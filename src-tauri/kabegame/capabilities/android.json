@@ -1,0 +1,14 @@
+{
+  "identifier": "android-capability",
+  "description": "Android-only capabilities for Kabegame",
+  "platforms": ["android"],
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "picker:default",
+    "share:default",
+    "task-notification:default",
+    "wallpaper:default",
+    "compress:default"
+  ]
+}

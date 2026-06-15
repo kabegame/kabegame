@@ -4,7 +4,6 @@
     v-bind="coreGridBind"
     :window-aspect-ratio="props.windowAspectRatio"
     :on-context-command="handleContextCommand"
-    @scroll-stable="$emit('scroll-stable')"
     @open-task="handleOpenTask"
     @image-dblclick="$emit('image-dblclick', $event)"
     @preview-open="handlePreviewOpen"
@@ -111,7 +110,6 @@ type PreviewPageBoundaryPayload = {
   image: ImageInfo;
 };
 const emit = defineEmits<{
-  "scroll-stable": [];
   "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
   "preview-navigate": [payload: PreviewNavigatePayload];
   "preview-page-boundary": [payload: PreviewPageBoundaryPayload];

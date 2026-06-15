@@ -62,6 +62,8 @@ impl NativeDownloadState {
                 state: DownloadState::Downloading,
                 native: true,
                 retried_for: None,
+                received_bytes: 0,
+                total_bytes: None,
             })
             .collect()
     }

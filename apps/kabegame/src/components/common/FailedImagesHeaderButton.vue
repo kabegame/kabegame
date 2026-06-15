@@ -27,16 +27,30 @@ const { t } = useI18n();
 const route = useRoute();
 const failedImagesStore = useFailedImagesStore();
 const taskDetailRouteStore = useTaskDetailRouteStore();
-const failedCount = computed(() => failedImagesStore.allFailed.length);
+const currentTaskId = computed(() => {
+  if (route.name !== "TaskDetail") return undefined;
+  const routeId = Array.isArray(route.params.id) ? route.params.id[0] : route.params.id;
+  const id = String(routeId || taskDetailRouteStore.taskId || "").trim();
+  return id || undefined;
+});
+const failedCount = computed(() => {
+  const taskId = currentTaskId.value;
+  return taskId
+    ? failedImagesStore.byTaskId(taskId).length
+    : failedImagesStore.failedCount;
+});
 
 const dialogRef = ref<InstanceType<typeof FailedImagesDialog> | null>(null);
 
 const openDialog = () => {
-  const taskId = route.name === "TaskDetail"
-    ? (taskDetailRouteStore.taskId || undefined)
-    : undefined;
-  dialogRef.value?.open(taskId);
+  dialogRef.value?.setTaskId(currentTaskId.value);
+  dialogRef.value?.open();
 };
+
+defineEmits<{
+  action: []
+}>()
+
 </script>
 
 <style scoped lang="scss">

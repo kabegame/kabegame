@@ -36,9 +36,9 @@ pub fn resolve_image_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
 /// stream's `codecpar` width/height via libavformat (rsmpeg), so it works
 /// uniformly for mp4/mov/wmv/webm/mkv. Returns `None` on error.
 ///
-/// Only compiled when `video` feature is active (standard/CLI). Android and
-/// light builds do not link FFmpeg; callers must guard with `#[cfg(feature = "video")]`.
-#[cfg(all(not(target_os = "android"), feature = "video"))]
+/// Android does not link FFmpeg; `content://` video dimensions come from the
+/// async ContentIoProvider path in the `android` submodule.
+#[cfg(not(target_os = "android"))]
 pub fn resolve_video_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
     use rsmpeg::avformat::AVFormatContextInput;
     use rsmpeg::ffi;
@@ -94,10 +94,7 @@ pub fn resolve_video_dimensions_sync(_local_path: &str) -> Option<(u32, u32)> {
 pub fn resolve_media_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
     let path = local_path_to_path_buf(local_path);
     if crate::image_type::is_video_by_path(path.as_path()) {
-        #[cfg(feature = "video")]
         return resolve_video_dimensions_sync(local_path);
-        #[cfg(not(feature = "video"))]
-        return None;
     }
     resolve_image_dimensions_sync(local_path)
 }

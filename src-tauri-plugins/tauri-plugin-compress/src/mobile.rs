@@ -22,7 +22,7 @@ pub struct Compress<R: Runtime>(pub PluginHandle<R>);
 impl<R: Runtime> Compress<R> {
     pub async fn compress_video_for_preview(
         &self,
-        input_path: String,
+        input_uri: String,
         output_path: String,
     ) -> crate::Result<CompressVideoForPreviewResponse> {
         let result: CompressVideoForPreviewResponse = self
@@ -30,7 +30,7 @@ impl<R: Runtime> Compress<R> {
             .run_mobile_plugin_async(
                 "compressVideoForPreview",
                 CompressVideoForPreviewArgs {
-                    input_path,
+                    input_uri,
                     output_path,
                 },
             )
@@ -41,7 +41,7 @@ impl<R: Runtime> Compress<R> {
 
     pub async fn extract_video_frames(
         &self,
-        input_path: String,
+        input_uri: String,
         output_dir: String,
     ) -> crate::Result<ExtractVideoFramesResponse> {
         let result: ExtractVideoFramesResponse = self
@@ -49,7 +49,7 @@ impl<R: Runtime> Compress<R> {
             .run_mobile_plugin_async(
                 "extractVideoFrames",
                 ExtractVideoFramesArgs {
-                    input_path,
+                    input_uri,
                     output_dir,
                 },
             )

@@ -35,7 +35,7 @@
 | `src-tauri/kabegame-core/src/crawler/scheduler.rs` | crawl task 调度；失败图片重试句柄；任务级 header/display_name/metadata 快照回放 |
 | `src-tauri/kabegame/src/commands/task.rs` | 失败项重试、取消重试、删除失败项等命令入口 |
 | `apps/kabegame/src/stores/failedImages.ts` | 前端失败图片事件增量同步 |
-| `apps/kabegame/src/views/TaskDetail.vue`、`apps/kabegame/src/views/FailedImages.vue` | 任务详情与失败图片列表展示 |
+| `apps/kabegame/src/views/TaskDetail.vue`、`apps/kabegame/src/components/FailedImagesDialog.vue`、`apps/kabegame/src/components/common/FailedImagesHeaderButton.vue` | 任务详情、Header 失败图片入口与失败图片弹窗展示 |
 
 额外涉及：
 | `src-tauri/kabegame-core/src/app_paths.rs` | `downloads_temp_dir()` 提供溢写临时目录；`temp_dir` 提供通用临时目录；启动时临时文件清理逻辑 |

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompressVideoForPreviewArgs {
-    pub input_path: String,
+    pub input_uri: String,
     pub output_path: String,
 }
 
@@ -18,7 +18,7 @@ pub struct CompressVideoForPreviewResponse {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtractVideoFramesArgs {
-    pub input_path: String,
+    pub input_uri: String,
     pub output_dir: String,
 }
 

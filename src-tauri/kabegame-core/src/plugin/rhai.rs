@@ -1,4 +1,4 @@
-use crate::crawler::scheduler::PageStackEntry;
+use crate::crawler::task_scheduler::PageStackEntry;
 use crate::crawler::xhh_sign;
 use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
@@ -139,25 +139,8 @@ fn run_rhai_download_image_sync(
     custom_display_name: Option<String>,
     metadata_id: Option<i64>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    if dq_handle.is_download_canceled_blocking(&task_id) {
+    if TaskScheduler::global().is_task_canceled_blocking(&task_id) {
         return Err("Task canceled".into());
-    }
-
-    // 注意：不在 Rhai 层做「按本地路径已存在就跳过」的短路。
-    const MAX_TASK_IMAGES: usize = 10000;
-    match Storage::get_task_image_ids(&task_id) {
-        Ok(image_ids) => {
-            if image_ids.len() >= MAX_TASK_IMAGES {
-                return Err(format!(
-                    "任务图片数量已达到上限（{} 张），无法继续爬取",
-                    MAX_TASK_IMAGES
-                )
-                .into());
-            }
-        }
-        Err(e) => {
-            return Err(format!("检查任务图片数量失败: {}", e).into());
-        }
     }
 
     let download_start_time = std::time::SystemTime::now()
@@ -267,11 +250,11 @@ fn parse_create_image_metadata_version(opts: &Map) -> Result<u32, Box<rhai::Eval
 
 fn get_page_stack(
     task_id_holder: &Shared<String>,
-) -> Result<crate::crawler::scheduler::PageStack, Box<rhai::EvalAltResult>> {
+) -> Result<crate::crawler::task_scheduler::PageStack, Box<rhai::EvalAltResult>> {
     let task_id = get_task_id(task_id_holder);
     TaskScheduler::global()
         .page_stacks()
-        .get_stack(&task_id)
+        .get_stack_sync(&task_id)
         .ok_or_else(|| format!("Page stack not found for task {task_id}").into())
 }
 
@@ -335,7 +318,7 @@ fn http_get_text_with_retry(
         let mut redirect_count = 0;
 
         let response = loop {
-            if dq.is_download_canceled_blocking(task_id) {
+            if TaskScheduler::global().is_task_canceled_blocking(task_id) {
                 return Err("Task canceled".to_string());
             }
 
@@ -1470,7 +1453,14 @@ pub fn register_crawler_functions(
     let progress_holder = Arc::clone(&current_progress);
     engine.register_fn(
         "add_progress",
-        move |percentage: f64| -> Result<(), Box<rhai::EvalAltResult>> {
+        move |percentage: Dynamic| -> Result<(), Box<rhai::EvalAltResult>> {
+            let percentage: f64 = if percentage.is_int() {
+                percentage.as_int().unwrap() as f64
+            } else if percentage.is_float() {
+                percentage.as_float().unwrap()
+            } else {
+                return Err("add_progress: percentage must be a number".into());
+            };
             let task_id = {
                 let guard = match task_id_holder.lock() {
                     Ok(g) => g,
@@ -1487,7 +1477,7 @@ pub fn register_crawler_functions(
             };
 
             // 若任务已被取消，直接让脚本失败退出
-            if dq_handle.is_download_canceled_blocking(&task_id) {
+            if TaskScheduler::global().is_task_canceled_blocking(&task_id) {
                 return Err("Task canceled".into());
             }
 

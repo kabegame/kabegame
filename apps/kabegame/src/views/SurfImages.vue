@@ -9,6 +9,7 @@
         :enable-ctrl-key-adjust-columns="!isCompact"
         :actions="imageActions"
         :on-context-command="handleImageMenuCommand"
+        @preview-page-boundary="handlePreviewPageBoundary"
       >
         <template #before-grid>
           <PageHeader
@@ -66,7 +67,7 @@
 import { onMounted, onActivated, onDeactivated, onBeforeUnmount, onUnmounted, ref, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
-import { pathqlEntry, pathqlFetch } from "@/services/pathql";
+import { pathqlFetch } from "@/services/pathql";
 import { rowToImageInfo } from "@/utils/imageRow";
 import { withGalleryPrefix } from "@/utils/path";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
@@ -88,6 +89,7 @@ import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyStat
 import { useSurfImagesRouteStore } from "@/stores/surfImagesRoute";
 import { HeaderFeatureId, useHeaderStore } from "@kabegame/core/stores/header";
 import { useImageOperations } from "@/composables/useImageOperations";
+import { usePagedGallery } from "@/composables/usePagedGallery";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useImageTypes } from "@/composables/useImageTypes";
@@ -113,7 +115,7 @@ const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotati
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
 
 const images = ref<ImageInfo[]>([]);
-const totalImagesCount = ref(0);
+const loadedKey = ref("");
 const loading = ref(false);
 const record = ref<SurfRecord | null>(null);
 /** 路由与 VD 路径使用的站点 host（与 `surf_records.host` 一致） */
@@ -372,9 +374,24 @@ const confirmRemoveImages = async () => {
 };
 
 const isOnSurfImagesRoute = computed(() => String(route.name ?? "") === "SurfImages");
-const currentPath = computed(() => surfImagesRouteStore.currentPath);
-const currentPage = computed(() => surfImagesRouteStore.page);
 const providerRootPath = computed(() => `surf/${surfImagesRouteStore.host}`);
+
+const pagedSurf = usePagedGallery({
+  routeStore: surfImagesRouteStore,
+  images,
+  loadedKey,
+  viewRef: surfViewRef,
+  loading: { startLoading: () => { }, finishLoading: () => { } },
+  load: (path) => loadCurrentPage(path),
+  computeCountPath: () => providerRootPath.value,
+  isActive: () => isOnSurfImagesRoute.value && !!surfHost.value,
+  onCountError: () => images.value.length,
+});
+const totalImagesCount = pagedSurf.totalImagesCount;
+const currentPath = pagedSurf.currentPath;
+const currentPage = pagedSurf.currentPage;
+const handleJumpToPage = pagedSurf.handleJumpToPage;
+const handlePreviewPageBoundary = pagedSurf.handlePreviewPageBoundary;
 
 const headerStore = useHeaderStore();
 watch(
@@ -405,28 +422,17 @@ const lastVisitSubtitle = computed(() => {
   return t("surf.lastSurfTime") + date.toLocaleString();
 });
 
-const fetchPageImages = async (path: string) => {
-  clearImageMetadataCache();
-  const p = withGalleryPrefix(path);
-  const list = (await pathqlFetch<Record<string, unknown>>(p)).map(rowToImageInfo);
-  const total = await pathqlEntry(withGalleryPrefix(providerRootPath.value))
-    .then((entry) => entry.total ?? list.length)
-    .catch(() => list.length);
-  return {
-    total,
-    images: list,
-  };
-};
-
-const loadCurrentPage = async () => {
+// 仅负责拉当前页图片并写 loadedKey；总数由 usePagedGallery 经 computeCountPath 统一维护。
+const loadCurrentPage = async (path?: string) => {
   if (!surfHost.value) return;
   if (!providerRootPath.value.startsWith(`surf/${surfHost.value}`)) return;
   loading.value = true;
   try {
-    const path = currentPath.value || `${providerRootPath.value}/1`;
-    const result = await fetchPageImages(path);
-    images.value = result.images;
-    totalImagesCount.value = result.total;
+    const p = path || currentPath.value || `${providerRootPath.value}/1`;
+    clearImageMetadataCache();
+    const list = (await pathqlFetch<Record<string, unknown>>(withGalleryPrefix(p))).map(rowToImageInfo);
+    images.value = list;
+    loadedKey.value = p;
   } catch (e: any) {
     ElMessage.error(e?.message || String(e) || t("surf.loadImagesFailed"));
   } finally {
@@ -434,24 +440,13 @@ const loadCurrentPage = async () => {
   }
 };
 
-const handleJumpToPage = async (page: number) => {
-  await surfImagesRouteStore.navigate({ page });
-};
-
-watch(
-  pageSize,
-  async (_v, prev) => {
-    if (prev === undefined) return;
-    await loadCurrentPage();
-  },
-);
-
 const reloadAllImages = async () => {
   await loadCurrentPage();
+  await pagedSurf.loadTotalImagesCount();
 };
 
 useImagesChangeRefresh({
-  enabled: isOnSurfImagesRoute,
+  enabled: ref(true),
   waitMs: 500,
   filter: (p) => {
     const rid = record.value?.id ?? "";
@@ -464,7 +459,7 @@ useImagesChangeRefresh({
 
 // HIDDEN 画册成员变化：刷新当前 surf 列表（HideGate 影响可见性）
 useAlbumImagesChangeRefresh({
-  enabled: isOnSurfImagesRoute,
+  enabled: ref(true),
   waitMs: 500,
   filter: (p) => (p.albumIds ?? []).includes(HIDDEN_ALBUM_ID),
   onRefresh: async () => {
@@ -489,6 +484,7 @@ const initRecord = async (host: string) => {
     await surfImagesRouteStore.navigate({ host, page: 1 });
   }
   await loadCurrentPage();
+  await pagedSurf.loadTotalImagesCount();
 };
 
 const goBack = () => {
@@ -503,21 +499,6 @@ watch(
     if (newHost && typeof newHost === "string" && newHost !== surfHost.value) {
       await initRecord(newHost);
     }
-  }
-);
-
-watch(
-  () => currentPath.value,
-  async (newPath) => {
-    if (!isOnSurfImagesRoute.value) return;
-    if (!surfHost.value) return;
-    if (!newPath) return;
-    const root = `surf/${surfHost.value}`;
-    if (!newPath.startsWith(`${root}/`)) {
-      await surfImagesRouteStore.navigate({ host: surfHost.value, page: 1 });
-      return;
-    }
-    await loadCurrentPage();
   }
 );
 
@@ -573,7 +554,9 @@ onActivated(async () => {
 });
 
 onDeactivated(() => {
-  stopListening();
+  // 不在后台停监听:keep-alive 缓存的页在后台仍接收 images-change/album-images-change,
+  // 这样离开 surf 期间下载的图片返回时已反映(修复「返回后下载新图不出现」)。
+  // 真正的监听卸载交给 onBeforeUnmount。
   surfViewRef.value?.clearSelection?.();
 });
 </script>

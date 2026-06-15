@@ -8,9 +8,10 @@
     "devUrl": "http://localhost:1420"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [],
     "security": {
-      "capabilities": ["main-capability", "crawler-capability"],
+      "capabilities": ["main-capability", "crawler-capability", "surf-capability"],
       "csp": "default-src 'self' ipc: http://ipc.localhost; img-src * data: blob:; media-src * data: blob: ; connect-src 'self' ipc: http://ipc.localhost ws: wss: http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline' 'nonce-kabegame-ejs-bridge'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'self' blob: data: about:;",
       "assetProtocol": {
         "enable": true,
@@ -21,7 +22,7 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis"
+      "dmg"
     ],
     "icon": [
       "./icons/32x32.png", 

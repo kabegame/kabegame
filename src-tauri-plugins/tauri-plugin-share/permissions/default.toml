@@ -1,4 +1,3 @@
 [default]
-description = "Default permissions for the picker plugin (folder, images, kgpg file)."
-permissions = ["allow-pickFolder", "allow-pickImages", "allow-pickKgpgFile", "allow-openImage"]
-
+description = "Default permissions for the share plugin."
+permissions = ["allow-shareFile", "allow-copyImageToClipboard"]

@@ -27,12 +27,13 @@ class TaskNotificationService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val runningCount = intent?.getIntExtra(EXTRA_RUNNING_COUNT, 0) ?: 0
-        if (runningCount <= 0) {
+        val downloadCount = intent?.getIntExtra(EXTRA_DOWNLOAD_COUNT, 0) ?: 0
+        if (runningCount <= 0 && downloadCount <= 0) {
             stopSelf()
             return START_NOT_STICKY
         }
 
-        val notification = buildForegroundNotification(runningCount)
+        val notification = buildForegroundNotification(runningCount, downloadCount)
         val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         } else {
@@ -57,7 +58,7 @@ class TaskNotificationService : Service() {
         }
     }
 
-    private fun buildForegroundNotification(runningCount: Int): Notification {
+    private fun buildForegroundNotification(runningCount: Int, downloadCount: Int): Notification {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
             ?: Intent(Intent.ACTION_MAIN).apply {
                 setPackage(packageName)
@@ -71,8 +72,9 @@ class TaskNotificationService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val title = if (runningCount == 1) {
-            "正在运行 1 个任务"
+        // 下载优先展示;否则回退任务运行数。该通知同时充当下载子通知的分组汇总。
+        val title = if (downloadCount > 0) {
+            "下载中 · 共 $downloadCount 个"
         } else {
             "正在运行 $runningCount 个任务"
         }
@@ -80,8 +82,10 @@ class TaskNotificationService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText("点击打开应用")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentIntent(pendingIntent)
+            .setGroup(TaskNotificationPlugin.GROUP_KEY)
+            .setGroupSummary(true)
             .setOngoing(true)
             .setAutoCancel(false)
             .build()
@@ -92,5 +96,6 @@ class TaskNotificationService : Service() {
         private const val CHANNEL_NAME = "任务进度"
         const val NOTIFICATION_ID = 9001
         const val EXTRA_RUNNING_COUNT = "running_count"
+        const val EXTRA_DOWNLOAD_COUNT = "download_count"
     }
 }

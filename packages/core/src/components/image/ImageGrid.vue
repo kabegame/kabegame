@@ -191,7 +191,6 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const emit = defineEmits<{
-  "scroll-stable": [];
   // 兼容旧 API（不再由 core 触发，但保留事件名避免上层 TS/模板报错）
   addedToAlbum: [];
   "open-task": [taskId: string];
@@ -864,14 +863,6 @@ const clearSelection = () => {
 // Blob URL 的生成/失效/重建统一交给上层 loader + 全局缓存；
 // core ImageGrid 不再维护局部 override。
 
-// scroll-stable：给上层用于触发“加载图片 URL”
-let scrollStableTimer: number | null = null;
-const emitScrollStable = () => {
-  if (!props.enableScrollStableEmit) return;
-  if (scrollStableTimer) window.clearTimeout(scrollStableTimer);
-  scrollStableTimer = window.setTimeout(() => emit("scroll-stable"), props.scrollStableDelay);
-};
-
 const pulseZoomAnimation = () => {
   const container = scrollEl.value;
   if (!container) return;
@@ -1035,10 +1026,9 @@ let boundScrollEl: HTMLElement | null = null;
 const unbindScrollElement = () => {
   const el = boundScrollEl;
   if (!el) return;
-  el.removeEventListener("scroll", emitScrollStable as any);
   el.removeEventListener("scroll", scheduleVirtualRangeUpdate as any);
   el.removeEventListener("scroll", saveScrollPosition as any);
-  el.removeEventListener("wheel", handleSmoothWheel as any);
+  // el.removeEventListener("wheel", handleSmoothWheel as any);
   el.removeEventListener("scroll-buttons-scroll-command", cancelSmoothWheel as any);
   el.removeEventListener("pointerdown", cancelSmoothWheel as any, { capture: true } as any);
   boundScrollEl = null;
@@ -1050,8 +1040,6 @@ const bindScrollElement = (el: HTMLElement | null) => {
   if (!el) return;
   boundScrollEl = el;
   setupContainerResizeObserver(el);
-  // 1) scroll-stable（内部已用 setTimeout 防抖）
-  el.addEventListener("scroll", emitScrollStable, { passive: true } as any);
   // 2) 虚拟滚动范围：每帧更新一次（避免空白）
   el.addEventListener("scroll", scheduleVirtualRangeUpdate, { passive: true } as any);
   // 记录滚动位置（rAF 节流，尽量便宜）
@@ -1104,7 +1092,6 @@ onUnmounted(async () => {
     smoothWheel.raf = null;
   }
   smoothWheel.active = false;
-  if (scrollStableTimer) window.clearTimeout(scrollStableTimer);
   if (zoomAnimTimer) clearTimeout(zoomAnimTimer);
   if (saveScrollRaf != null) cancelAnimationFrame(saveScrollRaf);
   saveScrollRaf = null;
@@ -1145,7 +1132,6 @@ onDeactivated(() => {
 watch(
   () => props.images,
   (newImages) => {
-    emitScrollStable();
     scheduleVirtualUpdate();
 
     const newIds = new Set((newImages ?? []).map((img) => img.id));

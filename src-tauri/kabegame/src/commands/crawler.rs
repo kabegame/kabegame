@@ -1,4 +1,4 @@
-use kabegame_core::crawler::scheduler::{PageStackEntry, TaskTransition};
+use kabegame_core::crawler::task_scheduler::{PageStackEntry, TaskTransition};
 use kabegame_core::crawler::webview::{crawler_window_state, JsTaskPatch};
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
@@ -103,10 +103,10 @@ fn resolve_target_url(
     Ok(target.to_string())
 }
 
-fn get_page_stack(task_id: &str) -> Result<kabegame_core::crawler::scheduler::PageStack, String> {
+async fn get_page_stack(task_id: &str) -> Result<kabegame_core::crawler::task_scheduler::PageStack, String> {
     TaskScheduler::global()
         .page_stacks()
-        .get_stack(task_id)
+        .get_stack(task_id).await
         .ok_or_else(|| format!("Page stack not found for task {}", task_id))
 }
 
@@ -225,7 +225,7 @@ pub async fn crawl_exit_with_status(status: TaskStatus, only_for_task_id: Option
     );
     TaskScheduler::global()
         .page_stacks()
-        .remove_stack(&ctx.task_id);
+        .remove_stack(&ctx.task_id).await;
     let _ = state.release_task(&ctx.task_id).await;
 }
 
@@ -265,7 +265,7 @@ pub async fn crawl_error(message: String) -> Result<(), String> {
     );
     TaskScheduler::global()
         .page_stacks()
-        .remove_stack(&ctx.task_id);
+        .remove_stack(&ctx.task_id).await;
     let _ = state.release_task(&ctx.task_id).await;
     Ok(())
 }
@@ -314,11 +314,6 @@ pub async fn crawl_download_image(
     let Some(ctx) = state.get_context().await else {
         return Err("Crawler context not found".to_string());
     };
-
-    let dq = TaskScheduler::global().download_queue();
-    if dq.is_download_canceled(&ctx.task_id).await {
-        return Err("Task canceled".to_string());
-    }
 
     let target_url = resolve_target_url(&url, ctx.current_url.as_deref(), &ctx.base_url)?;
     let parsed = Url::parse(&target_url).map_err(|e| format!("Invalid URL: {}", e))?;
@@ -382,7 +377,7 @@ pub async fn crawl_download_image(
     } else {
         None
     };
-    dq.download_image(
+    TaskScheduler::global().download_queue().download_image(
         parsed,
         images_dir,
         ctx.plugin_id.clone(),
@@ -482,7 +477,7 @@ pub async fn crawl_to(app: AppHandle, payload: CrawlToPayload) -> Result<(), Str
 
     let target_url = resolve_target_url(&payload.url, ctx.current_url.as_deref(), &ctx.base_url)?;
     let task_id = ctx.task_id.clone();
-    let stack = get_page_stack(&task_id)?;
+    let stack = get_page_stack(&task_id).await?;
     let new_page_label = payload
         .page_label
         .clone()
@@ -549,7 +544,7 @@ pub async fn crawl_back(app: AppHandle, count: Option<usize>) -> Result<(), Stri
     let Some(ctx) = state.get_context().await else {
         return Err("Crawler context not found".to_string());
     };
-    let stack = get_page_stack(&ctx.task_id)?;
+    let stack = get_page_stack(&ctx.task_id).await?;
     let (previous_url, restored_page_label, restored_page_state) = {
         let mut guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
         if guard.len() < count + 1 {

@@ -1,7 +1,7 @@
 // 启动步骤函数
 
 use async_trait::async_trait;
-use kabegame_core::crawler::{scheduler, TaskScheduler};
+use kabegame_core::crawler::{task_scheduler, TaskScheduler};
 use kabegame_i18n::t;
 // 事件转发到前端（桌面与 Android 均需要，用于 tasks-change 等）
 #[cfg(not(feature = "web"))]
@@ -318,6 +318,50 @@ pub fn start_event_forward_task() {
 }
 
 /// 启动本地事件转发循环（将 Broadcaster 事件转发给 Tauri 前端，桌面与 Android 均需）
+/// 从 URL/插件 ID 推导子通知标题（取 URL 末段文件名,回退插件 ID）。
+#[cfg(all(target_os = "android", not(feature = "web")))]
+fn download_notification_title(url: &str, plugin_id: &str) -> String {
+    url.rsplit('/')
+        .next()
+        .map(|s| s.split(['?', '#']).next().unwrap_or(s))
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| plugin_id.to_string())
+}
+
+/// 镜像 TaskDrawer「正在下载」面板,把当前活跃下载 + 运行任务数同步到通知栏。
+/// 数据全部现读自 `DownloadQueue::get_active_downloads()`,startup 不维护任何集合。
+#[cfg(all(target_os = "android", not(feature = "web")))]
+async fn refresh_notifications(app: &AppHandle) {
+    use tauri_plugin_task_notification::{DownloadNotificationItem, TaskNotificationExt};
+
+    let downloads = TaskScheduler::global()
+        .download_queue()
+        .get_active_downloads()
+        .await
+        .unwrap_or_default();
+    let items: Vec<DownloadNotificationItem> = downloads
+        .iter()
+        .filter(|d| !d.state.is_terminal())
+        .map(|d| {
+            let (indeterminate, progress) = match d.total_bytes {
+                Some(total) if total > 0 => {
+                    (false, (d.received_bytes.saturating_mul(100) / total).min(100) as u8)
+                }
+                _ => (true, 0u8),
+            };
+            DownloadNotificationItem {
+                id: d.id,
+                title: download_notification_title(&d.url, &d.plugin_id),
+                indeterminate,
+                progress,
+            }
+        })
+        .collect();
+    let running = TaskScheduler::global().running_worker_count() as u32;
+    let _ = app.task_notification().update_notifications(running, items).await;
+}
+
 pub fn start_event_loop(#[cfg(not(feature = "web"))] app: AppHandle) {
     #[cfg(feature = "web")]
     let bus = event_bus().clone();
@@ -404,15 +448,9 @@ pub fn start_event_loop(#[cfg(not(feature = "web"))] app: AppHandle) {
                 }
                 #[cfg(all(target_os = "android", not(feature = "web")))]
                 DaemonEvent::TaskChanged { diff, .. } => {
-                    if let Some(s) = diff.get("status").and_then(|v| v.as_str()) {
-                        use tauri_plugin_task_notification::TaskNotificationExt;
-                        let running = TaskScheduler::global().running_worker_count() as u32;
-                        let tn = app.task_notification();
-                        if running > 0 {
-                            let _ = tn.update_task_notification(running).await;
-                        } else if s == "completed" || s == "failed" || s == "canceled" {
-                            let _ = tn.clear_task_notification().await;
-                        }
+                    // 任务状态变化时刷新汇总(运行数 + 下载快照);完成态由命令内「无下载+无运行」自动转「全部完成」。
+                    if diff.get("status").is_some() {
+                        refresh_notifications(&app).await;
                     }
                 }
                 _ => {
@@ -422,6 +460,17 @@ pub fn start_event_loop(#[cfg(not(feature = "web"))] app: AppHandle) {
                         serde_json::to_value(&event).unwrap_or_else(|_| serde_json::Value::Null),
                     );
                 }
+            }
+
+            // Android:下载事件追加副作用驱动通知刷新(不抢占默认臂的 app.emit,前端 TaskDrawer 照常)。
+            #[cfg(all(target_os = "android", not(feature = "web")))]
+            if matches!(
+                &*event,
+                DaemonEvent::DownloadState { .. }
+                    | DaemonEvent::DownloadProgress { .. }
+                    | DaemonEvent::DownloadRemoved { .. }
+            ) {
+                refresh_notifications(&app).await;
             }
         }
     };

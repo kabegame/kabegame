@@ -28,7 +28,7 @@
     "windows": [],
     {{/if}}
     "security": {
-      "capabilities": ["main-capability"{{#unless isAndroid}}, "crawler-capability"{{/unless}}],
+      "capabilities": ["main-capability"{{#if isAndroid}}, "android-capability"{{else}}, "crawler-capability", "surf-capability"{{/if}}],
       "csp": "default-src 'self' ipc: http://ipc.localhost{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; img-src * data: blob:; media-src * data: blob: ; connect-src 'self' ipc: http://ipc.localhost ws: wss:{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}} http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline' 'nonce-kabegame-ejs-bridge'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'self' blob: data: about:;",
       "assetProtocol": {
         "enable": true,

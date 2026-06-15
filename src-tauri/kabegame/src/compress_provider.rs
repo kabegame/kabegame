@@ -27,11 +27,11 @@ impl<R: Runtime> PluginVideoCompressProvider<R> {
 #[derive(Debug)]
 enum Request {
     Compress {
-        input_path: String,
+        input_uri: String,
         output_path: String,
     },
     GenerateGifThumbnail {
-        input_path: String,
+        input_uri: String,
         output_path: String,
     },
 }
@@ -56,7 +56,7 @@ fn run_worker_loop<R: Runtime + 'static>(
     while let Ok((req, resp_tx)) = rx.recv() {
         let response = match req {
             Request::Compress {
-                input_path,
+                input_uri,
                 output_path,
             } => {
                 let p = &provider;
@@ -64,7 +64,7 @@ fn run_worker_loop<R: Runtime + 'static>(
                     let result = p
                         .app_handle
                         .compress()
-                        .compress_video_for_preview(input_path, output_path)
+                        .compress_video_for_preview(input_uri, output_path)
                         .await
                         .map_err(|e| e.to_string())?;
                     Ok(VideoCompressResult {
@@ -75,7 +75,7 @@ fn run_worker_loop<R: Runtime + 'static>(
                 }))
             }
             Request::GenerateGifThumbnail {
-                input_path,
+                input_uri,
                 output_path,
             } => {
                 let p = &provider;
@@ -91,7 +91,7 @@ fn run_worker_loop<R: Runtime + 'static>(
                         .app_handle
                         .compress()
                         .extract_video_frames(
-                            input_path.clone(),
+                            input_uri.clone(),
                             frame_dir.to_string_lossy().to_string(),
                         )
                         .await
@@ -131,22 +131,22 @@ impl ChannelVideoCompressProvider {
 impl AndroidVideoCompressProvider for ChannelVideoCompressProvider {
     async fn compress_video_for_preview(
         &self,
-        input_path: &Path,
+        input_uri: &str,
         output_path: &Path,
     ) -> Result<VideoCompressResult, String> {
         let (resp_tx, resp_rx) = oneshot::channel();
         let is_gif = output_path
             .extension()
-            .map(|e| e.eq_ignore_ascii_case("gif"))
+            .map(|e: &std::ffi::OsStr| e.eq_ignore_ascii_case("gif"))
             .unwrap_or(false);
         let req = if is_gif {
             Request::GenerateGifThumbnail {
-                input_path: input_path.to_string_lossy().to_string(),
+                input_uri: input_uri.to_string(),
                 output_path: output_path.to_string_lossy().to_string(),
             }
         } else {
             Request::Compress {
-                input_path: input_path.to_string_lossy().to_string(),
+                input_uri: input_uri.to_string(),
                 output_path: output_path.to_string_lossy().to_string(),
             }
         };

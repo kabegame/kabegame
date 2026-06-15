@@ -65,7 +65,7 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers�
 - 🎨 **Wallpaper setter (image/video)**: Collect, manage, and rotate anime wallpapers; auto-switch desktop wallpaper from albums (random or sequential)
 - 🖼️ **Image manager (image/video)**: Gallery browsing, album organization, virtual disk (drive letter on Windows, virtual folder on macOS/Linux), drag-and-drop import for local images/videos/folders/archives or kgpg plugins
 
-(Video support: mp4, mov, wmv, webm, mkv — standard build only; light build displays existing videos but does not support new video downloads/imports)
+(Video support: mp4, mov, wmv, webm, mkv — desktop builds use FFmpeg/rsmpeg; Android uses platform media APIs and does not compile FFmpeg)
 
 ## Installation
 
@@ -325,7 +325,7 @@ bun b -c kabegame-cli             # CLI
 bun check -c kabegame                # Vue + cargo
 bun check -c kabegame --skip cargo   # Vue only
 
-# Build FFmpeg libav* libraries (required for standard/CLI; not needed for light mode)
+# Build FFmpeg libav* libraries (required for desktop standard/light/CLI; not needed for Android)
 bun run build:ffmpeg             # Needs libx264 (macOS: brew install x264, Ubuntu: libx264-dev)
 ```
 
@@ -447,7 +447,7 @@ Built on these open-source projects:
 - [**Scraper**](https://github.com/causal-agent/scraper) - HTML parsing
 - [**Rusqlite**](https://github.com/rusqlite/rusqlite) - SQLite
 - [**Image**](https://github.com/image-rs/image) - Image processing
-- [**FFmpeg**](https://ffmpeg.org/) / [**rsmpeg**](https://github.com/larksuite/rsmpeg) - Video ingestion (in-process via rsmpeg; standard/CLI only)
+- [**FFmpeg**](https://ffmpeg.org/) / [**rsmpeg**](https://github.com/larksuite/rsmpeg) - Desktop video ingestion (in-process via rsmpeg)
 - [**Prisma**](https://github.com/prisma/prisma) - DB schema docs
 
 ### Build

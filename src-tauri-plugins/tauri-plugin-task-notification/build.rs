@@ -1,4 +1,4 @@
-const COMMANDS: &[&str] = &["updateTaskNotification", "clearTaskNotification"];
+const COMMANDS: &[&str] = &["updateNotifications"];
 
 fn main() {
     tauri_plugin::Builder::new(COMMANDS)

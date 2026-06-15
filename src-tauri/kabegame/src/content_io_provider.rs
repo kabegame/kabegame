@@ -43,6 +43,8 @@ enum Request {
         display_name: String,
     },
     CopyExtractedImagesToPictures(String),
+    ComputeHash(String),
+    GetImageThumbnail { uri: String, output_path: String },
 }
 
 #[derive(Debug)]
@@ -58,6 +60,8 @@ enum Response {
     GetDisplayName(Result<String, String>),
     CopyImageToPictures(Result<String, String>),
     CopyExtractedImagesToPictures(Result<Vec<CopiedImageEntry>, String>),
+    ComputeHash(Result<String, String>),
+    GetImageThumbnail(Result<(), String>),
 }
 
 /// 在独立线程中运行真实 Provider，用 channel 接收请求并返回结果。避免 Wry 跨线程 (Send/Sync)。
@@ -223,6 +227,28 @@ fn run_worker_loop<R: Runtime + 'static>(
                         .collect())
                 }))
             }
+            Request::ComputeHash(uri) => {
+                let p = &provider;
+                Response::ComputeHash(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .picker()
+                        .compute_hash(uri)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(resp.hash)
+                }))
+            }
+            Request::GetImageThumbnail { uri, output_path } => {
+                let p = &provider;
+                Response::GetImageThumbnail(rt.block_on(async move {
+                    p.app_handle
+                        .picker()
+                        .get_image_thumbnail(uri, output_path)
+                        .await
+                        .map_err(|e| e.to_string())
+                }))
+            }
         };
         let _ = resp_tx.send(response);
     }
@@ -378,6 +404,34 @@ impl ContentIoProvider for ChannelContentIoProvider {
             .map_err(|e| e.to_string())?;
         match resp_rx.await.map_err(|e| e.to_string())? {
             Response::CopyExtractedImagesToPictures(r) => r,
+            _ => Err("unexpected response".to_string()),
+        }
+    }
+
+    async fn compute_hash(&self, uri: &str) -> Result<String, String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send((Request::ComputeHash(uri.to_string()), resp_tx))
+            .map_err(|e| e.to_string())?;
+        match resp_rx.await.map_err(|e| e.to_string())? {
+            Response::ComputeHash(r) => r,
+            _ => Err("unexpected response".to_string()),
+        }
+    }
+
+    async fn get_image_thumbnail(&self, uri: &str, output_path: &str) -> Result<(), String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send((
+                Request::GetImageThumbnail {
+                    uri: uri.to_string(),
+                    output_path: output_path.to_string(),
+                },
+                resp_tx,
+            ))
+            .map_err(|e| e.to_string())?;
+        match resp_rx.await.map_err(|e| e.to_string())? {
+            Response::GetImageThumbnail(r) => r,
             _ => Err("unexpected response".to_string()),
         }
     }

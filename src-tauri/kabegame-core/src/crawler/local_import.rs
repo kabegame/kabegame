@@ -67,6 +67,10 @@ struct LocalImportHook {
 }
 
 impl LocalImportHook {
+    async fn is_canceled(&self) -> bool {
+        TaskScheduler::global().is_task_canceled(&self.task_id).await
+    }
+
     fn next_download_start_time(&mut self) -> u64 {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -186,44 +190,28 @@ impl LocalImportHook {
             return Ok(());
         }
 
-        let bytes = io.read_file_bytes(uri).await?;
-        let hash = crate::crawler::downloader::compute_bytes_hash(&bytes);
-        let thumbnail_path = if is_video {
-            prepare_android_video_thumb(&bytes, &mime).await
-        } else {
-            None
-        };
-        let display_name = match custom_display_name {
-            Some(name) if !name.trim().is_empty() => Some(name),
-            _ => io
-                .get_display_name(uri)
-                .await
-                .ok()
-                .filter(|name| !name.trim().is_empty()),
-        };
-        let headers: HashMap<String, String> = HashMap::new();
-
-        let result = crate::crawler::downloader::process_downloaded_content_image_to_storage(
+        let result = crate::crawler::downloader::postprocess_downloaded_image(
             &*self.download_queue,
             next_download_id(),
-            uri,
-            &hash,
-            thumbnail_path.as_deref(),
-            mime,
+            crate::crawler::downloader::PostprocessSource::ContentUri,
+            false,
+            url,
             PLUGIN_ID,
-            self.task_id,
+            Some(self.task_id.as_str()),
+            None,
+            None,
             download_start_time,
             self.output_album_id.as_deref(),
-            None,
-            &headers,
-            display_name.as_deref(),
+            &HashMap::new(),
+            false,
+            custom_display_name.as_deref(),
             None,
         )
         .await;
         wait_after_non_pool_download_if_needed(download_start_time).await;
-        result?;
-
-        self.image_count += 1;
+        if result? {
+            self.image_count += 1;
+        }
         Ok(())
     }
 }
@@ -237,22 +225,14 @@ impl FolderScanHook for LocalImportHook {
         _enter: &ScannedDir,
         _ctx: &ScanCtx<()>,
     ) -> Result<Option<()>, ScanError> {
-        if self
-            .download_queue
-            .is_download_canceled(&self.task_id)
-            .await
-        {
+        if self.is_canceled().await {
             return Err(ScanError::Fatal("Task canceled".to_string()));
         }
         Ok(Some(()))
     }
 
     async fn on_file(&mut self, file: &ScannedFile, _ctx: &ScanCtx<()>) -> Result<(), ScanError> {
-        if self
-            .download_queue
-            .is_download_canceled(&self.task_id)
-            .await
-        {
+        if self.is_canceled().await {
             return Err(ScanError::Fatal("Task canceled".to_string()));
         }
         let download_start_time = self.next_download_start_time();
@@ -284,35 +264,6 @@ impl FolderScanHook for LocalImportHook {
     }
 }
 
-#[cfg(target_os = "android")]
-async fn prepare_android_video_thumb(bytes: &[u8], mime: &Option<String>) -> Option<PathBuf> {
-    let ext = mime
-        .as_deref()
-        .and_then(crate::image_type::ext_from_mime)
-        .unwrap_or_else(|| "mp4".to_string());
-    let temp_dir = crate::app_paths::AppPaths::global().temp_dir.clone();
-    let _ = fs::create_dir_all(&temp_dir).await;
-    let temp_path = temp_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext));
-
-    if let Err(e) = fs::write(&temp_path, bytes).await {
-        eprintln!(
-            "[Local Import] Android content video temp write failed: {}",
-            e
-        );
-        return None;
-    }
-
-    let result =
-        match crate::crawler::downloader::compress::compress_video_for_preview(&temp_path).await {
-            Ok(r) => Some(r.preview_path),
-            Err(e) => {
-                eprintln!("[Local Import] Android content video GIF failed: {}", e);
-                None
-            }
-        };
-    let _ = fs::remove_file(&temp_path).await;
-    result
-}
 
 /// 把输入字符串路径解析为 `Url`（file:// 或 content://），并校验存在性、规范化。
 async fn parse_input_url(path_str: &str) -> Result<Url, String> {

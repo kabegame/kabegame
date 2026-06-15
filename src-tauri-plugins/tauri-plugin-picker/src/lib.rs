@@ -38,6 +38,19 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::pick_kgpg_file,
             commands::open_image,
             commands::open_video,
+            commands::get_image_thumbnail,
+            commands::compute_hash,
+            commands::get_mime_type,
+            commands::get_display_name,
+            commands::get_content_size,
+            commands::get_image_dimensions,
+            commands::get_video_dimensions,
+            commands::is_directory,
+            commands::list_content_children,
+            commands::read_file_bytes,
+            commands::take_persistable_permission,
+            commands::copy_image_to_pictures,
+            commands::copy_extracted_images_to_pictures,
         ])
         .setup(|app, api| {
             let picker = mobile::init(app, api)?;

@@ -1,3 +1,4 @@
+use crate::crawler::TaskScheduler;
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
@@ -13,13 +14,14 @@ use url::Url;
 
 use super::postprocess_downloaded_image;
 use super::NativeDownloadState;
-use super::{download_with_retry, emit_task_log, wait_after_pool_download_if_needed};
+use super::{download_with_retry, emit_task_log, wait_after_download_if_needed};
 
 static DOWNLOAD_ID_SEQ: AtomicU64 = AtomicU64::new(1);
 
 pub fn next_download_id() -> u64 {
     DOWNLOAD_ID_SEQ.fetch_add(1, Ordering::Relaxed)
 }
+
 /// 下载状态枚举。serde `rename_all = "lowercase"` 产出现有线上小写字符串。
 /// 状态机校验在 `DownloadQueue::switch_state` 中执行。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +76,12 @@ pub struct ActiveDownloadInfo {
     #[serde(default)]
     pub native: bool,
     pub retried_for: Option<i64>,
+    /// 已接收字节数（由 writer 经 `report_progress` 持续上报）。
+    #[serde(default)]
+    pub received_bytes: u64,
+    /// 总字节数（HTTP Content-Length / content 已知大小）；未知时为 None → 不确定进度。
+    #[serde(default)]
+    pub total_bytes: Option<u64>,
 }
 
 pub(super) fn emit_task_image_counts_snapshot(task_id: &str) {
@@ -139,13 +147,9 @@ pub(super) fn upsert_failed_image_on_failure(
 #[derive(Debug, Clone)]
 pub struct DownloadRequest {
     pub id: u64,
-    // 请求url，由schema+path
     pub url: Url,
-    // 下载目录
     pub images_dir: PathBuf,
-    // 插件id，当schema为file时忽略（本地文件）
     pub plugin_id: String,
-    // 任务id
     pub task_id: String,
     pub download_start_time: u64,
     pub output_album_id: Option<String>,
@@ -157,83 +161,54 @@ pub struct DownloadRequest {
     pub metadata_id: Option<i64>,
 }
 
-#[derive(Debug)]
-pub struct DownloadPoolState {
-    pub in_flight: u32,
-    pub queue: VecDeque<DownloadRequest>,
-}
-
-impl DownloadPoolState {
-    fn has_capacity(&self, desired: u32) -> bool {
-        self.in_flight < desired
-    }
-
-    fn start_download(&mut self, request: DownloadRequest) {
-        self.queue.push_back(request);
-        self.in_flight = self.in_flight.saturating_add(1);
-    }
-
-    fn finish_download(&mut self) {
-        self.in_flight = self.in_flight.saturating_sub(1);
-    }
-}
-
-#[derive(Debug)]
-pub struct DownloadPool {
-    /// 当前存在的 worker 数量，由 worker 退出时减 1
-    pub total_workers: Mutex<u32>,
-    pub state: Mutex<DownloadPoolState>,
-    /// 有新的 job 时 notify，worker 在 loop 开头 select 等此信号
-    pub job_notify: Notify,
-    /// 需要缩减 worker 时 notify_one，worker 被唤醒后从设置取 desired，若 total > desired 则减 1 并退出
-    pub exit_notify: Notify,
-    /// 当 worker 完成时 notify_waiters，唤醒等待入队的 download() 调用者
-    pub capacity_notify: Notify,
-}
-
-impl DownloadPool {
-    pub fn new(_initial_workers: u32) -> Self {
-        Self {
-            total_workers: Mutex::new(0),
-            state: Mutex::new(DownloadPoolState {
-                in_flight: 0,
-                queue: VecDeque::new(),
-            }),
-            job_notify: Notify::new(),
-            exit_notify: Notify::new(),
-            capacity_notify: Notify::new(),
-        }
-    }
-
-    async fn finish_one_download(&self) {
-        let mut state = self.state.lock().await;
-        state.finish_download();
-        self.capacity_notify.notify_waiters(); // 唤醒所有等待入队的 download() 调用
-    }
-}
-
 #[derive(Clone)]
 pub struct DownloadQueue {
-    pub pool: Arc<DownloadPool>,
+    /// 等待被 worker 取走的下载请求
+    pub pending_queue: Arc<Mutex<VecDeque<DownloadRequest>>>,
+    /// worker 正在处理的下载
     pub active_downloads: Arc<Mutex<Vec<ActiveDownloadInfo>>>,
-    pub canceled_downloads: Arc<RwLock<HashSet<String>>>,
+    /// 待取消的 download_id
+    pub canceled_downloads: Arc<RwLock<HashSet<u64>>>,
+    /// 当前存在的 worker 数量，由 worker 退出时减 1
+    pub total_workers: Arc<Mutex<u32>>,
+    /// 有新的 job 时 notify，worker 在 loop 开头 select 等此信号
+    pub job_notify: Arc<Notify>,
+    /// 需要缩减 worker 时 notify_one，worker 被唤醒后检查 desired，若 total > desired 则减 1 并退出
+    pub exit_notify: Arc<Notify>,
+    /// 下载完成时 notify_waiters，唤醒等待容量的阻塞 download() 调用
+    pub capacity_notify: Arc<Notify>,
 }
 
 impl DownloadQueue {
-    // new 的时候先只创建一个下载线程，等 init 阶段完成之后，再手动扩容（用 set_desired_concurrency_from_settings）
     pub fn new() -> Self {
-        let pool = Arc::new(DownloadPool::new(1));
         Self {
-            pool: Arc::clone(&pool),
+            pending_queue: Arc::new(Mutex::new(VecDeque::new())),
             active_downloads: Arc::new(Mutex::new(Vec::new())),
             canceled_downloads: Arc::new(RwLock::new(HashSet::new())),
+            total_workers: Arc::new(Mutex::new(0)),
+            job_notify: Arc::new(Notify::new()),
+            exit_notify: Arc::new(Notify::new()),
+            capacity_notify: Arc::new(Notify::new()),
+        }
+    }
+
+    pub async fn cancel_retried_download(&self, failed_image_id: i64) -> bool {
+        if let Some(did) =
+            self.active_downloads.lock().await
+                .iter()
+                .find(|d| matches!(d.retried_for, Some(fid) if fid == failed_image_id))
+                .map(|d| d.id)
+        {
+            self.canceled_downloads.write().await.insert(did)
+        } else {
+            false
         }
     }
 
     pub async fn start_download_workers(&self, count: u32) {
         let n = count.max(1);
         {
-            let mut total = self.pool.total_workers.lock().await;
+            let mut total = self.total_workers.lock().await;
             *total += n;
         }
         for _ in 0..n {
@@ -244,7 +219,7 @@ impl DownloadQueue {
 
     pub async fn set_desired_concurrency_from_settings(&self) {
         let desired = Settings::global().get_max_concurrent_downloads().max(1);
-        let mut total = self.pool.total_workers.lock().await;
+        let mut total = self.total_workers.lock().await;
         if *total < desired {
             let add = desired - *total;
             *total = desired;
@@ -253,27 +228,76 @@ impl DownloadQueue {
                 let dq = Arc::new(self.clone());
                 tokio::spawn(async move { download_worker_loop(dq).await });
             }
-            self.pool.job_notify.notify_waiters();
-            self.pool.capacity_notify.notify_waiters(); // 增加并发上限后，唤醒等待中的 download() 调用
+            self.job_notify.notify_waiters();
+            self.capacity_notify.notify_waiters();
         } else if *total > desired {
             let exit_count = *total - desired;
             drop(total);
             for _ in 0..exit_count {
-                self.pool.exit_notify.notify_one();
+                self.exit_notify.notify_one();
             }
         }
     }
 
     pub fn notify_all_waiting(&self) {
-        self.pool.job_notify.notify_waiters();
+        self.job_notify.notify_waiters();
     }
 
     pub async fn get_active_downloads(&self) -> Result<Vec<ActiveDownloadInfo>, String> {
-        let tasks = self.active_downloads.lock().await;
-        let mut all = tasks.clone();
-        drop(tasks);
+        let mut all = self.active_downloads.lock().await.clone();
         all.extend(NativeDownloadState::global().get_active_downloads());
         Ok(all)
+    }
+
+    pub async fn is_active_downloading(&self, download_id: u64) -> bool {
+        self.active_downloads.lock().await.iter().any(|d| d.id == download_id)
+    }
+
+    pub async fn is_active_task_downloading(&self, task_id: &str) -> bool {
+        self.active_downloads.lock().await.iter().any(|d| d.task_id == task_id)
+    }
+
+    async fn is_pending_task_downloads(&self, task_id: &str) -> bool {
+        self.pending_queue.lock().await.iter().any(|d| d.task_id == task_id)
+    }
+
+    async fn is_pending_download(&self, download_id: u64) -> bool {
+        self.pending_queue.lock().await.iter().any(|d| d.id == download_id)
+    }
+
+    // 是否正在重试下载
+    async fn is_retrying(&self, failed_image_id: i64) -> bool {
+        self.active_downloads.lock().await.iter()
+            .any(|d| d.retried_for.is_some_and(|id| id == failed_image_id))
+        || self.pending_queue.lock().await.iter().any(|d| d.failed_image_id.is_some_and(|id| id == failed_image_id))
+    }
+
+    async fn get_pending_task_download_ids(&self, task_id: &str) -> Vec<u64> {
+        self.pending_queue.lock().await.iter()
+            .filter_map(|d| (d.task_id == task_id).then_some(d.id))
+            .collect()
+    }
+
+    /// 由 writer 在写路径上发送任务日志（warn/info/error）。
+    /// 非阻塞：用 `try_lock` 查找 task_id；拿不到锁则静默丢弃。
+    pub fn emit_log_by_download_id(&self, download_id: u64, level: &str, message: impl Into<String>) {
+        if let Ok(list) = self.active_downloads.try_lock() {
+            if let Some(t) = list.iter().find(|t| t.id == download_id) {
+                GlobalEmitter::global().emit_task_log(&t.task_id, level, &message.into());
+            }
+        }
+    }
+
+    /// 由 writer 在写路径（`poll_write` / `set_total`）中调用上报进度。
+    /// 非阻塞：用 `try_lock`；拿不到锁就跳过（进度尽力上报，偶发跳过无碍）。
+    pub fn report_progress(&self, download_id: u64, received: u64, total: Option<u64>) {
+        if let Ok(mut list) = self.active_downloads.try_lock() {
+            if let Some(t) = list.iter_mut().find(|t| t.id == download_id) {
+                t.received_bytes = received;
+                t.total_bytes = total;
+            }
+        }
+        GlobalEmitter::global().emit_download_progress(download_id, received, total);
     }
 
     pub async fn download_image(
@@ -299,6 +323,7 @@ impl DownloadQueue {
             None,
             custom_display_name,
             metadata_id,
+            true,
         )
         .await
     }
@@ -316,6 +341,9 @@ impl DownloadQueue {
         metadata_id: Option<i64>,
         custom_display_name: Option<String>,
     ) -> Result<(), String> {
+        if self.is_retrying(failed_image_id).await {
+            return Err("Has been restarted".to_string());
+        }
         self.download(
             url,
             images_dir,
@@ -327,10 +355,13 @@ impl DownloadQueue {
             Some(failed_image_id),
             custom_display_name,
             metadata_id,
+            false,
         )
         .await
     }
 
+    /// `blocking=true`：等到并发槽位空闲再入队（普通下载）。
+    /// `blocking=false`：直接入队不等待（失败重试等后台补偿场景）。
     pub async fn download(
         &self,
         url: Url,
@@ -343,29 +374,8 @@ impl DownloadQueue {
         failed_image_id: Option<i64>,
         custom_display_name: Option<String>,
         metadata_id: Option<i64>,
+        blocking: bool,
     ) -> Result<(), String> {
-        // 检查下载是否取消
-        if self.is_download_canceled(&task_id).await {
-            return Err("Task canceled".to_string());
-        }
-
-        // 如果这是一个失败重试，且当前已经在重试中了，则跳过
-        if let Some(fid) = failed_image_id {
-            let active = self.active_downloads.lock().await;
-            if active.iter().any(|t| t.retried_for == Some(fid)) {
-                drop(active);
-                emit_task_log(
-                    &task_id,
-                    "info",
-                    format!(
-                        "Retry for failed image {} is already in progress, skipping",
-                        fid
-                    ),
-                );
-                return Ok(());
-            }
-        }
-
         let download_id = next_download_id();
 
         let request = DownloadRequest {
@@ -382,49 +392,49 @@ impl DownloadQueue {
             metadata_id,
         };
 
+        if !blocking {
+            if TaskScheduler::global().is_task_canceled(&task_id).await {
+                return Err("Task canceled".into());
+            }
+            self.pending_queue.lock().await.push_back(request);
+            self.job_notify.notify_one();
+            return Ok(());
+        }
+
         loop {
-            let notified = self.pool.capacity_notify.notified();
+            let notified = self.capacity_notify.notified();
             tokio::pin!(notified);
+            // 先订阅通知再检查容量，避免在检查和等待之间错过通知
+            notified.as_mut().enable();
 
-            {
-                let mut pool_st = self.pool.state.lock().await;
-                let desired = Settings::global().get_max_concurrent_downloads().max(1);
-                if pool_st.has_capacity(desired) {
-                    pool_st.start_download(request);
-                    drop(pool_st);
-                    self.pool.job_notify.notify_one();
-                    return Ok(());
+            let desired = Settings::global().get_max_concurrent_downloads().max(1) as usize;
+            if self.active_downloads.lock().await.len() < desired {
+                if TaskScheduler::global().is_task_canceled(&task_id).await {
+                    return Err("Task canceled".into());
                 }
-                notified.as_mut().enable(); // 注册等待（在持锁期间），防止错过通知
+                self.pending_queue.lock().await.push_back(request);
+                self.job_notify.notify_one();
+                return Ok(());
             }
-            // 锁已释放，安全 await
             notified.await;
-
-            if self.is_download_canceled(&task_id).await {
-                return Err("Task canceled".to_string());
-            }
         }
     }
 
-    pub async fn cancel_download(&self, task_id: &str) {
-        let mut canceled = self.canceled_downloads.write().await;
-        canceled.insert(task_id.to_string());
-        drop(canceled);
-        self.pool.capacity_notify.notify_waiters(); // 唤醒被阻塞的 download() 调用，让它们检查取消状态
+    pub async fn is_download_canceled(&self, download_id: u64) -> bool {
+        self.canceled_downloads.read().await.contains(&download_id)
     }
 
-    pub async fn is_download_canceled(&self, task_id: &str) -> bool {
-        let c = self.canceled_downloads.read().await;
-        c.contains(task_id)
-    }
-
-    /// 同步版本，供非 async 上下文调用（内部 block_on）。
-    pub fn is_download_canceled_blocking(&self, task_id: &str) -> bool {
-        tokio::runtime::Handle::current().block_on(self.is_download_canceled(task_id))
+    /// 同步检查取消状态，供 AsyncWrite::poll_write 等同步上下文使用。
+    /// 使用 try_read 非阻塞尝试：锁被占用时返回 false（尽力检查，下次 poll 再查）。
+    pub fn is_download_canceled_sync(&self, download_id: u64) -> bool {
+        self.canceled_downloads
+            .try_read()
+            .map(|set| set.contains(&download_id))
+            .unwrap_or(false)
     }
 
     /// 将 job 加入 active_downloads 并发送 Preparing 事件。
-    pub async fn begin_active(&self, job: &DownloadRequest) {
+    pub async fn add_active_then_prepare(&self, job: &DownloadRequest) {
         let info = ActiveDownloadInfo {
             id: job.id,
             url: job.url.to_string(),
@@ -434,11 +444,11 @@ impl DownloadQueue {
             state: DownloadState::Preparing,
             native: false,
             retried_for: job.failed_image_id,
+            received_bytes: 0,
+            total_bytes: None,
         };
-        {
-            let mut tasks = self.active_downloads.lock().await;
-            tasks.push(info);
-        }
+        self.active_downloads.lock().await.push(info);
+
         GlobalEmitter::global().emit_download_state(
             &job.task_id,
             job.id,
@@ -452,12 +462,40 @@ impl DownloadQueue {
         );
     }
 
-    /// 按 id 切换 active_downloads 状态 + 发事件。状态机非法跳转直接拒绝（不改不发，warn 日志）。
+    pub async fn cancel_download(&self, download_id: u64) -> Result<bool, String> {
+        if self.is_download_canceled(download_id).await {
+            return Ok(false);
+        }
+        let in_pending = self.is_pending_download(download_id).await;
+        let is_active = self.is_active_downloading(download_id).await;
+        if in_pending || is_active {
+            Ok(self.canceled_downloads.write().await.insert(download_id))
+        } else {
+            Err("No such download".into())
+        }
+    }
+
+    pub async fn cancel_task_downloads(&self, task_id: &str) -> bool {
+        let active_ids: Vec<u64> = self.active_downloads.lock().await
+            .iter()
+            .filter(|a| a.task_id == task_id)
+            .map(|a| a.id)
+            .collect();
+        let pending_ids = self.get_pending_task_download_ids(task_id).await;
+
+        if active_ids.is_empty() && pending_ids.is_empty() {
+            return false;
+        }
+        let mut canceled = self.canceled_downloads.write().await;
+        active_ids.iter().chain(pending_ids.iter()).all(|&id| canceled.insert(id))
+    }
+
+    /// 按 id 切换 active_downloads 状态 + 发事件。状态机非法跳转直接拒绝（不改不发，stderr 日志）。
     /// 返回 true 表示已切换并发送事件。
     pub async fn switch_state(&self, id: u64, next: DownloadState, error: Option<&str>) -> bool {
         let mut downloads = self.active_downloads.lock().await;
-        if let Some(t) = downloads.iter_mut().find(|t| t.id == id) {
-            let current = t.state;
+        if let Some(download) = downloads.iter_mut().find(|t| t.id == id) {
+            let current = download.state;
             if !current.can_transition_to(next) {
                 eprintln!(
                     "[DownloadQueue] Illegal state transition: {:?} -> {:?} (id={})",
@@ -465,15 +503,19 @@ impl DownloadQueue {
                 );
                 return false;
             }
-            t.state = next;
-            let task_id = t.task_id.clone();
-            let url = t.url.clone();
-            let start_time = t.start_time;
-            let plugin_id = t.plugin_id.clone();
-            let retried_for = t.retried_for;
-            let native = t.native;
-
+            download.state = next;
+            let task_id = download.task_id.clone();
+            let url = download.url.clone();
+            let start_time = download.start_time;
+            let plugin_id = download.plugin_id.clone();
+            let retried_for = download.retried_for;
+            let native = download.native;
             drop(downloads);
+
+            if matches!(next, DownloadState::Canceled) {
+                self.canceled_downloads.write().await.retain(|&d| d != id);
+            }
+
             GlobalEmitter::global().emit_download_state(
                 &task_id,
                 id,
@@ -491,23 +533,18 @@ impl DownloadQueue {
         false
     }
 
-    /// 等待一段时间后，从 active_downloads 中移除 id 对应的条目，并发送事件
+    /// 等待一段时间后，从 active_downloads 中移除 id 对应的条目，并发送事件。
     pub async fn wait_then_finish_download(&self, id: u64) {
-        // 等待一段事件
-        wait_after_pool_download_if_needed(&self.pool).await;
-
+        wait_after_download_if_needed(&self.exit_notify).await;
         self.finish_download(id).await;
     }
 
-    /// 减少一个下载空位，从 active_downloads 中移除 id 对应的条目。
-    pub async fn finish_download(&self, id: u64) {
-        self.pool.finish_one_download().await;
-        let mut tasks = self.active_downloads.lock().await;
-
-        let task_id = tasks.iter().find(|t| t.id == id).map(|t| t.task_id.clone());
-
-        tasks.retain(|t| t.id != id);
-
+    async fn finish_download(&self, id: u64) {
+        let mut downloads = self.active_downloads.lock().await;
+        let task_id = downloads.iter().find(|t| t.id == id).map(|t| t.task_id.clone());
+        downloads.retain(|t| t.id != id);
+        drop(downloads);
+        self.capacity_notify.notify_waiters();
         if let Some(task_id) = task_id {
             GlobalEmitter::global().emit_download_removed(&task_id, id);
         }
@@ -553,25 +590,22 @@ impl DownloadQueue {
 }
 
 async fn download_worker_loop(dq: Arc<DownloadQueue>) {
-    let pool = Arc::clone(&dq.pool);
     loop {
-        // 取下载任务
         let job = tokio::select! {
-            _ = pool.exit_notify.notified() => {
+            _ = dq.exit_notify.notified() => {
                 let desired = Settings::global()
                     .get_max_concurrent_downloads()
                     .max(1);
-                let mut total = pool.total_workers.lock().await;
+                let mut total = dq.total_workers.lock().await;
                 if *total > desired {
                     *total -= 1;
                     return;
                 }
                 continue;
             }
-            _ = pool.job_notify.notified() => {
-                let mut st = pool.state.lock().await;
-
-                if let Some(job) = st.queue.pop_front() {
+            _ = dq.job_notify.notified() => {
+                let mut queue = dq.pending_queue.lock().await;
+                if let Some(job) = queue.pop_front() {
                     job
                 } else {
                     continue;
@@ -579,8 +613,17 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             }
         };
 
-        // 取出任务后，添加到 active_downloads 并发送 Preparing 事件（实际上没有必要，一瞬间就转变成下载中了）
-        dq.begin_active(&job).await;
+        // 取出任务后检查任务是否取消
+        {
+            let tasks = TaskScheduler::global().canceled_tasks.read().await;
+            if tasks.contains(&job.task_id) {
+                // 甚至没加入活跃列表，直接跳过，不需要切换取消状态
+                continue;
+            }
+            // 取出任务后、加入活跃列表前有竞态，这里在持 canceled_tasks 读锁时加入活跃列表，
+            // 避免 cancel_task 在此窗口期漏掉这个下载
+            dq.add_active_then_prepare(&job).await;
+        }
 
         let job_url = job.url.clone();
         let plugin_id_clone = job.plugin_id.clone();
@@ -588,11 +631,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
         let download_start_time = job.download_start_time;
         let auto_deduplicate = Settings::global().get_auto_deduplicate();
 
-        dq.switch_state(job.id, DownloadState::Downloading, None)
-            .await;
-
-        // 图片且开启去重时：若 URL 已在库中且源文件存在于本机，则跳过下载，仅入画册+发事件
-        // 前去重校验：url，下载完成之后还有一个哈希的后去重校验
+        // 前去重校验：url 已在库中且源文件存在于本机，则跳过下载
         let existing_by_url = auto_deduplicate
             .then(|| Storage::find_image_by_url(job.url.as_str()).ok().flatten())
             .flatten();
@@ -610,8 +649,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                     }),
                 ),
             );
-            // 检查任务是否取消，决定是否执行 入画册+任务去重字段+1
-            if !dq.is_download_canceled(&task_id_clone).await {
+            if !dq.is_download_canceled(job.id).await {
                 if let Some(ref album_id) = job.output_album_id {
                     if !album_id.trim().is_empty() {
                         let added = Storage::global()
@@ -623,8 +661,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         }
                     }
                 }
-                if let Ok(new_count) = Storage::global().increment_task_dedup_count(&task_id_clone)
-                {
+                if let Ok(new_count) = Storage::global().increment_task_dedup_count(&task_id_clone) {
                     GlobalEmitter::global().emit_task_image_counts(
                         &task_id_clone,
                         None,
@@ -633,16 +670,42 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         Some(new_count),
                     );
                 }
-                dq.switch_state(job.id, DownloadState::Completed, None)
-                    .await;
+                dq.switch_state(job.id, DownloadState::Completed, None).await;
                 clear_failed_image_after_success(job.failed_image_id);
             } else {
                 dq.switch_state(job.id, DownloadState::Canceled, None).await;
             }
-            // 结束下载
             dq.wait_then_finish_download(job.id).await;
             continue;
         }
+
+        // Android content:// 不走网络下载，直接交由 postprocess 用 ContentIoProvider 处理
+        #[cfg(target_os = "android")]
+        if job_url.scheme() == "content" {
+            dq.switch_state(job.id, DownloadState::Processing, None).await;
+            let _ = postprocess_downloaded_image(
+                &*dq,
+                job.id,
+                super::PostprocessSource::ContentUri,
+                false,
+                &job_url,
+                &plugin_id_clone,
+                Some(&task_id_clone),
+                job.failed_image_id,
+                None,
+                download_start_time,
+                job.output_album_id.as_deref(),
+                &job.http_headers,
+                false,
+                job.custom_display_name.as_deref(),
+                job.metadata_id,
+            )
+            .await;
+            dq.wait_then_finish_download(job.id).await;
+            continue;
+        }
+
+        dq.switch_state(job.id, DownloadState::Downloading, None).await;
 
         let download_result = download_with_retry(
             &dq,
@@ -655,12 +718,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
 
         match download_result {
             Ok(outcome) => {
-                // 后处理：processing 状态、去重逻辑、缩略图、入库、入画册、发事件
-                if dq.is_download_canceled(&task_id_clone).await {
-                    dq.switch_state(job.id, DownloadState::Canceled, None).await;
-                } else {
-                    dq.switch_state(job.id, DownloadState::Processing, None)
-                        .await;
+                if !dq.is_download_canceled(job.id).await {
+                    dq.switch_state(job.id, DownloadState::Processing, None).await;
 
                     #[cfg(target_os = "android")]
                     let postprocess_dir = crate::app_paths::AppPaths::global()
@@ -669,16 +728,16 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                     #[cfg(not(target_os = "android"))]
                     let postprocess_dir = job.images_dir.clone();
 
-                    let (source, delete_soruce) = match &outcome {
+                    let (source, delete_source) = match &outcome {
                         super::DownloadOutcome::Bytes(b) => (super::PostprocessSource::Bytes {
                             output_dir: &postprocess_dir,
                             bytes: b,
                         }, false),
                         super::DownloadOutcome::Path(p) => {
                             #[cfg(not(target_os = "android"))]
-                            {( super::PostprocessSource::Path { path: p, relocate_to: Some(&job.images_dir) } , true)}
+                            {( super::PostprocessSource::Path { path: p, relocate_to: Some(&job.images_dir) }, true )}
                             #[cfg(target_os = "android")]
-                            {( super::PostprocessSource::Path { path: p, relocate_to: None } , true)}
+                            {( super::PostprocessSource::Path { path: p, relocate_to: None }, true )}
                         }
                     };
 
@@ -686,7 +745,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         &*dq,
                         job.id,
                         source,
-                        delete_soruce,
+                        delete_source,
                         &job_url,
                         &plugin_id_clone,
                         Some(&task_id_clone),
@@ -700,10 +759,12 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         job.metadata_id,
                     )
                     .await;
+                } else {
+                    dq.switch_state(job.id, DownloadState::Canceled, None).await;
                 }
             }
             Err(e) => {
-                if !e.contains("Task canceled") {
+                if !dq.is_download_canceled(job.id).await {
                     emit_task_log(
                         &task_id_clone,
                         "error",
@@ -715,8 +776,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             }),
                         ),
                     );
-                }
-                if !e.contains("Task canceled") {
                     upsert_failed_image_on_failure(
                         job.failed_image_id,
                         &task_id_clone,
@@ -728,20 +787,13 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         job.metadata_id,
                         job.custom_display_name.as_deref(),
                     );
-                }
-                let state = if e.contains("Task canceled") {
-                    DownloadState::Canceled
+                    dq.switch_state(job.id, DownloadState::Failed, Some(&e)).await;
                 } else {
-                    DownloadState::Failed
-                };
-                dq.switch_state(job.id, state, Some(&e)).await;
-                if !e.contains("Task canceled") {
-                    GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
+                    dq.switch_state(job.id, DownloadState::Canceled, None).await;
                 }
             }
         }
 
-        // 两个分支的公共收尾：扣减 in_flight、通知
         dq.wait_then_finish_download(job.id).await;
     }
 }

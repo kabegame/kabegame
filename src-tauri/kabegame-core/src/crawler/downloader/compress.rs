@@ -27,7 +27,7 @@ pub struct VideoCompressResult {
 pub trait AndroidVideoCompressProvider: Send + Sync + 'static {
     async fn compress_video_for_preview(
         &self,
-        input_path: &Path,
+        input_uri: &str,
         output_path: &Path,
     ) -> Result<VideoCompressResult, String>;
 }
@@ -50,10 +50,38 @@ fn get_android_video_compress_provider() -> Option<Arc<dyn AndroidVideoCompressP
     ANDROID_VIDEO_COMPRESS_PROVIDER.get().cloned()
 }
 
-/// 将视频转换为用于列表/预览的小 mp4。
-/// 仅在 Android（走 Kotlin provider）或启用 video feature（standard 模式）时可用。
-/// light 模式不链接 rsmpeg，此函数不存在，调用方须用 #[cfg(feature = "video")] 门控。
-#[cfg(any(target_os = "android", feature = "video"))]
+/// Android：从 content URI 生成视频预览（GIF），走 Kotlin provider。
+#[cfg(target_os = "android")]
+pub async fn compress_video_for_preview(input_uri: &str) -> Result<VideoCompressResult, String> {
+    let thumbnails_dir = crate::app_paths::AppPaths::global().thumbnails_dir();
+    tokio::fs::create_dir_all(&thumbnails_dir)
+        .await
+        .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
+
+    let preview_id = uuid::Uuid::new_v4();
+    let out_path = thumbnails_dir.join(format!("{preview_id}.gif"));
+
+    if let Some(provider) = get_android_video_compress_provider() {
+        return provider.compress_video_for_preview(input_uri, &out_path).await;
+    }
+
+    // 兜底：通过 content IO 读取字节写入输出文件
+    let bytes = crate::crawler::content_io::get_content_io_provider()
+        .read_file_bytes(input_uri)
+        .await
+        .map_err(|e| format!("Android fallback read failed: {e}"))?;
+    tokio::fs::write(&out_path, &bytes)
+        .await
+        .map_err(|e| format!("Android fallback write failed: {e}"))?;
+    Ok(VideoCompressResult {
+        preview_path: out_path,
+        width: None,
+        height: None,
+    })
+}
+
+/// 桌面：从文件路径生成视频预览（mp4），走 rsmpeg/FFmpeg。
+#[cfg(not(target_os = "android"))]
 pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompressResult, String> {
     let thumbnails_dir = crate::app_paths::AppPaths::global().thumbnails_dir();
     tokio::fs::create_dir_all(&thumbnails_dir)
@@ -61,75 +89,50 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
         .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
 
     let preview_id = uuid::Uuid::new_v4();
-    #[cfg(target_os = "android")]
-    let out_path = thumbnails_dir.join(format!("{preview_id}.gif"));
-    #[cfg(not(target_os = "android"))]
     let out_path = thumbnails_dir.join(format!("{preview_id}.mp4"));
 
-    #[cfg(target_os = "android")]
-    {
-        if let Some(provider) = get_android_video_compress_provider() {
-            return provider
-                .compress_video_for_preview(input_path, &out_path)
-                .await;
-        }
-
-        // 安卓兜底：若压缩插件未注册，则先拷贝原视频，避免下载链路中断。
-        tokio::fs::copy(input_path, &out_path)
-            .await
-            .map_err(|e| format!("Android fallback copy failed: {e}"))?;
-        return Ok(VideoCompressResult {
-            preview_path: out_path,
-            width: None,
-            height: None,
-        });
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        let temp_dir = crate::app_paths::AppPaths::global().temp_dir.clone();
-        tokio::fs::create_dir_all(&temp_dir)
-            .await
-            .map_err(|e| format!("Failed to create temp directory: {e}"))?;
-        let temp_out_path = temp_dir.join(format!("{preview_id}.mp4"));
-
-        let in_path = input_path.to_path_buf();
-        let temp_out_path_for_task = temp_out_path.clone();
-        let ffmpeg_result = tokio::task::spawn_blocking(move || {
-            run_ffmpeg_transcode(&in_path, &temp_out_path_for_task)
-        })
+    let temp_dir = crate::app_paths::AppPaths::global().temp_dir.clone();
+    tokio::fs::create_dir_all(&temp_dir)
         .await
-        .map_err(|e| format!("Video compress task join error: {e}"))
-        .and_then(|r| r);
+        .map_err(|e| format!("Failed to create temp directory: {e}"))?;
+    let temp_out_path = temp_dir.join(format!("{preview_id}.mp4"));
 
-        let (width, height) = match ffmpeg_result {
-            Ok(dims) => dims,
-            Err(e) => {
-                let _ = tokio::fs::remove_file(&temp_out_path).await;
-                return Err(e);
-            }
-        };
+    let in_path = input_path.to_path_buf();
+    let temp_out_path_for_task = temp_out_path.clone();
+    let ffmpeg_result = tokio::task::spawn_blocking(move || {
+        run_ffmpeg_transcode(&in_path, &temp_out_path_for_task)
+    })
+    .await
+    .map_err(|e| format!("Video compress task join error: {e}"))
+    .and_then(|r| r);
 
-        if let Err(e) = tokio::fs::copy(&temp_out_path, &out_path).await {
+    let (width, height) = match ffmpeg_result {
+        Ok(dims) => dims,
+        Err(e) => {
             let _ = tokio::fs::remove_file(&temp_out_path).await;
-            let _ = tokio::fs::remove_file(&out_path).await;
-            return Err(format!(
-                "Failed to copy video preview to thumbnails directory: {e}"
-            ));
+            return Err(e);
         }
-        let _ = tokio::fs::remove_file(&temp_out_path).await;
+    };
 
-        Ok(VideoCompressResult {
-            preview_path: out_path,
-            width: Some(width),
-            height: Some(height),
-        })
+    if let Err(e) = tokio::fs::copy(&temp_out_path, &out_path).await {
+        let _ = tokio::fs::remove_file(&temp_out_path).await;
+        let _ = tokio::fs::remove_file(&out_path).await;
+        return Err(format!(
+            "Failed to copy video preview to thumbnails directory: {e}"
+        ));
     }
+    let _ = tokio::fs::remove_file(&temp_out_path).await;
+
+    Ok(VideoCompressResult {
+        preview_path: out_path,
+        width: Some(width),
+        height: Some(height),
+    })
 }
 
 /// 进程内 FFmpeg（rsmpeg/libav*）转码：解码首个视频流 → scale 缩放 → libx264 编码（无音轨，截取前 2.5s）→ 输出 mp4。
 /// 返回输出视频的宽高（缩放后）。替代旧的 ffmpeg sidecar 进程调用。
-#[cfg(all(not(target_os = "android"), feature = "video"))]
+#[cfg(not(target_os = "android"))]
 fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u32), String> {
     use rsmpeg::avcodec::{AVCodec, AVCodecContext};
     use rsmpeg::avfilter::{AVFilter, AVFilterGraph, AVFilterInOut};
@@ -303,7 +306,7 @@ fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u
 }
 
 /// 编码一帧并交错写入输出（frame=None 表示冲洗编码器）。
-#[cfg(all(not(target_os = "android"), feature = "video"))]
+#[cfg(not(target_os = "android"))]
 fn encode_write(
     enc_ctx: &mut rsmpeg::avcodec::AVCodecContext,
     ofmt_ctx: &mut rsmpeg::avformat::AVFormatContextOutput,
@@ -341,7 +344,7 @@ fn encode_write(
 }
 
 /// 将一帧送入滤镜图，取出滤镜输出帧并编码写出（frame=None 表示冲洗滤镜）。
-#[cfg(all(not(target_os = "android"), feature = "video"))]
+#[cfg(not(target_os = "android"))]
 #[allow(clippy::too_many_arguments)]
 fn filter_encode_write(
     buffersrc_ctx: &mut rsmpeg::avfilter::AVFilterContextMut,

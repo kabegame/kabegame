@@ -7,12 +7,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{LazyLock, Mutex, Once};
 use std::time::Instant;
+use tokio::io::AsyncWriteExt;
 use tokio::time::Duration;
 use url::Url;
 
-use super::{emit_task_log, DownloadAttemptError, DownloadQueue, SchemeDownloader};
+use super::{DownloadAttemptError, DownloadWriter, SchemeDownloader};
 use crate::crawler::task_log_i18n::task_log_i18n;
-use crate::emitter::GlobalEmitter;
 use serde_json::json;
 
 /// http(s) scheme：目标路径由 URL 路径段与扩展名决定。
@@ -22,15 +22,12 @@ pub struct HttpSchemeDownloader;
 impl SchemeDownloader for HttpSchemeDownloader {
     async fn download(
         &self,
-        dq: &DownloadQueue,
         url: &Url,
-        task_id: &str,
         headers: &HashMap<String, String>,
-        out: &mut (dyn std::io::Write + Send),
+        out: &mut dyn DownloadWriter,
         already_received: u64,
-        download_id: u64,
     ) -> Result<(), DownloadAttemptError> {
-        download_http(dq, task_id, url, headers, out, already_received, download_id).await
+        download_http(url, headers, out, already_received).await
     }
 
     async fn display_name(&self, _url: &Url, final_local_path: &str) -> String {
@@ -143,9 +140,9 @@ impl HttpClientPool {
 
 static CLIENT_POOL: LazyLock<HttpClientPool> = LazyLock::new(HttpClientPool::new);
 
-pub fn build_reqwest_header_map_for_emitter(
-    task_id: &str,
+pub fn build_reqwest_header_map(
     headers: &HashMap<String, String>,
+    out: &mut dyn DownloadWriter,
 ) -> HeaderMap {
     let mut map = HeaderMap::new();
     for (k, v) in headers {
@@ -156,28 +153,20 @@ pub fn build_reqwest_header_map_for_emitter(
         let name = match HeaderName::from_bytes(key.as_bytes()) {
             Ok(n) => n,
             Err(e) => {
-                GlobalEmitter::global().emit_task_log(
-                    task_id,
-                    "warn",
-                    &task_log_i18n(
-                        "taskLogHttpHeaderInvalidName",
-                        json!({ "key": key, "detail": e.to_string() }),
-                    ),
-                );
+                out.warn(task_log_i18n(
+                    "taskLogHttpHeaderInvalidName",
+                    json!({ "key": key, "detail": e.to_string() }),
+                ));
                 continue;
             }
         };
         let value = match HeaderValue::from_str(v) {
             Ok(v) => v,
             Err(e) => {
-                GlobalEmitter::global().emit_task_log(
-                    task_id,
-                    "warn",
-                    &task_log_i18n(
-                        "taskLogHttpHeaderInvalidValue",
-                        json!({ "key": key, "detail": e.to_string() }),
-                    ),
-                );
+                out.warn(task_log_i18n(
+                    "taskLogHttpHeaderInvalidValue",
+                    json!({ "key": key, "detail": e.to_string() }),
+                ));
                 continue;
             }
         };
@@ -185,9 +174,6 @@ pub fn build_reqwest_header_map_for_emitter(
     }
     map
 }
-
-/// 进度上报节流间隔（毫秒）
-const PROGRESS_EMIT_INTERVAL_MS: u64 = 200;
 
 /// 整体请求+响应体读取超时（秒），大图或慢速站点需较长时间
 const HTTP_REQUEST_TIMEOUT_SECS: u64 = 600;
@@ -223,31 +209,23 @@ fn parse_content_range_start_and_total(header: &str) -> Option<(u64, Option<u64>
 /// 流式读入内存缓冲，按间隔上报进度；
 /// 读流失败时优先使用 Range 从已接收字节继续下载，服务端不支持时回退整包重下。
 async fn download_http(
-    dq: &DownloadQueue,
-    task_id: &str,
     url: &Url,
     headers: &HashMap<String, String>,
-    out: &mut (dyn std::io::Write + Send),
+    out: &mut dyn DownloadWriter,
     already_received: u64,
-    download_id: u64,
 ) -> Result<(), DownloadAttemptError> {
     let host = url.host_str().unwrap_or("unknown");
     let client = CLIENT_POOL
         .get_or_create(host)
         .map_err(DownloadAttemptError::resumable)?;
-    let mut header_map = build_reqwest_header_map_for_emitter(task_id, headers);
-    // 已接收量由外部告知（out 是抽象 Write，无法回读已写入长度）。
-    let mut received = already_received;
-    let mut last_emit = Instant::now();
+    let mut header_map = build_reqwest_header_map(headers, out);
+    // 已接收量由外部告知（out 是抽象 writer，无法回读已写入长度）；仅用于 Range 续传判断。
+    let received = already_received;
 
     let mut current_url = url.clone();
     let mut redirect_count: u32 = 0;
 
     let resp = loop {
-        if dq.is_download_canceled(task_id).await {
-            return Err(DownloadAttemptError::fatal("Task canceled"));
-        }
-
         let mut req = client.get(current_url.as_str());
         if !header_map.is_empty() {
             req = req.headers(header_map.clone());
@@ -340,25 +318,20 @@ async fn download_http(
             // 我们带 Range 请求续传，服务端却返回非 206（忽略 Range）：无法续传。
             // out 是抽象 Write，下载器无法自行清空已写内容，因此返回截断（Retriable），
             // 由 download_with_retry 清空缓冲后从头重下。
-            emit_task_log(
-                task_id,
-                "warn",
-                task_log_i18n(
-                    "taskLogDownloadNoPartialContent",
-                    json!({ "status": status.to_string() }),
-                ),
-            );
+            out.warn(task_log_i18n(
+                "taskLogDownloadNoPartialContent",
+                json!({ "status": status.to_string() }),
+            ));
             return Err(DownloadAttemptError::retriable(format!(
                 "server ignored Range (status {status}); truncating to restart"
             )));
         }
     }
+    // 声明总量后,进度（含字节/总量/节流上报）全部由 writer 经 DownloadQueue 处理。
+    out.set_total(total_bytes);
     let mut stream = resp.bytes_stream();
 
     while let Some(chunk_result) = stream.next().await {
-        if dq.is_download_canceled(task_id).await {
-            return Err(DownloadAttemptError::fatal("Task canceled"));
-        }
         let chunk = match chunk_result {
             Ok(c) => c,
             Err(e) => {
@@ -370,16 +343,9 @@ async fn download_http(
             }
         };
         out.write_all(&chunk)
+            .await
             .map_err(|e| DownloadAttemptError::fatal(format!("write download buffer: {e}")))?;
-        received += chunk.len() as u64;
-
-        let elapsed_ms = last_emit.elapsed().as_millis() as u64;
-        if elapsed_ms >= PROGRESS_EMIT_INTERVAL_MS {
-            last_emit = Instant::now();
-            GlobalEmitter::global().emit_download_progress(download_id, received, total_bytes);
-        }
     }
 
-    GlobalEmitter::global().emit_download_progress(download_id, received, total_bytes);
     Ok(())
 }

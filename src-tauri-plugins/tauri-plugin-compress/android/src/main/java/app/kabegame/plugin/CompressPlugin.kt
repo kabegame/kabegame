@@ -3,6 +3,7 @@ package app.kabegame.plugin
 import android.app.Activity
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.os.Build
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
@@ -23,46 +24,46 @@ class CompressPlugin(private val activity: Activity) : Plugin(activity) {
 
     @InvokeArg
     class CompressVideoForPreviewArgs {
-        var inputPath: String = ""
+        var inputUri: String = ""
         var outputPath: String = ""
     }
 
     @InvokeArg
     class ExtractVideoFramesArgs {
-        var inputPath: String = ""
+        var inputUri: String = ""
         var outputDir: String = ""
     }
 
     @Command
     fun compressVideoForPreview(invoke: Invoke) {
         val args = invoke.parseArgs(CompressVideoForPreviewArgs::class.java)
-        val inputPath = args.inputPath
+        val inputUriStr = args.inputUri
         val outputPath = args.outputPath
 
-        if (inputPath.isBlank() || outputPath.isBlank()) {
-            invoke.reject("inputPath/outputPath 不能为空")
+        if (inputUriStr.isBlank() || outputPath.isBlank()) {
+            invoke.reject("inputUri/outputPath 不能为空")
             return
         }
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val inputFile = File(inputPath)
-                if (!inputFile.exists() || !inputFile.isFile) {
-                    withContext(Dispatchers.Main) { invoke.reject("输入视频不存在: $inputPath") }
-                    return@launch
-                }
-
+                val inputUri = Uri.parse(inputUriStr)
                 val outputFile = File(outputPath)
                 outputFile.parentFile?.mkdirs()
 
-                // 当前实现先兜底复制，后续可替换为 Media3/MediaCodec 真正转码。
-                inputFile.copyTo(outputFile, overwrite = true)
+                // 兜底：从 content URI 复制字节到输出，后续可替换为 MediaCodec 真正转码。
+                activity.contentResolver.openInputStream(inputUri)?.use { inputStream ->
+                    outputFile.outputStream().use { out -> inputStream.copyTo(out) }
+                } ?: run {
+                    withContext(Dispatchers.Main) { invoke.reject("无法打开 URI: $inputUriStr") }
+                    return@launch
+                }
 
                 var width: Int? = null
                 var height: Int? = null
                 val retriever = MediaMetadataRetriever()
                 try {
-                    retriever.setDataSource(outputFile.absolutePath)
+                    retriever.setDataSource(activity, inputUri)
                     width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
                         ?.toIntOrNull()
                     height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
@@ -92,28 +93,24 @@ class CompressPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun extractVideoFrames(invoke: Invoke) {
         val args = invoke.parseArgs(ExtractVideoFramesArgs::class.java)
-        val inputPath = args.inputPath
+        val inputUriStr = args.inputUri
         val outputDir = args.outputDir
 
-        if (inputPath.isBlank() || outputDir.isBlank()) {
-            invoke.reject("inputPath/outputDir 不能为空")
+        if (inputUriStr.isBlank() || outputDir.isBlank()) {
+            invoke.reject("inputUri/outputDir 不能为空")
             return
         }
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val inputFile = File(inputPath)
-                if (!inputFile.exists() || !inputFile.isFile) {
-                    withContext(Dispatchers.Main) { invoke.reject("输入视频不存在: $inputPath") }
-                    return@launch
-                }
+                val inputUri = Uri.parse(inputUriStr)
 
                 val outDir = File(outputDir)
                 outDir.mkdirs()
 
                 val retriever = MediaMetadataRetriever()
                 try {
-                    retriever.setDataSource(inputFile.absolutePath)
+                    retriever.setDataSource(activity, inputUri)
                     val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
                     var durationUs = durationMs * 1000
                     if (durationUs <= 0L) durationUs = 2_500_000L

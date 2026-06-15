@@ -14,7 +14,7 @@ pub struct ListContentChildrenArgs {
     pub uri: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContentEntry {
     pub uri: String,
@@ -22,7 +22,7 @@ pub struct ContentEntry {
     pub is_directory: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListContentChildrenResponse {
     pub entries: Vec<ContentEntry>,
@@ -34,7 +34,7 @@ pub struct ReadContentUriArgs {
     pub uri: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadContentUriResponse {
     pub path: String,
@@ -46,7 +46,7 @@ pub struct IsDirectoryArgs {
     pub uri: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IsDirectoryResponse {
     pub is_directory: bool,
@@ -58,7 +58,7 @@ pub struct GetMimeTypeArgs {
     pub uri: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetMimeTypeResponse {
     pub mime_type: Option<String>,
@@ -70,7 +70,7 @@ pub struct GetImageDimensionsArgs {
     pub uri: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetImageDimensionsResponse {
     pub width: u32,
@@ -83,7 +83,7 @@ pub struct GetVideoDimensionsArgs {
     pub uri: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetVideoDimensionsResponse {
     pub width: u32,
@@ -96,7 +96,7 @@ pub struct GetContentSizeArgs {
     pub uri: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetContentSizeResponse {
     pub size: u64,
@@ -108,7 +108,7 @@ pub struct ReadFileBytesArgs {
     pub uri: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadFileBytesResponse {
     pub data: String,
@@ -127,10 +127,29 @@ pub struct GetDisplayNameArgs {
     pub uri: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetDisplayNameResponse {
     pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputeHashArgs {
+    pub uri: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputeHashResponse {
+    pub hash: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetImageThumbnailArgs {
+    pub uri: String,
+    pub output_path: String,
 }
 
 /// 选图结果：返回 content:// URI 列表。需 Serialize 供 command 返回前端。
@@ -174,7 +193,7 @@ pub struct CopyImageToPicturesArgs {
     pub display_name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopyImageToPicturesResponse {
     pub content_uri: String,
@@ -186,14 +205,14 @@ pub struct CopyExtractedImagesToPicturesArgs {
     pub source_dir: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopiedImageEntry {
     pub content_uri: String,
     pub display_name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopyExtractedImagesToPicturesResponse {
     pub entries: Vec<CopiedImageEntry>,

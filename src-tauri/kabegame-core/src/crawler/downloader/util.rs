@@ -226,6 +226,7 @@ mod tests {
     use super::compute_unique_download_path;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use url::Url;
 
     #[test]
     fn compute_unique_download_path_uses_linear_probe_without_hash_suffix() {
@@ -243,7 +244,7 @@ mod tests {
         fs::write(dir.join("wallpaper.jpg"), b"existing").unwrap();
         let first = compute_unique_download_path(
             &dir,
-            Url::parse("https://example.com/gallery/wallpaper.jpg?size=large"),
+            &Url::parse("https://example.com/gallery/wallpaper.jpg?size=large").unwrap(),
             Some("jpg"),
         )
         .unwrap();
@@ -255,7 +256,7 @@ mod tests {
         fs::write(&first, b"existing").unwrap();
         let second = compute_unique_download_path(
             &dir,
-            Url::parse("https://example.com/gallery/wallpaper.jpg?size=large"),
+            &Url::parse("https://example.com/gallery/wallpaper.jpg?size=large").unwrap(),
             Some("jpg"),
         )
         .unwrap();
@@ -282,7 +283,7 @@ mod tests {
 
         let path = compute_unique_download_path(
             &dir,
-            Url::parse("https://example.com/gallery/wallpaper.txt?size=large"),
+            &Url::parse("https://example.com/gallery/wallpaper.txt?size=large").unwrap(),
             Some("png"),
         )
         .unwrap();

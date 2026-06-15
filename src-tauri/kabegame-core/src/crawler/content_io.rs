@@ -32,6 +32,10 @@ pub trait ContentIoProvider: Send + Sync {
     /// content:// 文档的字节大小（通过 ContentResolver / OpenableColumns 等解析）。
     async fn get_content_size(&self, uri: &str) -> Result<u64, String>;
     async fn get_display_name(&self, uri: &str) -> Result<String, String>;
+    /// 用 SHA-256 计算 content URI 指向文件的哈希，由 Kotlin 端通过 ContentResolver 流式读取。
+    async fn compute_hash(&self, uri: &str) -> Result<String, String>;
+    /// 获取系统已计算好的图片缩略图，写入 output_path（JPEG）。
+    async fn get_image_thumbnail(&self, uri: &str, output_path: &str) -> Result<(), String>;
     async fn copy_image_to_pictures(
         &self,
         source_path: &str,

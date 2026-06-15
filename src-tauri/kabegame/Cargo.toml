@@ -25,7 +25,7 @@ url = "2"
 uuid = {workspace = true}
 
 # Tauri native app stack (activated by `standard` / `light` / `android` features)
-tauri = { version = "2.11.2", features = [ "tray-icon", "devtools", "protocol-asset", "image-png"], optional = true }
+tauri = { version = "2.11.2", features = ["macos-private-api", "tray-icon", "devtools", "protocol-asset", "image-png"], optional = true }
 tauri-plugin-clipboard-manager = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "=2.4.2", optional = true }
 tauri-plugin-global-shortcut = { version = "2.3.1", optional = true }
@@ -104,7 +104,6 @@ default = []
 # Standard desktop build: shared Tauri stack + virtual driver + video ingestion
 standard = [
     "kabegame-core/virtual-driver",
-    "kabegame-core/video",
     "dep:tauri",
     "dep:tauri-plugin-clipboard-manager",
     "dep:tauri-plugin-dialog",
@@ -116,7 +115,6 @@ standard = [
 
 # Light desktop build: shared Tauri stack + video ingestion, no virtual driver
 light = [
-    "kabegame-core/video",
     "dep:tauri",
     "dep:tauri-plugin-clipboard-manager",
     "dep:tauri-plugin-dialog",
