@@ -126,7 +126,8 @@ function getBaseTileStyle(): Record<string, string> {
     return {
         backgroundImage: baseSrc ? `url("${baseSrc}")` : "",
         backgroundRepeat: "repeat",
-        backgroundSize: "auto",
+        backgroundPosition: "center",
+        backgroundSize: "contain",
     };
 }
 
@@ -134,7 +135,8 @@ function getTopTileStyle(): Record<string, string> {
     return {
         backgroundImage: topSrc ? `url("${topSrc}")` : "",
         backgroundRepeat: "repeat",
-        backgroundSize: "auto",
+        backgroundPosition: "center",
+        backgroundSize: "contain",
     };
 }
 

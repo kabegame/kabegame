@@ -1,5 +1,7 @@
 #[cfg(not(target_os = "android"))]
-use crate::crawler::downloader::compress::compress_video_for_preview;
+use crate::crawler::downloader::compress::{
+    compress_video_for_preview, generate_compatible_image, generate_compatible_video,
+};
 use crate::crawler::downloader::{
     compute_file_hash, generate_thumbnail, wait_after_non_pool_download_if_needed,
 };
@@ -56,6 +58,7 @@ pub async fn import_local_file(
     let (width, height) = resolve_media_dimensions_sync(&path.to_string_lossy())
         .map(|(w, h)| (Some(w), Some(h)))
         .unwrap_or((None, None));
+
     let resolved_size = resolve_file_size_sync(&path.to_string_lossy()).or(Some(size));
 
     let basename = path
@@ -84,6 +87,8 @@ pub async fn import_local_file(
         )
     });
 
+    let compatible_path = build_compatible_path(path, is_video, &media_type, width, height).await;
+
     let image = ImageInfo {
         id: String::new(),
         url: None,
@@ -106,6 +111,7 @@ pub async fn import_local_file(
         last_set_wallpaper_at: None,
         size: resolved_size,
         album_order: None,
+        compatible_path,
     };
 
     let storage = Storage::global();
@@ -152,4 +158,51 @@ async fn build_thumbnail_path(path: &Path, is_video: bool) -> String {
 #[cfg(target_os = "android")]
 async fn build_thumbnail_path(path: &Path, _is_video: bool) -> String {
     path.to_string_lossy().into_owned()
+}
+
+#[cfg(not(target_os = "android"))]
+async fn build_compatible_path(
+    path: &Path,
+    is_video: bool,
+    media_type: &Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> Option<String> {
+    let result = if is_video {
+        match crate::media_dimensions::probe_media_sync(path) {
+            Some(probe) => generate_compatible_video(path, &probe).await,
+            None => Ok(None),
+        }
+    } else {
+        match (width, height, media_type.as_deref()) {
+            (Some(w), Some(h), Some(mime)) => generate_compatible_image(path, mime, w, h).await,
+            _ => Ok(None),
+        }
+    };
+    match result {
+        Ok(Some(p)) => p
+            .canonicalize()
+            .ok()
+            .map(|cp| {
+                cp.to_string_lossy()
+                    .trim_start_matches("\\\\?\\")
+                    .to_string()
+            }),
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("[local-import] compatible generation failed: {e}");
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+async fn build_compatible_path(
+    _path: &Path,
+    _is_video: bool,
+    _media_type: &Option<String>,
+    _width: Option<u32>,
+    _height: Option<u32>,
+) -> Option<String> {
+    None
 }

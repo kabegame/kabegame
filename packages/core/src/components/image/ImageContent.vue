@@ -22,9 +22,9 @@
       <template v-if="!isVideo || isVideo && prefer === 'thumbnail' && IS_ANDROID">
         <img
           v-if="!IS_ANDROID && !thumbFailed"
-          :key="`thumb:${plan.thumbnailUrl}`"
-          :src="plan.thumbnailUrl"
-          loading="eager"
+          :key="`thumb:${thumbnailUrl}`"
+          :src="thumbnailUrl"
+          loading="lazy"
           decoding="async"
           class="ic-img thumbnail-layer"
           :alt="image.id"
@@ -35,8 +35,8 @@
         />
         <img
           v-if="!originalFailed && prefer === 'original'"
-          :key="`orig:${plan.originalUrl}`"
-          :src="plan.originalUrl"
+          :key="`orig:${originalLayerSrc}`"
+          :src="originalLayerSrc"
           loading="lazy"
           decoding="async"
           class="ic-img original-layer"
@@ -78,13 +78,37 @@
 <script setup lang="ts">
 import { computed, ref, watch, watchEffect } from "vue";
 import { storeToRefs } from "pinia";
-import type { ImageInfo } from "../../types/image";
+import type { ImageInfo, ImagePrefer } from "../../types/image";
 import ImageNotFound from "../common/ImageNotFound.vue";
-import { buildImageUrlPlan, type ImagePrefer } from "../../composables/imageUrlPlan";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { useUiStore } from "../../stores/ui";
 import { useLoadingDelay } from "../../composables/useLoadingDelay";
-import { IS_ANDROID } from "../../env";
+import { fileToUrl, thumbnailToUrl, compatibleToUrl } from "../../httpServer";
+import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID, LOCAL_FILE_PROXY_PREFIX } from "../../env";
+
+// ---- Path → URL helpers (pure) ----
+const normalizeDesktopPath = (path: string | undefined): string =>
+  (path || "").trimStart().replace(/^\\\\\?\\/, "").trim();
+
+const toDesktopUrl = (path: string | undefined): string => {
+  const normalized = normalizeDesktopPath(path);
+  return normalized ? fileToUrl(normalized) : "";
+};
+
+const toDesktopThumbnailUrl = (path: string | undefined): string => {
+  const normalized = normalizeDesktopPath(path);
+  return normalized ? thumbnailToUrl(normalized) : "";
+};
+
+const toAndroidContentUrl = (path: string | undefined): string => {
+  const raw = (path || "").trim();
+  return raw.startsWith("content://") ? raw.replace("content://", CONTENT_URI_PROXY_PREFIX) : "";
+};
+
+const toAndroidLocalFileUrl = (path: string | undefined): string => {
+  const raw = (path || "").trim();
+  return !raw || raw.startsWith("content://") ? "" : LOCAL_FILE_PROXY_PREFIX + raw;
+};
 
 interface Props {
   image: ImageInfo;
@@ -113,36 +137,53 @@ const emit = defineEmits<{
 const { isCompact } = storeToRefs(useUiStore());
 const { showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 
-// ---- URL plan (pure, synchronous) ----
-const plan = computed(() => buildImageUrlPlan(props.image, props.prefer));
-
 // ---- Media type ----
 const isVideo = computed(() => isVideoMediaType(props.image.type));
 
-// ---- Single-image URL derivation ----
-const singlePrimaryUrl = computed(() =>
-  props.prefer === "original"
-    ? (plan.value.originalUrl || plan.value.thumbnailUrl)
-    : (plan.value.thumbnailUrl || plan.value.originalUrl)
-);
-const singleFallbackUrl = computed(() => {
-  const alt = props.prefer === "original" ? plan.value.thumbnailUrl : plan.value.originalUrl;
-  return alt && alt !== singlePrimaryUrl.value ? alt : "";
+// ---- Explicit URL derivation ----
+// 缩略图层 URL：桌面为缩略图文件；安卓为本地文件代理（无独立缩略图或偏好原图时为空）。
+const thumbnailUrl = computed(() => {
+  if (IS_ANDROID) {
+    const localFileUrl = toAndroidLocalFileUrl(props.image.thumbnailPath || props.image.localPath);
+    if (localFileUrl && (isVideo.value || props.prefer !== "original")) return localFileUrl;
+    return "";
+  }
+  return toDesktopThumbnailUrl(props.image.thumbnailPath);
 });
+// 浏览器兼容副本 URL：仅桌面有意义，走 /compatible 入口按 compatible_path 查表校验。
+const compatibleUrl = computed(() =>
+  IS_ANDROID || !props.image.compatiblePath ? "" : compatibleToUrl(props.image.compatiblePath)
+);
+// 原始文件 URL：桌面指向 localPath；安卓为 content:// 代理。
+const localUrl = computed(() =>
+  IS_ANDROID ? toAndroidContentUrl(props.image.localPath) : toDesktopUrl(props.image.localPath)
+);
 
 // ---- Mutable load state ----
-const useFallback    = ref(false);
 const thumbFailed    = ref(false);
 const originalFailed = ref(false);
 const videoFailed    = ref(false);
+// 兼容副本加载失败：原图层回落到原始文件重试一次。
+const compatibleError = ref(false);
+// 视频回退：先尝试兼容副本，失败后降为原始文件。
+const videoUsedFallback = ref(false);
 
 const videoEl  = ref<HTMLVideoElement | null>(null);
 
-const videoSrc = computed(() =>
-  props.prefer === "original"
-    ? (plan.value.originalUrl || plan.value.thumbnailUrl)
-    : (plan.value.thumbnailUrl || plan.value.originalUrl)
+// 原图层实际 src：兼容副本可用且未失败时优先，否则回落原始文件（回落由 compatibleError 驱动）。
+const originalLayerSrc = computed(() =>
+  compatibleUrl.value && !compatibleError.value ? compatibleUrl.value : localUrl.value
 );
+
+const videoSrc = computed(() => {
+  const compatibleOrLocal = compatibleUrl.value || localUrl.value;
+  if (videoUsedFallback.value) {
+    return localUrl.value || compatibleOrLocal;
+  }
+  return props.prefer === "original"
+    ? (compatibleOrLocal || thumbnailUrl.value)
+    : (thumbnailUrl.value || compatibleOrLocal);
+});
 
 // ---- Derived exposed state ----
 const isLost = computed(() =>
@@ -161,15 +202,15 @@ const originalMissing = computed(() => originalFailed.value);
 watch(
   () => props.image.id,
   () => {
-    useFallback.value    = false;
-    thumbFailed.value    = false;
-    originalFailed.value = false;
-    videoFailed.value    = false;
+    thumbFailed.value       = false;
+    originalFailed.value    = false;
+    videoFailed.value       = false;
+    compatibleError.value   = false;
+    videoUsedFallback.value = false;
 
     const hasAnyUrl = isVideo.value
       ? !!videoSrc.value
-      : !!(singlePrimaryUrl.value || singleFallbackUrl.value ||
-           plan.value.thumbnailUrl || plan.value.originalUrl);
+      : !!(thumbnailUrl.value || compatibleUrl.value || localUrl.value);
 
     if (!hasAnyUrl) {
       finishLoading();
@@ -197,6 +238,11 @@ const onOriginalLoad = () => {
   emit("ready");
 };
 const onOriginalError = () => {
+  // 原图层优先加载兼容副本；兼容副本失败时先回落到原始文件重试一次
+  if (compatibleUrl.value && !compatibleError.value) {
+    compatibleError.value = true;
+    return; // originalLayerSrc 自动切到原始文件，触发重新加载
+  }
   originalFailed.value = true;
   // Thumbnail layer still visible; skeleton clears only when thumb also done
   if (thumbFailed.value) finishLoading();
@@ -208,6 +254,11 @@ const onVideoReady = () => {
   emit("ready");
 };
 const onVideoError = () => {
+  // 若当前播放的是兼容副本（与原始文件不同），先降级到原始文件重试一次
+  if (!videoUsedFallback.value && compatibleUrl.value && compatibleUrl.value !== localUrl.value) {
+    videoUsedFallback.value = true;
+    return; // videoSrc computed 自动切换到 localUrl，触发重新加载
+  }
   videoFailed.value = true;
   finishLoading();
 };

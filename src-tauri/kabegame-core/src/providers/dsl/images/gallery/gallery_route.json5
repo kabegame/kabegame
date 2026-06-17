@@ -96,6 +96,11 @@
                 "sql": "images.size",
                 "as": "size",
                 "in_need": true
+            },
+            {
+                "sql": "images.compatible_path",
+                "as": "compatible_path",
+                "in_need": true
             }
         ],
         "order": [{ "sql": "images.crawled_at", "order": "asc" }],
@@ -182,6 +187,9 @@
         },
         "by_path": {
             "provider": "gallery_by_path_router"
+        },
+        "by_compatible_path": {
+            "provider": "gallery_by_compatible_path_router"
         },
         "by_thumbnail_path": {
             "provider": "gallery_by_thumbnail_path_router"

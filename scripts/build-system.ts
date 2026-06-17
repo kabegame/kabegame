@@ -59,6 +59,8 @@ interface BuildOptions {
   skip?: string;
   release?: boolean;
   args?: string[];
+  package?: string;
+  test?: string;
   /** false 表示 --no-nx：不经 nx 构建 kabegame 前端 */
   nx?: boolean;
 }
@@ -380,5 +382,40 @@ export class BuildSystem {
       );
       run("cargo", checkArgs);
     }
+  }
+
+  async test(options: BuildOptions): Promise<void> {
+    //@ts-ignore
+    this.options = Object.freeze(options);
+
+    this.commonUse(Cmd.TEST);
+    this.commonBefore();
+
+    const packageName = this.options.package || "kabegame-core";
+    const testArgs = ["test", "-p", packageName];
+    if (this.options.test) {
+      testArgs.push("--test", this.options.test);
+    }
+
+    let features: string[] = [];
+    let compileArgs: string[] | undefined;
+    if (packageName === this.context.component!.cargoComp) {
+      const prepared = this.hooks.prepareCompileArgs.call(
+        this.context.component!.comp,
+      );
+      features = prepared.features;
+      compileArgs = prepared.args;
+    }
+
+    const mergedArgs = [...(compileArgs || [])];
+    const args = this.buildCargoArgs(
+      testArgs,
+      features,
+      mergedArgs.length > 0 ? mergedArgs : undefined,
+    );
+    if (this.options.args && this.options.args.length > 0) {
+      args.push("--", ...this.options.args);
+    }
+    run("cargo", args);
   }
 }

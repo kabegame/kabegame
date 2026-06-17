@@ -151,7 +151,7 @@
   "styleCenter": "Center",
   "styleCenterDesc": "Center - original size",
   "styleTile": "Tile",
-  "styleTileDesc": "Tile - repeat",
+  "styleTileDesc": "Tile - fit-scaled, centered repeat",
   "rotationTargetTitle": "Album for rotation",
   "rotationTargetPlaceholder": "Select album for rotation",
   "rotationTargetAllGallery": "Full gallery",

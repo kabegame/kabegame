@@ -715,36 +715,3 @@ async function copyFullJson() {
   flex: 1;
 }
 </style>
-
-<style lang="scss">
-/* 与 CrawlerDialog `.crawl-dialog` 一致：整窗限高、仅 body 滚动，避免蒙层与内容双重滚动 */
-.auto-config-dialog.el-dialog {
-  max-height: 90vh !important;
-  display: flex !important;
-  flex-direction: column !important;
-  margin-top: 5vh !important;
-  margin-bottom: 5vh !important;
-  overflow: hidden !important;
-
-  .el-dialog__header {
-    flex-shrink: 0 !important;
-    padding: 20px 20px 10px !important;
-    border-bottom: 1px solid var(--anime-border);
-  }
-
-  .el-dialog__body {
-    flex: 1 1 auto !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    padding: 20px !important;
-    min-height: 0 !important;
-    max-height: none !important;
-  }
-
-  .el-dialog__footer {
-    flex-shrink: 0 !important;
-    padding: 10px 20px 20px !important;
-    border-top: 1px solid var(--anime-border);
-  }
-}
-</style>

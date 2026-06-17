@@ -151,7 +151,7 @@
   "styleCenter": "中央",
   "styleCenterDesc": "中央 - 元のサイズ",
   "styleTile": "タイル",
-  "styleTileDesc": "タイル - 繰り返し",
+  "styleTileDesc": "タイル - フィット拡大、中央から繰り返し",
   "rotationTargetTitle": "ローテーション用アルバム",
   "rotationTargetPlaceholder": "ローテーション用アルバムを選択",
   "rotationTargetAllGallery": "ギャラリー全体",

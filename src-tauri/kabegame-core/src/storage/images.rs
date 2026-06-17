@@ -80,6 +80,14 @@ pub struct ImageInfo {
     #[serde(rename(serialize = "albumOrder"), alias = "albumOrder")]
     #[serde(default)]
     pub album_order: Option<i64>,
+    /// 浏览器兼容副本路径（可空）。原始媒体为浏览器不可播放的格式时由下载/导入/Organize 生成。
+    /// 图片转 PNG（含超大图下采样）；视频转 H.264 mp4（含 AAC 音频）。
+    #[serde(
+        rename(serialize = "compatiblePath"),
+        alias = "compatiblePath",
+        default
+    )]
+    pub compatible_path: Option<String>,
 }
 
 fn deserialize_boolish<'de, D>(deserializer: D) -> Result<bool, D::Error>
@@ -439,6 +447,16 @@ impl Storage {
         ))
     }
 
+    pub fn find_image_by_compatible_path(path: &str) -> Result<Option<ImageInfo>, String> {
+        if path.is_empty() {
+            return Ok(None);
+        }
+        first_gallery_image_at(&format!(
+            "images://gallery/by_compatible_path/{}",
+            encode_provider_segment(path)
+        ))
+    }
+
     /// 按缩略图路径查找：path 可为 thumbnail_path 或（当 thumbnail_path 为空时）local_path。
     /// 查询时规范化路径（统一斜杠），与写入时 canonicalize 后的形式兼容。
     pub fn find_image_by_thumbnail_path(path: &str) -> Result<Option<ImageInfo>, String> {
@@ -505,8 +523,8 @@ impl Storage {
 
         let crawled_at_i64 = image.crawled_at as i64;
         conn.execute(
-            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata_id, thumbnail_path, hash, type, width, height, display_name, size)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata_id, thumbnail_path, hash, type, width, height, display_name, size, compatible_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 &image.url,
                 image.local_path,
@@ -522,6 +540,7 @@ impl Storage {
                 image.height.map(|v| v as i64),
                 image.display_name,
                 image.size.map(|v| v as i64),
+                image.compatible_path,
             ],
         )
         .map_err(|e| format!("Failed to add image: {}", e))?;
@@ -986,6 +1005,21 @@ impl Storage {
             }
         }
 
+        Ok(())
+    }
+
+    /// 将图片的 `compatible_path` 更新为新路径（不删除旧文件，由调用方负责）。
+    pub fn replace_image_compatible_path(
+        &self,
+        image_id: &str,
+        compatible_path: &str,
+    ) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.execute(
+            "UPDATE images SET compatible_path = ?1 WHERE id = ?2",
+            params![compatible_path, image_id],
+        )
+        .map_err(|e| format!("Failed to update compatible_path: {}", e))?;
         Ok(())
     }
 

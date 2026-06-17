@@ -67,7 +67,8 @@ CREATE TABLE images (
     display_name          TEXT    NOT NULL DEFAULT '',
     last_set_wallpaper_at INTEGER,
     size                  INTEGER,
-    description           TEXT
+    description           TEXT,
+    compatible_path       TEXT
 );
 CREATE INDEX idx_crawled_at                    ON images(crawled_at DESC);
 CREATE INDEX idx_plugin_id                     ON images(plugin_id);

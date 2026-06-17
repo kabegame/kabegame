@@ -151,7 +151,7 @@
   "styleCenter": "置中",
   "styleCenterDesc": "置中 - 原始大小置中顯示",
   "styleTile": "並排",
-  "styleTileDesc": "並排 - 重複並排顯示",
+  "styleTileDesc": "並排 - 適應縮放後置中並排",
   "rotationTargetTitle": "選擇用於輪播的畫冊",
   "rotationTargetPlaceholder": "選擇用於輪播的畫冊",
   "rotationTargetAllGallery": "全畫廊",

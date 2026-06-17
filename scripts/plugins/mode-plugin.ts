@@ -123,12 +123,13 @@ export class ModePlugin extends BasePlugin {
         }
         // windows: libs dir
         else if (OSPlugin.isWindows) {
-          this.setEnv("FFMPEG_LIBS_DIR", path.join(
+          const ffmpegBinDir = path.join(
             THIRD_DIR,
             "FFmpeg-build",
             "install",
             "bin",
-          ));
+          );
+          this.setEnv("FFMPEG_LIBS_DIR", ffmpegBinDir);
           this.setEnv("FFMPEG_INCLUDE_DIR", path.join(
             THIRD_DIR,
             "FFmpeg-build",
@@ -136,6 +137,14 @@ export class ModePlugin extends BasePlugin {
             "include",
           ));
           this.setEnv("FFMPEG_LINK_MODE", "dynamic");
+          const pathPrefixes = [BIN_DIR, ffmpegBinDir].filter((dir) => {
+            return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
+          });
+          if (pathPrefixes.length > 0) {
+            process.env.PATH = pathPrefixes.join(path.delimiter)
+              + path.delimiter
+              + (process.env.PATH || "");
+          }
         }
       }
 

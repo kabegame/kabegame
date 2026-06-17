@@ -234,9 +234,10 @@ async fn download_http(
             req = req.header(RANGE, format!("bytes={}-", received));
         }
 
-        let r = req.send().await.map_err(|e| {
-            DownloadAttemptError::resumable(format!("Failed to download: {e}"))
-        })?;
+        let r = req
+            .send()
+            .await
+            .map_err(|e| DownloadAttemptError::resumable(format!("Failed to download: {e}")))?;
 
         if r.status().is_redirection() {
             if redirect_count >= 10 {
@@ -282,7 +283,9 @@ async fn download_http(
         let retryable =
             status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error();
         if retryable {
-            return Err(DownloadAttemptError::resumable(format!("HTTP error: {status}")));
+            return Err(DownloadAttemptError::resumable(format!(
+                "HTTP error: {status}"
+            )));
         }
         return Err(DownloadAttemptError::fatal(format!("HTTP error: {status}")));
     }

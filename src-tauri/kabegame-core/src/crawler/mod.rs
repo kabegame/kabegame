@@ -3,8 +3,8 @@ pub mod downloader;
 pub mod favicon;
 pub mod local_import;
 pub mod proxy;
-pub mod task_scheduler;
 pub mod task_log_i18n;
+pub mod task_scheduler;
 pub mod webview;
 pub mod xhh_sign;
 

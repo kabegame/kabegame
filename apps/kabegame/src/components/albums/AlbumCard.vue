@@ -8,6 +8,7 @@
           :key="previewImageItemKey(slot.image)"
           :image="slot.image"
           :prefer="'thumbnail'"
+          :hover-original="false"
           class="album-hero-image-item"
           @click="handleHeroImageClick"
           @contextmenu="(e) => emit('contextmenu', e)"

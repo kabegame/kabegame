@@ -1,0 +1,35 @@
+:root {
+  --kabegame-desktop-dialog-gap: 5dvh;
+  --kabegame-desktop-dialog-max-height: 90dvh;
+  --kabegame-desktop-dialog-margin: var(--kabegame-desktop-dialog-gap) auto;
+}
+
+html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.file-drop-confirm-dialog):not(.exit-confirm-dialog) {
+  height: auto !important;
+  max-height: var(--kabegame-desktop-dialog-max-height) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  margin: var(--kabegame-desktop-dialog-margin) !important;
+  overflow: hidden !important;
+}
+
+html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.file-drop-confirm-dialog):not(.exit-confirm-dialog) .el-dialog__header {
+  flex-shrink: 0 !important;
+  padding: 20px 20px 10px !important;
+  border-bottom: 1px solid var(--anime-border);
+}
+
+html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.file-drop-confirm-dialog):not(.exit-confirm-dialog) .el-dialog__body {
+  flex: 1 1 auto !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding: 20px !important;
+  min-height: 0 !important;
+  max-height: none !important;
+}
+
+html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.file-drop-confirm-dialog):not(.exit-confirm-dialog) .el-dialog__footer {
+  flex-shrink: 0 !important;
+  padding: 10px 20px 20px !important;
+  border-top: 1px solid var(--anime-border);
+}

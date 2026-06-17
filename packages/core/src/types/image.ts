@@ -1,3 +1,6 @@
+/** 展示偏好：优先原图还是缩略图（缩略图始终作为打底层）。 */
+export type ImagePrefer = "original" | "thumbnail";
+
 /**
  * 尽量与主程序的 ImageInfo 兼容（字段多不要求全传）。
  * core 组件只依赖少量字段：id/localPath/thumbnailPath/localExists/favorite/order/crawledAt。
@@ -37,6 +40,9 @@ export interface ImageInfo {
 
   /** 图片磁盘大小（字节） */
   size?: number;
+
+  /** 浏览器兼容副本的本地路径（桌面端：浏览器无法直接播放/显示的格式会生成 H.264 MP4 / PNG 副本） */
+  compatiblePath?: string;
 }
 
 export interface TaskFailedImage {

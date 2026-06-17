@@ -68,7 +68,9 @@ struct LocalImportHook {
 
 impl LocalImportHook {
     async fn is_canceled(&self) -> bool {
-        TaskScheduler::global().is_task_canceled(&self.task_id).await
+        TaskScheduler::global()
+            .is_task_canceled(&self.task_id)
+            .await
     }
 
     fn next_download_start_time(&mut self) -> u64 {
@@ -263,7 +265,6 @@ impl FolderScanHook for LocalImportHook {
         GlobalEmitter::global().emit_task_progress(&self.task_id, self.progress);
     }
 }
-
 
 /// 把输入字符串路径解析为 `Url`（file:// 或 content://），并校验存在性、规范化。
 async fn parse_input_url(path_str: &str) -> Result<Url, String> {

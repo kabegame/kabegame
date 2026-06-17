@@ -1439,36 +1439,6 @@ watch(selectedOutputAlbumId, (newValue) => {
 </style>
 
 <style lang="scss">
-.crawl-dialog.el-dialog {
-  height: auto !important;
-  max-height: 90vh !important;
-  display: flex !important;
-  flex-direction: column !important;
-  margin: 5vh auto !important;
-  overflow: hidden !important;
-
-  .el-dialog__header {
-    flex-shrink: 0 !important;
-    padding: 20px 20px 10px !important;
-    border-bottom: 1px solid var(--anime-border);
-  }
-
-  .el-dialog__body {
-    flex: 1 1 auto !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    padding: 20px !important;
-    min-height: 0 !important;
-    max-height: none !important;
-  }
-
-  .el-dialog__footer {
-    flex-shrink: 0 !important;
-    padding: 10px 20px 20px !important;
-    border-top: 1px solid var(--anime-border);
-  }
-}
-
 .crawl-dialog.el-drawer {
   max-width: 500px !important;
 

@@ -42,6 +42,14 @@
                     </div>
                 </div>
                 <div class="option-item">
+                    <el-checkbox v-model="options.regenCompatible" />
+                    <div class="option-content">
+                        <div class="option-title">{{ $t('gallery.regenCompatible') }}</div>
+                        <div class="option-desc">{{ $t('gallery.regenCompatibleDesc') }}</div>
+                        <div class="option-slow-hint">{{ $t('gallery.regenCompatibleSlowHint') }}</div>
+                    </div>
+                </div>
+                <div class="option-item">
                     <el-checkbox v-model="options.deleteSourceFiles" />
                     <div class="option-content">
                         <div class="option-title">{{ $t('gallery.deleteSourceFiles') }}</div>
@@ -106,6 +114,14 @@
                     </div>
                 </div>
                 <div class="option-item">
+                    <el-checkbox v-model="options.regenCompatible" />
+                    <div class="option-content">
+                        <div class="option-title">{{ $t('gallery.regenCompatible') }}</div>
+                        <div class="option-desc">{{ $t('gallery.regenCompatibleDesc') }}</div>
+                        <div class="option-slow-hint">{{ $t('gallery.regenCompatibleSlowHint') }}</div>
+                    </div>
+                </div>
+                <div class="option-item">
                     <el-checkbox v-model="options.deleteSourceFiles" />
                     <div class="option-content">
                         <div class="option-title">{{ $t('gallery.deleteSourceFiles') }}</div>
@@ -152,6 +168,7 @@ interface OrganizeOptions {
     removeMissing: boolean;
     removeUnrecognized: boolean;
     regenThumbnails: boolean;
+    regenCompatible: boolean;
     deleteSourceFiles: boolean;
     rangeStart: number | null;
     rangeEnd: number | null;
@@ -178,6 +195,7 @@ const options = reactive({
     removeMissing: true, // 默认开启清除失效
     removeUnrecognized: false,
     regenThumbnails: true, // 默认开启补充缩略图
+    regenCompatible: false, // 默认关闭（重量级操作，用户按需选择）
     deleteSourceFiles: false,
 });
 
@@ -242,6 +260,7 @@ const handleConfirm = async () => {
         removeMissing: options.removeMissing,
         removeUnrecognized: options.removeUnrecognized,
         regenThumbnails: options.regenThumbnails,
+        regenCompatible: options.regenCompatible,
         deleteSourceFiles: options.deleteSourceFiles,
         rangeStart: null,
         rangeEnd: null,

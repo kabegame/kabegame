@@ -6,8 +6,9 @@ export class Cmd {
   static readonly START = "start";
   static readonly BUILD = "build";
   static readonly CHECK = "check";
+  static readonly TEST = "test";
 
-  static readonly ALL = [Cmd.DEV, Cmd.START, Cmd.BUILD, Cmd.CHECK];
+  static readonly ALL = [Cmd.DEV, Cmd.START, Cmd.BUILD, Cmd.CHECK, Cmd.TEST];
 
   constructor(private cmd: string) {}
 
@@ -25,6 +26,10 @@ export class Cmd {
 
   get isCheck(): boolean {
     return this.cmd === Cmd.CHECK;
+  }
+
+  get isTest(): boolean {
+    return this.cmd === Cmd.TEST;
   }
 }
 

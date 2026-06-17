@@ -62,7 +62,9 @@ pub async fn compress_video_for_preview(input_uri: &str) -> Result<VideoCompress
     let out_path = thumbnails_dir.join(format!("{preview_id}.gif"));
 
     if let Some(provider) = get_android_video_compress_provider() {
-        return provider.compress_video_for_preview(input_uri, &out_path).await;
+        return provider
+            .compress_video_for_preview(input_uri, &out_path)
+            .await;
     }
 
     // 兜底：通过 content IO 读取字节写入输出文件
@@ -420,6 +422,11 @@ pub fn encode_frames_dir_to_gif(frame_dir: &Path, output_path: &Path) -> Result<
     Ok(())
 }
 
+/// 兼容图片最长边像素上限。超过此上限的图片（或浏览器不支持的格式）会生成 PNG 兼容副本。
+pub const IMAGE_COMPATIBLE_MAX_DIM: u32 = 4096;
+/// 兼容视频高度上限（1080p）。
+pub const VIDEO_COMPATIBLE_MAX_HEIGHT: u32 = 1080;
+
 /// 仅当原图文件大于此阈值才生成独立预览缩略图；否则前端直接用原图。
 pub const IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES: u64 = 512 * 1024;
 /// 预览缩略图最长边像素上限。缩略图仅用于 UI（画廊网格 + 预览渐进占位），
@@ -486,7 +493,7 @@ async fn write_thumbnail_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
     Ok(thumbnail_path)
 }
 
-/// 从字节生成图片预览图；小于等于 1MiB 时返回 None，让调用方使用原图路径。
+/// 从字节生成图片预览图；小于等于阈值时返回 None，让调用方使用原图路径。
 pub async fn generate_thumbnail_from_bytes(bytes: &[u8]) -> Result<Option<PathBuf>, String> {
     if !image_needs_independent_thumbnail(bytes.len() as u64) {
         return Ok(None);
@@ -499,7 +506,7 @@ pub async fn generate_thumbnail_from_bytes(bytes: &[u8]) -> Result<Option<PathBu
     write_thumbnail_bytes(thumbnail_bytes).await.map(Some)
 }
 
-/// 图片缩略图策略：小文件直接用原图，大文件生成最长边 ≤ IMAGE_THUMBNAIL_MAX_DIM 的 JPEG 预览图。
+/// 图片缩略图策略：小文件直接用原图，大文件用 image crate 生成最长边 ≤ IMAGE_THUMBNAIL_MAX_DIM 的 JPEG 预览图。
 pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, String> {
     if !crate::image_type::is_image_by_path(image_path) {
         return Ok(None);
@@ -518,4 +525,431 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
     };
     let thumbnail_bytes = build_compressed_thumbnail_bytes(&img)?;
     write_thumbnail_bytes(thumbnail_bytes).await.map(Some)
+}
+
+/// 桌面：生成图片兼容副本（PNG）。
+/// 当图片格式浏览器不支持（heic/avif）或最长边 > `IMAGE_COMPATIBLE_MAX_DIM` 时生成；
+/// 否则返回 `Ok(None)`，不浪费 IO。
+/// 输出文件放在 `compatibles_dir`，命名为 UUID.png。
+#[cfg(not(target_os = "android"))]
+pub async fn generate_compatible_image(
+    image_path: &Path,
+    mime_type: &str,
+    width: u32,
+    height: u32,
+) -> Result<Option<PathBuf>, String> {
+    use crate::image_type::image_mime_browser_safe;
+    let max_dim = width.max(height);
+    if image_mime_browser_safe(mime_type) && max_dim <= IMAGE_COMPATIBLE_MAX_DIM {
+        return Ok(None);
+    }
+    let compatibles_dir = crate::app_paths::AppPaths::global().compatibles_dir();
+    tokio::fs::create_dir_all(&compatibles_dir)
+        .await
+        .map_err(|e| format!("Failed to create compatibles directory: {e}"))?;
+    let out_path = compatibles_dir.join(format!("{}.png", uuid::Uuid::new_v4()));
+    let in_path = image_path.to_path_buf();
+    let out_for_task = out_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        transcode_compatible_image_sync(&in_path, &out_for_task)
+    })
+    .await
+    .map_err(|e| format!("Compatible image task join error: {e}"))
+    .and_then(|r| r);
+    match result {
+        Ok(()) => Ok(Some(out_path)),
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&out_path).await;
+            Err(e)
+        }
+    }
+}
+
+/// 桌面：生成视频兼容副本（H.264 mp4，含音频）。
+/// 当 `probe.browser_safe == false` 时转码；否则返回 `Ok(None)`。
+/// 输出文件放在 `compatibles_dir`，命名为 UUID.mp4。
+#[cfg(not(target_os = "android"))]
+pub async fn generate_compatible_video(
+    video_path: &Path,
+    probe: &crate::media_dimensions::MediaProbeResult,
+) -> Result<Option<PathBuf>, String> {
+    if probe.browser_safe {
+        return Ok(None);
+    }
+    let compatibles_dir = crate::app_paths::AppPaths::global().compatibles_dir();
+    tokio::fs::create_dir_all(&compatibles_dir)
+        .await
+        .map_err(|e| format!("Failed to create compatibles directory: {e}"))?;
+    let out_path = compatibles_dir.join(format!("{}.mp4", uuid::Uuid::new_v4()));
+    let in_path = video_path.to_path_buf();
+    let out_for_task = out_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        transcode_compatible_video_sync(&in_path, &out_for_task)
+    })
+    .await
+    .map_err(|e| format!("Compatible video task join error: {e}"))
+    .and_then(|r| r);
+    match result {
+        Ok(()) => Ok(Some(out_path)),
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&out_path).await;
+            Err(e)
+        }
+    }
+}
+
+/// 图片兼容副本生成（同步）：用 image crate 打开 → 超限缩放 → PNG。
+#[cfg(not(target_os = "android"))]
+fn transcode_compatible_image_sync(
+    input_path: &Path,
+    output_path: &Path,
+) -> Result<(), String> {
+    use image::GenericImageView;
+    let img = image::open(input_path)
+        .map_err(|e| format!("Failed to open image for compatible: {e}"))?;
+    let (w, h) = img.dimensions();
+    let max = w.max(h);
+    let img = if max > IMAGE_COMPATIBLE_MAX_DIM {
+        let scale = IMAGE_COMPATIBLE_MAX_DIM as f64 / max as f64;
+        let tw = ((w as f64 * scale).round() as u32).max(1);
+        let th = ((h as f64 * scale).round() as u32).max(1);
+        img.resize(tw, th, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+    img.save_with_format(output_path, image::ImageFormat::Png)
+        .map_err(|e| format!("Failed to save compatible PNG: {e}"))
+}
+
+/// 视频兼容副本转码（同步）：解码 → scale(-2:min(1080,ih)) + yuv420p → libx264 CRF 23；
+/// 含音频轨时同步解码 → aresample=44100 → AAC 128k 编入同一 mp4。
+#[cfg(not(target_os = "android"))]
+fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Result<(), String> {
+    use rsmpeg::avcodec::{AVCodec, AVCodecContext};
+    use rsmpeg::avfilter::{AVFilter, AVFilterGraph, AVFilterInOut};
+    use rsmpeg::avformat::{AVFormatContextInput, AVFormatContextOutput};
+    use rsmpeg::avutil::{av_inv_q, ra, AVDictionary};
+    use rsmpeg::error::RsmpegError;
+    use rsmpeg::ffi;
+    use std::ffi::{CStr, CString};
+
+    const MAX_H: i32 = VIDEO_COMPATIBLE_MAX_HEIGHT as i32;
+
+    let to_cs = |p: &Path| -> Result<CString, String> {
+        CString::new(p.to_string_lossy().as_ref()).map_err(|e| format!("path NUL: {e}"))
+    };
+    let input_c = to_cs(input_path)?;
+    let output_c = to_cs(output_path)?;
+
+    // ── Input ──
+    let mut ifmt =
+        AVFormatContextInput::open(&input_c).map_err(|e| format!("open input: {e:?}"))?;
+
+    // ── Video stream ──
+    let (v_idx, v_dec) = ifmt
+        .find_best_stream(ffi::AVMEDIA_TYPE_VIDEO)
+        .map_err(|e| format!("find video: {e:?}"))?
+        .ok_or("no video stream")?;
+    let in_v_tb = ifmt.streams()[v_idx].time_base;
+    let framerate = ifmt.streams()[v_idx]
+        .guess_framerate()
+        .unwrap_or_else(|| ra(25, 1));
+
+    let mut v_dec_ctx = AVCodecContext::new(&v_dec);
+    v_dec_ctx
+        .apply_codecpar(&ifmt.streams()[v_idx].codecpar())
+        .map_err(|e| format!("video apply_codecpar: {e:?}"))?;
+    v_dec_ctx.set_pkt_timebase(in_v_tb);
+    v_dec_ctx
+        .open(None)
+        .map_err(|e| format!("open video decoder: {e:?}"))?;
+
+    // ── Audio stream (optional) ──
+    let audio_stream = ifmt
+        .find_best_stream(ffi::AVMEDIA_TYPE_AUDIO)
+        .ok()
+        .flatten();
+    let mut a_idx: Option<usize> = None;
+    let mut a_dec_ctx: Option<AVCodecContext> = None;
+    if let Some((idx, a_dec)) = audio_stream {
+        let mut ctx = AVCodecContext::new(&a_dec);
+        if ctx.apply_codecpar(&ifmt.streams()[idx].codecpar()).is_ok() {
+            ctx.set_pkt_timebase(ifmt.streams()[idx].time_base);
+            if ctx.open(None).is_ok() {
+                a_idx = Some(idx);
+                a_dec_ctx = Some(ctx);
+            }
+        }
+    }
+    let has_audio = a_dec_ctx.is_some();
+
+    // ── Video filter: buffer → scale=-2:'min(MAX_H,ih)' → format=yuv420p → buffersink ──
+    let vfg = AVFilterGraph::new();
+    let vbuf = AVFilter::get_by_name(c"buffer").ok_or("buffer filter missing")?;
+    let vbuf_sink = AVFilter::get_by_name(c"buffersink").ok_or("buffersink filter missing")?;
+    let v_args = CString::new(format!(
+        "video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",
+        v_dec_ctx.width,
+        v_dec_ctx.height,
+        v_dec_ctx.pix_fmt,
+        in_v_tb.num,
+        in_v_tb.den,
+        v_dec_ctx.sample_aspect_ratio.num.max(1),
+        v_dec_ctx.sample_aspect_ratio.den.max(1),
+    ))
+    .map_err(|e| format!("v_args NUL: {e}"))?;
+    {
+        let mut v_src = vfg
+            .create_filter_context(&vbuf, c"v_in", Some(&v_args))
+            .map_err(|e| format!("create v_src: {e:?}"))?;
+        let mut v_sink_ctx = vfg
+            .alloc_filter_context(&vbuf_sink, c"v_out")
+            .ok_or("alloc v_sink")?;
+        v_sink_ctx
+            .opt_set(c"pixel_formats", c"yuv420p")
+            .map_err(|e| format!("set v_sink pix_fmt: {e:?}"))?;
+        v_sink_ctx
+            .init_str(None)
+            .map_err(|e| format!("init v_sink: {e:?}"))?;
+        let outs = AVFilterInOut::new(c"in", &mut v_src, 0);
+        let ins = AVFilterInOut::new(c"out", &mut v_sink_ctx, 0);
+        let spec = CString::new(format!("scale=-2:'2*trunc(min({MAX_H},ih)/2)'"))
+            .map_err(|e| format!("v filter spec NUL: {e}"))?;
+        vfg.parse_ptr(&spec, Some(ins), Some(outs))
+            .map_err(|e| format!("parse v filter: {e:?}"))?;
+        vfg.config()
+            .map_err(|e| format!("config v filter: {e:?}"))?;
+    }
+    let mut v_src_ctx = vfg.get_filter(c"v_in").ok_or("v_in missing")?;
+    let mut v_sink_ctx = vfg.get_filter(c"v_out").ok_or("v_out missing")?;
+    let out_w = v_sink_ctx.get_w();
+    let out_h = v_sink_ctx.get_h();
+    let v_sink_tb = v_sink_ctx.get_time_base();
+
+    // ── Audio filter (if available): abuffer → aresample=44100 → aformat → abuffersink ──
+    // Stored in Option to handle missing audio gracefully.
+    let afg = AVFilterGraph::new();
+    let mut a_src_ctx_opt: Option<rsmpeg::avfilter::AVFilterContextMut> = None;
+    let mut a_sink_ctx_opt: Option<rsmpeg::avfilter::AVFilterContextMut> = None;
+    if let Some(ref ac) = a_dec_ctx {
+        let abuf = AVFilter::get_by_name(c"abuffer").ok_or("abuffer filter missing")?;
+        let abuf_sink =
+            AVFilter::get_by_name(c"abuffersink").ok_or("abuffersink filter missing")?;
+        let sfmt_name = unsafe {
+            let ptr = ffi::av_get_sample_fmt_name(ac.sample_fmt);
+            if ptr.is_null() {
+                "fltp"
+            } else {
+                CStr::from_ptr(ptr).to_str().unwrap_or("fltp")
+            }
+        };
+        let nb_ch = ac.ch_layout().nb_channels;
+        let ch_layout_name = if nb_ch >= 2 { "stereo" } else { "mono" };
+        let a_args = CString::new(format!(
+            "time_base=1/{}:sample_rate={}:sample_fmt={}:channel_layout={}",
+            ac.sample_rate, ac.sample_rate, sfmt_name, ch_layout_name,
+        ))
+        .map_err(|e| format!("a_args NUL: {e}"))?;
+
+        let setup = (|| -> Result<(), String> {
+            let mut a_src = afg
+                .create_filter_context(&abuf, c"a_in", Some(&a_args))
+                .map_err(|e| format!("create a_src: {e:?}"))?;
+            let mut a_sink = afg
+                .alloc_filter_context(&abuf_sink, c"a_out")
+                .ok_or("alloc a_sink")?;
+            a_sink
+                .init_str(None)
+                .map_err(|e| format!("init a_sink: {e:?}"))?;
+            let outs = AVFilterInOut::new(c"in", &mut a_src, 0);
+            let ins = AVFilterInOut::new(c"out", &mut a_sink, 0);
+            afg.parse_ptr(
+                c"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetnsamples=n=1024:p=0",
+                Some(ins),
+                Some(outs),
+            )
+            .map_err(|e| format!("parse a filter: {e:?}"))?;
+            afg.config()
+                .map_err(|e| format!("config a filter: {e:?}"))?;
+            Ok(())
+        })();
+        if setup.is_ok() {
+            a_src_ctx_opt = afg.get_filter(c"a_in");
+            a_sink_ctx_opt = afg.get_filter(c"a_out");
+        } else {
+            eprintln!("[compat-video] audio filter setup failed, proceeding video-only");
+        }
+    }
+    let has_audio_filter = a_src_ctx_opt.is_some() && a_sink_ctx_opt.is_some();
+
+    // ── Video encoder: libx264 ──
+    let v_enc = AVCodec::find_encoder_by_name(c"libx264").ok_or("libx264 not found")?;
+    let mut v_enc_ctx = AVCodecContext::new(&v_enc);
+    v_enc_ctx.set_width(out_w);
+    v_enc_ctx.set_height(out_h);
+    v_enc_ctx.set_pix_fmt(ffi::AV_PIX_FMT_YUV420P);
+    v_enc_ctx.set_time_base(av_inv_q(framerate));
+    v_enc_ctx.set_framerate(framerate);
+
+    // ── Output container ──
+    let mut ofmt =
+        AVFormatContextOutput::create(&output_c).map_err(|e| format!("create output: {e:?}"))?;
+    if ofmt.oformat().flags & ffi::AVFMT_GLOBALHEADER as i32 != 0 {
+        v_enc_ctx.set_flags(v_enc_ctx.flags | ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
+    }
+    let v_enc_opts = AVDictionary::new(c"preset", c"veryfast", 0).set(c"crf", c"23", 0);
+    v_enc_ctx
+        .open(Some(v_enc_opts))
+        .map_err(|e| format!("open video encoder: {e:?}"))?;
+
+    let v_out_idx;
+    {
+        let mut vs = ofmt.new_stream();
+        vs.set_codecpar(v_enc_ctx.extract_codecpar());
+        vs.set_time_base(v_enc_ctx.time_base);
+        v_out_idx = vs.index as usize;
+    }
+
+    // ── Audio encoder: AAC (only if audio filter pipeline succeeded) ──
+    let mut a_enc_ctx_opt: Option<AVCodecContext> = None;
+    let mut a_out_idx: usize = 0;
+    if has_audio_filter {
+        if let Some(aac) = AVCodec::find_encoder(ffi::AV_CODEC_ID_AAC) {
+            let mut ctx = AVCodecContext::new(&aac);
+            ctx.set_sample_rate(44100);
+            ctx.set_sample_fmt(ffi::AV_SAMPLE_FMT_FLTP);
+            ctx.set_bit_rate(128_000);
+            let mut ch_layout = unsafe { std::mem::zeroed::<ffi::AVChannelLayout>() };
+            unsafe { ffi::av_channel_layout_default(&mut ch_layout, 2) };
+            ctx.set_ch_layout(ch_layout);
+            if ofmt.oformat().flags & ffi::AVFMT_GLOBALHEADER as i32 != 0 {
+                ctx.set_flags(ctx.flags | ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
+            }
+            if ctx.open(None).is_ok() {
+                let mut a_stream = ofmt.new_stream();
+                a_stream.set_codecpar(ctx.extract_codecpar());
+                a_stream.set_time_base(ctx.time_base);
+                a_out_idx = a_stream.index as usize;
+                a_enc_ctx_opt = Some(ctx);
+            }
+        }
+    }
+
+    ofmt.write_header(&mut None)
+        .map_err(|e| format!("write_header: {e:?}"))?;
+
+    let in_v_tb_secs = in_v_tb.num as f64 / in_v_tb.den as f64;
+
+    // ── Main loop ──
+    loop {
+        let pkt = match ifmt.read_packet() {
+            Ok(Some(p)) => p,
+            Ok(None) => break,
+            Err(e) => return Err(format!("read_packet: {e:?}")),
+        };
+        let pkt_idx = pkt.stream_index as usize;
+
+        if pkt_idx == v_idx {
+            // Video: decode → filter → encode → write
+            v_dec_ctx
+                .send_packet(Some(&pkt))
+                .map_err(|e| format!("send video pkt: {e:?}"))?;
+            loop {
+                let mut frame = match v_dec_ctx.receive_frame() {
+                    Ok(f) => f,
+                    Err(RsmpegError::DecoderDrainError) | Err(RsmpegError::DecoderFlushedError) => {
+                        break
+                    }
+                    Err(e) => return Err(format!("receive video frame: {e:?}")),
+                };
+                let ts = frame.best_effort_timestamp;
+                frame.set_pts(ts);
+                filter_encode_write(
+                    &mut v_src_ctx,
+                    &mut v_sink_ctx,
+                    &mut v_enc_ctx,
+                    &mut ofmt,
+                    v_out_idx,
+                    v_sink_tb,
+                    Some(frame),
+                )?;
+            }
+        } else if let (Some(ai), Some(ref mut a_enc), Some(ref mut a_src), Some(ref mut a_sink)) = (
+            a_idx,
+            a_enc_ctx_opt.as_mut(),
+            a_src_ctx_opt.as_mut(),
+            a_sink_ctx_opt.as_mut(),
+        ) {
+            if pkt_idx == ai {
+                // Audio: decode → filter → encode → write
+                if let Some(ref mut adc) = a_dec_ctx {
+                    adc.send_packet(Some(&pkt))
+                        .map_err(|e| format!("send audio pkt: {e:?}"))?;
+                    loop {
+                        let frame = match adc.receive_frame() {
+                            Ok(f) => f,
+                            Err(RsmpegError::DecoderDrainError)
+                            | Err(RsmpegError::DecoderFlushedError) => break,
+                            Err(e) => return Err(format!("receive audio frame: {e:?}")),
+                        };
+                        a_src
+                            .buffersrc_add_frame(Some(frame), None)
+                            .map_err(|e| format!("a_src add_frame: {e:?}"))?;
+                        loop {
+                            let af = match a_sink.buffersink_get_frame(None) {
+                                Ok(f) => f,
+                                Err(RsmpegError::BufferSinkDrainError)
+                                | Err(RsmpegError::BufferSinkEofError) => break,
+                                Err(e) => return Err(format!("a_sink get_frame: {e:?}")),
+                            };
+                            encode_write(a_enc, &mut ofmt, a_out_idx, Some(af))?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Flush video ──
+    filter_encode_write(
+        &mut v_src_ctx,
+        &mut v_sink_ctx,
+        &mut v_enc_ctx,
+        &mut ofmt,
+        v_out_idx,
+        v_sink_tb,
+        None,
+    )?;
+    encode_write(&mut v_enc_ctx, &mut ofmt, v_out_idx, None)?;
+
+    // ── Flush audio ──
+    if let (Some(ref mut a_enc), Some(ref mut a_src), Some(ref mut a_sink)) = (
+        a_enc_ctx_opt.as_mut(),
+        a_src_ctx_opt.as_mut(),
+        a_sink_ctx_opt.as_mut(),
+    ) {
+        if let Some(ref mut adc) = a_dec_ctx {
+            let _ = adc.send_packet(None);
+            loop {
+                let frame = match adc.receive_frame() {
+                    Ok(f) => f,
+                    Err(_) => break,
+                };
+                let _ = a_src.buffersrc_add_frame(Some(frame), None);
+            }
+        }
+        let _ = a_src.buffersrc_add_frame(None, None);
+        loop {
+            let af = match a_sink.buffersink_get_frame(None) {
+                Ok(f) => f,
+                Err(_) => break,
+            };
+            let _ = encode_write(a_enc, &mut ofmt, a_out_idx, Some(af));
+        }
+        let _ = encode_write(a_enc, &mut ofmt, a_out_idx, None);
+    }
+
+    ofmt.write_trailer()
+        .map_err(|e| format!("write_trailer: {e:?}"))?;
+    Ok(())
 }

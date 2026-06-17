@@ -90,6 +90,81 @@ pub fn resolve_video_dimensions_sync(_local_path: &str) -> Option<(u32, u32)> {
     None
 }
 
+/// 桌面端视频探测结果。FFmpeg/rsmpeg 仅用于视频处理路径，不用于图片类型推断。
+#[cfg(not(target_os = "android"))]
+#[derive(Debug, Clone)]
+pub struct MediaProbeResult {
+    pub is_video: bool,
+    /// 探测得到的受支持视频 MIME；不受支持时 `probe_media_sync` 返回 `None`。
+    pub mime_type: String,
+    pub width: u32,
+    pub height: u32,
+    /// 浏览器（Chromium WebView）能否直接显示/播放此内容，无需转码。
+    /// video/mp4 非 HEVC 与 video/webm 视为 true；HEVC-in-mp4 / matroska / wmv 为 false。
+    pub browser_safe: bool,
+}
+
+/// 桌面端：用 libavformat 打开文件并探测首个视频流，返回视频 MIME/宽高/浏览器兼容性。
+/// 打开失败、无视频流、宽高非法或类型不受支持时返回 `None`。图片不走此函数。
+#[cfg(not(target_os = "android"))]
+pub fn probe_media_sync(path: &std::path::Path) -> Option<MediaProbeResult> {
+    use rsmpeg::avformat::AVFormatContextInput;
+    use rsmpeg::ffi;
+    use std::ffi::CString;
+
+    let path_c = CString::new(path.to_string_lossy().as_ref()).ok()?;
+    let fmt = AVFormatContextInput::open(&path_c).ok()?;
+    let (video_idx, _) = fmt.find_best_stream(ffi::AVMEDIA_TYPE_VIDEO).ok()??;
+    let codecpar = fmt.streams()[video_idx].codecpar();
+    let (w, h) = (codecpar.width, codecpar.height);
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    let fmt_name = fmt.iformat().name().to_string_lossy().to_lowercase();
+    let (mime, browser_safe) = classify_video_probe_mime(codecpar.codec_id, &fmt_name)?;
+    Some(MediaProbeResult {
+        is_video: true,
+        browser_safe,
+        mime_type: mime,
+        width: w as u32,
+        height: h as u32,
+    })
+}
+
+/// 把 (视频编码器 id, 容器格式名) 映射到受支持的 (MIME, browser_safe)。
+#[cfg(not(target_os = "android"))]
+fn classify_video_probe_mime(
+    codec_id: rsmpeg::ffi::AVCodecID,
+    fmt_name: &str,
+) -> Option<(String, bool)> {
+    use rsmpeg::ffi;
+    let (video_mime, safe): (&str, bool) = if fmt_name.contains("asf") || fmt_name.contains("wmv") {
+        ("video/x-ms-wmv", false)
+    } else if fmt_name.contains("matroska") || fmt_name.contains("webm") {
+        if codec_id == ffi::AV_CODEC_ID_VP8
+            || codec_id == ffi::AV_CODEC_ID_VP9
+            || codec_id == ffi::AV_CODEC_ID_AV1
+        {
+            ("video/webm", true)
+        } else {
+            ("video/x-matroska", false)
+        }
+    } else if fmt_name.contains("mp4")
+        || fmt_name.contains("mov")
+        || fmt_name.contains("quicktime")
+        || fmt_name.contains("m4a")
+        || fmt_name.contains("3gp")
+        || fmt_name.contains("mj2")
+    {
+        // mp4/mov：H.264 浏览器可播；HEVC 不能（Chromium 无 HEVC 解码，除非 HW 加速另论）。
+        let safe = codec_id != ffi::AV_CODEC_ID_HEVC;
+        ("video/mp4", safe)
+    } else {
+        return None;
+    };
+    Some((video_mime.to_string(), safe))
+}
+
 /// Dispatcher for desktop or `file://` paths.
 pub fn resolve_media_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
     let path = local_path_to_path_buf(local_path);

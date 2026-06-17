@@ -262,6 +262,33 @@ async fn serve_file_with_mime(
     }
 }
 
+#[cfg(not(target_os = "android"))]
+async fn handle_compatible_query(
+    Query(query): Query<FileQuery>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let path = query.path.trim();
+    if path.is_empty() {
+        return (StatusCode::BAD_REQUEST, "missing path").into_response();
+    }
+
+    if tokio::fs::metadata(path).await.is_err() {
+        return (StatusCode::NOT_FOUND, "file not found").into_response();
+    }
+
+    match kabegame_core::storage::Storage::find_image_by_compatible_path(path) {
+        Ok(Some(info)) => {
+            let mime = info.media_type.or_else(|| mime_from_path(path));
+            let range = headers
+                .get(RANGE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            serve_file_with_mime(path, mime, range).await
+        }
+        _ => (StatusCode::NOT_FOUND, "file not found").into_response(),
+    }
+}
+
 /// 代理 GET 请求：/proxy?url=xxx，用 reqwest 拉取目标 URL 后流式返回（初步实现，无任务上下文）
 #[cfg(not(target_os = "android"))]
 async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
@@ -345,6 +372,7 @@ pub fn file_routes() -> Router {
     Router::new()
         .route("/file", get(handle_file_query))
         .route("/thumbnail", get(handle_thumbnail_query))
+        .route("/compatible", get(handle_compatible_query))
         .route("/proxy", get(handle_proxy_query))
 }
 
@@ -360,6 +388,7 @@ pub fn file_routes_web() -> Router {
     let gated = Router::new()
         .route("/file", get(handle_file_query))
         .route("/thumbnail", get(handle_thumbnail_query))
+        .route("/compatible", get(handle_compatible_query))
         .layer(from_fn(image_concurrency_mw));
     gated.route("/proxy", get(handle_proxy_query))
 }

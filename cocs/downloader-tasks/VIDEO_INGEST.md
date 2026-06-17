@@ -6,6 +6,8 @@
 
 视频能力不再由 Cargo feature 门控：standard、light、kabegame-cli 桌面构建都支持新视频下载/导入；Android 支持 content URI 视频摄入但不链接 FFmpeg。
 
+图片推断、图片维度读取、图片缩略图与图片兼容副本不使用 FFmpeg：MIME 推断走 `infer`，尺寸与压缩/转 PNG 走 `image` crate。`scripts/build-ffmpeg.sh` 的最小化 FFmpeg 配置应只保留视频容器/视频解码/视频编码/音频转码所需组件，不启用 `image2`、图片解码器或 `mjpeg` 图片编码器。
+
 ## 平台关系
 
 | 构建目标 | 视频实现 |
@@ -22,7 +24,7 @@
 | 文件 | 作用 |
 |------|------|
 | `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | 视频预览生成。Android `compress_video_for_preview(&str)` 接收 content URI，走 provider/GIF 替代实现；非 Android `compress_video_for_preview(&Path)` 走 rsmpeg/FFmpeg 输出 mp4。 |
-| `src-tauri/kabegame-core/src/media_dimensions.rs` | 非 Android `resolve_video_dimensions_sync` 用 rsmpeg 读取宽高；Android 同步 stub 返回 `None`，content URI 宽高由 async ContentIoProvider 路径读取。 |
+| `src-tauri/kabegame-core/src/media_dimensions.rs` | 非 Android `resolve_video_dimensions_sync` / 视频兼容探测用 rsmpeg 读取视频宽高与容器信息；图片尺寸仍走 `image` crate。Android 同步 stub 返回 `None`，content URI 宽高由 async ContentIoProvider 路径读取。 |
 | `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | 下载入库 postprocess：Android content URI 视频直接传 URI 给 provider；非 Android 视频直接调用 FFmpeg 压缩。 |
 | `src-tauri/kabegame-core/src/local_folder/import.rs` | 本地导入：桌面视频始终尝试生成 FFmpeg 预览；Android 本地导入路径保持不生成视频预览。 |
 | `src-tauri/kabegame-core/src/image_type.rs` | `supported_video_extensions()` 始终返回内置视频扩展名列表。 |

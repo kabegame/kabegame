@@ -7,6 +7,7 @@ import App from "./App.vue";
 import router from "./router";
 import "virtual:uno.css";
 import "@kabegame/core/styles/anime-theme.css";
+import "./styles/dialogs.css";
 /** Vant：Toast 组件样式（按需引入时显式使用 showToast 必须带样式，见 Vant 文档） */
 import "vant/lib/toast/style";
 /** Vant 使用项目配色。若使用 Vant，请在其样式之后引入，顺序：anime-theme → vant 样式 → vant-theme */

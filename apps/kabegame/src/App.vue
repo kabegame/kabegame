@@ -3,34 +3,22 @@
   <!-- 主窗口 -->
   <el-container class="app-container" :class="{ 'app-container-compact': uiStore.isCompact, 'has-app-background': bgVisible }">
     <div
-      v-if="bgVisible && bgImageUrl"
+      v-if="bgVisible && bgImage"
       class="app-background-layer"
       aria-hidden="true"
     >
-      <video
-        v-if="bgMediaType === 'video'"
-        ref="bgVideoRef"
-        :key="`video-${bgImageUrl}`"
-        :src="bgImageUrl"
+      <ImageContent
+        ref="bgContentRef"
+        :key="`bg-${bgImageToken}`"
+        :image="bgImage"
+        prefer="original"
         class="app-background-media"
         :style="bgImageStyle"
-        :data-bg-token="bgImageToken"
-        autoplay
-        loop
-        muted
-        playsinline
-        preload="auto"
-        @loadedmetadata="handleBgVideoReady"
-        @canplay="handleBgVideoReady"
-        @error="handleBgMediaError"
-      />
-      <img
-        v-else
-        :key="bgImageUrl"
-        :src="bgImageUrl"
-        class="app-background-media"
-        :style="bgImageStyle"
-        :data-bg-token="bgImageToken"
+        :video-playing="bgVisible && bgMediaType === 'video'"
+        video-muted
+        video-loop
+        reset-video-on-pause
+        @ready="handleBgMediaReady"
         @error="handleBgMediaError"
       />
     </div>
@@ -154,6 +142,7 @@
     </nav>
     <KamechanMascot />
   </el-container>
+  <FrameMonitor />
   </el-config-provider>
 </template>
 
@@ -183,6 +172,7 @@ import PluginImportDialog from "./components/import/PluginImportDialog.vue";
 import CrawlerDialog from "./components/CrawlerDialog.vue";
 import MissedRunsDialog from "./components/scheduler/MissedRunsDialog.vue";
 import AutoConfigDialog from "./components/scheduler/AutoConfigDialog.vue";
+import FrameMonitor from "./components/common/FrameMonitor.vue";
 import KamechanMascot from "./components/kamechan/KamechanMascot.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
 import { useWindowEvents } from "./composables/useWindowEvents";
@@ -194,7 +184,7 @@ import { invoke } from "@/api/rpc";
 import { pathqlFetch } from "@/services/pathql";
 import { rowToImageInfo } from "@/utils/imageRow";
 import { IS_WINDOWS, IS_MACOS, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
-import { fileToUrl, initHttpServerBaseUrl } from "@kabegame/core/httpServer";
+import { initHttpServerBaseUrl } from "@kabegame/core/httpServer";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
@@ -212,6 +202,7 @@ import * as updaterService from "@/services/updater";
 import UpdateButton from "./components/updater/UpdateButton.vue";
 import UpdateDialog from "./components/updater/UpdateDialog.vue";
 import DownloadProgressDialog from "./components/updater/DownloadProgressDialog.vue";
+import ImageContent from "@kabegame/core/components/image/ImageContent.vue";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
@@ -328,20 +319,23 @@ const { set: setLanguageSetting } = useSettingKeyState("language");
 
 type BgMediaType = "image" | "video";
 
-const bgImageUrl = ref("");
+const bgImage = ref<ImageInfo | null>(null);
 const bgMediaType = ref<BgMediaType>("image");
 const bgVisible = ref(false);
 const bgImageToken = ref(0);
-const bgVideoRef = ref<HTMLVideoElement | null>(null);
+const bgContentRef = ref<InstanceType<typeof ImageContent> | null>(null);
 let bgResolveToken = 0;
 
 const isVideoBackground = (image: ImageInfo | undefined) =>
   isVideoMediaType(image?.type);
 
+const hasAppBackgroundSource = (image: ImageInfo | null | undefined) =>
+  !!(image?.localPath || image?.thumbnailPath || image?.compatiblePath);
+
 const shouldShowAppBackground = () =>
   !!settingsStore.values.appBackgroundEnabled &&
   !!settingsStore.values.currentWallpaperImageId &&
-  !!bgImageUrl.value;
+  hasAppBackgroundSource(bgImage.value);
 
 const syncBgVisible = () => {
   bgVisible.value = shouldShowAppBackground();
@@ -352,21 +346,22 @@ const getBgVideoPlaybackRate = () => {
   return Math.min(3, Math.max(0.25, Number.isFinite(raw) ? raw : 1));
 };
 
-const handleBgVideoReady = (event?: Event) => {
-  const video = (event?.currentTarget as HTMLVideoElement | null) ?? bgVideoRef.value;
+const applyBgVideoPlaybackRate = () => {
+  const video = bgContentRef.value?.videoEl;
   if (!video) return;
-  const readyToken = Number(video.dataset.bgToken ?? NaN);
-  if (!Number.isFinite(readyToken) || readyToken !== bgImageToken.value) return;
   video.muted = true;
   video.volume = 0;
   video.playbackRate = getBgVideoPlaybackRate();
   void video.play().catch(() => {});
 };
 
-const handleBgMediaError = (event: Event) => {
-  const media = event.currentTarget as HTMLImageElement | HTMLVideoElement | null;
-  const failedToken = Number(media?.dataset.bgToken ?? NaN);
-  if (!Number.isFinite(failedToken) || failedToken !== bgImageToken.value) return;
+const handleBgMediaReady = () => {
+  if (bgMediaType.value === "video") {
+    applyBgVideoPlaybackRate();
+  }
+};
+
+const handleBgMediaError = () => {
   bgVisible.value = false;
 };
 
@@ -376,7 +371,7 @@ watch(
     const token = ++bgResolveToken;
     const imageId = typeof id === "string" ? id.trim() : "";
     if (!imageId) {
-      bgImageUrl.value = "";
+      bgImage.value = null;
       bgVisible.value = false;
       return;
     }
@@ -389,19 +384,18 @@ watch(
         image = (await pathqlFetch<Record<string, unknown>>(path)).map(rowToImageInfo)[0];
       }
 
-      const source = image?.localPath ? fileToUrl(image.localPath) : "";
       const mediaType = isVideoBackground(image) ? "video" : "image";
       if (token !== bgResolveToken) return;
-      bgImageUrl.value = source;
+      bgImage.value = image ?? null;
       bgMediaType.value = mediaType;
       bgImageToken.value = token;
       syncBgVisible();
       if (mediaType === "video") {
-        requestAnimationFrame(() => handleBgVideoReady());
+        requestAnimationFrame(() => applyBgVideoPlaybackRate());
       }
     } catch (error) {
       if (token !== bgResolveToken) return;
-      bgImageUrl.value = "";
+      bgImage.value = null;
       bgMediaType.value = "image";
       bgVisible.value = false;
     }
@@ -413,7 +407,9 @@ watch(
   () => [
     settingsStore.values.appBackgroundEnabled,
     settingsStore.values.currentWallpaperImageId,
-    bgImageUrl.value,
+    bgImage.value?.localPath,
+    bgImage.value?.thumbnailPath,
+    bgImage.value?.compatiblePath,
   ],
   syncBgVisible,
 );
@@ -426,7 +422,7 @@ const bgImageStyle = computed(() => ({
 
 watch(
   () => settingsStore.values.wallpaperVideoPlaybackRate,
-  () => handleBgVideoReady(),
+  () => applyBgVideoPlaybackRate(),
 );
 
 // 设置变更事件监听器
@@ -679,9 +675,16 @@ body,
 .app-background-media {
   width: 100%;
   height: 100%;
-  object-fit: cover;
   transform: scale(1.04);
   transition: opacity 0.25s ease, filter 0.25s ease;
+}
+
+.app-background-layer .app-background-media.image-content .ic-img {
+  object-fit: cover !important;
+}
+
+.app-background-layer .app-background-media.image-content .ic-loading-overlay {
+  display: none;
 }
 
 // 紧凑布局：主内容区顶部留出状态栏高度，避免与 Android 系统状态栏重叠（桌面浏览器 env() 为 0）

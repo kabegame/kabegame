@@ -22,7 +22,8 @@
             { "sql": "images.display_name", "as": "display_name", "in_need": true },
             { "sql": "COALESCE(images.type, 'image')", "as": "media_type", "in_need": true },
             { "sql": "images.last_set_wallpaper_at", "as": "last_set_wallpaper_at", "in_need": true },
-            { "sql": "images.size", "as": "size", "in_need": true }
+            { "sql": "images.size", "as": "size", "in_need": true },
+            { "sql": "images.compatible_path", "as": "compatible_path", "in_need": true }
         ],
         "order": [{ "sql": "images.id", "order": "asc" }],
         "join": [{

@@ -46,9 +46,8 @@
 import { computed, nextTick, onUnmounted, watch } from "vue";
 import { ref, toRef } from "vue";
 import { WarningFilled, VideoPlay, VideoPause } from "@element-plus/icons-vue";
-import type { ImageInfo } from "../../types/image";
+import type { ImageInfo, ImagePrefer } from "../../types/image";
 import ImageContent from "./ImageContent.vue";
-import type { ImagePrefer } from "../../composables/imageUrlPlan";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -63,10 +62,12 @@ interface Props {
   fillBox?: boolean; // gallery 布局：盒宽高比等于图片自然比，填满且不留 letterbox 背景
   horizontal?: boolean; // 水平方向：盒子用 height: 100% 撑满主轴，width 由 aspect-ratio 决定
   videoPlaying?: boolean; // 视频是否正在播放（由上层协调，确保同一时间只有一个视频在播放）
+  hoverOriginal?: boolean; // 图片 hover 时是否升级为原图（仅影响图片，不影响视频 hover 预览）
 }
 
 const props = withDefaults(defineProps<Props>(), {
   videoPlaying: false,
+  hoverOriginal: true,
 });
 
 const emit = defineEmits<{
@@ -227,6 +228,7 @@ const effectivePrefer = computed<ImagePrefer>(() => {
   return hoverOriginalActive.value ? "original" : props.prefer;
 });
 const canHoverOriginalPreview = computed(() =>
+  props.hoverOriginal &&
   !isCompact.value &&
   !isVideo.value &&
   props.prefer === "thumbnail" &&
@@ -249,6 +251,7 @@ const clearHoverImageOriginalTimer = () => {
 
 const stopHoverPreview = () => {
   clearHoverPreviewTimer();
+  clearHoverImageOriginalTimer();
   if (hoverVideoPreviewActive.value) {
     hoverVideoPreviewActive.value = false;
     emit("hoverVideoPreview", false);

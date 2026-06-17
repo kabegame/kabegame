@@ -122,7 +122,7 @@ impl TaskScheduler {
             running_workers: Arc::new(AtomicUsize::new(0)),
             page_stacks: Arc::new(PageStackStore::new()),
             task_slot_notify: Arc::new(Notify::new()),
-            canceled_tasks: Arc::new(RwLock::new(HashSet::new()))
+            canceled_tasks: Arc::new(RwLock::new(HashSet::new())),
         };
         s
     }
@@ -193,14 +193,11 @@ impl TaskScheduler {
         let item = Storage::get_task_failed_image_by_id(failed_id)?
             .ok_or_else(|| "失败图片记录不存在".to_string())?;
 
-        let task_opt = storage
-            .get_task(&item.task_id)?;
+        let task_opt = storage.get_task(&item.task_id)?;
 
         let images_dir = task_opt
             .clone()
-            .and_then(|t| 
-                t.output_dir.as_deref().map(std::path::PathBuf::from)
-            )
+            .and_then(|t| t.output_dir.as_deref().map(std::path::PathBuf::from))
             .unwrap_or_else(|| get_default_images_dir());
 
         let start_time = if item.order > 0 {
@@ -217,29 +214,28 @@ impl TaskScheduler {
         let retry_headers = item
             .header_snapshot
             .filter(|headers| !headers.is_empty())
-            .unwrap_or_else(|| task_opt_for_headers
-                .and_then(
-                    |t| {
-                        t.http_headers.clone()
-                    }).unwrap_or_default()
-                );
+            .unwrap_or_else(|| {
+                task_opt_for_headers
+                    .and_then(|t| t.http_headers.clone())
+                    .unwrap_or_default()
+            });
 
-        let output_album_id = task_opt.clone().and_then(|t| 
-            t.output_album_id.clone()
-        );
+        let output_album_id = task_opt.clone().and_then(|t| t.output_album_id.clone());
 
-        self.download_queue.download_image_retry(
-            failed_id,
-            url,
-            images_dir,
-            item.plugin_id,
-            item.task_id,
-            start_time,
-            output_album_id,
-            retry_headers,
-            item.metadata_id,
-            item.display_name,
-        ).await
+        self.download_queue
+            .download_image_retry(
+                failed_id,
+                url,
+                images_dir,
+                item.plugin_id,
+                item.task_id,
+                start_time,
+                output_album_id,
+                retry_headers,
+                item.metadata_id,
+                item.display_name,
+            )
+            .await
     }
 
     /// 批量重试（前端已按插件筛选）；跳过已有 handle 的 id。
@@ -472,7 +468,11 @@ async fn worker_loop(
                         },
                     );
                     // 清理canceled_tasks
-                    scheduler.canceled_tasks.write().await.retain(|d| *d != req.task_id);
+                    scheduler
+                        .canceled_tasks
+                        .write()
+                        .await
+                        .retain(|d| *d != req.task_id);
                 } else {
                     scheduler.transition(
                         &req.task_id,
@@ -497,7 +497,11 @@ async fn worker_loop(
                 let is_canceled = scheduler.is_task_canceled(&req.task_id).await;
                 let end = now_ms();
                 let next = if is_canceled {
-                    scheduler.canceled_tasks.write().await.retain(|d| *d != req.task_id);
+                    scheduler
+                        .canceled_tasks
+                        .write()
+                        .await
+                        .retain(|d| *d != req.task_id);
                     TaskStatus::Canceled
                 } else {
                     TaskStatus::Failed

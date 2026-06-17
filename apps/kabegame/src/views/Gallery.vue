@@ -9,7 +9,7 @@
             :enable-ctrl-wheel-adjust-columns="!isCompact"
             hide-scrollbar 
             :enable-ctrl-key-adjust-columns="!isCompact"
-            enable-virtual-scroll
+            :enable-virtual-scroll="true"
             :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
             :on-context-command="handleGridContextCommand" @image-dblclick="handleImageDoubleOpen"
             @preview-navigate="handlePreviewNavigate" @preview-page-boundary="handlePreviewPageBoundary"
@@ -1131,36 +1131,6 @@ onDeactivated(() => {
 </style>
 
 <style lang="scss">
-.crawl-dialog.el-dialog {
-  max-height: 90vh !important;
-  display: flex !important;
-  flex-direction: column !important;
-  margin-top: 5vh !important;
-  margin-bottom: 5vh !important;
-  overflow: hidden !important;
-
-  .el-dialog__header {
-    flex-shrink: 0 !important;
-    padding: 20px 20px 10px !important;
-    border-bottom: 1px solid var(--anime-border);
-  }
-
-  .el-dialog__body {
-    flex: 1 1 auto !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    padding: 20px !important;
-    min-height: 0 !important;
-    max-height: none !important;
-  }
-
-  .el-dialog__footer {
-    flex-shrink: 0 !important;
-    padding: 10px 20px 20px !important;
-    border-top: 1px solid var(--anime-border);
-  }
-}
-
 /* "开始导入图片"->"选择导入源"下拉框：下拉面板是 teleport 到 body 的，所以必须用全局样式 */
 .crawl-plugin-select-dropdown {
   .el-select-dropdown__item {

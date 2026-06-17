@@ -9,6 +9,8 @@ export interface OrganizeOptions {
   removeMissing: boolean;
   removeUnrecognized: boolean;
   regenThumbnails: boolean;
+  /** 为旧库媒体补充生成浏览器兼容副本（仅桌面） */
+  regenCompatible: boolean;
   deleteSourceFiles: boolean;
   rangeStart: number | null;
   rangeEnd: number | null;

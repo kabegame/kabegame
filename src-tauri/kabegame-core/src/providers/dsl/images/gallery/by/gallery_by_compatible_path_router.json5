@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_by_compatible_path_router",
+    "resolve": {
+        "(.+)": {
+            "provider": "gallery_by_compatible_path_provider",
+            "properties": { "path": "${capture[1]}" }
+        }
+    }
+}

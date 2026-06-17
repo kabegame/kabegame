@@ -47,3 +47,14 @@ export function thumbnailToUrl(thumbnailPath: string): string {
   if (httpServerBaseUrl === null) return "";
   return `${httpServerBaseUrl}/thumbnail?path=${encodeURIComponent(path)}`;
 }
+
+/** 兼容副本 URL：走 /compatible，后端按 compatible_path 查表校验 */
+export function compatibleToUrl(compatiblePath: string): string {
+  const path = (compatiblePath || "").trim();
+  if (!path) return "";
+  const abs = asAbsoluteUrlOrNull(path);
+  if (abs) return abs;
+  if (IS_ANDROID) return "";
+  if (httpServerBaseUrl === null) return "";
+  return `${httpServerBaseUrl}/compatible?path=${encodeURIComponent(path)}`;
+}

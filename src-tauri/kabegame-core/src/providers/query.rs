@@ -318,6 +318,7 @@ pub fn organize_batch_at(page_size: usize, page: usize) -> Result<Vec<OrganizeSc
                 local_path: json_string(row, "local_path")
                     .ok_or("organize row missing `local_path`")?,
                 thumbnail_path: json_string(row, "thumbnail_path").unwrap_or_default(),
+                compatible_path: json_string(row, "compatible_path").unwrap_or_default(),
             })
         })
         .collect()
@@ -530,6 +531,7 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
             .map(|t| t as u64),
         size: i("size").map(|v| v as u64),
         album_order: i("album_order"),
+        compatible_path: s("compatible_path"),
     })
 }
 

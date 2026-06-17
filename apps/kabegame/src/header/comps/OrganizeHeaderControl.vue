@@ -84,6 +84,7 @@ type OrganizeRunStatePayload = OrganizeProgressState & {
   removeMissing: boolean;
   removeUnrecognized: boolean;
   regenThumbnails: boolean;
+  regenCompatible: boolean;
   deleteSourceFiles: boolean;
 };
 
@@ -150,6 +151,7 @@ const optionRows = computed(() => {
     { key: "removeMissing", label: t("gallery.removeMissing"), enabled: options.removeMissing },
     { key: "removeUnrecognized", label: t("gallery.removeUnrecognized"), enabled: options.removeUnrecognized },
     { key: "regenThumbnails", label: t("gallery.regenThumbnails"), enabled: options.regenThumbnails },
+    { key: "regenCompatible", label: t("gallery.regenCompatible"), enabled: options.regenCompatible },
     { key: "deleteSourceFiles", label: t("gallery.deleteSourceFiles"), enabled: options.deleteSourceFiles },
   ];
 });
@@ -189,6 +191,7 @@ async function syncOrganizeRunStateFromBackend() {
       removeMissing: s.removeMissing,
       removeUnrecognized: s.removeUnrecognized,
       regenThumbnails: s.regenThumbnails,
+      regenCompatible: s.regenCompatible,
       deleteSourceFiles: s.deleteSourceFiles,
       rangeStart: s.rangeStart ?? null,
       rangeEnd: s.rangeEnd ?? null,
@@ -269,6 +272,7 @@ async function runOrganize(options: OrganizeOptions) {
         removeMissing: options.removeMissing,
         removeUnrecognized: options.removeUnrecognized,
         regenThumbnails: options.regenThumbnails,
+        regenCompatible: options.regenCompatible,
         deleteSourceFiles: options.deleteSourceFiles,
         rangeStart: options.rangeStart,
         rangeEnd: options.rangeEnd,

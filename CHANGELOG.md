@@ -4,11 +4,18 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
-**Changelog entries:** Write release notes in **English** (new sections and bullets from [3.4.5] onward).
+**Changelog entries:** ~~Write release notes in **English** (new sections and bullets from [3.4.5] onward). ~~ 从4.2.1开始用中文。
 
 ## [4.2.1]
+### Fixed
+- **画廊掉帧**: 画廊经常掉帧是因为原图显示bug，即使鼠标离开也还在加载原图。该问题在原图大小尤其大的时候
+
+### Optimized
+- **Compatible path**: 浏览器不支持的格式如heic、wmv等，通过生成兼容格式显示。并且太大的图片也生成4096大小图片来显示替代原图。该行为目前不可配置
+
 ### Changed
-- **Failed Image**: now operate them in a dialog not in a new page. 
+- **Failed Image**: 失败图片通过弹窗列出，而不是一个单独的页面
+- **平铺**: 平铺行为改成直接先居中fit，然后向其他方向铺展
 
 ## [4.2.0]
 ### Added

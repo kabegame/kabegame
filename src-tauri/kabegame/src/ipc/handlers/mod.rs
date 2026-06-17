@@ -242,6 +242,7 @@ async fn handle_organize_start(
                 remove_missing,
                 remove_unrecognized,
                 regen_thumbnails,
+                regen_compatible: false,
                 delete_source_files,
                 offset,
                 limit,

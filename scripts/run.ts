@@ -30,6 +30,8 @@ interface BuildOptions {
   skip?: string;
   args?: string[];
   release?: boolean;
+  package?: string;
+  test?: string;
   /** false 表示传入 --no-nx，不经 nx 构建 kabegame 前端 */
   nx?: boolean;
 }
@@ -57,6 +59,10 @@ async function start(options: BuildOptions): Promise<void> {
 
 async function check(options: BuildOptions): Promise<void> {
   await buildSystem.check(options);
+}
+
+async function test(options: BuildOptions): Promise<void> {
+  await buildSystem.test(options);
 }
 
 // 创建 Commander 程序
@@ -164,6 +170,28 @@ program
   .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
   .action(async (options: BuildOptions) => {
     await check(options);
+  });
+
+program
+  .command("test")
+  .description("运行 Rust 测试（自动准备 Kabegame/FFmpeg 环境变量）")
+  .requiredOption(
+    "-c, --component <component>",
+    "用于准备环境的组件：kabegame | kabegame-cli",
+    Component.MAIN,
+  )
+  .option("--package <package>", "Cargo package", "kabegame-core")
+  .option("--test <testName>", "Cargo integration test target")
+  .option(
+    "--mode <mode>",
+    "构建模式：standard | light",
+    Mode.STANDARD,
+  )
+  .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
+  .argument("[args...]", "剩余测试参数（传给 cargo test 的 -- 之后）")
+  .action(async (args: string[], options: BuildOptions) => {
+    options.args = args || [];
+    await test(options);
   });
 
 // 解析命令行参数

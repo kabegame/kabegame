@@ -1,5 +1,5 @@
-use crate::crawler::TaskScheduler;
 use crate::crawler::task_log_i18n::task_log_i18n;
+use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::Storage;
@@ -193,11 +193,13 @@ impl DownloadQueue {
     }
 
     pub async fn cancel_retried_download(&self, failed_image_id: i64) -> bool {
-        if let Some(did) =
-            self.active_downloads.lock().await
-                .iter()
-                .find(|d| matches!(d.retried_for, Some(fid) if fid == failed_image_id))
-                .map(|d| d.id)
+        if let Some(did) = self
+            .active_downloads
+            .lock()
+            .await
+            .iter()
+            .find(|d| matches!(d.retried_for, Some(fid) if fid == failed_image_id))
+            .map(|d| d.id)
         {
             self.canceled_downloads.write().await.insert(did)
         } else {
@@ -250,37 +252,69 @@ impl DownloadQueue {
     }
 
     pub async fn is_active_downloading(&self, download_id: u64) -> bool {
-        self.active_downloads.lock().await.iter().any(|d| d.id == download_id)
+        self.active_downloads
+            .lock()
+            .await
+            .iter()
+            .any(|d| d.id == download_id)
     }
 
     pub async fn is_active_task_downloading(&self, task_id: &str) -> bool {
-        self.active_downloads.lock().await.iter().any(|d| d.task_id == task_id)
+        self.active_downloads
+            .lock()
+            .await
+            .iter()
+            .any(|d| d.task_id == task_id)
     }
 
     async fn is_pending_task_downloads(&self, task_id: &str) -> bool {
-        self.pending_queue.lock().await.iter().any(|d| d.task_id == task_id)
+        self.pending_queue
+            .lock()
+            .await
+            .iter()
+            .any(|d| d.task_id == task_id)
     }
 
     async fn is_pending_download(&self, download_id: u64) -> bool {
-        self.pending_queue.lock().await.iter().any(|d| d.id == download_id)
+        self.pending_queue
+            .lock()
+            .await
+            .iter()
+            .any(|d| d.id == download_id)
     }
 
     // 是否正在重试下载
     async fn is_retrying(&self, failed_image_id: i64) -> bool {
-        self.active_downloads.lock().await.iter()
+        self.active_downloads
+            .lock()
+            .await
+            .iter()
             .any(|d| d.retried_for.is_some_and(|id| id == failed_image_id))
-        || self.pending_queue.lock().await.iter().any(|d| d.failed_image_id.is_some_and(|id| id == failed_image_id))
+            || self
+                .pending_queue
+                .lock()
+                .await
+                .iter()
+                .any(|d| d.failed_image_id.is_some_and(|id| id == failed_image_id))
     }
 
     async fn get_pending_task_download_ids(&self, task_id: &str) -> Vec<u64> {
-        self.pending_queue.lock().await.iter()
+        self.pending_queue
+            .lock()
+            .await
+            .iter()
             .filter_map(|d| (d.task_id == task_id).then_some(d.id))
             .collect()
     }
 
     /// 由 writer 在写路径上发送任务日志（warn/info/error）。
     /// 非阻塞：用 `try_lock` 查找 task_id；拿不到锁则静默丢弃。
-    pub fn emit_log_by_download_id(&self, download_id: u64, level: &str, message: impl Into<String>) {
+    pub fn emit_log_by_download_id(
+        &self,
+        download_id: u64,
+        level: &str,
+        message: impl Into<String>,
+    ) {
         if let Ok(list) = self.active_downloads.try_lock() {
             if let Some(t) = list.iter().find(|t| t.id == download_id) {
                 GlobalEmitter::global().emit_task_log(&t.task_id, level, &message.into());
@@ -476,7 +510,10 @@ impl DownloadQueue {
     }
 
     pub async fn cancel_task_downloads(&self, task_id: &str) -> bool {
-        let active_ids: Vec<u64> = self.active_downloads.lock().await
+        let active_ids: Vec<u64> = self
+            .active_downloads
+            .lock()
+            .await
             .iter()
             .filter(|a| a.task_id == task_id)
             .map(|a| a.id)
@@ -487,7 +524,10 @@ impl DownloadQueue {
             return false;
         }
         let mut canceled = self.canceled_downloads.write().await;
-        active_ids.iter().chain(pending_ids.iter()).all(|&id| canceled.insert(id))
+        active_ids
+            .iter()
+            .chain(pending_ids.iter())
+            .all(|&id| canceled.insert(id))
     }
 
     /// 按 id 切换 active_downloads 状态 + 发事件。状态机非法跳转直接拒绝（不改不发，stderr 日志）。
@@ -541,7 +581,10 @@ impl DownloadQueue {
 
     async fn finish_download(&self, id: u64) {
         let mut downloads = self.active_downloads.lock().await;
-        let task_id = downloads.iter().find(|t| t.id == id).map(|t| t.task_id.clone());
+        let task_id = downloads
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.task_id.clone());
         downloads.retain(|t| t.id != id);
         drop(downloads);
         self.capacity_notify.notify_waiters();
@@ -661,7 +704,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         }
                     }
                 }
-                if let Ok(new_count) = Storage::global().increment_task_dedup_count(&task_id_clone) {
+                if let Ok(new_count) = Storage::global().increment_task_dedup_count(&task_id_clone)
+                {
                     GlobalEmitter::global().emit_task_image_counts(
                         &task_id_clone,
                         None,
@@ -670,7 +714,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         Some(new_count),
                     );
                 }
-                dq.switch_state(job.id, DownloadState::Completed, None).await;
+                dq.switch_state(job.id, DownloadState::Completed, None)
+                    .await;
                 clear_failed_image_after_success(job.failed_image_id);
             } else {
                 dq.switch_state(job.id, DownloadState::Canceled, None).await;
@@ -682,7 +727,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
         // Android content:// 不走网络下载，直接交由 postprocess 用 ContentIoProvider 处理
         #[cfg(target_os = "android")]
         if job_url.scheme() == "content" {
-            dq.switch_state(job.id, DownloadState::Processing, None).await;
+            dq.switch_state(job.id, DownloadState::Processing, None)
+                .await;
             let _ = postprocess_downloaded_image(
                 &*dq,
                 job.id,
@@ -705,7 +751,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             continue;
         }
 
-        dq.switch_state(job.id, DownloadState::Downloading, None).await;
+        dq.switch_state(job.id, DownloadState::Downloading, None)
+            .await;
 
         let download_result = download_with_retry(
             &dq,
@@ -719,7 +766,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
         match download_result {
             Ok(outcome) => {
                 if !dq.is_download_canceled(job.id).await {
-                    dq.switch_state(job.id, DownloadState::Processing, None).await;
+                    dq.switch_state(job.id, DownloadState::Processing, None)
+                        .await;
 
                     #[cfg(target_os = "android")]
                     let postprocess_dir = crate::app_paths::AppPaths::global()
@@ -729,15 +777,34 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                     let postprocess_dir = job.images_dir.clone();
 
                     let (source, delete_source) = match &outcome {
-                        super::DownloadOutcome::Bytes(b) => (super::PostprocessSource::Bytes {
-                            output_dir: &postprocess_dir,
-                            bytes: b,
-                        }, false),
+                        super::DownloadOutcome::Bytes(b) => (
+                            super::PostprocessSource::Bytes {
+                                output_dir: &postprocess_dir,
+                                bytes: b,
+                            },
+                            false,
+                        ),
                         super::DownloadOutcome::Path(p) => {
                             #[cfg(not(target_os = "android"))]
-                            {( super::PostprocessSource::Path { path: p, relocate_to: Some(&job.images_dir) }, true )}
+                            {
+                                (
+                                    super::PostprocessSource::Path {
+                                        path: p,
+                                        relocate_to: Some(&job.images_dir),
+                                    },
+                                    true,
+                                )
+                            }
                             #[cfg(target_os = "android")]
-                            {( super::PostprocessSource::Path { path: p, relocate_to: None }, true )}
+                            {
+                                (
+                                    super::PostprocessSource::Path {
+                                        path: p,
+                                        relocate_to: None,
+                                    },
+                                    true,
+                                )
+                            }
                         }
                     };
 
@@ -787,7 +854,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         job.metadata_id,
                         job.custom_display_name.as_deref(),
                     );
-                    dq.switch_state(job.id, DownloadState::Failed, Some(&e)).await;
+                    dq.switch_state(job.id, DownloadState::Failed, Some(&e))
+                        .await;
                 } else {
                     dq.switch_state(job.id, DownloadState::Canceled, None).await;
                 }

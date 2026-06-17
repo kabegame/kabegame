@@ -123,6 +123,12 @@ impl AppPaths {
         }
     }
 
+    /// 浏览器兼容副本目录（仅桌面）：`data_dir/compatibles`
+    #[cfg(not(target_os = "android"))]
+    pub fn compatibles_dir(&self) -> PathBuf {
+        self.data_dir.join("compatibles")
+    }
+
     // ========== 缓存目录 ==========
 
     /// store-cache 目录（插件商店 index.json 缓存）

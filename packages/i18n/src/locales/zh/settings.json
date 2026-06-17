@@ -151,7 +151,7 @@
   "styleCenter": "居中",
   "styleCenterDesc": "居中 - 原始大小居中显示",
   "styleTile": "平铺",
-  "styleTileDesc": "平铺 - 重复平铺显示",
+  "styleTileDesc": "平铺 - 适应缩放后居中平铺",
   "rotationTargetTitle": "选择用于轮播的画册",
   "rotationTargetPlaceholder": "选择用于轮播的画册",
   "rotationTargetAllGallery": "全画廊",

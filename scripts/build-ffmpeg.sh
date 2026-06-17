@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 一键编译 FFmpeg：生成「视频缩放 + mp4 压缩 + 维度读取」所需的 libav* 库（最小化编译，不再产出 CLI）。
-# 功能：读 mov/mp4/mkv/webm/wmv 等 → scale 缩放 → libx264 编码 → 输出 mov；并经 libavformat 读取维度。
+# 一键编译 FFmpeg：生成「视频缩放 + mp4 压缩 + 视频维度/兼容性探测」所需的 libav* 库（最小化编译，不再产出 CLI）。
+# 功能：读 mov/mp4/mkv/webm/wmv 等视频 → scale 缩放 → libx264/AAC 编码；图片推断、维度读取与缩略图由 infer/image crate 处理。
 # 由 kabegame-core 经 rsmpeg/rusty_ffmpeg 进程内链接（替代旧的 ffmpeg sidecar 调用）。
 #
 # 链接模型（见 cocs / 计划）：
@@ -67,7 +67,7 @@ case "$(uname -s)" in
     ;;
 esac
 
-# 最小化编译：mov/mkv/webm/wmv 解码 + scale + libx264，输出短 mov；并保留 libav* 供进程内 API 使用。
+# 最小化编译：mov/mkv/webm/wmv 解码 + scale + libx264/AAC，输出 mp4；并保留 libav* 供进程内视频 API 使用。
 # 链接模型：Unix 静态库 / Windows 动态库（见文件头说明）。
 _LINK_FLAGS=()
 if [[ "$OS_KIND" == "windows" ]]; then
@@ -107,11 +107,33 @@ CONFIG_FLAGS=(
   "--enable-encoder=libx264"
   "--enable-muxer=mov"
   "--enable-muxer=mp4"
+
+  # 音频:浏览器兼容版本(compatible_path)转 H.264 mp4 时需保留音轨 → 解码源音频 + AAC 编码。
+  "--enable-decoder=aac"
+  "--enable-decoder=mp3float"
+  "--enable-decoder=ac3"
+  "--enable-decoder=vorbis"
+  "--enable-decoder=opus"
+  "--enable-decoder=flac"
+  "--enable-decoder=wmav1"
+  "--enable-decoder=wmav2"
+  "--enable-decoder=wmapro"
+  "--enable-encoder=aac"
+  "--enable-parser=aac"
+  "--enable-muxer=ipod"
+  "--enable-swresample"
+
   "--enable-filter=scale"
   "--enable-filter=buffer"
   "--enable-filter=buffersink"
   "--enable-filter=format"
-  
+  "--enable-filter=aresample"
+  "--enable-filter=aformat"
+  "--enable-filter=anull"
+  "--enable-filter=abuffer"
+  "--enable-filter=abuffersink"
+  "--enable-filter=asetnsamples"
+
   "--enable-swscale"
 
   # binding里引用了符号，但没有调用，所以去掉这玩意没影响
@@ -167,6 +189,8 @@ if [[ ! -f "$INSTALL_DIR/lib/pkgconfig/libavcodec.pc" ]]; then
 fi
 
 if [[ "$OS_KIND" != "windows" ]]; then
+  # 去除 avdevice 静态库与 .pc（--disable-avdevice 通常不产出，防止 configure 变体残留）
+  rm -f "$INSTALL_DIR/lib/libavdevice"*.a "$INSTALL_DIR/lib/pkgconfig/libavdevice.pc"
   echo "已输出静态库: $INSTALL_DIR/lib/*.a  头文件: $INSTALL_DIR/include"
   echo "rust build.rs 将经 FFMPEG_PKG_CONFIG_PATH=$INSTALL_DIR/lib/pkgconfig 静态链接。"
   exit 0
@@ -176,7 +200,11 @@ fi
 mkdir -p "$BIN_DIR"
 # 1) 复制 libav* DLL（含版本后缀，如 avcodec-61.dll）
 shopt -s nullglob
-_dlls=("$INSTALL_DIR/bin"/av*.dll "$INSTALL_DIR/bin"/swscale-*.dll "$INSTALL_DIR/bin"/swresample-*.dll)
+_dlls=()
+for _dll in "$INSTALL_DIR/bin"/av*.dll "$INSTALL_DIR/bin"/swscale-*.dll "$INSTALL_DIR/bin"/swresample-*.dll; do
+  [[ "$(basename "$_dll")" == avdevice-* ]] && continue
+  _dlls+=("$_dll")
+done
 if [[ ${#_dlls[@]} -eq 0 ]]; then
   echo "未找到 libav* DLL: $INSTALL_DIR/bin/*.dll" >&2
   exit 1
@@ -204,6 +232,7 @@ _DEF_DIR="$BUILD_DIR/msvc-implib"
 mkdir -p "$_DEF_DIR"
 for _dll in "$BIN_DIR"/av*.dll "$BIN_DIR"/swscale-*.dll "$BIN_DIR"/swresample-*.dll; do
   [[ -f "$_dll" ]] || continue
+  [[ "$(basename "$_dll")" == avdevice-* ]] && continue
   _base="$(basename "$_dll" .dll)"             # e.g. avcodec-61
   _libname="${_base%%-*}"                       # e.g. avcodec（rusty_ffmpeg 链接名）
   ( cd "$_DEF_DIR" && gendef "$_dll" >/dev/null 2>&1 )

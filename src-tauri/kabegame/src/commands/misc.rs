@@ -207,6 +207,8 @@ pub struct StartOrganizeArgs {
     pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
     #[serde(default)]
+    pub regen_compatible: bool,
+    #[serde(default)]
     pub delete_source_files: bool,
     pub range_start: Option<usize>,
     pub range_end: Option<usize>,
@@ -230,6 +232,7 @@ pub async fn start_organize(args: StartOrganizeArgs) -> Result<(), String> {
                 remove_missing: args.remove_missing,
                 remove_unrecognized: args.remove_unrecognized,
                 regen_thumbnails: args.regen_thumbnails,
+                regen_compatible: args.regen_compatible,
                 delete_source_files: args.delete_source_files,
                 offset,
                 limit,

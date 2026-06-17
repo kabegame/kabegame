@@ -27,6 +27,11 @@ pub mod native_download;
 pub mod queue;
 pub mod util;
 
+#[cfg(not(target_os = "android"))]
+pub use compress::{
+    generate_compatible_image, generate_compatible_video, IMAGE_COMPATIBLE_MAX_DIM,
+    VIDEO_COMPATIBLE_MAX_HEIGHT,
+};
 pub use compress::{
     generate_thumbnail, generate_thumbnail_from_bytes, image_needs_independent_thumbnail,
     image_thumbnail_dimensions_acceptable, IMAGE_THUMBNAIL_MAX_DIM,
@@ -35,8 +40,7 @@ pub use compress::{
 pub use http::{build_reqwest_header_map, create_client};
 pub use native_download::{NativeDownloadEntry, NativeDownloadState};
 pub use queue::{
-    next_download_id, ActiveDownloadInfo, DownloadQueue, DownloadRequest,
-    DownloadState,
+    next_download_id, ActiveDownloadInfo, DownloadQueue, DownloadRequest, DownloadState,
 };
 pub use util::{
     build_safe_filename, build_safe_filename_no_ext, compute_bytes_hash, compute_file_hash,
@@ -214,7 +218,9 @@ impl SpillWriter {
     fn poll_drive_spill(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         if self.file.is_none() {
             std::fs::create_dir_all(&self.downloads_dir)?;
-            let path = self.downloads_dir.join(format!("{}.part", self.download_id));
+            let path = self
+                .downloads_dir
+                .join(format!("{}.part", self.download_id));
             let std_file = std::fs::File::create(&path)?;
             self.file = Some(tokio::fs::File::from_std(std_file));
             self.path = Some(path);
@@ -289,7 +295,8 @@ impl AsyncWrite for SpillWriter {
         if let Some(dq) = self.dq.as_ref() {
             if dq.is_download_canceled_sync(download_id) {
                 return Poll::Ready(Err(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted, "Task canceled",
+                    std::io::ErrorKind::Interrupted,
+                    "Task canceled",
                 )));
             }
         }
@@ -479,7 +486,7 @@ pub async fn download_with_retry(
         // 已接收量 >0 表示续传：download 据此发送 Range。
         let already_received = writer.received();
         match downloader
-            .download( &parsed, headers, &mut writer, already_received)
+            .download(&parsed, headers, &mut writer, already_received)
             .await
         {
             // 流结束：曾落盘 → Path，否则 → Bytes。
@@ -572,12 +579,17 @@ pub async fn resolve_display_name(url: &str, local_path: &str) -> String {
     downloader.display_name(&parsed, local_path).await
 }
 
-
 pub enum PostprocessSource<'a> {
     /// 小文件/内存下载 → 写入 output_dir
-    Bytes { output_dir: &'a Path, bytes: &'a [u8] },
+    Bytes {
+        output_dir: &'a Path,
+        bytes: &'a [u8],
+    },
     /// 文件已在磁盘上；relocate_to = Some(dir) → 移动到 dir；None → 原地处理
-    Path { path: &'a Path, relocate_to: Option<&'a Path> },
+    Path {
+        path: &'a Path,
+        relocate_to: Option<&'a Path>,
+    },
     /// Android content:// URI —— url 参数即为 URI；所有元数据通过 ContentIoProvider 解析，不在 Rust 持有字节。
     #[cfg(target_os = "android")]
     ContentUri,
@@ -609,7 +621,8 @@ pub async fn postprocess_downloaded_image(
     match async {
         let event_task_id = task_id.or(surf_record_id).unwrap_or_default();
         let is_surf_mode = surf_record_id.is_some();
-        // 根据不同来源计算mime和哈希
+        // 根据不同来源计算 MIME 和哈希。图片/普通文件仍由 infer 负责格式判定；
+        // Android content:// 由系统 ContentIoProvider 提供 MIME。
         let (inferred_mime, hash, hash_ms) = match &source {
             PostprocessSource::Bytes { bytes, .. } => {
                 let inferred_mime = match crate::image_type::mime_type_from_bytes(bytes) {
@@ -985,6 +998,42 @@ pub async fn postprocess_downloaded_image(
                 .map(|s| s.to_string())
                 .unwrap_or(default_name);
 
+            // 桌面：生成浏览器兼容副本（格式不支持或超大图）。失败只记日志，不阻断入库。
+            #[cfg(not(target_os = "android"))]
+            let compatible_path_str: Option<String> = {
+                let compat_result = if is_video {
+                    match crate::media_dimensions::probe_media_sync(&path) {
+                        Some(probe) => compress::generate_compatible_video(&path, &probe).await,
+                        None => Ok(None),
+                    }
+                } else {
+                    match (resolved_w, resolved_h) {
+                        (Some(w), Some(h)) => {
+                            compress::generate_compatible_image(&path, &inferred_mime, w, h).await
+                        }
+                        _ => Ok(None),
+                    }
+                };
+                match compat_result {
+                    Ok(Some(p)) => p
+                        .canonicalize()
+                        .ok()
+                        .map(|cp| {
+                            cp.to_string_lossy()
+                                .to_string()
+                                .trim_start_matches("\\\\?\\")
+                                .to_string()
+                        }),
+                    Ok(None) => None,
+                    Err(e) => {
+                        eprintln!("[downloader] compatible generation failed: {e}");
+                        None
+                    }
+                }
+            };
+            #[cfg(target_os = "android")]
+            let compatible_path_str: Option<String> = None;
+
             let image_info = ImageInfo {
                 id: "".to_string(),
                 url: if is_content {
@@ -1011,6 +1060,7 @@ pub async fn postprocess_downloaded_image(
                 last_set_wallpaper_at: None,
                 size: resolved_size,
                 album_order: None,
+                compatible_path: compatible_path_str,
             };
 
             let t_add = (!auto_deduplicate).then(Instant::now);
@@ -1118,31 +1168,6 @@ pub async fn postprocess_downloaded_image(
             dq.switch_state(id, DownloadState::Failed, Some(err.as_str())).await;
             return Err(err);
         }
-    }
-}
-
-/// 若 infer 得到支持的媒体类型且当前路径扩展名不匹配，则重命名为规范扩展名。
-pub(crate) async fn ensure_media_extension_by_infer(path: &Path) -> PathBuf {
-    let inferred = match crate::image_type::mime_type_from_path(path) {
-        Some(m) => m,
-        None => return path.to_path_buf(),
-    };
-    let want_ext = match crate::image_type::ext_from_mime(&inferred) {
-        Some(e) => e,
-        None => return path.to_path_buf(),
-    };
-    let current_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    if crate::image_type::is_supported_media_ext(current_ext) && current_ext == want_ext {
-        return path.to_path_buf();
-    }
-    let new_path = path.with_extension(&want_ext);
-    if new_path == *path {
-        return path.to_path_buf();
-    }
-    if tokio::fs::rename(path, &new_path).await.is_ok() {
-        new_path
-    } else {
-        path.to_path_buf()
     }
 }
 
@@ -1264,8 +1289,15 @@ mod spill_writer_tests {
         let mut w = SpillWriter::new_in(3, dir.clone());
         let data = write_pattern(&mut w, 6 * MIB).await;
 
-        assert_eq!(w.spilled_len as usize, DOWNLOAD_SPILL_THRESHOLD, "仅一次 5 MiB 溢写");
-        assert_eq!(w.buffer.len(), 6 * MIB - DOWNLOAD_SPILL_THRESHOLD, "残余 1 MiB 仍在内存");
+        assert_eq!(
+            w.spilled_len as usize, DOWNLOAD_SPILL_THRESHOLD,
+            "仅一次 5 MiB 溢写"
+        );
+        assert_eq!(
+            w.buffer.len(),
+            6 * MIB - DOWNLOAD_SPILL_THRESHOLD,
+            "残余 1 MiB 仍在内存"
+        );
         assert_eq!(w.received() as usize, 6 * MIB);
 
         match w.finalize().await.unwrap() {
@@ -1345,7 +1377,10 @@ mod spill_writer_tests {
             expected.extend_from_slice(&chunk);
         }
         w.flush().await.unwrap();
-        assert_eq!(w.spilled_len as usize, DOWNLOAD_SPILL_THRESHOLD, "累计到 5 MiB 落盘一次");
+        assert_eq!(
+            w.spilled_len as usize, DOWNLOAD_SPILL_THRESHOLD,
+            "累计到 5 MiB 落盘一次"
+        );
         assert_eq!(w.received() as usize, 6 * MIB);
         match w.finalize().await.unwrap() {
             DownloadOutcome::Path(p) => assert_eq!(std::fs::read(&p).unwrap(), expected),

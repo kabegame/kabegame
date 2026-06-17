@@ -567,7 +567,8 @@ impl Storage {
              images.display_name,
              COALESCE(images.type, 'image') as media_type,
              images.last_set_wallpaper_at,
-             images.size
+             images.size,
+             images.compatible_path
              FROM images
              LEFT JOIN album_images ai_fav ON images.id = ai_fav.image_id AND ai_fav.album_id = '{}'
              LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
@@ -610,6 +611,7 @@ impl Storage {
                         )?,
                         size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
                         album_order: None,
+                        compatible_path: row.get::<_, Option<String>>(17)?,
                     })
                 },
             )
@@ -643,7 +645,8 @@ impl Storage {
              images.display_name,
              COALESCE(images.type, 'image') as media_type,
              images.last_set_wallpaper_at,
-             images.size
+             images.size,
+             images.compatible_path
              FROM images
              LEFT JOIN album_images ai_fav ON images.id = ai_fav.image_id AND ai_fav.album_id = '{}'
              LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
@@ -679,6 +682,7 @@ impl Storage {
                     last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
                     size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
                     album_order: None,
+                    compatible_path: row.get::<_, Option<String>>(17)?,
                 })
             })
             .optional()

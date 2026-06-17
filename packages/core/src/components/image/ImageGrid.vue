@@ -17,6 +17,7 @@
                 :prefer="gridPrefer" :selected="selectedIds.has(item.image.id)"
                 :is-entering="item.isEntering"
                 :horizontal="isHorizontal"
+                :hover-original="gridHoverOriginal"
                 :video-playing="playingVideoId === item.image.id"
                 @click="(e) => handleItemClick(item.image, item.index, e)"
                 @dblclick="() => handleItemDblClick(item.image, item.index)"
@@ -31,6 +32,7 @@
               <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
                 :prefer="gridPrefer" :selected="selectedIds.has(image.id)"
                 :horizontal="isHorizontal"
+                :hover-original="gridHoverOriginal"
                 :video-playing="playingVideoId === image.id"
                 @click="(e) => handleItemClick(image, index, e)"
                 @dblclick="() => handleItemDblClick(image, index)"
@@ -47,6 +49,7 @@
               <ImageItem v-for="entry in bucket" :key="entry.image.id" :image="entry.image"
                 :prefer="gridPrefer" :selected="selectedIds.has(entry.image.id)"
                 :window-aspect-ratio="aspectRatioOf(entry.image)" fill-box :horizontal="isHorizontal"
+                :hover-original="gridHoverOriginal"
                 :video-playing="playingVideoId === entry.image.id"
                 @click="(e) => handleItemClick(entry.image, entry.index, e)"
                 @dblclick="() => handleItemDblClick(entry.image, entry.index)"
@@ -112,7 +115,7 @@ import { IS_WEB, IS_ANDROID } from "../../env";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 import { Plugin } from "@kabegame/core/stores/plugins";
-import { ImagePrefer } from "@kabegame/core/composables/imageUrlPlan.ts";
+import type { ImagePrefer } from "@kabegame/core/types/image";
 
 // core 版保留通用图片意图；favorite/addToAlbum 等 kabegame 专属入口仍在 wrapper 层扩展。
 export type ContextCommand =
@@ -275,8 +278,10 @@ const gridColumnsCount = computed(() => {
 });
 // 非web且列数少（<3）时优先加载原图（缩略图打底，原图流式覆盖）；列数多则只用缩略图省带宽。
 const gridPrefer = computed<ImagePrefer>(() =>
-  (gridColumnsCount.value < 3 && !IS_WEB) ? "original" : "thumbnail"
+  (gridColumnsCount.value <= 2 && !IS_WEB) ? "original" : "thumbnail"
 );
+// 列数过多（>=5）时 hover 不再升级为原图，因为没有意义；视频 hover 预览不受影响。
+const gridHoverOriginal = computed(() => gridColumnsCount.value < 5);
 // 紧凑布局：栅格更紧凑，空白更少。整体间距为历史值的 1/3，让网格更紧凑。
 const gridGapPx = computed(() => {
   const base = isCompact.value
@@ -524,8 +529,10 @@ const updateVirtualRange = () => {
   const overscan = virtualOverscanRows.value;
   const nextStart = Math.max(0, startRow - overscan);
   const nextEnd = Math.max(nextStart, Math.min(totalRows.value - 1, endRow + overscan));
+
   virtualStartRow.value = isFinite(nextStart) ? nextStart : 0;
   virtualEndRow.value = isFinite(nextEnd) ? nextEnd : 0;
+
 };
 
 const measureItemHeight = () => {

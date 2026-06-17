@@ -85,6 +85,7 @@ pub struct OrganizeScanRow {
     pub hash: String,
     pub local_path: String,
     pub thumbnail_path: String,
+    pub compatible_path: String,
 }
 
 impl Storage {
@@ -222,7 +223,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, COALESCE(hash, ''), local_path, COALESCE(thumbnail_path, '') \
+                "SELECT id, COALESCE(hash, ''), local_path, COALESCE(thumbnail_path, ''), COALESCE(compatible_path, '') \
                  FROM images WHERE id > ?1 ORDER BY id ASC LIMIT ?2",
             )
             .map_err(|e| format!("Failed to prepare organize batch: {}", e))?;
@@ -233,6 +234,7 @@ impl Storage {
                     hash: row.get(1)?,
                     local_path: row.get(2)?,
                     thumbnail_path: row.get(3)?,
+                    compatible_path: row.get(4)?,
                 })
             })
             .map_err(|e| format!("Failed to query organize batch: {}", e))?;
@@ -296,6 +298,8 @@ pub struct OrganizeOptions {
     pub remove_missing: bool,
     pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
+    /// 为尚无兼容副本的媒体（浏览器不兼容格式/超大图）生成兼容副本（仅桌面）
+    pub regen_compatible: bool,
     /// 在 DB 记录删除后是否同时删除磁盘上的源文件
     pub delete_source_files: bool,
     /// 从有序列表（按 id ASC）中跳过的前若干条
@@ -320,6 +324,7 @@ pub struct OrganizeRunState {
     pub remove_missing: bool,
     pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
+    pub regen_compatible: bool,
     pub delete_source_files: bool,
 }
 
@@ -368,6 +373,7 @@ impl OrganizeService {
             remove_missing: options.remove_missing,
             remove_unrecognized: options.remove_unrecognized,
             regen_thumbnails: options.regen_thumbnails,
+            regen_compatible: options.regen_compatible,
             delete_source_files: options.delete_source_files,
         };
         let mut g = self
@@ -577,8 +583,12 @@ fn run_organize(
     // id 游标：上一批处理到的最大 id。用游标分页而非 OFFSET，避免边扫边删导致漏扫。
     let mut last_id: i64 = 0;
 
-    // 缩略图重生成重（解码 + 写文件），保持小批；其余只读判断 + 删除，用大批减少往返。
-    let batch_size = if options.regen_thumbnails { 10 } else { 100 };
+    // 缩略图重生成 / 兼容格式生成均重（解码 + 写文件），保持小批；其余只读判断 + 删除，用大批减少往返。
+    let batch_size = if options.regen_thumbnails || options.regen_compatible {
+        10
+    } else {
+        100
+    };
 
     // 当前壁纸 id：若被移除则清空（与历史行为保持一致）
     let mut current_wallpaper_id = Settings::global().get_current_wallpaper_image_id();
@@ -612,6 +622,8 @@ fn run_organize(
         let mut remove_ids: Vec<String> = Vec::new();
         let mut refresh_list: Vec<ThumbnailRefreshAction> = Vec::new();
         let mut should_remove: HashSet<i64> = HashSet::new();
+        #[cfg(not(target_os = "android"))]
+        let mut compat_list: Vec<(i64, String)> = Vec::new();
 
         let upper = organize_range_upper_bound(options.offset, options.limit);
         let mut finish_organize = false;
@@ -665,6 +677,18 @@ fn run_organize(
             if options.regen_thumbnails && !should_remove.contains(&row.id) {
                 if let Some(action) = thumbnail_refresh_action(row) {
                     refresh_list.push(action);
+                }
+            }
+
+            // 5. 补充兼容格式（仅桌面：浏览器不兼容格式 / 超大图）
+            #[cfg(not(target_os = "android"))]
+            if options.regen_compatible
+                && !should_remove.contains(&row.id)
+                && row.compatible_path.is_empty()
+            {
+                let local = row.local_path.trim();
+                if !local.is_empty() && Path::new(local).exists() {
+                    compat_list.push((row.id, local.to_string()));
                 }
             }
         }
@@ -726,7 +750,65 @@ fn run_organize(
             }
         }
 
-        // 本批（扫描 + 删除 + 缩略图）完成后发送进度
+        // 执行兼容格式补充（仅桌面）
+        #[cfg(not(target_os = "android"))]
+        for (id, local_path) in compat_list {
+            if cancel.load(Ordering::Relaxed) {
+                emit_organize_finished(removed_total, regenerated_total, true);
+                return Ok(());
+            }
+            let local = Path::new(&local_path);
+            let result = handle.block_on(async {
+                if crate::image_type::is_video_by_path(local) {
+                    match crate::media_dimensions::probe_media_sync(local) {
+                        Some(probe) => {
+                            crate::crawler::downloader::generate_compatible_video(local, &probe)
+                                .await
+                        }
+                        None => Ok(None),
+                    }
+                } else {
+                    let Some(mime) = crate::image_type::mime_type_from_path(local) else {
+                        return Ok(None);
+                    };
+                    let Some((w, h)) =
+                        crate::media_dimensions::resolve_media_dimensions_sync(&local_path)
+                    else {
+                        return Ok(None);
+                    };
+                    crate::crawler::downloader::generate_compatible_image(local, &mime, w, h).await
+                }
+            });
+            match result {
+                Ok(Some(compat_path)) => {
+                    let path_str = compat_path
+                        .canonicalize()
+                        .ok()
+                        .map(|p| {
+                            p.to_string_lossy()
+                                .to_string()
+                                .trim_start_matches("\\\\?\\")
+                                .to_string()
+                        })
+                        .unwrap_or_else(|| compat_path.to_string_lossy().to_string());
+                    if let Err(e) =
+                        storage.replace_image_compatible_path(&id.to_string(), &path_str)
+                    {
+                        eprintln!("[organize] compatible_path update failed for {id}: {e}");
+                    } else {
+                        regenerated_total += 1;
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!(
+                        "[organize] compatible generation failed for {id} ({local_path}): {e}"
+                    );
+                }
+            }
+        }
+
+        // 本批（扫描 + 删除 + 缩略图 + 兼容格式）完成后发送进度
         push_organize_progress(total, &options, row_index, removed_total, regenerated_total);
 
         if finish_organize {
@@ -751,6 +833,7 @@ mod tests {
             hash: String::new(),
             local_path: local_path.to_string_lossy().to_string(),
             thumbnail_path: thumbnail_path.to_string_lossy().to_string(),
+            compatible_path: String::new(),
         }
     }
 

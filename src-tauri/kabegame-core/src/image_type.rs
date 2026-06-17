@@ -8,7 +8,9 @@ use std::sync::{LazyLock, OnceLock, RwLock};
 /// 后端内置支持的图片扩展名（小写，不含点号）。前端可通过 set_frontend_supported_image_formats 扩展额外格式。
 const BUILTIN_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp"];
 /// 后端内置支持的视频扩展名（小写，不含点号）。
-const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "wmv", "webm", "mkv"];
+const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "m4v", "mov", "3gp", "3g2", "mkv", "webm", "wmv", "asf",
+];
 
 /// 扩展名到 MIME 的映射（含内置 avif，以及前端可能上报的 heic）。
 const EXT_MIME: &[(&str, &str)] = &[
@@ -21,11 +23,42 @@ const EXT_MIME: &[(&str, &str)] = &[
     ("avif", "image/avif"),
     ("heic", "image/heic"),
     ("mp4", "video/mp4"),
+    ("m4v", "video/mp4"),
     ("mov", "video/quicktime"),
+    ("3gp", "video/mp4"),
+    ("3g2", "video/mp4"),
     ("wmv", "video/x-ms-wmv"),
+    ("asf", "video/x-ms-wmv"),
     ("webm", "video/webm"),
     ("mkv", "video/x-matroska"),
 ];
+
+/// 浏览器（Chromium WebView）能直接显示的图片 MIME 集合（不依赖前端上报）。
+/// avif/heic 取决于前端能力，不在此列；调用方可结合 `FRONTEND_EXTENSIONS` 二次放行。
+const BROWSER_SAFE_IMAGE_MIMES: &[&str] = &[
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/bmp",
+    "image/webp",
+];
+
+/// 判断图片 MIME 是否可在浏览器中直接显示（不需要生成兼容副本）。
+/// heic/avif 的前端能力需在调用层结合 `FRONTEND_EXTENSIONS` 额外判定。
+pub fn image_mime_browser_safe(mime: &str) -> bool {
+    let m = mime.trim().to_lowercase();
+    if BROWSER_SAFE_IMAGE_MIMES.contains(&m.as_str()) {
+        return true;
+    }
+    // 若前端上报支持（如 avif/heic），也视为安全。
+    if let Ok(guard) = FRONTEND_EXTENSIONS.read() {
+        let mime_by_ext = mime_by_ext_map();
+        return guard
+            .iter()
+            .any(|ext| mime_by_ext.get(ext).map(|s| s.as_str()) == Some(&m));
+    }
+    false
+}
 
 static MIME_BY_EXT: OnceLock<HashMap<String, String>> = OnceLock::new();
 

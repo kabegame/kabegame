@@ -569,6 +569,7 @@ fn replace_image_thumbnail_path_deletes_old_independent_thumbnail() {
             last_set_wallpaper_at: None,
             size: None,
             album_order: None,
+            compatible_path: None,
         })
         .unwrap();
 
