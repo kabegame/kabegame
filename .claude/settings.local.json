@@ -85,7 +85,18 @@
       "Bash(xxd /d/Codes/kabegame/src-tauri/kabegame-core/tests/media/image_bmp.bmp)",
       "Bash(FFMPEG_LIBS_DIR=\"/d/Codes/kabegame/third/FFmpeg-build/install/bin\" FFMPEG_INCLUDE_DIR=\"/d/Codes/kabegame/third/FFmpeg-build/install/include\" FFMPEG_LINK_MODE=\"dynamic\" cargo test -p kabegame-core --test probe_debug debug_dll_config -- --nocapture)",
       "Bash(where avformat-62.dll)",
-      "Bash(FFMPEG_LIBS_DIR=/d/Codes/kabegame/third/FFmpeg-build/install/bin FFMPEG_INCLUDE_DIR=/d/Codes/kabegame/third/FFmpeg-build/install/include FFMPEG_LINK_MODE=dynamic PATH=/d/Codes/kabegame/third/FFmpeg-build/install/bin:__TRACKED_VAR__ cargo test -p kabegame-core --test probe_debug debug_probe_format_detection -- --nocapture)"
+      "Bash(FFMPEG_LIBS_DIR=/d/Codes/kabegame/third/FFmpeg-build/install/bin FFMPEG_INCLUDE_DIR=/d/Codes/kabegame/third/FFmpeg-build/install/include FFMPEG_LINK_MODE=dynamic PATH=/d/Codes/kabegame/third/FFmpeg-build/install/bin:__TRACKED_VAR__ cargo test -p kabegame-core --test probe_debug debug_probe_format_detection -- --nocapture)",
+      "PowerShell(Get-WinEvent -LogName \"Application\" -MaxEvents 50 -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -match \"docker\" -or $_.Message -match \"docker\" } | Select-Object TimeCreated, ProviderName, LevelDisplayName, Message | Format-List | Select-Object -First 100)",
+      "PowerShell(wsl --status 2>&1)",
+      "PowerShell(Get-WindowsOptionalFeature -Online -FeatureName \"Microsoft-Hyper-V-All\" -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-WindowsOptionalFeature -Online -FeatureName \"VirtualMachinePlatform\" -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Content \"$env:LOCALAPPDATA\\\\Docker\\\\log\\\\host\\\\com.docker.backend.exe.log.0\" -Tail 80)",
+      "PowerShell(Get-Content \"$env:LOCALAPPDATA\\\\Docker\\\\log\\\\host\\\\com.docker.backend.exe.log.0\" -Tail 30 | Select-String -Pattern \"error|fail|fatal|crash|abort|exit|warn\" -CaseSensitive:$false | Select-Object -Last 30)",
+      "PowerShell(Get-Content \"$env:LOCALAPPDATA\\\\Docker\\\\log\\\\host\\\\Docker Desktop.exe.stderr.log\" -Tail 50)",
+      "PowerShell(Get-Content \"$env:LOCALAPPDATA\\\\Docker\\\\log\\\\host\\\\electron-2026-06-18-01.log\")",
+      "PowerShell(wsl --list --verbose 2>&1)",
+      "PowerShell(wsl --version 2>&1)",
+      "PowerShell(Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{N='Used\\(GB\\)';E={[math]::Round\\($_.Used/1GB,2\\)}}, @{N='Free\\(GB\\)';E={[math]::Round\\($_.Free/1GB,2\\)}}, @{N='Total\\(GB\\)';E={[math]::Round\\(\\($_.Used+$_.Free\\)/1GB,2\\)}})"
     ]
   }
 }

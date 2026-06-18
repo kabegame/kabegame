@@ -524,7 +524,7 @@ impl Storage {
         let crawled_at_i64 = image.crawled_at as i64;
         conn.execute(
             "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata_id, thumbnail_path, hash, type, width, height, display_name, size, compatible_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             VALUES (?1, ?2, ?3, (SELECT id FROM tasks WHERE id = ?4), ?5, ?6, (SELECT id FROM image_metadata WHERE id = ?7), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 &image.url,
                 image.local_path,

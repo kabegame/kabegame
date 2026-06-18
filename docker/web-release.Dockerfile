@@ -28,6 +28,7 @@ RUN dnf install -y \
     openssl-devel \
     x264-devel \
     nasm \
+    clang-devel \
  && dnf clean all
 
 RUN ln -sf /bin/bash /bash

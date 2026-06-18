@@ -97,11 +97,10 @@ export class ModePlugin extends BasePlugin {
       // 编译期 mode 现在通过 cargo --features 传递（见 prepareCompileArgs hook）。
       this.setEnv("KABEGAME_MODE", this.mode!.mode);
       this.setEnv("VITE_KABEGAME_MODE", this.mode!.mode);
-
       if (this.mode!.isAndroid) {
         this.setEnv("VITE_ANDROID", "true");
         this.setEnv("TAURI_PLATFORM", "android");
-      } else if (this.mode!.isStandard || this.mode!.isLight) {
+      } else if (this.mode!.isStandard || this.mode!.isLight || this.mode!.isWeb) {
         this.setEnv("FFMPEG_PKG_CONFIG_PATH", path.join(
             THIRD_DIR,
             "FFmpeg-build",
@@ -157,8 +156,7 @@ export class ModePlugin extends BasePlugin {
       ) {
         const binAbs = path.resolve(BIN_DIR);
         const prev = process.env.PATH || "";
-        process.env.PATH = binAbs + path.delimiter + prev;
-        this.log(chalk.cyan(`PATH prepended with KABEGAME bin: ${binAbs}`));
+        this.setEnv("PATH", binAbs + path.delimiter + prev);
       }
     });
 
