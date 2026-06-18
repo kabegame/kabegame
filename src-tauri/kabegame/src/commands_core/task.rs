@@ -114,7 +114,6 @@ pub async fn start_task(task: Value) -> Result<String, String> {
             failed_task.end_time = Some(now_ms);
             failed_task.error = Some(e.clone());
             let _ = Storage::global().update_task(failed_task);
-
         }
         return Err(e);
     }

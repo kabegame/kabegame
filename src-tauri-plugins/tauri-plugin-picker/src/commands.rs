@@ -4,6 +4,16 @@ use crate::models::*;
 use crate::PickerExt;
 
 #[tauri::command]
+pub(crate) async fn get_http_server_base<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<GetHttpServerBaseResponse, String> {
+    app.picker()
+        .get_http_server_base()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub(crate) async fn pick_folder<R: Runtime>(app: AppHandle<R>) -> Result<PickFolderResult, String> {
     app.picker()
         .0

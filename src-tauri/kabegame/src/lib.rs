@@ -21,7 +21,7 @@ mod debug_ingest;
 mod compress_provider;
 #[cfg(all(not(feature = "web"), target_os = "android"))]
 mod content_io_provider;
-#[cfg(not(target_os = "android"))]
+#[cfg(any(not(target_os = "android"), not(feature = "web")))]
 mod http_server;
 mod ipc;
 #[cfg(all(not(feature = "web"), target_os = "linux"))]
@@ -45,7 +45,7 @@ mod wallpaper;
 use commands::*;
 #[cfg(not(feature = "web"))]
 use core::fmt;
-#[cfg(all(not(feature = "web"), not(target_os = "android")))]
+#[cfg(not(feature = "web"))]
 use http_server::get_http_server_base_url;
 use startup::*;
 use std::process;
@@ -591,7 +591,6 @@ pub fn run() {
             set_supported_image_formats,
             get_linux_desktop_env,
             is_plasma_wallpaper_plugin_installed,
-            #[cfg(not(target_os = "android"))]
             get_http_server_base_url,
             #[cfg(not(target_os = "android"))]
             start_organize,

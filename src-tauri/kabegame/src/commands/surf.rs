@@ -231,9 +231,8 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                             return false;
                         }
                         let effective_url = if url.scheme() == "blob" {
-                            Url::parse(url.as_str()
-                                .strip_prefix("blob:")
-                                .unwrap_or(url.as_str())).unwrap()
+                            Url::parse(url.as_str().strip_prefix("blob:").unwrap_or(url.as_str()))
+                                .unwrap()
                         } else {
                             url.clone()
                         };

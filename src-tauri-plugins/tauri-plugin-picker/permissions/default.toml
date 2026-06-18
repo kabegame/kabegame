@@ -1,6 +1,7 @@
 [default]
 description = "Default permissions for the picker plugin."
 permissions = [
+  "allow-getHttpServerBase",
   "allow-pickFolder",
   "allow-pickImages",
   "allow-pickVideos",

@@ -8,6 +8,12 @@ pub struct PickFolderResult {
     pub path: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetHttpServerBaseResponse {
+    pub base_url: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListContentChildrenArgs {

@@ -11,11 +11,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "../image/ImageContent.vue";
 import { isVideoMediaType } from "../../utils/mediaMime";
 
+onMounted(() => {
+console.log('render this')
+
+})
 /**
  * PhotoSwipe 每张幻灯片的内容封装：复用 ImageContent（缩略图→原图流式覆盖）。
  * 视频：随 PhotoSwipe 控件显隐同步播放/暂停；若浏览器拒绝带声音 autoplay，

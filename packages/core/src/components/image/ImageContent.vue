@@ -21,7 +21,7 @@
       <!-- 双图层：prefer=original 且缩略图与原图 URL 不同 -->
       <template v-if="!isVideo || isVideo && prefer === 'thumbnail' && IS_ANDROID">
         <img
-          v-if="!IS_ANDROID && !thumbFailed"
+          v-if="!thumbFailed"
           :key="`thumb:${thumbnailUrl}`"
           :src="thumbnailUrl"
           loading="lazy"
@@ -84,30 +84,20 @@ import { isVideoMediaType } from "../../utils/mediaMime";
 import { useUiStore } from "../../stores/ui";
 import { useLoadingDelay } from "../../composables/useLoadingDelay";
 import { fileToUrl, thumbnailToUrl, compatibleToUrl } from "../../httpServer";
-import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID, LOCAL_FILE_PROXY_PREFIX } from "../../env";
+import { IS_ANDROID } from "../../env";
 
 // ---- Path → URL helpers (pure) ----
 const normalizeDesktopPath = (path: string | undefined): string =>
   (path || "").trimStart().replace(/^\\\\\?\\/, "").trim();
 
-const toDesktopUrl = (path: string | undefined): string => {
+const toFileUrl = (path: string | undefined): string => {
   const normalized = normalizeDesktopPath(path);
   return normalized ? fileToUrl(normalized) : "";
 };
 
-const toDesktopThumbnailUrl = (path: string | undefined): string => {
+const toThumbnailUrl = (path: string | undefined): string => {
   const normalized = normalizeDesktopPath(path);
   return normalized ? thumbnailToUrl(normalized) : "";
-};
-
-const toAndroidContentUrl = (path: string | undefined): string => {
-  const raw = (path || "").trim();
-  return raw.startsWith("content://") ? raw.replace("content://", CONTENT_URI_PROXY_PREFIX) : "";
-};
-
-const toAndroidLocalFileUrl = (path: string | undefined): string => {
-  const raw = (path || "").trim();
-  return !raw || raw.startsWith("content://") ? "" : LOCAL_FILE_PROXY_PREFIX + raw;
 };
 
 interface Props {
@@ -143,21 +133,19 @@ const isVideo = computed(() => isVideoMediaType(props.image.type));
 // ---- Explicit URL derivation ----
 // 缩略图层 URL：桌面为缩略图文件；安卓为本地文件代理（无独立缩略图或偏好原图时为空）。
 const thumbnailUrl = computed(() => {
-  if (IS_ANDROID) {
-    const localFileUrl = toAndroidLocalFileUrl(props.image.thumbnailPath || props.image.localPath);
-    if (localFileUrl && (isVideo.value || props.prefer !== "original")) return localFileUrl;
-    return "";
+  const thumbnail = toThumbnailUrl(props.image.thumbnailPath);
+  if (thumbnail) return thumbnail;
+  if (IS_ANDROID && (isVideo.value || props.prefer !== "original")) {
+    return toFileUrl(props.image.localPath);
   }
-  return toDesktopThumbnailUrl(props.image.thumbnailPath);
+  return "";
 });
-// 浏览器兼容副本 URL：仅桌面有意义，走 /compatible 入口按 compatible_path 查表校验。
+// 浏览器兼容副本 URL：走 /compatible；Android 本地服务不做库校验，只按路径读取。
 const compatibleUrl = computed(() =>
-  IS_ANDROID || !props.image.compatiblePath ? "" : compatibleToUrl(props.image.compatiblePath)
+  props.image.compatiblePath ? compatibleToUrl(normalizeDesktopPath(props.image.compatiblePath)) : ""
 );
-// 原始文件 URL：桌面指向 localPath；安卓为 content:// 代理。
-const localUrl = computed(() =>
-  IS_ANDROID ? toAndroidContentUrl(props.image.localPath) : toDesktopUrl(props.image.localPath)
-);
+// 原始文件 URL：桌面为文件路径，Android 可为 content:// 或普通路径。
+const localUrl = computed(() => toFileUrl(props.image.localPath));
 
 // ---- Mutable load state ----
 const thumbFailed    = ref(false);
@@ -259,6 +247,16 @@ const onVideoError = () => {
     videoUsedFallback.value = true;
     return; // videoSrc computed 自动切换到 localUrl，触发重新加载
   }
+  const el = videoEl.value;
+  const me = el?.error;
+  console.log('[KbgVideo] error', {
+    src: el?.currentSrc || videoSrc.value,
+    code: me?.code,            // 1=ABORTED 2=NETWORK 3=DECODE 4=SRC_NOT_SUPPORTED
+    message: me?.message,
+    networkState: el?.networkState,
+    readyState: el?.readyState,
+    type: props.image.type,
+  });
   videoFailed.value = true;
   finishLoading();
 };

@@ -66,7 +66,6 @@ import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import type { Album } from "@/stores/albums";
 import { Loading } from "@element-plus/icons-vue";
 import { useAlbumStore } from "@/stores/albums";
-import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID } from "@kabegame/core/env";
 import ImageItem from "@kabegame/core/components/image/ImageItem.vue";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { fileToUrl, thumbnailToUrl } from "@kabegame/core/httpServer";
@@ -108,11 +107,6 @@ const toPreviewUrl = (img: ImageInfo): string => {
   const localPath = (img.localPath || "").trim();
   const path = thumbPath || localPath;
   if (!path) return "";
-  if (IS_ANDROID) {
-    return path.startsWith("content://")
-      ? path.replace("content://", CONTENT_URI_PROXY_PREFIX)
-      : "";
-  }
   return thumbPath ? thumbnailToUrl(thumbPath) : fileToUrl(localPath);
 };
 

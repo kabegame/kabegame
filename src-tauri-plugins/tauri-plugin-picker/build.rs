@@ -1,4 +1,5 @@
 const COMMANDS: &[&str] = &[
+    "getHttpServerBase",
     "pickFolder",
     "pickImages",
     "pickVideos",

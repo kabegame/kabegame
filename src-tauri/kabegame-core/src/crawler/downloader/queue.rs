@@ -49,7 +49,7 @@ impl DownloadState {
     pub fn can_transition_to(self, next: DownloadState) -> bool {
         use DownloadState::*;
         match self {
-            Preparing => matches!(next, Downloading | Processing | Canceled | Failed),
+            Preparing => matches!(next, Downloading | Processing | Completed | Canceled | Failed),
             // Downloading → Downloading 为 browser 流幂等重发
             Downloading => {
                 matches!(
@@ -733,6 +733,55 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                 clear_failed_image_after_success(job.failed_image_id);
             } else {
                 dq.switch_state(job.id, DownloadState::Canceled, None).await;
+            }
+            dq.wait_then_finish_download(job.id).await;
+            continue;
+        }
+
+        // file:// 不走网络下载，直接用本地路径走 postprocess（含重试场景）
+        if job_url.scheme() == "file" {
+            match job_url.to_file_path() {
+                Ok(file_path) => {
+                    dq.switch_state(job.id, DownloadState::Processing, None)
+                        .await;
+                    let _ = postprocess_downloaded_image(
+                        &*dq,
+                        job.id,
+                        super::PostprocessSource::Path {
+                            path: &file_path,
+                            relocate_to: None,
+                        },
+                        false,
+                        &job_url,
+                        &plugin_id_clone,
+                        Some(&task_id_clone),
+                        job.failed_image_id,
+                        None,
+                        download_start_time,
+                        job.output_album_id.as_deref(),
+                        &job.http_headers,
+                        false,
+                        job.custom_display_name.as_deref(),
+                        job.metadata_id,
+                    )
+                    .await;
+                }
+                Err(_) => {
+                    let e = "Invalid file:// URL";
+                    upsert_failed_image_on_failure(
+                        job.failed_image_id,
+                        &task_id_clone,
+                        &plugin_id_clone,
+                        job_url.as_str(),
+                        download_start_time as i64,
+                        e,
+                        &job.http_headers,
+                        job.metadata_id,
+                        job.custom_display_name.as_deref(),
+                    );
+                    dq.switch_state(job.id, DownloadState::Failed, Some(e))
+                        .await;
+                }
             }
             dq.wait_then_finish_download(job.id).await;
             continue;

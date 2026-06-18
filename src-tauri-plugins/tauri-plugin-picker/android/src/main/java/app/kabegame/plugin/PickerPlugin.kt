@@ -63,9 +63,22 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
     private var pendingImagesInvoke: Invoke? = null
     private var pendingVideosInvoke: Invoke? = null
     private var pendingKgpgInvoke: Invoke? = null
+    private val localHttpServer by lazy { LocalHttpServer(activity.applicationContext) }
 
     /** Launcher 由 Activity 在 onCreate 前注册并通过 PickerLauncherHost 提供，避免 RESUMED 后 register 崩溃 */
     private val launcherHost: PickerLauncherHost? = activity as? PickerLauncherHost
+
+    @Command
+    fun getHttpServerBase(invoke: Invoke) {
+        try {
+            val result = JSObject()
+            result.put("baseUrl", localHttpServer.start())
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            Log.e(TAG, "getHttpServerBase failed", e)
+            invoke.reject("启动本地 HTTP 服务失败: ${e.message}", e)
+        }
+    }
 
     /** 打开文件选择器选择 .kgpg 文件，将 content:// URI 复制到应用私有目录后返回可读路径 */
     @Command

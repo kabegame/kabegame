@@ -157,7 +157,7 @@ import AlbumsPageHeader from "@/components/header/AlbumsPageHeader.vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, IS_WEB, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
@@ -479,11 +479,6 @@ const toPreviewUrl = (img: ImageInfo): string => {
   const localPath = (img.localPath || "").trim();
   const path = thumbPath || localPath;
   if (!path) return "";
-  if (IS_ANDROID) {
-    return path.startsWith("content://")
-      ? path.replace("content://", CONTENT_URI_PROXY_PREFIX)
-      : "";
-  }
   return thumbPath ? thumbnailToUrl(thumbPath) : fileToUrl(localPath);
 };
 

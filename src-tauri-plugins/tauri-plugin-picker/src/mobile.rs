@@ -8,10 +8,10 @@ use crate::models::{
     ComputeHashArgs, ComputeHashResponse, CopyExtractedImagesToPicturesArgs,
     CopyExtractedImagesToPicturesResponse, CopyImageToPicturesArgs, CopyImageToPicturesResponse,
     GetContentSizeArgs, GetContentSizeResponse, GetDisplayNameArgs, GetDisplayNameResponse,
-    GetImageDimensionsArgs, GetImageDimensionsResponse, GetImageThumbnailArgs,
-    GetMimeTypeArgs, GetMimeTypeResponse,
-    GetVideoDimensionsArgs, GetVideoDimensionsResponse, IsDirectoryArgs, IsDirectoryResponse,
-    ListContentChildrenArgs, ListContentChildrenResponse, ReadFileBytesArgs, ReadFileBytesResponse,
+    GetHttpServerBaseResponse, GetImageDimensionsArgs, GetImageDimensionsResponse,
+    GetImageThumbnailArgs, GetMimeTypeArgs, GetMimeTypeResponse, GetVideoDimensionsArgs,
+    GetVideoDimensionsResponse, IsDirectoryArgs, IsDirectoryResponse, ListContentChildrenArgs,
+    ListContentChildrenResponse, ReadFileBytesArgs, ReadFileBytesResponse,
     TakePersistablePermissionArgs,
 };
 
@@ -28,6 +28,15 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
 pub struct Picker<R: Runtime>(pub(crate) PluginHandle<R>);
 
 impl<R: Runtime> Picker<R> {
+    pub async fn get_http_server_base(&self) -> crate::Result<GetHttpServerBaseResponse> {
+        let result: GetHttpServerBaseResponse = self
+            .0
+            .run_mobile_plugin_async("getHttpServerBase", ())
+            .await
+            .map_err(crate::Error::from)?;
+        Ok(result)
+    }
+
     pub async fn is_directory(&self, uri: String) -> crate::Result<IsDirectoryResponse> {
         let result: IsDirectoryResponse = self
             .0

@@ -805,7 +805,9 @@ pub async fn postprocess_downloaded_image(
             let is_content = url.scheme() == "content";
 
             // 这个算法要保持，不然可能不一致
-            let local_path = path
+            // Android 复制进媒体库后会把 local_path 改写为 content URI；桌面不改写。
+            #[cfg_attr(not(target_os = "android"), allow(unused_mut))]
+            let mut local_path = path
                 .canonicalize()
                 .unwrap_or_else(|_| path.to_path_buf())
                 .to_string_lossy()
@@ -855,20 +857,40 @@ pub async fn postprocess_downloaded_image(
                 return Ok(false);
             }
 
+            // Android：把下载到的临时文件复制进系统媒体库（图片→Pictures，视频→Movies），
+            // 得到 content:// URI；之后尺寸/预览/大小/名称解析与入库 local_path 都用该 URI。
+            // 视频必须如此：Android 的 compress_video_for_preview 只接受 content URI。
+            // ContentUri 源（本地 content:// 导入）已是 URI，跳过复制。
             #[cfg(target_os = "android")]
-            let (resolved_w, resolved_h) = if let PostprocessSource::ContentUri = &source {
+            if !matches!(&source, PostprocessSource::ContentUri) {
+                use crate::crawler::content_io::get_content_io_provider;
+                let copy_name = custom_display_name
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| {
+                        path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("image")
+                            .to_string()
+                    });
+                let uri = get_content_io_provider()
+                    .copy_image_to_pictures(&local_path, &inferred_mime, &copy_name)
+                    .await?;
+                // 临时文件已进库，删除
+                let _ = tokio::fs::remove_file(&path).await;
+                local_path = uri;
+            }
+
+            #[cfg(target_os = "android")]
+            let (resolved_w, resolved_h) = {
                 use crate::crawler::content_io::get_content_io_provider;
                 let io = get_content_io_provider();
                 let r = if is_video {
-                    io.get_video_dimensions(url.as_str()).await
+                    io.get_video_dimensions(&local_path).await
                 } else {
-                    io.get_image_dimensions(url.as_str()).await
+                    io.get_image_dimensions(&local_path).await
                 };
                 r.ok().map(|(w, h)| (Some(w), Some(h))).unwrap_or((None, None))
-            } else {
-                crate::media_dimensions::resolve_media_dimensions_sync(&local_path)
-                    .map(|(w, h)| (Some(w), Some(h)))
-                    .unwrap_or((None, None))
             };
             #[cfg(not(target_os = "android"))]
             let (resolved_w, resolved_h) =
@@ -877,13 +899,12 @@ pub async fn postprocess_downloaded_image(
                     .unwrap_or((None, None));
 
             #[cfg(target_os = "android")]
-            let resolved_size = if let PostprocessSource::ContentUri = &source {
-                use crate::crawler::content_io::get_content_io_provider;
-                get_content_io_provider().get_content_size(url.as_str()).await.ok()
-            } else if let Some(b) = bytes {
+            let resolved_size = if let Some(b) = bytes {
                 Some(b.len() as u64)
             } else {
-                crate::media_dimensions::resolve_file_size_sync(&local_path)
+                // 溢写文件已复制进库并删除，改用 content URI 读取大小。
+                use crate::crawler::content_io::get_content_io_provider;
+                get_content_io_provider().get_content_size(&local_path).await.ok()
             };
             #[cfg(not(target_os = "android"))]
             let resolved_size = if let Some(b) = bytes {
@@ -896,13 +917,11 @@ pub async fn postprocess_downloaded_image(
 
             let thumbnail_result: Result<Option<PathBuf>, String> = if is_video {
                 #[cfg(target_os = "android")]
-                if let PostprocessSource::ContentUri = &source {
-                    // 安卓 content URI：直接传 URI 给 Kotlin，不落盘
-                    compress::compress_video_for_preview(url.as_str())
+                {
+                    // local_path 此时是系统媒体库 content URI，交给 Kotlin provider 生成预览。
+                    compress::compress_video_for_preview(&local_path)
                         .await
                         .map(|r| Some(r.preview_path))
-                } else {
-                    Err("video ingestion not supported for non-content-uri on android".to_string())
                 }
                 #[cfg(not(target_os = "android"))]
                 {
@@ -912,24 +931,23 @@ pub async fn postprocess_downloaded_image(
                 }
             } else {
                 #[cfg(target_os = "android")]
-                if let PostprocessSource::ContentUri = &source {
-                    // 安卓 content URI：获取系统已计算好的图片缩略图
+                if let Some(b) = bytes {
+                    // 内存字节直接生成缩略图，最可靠，无需依赖系统缩略图。
+                    generate_thumbnail_from_bytes(b).await
+                } else {
+                    // 溢写文件已删除，改用系统 content URI 缩略图。
                     use crate::crawler::content_io::get_content_io_provider;
                     let thumbnails_dir = crate::app_paths::AppPaths::global().thumbnails_dir();
                     let _ = tokio::fs::create_dir_all(&thumbnails_dir).await;
                     let thumb_path = thumbnails_dir
                         .join(format!("{}.jpg", uuid::Uuid::new_v4()));
                     match get_content_io_provider()
-                        .get_image_thumbnail(url.as_str(), thumb_path.to_str().unwrap_or(""))
+                        .get_image_thumbnail(&local_path, thumb_path.to_str().unwrap_or(""))
                         .await
                     {
                         Ok(()) => Ok(Some(thumb_path)),
                         Err(_) => Ok(None),
                     }
-                } else if let Some(b) = bytes {
-                    generate_thumbnail_from_bytes(b).await
-                } else {
-                    generate_thumbnail(&path).await
                 }
                 #[cfg(not(target_os = "android"))]
                 if let Some(b) = bytes {
@@ -973,18 +991,14 @@ pub async fn postprocess_downloaded_image(
                 })
                 .unwrap_or_else(|| local_path.clone());
 
+            // local_path 此时是系统媒体库 content URI，取库内最终展示名（可能被系统去重改名）。
             #[cfg(target_os = "android")]
-            let default_name = if let PostprocessSource::ContentUri = &source {
+            let default_name = {
                 use crate::crawler::content_io::get_content_io_provider;
                 get_content_io_provider()
-                    .get_display_name(url.as_str())
+                    .get_display_name(&local_path)
                     .await
                     .unwrap_or_else(|_| "image".to_string())
-            } else {
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("image")
-                    .to_string()
             };
             #[cfg(not(target_os = "android"))]
             let default_name = path

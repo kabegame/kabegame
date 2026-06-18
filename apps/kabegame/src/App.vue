@@ -432,9 +432,7 @@ let unlistenSettingChange: UnlistenFn | null = null;
 let removeF11Listener: (() => void) | null = null;
 
 onMounted(async () => {
-  if (!IS_ANDROID) {
-    await initHttpServerBaseUrl();
-  }
+  await initHttpServerBaseUrl();
 
   // Android Back Button Handling
   let confirmingExit = false;
@@ -633,7 +631,7 @@ body,
 }
 
 .app-container {
-  height: 100dvh;
+  height: 100vh;
   display: flex;
   position: relative;
   overflow: hidden;

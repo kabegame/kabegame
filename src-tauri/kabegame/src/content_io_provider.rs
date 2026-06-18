@@ -44,7 +44,10 @@ enum Request {
     },
     CopyExtractedImagesToPictures(String),
     ComputeHash(String),
-    GetImageThumbnail { uri: String, output_path: String },
+    GetImageThumbnail {
+        uri: String,
+        output_path: String,
+    },
 }
 
 #[derive(Debug)]

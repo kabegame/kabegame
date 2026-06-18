@@ -345,9 +345,10 @@ async fn refresh_notifications(app: &AppHandle) {
         .filter(|d| !d.state.is_terminal())
         .map(|d| {
             let (indeterminate, progress) = match d.total_bytes {
-                Some(total) if total > 0 => {
-                    (false, (d.received_bytes.saturating_mul(100) / total).min(100) as u8)
-                }
+                Some(total) if total > 0 => (
+                    false,
+                    (d.received_bytes.saturating_mul(100) / total).min(100) as u8,
+                ),
                 _ => (true, 0u8),
             };
             DownloadNotificationItem {
@@ -359,7 +360,10 @@ async fn refresh_notifications(app: &AppHandle) {
         })
         .collect();
     let running = TaskScheduler::global().running_worker_count() as u32;
-    let _ = app.task_notification().update_notifications(running, items).await;
+    let _ = app
+        .task_notification()
+        .update_notifications(running, items)
+        .await;
 }
 
 pub fn start_event_loop(#[cfg(not(feature = "web"))] app: AppHandle) {
@@ -628,9 +632,7 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
                     return false;
                 }
                 let effective_url = if url.scheme() == "blob" {
-                    Url::parse(url.as_str()
-                        .strip_prefix("blob:")
-                        .unwrap_or(url.as_str())).unwrap()
+                    Url::parse(url.as_str().strip_prefix("blob:").unwrap_or(url.as_str())).unwrap()
                 } else {
                     url.clone()
                 };

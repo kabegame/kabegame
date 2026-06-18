@@ -32,6 +32,7 @@ impl<R: Runtime, T: Manager<R>> crate::PickerExt<R> for T {
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("picker")
         .invoke_handler(tauri::generate_handler![
+            commands::get_http_server_base,
             commands::pick_folder,
             commands::pick_images,
             commands::pick_videos,

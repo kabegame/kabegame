@@ -462,3 +462,17 @@ pub async fn get_http_server_base_url() -> Result<String, String> {
     }
     Err("file server not ready".to_string())
 }
+
+#[cfg(all(target_os = "android", not(feature = "web")))]
+#[tauri::command]
+pub async fn get_http_server_base_url<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<String, String> {
+    use tauri_plugin_picker::PickerExt;
+
+    app.picker()
+        .get_http_server_base()
+        .await
+        .map(|r| r.base_url.trim_end_matches('/').to_string())
+        .map_err(|e| e.to_string())
+}

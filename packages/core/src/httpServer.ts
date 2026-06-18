@@ -1,11 +1,10 @@
 import { invoke } from "./api";
-import { IS_ANDROID, IS_WEB } from "./env";
+import { IS_WEB } from "./env";
 
 // null = not yet initialized; "" = web same-origin; "http://..." = absolute base
 let httpServerBaseUrl: string | null = null;
 
 export async function initHttpServerBaseUrl() {
-  if (IS_ANDROID) return;
   if (httpServerBaseUrl !== null) return;
   if (IS_WEB) {
     const apiRoot = (import.meta.env.VITE_API_ROOT as string | undefined) ?? "/";
@@ -32,7 +31,6 @@ export function fileToUrl(localPath: string): string {
   if (!path) return "";
   const abs = asAbsoluteUrlOrNull(path);
   if (abs) return abs;
-  if (IS_ANDROID) return "";
   if (httpServerBaseUrl === null) return "";
   return `${httpServerBaseUrl}/file?path=${encodeURIComponent(path)}`;
 }
@@ -43,7 +41,6 @@ export function thumbnailToUrl(thumbnailPath: string): string {
   if (!path) return "";
   const abs = asAbsoluteUrlOrNull(path);
   if (abs) return abs;
-  if (IS_ANDROID) return "";
   if (httpServerBaseUrl === null) return "";
   return `${httpServerBaseUrl}/thumbnail?path=${encodeURIComponent(path)}`;
 }
@@ -54,7 +51,6 @@ export function compatibleToUrl(compatiblePath: string): string {
   if (!path) return "";
   const abs = asAbsoluteUrlOrNull(path);
   if (abs) return abs;
-  if (IS_ANDROID) return "";
   if (httpServerBaseUrl === null) return "";
   return `${httpServerBaseUrl}/compatible?path=${encodeURIComponent(path)}`;
 }

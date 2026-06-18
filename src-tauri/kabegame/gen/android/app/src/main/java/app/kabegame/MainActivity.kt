@@ -26,9 +26,7 @@ import app.kabegame.plugin.PickerLauncherHost
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.InputStream
 import java.net.URLDecoder
-import android.content.res.AssetFileDescriptor
 
 class MainActivity : TauriActivity(), PickerLauncherHost {
   private var folderPickerCallback: ActivityResultCallback<ActivityResult>? = null
@@ -399,147 +397,24 @@ private class ContentUriStreamClient(
             try {
                 val contentUriStr = uri.toString().replace("http://$PROXY_HOST_CONTENT/", "content://")
                 val contentUri = Uri.parse(contentUriStr)
-
                 val mimeType = contentResolver.getType(contentUri) ?: guessMimeTypeFromUri(contentUri)
 
-                // 视频等媒体需要 Range 支持，否则 WebView 会一直加载不播放
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    val rangeHeader = request.requestHeaders?.get("Range")
-                    if (!rangeHeader.isNullOrBlank()) {
-                        val rangeResponse = tryOpenRangeResponse(contentUri, mimeType, rangeHeader)
-                        if (rangeResponse != null) return rangeResponse
-                        // Range 解析或打开失败则回退到整段流
-                    }
-                }
-
+                // WebView 的 shouldInterceptRequest 路径不真正支持媒体 seek：实测它会忽略
+                // 我们返回的 Content-Range，把分段响应当成「从第 0 字节起」解析，导致非 faststart
+                // 的 MP4（moov 在末尾）永远播不出来并无限重试 Range 请求。
+                // 因此对 content:// 一律整段返回 200、不声明 Accept-Ranges：播放器据此判定资源
+                // 不可 seek，改为从头线性读到文件末尾的 moov，即可正常播放（代价：无法拖动进度、
+                // 大视频会强制全量缓冲）。图片同样整段返回，无影响。
                 val inputStream = contentResolver.openInputStream(contentUri)
-                    ?: run {
-                        android.util.Log.w("Kabegame", "Failed to open InputStream for: $contentUri")
-                        return delegate.shouldInterceptRequest(view, request)
-                    }
+                    ?: return delegate.shouldInterceptRequest(view, request)
 
                 return WebResourceResponse(mimeType, null, inputStream)
             } catch (e: Exception) {
-                android.util.Log.e("Kabegame", "Error intercepting proxy URI: $uri", e)
                 return delegate.shouldInterceptRequest(view, request)
             }
         }
 
         return delegate.shouldInterceptRequest(view, request)
-    }
-
-    /**
-     * 解析 Range 头并返回 206 响应；失败返回 null，调用方回退到整段流。
-     * 格式：bytes=start-end 或 bytes=start-
-     */
-    private fun tryOpenRangeResponse(contentUri: Uri, mimeType: String, rangeHeader: String): WebResourceResponse? {
-        val range = parseRangeHeader(rangeHeader) ?: return null
-        val afd = try {
-            contentResolver.openAssetFileDescriptor(contentUri, "r") ?: return null
-        } catch (e: Exception) {
-            return null
-        }
-        return try {
-            val total = afd.length
-            if (total < 0) {
-                afd.close()
-                return null // 长度未知时不支持 range
-            }
-            val totalSize = total.toLong()
-            var start = range.first
-            var end = range.second
-            if (end < 0) end = totalSize - 1
-            end = minOf(end, totalSize - 1)
-            if (start > end) {
-                afd.close()
-                return null
-            }
-            start = maxOf(0, start)
-
-            val inputStream = afd.createInputStream() ?: run {
-                afd.close()
-                return null
-            }
-            val skipped = inputStream.skip(start)
-            if (skipped != start) {
-                inputStream.close()
-                afd.close()
-                return null
-            }
-            val contentLength = (end - start + 1).toInt()
-            val boundedStream = BoundedInputStream(inputStream, contentLength)
-            val streamWithAfd = StreamWithAfd(boundedStream, afd)
-
-            val responseHeaders = mutableMapOf<String, String>(
-                "Content-Range" to "bytes $start-$end/$totalSize",
-                "Content-Length" to contentLength.toString(),
-                "Accept-Ranges" to "bytes",
-            )
-            WebResourceResponse(mimeType, null, 206, "Partial Content", responseHeaders, streamWithAfd)
-        } catch (e: Exception) {
-            android.util.Log.w("Kabegame", "Range response failed for $contentUri", e)
-            afd.close()
-            null
-        }
-    }
-
-    /** 关闭流时同时关闭 AssetFileDescriptor，避免泄漏 */
-    private class StreamWithAfd(
-        private val inner: InputStream,
-        private val afd: AssetFileDescriptor
-    ) : InputStream() {
-        override fun read(): Int = inner.read()
-        override fun read(b: ByteArray, off: Int, len: Int): Int = inner.read(b, off, len)
-        override fun close() {
-            try {
-                inner.close()
-            } finally {
-                afd.close()
-            }
-        }
-    }
-
-    /** 解析 "bytes=start-end" 或 "bytes=start-"；返回 Pair(start, end)，end 为 -1 表示到末尾 */
-    private fun parseRangeHeader(rangeHeader: String): Pair<Long, Long>? {
-        val value = rangeHeader.trim().lowercase()
-        if (!value.startsWith("bytes=")) return null
-        val part = value.removePrefix("bytes=").trim()
-        val dash = part.indexOf('-')
-        if (dash < 0) return null
-        val startStr = part.substring(0, dash).trim()
-        val endStr = part.substring(dash + 1).trim()
-        val start = startStr.toLongOrNull() ?: return null
-        if (start < 0) return null
-        val end = if (endStr.isEmpty()) -1L else endStr.toLongOrNull() ?: return null
-        if (end >= 0 && end < start) return null
-        return Pair(start, end)
-    }
-
-    /**
-     * 只读取最多 maxBytes 的输入流，之后返回 -1
-     */
-    private class BoundedInputStream(
-        private val inner: InputStream,
-        private var remaining: Int
-    ) : InputStream() {
-        override fun read(): Int {
-            if (remaining <= 0) return -1
-            val b = inner.read()
-            if (b >= 0) remaining--
-            return b
-        }
-
-        override fun read(b: ByteArray, off: Int, len: Int): Int {
-            if (remaining <= 0) return -1
-            val toRead = minOf(len, remaining)
-            val n = inner.read(b, off, toRead)
-            if (n > 0) remaining -= n
-            return n
-        }
-
-        override fun close() {
-            inner.close()
-        }
     }
 
     /**

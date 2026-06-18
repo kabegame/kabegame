@@ -181,15 +181,17 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 
 Android 下载池也走 `postprocess_downloaded_image`：
 
-- 未命中去重时：
-  - `Bytes` 源：写入内部临时文件，调用 `copy_image_to_pictures` 复制到 MediaStore Pictures，得到最终 content URI，再删除临时文件。
-  - `Path` 源（溢写文件）：直接从此临时文件复制到 MediaStore Pictures，完成后删除临时文件。
-- Pictures 内的最终命名与冲突处理交给 Android 系统。
-- hash 去重发生在复制或写临时文件之前。
-- 图片缩略图：`Bytes` 源直接从内存生成；`Path` 源从临时文件生成。
-- 视频预览使用同一个临时源文件压缩，完成后删除临时源文件。
-- 宽高与大小优先从 bytes/Rust 侧取得。
-- 入库后 `images.local_path` 存最终 content URI，缩略图仍是本地路径。
+- 未命中去重时（`Bytes`/`Path` 源，非 `ContentUri`）：
+  - 先把数据落到内部临时文件（`Bytes` 源写入 `cache_dir/image-download`；`Path` 源即溢写文件），再调用 `copy_image_to_pictures(temp_path, mime, name)` 复制进系统媒体库，得到最终 content URI，随后删除临时文件。
+  - **复制目标按 MIME 分流**（Kotlin `copyFileToPictures` 内部）：图片 → `MediaStore.Images`（`Pictures/Kabegame/`），视频 → `MediaStore.Video`（`Movies/Kabegame/`）。视频必须写入 Video 集合，否则插入 Images 会触发 MIME 校验失败。
+  - 复制后 `local_path` 被改写为该 content URI；之后的尺寸 / 大小 / 预览 / 展示名解析全部基于该 URI。
+- 库内的最终命名与冲突处理交给 Android 系统；`get_display_name(uri)` 取回系统去重后的真实名。
+- hash 去重发生在复制（写临时文件）之前，避免给系统媒体库制造重复项。
+- 图片缩略图：`Bytes` 源直接从内存字节生成（最可靠）；`Path` 源（溢写文件已删除）改用 `get_image_thumbnail(content_uri)` 取系统缩略图，失败回退 `None`。
+- 视频预览：必须在复制进库**之后**，用 content URI 走 Kotlin provider 的 `compress_video_for_preview(uri)` 生成（Android 版只接受 content URI，不接受文件路径）。
+- 宽高：图片/视频均通过 content URI 由 `get_image_dimensions` / `get_video_dimensions` 解析（图片侧有 `BitmapFactory` 兜底，刚插入即可解码）。大小优先用 `Bytes` 长度，否则 `get_content_size(uri)`。
+- 入库后 `images.local_path` 存最终 content URI，`images.url` 仍存原始下载 URL（`url.scheme()=="content"` 的本地导入才置空），缩略图仍是本地路径。
+- `ContentUri` 源（本地 `content://` 导入）跳过复制：`local_path` 即原 URI。
 
 本地 `content://` 导入走独立路径：`local_import.rs` 提前解析/传入 `display_name`，直接调用 `process_downloaded_content_image_to_storage`，不经过下载池的统一后处理。
 

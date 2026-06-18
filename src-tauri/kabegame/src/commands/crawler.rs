@@ -103,10 +103,13 @@ fn resolve_target_url(
     Ok(target.to_string())
 }
 
-async fn get_page_stack(task_id: &str) -> Result<kabegame_core::crawler::task_scheduler::PageStack, String> {
+async fn get_page_stack(
+    task_id: &str,
+) -> Result<kabegame_core::crawler::task_scheduler::PageStack, String> {
     TaskScheduler::global()
         .page_stacks()
-        .get_stack(task_id).await
+        .get_stack(task_id)
+        .await
         .ok_or_else(|| format!("Page stack not found for task {}", task_id))
 }
 
@@ -225,7 +228,8 @@ pub async fn crawl_exit_with_status(status: TaskStatus, only_for_task_id: Option
     );
     TaskScheduler::global()
         .page_stacks()
-        .remove_stack(&ctx.task_id).await;
+        .remove_stack(&ctx.task_id)
+        .await;
     let _ = state.release_task(&ctx.task_id).await;
 }
 
@@ -265,7 +269,8 @@ pub async fn crawl_error(message: String) -> Result<(), String> {
     );
     TaskScheduler::global()
         .page_stacks()
-        .remove_stack(&ctx.task_id).await;
+        .remove_stack(&ctx.task_id)
+        .await;
     let _ = state.release_task(&ctx.task_id).await;
     Ok(())
 }
@@ -377,18 +382,20 @@ pub async fn crawl_download_image(
     } else {
         None
     };
-    TaskScheduler::global().download_queue().download_image(
-        parsed,
-        images_dir,
-        ctx.plugin_id.clone(),
-        ctx.task_id.clone(),
-        download_start_time,
-        ctx.output_album_id.clone(),
-        merged_headers,
-        name,
-        metadata_id,
-    )
-    .await
+    TaskScheduler::global()
+        .download_queue()
+        .download_image(
+            parsed,
+            images_dir,
+            ctx.plugin_id.clone(),
+            ctx.task_id.clone(),
+            download_start_time,
+            ctx.output_album_id.clone(),
+            merged_headers,
+            name,
+            metadata_id,
+        )
+        .await
 }
 
 #[tauri::command]

@@ -7,7 +7,7 @@
     @close="handlePswpClose" @ui-visible-change="handlePswpUiVisibleChange" @reach-boundary="handlePswpReachBoundary">
 	    <!-- 每张幻灯片统一用 PswpSlideContent 渲染（缩略图→原图流式覆盖；视频随控件显隐播放/暂停） -->
 	    <template #slide="{ item, active, onReady, onError }">
-	      <PswpSlideContent v-if="imageById(item.id)" :image="imageById(item.id)!" :active="active"
+	      <PswpSlideContent v-if="item && imageById(item.id)" :image="imageById(item.id)!" :active="active"
 	        :ui-visible="pswpUiVisible" @ready="onReady" @error="onError" @video-play-fail="handleVideoPlayFail" />
 	    </template>
     <!-- 安卓：图片标题居中覆盖显示 -->
@@ -167,7 +167,7 @@ import ImageDetailContent, { type ImageDetailGalleryFilterTarget } from "./Image
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 import VideoControls from "./VideoControls.vue";
-import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX, LOCAL_FILE_PROXY_PREFIX, IS_LINUX } from "../../env";
+import { IS_LINUX } from "../../env";
 import { useUiStore } from "../../stores/ui";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
@@ -311,29 +311,17 @@ let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 const normalizeDesktopPath = (path: string | undefined) =>
   (path || "").trimStart().replace(/^\\\\\?\\/, "").trim();
 
-const toDesktopUrl = (path: string | undefined) => {
+const toFileUrl = (path: string | undefined) => {
   const normalized = normalizeDesktopPath(path);
   if (!normalized) return "";
   return fileToUrl(normalized);
 };
 
-const toAndroidProxyUrl = (path: string | undefined) => {
-  const raw = (path || "").trim();
-  if (!raw.startsWith("content://")) return "";
-  return raw.replace("content://", CONTENT_URI_PROXY_PREFIX);
-};
-
 const getOriginalPreviewUrl = (image: ImageInfo) =>
-  IS_ANDROID ? toAndroidProxyUrl(image.localPath) : toDesktopUrl(image.localPath);
+  toFileUrl(image.localPath);
 
 const getThumbnailPreviewUrl = (image: ImageInfo) => {
   const thumbPath = image.thumbnailPath;
-  if (IS_ANDROID) {
-    // 缩略图为应用私有目录下的本地文件（非 content://），经 kbg-local 代理加载；无缩略图则回退原图。
-    const raw = (thumbPath || "").trim();
-    if (raw && !raw.startsWith("content://")) return LOCAL_FILE_PROXY_PREFIX + raw;
-    return toAndroidProxyUrl(thumbPath) || getOriginalPreviewUrl(image);
-  }
   const normalized = normalizeDesktopPath(thumbPath);
   return normalized ? thumbnailToUrl(normalized) : getOriginalPreviewUrl(image);
 };
