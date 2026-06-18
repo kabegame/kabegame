@@ -634,24 +634,38 @@ impl DownloadQueue {
 
 async fn download_worker_loop(dq: Arc<DownloadQueue>) {
     loop {
-        let job = tokio::select! {
-            _ = dq.exit_notify.notified() => {
-                let desired = Settings::global()
-                    .get_max_concurrent_downloads()
-                    .max(1);
-                let mut total = dq.total_workers.lock().await;
-                if *total > desired {
-                    *total -= 1;
-                    return;
-                }
-                continue;
-            }
-            _ = dq.job_notify.notified() => {
-                let mut queue = dq.pending_queue.lock().await;
-                if let Some(job) = queue.pop_front() {
-                    job
-                } else {
+        // 持锁期间 enable，保证"队列为空"判断与 waiter 注册之间无窗口期，
+        // 防止 notify_waiters 在 worker 完成任务回到 select! 之前丢失通知。
+        let job_notified = dq.job_notify.notified();
+        tokio::pin!(job_notified);
+        let optimistic = {
+            let mut queue = dq.pending_queue.lock().await;
+            job_notified.as_mut().enable();
+            queue.pop_front()
+        };
+
+        let job = if let Some(job) = optimistic {
+            job
+        } else {
+            tokio::select! {
+                _ = dq.exit_notify.notified() => {
+                    let desired = Settings::global()
+                        .get_max_concurrent_downloads()
+                        .max(1);
+                    let mut total = dq.total_workers.lock().await;
+                    if *total > desired {
+                        *total -= 1;
+                        return;
+                    }
                     continue;
+                }
+                _ = job_notified => {
+                    let mut queue = dq.pending_queue.lock().await;
+                    if let Some(job) = queue.pop_front() {
+                        job
+                    } else {
+                        continue;
+                    }
                 }
             }
         };

@@ -28,8 +28,9 @@ dist-kabegame/*
 
 # Tauri
 target
-# kabegame capability 由 handlebars 生成
+# 由 handlebars 生成
 src-tauri/kabegame/capabilities/main.json
+src-tauri/kabegame/tauri.conf.json
 # apps/kabegame/index.html 由 handlebars 生成（见 index.html.handlebars）
 apps/kabegame/index.html
 src-tauri/*/gen/schemas/*
