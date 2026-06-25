@@ -23,12 +23,12 @@ use kabegame_core::storage::Storage;
 use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::Arc;
 #[cfg(not(feature = "web"))]
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 
 /// 分发 IPC 请求到对应的处理器（app_handle 由 start_ipc_server 传入，仅需发事件的请求使用）
-pub async fn dispatch_request(
+pub async fn dispatch_request<R: Runtime>(
     req: IpcRequest,
-    #[cfg(not(feature = "web"))] app_handle: AppHandle,
+    #[cfg(not(feature = "web"))] app_handle: AppHandle<R>,
 ) -> IpcResponse {
     // 获取s tatus
     if matches!(req, IpcRequest::Status) {
@@ -444,7 +444,7 @@ fn parse_plugin_args_to_user_config(
 }
 
 #[cfg(not(feature = "web"))]
-async fn handle_app_show_window(app_handle: AppHandle) -> IpcResponse {
+async fn handle_app_show_window<R: Runtime>(app_handle: AppHandle<R>) -> IpcResponse {
     match crate::startup::ensure_main_window(app_handle.clone()) {
         Ok(()) => {
             let _ = app_handle.emit("app-show-window", ());
@@ -455,7 +455,10 @@ async fn handle_app_show_window(app_handle: AppHandle) -> IpcResponse {
 }
 
 #[cfg(not(feature = "web"))]
-async fn handle_app_import_plugin(kgpg_path: String, app_handle: AppHandle) -> IpcResponse {
+async fn handle_app_import_plugin<R: Runtime>(
+    kgpg_path: String,
+    app_handle: AppHandle<R>,
+) -> IpcResponse {
     let path = std::path::PathBuf::from(&kgpg_path);
     if !path.is_file() {
         return IpcResponse::err(format!("File not found: {}", kgpg_path));

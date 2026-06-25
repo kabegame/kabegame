@@ -43,4 +43,42 @@ fn main() {
         // Delay-load dokan2.dll; binary won't fail to launch if the DLL is absent.
         println!("cargo:rustc-link-arg=/DELAYLOAD:dokan2.dll");
     }
+
+    // Bundled shared libs live in:
+    //   Linux .deb → /usr/lib/kabegame/   (binary at /usr/bin/kabegame)
+    //   macOS .app → Contents/Frameworks/ (binary at Contents/MacOS/Kabegame)
+    // See cocs/build/PLATFORM_SHARED_LIBS.md.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib/kabegame");
+        println!("cargo:rustc-link-arg=-Wl,--enable-new-dtags");
+
+        // Linux CEF backend (standard/light): hide the bundled SQLite (rusqlite)
+        // symbols from the dynamic symbol table.
+        //
+        // Chromium/CEF performs TLS certificate verification via NSS, which
+        // dlopen()s libsoftokn3 → system libsqlite3 to open its cert DB. Because
+        // the MAIN executable's global symbols take precedence, softokn binds
+        // `sqlite3_*` to OUR statically-linked SQLite (rusqlite, 3.45.0) instead
+        // of the system libsqlite3 (3.46.1) it was built against → mismatched
+        // VFS/struct layout → call through a null pointer → SIGSEGV on startup.
+        //
+        // Localizing `sqlite3_*` makes softokn resolve to the system libsqlite3;
+        // our own rusqlite calls are resolved at static-link time and unaffected.
+        // (This was the real cause of the CEF crash — NOT the tao runtime.)
+        if std::env::var("CARGO_FEATURE_STANDARD").is_ok()
+            || std::env::var("CARGO_FEATURE_LIGHT").is_ok()
+        {
+            let out = std::env::var("OUT_DIR").unwrap();
+            let map = std::path::Path::new(&out).join("hide-sqlite-symbols.map");
+            std::fs::write(&map, "{\n  local:\n    sqlite3_*;\n};\n")
+                .expect("write sqlite version script");
+            println!(
+                "cargo:rustc-link-arg=-Wl,--version-script={}",
+                map.display()
+            );
+        }
+    }
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
+    }
 }

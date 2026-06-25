@@ -11,7 +11,7 @@ use std::process::Command;
 use tauri::AppHandle;
 
 /// 应用已下载的安装包并重启。按平台分流。
-pub fn apply(app: &AppHandle, package: &Path) -> Result<(), String> {
+pub fn apply<R: tauri::Runtime>(app: &AppHandle<R>, package: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         return apply_macos(app, package);
@@ -33,7 +33,7 @@ pub fn apply(app: &AppHandle, package: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn apply_macos(app: &AppHandle, dmg: &Path) -> Result<(), String> {
+fn apply_macos<R: tauri::Runtime>(app: &AppHandle<R>, dmg: &Path) -> Result<(), String> {
     // 直接用系统 `open` 打开 dmg 镜像；用户在弹出的窗口里把 .app 拖入 Applications。
     // 打开成功即退出本进程（避免占用旧版本 / 让用户完成替换）。
     let status = Command::new("open")
@@ -48,7 +48,7 @@ fn apply_macos(app: &AppHandle, dmg: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn apply_windows(app: &AppHandle, setup: &Path) -> Result<(), String> {
+fn apply_windows<R: tauri::Runtime>(app: &AppHandle<R>, setup: &Path) -> Result<(), String> {
     Command::new(setup)
         .spawn()
         .map_err(|e| format!("启动安装程序失败: {e}"))?;

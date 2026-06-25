@@ -289,7 +289,9 @@ pub fn set_gallery_image_object_position(position: String) -> Result<(), String>
 }
 
 #[tauri::command]
-pub fn get_desktop_resolution(app: tauri::AppHandle) -> Result<(u32, u32), String> {
+pub fn get_desktop_resolution<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<(u32, u32), String> {
     #[cfg(target_os = "windows")]
     {
         unsafe {

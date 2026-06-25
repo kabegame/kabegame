@@ -16,7 +16,7 @@ pub use window::WindowWallpaperManager;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::wallpaper::window::WallpaperWindow;
@@ -26,12 +26,11 @@ use kabegame_core::settings::Settings;
 ///
 /// 注意：此控制器不承诺"过渡效果可用"，过渡效果应由更上层的轮播 manager 控制（并受"是否启用轮播"约束）。
 pub struct WallpaperController {
-    app: AppHandle,
-    native: Arc<NativeWallpaperManager>,
+    native: Arc<dyn WallpaperManager + Send + Sync>,
     #[cfg(target_os = "linux")]
-    plasma_plugin: Arc<PlasmaPluginWallpaperManager>,
+    plasma_plugin: Arc<dyn WallpaperManager + Send + Sync>,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
-    window: Arc<WindowWallpaperManager>,
+    window: Arc<dyn WallpaperManager + Send + Sync>,
 }
 
 // 全局 WallpaperController 单例
@@ -39,7 +38,7 @@ pub static WALLPAPER_CONTROLLER: OnceLock<WallpaperController> = OnceLock::new()
 
 impl WallpaperController {
     /// 初始化全局 WallpaperController（必须在首次使用前调用）
-    pub fn init_global(app: AppHandle) -> Result<(), String> {
+    pub fn init_global<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
         let controller = WallpaperController::new(app);
         WALLPAPER_CONTROLLER
             .set(controller)
@@ -54,23 +53,24 @@ impl WallpaperController {
         )
     }
 
-    pub fn new(app: AppHandle) -> Self {
-        let native = Arc::new(NativeWallpaperManager::new(app.clone()));
+    pub fn new<R: Runtime>(app: AppHandle<R>) -> Self {
+        let native = Arc::new(NativeWallpaperManager::new(app.clone()))
+            as Arc<dyn WallpaperManager + Send + Sync>;
 
         #[cfg(target_os = "linux")]
-        let plasma_plugin = Arc::new(PlasmaPluginWallpaperManager::new(app.clone()));
+        let plasma_plugin = Arc::new(PlasmaPluginWallpaperManager::new(app.clone()))
+            as Arc<dyn WallpaperManager + Send + Sync>;
 
         #[cfg(any(target_os = "windows", target_os = "macos"))]
-        let wallpaper_window: Arc<Mutex<Option<WallpaperWindow>>> = Arc::new(Mutex::new(None));
+        let wallpaper_window: Arc<Mutex<Option<WallpaperWindow<R>>>> = Arc::new(Mutex::new(None));
 
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         let window = Arc::new(WindowWallpaperManager::new(
-            app.clone(),
+            app,
             Arc::clone(&wallpaper_window),
-        ));
+        )) as Arc<dyn WallpaperManager + Send + Sync>;
 
         Self {
-            app,
             native,
             #[cfg(target_os = "linux")]
             plasma_plugin,
@@ -85,11 +85,11 @@ impl WallpaperController {
         Ok(match mode.as_str() {
             #[cfg(target_os = "linux")]
             "plasma-plugin" => {
-                self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>
+                self.plasma_plugin.clone()
             }
             #[cfg(any(target_os = "windows", target_os = "macos"))]
-            "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
-            _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+            "window" => self.window.clone(),
+            _ => self.native.clone(),
         })
     }
 
@@ -98,11 +98,11 @@ impl WallpaperController {
         match mode {
             #[cfg(target_os = "linux")]
             "plasma-plugin" => {
-                self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>
+                self.plasma_plugin.clone()
             }
             #[cfg(any(target_os = "windows", target_os = "macos"))]
-            "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
-            _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+            "window" => self.window.clone(),
+            _ => self.native.clone(),
         }
     }
 
@@ -124,11 +124,11 @@ impl WallpaperController {
         // - native: no-op
         // - window: 只确保 wallpaper 窗口存在且保持隐藏，不做挂载/显示
         // Linux plasma-plugin: 不在此处切换系统壁纸插件，仅在用户切换到插件模式时由 set_wallpaper_mode 调用 init
-        self.native.init(self.app.clone())?;
+        self.native.init()?;
 
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
-            self.window.init(self.app.clone())?;
+            self.window.init()?;
         }
         Ok(())
     }
@@ -206,7 +206,5 @@ pub trait WallpaperManager: Send + Sync {
 
     /// 初始化管理器（如创建窗口等）
     ///
-    /// # Arguments
-    /// * `app` - Tauri 应用句柄
-    fn init(&self, app: AppHandle) -> Result<(), String>;
+    fn init(&self) -> Result<(), String>;
 }

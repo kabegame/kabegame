@@ -5,17 +5,15 @@ use super::plasma_qdbus;
 use super::WallpaperManager;
 use async_trait::async_trait;
 use kabegame_core::settings::Settings;
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 /// Plasma 壁纸插件模式管理器。
 /// 所有壁纸/样式/过渡操作仅保存到 Settings，由 Plasma 插件通过 IPC 事件同步并显示。
-pub struct PlasmaPluginWallpaperManager {
-    _app: AppHandle,
-}
+pub struct PlasmaPluginWallpaperManager;
 
 impl PlasmaPluginWallpaperManager {
-    pub fn new(app: AppHandle) -> Self {
-        Self { _app: app }
+    pub fn new<R: Runtime>(_app: AppHandle<R>) -> Self {
+        Self
     }
 
     /// 将所有桌面的 wallpaperPlugin 切换为 kabegame 插件
@@ -94,7 +92,7 @@ impl WallpaperManager for PlasmaPluginWallpaperManager {
         Ok(())
     }
 
-    fn init(&self, _app: AppHandle) -> Result<(), String> {
+    fn init(&self) -> Result<(), String> {
         Self::switch_to_kabegame_plugin()
     }
 }

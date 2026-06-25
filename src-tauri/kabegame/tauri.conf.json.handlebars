@@ -29,7 +29,7 @@
     {{/if}}
     "security": {
       "capabilities": ["main-capability"{{#if isAndroid}}, "android-capability"{{else}}, "crawler-capability", "surf-capability"{{/if}}],
-      "csp": "default-src 'self' ipc: http://ipc.localhost{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; img-src * data: blob:; media-src * data: blob: ; connect-src 'self' ipc: http://ipc.localhost ws: wss:{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}} http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline' 'nonce-kabegame-ejs-bridge'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'self' blob: data: about:;",
+      "csp": "default-src 'self' ipc: cef-ipc: http://ipc.localhost{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; img-src * data: blob:; media-src * data: blob: ; connect-src 'self' ipc: cef-ipc: http://ipc.localhost ws: wss:{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}} http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline' 'nonce-kabegame-ejs-bridge'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'self' blob: data: about:;",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]
@@ -75,6 +75,7 @@
       }
     },
     "macOS": {
+      "frameworks": {{{macosFrameworksEntries}}},
       "dmg": {
         "background": "dmg/background.jpg"
       }
@@ -87,7 +88,8 @@
           "/usr/bin/kabegame-cli": "../../target/release/kabegame-cli",
           {{/unless}}
           "/usr/share/mime/packages/kabegame-kgpg.xml": "./deb/kabegame-kgpg.xml",
-          "/usr/share/icons/hicolor/256x256/mimetypes/application-x-kabegame-kgpg.png": "./icons/icon.png"
+          "/usr/share/icons/hicolor/256x256/mimetypes/application-x-kabegame-kgpg.png": "./icons/icon.png"{{#if linuxDebExtraFilesPresent}},
+          {{{linuxDebExtraFilesEntries}}}{{/if}}
         },
         "desktopTemplate": "./deb/kabegame.desktop",
         "postInstallScript": "./deb/postinst.sh",

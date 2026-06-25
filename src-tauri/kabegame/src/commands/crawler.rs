@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use url::Url;
 
 #[derive(Debug, Clone, Serialize)]
@@ -158,7 +158,7 @@ pub async fn crawl_get_context() -> Result<Option<CrawlContextPayload>, String> 
 }
 
 #[tauri::command]
-pub async fn crawl_run_script(app: AppHandle) -> Result<(), String> {
+pub async fn crawl_run_script<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let state = crawler_window_state();
     if !state.try_dispatch_script() {
         return Ok(());
@@ -306,8 +306,8 @@ pub async fn crawl_add_progress(percentage: f64) -> Result<(), String> {
 /// WebView `ctx.downloadImage(url, opts)`：`opts.name` / `opts.metadata` 可单独或同时传入（与 Rhai `download_image(url, #{ ... })` 语义一致）。
 /// raw metadata 在入口处归一化为 `metadata_id`，下载队列只传 id。
 #[tauri::command]
-pub async fn crawl_download_image(
-    app: AppHandle,
+pub async fn crawl_download_image<R: Runtime>(
+    app: AppHandle<R>,
     url: String,
     cookie: Option<bool>,
     headers: Option<HashMap<String, String>>,
@@ -460,7 +460,7 @@ pub async fn crawl_page_ready() -> Result<(), String> {
 
 /// 清空「当前站点」数据：删除该 URL 对应 origin 下的所有 Cookie（localStorage/sessionStorage 由前端 clear() 内清除）。
 #[tauri::command]
-pub async fn crawl_clear_site_data(app: AppHandle, url: String) -> Result<(), String> {
+pub async fn crawl_clear_site_data<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), String> {
     let parsed =
         Url::parse(url.trim()).map_err(|e| format!("Invalid URL for clear_site_data: {}", e))?;
     let crawler_window = app
@@ -476,7 +476,7 @@ pub async fn crawl_clear_site_data(app: AppHandle, url: String) -> Result<(), St
 }
 
 #[tauri::command]
-pub async fn crawl_to(app: AppHandle, payload: CrawlToPayload) -> Result<(), String> {
+pub async fn crawl_to<R: Runtime>(app: AppHandle<R>, payload: CrawlToPayload) -> Result<(), String> {
     let state = crawler_window_state();
     let Some(ctx) = state.get_context().await else {
         return Err("Crawler context not found".to_string());
@@ -542,7 +542,7 @@ pub async fn crawl_to(app: AppHandle, payload: CrawlToPayload) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn crawl_back(app: AppHandle, count: Option<usize>) -> Result<(), String> {
+pub async fn crawl_back<R: Runtime>(app: AppHandle<R>, count: Option<usize>) -> Result<(), String> {
     let count = count.unwrap_or(1);
     if count == 0 {
         return Err("count must be >= 1".to_string());
@@ -598,7 +598,7 @@ pub async fn crawl_back(app: AppHandle, count: Option<usize>) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn show_crawler_window(app: AppHandle) -> Result<(), String> {
+pub fn show_crawler_window<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     if crawler_window_state().try_get_context().is_none() {
         return Err(
             "爬虫 WebView 窗口当前为空，没有爬虫插件在占用，先运行一个爬虫插件吧".to_string(),

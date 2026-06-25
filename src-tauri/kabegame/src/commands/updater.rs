@@ -37,7 +37,9 @@ pub async fn cancel_download() -> Result<bool, String> {
 
 /// 应用已下载的更新并重启（restartable 下调用）。Linux 不支持。
 #[tauri::command]
-pub async fn apply_update_and_restart(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn apply_update_and_restart<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<(), String> {
     let (_tag, path) = UpdaterService::global()
         .downloaded_package()
         .ok_or("没有已下载的更新包")?;

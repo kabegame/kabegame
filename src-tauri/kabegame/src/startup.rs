@@ -20,7 +20,7 @@ use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use std::fs;
 use std::sync::Arc;
 #[cfg(not(feature = "web"))]
-use tauri::{AppHandle, Emitter, Listener, Manager};
+use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
 use url::Url;
 
 #[cfg(feature = "web")]
@@ -41,13 +41,13 @@ use kabegame_core::emitter::GlobalEmitter;
 use tauri::webview::DownloadEvent;
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-struct AppCrawlerWebViewHandler {
-    app: AppHandle,
+struct AppCrawlerWebViewHandler<R: Runtime> {
+    app: AppHandle<R>,
 }
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 #[async_trait]
-impl CrawlerWebViewHandler for AppCrawlerWebViewHandler {
+impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
     async fn setup_js_task(&self, _task_id: &str, base_url: &str) -> Result<(), String> {
         let crawler_window = self
             .app
@@ -123,7 +123,7 @@ pub fn cleanup_user_data_if_marked() -> bool {
 }
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-pub fn create_main_window(app_handle: &AppHandle) -> Result<(), String> {
+pub fn create_main_window<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Result<(), String> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
     let (width, height) = if cfg!(target_os = "linux") {
@@ -189,7 +189,7 @@ pub fn is_auto_startup() -> bool {
 
 /// 若主窗口不存在则创建，然后显示并聚焦。用于托盘点击、IPC AppShowWindow 等“显示窗口”场景。
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-pub fn ensure_main_window(app_handle: AppHandle) -> Result<(), String> {
+pub fn ensure_main_window<R: Runtime>(app_handle: AppHandle<R>) -> Result<(), String> {
     use tauri::Manager;
     if let Some(w) = app_handle.get_webview_window("main") {
         if w.is_minimized().unwrap_or(false) {
@@ -213,7 +213,10 @@ pub fn ensure_main_window(app_handle: AppHandle) -> Result<(), String> {
 }
 
 #[cfg(all(target_os = "macos", not(feature = "web")))]
-fn activate_macos_window(window: &tauri::WebviewWindow, app_handle: &AppHandle) {
+fn activate_macos_window<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    app_handle: &AppHandle<R>,
+) {
     let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Regular);
 
     let Ok(ns_window_ptr) = window.ns_window() else {
@@ -240,7 +243,7 @@ fn activate_macos_window(window: &tauri::WebviewWindow, app_handle: &AppHandle) 
 
 // 壁纸组件，壁纸设置、轮播等功能
 #[cfg(not(feature = "web"))]
-pub fn init_wallpaper_controller(app: &mut tauri::App) {
+pub fn init_wallpaper_controller(app: &mut tauri::App<crate::AppRuntime>) {
     // 初始化全局壁纸控制器（基础 manager）
     // 使用全局单例（不再使用 manage）
     if let Err(e) = WallpaperController::init_global(app.app_handle().clone()) {
@@ -332,7 +335,7 @@ fn download_notification_title(url: &str, plugin_id: &str) -> String {
 /// 镜像 TaskDrawer「正在下载」面板,把当前活跃下载 + 运行任务数同步到通知栏。
 /// 数据全部现读自 `DownloadQueue::get_active_downloads()`,startup 不维护任何集合。
 #[cfg(all(target_os = "android", not(feature = "web")))]
-async fn refresh_notifications(app: &AppHandle) {
+async fn refresh_notifications<R: Runtime>(app: &AppHandle<R>) {
     use tauri_plugin_task_notification::{DownloadNotificationItem, TaskNotificationExt};
 
     let downloads = TaskScheduler::global()
@@ -366,7 +369,9 @@ async fn refresh_notifications(app: &AppHandle) {
         .await;
 }
 
-pub fn start_event_loop(#[cfg(not(feature = "web"))] app: AppHandle) {
+pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
+    #[cfg(not(feature = "web"))] app: AppHandle<R>,
+) {
     #[cfg(feature = "web")]
     let bus = event_bus().clone();
     #[cfg(feature = "web")]
@@ -536,7 +541,9 @@ pub fn try_forward_to_existing_instance_and_exit() {
 
 /// 启动 IPC 服务（仅需 app_handle，DedupeService / VirtualDriveService 等由全局单例提供）
 #[cfg(not(target_os = "android"))]
-pub fn start_ipc_server(#[cfg(not(feature = "web"))] app_handle: AppHandle) {
+pub fn start_ipc_server<#[cfg(not(feature = "web"))] R: Runtime>(
+    #[cfg(not(feature = "web"))] app_handle: AppHandle<R>,
+) {
     println!("[IPC_SERVER] Starting IPC server...");
 
     let task_future = async move {
@@ -601,7 +608,7 @@ pub fn start_download_workers() {
 }
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
+pub fn create_crawler_window<R: Runtime>(app_handle: AppHandle<R>) -> Result<(), String> {
     if app_handle.get_webview_window("crawler").is_some() {
         return Ok(());
     }
@@ -737,13 +744,13 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
 }
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-pub fn init_crawler_webview_handler(app_handle: AppHandle) -> Result<(), String> {
+pub fn init_crawler_webview_handler<R: Runtime>(app_handle: AppHandle<R>) -> Result<(), String> {
     let handler = Arc::new(AppCrawlerWebViewHandler { app: app_handle });
     set_webview_handler(handler)
 }
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-pub fn init_crawler_window(app_handle: AppHandle) {
+pub fn init_crawler_window<R: Runtime>(app_handle: AppHandle<R>) {
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(e) = create_crawler_window(app_handle.clone()) {
             eprintln!("Failed to create crawler window: {}", e);

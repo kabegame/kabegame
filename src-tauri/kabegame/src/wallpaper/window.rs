@@ -1,7 +1,7 @@
 // 窗口壁纸模块 - 类似 Wallpaper Engine 的实现
 
 use std::sync::{Condvar, Mutex, OnceLock};
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
 
 // 标记壁纸窗口是否已完全初始化（前端 DOM + Vue 组件 + 事件监听器都已就绪）
 // 由 wallpaper_window_ready 命令设置为 true，并通过 notify_all 唤醒所有等待者
@@ -19,13 +19,13 @@ fn ready_notify() -> &'static ReadyNotify {
     })
 }
 
-pub struct WallpaperWindow {
-    window: WebviewWindow,
-    app: AppHandle,
+pub struct WallpaperWindow<R: Runtime> {
+    window: WebviewWindow<R>,
+    app: AppHandle<R>,
 }
 
-impl WallpaperWindow {
-    pub fn new(app: AppHandle) -> Self {
+impl<R: Runtime> WallpaperWindow<R> {
+    pub fn new(app: AppHandle<R>) -> Self {
         Self {
             window: app.get_webview_window("wallpaper").unwrap(),
             app,

@@ -87,6 +87,10 @@
   - 主题：Tauri v2 ACL（capability/permission）在 kabegame 的运行机制与故障复盘。
   - 适用场景：新增窗口 IPC 权限、调整 capability/permission、排查“命令不可用/全部被拒绝”问题。
 
+- [../src-tauri/tauri-runtime-cef/README.md](../src-tauri/tauri-runtime-cef/README.md)
+  - 主题：Linux 桌面 CEF runtime 后端的架构、平台门控、OSR 渲染、输入转发、自定义协议、page-load 生命周期与 `invoke` IPC 桥接（`ipc://` 主路径 + `cef-ipc://` postMessage 后备）。
+  - 适用场景：排查 Linux CEF 启动/渲染/IPC、升级 CEF/Chromium、调整 `tauri-runtime-cef` trait 适配、确认非 Linux 平台不触达 CEF。
+
 ## 调试（`debug/`）
 
 - [debug/DEBUG_INGEST.md](debug/DEBUG_INGEST.md)
@@ -98,6 +102,12 @@
 - [i18n/I18N_MIGRATION.md](i18n/I18N_MIGRATION.md)
   - 主题：i18n 迁移约束、命名空间规范与落地状态。
   - 适用场景：新增国际化 key、迁移旧文案、核对多语言覆盖。
+
+## 构建打包（`build/`）
+
+- [build/PLATFORM_SHARED_LIBS.md](build/PLATFORM_SHARED_LIBS.md)
+  - 主题：三平台动态库随包打包。`bin/{windows,linux,macos}/` 子目录约定、`OSPlugin.bundleLibs` 与 `verifyFFmpegBuildArtifacts` / `fixupMacOSAppBundle` / `fixupMacOSDmg`、Linux rpath `$ORIGIN/../lib/kabegame`、macOS install_name 改写为 `@executable_path/{相对路径}/Frameworks/...`、Tauri handlebars 动态注入 `linux.deb.files` 与 `macOS.frameworks`、Linux 不捆 libfuse 但仍 apt 依赖 `fuse3`(fusermount3)。
+  - 适用场景：新增/升级运行时动态库;排查最终用户报 `libx264.so.X: cannot open` 或 macOS `Library not loaded`;调整 build-ffmpeg / DLL 复制 / dmg fixup 流程。
 
 ## 应用更新（`updater/`）
 

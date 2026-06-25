@@ -7,13 +7,13 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 /// 桌面端开发：打开一个加载远程 URL 的 WebView 窗口（CRAWLER_BACKENDS 快速原型）。
 /// 仅桌面端可用；安卓不支持。
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub fn open_dev_webview(app: AppHandle, url: String) -> Result<(), String> {
+pub fn open_dev_webview<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), String> {
     let url = url.trim();
     if url.is_empty() {
         return Err("请输入 URL".to_string());
@@ -41,7 +41,7 @@ pub fn open_dev_webview(app: AppHandle, url: String) -> Result<(), String> {
 /// 退出应用。用于 Android 返回键确认退出及桌面/托盘等场景。
 /// 使用 AppHandle::exit 确保进程正确退出（win.close() 在 Android 上可能只关窗口不退出进程）。
 #[tauri::command]
-pub fn exit_app(app: AppHandle) {
+pub fn exit_app<R: Runtime>(app: AppHandle<R>) {
     if let Some(emitter) = GlobalEmitter::try_global() {
         emitter.emit_daemon_shutdown("exit");
     }
@@ -171,7 +171,7 @@ pub async fn is_plasma_wallpaper_plugin_installed() -> Result<bool, String> {
 
 #[tauri::command]
 #[cfg(not(target_os = "android"))]
-pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
+pub async fn clear_user_data<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let app_data_dir = kabegame_core::app_paths::AppPaths::global()
         .data_dir
         .clone();
@@ -276,7 +276,10 @@ pub async fn get_gallery_image(image_path: String) -> Result<Vec<u8>, String> {
 /// 复制图片到系统剪贴板。支持 Windows、macOS、Linux、Android。
 /// 通过 image_id 查表得到 local_path 后按路径读取并写入剪贴板。
 #[tauri::command]
-pub async fn copy_image_to_clipboard(app: AppHandle, image_id: String) -> Result<(), String> {
+pub async fn copy_image_to_clipboard<R: Runtime>(
+    app: AppHandle<R>,
+    image_id: String,
+) -> Result<(), String> {
     let image_path = {
         let info = Storage::find_image_by_id(&image_id)
             .map_err(|e| e.to_string())?
@@ -598,8 +601,8 @@ pub async fn copy_image_to_clipboard(app: AppHandle, image_id: String) -> Result
 
 #[tauri::command]
 #[cfg(target_os = "android")]
-pub async fn share_file(
-    app: AppHandle,
+pub async fn share_file<R: Runtime>(
+    app: AppHandle<R>,
     file_path: String,
     mime_type: String,
 ) -> Result<(), String> {

@@ -78,6 +78,7 @@ winver = "1"
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = "3.6"
 libc = "0.2"
+tauri-runtime-cef = { path = "../tauri-runtime-cef", features = ["cef-backend"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "0.3"
@@ -105,6 +106,7 @@ default = []
 standard = [
     "kabegame-core/virtual-driver",
     "dep:tauri",
+    "dep:tauri-runtime-cef",
     "dep:tauri-plugin-clipboard-manager",
     "dep:tauri-plugin-dialog",
     "dep:tauri-plugin-global-shortcut",
@@ -116,6 +118,7 @@ standard = [
 # Light desktop build: shared Tauri stack + video ingestion, no virtual driver
 light = [
     "dep:tauri",
+    "dep:tauri-runtime-cef",
     "dep:tauri-plugin-clipboard-manager",
     "dep:tauri-plugin-dialog",
     "dep:tauri-plugin-global-shortcut",

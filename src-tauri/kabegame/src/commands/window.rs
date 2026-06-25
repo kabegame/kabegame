@@ -1,7 +1,7 @@
 // 窗口管理相关命令
 
 #[cfg(target_os = "windows")]
-pub(super) async fn fix_wallpaper_window_zorder(app: tauri::AppHandle) {
+pub(super) async fn fix_wallpaper_window_zorder<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     use tauri::Manager;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -108,7 +108,7 @@ pub(super) async fn fix_wallpaper_window_zorder(app: tauri::AppHandle) {
 
 /// 隐藏主窗口（用于窗口关闭事件处理）
 #[tauri::command]
-pub fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
+pub fn hide_main_window<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
     use tauri::Manager;
     // 明确获取主窗口，而不是使用 values().next()（可能获取到壁纸窗口）
     let Some(window) = app.get_webview_window("main") else {
@@ -136,7 +136,7 @@ pub fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
 /// 修复壁纸窗口 Z-order（供前端在最小化等事件时调用）
 #[tauri::command]
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-pub async fn fix_wallpaper_zorder(app: tauri::AppHandle) {
+pub async fn fix_wallpaper_zorder<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     #[cfg(target_os = "windows")]
     fix_wallpaper_window_zorder(app).await;
 
@@ -153,7 +153,7 @@ pub async fn fix_wallpaper_zorder(app: tauri::AppHandle) {
 /// 解决壁纸窗口尚未注册事件监听时，后端先 emit 导致事件丢失的问题。
 #[tauri::command]
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-pub fn wallpaper_window_ready(_app: tauri::AppHandle) -> Result<(), String> {
+pub fn wallpaper_window_ready<R: tauri::Runtime>(_app: tauri::AppHandle<R>) -> Result<(), String> {
     // 标记窗口已完全初始化
     println!("壁纸窗口已就绪");
     crate::wallpaper::WallpaperWindow::mark_ready();
@@ -163,7 +163,7 @@ pub fn wallpaper_window_ready(_app: tauri::AppHandle) -> Result<(), String> {
 /// 切换主窗口全屏状态
 #[tauri::command]
 #[cfg(not(target_os = "android"))]
-pub async fn toggle_fullscreen(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn toggle_fullscreen<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
     use tauri::Manager;
 
     let window = app

@@ -6,7 +6,7 @@
 # 链接模型（见 cocs / 计划）：
 #   - macOS/Linux：静态库（install/lib/*.a + install/include），rust build.rs 静态链接。
 #   - Windows(MSYS2/MinGW)：动态库（avcodec-*.dll 等），用 gendef + lib.exe 生成 MSVC 导入库供 windows-msvc 链接，
-#     DLL 复制到仓库根 bin/（经 scripts/utils.ts 的 ffmpegDlls 复制到 resources/bin）。
+#     DLL 复制到仓库根 bin/windows/ → resources/bin 由 scripts/plugins/os-plugin.ts 在 build 期处理。
 #     —— 之所以 Windows 走 DLL：Dokan 仅有 MSVC 导入库，主程序须保持 windows-msvc；
 #        而 MinGW 编出的 libav* 静态库无法被 MSVC 链接，DLL 的 C 导出表则跨工具链可用。
 #
@@ -24,8 +24,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FFMPEG_SRC="${REPO_ROOT}/third/FFmpeg"
 BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build"
 INSTALL_DIR="${BUILD_DIR}/install"
-# Windows：DLL 复制到仓库根 bin/，与既有 libx264-165.dll/dokan2.dll 并列，由构建脚本复制进 resources/bin
-BIN_DIR="${REPO_ROOT}/bin"
+# 本脚本只产出 install/{bin,lib,include}/。把 install/bin/ 下的 DLL 复制到 bin/windows/
+# 由 scripts/plugins/os-plugin.ts 在 build 期负责（含校验 + 报错提示），见 cocs/build/PLATFORM_SHARED_LIBS.md。
 
 case "$(uname -s)" in
   Darwin)   OS_KIND="unix" ;;
@@ -196,9 +196,9 @@ if [[ "$OS_KIND" != "windows" ]]; then
   exit 0
 fi
 
-# ---- Windows：复制 DLL 到仓库根 bin/，并生成 MSVC 导入库 ----
-mkdir -p "$BIN_DIR"
-# 1) 复制 libav* DLL（含版本后缀，如 avcodec-61.dll）
+# ---- Windows：生成 MSVC 导入库 ----
+# DLL 复制到 bin/windows/ 的步骤已迁出，由 scripts/plugins/os-plugin.ts 在 build 期处理
+# （见 OSPlugin.collectWindowsFFmpegDlls()）。本脚本只产出 install/{bin,lib,include}/ 与 .lib。
 shopt -s nullglob
 _dlls=()
 for _dll in "$INSTALL_DIR/bin"/av*.dll "$INSTALL_DIR/bin"/swscale-*.dll "$INSTALL_DIR/bin"/swresample-*.dll; do
@@ -209,16 +209,9 @@ if [[ ${#_dlls[@]} -eq 0 ]]; then
   echo "未找到 libav* DLL: $INSTALL_DIR/bin/*.dll" >&2
   exit 1
 fi
-for _dll in "${_dlls[@]}"; do
-  cp -f "$_dll" "$BIN_DIR/" && echo "已复制 DLL: $(basename "$_dll")"
-done
-# 2) x264 运行时 DLL（avcodec.dll 依赖；仓库已提交一份，这里覆盖以保持版本同步）
-for _dll in /mingw64/bin/libx264*.dll; do
-  [[ -f "$_dll" ]] && cp -f "$_dll" "$BIN_DIR/" && echo "已复制 x264 DLL: $(basename "$_dll")"
-done
 
-# 3) 生成 MSVC 导入库（.lib）：gendef 从 DLL 提取 .def，再用 VS 的 lib.exe 生成 <name>.lib
-#    输出到 install/lib（与 .pc 同目录，便于 build.rs 经 FFMPEG_LIBS_DIR 找到）
+# 生成 MSVC 导入库（.lib）：gendef 从 DLL 提取 .def，再用 VS 的 lib.exe 生成 <name>.lib
+#   输出到 install/lib（与 .pc 同目录，便于 build.rs 经 FFMPEG_LIBS_DIR 找到）
 if ! command -v gendef &>/dev/null; then
   echo "错误: 未找到 gendef（生成 .def 需要）。请在 MSYS2 执行: pacman -S mingw-w64-x86_64-tools-git" >&2
   exit 1
@@ -230,9 +223,7 @@ fi
 _LIB_EXE="lib.exe"; command -v lib.exe &>/dev/null || _LIB_EXE="lib"
 _DEF_DIR="$BUILD_DIR/msvc-implib"
 mkdir -p "$_DEF_DIR"
-for _dll in "$BIN_DIR"/av*.dll "$BIN_DIR"/swscale-*.dll "$BIN_DIR"/swresample-*.dll; do
-  [[ -f "$_dll" ]] || continue
-  [[ "$(basename "$_dll")" == avdevice-* ]] && continue
+for _dll in "${_dlls[@]}"; do
   _base="$(basename "$_dll" .dll)"             # e.g. avcodec-61
   _libname="${_base%%-*}"                       # e.g. avcodec（rusty_ffmpeg 链接名）
   ( cd "$_DEF_DIR" && gendef "$_dll" >/dev/null 2>&1 )
@@ -244,4 +235,4 @@ for _dll in "$BIN_DIR"/av*.dll "$BIN_DIR"/swscale-*.dll "$BIN_DIR"/swresample-*.
   "$_LIB_EXE" "/def:$_def" /machine:x64 "/out:$INSTALL_DIR/lib/${_libname}.lib" >/dev/null
   echo "已生成 MSVC 导入库: ${_libname}.lib"
 done
-echo "Windows DLL 已复制到 $BIN_DIR；MSVC 导入库已生成到 $INSTALL_DIR/lib。"
+echo "Windows libav* DLL 留在 $INSTALL_DIR/bin（由 os-plugin 在 build 期复制到 bin/windows）；MSVC 导入库已生成到 $INSTALL_DIR/lib。"

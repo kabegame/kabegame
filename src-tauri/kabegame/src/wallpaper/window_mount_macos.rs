@@ -12,7 +12,7 @@ use tauri::WebviewWindow;
 /// 将 wallpaper WebView 窗口放到 macOS 桌面层（图标下方）。
 /// 通过 dispatch2::run_on_main 保证 NSWindow 属性在主线程上设置（若已在主线程则直接执行）。
 #[cfg(target_os = "macos")]
-pub fn mount_to_desktop(window: &WebviewWindow) -> Result<(), String> {
+pub fn mount_to_desktop<R: tauri::Runtime>(window: &WebviewWindow<R>) -> Result<(), String> {
     let ns_window_ptr = window
         .ns_window()
         .map_err(|e| format!("获取 NSWindow 句柄失败: {e}"))?;

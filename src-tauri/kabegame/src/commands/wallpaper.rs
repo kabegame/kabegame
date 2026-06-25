@@ -21,8 +21,8 @@ fn reject_if_wallpaper_disabled() -> Result<(), String> {
     Ok(())
 }
 
-pub async fn get_current_wallpaper_path_from_settings(
-    _app: &tauri::AppHandle,
+pub async fn get_current_wallpaper_path_from_settings<R: tauri::Runtime>(
+    _app: &tauri::AppHandle<R>,
 ) -> Result<Option<String>, String> {
     // 从 Settings 获取 settings + image localPath
     if let Some(id) = Settings::global().get_current_wallpaper_image_id() {
@@ -104,7 +104,9 @@ pub fn clear_current_wallpaper_image_id() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn get_current_wallpaper_path(app: AppHandle) -> Result<Option<String>, String> {
+pub async fn get_current_wallpaper_path<R: tauri::Runtime>(
+    app: AppHandle<R>,
+) -> Result<Option<String>, String> {
     get_current_wallpaper_path_from_settings(&app).await
 }
 
@@ -284,7 +286,10 @@ pub fn set_wallpaper_rotation_mode(mode: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_style(style: String, app: AppHandle) -> Result<(), String> {
+pub async fn set_wallpaper_style<R: tauri::Runtime>(
+    style: String,
+    app: AppHandle<R>,
+) -> Result<(), String> {
     reject_if_wallpaper_disabled()?;
     Settings::global().set_wallpaper_style(style.clone())?;
 
@@ -323,7 +328,10 @@ pub async fn set_wallpaper_rotation_transition(transition: String) -> Result<(),
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), String> {
+pub async fn set_wallpaper_mode<R: tauri::Runtime>(
+    mode: String,
+    app: AppHandle<R>,
+) -> Result<(), String> {
     reject_if_wallpaper_disabled()?;
     let settings = Settings::global();
     let old_mode = settings.get_wallpaper_mode();
@@ -353,7 +361,7 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
             if mode == "plasma-plugin" {
                 let target = controller.manager_for_mode(&mode);
                 target
-                    .init(app.clone())
+                    .init()
                     .map_err(|e| format!("切换系统壁纸插件失败: {}", e))?;
             }
             settings.set_wallpaper_mode(mode.clone())?;
@@ -392,7 +400,7 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
 
     eprintln!("[DEBUG] set_wallpaper_mode: 开始应用模式 {}", mode);
     target
-        .init(app.clone())
+        .init()
         .map_err(|e| format!("init 失败: {}", e))?;
     #[cfg(not(target_os = "linux"))]
     let is_plugin_mode = false;
@@ -465,7 +473,10 @@ pub fn get_wallpaper_disabled() -> bool {
 ///   native 模式保持系统壁纸现状不动（无法自动还原）。保留 currentWallpaperImageId。
 /// - 关闭时：复用启动逻辑恢复上次壁纸，并在轮播启用时恢复轮播。
 #[tauri::command]
-pub async fn set_wallpaper_disabled(disabled: bool, _app: AppHandle) -> Result<(), String> {
+pub async fn set_wallpaper_disabled<R: tauri::Runtime>(
+    disabled: bool,
+    _app: AppHandle<R>,
+) -> Result<(), String> {
     let settings = Settings::global();
     settings
         .set_wallpaper_disabled(disabled)

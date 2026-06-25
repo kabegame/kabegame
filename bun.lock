@@ -83,7 +83,7 @@
     },
     "packages/core": {
       "name": "@kabegame/core",
-      "version": "4.2.0",
+      "version": "4.2.1",
       "dependencies": {
         "@kabegame/i18n": "workspace:*",
         "@kabegame/image-type": "workspace:*",

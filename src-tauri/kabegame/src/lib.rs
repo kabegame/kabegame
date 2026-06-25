@@ -43,6 +43,29 @@ mod wallpaper;
 // ---- local-only imports ----
 #[cfg(not(feature = "web"))]
 use commands::*;
+
+/// 本次构建实际使用的 Tauri `Runtime` 具体类型。
+///
+/// 用于**不能带自由泛型 `<R>` 的场景**(全局单例 `static`、长期持有 `AppHandle`
+/// 的结构体)。命令/函数仍优先用 `<R: Runtime>` 泛型;只有像 `WallpaperRotator`
+/// 这种存进全局 `OnceLock` 的才用本别名。
+///
+/// Linux + standard/light → CEF;其余桌面/移动 → Wry。两条 run 路径分别用
+/// `Builder::<Cef<EventLoopMessage>>` / `Builder::default()`,与此别名一致。
+#[cfg(all(
+    not(feature = "web"),
+    target_os = "linux",
+    any(feature = "standard", feature = "light")
+))]
+pub(crate) type AppRuntime = tauri_runtime_cef::Cef<tauri::EventLoopMessage>;
+#[cfg(all(
+    not(feature = "web"),
+    not(all(
+        target_os = "linux",
+        any(feature = "standard", feature = "light")
+    ))
+))]
+pub(crate) type AppRuntime = tauri::Wry;
 #[cfg(not(feature = "web"))]
 use core::fmt;
 #[cfg(not(feature = "web"))]
@@ -73,7 +96,7 @@ use axum::{routing::get, Router};
 use std::net::SocketAddr;
 
 fn init(
-    #[cfg(not(feature = "web"))] app: &mut tauri::App,
+    #[cfg(not(feature = "web"))] app: &mut tauri::App<crate::AppRuntime>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     // 若有清理标记，必须在 init_globals 之前清理 data/cache，否则 DB 等已打开无法删除
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
@@ -294,11 +317,39 @@ pub fn run() {
 
 // ---- local (Tauri) entry point ----
 
-#[cfg(not(feature = "web"))]
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(all(
+    not(feature = "web"),
+    target_os = "linux",
+    any(feature = "standard", feature = "light")
+))]
 pub fn run() {
+    // 不再手动 push "main" 窗口:base config `windows: []`,主窗口由 setup 的
+    // `startup::create_main_window` 统一创建(与 Wry 路径完全一致)。Phase 3 minimal
+    // 时没挂 setup 才需要那个临时 window push;4.2 挂上 configure_app 后,push 会和
+    // create_main_window 撞 "main" label 导致窗口创建失败 → 黑屏。
+    let ctx = tauri::generate_context!();
+    eprintln!(
+        "[acl-diag] is_dev={} dev_url={:?} frontend_dist={:?}",
+        tauri::is_dev(),
+        ctx.config().build.dev_url.as_ref().map(|u| u.to_string()),
+        ctx.config().build.frontend_dist
+    );
+    let app = configure_app(tauri::Builder::<crate::AppRuntime>::new())
+        .build(ctx)
+        .expect("error while building tauri CEF application");
+
+    app.run(|_app_handle, _event| {});
+}
+
+/// 把全套插件 / setup / invoke_handler 装进 builder。Wry 与 CEF(Linux)两条 run
+/// 路径共用它,保证 CEF 下后端能力与 Wry 完全一致。`crate::AppRuntime` 按 cfg 解析为
+/// `Wry` 或 `Cef`,因此本函数在每个具体 build 里是单态的。
+#[cfg(not(feature = "web"))]
+pub(crate) fn configure_app(
+    builder: tauri::Builder<crate::AppRuntime>,
+) -> tauri::Builder<crate::AppRuntime> {
     // 先注册 pathes，在 .setup() 前完成 AppPaths 初始化，供 Settings/Storage 等使用
-    let mut builder = tauri::Builder::default()
+    let mut builder = builder
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -331,7 +382,7 @@ pub fn run() {
         });
     }
 
-    let app = builder
+    builder
         .setup(|app| {
             if let Err(e) = init(app) {
                 #[cfg(not(feature = "web"))]
@@ -604,6 +655,15 @@ pub fn run() {
             #[cfg(target_os = "android")]
             share_file,
         ])
+}
+
+#[cfg(all(
+    not(feature = "web"),
+    not(all(target_os = "linux", any(feature = "standard", feature = "light")))
+))]
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let app = configure_app(tauri::Builder::default())
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 

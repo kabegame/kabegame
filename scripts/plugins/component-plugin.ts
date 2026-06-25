@@ -1,7 +1,12 @@
 import { BasePlugin } from "./base-plugin";
 import { BuildSystem, SRC_FE_DIR, SRC_TAURI_DIR } from "../build-system";
 import * as path from "path";
-import { RESOURCES_DIR, stageResourceBinary, getDevServerHost } from "../utils";
+import {
+  ROOT,
+  RESOURCES_DIR,
+  stageResourceBinary,
+  getDevServerHost,
+} from "../utils";
 import { OSPlugin } from "./os-plugin";
 import {
   readdirSync,
@@ -127,6 +132,43 @@ export class ComponentPlugin extends BasePlugin {
       const component = comp ? new Component(comp) : this.component!;
       const isAndroid = !!bs.context.mode?.isAndroid;
       const isWeb = !!bs.context.mode?.isWeb;
+
+      // OSPlugin.bundleLibs 已在本 hook 之前(在同一 beforeBuild 阶段)填充了 bin/linux 与 bin/macos。
+      // 这里把目录列表翻译为 tauri.conf.json 的动态片段:
+      //   - Linux deb.files entries:`"/usr/lib/kabegame/<file>": "../../bin/linux/<file>"`
+      //   - macOS.frameworks:`["../../bin/macos/<file>", ...]`
+      // dev/check 等非 build 流程下,bin/{linux,macos} 可能为空,对应片段就是空(deb 段无额外 entry / frameworks 为空数组),tauri.conf.json 仍然合法。
+      let linuxDebExtraFilesEntries = "";
+      let linuxDebExtraFilesPresent = false;
+      let macosFrameworksEntries = "[]";
+      if (!isAndroid && !isWeb && !bs.context.cmd?.isCheck) {
+        if (OSPlugin.isLinux) {
+          const dir = path.join(ROOT, "bin", "linux");
+          if (existsSync(dir)) {
+            const files = readdirSync(dir).filter((f) =>
+              statSync(path.join(dir, f)).isFile(),
+            );
+            if (files.length > 0) {
+              linuxDebExtraFilesEntries = files
+                .map(
+                  (f) =>
+                    `"/usr/lib/kabegame/${f}": "../../bin/linux/${f}"`,
+                )
+                .join(",\n          ");
+              linuxDebExtraFilesPresent = true;
+            }
+          }
+        } else if (OSPlugin.isMacOS) {
+          const dir = path.join(ROOT, "bin", "macos");
+          if (existsSync(dir)) {
+            const files = readdirSync(dir)
+              .filter((f) => f.endsWith(".dylib"))
+              .map((f) => `../../bin/macos/${f}`);
+            macosFrameworksEntries = JSON.stringify(files);
+          }
+        }
+      }
+
       const templateCtx = {
         isWindows: !isAndroid && !isWeb && OSPlugin.isWindows,
         isMacOS: !isAndroid && !isWeb && OSPlugin.isMacOS,
@@ -138,6 +180,9 @@ export class ComponentPlugin extends BasePlugin {
         isWindowEffect:
           !isAndroid && !isWeb && (OSPlugin.isWindows || OSPlugin.isMacOS),
         noResources: false,
+        linuxDebExtraFilesEntries,
+        linuxDebExtraFilesPresent,
+        macosFrameworksEntries,
       };
 
       // 编译 apps/<comp>/index.html.handlebars → index.html（在所有模式下，包括 web）

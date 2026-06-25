@@ -225,7 +225,7 @@ struct ImageLite {
 }
 
 pub struct WallpaperRotator {
-    app: AppHandle,
+    app: AppHandle<crate::AppRuntime>,
     running: Arc<AtomicBool>,
     state: Arc<AtomicU8>,             // 轮播状态：Idle/Starting/Running/Stopping
     current_index: Arc<Mutex<usize>>, // 用于顺序模式
@@ -238,7 +238,7 @@ static WALLPAPER_ROTATOR: OnceLock<WallpaperRotator> = OnceLock::new();
 
 impl WallpaperRotator {
     /// 初始化全局 WallpaperRotator（必须在首次使用前调用）
-    pub fn init_global(app: AppHandle) -> Result<(), String> {
+    pub fn init_global(app: AppHandle<crate::AppRuntime>) -> Result<(), String> {
         let rotator = WallpaperRotator::new(app);
         WALLPAPER_ROTATOR
             .set(rotator)
@@ -253,7 +253,7 @@ impl WallpaperRotator {
             .expect("WallpaperRotator not initialized. Call WallpaperRotator::init_global() first.")
     }
 
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new(app: AppHandle<crate::AppRuntime>) -> Self {
         Self {
             app,
             running: Arc::new(AtomicBool::new(false)),
@@ -305,7 +305,7 @@ impl WallpaperRotator {
             .collect())
     }
 
-    async fn get_current_wallpaper_path(_app: &AppHandle) -> Option<String> {
+    async fn get_current_wallpaper_path(_app: &AppHandle<crate::AppRuntime>) -> Option<String> {
         let id = Settings::global().get_current_wallpaper_image_id()?;
         let img = Storage::find_image_by_id(&id).ok().flatten()?;
         let p = img.local_path;

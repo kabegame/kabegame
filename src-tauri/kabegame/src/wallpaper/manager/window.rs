@@ -2,17 +2,20 @@ use super::WallpaperManager;
 use crate::wallpaper::window::WallpaperWindow;
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 /// 窗口模式壁纸管理器（使用窗口句柄显示壁纸）
 /// 内容由壁纸页面通过 setting-change 自驱动，本 manager 仅负责窗口可见性（remount/show）
-pub struct WindowWallpaperManager {
-    app: AppHandle,
-    wallpaper_window: Arc<Mutex<Option<WallpaperWindow>>>,
+pub struct WindowWallpaperManager<R: Runtime> {
+    app: AppHandle<R>,
+    wallpaper_window: Arc<Mutex<Option<WallpaperWindow<R>>>>,
 }
 
-impl WindowWallpaperManager {
-    pub fn new(app: AppHandle, wallpaper_window: Arc<Mutex<Option<WallpaperWindow>>>) -> Self {
+impl<R: Runtime> WindowWallpaperManager<R> {
+    pub fn new(
+        app: AppHandle<R>,
+        wallpaper_window: Arc<Mutex<Option<WallpaperWindow<R>>>>,
+    ) -> Self {
         Self {
             app,
             wallpaper_window,
@@ -21,7 +24,7 @@ impl WindowWallpaperManager {
 }
 
 #[async_trait]
-impl WallpaperManager for WindowWallpaperManager {
+impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
     async fn get_style(&self) -> Result<String, String> {
         Ok(kabegame_core::settings::Settings::global().get_wallpaper_rotation_style())
     }
@@ -96,7 +99,7 @@ impl WallpaperManager for WindowWallpaperManager {
         Ok(())
     }
 
-    fn init(&self, app: AppHandle) -> Result<(), String> {
+    fn init(&self) -> Result<(), String> {
         println!("初始化窗口模式壁纸管理器");
         // 检查窗口是否已存在
         if let Ok(wp) = self.wallpaper_window.lock() {
@@ -109,15 +112,15 @@ impl WallpaperManager for WindowWallpaperManager {
         // 这里不创建窗口，因为只能拿到app句柄，拿不到manager
         // create() 会把窗口挂载到桌面层并 show，如果此时没有有效图片路径，会导致桌面上"看不到壁纸"（被空内容窗口覆盖）。
         // 我们只确保 wallpaper WebviewWindow 已存在且保持隐藏；真正显示/挂载留到第一次 set_wallpaper_path 触发 remount。
-        if app.get_webview_window("wallpaper").is_none() {
+        if self.app.get_webview_window("wallpaper").is_none() {
             return Err("壁纸窗口不存在。请确保在应用启动时已创建 wallpaper 窗口".to_string());
         }
-        if let Some(w) = app.get_webview_window("wallpaper") {
+        if let Some(w) = self.app.get_webview_window("wallpaper") {
             let _ = w.hide();
         }
 
         // 创建并记录 WallpaperWindow（不挂载/不 show）
-        let new_wp = WallpaperWindow::new(app.clone());
+        let new_wp = WallpaperWindow::new(self.app.clone());
 
         // 更新窗口状态
         if let Ok(mut wp) = self.wallpaper_window.lock() {

@@ -8,7 +8,7 @@ use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuEvent, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager,
+    AppHandle, Manager, Runtime,
 };
 
 use crate::startup;
@@ -24,7 +24,7 @@ const TRAY_ID: &str = "main";
 const TRAY_CLICK_DEBOUNCE_MS: u64 = 500; // 500ms 防抖
 
 /// 使用当前 locale 构建托盘菜单（供首次创建与语言切换后刷新共用）
-fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
+fn build_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, String> {
     let show_item = MenuItem::with_id(app, "show", t!("tray.showWindow"), true, None::<&str>)
         .map_err(|e| format!("创建菜单项失败: {}", e))?;
     let hide_item = MenuItem::with_id(app, "hide", t!("tray.hideWindow"), true, None::<&str>)
@@ -58,7 +58,19 @@ fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
 }
 
 /// 刷新托盘菜单与 tooltip（语言切换后由 setting-change 回调调用，与磁盘挂载等实现方式一致）
-pub fn update_tray_menu(app: &AppHandle) -> Result<(), String> {
+pub fn update_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let runner = app.clone();
+    let app = app.clone();
+    runner
+        .run_on_main_thread(move || {
+            if let Err(e) = update_tray_menu_on_main_thread(&app) {
+                eprintln!("[托盘] 语言切换后刷新菜单失败: {}", e);
+            }
+        })
+        .map_err(|e| format!("调度托盘菜单刷新失败: {}", e))
+}
+
+fn update_tray_menu_on_main_thread<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return Ok(());
     };
@@ -70,89 +82,87 @@ pub fn update_tray_menu(app: &AppHandle) -> Result<(), String> {
 }
 
 /// 初始化系统托盘
-/// 延迟初始化，确保窗口已经创建
-pub fn setup_tray(app: AppHandle) {
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(500));
+///
+/// Linux 的 tray-icon/AppIndicator 后端会触碰 GTK 对象，必须和 Tauri/WebKitGTK
+/// 在同一个 GUI 线程初始化；放到后台线程会导致稍后的 WebView 弹层创建时崩溃。
+pub fn setup_tray<R: Runtime>(app: AppHandle<R>) {
+    // 创建防抖限流器
+    let limiter = RateLimiter::direct(
+        Quota::with_period(Duration::from_millis(TRAY_CLICK_DEBOUNCE_MS))
+            .unwrap()
+            .allow_burst(NonZeroU32::new(1).unwrap()),
+    );
 
-        // 创建防抖限流器
-        let limiter = RateLimiter::direct(
-            Quota::with_period(Duration::from_millis(TRAY_CLICK_DEBOUNCE_MS))
-                .unwrap()
-                .allow_burst(NonZeroU32::new(1).unwrap()),
-        );
-
-        let menu = match build_tray_menu(&app) {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("{}", e);
-                return;
-            }
-        };
-
-        // 创建托盘图标
-        // macOS：使用乌龟模板图（黑+alpha），随系统深色/浅色菜单栏自适应
-        // 其他平台：沿用窗口默认图标
-        #[cfg(target_os = "macos")]
-        let icon = {
-            const TURTLE_PNG: &[u8] = include_bytes!("../icons/tray/turtle-tray@2x.png");
-            match tauri::image::Image::from_bytes(TURTLE_PNG) {
-                Ok(img) => img,
-                Err(e) => {
-                    eprintln!("加载托盘图标失败: {}", e);
-                    return;
-                }
-            }
-        };
-        #[cfg(not(target_os = "macos"))]
-        let icon = match app.default_window_icon() {
-            Some(icon) => icon.clone(),
-            None => {
-                eprintln!("无法获取默认图标");
-                return;
-            }
-        };
-
-        let handle_clone1 = app.clone();
-        let handle_clone2 = app.clone();
-
-        // 创建托盘（带 id 以便语言切换后 tray_by_id 刷新菜单），明确禁止左键点击显示菜单
-        let builder = TrayIconBuilder::with_id(TRAY_ID)
-            .icon(icon)
-            .tooltip(t!("common.appName"))
-            .show_menu_on_left_click(false); // 关键：禁止左键显示菜单
-
-        // macOS 菜单栏图标使用 template 模式，由系统按主题自动反色
-        #[cfg(target_os = "macos")]
-        let builder = builder.icon_as_template(true);
-
-        let tray = match builder.build(&app) {
-            Ok(tray) => tray,
-            Err(e) => {
-                eprintln!("创建系统托盘失败: {}", e);
-                return;
-            }
-        };
-
-        // 设置菜单（只在右键时显示）
-        if let Err(e) = tray.set_menu(Some(menu)) {
-            eprintln!("设置托盘菜单失败: {}", e);
+    let menu = match build_tray_menu(&app) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("{}", e);
+            return;
         }
+    };
 
-        // 处理托盘图标事件（带防抖）
-        tray.on_tray_icon_event(move |tray, event| {
-            handle_tray_icon_event(&handle_clone2, tray, event, &limiter);
-        });
+    // 创建托盘图标
+    // macOS：使用乌龟模板图（黑+alpha），随系统深色/浅色菜单栏自适应
+    // 其他平台：沿用窗口默认图标
+    #[cfg(target_os = "macos")]
+    let icon = {
+        const TURTLE_PNG: &[u8] = include_bytes!("../icons/tray/turtle-tray@2x.png");
+        match tauri::image::Image::from_bytes(TURTLE_PNG) {
+            Ok(img) => img,
+            Err(e) => {
+                eprintln!("加载托盘图标失败: {}", e);
+                return;
+            }
+        }
+    };
+    #[cfg(not(target_os = "macos"))]
+    let icon = match app.default_window_icon() {
+        Some(icon) => icon.clone(),
+        None => {
+            eprintln!("无法获取默认图标");
+            return;
+        }
+    };
 
-        // 处理菜单事件
-        tray.on_menu_event(move |_tray, event| {
-            handle_menu_event(&handle_clone1, event);
-        });
+    let handle_clone1 = app.clone();
+    let handle_clone2 = app.clone();
+
+    // 创建托盘（带 id 以便语言切换后 tray_by_id 刷新菜单），明确禁止左键点击显示菜单
+    let builder = TrayIconBuilder::with_id(TRAY_ID)
+        .icon(icon)
+        .tooltip(t!("common.appName"))
+        .show_menu_on_left_click(false); // 关键：禁止左键显示菜单
+
+    // macOS 菜单栏图标使用 template 模式，由系统按主题自动反色
+    #[cfg(target_os = "macos")]
+    let builder = builder.icon_as_template(true);
+
+    let tray = match builder.build(&app) {
+        Ok(tray) => tray,
+        Err(e) => {
+            eprintln!("创建系统托盘失败: {}", e);
+            return;
+        }
+    };
+
+    // 设置菜单（只在右键时显示）
+    if let Err(e) = tray.set_menu(Some(menu)) {
+        eprintln!("设置托盘菜单失败: {}", e);
+    }
+
+    // 处理托盘图标事件（带防抖）
+    tray.on_tray_icon_event(move |tray, event| {
+        handle_tray_icon_event(&handle_clone2, tray, event, &limiter);
+    });
+
+    // 处理菜单事件
+    tray.on_menu_event(move |_tray, event| {
+        handle_menu_event(&handle_clone1, event);
     });
 }
 
 /// 处理菜单事件
-fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
+fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     match event.id.as_ref() {
         "show" => {
             if let Err(e) = startup::ensure_main_window(app.clone()) {
@@ -184,9 +194,9 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
 }
 
 /// 处理托盘图标事件
-fn handle_tray_icon_event(
-    app: &AppHandle,
-    _tray: &tauri::tray::TrayIcon,
+fn handle_tray_icon_event<R: Runtime>(
+    app: &AppHandle<R>,
+    _tray: &tauri::tray::TrayIcon<R>,
     event: TrayIconEvent,
     limiter: &DefaultDirectRateLimiter,
 ) {

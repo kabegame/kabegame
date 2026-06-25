@@ -1,7 +1,7 @@
 use kabegame_i18n::t;
 use tauri_plugin_dialog::DialogExt;
 
-pub fn show_error(app: &tauri::AppHandle, msg: String) {
+pub fn show_error<R: tauri::Runtime>(app: &tauri::AppHandle<R>, msg: String) {
     app.dialog()
         .message(msg)
         .title(t!("dialog.errorTitle"))

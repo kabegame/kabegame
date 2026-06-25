@@ -96,7 +96,7 @@ fn collect_surf_cookie_string<R: Runtime>(
     Ok(pairs.join("; "))
 }
 
-fn eval_surf_toast(app: &AppHandle, message: &str, kind: &str) {
+fn eval_surf_toast<R: Runtime>(app: &AppHandle<R>, message: &str, kind: &str) {
     if let Some(win) = app.get_webview_window("surf") {
         let msg_json =
             serde_json::to_string(message).unwrap_or_else(|_| "\"下载失败\"".to_string());
@@ -109,7 +109,7 @@ fn eval_surf_toast(app: &AppHandle, message: &str, kind: &str) {
 /// 由 surf 导航栏注入脚本通过 `invoke` 调用，打开当前畅游窗口的开发者工具。
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_open_devtools(app: AppHandle) -> Result<(), String> {
+pub async fn surf_open_devtools<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let win = app
         .get_webview_window("surf")
         .ok_or_else(|| "畅游窗口未打开".to_string())?;
@@ -117,7 +117,7 @@ pub async fn surf_open_devtools(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn save_surf_session_cookies(app: &AppHandle) {
+fn save_surf_session_cookies<R: Runtime>(app: &AppHandle<R>) {
     let record_id = SurfSessionState::global()
         .lock()
         .ok()
@@ -141,7 +141,10 @@ fn save_surf_session_cookies(app: &AppHandle) {
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_json::Value, String> {
+pub async fn surf_start_session<R: Runtime>(
+    app: AppHandle<R>,
+    url: String,
+) -> Result<serde_json::Value, String> {
     // 若当前会话窗口已存在，则仅置顶聚焦，不触发 navigate 刷新页面内容。
     if let Some(win) = app.get_webview_window("surf") {
         let current_record_id = SurfSessionState::global()
@@ -393,7 +396,7 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
 
 /// 在会话窗口被关闭时由 lib 的 on_window_event 调用，清除状态并通知前端。
 #[cfg(not(target_os = "android"))]
-pub fn notify_surf_session_closed(app: &AppHandle) {
+pub fn notify_surf_session_closed<R: Runtime>(app: &AppHandle<R>) {
     if let Ok(mut guard) = SurfSessionState::global().lock() {
         guard.current_record_id = None;
         guard.current_host = None;
@@ -406,7 +409,7 @@ pub fn notify_surf_session_closed(app: &AppHandle) {
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_close_session(app: AppHandle) -> Result<(), String> {
+pub async fn surf_close_session<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("surf") {
         let _ = win.close();
     }
@@ -416,7 +419,9 @@ pub async fn surf_close_session(app: AppHandle) -> Result<(), String> {
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_get_session_status(app: AppHandle) -> Result<SurfSessionStatus, String> {
+pub async fn surf_get_session_status<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<SurfSessionStatus, String> {
     let active_window = app.get_webview_window("surf").is_some();
     if !active_window {
         if let Ok(mut guard) = SurfSessionState::global().lock() {
@@ -511,7 +516,7 @@ pub struct SurfCookiesResult {
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_get_cookies(app: AppHandle) -> Result<SurfCookiesResult, String> {
+pub async fn surf_get_cookies<R: Runtime>(app: AppHandle<R>) -> Result<SurfCookiesResult, String> {
     let (record_id, host) = {
         let guard = SurfSessionState::global()
             .lock()

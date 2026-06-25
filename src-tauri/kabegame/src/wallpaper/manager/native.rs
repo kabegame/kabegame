@@ -2,17 +2,17 @@ use super::WallpaperManager;
 use async_trait::async_trait;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 #[cfg(target_os = "android")]
 use tauri_plugin_wallpaper::WallpaperExt;
 
 /// 原生壁纸管理器（使用系统原生 API）
-pub struct NativeWallpaperManager {
-    _app: AppHandle,
+pub struct NativeWallpaperManager<R: Runtime> {
+    _app: AppHandle<R>,
 }
 
-impl NativeWallpaperManager {
-    pub fn new(app: AppHandle) -> Self {
+impl<R: Runtime> NativeWallpaperManager<R> {
+    pub fn new(app: AppHandle<R>) -> Self {
         Self { _app: app }
     }
 
@@ -411,7 +411,7 @@ for (var i=0; i<allDesktops.length; i++) {{\n\
 }
 
 #[async_trait]
-impl WallpaperManager for NativeWallpaperManager {
+impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
     // 从注册表读取当前壁纸样式（Windows）
     #[cfg(target_os = "windows")]
     async fn get_style(&self) -> Result<String, String> {
@@ -703,8 +703,8 @@ impl WallpaperManager for NativeWallpaperManager {
             let desktop = linux_desktop();
 
             // 内部辅助：先 Plasma 后 GNOME，或相反
-            async fn try_plasma_then_gnome(
-                manager: &NativeWallpaperManager,
+            async fn try_plasma_then_gnome<R: Runtime>(
+                manager: &NativeWallpaperManager<R>,
                 path: &str,
                 style: &str,
             ) -> Result<(), String> {
@@ -717,8 +717,8 @@ impl WallpaperManager for NativeWallpaperManager {
                 }
             }
 
-            async fn try_gnome_then_plasma(
-                manager: &NativeWallpaperManager,
+            async fn try_gnome_then_plasma<R: Runtime>(
+                manager: &NativeWallpaperManager<R>,
                 path: &str,
                 style: &str,
             ) -> Result<(), String> {
@@ -858,8 +858,8 @@ impl WallpaperManager for NativeWallpaperManager {
 
         let desktop = linux_desktop();
 
-        async fn set_style_plasma(
-            manager: &NativeWallpaperManager,
+        async fn set_style_plasma<R: Runtime>(
+            manager: &NativeWallpaperManager<R>,
             style: &str,
         ) -> Result<(), String> {
             if let Some(path) = manager.current_wallpaper_path_from_settings() {
@@ -870,7 +870,7 @@ impl WallpaperManager for NativeWallpaperManager {
                 }
             } else {
                 // 如果没有当前壁纸，仍然尝试通过 qdbus 只设置 FillMode（不改变图片）
-                let fill_mode = NativeWallpaperManager::style_to_plasma_fill_mode(style);
+                let fill_mode = NativeWallpaperManager::<R>::style_to_plasma_fill_mode(style);
                 let script = format!(
                     "var allDesktops = desktops();\n\
                     for (var i=0; i<allDesktops.length; i++) {{\n\
@@ -883,19 +883,20 @@ impl WallpaperManager for NativeWallpaperManager {
                     fill_mode
                 );
                 println!("fill_mode {}", fill_mode);
-                NativeWallpaperManager::run_qdbus_evaluate_script(&script)?;
+                NativeWallpaperManager::<R>::run_qdbus_evaluate_script(&script)?;
             }
             Ok(())
         }
 
-        async fn set_style_gnome(
-            manager: &NativeWallpaperManager,
+        async fn set_style_gnome<R: Runtime>(
+            manager: &NativeWallpaperManager<R>,
             style: &str,
         ) -> Result<(), String> {
             use std::process::Command;
 
             // 设置 picture-options
-            let picture_options = NativeWallpaperManager::style_to_gnome_picture_options(style);
+            let picture_options =
+                NativeWallpaperManager::<R>::style_to_gnome_picture_options(style);
             let output = Command::new("gsettings")
                 .args([
                     "set",
@@ -925,8 +926,8 @@ impl WallpaperManager for NativeWallpaperManager {
             Ok(())
         }
 
-        async fn try_plasma_then_gnome(
-            manager: &NativeWallpaperManager,
+        async fn try_plasma_then_gnome<R: Runtime>(
+            manager: &NativeWallpaperManager<R>,
             style: &str,
         ) -> Result<(), String> {
             match set_style_plasma(manager, style).await {
@@ -938,8 +939,8 @@ impl WallpaperManager for NativeWallpaperManager {
             }
         }
 
-        async fn try_gnome_then_plasma(
-            manager: &NativeWallpaperManager,
+        async fn try_gnome_then_plasma<R: Runtime>(
+            manager: &NativeWallpaperManager<R>,
             style: &str,
         ) -> Result<(), String> {
             match set_style_gnome(manager, style).await {
@@ -1066,7 +1067,7 @@ impl WallpaperManager for NativeWallpaperManager {
         Ok(())
     }
 
-    fn init(&self, _app: AppHandle) -> Result<(), String> {
+    fn init(&self) -> Result<(), String> {
         Ok(())
     }
 }

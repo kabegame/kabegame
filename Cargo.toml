@@ -5,6 +5,7 @@ members = [
   "src-tauri/pathql-rs",
   "src-tauri/kabegame",
   "src-tauri/kabegame-cli",
+  "src-tauri/tauri-runtime-cef",
   "src-tauri-plugins/tauri-plugin-picker",
   "src-tauri-plugins/tauri-plugin-pathes",
   "src-tauri-plugins/tauri-plugin-share",

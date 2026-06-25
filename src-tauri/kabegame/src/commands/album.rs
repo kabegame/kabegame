@@ -9,7 +9,7 @@ use kabegame_core::storage::Storage;
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 #[tauri::command]
 pub async fn get_albums() -> Result<serde_json::Value, String> {
@@ -18,8 +18,8 @@ pub async fn get_albums() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn add_album(
-    _app: AppHandle,
+pub async fn add_album<R: Runtime>(
+    _app: AppHandle<R>,
     name: String,
     parent_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
@@ -28,7 +28,7 @@ pub async fn add_album(
 }
 
 #[tauri::command]
-pub async fn delete_album(_app: AppHandle, album_id: String) -> Result<(), String> {
+pub async fn delete_album<R: Runtime>(_app: AppHandle<R>, album_id: String) -> Result<(), String> {
     Storage::global().delete_album(&album_id)?;
     // 轮播画册没有了，回到画廊。这里前端会提示，所以不用报错
     if let Some(id) = Settings::global().get_wallpaper_rotation_album_id() {
@@ -42,8 +42,8 @@ pub async fn delete_album(_app: AppHandle, album_id: String) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub async fn rename_album(
-    _app: AppHandle,
+pub async fn rename_album<R: Runtime>(
+    _app: AppHandle<R>,
     album_id: String,
     new_name: String,
 ) -> Result<(), String> {
@@ -54,8 +54,8 @@ pub async fn rename_album(
 }
 
 #[tauri::command]
-pub async fn move_album(
-    _app: AppHandle,
+pub async fn move_album<R: Runtime>(
+    _app: AppHandle<R>,
     album_id: String,
     new_parent_id: Option<String>,
 ) -> Result<(), String> {
@@ -66,8 +66,8 @@ pub async fn move_album(
 }
 
 #[tauri::command]
-pub async fn add_images_to_album(
-    _app: AppHandle,
+pub async fn add_images_to_album<R: Runtime>(
+    _app: AppHandle<R>,
     album_id: String,
     image_ids: Vec<String>,
 ) -> Result<serde_json::Value, String> {
@@ -81,8 +81,8 @@ pub async fn add_images_to_album(
 
 /// 将任务的全部图片加入画册（后端根据 task_id 取图，前端只负责选画册）
 #[tauri::command]
-pub async fn add_task_images_to_album(
-    _app: AppHandle,
+pub async fn add_task_images_to_album<R: Runtime>(
+    _app: AppHandle<R>,
     task_id: String,
     album_id: String,
 ) -> Result<serde_json::Value, String> {
@@ -105,8 +105,8 @@ pub async fn add_task_images_to_album(
 }
 
 #[tauri::command]
-pub async fn remove_images_from_album(
-    _app: AppHandle,
+pub async fn remove_images_from_album<R: Runtime>(
+    _app: AppHandle<R>,
     album_id: String,
     image_ids: Vec<String>,
 ) -> Result<usize, String> {

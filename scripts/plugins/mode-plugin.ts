@@ -1,9 +1,3 @@
-import {
-  copyDokan2DllToResources,
-  copyDokanInstallerToResources,
-  copyFFmpegDllsToResources,
-  BIN_DIR,
-} from "../utils";
 import { BasePlugin } from "./base-plugin";
 import { run } from "../utils";
 import { Component } from "./component-plugin";
@@ -12,6 +6,7 @@ import { BuildSystem, THIRD_DIR } from "../build-system";
 import { OSPlugin } from "./os-plugin";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import { execSync } from "child_process";
 
 export class Mode {
@@ -109,6 +104,32 @@ export class ModePlugin extends BasePlugin {
             "pkgconfig",
           )
         );
+        if (OSPlugin.isLinux && !this.mode!.isWeb) {
+          const cefPath = process.env.CEF_PATH || path.join(
+            os.homedir(),
+            ".local",
+            "share",
+            "cef",
+          );
+          const libcef = path.join(cefPath, "libcef.so");
+          if (!fs.existsSync(libcef)) {
+            throw new Error(
+              [
+                `Linux CEF runtime not found: ${libcef}`,
+                "Set CEF_PATH to an exported cef-rs runtime directory, or run:",
+                'cargo run -p export-cef-dir -- --force "$HOME/.local/share/cef"',
+              ].join("\n"),
+            );
+          }
+          this.setEnv("CEF_PATH", cefPath);
+          const libraryPath = (process.env.LD_LIBRARY_PATH || "")
+            .split(path.delimiter)
+            .filter(Boolean);
+          if (!libraryPath.includes(cefPath)) {
+            libraryPath.unshift(cefPath);
+          }
+          this.setEnv("LD_LIBRARY_PATH", libraryPath.join(path.delimiter));
+        }
         // macOS: clang (used by bindgen/rusty_ffmpeg) cannot find system headers like
         // errno.h without an explicit sysroot. BINDGEN_EXTRA_CLANG_ARGS is read by
         // bindgen and passed straight to clang before binding generation.
@@ -136,7 +157,7 @@ export class ModePlugin extends BasePlugin {
             "include",
           ));
           this.setEnv("FFMPEG_LINK_MODE", "dynamic");
-          const pathPrefixes = [BIN_DIR, ffmpegBinDir].filter((dir) => {
+          const pathPrefixes = [OSPlugin.binDir, ffmpegBinDir].filter((dir) => {
             return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
           });
           if (pathPrefixes.length > 0) {
@@ -151,10 +172,10 @@ export class ModePlugin extends BasePlugin {
       if (
         OSPlugin.isWindows &&
         (bs.context.cmd?.isDev || bs.context.cmd?.isStart) &&
-        fs.existsSync(BIN_DIR) &&
-        fs.statSync(BIN_DIR).isDirectory()
+        fs.existsSync(OSPlugin.binDir) &&
+        fs.statSync(OSPlugin.binDir).isDirectory()
       ) {
-        const binAbs = path.resolve(BIN_DIR);
+        const binAbs = path.resolve(OSPlugin.binDir);
         const prev = process.env.PATH || "";
         this.setEnv("PATH", binAbs + path.delimiter + prev);
       }
@@ -166,7 +187,7 @@ export class ModePlugin extends BasePlugin {
         return;
       }
       this.packagePlugins(bs);
-      this.copyBin(bs);
+      // bin/{platform}/ 收集与 resources/bin 复制由 OSPlugin.bundleLibs 接管
     });
 
     bs.hooks.prepareCompileArgs.tap(
@@ -225,30 +246,6 @@ export class ModePlugin extends BasePlugin {
         };
       },
     );
-  }
-
-  // 准备资源文件（仅在需要时包含 dokan 相关文件）
-  copyBin(bs: BuildSystem): void {
-    if (!bs.context.cmd.isBuild) {
-      return;
-    }
-    // web mode outputs a plain binary — no Tauri bundle, no DLL resources needed
-    if (bs.context.mode!.isWeb) {
-      return;
-    }
-
-    // 仅在 main 组件构建时才需要处理 dokan 与 bin 下 DLL 资源
-    if (bs.context.component!.isMain && OSPlugin.isWindows) {
-      if (this.mode!.isStandard) {
-        this.log("Copy Dokan and FFmpeg DLLs resources...");
-        copyDokan2DllToResources();
-        copyDokanInstallerToResources();
-        copyFFmpegDllsToResources();
-      } else if (this.mode!.isLight) {
-        this.log("Copy FFmpeg DLLs resources (light mode)...");
-        copyFFmpegDllsToResources();
-      }
-    }
   }
 
   // 打包爬虫插件：仅本地开发写入 data/plugins-directory（不将 .kgpg 打入安装包 resources）

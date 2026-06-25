@@ -15,7 +15,7 @@ use kabegame_core::storage::FAVORITE_ALBUM_ID;
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 #[cfg(all(feature = "standard", feature = "vd-legacy"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 #[tauri::command]
 pub async fn pathql_entry(path: String) -> Result<ProviderEntry, String> {
@@ -146,8 +146,8 @@ pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn toggle_image_favorite(
-    _app: AppHandle,
+pub async fn toggle_image_favorite<R: Runtime>(
+    _app: AppHandle<R>,
     image_id: String,
     favorite: bool,
 ) -> Result<(), String> {
