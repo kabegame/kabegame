@@ -111,12 +111,17 @@ cef(cef-rs,预编译 Chromium 内核)
 - **验收**:kabegame 关键命令(画廊浏览、设置读写等)在 CEF 下可用。
 - **风险**:多进程消息序列化/大 payload;事件(`emit`)方向。
 
-### ⬜ Phase 5 — 补齐 dispatch(功能对齐)
+### 🔄 Phase 5 — 功能对齐 + 性能(详见 [phase5](cef-linux-runtime-phase5.md) + 5.1–5.5)
 
-- **目标**:补齐 `WebviewDispatch` / `WindowDispatch` 其余方法,达到与 wry 的功能对等(Linux)。
-- **任务**:导航/geometry/focus/hide-show/reparent、`eval_script`、cookie(`CefCookieManager`)、devtools(Chrome DevTools)、`set_zoom`/背景色/`clear_all_browsing_data`、窗口事件与拖拽/装饰。
-- **验收**:kabegame 在 Linux 下的日常功能与未换引擎前一致;NVIDIA 下滚动丝滑、原 `free()` 崩溃消失。
-- **风险**:逐方法长尾;透明/装饰/拖拽等平台细节。
+- **目标**:kabegame 在 Linux CEF 下日常功能与未换引擎前一致;NVIDIA 滚动丝滑、原 `free()` 崩溃消失(崩溃已由 Phase 3.3 sqlite version-script 修复)。
+- **现状**:原"补齐方法"清单大部分已在 Phase 3/4 顺带完成(window 近全量;webview 的 cookie/devtools/zoom/背景色/clear-data 已实现,仅剩 `print`/`reparent` stub)。
+- **剩余拆分**(各为可独立提交单元):
+  - [5.1 性能与 GPU](cef-linux-runtime-phase5.1.md) —— **最关键**,仍 `disable-gpu` 软件 OSR(§9.2.2)。
+  - [5.2 多窗口 / 多 webview](cef-linux-runtime-phase5.2.md) —— 独立 RequestContext / scheme 隔离。
+  - [5.3 系统集成补齐](cef-linux-runtime-phase5.3.md) —— 拖放/全屏/弹窗外链/下载/剪贴板/对话框。
+  - [5.4 剩余 dispatch + 边角](cef-linux-runtime-phase5.4.md) —— `print`/`reparent`/`with_webview`。
+  - [5.5 稳定性与全功能回归](cef-linux-runtime-phase5.5.md) —— shutdown/内存/长跑 + 主路径逐项验收。
+- **风险**:软件 OSR 性能天花板;多实例调度;OSR 下系统集成(DnD/全屏/对话框)细节。
 
 ### ⬜ Phase 6 — 打包分发
 

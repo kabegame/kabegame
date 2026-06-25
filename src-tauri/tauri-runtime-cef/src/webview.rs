@@ -587,7 +587,17 @@ mod imp {
         let initial_url = pending.url.clone();
         ipc::install_post_message_bridge(&mut pending, detached, initial_url);
         eprintln!("[cef-runtime] registering webview protocols");
-        protocol::register_webview_protocols(&mut pending)?;
+        // Per-webview RequestContext so each webview's scheme factories (and thus
+        // the webview label used for Tauri IPC/ACL) stay isolated. Global
+        // registration would let the last webview's label clobber the others.
+        let mut request_context =
+            request_context_create_context(Some(&RequestContextSettings::default()), None)
+                .ok_or_else(|| {
+                    Error::CreateWebview(Box::new(std::io::Error::other(
+                        "CEF failed to create a request context",
+                    )))
+                })?;
+        protocol::register_webview_protocols(&mut pending, &mut request_context)?;
         eprintln!(
             "[cef-runtime] creating windowless browser for {}",
             pending.url
@@ -606,7 +616,7 @@ mod imp {
             Some(&CefString::from(url.as_str())),
             Some(&BrowserSettings::default()),
             None,
-            None,
+            Some(&mut request_context),
         )
         .ok_or_else(|| {
             Error::CreateWebview(Box::new(std::io::Error::other(
@@ -712,10 +722,25 @@ mod imp {
                 if mouse_up {
                     webview.input.mouse_buttons &= !button_flag;
                 } else {
+                    // GTK 把双击/三击额外发 GDK_2BUTTON_PRESS / GDK_3BUTTON_PRESS,
+                    // tao 把它们当成**重复的 Pressed**(中间没有 Release)转发。直接
+                    // 转给 CEF 会把序列搞成 down(2)→down(3)→up,导致 DOM dblclick 不
+                    // 触发。按钮已按下时跳过这种合成重复按下:每个"真实按下"(在一次
+                    // Release 之后)才递增 click count,CEF 依据真实按下的 clickCount
+                    // 自行判定双击/三击。
+                    if webview.input.mouse_buttons & button_flag != 0 {
+                        return;
+                    }
                     webview.input.mouse_buttons |= button_flag;
                     webview.input.active_click_count = click_count(&mut webview.input, *button);
                 }
                 let event = mouse_event(&webview.input);
+                eprintln!(
+                    "[dc-diag] click btn={button:?} {} count={} cursor={:?}",
+                    if mouse_up { "UP" } else { "DOWN" },
+                    webview.input.active_click_count.max(1),
+                    webview.input.cursor
+                );
                 host.send_mouse_click_event(
                     Some(&event),
                     cef_button,

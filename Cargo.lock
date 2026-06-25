@@ -7177,16 +7177,19 @@ dependencies = [
 name = "tauri-runtime-cef"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "bytemuck",
  "cef",
  "gtk",
  "http 1.4.0",
+ "libc",
  "pollster",
  "raw-window-handle",
  "softbuffer",
  "tao",
  "tauri-runtime",
  "tauri-utils",
+ "tracing",
  "url",
  "wgpu",
 ]

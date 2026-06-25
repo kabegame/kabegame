@@ -44,10 +44,6 @@ wrap_scheme_handler_factory! {
             _scheme_name: Option<&CefString>,
             request: Option<&mut cef::Request>,
         ) -> Option<ResourceHandler> {
-            eprintln!(
-                "[cef-diag] SchemeHandlerFactory::create url={:?}",
-                request.map(|r| CefString::from(&r.url()).to_string()),
-            );
             Some(CefResourceHandler::new(
                 self.webview_label.clone(),
                 self.protocol.clone(),
@@ -228,29 +224,35 @@ wrap_resource_handler! {
 
 /// Register every protocol supplied by Tauri for one webview.
 ///
-/// CEF registrations live on the global request context. Re-registering the
-/// same scheme replaces its factory, which is sufficient for Phase 3's
-/// single-window/single-webview target and is kept isolated here for a future
-/// per-request-context implementation.
+/// Factories are registered on the webview's **own** [`RequestContext`], not the
+/// global one. The global registry keeps only the last factory per scheme, so
+/// with multiple webviews (e.g. `main` + `crawler`) every request would be
+/// mislabeled as the last-registered webview — breaking Tauri's per-webview ACL
+/// resolution. A per-context registration keeps each webview's label correct.
 pub(crate) fn register_webview_protocols<T: UserEvent>(
     pending: &mut PendingWebview<T, Cef<T>>,
+    context: &mut cef::RequestContext,
 ) -> Result<()> {
     let label = pending.label.clone();
     let protocols = std::mem::take(&mut pending.uri_scheme_protocols);
     for (scheme, protocol) in protocols {
-        register_protocol(&label, &scheme, protocol)?;
+        register_protocol(context, &label, &scheme, protocol)?;
     }
     Ok(())
 }
 
 fn register_protocol(
+    context: &mut cef::RequestContext,
     webview_label: &str,
     scheme: &str,
     protocol: Box<ProtocolHandler>,
 ) -> Result<()> {
     let mut factory = CefSchemeHandlerFactory::new(webview_label.to_string(), Arc::from(protocol));
-    let registered =
-        register_scheme_handler_factory(Some(&CefString::from(scheme)), None, Some(&mut factory));
+    let registered = context.register_scheme_handler_factory(
+        Some(&CefString::from(scheme)),
+        None,
+        Some(&mut factory),
+    );
     if registered == 1 {
         Ok(())
     } else {

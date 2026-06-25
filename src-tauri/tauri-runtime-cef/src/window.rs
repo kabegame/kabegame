@@ -711,7 +711,12 @@ mod imp {
         ))]
         {
             use tao::platform::unix::WindowBuilderExtUnix;
-            builder.inner = builder.inner.with_cursor_moved_event(false);
+            // 与 wry 相反:必须保留 tao 的 CursorMoved 事件。
+            // wry 关掉它(`with_cursor_moved_event(false)`)是因为它内嵌原生
+            // WebKitGTK widget,鼠标输入由 widget 自己收;而我们是 **OSR**,没有
+            // 原生 webview widget,鼠标移动/hover 全靠 tao 的 CursorMoved 转发给 CEF。
+            // 关掉它会导致 cursor 永远停在 (0,0)、hover/点击全部落空。
+            builder.inner = builder.inner.with_cursor_moved_event(true);
         }
         let window = Arc::new(
             builder

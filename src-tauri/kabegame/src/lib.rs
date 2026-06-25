@@ -328,12 +328,6 @@ pub fn run() {
     // 时没挂 setup 才需要那个临时 window push;4.2 挂上 configure_app 后,push 会和
     // create_main_window 撞 "main" label 导致窗口创建失败 → 黑屏。
     let ctx = tauri::generate_context!();
-    eprintln!(
-        "[acl-diag] is_dev={} dev_url={:?} frontend_dist={:?}",
-        tauri::is_dev(),
-        ctx.config().build.dev_url.as_ref().map(|u| u.to_string()),
-        ctx.config().build.frontend_dist
-    );
     let app = configure_app(tauri::Builder::<crate::AppRuntime>::new())
         .build(ctx)
         .expect("error while building tauri CEF application");

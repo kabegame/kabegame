@@ -74,6 +74,9 @@ gtk = { version = "0.18", features = ["v3_24"], optional = true }
 wgpu = { version = "29", optional = true }
 pollster = { version = "0.4", optional = true }
 bytemuck = { version = "1", optional = true }
+tracing = "0.1"
+ash = "0.38"
+libc = "0.2"
 
 [[example]]
 name = "minimal"
