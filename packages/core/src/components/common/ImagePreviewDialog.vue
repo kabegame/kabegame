@@ -125,10 +125,9 @@
               </svg>
             </button>
           </PreviewControlBar>
-          <!-- TODO 确认linux可用 -->
           <div v-if="previewImage && isPreviewVideo" class="preview-video-wrapper">
             <ImageContent ref="previewContentRef" :image="previewImage" prefer="original"
-              :video-playing="!IS_LINUX" :video-loop="!IS_LINUX" @ready="handlePreviewReady" />
+              video-playing video-loop @ready="handlePreviewReady" />
             <VideoControls :video="previewVideoEl" :show-play-pause="true" :is-fullscreen="isAppFullscreen"
               @toggle-fullscreen="toggleAppFullscreen" />
           </div>
@@ -167,7 +166,6 @@ import ImageDetailContent, { type ImageDetailGalleryFilterTarget } from "./Image
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 import VideoControls from "./VideoControls.vue";
-import { IS_LINUX } from "../../env";
 import { useUiStore } from "../../stores/ui";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";

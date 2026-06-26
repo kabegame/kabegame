@@ -2,7 +2,6 @@ use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 // `fs` 仅用于桌面/iOS 的缩略图删除（remove_thumbnail_file_if_needed）；Android 无此用法。
 #[cfg(not(target_os = "android"))]
@@ -144,7 +143,6 @@ pub struct ImageMetadataFull {
     pub data: Option<Value>,
     pub version: u32,
     pub plugin_id: String,
-    pub content_hash: String,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -178,19 +176,6 @@ pub(crate) fn parse_image_metadata_json(s: Option<String>) -> Option<Value> {
     })
 }
 
-pub(crate) fn metadata_content_hash_hex(bytes: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(bytes);
-    let digest = h.finalize();
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut s = String::with_capacity(64);
-    for &b in digest.as_slice() {
-        s.push(char::from(HEX[(b >> 4) as usize]));
-        s.push(char::from(HEX[(b & 0xf) as usize]));
-    }
-    s
-}
-
 /// 将 JSON 文本写入 `image_metadata` 并返回新插入的行 id。
 pub(crate) fn insert_image_metadata_id(
     conn: &rusqlite::Connection,
@@ -198,13 +183,12 @@ pub(crate) fn insert_image_metadata_id(
     plugin_id: &str,
     version: u32,
 ) -> Result<i64, String> {
-    let hash = metadata_content_hash_hex(data_json.as_bytes());
     let version_i64 = i64::from(version);
 
     conn.execute(
-        "INSERT INTO image_metadata (data, content_hash, plugin_id, version)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![data_json, hash, plugin_id, version_i64],
+        "INSERT INTO image_metadata (data, plugin_id, version)
+         VALUES (?1, ?2, ?3)",
+        params![data_json, plugin_id, version_i64],
     )
     .map_err(|e| format!("insert image_metadata: {}", e))?;
 
@@ -253,7 +237,7 @@ impl Storage {
         crate::providers::image_metadata_at(image_id)
     }
 
-    /// 读取 metadata 的完整行信息（含 version/plugin_id/content_hash）。
+    /// 读取 metadata 的完整行信息（含 version/plugin_id）。
     pub fn get_image_metadata_full(
         &self,
         image_id: &str,
@@ -286,7 +270,7 @@ impl Storage {
         .map_err(|e| format!("read_image_metadata_text: {}", e))
     }
 
-    /// 按原始 JSON 文本写入/复用 metadata 行并返回 id（content_hash 去重）。
+    /// 按原始 JSON 文本写入 metadata 行并返回 id。
     /// 文件夹同步重导入用：删旧行后重写——若内容仍在则拿回原 id，若已被 GC 则得新 id。
     pub fn insert_image_metadata_text(&self, data_json: &str) -> Result<i64, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -335,34 +319,24 @@ impl Storage {
             .transaction()
             .map_err(|e| format!("begin writeback_migrated_metadata_row: {e}"))?;
 
-        let current: Option<(String, String, i64)> = tx
+        let current: Option<(String, i64)> = tx
             .query_row(
-                "SELECT data, content_hash, version
+                "SELECT data, version
                  FROM image_metadata
                  WHERE id = ?1 AND plugin_id = ?2",
                 params![row_id, plugin_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                },
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
             )
             .optional()
             .map_err(|e| format!("select metadata row for writeback: {e}"))?;
-        let Some((current_data, current_hash, current_version)) = current else {
+        let Some((current_data, current_version)) = current else {
             tx.commit()
                 .map_err(|e| format!("commit metadata writeback no-op: {e}"))?;
             return Ok(false);
         };
 
-        let new_hash = metadata_content_hash_hex(new_data.as_bytes());
         let new_version_i64 = i64::from(new_version);
-        if current_data == new_data
-            && current_hash == new_hash
-            && current_version == new_version_i64
-        {
+        if current_data == new_data && current_version == new_version_i64 {
             tx.commit()
                 .map_err(|e| format!("commit metadata writeback unchanged: {e}"))?;
             return Ok(false);
@@ -372,9 +346,9 @@ impl Storage {
             .query_row(
                 "SELECT id
                  FROM image_metadata
-                 WHERE plugin_id = ?1 AND version = ?2 AND content_hash = ?3 AND id <> ?4
+                 WHERE plugin_id = ?1 AND version = ?2 AND data = ?3 AND id <> ?4
                  LIMIT 1",
-                params![plugin_id, new_version_i64, new_hash, row_id],
+                params![plugin_id, new_version_i64, new_data, row_id],
                 |row| row.get(0),
             )
             .optional()
@@ -396,9 +370,9 @@ impl Storage {
         } else {
             tx.execute(
                 "UPDATE image_metadata
-                 SET data = ?1, content_hash = ?2, version = ?3
-                 WHERE id = ?4",
-                params![new_data, new_hash, new_version_i64, row_id],
+                 SET data = ?1, version = ?2
+                 WHERE id = ?3",
+                params![new_data, new_version_i64, row_id],
             )
             .map_err(|e| format!("update migrated image_metadata row: {e}"))?;
         }

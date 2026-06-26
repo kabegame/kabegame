@@ -82,7 +82,7 @@ pub async fn compress_video_for_preview(input_uri: &str) -> Result<VideoCompress
     })
 }
 
-/// 桌面：从文件路径生成视频预览（mp4），走 rsmpeg/FFmpeg。
+/// 桌面：从文件路径生成视频预览。Linux 输出 VP9 WebM，其他桌面平台输出 H.264 MP4。
 #[cfg(not(target_os = "android"))]
 pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompressResult, String> {
     let thumbnails_dir = crate::app_paths::AppPaths::global().thumbnails_dir();
@@ -91,13 +91,18 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
         .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
 
     let preview_id = uuid::Uuid::new_v4();
-    let out_path = thumbnails_dir.join(format!("{preview_id}.mp4"));
+    let extension = if cfg!(target_os = "linux") {
+        "webm"
+    } else {
+        "mp4"
+    };
+    let out_path = thumbnails_dir.join(format!("{preview_id}.{extension}"));
 
     let temp_dir = crate::app_paths::AppPaths::global().temp_dir.clone();
     tokio::fs::create_dir_all(&temp_dir)
         .await
         .map_err(|e| format!("Failed to create temp directory: {e}"))?;
-    let temp_out_path = temp_dir.join(format!("{preview_id}.mp4"));
+    let temp_out_path = temp_dir.join(format!("{preview_id}.{extension}"));
 
     let in_path = input_path.to_path_buf();
     let temp_out_path_for_task = temp_out_path.clone();
@@ -132,7 +137,8 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
     })
 }
 
-/// 进程内 FFmpeg（rsmpeg/libav*）转码：解码首个视频流 → scale 缩放 → libx264 编码（无音轨，截取前 2.5s）→ 输出 mp4。
+/// 进程内 FFmpeg（rsmpeg/libav*）转码：解码首个视频流 → scale 缩放 → 编码（无音轨，截取前 2.5s）。
+/// Linux 使用 VP9/WebM，其他桌面平台使用 H.264/MP4。
 /// 返回输出视频的宽高（缩放后）。替代旧的 ffmpeg sidecar 进程调用。
 #[cfg(not(target_os = "android"))]
 fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u32), String> {
@@ -197,7 +203,7 @@ fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u
         let mut sink = filter_graph
             .alloc_filter_context(&buffersink, c"out")
             .ok_or("alloc buffersink failed")?;
-        // libx264 需要 yuv420p 输入
+        // 目标编码器均使用 yuv420p 输入。
         sink.opt_set(c"pixel_formats", c"yuv420p")
             .map_err(|e| format!("set sink pix_fmt failed: {e:?}"))?;
         sink.init_str(None)
@@ -220,7 +226,11 @@ fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u
     let out_h = buffersink_ctx.get_h();
     let sink_tb = buffersink_ctx.get_time_base();
 
-    // ---- 编码器 libx264 ----
+    // ---- 编码器：Linux CEF 仅支持 VP9，其他桌面平台使用 H.264 ----
+    #[cfg(target_os = "linux")]
+    let encoder =
+        AVCodec::find_encoder_by_name(c"libvpx-vp9").ok_or("libvpx-vp9 encoder not found")?;
+    #[cfg(not(target_os = "linux"))]
     let encoder = AVCodec::find_encoder_by_name(c"libx264").ok_or("libx264 encoder not found")?;
     let mut enc_ctx = AVCodecContext::new(&encoder);
     enc_ctx.set_width(out_w);
@@ -229,12 +239,17 @@ fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u
     enc_ctx.set_time_base(av_inv_q(framerate));
     enc_ctx.set_framerate(framerate);
 
-    // ---- 输出（mp4 muxer，按扩展名推断）----
+    // ---- 输出（按扩展名推断 MP4/WebM muxer）----
     let mut ofmt = AVFormatContextOutput::create(&output_c)
         .map_err(|e| format!("create output failed: {e:?}"))?;
     if ofmt.oformat().flags & ffi::AVFMT_GLOBALHEADER as i32 != 0 {
         enc_ctx.set_flags(enc_ctx.flags | ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
     }
+    #[cfg(target_os = "linux")]
+    let enc_opts = AVDictionary::new(c"deadline", c"good", 0)
+        .set(c"cpu-used", c"4", 0)
+        .set(c"crf", c"32", 0);
+    #[cfg(not(target_os = "linux"))]
     let enc_opts = AVDictionary::new(c"preset", c"veryfast", 0).set(c"crf", c"30", 0);
     enc_ctx
         .open(Some(enc_opts))
@@ -565,9 +580,9 @@ pub async fn generate_compatible_image(
     }
 }
 
-/// 桌面：生成视频兼容副本（H.264 mp4，含音频）。
-/// 当 `probe.browser_safe == false` 时转码；否则返回 `Ok(None)`。
-/// 输出文件放在 `compatibles_dir`，命名为 UUID.mp4。
+/// 桌面：生成视频兼容副本（含音频）。
+/// Linux CEF 使用 VP9/Opus WebM，避免依赖未启用专有 H.264/AAC 编解码器的 CEF runtime；
+/// 其它桌面平台使用 H.264/AAC MP4。当 `probe.browser_safe == true` 时不转码。
 #[cfg(not(target_os = "android"))]
 pub async fn generate_compatible_video(
     video_path: &Path,
@@ -580,7 +595,11 @@ pub async fn generate_compatible_video(
     tokio::fs::create_dir_all(&compatibles_dir)
         .await
         .map_err(|e| format!("Failed to create compatibles directory: {e}"))?;
-    let out_path = compatibles_dir.join(format!("{}.mp4", uuid::Uuid::new_v4()));
+    #[cfg(target_os = "linux")]
+    let extension = "webm";
+    #[cfg(not(target_os = "linux"))]
+    let extension = "mp4";
+    let out_path = compatibles_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), extension));
     let in_path = video_path.to_path_buf();
     let out_for_task = out_path.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -600,13 +619,10 @@ pub async fn generate_compatible_video(
 
 /// 图片兼容副本生成（同步）：用 image crate 打开 → 超限缩放 → PNG。
 #[cfg(not(target_os = "android"))]
-fn transcode_compatible_image_sync(
-    input_path: &Path,
-    output_path: &Path,
-) -> Result<(), String> {
+fn transcode_compatible_image_sync(input_path: &Path, output_path: &Path) -> Result<(), String> {
     use image::GenericImageView;
-    let img = image::open(input_path)
-        .map_err(|e| format!("Failed to open image for compatible: {e}"))?;
+    let img =
+        image::open(input_path).map_err(|e| format!("Failed to open image for compatible: {e}"))?;
     let (w, h) = img.dimensions();
     let max = w.max(h);
     let img = if max > IMAGE_COMPATIBLE_MAX_DIM {
@@ -621,8 +637,8 @@ fn transcode_compatible_image_sync(
         .map_err(|e| format!("Failed to save compatible PNG: {e}"))
 }
 
-/// 视频兼容副本转码（同步）：解码 → scale(-2:min(1080,ih)) + yuv420p → libx264 CRF 23；
-/// 含音频轨时同步解码 → aresample=44100 → AAC 128k 编入同一 mp4。
+/// 视频兼容副本转码（同步）：解码 → scale(-2:min(1080,ih)) + yuv420p。
+/// Linux 输出 VP9/Opus WebM；其它桌面输出 H.264/AAC MP4。
 #[cfg(not(target_os = "android"))]
 fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Result<(), String> {
     use rsmpeg::avcodec::{AVCodec, AVCodecContext};
@@ -634,6 +650,22 @@ fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Res
     use std::ffi::{CStr, CString};
 
     const MAX_H: i32 = VIDEO_COMPATIBLE_MAX_HEIGHT as i32;
+    #[cfg(target_os = "linux")]
+    const COMPATIBLE_AUDIO_RATE: i32 = 48_000;
+    #[cfg(target_os = "linux")]
+    const COMPATIBLE_AUDIO_FRAME_SIZE: i32 = 960;
+    #[cfg(not(target_os = "linux"))]
+    const COMPATIBLE_AUDIO_RATE: i32 = 44_100;
+    #[cfg(not(target_os = "linux"))]
+    const COMPATIBLE_AUDIO_FRAME_SIZE: i32 = 1_024;
+    #[cfg(target_os = "linux")]
+    const COMPATIBLE_AUDIO_SAMPLE_FORMAT: rsmpeg::ffi::AVSampleFormat = ffi::AV_SAMPLE_FMT_FLT;
+    #[cfg(target_os = "linux")]
+    const COMPATIBLE_AUDIO_SAMPLE_FORMAT_NAME: &str = "flt";
+    #[cfg(not(target_os = "linux"))]
+    const COMPATIBLE_AUDIO_SAMPLE_FORMAT: rsmpeg::ffi::AVSampleFormat = ffi::AV_SAMPLE_FMT_FLTP;
+    #[cfg(not(target_os = "linux"))]
+    const COMPATIBLE_AUDIO_SAMPLE_FORMAT_NAME: &str = "fltp";
 
     let to_cs = |p: &Path| -> Result<CString, String> {
         CString::new(p.to_string_lossy().as_ref()).map_err(|e| format!("path NUL: {e}"))
@@ -667,21 +699,19 @@ fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Res
     // ── Audio stream (optional) ──
     let audio_stream = ifmt
         .find_best_stream(ffi::AVMEDIA_TYPE_AUDIO)
-        .ok()
-        .flatten();
+        .map_err(|e| format!("find audio stream: {e:?}"))?;
     let mut a_idx: Option<usize> = None;
     let mut a_dec_ctx: Option<AVCodecContext> = None;
     if let Some((idx, a_dec)) = audio_stream {
         let mut ctx = AVCodecContext::new(&a_dec);
-        if ctx.apply_codecpar(&ifmt.streams()[idx].codecpar()).is_ok() {
-            ctx.set_pkt_timebase(ifmt.streams()[idx].time_base);
-            if ctx.open(None).is_ok() {
-                a_idx = Some(idx);
-                a_dec_ctx = Some(ctx);
-            }
-        }
+        ctx.apply_codecpar(&ifmt.streams()[idx].codecpar())
+            .map_err(|e| format!("audio apply_codecpar: {e:?}"))?;
+        ctx.set_pkt_timebase(ifmt.streams()[idx].time_base);
+        ctx.open(None)
+            .map_err(|e| format!("open audio decoder: {e:?}"))?;
+        a_idx = Some(idx);
+        a_dec_ctx = Some(ctx);
     }
-    let has_audio = a_dec_ctx.is_some();
 
     // ── Video filter: buffer → scale=-2:'min(MAX_H,ih)' → format=yuv420p → buffersink ──
     let vfg = AVFilterGraph::new();
@@ -726,7 +756,7 @@ fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Res
     let out_h = v_sink_ctx.get_h();
     let v_sink_tb = v_sink_ctx.get_time_base();
 
-    // ── Audio filter (if available): abuffer → aresample=44100 → aformat → abuffersink ──
+    // ── Audio filter (if available): abuffer → platform output format → abuffersink ──
     // Stored in Option to handle missing audio gracefully.
     let afg = AVFilterGraph::new();
     let mut a_src_ctx_opt: Option<rsmpeg::avfilter::AVFilterContextMut> = None;
@@ -763,26 +793,26 @@ fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Res
                 .map_err(|e| format!("init a_sink: {e:?}"))?;
             let outs = AVFilterInOut::new(c"in", &mut a_src, 0);
             let ins = AVFilterInOut::new(c"out", &mut a_sink, 0);
-            afg.parse_ptr(
-                c"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetnsamples=n=1024:p=0",
-                Some(ins),
-                Some(outs),
-            )
-            .map_err(|e| format!("parse a filter: {e:?}"))?;
+            let spec = CString::new(format!(
+                "aresample={COMPATIBLE_AUDIO_RATE},aformat=sample_fmts={COMPATIBLE_AUDIO_SAMPLE_FORMAT_NAME}:channel_layouts=stereo,asetnsamples=n={COMPATIBLE_AUDIO_FRAME_SIZE}:p=0"
+            ))
+            .map_err(|e| format!("audio filter spec NUL: {e}"))?;
+            afg.parse_ptr(&spec, Some(ins), Some(outs))
+                .map_err(|e| format!("parse a filter: {e:?}"))?;
             afg.config()
                 .map_err(|e| format!("config a filter: {e:?}"))?;
             Ok(())
         })();
-        if setup.is_ok() {
-            a_src_ctx_opt = afg.get_filter(c"a_in");
-            a_sink_ctx_opt = afg.get_filter(c"a_out");
-        } else {
-            eprintln!("[compat-video] audio filter setup failed, proceeding video-only");
-        }
+        setup.map_err(|e| format!("audio filter setup failed: {e}"))?;
+        a_src_ctx_opt = afg.get_filter(c"a_in");
+        a_sink_ctx_opt = afg.get_filter(c"a_out");
     }
     let has_audio_filter = a_src_ctx_opt.is_some() && a_sink_ctx_opt.is_some();
 
-    // ── Video encoder: libx264 ──
+    // ── Video encoder: Linux CEF needs VP9; other desktop WebViews use H.264. ──
+    #[cfg(target_os = "linux")]
+    let v_enc = AVCodec::find_encoder_by_name(c"libvpx-vp9").ok_or("libvpx-vp9 not found")?;
+    #[cfg(not(target_os = "linux"))]
     let v_enc = AVCodec::find_encoder_by_name(c"libx264").ok_or("libx264 not found")?;
     let mut v_enc_ctx = AVCodecContext::new(&v_enc);
     v_enc_ctx.set_width(out_w);
@@ -797,6 +827,11 @@ fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Res
     if ofmt.oformat().flags & ffi::AVFMT_GLOBALHEADER as i32 != 0 {
         v_enc_ctx.set_flags(v_enc_ctx.flags | ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
     }
+    #[cfg(target_os = "linux")]
+    let v_enc_opts = AVDictionary::new(c"deadline", c"good", 0)
+        .set(c"cpu-used", c"4", 0)
+        .set(c"crf", c"32", 0);
+    #[cfg(not(target_os = "linux"))]
     let v_enc_opts = AVDictionary::new(c"preset", c"veryfast", 0).set(c"crf", c"23", 0);
     v_enc_ctx
         .open(Some(v_enc_opts))
@@ -810,35 +845,38 @@ fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Res
         v_out_idx = vs.index as usize;
     }
 
-    // ── Audio encoder: AAC (only if audio filter pipeline succeeded) ──
+    // ── Audio encoder: Linux CEF needs Opus; other desktop WebViews use AAC. ──
     let mut a_enc_ctx_opt: Option<AVCodecContext> = None;
     let mut a_out_idx: usize = 0;
     if has_audio_filter {
-        if let Some(aac) = AVCodec::find_encoder(ffi::AV_CODEC_ID_AAC) {
-            let mut ctx = AVCodecContext::new(&aac);
-            ctx.set_sample_rate(44100);
-            ctx.set_sample_fmt(ffi::AV_SAMPLE_FMT_FLTP);
-            ctx.set_bit_rate(128_000);
-            let mut ch_layout = unsafe { std::mem::zeroed::<ffi::AVChannelLayout>() };
-            unsafe { ffi::av_channel_layout_default(&mut ch_layout, 2) };
-            ctx.set_ch_layout(ch_layout);
-            if ofmt.oformat().flags & ffi::AVFMT_GLOBALHEADER as i32 != 0 {
-                ctx.set_flags(ctx.flags | ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
-            }
-            if ctx.open(None).is_ok() {
-                let mut a_stream = ofmt.new_stream();
-                a_stream.set_codecpar(ctx.extract_codecpar());
-                a_stream.set_time_base(ctx.time_base);
-                a_out_idx = a_stream.index as usize;
-                a_enc_ctx_opt = Some(ctx);
-            }
+        #[cfg(target_os = "linux")]
+        let audio_encoder =
+            AVCodec::find_encoder_by_name(c"libopus").ok_or("libopus encoder not found")?;
+        #[cfg(not(target_os = "linux"))]
+        let audio_encoder =
+            AVCodec::find_encoder(ffi::AV_CODEC_ID_AAC).ok_or("AAC encoder not found")?;
+        let mut ctx = AVCodecContext::new(&audio_encoder);
+        ctx.set_sample_rate(COMPATIBLE_AUDIO_RATE);
+        ctx.set_sample_fmt(COMPATIBLE_AUDIO_SAMPLE_FORMAT);
+        ctx.set_time_base(ra(1, COMPATIBLE_AUDIO_RATE));
+        ctx.set_bit_rate(128_000);
+        let mut ch_layout = unsafe { std::mem::zeroed::<ffi::AVChannelLayout>() };
+        unsafe { ffi::av_channel_layout_default(&mut ch_layout, 2) };
+        ctx.set_ch_layout(ch_layout);
+        if ofmt.oformat().flags & ffi::AVFMT_GLOBALHEADER as i32 != 0 {
+            ctx.set_flags(ctx.flags | ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
         }
+        ctx.open(None)
+            .map_err(|e| format!("open audio encoder: {e:?}"))?;
+        let mut a_stream = ofmt.new_stream();
+        a_stream.set_codecpar(ctx.extract_codecpar());
+        a_stream.set_time_base(ctx.time_base);
+        a_out_idx = a_stream.index as usize;
+        a_enc_ctx_opt = Some(ctx);
     }
 
     ofmt.write_header(&mut None)
         .map_err(|e| format!("write_header: {e:?}"))?;
-
-    let in_v_tb_secs = in_v_tb.num as f64 / in_v_tb.den as f64;
 
     // ── Main loop ──
     loop {

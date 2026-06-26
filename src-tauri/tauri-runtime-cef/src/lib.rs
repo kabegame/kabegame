@@ -37,8 +37,8 @@
 //! ## 当前状态
 //!
 //! `cef-backend` feature 打开时,本 crate 会实现 `tauri-runtime` 的核心
-//! trait,用 tao 承载窗口/事件循环,用 CEF windowless OSR 负责页面渲染。
-//! 默认 feature 仍保持轻量,避免没有 CEF 二进制工具链时影响普通检查。
+//! trait。Linux 上 CEF Views 创建并管理原生窗口及 GPU 组合；默认 feature
+//! 仍保持轻量,避免没有 CEF 二进制工具链时影响普通检查。
 
 #![allow(dead_code)]
 
@@ -60,8 +60,7 @@ mod protocol;
 /// CEF 驱动的 Tauri runtime。
 ///
 /// Linux 下应用通过 `tauri::Builder::<Cef<EventLoopMessage>>::new()` 选择这个
-/// runtime,替代 Tauri 默认的 `Wry`。窗口仍由 tao 管理,webview 渲染则由
-/// CEF windowless OSR 产出像素后绘制到 tao 顶层窗口。
+/// runtime,替代 Tauri 默认的 `Wry`。窗口和 webview 均由 CEF Views 管理。
 #[derive(Debug)]
 pub struct Cef<T: UserEvent> {
     #[cfg(feature = "cef-backend")]
@@ -85,7 +84,7 @@ pub struct CefHandle<T: UserEvent> {
 /// 向 CEF runtime 事件循环投递用户事件的代理。
 ///
 /// 这是 `tauri_runtime::EventLoopProxy` 的 CEF 版本,把 Tauri 用户事件转换成
-/// runtime 内部消息队列项。OSR/windowed 两条主循环消费同一队列。
+/// runtime 内部消息队列项。
 #[derive(Debug, Clone)]
 pub struct CefEventLoopProxy<T: UserEvent> {
     #[cfg(feature = "cef-backend")]

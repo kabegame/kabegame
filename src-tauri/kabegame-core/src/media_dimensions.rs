@@ -99,8 +99,9 @@ pub struct MediaProbeResult {
     pub mime_type: String,
     pub width: u32,
     pub height: u32,
-    /// 浏览器（Chromium WebView）能否直接显示/播放此内容，无需转码。
-    /// video/mp4 非 HEVC 与 video/webm 视为 true；HEVC-in-mp4 / matroska / wmv 为 false。
+    /// 当前平台的内嵌浏览器能否直接显示/播放此内容，无需转码。
+    /// Linux CEF 不带 H.264/AAC 专有解码器，只有 VP8/VP9/AV1 WebM 视为可直播；
+    /// 其它桌面 Chromium WebView 则将非 HEVC 的 MP4 与 WebM 视为可直播放。
     pub browser_safe: bool,
 }
 
@@ -156,7 +157,11 @@ fn classify_video_probe_mime(
         || fmt_name.contains("3gp")
         || fmt_name.contains("mj2")
     {
-        // mp4/mov：H.264 浏览器可播；HEVC 不能（Chromium 无 HEVC 解码，除非 HW 加速另论）。
+        // Linux CEF 的预编译 runtime 不含 H.264/AAC，MP4 必须先转成 VP9/Opus WebM。
+        // 其它桌面端仍可直接播放非 HEVC 的 MP4。
+        #[cfg(target_os = "linux")]
+        let safe = false;
+        #[cfg(not(target_os = "linux"))]
         let safe = codec_id != ffi::AV_CODEC_ID_HEVC;
         ("video/mp4", safe)
     } else {

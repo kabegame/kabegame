@@ -170,8 +170,8 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapersâ€
      Or log out and log back in.
    - **Source**: [Plasma Wallpaper Plugin](https://github.com/kabegame/plasma-wallpaper-plugin2)
 
-5. **Workarounds** (Linux):
-   - **Wayland**: WebKit2GTK can feel laggy on Wayland. The app automatically forces `GDK_BACKEND=x11` when running under Wayland (so the UI uses X11 and is smoother).
+5. **Rendering backend** (Linux):
+   - Kabegame uses its bundled CEF/Chromium runtime in windowed mode. The current backend runs through X11/ANGLE Vulkan; it does not use WebKitGTK or a software compositing fallback.
 
 ## Main Features
 

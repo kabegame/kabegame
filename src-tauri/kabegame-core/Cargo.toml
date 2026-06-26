@@ -68,7 +68,10 @@ which = { version = "6.0", optional = true }
 libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-fuser = { version = "0.16", default-features = false, optional = true }
+# Linux 走 C libfuse(参考实现,挂载/卸载更成熟),并在构建期通过 `FUSE3_STATIC=1`
+# 静态链接系统 libfuse3.a —— 不产生 libfuse3.so 运行时依赖(详见 Phase 6 计划点 7)。
+# 运行时仍需 SUID `fusermount3`(apt `fuse3` 提供),deb 仍 depends fuse3。
+fuser = { version = "0.16", features = ["libfuse"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"

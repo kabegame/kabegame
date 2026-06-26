@@ -12,7 +12,26 @@ import {
 import chalk from "chalk";
 import { execSync } from "child_process";
 import fs from "fs";
+import os from "os";
 import path from "path";
+
+// CEF 运行时白名单:除下列单文件外,locales 只保留 kabegame 支持的 UI 语言 + en-US 回退
+// (CEF locales 是 Chromium 自身 UI 文案,与 app 的 Vue i18n 无关;全量 220 个 ~50MB)。
+const CEF_RUNTIME_FILES = [
+  "libcef.so",
+  "libEGL.so",
+  "libGLESv2.so",
+  "libvulkan.so.1",
+  "libvk_swiftshader.so",
+  "vk_swiftshader_icd.json",
+  "icudtl.dat",
+  "v8_context_snapshot.bin",
+  "chrome_100_percent.pak",
+  "chrome_200_percent.pak",
+  "resources.pak",
+];
+// en-US.pak 必留(CEF 找不到系统语言时回退它,缺失会启动报错)。
+const CEF_LOCALES = ["en-US.pak", "zh-CN.pak", "zh-TW.pak", "ja.pak", "ko.pak"];
 
 // Windows 运行时 DLL 清单（位于仓库根 bin/windows/，构建时复制到 resources/bin）。
 // 含 MinGW 运行时 + libx264 + libav*（由 scripts/build-ffmpeg.sh + os-plugin 协同产出/收集，FFmpeg 8.x 主版本后缀）。
@@ -163,7 +182,13 @@ export class OSPlugin extends BasePlugin {
       this.copyFFmpegDllsToResources();
       this.copyDokan2DllToTauriReleaseDirBestEffort();
     } else if (OSPlugin.isLinux) {
+      // 注意:collectLinuxSharedLibs() 会先清空 bin/linux/,CEF 收集必须排在其后。
       this.collectLinuxSharedLibs();
+      // Linux standard/light 用 CEF runtime;打包其运行时文件(libcef.so + 资源 + locales)。
+      if (bs.context.mode?.isStandard || bs.context.mode?.isLight) {
+        this.verifyCefArtifacts();
+        this.collectLinuxCefLibs();
+      }
     } else if (OSPlugin.isMacOS) {
       this.collectMacOSDylibs();
     }
@@ -258,9 +283,10 @@ export class OSPlugin extends BasePlugin {
     }
     ensureDir(dst);
 
-    // Linux 不带 libfuse(fuser 用 default-features=false,纯 Rust;运行时只需 fusermount3 二进制)。
-    // 仅收集 x264。
-    const packages = ["x264"];
+    // Linux 不捆 libfuse.so:fuser 用 libfuse feature + FUSE3_STATIC=1 **静态链接** libfuse3.a
+    // (见 mode-plugin prepareEnv),运行时只需 SUID fusermount3 二进制(apt fuse3)。
+    // FFmpeg、x264、vpx、opus 均已静态链接；这里只处理显式附加的动态库。
+    const packages: string[] = [];
     for (const pkg of packages) {
       let libdir = "";
       try {
@@ -302,6 +328,77 @@ export class OSPlugin extends BasePlugin {
     }
 
     this.appendExtraLibs(dst);
+  }
+
+  // ===== CEF runtime(Linux standard/light)=====
+  // CEF 目录解析与 mode-plugin 一致:优先 CEF_PATH(prepareEnv 已设),回退 ~/.local/share/cef。
+  private cefDir(): string {
+    return (
+      process.env.CEF_PATH ||
+      path.join(os.homedir(), ".local", "share", "cef")
+    );
+  }
+
+  // 前置校验:缺少 CEF 运行时则报错并提示导出命令(类比 verifyFFmpegBuildArtifacts)。
+  private verifyCefArtifacts(): void {
+    const dir = this.cefDir();
+    const missing = ["libcef.so", "icudtl.dat"].filter(
+      (f) => !existsFile(path.join(dir, f)),
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        [
+          `❌ 未找到 CEF 运行时产物: ${missing.join(", ")}(目录: ${dir})`,
+          `请先导出 CEF(release/minimal)或设置 CEF_PATH:`,
+          `  bun run build:cef`,
+          `  # 或 cargo run -p export-cef-dir -- --force "$HOME/.local/share/cef"`,
+        ].join("\n"),
+      );
+    }
+  }
+
+  // 收集 CEF runtime 文件 + locales 白名单到 bin/linux/(供 deb 注入到 /usr/lib/kabegame/)。
+  private collectLinuxCefLibs(): void {
+    const dst = OSPlugin.binDir;
+    ensureDir(dst);
+    const src = this.cefDir();
+
+    for (const f of CEF_RUNTIME_FILES) {
+      const s = path.join(src, f);
+      if (!fs.existsSync(s)) {
+        throw new Error(`❌ CEF 运行时缺少文件: ${f}(目录: ${src})`);
+      }
+      let realpath = s;
+      try {
+        realpath = fs.realpathSync(s);
+      } catch {
+        // ignore — fall back to s
+      }
+      fs.copyFileSync(realpath, path.join(dst, f));
+      this.log(chalk.cyan(`已收集 CEF 文件 → bin/linux/${f}`));
+    }
+
+    // locales 白名单(全量 ~50MB,白名单 ~1.5MB)
+    const localesDst = path.join(dst, "locales");
+    ensureDir(localesDst);
+    let copied = 0;
+    for (const f of CEF_LOCALES) {
+      const s = path.join(src, "locales", f);
+      if (!fs.existsSync(s)) {
+        if (f === "en-US.pak") {
+          throw new Error(
+            `❌ CEF locales 缺少 en-US.pak(CEF 必需的回退语言): ${path.join(src, "locales")}`,
+          );
+        }
+        this.log(chalk.yellow(`CEF locale 缺失(跳过): ${f}`));
+        continue;
+      }
+      fs.copyFileSync(s, path.join(localesDst, f));
+      copied++;
+    }
+    this.log(
+      chalk.cyan(`已收集 CEF locales(白名单 ${copied}/${CEF_LOCALES.length})→ bin/linux/locales/`),
+    );
   }
 
   // ===== macOS:brew + macFUSE 收集到 bin/macos/ =====

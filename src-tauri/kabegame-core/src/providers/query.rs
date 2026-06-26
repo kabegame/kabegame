@@ -350,7 +350,6 @@ pub fn image_metadata_full_at(image_id: &str) -> Result<Option<ImageMetadataFull
         data: parse_image_metadata_json(json_string(row, "data")),
         version,
         plugin_id: json_string(row, "plugin_id").unwrap_or_default(),
-        content_hash: json_string(row, "content_hash").unwrap_or_default(),
     }))
 }
 
@@ -612,7 +611,6 @@ mod tests {
             CREATE TABLE image_metadata (
                 id INTEGER PRIMARY KEY,
                 data TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
                 version INTEGER NOT NULL DEFAULT 0,
                 plugin_id TEXT NOT NULL DEFAULT ''
             );

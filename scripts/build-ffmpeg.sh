@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# 一键编译 FFmpeg：生成「视频缩放 + mp4 压缩 + 视频维度/兼容性探测」所需的 libav* 库（最小化编译，不再产出 CLI）。
-# 功能：读 mov/mp4/mkv/webm/wmv 等视频 → scale 缩放 → libx264/AAC 编码；图片推断、维度读取与缩略图由 infer/image crate 处理。
+# 一键编译 FFmpeg：生成「视频缩放 + 兼容视频压缩 + 视频维度/兼容性探测」所需的 libav* 库（最小化编译，不再产出 CLI）。
+# 功能：读 mov/mp4/mkv/webm/wmv 等视频 → scale 缩放；Linux CEF 输出 VP9/Opus WebM，
+# 其它桌面输出 libx264/AAC MP4。图片推断、维度读取与缩略图由 infer/image crate 处理。
 # 由 kabegame-core 经 rsmpeg/rusty_ffmpeg 进程内链接（替代旧的 ffmpeg sidecar 调用）。
 #
 # 链接模型（见 cocs / 计划）：
@@ -10,9 +11,9 @@
 #     —— 之所以 Windows 走 DLL：Dokan 仅有 MSVC 导入库，主程序须保持 windows-msvc；
 #        而 MinGW 编出的 libav* 静态库无法被 MSVC 链接，DLL 的 C 导出表则跨工具链可用。
 #
-# 依赖: libx264
+# 依赖: Windows/macOS 需要 libx264；Linux 需要 libvpx 与 libopus（供 CEF WebM 兼容副本）。
 #   macOS:   brew install x264
-#   Ubuntu:  apt install libx264-dev
+#   Ubuntu:  apt install libx264-dev libvpx-dev libopus-dev
 #   Windows: 必须在 MSYS2 MinGW 64-bit 中安装：pacman -S mingw-w64-x86_64-x264 mingw-w64-x86_64-tools-git
 #             （tools-git 提供 gendef；生成 MSVC 导入库还需 PATH 上有 VS 的 lib.exe，即在 VS Developer 环境运行）
 #             （Git Bash 无 pacman，无法直接安装 x264，请改用 MSYS2 终端再执行本脚本）
@@ -39,8 +40,17 @@ if [[ ! -d "$FFMPEG_SRC" ]]; then
   exit 1
 fi
 
-# Windows (MINGW/MSYS)：若未安装 x264，configure 会报错；提前检查并提示
+# FFmpeg 配置依赖：Linux 的 CEF 兼容副本需要 vpx/opus，不使用 H.264 编码器。
 case "$(uname -s)" in
+  Linux)
+    for pkg in vpx opus; do
+      if ! pkg-config --exists "$pkg" 2>/dev/null; then
+        echo "错误: 未找到 $pkg（pkg-config $pkg 失败）" >&2
+        echo "请安装: sudo apt install libvpx-dev libopus-dev" >&2
+        exit 1
+      fi
+    done
+    ;;
   MINGW*|MSYS*|CYGWIN*)
     if ! pkg-config --exists x264 2>/dev/null; then
       echo "错误: 未找到 libx264（pkg-config x264 失败）" >&2
@@ -67,7 +77,7 @@ case "$(uname -s)" in
     ;;
 esac
 
-# 最小化编译：mov/mkv/webm/wmv 解码 + scale + libx264/AAC，输出 mp4；并保留 libav* 供进程内视频 API 使用。
+# 最小化编译：mov/mkv/webm/wmv 解码 + scale + 平台兼容视频编码；并保留 libav* 供进程内视频 API 使用。
 # 链接模型：Unix 静态库 / Windows 动态库（见文件头说明）。
 _LINK_FLAGS=()
 if [[ "$OS_KIND" == "windows" ]]; then
@@ -79,8 +89,15 @@ fi
 CONFIG_FLAGS=(
   "--disable-everything"
   "--disable-programs"
+  # Video conversion uses software codecs.  Disable optional hardware APIs so a
+  # static FFmpeg archive cannot pull VA-API/VDPAU/DRM shared libraries into the
+  # application link (and so each distro does not need to provide matching ABI).
+  "--disable-hwaccels"
+  "--disable-libdrm"
+  "--disable-vaapi"
+  "--disable-vdpau"
+  "--disable-opencl"
   "--enable-gpl"
-  "--enable-libx264"
 
   "--enable-protocol=file"
   "--enable-demuxer=mov"
@@ -104,7 +121,6 @@ CONFIG_FLAGS=(
   "--enable-parser=vp8"
   "--enable-parser=vp9"
   "--enable-parser=vc1"
-  "--enable-encoder=libx264"
   "--enable-muxer=mov"
   "--enable-muxer=mp4"
 
@@ -142,6 +158,28 @@ CONFIG_FLAGS=(
   "--enable-small"
   "--disable-runtime-cpudetect"
 )
+
+# Linux CEF 只播放 VP9/Opus WebM。Linux 不引入 libx264，避免依赖发行版通常
+# 不提供的 libx264.a；Windows/macOS 保持既有 H.264/AAC MP4 输出。
+if [[ "$(uname -s)" != "Linux" ]]; then
+  CONFIG_FLAGS+=(
+    "--enable-libx264"
+    "--enable-encoder=libx264"
+  )
+fi
+
+# Linux 的 CEF runtime 不带 H.264/AAC 解码器，兼容副本需编码为 VP9/Opus WebM。
+# 只在 Linux 启用，避免为 Windows/macOS 的 H.264/AAC 路径额外引入链接依赖。
+if [[ "$(uname -s)" == "Linux" ]]; then
+  CONFIG_FLAGS+=(
+    "--enable-libvpx"
+    "--enable-libopus"
+    # configure 使用内部组件名（下划线）；运行时 AVCodec 名仍为 libvpx-vp9。
+    "--enable-encoder=libvpx_vp9"
+    "--enable-encoder=libopus"
+    "--enable-muxer=webm"
+  )
+fi
 
 
 "$FFMPEG_SRC/configure" \
@@ -186,6 +224,19 @@ $MAKE_CMD install
 if [[ ! -f "$INSTALL_DIR/lib/pkgconfig/libavcodec.pc" ]]; then
   echo "未找到 libav* 安装产物: $INSTALL_DIR/lib/pkgconfig/libavcodec.pc" >&2
   exit 1
+fi
+
+# Linux 的 libavcodec.a 依赖 libopus/libvpx；验证 pkg-config 能把它们传递到 Rust
+# 最终链接命令，避免在数分钟后的 rust-lld 阶段才报未定义符号。
+if [[ "$(uname -s)" == "Linux" ]]; then
+  _ffmpeg_static_libs="$(PKG_CONFIG_PATH="$INSTALL_DIR/lib/pkgconfig" pkg-config --libs --static libavcodec)"
+  for _required_lib in opus vpx; do
+    if [[ "$_ffmpeg_static_libs" != *"-l$_required_lib"* ]]; then
+      echo "错误: FFmpeg 静态链接信息缺少 -l$_required_lib" >&2
+      echo "请确认 configure 已启用 libopus 与 libvpx_vp9，然后重新运行 bun run build:ffmpeg" >&2
+      exit 1
+    fi
+  done
 fi
 
 if [[ "$OS_KIND" != "windows" ]]; then

@@ -1,12 +1,11 @@
 //! CEF runtime 的窗口半边。
 //!
-//! 这一层刻意贴近 `tauri-runtime-wry`:窗口和事件循环都由 tao 管理,
-//! CEF 只在 `webview.rs` 里负责 OSR 渲染。这样窗口行为、DPI、monitor、
-//! raw handle 等能力尽量沿用 Tauri/Wry 已验证过的模型。
+//! 这一层适配 Tauri 的窗口 trait 到 CEF Views。tao 仅提供 Tauri 通用的
+//! builder、事件循环和 monitor 类型，不承载原生应用窗口。
 
 #[cfg(feature = "cef-backend")]
 mod imp {
-    use std::sync::{mpsc::channel, Arc};
+    use std::sync::mpsc::channel;
 
     use raw_window_handle::WindowHandle;
     use tao::{
@@ -19,8 +18,7 @@ mod imp {
         window::{
             CursorIcon as TaoCursorIcon, Fullscreen, Icon as TaoIcon,
             ResizeDirection as TaoResizeDirection, Theme as TaoTheme,
-            UserAttentionType as TaoUserAttentionType, Window as TaoWindow,
-            WindowBuilder as TaoWindowBuilder,
+            UserAttentionType as TaoUserAttentionType, WindowBuilder as TaoWindowBuilder,
         },
     };
     use tauri_runtime::window::WindowId;
@@ -40,7 +38,7 @@ mod imp {
 
     /// Tauri 窗口 dispatcher 的 CEF 实现。
     ///
-    /// 它不直接保存 `TaoWindow`,而是保存 `window_id + CefContext`。所有操作
+    /// 它不直接保存平台窗口对象，而是保存 `window_id + CefContext`。所有操作
     /// 都通过 runtime 内部消息转回主线程,避免跨线程操作 tao/GTK 对象。
     #[derive(Clone)]
     pub struct CefWindowDispatcher<T: UserEvent> {
@@ -67,6 +65,10 @@ mod imp {
     pub struct CefWindowBuilder {
         pub(crate) inner: TaoWindowBuilder,
         pub(crate) center: bool,
+        /// 原始 RGBA 图标(宽、高)。tao 的 `window_icon` 在 windowed(CEF Views)
+        /// 路径下用不上(不建 tao 窗口),故额外保留 RGBA,供 runtime 给 CEF
+        /// `Window::set_window_icon` / `set_window_app_icon` 用。
+        pub(crate) icon_rgba: Option<(Vec<u8>, u32, u32)>,
     }
 
     #[allow(clippy::non_send_fields_in_send_ty)]
@@ -77,6 +79,7 @@ mod imp {
             Self {
                 inner: TaoWindowBuilder::new(),
                 center: false,
+                icon_rgba: None,
             }
             .title("Tauri App")
             .focused(true)
@@ -276,9 +279,13 @@ mod imp {
         }
 
         fn icon(mut self, icon: Icon) -> Result<Self> {
-            let icon = TaoIcon::from_rgba(icon.rgba.into_owned(), icon.width, icon.height)
+            let (width, height) = (icon.width, icon.height);
+            let rgba = icon.rgba.into_owned();
+            // 保留 RGBA 供 windowed(CEF Views)路径设置窗口/任务栏图标。
+            self.icon_rgba = Some((rgba.clone(), width, height));
+            let tao_icon = TaoIcon::from_rgba(rgba, width, height)
                 .map_err(|e| Error::InvalidIcon(Box::new(e)))?;
-            self.inner = self.inner.with_window_icon(Some(icon));
+            self.inner = self.inner.with_window_icon(Some(tao_icon));
             Ok(self)
         }
 
@@ -308,6 +315,7 @@ mod imp {
             Self {
                 inner: self.inner.with_transient_for(parent),
                 center: self.center,
+                icon_rgba: self.icon_rgba,
             }
         }
 
@@ -692,81 +700,6 @@ mod imp {
             .downcast::<R>()
             .map(|v| *v)
             .map_err(|_| Error::FailedToReceiveMessage)
-    }
-
-    /// 使用适配后的 builder 创建 tao 窗口。
-    ///
-    /// Linux 下关闭 cursor moved 事件,避免高频鼠标移动事件阻塞主循环。
-    pub(crate) fn build_tao_window<T: UserEvent>(
-        event_loop: &tao::event_loop::EventLoopWindowTarget<runtime::Message<T>>,
-        mut builder: CefWindowBuilder,
-    ) -> Result<Arc<TaoWindow>> {
-        let center = builder.center;
-        #[cfg(any(
-            target_os = "linux",
-            target_os = "dragonfly",
-            target_os = "freebsd",
-            target_os = "netbsd",
-            target_os = "openbsd"
-        ))]
-        {
-            use tao::platform::unix::WindowBuilderExtUnix;
-            // 与 wry 相反:必须保留 tao 的 CursorMoved 事件。
-            // wry 关掉它(`with_cursor_moved_event(false)`)是因为它内嵌原生
-            // WebKitGTK widget,鼠标输入由 widget 自己收;而我们是 **OSR**,没有
-            // 原生 webview widget,鼠标移动/hover 全靠 tao 的 CursorMoved 转发给 CEF。
-            // 关掉它会导致 cursor 永远停在 (0,0)、hover/点击全部落空。
-            builder.inner = builder.inner.with_cursor_moved_event(true);
-        }
-        let window = Arc::new(
-            builder
-                .inner
-                .build(event_loop)
-                .map_err(|_| Error::CreateWindow)?,
-        );
-        let _ = center;
-        Ok(window)
-    }
-
-    /// 构造 Tauri `after_window_creation` 回调需要的 Linux raw window。
-    ///
-    /// Tauri 菜单等 Linux 集成需要 GTK window/default vbox,这里通过 tao unix
-    /// 扩展暴露给上层回调。
-    pub(crate) fn raw_window_for_callback(window: &TaoWindow) -> RawWindow<'_> {
-        use std::marker::PhantomData;
-        use tao::platform::unix::WindowExtUnix;
-        RawWindow {
-            gtk_window: window.gtk_window(),
-            default_vbox: window.default_vbox(),
-            _marker: &PhantomData,
-        }
-    }
-
-    /// 把 tao window event 映射为 Tauri runtime window event。
-    ///
-    /// 不属于 Tauri 抽象层的 tao 事件返回 `None`。
-    pub(crate) fn map_window_event(event: &tao::event::WindowEvent<'_>) -> Option<WindowEvent> {
-        match event {
-            tao::event::WindowEvent::Resized(size) => Some(WindowEvent::Resized(
-                PhysicalSize::new(size.width, size.height),
-            )),
-            tao::event::WindowEvent::Moved(position) => Some(WindowEvent::Moved(
-                PhysicalPosition::new(position.x, position.y),
-            )),
-            tao::event::WindowEvent::Focused(focused) => Some(WindowEvent::Focused(*focused)),
-            tao::event::WindowEvent::ScaleFactorChanged {
-                scale_factor,
-                new_inner_size,
-            } => Some(WindowEvent::ScaleFactorChanged {
-                scale_factor: *scale_factor,
-                new_inner_size: PhysicalSize::new(new_inner_size.width, new_inner_size.height),
-            }),
-            tao::event::WindowEvent::ThemeChanged(theme) => {
-                Some(WindowEvent::ThemeChanged(from_tao_theme(*theme)))
-            }
-            tao::event::WindowEvent::Destroyed => Some(WindowEvent::Destroyed),
-            _ => None,
-        }
     }
 
     /// 把 tao monitor 描述转换为 Tauri runtime monitor 描述。

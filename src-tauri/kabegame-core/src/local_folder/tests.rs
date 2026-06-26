@@ -612,12 +612,11 @@ async fn sync_reimports_changed_file_and_carries_user_fields() {
     Storage::global()
         .update_album_images_order(&album_id, &[(old.0.clone(), 42)])
         .unwrap();
-    let metadata_hash = format!("metadata-{}", uuid::Uuid::new_v4());
     let metadata_id = {
         let conn = Storage::global().db.lock().unwrap();
         conn.execute(
-            "INSERT INTO image_metadata (data, content_hash) VALUES (?1, ?2)",
-            params![r#"{"edited":true}"#, metadata_hash],
+            "INSERT INTO image_metadata (data) VALUES (?1)",
+            params![r#"{"edited":true}"#],
         )
         .unwrap();
         let metadata_id = conn.last_insert_rowid();

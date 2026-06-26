@@ -126,16 +126,8 @@ pub fn cleanup_user_data_if_marked() -> bool {
 pub fn create_main_window<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Result<(), String> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
-    let (width, height) = if cfg!(target_os = "linux") {
-        (1600.0, 1200.0)
-    } else {
-        (1200.0, 800.0)
-    };
-    let (min_w, min_h) = if cfg!(target_os = "linux") {
-        (1200.0, 800.0)
-    } else {
-        (800.0, 600.0)
-    };
+    let (width, height) = (1200.0, 800.0);
+    let (min_w, min_h) = (800.0, 600.0);
 
     let (x, y) = match app_handle.primary_monitor() {
         Ok(Some(monitor)) => {

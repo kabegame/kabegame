@@ -104,6 +104,11 @@ export class ModePlugin extends BasePlugin {
             "pkgconfig",
           )
         );
+        // Linux 将 FFmpeg 与 x264/vpx/opus 显式静态链接；该模式还会让
+        // rusty_ffmpeg 完整解析 .pc 的传递依赖，避免复用旧的链接元数据。
+        if (OSPlugin.isLinux) {
+          this.setEnv("FFMPEG_LINK_MODE", "static");
+        }
         if (OSPlugin.isLinux && !this.mode!.isWeb) {
           const cefPath = process.env.CEF_PATH || path.join(
             os.homedir(),
@@ -129,6 +134,12 @@ export class ModePlugin extends BasePlugin {
             libraryPath.unshift(cefPath);
           }
           this.setEnv("LD_LIBRARY_PATH", libraryPath.join(path.delimiter));
+        }
+        // Linux 虚拟盘:静态链接系统 libfuse3(libfuse3-dev 提供 libfuse3.a),
+        // 不产生 libfuse3.so 运行时依赖。fuser 的 libfuse feature 用
+        // pkg_config.probe("fuse3"),FUSE3_STATIC=1 触发静态链接。仅 standard 含虚拟盘。
+        if (OSPlugin.isLinux && this.mode!.isStandard) {
+          this.setEnv("FUSE3_STATIC", "1");
         }
         // macOS: clang (used by bindgen/rusty_ffmpeg) cannot find system headers like
         // errno.h without an explicit sysroot. BINDGEN_EXTRA_CLANG_ARGS is read by

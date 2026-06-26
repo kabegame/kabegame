@@ -3,7 +3,7 @@ use bindgen::{callbacks, Bindings};
 use camino::Utf8Path as Path;
 use camino::Utf8PathBuf as PathBuf;
 use once_cell::sync::Lazy;
-use std::{collections::HashSet, env, fs};
+use std::{collections::HashSet, env, fs, process::Command};
 
 /// All the libs that FFmpeg has
 static LIBS: Lazy<[&str; 6]> = Lazy::new(|| {
@@ -334,6 +334,54 @@ fn remove_verbatim(path: String) -> PathBuf {
 mod pkg_config_linking {
     use super::*;
 
+    /// Linux FFmpeg is built as static archives. Keep the codec libraries it was
+    /// configured against static as well, while desktop/system integration
+    /// libraries (X11, VA-API, NSS, etc.) remain dynamically linked.
+    const STATIC_FFMPEG_DEPENDENCIES: &[&str] = &["vpx", "opus"];
+
+    fn static_dependency_lib_dirs() -> Vec<(String, std::path::PathBuf)> {
+        if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
+            return Vec::new();
+        }
+
+        let compiler = env::var_os("CC").unwrap_or_else(|| "cc".into());
+        STATIC_FFMPEG_DEPENDENCIES
+            .iter()
+            .map(|dependency| {
+                // A package's `libdir` can be `/usr/lib` while the actual archive
+                // is in the target multiarch directory. Ask the active compiler for
+                // its library resolution instead of reconstructing that path.
+                let output = Command::new(&compiler)
+                    .arg(format!("-print-file-name=lib{dependency}.a"))
+                    .output()
+                    .unwrap_or_else(|e| panic!("run compiler for lib{dependency}.a: {e}"));
+                if !output.status.success() {
+                    panic!(
+                        "compiler lookup for lib{dependency}.a failed: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    );
+                }
+                let archive = std::path::PathBuf::from(
+                    String::from_utf8(output.stdout)
+                        .unwrap_or_else(|e| {
+                            panic!("compiler returned non-UTF-8 for {dependency}: {e}")
+                        })
+                        .trim(),
+                );
+                if !archive.is_file() {
+                    panic!("static FFmpeg dependency missing: {}", archive.display());
+                }
+                let lib_dir = archive
+                    .parent()
+                    .unwrap_or_else(|| {
+                        panic!("static archive has no parent: {}", archive.display())
+                    })
+                    .to_path_buf();
+                ((*dependency).to_string(), lib_dir)
+            })
+            .collect()
+    }
+
     /// Returns error when some library are missing. Otherwise, returns the paths of the libraries.
     ///
     /// Note: no side effect if this function errors.
@@ -341,30 +389,68 @@ mod pkg_config_linking {
         library_names: &[&str],
         statik: bool,
     ) -> Result<Vec<PathBuf>, pkg_config::Error> {
-        // dry run for library linking
+        let static_dependency_dirs = if statik {
+            static_dependency_lib_dirs()
+        } else {
+            Vec::new()
+        };
+        let static_dependency_names: HashSet<&str> = static_dependency_dirs
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let mut printed_search_paths = HashSet::new();
+
+        // Emit the FFmpeg libraries' own link paths (e.g. the project's
+        // third/FFmpeg-build/install/lib) FIRST, so our controlled static
+        // archives win over identically-named system archives. Without this,
+        // emitting the codec deps' system dir (/usr/lib/<triple>) before these
+        // lets a system libavfilter.a (built with extra filters such as
+        // bs2b/lv2) shadow ours during `+bundle static=...`, dragging in
+        // undefined bs2b_*/lilv_* symbols at the final link.
+        //
+        // pkg-config intentionally treats /usr as a system root and does not
+        // mark its archives static. Emit Cargo metadata ourselves so only the
+        // codec dependencies above are forced to their .a archives.
+        let mut paths = HashSet::new();
         for libname in library_names {
-            pkg_config::Config::new()
+            let library = pkg_config::Config::new()
                 .statik(statik)
                 .cargo_metadata(false)
                 .env_metadata(false)
-                .print_system_libs(false)
-                .print_system_cflags(false)
                 .probe(&format!("lib{}", libname))?;
-        }
 
-        // real linking
-        let mut paths = HashSet::new();
-        for libname in library_names {
-            let new_paths = pkg_config::Config::new()
-                .statik(statik)
-                .probe(&format!("lib{}", libname))
-                .unwrap_or_else(|_| panic!("{} not found!", libname))
-                .include_paths;
-            for new_path in new_paths {
+            for link_path in &library.link_paths {
+                if printed_search_paths.insert(link_path.clone()) {
+                    println!("cargo:rustc-link-search=native={}", link_path.display());
+                }
+            }
+            for linked_library in &library.libs {
+                let force_static = statik
+                    && (library_names.contains(&linked_library.as_str())
+                        || static_dependency_names.contains(linked_library.as_str()));
+                if force_static {
+                    println!("cargo:rustc-link-lib=static={linked_library}");
+                } else {
+                    println!("cargo:rustc-link-lib={linked_library}");
+                }
+            }
+            for args in &library.ld_args {
+                println!("cargo:rustc-link-arg=-Wl,{}", args.join(","));
+            }
+            for new_path in library.include_paths {
                 let new_path = new_path.to_str().unwrap().to_string();
                 paths.insert(new_path);
             }
         }
+
+        // Emit the system dirs hosting the forced-static codec deps (vpx/opus)
+        // AFTER the FFmpeg link paths above, so they cannot shadow our archives.
+        for (_, path) in &static_dependency_dirs {
+            if printed_search_paths.insert(path.clone()) {
+                println!("cargo:rustc-link-search=native={}", path.display());
+            }
+        }
+
         Ok(paths.into_iter().map(PathBuf::from).collect())
     }
 }
@@ -478,6 +564,39 @@ fn linking(env_vars: EnvVars) {
                     ffmpeg_pkg_config_path
                 );
             }
+            // The FFmpeg build is external to Cargo. Its reconfiguration can change the
+            // transitive native libraries in libav*.pc (for example adding libopus or
+            // libvpx), while FFMPEG_PKG_CONFIG_PATH itself stays unchanged. Track each
+            // package file and archive so Cargo refreshes both link metadata and the
+            // rlib that embeds these static archives.
+            let ffmpeg_lib_dir = ffmpeg_pkg_config_path
+                .parent()
+                .expect("FFMPEG_PKG_CONFIG_PATH must have a parent directory");
+            let mut archive_stamps = Vec::new();
+            for libname in LIBS.iter() {
+                println!(
+                    "cargo:rerun-if-changed={}",
+                    ffmpeg_pkg_config_path
+                        .join(format!("lib{libname}.pc"))
+                        .as_str()
+                );
+                let archive = ffmpeg_lib_dir.join(format!("lib{libname}.a"));
+                println!("cargo:rerun-if-changed={}", archive.as_str());
+                let modified = fs::metadata(&archive)
+                    .and_then(|metadata| metadata.modified())
+                    .and_then(|time| {
+                        time.duration_since(std::time::UNIX_EPOCH)
+                            .map_err(std::io::Error::other)
+                    })
+                    .unwrap_or_default();
+                archive_stamps.push(format!("{libname}:{}", modified.as_nanos()));
+            }
+            // Build script output changes when an external FFmpeg archive changes, so
+            // Cargo recompiles rusty_ffmpeg instead of retaining an rlib with old .o files.
+            println!(
+                "cargo:rustc-env=RUSTY_FFMPEG_ARCHIVE_STAMP={}",
+                archive_stamps.join(",")
+            );
             env::set_var("PKG_CONFIG_PATH", ffmpeg_pkg_config_path);
             linking_with_pkg_config_and_bindgen(&env_vars, output_binding_path)
                 .expect("Static linking with pkg-config failed.");

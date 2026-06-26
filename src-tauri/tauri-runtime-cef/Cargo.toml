@@ -24,22 +24,9 @@ default = []
 # prebuilt Chromium). Turn this on only once the local CEF build/run environment
 # has been validated against the upstream `cefsimple` example (see README §7).
 #
-# Pulls in `tao` too: the engine-agnostic window/event-loop half of the runtime
-# is hosted by tao (exactly like `tauri-runtime-wry`), with CEF parented into the
-# tao window. See `examples/minimal.rs`.
-cef-backend = ["dep:cef", "dep:gtk", "dep:tao", "dep:softbuffer"]
-
-# GPU-accelerated OSR: CEF renders on the GPU to a shared dmabuf texture, which
-# cef-rs imports zero-copy into wgpu (`on_accelerated_paint`). Validated on this
-# NVIDIA box ONLY with `--use-angle=vulkan` (see README §9.2.1). Heavy (pulls
-# wgpu); kept separate from `cef-backend`. Used by `examples/minimal_gpu.rs`.
-accelerated-osr = [
-  "cef-backend",
-  "cef/accelerated_osr",
-  "dep:wgpu",
-  "dep:pollster",
-  "dep:bytemuck",
-]
+# CEF Views owns Linux windows and GPU composition. `tao` remains only as the
+# engine-agnostic Tauri event-loop and monitor adapter.
+cef-backend = ["dep:cef", "dep:gtk", "dep:tao"]
 
 [dependencies]
 # The trait contract we implement. `"2"` lets cargo unify this with whatever
@@ -61,31 +48,11 @@ cef = { version = "149", optional = true, default-features = false }
 # read the tao window's handle. Default features stay ON, plus rwh_06.
 tao = { version = "0.35", optional = true, features = ["rwh_06"] }
 
-# Software blit of CEF's OSR (off-screen rendering) pixel buffer into the tao
-# window. OSR avoids both NVIDIA failure modes found in Phase 2 (GPU process
-# SIGSEGV + X11 child-window present failure): CEF rasterizes to a CPU buffer
-# (`on_paint`) and we XPutImage it to the tao top-level window. Optional.
-softbuffer = { version = "0.4", optional = true }
 gtk = { version = "0.18", features = ["v3_24"], optional = true }
-
-# GPU compositing for accelerated OSR. MUST match the wgpu version cef-rs's
-# `accelerated_osr` uses (workspace wgpu = "29") so the dmabuf→texture import
-# shares the same wgpu-hal types. Optional, only with `accelerated-osr`.
-wgpu = { version = "29", optional = true }
-pollster = { version = "0.4", optional = true }
-bytemuck = { version = "1", optional = true }
 tracing = "0.1"
 ash = "0.38"
 libc = "0.2"
 
 [[example]]
-name = "minimal"
-required-features = ["cef-backend"]
-
-[[example]]
 name = "minimal_windowed"
 required-features = ["cef-backend"]
-
-[[example]]
-name = "minimal_gpu"
-required-features = ["accelerated-osr"]

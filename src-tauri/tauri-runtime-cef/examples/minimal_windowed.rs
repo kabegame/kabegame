@@ -1,6 +1,6 @@
 //! Minimal CEF-owned top-level window experiment.
 //!
-//! This intentionally does not use tao, OSR, softbuffer, or dmabuf import. It
+//! This intentionally does not use tao, software compositing, or dmabuf import. It
 //! exercises the route that worked in the upstream `cefsimple` baseline: let CEF
 //! create and own a top-level Views window, with GPU enabled.
 //!
@@ -82,7 +82,7 @@ mod minimal_windowed {
                 }
                 cl.append_switch(Some(&CefString::from("no-sandbox")));
 
-                // Default to the Vulkan/ANGLE stack that was required for GPU OSR
+                // Default to the Vulkan/ANGLE stack validated for this NVIDIA setup.
                 // on this NVIDIA box. Set CEF_WINDOWED_GPU_MODE=default to leave
                 // Chromium's normal GPU choice untouched.
                 if std::env::var("CEF_WINDOWED_GPU_MODE").as_deref() != Ok("default") {
@@ -166,6 +166,7 @@ mod minimal_windowed {
         struct WindowedClient {
             life_span_handler: LifeSpanHandler,
             load_handler: LoadHandler,
+            display_handler: DisplayHandler,
         }
 
         impl Client {
@@ -175,6 +176,35 @@ mod minimal_windowed {
 
             fn load_handler(&self) -> Option<LoadHandler> {
                 Some(self.load_handler.clone())
+            }
+
+            fn display_handler(&self) -> Option<DisplayHandler> {
+                Some(self.display_handler.clone())
+            }
+        }
+    }
+
+    // Forward page diagnostics to the terminal so media capability tests do
+    // not depend on DevTools being open.
+    wrap_display_handler! {
+        struct WindowedConsoleDisplayHandler;
+
+        impl DisplayHandler {
+            fn on_console_message(
+                &self,
+                _browser: Option<&mut Browser>,
+                level: LogSeverity,
+                message: Option<&CefString>,
+                source: Option<&CefString>,
+                line: ::std::os::raw::c_int,
+            ) -> ::std::os::raw::c_int {
+                println!(
+                    "[windowed][console][{level:?}] {}:{} {}",
+                    source.map(CefString::to_string).unwrap_or_default(),
+                    line,
+                    message.map(CefString::to_string).unwrap_or_default(),
+                );
+                0
             }
         }
     }
@@ -248,6 +278,7 @@ mod minimal_windowed {
                 *self.client.borrow_mut() = Some(WindowedClient::new(
                     WindowedLifeSpanHandler::new(self.quit.clone()),
                     WindowedLoadHandler::new(),
+                    WindowedConsoleDisplayHandler::new(),
                 ));
 
                 let settings = BrowserSettings::default();
@@ -296,8 +327,9 @@ mod minimal_windowed {
             no_sandbox: 1,
             external_message_pump: pump_mode.uses_external_pump() as i32,
             root_cache_path: CefString::from(
-                std::env::temp_dir()
-                    .join("tauri-runtime-cef-windowed")
+                std::env::var_os("CEF_WINDOWED_CACHE_DIR")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::env::temp_dir().join("tauri-runtime-cef-windowed"))
                     .to_str()
                     .unwrap_or(""),
             ),

@@ -145,14 +145,24 @@ export class ComponentPlugin extends BasePlugin {
         if (OSPlugin.isLinux) {
           const dir = path.join(ROOT, "bin", "linux");
           if (existsSync(dir)) {
-            const files = readdirSync(dir).filter((f) =>
-              statSync(path.join(dir, f)).isFile(),
-            );
-            if (files.length > 0) {
-              linuxDebExtraFilesEntries = files
+            // 递归收集(含 CEF 的 locales/ 子目录),路径相对 bin/linux。
+            const rels: string[] = [];
+            const walk = (cur: string) => {
+              for (const name of readdirSync(cur)) {
+                const abs = path.join(cur, name);
+                if (statSync(abs).isDirectory()) {
+                  walk(abs);
+                } else {
+                  rels.push(path.relative(dir, abs).split(path.sep).join("/"));
+                }
+              }
+            };
+            walk(dir);
+            if (rels.length > 0) {
+              linuxDebExtraFilesEntries = rels
                 .map(
-                  (f) =>
-                    `"/usr/lib/kabegame/${f}": "../../bin/linux/${f}"`,
+                  (rel) =>
+                    `"/usr/lib/kabegame/${rel}": "../../bin/linux/${rel}"`,
                 )
                 .join(",\n          ");
               linuxDebExtraFilesPresent = true;

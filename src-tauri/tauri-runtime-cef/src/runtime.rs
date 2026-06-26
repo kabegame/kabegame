@@ -22,16 +22,11 @@ mod imp {
     };
 
     use cef::{args::Args, *};
-    use gtk::{glib::MainContext, prelude::WidgetExt};
-    use raw_window_handle::HasWindowHandle;
+    use gtk::glib::MainContext;
     use tao::{
-        event::{Event, WindowEvent as TaoWindowEvent},
         event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy},
-        platform::{
-            run_return::EventLoopExtRunReturn,
-            unix::{EventLoopBuilderExtUnix, WindowExtUnix},
-        },
-        window::{Icon as TaoIcon, Window as TaoWindow},
+        platform::unix::EventLoopBuilderExtUnix,
+        window::Icon as TaoIcon,
     };
     use tauri_runtime::window::WindowId;
     use tauri_runtime::{
@@ -53,41 +48,6 @@ mod imp {
     /// 可复用的公开 id 类型,所以这里维护独立递增 id。
     pub(crate) type WebviewId = u32;
 
-    /// CEF backend 的渲染/窗口模式。
-    ///
-    /// 默认保留 OSR,便于回退和对照。设置
-    /// `KABEGAME_CEF_WINDOW_MODE=windowed` 后启用 CEF Views 自建顶层窗口。
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum WindowMode {
-        Osr,
-        Windowed,
-    }
-
-    impl WindowMode {
-        fn from_env() -> Self {
-            let explicit = std::env::var("KABEGAME_CEF_WINDOW_MODE").ok();
-            match explicit.as_deref() {
-                Some("windowed" | "views") => Self::Windowed,
-                Some("osr" | "windowless") => Self::Osr,
-                _ => Self::Osr,
-            }
-        }
-
-        fn is_windowed(self) -> bool {
-            matches!(self, Self::Windowed)
-        }
-
-        fn env_debug_value() -> String {
-            let mode = std::env::var("KABEGAME_CEF_WINDOW_MODE").ok();
-            let kabegame_url = std::env::var("KABEGAME_CEF_WINDOWED_URL").ok();
-            let legacy_url = std::env::var("CEF_WINDOWED_URL").ok();
-            let legacy_pump = std::env::var("CEF_WINDOWED_PUMP").ok();
-            format!(
-                "KABEGAME_CEF_WINDOW_MODE={mode:?} KABEGAME_CEF_WINDOWED_URL={kabegame_url:?} CEF_WINDOWED_URL={legacy_url:?} CEF_WINDOWED_PUMP={legacy_pump:?}"
-            )
-        }
-    }
-
     static WINDOWED_QUIT: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     static WINDOWED_CONTEXT_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -105,9 +65,7 @@ mod imp {
     pub(crate) struct CefRuntime<T: UserEvent> {
         pub(crate) context: CefContext<T>,
         pub(crate) event_loop: EventLoop<Message<T>>,
-        window_mode: WindowMode,
         windows: Arc<CefWindows>,
-        tao_to_tauri: Arc<CefWindowIdMap>,
         webviews: Arc<CefWebviews>,
         pub(crate) exit_code: Cell<i32>,
     }
@@ -131,13 +89,83 @@ mod imp {
         messages: Arc<CefMessageQueue<T>>,
         main_thread_id: StdThreadId,
         windows: Arc<CefWindows>,
-        tao_to_tauri: Arc<CefWindowIdMap>,
         webviews: Arc<CefWebviews>,
         main_runtime: Arc<AtomicPtr<CefRuntime<T>>>,
         next_window_id: Arc<AtomicU32>,
         next_webview_id: Arc<AtomicU32>,
         next_window_event_id: Arc<AtomicU32>,
         next_webview_event_id: Arc<AtomicU32>,
+        // 启动期(`new_any_thread`,event_loop 已建)枚举的显示器快照。
+        // RuntimeHandle 在 setup 阶段(主循环尚未运行、`main_runtime` 仍为 null)
+        // 也能据此返回 monitor —— kabegame 用它算主窗口居中坐标。
+        monitors: Arc<Mutex<MonitorSnapshot>>,
+    }
+
+    #[derive(Default)]
+    pub(crate) struct MonitorSnapshot {
+        primary: Option<Monitor>,
+        all: Vec<Monitor>,
+    }
+
+    /// 用 CEF/Chromium 的 `Display` 构造 `Monitor`。
+    ///
+    /// 关键:Chromium 正确处理 XWayland 下的小数缩放(`device_scale_factor` 给真实
+    /// 1.4 等),而 tao/GTK 的 `MonitorHandle::scale_factor()` 在 XWayland 上会误报
+    /// 整数 1.0,导致依赖 scale 的居中计算(kabegame 自己算窗口居中位置)整体偏移。
+    ///
+    /// CEF `bounds()` 是 DIP(逻辑像素);Tauri `Monitor` 约定 size/position 为物理
+    /// 像素,故按 scale 换算回物理。
+    fn monitor_from_cef_display(display: &Display) -> Monitor {
+        let bounds = display.bounds();
+        let work_area = display.work_area();
+        let scale = f64::from(display.device_scale_factor()).max(1.0);
+        let phys_i = |v: i32| (v as f64 * scale).round() as i32;
+        let phys_u = |v: i32| (v.max(0) as f64 * scale).round() as u32;
+        let position = PhysicalPosition::new(phys_i(bounds.x), phys_i(bounds.y));
+        let size = PhysicalSize::new(phys_u(bounds.width), phys_u(bounds.height));
+        let work_area_position = PhysicalPosition::new(phys_i(work_area.x), phys_i(work_area.y));
+        let work_area_size = PhysicalSize::new(phys_u(work_area.width), phys_u(work_area.height));
+        Monitor {
+            name: None,
+            position,
+            size,
+            work_area: tauri_runtime::dpi::PhysicalRect {
+                position: work_area_position,
+                size: work_area_size,
+            },
+            scale_factor: scale,
+        }
+    }
+
+    /// 启动期从 CEF 枚举显示器快照。CEF 未就绪(返回空)时返回 `None`,调用方回退 tao。
+    fn cef_monitor_snapshot() -> Option<MonitorSnapshot> {
+        let primary = display_get_primary().map(|d| monitor_from_cef_display(&d));
+        // `display_get_alls` uses the vector length as its output capacity. An
+        // empty vector only asks CEF for the count and yields no display values.
+        let mut displays = vec![None; display_get_count()];
+        display_get_alls(Some(&mut displays));
+        let all: Vec<Monitor> = displays
+            .into_iter()
+            .flatten()
+            .map(|d| monitor_from_cef_display(&d))
+            .collect();
+        if primary.is_none() && all.is_empty() {
+            return None;
+        }
+        Some(MonitorSnapshot {
+            primary: primary.or_else(|| all.first().cloned()),
+            all,
+        })
+    }
+
+    fn tao_monitor_snapshot<T: UserEvent>(event_loop: &EventLoop<Message<T>>) -> MonitorSnapshot {
+        MonitorSnapshot {
+            primary: event_loop.primary_monitor().map(window::monitor_from_tao),
+            all: event_loop
+                .available_monitors()
+                .map(window::monitor_from_tao)
+                .collect(),
+        }
     }
 
     impl<T: UserEvent> fmt::Debug for CefContext<T> {
@@ -154,8 +182,7 @@ mod imp {
     impl<T: UserEvent> CefContext<T> {
         /// 向 runtime 主循环发送一条内部消息。
         ///
-        /// OSR 模式用 tao proxy 唤醒事件循环；windowed 模式由纯 CEF/GLib pump
-        /// 轮询同一队列。调用方不应直接持有或操作 `TaoWindow` / CEF UI 对象。
+        /// CEF/GLib pump 轮询内部队列。调用方不应直接操作 CEF UI 对象。
         pub(crate) fn send(&self, message: Message<T>) -> Result<()> {
             match message {
                 Message::UserEvent(_) | Message::RequestExit(_) => self.enqueue(message),
@@ -235,12 +262,6 @@ mod imp {
     #[allow(clippy::non_send_fields_in_send_ty)]
     unsafe impl Sync for CefWindows {}
 
-    struct CefWindowIdMap(RefCell<BTreeMap<tao::window::WindowId, WindowId>>);
-    #[allow(clippy::non_send_fields_in_send_ty)]
-    unsafe impl Send for CefWindowIdMap {}
-    #[allow(clippy::non_send_fields_in_send_ty)]
-    unsafe impl Sync for CefWindowIdMap {}
-
     struct CefWebviews(RefCell<BTreeMap<WebviewId, webview::CefWebviewState>>);
     #[allow(clippy::non_send_fields_in_send_ty)]
     unsafe impl Send for CefWebviews {}
@@ -260,14 +281,14 @@ mod imp {
         Task(Box<dyn FnOnce() + Send>),
         /// 请求退出事件循环。
         RequestExit(i32),
-        /// 在主线程创建 tao 窗口,并返回 Tauri detached window。
+        /// 在 CEF UI 线程创建 Views 窗口,并返回 Tauri detached window。
         CreateWindow {
             window_id: WindowId,
             pending: PendingWindow<T, Cef<T>>,
             after_window_creation: Option<Box<dyn Fn(RawWindow) + Send>>,
             tx: Sender<Result<DetachedWindow<T, Cef<T>>>>,
         },
-        /// 在已存在窗口上创建 CEF windowless webview。
+        /// 在已存在 CEF Views 窗口上创建 BrowserView。
         CreateWebview {
             window_id: WindowId,
             webview_id: WebviewId,
@@ -278,7 +299,17 @@ mod imp {
         Window(WindowId, WindowMessage),
         /// 派发 webview 操作或 getter。
         Webview(WebviewId, WebviewMessage),
+        /// windowed(CEF Views)的窗口事件回流:delegate 在 UI 线程产生,经
+        /// `CefContext::enqueue` 投入队列,由主循环 `emit_mapped_window_event`
+        /// 分发给该窗口的 listeners + `RunEvent::WindowEvent`。
+        CefWindowEvent(WindowId, WindowEvent),
     }
+
+    /// 类型擦除的窗口事件发射器,交给 CEF Views `WindowDelegate` 在回调里调用。
+    ///
+    /// 闭包内部捕获 `CefContext<T>` 与 `WindowId`,把事件 `enqueue` 成
+    /// `Message::CefWindowEvent`;delegate 本身不需要泛型。
+    pub(crate) type WindowEventEmitter = Arc<dyn Fn(WindowEvent) + Send + Sync>;
 
     impl<T: UserEvent> fmt::Debug for Message<T> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -301,14 +332,15 @@ mod imp {
                     .finish(),
                 Self::Window(id, _) => f.debug_tuple("Window").field(id).finish(),
                 Self::Webview(id, _) => f.debug_tuple("Webview").field(id).finish(),
+                Self::CefWindowEvent(id, _) => f.debug_tuple("CefWindowEvent").field(id).finish(),
             }
         }
     }
 
-    /// 单个 tao 窗口的运行期状态。
+    /// 单个 CEF Views 窗口的运行期状态。
     ///
     /// 记录 Tauri label、原生窗口、窗口事件监听器以及挂载到该窗口上的 CEF
-    /// webview id。窗口 resize 时会按这个列表通知 webview 调整 OSR 视口。
+    /// webview id。
     pub(crate) struct CefWindowState {
         pub(crate) label: String,
         pub(crate) kind: CefWindowKind,
@@ -317,7 +349,6 @@ mod imp {
     }
 
     pub(crate) enum CefWindowKind {
-        Osr { window: Arc<TaoWindow> },
         Windowed(WindowedWindowState),
     }
 
@@ -569,26 +600,20 @@ mod imp {
     /// 应用主进程调用后会继续返回；renderer/gpu 等 CEF 子进程会在这里
     /// `std::process::exit`,不会进入 Tauri 初始化。
     pub fn execute_cef_subprocess_and_exit() {
-        // Match the proven OSR bootstrap order: select X11 before CEF parses
+        // Select X11 before CEF parses
         // the process environment or launches any child process.
         unsafe {
             std::env::set_var("GDK_BACKEND", "x11");
         }
-        let window_mode = WindowMode::from_env();
-        eprintln!(
-            "[cef-runtime] early subprocess dispatch mode={window_mode:?} {}",
-            WindowMode::env_debug_value()
-        );
-        let mut app = init_cef_app_and_maybe_exit(true, window_mode);
-        initialize_cef(&mut app, window_mode)
-            .expect("failed to initialize CEF before Tauri startup");
+        eprintln!("[cef-runtime] early subprocess dispatch (CEF Views/windowed)");
+        let mut app = init_cef_app_and_maybe_exit(true);
+        initialize_cef(&mut app).expect("failed to initialize CEF before Tauri startup");
         PREPARED_CEF_APP.with(|prepared| prepared.replace(Some(app)));
         CEF_INITIALIZED.with(|initialized| initialized.set(true));
     }
 
     wrap_app! {
         struct CefRuntimeApp {
-            window_mode: WindowMode,
             windowed_quit: Arc<AtomicBool>,
         }
         impl App {
@@ -616,19 +641,14 @@ mod imp {
                     );
                 }
                 cl.append_switch(Some(&CefString::from("no-sandbox")));
-                if self.window_mode.is_windowed() {
-                    cl.append_switch_with_value(
-                        Some(&CefString::from("use-angle")),
-                        Some(&CefString::from("vulkan")),
-                    );
-                    cl.append_switch_with_value(
-                        Some(&CefString::from("enable-features")),
-                        Some(&CefString::from("Vulkan")),
-                    );
-                } else {
-                    cl.append_switch(Some(&CefString::from("disable-gpu")));
-                    cl.append_switch(Some(&CefString::from("disable-gpu-compositing")));
-                }
+                cl.append_switch_with_value(
+                    Some(&CefString::from("use-angle")),
+                    Some(&CefString::from("vulkan")),
+                );
+                cl.append_switch_with_value(
+                    Some(&CefString::from("enable-features")),
+                    Some(&CefString::from("Vulkan")),
+                );
                 // 禁用 zygote:Linux 下渲染进程默认从 zygote fork,**不会**重新
                 // `execute_process` → 不跑 `on_register_custom_schemes` → fork 出的
                 // renderer 不认 `ipc://` / `cef-ipc://`(`ERR_UNKNOWN_URL_SCHEME`),
@@ -636,19 +656,17 @@ mod imp {
                 // 后每个 renderer 作为独立进程 re-exec 本二进制,自己注册自定义 scheme。
                 cl.append_switch(Some(&CefString::from("no-zygote")));
                 // NOTE: 不要开 `single-process`。CEF/Chromium 单进程模式已弃用且极不
-                // 稳定(OSR 首帧后 SIGSEGV,并伴随 "Cannot use V8 Proxy resolver in
+                // 稳定(并伴随 "Cannot use V8 Proxy resolver in
                 // single process mode")。多进程下渲染/GPU 子进程会 re-exec 本二进制,
                 // 由 `execute_cef_subprocess_and_exit()` 在 main 最早期拦下退出
                 // (见 main.rs + browser_subprocess_path)。minimal.rs 多进程已验证可用。
             }
 
             fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
-                self.window_mode.is_windowed().then(|| {
-                    WindowedBrowserProcessHandler::new(
-                        RefCell::new(None),
-                        self.windowed_quit.clone(),
-                    )
-                })
+                Some(WindowedBrowserProcessHandler::new(
+                    RefCell::new(None),
+                    self.windowed_quit.clone(),
+                ))
             }
         }
     }
@@ -663,6 +681,11 @@ mod imp {
             maximizable: bool,
             minimizable: bool,
             closable: bool,
+            emitter: WindowEventEmitter,
+            // 是否在首次显示前居中(Tauri `center: true`)。
+            center: bool,
+            // 应用图标 RGBA(宽、高),用于 CEF 窗口标题栏 + 任务栏图标。
+            icon: Option<Arc<(Vec<u8>, u32, u32)>>,
         }
 
         impl ViewDelegate {
@@ -690,6 +713,36 @@ mod imp {
                         shared.browser_view_attached = true;
                     }
                 }
+                layout_windowed_browser_view(&shared, window);
+
+                // 应用图标(标题栏 + 任务栏)。CEF Views 默认是 Chromium 图标,
+                // tao 的 window_icon 在 windowed 路径用不上,故这里显式设置。
+                if let Some(icon) = self.icon.as_ref() {
+                    if let Some(mut image) = image_create() {
+                        if image.add_bitmap(
+                            1.0,
+                            icon.1 as i32,
+                            icon.2 as i32,
+                            ColorType::RGBA_8888,
+                            AlphaType::POSTMULTIPLIED,
+                            Some(icon.0.as_slice()),
+                        ) != 0
+                        {
+                            window.set_window_icon(Some(&mut image));
+                            window.set_window_app_icon(Some(&mut image));
+                        }
+                    }
+                }
+
+                // 居中(Tauri `center: true`)。在 show 前居中,避免可见跳动。
+                // CEF Views `center_window` 按窗口所在 display 的工作区居中。
+                if self.center {
+                    window.center_window(Some(&cef::Size {
+                        width: self.initial_bounds.width,
+                        height: self.initial_bounds.height,
+                    }));
+                }
+
                 if self.initial_show_state != ShowState::HIDDEN {
                     window.show();
                 }
@@ -700,6 +753,43 @@ mod imp {
                 let mut shared = self.shared.lock().expect("windowed state mutex poisoned");
                 shared.window = None;
                 shared.quit.store(true, Ordering::Release);
+            }
+
+            /// CEF Views 窗口尺寸/位置变化 → Tauri `Resized` + `Moved`。
+            ///
+            /// CEF Views bounds 是 DIP(逻辑像素),Tauri `WindowEvent` 要物理像素,
+            /// 故按窗口所在 display 的 scale factor 换算。
+            fn on_window_bounds_changed(
+                &self,
+                window: Option<&mut cef::Window>,
+                new_bounds: Option<&cef::Rect>,
+            ) {
+                let Some(bounds) = new_bounds else { return };
+                let scale = if let Some(window) = window {
+                    let shared = self.shared.lock().expect("windowed state mutex poisoned");
+                    layout_windowed_browser_view(&shared, window);
+                    window
+                        .display()
+                        .map(|display| display.device_scale_factor() as f64)
+                        .unwrap_or(1.0)
+                } else {
+                    1.0
+                };
+                let width = (bounds.width.max(0) as f64 * scale).round() as u32;
+                let height = (bounds.height.max(0) as f64 * scale).round() as u32;
+                let x = (bounds.x as f64 * scale).round() as i32;
+                let y = (bounds.y as f64 * scale).round() as i32;
+                (self.emitter)(WindowEvent::Resized(PhysicalSize::new(width, height)));
+                (self.emitter)(WindowEvent::Moved(PhysicalPosition::new(x, y)));
+            }
+
+            /// CEF Views 窗口激活态变化 → Tauri `Focused`。
+            fn on_window_activation_changed(
+                &self,
+                _window: Option<&mut cef::Window>,
+                active: ::std::os::raw::c_int,
+            ) {
+                (self.emitter)(WindowEvent::Focused(active != 0));
             }
 
             fn can_close(&self, _window: Option<&mut cef::Window>) -> i32 {
@@ -747,6 +837,21 @@ mod imp {
                 RuntimeStyle::ALLOY
             }
         }
+    }
+
+    /// Keep the sole windowed `BrowserView` aligned with the CEF Window client
+    /// area. This is a CEF Views layout operation.
+    fn layout_windowed_browser_view(shared: &WindowedWindowShared, window: &cef::Window) {
+        let client_area = window.client_area_bounds_in_screen();
+        let Some(browser_view) = shared.browser_view.as_ref() else {
+            return;
+        };
+        browser_view.inner.set_bounds(Some(&cef::Rect {
+            x: 0,
+            y: 0,
+            width: client_area.width.max(0),
+            height: client_area.height.max(0),
+        }));
     }
 
     wrap_browser_view_delegate! {
@@ -885,6 +990,11 @@ mod imp {
                         true,
                         true,
                         true,
+                        // bootstrap 窗口不对接 Tauri window,无需事件回流。
+                        Arc::new(|_| {}),
+                        // bootstrap 窗口:不居中、无图标。
+                        false,
+                        None,
                     );
                 let window = window_create_top_level(Some(&mut window_delegate));
                 eprintln!(
@@ -899,7 +1009,7 @@ mod imp {
     ///
     /// `exit_subprocess` 为 true 时用于应用 `main` 最早阶段；为 false 时用于
     /// runtime 初始化阶段,此时 browser 主进程应继续执行 `cef::initialize`。
-    fn init_cef_app_and_maybe_exit(exit_subprocess: bool, window_mode: WindowMode) -> cef::App {
+    fn init_cef_app_and_maybe_exit(exit_subprocess: bool) -> cef::App {
         let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
         let args = Args::new();
         let cmd = args.as_cmd_line().expect("failed to parse command line");
@@ -910,11 +1020,11 @@ mod imp {
             CefString::from(&cmd.switch_value(Some(&CefString::from("type")))).to_string()
         };
         eprintln!(
-            "[cef-runtime] cef_execute_process pid={} type={process_type} mode={window_mode:?} args={:?}",
+            "[cef-runtime] cef_execute_process pid={} type={process_type} backend=windowed args={:?}",
             std::process::id(),
             std::env::args().collect::<Vec<_>>()
         );
-        let mut app = CefRuntimeApp::new(window_mode, windowed_quit());
+        let mut app = CefRuntimeApp::new(windowed_quit());
 
         let code = execute_process(
             Some(args.as_main_args()),
@@ -931,19 +1041,57 @@ mod imp {
         app
     }
 
+    /// 解析 CEF 资源目录(`*.pak` / `icudtl.dat` / `v8_context_snapshot.bin` /
+    /// `locales/` 的所在目录)。
+    ///
+    /// 注意:CEF 初始化早于 Tauri app 构建,此时还没有 `AppPaths` /
+    /// `tauri-plugin-pathes`,因此这里只能用 `current_exe()` 自算 —— 是 CLAUDE.md
+    /// 「路径逻辑归 tauri-plugin-pathes」规则在 CEF 早期初始化下的唯一例外。
+    ///
+    /// 顺序:
+    /// 1. `CEF_PATH` 环境变量(开发期,cef-rs 导出的运行时目录);
+    /// 2. 安装态:`<exe>/../lib/kabegame`(deb `/usr/bin/kabegame` → `/usr/lib/kabegame`),
+    ///    以是否存在 `icudtl.dat` 判定;
+    /// 3. 都没有 → `None`(交给 CEF 默认:可执行文件同目录)。
+    fn resolve_cef_resource_dir() -> Option<std::path::PathBuf> {
+        if let Ok(cef_path) = std::env::var("CEF_PATH") {
+            if !cef_path.is_empty() {
+                return Some(std::path::PathBuf::from(cef_path));
+            }
+        }
+        let exe = std::env::current_exe().ok()?;
+        let dir = exe.parent()?.join("../lib/kabegame");
+        if dir.join("icudtl.dat").is_file() {
+            return Some(dir.canonicalize().unwrap_or(dir));
+        }
+        None
+    }
+
+    /// CEF 缓存/用户数据目录(cookies、缓存等)。优先 XDG / HOME,回退临时目录。
+    fn cef_root_cache_dir() -> std::path::PathBuf {
+        if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+            if !xdg.is_empty() {
+                return std::path::PathBuf::from(xdg).join("kabegame-cef");
+            }
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            if !home.is_empty() {
+                return std::path::PathBuf::from(home).join(".cache/kabegame-cef");
+            }
+        }
+        std::env::temp_dir().join("kabegame-cef")
+    }
+
     /// 初始化 CEF browser 主进程。
     ///
     /// 关键配置:
     /// - `external_message_pump = 1`:由 runtime 主循环主动调用 `do_message_loop_work`。
-    /// - OSR 模式设置 `windowless_rendering_enabled = 1`;windowed 模式让 CEF
-    ///   Views 创建真实顶层窗口。
+    /// - CEF Views 创建真实顶层窗口并负责 GPU 组合。
     /// - `CEF_PATH`:可指定 CEF resources/locales 所在目录。
-    fn initialize_cef(app: &mut cef::App, window_mode: WindowMode) -> Result<()> {
+    fn initialize_cef(app: &mut cef::App) -> Result<()> {
         let args = Args::new();
-        if window_mode.is_windowed() {
-            WINDOWED_CONTEXT_INITIALIZED.store(false, Ordering::Release);
-        }
-        eprintln!("[cef-runtime] cef_initialize mode={window_mode:?}");
+        WINDOWED_CONTEXT_INITIALIZED.store(false, Ordering::Release);
+        eprintln!("[cef-runtime] cef_initialize backend=windowed");
         let mut settings = Settings {
             no_sandbox: 1,
             external_message_pump: 1,
@@ -954,21 +1102,21 @@ mod imp {
                     .to_string_lossy()
                     .as_ref(),
             ),
-            root_cache_path: CefString::from(
-                std::env::temp_dir()
-                    .join("kabegame-cef")
-                    .to_string_lossy()
-                    .as_ref(),
-            ),
+            root_cache_path: CefString::from(cef_root_cache_dir().to_string_lossy().as_ref()),
             ..Default::default()
         };
-        if !window_mode.is_windowed() {
-            settings.windowless_rendering_enabled = 1;
-        }
-        if let Ok(cef_path) = std::env::var("CEF_PATH") {
-            if !cef_path.is_empty() {
-                settings.resources_dir_path = CefString::from(cef_path.as_str());
-                settings.locales_dir_path = CefString::from(format!("{cef_path}/locales").as_str());
+        match resolve_cef_resource_dir() {
+            Some(dir) => {
+                settings.resources_dir_path = CefString::from(dir.to_string_lossy().as_ref());
+                settings.locales_dir_path =
+                    CefString::from(dir.join("locales").to_string_lossy().as_ref());
+            }
+            None => {
+                eprintln!(
+                    "[cef-runtime] WARN: CEF resource dir not found \
+                     (no CEF_PATH, no <exe>/../lib/kabegame/icudtl.dat); \
+                     relying on CEF default next to executable"
+                );
             }
         }
 
@@ -1126,15 +1274,30 @@ mod imp {
         }
 
         fn primary_monitor(&self) -> Option<Monitor> {
-            None
+            self.context.monitors.lock().ok()?.primary.clone()
         }
 
-        fn monitor_from_point(&self, _x: f64, _y: f64) -> Option<Monitor> {
-            None
+        fn monitor_from_point(&self, x: f64, y: f64) -> Option<Monitor> {
+            let snapshot = self.context.monitors.lock().ok()?;
+            snapshot
+                .all
+                .iter()
+                .find(|m| {
+                    let pos = m.position;
+                    let size = m.size;
+                    let (mx, my) = (pos.x as f64, pos.y as f64);
+                    x >= mx && y >= my && x < mx + size.width as f64 && y < my + size.height as f64
+                })
+                .or(snapshot.primary.as_ref())
+                .cloned()
         }
 
         fn available_monitors(&self) -> Vec<Monitor> {
-            Vec::new()
+            self.context
+                .monitors
+                .lock()
+                .map(|snapshot| snapshot.all.clone())
+                .unwrap_or_default()
         }
 
         fn cursor_position(&self) -> Result<PhysicalPosition<f64>> {
@@ -1170,15 +1333,13 @@ mod imp {
             unsafe {
                 std::env::set_var("GDK_BACKEND", "x11");
             }
-            let window_mode = WindowMode::from_env();
             eprintln!(
-                "[cef-runtime] runtime new_any_thread mode={window_mode:?} initialized={} {}",
-                CEF_INITIALIZED.with(Cell::get),
-                WindowMode::env_debug_value()
+                "[cef-runtime] runtime new_any_thread backend=windowed initialized={}",
+                CEF_INITIALIZED.with(Cell::get)
             );
             if !CEF_INITIALIZED.with(Cell::get) {
-                let mut app = init_cef_app_and_maybe_exit(false, window_mode);
-                initialize_cef(&mut app, window_mode)?;
+                let mut app = init_cef_app_and_maybe_exit(false);
+                initialize_cef(&mut app)?;
                 PREPARED_CEF_APP.with(|prepared| prepared.replace(Some(app)));
                 CEF_INITIALIZED.with(|initialized| initialized.set(true));
             }
@@ -1189,31 +1350,46 @@ mod imp {
                 builder.with_app_id(app_id);
             }
             let event_loop = builder.build();
+            // CEF 的 Display 保留 XWayland fractional scale；tao/GTK 在该场景
+            // 可能只报告整数 scale。仅 CEF 未返回 display 时回退 tao。
+            let monitors =
+                cef_monitor_snapshot().unwrap_or_else(|| tao_monitor_snapshot(&event_loop));
+            eprintln!(
+                "[cef-runtime] monitor snapshot source={} primary={:?}",
+                if monitors.primary.is_some() {
+                    "cef"
+                } else {
+                    "tao"
+                },
+                monitors.primary.as_ref().map(|monitor| (
+                    monitor.size,
+                    monitor.scale_factor,
+                    monitor.work_area,
+                )),
+            );
+            let monitors = Arc::new(Mutex::new(monitors));
             let messages = Arc::new(CefMessageQueue::new());
             let windows = Arc::new(CefWindows(RefCell::new(BTreeMap::new())));
-            let tao_to_tauri = Arc::new(CefWindowIdMap(RefCell::new(BTreeMap::new())));
             let webviews = Arc::new(CefWebviews(RefCell::new(BTreeMap::new())));
             let context = CefContext {
                 tao_proxy: event_loop.create_proxy(),
                 messages,
                 main_thread_id: current_thread().id(),
                 windows: windows.clone(),
-                tao_to_tauri: tao_to_tauri.clone(),
                 webviews: webviews.clone(),
                 main_runtime: Arc::new(AtomicPtr::new(std::ptr::null_mut())),
                 next_window_id: Arc::new(AtomicU32::new(1)),
                 next_webview_id: Arc::new(AtomicU32::new(1)),
                 next_window_event_id: Arc::new(AtomicU32::new(1)),
                 next_webview_event_id: Arc::new(AtomicU32::new(1)),
+                monitors,
             };
 
             Ok(Self {
                 inner: CefRuntime {
                     context,
                     event_loop,
-                    window_mode,
                     windows,
-                    tao_to_tauri,
                     webviews,
                     exit_code: Cell::new(0),
                 },
@@ -1264,25 +1440,33 @@ mod imp {
         }
 
         fn primary_monitor(&self) -> Option<Monitor> {
-            self.inner
-                .event_loop
-                .primary_monitor()
-                .map(window::monitor_from_tao)
+            self.inner.context.monitors.lock().ok()?.primary.clone()
         }
 
         fn monitor_from_point(&self, x: f64, y: f64) -> Option<Monitor> {
-            self.inner
-                .event_loop
-                .monitor_from_point(x, y)
-                .map(window::monitor_from_tao)
+            let snapshot = self.inner.context.monitors.lock().ok()?;
+            snapshot
+                .all
+                .iter()
+                .find(|monitor| {
+                    let position = monitor.position;
+                    let size = monitor.size;
+                    x >= position.x as f64
+                        && y >= position.y as f64
+                        && x < position.x as f64 + size.width as f64
+                        && y < position.y as f64 + size.height as f64
+                })
+                .or(snapshot.primary.as_ref())
+                .cloned()
         }
 
         fn available_monitors(&self) -> Vec<Monitor> {
             self.inner
-                .event_loop
-                .available_monitors()
-                .map(window::monitor_from_tao)
-                .collect()
+                .context
+                .monitors
+                .lock()
+                .map(|snapshot| snapshot.all.clone())
+                .unwrap_or_default()
         }
 
         fn cursor_position(&self) -> Result<PhysicalPosition<f64>> {
@@ -1300,19 +1484,11 @@ mod imp {
 
         fn set_device_event_filter(&mut self, _filter: DeviceEventFilter) {}
 
-        /// 单步驱动 CEF 消息泵并刷新 OSR 脏帧。
-        ///
-        /// 这里只提供最小实现；应用常规运行使用 `run` / `run_return`。
+        /// 单步驱动 CEF Views/GLib 消息泵。
         fn run_iteration<F: FnMut(RunEvent<T>) + 'static>(&mut self, callback: F) {
             let mut callback = callback;
-            if self.inner.window_mode.is_windowed() {
-                pump_glib(&MainContext::default());
-                do_message_loop_work();
-                callback(RunEvent::MainEventsCleared);
-                return;
-            }
+            pump_glib(&MainContext::default());
             do_message_loop_work();
-            self.inner.blit_all();
             callback(RunEvent::MainEventsCleared);
         }
 
@@ -1329,7 +1505,7 @@ mod imp {
     }
 
     impl<T: UserEvent> CefRuntime<T> {
-        /// 在主线程立即创建 tao 窗口,并在需要时同步创建首个 webview。
+        /// 在 CEF UI 线程立即创建 Views 窗口,并在需要时同步创建首个 webview。
         fn create_window_now(
             &self,
             event_loop: &tao::event_loop::EventLoopWindowTarget<Message<T>>,
@@ -1337,62 +1513,8 @@ mod imp {
             pending: PendingWindow<T, Cef<T>>,
             after_window_creation: Option<Box<dyn Fn(RawWindow) + Send>>,
         ) -> Result<DetachedWindow<T, Cef<T>>> {
-            eprintln!(
-                "[cef-runtime] create_window_now id={window_id:?} label={} mode={:?}",
-                pending.label, self.window_mode
-            );
-            if self.window_mode.is_windowed() {
-                return self.create_windowed_window_now(window_id, pending, after_window_creation);
-            }
-
-            let label = pending.label.clone();
-            let mut pending_webview = pending.webview;
-            let use_https_scheme = pending_webview
-                .as_ref()
-                .map(|w| w.webview_attributes.use_https_scheme)
-                .unwrap_or(false);
-
-            let window = window::build_tao_window(event_loop, pending.window_builder)?;
-            if let Some(after) = after_window_creation {
-                after(window::raw_window_for_callback(&window));
-            }
-
-            self.tao_to_tauri
-                .0
-                .borrow_mut()
-                .insert(window.id(), window_id);
-            self.windows.0.borrow_mut().insert(
-                window_id,
-                CefWindowState {
-                    label: label.clone(),
-                    kind: CefWindowKind::Osr {
-                        window: window.clone(),
-                    },
-                    listeners: Vec::new(),
-                    webviews: Vec::new(),
-                },
-            );
-
-            let detached_webview = if let Some(webview) = pending_webview.take() {
-                let webview_id = self.context.next_webview_id();
-                let detached = self.create_webview_now(window_id, webview_id, webview)?;
-                Some(DetachedWindowWebview {
-                    webview: detached,
-                    use_https_scheme,
-                })
-            } else {
-                None
-            };
-
-            Ok(DetachedWindow {
-                id: window_id,
-                label,
-                dispatcher: window::CefWindowDispatcher {
-                    window_id,
-                    context: self.context.clone(),
-                },
-                webview: detached_webview,
-            })
+            let _ = event_loop;
+            self.create_windowed_window_now(window_id, pending, after_window_creation)
         }
 
         fn create_windowed_window_now(
@@ -1437,6 +1559,10 @@ mod imp {
                 .map(|w| w.webview_attributes.use_https_scheme)
                 .unwrap_or(false);
             let attrs = pending.window_builder.inner.window.clone();
+            // Tauri `center: true` 与应用图标:windowed(CEF Views)路径不建 tao 窗口,
+            // 需在 delegate 里显式应用(见 on_window_created)。
+            let center = pending.window_builder.center;
+            let icon = pending.window_builder.icon_rgba.clone().map(Arc::new);
             let size = tao_size_to_physical(attrs.inner_size, 1024, 768);
             let position = attrs
                 .position
@@ -1469,6 +1595,14 @@ mod imp {
                 webview_id = Some(id);
             }
 
+            // 窗口事件回流发射器:delegate 在 CEF UI 线程回调里调用,把事件
+            // enqueue 成 `Message::CefWindowEvent`,由主循环分发到该窗口 listeners。
+            let emitter: WindowEventEmitter = {
+                let context = context.clone();
+                Arc::new(move |event| {
+                    let _ = context.enqueue(Message::CefWindowEvent(window_id, event));
+                })
+            };
             let mut delegate = WindowedTopLevelWindowDelegate::new(
                 shared.clone(),
                 cef::Rect {
@@ -1483,6 +1617,9 @@ mod imp {
                 attrs.maximizable,
                 attrs.minimizable,
                 attrs.closable,
+                emitter,
+                center,
+                icon,
             );
             let window = window_create_top_level(Some(&mut delegate)).ok_or_else(|| {
                 eprintln!("[cef-runtime] CEF failed to create a top-level Views window");
@@ -1500,11 +1637,8 @@ mod imp {
                 if !shared.browser_view_attached {
                     if let Some(browser_view) = shared.browser_view.as_ref() {
                         let mut view = View::from(&browser_view.inner);
-                        browser_view.inner.set_size(Some(&cef::Size {
-                            width: size.width as i32,
-                            height: size.height as i32,
-                        }));
                         window.add_child_view(Some(&mut view));
+                        layout_windowed_browser_view(&shared, &window);
                         shared.browser_view_attached = true;
                     }
                 }
@@ -1552,46 +1686,14 @@ mod imp {
             })
         }
 
-        /// 在已存在的 tao 窗口上创建 CEF windowless webview。
+        /// 在已存在的 CEF Views 窗口上创建 BrowserView。
         fn create_webview_now(
             &self,
             window_id: WindowId,
             webview_id: WebviewId,
             pending: PendingWebview<T, Cef<T>>,
         ) -> Result<DetachedWebview<T, Cef<T>>> {
-            if self.window_mode.is_windowed() {
-                return self.create_windowed_webview_now(window_id, webview_id, pending);
-            }
-
-            let window = self
-                .windows
-                .0
-                .borrow()
-                .get(&window_id)
-                .and_then(|w| match &w.kind {
-                    CefWindowKind::Osr { window } => Some(window.clone()),
-                    CefWindowKind::Windowed(_) => None,
-                })
-                .ok_or(Error::WindowNotFound)?;
-
-            let label = pending.label.clone();
-            let state = webview::create_cef_webview(
-                &window,
-                window_id,
-                webview_id,
-                self.context.clone(),
-                pending,
-            )?;
-            self.webviews.0.borrow_mut().insert(webview_id, state);
-            if let Some(window) = self.windows.0.borrow_mut().get_mut(&window_id) {
-                window.webviews.push(webview_id);
-            }
-            Ok(webview::detached_webview(
-                label,
-                window_id,
-                webview_id,
-                self.context.clone(),
-            ))
+            self.create_windowed_webview_now(window_id, webview_id, pending)
         }
 
         fn create_windowed_webview_now(
@@ -1625,22 +1727,21 @@ mod imp {
             let Some(window) = window_states.get_mut(&window_id) else {
                 return Err(Error::WindowNotFound);
             };
-            let CefWindowKind::Windowed(windowed) = &mut window.kind else {
-                return Err(Error::WindowNotFound);
-            };
+            let CefWindowKind::Windowed(windowed) = &mut window.kind;
             let mut view = View::from(&browser_view);
             {
                 let mut shared = windowed
                     .shared
                     .lock()
                     .expect("windowed state mutex poisoned");
+                shared.browser_view = Some(webview::CefBrowserView {
+                    inner: browser_view.clone(),
+                });
                 if let Some(window) = shared.window.as_ref() {
                     window.inner.add_child_view(Some(&mut view));
+                    layout_windowed_browser_view(&shared, &window.inner);
                     shared.browser_view_attached = true;
                 }
-                shared.browser_view = Some(webview::CefBrowserView {
-                    inner: browser_view,
-                });
             }
             window.webviews.push(webview_id);
             drop(window_states);
@@ -1651,82 +1752,12 @@ mod imp {
             ))
         }
 
-        /// runtime 主循环。
-        ///
-        /// 每轮循环处理 tao 事件和内部消息,随后调用 `cef::do_message_loop_work`
-        /// 驱动 CEF 外部消息泵,最后把所有 OSR 脏帧 blit 到对应 tao 窗口。
-        fn run_loop<F: FnMut(RunEvent<T>) + 'static>(mut self, mut callback: F, once: bool) -> i32 {
-            if self.window_mode.is_windowed() {
-                return self.run_windowed_loop(callback, once);
-            }
-
-            eprintln!("[cef-runtime] event loop started");
-            let runtime_ptr = &mut self as *mut Self;
-            self.context
-                .main_runtime
-                .store(runtime_ptr, Ordering::Release);
-            callback(RunEvent::Ready);
-
-            let this = &self as *const Self;
-            self.event_loop
-                .run_return(move |event, target, control_flow| {
-                    let this = unsafe { &*this };
-                    *control_flow = if once {
-                        ControlFlow::Exit
-                    } else {
-                        ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(8))
-                    };
-
-                    match event {
-                        Event::UserEvent(message) => {
-                            this.handle_message(target, message, &mut callback, control_flow);
-                        }
-                        Event::WindowEvent {
-                            window_id, event, ..
-                        } => {
-                            if let Some(id) = this.tao_to_tauri.0.borrow().get(&window_id).copied()
-                            {
-                                this.handle_tao_window_event(
-                                    id,
-                                    event,
-                                    &mut callback,
-                                    control_flow,
-                                );
-                            }
-                        }
-                        Event::MainEventsCleared => {
-                            callback(RunEvent::MainEventsCleared);
-                        }
-                        Event::LoopDestroyed => {
-                            eprintln!("[cef-runtime] tao loop destroyed");
-                            callback(RunEvent::Exit);
-                        }
-                        _ => {}
-                    }
-
-                    this.drain_messages(target, &mut callback, control_flow);
-                    do_message_loop_work();
-                    this.blit_all();
-                });
-
-            shutdown();
-            eprintln!("[cef-runtime] CEF shutdown complete");
-            self.context
-                .main_runtime
-                .store(std::ptr::null_mut(), Ordering::Release);
-            self.exit_code.get()
-        }
-
-        /// CEF Views windowed 路径的外部消息泵。
+        /// CEF Views 的外部消息泵。
         ///
         /// 这条路径不进入 tao `run_return`:CEF Views 自己创建真实窗口,并且
         /// Linux 上必须在同一个主线程持续泵 GLib/X11 和 CEF message loop。
         /// Tauri runtime 消息从 `CefContext` 队列 drain。
-        fn run_windowed_loop<F: FnMut(RunEvent<T>) + 'static>(
-            mut self,
-            mut callback: F,
-            once: bool,
-        ) -> i32 {
+        fn run_loop<F: FnMut(RunEvent<T>) + 'static>(mut self, mut callback: F, once: bool) -> i32 {
             eprintln!("[cef-runtime] windowed pure CEF/GLib pump started");
             let runtime_ptr = &mut self as *mut Self;
             self.context
@@ -1798,7 +1829,9 @@ mod imp {
                 Message::Webview(webview_id, message) => {
                     self.handle_webview_message(webview_id, message);
                 }
-                message @ (Message::UserEvent(_) | Message::RequestExit(_)) => {
+                message @ (Message::UserEvent(_)
+                | Message::RequestExit(_)
+                | Message::CefWindowEvent(..)) => {
                     self.context.enqueue(message)?;
                 }
                 Message::Wake => {}
@@ -1872,98 +1905,20 @@ mod imp {
                 Message::Webview(webview_id, message) => {
                     self.handle_webview_message(webview_id, message)
                 }
-            }
-        }
-
-        /// 把 tao 原生窗口事件转换为 Tauri `RunEvent::WindowEvent`。
-        ///
-        /// CloseRequested 需要特殊处理,因为 Tauri 允许监听器阻止关闭。
-        fn handle_tao_window_event<F: FnMut(RunEvent<T>) + 'static>(
-            &self,
-            window_id: WindowId,
-            event: TaoWindowEvent<'_>,
-            callback: &mut F,
-            control_flow: &mut ControlFlow,
-        ) {
-            if let Some(window) = self.windows.0.borrow().get(&window_id) {
-                match &event {
-                    TaoWindowEvent::CloseRequested => {
-                        let (tx, rx) = channel();
-                        let event = WindowEvent::CloseRequested { signal_tx: tx };
-                        for (_, listener) in &window.listeners {
-                            listener(&event);
-                        }
-                        callback(RunEvent::WindowEvent {
-                            label: window.label.clone(),
-                            event,
-                        });
-                        if rx.try_recv().unwrap_or(false) {
-                            return;
-                        }
-                        *control_flow = ControlFlow::Exit;
-                    }
-                    TaoWindowEvent::Resized(size) => {
-                        for webview_id in &window.webviews {
-                            if let Some(webview) = self.webviews.0.borrow().get(webview_id) {
-                                if webview.auto_resize {
-                                    let scale_factor = match &window.kind {
-                                        CefWindowKind::Osr { window } => window.scale_factor(),
-                                        CefWindowKind::Windowed(_) => 1.0,
-                                    };
-                                    webview::resize_webview(
-                                        webview,
-                                        size.width,
-                                        size.height,
-                                        scale_factor,
-                                    );
-                                }
-                            }
-                        }
-                        self.emit_window_event(window_id, &event, callback);
-                    }
-                    TaoWindowEvent::ScaleFactorChanged {
-                        scale_factor,
-                        new_inner_size,
-                    } => {
-                        for webview_id in &window.webviews {
-                            if let Some(webview) = self.webviews.0.borrow().get(webview_id) {
-                                if webview.auto_resize {
-                                    webview::resize_webview(
-                                        webview,
-                                        new_inner_size.width,
-                                        new_inner_size.height,
-                                        *scale_factor,
-                                    );
-                                }
-                            }
-                        }
-                        self.emit_window_event(window_id, &event, callback);
-                    }
-                    _ => self.emit_window_event(window_id, &event, callback),
-                }
-
-                if let CefWindowKind::Osr { window: tao_window } = &window.kind {
-                    let scale_factor = tao_window.scale_factor();
-                    let mut webviews = self.webviews.0.borrow_mut();
-                    for webview_id in &window.webviews {
-                        if let Some(webview) = webviews.get_mut(webview_id) {
-                            webview::handle_window_input(webview, &event, scale_factor);
-                        }
-                    }
+                Message::CefWindowEvent(window_id, event) => {
+                    self.emit_mapped_window_event(window_id, event, callback)
                 }
             }
         }
 
-        /// 发送普通窗口事件给窗口监听器和 Tauri runtime 回调。
-        fn emit_window_event<F: FnMut(RunEvent<T>) + 'static>(
+        /// 把一个已映射好的 Tauri `WindowEvent` 分发给该窗口的 listeners +
+        /// `RunEvent::WindowEvent`。事件由 CEF Views 回流到消息队列。
+        fn emit_mapped_window_event<F: FnMut(RunEvent<T>) + 'static>(
             &self,
             window_id: WindowId,
-            event: &TaoWindowEvent<'_>,
+            mapped: WindowEvent,
             callback: &mut F,
         ) {
-            let Some(mapped) = window::map_window_event(event) else {
-                return;
-            };
             if let Some(window) = self.windows.0.borrow().get(&window_id) {
                 for (_, listener) in &window.listeners {
                     listener(&mapped);
@@ -1997,12 +1952,11 @@ mod imp {
                     let _ = tx.send(target.monitor_from_point(x, y));
                 }
                 WindowMessage::Set(set) => apply_window_set(&mut state.kind, set),
-                WindowMessage::Center => {}
-                WindowMessage::RequestUserAttention(request_type) => {
-                    if let CefWindowKind::Osr { window } = &state.kind {
-                        window.request_user_attention(request_type);
-                    }
+                WindowMessage::Center => {
+                    let CefWindowKind::Windowed(window) = &state.kind;
+                    window.with_cef_window(|w| w.center_window(None));
                 }
+                WindowMessage::RequestUserAttention(_) => {}
             }
         }
 
@@ -2013,122 +1967,82 @@ mod imp {
             kind: WindowGetterKind,
             target: &tao::event_loop::EventLoopWindowTarget<Message<T>>,
         ) -> Result<Box<dyn Any + Send>> {
-            use tao::platform::unix::WindowExtUnix;
+            let CefWindowKind::Windowed(window) = &state.kind;
             let value: Box<dyn Any + Send> = match kind {
-                WindowGetterKind::ScaleFactor => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.scale_factor()),
-                    CefWindowKind::Windowed(_) => Box::new(1.0),
-                },
-                WindowGetterKind::InnerPosition | WindowGetterKind::OuterPosition => {
-                    match &state.kind {
-                        CefWindowKind::Osr { window } => Box::new(
-                            window
-                                .inner_position()
-                                .map(|p| PhysicalPosition::new(p.x, p.y))
-                                .map_err(|_| Error::CreateWindow)?,
-                        ),
-                        CefWindowKind::Windowed(window) => {
-                            Box::new(window.position.unwrap_or(PhysicalPosition::new(0, 0)))
-                        }
-                    }
-                }
-                WindowGetterKind::InnerSize | WindowGetterKind::OuterSize => match &state.kind {
-                    CefWindowKind::Osr { window } => {
-                        let s = window.inner_size();
-                        Box::new(PhysicalSize::new(s.width, s.height))
-                    }
-                    CefWindowKind::Windowed(window) => Box::new(window.size),
-                },
-                WindowGetterKind::IsFullscreen => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.fullscreen().is_some()),
-                    CefWindowKind::Windowed(window) => Box::new(window.fullscreen),
-                },
-                WindowGetterKind::IsMinimized => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.is_minimized()),
-                    CefWindowKind::Windowed(window) => Box::new(window.minimized),
-                },
-                WindowGetterKind::IsMaximized => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.is_maximized()),
-                    CefWindowKind::Windowed(window) => Box::new(window.maximized),
-                },
-                WindowGetterKind::IsFocused => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.is_focused()),
-                    CefWindowKind::Windowed(window) => Box::new(window.focused),
-                },
-                WindowGetterKind::IsDecorated => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.is_decorated()),
-                    CefWindowKind::Windowed(window) => Box::new(window.decorated),
-                },
-                WindowGetterKind::IsResizable => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.is_resizable()),
-                    CefWindowKind::Windowed(window) => Box::new(window.resizable),
-                },
-                WindowGetterKind::IsMaximizable => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.is_maximizable()),
-                    CefWindowKind::Windowed(window) => Box::new(window.maximizable),
-                },
-                WindowGetterKind::IsMinimizable => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.is_minimizable()),
-                    CefWindowKind::Windowed(window) => Box::new(window.minimizable),
-                },
-                WindowGetterKind::IsClosable => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.is_closable()),
-                    CefWindowKind::Windowed(window) => Box::new(window.closable),
-                },
-                WindowGetterKind::IsVisible => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.is_visible()),
-                    CefWindowKind::Windowed(window) => Box::new(window.visible),
-                },
-                WindowGetterKind::IsEnabled => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.gtk_window().is_sensitive()),
-                    CefWindowKind::Windowed(_) => Box::new(true),
-                },
-                WindowGetterKind::IsAlwaysOnTop => match &state.kind {
-                    CefWindowKind::Osr { .. } => Box::new(false),
-                    CefWindowKind::Windowed(window) => Box::new(window.always_on_top),
-                },
-                WindowGetterKind::Title => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.title()),
-                    CefWindowKind::Windowed(window) => Box::new(window.title.clone()),
-                },
-                WindowGetterKind::CurrentMonitor => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(window.current_monitor()),
-                    CefWindowKind::Windowed(_) => Box::new(None::<tao::monitor::MonitorHandle>),
-                },
+                WindowGetterKind::ScaleFactor => Box::new(
+                    window
+                        .with_cef_window(|w| w.display().map(|d| d.device_scale_factor() as f64))
+                        .flatten()
+                        .unwrap_or(1.0),
+                ),
+                WindowGetterKind::InnerPosition | WindowGetterKind::OuterPosition => Box::new(
+                    window
+                        .with_cef_window(|w| {
+                            let p = w.position();
+                            PhysicalPosition::new(p.x, p.y)
+                        })
+                        .or(window.position)
+                        .unwrap_or(PhysicalPosition::new(0, 0)),
+                ),
+                WindowGetterKind::InnerSize | WindowGetterKind::OuterSize => Box::new(
+                    window
+                        .with_cef_window(|w| {
+                            let s = w.size();
+                            PhysicalSize::new(s.width.max(0) as u32, s.height.max(0) as u32)
+                        })
+                        .unwrap_or(window.size),
+                ),
+                WindowGetterKind::IsFullscreen => Box::new(
+                    window
+                        .with_cef_window(|w| w.is_fullscreen() != 0)
+                        .unwrap_or(window.fullscreen),
+                ),
+                WindowGetterKind::IsMinimized => Box::new(
+                    window
+                        .with_cef_window(|w| w.is_minimized() != 0)
+                        .unwrap_or(window.minimized),
+                ),
+                WindowGetterKind::IsMaximized => Box::new(
+                    window
+                        .with_cef_window(|w| w.is_maximized() != 0)
+                        .unwrap_or(window.maximized),
+                ),
+                WindowGetterKind::IsFocused => Box::new(
+                    window
+                        .with_cef_window(|w| w.is_active() != 0)
+                        .unwrap_or(window.focused),
+                ),
+                WindowGetterKind::IsDecorated => Box::new(window.decorated),
+                WindowGetterKind::IsResizable => Box::new(window.resizable),
+                WindowGetterKind::IsMaximizable => Box::new(window.maximizable),
+                WindowGetterKind::IsMinimizable => Box::new(window.minimizable),
+                WindowGetterKind::IsClosable => Box::new(window.closable),
+                WindowGetterKind::IsVisible => Box::new(
+                    window
+                        .with_cef_window(|w| w.is_visible() != 0)
+                        .unwrap_or(window.visible),
+                ),
+                WindowGetterKind::IsEnabled => Box::new(true),
+                WindowGetterKind::IsAlwaysOnTop => Box::new(
+                    window
+                        .with_cef_window(|w| w.is_always_on_top() != 0)
+                        .unwrap_or(window.always_on_top),
+                ),
+                WindowGetterKind::Title => Box::new(window.title.clone()),
+                WindowGetterKind::CurrentMonitor => Box::new(None::<tao::monitor::MonitorHandle>),
                 WindowGetterKind::PrimaryMonitor => Box::new(target.primary_monitor()),
                 WindowGetterKind::AvailableMonitors => {
                     Box::new(target.available_monitors().collect::<Vec<_>>())
                 }
-                WindowGetterKind::GtkWindow => match &state.kind {
-                    CefWindowKind::Osr { window } => {
-                        Box::new(GtkWindow(window.gtk_window().clone()))
-                    }
-                    CefWindowKind::Windowed(_) => return Err(Error::CreateWindow),
-                },
-                WindowGetterKind::GtkBox => match &state.kind {
-                    CefWindowKind::Osr { window } => {
-                        Box::new(GtkBox(window.default_vbox().unwrap().clone()))
-                    }
-                    CefWindowKind::Windowed(_) => return Err(Error::CreateWindow),
-                },
-                WindowGetterKind::RawWindowHandle => match &state.kind {
-                    CefWindowKind::Osr { window } => Box::new(
-                        window
-                            .window_handle()
-                            .map(|h| SendRawWindowHandle(h.as_raw())),
-                    ),
-                    CefWindowKind::Windowed(_) => {
-                        Box::new(Err::<SendRawWindowHandle, raw_window_handle::HandleError>(
-                            raw_window_handle::HandleError::Unavailable,
-                        ))
-                    }
-                },
-                WindowGetterKind::Theme => match &state.kind {
-                    CefWindowKind::Osr { window } => {
-                        Box::new(window::from_tao_theme(window.theme()))
-                    }
-                    CefWindowKind::Windowed(_) => Box::new(Theme::Light),
-                },
+                WindowGetterKind::GtkWindow | WindowGetterKind::GtkBox => {
+                    return Err(Error::CreateWindow)
+                }
+                WindowGetterKind::RawWindowHandle => {
+                    Box::new(Err::<SendRawWindowHandle, raw_window_handle::HandleError>(
+                        raw_window_handle::HandleError::Unavailable,
+                    ))
+                }
+                WindowGetterKind::Theme => Box::new(Theme::Light),
             };
             Ok(value)
         }
@@ -2183,12 +2097,14 @@ mod imp {
                         Size::Physical(s) => (s.width, s.height),
                         Size::Logical(s) => (s.width as u32, s.height as u32),
                     };
-                    let scale_factor = state
-                        .osr
-                        .as_ref()
-                        .map(|osr| osr.scale_factor.get() as f64)
-                        .unwrap_or(1.0);
-                    webview::resize_webview(state, w, h, scale_factor);
+                    if let Some(browser_view) = &state.browser_view {
+                        browser_view.inner.set_bounds(Some(&cef::Rect {
+                            x: 0,
+                            y: 0,
+                            width: w as i32,
+                            height: h as i32,
+                        }));
+                    }
                 }
                 WebviewMessage::SetFocus => {
                     if let Some(host) = state.resolve_browser().and_then(|b| b.host()) {
@@ -2218,21 +2134,6 @@ mod imp {
                 }
             }
         }
-
-        /// 遍历所有 webview,把 CEF OSR 最新脏帧呈现到对应窗口。
-        fn blit_all(&self) {
-            let windows = self.windows.0.borrow();
-            let webviews = self.webviews.0.borrow();
-            for window in windows.values() {
-                if let CefWindowKind::Osr { window: tao_window } = &window.kind {
-                    for id in &window.webviews {
-                        if let Some(webview) = webviews.get(id) {
-                            webview::blit(tao_window, webview);
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /// 执行 webview getter,返回装箱结果供 dispatcher downcast。
@@ -2243,10 +2144,7 @@ mod imp {
         let value: Box<dyn Any + Send> = match kind {
             WebviewGetterKind::Url => Box::new(state.url.clone()),
             WebviewGetterKind::Size => {
-                if let Some(osr) = &state.osr {
-                    let (w, h) = *osr.size.borrow();
-                    Box::new(PhysicalSize::new(w.max(1) as u32, h.max(1) as u32))
-                } else if let Some(browser_view) = &state.browser_view {
+                if let Some(browser_view) = &state.browser_view {
                     let size = browser_view.inner.size();
                     Box::new(PhysicalSize::new(
                         size.width.max(1) as u32,
@@ -2363,70 +2261,10 @@ mod imp {
         }
     }
 
-    /// 把 runtime 的窗口命令映射到当前窗口后端 API。
+    /// 把 runtime 的窗口命令映射到 CEF Views API。
     fn apply_window_set(kind: &mut CefWindowKind, set: WindowSet) {
-        match kind {
-            CefWindowKind::Osr { window } => apply_tao_window_set(window, set),
-            CefWindowKind::Windowed(window) => apply_windowed_window_set(window, set),
-        }
-    }
-
-    fn apply_tao_window_set(window: &TaoWindow, set: WindowSet) {
-        match set {
-            WindowSet::Resizable(v) => window.set_resizable(v),
-            WindowSet::Enabled(v) => {
-                use tao::platform::unix::WindowExtUnix;
-                window.gtk_window().set_sensitive(v);
-            }
-            WindowSet::Maximizable(v) => window.set_maximizable(v),
-            WindowSet::Minimizable(v) => window.set_minimizable(v),
-            WindowSet::Closable(v) => window.set_closable(v),
-            WindowSet::Title(v) => window.set_title(&v),
-            WindowSet::Maximize => window.set_maximized(true),
-            WindowSet::Unmaximize => window.set_maximized(false),
-            WindowSet::Minimize => window.set_minimized(true),
-            WindowSet::Unminimize => window.set_minimized(false),
-            WindowSet::Show => window.set_visible(true),
-            WindowSet::Hide => window.set_visible(false),
-            WindowSet::Close | WindowSet::Destroy => window.set_visible(false),
-            WindowSet::Decorations(v) => window.set_decorations(v),
-            WindowSet::AlwaysOnBottom(v) => window.set_always_on_bottom(v),
-            WindowSet::AlwaysOnTop(v) => window.set_always_on_top(v),
-            WindowSet::VisibleOnAllWorkspaces(v) => window.set_visible_on_all_workspaces(v),
-            WindowSet::ContentProtected(v) => window.set_content_protection(v),
-            WindowSet::Size(v) => window.set_inner_size(window::to_tao_size(v)),
-            WindowSet::MinSize(v) => window.set_min_inner_size(v.map(window::to_tao_size)),
-            WindowSet::MaxSize(v) => window.set_max_inner_size(v.map(window::to_tao_size)),
-            WindowSet::SizeConstraints(_c) => {}
-            WindowSet::Position(v) => window.set_outer_position(window::to_tao_position(v)),
-            WindowSet::Fullscreen(v) => {
-                window.set_fullscreen(v.then_some(tao::window::Fullscreen::Borderless(None)))
-            }
-            WindowSet::Focus => window.set_focus(),
-            WindowSet::Focusable(v) => window.set_focusable(v),
-            WindowSet::Icon(v) => window.set_window_icon(Some(v)),
-            WindowSet::SkipTaskbar(v) => {
-                let _ = window.set_skip_taskbar(v);
-            }
-            WindowSet::CursorGrab(v) => {
-                let _ = window.set_cursor_grab(v);
-            }
-            WindowSet::CursorVisible(v) => window.set_cursor_visible(v),
-            WindowSet::CursorIcon(v) => window.set_cursor_icon(v),
-            WindowSet::CursorPosition(v) => {
-                let _ = window.set_cursor_position(window::to_tao_position(v));
-            }
-            WindowSet::IgnoreCursorEvents(v) => {
-                let _ = window.set_ignore_cursor_events(v);
-            }
-            WindowSet::StartDragging => {
-                let _ = window.drag_window();
-            }
-            WindowSet::StartResizeDragging(direction) => {
-                let _ = window.drag_resize_window(direction);
-            }
-            WindowSet::Theme(theme) => window.set_theme(theme.map(window::to_tao_theme)),
-        }
+        let CefWindowKind::Windowed(window) = kind;
+        apply_windowed_window_set(window, set);
     }
 
     fn apply_windowed_window_set(window: &mut WindowedWindowState, set: WindowSet) {

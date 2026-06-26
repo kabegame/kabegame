@@ -1,5 +1,10 @@
 mod avutil;
 
+// Force recompilation when the externally-built FFmpeg static archives change.
+// The value is emitted by build.rs and becomes part of this crate's compiled input.
+#[allow(dead_code)]
+const FFMPEG_ARCHIVE_STAMP: Option<&str> = option_env!("RUSTY_FFMPEG_ARCHIVE_STAMP");
+
 #[allow(
     non_snake_case,
     non_camel_case_types,

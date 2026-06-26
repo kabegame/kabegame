@@ -118,6 +118,9 @@ function commandOutput(cmd: string, args: string[], cwd?: string): string {
   return `${res.stdout ?? ""}${res.stderr ?? ""}`;
 }
 
+// Linux 策略:libfuse 必须**静态**链接(FUSE3_STATIC=1 链 libfuse3.a),
+// 不得出现动态 libfuse 依赖,也不得把 libfuse.so 捆进包。静态链接不产生
+// DT_NEEDED libfuse 条目,故此校验在新策略下仍然通过;若误用动态链接会被拦下。
 function assertNoLinuxLibfuseLink(debPath: string): void {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "kabegame-deb-check-"));
   try {
@@ -135,10 +138,10 @@ function assertNoLinuxLibfuseLink(debPath: string): void {
       if (fuseNeeded.length > 0) {
         throw new Error(
           [
-            `Linux release binary must not dynamically link libfuse: ${path.relative(ROOT, debPath)}`,
+            `Linux release binary must not DYNAMICALLY link libfuse: ${path.relative(ROOT, debPath)}`,
             `binary: ${path.relative(tmpDir, binary)}`,
             ...fuseNeeded,
-            "Use fuser without the libfuse feature on Linux; runtime should depend on fuse3/fusermount3 instead.",
+            "On Linux libfuse must be STATICALLY linked (build with FUSE3_STATIC=1 against libfuse3.a); runtime still depends on fuse3/fusermount3, never on libfuse.so.",
           ].join("\n"),
         );
       }

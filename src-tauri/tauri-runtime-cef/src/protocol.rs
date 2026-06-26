@@ -42,7 +42,7 @@ wrap_scheme_handler_factory! {
             _browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
             _scheme_name: Option<&CefString>,
-            request: Option<&mut cef::Request>,
+            _request: Option<&mut cef::Request>,
         ) -> Option<ResourceHandler> {
             Some(CefResourceHandler::new(
                 self.webview_label.clone(),
