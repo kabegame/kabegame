@@ -4,12 +4,16 @@
 
 这是一个 *适配器* crate:它在 [`tauri-runtime`](https://crates.io/crates/tauri-runtime) 的 trait 契约之上,用 [`cef`(tauri-apps/cef-rs)](https://github.com/tauri-apps/cef-rs) 实现一套 Chromium 渲染后端 —— 角色和官方的 `tauri-runtime-wry` 完全对等,只是引擎从系统 WebView 换成了内嵌 Chromium。
 
-> 状态:**Phase 4.4 集成阶段**。`cef-backend` 已实现 Tauri runtime/window/webview
+> 状态:**Phase 5.1.6 windowed 纯 CEF/GLib pump 阶段**。`cef-backend` 已实现 Tauri runtime/window/webview
 > 骨架、软件 OSR 渲染、自定义资源协议、browser-process initialization script
 > 注入、鼠标/键盘/滚轮/GTK IME/光标转发、全 app builder 复用与 `invoke`
-> IPC 往返,并接入 page-load hook 与 `cef-ipc://` CSP 放行。真实 CEF 代码挂在
-> 默认关闭的 `cef-backend` feature 后面,避免非 Linux 目标或轻量检查下载
-> Chromium。打包和完整 GUI smoke 仍在后续阶段。
+> IPC 往返,并接入 page-load hook 与 `cef-ipc://` CSP 放行。默认仍走 OSR
+> fallback;设置 `KABEGAME_CEF_WINDOW_MODE=windowed` 后,`create_window` /
+> `create_webview` 会经 `post_task(ThreadId::UI)` 在 CEF UI 任务里创建 CEF
+> Views 顶层窗口 + BrowserView + GPU,主循环改为纯 CEF/GLib pump,不再进入
+> tao `run_return`。真实 CEF 代码挂在默认关闭的 `cef-backend` feature 后面,避免
+> 非 Linux 目标或轻量检查下载 Chromium。完整 WindowDispatch 映射、GUI smoke
+> 和打包仍在后续阶段。
 
 ---
 
@@ -151,7 +155,11 @@ Tauri 不是铁板一块,webview 后端是**官方支持的可插拔扩展点**:
   已完成。端到端启动与方法补齐继续按
   `.claude/plans/cef-linux-runtime/cef-linux-runtime-phase3.{3,4}.md` 推进。
 - [x] **Phase 4 — IPC / 应用回归收口**(已完成到 4.4,2026-06-25):Linux CEF 入口复用全 app builder;`invoke()` 通过 `ipc://` custom protocol 命中 Rust 命令,并提供 `cef-ipc://` postMessage fallback;CEF CSP 与 page-load hook 已补齐。完整 GUI smoke 和打包继续看后续阶段。
-- [ ] **Phase 5 — 补齐 dispatch**:窗口/webview 其余 trait 方法、devtools、cookie、事件。
+- [ ] **Phase 5 — GPU/windowed 与 dispatch 补齐**:Phase 5.1.6 已加入显式
+  `KABEGAME_CEF_WINDOW_MODE=windowed` 路径,并把 Tauri `create_window` /
+  `create_webview` 映射到 CEF Views `Window + BrowserView`;windowed 主循环已改为
+  纯 CEF/GLib pump,不再进入 tao `run_return`;后续继续补齐
+  WindowDispatch 降级矩阵、GUI smoke 和性能对照。
 - [ ] **Phase 6 — 打包**:`tauri-bundler` Linux 产物带 CEF + helper;签名 / 体积优化。
 
 ## 7. 构建前置条件(Phase 1 实测,2026-06-19)

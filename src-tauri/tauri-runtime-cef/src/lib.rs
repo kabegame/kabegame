@@ -84,12 +84,12 @@ pub struct CefHandle<T: UserEvent> {
 
 /// 向 CEF runtime 事件循环投递用户事件的代理。
 ///
-/// 这是 `tauri_runtime::EventLoopProxy` 的 CEF 版本,内部包了一层 tao
-/// `EventLoopProxy<Message<T>>`,把 Tauri 用户事件转换成 runtime 内部消息。
+/// 这是 `tauri_runtime::EventLoopProxy` 的 CEF 版本,把 Tauri 用户事件转换成
+/// runtime 内部消息队列项。OSR/windowed 两条主循环消费同一队列。
 #[derive(Debug, Clone)]
 pub struct CefEventLoopProxy<T: UserEvent> {
     #[cfg(feature = "cef-backend")]
-    pub(crate) proxy: tao::event_loop::EventLoopProxy<runtime::Message<T>>,
+    pub(crate) context: runtime::CefContext<T>,
     #[cfg(not(feature = "cef-backend"))]
     _marker: std::marker::PhantomData<T>,
 }

@@ -1,14 +1,14 @@
-# Phase 5.1 — GPU OSR / dmabuf 黑屏排查
+# Phase 5.1 — GPU 路线收敛:dmabuf OSR → CEF 自建窗口
 
 > 父:[phase5](cef-linux-runtime-phase5.md)。**本阶段最关键**——这是换 CEF 的初衷。
 >
 > **当前结论**:CPU 软件 OSR 对 kabegame 图库(大图 + 密集滚动 + 可能视频)
-> 不够快,不能作为最终方案。Phase 5.1 不再把"软件路径是否够用"作为主问题,
-> 而是直接以 **GPU 加速 OSR** 为硬目标。
+> 不够快,不能作为最终方案。GPU 必须启用。
 >
-> **目标**:先挖清 `dmabuf` 黑屏问题,把 CEF GPU 出帧 → Vulkan dmabuf 导入 →
-> wgpu 采样上屏这条链路修通或证伪;只有在 OSR+GPU 不可行时,再退回 CEF
-> 自建顶层窗口路线。
+> **2026-06-26 交互式结论**:`dmabuf` OSR 已收敛到 CEF/ANGLE 共享纹理
+> readback 全 0,短期继续挖同步/ownership 成本高;切到 **路线 A:CEF 自建
+> 顶层窗口 + GPU**。该路线已用 `minimal_windowed` 证明可显示、可交互、
+> 可滚动、可点击、可关闭退出。
 
 ## 现状锚点
 **软件 OSR**(`runtime.rs:446`)
@@ -26,7 +26,7 @@ cl.append_switch(Some(&CefString::from("disable-gpu-compositing")));  // 现状:
   返回 OK、GPU 进程不崩。
 - 当前失败点:导入纹理作为 wgpu sampled texture 上屏后为黑。
 
-## 点 1 — dmabuf 黑屏根因收敛(先做)
+## 点 1 — dmabuf 黑屏根因收敛(已暂停)
 **已知怀疑点**:`cef/src/osr_texture_import/dmabuf.rs` 创建外部 VkImage 后直接交给
 wgpu:
 - **CEF shared handle 生命周期**:CEF 文档说明 `on_accelerated_paint` 的 handle
@@ -47,10 +47,11 @@ wgpu:
 - [x] 检查 cef-rs dmabuf 导入器的实际 Vulkan 调用,列出必须 patch 的最小集合:
   external memory import、DRM modifier、layout transition、foreign queue-family acquire、
   同步等待。
-- [ ] 验证 CEF shared handle 生命周期问题:把 imported dmabuf 在
+- [x] 验证 CEF shared handle 生命周期问题:把 imported dmabuf 在
   `on_accelerated_paint` 回调内 copy 到应用自有 wgpu texture,再采样自有 texture。
-- [ ] 判断 patch 落点:优先在本仓库 vendor/patch 一份 importer 或复制最小 importer;
-  能稳定后再考虑上游 PR。
+- [x] 增加 raw Vulkan dmabuf readback:外部 memory import、DRM modifier explicit layout、
+  dedicated allocation、memory fd properties、queue family/layout matrix 后仍 `nonzero=0`。
+- [x] 暂停 patch 落点判断:没有 sync fd/fence 信息时继续投入不可控。
 
 **产出**
 - 一份"黑屏发生在哪一层"的结论:
@@ -59,9 +60,34 @@ wgpu:
   - dmabuf import 参数/格式错误;
   - Vulkan layout/ownership/sync 错;
   - wgpu 合成层错。
-- 如果结论指向 layout/ownership/sync,进入点 2。
+- 当前结论:wgpu surface / shader / test texture 均正常;CEF accelerated paint 回调
+  与 cef-rs Vulkan importer 都返回 OK;但 raw Vulkan 读回全 0。短期不把 dmabuf
+  作为主线。
 
-## 点 2 — 修 dmabuf 导入路径
+## 点 2 — CEF 自建顶层窗口 + GPU(当前主线)
+**已验证**
+- `examples/minimal_windowed.rs` 走 `browser_view_create` + `window_create_top_level`,
+  不使用 OSR、softbuffer、dmabuf。
+- `--ozone-platform=x11`、`--no-sandbox`、`--use-angle=vulkan`、
+  `--enable-features=Vulkan` 下能正常显示。
+- `CEF_WINDOWED_PUMP=external` + GLib `MainContext` 迭代后,文字选择、滚动、
+  按钮点击、关闭退出均正常。
+
+**关键经验**
+- CEF Views 自建窗口不能只靠固定周期 `cef::do_message_loop_work()`。
+- Linux external pump 必须同时驱动 GLib/X11 事件队列;否则会出现显示正常但
+  鼠标拖选等交互不完整。
+
+**下一轮任务**
+- [ ] 设计纯 CEF/GLib runtime loop:用 CEF Views `Window` 作为真实窗口,
+  不再把 tao 作为 Linux CEF backend 的窗口基座。
+- [ ] 设计 runtime 接入方式:把 CEF window delegate 包装成 Tauri runtime window,
+  保留必要的 dispatcher/state 表,但窗口操作直接落到 CEF Views。
+- [ ] 明确窗口 API 映射范围:位置、尺寸、标题、显示/隐藏、关闭、focus、fullscreen、
+  menu/tray/monitor 相关能力哪些能保持,哪些需要降级。
+- [ ] 明确 webview API 映射范围:URL、eval、IPC、protocol、page-load、devtools。
+
+## 点 3 — 修 dmabuf 导入路径(暂缓)
 **方向**
 - 建立 patched importer,不要直接依赖 cef-rs 当前 `SharedTextureHandle::import_texture`
   的黑盒行为。
@@ -80,29 +106,25 @@ wgpu:
 - resize / 持续 begin-frame / 页面动画稳定。
 - 无 GPU process crash,无 wgpu validation error。
 
-## 点 3 — 接入 runtime 渲染层
-前提:点 2 的最小复现已正确显示。
+## 点 4 — 接入 runtime 窗口层
+前提:点 2 的 CEF 自建窗口 + external GLib pump 已验证通过。
 
-- 把 runtime 从软件 `on_paint`/softbuffer 主路径切到 accelerated OSR + wgpu。
-- 保留软件 OSR 作为启动参数或运行期 fallback,用于不支持 dmabuf/Vulkan 的环境。
+- runtime 初始化不再强制 `windowless_rendering_enabled = 1` 作为唯一主路径。
 - 运行期开关从 `disable-gpu` 改为 GPU 路线:
   - `--ozone-platform=x11`
   - `--use-angle=vulkan`
   - `--enable-features=Vulkan`
   - 继续保留 `--no-sandbox` / `--no-zygote` 的现有约束。
-- 输入、resize、DPI、page-load、IPC 不应因渲染层替换回退。
+- `run_loop` 可从 tao `run_return` 切到纯 CEF/GLib 外部泵;在
+  `do_message_loop_work()` 外还要泵 GLib `MainContext`。
+- 窗口/ webview 创建从 `WindowInfo.windowless_rendering_enabled=1` 的 OSR browser
+  改为 CEF Views `BrowserView + Window`。
+- 保留软件 OSR 作为 fallback 或独立实验路径,但不作为性能主线。
 
 **验收**
-- kabegame 真实图库滚动在 NVIDIA 下 GPU 合成,无明显卡顿。
+- kabegame 真实图库滚动在 NVIDIA 下走 CEF GPU 窗口,无明显卡顿。
 - CPU 占用相比软件 OSR 明显下降。
-- 大窗口 / 高分屏 / 视频缩略或视频播放场景稳定。
-
-## 兜底 — CEF 自建顶层窗口
-仅当 OSR+GPU 的 dmabuf 路径被证伪时启用。
-
-- Phase 1 已证明 CEF 自建窗口 + GPU 正确显示。
-- 代价:窗口归 CEF,丢 tao 现有窗口/事件循环集成,会冲击 Tauri runtime 适配层。
-- 若走此路,需要另开计划,不要在本阶段和 dmabuf patch 混做。
+- 文字选择、滚动、按钮点击、IPC、protocol、page-load、关闭退出稳定。
 
 ## 风险
 - Vulkan external memory / queue-family ownership / sync 细节深,驱动敏感。
@@ -116,3 +138,20 @@ wgpu:
 - `/home/cm/code/cef-rs/cef/src/osr_texture_import/dmabuf.rs`:当前导入器。
 - `runtime.rs:446`:现仍硬关 GPU。
 - `webview.rs`:`on_paint`/softbuffer 软件 fallback。
+
+## 执行拆解(5.1.x)— 路线 A 迁移(tao+OSR → CEF Views windowed + GLib pump)
+
+> 范围提示:路线 A 会让 Phase 3 的 **tao 窗口半边(`window.rs`)+ OSR 输入转发/softbuffer blit** 在 windowed 路径上**被取代**(降级为 OSR fallback)。各步保持可编译,OSR 路径不删、按 mode 分流。
+
+| 子段 | 主题 | 验收 |
+|---|---|---|
+| [5.1.1](cef-linux-runtime-phase5.1.1.md) | windowed 骨架:GPU 开关 + CEF/GLib 外部泵 | runtime 起 CEF Views 窗口加载固定 URL、GPU、可交互 |
+| [5.1.2](cef-linux-runtime-phase5.1.2.md) | Tauri `create_window`/`create_webview` → CEF Views(BrowserView)| `Builder::<Cef>` 出无外壳 GPU 窗口 + 前端,IPC/protocol/init-script 通 |
+| [5.1.3](cef-linux-runtime-phase5.1.3.md) | `WindowDispatch` 映射到 CEF Views + 降级矩阵 | 主窗口常用操作可用,降级项明确 |
+| [5.1.4](cef-linux-runtime-phase5.1.4.md) | 收敛 OSR 专属(输入/blit)为 fallback + webview 复核 | windowed 原生输入/呈现,webview 方法全通 |
+| [5.1.5](cef-linux-runtime-phase5.1.5.md) | kabegame 端到端 GPU + 性能对照 + 退出清理 | 图库滚动丝滑、CPU 降、稳定退出 |
+| [5.1.6](cef-linux-runtime-phase5.1.6.md) ⚠️ | **windowed 弃用 tao**(纯 CEF/GLib pump + `post_task` 建窗口),修 5.1.2 启动卡死/无窗口根因;**OSR 的 tao 保留** | windowed 真窗口弹出、可交互、无 10s 卡顿 |
+
+建议顺序:**先 5.1.6**(修根因、解卡)→ 再 5.1.3(窗口方法映射 CEF Views)→ 5.1.4 → 5.1.5。
+
+> 5.1.6 修订了 5.1.1/5.1.2 的"windowed 仍借 tao run_return"做法:windowed 改纯 CEF/GLib pump,所有 CEF Views 创建经 `post_task(TID_UI)`;OSR 路径 tao 不动。

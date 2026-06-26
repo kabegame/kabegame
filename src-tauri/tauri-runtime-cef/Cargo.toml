@@ -83,5 +83,9 @@ name = "minimal"
 required-features = ["cef-backend"]
 
 [[example]]
+name = "minimal_windowed"
+required-features = ["cef-backend"]
+
+[[example]]
 name = "minimal_gpu"
 required-features = ["accelerated-osr"]

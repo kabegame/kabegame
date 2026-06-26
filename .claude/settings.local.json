@@ -144,7 +144,12 @@
       "Read(//proc/sys/kernel/**)",
       "Bash(export DISPLAY=:1)",
       "Bash(echo \"=== windows ===\")",
-      "Bash(xwininfo -root -tree)"
+      "Bash(xwininfo -root -tree)",
+      "Bash(break)",
+      "Bash(pkill -f \"target/debug/kabegame\")",
+      "Bash(pkill -9 -f \"debug/kabegame\")",
+      "Bash(pkill -9 -f \"target/debug/kabegame\")",
+      "Bash(export CEF_PATH=\"$HOME/.local/share/cef\")"
     ],
     "additionalDirectories": [
       "/home/cm/code/kabegame"

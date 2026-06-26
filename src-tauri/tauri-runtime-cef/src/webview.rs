@@ -492,6 +492,31 @@ mod imp {
         }
     }
 
+    // Windowed/Views browser client. Unlike OSR this does not expose a
+    // RenderHandler; CEF owns the native view and GPU composition.
+    wrap_client! {
+        pub(crate) struct ViewsClient {
+            load_handler: LoadHandler,
+        }
+        impl Client {
+            fn load_handler(&self) -> Option<LoadHandler> {
+                Some(self.load_handler.clone())
+            }
+        }
+    }
+
+    wrap_browser_view_delegate! {
+        pub(crate) struct ViewsBrowserViewDelegate {}
+
+        impl ViewDelegate {}
+
+        impl BrowserViewDelegate {
+            fn browser_runtime_style(&self) -> RuntimeStyle {
+                RuntimeStyle::ALLOY
+            }
+        }
+    }
+
     /// CEF browser wrapper。
     ///
     /// cef-rs browser 类型不是普通 `Send/Sync` 类型；本 runtime 保证它只在主线程
@@ -505,14 +530,28 @@ mod imp {
     #[allow(clippy::non_send_fields_in_send_ty)]
     unsafe impl Sync for CefBrowser {}
 
+    pub(crate) struct CefBrowserView {
+        pub(crate) inner: BrowserView,
+    }
+
+    #[allow(clippy::non_send_fields_in_send_ty)]
+    unsafe impl Send for CefBrowserView {}
+    #[allow(clippy::non_send_fields_in_send_ty)]
+    unsafe impl Sync for CefBrowserView {}
+
     /// 单个 CEF webview 的运行期状态。
     ///
     /// 包含 CEF browser、OSR frame buffer、当前 URL、自动 resize 标记和事件
     /// 监听器列表。
     pub(crate) struct CefWebviewState {
         pub(crate) label: String,
-        pub(crate) browser: CefBrowser,
-        pub(crate) osr: OsrState,
+        /// OSR 用 `browser_host_create_browser_sync` 同步创建,此处为 `Some`。
+        /// windowed(CEF Views `BrowserView`)的 browser 是**异步**创建的
+        /// (要等 view 挂窗+显示后经 `on_after_created` 才有),创建时为 `None`,
+        /// 通过 [`CefWebviewState::resolve_browser`] 延迟从 `browser_view` 解析。
+        pub(crate) browser: Option<CefBrowser>,
+        pub(crate) browser_view: Option<CefBrowserView>,
+        pub(crate) osr: Option<OsrState>,
         pub(crate) url: String,
         pub(crate) auto_resize: bool,
         pub(crate) visible: bool,
@@ -522,6 +561,19 @@ mod imp {
         /// 之前每帧 `Context::new` 都新开一个 X11 连接且不释放,连续重绘几百帧后即
         /// `Maximum number of clients reached` 崩溃。这里只在首帧创建、之后复用。
         surface: std::cell::RefCell<Option<softbuffer::Surface<Arc<TaoWindow>, Arc<TaoWindow>>>>,
+    }
+
+    impl CefWebviewState {
+        /// 解析当前 browser:OSR 直接用同步创建的;windowed 延迟从 `browser_view`
+        /// 取(异步创建,首次可能为 `None`,挂窗显示后即可用)。
+        pub(crate) fn resolve_browser(&self) -> Option<Browser> {
+            if let Some(browser) = &self.browser {
+                return Some(browser.inner.clone());
+            }
+            self.browser_view
+                .as_ref()
+                .and_then(|view| view.inner.browser())
+        }
     }
 
     #[derive(Default)]
@@ -633,8 +685,9 @@ mod imp {
         let native_ime = install_native_ime(window);
         Ok(CefWebviewState {
             label: pending.label,
-            browser: CefBrowser { inner: browser },
-            osr,
+            browser: Some(CefBrowser { inner: browser }),
+            browser_view: None,
+            osr: Some(osr),
             url,
             auto_resize: true,
             visible: true,
@@ -645,6 +698,77 @@ mod imp {
             },
             surface: std::cell::RefCell::new(None),
         })
+    }
+
+    /// Create a CEF Views BrowserView for windowed mode.
+    ///
+    /// This keeps the Phase 3/4 protocol, IPC and init-script path, but skips
+    /// OSR-only render/display/input handlers.
+    pub(crate) fn create_cef_browser_view<T: UserEvent>(
+        window_id: WindowId,
+        webview_id: runtime::WebviewId,
+        context: runtime::CefContext<T>,
+        mut pending: PendingWebview<T, Cef<T>>,
+    ) -> Result<(CefWebviewState, BrowserView)> {
+        let protocol_keys = pending
+            .uri_scheme_protocols
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        eprintln!(
+            "[cef-runtime] windowed webview '{}' IPC state: protocols={protocol_keys:?}, ipc_handler={}",
+            pending.label,
+            pending.ipc_handler.is_some()
+        );
+        let detached = detached_webview(pending.label.clone(), window_id, webview_id, context);
+        let initial_url = pending.url.clone();
+        ipc::install_post_message_bridge(&mut pending, detached, initial_url);
+
+        let mut request_context =
+            request_context_create_context(Some(&RequestContextSettings::default()), None)
+                .ok_or_else(|| {
+                    Error::CreateWebview(Box::new(std::io::Error::other(
+                        "CEF failed to create a request context",
+                    )))
+                })?;
+        protocol::register_webview_protocols(&mut pending, &mut request_context)?;
+
+        let scripts = std::mem::take(&mut pending.webview_attributes.initialization_scripts);
+        let on_page_load = pending.on_page_load_handler.take().map(Rc::new);
+        let mut client = ViewsClient::new(InitializationLoadHandler::new(scripts, on_page_load));
+        let mut browser_view_delegate = ViewsBrowserViewDelegate::new();
+        let url = pending.url.clone();
+        let browser_view = browser_view_create(
+            Some(&mut client),
+            Some(&CefString::from(url.as_str())),
+            Some(&BrowserSettings::default()),
+            None,
+            Some(&mut request_context),
+            Some(&mut browser_view_delegate),
+        )
+        .ok_or_else(|| {
+            Error::CreateWebview(Box::new(std::io::Error::other(
+                "CEF failed to create a BrowserView",
+            )))
+        })?;
+        // NB: BrowserView 的 browser 是异步创建的(挂窗+显示后经 on_after_created
+        // 才有),这里不能同步取,否则必为 None。延迟由 resolve_browser() 从
+        // browser_view 解析。
+        let state = CefWebviewState {
+            label: pending.label,
+            browser: None,
+            browser_view: Some(CefBrowserView {
+                inner: browser_view.clone(),
+            }),
+            osr: None,
+            url,
+            auto_resize: true,
+            visible: true,
+            listeners: Vec::new(),
+            input: InputState::default(),
+            surface: std::cell::RefCell::new(None),
+        };
+        Ok((state, browser_view))
     }
 
     /// 构造返回给 Tauri 的 detached webview。
@@ -673,11 +797,18 @@ mod imp {
         height: u32,
         scale_factor: f64,
     ) {
-        *webview.osr.size.borrow_mut() = (width as i32, height as i32);
-        webview.osr.scale_factor.set((scale_factor as f32).max(1.0));
-        if let Some(host) = webview.browser.inner.host() {
-            host.notify_screen_info_changed();
-            host.was_resized();
+        if let Some(osr) = &webview.osr {
+            *osr.size.borrow_mut() = (width as i32, height as i32);
+            osr.scale_factor.set((scale_factor as f32).max(1.0));
+            if let Some(host) = webview.resolve_browser().and_then(|b| b.host()) {
+                host.notify_screen_info_changed();
+                host.was_resized();
+            }
+        } else if let Some(browser_view) = &webview.browser_view {
+            browser_view.inner.set_size(Some(&cef::Size {
+                width: width as i32,
+                height: height as i32,
+            }));
         }
     }
 
@@ -687,7 +818,7 @@ mod imp {
         event: &TaoWindowEvent<'_>,
         scale_factor: f64,
     ) {
-        let Some(host) = webview.browser.inner.host() else {
+        let Some(host) = webview.resolve_browser().and_then(|b| b.host()) else {
             return;
         };
         match event {
@@ -1253,7 +1384,10 @@ mod imp {
     /// Phase 3 为正确性优先,每次 dirty 帧都会创建 softbuffer surface 并逐像素
     /// 转换。后续性能优化可以复用 surface 或改走 GPU 路线。
     pub(crate) fn blit(window: &Arc<TaoWindow>, webview: &CefWebviewState) {
-        if !webview.visible || !webview.osr.dirty.get() {
+        let Some(osr) = &webview.osr else {
+            return;
+        };
+        if !webview.visible || !osr.dirty.get() {
             return;
         }
         let ws = window.inner_size();
@@ -1290,7 +1424,7 @@ mod imp {
             return;
         };
 
-        let frame = webview.osr.frame.borrow();
+        let frame = osr.frame.borrow();
         if frame.bgra.is_empty() {
             return;
         }
@@ -1311,7 +1445,7 @@ mod imp {
             }
         }
         let _ = buf.present();
-        webview.osr.dirty.set(false);
+        osr.dirty.set(false);
     }
 
     #[cfg(test)]
