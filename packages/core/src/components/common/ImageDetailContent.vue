@@ -588,6 +588,7 @@ const EJS_BRIDGE_NONCE = "kabegame-ejs-bridge";
 const descriptionSrcdoc = computed(() => {
   const img = props.image;
   const meta = effectiveMetadata.value;
+
   if (!img?.pluginId || !isRenderableMetadata(meta)) return "";
   const tpl = pluginDescriptionTemplate(img.pluginId);
   if (!tpl?.trim()) return "";

@@ -9,7 +9,7 @@ use crate::crawler::content_io::get_content_io_provider;
 #[cfg(not(target_os = "android"))]
 use crate::crawler::downloader::{build_safe_filename, unique_path};
 use crate::crawler::downloader::{
-    next_download_id, wait_after_non_pool_download_if_needed, DownloadQueue,
+    next_download_id, wait_after_download_if_needed, DownloadQueue,
 };
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::crawler::TaskScheduler;
@@ -135,7 +135,7 @@ impl LocalImportHook {
             None,
         )
         .await;
-        wait_after_non_pool_download_if_needed(download_start_time).await;
+        wait_after_download_if_needed(download_start_time, None).await;
         let imported = imported?;
         if imported {
             self.image_count += 1;

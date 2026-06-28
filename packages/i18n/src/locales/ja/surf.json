@@ -24,7 +24,6 @@
   "surfHelpRecord": "各サーフは記録されます。ここからサイトに再入場したり、「最近の画像を表示」でそのサイトのギャラリービューを開けます。",
   "linuxHintHelp": "Linuxではサーフはコンテンツのダウンロードができません。閲覧のみ。",
   "gotIt": "了解",
-  "openWebViewSuccess": "クローラーWebViewウィンドウを開きました",
   "pleaseEnterUrl": "URLを入力してください",
   "useHttps": "httpsを使用してください",
   "unsupportedProtocol": "サポートされていないプロトコル。httpsのみ対応",

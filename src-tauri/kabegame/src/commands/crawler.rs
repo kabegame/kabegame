@@ -1,5 +1,10 @@
-use kabegame_core::crawler::task_scheduler::{PageStackEntry, TaskTransition};
-use kabegame_core::crawler::webview::{crawler_window_state, JsTaskPatch};
+use kabegame_core::crawler::downloader::{
+    compute_unique_download_path, next_download_id, ActiveDownloadInfo, DownloadState,
+};
+use kabegame_core::crawler::task_scheduler::PageStackEntry;
+use kabegame_core::crawler::webview::{
+    crawler_window_label, get_session, task_id_from_crawler_label, CrawlerSession, JsTaskPatch,
+};
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::storage::tasks::TaskStatus;
@@ -8,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager, Runtime};
+use std::sync::Arc;
+use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
 use url::Url;
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,6 +119,18 @@ async fn get_page_stack(
         .ok_or_else(|| format!("Page stack not found for task {}", task_id))
 }
 
+async fn session_of<R: Runtime>(
+    webview: &WebviewWindow<R>,
+) -> Result<(String, Arc<CrawlerSession>), String> {
+    let task_id = task_id_from_crawler_label(webview.label())
+        .ok_or_else(|| format!("Invalid crawler window label: {}", webview.label()))?
+        .to_string();
+    let session = get_session(&task_id)
+        .await
+        .ok_or_else(|| format!("Crawler session not found for task {}", task_id))?;
+    Ok((task_id, session))
+}
+
 fn merge_task_headers(
     task_id: &str,
     headers: Option<HashMap<String, String>>,
@@ -138,9 +156,11 @@ fn merge_task_headers(
 }
 
 #[tauri::command]
-pub async fn crawl_get_context() -> Result<Option<CrawlContextPayload>, String> {
-    let state = crawler_window_state();
-    let Some(ctx) = state.get_context().await else {
+pub async fn crawl_get_context<R: Runtime>(
+    webview: WebviewWindow<R>,
+) -> Result<Option<CrawlContextPayload>, String> {
+    let (_, session) = session_of(&webview).await?;
+    let Some(ctx) = session.get_context().await else {
         return Ok(None);
     };
     Ok(Some(CrawlContextPayload {
@@ -158,17 +178,14 @@ pub async fn crawl_get_context() -> Result<Option<CrawlContextPayload>, String> 
 }
 
 #[tauri::command]
-pub async fn crawl_run_script<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    let state = crawler_window_state();
-    if !state.try_dispatch_script() {
+pub async fn crawl_run_script<R: Runtime>(webview: WebviewWindow<R>) -> Result<(), String> {
+    let (_, session) = session_of(&webview).await?;
+    if !session.try_dispatch_script() {
         return Ok(());
     }
-    let Some(ctx) = state.get_context().await else {
+    let Some(ctx) = session.get_context().await else {
         return Err("Crawler context not found".to_string());
     };
-    let crawler_window = app
-        .get_webview_window("crawler")
-        .ok_or_else(|| "Crawler window not found".to_string())?;
 
     let wrapped_script = format!(
         r#"(async function () {{
@@ -197,7 +214,7 @@ pub async fn crawl_run_script<R: Runtime>(app: AppHandle<R>) -> Result<(), Strin
         script = ctx.crawl_js
     );
 
-    crawler_window
+    webview
         .eval(&wrapped_script)
         .map_err(|e| format!("Failed to eval crawler script: {}", e))?;
     Ok(())
@@ -206,47 +223,37 @@ pub async fn crawl_run_script<R: Runtime>(app: AppHandle<R>) -> Result<(), Strin
 /// 内部：按给定状态结束当前 webview 任务并释放。若 only_for_task_id 为 Some，
 /// 仅当当前上下文为该任务时执行，否则直接返回（用于取消时只释放对应任务）。
 pub async fn crawl_exit_with_status(status: TaskStatus, only_for_task_id: Option<&str>) {
-    let state = crawler_window_state();
-    let Some(ctx) = state.get_context().await else {
-        return;
-    };
-    if let Some(id) = only_for_task_id {
-        if ctx.task_id != id {
-            return;
+    if let Some(task_id) = only_for_task_id {
+        if let Some(session) = get_session(task_id).await {
+            if status == TaskStatus::Canceled {
+                TaskScheduler::global()
+                    .download_queue()
+                    .cancel_task_downloads(task_id)
+                    .await;
+            }
+            session
+                .complete(
+                    status,
+                    (status == TaskStatus::Canceled).then(|| "Task canceled".to_string()),
+                )
+                .await;
         }
     }
-
-    let end = now_ms();
-    TaskScheduler::global().transition(
-        &ctx.task_id,
-        status,
-        TaskTransition {
-            start_time: None,
-            end_time: Some(end),
-            error: None,
-        },
-    );
-    TaskScheduler::global()
-        .page_stacks()
-        .remove_stack(&ctx.task_id)
-        .await;
-    let _ = state.release_task(&ctx.task_id).await;
 }
 
 #[tauri::command]
-pub async fn crawl_exit() -> Result<(), String> {
-    crawl_exit_with_status(TaskStatus::Completed, None).await;
+pub async fn crawl_exit<R: Runtime>(webview: WebviewWindow<R>) -> Result<(), String> {
+    let (_, session) = session_of(&webview).await?;
+    session.complete(TaskStatus::Completed, None).await;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn crawl_error(message: String) -> Result<(), String> {
-    let state = crawler_window_state();
-    let Some(ctx) = state.get_context().await else {
-        return Ok(());
-    };
-
-    let end = now_ms();
+pub async fn crawl_error<R: Runtime>(
+    webview: WebviewWindow<R>,
+    message: String,
+) -> Result<(), String> {
+    let (task_id, session) = session_of(&webview).await?;
     let err = if message.trim().is_empty() {
         "Unknown crawl.js error".to_string()
     } else {
@@ -258,27 +265,24 @@ pub async fn crawl_error(message: String) -> Result<(), String> {
     } else {
         TaskStatus::Failed
     };
-    TaskScheduler::global().transition(
-        &ctx.task_id,
-        next,
-        TaskTransition {
-            start_time: None,
-            end_time: Some(end),
-            error: Some(err),
-        },
-    );
-    TaskScheduler::global()
-        .page_stacks()
-        .remove_stack(&ctx.task_id)
-        .await;
-    let _ = state.release_task(&ctx.task_id).await;
+    if next == TaskStatus::Canceled {
+        TaskScheduler::global()
+            .download_queue()
+            .cancel_task_downloads(&task_id)
+            .await;
+    }
+    session.complete(next, Some(err)).await;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn crawl_task_log(message: String, level: Option<String>) -> Result<(), String> {
-    let state = crawler_window_state();
-    let Some(ctx) = state.get_context().await else {
+pub async fn crawl_task_log<R: Runtime>(
+    webview: WebviewWindow<R>,
+    message: String,
+    level: Option<String>,
+) -> Result<(), String> {
+    let (_, session) = session_of(&webview).await?;
+    let Some(ctx) = session.get_context().await else {
         return Ok(());
     };
     let lvl = level.as_deref().unwrap_or("print");
@@ -287,9 +291,12 @@ pub async fn crawl_task_log(message: String, level: Option<String>) -> Result<()
 }
 
 #[tauri::command]
-pub async fn crawl_add_progress(percentage: f64) -> Result<(), String> {
-    let state = crawler_window_state();
-    let Some(ctx) = state.get_context().await else {
+pub async fn crawl_add_progress<R: Runtime>(
+    webview: WebviewWindow<R>,
+    percentage: f64,
+) -> Result<(), String> {
+    let (_, session) = session_of(&webview).await?;
+    let Some(ctx) = session.get_context().await else {
         return Ok(());
     };
 
@@ -307,16 +314,16 @@ pub async fn crawl_add_progress(percentage: f64) -> Result<(), String> {
 /// raw metadata 在入口处归一化为 `metadata_id`，下载队列只传 id。
 #[tauri::command]
 pub async fn crawl_download_image<R: Runtime>(
-    app: AppHandle<R>,
+    webview: WebviewWindow<R>,
     url: String,
-    cookie: Option<bool>,
+    _cookie: Option<bool>,
     headers: Option<HashMap<String, String>>,
     name: Option<String>,
     metadata: Option<Value>,
     metadata_version: Option<i64>,
 ) -> Result<(), String> {
-    let state = crawler_window_state();
-    let Some(ctx) = state.get_context().await else {
+    let (_, session) = session_of(&webview).await?;
+    let Some(ctx) = session.get_context().await else {
         return Err("Crawler context not found".to_string());
     };
 
@@ -324,48 +331,12 @@ pub async fn crawl_download_image<R: Runtime>(
     let parsed = Url::parse(&target_url).map_err(|e| format!("Invalid URL: {}", e))?;
     let images_dir = PathBuf::from(&ctx.images_dir);
     let download_start_time = now_ms();
-    let cookie_header = if cookie.unwrap_or(false) {
-        let crawler_window = app
-            .get_webview_window("crawler")
-            .ok_or_else(|| "Crawler window not found".to_string())?;
-        let page_url = ctx
-            .current_url
-            .as_deref()
-            .map(|u| Url::parse(u))
-            .transpose()
-            .ok()
-            .flatten();
-        let mut cookie_map = std::collections::BTreeMap::<String, String>::new();
-        for cookie_url in [Some(parsed.clone()), page_url].into_iter().flatten() {
-            if let Ok(cookies) = crawler_window.cookies_for_url(cookie_url) {
-                for c in cookies {
-                    cookie_map
-                        .entry(c.name().to_string())
-                        .or_insert_with(|| c.value().to_string());
-                }
-            }
-        }
-        if cookie_map.is_empty() {
-            None
-        } else {
-            Some(
-                cookie_map
-                    .iter()
-                    .map(|(k, v)| format!("{k}={v}"))
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            )
-        }
-    } else {
-        None
-    };
     let mut request_headers = headers.unwrap_or_default();
     if let Some(ref page_url) = ctx.current_url {
         if !page_url.trim().is_empty() {
             request_headers.insert("Referer".to_string(), page_url.clone());
         }
     }
-    let merged_headers = merge_task_headers(&ctx.task_id, Some(request_headers), cookie_header)?;
     let metadata_version = match metadata_version {
         None => 0,
         Some(v) if v >= 0 => {
@@ -382,32 +353,61 @@ pub async fn crawl_download_image<R: Runtime>(
     } else {
         None
     };
-    TaskScheduler::global()
-        .download_queue()
-        .download_image(
-            parsed,
-            images_dir,
-            ctx.plugin_id.clone(),
-            ctx.task_id.clone(),
-            download_start_time,
-            ctx.output_album_id.clone(),
-            merged_headers,
-            name,
-            metadata_id,
-        )
-        .await
+
+    let merged_headers = merge_task_headers(&ctx.task_id, Some(request_headers), None)?;
+    std::fs::create_dir_all(&images_dir)
+        .map_err(|e| format!("Failed to create native download dir: {}", e))?;
+    let _native_dest = compute_unique_download_path(&images_dir, &parsed, None)
+        .map_err(|e| format!("Failed to compute native download destination: {}", e))?;
+    let download_id = next_download_id();
+    let native_info = ActiveDownloadInfo {
+        id: download_id,
+        url: parsed.as_str().to_string(),
+        plugin_id: ctx.plugin_id.clone(),
+        start_time: download_start_time,
+        task_id: ctx.task_id.clone(),
+        state: DownloadState::Preparing,
+        native: true,
+        retried_for: None,
+        received_bytes: 0,
+        total_bytes: None,
+        surf_record_id: None,
+        http_headers: merged_headers,
+        output_album_id: ctx.output_album_id.clone(),
+        custom_display_name: name,
+        metadata_id,
+    };
+    let dq = TaskScheduler::global().download_queue();
+    dq.register_native(native_info)?;
+
+    #[cfg(target_os = "linux")]
+    let start_result = tauri_runtime_cef::start_download(webview.label(), parsed.as_str())
+        .map_err(|e| e.to_string());
+    #[cfg(not(target_os = "linux"))]
+    let start_result = webview
+        .navigate(parsed.clone())
+        .map_err(|e| e.to_string());
+
+    if let Err(e) = start_result {
+        let _ = dq.take_native(parsed.as_str());
+        return Err(format!("Failed to start native crawler download: {}", e));
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn crawl_update_page_state(patch: Value) -> Result<(), String> {
-    let state = crawler_window_state();
-    let Some(ctx) = state.get_context().await else {
+pub async fn crawl_update_page_state<R: Runtime>(
+    webview: WebviewWindow<R>,
+    patch: Value,
+) -> Result<(), String> {
+    let (_, session) = session_of(&webview).await?;
+    let Some(ctx) = session.get_context().await else {
         return Err("Crawler context not found".to_string());
     };
     let task_id = ctx.task_id.clone();
     let patch_obj = page_state_plain_object(Some(&patch));
     let merged = merge_page_state(ctx.page_state.as_ref(), &patch_obj);
-    state
+    session
         .patch_context_for_task(
             &task_id,
             JsTaskPatch {
@@ -424,15 +424,18 @@ pub async fn crawl_update_page_state(patch: Value) -> Result<(), String> {
 
 /// 更新整个任务上下文状态：同步到 Rust 内存并会反映到 ctx.state（与 updatePageState 同理）。
 #[tauri::command]
-pub async fn crawl_update_state(patch: Value) -> Result<(), String> {
-    let state = crawler_window_state();
-    let Some(ctx) = state.get_context().await else {
+pub async fn crawl_update_state<R: Runtime>(
+    webview: WebviewWindow<R>,
+    patch: Value,
+) -> Result<(), String> {
+    let (_, session) = session_of(&webview).await?;
+    let Some(ctx) = session.get_context().await else {
         return Err("Crawler context not found".to_string());
     };
     let task_id = ctx.task_id.clone();
     let patch_obj = state_plain_object(Some(&patch));
     let merged = merge_state(ctx.state.as_ref(), &patch_obj);
-    state
+    session
         .patch_context_for_task(
             &task_id,
             JsTaskPatch {
@@ -448,37 +451,41 @@ pub async fn crawl_update_state(patch: Value) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn crawl_page_ready() -> Result<(), String> {
-    let state = crawler_window_state();
-    let Some(_) = state.get_context().await else {
+pub async fn crawl_page_ready<R: Runtime>(webview: WebviewWindow<R>) -> Result<(), String> {
+    let (_, session) = session_of(&webview).await?;
+    let Some(_) = session.get_context().await else {
         return Err("Crawler context not found".to_string());
     };
-    state.set_page_ready(false);
-    state.set_page_ready(true);
+    session.set_page_ready(false);
+    session.set_page_ready(true);
     Ok(())
 }
 
 /// 清空「当前站点」数据：删除该 URL 对应 origin 下的所有 Cookie（localStorage/sessionStorage 由前端 clear() 内清除）。
 #[tauri::command]
-pub async fn crawl_clear_site_data<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), String> {
+pub async fn crawl_clear_site_data<R: Runtime>(
+    webview: WebviewWindow<R>,
+    url: String,
+) -> Result<(), String> {
+    let _ = session_of(&webview).await?;
     let parsed =
         Url::parse(url.trim()).map_err(|e| format!("Invalid URL for clear_site_data: {}", e))?;
-    let crawler_window = app
-        .get_webview_window("crawler")
-        .ok_or_else(|| "Crawler window not found".to_string())?;
-    let cookies = crawler_window
+    let cookies = webview
         .cookies_for_url(parsed)
         .map_err(|e| format!("Failed to get cookies: {}", e))?;
     for cookie in cookies {
-        let _ = crawler_window.delete_cookie(cookie);
+        let _ = webview.delete_cookie(cookie);
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn crawl_to<R: Runtime>(app: AppHandle<R>, payload: CrawlToPayload) -> Result<(), String> {
-    let state = crawler_window_state();
-    let Some(ctx) = state.get_context().await else {
+pub async fn crawl_to<R: Runtime>(
+    webview: WebviewWindow<R>,
+    payload: CrawlToPayload,
+) -> Result<(), String> {
+    let (_, session) = session_of(&webview).await?;
+    let Some(ctx) = session.get_context().await else {
         return Err("Crawler context not found".to_string());
     };
 
@@ -516,7 +523,7 @@ pub async fn crawl_to<R: Runtime>(app: AppHandle<R>, payload: CrawlToPayload) ->
             page_state: new_page_state.clone(),
         });
     }
-    state
+    session
         .patch_context_for_task(
             &task_id,
             JsTaskPatch {
@@ -529,26 +536,26 @@ pub async fn crawl_to<R: Runtime>(app: AppHandle<R>, payload: CrawlToPayload) ->
         )
         .await?;
 
-    let crawler_window = app
-        .get_webview_window("crawler")
-        .ok_or_else(|| "Crawler window not found".to_string())?;
     let parsed = url::Url::parse(&target_url)
         .map_err(|e| format!("Invalid target URL '{}': {}", target_url, e))?;
-    state.set_page_ready(false);
-    crawler_window
+    session.set_page_ready(false);
+    webview
         .navigate(parsed)
         .map_err(|e| format!("Failed to navigate crawler window: {}", e))?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn crawl_back<R: Runtime>(app: AppHandle<R>, count: Option<usize>) -> Result<(), String> {
+pub async fn crawl_back<R: Runtime>(
+    webview: WebviewWindow<R>,
+    count: Option<usize>,
+) -> Result<(), String> {
     let count = count.unwrap_or(1);
     if count == 0 {
         return Err("count must be >= 1".to_string());
     }
-    let state = crawler_window_state();
-    let Some(ctx) = state.get_context().await else {
+    let (_, session) = session_of(&webview).await?;
+    let Some(ctx) = session.get_context().await else {
         return Err("Crawler context not found".to_string());
     };
     let stack = get_page_stack(&ctx.task_id).await?;
@@ -573,7 +580,7 @@ pub async fn crawl_back<R: Runtime>(app: AppHandle<R>, count: Option<usize>) -> 
             page_state_plain_object(Some(&top.page_state)),
         )
     };
-    state
+    session
         .patch_context_for_task(
             &ctx.task_id,
             JsTaskPatch {
@@ -585,28 +592,21 @@ pub async fn crawl_back<R: Runtime>(app: AppHandle<R>, count: Option<usize>) -> 
             },
         )
         .await?;
-    let crawler_window = app
-        .get_webview_window("crawler")
-        .ok_or_else(|| "Crawler window not found".to_string())?;
     let parsed = url::Url::parse(&previous_url)
         .map_err(|e| format!("Invalid target URL '{}': {}", previous_url, e))?;
-    state.set_page_ready(false);
-    crawler_window
+    session.set_page_ready(false);
+    webview
         .navigate(parsed)
         .map_err(|e| format!("Failed to navigate crawler window: {}", e))?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn show_crawler_window<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    if crawler_window_state().try_get_context().is_none() {
-        return Err(
-            "爬虫 WebView 窗口当前为空，没有爬虫插件在占用，先运行一个爬虫插件吧".to_string(),
-        );
-    }
+pub fn show_crawler_window<R: Runtime>(app: AppHandle<R>, task_id: String) -> Result<(), String> {
+    let label = crawler_window_label(task_id.trim());
     let crawler_window = app
-        .get_webview_window("crawler")
-        .ok_or_else(|| "Crawler window not found".to_string())?;
+        .get_webview_window(&label)
+        .ok_or_else(|| "该任务未在运行或没有 WebView 窗口".to_string())?;
     crawler_window
         .show()
         .map_err(|e| format!("Failed to show crawler window: {}", e))?;

@@ -399,9 +399,7 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
         };
 
     eprintln!("[DEBUG] set_wallpaper_mode: 开始应用模式 {}", mode);
-    target
-        .init()
-        .map_err(|e| format!("init 失败: {}", e))?;
+    target.init().map_err(|e| format!("init 失败: {}", e))?;
     #[cfg(not(target_os = "linux"))]
     let is_plugin_mode = false;
     #[cfg(target_os = "linux")]

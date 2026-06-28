@@ -9,38 +9,36 @@ use crate::storage::{ImageInfo, Storage};
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::time::Instant;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::Notify;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use url::Url;
 
 pub mod compress;
 #[cfg(target_os = "android")]
 mod content;
 mod http;
-pub mod native_download;
 pub mod queue;
 pub mod util;
 
 #[cfg(not(target_os = "android"))]
 pub use compress::{
-    generate_compatible_image, generate_compatible_video, IMAGE_COMPATIBLE_MAX_DIM,
-    VIDEO_COMPATIBLE_MAX_HEIGHT,
+    IMAGE_COMPATIBLE_MAX_DIM, VIDEO_COMPATIBLE_MAX_HEIGHT, generate_compatible_image,
+    generate_compatible_video,
 };
 pub use compress::{
-    generate_thumbnail, generate_thumbnail_from_bytes, image_needs_independent_thumbnail,
-    image_thumbnail_dimensions_acceptable, IMAGE_THUMBNAIL_MAX_DIM,
-    IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES,
+    IMAGE_THUMBNAIL_MAX_DIM, IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES, generate_thumbnail,
+    generate_thumbnail_from_bytes, image_needs_independent_thumbnail,
+    image_thumbnail_dimensions_acceptable,
 };
 pub use http::{build_reqwest_header_map, create_client};
-pub use native_download::{NativeDownloadEntry, NativeDownloadState};
 pub use queue::{
-    next_download_id, ActiveDownloadInfo, DownloadQueue, DownloadRequest, DownloadState,
+    ActiveDownloadInfo, DownloadQueue, DownloadRequest, DownloadState, emit_removed_after_interval,
+    next_download_id,
 };
 pub use util::{
     build_safe_filename, build_safe_filename_no_ext, compute_bytes_hash, compute_file_hash,
@@ -494,7 +492,7 @@ pub async fn download_with_retry(
                 return writer
                     .finalize()
                     .await
-                    .map_err(|e| format!("finalize download: {e}"))
+                    .map_err(|e| format!("finalize download: {e}"));
             }
             Err(e) => {
                 if !e.is_retryable() || attempt >= max_attempts {
@@ -532,21 +530,36 @@ async fn wait_until_download_interval_elapsed(download_start_time: u64, interval
     }
 }
 
-/// 非下载池路径（本地导入、本地文件夹同步、native/surf 下载）使用：
+/// 非下载池路径（本地导入、本地文件夹同步）使用：
 /// 确保单个文件处理从开始到结束至少间隔设置中的下载间隔。
 pub async fn wait_after_non_pool_download_if_needed(download_start_time: u64) {
     wait_until_download_interval_elapsed(download_start_time, download_interval_ms()).await;
 }
 
 /// 每次下载完成后，按设置等待一段时间再进入下一轮；等待期间可被 exit_notify 中断。
-async fn wait_after_download_if_needed(exit_notify: &Notify) {
+pub async fn wait_after_download_if_needed(start_time: u64, exit_notify: Option<&Notify>) {
     let interval_ms = download_interval_ms();
     if interval_ms == 0 {
         return;
     }
-    tokio::select! {
-        _ = sleep(Duration::from_millis(interval_ms)) => {}
-        _ = exit_notify.notified() => {}
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        - start_time;
+    if elapsed < interval_ms {
+        let remaining = interval_ms - elapsed;
+        match exit_notify {
+            Some(exit_notify) => {
+                tokio::select! {
+                    _ = sleep(Duration::from_millis(remaining)) => {}
+                    _ = exit_notify.notified() => {}
+                }
+            }
+            None => {
+                sleep(Duration::from_millis(remaining)).await;
+            }
+        }
     }
 }
 
@@ -614,12 +627,11 @@ pub async fn postprocess_downloaded_image(
     download_start_time: u64,
     output_album_id: Option<&str>,
     http_headers: &HashMap<String, String>,
-    native: bool,
+    _native: bool,
     custom_display_name: Option<&str>,
     metadata_id: Option<i64>,
 ) -> Result<bool, String> {
     match async {
-        let event_task_id = task_id.or(surf_record_id).unwrap_or_default();
         let is_surf_mode = surf_record_id.is_some();
         // 根据不同来源计算 MIME 和哈希。图片/普通文件仍由 infer 负责格式判定；
         // Android content:// 由系统 ContentIoProvider 提供 MIME。
@@ -1224,7 +1236,7 @@ pub async fn clear_downloads_temp_dir() {
 
 #[cfg(test)]
 mod spill_writer_tests {
-    use super::{DownloadOutcome, SpillWriter, DOWNLOAD_SPILL_THRESHOLD};
+    use super::{DOWNLOAD_SPILL_THRESHOLD, DownloadOutcome, SpillWriter};
     use std::path::PathBuf;
     use tokio::io::AsyncWriteExt;
 

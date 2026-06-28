@@ -9,12 +9,12 @@
 //! export CEF_PATH="$HOME/.local/share/cef"
 //! export LD_LIBRARY_PATH="$CEF_PATH:$LD_LIBRARY_PATH"
 //! CEF_WINDOWED_URL=file:///tmp/cef-gpu-readback.html \
-//!   cargo run -p tauri-runtime-cef --example minimal_windowed --features cef-backend
+//!   cargo run -p tauri-runtime-cef --example minimal_windowed
 //!
 //! # Same CEF-owned window, but with an external message pump like the runtime.
 //! CEF_WINDOWED_PUMP=external \
 //! CEF_WINDOWED_URL=file:///tmp/cef-gpu-readback.html \
-//!   cargo run -p tauri-runtime-cef --example minimal_windowed --features cef-backend
+//!   cargo run -p tauri-runtime-cef --example minimal_windowed
 //! ```
 
 #[cfg(not(target_os = "linux"))]

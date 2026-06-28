@@ -121,6 +121,11 @@
                               :title="t('tasks.drawerViewLog')" @click.stop="openTaskLog(item.data.id)">
                               {{ t("tasks.drawerTaskActionLog") }}
                             </el-button>
+                            <el-button v-if="shouldShowTaskWebviewButton(item.data)" plain size="small" type="primary"
+                              class="task-drawer-action-btn" :title="t('tasks.openTaskWebview')"
+                              @click.stop="openTaskWindow(item.data.id)">
+                              {{ t("tasks.drawerTaskActionWebview") }}
+                            </el-button>
                           </div>
                           <div v-if="item.data.startTime != null && Number(item.data.startTime) > 0"
                             class="task-drawer-start-time" :title="formatDrawerTaskStartFull(item.data.startTime)">
@@ -165,6 +170,7 @@ import { LOCAL_IMPORT_PLUGIN_ID, usePluginStore } from "../../stores/plugins";
 import type { PluginManifestText } from "../../stores/plugins";
 import type { TaskRunParamsTask } from "./TaskRunParamsContent.vue";
 import { trackEvent } from "../../track/umami";
+import { kameMessage as ElMessage } from "../../utils/kameMessage";
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
@@ -307,7 +313,7 @@ function currentPagePath() {
   return typeof location === "undefined" ? "" : location.pathname;
 }
 
-function trackTaskDrawerAction(action: "view_params" | "view_log", task: ScriptTask) {
+function trackTaskDrawerAction(action: "view_params" | "view_log" | "open_webview", task: ScriptTask) {
   trackEvent("task_drawer_task_action", {
     action,
     taskId: task.id,
@@ -507,6 +513,25 @@ const syncDownloadsOnDrawerOpen = async () => {
 
 const getPluginName = (pluginId: string) => pluginStore.pluginLabel(pluginId);
 const isScheduledTask = (task: ScriptTask) => task.triggerSource === "scheduled";
+
+const isJsTask = (pluginId: string) =>
+  pluginStore.plugins.find((plugin) => plugin.id === pluginId)?.scriptType === "js";
+
+const shouldShowTaskWebviewButton = (task: ScriptTask) =>
+  task.status === "running" && isJsTask(task.pluginId);
+
+async function openTaskWindow(taskId: string) {
+  const id = String(taskId || "").trim();
+  if (!id) return;
+  const task = props.tasks.find((t) => t.id === id);
+  if (task) trackTaskDrawerAction("open_webview", task);
+  try {
+    await invoke("show_crawler_window", { taskId: id });
+    ElMessage.success(t("tasks.openTaskWebviewSuccess"));
+  } catch (error) {
+    ElMessage.error(String(error));
+  }
+}
 
 const getRunConfigName = (task: ScriptTask) => {
   const runConfigId = `${task.runConfigId ?? ""}`.trim();

@@ -16,7 +16,6 @@
   "failedImages": "失败图片",
   "gallerySort": "按时间排序",
   "galleryPageSize": "每页数量",
-  "openCrawlerWebview": "爬虫 WebView 窗口",
   "failedImagesCancelWaiting": "取消等待",
   "failedImagesRetryAll": "全部重试",
   "failedImagesDeleteAll": "全部删除",

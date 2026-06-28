@@ -3,7 +3,6 @@
 //! 这一层适配 Tauri 的窗口 trait 到 CEF Views。tao 仅提供 Tauri 通用的
 //! builder、事件循环和 monitor 类型，不承载原生应用窗口。
 
-#[cfg(feature = "cef-backend")]
 mod imp {
     use std::sync::mpsc::channel;
 
@@ -828,5 +827,4 @@ mod imp {
     pub(crate) type WebviewListeners = Vec<(WebviewEventId, Box<dyn Fn(&WebviewEvent) + Send>)>;
 }
 
-#[cfg(feature = "cef-backend")]
 pub(crate) use imp::*;

@@ -52,8 +52,8 @@
 ## 爬虫（`crawler/`）
 
 - [crawler/CRAWLER_JS_FLOW.md](crawler/CRAWLER_JS_FLOW.md)
-  - 主题：Crawler JS 执行链路与相关模块关系。
-  - 适用场景：调度、注入、抓取流程排查与扩展。
+  - 主题：Crawler JS 执行链路与相关模块关系，含每任务独立 WebView 窗口、session 注册表、worker await completion、按 `crawler-<task_id>` label 路由命令。
+  - 适用场景：调度、注入、抓取流程排查与扩展；排查 JS 任务并发、窗口创建/销毁、IPC 路由问题。
 
 - [crawler/PIXIV_METADATA.md](crawler/PIXIV_METADATA.md)
   - 主题：Pixiv Rhai 插件 `metadata.body` 白名单入库与 DB 一次性迁移。

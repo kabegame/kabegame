@@ -16,7 +16,6 @@
   "failedImages": "失敗画像",
   "gallerySort": "日時で並び替え",
   "galleryPageSize": "1ページあたり",
-  "openCrawlerWebview": "クローラーWebViewウィンドウ",
   "failedImagesCancelWaiting": "待機をキャンセル",
   "failedImagesRetryAll": "すべて再試行",
   "failedImagesDeleteAll": "すべて削除",

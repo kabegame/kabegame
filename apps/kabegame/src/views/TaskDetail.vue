@@ -9,9 +9,9 @@
             @preview-page-boundary="handlePreviewPageBoundary">
             <template #before-grid>
                 <TaskDetailPageHeader :task-name="taskName"
-                    :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
+                    :show-stop-task="shouldShowStopButton" :show-open-webview="showOpenWebview" @refresh="handleRefresh" @stop-task="handleStopTask"
                     @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum" @help="openHelpDrawer"
-                    @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @back="goBack">
+                    @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @open-task-webview="handleOpenTaskWebview" @back="goBack">
                     <template #subtitle>
                         <TaskCountsInline :success="successN" :failed="failedN" :deleted="deletedN" :dedup="dedupN"
                             :duration="durationText" />
@@ -172,6 +172,22 @@ const taskStatusFromStore = computed(() => taskFromStore.value?.status ?? "");
 const shouldShowStopButton = computed(() => {
     return taskStatusFromStore.value === "running";
 });
+const showOpenWebview = computed(() => {
+    const task = taskFromStore.value;
+    if (!task || task.status !== "running") return false;
+    return pluginStore.plugins.find((plugin) => plugin.id === task.pluginId)?.scriptType === "js";
+});
+
+async function handleOpenTaskWebview() {
+    const id = String(taskId.value || "").trim();
+    if (!id) return;
+    try {
+        await invoke("show_crawler_window", { taskId: id });
+        ElMessage.success(t("tasks.openTaskWebviewSuccess"));
+    } catch (error) {
+        ElMessage.error(String(error));
+    }
+}
 const loading = ref(false);
 const isRefreshing = ref(false);
 const pullToRefreshOpts = computed(() =>

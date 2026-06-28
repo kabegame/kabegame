@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
+use reqwest::header::{CONTENT_LENGTH, CONTENT_RANGE, HeaderMap, HeaderName, HeaderValue, RANGE};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{LazyLock, Mutex, Once};

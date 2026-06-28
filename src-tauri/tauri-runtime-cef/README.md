@@ -32,6 +32,7 @@ Tauri Builder
 | `invoke()` | `ipc://` 主路径与 `cef-ipc://` postMessage 后备桥接 |
 | 初始化脚本 | CEF `LoadHandler::on_load_start` 注入 |
 | 页面生命周期 | `LoadHandler` 映射到 Tauri page-load hook |
+| Cookie API | CEF 全局 `CookieManager` 映射到 Tauri `cookies_for_url` / `cookies` / `set_cookie` / `delete_cookie` |
 | 窗口事件 | CEF `WindowDelegate` 回流为 Tauri runtime events |
 
 ## 平台门控
@@ -46,10 +47,10 @@ tauri::Builder::<tauri_runtime_cef::Cef<tauri::EventLoopMessage>>::new()
 
 ## 开发与校验
 
-真实 CEF 代码在 `cef-backend` feature 后，以避免普通的非 Linux 检查下载 Chromium：
+`tauri-runtime-cef` crate 本身就是 CEF 后端，不再需要额外 backend feature：
 
 ```bash
-cargo check -p tauri-runtime-cef --features cef-backend
+cargo check -p tauri-runtime-cef
 ```
 
 `cef-rs` 默认下载对应的官方预编译 CEF；设置 `CEF_PATH` 可以复用已下载的运行时目录。不要自行构建 Chromium。

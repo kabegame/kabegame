@@ -220,7 +220,7 @@ import { ElDialog } from "element-plus";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
-import { IS_ANDROID, IS_LINUX, IS_WEB } from "@kabegame/core/env";
+import { IS_LINUX } from "@kabegame/core/env";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import { usePluginStore } from "@/stores/plugins";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
@@ -240,11 +240,7 @@ const appBackgroundCardClass = computed(() =>
     ? "!bg-transparent [--el-card-bg-color:transparent]"
     : ""
 );
-const surfHeaderShowIds = computed(() =>
-  IS_ANDROID || IS_WEB
-    ? [HeaderFeatureId.Help]
-    : [HeaderFeatureId.Help, HeaderFeatureId.OpenCrawlerWebview]
-);
+const surfHeaderShowIds = computed(() => [HeaderFeatureId.Help]);
 
 const helpDialog = useModal();
 const detailDialog = useModal();
@@ -255,23 +251,8 @@ const detailCopyDone = ref(false);
 
 const inputUrl = ref("");
 const pluginQuickSelect = ref("");
-const crawlerWebviewOpening = ref(false);
-
-async function openCrawlerWindow() {
-  crawlerWebviewOpening.value = true;
-  try {
-    await invoke("show_crawler_window");
-    ElMessage.success(t("surf.openWebViewSuccess"));
-  } catch (e) {
-    ElMessage.error(String(e));
-  } finally {
-    crawlerWebviewOpening.value = false;
-  }
-}
-
 function handleSurfHeaderAction(payload: { id: string; data: { type: string } }) {
   if (payload.id === HeaderFeatureId.Help) helpDialog.open();
-  else if (payload.id === HeaderFeatureId.OpenCrawlerWebview) openCrawlerWindow();
 }
 
 const surfRecordActions = createSurfRecordActions();

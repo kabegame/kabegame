@@ -84,9 +84,7 @@ impl WallpaperController {
         let mode = Settings::global().get_wallpaper_mode();
         Ok(match mode.as_str() {
             #[cfg(target_os = "linux")]
-            "plasma-plugin" => {
-                self.plasma_plugin.clone()
-            }
+            "plasma-plugin" => self.plasma_plugin.clone(),
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             "window" => self.window.clone(),
             _ => self.native.clone(),
@@ -97,9 +95,7 @@ impl WallpaperController {
     pub fn manager_for_mode(&self, mode: &str) -> Arc<dyn WallpaperManager + Send + Sync> {
         match mode {
             #[cfg(target_os = "linux")]
-            "plasma-plugin" => {
-                self.plasma_plugin.clone()
-            }
+            "plasma-plugin" => self.plasma_plugin.clone(),
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             "window" => self.window.clone(),
             _ => self.native.clone(),

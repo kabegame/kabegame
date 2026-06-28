@@ -36,9 +36,8 @@
 //!
 //! ## 当前状态
 //!
-//! `cef-backend` feature 打开时,本 crate 会实现 `tauri-runtime` 的核心
-//! trait。Linux 上 CEF Views 创建并管理原生窗口及 GPU 组合；默认 feature
-//! 仍保持轻量,避免没有 CEF 二进制工具链时影响普通检查。
+//! 本 crate 直接实现 `tauri-runtime` 的核心 trait。Linux 上 CEF Views 创建
+//! 并管理原生窗口及 GPU 组合；`kabegame` 只在 Linux standard/light 构建中依赖它。
 
 #![allow(dead_code)]
 
@@ -51,11 +50,14 @@ mod window;
 // The IPC bridge (`window.ipc.postMessage` → Rust) and the custom URI scheme
 // handler (`tauri://` / `asset://` serving the bundled frontend) are the two
 // Tauri-specific pieces that wry hides behind one-liners but CEF needs wired up
-// through its multi-process render handler. They live behind the backend feature.
-#[cfg(feature = "cef-backend")]
+// through its multi-process render handler.
 mod ipc;
-#[cfg(feature = "cef-backend")]
 mod protocol;
+
+/// Start a native CEF download from the webview identified by `webview_label`.
+pub fn start_download(webview_label: &str, url: &str) -> Result<(), String> {
+    webview::start_download(webview_label, url)
+}
 
 /// CEF 驱动的 Tauri runtime。
 ///
@@ -63,10 +65,7 @@ mod protocol;
 /// runtime,替代 Tauri 默认的 `Wry`。窗口和 webview 均由 CEF Views 管理。
 #[derive(Debug)]
 pub struct Cef<T: UserEvent> {
-    #[cfg(feature = "cef-backend")]
     pub(crate) inner: runtime::CefRuntime<T>,
-    #[cfg(not(feature = "cef-backend"))]
-    _marker: std::marker::PhantomData<T>,
 }
 
 /// 正在运行的 [`Cef`] runtime 的线程安全句柄。
@@ -75,10 +74,7 @@ pub struct Cef<T: UserEvent> {
 /// CEF/tao 的实际操作仍会被转发到 runtime 主事件循环中执行。
 #[derive(Debug, Clone)]
 pub struct CefHandle<T: UserEvent> {
-    #[cfg(feature = "cef-backend")]
     pub(crate) context: runtime::CefContext<T>,
-    #[cfg(not(feature = "cef-backend"))]
-    _marker: std::marker::PhantomData<T>,
 }
 
 /// 向 CEF runtime 事件循环投递用户事件的代理。
@@ -87,13 +83,9 @@ pub struct CefHandle<T: UserEvent> {
 /// runtime 内部消息队列项。
 #[derive(Debug, Clone)]
 pub struct CefEventLoopProxy<T: UserEvent> {
-    #[cfg(feature = "cef-backend")]
     pub(crate) context: runtime::CefContext<T>,
-    #[cfg(not(feature = "cef-backend"))]
-    _marker: std::marker::PhantomData<T>,
 }
 
-#[cfg(feature = "cef-backend")]
 /// 执行 CEF 多进程子进程派发,并在非 browser 进程中直接退出。
 ///
 /// 必须在应用 `main` 的最早阶段调用,早于 Tauri `Builder`、单例检测和任何

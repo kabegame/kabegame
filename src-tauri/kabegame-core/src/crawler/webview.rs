@@ -5,8 +5,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
-use tokio::sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{oneshot, watch, Mutex};
 use tokio::time::{timeout, Duration};
+
+use crate::storage::tasks::TaskStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,11 +29,6 @@ pub struct JsTaskContext {
     pub http_headers: HashMap<String, String>,
 }
 
-struct JsTaskSlot {
-    context: JsTaskContext,
-    _permit: OwnedSemaphorePermit,
-}
-
 #[derive(Default)]
 pub struct JsTaskPatch {
     pub current_url: Option<String>,
@@ -41,54 +38,41 @@ pub struct JsTaskPatch {
     pub resume_mode: Option<String>,
 }
 
-pub struct CrawlerWindowState {
-    semaphore: Arc<Semaphore>,
-    current_task: Mutex<Option<JsTaskSlot>>,
+#[derive(Debug, Clone)]
+pub struct TaskCompletion {
+    pub status: TaskStatus,
+    pub error: Option<String>,
+}
+
+pub struct CrawlerSession {
+    context: Mutex<JsTaskContext>,
     page_ready_tx: watch::Sender<bool>,
     page_ready_rx: watch::Receiver<bool>,
     script_dispatched: AtomicBool,
+    completion: Mutex<Option<oneshot::Sender<TaskCompletion>>>,
 }
 
-impl CrawlerWindowState {
-    pub fn new() -> Self {
+impl CrawlerSession {
+    pub fn new(
+        context: JsTaskContext,
+        completion_tx: oneshot::Sender<TaskCompletion>,
+    ) -> Self {
         let (page_ready_tx, page_ready_rx) = watch::channel(false);
         Self {
-            semaphore: Arc::new(Semaphore::new(1)),
-            current_task: Mutex::new(None),
+            context: Mutex::new(context),
             page_ready_tx,
             page_ready_rx,
             script_dispatched: AtomicBool::new(false),
+            completion: Mutex::new(Some(completion_tx)),
         }
     }
 
-    pub async fn assign_task(&self, context: JsTaskContext) -> Result<(), String> {
-        let permit = Arc::clone(&self.semaphore)
-            .acquire_owned()
-            .await
-            .map_err(|_| "Crawler window semaphore closed".to_string())?;
-        let mut guard = self.current_task.lock().await;
-        *guard = Some(JsTaskSlot {
-            context,
-            _permit: permit,
-        });
-        let _ = self.page_ready_tx.send(false);
-        Ok(())
-    }
-
     pub async fn get_context(&self) -> Option<JsTaskContext> {
-        self.current_task
-            .lock()
-            .await
-            .as_ref()
-            .map(|slot| slot.context.clone())
+        Some(self.context.lock().await.clone())
     }
 
     pub fn try_get_context(&self) -> Option<JsTaskContext> {
-        self.current_task
-            .try_lock()
-            .ok()?
-            .as_ref()
-            .map(|slot| slot.context.clone())
+        self.context.try_lock().ok().map(|ctx| ctx.clone())
     }
 
     pub async fn patch_context_for_task(
@@ -96,44 +80,27 @@ impl CrawlerWindowState {
         task_id: &str,
         patch: JsTaskPatch,
     ) -> Result<(), String> {
-        let mut guard = self.current_task.lock().await;
-        let Some(slot) = guard.as_mut() else {
-            return Err("Crawler window is idle".to_string());
-        };
-        if slot.context.task_id != task_id {
-            return Err("Crawler window is occupied by another task".to_string());
+        let mut context = self.context.lock().await;
+        if context.task_id != task_id {
+            return Err("Crawler session belongs to another task".to_string());
         }
 
         if let Some(url) = patch.current_url {
-            slot.context.current_url = Some(url);
+            context.current_url = Some(url);
         }
         if let Some(label) = patch.page_label {
-            slot.context.page_label = label;
+            context.page_label = label;
         }
         if let Some(state) = patch.page_state {
-            slot.context.page_state = Some(state);
+            context.page_state = Some(state);
         }
         if let Some(state) = patch.state {
-            slot.context.state = Some(state);
+            context.state = Some(state);
         }
         if let Some(mode) = patch.resume_mode {
-            slot.context.resume_mode = mode;
+            context.resume_mode = mode;
         }
         Ok(())
-    }
-
-    pub async fn release_task(&self, task_id: &str) -> bool {
-        let mut guard = self.current_task.lock().await;
-        let should_release = guard
-            .as_ref()
-            .map(|slot| slot.context.task_id == task_id)
-            .unwrap_or(false);
-        if should_release {
-            *guard = None;
-            let _ = self.page_ready_tx.send(false);
-            return true;
-        }
-        false
     }
 
     pub fn set_page_ready(&self, ready: bool) {
@@ -158,18 +125,64 @@ impl CrawlerWindowState {
             .map_err(|_| "Crawler page ready channel closed".to_string())?;
         Ok(())
     }
+
+    pub async fn complete(&self, status: TaskStatus, error: Option<String>) {
+        let mut guard = self.completion.lock().await;
+        if let Some(tx) = guard.take() {
+            let _ = tx.send(TaskCompletion { status, error });
+        }
+    }
 }
 
 #[async_trait]
 pub trait CrawlerWebViewHandler: Send + Sync + 'static {
-    async fn setup_js_task(&self, task_id: &str, base_url: &str) -> Result<(), String>;
+    async fn create_task_window(&self, task_id: &str, base_url: &str) -> Result<(), String>;
+    async fn destroy_task_window(&self, task_id: &str) -> Result<(), String>;
 }
 
-static CRAWLER_WINDOW_STATE: OnceLock<CrawlerWindowState> = OnceLock::new();
+static CRAWLER_SESSIONS: OnceLock<Mutex<HashMap<String, Arc<CrawlerSession>>>> = OnceLock::new();
 static CRAWLER_WEBVIEW_HANDLER: OnceLock<Arc<dyn CrawlerWebViewHandler>> = OnceLock::new();
 
-pub fn crawler_window_state() -> &'static CrawlerWindowState {
-    CRAWLER_WINDOW_STATE.get_or_init(CrawlerWindowState::new)
+pub fn crawler_sessions() -> &'static Mutex<HashMap<String, Arc<CrawlerSession>>> {
+    CRAWLER_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub async fn register_session(
+    task_id: &str,
+    context: JsTaskContext,
+) -> Result<(Arc<CrawlerSession>, oneshot::Receiver<TaskCompletion>), String> {
+    let (completion_tx, completion_rx) = oneshot::channel();
+    let session = Arc::new(CrawlerSession::new(context, completion_tx));
+    let mut sessions = crawler_sessions().lock().await;
+    if sessions.contains_key(task_id) {
+        return Err(format!("Crawler session already exists for task {}", task_id));
+    }
+    sessions.insert(task_id.to_string(), Arc::clone(&session));
+    Ok((session, completion_rx))
+}
+
+pub async fn get_session(task_id: &str) -> Option<Arc<CrawlerSession>> {
+    crawler_sessions().lock().await.get(task_id).cloned()
+}
+
+pub fn try_get_session_context(task_id: &str) -> Option<JsTaskContext> {
+    crawler_sessions()
+        .try_lock()
+        .ok()?
+        .get(task_id)
+        .and_then(|session| session.try_get_context())
+}
+
+pub async fn remove_session(task_id: &str) -> Option<Arc<CrawlerSession>> {
+    crawler_sessions().lock().await.remove(task_id)
+}
+
+pub fn crawler_window_label(task_id: &str) -> String {
+    format!("crawler-{task_id}")
+}
+
+pub fn task_id_from_crawler_label(label: &str) -> Option<&str> {
+    label.strip_prefix("crawler-").filter(|id| !id.is_empty())
 }
 
 pub fn set_webview_handler(handler: Arc<dyn CrawlerWebViewHandler>) -> Result<(), String> {

@@ -6,6 +6,23 @@
 
 **Changelog entries:** ~~Write release notes in **English** (new sections and bullets from [3.4.5] onward). ~~ 从4.2.1开始用中文。
 
+## [4.2.2]
+### Added
+- **爬虫**: webview 爬虫插件现在可以多窗口了
+
+### Fixed
+- **动态库**: windows、macos和linux现在带上依赖的动态库和搜索路径，尽量能够在更多系统上能够运行。
+  - libfuse
+  - ffmpeg 依赖
+  - cef 依赖
+
+### Optimized
+- **任务**: JS任务在log旁添加了一个快捷打开webview的按钮
+
+### Changed
+- **Linux**: Linux现在用自研CEF运行时，被 WebkitGTK 折磨的时代已经过去啦（代价是安装包膨胀200MB左右）
+- **Linux**: Linux视频现在用ffmpeg生成webm(vpx_vp9+Opus)兼容和缩略视频，以前的视频无法播放，需要重新运行一次整理
+
 ## [4.2.1]
 ### Fixed
 - **画廊掉帧**: 画廊经常掉帧是因为原图显示bug，即使鼠标离开也还在加载原图。该问题在原图大小尤其大的时候

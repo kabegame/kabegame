@@ -256,7 +256,9 @@ export const usePluginStore = defineStore("plugins", () => {
       await listen<{ pluginId: string }>("plugin-deleted", (event) => {
         const id = String(event.payload?.pluginId ?? "").trim();
         if (!id) return;
-        plugins.value = sortPluginsById(plugins.value.filter((p) => p.id !== id));
+        plugins.value = sortPluginsById(
+          plugins.value.filter((p) => p.id !== id),
+        );
         if (activePlugin.value?.id === id) activePlugin.value = null;
         delete pluginDetailCache.value[id];
         if (IS_WEB) {
@@ -290,19 +292,18 @@ export const usePluginStore = defineStore("plugins", () => {
 
   /** 从缓存读取插件列表（不重新扫盘）；首次调用时由 startup 的 ensure_installed_cache_initialized 保证缓存已就绪 */
   async function loadPlugins(): Promise<void> {
-        await initEventListeners();
-        try {
+    await initEventListeners();
+    try {
       if (IS_WEB) {
-                const index = await invoke<Array<{ id: string; version: string }>>(
-          "get_plugins",
-        );
-                const list = await Promise.all(
+        const index =
+          await invoke<Array<{ id: string; version: string }>>("get_plugins");
+        const list = await Promise.all(
           index.map(async ({ id, version }) => {
             const cached = await pluginCacheDb.plugins.get(id);
             if (cached && cached.version === version) {
-                            return cached.data;
+              return cached.data;
             }
-                        const full = await invoke<Plugin>("get_plugin_detail", {
+            const full = await invoke<Plugin>("get_plugin_detail", {
               pluginId: id,
             });
             await pluginCacheDb.plugins.put({
@@ -314,15 +315,13 @@ export const usePluginStore = defineStore("plugins", () => {
             return full;
           }),
         );
-                const validIds = new Set(index.map((i) => i.id));
-        const keys = await pluginCacheDb.plugins
-          .toCollection()
-          .primaryKeys();
+        const validIds = new Set(index.map((i) => i.id));
+        const keys = await pluginCacheDb.plugins.toCollection().primaryKeys();
         const stale = keys.filter((k) => !validIds.has(String(k)));
         if (stale.length) await pluginCacheDb.plugins.bulkDelete(stale);
         const sorted = sortPluginsById(list);
         plugins.value = sorted;
-                const crawler = useCrawlerStore();
+        const crawler = useCrawlerStore();
         crawler.loadPluginRecommendedConfigs(sorted);
       } else {
         const result = await invoke<Plugin[]>("get_plugins");

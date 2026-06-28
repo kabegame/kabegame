@@ -14,20 +14,6 @@ publish = false
 # It NEVER forks the `tauri` source tree — it only depends on the published
 # `tauri-runtime` trait crate. See README.md for the full rationale.
 
-[features]
-default = []
-
-# Enables the real CEF binding + the Runtime trait implementation.
-#
-# Kept OFF by default so the skeleton type-checks (`cargo check`) WITHOUT the
-# heavy CEF binary toolchain (cef-rs build scripts download a ~hundreds-of-MB
-# prebuilt Chromium). Turn this on only once the local CEF build/run environment
-# has been validated against the upstream `cefsimple` example (see README §7).
-#
-# CEF Views owns Linux windows and GPU composition. `tao` remains only as the
-# engine-agnostic Tauri event-loop and monitor adapter.
-cef-backend = ["dep:cef", "dep:gtk", "dep:tao"]
-
 [dependencies]
 # The trait contract we implement. `"2"` lets cargo unify this with whatever
 # tauri version the kabegame app resolves (currently tauri 2.11.x).
@@ -37,22 +23,21 @@ tauri-utils = "2"
 http = "1"
 url = "2"
 raw-window-handle = "0.6"
+cookie = "0.18"
 
-# The Chromium engine binding (tauri-apps/cef-rs). Optional + off by default,
-# see the `cef-backend` feature above. Tracks CEF/Chromium major versions:
-# bumping this version is how we "follow upstream Chromium".
-cef = { version = "149", optional = true, default-features = false }
+# The Chromium engine binding (tauri-apps/cef-rs). Tracks CEF/Chromium major
+# versions: bumping this version is how we "follow upstream Chromium".
+cef = { version = "149", default-features = false }
 
-# Window + event-loop host (same lib tauri-runtime-wry uses). Optional, only
-# compiled with `cef-backend`. `rwh_06` exposes raw-window-handle 0.6 so we can
-# read the tao window's handle. Default features stay ON, plus rwh_06.
-tao = { version = "0.35", optional = true, features = ["rwh_06"] }
+# Window + event-loop host (same lib tauri-runtime-wry uses). `rwh_06` exposes
+# raw-window-handle 0.6 so we can read the tao window's handle. Default features
+# stay ON, plus rwh_06.
+tao = { version = "0.35", features = ["rwh_06"] }
 
-gtk = { version = "0.18", features = ["v3_24"], optional = true }
+gtk = { version = "0.18", features = ["v3_24"] }
 tracing = "0.1"
 ash = "0.38"
 libc = "0.2"
 
 [[example]]
 name = "minimal_windowed"
-required-features = ["cef-backend"]

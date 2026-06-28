@@ -7,7 +7,6 @@ export type DownloadEntry = {
   url: string;
   state: string;
   progress?: number;
-  taskId?: string;
   pluginId?: string;
   retriedFor?: number;
   native?: boolean;
@@ -17,7 +16,6 @@ export type DownloadStatePayload = {
   id: number;
   url: string;
   state: string;
-  taskId?: string;
   pluginId?: string;
   retriedFor?: number;
   /** 仅 `get_active_downloads` 快照携带；用于初始化恢复进度 */
@@ -61,7 +59,6 @@ export const useDownloadStateStore = defineStore("downloadState", () => {
       id,
       url: p.url,
       state: String(p.state ?? "").trim(),
-      taskId: p.taskId,
       pluginId: p.pluginId,
       retriedFor: p.retriedFor,
       native: p.native,
@@ -118,5 +115,5 @@ export const useDownloadStateStore = defineStore("downloadState", () => {
     inited = false;
   };
 
-  return { map, init, getByUrl, getByFailedImageId, dispose };
+  return { init, getByUrl, getByFailedImageId, dispose };
 });

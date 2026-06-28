@@ -1,5 +1,5 @@
-use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::crawler::TaskScheduler;
+use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::Storage;
@@ -8,13 +8,15 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{Mutex, Notify, RwLock};
 use url::Url;
 
 use super::postprocess_downloaded_image;
-use super::NativeDownloadState;
-use super::{download_with_retry, emit_task_log, wait_after_download_if_needed};
+use super::{
+    download_with_retry, emit_task_log, wait_after_download_if_needed,
+    wait_after_non_pool_download_if_needed,
+};
 
 static DOWNLOAD_ID_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -49,7 +51,10 @@ impl DownloadState {
     pub fn can_transition_to(self, next: DownloadState) -> bool {
         use DownloadState::*;
         match self {
-            Preparing => matches!(next, Downloading | Processing | Completed | Canceled | Failed),
+            Preparing => matches!(
+                next,
+                Preparing | Downloading | Processing | Completed | Canceled | Failed
+            ),
             // Downloading → Downloading 为 browser 流幂等重发
             Downloading => {
                 matches!(
@@ -57,8 +62,10 @@ impl DownloadState {
                     Downloading | Processing | Completed | Canceled | Failed
                 )
             }
-            Processing => matches!(next, Completed | Canceled | Failed),
-            Completed | Canceled | Failed => false,
+            Processing => matches!(next, Processing | Completed | Canceled | Failed),
+            Completed => matches!(next, Completed),
+            Canceled => matches!(next, Canceled),
+            Failed => matches!(next, Failed),
         }
     }
 }
@@ -82,6 +89,16 @@ pub struct ActiveDownloadInfo {
     /// 总字节数（HTTP Content-Length / content 已知大小）；未知时为 None → 不确定进度。
     #[serde(default)]
     pub total_bytes: Option<u64>,
+    #[serde(skip)]
+    pub surf_record_id: Option<String>,
+    #[serde(skip)]
+    pub http_headers: HashMap<String, String>,
+    #[serde(skip)]
+    pub output_album_id: Option<String>,
+    #[serde(skip)]
+    pub custom_display_name: Option<String>,
+    #[serde(skip)]
+    pub metadata_id: Option<i64>,
 }
 
 pub(super) fn emit_task_image_counts_snapshot(task_id: &str) {
@@ -166,7 +183,7 @@ pub struct DownloadQueue {
     /// 等待被 worker 取走的下载请求
     pub pending_queue: Arc<Mutex<VecDeque<DownloadRequest>>>,
     /// worker 正在处理的下载
-    pub active_downloads: Arc<Mutex<Vec<ActiveDownloadInfo>>>,
+    pub active_downloads: Arc<StdMutex<Vec<ActiveDownloadInfo>>>,
     /// 待取消的 download_id
     pub canceled_downloads: Arc<RwLock<HashSet<u64>>>,
     /// 当前存在的 worker 数量，由 worker 退出时减 1
@@ -183,7 +200,7 @@ impl DownloadQueue {
     pub fn new() -> Self {
         Self {
             pending_queue: Arc::new(Mutex::new(VecDeque::new())),
-            active_downloads: Arc::new(Mutex::new(Vec::new())),
+            active_downloads: Arc::new(StdMutex::new(Vec::new())),
             canceled_downloads: Arc::new(RwLock::new(HashSet::new())),
             total_workers: Arc::new(Mutex::new(0)),
             job_notify: Arc::new(Notify::new()),
@@ -193,14 +210,15 @@ impl DownloadQueue {
     }
 
     pub async fn cancel_retried_download(&self, failed_image_id: i64) -> bool {
-        if let Some(did) = self
-            .active_downloads
-            .lock()
-            .await
-            .iter()
-            .find(|d| matches!(d.retried_for, Some(fid) if fid == failed_image_id))
-            .map(|d| d.id)
-        {
+        let did = {
+            self.active_downloads
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|d| matches!(d.retried_for, Some(fid) if fid == failed_image_id))
+                .map(|d| d.id)
+        };
+        if let Some(did) = did {
             self.canceled_downloads.write().await.insert(did)
         } else {
             false
@@ -246,15 +264,82 @@ impl DownloadQueue {
     }
 
     pub async fn get_active_downloads(&self) -> Result<Vec<ActiveDownloadInfo>, String> {
-        let mut all = self.active_downloads.lock().await.clone();
-        all.extend(NativeDownloadState::global().get_active_downloads());
-        Ok(all)
+        Ok(self
+            .active_downloads
+            .lock()
+            .map_err(|e| format!("active_downloads lock failed: {e}"))?
+            .clone())
+    }
+
+    pub fn register_native(&self, info: ActiveDownloadInfo) -> Result<(), String> {
+        if info.url.trim().is_empty() {
+            return Err("native download url is empty".to_string());
+        }
+        self.active_downloads
+            .lock()
+            .map_err(|e| format!("active_downloads lock failed: {e}"))?
+            .push(info.clone());
+
+        eprintln!("register {:?}", info);
+        GlobalEmitter::global().emit_download_state(
+            info.id,
+            info.url.as_str(),
+            info.start_time,
+            info.plugin_id.as_str(),
+            info.state,
+            None,
+            None,
+            true,
+        );
+
+        Ok(())
+    }
+
+    pub fn get_native(&self, url: &str) -> Option<ActiveDownloadInfo> {
+        self.active_downloads
+            .lock()
+            .ok()?
+            .iter()
+            .find(|download| download.native && download.url == url)
+            .cloned()
+    }
+
+    pub fn contains_native(&self, url: &str) -> bool {
+        self.active_downloads
+            .lock()
+            .map(|downloads| {
+                downloads
+                    .iter()
+                    .any(|download| download.native && download.url == url)
+            })
+            .unwrap_or(false)
+    }
+
+    pub fn take_native(&self, url: &str) -> Option<ActiveDownloadInfo> {
+        let mut downloads = self.active_downloads.lock().ok()?;
+        let index = downloads
+            .iter()
+            .position(|download| download.native && download.url == url)?;
+        let info = downloads.remove(index);
+        self.capacity_notify.notify_waiters();
+        Some(info)
+    }
+
+    pub fn update_native_state(&self, url: &str, state: DownloadState) {
+        if let Ok(mut downloads) = self.active_downloads.lock() {
+            if let Some(download) = downloads
+                .iter_mut()
+                .find(|download| download.native && download.url == url)
+            {
+                download.state = state;
+            }
+        }
     }
 
     pub async fn is_active_downloading(&self, download_id: u64) -> bool {
         self.active_downloads
             .lock()
-            .await
+            .unwrap()
             .iter()
             .any(|d| d.id == download_id)
     }
@@ -262,7 +347,7 @@ impl DownloadQueue {
     pub async fn is_active_task_downloading(&self, task_id: &str) -> bool {
         self.active_downloads
             .lock()
-            .await
+            .unwrap()
             .iter()
             .any(|d| d.task_id == task_id)
     }
@@ -287,7 +372,7 @@ impl DownloadQueue {
     async fn is_retrying(&self, failed_image_id: i64) -> bool {
         self.active_downloads
             .lock()
-            .await
+            .unwrap()
             .iter()
             .any(|d| d.retried_for.is_some_and(|id| id == failed_image_id))
             || self
@@ -442,7 +527,14 @@ impl DownloadQueue {
             notified.as_mut().enable();
 
             let desired = Settings::global().get_max_concurrent_downloads().max(1) as usize;
-            if self.active_downloads.lock().await.len() < desired {
+            let active_pool = self
+                .active_downloads
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|d| !d.native)
+                .count();
+            if active_pool < desired {
                 if TaskScheduler::global().is_task_canceled(&task_id).await {
                     return Err("Task canceled".into());
                 }
@@ -480,11 +572,15 @@ impl DownloadQueue {
             retried_for: job.failed_image_id,
             received_bytes: 0,
             total_bytes: None,
+            surf_record_id: None,
+            http_headers: job.http_headers.clone(),
+            output_album_id: job.output_album_id.clone(),
+            custom_display_name: job.custom_display_name.clone(),
+            metadata_id: job.metadata_id,
         };
-        self.active_downloads.lock().await.push(info);
+        self.active_downloads.lock().unwrap().push(info);
 
         GlobalEmitter::global().emit_download_state(
-            &job.task_id,
             job.id,
             job.url.as_str(),
             job.download_start_time,
@@ -510,31 +606,62 @@ impl DownloadQueue {
     }
 
     pub async fn cancel_task_downloads(&self, task_id: &str) -> bool {
-        let active_ids: Vec<u64> = self
-            .active_downloads
-            .lock()
-            .await
-            .iter()
-            .filter(|a| a.task_id == task_id)
-            .map(|a| a.id)
-            .collect();
+        let (active_ids, native_entries): (Vec<u64>, Vec<ActiveDownloadInfo>) = {
+            let mut downloads = self.active_downloads.lock().unwrap();
+            let mut pool_ids = Vec::new();
+            let mut native = Vec::new();
+            let mut i = 0;
+            while i < downloads.len() {
+                if downloads[i].task_id == task_id {
+                    if downloads[i].native {
+                        native.push(downloads.remove(i));
+                        continue;
+                    }
+                    pool_ids.push(downloads[i].id);
+                }
+                i += 1;
+            }
+            (pool_ids, native)
+        };
         let pending_ids = self.get_pending_task_download_ids(task_id).await;
 
-        if active_ids.is_empty() && pending_ids.is_empty() {
+        if active_ids.is_empty() && pending_ids.is_empty() && native_entries.is_empty() {
             return false;
         }
-        let mut canceled = self.canceled_downloads.write().await;
-        active_ids
-            .iter()
-            .chain(pending_ids.iter())
-            .all(|&id| canceled.insert(id))
+        let pool_canceled = {
+            let mut canceled = self.canceled_downloads.write().await;
+            active_ids
+                .iter()
+                .chain(pending_ids.iter())
+                .all(|&id| canceled.insert(id))
+        };
+        for entry in &native_entries {
+            self.emit_state(
+                entry.id,
+                &entry.url,
+                entry.start_time,
+                &entry.plugin_id,
+                DownloadState::Canceled,
+                None,
+                None,
+                true,
+            );
+            GlobalEmitter::global().emit_download_removed(entry.id);
+        }
+        if !native_entries.is_empty() {
+            self.capacity_notify.notify_waiters();
+        }
+        pool_canceled || !native_entries.is_empty()
     }
 
     /// 按 id 切换 active_downloads 状态 + 发事件。状态机非法跳转直接拒绝（不改不发，stderr 日志）。
     /// 返回 true 表示已切换并发送事件。
     pub async fn switch_state(&self, id: u64, next: DownloadState, error: Option<&str>) -> bool {
-        let mut downloads = self.active_downloads.lock().await;
-        if let Some(download) = downloads.iter_mut().find(|t| t.id == id) {
+        let Some((url, start_time, plugin_id, retried_for, native)) = ({
+            let mut downloads = self.active_downloads.lock().unwrap();
+            let Some(download) = downloads.iter_mut().find(|t| t.id == id) else {
+                return false;
+            };
             let current = download.state;
             if !current.can_transition_to(next) {
                 eprintln!(
@@ -544,59 +671,67 @@ impl DownloadQueue {
                 return false;
             }
             download.state = next;
-            let task_id = download.task_id.clone();
-            let url = download.url.clone();
-            let start_time = download.start_time;
-            let plugin_id = download.plugin_id.clone();
-            let retried_for = download.retried_for;
-            let native = download.native;
-            drop(downloads);
+            Some((
+                download.url.clone(),
+                download.start_time,
+                download.plugin_id.clone(),
+                download.retried_for,
+                download.native,
+            ))
+        }) else {
+            return false;
+        };
 
-            if matches!(next, DownloadState::Canceled) {
-                self.canceled_downloads.write().await.retain(|&d| d != id);
-            }
-
-            GlobalEmitter::global().emit_download_state(
-                &task_id,
-                id,
-                &url,
-                start_time,
-                &plugin_id,
-                next,
-                error,
-                retried_for,
-                native,
-            );
-
-            return true;
+        if matches!(next, DownloadState::Canceled) {
+            self.canceled_downloads.write().await.retain(|&d| d != id);
         }
-        false
+
+        GlobalEmitter::global().emit_download_state(
+            id,
+            &url,
+            start_time,
+            &plugin_id,
+            next,
+            error,
+            retried_for,
+            native,
+        );
+
+        true
+    }
+
+    pub fn get_active_download(&self, id: u64) -> Option<ActiveDownloadInfo> {
+        self.active_downloads
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|d| d.id == id)
+            .cloned()
     }
 
     /// 等待一段时间后，从 active_downloads 中移除 id 对应的条目，并发送事件。
-    pub async fn wait_then_finish_download(&self, id: u64) {
-        wait_after_download_if_needed(&self.exit_notify).await;
+    pub async fn wait_then_finish_download(&self, id: u64, notify_exit: bool) {
+        let exit_notify = notify_exit.then_some(self.exit_notify.as_ref());
+        wait_after_download_if_needed(
+            std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64, 
+        exit_notify).await;
         self.finish_download(id).await;
     }
 
     async fn finish_download(&self, id: u64) {
-        let mut downloads = self.active_downloads.lock().await;
-        let task_id = downloads
-            .iter()
-            .find(|t| t.id == id)
-            .map(|t| t.task_id.clone());
+        let mut downloads = self.active_downloads.lock().unwrap();
         downloads.retain(|t| t.id != id);
         drop(downloads);
         self.capacity_notify.notify_waiters();
-        if let Some(task_id) = task_id {
-            GlobalEmitter::global().emit_download_removed(&task_id, id);
-        }
+        GlobalEmitter::global().emit_download_removed(id);
     }
 
     /// 直接发送 download-state 事件（不过状态机，用于无 active_downloads 条目的终态发送）。
     pub fn emit_state(
         &self,
-        event_task_id: &str,
         id: u64,
         url: &str,
         download_start_time: u64,
@@ -607,7 +742,6 @@ impl DownloadQueue {
         native: bool,
     ) {
         GlobalEmitter::global().emit_download_state(
-            event_task_id,
             id,
             url,
             download_start_time,
@@ -630,6 +764,11 @@ impl DownloadQueue {
     pub fn storage(&self) -> &'static crate::storage::Storage {
         Storage::global()
     }
+}
+
+pub async fn emit_removed_after_interval(info: &ActiveDownloadInfo) {
+    wait_after_non_pool_download_if_needed(info.start_time).await;
+    GlobalEmitter::global().emit_download_removed(info.id);
 }
 
 async fn download_worker_loop(dq: Arc<DownloadQueue>) {
@@ -734,7 +873,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             } else {
                 dq.switch_state(job.id, DownloadState::Canceled, None).await;
             }
-            dq.wait_then_finish_download(job.id).await;
+            dq.wait_then_finish_download(job.id, true).await;
             continue;
         }
 
@@ -783,7 +922,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         .await;
                 }
             }
-            dq.wait_then_finish_download(job.id).await;
+            dq.wait_then_finish_download(job.id, true).await;
             continue;
         }
 
@@ -810,7 +949,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                 job.metadata_id,
             )
             .await;
-            dq.wait_then_finish_download(job.id).await;
+            dq.wait_then_finish_download(job.id, true).await;
             continue;
         }
 
@@ -925,6 +1064,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             }
         }
 
-        dq.wait_then_finish_download(job.id).await;
+        dq.wait_then_finish_download(job.id, true).await;
     }
 }

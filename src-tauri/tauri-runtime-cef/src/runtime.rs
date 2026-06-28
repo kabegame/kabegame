@@ -4,7 +4,6 @@
 //! 所有 CEF browser 操作都应通过内部 `Message` 投递回主循环,避免跨线程直接
 //! 调用 CEF UI 对象。
 
-#[cfg(feature = "cef-backend")]
 mod imp {
     #![allow(non_upper_case_globals)]
     use std::{
@@ -303,6 +302,10 @@ mod imp {
         /// `CefContext::enqueue` 投入队列,由主循环 `emit_mapped_window_event`
         /// 分发给该窗口的 listeners + `RunEvent::WindowEvent`。
         CefWindowEvent(WindowId, WindowEvent),
+        /// CEF `can_close` 首次被调用,需主循环向上层发 `CloseRequested` 裁决。
+        /// 由 delegate 的 `close_requester` 投递;主循环处理后决定是否置
+        /// `close_confirmed` 并再次触发 `cef_window.close()`。
+        WindowCloseRequested(WindowId),
     }
 
     /// 类型擦除的窗口事件发射器,交给 CEF Views `WindowDelegate` 在回调里调用。
@@ -333,6 +336,9 @@ mod imp {
                 Self::Window(id, _) => f.debug_tuple("Window").field(id).finish(),
                 Self::Webview(id, _) => f.debug_tuple("Webview").field(id).finish(),
                 Self::CefWindowEvent(id, _) => f.debug_tuple("CefWindowEvent").field(id).finish(),
+                Self::WindowCloseRequested(id) => {
+                    f.debug_tuple("WindowCloseRequested").field(id).finish()
+                }
             }
         }
     }
@@ -389,6 +395,10 @@ mod imp {
         browser_view: Option<webview::CefBrowserView>,
         browser_view_attached: bool,
         quit: Arc<AtomicBool>,
+        /// `can_close` 已向主循环发出 `CloseRequested` 请求,正等待裁决。
+        close_requested: bool,
+        /// 上层未拦截,已确认允许销毁,`can_close` 下次调用直接放行。
+        close_confirmed: bool,
     }
 
     pub(crate) struct CefWindow {
@@ -518,8 +528,8 @@ mod imp {
 
     /// webview 层消息。
     ///
-    /// Phase 3 只实现启动渲染所需的导航、脚本执行、尺寸和可见性控制；
-    /// IPC、完整 cookie/devtools 等能力后续按阶段补齐。
+    /// Phase 3 起实现启动渲染所需的导航、脚本执行、尺寸和可见性控制；
+    /// IPC、devtools、download handler 与 cookie bridge 按后续阶段补齐。
     pub(crate) enum WebviewMessage {
         AddEventListener(
             WebviewEventId,
@@ -641,13 +651,12 @@ mod imp {
                     );
                 }
                 cl.append_switch(Some(&CefString::from("no-sandbox")));
+                // ANGLE 用 GL 后端(而非 Vulkan):Linux 下 Vulkan 后端在视频合成时
+                // 会触发 GPU 进程 device-lost("SharedContextState context lost via
+                // Skia" → GPU 进程崩溃 → 页面自动重载),GL 后端在视频播放时明显更稳。
                 cl.append_switch_with_value(
                     Some(&CefString::from("use-angle")),
-                    Some(&CefString::from("vulkan")),
-                );
-                cl.append_switch_with_value(
-                    Some(&CefString::from("enable-features")),
-                    Some(&CefString::from("Vulkan")),
+                    Some(&CefString::from("gl")),
                 );
                 // 禁用 zygote:Linux 下渲染进程默认从 zygote fork,**不会**重新
                 // `execute_process` → 不跑 `on_register_custom_schemes` → fork 出的
@@ -686,6 +695,16 @@ mod imp {
             center: bool,
             // 应用图标 RGBA(宽、高),用于 CEF 窗口标题栏 + 任务栏图标。
             icon: Option<Arc<(Vec<u8>, u32, u32)>>,
+            // 窗口销毁时是否直接停泵退出进程。仅独立 bootstrap 窗口为 true:
+            // 它不在 Tauri 窗口注册表里,主循环无法据此判断”已无窗口”。
+            // 真实 Tauri 窗口为 false —— 销毁时只上报 `Destroyed`,由主循环按
+            // wry 语义决定是否退出(最后一个窗口关闭才发 `ExitRequested`),
+            // 子窗口/主窗口关闭都不再无条件牵连整个进程。
+            quit_on_destroy: bool,
+            // 真实 Tauri 窗口关闭时向主循环投递 `WindowCloseRequested` 的回调。
+            // bootstrap 窗口为 `None`,直接走 CEF 握手;真实窗口为 `Some`,
+            // `can_close` 先否决、再异步询问上层,实现与 wry 一致的可拦截语义。
+            close_requester: Option<Arc<dyn Fn() + Send + Sync>>,
         }
 
         impl ViewDelegate {
@@ -750,9 +769,23 @@ mod imp {
             }
 
             fn on_window_destroyed(&self, _window: Option<&mut cef::Window>) {
-                let mut shared = self.shared.lock().expect("windowed state mutex poisoned");
-                shared.window = None;
-                shared.quit.store(true, Ordering::Release);
+                self.shared
+                    .lock()
+                    .expect("windowed state mutex poisoned")
+                    .window = None;
+                if self.quit_on_destroy {
+                    // 独立 bootstrap 窗口:不在 Tauri 注册表里,直接停泵退出。
+                    self.shared
+                        .lock()
+                        .expect("windowed state mutex poisoned")
+                        .quit
+                        .store(true, Ordering::Release);
+                } else {
+                    // 真实 Tauri 窗口:仅上报销毁。主循环会移除该窗口,并仅在
+                    // 最后一个窗口关闭时发 `ExitRequested`。单个子窗口(如 surf)
+                    // 关闭不再连带退出整个应用。
+                    (self.emitter)(WindowEvent::Destroyed);
+                }
             }
 
             /// CEF Views 窗口尺寸/位置变化 → Tauri `Resized` + `Moved`。
@@ -796,17 +829,32 @@ mod imp {
                 if !self.closable {
                     return 0;
                 }
-                let shared = self.shared.lock().expect("windowed state mutex poisoned");
-                let Some(browser_view) = shared.browser_view.as_ref() else {
-                    return 1;
+                let Some(requester) = &self.close_requester else {
+                    // bootstrap 窗口:无需询问上层,直接走 CEF 浏览器关闭握手。
+                    return try_close_browser_now(&self.shared);
                 };
-                let Some(browser) = browser_view.inner.browser() else {
-                    return 1;
+                // 真实 Tauri 窗口:实现三段式关闭:
+                //   1. 首次请求 → 否决(返回 0)+ 向主循环投递 WindowCloseRequested
+                //   2. 主循环裁决:被拦截 → 复位 close_requested;未拦截 → 置 close_confirmed + 再调 cef_window.close()
+                //   3. 已确认 → 放行给 CEF 握手(try_close_browser),最终 on_window_destroyed
+                let (close_confirmed, close_requested) = {
+                    let shared = self.shared.lock().expect("windowed state mutex poisoned");
+                    (shared.close_confirmed, shared.close_requested)
                 };
-                let Some(host) = browser.host() else {
-                    return 1;
-                };
-                host.try_close_browser()
+                if close_confirmed {
+                    // 上层已确认:走 CEF 握手(注意 try_close_browser_now 内部不持锁调用)
+                    return try_close_browser_now(&self.shared);
+                }
+                if !close_requested {
+                    // 首次:否决并向主循环异步请求
+                    self.shared
+                        .lock()
+                        .expect("windowed state mutex poisoned")
+                        .close_requested = true;
+                    requester();
+                }
+                // 等待裁决期间:继续否决
+                0
             }
 
             fn initial_bounds(&self, _window: Option<&mut cef::Window>) -> cef::Rect {
@@ -836,6 +884,28 @@ mod imp {
             fn window_runtime_style(&self) -> RuntimeStyle {
                 RuntimeStyle::ALLOY
             }
+        }
+    }
+
+    /// 向 CEF 发起浏览器关闭握手:依次取 browser_view → browser → host,
+    /// 调用 `try_close_browser()`。无 browser 时返回 `1`(视为可关)。
+    ///
+    /// **关键**:先在短临界区内取出 owned `BrowserHost`(引用计数句柄),**释放
+    /// `shared` 锁后**再调用 `try_close_browser()`。否则当 `try_close_browser()`
+    /// 同步驱动关闭、回调 `on_window_destroyed`(也要 `shared.lock()`)时,会在
+    /// 同一线程对非可重入的 `std::Mutex` 二次加锁而死锁,导致整个应用 freeze。
+    fn try_close_browser_now(shared: &Mutex<WindowedWindowShared>) -> i32 {
+        let host = {
+            let s = shared.lock().expect("windowed state mutex poisoned");
+            s.browser_view
+                .as_ref()
+                .and_then(|bv| bv.inner.browser())
+                .and_then(|b| b.host())
+            // shared 锁在此块结束时释放
+        };
+        match host {
+            Some(host) => host.try_close_browser(),
+            None => 1,
         }
     }
 
@@ -977,6 +1047,8 @@ mod imp {
                             browser_view: browser_view.map(|inner| webview::CefBrowserView { inner }),
                             browser_view_attached: false,
                             quit: self.quit.clone(),
+                            close_requested: false,
+                            close_confirmed: false,
                         })),
                         cef::Rect {
                             x: 0,
@@ -994,6 +1066,10 @@ mod imp {
                         Arc::new(|_| {}),
                         // bootstrap 窗口:不居中、无图标。
                         false,
+                        None,
+                        // bootstrap 窗口不在注册表里,关闭时直接停泵退出。
+                        true,
+                        // bootstrap 无需询问上层,close_requester = None。
                         None,
                     );
                 let window = window_create_top_level(Some(&mut window_delegate));
@@ -1102,6 +1178,10 @@ mod imp {
                     .to_string_lossy()
                     .as_ref(),
             ),
+            // cache_path 与 root_cache_path 相同是 CEF 允许的。
+            // 设置 cache_path 后全局 RequestContext 在 cef_initialize 期间同步落盘初始化,
+            // localStorage / cookies 跨会话持久化。
+            cache_path: CefString::from(cef_root_cache_dir().to_string_lossy().as_ref()),
             root_cache_path: CefString::from(cef_root_cache_dir().to_string_lossy().as_ref()),
             ..Default::default()
         };
@@ -1572,6 +1652,8 @@ mod imp {
                 browser_view: None,
                 browser_view_attached: false,
                 quit: windowed_quit(),
+                close_requested: false,
+                close_confirmed: false,
             }));
 
             let mut detached_webview = None;
@@ -1603,6 +1685,14 @@ mod imp {
                     let _ = context.enqueue(Message::CefWindowEvent(window_id, event));
                 })
             };
+            // 关闭请求投递器:can_close 首次被调用时,向主循环投递
+            // `WindowCloseRequested(window_id)`,主循环再发 CloseRequested 给上层裁决。
+            let close_requester: Arc<dyn Fn() + Send + Sync> = {
+                let context = context.clone();
+                Arc::new(move || {
+                    let _ = context.enqueue(Message::WindowCloseRequested(window_id));
+                })
+            };
             let mut delegate = WindowedTopLevelWindowDelegate::new(
                 shared.clone(),
                 cef::Rect {
@@ -1620,6 +1710,10 @@ mod imp {
                 emitter,
                 center,
                 icon,
+                // 真实 Tauri 窗口:销毁时上报 Destroyed,退出由主循环决定。
+                false,
+                // 真实 Tauri 窗口:关闭时先发 CloseRequested 询问上层。
+                Some(close_requester),
             );
             let window = window_create_top_level(Some(&mut delegate)).ok_or_else(|| {
                 eprintln!("[cef-runtime] CEF failed to create a top-level Views window");
@@ -1831,7 +1925,8 @@ mod imp {
                 }
                 message @ (Message::UserEvent(_)
                 | Message::RequestExit(_)
-                | Message::CefWindowEvent(..)) => {
+                | Message::CefWindowEvent(..)
+                | Message::WindowCloseRequested(_)) => {
                     self.context.enqueue(message)?;
                 }
                 Message::Wake => {}
@@ -1906,8 +2001,127 @@ mod imp {
                     self.handle_webview_message(webview_id, message)
                 }
                 Message::CefWindowEvent(window_id, event) => {
-                    self.emit_mapped_window_event(window_id, event, callback)
+                    let destroyed = matches!(event, WindowEvent::Destroyed);
+                    self.emit_mapped_window_event(window_id, event, callback);
+                    if destroyed {
+                        self.handle_window_destroyed(window_id, callback, control_flow);
+                    }
                 }
+                Message::WindowCloseRequested(window_id) => {
+                    self.handle_window_close_requested(window_id, callback);
+                }
+            }
+        }
+
+        /// 某个 CEF Views 窗口已销毁(用户点 X 或 `window.close()` 都汇聚到
+        /// `on_window_destroyed`)。按 `tauri-runtime-wry` 语义处理:从注册表移除
+        /// 该窗口及其 webview;仅当已无任何窗口时才发 `RunEvent::ExitRequested`,
+        /// 未被上层拦截才真正退出消息循环。这样关闭单个子窗口/主窗口都不会无条件
+        /// 终止进程,是否退出交由 Tauri 应用层(可 `prevent_exit`)决定。
+        fn handle_window_destroyed<F: FnMut(RunEvent<T>) + 'static>(
+            &self,
+            window_id: WindowId,
+            callback: &mut F,
+            control_flow: &mut ControlFlow,
+        ) {
+            let Some(state) = self.windows.0.borrow_mut().remove(&window_id) else {
+                return;
+            };
+            // 连带回收该窗口的 webview 状态(协议表由 on_browser_destroyed 自清)。
+            {
+                let mut webviews = self.webviews.0.borrow_mut();
+                for webview_id in &state.webviews {
+                    webviews.remove(webview_id);
+                }
+            }
+            if self.windows.0.borrow().is_empty() {
+                let (tx, rx) = channel();
+                callback(RunEvent::ExitRequested { code: None, tx });
+                if !matches!(rx.try_recv(), Ok(ExitRequestedEventAction::Prevent)) {
+                    *control_flow = ControlFlow::Exit;
+                }
+            }
+        }
+
+        /// 按 `tauri-runtime-wry` 语义处理关窗请求:
+        ///
+        /// 1. 调用该窗口的所有 per-window listeners + `RunEvent::WindowEvent::CloseRequested`
+        /// 2. 读取 `signal_tx` 裁决:被拦截则复位状态(窗口留存);未被拦截则置
+        ///    `close_confirmed=true` 并调 `cef_window.close()` 重进 `can_close`
+        ///    的「已确认」分支,完成真正的 CEF 销毁握手。
+        ///
+        /// **锁序安全**:在调用 `cef_window.close()` 前已释放 `shared` mutex,
+        /// 避免 `close()` 同步回调 `can_close` 时再次锁定同一 Mutex 造成死锁。
+        fn handle_window_close_requested<F: FnMut(RunEvent<T>) + 'static>(
+            &self,
+            window_id: WindowId,
+            callback: &mut F,
+        ) {
+            let (tx, rx) = channel::<bool>();
+            // 取出 label / shared,并把 listeners **临时 move 出**(置空),以便在
+            // **不持有 self.windows 借用**的情况下调用它们。
+            //
+            // 必须如此:Tauri 注册的 per-window listener 里含 crawler 的
+            // `window.hide()` —— 它在主线程上同步走 `send` → `handle_window_message`
+            // → `self.windows.0.borrow_mut()`。若我们调用 listener 时仍持有 windows
+            // 的不可变借用,就会 RefCell 双借用 panic。wry 因 listeners 是
+            // `Arc<Mutex<_>>` 可 clone 句柄后丢借用;此处 listeners 非 Arc,故改用
+            // mem::take。
+            let (label, shared, listeners) = {
+                let mut windows = self.windows.0.borrow_mut();
+                let Some(state) = windows.get_mut(&window_id) else {
+                    return;
+                };
+                let CefWindowKind::Windowed(ref w) = state.kind;
+                let shared = w.shared.clone();
+                let label = state.label.clone();
+                let listeners = std::mem::take(&mut state.listeners);
+                (label, shared, listeners)
+                // windows 借用在此块结束时释放
+            };
+
+            // 不持 windows 借用地分发 CloseRequested
+            for (_, listener) in &listeners {
+                listener(&WindowEvent::CloseRequested {
+                    signal_tx: tx.clone(),
+                });
+            }
+
+            // 放回 listeners:其间若有 AddEventListener 追加到(已被清空的)列表,
+            // 合并保留,避免丢失。
+            {
+                let mut windows = self.windows.0.borrow_mut();
+                if let Some(state) = windows.get_mut(&window_id) {
+                    let added = std::mem::replace(&mut state.listeners, listeners);
+                    state.listeners.extend(added);
+                }
+            }
+
+            // callback 同样在无 windows 借用下调用
+            callback(RunEvent::WindowEvent {
+                label,
+                event: WindowEvent::CloseRequested { signal_tx: tx },
+            });
+
+            let prevented = matches!(rx.try_recv(), Ok(true));
+
+            let cef_window_opt = {
+                let mut s = shared.lock().expect("windowed state mutex poisoned");
+                if prevented {
+                    // 上层拦截:复位状态,窗口留存,下次关闭仍走完整流程
+                    s.close_requested = false;
+                    None
+                } else {
+                    // 未被拦截:确认销毁
+                    s.close_confirmed = true;
+                    s.window.as_ref().map(|w| w.inner.clone())
+                }
+                // mutex guard 在此块结束时释放
+            };
+
+            if let Some(cef_window) = cef_window_opt {
+                // 锁已释放,再调 close() 不会与 can_close 形成死锁
+                cef_window.close();
             }
         }
 
@@ -2268,8 +2482,15 @@ mod imp {
     }
 
     fn apply_windowed_window_set(window: &mut WindowedWindowState, set: WindowSet) {
-        let shared = window.shared.lock().expect("windowed state mutex poisoned");
-        let cef_window = shared.window.as_ref().map(|window| &window.inner);
+        // 取出 owned `cef::Window`(引用计数 clone)后**立即释放 `shared` 锁**:
+        // 后续所有 CEF 窗口操作(hide/show/maximize/close…)都不持锁调用,避免它们
+        // 同步回调(如 on_window_bounds_changed / on_window_destroyed,均要 shared.lock())
+        // 时在同一线程对非可重入 Mutex 二次加锁而死锁。需要写 shared 的分支(Destroy)
+        // 在分支内用一次性短锁。
+        let cef_window = {
+            let shared = window.shared.lock().expect("windowed state mutex poisoned");
+            shared.window.as_ref().map(|w| w.inner.clone())
+        };
         match set {
             WindowSet::Resizable(v) => window.resizable = v,
             WindowSet::Enabled(_) => {}
@@ -2277,49 +2498,64 @@ mod imp {
             WindowSet::Minimizable(v) => window.minimizable = v,
             WindowSet::Closable(v) => window.closable = v,
             WindowSet::Title(v) => {
-                if let Some(cef_window) = cef_window {
+                if let Some(ref cef_window) = cef_window {
                     cef_window.set_title(Some(&CefString::from(v.as_str())));
                 }
                 window.title = v;
             }
             WindowSet::Maximize => {
-                if let Some(cef_window) = cef_window {
+                if let Some(ref cef_window) = cef_window {
                     cef_window.maximize();
                 }
                 window.maximized = true;
                 window.minimized = false;
             }
             WindowSet::Unmaximize => {
-                if let Some(cef_window) = cef_window {
+                if let Some(ref cef_window) = cef_window {
                     cef_window.restore();
                 }
                 window.maximized = false;
             }
             WindowSet::Minimize => {
-                if let Some(cef_window) = cef_window {
+                if let Some(ref cef_window) = cef_window {
                     cef_window.minimize();
                 }
                 window.minimized = true;
             }
             WindowSet::Unminimize => {
-                if let Some(cef_window) = cef_window {
+                if let Some(ref cef_window) = cef_window {
                     cef_window.restore();
                 }
                 window.minimized = false;
             }
             WindowSet::Show => {
-                if let Some(cef_window) = cef_window {
+                if let Some(ref cef_window) = cef_window {
                     cef_window.show();
                 }
                 window.visible = true;
             }
             WindowSet::Hide => {
-                if let Some(cef_window) = cef_window {
+                if let Some(ref cef_window) = cef_window {
                     cef_window.hide();
                 }
                 window.visible = false;
             }
-            WindowSet::Close | WindowSet::Destroy => {
+            WindowSet::Close => {
+                // 可拦截关闭:不强制设 close_confirmed,走 CloseRequested 门。
+                // 锁已在上方释放,close() 不持锁调用。
+                if let Some(cef_window) = cef_window {
+                    cef_window.close();
+                }
+                window.visible = false;
+            }
+            WindowSet::Destroy => {
+                // 强制销毁(不可拦截):用一次性短锁置 close_confirmed 跳过
+                // CloseRequested,随后不持锁调用 close()。
+                window
+                    .shared
+                    .lock()
+                    .expect("windowed state mutex poisoned")
+                    .close_confirmed = true;
                 if let Some(cef_window) = cef_window {
                     cef_window.close();
                 }
@@ -2328,7 +2564,7 @@ mod imp {
             WindowSet::Decorations(v) => window.decorated = v,
             WindowSet::AlwaysOnBottom(_) => {}
             WindowSet::AlwaysOnTop(v) => {
-                if let Some(cef_window) = cef_window {
+                if let Some(ref cef_window) = cef_window {
                     cef_window.set_always_on_top(i32::from(v));
                 }
                 window.always_on_top = v;
@@ -2337,7 +2573,7 @@ mod imp {
             WindowSet::ContentProtected(_) => {}
             WindowSet::Size(v) => {
                 let size = runtime_size_to_physical(v);
-                if let Some(cef_window) = cef_window {
+                if let Some(ref cef_window) = cef_window {
                     cef_window.set_bounds(Some(&cef::Rect {
                         x: window.position.map(|p| p.x).unwrap_or(0),
                         y: window.position.map(|p| p.y).unwrap_or(0),
@@ -2350,7 +2586,7 @@ mod imp {
             WindowSet::MinSize(_) | WindowSet::MaxSize(_) | WindowSet::SizeConstraints(_) => {}
             WindowSet::Position(v) => {
                 let position = runtime_position_to_physical(v);
-                if let Some(cef_window) = cef_window {
+                if let Some(ref cef_window) = cef_window {
                     cef_window.set_bounds(Some(&cef::Rect {
                         x: position.x,
                         y: position.y,
@@ -2361,13 +2597,13 @@ mod imp {
                 window.position = Some(position);
             }
             WindowSet::Fullscreen(v) => {
-                if let Some(cef_window) = cef_window {
+                if let Some(ref cef_window) = cef_window {
                     cef_window.set_fullscreen(i32::from(v));
                 }
                 window.fullscreen = v;
             }
             WindowSet::Focus => {
-                if let Some(cef_window) = cef_window {
+                if let Some(ref cef_window) = cef_window {
                     cef_window.activate();
                 }
                 window.focused = true;
@@ -2387,5 +2623,4 @@ mod imp {
     }
 }
 
-#[cfg(feature = "cef-backend")]
 pub use imp::*;

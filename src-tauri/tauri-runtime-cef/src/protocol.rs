@@ -4,10 +4,19 @@
 //! asynchronous handlers on [`tauri_runtime::webview::PendingWebview`]. This
 //! module translates CEF requests into `http` requests, invokes those handlers,
 //! then exposes the buffered response through CEF's streaming resource API.
+//!
+//! ## 协议工厂架构(全局动态分发)
+//!
+//! 每个 scheme 注册**一个**进程级全局 factory(`GlobalSchemeHandlerFactory`)。
+//! factory 的 `create(browser)` 回调通过 `browser.identifier()`(i32)在
+//! `PROTOCOL_REGISTRY` 中查出对应 webview 的 label 和 `ProtocolHandler`,再
+//! 构造 `CefResourceHandler`。注册表在 `on_browser_created` 时填入,在
+//! `on_browser_destroyed` 时清除,保证请求期 label 始终正确。
 
 use std::{
     borrow::Cow,
-    sync::{Arc, Mutex},
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use cef::{self, *};
@@ -16,11 +25,40 @@ use tauri_runtime::{webview::PendingWebview, Error, Result, UserEvent};
 
 use crate::Cef;
 
-type ResponseBody = Cow<'static, [u8]>;
-type ProtocolHandler = dyn Fn(&str, HttpRequest<Vec<u8>>, Box<dyn FnOnce(HttpResponse<ResponseBody>) + Send>)
+pub(crate) type ResponseBody = Cow<'static, [u8]>;
+pub(crate) type ProtocolHandler = dyn Fn(&str, HttpRequest<Vec<u8>>, Box<dyn FnOnce(HttpResponse<ResponseBody>) + Send>)
     + Send
     + Sync
     + 'static;
+
+/// 一个 webview 的协议信息,在 `on_browser_created` 时以 browser id 为键写入注册表。
+pub(crate) struct WebviewProtocols {
+    pub(crate) label: String,
+    pub(crate) schemes: HashMap<String, Arc<ProtocolHandler>>,
+}
+
+// browser id (i32) -> 该 browser 对应的 webview label + 各 scheme handler
+static PROTOCOL_REGISTRY: OnceLock<Mutex<HashMap<i32, WebviewProtocols>>> = OnceLock::new();
+// 已向 CEF 全局注册过 factory 的 scheme 集合(每 scheme 只注册一次)
+static REGISTERED_SCHEMES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn registry() -> &'static Mutex<HashMap<i32, WebviewProtocols>> {
+    PROTOCOL_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn registered_schemes() -> &'static Mutex<HashSet<String>> {
+    REGISTERED_SCHEMES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// 将 browser id 与对应 webview 的协议信息关联。由 `on_browser_created` 调用。
+pub(crate) fn insert_browser_protocols(id: i32, protocols: WebviewProtocols) {
+    registry().lock().unwrap().insert(id, protocols);
+}
+
+/// 清除 browser id 对应的协议信息。由 `on_browser_destroyed` 调用。
+pub(crate) fn remove_browser_protocols(id: i32) {
+    registry().lock().unwrap().remove(&id);
+}
 
 #[derive(Default)]
 struct ResponseState {
@@ -30,23 +68,26 @@ struct ResponseState {
     open_in_progress: bool,
 }
 
+// 全局动态分发 factory:每个 scheme 只注册一个实例,请求期按 browser id 查 label/handler。
 wrap_scheme_handler_factory! {
-    struct CefSchemeHandlerFactory {
-        webview_label: String,
-        protocol: Arc<ProtocolHandler>,
-    }
+    struct GlobalSchemeHandlerFactory { scheme: String }
 
     impl SchemeHandlerFactory {
         fn create(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
             _scheme_name: Option<&CefString>,
             _request: Option<&mut cef::Request>,
         ) -> Option<ResourceHandler> {
+            let id = browser?.identifier();
+            let guard = registry().lock().ok()?;
+            let entry = guard.get(&id)?;
+            let protocol = entry.schemes.get(&self.scheme)?.clone();
+            let label = entry.label.clone();
             Some(CefResourceHandler::new(
-                self.webview_label.clone(),
-                self.protocol.clone(),
+                label,
+                protocol,
                 Arc::new(Mutex::new(ResponseState::default())),
             ))
         }
@@ -222,42 +263,42 @@ wrap_resource_handler! {
     }
 }
 
-/// Register every protocol supplied by Tauri for one webview.
+/// 从 `pending` 中取出所有协议 handler,向 CEF 全局注册各 scheme 的 factory(每个
+/// scheme 只注册一次),返回 `(webview_label, schemes_map)` 供调用方通过
+/// `on_browser_created` delegate 写入 [`PROTOCOL_REGISTRY`]。
 ///
-/// Factories are registered on the webview's **own** [`RequestContext`], not the
-/// global one. The global registry keeps only the last factory per scheme, so
-/// with multiple webviews (e.g. `main` + `crawler`) every request would be
-/// mislabeled as the last-registered webview — breaking Tauri's per-webview ACL
-/// resolution. A per-context registration keeps each webview's label correct.
-pub(crate) fn register_webview_protocols<T: UserEvent>(
+/// 该函数在 CEF UI 线程的窗口创建任务中调用(`post_cef_ui_task` 已等待
+/// `WINDOWED_CONTEXT_INITIALIZED`),满足全局注册时序要求。
+pub(crate) fn take_webview_protocols<T: UserEvent>(
     pending: &mut PendingWebview<T, Cef<T>>,
-    context: &mut cef::RequestContext,
-) -> Result<()> {
+) -> Result<(String, HashMap<String, Arc<ProtocolHandler>>)> {
     let label = pending.label.clone();
-    let protocols = std::mem::take(&mut pending.uri_scheme_protocols);
-    for (scheme, protocol) in protocols {
-        register_protocol(context, &label, &scheme, protocol)?;
+    let mut schemes: HashMap<String, Arc<ProtocolHandler>> = HashMap::new();
+    for (scheme, protocol) in std::mem::take(&mut pending.uri_scheme_protocols) {
+        ensure_global_scheme_factory(&scheme)?;
+        schemes.insert(scheme, Arc::from(protocol));
     }
-    Ok(())
+    Ok((label, schemes))
 }
 
-fn register_protocol(
-    context: &mut cef::RequestContext,
-    webview_label: &str,
-    scheme: &str,
-    protocol: Box<ProtocolHandler>,
-) -> Result<()> {
-    let mut factory = CefSchemeHandlerFactory::new(webview_label.to_string(), Arc::from(protocol));
-    let registered = context.register_scheme_handler_factory(
+/// 向 CEF 全局注册 `scheme` 的 factory,首次调用才实际注册,重复调用为 no-op。
+fn ensure_global_scheme_factory(scheme: &str) -> Result<()> {
+    let mut set = registered_schemes().lock().unwrap();
+    if set.contains(scheme) {
+        return Ok(());
+    }
+    let mut factory = GlobalSchemeHandlerFactory::new(scheme.to_string());
+    let ok = cef::register_scheme_handler_factory(
         Some(&CefString::from(scheme)),
         None,
         Some(&mut factory),
     );
-    if registered == 1 {
+    if ok == 1 {
+        set.insert(scheme.to_string());
         Ok(())
     } else {
         Err(Error::CreateWebview(Box::new(std::io::Error::other(
-            format!("CEF failed to register the {scheme:?} protocol"),
+            format!("CEF failed to register global {scheme:?} scheme factory"),
         ))))
     }
 }

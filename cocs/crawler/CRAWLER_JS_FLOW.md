@@ -8,13 +8,15 @@
 
 ```
 用户启动插件任务
-    → Scheduler 解析插件、构建 JsTaskContext、assign_task
-    → setup_js_task：WebView navigate 到 base_url
+    → Scheduler 解析插件、构建 JsTaskContext、register_session(task_id)
+    → AppCrawlerWebViewHandler 创建 label=`crawler-<task_id>` 的独立 WebView 窗口并加载 base_url
     → 页面加载 → 每次加载都会执行 initialization_script（bootstrap.js）
     → bootstrap: crawl_get_context → crawl_page_ready → bindApi → crawl_run_script
-    → Rust: try_dispatch_script → eval(crawl.js 包装)
+    → Rust: 按调用方 window label 找 session → try_dispatch_script → eval(crawl.js 包装)
     → crawl.js 根据 ctx.pageLabel 分支执行（initial / posts / detail / exit）
     → 脚本调用 ctx.to() / ctx.back() → Rust 更新上下文并 navigate → 新页面再次走 bootstrap → 循环
+    → 脚本调用 ctx.exit()/ctx.error() 或任务取消 → session completion 唤醒 worker
+    → worker 统一更新任务终态、清理 page_stack、销毁 crawler-<task_id> 窗口、remove_session
 ```
 
 ---
@@ -23,26 +25,27 @@
 
 | 层级 | 文件路径 | 作用 |
 |------|----------|------|
-| 任务入口 | `src-tauri/kabegame-core/src/crawler/scheduler.rs` | 解析插件、构建 JsTaskContext、assign_task、调用 setup_js_task |
+| 任务入口 | `src-tauri/kabegame-core/src/crawler/scheduler.rs` | 解析插件、构建 JsTaskContext、注册 session、委托 app 建窗并 await completion |
 | 插件脚本读取 | `src-tauri/kabegame-core/src/plugin/mod.rs` | `read_plugin_js_script(zip_path)` 从 .kgpg 内读 `crawl.js` |
-| 窗口状态 | `src-tauri/kabegame-core/src/crawler/webview.rs` | CrawlerWindowState、JsTaskContext、assign_task、set_page_ready、try_dispatch_script |
-| 窗口创建与注入 | `src-tauri/kabegame/src/startup.rs` | create_crawler_window（initialization_script 注入 bootstrap.js）、AppCrawlerWebViewHandler::setup_js_task（navigate） |
+| session 状态 | `src-tauri/kabegame-core/src/crawler/webview.rs` | CrawlerSession、session 注册表、JsTaskContext、completion、label 工具、set_page_ready、try_dispatch_script |
+| 窗口创建与注入 | `src-tauri/kabegame/src/startup.rs` | create_crawler_task_window（initialization_script 注入 bootstrap.js）、AppCrawlerWebViewHandler::create_task_window / destroy_task_window |
 | Bootstrap 脚本 | `src-tauri/kabegame/resources/bootstrap.js` | 每次页面加载执行：get_context → page_ready → bindApi → run_script |
-| Tauri 命令 | `src-tauri/kabegame/src/commands/crawler.rs` | crawl_get_context、crawl_page_ready、crawl_run_script、crawl_to、crawl_back、crawl_task_log 等 |
-| 权限 | `src-tauri/kabegame/capabilities/crawler.json` | crawler 窗口/webview 的 Tauri 权限（remote URLs、events、window） |
+| Tauri 命令 | `src-tauri/kabegame/src/commands/crawler.rs` | 从调用方 `crawler-<task_id>` label 路由到 session；crawl_get_context、crawl_page_ready、crawl_run_script、crawl_to、crawl_back、crawl_task_log 等 |
+| 权限 | `src-tauri/kabegame/capabilities/crawler.json` | `crawler-*` 窗口/webview 的 Tauri 权限（remote URLs、events、window） |
 | 插件脚本 | `src-crawler-plugins/plugins/<id>/crawl.js` | 业务逻辑，按 ctx.pageLabel 分支（initial/posts/detail/exit） |
 
 ---
 
 ## 3. 详细流程（按执行顺序）
 
-### 3.1 应用启动：创建 Crawler 窗口并注入 Bootstrap
+### 3.1 应用启动：注册 WebView handler
 
 - **文件**：`src-tauri/kabegame/src/lib.rs`、`src-tauri/kabegame/src/startup.rs`
-- **时机**：桌面端在 `setup` 中调用 `init_crawler_window(app_handle)`。
+- **时机**：桌面端在 `setup` 中调用 `init_crawler_webview_handler(app_handle)`。
 - **逻辑**：
-  - `create_crawler_window`：用 `WebviewWindowBuilder::new(..., "crawler", WebviewUrl::External(about_blank))` 创建窗口；
-  - **Bootstrap 注入**：`initialization_script(include_str!("../resources/bootstrap.js"))`，即 **每次该 WebView 加载任意文档（包括 about:blank 与后续 navigate 的页面）都会先执行 bootstrap.js**。
+  - 启动时不再创建常驻 crawler 窗口；
+  - `kabegame-core` 只持有 `CrawlerWebViewHandler` trait，不依赖 Tauri；
+  - worker 取到 JS 任务时委托 app 层创建 `crawler-<task_id>` 窗口，并注入 `bootstrap.js`。
 - **说明**：bootstrap 是编译期嵌入的字符串，修改后需重新编译；crawl.js 来自插件包，运行时由 Rust 读入并传给 eval。
 
 ### 3.2 任务创建与上下文分配（Rust）
@@ -53,14 +56,14 @@
   2. `read_plugin_js_script(&plugin_file)` 从插件 ZIP 内读取 **crawl.js** 全文（`src-tauri/kabegame-core/src/plugin/mod.rs` 中实现，读 ZIP 内 `crawl.js` 条目）。
   3. 若 `js_script.is_some()`（桌面）则走 WebView 分支：
      - 构建 **JsTaskContext**（含 task_id、plugin_id、**crawl_js**、merged_config、base_url、**page_label: "initial"**、page_state、state 等）。
-     - `crawler_window_state().assign_task(context).await`：
-       - 占位 semaphore，将 context 存入 `current_task`；
-       - `page_ready_tx.send(false)`，便于后续等待“页面就绪”。
-     - `get_webview_handler().setup_js_task(&task_id, &base_url)`：
+     - `register_session(&task_id, context).await`：
+       - 把 `CrawlerSession` 放入全局 session 注册表；
+       - 返回 `oneshot::Receiver<TaskCompletion>`，worker 用它等待 JS 任务完成。
+     - `get_webview_handler().create_task_window(&task_id, &base_url)`：
        - 实现位于 `src-tauri/kabegame/src/startup.rs` 的 `AppCrawlerWebViewHandler`；
-       - 获取 crawler 窗口并 **navigate(base_url)**（若为空则 about:blank）；
+       - 创建 label 为 `crawler-<task_id>` 的隐藏窗口，注入 bootstrap 并加载 `base_url`（若为空则 about:blank）；
        - 可选根据设置自动 show/focus 窗口。
-  4. 返回 `TaskOutcome::HandledOffToWebView`，任务由 WebView 端接管。
+  4. worker `await completion_rx`，任务完成/失败/取消后调用 `destroy_task_window(task_id)` 并 `remove_session(task_id)`。
 
 ### 3.3 页面加载后：Bootstrap 执行（每页一次）
 
@@ -69,17 +72,17 @@
 - **步骤**：
   1. **防重入**：`if (window.__crawl_starting__) return;`，`window.__crawl_starting__ = true`。
   2. **取上下文**：`ctx = await invoke("crawl_get_context")`。
-     - 对应 Rust：`crawler.rs` 中 `crawl_get_context()`，从 `crawler_window_state().get_context().await` 取当前任务上下文并返回给前端（含 crawl_js、pageLabel、state、pageState 等）。
+     - 对应 Rust：`crawler.rs` 中 `crawl_get_context(webview)`，从调用方窗口 label 解析 task_id，再通过 `get_session(task_id)` 取上下文并返回给前端（含 crawl_js、pageLabel、state、pageState 等）。
   3. **校验**：`if (!ctx || !ctx.crawlJs) return;`，`ctx.state` 默认 `{}`。
   4. **通知就绪**：`await invoke("crawl_page_ready")`。
-     - Rust：`crawl_page_ready()` 里 `state.set_page_ready(false)` 再 `set_page_ready(true)`，使等待 `wait_page_ready` 的调用方（如有）继续；同时 **script_dispatched** 在 `set_page_ready(false)` 时被置 false，允许本页再次派发脚本。
+     - Rust：`crawl_page_ready(webview)` 里对该 session `set_page_ready(false)` 再 `set_page_ready(true)`，使等待 `wait_page_ready` 的调用方（如有）继续；同时 **script_dispatched** 在 `set_page_ready(false)` 时被置 false，允许本页再次派发脚本。
   5. **绑定 API**：`bindApiToContext(ctx, createApi(ctx))`，把 log、sleep、to、back、updateState、waitForSelector、clearData 等挂到 `ctx` 上。
   6. **挂到 window**：`window.__crawl_ctx__ = ctx`。
   7. **派发插件脚本**：`await invoke("crawl_run_script")`。
-     - Rust：`crawl_run_script(app)`：
+     - Rust：`crawl_run_script(webview)`：
        - `try_dispatch_script()`：若已在本页派发过则直接 return（同一页只执行一次 crawl.js）；
-       - 从 state 取当前 `ctx`，用 **ctx.crawl_js** 拼成一段 IIFE，内层 `const ctx = window.__crawl_ctx__`，外层 try/catch 里执行插件脚本，异常时 `ctx.error(detail)`；
-       - `crawler_window.eval(wrapped_script)` 在当前页面执行。
+       - 从 session 取当前 `ctx`，用 **ctx.crawl_js** 拼成一段 IIFE，内层 `const ctx = window.__crawl_ctx__`，外层 try/catch 里执行插件脚本，异常时 `ctx.error(detail)`；
+       - `webview.eval(wrapped_script)` 在调用方窗口当前页面执行。
   8. 最后 `delete window.__TAURI_INTERNALS__`（按需），`start().catch(...)` 捕获 bootstrap 自身错误。
 
 **重要**：每次 **navigate** 都会产生新文档，因此都会重新执行上述 bootstrap 流程；`page_label` / `page_state` / `state` 由 Rust 在 `crawl_to` / `crawl_back` 中更新并持久化，所以插件脚本通过 `ctx.pageLabel` 等即可恢复“当前步骤”。
@@ -102,8 +105,8 @@
   - 解析 URL，解析 page_label / page_state；
   - 在 **page_stacks** 中：先更新栈顶的 page_label/page_state，再 push 新条目（target_url, new_page_label, new_page_state）；
   - `patch_context_for_task`：更新 current_url、page_label、page_state、resume_mode: "after_navigation"；
-  - `state.set_page_ready(false)`；
-  - `crawler_window.navigate(parsed_url)`；
+  - `session.set_page_ready(false)`；
+  - 调用方 `webview.navigate(parsed_url)`；
   - 新页面加载 → 再次执行 bootstrap → get_context 拿到更新后的 page_label/page_state → run_script 执行 crawl.js 对应分支。
 - **ctx.back(count)**：
   - 从 page_stacks 弹出 count 个条目，取新的栈顶的 url、page_label、page_state；
@@ -112,16 +115,21 @@
 
 ### 3.6 任务结束与释放
 
-- **文件**：`src-tauri/kabegame/src/commands/crawler.rs`（`crawl_exit`、`crawl_error`）、`src-tauri/kabegame-core/src/crawler/webview.rs`（`release_task`）。
+- **文件**：`src-tauri/kabegame/src/commands/crawler.rs`（`crawl_exit`、`crawl_error`）、`src-tauri/kabegame-core/src/crawler/webview.rs`（`CrawlerSession::complete`）、`src-tauri/kabegame-core/src/crawler/task_scheduler.rs`（worker 统一收尾）。
 - 脚本调用 `ctx.exit()` 或 `ctx.error(msg)`：
-  - 更新任务状态、发送事件、移除 page_stack、**release_task** 释放 current_task 与 semaphore，并 `page_ready_tx.send(false)`。
-- 之后 crawler 窗口可能仍打开，但无任务占用；下次新任务会再次 assign_task 并 navigate。
+  - 命令按调用方 label 找 session；
+  - `crawl_exit` 发送 `TaskCompletion { status: Completed }`；
+  - `crawl_error` 根据错误内容发送 `Failed` 或 `Canceled`；
+  - worker 被 completion 唤醒后统一 transition、发送事件、移除 page_stack、销毁 `crawler-<task_id>` 窗口并移除 session。
+- 取消任务时，`TaskScheduler::cancel_task` 会取消下载并对对应 session 发送 `Canceled` completion，worker 按取消路径收尾。
 
 ---
 
 ## 4. 关键状态与约束
 
-- **单任务占窗**：同一时刻 crawler 窗口只服务一个任务（semaphore + current_task）；assign_task 时若拿不到 permit 会失败。
+- **每任务独立窗口**：每个 JS 任务创建一个 `crawler-<task_id>` WebView 窗口；窗口句柄不存入 core，core 只保存 session 状态。
+- **并发模型**：JS 任务全程占用一个 task worker 槽，与 Rhai 任务一致；并发由 `max_concurrent_tasks` 控制，不再有 crawler WebView 专用 `Semaphore(1)`。
+- **命令路由**：crawler IPC 命令通过 Tauri 注入的调用方 `WebviewWindow` 解析 label，再从 session 注册表取上下文；native 操作直接作用于该 `webview`。
 - **每页只派发一次脚本**：`script_dispatched` 在 set_page_ready(false) 时清零，在 crawl_run_script 中通过 try_dispatch_script 置 true，保证同一文档内只 eval 一次 crawl.js。
 - **Bootstrap 每页必跑**：每次 navigate 都会重新执行 initialization_script(bootstrap.js)，因此不要依赖“上一页的 JS 变量或定时器”；所有跨页状态用 ctx.state / page_state 和 Rust 侧 context 维护。
 - **crawl.js 来源**：由 Rust 从**插件 .kgpg 文件**内读取（ZIP 条目 `crawl.js`）。任务请求可带 `plugin_file_path`（临时 .kgpg 路径）或仅 `plugin_id`（从已安装缓存找对应 .kgpg）。开发时修改 `src-crawler-plugins/plugins/<id>/crawl.js` 后，需重新打包或通过能提供该 .kgpg 的流程启动任务，脚本内容才会更新。
@@ -132,7 +140,13 @@
 
 - **crawler 相关命令**（在 `lib.rs` 的 invoke_handler 中注册）：  
   `crawl_get_context`、`crawl_page_ready`、`crawl_run_script`、`crawl_to`、`crawl_back`、`crawl_task_log`、`crawl_add_progress`、`crawl_download_image`、`crawl_update_state`、`crawl_update_page_state`、`crawl_exit`、`crawl_error`、`crawl_clear_site_data`、`show_crawler_window` 等。
-- **crawler 窗口** 使用 capability：`src-tauri/kabegame/capabilities/crawler.json`，允许的 remote urls 为 `https://*.*`、`http://*.*`，权限包括 core:event、core:window:allow-hide 等；确保加载目标站时 invoke 可被允许。
+- **crawler 窗口** 使用 capability：`src-tauri/kabegame/capabilities/crawler.json`，窗口/webview 匹配 `crawler-*`，允许的 remote urls 为 `https://*.*`、`http://*.*`，权限包括 core:event、core:window:allow-hide 等；确保加载目标站时 invoke 可被允许。
+
+### 5.1 `ctx.downloadImage` 与原生下载
+
+WebView 后端的 `ctx.downloadImage(url, opts)` 不再由 APP 侧 HTTP downloader 主动请求目标 URL。命令入口会先解析相对 URL、写入 metadata（得到 `metadata_id`）、合并任务 header 快照，并把这些入库参数登记到 `DownloadQueue.active_downloads` 的 `ActiveDownloadInfo { native: true, ... }`；随后直接调用调用方 crawler WebView 的原生下载能力（Linux CEF 为 `start_download(webview.label(), url)`），避免连续下载时多次导航互相打断。请求由浏览器原生下载栈发起，自动沿用浏览器 Cookie、站点会话与 Referer 语义。下载 URL 可能发生 30x 跳转，native download 的匹配 identity 使用 CEF `DownloadItem::original_url()`，避免最终 CDN URL 与脚本传入 URL 不一致时丢失 metadata/name/header。
+
+浏览器下载完成后，crawler 窗口的 `on_download` 回调按 URL 从 `active_downloads` 取回对应 native 项，将落盘文件、header 快照、展示名、`metadata_id` 和输出画册一起交给下载器统一后处理入库。这样后续去重、缩略图、画册写入、任务计数和事件广播仍复用下载器主流程，`get_active_downloads` 也能从同一列表返回池下载与 native 下载。
 
 ---
 

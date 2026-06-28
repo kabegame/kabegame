@@ -183,7 +183,6 @@ pub enum DaemonEvent {
     /// 下载状态事件
     #[serde(rename_all = "camelCase")]
     DownloadState {
-        task_id: String,
         id: u64,
         url: String,
         start_time: u64,
@@ -359,7 +358,7 @@ pub enum DaemonEvent {
 
     /// 下载条目移除（后端 wait 完成后发出，前端据此从活跃列表删除）
     #[serde(rename_all = "camelCase")]
-    DownloadRemoved { task_id: String, id: u64 },
+    DownloadRemoved { id: u64 },
 }
 
 /// 包装在 Arc 中的 Daemon 事件，用于零拷贝传递

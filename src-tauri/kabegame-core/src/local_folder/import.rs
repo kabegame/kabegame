@@ -3,7 +3,7 @@ use crate::crawler::downloader::compress::{
     compress_video_for_preview, generate_compatible_image, generate_compatible_video,
 };
 use crate::crawler::downloader::{
-    compute_file_hash, generate_thumbnail, wait_after_non_pool_download_if_needed,
+    compute_file_hash, generate_thumbnail, wait_after_download_if_needed, wait_after_non_pool_download_if_needed
 };
 use crate::emitter::GlobalEmitter;
 use crate::image_type::{is_video_by_path, mime_type_from_path};
@@ -48,7 +48,7 @@ pub async fn import_local_file(
             let image_ids = vec![image_id.clone()];
             GlobalEmitter::global().emit_album_images_change("add", &album_ids, &image_ids);
         }
-        wait_after_non_pool_download_if_needed(import_start_time).await;
+        wait_after_download_if_needed(import_start_time, None).await;
         return Ok(image_id);
     }
 
@@ -128,7 +128,7 @@ pub async fn import_local_file(
     GlobalEmitter::global().emit_images_change("add", &image_ids, None, None, Some(&plugin_ids));
     GlobalEmitter::global().emit_album_images_change("add", &album_ids, &image_ids);
 
-    wait_after_non_pool_download_if_needed(import_start_time).await;
+    wait_after_download_if_needed(import_start_time, None).await;
     Ok(image_id)
 }
 
@@ -180,14 +180,11 @@ async fn build_compatible_path(
         }
     };
     match result {
-        Ok(Some(p)) => p
-            .canonicalize()
-            .ok()
-            .map(|cp| {
-                cp.to_string_lossy()
-                    .trim_start_matches("\\\\?\\")
-                    .to_string()
-            }),
+        Ok(Some(p)) => p.canonicalize().ok().map(|cp| {
+            cp.to_string_lossy()
+                .trim_start_matches("\\\\?\\")
+                .to_string()
+        }),
         Ok(None) => None,
         Err(e) => {
             eprintln!("[local-import] compatible generation failed: {e}");

@@ -26,6 +26,8 @@ interface Props {
   taskName?: string;
   /** 是否显示停止任务（仅当任务 running 时为 true，用于控制 Android fold 中是否显示停止） */
   showStopTask?: boolean;
+  /** 是否显示打开当前 JS 任务 WebView 窗口按钮 */
+  showOpenWebview?: boolean;
 }
 
 const { t } = useI18n();
@@ -33,6 +35,7 @@ const { t } = useI18n();
 const props = withDefaults(defineProps<Props>(), {
   taskName: undefined,
   showStopTask: true,
+  showOpenWebview: false,
 });
 
 const emit = defineEmits<{
@@ -44,6 +47,7 @@ const emit = defineEmits<{
   'quick-settings': [];
   'view-task-log': [];
   'view-task-params': [];
+  'open-task-webview': [];
   back: [];
 }>();
 
@@ -83,6 +87,7 @@ const showIds = computed(() => {
       HeaderFeatureId.QuickSettings,
     ];
     if (props.showStopTask) ids.splice(1, 0, HeaderFeatureId.StopTask);
+    if (props.showOpenWebview) ids.splice(8, 0, HeaderFeatureId.OpenTaskWebview);
     return ids;
   }
 });
@@ -100,6 +105,7 @@ const foldIds = computed(() => {
     HeaderFeatureId.ToggleShowHidden,
   ];
   if (props.showStopTask) ids.unshift(HeaderFeatureId.StopTask);
+  if (props.showOpenWebview) ids.splice(props.showStopTask ? 3 : 2, 0, HeaderFeatureId.OpenTaskWebview);
   return ids;
 });
 
@@ -129,6 +135,9 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.TaskViewParams:
       emit("view-task-params");
+      break;
+    case HeaderFeatureId.OpenTaskWebview:
+      emit("open-task-webview");
       break;
     case HeaderFeatureId.ToggleShowHidden:
       taskRouteStore.hide = !taskRouteStore.hide;

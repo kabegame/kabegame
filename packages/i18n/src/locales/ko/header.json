@@ -16,7 +16,6 @@
   "failedImages": "실패 이미지",
   "gallerySort": "시간순 정렬",
   "galleryPageSize": "페이지당",
-  "openCrawlerWebview": "크롤러 WebView 창",
   "failedImagesCancelWaiting": "대기 취소",
   "failedImagesRetryAll": "모두 재시도",
   "failedImagesDeleteAll": "모두 삭제",

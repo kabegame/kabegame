@@ -17,7 +17,7 @@
     -> 成功、失败、取消或去重终态后，等待 downloadIntervalMs 并释放下载池槽位
 ```
 
-下载阶段通过 `DownloadSink` 管理内存/磁盘缓冲，下载结果为 `DownloadOutcome`（`Bytes` 或 `Path`）。后处理由统一的 `postprocess_downloaded_image` 函数完成，根据 `PostprocessSource` 枚举（`Bytes` 或 `Path`）自适应处理路径。Android 本地 `content://` 导入不走下载池后处理，直接走 content URI 入库。
+下载阶段通过 `DownloadSink` 管理内存/磁盘缓冲，下载结果为 `DownloadOutcome`（`Bytes` 或 `Path`）。后处理由统一的 `postprocess_downloaded_image` 函数完成，根据 `PostprocessSource` 枚举（`Bytes` 或 `Path`）自适应处理路径。桌面 WebView/CEF native 下载也登记进 `DownloadQueue.active_downloads`，以 `native=true` 标识，但不占下载池并发额度。Android 本地 `content://` 导入不走下载池后处理，直接走 content URI 入库。
 
 ---
 
@@ -26,12 +26,12 @@
 | 文件 | 责任 |
 |------|------|
 | `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | downloader 模块门面；scheme downloader trait/注册表；`download_with_retry`；下载间隔 helper；统一 `postprocess_downloaded_image`；`DownloadSink` / `DownloadOutcome` / `PostprocessSource` 定义；最终目标路径与 Android Pictures copy / content URI 入库 |
-| `src-tauri/kabegame-core/src/crawler/downloader/queue.rs` | `DownloadQueue`、下载池、active download 状态机、worker loop、URL 前置去重、失败记录 upsert、任务图片计数快照 |
+| `src-tauri/kabegame-core/src/crawler/downloader/queue.rs` | `DownloadQueue`、下载池、统一 active download 状态机、原生下载登记/移除、worker loop、URL 前置去重、失败记录 upsert、任务图片计数快照 |
 | `src-tauri/kabegame-core/src/crawler/downloader/http.rs` | HTTP/HTTPS scheme downloader；响应流读取写入 `DownloadSink`、Range 续传、进度事件、请求头处理 |
 | `src-tauri/kabegame-core/src/crawler/downloader/content.rs` | Android-only `content://` scheme downloader；从 ContentResolver 读取 bytes 写入 `DownloadSink` |
 | `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | 图片缩略图、视频预览压缩、缩略图尺寸策略 |
 | `src-tauri/kabegame-core/src/crawler/downloader/util.rs` | 安全文件名、唯一下载路径、hash、MIME/文件名辅助 |
-| `src-tauri/kabegame-core/src/crawler/downloader/native_download.rs` | native/browser 下载状态并入 active downloads 展示 |
+| `src-tauri/kabegame/src/startup.rs`、`src-tauri/kabegame/src/commands/surf.rs`、`src-tauri/kabegame/src/commands/crawler.rs` | 桌面 WebView/CEF native 下载触发、URL identity 匹配、落盘路径指定与统一后处理衔接 |
 | `src-tauri/kabegame-core/src/crawler/scheduler.rs` | crawl task 调度；失败图片重试句柄；任务级 header/display_name/metadata 快照回放 |
 | `src-tauri/kabegame/src/commands/task.rs` | 失败项重试、取消重试、删除失败项等命令入口 |
 | `apps/kabegame/src/stores/failedImages.ts` | 前端失败图片事件增量同步 |
@@ -124,6 +124,14 @@ worker 数量由 `start_download_workers` 与设置缩容逻辑维护。worker l
 
 终态后调用 `wait_then_finish_download`：先按 `downloadIntervalMs` 等待，再 `in_flight--`、发送 `download-removed`、唤醒等待容量的入队者。
 
+`active_downloads` 是所有进行中下载的唯一列表，包含下载池 worker 项和桌面 WebView/CEF native 项。因为 WebView `on_download` / `on_navigation` 回调是同步闭包，`active_downloads` 使用 `std::sync::Mutex`，native 项通过同步方法按 URL 查找、登记和取出：
+
+- `register_native`：把 `ActiveDownloadInfo { native: true, ... }` 放入列表。
+- `get_native` / `contains_native`：用于 Requested 复用预登记项和 navigation 拦截。
+- `take_native`：Finished 时移除项并把其后端上下文交给后处理。
+
+下载池容量门控只统计 `native=false` 的项，保持浏览器原生下载不挤占 reqwest worker 并发额度。任务取消统一走 `DownloadQueue::cancel_task_downloads`：下载池项加入协作取消集合；native 项从 `active_downloads` 移除并发送 `Canceled` 与 `download-removed`。如果浏览器下载之后仍回调 Finished，因为列表中已没有对应 URL，回调会被忽略。
+
 ---
 
 ## 5. 去重流程
@@ -174,6 +182,8 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 - 生成缩略图或视频预览
 - 写入 `images`，其中 `local_path` 是磁盘路径，`thumbnail_path` 是缩略图路径或回退本地路径
 - 按需写入目标画册并广播事件
+
+桌面 WebView/CEF 原生下载完成后也复用同一后处理入口。触发原生下载前，后端会把下载所需的入库上下文登记到 `ActiveDownloadInfo` 的后端字段里，包括 `task_id` / `surf_record_id`、`plugin_id`、输出画册、header 快照、脚本指定展示名和 `metadata_id`。这些字段都使用 `#[serde(skip)]`，不会下发前端，避免暴露 cookie/鉴权 header。下载完成事件只负责按 URL 从 `active_downloads` 取回 native 项，并把浏览器落盘文件交给 `postprocess_downloaded_image`；后续入库、去重、缩略图和事件广播仍由统一后处理负责。native 下载也发送完整 lifecycle：`Downloading -> Processing -> Completed/Failed -> download-removed`，前端刷新快照时可以从同一个 `get_active_downloads` 结果看到池下载与 native 下载。
 
 桌面的 `file://` 或其他本地导入路径也通过 `PostprocessSource::Path` 走统一后处理。
 

@@ -21,6 +21,8 @@ export enum HeaderFeatureId {
   TaskViewLog = "taskViewLog",
   /** 任务详情页：查看运行参数（Android 放入 fold） */
   TaskViewParams = "taskViewParams",
+  /** 任务详情页：打开该 JS 任务的 WebView 窗口 */
+  OpenTaskWebview = "openTaskWebview",
   FailedImages = "failedImages",
   AddToAlbum = "addToAlbum",
   /** 画廊：过滤（全部 / 设置过壁纸等，仅 Android 放入 fold） */
@@ -33,8 +35,6 @@ export enum HeaderFeatureId {
   AlbumBrowseFilter = "albumBrowseFilter",
   /** 画册详情：排序，Android 放入 fold */
   AlbumBrowseSort = "albumBrowseSort",
-  /** 畅游页：打开爬虫 WebView 窗口（仅桌面） */
-  OpenCrawlerWebview = "openCrawlerWebview",
   /** 失败图片页：取消等待；Android 放入 fold */
   FailedImagesCancelWaiting = "failedImagesCancelWaiting",
   /** 失败图片页：全部重试；Android 放入 fold */

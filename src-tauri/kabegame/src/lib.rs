@@ -60,10 +60,7 @@ use commands::*;
 pub(crate) type AppRuntime = tauri_runtime_cef::Cef<tauri::EventLoopMessage>;
 #[cfg(all(
     not(feature = "web"),
-    not(all(
-        target_os = "linux",
-        any(feature = "standard", feature = "light")
-    ))
+    not(all(target_os = "linux", any(feature = "standard", feature = "light")))
 ))]
 pub(crate) type AppRuntime = tauri::Wry;
 #[cfg(not(feature = "web"))]
@@ -135,7 +132,9 @@ fn init(
         }
     }
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-    init_crawler_window(app.app_handle().clone());
+    if let Err(e) = init_crawler_webview_handler(app.app_handle().clone()) {
+        eprintln!("Failed to init crawler webview handler: {}", e);
+    }
     // 初始化壁纸控制器
     #[cfg(not(feature = "web"))]
     init_wallpaper_controller(app);
@@ -365,7 +364,7 @@ pub(crate) fn configure_app(
         // 爬虫窗口关闭时仅隐藏不销毁，便于设置中再次打开；遨游窗口关闭时清除会话状态并通知前端
         builder = builder.on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
-                if window.label() == "crawler" {
+                if window.label().starts_with("crawler-") {
                     let _ = window.hide();
                     api.prevent_close();
                 } else if window.label() == "surf" {

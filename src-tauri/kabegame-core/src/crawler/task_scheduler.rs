@@ -30,7 +30,8 @@ const INITIAL_PAGE_LABEL: &str = "initial";
 
 #[cfg(not(target_os = "android"))]
 use crate::crawler::webview::{
-    crawler_window_state, get_webview_handler, pathbuf_to_string, JsTaskContext,
+    get_session, get_webview_handler, pathbuf_to_string, register_session, remove_session,
+    JsTaskContext,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,6 +171,12 @@ impl TaskScheduler {
         // 这里用active_downloads，存在竞态：不在该列表，但即将进入该列表的下载
         self.download_queue.cancel_task_downloads(task_id).await;
         self.canceled_tasks.write().await.insert(task_id.into());
+        #[cfg(not(target_os = "android"))]
+        if let Some(session) = get_session(task_id).await {
+            session
+                .complete(TaskStatus::Canceled, Some("Task canceled".to_string()))
+                .await;
+        }
         self.download_queue.capacity_notify.notify_waiters(); // 唤醒被阻塞的 download() 调用，让它们检查取消状态
     }
 
@@ -452,7 +459,6 @@ async fn worker_loop(
         let page_stacks = scheduler.page_stacks();
         page_stacks.create_stack(&req.task_id).await;
         let res = run_task(&storage, Arc::clone(&download_queue), &req).await;
-        let mut keep_page_stack = false;
 
         match res {
             Ok(TaskOutcome::Completed) => {
@@ -485,12 +491,27 @@ async fn worker_loop(
                     );
                 }
             }
-            Ok(TaskOutcome::HandedOffToWebView) => {
-                keep_page_stack = true;
-                GlobalEmitter::global().emit_task_log(
+            Ok(TaskOutcome::Terminal(status, error)) => {
+                let end = now_ms();
+                if status == TaskStatus::Canceled {
+                    scheduler
+                        .canceled_tasks
+                        .write()
+                        .await
+                        .retain(|d| *d != req.task_id);
+                    scheduler
+                        .download_queue
+                        .cancel_task_downloads(&req.task_id)
+                        .await;
+                }
+                scheduler.transition(
                     &req.task_id,
-                    "info",
-                    &task_log_i18n("taskLogSchedulerJsHandoff", json!({})),
+                    status,
+                    TaskTransition {
+                        start_time: None,
+                        end_time: Some(end),
+                        error,
+                    },
                 );
             }
             Err(e) => {
@@ -517,19 +538,17 @@ async fn worker_loop(
                 );
             }
         }
-        if !keep_page_stack {
-            page_stacks.remove_stack(&req.task_id).await;
-        }
+        page_stacks.remove_stack(&req.task_id).await;
 
         running.fetch_sub(1, Ordering::Relaxed);
         scheduler.task_slot_notify.notify_one();
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum TaskOutcome {
     Completed,
-    HandedOffToWebView,
+    Terminal(TaskStatus, Option<String>),
 }
 
 async fn run_task(
@@ -585,7 +604,6 @@ async fn run_task(
 
     #[cfg(not(target_os = "android"))]
     if let Some(crawl_js) = js_script {
-        let state = crawler_window_state();
         let context = JsTaskContext {
             task_id: req.task_id.clone(),
             plugin_id: plugin.id.clone(),
@@ -602,9 +620,9 @@ async fn run_task(
             http_headers: task.http_headers.clone().unwrap_or_default(),
         };
 
-        state.assign_task(context).await?;
+        let (_session, completion_rx) = register_session(&req.task_id, context).await?;
         let Some(handler) = get_webview_handler() else {
-            let _ = state.release_task(&req.task_id).await;
+            let _ = remove_session(&req.task_id).await;
             return Err("Crawler webview handler is not initialized".to_string());
         };
 
@@ -614,12 +632,22 @@ async fn run_task(
             plugin.base_url.clone()
         };
 
-        if let Err(e) = handler.setup_js_task(&req.task_id, &base_url).await {
-            let _ = state.release_task(&req.task_id).await;
+        if let Err(e) = handler.create_task_window(&req.task_id, &base_url).await {
+            let _ = handler.destroy_task_window(&req.task_id).await;
+            let _ = remove_session(&req.task_id).await;
             return Err(e);
         }
 
-        return Ok(TaskOutcome::HandedOffToWebView);
+        let completion = completion_rx
+            .await
+            .map_err(|_| "Crawler task completion channel closed".to_string());
+        let destroy_result = handler.destroy_task_window(&req.task_id).await;
+        let _ = remove_session(&req.task_id).await;
+        if let Err(e) = destroy_result {
+            eprintln!("Failed to destroy crawler task window {}: {}", req.task_id, e);
+        }
+        let completion = completion?;
+        return Ok(TaskOutcome::Terminal(completion.status, completion.error));
     }
 
     let rhai_script = rhai_script

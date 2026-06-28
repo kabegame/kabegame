@@ -145,7 +145,7 @@ fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u
     use rsmpeg::avcodec::{AVCodec, AVCodecContext};
     use rsmpeg::avfilter::{AVFilter, AVFilterGraph, AVFilterInOut};
     use rsmpeg::avformat::{AVFormatContextInput, AVFormatContextOutput};
-    use rsmpeg::avutil::{av_inv_q, ra, AVDictionary};
+    use rsmpeg::avutil::{AVDictionary, av_inv_q, ra};
     use rsmpeg::error::RsmpegError;
     use rsmpeg::ffi;
     use std::ffi::CString;
@@ -284,7 +284,7 @@ fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u
             let mut frame = match dec_ctx.receive_frame() {
                 Ok(f) => f,
                 Err(RsmpegError::DecoderDrainError) | Err(RsmpegError::DecoderFlushedError) => {
-                    break
+                    break;
                 }
                 Err(e) => return Err(format!("receive_frame failed: {e:?}")),
             };
@@ -644,7 +644,7 @@ fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Res
     use rsmpeg::avcodec::{AVCodec, AVCodecContext};
     use rsmpeg::avfilter::{AVFilter, AVFilterGraph, AVFilterInOut};
     use rsmpeg::avformat::{AVFormatContextInput, AVFormatContextOutput};
-    use rsmpeg::avutil::{av_inv_q, ra, AVDictionary};
+    use rsmpeg::avutil::{AVDictionary, av_inv_q, ra};
     use rsmpeg::error::RsmpegError;
     use rsmpeg::ffi;
     use std::ffi::{CStr, CString};
@@ -896,7 +896,7 @@ fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Res
                 let mut frame = match v_dec_ctx.receive_frame() {
                     Ok(f) => f,
                     Err(RsmpegError::DecoderDrainError) | Err(RsmpegError::DecoderFlushedError) => {
-                        break
+                        break;
                     }
                     Err(e) => return Err(format!("receive video frame: {e:?}")),
                 };

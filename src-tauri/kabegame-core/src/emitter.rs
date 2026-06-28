@@ -72,7 +72,6 @@ impl GlobalEmitter {
 
     pub fn emit_download_state(
         &self,
-        task_id: &str,
         id: u64,
         url: &str,
         start_time: u64,
@@ -83,7 +82,6 @@ impl GlobalEmitter {
         native: bool,
     ) {
         let event = std::sync::Arc::new(DaemonEvent::DownloadState {
-            task_id: task_id.to_string(),
             id,
             url: url.to_string(),
             start_time,
@@ -97,9 +95,8 @@ impl GlobalEmitter {
     }
 
     /// 发送下载条目移除事件（后端 wait 完成后调用，前端据此从活跃列表删除）
-    pub fn emit_download_removed(&self, task_id: &str, id: u64) {
+    pub fn emit_download_removed(&self, id: u64) {
         let event = std::sync::Arc::new(DaemonEvent::DownloadRemoved {
-            task_id: task_id.to_string(),
             id,
         });
         EventBroadcaster::global().broadcast(event);

@@ -127,6 +127,11 @@ export function registerHeaderFeatures() {
       icon: InfoFilled,
     },
     {
+      id: HeaderFeatureId.OpenTaskWebview,
+      label: t("tasks.openTaskWebview"),
+      icon: Monitor,
+    },
+    {
       id: HeaderFeatureId.FailedImages,
       label: t("header.failedImages"),
       icon: WarningFilled,
@@ -158,11 +163,6 @@ export function registerHeaderFeatures() {
       id: HeaderFeatureId.AlbumBrowseSort,
       label: t("header.gallerySort"),
       icon: Sort,
-    },
-    {
-      id: HeaderFeatureId.OpenCrawlerWebview,
-      label: t("header.openCrawlerWebview"),
-      icon: Monitor,
     },
     {
       id: HeaderFeatureId.FailedImagesCancelWaiting,

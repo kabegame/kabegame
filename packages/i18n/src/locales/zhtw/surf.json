@@ -24,7 +24,6 @@
   "surfHelpRecord": "每次暢遊會產生一筆記錄，可在此頁快速再次進入該網站，或透過「檢視最近圖片」進入該網站的畫廊檢視。",
   "linuxHintHelp": "Linux 下因 WebKit 限制，暢遊視窗內無法下載內容，僅支援瀏覽。",
   "gotIt": "知道了",
-  "openWebViewSuccess": "已開啟爬蟲 WebView 視窗",
   "pleaseEnterUrl": "請輸入 URL",
   "useHttps": "請使用 https 協定",
   "unsupportedProtocol": "不支援的協定，僅支援 https",

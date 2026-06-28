@@ -1,13 +1,13 @@
 // 启动步骤函数
 
 use async_trait::async_trait;
-use kabegame_core::crawler::{task_scheduler, TaskScheduler};
+use kabegame_core::crawler::{TaskScheduler, task_scheduler};
 use kabegame_i18n::t;
 // 事件转发到前端（桌面与 Android 均需要，用于 tasks-change 等）
 #[cfg(not(feature = "web"))]
-use crate::wallpaper::manager::WallpaperController;
-#[cfg(not(feature = "web"))]
 use crate::wallpaper::WallpaperRotator;
+#[cfg(not(feature = "web"))]
+use crate::wallpaper::manager::WallpaperController;
 #[cfg(feature = "web")]
 use crate::web::server::SseMessage;
 use kabegame_core::ipc::events::DaemonEventKind;
@@ -27,16 +27,13 @@ use url::Url;
 use crate::web::server::*;
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::downloader::{
-    compute_unique_download_path, next_download_id, postprocess_downloaded_image,
-    wait_after_non_pool_download_if_needed, DownloadState, NativeDownloadEntry,
-    NativeDownloadState,
+    ActiveDownloadInfo, DownloadState, compute_unique_download_path, next_download_id,
+    postprocess_downloaded_image,
 };
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::webview::{
-    crawler_window_state, set_webview_handler, CrawlerWebViewHandler,
+    CrawlerWebViewHandler, crawler_window_label, set_webview_handler, try_get_session_context,
 };
-#[cfg(not(target_os = "android"))]
-use kabegame_core::emitter::GlobalEmitter;
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use tauri::webview::DownloadEvent;
 
@@ -48,29 +45,41 @@ struct AppCrawlerWebViewHandler<R: Runtime> {
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 #[async_trait]
 impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
-    async fn setup_js_task(&self, _task_id: &str, base_url: &str) -> Result<(), String> {
-        let crawler_window = self
-            .app
-            .get_webview_window("crawler")
-            .ok_or_else(|| "Crawler window not found".to_string())?;
-        let target = if base_url.trim().is_empty() {
-            "about:blank"
-        } else {
-            base_url
-        };
-        let parsed = url::Url::parse(target)
-            .map_err(|e| format!("Invalid crawler URL '{}': {}", target, e))?;
-        crawler_window
-            .navigate(parsed)
-            .map_err(|e| format!("Failed to navigate crawler window: {}", e))?;
-        // 由设置控制启动 WebView 插件任务时是否自动显示窗口
-        let auto_open = Settings::global().get_auto_open_crawler_webview();
-        if auto_open {
-            let _ = crawler_window.show();
-            let _ = crawler_window.set_focus();
-        }
-        Ok(())
+    async fn create_task_window(&self, task_id: &str, base_url: &str) -> Result<(), String> {
+        let task_id = task_id.to_string();
+        let base_url = base_url.to_string();
+        run_on_main_thread_sync(&self.app, move |app| {
+            create_crawler_task_window(app, &task_id, &base_url)
+        })
     }
+
+    async fn destroy_task_window(&self, task_id: &str) -> Result<(), String> {
+        let label = crawler_window_label(task_id);
+        run_on_main_thread_sync(&self.app, move |app| {
+            if let Some(window) = app.get_webview_window(&label) {
+                window
+                    .destroy()
+                    .map_err(|e| format!("Failed to destroy crawler window: {}", e))?;
+            }
+            Ok(())
+        })
+    }
+}
+
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
+fn run_on_main_thread_sync<R, F>(app: &AppHandle<R>, f: F) -> Result<(), String>
+where
+    R: Runtime,
+    F: FnOnce(AppHandle<R>) -> Result<(), String> + Send + 'static,
+{
+    let app_handle = app.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(f(app_handle));
+    })
+    .map_err(|e| format!("Failed to dispatch to main thread: {}", e))?;
+    rx.recv()
+        .map_err(|e| format!("Failed to receive main thread result: {}", e))?
 }
 
 pub fn init_kgpg_plugin() {
@@ -513,7 +522,7 @@ pub fn try_forward_to_existing_instance_and_exit() {
         return;
     }
 
-    use kabegame_core::ipc::ipc::{request, IpcRequest};
+    use kabegame_core::ipc::ipc::{IpcRequest, request};
 
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
@@ -600,8 +609,23 @@ pub fn start_download_workers() {
 }
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-pub fn create_crawler_window<R: Runtime>(app_handle: AppHandle<R>) -> Result<(), String> {
-    if app_handle.get_webview_window("crawler").is_some() {
+pub fn create_crawler_task_window<R: Runtime>(
+    app_handle: AppHandle<R>,
+    task_id: &str,
+    base_url: &str,
+) -> Result<(), String> {
+    let label = crawler_window_label(task_id);
+    if let Some(window) = app_handle.get_webview_window(&label) {
+        let target = if base_url.trim().is_empty() {
+            "about:blank"
+        } else {
+            base_url
+        };
+        let parsed = url::Url::parse(target)
+            .map_err(|e| format!("Invalid crawler URL '{}': {}", target, e))?;
+        window
+            .navigate(parsed)
+            .map_err(|e| format!("Failed to navigate crawler window: {}", e))?;
         return Ok(());
     }
 
@@ -611,8 +635,15 @@ pub fn create_crawler_window<R: Runtime>(app_handle: AppHandle<R>) -> Result<(),
         env!("CARGO_MANIFEST_DIR"),
         "/resources/bootstrap.js"
     ));
-    let about_blank = url::Url::parse("about:blank").map_err(|e| e.to_string())?;
-    WebviewWindowBuilder::new(&app_handle, "crawler", WebviewUrl::External(about_blank))
+    let target = if base_url.trim().is_empty() {
+        "about:blank"
+    } else {
+        base_url
+    };
+    let target_url =
+        url::Url::parse(target).map_err(|e| format!("Invalid crawler URL '{}': {}", target, e))?;
+    let task_id_for_download = task_id.to_string();
+    WebviewWindowBuilder::new(&app_handle, &label, WebviewUrl::External(target_url))
         .title(t!("window.crawlerTitle"))
         .visible(false)
         .skip_taskbar(true)
@@ -620,9 +651,14 @@ pub fn create_crawler_window<R: Runtime>(app_handle: AppHandle<R>) -> Result<(),
         .inner_size(1920.0, 1080.0)
         .initialization_script(script)
         .on_page_load(move |_webview, _payload| {})
-        .on_download(|_webview, event| match event {
+        .on_navigation(|url| {
+            !TaskScheduler::global()
+                .download_queue()
+                .contains_native(url.as_str())
+        })
+        .on_download(move |_webview, event| match event {
             DownloadEvent::Requested { url, destination } => {
-                let Some(ctx) = crawler_window_state().try_get_context() else {
+                let Some(ctx) = try_get_session_context(&task_id_for_download) else {
                     return false;
                 };
                 let images_dir = std::path::PathBuf::from(&ctx.images_dir);
@@ -643,47 +679,43 @@ pub fn create_crawler_window<R: Runtime>(app_handle: AppHandle<R>) -> Result<(),
                             return false;
                         }
                     };
-                let download_start_time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                let download_id = next_download_id();
-                let entry = NativeDownloadEntry {
-                    id: download_id,
-                    destination: native_dest.clone(),
-                    task_id: Some(ctx.task_id.clone()),
-                    surf_record_id: None,
-                    plugin_id: ctx.plugin_id.clone(),
-                    output_album_id: ctx.output_album_id.clone(),
-                    download_start_time,
-                };
-                if let Err(e) = NativeDownloadState::global().register(url.as_str(), entry) {
-                    eprintln!("Failed to register native download: {}", e);
+                let dq = TaskScheduler::global().download_queue();
+                let entry = if let Some(entry) = dq.get_native(url.as_str()) {
+                    entry
+                } else {
+                    eprintln!("[Crawler] Cannot find the download for crawler webview.");
                     return false;
-                }
-                GlobalEmitter::global().emit_download_state(
-                    &ctx.task_id,
-                    download_id,
-                    url.as_str(),
-                    download_start_time,
-                    &ctx.plugin_id,
-                    DownloadState::Downloading,
-                    None,
-                    None,
-                    true,
-                );
+                };
                 *destination = native_dest;
+                tauri::async_runtime::spawn(async move {
+                    dq.switch_state(entry.id, DownloadState::Downloading, None).await;
+                });
                 true
             }
             DownloadEvent::Finished { url, path, success } => {
-                let Some(entry) = NativeDownloadState::global().take(url.as_str()) else {
+                let dq = TaskScheduler::global().download_queue();
+                let Some(entry) = dq.get_native(url.as_str()) else {
                     return true;
                 };
                 if success {
-                    let final_path = path.unwrap_or_else(|| entry.destination.clone());
+                    let Some(final_path) = path else {
+                        tauri::async_runtime::spawn(async move {
+                            dq.switch_state(
+                                entry.id,
+                                DownloadState::Failed,
+                                Some("Native download finished without output path"),
+                            )
+                            .await;
+                            dq.wait_then_finish_download(entry.id, false).await;
+                        });
+                        return true;
+                    };
                     tauri::async_runtime::spawn(async move {
                         let dq = TaskScheduler::global().download_queue();
-                        let empty_headers = std::collections::HashMap::new();
+                        dq.switch_state(entry.id, DownloadState::Processing, None)
+                            .await;
+                        let task_id =
+                            (!entry.task_id.trim().is_empty()).then_some(entry.task_id.as_str());
                         let result = postprocess_downloaded_image(
                             &*dq,
                             entry.id,
@@ -694,37 +726,29 @@ pub fn create_crawler_window<R: Runtime>(app_handle: AppHandle<R>) -> Result<(),
                             false,
                             &url,
                             &entry.plugin_id,
-                            entry.task_id.as_deref(),
+                            task_id,
                             None,
                             entry.surf_record_id.as_deref(),
-                            entry.download_start_time,
+                            entry.start_time,
                             entry.output_album_id.as_deref(),
-                            &empty_headers,
+                            &entry.http_headers,
                             true,
-                            None,
-                            None,
+                            entry.custom_display_name.as_deref(),
+                            entry.metadata_id,
                         )
                         .await;
-                        wait_after_non_pool_download_if_needed(entry.download_start_time).await;
-                        let _ = result;
+                        dq.wait_then_finish_download(entry.id, false).await;
                     });
                 } else {
-                    let event_task_id = entry
-                        .task_id
-                        .as_deref()
-                        .or(entry.surf_record_id.as_deref())
-                        .unwrap_or_default();
-                    GlobalEmitter::global().emit_download_state(
-                        event_task_id,
-                        entry.id,
-                        url.as_str(),
-                        entry.download_start_time,
-                        &entry.plugin_id,
-                        DownloadState::Failed,
-                        Some("Native download finished with failure"),
-                        None,
-                        true,
-                    );
+                    tauri::async_runtime::spawn(async move {
+                        dq.switch_state(
+                            entry.id,
+                            DownloadState::Failed,
+                            Some("Native download finished with failure"),
+                        )
+                        .await;
+                        dq.wait_then_finish_download(entry.id, false).await;
+                    });
                 }
                 true
             }
@@ -732,6 +756,13 @@ pub fn create_crawler_window<R: Runtime>(app_handle: AppHandle<R>) -> Result<(),
         })
         .build()
         .map_err(|e| format!("创建 crawler 窗口失败: {}", e))?;
+
+    if Settings::global().get_auto_open_crawler_webview() {
+        if let Some(window) = app_handle.get_webview_window(&label) {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }
     Ok(())
 }
 
@@ -739,18 +770,6 @@ pub fn create_crawler_window<R: Runtime>(app_handle: AppHandle<R>) -> Result<(),
 pub fn init_crawler_webview_handler<R: Runtime>(app_handle: AppHandle<R>) -> Result<(), String> {
     let handler = Arc::new(AppCrawlerWebViewHandler { app: app_handle });
     set_webview_handler(handler)
-}
-
-#[cfg(all(not(target_os = "android"), not(feature = "web")))]
-pub fn init_crawler_window<R: Runtime>(app_handle: AppHandle<R>) {
-    tauri::async_runtime::spawn_blocking(move || {
-        if let Err(e) = create_crawler_window(app_handle.clone()) {
-            eprintln!("Failed to create crawler window: {}", e);
-        }
-        if let Err(e) = init_crawler_webview_handler(app_handle) {
-            eprintln!("Failed to init crawler webview handler: {}", e);
-        }
-    });
 }
 
 /// 启动 TaskScheduler（启动 DownloadQueue 的 worker）
@@ -782,7 +801,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     // Linux Plasma + 插件模式：若当前系统壁纸插件不是 Kabegame，自动切到 Kabegame（与 Windows/macOS 窗口模式启动时对齐）
     #[cfg(target_os = "linux")]
     {
-        use crate::linux_desktop::{linux_desktop, LinuxDesktop};
+        use crate::linux_desktop::{LinuxDesktop, linux_desktop};
         use crate::wallpaper::manager::PlasmaPluginWallpaperManager;
         let mode = Settings::global().get_wallpaper_mode();
         if linux_desktop() == LinuxDesktop::Plasma && mode == "plasma-plugin" {

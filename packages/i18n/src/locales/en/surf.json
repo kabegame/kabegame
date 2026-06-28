@@ -24,7 +24,6 @@
   "surfHelpRecord": "Each surf creates a record; you can re-enter the site from here or open \"View recent images\" for that site's gallery view.",
   "linuxHintHelp": "On Linux, Surf cannot download content; browsing only.",
   "gotIt": "Got it",
-  "openWebViewSuccess": "Crawler WebView window opened",
   "pleaseEnterUrl": "Please enter URL",
   "useHttps": "Please use https",
   "unsupportedProtocol": "Unsupported protocol; only https is supported",

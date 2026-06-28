@@ -24,7 +24,6 @@
   "surfHelpRecord": "每次畅游会生成一条记录，可在此页快速再次进入该站点，或通过「查看最近图片」进入该站点的画廊视图。",
   "linuxHintHelp": "Linux 下因 WebKit 限制，畅游窗口内无法下载内容，仅支持浏览。",
   "gotIt": "知道了",
-  "openWebViewSuccess": "已打开爬虫 WebView 窗口",
   "pleaseEnterUrl": "请输入 URL",
   "useHttps": "请使用 https 协议",
   "unsupportedProtocol": "不支持的协议，仅支持 https",
