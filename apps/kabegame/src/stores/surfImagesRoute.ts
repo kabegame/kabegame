@@ -40,6 +40,7 @@ function parseSurfImagesPath(path: string): SurfImagesRouteState {
 export const useSurfImagesRouteStore = createPathRouteStore<SurfImagesRouteState>(
   "surfImagesRoute",
   {
+    settingKey: "surf-images-path",
     parse: parseSurfImagesPath,
     build: (state) => {
       const ps = state.pageSize === DEFAULT_PAGE_SIZE ? "" : `x${state.pageSize}x/`;

@@ -22,6 +22,7 @@ type GalleryRouteState = {
 export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
   "galleryRoute",
   {
+    settingKey: "gallery-path",
     parse: (path) => {
       const parsed = parseGalleryPath(path);
       return {

@@ -541,8 +541,6 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
                 throw error;
             }
 
-            await settingsStore.ensureLoaded();
-
             // 5. 如果轮播未开启，开启它
             if (!settingsStore.values.wallpaperRotationEnabled) {
                 await setWallpaperRotationEnabled(true);
@@ -770,7 +768,6 @@ const initTask = async (id: string) => {
         await taskDetailRouteStore.navigate({ taskId: id, page: 1 });
     }
     await failedImagesStore.initListeners();
-    await settingsStore.ensureLoaded();
     await Promise.all([
         loadTaskImages(),
         loadTotalImagesCount(),

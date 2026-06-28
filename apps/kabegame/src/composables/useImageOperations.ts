@@ -401,8 +401,6 @@ export function useImageOperations(
           throw error;
         }
 
-        await settingsStore.ensureLoaded();
-
         // 5. 如果轮播未开启，开启它
         if (!settingsStore.values.wallpaperRotationEnabled) {
           await setWallpaperRotationEnabled(true);

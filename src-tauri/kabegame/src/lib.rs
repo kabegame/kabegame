@@ -560,7 +560,6 @@ pub(crate) fn configure_app(
             set_wallpaper_volume,
             get_wallpaper_video_playback_rate,
             set_wallpaper_video_playback_rate,
-            get_wallpaper_rotator_status,
             get_wallpaper_disabled,
             set_wallpaper_disabled,
             #[cfg(any(target_os = "windows", target_os = "macos"))]

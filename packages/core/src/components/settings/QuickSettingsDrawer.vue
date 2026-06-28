@@ -26,8 +26,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { useSettingsStore } from "../../stores/settings";
+import { computed, ref } from "vue";
 import SettingRow from "./SettingRow.vue";
 import type {
     QuickSettingGroup,
@@ -68,7 +67,6 @@ function onDrawerModelValue(v: boolean) {
     if (!v) emit("onClose");
 }
 
-const settingsStore = useSettingsStore();
 const loading = ref(false);
 
 const filteredGroups = computed(() => {
@@ -95,24 +93,6 @@ const getEffectiveDescription = (
     return props.getItemDescription ? props.getItemDescription(item, base) : base;
 };
 
-watch(
-    () => [props.isOpen, props.pageId] as const,
-    async ([open]) => {
-        if (!open) return;
-        if (!props.loadOnOpen) return;
-        const keys = Array.from(
-            new Set(filteredGroups.value.flatMap((g) => g.items.map((it) => it.key)))
-        );
-        if (keys.length === 0) return;
-        loading.value = true;
-        try {
-            await settingsStore.loadMany(keys);
-        } finally {
-            loading.value = false;
-        }
-    },
-    { flush: "post" }
-);
 </script>
 
 <style scoped lang="scss">

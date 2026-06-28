@@ -94,12 +94,7 @@ watch(
 );
 
 const handleChange = async (style: string) => {
-  // 特殊逻辑：不再等待事件，因为方法会在设置完毕后返回，等待事件会导致时序问题
-  const onAfterSave = async () => {
-    return;
-  };
-
-  await set(style, onAfterSave);
+  await set(style);
 };
 
 const onPickerChange = async (v: string | null) => {

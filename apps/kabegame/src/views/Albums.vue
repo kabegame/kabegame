@@ -567,7 +567,6 @@ onMounted(async () => {
 // 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表，并等待设置缓存就绪。
 onActivated(async () => {
   await albumStore.loadAlbums();
-  await settingsStore.ensureLoaded();
 
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
   const favoriteAlbum =
@@ -602,7 +601,6 @@ const handleRefresh = async () => {
   isRefreshing.value = true;
   try {
     await albumStore.loadAlbums();
-    await settingsStore.ensureLoaded();
     // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来"没刷新"）
     for (const album of displayedAlbumRoots.value) {
       clearAlbumPreviewCache(album.id);

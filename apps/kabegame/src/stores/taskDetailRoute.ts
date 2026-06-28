@@ -55,6 +55,7 @@ function parseTaskDetailPath(path: string): TaskDetailRouteState {
 export const useTaskDetailRouteStore = createPathRouteStore<TaskDetailRouteState>(
   "taskDetailRoute",
   {
+    settingKey: "task-detail-path",
     parse: parseTaskDetailPath,
     build: (state) => {
       const ps = state.pageSize === DEFAULT_PAGE_SIZE ? "" : `x${state.pageSize}x/`;

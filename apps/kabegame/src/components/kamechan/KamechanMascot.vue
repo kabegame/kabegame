@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div
-      v-if="kamechanEnabled"
+      v-if="kamechanEnabled.settingValue"
       ref="hostEl"
       class="kamechan-host"
       :class="{ 'is-minimized': minimized, 'is-dragging': isDragging }"
@@ -81,6 +81,7 @@ import appLogoUrl from "@/assets/icon-small.png";
 import { useKamechanMachine } from "./useKamechanMachine";
 import KameBubble from "./KameBubble.vue";
 import KamechanHistoryDialog from "./KamechanHistoryDialog.vue";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState.ts";
 
 const { t } = useI18n();
 const store = useKameMessageStore();
@@ -134,7 +135,7 @@ const {
 
 const currentMessage = computed(() => queue.value[queue.value.length - 1] ?? null);
 const queuedExtraCount = computed(() => Math.max(0, queue.value.length - 1));
-const kamechanEnabled = computed(() => settingsStore.values.kamechanEnabled !== false);
+const kamechanEnabled = useSettingKeyState('kamechanEnabled');
 const moreText = computed(() =>
   queuedExtraCount.value > 0
     ? t("kamechan.moreMessages", { count: queuedExtraCount.value })
@@ -419,7 +420,6 @@ watch(kamechanEnabled, (enabled) => {
 
 onMounted(() => {
   updateViewportSize();
-  void settingsStore.load("kamechanEnabled");
   restorePersistedMinimized();
   restorePersistedPosition();
   window.addEventListener("resize", clampCurrentPosition, { passive: true });

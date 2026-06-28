@@ -1,8 +1,9 @@
 import { computed, watch } from "vue";
-import { AppSettingKey, AppSettings, useSettingsStore } from "../stores/settings";
+import { AppSettingKey, AppSettings, useSettingsStore, type SettingsSaveOptions } from "../stores/settings";
 import { useLoadingDelay } from "./useLoadingDelay";
 import { IS_WEB } from "../env";
 import { trackEvent } from "../track/umami";
+import { guardDesktopOnly } from "../utils/desktopOnlyGuard";
 
 function currentUrl() {
   return typeof location === "undefined" ? "" : location.pathname + location.search;
@@ -30,6 +31,39 @@ function trackSettingChange(
 }
 
 /**
+ * web readonly 设置键对应的能力文案桶。
+ *
+ * 这是 UI 关切，不属于 settings store：store 只知道 key 当前是否 readonly，
+ * 这里负责把 key 映射到 `web.feature.*` 的展示文案。
+ */
+const WEB_READONLY_FEATURE_KEY_MAP: Partial<Record<AppSettingKey, string>> = {
+  currentWallpaperImageId: "wallpaper",
+  wallpaperVolume: "wallpaperPlayback",
+  wallpaperVideoPlaybackRate: "wallpaperPlayback",
+  wallpaperRotationEnabled: "wallpaperRotation",
+  wallpaperRotationAlbumId: "wallpaperRotation",
+  wallpaperRotationIncludeSubalbums: "wallpaperRotation",
+  wallpaperRotationIntervalMinutes: "wallpaperRotation",
+  wallpaperRotationMode: "wallpaperRotation",
+  wallpaperRotationTransition: "wallpaperRotation",
+  wallpaperStyle: "wallpaper",
+  wallpaperStyleByMode: "wallpaper",
+  wallpaperTransitionByMode: "wallpaper",
+  wallpaperMode: "wallpaper",
+  albumDriveEnabled: "albumDrive",
+  albumDriveMountPoint: "albumDrive",
+  autoOpenCrawlerWebview: "openCrawlerWindow",
+  windowState: "windowState",
+  autoLaunch: "autoLaunch",
+  defaultDownloadDir: "defaultDownloadDir",
+  imageClickAction: "imageClickAction",
+};
+
+function webReadonlyFeatureKey(key: AppSettingKey): string {
+  return WEB_READONLY_FEATURE_KEY_MAP[key] ?? key;
+}
+
+/**
  * 封装设置键的状态管理
  *
  * 状态机：初始状态 -> loading -> down -> saving -> down
@@ -39,8 +73,15 @@ function trackSettingChange(
  *
  * 使用延迟显示（300ms）来避免短暂的状态闪烁
  *
- * @param key - 设置键名
+ * @param key - 设置键名；后端类型由 settings descriptor 决定。
  * @returns 状态管理相关的响应式引用和方法
+ *
+ * @example
+ * ```ts
+ * const { settingValue, set, disabled } = useSettingKeyState("galleryPageSize");
+ * await set(500);
+ * await set("recommended", { history: "replace", source: "auto_config_tabs" });
+ * ```
  */
 export function useSettingKeyState<K extends AppSettingKey>(key: K) {
   const settingsStore = useSettingsStore();
@@ -49,6 +90,7 @@ export function useSettingKeyState<K extends AppSettingKey>(key: K) {
   const isLoading = computed(() => settingsStore.isLoading(key));
   const isSaving = computed(() => settingsStore.isSaving(key));
   const isDown = computed(() => settingsStore.isDown(key));
+  const isReadonly = computed(() => settingsStore.isReadonly(key));
 
   // 延迟显示的状态（300ms）
   const { showLoading: showLoadingState, startLoading: startLoadingDelay, finishLoading: finishLoadingDelay } = useLoadingDelay(300);
@@ -62,8 +104,7 @@ export function useSettingKeyState<K extends AppSettingKey>(key: K) {
   const settingValue = computed({
     get: () => settingsStore.values[key] as AppSettings[K] | undefined,
     set: (value: AppSettings[K]) => {
-      // 直接更新 store 中的值（set 函数会处理保存逻辑）
-      (settingsStore.values as any)[key] = value;
+      void set(value);
     },
   });
 
@@ -72,24 +113,32 @@ export function useSettingKeyState<K extends AppSettingKey>(key: K) {
   const showDisabled = computed(() => showLoadingState.value || showSavingState.value);
 
   /**
-   * 设置值并保存到后端
+   * 设置值并保存到当前 key 的后端。
    *
    * @param value - 要设置的值
-   * @param onAfterSave - 保存成功后的可选回调，回调完成后才将状态转换为 down
-   * @throws 如果保存失败会抛出错误，并自动回滚本地值
+   * @param opts - query history 与可选埋点上下文。只有传入 `source` 时才埋点。
+   * @returns `true` 表示写入已发起或完成；`false` 表示被 loading/saving/readonly 拒绝。
+   *
+   * @example
+   * ```ts
+   * await set("hide/全部", { history: "replace" });
+   * await set(true, { source: "settings_page", extra: { section: "wallpaper" } });
+   * ```
    */
   const set = async (
     value: AppSettings[K],
-    onAfterSave?: () => Promise<void> | void,
-    analytics?: { source?: string; extra?: Record<string, unknown> },
-  ) => {
-    // 如果不在 down 状态，不响应用户操作
-    if (!isDown.value) {
-      return;
+    opts?: SettingsSaveOptions,
+  ): Promise<boolean> => {
+    if (isReadonly.value) {
+      void guardDesktopOnly(webReadonlyFeatureKey(key));
+      return false;
     }
-    console.log('set', key, value);
-    await settingsStore.save(key, value, onAfterSave);
-    trackSettingChange(key, value, analytics?.source, analytics?.extra);
+    if (!isDown.value) return false;
+    const ok = await settingsStore.save(key, value, opts);
+    if (ok && opts?.source) {
+      trackSettingChange(key, value, opts.source, opts.extra);
+    }
+    return ok;
   };
 
   return {
@@ -97,12 +146,14 @@ export function useSettingKeyState<K extends AppSettingKey>(key: K) {
     isLoading,
     isSaving,
     isDown,
+    isReadonly,
     showLoading: showLoadingState,
     showSaving: showSavingState,
     disabled,
     showDisabled,
+    showReadonly: isReadonly,
 
-    // 值
+    // 值，可以直接设置，但如果要传入options就通过 set 方法
     settingValue,
 
     // 方法

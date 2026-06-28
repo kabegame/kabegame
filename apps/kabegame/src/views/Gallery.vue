@@ -823,7 +823,6 @@ useAlbumImagesChangeRefresh({
 
 // ---------- Lifecycle ----------
 onMounted(async () => {
-  await settingsStore.ensureLoaded();
   // 注意：任务列表与运行配置在 crawler store 初始化时加载；已安装插件在 App.vue onMounted 中 loadPlugins
   loadTotalImagesCount(); // 加载总图片数
 
@@ -871,7 +870,6 @@ onMounted(async () => {
 // 组件激活时（keep-alive 缓存后重新显示）：以路由为唯一真理，始终按当前路由 path 刷新列表，保证从任务页返回后顺序与路由、header 一致。
 onActivated(async () => {
   isGalleryActive.value = true;
-  await settingsStore.ensureLoaded();
 
   const pathToLoad = currentPath.value;
   if (!pathToLoad) return;

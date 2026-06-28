@@ -193,7 +193,6 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
     }
 
     if (imagesToProcess.length > 1) {
-      await settingsStore.ensureLoaded();
       await albumStore.loadAlbums();
       let albumName = t("surf.desktopAlbumName", { n: 1 });
       let counter = 1;
@@ -204,7 +203,6 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
       const createdAlbum = await albumStore.createAlbum(albumName);
       const imageIds = imagesToProcess.map((img) => img.id);
       await albumStore.addImagesToAlbum(createdAlbum.id, imageIds);
-      await settingsStore.ensureLoaded();
       if (!settingsStore.values.wallpaperRotationEnabled) {
         await setWallpaperRotationEnabled(true);
       }

@@ -41,7 +41,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onDeactivated, onMounted, ref, useAttrs, watch } from "vue";
 import { useModal } from "@kabegame/core/composables/useModal";
-import { useRoute, useRouter } from "vue-router";
+import { useRouter } from "vue-router";
 import CoreImageGrid from "@kabegame/core/components/image/ImageGrid.vue";
 import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
 import ImageDetailDialog from "@kabegame/core/components/common/ImageDetailDialog.vue";
@@ -50,6 +50,7 @@ import { usePluginStore } from "@/stores/plugins";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
 import { singleFilterToSet, type GalleryFilter, type GalleryFilterSet } from "@/utils/galleryPath";
 import EmptyState from "@/components/common/EmptyState.vue";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 
 import type {
   ContextCommand as CoreContextCommand,
@@ -193,8 +194,7 @@ const coreRef = ref<any>(null);
  * router 由本（外层）组件持有，core 层保持 router-agnostic：core 仅
  * emit preview-open/navigate/close 并暴露 openPreviewById/closePreview。
  */
-const route = useRoute();
-const PREVIEW_QUERY_KEY = "pvwimgid";
+const { settingValue: previewImageId, set: setPreviewImageId } = useSettingKeyState("previewImageId");
 /** 当前预览中的图片 id（未预览为 null） */
 const previewedId = ref<string | null>(null);
 
@@ -206,8 +206,8 @@ const previewedId = ref<string | null>(null);
 const isRouteActive = ref(true);
 
 const readPreviewId = (): string | null => {
-  const v = route.query[PREVIEW_QUERY_KEY];
-  return Array.isArray(v) ? v[0] ?? null : (v as string | undefined) ?? null;
+  const v = previewImageId.value;
+  return v ? String(v) : null;
 };
 
 // state -> URL：用 replace（不污染 history），只更新 pvwimgid 这一项并合并进当前 query。
@@ -216,10 +216,7 @@ const readPreviewId = (): string | null => {
 watch(previewedId, (id) => {
   if (!isRouteActive.value) return; // 非激活视图不写 URL
   if ((id ?? null) === readPreviewId()) return; // 已一致，避免回环
-  const query = { ...route.query };
-  if (id) query[PREVIEW_QUERY_KEY] = id;
-  else delete query[PREVIEW_QUERY_KEY];
-  void router.replace({ query });
+  void setPreviewImageId(id ?? "", { history: "replace" });
 });
 
 // URL -> state
@@ -241,7 +238,7 @@ const applyPreviewFromUrl = async () => {
 onMounted(applyPreviewFromUrl);
 onActivated(() => { isRouteActive.value = true; void applyPreviewFromUrl(); });
 onDeactivated(() => { isRouteActive.value = false; });
-watch(() => readPreviewId(), applyPreviewFromUrl); // 前进/后退、外部改动
+watch(() => previewImageId.value, applyPreviewFromUrl); // 前进/后退、外部改动
 watch(() => props.images, () => {
   // 列表异步加载完成后再尝试一次（仅在仍有待打开 id 且未预览时）
   if (readPreviewId() && previewedId.value == null) void applyPreviewFromUrl();

@@ -20,6 +20,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
@@ -50,11 +51,14 @@ const showSkeleton = ref(false); // 控制是否显示骨架屏（延迟300ms显
 const skeletonTimer = ref<ReturnType<typeof setTimeout> | null>(null);
 const plugin = ref<Plugin | null>(null);
 const installing = ref(false);
+const { settingValue: pluginDetailMode } = useSettingKeyState("pluginDetailMode");
+const { settingValue: pluginDetailSourceId } = useSettingKeyState("pluginDetailSourceId");
+const { settingValue: pluginDetailVersion } = useSettingKeyState("pluginDetailVersion");
 
 const pluginIdDecoded = computed(() => decodeURIComponent(route.params.id as string));
-const mode = computed(() => route.query.mode === "remote" ? "remote" as const : "local" as const);
-const sourceId = computed(() => (typeof route.query.sourceId === "string" ? route.query.sourceId : null));
-const expectedVersion = computed(() => (typeof route.query.version === "string" ? route.query.version : null));
+const mode = computed(() => pluginDetailMode.value === "remote" ? "remote" as const : "local" as const);
+const sourceId = computed(() => pluginDetailSourceId.value || null);
+const expectedVersion = computed(() => pluginDetailVersion.value || null);
 
 const isInstalled = computed(() => {
     if (!plugin.value) return false;
@@ -252,7 +256,7 @@ onMounted(async () => {
 
 // 监听路由参数变化，当切换插件时重新加载
 watch(
-    () => [route.params.id, route.query.mode, route.query.sourceId],
+    () => [route.params.id, pluginDetailMode.value, pluginDetailSourceId.value],
     async ([newId, newMode, newSourceId], [oldId, oldMode, oldSourceId]) => {
         // keep-alive 下，route 变化会在后台触发；只在"源详情"页激活时才响应
         if (!isOnPluginDetailRoute.value) return;

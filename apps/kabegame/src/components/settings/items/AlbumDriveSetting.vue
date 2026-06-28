@@ -97,13 +97,14 @@ const handleToggle = async (val: boolean) => {
   }
 
   try {
-    await setEnabled(val, async () => {
+    const ok = await setEnabled(val);
+    if (ok) {
       if (val) {
         ElMessage.success(t("settings.albumDriveMessageEnabled"));
       } else {
         ElMessage.success(t("settings.albumDriveMessageDisabled"));
       }
-    });
+    }
   } catch (e) {
     console.error(e);
     // 错误时 enabled.value 会由 watch 回滚

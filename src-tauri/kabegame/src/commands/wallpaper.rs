@@ -456,12 +456,6 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub fn get_wallpaper_rotator_status() -> Result<String, String> {
-    let rotator = WallpaperRotator::global();
-    Ok(rotator.get_status())
-}
-
-#[tauri::command]
 pub fn get_wallpaper_disabled() -> bool {
     Settings::global().get_wallpaper_disabled()
 }

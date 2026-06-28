@@ -32,6 +32,7 @@ function createDefaultState(): AlbumDetailRouteState {
 export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteState>(
   "albumDetailRoute",
   {
+    settingKey: "album-detail-path",
     parse: (path) => {
       const parsed = parseAlbumBrowsePath(path);
       if (!parsed) return createDefaultState();

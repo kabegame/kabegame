@@ -2,19 +2,11 @@ import { defineStore, storeToRefs } from "pinia";
 import { computed, reactive, toRefs, watch } from "vue";
 import { useLocalStorage } from "@vueuse/core";
 import router from "@/router";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
+import type { AppSettingKey } from "@kabegame/core/stores/settings";
 
 const HIDE_PREFIX = "hide/";
 const GLOBAL_HIDE_KEY = "pathRoute.hide";
-const LEGACY_GALLERY_HIDE_KEY = "kabegame-gallery-hide";
-
-// 一次性迁移：老键 "kabegame-gallery-hide" → 新键 "pathRoute.hide"
-if (localStorage.getItem(GLOBAL_HIDE_KEY) === null) {
-  const legacy = localStorage.getItem(LEGACY_GALLERY_HIDE_KEY);
-  if (legacy !== null) {
-    localStorage.setItem(GLOBAL_HIDE_KEY, legacy);
-    localStorage.removeItem(LEGACY_GALLERY_HIDE_KEY);
-  }
-}
 
 export interface GlobalRouteState {
   hide: boolean;
@@ -31,6 +23,15 @@ export const useGlobalPathRoute = defineStore("globalPathRoute", () => {
 });
 
 type PathRouteStoreConfig<TState extends object> = {
+  /**
+   * 用于镜像 `?path=` 的 settings query key。
+   *
+   * @example
+   * ```ts
+   * createPathRouteStore("galleryRoute", { settingKey: "gallery-path", ... })
+   * ```
+   */
+  settingKey: Extract<AppSettingKey, "gallery-path" | "task-detail-path" | "surf-images-path" | "album-detail-path">;
   /** 解析业务部分：工厂会先剥掉 `hide/` 前缀再把剩余 path 交过来 */
   parse: (path: string) => TState;
   /** 构建业务部分：工厂会在外面自动套 `hide/`，不要自己套 */
@@ -70,6 +71,7 @@ export function createPathRouteStore<TState extends object>(
     const allowedKeys = new Set(Object.keys(local));
     const globalStore = useGlobalPathRoute();
     const { hide } = storeToRefs(globalStore);
+    const { settingValue: path, set: setPath } = useSettingKeyState(config.settingKey);
 
     const isOwningRoute = (): boolean => {
       if (!config.routeName) return true;
@@ -154,11 +156,11 @@ export function createPathRouteStore<TState extends object>(
       }
     };
 
-    // 初始 URL → state（仅当已在本 store 所属路由时）
+    // 初始 settings query → state（仅当已在本 store 所属路由时）。
+    // query 的 routeName/激活态 guard 由本 store 自己处理，settings 层只镜像 `?path=`。
     if (isOwningRoute()) {
-      const raw = router.currentRoute.value.query.path;
-      const s = Array.isArray(raw) ? String(raw[0] ?? "") : String(raw ?? "");
-      if (s.trim()) syncFromUrl(s);
+      const s = pathSettingValue().trim();
+      if (s) syncFromUrl(s);
     }
 
     // state → URL：state 变化时 replace，以及路由激活/store 首次实例化时修正 stale URL。
@@ -171,10 +173,9 @@ export function createPathRouteStore<TState extends object>(
           console.log(`[${storeId}] state→URL skip (not owning route)`, path);
           return;
         }
-        const cur = router.currentRoute.value;
-        if (cur.query.path === path) return;
+        if (path === String(pathSettingValue())) return;
         console.log(`[${storeId}] state→URL replace`, path);
-        await router.replace({ path: cur.path, query: { ...cur.query, path } });
+        await setPath(path as any, { history: "replace" });
         config.onStateChange?.(merged(), path);
       },
       { immediate: true }
@@ -186,16 +187,21 @@ export function createPathRouteStore<TState extends object>(
     watch(
       () => [
         router.currentRoute.value.name,
-        router.currentRoute.value.query.path,
+        path.value,
       ] as const,
-      ([name, raw], [prevName]) => {
+      ([name, raw], oldValue) => {
+        const prevName = oldValue?.[0];
         if (config.routeName && name !== config.routeName) return;
-        const s = Array.isArray(raw) ? String(raw[0] ?? "") : String(raw ?? "");
-        if (!s.trim()) return;
+        const s = String(raw ?? "").trim();
+        if (!s) {
+          Object.assign(local, getDefault());
+          return;
+        }
         if (s === currentPath.value) return;
         if (prevName !== name) return; // 路由刚切入：让 state→URL 负责
         syncFromUrl(s);
-      }
+      },
+      { immediate: true },
     );
 
     /** 批量 replace：一次性修改多个字段，由 state→URL watcher 统一触发 replace */
@@ -223,19 +229,19 @@ export function createPathRouteStore<TState extends object>(
       }
       const path = pathFor(overrideLocal as Partial<TState>, overrideHide);
       console.log(`[${storeId}] push → name:${config.routeName}`, path);
-      if (config.routeName) {
+      if (config.routeName && !isOwningRoute()) {
         await router.push({
           name: config.routeName,
           query: { path },
         });
       } else {
-        const cur = router.currentRoute.value;
-        await router.push({
-          path: cur.path,
-          query: { ...cur.query, path },
-        });
+        await setPath(path as any, { history: "push" });
       }
     };
+
+    function pathSettingValue(): string {
+      return String(path.value ?? "");
+    }
 
     return {
       ...toRefs(local),

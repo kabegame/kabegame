@@ -214,6 +214,7 @@ import { checkRecommendedPresetCompatibility } from "@/composables/useConfigComp
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import type { PluginRecommendedPreset, RunConfig } from "@kabegame/core/stores/crawler";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { trackEvent } from "@kabegame/core/track/umami";
 
 const { t, locale } = useI18n();
@@ -225,6 +226,7 @@ const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
 const pluginStore = usePluginStore();
 const settingsStore = useSettingsStore();
+const { settingValue: autoConfigTab, set: setAutoConfigTab } = useSettingKeyState("autoConfigTab");
 const appBackgroundCardClass = computed(() =>
   settingsStore.values.appBackgroundEnabled
     ? "!bg-transparent [--el-card-bg-color:transparent]"
@@ -392,7 +394,7 @@ watch(
 );
 
 watch(
-  () => route.query.tab,
+  () => autoConfigTab.value,
   (tab) => {
     const nextTab = tab === "recommended" ? "recommended" : "mine";
     listTab.value = nextTab;
@@ -415,10 +417,7 @@ function onTabChange(name: string | number) {
     });
     lastTrackedListTab.value = nextTab;
   }
-  const q = { ...route.query } as Record<string, string | string[]>;
-  if (tab === "recommended") q.tab = "recommended";
-  else delete q.tab;
-  void router.replace({ path: route.path, query: q });
+  void setAutoConfigTab(nextTab, { history: "replace" });
 }
 
 function onRecommendedPluginChange(name: string | string[] | number | number[]) {

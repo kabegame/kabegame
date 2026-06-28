@@ -1,13 +1,19 @@
 import { defineStore } from "pinia";
-import { nextTick, reactive, watch, type Ref } from "vue";
+import { computed, reactive, shallowRef, watch, type ComputedRef, type Ref } from "vue";
 import { useLocalStorage } from "@vueuse/core";
 import { invoke } from "../api";
-import { IS_DEV, IS_LIGHT_MODE, IS_ANDROID, IS_LINUX, IS_MACOS, IS_WINDOWS, IS_WEB } from "../env";
-import { guardDesktopOnly } from "../utils/desktopOnlyGuard";
+import { IS_ANDROID, IS_DEV, IS_WEB } from "../env";
 import { guardSuperRequired } from "../utils/superModeGuard";
-import { getIsSuper } from "../state/superState";
+import {
+  buildSettingsDescriptors,
+  type QuerySettingDescriptor,
+  type SettingDescriptor,
+  type SettingsHistoryMode,
+  type SettingsSaveOptions,
+} from "./settingsDescriptors";
+import { runLocalSettingsMigrations } from "./localSettingsMigrations";
 
-// 与后端 settings.rs 的 AppSettings（serde rename_all = camelCase）保持一致
+// 与后端 settings.rs 的 AppSettings（serde rename_all = camelCase）保持一致。
 export interface AppSettings {
   autoLaunch: boolean;
   maxConcurrentDownloads: number;
@@ -30,7 +36,7 @@ export interface AppSettings {
   wallpaperRotationMode: "random" | "sequential" | string;
   wallpaperStyle: "fill" | "fit" | "stretch" | "center" | "tile" | string;
   wallpaperRotationTransition: "none" | "fade" | "slide" | "zoom" | string;
-  // 按 wallpaperMode 记忆各模式的最后 style/transition（切换模式时用于恢复）
+  /** 按 wallpaperMode 记忆各模式的最后 style/transition（切换模式时用于恢复） */
   wallpaperStyleByMode: Record<string, string>;
   wallpaperTransitionByMode: Record<string, string>;
   wallpaperMode: "native" | "window" | string;
@@ -73,287 +79,205 @@ export interface AppSettings {
   galleryLayoutDirection: "vertical" | "horizontal";
   /** 是否启用 Kamechan；关闭后消息走普通弹出提示 */
   kamechanEnabled: boolean;
+
+  // --- URL query 镜像键（settings 层只做哑同步，页面自己做激活态 guard）---
+  /** `/auto-configs?tab=`；缺省为 `"mine"`，`"mine"` 会编码为空并删除参数。 */
+  autoConfigTab: "mine" | "recommended";
+  /** 图片预览 query `?pvwimgid=`；空串表示未预览。 */
+  previewImageId: string;
+  /** web super query `?super=1`；非 `"1"` 都解码为 false。 */
+  superMode: boolean;
+  /** 插件详情来源模式 query `?mode=remote`；缺省为 `"local"`。 */
+  pluginDetailMode: "local" | "remote";
+  /** 插件详情商店源 query `?sourceId=`；空串表示未指定。 */
+  pluginDetailSourceId: string;
+  /** 插件详情期望版本 query `?version=`；空串表示未指定。 */
+  pluginDetailVersion: string;
+  /** 画廊 route path query 的原始字符串，包含可选 `hide/` 前缀。 */
+  "gallery-path": string;
+  /** 任务详情 route path query 的原始字符串，包含可选 `hide/` 前缀。 */
+  "task-detail-path": string;
+  /** 畅游图片 route path query 的原始字符串，包含可选 `hide/` 前缀。 */
+  "surf-images-path": string;
+  /** 画册详情 route path query 的原始字符串，包含可选 `hide/` 前缀。 */
+  "album-detail-path": string;
 }
 
 export type AppSettingKey = keyof AppSettings;
 export type ImageClickAction = AppSettings["imageClickAction"];
+export type { SettingsSaveOptions, SettingsHistoryMode };
+
+const LOCAL_STORAGE_PREFIX = "kabegame-setting-";
+const descriptors = buildSettingsDescriptors();
+
+export interface SettingsQueryAdapter {
+  /**
+   * 响应式当前 query。通常由 app 层传入 `computed(() => route.query)`。
+   *
+   * @example
+   * ```ts
+   * setSettingsQueryAdapter({
+   *   query: computed(() => route.query),
+   *   write: (param, value, history) => router[history]({ query: { ...route.query, [param]: value } }),
+   * });
+   * ```
+   */
+  query: ComputedRef<Record<string, unknown>> | Ref<Record<string, unknown>>;
+  /**
+   * 写入单个 query 参数。`value === ""` 表示删除参数。
+   * `history` 由调用方决定，页面状态同步一般用 replace，用户导航动作一般用 push。
+   */
+  write(param: string, value: string, history: SettingsHistoryMode): Promise<void>;
+}
+
+const queryAdapterRef = shallowRef<SettingsQueryAdapter | null>(null);
 
 /**
- * Web mode 下通过浏览器 localStorage 持久化的设置项。
- * 这些键在 web 环境下不走后端 IPC，而是直接读写本地存储；
- * 其他平台（Tauri 桌面 / Android）仍走 IPC 后端。
+ * 注入 URL query 后端。
  *
- * - `readonly: true`：web 端只读；写入时弹 desktopOnlyGuard 引导用户前往桌面版。
- * - 省略 readonly：web 端可自由写入 localStorage（如语言、画廊设置等前端偏好）。
+ * core 包不依赖 vue-router；app 层在拿到 `useRoute()` / `useRouter()`
+ * 后调用一次这个函数即可让 query descriptor 开始响应式同步。
  *
- * 区别于"super 管控项"：非短路的设置项在 web 端仍走 RPC，需要 super 权限才可写入；
- * 非 super 状态下写入时弹 guardSuperRequired 提示开启 super 模式。
+ * @param adapter - 提供当前 query 的响应式引用，以及写入单个 query 参数的方法。
+ *
+ * @example
+ * ```ts
+ * const route = useRoute();
+ * const router = useRouter();
+ * setSettingsQueryAdapter({
+ *   query: computed(() => route.query as Record<string, unknown>),
+ *   async write(param, value, history) {
+ *     const query = { ...route.query };
+ *     if (value === "") delete query[param];
+ *     else query[param] = value;
+ *     await router[history]({ path: route.path, query });
+ *   },
+ * });
+ * ```
  */
-type WebLocalSettingEntry = {
-  [K in AppSettingKey]: { key: K; defaultValue: AppSettings[K]; readonly?: boolean };
-}[AppSettingKey];
+export function setSettingsQueryAdapter(adapter: SettingsQueryAdapter | null) {
+  queryAdapterRef.value = adapter;
+}
 
-const WEB_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
-  { key: "language", defaultValue: null },
-  { key: "imageClickAction", defaultValue: "preview", readonly: true },
-  // 壁纸轮播能力：web 模式下只做 localStorage 占位，修改时弹 desktopOnlyGuard
-  { key: "wallpaperRotationEnabled", defaultValue: false, readonly: true },
-  { key: "wallpaperRotationAlbumId", defaultValue: null, readonly: true },
-  { key: "wallpaperRotationIncludeSubalbums", defaultValue: true, readonly: true },
-  { key: "wallpaperRotationIntervalMinutes", defaultValue: 30, readonly: true },
-  { key: "wallpaperRotationMode", defaultValue: "random", readonly: true },
-  // web 下作为应用内背景图来源，可写入 localStorage
-  { key: "currentWallpaperImageId", defaultValue: null },
-  { key: "wallpaperVolume", defaultValue: 0.5, readonly: true },
-  { key: "wallpaperVideoPlaybackRate", defaultValue: 1, readonly: true },
-  // 壁纸样式/模式/过渡：web 不使用，readonly 占位防止 IPC 调用
-  { key: "wallpaperStyle", defaultValue: "fill", readonly: true },
-  { key: "wallpaperRotationTransition", defaultValue: "none", readonly: true },
-  { key: "wallpaperStyleByMode", defaultValue: {} as Record<string, string>, readonly: true },
-  { key: "wallpaperTransitionByMode", defaultValue: {} as Record<string, string>, readonly: true },
-  { key: "wallpaperMode", defaultValue: "native", readonly: true },
-  { key: "windowState", defaultValue: null as AppSettings["windowState"], readonly: true },
-  // 桌面/系统能力：web 端不可用，设置时弹 desktopOnlyGuard
-  { key: "albumDriveEnabled", defaultValue: false, readonly: true },
-  { key: "albumDriveMountPoint", defaultValue: "", readonly: true },
-  { key: "autoOpenCrawlerWebview", defaultValue: false, readonly: true },
-  { key: "defaultDownloadDir", defaultValue: null, readonly: true },
-  { key: "autoLaunch", defaultValue: false, readonly: true },
-];
+function descriptorFor<K extends AppSettingKey>(key: K): SettingDescriptor<K> | undefined {
+  return descriptors[key] as SettingDescriptor<K> | undefined;
+}
 
-const WEB_LOCAL_STORAGE_PREFIX = "kabegame-setting-";
+function backendKeys() {
+  return (Object.keys(descriptors) as AppSettingKey[]).filter((key) => descriptorFor(key)?.backend === "tauri");
+}
 
-/**
- * 将设置键映射到 `web.feature.*` 下的通用桶，
- * 避免为每个键单独添加 i18n 文案。
- */
-const WEB_READONLY_FEATURE_KEY_MAP: Partial<Record<AppSettingKey, string>> = {
-  currentWallpaperImageId: "wallpaper",
-  wallpaperVolume: "wallpaperPlayback",
-  wallpaperVideoPlaybackRate: "wallpaperPlayback",
-  wallpaperRotationEnabled: "wallpaperRotation",
-  wallpaperRotationAlbumId: "wallpaperRotation",
-  wallpaperRotationIncludeSubalbums: "wallpaperRotation",
-  wallpaperRotationIntervalMinutes: "wallpaperRotation",
-  wallpaperRotationMode: "wallpaperRotation",
-  wallpaperRotationTransition: "wallpaperRotation",
-  wallpaperStyle: "wallpaper",
-  wallpaperStyleByMode: "wallpaper",
-  wallpaperTransitionByMode: "wallpaper",
-  wallpaperMode: "wallpaper",
-  albumDriveEnabled: "albumDrive",
-  albumDriveMountPoint: "albumDrive",
-  autoOpenCrawlerWebview: "openCrawlerWindow",
-  windowState: "windowState",
-  autoLaunch: "autoLaunch",
-  defaultDownloadDir: "defaultDownloadDir",
-  imageClickAction: "imageClickAction",
-  maxConcurrentDownloads: "downloadSettings",
-  maxConcurrentTasks: "downloadSettings",
-  downloadIntervalMs: "downloadSettings",
-    networkRetryCount: "downloadSettings",
-    autoDeduplicate: "autoDeduplicate",
-    realtimeFolderSync: "localFolderSync",
-    importRecommendedScheduleEnabled: "scheduler",
-};
+function camelToSnake(str: string): string {
+  return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
 
-function webReadonlyFeatureKey(key: AppSettingKey): string {
-  return WEB_READONLY_FEATURE_KEY_MAP[key] ?? key;
+function rawQueryValue(param: string): string {
+  const adapter = queryAdapterRef.value;
+  if (!adapter) return "";
+  const raw = adapter.query.value[param];
+  if (Array.isArray(raw)) return String(raw[0] ?? "");
+  return raw == null ? "" : String(raw);
+}
+
+function decodeQueryValue<K extends AppSettingKey>(descriptor: QuerySettingDescriptor<K>): AppSettings[K] {
+  const raw = rawQueryValue(descriptor.param);
+  if (descriptor.codec) return descriptor.codec.decode(raw);
+  return raw as AppSettings[K];
+}
+
+function encodeQueryValue<K extends AppSettingKey>(
+  descriptor: QuerySettingDescriptor<K>,
+  value: AppSettings[K],
+): string {
+  if (descriptor.codec) return descriptor.codec.encode(value);
+  return String(value ?? "");
 }
 
 /**
- * 前端本地偏好：始终走 localStorage（不经 IPC，所有平台一致）。
- * 与 WEB_LOCAL_SETTING_ENTRIES 不同，这里不受 IS_WEB 限制——web 模式下
- * 两份列表会合并到同一个 localStorage 短路层，对消费者完全透明。
+ * 设置键状态机。
+ *
+ * `save` 不做乐观写，也不手动回滚：保存开始只标记 `savingByKey[key] = true`，
+ * 真正的 `values[key]` 更新和保存态退出都由观察源确认：
+ *
+ * - tauri：后端 `setting-change` 事件进入 `applyChanges`。
+ * - localStorage：`useLocalStorage` ref 的 watcher。
+ * - query：注入 adapter 的 `query` watcher。
+ *
+ * @example
+ * ```ts
+ * const settings = useSettingsStore();
+ * await settings.loadAll();
+ * await settings.save("galleryPageSize", 500);
+ * ```
  */
-const FRONTEND_LOCAL_SETTING_ENTRIES: WebLocalSettingEntry[] = [
-  { key: "appBackgroundEnabled", defaultValue: true },
-  { key: "appBackgroundBlur", defaultValue: 2 },
-  { key: "appBackgroundOpacity", defaultValue: 0.25 },
-  { key: "galleryPageSize", defaultValue: 100 },
-  { key: "galleryGridColumns", defaultValue: 0 },
-  { key: "galleryLayoutMode", defaultValue: "grid" },
-  { key: "galleryLayoutDirection", defaultValue: "vertical" },
-  { key: "kamechanEnabled", defaultValue: true },
-];
-
-/** 旧键 → 新键（`${WEB_LOCAL_STORAGE_PREFIX}${key}`）一次性迁移表。 */
-const LOCAL_SETTING_LEGACY_KEYS: Partial<Record<AppSettingKey, string>> = {
-  galleryPageSize: "kabegame-galleryPageSize",
-};
-
-type SettingKeyMeta = {
-  getter: string;       // IPC getter 命令名
-  setter: string;       // IPC setter 命令名
-  param?: string;       // setter 参数名（省略时 fallback 为 camelToSnake(key)）
-};
-
-/**
- * 构建设置键配置表
- * 先定义基础通用键，然后按平台/模式条件追加专属键
- */
-function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
-  const map: Partial<Record<AppSettingKey, SettingKeyMeta>> = {
-    // --- 基础通用键（所有平台） ---
-    language: { getter: "get_language", setter: "set_language", param: "language" },
-    importRecommendedScheduleEnabled: {
-      getter: "get_import_recommended_schedule_enabled",
-      setter: "set_import_recommended_schedule_enabled",
-      param: "enabled",
-    },
-    maxConcurrentDownloads: { getter: "get_max_concurrent_downloads", setter: "set_max_concurrent_downloads", param: "count" },
-    maxConcurrentTasks: { getter: "get_max_concurrent_tasks", setter: "set_max_concurrent_tasks", param: "count" },
-    downloadIntervalMs: { getter: "get_download_interval_ms", setter: "set_download_interval_ms", param: "intervalMs" },
-    networkRetryCount: { getter: "get_network_retry_count", setter: "set_network_retry_count", param: "count" },
-    autoDeduplicate: { getter: "get_auto_deduplicate", setter: "set_auto_deduplicate", param: "enabled" },
-    wallpaperRotationEnabled: { getter: "get_wallpaper_rotation_enabled", setter: "set_wallpaper_rotation_enabled", param: "enabled" },
-    wallpaperRotationAlbumId: { getter: "get_wallpaper_rotation_album_id", setter: "set_wallpaper_rotation_album_id", param: "albumId" },
-    wallpaperRotationIncludeSubalbums: {
-      getter: "get_wallpaper_rotation_include_subalbums",
-      setter: "set_wallpaper_rotation_include_subalbums",
-      param: "includeSubalbums",
-    },
-    wallpaperRotationIntervalMinutes: { getter: "get_wallpaper_rotation_interval_minutes", setter: "set_wallpaper_rotation_interval_minutes", param: "minutes" },
-    wallpaperRotationMode: { getter: "get_wallpaper_rotation_mode", setter: "set_wallpaper_rotation_mode", param: "mode" },
-    wallpaperStyle: { getter: "get_wallpaper_rotation_style", setter: "set_wallpaper_style", param: "style" },
-    wallpaperRotationTransition: { getter: "get_wallpaper_rotation_transition", setter: "set_wallpaper_rotation_transition", param: "transition" },
-    wallpaperStyleByMode: { getter: "get_wallpaper_style_by_mode", setter: "set_wallpaper_style_by_mode" },
-    wallpaperTransitionByMode: { getter: "get_wallpaper_transition_by_mode", setter: "set_wallpaper_transition_by_mode" },
-    wallpaperMode: { getter: "get_wallpaper_mode", setter: "set_wallpaper_mode", param: "mode" },
-    wallpaperDisabled: { getter: "get_wallpaper_disabled", setter: "set_wallpaper_disabled", param: "disabled" },
-    wallpaperVolume: { getter: "get_wallpaper_volume", setter: "set_wallpaper_volume", param: "volume" },
-    wallpaperVideoPlaybackRate: { getter: "get_wallpaper_video_playback_rate", setter: "set_wallpaper_video_playback_rate", param: "rate" },
-    windowState: { getter: "get_window_state", setter: "set_window_state" },
-    currentWallpaperImageId: { getter: "get_current_wallpaper_image_id", setter: "set_current_wallpaper_image_id" },
-  };
-
-  // 非安卓才归入
-  if (!IS_ANDROID) {
-    map.autoLaunch = { getter: "get_auto_launch", setter: "set_auto_launch", param: "enabled" };
-    map.imageClickAction = { getter: "get_image_click_action", setter: "set_image_click_action", param: "action" };
-    map.defaultDownloadDir = { getter: "get_default_download_dir", setter: "set_default_download_dir", param: "dir" };
-    map.autoOpenCrawlerWebview = {
-      getter: "get_auto_open_crawler_webview",
-      setter: "set_auto_open_crawler_webview",
-      param: "enabled",
-    };
-  }
-
-  if (!IS_ANDROID && !IS_WEB && (IS_MACOS || IS_LINUX || IS_WINDOWS)) {
-    map.realtimeFolderSync = {
-      getter: "get_realtime_folder_sync",
-      setter: "set_realtime_folder_sync",
-      param: "enabled",
-    };
-  }
-
-  // 非安卓 + 非 light 模式
-  if (!IS_ANDROID && !IS_LIGHT_MODE) {
-    map.albumDriveEnabled = { getter: "get_album_drive_enabled", setter: "set_album_drive_enabled", param: "enabled" };
-    map.albumDriveMountPoint = { getter: "get_album_drive_mount_point", setter: "set_album_drive_mount_point", param: "mountPoint" };
-  }
-
-  return map;
-}
-
-/**
- * 设置键状态机                   (一般也很短)
- * 初始状态 -> loading -> down -> saving
-              (很短的过程)  ^---<----|        
- *  
-*/
 export const useSettingsStore = defineStore("settings", () => {
-  // 后端 AppSettings 的 key-value 缓存（key 与后端完全一致）
+  runLocalSettingsMigrations();
+
   const values = reactive<Partial<AppSettings>>({});
-  const loadingByKey = reactive<Record<string, boolean>>({});
-  const savingByKey = reactive<Record<string, boolean>>({});
-
-  // 统一的设置键配置表
-  const SETTING_KEY_MAP = buildSettingKeyMap();
-
-  // localStorage 短路层：FRONTEND_LOCAL 始终激活（所有平台），WEB_LOCAL 仅 web 模式追加。
-  // 对消费者透明：load/save 命中 webLocalRefs 的 key 即短路到 localStorage，其他走 IPC。
-  const webLocalRefs: Partial<Record<AppSettingKey, Ref<any>>> = {};
-  const webLocalReadonly = new Set<AppSettingKey>();
-  const localEntries: WebLocalSettingEntry[] = [
-    ...FRONTEND_LOCAL_SETTING_ENTRIES,
-    ...(IS_WEB ? WEB_LOCAL_SETTING_ENTRIES : []),
-  ];
-  for (const entry of localEntries) {
-    const newKey = `${WEB_LOCAL_STORAGE_PREFIX}${entry.key}`;
-    const legacyKey = LOCAL_SETTING_LEGACY_KEYS[entry.key];
-    if (legacyKey && localStorage.getItem(newKey) === null) {
-      const legacy = localStorage.getItem(legacyKey);
-      if (legacy !== null) {
-        localStorage.setItem(newKey, legacy);
-        localStorage.removeItem(legacyKey);
-      }
-    }
-    webLocalRefs[entry.key] = useLocalStorage(
-      newKey,
-      entry.defaultValue as any,
-      { mergeDefaults: true },
-    );
-    if (entry.readonly) webLocalReadonly.add(entry.key);
-    // 预填 values，并保持与 ref 的双向同步（其它 tab 改 localStorage 也能带动 UI）
-    (values as any)[entry.key] = webLocalRefs[entry.key]!.value;
-    watch(webLocalRefs[entry.key]!, (v: unknown) => {
-      (values as any)[entry.key] = v;
-    });
-  }
-  const isWebLocal = (key: AppSettingKey) => key in webLocalRefs;
-  // 保留原语义：readonly 仅在 web 模式下生效；非 web 不关心 readonly。
-  const isWebReadonly = (key: AppSettingKey) => IS_WEB && webLocalReadonly.has(key);
-
-  const isLoading = (key: AppSettingKey) => !!loadingByKey[key];
-  const isSaving = (key: AppSettingKey) => !!savingByKey[key];
-
-  // 将 key 映射到对应的 setter 命令名
-  const getSetterCommand = (key: AppSettingKey): string | null => {
-    return SETTING_KEY_MAP[key]?.setter || null;
-  };
-
-  const backendKeys = () => Object.keys(SETTING_KEY_MAP) as AppSettingKey[];
+  const loadingByKey = reactive<Partial<Record<AppSettingKey, boolean>>>({});
+  const savingByKey = reactive<Partial<Record<AppSettingKey, boolean>>>({});
+  const localRefs: Partial<Record<AppSettingKey, Ref<unknown>>> = {};
 
   let settingsLoaded = false;
   let settingsLoadPromise: Promise<void> | null = null;
 
+  for (const key of Object.keys(descriptors) as AppSettingKey[]) {
+    const descriptor = descriptorFor(key);
+    if (!descriptor) continue;
+
+    if (descriptor.backend === "localStorage") {
+      const storageKey = `${LOCAL_STORAGE_PREFIX}${String(key)}`;
+      const localRef = useLocalStorage(storageKey, descriptor.defaultValue as any, { mergeDefaults: true });
+      localRefs[key] = localRef;
+      (values as any)[key] = localRef.value;
+      watch(localRef, (value) => {
+        (values as any)[key] = value;
+        savingByKey[key] = false;
+      });
+      continue;
+    }
+
+    if (descriptor.backend === "readonly") {
+      (values as any)[key] = descriptor.defaultValue;
+      continue;
+    }
+
+    if (descriptor.backend === "query") {
+      (values as any)[key] = decodeQueryValue(descriptor as QuerySettingDescriptor<any>);
+      watch(
+        () => decodeQueryValue(descriptor as QuerySettingDescriptor<any>),
+        (value) => {
+          (values as any)[key] = value;
+          savingByKey[key] = false;
+        },
+        { immediate: true },
+      );
+    }
+  }
+
   const applyAndroidDefaults = () => {
     if (!IS_ANDROID) return;
-
-    // imageClickAction: 安卓下固定为应用内预览
     (values as any).imageClickAction = "preview";
-
-    // defaultDownloadDir: 保持 null，后端自动使用默认目录
     (values as any).defaultDownloadDir = null;
   };
 
   const setBackendLoading = (loading: boolean) => {
     for (const key of backendKeys()) {
-      if (!isWebLocal(key)) {
-        loadingByKey[key] = loading;
-      }
-    }
-  };
-
-  const syncLocalValue = (key: AppSettingKey) => {
-    if (isWebLocal(key)) {
-      (values as any)[key] = webLocalRefs[key]!.value;
+      loadingByKey[key] = loading;
     }
   };
 
   const applySnapshot = (snapshot: Partial<AppSettings>) => {
-    const knownKeys = new Set(backendKeys());
     for (const [rawKey, value] of Object.entries(snapshot)) {
       const key = rawKey as AppSettingKey;
-      if (!knownKeys.has(key) || isWebLocal(key)) continue;
+      if (descriptorFor(key)?.backend !== "tauri") continue;
       (values as any)[key] = value;
     }
     applyAndroidDefaults();
   };
 
   const fetchSettingsBatch = async () => {
-    const keys = backendKeys().filter((key) => !isWebLocal(key));
+    const keys = backendKeys();
     if (keys.length === 0) {
       applyAndroidDefaults();
       settingsLoaded = true;
@@ -377,7 +301,7 @@ export const useSettingsStore = defineStore("settings", () => {
     return settingsLoadPromise;
   };
 
-  const ensureLoaded = async () => {
+  const loadAll = async () => {
     if (settingsLoadPromise) {
       await settingsLoadPromise.catch((error) => {
         console.error("Failed to load settings:", error);
@@ -385,166 +309,151 @@ export const useSettingsStore = defineStore("settings", () => {
       return;
     }
     if (settingsLoaded) return;
-    if (!settingsLoadPromise) {
-      setSettingsLoadPromise(
-        fetchSettingsBatch().catch((error) => {
-          console.error("Failed to load settings:", error);
-        }),
-      );
-    }
+    setSettingsLoadPromise(
+      fetchSettingsBatch().catch((error) => {
+        console.error("Failed to load settings:", error);
+      }),
+    );
     await settingsLoadPromise;
   };
 
   const refreshAll = async () => {
-    if (settingsLoadPromise) {
-      await settingsLoadPromise;
-    }
+    if (settingsLoadPromise) await settingsLoadPromise;
     await setSettingsLoadPromise(fetchSettingsBatch());
   };
 
-  const load = async <K extends AppSettingKey>(key: K) => {
-    if (isWebLocal(key)) {
-      syncLocalValue(key);
-      return;
-    }
-    if (!SETTING_KEY_MAP[key]) {
-      console.warn(`No settings entry found for key: ${key}`);
-      return;
-    }
-    await ensureLoaded();
-  };
-
-  const loadMany = async (keys: AppSettingKey[]) => {
-    for (const key of keys) {
-      syncLocalValue(key);
-    }
-
-    if (keys.some((key) => !isWebLocal(key) && SETTING_KEY_MAP[key])) {
-      await ensureLoaded();
-    }
-  };
-
-  // 兼容旧调用名：loadAll 只确保首次加载，不作为刷新入口。
-  const loadAll = ensureLoaded;
-
+  /**
+   * 应用后端设置变更事件。
+   *
+   * 这是 tauri 后端的真实值同步入口，也是 tauri 保存态的确认入口；
+   * 命中的 key 会同时更新 `values[key]` 并清掉 `savingByKey[key]`。
+   */
   const applyChanges = (changes: Partial<AppSettings> | Record<string, unknown>) => {
     for (const [rawKey, value] of Object.entries(changes)) {
       const key = rawKey as AppSettingKey;
-      if (isWebLocal(key) && !isWebReadonly(key)) {
-        webLocalRefs[key]!.value = value;
-      } else {
+      const descriptor = descriptorFor(key);
+      if (!descriptor) continue;
+      if (descriptor.backend === "localStorage") {
+        localRefs[key]!.value = value;
+      } else if (descriptor.backend === "tauri") {
         (values as any)[key] = value;
       }
-    }
-  };
-
-  // 将 key 映射到对应的 setter 参数名
-  const getSetterParamKey = (key: AppSettingKey): string => {
-    const meta = SETTING_KEY_MAP[key];
-    return meta?.param || camelToSnake(key);
-  };
-
-  // 将 camelCase 转换为 snake_case
-  const camelToSnake = (str: string): string => {
-    return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-  };
-
-  const save = async <K extends AppSettingKey>(
-    key: K,
-    value: AppSettings[K],
-    onAfterSave?: () => Promise<void> | void,
-  ) => {
-    if (savingByKey[key]) return;
-    if (loadingByKey[key]) return;
-
-    savingByKey[key] = true;
-    const prevValue = (values as any)[key];
-    try {
-      // 更新本地值
-      (values as any)[key] = value;
-
-      // Web mode：写入 localStorage 后即完成，不再走后端 IPC
-      if (isWebLocal(key)) {
-        if (isWebReadonly(key)) {
-          // 让 watcher 先捕获到「值被改变」的中间状态，然后再回滚；
-          // 否则 Vue 3 对"净变化=0"的连续写入会去重，导致组件里的
-          // localValue ref 无法通过 watch(settingValue) 被重置（UI 看上去「设置成功」）。
-          await nextTick();
-          (values as any)[key] = prevValue;
-          void guardDesktopOnly(webReadonlyFeatureKey(key));
-          return;
-        }
-        webLocalRefs[key]!.value = value;
-        if (onAfterSave) {
-          await onAfterSave();
-        }
-        return;
-      }
-
-      if (IS_WEB && !getIsSuper()) {
-        await nextTick();
-        // 回滚本地值
-        (values as any)[key] = prevValue;
-        guardDesktopOnly(webReadonlyFeatureKey(key));
-        return;
-      }
-
-      // 调用后端接口
-      const command = getSetterCommand(key);
-      if (!command) {
-        console.warn(`No setter command found for key: ${key}`);
-        // 回滚本地值
-        (values as any)[key] = prevValue;
-        return;
-      }
-
-      // 构建参数对象：将 camelCase key 转换为 snake_case 参数名
-      const paramKey = getSetterParamKey(key);
-      const args: Record<string, any> = { [paramKey]: value };
-      if (IS_DEV) {
-        console.log(`Saving setting ${key} with value ${value}`, args);
-      }
-      await invoke(command, args);
-
-      // 执行可选的回调
-      if (onAfterSave) {
-        await onAfterSave();
-      }
-    } catch (error) {
-      // 回滚本地值
-      (values as any)[key] = prevValue;
-      // web mode 下 RPC -32001 forbidden：需要 super 权限，弹窗提示
-      if (IS_WEB && (error as { code?: number }).code === -32001) {
-        void guardSuperRequired();
-        return;
-      }
-      console.error(`Failed to save setting ${key}:`, error);
-      throw error;
-    } finally {
       savingByKey[key] = false;
     }
   };
 
-  // 判断状态是否为 down（既不在 loading 也不在 saving）
-  const isDown = (key: AppSettingKey) => {
-    return !loadingByKey[key] && !savingByKey[key];
+  const saveLocalStorage = <K extends AppSettingKey>(key: K, value: AppSettings[K]) => {
+    const localRef = localRefs[key];
+    if (!localRef) {
+      savingByKey[key] = false;
+      return false;
+    }
+    const unchanged = Object.is(localRef.value, value);
+    localRef.value = value;
+    if (unchanged) savingByKey[key] = false;
+    return true;
   };
 
+  const saveQuery = async <K extends AppSettingKey>(
+    key: K,
+    descriptor: QuerySettingDescriptor<K>,
+    value: AppSettings[K],
+    opts?: SettingsSaveOptions,
+  ) => {
+    const adapter = queryAdapterRef.value;
+    if (!adapter) {
+      savingByKey[key] = false;
+      return false;
+    }
+    const encoded = encodeQueryValue(descriptor, value);
+    const previous = rawQueryValue(descriptor.param);
+    const history = opts?.history ?? "replace";
+    if (!opts?.history && IS_DEV) {
+      console.warn(`[settings] query setting "${String(key)}" saved without history; using replace`);
+    }
+    await adapter.write(descriptor.param, encoded, history);
+    if (previous === encoded) savingByKey[key] = false;
+    return true;
+  };
+
+  const saveTauri = async <K extends AppSettingKey>(
+    key: K,
+    descriptor: Extract<SettingDescriptor<K>, { backend: "tauri" }>,
+    value: AppSettings[K],
+  ) => {
+    const paramKey = descriptor.param || camelToSnake(String(key));
+    const args: Record<string, unknown> = { [paramKey]: value };
+    if (IS_DEV) {
+      console.log(`Saving setting ${String(key)} with value`, value, args);
+    }
+    await invoke(descriptor.setter, args);
+    return true;
+  };
+
+  /**
+   * 保存单个设置值。
+   *
+   * @param key - `AppSettings` 中的设置键。
+   * @param value - 与 key 类型匹配的新值。
+   * @param opts - query history 与可选埋点上下文；store 只消费 `history`。
+   * @returns `true` 表示写入已发起或完成；`false` 表示当前状态拒绝写入。
+   *
+   * @example
+   * ```ts
+   * await settings.save("galleryPageSize", 500);
+   * await settings.save("gallery-path", "hide/全部", { history: "replace" });
+   * ```
+   */
+  const save = async <K extends AppSettingKey>(
+    key: K,
+    value: AppSettings[K],
+    opts?: SettingsSaveOptions,
+  ): Promise<boolean> => {
+    if (savingByKey[key] || loadingByKey[key]) return false;
+
+    const descriptor = descriptorFor(key);
+    if (!descriptor) {
+      console.warn(`No setting descriptor found for key: ${String(key)}`);
+      return false;
+    }
+    if (descriptor.backend === "readonly") return false;
+
+    savingByKey[key] = true;
+    try {
+      if (descriptor.backend === "localStorage") {
+        return saveLocalStorage(key, value);
+      }
+      if (descriptor.backend === "query") {
+        return await saveQuery(key, descriptor as QuerySettingDescriptor<K>, value, opts);
+      }
+      return await saveTauri(key, descriptor as Extract<SettingDescriptor<K>, { backend: "tauri" }>, value);
+    } catch (error) {
+      savingByKey[key] = false;
+      if (IS_WEB && (error as { code?: number }).code === -32001) {
+        void guardSuperRequired();
+        return false;
+      }
+      console.error(`Failed to save setting ${String(key)}:`, error);
+      throw error;
+    }
+  };
+
+  const isLoading = (key: AppSettingKey) => !!loadingByKey[key];
+  const isSaving = (key: AppSettingKey) => !!savingByKey[key];
+  const isDown = (key: AppSettingKey) => !loadingByKey[key] && !savingByKey[key];
+  const isReadonly = (key: AppSettingKey) => descriptorFor(key)?.backend === "readonly";
+
   return {
-    // app settings
     values,
     loadingByKey,
     savingByKey,
     isLoading,
     isSaving,
     isDown,
-    isWebReadonly,
+    isReadonly,
     applyChanges,
-    ensureLoaded,
-    refreshAll,
-    load,
-    loadMany,
     loadAll,
+    refreshAll,
     save,
   };
 });

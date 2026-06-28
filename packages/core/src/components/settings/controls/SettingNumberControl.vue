@@ -61,7 +61,10 @@ watch(
 
 const onChange = async (v: number | undefined) => {
   if (typeof v !== "number" || !Number.isFinite(v)) return;
-  await set(v);
+  const ok = await set(v);
+  if (!ok) {
+    const current = Number(settingValue.value);
+    localValue.value = Number.isFinite(current) ? current : 0;
+  }
 };
 </script>
-

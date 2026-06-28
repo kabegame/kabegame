@@ -1132,9 +1132,6 @@ const handleRefresh = async () => {
     const found = albumStore.albums.find((a) => a.id === albumId.value);
     if (found) albumName.value = found.name;
 
-    // 2) 确保设置缓存已初始化；设置刷新只由 Settings 页手动触发或 setting-change 驱动。
-    await settingsStore.ensureLoaded();
-
     // 3) 手动刷新：清缓存强制重载详情（否则 store 缓存会让 UI 看起来“没刷新”）
     delete albumStore.albumImages[albumId.value];
     delete albumStore.albumPreviews[albumId.value];
@@ -1797,11 +1794,6 @@ useAlbumImagesChangeRefresh({
 // ---------- Lifecycle ----------
 onMounted(async () => {
   isAlbumDetailActive.value = true;
-  try {
-    await settingsStore.ensureLoaded();
-  } catch (e) {
-    console.error("加载设置失败:", e);
-  }
 });
 
 onActivated(async () => {

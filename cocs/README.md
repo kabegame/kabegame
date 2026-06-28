@@ -103,6 +103,12 @@
   - 主题：i18n 迁移约束、命名空间规范与落地状态。
   - 适用场景：新增国际化 key、迁移旧文案、核对多语言覆盖。
 
+## 设置（`settings/`）
+
+- [settings/SETTINGS_BACKENDS.md](settings/SETTINGS_BACKENDS.md)
+  - 主题：前端设置后端抽象。涵盖 `tauri` / `localStorage` / `query` / `readonly` 四类 descriptor、事件驱动保存状态机、query adapter 注入和 pathRoute 接入边界。
+  - 适用场景：新增设置 key；迁移 URL query 状态；排查设置保存态、web readonly 回弹、query 参数同步和 localStorage 迁移。
+
 ## 构建打包（`build/`）
 
 - [build/PLATFORM_SHARED_LIBS.md](build/PLATFORM_SHARED_LIBS.md)

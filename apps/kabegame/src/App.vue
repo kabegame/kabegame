@@ -155,7 +155,7 @@ import ja from "element-plus/dist/locale/ja.mjs";
 import ko from "element-plus/dist/locale/ko.mjs";
 import { Picture, Grid, Setting, Collection, QuestionFilled, Compass, AlarmClock } from "@element-plus/icons-vue";
 import appLogoUrl from "@/assets/icon-small.png";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { setSettingsQueryAdapter, useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useI18n, setLocale, tryResolveStoredLanguage, resolveBrowserLanguage, i18n } from "@kabegame/i18n";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
@@ -191,7 +191,7 @@ import { usePluginStore } from "./stores/plugins";
 import { useFailedImagesStore } from "./stores/failedImages";
 import { useDownloadStateStore } from "./stores/downloadState";
 import { useAlbumStore } from "./stores/albums";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { ElMessageBox } from "element-plus";
@@ -241,7 +241,7 @@ async function initializeLanguageSetting() {
   const detectedLocale = resolveBrowserLanguage();
   console.log("set language detected", detectedLocale);
   setLocale(detectedLocale);
-  await setLanguageSetting(detectedLocale, undefined, { source: "language_auto_init" });
+  await setLanguageSetting(detectedLocale, { source: "language_auto_init" });
 }
 
 // Android 底部 Tab 配置（均匀分布；爬虫仅桌面端有代理，故仅侧栏展示）
@@ -277,6 +277,16 @@ const downloadStateStore = useDownloadStateStore();
 const albumStore = useAlbumStore();
 
 const router = useRouter();
+const route = useRoute();
+setSettingsQueryAdapter({
+  query: computed(() => route.query as Record<string, unknown>),
+  async write(param, value, history) {
+    const query = { ...route.query } as Record<string, any>;
+    if (value === "") delete query[param];
+    else query[param] = value;
+    await router[history]({ path: route.path, query });
+  },
+});
 const modalStack = useModalStackStore();
 
 // 文件拖拽提示层引用
@@ -483,7 +493,7 @@ onMounted(async () => {
   }
 
   // 加载全部设置
-  await settingsStore.ensureLoaded();
+  await settingsStore.loadAll();
 
   await initializeLanguageSetting();
   try {

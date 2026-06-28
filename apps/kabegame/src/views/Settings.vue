@@ -420,23 +420,8 @@ function handleSettingsAction(payload: { id: string; data: { type: string } }) {
   if (payload.id === HeaderFeatureId.Help) openHelpDrawer();
 }
 
-
-const loadSettings = async () => {
-  startLoading();
-  try {
-    await settingsStore.ensureLoaded();
-  } finally {
-    finishLoading();
-  }
-};
-
 const refreshSettings = async () => {
-  startLoading();
-  try {
-    await settingsStore.refreshAll();
-  } finally {
-    finishLoading();
-  }
+  await settingsStore.refreshAll();
 };
 
 // 统一的刷新处理
@@ -457,7 +442,6 @@ const batteryOptimizationStore = useBatteryOptimizationStore();
 
 // 首次进入时加载设置
 onMounted(async () => {
-  await loadSettings();
   await refreshCurrentWallpaperPath();
 });
 

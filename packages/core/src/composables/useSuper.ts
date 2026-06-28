@@ -1,6 +1,7 @@
 import { computed, type ComputedRef } from "vue";
 import { IS_WEB } from "../env";
 import { getIsSuper } from "../state/superState";
+import { useSettingsStore } from "../stores/settings";
 
 // Why: web 模式下 super 以 URL `?super=1` 为唯一真源，不再写 localStorage；
 // 非 web 平台 isSuper 恒为 true，setSuper 无副作用。
@@ -10,7 +11,10 @@ export function useSuper(): {
   isSuper: ComputedRef<boolean>;
   setSuper: (v: boolean) => Promise<void>;
 } {
-  const isSuper = computed<boolean>(() => getIsSuper());
+  const settingsStore = useSettingsStore();
+  const isSuper = computed<boolean>(() =>
+    IS_WEB ? settingsStore.values.superMode ?? getIsSuper() : true
+  );
 
   async function setSuper(v: boolean): Promise<void> {
     if (!IS_WEB) return;
