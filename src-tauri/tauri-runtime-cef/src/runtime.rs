@@ -49,11 +49,34 @@ mod imp {
 
     static WINDOWED_QUIT: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     static WINDOWED_CONTEXT_INITIALIZED: AtomicBool = AtomicBool::new(false);
+    const CHROME_ONLY_DISABLED_FEATURES: &[&str] = &["ImmersiveReadAnything"];
 
     fn windowed_quit() -> Arc<AtomicBool> {
         WINDOWED_QUIT
             .get_or_init(|| Arc::new(AtomicBool::new(false)))
             .clone()
+    }
+
+    fn disable_chrome_only_features(command_line: &CommandLine) {
+        let switch = CefString::from("disable-features");
+        let mut value = if command_line.has_switch(Some(&switch)) == 1 {
+            CefString::from(&command_line.switch_value(Some(&switch))).to_string()
+        } else {
+            String::new()
+        };
+
+        for feature in CHROME_ONLY_DISABLED_FEATURES {
+            if value.split(',').any(|entry| entry == *feature) {
+                continue;
+            }
+            if !value.is_empty() {
+                value.push(',');
+            }
+            value.push_str(feature);
+        }
+
+        command_line
+            .append_switch_with_value(Some(&switch), Some(&CefString::from(value.as_str())));
     }
 
     /// CEF runtime 的主状态。
@@ -658,6 +681,10 @@ mod imp {
                     Some(&CefString::from("use-angle")),
                     Some(&CefString::from("gl")),
                 );
+                // CEF WebContents are not Chrome browser tabs. Some Chrome UI
+                // features assume tabs::TabInterface exists and crash on SPA
+                // soft navigations when variations enable them.
+                disable_chrome_only_features(cl);
                 // 禁用 zygote:Linux 下渲染进程默认从 zygote fork,**不会**重新
                 // `execute_process` → 不跑 `on_register_custom_schemes` → fork 出的
                 // renderer 不认 `ipc://` / `cef-ipc://`(`ERR_UNKNOWN_URL_SCHEME`),
