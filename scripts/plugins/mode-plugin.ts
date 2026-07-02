@@ -114,7 +114,7 @@ export class ModePlugin extends BasePlugin {
             os.homedir(),
             ".local",
             "share",
-            "cef",
+            bs.context.cmd.isDev ? "cef-dev" : "cef-prod",
           );
           const libcef = path.join(cefPath, "libcef.so");
           if (!fs.existsSync(libcef)) {

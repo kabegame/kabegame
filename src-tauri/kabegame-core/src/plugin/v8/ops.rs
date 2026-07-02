@@ -153,7 +153,9 @@ pub fn op_kabegame_set_plugin_data(
     #[serde] value: JsonValue,
 ) -> Result<(), JsErrorBox> {
     if !value.is_object() {
-        return Err(JsErrorBox::generic("set_plugin_data: value must be an object"));
+        return Err(JsErrorBox::generic(
+            "set_plugin_data: value must be an object",
+        ));
     }
     let plugin_id = state.borrow::<KabegameOpState>().plugin_id.clone();
     Storage::global()
@@ -163,11 +165,7 @@ pub fn op_kabegame_set_plugin_data(
 }
 
 #[op2(fast)]
-pub fn op_kabegame_set_header(
-    state: &mut OpState,
-    #[string] key: String,
-    #[string] value: String,
-) {
+pub fn op_kabegame_set_header(state: &mut OpState, #[string] key: String, #[string] value: String) {
     let k = key.trim();
     if k.is_empty() {
         return;
@@ -202,10 +200,13 @@ pub fn op_kabegame_warn(state: &mut OpState, #[string] msg: String) {
 }
 
 #[op2(fast)]
-pub fn op_kabegame_add_progress(
-    state: &mut OpState,
-    percentage: f64,
-) -> Result<f64, JsErrorBox> {
+pub fn op_kabegame_log(state: &mut OpState, #[string] level: String, #[string] message: String) {
+    let task_id = state.borrow::<KabegameOpState>().task_id.clone();
+    GlobalEmitter::global().emit_task_log(&task_id, &level, &message);
+}
+
+#[op2(fast)]
+pub fn op_kabegame_add_progress(state: &mut OpState, percentage: f64) -> Result<f64, JsErrorBox> {
     {
         let state = state.borrow::<KabegameOpState>();
         check_cancelled(&state.cancel)?;
@@ -412,7 +413,9 @@ fn optional_i64(
     match opts.get(key) {
         None | Some(JsonValue::Null) => Ok(None),
         Some(JsonValue::Number(n)) => n.as_i64().map(Some).ok_or_else(|| {
-            JsErrorBox::generic(format!("{label} opts: `{key}` must be an integer if present"))
+            JsErrorBox::generic(format!(
+                "{label} opts: `{key}` must be an integer if present"
+            ))
         }),
         Some(_) => Err(JsErrorBox::generic(format!(
             "{label} opts: `{key}` must be an integer if present"
@@ -427,7 +430,9 @@ fn optional_u32(
 ) -> Result<Option<u32>, JsErrorBox> {
     match optional_i64(opts, key, label)? {
         None => Ok(None),
-        Some(v) if v < 0 => Err(JsErrorBox::generic(format!("{label} opts: `{key}` must be >= 0"))),
+        Some(v) if v < 0 => Err(JsErrorBox::generic(format!(
+            "{label} opts: `{key}` must be >= 0"
+        ))),
         Some(v) => u32::try_from(v)
             .map(Some)
             .map_err(|_| JsErrorBox::generic(format!("{label} opts: `{key}` is too large"))),
@@ -520,23 +525,21 @@ async fn http_get_text_with_retry(
                 }
                 if let Some(loc) = resp.headers().get(reqwest::header::LOCATION) {
                     if let Ok(loc_str) = loc.to_str() {
-                        let next_url =
-                            if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
-                                loc_str.to_string()
-                            } else {
-                                match Url::parse(&current_url).and_then(|u| u.join(loc_str)) {
-                                    Ok(u) => u.to_string(),
-                                    Err(e) => {
-                                        let msg = format!("[{label}] 重定向 URL 解析失败：{e}");
-                                        eprintln!("{msg} URL: {current_url}");
-                                        emit_http_error(
-                                            task_id,
-                                            format!("{msg}，URL: {current_url}"),
-                                        );
-                                        break Err(format!("Redirect parse error: {e}"));
-                                    }
+                        let next_url = if loc_str.starts_with("http://")
+                            || loc_str.starts_with("https://")
+                        {
+                            loc_str.to_string()
+                        } else {
+                            match Url::parse(&current_url).and_then(|u| u.join(loc_str)) {
+                                Ok(u) => u.to_string(),
+                                Err(e) => {
+                                    let msg = format!("[{label}] 重定向 URL 解析失败：{e}");
+                                    eprintln!("{msg} URL: {current_url}");
+                                    emit_http_error(task_id, format!("{msg}，URL: {current_url}"));
+                                    break Err(format!("Redirect parse error: {e}"));
                                 }
-                            };
+                            }
+                        };
 
                         redirect_count += 1;
                         emit_http_warn(

@@ -25,6 +25,8 @@ CEF_BRANCH=7827                     # 对应 CEF 149.0.x / Chromium 149.0.7827.x
 IMG="$HOME/e/cef-build.img"         # ext4 镜像文件(放 exFAT 大盘)
 IMG_SIZE=200G                       # 镜像大小(prod LTO 峰值占用不小,别低于 150G)
 CEFBUILD="$HOME/cefbuild"           # 挂载点 = 构建根目录
+CEF_EXPORT_ROOT="$HOME/.local/share" # cef-rs 扁平 runtime 导出目录的父目录
+CEF_RS_ARCHIVE_VERSION=149.0.2       # 对应 Cargo.lock 里的 cef-dll-sys 149.0.0+149.0.2
 
 # 浅 checkout:只拉当前分支 tip,不下完整 git 历史(chromium/src 历史占大头,
 # 全量单次 fetch ≈17G 过代理极易被掐断且不可续传)。牺牲 git 历史换"一次能下完"。
@@ -175,7 +177,51 @@ configure_update() {
 }
 
 # ---------------------------------------------------------------------------
-# 7. 跑 automate-git.py
+# 7. 导出 cef-rs 期望的扁平 runtime 目录
+# ---------------------------------------------------------------------------
+export_cef_runtime() {
+  local distrib="$1"
+  local export_dir="$CEF_EXPORT_ROOT/cef-${VARIANT}"
+  local tmp_dir="${export_dir}.tmp"
+
+  [[ -d "$distrib/Release" ]] || die "CEF distrib 缺少 Release/: $distrib"
+  [[ -d "$distrib/Resources" ]] || die "CEF distrib 缺少 Resources/: $distrib"
+
+  log "导出 cef-rs runtime: $export_dir"
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir"
+
+  # download-cef/cef-dll-sys 会把官方 distrib 展平成这个结构:
+  # Release/* 和 Resources/* 位于 CEF_PATH 根层,libcef.so 也必须在根层。
+  cp -a "$distrib/Release/." "$tmp_dir/"
+  cp -a "$distrib/Resources/." "$tmp_dir/"
+
+  local item
+  for item in CMakeLists.txt cmake include libcef_dll CREDITS.html; do
+    [[ -e "$distrib/$item" ]] || die "CEF distrib 缺少 $item: $distrib"
+    cp -a "$distrib/$item" "$tmp_dir/"
+  done
+
+  cat > "$tmp_dir/archive.json" <<EOF
+{
+  "type": "minimal",
+  "name": "cef_binary_${CEF_RS_ARCHIVE_VERSION}+linux64_${VARIANT}_minimal",
+  "sha1": "0000000000000000000000000000000000000000"
+}
+EOF
+
+  [[ -f "$tmp_dir/libcef.so" ]] || die "导出失败: $tmp_dir/libcef.so 不存在"
+  [[ -d "$tmp_dir/locales" ]] || die "导出失败: $tmp_dir/locales 不存在"
+
+  rm -rf "$export_dir"
+  mv "$tmp_dir" "$export_dir"
+
+  log "runtime 导出完成 ✓"
+  log "接入:export CEF_PATH=\"$export_dir\"   然后正常 bun dev -c kabegame"
+}
+
+# ---------------------------------------------------------------------------
+# 8. 跑 automate-git.py
 # ---------------------------------------------------------------------------
 run_build() {
   local logfile="$CEFBUILD/build-${VARIANT}.log"
@@ -193,23 +239,28 @@ run_build() {
     fi
   fi
 
+  # --build-target=cefsimple:默认目标 cefclient 在 Linux 无条件 include <gtk/gtk.h>,
+  # 而 sysroot 里没有 GTK 头(CEF BUILD.gn 自己注释了这一点),use_sysroot=true 下编不过。
+  # cefsimple 无 GTK 依赖,同样把 libcef 全量拉着编;Linux 官方 client distrib 也用它。
   python3 "$CEFBUILD/automate/automate-git.py" \
     --download-dir="$CEFBUILD/chromium_git" \
     --depot-tools-dir="$CEFBUILD/depot_tools" \
     --branch="$CEF_BRANCH" \
     --x64-build \
     --no-debug-build \
+    --build-target=cefsimple \
     "${HISTORY_FLAGS[@]}" \
     "${DISTRIB_FLAGS[@]}" \
     "${UPDATE_FLAGS[@]}" \
     2>&1 | tee "$logfile"
 
   local out
-  out=$(ls -d "$CEFBUILD"/chromium_git/chromium/src/cef/binary_distrib/cef_binary_*_minimal_"$VARIANT" 2>/dev/null | tail -1 || true)
+  # 实际产物目录名格式:cef_binary_<ver>_linux64_<variant>_minimal
+  out=$(ls -d "$CEFBUILD"/chromium_git/chromium/src/cef/binary_distrib/cef_binary_*_"${VARIANT}"_minimal 2>/dev/null | tail -1 || true)
   if [[ -n "$out" ]]; then
     log "完成 ✓ 产物目录:"
     log "  $out"
-    log "接入:export CEF_PATH=\"$out\"   然后正常 bun dev -c kabegame"
+    export_cef_runtime "$out"
   else
     die "未找到产物目录,检查日志: $logfile"
   fi

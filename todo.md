@@ -65,12 +65,12 @@
 桌面右键菜单下一张图片（windows用nsis脚本，plasma用desktop文件），并且做好错误处理
 - [x] `4.2.0` 关闭壁纸功能，这种情况下不会设置壁纸
 - [ ] MCP 管理页面、更详细的 MCP 资源说明（尤其是provider）
-- [ ] library 分库管理
+- [ ] ! library 分库管理
 - [ ] 多显示器支持
 
 ### 插件
 - [ ] 插件能够请求打开webview窗口，等待用户登录，降低需cookie爬虫的难度
-- [ ] comfyui插件
+- [ ] !! comfyui插件
 
 ### 杂项
 - [x] `4.2.0` 安卓 photoswipe 管理错误状态（图片丢失占位）和加载中状态 
