@@ -26,6 +26,19 @@ IMG="$HOME/e/cef-build.img"         # ext4 镜像文件(放 exFAT 大盘)
 IMG_SIZE=200G                       # 镜像大小(prod LTO 峰值占用不小,别低于 150G)
 CEFBUILD="$HOME/cefbuild"           # 挂载点 = 构建根目录
 
+# 浅 checkout:只拉当前分支 tip,不下完整 git 历史(chromium/src 历史占大头,
+# 全量单次 fetch ≈17G 过代理极易被掐断且不可续传)。牺牲 git 历史换"一次能下完"。
+# 注意:
+#   - 首次切成浅 checkout 时,已有的全量残包版本对不上,automate 会要求删掉重来,
+#     所以切换那一次必须带 --clean(触发 --force-clean)。
+#   - 将来升 CEF 大版本时浅仓库增量可能又炸成大包,届时可能要重下一次。
+NO_HISTORY=1                        # 1=浅 checkout(--no-chromium-history);0=全量历史
+
+# gclient DEPS 同步并发。gclient 默认 max(8, CPU 数)(本机 24),几十个并行 fetch
+# 打同一个代理出口,googlesource 直接 429 限流,sync 断在半路(v8/skia 空目录的根因)。
+# automate-git.py 没有透传参数,只能用 PATH shim 包一层 gclient 注入 --jobs。
+GCLIENT_JOBS=4
+
 # ---------------------------------------------------------------------------
 # 参数解析
 # ---------------------------------------------------------------------------
@@ -84,12 +97,21 @@ check_symlink() {
 # 3. 环境变量
 # ---------------------------------------------------------------------------
 setup_env() {
-  mkdir -p "$CEFBUILD"/{tmp,cache,depot_tools,automate}
+  mkdir -p "$CEFBUILD"/{tmp,cache,depot_tools,automate,shim}
   export TMPDIR="$CEFBUILD/tmp"          # 别用 16G 的 /tmp tmpfs
   export XDG_CACHE_HOME="$CEFBUILD/cache" # vpython/gsutil 缓存别写满 /home
-  export PATH="$CEFBUILD/depot_tools:$PATH"
+  # gclient shim:对 sync/revert 注入 --jobs,压低 DEPS 并发防 googlesource 429。
+  # automate-git.py 通过 PATH 调 gclient,shim 排在 depot_tools 前即可拦截。
+  cat > "$CEFBUILD/shim/gclient" <<EOF
+#!/usr/bin/env bash
+args=("\$@")
+case "\${1:-}" in sync|revert) args+=(--jobs $GCLIENT_JOBS) ;; esac
+exec "$CEFBUILD/depot_tools/gclient" "\${args[@]}"
+EOF
+  chmod +x "$CEFBUILD/shim/gclient"
+  export PATH="$CEFBUILD/shim:$CEFBUILD/depot_tools:$PATH"
   export CEF_USE_GN=1
-  export GN_ARGUMENTS="--ide=none"
+  # 不设 GN_ARGUMENTS:gn 的 --ide 没有 "none" 取值,不生成 IDE 工程就别传 --ide
   export DEPOT_TOOLS_UPDATE=1
 }
 
@@ -114,14 +136,18 @@ bootstrap() {
 # 5. 按 variant 设置 GN_DEFINES + distrib 参数
 # ---------------------------------------------------------------------------
 configure_variant() {
-  local common="proprietary_codecs=true ffmpeg_branding=Chrome use_sysroot=true enable_nacl=false"
+  # 注意:CEF 7827 的 gn_args.py GetRequiredArgs() 硬性要求 optimize_webui=true、
+  # enable_widevine=true(还有 //cef/BUILD.gn 的 assert 兜底),覆盖会直接 assertion,
+  # 所以这两项不能出现在 GN_DEFINES 里。
+  # enable_nacl 已随 NaCl 从 Chromium 149 移除,不要再设(设了报 has no effect)
+  local common="proprietary_codecs=true ffmpeg_branding=Chrome use_sysroot=true"
   if [[ "$VARIANT" == "dev" ]]; then
-    # 快:关 LTO、不要符号、跳过 WebUI 优化(不需要 chrome:// 内置页面)
-    export GN_DEFINES="$common is_official_build=false symbol_level=0 blink_symbol_level=0 dcheck_always_on=false optimize_webui=false"
+    # 快:关 LTO、不要符号
+    export GN_DEFINES="$common is_official_build=false symbol_level=0 blink_symbol_level=0 dcheck_always_on=false"
     DISTRIB_FLAGS=(--minimal-distrib-only --no-distrib-docs --no-distrib-symbols --distrib-subdir-suffix=dev)
   else
-    # 小:开 LTO + 体积优化,保留可符号化崩溃栈,去掉 DRM
-    export GN_DEFINES="$common is_official_build=true optimize_for_size=true enable_widevine=false use_cups=false symbol_level=1"
+    # 小:开 LTO + 体积优化,保留可符号化崩溃栈
+    export GN_DEFINES="$common is_official_build=true optimize_for_size=true use_cups=false symbol_level=1"
     DISTRIB_FLAGS=(--minimal-distrib-only --no-distrib-docs --distrib-subdir-suffix=prod)
   fi
   log "variant=$VARIANT"
@@ -149,12 +175,25 @@ run_build() {
   local logfile="$CEFBUILD/build-${VARIANT}.log"
   log "开始编译,日志: $logfile"
   log "建议在 tmux/screen 里跑;prod 的 LTO 链接很吃内存,OOM 就在 ~/e 挂 swap。"
+
+  local HISTORY_FLAGS=()
+  if [[ "$NO_HISTORY" == 1 ]]; then
+    HISTORY_FLAGS=(--no-chromium-history)
+    log "浅 checkout:仅拉当前分支 tip,不下完整 git 历史"
+    if [[ "$CLEAN" != 1 && ! -d "$CEFBUILD/chromium_git/chromium/src" ]]; then
+      : # 首次全新目录,automate 自会全新浅 checkout
+    elif [[ "$CLEAN" != 1 ]]; then
+      log "提示:若已有全量残包,切浅 checkout 可能报 'checkout is incorrect',需带 --clean 重来"
+    fi
+  fi
+
   python3 "$CEFBUILD/automate/automate-git.py" \
     --download-dir="$CEFBUILD/chromium_git" \
     --depot-tools-dir="$CEFBUILD/depot_tools" \
     --branch="$CEF_BRANCH" \
     --x64-build \
     --no-debug-build \
+    "${HISTORY_FLAGS[@]}" \
     "${DISTRIB_FLAGS[@]}" \
     "${UPDATE_FLAGS[@]}" \
     2>&1 | tee "$logfile"

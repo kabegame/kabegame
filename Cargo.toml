@@ -84,3 +84,10 @@ zip = "0.6"
 opt-level = 2
 debug-assertions = false
 overflow-checks = false
+
+# deno_core 的 op2 宏在调用方按 `#[cfg(debug_assertions)]` 生成 `_ops::reentrancy_check`
+# 调用，而 deno_core 仅在 debug_assertions 下导出该符号。上面的 `*` 覆盖会把 deno_core 的
+# debug_assertions 关掉，导致工作区成员（debug_assertions=on）调用一个未导出的符号（E0425）。
+# 给 deno_core 单独恢复 debug_assertions，使调用点与导出点一致。release 下两侧同为 off，无此问题。
+[profile.dev.package.deno_core]
+debug-assertions = true

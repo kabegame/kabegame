@@ -53,6 +53,11 @@ trash = "5"
 # 进程内 FFmpeg：视频预览压缩 + 维度读取（Android 走 Kotlin provider，无需）。
 # 链接依赖构建环境 FFMPEG_PKG_CONFIG_PATH 指向 third/FFmpeg-build/install/lib/pkgconfig。
 rsmpeg = { workspace = true }
+# Phase 0（V8_RUNTIME）：嵌入式 V8 (deno_core/rusty_v8) 插件运行时，仅桌面接入。
+# Android 保留 Rhai 后端；二进制增量与打包流程后续对照 cocs/build/PLATFORM_SHARED_LIBS.md 评估。
+deno_core = "0.405"
+deno_error = "0.7"
+tokio-util = "0.7"
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 reqwest = { version = "0.11", features = [

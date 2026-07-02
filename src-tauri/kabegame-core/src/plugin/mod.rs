@@ -1,6 +1,9 @@
 // Rhai 爬虫运行时/脚本执行
 pub mod metadata_migration;
 pub mod rhai;
+// Phase 0：嵌入式 V8 后端，仅桌面（Android 保留 Rhai）。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod v8;
 
 use arc_swap::ArcSwap;
 use futures_util::StreamExt;

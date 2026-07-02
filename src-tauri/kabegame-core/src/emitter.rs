@@ -476,7 +476,6 @@ impl GlobalEmitter {
 
     pub fn emit_download_state(
         &self,
-        _task_id: &str,
         _id: u64,
         _url: &str,
         _start_time: u64,
@@ -490,7 +489,6 @@ impl GlobalEmitter {
 
     pub fn emit_download_state_with_native(
         &self,
-        _task_id: &str,
         _id: u64,
         _url: &str,
         _start_time: u64,
@@ -502,7 +500,7 @@ impl GlobalEmitter {
     ) {
     }
 
-    pub fn emit_download_removed(&self, _task_id: &str, _id: u64) {}
+    pub fn emit_download_removed(&self, _id: u64) {}
 
     pub fn emit(&self, _event: &str, _payload: serde_json::Value) {}
 
