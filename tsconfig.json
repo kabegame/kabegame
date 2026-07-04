@@ -22,7 +22,7 @@
 
     /* Path aliases */
     "paths": {
-      "@kabegame/core/*": ["./packages/core/src/*"],
+      "@kabegame/core/*": ["./packages/kabegame-core/src/*"],
     }
   },
   "include": [

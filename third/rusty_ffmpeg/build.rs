@@ -3,7 +3,7 @@ use bindgen::{callbacks, Bindings};
 use camino::Utf8Path as Path;
 use camino::Utf8PathBuf as PathBuf;
 use once_cell::sync::Lazy;
-use std::{collections::HashSet, env, fs, process::Command};
+use std::{collections::HashSet, env, fs};
 
 /// All the libs that FFmpeg has
 static LIBS: Lazy<[&str; 6]> = Lazy::new(|| {
@@ -334,53 +334,16 @@ fn remove_verbatim(path: String) -> PathBuf {
 mod pkg_config_linking {
     use super::*;
 
-    /// Linux FFmpeg is built as static archives. Keep the codec libraries it was
-    /// configured against static as well, while desktop/system integration
-    /// libraries (X11, VA-API, NSS, etc.) remain dynamically linked.
-    const STATIC_FFMPEG_DEPENDENCIES: &[&str] = &["vpx", "opus"];
-
-    fn static_dependency_lib_dirs() -> Vec<(String, std::path::PathBuf)> {
-        if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
-            return Vec::new();
-        }
-
-        let compiler = env::var_os("CC").unwrap_or_else(|| "cc".into());
-        STATIC_FFMPEG_DEPENDENCIES
-            .iter()
-            .map(|dependency| {
-                // A package's `libdir` can be `/usr/lib` while the actual archive
-                // is in the target multiarch directory. Ask the active compiler for
-                // its library resolution instead of reconstructing that path.
-                let output = Command::new(&compiler)
-                    .arg(format!("-print-file-name=lib{dependency}.a"))
-                    .output()
-                    .unwrap_or_else(|e| panic!("run compiler for lib{dependency}.a: {e}"));
-                if !output.status.success() {
-                    panic!(
-                        "compiler lookup for lib{dependency}.a failed: {}",
-                        String::from_utf8_lossy(&output.stderr).trim()
-                    );
-                }
-                let archive = std::path::PathBuf::from(
-                    String::from_utf8(output.stdout)
-                        .unwrap_or_else(|e| {
-                            panic!("compiler returned non-UTF-8 for {dependency}: {e}")
-                        })
-                        .trim(),
-                );
-                if !archive.is_file() {
-                    panic!("static FFmpeg dependency missing: {}", archive.display());
-                }
-                let lib_dir = archive
-                    .parent()
-                    .unwrap_or_else(|| {
-                        panic!("static archive has no parent: {}", archive.display())
-                    })
-                    .to_path_buf();
-                ((*dependency).to_string(), lib_dir)
-            })
-            .collect()
-    }
+    /// Codec dependencies that must be linked statically. Only x264 qualifies: it is
+    /// built from source into third/x264-build and MUST NOT resolve to the system
+    /// libx264.so — that shared library would be loaded into the same process as
+    /// libcef.so, whose PartitionAlloc replaces the global memalign and crashes on
+    /// x264's high-alignment SIMD allocations. x264's `-L` search path is emitted by
+    /// FFmpeg's own .pc (Libs line), so forcing it static by name is sufficient.
+    ///
+    /// All other codec deps (libvpx, libopus, …) stay dynamic and are bundled into
+    /// the package (deb) alongside the binary by scripts/plugins/os-plugin.ts.
+    const STATIC_FFMPEG_DEPENDENCIES: &[&str] = &["x264"];
 
     /// Returns error when some library are missing. Otherwise, returns the paths of the libraries.
     ///
@@ -389,15 +352,11 @@ mod pkg_config_linking {
         library_names: &[&str],
         statik: bool,
     ) -> Result<Vec<PathBuf>, pkg_config::Error> {
-        let static_dependency_dirs = if statik {
-            static_dependency_lib_dirs()
+        let static_dependency_names: HashSet<&str> = if statik {
+            STATIC_FFMPEG_DEPENDENCIES.iter().copied().collect()
         } else {
-            Vec::new()
+            HashSet::new()
         };
-        let static_dependency_names: HashSet<&str> = static_dependency_dirs
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect();
         let mut printed_search_paths = HashSet::new();
 
         // Emit the FFmpeg libraries' own link paths (e.g. the project's
@@ -440,14 +399,6 @@ mod pkg_config_linking {
             for new_path in library.include_paths {
                 let new_path = new_path.to_str().unwrap().to_string();
                 paths.insert(new_path);
-            }
-        }
-
-        // Emit the system dirs hosting the forced-static codec deps (vpx/opus)
-        // AFTER the FFmpeg link paths above, so they cannot shadow our archives.
-        for (_, path) in &static_dependency_dirs {
-            if printed_search_paths.insert(path.clone()) {
-                println!("cargo:rustc-link-search=native={}", path.display());
             }
         }
 

@@ -1,16 +1,18 @@
-use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::crawler::downloader::{
-    ActiveDownloadInfo, DownloadState, compute_unique_download_path, get_default_images_dir,
-    next_download_id, postprocess_downloaded_image,
+    compute_unique_download_path, get_default_images_dir, next_download_id,
+    postprocess_downloaded_image, ActiveDownloadInfo, DownloadState,
 };
 use kabegame_core::crawler::favicon::fetch_favicon;
+use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::storage::{RangedSurfRecords, Storage, SurfRecord};
 use kabegame_i18n::t;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::Emitter;
-use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent};
-use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, Webview, WebviewUrl,
+    WebviewWindowBuilder,
+};
 use url::Url;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -19,19 +21,6 @@ pub struct SurfSessionStatus {
     pub active: bool,
     /// 当前畅游站点 host（对外索引键，与路由 `/surf/:host/images` 一致）
     pub surf_host: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SurfSessionState {
-    current_record_id: Option<String>,
-    current_host: Option<String>,
-}
-
-impl SurfSessionState {
-    pub fn global() -> &'static Mutex<SurfSessionState> {
-        static INSTANCE: OnceLock<Mutex<SurfSessionState>> = OnceLock::new();
-        INSTANCE.get_or_init(|| Mutex::new(SurfSessionState::default()))
-    }
 }
 
 fn parse_external_url(raw: &str) -> Result<url::Url, String> {
@@ -59,22 +48,25 @@ fn cookie_domain_matches_site_host(cookie_domain: &str, site_host: &str) -> bool
 
 /// 合并 `cookies_for_url(root)` 与全量 `cookies()` 中域属于本站点的项。
 /// 仅 `cookies_for_url(www)` 时，部分 WebView 实现会漏掉与登录相关的 Cookie（开发者工具仍可见）。
+///
+/// 注意：surf 窗口带 navbar 子 webview，不再是 Tauri 的 `WebviewWindow`
+/// （`is_webview_window()` 为 false），必须用 `Webview` 级 API 操作内容页。
 fn collect_surf_cookie_string<R: Runtime>(
-    surf_window: &WebviewWindow<R>,
+    surf_webview: &Webview<R>,
     site_host: &str,
     root_url: &str,
 ) -> Result<String, String> {
     let mut merged: HashMap<String, String> = HashMap::new();
 
     if let Ok(parsed) = url::Url::parse(root_url) {
-        if let Ok(for_url) = surf_window.cookies_for_url(parsed) {
+        if let Ok(for_url) = surf_webview.cookies_for_url(parsed) {
             for c in for_url {
                 merged.insert(c.name().to_string(), c.value().to_string());
             }
         }
     }
 
-    let all = surf_window
+    let all = surf_webview
         .cookies()
         .map_err(|e| format!("获取 Cookie 失败: {}", e))?;
     for c in all {
@@ -95,46 +87,137 @@ fn collect_surf_cookie_string<R: Runtime>(
 }
 
 fn eval_surf_toast<R: Runtime>(app: &AppHandle<R>, message: &str, kind: &str) {
-    if let Some(win) = app.get_webview_window("surf") {
+    if let Some(webview) = app
+        .webviews()
+        .into_iter()
+        .find_map(|(label, webview)| is_surf_content_label(&label).then_some(webview))
+    {
         let msg_json =
             serde_json::to_string(message).unwrap_or_else(|_| "\"下载失败\"".to_string());
         let kind_json = serde_json::to_string(kind).unwrap_or_else(|_| "\"failed\"".to_string());
         let script = format!("window.__kabegame_toast?.({}, {});", msg_json, kind_json);
-        let _ = win.eval(script.as_str());
+        let _ = webview.eval(script.as_str());
     }
 }
 
-/// 由 surf 导航栏注入脚本通过 `invoke` 调用，打开当前畅游窗口的开发者工具。
+fn eval_surf_toast_for_host<R: Runtime>(app: &AppHandle<R>, host: &str, message: &str, kind: &str) {
+    if let Some(webview) = app.get_webview(&surf_label(host)) {
+        let msg_json =
+            serde_json::to_string(message).unwrap_or_else(|_| "\"下载失败\"".to_string());
+        let kind_json = serde_json::to_string(kind).unwrap_or_else(|_| "\"failed\"".to_string());
+        let script = format!("window.__kabegame_toast?.({}, {});", msg_json, kind_json);
+        let _ = webview.eval(script.as_str());
+    }
+}
+
+fn surf_label(host: &str) -> String {
+    // Tauri window labels only allow [a-zA-Z0-9-/:_]; replace '.' with '_'
+    format!("surf-{}", host.trim().to_lowercase().replace('.', "_"))
+}
+
+fn surf_navbar_label(host: &str) -> String {
+    format!("{}-navbar", surf_label(host))
+}
+
+fn is_surf_content_label(label: &str) -> bool {
+    label.starts_with("surf-") && !label.ends_with("-navbar")
+}
+
+fn host_from_surf_label(label: &str) -> Option<String> {
+    label
+        .strip_prefix("surf-")
+        .filter(|s| !s.ends_with("-navbar"))
+        .filter(|s| !s.is_empty())
+        .map(|s| s.replace('_', "."))
+}
+
+fn encode_query_value(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
+fn surf_content_webview<R: Runtime>(
+    app: &AppHandle<R>,
+    host: Option<&str>,
+) -> Result<Webview<R>, String> {
+    if let Some(host) = host {
+        let host = normalize_surf_host(host);
+        return app
+            .get_webview(&surf_label(&host))
+            .ok_or_else(|| "畅游窗口未打开".to_string());
+    }
+
+    app.webviews()
+        .into_iter()
+        .find_map(|(label, webview)| is_surf_content_label(&label).then_some(webview))
+        .ok_or_else(|| "畅游窗口未打开".to_string())
+}
+
+/// 由 surf 导航栏通过 `invoke` 调用，打开对应畅游内容 webview 的开发者工具。
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_open_devtools<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    let win = app
-        .get_webview_window("surf")
-        .ok_or_else(|| "畅游窗口未打开".to_string())?;
-    win.open_devtools();
+pub async fn surf_open_devtools<R: Runtime>(
+    app: AppHandle<R>,
+    host: Option<String>,
+) -> Result<(), String> {
+    let webview = surf_content_webview(&app, host.as_deref())?;
+    webview.open_devtools();
     Ok(())
 }
 
-fn save_surf_session_cookies<R: Runtime>(app: &AppHandle<R>) {
-    let record_id = SurfSessionState::global()
-        .lock()
-        .ok()
-        .and_then(|g| g.current_record_id.clone());
-    let Some(record_id) = record_id else {
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn surf_go_back<R: Runtime>(app: AppHandle<R>, host: String) -> Result<(), String> {
+    let webview = surf_content_webview(&app, Some(&host))?;
+    webview
+        .eval("history.back()")
+        .map_err(|e| format!("后退失败: {}", e))
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn surf_go_forward<R: Runtime>(app: AppHandle<R>, host: String) -> Result<(), String> {
+    let webview = surf_content_webview(&app, Some(&host))?;
+    webview
+        .eval("history.forward()")
+        .map_err(|e| format!("前进失败: {}", e))
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn surf_reload<R: Runtime>(app: AppHandle<R>, host: String) -> Result<(), String> {
+    let webview = surf_content_webview(&app, Some(&host))?;
+    webview
+        .eval("location.reload()")
+        .map_err(|e| format!("刷新失败: {}", e))
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn surf_navigate<R: Runtime>(
+    app: AppHandle<R>,
+    host: String,
+    url: String,
+) -> Result<(), String> {
+    let parsed = parse_external_url(url.trim())?;
+    let webview = surf_content_webview(&app, Some(&host))?;
+    webview
+        .navigate(parsed)
+        .map_err(|e| format!("导航失败: {}", e))
+}
+
+fn save_surf_session_cookies_for_host<R: Runtime>(app: &AppHandle<R>, host: &str) {
+    let Some(surf_webview) = app.get_webview(&surf_label(host)) else {
         return;
     };
-    let Some(surf_window) = app.get_webview_window("surf") else {
-        return;
-    };
-    let Ok(Some(record)) = Storage::global().get_surf_record(&record_id) else {
+    let Ok(Some(record)) = Storage::global().get_surf_record_by_host(host) else {
         return;
     };
     let site_host = record.host.as_str();
     let root_url = record.root_url.as_str();
-    let Ok(cookie_string) = collect_surf_cookie_string(&surf_window, site_host, root_url) else {
+    let Ok(cookie_string) = collect_surf_cookie_string(&surf_webview, site_host, root_url) else {
         return;
     };
-    let _ = Storage::global().update_surf_record_cookie(&record_id, &cookie_string);
+    let _ = Storage::global().update_surf_record_cookie(&record.id, &cookie_string);
 }
 
 #[cfg(not(target_os = "android"))]
@@ -143,22 +226,6 @@ pub async fn surf_start_session<R: Runtime>(
     app: AppHandle<R>,
     url: String,
 ) -> Result<serde_json::Value, String> {
-    // 若当前会话窗口已存在，则仅置顶聚焦，不触发 navigate 刷新页面内容。
-    if let Some(win) = app.get_webview_window("surf") {
-        let current_record_id = SurfSessionState::global()
-            .lock()
-            .ok()
-            .and_then(|g| g.current_record_id.clone());
-        if let Some(record_id) = current_record_id {
-            let record = Storage::global()
-                .get_surf_record(&record_id)?
-                .ok_or_else(|| "畅游记录不存在".to_string())?;
-            let _ = win.show();
-            let _ = win.set_focus();
-            return serde_json::to_value(record).map_err(|e| e.to_string());
-        }
-    }
-
     let parsed = parse_external_url(url.trim())?;
     let host = parsed
         .host_str()
@@ -173,43 +240,57 @@ pub async fn surf_start_session<R: Runtime>(
         record = updated;
     }
 
-    if let Ok(mut guard) = SurfSessionState::global().lock() {
-        guard.current_record_id = Some(record.id.clone());
-        guard.current_host = Some(host.clone());
-    }
-
-    if app.get_webview_window("surf").is_none() {
+    let label = surf_label(&host);
+    // surf 窗口含 navbar 子 webview,不是 WebviewWindow;按窗口 label 查 Window。
+    if let Some(win) = app.get_window(&label) {
+        let _ = win.show();
+        let _ = win.set_focus();
+    } else {
         let host_for_plugin_id = host.clone();
-        let builder = WebviewWindowBuilder::new(&app, "surf", WebviewUrl::External(parsed))
+        let record_id_for_download = record.id.clone();
+        let navbar_label = surf_navbar_label(&host);
+        let media_capture = include_str!("../../resources/media_capture.js");
+        let media_download = include_str!("../../resources/media_download.js");
+        let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
             .title(t!("surf.windowTitle", host = host.as_str()))
             .inner_size(1200.0, 800.0)
             .devtools(true)
+            .initialization_script(media_capture)
+            .initialization_script(media_download)
             .initialization_script(include_str!("../../resources/surf_bootstrap.js"))
             .initialization_script(include_str!("../../resources/surf_toast.js"))
             .initialization_script(include_str!("../../resources/surf_context_menu.js"))
-            .initialization_script(include_str!("../../resources/surf_navbar.js"))
             .on_page_load({
                 let app = app.clone();
+                let host = host.clone();
+                let navbar_label = navbar_label.clone();
                 move |_surf_window, payload| {
                     if payload.event() == PageLoadEvent::Finished {
+                        let _ = app.emit_to(
+                            navbar_label.as_str(),
+                            "surf-url-changed",
+                            payload.url().as_str(),
+                        );
                         // cookies_for_url 内部使用 wait_with_pump（重入 Win32 消息泵），
                         // 不能在 WebView2 COM 事件回调（UI线程）中同步调用，否则可能与
                         // NewWindowRequested 等其他 COM 事件交叉导致死锁。
                         // 移到 blocking 线程执行。
                         let app = app.clone();
+                        let host = host.clone();
                         tauri::async_runtime::spawn_blocking(move || {
-                            save_surf_session_cookies(&app);
+                            save_surf_session_cookies_for_host(&app, &host);
                         });
                     }
                 }
             })
             .on_new_window({
                 let app = app.clone();
+                let label = label.clone();
                 move |url, _features| {
                     let scheme = url.scheme();
                     if matches!(scheme, "http" | "https") {
-                        if let Some(win) = app.get_webview_window("surf") {
-                            let _ = win.navigate(url);
+                        if let Some(webview) = app.get_webview(&label) {
+                            let _ = webview.navigate(url);
                         }
                     }
                     NewWindowResponse::Deny
@@ -230,17 +311,10 @@ pub async fn surf_start_session<R: Runtime>(
             })
             .on_download({
                 let app = app.clone();
+                let host = host_for_plugin_id.clone();
+                let surf_record_id = record_id_for_download.clone();
                 move |_webview, event| match event {
                     DownloadEvent::Requested { url, destination } => {
-                        let surf_record_id = SurfSessionState::global()
-                            .lock()
-                            .ok()
-                            .and_then(|g| g.current_record_id.clone());
-
-                        let Some(surf_record_id) = surf_record_id else {
-                            return false;
-                        };
-
                         let images_dir = get_default_images_dir();
                         if std::fs::create_dir_all(&images_dir).is_err() {
                             return false;
@@ -287,7 +361,7 @@ pub async fn surf_start_session<R: Runtime>(
                             return false;
                         }
 
-                        eval_surf_toast(&app, "开始下载", "start");
+                        eval_surf_toast_for_host(&app, &host, "开始下载", "start");
                         *destination = native_dest;
                         true
                     }
@@ -298,23 +372,30 @@ pub async fn surf_start_session<R: Runtime>(
                         };
                         if success {
                             let app2 = app.clone();
+                            let host_for_toast = host_for_plugin_id.clone();
                             let Some(final_path) = path else {
-                                
                                 tauri::async_runtime::spawn(async move {
                                     dq.switch_state(
                                         entry.id,
                                         DownloadState::Failed,
                                         Some("Native download finished without output path"),
-                                    ).await;
+                                    )
+                                    .await;
                                     dq.wait_then_finish_download(entry.id, false).await;
                                 });
-                                eval_surf_toast(&app, "下载失败", "failed");
+                                eval_surf_toast_for_host(
+                                    &app,
+                                    &host_for_plugin_id,
+                                    "下载失败",
+                                    "failed",
+                                );
                                 return true;
                             };
                             tauri::async_runtime::spawn(async move {
                                 let dq = TaskScheduler::global().download_queue();
                                 let surf_record_id = entry.surf_record_id.clone();
-                                dq.switch_state(entry.id, DownloadState::Processing, None).await;
+                                dq.switch_state(entry.id, DownloadState::Processing, None)
+                                    .await;
                                 let result = postprocess_downloaded_image(
                                     &*dq,
                                     entry.id,
@@ -324,7 +405,7 @@ pub async fn surf_start_session<R: Runtime>(
                                     },
                                     false,
                                     &url,
-                                    "",
+                                    &entry.plugin_id,
                                     None,
                                     None,
                                     surf_record_id.as_deref(),
@@ -343,34 +424,50 @@ pub async fn surf_start_session<R: Runtime>(
                                             if inserted {
                                                 let _ = Storage::global()
                                                     .increment_surf_record_download_count(id);
-                                                eval_surf_toast(&app2, "下载成功", "success");
-                                            } else {
-                                                eval_surf_toast(
+                                                eval_surf_toast_for_host(
                                                     &app2,
+                                                    &host_for_toast,
+                                                    "下载成功",
+                                                    "success",
+                                                );
+                                            } else {
+                                                eval_surf_toast_for_host(
+                                                    &app2,
+                                                    &host_for_toast,
                                                     "下载失败（重复或未入库）",
                                                     "failed",
                                                 );
                                             }
                                         } else {
-                                            eval_surf_toast(&app2, "下载失败", "failed");
+                                            eval_surf_toast_for_host(
+                                                &app2,
+                                                &host_for_toast,
+                                                "下载失败",
+                                                "failed",
+                                            );
                                         }
                                     }
                                     Err(_) => {
-                                        eval_surf_toast(&app2, "下载失败", "failed");
+                                        eval_surf_toast_for_host(
+                                            &app2,
+                                            &host_for_toast,
+                                            "下载失败",
+                                            "failed",
+                                        );
                                     }
                                 }
                             });
                         } else {
-                            
                             tauri::async_runtime::spawn(async move {
                                 dq.switch_state(
                                     entry.id,
                                     DownloadState::Failed,
                                     Some("Native download finished with failure"),
-                                ).await;
+                                )
+                                .await;
                                 dq.wait_then_finish_download(entry.id, false).await;
                             });
-                            eval_surf_toast(&app, "下载失败", "failed");
+                            eval_surf_toast_for_host(&app, &host, "下载失败", "failed");
                         }
                         true
                     }
@@ -380,12 +477,26 @@ pub async fn surf_start_session<R: Runtime>(
         let window = builder
             .build()
             .map_err(|e| format!("创建 surf 窗口失败: {}", e))?;
+        let navbar_url = WebviewUrl::App(
+            format!(
+                "surf-navbar.html?host={}&url={}",
+                encode_query_value(&host),
+                encode_query_value(&root_url)
+            )
+            .into(),
+        );
+        let navbar = WebviewBuilder::new(&navbar_label, navbar_url).devtools(true);
+        window
+            .as_ref()
+            .window()
+            .add_child(
+                navbar,
+                LogicalPosition::new(0.0, 0.0),
+                LogicalSize::new(1200.0, 40.0),
+            )
+            .map_err(|e| format!("创建 surf 导航栏失败: {}", e))?;
         let _ = window.show();
         let _ = window.set_focus();
-    } else if let Some(win) = app.get_webview_window("surf") {
-        let _ = win.navigate(parsed);
-        let _ = win.show();
-        let _ = win.set_focus();
     }
 
     let _ = app.emit(
@@ -407,24 +518,34 @@ pub async fn surf_start_session<R: Runtime>(
 
 /// 在会话窗口被关闭时由 lib 的 on_window_event 调用，清除状态并通知前端。
 #[cfg(not(target_os = "android"))]
-pub fn notify_surf_session_closed<R: Runtime>(app: &AppHandle<R>) {
-    if let Ok(mut guard) = SurfSessionState::global().lock() {
-        guard.current_record_id = None;
-        guard.current_host = None;
-    }
+pub fn notify_surf_session_closed<R: Runtime>(app: &AppHandle<R>, closing_label: Option<&str>) {
+    // 用 windows() 而非 webview_windows():surf 窗口含 navbar 子 webview,
+    // 不满足 is_webview_window,会被 webview_windows() 过滤掉。
+    let surf_host = app
+        .windows()
+        .into_keys()
+        .filter(|label| closing_label != Some(label.as_str()))
+        .find_map(|label| host_from_surf_label(&label));
     let _ = app.emit(
         "surf-session-changed",
-        serde_json::json!({ "active": false, "surfHost": null }),
+        serde_json::json!({ "active": surf_host.is_some(), "surfHost": surf_host }),
     );
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_close_session<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("surf") {
+    // 关窗口即连带销毁其下所有 webview(含 navbar)。
+    for (label, win) in app.windows() {
+        if !label.starts_with("surf-") {
+            continue;
+        }
         let _ = win.close();
     }
-    notify_surf_session_closed(&app);
+    let _ = app.emit(
+        "surf-session-changed",
+        serde_json::json!({ "active": false, "surfHost": null }),
+    );
     Ok(())
 }
 
@@ -433,19 +554,13 @@ pub async fn surf_close_session<R: Runtime>(app: AppHandle<R>) -> Result<(), Str
 pub async fn surf_get_session_status<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<SurfSessionStatus, String> {
-    let active_window = app.get_webview_window("surf").is_some();
-    if !active_window {
-        if let Ok(mut guard) = SurfSessionState::global().lock() {
-            guard.current_record_id = None;
-            guard.current_host = None;
-        }
-    }
-    let guard = SurfSessionState::global()
-        .lock()
-        .map_err(|e| format!("Lock error: {}", e))?;
+    let surf_host = app
+        .windows()
+        .into_keys()
+        .find_map(|label| host_from_surf_label(&label));
     Ok(SurfSessionStatus {
-        active: active_window && guard.current_record_id.is_some(),
-        surf_host: guard.current_host.clone(),
+        active: surf_host.is_some(),
+        surf_host,
     })
 }
 
@@ -528,36 +643,30 @@ pub struct SurfCookiesResult {
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_get_cookies<R: Runtime>(app: AppHandle<R>) -> Result<SurfCookiesResult, String> {
-    let (record_id, host) = {
-        let guard = SurfSessionState::global()
-            .lock()
-            .map_err(|e| format!("Lock error: {}", e))?;
-        let record_id = guard
-            .current_record_id
-            .clone()
-            .ok_or_else(|| "当前无畅游会话".to_string())?;
-        let host = guard.current_host.clone();
-        (record_id, host)
-    };
+    let host = app
+        .windows()
+        .into_keys()
+        .find_map(|label| host_from_surf_label(&label))
+        .ok_or_else(|| "当前无畅游会话".to_string())?;
 
     let record = Storage::global()
-        .get_surf_record(&record_id)?
+        .get_surf_record_by_host(&host)?
         .ok_or_else(|| "畅游记录不存在".to_string())?;
     let site_host = record.host.clone();
     let root_url = record.root_url.clone();
 
     let app2 = app.clone();
     let cookie_string = tauri::async_runtime::spawn_blocking(move || {
-        let win = app2
-            .get_webview_window("surf")
+        let webview = app2
+            .get_webview(&surf_label(&site_host))
             .ok_or_else(|| "畅游窗口未打开".to_string())?;
-        collect_surf_cookie_string(&win, &site_host, &root_url)
+        collect_surf_cookie_string(&webview, &site_host, &root_url)
     })
     .await
     .map_err(|e| format!("Cookie 读取任务失败: {}", e))??;
 
     Ok(SurfCookiesResult {
         cookie_string,
-        host,
+        host: Some(host),
     })
 }

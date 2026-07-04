@@ -1,69 +1,133 @@
 #!/usr/bin/env bash
-# 一键编译 FFmpeg：生成「视频缩放 + 兼容视频压缩 + 视频维度/兼容性探测」所需的 libav* 库（最小化编译，不再产出 CLI）。
-# 功能：读 mov/mp4/mkv/webm/wmv 等视频 → scale 缩放；Linux CEF 输出 VP9/Opus WebM，
-# 其它桌面输出 libx264/AAC MP4。图片推断、维度读取与缩略图由 infer/image crate 处理。
+# 从源码编译 x264 + FFmpeg，生成「视频缩放 + 兼容视频压缩 + 维度/兼容性探测」所需的 libav* 库。
+# 功能：读 mov/mp4/mkv/webm/wmv 等视频 → scale 缩放；桌面输出 libx264/AAC MP4。
+# 图片推断、维度读取与缩略图由 infer/image crate 处理。
 # 由 kabegame-core 经 rsmpeg/rusty_ffmpeg 进程内链接（替代旧的 ffmpeg sidecar 调用）。
 #
-# 链接模型（见 cocs / 计划）：
-#   - macOS/Linux：静态库（install/lib/*.a + install/include），rust build.rs 静态链接。
-#   - Windows(MSYS2/MinGW)：动态库（avcodec-*.dll 等），用 gendef + lib.exe 生成 MSVC 导入库供 windows-msvc 链接，
-#     DLL 复制到仓库根 bin/windows/ → resources/bin 由 scripts/plugins/os-plugin.ts 在 build 期处理。
-#     —— 之所以 Windows 走 DLL：Dokan 仅有 MSVC 导入库，主程序须保持 windows-msvc；
-#        而 MinGW 编出的 libav* 静态库无法被 MSVC 链接，DLL 的 C 导出表则跨工具链可用。
+# 构建顺序：
+#   1. 从 third/x264 源码编译 x264 → third/x264-build/install/
+#      Linux 在 configure 后改写 config.h 关闭 HAVE_THP（透明大页）：
+#        CEF 在 Linux 进程内用 PartitionAlloc 替换全局 memalign，其 kMaxSupportedAlignment
+#        约为 1MB（kSuperPageSize/2）。x264 开启 THP 时，x264_malloc 对 >=1.75MB 的分配
+#        （如 1080p 帧缓冲）会用 memalign(2MB, ...) 请求 2MB 对齐，超过上限 → 断言崩溃。
+#        关闭 THP 后仅剩 NATIVE_ALIGN(64 字节) 对齐，在上限内；asm/AVX2 全部保留，性能不受影响。
+#      macOS/Windows 无此问题（WebKit/WebView2 不替换全局分配器），正常编译。
+#   2. 以 x264-build/install 为 PKG_CONFIG_PATH 前缀编译 FFmpeg（third/FFmpeg）
+#      → third/FFmpeg-build/install/
+#      x264 静态嵌入 libavcodec（Unix）/ avcodec DLL（Windows），不依赖任何系统 libx264。
 #
-# 依赖: Windows/macOS 需要 libx264；Linux 需要 libvpx 与 libopus（供 CEF WebM 兼容副本）。
-#   macOS:   brew install x264
-#   Ubuntu:  apt install libx264-dev libvpx-dev libopus-dev
-#   Windows: 必须在 MSYS2 MinGW 64-bit 中安装：pacman -S mingw-w64-x86_64-x264 mingw-w64-x86_64-tools-git
-#             （tools-git 提供 gendef；生成 MSVC 导入库还需 PATH 上有 VS 的 lib.exe，即在 VS Developer 环境运行）
-#             （Git Bash 无 pacman，无法直接安装 x264，请改用 MSYS2 终端再执行本脚本）
-#            1. 打开 x64 Native Tools Command Prompt for VS 
-#            2. 执行 D:\Programs\MSYS2\msys2_shell.cmd -mingw64 -use-full-path -defterm -no-start -here -c "cd /d/Codes/kabegame && ./scripts/build-ffmpeg.sh"
+# 链接模型（见 cocs/build/PLATFORM_SHARED_LIBS.md）：
+#   - macOS/Linux：静态库（install/lib/*.a + install/include），rust build.rs 静态链接。
+#   - Windows(MSYS2/MinGW)：动态库（avcodec-*.dll 等），用 gendef + lib.exe 生成 MSVC 导入库。
+#
+# 依赖：
+#   - 所有平台：git submodule update --init third/FFmpeg third/x264
+#   - Linux：nasm 可选（有则 x264 启用 asm 加速；无则自动降级 C 实现）
+#   - macOS：nasm 可选（brew install nasm 获取性能版本；无则自动降级 C 实现）
+#   - Windows(MSYS2 MinGW 64-bit)：nasm 可选（pacman -S nasm）、
+#     gendef（pacman -S mingw-w64-x86_64-tools-git）、
+#     VS 的 lib.exe（在 x64 Native Tools 环境中运行）
+#     运行方式：
+#       1. 打开 x64 Native Tools Command Prompt for VS
+#       2. 执行 D:\Programs\MSYS2\msys2_shell.cmd -mingw64 -use-full-path -defterm -no-start -here -c "cd /d/Codes/kabegame && ./scripts/build-ffmpeg.sh"
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FFMPEG_SRC="${REPO_ROOT}/third/FFmpeg"
 BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build"
 INSTALL_DIR="${BUILD_DIR}/install"
-# 本脚本只产出 install/{bin,lib,include}/。把 install/bin/ 下的 DLL 复制到 bin/windows/
-# 由 scripts/plugins/os-plugin.ts 在 build 期负责（含校验 + 报错提示），见 cocs/build/PLATFORM_SHARED_LIBS.md。
+X264_SRC="${REPO_ROOT}/third/x264"
+X264_BUILD_DIR="${REPO_ROOT}/third/x264-build"
+X264_INSTALL_DIR="${X264_BUILD_DIR}/install"
 
 case "$(uname -s)" in
-  Darwin)   OS_KIND="unix" ;;
-  Linux)    OS_KIND="unix" ;;
+  Darwin)            OS_KIND="unix" ;;
+  Linux)             OS_KIND="unix" ;;
   MINGW*|MSYS*|CYGWIN*) OS_KIND="windows" ;;
-  *)        echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
+  *) echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
 esac
 
-if [[ ! -d "$FFMPEG_SRC" ]]; then
-  echo "FFmpeg 源码目录不存在: $FFMPEG_SRC（请先执行 git submodule update --init third/FFmpeg）" >&2
+if [[ ! -f "$FFMPEG_SRC/configure" ]]; then
+  echo "FFmpeg 源码未找到: $FFMPEG_SRC/configure" >&2
+  echo "请执行: git submodule update --init third/FFmpeg" >&2
+  exit 1
+fi
+if [[ ! -f "$X264_SRC/configure" ]]; then
+  echo "x264 源码未找到: $X264_SRC/configure" >&2
+  echo "请执行: git submodule update --init third/x264" >&2
   exit 1
 fi
 
-# FFmpeg 配置依赖：Linux 的 CEF 兼容副本需要 vpx/opus，不使用 H.264 编码器。
+# ---- 并发数 / make 命令（x264 与 FFmpeg 共用）----
+if command -v nproc &>/dev/null; then
+  NPROC=$(nproc)
+elif command -v sysctl &>/dev/null; then
+  NPROC=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+else
+  NPROC=4
+fi
+MAKE_CMD="make"
 case "$(uname -s)" in
-  Linux)
-    for pkg in vpx opus; do
-      if ! pkg-config --exists "$pkg" 2>/dev/null; then
-        echo "错误: 未找到 $pkg（pkg-config $pkg 失败）" >&2
-        echo "请安装: sudo apt install libvpx-dev libopus-dev" >&2
-        exit 1
-      fi
-    done
-    ;;
   MINGW*|MSYS*|CYGWIN*)
-    if ! pkg-config --exists x264 2>/dev/null; then
-      echo "错误: 未找到 libx264（pkg-config x264 失败）" >&2
-      echo "请在 MSYS2 MinGW 64-bit 终端中执行: pacman -S mingw-w64-x86_64-x264" >&2
-      echo "然后在该 MSYS2 终端中重新运行本脚本（不要用 Git Bash）。" >&2
-      exit 1
-    fi
+    command -v make &>/dev/null || MAKE_CMD="mingw32-make"
+    NPROC=1
     ;;
 esac
 
+# ---- 构建 x264 ----
+echo "=== 构建 x264 ==="
+mkdir -p "$X264_BUILD_DIR" && cd "$X264_BUILD_DIR"
+
+X264_FLAGS=(
+  "--prefix=$X264_INSTALL_DIR"
+  "--enable-static"
+  "--disable-shared"
+  "--disable-cli"
+)
+case "$(uname -s)" in
+  Linux)  X264_FLAGS+=("--enable-pic") ;;
+  Darwin) X264_FLAGS+=("--enable-pic") ;;
+  MINGW*|MSYS*|CYGWIN*)
+    # Windows/MinGW：x264 静态库嵌入 avcodec.dll，不需要 --enable-pic
+    ;;
+esac
+
+"$X264_SRC/configure" "${X264_FLAGS[@]}"
+
+# Linux：关闭透明大页（THP）。x264_malloc 对 >=1.75MB 的分配（如 1080p 帧缓冲）
+# 会调用 memalign(2MB, ...) 请求 2MB 对齐；而 CEF 的 PartitionAlloc 上限
+# kMaxSupportedAlignment 仅约 1MB（kSuperPageSize/2），会在 partition_root.h 断言失败崩溃。
+# x264 无 --disable-thp 选项（configure 依据 MADV_HUGEPAGE 自动开启），故在 configure
+# 之后改写生成的 config.h 关闭它。关闭后仅剩 NATIVE_ALIGN(64 字节) 对齐，在上限内；
+# asm/AVX2 全部保留（asm 需要的是数据访问对齐，由 64 字节分配 + ALIGNED_32/64 栈宏满足）。
+if [[ "$(uname -s)" == "Linux" ]]; then
+  sed -i 's/#define HAVE_THP 1/#define HAVE_THP 0/' config.h
+  grep -q "#define HAVE_THP 0" config.h || {
+    echo "错误: 未能在 x264 config.h 中关闭 HAVE_THP" >&2
+    exit 1
+  }
+fi
+
+$MAKE_CMD -j"$NPROC"
+$MAKE_CMD install
+echo "x264 已安装到: $X264_INSTALL_DIR"
+
+# ---- 设置 PKG_CONFIG_PATH（确保我们的 x264 优先于任何系统版本）----
+# Windows：先把 MinGW 系统路径加进来，再把我们的 x264 插到最前面
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if [[ -d /mingw64/lib/pkgconfig ]]; then
+      export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    fi
+    ;;
+esac
+export PKG_CONFIG_PATH="$X264_INSTALL_DIR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+
+# ---- 构建 FFmpeg ----
+echo "=== 构建 FFmpeg ==="
 mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
 
-# Windows：显式指定 pkg-config 与 .pc 搜索路径，确保 configure 子进程能找到 x264
+# Windows：显式指定 pkg-config 可执行文件路径，确保 configure 子进程能找到 x264
 CONFIGURE_EXTRA=()
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
@@ -71,13 +135,11 @@ case "$(uname -s)" in
     if [[ -n "$_pkgconfig_exe" ]]; then
       CONFIGURE_EXTRA+=(--pkg-config="$_pkgconfig_exe")
     fi
-    if [[ -d /mingw64/lib/pkgconfig ]]; then
-      export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-    fi
     ;;
 esac
 
-# 最小化编译：mov/mkv/webm/wmv 解码 + scale + 平台兼容视频编码；并保留 libav* 供进程内视频 API 使用。
+# 最小化编译：mov/mkv/webm/wmv 解码 + scale + 桌面兼容视频编码；
+# 同时保留 WebM muxer，供 MSE 多流合流时 stream-copy 输出 VP9/Opus WebM。
 # 链接模型：Unix 静态库 / Windows 动态库（见文件头说明）。
 _LINK_FLAGS=()
 if [[ "$OS_KIND" == "windows" ]]; then
@@ -89,9 +151,7 @@ fi
 CONFIG_FLAGS=(
   "--disable-everything"
   "--disable-programs"
-  # Video conversion uses software codecs.  Disable optional hardware APIs so a
-  # static FFmpeg archive cannot pull VA-API/VDPAU/DRM shared libraries into the
-  # application link (and so each distro does not need to provide matching ABI).
+  # 禁用可选硬件 API，静态 FFmpeg 不拉入 VA-API/VDPAU/DRM 动态库
   "--disable-hwaccels"
   "--disable-libdrm"
   "--disable-vaapi"
@@ -108,6 +168,9 @@ CONFIG_FLAGS=(
   "--enable-decoder=mpeg4"
   "--enable-decoder=vp8"
   "--enable-decoder=vp9"
+  # AV1: bilibili/YouTube DASH 常用 av01。桌面预览缩略图/兼容副本需解码一帧;
+  # 内嵌 Chromium/CEF 播放不经 ffmpeg。用原生 av1 解码器(无外部依赖,单帧解码够用)。
+  "--enable-decoder=av1"
   "--enable-decoder=wmv1"
   "--enable-decoder=wmv2"
   "--enable-decoder=wmv3"
@@ -120,11 +183,13 @@ CONFIG_FLAGS=(
   "--enable-parser=mpeg4video"
   "--enable-parser=vp8"
   "--enable-parser=vp9"
+  "--enable-parser=av1"
   "--enable-parser=vc1"
   "--enable-muxer=mov"
   "--enable-muxer=mp4"
+  "--enable-muxer=webm"
 
-  # 音频:浏览器兼容版本(compatible_path)转 H.264 mp4 时需保留音轨 → 解码源音频 + AAC 编码。
+  # 音频：兼容视频转 H.264 mp4 时需保留音轨 → 解码源音频 + AAC 编码
   "--enable-decoder=aac"
   "--enable-decoder=mp3float"
   "--enable-decoder=ac3"
@@ -152,35 +217,15 @@ CONFIG_FLAGS=(
 
   "--enable-swscale"
 
-  # binding里引用了符号，但没有调用，所以去掉这玩意没影响
+  # binding 里引用了符号但没有调用，去掉无影响
   "--disable-avdevice"
   "--disable-doc"
   "--enable-small"
   "--disable-runtime-cpudetect"
+
+  "--enable-libx264"
+  "--enable-encoder=libx264"
 )
-
-# Linux CEF 只播放 VP9/Opus WebM。Linux 不引入 libx264，避免依赖发行版通常
-# 不提供的 libx264.a；Windows/macOS 保持既有 H.264/AAC MP4 输出。
-if [[ "$(uname -s)" != "Linux" ]]; then
-  CONFIG_FLAGS+=(
-    "--enable-libx264"
-    "--enable-encoder=libx264"
-  )
-fi
-
-# Linux 的 CEF runtime 不带 H.264/AAC 解码器，兼容副本需编码为 VP9/Opus WebM。
-# 只在 Linux 启用，避免为 Windows/macOS 的 H.264/AAC 路径额外引入链接依赖。
-if [[ "$(uname -s)" == "Linux" ]]; then
-  CONFIG_FLAGS+=(
-    "--enable-libvpx"
-    "--enable-libopus"
-    # configure 使用内部组件名（下划线）；运行时 AVCodec 名仍为 libvpx-vp9。
-    "--enable-encoder=libvpx_vp9"
-    "--enable-encoder=libopus"
-    "--enable-muxer=webm"
-  )
-fi
-
 
 "$FFMPEG_SRC/configure" \
   --prefix="$INSTALL_DIR" \
@@ -189,7 +234,6 @@ fi
   "${_LINK_FLAGS[@]}" \
   "${CONFIGURE_EXTRA[@]}" \
   "$@"
-
 
 # Windows：make 无法解析 /d/... 绝对路径，将 Makefile 与 config.mak 中的源码路径改为相对路径
 case "$(uname -s)" in
@@ -203,44 +247,27 @@ case "$(uname -s)" in
     ;;
 esac
 
-if command -v nproc &>/dev/null; then
-  NPROC=$(nproc)
-elif command -v sysctl &>/dev/null; then
-  NPROC=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
-else
-  NPROC=4
-fi
-MAKE_CMD="make"
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*)
-    command -v make &>/dev/null || MAKE_CMD="mingw32-make"
-    NPROC=1
-    ;;
-esac
-$MAKE_CMD -j"${NPROC}"
+$MAKE_CMD -j"$NPROC"
 $MAKE_CMD install
 
-# 校验库与头文件已安装（供 rust build.rs 经 pkg-config / FFMPEG_LIBS_DIR 链接）
+# ---- 校验 ----
 if [[ ! -f "$INSTALL_DIR/lib/pkgconfig/libavcodec.pc" ]]; then
   echo "未找到 libav* 安装产物: $INSTALL_DIR/lib/pkgconfig/libavcodec.pc" >&2
   exit 1
 fi
 
-# Linux 的 libavcodec.a 依赖 libopus/libvpx；验证 pkg-config 能把它们传递到 Rust
-# 最终链接命令，避免在数分钟后的 rust-lld 阶段才报未定义符号。
+# Linux 静态链接校验：libavcodec.a 须携带 -lx264（来自我们自己编译的 x264）
 if [[ "$(uname -s)" == "Linux" ]]; then
-  _ffmpeg_static_libs="$(PKG_CONFIG_PATH="$INSTALL_DIR/lib/pkgconfig" pkg-config --libs --static libavcodec)"
-  for _required_lib in opus vpx; do
-    if [[ "$_ffmpeg_static_libs" != *"-l$_required_lib"* ]]; then
-      echo "错误: FFmpeg 静态链接信息缺少 -l$_required_lib" >&2
-      echo "请确认 configure 已启用 libopus 与 libvpx_vp9，然后重新运行 bun run build:ffmpeg" >&2
-      exit 1
-    fi
-  done
+  _pc_path="$INSTALL_DIR/lib/pkgconfig:$X264_INSTALL_DIR/lib/pkgconfig"
+  _ffmpeg_static_libs="$(PKG_CONFIG_PATH="$_pc_path" pkg-config --libs --static libavcodec)"
+  if [[ "$_ffmpeg_static_libs" != *"-lx264"* ]]; then
+    echo "错误: FFmpeg 静态链接信息缺少 -lx264" >&2
+    echo "请确认 configure 已启用 libx264，然后重新运行 bun run build:ffmpeg" >&2
+    exit 1
+  fi
 fi
 
 if [[ "$OS_KIND" != "windows" ]]; then
-  # 去除 avdevice 静态库与 .pc（--disable-avdevice 通常不产出，防止 configure 变体残留）
   rm -f "$INSTALL_DIR/lib/libavdevice"*.a "$INSTALL_DIR/lib/pkgconfig/libavdevice.pc"
   echo "已输出静态库: $INSTALL_DIR/lib/*.a  头文件: $INSTALL_DIR/include"
   echo "rust build.rs 将经 FFMPEG_PKG_CONFIG_PATH=$INSTALL_DIR/lib/pkgconfig 静态链接。"
@@ -248,8 +275,7 @@ if [[ "$OS_KIND" != "windows" ]]; then
 fi
 
 # ---- Windows：生成 MSVC 导入库 ----
-# DLL 复制到 bin/windows/ 的步骤已迁出，由 scripts/plugins/os-plugin.ts 在 build 期处理
-# （见 OSPlugin.collectWindowsFFmpegDlls()）。本脚本只产出 install/{bin,lib,include}/ 与 .lib。
+# DLL 复制到 bin/windows/ 由 scripts/plugins/os-plugin.ts 在 build 期处理
 shopt -s nullglob
 _dlls=()
 for _dll in "$INSTALL_DIR/bin"/av*.dll "$INSTALL_DIR/bin"/swscale-*.dll "$INSTALL_DIR/bin"/swresample-*.dll; do
@@ -261,22 +287,20 @@ if [[ ${#_dlls[@]} -eq 0 ]]; then
   exit 1
 fi
 
-# 生成 MSVC 导入库（.lib）：gendef 从 DLL 提取 .def，再用 VS 的 lib.exe 生成 <name>.lib
-#   输出到 install/lib（与 .pc 同目录，便于 build.rs 经 FFMPEG_LIBS_DIR 找到）
 if ! command -v gendef &>/dev/null; then
-  echo "错误: 未找到 gendef（生成 .def 需要）。请在 MSYS2 执行: pacman -S mingw-w64-x86_64-tools-git" >&2
+  echo "错误: 未找到 gendef。请在 MSYS2 执行: pacman -S mingw-w64-x86_64-tools-git" >&2
   exit 1
 fi
 if ! command -v lib.exe &>/dev/null && ! command -v lib &>/dev/null; then
-  echo "错误: 未找到 lib.exe（MSVC 库管理器）。请在 'x64 Native Tools / VS Developer' 环境运行本脚本。" >&2
+  echo "错误: 未找到 lib.exe。请在 'x64 Native Tools / VS Developer' 环境运行本脚本。" >&2
   exit 1
 fi
 _LIB_EXE="lib.exe"; command -v lib.exe &>/dev/null || _LIB_EXE="lib"
 _DEF_DIR="$BUILD_DIR/msvc-implib"
 mkdir -p "$_DEF_DIR"
 for _dll in "${_dlls[@]}"; do
-  _base="$(basename "$_dll" .dll)"             # e.g. avcodec-61
-  _libname="${_base%%-*}"                       # e.g. avcodec（rusty_ffmpeg 链接名）
+  _base="$(basename "$_dll" .dll)"
+  _libname="${_base%%-*}"
   ( cd "$_DEF_DIR" && gendef "$_dll" >/dev/null 2>&1 )
   _def="$_DEF_DIR/${_base}.def"
   if [[ ! -f "$_def" ]]; then

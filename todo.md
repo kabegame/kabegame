@@ -67,6 +67,7 @@
 - [ ] MCP 管理页面、更详细的 MCP 资源说明（尤其是provider）
 - [ ] ! library 分库管理
 - [ ] 多显示器支持
+- [ ] surf 和 crawler 爬虫窗口图标优化
 
 ### 插件
 - [ ] 插件能够请求打开webview窗口，等待用户登录，降低需cookie爬虫的难度

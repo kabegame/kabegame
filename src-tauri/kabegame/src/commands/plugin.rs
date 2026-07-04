@@ -1,5 +1,3 @@
-// 謠剃ｻｶ逶ｸ蜈ｳ蜻ｽ莉､
-
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::storage::Storage;
 

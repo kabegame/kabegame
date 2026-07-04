@@ -278,8 +278,8 @@ async fn handle_compatible_query(
 
     match kabegame_core::storage::Storage::find_image_by_compatible_path(path) {
         Ok(Some(info)) => {
-            // compatible_path may be a Linux VP9/Opus WebM while the source record is
-            // video/mp4. The response MIME must describe the served compatible file.
+            // compatible_path may differ from the source record MIME. The response MIME
+            // must describe the served compatible file.
             let mime = mime_from_path(path).or(info.media_type);
             let range = headers
                 .get(RANGE)

@@ -5,10 +5,45 @@
   // 1) window.open _blank → 当前窗口或下载
   // 2) <a target="_blank"> → 同上（不经过 window.open）
 
-  function triggerDownload(url) {
+  // 用于计算下载url所用的名称
+  function nameFromUrl(url) {
+    try {
+      const u = new URL(String(url || ""), location.href);
+      if (/^(data|blob):$/i.test(u.protocol)) return "";
+      const segment = u.pathname.split("/").filter(Boolean).pop() || "";
+      return decodeURIComponent(segment).trim();
+    } catch (_) {
+      return "";
+    }
+  }
+
+  // 将title和url名称拼接，用来计算最终所用的名称
+  function downloadName(url) {
+    const title = String(document.title || "").trim();
+    const segment = nameFromUrl(url) || nameFromUrl(location.href);
+    if (title && segment) return title + " / " + segment;
+    return title || segment || "";
+  }
+
+  // 下载选项用 name: downloadName()
+  function downloadOptions(url, opts) {
+    const out = opts && typeof opts === "object" ? { ...opts } : {};
+    if (!out.name) {
+      out.name = downloadName(url) || undefined;
+    }
+    return out;
+  }
+
+  // TODO: 改成用crawl_download_image
+  function triggerDownload(url, opts) {
+    if (/^(data|blob):/i.test(String(url || ""))) {
+      return window.__kb_media_download__(url, downloadOptions(url, opts)).catch(function (error) {
+        window.__kabegame_toast?.(String(error && error.message ? error.message : error), "failed");
+      });
+    }
     const a = document.createElement("a");
     a.href = url;
-    a.download = "";
+    a.download = downloadName(url);
     a.style.display = "none";
     document.body.appendChild(a);
     a.click();

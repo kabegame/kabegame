@@ -11,7 +11,7 @@
 | 平台 | 暂存目录 | git 跟踪 | 内容 |
 |---|---|---|---|
 | Windows | `bin/windows/` | 部分 | dokan2/libwinpthread/libva 等预置 DLL 跟踪;av*/swscale-*/swresample-*/libx264-* 由 os-plugin 在 build 期从 `third/FFmpeg-build/install/bin` 与 `/mingw64/bin` 收集(`.gitignore` 已忽略) |
-| Linux | `bin/linux/` | 否 | FFmpeg、x264、vpx、opus 均静态链接；仅保留 `KABEGAME_BUNDLE_LIBS_EXTRA` 指定的额外动态库 |
+| Linux | `bin/linux/` | 否 | FFmpeg、x264 均静态链接；仅保留 `KABEGAME_BUNDLE_LIBS_EXTRA` 指定的额外动态库 |
 | macOS | `bin/macos/` | 否 | os-plugin 经 `brew --prefix x264` 收集 x264 dylib;经 `MACFUSE_LIB_DIR` / `/Library/Frameworks/macFUSE.framework/Versions/A/Frameworks/` 收集 libfuse dylib |
 
 收集逻辑集中在 [scripts/plugins/os-plugin.ts](../../scripts/plugins/os-plugin.ts) 的 `OSPlugin.bundleLibs()`,挂在 `beforeBuild` hook,**只在 `bun b` build 期、main 组件、非 android/web 时触发**。Linux 的 light 模式不收 fuse；FFmpeg 编解码依赖已进入二进制，不再收集对应 `.so`。
@@ -88,8 +88,8 @@ Tauri 的 `tauri build` 流程内部依次产生 .app 与 .dmg,**无中间 hook*
 
 ## 升级与运维
 
-- **升级 FFmpeg/x264/vpx/opus 主版本**:重新运行 `bun run build:ffmpeg`；下次 Rust 构建会重新读取 `libav*.pc` 并静态链接更新后的库。
-- **系统 x264/vpx/opus 版本变化**:重新运行 `bun run build:ffmpeg` 后重建即可，不需要收集 SONAME 动态库。
+- **升级 FFmpeg/x264 主版本**:重新运行 `bun run build:ffmpeg`；下次 Rust 构建会重新读取 `libav*.pc` 并静态链接更新后的库。
+- **系统 x264 版本变化**:重新运行 `bun run build:ffmpeg` 后重建即可，不需要收集 SONAME 动态库。
 - **覆盖额外库**:设 env `KABEGAME_BUNDLE_LIBS_EXTRA="/path/to/extra.so,/another.so"`,会被复制到 `bin/{linux,macos}/`(Windows 暂不支持此 env,有需要可扩展)。
 - **macOS macFUSE 路径**:默认从 `/Library/Frameworks/macFUSE.framework/Versions/A/Frameworks/` 找;若 macFUSE 装在别处,设 `MACFUSE_LIB_DIR` env 指向 `libfuse.dylib` 所在目录。
 

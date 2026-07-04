@@ -3677,6 +3677,7 @@ version = "4.3.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
+ "globset",
  "include_dir",
  "kabegame-core",
  "regex",
@@ -3723,6 +3724,7 @@ dependencies = [
  "rusqlite",
  "scraper",
  "select",
+ "semver",
  "serde",
  "serde_bytes",
  "serde_cbor",

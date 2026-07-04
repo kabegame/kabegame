@@ -19,6 +19,8 @@
 
 下载阶段通过 `DownloadSink` 管理内存/磁盘缓冲，下载结果为 `DownloadOutcome`（`Bytes` 或 `Path`）。后处理由统一的 `postprocess_downloaded_image` 函数完成，根据 `PostprocessSource` 枚举（`Bytes` 或 `Path`）自适应处理路径。桌面 WebView/CEF native 下载也登记进 `DownloadQueue.active_downloads`，以 `native=true` 标识，但不占下载池并发额度。Android 本地 `content://` 导入不走下载池后处理，直接走 content URI 入库。
 
+JS 爬虫与畅游窗口还有一条浏览器内媒体上传通道：`data:`、普通 `blob:` 和 MSE `blob:` 不交给 WebView 原生下载，而是在页面 JS 层读取/捕获字节后，通过 `crawl_media_begin` / `crawl_media_chunk` / `crawl_media_end` 分块上传给 Rust。MSE 支持单流与音视频分离多 SourceBuffer；JS 捕获层会按解码时间排序去重，桌面端多流由 rsmpeg stream-copy 合流后再进入 `postprocess_downloaded_image(PostprocessSource::Path)`。Rust 侧把这类上传登记为 `native=true` 的 active download，进度通过 `DownloadQueue::report_progress` 发出。
+
 ---
 
 ## 2. 代码位置
@@ -28,10 +30,11 @@
 | `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | downloader 模块门面；scheme downloader trait/注册表；`download_with_retry`；下载间隔 helper；统一 `postprocess_downloaded_image`；`DownloadSink` / `DownloadOutcome` / `PostprocessSource` 定义；最终目标路径与 Android Pictures copy / content URI 入库 |
 | `src-tauri/kabegame-core/src/crawler/downloader/queue.rs` | `DownloadQueue`、下载池、统一 active download 状态机、原生下载登记/移除、worker loop、URL 前置去重、失败记录 upsert、任务图片计数快照 |
 | `src-tauri/kabegame-core/src/crawler/downloader/http.rs` | HTTP/HTTPS scheme downloader；响应流读取写入 `DownloadSink`、Range 续传、进度事件、请求头处理 |
+| `src-tauri/kabegame-core/src/crawler/downloader/media_upload.rs` | JS 层 blob/data/MSE 分块上传会话表；负责上传临时文件句柄、字节上限、任务取消清理 |
 | `src-tauri/kabegame-core/src/crawler/downloader/content.rs` | Android-only `content://` scheme downloader；从 ContentResolver 读取 bytes 写入 `DownloadSink` |
 | `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | 图片缩略图、视频预览压缩、缩略图尺寸策略 |
 | `src-tauri/kabegame-core/src/crawler/downloader/util.rs` | 安全文件名、唯一下载路径、hash、MIME/文件名辅助 |
-| `src-tauri/kabegame/src/startup.rs`、`src-tauri/kabegame/src/commands/surf.rs`、`src-tauri/kabegame/src/commands/crawler.rs` | 桌面 WebView/CEF native 下载触发、URL identity 匹配、落盘路径指定与统一后处理衔接 |
+| `src-tauri/kabegame/src/startup.rs`、`src-tauri/kabegame/src/commands/surf.rs`、`src-tauri/kabegame/src/commands/crawler.rs` | 桌面 WebView/CEF native 下载触发、URL identity 匹配、媒体上传命令按窗口 label 路由、落盘路径指定与统一后处理衔接 |
 | `src-tauri/kabegame-core/src/crawler/scheduler.rs` | crawl task 调度；失败图片重试句柄；任务级 header/display_name/metadata 快照回放 |
 | `src-tauri/kabegame/src/commands/task.rs` | 失败项重试、取消重试、删除失败项等命令入口 |
 | `apps/kabegame/src/stores/failedImages.ts` | 前端失败图片事件增量同步 |
@@ -184,6 +187,27 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 - 按需写入目标画册并广播事件
 
 桌面 WebView/CEF 原生下载完成后也复用同一后处理入口。触发原生下载前，后端会把下载所需的入库上下文登记到 `ActiveDownloadInfo` 的后端字段里，包括 `task_id` / `surf_record_id`、`plugin_id`、输出画册、header 快照、脚本指定展示名和 `metadata_id`。这些字段都使用 `#[serde(skip)]`，不会下发前端，避免暴露 cookie/鉴权 header。下载完成事件只负责按 URL 从 `active_downloads` 取回 native 项，并把浏览器落盘文件交给 `postprocess_downloaded_image`；后续入库、去重、缩略图和事件广播仍由统一后处理负责。native 下载也发送完整 lifecycle：`Downloading -> Processing -> Completed/Failed -> download-removed`，前端刷新快照时可以从同一个 `get_active_downloads` 结果看到池下载与 native 下载。
+
+### JS 层流式上传通道
+
+`ctx.downloadImage(url)` 在 bootstrap 中按 scheme 分流；畅游 `surf-{host}` 窗口的右键下载对 `data:` / `blob:` 也复用同一条共享上传脚本：
+
+- `http:` / `https:` 等普通 URL：保持原 WebView/CEF native 下载路径。
+- `data:`：页面内 `fetch(url).blob()` 后按 2 MiB 切片上传。
+- 普通 `blob:`：优先从 `media_capture.js` 维护的 `URL.createObjectURL` 注册表取 Blob；未命中时兜底 `fetch(blobUrl)`。
+- MSE `blob:`：`media_capture.js` 早期 hook `MediaSource.addSourceBuffer` 与 `SourceBuffer.appendBuffer`，只保存页面实际 append 过的媒体片段；下载前 `media_download.js` 会静音高倍速驱动 `<video>` 尽量全缓冲，直播或长时间无推进会明确报错。
+- 捕获结果在 `resolve()` 时按容器归一化：fMP4/CMAF 读取 `tfdt.baseMediaDecodeTime`，MPEG-TS 读取首个 PES PTS，按时间升序排序并去重；无法识别的容器保留 append 顺序并标记 `unordered`。
+- MSE 多 SourceBuffer 上传为多流会话。桌面端在 `crawl_media_end` 中调用 `compress::mux_media_streams` 做 stream-copy 合流；Android 不编译 FFmpeg/rsmpeg，多流合流会优雅失败。
+- DRM/EME 只做检测和拒绝：检测到 `setMediaKeys` 或 `encrypted` 事件后抛出清晰错误，不尝试解密，也不生成坏文件。
+
+Rust 命令语义：
+
+- `crawl_media_begin`：按调用方 label 解析上下文。`crawler-<task_id>` 从 crawler session 取 `images_dir/plugin_id/output_album_id` 并合并任务 header；`surf-{host}` 按 host 现算 `plugin_id=host`、`surf_record_id` 与默认图片目录。随后分配 `download_id`，按每个 stream 的 MIME/name 计算临时文件，创建上传会话，并把 `ActiveDownloadInfo { native: true, state: Preparing, total_bytes, ... }` 登记到 `DownloadQueue`，随后切到 `Downloading`。
+- `crawl_media_chunk`：base64 解码 JS chunk，按 `stream` 索引追加写入对应会话文件，并调用 `report_progress(id, written, total)` 推动任务抽屉进度。
+- `crawl_media_end(success=true)`：关闭会话文件，单流直接后处理，多流桌面先合流成临时单文件，再切到 `Processing` 并用 `PostprocessSource::Path { relocate_to: None }` 进入统一后处理；完成后由后处理切到 `Completed` 或 `Failed`，再 `wait_then_finish_download`。畅游媒体下载成功入库时会同步增加对应 surf 记录下载计数。
+- `crawl_media_end(success=false)` 或任务取消：abort 会话、删除半截文件。任务取消统一在 `DownloadQueue::cancel_task_downloads` 中调用 `media_upload::abort_task_sessions(task_id)`，覆盖用户取消和 `crawl_error` 的取消路径。
+
+上传会话累计上限为 2 GiB，单个 MediaSource 捕获上限为 768 MiB。该通道不做 HLS/DASH manifest 解析，也不主动抓分片；它只处理播放器已经通过 `appendBuffer` 喂给 MSE 的字节。
 
 桌面的 `file://` 或其他本地导入路径也通过 `PostprocessSource::Path` 走统一后处理。
 

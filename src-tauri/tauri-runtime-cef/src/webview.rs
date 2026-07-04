@@ -757,13 +757,33 @@ mod imp {
         cef::sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0
     }
 
+    /// Surf 顶部导航栏 webview 的固定高度(DIP;CEF Views 坐标系为 DIP,由 Chromium
+    /// 按显示器缩放自动转物理像素)。导航栏 label 以 `-navbar` 结尾。
+    pub(crate) const SURF_NAVBAR_DIP_HEIGHT: i32 = 40;
+
     wrap_browser_view_delegate! {
         pub(crate) struct ViewsBrowserViewDelegate {
             label: String,
             // on_browser_created 时一次性取出写入全局注册表。
             pending_protocols: Arc<Mutex<Option<protocol::WebviewProtocols>>>,
         }
-        impl ViewDelegate {}
+        impl ViewDelegate {
+            fn preferred_size(&self, _view: Option<&mut View>) -> cef::Size {
+                // Surf 导航栏以固定 DIP 高度参与窗口的垂直 BoxLayout;内容 webview 用
+                // flex=1 撑满剩余高度。
+                //
+                // 两个维度都必须非 0:CEF(view_view.h)仅在 delegate 返回的 Size
+                // 非 empty(gfx::Size::IsEmpty() = 任一维度为 0)时才采用,否则回退
+                // 到 views::WebView 自身的 preferred size(跟随视图当前尺寸变化,
+                // 会导致导航栏高度锁死在历史尺寸)。宽度由 BoxLayout 的 cross-axis
+                // STRETCH 拉伸到窗口宽,这里的值不参与布局,取 1 即可。
+                if self.label.ends_with("-navbar") {
+                    cef::Size { width: 1, height: SURF_NAVBAR_DIP_HEIGHT }
+                } else {
+                    cef::Size { width: 1, height: 1 }
+                }
+            }
+        }
         impl BrowserViewDelegate {
             fn browser_runtime_style(&self) -> RuntimeStyle { RuntimeStyle::ALLOY }
 

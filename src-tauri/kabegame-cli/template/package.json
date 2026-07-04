@@ -1,0 +1,30 @@
+{
+  "name": "{{ project-name }}",
+  "version": "0.1.0",
+  "description": "{{ project-name }} crawler plugin",
+  "author": "You",
+  "private": true,
+  "engines": { "kabegame": ">=4.3.0" },
+  "kbPackageVersion": 3,
+  "kbBackend": "{{ backend }}",
+  "kbBaseUrl": "",
+  "kbConfig": [],
+  "kbIcon": "icon.png",
+  "kbDoc": { "default": "docs/doc.md" }
+{%- if backend == "v8" %},
+  "main": "dist/main.js",
+  "scripts": { "build": "rspack build" },
+  "devDependencies": {
+    "@kabegame/plugin-sdk": "^0.1.0",
+    "@kabegame/types": "^0.1.0",
+    "@rspack/cli": "^1",
+    "@rspack/core": "^1",
+    "typescript": "^5"
+  }
+{%- elsif backend == "webview" %},
+  "main": "crawl.js",
+  "devDependencies": { "@types/web": "^0.0" }
+{%- else %},
+  "main": "crawl.rhai"
+{%- endif %}
+}

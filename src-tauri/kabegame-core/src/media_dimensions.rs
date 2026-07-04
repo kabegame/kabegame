@@ -38,10 +38,21 @@ pub fn resolve_image_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
 ///
 /// Android does not link FFmpeg; `content://` video dimensions come from the
 /// async ContentIoProvider path in the `android` submodule.
+///
+/// First video stream index by `codec_type`, WITHOUT requiring a decoder.
+/// `find_best_stream` skips streams whose decoder isn't compiled (this build has no
+/// AV1 decoder), which would hide AV1 video from probing that only reads `codecpar`.
+#[cfg(not(target_os = "android"))]
+fn first_video_stream_index(fmt: &rsmpeg::avformat::AVFormatContextInput) -> Option<usize> {
+    use rsmpeg::ffi;
+    let count = fmt.nb_streams as usize;
+    let streams = fmt.streams();
+    (0..count).find(|&i| streams[i].codecpar().codec_type == ffi::AVMEDIA_TYPE_VIDEO)
+}
+
 #[cfg(not(target_os = "android"))]
 pub fn resolve_video_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
     use rsmpeg::avformat::AVFormatContextInput;
-    use rsmpeg::ffi;
     use std::ffi::CString;
 
     let path = local_path_to_path_buf(local_path);
@@ -60,9 +71,9 @@ pub fn resolve_video_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
             return None;
         }
     };
-    let video_idx = match fmt.find_best_stream(ffi::AVMEDIA_TYPE_VIDEO) {
-        Ok(Some((idx, _dec))) => idx,
-        _ => {
+    let video_idx = match first_video_stream_index(&fmt) {
+        Some(idx) => idx,
+        None => {
             eprintln!(
                 "[media-dimensions] no video stream found in {}",
                 path.display()
@@ -100,8 +111,7 @@ pub struct MediaProbeResult {
     pub width: u32,
     pub height: u32,
     /// 当前平台的内嵌浏览器能否直接显示/播放此内容，无需转码。
-    /// Linux CEF 不带 H.264/AAC 专有解码器，只有 VP8/VP9/AV1 WebM 视为可直播；
-    /// 其它桌面 Chromium WebView 则将非 HEVC 的 MP4 与 WebM 视为可直播放。
+    /// 桌面 Chromium/CEF 将非 HEVC 的 MP4 与 VP8/VP9/AV1 WebM 视为可直播放。
     pub browser_safe: bool,
 }
 
@@ -110,12 +120,11 @@ pub struct MediaProbeResult {
 #[cfg(not(target_os = "android"))]
 pub fn probe_media_sync(path: &std::path::Path) -> Option<MediaProbeResult> {
     use rsmpeg::avformat::AVFormatContextInput;
-    use rsmpeg::ffi;
     use std::ffi::CString;
 
     let path_c = CString::new(path.to_string_lossy().as_ref()).ok()?;
     let fmt = AVFormatContextInput::open(&path_c).ok()?;
-    let (video_idx, _) = fmt.find_best_stream(ffi::AVMEDIA_TYPE_VIDEO).ok()??;
+    let video_idx = first_video_stream_index(&fmt)?;
     let codecpar = fmt.streams()[video_idx].codecpar();
     let (w, h) = (codecpar.width, codecpar.height);
     if w <= 0 || h <= 0 {
@@ -157,11 +166,6 @@ fn classify_video_probe_mime(
         || fmt_name.contains("3gp")
         || fmt_name.contains("mj2")
     {
-        // Linux CEF 的预编译 runtime 不含 H.264/AAC，MP4 必须先转成 VP9/Opus WebM。
-        // 其它桌面端仍可直接播放非 HEVC 的 MP4。
-        #[cfg(target_os = "linux")]
-        let safe = false;
-        #[cfg(not(target_os = "linux"))]
         let safe = codec_id != ffi::AV_CODEC_ID_HEVC;
         ("video/mp4", safe)
     } else {

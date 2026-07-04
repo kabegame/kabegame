@@ -1,0 +1,8 @@
+# .kabegameignore — 排除/追加文件的 glob 规则
+# 引用闭包（package.json 字段引用的文件）通常够用，此文件用于额外控制。
+#
+# 排除（普通行）：
+#   *.tmp
+#
+# 强制追加（! 开头）：
+#   !data/bundled.json

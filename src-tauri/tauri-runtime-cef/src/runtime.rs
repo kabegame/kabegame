@@ -417,6 +417,8 @@ mod imp {
         window: Option<CefWindow>,
         browser_view: Option<webview::CefBrowserView>,
         browser_view_attached: bool,
+        chrome_view: Option<webview::CefBrowserView>,
+        chrome_view_attached: bool,
         quit: Arc<AtomicBool>,
         /// `can_close` 已向主循环发出 `CloseRequested` 请求,正等待裁决。
         close_requested: bool,
@@ -752,13 +754,7 @@ mod imp {
                 shared.window = Some(CefWindow {
                     inner: window.clone(),
                 });
-                if !shared.browser_view_attached {
-                    if let Some(browser_view) = shared.browser_view.as_ref() {
-                        let mut view = View::from(&browser_view.inner);
-                        window.add_child_view(Some(&mut view));
-                        shared.browser_view_attached = true;
-                    }
-                }
+                attach_windowed_browser_views(&mut shared, window);
                 layout_windowed_browser_view(&shared, window);
 
                 // 应用图标(标题栏 + 任务栏)。CEF Views 默认是 Chromium 图标,
@@ -936,19 +932,58 @@ mod imp {
         }
     }
 
-    /// Keep the sole windowed `BrowserView` aligned with the CEF Window client
-    /// area. This is a CEF Views layout operation.
+    fn attach_windowed_browser_views(shared: &mut WindowedWindowShared, window: &cef::Window) {
+        if !shared.browser_view_attached {
+            if let Some(browser_view) = shared.browser_view.as_ref() {
+                let mut view = View::from(&browser_view.inner);
+                window.add_child_view(Some(&mut view));
+                shared.browser_view_attached = true;
+            }
+        }
+    }
+
+    /// Keep the sole content `BrowserView` aligned with the CEF Window client area.
+    ///
+    /// 仅用于「无导航栏」的普通窗口(main / wallpaper / crawler / 单 webview surf 之外)。
+    /// 一旦窗口装上 surf 导航栏,布局改由 [`apply_surf_chrome_layout`] 安装的垂直
+    /// BoxLayout 接管,这里直接返回,避免与 BoxLayout 争抢导致导航栏闪烁/错位。
     fn layout_windowed_browser_view(shared: &WindowedWindowShared, window: &cef::Window) {
+        if shared.chrome_view.is_some() {
+            return;
+        }
         let client_area = window.client_area_bounds_in_screen();
-        let Some(browser_view) = shared.browser_view.as_ref() else {
+        if let Some(browser_view) = shared.browser_view.as_ref() {
+            browser_view.inner.set_bounds(Some(&cef::Rect {
+                x: 0,
+                y: 0,
+                width: client_area.width.max(0),
+                height: client_area.height.max(0),
+            }));
+        }
+    }
+
+    /// 把窗口从 CEF 默认的 fill 布局(所有 BrowserView 都铺满、后加的导航栏盖住
+    /// 内容)切换为**垂直 BoxLayout**:顶部导航栏(固定 preferred 高度,见
+    /// [`webview::SURF_NAVBAR_DIP_HEIGHT`])+ 内容 webview(flex=1 撑满剩余)。
+    /// BoxLayout 会随窗口 resize 自动重排,无需手动 set_bounds。
+    /// 前置条件:导航栏已通过 `add_child_view_at(_, 0)` 插到最上方(index 0)。
+    fn apply_surf_chrome_layout(shared: &WindowedWindowShared, window: &cef::Window) {
+        let settings = cef::BoxLayoutSettings {
+            horizontal: 0, // 0 = 垂直堆叠
+            main_axis_alignment: cef::AxisAlignment::START,
+            cross_axis_alignment: cef::AxisAlignment::STRETCH, // 子视图占满宽度
+            ..Default::default()
+        };
+        let Some(box_layout) = window.set_to_box_layout(Some(&settings)) else {
             return;
         };
-        browser_view.inner.set_bounds(Some(&cef::Rect {
-            x: 0,
-            y: 0,
-            width: client_area.width.max(0),
-            height: client_area.height.max(0),
-        }));
+        if let Some(content) = shared.browser_view.as_ref() {
+            let mut content_view = View::from(&content.inner);
+            box_layout.set_flex_for_view(Some(&mut content_view), 1);
+        }
+        // 导航栏是在默认 fill 布局下 add_child_view_at 的(此刻已被排成整窗),
+        // 切到 BoxLayout 后必须显式触发一次重排,否则要等下一次窗口 resize。
+        window.invalidate_layout();
     }
 
     wrap_browser_view_delegate! {
@@ -1073,6 +1108,8 @@ mod imp {
                             window: None,
                             browser_view: browser_view.map(|inner| webview::CefBrowserView { inner }),
                             browser_view_attached: false,
+                            chrome_view: None,
+                            chrome_view_attached: false,
                             quit: self.quit.clone(),
                             close_requested: false,
                             close_confirmed: false,
@@ -1678,6 +1715,8 @@ mod imp {
                 window: None,
                 browser_view: None,
                 browser_view_attached: false,
+                chrome_view: None,
+                chrome_view_attached: false,
                 quit: windowed_quit(),
                 close_requested: false,
                 close_confirmed: false,
@@ -1755,14 +1794,8 @@ mod imp {
                 shared.window = Some(CefWindow {
                     inner: window.clone(),
                 });
-                if !shared.browser_view_attached {
-                    if let Some(browser_view) = shared.browser_view.as_ref() {
-                        let mut view = View::from(&browser_view.inner);
-                        window.add_child_view(Some(&mut view));
-                        layout_windowed_browser_view(&shared, &window);
-                        shared.browser_view_attached = true;
-                    }
-                }
+                attach_windowed_browser_views(&mut shared, &window);
+                layout_windowed_browser_view(&shared, &window);
             }
             if attrs.visible {
                 window.show();
@@ -1855,13 +1888,31 @@ mod imp {
                     .shared
                     .lock()
                     .expect("windowed state mutex poisoned");
-                shared.browser_view = Some(webview::CefBrowserView {
-                    inner: browser_view.clone(),
-                });
+                let is_chrome = label.ends_with("-navbar");
+                if is_chrome {
+                    shared.chrome_view = Some(webview::CefBrowserView {
+                        inner: browser_view.clone(),
+                    });
+                    shared.chrome_view_attached = false;
+                } else {
+                    shared.browser_view = Some(webview::CefBrowserView {
+                        inner: browser_view.clone(),
+                    });
+                    shared.browser_view_attached = false;
+                }
                 if let Some(window) = shared.window.as_ref() {
-                    window.inner.add_child_view(Some(&mut view));
-                    layout_windowed_browser_view(&shared, &window.inner);
-                    shared.browser_view_attached = true;
+                    if is_chrome {
+                        // 导航栏插到最上方(index 0),内容在其下方;随后切换为垂直
+                        // BoxLayout 接管布局(取代默认 fill,否则两个 BrowserView 都会
+                        // 铺满、导航栏盖住内容并居中显示)。
+                        window.inner.add_child_view_at(Some(&mut view), 0);
+                        apply_surf_chrome_layout(&shared, &window.inner);
+                        shared.chrome_view_attached = true;
+                    } else {
+                        window.inner.add_child_view(Some(&mut view));
+                        layout_windowed_browser_view(&shared, &window.inner);
+                        shared.browser_view_attached = true;
+                    }
                 }
             }
             window.webviews.push(webview_id);

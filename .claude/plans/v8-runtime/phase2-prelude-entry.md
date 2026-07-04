@@ -42,8 +42,8 @@
 
 - **不做** ModuleLoader:`RuntimeOptions.module_loader = None` 是**契约的一部分** —— 插件里任何
   `import` 语句在运行期直接报错,从运行时侧强制"作者必须 bundle 成自包含单文件"(决策 D4/D6)。
-- **不做** `.kgpg` 内 `crawl.v8.js` 的检测/装载(`Plugin.v8_script` 字段、`script_type = "v8"`)——
-  属 Phase 4 调度集成;本 Phase 入口 API 只收 `script_content: &str`。
+- **不做** `.kgpg` 内 v8 脚本的装载/调度(v3 装载 = `PluginScript::V3 { backend: V8, source }`,属
+  Phase 3b 存储;`script_type = "v8"` 派生;调度分发属 Phase 4)——本 Phase 入口 API 只收 `script_content: &str`。
 - **不做** SDK(Phase 3);测试直接用 `globalThis.__kabegame_*` 写入口脚本。
 - snapshot **降级为可选项**(见点 6 的取舍说明),不作为本 Phase 退出闸。
 

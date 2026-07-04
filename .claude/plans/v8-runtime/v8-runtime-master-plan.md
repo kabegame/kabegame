@@ -41,7 +41,7 @@
 | D6 | **kabegame-cli 不绑定 rspack/任何打包器**,学 vsce:只"打包关心的文件 + `.kabegameignore`" | CLI 保持纯 Rust zip 打包器,零 Node/bundler 依赖。产出自包含 bundle 是**作者构建的职责**(模板里预置 rspack,但 CLI 不调用)。 |
 | D7 | v8 后端入口文件名 `crawl.v8.js` | 与 CEF 的 `crawl.js` 不撞名;backend 检测据此区分。 |
 | D8 | metadata migrations 转 JS(`v{N}.js`),契约仍 `migrate(data) -> data` | JSON/RegExp 是 JS 原生,迁移几乎不需要 host op,跑在极简 V8 即可。 |
-| D9 | **插件清单 v3:package.json 自描述单清单**,灭掉 `manifest.json`/`config.json` | `name/version/author/description/main` 复用 npm 字段(i18n 顶层扁平键保留);kabegame 语义走 `kbPackageVersion: 3`、`kbBackend`、`kbBaseUrl`、`kbConfig`、`kbIcon`、`kbDoc.[locale]`、`kbRecommendedConfigs`、`kbPathQLProviders`、`kbMetadataMigrations`(下标+1=版本)、`kbDescriptionTemplate`——路径字段定位一切,**不强制结构和名称**。详见 [phase3-sdk-cli-packaging.md](./phase3-sdk-cli-packaging.md)。 |
+| D9 | **插件清单 v3:package.json 自描述单清单**,灭掉 `manifest.json`/`config.json` | `name/version/author/description/main` 复用 npm 字段(i18n 顶层扁平键保留);kabegame 语义走 `kbPackageVersion: 3`、`kbBackend`、`kbBaseUrl`、`kbConfig`、`kbIcon`、`kbDoc.[locale]`、`kbRecommendedConfigs`、`kbPathQLProviders`、`kbMetadataMigrations`(下标+1=版本)、`kbDescriptionTemplate`——路径字段定位一切,**不强制结构和名称**。详见 [phase3-overview.md](./phase3-overview.md)。 |
 | D10 | **v2 兼容双轨** | 运行时保留旧 .kgpg(zip 内 manifest.json/config.json)读取;CLI pack 按 `kbPackageVersion` 分流 v2/v3;KGPG 二进制头部版本仍为 2(槽内改派生清单)。 |
 | D11 | **本重构随 App 4.3.0 发布** | v3 包 pack 时强制 `engines.kabegame >= 4.3.0`;内置插件迁移后 minAppVersion 一律 4.3.0。 |
 | D12 | **v3 单后端单脚本**(`kbBackend ∈ rhai/v8/webview`) | 后端显式声明、不靠文件名/扩展名;rhai+v8 双跑 = 发两个包(修正早期"同包双跑"设想,发布形态 Phase 6 拍板)。 |
@@ -120,7 +120,9 @@ export async function crawl() {                 - schema 感知默认收集 + .k
 - **退出标准**:能加载一个自包含 bundle 并完整跑完 `crawl`,异步分页/下载/进度事件行为正确。
 
 ### Phase 3 — SDK + CLI 打包器 + 插件清单 v3
-> 逐点实施方案见 [phase3-sdk-cli-packaging.md](./phase3-sdk-cli-packaging.md)(决策 D9–D12 的落地)。
+> 总览/决策/契约见 [phase3-overview.md](./phase3-overview.md);子阶段实施方案:
+> [3a SDK](./phase3a-plugin-sdk.md)、[3b core 装载](./phase3b-core-loader.md)、
+> [3c CLI 打包器](./phase3c-cli-packer.md)、[3d 内置迁移+文档](./phase3d-builtin-and-docs.md)。
 - **3a 填充 `@kabegame/plugin-sdk`**(`packages/` 下 git submodule → 指向已建空仓库
   `https://github.com/kabegame/kabegame-plugin-sdk`)
   - 新增:`__kabegame_*` 的 TS 薄封装 + JS 侧工具(DOM 解析/URL/md5,纯 JS 依赖随 SDK 打包)
@@ -129,14 +131,16 @@ export async function crawl() {                 - schema 感知默认收集 + .k
   - 修改:`.gitmodules` 增条目(根 workspaces 已含 `packages/*`,无需改)。
 - **3b 插件清单 v3(D9)+ core 双轨装载(D10)**
   - 修改:`kabegame-core` 新增 package.json → manifest/config 派生与 `load_plugin_v3_from_zip`
-    (kb* 路径字段定位脚本/doc/推荐配置/providers/迁移脚本/EJS 模板;`Plugin.v8_script` 存储字段);
+    (kb* 路径字段定位脚本/doc/推荐配置/providers/迁移脚本/EJS 模板);`Plugin` 脚本存储改
+    `PluginScript` 枚举(v2 双脚本 / v3 `{ backend, source }`,core 权威 `PluginBackend`);
     v2 读取路径原样保留;store 包版本上限 2→3。
 - **3c kabegame-cli = v3 打包器(纯 Rust,bundler-agnostic)**
   - 修改:pack 按 `kbPackageVersion` 双轨;v3 = **引用闭包收集**(package.json 引用的文件 +
     kbDoc md 引用图片)叠加 `.kabegameignore`(学 `.vscodeignore`);头部清单从 package.json 派生。
   - 修改:后端由 `kbBackend` 显式声明(D12),v3 不做文件名检测;不驱动构建(O1 已拍板不做)。
-  - 新增:`plugin new --backend v8` 模板(node 工程:SDK 依赖、tsconfig、rspack.config、
-    `src/index.ts` 带 `export async function crawl`;rhai/webview 模板同步 v3 化,删 manifest.json 模板)。
+  - 修改:`plugin new` 改用 **`cargo-generate` crate + 单一模板 + 条件文件**(`cargo-generate.toml`
+    按 `backend` 占位符取舍;弃分子文件夹)。v8 出 SDK/types 依赖 + tsconfig + rspack.config +
+    `src/index.ts`;webview 出 `crawl.js` + DOM tsconfig;rhai 出 `crawl.rhai`;删 manifest.json 模板。
   - 新增:`engines.kabegame → minAppVersion` 校验(pack 时,强制 >= 4.3.0)。
 - **3d 内置 12 插件迁移 v3 + `generate-index.ts` 跟进**(index `packageVersion: 3` + `minAppVersion`)。
 - **退出标准**:`plugin new --backend v8` 产出可构建模板;作者 bundle 后 `plugin pack` 产出可安装的

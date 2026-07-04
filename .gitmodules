@@ -10,3 +10,9 @@
 [submodule "src-plasma-wallpaper-plugin"]
 	path = src-plasma-wallpaper-plugin
 	url = git@github.com:kabegame/plasma-wallpaper-plugin2.git
+[submodule "packages/kabegame-plugin-sdk"]
+	path = packages/kabegame-plugin-sdk
+	url = https://github.com/kabegame/kabegame-plugin-sdk.git
+[submodule "third/x264"]
+	path = third/x264
+	url = https://code.videolan.org/videolan/x264.git

@@ -1,6 +1,13 @@
 [[permission]]
 identifier = "surf"
 description = "Surf allowed commands"
-command.allow = [
+commands.allow = [
     "surf_open_devtools",
+    "surf_go_back",
+    "surf_go_forward",
+    "surf_reload",
+    "surf_navigate",
+    "crawl_media_begin",
+    "crawl_media_chunk",
+    "crawl_media_end",
 ]

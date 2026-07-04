@@ -1,13 +1,13 @@
 // 启动步骤函数
 
 use async_trait::async_trait;
-use kabegame_core::crawler::{TaskScheduler, task_scheduler};
+use kabegame_core::crawler::{task_scheduler, TaskScheduler};
 use kabegame_i18n::t;
 // 事件转发到前端（桌面与 Android 均需要，用于 tasks-change 等）
 #[cfg(not(feature = "web"))]
-use crate::wallpaper::WallpaperRotator;
-#[cfg(not(feature = "web"))]
 use crate::wallpaper::manager::WallpaperController;
+#[cfg(not(feature = "web"))]
+use crate::wallpaper::WallpaperRotator;
 #[cfg(feature = "web")]
 use crate::web::server::SseMessage;
 use kabegame_core::ipc::events::DaemonEventKind;
@@ -27,12 +27,11 @@ use url::Url;
 use crate::web::server::*;
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::downloader::{
-    ActiveDownloadInfo, DownloadState, compute_unique_download_path, next_download_id,
-    postprocess_downloaded_image,
+    compute_unique_download_path_with_name, postprocess_downloaded_image, DownloadState,
 };
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::webview::{
-    CrawlerWebViewHandler, crawler_window_label, set_webview_handler, try_get_session_context,
+    crawler_window_label, set_webview_handler, try_get_session_context, CrawlerWebViewHandler,
 };
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use tauri::webview::DownloadEvent;
@@ -49,7 +48,7 @@ impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
         let task_id = task_id.to_string();
         let base_url = base_url.to_string();
         run_on_main_thread_sync(&self.app, move |app| {
-            create_crawler_task_window(app, &task_id, &base_url)
+            create_crawler_window(app, &task_id, &base_url)
         })
     }
 
@@ -522,7 +521,7 @@ pub fn try_forward_to_existing_instance_and_exit() {
         return;
     }
 
-    use kabegame_core::ipc::ipc::{IpcRequest, request};
+    use kabegame_core::ipc::ipc::{request, IpcRequest};
 
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
@@ -609,7 +608,7 @@ pub fn start_download_workers() {
 }
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-pub fn create_crawler_task_window<R: Runtime>(
+pub fn create_crawler_window<R: Runtime>(
     app_handle: AppHandle<R>,
     task_id: &str,
     base_url: &str,
@@ -630,7 +629,15 @@ pub fn create_crawler_task_window<R: Runtime>(
     }
 
     use tauri::{WebviewUrl, WebviewWindowBuilder};
-    // 编译时嵌入 bootstrap.js（从 resources 目录读取）
+    // 编译时嵌入 crawler initialization scripts（从 resources 目录读取）
+    let media_capture = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/resources/media_capture.js"
+    ));
+    let media_download = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/resources/media_download.js"
+    ));
     let script = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/resources/bootstrap.js"
@@ -649,6 +656,8 @@ pub fn create_crawler_task_window<R: Runtime>(
         .skip_taskbar(true)
         .resizable(false)
         .inner_size(1920.0, 1080.0)
+        .initialization_script(media_capture)
+        .initialization_script(media_download)
         .initialization_script(script)
         .on_page_load(move |_webview, _payload| {})
         .on_navigation(|url| {
@@ -671,14 +680,6 @@ pub fn create_crawler_task_window<R: Runtime>(
                 } else {
                     url.clone()
                 };
-                let native_dest =
-                    match compute_unique_download_path(&images_dir, &effective_url, None) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            eprintln!("Failed to compute native download destination: {}", e);
-                            return false;
-                        }
-                    };
                 let dq = TaskScheduler::global().download_queue();
                 let entry = if let Some(entry) = dq.get_native(url.as_str()) {
                     entry
@@ -686,9 +687,22 @@ pub fn create_crawler_task_window<R: Runtime>(
                     eprintln!("[Crawler] Cannot find the download for crawler webview.");
                     return false;
                 };
+                let native_dest = match compute_unique_download_path_with_name(
+                    &images_dir,
+                    &effective_url,
+                    None,
+                    entry.custom_display_name.as_deref(),
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("Failed to compute native download destination: {}", e);
+                        return false;
+                    }
+                };
                 *destination = native_dest;
                 tauri::async_runtime::spawn(async move {
-                    dq.switch_state(entry.id, DownloadState::Downloading, None).await;
+                    dq.switch_state(entry.id, DownloadState::Downloading, None)
+                        .await;
                 });
                 true
             }
@@ -801,7 +815,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     // Linux Plasma + 插件模式：若当前系统壁纸插件不是 Kabegame，自动切到 Kabegame（与 Windows/macOS 窗口模式启动时对齐）
     #[cfg(target_os = "linux")]
     {
-        use crate::linux_desktop::{LinuxDesktop, linux_desktop};
+        use crate::linux_desktop::{linux_desktop, LinuxDesktop};
         use crate::wallpaper::manager::PlasmaPluginWallpaperManager;
         let mode = Settings::global().get_wallpaper_mode();
         if linux_desktop() == LinuxDesktop::Plasma && mode == "plasma-plugin" {

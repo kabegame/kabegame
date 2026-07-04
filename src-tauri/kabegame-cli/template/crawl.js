@@ -1,4 +1,4 @@
-// {{plugin_name}} WebView 模板
+// {{ project-name }} WebView 模板
 // 提示：按需使用 window.crawl 提供的 API
 
 async function run() {

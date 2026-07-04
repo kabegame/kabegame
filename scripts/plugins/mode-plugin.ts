@@ -104,7 +104,7 @@ export class ModePlugin extends BasePlugin {
             "pkgconfig",
           )
         );
-        // Linux 将 FFmpeg 与 x264/vpx/opus 显式静态链接；该模式还会让
+        // Linux 将 FFmpeg 与 x264 显式静态链接；该模式还会让
         // rusty_ffmpeg 完整解析 .pc 的传递依赖，避免复用旧的链接元数据。
         if (OSPlugin.isLinux) {
           this.setEnv("FFMPEG_LINK_MODE", "static");

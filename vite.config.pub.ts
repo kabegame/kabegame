@@ -73,10 +73,9 @@ export default {
   resolve: {
     alias: {
       "@": path.resolve(process.cwd(), "src"),
-      "@kabegame/core": path.resolve(root, "packages", "core", "src"),
+      "@kabegame/core": path.resolve(root, "packages", "kabegame-core", "src"),
     },
   },
-
   css: {
     preprocessorOptions: {
       scss: {

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::plugin::Plugin;
+use super::PluginScript;
 
 mod ops;
 pub use ops::KabegameOpState;
@@ -301,8 +302,10 @@ mod tests {
             description_template: None,
             recommended_configs: Vec::new(),
             var_defs: Vec::new(),
-            rhai_script: None,
-            js_script: None,
+            script: PluginScript::V2 {
+                rhai: None,
+                js: None,
+            },
             doc_resources: None,
             providers: Vec::new(),
             metadata_migrations: Vec::new(),

@@ -1,0 +1,19 @@
+[template]
+cargo_generate_version = ">=0.20"
+
+[placeholders]
+backend = { type = "string", prompt = "backend", choices = ["rhai", "v8", "webview"], default = "v8" }
+
+# v8 专属：非 v8 时忽略
+[conditional.'backend != "v8"']
+ignore = ["src", "rspack.config.mjs"]
+
+# tsconfig 仅 v8/webview 需要（rhai 无 TS）
+[conditional.'backend == "rhai"']
+ignore = ["tsconfig.json"]
+
+# 单脚本：只保留所选后端的入口脚本
+[conditional.'backend != "rhai"']
+ignore = ["crawl.rhai"]
+[conditional.'backend != "webview"']
+ignore = ["crawl.js"]

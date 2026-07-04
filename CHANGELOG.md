@@ -6,22 +6,25 @@
 
 **Changelog entries:** ~~Write release notes in **English** (new sections and bullets from [3.4.5] onward). ~~ 从4.2.1开始用中文。
 
-## [4.2.2]
+## [4.3.0]
 ### Added
 - **爬虫**: webview 爬虫插件现在可以多窗口了
+- **畅游**: 畅游现在不受限制可以多窗口了
+- **插件**: v8插件就绪，可以以编写vscode插件一样的体验来编写kabegame插件啦
 
 ### Fixed
 - **动态库**: windows、macos和linux现在带上依赖的动态库和搜索路径，尽量能够在更多系统上能够运行。
   - libfuse
   - ffmpeg 依赖
   - cef 依赖
+- **预览**: 手机屏幕预览抵达页的边界的时候自动翻页
 
 ### Optimized
 - **任务**: JS任务在log旁添加了一个快捷打开webview的按钮
+- **畅游**: 畅游下载视频更加健壮，用MSE、HSL hook来下载流式视频，**长视频暂不稳定，建议5分钟短视频**。
 
 ### Changed
-- **Linux**: Linux现在用自研CEF运行时，被 WebkitGTK 折磨的时代已经过去啦（代价是安装包膨胀200MB左右）
-- **Linux**: Linux视频现在用ffmpeg生成webm(vpx_vp9+Opus)兼容和缩略视频，以前的视频无法播放，需要重新运行一次整理
+- **界面**: webview现在用自研CEF运行时，Linux 上被 WebkitGTK 折磨的时代已经过去啦（代价是安装包膨胀200MB左右），并且还可以定制运行时和一致化webview行为。
 
 ## [4.2.1]
 ### Fixed

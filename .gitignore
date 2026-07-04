@@ -61,8 +61,9 @@ src-tauri/kabegame/resources/bin/*
 
 # /test/
 
-# FFmpeg 外树构建目录（bun run build:ffmpeg 产出）
+# 外树构建目录
 third/FFmpeg-build
+third/x264-build
 
 # 一些临时文件
 /ignore

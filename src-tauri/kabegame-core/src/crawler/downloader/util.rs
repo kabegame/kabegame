@@ -31,11 +31,18 @@ pub fn compute_bytes_hash(bytes: &[u8]) -> String {
 
 pub const MAX_SAFE_FILENAME_LEN: usize = 180;
 
-pub fn clamp_ascii_len(s: &str, max_len: usize) -> &str {
+/// 将字符串裁剪到不超过 `max_len` 字节。`max_len` 是**字节**预算(多数文件系统按字节
+/// 限制文件名长度,如 ext4/APFS 的 255 字节),但裁剪点会回退到最近的 UTF-8 字符边界,
+/// 避免把一个多字节字符(如中文)截断成非法 UTF-8。
+pub fn clamp_utf8_len(s: &str, max_len: usize) -> &str {
     if s.len() <= max_len {
         return s;
     }
-    &s[..max_len]
+    let mut end = max_len;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 pub fn is_windows_reserved_device_name(stem: &str) -> bool {
@@ -55,16 +62,17 @@ pub fn is_windows_reserved_device_name(stem: &str) -> bool {
     false
 }
 
+/// 跨平台文件名非法字符:Windows 保留的 `< > : " / \ | ? *`、路径分隔符,以及任意控制字符
+/// (含 Unicode 控制字符)。其余字符——包括中文、日文假名、韩文、重音拉丁等——一律保留,
+/// 因此生成的文件名可以宽松地承载多语言标题,同时在 Windows/macOS/Linux 上都合法。
+fn is_forbidden_filename_char(c: char) -> bool {
+    matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || c.is_control()
+}
+
 pub fn sanitize_stem_for_filename(stem: &str) -> String {
     let mut out: String = stem
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ' ' {
-                c
-            } else {
-                '_'
-            }
-        })
+        .map(|c| if is_forbidden_filename_char(c) { '_' } else { c })
         .collect();
 
     while out.contains("  ") {
@@ -105,7 +113,7 @@ pub fn build_safe_filename(hint_filename: &str, fallback_ext: &str) -> String {
 
     let reserve = 1 + ext.len();
     let stem_max = MAX_SAFE_FILENAME_LEN.saturating_sub(reserve).max(1);
-    let stem_final = clamp_ascii_len(&stem, stem_max);
+    let stem_final = clamp_utf8_len(&stem, stem_max);
 
     format!("{}.{}", stem_final, ext)
 }
@@ -116,8 +124,35 @@ pub fn build_safe_filename_no_ext(hint_filename: &str) -> String {
     let raw_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
     let stem = sanitize_stem_for_filename(raw_stem);
     let stem_max = MAX_SAFE_FILENAME_LEN.max(1);
-    let stem_final = clamp_ascii_len(&stem, stem_max);
+    let stem_final = clamp_utf8_len(&stem, stem_max);
     stem_final.to_string()
+}
+
+fn build_safe_custom_filename(hint_name: &str, ext: Option<&str>) -> String {
+    let hint_name = hint_name.replace(['/', '\\'], "_");
+    let Some(ext) = ext.filter(|value| !value.trim().trim_start_matches('.').is_empty()) else {
+        let stem = sanitize_stem_for_filename(&hint_name);
+        let stem_max = MAX_SAFE_FILENAME_LEN.max(1);
+        let stem_final = clamp_utf8_len(&stem, stem_max);
+        return stem_final.to_string();
+    };
+
+    let ext = normalize_ext(ext, crate::image_type::default_image_extension());
+    let suffix = format!(".{ext}");
+    let raw_stem = hint_name
+        .strip_suffix(&suffix)
+        .or_else(|| {
+            let lower = hint_name.to_ascii_lowercase();
+            lower
+                .strip_suffix(&suffix)
+                .map(|stem| &hint_name[..stem.len()])
+        })
+        .unwrap_or(hint_name.as_str());
+    let stem = sanitize_stem_for_filename(raw_stem);
+    let reserve = 1 + ext.len();
+    let stem_max = MAX_SAFE_FILENAME_LEN.saturating_sub(reserve).max(1);
+    let stem_final = clamp_utf8_len(&stem, stem_max);
+    format!("{}.{}", stem_final, ext)
 }
 
 pub fn unique_path(dir: &Path, filename: &str) -> PathBuf {
@@ -146,7 +181,7 @@ pub fn unique_path(dir: &Path, filename: &str) -> PathBuf {
                 format!(".{}", ext),
             )
         };
-        let stem_final = clamp_ascii_len(stem, stem_max);
+        let stem_final = clamp_utf8_len(stem, stem_max);
         let new_name = format!("{}{}{}", stem_final, suffix, ext_part);
         candidate = dir.join(&new_name);
         if !candidate.exists() {
@@ -199,7 +234,7 @@ pub fn compute_unique_download_path(
         let stem = sanitize_stem_for_filename(raw_stem);
         let reserve = 1 + ext.len();
         let stem_max = MAX_SAFE_FILENAME_LEN.saturating_sub(reserve).max(1);
-        let stem_final = clamp_ascii_len(&stem, stem_max);
+        let stem_final = clamp_utf8_len(&stem, stem_max);
         format!("{}.{}", stem_final, ext)
     } else {
         let extension = Path::new(url_path).extension().and_then(|e| e.to_str());
@@ -221,9 +256,34 @@ pub fn compute_unique_download_path(
     Ok(unique_path(output_dir, &filename))
 }
 
+pub fn compute_unique_download_path_with_name(
+    output_dir: &Path,
+    url: &Url,
+    ext: Option<&str>,
+    name: Option<&str>,
+) -> Result<PathBuf, String> {
+    let Some(name) = name.filter(|value| !value.trim().is_empty()) else {
+        return compute_unique_download_path(output_dir, url, ext);
+    };
+
+    let fallback_ext = ext.or_else(|| {
+        url.path_segments()
+            .and_then(|segments| segments.last())
+            .and_then(|name| Path::new(name).extension())
+            .and_then(|ext| ext.to_str())
+    });
+    #[cfg(target_os = "android")]
+    let fallback_ext = fallback_ext.or_else(|| Some(crate::image_type::default_image_extension()));
+
+    Ok(unique_path(
+        output_dir,
+        &build_safe_custom_filename(name, fallback_ext),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::compute_unique_download_path;
+    use super::{compute_unique_download_path, compute_unique_download_path_with_name};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
     use url::Url;
@@ -294,6 +354,57 @@ mod tests {
 
         fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn sanitize_stem_keeps_cjk_and_strips_only_forbidden_chars() {
+        use super::sanitize_stem_for_filename;
+        // 中文/日文假名保留,仅 Windows 保留字符被替换为下划线。
+        assert_eq!(sanitize_stem_for_filename("壁纸标题"), "壁纸标题");
+        assert_eq!(
+            sanitize_stem_for_filename("東方 <幻想郷>: レミリア"),
+            "東方 _幻想郷__ レミリア"
+        );
+        assert_eq!(sanitize_stem_for_filename("a/b\\c"), "a_b_c");
+    }
+
+    #[test]
+    fn clamp_utf8_len_never_splits_a_multibyte_char() {
+        use super::clamp_utf8_len;
+        let s = "壁纸"; // 每个汉字 3 字节,共 6 字节
+        // max_len 落在字符中间时应回退到边界,而不是 panic 或产生非法 UTF-8。
+        assert_eq!(clamp_utf8_len(s, 4), "壁");
+        assert_eq!(clamp_utf8_len(s, 3), "壁");
+        assert_eq!(clamp_utf8_len(s, 2), "");
+        assert_eq!(clamp_utf8_len(s, 6), "壁纸");
+    }
+
+    #[test]
+    fn compute_unique_download_path_with_name_preserves_title_prefix() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "kabegame-download-path-name-test-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        let path = compute_unique_download_path_with_name(
+            &dir,
+            &Url::parse("https://example.com/video/media.mp4?download=1").unwrap(),
+            None,
+            Some("Some.Page / media.mp4"),
+        )
+        .unwrap();
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("Some_Page _ media.mp4")
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -316,7 +427,7 @@ pub(super) fn derive_display_name_from_url(url: &str) -> String {
         fallback_ext,
     );
     let stem_max = MAX_SAFE_FILENAME_LEN.saturating_sub(ext.len() + 1).max(1);
-    let stem_final = clamp_ascii_len(&stem, stem_max);
+    let stem_final = clamp_utf8_len(&stem, stem_max);
     format!("{}.{}", stem_final, ext)
 }
 

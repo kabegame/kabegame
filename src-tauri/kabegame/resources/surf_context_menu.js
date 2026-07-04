@@ -41,9 +41,9 @@
     }
   }
 
-  function triggerDownload(url) {
+  function triggerDownload(url, element) {
     if (typeof window.__kabegame_surf_triggerDownload === "function") {
-      window.__kabegame_surf_triggerDownload(url);
+      window.__kabegame_surf_triggerDownload(url, { element });
       return;
     }
     const a = document.createElement("a");
@@ -63,7 +63,7 @@
     }
   }
 
-  function show(x, y, mediaUrl, mediaKind) {
+  function show(x, y, mediaUrl, mediaKind, element) {
     if (!menu) {
       menu = document.createElement("div");
       menu.style.cssText =
@@ -90,7 +90,7 @@
     item.onclick = (e) => {
       e.stopPropagation();
       hide();
-      triggerDownload(mediaUrl);
+      triggerDownload(mediaUrl, element);
     };
     menu.appendChild(item);
 
@@ -113,7 +113,7 @@
       e.preventDefault();
       e.stopPropagation();
       const absoluteUrl = toAbsolute(url);
-      show(e.clientX, e.clientY, absoluteUrl, kind);
+      show(e.clientX, e.clientY, absoluteUrl, kind, e.target);
     },
     true,
   );

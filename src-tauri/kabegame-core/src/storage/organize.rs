@@ -523,20 +523,8 @@ fn row_in_organize_range(idx: usize, offset: Option<usize>, limit: Option<usize>
 
 #[derive(Debug, Clone)]
 enum ThumbnailRefreshAction {
-    UseOriginal {
-        id: i64,
-        local_path: String,
-    },
-    Regenerate {
-        id: i64,
-        local_path: String,
-    },
-    #[cfg(target_os = "linux")]
-    RegenerateVideo {
-        id: i64,
-        local_path: String,
-        previous_thumbnail_path: String,
-    },
+    UseOriginal { id: i64, local_path: String },
+    Regenerate { id: i64, local_path: String },
 }
 
 fn thumbnail_refresh_action(row: &OrganizeScanRow) -> Option<ThumbnailRefreshAction> {
@@ -578,65 +566,6 @@ fn thumbnail_refresh_action(row: &OrganizeScanRow) -> Option<ThumbnailRefreshAct
         })
     } else {
         None
-    }
-}
-
-/// Linux CEF 不能播放旧的 H.264 MP4 视频缩略图。整理时将其重建为 VP9 WebM，
-/// 已存在的 WebM 缩略图无需重复处理。
-#[cfg(target_os = "linux")]
-fn video_thumbnail_refresh_action(row: &OrganizeScanRow) -> Option<ThumbnailRefreshAction> {
-    let local_path = row.local_path.trim();
-    if local_path.is_empty() {
-        return None;
-    }
-
-    let local = Path::new(local_path);
-    if !local.exists() || !crate::image_type::is_video_by_path(local) {
-        return None;
-    }
-
-    let thumbnail_path = row.thumbnail_path.trim();
-    let is_usable_webm = Path::new(thumbnail_path)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("webm"))
-        && Path::new(thumbnail_path).exists();
-    if is_usable_webm {
-        return None;
-    }
-
-    Some(ThumbnailRefreshAction::RegenerateVideo {
-        id: row.id,
-        local_path: local_path.to_string(),
-        previous_thumbnail_path: thumbnail_path.to_string(),
-    })
-}
-
-/// 删除已被新缩略图替代的文件。只允许删除 `AppPaths::thumbnails_dir()` 内的常规文件，
-/// 避免整理流程触及原始媒体或任意外部路径。
-#[cfg(target_os = "linux")]
-fn remove_replaced_thumbnail_file(previous_path: &str, replacement_path: &str) {
-    let previous_path = previous_path.trim();
-    if previous_path.is_empty() || previous_path == replacement_path {
-        return;
-    }
-    let Ok(root) = crate::app_paths::AppPaths::global()
-        .thumbnails_dir()
-        .canonicalize()
-    else {
-        return;
-    };
-    let Ok(previous) = Path::new(previous_path).canonicalize() else {
-        return;
-    };
-    if !previous.starts_with(&root) {
-        return;
-    }
-    if let Err(e) = std::fs::remove_file(&previous) {
-        eprintln!(
-            "[organize] remove replaced video thumbnail failed ({}): {e}",
-            previous.display()
-        );
     }
 }
 
@@ -774,27 +703,19 @@ fn run_organize(
 
             // 4. 补充缩略图判断
             if options.regen_thumbnails && !should_remove.contains(&row.id) {
-                #[cfg(target_os = "linux")]
-                let refresh_action =
-                    video_thumbnail_refresh_action(row).or_else(|| thumbnail_refresh_action(row));
-                #[cfg(not(target_os = "linux"))]
                 let refresh_action = thumbnail_refresh_action(row);
                 if let Some(action) = refresh_action {
                     refresh_list.push(action);
                 }
             }
 
-            // 5. 补充兼容格式。Linux CEF 不支持 H.264/AAC，因此勾选整理时所有视频都
-            // 重新生成 VP9/Opus WebM 副本。不能仅按 .webm 扩展名跳过：历史副本可能是
-            // 无声的 VP9 WebM，必须借此迁移为包含 Opus 音轨的正确副本。
+            // 5. 补充兼容格式。仅在缺失 compatible_path 时生成；已有兼容副本不做平台迁移式重建。
             #[cfg(not(target_os = "android"))]
             {
                 let compatible_path = row.compatible_path.trim();
-                let linux_video_needs_refresh = cfg!(target_os = "linux")
-                    && crate::image_type::is_video_by_path(Path::new(&row.local_path));
                 if options.regen_compatible
                     && !should_remove.contains(&row.id)
-                    && (compatible_path.is_empty() || linux_video_needs_refresh)
+                    && compatible_path.is_empty()
                 {
                     let local = row.local_path.trim();
                     if !local.is_empty() && Path::new(local).exists() {
@@ -858,26 +779,6 @@ fn run_organize(
                         regenerated_total += 1;
                     }
                 }
-                #[cfg(target_os = "linux")]
-                ThumbnailRefreshAction::RegenerateVideo {
-                    id,
-                    local_path,
-                    previous_thumbnail_path,
-                } => {
-                    let thumbnail_result = handle.block_on(async {
-                        crate::crawler::downloader::compress::compress_video_for_preview(Path::new(
-                            &local_path,
-                        ))
-                        .await
-                    });
-
-                    if let Ok(result) = thumbnail_result {
-                        let thumbnail_path = result.preview_path.to_string_lossy().to_string();
-                        storage.replace_image_thumbnail_path(&id.to_string(), &thumbnail_path)?;
-                        remove_replaced_thumbnail_file(&previous_thumbnail_path, &thumbnail_path);
-                        regenerated_total += 1;
-                    }
-                }
             }
         }
 
@@ -929,16 +830,6 @@ fn run_organize(
                         eprintln!("[organize] compatible_path update failed for {id}: {e}");
                     } else {
                         remove_replaced_compatible_file(&previous_compatible_path, &path_str);
-                        regenerated_total += 1;
-                    }
-                }
-                // VP8/VP9/AV1 WebM 原文件本身已可被 Linux CEF 直接播放。若历史上
-                // 留有 H.264 MP4 兼容副本，清空引用并删除该副本，避免前端优先选到它。
-                Ok(None) if is_video && !previous_compatible_path.is_empty() => {
-                    if let Err(e) = storage.replace_image_compatible_path(&id.to_string(), "") {
-                        eprintln!("[organize] compatible_path clear failed for {id}: {e}");
-                    } else {
-                        remove_replaced_compatible_file(&previous_compatible_path, "");
                         regenerated_total += 1;
                     }
                 }

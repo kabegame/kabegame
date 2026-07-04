@@ -1,0 +1,9 @@
+{
+  "identifier": "surf-navbar-capability",
+  "description": "Surf navbar webview (local tauri:// page only; content webview stays on surf-capability)",
+  "webviews": ["surf-*-navbar"],
+  "permissions": [
+    "surf",
+    "core:event:default"
+  ]
+}

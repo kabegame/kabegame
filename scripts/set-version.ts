@@ -49,9 +49,9 @@ function updateCargoTomlVersion(newVersion: string): void {
   console.log(`✓ Updated Cargo.toml to ${newVersion}`);
 }
 
-// 更新 packages/core/package.json
+// 更新 packages/kabegame-core/package.json
 function updateCorePackageJson(newVersion: string): void {
-  const corePkgPath = path.join(ROOT, "packages", "core", "package.json");
+  const corePkgPath = path.join(ROOT, "packages", "kabegame-core", "package.json");
   if (!fs.existsSync(corePkgPath)) {
     return;
   }
@@ -60,7 +60,7 @@ function updateCorePackageJson(newVersion: string): void {
     const pkg: PackageJson = JSON.parse(fs.readFileSync(corePkgPath, "utf8"));
     pkg.version = newVersion;
     fs.writeFileSync(corePkgPath, JSON.stringify(pkg, null, 2) + "\n");
-    console.log(`✓ Updated packages/core/package.json to ${newVersion}`);
+    console.log(`✓ Updated packages/kabegame-core/package.json to ${newVersion}`);
   } catch (e: any) {
     console.error(`✗ Error updating ${corePkgPath}:`, e.message);
   }

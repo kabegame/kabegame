@@ -1,5 +1,8 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use kabegame_core::crawler::downloader::{
-    compute_unique_download_path, next_download_id, ActiveDownloadInfo, DownloadState,
+    build_safe_filename, build_safe_filename_no_ext, compute_unique_download_path_with_name,
+    media_upload, next_download_id, postprocess_downloaded_image, unique_path, ActiveDownloadInfo,
+    DownloadState, PostprocessSource,
 };
 use kabegame_core::crawler::task_scheduler::PageStackEntry;
 use kabegame_core::crawler::webview::{
@@ -45,6 +48,187 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn normalize_metadata_version(metadata_version: Option<i64>) -> Result<u32, String> {
+    match metadata_version {
+        None => Ok(0),
+        Some(v) if v >= 0 => {
+            u32::try_from(v).map_err(|_| "metadata_version is too large".to_string())
+        }
+        Some(_) => Err("metadata_version must be >= 0".to_string()),
+    }
+}
+
+fn insert_metadata(
+    plugin_id: &str,
+    metadata: Option<Value>,
+    metadata_version: Option<i64>,
+) -> Result<Option<i64>, String> {
+    let metadata_version = normalize_metadata_version(metadata_version)?;
+    if let Some(value) = metadata {
+        Ok(Some(Storage::global().insert_image_metadata_row(
+            &value,
+            plugin_id,
+            metadata_version,
+        )?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn media_upload_ext(mime: &str) -> String {
+    let base_mime = mime.split(';').next().unwrap_or("").trim().to_lowercase();
+    kabegame_core::image_type::ext_from_mime(&base_mime)
+        .unwrap_or_else(|| kabegame_core::image_type::default_image_extension().to_string())
+}
+
+fn compute_media_upload_path(
+    images_dir: &std::path::Path,
+    source_url: &Url,
+    mime: &str,
+    name: Option<&str>,
+) -> Result<PathBuf, String> {
+    let ext = media_upload_ext(mime);
+    compute_unique_download_path_with_name(images_dir, source_url, Some(&ext), name)
+}
+
+fn compute_media_upload_paths(
+    images_dir: &std::path::Path,
+    source_url: &Url,
+    streams: &[MediaStreamInit],
+    name: Option<&str>,
+) -> Result<Vec<(PathBuf, String)>, String> {
+    if streams.is_empty() {
+        return Err("Media upload requires at least one stream".to_string());
+    }
+    if streams.len() == 1 {
+        let mime = streams[0].mime.clone().unwrap_or_default();
+        return Ok(vec![(
+            compute_media_upload_path(images_dir, source_url, &mime, name)?,
+            mime,
+        )]);
+    }
+
+    let base_name = name
+        .filter(|value| !value.trim().is_empty())
+        .map(build_safe_filename_no_ext)
+        .unwrap_or_else(|| "media".to_string());
+    streams
+        .iter()
+        .enumerate()
+        .map(|(idx, stream)| {
+            let mime = stream.mime.clone().unwrap_or_default();
+            let ext = media_upload_ext(&mime);
+            let filename = build_safe_filename(&format!("{base_name}-{idx}.{ext}"), &ext);
+            Ok((unique_path(images_dir, &filename), mime))
+        })
+        .collect()
+}
+
+fn surf_download_name_from_url(url: &Url) -> Option<String> {
+    if matches!(url.scheme(), "blob" | "data") {
+        return None;
+    }
+    url.path_segments()
+        .and_then(|segments| segments.filter(|segment| !segment.trim().is_empty()).last())
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaStreamInit {
+    pub mime: Option<String>,
+    pub total_bytes: Option<u64>,
+}
+
+#[derive(Debug)]
+struct MediaReceiveCtx {
+    images_dir: PathBuf,
+    plugin_id: String,
+    task_id: String,
+    surf_record_id: Option<String>,
+    output_album_id: Option<String>,
+    http_headers: HashMap<String, String>,
+}
+
+// surf 内容 webview 所在窗口含 navbar 子 webview,不是 WebviewWindow,
+// 命令参数用 `Webview`(对 crawler 窗口同样适用),按 label 分流。
+async fn media_ctx_from_label(label: &str, include_headers: bool) -> Result<MediaReceiveCtx, String> {
+    if label.starts_with("crawler-") {
+        let (_, session) = session_of_label(label).await?;
+        let Some(ctx) = session.get_context().await else {
+            return Err("Crawler context not found".to_string());
+        };
+        let task_id = ctx.task_id.clone();
+        let merged_headers = if include_headers {
+            let mut request_headers = HashMap::new();
+            if let Some(ref page_url) = ctx.current_url {
+                if !page_url.trim().is_empty() {
+                    request_headers.insert("Referer".to_string(), page_url.clone());
+                }
+            }
+            merge_task_headers(&task_id, Some(request_headers), None)?
+        } else {
+            HashMap::new()
+        };
+        return Ok(MediaReceiveCtx {
+            images_dir: PathBuf::from(&ctx.images_dir),
+            plugin_id: ctx.plugin_id,
+            task_id,
+            surf_record_id: None,
+            output_album_id: ctx.output_album_id,
+            http_headers: merged_headers,
+        });
+    }
+
+    if let Some(host) = surf_host_from_label(label) {
+        let record = Storage::global()
+            .get_surf_record_by_host(&host)?
+            .ok_or_else(|| format!("Surf record not found for host: {host}"))?;
+        return Ok(MediaReceiveCtx {
+            images_dir: kabegame_core::crawler::downloader::get_default_images_dir(),
+            plugin_id: host,
+            task_id: String::new(),
+            surf_record_id: Some(record.id),
+            output_album_id: None,
+            http_headers: HashMap::new(),
+        });
+    }
+
+    Err(format!("Invalid media receiver window label: {label}"))
+}
+
+fn active_download_matches_ctx(entry: &ActiveDownloadInfo, ctx: &MediaReceiveCtx) -> bool {
+    if !ctx.task_id.is_empty() {
+        entry.task_id == ctx.task_id
+    } else {
+        entry.task_id.is_empty()
+            && entry.plugin_id == ctx.plugin_id
+            && entry.surf_record_id == ctx.surf_record_id
+    }
+}
+
+fn sum_stream_totals(streams: &[MediaStreamInit]) -> Result<Option<u64>, String> {
+    let mut total = 0u64;
+    for stream in streams {
+        let Some(bytes) = stream.total_bytes else {
+            return Ok(None);
+        };
+        total = total
+            .checked_add(bytes)
+            .ok_or_else(|| "Media upload total byte count overflow".to_string())?;
+    }
+    Ok(Some(total))
+}
+
+fn surf_host_from_label(label: &str) -> Option<String> {
+    label
+        .strip_prefix("surf-")
+        .filter(|host| !host.is_empty())
+        .map(|host| host.replace('_', "."))
 }
 
 /// 仅接受 plain object：是 Object 则克隆返回，否则返回空对象。
@@ -122,8 +306,12 @@ async fn get_page_stack(
 async fn session_of<R: Runtime>(
     webview: &WebviewWindow<R>,
 ) -> Result<(String, Arc<CrawlerSession>), String> {
-    let task_id = task_id_from_crawler_label(webview.label())
-        .ok_or_else(|| format!("Invalid crawler window label: {}", webview.label()))?
+    session_of_label(webview.label()).await
+}
+
+async fn session_of_label(label: &str) -> Result<(String, Arc<CrawlerSession>), String> {
+    let task_id = task_id_from_crawler_label(label)
+        .ok_or_else(|| format!("Invalid crawler window label: {}", label))?
         .to_string();
     let session = get_session(&task_id)
         .await
@@ -337,28 +525,14 @@ pub async fn crawl_download_image<R: Runtime>(
             request_headers.insert("Referer".to_string(), page_url.clone());
         }
     }
-    let metadata_version = match metadata_version {
-        None => 0,
-        Some(v) if v >= 0 => {
-            u32::try_from(v).map_err(|_| "metadata_version is too large".to_string())?
-        }
-        Some(_) => return Err("metadata_version must be >= 0".to_string()),
-    };
-    let metadata_id = if let Some(value) = metadata {
-        Some(Storage::global().insert_image_metadata_row(
-            &value,
-            &ctx.plugin_id,
-            metadata_version,
-        )?)
-    } else {
-        None
-    };
+    let metadata_id = insert_metadata(&ctx.plugin_id, metadata, metadata_version)?;
 
     let merged_headers = merge_task_headers(&ctx.task_id, Some(request_headers), None)?;
     std::fs::create_dir_all(&images_dir)
         .map_err(|e| format!("Failed to create native download dir: {}", e))?;
-    let _native_dest = compute_unique_download_path(&images_dir, &parsed, None)
-        .map_err(|e| format!("Failed to compute native download destination: {}", e))?;
+    let _native_dest =
+        compute_unique_download_path_with_name(&images_dir, &parsed, None, name.as_deref())
+            .map_err(|e| format!("Failed to compute native download destination: {}", e))?;
     let download_id = next_download_id();
     let native_info = ActiveDownloadInfo {
         id: download_id,
@@ -384,15 +558,278 @@ pub async fn crawl_download_image<R: Runtime>(
     let start_result = tauri_runtime_cef::start_download(webview.label(), parsed.as_str())
         .map_err(|e| e.to_string());
     #[cfg(not(target_os = "linux"))]
-    let start_result = webview
-        .navigate(parsed.clone())
-        .map_err(|e| e.to_string());
+    let start_result = webview.navigate(parsed.clone()).map_err(|e| e.to_string());
 
     if let Err(e) = start_result {
         let _ = dq.take_native(parsed.as_str());
         return Err(format!("Failed to start native crawler download: {}", e));
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn crawl_media_begin<R: Runtime>(
+    webview: tauri::Webview<R>,
+    source_url: String,
+    streams: Vec<MediaStreamInit>,
+    name: Option<String>,
+    metadata: Option<Value>,
+    metadata_version: Option<i64>,
+) -> Result<u64, String> {
+    let ctx = media_ctx_from_label(webview.label(), true).await?;
+    let total_bytes = sum_stream_totals(&streams)?;
+    if matches!(total_bytes, Some(total) if total > media_upload::SESSION_MAX_BYTES) {
+        return Err(format!(
+            "Media upload exceeds {} bytes",
+            media_upload::SESSION_MAX_BYTES
+        ));
+    }
+
+    let parsed = Url::parse(&source_url).map_err(|e| format!("Invalid media URL: {}", e))?;
+    std::fs::create_dir_all(&ctx.images_dir)
+        .map_err(|e| format!("Failed to create media upload dir: {e}"))?;
+    let custom_name = name.or_else(|| {
+        ctx.surf_record_id
+            .as_ref()
+            .and_then(|_| surf_download_name_from_url(&parsed))
+    });
+    let paths =
+        compute_media_upload_paths(&ctx.images_dir, &parsed, &streams, custom_name.as_deref())?;
+    let download_id = next_download_id();
+    let download_start_time = now_ms();
+    let metadata_id = insert_metadata(&ctx.plugin_id, metadata, metadata_version)?;
+
+    media_upload::begin(
+        download_id,
+        ctx.task_id.clone(),
+        paths,
+        parsed.as_str().to_string(),
+        total_bytes,
+    )?;
+
+    let native_info = ActiveDownloadInfo {
+        id: download_id,
+        url: parsed.as_str().to_string(),
+        plugin_id: ctx.plugin_id.clone(),
+        start_time: download_start_time,
+        task_id: ctx.task_id.clone(),
+        state: DownloadState::Preparing,
+        native: true,
+        retried_for: None,
+        received_bytes: 0,
+        total_bytes,
+        surf_record_id: ctx.surf_record_id.clone(),
+        http_headers: ctx.http_headers.clone(),
+        output_album_id: ctx.output_album_id.clone(),
+        custom_display_name: custom_name,
+        metadata_id,
+    };
+    let dq = TaskScheduler::global().download_queue();
+    if let Err(e) = dq.register_native(native_info) {
+        media_upload::abort(download_id);
+        return Err(e);
+    }
+    dq.switch_state(download_id, DownloadState::Downloading, None)
+        .await;
+    Ok(download_id)
+}
+
+#[tauri::command]
+pub async fn crawl_media_chunk<R: Runtime>(
+    webview: tauri::Webview<R>,
+    id: u64,
+    stream: Option<usize>,
+    data: String,
+) -> Result<(), String> {
+    let ctx = media_ctx_from_label(webview.label(), false).await?;
+    let dq = TaskScheduler::global().download_queue();
+    let Some(entry) = dq.get_active_download(id) else {
+        return Err(format!("Media upload download not found: {id}"));
+    };
+    if !active_download_matches_ctx(&entry, &ctx) {
+        return Err("Media upload context mismatch".to_string());
+    }
+
+    let bytes = BASE64_STANDARD
+        .decode(data.as_bytes())
+        .map_err(|e| format!("Invalid media upload chunk: {e}"))?;
+    match media_upload::append(id, stream.unwrap_or(0), &bytes) {
+        Ok((written, total)) => {
+            dq.report_progress(id, written, total);
+            Ok(())
+        }
+        Err(e) => {
+            media_upload::abort(id);
+            dq.switch_state(id, DownloadState::Failed, Some(e.as_str()))
+                .await;
+            dq.wait_then_finish_download(id, false).await;
+            Err(e)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn crawl_media_end<R: Runtime>(
+    webview: tauri::Webview<R>,
+    id: u64,
+    success: bool,
+    error: Option<String>,
+) -> Result<(), String> {
+    let ctx = media_ctx_from_label(webview.label(), false).await?;
+    let dq = TaskScheduler::global().download_queue();
+    let Some(entry) = dq.get_active_download(id) else {
+        if !success {
+            media_upload::abort(id);
+            return Ok(());
+        }
+        return Err(format!("Media upload download not found: {id}"));
+    };
+    if !active_download_matches_ctx(&entry, &ctx) {
+        return Err("Media upload context mismatch".to_string());
+    }
+
+    if !success {
+        media_upload::abort(id);
+        let error = error
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("Media upload aborted");
+        dq.switch_state(id, DownloadState::Failed, Some(error))
+            .await;
+        dq.wait_then_finish_download(id, false).await;
+        return Ok(());
+    }
+
+    let upload = match media_upload::finish(id) {
+        Ok(upload) => upload,
+        Err(e) => {
+            dq.switch_state(id, DownloadState::Failed, Some(e.as_str()))
+                .await;
+            dq.wait_then_finish_download(id, false).await;
+            return Err(e);
+        }
+    };
+    if upload.task_id != ctx.task_id {
+        for (path, _) in &upload.streams {
+            let _ = std::fs::remove_file(path);
+        }
+        let error = "Media upload context mismatch";
+        dq.switch_state(id, DownloadState::Failed, Some(error))
+            .await;
+        dq.wait_then_finish_download(id, false).await;
+        return Err(error.to_string());
+    }
+    if let Some(total) = upload.total {
+        if total != upload.written {
+            let error = format!(
+                "Media upload size mismatch: wrote {} of {} bytes",
+                upload.written, total
+            );
+            dq.switch_state(id, DownloadState::Failed, Some(error.as_str()))
+                .await;
+            dq.wait_then_finish_download(id, false).await;
+            for (path, _) in &upload.streams {
+                let _ = std::fs::remove_file(path);
+            }
+            return Err(error);
+        }
+    }
+
+    let parsed =
+        Url::parse(&upload.source_url).map_err(|e| format!("Invalid media upload URL: {e}"))?;
+    dq.switch_state(id, DownloadState::Processing, None).await;
+    let task_id = (!entry.task_id.trim().is_empty()).then_some(entry.task_id.as_str());
+    let postprocess_path;
+    let temp_mux_path;
+    let relocate_to;
+    let delete_postprocess_source;
+    if upload.streams.len() == 1 {
+        postprocess_path = upload.streams[0].0.clone();
+        temp_mux_path = None;
+        relocate_to = None;
+        delete_postprocess_source = false;
+    } else {
+        #[cfg(target_os = "android")]
+        {
+            for (path, _) in &upload.streams {
+                let _ = std::fs::remove_file(path);
+            }
+            let error = "A/V stream merge not supported on Android";
+            dq.switch_state(id, DownloadState::Failed, Some(error))
+                .await;
+            dq.wait_then_finish_download(id, false).await;
+            return Err(error.to_string());
+        }
+
+        #[cfg(not(target_os = "android"))]
+        {
+            let out_ext = if upload
+                .streams
+                .iter()
+                .any(|(_, mime)| mime.to_lowercase().contains("webm"))
+            {
+                "webm"
+            } else {
+                "mp4"
+            };
+            let out_path = kabegame_core::app_paths::AppPaths::global()
+                .temp_dir
+                .join(format!("media-mux-{}.{}", id, out_ext));
+            if let Err(e) = kabegame_core::crawler::downloader::compress::mux_media_streams(
+                &upload.streams,
+                &out_path,
+            ) {
+                for (path, _) in &upload.streams {
+                    let _ = std::fs::remove_file(path);
+                }
+                let _ = std::fs::remove_file(&out_path);
+                dq.switch_state(id, DownloadState::Failed, Some(e.as_str()))
+                    .await;
+                dq.wait_then_finish_download(id, false).await;
+                return Err(e);
+            }
+            for (path, _) in &upload.streams {
+                let _ = std::fs::remove_file(path);
+            }
+            postprocess_path = out_path.clone();
+            temp_mux_path = Some(out_path);
+            relocate_to = Some(ctx.images_dir.as_path());
+            delete_postprocess_source = true;
+        }
+    }
+    let result = postprocess_downloaded_image(
+        &*dq,
+        id,
+        PostprocessSource::Path {
+            path: &postprocess_path,
+            relocate_to,
+        },
+        delete_postprocess_source,
+        &parsed,
+        &entry.plugin_id,
+        task_id,
+        None,
+        entry.surf_record_id.as_deref(),
+        entry.start_time,
+        entry.output_album_id.as_deref(),
+        &entry.http_headers,
+        true,
+        entry.custom_display_name.as_deref(),
+        entry.metadata_id,
+    )
+    .await;
+    if let Some(path) = temp_mux_path.as_ref() {
+        let _ = std::fs::remove_file(path);
+    }
+    if let Ok(inserted) = result.as_ref() {
+        if *inserted {
+            if let Some(surf_record_id) = entry.surf_record_id.as_deref() {
+                let _ = Storage::global().increment_surf_record_download_count(surf_record_id);
+            }
+        }
+    }
+    dq.wait_then_finish_download(id, false).await;
+    result.map(|_| ())
 }
 
 #[tauri::command]

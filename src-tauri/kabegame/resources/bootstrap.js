@@ -1,6 +1,7 @@
 (function () {
   const _tauri = window.__TAURI_INTERNALS__;
   const invoke = (cmd, args) => _tauri.invoke(cmd, args || {});
+
   // 扩展api要维护 permissions/crawler.toml
   function createApi(ctx) {
     return {
@@ -22,10 +23,17 @@
       },
       // 统一下载 API：走 Rust download_worker。opts 为 plain object，可选键：
       // cookie、headers、name（展示名）、metadata（任意 JSON）、metadata_version（与 Rhai opts 一致）。
-      downloadImage(url, opts) {
+      async downloadImage(url, opts) {
+        const rawUrl = String(url ?? "");
+        if (/^data:/i.test(rawUrl)) {
+          return window.__kb_media_download__(rawUrl, opts);
+        }
+        if (/^blob:/i.test(rawUrl)) {
+          return window.__kb_media_download__(rawUrl, opts);
+        }
         const o = typeof opts === "object" && opts !== null ? opts : {};
         return invoke("crawl_download_image", {
-          url,
+          url: rawUrl,
           cookie: !!o.cookie,
           headers: o.headers ?? undefined,
           name: o.name ?? undefined,

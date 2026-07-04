@@ -25,7 +25,6 @@
             :placeholder="$t('surf.placeholderPlugin')"
             size="large"
             filterable
-            :disabled="surfStore.sessionActive"
             class="surf-plugin-select"
             @change="onPluginQuickSelect"
           >
@@ -39,12 +38,11 @@
           <el-input
             v-model="inputUrl"
             :placeholder="$t('surf.placeholderUrl')"
-            :disabled="surfStore.sessionActive"
             size="large"
             @keyup.enter="handleStart"
           />
           <el-button type="primary" size="large" @click="handleStart">
-            {{ surfStore.sessionActive ? $t('surf.openSession') : $t('surf.startSurf') }}
+            {{ $t('surf.startSurf') }}
           </el-button>
         </div>
 
@@ -86,7 +84,6 @@
                   <el-button
                     size="small"
                     type="primary"
-                    :disabled="surfStore.sessionActive"
                     @click.stop="handleRecordClick(record)"
                   >
                     {{ $t('surf.startSurf') }}
@@ -350,17 +347,12 @@ function normalizeAndValidateUrl(input: string): { url: string } | { error: stri
 
 const handleStart = async () => {
   try {
-    const raw = inputUrl.value || (surfStore.sessionActive ? "https://example.com" : "");
-    const result = normalizeAndValidateUrl(raw);
+    const result = normalizeAndValidateUrl(inputUrl.value);
     if ("error" in result) {
       ElMessage.warning(result.error);
       return;
     }
     const normalized = result.url;
-    if (surfStore.sessionActive) {
-      await surfStore.startSession(normalized);
-      return;
-    }
     await surfStore.startSession(normalized);
     ElMessage.success(t("surf.sessionStartSuccess"));
   } catch (e: any) {
@@ -462,10 +454,10 @@ async function deleteRecordFromDetail() {
 }
 
 const handleRecordClick = async (record: SurfRecord) => {
-  if (surfStore.sessionActive) return;
   try {
     inputUrl.value = record.rootUrl;
     await surfStore.startSession(record.rootUrl);
+    ElMessage.success(t("surf.sessionStartSuccess"));
   } catch (e: any) {
     ElMessage.error(e?.message || String(e) || t("surf.sessionStartFailed"));
   }

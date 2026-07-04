@@ -593,9 +593,9 @@ async fn run_task(
     let images_dir = resolve_crawl_output_dir(task.output_dir.as_deref());
 
     // 从 Plugin 结构读取脚本和变量定义（已在 parse_kgpg 阶段加载到内存）
-    let rhai_script = plugin.rhai_script.clone();
     #[cfg(not(target_os = "android"))]
-    let js_script = plugin.js_script.clone();
+    let js_script = plugin.script.js_source().map(|s| s.to_string());
+    let rhai_script = plugin.script.rhai_source().map(|s| s.to_string());
 
     // merged_config：默认值 -> 用户覆盖 -> checkbox 规范化（与 crawl_images 保持一致）
     let user_cfg = task.user_config.clone().unwrap_or_default();

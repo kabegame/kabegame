@@ -367,8 +367,11 @@ pub(crate) fn configure_app(
                 if window.label().starts_with("crawler-") {
                     let _ = window.hide();
                     api.prevent_close();
-                } else if window.label() == "surf" {
-                    commands::surf::notify_surf_session_closed(&window.app_handle());
+                } else if window.label().starts_with("surf-") {
+                    commands::surf::notify_surf_session_closed(
+                        &window.app_handle(),
+                        Some(window.label()),
+                    );
                 }
             }
             _ => {}
@@ -465,6 +468,14 @@ pub(crate) fn configure_app(
             surf_get_cookies,
             #[cfg(not(target_os = "android"))]
             surf_open_devtools,
+            #[cfg(not(target_os = "android"))]
+            surf_go_back,
+            #[cfg(not(target_os = "android"))]
+            surf_go_forward,
+            #[cfg(not(target_os = "android"))]
+            surf_reload,
+            #[cfg(not(target_os = "android"))]
+            surf_navigate,
             // --- Run Configs ---
             get_run_configs,
             get_run_config,
@@ -613,6 +624,12 @@ pub(crate) fn configure_app(
             crawl_add_progress,
             #[cfg(not(target_os = "android"))]
             crawl_download_image,
+            #[cfg(not(target_os = "android"))]
+            crawl_media_begin,
+            #[cfg(not(target_os = "android"))]
+            crawl_media_chunk,
+            #[cfg(not(target_os = "android"))]
+            crawl_media_end,
             #[cfg(not(target_os = "android"))]
             crawl_to,
             #[cfg(not(target_os = "android"))]

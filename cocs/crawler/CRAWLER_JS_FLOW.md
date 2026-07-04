@@ -10,7 +10,7 @@
 用户启动插件任务
     → Scheduler 解析插件、构建 JsTaskContext、register_session(task_id)
     → AppCrawlerWebViewHandler 创建 label=`crawler-<task_id>` 的独立 WebView 窗口并加载 base_url
-    → 页面加载 → 每次加载都会执行 initialization_script（bootstrap.js）
+    → 页面加载 → 每次加载都会执行 initialization_script（media_capture.js → media_download.js → bootstrap.js）
     → bootstrap: crawl_get_context → crawl_page_ready → bindApi → crawl_run_script
     → Rust: 按调用方 window label 找 session → try_dispatch_script → eval(crawl.js 包装)
     → crawl.js 根据 ctx.pageLabel 分支执行（initial / posts / detail / exit）
@@ -28,8 +28,10 @@
 | 任务入口 | `src-tauri/kabegame-core/src/crawler/scheduler.rs` | 解析插件、构建 JsTaskContext、注册 session、委托 app 建窗并 await completion |
 | 插件脚本读取 | `src-tauri/kabegame-core/src/plugin/mod.rs` | `read_plugin_js_script(zip_path)` 从 .kgpg 内读 `crawl.js` |
 | session 状态 | `src-tauri/kabegame-core/src/crawler/webview.rs` | CrawlerSession、session 注册表、JsTaskContext、completion、label 工具、set_page_ready、try_dispatch_script |
-| 窗口创建与注入 | `src-tauri/kabegame/src/startup.rs` | create_crawler_task_window（initialization_script 注入 bootstrap.js）、AppCrawlerWebViewHandler::create_task_window / destroy_task_window |
-| Bootstrap 脚本 | `src-tauri/kabegame/resources/bootstrap.js` | 每次页面加载执行：get_context → page_ready → bindApi → run_script |
+| 窗口创建与注入 | `src-tauri/kabegame/src/startup.rs` | create_crawler_window（initialization_script 依次注入 media_capture.js、media_download.js、bootstrap.js）、AppCrawlerWebViewHandler::create_task_window / destroy_task_window |
+| 媒体捕获脚本 | `src-tauri/kabegame/resources/media_capture.js` | 每次页面脚本前执行：hook `URL.createObjectURL`、`MediaSource.addSourceBuffer`、`SourceBuffer.appendBuffer`，维护 blob/MSE 注册表 |
+| 媒体上传脚本 | `src-tauri/kabegame/resources/media_download.js` | crawler 与 surf 共用：对 data/blob/MSE 做分流、全缓冲驱动、多流上传、DRM 拒绝 |
+| Bootstrap 脚本 | `src-tauri/kabegame/resources/bootstrap.js` | 每次页面加载执行：get_context → page_ready → bindApi → run_script；`downloadImage` 对 data/blob 委托共享媒体上传脚本 |
 | Tauri 命令 | `src-tauri/kabegame/src/commands/crawler.rs` | 从调用方 `crawler-<task_id>` label 路由到 session；crawl_get_context、crawl_page_ready、crawl_run_script、crawl_to、crawl_back、crawl_task_log 等 |
 | 权限 | `src-tauri/kabegame/capabilities/crawler.json` | `crawler-*` 窗口/webview 的 Tauri 权限（remote URLs、events、window） |
 | 插件脚本 | `src-crawler-plugins/plugins/<id>/crawl.js` | 业务逻辑，按 ctx.pageLabel 分支（initial/posts/detail/exit） |
@@ -67,23 +69,25 @@
 
 ### 3.3 页面加载后：Bootstrap 执行（每页一次）
 
-- **文件**：`src-tauri/kabegame/resources/bootstrap.js`
+- **文件**：`src-tauri/kabegame/resources/media_capture.js`、`src-tauri/kabegame/resources/bootstrap.js`
 - **触发**：Tauri 的 **initialization_script** 在**每次** crawler WebView 的文档加载时执行（包括首次 about:blank 或 base_url，以及之后每次 `crawl_to` / `crawl_back` 导致的导航）。
 - **步骤**：
-  1. **防重入**：`if (window.__crawl_starting__) return;`，`window.__crawl_starting__ = true`。
-  2. **取上下文**：`ctx = await invoke("crawl_get_context")`。
+  1. **媒体捕获预注入**：`media_capture.js` 先于页面脚本与 bootstrap 执行，注册 `window.__kb_media__.resolve(url)`。它维护 Blob / MediaSource 捕获注册表，解析 fMP4 `tfdt` 与 MPEG-TS PTS，对 MSE fragment 排序去重，并检测 DRM/EME。
+  2. **媒体上传预注入**：`media_download.js` 注册 `window.__kb_media_download__(url, opts)`，负责 data/blob/MSE 上传、MSE 全缓冲、多 SourceBuffer 上传和桌面合流入口调用。
+  3. **防重入**：`if (window.__crawl_starting__) return;`，`window.__crawl_starting__ = true`。
+  4. **取上下文**：`ctx = await invoke("crawl_get_context")`。
      - 对应 Rust：`crawler.rs` 中 `crawl_get_context(webview)`，从调用方窗口 label 解析 task_id，再通过 `get_session(task_id)` 取上下文并返回给前端（含 crawl_js、pageLabel、state、pageState 等）。
-  3. **校验**：`if (!ctx || !ctx.crawlJs) return;`，`ctx.state` 默认 `{}`。
-  4. **通知就绪**：`await invoke("crawl_page_ready")`。
+  5. **校验**：`if (!ctx || !ctx.crawlJs) return;`，`ctx.state` 默认 `{}`。
+  6. **通知就绪**：`await invoke("crawl_page_ready")`。
      - Rust：`crawl_page_ready(webview)` 里对该 session `set_page_ready(false)` 再 `set_page_ready(true)`，使等待 `wait_page_ready` 的调用方（如有）继续；同时 **script_dispatched** 在 `set_page_ready(false)` 时被置 false，允许本页再次派发脚本。
-  5. **绑定 API**：`bindApiToContext(ctx, createApi(ctx))`，把 log、sleep、to、back、updateState、waitForSelector、clearData 等挂到 `ctx` 上。
-  6. **挂到 window**：`window.__crawl_ctx__ = ctx`。
-  7. **派发插件脚本**：`await invoke("crawl_run_script")`。
+  7. **绑定 API**：`bindApiToContext(ctx, createApi(ctx))`，把 log、sleep、to、back、updateState、waitForSelector、clearData 等挂到 `ctx` 上。
+  8. **挂到 window**：`window.__crawl_ctx__ = ctx`。
+  9. **派发插件脚本**：`await invoke("crawl_run_script")`。
      - Rust：`crawl_run_script(webview)`：
        - `try_dispatch_script()`：若已在本页派发过则直接 return（同一页只执行一次 crawl.js）；
        - 从 session 取当前 `ctx`，用 **ctx.crawl_js** 拼成一段 IIFE，内层 `const ctx = window.__crawl_ctx__`，外层 try/catch 里执行插件脚本，异常时 `ctx.error(detail)`；
        - `webview.eval(wrapped_script)` 在调用方窗口当前页面执行。
-  8. 最后 `delete window.__TAURI_INTERNALS__`（按需），`start().catch(...)` 捕获 bootstrap 自身错误。
+  9. 最后 `delete window.__TAURI_INTERNALS__`（按需），`start().catch(...)` 捕获 bootstrap 自身错误。
 
 **重要**：每次 **navigate** 都会产生新文档，因此都会重新执行上述 bootstrap 流程；`page_label` / `page_state` / `state` 由 Rust 在 `crawl_to` / `crawl_back` 中更新并持久化，所以插件脚本通过 `ctx.pageLabel` 等即可恢复“当前步骤”。
 
@@ -144,9 +148,17 @@
 
 ### 5.1 `ctx.downloadImage` 与原生下载
 
-WebView 后端的 `ctx.downloadImage(url, opts)` 不再由 APP 侧 HTTP downloader 主动请求目标 URL。命令入口会先解析相对 URL、写入 metadata（得到 `metadata_id`）、合并任务 header 快照，并把这些入库参数登记到 `DownloadQueue.active_downloads` 的 `ActiveDownloadInfo { native: true, ... }`；随后直接调用调用方 crawler WebView 的原生下载能力（Linux CEF 为 `start_download(webview.label(), url)`），避免连续下载时多次导航互相打断。请求由浏览器原生下载栈发起，自动沿用浏览器 Cookie、站点会话与 Referer 语义。下载 URL 可能发生 30x 跳转，native download 的匹配 identity 使用 CEF `DownloadItem::original_url()`，避免最终 CDN URL 与脚本传入 URL 不一致时丢失 metadata/name/header。
+WebView 后端的 `ctx.downloadImage(url, opts)` 对普通网络 URL 不再由 APP 侧 HTTP downloader 主动请求目标 URL。命令入口会先解析相对 URL、写入 metadata（得到 `metadata_id`）、合并任务 header 快照，并把这些入库参数登记到 `DownloadQueue.active_downloads` 的 `ActiveDownloadInfo { native: true, ... }`；随后直接调用调用方 crawler WebView 的原生下载能力（Linux CEF 为 `start_download(webview.label(), url)`），避免连续下载时多次导航互相打断。请求由浏览器原生下载栈发起，自动沿用浏览器 Cookie、站点会话与 Referer 语义。下载 URL 可能发生 30x 跳转，native download 的匹配 identity 使用 CEF `DownloadItem::original_url()`，避免最终 CDN URL 与脚本传入 URL 不一致时丢失 metadata/name/header。
 
 浏览器下载完成后，crawler 窗口的 `on_download` 回调按 URL 从 `active_downloads` 取回对应 native 项，将落盘文件、header 快照、展示名、`metadata_id` 和输出画册一起交给下载器统一后处理入库。这样后续去重、缩略图、画册写入、任务计数和事件广播仍复用下载器主流程，`get_active_downloads` 也能从同一列表返回池下载与 native 下载。
+
+`data:` 与 `blob:` URL 走 JS 层流式上传，不触发 WebView 原生下载：
+
+- `data:` 在页面内 `fetch` 成 Blob 后分块上传。
+- 普通 Blob URL 由 `media_capture.js` 的 `URL.createObjectURL` 注册表解析，未命中时兜底 `fetch(blobUrl)`。
+- MSE Blob URL 由 `SourceBuffer.appendBuffer` 捕获的数据还原；下载前会尝试驱动对应 `<video>` 全缓冲。fMP4 与 MPEG-TS fragment 在捕获层按解码时间排序去重；多 SourceBuffer 会按多流上传，桌面由 Rust/rsmpeg 合流，Android 优雅报错。超过捕获上限、直播无法全缓冲或 DRM/EME 内容会向插件抛出明确错误。
+
+上传命令为 `crawl_media_begin` / `crawl_media_chunk` / `crawl_media_end`。它们按调用方 label 解析上下文：`crawler-<task_id>` 走 crawler session；`surf-{host}` 走畅游记录上下文。crawler 路径仍把会话登记进同一个 `DownloadQueue.active_downloads`，所以任务抽屉状态、进度、取消清理和后处理事件与 native 下载一致。
 
 ---
 

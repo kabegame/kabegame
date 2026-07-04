@@ -88,7 +88,7 @@ bun check -c kabegame --skip cargo   # Vue types only
 - Desktop builds (standard/light/CLI on Windows/macOS/Linux) link rsmpeg/FFmpeg for preview compression and video dimensions.
 - Android must not compile FFmpeg/rsmpeg; it uses `AndroidVideoCompressProvider` backed by `tauri-plugin-compress`/Kotlin and content URI media APIs.
 - rsmpeg usage in `compress.rs` and `media_dimensions.rs` is guarded with `#[cfg(not(target_os = "android"))]`; Android alternatives are guarded with `#[cfg(target_os = "android")]`.
-- Linux CEF does not decode H.264/AAC: Linux video compatibility copies must be VP9/Opus WebM and video preview thumbnails must be VP9 WebM. Windows/macOS compatibility copies remain H.264/AAC MP4 and previews remain H.264 MP4. Organize must refresh legacy Linux MP4 copies via `regen_compatible` and video thumbnails via `regen_thumbnails`.
+- Linux CEF/Chromium is built with common MP4 codec support. Desktop video compatibility copies are H.264/AAC MP4 on Windows/macOS/Linux, and video preview thumbnails are H.264 MP4. Do not add Linux-only WebM regeneration logic for organize/postprocess; WebM muxing is retained only for stream-copy MSE captures whose original streams are VP9/Opus WebM.
 - Gallery playback of stored videos is always supported (uses the HTML `<video>` element, no FFmpeg needed).
 
 **Android modals** — Every overlay (dialog, drawer, ActionSheet, preview) must call `useModal(visibleRef)` from `@kabegame/core/composables/useModal` so the Android back button closes layers in stack order. The composable is a no-op on desktop; use it everywhere regardless of platform.

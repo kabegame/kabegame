@@ -28,6 +28,11 @@ export default defineConfig(async ({ mode }) => {
   const isWeb = process.env.KABEGAME_MODE === "web" || mode === "web";
   // web mode: no wallpaper window, chunking always on
   const hasWallpaper = !isWeb && (isWindows || isMacOS);
+  const hasSurfNavbar = !isWeb;
+  const rollupInput = {
+    ...(hasWallpaper && { wallpaper: "./wallpaper.html" }),
+    ...(hasSurfNavbar && { "surf-navbar": "./surf-navbar.html" }),
+  };
   const webDevApiProxy = isWeb
     ? Object.fromEntries(
         webDevApiProxyPaths.map((p) => [
@@ -56,9 +61,9 @@ export default defineConfig(async ({ mode }) => {
         return false;
       },
       rollupOptions: {
-        input: hasWallpaper ? { wallpaper: "./wallpaper.html" } : {},
+        input: rollupInput,
         output: {
-          inlineDynamicImports: !hasWallpaper && !isWeb,
+          inlineDynamicImports: !hasWallpaper && !hasSurfNavbar && !isWeb,
           ...(isWeb && {
             manualChunks(id: string) {
               if (!id.includes("node_modules")) return undefined;

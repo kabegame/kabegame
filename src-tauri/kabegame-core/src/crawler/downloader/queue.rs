@@ -1,5 +1,5 @@
-use crate::crawler::TaskScheduler;
 use crate::crawler::task_log_i18n::task_log_i18n;
+use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::Storage;
@@ -12,11 +12,11 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{Mutex, Notify, RwLock};
 use url::Url;
 
-use super::postprocess_downloaded_image;
 use super::{
     download_with_retry, emit_task_log, wait_after_download_if_needed,
     wait_after_non_pool_download_if_needed,
 };
+use super::{media_upload, postprocess_downloaded_image};
 
 static DOWNLOAD_ID_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -606,6 +606,7 @@ impl DownloadQueue {
     }
 
     pub async fn cancel_task_downloads(&self, task_id: &str) -> bool {
+        let upload_ids = media_upload::abort_task_sessions(task_id);
         let (active_ids, native_entries): (Vec<u64>, Vec<ActiveDownloadInfo>) = {
             let mut downloads = self.active_downloads.lock().unwrap();
             let mut pool_ids = Vec::new();
@@ -625,7 +626,11 @@ impl DownloadQueue {
         };
         let pending_ids = self.get_pending_task_download_ids(task_id).await;
 
-        if active_ids.is_empty() && pending_ids.is_empty() && native_entries.is_empty() {
+        if active_ids.is_empty()
+            && pending_ids.is_empty()
+            && native_entries.is_empty()
+            && upload_ids.is_empty()
+        {
             return false;
         }
         let pool_canceled = {
@@ -651,7 +656,7 @@ impl DownloadQueue {
         if !native_entries.is_empty() {
             self.capacity_notify.notify_waiters();
         }
-        pool_canceled || !native_entries.is_empty()
+        pool_canceled || !native_entries.is_empty() || !upload_ids.is_empty()
     }
 
     /// 按 id 切换 active_downloads 状态 + 发事件。状态机非法跳转直接拒绝（不改不发，stderr 日志）。
@@ -714,10 +719,12 @@ impl DownloadQueue {
         let exit_notify = notify_exit.then_some(self.exit_notify.as_ref());
         wait_after_download_if_needed(
             std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64, 
-        exit_notify).await;
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+            exit_notify,
+        )
+        .await;
         self.finish_download(id).await;
     }
 

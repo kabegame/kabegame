@@ -149,6 +149,14 @@ configure_variant() {
   # 所以这两项不能出现在 GN_DEFINES 里。
   # enable_nacl 已随 NaCl 从 Chromium 149 移除,不要再设(设了报 has no effect)
   local common="proprietary_codecs=true ffmpeg_branding=Chrome use_sysroot=true"
+  # PGO(按性能剖析优化):is_official_build=true 时 Chromium 默认开启
+  # chrome_pgo_phase,gn gen 阶段会去取 chrome-linux-*.profdata。该 profile 由
+  # gclient runhooks 下载,前提是 .gclient 的 custom_vars.checkout_pgo_profiles=True。
+  # automate-git.py 的 --with-pgo-profiles 会在(重)生成 .gclient 时把它写成 True。
+  # 只有全量/--force-config 才会重写 .gclient,所以此 flag 主要对带 --clean 的重建生效;
+  # 增量重编下需已存在 profile(见脚本注释与手动 update_pgo_profiles.py update)。
+  # dev 是 is_official_build=false,PGO 默认关闭,不需要 profile。
+  PGO_FLAGS=()
   if [[ "$VARIANT" == "dev" ]]; then
     # 快:关 LTO、不要符号
     export GN_DEFINES="$common is_official_build=false symbol_level=0 blink_symbol_level=0 dcheck_always_on=false"
@@ -157,6 +165,7 @@ configure_variant() {
     # 小:开 LTO + 体积优化,保留可符号化崩溃栈
     export GN_DEFINES="$common is_official_build=true optimize_for_size=true use_cups=false symbol_level=1"
     DISTRIB_FLAGS=(--minimal-distrib-only --no-distrib-docs --distrib-subdir-suffix=prod)
+    PGO_FLAGS=(--with-pgo-profiles)   # 让全量 checkout 自动下载 PGO profile
   fi
   log "variant=$VARIANT"
   log "GN_DEFINES=$GN_DEFINES"
@@ -250,6 +259,7 @@ run_build() {
     --no-debug-build \
     --build-target=cefsimple \
     "${HISTORY_FLAGS[@]}" \
+    "${PGO_FLAGS[@]}" \
     "${DISTRIB_FLAGS[@]}" \
     "${UPDATE_FLAGS[@]}" \
     2>&1 | tee "$logfile"

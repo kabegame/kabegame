@@ -11,38 +11,39 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::task::{Context, Poll, ready};
+use std::task::{ready, Context, Poll};
 use std::time::Instant;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::Notify;
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 use url::Url;
 
 pub mod compress;
 #[cfg(target_os = "android")]
 mod content;
 mod http;
+pub mod media_upload;
 pub mod queue;
 pub mod util;
 
 #[cfg(not(target_os = "android"))]
 pub use compress::{
-    IMAGE_COMPATIBLE_MAX_DIM, VIDEO_COMPATIBLE_MAX_HEIGHT, generate_compatible_image,
-    generate_compatible_video,
+    generate_compatible_image, generate_compatible_video, IMAGE_COMPATIBLE_MAX_DIM,
+    VIDEO_COMPATIBLE_MAX_HEIGHT,
 };
 pub use compress::{
-    IMAGE_THUMBNAIL_MAX_DIM, IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES, generate_thumbnail,
-    generate_thumbnail_from_bytes, image_needs_independent_thumbnail,
-    image_thumbnail_dimensions_acceptable,
+    generate_thumbnail, generate_thumbnail_from_bytes, image_needs_independent_thumbnail,
+    image_thumbnail_dimensions_acceptable, IMAGE_THUMBNAIL_MAX_DIM,
+    IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES,
 };
 pub use http::{build_reqwest_header_map, create_client};
 pub use queue::{
-    ActiveDownloadInfo, DownloadQueue, DownloadRequest, DownloadState, emit_removed_after_interval,
-    next_download_id,
+    emit_removed_after_interval, next_download_id, ActiveDownloadInfo, DownloadQueue,
+    DownloadRequest, DownloadState,
 };
 pub use util::{
     build_safe_filename, build_safe_filename_no_ext, compute_bytes_hash, compute_file_hash,
-    compute_unique_download_path, unique_path,
+    compute_unique_download_path, compute_unique_download_path_with_name, unique_path,
 };
 
 use queue::{
@@ -770,7 +771,12 @@ pub async fn postprocess_downloaded_image(
                     return Err(format!("Failed to create directory: {}", e));
                 }
 
-                let path = compute_unique_download_path(dir, url, inferred_ext.as_deref())?;
+                let path = compute_unique_download_path_with_name(
+                    dir,
+                    url,
+                    inferred_ext.as_deref(),
+                    custom_display_name,
+                )?;
                 if !delete_source {
                     if let Err(e2) = tokio::fs::copy(src_path, &path).await {
                         return Err(format!(
@@ -928,18 +934,22 @@ pub async fn postprocess_downloaded_image(
             let t_thumb = (!auto_deduplicate).then(Instant::now);
 
             let thumbnail_result: Result<Option<PathBuf>, String> = if is_video {
+                // 视频预览是尽力而为：失败只记日志、不阻断入库。画廊用 <video> 直接播放原文件，
+                // thumbnail 回退为原文件（见下方 thumbnail_path_str 的 local_path 兜底）。典型场景：
+                // 本 ffmpeg 构建缺该编码的解码器（如未启用 av1 解码器时的 AV1）。
                 #[cfg(target_os = "android")]
-                {
-                    // local_path 此时是系统媒体库 content URI，交给 Kotlin provider 生成预览。
-                    compress::compress_video_for_preview(&local_path)
-                        .await
-                        .map(|r| Some(r.preview_path))
-                }
+                // local_path 此时是系统媒体库 content URI，交给 Kotlin provider 生成预览。
+                let preview = compress::compress_video_for_preview(&local_path).await;
                 #[cfg(not(target_os = "android"))]
-                {
-                    compress::compress_video_for_preview(&path)
-                        .await
-                        .map(|r| Some(r.preview_path))
+                let preview = compress::compress_video_for_preview(&path).await;
+                match preview {
+                    Ok(r) => Ok(Some(r.preview_path)),
+                    Err(e) => {
+                        eprintln!(
+                            "[downloader] video preview generation failed, storing without preview: {e}"
+                        );
+                        Ok(None)
+                    }
                 }
             } else {
                 #[cfg(target_os = "android")]
@@ -1236,7 +1246,7 @@ pub async fn clear_downloads_temp_dir() {
 
 #[cfg(test)]
 mod spill_writer_tests {
-    use super::{DOWNLOAD_SPILL_THRESHOLD, DownloadOutcome, SpillWriter};
+    use super::{DownloadOutcome, SpillWriter, DOWNLOAD_SPILL_THRESHOLD};
     use std::path::PathBuf;
     use tokio::io::AsyncWriteExt;
 

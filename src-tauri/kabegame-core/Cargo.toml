@@ -31,6 +31,7 @@ serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_cbor = { workspace = true }
 serde_json = { workspace = true }
+semver = "1"
 sha2 = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
