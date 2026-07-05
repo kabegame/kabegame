@@ -81,42 +81,6 @@ pub async fn op_kabegame_back(state: Rc<RefCell<OpState>>) -> Result<(), JsError
 }
 
 #[op2]
-#[serde]
-pub async fn op_kabegame_fetch_json(
-    state: Rc<RefCell<OpState>>,
-    #[string] url: String,
-) -> Result<JsonValue, JsErrorBox> {
-    let (task_id, headers, cancel) = state_snapshot(&state, |s| {
-        (s.task_id.clone(), s.headers.clone(), s.cancel.clone())
-    });
-    check_cancelled(&cancel)?;
-
-    let resolved_url = resolve_url_for_task_async(&task_id, &url).await?;
-    emit_http_info(&task_id, format!("[fetch_json] 请求 JSON：{resolved_url}"));
-    let (final_url, text, _) =
-        http_get_text_with_retry(&task_id, &resolved_url, "fetch_json", &headers, &cancel).await?;
-    let json = serde_json::from_str::<JsonValue>(&text).map_err(|e| {
-        let msg = format!("[fetch_json] JSON 解析失败：{e}");
-        eprintln!("{msg} URL: {final_url}");
-        emit_http_error(&task_id, format!("{msg}，URL: {final_url}"));
-        JsErrorBox::generic(format!("Failed to parse JSON: {e}"))
-    })?;
-    let json_kind = match &json {
-        JsonValue::Object(_) => "object",
-        JsonValue::Array(_) => "array",
-        JsonValue::String(_) => "string",
-        JsonValue::Number(_) => "number",
-        JsonValue::Bool(_) => "boolean",
-        JsonValue::Null => "null",
-    };
-    emit_http_info(
-        &task_id,
-        format!("[fetch_json] JSON 请求成功：{final_url}（type={json_kind}）"),
-    );
-    Ok(wrap_non_object_json(json))
-}
-
-#[op2]
 #[string]
 pub async fn op_kabegame_current_url(state: Rc<RefCell<OpState>>) -> Result<String, JsErrorBox> {
     current_page_value_async(state, |entry| entry.url.clone()).await
@@ -134,6 +98,93 @@ pub async fn op_kabegame_current_headers(
     state: Rc<RefCell<OpState>>,
 ) -> Result<HashMap<String, String>, JsErrorBox> {
     current_page_value_async(state, |entry| entry.headers.clone()).await
+}
+
+/// Host-backed `fetch` result. Constructed into a native `Response` in the
+/// prelude. `body` is serialized to a `Uint8Array` (via `ToJsBuffer`) so the
+/// JS side can build a `Response` supporting `.json()`/`.text()`/`.arrayBuffer()`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchResult {
+    status: u16,
+    status_text: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: deno_core::ToJsBuffer,
+}
+
+/// Host-backed `fetch`. Uses the proxy-aware reqwest client (same proxy/no_proxy
+/// config as the rest of the crawler); the runtime does NOT include `deno_net`,
+/// so plugins get no raw-socket surface. The task's default request headers are
+/// merged first, then overridden by `init.headers`. Follows redirects (<=10).
+#[op2]
+#[serde]
+pub async fn op_kabegame_fetch(
+    state: Rc<RefCell<OpState>>,
+    #[string] url: String,
+    #[serde] init: Option<JsonValue>,
+) -> Result<FetchResult, JsErrorBox> {
+    let (task_id, default_headers, cancel) = state_snapshot(&state, |s| {
+        (s.task_id.clone(), s.headers.clone(), s.cancel.clone())
+    });
+    check_cancelled(&cancel)?;
+
+    let (method, init_headers, body) = parse_fetch_init(init)?;
+
+    // Case-insensitive merge: task defaults first, init.headers win.
+    let mut merged: HashMap<String, String> = HashMap::new();
+    for (k, v) in default_headers {
+        merged.insert(k.to_lowercase(), v);
+    }
+    for (k, v) in init_headers {
+        merged.insert(k.to_lowercase(), v);
+    }
+
+    let method = reqwest::Method::from_bytes(method.as_bytes())
+        .map_err(|e| JsErrorBox::generic(format!("fetch: invalid method: {e}")))?;
+    let client = create_fetch_client()?;
+    let header_map = build_reqwest_header_map(&task_id, &merged);
+
+    let mut req = client.request(method, &url);
+    if !header_map.is_empty() {
+        req = req.headers(header_map);
+    }
+    if let Some(body) = body {
+        req = req.body(body);
+    }
+
+    let resp = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(JsErrorBox::generic("Task canceled")),
+        result = req.send() => result.map_err(|e| JsErrorBox::generic(format!("fetch failed: {e}")))?,
+    };
+
+    let status = resp.status();
+    let final_url = resp.url().to_string();
+    let headers: Vec<(String, String)> = resp
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_string(),
+                value.to_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+
+    let bytes = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(JsErrorBox::generic("Task canceled")),
+        result = resp.bytes() => result.map_err(|e| JsErrorBox::generic(format!("fetch: read body failed: {e}")))?,
+    };
+
+    Ok(FetchResult {
+        status: status.as_u16(),
+        status_text: status.canonical_reason().unwrap_or("").to_string(),
+        url: final_url,
+        headers,
+        body: deno_core::ToJsBuffer::from(bytes.to_vec()),
+    })
 }
 
 #[op2]
@@ -241,7 +292,7 @@ pub async fn op_kabegame_download_image(
         });
     check_cancelled(&cancel)?;
 
-    let (custom_name, metadata_id) = parse_download_opts(opts, &plugin_id)?;
+    let (custom_name, metadata_id, post_url) = parse_download_opts(opts, &plugin_id)?;
     let parsed_url =
         Url::parse(&url).map_err(|e| JsErrorBox::generic(format!("Invalid URL: {e}")))?;
     let download_start_time = now_ms();
@@ -255,6 +306,7 @@ pub async fn op_kabegame_download_image(
         headers,
         custom_name,
         metadata_id,
+        post_url,
     );
     tokio::select! {
         biased;
@@ -337,28 +389,19 @@ async fn resolve_url_for_task_async(task_id: &str, url: &str) -> Result<String, 
         .map_err(|e| JsErrorBox::generic(format!("Failed to resolve URL: {e}")))
 }
 
-fn wrap_non_object_json(value: JsonValue) -> JsonValue {
-    if value.is_object() {
-        value
-    } else {
-        let mut map = serde_json::Map::new();
-        map.insert("data".to_string(), value);
-        JsonValue::Object(map)
-    }
-}
-
 fn parse_download_opts(
     opts: Option<JsonValue>,
     plugin_id: &str,
-) -> Result<(Option<String>, Option<i64>), JsErrorBox> {
+) -> Result<(Option<String>, Option<i64>, Option<String>), JsErrorBox> {
     let Some(opts) = opts else {
-        return Ok((None, None));
+        return Ok((None, None, None));
     };
     let opts = opts
         .as_object()
         .ok_or_else(|| JsErrorBox::generic("download_image opts must be an object"))?;
 
     let custom_name = optional_string(opts, "name", "download_image")?;
+    let post_url = optional_string(opts, "url", "download_image")?;
     let metadata_id = optional_i64(opts, "metadata_id", "download_image")?;
     let metadata = opts.get("metadata").filter(|v| !v.is_null()).cloned();
     let metadata_version = optional_u32(opts, "metadata_version", "download_image")?.unwrap_or(0);
@@ -374,7 +417,57 @@ fn parse_download_opts(
         None
     };
 
-    Ok((custom_name, metadata_id))
+    Ok((custom_name, metadata_id, post_url))
+}
+
+/// Parse a `fetch` init object into `(method, headers, body)`.
+/// `headers` accepts either an array of `[name, value]` pairs (a serialized
+/// `Headers`) or a plain string map. `body` supports strings only.
+fn parse_fetch_init(
+    init: Option<JsonValue>,
+) -> Result<(String, Vec<(String, String)>, Option<Vec<u8>>), JsErrorBox> {
+    let Some(init) = init else {
+        return Ok(("GET".to_string(), Vec::new(), None));
+    };
+    let obj = init
+        .as_object()
+        .ok_or_else(|| JsErrorBox::generic("fetch init must be an object"))?;
+
+    let method = match obj.get("method") {
+        None | Some(JsonValue::Null) => "GET".to_string(),
+        Some(JsonValue::String(s)) => s.to_uppercase(),
+        Some(_) => return Err(JsErrorBox::generic("fetch init.method must be a string")),
+    };
+
+    let headers = match obj.get("headers") {
+        None | Some(JsonValue::Null) => Vec::new(),
+        Some(JsonValue::Array(arr)) => arr
+            .iter()
+            .filter_map(|pair| {
+                let p = pair.as_array()?;
+                let key = p.first()?.as_str()?;
+                let value = p.get(1)?.as_str()?;
+                Some((key.to_string(), value.to_string()))
+            })
+            .collect(),
+        Some(JsonValue::Object(map)) => map
+            .iter()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+            .collect(),
+        Some(_) => {
+            return Err(JsErrorBox::generic(
+                "fetch init.headers must be an object or array of pairs",
+            ))
+        }
+    };
+
+    let body = match obj.get("body") {
+        None | Some(JsonValue::Null) => None,
+        Some(JsonValue::String(s)) => Some(s.clone().into_bytes()),
+        Some(_) => return Err(JsErrorBox::generic("fetch init.body must be a string")),
+    };
+
+    Ok((method, headers, body))
 }
 
 fn parse_create_image_metadata_version(opts: Option<JsonValue>) -> Result<u32, JsErrorBox> {
@@ -645,7 +738,7 @@ async fn cancellable_sleep(
     }
 }
 
-fn create_async_client() -> Result<reqwest::Client, JsErrorBox> {
+fn build_client(redirect: reqwest::redirect::Policy) -> Result<reqwest::Client, JsErrorBox> {
     let mut client_builder = reqwest::Client::builder();
     let config = crate::crawler::proxy::get_proxy_config();
 
@@ -672,12 +765,22 @@ fn create_async_client() -> Result<reqwest::Client, JsErrorBox> {
     client_builder = client_builder
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(redirect)
         .user_agent("Kabegame/1.0");
 
     client_builder
         .build()
         .map_err(|e| JsErrorBox::generic(format!("Failed to create async HTTP client: {e}")))
+}
+
+/// Crawler `to`/page-fetch client: redirects handled manually by the caller.
+fn create_async_client() -> Result<reqwest::Client, JsErrorBox> {
+    build_client(reqwest::redirect::Policy::none())
+}
+
+/// Global `fetch` client: follows redirects like the platform `fetch` (<=10).
+fn create_fetch_client() -> Result<reqwest::Client, JsErrorBox> {
+    build_client(reqwest::redirect::Policy::limited(10))
 }
 
 fn build_reqwest_header_map(task_id: &str, headers: &HashMap<String, String>) -> HeaderMap {

@@ -71,6 +71,10 @@
   - 主题：插件图片 metadata 版本化迁移流程，含 `metadata_migrations/v{N}.rhai` 脚本契约、`download_image` / `create_image_metadata` 版本写入、`image_metadata` 复合去重、`metadata_full` 查询路径与 `metadata-migrate` 事件作用域。
   - 适用场景：插件升级后历史图片详情结构变化；排查 metadata 迁移失败、缓存未刷新、去重合并或版本断档问题。
 
+- [crawler/V8_RUNTIME.md](crawler/V8_RUNTIME.md)
+  - 主题：桌面 V8 爬虫运行时的 Web 平台全局与 `Kabegame.*` 宿主桥。涵盖 `fetchJson` / `@kabegame/plugin-sdk/host` 移除、标准 `fetch` 使用、任务请求头合并、相对 URL 解析差异、SDK 保留工具模块。
+  - 适用场景：编写/迁移 V8 插件；排查 `Kabegame.*`、`fetch`、`URL`、`crypto`、`DOMParser` 可用性；更新 JS 插件模板和类型声明。
+
 ## 插件（`plugins/`）
 
 - [plugins/PLUGIN_STORE_CACHE.md](plugins/PLUGIN_STORE_CACHE.md)

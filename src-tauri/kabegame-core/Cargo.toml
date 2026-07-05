@@ -58,6 +58,33 @@ rsmpeg = { workspace = true }
 # Android 保留 Rhai 后端；二进制增量与打包流程后续对照 cocs/build/PLATFORM_SHARED_LIBS.md 评估。
 deno_core = "0.405"
 deno_error = "0.7"
+deno_webidl = "0.252"
+deno_console = "0.222"
+deno_url = "0.222"
+deno_web = "0.283"
+deno_crypto = "0.266"
+deno_fetch = "0.276"
+deno_net = "0.244"
+deno_tls = "0.239"
+deno_permissions = "0.111"
+deno_features = "0.49"
+sys_traits = { version = "0.1", features = ["real", "libc"] }
+tokio-util = "0.7"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.build-dependencies]
+deno_core = "0.405"
+deno_error = "0.7"
+deno_webidl = "0.252"
+deno_console = "0.222"
+deno_url = "0.222"
+deno_web = "0.283"
+deno_crypto = "0.266"
+deno_fetch = "0.276"
+deno_net = "0.244"
+deno_tls = "0.239"
+deno_permissions = "0.111"
+deno_features = "0.49"
+sys_traits = { version = "0.1", features = ["real", "libc"] }
 tokio-util = "0.7"
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]

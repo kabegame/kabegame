@@ -345,7 +345,11 @@ pub(crate) fn configure_app(
     let mut builder = builder
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_pathes::init());
 
     #[cfg(target_os = "android")]
@@ -476,6 +480,8 @@ pub(crate) fn configure_app(
             surf_reload,
             #[cfg(not(target_os = "android"))]
             surf_navigate,
+            #[cfg(not(target_os = "android"))]
+            surf_report_url,
             // --- Run Configs ---
             get_run_configs,
             get_run_config,
@@ -624,6 +630,8 @@ pub(crate) fn configure_app(
             crawl_add_progress,
             #[cfg(not(target_os = "android"))]
             crawl_download_image,
+            #[cfg(not(target_os = "android"))]
+            surf_download_image,
             #[cfg(not(target_os = "android"))]
             crawl_media_begin,
             #[cfg(not(target_os = "android"))]

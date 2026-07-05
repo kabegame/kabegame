@@ -101,6 +101,11 @@
                 "sql": "images.compatible_path",
                 "as": "compatible_path",
                 "in_need": true
+            },
+            {
+                "sql": "images.post_url",
+                "as": "post_url",
+                "in_need": true
             }
         ],
         "order": [{ "sql": "images.crawled_at", "order": "asc" }],

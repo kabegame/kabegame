@@ -568,7 +568,8 @@ impl Storage {
              COALESCE(images.type, 'image') as media_type,
              images.last_set_wallpaper_at,
              images.size,
-             images.compatible_path
+             images.compatible_path,
+             images.post_url
              FROM images
              LEFT JOIN album_images ai_fav ON images.id = ai_fav.image_id AND ai_fav.album_id = '{}'
              LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
@@ -612,6 +613,7 @@ impl Storage {
                         size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
                         album_order: None,
                         compatible_path: row.get::<_, Option<String>>(17)?,
+                        post_url: row.get::<_, Option<String>>(18)?,
                     })
                 },
             )
@@ -646,7 +648,8 @@ impl Storage {
              COALESCE(images.type, 'image') as media_type,
              images.last_set_wallpaper_at,
              images.size,
-             images.compatible_path
+             images.compatible_path,
+             images.post_url
              FROM images
              LEFT JOIN album_images ai_fav ON images.id = ai_fav.image_id AND ai_fav.album_id = '{}'
              LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
@@ -683,6 +686,7 @@ impl Storage {
                     size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
                     album_order: None,
                     compatible_path: row.get::<_, Option<String>>(17)?,
+                    post_url: row.get::<_, Option<String>>(18)?,
                 })
             })
             .optional()

@@ -85,7 +85,7 @@
   "headerNamePlaceholder": "헤더 이름 (예: Authorization)",
   "headerValuePlaceholder": "헤더 값 (예: Bearer xxx)",
   "addHeader": "헤더 추가",
-  "httpHeadersHint": "이 HTTP 헤더는 크롤러 요청(to/fetch_json)과 이미지 다운로드(download_image)에 사용되며 스크립트 변수에 주입되지 않습니다.",
+  "httpHeadersHint": "이 HTTP 헤더는 크롤러 요청(to/fetch_json/fetch)과 이미지 다운로드(download_image)에 사용되며 스크립트 변수에 주입되지 않습니다.",
   "newConfig": "새 설정",
   "configNotExist": "설정이 존재하지 않습니다",
   "updatedToConfig": "현재 설정으로 업데이트됨",

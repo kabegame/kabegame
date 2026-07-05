@@ -749,6 +749,7 @@ pub fn create_crawler_window<R: Runtime>(
                             true,
                             entry.custom_display_name.as_deref(),
                             entry.metadata_id,
+                            entry.post_url.as_deref(),
                         )
                         .await;
                         dq.wait_then_finish_download(entry.id, false).await;

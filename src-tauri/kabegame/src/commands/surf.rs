@@ -1,6 +1,6 @@
 use kabegame_core::crawler::downloader::{
-    compute_unique_download_path, get_default_images_dir, next_download_id,
-    postprocess_downloaded_image, ActiveDownloadInfo, DownloadState,
+    compute_unique_download_path, compute_unique_download_path_with_name, get_default_images_dir,
+    next_download_id, postprocess_downloaded_image, ActiveDownloadInfo, DownloadState,
 };
 use kabegame_core::crawler::favicon::fetch_favicon;
 use kabegame_core::crawler::TaskScheduler;
@@ -205,6 +205,24 @@ pub async fn surf_navigate<R: Runtime>(
         .map_err(|e| format!("导航失败: {}", e))
 }
 
+/// 内容页脚本(surf_url_report.js)在 SPA 导航(pushState 等)时调用,
+/// 把当前 URL 转发给同窗口导航栏。这类导航不触发 page load,
+/// 仅靠 on_page_load 时导航栏地址会停在旧值。
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn surf_report_url<R: Runtime>(
+    app: AppHandle<R>,
+    webview: Webview<R>,
+    url: String,
+) -> Result<(), String> {
+    let label = webview.label().to_string();
+    if !is_surf_content_label(&label) {
+        return Err(format!("Not a surf content webview: {label}"));
+    }
+    let _ = app.emit_to(format!("{label}-navbar").as_str(), "surf-url-changed", url);
+    Ok(())
+}
+
 fn save_surf_session_cookies_for_host<R: Runtime>(app: &AppHandle<R>, host: &str) {
     let Some(surf_webview) = app.get_webview(&surf_label(host)) else {
         return;
@@ -260,17 +278,20 @@ pub async fn surf_start_session<R: Runtime>(
             .initialization_script(include_str!("../../resources/surf_bootstrap.js"))
             .initialization_script(include_str!("../../resources/surf_toast.js"))
             .initialization_script(include_str!("../../resources/surf_context_menu.js"))
+            .initialization_script(include_str!("../../resources/surf_url_report.js"))
             .on_page_load({
                 let app = app.clone();
                 let host = host.clone();
                 let navbar_label = navbar_label.clone();
                 move |_surf_window, payload| {
+                    // Started 也上报:整页导航一发起地址栏即更新,不必等加载完;
+                    // SPA 内部跳转(pushState 等)不经过这里,由 surf_report_url 补上。
+                    let _ = app.emit_to(
+                        navbar_label.as_str(),
+                        "surf-url-changed",
+                        payload.url().as_str(),
+                    );
                     if payload.event() == PageLoadEvent::Finished {
-                        let _ = app.emit_to(
-                            navbar_label.as_str(),
-                            "surf-url-changed",
-                            payload.url().as_str(),
-                        );
                         // cookies_for_url 内部使用 wait_with_pump（重入 Win32 消息泵），
                         // 不能在 WebView2 COM 事件回调（UI线程）中同步调用，否则可能与
                         // NewWindowRequested 等其他 COM 事件交叉导致死锁。
@@ -297,17 +318,9 @@ pub async fn surf_start_session<R: Runtime>(
                 }
             })
             .on_navigation(|url| {
-                // 主框架导航到「以图片扩展名结尾的 URL」时返回 false 取消导航;
-                // runtime(CEF on_before_browse)据此改为 start_download 走原生下载链路,
-                // 解决「点击图片链接/JS 跳转直接打开图片页、需右键才能下载」的问题。
-                // 不受跨域 <a download> 限制(那条路对 i.pximg.net 等跨域 CDN 会失效)。
-                let ext = std::path::Path::new(url.path())
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("");
-                let is_img =
-                    !ext.is_empty() && kabegame_core::image_type::is_supported_image_ext(ext);
-                !is_img
+                !TaskScheduler::global()
+                    .download_queue()
+                    .contains_native(url.as_str())
             })
             .on_download({
                 let app = app.clone();
@@ -326,43 +339,68 @@ pub async fn surf_start_session<R: Runtime>(
                             url.clone()
                         };
 
-                        let native_dest =
-                            match compute_unique_download_path(&images_dir, &effective_url, None) {
+                        let dq = TaskScheduler::global().download_queue();
+                        if let Some(entry) = dq.get_native(url.as_str()) {
+                            let native_dest = match compute_unique_download_path_with_name(
+                                &images_dir,
+                                &effective_url,
+                                None,
+                                entry.custom_display_name.as_deref(),
+                            ) {
                                 Ok(p) => p,
                                 Err(_) => {
                                     return false;
                                 }
                             };
-                        let download_start_time = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis() as u64)
-                            .unwrap_or(0);
-                        let download_id = next_download_id();
-                        let entry = ActiveDownloadInfo {
-                            id: download_id,
-                            url: url.as_str().to_string(),
-                            plugin_id: host_for_plugin_id.clone(),
-                            start_time: download_start_time,
-                            task_id: String::new(),
-                            state: DownloadState::Downloading,
-                            native: true,
-                            retried_for: None,
-                            received_bytes: 0,
-                            total_bytes: None,
-                            surf_record_id: Some(surf_record_id.clone()),
-                            http_headers: HashMap::new(),
-                            output_album_id: None,
-                            custom_display_name: None,
-                            metadata_id: None,
-                        };
+                            *destination = native_dest;
+                            let dq2 = dq.clone();
+                            let entry_id = entry.id;
+                            tauri::async_runtime::spawn(async move {
+                                dq2.switch_state(entry_id, DownloadState::Downloading, None)
+                                    .await;
+                            });
+                        } else {
+                            let native_dest = match compute_unique_download_path(
+                                &images_dir,
+                                &effective_url,
+                                None,
+                            ) {
+                                Ok(p) => p,
+                                Err(_) => {
+                                    return false;
+                                }
+                            };
+                            let download_start_time = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0);
+                            let download_id = next_download_id();
+                            let entry = ActiveDownloadInfo {
+                                id: download_id,
+                                url: url.as_str().to_string(),
+                                plugin_id: host_for_plugin_id.clone(),
+                                start_time: download_start_time,
+                                task_id: String::new(),
+                                state: DownloadState::Downloading,
+                                native: true,
+                                retried_for: None,
+                                received_bytes: 0,
+                                total_bytes: None,
+                                surf_record_id: Some(surf_record_id.clone()),
+                                http_headers: HashMap::new(),
+                                output_album_id: None,
+                                custom_display_name: None,
+                                metadata_id: None,
+                                post_url: None,
+                            };
 
-                        let dq = TaskScheduler::global().download_queue();
-                        if dq.register_native(entry.clone()).is_err() {
-                            return false;
+                            if dq.register_native(entry.clone()).is_err() {
+                                return false;
+                            }
+                            *destination = native_dest;
                         }
 
                         eval_surf_toast_for_host(&app, &host, "开始下载", "start");
-                        *destination = native_dest;
                         true
                     }
                     DownloadEvent::Finished { url, path, success } => {
@@ -413,8 +451,9 @@ pub async fn surf_start_session<R: Runtime>(
                                     None,
                                     &entry.http_headers,
                                     true,
-                                    None,
-                                    None,
+                                    entry.custom_display_name.as_deref(),
+                                    entry.metadata_id,
+                                    entry.post_url.as_deref(),
                                 )
                                 .await;
                                 dq.wait_then_finish_download(entry.id, false).await;

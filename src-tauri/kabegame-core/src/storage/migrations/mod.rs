@@ -32,6 +32,7 @@ mod v015_unique_local_path_and_sync_folder;
 mod v016_image_metadata_version_plugin;
 mod v017_image_compatible_path;
 mod v018_drop_image_metadata_content_hash_unique;
+mod v019_image_post_url;
 
 use rusqlite::Connection;
 
@@ -102,13 +103,18 @@ const MIGRATIONS: &[Migration] = &[
         name: "drop_image_metadata_content_hash",
         up: v018_drop_image_metadata_content_hash_unique::up,
     },
+    Migration {
+        version: 19,
+        name: "image_post_url",
+        up: v019_image_post_url::up,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 18;
+pub const LATEST_VERSION: u32 = 19;
 
 fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

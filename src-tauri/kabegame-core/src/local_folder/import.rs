@@ -112,6 +112,7 @@ pub async fn import_local_file(
         size: resolved_size,
         album_order: None,
         compatible_path,
+        post_url: None,
     };
 
     let storage = Storage::global();

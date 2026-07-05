@@ -389,7 +389,6 @@ if done < num_artworks {
 | `sleep(secs)` | **阻塞**当前任务线程若干秒，上限 300s。用于限速等简单场景 |
 | `rand_f64(min, max)` | 返回区间内的随机浮点数，常配合 `sleep` 做抖动 |
 | `unix_time_ms()` | 当前 Unix 毫秒时间戳，适合生成签名、nonce |
-| `xhh_nonce(t)` / `xhh_hkey(path, t, nonce)` | 小红书 X-s / X-t 签名算法（插件自用） |
 | `is_video_url(url)` / `is_media_url(url)` | `is_image_url` 的同族判断，用于区分视频或通用媒体 |
 | `create_image_metadata(map)` / `create_image_metadata(map, #{ version: N })` | 预先往 `image_metadata` 表插入一行并返回 `i64`；`version` 必须是纯自然数，省略为 `0`。可作为 `download_image(url, #{ metadata_id })` 的高级用法，适合一份 metadata 被多张图片共享的场景 |
 
@@ -500,5 +499,5 @@ for link in next_links {
 ## 延伸阅读
 
 - [插件格式](/dev/format/) — `.kgpg` 布局与 `crawl.rhai` 的位置
-- [爬虫后端](/dev/crawler-backends/) — Rhai 与 WebView 两种后端的选型
+- [爬虫后端](/dev/crawler-backends/) — Rhai、V8 与 WebView 后端的选型
 - [Rhai 函数字典](/reference/rhai-dictionary/) — 全部函数的签名、返回类型与错误字符串

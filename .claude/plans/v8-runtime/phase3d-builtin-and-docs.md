@@ -16,7 +16,7 @@
 // config.json：{ "baseUrl": ..., "var": [ {key,type,name,name.en,...,default,min,max} ] }
 // package.json：现状仅 { "name": "kgpg-anime-pictures", "version": "0.1.0", "private": true }
 // 目录约定：icon.png / doc_root/ / configs/ / providers/ / metadata_migrations/v{N}.rhai / templates/
-// 注意：部分插件同时有 crawl.js + crawl.rhai（现状打包器 webview 优先、只装一个）
+// 注意：部分插件同时有 crawl.js + crawl.rhai（迁移后按 package.json main/kbBackend 只装一个）
 ```
 
 12 个：anihonet-wallpaper、anime-pictures、bilibili、heybox、konachan、miyoushe、
@@ -49,8 +49,8 @@ copyFlatI18nKeys(manifestRaw, pluginInfo, "description");
     `author`/`description` + 顶层扁平 i18n 键（manifest 原样搬，P3-6）；
   - `kbPackageVersion: 3`；`engines: { "kabegame": ">=4.3.0" }`（原 minAppVersion 一律升 4.3.0，P3-5）；
   - `kbBaseUrl` ← config.json `baseUrl`；`kbConfig` ← config.json `var`；
-  - **`main` + `kbBackend`**（单后端，P3-11）：有 `crawl.js` 者取 `main:"crawl.js"`/`kbBackend:"webview"`
-    （对齐现状 webview 优先），否则 `main:"crawl.rhai"`/`kbBackend:"rhai"`；被舍弃侧脚本文件留在仓库但不入包；
+  - **`main` + `kbBackend`**（单后端，P3-11）：有 `crawl.js` 者取 `main:"crawl.js"`/`kbBackend:"v8"`
+    （JS 插件走嵌入式 V8 后端），否则 `main:"crawl.rhai"`/`kbBackend:"rhai"`；被舍弃侧脚本文件留在仓库但不入包；
   - `kbIcon: "icon.png"`；
   - `kbDoc` ← `doc_root/doc.md`/`doc.<lang>.md` 逐语言列出（`doc.md`→`default`）；
   - `kbRecommendedConfigs` ← `configs/*.json` 枚举；

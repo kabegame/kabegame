@@ -39,6 +39,7 @@
           name: o.name ?? undefined,
           metadata: o.metadata ?? undefined,
           metadata_version: o.metadata_version ?? undefined,
+          source_url: o.url ?? undefined,
         });
       },
       async to(payload, opts) {

@@ -191,7 +191,7 @@ WebView 运行时（如 `crawler-runtime.js`）应暴露 `window.crawl`，与 Rh
 | Rhai API | JS 对等 API | 说明 |
 |----------|-------------|------|
 | `to(url)` | `crawl.to(url)` 或 `crawl.to({ url, pageLabel, pageState })` | 顶层 WebView 导航到新的url，建议同时传入下一步页面语义与参数，便于 Rust 在导航后恢复执行。 |
-| `fetch_json(url)` | `crawl.fetch_json(url)` | 不返回 |
+| `fetch_json(url)` | V8 使用标准 `fetch(url)`；WebView 可提供 `crawl.fetch_json(url)` 兼容层 | V8 的 `fetch` 返回标准 `Response`，JSON 用 `await (await fetch(url)).json()`；不入页面栈。 |
 | `back()` | `crawl.back()` | 页面栈出栈，显示上一帧。 |
 | `current_url()` | `crawl.currentUrl()` | 返回当前栈顶 URL 字符串。 |
 | `current_html()` | — | JS 下“当前页”的 document；可用 `crawl.$(selector)` 操作。若需原始 HTML，可提供 `crawl.currentHtml()` 返回 `document.documentElement.outerHTML`（当前 iframe）。 |

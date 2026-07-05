@@ -9,9 +9,9 @@
     'image-item-horizontal': horizontal,
   }" :style="rootStyle" :data-id="image.id" @mouseenter="handleMouseEnter" @mouseleave="handleMouseLeave"
     @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
-    <!-- 本地文件缺失标识：不阻挡点击/选择/右键 -->
-    <el-tooltip v-if="originalMissing && !isLost" content="这张图片找不到了" placement="top" :show-after="300">
-      <div class="missing-file-badge">
+    <!-- 文件异常标识：不阻挡点击/选择/右键 -->
+    <el-tooltip v-if="showFileWarning" :content="fileWarningText" placement="top" :show-after="300">
+      <div class="missing-file-badge" :class="{ 'missing-file-badge-thumbnail': thumbnailMissing }">
         <el-icon :size="14">
           <WarningFilled />
         </el-icon>
@@ -51,6 +51,7 @@ import ImageContent from "./ImageContent.vue";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import { useI18n } from "@kabegame/i18n";
 
 interface Props {
   image: ImageInfo;
@@ -84,10 +85,36 @@ const emit = defineEmits<{
 const rootEl = ref<HTMLElement | null>(null);
 const contentRef = ref<InstanceType<typeof ImageContent> | null>(null);
 const { isCompact } = storeToRefs(useUiStore());
+const { t } = useI18n();
 
 // 缺失/丢失状态来自 ImageContent（用于角标显示）
 const originalMissing = computed(() => contentRef.value?.originalMissing ?? false);
+const thumbnailMissing = computed(() => contentRef.value?.thumbnailMissing ?? false);
 const isLost = computed(() => contentRef.value?.isLost ?? false);
+const showFileWarning = computed(() => !isLost.value && (originalMissing.value || thumbnailMissing.value));
+
+const THUMBNAIL_REGEN_RANGE_SIZE = 1000;
+const thumbnailRegenRange = computed(() => {
+  const id = Number.parseInt(props.image.id, 10);
+  if (!Number.isFinite(id) || id < 0) return null;
+  const bucketId = Math.max(0, id - 1);
+  const start = Math.floor(bucketId / THUMBNAIL_REGEN_RANGE_SIZE) * THUMBNAIL_REGEN_RANGE_SIZE;
+  return { start, end: start + THUMBNAIL_REGEN_RANGE_SIZE };
+});
+
+const fileWarningText = computed(() => {
+  if (thumbnailMissing.value) {
+    const range = thumbnailRegenRange.value;
+    if (!range) {
+      return t("gallery.imageThumbnailMissingWarningNoRange", { id: props.image.id });
+    }
+    return t("gallery.imageThumbnailMissingWarning", {
+      id: props.image.id,
+      range: t("gallery.organizeRangeSegment", range),
+    });
+  }
+  return t("gallery.imageOriginalMissingWarning");
+});
 
 // 虚拟滚动下挂载时已有 isEntering，若直接绑 class 浏览器可能不触发 CSS 动画；延迟一帧再加 class 以触发入场动画
 const enteringClassActive = ref(false);
@@ -437,7 +464,7 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   position: absolute;
   top: 8px;
   right: 8px;
-  z-index: 2;
+  z-index: 3;
   width: 22px;
   height: 22px;
   border-radius: 999px;
@@ -454,6 +481,14 @@ const handleAnimationEnd = (event: AnimationEvent) => {
 
   &:hover {
     background: rgba(245, 108, 108, 1);
+  }
+
+  &.missing-file-badge-thumbnail {
+    background: rgba(230, 162, 60, 0.92);
+
+    &:hover {
+      background: rgba(230, 162, 60, 1);
+    }
   }
 }
 

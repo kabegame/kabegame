@@ -726,12 +726,55 @@ mod imp {
             keyboard_handler: KeyboardHandler,
             download_handler: Option<DownloadHandler>,
             request_handler: Option<RequestHandler>,
+            life_span_handler: Option<LifeSpanHandler>,
         }
         impl Client {
             fn load_handler(&self) -> Option<LoadHandler> { Some(self.load_handler.clone()) }
             fn keyboard_handler(&self) -> Option<KeyboardHandler> { Some(self.keyboard_handler.clone()) }
             fn download_handler(&self) -> Option<DownloadHandler> { self.download_handler.clone() }
             fn request_handler(&self) -> Option<RequestHandler> { self.request_handler.clone() }
+            fn life_span_handler(&self) -> Option<LifeSpanHandler> { self.life_span_handler.clone() }
+        }
+    }
+
+    wrap_life_span_handler! {
+        // popup 拦截:Linux 上 tauri-runtime 的 NewWindowFeatures/NewWindowOpener
+        // 携带 webkit2gtk::WebView 字段,CEF runtime 无法构造,因此无法把 popup
+        // 请求转交给 tauri 的 new_window_handler 闭包裁决。折中语义:凡上层注册了
+        // on_new_window 的 webview 视为「禁止弹新窗口」,popup 一律取消,http/https
+        // 目标改为在 opener 主框架内导航(与 wry 平台上 surf 的 navigate + Deny
+        // 行为对齐)。未注册 on_new_window 的 webview 不挂本 handler,保持 CEF
+        // 默认 popup 行为。devtools 走 on_before_dev_tools_popup,不受影响。
+        pub(crate) struct PopupToNavigationLifeSpanHandler {}
+        impl LifeSpanHandler {
+            fn on_before_popup(
+                &self,
+                browser: Option<&mut Browser>,
+                _frame: Option<&mut Frame>,
+                _popup_id: ::std::os::raw::c_int,
+                target_url: Option<&CefString>,
+                _target_frame_name: Option<&CefString>,
+                _target_disposition: WindowOpenDisposition,
+                _user_gesture: ::std::os::raw::c_int,
+                _popup_features: Option<&PopupFeatures>,
+                _window_info: Option<&mut WindowInfo>,
+                _client: Option<&mut Option<Client>>,
+                _settings: Option<&mut BrowserSettings>,
+                _extra_info: Option<&mut Option<DictionaryValue>>,
+                _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
+            ) -> ::std::os::raw::c_int {
+                let url = target_url.map(CefString::to_string).unwrap_or_default();
+                let is_web_url = Url::parse(&url)
+                    .map(|u| matches!(u.scheme(), "http" | "https"))
+                    .unwrap_or(false);
+                if is_web_url {
+                    if let Some(main_frame) = browser.and_then(|b| b.main_frame()) {
+                        main_frame.load_url(Some(&CefString::from(url.as_str())));
+                    }
+                }
+                // 返回 1 = 取消 popup(about:blank 等非 web scheme 仅取消,不导航)
+                1
+            }
         }
     }
 
@@ -866,11 +909,18 @@ mod imp {
             .navigation_handler
             .take()
             .map(|h| TauriCefRequestHandler::new(Rc::new(h)));
+        // 无法在 Linux 上调用 new_window_handler 本体(见 PopupToNavigationLifeSpanHandler
+        // 注释),仅以其存在与否作为「取消 popup 改本页导航」的开关。
+        let life_span_handler = pending
+            .new_window_handler
+            .take()
+            .map(|_| PopupToNavigationLifeSpanHandler::new());
         let mut client = ViewsClient::new(
             InitializationLoadHandler::new(scripts, on_page_load),
             DevToolsKeyboardHandler::new(),
             download_handler,
             navigation_handler,
+            life_span_handler,
         );
         let mut delegate = ViewsBrowserViewDelegate::new(webview_label, pending_protocols);
         let url = pending.url.clone();

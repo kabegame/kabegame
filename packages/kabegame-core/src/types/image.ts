@@ -43,6 +43,9 @@ export interface ImageInfo {
 
   /** 浏览器兼容副本的本地路径（桌面端：浏览器无法直接播放/显示的格式会生成 H.264 MP4 / PNG 副本） */
   compatiblePath?: string;
+
+  /** 帖子/页面地址（与下载 url 分开）；本地导入或无帖子概念时为 null。 */
+  postUrl?: string;
 }
 
 export interface TaskFailedImage {

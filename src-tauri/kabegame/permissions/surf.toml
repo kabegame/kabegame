@@ -7,6 +7,8 @@ commands.allow = [
     "surf_go_forward",
     "surf_reload",
     "surf_navigate",
+    "surf_report_url",
+    "surf_download_image",
     "crawl_media_begin",
     "crawl_media_chunk",
     "crawl_media_end",

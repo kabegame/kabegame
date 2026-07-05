@@ -830,7 +830,7 @@ fn pack_plugin_v2(
         eprintln!("[WARN] v3 目录不应有 manifest.json，请迁移到 package.json");
     }
 
-    maybe_run_webview_build(plugin_dir)?;
+    maybe_run_plugin_build(plugin_dir)?;
     let backend = detect_plugin_backend(plugin_dir)?;
 
     let icon_path = plugin_dir.join("icon.png");
@@ -925,6 +925,8 @@ fn pack_plugin_v3(
             plugin_dir.display()
         );
     }
+
+    maybe_run_plugin_build(plugin_dir)?;
 
     let kb_backend_str = pkg_obj
         .get("kbBackend")
@@ -1071,7 +1073,8 @@ fn derive_header_manifest(pkg: &serde_json::Value) -> Result<Vec<u8>, String> {
         );
     }
 
-    // name + name.*
+    // KGPG v2 header is a small store-list manifest, not the full v3
+    // package.json. Keep heavy fields such as kbConfig only inside the ZIP.
     for (k, v) in obj {
         if k == "name" || k.starts_with("name.") {
             if let Some(s) = v.as_str() {
@@ -1122,6 +1125,11 @@ fn collect_v3_entries(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "缺少 main".to_string())?;
     entries.push((main_path.to_string(), plugin_dir.join(main_path)));
+
+    // kbIcon
+    if let Some(icon) = pkg_obj.get("kbIcon").and_then(|v| v.as_str()) {
+        entries.push((icon.to_string(), plugin_dir.join(icon)));
+    }
 
     // kbDescriptionTemplate
     if let Some(tpl) = pkg_obj.get("kbDescriptionTemplate").and_then(|v| v.as_str()) {
@@ -1345,7 +1353,7 @@ fn make_rooted_globset(rules: &[String]) -> Result<globset::GlobSet, String> {
     builder.build().map_err(|e| format!("构建 globset 失败: {}", e))
 }
 
-fn maybe_run_webview_build(plugin_dir: &Path) -> Result<(), String> {
+fn maybe_run_plugin_build(plugin_dir: &Path) -> Result<(), String> {
     let package_json_path = plugin_dir.join("package.json");
     if !package_json_path.is_file() {
         return Ok(());
@@ -1380,7 +1388,7 @@ fn maybe_run_webview_build(plugin_dir: &Path) -> Result<(), String> {
     } else if command_exists("bun") {
         ("bun", vec!["run", "build"])
     } else {
-        return Err("未找到可用的包管理器（npm/bun），无法执行 webview 构建".to_string());
+        return Err("未找到可用的包管理器（npm/bun），无法执行插件构建".to_string());
     };
 
     let status = Command::new(runner)
@@ -1390,7 +1398,7 @@ fn maybe_run_webview_build(plugin_dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("执行 `{runner} run build` 失败: {e}"))?;
     if !status.success() {
         return Err(format!(
-            "webview 构建失败（`{runner} run build` 退出码: {status}）"
+            "插件构建失败（`{runner} run build` 退出码: {status}）"
         ));
     }
     Ok(())
@@ -1700,6 +1708,52 @@ mod tests {
         assert!(!kabegame_core::plugin::package_json_is_v3(
             &serde_json::json!({"kbPackageVersion": 2})
         ));
+    }
+
+    #[test]
+    fn test_derive_header_manifest_excludes_v3_heavy_fields() {
+        let pkg = serde_json::json!({
+            "name": "heavy-plugin",
+            "name.zh": "重配置插件",
+            "version": "1.2.3",
+            "description": "short description",
+            "author": "Kabegame",
+            "kbPackageVersion": 3,
+            "engines": { "kabegame": ">=4.3.0" },
+            "main": "crawl.rhai",
+            "kbBackend": "rhai",
+            "kbBaseUrl": "https://example.com",
+            "kbConfig": (0..500)
+                .map(|i| serde_json::json!({
+                    "key": format!("option_{i}"),
+                    "type": "string",
+                    "name": format!("Option {i}"),
+                    "default": "x".repeat(64)
+                }))
+                .collect::<Vec<_>>(),
+        });
+
+        let header = derive_header_manifest(&pkg).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&header).unwrap();
+        let obj = value.as_object().unwrap();
+
+        assert_eq!(obj.get("version").and_then(|v| v.as_str()), Some("1.2.3"));
+        assert_eq!(
+            obj.get("minAppVersion").and_then(|v| v.as_str()),
+            Some("4.3.0")
+        );
+        assert_eq!(
+            obj.get("name").and_then(|v| v.as_str()),
+            Some("heavy-plugin")
+        );
+        assert_eq!(
+            obj.get("description").and_then(|v| v.as_str()),
+            Some("short description")
+        );
+        assert!(!obj.contains_key("kbConfig"));
+        assert!(!obj.contains_key("kbBaseUrl"));
+        assert!(!obj.contains_key("main"));
+        assert!(header.len() < kabegame_core::kgpg::KGPG2_MANIFEST_SLOT_SIZE);
     }
 
     #[test]

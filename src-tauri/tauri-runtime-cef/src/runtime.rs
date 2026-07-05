@@ -654,12 +654,21 @@ mod imp {
         impl App {
             fn on_register_custom_schemes(&self, registrar: Option<&mut SchemeRegistrar>) {
                 let Some(registrar) = registrar else { return };
-                let options = (SchemeOptions::STANDARD.get_raw()
+                let web_resource_options = (SchemeOptions::STANDARD.get_raw()
                     | SchemeOptions::SECURE.get_raw()
                     | SchemeOptions::CORS_ENABLED.get_raw()
                     | SchemeOptions::FETCH_ENABLED.get_raw()) as i32;
-                for scheme in ["tauri", "asset", "ipc", "cef-ipc"] {
-                    registrar.add_custom_scheme(Some(&CefString::from(scheme)), options);
+                for scheme in ["tauri", "asset"] {
+                    registrar.add_custom_scheme(Some(&CefString::from(scheme)), web_resource_options);
+                }
+
+                // Tauri IPC is injected into third-party pages such as surf sessions.
+                // Strict site CSP can block `fetch(ipc://...)` before it reaches the runtime,
+                // so only the internal IPC schemes bypass CSP.
+                let ipc_options = (web_resource_options
+                    | SchemeOptions::CSP_BYPASSING.get_raw() as i32) as i32;
+                for scheme in ["ipc", "cef-ipc"] {
+                    registrar.add_custom_scheme(Some(&CefString::from(scheme)), ipc_options);
                 }
             }
 

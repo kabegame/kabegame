@@ -6,7 +6,6 @@ pub mod proxy;
 pub mod task_log_i18n;
 pub mod task_scheduler;
 pub mod webview;
-pub mod xhh_sign;
 
 pub use downloader::{create_client, ActiveDownloadInfo, DownloadQueue};
 pub use task_scheduler::{

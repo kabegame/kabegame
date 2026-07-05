@@ -1,5 +1,4 @@
 use crate::crawler::task_scheduler::PageStackEntry;
-use crate::crawler::xhh_sign;
 use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
 use crate::plugin::Plugin;
@@ -138,6 +137,7 @@ fn run_rhai_download_image_sync(
     url: &str,
     custom_display_name: Option<String>,
     metadata_id: Option<i64>,
+    post_url: Option<String>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     if TaskScheduler::global().is_task_canceled_blocking(&task_id) {
         return Err("Task canceled".into());
@@ -159,17 +159,18 @@ fn run_rhai_download_image_sync(
         http_headers,
         custom_display_name,
         metadata_id,
+        post_url,
     );
     tokio::runtime::Handle::current()
         .block_on(fut)
         .map_err(|e| format!("Failed to download image: {}", e).into())
 }
 
-/// 从 Rhai `download_image(url, opts)` 的 `opts` map 解析 `name` / `metadata_id`。
+/// 从 Rhai `download_image(url, opts)` 的 `opts` map 解析 `name` / `metadata_id` / `url`（帖子 URL）。
 fn parse_download_image_opts_from_map(
     opts: &Map,
     plugin_id: &str,
-) -> Result<(Option<String>, Option<i64>), Box<rhai::EvalAltResult>> {
+) -> Result<(Option<String>, Option<i64>, Option<String>), Box<rhai::EvalAltResult>> {
     let opt_str = |key: &str| -> Result<Option<String>, Box<rhai::EvalAltResult>> {
         match opts.get(key) {
             None => Ok(None),
@@ -226,7 +227,7 @@ fn parse_download_image_opts_from_map(
     } else {
         None
     };
-    Ok((opt_str("name")?, metadata_id))
+    Ok((opt_str("name")?, metadata_id, opt_str("url")?))
 }
 
 fn parse_create_image_metadata_version(opts: &Map) -> Result<u32, Box<rhai::EvalAltResult>> {
@@ -752,14 +753,6 @@ pub fn register_crawler_functions(
                 .map_err(|e| format!("plugin_data set: {e}"))?;
             Ok(())
         }
-    });
-
-    // xhh_nonce(t) - 生成 XHH nonce（32位大写十六进制）
-    engine.register_fn("xhh_nonce", |t: i64| -> String { xhh_sign::xhh_nonce(t) });
-
-    // xhh_hkey(path, t, nonce) - 计算 XHH hkey 签名字符串（7字符）
-    engine.register_fn("xhh_hkey", |path: &str, t: i64, nonce: &str| -> String {
-        xhh_sign::xhh_hkey(path, t, nonce)
     });
 
     // re_is_match(pattern, text) - 正则匹配判断（pattern 使用 Rust regex 语法）
@@ -1537,6 +1530,7 @@ pub fn register_crawler_functions(
                 url,
                 None,
                 None,
+                None,
             )
         },
     );
@@ -1554,7 +1548,7 @@ pub fn register_crawler_functions(
             let task_id = lock_or_inner(&tid2).clone();
             let output_album_id = lock_or_inner(&oaid2).clone();
             let http_headers = lock_or_inner(&hdr2).clone();
-            let (custom_name, metadata_id) = parse_download_image_opts_from_map(&opts, &plugin_id)?;
+            let (custom_name, metadata_id, post_url) = parse_download_image_opts_from_map(&opts, &plugin_id)?;
             run_rhai_download_image_sync(
                 &dq2,
                 images_dir,
@@ -1565,6 +1559,7 @@ pub fn register_crawler_functions(
                 url,
                 custom_name,
                 metadata_id,
+                post_url,
             )
         },
     );

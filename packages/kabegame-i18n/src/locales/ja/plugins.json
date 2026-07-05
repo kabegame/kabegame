@@ -85,7 +85,7 @@
   "headerNamePlaceholder": "ヘッダー名（例：Authorization）",
   "headerValuePlaceholder": "ヘッダー値（例：Bearer xxx）",
   "addHeader": "ヘッダーを追加",
-  "httpHeadersHint": "これらのHTTPヘッダーはクローラーリクエスト（to/fetch_json）と画像ダウンロード（download_image）に使用され、スクリプト変数には注入されません。",
+  "httpHeadersHint": "これらのHTTPヘッダーはクローラーリクエスト（to/fetch_json/fetch）と画像ダウンロード（download_image）に使用され、スクリプト変数には注入されません。",
   "newConfig": "新規設定",
   "configNotExist": "設定が存在しません",
   "updatedToConfig": "現在の設定に更新しました",

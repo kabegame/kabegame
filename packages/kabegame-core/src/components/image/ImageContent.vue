@@ -34,7 +34,7 @@
           @dragstart.prevent
         />
         <img
-          v-if="!originalFailed && prefer === 'original'"
+          v-if="thumbFailed || !originalFailed && prefer === 'original'"
           :key="`orig:${originalLayerSrc}`"
           :src="originalLayerSrc"
           loading="lazy"
@@ -183,6 +183,7 @@ const isLost = computed(() =>
 );
 
 const originalMissing = computed(() => originalFailed.value);
+const thumbnailMissing = computed(() => thumbFailed.value && !originalFailed.value && !isLost.value);
 
 // ---- Reset on image identity change (NOT on prefer — preserves hover no-flash) ----
 // When ImageItem flips effectivePrefer thumbnail→original, the two URLs don't change, so this
@@ -277,7 +278,7 @@ watchEffect(() => {
   }
 });
 
-defineExpose({ videoEl, originalMissing, isLost });
+defineExpose({ videoEl, originalMissing, thumbnailMissing, isLost });
 </script>
 
 <style scoped lang="scss">

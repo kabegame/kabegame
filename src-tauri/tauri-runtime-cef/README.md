@@ -29,7 +29,7 @@ Tauri Builder
 | Tauri 能力 | CEF 实现 |
 | --- | --- |
 | 前端资源 | 每个 webview 的 `RequestContext` 注册 `tauri://` / `asset://` scheme handler |
-| `invoke()` | `ipc://` 主路径与 `cef-ipc://` postMessage 后备桥接 |
+| `invoke()` | `ipc://` 主路径与 `cef-ipc://` postMessage 后备桥接；内部 IPC scheme 允许绕过页面 CSP，以支持 surf 等第三方页面中的 Tauri IPC |
 | 初始化脚本 | CEF `LoadHandler::on_load_start` 注入 |
 | 页面生命周期 | `LoadHandler` 映射到 Tauri page-load hook |
 | Cookie API | CEF 全局 `CookieManager` 映射到 Tauri `cookies_for_url` / `cookies` / `set_cookie` / `delete_cookie` |

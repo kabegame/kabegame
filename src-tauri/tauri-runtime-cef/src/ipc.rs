@@ -63,6 +63,8 @@ pub(crate) fn install_post_message_bridge<T: UserEvent>(
         },
     );
 
+    force_postmessage_ipc_transport(&mut pending.webview_attributes.initialization_scripts);
+
     let ipc_handler = Mutex::new(ipc_handler);
     pending.register_uri_scheme_protocol(CEF_IPC_SCHEME, move |_label, request, responder| {
         let response = match post_message_request(request, &initial_url) {
@@ -82,6 +84,28 @@ pub(crate) fn install_post_message_bridge<T: UserEvent>(
     });
 }
 
+/// 把 Tauri `ipc-protocol.js` 里的 `customProtocolIpcFailed = false` 预置为 `true`,
+/// 让前端 IPC 从一开始就走 postMessage 主路径,而不是先尝试 `fetch(ipc://...)`。
+///
+/// 原因:CEF 渲染进程在页面首帧提交时拿到的 `URLLoaderFactory` bundle 还不包含
+/// 运行时动态注册的 `ipc` scheme,导致每个页面加载后的第一个 invoke 必然
+/// `net::ERR_UNKNOWN_URL_SCHEME`。Tauri 前端一旦失败就把 `customProtocolIpcFailed`
+/// 永久置位并回退 postMessage —— 于是每页留下一条报错、首个命令还多一次注定失败
+/// 的往返。直接把初值改成"已失败",跳过这次往返;postMessage 经本模块的
+/// `cef-ipc://` POST 桥传输,功能与 `ipc://` 等价。
+///
+/// 该替换与 Tauri 上游脚本文本强耦合;若上游改写此标记,替换会静默失效(仅退回
+/// "先失败再回退",功能不受影响)。
+fn force_postmessage_ipc_transport(scripts: &mut [InitializationScript]) {
+    const NEEDLE: &str = "customProtocolIpcFailed = false";
+    const PATCHED: &str = "customProtocolIpcFailed = true";
+    for script in scripts.iter_mut() {
+        if script.script.contains(NEEDLE) {
+            script.script = script.script.replace(NEEDLE, PATCHED);
+        }
+    }
+}
+
 fn post_message_request(
     request: HttpRequest<Vec<u8>>,
     fallback_url: &str,
@@ -90,13 +114,20 @@ fn post_message_request(
         return Err("CEF IPC postMessage only accepts POST".to_string());
     }
 
+    // Tauri 的 handle_ipc_message 会对该 URI 做 `Url::parse(...).expect(...)`;
+    // opaque origin(错误页、Cloudflare 拦截页、沙箱 iframe)的 Origin 头是字面量
+    // "null",能过 http::Uri 但过不了 url::Url,必须在此过滤,否则整个进程 abort。
     let uri = request
         .headers()
         .get(http::header::ORIGIN)
         .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty())
+        .filter(|value| url::Url::parse(value).is_ok())
         .unwrap_or(fallback_url)
         .to_string();
+
+    if url::Url::parse(&uri).is_err() {
+        return Err(format!("CEF IPC postMessage origin is not an absolute URL: {uri}"));
+    }
 
     let body = String::from_utf8(request.into_body())
         .map_err(|_| "CEF IPC postMessage body must be UTF-8".to_string())?;

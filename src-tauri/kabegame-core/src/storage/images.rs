@@ -87,6 +87,8 @@ pub struct ImageInfo {
         default
     )]
     pub compatible_path: Option<String>,
+    #[serde(rename(serialize = "postUrl"), alias = "postUrl", default)]
+    pub post_url: Option<String>,
 }
 
 fn deserialize_boolish<'de, D>(deserializer: D) -> Result<bool, D::Error>
@@ -445,7 +447,10 @@ impl Storage {
     }
 
     pub fn find_image_by_url(url: &str) -> Result<Option<ImageInfo>, String> {
-        if url.is_empty() {
+        if url.is_empty()
+            || url == crate::crawler::downloader::DATA_URI_PLACEHOLDER
+            || url.starts_with("blob:")
+        {
             return Ok(None);
         }
         first_gallery_image_at(&format!(
@@ -497,8 +502,8 @@ impl Storage {
 
         let crawled_at_i64 = image.crawled_at as i64;
         conn.execute(
-            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata_id, thumbnail_path, hash, type, width, height, display_name, size, compatible_path)
-             VALUES (?1, ?2, ?3, (SELECT id FROM tasks WHERE id = ?4), ?5, ?6, (SELECT id FROM image_metadata WHERE id = ?7), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata_id, thumbnail_path, hash, type, width, height, display_name, size, compatible_path, post_url)
+             VALUES (?1, ?2, ?3, (SELECT id FROM tasks WHERE id = ?4), ?5, ?6, (SELECT id FROM image_metadata WHERE id = ?7), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 &image.url,
                 image.local_path,
@@ -515,6 +520,7 @@ impl Storage {
                 image.display_name,
                 image.size.map(|v| v as i64),
                 image.compatible_path,
+                image.post_url,
             ],
         )
         .map_err(|e| format!("Failed to add image: {}", e))?;

@@ -241,6 +241,7 @@ impl TaskScheduler {
                 retry_headers,
                 item.metadata_id,
                 item.display_name,
+                None,
             )
             .await
     }
@@ -648,6 +649,52 @@ async fn run_task(
         }
         let completion = completion?;
         return Ok(TaskOutcome::Terminal(completion.status, completion.error));
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let v8_script = plugin.script.v8_source().map(|s| s.to_string());
+        if let Some(crawl_v8) = v8_script {
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let watcher_cancel = cancel.clone();
+            let task_id_for_watcher = req.task_id.clone();
+            let watcher = tokio::spawn(async move {
+                loop {
+                    if TaskScheduler::global().is_task_canceled(&task_id_for_watcher).await {
+                        watcher_cancel.cancel();
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            });
+
+            let plugin_for_exec = plugin.clone();
+            let task_id = req.task_id.clone();
+            let merged_config_for_exec = merged_config;
+            let output_album_id = task.output_album_id.clone();
+            let http_headers = task.http_headers.clone();
+
+            let result = tokio::task::spawn_blocking(move || {
+                crate::plugin::v8::execute_crawler_script_v8(
+                    download_queue,
+                    &plugin_for_exec,
+                    &images_dir,
+                    &plugin_for_exec.id,
+                    &task_id,
+                    &crawl_v8,
+                    merged_config_for_exec,
+                    output_album_id,
+                    http_headers,
+                    cancel,
+                )
+            })
+            .await
+            .map_err(|e| format!("V8 task worker join error: {}", e))?;
+
+            watcher.abort();
+            result?;
+            return Ok(TaskOutcome::Completed);
+        }
     }
 
     let rhai_script = rhai_script

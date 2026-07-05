@@ -85,7 +85,7 @@
   "headerNamePlaceholder": "Header name (e.g. Authorization)",
   "headerValuePlaceholder": "Header value (e.g. Bearer xxx)",
   "addHeader": "Add header",
-  "httpHeadersHint": "These HTTP headers are used for crawler requests (to/fetch_json) and image downloads (download_image), not injected into script variables.",
+  "httpHeadersHint": "These HTTP headers are used for crawler requests (to/fetch_json/fetch) and image downloads (download_image), not injected into script variables.",
   "newConfig": "New config",
   "configNotExist": "Config does not exist",
   "updatedToConfig": "Updated to current config",

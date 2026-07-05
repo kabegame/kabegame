@@ -51,6 +51,7 @@ export function rowToImageInfo(row: Row): ImageInfo {
     ["taskId", stringField(row, "task_id", "taskId")],
     ["type", stringField(row, "media_type", "type")],
     ["compatiblePath", stringField(row, "compatible_path", "compatiblePath")],
+    ["postUrl", stringField(row, "post_url")],
   ];
   for (const [key, value] of optionalStrings) {
     if (value !== undefined) (image as unknown as Record<string, unknown>)[key] = value;

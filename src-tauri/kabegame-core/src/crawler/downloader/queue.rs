@@ -99,6 +99,8 @@ pub struct ActiveDownloadInfo {
     pub custom_display_name: Option<String>,
     #[serde(skip)]
     pub metadata_id: Option<i64>,
+    #[serde(skip)]
+    pub post_url: Option<String>,
 }
 
 pub(super) fn emit_task_image_counts_snapshot(task_id: &str) {
@@ -176,6 +178,8 @@ pub struct DownloadRequest {
     pub custom_display_name: Option<String>,
     /// 已写入 `image_metadata` 的 id。
     pub metadata_id: Option<i64>,
+    /// 帖子/页面地址（与下载 URL 分开）；爬虫传入时为当前页面 URL。
+    pub post_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -430,6 +434,7 @@ impl DownloadQueue {
         http_headers: HashMap<String, String>,
         custom_display_name: Option<String>,
         metadata_id: Option<i64>,
+        post_url: Option<String>,
     ) -> Result<(), String> {
         self.download(
             url,
@@ -443,6 +448,7 @@ impl DownloadQueue {
             custom_display_name,
             metadata_id,
             true,
+            post_url,
         )
         .await
     }
@@ -459,6 +465,7 @@ impl DownloadQueue {
         http_headers: HashMap<String, String>,
         metadata_id: Option<i64>,
         custom_display_name: Option<String>,
+        post_url: Option<String>,
     ) -> Result<(), String> {
         if self.is_retrying(failed_image_id).await {
             return Err("Has been restarted".to_string());
@@ -475,6 +482,7 @@ impl DownloadQueue {
             custom_display_name,
             metadata_id,
             false,
+            post_url,
         )
         .await
     }
@@ -494,6 +502,7 @@ impl DownloadQueue {
         custom_display_name: Option<String>,
         metadata_id: Option<i64>,
         blocking: bool,
+        post_url: Option<String>,
     ) -> Result<(), String> {
         let download_id = next_download_id();
 
@@ -509,6 +518,7 @@ impl DownloadQueue {
             failed_image_id,
             custom_display_name,
             metadata_id,
+            post_url,
         };
 
         if !blocking {
@@ -577,6 +587,7 @@ impl DownloadQueue {
             output_album_id: job.output_album_id.clone(),
             custom_display_name: job.custom_display_name.clone(),
             metadata_id: job.metadata_id,
+            post_url: job.post_url.clone(),
         };
         self.active_downloads.lock().unwrap().push(info);
 
@@ -909,6 +920,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         false,
                         job.custom_display_name.as_deref(),
                         job.metadata_id,
+                        job.post_url.as_deref(),
                     )
                     .await;
                 }
@@ -954,6 +966,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                 false,
                 job.custom_display_name.as_deref(),
                 job.metadata_id,
+                job.post_url.as_deref(),
             )
             .await;
             dq.wait_then_finish_download(job.id, true).await;
@@ -1033,6 +1046,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         false,
                         job.custom_display_name.as_deref(),
                         job.metadata_id,
+                        job.post_url.as_deref(),
                     )
                     .await;
                 } else {

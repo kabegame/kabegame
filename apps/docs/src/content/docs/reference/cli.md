@@ -37,18 +37,19 @@ kabegame-cli plugin run --help
 在当前目录脚手架一个新的插件目录。**离线可用，不需要 daemon。**
 
 ```bash
-kabegame-cli plugin new <name> [--backend rhai|webview]
+kabegame-cli plugin new <name> [--backend rhai|v8|webview]
 ```
 
 | 参数        | 必填 | 说明                                                                                                                 |
 | ----------- | ---- | -------------------------------------------------------------------------------------------------------------------- |
 | `name`      | 是   | 插件名，必须是 kebab-case（正则 `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`）。`MyPlugin`、`my_plugin`、`1stplugin` 都会被拒绝。 |
-| `--backend` | 否   | `rhai`（默认）或 `webview`，决定生成的脚本文件（`crawl.rhai` 或 `crawl.js` + `package.json`）。                      |
+| `--backend` | 否   | `v8`（默认）、`rhai` 或 `webview`，决定生成的脚本文件与 `package.json.kbBackend`。                                      |
 
-目标目录若已存在则直接报错退出。脚手架会从模板复制 `manifest.json`、`icon.png`、`doc_root/doc.md` 等通用文件，并根据 backend 生成对应脚本。
+目标目录若已存在则直接报错退出。脚手架会从模板生成 `package.json`、`icon.png`、`doc_root/doc.md` 等通用文件，并根据 backend 生成对应脚本。
 
 ```bash
 kabegame-cli plugin new my-site
+kabegame-cli plugin new my-site --backend rhai
 kabegame-cli plugin new my-site --backend webview
 ```
 
@@ -93,16 +94,16 @@ kabegame-cli plugin pack --plugin-dir <目录> --output <输出.kgpg>
 
 | 参数           | 必填 | 说明                                                              |
 | -------------- | ---- | ----------------------------------------------------------------- |
-| `--plugin-dir` | 是   | 包含 `manifest.json` 以及 `crawl.js` 或 `crawl.rhai` 的插件目录。 |
+| `--plugin-dir` | 是   | 包含 v3 `package.json` 与 `main` 指向脚本的插件目录；legacy v2 目录仍兼容 `manifest.json` + `crawl.js`/`crawl.rhai`。 |
 | `--output`     | 是   | 输出的 `.kgpg` 文件路径。                                         |
 
-打包时会自动检测 backend：优先 `crawl.js`（webview），否则回退 `crawl.rhai`；两者都不存在会报错。
+v3 插件打包时读取 `package.json.main` 与 `package.json.kbBackend`。legacy v2 插件仍保留旧检测逻辑：优先 `crawl.js`（webview），否则回退 `crawl.rhai`；两者都不存在会报错。
 
 :::caution
 若目录内 `package.json` 存在且 `scripts.build` 非空，`plugin pack` 会在打包前**先执行一次构建**：检测到 bun lockfile 且 `bun` 在 PATH 时使用 bun，否则使用 npm，两者都找不到时报 `未找到可用的包管理器（npm/bun）…`。
 :::
 
-内部 ZIP 会收集 `manifest.json`、探测到的脚本、可选 `config.json`、`configs/**/*.json`、`doc_root/doc.md` 与本地化 `doc.<lang>.md` 及其配图（每张 ≤ 2 MB）、`templates/*.ejs`。`icon.png` 被单独编码进 KGPG 头部字段，失败时仅日志警告，不中断打包。
+内部 ZIP 会收集 `package.json` 明确引用的脚本、文档、推荐配置、providers、metadata 迁移脚本与模板。`icon.png` 被单独编码进 KGPG 头部字段，失败时仅日志警告，不中断打包。
 
 ### plugin import
 

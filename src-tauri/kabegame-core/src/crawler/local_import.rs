@@ -133,6 +133,7 @@ impl LocalImportHook {
             false,
             None,
             None,
+            None,
         )
         .await;
         wait_after_download_if_needed(download_start_time, None).await;
@@ -207,6 +208,7 @@ impl LocalImportHook {
             &HashMap::new(),
             false,
             custom_display_name.as_deref(),
+            None,
             None,
         )
         .await;

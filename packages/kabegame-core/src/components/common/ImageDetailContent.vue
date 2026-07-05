@@ -67,13 +67,13 @@
               </template>
             </div>
           </div>
-          <div v-if="image.url && !isFileUrl(image.url)" class="detail-item">
+          <div v-if="image.postUrl && !isFileUrl(image.postUrl)" class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailUrl') }}</span>
             <span
               class="detail-value line-clamp-2 clickable-link"
-              :title="image.url"
-              @click="handleOpenUrl(image.url)"
-            >{{ image.url }}</span>
+              :title="image.postUrl"
+              @click="handleOpenUrl(image.postUrl)"
+            >{{ image.postUrl }}</span>
           </div>
           <div class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailLocalPath') }}</span>
@@ -209,6 +209,7 @@ export type ImageDetailLike = {
   width?: number;
   height?: number;
   taskId?: string;
+  postUrl?: string;
 };
 
 export type ImageDetailGalleryFilterTarget =

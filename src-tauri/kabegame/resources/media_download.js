@@ -22,6 +22,7 @@
       metadata: o.metadata ?? undefined,
       metadata_version: o.metadata_version ?? undefined,
       metadataVersion: o.metadata_version ?? undefined,
+      page_url: o.url ?? undefined,
     };
   }
 

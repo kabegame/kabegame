@@ -18,6 +18,8 @@ use tokio::sync::Notify;
 use tokio::time::{sleep, Duration};
 use url::Url;
 
+pub const DATA_URI_PLACEHOLDER: &str = "data:dummy";
+
 pub mod compress;
 #[cfg(target_os = "android")]
 mod content;
@@ -631,6 +633,7 @@ pub async fn postprocess_downloaded_image(
     _native: bool,
     custom_display_name: Option<&str>,
     metadata_id: Option<i64>,
+    post_url: Option<&str>,
 ) -> Result<bool, String> {
     match async {
         let is_surf_mode = surf_record_id.is_some();
@@ -1074,6 +1077,8 @@ pub async fn postprocess_downloaded_image(
                 id: "".to_string(),
                 url: if is_content {
                     None
+                } else if url.scheme() == "data" {
+                    Some(DATA_URI_PLACEHOLDER.to_string())
                 } else {
                     Some(url.to_string())
                 },
@@ -1097,6 +1102,7 @@ pub async fn postprocess_downloaded_image(
                 size: resolved_size,
                 album_order: None,
                 compatible_path: compatible_path_str,
+                post_url: post_url.map(|s| s.to_string()),
             };
 
             let t_add = (!auto_deduplicate).then(Instant::now);

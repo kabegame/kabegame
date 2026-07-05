@@ -3,14 +3,13 @@ import { defineConfig } from "@rspack/cli";
 export default defineConfig({
   entry: { main: "./src/index.ts" },
   target: "es2022",
+  devtool: false,
   output: {
     filename: "[name].js",
-    path: "dist",
+    path: new URL("./dist", import.meta.url).pathname,
     library: { type: "module" },
   },
   experiments: { outputModule: true },
-  externalsType: "module",
-  externals: [/^@kabegame\/plugin-sdk$/, /^@kabegame\/types$/],
   module: {
     rules: [
       {
@@ -25,5 +24,5 @@ export default defineConfig({
       },
     ],
   },
-  resolve: { extensions: [".ts", ".js"] },
+  resolve: { extensions: [".ts", ".js"], fullySpecified: false },
 });

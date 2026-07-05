@@ -85,7 +85,7 @@
   "headerNamePlaceholder": "Header 名（如 Authorization）",
   "headerValuePlaceholder": "Header 值（如 Bearer xxx）",
   "addHeader": "新增 Header",
-  "httpHeadersHint": "提示：此處的 HTTP 標頭會用於爬蟲請求（to/fetch_json）與圖片下載（download_image），不會注入到腳本變數中。",
+  "httpHeadersHint": "提示：此處的 HTTP 標頭會用於爬蟲請求（to/fetch_json/fetch）與圖片下載（download_image），不會注入到腳本變數中。",
   "newConfig": "新增配置",
   "configNotExist": "配置不存在",
   "updatedToConfig": "已更新至目前配置",

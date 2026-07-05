@@ -17,7 +17,7 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
+use tauri::{AppHandle, Manager, Runtime, Webview, WebviewWindow};
 use url::Url;
 
 #[derive(Debug, Clone, Serialize)]
@@ -156,7 +156,10 @@ struct MediaReceiveCtx {
 
 // surf 内容 webview 所在窗口含 navbar 子 webview,不是 WebviewWindow,
 // 命令参数用 `Webview`(对 crawler 窗口同样适用),按 label 分流。
-async fn media_ctx_from_label(label: &str, include_headers: bool) -> Result<MediaReceiveCtx, String> {
+async fn media_ctx_from_label(
+    label: &str,
+    include_headers: bool,
+) -> Result<MediaReceiveCtx, String> {
     if label.starts_with("crawler-") {
         let (_, session) = session_of_label(label).await?;
         let Some(ctx) = session.get_context().await else {
@@ -509,6 +512,7 @@ pub async fn crawl_download_image<R: Runtime>(
     name: Option<String>,
     metadata: Option<Value>,
     metadata_version: Option<i64>,
+    source_url: Option<String>,
 ) -> Result<(), String> {
     let (_, session) = session_of(&webview).await?;
     let Some(ctx) = session.get_context().await else {
@@ -550,6 +554,7 @@ pub async fn crawl_download_image<R: Runtime>(
         output_album_id: ctx.output_album_id.clone(),
         custom_display_name: name,
         metadata_id,
+        post_url: source_url,
     };
     let dq = TaskScheduler::global().download_queue();
     dq.register_native(native_info)?;
@@ -567,6 +572,75 @@ pub async fn crawl_download_image<R: Runtime>(
     Ok(())
 }
 
+/// Surf right-click download entry: pre-register a native download so the surf WebView
+/// can keep cookies/session state while preserving the JS-computed display name.
+#[tauri::command]
+pub async fn surf_download_image<R: Runtime>(
+    webview: Webview<R>,
+    url: String,
+    name: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    metadata: Option<Value>,
+    metadata_version: Option<i64>,
+    source_url: Option<String>,
+) -> Result<(), String> {
+    let ctx = media_ctx_from_label(webview.label(), true).await?;
+    let parsed = Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Surf download only supports http or https URLs".to_string());
+    }
+
+    let custom_name = name.or_else(|| surf_download_name_from_url(&parsed));
+    std::fs::create_dir_all(&ctx.images_dir)
+        .map_err(|e| format!("Failed to create native download dir: {}", e))?;
+    let _native_dest = compute_unique_download_path_with_name(
+        &ctx.images_dir,
+        &parsed,
+        None,
+        custom_name.as_deref(),
+    )
+    .map_err(|e| format!("Failed to compute native download destination: {}", e))?;
+
+    let metadata_id = insert_metadata(&ctx.plugin_id, metadata, metadata_version)?;
+    let mut http_headers = ctx.http_headers.clone();
+    if let Some(headers) = headers {
+        http_headers.extend(headers);
+    }
+    let download_id = next_download_id();
+    let native_info = ActiveDownloadInfo {
+        id: download_id,
+        url: parsed.as_str().to_string(),
+        plugin_id: ctx.plugin_id.clone(),
+        start_time: now_ms(),
+        task_id: ctx.task_id.clone(),
+        state: DownloadState::Preparing,
+        native: true,
+        retried_for: None,
+        received_bytes: 0,
+        total_bytes: None,
+        surf_record_id: ctx.surf_record_id.clone(),
+        http_headers,
+        output_album_id: ctx.output_album_id.clone(),
+        custom_display_name: custom_name,
+        metadata_id,
+        post_url: source_url,
+    };
+    let dq = TaskScheduler::global().download_queue();
+    dq.register_native(native_info)?;
+
+    #[cfg(target_os = "linux")]
+    let start_result = tauri_runtime_cef::start_download(webview.label(), parsed.as_str())
+        .map_err(|e| e.to_string());
+    #[cfg(not(target_os = "linux"))]
+    let start_result = webview.navigate(parsed.clone()).map_err(|e| e.to_string());
+
+    if let Err(e) = start_result {
+        let _ = dq.take_native(parsed.as_str());
+        return Err(format!("Failed to start native surf download: {}", e));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn crawl_media_begin<R: Runtime>(
     webview: tauri::Webview<R>,
@@ -575,6 +649,7 @@ pub async fn crawl_media_begin<R: Runtime>(
     name: Option<String>,
     metadata: Option<Value>,
     metadata_version: Option<i64>,
+    page_url: Option<String>,
 ) -> Result<u64, String> {
     let ctx = media_ctx_from_label(webview.label(), true).await?;
     let total_bytes = sum_stream_totals(&streams)?;
@@ -623,6 +698,7 @@ pub async fn crawl_media_begin<R: Runtime>(
         output_album_id: ctx.output_album_id.clone(),
         custom_display_name: custom_name,
         metadata_id,
+        post_url: page_url,
     };
     let dq = TaskScheduler::global().download_queue();
     if let Err(e) = dq.register_native(native_info) {
@@ -816,6 +892,7 @@ pub async fn crawl_media_end<R: Runtime>(
         true,
         entry.custom_display_name.as_deref(),
         entry.metadata_id,
+        entry.post_url.as_deref(),
     )
     .await;
     if let Some(path) = temp_mux_path.as_ref() {
