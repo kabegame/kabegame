@@ -211,6 +211,12 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     frontendLocal("galleryLayoutDirection", "vertical"),
     frontendLocal("kamechanEnabled", true),
   ];
+  if (!IS_WEB) {
+    localEntries.push(
+      // @ts-expect-error 非web下localstorage
+      frontendLocal("gallery-path", ""),
+    )
+  }
   for (const entry of localEntries) assignEntry(map, entry);
 
   if (IS_WEB) {
@@ -251,11 +257,16 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     query("pluginDetailMode", "mode", pluginDetailModeCodec),
     query("pluginDetailSourceId", "sourceId"),
     query("pluginDetailVersion", "version"),
-    query("gallery-path", "path"),
     query("task-detail-path", "path"),
     query("surf-images-path", "path"),
     query("album-detail-path", "path"),
   ];
+  if (IS_WEB) {
+    queryEntries.push(
+      // @ts-expect-error 非web下用localStorage
+      query("gallery-path", "path")
+    )
+  }
   for (const entry of queryEntries) assignEntry(map, entry);
 
   return map;

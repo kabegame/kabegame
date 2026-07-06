@@ -82,7 +82,7 @@
 
 ## refactor
 - [x] `4.2.0` 吉祥物气泡消息
-- [ ] 从rhai转到js插件, node 子进程或者 rusty_v8 两种技术方案待选择（直接给AI喂Deno core的源代码）
+- [x] `4.3.0` 从rhai转到js插件, node 子进程或者 rusty_v8 两种技术方案待选择（直接给AI喂Deno core的源代码）
 - [ ] 脚本化爬取流程，自动爬取用脚本化爬取代替
 
 ## stash

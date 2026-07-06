@@ -459,6 +459,10 @@ pub(crate) fn configure_app(
             #[cfg(not(target_os = "android"))]
             surf_list_records,
             #[cfg(not(target_os = "android"))]
+            surf_get_all_records,
+            #[cfg(not(target_os = "android"))]
+            surf_get_records_by_ids,
+            #[cfg(not(target_os = "android"))]
             surf_get_record,
             #[cfg(not(target_os = "android"))]
             surf_get_record_images,

@@ -89,7 +89,11 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
         .as_secs();
     let _ = Storage::global().update_image_last_set_wallpaper_at(&image_id, now);
     let ids = vec![image_id];
-    GlobalEmitter::global().emit_images_change("change", &ids, None, None, Some(&[plugin_id]));
+    if let Some(plugin_id) = plugin_id {
+        GlobalEmitter::global().emit_images_change("change", &ids, None, None, Some(&[plugin_id]));
+    } else {
+        GlobalEmitter::global().emit_images_change("change", &ids, None, None, None);
+    }
     Ok(())
 }
 

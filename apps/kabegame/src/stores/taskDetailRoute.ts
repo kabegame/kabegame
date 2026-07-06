@@ -1,5 +1,6 @@
 import { createPathRouteStore } from "./pathRoute";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import router from "@/router";
 
 const DEFAULT_PAGE_SIZE = 100;
 const SEARCH_PREFIX = "search/display-name/";
@@ -12,10 +13,23 @@ type TaskDetailRouteState = {
   search: string;
 };
 
+/**
+ * 当前路由的 task id（本 store 绑定在 `/tasks/:id`，`route.params.id` 才是权威）。
+ * 仅在 TaskDetail 路由下取值，其它路由返回空串，避免误把别的页面 `:id` 当成 task。
+ */
+function currentRouteTaskId(): string {
+  if (router.currentRoute.value.name !== "TaskDetail") return "";
+  const raw = router.currentRoute.value.params.id;
+  return Array.isArray(raw) ? String(raw[0] ?? "") : String(raw ?? "");
+}
+
 function createDefaultState(): TaskDetailRouteState {
   const settings = useSettingsStore();
   return {
-    taskId: "",
+    // 默认 taskId 取自当前路由：切任务时 URL→state 监听在空 `?path=` 下会用 getDefault()
+    // 重置 local，若此处给空串就会拼出 `task//page` 脏路径。取 route.params.id 后，
+    // “重置”只把视图退回该任务第 1 页，不再抹掉 taskId。
+    taskId: currentRouteTaskId(),
     page: 1,
     pageSize: (settings.values.galleryPageSize as number | undefined) ?? DEFAULT_PAGE_SIZE,
     search: "",
@@ -69,7 +83,6 @@ export const useTaskDetailRouteStore = createPathRouteStore<TaskDetailRouteState
       return `${sp}task/${state.taskId}`;
     },
     defaultState: createDefaultState,
-    routeName: "TaskDetail",
     onStateChange: (state) => {
       const settings = useSettingsStore();
       if (state.pageSize !== settings.values.galleryPageSize) {

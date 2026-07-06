@@ -368,11 +368,14 @@ export const useSettingsStore = defineStore("settings", () => {
     const encoded = encodeQueryValue(descriptor, value);
     const previous = rawQueryValue(descriptor.param);
     const history = opts?.history ?? "replace";
-    if (!opts?.history && IS_DEV) {
-      console.warn(`[settings] query setting "${String(key)}" saved without history; using replace`);
+    if (previous === encoded) {
+      (values as any)[key] = value;
+      savingByKey[key] = false;
+      return true;
     }
     await adapter.write(descriptor.param, encoded, history);
-    if (previous === encoded) savingByKey[key] = false;
+    (values as any)[key] = decodeQueryValue(descriptor);
+    savingByKey[key] = false;
     return true;
   };
 

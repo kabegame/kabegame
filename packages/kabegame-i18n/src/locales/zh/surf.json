@@ -6,7 +6,6 @@
   "openSession": "打开已有会话",
   "endSession": "结束会话",
   "viewCookie": "查看网站 Cookie",
-  "linuxHint": "Linux 下因 WebKit 限制，畅游无法下载图片/视频，仅可浏览页面。",
   "downloadCount": "下载",
   "imageCount": "图片",
   "deletedCount": "已删除",

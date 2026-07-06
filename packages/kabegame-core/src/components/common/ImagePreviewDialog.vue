@@ -140,6 +140,7 @@
               :plugins="plugins"
               @open-task="emit('open-task', $event)"
               @open-gallery-filter="handleOpenGalleryFilter"
+              @open-surf-record="emit('open-surf-record', $event)"
             />
           </div>
         </aside>
@@ -162,7 +163,10 @@ import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "../image/ImageContent.vue";
 import PswpSlideContent from "./PswpSlideContent.vue";
-import ImageDetailContent, { type ImageDetailGalleryFilterTarget } from "./ImageDetailContent.vue";
+import ImageDetailContent, {
+  type ImageDetailGalleryFilterTarget,
+  type ImageDetailSurfRecordTarget,
+} from "./ImageDetailContent.vue";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 import VideoControls from "./VideoControls.vue";
@@ -208,6 +212,7 @@ const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
   (e: "open-task", taskId: string): void;
   (e: "open-gallery-filter", target: ImageDetailGalleryFilterTarget): void;
+  (e: "open-surf-record", target: ImageDetailSurfRecordTarget): void;
   (e: "preview-navigate", payload: PreviewNavigatePayload): void;
   (e: "preview-page-boundary", payload: PreviewPageBoundaryPayload): void;
   (e: "preview-detail-toggle", payload: { open: boolean; image: ImageInfo | null }): void;

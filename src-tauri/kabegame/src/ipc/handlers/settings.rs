@@ -330,7 +330,8 @@ fn set_current_wallpaper_image_id(image_id: Option<String>) -> IpcResponse {
                 let plugin_ids = Storage::find_image_by_id(&id)
                     .ok()
                     .flatten()
-                    .map(|image| vec![image.plugin_id])
+                    .and_then(|image| image.plugin_id)
+                    .map(|plugin_id| vec![plugin_id])
                     .unwrap_or_default();
                 GlobalEmitter::global().emit_images_change(
                     "change",

@@ -49,7 +49,6 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
         search: "", // 搜索词不持久化
       };
     },
-    routeName: "Gallery",
     onStateChange: (state) => {
       // 仅持久化 filter/sort（page / search 不持久化，pageSize 交 settings 统一管理）
       if (!IS_WEB) {

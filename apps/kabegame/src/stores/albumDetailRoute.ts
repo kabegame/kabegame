@@ -48,7 +48,6 @@ export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteSta
         state.search
       ),
     defaultState: createDefaultState,
-    routeName: "AlbumDetail",
     // HIDDEN 画册内部永远不套 `hide/` 前缀，否则 HideGate 会剔除其成员
     ignoreHide: (s) => s.albumId === HIDDEN_ALBUM_ID,
     onStateChange: (state) => {

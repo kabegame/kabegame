@@ -5,7 +5,7 @@ import type { ImageInfo } from "@kabegame/core/types/image";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 
 type PagedRouteStore = {
-  currentPath: string;
+  computedPath: string;
   page: number;
   pageSize: number;
   navigate: (patch: { page: number }) => Promise<unknown>;
@@ -38,15 +38,17 @@ type UsePagedGalleryParams = {
   computeCountPath: (path: string) => string;
   isActive: () => boolean;
   computeTargetPath?: (page: number) => string;
-  afterJumpSyncUrl?: (page: number) => Promise<void> | void;
   onCountError?: (error: unknown) => Promise<number | void> | number | void;
   onLoadError?: (error: unknown, path: string) => Promise<void> | void;
   messages?: PagedGalleryMessages;
 };
 
+// 页面导航、clamp
 export function usePagedGallery(params: UsePagedGalleryParams) {
   const totalImagesCount = ref(0);
-  const currentPath = computed(() => params.routeStore.currentPath);
+  // 各页面不同 :path/
+  const currentPath = computed(() => params.routeStore.computedPath);
+  // {path/x{pageSize}x/{page}
   const currentPage = computed(() => params.routeStore.page);
   const pageSize = computed(() => params.routeStore.pageSize);
   const bigPageEnabled = computed(() => totalImagesCount.value > pageSize.value);
@@ -76,12 +78,12 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
     params.loading.startLoading();
     try {
       await params.routeStore.navigate({ page });
-      await params.afterJumpSyncUrl?.(page);
     } finally {
       params.loading.finishLoading();
     }
   };
 
+  // clamp到最后一页
   watch(
     () => totalImagesCount.value,
     async (total) => {
@@ -99,6 +101,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
   );
 
   let ensuringPage = false;
+  // 手动兜底clamp到最后一页有效页
   const ensureValidPageAfterMassRemoval = async () => {
     if (ensuringPage) return;
     ensuringPage = true;
@@ -122,6 +125,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
     }
   };
 
+  // 到达页面边界，尝试加载下一页或上一页
   const handlePreviewPageBoundary = async (payload: {
     direction: "prev" | "next";
     index: number;

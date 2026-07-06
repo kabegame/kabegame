@@ -63,6 +63,8 @@ commands.allow = [
   "surf_update_name",
   "surf_delete_record",
   "surf_get_cookies",
+  'surf_get_records_by_ids',
+  'surf_get_all_records',
   "get_run_configs",
   "get_run_config",
   "add_run_config",

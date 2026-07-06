@@ -2,11 +2,14 @@
   "use strict";
 
   function getMediaInfo(target) {
-    if (target.tagName === "VIDEO" && target.currentSrc) {
-      return { url: target.currentSrc, kind: "video" };
-    }
-    if (target.tagName === "VIDEO" && target.src) {
-      return { url: target.src, kind: "video" };
+    if (target.tagName === "VIDEO") {
+      const src = target.currentSrc || target.src;
+      if (src) return { url: src, kind: "video" };
+      // <video> 自身无地址时,回退到子 <source>
+      const childSource = target.querySelector("source[src]");
+      if (childSource && childSource.src) {
+        return { url: childSource.src, kind: "video" };
+      }
     }
     if (target.tagName === "SOURCE" && target.src) {
       const parentTag = target.parentElement && target.parentElement.tagName;
@@ -43,7 +46,7 @@
 
   function triggerDownload(url, element) {
     if (typeof window.__kabegame_surf_triggerDownload === "function") {
-      window.__kabegame_surf_triggerDownload(url, { element });
+      window.__kabegame_surf_triggerDownload(url, { element, url: location.href });
       return;
     }
     const a = document.createElement("a");
@@ -103,17 +106,36 @@
     if (r.bottom > innerHeight) menu.style.top = y - r.height + "px";
   }
 
+  function resolveMediaAt(e) {
+    // 先看直接命中的元素
+    let element = e.target;
+    let media = getMediaInfo(element);
+    if (media) return { media, element };
+    // 命中的可能是覆盖层(如 x.com 视频上的透明控件层),
+    // 沿光标位置向下穿透整个元素栈,找到底层的 video/img/source
+    const stack =
+      typeof document.elementsFromPoint === "function"
+        ? document.elementsFromPoint(e.clientX, e.clientY)
+        : [];
+    for (const el of stack) {
+      media = getMediaInfo(el);
+      if (media) return { media, element: el };
+    }
+    return null;
+  }
+
   document.addEventListener(
     "contextmenu",
     (e) => {
-      const media = getMediaInfo(e.target);
-      if (!media) return;
+      const hit = resolveMediaAt(e);
+      if (!hit) return;
+      const { media, element } = hit;
       const url = typeof media === "string" ? media : media.url;
       const kind = typeof media === "string" ? "image" : media.kind || "image";
       e.preventDefault();
       e.stopPropagation();
       const absoluteUrl = toAbsolute(url);
-      show(e.clientX, e.clientY, absoluteUrl, kind, e.target);
+      show(e.clientX, e.clientY, absoluteUrl, kind, element);
     },
     true,
   );

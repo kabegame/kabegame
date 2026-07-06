@@ -18,7 +18,8 @@ pub struct ImageInfo {
     pub url: Option<String>,
     pub local_path: String,
     #[serde(rename(serialize = "pluginId"), alias = "pluginId")]
-    pub plugin_id: String,
+    #[serde(default)]
+    pub plugin_id: Option<String>,
     #[serde(rename(serialize = "taskId"), alias = "taskId")]
     pub task_id: Option<String>,
     #[serde(rename(serialize = "surfRecordId"), alias = "surfRecordId")]
@@ -578,8 +579,11 @@ impl Storage {
         let mut set = HashSet::new();
         for id in image_ids {
             if let Some(image) = Self::find_image_by_id(id)? {
-                if !image.plugin_id.trim().is_empty() {
-                    set.insert(image.plugin_id);
+                if let Some(plugin_id) = image.plugin_id {
+                    let plugin_id = plugin_id.trim().to_string();
+                    if !plugin_id.is_empty() {
+                        set.insert(plugin_id);
+                    }
                 }
             }
         }

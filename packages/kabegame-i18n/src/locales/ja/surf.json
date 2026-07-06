@@ -6,7 +6,6 @@
   "openSession": "既存セッションを開く",
   "endSession": "セッションを終了",
   "viewCookie": "サイトのCookieを表示",
-  "linuxHint": "LinuxではWebKitの制限により、サーフは画像/動画のダウンロードができません。閲覧のみ。",
   "downloadCount": "ダウンロード",
   "imageCount": "画像",
   "deletedCount": "削除済み",

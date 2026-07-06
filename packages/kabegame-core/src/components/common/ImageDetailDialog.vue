@@ -14,6 +14,7 @@
       :plugins="plugins"
       @open-task="emit('open-task', $event)"
       @open-gallery-filter="emit('open-gallery-filter', $event)"
+      @open-surf-record="emit('open-surf-record', $event)"
     />
   </el-dialog>
 </template>
@@ -23,6 +24,7 @@ import { useI18n } from "@kabegame/i18n";
 import ImageDetailContent, {
   type ImageDetailGalleryFilterTarget,
   type ImageDetailLike,
+  type ImageDetailSurfRecordTarget,
 } from "./ImageDetailContent.vue";
 import { Plugin } from "@kabegame/core/stores/plugins";
 
@@ -38,6 +40,7 @@ interface Props {
 interface Emits {
   (e: "open-task", taskId: string): void;
   (e: "open-gallery-filter", target: ImageDetailGalleryFilterTarget): void;
+  (e: "open-surf-record", target: ImageDetailSurfRecordTarget): void;
   (e: "close"): void;
 }
 

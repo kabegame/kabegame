@@ -3,7 +3,7 @@ import { invoke } from "@/api/rpc";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { storeToRefs } from "pinia";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
@@ -12,6 +12,7 @@ import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { IS_WEB } from "@kabegame/core/env";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
+import { useImageTypes } from "@/composables/useImageTypes";
 import { i18n } from "@kabegame/i18n";
 
 export type FavoriteStatusChangedDetail = {
@@ -23,7 +24,7 @@ export type FavoriteStatusChangedDetail = {
  * 图片操作 composable
  */
 export function useImageOperations(
-  displayedImages: Ref<ImageInfo[]>,
+  _displayedImages: Readonly<Ref<ImageInfo[]>>,
   currentWallpaperImageId: Ref<string | null>,
   galleryViewRef: Ref<any>
 ) {
@@ -250,26 +251,6 @@ export function useImageOperations(
     }
   };
 
-  // 应用收藏状态变化到画廊缓存
-  const applyFavoriteChangeToGalleryCache = (
-    imageIds: string[],
-    favorite: boolean,
-  ) => {
-    if (!imageIds || imageIds.length === 0) return;
-    const idSet = new Set(imageIds);
-
-    // 就地更新 favorite 字段（避免全量刷新）
-    let changed = false;
-    const next = displayedImages.value.map((img) => {
-      if (!idSet.has(img.id)) return img;
-      if ((img.favorite ?? false) === favorite) return img;
-      changed = true;
-      return { ...img, favorite };
-    });
-    if (changed) {
-      displayedImages.value = next;
-    }
-  };
   // 永久删除：同时移除 DB 记录与磁盘文件。调用方自行处理确认逻辑。
   const handleBatchDeleteImages = async (imagesToProcess: ImageInfo[]) => {
     if (imagesToProcess.length === 0) return;
@@ -324,39 +305,72 @@ export function useImageOperations(
 
   // 注意：按 hash 去重已改为后端“分批后台任务 + 事件驱动 UI 同步”，逻辑迁移到 Gallery.vue
 
-  // 切换收藏状态
-  const toggleFavorite = async (image: ImageInfo) => {
-    try {
-      const newFavorite = !(image.favorite ?? false);
-      await invoke("toggle_image_favorite", {
-        imageId: image.id,
-        favorite: newFavorite,
-      });
-
-      ElMessage.success(
-        newFavorite
+  // 批量切换收藏：任一未收藏 → 全部收藏，否则全部取消收藏。
+  // 列表与画册缓存由 album-images-change / images-change 事件驱动刷新。
+  const toggleFavoriteForImages = async (imagesToProcess: ImageInfo[]) => {
+    if (imagesToProcess.length === 0) return;
+    const desiredFavorite = imagesToProcess.some((img) => !(img.favorite ?? false));
+    const toChange = imagesToProcess.filter(
+      (img) => (img.favorite ?? false) !== desiredFavorite,
+    );
+    if (toChange.length === 0) {
+      ElMessage.info(
+        desiredFavorite
           ? i18n.global.t("common.favorited")
           : i18n.global.t("common.unfavorited"),
       );
+      return;
+    }
 
-      // 新策略：收藏状态以 store 为准，不再通过全局事件/清缓存同步
-      // 1) 更新画廊缓存（就地更新，避免全量刷新导致“加载更多”图片丢失）
-      applyFavoriteChangeToGalleryCache([image.id], newFavorite);
-      // 2) 若收藏画册图片缓存已加载：取消收藏应从缓存数组中移除（而不是清缓存）
-      const favList = albumStore.albumImages[FAVORITE_ALBUM_ID];
-      if (Array.isArray(favList)) {
-        const idx = favList.findIndex((i) => i.id === image.id);
-        if (newFavorite) {
-          if (idx === -1) favList.push({ ...image, favorite: true });
-          else favList[idx] = { ...favList[idx], favorite: true } as ImageInfo;
-        } else {
-          if (idx !== -1) favList.splice(idx, 1);
-        }
-      }
-      galleryViewRef.value?.clearSelection?.();
-    } catch (error) {
-      console.error("切换收藏状态失败:", error);
+    const results = await Promise.allSettled(
+      toChange.map((img) =>
+        invoke("toggle_image_favorite", {
+          imageId: img.id,
+          favorite: desiredFavorite,
+        }),
+      ),
+    );
+    const succeeded = toChange.filter((_, idx) => results[idx]?.status === "fulfilled");
+    if (succeeded.length === 0) {
       ElMessage.error(i18n.global.t("common.operationFailed"));
+      return;
+    }
+
+    ElMessage.success(
+      desiredFavorite
+        ? i18n.global.t("common.favoritedCount", { count: succeeded.length })
+        : i18n.global.t("common.unfavoritedCount", { count: succeeded.length }),
+    );
+    galleryViewRef.value?.clearSelection?.();
+    return { favorite: desiredFavorite, images: succeeded };
+  };
+
+  // 分享单张图片（Android share sheet / 桌面系统分享）
+  const shareImage = async (image: ImageInfo) => {
+    try {
+      const filePath = image.localPath;
+      if (!filePath) {
+        ElMessage.error(i18n.global.t("common.imagePathMissing"));
+        return;
+      }
+      const ext = filePath.split(".").pop()?.toLowerCase() || "";
+      const { load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
+      await loadImageTypes();
+      const mimeType = getMimeTypeForImage(image, ext);
+      await invoke("share_file", { filePath, mimeType });
+    } catch (error) {
+      console.error("分享失败:", error);
+      ElMessage.error(i18n.global.t("common.shareFailed"));
+    }
+  };
+
+  // 在资源管理器中打开图片所在文件夹
+  const openImageFolder = async (image: ImageInfo) => {
+    try {
+      await invoke("open_file_folder", { filePath: image.localPath });
+    } catch (error) {
+      console.error("打开文件夹失败:", error);
+      ElMessage.error(i18n.global.t("common.openFolderFailed"));
     }
   };
 
@@ -438,10 +452,11 @@ export function useImageOperations(
     handleOpenImagePath,
     handleDownloadImage,
     handleCopyImage,
-    applyFavoriteChangeToGalleryCache,
     handleBatchDeleteImages,
     handleBatchHideImages,
-    toggleFavorite,
+    toggleFavoriteForImages,
+    shareImage,
+    openImageFolder,
     setWallpaper,
   };
 }

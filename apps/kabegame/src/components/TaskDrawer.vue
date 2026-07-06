@@ -279,7 +279,15 @@ const handleOpenTaskImagesById = (taskId: string) => {
   const task = props.tasks.find((t) => t.id === taskId);
   if (!task) return;
   trackTaskDrawerAction("view_images", task);
-  void router.push(`/tasks/${task.id}`);
+  if (route.name === 'TaskDetail') {
+    router.replace({
+      path: `/tasks/${task.id}`,
+    });
+  } else {
+    router.push({
+      path: `/tasks/${task.id}`,
+    });
+  }
   requestAnimationFrame(() => {
     modal.close();
   });

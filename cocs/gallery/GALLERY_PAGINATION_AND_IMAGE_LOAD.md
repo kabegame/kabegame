@@ -80,6 +80,7 @@
 
 - **Composable**：[`packages/core/src/composables/useImageMetadataCache.ts`](/packages/core/src/composables/useImageMetadataCache.ts) — `useProvideImageMetadataCache()` 向子组件树 `provide` 懒加载解析器（内部 `Map` 缓存 + `invoke("get_image_metadata", { imageId })`）。
 - **详情 UI**：[`packages/core/src/components/common/ImageDetailContent.vue`](/packages/core/src/components/common/ImageDetailContent.vue) — `inject` 解析器；若列表项已有可渲染 `metadata` 则直接用，否则异步拉取并合并为 `effectiveMetadata`。
+- **详情来源**：`ImageDetailContent.vue` 的来源优先显示 `pluginId` 对应插件；没有 `pluginId` 但有 `surfRecordId` 时，通过 `packages/core/src/stores/surf.ts` 读取 Surf host 并可跳转 `/surf/:host/images`；两者都没有时显示 `unknown`。
 - **接入视图**（在拉取当前 leaf 前 `clearCache`）：[`Gallery.vue`](/apps/kabegame/src/views/Gallery.vue)（经 `useGalleryImages` 的 `onBeforeFetch`）、[`AlbumDetail.vue`](/apps/kabegame/src/views/AlbumDetail.vue)、[`TaskDetail.vue`](/apps/kabegame/src/views/TaskDetail.vue)、[`SurfImages.vue`](/apps/kabegame/src/views/SurfImages.vue)。
 
 ### 使用 SimplePage 列表的视图（需统一）
@@ -99,6 +100,8 @@
 - **画册详情**：[`AlbumDetailBrowseToolbar.vue`](/apps/kabegame/src/components/AlbumDetailBrowseToolbar.vue) + [`GalleryPageSizeControl.vue`](/apps/kabegame/src/components/GalleryPageSizeControl.vue)；Android 在 [`AlbumDetailPageHeader.vue`](/apps/kabegame/src/components/header/AlbumDetailPageHeader.vue) fold 中增加与画廊相同的 `HeaderFeatureId.GalleryPageSize`。
 - **任务 / 畅游**：分页器上方工具行内嵌 `GalleryPageSizeControl`（`android-ui="inline"`）。
 - **设置**：[`GalleryPageSizeSetting.vue`](/apps/kabegame/src/components/settings/items/GalleryPageSizeSetting.vue)，[`Settings.vue`](/apps/kabegame/src/views/Settings.vue) 应用设置区。
+
+Surf 记录列表不分页：`packages/core/src/stores/surf.ts` 初始化时一次性读取全部记录，之后通过 `surf-records-change` / `surf-session-changed` 维护缓存；`Surf.vue` 和 `SurfImages.vue` 都以该 store 为读取源头，不再各自全量刷新。
 
 ### i18n
 

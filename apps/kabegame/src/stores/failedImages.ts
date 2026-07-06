@@ -79,7 +79,6 @@ export const useFailedImagesStore = defineStore("failedImages", () => {
     unlistenFailedImagesChange = await listen<FailedImagesChangePayload>(
       "failed-images-change",
       (event) => {
-        console.log('failed images change')
         applyFailedImagesChange(event.payload ?? {});
       }
     );

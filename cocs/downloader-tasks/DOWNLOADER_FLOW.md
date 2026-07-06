@@ -176,6 +176,8 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 4. 未命中去重时，根据 MIME 计算最终目标路径/文件名，落盘（或 Android MediaStore copy）。
 5. 生成缩略图/预览，写入 `images` 表，广播事件。
 
+`images.plugin_id` 仅表示爬虫插件来源，可为空；畅游来源图片不再把 host 写入 `plugin_id`，而是写入 `surf_record_id`，详情页再通过 Surf 记录解析 host。普通爬虫任务仍写入 `plugin_id`。
+
 ### 桌面
 
 桌面后处理（`PostprocessSource::Bytes` 或 `Path`）：
@@ -202,7 +204,7 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 
 Rust 命令语义：
 
-- `crawl_media_begin`：按调用方 label 解析上下文。`crawler-<task_id>` 从 crawler session 取 `images_dir/plugin_id/output_album_id` 并合并任务 header；`surf-{host}` 按 host 现算 `plugin_id=host`、`surf_record_id` 与默认图片目录。随后分配 `download_id`，按每个 stream 的 MIME/name 计算临时文件，创建上传会话，并把 `ActiveDownloadInfo { native: true, state: Preparing, total_bytes, ... }` 登记到 `DownloadQueue`，随后切到 `Downloading`。
+- `crawl_media_begin`：按调用方 label 解析上下文。`crawler-<task_id>` 从 crawler session 取 `images_dir/plugin_id/output_album_id` 并合并任务 header；`surf-{host}` 按 host 现算下载显示用来源与 `surf_record_id`、默认图片目录。随后分配 `download_id`，按每个 stream 的 MIME/name 计算临时文件，创建上传会话，并把 `ActiveDownloadInfo { native: true, state: Preparing, total_bytes, ... }` 登记到 `DownloadQueue`，随后切到 `Downloading`。
 - `crawl_media_chunk`：base64 解码 JS chunk，按 `stream` 索引追加写入对应会话文件，并调用 `report_progress(id, written, total)` 推动任务抽屉进度。
 - `crawl_media_end(success=true)`：关闭会话文件，单流直接后处理，多流桌面先合流成临时单文件，再切到 `Processing` 并用 `PostprocessSource::Path { relocate_to: None }` 进入统一后处理；完成后由后处理切到 `Completed` 或 `Failed`，再 `wait_then_finish_download`。畅游媒体下载成功入库时会同步增加对应 surf 记录下载计数。
 - `crawl_media_end(success=false)` 或任务取消：abort 会话、删除半截文件。任务取消统一在 `DownloadQueue::cancel_task_downloads` 中调用 `media_upload::abort_task_sessions(task_id)`，覆盖用户取消和 `crawl_error` 的取消路径。

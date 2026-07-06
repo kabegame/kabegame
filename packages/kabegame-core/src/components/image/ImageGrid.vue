@@ -89,6 +89,7 @@
           @preview-detail-toggle="emit('preview-detail-toggle', $event)"
           @preview-close="emit('preview-close', $event)"
           @open-task="emit('open-task', $event)"
+          @open-surf-record="emit('open-surf-record', $event)"
           @open-gallery-filter="emit('open-gallery-filter', $event)" />
       </div>
     </div>
@@ -105,7 +106,10 @@ import ImageItem from "./ImageItem.vue";
 import type { ImageInfo } from "../../types/image";
 import EmptyState from "../common/EmptyState.vue";
 import ImagePreviewDialog from "../common/ImagePreviewDialog.vue";
-import type { ImageDetailGalleryFilterTarget } from "../common/ImageDetailContent.vue";
+import type {
+  ImageDetailGalleryFilterTarget,
+  ImageDetailSurfRecordTarget,
+} from "../common/ImageDetailContent.vue";
 import ScrollButtons from "../common/ScrollButtons.vue";
 import { useSettingsStore } from "../../stores/settings";
 import { useModal } from "../../composables/useModal";
@@ -198,6 +202,7 @@ const emit = defineEmits<{
   addedToAlbum: [];
   "open-task": [taskId: string];
   "open-gallery-filter": [target: ImageDetailGalleryFilterTarget];
+  "open-surf-record": [target: ImageDetailSurfRecordTarget];
   "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
   "preview-navigate": [payload: {
     direction: "prev" | "next";

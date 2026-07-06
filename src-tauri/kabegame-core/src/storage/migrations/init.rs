@@ -53,7 +53,7 @@ CREATE TABLE images (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     url                   TEXT,
     local_path            TEXT    NOT NULL,
-    plugin_id             TEXT    NOT NULL,
+    plugin_id             TEXT,
     task_id               TEXT    REFERENCES tasks(id) ON DELETE SET NULL,
     surf_record_id        TEXT,
     crawled_at            INTEGER NOT NULL,

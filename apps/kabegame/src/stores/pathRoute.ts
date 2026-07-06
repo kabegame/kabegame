@@ -1,7 +1,6 @@
 import { defineStore, storeToRefs } from "pinia";
-import { computed, reactive, toRefs, watch } from "vue";
+import { computed, type WritableComputedRef } from "vue";
 import { useLocalStorage } from "@vueuse/core";
-import router from "@/router";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import type { AppSettingKey } from "@kabegame/core/stores/settings";
 
@@ -45,10 +44,9 @@ type PathRouteStoreConfig<TState extends object> = {
    * 同时让 hide + search 等"上下文"原样生效，避免手拼字符串。见暴露的 `contextPath`。
    */
   buildContext?: (state: TState) => string;
-  /** 初始状态；传函数则延迟到 store setup 内求值（可安全调用其它 Pinia store） */
+  /** 初始状态，必须包含所有可枚举键；传函数则延迟到 store setup 内求值（可安全调用其它 Pinia store）。 */
   defaultState: TState | (() => TState);
-  /** 该 store 所属的 vue-router route.name。URL↔state 同步只在 cur.name === routeName 时发生。 */
-  routeName?: string;
+
   onStateChange?: (state: TState & GlobalRouteState, path: string) => void;
   /**
    * 返回 true 时：build 不加 `hide/` 前缀；syncFromUrl 见到前缀也不回写 hide。
@@ -57,6 +55,14 @@ type PathRouteStoreConfig<TState extends object> = {
   ignoreHide?: (state: TState & GlobalRouteState) => boolean;
 };
 
+type StateComputedRefs<TState extends object> = {
+  [K in keyof TState]: WritableComputedRef<TState[K], TState[K]>;
+};
+
+/**
+ * 将 url 中的 `?path=xxx` 解析成 state，并保持两者双向同步，其中path可配置
+ * 不负责keepalive页面跨页面guard,如有需求由调用方保证 
+ */ 
 export function createPathRouteStore<TState extends object>(
   storeId: string,
   config: PathRouteStoreConfig<TState>
@@ -67,33 +73,92 @@ export function createPathRouteStore<TState extends object>(
       : ({ ...config.defaultState });
 
   return defineStore(storeId, () => {
-    const local = reactive(getDefault()) as TState;
-    const allowedKeys = new Set(Object.keys(local));
     const globalStore = useGlobalPathRoute();
     const { hide } = storeToRefs(globalStore);
     const { settingValue: path, set: setPath } = useSettingKeyState(config.settingKey);
+    const defaults = getDefault();
 
-    const isOwningRoute = (): boolean => {
-      if (!config.routeName) return true;
-      return router.currentRoute.value.name === config.routeName;
+    const stripHidePrefix = (raw: string): string =>
+      raw.startsWith(HIDE_PREFIX) ? raw.slice(HIDE_PREFIX.length) : raw;
+
+    const parsePathState = (raw: string): TState => {
+      const inner = stripHidePrefix(raw.trim());
+      return inner ? config.parse(inner) : getDefault();
     };
 
-    const merged = (): TState & GlobalRouteState =>
-      ({ ...local, hide: hide.value } as TState & GlobalRouteState);
-
-    const pathFor = (
-      overrideLocal: Partial<TState>,
-      overrideHide?: boolean
+    const fullPathFor = (
+      nextState: TState,
+      overrideHide = hide.value,
     ): string => {
-      const ml = { ...local, ...overrideLocal } as TState;
-      const h = overrideHide ?? hide.value;
-      const full = { ...ml, hide: h } as TState & GlobalRouteState;
-      const effHide = !config.ignoreHide?.(full) && h;
-      const inner = config.build(ml);
+      const full = { ...nextState, hide: overrideHide } as TState & GlobalRouteState;
+      const effHide = !config.ignoreHide?.(full) && overrideHide;
+      const inner = config.build(nextState);
       return effHide ? HIDE_PREFIX + inner : inner;
     };
 
-    const currentPath = computed(() => pathFor({}));
+    const writeState = async (
+      nextState: TState,
+      options?: { history?: "push" | "replace" },
+    ): Promise<boolean> => {
+      const nextPath = fullPathFor(nextState);
+      if (nextPath === String(path.value ?? "")) {
+        console.log(`[path-route] repeated path`);
+        return true;
+      }
+      const ok = await setPath(nextPath as any, options);
+      if (ok) {
+        config.onStateChange?.(
+          { ...nextState, hide: hide.value } as TState & GlobalRouteState,
+          nextPath,
+        );
+      }
+      return ok;
+    };
+
+    const state = computed<TState>({
+      // 读：直接读state路径
+      get: () => {
+        return path.value ? parsePathState(String(path.value)) : getDefault();
+      },
+      // 写：全量赋值路径
+      set: value => {
+        void writeState(value).catch((e) => {
+          console.error(`[path-route] state set failed: ${e}`);
+        });
+      }
+    });
+
+    type StateKey = Extract<keyof TState, string>;
+    const stateKeys = Object.keys(defaults) as StateKey[];
+    const createStateComputedRef = <K extends StateKey>(key: K): StateComputedRefs<TState>[K] =>
+      computed<TState[K]>({
+        get: () => {
+          return state.value[key]
+        },
+        set: value => {
+          if (value === state.value[key]) return;
+          state.value = {
+            ...state.value,
+            [key]: value
+          }
+        }
+      });
+
+    // 逐字段赋值路径
+    const stateComputedKeys = {} as StateComputedRefs<TState>;
+    for (const key of stateKeys) {
+      stateComputedKeys[key] = createStateComputedRef(key);
+    }
+
+    const pathFor = (
+      overrideState: Partial<TState>,
+      overrideHide?: boolean
+    ): string => {
+      const mergedState = { ...state.value, ...overrideState } as TState;
+      return fullPathFor(mergedState, overrideHide ?? hide.value);
+    };
+
+    const computedPath = computed(() => pathFor({}));
 
     /**
      * 构建"上下文前缀"——`[hide/]` + `config.buildContext(state)`（若未声明则空串）。
@@ -104,7 +169,7 @@ export function createPathRouteStore<TState extends object>(
       overrideLocal: Partial<TState> = {},
       overrideHide?: boolean
     ): string => {
-      const ml = { ...local, ...overrideLocal } as TState;
+      const ml = { ...state.value, ...overrideLocal } as TState;
       const h = overrideHide ?? hide.value;
       const full = { ...ml, hide: h } as TState & GlobalRouteState;
       const effHide = !config.ignoreHide?.(full) && h;
@@ -112,7 +177,7 @@ export function createPathRouteStore<TState extends object>(
       return effHide ? HIDE_PREFIX + ctx : ctx;
     };
 
-    const contextPath = computed(() => contextPathFor({}));
+    const computedContextPath = computed(() => contextPathFor({}));
 
     /**
      * 计算"**若用给定 overrides 调 navigate/push，最终会路由到哪条 path**"——
@@ -130,133 +195,118 @@ export function createPathRouteStore<TState extends object>(
       for (const [k, v] of Object.entries(u)) {
         if (k === "hide") {
           overrideHide = v as boolean;
-        } else if (allowedKeys.has(k)) {
+        } else {
           overrideLocal[k] = v;
         }
       }
       return pathFor(overrideLocal as Partial<TState>, overrideHide);
     };
 
+    // todo: 去掉这个接口，应该在内部own这个接口
     const syncFromUrl = (raw: string) => {
-      const trimmed = (raw || "").trim();
-      console.log(`[${storeId}] syncFromUrl ←`, JSON.stringify(trimmed));
-      if (!trimmed) {
-        Object.assign(local, getDefault());
-        return;
-      }
-      const hasHide = trimmed.startsWith(HIDE_PREFIX);
-      const inner = hasHide ? trimmed.slice(HIDE_PREFIX.length) : trimmed;
-      if (inner) {
-        Object.assign(local, config.parse(inner));
-      } else {
-        Object.assign(local, getDefault());
-      }
-      if (!config.ignoreHide?.(merged())) {
-        hide.value = hasHide;
-      }
+      // const trimmed = (raw || "").trim();
+      // console.log(`[${storeId}] syncFromUrl ←`, JSON.stringify(trimmed));
+      // if (!trimmed) {
+      //   Object.assign(local, getDefault());
+      //   return;
+      // }
+      // const hasHide = trimmed.startsWith(HIDE_PREFIX);
+      // const inner = hasHide ? trimmed.slice(HIDE_PREFIX.length) : trimmed;
+      // if (inner) {
+      //   Object.assign(local, config.parse(inner));
+      // } else {
+      //   Object.assign(local, getDefault());
+      // }
+      // if (!config.ignoreHide?.(merged())) {
+      //   hide.value = hasHide;
+      // }
     };
-
-    // 初始 settings query → state（仅当已在本 store 所属路由时）。
-    // query 的 routeName/激活态 guard 由本 store 自己处理，settings 层只镜像 `?path=`。
-    if (isOwningRoute()) {
-      const s = pathSettingValue().trim();
-      if (s) syncFromUrl(s);
-    }
 
     // state → URL：state 变化时 replace，以及路由激活/store 首次实例化时修正 stale URL。
     // immediate：首屏访问 `/gallery`（无 `?path=`）时立即把默认路径写入 URL，
     // 否则 watcher 要等 currentPath 变化才触发，而默认路径下它不会再变。
-    watch(
-      [currentPath, () => router.currentRoute.value.name] as const,
-      async ([path]) => {
-        if (!isOwningRoute()) {
-          console.log(`[${storeId}] state→URL skip (not owning route)`, path);
-          return;
-        }
-        if (path === String(pathSettingValue())) return;
-        console.log(`[${storeId}] state→URL replace`, path);
-        await setPath(path as any, { history: "replace" });
-        config.onStateChange?.(merged(), path);
-      },
-      { immediate: true }
-    );
+    // watch(
+    //   computedPath,
+    //   async (path) => {
+    //     if (path === String(pathSettingValue())) return;
+    //     console.log(`[${storeId}] state→URL replace`, path);
+    //     await setPath(path as any, { history: "replace" });
+    //     config.onStateChange?.(merged(), path);
+    //   },
+    //   { immediate: true }
+    // );
 
     // URL → state：浏览器 back/forward、手输 URL、replace 后的回灌
     // prevName 跟踪：路由刚激活（name 发生变化切入本路由）时跳过 URL→state，
     // 改由 state→URL watcher 来纠正 stale URL，避免两个 watcher 竞争 hide。
-    watch(
-      () => [
-        router.currentRoute.value.name,
-        path.value,
-      ] as const,
-      ([name, raw], oldValue) => {
-        const prevName = oldValue?.[0];
-        if (config.routeName && name !== config.routeName) return;
-        const s = String(raw ?? "").trim();
-        if (!s) {
-          Object.assign(local, getDefault());
-          return;
-        }
-        if (s === currentPath.value) return;
-        if (prevName !== name) return; // 路由刚切入：让 state→URL 负责
-        syncFromUrl(s);
-      },
-      { immediate: true },
-    );
+    // watch(
+    //     path,
+    //   (raw, oldValue) => {
+    //     const prevName = oldValue?.[0];
+    //     const s = String(raw ?? "").trim();
+    //     if (!s) {
+    //       Object.assign(state, getDefault());
+    //       return;
+    //     }
+    //     if (s === computedPath.value) return;
+    //     if (prevName !== name) return; // 路由刚切入：让 state→URL 负责
+    //     syncFromUrl(s);
+    //   },
+    //   { immediate: true },
+    // );
 
     /** 批量 replace：一次性修改多个字段，由 state→URL watcher 统一触发 replace */
-    const patch = (u: Partial<TState & GlobalRouteState>) => {
+    const patch = async (u: Partial<TState & GlobalRouteState>) => {
       console.log(`[${storeId}] patch`, u);
+      const draft = { ...state.value }
+      let nextHide = hide.value;
       for (const [k, v] of Object.entries(u)) {
         if (k === "hide") {
-          hide.value = v as boolean;
-        } else if (allowedKeys.has(k)) {
-          (local as Record<string, unknown>)[k] = v;
+          nextHide = v as boolean;
+        } else if (k in stateComputedKeys) {
+          draft[k as StateKey] = v as TState[StateKey];
         }
       }
+      hide.value = nextHide;
+      return writeState(draft as TState);
     };
 
     /** 跨页跳转：push 一条新的 history 记录（可前进/后退），不 mutate local，由 URL→state watcher 回灌 */
     const push = async (u: Partial<TState & GlobalRouteState>) => {
-      const overrideLocal: Record<string, unknown> = {};
+      const overrideState: Record<string, unknown> = {};
       let overrideHide: boolean | undefined;
       for (const [k, v] of Object.entries(u)) {
         if (k === "hide") {
           overrideHide = v as boolean;
-        } else if (allowedKeys.has(k)) {
-          overrideLocal[k] = v;
+        } else {
+          overrideState[k] = v;
         }
       }
-      const path = pathFor(overrideLocal as Partial<TState>, overrideHide);
-      console.log(`[${storeId}] push → name:${config.routeName}`, path);
-      if (config.routeName && !isOwningRoute()) {
-        await router.push({
-          name: config.routeName,
-          query: { path },
-        });
-      } else {
-        await setPath(path as any, { history: "push" });
-      }
+      const nextState = { ...state.value, ...overrideState } as TState;
+      const path = fullPathFor(nextState, overrideHide ?? hide.value);
+      console.log(`[${storeId}] push → `, path);
+      await setPath(path as any, { history: "push" });
     };
 
-    function pathSettingValue(): string {
-      return String(path.value ?? "");
-    }
-
     return {
-      ...toRefs(local),
+      ...stateComputedKeys,
       hide,
-      currentPath,
-      contextPath,
+      // 根据state算出的path，不是真实url path
+      computedPath,
+      // 根据 state 算出的上下文path.
+      computedContextPath,
+      // 从某个state算一个path
       computePath,
+      // 
       syncFromUrl,
       patch,
       push,
-      /** 过渡期兼容旧 API；新代码建议直接 `store.field = v` / `patch` / `push` */
+      /** 此接口最完整。`store.field = v`(replace) / `patch`(replace) / `push` */
       navigate: (
         u: Partial<TState & GlobalRouteState>,
         o?: { push?: boolean }
-      ) => (o?.push ? push(u) : Promise.resolve(patch(u))),
+      ) => (o?.push ? push(u) : patch(u)),
+      clear: () => setPath('')
     };
   });
 }

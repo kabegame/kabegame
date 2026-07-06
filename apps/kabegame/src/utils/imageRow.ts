@@ -38,7 +38,6 @@ export function rowToImageInfo(row: Row): ImageInfo {
     id: stringField(row, "id") ?? "",
     localPath,
     thumbnailPath,
-    pluginId: stringField(row, "plugin_id", "pluginId") ?? "",
     crawledAt: numberField(row, "crawled_at", "crawledAt") ?? 0,
     hash: stringField(row, "hash") ?? "",
     favorite: boolField(row, "is_favorite", "favorite") ?? false,
@@ -48,7 +47,9 @@ export function rowToImageInfo(row: Row): ImageInfo {
   };
   const optionalStrings: Array<[keyof ImageInfo, string | undefined]> = [
     ["url", stringField(row, "url")],
+    ["pluginId", stringField(row, "plugin_id", "pluginId")],
     ["taskId", stringField(row, "task_id", "taskId")],
+    ["surfRecordId", stringField(row, "surf_record_id", "surfRecordId")],
     ["type", stringField(row, "media_type", "type")],
     ["compatiblePath", stringField(row, "compatible_path", "compatiblePath")],
     ["postUrl", stringField(row, "post_url")],

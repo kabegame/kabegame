@@ -651,7 +651,6 @@ pub fn mux_media_streams(inputs: &[(PathBuf, String)], output_path: &Path) -> Re
         let input_stream = &ifmt.streams()[mapped_stream];
         let input_time_base = input_stream.time_base;
         let output_stream;
-        let output_time_base;
         {
             let mut out_stream = ofmt.new_stream();
             let mut codecpar = AVCodecParameters::new();
@@ -659,19 +658,26 @@ pub fn mux_media_streams(inputs: &[(PathBuf, String)], output_path: &Path) -> Re
             out_stream.set_codecpar(codecpar);
             out_stream.set_time_base(input_time_base);
             output_stream = out_stream.index as usize;
-            output_time_base = out_stream.time_base;
         }
         opened.push(OpenInput {
             ctx: ifmt,
             mapped_stream,
             output_stream,
             input_time_base,
-            output_time_base,
+            // 占位:真正的 output_time_base 只有在 write_header 之后才确定
+            // (mov/mp4 muxer 会把音轨 timescale 改写成采样率),此处先填输入值,
+            // write_header 后再回读实际值,否则 rescale_ts 会用陈旧 timescale 导致时长错乱。
+            output_time_base: input_time_base,
         });
     }
 
     ofmt.write_header(&mut None)
         .map_err(|e| format!("write mux header: {e:?}"))?;
+
+    // write_header 之后 muxer 才最终确定各输出流的 time_base,回读真实值用于 rescale。
+    for input in &mut opened {
+        input.output_time_base = ofmt.streams()[input.output_stream].time_base;
+    }
 
     for input in &mut opened {
         loop {

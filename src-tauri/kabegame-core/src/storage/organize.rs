@@ -67,7 +67,7 @@ pub struct DebugCloneImagesProgress {
 pub(crate) struct BaseImageRow {
     pub(crate) url: Option<String>,
     pub(crate) local_path: String,
-    pub(crate) plugin_id: String,
+    pub(crate) plugin_id: Option<String>,
     pub(crate) task_id: Option<String>,
     pub(crate) crawled_at: i64,
     pub(crate) metadata_json: Option<String>,

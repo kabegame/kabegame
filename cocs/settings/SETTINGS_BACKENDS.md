@@ -14,11 +14,11 @@
 
 ## 状态机
 
-`save(key, value, opts?)` 不乐观写 `values[key]`，也不做手动回滚。保存态退出由真实观察源确认：
+`save(key, value, opts?)` 不乐观写 tauri/localStorage 的 `values[key]`，也不做手动回滚。保存态退出由真实观察源确认：
 
 - tauri：后端 `setting-change` 事件进入 `applyChanges`。
 - localStorage：`useLocalStorage` ref watcher。
-- query：app 层注入的 `setSettingsQueryAdapter` watcher。
+- query：`setSettingsQueryAdapter.write` 完成后按当前 query 解码同步并清掉保存态；adapter 的 query watcher 仍负责浏览器前进/后退、手输 URL 等外部变化。
 
 ## 使用示例
 

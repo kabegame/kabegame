@@ -47,7 +47,6 @@ export const useSurfImagesRouteStore = createPathRouteStore<SurfImagesRouteState
       return `surf/${state.host}/${ps}${Math.max(1, state.page)}`;
     },
     defaultState: createDefaultState,
-    routeName: "SurfImages",
     onStateChange: (state) => {
       const settings = useSettingsStore();
       if (state.pageSize !== settings.values.galleryPageSize) {

@@ -551,7 +551,7 @@ fn replace_image_thumbnail_path_deletes_old_independent_thumbnail() {
             id: String::new(),
             url: None,
             local_path: local_str.clone(),
-            plugin_id: "test".to_string(),
+            plugin_id: Some("test".to_string()),
             task_id: None,
             surf_record_id: None,
             crawled_at: now_secs() as u64,
@@ -570,6 +570,7 @@ fn replace_image_thumbnail_path_deletes_old_independent_thumbnail() {
             size: None,
             album_order: None,
             compatible_path: None,
+            post_url: None,
         })
         .unwrap();
 

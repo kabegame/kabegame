@@ -670,7 +670,8 @@ impl ServerHandler for KabegameMcpServer {
                 let plugin_ids = Storage::find_image_by_id(&args.image_id)
                     .ok()
                     .flatten()
-                    .map(|image| vec![image.plugin_id])
+                    .and_then(|image| image.plugin_id)
+                    .map(|plugin_id| vec![plugin_id])
                     .unwrap_or_default();
                 GlobalEmitter::global().emit_images_change(
                     "rename",

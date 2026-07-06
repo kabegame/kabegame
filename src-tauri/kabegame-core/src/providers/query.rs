@@ -504,7 +504,7 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
         id: s("id").ok_or("row missing `id`")?,
         url: s("url"),
         local_path: s("local_path").ok_or("row missing `local_path`")?,
-        plugin_id: s("plugin_id").ok_or("row missing `plugin_id`")?,
+        plugin_id: s("plugin_id"),
         task_id: s("task_id"),
         surf_record_id: s("surf_record_id"),
         crawled_at: i("crawled_at")
@@ -589,7 +589,7 @@ mod tests {
                 id INTEGER PRIMARY KEY,
                 url TEXT,
                 local_path TEXT NOT NULL,
-                plugin_id TEXT NOT NULL,
+                plugin_id TEXT,
                 task_id TEXT,
                 surf_record_id TEXT,
                 crawled_at INTEGER NOT NULL,

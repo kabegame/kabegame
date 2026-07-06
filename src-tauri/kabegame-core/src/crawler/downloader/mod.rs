@@ -1083,7 +1083,11 @@ pub async fn postprocess_downloaded_image(
                     Some(url.to_string())
                 },
                 local_path,
-                plugin_id: plugin_id.to_string(),
+                plugin_id: if surf_record_id.is_some() {
+                    None
+                } else {
+                    Some(plugin_id.to_string())
+                },
                 task_id: task_id.map(|v| v.to_string()),
                 surf_record_id: surf_record_id.map(|v| v.to_string()),
                 crawled_at: download_start_time,

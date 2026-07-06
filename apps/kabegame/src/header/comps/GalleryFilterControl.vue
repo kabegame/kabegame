@@ -284,7 +284,7 @@ const route = useRoute();
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 const galleryRouteStore = useGalleryRouteStore();
-const { contextPath: filterContextPrefix } = storeToRefs(galleryRouteStore);
+const { computedContextPath: filterContextPrefix } = storeToRefs(galleryRouteStore);
 const legacyFilter = computed(() => filterSetToSingleFilter(galleryRouteStore.filters));
 
 const showSimpleFilter = computed(() =>

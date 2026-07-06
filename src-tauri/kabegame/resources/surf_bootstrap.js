@@ -42,9 +42,11 @@
     if (/^(data|blob):/i.test(String(url || ""))) {
       return window.__kb_media_download__(url, options).catch(reportErr);
     }
+    console.log('surf download', url, opts);
     return invoke("surf_download_image", {
       url: String(url),
       name: options.name ?? undefined,
+      sourceUrl: options.url ?? undefined,
       source_url: options.url ?? undefined,
     }).catch(reportErr);
   }

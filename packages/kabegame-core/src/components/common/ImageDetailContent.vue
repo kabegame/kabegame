@@ -23,13 +23,13 @@
             <span class="detail-label">{{ t('gallery.imageDetailSource') }}</span>
             <div class="detail-value-row">
               <button
-                v-if="pluginFilterTarget"
+                v-if="sourceClickEnabled"
                 type="button"
                 class="detail-filter-link"
-                :title="t('gallery.filterByPlugin')"
-                @click="emitGalleryFilter(pluginFilterTarget)"
-              >{{ getPluginName(image.pluginId) }}</button>
-              <span v-else class="detail-value">{{ getPluginName(image.pluginId) }}</span>
+                :title="sourceTitle"
+                @click="handleOpenSource"
+              >{{ sourceLabel }}</button>
+              <span v-else class="detail-value">{{ sourceLabel }}</span>
               <el-button
                 v-if="image.taskId"
                 text
@@ -178,6 +178,7 @@ import { List } from "@element-plus/icons-vue";
 import { IS_ANDROID, IS_WEB } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
 import { Plugin, usePluginStore } from "../../stores/plugins";
+import { useSurfStore } from "../../stores/surf";
 import {
   imageMetadataResolverKey,
   type ImageMetadataResolver,
@@ -187,6 +188,7 @@ import { getEjsBridgeCache, setEjsBridgeCache } from "../../cache/ejsBridgeCache
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
+const surfStore = useSurfStore();
 
 const toLocaleTag = (loc: string) => {
   if (loc.startsWith("zh")) return loc === "zhtw" ? "zh-TW" : "zh-CN";
@@ -209,7 +211,13 @@ export type ImageDetailLike = {
   width?: number;
   height?: number;
   taskId?: string;
+  surfRecordId?: string;
   postUrl?: string;
+};
+
+export type ImageDetailSurfRecordTarget = {
+  surfRecordId: string;
+  host: string;
 };
 
 export type ImageDetailGalleryFilterTarget =
@@ -230,6 +238,7 @@ const props = defineProps<Props>();
 const emit = defineEmits<{
   "open-task": [taskId: string];
   "open-gallery-filter": [target: ImageDetailGalleryFilterTarget];
+  "open-surf-record": [target: ImageDetailSurfRecordTarget];
 }>();
 
 function handleOpenTask() {
@@ -246,6 +255,51 @@ const pluginFilterTarget = computed<ImageDetailGalleryFilterTarget | null>(() =>
   const pluginId = props.image?.pluginId?.trim();
   return pluginId ? { type: "plugin", pluginId } : null;
 });
+
+const surfRecordId = computed(() => props.image?.surfRecordId?.trim() || "");
+
+watch(
+  surfRecordId,
+  (id) => {
+    if (!id || pluginFilterTarget.value) return;
+    void surfStore.ensureRecordsByIds([id]);
+  },
+  { immediate: true },
+);
+
+const surfSourceHost = computed(() => {
+  const id = surfRecordId.value;
+  return id ? surfStore.hostById(id) ?? "" : "";
+});
+
+const sourceKind = computed<"plugin" | "surf" | "unknown">(() => {
+  if (pluginFilterTarget.value) return "plugin";
+  if (surfRecordId.value && surfSourceHost.value) return "surf";
+  return "unknown";
+});
+
+const sourceLabel = computed(() => {
+  if (sourceKind.value === "plugin") return getPluginName(props.image?.pluginId);
+  if (sourceKind.value === "surf") return surfSourceHost.value;
+  return "unknown";
+});
+
+const sourceClickEnabled = computed(() => sourceKind.value !== "unknown");
+
+const sourceTitle = computed(() => {
+  if (sourceKind.value === "plugin") return t("gallery.filterByPlugin");
+  return surfSourceHost.value || sourceLabel.value;
+});
+
+function handleOpenSource() {
+  if (pluginFilterTarget.value) {
+    emitGalleryFilter(pluginFilterTarget.value);
+    return;
+  }
+  const id = surfRecordId.value;
+  const host = surfSourceHost.value;
+  if (id && host) emit("open-surf-record", { surfRecordId: id, host });
+}
 
 const mediaTypeParts = computed((): { kind: "image" | "video"; format: string } => {
   const raw = displayImageMimeType(props.image?.type).trim().toLowerCase();

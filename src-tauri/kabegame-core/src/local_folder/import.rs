@@ -93,7 +93,7 @@ pub async fn import_local_file(
         id: String::new(),
         url: None,
         local_path: path.to_string_lossy().into_owned(),
-        plugin_id: LOCAL_FOLDER_PLUGIN_ID.to_string(),
+        plugin_id: Some(LOCAL_FOLDER_PLUGIN_ID.to_string()),
         task_id: None,
         surf_record_id: None,
         crawled_at,

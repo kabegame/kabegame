@@ -119,9 +119,9 @@
     </template>
     <el-main class="app-main">
       <router-view v-slot="{ Component }" :key="routerViewKey">
-        <keep-alive>
+        <!-- <keep-alive> -->
           <component :is="Component" />
-        </keep-alive>
+        <!-- </keep-alive> -->
       </router-view>
     </el-main>
     <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
@@ -441,7 +441,23 @@ let unlistenSettingChange: UnlistenFn | null = null;
 // F11 全屏：仅在本窗口获得焦点时响应，不占用其他应用（如浏览器）的 F11
 let removeF11Listener: (() => void) | null = null;
 
+// CEF/Chromium 默认会把 Ctrl/Cmd+滚轮解释为页面缩放；仅取消默认行为，不阻止业务侧继续处理事件。
+let removeBrowserZoomWheelListener: (() => void) | null = null;
+const browserZoomWheelOptions: AddEventListenerOptions = { capture: true, passive: false };
+const preventBrowserZoomWheel = (event: WheelEvent) => {
+  if (event.ctrlKey || event.metaKey) {
+    event.preventDefault();
+  }
+};
+
 onMounted(async () => {
+  if (!IS_ANDROID && !IS_WEB) {
+    window.addEventListener("wheel", preventBrowserZoomWheel, browserZoomWheelOptions);
+    removeBrowserZoomWheelListener = () => {
+      window.removeEventListener("wheel", preventBrowserZoomWheel, browserZoomWheelOptions);
+    };
+  }
+
   await initHttpServerBaseUrl();
 
   // Android Back Button Handling
@@ -616,6 +632,10 @@ onUnmounted(() => {
   if (removeF11Listener) {
     removeF11Listener();
     removeF11Listener = null;
+  }
+  if (removeBrowserZoomWheelListener) {
+    removeBrowserZoomWheelListener();
+    removeBrowserZoomWheelListener = null;
   }
   // 注销更新事件订阅
   updaterService.dispose();

@@ -221,7 +221,7 @@ enum RotationSource {
 struct ImageLite {
     id: String,
     local_path: String,
-    plugin_id: String,
+    plugin_id: Option<String>,
 }
 
 pub struct WallpaperRotator {
@@ -608,13 +608,17 @@ impl WallpaperRotator {
                 let _ = Storage::global()
                     .update_image_last_set_wallpaper_at(&selected_image.id, now_ts);
                 let ids = vec![selected_image.id.clone()];
-                GlobalEmitter::global().emit_images_change(
-                    "change",
-                    &ids,
-                    None,
-                    None,
-                    Some(&[selected_image.plugin_id.clone()]),
-                );
+                if let Some(plugin_id) = selected_image.plugin_id.clone() {
+                    GlobalEmitter::global().emit_images_change(
+                        "change",
+                        &ids,
+                        None,
+                        None,
+                        Some(&[plugin_id]),
+                    );
+                } else {
+                    GlobalEmitter::global().emit_images_change("change", &ids, None, None, None);
+                }
 
                 // 本轮执行完后，让下一次从“现在”开始计时，确保手动切换/模式切换会重置计时器
                 ticker.reset();
@@ -890,13 +894,17 @@ impl WallpaperRotator {
             .as_secs();
         let _ = Storage::global().update_image_last_set_wallpaper_at(&selected_image.id, now_ts);
         let ids = vec![selected_image.id.clone()];
-        GlobalEmitter::global().emit_images_change(
-            "change",
-            &ids,
-            None,
-            None,
-            Some(&[selected_image.plugin_id.clone()]),
-        );
+        if let Some(plugin_id) = selected_image.plugin_id.clone() {
+            GlobalEmitter::global().emit_images_change(
+                "change",
+                &ids,
+                None,
+                None,
+                Some(&[plugin_id]),
+            );
+        } else {
+            GlobalEmitter::global().emit_images_change("change", &ids, None, None, None);
+        }
 
         // 如果轮播已启用但未运行，启动轮播器
         let enabled = settings.get_wallpaper_rotation_enabled();
@@ -961,6 +969,7 @@ impl WallpaperRotator {
     }
 
     /// 获取轮播状态："idle" | "starting" | "running" | "stopping"
+    #[allow(dead_code)]
     pub fn get_status(&self) -> String {
         match self.state.load(Ordering::Acquire) {
             STATE_IDLE => "idle".to_string(),

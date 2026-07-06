@@ -46,16 +46,6 @@
           </el-button>
         </div>
 
-        <el-alert
-          v-if="IS_LINUX"
-          type="info"
-          :closable="false"
-          show-icon
-          class="surf-linux-tip"
-        >
-          {{ $t('surf.linuxHint') }}
-        </el-alert>
-
         <!-- 畅游记录列表 -->
         <div class="surf-list-wrap" @wheel="onListWheel">
           <transition-group name="surf-list" tag="div" class="surf-list">
@@ -95,11 +85,6 @@
               </div>
             </el-card>
           </transition-group>
-          <div class="load-more">
-            <el-button v-if="surfStore.hasMore" :loading="surfStore.loading" @click="surfStore.loadMore()">
-              {{ $t('surf.loadMore') }}
-            </el-button>
-          </div>
         </div>
       </div>
     </div>
@@ -360,13 +345,6 @@ const handleStart = async () => {
   }
 };
 
-function syncRecordInList(id: string, patch: Partial<SurfRecord>) {
-  const target = surfStore.records.find((item) => item.id === id);
-  if (target) {
-    Object.assign(target, patch);
-  }
-}
-
 async function openDetailDialog(record: SurfRecord) {
   try {
     const latest = await surfStore.getRecord(record.host);
@@ -396,7 +374,6 @@ async function saveDetailName() {
   try {
     await surfStore.updateName(record.host, nextName);
     detailRecord.value = { ...record, name: nextName };
-    syncRecordInList(record.id, { name: nextName });
     ElMessage.success(t("surf.savedSuccess"));
   } catch (e: any) {
     ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
@@ -411,7 +388,6 @@ async function saveDetailEntryPath() {
   try {
     await surfStore.updateRootUrl(record.host, nextRootUrl);
     detailRecord.value = { ...record, rootUrl: nextRootUrl };
-    syncRecordInList(record.id, { rootUrl: nextRootUrl });
     ElMessage.success(t("surf.savedSuccess"));
   } catch (e: any) {
     ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
@@ -495,8 +471,7 @@ const handleRecordMenuCommand = async (command: "viewImages" | "details" | "dele
 };
 
 onMounted(async () => {
-  await surfStore.checkSession();
-  await surfStore.loadRecords();
+  await surfStore.init();
 });
 </script>
 

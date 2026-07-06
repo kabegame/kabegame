@@ -14,6 +14,7 @@ export interface ImageInfo {
   url?: string;
   pluginId?: string;
   taskId?: string;
+  surfRecordId?: string;
   crawledAt?: number;
   /** 外键 `image_metadata.id`；列表常带此字段以合并懒加载请求 */
   metadataId?: number;

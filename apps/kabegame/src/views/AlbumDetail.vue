@@ -65,17 +65,13 @@
       </div>
     </div>
 
-    <ImageGrid v-else 
-      ref="albumViewRef" class="detail-body" :images="images" 
+    <ImageGrid v-else
+      ref="albumViewRef" class="detail-body" :surface="surface"
       :enable-ctrl-wheel-adjust-columns="!isCompact"
       enable-virtual-scroll
       :enable-ctrl-key-adjust-columns="!isCompact"
-      :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
-      :on-context-command="handleImageMenuCommand" hide-scrollbar scroll-whole-container
-      @added-to-album="handleAddedToAlbum" @image-dblclick="handleImageDoubleOpen"
-      @preview-navigate="handlePreviewNavigate" @preview-page-boundary="handlePreviewPageBoundary"
-      @preview-detail-toggle="handlePreviewDetailToggle"
-      @preview-close="handlePreviewClose">
+      :loading="isRefreshing" :loading-overlay="isRefreshing"
+      hide-scrollbar scroll-whole-container>
 
       <template #empty>
         <div class="album-empty fade-in">
@@ -94,7 +90,7 @@
         </div>
       </template>
 
-      <template #before-grid>
+      <template #before-grid="{ totalCount, currentPage, pageSize: gridPageSize, jumpToPage }">
         <AlbumDetailPageHeader :album-name="albumName" :total-images-count="totalImagesCount" :is-renaming="isRenaming"
           v-model:editing-name="editingName" :album-drive-enabled="albumDriveEnabled"
           :is-favorite-album="albumId === FAVORITE_ALBUM_ID"
@@ -140,7 +136,7 @@
           :album-id="albumDetailRouteStore.albumId"
           :filter="albumDetailRouteStore.filter"
           :sort="albumDetailRouteStore.sort"
-          :page-size="pageSize"
+          :page-size="gridPageSize"
           :search="search"
           @update:filter="(filter) => albumDetailRouteStore.navigate({ filter, page: 1 })"
           @update:sort="(sort) => albumDetailRouteStore.navigate({ sort })"
@@ -148,18 +144,10 @@
           @update:search="(s) => albumDetailRouteStore.navigate({ page: 1, search: s })"
         />
 
-        <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage"
-          :big-page-size="pageSize" :is-sticky="true" @jump-to-page="handleJumpToPage" />
+        <GalleryBigPaginator :total-count="totalCount" :current-page="currentPage"
+          :big-page-size="gridPageSize" :is-sticky="true" @jump-to-page="jumpToPage" />
       </template>
     </ImageGrid>
-
-    <RemoveImagesConfirmDialog :open="removeDialog.isOpen.value" :z-index="removeDialog.zIndex.value"
-      :message="removeDialogMessage" :title="removeDialogTitle" :hide-checkbox="true"
-      :confirm-text="removeDialogConfirmText"
-      @close="removeDialog.close()" @confirm="confirmRemoveImages" />
-
-    <AddToAlbumDialog :open="addToAlbumDialog.isOpen.value" :z-index="addToAlbumDialog.zIndex.value" :image-ids="addToAlbumImageIds"
-      :exclude-album-ids="albumId ? [albumId] : []" @close="addToAlbumDialog.close()" @added="handleAddedToAlbum" />
 
     <el-dialog :model-value="createSubAlbumDialog.isOpen.value" :z-index="createSubAlbumDialog.zIndex.value" :title="t('albums.newAlbum')" width="360px" @update:model-value="createSubAlbumDialog.close">
       <el-input v-model="newSubAlbumName" :placeholder="t('albums.placeholderName')" />
@@ -223,22 +211,16 @@ const albumDetailStack: AlbumDetailSnapshot[] = [];
 </script>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
+import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
-import { pathqlFetch } from "@/services/pathql";
-import { rowToImageInfo } from "@/utils/imageRow";
-import { withGalleryPrefix } from "@/utils/path";
-import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { Picture } from "@element-plus/icons-vue";
-import { createImageActions } from "@/actions/imageActions";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
 import ImageGrid from "@/components/ImageGrid.vue";
-import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
-import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
+import { createAlbumDetailSurface } from "@/components/imageGrid/surfaces/album";
 import { useAlbumStore, HIDDEN_ALBUM_ID, FAVORITE_ALBUM_ID } from "@/stores/albums";
 import type { Album } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
@@ -256,24 +238,10 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import { IS_LIGHT_MODE, IS_WEB, IS_ANDROID } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
 import { createImageAnalytics, currentUrl } from "@kabegame/core/track/imageAnalytics";
-import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { useImageOperations } from "@/composables/useImageOperations";
-import type { ContextCommand, ContextCommandPayload } from "@/components/ImageGrid.vue";
-import { usePagedGallery } from "@/composables/usePagedGallery";
-import {
-  buildAlbumCountPathFromCurrentPath,
-  isAlbumWallpaperFilterPath,
-} from "@/utils/albumPath";
 import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
-import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
-import { useAlbumImagesChangeRefresh, type AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
-import { diffById } from "@/utils/listDiff";
-import { useImageTypes } from "@/composables/useImageTypes";
-import { openLocalImage } from "@/utils/openLocalImage";
-import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
-import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
+import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
@@ -305,29 +273,19 @@ const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotati
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
 const uiStore = useUiStore();
 const isCompact = computed(() => uiStore.isCompact);
-const { load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
-const isAlbumDetailActive = ref(true);
 const albumDetailRouteStore = useAlbumDetailRouteStore();
-const { pageSize, search } = storeToRefs(albumDetailRouteStore);
+const { search, albumId } = storeToRefs(albumDetailRouteStore);
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("albumdetail");
 
-const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
-
-const albumId = ref<string>("");
 const albumName = ref<string>("");
-const currentPath = computed(() => albumDetailRouteStore.currentPath);
+const currentPath = computed(() => albumDetailRouteStore.computedPath);
 let lastTrackedAlbumPath: string | null = null;
 
-// 本地计算的 provider root path，用于初始化
-const localProviderRootPath = computed(() => {
-  if (!albumId.value) return "";
-  // 新格式：album/<albumId>
-  return `album/${albumId.value}`;
-});
+const isLocalFolderDetail = computed(() => albumStore.isLocalFolderAlbum(albumId.value));
 
 // ---------- Analytics ----------
 const analytics = createImageAnalytics(() => ({
@@ -337,8 +295,15 @@ const analytics = createImageAnalytics(() => ({
   path: currentPath.value,
 }));
 
-// ---------- Album state and loading ----------
-const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay();
+// 数据加载 / 菜单命令 / 本页事件刷新均由 ImageGrid connected 模式接管
+const surface = createAlbumDetailSurface({
+  albumId: () => albumId.value,
+  albumName: () => albumName.value,
+  isLocalFolder: () => isLocalFolderDetail.value,
+  analytics,
+});
+
+// ---------- Album state ----------
 const isRefreshing = ref(false);
 const pullToRefreshOpts = computed(() =>
   isCompact.value
@@ -346,16 +311,7 @@ const pullToRefreshOpts = computed(() =>
     : undefined
 );
 
-const currentWallpaperImageId = computed<string | null>({
-  get: () => settingsStore.values.currentWallpaperImageId ?? null,
-  set: (value) => {
-    settingsStore.values.currentWallpaperImageId = value;
-  },
-});
-const images = ref<ImageInfo[]>([]);
-let leafAllImages: ImageInfo[] = [];
-const loadedPathKey = ref("");
-const albumViewRef = ref<any>(null);
+const albumViewRef = ref<InstanceType<typeof ImageGrid> | null>(null);
 const albumSubAlbumsScrollRef = ref<HTMLElement | null>(null);
 const albumBrowseToolbarRef = ref<{
   openFilterPicker: () => void;
@@ -364,48 +320,14 @@ const albumBrowseToolbarRef = ref<{
 } | null>(null);
 const albumContainerRef = ref<HTMLElement | null>(null);
 
-const isLocalFolderDetail = computed(() => albumStore.isLocalFolderAlbum(albumId.value));
-
-const pagedAlbum = usePagedGallery({
-  routeStore: albumDetailRouteStore,
-  images,
-  loadedKey: loadedPathKey,
-  viewRef: albumViewRef,
-  loading: { startLoading, finishLoading },
-  load: loadAlbumPage,
-  computeCountPath: buildAlbumCountPathFromCurrentPath,
-  isActive: () => {
-    const routeAlbumId = typeof route.params.id === "string" ? route.params.id : "";
-    return (
-      isOnAlbumRoute.value &&
-      !!albumId.value &&
-      (!routeAlbumId || routeAlbumId === albumId.value) &&
-      !!albumName.value
-    );
-  },
-  computeTargetPath: (page) => albumDetailRouteStore.computePath({ page }),
-  afterJumpSyncUrl: async (page) => {
-    const targetPath = albumDetailRouteStore.computePath({ page });
-    const current = router.currentRoute.value;
-    if (current.name === "AlbumDetail" && current.query.path !== targetPath) {
-      await router.replace({
-        path: current.path,
-        query: { ...current.query, path: targetPath },
-      });
-    }
-  },
-  onCountError: (error) => {
-    console.error("获取画册总图片数失败:", error);
-    return images.value.length;
-  },
-});
-
-const totalImagesCount = pagedAlbum.totalImagesCount;
-const currentPage = pagedAlbum.currentPage;
-const loadTotalImagesCount = pagedAlbum.loadTotalImagesCount;
-const handleJumpToPage = pagedAlbum.handleJumpToPage;
-const handlePreviewPageBoundary = pagedAlbum.handlePreviewPageBoundary;
-const pendingPreviewBoundary = pagedAlbum.pendingPreviewBoundary;
+// grid 卸载（子画册 tab）时保留最后一次总数，供 header / tab label 显示
+const totalImagesCount = ref(0);
+watch(
+  () => albumViewRef.value?.totalImagesCount ?? null,
+  (v) => {
+    if (typeof v === "number") totalImagesCount.value = v;
+  }
+);
 
 // ---------- Local folder sync helpers ----------
 const syncStatusSuffix = (state: FolderStatusState) =>
@@ -512,7 +434,7 @@ const childAlbumRoots = computed(() => {
   if (!albumId.value) return [];
   return albumStore.getChildren(albumId.value);
 });
-const albumMediaHide = computed(() => albumDetailRouteStore.currentPath.startsWith("hide/"));
+const albumMediaHide = computed(() => albumDetailRouteStore.computedPath.startsWith("hide/"));
 const childAlbumNodes = computed(() =>
   buildAlbumMediaNodes(
     childAlbumRoots.value,
@@ -978,35 +900,14 @@ watch(
   { immediate: true },
 );
 
-watch(
-  () => route.query.path,
-  (rawPath) => {
-    const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
-    if (!isOnAlbumRoute.value) return;
-    if (!qp.trim()) return;
-    const pending = pendingPreviewBoundary.value;
-    if (pending && currentPath.value === pending.targetPath && qp !== pending.targetPath) {
-      void router.replace({
-        path: route.path,
-        query: { ...route.query, path: pending.targetPath },
-      });
-      return;
-    }
-    if (qp !== currentPath.value) {
-      albumDetailRouteStore.syncFromUrl(qp);
-    }
-  },
-  { immediate: true }
-);
-
 // dragScroll “太快且仍在加速”时的俏皮提示（画册开启）
-const dragScrollTooFastMessages = [
-  "慢慢滑嘛，人家要追不上啦 (；´д｀)ゞ",
-  "你这手速开挂了吧？龟龟跟不上啦 (╥﹏╥)",
-  "别飙车！龟龟晕滚动条了~ (＠_＠;)",
-  "给人家留点帧率呀，慢一点点嘛 (´-﹏-`；)",
-  "这速度像火箭！先等等我！ε=ε=ε=┏(゜ロ゜;)┛",
-];
+const dragScrollTooFastMessages = computed(() => [
+  t("gallery.scrollTooFast1"),
+  t("gallery.scrollTooFast2"),
+  t("gallery.scrollTooFast3"),
+  t("gallery.scrollTooFast4"),
+  t("gallery.scrollTooFast5"),
+]);
 const pickOne = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)] || arr[0] || "";
 let cleanupDragScrollTooFastListener: (() => void) | null = null;
 watch(
@@ -1034,22 +935,11 @@ watch(
 function onDragScrollOverspeed(_ev: Event) {
   ElMessage({
     type: "info",
-    message: pickOne(dragScrollTooFastMessages),
+    message: pickOne(dragScrollTooFastMessages.value),
     duration: 900,
     showClose: false,
   });
 }
-
-// ---------- Image operations ----------
-// Image actions for context menu / action sheet
-const imageActions = computed(() =>
-  createImageActions({
-    removeText: t("gallery.removeFromAlbum"),
-    deleteText: t("gallery.deleteImageFiles"),
-    showDelete: true,
-    hide: isLocalFolderDetail.value ? ["remove"] : [],
-  }),
-);
 
 watch(
   [() => albumViewRef.value, activeAlbumDetailTab],
@@ -1067,15 +957,6 @@ const clearSelection = () => {
   albumViewRef.value?.clearSelection?.();
 };
 
-const clearSelectionIfRemoved = (removedIds: readonly string[]) => {
-  if (removedIds.length === 0) return;
-  const selectedIds = albumViewRef.value?.getSelectedIds?.() as Set<string> | undefined;
-  if (!selectedIds || selectedIds.size === 0) return;
-  if (removedIds.some((id) => selectedIds.has(id))) {
-    clearSelection();
-  }
-};
-
 // 重命名相关
 const isRenaming = ref(false);
 const editingName = ref("");
@@ -1087,26 +968,6 @@ const currentRotationAlbumId = computed(() => {
   const id = (raw ?? "").trim();
   return id ? id : null;
 });
-
-// 收藏画册标记：当收藏状态变化时，如果页面在后台，标记为需要刷新
-const favoriteAlbumDirty = ref(false);
-
-// 移除/删除对话框相关
-const removeDialog = useModal();
-const pendingRemoveMode = ref<"remove" | "delete">("remove");
-const removeDialogMessage = ref("");
-const pendingRemoveImages = ref<ImageInfo[]>([]);
-const pendingAddToAlbumImages = ref<ImageInfo[]>([]);
-const addToAlbumDialog = useModal();
-const addToAlbumImageIds = ref<string[]>([]);
-const removeDialogTitle = computed(() =>
-  pendingRemoveMode.value === "delete"
-    ? t("gallery.deleteImageFiles")
-    : t("gallery.removeFromAlbum")
-);
-const removeDialogConfirmText = computed(() =>
-  pendingRemoveMode.value === "delete" ? t("common.delete") : t("common.remove")
-);
 
 // ---------- Album loading flow ----------
 const goBack = () => {
@@ -1135,10 +996,9 @@ const handleRefresh = async () => {
     // 3) 手动刷新：清缓存强制重载详情（否则 store 缓存会让 UI 看起来“没刷新”）
     delete albumStore.albumImages[albumId.value];
     delete albumStore.albumPreviews[albumId.value];
-    // 4) 重新拉取图片列表 + 清理本地选择/URL 缓存
+    // 4) 重新拉取图片列表 + 清理本地选择
     clearSelection();
-    await loadAlbumPage(currentPath.value);
-    await loadTotalImagesCount();
+    await albumViewRef.value?.refresh();
 
     const idsToSync = new Set<string>();
     if (albumStore.isLocalFolderAlbum(albumId.value)) {
@@ -1165,371 +1025,33 @@ const handleRefresh = async () => {
   }
 };
 
-async function loadAlbumPage(path: string) {
-  if (!albumId.value) return;
-  const rawPath = path || currentPath.value || localProviderRootPath.value || `album/${albumId.value}/1`;
-  const inner = rawPath.startsWith("hide/") ? rawPath.slice("hide/".length) : rawPath;
-  if (!inner.startsWith("album/") || inner.startsWith("album//")) {
-    return;
-  }
-  const pathToLoad = withGalleryPrefix(rawPath);
-  clearImageMetadataCache();
-  const rows = await pathqlFetch<Record<string, unknown>>(pathToLoad);
-  const list = rows.map(rowToImageInfo);
-  leafAllImages = list;
-  images.value = list;
-  loadedPathKey.value = rawPath;
-}
-
-const handleAddedToAlbum = async () => {
-  analytics.trackAction("addToAlbum", pendingAddToAlbumImages.value);
-  pendingAddToAlbumImages.value = [];
-  await albumStore.loadAlbums();
-};
-
-const { handleDownloadImage, handleCopyImage } = useImageOperations(
-  images,
-  currentWallpaperImageId,
-  albumViewRef
-);
-
-// 确认移除图片或删除文件。两者是独立动作，不再由 checkbox 切换语义。
-const confirmRemoveImages = async () => {
-  const imagesToRemove = pendingRemoveImages.value;
-  if (imagesToRemove.length === 0) {
-    removeDialog.close();
-    return;
-  }
-  if (!albumId.value) {
-    removeDialog.close();
-    return;
-  }
-  const shouldDeleteFiles = pendingRemoveMode.value === "delete";
-  if (!shouldDeleteFiles && isLocalFolderDetail.value) {
-    removeDialog.close();
-    ElMessage.info(t("albums.localFolder.readOnlyHint"));
-    return;
-  }
-
-  const count = imagesToRemove.length;
-  const includesCurrent =
-    !!currentWallpaperImageId.value &&
-    imagesToRemove.some((img) => img.id === currentWallpaperImageId.value);
-  removeDialog.close();
-
-  try {
-    const idsArr = imagesToRemove.map((i) => i.id);
-
-    if (shouldDeleteFiles) {
-      await invoke("batch_delete_images", { imageIds: idsArr });
-    } else {
-      await albumStore.removeImagesFromAlbum(albumId.value, idsArr);
-    }
-
-    if (includesCurrent) {
-      currentWallpaperImageId.value = null;
-    }
-
-    // 列表由 images-change / album-images-change 事件驱动刷新，不做乐观更新
-
-    if (shouldDeleteFiles) {
-      ElMessage.success(
-        count > 1 ? t("gallery.deletedAndRemovedCountSuccess", { count }) : t("gallery.deletedAndRemovedSuccess")
-      );
-    } else {
-      ElMessage.success(
-        count > 1 ? t("gallery.removedFromAlbumCountSuccess", { count }) : t("gallery.removedFromAlbumSuccess")
-      );
-    }
-    analytics.trackAction(shouldDeleteFiles ? "deleteFile" : "remove", imagesToRemove);
-  } catch (error) {
-    console.error("操作失败:", error);
-    ElMessage.error(shouldDeleteFiles ? t("common.deleteFail") : t("common.removeFail"));
-  }
-};
-
-const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<ContextCommand | null> => {
-  const command = payload.command;
-  const image = payload.image;
-
-  // 从本地列表中查找图片对象（确保获取完整的图片信息）
-  const imageInList = images.value.find((img) => img.id === image.id);
-  const selectedSet =
-    "selectedImageIds" in payload && payload.selectedImageIds && payload.selectedImageIds.size > 0
-      ? payload.selectedImageIds
-      : new Set([image.id]);
-
-  const isMultiSelect = selectedSet.size > 1;
-  const imagesToProcess = isMultiSelect
-    ? images.value.filter((img) => selectedSet.has(img.id))
-    : imageInList
-      ? [imageInList]
-      : [];
-  const primaryImageTargets = imageInList ? [imageInList] : [image];
-
-  switch (command) {
-    case "detail":
-      analytics.trackAction("detail", primaryImageTargets);
-      return command;
-    case "favorite": {
-      if (await guardDesktopOnly("favoriteImage", { needSuper: true })) break;
-      const desiredFavorite = imagesToProcess.some((img) => !(img.favorite ?? false));
-      const toChange = imagesToProcess.filter(
-        (img) => (img.favorite ?? false) !== desiredFavorite
-      );
-      if (toChange.length === 0) {
-        ElMessage.info(desiredFavorite ? "已收藏" : "已取消收藏");
-        break;
-      }
-
-      const results = await Promise.allSettled(
-        toChange.map((img) =>
-          invoke("toggle_image_favorite", {
-            imageId: img.id,
-            favorite: desiredFavorite,
-          })
-        )
-      );
-      const succeededIds: string[] = [];
-      results.forEach((r, idx) => {
-        if (r.status === "fulfilled") succeededIds.push(toChange[idx]!.id);
-      });
-      if (succeededIds.length === 0) {
-        ElMessage.error("操作失败");
-        break;
-      }
-
-      // 列表与画册缓存由 album-images-change / images-change 事件驱动刷新
-
-      clearSelection();
-      ElMessage.success(desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`);
-      analytics.trackAction(
-        "favorite",
-        toChange.filter((img) => succeededIds.includes(img.id)),
-        { value: desiredFavorite }
-      );
-      break;
-    }
-    case "download":
-      for (const img of imagesToProcess) {
-        await handleDownloadImage(img);
-      }
-      analytics.trackAction("download", imagesToProcess);
-      break;
-    case "copy":
-      if (IS_WEB) {
-        if (imagesToProcess[0]) await handleCopyImage(imagesToProcess[0]);
-      } else if (imagesToProcess[0]) {
-        await handleCopyImage(imagesToProcess[0]);
-      }
-      analytics.trackAction("copy", primaryImageTargets);
-      break;
-    case "open":
-      if (!isMultiSelect && image.localPath) {
-        try {
-          await openLocalImage(image.localPath);
-          analytics.trackAction("open", primaryImageTargets);
-        } catch (error) {
-          console.error("打开文件失败:", error);
-          ElMessage.error("打开文件失败");
-        }
-      }
-      break;
-    case "openFolder":
-      if (await guardDesktopOnly("openLocal")) break;
-      if (!isMultiSelect) {
-        await invoke("open_file_folder", { filePath: image.localPath });
-        analytics.trackAction("openFolder", primaryImageTargets);
-      }
-      break;
-    case "wallpaper":
-      if (!isMultiSelect) {
-        await setWallpaperOrBackground(image.id);
-        currentWallpaperImageId.value = image.id;
-      }
-      analytics.trackAction("wallpaper", primaryImageTargets);
-      break;
-    case "share":
-      if (await guardDesktopOnly("share")) break;
-      if (!isMultiSelect && image) {
-        try {
-          const filePath = image.localPath;
-          if (!filePath) {
-            ElMessage.error("图片路径不存在");
-            break;
-          }
-
-          const ext = filePath.split('.').pop()?.toLowerCase() || '';
-          await loadImageTypes();
-          const mimeType = getMimeTypeForImage(image, ext);
-          await invoke("share_file", { filePath, mimeType });
-          analytics.trackAction("share", primaryImageTargets);
-        } catch (error) {
-          console.error("分享失败:", error);
-          ElMessage.error("分享失败");
-        }
-      }
-      break;
-    case "addToAlbum": {
-      const ids = imagesToProcess.map((img) => img.id);
-      addToAlbumImageIds.value = ids;
-      pendingAddToAlbumImages.value = imagesToProcess.slice();
-      addToAlbumDialog.open();
-      break;
-    }
-    case "addToHidden": {
-      if (await guardDesktopOnly("hideImage", { needSuper: true })) break;
-      const ids = imagesToProcess.map((img) => img.id);
-      if (ids.length === 0) break;
-      const isUnhide = !!image?.isHidden || albumId.value === HIDDEN_ALBUM_ID;
-      try {
-        if (isUnhide) {
-          await albumStore.removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids);
-          ElMessage.success(t("contextMenu.unhideSuccess"));
-        } else {
-          await albumStore.addImagesToAlbum(HIDDEN_ALBUM_ID, ids);
-          ElMessage.success(
-            ids.length > 1
-              ? t("contextMenu.hiddenCount", { count: ids.length })
-              : t("contextMenu.hiddenOne"),
-          );
-        }
-        clearSelection();
-        analytics.trackAction(isUnhide ? "removeFromHidden" : "addToHidden", imagesToProcess);
-      } catch (e) {
-        console.error(isUnhide ? "取消隐藏失败:" : "隐藏失败:", e);
-        ElMessage.error(t(isUnhide ? "contextMenu.unhideFailed" : "contextMenu.hideFailed"));
-      }
-      break;
-    }
-    case "remove":
-      if (isLocalFolderDetail.value) {
-        ElMessage.info(t("albums.localFolder.readOnlyHint"));
-        break;
-      }
-      pendingRemoveImages.value = imagesToProcess;
-      pendingRemoveMode.value = "remove";
-      const count = imagesToProcess.length;
-      const includesCurrent =
-        !!currentWallpaperImageId.value &&
-        imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
-      const currentHint = includesCurrent ? `\n\n${t("gallery.removeDialogWallpaperHint")}` : "";
-      removeDialogMessage.value = (count > 1 ? t("gallery.removeDialogMessageMulti", { count }) : t("gallery.removeDialogMessageSingle")) + currentHint;
-      removeDialog.open();
-      break;
-    case "deleteFile": {
-      if (imagesToProcess.length === 0) break;
-      pendingRemoveImages.value = imagesToProcess;
-      pendingRemoveMode.value = "delete";
-      const count = imagesToProcess.length;
-      const includesCurrent =
-        !!currentWallpaperImageId.value &&
-        imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
-      const currentHint = includesCurrent ? `\n\n${t("gallery.removeDialogWallpaperHint")}` : "";
-      removeDialogMessage.value =
-        (count > 1
-          ? t("gallery.deleteDialogMessageMulti", { count })
-          : t("gallery.deleteDialogMessageSingle")) + currentHint;
-      removeDialog.open();
-      break;
-    }
-    case "swipe-remove" as any:
-      if (isLocalFolderDetail.value) {
-        ElMessage.info(t("albums.localFolder.readOnlyHint"));
-        break;
-      }
-      // 上划删除：直接从画册移除，不删除文件，不显示确认对话框
-      if (imagesToProcess.length === 0 || !albumId.value) break;
-      void (async () => {
-        try {
-          const idsArr = imagesToProcess.map((i) => i.id);
-
-          // 只从当前画册移除，不删除文件
-          await albumStore.removeImagesFromAlbum(albumId.value, idsArr);
-
-          const includesCurrentWallpaper =
-            !!currentWallpaperImageId.value &&
-            imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
-
-          // 如果包含当前壁纸，清除壁纸 ID（列表由事件刷新）
-          if (includesCurrentWallpaper) {
-            currentWallpaperImageId.value = null;
-          }
-          analytics.trackAction("swipe-remove", imagesToProcess);
-        } catch (error) {
-          console.error("移除图片失败:", error);
-          ElMessage.error(t("gallery.removeImageFailed"));
-        }
-      })();
-      break;
-  }
-  return null;
-};
-
-// ---------- Preview flow ----------
-const handleImageDoubleOpen = (payload: { action: "preview" | "open"; image: ImageInfo }) => {
-  analytics.trackDoubleOpen(payload);
-};
-
-const handlePreviewNavigate = (payload: {
-  direction: "prev" | "next";
-  fromIndex: number;
-  toIndex: number;
-  wrapped: boolean;
-  image: ImageInfo;
-}) => {
-  analytics.trackPreviewNavigate(payload);
-};
-
-const handlePreviewDetailToggle = (payload: { open: boolean; image: ImageInfo | null }) => {
-  analytics.trackPreviewDetailToggle(payload);
-};
-
-const handlePreviewClose = (payload: { image: ImageInfo | null }) => {
-  analytics.trackPreviewClose(payload);
-};
-
 // ---------- Album initialization ----------
 const initAlbum = async (newAlbumId: string) => {
-  // Provider 路径加载不再写入 albumStore.albumImages；当前页已有图片时即可跳过同画册初始化。
-  if (albumId.value === newAlbumId && images.value.length > 0) {
+  // 同画册且当前页已有图片时跳过重复初始化
+  if (albumId.value === newAlbumId && (albumViewRef.value?.images?.length ?? 0) > 0) {
     return;
   }
 
-  // 先设置 loading，避免显示空状态
-  startLoading();
-
-  // 清理旧数据
-  images.value = [];
-  leafAllImages = [];
-  loadedPathKey.value = "";
   clearSelection();
-
-  try {
-    albumId.value = newAlbumId;
-    const rawPath = route.query.path;
-    const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
-    if (qp.startsWith(`album/${newAlbumId}/`)) {
-      albumDetailRouteStore.syncFromUrl(qp);
-    } else {
-      await albumDetailRouteStore.navigate({
-        albumId: newAlbumId,
-        filter: "all",
-        sort: "join-asc",
-        page: 1,
-      });
-    }
-    await albumStore.loadAlbums();
-    const found = albumStore.albums.find((a) => a.id === newAlbumId);
-    albumName.value = found?.name || "画册";
-
-    // 清除store中的缓存，强制重新加载
-    delete albumStore.albumImages[newAlbumId];
-    await loadAlbumPage(currentPath.value);
-    await loadTotalImagesCount();
-  } finally {
-    finishLoading();
+  albumId.value = newAlbumId;
+  const rawPath = route.query.path;
+  const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
+  if (qp.startsWith(`album/${newAlbumId}/`)) {
+    albumDetailRouteStore.syncFromUrl(qp);
+  } else {
+    await albumDetailRouteStore.navigate({
+      albumId: newAlbumId,
+      filter: "all",
+      sort: "join-asc",
+      page: 1,
+    });
   }
+  await albumStore.loadAlbums();
+  const found = albumStore.albums.find((a) => a.id === newAlbumId);
+  albumName.value = found?.name || "画册";
+
+  // 清除store中的缓存；列表与总数由 ImageGrid 自动加载（albumName 就绪后 isActive 翻转触发）
+  delete albumStore.albumImages[newAlbumId];
 };
 
 watch(
@@ -1573,7 +1095,6 @@ const handleStartRename = async (event?: MouseEvent) => {
     console.warn("无法重命名：画册ID为空");
     return;
   }
-  console.log("开始重命名画册:", albumName.value);
   editingName.value = albumName.value;
   isRenaming.value = true;
 };
@@ -1621,7 +1142,7 @@ const handleRenameCancel = () => {
 const handleSetAsWallpaperCarousel = async () => {
   if (!albumId.value) return;
   try {
-    if (images.value.length === 0) {
+    if (totalImagesCount.value === 0) {
       ElMessage.warning("画册为空：请先添加图片，再开启轮播");
       return;
     }
@@ -1649,8 +1170,6 @@ const handleDeleteAlbum = async () => {
   }
 
   try {
-
-
     const deletedAlbumId = albumId.value;
 
     await ElMessageBox.confirm(
@@ -1664,36 +1183,6 @@ const handleDeleteAlbum = async () => {
     // 删除画册
     await albumStore.deleteAlbum(deletedAlbumId);
 
-    // 如果删除的是当前轮播画册：自动关闭轮播并切回单张壁纸
-    // if (wasCurrentRotation) {
-    //   // 清除轮播画册
-    //   try {
-    //     await setWallpaperRotationAlbumId(null);
-    //   } catch {
-    //     // 静默失败
-    //   }
-
-    //   // 若轮播开启中：关闭轮播并切回单张壁纸
-    //   if (wasEnabled) {
-    //     try {
-    //       await setWallpaperRotationEnabled(false);
-    //     } catch {
-    //       // 静默失败
-    //     }
-
-    //     // 切回单张壁纸：用当前壁纸路径再 set 一次，确保"单张模式"一致且设置页能显示
-    //     if (currentWallpaperPath) {
-    //       try {
-    //         await invoke("set_wallpaper", { filePath: currentWallpaperPath });
-    //       } catch (e) {
-    //         console.warn("切回单张壁纸失败:", e);
-    //       }
-    //     }
-
-    //     ElMessage.info("删除的画册正在用于轮播：已自动关闭轮播并切换为单张壁纸");
-    //   }
-    // }
-
     ElMessage.success("删除成功");
     // 返回上一页
     router.back();
@@ -1705,19 +1194,10 @@ const handleDeleteAlbum = async () => {
   }
 };
 
-// ---------- Event-driven refresh ----------
-const refreshAlbumDetailPageFromEvents = async () => {
-  if (!albumId.value) return;
-  const prevList = images.value.slice();
-  delete albumStore.albumImages[albumId.value];
-  await loadAlbumPage(currentPath.value);
-  await loadTotalImagesCount();
-
-  const { removedIds } = diffById(prevList, images.value);
-  clearSelectionIfRemoved(removedIds);
-  await pagedAlbum.ensureValidPageAfterMassRemoval();
-};
-
+// ---------- Event-driven refresh（子画册预览维度）----------
+// 本画册页面自身的 images-change / album-images-change 刷新由 ImageGrid（surface adapter）
+// 接管；这里只保留子画册预览的刷新——它属于 view 状态，且需要在 grid 卸载
+// （子画册 tab 激活）时仍然生效。
 function childAlbumEventAffectsCurrentSubtree(albumIds: ReadonlySet<string>): boolean {
   if (!albumId.value) return false;
   if (albumIds.size === 0) return true;
@@ -1741,79 +1221,27 @@ async function refreshAffectedChildPreviews(albumIds: ReadonlySet<string>) {
   }
 }
 
-const refreshAlbumDetailFromAlbumImagesChange = async (p: AlbumImagesChangePayload) => {
-  if (!albumId.value) return;
-  const affected = new Set((p.albumIds ?? []).map((id) => String(id).trim()).filter(Boolean));
-  const selfAffected = affected.size === 0 || affected.has(albumId.value) || affected.has(HIDDEN_ALBUM_ID);
-  const childAffected = childAlbumEventAffectsCurrentSubtree(affected);
-
-  if (childAffected) {
-    await refreshAffectedChildPreviews(affected);
-  }
-
-  if (selfAffected) {
-    await refreshAlbumDetailPageFromEvents();
-  }
-};
-
-// images 表变更：1000ms trailing 节流
-useImagesChangeRefresh({
-  enabled: ref(true),
-  waitMs: 1000,
-  filter: (p) => {
-    if (!albumId.value) return false;
-    const reason = String(p.reason ?? "");
-    const ids = Array.isArray(p.imageIds) ? p.imageIds : [];
-    const intersects = ids.some((id) => leafAllImages.some((img) => img.id === id));
-
-    if (reason === "delete") {
-      return ids.length === 0 || intersects;
-    }
-    if (reason === "change") {
-      if (isAlbumWallpaperFilterPath(currentPath.value)) return true;
-      return ids.length === 0 || intersects;
-    }
-    return true;
-  },
-  onRefresh: refreshAlbumDetailPageFromEvents,
-});
-
-// album_images 表变更：与上同策略节流
-// HIDDEN 命中时也刷新——HideGate 会改变其它画册详情的可见性
 useAlbumImagesChangeRefresh({
   enabled: ref(true),
   waitMs: 1000,
   filter: (p) => {
     if (!albumId.value) return false;
     const ids = new Set((p.albumIds ?? []).map((id) => String(id).trim()).filter(Boolean));
-    return ids.size === 0 || ids.has(albumId.value) || childAlbumEventAffectsCurrentSubtree(ids);
+    return childAlbumEventAffectsCurrentSubtree(ids);
   },
-  onRefresh: refreshAlbumDetailFromAlbumImagesChange,
+  onRefresh: async (p) => {
+    const affected = new Set((p.albumIds ?? []).map((id) => String(id).trim()).filter(Boolean));
+    await refreshAffectedChildPreviews(affected);
+  },
 });
 
 // ---------- Lifecycle ----------
-onMounted(async () => {
-  isAlbumDetailActive.value = true;
-});
+onMounted(() => { });
 
-onActivated(async () => {
-  isAlbumDetailActive.value = true;
-
-  if (albumId.value === FAVORITE_ALBUM_ID && favoriteAlbumDirty.value) {
-    favoriteAlbumDirty.value = false;
-    await loadAlbumPage(currentPath.value);
-    await loadTotalImagesCount();
-  }
-});
+onActivated(() => { });
 
 onDeactivated(() => {
-  isAlbumDetailActive.value = false;
   clearSelection();
-});
-
-onBeforeUnmount(() => {
-  // 收藏状态以 store 为准：无需移除监听
-
 });
 </script>
 

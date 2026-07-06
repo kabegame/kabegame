@@ -604,7 +604,7 @@ const timeMenuRoots = computed<TimeMenuNode[]>(() =>
 /** 当前上下文前缀：hide + search，由 galleryRouteStore 统一拼出。
  *  各 filter 列表查询（`plugin/` / `media-type/` / `date/`）都拼这个前缀，
  *  保证 hide 状态与搜索词对预览计数生效。 */
-const { contextPath: filterContextPrefix } = storeToRefs(galleryRouteStore);
+const { computedContextPath: filterContextPrefix } = storeToRefs(galleryRouteStore);
 
 async function countProviderPath(path: string): Promise<number> {
   const p = path.trim().replace(/\/+$/, "");

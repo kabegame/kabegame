@@ -610,6 +610,30 @@ pub async fn surf_list_records(offset: usize, limit: usize) -> Result<RangedSurf
     Storage::global().list_surf_records(offset, page_limit)
 }
 
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn surf_get_all_records() -> Result<Vec<SurfRecord>, String> {
+    Storage::global().list_all_surf_records()
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn surf_get_records_by_ids(ids: Vec<String>) -> Result<Vec<SurfRecord>, String> {
+    let ids: Vec<String> = ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let map = Storage::global().get_surf_records_by_ids(&ids)?;
+    Ok(ids
+        .into_iter()
+        .filter_map(|id| map.get(&id).cloned())
+        .collect())
+}
+
 fn normalize_surf_host(host: &str) -> String {
     host.trim().to_lowercase()
 }
