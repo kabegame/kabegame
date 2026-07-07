@@ -1055,7 +1055,7 @@ const initAlbum = async (newAlbumId: string) => {
 };
 
 watch(
-  () => route.params.id,
+  () => route.params.albumId,
   async (newId, oldId) => {
     if (!isOnAlbumRoute.value) return;
     if (!newId || typeof newId !== "string") return;
