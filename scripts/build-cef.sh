@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 导出 CEF 预编译运行时(release/minimal)到 CEF_PATH(默认 ~/.local/share/cef),
+# 导出 CEF 预编译运行时(release/minimal)到 CEF_PATH(默认 ~/i/cef-prod),
 # 供构建期 os-plugin 的 collectLinuxCefLibs() 收集进 Linux .deb。
 #
 # - 幂等:目标目录已有 libcef.so + icudtl.dat 则跳过。
@@ -8,7 +8,7 @@
 set -euo pipefail
 
 CEF_VERSION_MAJOR="149"
-DEST="${CEF_PATH:-$HOME/.local/share/cef}"
+DEST="${CEF_PATH:-$HOME/i/cef-prod}"
 
 if [[ -f "$DEST/libcef.so" && -f "$DEST/icudtl.dat" ]]; then
   echo "✅ CEF runtime 已存在,跳过: $DEST"

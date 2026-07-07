@@ -9,6 +9,6 @@ metadata:
 
 在 kabegame 仓库,`cef-dll-sys` 的 build.rs 会在(重)编译时把解析到的 CEF runtime 整目录拷进 `target/debug/`。若环境没有 `CEF_PATH`,它会下载**官方预编译 CEF(不含 H.264/AAC)**并覆盖 `target/debug/libcef.so`,导致所有窗口 `<video>` H.264 播放报 code 4(2026-07-04 实际发生,由一次不带 env 的 `cargo check -p tauri-runtime-cef` 引起)。
 
-**Why:** build.rs 没有 `rerun-if-env-changed=CEF_PATH`,bun dev 设置的 `CEF_PATH=~/.local/share/cef-dev`(自编 H.264 Chromium)只在 cef-dll-sys 恰好重编时生效;一次裸 cargo 命令就能把 runtime 换成官方版。
+**Why:** build.rs 没有 `rerun-if-env-changed=CEF_PATH`,bun dev 设置的 `CEF_PATH=~/i/cef-dev`(自编 H.264 Chromium)只在 cef-dll-sys 恰好重编时生效;一次裸 cargo 命令就能把 runtime 换成官方版。
 
-**How to apply:** 在该仓库手动跑任何 cargo 命令(含 `cargo check -p tauri-runtime-cef`)前先 `export CEF_PATH="$HOME/.local/share/cef-dev"`(prod 用 cef-prod，或者其他平台的路径)。若已被覆盖,把 cef-dev 的 runtime 文件(libcef.so、*.pak、icudtl.dat、locales/ 等,清单见 scripts/plugins/os-plugin.ts 的 CEF_RUNTIME_FILES)拷回 `target/debug/` 即可,无需重编。
+**How to apply:** 在该仓库手动跑任何 cargo 命令(含 `cargo check -p tauri-runtime-cef`)前先 `export CEF_PATH="$HOME/i/cef-dev"`(prod 用 `$HOME/i/cef-prod`，或者其他平台的路径)。若已被覆盖,把 cef-dev 的 runtime 文件(libcef.so、*.pak、icudtl.dat、locales/ 等,清单见 scripts/plugins/os-plugin.ts 的 CEF_RUNTIME_FILES)拷回 `target/debug/` 即可,无需重编。

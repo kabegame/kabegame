@@ -112,8 +112,7 @@ export class ModePlugin extends BasePlugin {
         if (OSPlugin.isLinux && !this.mode!.isWeb) {
           const cefPath = process.env.CEF_PATH || path.join(
             os.homedir(),
-            ".local",
-            "share",
+            "i",
             bs.context.cmd.isDev ? "cef-dev" : "cef-prod",
           );
           const libcef = path.join(cefPath, "libcef.so");
@@ -122,7 +121,8 @@ export class ModePlugin extends BasePlugin {
               [
                 `Linux CEF runtime not found: ${libcef}`,
                 "Set CEF_PATH to an exported cef-rs runtime directory, or run:",
-                'cargo run -p export-cef-dir -- --force "$HOME/.local/share/cef"',
+                'scripts/build-chromium.sh dev',
+                'scripts/build-chromium.sh prod',
               ].join("\n"),
             );
           }

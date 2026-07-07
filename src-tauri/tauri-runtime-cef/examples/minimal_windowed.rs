@@ -6,7 +6,7 @@
 //!
 //! Run:
 //! ```sh
-//! export CEF_PATH="$HOME/.local/share/cef"
+//! export CEF_PATH="$HOME/i/cef-dev"
 //! export LD_LIBRARY_PATH="$CEF_PATH:$LD_LIBRARY_PATH"
 //! CEF_WINDOWED_URL=file:///tmp/cef-gpu-readback.html \
 //!   cargo run -p tauri-runtime-cef --example minimal_windowed

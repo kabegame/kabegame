@@ -11,10 +11,9 @@
 #   scripts/build-chromium.sh prod --clean
 #
 # 关键前提:Chromium/CEF 的源码树重度依赖符号链接 + POSIX 权限 + 大小写敏感,
-# exFAT/NTFS 都不行。本机 ~/e 是 exFAT,所以把构建空间放进一个 ext4 镜像里 loop 挂载:
-#   镜像:   ~/e/cef-build.img   (ext4,实际数据落在 ~/e 大盘)
-#   挂载点: ~/cefbuild          (空目录,在 /home 上,不占空间)
-# 本脚本会在需要时自动创建镜像并挂载(挂载需要 sudo)。
+# exFAT/NTFS 都不行。本机已把构建空间放到 POSIX 文件系统下的 ~/i:
+#   构建根目录: ~/i/cefbuild
+#   runtime:    ~/i/cef-dev 或 ~/i/cef-prod
 #
 set -euo pipefail
 
@@ -22,10 +21,9 @@ set -euo pipefail
 # 可调参数
 # ---------------------------------------------------------------------------
 CEF_BRANCH=7827                     # 对应 CEF 149.0.x / Chromium 149.0.7827.x(与 cef-rs "149" 对齐)
-IMG="$HOME/e/cef-build.img"         # ext4 镜像文件(放 exFAT 大盘)
-IMG_SIZE=200G                       # 镜像大小(prod LTO 峰值占用不小,别低于 150G)
-CEFBUILD="$HOME/cefbuild"           # 挂载点 = 构建根目录
-CEF_EXPORT_ROOT="$HOME/.local/share" # cef-rs 扁平 runtime 导出目录的父目录
+CEF_ROOT="$HOME/i"                  # CEF 构建与 runtime 根目录
+CEFBUILD="$CEF_ROOT/cefbuild"       # 构建根目录
+CEF_EXPORT_ROOT="$CEF_ROOT"         # cef-rs 扁平 runtime 导出目录的父目录
 CEF_RS_ARCHIVE_VERSION=149.0.2       # 对应 Cargo.lock 里的 cef-dll-sys 149.0.0+149.0.2
 
 # 浅 checkout:只拉当前分支 tip,不下完整 git 历史(chromium/src 历史占大头,
@@ -66,22 +64,11 @@ log() { printf '\033[1;36m[build-chromium]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[build-chromium] 错误:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
-# 1. 确保 ext4 镜像已挂载(没有则创建,未挂则挂载)
+# 1. 确保构建目录存在
 # ---------------------------------------------------------------------------
-ensure_mount() {
-  if mountpoint -q "$CEFBUILD"; then
-    log "构建空间已挂载: $CEFBUILD"
-    return
-  fi
-  if [[ ! -f "$IMG" ]]; then
-    log "镜像不存在,创建 $IMG ($IMG_SIZE, ext4)..."
-    truncate -s "$IMG_SIZE" "$IMG"
-    mkfs.ext4 -q "$IMG"
-  fi
+ensure_build_dir() {
   mkdir -p "$CEFBUILD"
-  log "挂载 $IMG -> $CEFBUILD (需要 sudo)"
-  sudo mount -o loop "$IMG" "$CEFBUILD"
-  sudo chown "$USER:$USER" "$CEFBUILD"
+  log "构建空间: $CEFBUILD"
 }
 
 # ---------------------------------------------------------------------------
@@ -278,7 +265,7 @@ run_build() {
 
 # ---------------------------------------------------------------------------
 main() {
-  ensure_mount
+  ensure_build_dir
   check_symlink
   setup_env
   bootstrap

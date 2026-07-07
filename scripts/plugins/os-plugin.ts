@@ -331,11 +331,11 @@ export class OSPlugin extends BasePlugin {
   }
 
   // ===== CEF runtime(Linux standard/light)=====
-  // CEF 目录解析与 mode-plugin 一致:优先 CEF_PATH(prepareEnv 已设),回退 ~/.local/share/cef。
+  // CEF 目录解析与 mode-plugin 一致:优先 CEF_PATH(prepareEnv 已设),回退 ~/i/cef-prod。
   private cefDir(): string {
     return (
       process.env.CEF_PATH ||
-      path.join(os.homedir(), ".local", "share", "cef")
+      path.join(os.homedir(), "i", "cef-prod")
     );
   }
 
@@ -350,8 +350,8 @@ export class OSPlugin extends BasePlugin {
         [
           `❌ 未找到 CEF 运行时产物: ${missing.join(", ")}(目录: ${dir})`,
           `请先导出 CEF(release/minimal)或设置 CEF_PATH:`,
-          `  bun run build:cef`,
-          `  # 或 cargo run -p export-cef-dir -- --force "$HOME/.local/share/cef"`,
+          `  scripts/build-chromium.sh prod`,
+          `  # 开发运行时: scripts/build-chromium.sh dev`,
         ].join("\n"),
       );
     }
