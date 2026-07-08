@@ -156,7 +156,7 @@ pub async fn fix_wallpaper_zorder<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
 pub fn wallpaper_window_ready<R: tauri::Runtime>(_app: tauri::AppHandle<R>) -> Result<(), String> {
     // 标记窗口已完全初始化
     println!("壁纸窗口已就绪");
-    crate::wallpaper::WallpaperWindow::mark_ready();
+    crate::wallpaper::WallpaperWindow::<R>::mark_ready();
     Ok(())
 }
 

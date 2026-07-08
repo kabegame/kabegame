@@ -91,11 +91,18 @@ pub async fn get_gallery_time_filter_data() -> Result<Value, String> {
 }
 
 pub async fn get_image_by_id(image_id: String) -> Result<Value, String> {
-    let mut image = Storage::find_image_by_id(&image_id)?;
     #[cfg(feature = "web")]
-    if let Some(info) = image.as_mut() {
-        rewrite_image_info(info);
+    {
+        let mut image = Storage::find_image_by_id(&image_id)?;
+        if let Some(info) = image.as_mut() {
+            rewrite_image_info(info);
+        }
+        return serde_json::to_value(image).map_err(|e| e.to_string());
     }
+
+    #[cfg(not(feature = "web"))]
+    let image = Storage::find_image_by_id(&image_id)?;
+
     serde_json::to_value(image).map_err(|e| e.to_string())
 }
 

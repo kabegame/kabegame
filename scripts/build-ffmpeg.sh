@@ -31,6 +31,8 @@
 #       1. 打开 x64 Native Tools Command Prompt for VS
 #       2. 执行 D:\Programs\MSYS2\msys2_shell.cmd -mingw64 -use-full-path -defterm -no-start -here -c "cd /d/Codes/kabegame && ./scripts/build-ffmpeg.sh"
 
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FFMPEG_SRC="${REPO_ROOT}/third/FFmpeg"
@@ -39,6 +41,7 @@ INSTALL_DIR="${BUILD_DIR}/install"
 X264_SRC="${REPO_ROOT}/third/x264"
 X264_BUILD_DIR="${REPO_ROOT}/third/x264-build"
 X264_INSTALL_DIR="${X264_BUILD_DIR}/install"
+BUILD_TMP_DIR="${REPO_ROOT}/third/.tmp"
 
 case "$(uname -s)" in
   Darwin)            OS_KIND="unix" ;;
@@ -46,6 +49,16 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) OS_KIND="windows" ;;
   *) echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
 esac
+
+mkdir -p "$BUILD_TMP_DIR"
+if [[ "$OS_KIND" == "windows" ]]; then
+  BUILD_TMP_WIN="$(cygpath -w "$BUILD_TMP_DIR")"
+  export TMPDIR="$BUILD_TMP_DIR"
+  export TMP="$BUILD_TMP_WIN"
+  export TEMP="$BUILD_TMP_WIN"
+else
+  export TMPDIR="$BUILD_TMP_DIR"
+fi
 
 if [[ ! -f "$FFMPEG_SRC/configure" ]]; then
   echo "FFmpeg 源码未找到: $FFMPEG_SRC/configure" >&2
@@ -81,7 +94,6 @@ mkdir -p "$X264_BUILD_DIR" && cd "$X264_BUILD_DIR"
 X264_FLAGS=(
   "--prefix=$X264_INSTALL_DIR"
   "--enable-static"
-  "--disable-shared"
   "--disable-cli"
 )
 case "$(uname -s)" in
@@ -94,13 +106,9 @@ esac
 
 "$X264_SRC/configure" "${X264_FLAGS[@]}"
 
-# Linux：关闭透明大页（THP）。x264_malloc 对 >=1.75MB 的分配（如 1080p 帧缓冲）
-# 会调用 memalign(2MB, ...) 请求 2MB 对齐；而 CEF 的 PartitionAlloc 上限
-# kMaxSupportedAlignment 仅约 1MB（kSuperPageSize/2），会在 partition_root.h 断言失败崩溃。
-# x264 无 --disable-thp 选项（configure 依据 MADV_HUGEPAGE 自动开启），故在 configure
-# 之后改写生成的 config.h 关闭它。关闭后仅剩 NATIVE_ALIGN(64 字节) 对齐，在上限内；
-# asm/AVX2 全部保留（asm 需要的是数据访问对齐，由 64 字节分配 + ALIGNED_32/64 栈宏满足）。
-if [[ "$(uname -s)" == "Linux" ]]; then
+if [[ "$OS_KIND" == "unix" && "$(uname -s)" == "Linux" ]]; then
+  # Linux only: disable x264 THP. CEF's PartitionAlloc rejects the 2MB
+  # alignment requested by x264_malloc for large frame buffers.
   sed -i 's/#define HAVE_THP 1/#define HAVE_THP 0/' config.h
   grep -q "#define HAVE_THP 0" config.h || {
     echo "错误: 未能在 x264 config.h 中关闭 HAVE_THP" >&2
@@ -220,6 +228,10 @@ CONFIG_FLAGS=(
   # binding 里引用了符号但没有调用，去掉无影响
   "--disable-avdevice"
   "--disable-doc"
+  "--disable-iconv"
+  "--disable-zlib"
+  "--disable-bzlib"
+  "--disable-lzma"
   "--enable-small"
   "--disable-runtime-cpudetect"
 

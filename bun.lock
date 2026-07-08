@@ -122,7 +122,6 @@
       "name": "@kabegame/plugin-sdk",
       "version": "0.1.0",
       "dependencies": {
-        "@kabegame/types": "file:../kabegame-types",
         "css-select": "^5.1.0",
         "domhandler": "^5.0.3",
         "domutils": "^3.2.2",

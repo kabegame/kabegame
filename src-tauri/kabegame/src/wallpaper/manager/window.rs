@@ -41,7 +41,7 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
             return Err("File does not exist".to_string());
         }
 
-        WallpaperWindow::wait_ready(std::time::Duration::from_secs(100))?;
+        WallpaperWindow::<R>::wait_ready(std::time::Duration::from_secs(100))?;
 
         // 内容由壁纸页面通过 setting-change 自驱动，此处仅管理窗口可见性（remount/show）
         if let Ok(wp) = self.wallpaper_window.lock() {
