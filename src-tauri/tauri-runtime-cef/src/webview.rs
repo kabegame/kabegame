@@ -758,10 +758,20 @@ mod imp {
         // popup 拦截:Linux 上 tauri-runtime 的 NewWindowFeatures/NewWindowOpener
         // 携带 webkit2gtk::WebView 字段,CEF runtime 无法构造,因此无法把 popup
         // 请求转交给 tauri 的 new_window_handler 闭包裁决。折中语义:凡上层注册了
-        // on_new_window 的 webview 视为「禁止弹新窗口」,popup 一律取消,http/https
-        // 目标改为在 opener 主框架内导航(与 wry 平台上 surf 的 navigate + Deny
-        // 行为对齐)。未注册 on_new_window 的 webview 不挂本 handler,保持 CEF
-        // 默认 popup 行为。devtools 走 on_before_dev_tools_popup,不受影响。
+        // on_new_window 的 webview,tab 类 disposition(target="_blank"、Ctrl/中键
+        // 点击等)视为「禁止弹新窗口」,一律取消,http/https 目标改为在 opener 主
+        // 框架内导航(与 wry 平台上 surf 的 navigate + Deny 行为对齐)。
+        //
+        // 例外:真正的 `window.open(url, name, "width=..,height=..")` 弹窗以
+        // NEW_POPUP disposition 到达。OAuth 登录、分享等流程依赖 window.open() 返回
+        // 可用的 WindowProxy 并与 opener 双向 postMessage(如 Google Identity
+        // Services),取消后 window.open() 返回 null,页面会在 popup.postMessage
+        // 处抛 "Cannot read properties of null (reading 'postMessage')" 并白屏。
+        // 对 NEW_POPUP 放行,退回 CEF 默认弹窗行为(与未注册 on_new_window 的
+        // webview 一致,生成可与 opener 通信的真实弹窗)。
+        //
+        // 未注册 on_new_window 的 webview 不挂本 handler,保持 CEF 默认 popup 行为。
+        // devtools 走 on_before_dev_tools_popup,不受影响。
         pub(crate) struct PopupToNavigationLifeSpanHandler {}
         impl LifeSpanHandler {
             fn on_before_popup(
@@ -771,7 +781,7 @@ mod imp {
                 _popup_id: ::std::os::raw::c_int,
                 target_url: Option<&CefString>,
                 _target_frame_name: Option<&CefString>,
-                _target_disposition: WindowOpenDisposition,
+                target_disposition: WindowOpenDisposition,
                 _user_gesture: ::std::os::raw::c_int,
                 _popup_features: Option<&PopupFeatures>,
                 _window_info: Option<&mut WindowInfo>,
@@ -780,6 +790,10 @@ mod imp {
                 _extra_info: Option<&mut Option<DictionaryValue>>,
                 _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
             ) -> ::std::os::raw::c_int {
+                // 返回 0 = 放行,让 CEF 以默认弹窗行为生成真实窗口(见上方注释)。
+                if target_disposition == WindowOpenDisposition::NEW_POPUP {
+                    return 0;
+                }
                 let url = target_url.map(CefString::to_string).unwrap_or_default();
                 let is_web_url = Url::parse(&url)
                     .map(|u| matches!(u.scheme(), "http" | "https"))

@@ -307,8 +307,20 @@ pub async fn surf_start_session<R: Runtime>(
             .on_new_window({
                 let app = app.clone();
                 let label = label.clone();
-                move |url, _features| {
+                move |url, features| {
                     let scheme = url.scheme();
+                    // 真正的 window.open(url, name, "width=..,height=..") 弹窗(OAuth 登录、
+                    // 分享等)会带上窗口尺寸;此类流程依赖 window.open() 返回可用的
+                    // WindowProxy 并与 opener 双向 postMessage(如 Google Identity
+                    // Services),Deny 后 window.open() 返回 null,页面会在
+                    // popup.postMessage 处抛 "Cannot read properties of null" 并白屏。
+                    // 放行为真实弹窗。(CEF runtime 该闭包不被调用,弹窗裁决见
+                    // tauri-runtime-cef 的 PopupToNavigationLifeSpanHandler。)
+                    if matches!(scheme, "http" | "https") && features.size().is_some() {
+                        return NewWindowResponse::Allow;
+                    }
+                    // 其余(target="_blank"、无尺寸的 window.open):维持 surf 单窗口语义,
+                    // http/https 目标改在当前窗口内导航。
                     if matches!(scheme, "http" | "https") {
                         if let Some(webview) = app.get_webview(&label) {
                             let _ = webview.navigate(url);

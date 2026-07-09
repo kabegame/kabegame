@@ -203,7 +203,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
   for (const entry of entries) assignEntry(map, entry);
 
   const localEntries = [
-    frontendLocal("appBackgroundEnabled", true),
+    frontendLocal("appBackgroundEnabled", false),
     frontendLocal("appBackgroundBlur", 2),
     frontendLocal("appBackgroundOpacity", 0.25),
     frontendLocal("galleryPageSize", 100),
