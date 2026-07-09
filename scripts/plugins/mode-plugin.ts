@@ -109,31 +109,46 @@ export class ModePlugin extends BasePlugin {
         if (OSPlugin.isLinux) {
           this.setEnv("FFMPEG_LINK_MODE", "static");
         }
-        if (OSPlugin.isLinux && !this.mode!.isWeb) {
-          const cefPath = process.env.CEF_PATH || path.join(
-            os.homedir(),
-            "i",
-            bs.context.cmd.isDev ? "cef-dev" : "cef-prod",
-          );
-          const libcef = path.join(cefPath, "libcef.so");
+        // Linux/Windows standard|light 用 CEF runtime。必须在任何 cargo 命令前设好
+        // CEF_PATH,否则 cef-dll-sys 会下载官方无 H.264 的 CEF 覆盖 target 目录
+        // (见 .cursor/rules/cef-path-set.mdc)。
+        // 回退约定:Linux ~/i/cef-{dev,prod};Windows H:\cef-{dev,prod}。
+        if ((OSPlugin.isLinux || OSPlugin.isWindows) && !this.mode!.isWeb) {
+          // dev/check 用 cef-dev(check 只需要任意有效 CEF 目录做编译,不打包);
+          // 仅 build 要求 cef-prod。
+          const cefVariant =
+            bs.context.cmd.isDev || bs.context.cmd.isCheck ? "cef-dev" : "cef-prod";
+          const cefPath =
+            process.env.CEF_PATH ||
+            (OSPlugin.isWindows
+              ? path.join("H:", cefVariant)
+              : path.join(os.homedir(), "i", cefVariant));
+          const libcefName = OSPlugin.isWindows ? "libcef.dll" : "libcef.so";
+          const libcef = path.join(cefPath, libcefName);
           if (!fs.existsSync(libcef)) {
             throw new Error(
               [
-                `Linux CEF runtime not found: ${libcef}`,
-                "Set CEF_PATH to an exported cef-rs runtime directory, or run:",
-                'scripts/build-chromium.sh dev',
-                'scripts/build-chromium.sh prod',
+                `CEF runtime not found: ${libcef}`,
+                "Set CEF_PATH to an exported cef-rs runtime directory" +
+                  (OSPlugin.isLinux ? ", or run:" : "."),
+                ...(OSPlugin.isLinux
+                  ? ["scripts/build-chromium.sh dev", "scripts/build-chromium.sh prod"]
+                  : []),
               ].join("\n"),
             );
           }
           this.setEnv("CEF_PATH", cefPath);
-          const libraryPath = (process.env.LD_LIBRARY_PATH || "")
-            .split(path.delimiter)
-            .filter(Boolean);
-          if (!libraryPath.includes(cefPath)) {
-            libraryPath.unshift(cefPath);
+          // Windows 不需要注入库搜索路径:cef-dll-sys build.rs 会把整个 CEF runtime
+          // 拷进 target/{debug,release}/(exe 同目录),加载器直接命中。
+          if (OSPlugin.isLinux) {
+            const libraryPath = (process.env.LD_LIBRARY_PATH || "")
+              .split(path.delimiter)
+              .filter(Boolean);
+            if (!libraryPath.includes(cefPath)) {
+              libraryPath.unshift(cefPath);
+            }
+            this.setEnv("LD_LIBRARY_PATH", libraryPath.join(path.delimiter));
           }
-          this.setEnv("LD_LIBRARY_PATH", libraryPath.join(path.delimiter));
         }
         // Linux 虚拟盘:静态链接系统 libfuse3(libfuse3-dev 提供 libfuse3.a),
         // 不产生 libfuse3.so 运行时依赖。fuser 的 libfuse feature 用

@@ -25,6 +25,40 @@
   dll_move_done:
   FindClose $0
 
+  ; Move the CEF runtime from resources/cef to install root. libcef.dll is
+  ; load-time linked and CEF requires dll/pak/dat files and locales/ to sit
+  ; next to the exe, so they cannot stay under resources\.
+  IfFileExists "$INSTDIR\resources\cef\libcef.dll" 0 cef_all_done
+  FindFirst $0 $1 "$INSTDIR\resources\cef\*.*"
+  cef_move_loop:
+    StrCmp $1 "" cef_move_done
+    StrCmp $1 "." cef_move_next
+    StrCmp $1 ".." cef_move_next
+    StrCmp $1 "locales" cef_move_next
+    ExecWait '$\"$SYSDIR\cmd.exe$\" /C move /Y $\"$INSTDIR\resources\cef\$1$\" $\"$INSTDIR$\"' $2
+    DetailPrint "Move CEF $1 -> $INSTDIR (exit $2)"
+  cef_move_next:
+    FindNext $0 $1
+    Goto cef_move_loop
+  cef_move_done:
+  FindClose $0
+
+  CreateDirectory "$INSTDIR\locales"
+  FindFirst $0 $1 "$INSTDIR\resources\cef\locales\*.pak"
+  cef_locale_move_loop:
+    StrCmp $1 "" cef_locale_move_done
+    ExecWait '$\"$SYSDIR\cmd.exe$\" /C move /Y $\"$INSTDIR\resources\cef\locales\$1$\" $\"$INSTDIR\locales$\"' $2
+    DetailPrint "Move CEF locale $1 -> $INSTDIR\locales (exit $2)"
+    FindNext $0 $1
+    Goto cef_locale_move_loop
+  cef_locale_move_done:
+  FindClose $0
+
+  ; Remove the now-empty staging dirs (best-effort; RMDir only removes empty dirs)
+  RMDir "$INSTDIR\resources\cef\locales"
+  RMDir "$INSTDIR\resources\cef"
+  cef_all_done:
+
   ; Check if dokan2.dll was bundled (not present in light mode) for driver setup
   IfFileExists "$INSTDIR\dokan2.dll" +3 0
     DetailPrint "dokan2.dll not bundled (light mode), skipping Dokan driver setup."
@@ -86,6 +120,7 @@
     Delete "$INSTDIR\kabegame-cliw.exe"
 
   ; Delete all DLLs we moved from resources/bin (dokan2.dll and other bin/*.dll)
+  ; This sweep also removes the CEF DLLs (libcef.dll, chrome_elf.dll, ...).
   FindFirst $0 $1 "$INSTDIR\*.dll"
   dll_del_loop:
     StrCmp $1 "" dll_del_done
@@ -94,6 +129,17 @@
     Goto dll_del_loop
   dll_del_done:
   FindClose $0
+
+  ; Delete non-DLL CEF runtime files moved to install root (best-effort)
+  Delete "$INSTDIR\icudtl.dat"
+  Delete "$INSTDIR\v8_context_snapshot.bin"
+  Delete "$INSTDIR\resources.pak"
+  Delete "$INSTDIR\chrome_100_percent.pak"
+  Delete "$INSTDIR\chrome_200_percent.pak"
+  Delete "$INSTDIR\vk_swiftshader_icd.json"
+  ; CEF verbose log written next to the exe (if any)
+  Delete "$INSTDIR\debug.log"
+  RMDir /r "$INSTDIR\locales"
 
   ; Remove folder attributes (best-effort).
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib -s -r $\"$INSTDIR$\"'

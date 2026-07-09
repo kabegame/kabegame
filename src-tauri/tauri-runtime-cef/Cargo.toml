@@ -1,7 +1,7 @@
 [package]
 name = "tauri-runtime-cef"
 version = "0.1.0"
-description = "CEF (Chromium) webview backend for Tauri — Linux desktop only"
+description = "CEF (Chromium) webview backend for Tauri — Linux & Windows desktop"
 authors = ["kabegame"]
 edition = "2021"
 publish = false
@@ -34,10 +34,20 @@ cef = { version = "149", default-features = false }
 # stay ON, plus rwh_06.
 tao = { version = "0.35", features = ["rwh_06"] }
 
-gtk = { version = "0.18", features = ["v3_24"] }
 tracing = "0.1"
 ash = "0.38"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "0.18", features = ["v3_24"] }
 libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation"] }
+windows-sys = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [[example]]
 name = "minimal_windowed"

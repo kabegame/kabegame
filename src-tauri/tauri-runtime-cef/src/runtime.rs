@@ -21,10 +21,14 @@ mod imp {
     };
 
     use cef::{args::Args, *};
+    #[cfg(target_os = "linux")]
     use gtk::glib::MainContext;
+    #[cfg(target_os = "linux")]
+    use tao::platform::unix::EventLoopBuilderExtUnix;
+    #[cfg(target_os = "windows")]
+    use tao::platform::windows::EventLoopBuilderExtWindows;
     use tao::{
         event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy},
-        platform::unix::EventLoopBuilderExtUnix,
         window::Icon as TaoIcon,
     };
     use tauri_runtime::window::WindowId;
@@ -77,6 +81,41 @@ mod imp {
 
         command_line
             .append_switch_with_value(Some(&switch), Some(&CefString::from(value.as_str())));
+    }
+
+    fn apply_windowed_gpu_mode(command_line: &CommandLine) {
+        let mode = std::env::var("KABEGAME_CEF_GPU_MODE")
+            .or_else(|_| std::env::var("CEF_WINDOWED_GPU_MODE"))
+            .unwrap_or_else(|_| default_windowed_gpu_mode().to_string());
+
+        match mode.as_str() {
+            "" | "default" => {}
+            "disabled" | "disable" | "off" => {
+                command_line.append_switch(Some(&CefString::from("disable-gpu")));
+                command_line.append_switch(Some(&CefString::from("disable-gpu-compositing")));
+            }
+            angle_backend => {
+                command_line.append_switch_with_value(
+                    Some(&CefString::from("use-angle")),
+                    Some(&CefString::from(angle_backend)),
+                );
+                if angle_backend == "vulkan" {
+                    command_line.append_switch_with_value(
+                        Some(&CefString::from("enable-features")),
+                        Some(&CefString::from("Vulkan")),
+                    );
+                }
+            }
+        }
+    }
+
+    fn default_windowed_gpu_mode() -> &'static str {
+        if cfg!(target_os = "linux") {
+            // Linux 视频合成在 ANGLE/GL 下比 Vulkan 更稳。
+            "gl"
+        } else {
+            "default"
+        }
     }
 
     /// CEF runtime 的主状态。
@@ -397,6 +436,8 @@ mod imp {
         minimized: bool,
         focused: bool,
         always_on_top: bool,
+        #[cfg(target_os = "windows")]
+        native_options: WindowsNativeWindowOptions,
     }
 
     impl WindowedWindowState {
@@ -430,6 +471,15 @@ mod imp {
         inner: cef::Window,
     }
 
+    #[cfg(target_os = "windows")]
+    #[derive(Clone, Copy, Debug)]
+    struct WindowsNativeWindowOptions {
+        owner_hwnd: Option<isize>,
+        parent_hwnd: Option<isize>,
+        drag_and_drop: bool,
+        shadow: Option<bool>,
+    }
+
     #[allow(clippy::non_send_fields_in_send_ty)]
     unsafe impl Send for CefWindow {}
     #[allow(clippy::non_send_fields_in_send_ty)]
@@ -439,12 +489,16 @@ mod imp {
     ///
     /// GTK 类型本身不是 `Send`,但这里的通道只用于主循环同步回复 dispatcher
     /// getter,使用方式与 `tauri-runtime-wry` 的 wrapper 相同。
+    #[cfg(target_os = "linux")]
     pub(crate) struct GtkWindow(pub gtk::ApplicationWindow);
+    #[cfg(target_os = "linux")]
     #[allow(clippy::non_send_fields_in_send_ty)]
     unsafe impl Send for GtkWindow {}
 
     /// 允许 GTK box 跨内部 mpsc 返回的 wrapper。
+    #[cfg(target_os = "linux")]
     pub(crate) struct GtkBox(pub gtk::Box);
+    #[cfg(target_os = "linux")]
     #[allow(clippy::non_send_fields_in_send_ty)]
     unsafe impl Send for GtkBox {}
 
@@ -498,7 +552,9 @@ mod imp {
         CurrentMonitor,
         PrimaryMonitor,
         AvailableMonitors,
+        #[cfg(target_os = "linux")]
         GtkWindow,
+        #[cfg(target_os = "linux")]
         GtkBox,
         RawWindowHandle,
         Theme,
@@ -637,6 +693,7 @@ mod imp {
     pub fn execute_cef_subprocess_and_exit() {
         // Select X11 before CEF parses
         // the process environment or launches any child process.
+        #[cfg(target_os = "linux")]
         unsafe {
             std::env::set_var("GDK_BACKEND", "x11");
         }
@@ -678,6 +735,7 @@ mod imp {
                 command_line: Option<&mut CommandLine>,
             ) {
                 let Some(cl) = command_line else { return };
+                #[cfg(target_os = "linux")]
                 if cl.has_switch(Some(&CefString::from("ozone-platform"))) == 0 {
                     cl.append_switch_with_value(
                         Some(&CefString::from("ozone-platform")),
@@ -685,23 +743,20 @@ mod imp {
                     );
                 }
                 cl.append_switch(Some(&CefString::from("no-sandbox")));
-                // ANGLE 用 GL 后端(而非 Vulkan):Linux 下 Vulkan 后端在视频合成时
-                // 会触发 GPU 进程 device-lost("SharedContextState context lost via
-                // Skia" → GPU 进程崩溃 → 页面自动重载),GL 后端在视频播放时明显更稳。
-                cl.append_switch_with_value(
-                    Some(&CefString::from("use-angle")),
-                    Some(&CefString::from("gl")),
-                );
+                apply_windowed_gpu_mode(cl);
                 // CEF WebContents are not Chrome browser tabs. Some Chrome UI
                 // features assume tabs::TabInterface exists and crash on SPA
                 // soft navigations when variations enable them.
                 disable_chrome_only_features(cl);
-                // 禁用 zygote:Linux 下渲染进程默认从 zygote fork,**不会**重新
-                // `execute_process` → 不跑 `on_register_custom_schemes` → fork 出的
-                // renderer 不认 `ipc://` / `cef-ipc://`(`ERR_UNKNOWN_URL_SCHEME`),
-                // 导致 Tauri IPC 全断、ACL 因 `is_local=false` 拒命令。关掉 zygote
-                // 后每个 renderer 作为独立进程 re-exec 本二进制,自己注册自定义 scheme。
-                cl.append_switch(Some(&CefString::from("no-zygote")));
+                #[cfg(target_os = "linux")]
+                {
+                    // 禁用 zygote:Linux 下渲染进程默认从 zygote fork,**不会**重新
+                    // `execute_process` → 不跑 `on_register_custom_schemes` → fork 出的
+                    // renderer 不认 `ipc://` / `cef-ipc://`(`ERR_UNKNOWN_URL_SCHEME`),
+                    // 导致 Tauri IPC 全断、ACL 因 `is_local=false` 拒命令。关掉 zygote
+                    // 后每个 renderer 作为独立进程 re-exec 本二进制,自己注册自定义 scheme。
+                    cl.append_switch(Some(&CefString::from("no-zygote")));
+                }
                 // NOTE: 不要开 `single-process`。CEF/Chromium 单进程模式已弃用且极不
                 // 稳定(并伴随 "Cannot use V8 Proxy resolver in
                 // single process mode")。多进程下渲染/GPU 子进程会 re-exec 本二进制,
@@ -831,8 +886,15 @@ mod imp {
             ) {
                 let Some(bounds) = new_bounds else { return };
                 let scale = if let Some(window) = window {
-                    let shared = self.shared.lock().expect("windowed state mutex poisoned");
-                    layout_windowed_browser_view(&shared, window);
+                    // 必须 try_lock:Windows 上 attach/layout 期间 SetWindowPos 会
+                    // **同步**派发 WM_WINDOWPOSCHANGED → CEF 立刻回调本函数;此时
+                    // `shared` 正被 on_window_created / 主流程持有,同线程重入
+                    // `Mutex::lock` 直接死锁(主窗口创建即挂死,Linux 的 X11 bounds
+                    // 事件是异步的所以从未暴露)。拿不到锁说明持锁方随后自会 layout,
+                    // 跳过无损;scale 换算不需要锁。
+                    if let Ok(shared) = self.shared.try_lock() {
+                        layout_windowed_browser_view(&shared, window);
+                    }
                     window
                         .display()
                         .map(|display| display.device_scale_factor() as f64)
@@ -1216,8 +1278,16 @@ mod imp {
         None
     }
 
-    /// CEF 缓存/用户数据目录(cookies、缓存等)。优先 XDG / HOME,回退临时目录。
+    /// CEF 缓存/用户数据目录(cookies、缓存等)。
+    /// Linux 优先 XDG / HOME;Windows 用 %LOCALAPPDATA%(GUI 启动时 HOME 通常不存在,
+    /// 不能让 cookies/localStorage 落进会被系统清理的 Temp);都取不到才回退临时目录。
     fn cef_root_cache_dir() -> std::path::PathBuf {
+        #[cfg(target_os = "windows")]
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            if !local_app_data.is_empty() {
+                return std::path::PathBuf::from(local_app_data).join("kabegame-cef");
+            }
+        }
         if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
             if !xdg.is_empty() {
                 return std::path::PathBuf::from(xdg).join("kabegame-cef");
@@ -1330,9 +1400,11 @@ mod imp {
         pub(crate) const AvailableMonitors: Self =
             Self::from_kind(WindowGetterKind::AvailableMonitors);
     }
+    #[cfg(target_os = "linux")]
     impl WindowGetter<GtkWindow> {
         pub(crate) const GtkWindow: Self = Self::from_kind(WindowGetterKind::GtkWindow);
     }
+    #[cfg(target_os = "linux")]
     impl WindowGetter<GtkBox> {
         pub(crate) const GtkBox: Self = Self::from_kind(WindowGetterKind::GtkBox);
     }
@@ -1483,6 +1555,7 @@ mod imp {
 
         /// 初始化 CEF、创建 tao event loop,并准备 runtime 状态表。
         fn new_any_thread(args: RuntimeInitArgs) -> Result<Self> {
+            #[cfg(target_os = "linux")]
             unsafe {
                 std::env::set_var("GDK_BACKEND", "x11");
             }
@@ -1499,9 +1572,14 @@ mod imp {
 
             let mut builder = EventLoopBuilder::<Message<T>>::with_user_event();
             builder.with_any_thread(true);
+            // `RuntimeInitArgs::app_id` 仅存在于 linux/BSD;Windows 侧 tauri-runtime-wry
+            // 也不设 AppUserModelID(由安装器快捷方式承载),保持对齐。
+            #[cfg(target_os = "linux")]
             if let Some(app_id) = args.app_id {
                 builder.with_app_id(app_id);
             }
+            #[cfg(not(target_os = "linux"))]
+            let _ = &args;
             let event_loop = builder.build();
             // CEF 的 Display 保留 XWayland fractional scale；tao/GTK 在该场景
             // 可能只报告整数 scale。仅 CEF 未返回 display 时回退 tao。
@@ -1637,10 +1715,10 @@ mod imp {
 
         fn set_device_event_filter(&mut self, _filter: DeviceEventFilter) {}
 
-        /// 单步驱动 CEF Views/GLib 消息泵。
+        /// 单步驱动 CEF Views 与当前平台消息泵。
         fn run_iteration<F: FnMut(RunEvent<T>) + 'static>(&mut self, callback: F) {
             let mut callback = callback;
-            pump_glib(&MainContext::default());
+            pump_platform_messages();
             do_message_loop_work();
             callback(RunEvent::MainEventsCleared);
         }
@@ -1716,6 +1794,13 @@ mod imp {
             // 需在 delegate 里显式应用(见 on_window_created)。
             let center = pending.window_builder.center;
             let icon = pending.window_builder.icon_rgba.clone().map(Arc::new);
+            #[cfg(target_os = "windows")]
+            let native_options = WindowsNativeWindowOptions {
+                owner_hwnd: pending.window_builder.owner_hwnd,
+                parent_hwnd: pending.window_builder.parent_hwnd,
+                drag_and_drop: pending.window_builder.drag_and_drop,
+                shadow: pending.window_builder.shadow,
+            };
             let size = tao_size_to_physical(attrs.inner_size, 1024, 768);
             let position = attrs
                 .position
@@ -1797,6 +1882,8 @@ mod imp {
             if attrs.always_on_top {
                 window.set_always_on_top(1);
             }
+            #[cfg(target_os = "windows")]
+            apply_windows_native_window_options(&window, native_options);
             window.set_title(Some(&CefString::from(attrs.title.as_str())));
             {
                 let mut shared = shared.lock().expect("windowed state mutex poisoned");
@@ -1835,6 +1922,8 @@ mod imp {
                         minimized: false,
                         focused: attrs.focused,
                         always_on_top: attrs.always_on_top,
+                        #[cfg(target_os = "windows")]
+                        native_options,
                     }),
                     listeners: Vec::new(),
                     webviews,
@@ -1936,10 +2025,10 @@ mod imp {
         /// CEF Views 的外部消息泵。
         ///
         /// 这条路径不进入 tao `run_return`:CEF Views 自己创建真实窗口,并且
-        /// Linux 上必须在同一个主线程持续泵 GLib/X11 和 CEF message loop。
+        /// Linux 上必须持续泵 GLib/X11；Windows 上必须持续泵 Win32 messages。
         /// Tauri runtime 消息从 `CefContext` 队列 drain。
         fn run_loop<F: FnMut(RunEvent<T>) + 'static>(mut self, mut callback: F, once: bool) -> i32 {
-            eprintln!("[cef-runtime] windowed pure CEF/GLib pump started");
+            eprintln!("[cef-runtime] windowed pure CEF platform pump started");
             let runtime_ptr = &mut self as *mut Self;
             self.context
                 .main_runtime
@@ -1947,26 +2036,87 @@ mod imp {
             callback(RunEvent::Ready);
 
             let quit = windowed_quit();
-            let main_context = MainContext::default();
             loop {
                 let mut control_flow = ControlFlow::WaitUntil(
                     Instant::now() + Duration::from_millis(if once { 0 } else { 1 }),
                 );
                 self.drain_messages(&self.event_loop, &mut callback, &mut control_flow);
                 callback(RunEvent::MainEventsCleared);
-                let did_glib_work = pump_glib(&main_context);
+                let did_platform_work = pump_platform_messages();
                 do_message_loop_work();
 
                 if matches!(control_flow, ControlFlow::Exit) || once || quit.load(Ordering::Acquire)
                 {
+                    eprintln!(
+                        "[cef-runtime] run loop exiting (control_flow_exit={} once={once} quit={})",
+                        matches!(control_flow, ControlFlow::Exit),
+                        quit.load(Ordering::Acquire),
+                    );
                     break;
                 }
-                if !did_glib_work {
+                if !did_platform_work {
                     std::thread::sleep(Duration::from_millis(1));
                 }
             }
 
             callback(RunEvent::Exit);
+            eprintln!("[cef-runtime] RunEvent::Exit dispatched; closing remaining CEF windows");
+
+            // `cef_shutdown()` 前必须先销毁所有 CEF 窗口/浏览器,否则 CEF 内部的
+            // ObserverList 仍挂着 observer,shutdown 时 CHECK `observers_.empty()`
+            // 崩溃(实测:托盘退出 / app.exit() 直接 break 出主循环时,壁纸窗口等
+            // 仍存活)。协议:对每个存活窗口置 `close_confirmed` 绕过 CloseRequested
+            // 裁决 → 锁外 `close()` 走 CEF 销毁握手 → 泵消息直到全部
+            // `on_window_destroyed`,再短暂排空 browser/子系统 teardown。
+            let remaining: Vec<_> = self
+                .windows
+                .0
+                .borrow()
+                .values()
+                .map(|state| {
+                    let CefWindowKind::Windowed(w) = &state.kind;
+                    w.shared.clone()
+                })
+                .collect();
+            for shared in &remaining {
+                let cef_window = {
+                    let mut s = shared.lock().expect("windowed state mutex poisoned");
+                    s.close_confirmed = true;
+                    s.window.as_ref().map(|w| w.inner.clone())
+                };
+                if let Some(window) = cef_window {
+                    window.close();
+                }
+            }
+            let close_deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < close_deadline {
+                let all_destroyed = remaining.iter().all(|shared| {
+                    shared.lock().map(|s| s.window.is_none()).unwrap_or(true)
+                });
+                if all_destroyed {
+                    break;
+                }
+                pump_platform_messages();
+                do_message_loop_work();
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            // 窗口销毁后 browser/IO 线程的 teardown 仍在飞行,继续泵到连续 idle。
+            let drain_deadline = Instant::now() + Duration::from_secs(1);
+            let mut idle_streak = 0u32;
+            while Instant::now() < drain_deadline {
+                let did_platform_work = pump_platform_messages();
+                do_message_loop_work();
+                if did_platform_work {
+                    idle_streak = 0;
+                } else {
+                    idle_streak += 1;
+                    if idle_streak >= 50 {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+            eprintln!("[cef-runtime] windows destroyed; calling cef shutdown");
 
             shutdown();
             eprintln!("[cef-runtime] CEF shutdown complete");
@@ -2330,18 +2480,21 @@ mod imp {
                         .unwrap_or(window.always_on_top),
                 ),
                 WindowGetterKind::Title => Box::new(window.title.clone()),
-                WindowGetterKind::CurrentMonitor => Box::new(None::<tao::monitor::MonitorHandle>),
+                WindowGetterKind::CurrentMonitor => {
+                    Box::new(current_monitor_for_cef_window(window, target))
+                }
                 WindowGetterKind::PrimaryMonitor => Box::new(target.primary_monitor()),
                 WindowGetterKind::AvailableMonitors => {
                     Box::new(target.available_monitors().collect::<Vec<_>>())
                 }
+                #[cfg(target_os = "linux")]
                 WindowGetterKind::GtkWindow | WindowGetterKind::GtkBox => {
-                    return Err(Error::CreateWindow)
+                    // CEF windowed runtime owns a top-level CEF Views window,
+                    // so there is no GTK ApplicationWindow/default vbox to expose.
+                    return Err(Error::CreateWindow);
                 }
                 WindowGetterKind::RawWindowHandle => {
-                    Box::new(Err::<SendRawWindowHandle, raw_window_handle::HandleError>(
-                        raw_window_handle::HandleError::Unavailable,
-                    ))
+                    Box::new(raw_window_handle_for_cef_window(window))
                 }
                 WindowGetterKind::Theme => Box::new(Theme::Light),
             };
@@ -2465,6 +2618,7 @@ mod imp {
         Ok(value)
     }
 
+    #[cfg(target_os = "linux")]
     fn pump_glib(main_context: &MainContext) -> bool {
         let mut did_glib_work = false;
         while main_context.pending() {
@@ -2472,6 +2626,43 @@ mod imp {
         }
         did_glib_work
     }
+
+    fn pump_platform_messages() -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            return pump_glib(&MainContext::default());
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            return pump_windows_messages();
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            false
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn pump_windows_messages() -> bool {
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
+        };
+
+        let mut did_work = false;
+        unsafe {
+            let mut msg = std::mem::zeroed::<MSG>();
+            while PeekMessageW(&mut msg, 0 as HWND, 0, 0, PM_REMOVE) != 0 {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+                did_work = true;
+            }
+        }
+        did_work
+    }
+
 
     fn post_cef_ui_task<R, F>(task: F) -> Result<R>
     where
@@ -2483,7 +2674,6 @@ mod imp {
         // 而卡死(post 的任务在 do_message_loop_work 里 FIFO 执行,可能排在
         // on_context_initialized 之前)。在 UI 线程上同步 pump 直到 flag 置位。
         {
-            let main_context = MainContext::default();
             let deadline = Instant::now() + Duration::from_secs(10);
             while !WINDOWED_CONTEXT_INITIALIZED.load(Ordering::Acquire) {
                 if Instant::now() >= deadline {
@@ -2492,7 +2682,7 @@ mod imp {
                     );
                     return Err(Error::CreateWindow);
                 }
-                pump_glib(&main_context);
+                pump_platform_messages();
                 do_message_loop_work();
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -2507,7 +2697,6 @@ mod imp {
             return Err(Error::CreateWindow);
         }
 
-        let main_context = MainContext::default();
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             match rx.try_recv() {
@@ -2517,7 +2706,7 @@ mod imp {
                     return Err(Error::FailedToReceiveMessage);
                 }
             }
-            pump_glib(&main_context);
+            pump_platform_messages();
             do_message_loop_work();
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -2559,6 +2748,113 @@ mod imp {
             ShowState::MAXIMIZED
         } else {
             ShowState::NORMAL
+        }
+    }
+
+    fn current_monitor_for_cef_window<T: UserEvent>(
+        window: &WindowedWindowState,
+        target: &tao::event_loop::EventLoopWindowTarget<Message<T>>,
+    ) -> Option<tao::monitor::MonitorHandle> {
+        let (x, y) = window.with_cef_window(|w| {
+            let bounds = w
+                .display()
+                .map(|display| display.bounds())
+                .unwrap_or_else(|| w.bounds());
+            (
+                bounds.x as f64 + (bounds.width.max(0) as f64 / 2.0),
+                bounds.y as f64 + (bounds.height.max(0) as f64 / 2.0),
+            )
+        })?;
+        target.monitor_from_point(x, y)
+    }
+
+    fn raw_window_handle_for_cef_window(
+        window: &WindowedWindowState,
+    ) -> std::result::Result<SendRawWindowHandle, raw_window_handle::HandleError> {
+        window
+            .with_cef_window(raw_window_handle_from_cef_window)
+            .unwrap_or(Err(raw_window_handle::HandleError::Unavailable))
+    }
+
+    #[cfg(target_os = "windows")]
+    fn raw_window_handle_from_cef_window(
+        window: &cef::Window,
+    ) -> std::result::Result<SendRawWindowHandle, raw_window_handle::HandleError> {
+        use std::num::NonZeroIsize;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_HINSTANCE};
+
+        let hwnd = window.window_handle().0 as isize;
+        let Some(hwnd) = NonZeroIsize::new(hwnd) else {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        };
+
+        let mut handle = raw_window_handle::Win32WindowHandle::new(hwnd);
+        let hinstance = unsafe {
+            GetWindowLongPtrW(
+                hwnd.get() as windows_sys::Win32::Foundation::HWND,
+                GWLP_HINSTANCE,
+            )
+        };
+        handle.hinstance = NonZeroIsize::new(hinstance);
+        Ok(SendRawWindowHandle(
+            raw_window_handle::RawWindowHandle::Win32(handle),
+        ))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn raw_window_handle_from_cef_window(
+        window: &cef::Window,
+    ) -> std::result::Result<SendRawWindowHandle, raw_window_handle::HandleError> {
+        let window = window.window_handle();
+        if window == 0 {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+        Ok(SendRawWindowHandle(
+            raw_window_handle::RawWindowHandle::Xlib(raw_window_handle::XlibWindowHandle::new(
+                window,
+            )),
+        ))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    fn raw_window_handle_from_cef_window(
+        _window: &cef::Window,
+    ) -> std::result::Result<SendRawWindowHandle, raw_window_handle::HandleError> {
+        Err(raw_window_handle::HandleError::Unavailable)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn apply_windows_native_window_options(
+        window: &cef::Window,
+        options: WindowsNativeWindowOptions,
+    ) {
+        use windows_sys::Win32::{
+            Foundation::HWND,
+            UI::{
+                Shell::DragAcceptFiles,
+                WindowsAndMessaging::{SetParent, SetWindowLongPtrW, GWLP_HWNDPARENT},
+            },
+        };
+
+        let hwnd = window.window_handle().0 as HWND;
+        if hwnd == 0 as HWND {
+            return;
+        }
+
+        unsafe {
+            if let Some(parent) = options.parent_hwnd.filter(|hwnd| *hwnd != 0) {
+                SetParent(hwnd, parent as HWND);
+            } else if let Some(owner) = options.owner_hwnd.filter(|hwnd| *hwnd != 0) {
+                SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, owner);
+            }
+
+            DragAcceptFiles(hwnd, i32::from(options.drag_and_drop));
+        }
+
+        if let Some(_enabled) = options.shadow {
+            // CEF Views does not expose a runtime shadow toggle. Decorated
+            // top-level windows keep the OS default shadow; frameless shadow
+            // policy is decided by CEF when the native HWND is created.
         }
     }
 

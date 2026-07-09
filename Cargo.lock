@@ -8884,6 +8884,8 @@ dependencies = [
  "tauri-utils",
  "tracing",
  "url",
+ "windows 0.61.3",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

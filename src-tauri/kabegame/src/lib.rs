@@ -54,13 +54,13 @@ use commands::*;
 /// `Builder::<Cef<EventLoopMessage>>` / `Builder::default()`,与此别名一致。
 #[cfg(all(
     not(feature = "web"),
-    target_os = "linux",
+    any(target_os = "linux", windows),
     any(feature = "standard", feature = "light")
 ))]
 pub(crate) type AppRuntime = tauri_runtime_cef::Cef<tauri::EventLoopMessage>;
 #[cfg(all(
     not(feature = "web"),
-    not(all(target_os = "linux", any(feature = "standard", feature = "light")))
+    not(all(any(target_os = "linux", windows), any(feature = "standard", feature = "light")))
 ))]
 pub(crate) type AppRuntime = tauri::Wry;
 #[cfg(not(feature = "web"))]
@@ -318,7 +318,7 @@ pub fn run() {
 
 #[cfg(all(
     not(feature = "web"),
-    target_os = "linux",
+    any(target_os = "linux", windows),
     any(feature = "standard", feature = "light")
 ))]
 pub fn run() {
@@ -680,7 +680,7 @@ pub(crate) fn configure_app(
 
 #[cfg(all(
     not(feature = "web"),
-    not(all(target_os = "linux", any(feature = "standard", feature = "light")))
+    not(all(any(target_os = "linux", windows), any(feature = "standard", feature = "light")))
 ))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

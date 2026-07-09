@@ -7,13 +7,16 @@ mod imp {
     use std::sync::mpsc::channel;
 
     use raw_window_handle::WindowHandle;
+    #[cfg(target_os = "linux")]
+    use tao::platform::unix::WindowBuilderExtUnix;
+    #[cfg(target_os = "windows")]
+    use tao::platform::windows::WindowBuilderExtWindows;
     use tao::{
         dpi::{
             LogicalPosition as TaoLogicalPosition, LogicalSize as TaoLogicalSize,
             PhysicalPosition as TaoPhysicalPosition, PhysicalSize as TaoPhysicalSize,
             Position as TaoPosition, Size as TaoSize,
         },
-        platform::unix::WindowBuilderExtUnix,
         window::{
             CursorIcon as TaoCursorIcon, Fullscreen, Icon as TaoIcon,
             ResizeDirection as TaoResizeDirection, Theme as TaoTheme,
@@ -32,6 +35,8 @@ mod imp {
         WebviewEventId, WindowDispatch, WindowEventId,
     };
     use tauri_utils::{config::Color, Theme};
+    #[cfg(windows)]
+    use windows::Win32::Foundation::HWND;
 
     use crate::{runtime, Cef, CefHandle};
 
@@ -68,6 +73,14 @@ mod imp {
         /// 路径下用不上(不建 tao 窗口),故额外保留 RGBA,供 runtime 给 CEF
         /// `Window::set_window_icon` / `set_window_app_icon` 用。
         pub(crate) icon_rgba: Option<(Vec<u8>, u32, u32)>,
+        #[cfg(windows)]
+        pub(crate) owner_hwnd: Option<isize>,
+        #[cfg(windows)]
+        pub(crate) parent_hwnd: Option<isize>,
+        #[cfg(windows)]
+        pub(crate) drag_and_drop: bool,
+        #[cfg(windows)]
+        pub(crate) shadow: Option<bool>,
     }
 
     #[allow(clippy::non_send_fields_in_send_ty)]
@@ -79,6 +92,14 @@ mod imp {
                 inner: TaoWindowBuilder::new(),
                 center: false,
                 icon_rgba: None,
+                #[cfg(windows)]
+                owner_hwnd: None,
+                #[cfg(windows)]
+                parent_hwnd: None,
+                #[cfg(windows)]
+                drag_and_drop: true,
+                #[cfg(windows)]
+                shadow: None,
             }
             .title("Tauri App")
             .focused(true)
@@ -289,7 +310,16 @@ mod imp {
         }
 
         fn skip_taskbar(mut self, skip: bool) -> Self {
-            self.inner = self.inner.with_skip_taskbar(skip);
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            {
+                self.inner = self.inner.with_skip_taskbar(skip);
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+            {
+                // Unsupported target for this runtime crate; keep the builder
+                // chain inert if the crate is type-checked there.
+                let _ = skip;
+            }
             self
         }
 
@@ -298,7 +328,38 @@ mod imp {
             self
         }
 
-        fn shadow(self, _enable: bool) -> Self {
+        fn shadow(mut self, enable: bool) -> Self {
+            #[cfg(windows)]
+            {
+                self.shadow = Some(enable);
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = enable;
+            }
+            self
+        }
+
+        #[cfg(windows)]
+        fn owner(mut self, owner: HWND) -> Self {
+            self.owner_hwnd = Some(owner.0 as isize);
+            self.parent_hwnd = None;
+            self.inner = self.inner.with_owner_window(owner.0 as isize);
+            self
+        }
+
+        #[cfg(windows)]
+        fn parent(mut self, parent: HWND) -> Self {
+            self.parent_hwnd = Some(parent.0 as isize);
+            self.owner_hwnd = None;
+            self.inner = self.inner.with_parent_window(parent.0 as isize);
+            self
+        }
+
+        #[cfg(windows)]
+        fn drag_and_drop(mut self, enabled: bool) -> Self {
+            self.drag_and_drop = enabled;
+            self.inner = self.inner.with_drag_and_drop(enabled);
             self
         }
 
@@ -464,11 +525,13 @@ mod imp {
             Ok(monitors.into_iter().map(monitor_from_tao).collect())
         }
 
+        #[cfg(target_os = "linux")]
         fn gtk_window(&self) -> Result<gtk::ApplicationWindow> {
             window_getter::<_, runtime::GtkWindow>(self, runtime::WindowGetter::GtkWindow)
                 .map(|w| w.0)
         }
 
+        #[cfg(target_os = "linux")]
         fn default_vbox(&self) -> Result<gtk::Box> {
             window_getter::<_, runtime::GtkBox>(self, runtime::WindowGetter::GtkBox).map(|w| w.0)
         }

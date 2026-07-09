@@ -1,8 +1,21 @@
 fn main() {
     // tauri_build only needed when the Tauri native stack is enabled
     // (standard / light / android features). #[cfg] is compile-time so tauri_build isn't linked in web mode.
+    //
+    // Windows 用自定义 app manifest(windows-app.manifest):在 tauri 默认的
+    // Common-Controls 之上追加 <compatibility> supportedOS 与 PerMonitorV2 DPI。
+    // supportedOS 段是 CEF 的硬性要求:Chromium GPU 进程用 WS_EX_LAYERED 子窗口做
+    // DirectComposition 呈现(ui/gl/child_window_win.cc),layered 子窗口只对声明了
+    // Windows 8+ 兼容性的进程开放;缺失则 GPU 进程 CreateWindowEx 返回 NULL →
+    // NOTREACHED 崩溃循环(CEF #3765)。kabegame.exe 会被 CEF re-exec 为 GPU/renderer
+    // 子进程,所以主 exe 必须带它。
+    // 注意:manifest 文件须保持纯 ASCII、无 XML 声明/注释 —— 它经 RC 资源编译器
+    // 内嵌,非 ASCII 内容会被 codepage 弄坏 XML,触发启动报 sxs 14001。
     #[cfg(any(feature = "standard", feature = "light", feature = "android"))]
-    tauri_build::build();
+    tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(
+        tauri_build::WindowsAttributes::new().app_manifest(include_str!("windows-app.manifest")),
+    ))
+    .expect("failed to run tauri-build");
 
     println!("cargo:rustc-check-cfg=cfg(kabegame_data, values(\"dev\", \"prod\"))");
 

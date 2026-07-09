@@ -4,6 +4,7 @@ import { Component } from "./component-plugin";
 import {
   ROOT,
   RESOURCES_BIN_DIR,
+  RESOURCES_DIR,
   ensureDir,
   existsFile,
   findFirstExisting,
@@ -29,6 +30,27 @@ const CEF_RUNTIME_FILES = [
   "chrome_100_percent.pak",
   "chrome_200_percent.pak",
   "resources.pak",
+];
+// Windows CEF 运行时白名单(对照 windows64 minimal distrib 实有文件;无 snapshot_blob.bin,
+// 该 build 用 v8_context_snapshot;no-sandbox 传统 exe 模式,不需要 bootstrap.exe/cef_sandbox)。
+// 收集到 resources/cef/,安装期由 NSIS hook 搬到 $INSTDIR(libcef.dll 是 load-time 链接,
+// CEF 要求 dll/pak/dat/locales 与 exe 同目录)。
+const WINDOWS_CEF_RUNTIME_FILES = [
+  "libcef.dll",
+  "chrome_elf.dll",
+  "icudtl.dat",
+  "v8_context_snapshot.bin",
+  "resources.pak",
+  "chrome_100_percent.pak",
+  "chrome_200_percent.pak",
+  "libEGL.dll",
+  "libGLESv2.dll",
+  "vk_swiftshader.dll",
+  "vk_swiftshader_icd.json",
+  "vulkan-1.dll",
+  "d3dcompiler_47.dll",
+  "dxcompiler.dll",
+  "dxil.dll",
 ];
 // en-US.pak 必留(CEF 找不到系统语言时回退它,缺失会启动报错)。
 const CEF_LOCALES = ["en-US.pak", "zh-CN.pak", "zh-TW.pak", "ja.pak", "ko.pak"];
@@ -181,6 +203,11 @@ export class OSPlugin extends BasePlugin {
       this.collectWindowsFFmpegDlls();
       this.copyFFmpegDllsToResources();
       this.copyDokan2DllToTauriReleaseDirBestEffort();
+      // Windows standard/light 用 CEF runtime;打包其运行时文件(libcef.dll + 资源 + locales)。
+      if (bs.context.mode?.isStandard || bs.context.mode?.isLight) {
+        this.verifyCefArtifacts();
+        this.collectWindowsCefRuntime();
+      }
     } else if (OSPlugin.isLinux) {
       // 注意:collectLinuxSharedLibs() 会先清空 bin/linux/,CEF 收集必须排在其后。
       this.collectLinuxSharedLibs();
@@ -330,19 +357,23 @@ export class OSPlugin extends BasePlugin {
     this.appendExtraLibs(dst);
   }
 
-  // ===== CEF runtime(Linux standard/light)=====
-  // CEF 目录解析与 mode-plugin 一致:优先 CEF_PATH(prepareEnv 已设),回退 ~/i/cef-prod。
+  // ===== CEF runtime(Linux/Windows standard/light)=====
+  // CEF 目录解析与 mode-plugin 一致:优先 CEF_PATH(prepareEnv 已设),
+  // 回退 Linux ~/i/cef-prod、Windows H:\cef-prod。
   private cefDir(): string {
     return (
       process.env.CEF_PATH ||
-      path.join(os.homedir(), "i", "cef-prod")
+      (OSPlugin.isWindows
+        ? path.join("H:", "cef-prod")
+        : path.join(os.homedir(), "i", "cef-prod"))
     );
   }
 
   // 前置校验:缺少 CEF 运行时则报错并提示导出命令(类比 verifyFFmpegBuildArtifacts)。
   private verifyCefArtifacts(): void {
     const dir = this.cefDir();
-    const missing = ["libcef.so", "icudtl.dat"].filter(
+    const libcef = OSPlugin.isWindows ? "libcef.dll" : "libcef.so";
+    const missing = [libcef, "icudtl.dat"].filter(
       (f) => !existsFile(path.join(dir, f)),
     );
     if (missing.length > 0) {
@@ -350,8 +381,12 @@ export class OSPlugin extends BasePlugin {
         [
           `❌ 未找到 CEF 运行时产物: ${missing.join(", ")}(目录: ${dir})`,
           `请先导出 CEF(release/minimal)或设置 CEF_PATH:`,
-          `  scripts/build-chromium.sh prod`,
-          `  # 开发运行时: scripts/build-chromium.sh dev`,
+          ...(OSPlugin.isWindows
+            ? [`  在 Windows 上设置 CEF_PATH 指向已构建的 CEF 发行版目录`]
+            : [
+                `  scripts/build-chromium.sh prod`,
+                `  # 开发运行时: scripts/build-chromium.sh dev`,
+              ]),
         ].join("\n"),
       );
     }
@@ -398,6 +433,50 @@ export class OSPlugin extends BasePlugin {
     }
     this.log(
       chalk.cyan(`已收集 CEF locales(白名单 ${copied}/${CEF_LOCALES.length})→ bin/linux/locales/`),
+    );
+  }
+
+  // 收集 Windows CEF runtime 文件 + locales 白名单到 resources/cef/。
+  // 经 tauri.conf 的 `resources/**/*` 进 NSIS 安装包,POSTINSTALL hook 再把
+  // resources\cef\ 下的文件搬到 $INSTDIR(exe 同目录),locales 搬到 $INSTDIR\locales\。
+  private collectWindowsCefRuntime(): void {
+    const dst = path.join(RESOURCES_DIR, "cef");
+    // 全量生成目录:先清空,避免残留旧版本文件
+    fs.rmSync(dst, { recursive: true, force: true });
+    ensureDir(dst);
+    const src = this.cefDir();
+
+    for (const f of WINDOWS_CEF_RUNTIME_FILES) {
+      const s = path.join(src, f);
+      if (!fs.existsSync(s)) {
+        throw new Error(`❌ CEF 运行时缺少文件: ${f}(目录: ${src})`);
+      }
+      fs.copyFileSync(s, path.join(dst, f));
+      this.log(chalk.cyan(`已收集 CEF 文件 → resources/cef/${f}`));
+    }
+
+    // locales 白名单(全量 220+ 个,白名单 ~5 个)
+    const localesDst = path.join(dst, "locales");
+    ensureDir(localesDst);
+    let copied = 0;
+    for (const f of CEF_LOCALES) {
+      const s = path.join(src, "locales", f);
+      if (!fs.existsSync(s)) {
+        if (f === "en-US.pak") {
+          throw new Error(
+            `❌ CEF locales 缺少 en-US.pak(CEF 必需的回退语言): ${path.join(src, "locales")}`,
+          );
+        }
+        this.log(chalk.yellow(`CEF locale 缺失(跳过): ${f}`));
+        continue;
+      }
+      fs.copyFileSync(s, path.join(localesDst, f));
+      copied++;
+    }
+    this.log(
+      chalk.cyan(
+        `已收集 CEF locales(白名单 ${copied}/${CEF_LOCALES.length})→ resources/cef/locales/`,
+      ),
     );
   }
 

@@ -58,7 +58,7 @@
     />
     <!-- 非紧凑布局：侧边栏 + 主内容 -->
     <template v-if="!uiStore.isCompact">
-      <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed, 'bg-transparent': (IS_WINDOWS || IS_MACOS) && !IS_WEB, 'bg-white': !IS_WINDOWS && !IS_MACOS || IS_WEB }" :width="isCollapsed ? '64px' : '200px'">
+      <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }" :width="isCollapsed ? '64px' : '200px'">
         <div class="sidebar-header">
           <span class="app-logo-wrap">
             <img :src="appLogoUrl" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
@@ -183,7 +183,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from "@/api/rpc";
 import { pathqlFetch } from "@/services/pathql";
 import { rowToImageInfo } from "@/utils/imageRow";
-import { IS_WINDOWS, IS_MACOS, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { IS_MACOS, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { initHttpServerBaseUrl } from "@kabegame/core/httpServer";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
@@ -677,10 +677,6 @@ body,
       background: rgba(255, 255, 255, 0.65);
     }
 
-    .app-sidebar {
-      background: transparent;
-    }
-
     .app-bottom-tabs {
       background: rgba(255, 255, 255, 0.7);
     }
@@ -778,11 +774,7 @@ body,
 }
 
 .app-sidebar {
-  // 关键：侧栏背景必须半透明，DWM 才能透出模糊效果
-  // background: transparent;
-  // 非 Windows / DWM 失效时的降级（浏览器预览也能看到"玻璃感"）
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
+  background: var(--anime-bg-sidebar);
   border-right: 2px solid var(--anime-border);
   display: flex;
   flex-direction: column;
@@ -953,7 +945,7 @@ body,
     overflow-y: auto;
     scrollbar-width: none;
     -ms-overflow-style: none;
-    // Element Plus 默认给 el-menu 一个不透明背景，会把"半透明侧栏"盖住，导致看起来没有毛玻璃
+    // Element Plus 默认给 el-menu 一个不透明背景，会盖住侧栏自身背景
     background: transparent;
 
     &::-webkit-scrollbar {
@@ -993,89 +985,6 @@ body,
         align-items: center;
         justify-content: center;
         margin-right: 8px;
-      }
-    }
-  }
-
-  // macOS 毛玻璃效果下，文字需要白色才能看清
-  &.bg-transparent {
-    .sidebar-header {
-      h1 {
-        // 标题文字在毛玻璃背景下使用白色，但保持渐变效果
-        -webkit-text-fill-color: white;
-        color: white;
-        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-      }
-    }
-
-    .sidebar-menu {
-      .el-menu-item {
-        color: white;
-
-        .el-icon {
-          color: white;
-        }
-
-        span {
-          color: white;
-        }
-
-        // 激活状态保持渐变背景，文字为白色
-        &.is-active {
-          color: white;
-
-          .el-icon {
-            color: white;
-          }
-
-          span {
-            color: white;
-          }
-        }
-
-        // 悬浮状态：文字稍微变亮
-        &:hover {
-          color: rgba(255, 255, 255, 0.9);
-
-          .el-icon {
-            color: rgba(255, 255, 255, 0.9);
-          }
-
-          span {
-            color: rgba(255, 255, 255, 0.9);
-          }
-        }
-      }
-    }
-
-    // 折叠状态下的菜单项也需要白色
-    &.sidebar-collapsed {
-      .sidebar-menu {
-        .el-menu-item {
-          color: white;
-
-          .el-icon {
-            color: white;
-          }
-
-          // 激活状态：渐变背景 + 白色图标
-          &.is-active {
-            color: white;
-
-            .el-icon {
-              color: white;
-            }
-          }
-
-          // 悬浮状态
-          &:hover {
-            color: rgba(255, 255, 255, 0.9);
-
-            .el-icon {
-              color: rgba(255, 255, 255, 0.9);
-            }
-          }
-        }
       }
     }
   }

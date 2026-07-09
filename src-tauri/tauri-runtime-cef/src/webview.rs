@@ -781,23 +781,47 @@ mod imp {
     wrap_keyboard_handler! {
         pub(crate) struct DevToolsKeyboardHandler {}
         impl KeyboardHandler {
+            #[cfg(target_os = "linux")]
             fn on_pre_key_event(&self, browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: Option<&mut cef::sys::XEvent>, _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
-                let Some(event) = event else { return 0 };
-                if event.type_ != KeyEventType::RAWKEYDOWN || event.windows_key_code != b'D' as i32 || event.modifiers & (event_flag_control() | event_flag_shift()) != event_flag_control() | event_flag_shift() { return 0; }
-                if let Some(host) = browser.and_then(|browser| browser.host()) {
-                    host.show_dev_tools(Some(&WindowInfo::default()), None, Some(&BrowserSettings::default()), None);
-                    return 1;
-                }
-                0
+                handle_devtools_shortcut(browser, event)
+            }
+
+            #[cfg(target_os = "windows")]
+            fn on_pre_key_event(&self, browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: Option<&mut cef::sys::MSG>, _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
+                handle_devtools_shortcut(browser, event)
             }
         }
     }
 
+    fn handle_devtools_shortcut(
+        browser: Option<&mut Browser>,
+        event: Option<&KeyEvent>,
+    ) -> ::std::os::raw::c_int {
+        let Some(event) = event else { return 0 };
+        let devtools_modifiers = event_flag_control() | event_flag_shift();
+        if event.type_ != KeyEventType::RAWKEYDOWN
+            || event.windows_key_code != b'D' as i32
+            || event.modifiers & devtools_modifiers != devtools_modifiers
+        {
+            return 0;
+        }
+        if let Some(host) = browser.and_then(|browser| browser.host()) {
+            host.show_dev_tools(
+                Some(&WindowInfo::default()),
+                None,
+                Some(&BrowserSettings::default()),
+                None,
+            );
+            return 1;
+        }
+        0
+    }
+
     fn event_flag_control() -> u32 {
-        cef::sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN.0
+        cef::sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN.0 as u32
     }
     fn event_flag_shift() -> u32 {
-        cef::sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0
+        cef::sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0 as u32
     }
 
     /// Surf 顶部导航栏 webview 的固定高度(DIP;CEF Views 坐标系为 DIP,由 Chromium

@@ -37,6 +37,8 @@ src-tauri/*/gen/schemas/*
 # 插件 permissions 下的 schema.json 由 tauri_plugin::Builder 在 cargo build 时生成
 src-tauri-plugins/**/permissions/schemas/schema.json
 src-tauri/kabegame/resources/bin/*
+# Windows CEF runtime,由 os-plugin collectWindowsCefRuntime() 构建期生成
+src-tauri/kabegame/resources/cef/
 
 # bin/{platform}/ runtime libs:
 # - bin/windows/ keeps the predefined DLLs in git (dokan2/libwinpthread/libva/...);

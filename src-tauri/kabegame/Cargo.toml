@@ -74,6 +74,7 @@ windows-sys = {workspace = true, features = [
 ] }
 winreg = "0.52"
 winver = "1"
+tauri-runtime-cef = { path = "../tauri-runtime-cef", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = "3.6"

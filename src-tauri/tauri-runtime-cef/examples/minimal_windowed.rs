@@ -16,27 +16,34 @@
 //! CEF_WINDOWED_URL=file:///tmp/cef-gpu-readback.html \
 //!   cargo run -p tauri-runtime-cef --example minimal_windowed
 //! ```
+//!
+//! Windows:
+//! ```powershell
+//! $env:CEF_PATH = "H:\cef-dev"
+//! $env:PATH = "$env:CEF_PATH;$env:PATH"
+//! $env:CEF_WINDOWED_PUMP = "external"
+//! cargo run -p tauri-runtime-cef --example minimal_windowed
+//! ```
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn main() {
-    eprintln!("`minimal_windowed` example is Linux-only.");
+    eprintln!("`minimal_windowed` example currently supports Linux and Windows.");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn main() {
-    // Keep this baseline on X11/XWayland, matching the known-working cefsimple
-    // environment and avoiding Wayland/Ozone as a second variable.
-    unsafe {
-        std::env::set_var("GDK_BACKEND", "x11");
-    }
+    minimal_windowed::prepare_platform_environment();
     minimal_windowed::run();
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod minimal_windowed {
     use cef::{args::Args, *};
+    #[cfg(target_os = "linux")]
     use gtk::glib::MainContext;
     use std::cell::RefCell;
+    #[cfg(target_os = "windows")]
+    use std::path::PathBuf;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -74,6 +81,7 @@ mod minimal_windowed {
                 command_line: Option<&mut CommandLine>,
             ) {
                 let Some(cl) = command_line else { return };
+                #[cfg(target_os = "linux")]
                 if cl.has_switch(Some(&CefString::from("ozone-platform"))) == 0 {
                     cl.append_switch_with_value(
                         Some(&CefString::from("ozone-platform")),
@@ -82,19 +90,7 @@ mod minimal_windowed {
                 }
                 cl.append_switch(Some(&CefString::from("no-sandbox")));
 
-                // Default to the Vulkan/ANGLE stack validated for this NVIDIA setup.
-                // on this NVIDIA box. Set CEF_WINDOWED_GPU_MODE=default to leave
-                // Chromium's normal GPU choice untouched.
-                if std::env::var("CEF_WINDOWED_GPU_MODE").as_deref() != Ok("default") {
-                    cl.append_switch_with_value(
-                        Some(&CefString::from("use-angle")),
-                        Some(&CefString::from("vulkan")),
-                    );
-                    cl.append_switch_with_value(
-                        Some(&CefString::from("enable-features")),
-                        Some(&CefString::from("Vulkan")),
-                    );
-                }
+                apply_gpu_mode(cl);
             }
 
             fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
@@ -261,18 +257,21 @@ mod minimal_windowed {
         impl BrowserProcessHandler {
             fn on_schedule_message_pump_work(&self, delay_ms: i64) {
                 if PumpMode::from_env().uses_external_pump() {
+                    #[cfg(target_os = "linux")]
                     println!("[windowed] schedule message pump delay_ms={delay_ms}");
+                    #[cfg(target_os = "windows")]
+                    let _ = delay_ms;
                 }
             }
 
             fn on_context_initialized(&self) {
                 let url = CefString::from(
                     std::env::var("CEF_WINDOWED_URL")
-                        .unwrap_or_else(|_| "file:///tmp/cef-test.html".to_string())
+                        .unwrap_or_else(|_| default_url())
                         .as_str(),
                 );
                 let gpu_mode = std::env::var("CEF_WINDOWED_GPU_MODE")
-                    .unwrap_or_else(|_| "vulkan".to_string());
+                    .unwrap_or_else(|_| default_gpu_mode().to_string());
                 println!("[windowed] url={url} gpu_mode={gpu_mode}");
 
                 *self.client.borrow_mut() = Some(WindowedClient::new(
@@ -301,6 +300,126 @@ mod minimal_windowed {
         }
     }
 
+    pub fn prepare_platform_environment() {
+        #[cfg(target_os = "linux")]
+        unsafe {
+            // Keep this baseline on X11/XWayland, matching the known-working
+            // cefsimple environment and avoiding Wayland/Ozone as a variable.
+            std::env::set_var("GDK_BACKEND", "x11");
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            if std::env::var_os("CEF_PATH").is_none() {
+                let default = PathBuf::from(r"H:\cef-dev");
+                if default.join("libcef.dll").is_file() {
+                    unsafe {
+                        std::env::set_var("CEF_PATH", &default);
+                    }
+                }
+            }
+            if let Some(cef_path) = std::env::var_os("CEF_PATH") {
+                let cef_path = PathBuf::from(cef_path);
+                let path = std::env::var_os("PATH").unwrap_or_default();
+                let mut paths: Vec<PathBuf> = std::env::split_paths(&path).collect();
+                if !paths.iter().any(|p| p == &cef_path) {
+                    paths.insert(0, cef_path);
+                    if let Ok(joined) = std::env::join_paths(paths) {
+                        unsafe {
+                            std::env::set_var("PATH", joined);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn default_gpu_mode() -> &'static str {
+        if cfg!(target_os = "linux") {
+            "vulkan"
+        } else {
+            "default"
+        }
+    }
+
+    fn apply_gpu_mode(command_line: &CommandLine) {
+        let mode = std::env::var("CEF_WINDOWED_GPU_MODE")
+            .unwrap_or_else(|_| default_gpu_mode().to_string());
+
+        match mode.as_str() {
+            "" | "default" => {}
+            "disabled" | "disable" | "off" => {
+                command_line.append_switch(Some(&CefString::from("disable-gpu")));
+                command_line.append_switch(Some(&CefString::from("disable-gpu-compositing")));
+            }
+            angle_backend => {
+                command_line.append_switch_with_value(
+                    Some(&CefString::from("use-angle")),
+                    Some(&CefString::from(angle_backend)),
+                );
+                if angle_backend == "vulkan" {
+                    command_line.append_switch_with_value(
+                        Some(&CefString::from("enable-features")),
+                        Some(&CefString::from("Vulkan")),
+                    );
+                }
+            }
+        }
+    }
+
+    /// 事件测试页:按钮点击、输入框(键盘/IME)、滚动区域。页面里所有事件都
+    /// `console.log`,经 `on_console_message` 回显到终端,无需开 DevTools 即可
+    /// 确认鼠标/键盘/滚轮事件送达。写临时文件走 file://,避免 data: URL 转义。
+    fn default_url() -> String {
+        const TEST_HTML: &str = r#"<!doctype html>
+<meta charset="utf-8">
+<title>CEF windowed event test</title>
+<style>
+  body{font-family:system-ui;margin:24px;background:rgb(250,250,252)}
+  fieldset{margin-bottom:14px;border:1px solid rgb(200,200,210);border-radius:8px}
+  #scrollbox{height:160px;overflow:auto;border:1px solid rgb(180,180,190);border-radius:6px;padding:0 8px}
+  #log{height:120px;overflow:auto;background:rgb(30,30,40);color:rgb(140,230,140);font:12px monospace;padding:8px;border-radius:6px}
+  .row{height:28px;line-height:28px;border-bottom:1px dashed rgb(220,220,230)}
+</style>
+<h1>CEF windowed OK</h1>
+<fieldset><legend>按钮点击</legend>
+  <button id="btn">点我 +1</button> <span id="count">0</span>
+</fieldset>
+<fieldset><legend>输入框(键盘/IME)</legend>
+  <input id="inp" placeholder="输入文字..." style="width:60%">
+  <div>echo: <span id="echo"></span></div>
+</fieldset>
+<fieldset><legend>滚动区域(滚轮/拖滚动条)</legend>
+  <div id="scrollbox"></div>
+  <div>scrollTop: <span id="st">0</span></div>
+</fieldset>
+<fieldset><legend>事件日志</legend><div id="log"></div></fieldset>
+<script>
+  const logEl=document.getElementById('log');
+  const log=(m)=>{logEl.insertAdjacentHTML('beforeend','<div>'+m+'</div>');logEl.scrollTop=logEl.scrollHeight;console.log(m);};
+  let n=0;
+  btn.addEventListener('click',()=>{count.textContent=++n;log('click '+n);});
+  inp.addEventListener('input',()=>{echo.textContent=inp.value;log('input "'+inp.value+'"');});
+  inp.addEventListener('keydown',(e)=>log('keydown '+e.key));
+  inp.addEventListener('compositionend',(e)=>log('compositionend "'+e.data+'"'));
+  const box=document.getElementById('scrollbox');
+  for(let i=1;i<=60;i++)box.insertAdjacentHTML('beforeend','<div class="row">row '+i+'</div>');
+  let lastScrollLog=0;
+  box.addEventListener('scroll',()=>{st.textContent=box.scrollTop;const now=Date.now();if(now-lastScrollLog>300){lastScrollLog=now;log('scroll '+box.scrollTop);}});
+  window.addEventListener('mousedown',(e)=>log('mousedown btn='+e.button+' @'+e.clientX+','+e.clientY));
+  log('page ready');
+</script>
+"#;
+        let path = std::env::temp_dir().join("kabegame-cef-windowed-test.html");
+        if std::fs::write(&path, TEST_HTML).is_ok() {
+            let slashes = path.to_string_lossy().replace('\\', "/");
+            let prefix = if slashes.starts_with('/') { "file://" } else { "file:///" };
+            return format!("{prefix}{slashes}");
+        }
+        // 写文件失败时回退到最小 data: URL
+        "data:text/html;charset=utf-8,%3Ch1%3ECEF%20windowed%20OK%3C%2Fh1%3E".to_string()
+    }
+
     pub fn run() {
         let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
         let args = Args::new();
@@ -326,6 +445,12 @@ mod minimal_windowed {
         let mut settings = Settings {
             no_sandbox: 1,
             external_message_pump: pump_mode.uses_external_pump() as i32,
+            browser_subprocess_path: CefString::from(
+                std::env::current_exe()
+                    .expect("failed to resolve CEF subprocess executable")
+                    .to_string_lossy()
+                    .as_ref(),
+            ),
             root_cache_path: CefString::from(
                 std::env::var_os("CEF_WINDOWED_CACHE_DIR")
                     .map(std::path::PathBuf::from)
@@ -363,6 +488,7 @@ mod minimal_windowed {
         shutdown();
     }
 
+    #[cfg(target_os = "linux")]
     fn pump_glib(main_context: &MainContext) -> bool {
         let mut did_glib_work = false;
         while main_context.pending() {
@@ -371,13 +497,43 @@ mod minimal_windowed {
         did_glib_work
     }
 
+    fn pump_platform_messages() -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            return pump_glib(&MainContext::default());
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            return pump_windows_messages();
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn pump_windows_messages() -> bool {
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
+        };
+
+        let mut did_work = false;
+        unsafe {
+            let mut msg = std::mem::zeroed::<MSG>();
+            while PeekMessageW(&mut msg, 0 as HWND, 0, 0, PM_REMOVE) != 0 {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+                did_work = true;
+            }
+        }
+        did_work
+    }
+
     fn run_external_pump(quit: &AtomicBool) {
-        println!("[windowed] using external message pump + glib main context");
-        let main_context = MainContext::default();
+        println!("[windowed] using external message pump");
         while !quit.load(Ordering::Acquire) {
-            let did_glib_work = pump_glib(&main_context);
+            let did_platform_work = pump_platform_messages();
             do_message_loop_work();
-            if !did_glib_work {
+            if !did_platform_work {
                 std::thread::sleep(Duration::from_millis(1));
             }
         }

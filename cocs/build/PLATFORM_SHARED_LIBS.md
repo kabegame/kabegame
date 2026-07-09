@@ -56,6 +56,21 @@ Tauri 的 `tauri build` 流程内部依次产生 .app 与 .dmg,**无中间 hook*
 - 先 fixup `target/release/bundle/macos/Kabegame.app/`(裸 .app)。
 - 再对 `target/release/bundle/dmg/Kabegame_*.dmg` 走 **convert→attach RW→fixup→detach→convert UDZO** 流程:`hdiutil convert -format UDRW` 把只读 dmg 转为可写,挂载,fixup 内部的 .app,卸载,再 `hdiutil convert -format UDZO` 转回压缩格式覆盖原 dmg。这样保留了 Tauri 配置的 background.jpg 等所有 dmg 特性,无需重写 dmg 生成逻辑。
 
+## CEF runtime 随包打包(Linux/Windows standard|light)
+
+CEF/Chromium 运行时(约 200MB)不走系统收集,来源是 `CEF_PATH` 指向的自编发行版目录
+(回退:Linux `~/i/cef-prod`、Windows `H:\cef-prod`;dev/check 用对应 cef-dev):
+
+| 平台 | 收集函数(os-plugin) | 暂存位置 | 安装位置 | 搬运机制 |
+|---|---|---|---|---|
+| Linux | `collectLinuxCefLibs()` | `bin/linux/`(含 `locales/`) | `/usr/lib/kabegame/` | deb `files` 注入(component-plugin 递归扫描 bin/linux) |
+| Windows | `collectWindowsCefRuntime()` | `src-tauri/kabegame/resources/cef/`(含 `locales/`) | `$INSTDIR\` 与 `$INSTDIR\locales\` | 随 `resources/**/*` 进 NSIS 包,POSTINSTALL hook(`nsis/installer-hooks.nsh`)move 到位 |
+
+- 清单常量:`CEF_RUNTIME_FILES`(Linux)/ `WINDOWS_CEF_RUNTIME_FILES`(Windows),locales 白名单共用 `CEF_LOCALES`(en-US 必留)。
+- Windows 必须搬到 exe 同目录:`libcef.dll` 是 load-time 链接,CEF 要求 dll/pak/dat/locales 与 exe 同层;NSIS 现有 `resources\bin\*.dll` move loop 只搬 DLL,CEF 用独立的 `resources\cef` move 段(含非 DLL 文件与 locales 子目录),卸载时在 PREUNINSTALL 里显式删除非 DLL 残留(icudtl.dat、*.pak、locales/ 等)。
+- Windows exe 还必须内嵌含 `<compatibility>` supportedOS 的 application manifest,否则 GPU 进程崩溃循环 —— 见 [tauri-runtime-cef README](../../src-tauri/tauri-runtime-cef/README.md) 的 Windows 注意事项。
+- 运行时资源定位:dev 下 cef-dll-sys build.rs 已把 runtime 拷进 `target/{debug,release}/`;安装态 Linux 走 `<exe>/../lib/kabegame`,Windows 走 CEF 默认(exe 同目录)。
+
 ## Tauri 配置如何感知动态库
 
 [scripts/plugins/component-plugin.ts](../../scripts/plugins/component-plugin.ts) 在渲染 `tauri.conf.json.handlebars` 前,扫描 `bin/{linux,macos}/` 并向 `templateCtx` 注入:
@@ -106,4 +121,5 @@ Tauri 的 `tauri build` 流程内部依次产生 .app 与 .dmg,**无中间 hook*
 | `src-tauri/kabegame/build.rs` | Linux `$ORIGIN/../lib/kabegame` + macOS `@executable_path/../Frameworks` rpath |
 | `src-tauri/kabegame-cli/build.rs` | 同上(CLI 也吃同一份 libx264) |
 | `src-tauri/kabegame/tauri.conf.json.handlebars` | Linux deb files + macOS frameworks 动态注入点 |
-| `.gitignore` | `/bin/linux/`、`/bin/macos/`、`/bin/windows/av*-*.dll` 等 |
+| `src-tauri/kabegame/nsis/installer-hooks.nsh` | Windows 安装期把 resources/bin DLL 与 resources/cef CEF runtime 搬到 $INSTDIR;卸载期清理 |
+| `.gitignore` | `/bin/linux/`、`/bin/macos/`、`/bin/windows/av*-*.dll`、`src-tauri/kabegame/resources/cef/` 等 |

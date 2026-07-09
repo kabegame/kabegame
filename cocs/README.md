@@ -92,8 +92,8 @@
   - 适用场景：新增窗口 IPC 权限、调整 capability/permission、排查“命令不可用/全部被拒绝”问题。
 
 - [../src-tauri/tauri-runtime-cef/README.md](../src-tauri/tauri-runtime-cef/README.md)
-  - 主题：Linux 桌面 CEF runtime 后端的架构、平台门控与唯一的 CEF Views/windowed GPU 路径；自定义协议、page-load 生命周期与 `invoke` IPC 桥接（`ipc://` 主路径 + `cef-ipc://` postMessage 后备）。
-  - 适用场景：排查 Linux CEF 启动/渲染/IPC、升级 CEF/Chromium、调整 `tauri-runtime-cef` trait 适配、确认非 Linux 平台不触达 CEF。
+  - 主题：Linux/Windows 桌面 CEF runtime 后端的架构、平台门控与唯一的 CEF Views/windowed GPU 路径；自定义协议、page-load 生命周期与 `invoke` IPC 桥接（`ipc://` 主路径 + `cef-ipc://` postMessage 后备）；Windows 的 application manifest 硬性要求（supportedOS 缺失 → GPU 进程 NOTREACHED 崩溃循环）、`%LOCALAPPDATA%` 缓存目录与 resources/cef → $INSTDIR 打包流。
+  - 适用场景：排查 Linux/Windows CEF 启动/渲染/IPC、升级 CEF/Chromium、调整 `tauri-runtime-cef` trait 适配、确认 macOS/Android 不触达 CEF；排查 Windows GPU 进程崩溃、CEF_PATH 解析（Linux `~/i/cef-{dev,prod}`、Windows `H:\cef-{dev,prod}`）。
 
 ## 调试（`debug/`）
 
