@@ -9,7 +9,7 @@ export class DataMode {
 
 /**
  * 解析 --data dev|prod，控制数据目录模式。
- * dev：使用仓库本地 data/ 和 cache/ 目录（默认用于 bun dev）。
+ * dev：使用仓库本地 .kabegame/debug/{data,cache,tmp} 目录（默认用于 bun dev）。
  * prod：使用系统用户数据目录（默认用于 bun build / bun start / bun check）。
  * 对应 Rust cfg: kabegame_data="dev"|"prod"，由 build.rs 注入。
  */

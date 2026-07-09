@@ -10,7 +10,7 @@
  * - bun b -c kabegame|kabegame-cli
  *
  * 说明：
- * - bun dev -c kabegame 时由构建链打包爬虫插件到 data/plugins-directory（package-to-dev-data），不写入 app resources
+ * - bun dev -c kabegame 时由构建链打包爬虫插件到 .kabegame/debug/data/plugins-directory（package-to-dev-data），不写入 app resources
  * - kabegame 的前端由各自 tauri.conf.json 的 beforeDev/BuildCommand 触发
  */
 

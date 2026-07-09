@@ -30,6 +30,12 @@
     "security": {
       "capabilities": ["main-capability"{{#if isAndroid}}, "android-capability"{{else}}, "crawler-capability", "surf-capability", "surf-navbar-capability"{{/if}}],
       "csp": "default-src 'self' ipc: cef-ipc: http://ipc.localhost{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; img-src * data: blob:; media-src * data: blob: ; connect-src 'self' ipc: cef-ipc: http://ipc.localhost ws: wss:{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}} http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline' 'nonce-kabegame-ejs-bridge'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'self' blob: data: about:;",
+      {{!-- Tauri 默认会给打包 HTML 里的 <style> 标签自动注入随机 nonce 并加到 style-src,
+           一旦 style-src 出现 nonce-source,浏览器会忽略该指令里的 'unsafe-inline'
+           (对内联 style="" 属性同样生效,且属性没有 nonce 机制可用),
+           导致 Vue :style 绑定等内联样式属性被 CSP 拦截。这里显式关闭 style-src 的自动
+           nonce 注入,保留我们主动声明的 'unsafe-inline'。 --}}
+      "dangerousDisableAssetCspModification": ["style-src"],
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]

@@ -315,6 +315,82 @@ impl PluginManager {
         PLUGIN_MANAGER.get()
     }
 
+    /// 将预置在 AppPaths::bundled_plugins_dir()（resources/plugins/）下的 .kgpg
+    /// 移动进用户插件目录 AppPaths::plugins_dir()（data/plugins-directory）。
+    ///
+    /// 仅桌面/web（非 Android）；由 `init_kgpg_plugin()` 在插件缓存初始化之前
+    /// 无条件调用一次。尽力而为：任何一步失败仅 eprintln! 记录，不返回 Err、不 panic。
+    ///
+    /// 幂等/一次性：文件被移动后 resources/plugins/ 随之清空，此后每次启动该目录
+    /// 为空、函数立即返回；只有应用更新重新铺出新 .kgpg 才会再次触发搬运（且会
+    /// 覆盖用户目录里的同名旧版本）。
+    #[cfg(not(target_os = "android"))]
+    pub async fn seed_bundled_plugins(&self) {
+        let app_paths = crate::app_paths::AppPaths::global();
+
+        let bundled_dir = app_paths.bundled_plugins_dir();
+        let mut entries = match tokio::fs::read_dir(&bundled_dir).await {
+            Ok(entries) => entries,
+            // 目录不存在/不可读：dev 环境（不打包 resources）下必然如此，静默跳过
+            Err(_) => return,
+        };
+
+        let user_dir = app_paths.plugins_dir();
+        if let Err(e) = tokio::fs::create_dir_all(&user_dir).await {
+            eprintln!("[plugin] seed_bundled_plugins: 创建用户插件目录失败: {e}");
+            return;
+        }
+
+        loop {
+            let entry = match entries.next_entry().await {
+                Ok(Some(e)) => e,
+                Ok(None) => break,
+                Err(e) => {
+                    eprintln!("[plugin] seed_bundled_plugins: 读取目录项失败: {e}");
+                    break;
+                }
+            };
+            let src = entry.path();
+            if !(src.is_file() && src.extension().and_then(|s| s.to_str()) == Some("kgpg")) {
+                continue;
+            }
+            let Some(file_name) = src.file_name() else {
+                continue;
+            };
+            let dst = user_dir.join(file_name);
+
+            // 预置版本始终覆盖用户目录中的同名旧版本（应用更新场景）
+            if dst.exists() {
+                if let Err(e) = tokio::fs::remove_file(&dst).await {
+                    eprintln!(
+                        "[plugin] seed_bundled_plugins: 删除旧插件文件失败 {}: {e}",
+                        dst.display()
+                    );
+                    continue;
+                }
+            }
+
+            if tokio::fs::rename(&src, &dst).await.is_ok() {
+                continue;
+            }
+            // rename 失败（如跨盘/跨卷）：回退为 copy + remove_file
+            if let Err(e) = tokio::fs::copy(&src, &dst).await {
+                eprintln!(
+                    "[plugin] seed_bundled_plugins: 搬运插件失败 {} -> {}: {e}",
+                    src.display(),
+                    dst.display()
+                );
+                continue;
+            }
+            if let Err(e) = tokio::fs::remove_file(&src).await {
+                eprintln!(
+                    "[plugin] seed_bundled_plugins: 清理源文件失败 {}: {e}",
+                    src.display()
+                );
+            }
+        }
+    }
+
     /// 启动时初始化商店插件缓存：扫描 store-cache 目录，将已下载的 .kgpg 解析为 Plugin 放入内存
     pub async fn init_store_plugin_cache(&self) -> Result<(), String> {
         let store_cache_dir = crate::app_paths::AppPaths::global().store_cache_dir();

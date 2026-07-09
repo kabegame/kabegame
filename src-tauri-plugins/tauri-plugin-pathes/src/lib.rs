@@ -73,15 +73,14 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 // Desktop: compute paths using dirs crate
                 use dirs;
 
-                let data_dir = if is_dev() {
-                    if let Some(repo_root) = repo_root_dir() {
-                        repo_root.join("data")
-                    } else {
-                        dirs::data_local_dir()
-                            .or_else(|| dirs::data_dir())
-                            .expect("Failed to get app data directory")
-                            .join("Kabegame")
-                    }
+                let dev_debug_dir = if is_dev() {
+                    repo_root_dir().map(|repo_root| repo_root.join(".kabegame").join("debug"))
+                } else {
+                    None
+                };
+
+                let data_dir = if let Some(dev_debug_dir) = &dev_debug_dir {
+                    dev_debug_dir.join("data")
                 } else {
                     dirs::data_local_dir()
                         .or_else(|| dirs::data_dir())
@@ -89,21 +88,18 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                         .join("Kabegame")
                 };
 
-                let cache_dir = if is_dev() {
-                    if let Some(repo_root) = repo_root_dir() {
-                        repo_root.join("cache")
-                    } else {
-                        dirs::cache_dir()
-                            .expect("Failed to get cache dir")
-                            .join("Kabegame")
-                    }
+                let cache_dir = if let Some(dev_debug_dir) = &dev_debug_dir {
+                    dev_debug_dir.join("cache")
                 } else {
                     dirs::cache_dir()
                         .expect("Failed to get cache dir")
                         .join("Kabegame")
                 };
 
-                let temp_dir = std::env::temp_dir().join("Kabegame");
+                let temp_dir = dev_debug_dir
+                    .as_ref()
+                    .map(|dev_debug_dir| dev_debug_dir.join("tmp"))
+                    .unwrap_or_else(|| std::env::temp_dir().join("Kabegame"));
 
                 let resource_dir = app
                     .path()

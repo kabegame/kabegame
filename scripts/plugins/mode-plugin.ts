@@ -257,7 +257,15 @@ export class ModePlugin extends BasePlugin {
     );
   }
 
-  // 打包爬虫插件：仅本地开发写入 data/plugins-directory（不将 .kgpg 打入安装包 resources）
+  // 打包爬虫插件：
+  // - dev：写入 data/plugins-directory（不打进安装包 resources，即时对开发中的
+  //   应用可见）
+  // - build（非 Android）：写入 resources/plugins/，随 tauri.conf.json 的
+  //   bundle.resources 打进安装包；init_kgpg_plugin() 在应用启动时把这里的 .kgpg
+  //   "移动"进用户插件目录（见 kabegame-core/src/plugin/mod.rs 的
+  //   PluginManager::seed_bundled_plugins）。Android 不走桌面 bundle.resources
+  //   机制，跳过。
+  // - start：不打包插件；正式环境插件从 GitHub Releases 下载
   packagePlugins(bs: BuildSystem): void {
     const cmd = bs.context.cmd;
     const comp = bs.context.component!;
@@ -270,7 +278,21 @@ export class ModePlugin extends BasePlugin {
       run("nx", ["run", "crawler-plugins:package-to-dev-data"], {
         bin: "bun",
       });
+    } else if (comp.isMain && cmd.isBuild && !this.mode!.isAndroid) {
+      // 注意：本步骤在 tauri/cargo 编译 kabegame 主程序之前执行（build-system.ts
+      // 的 beforeBuild hook 早于实际编译调用），因此依赖 kabegame-cli release
+      // sidecar（target/release/kabegame-cli[.exe]）已提前构建好（package-plugin.ts
+      // 的 cliPackPlugin 通过它打包 .kgpg）。这是 package-to-dev-data 同样存在的
+      // 既有约束：CI 中 .github/workflows/release.yml 已保证先 `bun b -c kabegame-cli`
+      // 再 `bun b -c kabegame --release`；本地构建需遵循同样的顺序。
+      this.log(
+        chalk.blue(
+          "打包插件到安装包资源目录: crawler-plugins:package-to-resources",
+        ),
+      );
+      run("nx", ["run", "crawler-plugins:package-to-resources"], {
+        bin: "bun",
+      });
     }
-    // build / start 不打包插件；正式环境插件从 GitHub Releases 下载
   }
 }

@@ -5,11 +5,11 @@ use std::{path::PathBuf, sync::OnceLock};
 /// 所有路径在应用启动时由 tauri-plugin-pathes 一次性计算并初始化。
 /// 各模块通过 `AppPaths::global()` 获取路径，只做 `.join()` 操作，不做 IO。
 pub struct AppPaths {
-    /// 数据目录根：桌面 dirs::data_local_dir()/Kabegame；安卓 filesDir
+    /// 数据目录根：桌面 prod 为 dirs::data_local_dir()/Kabegame，dev 为 .kabegame/debug/data；安卓 filesDir
     pub data_dir: PathBuf,
-    /// 缓存目录根：桌面 dirs::cache_dir()/Kabegame；安卓 cacheDir
+    /// 缓存目录根：桌面 prod 为 dirs::cache_dir()/Kabegame，dev 为 .kabegame/debug/cache；安卓 cacheDir
     pub cache_dir: PathBuf,
-    /// 临时目录根：桌面 std::env::temp_dir()/Kabegame；安卓 cacheDir
+    /// 临时目录根：桌面 prod 为 std::env::temp_dir()/Kabegame，dev 为 .kabegame/debug/tmp；安卓 cacheDir
     pub temp_dir: PathBuf,
     /// 资源目录：Tauri BaseDirectory::Resource
     pub resource_dir: PathBuf,
@@ -63,6 +63,17 @@ impl AppPaths {
     /// plugins-directory 目录（用户安装的插件）
     pub fn plugins_dir(&self) -> PathBuf {
         self.data_dir.join("plugins-directory")
+    }
+
+    /// 预置（随安装包/更新分发）插件目录：`resource_dir/plugins`
+    ///
+    /// 由构建脚本在 build（非 Android）时写入（见 scripts/plugins/mode-plugin.ts 的
+    /// `crawler-plugins:package-to-resources`），随 tauri.conf.json 的
+    /// `bundle.resources: ["resources/**/*"]` 打进安装包。
+    /// `init_kgpg_plugin()` 启动时把这里的 `.kgpg` 移动进 `plugins_dir()`。
+    /// Android 不使用桌面 bundle.resources 机制，该目录在 Android 端不会有内容。
+    pub fn bundled_plugins_dir(&self) -> PathBuf {
+        self.resource_dir.join("plugins")
     }
 
     /// 插件默认配置目录：`plugins-directory/default-configs`
@@ -183,7 +194,7 @@ impl AppPaths {
     }
 }
 
-/// 是否使用开发数据目录（仓库本地 data/ 和 cache/）。
+/// 是否使用开发数据目录（仓库本地 .kabegame/debug/{data,cache,tmp}）。
 /// 由 --data dev|prod 构建选项控制（kabegame_data cfg），未指定时回退到 debug_assertions。
 #[inline]
 pub fn is_dev() -> bool {

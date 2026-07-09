@@ -37,6 +37,9 @@ src-tauri/*/gen/schemas/*
 # 插件 permissions 下的 schema.json 由 tauri_plugin::Builder 在 cargo build 时生成
 src-tauri-plugins/**/permissions/schemas/schema.json
 src-tauri/kabegame/resources/bin/*
+# 预置爬虫插件，由 crawler-plugins:package-to-resources 构建期生成，
+# init_kgpg_plugin() 启动时移动进用户插件目录（见 PluginManager::seed_bundled_plugins）
+src-tauri/kabegame/resources/plugins/
 # Windows CEF runtime,由 os-plugin collectWindowsCefRuntime() 构建期生成
 src-tauri/kabegame/resources/cef/
 
@@ -52,8 +55,6 @@ src-tauri/kabegame/resources/cef/
 /bin/macos/
 
 # development data
-/data
-/cache
 /.kabegame/debug
 
 # Nx

@@ -53,7 +53,24 @@ mod imp {
 
     static WINDOWED_QUIT: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     static WINDOWED_CONTEXT_INITIALIZED: AtomicBool = AtomicBool::new(false);
-    const CHROME_ONLY_DISABLED_FEATURES: &[&str] = &["ImmersiveReadAnything"];
+    const CHROME_ONLY_DISABLED_FEATURES: &[&str] = &[
+        "ImmersiveReadAnything",
+        // `tauri`/`asset` custom schemes are registered with `SECURE` below, so
+        // `http://tauri.localhost` counts as a secure origin to Chromium's Local/
+        // Private Network Access checks. LNA then requires a user permission grant
+        // before that "secure" page may reach loopback services (e.g. the app's own
+        // `http://127.0.0.1:<port>` media server in `http_server.rs`). Real Chrome
+        // shows a permission prompt for this; CEF windowed mode has no such UI, so
+        // the request is denied before any socket opens — no CSP violation, no
+        // network entry, images just never load. Disable both the legacy PNA and
+        // current LNA feature names since the exact one gated by CEF's pinned
+        // Chromium version isn't guaranteed.
+        "LocalNetworkAccessChecks",
+        "PrivateNetworkAccessPermissionPrompt",
+        "PrivateNetworkAccessRespectPreflightResults",
+        "PrivateNetworkAccessSendPreflights",
+        "BlockInsecurePrivateNetworkRequests",
+    ];
 
     fn windowed_quit() -> Arc<AtomicBool> {
         WINDOWED_QUIT

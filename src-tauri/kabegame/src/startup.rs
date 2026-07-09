@@ -84,6 +84,11 @@ where
 pub fn init_kgpg_plugin() {
     let task_future = async {
         let pm = PluginManager::global();
+        // 新增：把预置在 resources/plugins/ 下的 .kgpg 插件"移动"进用户插件目录；
+        // 仅桌面/web（非 Android）。Android 不使用桌面 bundle.resources 机制，
+        // 编译期直接不含这一步，行为与今天完全一致。
+        #[cfg(not(target_os = "android"))]
+        pm.seed_bundled_plugins().await;
         // 初始化已安装插件缓存（仅用户 data 目录下的 .kgpg）
         if let Err(e) = pm.ensure_installed_cache_initialized().await {
             eprintln!("Failed to initialize plugin cache: {}", e);
@@ -511,7 +516,7 @@ fn is_cleanup_restart() -> bool {
 
     let data_dir = if is_dev() {
         if let Some(repo_root) = repo_root_dir() {
-            repo_root.join("data")
+            repo_root.join(".kabegame").join("debug").join("data")
         } else {
             match dirs::data_local_dir().or_else(dirs::data_dir) {
                 Some(d) => d.join("Kabegame"),

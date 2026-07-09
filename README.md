@@ -332,9 +332,9 @@ bun run build:ffmpeg             # Needs libx264 (macOS: brew install x264, Ubun
 - `-c, --component`: `kabegame` | `kabegame-cli`
 - `bun check` requires `-c`
 - `--mode`: `standard` (default, store + virtual disk + CLI) | `light` (store only) | `android` (Android target)
-- `--data`: `dev` (default for `bun dev` — uses repo-local `data/` and `cache/` dirs) | `prod` (default for all other commands — uses system data dirs). Use `--data prod` during `bun dev` to test against your installed Kabegame data.
+- `--data`: `dev` (default for `bun dev` — uses repo-local `.kabegame/debug/data`, `.kabegame/debug/cache`, and `.kabegame/debug/tmp` dirs) | `prod` (default for all other commands — uses system data dirs). Use `--data prod` during `bun dev` to test against your installed Kabegame data.
 - `--skip`: `vue` | `cargo`
-- Kabegame app `bun dev -c kabegame` runs `crawler-plugins:package-to-dev-data` (NX) so packed `.kgpg` files land in `data/plugins-directory` for local testing; release builds do not bundle store plugins (users install from the GitHub store).
+- Kabegame app `bun dev -c kabegame` runs `crawler-plugins:package-to-dev-data` (NX) so packed `.kgpg` files land in `.kabegame/debug/data/plugins-directory` for local testing; release builds do not bundle store plugins (users install from the GitHub store).
 
 ### Android development
 

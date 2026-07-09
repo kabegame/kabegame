@@ -16,7 +16,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export const ROOT = path.resolve(__dirname, "..");
 
-export const DATA_PLUGINS_DIR = path.join(ROOT, "data", "plugins-directory");
+export const DATA_PLUGINS_DIR = path.join(
+  ROOT,
+  ".kabegame",
+  "debug",
+  "data",
+  "plugins-directory",
+);
 
 export const RESOURCES_DIR = path.join(
   ROOT,

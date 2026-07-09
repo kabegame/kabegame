@@ -18,6 +18,7 @@
   - ffmpeg 依赖
   - cef 依赖
 - **预览**: 手机屏幕预览抵达页的边界的时候自动翻页
+- **i18n**: 首次语言设置从后端直达，非前端探测
 
 ### Optimized
 - **任务**: JS任务在log旁添加了一个快捷打开webview的按钮
@@ -25,11 +26,12 @@
 - **缩略图丢失**: 当缩略图丢失的时候，右上角出现黄色警告提示用户应该重新运行整理来生成。
 
 ### Changed
-- **界面**: webview现在用自研CEF运行时，Linux 上被 WebkitGTK 折磨的时代已经过去啦（代价是安装包膨胀200MB左右），并且还可以定制运行时和一致化webview行为。
+- **界面**: webview现在用自研CEF运行时，Linux 上被 WebkitGTK 折磨的时代已经过去啦（代价是安装包膨胀100MB左右），并且还可以定制运行时和一致化webview行为。
+- **VD**: Dokan依赖、fuse依赖不再硬要求，在用户打开虚拟盘的时候要求先安装该依赖
 
 ### Removed
 - **Light**: 自研 CEF 运行时使得 light 模式含义变为不包含 webview，但那样会影响程序行为并添加说明负担，因此去掉light模式。
-- **CLI**: Standard 模式不再带kabegame-cli，cli改为单独发布。
+- **CLI Bundling**: Standard 模式不再带kabegame-cli，cli改为单独发布。
 
 ## [4.2.1]
 ### Fixed

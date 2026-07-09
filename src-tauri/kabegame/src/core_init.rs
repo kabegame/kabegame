@@ -155,13 +155,14 @@ pub fn init_globals() -> Result<(), String> {
 pub fn init_app_paths_for_web() -> Result<(), String> {
     use kabegame_core::app_paths::{is_dev, repo_root_dir, AppPaths};
 
-    let data_dir = if is_dev() {
-        repo_root_dir().map(|r| r.join("data")).unwrap_or_else(|| {
-            dirs::data_local_dir()
-                .or_else(|| dirs::data_dir())
-                .expect("cannot determine data dir")
-                .join("Kabegame")
-        })
+    let dev_debug_dir = if is_dev() {
+        repo_root_dir().map(|repo_root| repo_root.join(".kabegame").join("debug"))
+    } else {
+        None
+    };
+
+    let data_dir = if let Some(dev_debug_dir) = &dev_debug_dir {
+        dev_debug_dir.join("data")
     } else {
         dirs::data_local_dir()
             .or_else(|| dirs::data_dir())
@@ -169,12 +170,8 @@ pub fn init_app_paths_for_web() -> Result<(), String> {
             .join("Kabegame")
     };
 
-    let cache_dir = if is_dev() {
-        repo_root_dir().map(|r| r.join("cache")).unwrap_or_else(|| {
-            dirs::cache_dir()
-                .expect("cannot determine cache dir")
-                .join("Kabegame")
-        })
+    let cache_dir = if let Some(dev_debug_dir) = &dev_debug_dir {
+        dev_debug_dir.join("cache")
     } else {
         dirs::cache_dir()
             .expect("cannot determine cache dir")
@@ -193,7 +190,10 @@ pub fn init_app_paths_for_web() -> Result<(), String> {
     let app_paths = AppPaths {
         data_dir,
         cache_dir,
-        temp_dir: std::env::temp_dir().join("Kabegame"),
+        temp_dir: dev_debug_dir
+            .as_ref()
+            .map(|dev_debug_dir| dev_debug_dir.join("tmp"))
+            .unwrap_or_else(|| std::env::temp_dir().join("Kabegame")),
         resource_dir,
         exe_dir,
         external_data_dir: None,
