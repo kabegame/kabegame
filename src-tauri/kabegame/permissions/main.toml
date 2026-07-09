@@ -162,6 +162,8 @@ commands.allow = [
   "set_album_drive_enabled",
   "get_album_drive_mount_point",
   "set_album_drive_mount_point",
+  "get_album_drive_driver_installed",
+  "install_album_drive_driver",
   "hide_main_window",
   "toggle_fullscreen",
   "get_window_state",

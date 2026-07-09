@@ -42,7 +42,7 @@
   - 适用场景：下载任务生命周期、Android `content://` 与 HTTP/HTTPS 下载差异、JS 爬虫或畅游窗口的 `blob:` / `data:` / MSE 媒体下载、MSE 多 SourceBuffer 合流、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
 
 - [downloader-tasks/VIDEO_INGEST.md](downloader-tasks/VIDEO_INGEST.md)
-  - 主题：视频摄入（下载/导入压缩）的平台门控机制。桌面 standard/light/CLI 使用 rsmpeg/FFmpeg；Android 走 Kotlin `AndroidVideoCompressProvider` 与系统媒体 API，不编译 FFmpeg。画廊播放始终可用（HTML `<video>`，无需 FFmpeg）。
+  - 主题：视频摄入（下载/导入压缩）的平台门控机制。桌面 standard/CLI 使用 rsmpeg/FFmpeg；Android 走 Kotlin `AndroidVideoCompressProvider` 与系统媒体 API，不编译 FFmpeg。画廊播放始终可用（HTML `<video>`，无需 FFmpeg）。
   - 适用场景：新增视频处理调用点；排查桌面 FFmpeg 构建环境；排查 Android content URI 视频预览/维度读取；理解 `bun run build:ffmpeg` 与桌面构建的关系。
 
 - [downloader-tasks/TASK_DRAWER_LOAD.md](downloader-tasks/TASK_DRAWER_LOAD.md)
@@ -110,14 +110,14 @@
 ## 设置（`settings/`）
 
 - [settings/SETTINGS_BACKENDS.md](settings/SETTINGS_BACKENDS.md)
-  - 主题：前端设置后端抽象。涵盖 `tauri` / `localStorage` / `query` / `readonly` 四类 descriptor、事件驱动保存状态机、query adapter 注入和 pathRoute 接入边界。
-  - 适用场景：新增设置 key；迁移 URL query 状态；排查设置保存态、web readonly 回弹、query 参数同步和 localStorage 迁移。
+  - 主题：前端设置后端抽象。涵盖 `tauri` / `localStorage` / `query` / `readonly` 四类 descriptor、getter-only tauri key 的 `refresh(key)` 单键读取、事件驱动保存状态机、query adapter 注入和 pathRoute 接入边界。
+  - 适用场景：新增设置 key；新增运行时状态类单键刷新；迁移 URL query 状态；排查设置保存态、web readonly 回弹、query 参数同步和 localStorage 迁移。
 
 ## 构建打包（`build/`）
 
 - [build/PLATFORM_SHARED_LIBS.md](build/PLATFORM_SHARED_LIBS.md)
-  - 主题：三平台动态库随包打包。`bin/{windows,linux,macos}/` 子目录约定、`OSPlugin.bundleLibs` 与 `verifyFFmpegBuildArtifacts` / `fixupMacOSAppBundle` / `fixupMacOSDmg`、Linux rpath `$ORIGIN/../lib/kabegame`、macOS install_name 改写为 `@executable_path/{相对路径}/Frameworks/...`、Tauri handlebars 动态注入 `linux.deb.files` 与 `macOS.frameworks`、Linux 不捆 libfuse 但仍 apt 依赖 `fuse3`(fusermount3)。
-  - 适用场景：新增/升级运行时动态库;排查最终用户报 `libx264.so.X: cannot open` 或 macOS `Library not loaded`;调整 build-ffmpeg / DLL 复制 / dmg fixup 流程。
+  - 主题：三平台动态库随包打包。`bin/{windows,linux,macos}/` 子目录约定、`OSPlugin.bundleLibs` 与 `verifyFFmpegBuildArtifacts` / `fixupMacOSAppBundle` / `fixupMacOSDmg`、Linux rpath `$ORIGIN/../lib/kabegame`、macOS install_name 改写为 `@executable_path/{相对路径}/Frameworks/...`、Tauri handlebars 动态注入 `linux.deb.files` 与 `macOS.frameworks`、Linux 不捆 libfuse 但仍 apt 依赖 `fuse3`(fusermount3)、虚拟盘驱动/系统依赖由设置页检测并由用户触发或手动安装。
+  - 适用场景：新增/升级运行时动态库;排查最终用户报 `libx264.so.X: cannot open`、macOS `Library not loaded` 或画册盘驱动缺失;调整 build-ffmpeg / DLL 复制 / dmg fixup / NSIS hook 流程。
 
 ## 应用更新（`updater/`）
 

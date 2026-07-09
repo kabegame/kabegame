@@ -81,7 +81,7 @@ program
   )
   .option(
     "--mode <mode>",
-    "构建模式：standard | light | android",
+    "构建模式：standard | android",
     Mode.STANDARD,
   )
   .option("--data <data>", "数据目录模式：dev | prod（默认 dev）")
@@ -103,7 +103,7 @@ program
   )
   .option(
     "--mode <mode>",
-    "构建模式：standard | light | android",
+    "构建模式：standard | android",
     Mode.STANDARD,
   )
   .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
@@ -134,7 +134,7 @@ program
   )
   .option(
     "--mode <mode>",
-    "构建模式：standard | light | android",
+    "构建模式：standard | android",
     Mode.STANDARD,
   )
   .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
@@ -164,7 +164,7 @@ program
   .option("--skip <skip>", "跳过检查项：vue/cargo（只能一个值）", "")
   .option(
     "--mode <mode>",
-    "构建模式：standard | light | android",
+    "构建模式：standard | android",
     Mode.STANDARD,
   )
   .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
@@ -184,7 +184,7 @@ program
   .option("--test <testName>", "Cargo integration test target")
   .option(
     "--mode <mode>",
-    "构建模式：standard | light",
+    "构建模式：standard",
     Mode.STANDARD,
   )
   .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")

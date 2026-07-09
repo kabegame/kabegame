@@ -2,12 +2,12 @@
 
 ## 主题
 
-`packages/core/src/stores/settings.ts` 统一管理前端设置状态。每个设置 key 的后端由
+`packages/kabegame-core/src/stores/settings.ts` 统一管理前端设置状态。每个设置 key 的后端由
 `settingsDescriptors.ts` 描述，调用方只通过 `useSettingKeyState(key)` 读写。
 
 ## 后端类型
 
-- `tauri`：通过 `get_settings` 批量读取，通过 descriptor 中的 setter IPC 写入。
+- `tauri`：通过 `get_settings` 批量读取，通过 descriptor 中的 setter IPC 写入。getter-only key 允许没有 setter；调用方用 `settingsStore.refresh(key)` 走 descriptor 的 getter 做单键刷新（例如 `albumDriveDriverInstalled` 这类运行时状态）。
 - `localStorage`：前端本地偏好，使用 `kabegame-setting-${key}` 持久化。
 - `query`：URL query 镜像。settings 层只同步参数值，不判断 routeName 或激活态。
 - `readonly`：web 下桌面能力占位，写入由 `useSettingKeyState` 拦截并提示桌面版。
@@ -28,6 +28,11 @@ await set("recommended", { history: "replace", source: "auto_config_tabs" });
 ```
 
 ```ts
+const settings = useSettingsStore();
+await settings.refresh("albumDriveDriverInstalled");
+```
+
+```ts
 setSettingsQueryAdapter({
   query: computed(() => route.query as Record<string, unknown>),
   async write(param, value, history) {
@@ -41,8 +46,8 @@ setSettingsQueryAdapter({
 
 ## 涉及文件
 
-- `packages/core/src/stores/settings.ts`
-- `packages/core/src/stores/settingsDescriptors.ts`
-- `packages/core/src/stores/localSettingsMigrations.ts`
-- `packages/core/src/composables/useSettingKeyState.ts`
+- `packages/kabegame-core/src/stores/settings.ts`
+- `packages/kabegame-core/src/stores/settingsDescriptors.ts`
+- `packages/kabegame-core/src/stores/localSettingsMigrations.ts`
+- `packages/kabegame-core/src/composables/useSettingKeyState.ts`
 - `apps/kabegame/src/stores/pathRoute.ts`

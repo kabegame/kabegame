@@ -16,7 +16,6 @@ export const isAndroid =
   process.env.TAURI_PLATFORM === "android" ||
   process.env.VITE_ANDROID === "true";
 
-export const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
 export const isWeb = process.env.KABEGAME_MODE === "web";
 export const isDebugIngestEnabled = process.env.KABEGAME_DEBUG_INGEST !== "false";
 
@@ -39,7 +38,7 @@ export default {
     __MACOS__: !isAndroid && !isWeb && isMacOS,
     __ANDROID__: isAndroid,
     __WEB__: isWeb,
-    __LIGHT_MODE__: isAndroid || isLightMode,
+    __LIGHT_MODE__: isAndroid,
     // 切换此开关来强制重启vite服务器
     __REBOOT__: true,
   },

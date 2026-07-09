@@ -69,6 +69,8 @@ third/x264-build
 
 # 一些临时文件
 /ignore
+tmp/
+.tmp/
 
 # 临时忽略 kamechan emotion 图片资源
 apps/kabegame/public/kamechan/emotion*/**/*.png

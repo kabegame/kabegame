@@ -27,6 +27,10 @@
 ### Changed
 - **界面**: webview现在用自研CEF运行时，Linux 上被 WebkitGTK 折磨的时代已经过去啦（代价是安装包膨胀200MB左右），并且还可以定制运行时和一致化webview行为。
 
+### Removed
+- **Light**: 自研 CEF 运行时使得 light 模式含义变为不包含 webview，但那样会影响程序行为并添加说明负担，因此去掉light模式。
+- **CLI**: Standard 模式不再带kabegame-cli，cli改为单独发布。
+
 ## [4.2.1]
 ### Fixed
 - **画廊掉帧**: 画廊经常掉帧是因为原图显示bug，即使鼠标离开也还在加载原图。该问题在原图大小尤其大的时候

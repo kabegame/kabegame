@@ -9,11 +9,11 @@ use kabegame_core::storage::image_events::{
     delete_images_with_events, toggle_image_favorite_with_event,
 };
 use kabegame_core::storage::Storage;
-#[cfg(all(feature = "standard", feature = "vd-legacy"))]
+#[cfg(feature = "standard")]
 use kabegame_core::storage::FAVORITE_ALBUM_ID;
-#[cfg(all(feature = "standard", feature = "vd-legacy"))]
+#[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(all(feature = "standard", feature = "vd-legacy"))]
+#[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use tauri::{AppHandle, Runtime};
 
@@ -153,7 +153,7 @@ pub async fn toggle_image_favorite<R: Runtime>(
 ) -> Result<(), String> {
     toggle_image_favorite_with_event(&image_id, favorite)?;
 
-    #[cfg(all(feature = "standard", feature = "vd-legacy"))]
+    #[cfg(feature = "standard")]
     VirtualDriveService::global().notify_album_dir_changed(FAVORITE_ALBUM_ID);
     Ok(())
 }

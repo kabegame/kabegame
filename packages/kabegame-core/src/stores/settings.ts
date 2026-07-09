@@ -58,6 +58,7 @@ export interface AppSettings {
   // Windows：画册虚拟盘（Dokan）
   albumDriveEnabled: boolean;
   albumDriveMountPoint: string;
+  albumDriveDriverInstalled: boolean;
   autoOpenCrawlerWebview: boolean;
   /** 导入插件推荐运行配置时是否默认启用定时（默认 true） */
   importRecommendedScheduleEnabled: boolean;
@@ -322,6 +323,18 @@ export const useSettingsStore = defineStore("settings", () => {
     await setSettingsLoadPromise(fetchSettingsBatch());
   };
 
+  const refresh = async <K extends AppSettingKey>(key: K): Promise<void> => {
+    const descriptor = descriptorFor(key);
+    if (descriptor?.backend !== "tauri" || !descriptor.getter) return;
+
+    loadingByKey[key] = true;
+    try {
+      (values as any)[key] = await invoke<AppSettings[K]>(descriptor.getter);
+    } finally {
+      loadingByKey[key] = false;
+    }
+  };
+
   /**
    * 应用后端设置变更事件。
    *
@@ -389,7 +402,7 @@ export const useSettingsStore = defineStore("settings", () => {
     if (IS_DEV) {
       console.log(`Saving setting ${String(key)} with value`, value, args);
     }
-    await invoke(descriptor.setter, args);
+    await invoke(descriptor.setter!, args);
     return true;
   };
 
@@ -457,6 +470,7 @@ export const useSettingsStore = defineStore("settings", () => {
     applyChanges,
     loadAll,
     refreshAll,
+    refresh,
     save,
   };
 });

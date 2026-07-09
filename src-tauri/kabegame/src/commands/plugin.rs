@@ -26,8 +26,6 @@ pub fn get_build_mode() -> Result<String, String> {
         "android"
     } else if cfg!(feature = "standard") {
         "standard"
-    } else if cfg!(feature = "light") {
-        "light"
     } else {
         "unknown"
     };

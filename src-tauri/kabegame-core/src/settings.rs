@@ -254,6 +254,13 @@ impl Settings {
             .set(Settings)
             .map_err(|_| "Settings already initialized".to_string())?;
 
+        if let Err(e) = Self::normalize_setting_value_now(&settings_file, SettingKey::Language) {
+            eprintln!(
+                "[Warn] Failed to persist normalized language setting: {}",
+                e
+            );
+        }
+
         Ok(())
     }
 
@@ -732,6 +739,53 @@ Write-Output "$style,$tile"
         }
 
         Ok(serde_json::Value::Object(json_map))
+    }
+
+    fn write_settings_file_now(file: &Path) -> Result<(), String> {
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create settings directory: {}", e))?;
+        }
+
+        let json_val = Self::serialize_to_json()?;
+        let content = serde_json::to_string_pretty(&json_val)
+            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+        let tmp = file.with_extension("json.tmp");
+        fs::write(&tmp, content)
+            .map_err(|e| format!("Failed to write temp settings file: {}", e))?;
+        atomic_replace_file(&tmp, file)
+    }
+
+    fn normalize_setting_value_now(
+        file: &Path,
+        key: SettingKey,
+    ) -> Result<Option<SettingValue>, String> {
+        let Some(cell) = Self::cells().get(&key) else {
+            return Ok(None);
+        };
+        let current = cell.load();
+        let Some(new_value) = Self::normalize_setting_value(key, &current) else {
+            return Ok(None);
+        };
+        cell.store(Arc::new(new_value.clone()));
+        Self::write_settings_file_now(file)?;
+        Ok(Some(new_value))
+    }
+
+    fn normalize_setting_value(key: SettingKey, current: &SettingValue) -> Option<SettingValue> {
+        match key {
+            SettingKey::Language => {
+                let raw = current.as_option_string().flatten();
+                let resolved = kabegame_i18n::resolve_language_setting(raw.as_deref());
+                kabegame_i18n::set_locale(resolved);
+                if raw.as_deref() == Some(resolved) {
+                    None
+                } else {
+                    Some(SettingValue::OptionString(Some(resolved.to_string())))
+                }
+            }
+            _ => None,
+        }
     }
 
     /// 获取当前所有设置的 JSON 快照（camelCase key）。
@@ -1533,14 +1587,7 @@ Write-Output "$style,$tile"
     }
 
     pub fn set_language(&self, language: Option<String>) -> Result<(), String> {
-        let opt = language.and_then(|s| {
-            let t = s.trim().to_string();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
-        });
+        let opt = Some(kabegame_i18n::resolve_language_setting(language.as_deref()).to_string());
         let cells = Self::cells();
         let new_value = SettingValue::OptionString(opt);
         if let Some(cell) = cells.get(&SettingKey::Language) {

@@ -11,11 +11,10 @@ import { execSync } from "child_process";
 
 export class Mode {
   static readonly STANDARD = "standard";
-  static readonly LIGHT = "light";
   static readonly ANDROID = "android";
   static readonly WEB = "web";
 
-  static readonly modes = [this.STANDARD, this.LIGHT, this.ANDROID, this.WEB];
+  static readonly modes = [this.STANDARD, this.ANDROID, this.WEB];
 
   constructor(private readonly _mode: string) {}
 
@@ -25,10 +24,6 @@ export class Mode {
 
   get isStandard(): boolean {
     return this.mode === Mode.STANDARD;
-  }
-
-  get isLight(): boolean {
-    return this.mode === Mode.LIGHT;
   }
 
   get isAndroid(): boolean {
@@ -61,7 +56,7 @@ export class ModePlugin extends BasePlugin {
       }
       const modeObj = new Mode(mode);
       if (
-        (modeObj.isLight || modeObj.isAndroid || modeObj.isWeb) &&
+        (modeObj.isAndroid || modeObj.isWeb) &&
         !bs.context.component!.isMain
       ) {
         throw new Error(`${mode} mode 只支持main组件！`);
@@ -95,7 +90,7 @@ export class ModePlugin extends BasePlugin {
       if (this.mode!.isAndroid) {
         this.setEnv("VITE_ANDROID", "true");
         this.setEnv("TAURI_PLATFORM", "android");
-      } else if (this.mode!.isStandard || this.mode!.isLight || this.mode!.isWeb) {
+      } else {
         this.setEnv("FFMPEG_PKG_CONFIG_PATH", path.join(
             THIRD_DIR,
             "FFmpeg-build",
@@ -109,7 +104,7 @@ export class ModePlugin extends BasePlugin {
         if (OSPlugin.isLinux) {
           this.setEnv("FFMPEG_LINK_MODE", "static");
         }
-        // Linux/Windows standard|light 用 CEF runtime。必须在任何 cargo 命令前设好
+        // Linux/Windows 用 CEF runtime。必须在任何 cargo 命令前设好
         // CEF_PATH,否则 cef-dll-sys 会下载官方无 H.264 的 CEF 覆盖 target 目录
         // (见 .cursor/rules/cef-path-set.mdc)。
         // 回退约定:Linux ~/i/cef-{dev,prod};Windows H:\cef-{dev,prod}。
@@ -187,24 +182,15 @@ export class ModePlugin extends BasePlugin {
             return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
           });
           if (pathPrefixes.length > 0) {
-            process.env.PATH = pathPrefixes.join(path.delimiter)
-              + path.delimiter
-              + (process.env.PATH || "");
+            this.setEnv(
+              "PATH",
+              pathPrefixes.join(path.delimiter) + path.delimiter + (process.env.PATH || ""),
+            );
           }
         }
       }
-
-      // 开发/start 时通过 PATH 让主进程及 sidecar（如 ffmpeg）找到 kabegame/bin 下的 DLL，无需复制
-      if (
-        OSPlugin.isWindows &&
-        (bs.context.cmd?.isDev || bs.context.cmd?.isStart) &&
-        fs.existsSync(OSPlugin.binDir) &&
-        fs.statSync(OSPlugin.binDir).isDirectory()
-      ) {
-        const binAbs = path.resolve(OSPlugin.binDir);
-        const prev = process.env.PATH || "";
-        this.setEnv("PATH", binAbs + path.delimiter + prev);
-      }
+      // 注:Windows 下 OSPlugin.binDir 已在上面的 isWindows 分支里随 ffmpegBinDir
+      // 一起 unshift 进 PATH,这里不再重复注入,否则 PATH 里会出现两份 bin/windows。
     });
 
     bs.hooks.beforeBuild.tap(this.name, (comp) => {
@@ -246,10 +232,9 @@ export class ModePlugin extends BasePlugin {
             : undefined;
 
         // Mode → cargo feature 翻译。仅作用于 main 组件；cli 始终以 standard 等价
-        // 编译，不感知 mode（mode-plugin.ts 顶部 parseParams 已强制 light/android/web
+        // 编译，不感知 mode（mode-plugin.ts 顶部 parseParams 已强制 android/web
         // 只允许 main 组件）。
         //   - standard：--features standard（默认特性也是 standard，显式传递便于 dev/check/build 行为一致）
-        //   - light：--no-default-features --features light
         //   - android：--no-default-features --features android（不带 VD，含 android-only 插件）
         //   - web：--no-default-features --features web（不带 Tauri 栈）
         const finalArgs = args ? [...args] : [];
@@ -258,8 +243,6 @@ export class ModePlugin extends BasePlugin {
             features.push("web");
           } else if (this.mode!.isAndroid) {
             features.push("android");
-          } else if (this.mode!.isLight) {
-            features.push("light");
           } else if (this.mode!.isStandard) {
             features.push("standard");
           }

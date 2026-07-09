@@ -157,8 +157,7 @@ import { Picture, Grid, Setting, Collection, QuestionFilled, Compass, AlarmClock
 import appLogoUrl from "@/assets/icon-small.png";
 import { setSettingsQueryAdapter, useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
-import { useI18n, setLocale, tryResolveStoredLanguage, resolveBrowserLanguage, i18n } from "@kabegame/i18n";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
+import { useI18n, setLocale, tryResolveStoredLanguage, i18n } from "@kabegame/i18n";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 import HelpDrawer from "./components/help/HelpDrawer.vue";
@@ -225,23 +224,13 @@ const elementPlusLocale = computed(() => {
 });
 
 function applyLanguageSetting(raw: string | null | undefined) {
-  const locale = tryResolveStoredLanguage(raw) ?? resolveBrowserLanguage();
+  const locale = tryResolveStoredLanguage(raw) ?? "en";
   setLocale(locale);
   return locale;
 }
 
-async function initializeLanguageSetting() {
-  const raw = settingsStore.values.language;
-  const storedLocale = tryResolveStoredLanguage(raw ?? undefined);
-  console.log("set language stored", storedLocale)
-  if (storedLocale) {
-    setLocale(storedLocale);
-    return;
-  }
-  const detectedLocale = resolveBrowserLanguage();
-  console.log("set language detected", detectedLocale);
-  setLocale(detectedLocale);
-  await setLanguageSetting(detectedLocale, { source: "language_auto_init" });
+function initializeLanguageSetting() {
+  applyLanguageSetting(settingsStore.values.language);
 }
 
 // Android 底部 Tab 配置（均匀分布；爬虫仅桌面端有代理，故仅侧栏展示）
@@ -325,8 +314,6 @@ const { isCollapsed, toggleCollapse } = useSidebar();
 // 紧凑布局信号（Android 恒紧凑；web mode 跟随视口；Tauri 桌面永不紧凑）
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
-const { set: setLanguageSetting } = useSettingKeyState("language");
-
 type BgMediaType = "image" | "video";
 
 const bgImage = ref<ImageInfo | null>(null);
@@ -511,7 +498,7 @@ onMounted(async () => {
   // 加载全部设置
   await settingsStore.loadAll();
 
-  await initializeLanguageSetting();
+  initializeLanguageSetting();
   try {
     await albumStore.loadAlbums();
   } catch (e) {

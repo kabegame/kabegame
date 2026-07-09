@@ -29,7 +29,7 @@ Tauri Builder
 
 | Tauri 能力 | CEF 实现 |
 | --- | --- |
-| 前端资源 | 每个 webview 的 `RequestContext` 注册 `tauri://` / `asset://` scheme handler |
+| 前端资源 | 全局 scheme handler factory 服务前端/asset 资源。Linux/macOS 走自定义 scheme（`tauri://localhost` / `asset://localhost`）；Windows 上 Tauri core 把自定义 scheme `X` 改写为 `http://X.localhost`（见 `tauri` manager `webview.rs`），故 CEF 改为对 `http` scheme + `X.localhost` 域注册 factory（`protocol::cef_scheme_and_domain`），否则 `http://tauri.localhost` 会当成真实网络请求 → `ERR_CONNECTION_REFUSED` |
 | `invoke()` | `ipc://` 主路径与 `cef-ipc://` postMessage 后备桥接；内部 IPC scheme 允许绕过页面 CSP，以支持 surf 等第三方页面中的 Tauri IPC |
 | 初始化脚本 | CEF `LoadHandler::on_load_start` 注入 |
 | 页面生命周期 | `LoadHandler` 映射到 Tauri page-load hook |
@@ -59,6 +59,22 @@ macOS / Android 不会把 CEF 放入 Kabegame 的依赖树。
 - CEF 子进程 = re-exec 本 exe（`browser_subprocess_path`），`execute_cef_subprocess_and_exit()`
   必须在 `main` 最早期调用（与 Linux 相同）。Windows 无 zygote，`no-zygote` 开关仅 Linux 追加。
 - cookies/localStorage 落 `%LOCALAPPDATA%\kabegame-cef`（Linux 为 XDG cache）。
+  **dev 与安装态目录必须分开**：CEF 是 Chrome runtime，`cef_initialize` 会在该目录建
+  Chrome profile 并注册进程级 ProcessSingleton（单实例锁）。若 `bun dev` 与已安装正式版
+  共用目录，后启动者会命中对方 singleton → `Opening in existing browser session.` →
+  `cef_initialize` 返回 false → panic。故按构建 profile 隔离：debug（`bun dev`）用
+  `kabegame-cef-dev`，release（安装态）用 `kabegame-cef`（见 `cef_cache_dir_name`）。
+- **前端/asset scheme 与 Linux 不同**：Windows/Android 上 Tauri core 用 `http://<scheme>.localhost`
+  提供自定义 scheme 资源（`tauri_protocol_url` / `window_origin` 改写，默认 `http`，
+  由 `use_https_scheme` 决定 http/https），主框架加载的是 `http://tauri.localhost`。因此
+  `protocol.rs` 在 Windows 对 `http` scheme + `<scheme>.localhost` 域注册 factory，而非
+  自定义 scheme（否则连接被当真实网络请求 → `ERR_CONNECTION_REFUSED`，页面 refused/白屏）。
+  `cef-ipc`（runtime 自有 postMessage 通道）在所有平台仍是自定义 scheme。
+- **请求 URI 还原**：Tauri 的 handler 仍按自定义 scheme 约定解析 URI（`protocol/tauri.rs`
+  对整串 `strip_prefix("tauri://localhost")`）。CEF 拿到的是 `http://tauri.localhost/...`，
+  strip 失败 → 空路径 → 回退 `index.html`（JS 模块被当 `text/html` → MIME 报错）。故
+  `request_to_http` 在 Windows 把 `http(s)://<scheme>.localhost/<path>` 还原为
+  `<scheme>://localhost/<path>` 再交给 handler，与 wry 行为对齐。
 - `WindowBuilder::owner` / `parent` 通过创建后的 `SetWindowLongPtrW(GWLP_HWNDPARENT)` /
   `SetParent` 尽力实现（CEF Views 不暴露创建参数）；kabegame 当前无调用方。
   `shadow` 无运行时等价物，no-op。不设置 AppUserModelID（与 tauri-runtime-wry 对齐，

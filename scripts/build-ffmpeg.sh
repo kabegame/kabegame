@@ -30,8 +30,24 @@
 #     运行方式：
 #       1. 打开 x64 Native Tools Command Prompt for VS
 #       2. 执行 D:\Programs\MSYS2\msys2_shell.cmd -mingw64 -use-full-path -defterm -no-start -here -c "cd /d/Codes/kabegame && ./scripts/build-ffmpeg.sh"
+#
+# 参数：
+#   --skip-x264   跳过重新编译 x264，复用 third/x264-build/install/ 下已有产物
+#                 （仅需迭代 FFmpeg configure flags 时用，节省 x264 编译时间；
+#                 若该目录下没有已安装的 x264 会报错退出）。
 
 set -euo pipefail
+
+SKIP_X264=0
+_ARGS=()
+for _arg in "$@"; do
+  if [[ "$_arg" == "--skip-x264" ]]; then
+    SKIP_X264=1
+  else
+    _ARGS+=("$_arg")
+  fi
+done
+set -- "${_ARGS[@]}"
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -65,9 +81,14 @@ if [[ ! -f "$FFMPEG_SRC/configure" ]]; then
   echo "请执行: git submodule update --init third/FFmpeg" >&2
   exit 1
 fi
-if [[ ! -f "$X264_SRC/configure" ]]; then
+if [[ "$SKIP_X264" -eq 0 ]] && [[ ! -f "$X264_SRC/configure" ]]; then
   echo "x264 源码未找到: $X264_SRC/configure" >&2
   echo "请执行: git submodule update --init third/x264" >&2
+  exit 1
+fi
+if [[ "$SKIP_X264" -eq 1 ]] && [[ ! -f "$X264_INSTALL_DIR/lib/pkgconfig/x264.pc" ]]; then
+  echo "错误: --skip-x264 但未找到已安装的 x264: $X264_INSTALL_DIR/lib/pkgconfig/x264.pc" >&2
+  echo "请先不带 --skip-x264 完整运行一次本脚本。" >&2
   exit 1
 fi
 
@@ -88,37 +109,41 @@ case "$(uname -s)" in
 esac
 
 # ---- 构建 x264 ----
-echo "=== 构建 x264 ==="
-mkdir -p "$X264_BUILD_DIR" && cd "$X264_BUILD_DIR"
+if [[ "$SKIP_X264" -eq 1 ]]; then
+  echo "=== 跳过构建 x264（--skip-x264），复用 $X264_INSTALL_DIR ==="
+else
+  echo "=== 构建 x264 ==="
+  mkdir -p "$X264_BUILD_DIR" && cd "$X264_BUILD_DIR"
 
-X264_FLAGS=(
-  "--prefix=$X264_INSTALL_DIR"
-  "--enable-static"
-  "--disable-cli"
-)
-case "$(uname -s)" in
-  Linux)  X264_FLAGS+=("--enable-pic") ;;
-  Darwin) X264_FLAGS+=("--enable-pic") ;;
-  MINGW*|MSYS*|CYGWIN*)
-    # Windows/MinGW：x264 静态库嵌入 avcodec.dll，不需要 --enable-pic
-    ;;
-esac
+  X264_FLAGS=(
+    "--prefix=$X264_INSTALL_DIR"
+    "--enable-static"
+    "--disable-cli"
+  )
+  case "$(uname -s)" in
+    Linux)  X264_FLAGS+=("--enable-pic") ;;
+    Darwin) X264_FLAGS+=("--enable-pic") ;;
+    MINGW*|MSYS*|CYGWIN*)
+      # Windows/MinGW：x264 静态库嵌入 avcodec.dll，不需要 --enable-pic
+      ;;
+  esac
 
-"$X264_SRC/configure" "${X264_FLAGS[@]}"
+  "$X264_SRC/configure" "${X264_FLAGS[@]}"
 
-if [[ "$OS_KIND" == "unix" && "$(uname -s)" == "Linux" ]]; then
-  # Linux only: disable x264 THP. CEF's PartitionAlloc rejects the 2MB
-  # alignment requested by x264_malloc for large frame buffers.
-  sed -i 's/#define HAVE_THP 1/#define HAVE_THP 0/' config.h
-  grep -q "#define HAVE_THP 0" config.h || {
-    echo "错误: 未能在 x264 config.h 中关闭 HAVE_THP" >&2
-    exit 1
-  }
+  if [[ "$OS_KIND" == "unix" && "$(uname -s)" == "Linux" ]]; then
+    # Linux only: disable x264 THP. CEF's PartitionAlloc rejects the 2MB
+    # alignment requested by x264_malloc for large frame buffers.
+    sed -i 's/#define HAVE_THP 1/#define HAVE_THP 0/' config.h
+    grep -q "#define HAVE_THP 0" config.h || {
+      echo "错误: 未能在 x264 config.h 中关闭 HAVE_THP" >&2
+      exit 1
+    }
+  fi
+
+  $MAKE_CMD -j"$NPROC"
+  $MAKE_CMD install
+  echo "x264 已安装到: $X264_INSTALL_DIR"
 fi
-
-$MAKE_CMD -j"$NPROC"
-$MAKE_CMD install
-echo "x264 已安装到: $X264_INSTALL_DIR"
 
 # ---- 设置 PKG_CONFIG_PATH（确保我们的 x264 优先于任何系统版本）----
 # Windows：先把 MinGW 系统路径加进来，再把我们的 x264 插到最前面
@@ -150,8 +175,18 @@ esac
 # 同时保留 WebM muxer，供 MSE 多流合流时 stream-copy 输出 VP9/Opus WebM。
 # 链接模型：Unix 静态库 / Windows 动态库（见文件头说明）。
 _LINK_FLAGS=()
+_EXTRA_LIBS=()
 if [[ "$OS_KIND" == "windows" ]]; then
   _LINK_FLAGS=(--enable-shared --disable-static)
+  # avutil 的 av_gettime()/av_usleep() 用到 clock_gettime64/nanosleep64，
+  # mingw-w64 把这两个符号放在 libwinpthread 里（跟 FFmpeg 线程后端无关，
+  # HAVE_PTHREADS 本来就是 no，用的是 HAVE_W32THREADS）。静态链接 libwinpthread.a
+  # 进 avutil-*.dll，避免运行时再依赖单独的 libwinpthread-1.dll。
+  # 必须用 --extra-libs 而非 --extra-ldflags：DLL 链接行是
+  #   LINK( LINK_SO_ARGS <objects> FFEXTRALIBS )（见 FFmpeg ffbuild/library.mak），
+  # extra-ldflags 落在 objects 之前（此时无未决符号，-lwinpthread 被丢弃，回退到动态导入库），
+  # extra-libs 落在 FFEXTRALIBS 末尾即 objects 之后，才能解析 avutil 的未决符号并静态吸收。
+  _EXTRA_LIBS=(--extra-libs="-Wl,-Bstatic -lwinpthread -Wl,-Bdynamic")
 else
   _LINK_FLAGS=(--enable-static --disable-shared --enable-pic)
 fi
@@ -244,6 +279,7 @@ CONFIG_FLAGS=(
   "${CONFIG_FLAGS[@]}" \
   --extra-cflags="-O2" \
   "${_LINK_FLAGS[@]}" \
+  "${_EXTRA_LIBS[@]}" \
   "${CONFIGURE_EXTRA[@]}" \
   "$@"
 
@@ -319,7 +355,18 @@ for _dll in "${_dlls[@]}"; do
     echo "未能为 $(basename "$_dll") 生成 .def" >&2
     exit 1
   fi
-  "$_LIB_EXE" "/def:$_def" /machine:x64 "/out:$INSTALL_DIR/lib/${_libname}.lib" >/dev/null
+  # lib.exe 是 MSVC 原生工具,只认 Windows 路径。用 cygpath -w 显式转换,并用 -def:/-out:
+  # 形式(前导 '-' 不会被 MSYS2 当作路径参数尝试转换),不依赖 MSYS2 的自动路径转换启发式。
+  _def_win="$(cygpath -w "$_def")"
+  _out_win="$(cygpath -w "$INSTALL_DIR/lib/${_libname}.lib")"
+  _lib_out="$(mktemp)"
+  if ! "$_LIB_EXE" "-def:$_def_win" -machine:x64 "-out:$_out_win" >"$_lib_out" 2>&1; then
+    echo "错误: lib.exe 为 $(basename "$_dll") 生成导入库失败:" >&2
+    cat "$_lib_out" >&2
+    rm -f "$_lib_out"
+    exit 1
+  fi
+  rm -f "$_lib_out"
   echo "已生成 MSVC 导入库: ${_libname}.lib"
 done
 echo "Windows libav* DLL 留在 $INSTALL_DIR/bin（由 os-plugin 在 build 期复制到 bin/windows）；MSVC 导入库已生成到 $INSTALL_DIR/lib。"

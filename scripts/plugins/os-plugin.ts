@@ -56,15 +56,11 @@ const WINDOWS_CEF_RUNTIME_FILES = [
 const CEF_LOCALES = ["en-US.pak", "zh-CN.pak", "zh-TW.pak", "ja.pak", "ko.pak"];
 
 // Windows 运行时 DLL 清单（位于仓库根 bin/windows/，构建时复制到 resources/bin）。
-// 含 MinGW 运行时 + libx264 + libav*（由 scripts/build-ffmpeg.sh + os-plugin 协同产出/收集，FFmpeg 8.x 主版本后缀）。
+// 仅 libav*（由 scripts/build-ffmpeg.sh 产出，FFmpeg 8.x 主版本后缀）；
+// libx264 静态嵌入 avcodec-*.dll，libwinpthread 静态嵌入 avutil-*.dll，均无需单独打包。
 // 实际复制以 bin/windows/ 下发现的所有 *.dll 为准（见 OSPlugin.copyFFmpegDllsToResources），本清单为预期 manifest。
 const WINDOWS_FFMPEG_DLLS_EXPECTED = [
-  "libbz2-1.dll",
-  "libgcc_s_seh-1.dll",
-  "libva_win32.dll",
-  "libva.dll",
-  "libwinpthread-1.dll",
-  "libx264-165.dll",
+  // libwinpthread 已静态链接进 avutil-*.dll（见 scripts/build-ffmpeg.sh），无需再单独打包。
   // libav*（FFmpeg 8.2：avcodec/avformat 62、avutil 60、avfilter 11、swscale 9、swresample 6）
   "avcodec-62.dll",
   "avformat-62.dll",
@@ -195,7 +191,7 @@ export class OSPlugin extends BasePlugin {
   private bundleLibs(bs: BuildSystem): void {
     this.verifyFFmpegBuildArtifacts();
     if (OSPlugin.isWindows) {
-      // standard 需要 Dokan + 安装器;light 仅 FFmpeg DLL
+      // standard 需要 Dokan + 安装器
       if (bs.context.mode?.isStandard) {
         this.copyDokan2DllToResources();
         this.copyDokanInstallerToResources();
@@ -203,16 +199,16 @@ export class OSPlugin extends BasePlugin {
       this.collectWindowsFFmpegDlls();
       this.copyFFmpegDllsToResources();
       this.copyDokan2DllToTauriReleaseDirBestEffort();
-      // Windows standard/light 用 CEF runtime;打包其运行时文件(libcef.dll + 资源 + locales)。
-      if (bs.context.mode?.isStandard || bs.context.mode?.isLight) {
+      // Windows standard 用 CEF runtime;打包其运行时文件(libcef.dll + 资源 + locales)。
+      if (bs.context.mode?.isStandard) {
         this.verifyCefArtifacts();
         this.collectWindowsCefRuntime();
       }
     } else if (OSPlugin.isLinux) {
       // 注意:collectLinuxSharedLibs() 会先清空 bin/linux/,CEF 收集必须排在其后。
       this.collectLinuxSharedLibs();
-      // Linux standard/light 用 CEF runtime;打包其运行时文件(libcef.so + 资源 + locales)。
-      if (bs.context.mode?.isStandard || bs.context.mode?.isLight) {
+      // Linux standard 用 CEF runtime;打包其运行时文件(libcef.so + 资源 + locales)。
+      if (bs.context.mode?.isStandard) {
         this.verifyCefArtifacts();
         this.collectLinuxCefLibs();
       }
@@ -274,31 +270,6 @@ export class OSPlugin extends BasePlugin {
     for (const f of ffmpegDlls) {
       fs.copyFileSync(path.join(installBin, f), path.join(dst, f));
       this.log(chalk.cyan(`已收集 FFmpeg DLL → bin/windows/${f}`));
-    }
-    // 2) libx264-*.dll 来自 MSYS2 MinGW64
-    const x264Candidates = ["/mingw64/bin", "C:/msys64/mingw64/bin"];
-    let x264Found = false;
-    for (const dir of x264Candidates) {
-      if (!fs.existsSync(dir)) continue;
-      const dlls = fs
-        .readdirSync(dir)
-        .filter((f) => /^libx264-?\d*\.dll$/i.test(f));
-      if (dlls.length === 0) continue;
-      for (const f of dlls) {
-        fs.copyFileSync(path.join(dir, f), path.join(dst, f));
-        this.log(chalk.cyan(`已收集 x264 DLL → bin/windows/${f}(来源: ${dir})`));
-        x264Found = true;
-      }
-      break;
-    }
-    if (!x264Found) {
-      throw new Error(
-        [
-          `❌ 未找到 libx264*.dll`,
-          `请在 MSYS2 MinGW 64-bit 终端中运行: pacman -S mingw-w64-x86_64-x264`,
-          `或确保 /mingw64/bin 在路径上。`,
-        ].join("\n"),
-      );
     }
   }
 
@@ -574,8 +545,8 @@ export class OSPlugin extends BasePlugin {
    * macOS fixup:
    *   1. 每个 Frameworks/*.dylib 的 install_name 改为 @executable_path/../Frameworks/<name>
    *      (这只是 dylib 自身的 ID,主要对挂接 dylib 后续 dlopen 有意义;每个二进制再单独 -change 自己的依赖记录)。
-   *   2. 扫 .app 内所有 Mach-O 二进制(目前包括 Contents/MacOS/Kabegame 与 Contents/Resources/bin/kabegame-cli):
-   *      - 计算二进制相对 Frameworks/ 的相对路径(GUI 在 MacOS/ 下是 ../Frameworks;CLI 在 Resources/bin/ 下是 ../../Frameworks)。
+ *   2. 扫 .app 内所有 Mach-O 二进制(目前包括 Contents/MacOS/Kabegame):
+ *      - 计算二进制相对 Frameworks/ 的相对路径(GUI 在 MacOS/ 下是 ../Frameworks)。
    *      - 对每个被记录为依赖的 brew 绝对路径,install_name_tool -change 到 @executable_path/<relpath>/<name>。
    *   3. 改完二进制 + dylib 后 codesign --force --sign - 重签(改写 Mach-O 后签名失效)。
    */
@@ -646,7 +617,7 @@ export class OSPlugin extends BasePlugin {
         path.dirname(binary),
         frameworksDir,
       );
-      // 例:MacOS/Kabegame → ../Frameworks;Resources/bin/kabegame-cli → ../../Frameworks
+      // 例:MacOS/Kabegame → ../Frameworks
       for (const dylib of dylibs) {
         const origId = dylibOrigIds.get(dylib) ?? "";
         const newDep = `@executable_path/${relFromBinToFrameworks}/${dylib}`;
@@ -659,7 +630,7 @@ export class OSPlugin extends BasePlugin {
             ),
           );
         } catch {
-          // 该二进制并未引用此 dylib(例如 CLI 不启 VD 特性,不会引用 libfuse);忽略
+          // 该二进制并未引用此 dylib;忽略
         }
       }
     }

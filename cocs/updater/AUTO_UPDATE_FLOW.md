@@ -11,8 +11,8 @@
 - **版本比较只比 tag 字符串是否相同**，不做 semver 大小比较——tag 不同即「有更新」。
 - **`v` 前缀归一化**：GitHub tag 形如 `v4.1.1`，`CARGO_PKG_VERSION` 为 `4.1.1`；比较前两边都剥前导 `v`（`norm_tag`）。展示与下载 URL 仍用原始带 `v` 的 tag。
 - **错过版本**：从最新向下收集 `tag != 当前版本` 的 release，遇当前版本即停，跳过 draft，**最多 5 个**。
-- **平台 / 模式 / 架构（后端权威）**：`cfg!(target_os)`、Cargo feature（`light` ⇒ light 否则 standard）、`std::env::consts::ARCH`（x86_64→`x64`、aarch64→`aarch64`）。
-- **asset 匹配**：name 同时含模式 token（`-standard_` / `-light_`）与平台 token（win `…x64-setup.exe`、mac `…aarch64.dmg`、linux `…amd64.deb`）。匹配不到则 `downloadable=false`，前端降级「打开发布页」。
+- **平台 / 模式 / 架构（后端权威）**：`cfg!(target_os)`、Cargo feature（均视为 `standard`）、`std::env::consts::ARCH`（x86_64→`x64`、aarch64→`aarch64`）。
+- **asset 匹配**：name 含模式 token（`-standard_`）与平台 token（win `…x64-setup.exe`、mac `…aarch64.dmg`、linux `…amd64.deb`）。匹配不到则 `downloadable=false`，前端降级「打开发布页」。
 
 ## 状态机（6 phase，后端 `UpdaterPhase`）
 

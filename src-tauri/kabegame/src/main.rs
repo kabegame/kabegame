@@ -9,7 +9,7 @@ fn main() {
     #[cfg(all(
         any(target_os = "linux", windows),
         not(feature = "web"),
-        any(feature = "standard", feature = "light")
+        feature = "standard"
     ))]
     tauri_runtime_cef::execute_cef_subprocess_and_exit();
 

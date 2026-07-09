@@ -84,14 +84,7 @@ pub fn current_platform() -> &'static str {
 
 /// 当前构建模式（编译期由 Cargo feature 决定）。
 pub fn current_mode() -> &'static str {
-    #[cfg(feature = "light")]
-    {
-        "light"
-    }
-    #[cfg(not(feature = "light"))]
-    {
-        "standard"
-    }
+    "standard"
 }
 
 /// 当前架构，映射到 asset 命名所用 token。

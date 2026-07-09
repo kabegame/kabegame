@@ -183,7 +183,7 @@ export class ComponentPlugin extends BasePlugin {
         isWindows: !isAndroid && !isWeb && OSPlugin.isWindows,
         isMacOS: !isAndroid && !isWeb && OSPlugin.isMacOS,
         isLinux: !isAndroid && !isWeb && OSPlugin.isLinux,
-        isLight: isAndroid || bs.context.mode!.isLight,
+        isLight: isAndroid,
         isDev: bs.context.cmd!.isDev,
         isAndroid,
         isWeb,
@@ -251,7 +251,7 @@ export class ComponentPlugin extends BasePlugin {
     });
 
     if (bs.context.cmd!.isBuild) {
-      bs.hooks.beforeBuild.tap(this.name, (comp?: string) => {
+      bs.hooks.prepareEnv.tap(this.name, (comp?: string) => {
         this.setEnv("KABEGAME_COMPONENT", this.component?.comp || comp || "");
         const component = comp ? new Component(comp) : this.component!;
         if (component.isMain) {
@@ -272,16 +272,7 @@ export class ComponentPlugin extends BasePlugin {
             });
           }
         }
-        // 安卓、linux 不需要
-        if (
-          component.isMain &&
-          !bs.context.mode!.isLight &&
-          !bs.context.mode!.isWeb &&
-          !OSPlugin.isLinux &&
-          !bs.context.mode?.isAndroid
-        ) {
-          stageResourceBinary(Component.cargoComp(Component.CLI));
-        }
+
       });
     }
   }

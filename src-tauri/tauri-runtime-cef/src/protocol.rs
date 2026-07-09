@@ -68,9 +68,12 @@ struct ResponseState {
     open_in_progress: bool,
 }
 
-// 全局动态分发 factory:每个 scheme 只注册一个实例,请求期按 browser id 查 label/handler。
+// 全局动态分发 factory:每个逻辑 scheme 只注册一个实例,请求期按 browser id 查
+// label/handler。`logical_scheme` 是 `pending.uri_scheme_protocols` 的键(如
+// `tauri`),Windows 上虽以 `http`+`<scheme>.localhost` 域注册(见
+// `ensure_global_scheme_factory`),但这里仍用逻辑 scheme 查 handler。
 wrap_scheme_handler_factory! {
-    struct GlobalSchemeHandlerFactory { scheme: String }
+    struct GlobalSchemeHandlerFactory { logical_scheme: String }
 
     impl SchemeHandlerFactory {
         fn create(
@@ -83,7 +86,7 @@ wrap_scheme_handler_factory! {
             let id = browser?.identifier();
             let guard = registry().lock().ok()?;
             let entry = guard.get(&id)?;
-            let protocol = entry.schemes.get(&self.scheme)?.clone();
+            let protocol = entry.schemes.get(&self.logical_scheme)?.clone();
             let label = entry.label.clone();
             Some(CefResourceHandler::new(
                 label,
@@ -281,25 +284,82 @@ pub(crate) fn take_webview_protocols<T: UserEvent>(
     Ok((label, schemes))
 }
 
-/// 向 CEF 全局注册 `scheme` 的 factory,首次调用才实际注册,重复调用为 no-op。
-fn ensure_global_scheme_factory(scheme: &str) -> Result<()> {
+/// 逻辑 scheme(`pending.uri_scheme_protocols` 的键,如 `tauri`/`asset`/`ipc`)在
+/// 具体平台上实际由哪个 CEF scheme + 域来承载。
+///
+/// Windows/Android 上 Tauri 不用自定义 scheme,而是把自定义 scheme `X` 的资源经
+/// `http://X.localhost` 提供(见 `tauri` manager `webview.rs` 的 `window_origin`
+/// 改写与 `tauri_protocol_url`);因此主框架加载的 URL 是 `http://tauri.localhost`,
+/// CEF 必须对 **`http` scheme + `X.localhost` 域**注册 factory,而不是注册自定义
+/// scheme `X`(后者永不会被导航命中,请求会被当成真实网络请求 → ERR_CONNECTION_REFUSED)。
+///
+/// 例外:`cef-ipc` 是本 runtime 自有的 postMessage 通道(shim 里用
+/// `cef-ipc://localhost/`,见 [`crate::ipc`]),任何平台都保持自定义 scheme。
+///
+/// CEF Views 只用于 Linux/Windows,Android 不触达本 crate,故只需区分 Windows。
+#[cfg(target_os = "windows")]
+fn cef_scheme_and_domain(logical_scheme: &str) -> (String, Option<String>) {
+    if logical_scheme == crate::ipc::CEF_IPC_SCHEME {
+        (logical_scheme.to_string(), None)
+    } else {
+        ("http".to_string(), Some(format!("{logical_scheme}.localhost")))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn cef_scheme_and_domain(logical_scheme: &str) -> (String, Option<String>) {
+    (logical_scheme.to_string(), None)
+}
+
+/// 向 CEF 全局注册 `logical_scheme` 的 factory,首次调用才实际注册,重复调用为 no-op。
+///
+/// 注册用的 CEF scheme/域由 [`cef_scheme_and_domain`] 决定(Windows 走
+/// `http` + `<scheme>.localhost`);但 factory 始终以逻辑 scheme 为键,请求期在
+/// [`PROTOCOL_REGISTRY`] 里查 `entry.schemes.get(logical_scheme)`,故去重集合也以
+/// 逻辑 scheme 为键。
+fn ensure_global_scheme_factory(logical_scheme: &str) -> Result<()> {
     let mut set = registered_schemes().lock().unwrap();
-    if set.contains(scheme) {
+    if set.contains(logical_scheme) {
         return Ok(());
     }
-    let mut factory = GlobalSchemeHandlerFactory::new(scheme.to_string());
+    let (cef_scheme, domain) = cef_scheme_and_domain(logical_scheme);
+    let mut factory = GlobalSchemeHandlerFactory::new(logical_scheme.to_string());
+    let domain = domain.map(|d| CefString::from(d.as_str()));
     let ok = cef::register_scheme_handler_factory(
-        Some(&CefString::from(scheme)),
-        None,
+        Some(&CefString::from(cef_scheme.as_str())),
+        domain.as_ref(),
         Some(&mut factory),
     );
     if ok == 1 {
-        set.insert(scheme.to_string());
+        set.insert(logical_scheme.to_string());
         Ok(())
     } else {
         Err(Error::CreateWebview(Box::new(std::io::Error::other(
-            format!("CEF failed to register global {scheme:?} scheme factory"),
+            format!("CEF failed to register global {logical_scheme:?} scheme factory"),
         ))))
+    }
+}
+
+/// 把 Windows 的 `http(s)://<scheme>.localhost[:port]/<path>?<query>` 还原为
+/// `<scheme>://localhost/<path>?<query>`,使 Tauri 的自定义-scheme handler 能正确
+/// 解析(见 [`request_to_http`] 处的说明)。非 `*.localhost` 或非 http(s) 的请求
+/// (如 `cef-ipc://localhost/`)原样返回。
+#[cfg(target_os = "windows")]
+fn rewrite_windows_localhost_uri(uri: http::Uri) -> http::Uri {
+    if !matches!(uri.scheme_str(), Some("http") | Some("https")) {
+        return uri;
+    }
+    let Some(host) = uri.host() else { return uri };
+    let Some(custom_scheme) = host.strip_suffix(".localhost") else {
+        return uri;
+    };
+    if custom_scheme.is_empty() {
+        return uri;
+    }
+    let path_and_query = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+    match format!("{custom_scheme}://localhost{path_and_query}").parse() {
+        Ok(rewritten) => rewritten,
+        Err(_) => uri,
     }
 }
 
@@ -310,10 +370,18 @@ fn request_to_http(request: &cef::Request) -> std::result::Result<HttpRequest<Ve
         .parse()
         .map_err(|_| ())?;
     let cef_url = request.url();
-    let uri = CefString::from(&cef_url)
+    let uri: http::Uri = CefString::from(&cef_url)
         .to_string()
         .parse()
         .map_err(|_| ())?;
+    // Windows 上主框架/asset 请求经 `http://<scheme>.localhost/<path>` 到达(见
+    // `cef_scheme_and_domain`),但 Tauri 的 scheme handler 仍按自定义 scheme 约定
+    // 解析 URI —— 尤其 `protocol/tauri.rs` 会 `strip_prefix("tauri://localhost")`,
+    // 拿到 `http://...` 会得到空路径 → 回退 index.html(JS 模块因此被当 text/html)。
+    // 与 wry 的 Windows 行为对齐:把 URI 还原成 `<scheme>://localhost/<path>` 再交给
+    // handler。asset handler 只读 `uri().path()`,不受影响。
+    #[cfg(target_os = "windows")]
+    let uri = rewrite_windows_localhost_uri(uri);
     let mut http_request = HttpRequest::new(post_data_bytes(request));
     *http_request.method_mut() = method;
     *http_request.uri_mut() = uri;

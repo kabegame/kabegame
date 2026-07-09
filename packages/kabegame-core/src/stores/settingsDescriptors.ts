@@ -50,7 +50,7 @@ export type TauriSettingDescriptor<K extends AppSettingKey = AppSettingKey> = {
   /** IPC getter 命令名；当前批量读取使用 `get_settings`，此字段保留给单键读取和文档。 */
   getter: string;
   /** IPC setter 命令名；`save` 会调用 `invoke(setter, { [param]: value })`。 */
-  setter: string;
+  setter?: string;
   /** setter 入参名；省略时回退为设置 key 的 snake_case 形式。 */
   param?: string;
   _key?: K;
@@ -106,7 +106,7 @@ const readonly = <K extends AppSettingKey>(
 const tauri = <K extends AppSettingKey>(
   key: K,
   getter: string,
-  setter: string,
+  setter?: string,
   param?: string,
 ): [K, TauriSettingDescriptor<K>] => [key, { backend: "tauri", getter, setter, param }];
 
@@ -196,6 +196,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     entries.push(
       tauri("albumDriveEnabled", "get_album_drive_enabled", "set_album_drive_enabled", "enabled"),
       tauri("albumDriveMountPoint", "get_album_drive_mount_point", "set_album_drive_mount_point", "mountPoint"),
+      tauri("albumDriveDriverInstalled", "get_album_drive_driver_installed"),
     );
   }
 
@@ -243,6 +244,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
       readonly("windowState", null),
       readonly("albumDriveEnabled", false),
       readonly("albumDriveMountPoint", ""),
+      readonly("albumDriveDriverInstalled", false),
       readonly("autoOpenCrawlerWebview", false),
       readonly("defaultDownloadDir", null),
       readonly("autoLaunch", false),

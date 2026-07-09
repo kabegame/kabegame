@@ -3,6 +3,13 @@
     <el-switch v-model="enabled" :loading="showEnabledLoading" :disabled="enabledDisabled"
       @change="handleToggle" />
 
+    <el-button circle size="small" :icon="Refresh" :loading="driverStatusLoading"
+      :title="$t('settings.albumDriveRefreshDriverStatus')" @click="handleRefreshDriverStatus" />
+
+    <el-button v-if="showInstallDriverButton" :loading="installingDriver" @click="handleInstallDriver">
+      {{ $t('settings.albumDriveInstallDriverButton') }}
+    </el-button>
+
     <el-input v-model="mountPoint" class="mount-point-input" size="default"
       :disabled="enabled || showEnabledLoading || showMountPointLoading"
       :placeholder="$t('settings.albumDriveMountPointPlaceholder')"
@@ -15,13 +22,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { ElMessageBox } from "element-plus";
+import { Refresh } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
+import { IS_LINUX, IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 const { t } = useI18n();
+const settingsStore = useSettingsStore();
+const installingDriver = ref(false);
 
 const {
   settingValue: enabledValue,
@@ -36,8 +49,15 @@ const {
   showDisabled: showMountPointLoading,
 } = useSettingKeyState("albumDriveMountPoint");
 
+const {
+  settingValue: driverInstalled,
+} = useSettingKeyState("albumDriveDriverInstalled");
+
 const enabled = ref<boolean>(!!enabledValue.value);
 const mountPoint = ref<string>((mountPointValue.value as string) ?? "K:\\");
+
+const driverStatusLoading = computed(() => settingsStore.isLoading("albumDriveDriverInstalled"));
+const showInstallDriverButton = computed(() => driverInstalled.value === false);
 
 watch(
   enabledValue,
@@ -62,6 +82,60 @@ watch(
 );
 
 const normalizedMountPoint = computed(() => mountPoint.value.trim());
+
+const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+const refreshDriverStatus = async () => {
+  await settingsStore.refresh("albumDriveDriverInstalled");
+};
+
+onMounted(() => {
+  void refreshDriverStatus();
+});
+
+const handleRefreshDriverStatus = async () => {
+  try {
+    await refreshDriverStatus();
+  } catch (e) {
+    console.error(e);
+    ElMessage.error(String(e));
+  }
+};
+
+const handleInstallDriver = async () => {
+  if (IS_WINDOWS) {
+    installingDriver.value = true;
+    try {
+      await invoke("install_album_drive_driver");
+      ElMessage.info(t("settings.albumDriveInstallDriverStarted"));
+      for (let i = 0; i < 3; i += 1) {
+        await delay(3000);
+        await refreshDriverStatus();
+        if (driverInstalled.value) break;
+      }
+    } catch (e) {
+      console.error(e);
+      ElMessage.error(String(e));
+    } finally {
+      installingDriver.value = false;
+    }
+    return;
+  }
+
+  if (IS_MACOS || IS_LINUX) {
+    const messageKey = IS_MACOS
+      ? "settings.albumDriveInstallDriverManualMac"
+      : "settings.albumDriveInstallDriverManualLinux";
+    try {
+      await ElMessageBox.alert(
+        t(messageKey),
+        t("settings.albumDriveInstallDriverManualTitle"),
+      );
+    } finally {
+      await refreshDriverStatus();
+    }
+  }
+};
 
 const handleMountPointBlur = async () => {
   const mp = normalizedMountPoint.value;

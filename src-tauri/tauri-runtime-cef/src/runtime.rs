@@ -1278,27 +1278,45 @@ mod imp {
         None
     }
 
+    /// CEF 用户数据目录名。**dev(debug)与安装态(release)必须分开**:
+    ///
+    /// CEF 用的是 Chrome runtime,浏览器进程在 `cef_initialize` 时按此目录建立 Chrome
+    /// profile 并注册进程级 **ProcessSingleton**(单实例锁)。若 `bun dev` 与已安装的
+    /// 正式版共用同一目录,后启动者的 `cef_initialize` 会命中对方的 singleton →
+    /// 打印 "Opening in existing browser session." 并返回 false → `initialize_cef`
+    /// panic(见 issue:开发启动时弹出一个 Chrome 窗口后崩溃)。按构建 profile 隔离即可:
+    /// 安装态恒为 release,`bun dev` 恒为 debug,两者目录不再冲突。
+    const fn cef_cache_dir_name() -> &'static str {
+        if cfg!(debug_assertions) {
+            "kabegame-cef-dev"
+        } else {
+            "kabegame-cef"
+        }
+    }
+
     /// CEF 缓存/用户数据目录(cookies、缓存等)。
     /// Linux 优先 XDG / HOME;Windows 用 %LOCALAPPDATA%(GUI 启动时 HOME 通常不存在,
     /// 不能让 cookies/localStorage 落进会被系统清理的 Temp);都取不到才回退临时目录。
+    /// 目录名由 [`cef_cache_dir_name`] 决定(dev/prod 隔离)。
     fn cef_root_cache_dir() -> std::path::PathBuf {
+        let name = cef_cache_dir_name();
         #[cfg(target_os = "windows")]
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             if !local_app_data.is_empty() {
-                return std::path::PathBuf::from(local_app_data).join("kabegame-cef");
+                return std::path::PathBuf::from(local_app_data).join(name);
             }
         }
         if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
             if !xdg.is_empty() {
-                return std::path::PathBuf::from(xdg).join("kabegame-cef");
+                return std::path::PathBuf::from(xdg).join(name);
             }
         }
         if let Ok(home) = std::env::var("HOME") {
             if !home.is_empty() {
-                return std::path::PathBuf::from(home).join(".cache/kabegame-cef");
+                return std::path::PathBuf::from(home).join(".cache").join(name);
             }
         }
-        std::env::temp_dir().join("kabegame-cef")
+        std::env::temp_dir().join(name)
     }
 
     /// 初始化 CEF browser 主进程。

@@ -34,15 +34,13 @@
             <!-- 无图片空状态：使用 ImageGrid 的 empty 插槽（只隐藏 ImageItem，不影响 header/插槽挂载） -->
             <template #empty>
               <div v-if="!isRefreshing" :key="'empty-' + refreshKey" class="empty fade-in">
-                <template>
-                  <EmptyState />
-                  <el-button type="primary" class="empty-action-btn" @click="handleEmptyStateCollect">
-                    <el-icon>
-                      <Plus />
-                    </el-icon>
-                    {{ $t('gallery.startCollect') }}
-                  </el-button>
-                </template>
+                <EmptyState />
+                <el-button type="primary" class="empty-action-btn" @click="handleEmptyStateCollect">
+                  <el-icon>
+                    <Plus />
+                  </el-icon>
+                  {{ $t('gallery.startCollect') }}
+                </el-button>
               </div>
             </template>
           </ImageGrid>
@@ -300,7 +298,6 @@ const handleManualRefresh = async () => {
   refreshKey.value++;
   isRefreshing.value = true;
   try {
-    await galleryRouteStore.navigate({ filters: galleryRouteStore.filters, page: 1 });
     await galleryViewRef.value?.refresh({ resetScroll: true });
   } finally {
     isRefreshing.value = false;

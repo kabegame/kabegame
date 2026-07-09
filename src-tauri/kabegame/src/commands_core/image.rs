@@ -118,7 +118,7 @@ pub async fn get_image_metadata_full(image_id: String) -> Result<Value, String> 
 
 pub async fn toggle_image_favorite(image_id: String, favorite: bool) -> Result<Value, String> {
     toggle_image_favorite_with_event(&image_id, favorite)?;
-    #[cfg(all(feature = "standard", feature = "vd-legacy"))]
+    #[cfg(feature = "standard")]
     {
         use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
         kabegame_core::virtual_driver::VirtualDriveService::global()

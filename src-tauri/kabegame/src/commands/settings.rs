@@ -1,10 +1,14 @@
 // Settings related commands
 
+#[cfg(all(feature = "standard", target_os = "windows"))]
+use kabegame_core::app_paths::AppPaths;
 use kabegame_core::settings::Settings;
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
+#[cfg(feature = "standard")]
+use std::path::Path;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
 
@@ -186,6 +190,82 @@ pub fn get_album_drive_enabled() -> bool {
 #[tauri::command]
 pub fn get_album_drive_mount_point() -> String {
     Settings::global().get_album_drive_mount_point()
+}
+
+#[cfg(feature = "standard")]
+#[tauri::command]
+pub fn get_album_drive_driver_installed() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
+        let windir = Path::new(&windir);
+        return windir.join("SysNative\\drivers\\dokan2.sys").is_file()
+            || windir.join("System32\\drivers\\dokan2.sys").is_file();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return Path::new("/Library/Frameworks/macFUSE.framework").exists()
+            || Path::new("/Library/Filesystems/macfuse.fs").exists();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return Path::new("/dev/fuse").exists()
+            && std::process::Command::new("fusermount3")
+                .arg("--version")
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false);
+    }
+
+    #[allow(unreachable_code)]
+    false
+}
+
+#[cfg(all(feature = "standard", target_os = "windows"))]
+#[tauri::command]
+pub fn install_album_drive_driver() -> Result<(), String> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
+        value.as_ref().encode_wide().chain(Some(0)).collect()
+    }
+
+    let installer_path = AppPaths::global()
+        .resource_dir
+        .join("bin")
+        .join("dokan-installer.exe");
+    if !installer_path.is_file() {
+        return Err(format!(
+            "Dokan installer not found: {}",
+            installer_path.display()
+        ));
+    }
+
+    let operation = wide("runas");
+    let file = wide(installer_path.as_os_str());
+    let params = wide("/S");
+
+    let result = unsafe {
+        ShellExecuteW(
+            0,
+            operation.as_ptr(),
+            file.as_ptr(),
+            params.as_ptr(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+
+    if result as isize <= 32 {
+        return Err(format!("Failed to launch Dokan installer: {}", result as isize));
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

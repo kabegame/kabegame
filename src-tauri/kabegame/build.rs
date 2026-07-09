@@ -11,7 +11,7 @@ fn main() {
     // 子进程,所以主 exe 必须带它。
     // 注意:manifest 文件须保持纯 ASCII、无 XML 声明/注释 —— 它经 RC 资源编译器
     // 内嵌,非 ASCII 内容会被 codepage 弄坏 XML,触发启动报 sxs 14001。
-    #[cfg(any(feature = "standard", feature = "light", feature = "android"))]
+    #[cfg(any(feature = "standard", feature = "android"))]
     tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(
         tauri_build::WindowsAttributes::new().app_manifest(include_str!("windows-app.manifest")),
     ))
@@ -49,7 +49,7 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib/kabegame");
         println!("cargo:rustc-link-arg=-Wl,--enable-new-dtags");
 
-        // Linux CEF backend (standard/light): hide the bundled SQLite (rusqlite)
+        // Linux CEF backend (standard): hide the bundled SQLite (rusqlite)
         // symbols from the dynamic symbol table.
         //
         // Chromium/CEF performs TLS certificate verification via NSS, which
@@ -63,7 +63,6 @@ fn main() {
         // our own rusqlite calls are resolved at static-link time and unaffected.
         // (This was the real cause of the CEF crash — NOT the tao runtime.)
         if std::env::var("CARGO_FEATURE_STANDARD").is_ok()
-            || std::env::var("CARGO_FEATURE_LIGHT").is_ok()
         {
             let out = std::env::var("OUT_DIR").unwrap();
             let map = std::path::Path::new(&out).join("hide-sqlite-symbols.map");

@@ -37,11 +37,7 @@ fn resolve_supported_language(language: &str) -> Option<&'static str> {
 
 #[inline]
 fn current_language(language: Option<&str>) -> &'static str {
-    language
-        .as_ref()
-        .filter(|lang| !lang.is_empty())
-        .and_then(|lang| resolve_supported_language(lang))
-        .unwrap_or_else(system_language)
+    resolve_language_setting(language)
 }
 
 #[inline]
@@ -50,6 +46,14 @@ pub fn system_language() -> &'static str {
         .as_deref()
         .and_then(resolve_supported_language)
         .unwrap_or(DEFAULT_LANGUAGE)
+}
+
+#[inline]
+pub fn resolve_language_setting(language: Option<&str>) -> &'static str {
+    match language.map(str::trim).filter(|lang| !lang.is_empty()) {
+        Some(lang) => resolve_supported_language(lang).unwrap_or(DEFAULT_LANGUAGE),
+        None => system_language(),
+    }
 }
 
 #[inline]

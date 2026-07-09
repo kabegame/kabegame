@@ -14,8 +14,6 @@ import { useImageTypes } from "@/composables/useImageTypes";
 // 媒体类型真理源：扩展名→MIME 由后端经 useImageTypes 提供（load 后填充）
 const { mimeByExt, load: loadImageTypes } = useImageTypes();
 
-const isLightMode = import.meta.env.VITE_KABEGAME_MODE === "light";
-
 // 支持的扩展名列表（用于默认提示文案），运行时由 updateSupportedTypes 从后端覆盖
 let SUPPORTED_KGPG_EXTENSIONS = ["kgpg"];
 
@@ -79,9 +77,8 @@ const isImageFile = (file: File) =>
   ["jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "jxl"].includes(getExt(file.name));
 
 const isVideoFile = (file: File) =>
-  !isLightMode &&
-  (file.type.startsWith("video/") ||
-    (mimeByExt.value[getExt(file.name)] ?? "").startsWith("video/"));
+  file.type.startsWith("video/") ||
+    (mimeByExt.value[getExt(file.name)] ?? "").startsWith("video/");
 
 const isWebImportableFile = (file: File) =>
   !isKgpgName(file.name) && (isImageFile(file) || isVideoFile(file));
@@ -206,7 +203,7 @@ export function useFileDrop(
     if (!first) return t("import.dropFileToImport");
     if (isImageFile(first)) return t("import.dropImageToImport");
     if (isVideoFile(first)) return t("import.dropVideoToImport");
-    return t(isLightMode ? "import.dropImageToImport" : "import.dropSupportedTypes");
+    return t("import.dropSupportedTypes");
   };
 
   const handleWebDrop = async (event: DragEvent) => {
@@ -351,7 +348,7 @@ export function useFileDrop(
                 } else if (first.isImage) {
                   isImportable = true;
                   text = t("import.dropImageToImport");
-                } else if (first.isVideo && !isLightMode) {
+                } else if (first.isVideo) {
                   isImportable = true;
                   text = t("import.dropVideoToImport");
                 }
@@ -397,7 +394,7 @@ export function useFileDrop(
                     isDirectory: true,
                     isKgpg: false,
                   });
-                } else if (k.isImage || (k.isVideo && !isLightMode) || k.isKgpg) {
+                } else if (k.isImage || k.isVideo || k.isKgpg) {
                   items.push({
                     path: k.path,
                     name: k.isKgpg ? `${name}${i18n.global.t("import.pluginPackageSuffix")}` : name,

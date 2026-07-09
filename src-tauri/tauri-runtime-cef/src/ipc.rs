@@ -21,7 +21,7 @@ use tauri_runtime::{
 
 use crate::Cef;
 
-const CEF_IPC_SCHEME: &str = "cef-ipc";
+pub(crate) const CEF_IPC_SCHEME: &str = "cef-ipc";
 
 const POST_MESSAGE_SHIM: &str = r#"
 ;(() => {

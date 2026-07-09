@@ -74,10 +74,10 @@ export function resolveBrowserLanguage(): SupportedLocale {
 }
 
 /**
- * 生效语言：已保存且合法的语言 → 浏览器语言 → 英语。
+ * 生效语言：已保存且合法的语言 → 英语。
  */
 export function resolveLanguage(lang: string | null | undefined): SupportedLocale {
-  return tryResolveStoredLanguage(lang) ?? resolveBrowserLanguage();
+  return tryResolveStoredLanguage(lang) ?? "en";
 }
 
 export const i18n = createI18n({

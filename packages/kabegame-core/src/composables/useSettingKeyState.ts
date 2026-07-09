@@ -52,6 +52,7 @@ const WEB_READONLY_FEATURE_KEY_MAP: Partial<Record<AppSettingKey, string>> = {
   wallpaperMode: "wallpaper",
   albumDriveEnabled: "albumDrive",
   albumDriveMountPoint: "albumDrive",
+  albumDriveDriverInstalled: "albumDrive",
   autoOpenCrawlerWebview: "openCrawlerWindow",
   windowState: "windowState",
   autoLaunch: "autoLaunch",

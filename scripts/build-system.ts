@@ -175,7 +175,7 @@ export class BuildSystem {
     // --component
     this.use(new ComponentPlugin());
 
-    // --mode (standard | light | android)
+    // --mode (standard | android)
     this.use(new ModePlugin());
 
     // --release
@@ -289,22 +289,6 @@ export class BuildSystem {
 
     this.commonUse(Cmd.BUILD);
     this.commonBefore();
-    if (this.context.component!.isCli && this.context.mode!.isStandard) {
-      this.hooks.beforeBuild.call(Component.CLI);
-      const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.CLI);
-      const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
-      const args = this.buildCargoArgs(
-        ["build", "--release", "-p", Component.cargoComp(Component.CLI)],
-        features,
-        mergedArgs.length > 0 ? mergedArgs : undefined,
-      );
-      if (!this.context.skip?.isCargo) {
-        run("cargo", args, {
-          cwd: SRC_TAURI_DIR,
-        });
-      }
-      // this.hooks.afterBuild.callAsync(Component.CLI)
-    }
     if (this.context.component!.isMain) {
       this.hooks.beforeBuild.call(Component.MAIN);
       const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.MAIN);

@@ -12,8 +12,6 @@ const extensions: Ref<string[]> = ref([]);
 const mimeByExt: Ref<Record<string, string>> = ref({});
 let loadPromise: Promise<void> | null = null;
 
-const isLightMode = import.meta.env.VITE_KABEGAME_MODE === "light";
-
 export function useImageTypes() {
   const load = async (): Promise<void> => {
     if (extensions.value.length > 0) return;
@@ -27,7 +25,7 @@ export function useImageTypes() {
           console.warn("[useImageTypes] 获取支持的媒体类型失败，使用默认值:", e);
           const imageExts = ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp"];
           const videoExts = ["mp4", "mov", "wmv", "webm", "mkv"];
-          extensions.value = isLightMode ? imageExts : [...imageExts, ...videoExts];
+          extensions.value = [...imageExts, ...videoExts];
           const imageMime: Record<string, string> = {
             jpg: "image/jpeg",
             jpeg: "image/jpeg",
@@ -37,16 +35,14 @@ export function useImageTypes() {
             avif: "image/avif",
             bmp: "image/bmp",
           };
-          mimeByExt.value = isLightMode
-            ? imageMime
-            : {
-                ...imageMime,
-                mp4: "video/mp4",
-                mov: "video/quicktime",
-                wmv: "video/x-ms-wmv",
-                webm: "video/webm",
-                mkv: "video/x-matroska",
-              };
+          mimeByExt.value = {
+            ...imageMime,
+            mp4: "video/mp4",
+            mov: "video/quicktime",
+            wmv: "video/x-ms-wmv",
+            webm: "video/webm",
+            mkv: "video/x-matroska",
+          };
         });
     }
     await loadPromise;

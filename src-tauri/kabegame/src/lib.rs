@@ -55,12 +55,12 @@ use commands::*;
 #[cfg(all(
     not(feature = "web"),
     any(target_os = "linux", windows),
-    any(feature = "standard", feature = "light")
+    feature = "standard"
 ))]
 pub(crate) type AppRuntime = tauri_runtime_cef::Cef<tauri::EventLoopMessage>;
 #[cfg(all(
     not(feature = "web"),
-    not(all(any(target_os = "linux", windows), any(feature = "standard", feature = "light")))
+    not(all(any(target_os = "linux", windows), feature = "standard"))
 ))]
 pub(crate) type AppRuntime = tauri::Wry;
 #[cfg(not(feature = "web"))]
@@ -319,7 +319,7 @@ pub fn run() {
 #[cfg(all(
     not(feature = "web"),
     any(target_os = "linux", windows),
-    any(feature = "standard", feature = "light")
+    feature = "standard"
 ))]
 pub fn run() {
     // 不再手动 push "main" 窗口:base config `windows: []`,主窗口由 setup 的
@@ -594,6 +594,10 @@ pub(crate) fn configure_app(
             get_album_drive_mount_point,
             #[cfg(feature = "standard")]
             set_album_drive_mount_point,
+            #[cfg(feature = "standard")]
+            get_album_drive_driver_installed,
+            #[cfg(all(feature = "standard", target_os = "windows"))]
+            install_album_drive_driver,
             // --- Window ---
             hide_main_window,
             #[cfg(not(target_os = "android"))]
@@ -680,7 +684,7 @@ pub(crate) fn configure_app(
 
 #[cfg(all(
     not(feature = "web"),
-    not(all(any(target_os = "linux", windows), any(feature = "standard", feature = "light")))
+    not(all(any(target_os = "linux", windows), feature = "standard"))
 ))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

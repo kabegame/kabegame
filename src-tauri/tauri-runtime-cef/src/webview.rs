@@ -724,6 +724,7 @@ mod imp {
         pub(crate) struct ViewsClient {
             load_handler: LoadHandler,
             keyboard_handler: KeyboardHandler,
+            context_menu_handler: ContextMenuHandler,
             download_handler: Option<DownloadHandler>,
             request_handler: Option<RequestHandler>,
             life_span_handler: Option<LifeSpanHandler>,
@@ -731,9 +732,25 @@ mod imp {
         impl Client {
             fn load_handler(&self) -> Option<LoadHandler> { Some(self.load_handler.clone()) }
             fn keyboard_handler(&self) -> Option<KeyboardHandler> { Some(self.keyboard_handler.clone()) }
+            fn context_menu_handler(&self) -> Option<ContextMenuHandler> { Some(self.context_menu_handler.clone()) }
             fn download_handler(&self) -> Option<DownloadHandler> { self.download_handler.clone() }
             fn request_handler(&self) -> Option<RequestHandler> { self.request_handler.clone() }
             fn life_span_handler(&self) -> Option<LifeSpanHandler> { self.life_span_handler.clone() }
+        }
+    }
+
+    wrap_context_menu_handler! {
+        pub(crate) struct DisabledContextMenuHandler {}
+        impl ContextMenuHandler {
+            // 清空菜单模型:CEF 在 Client 未提供 ContextMenuHandler 时会退回内置的
+            // 默认菜单(后退/前进/重新加载/查看网页源代码/检查元素…),与裸 Chromium
+            // 一致。kabegame 前端用自有的 Vue 右键菜单(TaskContextMenu 等),这里
+            // 全局清空模型抑制原生菜单,交给页面 JS 的 contextmenu 处理。
+            fn on_before_context_menu(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _params: Option<&mut ContextMenuParams>, model: Option<&mut MenuModel>) {
+                if let Some(model) = model {
+                    model.clear();
+                }
+            }
         }
     }
 
@@ -942,6 +959,7 @@ mod imp {
         let mut client = ViewsClient::new(
             InitializationLoadHandler::new(scripts, on_page_load),
             DevToolsKeyboardHandler::new(),
+            DisabledContextMenuHandler::new(),
             download_handler,
             navigation_handler,
             life_span_handler,

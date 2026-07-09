@@ -62,7 +62,7 @@ bun run set-version              # Bump version across workspace
 bun run build:ffmpeg             # Build x264 (third/x264) + FFmpeg libav* libs from source
                                  # x264 is built-in (no system libx264 needed); Linux build uses
                                  # --disable-asm + -DNATIVE_ALIGN=16 to avoid CEF/PartitionAlloc crash
-                                 # Required before standard/CLI cargo build; NOT needed for light mode
+                                 # Required before standard/CLI cargo build
 ```
 
 ### Verification workflow
@@ -108,8 +108,7 @@ struct Foo {
 ### Build Modes
 | Mode | Features |
 |------|----------|
-| Standard (default) | Virtual disk, CLI, store plugins, **video ingestion** (rsmpeg/FFmpeg) |
-| Light (`--mode light`) | Store only, no virtual disk/CLI, **video ingestion** (rsmpeg/FFmpeg) |
+| Standard (default) | Virtual disk, store plugins, **video ingestion** (rsmpeg/FFmpeg) |
 | Local (`--mode local`, dev) | All plugins bundled locally |
 
 ### Key Architecture Rules
@@ -120,7 +119,7 @@ struct Foo {
 - `supported_video_extensions()` always returns the built-in video list. Frontend `isVideoMediaType` checks `type.startsWith("video/")` for gallery display.
 
 **Video ingestion is platform-gated, not Cargo-feature-gated:**
-- Desktop builds (standard/light/CLI on Windows/macOS/Linux) link rsmpeg/FFmpeg for preview compression and video dimensions.
+- Desktop builds (standard/CLI on Windows/macOS/Linux) link rsmpeg/FFmpeg for preview compression and video dimensions.
 - Android must not compile FFmpeg/rsmpeg; it uses `AndroidVideoCompressProvider` backed by `tauri-plugin-compress`/Kotlin and content URI media APIs.
 - rsmpeg usage in `compress.rs` and `media_dimensions.rs` is guarded with `#[cfg(not(target_os = "android"))]`; Android alternatives are guarded with `#[cfg(target_os = "android")]`.
 - Linux CEF/Chromium is built with common MP4 codec support. Desktop video compatibility copies are H.264/AAC MP4 on Windows/macOS/Linux, and video preview thumbnails are H.264 MP4. Do not add Linux-only WebM regeneration logic for organize/postprocess; WebM muxing is retained only for stream-copy MSE captures whose original streams are VP9/Opus WebM.

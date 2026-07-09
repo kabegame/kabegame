@@ -126,7 +126,7 @@ function assertNoLinuxLibfuseLink(debPath: string): void {
   try {
     commandOutput("dpkg-deb", ["-x", debPath, tmpDir]);
     const binDir = path.join(tmpDir, "usr", "bin");
-    const binaries = ["kabegame", "kabegame-cli"]
+    const binaries = ["kabegame"]
       .map((name) => path.join(binDir, name))
       .filter((p) => fs.existsSync(p) && fs.statSync(p).isFile());
 
