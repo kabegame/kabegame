@@ -118,9 +118,9 @@ function commandOutput(cmd: string, args: string[], cwd?: string): string {
   return `${res.stdout ?? ""}${res.stderr ?? ""}`;
 }
 
-// Linux 策略:libfuse 必须**静态**链接(FUSE3_STATIC=1 链 libfuse3.a),
-// 不得出现动态 libfuse 依赖,也不得把 libfuse.so 捆进包。静态链接不产生
-// DT_NEEDED libfuse 条目,故此校验在新策略下仍然通过;若误用动态链接会被拦下。
+// Linux 策略:fuser 关闭 `libfuse` feature 走纯 Rust 挂载,二进制**根本不链接** libfuse
+// (挂载时懒执行 fusermount3,语义同 Windows delay-load dokan2.dll)。因此正常产物没有
+// DT_NEEDED libfuse 条目;若误开 libfuse feature 导致动态依赖回归,此校验会拦下。
 function assertNoLinuxLibfuseLink(debPath: string): void {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "kabegame-deb-check-"));
   try {
@@ -138,10 +138,10 @@ function assertNoLinuxLibfuseLink(debPath: string): void {
       if (fuseNeeded.length > 0) {
         throw new Error(
           [
-            `Linux release binary must not DYNAMICALLY link libfuse: ${path.relative(ROOT, debPath)}`,
+            `Linux release binary must not link libfuse at all: ${path.relative(ROOT, debPath)}`,
             `binary: ${path.relative(tmpDir, binary)}`,
             ...fuseNeeded,
-            "On Linux libfuse must be STATICALLY linked (build with FUSE3_STATIC=1 against libfuse3.a); runtime still depends on fuse3/fusermount3, never on libfuse.so.",
+            "On Linux fuser must be built WITHOUT the `libfuse` feature (pure-rust mount); libfuse is never linked. Runtime mounting lazily execs fusermount3 (apt fuse3), like Windows delay-loads dokan2.dll.",
           ].join("\n"),
         );
       }

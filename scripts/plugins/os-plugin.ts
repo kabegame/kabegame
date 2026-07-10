@@ -281,8 +281,8 @@ export class OSPlugin extends BasePlugin {
     }
     ensureDir(dst);
 
-    // Linux 不捆 libfuse.so:fuser 用 libfuse feature + FUSE3_STATIC=1 **静态链接** libfuse3.a
-    // (见 mode-plugin prepareEnv),运行时只需 SUID fusermount3 二进制(apt fuse3)。
+    // Linux 不捆 libfuse.so:fuser 关闭 libfuse feature 走纯 Rust 挂载,二进制根本不链接
+    // libfuse(启动无 DT_NEEDED,挂载时懒执行 fusermount3),运行时只需 SUID fusermount3(apt fuse3)。
     // FFmpeg、x264 均已静态链接；这里只处理显式附加的动态库。
     const packages: string[] = [];
     for (const pkg of packages) {

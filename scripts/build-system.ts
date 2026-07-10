@@ -289,6 +289,21 @@ export class BuildSystem {
 
     this.commonUse(Cmd.BUILD);
     this.commonBefore();
+    if (this.context.component!.isCli) {
+      this.hooks.beforeBuild.call(Component.CLI);
+      const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.CLI);
+      const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
+      const args = this.buildCargoArgs(
+        ["build", "--release", "-p", Component.cargoComp(Component.CLI)],
+        features,
+        mergedArgs.length > 0 ? mergedArgs : undefined,
+      );
+      if (!this.context.skip?.isCargo) {
+        run("cargo", args, {
+          cwd: SRC_TAURI_DIR,
+        });
+      }
+    }
     if (this.context.component!.isMain) {
       this.hooks.beforeBuild.call(Component.MAIN);
       const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.MAIN);

@@ -81,6 +81,7 @@
               class="detail-value line-clamp-2 clickable-link"
               :title="image.localPath"
               @click="handleOpenPath(image.localPath)"
+              @contextmenu.prevent.stop="handleCopyLocalPath(image.localPath)"
             >{{ image.localPath }}</span>
           </div>
           <div class="detail-item">
@@ -172,6 +173,7 @@ import DESCRIPTION_BRIDGE_INJECT_SCRIPT from "./descriptionBridgeInject.body.js?
 import CollapsibleDrawerPanel from "./CollapsibleDrawerPanel.vue";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
 import { invoke } from "../../api";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { List } from "@element-plus/icons-vue";
@@ -807,6 +809,21 @@ const handleOpenPath = async (path?: string) => {
   } catch (error) {
     console.error("打开文件失败:", error);
     ElMessage.error(t("common.openFileFailed"));
+  }
+};
+
+const handleCopyLocalPath = async (path?: string) => {
+  if (!path) return;
+  try {
+    if (IS_WEB) {
+      await navigator.clipboard.writeText(path);
+    } else {
+      await writeText(path);
+    }
+    ElMessage.success(t("common.copySuccess"));
+  } catch (error) {
+    console.error("复制本地路径失败:", error);
+    ElMessage.error(t("common.copyFailed"));
   }
 };
 </script>

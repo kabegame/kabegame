@@ -1,5 +1,5 @@
-use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::crawler::TaskScheduler;
+use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::Storage;

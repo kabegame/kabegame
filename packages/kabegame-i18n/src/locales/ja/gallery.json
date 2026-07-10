@@ -125,6 +125,7 @@
   "imageOriginalMissingWarning": "この画像ファイルが見つかりません。",
   "imageThumbnailMissingWarning": "サムネイルの読み込みに失敗しましたが、元ファイルは存在します。「整理」を開き、「サムネイルを再生成」を有効にしてもう一度実行してください。推奨範囲：{range}（画像 ID：{id}）。",
   "imageThumbnailMissingWarningNoRange": "サムネイルの読み込みに失敗しましたが、元ファイルは存在します。「整理」を開き、「サムネイルを再生成」を有効にしてもう一度実行してください。画像 ID：{id}。",
+  "imageCompatibleMissingWarning": "ブラウザ互換コピーの読み込みに失敗したため、元ファイルにフォールバックしました。「整理」で互換コピーを再生成できます。",
   "regenCompatible": "互換コピーを生成",
   "regenCompatibleDesc": "ブラウザ互換コピーを生成します。Linux CEF ではすべての動画を VP9/Opus WebM に変換し、他のプラットフォームでは WebView がネイティブ表示できないメディア（WMV・HEVC・MKV・超大サイズ画像など）のみを変換します。",
   "regenCompatibleSlowHint": "注意：ファイルごとにデコード・トランスコードが必要なため、時間がかかります。",

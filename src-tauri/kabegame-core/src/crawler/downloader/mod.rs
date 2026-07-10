@@ -11,11 +11,11 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::time::Instant;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::Notify;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use url::Url;
 
 pub const DATA_URI_PLACEHOLDER: &str = "data:dummy";
@@ -30,18 +30,18 @@ pub mod util;
 
 #[cfg(not(target_os = "android"))]
 pub use compress::{
-    generate_compatible_image, generate_compatible_video, IMAGE_COMPATIBLE_MAX_DIM,
-    VIDEO_COMPATIBLE_MAX_HEIGHT,
+    IMAGE_COMPATIBLE_MAX_DIM, VIDEO_COMPATIBLE_MAX_HEIGHT, generate_compatible_image,
+    generate_compatible_video,
 };
 pub use compress::{
-    generate_thumbnail, generate_thumbnail_from_bytes, image_needs_independent_thumbnail,
-    image_thumbnail_dimensions_acceptable, IMAGE_THUMBNAIL_MAX_DIM,
-    IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES,
+    IMAGE_THUMBNAIL_MAX_DIM, IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES, generate_thumbnail,
+    generate_thumbnail_from_bytes, image_needs_independent_thumbnail,
+    image_thumbnail_dimensions_acceptable,
 };
 pub use http::{build_reqwest_header_map, create_client};
 pub use queue::{
-    emit_removed_after_interval, next_download_id, ActiveDownloadInfo, DownloadQueue,
-    DownloadRequest, DownloadState,
+    ActiveDownloadInfo, DownloadQueue, DownloadRequest, DownloadState, emit_removed_after_interval,
+    next_download_id,
 };
 pub use util::{
     build_safe_filename, build_safe_filename_no_ext, compute_bytes_hash, compute_file_hash,
@@ -755,7 +755,12 @@ pub async fn postprocess_downloaded_image(
                 }
 
                 #[cfg(not(target_os = "android"))]
-                let path = compute_unique_download_path(output_dir, url, inferred_ext.as_deref())?;
+                let path = compute_unique_download_path_with_name(
+                    output_dir,
+                    url,
+                    inferred_ext.as_deref(),
+                    custom_display_name,
+                )?;
 
                 if let Err(e) = tokio::fs::write(&path, bytes).await {
                     return Err(format!("Failed to write file: {}", e));
@@ -1256,7 +1261,7 @@ pub async fn clear_downloads_temp_dir() {
 
 #[cfg(test)]
 mod spill_writer_tests {
-    use super::{DownloadOutcome, SpillWriter, DOWNLOAD_SPILL_THRESHOLD};
+    use super::{DOWNLOAD_SPILL_THRESHOLD, DownloadOutcome, SpillWriter};
     use std::path::PathBuf;
     use tokio::io::AsyncWriteExt;
 

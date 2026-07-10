@@ -9,14 +9,17 @@
     'image-item-horizontal': horizontal,
   }" :style="rootStyle" :data-id="image.id" @mouseenter="handleMouseEnter" @mouseleave="handleMouseLeave"
     @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
-    <!-- 文件异常标识：不阻挡点击/选择/右键 -->
-    <el-tooltip v-if="showFileWarning" :content="fileWarningText" placement="top" :show-after="300">
-      <div class="missing-file-badge" :class="{ 'missing-file-badge-thumbnail': thumbnailMissing }">
-        <el-icon :size="14">
-          <WarningFilled />
-        </el-icon>
-      </div>
-    </el-tooltip>
+    <!-- 文件异常标识：thumb/comp/local 三级失败标记（蓝/黄/红），最多三个全亮；不阻挡点击/选择/右键 -->
+    <div v-if="failedSources.length" class="missing-file-badges">
+      <el-tooltip v-for="tag in failedSources" :key="tag" :content="fileWarningText(tag)" placement="top"
+        :show-after="300">
+        <div class="missing-file-badge" :class="`missing-file-badge-${tag}`">
+          <el-icon :size="14">
+            <WarningFilled />
+          </el-icon>
+        </div>
+      </el-tooltip>
+    </div>
     <!-- 视频标识：右上角播放/暂停切换按钮（可控视频） -->
     <div v-if="isControllableVideo" class="video-play-badge video-play-badge-interactive"
       role="button" :aria-label="videoShouldPlay ? '暂停' : '播放'"
@@ -46,7 +49,7 @@
 import { computed, nextTick, onUnmounted, watch } from "vue";
 import { ref, toRef } from "vue";
 import { WarningFilled, VideoPlay, VideoPause } from "@element-plus/icons-vue";
-import type { ImageInfo, ImagePrefer } from "../../types/image";
+import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageContent from "./ImageContent.vue";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { storeToRefs } from "pinia";
@@ -87,11 +90,11 @@ const contentRef = ref<InstanceType<typeof ImageContent> | null>(null);
 const { isCompact } = storeToRefs(useUiStore());
 const { t } = useI18n();
 
-// 缺失/丢失状态来自 ImageContent（用于角标显示）
-const originalMissing = computed(() => contentRef.value?.originalMissing ?? false);
-const thumbnailMissing = computed(() => contentRef.value?.thumbnailMissing ?? false);
-const isLost = computed(() => contentRef.value?.isLost ?? false);
-const showFileWarning = computed(() => !isLost.value && (originalMissing.value || thumbnailMissing.value));
+// 三级失败标记来自 ImageContent 状态机（thumb 蓝 / comp 黄 / local 红），按固定顺序展示
+const SOURCE_TAG_ORDER: ImageSourceTag[] = ["thumb", "comp", "local"];
+const failedSources = computed(() =>
+  SOURCE_TAG_ORDER.filter((tag) => contentRef.value?.failedSources.includes(tag))
+);
 
 const THUMBNAIL_REGEN_RANGE_SIZE = 1000;
 const thumbnailRegenRange = computed(() => {
@@ -102,8 +105,8 @@ const thumbnailRegenRange = computed(() => {
   return { start, end: start + THUMBNAIL_REGEN_RANGE_SIZE };
 });
 
-const fileWarningText = computed(() => {
-  if (thumbnailMissing.value) {
+const fileWarningText = (tag: ImageSourceTag): string => {
+  if (tag === "thumb") {
     const range = thumbnailRegenRange.value;
     if (!range) {
       return t("gallery.imageThumbnailMissingWarningNoRange", { id: props.image.id });
@@ -113,8 +116,11 @@ const fileWarningText = computed(() => {
       range: t("gallery.organizeRangeSegment", range),
     });
   }
+  if (tag === "comp") {
+    return t("gallery.imageCompatibleMissingWarning");
+  }
   return t("gallery.imageOriginalMissingWarning");
-});
+};
 
 // 虚拟滚动下挂载时已有 isEntering，若直接绑 class 浏览器可能不触发 CSS 动画；延迟一帧再加 class 以触发入场动画
 const enteringClassActive = ref(false);
@@ -259,7 +265,8 @@ const canHoverOriginalPreview = computed(() =>
   !isCompact.value &&
   !isVideo.value &&
   props.prefer === "thumbnail" &&
-  !originalMissing.value
+  // 原始文件已确认失败（原图链末环 local 已死）时不再升级为原图
+  !failedSources.value.includes("local")
 );
 
 const clearHoverPreviewTimer = () => {
@@ -460,11 +467,16 @@ const handleAnimationEnd = (event: AnimationEvent) => {
 
 }
 
-.missing-file-badge {
+.missing-file-badges {
   position: absolute;
   top: 8px;
   right: 8px;
   z-index: 3;
+  display: flex;
+  gap: 4px;
+}
+
+.missing-file-badge {
   width: 22px;
   height: 22px;
   border-radius: 999px;
@@ -474,20 +486,32 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   pointer-events: auto;
   cursor: help;
   color: #fff;
-  background: rgba(245, 108, 108, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.7);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
   transition: background 0.2s ease;
 
-  &:hover {
-    background: rgba(245, 108, 108, 1);
+  /* 三级失败标记：thumb 蓝 / comp 黄 / local 红 */
+  &.missing-file-badge-thumb {
+    background: rgba(64, 158, 255, 0.92);
+
+    &:hover {
+      background: rgba(64, 158, 255, 1);
+    }
   }
 
-  &.missing-file-badge-thumbnail {
+  &.missing-file-badge-comp {
     background: rgba(230, 162, 60, 0.92);
 
     &:hover {
       background: rgba(230, 162, 60, 1);
+    }
+  }
+
+  &.missing-file-badge-local {
+    background: rgba(245, 108, 108, 0.92);
+
+    &:hover {
+      background: rgba(245, 108, 108, 1);
     }
   }
 }

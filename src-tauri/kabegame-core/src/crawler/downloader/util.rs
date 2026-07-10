@@ -72,7 +72,13 @@ fn is_forbidden_filename_char(c: char) -> bool {
 pub fn sanitize_stem_for_filename(stem: &str) -> String {
     let mut out: String = stem
         .chars()
-        .map(|c| if is_forbidden_filename_char(c) { '_' } else { c })
+        .map(|c| {
+            if is_forbidden_filename_char(c) {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
 
     while out.contains("  ") {

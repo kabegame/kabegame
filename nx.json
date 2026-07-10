@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
-  "maxCacheSize": "20MB",
+  "maxCacheSize": "500MB",
   "targetDefaults": {
     "build-docs": {
       "cache": true,

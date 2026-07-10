@@ -1,6 +1,9 @@
 /** 展示偏好：优先原图还是缩略图（缩略图始终作为打底层）。 */
 export type ImagePrefer = "original" | "thumbnail";
 
+/** 图片资源三级来源：缩略图 / 浏览器兼容副本 / 原始文件。既是加载回退链的环，也是失败标记的等级。 */
+export type ImageSourceTag = "thumb" | "comp" | "local";
+
 /**
  * 尽量与主程序的 ImageInfo 兼容（字段多不要求全传）。
  * core 组件只依赖少量字段：id/localPath/thumbnailPath/localExists/favorite/order/crawledAt。

@@ -125,6 +125,7 @@
   "imageOriginalMissingWarning": "这张图片找不到了",
   "imageThumbnailMissingWarning": "缩略图加载失败，原图还在。请打开整理，勾选“补充缩略图”后重新整理一次。建议整理区间：{range}（图片 ID：{id}）。",
   "imageThumbnailMissingWarningNoRange": "缩略图加载失败，原图还在。请打开整理，勾选“补充缩略图”后重新整理一次。图片 ID：{id}。",
+  "imageCompatibleMissingWarning": "浏览器兼容副本加载失败，已回退尝试原始文件。可在整理中重新生成兼容副本。",
   "regenCompatible": "补充兼容格式",
   "regenCompatibleDesc": "生成浏览器兼容副本。Linux CEF 会将全部视频转换为 VP9/Opus WebM；其他平台仅转换浏览器无法直接显示的媒体（WMV、HEVC、MKV、超大图等）。",
   "regenCompatibleSlowHint": "提示：需逐文件解码转码，耗时较长。",

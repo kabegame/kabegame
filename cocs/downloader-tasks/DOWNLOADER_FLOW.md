@@ -183,12 +183,13 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 桌面后处理（`PostprocessSource::Bytes` 或 `Path`）：
 
 - 从 source 推断 MIME，并在函数内计算最终文件名和扩展名
+- 桌面端若脚本指定了展示名（`custom_display_name`），`Bytes` 与 `Path { relocate_to: Some }` 都按 `custom_display_name + inferred_ext` 生成最终文件名
 - 未重复时写入最终文件
 - 生成缩略图或视频预览
 - 写入 `images`，其中 `local_path` 是磁盘路径，`thumbnail_path` 是缩略图路径或回退本地路径
 - 按需写入目标画册并广播事件
 
-桌面 WebView/CEF 原生下载完成后也复用同一后处理入口。触发原生下载前，后端会把下载所需的入库上下文登记到 `ActiveDownloadInfo` 的后端字段里，包括 `task_id` / `surf_record_id`、`plugin_id`、输出画册、header 快照、脚本指定展示名和 `metadata_id`。这些字段都使用 `#[serde(skip)]`，不会下发前端，避免暴露 cookie/鉴权 header。下载完成事件只负责按 URL 从 `active_downloads` 取回 native 项，并把浏览器落盘文件交给 `postprocess_downloaded_image`；后续入库、去重、缩略图和事件广播仍由统一后处理负责。native 下载也发送完整 lifecycle：`Downloading -> Processing -> Completed/Failed -> download-removed`，前端刷新快照时可以从同一个 `get_active_downloads` 结果看到池下载与 native 下载。
+桌面 WebView/CEF 原生下载完成后也复用同一后处理入口。触发原生下载前，后端会把下载所需的入库上下文登记到 `ActiveDownloadInfo` 的后端字段里，包括 `task_id` / `surf_record_id`、`plugin_id`、输出画册、header 快照、脚本指定展示名和 `metadata_id`。这些字段都使用 `#[serde(skip)]`，不会下发前端，避免暴露 cookie/鉴权 header。下载完成事件只负责按 URL 从 `active_downloads` 取回 native 项，并把浏览器落盘文件交给 `postprocess_downloaded_image`；后续入库、去重、缩略图和事件广播仍由统一后处理负责。crawler / surf 窗口的原生下载先落到 `downloads_temp_dir()/*-native-<id>.part`，完成后以 `PostprocessSource::Path { relocate_to: Some(images_dir) }` 进入后处理，由后处理按 infer 出的 MIME 生成最终文件名和扩展名。native 下载也发送完整 lifecycle：`Downloading -> Processing -> Completed/Failed -> download-removed`，前端刷新快照时可以从同一个 `get_active_downloads` 结果看到池下载与 native 下载。
 
 ### JS 层流式上传通道
 

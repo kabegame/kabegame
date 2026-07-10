@@ -123,6 +123,7 @@
   "imageOriginalMissingWarning": "This image file cannot be found.",
   "imageThumbnailMissingWarning": "The thumbnail failed to load, but the original file still exists. Open Organize, enable \"Regenerate thumbnails\", then run it again. Suggested range: {range} (image ID: {id}).",
   "imageThumbnailMissingWarningNoRange": "The thumbnail failed to load, but the original file still exists. Open Organize, enable \"Regenerate thumbnails\", then run it again. Image ID: {id}.",
+  "imageCompatibleMissingWarning": "The browser-compatible copy failed to load; fell back to the original file. You can regenerate it in Organize.",
   "regenCompatible": "Generate compatible copies",
   "regenCompatibleDesc": "Generate browser-compatible copies. On Linux CEF, all videos are converted to VP9/Opus WebM; other platforms convert media the WebView cannot display natively (WMV, HEVC, MKV, oversized images, etc.).",
   "regenCompatibleSlowHint": "Note: requires per-file decode and transcode — may take a long time.",

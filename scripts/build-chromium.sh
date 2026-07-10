@@ -236,8 +236,8 @@ configure_variant() {
     export GN_DEFINES="$common is_official_build=false symbol_level=0 blink_symbol_level=0 dcheck_always_on=false"
     DISTRIB_FLAGS=(--minimal-distrib-only --no-distrib-docs --no-distrib-symbols --distrib-subdir-suffix=dev)
   else
-    # 小:开 LTO + 体积优化,保留可符号化崩溃栈
-    local prod_extra="optimize_for_size=true symbol_level=1"
+    # 小:开 LTO + 体积优化
+    local prod_extra="optimize_for_size=true symbol_level=0"
     if is_linux; then
       prod_extra="$prod_extra use_cups=false"
     fi

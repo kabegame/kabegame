@@ -141,7 +141,7 @@ fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u
     use rsmpeg::avcodec::{AVCodec, AVCodecContext};
     use rsmpeg::avfilter::{AVFilter, AVFilterGraph, AVFilterInOut};
     use rsmpeg::avformat::{AVFormatContextInput, AVFormatContextOutput};
-    use rsmpeg::avutil::{av_inv_q, ra, AVDictionary};
+    use rsmpeg::avutil::{AVDictionary, av_inv_q, ra};
     use rsmpeg::error::RsmpegError;
     use rsmpeg::ffi;
     use std::ffi::CString;
@@ -520,8 +520,17 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
         return Ok(None);
     }
 
-    let img = match image::open(image_path) {
-        Ok(img) => img,
+    let img = match image::io::Reader::open(image_path) {
+        Ok(mut reader) => {
+            reader.no_limits();
+            match reader.with_guessed_format() {
+                Ok(r) => match r.decode() {
+                    Ok(img) => img,
+                    Err(_) => return Ok(None),
+                },
+                Err(_) => return Ok(None),
+            }
+        }
         Err(_) => return Ok(None),
     };
     let thumbnail_bytes = build_compressed_thumbnail_bytes(&img)?;
@@ -705,8 +714,14 @@ pub fn mux_media_streams(inputs: &[(PathBuf, String)], output_path: &Path) -> Re
 #[cfg(not(target_os = "android"))]
 fn transcode_compatible_image_sync(input_path: &Path, output_path: &Path) -> Result<(), String> {
     use image::GenericImageView;
-    let img =
-        image::open(input_path).map_err(|e| format!("Failed to open image for compatible: {e}"))?;
+    let mut reader = image::io::Reader::open(input_path)
+        .map_err(|e| format!("Failed to open image reader for compatible: {e}"))?;
+    reader.no_limits();
+    let img = reader
+        .with_guessed_format()
+        .map_err(|e| format!("Failed to guess image format for compatible: {e}"))?
+        .decode()
+        .map_err(|e| format!("Failed to decode image for compatible: {e}"))?;
     let (w, h) = img.dimensions();
     let max = w.max(h);
     let img = if max > IMAGE_COMPATIBLE_MAX_DIM {
@@ -728,7 +743,7 @@ fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Res
     use rsmpeg::avcodec::{AVCodec, AVCodecContext};
     use rsmpeg::avfilter::{AVFilter, AVFilterGraph, AVFilterInOut};
     use rsmpeg::avformat::{AVFormatContextInput, AVFormatContextOutput};
-    use rsmpeg::avutil::{av_inv_q, ra, AVDictionary};
+    use rsmpeg::avutil::{AVDictionary, av_inv_q, ra};
     use rsmpeg::error::RsmpegError;
     use rsmpeg::ffi;
     use std::ffi::{CStr, CString};

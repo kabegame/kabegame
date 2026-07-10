@@ -21,17 +21,17 @@ use std::fs;
 use std::sync::Arc;
 #[cfg(not(feature = "web"))]
 use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
-use url::Url;
 
 #[cfg(feature = "web")]
 use crate::web::server::*;
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-use kabegame_core::crawler::downloader::{
-    compute_unique_download_path_with_name, postprocess_downloaded_image, DownloadState,
-};
+use kabegame_core::app_paths::AppPaths;
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
+use kabegame_core::crawler::downloader::{DownloadState, postprocess_downloaded_image};
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::webview::{
-    crawler_window_label, set_webview_handler, try_get_session_context, CrawlerWebViewHandler,
+    CrawlerWebViewHandler, crawler_window_label, get_session, set_webview_handler,
+    try_get_session_context,
 };
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use tauri::webview::DownloadEvent;
@@ -694,11 +694,6 @@ pub fn create_crawler_window<R: Runtime>(
                     eprintln!("Failed to create native download dir: {}", e);
                     return false;
                 }
-                let effective_url = if url.scheme() == "blob" {
-                    Url::parse(url.as_str().strip_prefix("blob:").unwrap_or(url.as_str())).unwrap()
-                } else {
-                    url.clone()
-                };
                 let dq = TaskScheduler::global().download_queue();
                 let entry = if let Some(entry) = dq.get_native(url.as_str()) {
                     entry
@@ -706,19 +701,12 @@ pub fn create_crawler_window<R: Runtime>(
                     eprintln!("[Crawler] Cannot find the download for crawler webview.");
                     return false;
                 };
-                let native_dest = match compute_unique_download_path_with_name(
-                    &images_dir,
-                    &effective_url,
-                    None,
-                    entry.custom_display_name.as_deref(),
-                ) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("Failed to compute native download destination: {}", e);
-                        return false;
-                    }
-                };
-                *destination = native_dest;
+                let temp_dir = AppPaths::global().downloads_temp_dir();
+                if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+                    eprintln!("Failed to create native download temp dir: {}", e);
+                    return false;
+                }
+                *destination = temp_dir.join(format!("crawler-native-{}.part", entry.id));
                 tauri::async_runtime::spawn(async move {
                     dq.switch_state(entry.id, DownloadState::Downloading, None)
                         .await;
@@ -749,14 +737,36 @@ pub fn create_crawler_window<R: Runtime>(
                             .await;
                         let task_id =
                             (!entry.task_id.trim().is_empty()).then_some(entry.task_id.as_str());
+                        let images_dir = match get_session(&entry.task_id).await {
+                            Some(session) => match session.get_context().await {
+                                Some(ctx) => std::path::PathBuf::from(ctx.images_dir),
+                                None => {
+                                    let error =
+                                        "Crawler context not found for native download output";
+                                    let _ = tokio::fs::remove_file(&final_path).await;
+                                    dq.switch_state(entry.id, DownloadState::Failed, Some(error))
+                                        .await;
+                                    dq.wait_then_finish_download(entry.id, false).await;
+                                    return;
+                                }
+                            },
+                            None => {
+                                let error = "Crawler context not found for native download output";
+                                let _ = tokio::fs::remove_file(&final_path).await;
+                                dq.switch_state(entry.id, DownloadState::Failed, Some(error))
+                                    .await;
+                                dq.wait_then_finish_download(entry.id, false).await;
+                                return;
+                            }
+                        };
                         let result = postprocess_downloaded_image(
                             &*dq,
                             entry.id,
                             kabegame_core::crawler::downloader::PostprocessSource::Path {
                                 path: &final_path,
-                                relocate_to: None,
+                                relocate_to: Some(&images_dir),
                             },
-                            false,
+                            true,
                             &url,
                             &entry.plugin_id,
                             task_id,
@@ -771,9 +781,15 @@ pub fn create_crawler_window<R: Runtime>(
                             entry.post_url.as_deref(),
                         )
                         .await;
+                        if result.is_err() {
+                            let _ = tokio::fs::remove_file(&final_path).await;
+                        }
                         dq.wait_then_finish_download(entry.id, false).await;
                     });
                 } else {
+                    if let Some(path) = path {
+                        let _ = std::fs::remove_file(path);
+                    }
                     tauri::async_runtime::spawn(async move {
                         dq.switch_state(
                             entry.id,

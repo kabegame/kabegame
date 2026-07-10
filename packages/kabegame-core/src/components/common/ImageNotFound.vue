@@ -37,7 +37,7 @@ withDefaults(defineProps<Props>(), {
   }
 
   .lost-text {
-    color: rgba(255, 255, 255, 0.78);
+    color: var(--anime-warning);
     font-size: 15px;
     text-align: center;
     line-height: 1.6;

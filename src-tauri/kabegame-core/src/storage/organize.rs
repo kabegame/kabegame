@@ -7,10 +7,10 @@ use crate::storage::Storage;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -525,6 +525,14 @@ fn row_in_organize_range(idx: usize, offset: Option<usize>, limit: Option<usize>
 enum ThumbnailRefreshAction {
     UseOriginal { id: i64, local_path: String },
     Regenerate { id: i64, local_path: String },
+    RegenerateVideo { id: i64, local_path: String },
+}
+
+#[derive(Debug)]
+enum CompatResult {
+    Generated(PathBuf),
+    NotNeeded,
+    Unknown,
 }
 
 fn thumbnail_refresh_action(row: &OrganizeScanRow) -> Option<ThumbnailRefreshAction> {
@@ -534,7 +542,22 @@ fn thumbnail_refresh_action(row: &OrganizeScanRow) -> Option<ThumbnailRefreshAct
     }
 
     let local = Path::new(local_path);
-    if !local.exists() || !crate::image_type::is_image_by_path(local) {
+    if !local.exists() {
+        return None;
+    }
+
+    if crate::image_type::is_video_by_path(local) {
+        let thumb = row.thumbnail_path.trim();
+        if thumb.is_empty() || thumb == local_path || !Path::new(thumb).exists() {
+            return Some(ThumbnailRefreshAction::RegenerateVideo {
+                id: row.id,
+                local_path: local_path.to_string(),
+            });
+        }
+        return None;
+    }
+
+    if !crate::image_type::is_image_by_path(local) {
         return None;
     }
 
@@ -715,7 +738,7 @@ fn run_organize(
                 let compatible_path = row.compatible_path.trim();
                 if options.regen_compatible
                     && !should_remove.contains(&row.id)
-                    && compatible_path.is_empty()
+                    && (compatible_path.is_empty() || !Path::new(compatible_path).exists())
                 {
                     let local = row.local_path.trim();
                     if !local.is_empty() && Path::new(local).exists() {
@@ -779,6 +802,34 @@ fn run_organize(
                         regenerated_total += 1;
                     }
                 }
+                ThumbnailRefreshAction::RegenerateVideo { id, local_path } => {
+                    #[cfg(target_os = "android")]
+                    let preview = handle.block_on(async {
+                        crate::crawler::downloader::compress::compress_video_for_preview(
+                            &local_path,
+                        )
+                        .await
+                    });
+                    #[cfg(not(target_os = "android"))]
+                    let preview = handle.block_on(async {
+                        crate::crawler::downloader::compress::compress_video_for_preview(Path::new(
+                            &local_path,
+                        ))
+                        .await
+                    });
+                    match preview {
+                        Ok(result) => {
+                            let preview_path_str =
+                                result.preview_path.to_string_lossy().to_string();
+                            storage
+                                .replace_image_thumbnail_path(&id.to_string(), &preview_path_str)?;
+                            regenerated_total += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[organize] video thumbnail generation failed for {id}: {e}");
+                        }
+                    }
+                }
             }
         }
 
@@ -791,29 +842,56 @@ fn run_organize(
             }
             let local = Path::new(&local_path);
             let is_video = crate::image_type::is_video_by_path(local);
-            let result = handle.block_on(async {
+            let compat_result = handle.block_on(async {
                 if is_video {
                     match crate::media_dimensions::probe_media_sync(local) {
+                        Some(probe) if probe.browser_safe => CompatResult::NotNeeded,
                         Some(probe) => {
-                            crate::crawler::downloader::generate_compatible_video(local, &probe)
-                                .await
+                            eprintln!(
+                                "[organize] transcoding compatible video for {id} ({local_path})"
+                            );
+                            match crate::crawler::downloader::generate_compatible_video(
+                                local, &probe,
+                            )
+                            .await
+                            {
+                                Ok(Some(path)) => CompatResult::Generated(path),
+                                Ok(None) => CompatResult::Unknown,
+                                Err(e) => {
+                                    eprintln!(
+                                        "[organize] compatible generation failed for {id} ({local_path}): {e}"
+                                    );
+                                    CompatResult::Unknown
+                                }
+                            }
                         }
-                        None => Ok(None),
+                        None => CompatResult::Unknown,
                     }
                 } else {
                     let Some(mime) = crate::image_type::mime_type_from_path(local) else {
-                        return Ok(None);
+                        return CompatResult::Unknown;
                     };
                     let Some((w, h)) =
                         crate::media_dimensions::resolve_media_dimensions_sync(&local_path)
                     else {
-                        return Ok(None);
+                        return CompatResult::Unknown;
                     };
-                    crate::crawler::downloader::generate_compatible_image(local, &mime, w, h).await
+                    match crate::crawler::downloader::generate_compatible_image(local, &mime, w, h)
+                        .await
+                    {
+                        Ok(Some(path)) => CompatResult::Generated(path),
+                        Ok(None) => CompatResult::NotNeeded,
+                        Err(e) => {
+                            eprintln!(
+                                "[organize] compatible generation failed for {id} ({local_path}): {e}"
+                            );
+                            CompatResult::Unknown
+                        }
+                    }
                 }
             });
-            match result {
-                Ok(Some(compat_path)) => {
+            match compat_result {
+                CompatResult::Generated(compat_path) => {
                     let path_str = compat_path
                         .canonicalize()
                         .ok()
@@ -833,12 +911,18 @@ fn run_organize(
                         regenerated_total += 1;
                     }
                 }
-                Ok(None) => {}
-                Err(e) => {
-                    eprintln!(
-                        "[organize] compatible generation failed for {id} ({local_path}): {e}"
-                    );
+                CompatResult::NotNeeded => {
+                    if let Err(e) =
+                        storage.replace_image_compatible_path(&id.to_string(), &local_path)
+                    {
+                        eprintln!(
+                            "[organize] compatible_path sentinel update failed for {id}: {e}"
+                        );
+                    } else {
+                        remove_replaced_compatible_file(&previous_compatible_path, &local_path);
+                    }
                 }
+                CompatResult::Unknown => {}
             }
         }
 
@@ -930,5 +1014,48 @@ mod tests {
             }
             other => panic!("unexpected action: {:?}", other),
         }
+    }
+
+    #[test]
+    fn thumbnail_refresh_regenerates_video_missing_thumb() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("test.mp4");
+        std::fs::write(&local, [1u8; 100]).unwrap();
+        let row = OrganizeScanRow {
+            id: 10,
+            hash: String::new(),
+            local_path: local.to_string_lossy().to_string(),
+            thumbnail_path: dir
+                .path()
+                .join("nonexistent.mp4")
+                .to_string_lossy()
+                .to_string(),
+            compatible_path: String::new(),
+        };
+        let action = thumbnail_refresh_action(&row).unwrap();
+        match action {
+            ThumbnailRefreshAction::RegenerateVideo { id, local_path } => {
+                assert_eq!(id, 10);
+                assert_eq!(local_path, local.to_string_lossy().to_string());
+            }
+            other => panic!("unexpected action: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn thumbnail_refresh_keeps_existing_video_thumb() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("test.mp4");
+        let thumb = dir.path().join("existing_preview.mp4");
+        std::fs::write(&local, [1u8; 100]).unwrap();
+        std::fs::write(&thumb, [2u8; 100]).unwrap();
+        let row = OrganizeScanRow {
+            id: 11,
+            hash: String::new(),
+            local_path: local.to_string_lossy().to_string(),
+            thumbnail_path: thumb.to_string_lossy().to_string(),
+            compatible_path: String::new(),
+        };
+        assert!(thumbnail_refresh_action(&row).is_none());
     }
 }

@@ -125,6 +125,7 @@
   "imageOriginalMissingWarning": "이 이미지 파일을 찾을 수 없습니다.",
   "imageThumbnailMissingWarning": "썸네일을 불러오지 못했지만 원본 파일은 있습니다. 정리를 열고 \"썸네일 재생성\"을 켠 뒤 다시 실행하세요. 권장 범위: {range} (이미지 ID: {id}).",
   "imageThumbnailMissingWarningNoRange": "썸네일을 불러오지 못했지만 원본 파일은 있습니다. 정리를 열고 \"썸네일 재생성\"을 켠 뒤 다시 실행하세요. 이미지 ID: {id}.",
+  "imageCompatibleMissingWarning": "브라우저 호환 사본을 불러오지 못해 원본 파일로 대체했습니다. 정리에서 호환 사본을 다시 생성할 수 있습니다.",
   "regenCompatible": "호환 파일 생성",
   "regenCompatibleDesc": "브라우저 호환 사본을 생성합니다. Linux CEF에서는 모든 동영상을 VP9/Opus WebM으로 변환하고, 다른 플랫폼에서는 WebView가 기본 표시할 수 없는 미디어(WMV, HEVC, MKV, 초대형 이미지 등)만 변환합니다.",
   "regenCompatibleSlowHint": "참고: 파일마다 디코딩·트랜스코딩이 필요하므로 시간이 오래 걸릴 수 있습니다.",

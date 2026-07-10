@@ -323,8 +323,6 @@ fn eval_liquid_cond(cond: &str, vars: &HashMap<String, String>) -> bool {
 
 #[tokio::main]
 async fn main() {
-    #[cfg(target_os = "linux")]
-    kabegame_core::workarounds::apply_nvidia_dmabuf_renderer_workaround();
     let cli = Cli::parse();
 
     let res = match cli.command {

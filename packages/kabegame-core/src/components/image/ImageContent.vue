@@ -1,14 +1,14 @@
 <template>
-  <div class="image-content" :class="{ 'is-compact': isCompact }">
+  <div class="image-content relative w-full h-full overflow-hidden" :class="{ 'is-compact': isCompact }">
     <!-- 彻底加载失败 -->
-    <div v-if="isLost" class="ic-lost">
-      <ImageNotFound :show-image="false" />
+    <div v-if="isLost" class="ic-lost absolute inset-0 flex items-center justify-center">
+      <ImageNotFound show-image class="text-black" />
     </div>
 
     <template v-else>
-      <!-- 骨架覆盖层：delayed 防止快速解码时闪烁；GIF 以 <img> 渲染，不需要独立骨架 -->
-      <div v-if="showLoading" class="ic-loading ic-loading-overlay">
-        <el-skeleton :rows="0" animated>
+      <!-- 骨架覆盖层：delayed 防止快速解码时闪烁 -->
+      <div v-if="showLoading" class="ic-loading-overlay absolute inset-0 z-3 pointer-events-none">
+        <el-skeleton :rows="0" animated class="absolute inset-0">
           <template #template>
             <el-skeleton-item
               :variant="isVideo ? 'rect' : 'image'"
@@ -18,42 +18,57 @@
         </el-skeleton>
       </div>
 
-      <!-- 双图层：prefer=original 且缩略图与原图 URL 不同 -->
-      <template v-if="!isVideo || isVideo && prefer === 'thumbnail' && IS_ANDROID">
+      <!-- 图片：双图层（缩略层打底；prefer=original 或缩略链死亡时叠加原图层） -->
+      <template v-if="mode === 'image'">
         <img
-          v-if="!thumbFailed"
-          :key="`thumb:${thumbnailUrl}`"
-          :src="thumbnailUrl"
+          v-if="!thumbSlot.dead"
+          :key="`thumb:${thumbSlot.src}`"
+          :src="thumbSlot.src"
           loading="lazy"
           decoding="async"
-          class="ic-img thumbnail-layer"
+          class="ic-img thumbnail-layer z-1"
           :alt="image.id"
           draggable="false"
-          @load="onThumbLoad"
-          @error="onThumbError"
+          @load="onLoad"
+          @error="onImgError(thumbSlot, $event)"
           @dragstart.prevent
         />
         <img
-          v-if="thumbFailed || !originalFailed && prefer === 'original'"
-          :key="`orig:${originalLayerSrc}`"
-          :src="originalLayerSrc"
+          v-if="origEngaged && !origSlot.dead"
+          :key="`orig:${origSlot.src}`"
+          :src="origSlot.src"
           loading="lazy"
           decoding="async"
-          class="ic-img original-layer"
+          class="ic-img original-layer z-2"
           :alt="image.id"
           draggable="false"
-          @load="onOriginalLoad"
-          @error="onOriginalError"
+          @load="onLoad"
+          @error="onImgError(origSlot, $event)"
           @dragstart.prevent
         />
       </template>
 
+      <!-- 安卓视频缩略：单张 GIF <img>，与 <video> 互斥（与图片双图层分开） -->
+      <img
+        v-else-if="mode === 'gif'"
+        :key="`gif:${thumbSlot.src}`"
+        :src="thumbSlot.src"
+        loading="lazy"
+        decoding="async"
+        class="ic-img"
+        :alt="image.id"
+        draggable="false"
+        @load="onLoad"
+        @error="onImgError(thumbSlot, $event)"
+        @dragstart.prevent
+      />
+
       <!-- 视频 -->
       <video
         v-else
-        :key="`video:${videoSrc}`"
+        :key="`video:${videoSlot.src}`"
         ref="videoEl"
-        :src="videoSrc"
+        :src="videoSlot.src"
         class="ic-img ic-video"
         draggable="false"
         :muted="videoMuted"
@@ -65,8 +80,8 @@
         webkit-playsinline="true"
         disablepictureinpicture="true"
         disableremoteplayback=""
-        @loadeddata="onVideoReady"
-        @canplay="onVideoReady"
+        @loadeddata="onLoad"
+        @canplay="onLoad"
         @error="onVideoError"
         @dragstart.prevent
         @mousedown.prevent
@@ -76,9 +91,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, watchEffect } from "vue";
+import { computed, reactive, ref, watch, watchEffect } from "vue";
 import { storeToRefs } from "pinia";
-import type { ImageInfo, ImagePrefer } from "../../types/image";
+import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { useUiStore } from "../../stores/ui";
@@ -86,19 +101,54 @@ import { useLoadingDelay } from "../../composables/useLoadingDelay";
 import { fileToUrl, thumbnailToUrl, compatibleToUrl } from "../../httpServer";
 import { IS_ANDROID } from "../../env";
 
+/**
+ * 资源开始加载
+ * prefer |  thumbnail     |      origin     |
+ * type   | image          |      video      |
+ * img/video+thumb | init(0) ─→ thumb-fail(1) ─┬──(有comp)-→ comp-fail(2) ┐
+ *                   (单层)                    |                          ↓
+ *                                             └───→ (无comp)─────────→ local-fail(3) ───→ failed
+ * img+orig  | init(0) ─→ thumb-fail(1) ──→ thumbnail hidden ───────────────────────────┐
+ *             (thumb层)                                                                |
+ *             init(0) ────────┬──(有comp)-→ comp-fail(2) ┐                             |
+ *             (orig层)        |                          ↓                             ↓
+ *                             └───→ (无comp)────────→ local-fail(3) ─ local hidden─→ failed
+ * video+orig | init(0) ──┬──(有comp)-→ comp-fail(2) ┐
+ *              (单层)    |                          ↓
+ *                        └───→ (无comp)─────────→ local-fail(3) ───→ thumb-fail(1) -> failed
+ * 上层能知道当前哪一步fail,比如thumb-fail则可能显示一个蓝色感叹号，comp-fail需要一个黄色感叹号，local-fail需要一个红色感叹号。
+ * 不一定一次性探测出所有fail,但如果到了最终的fail状态，最多的情况下三个感叹号全亮
+ * 图片种类  |小图片                                |  中图片                                  |   大图片
+ * ----------|--------------------------------------|------------------------------------------|--------------
+ * 路径状况  | 路径三条路径都相同，或者只有本地路径 | 兼容路径和本地路径相同，或者兼容路径为空 | 三个路径都不同
+ * fail状态  | 直接跳到local-fail，没有其他fail状态 | 有thumb-fail,可能有local-fail            | 三个fail都可能出现
+ * 视频则只有一个独占播放位，安卓视频的thumb则是一个gif，和图片分开。
+ *
+ * 实现：上面的每一行都是一条「有序回退链」。每个渲染槽（slot）持有一条链，
+ * error 事件把当前环的失败等级记入 failedSources 并前进到下一环，链走空即 dead——
+ * 除 reset 外没有其他状态迁移；来自已卸载元素的迟到 load/error 事件（stale）一律忽略。
+ * 路径相同的环在建链时归并到更权威的等级（local > comp > thumb），
+ * 小图/中图因此天然跳过不存在的 fail 等级。
+ *
+ * [已知问题] 翻页高峰：播放位耗尽（media slot exhaustion）
+ * 现象：翻页后新页最后一张视频出现 failed 状态，但文件真实存在且 HTTP 服务返回 200；
+ *       切换到其他视频再切回恢复正常。video.error.code = 4（MEDIA_ERR_SRC_NOT_SUPPORTED），
+ *       networkState = 3（NETWORK_NO_SOURCE），readyState = 0，message 为空字符串。
+ * 原因：翻页瞬间旧页与新页的 <video preload="auto"> 同时存在于 DOM，
+ *       数量超出 CEF/Chromium renderer 进程的媒体播放位上限，新元素被拒绝解码。
+ * 行为：临时性，旧元素被 GC 释放播放位后自行恢复；isConnected 守卫阻止了迟到的
+ *       stale error 事件永久烧毁链环，但若 exhaustion error 在元素仍 connected 时
+ *       到达（链的最后一环），仍会短暂显示 failed 状态直到下次导航。
+ *       调试会话 video-pageflip-001 实测 52 次 exhaustion 事件。
+ * 潜在修复方向（尚未实施）：
+ *   1. 链最后一环失败时启动延迟重试（~500 ms），等旧槽释放后再尝试一次；
+ *   2. 懒加载视频元素（poster 占位，hover/click 时再挂载 <video>），
+ *      从根本上减少同时存活的媒体元素数量。
+ */
+
 // ---- Path → URL helpers (pure) ----
 const normalizeDesktopPath = (path: string | undefined): string =>
   (path || "").trimStart().replace(/^\\\\\?\\/, "").trim();
-
-const toFileUrl = (path: string | undefined): string => {
-  const normalized = normalizeDesktopPath(path);
-  return normalized ? fileToUrl(normalized) : "";
-};
-
-const toThumbnailUrl = (path: string | undefined): string => {
-  const normalized = normalizeDesktopPath(path);
-  return normalized ? thumbnailToUrl(normalized) : "";
-};
 
 interface Props {
   image: ImageInfo;
@@ -127,63 +177,115 @@ const emit = defineEmits<{
 const { isCompact } = storeToRefs(useUiStore());
 const { showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 
-// ---- Media type ----
+// ---- Media type / 渲染形态（三者互斥） ----
 const isVideo = computed(() => isVideoMediaType(props.image.type));
+const mode = computed<"image" | "gif" | "video">(() => {
+  if (!isVideo.value) return "image";
+  return IS_ANDROID && props.prefer === "thumbnail" ? "gif" : "video";
+});
 
-// ---- Explicit URL derivation ----
-// 缩略图层 URL：桌面为缩略图文件；安卓为本地文件代理（无独立缩略图或偏好原图时为空）。
-const thumbnailUrl = computed(() => {
-  const thumbnail = toThumbnailUrl(props.image.thumbnailPath);
-  if (thumbnail) return thumbnail;
-  if (IS_ANDROID && (isVideo.value || props.prefer !== "original")) {
-    return toFileUrl(props.image.localPath);
-  }
+// ---- 资源三元组（按 path 归一） ----
+// 兼容路径与本地路径相同视为无兼容副本，对应状态图中小图/中图的路径退化。
+const localPath = computed(() => normalizeDesktopPath(props.image.localPath));
+const compPath = computed(() => {
+  const path = normalizeDesktopPath(props.image.compatiblePath);
+  return path === localPath.value ? "" : path;
+});
+const thumbPath = computed(() => {
+  const path = normalizeDesktopPath(props.image.thumbnailPath);
+  if (path) return path;
+  // 安卓无独立缩略图时以原始文件充当缩略位（视频 GIF 位 / 图片缩略层）
+  if (IS_ANDROID && (isVideo.value || props.prefer !== "original")) return localPath.value;
   return "";
 });
-// 浏览器兼容副本 URL：走 /compatible；Android 本地服务不做库校验，只按路径读取。
-const compatibleUrl = computed(() =>
-  props.image.compatiblePath ? compatibleToUrl(normalizeDesktopPath(props.image.compatiblePath)) : ""
-);
-// 原始文件 URL：桌面为文件路径，Android 可为 content:// 或普通路径。
-const localUrl = computed(() => toFileUrl(props.image.localPath));
 
-// ---- Mutable load state ----
-const thumbFailed    = ref(false);
-const originalFailed = ref(false);
-const videoFailed    = ref(false);
-// 兼容副本加载失败：原图层回落到原始文件重试一次。
-const compatibleError = ref(false);
-// 视频回退：先尝试兼容副本，失败后降为原始文件。
-const videoUsedFallback = ref(false);
+interface Source {
+  tag: ImageSourceTag;
+  url: string;
+}
 
-const videoEl  = ref<HTMLVideoElement | null>(null);
+// path 归并到最权威的等级：local > comp > thumb
+const sourceOf = (path: string): Source => {
+  if (path === localPath.value) return { tag: "local", url: fileToUrl(path) };
+  if (path === compPath.value) return { tag: "comp", url: compatibleToUrl(path) };
+  return { tag: "thumb", url: thumbnailToUrl(path) };
+};
 
-// 原图层实际 src：兼容副本可用且未失败时优先，否则回落原始文件（回落由 compatibleError 驱动）。
-const originalLayerSrc = computed(() =>
-  compatibleUrl.value && !compatibleError.value ? compatibleUrl.value : localUrl.value
-);
-
-const videoSrc = computed(() => {
-  const compatibleOrLocal = compatibleUrl.value || localUrl.value;
-  if (videoUsedFallback.value) {
-    return localUrl.value || compatibleOrLocal;
+const buildChain = (...paths: string[]): Source[] => {
+  const seen = new Set<string>();
+  const chain: Source[] = [];
+  for (const path of paths) {
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    chain.push(sourceOf(path));
   }
-  return props.prefer === "original"
-    ? (compatibleOrLocal || thumbnailUrl.value)
-    : (thumbnailUrl.value || compatibleOrLocal);
-});
+  return chain;
+};
 
-// ---- Derived exposed state ----
-const isLost = computed(() =>
-  // 安卓下只要图片丢失
-  IS_ANDROID ?
-    !isVideo.value && originalFailed.value || isVideo.value && (thumbFailed.value || originalFailed.value)
-    // 非安卓，视频不回退，图片回退
-    : isVideo.value && (thumbFailed.value || originalFailed.value) || !isVideo.value && thumbFailed.value && originalFailed.value 
+// ---- 加载状态机 ----
+// 三级失败标记：状态机的对外输出，供上层点亮蓝(thumb)/黄(comp)/红(local)感叹号。
+const failedSources = ref<ImageSourceTag[]>([]);
+const markFailed = (tag: ImageSourceTag) => {
+  if (!failedSources.value.includes(tag)) failedSources.value = [...failedSources.value, tag];
+};
+
+// 渲染槽：一条有序回退链上的游标。error 记失败等级并前进，链走空即 dead。
+function useSlot(chain: () => Source[]) {
+  const index = ref(0);
+  const exhausted = ref(false);
+  return reactive({
+    src: computed(() => chain()[index.value]?.url ?? ""),
+    dead: computed(() => exhausted.value || chain().length === 0),
+    onError() {
+      const current = chain()[index.value];
+      if (current) markFailed(current.tag);
+      if (index.value + 1 < chain().length) index.value += 1;
+      else exhausted.value = true;
+    },
+    reset() {
+      index.value = 0;
+      exhausted.value = false;
+    },
+  });
+}
+
+// 图片缩略层（gif 形态复用同一槽）；原图层 comp → local；视频链方向由 prefer 决定。
+const thumbSlot = useSlot(() => buildChain(thumbPath.value));
+const origSlot = useSlot(() => buildChain(compPath.value, localPath.value));
+const videoSlot = useSlot(() =>
+  props.prefer === "original"
+    ? buildChain(compPath.value, localPath.value, thumbPath.value)
+    : buildChain(thumbPath.value, compPath.value, localPath.value)
 );
 
-const originalMissing = computed(() => originalFailed.value);
-const thumbnailMissing = computed(() => thumbFailed.value && !originalFailed.value && !isLost.value);
+// stale 守卫：已被 key 换掉的旧元素卸载后仍可能派发迟到的 load/error 事件，
+// 其 handler 闭包指向存活实例的槽，会烧掉不相干的链环——一律忽略。
+const isStaleMediaEvent = (e: Event): boolean => !(e.target as Element | null)?.isConnected;
+
+const onImgError = (slot: typeof thumbSlot, e: Event) => {
+  if (isStaleMediaEvent(e)) return;
+  slot.onError();
+};
+
+// 原图层介入时机：偏好原图，或缩略链死亡后作为回退（对应 img+thumb 行的单层链）
+const origEngaged = computed(() => props.prefer === "original" || thumbSlot.dead);
+
+const videoEl = ref<HTMLVideoElement | null>(null);
+
+// ---- 终态 ----
+const isLost = computed(() => {
+  switch (mode.value) {
+    case "video":
+      return videoSlot.dead;
+    case "gif":
+      return thumbSlot.dead;
+    case "image":
+      // 安卓：原图层死亡即视为丢失（缩略图可能仍在，但源文件已不可达）
+      return IS_ANDROID
+        ? origEngaged.value && origSlot.dead
+        : thumbSlot.dead && origSlot.dead;
+  }
+});
 
 // ---- Reset on image identity change (NOT on prefer — preserves hover no-flash) ----
 // When ImageItem flips effectivePrefer thumbnail→original, the two URLs don't change, so this
@@ -191,81 +293,43 @@ const thumbnailMissing = computed(() => thumbFailed.value && !originalFailed.val
 watch(
   () => props.image.id,
   () => {
-    thumbFailed.value       = false;
-    originalFailed.value    = false;
-    videoFailed.value       = false;
-    compatibleError.value   = false;
-    videoUsedFallback.value = false;
-
-    const hasAnyUrl = isVideo.value
-      ? !!videoSrc.value
-      : !!(thumbnailUrl.value || compatibleUrl.value || localUrl.value);
-
-    if (!hasAnyUrl) {
-      finishLoading();
-      return;
-    }
-    startLoading();
+    thumbSlot.reset();
+    origSlot.reset();
+    videoSlot.reset();
+    failedSources.value = [];
+    if (isLost.value) finishLoading(); // 一条可加载的链都没有
+    else startLoading();
   },
   { immediate: true }
 );
 
-watch(isLost, (lost) => { if (lost) emit("error"); });
+watch(
+  isLost,
+  (lost) => {
+    if (lost) {
+      finishLoading();
+      emit("error");
+    }
+  },
+  { immediate: true }
+);
 
-// ---- Handlers: dual layer ----
-const onThumbLoad = () => {
+// ---- Handlers ----
+const onLoad = (e: Event) => {
+  if (isStaleMediaEvent(e)) return;
   finishLoading();
   emit("ready");
-};
-const onThumbError = () => {
-  thumbFailed.value = true;
-  // If original also failed, both layers gone → isLost fires error via watch
-  if (originalFailed.value) finishLoading();
-};
-const onOriginalLoad = () => {
-  finishLoading();
-  emit("ready");
-};
-const onOriginalError = () => {
-  // 原图层优先加载兼容副本；兼容副本失败时先回落到原始文件重试一次
-  if (compatibleUrl.value && !compatibleError.value) {
-    compatibleError.value = true;
-    return; // originalLayerSrc 自动切到原始文件，触发重新加载
-  }
-  originalFailed.value = true;
-  // Thumbnail layer still visible; skeleton clears only when thumb also done
-  if (thumbFailed.value) finishLoading();
 };
 
-// ---- Handlers: video ----
-const onVideoReady = () => {
-  finishLoading();
-  emit("ready");
-};
-const onVideoError = () => {
-  // 若当前播放的是兼容副本（与原始文件不同），先降级到原始文件重试一次
-  if (!videoUsedFallback.value && compatibleUrl.value && compatibleUrl.value !== localUrl.value) {
-    videoUsedFallback.value = true;
-    return; // videoSrc computed 自动切换到 localUrl，触发重新加载
-  }
-  const el = videoEl.value;
-  const me = el?.error;
-  console.log('[KbgVideo] error', {
-    src: el?.currentSrc || videoSrc.value,
-    code: me?.code,            // 1=ABORTED 2=NETWORK 3=DECODE 4=SRC_NOT_SUPPORTED
-    message: me?.message,
-    networkState: el?.networkState,
-    readyState: el?.readyState,
-    type: props.image.type,
-  });
-  videoFailed.value = true;
-  finishLoading();
+const onVideoError = (e: Event) => {
+  if (isStaleMediaEvent(e)) return;
+  videoSlot.onError();
 };
 
 // ---- Video playback control (unchanged) ----
 watchEffect(() => {
   const el = videoEl.value;
-  if (!el || !isVideo.value || (isVideo.value && IS_ANDROID) || props.nativeVideoControls) return;
+  if (!el || mode.value !== "video" || IS_ANDROID || props.nativeVideoControls) return;
   if (props.videoPlaying) {
     void el.play().catch(() => {
       emit("videoPlayFail");
@@ -278,64 +342,5 @@ watchEffect(() => {
   }
 });
 
-defineExpose({ videoEl, originalMissing, thumbnailMissing, isLost });
+defineExpose({ videoEl, failedSources, isLost });
 </script>
-
-<style scoped lang="scss">
-.image-content {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-
-  .ic-img {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    will-change: contents, opacity;
-    -webkit-tap-highlight-color: transparent;
-  }
-
-  .thumbnail-layer {
-    z-index: 1;
-  }
-
-  .original-layer {
-    z-index: 2;
-  }
-
-  .ic-loading {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    > * {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-    }
-  }
-
-  .ic-loading-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 3;
-    pointer-events: none;
-  }
-
-  .ic-lost {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-}
-</style>

@@ -19,16 +19,61 @@ fn local_path_to_path_buf(local_path: &str) -> PathBuf {
 /// Image dimensions for a desktop or `file://` path. Returns `None` on error.
 pub fn resolve_image_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
     let path = local_path_to_path_buf(local_path);
-    match image::image_dimensions(&path) {
-        Ok((w, h)) => Some((w, h)),
+    match image::io::Reader::open(&path) {
+        Ok(reader) => match reader.with_guessed_format() {
+            Ok(r) => match r.into_dimensions() {
+                Ok((w, h)) => Some((w as u32, h as u32)),
+                Err(e) => {
+                    eprintln!(
+                        "[media-dimensions] failed to read image dimensions from {}: {}",
+                        path.display(),
+                        e
+                    );
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        avformat_media_dimensions(&path)
+                    }
+                    #[cfg(target_os = "android")]
+                    None
+                }
+            },
+            Err(e) => {
+                eprintln!(
+                    "[media-dimensions] failed to guess image format for {}: {}",
+                    path.display(),
+                    e
+                );
+                None
+            }
+        },
         Err(e) => {
             eprintln!(
-                "[media-dimensions] failed to read image dimensions from {}: {}",
+                "[media-dimensions] failed to open image reader for {}: {}",
                 path.display(),
                 e
             );
             None
         }
+    }
+}
+
+/// Desktop: use libavformat to probe media dimensions from the first video stream's codecpar.
+/// Useful as a fallback for image formats like AVIF that image crate can't decode,
+/// since the mp4/mov demuxer can read width/height from the container without a decoder.
+#[cfg(not(target_os = "android"))]
+fn avformat_media_dimensions(path: &std::path::Path) -> Option<(u32, u32)> {
+    use rsmpeg::avformat::AVFormatContextInput;
+    use std::ffi::CString;
+
+    let path_c = CString::new(path.to_string_lossy().as_ref()).ok()?;
+    let fmt = AVFormatContextInput::open(&path_c).ok()?;
+    let video_idx = first_video_stream_index(&fmt)?;
+    let codecpar = fmt.streams()[video_idx].codecpar();
+    let (width, height) = (codecpar.width, codecpar.height);
+    if width > 0 && height > 0 {
+        Some((width as u32, height as u32))
+    } else {
+        None
     }
 }
 
@@ -52,45 +97,16 @@ fn first_video_stream_index(fmt: &rsmpeg::avformat::AVFormatContextInput) -> Opt
 
 #[cfg(not(target_os = "android"))]
 pub fn resolve_video_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
-    use rsmpeg::avformat::AVFormatContextInput;
-    use std::ffi::CString;
-
     let path = local_path_to_path_buf(local_path);
-    let path_c = match CString::new(path.to_string_lossy().as_ref()) {
-        Ok(c) => c,
-        Err(_) => return None,
-    };
-    let fmt = match AVFormatContextInput::open(&path_c) {
-        Ok(fmt) => fmt,
-        Err(e) => {
-            eprintln!(
-                "[media-dimensions] failed to open video {}: {:?}",
-                path.display(),
-                e
-            );
-            return None;
-        }
-    };
-    let video_idx = match first_video_stream_index(&fmt) {
-        Some(idx) => idx,
+    match avformat_media_dimensions(&path) {
+        Some(dims) => Some(dims),
         None => {
             eprintln!(
-                "[media-dimensions] no video stream found in {}",
+                "[media-dimensions] failed to read video dimensions from {}",
                 path.display()
             );
-            return None;
+            None
         }
-    };
-    let codecpar = fmt.streams()[video_idx].codecpar();
-    let (width, height) = (codecpar.width, codecpar.height);
-    if width > 0 && height > 0 {
-        Some((width as u32, height as u32))
-    } else {
-        eprintln!(
-            "[media-dimensions] no video stream dimensions in {}",
-            path.display()
-        );
-        None
     }
 }
 

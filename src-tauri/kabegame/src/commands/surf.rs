@@ -1,19 +1,19 @@
+use kabegame_core::app_paths::AppPaths;
+use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::crawler::downloader::{
-    compute_unique_download_path, compute_unique_download_path_with_name, get_default_images_dir,
-    next_download_id, postprocess_downloaded_image, ActiveDownloadInfo, DownloadState,
+    ActiveDownloadInfo, DownloadState, get_default_images_dir, next_download_id,
+    postprocess_downloaded_image,
 };
 use kabegame_core::crawler::favicon::fetch_favicon;
-use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::storage::{RangedSurfRecords, Storage, SurfRecord};
 use kabegame_i18n::t;
 use std::collections::HashMap;
-use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::Emitter;
+use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, Webview, WebviewUrl,
     WebviewWindowBuilder,
 };
-use url::Url;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -344,27 +344,13 @@ pub async fn surf_start_session<R: Runtime>(
                         if std::fs::create_dir_all(&images_dir).is_err() {
                             return false;
                         }
-                        let effective_url = if url.scheme() == "blob" {
-                            Url::parse(url.as_str().strip_prefix("blob:").unwrap_or(url.as_str()))
-                                .unwrap()
-                        } else {
-                            url.clone()
-                        };
-
                         let dq = TaskScheduler::global().download_queue();
                         if let Some(entry) = dq.get_native(url.as_str()) {
-                            let native_dest = match compute_unique_download_path_with_name(
-                                &images_dir,
-                                &effective_url,
-                                None,
-                                entry.custom_display_name.as_deref(),
-                            ) {
-                                Ok(p) => p,
-                                Err(_) => {
-                                    return false;
-                                }
-                            };
-                            *destination = native_dest;
+                            let temp_dir = AppPaths::global().downloads_temp_dir();
+                            if std::fs::create_dir_all(&temp_dir).is_err() {
+                                return false;
+                            }
+                            *destination = temp_dir.join(format!("surf-native-{}.part", entry.id));
                             let dq2 = dq.clone();
                             let entry_id = entry.id;
                             tauri::async_runtime::spawn(async move {
@@ -372,21 +358,17 @@ pub async fn surf_start_session<R: Runtime>(
                                     .await;
                             });
                         } else {
-                            let native_dest = match compute_unique_download_path(
-                                &images_dir,
-                                &effective_url,
-                                None,
-                            ) {
-                                Ok(p) => p,
-                                Err(_) => {
-                                    return false;
-                                }
-                            };
                             let download_start_time = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|d| d.as_millis() as u64)
                                 .unwrap_or(0);
                             let download_id = next_download_id();
+                            let temp_dir = AppPaths::global().downloads_temp_dir();
+                            if std::fs::create_dir_all(&temp_dir).is_err() {
+                                return false;
+                            }
+                            let native_dest =
+                                temp_dir.join(format!("surf-native-{}.part", download_id));
                             let entry = ActiveDownloadInfo {
                                 id: download_id,
                                 url: url.as_str().to_string(),
@@ -444,6 +426,7 @@ pub async fn surf_start_session<R: Runtime>(
                             tauri::async_runtime::spawn(async move {
                                 let dq = TaskScheduler::global().download_queue();
                                 let surf_record_id = entry.surf_record_id.clone();
+                                let images_dir = get_default_images_dir();
                                 dq.switch_state(entry.id, DownloadState::Processing, None)
                                     .await;
                                 let result = postprocess_downloaded_image(
@@ -451,9 +434,9 @@ pub async fn surf_start_session<R: Runtime>(
                                     entry.id,
                                     kabegame_core::crawler::downloader::PostprocessSource::Path {
                                         path: &final_path,
-                                        relocate_to: None,
+                                        relocate_to: Some(&images_dir),
                                     },
-                                    false,
+                                    true,
                                     &url,
                                     &entry.plugin_id,
                                     None,
@@ -468,6 +451,9 @@ pub async fn surf_start_session<R: Runtime>(
                                     entry.post_url.as_deref(),
                                 )
                                 .await;
+                                if result.is_err() {
+                                    let _ = tokio::fs::remove_file(&final_path).await;
+                                }
                                 dq.wait_then_finish_download(entry.id, false).await;
                                 match result {
                                     Ok(inserted) => {
@@ -509,6 +495,9 @@ pub async fn surf_start_session<R: Runtime>(
                                 }
                             });
                         } else {
+                            if let Some(path) = path {
+                                let _ = std::fs::remove_file(path);
+                            }
                             tauri::async_runtime::spawn(async move {
                                 dq.switch_state(
                                     entry.id,
