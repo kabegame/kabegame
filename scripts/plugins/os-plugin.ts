@@ -73,6 +73,46 @@ const WINDOWS_FFMPEG_DLLS_EXPECTED = [
 // 经 ROOT 拼出,避免与 build-system.ts 形成循环导入(后者反过来 import OSPlugin)
 const FFMPEG_INSTALL_DIR = path.join(ROOT, "third", "FFmpeg-build", "install");
 
+// gen/CEFExample.app 与其内嵌 Helper.app 共用的最小 Info.plist 模板。
+// uiElement=true 时加 LSUIElement,子进程 helper 不在 Dock 显示图标。
+function macAppInfoPlist(opts: {
+  executable: string;
+  identifier: string;
+  name: string;
+  uiElement: boolean;
+  /** Resources 根下的 .icns 文件名(CFBundleIconFile)。缺失时 Dock 显示系统默认图标,
+   * 且 Chromium 下载进度的 NSDockTile 重绘(imageNamed:NSApplicationIcon 取自 bundle
+   * 图标而非运行期 applicationIconImage)会把 Dock 图标打回空白。 */
+  icon?: string;
+}): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>${opts.executable}</string>
+    <key>CFBundleIdentifier</key>
+    <string>${opts.identifier}</string>
+    <key>CFBundleName</key>
+    <string>${opts.name}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>LSEnvironment</key>
+    <dict>
+        <key>MallocNanoZone</key>
+        <string>0</string>
+    </dict>
+    <key>NSHighResolutionCapable</key>
+    <true/>${opts.icon ? `\n    <key>CFBundleIconFile</key>\n    <string>${opts.icon}</string>` : ""}${opts.uiElement ? "\n    <key>LSUIElement</key>\n    <string>1</string>" : ""}
+</dict>
+</plist>
+`;
+}
+
 export class OSPlugin extends BasePlugin {
   constructor() {
     super("OSPlugin");
@@ -150,44 +190,49 @@ export class OSPlugin extends BasePlugin {
       if (!component.isMain) return;
       if (bs.context.mode?.isWeb || bs.context.mode?.isAndroid) return;
       this.bundleLibs(bs);
+      if (OSPlugin.isMacOS) {
+        this.stageMacOSCefHelpers(bs);
+      }
     });
 
-    // 构建产物后处理:macOS 修 dylib install_name;Linux 修 Tauri CLI 误注入的 deb WebKit 依赖。
+    bs.hooks.beforeRun.tap(this.name, (comp?: string) => {
+      const component = comp ? new Component(comp) : bs.context.component!;
+      if (component.isMain && OSPlugin.isMacOS) {
+        if (bs.context.mode?.isWeb || bs.context.mode?.isAndroid) return;
+        this.assembleMacOSKabegameDevApp();
+        return;
+      }
+      if (component.isCEFExample && !OSPlugin.isMacOS) {
+        const helper = path.join(
+          ROOT,
+          "target",
+          bs.options.release ? "release" : "debug",
+          OSPlugin.isWindows ? "cef-helper.exe" : "cef-helper",
+        );
+        if (!fs.existsSync(helper)) {
+          throw new Error(
+            `❌ 缺少 cef-helper 可执行文件: ${path.relative(ROOT, helper)}\n` +
+              `请先运行: bun b -c cef-helper${bs.options.release ? " --release" : ""}`,
+          );
+        }
+      }
+    });
+
+    // 构建产物后处理:Linux 修 Tauri CLI 误注入的 deb WebKit 依赖。
     bs.hooks.afterBuild.tapPromise(this.name, async (comp: string) => {
+      if (comp === Component.CEF_EXAMPLE) {
+        if (bs.context.skip?.isCargo) return;
+        // macOS 浏览器进程必须在 app bundle 内运行,Linux/Windows 直接
+        // cargo run/build 即可,不需要额外产物。
+        if (OSPlugin.isMacOS) this.buildCEFExampleApp(bs);
+        return;
+      }
       if (comp !== Component.MAIN) return;
       if (bs.context.skip?.isCargo) return;
       if (bs.context.mode?.isWeb || bs.context.mode?.isAndroid) return;
-      if (OSPlugin.isLinux) {
-        this.stripWebkitFromDebs();
-        return;
-      }
-      if (!OSPlugin.isMacOS) return;
-      const appPath = path.join(
-        ROOT,
-        "target",
-        "release",
-        "bundle",
-        "macos",
-        "Kabegame.app",
-      );
-      if (fs.existsSync(appPath)) {
-        this.fixupMacOSAppBundle(appPath);
-      } else {
-        this.log(
-          chalk.yellow(
-            `跳过 fixup:.app 不存在(${path.relative(ROOT, appPath)})`,
-          ),
-        );
-      }
-      // dmg 中的 .app 也需要 fixup,convert→attach RW→fixup→detach→convert UDZO
-      const dmgDir = path.join(ROOT, "target", "release", "bundle", "dmg");
-      if (fs.existsSync(dmgDir)) {
-        const dmgs = fs
-          .readdirSync(dmgDir)
-          .filter((f) => f.endsWith(".dmg"))
-          .map((f) => path.join(dmgDir, f));
-        for (const dmg of dmgs) this.fixupMacOSDmg(dmg);
-      }
+      if (!bs.context.cmd?.isBuild) return;
+      if (!OSPlugin.isLinux) return;
+      this.stripWebkitFromDebs();
     });
   }
 
@@ -332,7 +377,8 @@ export class OSPlugin extends BasePlugin {
     this.appendExtraLibs(dst);
   }
 
-  // ===== CEF runtime(Linux/Windows standard/light)=====
+  // ===== CEF runtime(Linux/Windows/MacOS !isWeb)=====
+  // 这里的收集和验证只在 Linux和Windows运行，因为MacOS通过tauri framworks 来打包
   // CEF 目录解析与 mode-plugin 一致:优先 CEF_PATH(prepareEnv 已设),
   // 回退 Linux ~/i/cef-prod、Windows H:\cef-prod。
   private cefDir(): string {
@@ -455,74 +501,13 @@ export class OSPlugin extends BasePlugin {
     );
   }
 
-  // ===== macOS:brew + macFUSE 收集到 bin/macos/ =====
+  // ===== macOS:仅保留 KABEGAME_BUNDLE_LIBS_EXTRA 逃生口(x264 已静态嵌入 FFmpeg,libfuse 弱链接懒加载) =====
   private collectMacOSDylibs(): void {
     const dst = OSPlugin.binDir;
     if (OSPlugin.isGeneratedPlatformDir()) {
       fs.rmSync(dst, { recursive: true, force: true });
     }
     ensureDir(dst);
-
-    // 1) libx264:brew --prefix x264
-    let x264Prefix = "";
-    try {
-      x264Prefix = execSync(`brew --prefix x264`, { encoding: "utf8" }).trim();
-    } catch {
-      throw new Error(
-        [
-          `❌ 未找到 brew x264 安装(brew --prefix x264 失败)`,
-          `请运行: brew install x264`,
-        ].join("\n"),
-      );
-    }
-    const x264LibDir = path.join(x264Prefix, "lib");
-    const x264Dylibs = fs
-      .readdirSync(x264LibDir)
-      .filter((f) => /^libx264\.\d+\.dylib$/.test(f));
-    if (x264Dylibs.length === 0) {
-      throw new Error(
-        `❌ 未在 ${x264LibDir} 找到 libx264.*.dylib;请重装 brew install x264`,
-      );
-    }
-    for (const f of x264Dylibs) {
-      const src = fs.realpathSync(path.join(x264LibDir, f));
-      fs.copyFileSync(src, path.join(dst, f));
-      this.log(chalk.cyan(`已收集 macOS dylib → bin/macos/${f}(来源: ${src})`));
-    }
-
-    // 2) libfuse:macFUSE 安装包,按已知路径回退;支持 env MACFUSE_LIB_DIR
-    const fuseDirCandidates = [
-      process.env.MACFUSE_LIB_DIR,
-      "/Library/Frameworks/macFUSE.framework/Versions/A/Frameworks",
-      "/Library/Frameworks/macFUSE.framework/Versions/A",
-      "/usr/local/lib",
-    ].filter(Boolean) as string[];
-    let fuseFound = false;
-    for (const dir of fuseDirCandidates) {
-      if (!fs.existsSync(dir)) continue;
-      const dylibs = fs
-        .readdirSync(dir)
-        .filter((f) => /^lib(fuse|osxfuse)(\.\d+)?\.dylib$/.test(f));
-      if (dylibs.length === 0) continue;
-      for (const f of dylibs) {
-        const src = fs.realpathSync(path.join(dir, f));
-        fs.copyFileSync(src, path.join(dst, f));
-        this.log(
-          chalk.cyan(`已收集 macFUSE dylib → bin/macos/${f}(来源: ${src})`),
-        );
-        fuseFound = true;
-      }
-      break;
-    }
-    if (!fuseFound) {
-      throw new Error(
-        [
-          `❌ 未找到 macFUSE libfuse.dylib`,
-          `请安装 macFUSE(https://osxfuse.github.io/)或设 MACFUSE_LIB_DIR 指向 libfuse.dylib 所在目录`,
-        ].join("\n"),
-      );
-    }
-
     this.appendExtraLibs(dst);
   }
 
@@ -601,160 +586,199 @@ export class OSPlugin extends BasePlugin {
   }
 
   /**
-   * macOS fixup:
-   *   1. 每个 Frameworks/*.dylib 的 install_name 改为 @executable_path/../Frameworks/<name>
-   *      (这只是 dylib 自身的 ID,主要对挂接 dylib 后续 dlopen 有意义;每个二进制再单独 -change 自己的依赖记录)。
- *   2. 扫 .app 内所有 Mach-O 二进制(目前包括 Contents/MacOS/Kabegame):
- *      - 计算二进制相对 Frameworks/ 的相对路径(GUI 在 MacOS/ 下是 ../Frameworks)。
-   *      - 对每个被记录为依赖的 brew 绝对路径,install_name_tool -change 到 @executable_path/<relpath>/<name>。
-   *   3. 改完二进制 + dylib 后 codesign --force --sign - 重签(改写 Mach-O 后签名失效)。
+   * macOS:在 `<ROOT>/gen/CEFExample.app` 下生成最小 app bundle,包裹
+   * cef-example 主进程 + 独立 helper.app + CEF 框架(符号链接到 CEF_PATH,
+   * 不拷贝 —— dev 阶段够用;发布打包时框架改为拷贝,见 tauri-runtime-cef README)。
+   * macOS 浏览器进程必须运行于 app bundle 内(读取主 bundle Info.plist),
+   * 裸 exe 直跑不成立,故 `bun start -c cef-example` 依赖这里的产物。
    */
-  private fixupMacOSAppBundle(appPath: string): void {
+  private buildCEFExampleApp(bs: BuildSystem): void {
     if (!OSPlugin.isMacOS) return;
-    const frameworksDir = path.join(appPath, "Contents", "Frameworks");
-    if (!fs.existsSync(frameworksDir)) {
-      this.log(chalk.yellow(`fixup:无 Frameworks 目录,跳过(${path.relative(ROOT, appPath)})`));
-      return;
+    const profile = bs.options.release ? "release" : "debug";
+    const mainExe = path.join(ROOT, "target", profile, "cef-example");
+    const helperExe = path.join(ROOT, "target", profile, "cef-helper");
+    if (!fs.existsSync(mainExe)) {
+      throw new Error(`❌ 未找到 cef-example 可执行文件: ${path.relative(ROOT, mainExe)}`);
     }
-    const dylibs = fs
-      .readdirSync(frameworksDir)
-      .filter((f) => f.endsWith(".dylib"));
-    if (dylibs.length === 0) {
-      this.log(chalk.yellow(`fixup:Frameworks 为空,跳过`));
-      return;
-    }
-
-    // 步骤 1:每个 dylib 改 install_name(自身 ID)+ 记录原 ID
-    const dylibOrigIds = new Map<string, string>(); // dylib filename → original install_name
-    for (const dylib of dylibs) {
-      const dylibPath = path.join(frameworksDir, dylib);
-      const otoolOut = execSync(`otool -D "${dylibPath}"`, { encoding: "utf8" }).trim();
-      const origId = otoolOut.split(/\n/).slice(1).join("\n").trim();
-      dylibOrigIds.set(dylib, origId);
-      const newId = `@executable_path/../Frameworks/${dylib}`;
-      execSync(`install_name_tool -id "${newId}" "${dylibPath}"`);
-      this.log(chalk.cyan(`fixup dylib id: ${dylib}(${origId || "(empty)"} → ${newId})`));
-    }
-
-    // 步骤 2:扫 .app 内所有 Mach-O 可执行(目前只有 MacOS/ 与 Resources/bin/)
-    const candidateDirs = [
-      path.join(appPath, "Contents", "MacOS"),
-      path.join(appPath, "Contents", "Resources", "bin"),
-    ].filter((d) => fs.existsSync(d));
-    const binaries: string[] = [];
-    for (const dir of candidateDirs) {
-      for (const name of fs.readdirSync(dir)) {
-        const p = path.join(dir, name);
-        try {
-          const st = fs.statSync(p);
-          if (!st.isFile()) continue;
-          // 粗筛:Mach-O magic 头部 0xCFFAEDFE / 0xCEFAEDFE / 0xCAFEBABE
-          const head = fs.readFileSync(p).subarray(0, 4);
-          const magic = head.readUInt32BE(0);
-          if (
-            magic === 0xfeedface ||
-            magic === 0xfeedfacf ||
-            magic === 0xcefaedfe ||
-            magic === 0xcffaedfe ||
-            magic === 0xcafebabe
-          ) {
-            binaries.push(p);
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
-    if (binaries.length === 0) {
-      this.log(chalk.yellow(`fixup:未发现 Mach-O 可执行文件`));
-      return;
-    }
-
-    // 步骤 3:为每个二进制改 install_name 引用记录
-    for (const binary of binaries) {
-      const relFromBinToFrameworks = path.relative(
-        path.dirname(binary),
-        frameworksDir,
+    if (!fs.existsSync(helperExe)) {
+      throw new Error(
+        [
+          `❌ 缺少 cef-helper 可执行文件: ${path.relative(ROOT, helperExe)}`,
+          `请先运行: bun b -c cef-helper${bs.options.release ? " --release" : ""}`,
+        ].join("\n"),
       );
-      // 例:MacOS/Kabegame → ../Frameworks
-      for (const dylib of dylibs) {
-        const origId = dylibOrigIds.get(dylib) ?? "";
-        const newDep = `@executable_path/${relFromBinToFrameworks}/${dylib}`;
-        if (!origId || origId === newDep) continue;
-        try {
-          execSync(`install_name_tool -change "${origId}" "${newDep}" "${binary}"`);
-          this.log(
-            chalk.cyan(
-              `fixup ${path.relative(appPath, binary)}: ${dylib} → ${newDep}`,
-            ),
-          );
-        } catch {
-          // 该二进制并未引用此 dylib;忽略
-        }
-      }
     }
+    const frameworkSrc = this.macOSCefFrameworkPath();
 
-    // 步骤 4:重签所有改过的 Mach-O
-    for (const dylib of dylibs) {
-      const dylibPath = path.join(frameworksDir, dylib);
-      execSync(`codesign --force --sign - "${dylibPath}"`);
+    const appDir = path.join(ROOT, "gen", "CEFExample.app");
+    fs.rmSync(appDir, { recursive: true, force: true });
+    const contentsDir = path.join(appDir, "Contents");
+    const macosDir = path.join(contentsDir, "MacOS");
+    ensureDir(macosDir);
+
+    fs.copyFileSync(mainExe, path.join(macosDir, "cef-example"));
+    fs.chmodSync(path.join(macosDir, "cef-example"), 0o755);
+    this.assembleMacOSCefIntoApp(contentsDir, {
+      helperExe,
+      helperBaseName: "CEFExample Helper",
+      frameworkSrc,
+      copyFramework: false,
+    });
+
+    fs.writeFileSync(
+      path.join(contentsDir, "Info.plist"),
+      macAppInfoPlist({
+        executable: "cef-example",
+        identifier: "app.kabegame.cef-example",
+        name: "CEFExample",
+        uiElement: false,
+      }),
+    );
+
+    this.log(chalk.green(`已生成 ${path.relative(ROOT, appDir)}(含 5 个 helper 变体)`));
+  }
+
+  private macOSCefFrameworkPath(): string {
+    const cefPath = process.env.CEF_PATH;
+    if (!cefPath) {
+      throw new Error("❌ CEF_PATH 未设置,无法定位 CEF 框架(应由 mode-plugin 的 prepareEnv 设置)");
     }
-    for (const binary of binaries) {
-      try {
-        execSync(`codesign --force --sign - "${binary}"`);
-        this.log(chalk.cyan(`已重签 ${path.relative(appPath, binary)}`));
-      } catch (e) {
-        this.log(chalk.yellow(`重签失败 ${binary}: ${(e as Error).message}`));
-      }
+    const framework = path.join(cefPath, "Chromium Embedded Framework.framework");
+    if (!fs.existsSync(framework)) throw new Error(`❌ 未找到 CEF 框架: ${framework}`);
+    return framework;
+  }
+
+  private ensureMacOSCefHelper(profile: "debug" | "release"): string {
+    const helper = path.join(ROOT, "target", profile, "cef-helper");
+    if (!fs.existsSync(helper)) {
+      throw new Error(
+        [
+          `❌ 缺少 cef-helper 可执行文件: ${path.relative(ROOT, helper)}`,
+          `请先运行: bun b -c cef-helper${profile === "release" ? " --release" : ""}`,
+        ].join("\n"),
+      );
+    }
+    this.log(
+      chalk.cyan(
+        `macOS bundle 使用 CEF helper (${profile}): ${path.relative(ROOT, helper)}`,
+      ),
+    );
+    return helper;
+  }
+
+  private assembleMacOSKabegameDevApp(): void {
+    const mainExe = path.join(ROOT, "target", "debug", "kabegame");
+    if (!fs.existsSync(mainExe)) {
+      throw new Error(`❌ 未找到 kabegame 可执行文件: ${path.relative(ROOT, mainExe)}`);
+    }
+    const appDir = path.join(ROOT, "gen", "Kabegame.app");
+    fs.rmSync(appDir, { recursive: true, force: true });
+    const contentsDir = path.join(appDir, "Contents");
+    const macosDir = path.join(contentsDir, "MacOS");
+    ensureDir(macosDir);
+    const bundledExe = path.join(macosDir, "kabegame");
+    fs.copyFileSync(mainExe, bundledExe);
+    fs.chmodSync(bundledExe, 0o755);
+
+    // Resources 不能整体符号链接到 crate 目录:CFBundleIconFile 要求 icns 位于
+    // Resources 根,而通过整体链接写入会污染 src-tauri/kabegame。改为真实目录 +
+    // 逐项符号链接(resource_dir 解析语义等价),再把 icon.icns 拷到根。
+    const kabegameDir = path.join(ROOT, "src-tauri", "kabegame");
+    const resourcesDir = path.join(contentsDir, "Resources");
+    ensureDir(resourcesDir);
+    for (const entry of fs.readdirSync(kabegameDir)) {
+      fs.symlinkSync(path.join(kabegameDir, entry), path.join(resourcesDir, entry));
+    }
+    fs.copyFileSync(
+      path.join(kabegameDir, "icons", "icon.icns"),
+      path.join(resourcesDir, "icon.icns"),
+    );
+    this.assembleMacOSCefIntoApp(contentsDir, {
+      helperExe: this.ensureMacOSCefHelper("debug"),
+      helperBaseName: "Kabegame Helper",
+      frameworkSrc: this.macOSCefFrameworkPath(),
+      copyFramework: false,
+    });
+    fs.writeFileSync(
+      path.join(contentsDir, "Info.plist"),
+      macAppInfoPlist({
+        executable: "kabegame",
+        identifier: "Kabegame",
+        name: "Kabegame",
+        uiElement: false,
+        icon: "icon.icns",
+      }),
+    );
+    this.log(chalk.green(`已生成 ${path.relative(ROOT, appDir)}(macOS CEF dev bundle)`));
+  }
+
+  private createHelperAppVariants(
+    targetDir: string,
+    helperExe: string,
+    helperBaseName: string,
+  ): void {
+    const helperVariants = ["", " (GPU)", " (Renderer)", " (Plugin)", " (Alerts)"];
+    const identifierBase = helperBaseName.toLowerCase().replace(/[^a-z0-9]+/g, ".");
+    for (const variant of helperVariants) {
+      const helperName = `${helperBaseName}${variant}`;
+      const helperApp = path.join(targetDir, `${helperName}.app`);
+      fs.rmSync(helperApp, { recursive: true, force: true });
+      const helperMacosDir = path.join(helperApp, "Contents", "MacOS");
+      ensureDir(helperMacosDir);
+      const helperDest = path.join(helperMacosDir, helperName);
+      fs.copyFileSync(helperExe, helperDest);
+      fs.chmodSync(helperDest, 0o755);
+      const suffix = variant.trim().replace(/[() ]/g, "").toLowerCase();
+      fs.writeFileSync(
+        path.join(helperApp, "Contents", "Info.plist"),
+        macAppInfoPlist({
+          executable: helperName,
+          identifier: `app.kabegame.${identifierBase}.helper${suffix ? `.${suffix}` : ""}`,
+          name: helperName,
+          uiElement: true,
+        }),
+      );
     }
   }
 
-  /**
-   * macOS:把已生成的 .dmg 转为 read-write,挂载,fixup 内部 .app,再转回 UDZO 压缩格式覆盖原 dmg。
-   * 这是绕过 Tauri "app→dmg 不可中断" 的最直接方法,保留 background.jpg 等所有 dmg 特性。
-   */
-  private fixupMacOSDmg(dmg: string): void {
+  private stageMacOSCefHelpers(bs: BuildSystem): void {
     if (!OSPlugin.isMacOS) return;
-    const tmpRw = `${dmg}.rw.dmg`;
-    const mountPoint = path.join(
-      "/Volumes",
-      `kabegame-fixup-${Date.now()}`,
+    const profile = bs.options.release ? "release" : "debug";
+    const helperExe = this.ensureMacOSCefHelper(profile);
+    const stagingDir = path.join(ROOT, "target", "cef-helpers-stage");
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+    ensureDir(stagingDir);
+    this.createHelperAppVariants(stagingDir, helperExe, "Kabegame Helper");
+    this.log(
+      chalk.green(
+        `已暂存 CEF helper 变体到 ${path.relative(ROOT, stagingDir)}`,
+      ),
     );
-    try {
-      execSync(
-        `hdiutil convert "${dmg}" -format UDRW -ov -o "${tmpRw}"`,
-        { stdio: "pipe" },
-      );
-      execSync(
-        `hdiutil attach "${tmpRw}" -mountpoint "${mountPoint}" -nobrowse -noverify -noautoopen`,
-        { stdio: "pipe" },
-      );
-      // 在 mountPoint 下找 Kabegame.app(理论上只有一个)
-      const apps = fs
-        .readdirSync(mountPoint)
-        .filter((f) => f.endsWith(".app"))
-        .map((f) => path.join(mountPoint, f));
-      for (const app of apps) {
-        this.fixupMacOSAppBundle(app);
-      }
-      execSync(`hdiutil detach "${mountPoint}"`, { stdio: "pipe" });
-      execSync(
-        `hdiutil convert "${tmpRw}" -format UDZO -imagekey zlib-level=9 -ov -o "${dmg}"`,
-        { stdio: "pipe" },
-      );
-      this.log(chalk.cyan(`已 fixup dmg: ${path.relative(ROOT, dmg)}`));
-    } finally {
-      // 兜底清理
-      try {
-        execSync(`hdiutil detach "${mountPoint}" -force`, { stdio: "ignore" });
-      } catch {
-        // ignore
-      }
-      try {
-        if (fs.existsSync(tmpRw)) fs.rmSync(tmpRw);
-      } catch {
-        // ignore
-      }
+  }
+
+  private assembleMacOSCefIntoApp(
+    contentsDir: string,
+    opts: {
+      helperExe: string;
+      helperBaseName: string;
+      frameworkSrc: string;
+      copyFramework: boolean;
+    },
+  ): void {
+    const frameworksDir = path.join(contentsDir, "Frameworks");
+    ensureDir(frameworksDir);
+
+    this.createHelperAppVariants(frameworksDir, opts.helperExe, opts.helperBaseName);
+
+    const frameworkDest = path.join(
+      frameworksDir,
+      "Chromium Embedded Framework.framework",
+    );
+    fs.rmSync(frameworkDest, { recursive: true, force: true });
+    if (opts.copyFramework) {
+      execFileSync("cp", ["-a", opts.frameworkSrc, frameworkDest]);
+    } else {
+      fs.symlinkSync(opts.frameworkSrc, frameworkDest);
     }
   }
 

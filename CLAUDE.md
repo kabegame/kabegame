@@ -34,6 +34,8 @@ bun dev -c kabegame --data prod      # Dev against system data dirs (not repo-lo
 bun dev:frontend            # Frontend only (no Tauri, port 1420)
 ```
 
+macOS 的 `bun dev -c kabegame` 会显式 cargo build，生成 `gen/Kabegame.app`（CEF framework 使用 `cef-dev` 符号链接），自行启动 Vite 后运行 app 内可执行文件。前端 HMR 保留，但 Rust 文件修改不会自动重启，需重新执行命令。
+
 ### Build
 ```bash
 bun b                            # Build everything (kabegame + kabegame-cli)
@@ -43,6 +45,20 @@ bun b -c kabegame --skip vue         # Cargo build only
 bun b --release                  # Copy artifacts to release/
 bun b -c kabegame --mode android     # Build Android APK/AAB
 ```
+
+`bun b` on cargo-only components (`kabegame-cli`, `cef-example`, `cef-helper`) builds **debug** by default; pass `--release` for a release build. The main app's desktop/android build always goes through `tauri build`, which is release regardless of `--release`.
+
+### CEF example (`cef-example` / `cef-helper`)
+
+Standalone crates (not part of `bun b`'s default "everything") for validating the CEF windowed backend outside of Tauri, on Linux/Windows/macOS:
+
+```bash
+bun b -c cef-helper               # subprocess entry — build first, cef-example only checks it exists
+bun b -c cef-example              # Linux/Windows: cargo build; macOS: also generates gen/CEFExample.app
+bun start -c cef-example          # Linux/Windows: cargo run; macOS: runs gen/CEFExample.app (build first)
+```
+
+macOS requires the app bundle (`gen/CEFExample.app`, produced by `bun b -c cef-example`) — a bare `cargo run -p cef-example` will not work there. See `src-tauri/tauri-runtime-cef/README.md`.
 
 ### Type Checking
 ```bash
@@ -66,7 +82,7 @@ bun run build:ffmpeg             # Build x264 (third/x264) + FFmpeg libav* libs 
 ```
 
 ### Verification workflow
-**Do not run `cargo build` or full builds to verify changes.** Rely on lint diagnostics (`vue-tsc`, `cargo check`) instead. Only run build commands when the user explicitly requests a build.
+**Do not run `cargo build` or full builds to verify changes.** Rely on lint diagnostics (`bun check`) instead. Only run build commands when the user explicitly requests a build.
 
 ### Plan & change-description format
 When writing a plan or describing code changes, organize by explicit **points** (明确的点). Under each point, group items under **新增 / 修改 / 删除** (Add / Modify / Delete), each with an optional indented note. Keep 现状 separate from the change:
@@ -132,6 +148,7 @@ New styles should use **UnoCSS utility classes** (configured in `uno.config.pub.
 
 ### Platform-Specific Notes
 - **Windows/macOS/Linux**: Virtual disk (Dokan / macFUSE / FUSE) for wallpaper mounting
+- **Windows/macOS/Linux standard**: Uses the CEF runtime backend. macOS browser processes must run inside `gen/Kabegame.app` in dev; release bundles embed the framework and independent helper apps.
 - **Android**: Simplified UI; picker/share/compress plugins; `useModalBack` is required
 - **iOS**: Not supported — do not add iOS adaptations
 

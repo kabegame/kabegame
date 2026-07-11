@@ -1,6 +1,6 @@
 //! # tauri-runtime-cef
 //!
-//! 一个面向 **Linux 桌面端** 的 Tauri CEF(Chromium Embedded Framework)
+//! 一个面向 **桌面端** 的 Tauri CEF(Chromium Embedded Framework)
 //! webview 后端。
 //!
 //! ## Why this exists
@@ -10,11 +10,10 @@
 //! native heap corruption (`free(): invalid pointer`) on ordinary UI
 //! interactions, and gallery scrolling is not smooth. These bugs live inside
 //! WebKitGTK's C++ and cannot be debugged or fixed from the Rust/JS layer, so we
-//! replace the rendering engine *on Linux only* with Chromium via CEF.
+//! use Chromium via CEF as the desktop rendering engine.
 //!
-//! Windows already runs Chromium (WebView2) and macOS WKWebView is fine, so this
-//! crate is deliberately Linux-only — see the platform gating in
-//! `src-tauri/kabegame/Cargo.toml` and the kabegame entry point.
+//! See the platform gating in `src-tauri/kabegame/Cargo.toml` and the kabegame
+//! entry point.
 //!
 //! ## What this crate is
 //!
@@ -36,13 +35,15 @@
 //!
 //! ## 当前状态
 //!
-//! 本 crate 直接实现 `tauri-runtime` 的核心 trait。Linux 上 CEF Views 创建
-//! 并管理原生窗口及 GPU 组合；`kabegame` 只在 Linux standard/light 构建中依赖它。
+//! 本 crate 直接实现 `tauri-runtime` 的核心 trait。Windows/macOS/Linux 上
+//! CEF Views 创建并管理原生窗口及 GPU 组合；`kabegame` 的桌面 standard 构建依赖它。
 
 #![allow(dead_code)]
 
 use tauri_runtime::UserEvent;
 
+#[cfg(target_os = "macos")]
+mod app_mac;
 mod runtime;
 mod webview;
 mod window;
@@ -61,7 +62,7 @@ pub fn start_download(webview_label: &str, url: &str) -> Result<(), String> {
 
 /// CEF 驱动的 Tauri runtime。
 ///
-/// Linux 下应用通过 `tauri::Builder::<Cef<EventLoopMessage>>::new()` 选择这个
+/// 桌面应用通过 `tauri::Builder::<Cef<EventLoopMessage>>::new()` 选择这个
 /// runtime,替代 Tauri 默认的 `Wry`。窗口和 webview 均由 CEF Views 管理。
 #[derive(Debug)]
 pub struct Cef<T: UserEvent> {

@@ -118,23 +118,6 @@
       "name": "@kabegame/image-type",
       "version": "1.0.0",
     },
-    "packages/kabegame-plugin-sdk": {
-      "name": "@kabegame/plugin-sdk",
-      "version": "0.1.0",
-      "dependencies": {
-        "@kabegame/types": "file:../kabegame-types",
-      },
-      "devDependencies": {
-        "typescript": "^5.4.5",
-      },
-    },
-    "packages/kabegame-types": {
-      "name": "@kabegame/types",
-      "version": "0.1.0",
-      "devDependencies": {
-        "typescript": "^5.4.5",
-      },
-    },
     "packages/photoswipe-vue": {
       "name": "photoswipe-vue",
       "version": "0.1.5",
@@ -390,10 +373,6 @@
     "@kabegame/i18n": ["@kabegame/i18n@workspace:packages/kabegame-i18n"],
 
     "@kabegame/image-type": ["@kabegame/image-type@workspace:packages/kabegame-image-type"],
-
-    "@kabegame/plugin-sdk": ["@kabegame/plugin-sdk@workspace:packages/kabegame-plugin-sdk"],
-
-    "@kabegame/types": ["@kabegame/types@workspace:packages/kabegame-types"],
 
     "@mdx-js/mdx": ["@mdx-js/mdx@3.1.1", "", { "dependencies": { "@types/estree": "^1.0.0", "@types/estree-jsx": "^1.0.0", "@types/hast": "^3.0.0", "@types/mdx": "^2.0.0", "acorn": "^8.0.0", "collapse-white-space": "^2.0.0", "devlop": "^1.0.0", "estree-util-is-identifier-name": "^3.0.0", "estree-util-scope": "^1.0.0", "estree-walker": "^3.0.0", "hast-util-to-jsx-runtime": "^2.0.0", "markdown-extensions": "^2.0.0", "recma-build-jsx": "^1.0.0", "recma-jsx": "^1.0.0", "recma-stringify": "^1.0.0", "rehype-recma": "^1.0.0", "remark-mdx": "^3.0.0", "remark-parse": "^11.0.0", "remark-rehype": "^11.0.0", "source-map": "^0.7.0", "unified": "^11.0.0", "unist-util-position-from-estree": "^2.0.0", "unist-util-stringify-position": "^4.0.0", "unist-util-visit": "^5.0.0", "vfile": "^6.0.0" } }, "sha512-f6ZO2ifpwAQIpzGWaBQT2TXxPv6z3RBzQKpVftEWN78Vl/YweF1uwussDx8ECAXVtr3Rs89fKyG9YlzUs9DyGQ=="],
 
@@ -2176,8 +2155,6 @@
     "@kabegame/core/@vueuse/core": ["@vueuse/core@14.2.1", "", { "dependencies": { "@types/web-bluetooth": "^0.0.21", "@vueuse/metadata": "14.2.1", "@vueuse/shared": "14.2.1" }, "peerDependencies": { "vue": "^3.5.0" } }, "sha512-3vwDzV+GDUNpdegRY6kzpLm4Igptq+GA0QkJ3W61Iv27YWwW/ufSlOfgQIpN6FZRMG0mkaz4gglJRtq5SeJyIQ=="],
 
     "@kabegame/frontend/@vueuse/core": ["@vueuse/core@14.2.1", "", { "dependencies": { "@types/web-bluetooth": "^0.0.21", "@vueuse/metadata": "14.2.1", "@vueuse/shared": "14.2.1" }, "peerDependencies": { "vue": "^3.5.0" } }, "sha512-3vwDzV+GDUNpdegRY6kzpLm4Igptq+GA0QkJ3W61Iv27YWwW/ufSlOfgQIpN6FZRMG0mkaz4gglJRtq5SeJyIQ=="],
-
-    "@kabegame/plugin-sdk/@kabegame/types": ["@kabegame/types@file:packages/kabegame-types", { "devDependencies": { "typescript": "^5.4.5" } }],
 
     "@mdx-js/mdx/source-map": ["source-map@0.7.6", "", {}, "sha512-i5uvt8C3ikiWeNZSVZNWcfZPItFQOsYTUAOkcUPGd8DqDy1uOUikjt5dG+uRlwyvR108Fb9DOd4GvXfT0N2/uQ=="],
 

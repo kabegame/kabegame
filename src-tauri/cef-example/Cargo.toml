@@ -1,0 +1,35 @@
+[package]
+name = "cef-example"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Minimal CEF-owned top-level window experiment (browser/main process). Subprocess entry lives in the separate cef-helper crate."
+
+[[bin]]
+name = "cef-example"
+path = "src/main.rs"
+
+[build-dependencies]
+
+[dependencies]
+cef = { version = "149", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "0.18", features = ["v3_24"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# CefAppProtocol NSApplication 子类(见 main.rs app_mac 模块):CEF 浏览器进程在
+# macOS 上要求 NSApp 实现 CrAppProtocol,否则窗口 chrome/事件循环/导航全部异常。
+objc2 = { version = "0.6", default-features = false }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSApplication",
+  "NSResponder",
+  "NSEvent",
+] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+] }

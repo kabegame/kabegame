@@ -50,17 +50,20 @@ use commands::*;
 /// 的结构体)。命令/函数仍优先用 `<R: Runtime>` 泛型;只有像 `WallpaperRotator`
 /// 这种存进全局 `OnceLock` 的才用本别名。
 ///
-/// Linux + standard/light → CEF;其余桌面/移动 → Wry。两条 run 路径分别用
+/// 桌面 standard/light → CEF;Android → Wry。两条 run 路径分别用
 /// `Builder::<Cef<EventLoopMessage>>` / `Builder::default()`,与此别名一致。
 #[cfg(all(
     not(feature = "web"),
-    any(target_os = "linux", windows),
+    any(target_os = "linux", target_os = "windows", target_os = "macos"),
     feature = "standard"
 ))]
 pub(crate) type AppRuntime = tauri_runtime_cef::Cef<tauri::EventLoopMessage>;
 #[cfg(all(
     not(feature = "web"),
-    not(all(any(target_os = "linux", windows), feature = "standard"))
+    not(all(
+        any(target_os = "linux", target_os = "windows", target_os = "macos"),
+        feature = "standard"
+    ))
 ))]
 pub(crate) type AppRuntime = tauri::Wry;
 #[cfg(not(feature = "web"))]
@@ -318,7 +321,7 @@ pub fn run() {
 
 #[cfg(all(
     not(feature = "web"),
-    any(target_os = "linux", windows),
+    any(target_os = "linux", target_os = "windows", target_os = "macos"),
     feature = "standard"
 ))]
 pub fn run() {
@@ -331,7 +334,40 @@ pub fn run() {
         .build(ctx)
         .expect("error while building tauri CEF application");
 
-    app.run(|_app_handle, _event| {});
+    app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
+        handle_macos_run_event(app_handle, event);
+    });
+}
+
+#[cfg(all(not(feature = "web"), target_os = "macos"))]
+fn handle_macos_run_event(app_handle: &tauri::AppHandle<AppRuntime>, event: tauri::RunEvent) {
+    match event {
+        tauri::RunEvent::Reopen { .. } => {
+            if let Err(e) = startup::ensure_main_window(app_handle.clone()) {
+                eprintln!("[macOS] Dock 点击显示主窗口失败: {e}");
+            }
+        }
+        tauri::RunEvent::Opened { urls } => {
+            for url in urls {
+                if let Ok(path) = url.to_file_path() {
+                    use std::ffi::OsStr;
+
+                    if path.extension() == Some(OsStr::new("kgpg")) {
+                        let _ = app_handle.emit(
+                            "app-import-plugin",
+                            serde_json::json!({ "kgpgPath": path.to_string_lossy() }),
+                        );
+                    } else {
+                        eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法将路径转换为字符串: {:?}", path);
+                    }
+                } else {
+                    eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法从 URL 提取文件路径: {url}");
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// 把全套插件 / setup / invoke_handler 装进 builder。Wry 与 CEF(Linux)两条 run
@@ -687,7 +723,10 @@ pub(crate) fn configure_app(
 
 #[cfg(all(
     not(feature = "web"),
-    not(all(any(target_os = "linux", windows), feature = "standard"))
+    not(all(
+        any(target_os = "linux", target_os = "windows", target_os = "macos"),
+        feature = "standard"
+    ))
 ))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -695,35 +734,5 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app_handle: &tauri::AppHandle, event| {
-        #[cfg(target_os = "macos")]
-        match event {
-            tauri::RunEvent::Reopen { .. } => {
-                if let Err(e) = startup::ensure_main_window(app_handle.clone()) {
-                    eprintln!("[macOS] Dock 点击显示主窗口失败: {}", e);
-                }
-            }
-            tauri::RunEvent::Opened { urls } => {
-                for url in urls {
-                    if let Ok(path) = url.to_file_path() {
-                        use std::ffi::OsStr;
-
-                        if path.extension() == Some(OsStr::new("kgpg")) {
-                            let _ = app_handle.emit(
-                                "app-import-plugin",
-                                serde_json::json!({
-                                    "kgpgPath": path.to_string_lossy()
-                                }),
-                            );
-                        } else {
-                            eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法将路径转换为字符串: {:?}", path);
-                        }
-                    } else {
-                        eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法从 URL 提取文件路径: {}", url);
-                    }
-                }
-            }
-            _ => {}
-        }
-    });
+    app.run(|_app_handle: &tauri::AppHandle, _event| {});
 }

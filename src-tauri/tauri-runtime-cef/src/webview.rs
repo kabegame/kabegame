@@ -527,19 +527,11 @@ mod imp {
 
     wrap_load_handler! {
         pub(crate) struct InitializationLoadHandler {
-            scripts: Vec<tauri_runtime::webview::InitializationScript>,
             on_page_load: Option<PageLoadHandler>,
         }
         impl LoadHandler {
             fn on_load_start(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition: TransitionType) {
                 let Some(frame) = frame else { return };
-                let main_frame = frame.is_main() == 1;
-                let source_url = CefString::from(&frame.url()).to_string();
-                for script in &self.scripts {
-                    if !script.for_main_frame_only || main_frame {
-                        frame.execute_java_script(Some(&CefString::from(script.script.as_str())), Some(&CefString::from(source_url.as_str())), 0);
-                    }
-                }
                 emit_page_load(frame, &self.on_page_load, PageLoadEvent::Started);
             }
             fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _status: ::std::os::raw::c_int) {
@@ -770,9 +762,13 @@ mod imp {
         // 对 NEW_POPUP 放行,退回 CEF 默认弹窗行为(与未注册 on_new_window 的
         // webview 一致,生成可与 opener 通信的真实弹窗)。
         //
-        // 未注册 on_new_window 的 webview 不挂本 handler,保持 CEF 默认 popup 行为。
-        // devtools 走 on_before_dev_tools_popup,不受影响。
-        pub(crate) struct PopupToNavigationLifeSpanHandler {}
+        // 所有 webview 都挂本 handler,以便 popup 继承 renderer document-start
+        // initialization scripts;是否把 tab 类 popup 改为本页导航仍由
+        // redirect_tab_popups 区分。devtools 走 on_before_dev_tools_popup,不受影响。
+        pub(crate) struct PopupToNavigationLifeSpanHandler {
+            initialization_scripts_payload: String,
+            redirect_tab_popups: bool,
+        }
         impl LifeSpanHandler {
             fn on_before_popup(
                 &self,
@@ -787,11 +783,24 @@ mod imp {
                 _window_info: Option<&mut WindowInfo>,
                 _client: Option<&mut Option<Client>>,
                 _settings: Option<&mut BrowserSettings>,
-                _extra_info: Option<&mut Option<DictionaryValue>>,
+                extra_info: Option<&mut Option<DictionaryValue>>,
                 _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
             ) -> ::std::os::raw::c_int {
+                if let Some(extra_info) = extra_info {
+                    match cef_helper::initialization_scripts_extra_info(
+                        &self.initialization_scripts_payload,
+                    ) {
+                        Ok(initialization_scripts) => *extra_info = Some(initialization_scripts),
+                        Err(error) => eprintln!(
+                            "[cef-runtime] failed to attach popup initialization scripts: {error}"
+                        ),
+                    }
+                }
                 // 返回 0 = 放行,让 CEF 以默认弹窗行为生成真实窗口(见上方注释)。
                 if target_disposition == WindowOpenDisposition::NEW_POPUP {
+                    return 0;
+                }
+                if !self.redirect_tab_popups {
                     return 0;
                 }
                 let url = target_url.map(CefString::to_string).unwrap_or_default();
@@ -821,6 +830,11 @@ mod imp {
             fn on_pre_key_event(&self, browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: Option<&mut cef::sys::MSG>, _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
                 handle_devtools_shortcut(browser, event)
             }
+
+            #[cfg(target_os = "macos")]
+            fn on_pre_key_event(&self, browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: *mut u8, _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
+                handle_devtools_shortcut(browser, event)
+            }
         }
     }
 
@@ -829,7 +843,7 @@ mod imp {
         event: Option<&KeyEvent>,
     ) -> ::std::os::raw::c_int {
         let Some(event) = event else { return 0 };
-        let devtools_modifiers = event_flag_control() | event_flag_shift();
+        let devtools_modifiers = event_flag_primary_modifier() | event_flag_shift();
         if event.type_ != KeyEventType::RAWKEYDOWN
             || event.windows_key_code != b'D' as i32
             || event.modifiers & devtools_modifiers != devtools_modifiers
@@ -848,7 +862,12 @@ mod imp {
         0
     }
 
-    fn event_flag_control() -> u32 {
+    #[cfg(target_os = "macos")]
+    fn event_flag_primary_modifier() -> u32 {
+        cef::sys::cef_event_flags_t::EVENTFLAG_COMMAND_DOWN.0 as u32
+    }
+    #[cfg(not(target_os = "macos"))]
+    fn event_flag_primary_modifier() -> u32 {
         cef::sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN.0 as u32
     }
     fn event_flag_shift() -> u32 {
@@ -955,6 +974,24 @@ mod imp {
             schemes,
         })));
         let scripts = std::mem::take(&mut pending.webview_attributes.initialization_scripts);
+        let initialization_scripts = scripts
+            .into_iter()
+            .map(|script| cef_helper::InitializationScript {
+                script: script.script,
+                for_main_frame_only: script.for_main_frame_only,
+            })
+            .collect::<Vec<_>>();
+        let initialization_scripts_payload = cef_helper::encode_initialization_scripts(
+            &initialization_scripts,
+        )
+        .map_err(|error| {
+            Error::CreateWebview(Box::new(io::Error::other(format!(
+                "failed to encode CEF initialization scripts: {error}"
+            ))))
+        })?;
+        let mut initialization_scripts_extra_info =
+            cef_helper::initialization_scripts_extra_info(&initialization_scripts_payload)
+                .map_err(|error| Error::CreateWebview(Box::new(io::Error::other(error))))?;
         let on_page_load = pending.on_page_load_handler.take().map(Rc::new);
         let download_handler = pending
             .download_handler
@@ -966,12 +1003,13 @@ mod imp {
             .map(|h| TauriCefRequestHandler::new(Rc::new(h)));
         // 无法在 Linux 上调用 new_window_handler 本体(见 PopupToNavigationLifeSpanHandler
         // 注释),仅以其存在与否作为「取消 popup 改本页导航」的开关。
-        let life_span_handler = pending
-            .new_window_handler
-            .take()
-            .map(|_| PopupToNavigationLifeSpanHandler::new());
+        let redirect_tab_popups = pending.new_window_handler.take().is_some();
+        let life_span_handler = Some(PopupToNavigationLifeSpanHandler::new(
+            initialization_scripts_payload,
+            redirect_tab_popups,
+        ));
         let mut client = ViewsClient::new(
-            InitializationLoadHandler::new(scripts, on_page_load),
+            InitializationLoadHandler::new(on_page_load),
             DevToolsKeyboardHandler::new(),
             DisabledContextMenuHandler::new(),
             download_handler,
@@ -986,7 +1024,7 @@ mod imp {
             Some(&mut client),
             Some(&CefString::from(url.as_str())),
             Some(&BrowserSettings::default()),
-            None,
+            Some(&mut initialization_scripts_extra_info),
             None,
             Some(&mut delegate),
         )

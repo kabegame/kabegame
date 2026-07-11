@@ -42,6 +42,8 @@ src-tauri/kabegame/resources/bin/*
 src-tauri/kabegame/resources/plugins/
 # Windows CEF runtime,由 os-plugin collectWindowsCefRuntime() 构建期生成
 src-tauri/kabegame/resources/cef/
+# macOS gen/CEFExample.app\Kabegame.app
+/gen/
 
 # bin/{platform}/ runtime libs:
 # - bin/windows/ keeps the predefined DLLs in git (dokan2/libwinpthread/libva/...);

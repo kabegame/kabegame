@@ -111,7 +111,7 @@
 
 ### MacOS
 
-> **最低系统版本要求**：macOS **10.13 (High Sierra)** 及以上。
+> **最低系统版本要求**：macOS **11 (Big Sur)** 及以上。
 
 1. **下载 DMG 文件**：根据你的需求选择 Standard 或 Light 模式的 `.dmg` 文件
 2. **安装应用**：

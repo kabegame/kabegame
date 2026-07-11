@@ -270,6 +270,14 @@ mod imp {
                         if !runtime.is_null() {
                             return unsafe { &*runtime }.handle_main_thread_message(message);
                         }
+                        // 主循环尚未运行(`main_runtime` 为 null,如 Builder::build 阶段
+                        // macOS 默认菜单经 run_on_main_thread 创建并同步等待结果):
+                        // Task 只要求在主线程执行、不依赖 runtime 状态,必须内联执行,
+                        // 否则入队后无人消费,调用方 recv 死锁。
+                        if let Message::Task(task) = message {
+                            task();
+                            return Ok(());
+                        }
                     }
                     self.enqueue(message)
                 }
@@ -714,6 +722,18 @@ mod imp {
         unsafe {
             std::env::set_var("GDK_BACKEND", "x11");
         }
+        #[cfg(target_os = "macos")]
+        {
+            static CEF_LIBRARY_LOADER: OnceLock<cef::library_loader::LibraryLoader> =
+                OnceLock::new();
+            CEF_LIBRARY_LOADER.get_or_init(|| {
+                let exe = std::env::current_exe().expect("failed to resolve current_exe");
+                let loader = cef::library_loader::LibraryLoader::new(&exe, false);
+                assert!(loader.load(), "kabegame: cef_load_library failed");
+                loader
+            });
+            crate::app_mac::init_cef_application();
+        }
         eprintln!("[cef-runtime] early subprocess dispatch (CEF Views/windowed)");
         let mut app = init_cef_app_and_maybe_exit(true);
         initialize_cef(&mut app).expect("failed to initialize CEF before Tauri startup");
@@ -760,6 +780,8 @@ mod imp {
                     );
                 }
                 cl.append_switch(Some(&CefString::from("no-sandbox")));
+                #[cfg(target_os = "macos")]
+                cl.append_switch(Some(&CefString::from("use-mock-keychain")));
                 apply_windowed_gpu_mode(cl);
                 // CEF WebContents are not Chrome browser tabs. Some Chrome UI
                 // features assume tabs::TabInterface exists and crash on SPA
@@ -786,6 +808,10 @@ mod imp {
                     RefCell::new(None),
                     self.windowed_quit.clone(),
                 ))
+            }
+
+            fn render_process_handler(&self) -> Option<RenderProcessHandler> {
+                Some(cef_helper::initialization_render_process_handler())
             }
         }
     }
@@ -978,6 +1004,10 @@ mod imp {
 
             fn is_frameless(&self, _window: Option<&mut cef::Window>) -> i32 {
                 i32::from(self.frameless)
+            }
+
+            fn with_standard_window_buttons(&self, _window: Option<&mut cef::Window>) -> i32 {
+                i32::from(!self.frameless)
             }
 
             fn can_resize(&self, _window: Option<&mut cef::Window>) -> i32 {
@@ -1239,34 +1269,48 @@ mod imp {
     /// runtime 初始化阶段,此时 browser 主进程应继续执行 `cef::initialize`。
     fn init_cef_app_and_maybe_exit(exit_subprocess: bool) -> cef::App {
         let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
-        let args = Args::new();
-        let cmd = args.as_cmd_line().expect("failed to parse command line");
-        let is_browser_process = cmd.has_switch(Some(&CefString::from("type"))) != 1;
-        let process_type = if is_browser_process {
-            "browser".to_string()
-        } else {
-            CefString::from(&cmd.switch_value(Some(&CefString::from("type")))).to_string()
-        };
-        eprintln!(
+        #[allow(unused_mut)]
+        let mut app = CefRuntimeApp::new(windowed_quit());
+        #[cfg(target_os = "macos")]
+        let _ = exit_subprocess;
+        #[cfg(not(target_os = "macos"))]
+        {
+            let args = Args::new();
+            let cmd = args.as_cmd_line().expect("failed to parse command line");
+            let is_browser_process = cmd.has_switch(Some(&CefString::from("type"))) != 1;
+            let process_type = if is_browser_process {
+                "browser".to_string()
+            } else {
+                CefString::from(&cmd.switch_value(Some(&CefString::from("type")))).to_string()
+            };
+            eprintln!(
             "[cef-runtime] cef_execute_process pid={} type={process_type} backend=windowed args={:?}",
             std::process::id(),
             std::env::args().collect::<Vec<_>>()
         );
-        let mut app = CefRuntimeApp::new(windowed_quit());
-
-        let code = execute_process(
-            Some(args.as_main_args()),
-            Some(&mut app),
-            std::ptr::null_mut(),
-        );
-        eprintln!(
-            "[cef-runtime] cef_execute_process returned pid={} type={process_type} code={code}",
-            std::process::id()
-        );
-        if exit_subprocess && !is_browser_process {
-            std::process::exit(code.max(0));
+            let code = execute_process(
+                Some(args.as_main_args()),
+                Some(&mut app),
+                std::ptr::null_mut(),
+            );
+            eprintln!(
+                "[cef-runtime] cef_execute_process returned pid={} type={process_type} code={code}",
+                std::process::id()
+            );
+            if exit_subprocess && !is_browser_process {
+                std::process::exit(code.max(0));
+            }
         }
         app
+    }
+
+    #[cfg(target_os = "macos")]
+    fn helper_path() -> std::path::PathBuf {
+        std::env::current_exe()
+            .expect("failed to resolve current_exe")
+            .parent()
+            .expect("exe has no parent dir")
+            .join("../Frameworks/Kabegame Helper.app/Contents/MacOS/Kabegame Helper")
     }
 
     /// 解析 CEF 资源目录(`*.pak` / `icudtl.dat` / `v8_context_snapshot.bin` /
@@ -1282,17 +1326,23 @@ mod imp {
     ///    以是否存在 `icudtl.dat` 判定;
     /// 3. 都没有 → `None`(交给 CEF 默认:可执行文件同目录)。
     fn resolve_cef_resource_dir() -> Option<std::path::PathBuf> {
-        if let Ok(cef_path) = std::env::var("CEF_PATH") {
-            if !cef_path.is_empty() {
-                return Some(std::path::PathBuf::from(cef_path));
+        #[cfg(target_os = "macos")]
+        return None;
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let Ok(cef_path) = std::env::var("CEF_PATH") {
+                if !cef_path.is_empty() {
+                    return Some(std::path::PathBuf::from(cef_path));
+                }
             }
+            let exe = std::env::current_exe().ok()?;
+            let dir = exe.parent()?.join("../lib/kabegame");
+            if dir.join("icudtl.dat").is_file() {
+                return Some(dir.canonicalize().unwrap_or(dir));
+            }
+            None
         }
-        let exe = std::env::current_exe().ok()?;
-        let dir = exe.parent()?.join("../lib/kabegame");
-        if dir.join("icudtl.dat").is_file() {
-            return Some(dir.canonicalize().unwrap_or(dir));
-        }
-        None
     }
 
     /// CEF 用户数据目录名。**dev(debug)与安装态(release)必须分开**:
@@ -1350,12 +1400,17 @@ mod imp {
             no_sandbox: 1,
             external_message_pump: 1,
             log_severity: LogSeverity::VERBOSE,
-            browser_subprocess_path: CefString::from(
-                std::env::current_exe()
-                    .expect("failed to resolve CEF subprocess executable")
-                    .to_string_lossy()
-                    .as_ref(),
-            ),
+            browser_subprocess_path: {
+                #[cfg(target_os = "macos")]
+                let subprocess = helper_path()
+                    .canonicalize()
+                    .unwrap_or_else(|e| panic!("cef-helper not found at {:?}: {e}", helper_path()));
+                #[cfg(not(target_os = "macos"))]
+                let subprocess =
+                    std::env::current_exe().expect("failed to resolve CEF subprocess executable");
+                let subprocess = subprocess.to_string_lossy().into_owned();
+                CefString::from(subprocess.as_str())
+            },
             // cache_path 与 root_cache_path 相同是 CEF 允许的。
             // 设置 cache_path 后全局 RequestContext 在 cef_initialize 期间同步落盘初始化,
             // localStorage / cookies 跨会话持久化。
@@ -1363,6 +1418,7 @@ mod imp {
             root_cache_path: CefString::from(cef_root_cache_dir().to_string_lossy().as_ref()),
             ..Default::default()
         };
+        #[cfg(not(target_os = "macos"))]
         match resolve_cef_resource_dir() {
             Some(dir) => {
                 settings.resources_dir_path = CefString::from(dir.to_string_lossy().as_ref());
@@ -1376,6 +1432,17 @@ mod imp {
                      relying on CEF default next to executable"
                 );
             }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let framework_dir = std::env::current_exe()
+                .expect("failed to resolve current_exe")
+                .parent()
+                .expect("exe has no parent dir")
+                .join("../Frameworks/Chromium Embedded Framework.framework")
+                .canonicalize()
+                .expect("CEF framework not found in app bundle Frameworks/");
+            settings.framework_dir_path = CefString::from(framework_dir.to_string_lossy().as_ref());
         }
 
         if initialize(
@@ -1477,6 +1544,23 @@ mod imp {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        fn set_activation_policy(
+            &self,
+            activation_policy: tauri_runtime::ActivationPolicy,
+        ) -> Result<()> {
+            self.context.send(Message::Task(Box::new(move || {
+                crate::app_mac::set_activation_policy(activation_policy)
+            })))
+        }
+
+        #[cfg(target_os = "macos")]
+        fn set_dock_visibility(&self, visible: bool) -> Result<()> {
+            self.context.send(Message::Task(Box::new(move || {
+                crate::app_mac::set_dock_visibility(visible)
+            })))
+        }
+
         /// 请求主循环退出。
         ///
         /// 实际退出前会触发 `RunEvent::ExitRequested`,上层仍可通过 tx 阻止退出。
@@ -1571,7 +1655,111 @@ mod imp {
             ));
         }
 
+        #[cfg(target_os = "macos")]
+        fn show(&self) -> Result<()> {
+            self.context
+                .send(Message::Task(Box::new(crate::app_mac::show)))
+        }
+
+        #[cfg(target_os = "macos")]
+        fn hide(&self) -> Result<()> {
+            self.context
+                .send(Message::Task(Box::new(crate::app_mac::hide)))
+        }
+
         fn set_device_event_filter(&self, _filter: DeviceEventFilter) {}
+
+        #[cfg(target_os = "macos")]
+        fn fetch_data_store_identifiers<F: FnOnce(Vec<[u8; 16]>) + Send + 'static>(
+            &self,
+            cb: F,
+        ) -> Result<()> {
+            self.context
+                .send(Message::Task(Box::new(move || cb(Vec::new()))))
+        }
+
+        #[cfg(target_os = "macos")]
+        fn remove_data_store<F: FnOnce(Result<()>) + Send + 'static>(
+            &self,
+            _uuid: [u8; 16],
+            cb: F,
+        ) -> Result<()> {
+            self.context
+                .send(Message::Task(Box::new(move || cb(Ok(())))))
+        }
+    }
+
+    fn create_cef_runtime<T: UserEvent>(args: RuntimeInitArgs, any_thread: bool) -> Result<Cef<T>> {
+        #[cfg(target_os = "linux")]
+        unsafe {
+            std::env::set_var("GDK_BACKEND", "x11");
+        }
+        eprintln!(
+            "[cef-runtime] runtime init backend=windowed initialized={}",
+            CEF_INITIALIZED.with(Cell::get)
+        );
+        if !CEF_INITIALIZED.with(Cell::get) {
+            let mut app = init_cef_app_and_maybe_exit(false);
+            initialize_cef(&mut app)?;
+            PREPARED_CEF_APP.with(|prepared| prepared.replace(Some(app)));
+            CEF_INITIALIZED.with(|initialized| initialized.set(true));
+        }
+
+        let mut builder = EventLoopBuilder::<Message<T>>::with_user_event();
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        if any_thread {
+            builder.with_any_thread(true);
+        }
+        #[cfg(target_os = "macos")]
+        let _ = any_thread;
+        #[cfg(target_os = "linux")]
+        if let Some(app_id) = args.app_id {
+            builder.with_app_id(app_id);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = &args;
+        let event_loop = builder.build();
+        let monitors = cef_monitor_snapshot().unwrap_or_else(|| tao_monitor_snapshot(&event_loop));
+        eprintln!(
+            "[cef-runtime] monitor snapshot source={} primary={:?}",
+            if monitors.primary.is_some() {
+                "cef"
+            } else {
+                "tao"
+            },
+            monitors.primary.as_ref().map(|monitor| (
+                monitor.size,
+                monitor.scale_factor,
+                monitor.work_area,
+            )),
+        );
+        let monitors = Arc::new(Mutex::new(monitors));
+        let messages = Arc::new(CefMessageQueue::new());
+        let windows = Arc::new(CefWindows(RefCell::new(BTreeMap::new())));
+        let webviews = Arc::new(CefWebviews(RefCell::new(BTreeMap::new())));
+        let context = CefContext {
+            tao_proxy: event_loop.create_proxy(),
+            messages,
+            main_thread_id: current_thread().id(),
+            windows: windows.clone(),
+            webviews: webviews.clone(),
+            main_runtime: Arc::new(AtomicPtr::new(std::ptr::null_mut())),
+            next_window_id: Arc::new(AtomicU32::new(1)),
+            next_webview_id: Arc::new(AtomicU32::new(1)),
+            next_window_event_id: Arc::new(AtomicU32::new(1)),
+            next_webview_event_id: Arc::new(AtomicU32::new(1)),
+            monitors,
+        };
+
+        Ok(Cef {
+            inner: CefRuntime {
+                context,
+                event_loop,
+                windows,
+                webviews,
+                exit_code: Cell::new(0),
+            },
+        })
     }
 
     impl<T: UserEvent> Runtime<T> for Cef<T> {
@@ -1582,84 +1770,14 @@ mod imp {
 
         /// 创建 runtime。
         ///
-        /// Linux CEF 后端允许 any-thread event loop,所以这里直接复用
-        /// `new_any_thread`。
         fn new(args: RuntimeInitArgs) -> Result<Self> {
-            Self::new_any_thread(args)
+            create_cef_runtime(args, false)
         }
 
         /// 初始化 CEF、创建 tao event loop,并准备 runtime 状态表。
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         fn new_any_thread(args: RuntimeInitArgs) -> Result<Self> {
-            #[cfg(target_os = "linux")]
-            unsafe {
-                std::env::set_var("GDK_BACKEND", "x11");
-            }
-            eprintln!(
-                "[cef-runtime] runtime new_any_thread backend=windowed initialized={}",
-                CEF_INITIALIZED.with(Cell::get)
-            );
-            if !CEF_INITIALIZED.with(Cell::get) {
-                let mut app = init_cef_app_and_maybe_exit(false);
-                initialize_cef(&mut app)?;
-                PREPARED_CEF_APP.with(|prepared| prepared.replace(Some(app)));
-                CEF_INITIALIZED.with(|initialized| initialized.set(true));
-            }
-
-            let mut builder = EventLoopBuilder::<Message<T>>::with_user_event();
-            builder.with_any_thread(true);
-            // `RuntimeInitArgs::app_id` 仅存在于 linux/BSD;Windows 侧 tauri-runtime-wry
-            // 也不设 AppUserModelID(由安装器快捷方式承载),保持对齐。
-            #[cfg(target_os = "linux")]
-            if let Some(app_id) = args.app_id {
-                builder.with_app_id(app_id);
-            }
-            #[cfg(not(target_os = "linux"))]
-            let _ = &args;
-            let event_loop = builder.build();
-            // CEF 的 Display 保留 XWayland fractional scale；tao/GTK 在该场景
-            // 可能只报告整数 scale。仅 CEF 未返回 display 时回退 tao。
-            let monitors =
-                cef_monitor_snapshot().unwrap_or_else(|| tao_monitor_snapshot(&event_loop));
-            eprintln!(
-                "[cef-runtime] monitor snapshot source={} primary={:?}",
-                if monitors.primary.is_some() {
-                    "cef"
-                } else {
-                    "tao"
-                },
-                monitors.primary.as_ref().map(|monitor| (
-                    monitor.size,
-                    monitor.scale_factor,
-                    monitor.work_area,
-                )),
-            );
-            let monitors = Arc::new(Mutex::new(monitors));
-            let messages = Arc::new(CefMessageQueue::new());
-            let windows = Arc::new(CefWindows(RefCell::new(BTreeMap::new())));
-            let webviews = Arc::new(CefWebviews(RefCell::new(BTreeMap::new())));
-            let context = CefContext {
-                tao_proxy: event_loop.create_proxy(),
-                messages,
-                main_thread_id: current_thread().id(),
-                windows: windows.clone(),
-                webviews: webviews.clone(),
-                main_runtime: Arc::new(AtomicPtr::new(std::ptr::null_mut())),
-                next_window_id: Arc::new(AtomicU32::new(1)),
-                next_webview_id: Arc::new(AtomicU32::new(1)),
-                next_window_event_id: Arc::new(AtomicU32::new(1)),
-                next_webview_event_id: Arc::new(AtomicU32::new(1)),
-                monitors,
-            };
-
-            Ok(Self {
-                inner: CefRuntime {
-                    context,
-                    event_loop,
-                    windows,
-                    webviews,
-                    exit_code: Cell::new(0),
-                },
-            })
+            create_cef_runtime(args, true)
         }
 
         /// 创建可用于投递 Tauri 用户事件的代理。
@@ -1746,6 +1864,26 @@ mod imp {
             self.inner
                 .event_loop
                 .set_theme(theme.map(window::to_tao_theme));
+        }
+
+        #[cfg(target_os = "macos")]
+        fn set_activation_policy(&mut self, activation_policy: tauri_runtime::ActivationPolicy) {
+            crate::app_mac::set_activation_policy(activation_policy);
+        }
+
+        #[cfg(target_os = "macos")]
+        fn set_dock_visibility(&mut self, visible: bool) {
+            crate::app_mac::set_dock_visibility(visible);
+        }
+
+        #[cfg(target_os = "macos")]
+        fn show(&self) {
+            crate::app_mac::show();
+        }
+
+        #[cfg(target_os = "macos")]
+        fn hide(&self) {
+            crate::app_mac::hide();
         }
 
         fn set_device_event_filter(&mut self, _filter: DeviceEventFilter) {}
@@ -2125,9 +2263,9 @@ mod imp {
             }
             let close_deadline = Instant::now() + Duration::from_secs(3);
             while Instant::now() < close_deadline {
-                let all_destroyed = remaining.iter().all(|shared| {
-                    shared.lock().map(|s| s.window.is_none()).unwrap_or(true)
-                });
+                let all_destroyed = remaining
+                    .iter()
+                    .all(|shared| shared.lock().map(|s| s.window.is_none()).unwrap_or(true));
                 if all_destroyed {
                     break;
                 }
@@ -2673,7 +2811,12 @@ mod imp {
             return pump_windows_messages();
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "macos")]
+        {
+            return crate::app_mac::pump_events();
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         {
             false
         }
@@ -2697,7 +2840,6 @@ mod imp {
         }
         did_work
     }
-
 
     fn post_cef_ui_task<R, F>(task: F) -> Result<R>
     where

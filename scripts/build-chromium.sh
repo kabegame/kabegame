@@ -13,12 +13,16 @@
 # 默认路径:
 #   Linux:       构建根目录 ~/i/cefbuild, runtime ~/i/cef-dev 或 ~/i/cef-prod
 #   Windows/MSYS:构建根目录 H:\cefbuild, runtime H:\cef-dev 或 H:\cef-prod
+#   macOS arm64: 构建根目录 /Volumes/KIOXIA/cefbuild, runtime /Volumes/KIOXIA/cef-dev 或 cef-prod
 #
 # Linux 关键前提:Chromium/CEF 的源码树重度依赖符号链接 + POSIX 权限 + 大小写敏感,
 # exFAT/NTFS 都不行。本机已把构建空间放到 POSIX 文件系统下的 ~/i。
 #
 # Windows 关键前提:在 MSYS2 bash 中运行,建议从 VS x64 Native Tools 环境启动
 # msys2_shell.cmd -mingw64/-msys -use-full-path,并把 H:\cefbuild 放在 NTFS 盘。
+#
+# macOS 关键前提:Apple Silicon + 完整 Xcode/macOS SDK;构建空间必须是 APFS/HFS+
+# 等支持符号链接的文件系统,不能是 exFAT。
 #
 set -euo pipefail
 
@@ -76,6 +80,15 @@ case "$UNAME_S" in
     CEF_RUNTIME_LIB="libcef.dll"
     PYTHON_BIN="${PYTHON_BIN:-python}"
     ;;
+  Darwin*)
+    HOST_OS="darwin"
+    CEF_ROOT="${CEF_ROOT:-/Volumes/KIOXIA}"          # macOS CEF 构建与 runtime 根目录
+    CEFBUILD="${CEFBUILD:-$CEF_ROOT/cefbuild}"       # 构建根目录
+    CEF_EXPORT_ROOT="${CEF_EXPORT_ROOT:-$CEF_ROOT}"  # cef-rs 扁平 runtime 导出目录的父目录
+    CEF_ARCHIVE_PLATFORM="macosarm64"
+    CEF_RUNTIME_LIB="Chromium Embedded Framework.framework"
+    PYTHON_BIN="${PYTHON_BIN:-python3}"
+    ;;
   *)
     echo "Unsupported OS: $UNAME_S" >&2
     exit 1
@@ -84,6 +97,7 @@ esac
 
 is_windows() { [[ "$HOST_OS" == "windows" ]]; }
 is_linux() { [[ "$HOST_OS" == "linux" ]]; }
+is_macos() { [[ "$HOST_OS" == "darwin" ]]; }
 
 host_path() {
   if is_windows; then
@@ -271,17 +285,28 @@ export_cef_runtime() {
   local export_dir="$CEF_EXPORT_ROOT/cef-${VARIANT}"
   local tmp_dir="${export_dir}.tmp"
 
-  [[ -d "$distrib/Release" ]] || die "CEF distrib 缺少 Release/: $distrib"
-  [[ -d "$distrib/Resources" ]] || die "CEF distrib 缺少 Resources/: $distrib"
+  if is_macos; then
+    local build_dir="$CEFBUILD/chromium_git/chromium/src/out/Release_GN_arm64"
+    local framework_dir="$build_dir/$CEF_RUNTIME_LIB"
+    [[ -d "$framework_dir" ]] || die "CEF build 缺少 framework: $framework_dir"
+  else
+    [[ -d "$distrib/Release" ]] || die "CEF distrib 缺少 Release/: $distrib"
+    [[ -d "$distrib/Resources" ]] || die "CEF distrib 缺少 Resources/: $distrib"
+  fi
 
   log "导出 cef-rs runtime: $export_dir"
   rm -rf "$tmp_dir"
   mkdir -p "$tmp_dir"
 
   # download-cef/cef-dll-sys 会把官方 distrib 展平成这个结构:
-  # Release/* 和 Resources/* 位于 CEF_PATH 根层,libcef.so 也必须在根层。
-  cp -a "$distrib/Release/." "$tmp_dir/"
-  cp -a "$distrib/Resources/." "$tmp_dir/"
+  # Linux/Windows: Release/* 和 Resources/* 位于 CEF_PATH 根层,libcef.so/libcef.dll 也必须在根层。
+  # macOS: framework 在 GN build output 根层,headers/cmake/libcef_dll 仍来自 distrib。
+  if is_macos; then
+    cp -a "$framework_dir" "$tmp_dir/"
+  else
+    cp -a "$distrib/Release/." "$tmp_dir/"
+    cp -a "$distrib/Resources/." "$tmp_dir/"
+  fi
 
   local item
   for item in CMakeLists.txt cmake include libcef_dll CREDITS.html; do
@@ -297,8 +322,12 @@ export_cef_runtime() {
 }
 EOF
 
-  [[ -f "$tmp_dir/$CEF_RUNTIME_LIB" ]] || die "导出失败: $tmp_dir/$CEF_RUNTIME_LIB 不存在"
-  [[ -d "$tmp_dir/locales" ]] || die "导出失败: $tmp_dir/locales 不存在"
+  if is_macos; then
+    [[ -d "$tmp_dir/$CEF_RUNTIME_LIB" ]] || die "导出失败: $tmp_dir/$CEF_RUNTIME_LIB 不存在"
+  else
+    [[ -f "$tmp_dir/$CEF_RUNTIME_LIB" ]] || die "导出失败: $tmp_dir/$CEF_RUNTIME_LIB 不存在"
+    [[ -d "$tmp_dir/locales" ]] || die "导出失败: $tmp_dir/locales 不存在"
+  fi
 
   rm -rf "$export_dir"
   mv "$tmp_dir" "$export_dir"
@@ -332,6 +361,8 @@ run_build() {
   local automate_py="$CEFBUILD/automate/automate-git.py"
   local download_dir="$CEFBUILD/chromium_git"
   local depot_tools_dir="$CEFBUILD/depot_tools"
+  local ARCH_FLAG="--x64-build"
+  is_macos && ARCH_FLAG="--arm64-build"
 
   # --build-target=cefsimple:默认目标 cefclient 在 Linux 无条件 include <gtk/gtk.h>,
   # 而 sysroot 里没有 GTK 头(CEF BUILD.gn 自己注释了这一点),use_sysroot=true 下编不过。
@@ -340,13 +371,13 @@ run_build() {
     --download-dir="$(host_path "$download_dir")" \
     --depot-tools-dir="$(host_path "$depot_tools_dir")" \
     --branch="$CEF_BRANCH" \
-    --x64-build \
+    "$ARCH_FLAG" \
     --no-debug-build \
     --build-target=cefsimple \
-    "${HISTORY_FLAGS[@]}" \
-    "${PGO_FLAGS[@]}" \
-    "${DISTRIB_FLAGS[@]}" \
-    "${UPDATE_FLAGS[@]}" \
+    ${HISTORY_FLAGS[@]+"${HISTORY_FLAGS[@]}"} \
+    ${PGO_FLAGS[@]+"${PGO_FLAGS[@]}"} \
+    ${DISTRIB_FLAGS[@]+"${DISTRIB_FLAGS[@]}"} \
+    ${UPDATE_FLAGS[@]+"${UPDATE_FLAGS[@]}"} \
     2>&1 | tee "$logfile"
 
   local out

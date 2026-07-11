@@ -1,7 +1,7 @@
 [package]
 name = "tauri-runtime-cef"
 version = "0.1.0"
-description = "CEF (Chromium) webview backend for Tauri — Linux & Windows desktop"
+description = "CEF (Chromium) webview backend for Tauri on desktop"
 authors = ["kabegame"]
 edition = "2021"
 publish = false
@@ -28,6 +28,7 @@ cookie = "0.18"
 # The Chromium engine binding (tauri-apps/cef-rs). Tracks CEF/Chromium major
 # versions: bumping this version is how we "follow upstream Chromium".
 cef = { version = "149", default-features = false }
+cef-helper = { path = "../cef-helper" }
 
 # Window + event-loop host (same lib tauri-runtime-wry uses). `rwh_06` exposes
 # raw-window-handle 0.6 so we can read the tao window's handle. Default features
@@ -49,5 +50,16 @@ windows-sys = { workspace = true, features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 
-[[example]]
-name = "minimal_windowed"
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", default-features = false }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSApplication",
+  "NSResponder",
+  "NSEvent",
+  "NSRunningApplication",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSRunLoop",
+] }

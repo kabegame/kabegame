@@ -4,39 +4,112 @@
 //! exercises the route that worked in the upstream `cefsimple` baseline: let CEF
 //! create and own a top-level Views window, with GPU enabled.
 //!
-//! Run:
+//! The browser (main) process lives here; every CEF subprocess (renderer/GPU/
+//! utility) is a *separate* executable — the `cef-helper` crate in this
+//! workspace — so this binary never re-executes itself. That split is required
+//! on macOS (subprocesses must be an independent helper `.app`) and is applied
+//! uniformly on Linux/Windows too so the three platforms share one code path.
+//!
+//! Run (Linux/Windows, `cef-helper` built and next to this binary):
 //! ```sh
 //! export CEF_PATH="$HOME/i/cef-dev"
 //! export LD_LIBRARY_PATH="$CEF_PATH:$LD_LIBRARY_PATH"
 //! CEF_WINDOWED_URL=file:///tmp/cef-gpu-readback.html \
-//!   cargo run -p tauri-runtime-cef --example minimal_windowed
-//!
-//! # Same CEF-owned window, but with an external message pump like the runtime.
-//! CEF_WINDOWED_PUMP=external \
-//! CEF_WINDOWED_URL=file:///tmp/cef-gpu-readback.html \
-//!   cargo run -p tauri-runtime-cef --example minimal_windowed
+//!   cargo run -p cef-example
 //! ```
 //!
 //! Windows:
 //! ```powershell
 //! $env:CEF_PATH = "H:\cef-dev"
 //! $env:PATH = "$env:CEF_PATH;$env:PATH"
-//! $env:CEF_WINDOWED_PUMP = "external"
-//! cargo run -p tauri-runtime-cef --example minimal_windowed
+//! cargo run -p cef-example
 //! ```
+//!
+//! macOS: run via `bun start -c cef-example` (builds `gen/CEFExample.app`,
+//! a minimal bundle wrapping this binary + `CEFExample Helper.app`, then
+//! launches it) — a bare `cargo run` will not work because macOS requires
+//! the browser process to live inside an app bundle. See
+//! `scripts/plugins/os-plugin.ts` `buildCEFExampleApp`.
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 fn main() {
-    eprintln!("`minimal_windowed` example currently supports Linux and Windows.");
+    eprintln!("`cef-example` currently supports Linux, Windows and macOS.");
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 fn main() {
     minimal_windowed::prepare_platform_environment();
     minimal_windowed::run();
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+/// macOS:实现 `CefAppProtocol` 的 `NSApplication` 子类。
+///
+/// 对照 cefsimple 的 `cefsimple_mac.mm`:CEF 浏览器进程要求 `NSApp` 是一个
+/// 实现 `CrAppProtocol`/`CrAppControlProtocol`/`CefAppProtocol` 的自定义
+/// application(Chromium 的 message pump 靠 `isHandlingSendEvent` 协调事件
+/// 派发)。必须在 `cef_initialize` 之前用本类创建 shared application,否则
+/// CEF 自建的普通 NSApplication 会导致窗口无标题栏按钮、内容黑屏、初始
+/// 导航 ERR_ABORTED。协议 binding 来自 `cef::application_mac`。
+#[cfg(target_os = "macos")]
+mod app_mac {
+    use cef::application_mac::{CefAppProtocol, CrAppControlProtocol, CrAppProtocol};
+    use objc2::rc::Retained;
+    use objc2::runtime::Bool;
+    use objc2::{define_class, msg_send, ClassType, MainThreadMarker, MainThreadOnly};
+    use objc2_app_kit::{NSApplication, NSEvent};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // NSApp 是进程单例,handlingSendEvent 状态放静态量即可,
+    // 免去 objc2 ivar 的 init 初始化仪式(sharedApplication 内部走 alloc/init)。
+    static HANDLING_SEND_EVENT: AtomicBool = AtomicBool::new(false);
+
+    define_class!(
+        // SAFETY: NSApplication 无额外子类化约束;本类型不实现 Drop。
+        #[unsafe(super(NSApplication))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "CEFExampleApplication"]
+        struct CEFExampleApplication;
+
+        impl CEFExampleApplication {
+            // cefsimple 的 sendEvent 覆写:派发期间置 handlingSendEvent,
+            // 恢复旧值(等价 CefScopedSendingEvent)。
+            #[unsafe(method(sendEvent:))]
+            fn send_event(&self, event: &NSEvent) {
+                let was = HANDLING_SEND_EVENT.swap(true, Ordering::AcqRel);
+                let _: () = unsafe { msg_send![super(self), sendEvent: event] };
+                HANDLING_SEND_EVENT.store(was, Ordering::Release);
+            }
+        }
+
+        unsafe impl CrAppProtocol for CEFExampleApplication {
+            #[unsafe(method(isHandlingSendEvent))]
+            unsafe fn is_handling_send_event(&self) -> Bool {
+                Bool::new(HANDLING_SEND_EVENT.load(Ordering::Acquire))
+            }
+        }
+
+        unsafe impl CrAppControlProtocol for CEFExampleApplication {
+            #[unsafe(method(setHandlingSendEvent:))]
+            unsafe fn set_handling_send_event(&self, handling_send_event: Bool) {
+                HANDLING_SEND_EVENT.store(handling_send_event.as_bool(), Ordering::Release);
+            }
+        }
+
+        unsafe impl CefAppProtocol for CEFExampleApplication {}
+    );
+
+    /// 创建(或获取)本类的 shared NSApplication。必须在 CEF 框架已
+    /// `load_library` 之后调用 —— `Cr*Protocol` 协议由 libcef 注册,
+    /// 类首次注册时才能解析到它们。
+    pub fn init_cef_application() {
+        let _mtm = MainThreadMarker::new()
+            .expect("CEFExampleApplication must be created on the main thread");
+        let _app: Retained<CEFExampleApplication> =
+            unsafe { msg_send![CEFExampleApplication::class(), sharedApplication] };
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 mod minimal_windowed {
     use cef::{args::Args, *};
     #[cfg(target_os = "linux")]
@@ -53,11 +126,28 @@ mod minimal_windowed {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum PumpMode {
         Cef,
+        // Never constructed on macOS: PumpMode::from_env() always returns
+        // Cef there (no CefAppProtocol NSApplication implemented).
+        #[cfg_attr(target_os = "macos", allow(dead_code))]
         External,
     }
 
     impl PumpMode {
         fn from_env() -> Self {
+            // macOS: external pump would require a CefAppProtocol-conforming
+            // NSApplication (see cef::application_mac); not implemented here,
+            // so macOS always uses CEF's own run_message_loop.
+            #[cfg(target_os = "macos")]
+            {
+                if std::env::var("CEF_WINDOWED_PUMP").as_deref() == Ok("external") {
+                    eprintln!(
+                        "[windowed] CEF_WINDOWED_PUMP=external is not supported on macOS \
+                         (no CefAppProtocol NSApplication); falling back to run_message_loop"
+                    );
+                }
+                return Self::Cef;
+            }
+            #[cfg(not(target_os = "macos"))]
             match std::env::var("CEF_WINDOWED_PUMP").as_deref() {
                 Ok("external") => Self::External,
                 _ => Self::Cef,
@@ -89,6 +179,10 @@ mod minimal_windowed {
                     );
                 }
                 cl.append_switch(Some(&CefString::from("no-sandbox")));
+                // macOS:不写真实 Keychain(否则 Chromium 初始化 Safe Storage 会
+                // 弹系统密码框;ad-hoc 签名每次重建变身份,导致反复弹)。
+                #[cfg(target_os = "macos")]
+                cl.append_switch(Some(&CefString::from("use-mock-keychain")));
 
                 apply_gpu_mode(cl);
             }
@@ -119,6 +213,30 @@ mod minimal_windowed {
         impl PanelDelegate {}
 
         impl WindowDelegate {
+            // 仅 macOS 生效:要求标准窗口按钮(关闭/最小化/缩放)。
+            // wrap_window_delegate! 对未实现方法生成返回 0 的默认实现,
+            // 0 = 无红绿灯按钮,窗口只能 Cmd+Q 退出。
+            fn with_standard_window_buttons(
+                &self,
+                _window: Option<&mut Window>,
+            ) -> ::std::os::raw::c_int {
+                1
+            }
+
+            // 同样是宏默认 0 的坑:不可缩放/最大化/最小化。macOS 上
+            // can_resize=0 会让绿灯(zoom)置灰。
+            fn can_resize(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
+                1
+            }
+
+            fn can_maximize(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
+                1
+            }
+
+            fn can_minimize(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
+                1
+            }
+
             fn on_window_created(&self, window: Option<&mut Window>) {
                 let browser_view = self.browser_view.borrow();
                 let (Some(window), Some(browser_view)) = (window, browser_view.as_ref()) else {
@@ -413,44 +531,82 @@ mod minimal_windowed {
         let path = std::env::temp_dir().join("kabegame-cef-windowed-test.html");
         if std::fs::write(&path, TEST_HTML).is_ok() {
             let slashes = path.to_string_lossy().replace('\\', "/");
-            let prefix = if slashes.starts_with('/') { "file://" } else { "file:///" };
+            let prefix = if slashes.starts_with('/') {
+                "file://"
+            } else {
+                "file:///"
+            };
             return format!("{prefix}{slashes}");
         }
         // 写文件失败时回退到最小 data: URL
         "data:text/html;charset=utf-8,%3Ch1%3ECEF%20windowed%20OK%3C%2Fh1%3E".to_string()
     }
 
+    /// 解析子进程 helper 可执行文件的绝对路径。三平台都是独立于本进程的
+    /// 二进制:Linux/Windows 在本 exe 同目录找 `cef-helper`(由 `cef-helper`
+    /// crate 单独构建);macOS 是 bundle 内的独立 `CEFExample Helper.app`
+    /// (由 os-plugin 的 `buildCEFExampleApp` 生成,见 build.ts)。
+    fn helper_path() -> std::path::PathBuf {
+        let exe_dir = std::env::current_exe()
+            .expect("failed to resolve current_exe")
+            .parent()
+            .expect("exe has no parent dir")
+            .to_path_buf();
+
+        #[cfg(target_os = "macos")]
+        {
+            exe_dir.join("../Frameworks/CEFExample Helper.app/Contents/MacOS/CEFExample Helper")
+        }
+        #[cfg(target_os = "windows")]
+        {
+            exe_dir.join("cef-helper.exe")
+        }
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        {
+            exe_dir.join("cef-helper")
+        }
+    }
+
     pub fn run() {
+        // macOS: cef-dll-sys does not link libcef there (see cef-dll-sys
+        // build.rs) — the framework must be loaded at runtime, before *any*
+        // other CEF call (including api_hash below). helper=false resolves
+        // the framework relative to this exe via "../Frameworks" (see
+        // cef::library_loader).
+        #[cfg(target_os = "macos")]
+        let _library_loader = {
+            let exe = std::env::current_exe().expect("failed to resolve current_exe");
+            let loader = library_loader::LibraryLoader::new(&exe, false);
+            assert!(loader.load(), "cef-example: cef_load_library failed");
+            loader
+        };
+
+        // 必须在框架加载后、cef_initialize 前创建 CefAppProtocol NSApplication
+        // (见 crate::app_mac 模块注释)。
+        #[cfg(target_os = "macos")]
+        crate::app_mac::init_cef_application();
+
         let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+
         let args = Args::new();
-        let cmd = args.as_cmd_line().expect("failed to parse command line");
-        let is_browser_process = cmd.has_switch(Some(&CefString::from("type"))) != 1;
         let quit = Arc::new(AtomicBool::new(false));
         let pump_mode = PumpMode::from_env();
 
+        // The browser (main) process never re-executes itself: every CEF
+        // subprocess is the standalone cef-helper binary, referenced below
+        // via browser_subprocess_path. So there is no execute_process /
+        // is_browser_process branching here — this function only ever runs
+        // the browser process.
         let mut app = WindowedApp::new(quit.clone());
-        let code = execute_process(
-            Some(args.as_main_args()),
-            Some(&mut app),
-            std::ptr::null_mut(),
-        );
-        if !is_browser_process {
-            std::process::exit(code.max(0));
-        }
-        assert_eq!(
-            code, -1,
-            "browser process: execute_process should return -1"
-        );
+
+        let helper = helper_path()
+            .canonicalize()
+            .unwrap_or_else(|e| panic!("cef-helper not found at {:?}: {e}", helper_path()));
 
         let mut settings = Settings {
             no_sandbox: 1,
             external_message_pump: pump_mode.uses_external_pump() as i32,
-            browser_subprocess_path: CefString::from(
-                std::env::current_exe()
-                    .expect("failed to resolve CEF subprocess executable")
-                    .to_string_lossy()
-                    .as_ref(),
-            ),
+            browser_subprocess_path: CefString::from(helper.to_string_lossy().as_ref()),
             root_cache_path: CefString::from(
                 std::env::var_os("CEF_WINDOWED_CACHE_DIR")
                     .map(std::path::PathBuf::from)
@@ -460,11 +616,33 @@ mod minimal_windowed {
             ),
             ..Default::default()
         };
+        // macOS always loads *.pak/icudtl.dat/locales from the framework's
+        // own Resources/ dir; resources_dir_path/locales_dir_path are
+        // ignored there (and would be wrong if set to CEF_PATH's root).
+        #[cfg(not(target_os = "macos"))]
         if let Ok(cef_path) = std::env::var("CEF_PATH") {
             if !cef_path.is_empty() {
                 settings.resources_dir_path = CefString::from(cef_path.as_str());
                 settings.locales_dir_path = CefString::from(format!("{cef_path}/locales").as_str());
             }
+        }
+        // macOS:framework_dir_path 必须给 canonicalize 后的真实路径。bundle 里的
+        // framework 是指向 CEF_PATH 的符号链接;LibraryLoader 已按真实路径加载了
+        // libcef,若这里留空,cef_initialize 会按 bundle 默认路径(符号链接字符串)
+        // 解析框架 —— 与已加载路径不一致,实测导致 GPU 合成黑屏(页面 JS 正常、
+        // 输入正常、唯独画面全黑;disable-gpu 可显示)。设为一致路径后 GPU 正常。
+        // 注:启动早期的 "Trying to load the allocator multiple times" 警告仍会
+        // 打一次,无害。
+        #[cfg(target_os = "macos")]
+        {
+            let framework_dir = std::env::current_exe()
+                .expect("failed to resolve current_exe")
+                .parent()
+                .expect("exe has no parent dir")
+                .join("../Frameworks/Chromium Embedded Framework.framework")
+                .canonicalize()
+                .expect("CEF framework not found in app bundle Frameworks/");
+            settings.framework_dir_path = CefString::from(framework_dir.to_string_lossy().as_ref());
         }
 
         assert_eq!(
@@ -506,6 +684,13 @@ mod minimal_windowed {
         #[cfg(target_os = "windows")]
         {
             return pump_windows_messages();
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            // macOS never reaches here: PumpMode::from_env() always returns
+            // Cef, so run_external_pump is never called.
+            false
         }
     }
 

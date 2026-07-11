@@ -262,7 +262,10 @@ pub fn install_album_drive_driver() -> Result<(), String> {
     };
 
     if result as isize <= 32 {
-        return Err(format!("Failed to launch Dokan installer: {}", result as isize));
+        return Err(format!(
+            "Failed to launch Dokan installer: {}",
+            result as isize
+        ));
     }
 
     Ok(())

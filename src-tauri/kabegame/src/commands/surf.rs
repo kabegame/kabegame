@@ -1,15 +1,15 @@
 use kabegame_core::app_paths::AppPaths;
-use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::crawler::downloader::{
-    ActiveDownloadInfo, DownloadState, get_default_images_dir, next_download_id,
-    postprocess_downloaded_image,
+    get_default_images_dir, next_download_id, postprocess_downloaded_image, ActiveDownloadInfo,
+    DownloadState,
 };
 use kabegame_core::crawler::favicon::fetch_favicon;
+use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::storage::{RangedSurfRecords, Storage, SurfRecord};
 use kabegame_i18n::t;
 use std::collections::HashMap;
-use tauri::Emitter;
 use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
+use tauri::Emitter;
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, Webview, WebviewUrl,
     WebviewWindowBuilder,

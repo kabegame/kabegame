@@ -271,6 +271,11 @@ mod imp {
             self
         }
 
+        #[cfg(target_os = "macos")]
+        fn transparent(self, _transparent: bool) -> Self {
+            self
+        }
+
         fn decorations(mut self, decorations: bool) -> Self {
             self.inner = self.inner.with_decorations(decorations);
             self
@@ -309,6 +314,7 @@ mod imp {
             Ok(self)
         }
 
+        #[allow(unused_mut)]
         fn skip_taskbar(mut self, skip: bool) -> Self {
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             {
@@ -328,6 +334,7 @@ mod imp {
             self
         }
 
+        #[allow(unused_mut)]
         fn shadow(mut self, enable: bool) -> Self {
             #[cfg(windows)]
             {
@@ -353,6 +360,31 @@ mod imp {
             self.parent_hwnd = Some(parent.0 as isize);
             self.owner_hwnd = None;
             self.inner = self.inner.with_parent_window(parent.0 as isize);
+            self
+        }
+
+        #[cfg(target_os = "macos")]
+        fn parent(self, _parent: *mut std::ffi::c_void) -> Self {
+            self
+        }
+
+        #[cfg(target_os = "macos")]
+        fn title_bar_style(self, _style: tauri_utils::TitleBarStyle) -> Self {
+            self
+        }
+
+        #[cfg(target_os = "macos")]
+        fn traffic_light_position<P: Into<Position>>(self, _position: P) -> Self {
+            self
+        }
+
+        #[cfg(target_os = "macos")]
+        fn hidden_title(self, _hidden: bool) -> Self {
+            self
+        }
+
+        #[cfg(target_os = "macos")]
+        fn tabbing_identifier(self, _identifier: &str) -> Self {
             self
         }
 
@@ -669,6 +701,10 @@ mod imp {
         }
         fn set_fullscreen(&self, fullscreen: bool) -> Result<()> {
             self.send_set(runtime::WindowSet::Fullscreen(fullscreen))
+        }
+        #[cfg(target_os = "macos")]
+        fn set_simple_fullscreen(&self, enable: bool) -> Result<()> {
+            self.set_fullscreen(enable)
         }
         fn set_focus(&self) -> Result<()> {
             self.send_set(runtime::WindowSet::Focus)

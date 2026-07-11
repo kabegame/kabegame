@@ -110,7 +110,7 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapersâ€
 
 ### macOS
 
-> **Minimum**: macOS **10.13 (High Sierra)** or later.
+> **Minimum**: macOS **11 (Big Sur)** or later.
 
 1. **Download DMG**: Choose Standard or Light `.dmg`.
 2. **Install**:

@@ -22,8 +22,17 @@ import Handlebars from "handlebars";
 export class Component {
   static readonly MAIN = "kabegame";
   static readonly CLI = "kabegame-cli";
+  // 独立于 kabegame 的 CEF 验证用二进制:cef-example(浏览器/主进程)+
+  // cef-helper(唯一子进程入口)。不并入 isAll(`bun b` 全量构建不含它们)。
+  static readonly CEF_EXAMPLE = "cef-example";
+  static readonly CEF_HELPER = "cef-helper";
 
-  static readonly components = [this.MAIN, this.CLI];
+  static readonly components = [
+    this.MAIN,
+    this.CLI,
+    this.CEF_EXAMPLE,
+    this.CEF_HELPER,
+  ];
 
   constructor(private readonly _comp: string) {}
 
@@ -37,6 +46,14 @@ export class Component {
 
   get isCli(): boolean {
     return this.comp === Component.CLI || this.isAll;
+  }
+
+  get isCEFExample(): boolean {
+    return this.comp === Component.CEF_EXAMPLE;
+  }
+
+  get isCEFHelper(): boolean {
+    return this.comp === Component.CEF_HELPER;
   }
 
   get isAll(): boolean {
@@ -58,6 +75,12 @@ export class Component {
       }
       case this.CLI: {
         return path.join(SRC_TAURI_DIR, "kabegame-cli");
+      }
+      case this.CEF_EXAMPLE: {
+        return path.join(SRC_TAURI_DIR, "cef-example");
+      }
+      case this.CEF_HELPER: {
+        return path.join(SRC_TAURI_DIR, "cef-helper");
       }
       default: {
         throw new Error(`未知的app: ${cmp}`);
@@ -105,12 +128,19 @@ export class ComponentPlugin extends BasePlugin {
         );
       }
       const comp = new Component(component);
-      if (bs.context.cmd!.isDev && comp.isCli) {
-        throw new Error(`当前 dev 不支持 kabegame-cli ！kabegame-cli 请构建后测试运行`);
+      if (
+        bs.context.cmd!.isDev &&
+        (comp.isCli || comp.isCEFExample || comp.isCEFHelper)
+      ) {
+        throw new Error(
+          `当前 dev 不支持 ${comp.comp}！请用 bun b 构建后用 bun start 测试运行`,
+        );
       }
-      // if (bs.context.cmd!.isStart && comp.isPluginEditor) {
-      //   throw new Error(`当前 start 不支持 p`);
-      // }
+      if (bs.context.cmd!.isStart && comp.isCEFHelper) {
+        throw new Error(
+          `cef-helper 是子进程可执行文件,无法单独 start；请 bun start -c cef-example`,
+        );
+      }
       this.component = comp;
       bs.context.component = comp;
     });
@@ -141,6 +171,8 @@ export class ComponentPlugin extends BasePlugin {
       let linuxDebExtraFilesEntries = "";
       let linuxDebExtraFilesPresent = false;
       let macosFrameworksEntries = "[]";
+      let macosFilesEntries = "";
+      let macosFilesPresent = false;
       if (!isAndroid && !isWeb && !bs.context.cmd?.isCheck) {
         if (OSPlugin.isLinux) {
           const dir = path.join(ROOT, "bin", "linux");
@@ -169,12 +201,31 @@ export class ComponentPlugin extends BasePlugin {
             }
           }
         } else if (OSPlugin.isMacOS) {
-          const dir = path.join(ROOT, "bin", "macos");
-          if (existsSync(dir)) {
-            const files = readdirSync(dir)
-              .filter((f) => f.endsWith(".dylib"))
-              .map((f) => `../../bin/macos/${f}`);
-            macosFrameworksEntries = JSON.stringify(files);
+          if (bs.context.cmd?.isBuild) {
+            const cefPath = process.env.CEF_PATH;
+            if (cefPath) {
+              const framework = path.join(cefPath, "Chromium Embedded Framework.framework");
+              if (existsSync(framework)) {
+                macosFrameworksEntries = JSON.stringify([framework]);
+              }
+            }
+            const stagingDir = path.join(ROOT, "target", "cef-helpers-stage");
+            if (existsSync(stagingDir)) {
+              const helperVariants = ["", " (GPU)", " (Renderer)", " (Plugin)", " (Alerts)"];
+              const helperBaseName = "Kabegame Helper";
+              const entries: string[] = [];
+              for (const variant of helperVariants) {
+                const helperName = `${helperBaseName}${variant}`;
+                const src = path.join(stagingDir, `${helperName}.app`);
+                if (existsSync(src)) {
+                  entries.push(`"Frameworks/${helperName}.app": "${src}"`);
+                }
+              }
+              if (entries.length > 0) {
+                macosFilesEntries = entries.join(",\n          ");
+                macosFilesPresent = true;
+              }
+            }
           }
         }
       }
@@ -193,6 +244,8 @@ export class ComponentPlugin extends BasePlugin {
         linuxDebExtraFilesEntries,
         linuxDebExtraFilesPresent,
         macosFrameworksEntries,
+        macosFilesEntries,
+        macosFilesPresent,
       };
 
       // 编译 apps/<comp>/index.html.handlebars → index.html（在所有模式下，包括 web）
@@ -247,6 +300,26 @@ export class ComponentPlugin extends BasePlugin {
             writeFileSync(capOut, capTemplate(templateCtx));
           }
         }
+      }
+    });
+
+    // cef-example 依赖独立构建的 cef-helper 子进程可执行文件;这里只检查其
+    // 存在,不代为 `cargo build`(构建始终是显式的 `bun b -c cef-helper`)。
+    // 注:main 组件的 CEF runtime 目前仍走自我重入模型(未接入独立 helper,
+    // 见 tauri-runtime-cef/src/runtime.rs),故此检查暂不对 main 启用。
+    bs.hooks.beforeBuild.tap(this.name, (comp?: string) => {
+      const component = comp ? new Component(comp) : this.component!;
+      if (!component.isCEFExample) return;
+      const profile = bs.options.release ? "release" : "debug";
+      const exeName = OSPlugin.isWindows ? "cef-helper.exe" : "cef-helper";
+      const exe = path.join(ROOT, "target", profile, exeName);
+      if (!existsSync(exe)) {
+        throw new Error(
+          [
+            `❌ 缺少 cef-helper 可执行文件: ${path.relative(ROOT, exe)}`,
+            `请先运行: bun b -c cef-helper${bs.options.release ? " --release" : ""}`,
+          ].join("\n"),
+        );
       }
     });
 

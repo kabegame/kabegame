@@ -164,6 +164,23 @@ export class ReleasePlugin extends BasePlugin {
       this.addRustFlags("-C codegen-units=1");
     });
 
+    // `bun b` 不再对直接 cargo build 的组件(kabegame-cli/cef-example/cef-helper)
+    // 硬编 --release —— 默认 debug,只有传了 --release 时才在这里补上 cargo 的
+    // --release 标志。main 组件桌面/android 走 `tauri build`,本身即恒定 release,
+    // 不需要(也不认识)这个 cargo 标志。
+    bs.hooks.prepareCompileArgs.tap(
+      this.name,
+      // @ts-ignore:waterfall 入参在这里已被前面的 tap(OSPlugin 等)归一化为对象
+      (result: { comp: Component; features: string[]; args?: string[] }) => {
+        const viaTauri = result.comp.isMain && !bs.context.mode?.isWeb;
+        if (viaTauri) return result;
+        return {
+          ...result,
+          args: [...(result.args || []), "--release"],
+        };
+      },
+    );
+
     bs.hooks.afterBuild.tapPromise(this.name, async (comp: string) => {
       if (comp !== Component.MAIN) return;
       if (bs.context.skip?.isCargo) return;

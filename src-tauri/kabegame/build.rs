@@ -76,5 +76,9 @@ fn main() {
     }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
+        // libfuse 弱链接:有 macFUSE 则可用虚拟盘,无则不崩(设置页检测并提示安装)
+        if std::env::var("CARGO_FEATURE_STANDARD").is_ok() {
+            println!("cargo:rustc-link-arg=-Wl,-weak-lfuse");
+        }
     }
 }

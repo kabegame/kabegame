@@ -993,6 +993,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cef-example"
+version = "0.1.0"
+dependencies = [
+ "cef",
+ "gtk",
+ "objc2",
+ "objc2-app-kit",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "cef-helper"
+version = "0.1.0"
+dependencies = [
+ "cef",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cesu8"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8871,10 +8891,14 @@ version = "0.1.0"
 dependencies = [
  "ash",
  "cef",
+ "cef-helper",
  "cookie",
  "gtk",
  "http 1.4.0",
  "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "raw-window-handle",
  "tao",
  "tauri-runtime",

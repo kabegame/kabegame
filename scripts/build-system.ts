@@ -82,6 +82,8 @@ interface BuildHooks {
     { comp: Component; features: string[]; args?: string[] }
   >;
   afterBuild: AsyncSeriesHook<[string]>;
+  beforeRun: SyncHook<[string?]>;
+  afterRun: SyncHook<[string?]>;
 }
 
 /**
@@ -110,6 +112,12 @@ export class BuildSystem {
 
       // 构建后阶段
       afterBuild: new AsyncSeriesHook(["comp"]),
+
+      // 可执行文件已生成、运行进程启动前
+      beforeRun: new SyncHook(["comp"]),
+
+      // 运行进程退出后
+      afterRun: new SyncHook(["comp"]),
     };
 
     this.context = {
@@ -246,13 +254,57 @@ export class BuildSystem {
       run("cargo", args, { cwd: SRC_TAURI_DIR });
       killVite();
     } else {
-      const args = this.buildTauriArgs(
-        ["dev"],
+      const cargoArgs = this.buildCargoArgs(
+        ["build", "-p", Component.MAIN],
         features,
-        this.options.args,
         compileArgs,
       );
-      run("tauri", args, { cwd, bin: "cargo" });
+      run("cargo", cargoArgs, { cwd: SRC_TAURI_DIR });
+      await this.hooks.afterBuild.promise(Component.MAIN);
+      this.hooks.beforeRun.call(Component.MAIN);
+
+      try {
+        if (OSPlugin.isMacOS) {
+          console.log(chalk.cyan("[macOS dev] Starting Vite dev server on 1420..."));
+          const viteProc = spawn("bun", ["run", "dev:frontend"], {
+            cwd: root,
+            stdio: "inherit",
+            env: process.env,
+          });
+          const killVite = () => {
+            if (!viteProc.killed) {
+              try { viteProc.kill("SIGTERM"); } catch {}
+            }
+          };
+          process.on("exit", killVite);
+          process.on("SIGINT", killVite);
+          process.on("SIGTERM", killVite);
+          try {
+            // await this.waitForDevServer("http://localhost:1420", 30_000);
+            const exe = path.join(
+              root,
+              "gen",
+              "Kabegame.app",
+              "Contents",
+              "MacOS",
+              "kabegame",
+            );
+            run(exe, this.options.args || [], { cwd: root });
+          } finally {
+            killVite();
+          }
+        } else {
+          const args = this.buildTauriArgs(
+            ["dev"],
+            features,
+            this.options.args,
+            compileArgs,
+          );
+          run("tauri", args, { cwd, bin: "cargo" });
+        }
+      } finally {
+        this.hooks.afterRun.call(Component.MAIN);
+      }
     }
   }
 
@@ -262,14 +314,58 @@ export class BuildSystem {
 
     this.commonUse(Cmd.START);
     this.commonBefore();
-    const { features } = this.hooks.prepareCompileArgs.call();
-    const baseArgs = ["run", "-p", this.context.component!.cargoComp];
-    const args = this.buildCargoArgs(baseArgs, features);
 
-    if (this.options.args && this.options.args.length > 0) {
-      args.push("--");
-      args.push(...this.options.args);
+    if (this.context.component?.isCEFExample) {
+      if (OSPlugin.isMacOS) {
+        // macOS 浏览器进程必须在 app bundle 内运行(见 os-plugin.buildCEFExampleApp);
+        // start 只负责运行已构建产物,不代为 build。
+        const exe = path.join(
+          root,
+          "gen",
+          "CEFExample.app",
+          "Contents",
+          "MacOS",
+          Component.CEF_EXAMPLE,
+        );
+        if (!existsSync(exe)) {
+          throw new Error(
+            `gen/CEFExample.app 不存在或未包含可执行文件,请先运行: bun b -c cef-example`,
+          );
+        }
+        this.hooks.beforeRun.call(Component.CEF_EXAMPLE);
+        try {
+          run(exe, this.options.args || [], { cwd: root });
+        } finally {
+          this.hooks.afterRun.call(Component.CEF_EXAMPLE);
+        }
+      } else {
+        const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(
+          Component.CEF_EXAMPLE,
+        );
+        const buildArgs = this.buildCargoArgs(
+          ["build", "-p", Component.CEF_EXAMPLE],
+          features,
+          compileArgs,
+        );
+        run("cargo", buildArgs, { cwd: SRC_TAURI_DIR });
+        this.hooks.beforeRun.call(Component.CEF_EXAMPLE);
+        try {
+          const runArgs = this.buildCargoArgs(
+            ["run", "-p", Component.CEF_EXAMPLE],
+            features,
+            compileArgs,
+          );
+          if (this.options.args?.length) runArgs.push("--", ...this.options.args);
+          run("cargo", runArgs, { cwd: SRC_TAURI_DIR });
+        } finally {
+          this.hooks.afterRun.call(Component.CEF_EXAMPLE);
+        }
+      }
+      return;
     }
+
+    const component = this.context.component!;
+    const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call();
     // 先构建前端资源
     if (this.context.component?.isMain) {
       if (this.options.nx === false) {
@@ -280,7 +376,48 @@ export class BuildSystem {
         });
       }
     }
-    run("cargo", args);
+    const buildArgs = this.buildCargoArgs(
+      ["build", "-p", component.cargoComp],
+      features,
+      compileArgs,
+    );
+    run("cargo", buildArgs, { cwd: SRC_TAURI_DIR });
+    this.hooks.beforeRun.call(component.comp);
+    try {
+      if (OSPlugin.isMacOS && component.isMain) {
+        const exe = path.join(
+          root,
+          "gen",
+          "Kabegame.app",
+          "Contents",
+          "MacOS",
+          "kabegame",
+        );
+        run(exe, this.options.args || [], { cwd: root });
+      } else {
+        const runArgs = this.buildCargoArgs(
+          ["run", "-p", component.cargoComp],
+          features,
+          compileArgs,
+        );
+        if (this.options.args?.length) runArgs.push("--", ...this.options.args);
+        run("cargo", runArgs, { cwd: SRC_TAURI_DIR });
+      }
+    } finally {
+      this.hooks.afterRun.call(component.comp);
+    }
+  }
+
+  private async waitForDevServer(url: string, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(url);
+        if (response.ok) return;
+      } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error(`Vite dev server did not become ready within ${timeoutMs}ms: ${url}`);
   }
 
   async build(options: BuildOptions): Promise<void> {
@@ -294,7 +431,7 @@ export class BuildSystem {
       const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.CLI);
       const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
       const args = this.buildCargoArgs(
-        ["build", "--release", "-p", Component.cargoComp(Component.CLI)],
+        ["build", "-p", Component.cargoComp(Component.CLI)],
         features,
         mergedArgs.length > 0 ? mergedArgs : undefined,
       );
@@ -303,6 +440,33 @@ export class BuildSystem {
           cwd: SRC_TAURI_DIR,
         });
       }
+    }
+    if (this.context.component!.isCEFHelper) {
+      this.hooks.beforeBuild.call(Component.CEF_HELPER);
+      const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.CEF_HELPER);
+      const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
+      const args = this.buildCargoArgs(
+        ["build", "-p", Component.CEF_HELPER],
+        features,
+        mergedArgs.length > 0 ? mergedArgs : undefined,
+      );
+      if (!this.context.skip?.isCargo) {
+        run("cargo", args, { cwd: SRC_TAURI_DIR });
+      }
+    }
+    if (this.context.component!.isCEFExample) {
+      this.hooks.beforeBuild.call(Component.CEF_EXAMPLE);
+      const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.CEF_EXAMPLE);
+      const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
+      const args = this.buildCargoArgs(
+        ["build", "-p", Component.CEF_EXAMPLE],
+        features,
+        mergedArgs.length > 0 ? mergedArgs : undefined,
+      );
+      if (!this.context.skip?.isCargo) {
+        run("cargo", args, { cwd: SRC_TAURI_DIR });
+      }
+      await this.hooks.afterBuild.promise(Component.CEF_EXAMPLE);
     }
     if (this.context.component!.isMain) {
       this.hooks.beforeBuild.call(Component.MAIN);
@@ -336,7 +500,7 @@ export class BuildSystem {
           }
           const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
           const args = this.buildCargoArgs(
-            ["build", "--release", "-p", "kabegame"],
+            ["build", "-p", "kabegame"],
             features,
             mergedArgs.length > 0 ? mergedArgs : undefined,
           );
@@ -362,7 +526,10 @@ export class BuildSystem {
     this.commonUse(Cmd.CHECK);
     this.commonBefore();
 
-    if (!this.context.skip?.isVue) {
+    // cef-example/cef-helper 无前端目录(apps/<comp> 不存在),跳过 vue-tsc。
+    const hasNoFrontend =
+      this.context.component!.isCEFExample || this.context.component!.isCEFHelper;
+    if (!this.context.skip?.isVue && !hasNoFrontend) {
       run("vue-tsc", [], {
         bin: "bun",
         cwd: this.context.component!.appFeDir,

@@ -6,6 +6,8 @@ members = [
   "src-tauri/kabegame",
   "src-tauri/kabegame-cli",
   "src-tauri/tauri-runtime-cef",
+  "src-tauri/cef-helper",
+  "src-tauri/cef-example",
   "src-tauri-plugins/tauri-plugin-picker",
   "src-tauri-plugins/tauri-plugin-pathes",
   "src-tauri-plugins/tauri-plugin-share",

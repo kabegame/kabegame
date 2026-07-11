@@ -104,37 +104,59 @@ export class ModePlugin extends BasePlugin {
         if (OSPlugin.isLinux) {
           this.setEnv("FFMPEG_LINK_MODE", "static");
         }
-        // Linux/Windows 用 CEF runtime。必须在任何 cargo 命令前设好
+        // Linux/Windows/macOS 用 CEF runtime。必须在任何 cargo 命令前设好
         // CEF_PATH,否则 cef-dll-sys 会下载官方无 H.264 的 CEF 覆盖 target 目录
         // (见 .cursor/rules/cef-path-set.mdc)。
-        // 回退约定:Linux ~/i/cef-{dev,prod};Windows H:\cef-{dev,prod}。
-        if ((OSPlugin.isLinux || OSPlugin.isWindows) && !this.mode!.isWeb) {
+        // 回退约定:Linux ~/i/cef-{dev,prod};Windows H:\cef-{dev,prod}；
+        // macOS /Volumes/KIOXIA/cef-{dev,prod}(见 scripts/build-chromium.sh)。
+        if (
+          (OSPlugin.isLinux || OSPlugin.isWindows || OSPlugin.isMacOS) &&
+          !this.mode!.isWeb
+        ) {
           // dev/check 用 cef-dev(check 只需要任意有效 CEF 目录做编译,不打包);
-          // 仅 build 要求 cef-prod。
-          const cefVariant =
-            bs.context.cmd.isDev || bs.context.cmd.isCheck ? "cef-dev" : "cef-prod";
+          // build 默认要求 cef-prod,除非是 cef-example/cef-helper 且未传
+          // --release(它们默认 debug profile,配 cef-dev 即可,不强制先编 cef-prod)。
+          const comp = bs.context.component;
+          const isCEFTool = !!(comp?.isCEFExample || comp?.isCEFHelper);
+          const cefVariant = isCEFTool
+            ? bs.options.release
+              ? "cef-prod"
+              : "cef-dev"
+            : bs.context.cmd.isDev || bs.context.cmd.isCheck
+              ? "cef-dev"
+              : "cef-dev";
           const cefPath =
             process.env.CEF_PATH ||
             (OSPlugin.isWindows
               ? path.join("H:", cefVariant)
-              : path.join(os.homedir(), "i", cefVariant));
-          const libcefName = OSPlugin.isWindows ? "libcef.dll" : "libcef.so";
-          const libcef = path.join(cefPath, libcefName);
-          if (!fs.existsSync(libcef)) {
+              : OSPlugin.isMacOS
+                ? path.join("/Volumes/KIOXIA", cefVariant)
+                : path.join(os.homedir(), "i", cefVariant));
+          // macOS 的 CEF runtime 是 framework(见 build-chromium.sh 导出结构),
+          // Linux/Windows 是单个 libcef.so/dll。
+          const cefRuntimeExists = OSPlugin.isMacOS
+            ? fs.existsSync(
+                path.join(cefPath, "Chromium Embedded Framework.framework"),
+              )
+            : fs.existsSync(
+                path.join(cefPath, OSPlugin.isWindows ? "libcef.dll" : "libcef.so"),
+              );
+          if (!cefRuntimeExists) {
             throw new Error(
               [
-                `CEF runtime not found: ${libcef}`,
+                `CEF runtime not found in: ${cefPath}`,
                 "Set CEF_PATH to an exported cef-rs runtime directory" +
-                  (OSPlugin.isLinux ? ", or run:" : "."),
-                ...(OSPlugin.isLinux
+                  (OSPlugin.isLinux || OSPlugin.isMacOS ? ", or run:" : "."),
+                ...(OSPlugin.isLinux || OSPlugin.isMacOS
                   ? ["scripts/build-chromium.sh dev", "scripts/build-chromium.sh prod"]
                   : []),
               ].join("\n"),
             );
           }
           this.setEnv("CEF_PATH", cefPath);
-          // Windows 不需要注入库搜索路径:cef-dll-sys build.rs 会把整个 CEF runtime
-          // 拷进 target/{debug,release}/(exe 同目录),加载器直接命中。
+          // Windows/macOS 不需要注入库搜索路径:Windows 由 cef-dll-sys build.rs
+          // 把整个 CEF runtime 拷进 target/{debug,release}/(exe 同目录);macOS
+          // 在运行时用 cef::library_loader 按绝对路径 dlopen 框架,无需 DYLD 路径。
           if (OSPlugin.isLinux) {
             const libraryPath = (process.env.LD_LIBRARY_PATH || "")
               .split(path.delimiter)

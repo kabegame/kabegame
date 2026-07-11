@@ -22,7 +22,12 @@
       metadata: o.metadata ?? undefined,
       metadata_version: o.metadata_version ?? undefined,
       metadataVersion: o.metadata_version ?? undefined,
+      // Tauri v2 按「Rust snake_case 参数 → camelCase」查找 invoke 实参,故必须传
+      // camelCase 的 pageUrl,才能命中 crawl_media_begin 的 page_url;只传 snake_case
+      // 的 page_url 会被丢弃 → post_url 为空(MSE/流式视频丢失帖子 url,而右键图片走
+      // surf_download_image 的 sourceUrl 正常)。保留 page_url 以兼容潜在的双向匹配。
       page_url: o.url ?? undefined,
+      pageUrl: o.url ?? undefined,
     };
   }
 
