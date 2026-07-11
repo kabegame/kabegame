@@ -1,32 +1,58 @@
 import { createPathRouteStore } from "./pathRoute";
 import {
-  buildAlbumBrowsePath,
-  parseAlbumBrowsePath,
-  type AlbumBrowseFilter,
-  type AlbumBrowseSort,
-} from "@/utils/albumPath";
+  buildComposablePath,
+  parseComposablePath,
+  buildComposableContextPrefix,
+  type GalleryFilterSet,
+  type GallerySort,
+} from "@/utils/galleryPath";
 import { HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 type AlbumDetailRouteState = {
   albumId: string;
-  filter: AlbumBrowseFilter;
-  sort: AlbumBrowseSort;
+  filters: GalleryFilterSet;
+  sort: GallerySort;
   page: number;
   pageSize: number;
   search: string;
 };
 
+const SEARCH_PREFIX = "search/display-name/";
+
 function createDefaultState(): AlbumDetailRouteState {
   const settings = useSettingsStore();
   return {
     albumId: "",
-    filter: "all",
-    sort: "join-asc",
+    filters: {},
+    sort: { field: "by-album-order", desc: false },
     page: 1,
     pageSize: (settings.values.galleryPageSize as number | undefined) ?? 100,
     search: "",
   };
+}
+
+function extractAlbumIdAndBody(path: string): { albumId: string; body: string } {
+  const trimmed = (path || "").trim();
+  let segs = trimmed.split("/").filter(Boolean);
+  let search = "";
+  if (segs.length >= 3 && segs[0] === "search" && segs[1] === "display-name") {
+    try {
+      search = segs[2] ?? "";
+    } catch {
+      search = segs[2] ?? "";
+    }
+    segs = segs.slice(3);
+  }
+  if (segs.length >= 2 && segs[0] === "album") {
+    const albumId = segs[1]!;
+    const body = segs.slice(2).join("/");
+    const searchPrefix = search
+      ? `${SEARCH_PREFIX}${search}/`
+      : "";
+    return { albumId, body: searchPrefix + body };
+  }
+  return { albumId: "", body: trimmed };
 }
 
 export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteState>(
@@ -34,21 +60,33 @@ export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteSta
   {
     settingKey: "album-detail-path",
     parse: (path) => {
-      const parsed = parseAlbumBrowsePath(path);
-      if (!parsed) return createDefaultState();
-      return parsed;
+      const { albumId, body } = extractAlbumIdAndBody(path);
+      if (!albumId) return createDefaultState();
+      const parsed = parseComposablePath(body, [], "by-album-order");
+      return {
+        albumId,
+        filters: parsed.filters,
+        sort: parsed.sort,
+        page: parsed.page,
+        pageSize: parsed.pageSize,
+        search: parsed.search,
+      };
     },
     build: (state) =>
-      buildAlbumBrowsePath(
-        state.albumId,
-        state.filter,
-        state.sort,
-        state.page,
-        state.pageSize,
-        state.search
+      buildComposablePath({
+        rootPrefix: `album/${state.albumId}`,
+        filters: state.filters,
+        sort: state.sort,
+        page: state.page,
+        pageSize: state.pageSize,
+        search: state.search,
+      }),
+    buildContext: (state) =>
+      buildComposableContextPrefix(
+        `album/${state.albumId}`,
+        state.search,
       ),
     defaultState: createDefaultState,
-    // HIDDEN 画册内部永远不套 `hide/` 前缀，否则 HideGate 会剔除其成员
     ignoreHide: (s) => s.albumId === HIDDEN_ALBUM_ID,
     onStateChange: (state) => {
       const settings = useSettingsStore();

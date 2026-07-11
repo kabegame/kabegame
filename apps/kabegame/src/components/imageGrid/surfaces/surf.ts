@@ -2,6 +2,7 @@ import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import router from "@/router";
 import { useSurfImagesRouteStore } from "@/stores/surfImagesRoute";
+import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { GridSurfaceAdapter } from "../types";
 
 /**
@@ -21,7 +22,7 @@ export function createSurfImagesSurface(params: {
     isActive: () =>
       router.currentRoute.value.name === "SurfImages" && !!routeStore.host,
     rootPathFallback: () => (routeStore.host ? `surf/${routeStore.host}/1` : ""),
-    computeCountPath: () => `surf/${routeStore.host}`,
+    computeCountPath: stripComposablePathTail,
     onCountError: (_error, ctx) => ctx.images.value.length,
     onLoadError: (error) => {
       const e = error as { message?: string } | null;

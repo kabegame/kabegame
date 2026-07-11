@@ -6,9 +6,8 @@ import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
 import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import {
-  buildAlbumCountPathFromCurrentPath,
-  isAlbumWallpaperFilterPath,
-} from "@/utils/albumPath";
+  stripComposablePathTail,
+} from "@/utils/galleryPath";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import type { GridSurfaceAdapter } from "../types";
@@ -61,7 +60,7 @@ export function createAlbumDetailSurface(params: {
         : rawPath;
       return inner.startsWith("album/") && !inner.startsWith("album//");
     },
-    computeCountPath: buildAlbumCountPathFromCurrentPath,
+    computeCountPath: stripComposablePathTail,
     onCountError: (error, ctx) => {
       console.error("获取画册总图片数失败:", error);
       return ctx.images.value.length;
@@ -80,7 +79,7 @@ export function createAlbumDetailSurface(params: {
           return ids.length === 0 || intersects;
         }
         if (reason === "change") {
-          if (isAlbumWallpaperFilterPath(ctx.computedPath.value)) return true;
+          if (routeStore.filters.wallpaperOrder) return true;
           return ids.length === 0 || intersects;
         }
         return true;

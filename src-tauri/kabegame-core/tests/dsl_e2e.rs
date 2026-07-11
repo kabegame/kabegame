@@ -906,65 +906,51 @@ fn images_metadata_path_reads_table_metadata() {
 }
 
 #[test]
-fn album_order_path_paginates_and_limit_leaf_only_limits() {
+fn album_sort_path_paginates_and_rejects_legacy_entries() {
     let runtime = build_runtime();
     let paged = runtime
-        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/order/x3x/1")
+        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/x3x/1")
         .unwrap();
-    let legacy_paged = runtime
-        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/album-order/x3x/1")
+    let desc = runtime
+        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/desc/x3x/1")
         .unwrap();
-    let legacy_desc = runtime
-        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/album-order/desc/x3x/1")
+    let hidden = runtime
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/x3x/1")
         .unwrap();
-    let legacy_hidden = runtime
-        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/album-order/x3x/1")
+    let delegated_all = runtime
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/all/x3x/1")
         .unwrap();
     let image_only = runtime
         .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/x3x/1")
         .unwrap();
-    let image_only_legacy_order = runtime
-        .fetch(
-            "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/album-order/x3x/1",
-        )
-        .unwrap();
-    let image_only_legacy_order_desc = runtime
-        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/album-order/desc/x3x/1")
-        .unwrap();
     let video_only = runtime
         .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/video-only/x3x/1");
-    let image_only_wallpaper_order = runtime.fetch(
-        "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/wallpaper-order/x3x/1",
-    );
-    let album_wallpaper_order = runtime.fetch(
-        "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/x3x/1",
-    );
+    let image_only_wallpaper_order = runtime
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/wallpaper-order/x3x/1")
+        .unwrap();
+    let album_wallpaper_order = runtime
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/x3x/1")
+        .unwrap();
+    let image_filter_album_order = runtime
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/media-type/image/filter_comb/sort/by-album-order/x3x/1")
+        .unwrap();
     let bigger_order = runtime
         .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/bigger_order/1/l100l")
         .unwrap();
     let limited = runtime
-        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/order/l3l")
+        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/l3l")
         .unwrap();
     assert_eq!(ids(paged), ["8", "7", "6"]);
-    assert_eq!(ids(legacy_paged), ["8", "7", "6"]);
-    assert_eq!(ids(legacy_desc), ["6", "7", "8"]);
-    assert_eq!(ids(legacy_hidden), ["8", "7", "6"]);
+    assert_eq!(ids(desc), ["6", "7", "8"]);
+    assert_eq!(ids(hidden), ["8", "7", "6"]);
+    assert_eq!(ids(delegated_all), ["6", "7", "8"]);
     assert_eq!(ids(image_only), ["6", "7", "8"]);
-    assert_eq!(ids(image_only_legacy_order), ["8", "7", "6"]);
-    assert_eq!(ids(image_only_legacy_order_desc), ["6", "7", "8"]);
     assert!(
         matches!(video_only, Err(EngineError::PathNotFound(path)) if path == "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/video-only/x3x/1")
     );
-    assert!(matches!(
-        image_only_wallpaper_order,
-        Err(EngineError::PathNotFound(path))
-            if path == "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/wallpaper-order/x3x/1"
-    ));
-    assert!(matches!(
-        album_wallpaper_order,
-        Err(EngineError::PathNotFound(path))
-            if path == "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/x3x/1"
-    ));
+    assert!(image_only_wallpaper_order.is_empty());
+    assert!(album_wallpaper_order.is_empty());
+    assert_eq!(ids(image_filter_album_order), ["8", "7", "6"]);
     assert_eq!(ids(bigger_order), ["7", "6"]);
     assert_eq!(ids(limited), ["8", "7", "6"]);
 
@@ -978,13 +964,20 @@ fn album_order_path_paginates_and_limit_leaf_only_limits() {
     );
 
     let page_node = runtime
-        .resolve("images://gallery/album/33333333-3333-3333-3333-333333333333/order/x3x/1")
+        .resolve("images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/x3x/1")
         .unwrap();
     assert!(page_node.composed.offset_terms.len() == 1);
     let limit_node = runtime
-        .resolve("images://gallery/album/33333333-3333-3333-3333-333333333333/order/l3l")
+        .resolve("images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/l3l")
         .unwrap();
     assert!(limit_node.composed.offset_terms.is_empty());
+
+    for legacy in ["order", "album-order"] {
+        let path = format!(
+            "images://gallery/album/33333333-3333-3333-3333-333333333333/{legacy}/x3x/1"
+        );
+        assert!(matches!(runtime.fetch(&path), Err(EngineError::PathNotFound(_))));
+    }
 
     let album_children = runtime
         .list("images://gallery/hide/album/33333333-3333-3333-3333-333333333333")

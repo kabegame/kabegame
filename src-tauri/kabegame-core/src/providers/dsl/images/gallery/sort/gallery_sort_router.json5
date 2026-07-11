@@ -19,6 +19,9 @@
         },
         "by-set-time": {
             "provider": "gallery_sort_by_set_time_provider"
+        },
+        "by-album-order": {
+            "provider": "gallery_album_order_provider"
         }
     }
 }

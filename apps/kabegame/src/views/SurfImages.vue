@@ -21,14 +21,21 @@
             @action="handleHeaderAction"
           />
 
-          <div class="surf-page-size-toolbar">
-            <GalleryPageSizeControl
-              :page-size="pageSize"
-              variant="gallery"
-              android-ui="inline"
-              @update:page-size="(ps) => surfImagesRouteStore.navigate({ page: 1, pageSize: ps })"
-            />
-          </div>
+          <GalleryFilters
+            :filters="surfImagesRouteStore.filters"
+            :sort="surfImagesRouteStore.sort"
+            :page-size="pageSize"
+            :search="surfImagesRouteStore.search"
+            :provider-context-prefix="surfImagesRouteStore.computedContextPath"
+            :filter-features="surfFilterFeatures"
+            :sort-features="surfSortFeatures"
+            enable-search
+            enable-page-size
+            @update:filters="(f) => surfImagesRouteStore.navigate({ filters: f, page: 1 })"
+            @update:sort="(s) => surfImagesRouteStore.navigate({ sort: s })"
+            @update:page-size="(ps) => surfImagesRouteStore.navigate({ page: 1, pageSize: ps })"
+            @update:search="(v) => surfImagesRouteStore.navigate({ page: 1, search: v })"
+          />
 
           <GalleryBigPaginator
             :total-count="totalCount"
@@ -49,11 +56,12 @@ import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
+import GalleryFilters from "@/components/GalleryFilters.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
-import GalleryPageSizeControl from "@/components/GalleryPageSizeControl.vue";
 import { createSurfImagesSurface } from "@/components/imageGrid/surfaces/surf";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import { useSurfImagesRouteStore } from "@/stores/surfImagesRoute";
+import type { GalleryFilterDimension, GallerySortField } from "@/utils/galleryPath";
 import { HeaderFeatureId, useHeaderStore } from "@kabegame/core/stores/header";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useI18n } from "@kabegame/i18n";
@@ -65,6 +73,13 @@ const { isCompact } = storeToRefs(useUiStore());
 const surfStore = useSurfStore();
 const surfImagesRouteStore = useSurfImagesRouteStore();
 const { hide: surfHide } = storeToRefs(surfImagesRouteStore);
+
+const surfFilterFeatures: GalleryFilterDimension[] = [
+  "wallpaperOrder", "noAlbum", "plugin", "mediaType", "date", "name", "size", "aspect",
+];
+const surfSortFeatures: GallerySortField[] = [
+  "by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time",
+];
 
 /** 路由与 VD 路径使用的站点 host（与 `surf_records.host` 一致） */
 const surfHost = ref("");
@@ -168,11 +183,4 @@ onActivated(async () => {
   min-height: 0;
 }
 
-.surf-page-size-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
 </style>

@@ -6,6 +6,7 @@
     // - 暴露 ai."order" AS album_order (壁纸顺序模式 marker, 7b S1e 引入)
     // - 默认按 images.crawled_at ASC (与旧 shared AlbumsProvider/VD 行为对齐)。
     "query": {
+        // 这里会返回多个但，后面过滤某一个画册会过滤掉其他的
         "join": [{
             "kind": "INNER",
             "table": "album_images",

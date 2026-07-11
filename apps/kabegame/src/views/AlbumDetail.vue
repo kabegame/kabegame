@@ -131,16 +131,20 @@
           <el-tab-pane :label="subAlbumsTabLabel" name="subAlbums" />
         </StyledTabs>
 
-        <AlbumDetailBrowseToolbar
+        <GalleryFilters
           ref="albumBrowseToolbarRef"
-          :album-id="albumDetailRouteStore.albumId"
-          :filter="albumDetailRouteStore.filter"
+          :filters="albumDetailRouteStore.filters"
           :sort="albumDetailRouteStore.sort"
           :page-size="gridPageSize"
           :search="search"
-          @update:filter="(filter) => albumDetailRouteStore.navigate({ filter, page: 1 })"
-          @update:sort="(sort) => albumDetailRouteStore.navigate({ sort })"
-          @update:pageSize="(ps) => albumDetailRouteStore.navigate({ page: 1, pageSize: ps })"
+          :provider-context-prefix="albumDetailRouteStore.computedContextPath"
+          :filter-features="albumFilterFeatures"
+          :sort-features="albumSortFeatures"
+          enable-search
+          enable-page-size
+          @update:filters="(f) => albumDetailRouteStore.navigate({ filters: f, page: 1 })"
+          @update:sort="(s) => albumDetailRouteStore.navigate({ sort: s })"
+          @update:page-size="(ps) => albumDetailRouteStore.navigate({ page: 1, pageSize: ps })"
           @update:search="(s) => albumDetailRouteStore.navigate({ page: 1, search: s })"
         />
 
@@ -232,7 +236,8 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import AlbumDetailPageHeader from "@/components/header/AlbumDetailPageHeader.vue";
-import AlbumDetailBrowseToolbar from "@/components/AlbumDetailBrowseToolbar.vue";
+import GalleryFilters from "@/components/GalleryFilters.vue";
+import type { GalleryFilterDimension, GallerySortField } from "@/utils/galleryPath";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { IS_LIGHT_MODE, IS_WEB, IS_ANDROID } from "@kabegame/core/env";
@@ -854,12 +859,19 @@ function childAlbumScopeIds(): string[] {
 }
 
 // ---------- Filter flags ----------
+const albumFilterFeatures: GalleryFilterDimension[] = [
+  "wallpaperOrder", "plugin", "mediaType", "date", "name", "size", "aspect",
+];
+const albumSortFeatures: GallerySortField[] = [
+  "by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time", "by-album-order",
+];
+
 const isAlbumWallpaperFilterEmpty = computed(() =>
-  albumDetailRouteStore.filter === "wallpaper-order"
+  !!albumDetailRouteStore.filters.wallpaperOrder
 );
 
 const handleAlbumWallpaperEmptyViewAll = async () => {
-  await albumDetailRouteStore.navigate({ filter: "all", page: 1 });
+  await albumDetailRouteStore.navigate({ filters: {}, page: 1 });
 };
 
 // ---------- Route synchronization ----------
@@ -1036,13 +1048,14 @@ const initAlbum = async (newAlbumId: string) => {
   albumId.value = newAlbumId;
   const rawPath = route.query.path;
   const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
-  if (qp.startsWith(`album/${newAlbumId}/`)) {
+  const innerPath = qp.startsWith("hide/") ? qp.slice("hide/".length) : qp;
+  if (innerPath.startsWith(`album/${newAlbumId}/`)) {
     albumDetailRouteStore.syncFromUrl(qp);
   } else {
     await albumDetailRouteStore.navigate({
       albumId: newAlbumId,
-      filter: "all",
-      sort: "join-asc",
+      filters: {},
+      sort: { field: "by-album-order", desc: false },
       page: 1,
     });
   }

@@ -14,21 +14,21 @@
                     </template>
                 </TaskDetailPageHeader>
 
-                <div class="task-detail-page-size-toolbar">
-                    <GalleryPageSizeControl
-                        :page-size="pageSize"
-                        variant="gallery"
-                        android-ui="inline"
-                        @update:page-size="(ps) => taskDetailRouteStore.navigate({ page: 1, pageSize: ps })"
-                    />
-                    <SearchInput
-                        v-if="!isCompact"
-                        :model-value="searchQuery"
-                        :placeholder="t('gallery.searchPlaceholder')"
-                        class="task-detail-search"
-                        @update:model-value="(v) => taskDetailRouteStore.navigate({ page: 1, search: v })"
-                    />
-                </div>
+                <GalleryFilters
+                    :filters="taskDetailRouteStore.filters"
+                    :sort="taskDetailRouteStore.sort"
+                    :page-size="pageSize"
+                    :search="taskDetailRouteStore.search"
+                    :provider-context-prefix="taskDetailRouteStore.computedContextPath"
+                    :filter-features="taskFilterFeatures"
+                    :sort-features="taskSortFeatures"
+                    enable-search
+                    enable-page-size
+                    @update:filters="(f) => taskDetailRouteStore.navigate({ filters: f, page: 1 })"
+                    @update:sort="(s) => taskDetailRouteStore.navigate({ sort: s })"
+                    @update:page-size="(ps) => taskDetailRouteStore.navigate({ page: 1, pageSize: ps })"
+                    @update:search="(v) => taskDetailRouteStore.navigate({ page: 1, search: v })"
+                />
 
                 <GalleryBigPaginator :total-count="totalCount" :current-page="currentPage"
                 :big-page-size="pageSize" :is-sticky="true" @jump-to-page="jumpToPage" />
@@ -49,9 +49,9 @@ import { listen } from "@/api/rpc";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import ImageGrid from "@/components/ImageGrid.vue";
-import GalleryPageSizeControl from "@/components/GalleryPageSizeControl.vue";
-import SearchInput from "@/components/SearchInput.vue";
+import GalleryFilters from "@/components/GalleryFilters.vue";
 import { createTaskDetailSurface } from "@/components/imageGrid/surfaces/task";
+import type { GalleryFilterDimension, GallerySortField } from "@/utils/galleryPath";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -111,6 +111,14 @@ const surface = createTaskDetailSurface({
     taskId: () => taskId.value,
 });
 const { search: searchQuery, taskId, page } = storeToRefs(taskDetailRouteStore);
+
+const taskFilterFeatures: GalleryFilterDimension[] = [
+  "wallpaperOrder", "noAlbum", "plugin", "mediaType", "date", "name", "size", "aspect",
+];
+const taskSortFeatures: GallerySortField[] = [
+  "by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time",
+];
+
 const taskViewRef = ref<InstanceType<typeof ImageGrid> | null>(null);
 
 // 任务数据一律从 crawlerStore 读取
@@ -402,16 +410,5 @@ onDeactivated(async () => {
         }
     }
 
-    .task-detail-page-size-toolbar {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 8px;
-    }
-
-    .task-detail-search {
-        margin-left: auto;
-    }
 }
 </style>

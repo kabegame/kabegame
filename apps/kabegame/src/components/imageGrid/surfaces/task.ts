@@ -3,6 +3,7 @@ import { i18n } from "@kabegame/i18n";
 import router from "@/router";
 import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 import { useFailedImagesStore } from "@/stores/failedImages";
+import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { GridSurfaceAdapter } from "../types";
 
 /**
@@ -23,7 +24,7 @@ export function createTaskDetailSurface(params: {
       router.currentRoute.value.name === "TaskDetail" && !!params.taskId(),
     rootPathFallback: () =>
       params.taskId() ? `task/${params.taskId()}/1` : "",
-    computeCountPath: () => routeStore.computedContextPath,
+    computeCountPath: stripComposablePathTail,
     onCountError: (error) => {
       console.error("加载任务总图片数失败:", error);
     },

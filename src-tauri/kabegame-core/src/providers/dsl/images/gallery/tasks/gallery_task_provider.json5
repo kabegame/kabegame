@@ -13,6 +13,15 @@
         }
     },
     "resolve": {
+        "filter_comb": {
+            "provider": "gallery_filter_comb"
+        },
+        "all|wallpaper-order|no-album|name|names|plugin|plugins|media-type|date|dates|sort|size|aspect|dimension|dimensions": {
+            "delegate": { "provider": "gallery_route" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        },
         "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
             "delegate": {
                 "provider": "kabegame.gallery_desc_pagination_page_comb"

@@ -9,8 +9,6 @@
     },
     "resolve": {
         "wallpaper-order": { "provider": "gallery_wallpaper_order_router" },
-        "order": { "provider": "gallery_album_order_provider" },
-        "album-order": { "provider": "gallery_album_order_provider" },
         "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
             "delegate": {
                 "provider": "kabegame.gallery_desc_pagination_page_comb"

@@ -18,7 +18,8 @@ export type GallerySortField =
   | "by-size"
   | "by-name"
   | "by-aspect"
-  | "by-set-time";
+  | "by-set-time"
+  | "by-album-order";
 
 export interface GallerySort {
   field: GallerySortField;
@@ -106,8 +107,122 @@ const DIMENSION_ORDER: GalleryFilterDimension[] = [
 ];
 
 export function buildGalleryContextPrefix(search: string | undefined): string {
+  return buildComposableContextPrefix("", search);
+}
+
+export interface ComposablePathParams {
+  rootPrefix?: string;
+  filters: GalleryFilterSet | GalleryFilter;
+  sort: GallerySort | GalleryStoredSort;
+  page: number;
+  pageSize?: number;
+  search?: string;
+}
+
+export function buildComposablePath(params: ComposablePathParams): string {
+  const {
+    rootPrefix = "",
+    sort: sortOrOrder,
+    page,
+    pageSize = DEFAULT_PAGE_SIZE,
+    search = "",
+  } = params;
+  const filters = isGalleryFilter(params.filters)
+    ? singleFilterToSet(params.filters)
+    : params.filters;
+  const sort = normalizeGallerySort(sortOrOrder);
+  const filterPath = serializeFilterSet(filters);
+  const bodyParts: string[] = [];
+
+  if (filterPath) bodyParts.push(filterPath);
+  bodyParts.push(`sort/${sort.field}`);
+
+  const body = bodyParts.join(`/${FILTER_COMB}/`);
+  const p = Math.max(1, Math.floor(Number(page)) || DEFAULT_PAGE);
+  const ps = pageSize === DEFAULT_PAGE_SIZE ? "" : `x${pageSize}x/`;
   const q = (search ?? "").trim();
-  return q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
+  const searchPrefix = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
+  const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
+  return sort.desc ? `${searchPrefix}${rp}${body}/desc/${ps}${p}` : `${searchPrefix}${rp}${body}/${ps}${p}`;
+}
+
+export function parseComposablePath(
+  path: string,
+  rootSegs: string[] = [],
+  defaultSort: GallerySortField = "by-time",
+): ParsedGalleryPath {
+  const base: ParsedGalleryPath = {
+    filters: {},
+    filter: DEFAULT_GALLERY_FILTER,
+    sort: { field: defaultSort, desc: false },
+    page: DEFAULT_PAGE,
+    pageSize: DEFAULT_PAGE_SIZE,
+    search: "",
+  };
+  const trimmed = (path || "").trim();
+  if (!trimmed) return base;
+
+  const rawSegs = trimmed.split("/").filter(Boolean);
+  if (rawSegs.length === 0) return base;
+
+  const { search, rest: segs } = stripSearchPrefix(rawSegs);
+
+  let restSegs = segs;
+  if (rootSegs.length > 0) {
+    if (restSegs.length < rootSegs.length) return { ...base, search };
+    for (let i = 0; i < rootSegs.length; i++) {
+      if (restSegs[i] !== rootSegs[i]) return { ...base, search };
+    }
+    restSegs = segs.slice(rootSegs.length);
+  }
+
+  if (restSegs.length === 0) return { ...base, search };
+
+  const { body, tail } = splitBodyAndTail(restSegs);
+  const { sort: order, pageSize, page } = parseTail(tail);
+  const { filters, sortField, legacyFilter } = parseBody(body);
+  const sort: GallerySort = {
+    field: sortField ?? defaultSort,
+    desc: order === "desc",
+  };
+  const filter = legacyFilter ?? filterSetToSingleFilter(filters);
+  return { filters, filter, sort, page, pageSize, search };
+}
+
+export function buildComposableContextPrefix(rootPrefix: string, search: string | undefined): string {
+  const q = (search ?? "").trim();
+  const searchPrefix = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
+  const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
+  return `${searchPrefix}${rp}`;
+}
+
+export function buildComposableCountPath(
+  rootPrefix: string,
+  filters: GalleryFilterSet | GalleryFilter,
+  search: string = "",
+): string {
+  const filterset = isGalleryFilter(filters) ? singleFilterToSet(filters) : filters;
+  const q = (search ?? "").trim();
+  const searchPrefix = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
+  const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
+  return `${searchPrefix}${rp}${buildFilterSetCountPath(filterset)}`;
+}
+
+export function stripComposablePathTail(path: string): string {
+  const trimmed = (path || "").trim().replace(/\/+$/g, "");
+  if (!trimmed) return "";
+  const segs = trimmed.split("/").filter(Boolean);
+  let i = segs.length;
+  if (i > 0 && /^[1-9][0-9]*$/.test(segs[i - 1]!)) {
+    i--;
+    if (i > 0 && /^x[1-9][0-9]*x$/.test(segs[i - 1]!)) {
+      i--;
+    }
+    if (i > 0 && segs[i - 1] === "desc") {
+      i--;
+    }
+  }
+  return segs.slice(0, i).join("/");
 }
 
 function stripSearchPrefix(segs: string[]): { search: string; rest: string[] } {
@@ -134,14 +249,15 @@ export function normalizeGallerySort(
   return { field: "by-time", desc: sort === "desc" };
 }
 
-function isGallerySortField(field: string | undefined): field is GallerySortField {
+export function isGallerySortField(field: string | undefined): field is GallerySortField {
   return (
     field === "by-id" ||
     field === "by-time" ||
     field === "by-size" ||
     field === "by-name" ||
     field === "by-aspect" ||
-    field === "by-set-time"
+    field === "by-set-time" ||
+    field === "by-album-order"
   );
 }
 
@@ -373,65 +489,18 @@ export function buildGalleryPath(
   pageSize: number = DEFAULT_PAGE_SIZE,
   search: string = "",
 ): string {
-  const filters = isGalleryFilter(filtersOrFilter)
-    ? singleFilterToSet(filtersOrFilter)
-    : filtersOrFilter;
-  const sort = normalizeGallerySort(sortOrOrder);
-  const filterPath = serializeFilterSet(filters);
-  const bodyParts: string[] = [];
-
-  if (filterPath) bodyParts.push(filterPath);
-  if (sort.field !== "by-time") {
-    bodyParts.push(`sort/${sort.field}`);
-  }
-
-  const body = bodyParts.length ? bodyParts.join(`/${FILTER_COMB}/`) : "all";
-  const p = Math.max(1, Math.floor(Number(page)) || DEFAULT_PAGE);
-  const ps = pageSize === DEFAULT_PAGE_SIZE ? "" : `x${pageSize}x/`;
-  const q = (search ?? "").trim();
-  const prefix = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
-  return sort.desc ? `${prefix}${body}/desc/${ps}${p}` : `${prefix}${body}/${ps}${p}`;
+  return buildComposablePath({ filters: filtersOrFilter, sort: sortOrOrder, page, pageSize, search });
 }
 
 export function buildGalleryCountPath(
   filtersOrFilter: GalleryFilterSet | GalleryFilter,
   search: string = "",
 ): string {
-  const filters = isGalleryFilter(filtersOrFilter)
-    ? singleFilterToSet(filtersOrFilter)
-    : filtersOrFilter;
-  const q = (search ?? "").trim();
-  const prefix = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
-  return `${prefix}${buildFilterSetCountPath(filters)}`;
+  return buildComposableCountPath("", filtersOrFilter, search);
 }
 
 export function parseGalleryPath(path: string): ParsedGalleryPath {
-  const base: ParsedGalleryPath = {
-    filters: {},
-    filter: DEFAULT_GALLERY_FILTER,
-    sort: DEFAULT_GALLERY_SORT,
-    page: DEFAULT_PAGE,
-    pageSize: DEFAULT_PAGE_SIZE,
-    search: "",
-  };
-  const trimmed = (path || "").trim();
-  if (!trimmed) return base;
-
-  const rawSegs = trimmed.split("/").filter(Boolean);
-  if (rawSegs.length === 0) return base;
-
-  const { search, rest: segs } = stripSearchPrefix(rawSegs);
-  if (segs.length === 0) return { ...base, search };
-
-  const { body, tail } = splitBodyAndTail(segs);
-  const { sort: order, pageSize, page } = parseTail(tail);
-  const { filters, sortField, legacyFilter } = parseBody(body);
-  const sort: GallerySort = {
-    field: sortField ?? "by-time",
-    desc: order === "desc",
-  };
-  const filter = legacyFilter ?? filterSetToSingleFilter(filters);
-  return { filters, filter, sort, page, pageSize, search };
+  return parseComposablePath(path, []);
 }
 
 export function parseFilter(root: string): GalleryFilter {

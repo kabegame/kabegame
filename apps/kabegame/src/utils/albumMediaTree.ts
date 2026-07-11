@@ -104,7 +104,7 @@ async function fetchProviderImages(path: string): Promise<ImageInfo[]> {
 }
 
 function albumPreviewPath(path: string, limit: number): string {
-  return `${normalizePath(path)}/order/x${limit}x/1`;
+  return `${normalizePath(path)}/sort/by-album-order/x${limit}x/1`;
 }
 
 function pickRoundRobinImages(buckets: ImageInfo[][], limit: number): ImageInfo[] {
