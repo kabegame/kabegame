@@ -266,11 +266,9 @@ export const useSurfStore = defineStore("surf", () => {
     return record;
   }
 
-  async function closeSession() {
+  async function closeSession(host?: string) {
     if (IS_ANDROID) return;
-    await invoke("surf_close_session");
-    sessionActive.value = false;
-    activeHost.value = null;
+    await invoke("surf_close_session", { host: host ? normalizeHost(host) : null });
   }
 
   async function getRecord(host: string) {

@@ -20,21 +20,15 @@
         </div>
         <!-- 输入区 -->
         <div class="surf-search-row">
-          <el-select
-            v-model="pluginQuickSelect"
+          <PluginPickerField
+            :model-value="pluginQuickSelect || null"
+            :plugins="pluginsWithHttpRoot"
+            value-key="baseUrl"
             :placeholder="$t('surf.placeholderPlugin')"
             size="large"
-            filterable
             class="surf-plugin-select"
-            @change="onPluginQuickSelect"
-          >
-            <el-option
-              v-for="p in pluginsWithHttpRoot"
-              :key="p.id"
-              :label="pluginName(p)"
-              :value="p.baseUrl"
-            />
-          </el-select>
+            @update:model-value="onPluginQuickSelect"
+          />
           <el-input
             v-model="inputUrl"
             :placeholder="$t('surf.placeholderUrl')"
@@ -53,7 +47,7 @@
               v-for="record in surfStore.records"
               :key="record.id"
               :class="['surf-card', appBackgroundCardClass]"
-              @click="openDetailDialog(record)"
+              @click="goImages(record.host)"
               @contextmenu.prevent="openRecordContextMenu($event, record)"
             >
               <div class="card-head">
@@ -70,18 +64,21 @@
               </div>
               <div class="card-foot">
                 <span>{{ $t('surf.lastVisit') }}{{ formatTime(record.lastVisitAt) }}</span>
-                <div class="card-actions">
-                  <el-button
-                    size="small"
-                    type="primary"
-                    @click.stop="handleRecordClick(record)"
-                  >
-                    {{ $t('surf.startSurf') }}
-                  </el-button>
-                  <el-button v-if="record.lastImage" size="small" @click.stop="goImages(record.host)">
-                    {{ $t('surf.viewDownloadedImages') }}
-                  </el-button>
-                </div>
+                  <div class="card-actions">
+                    <el-button
+                      size="small"
+                      type="primary"
+                      @click.stop="handleRecordClick(record)"
+                    >
+                      {{ isActiveSurf(record) ? $t('surf.openSurf') : $t('surf.startSurf') }}
+                    </el-button>
+                    <el-button v-if="isActiveSurf(record)" size="small" type="danger" @click.stop="handleCloseSurf(record)">
+                      {{ $t('surf.closeSurf') }}
+                    </el-button>
+                    <el-button size="small" @click.stop="openDetailDialog(record)">
+                      {{ $t('surf.recordDetails') }}
+                    </el-button>
+                  </div>
               </div>
             </el-card>
           </transition-group>
@@ -205,18 +202,18 @@ import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_LINUX } from "@kabegame/core/env";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import { usePluginStore } from "@/stores/plugins";
-import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
+import { useI18n } from "@kabegame/i18n";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
 import { createSurfRecordActions } from "@/actions/surfRecordActions";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import PluginPickerField from "@/components/PluginPickerField.vue";
 
 const { t } = useI18n();
 const router = useRouter();
 const surfStore = useSurfStore();
 const pluginStore = usePluginStore();
 const settingsStore = useSettingsStore();
-const { pluginName } = usePluginManifestI18n();
 const appBackgroundCardClass = computed(() =>
   settingsStore.values.appBackgroundEnabled
     ? "!bg-transparent [--el-card-bg-color:transparent]"
@@ -250,8 +247,8 @@ const pluginsWithHttpRoot = computed(() =>
   pluginStore.plugins.filter((p) => p.baseUrl && p.baseUrl.toLowerCase().startsWith("http"))
 );
 
-const onPluginQuickSelect = (baseUrl: string) => {
-  inputUrl.value = baseUrl;
+const onPluginQuickSelect = (baseUrl: string | null) => {
+  inputUrl.value = baseUrl ?? "";
   pluginQuickSelect.value = "";
 };
 
@@ -436,6 +433,18 @@ const handleRecordClick = async (record: SurfRecord) => {
     ElMessage.success(t("surf.sessionStartSuccess"));
   } catch (e: any) {
     ElMessage.error(e?.message || String(e) || t("surf.sessionStartFailed"));
+  }
+};
+
+const isActiveSurf = (record: SurfRecord) =>
+  surfStore.sessionActive && surfStore.activeHost === record.host;
+
+const handleCloseSurf = async (record: SurfRecord) => {
+  try {
+    await surfStore.closeSession(record.host);
+    ElMessage.success(t("surf.sessionClosed"));
+  } catch (e: any) {
+    ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
   }
 };
 

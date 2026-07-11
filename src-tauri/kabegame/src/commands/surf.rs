@@ -574,18 +574,25 @@ pub fn notify_surf_session_closed<R: Runtime>(app: &AppHandle<R>, closing_label:
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_close_session<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    // 关窗口即连带销毁其下所有 webview(含 navbar)。
-    for (label, win) in app.windows() {
-        if !label.starts_with("surf-") {
-            continue;
+pub async fn surf_close_session<R: Runtime>(
+    app: AppHandle<R>,
+    host: Option<String>,
+) -> Result<(), String> {
+    match host {
+        Some(host) => {
+            if let Some(win) = app.get_window(&surf_label(&normalize_surf_host(&host))) {
+                let _ = win.destroy();
+            }
         }
-        let _ = win.close();
+        None => {
+            for (label, win) in app.windows() {
+                if !label.starts_with("surf-") {
+                    continue;
+                }
+                let _ = win.destroy();
+            }
+        }
     }
-    let _ = app.emit(
-        "surf-session-changed",
-        serde_json::json!({ "active": false, "surfHost": null }),
-    );
     Ok(())
 }
 

@@ -22,29 +22,9 @@
       </el-form-item>
       <el-form-item :label="$t('plugins.selectSource')">
         <div class="plugin-source-field">
-          <div class="plugin-select-with-warning">
-            <AndroidPickerSelect :model-value="form.pluginId ?? null" :options="pluginPickerOptions"
-              :title="$t('plugins.selectSource')" :placeholder="$t('plugins.selectSourcePlaceholder')"
-              @update:model-value="onPluginChange">
-              <template #option="{ option }">
-                <div class="plugin-option">
-                  <img v-if="option.iconSrc" :src="option.iconSrc" class="plugin-option-icon" alt="" />
-                  <el-icon v-else class="plugin-option-icon-placeholder">
-                    <Grid />
-                  </el-icon>
-                  <span class="plugin-picker-option-label">{{ option.label }}</span>
-                  <el-icon v-if="option.warning" class="plugin-picker-option-warning"
-                    :title="$t('plugins.androidNotSupported')">
-                    <WarningFilled />
-                  </el-icon>
-                </div>
-              </template>
-            </AndroidPickerSelect>
-            <el-icon v-if="isSelectedPluginJs" class="plugin-js-warning-icon"
-              :title="$t('plugins.jsPluginAndroidNotSupportedTitle')">
-              <WarningFilled />
-            </el-icon>
-          </div>
+          <PluginPickerField :model-value="form.pluginId || null" :plugins="plugins"
+            :picker-title="$t('plugins.selectSource')" :placeholder="$t('plugins.selectSourcePlaceholder')"
+            show-js-warning show-selected-js-warning @update:model-value="onPluginChange" />
           <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
             {{ crawlDialogMinAppErrorText }}
           </div>
@@ -228,18 +208,9 @@
       </el-form-item>
       <el-form-item :label="$t('plugins.selectSource')">
         <div class="plugin-source-field">
-          <el-select v-model="form.pluginId" style="width: 100%" :placeholder="$t('plugins.selectSourcePlaceholder')"
-            popper-class="crawl-plugin-select-dropdown" @change="onPluginChange">
-            <el-option v-for="plugin in plugins" :key="plugin.id" :label="pluginName(plugin)" :value="plugin.id">
-              <div class="plugin-option">
-                <img v-if="pluginIconUrl(plugin.id)" :src="pluginIconUrl(plugin.id)" class="plugin-option-icon" />
-                <el-icon v-else class="plugin-option-icon-placeholder">
-                  <Grid />
-                </el-icon>
-                <span>{{ pluginName(plugin) }}</span>
-              </div>
-            </el-option>
-          </el-select>
+          <PluginPickerField :model-value="form.pluginId || null" :plugins="plugins"
+            :placeholder="$t('plugins.selectSourcePlaceholder')" popper-class="crawl-plugin-select-dropdown"
+            @update:model-value="onPluginChange" />
           <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
             {{ crawlDialogMinAppErrorText }}
           </div>
@@ -401,8 +372,8 @@
 import { computed, watch, ref, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
-import { useI18n, usePluginManifestI18n, usePluginConfigI18n } from "@kabegame/i18n";
-import { FolderOpened, Grid, WarningFilled } from "@element-plus/icons-vue";
+import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
+import { FolderOpened } from "@element-plus/icons-vue";
 import { ElDialog } from "element-plus";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
@@ -414,6 +385,7 @@ import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
+import PluginPickerField from "@/components/PluginPickerField.vue";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
@@ -461,10 +433,8 @@ function goImportRecommendedPresets() {
   void router.push({ name: "AutoConfigs", query: { tab: "recommended" } });
 }
 const pluginStore = usePluginStore();
-const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconDataUrl(pluginId);
 const appStore = useApp();
 const { version: crawlDialogAppVersion } = storeToRefs(appStore);
-const { pluginName } = usePluginManifestI18n();
 const { varDisplayName, varDescripts, optionDisplayName, resolveConfigText, locale } = usePluginConfigI18n();
 
 function trackCrawlerEvent(name: string, data: Record<string, unknown> = {}) {
@@ -778,15 +748,6 @@ const runConfigPickerOptions = computed(() =>
     };
   }),
 );
-const pluginPickerOptions = computed(() =>
-  plugins.value.map((p) => ({
-    label: pluginName(p),
-    value: p.id,
-    warning: p.scriptType === "js",
-    iconSrc: pluginStore.pluginIconDataUrl(p.id),
-  })),
-);
-
 const selectedPlugin = computed(() => {
   const id = form.value.pluginId;
   return id ? plugins.value.find((p) => p.id === id) : null;
@@ -1328,31 +1289,6 @@ watch(selectedOutputAlbumId, (newValue) => {
   align-items: center;
 }
 
-.plugin-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-:deep(.android-picker-select__list-item) .plugin-option {
-  width: 100%;
-  min-width: 0;
-}
-
-.plugin-option-icon {
-  width: 20px;
-  height: 20px;
-  object-fit: contain;
-  flex-shrink: 0;
-}
-
-.plugin-option-icon-placeholder {
-  width: 20px;
-  height: 20px;
-  flex-shrink: 0;
-  color: var(--anime-text-secondary);
-}
-
 .plugin-source-field {
   width: 100%;
 }
@@ -1362,33 +1298,6 @@ watch(selectedOutputAlbumId, (newValue) => {
   font-size: 12px;
   line-height: 1.45;
   margin-top: 6px;
-}
-
-.plugin-select-with-warning {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-}
-
-.plugin-js-warning-icon {
-  color: var(--el-color-danger);
-  font-size: 20px;
-  flex-shrink: 0;
-}
-
-.plugin-picker-option-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.plugin-picker-option-warning {
-  flex-shrink: 0;
-  margin-left: 8px;
-  color: var(--el-color-danger);
-  font-size: 18px;
 }
 
 .run-config-option {
@@ -1489,14 +1398,14 @@ watch(selectedOutputAlbumId, (newValue) => {
     padding: 8px 12px;
   }
 
-  .plugin-option {
+  .plugin-picker-option {
     display: flex;
     align-items: center;
     gap: 8px;
     min-height: 24px;
   }
 
-  .plugin-option-icon {
+  .plugin-picker-option__icon {
     width: 18px;
     height: 18px;
     object-fit: contain;
@@ -1504,7 +1413,7 @@ watch(selectedOutputAlbumId, (newValue) => {
     border-radius: 4px;
   }
 
-  .plugin-option-icon-placeholder {
+  .plugin-picker-option__icon-placeholder {
     width: 18px;
     height: 18px;
     flex-shrink: 0;
@@ -1515,7 +1424,7 @@ watch(selectedOutputAlbumId, (newValue) => {
     color: var(--anime-text-secondary);
   }
 
-  .plugin-option span {
+  .plugin-picker-option span {
     line-height: 1.2;
     color: var(--anime-text-primary);
   }

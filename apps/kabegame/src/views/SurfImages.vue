@@ -6,6 +6,8 @@
         :surface="surface"
         :enable-ctrl-wheel-adjust-columns="!isCompact"
         :enable-ctrl-key-adjust-columns="!isCompact"
+        hide-scrollbar
+        scroll-whole-container
       >
         <template #before-grid="{ totalCount, currentPage, pageSize, jumpToPage }">
           <PageHeader
@@ -157,8 +159,7 @@ onActivated(async () => {
 
 .surf-images-scroll-container {
   flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
   padding: 20px;
 }
 

@@ -51,6 +51,10 @@ import { useModal } from "../composables/useModal";
 export interface AndroidPickerSelectOption {
     label: string;
     value: string;
+    /** 可选：供 option 插槽使用，如展示插件 id 相关状态 */
+    pluginId?: string;
+    /** 可选：供 option 插槽使用，如展示关联数量 */
+    count?: number;
     /** 可选：供 option 插槽使用，如标记为 JS 插件在安卓不支持 */
     warning?: boolean;
     /** 可选：列表左侧图标 URL（如插件图标），由业务传入 */

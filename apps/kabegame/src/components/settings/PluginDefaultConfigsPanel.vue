@@ -1,20 +1,13 @@
 <template>
   <div class="plugin-defaults-panel">
     <p class="plugin-defaults-desc">{{ $t("settings.pluginDefaultsDesc") }}</p>
-    <el-select
-      v-model="selectedPluginId"
+    <PluginPickerField
+      :model-value="selectedPluginId || null"
       class="plugin-defaults-select"
-      filterable
       clearable
       :placeholder="$t('settings.pluginDefaultsSelectPlugin')"
-    >
-      <el-option
-        v-for="p in plugins"
-        :key="p.id"
-        :label="pluginStore.pluginLabel(p.id)"
-        :value="p.id"
-      />
-    </el-select>
+      @update:model-value="(value) => selectedPluginId = value ?? ''"
+    />
 
     <div v-if="selectedPluginId" v-loading="loading" class="plugin-defaults-editor">
       <el-form label-position="top" class="plugin-defaults-form">
@@ -110,6 +103,7 @@ import {
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import HttpHeadersEditor from "@kabegame/core/components/crawler/HttpHeadersEditor.vue";
 import { IS_ANDROID } from "@kabegame/core/env";
+import PluginPickerField from "@/components/PluginPickerField.vue";
 
 const { t } = useI18n();
 const { varDisplayName, varDescripts, optionDisplayName } = usePluginConfigI18n();

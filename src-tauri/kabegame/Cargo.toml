@@ -25,7 +25,6 @@ url = "2"
 uuid = {workspace = true}
 
 # Tauri native app stack (activated by `standard` / `android` features)
-tauri = { version = "2.11.2", features = [ "tray-icon", "devtools", "protocol-asset", "image-png", "unstable"], optional = true }
 tauri-plugin-clipboard-manager = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "=2.4.2", optional = true }
 tauri-plugin-global-shortcut = { version = "2.3.1", optional = true }
@@ -76,10 +75,21 @@ winreg = "0.52"
 winver = "1"
 tauri-runtime-cef = { path = "../tauri-runtime-cef", optional = true }
 
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+tauri = { version = "2.11.2", default-features = false, features = [
+  "tray-icon", "devtools", "protocol-asset", "image-png", "unstable",
+  "compression", "common-controls-v6", "dynamic-acl", "x11", "dbus",
+], optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = "3.6"
 libc = "0.2"
 tauri-runtime-cef = { path = "../tauri-runtime-cef", optional = true }
+
+[target.'cfg(not(any(target_os = "windows", target_os = "linux")))'.dependencies]
+tauri = { version = "2.11.2", features = ["dbus", "common-controls-v6", "x11", "dynamic-acl", "compression",
+  "tray-icon", "devtools", "protocol-asset", "image-png", "unstable",
+], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "0.3"

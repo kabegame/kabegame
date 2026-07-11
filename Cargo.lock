@@ -8846,8 +8846,6 @@ dependencies = [
 [[package]]
 name = "tauri-runtime"
 version = "2.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48222d7116c8807eaa6fe2f372e023fae125084e61e6eca6d70b7961cdf129ef"
 dependencies = [
  "cookie",
  "dpi",
@@ -8863,7 +8861,6 @@ dependencies = [
  "tauri-utils",
  "thiserror 2.0.18",
  "url",
- "webkit2gtk",
  "webview2-com",
  "windows 0.61.3",
 ]

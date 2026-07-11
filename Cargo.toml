@@ -71,6 +71,9 @@ windows-sys = {version = "0.52", features = [
 ]}
 zip = "0.6"
 
+[patch.crates-io]
+tauri-runtime = { path = "third/tauri-runtime" }
+
 # [profile.release]
 # on when release
 # codegen-units = 1

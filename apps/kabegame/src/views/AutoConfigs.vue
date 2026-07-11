@@ -41,30 +41,15 @@
               </template>
             </el-dropdown>
 
-            <el-dropdown trigger="click" @command="onPluginFilterCommand">
-              <el-button class="auto-configs-browse-btn">
-                <el-icon class="auto-configs-browse-icon">
-                  <Filter />
-                </el-icon>
-                <span>{{ pluginFilterButtonLabel }}</span>
-                <el-icon class="el-icon--right">
-                  <ArrowDown />
-                </el-icon>
-              </el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="" :class="{ 'is-active': !filterPluginId }">
-                    {{ $t("autoConfig.filterPluginAll") }}
-                    <span class="plugin-count">({{ pluginMenuAllCount }})</span>
-                  </el-dropdown-item>
-                  <el-dropdown-item v-for="row in pluginFilterRows" :key="row.pluginId" :command="row.pluginId"
-                    :class="{ 'is-active': filterPluginId === row.pluginId }">
-                    {{ pluginName(row.pluginId) }}
-                    <span class="plugin-count">({{ row.count }})</span>
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+            <PluginPickerField
+              :model-value="filterPluginId ?? ''"
+              :plugin-ids="pluginFilterPluginIds"
+              :prepend-options="pluginFilterPrependOptions"
+              :option-counts="pluginFilterCounts"
+              :placeholder="$t('autoConfig.filterPluginAll')"
+              class="auto-configs-plugin-picker"
+              @update:model-value="onPluginFilterChange"
+            />
           </div>
 
           <div v-if="filteredConfigs.length === 0" class="auto-configs-empty">
@@ -194,7 +179,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useVirtualList } from "@vueuse/core";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { AlarmClock, ArrowDown, Filter, Timer } from "@element-plus/icons-vue";
+import { AlarmClock, ArrowDown, Timer } from "@element-plus/icons-vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import AutoConfigDetailContent from "@kabegame/core/components/scheduler/AutoConfigDetailContent.vue";
@@ -204,6 +189,7 @@ import TaskLogDialog from "@kabegame/core/components/task/TaskLogDialog.vue";
 import AutoConfigListCard from "@/components/scheduler/AutoConfigListCard.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
 import LocalImportDialog from "@/components/LocalImportDialog.vue";
+import PluginPickerField from "@/components/PluginPickerField.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
@@ -499,6 +485,16 @@ const pluginFilterRows = computed(() => {
     );
 });
 
+const pluginFilterPluginIds = computed(() => pluginFilterRows.value.map((row) => row.pluginId));
+
+const pluginFilterCounts = computed(() =>
+  Object.fromEntries(pluginFilterRows.value.map((row) => [row.pluginId, row.count])),
+);
+
+const pluginFilterPrependOptions = computed(() => [
+  { value: "", label: t("autoConfig.filterPluginAll"), count: pluginMenuAllCount.value },
+]);
+
 const headerSubtitle = computed(() => {
   const total = configs.value.length;
   const shown = filteredConfigs.value.length;
@@ -512,16 +508,12 @@ const scheduleFilterButtonLabel = computed(() =>
   onlyEnabled.value ? t("autoConfig.onlyEnabled") : t("gallery.filterAll"),
 );
 
-const pluginFilterButtonLabel = computed(() =>
-  filterPluginId.value ? pluginName(filterPluginId.value) : t("autoConfig.filterPluginAll"),
-);
-
 function onScheduleFilterCommand(cmd: string) {
   onlyEnabled.value = cmd === "enabled";
 }
 
-function onPluginFilterCommand(cmd: string) {
-  filterPluginId.value = cmd ? cmd : null;
+function onPluginFilterChange(value: string | null) {
+  filterPluginId.value = value ? value : null;
 }
 
 const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconDataUrl(pluginId);
@@ -857,6 +849,11 @@ const handleHeaderAction = (payload: { id: string; data?: { type: string; value?
     margin-right: 6px;
     font-size: 14px;
   }
+}
+
+.auto-configs-plugin-picker {
+  width: 240px;
+  max-width: 100%;
 }
 
 :deep(.plugin-count) {

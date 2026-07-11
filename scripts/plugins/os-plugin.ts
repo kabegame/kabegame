@@ -11,7 +11,7 @@ import {
   stageResourceFile,
 } from "../utils";
 import chalk from "chalk";
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -152,12 +152,16 @@ export class OSPlugin extends BasePlugin {
       this.bundleLibs(bs);
     });
 
-    // macOS:tauri build 完成后对 .app 与 .dmg 进行 install_name fixup
+    // 构建产物后处理:macOS 修 dylib install_name;Linux 修 Tauri CLI 误注入的 deb WebKit 依赖。
     bs.hooks.afterBuild.tapPromise(this.name, async (comp: string) => {
       if (comp !== Component.MAIN) return;
-      if (!OSPlugin.isMacOS) return;
       if (bs.context.skip?.isCargo) return;
       if (bs.context.mode?.isWeb || bs.context.mode?.isAndroid) return;
+      if (OSPlugin.isLinux) {
+        this.stripWebkitFromDebs();
+        return;
+      }
+      if (!OSPlugin.isMacOS) return;
       const appPath = path.join(
         ROOT,
         "target",
@@ -538,6 +542,61 @@ export class OSPlugin extends BasePlugin {
       const realpath = fs.realpathSync(raw);
       fs.copyFileSync(realpath, path.join(dst, path.basename(raw)));
       this.log(chalk.cyan(`已收集额外库 → ${path.basename(raw)}(来源: ${realpath})`));
+    }
+  }
+
+  // ===== Linux deb:移除 cargo-tauri 无条件注入的 WebKit 依赖 =====
+  private stripWebkitFromDebs(): void {
+    const debDir = path.join(ROOT, "target", "release", "bundle", "deb");
+    if (!fs.existsSync(debDir)) return;
+    const debs = fs
+      .readdirSync(debDir)
+      .filter((f) => f.endsWith(".deb"))
+      .map((f) => path.join(debDir, f));
+    for (const deb of debs) {
+      this.stripWebkitFromDeb(deb);
+    }
+  }
+
+  private stripWebkitFromDeb(debPath: string): void {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "kabegame-deb-fix-"));
+    try {
+      const abs = path.resolve(debPath);
+      const controlTar = path.join(tmp, "control.tar.gz");
+      const controlDir = path.join(tmp, "control");
+      execFileSync("ar", ["x", abs, "control.tar.gz"], { cwd: tmp });
+      fs.mkdirSync(controlDir);
+      execFileSync("tar", ["-xzf", controlTar, "-C", controlDir]);
+
+      const controlFile = path.join(controlDir, "control");
+      const before = fs.readFileSync(controlFile, "utf8");
+      let sawDepends = false;
+      const after = before.replace(/^Depends:\s*(.*)$/m, (_match, deps: string) => {
+        sawDepends = true;
+        const seen = new Set<string>();
+        const kept = deps
+          .split(",")
+          .map((dep) => dep.trim())
+          .filter((dep) => dep && dep !== "libwebkit2gtk-4.1-0")
+          .filter((dep) => {
+            if (seen.has(dep)) return false;
+            seen.add(dep);
+            return true;
+          });
+        return `Depends: ${kept.join(", ")}`;
+      });
+      if (!sawDepends || after === before) return;
+
+      fs.writeFileSync(controlFile, after);
+      execFileSync("tar", ["-czf", controlTar, "-C", controlDir, "."]);
+      execFileSync("ar", ["r", abs, "control.tar.gz"], { cwd: tmp });
+      this.log(
+        chalk.green(
+          `已修正 deb 依赖(移除 WebKit / 去重): ${path.relative(ROOT, debPath)}`,
+        ),
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
     }
   }
 

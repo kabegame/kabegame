@@ -371,7 +371,10 @@ pub(crate) fn configure_app(
                 if window.label().starts_with("crawler-") {
                     let _ = window.hide();
                     api.prevent_close();
-                } else if window.label().starts_with("surf-") {
+                }
+            }
+            tauri::WindowEvent::Destroyed => {
+                if window.label().starts_with("surf-") {
                     commands::surf::notify_surf_session_closed(
                         &window.app_handle(),
                         Some(window.label()),
