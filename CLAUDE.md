@@ -34,7 +34,7 @@ bun dev -c kabegame --data prod      # Dev against system data dirs (not repo-lo
 bun dev:frontend            # Frontend only (no Tauri, port 1420)
 ```
 
-macOS 的 `bun dev -c kabegame` 会显式 cargo build，生成 `gen/Kabegame.app`（CEF framework 使用 `cef-dev` 符号链接），自行启动 Vite 后运行 app 内可执行文件。前端 HMR 保留，但 Rust 文件修改不会自动重启，需重新执行命令。
+macOS 的 `bun dev -c kabegame` 会在 ComponentPlugin `beforeBuild` 中先构建 `kabegame-cef-helper` bin，再构建并直接运行裸 `target/debug/kabegame`——**不生成 app bundle**。CEF framework 为构建期直链（`third/cef-rs` fork），经 `target/Frameworks` 符号链接（cef-dll-sys 自动创建，指向 `CEF_PATH`）由 dyld 解析；helper 是 exe 旁的扁平 `kabegame-cef-helper`，三平台一致。前端 HMR 保留，但 Rust 文件修改不会自动重启，需重新执行命令。
 
 ### Build
 ```bash
@@ -46,19 +46,18 @@ bun b --release                  # Copy artifacts to release/
 bun b -c kabegame --mode android     # Build Android APK/AAB
 ```
 
-`bun b` on cargo-only components (`kabegame-cli`, `cef-example`, `cef-helper`) builds **debug** by default; pass `--release` for a release build. The main app's desktop/android build always goes through `tauri build`, which is release regardless of `--release`.
+`bun b` on the cargo-only `kabegame-cli` component builds **debug** by default; pass `--release` for a release build. The main app's desktop/android build always goes through `tauri build`, which is release regardless of `--release`.
 
-### CEF example (`cef-example` / `cef-helper`)
+### CEF example
 
-Standalone crates (not part of `bun b`'s default "everything") for validating the CEF windowed backend outside of Tauri, on Linux/Windows/macOS:
+`cef-example` and `kabegame-cef-helper` are binary targets of the `kabegame` package. They validate the CEF windowed backend outside Tauri and are not build-system components:
 
 ```bash
-bun b -c cef-helper               # subprocess entry — build first, cef-example only checks it exists
-bun b -c cef-example              # Linux/Windows: cargo build; macOS: also generates gen/CEFExample.app
-bun start -c cef-example          # Linux/Windows: cargo run; macOS: runs gen/CEFExample.app (build first)
+CEF_PATH=... cargo build -p kabegame --features standard --bin kabegame-cef-helper
+CEF_PATH=... cargo run -p kabegame --features standard --bin cef-example
 ```
 
-macOS requires the app bundle (`gen/CEFExample.app`, produced by `bun b -c cef-example`) — a bare `cargo run -p cef-example` will not work there. See `src-tauri/tauri-runtime-cef/README.md`.
+On macOS both binaries are flat cargo artifacts in `target/<profile>`; the CEF framework resolves through the `target/Frameworks` symlink created by cef-dll-sys. See `src-tauri/tauri-runtime-cef/README.md`.
 
 ### Type Checking
 ```bash
@@ -148,7 +147,7 @@ New styles should use **UnoCSS utility classes** (configured in `uno.config.pub.
 
 ### Platform-Specific Notes
 - **Windows/macOS/Linux**: Virtual disk (Dokan / macFUSE / FUSE) for wallpaper mounting
-- **Windows/macOS/Linux standard**: Uses the CEF runtime backend. macOS browser processes must run inside `gen/Kabegame.app` in dev; release bundles embed the framework and independent helper apps.
+- **Windows/macOS/Linux standard**: Uses the CEF runtime backend. All three platforms link CEF at build time and spawn subprocesses via a flat `kabegame-cef-helper` next to the exe (macOS dev runs the bare executable; release bundles embed the framework via `macOS.frameworks` and the helper via `macOS.files`).
 - **Android**: Simplified UI; picker/share/compress plugins; `useModalBack` is required
 - **iOS**: Not supported — do not add iOS adaptations
 

@@ -220,7 +220,6 @@ fn init(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 fn spawn_startup_local_folder_sync() {
     let fut = async {
         let reports = kabegame_core::local_folder::sync_all_local_folder_albums().await;
@@ -245,12 +244,9 @@ fn spawn_startup_local_folder_sync() {
     tauri::async_runtime::spawn(fut);
 }
 
-#[cfg(not(target_os = "macos"))]
-fn spawn_startup_local_folder_sync() {}
-
 #[cfg(all(
     not(feature = "web"),
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
+    not(target_os = "android")
 ))]
 fn spawn_realtime_folder_sync_if_enabled() {
     tauri::async_runtime::spawn(async {
@@ -262,7 +258,7 @@ fn spawn_realtime_folder_sync_if_enabled() {
 
 #[cfg(not(all(
     not(feature = "web"),
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
+    not(target_os = "android")
 )))]
 fn spawn_realtime_folder_sync_if_enabled() {}
 

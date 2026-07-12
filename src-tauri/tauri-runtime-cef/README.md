@@ -50,11 +50,12 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
 
 ## macOS 运行模型
 
-- browser 主进程必须从 `.app/Contents/MacOS/kabegame` 启动；裸 `target/debug/kabegame` 不能运行。
-- `execute_cef_subprocess_and_exit()` 会先用 `LibraryLoader` 加载 app 内 framework，再创建实现 `CefAppProtocol` 的 `KabegameCefApplication`。macOS browser 主进程不调用 `execute_process`。
-- `Settings.browser_subprocess_path` 固定指向 `Kabegame Helper.app`；renderer/GPU/utility 全部由独立 `cef-helper` 处理。helper 同时承载初始化脚本的 renderer-side `on_context_created` hook。
+- libcef 由**构建期直链**（`third/cef-rs` fork 的 cef-dll-sys，分支 `kabegame-149`）：framework 的 install_name `@executable_path/../Frameworks/Chromium Embedded Framework.framework/...` 写入 exe 的 LC_LOAD_DYLIB，dev 经 cef-dll-sys build.rs 创建的 `target/Frameworks` 符号链接（→ `$CEF_PATH`）解析，release 经 bundle `Contents/Frameworks/` 解析。dyld 在 `main` 前完成绑定——不存在 `LibraryLoader` 加载顺序问题，`cef_load_library` 在 fork 里是 no-op stub。
+- browser 主进程 dev 下直接裸跑 `target/debug/kabegame`（不再生成 `gen/Kabegame.app`）；release 打包仍是 `.app`。裸跑时 `src-tauri/kabegame/macos/embedded-Info.plist` 经 `-sectcreate __TEXT __info_plist` 内嵌进 exe，提供 Retina/进程名/GPU 切换元数据（bundle 内运行时以 bundle 的 Info.plist 为准）。
+- `dispatch_cef_subprocess()` 创建实现 `CefAppProtocol` 的 `KabegameCefApplication`。macOS browser 主进程不调用 `execute_process`。
+- `Settings.browser_subprocess_path` 指向 exe 旁的扁平 `kabegame-cef-helper`（与 Linux/Windows 相同布局）；renderer/GPU/utility 全部由它承载，helper 与 browser 复用 runtime 内唯一的 `CefRuntimeApp` 和 renderer initialization-script handler。**release（bundled）依赖 `third/cef` 的 `kabegame_flat_subprocess_path` patch**（见「CEF fork 与 patch」），否则 Chromium 会把路径改写为 5 个 helper `.app` 变体；dev 裸跑时 `AmIBundled()==false`，stock CEF 本就不做变体改写。
 - runtime 使用 `external_message_pump=1`，每轮非阻塞排空 NSApplication event queue，再执行 `do_message_loop_work()`。
-- dev 的 `gen/Kabegame.app` 使用指向 `CEF_PATH` 的 framework 符号链接，因此 `framework_dir_path` 必须是 canonicalize 后的真实路径。
+- `framework_dir_path` 仍显式设为 canonicalize 后的真实路径（dev 的 `target/Frameworks` 是符号链接），与 dyld 实际加载路径一致；留空或不一致会导致 GPU 合成黑屏（JS/输入正常、画面全黑）。
 
 ## Windows 注意事项
 
@@ -62,12 +63,12 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
   DirectComposition 呈现（`ui/gl/child_window_win.cc`），layered 子窗口只对声明了
   Windows 8+ 兼容性（`<compatibility>` supportedOS）的进程开放；不带 manifest 的
   cargo 默认 exe 会让 GPU 进程 `CreateWindowEx` 失败 → NOTREACHED 崩溃循环
-  （CEF #3765）。`cef-example` crate 的 `build.rs` 为其二进制嵌入
-  `windows-app.manifest`（本文件仍放在 `tauri-runtime-cef/`,供两处共享）；
-  kabegame.exe 由 tauri-build 的
-  `WindowsAttributes::app_manifest` 注入同样的段（`src-tauri/kabegame/windows-app.manifest`）。
-- CEF 子进程 = re-exec 本 exe（`browser_subprocess_path`），`execute_cef_subprocess_and_exit()`
-  必须在 `main` 最早期调用（与 Linux 相同）。Windows 无 zygote，`no-zygote` 开关仅 Linux 追加。
+  （CEF #3765）。`kabegame` package 的 build.rs 通过 tauri-build
+  `WindowsAttributes::app_manifest` 同时为主程序、helper 和 example 注入
+  `src-tauri/kabegame/windows-app.manifest`。
+- CEF 子进程 = exe 旁的独立 `kabegame-cef-helper.exe`（`browser_subprocess_path`，三平台统一），
+  `dispatch_cef_subprocess()` 必须在 `main` 最早期调用（与 Linux 相同）。Windows 无
+  zygote，`no-zygote` 开关仅 Linux 追加。
 - cookies/localStorage 落 `%LOCALAPPDATA%\kabegame-cef`（Linux 为 XDG cache）。
   **dev 与安装态目录必须分开**：CEF 是 Chrome runtime，`cef_initialize` 会在该目录建
   Chrome profile 并注册进程级 ProcessSingleton（单实例锁）。若 `bun dev` 与已安装正式版
@@ -102,31 +103,30 @@ CEF_PATH=... cargo check -p tauri-runtime-cef
 
 Windows 构建 `libcef_dll_wrapper` 需要 cmake + ninja + MSVC；cef-dll-sys 的 build.rs 会把整个 CEF runtime 拷进 `target/{debug,release}/`，dev 运行免手工拷贝。
 
-CEF 是多进程运行时。`execute_cef_subprocess_and_exit()` 必须在应用 `main` 的最早阶段执行；Linux/Windows 在此派发 re-exec 子进程，macOS 在此完成 framework 与 NSApplication 的 browser 进程早期初始化。
+CEF 是多进程运行时。`dispatch_cef_subprocess()` 必须在 Tauri Builder 前执行 browser 初始化；三平台的子进程都由 `kabegame` package 内的独立 `kabegame-cef-helper` binary 承载，macOS 额外完成 CefAppProtocol NSApplication 的早期初始化。
 
-## Example / demo(`cef-example` / `cef-helper`)
+## Example / demo
 
-独立于本 crate 的两个 workspace 成员,用于在不接入 Tauri 的情况下验证 CEF 自身的窗口/多进程链路(Linux/Windows/macOS 三平台):
+`cef-example` 与 `kabegame-cef-helper` 都是 `kabegame` package 的 binary target，用于在不接入 Tauri 的情况下验证 CEF 自身的窗口/多进程链路:
 
-- `src-tauri/cef-example`:浏览器(主)进程,CEF Views 顶层窗口 + 事件测试页。
-- `src-tauri/cef-helper`:唯一的 CEF 子进程入口(renderer/GPU/utility)。三平台都用**独立于主进程的可执行文件**,主进程不会重新执行自己 —— macOS 要求子进程是独立 helper(且主进程需在 `.app` bundle 内运行),Linux/Windows 沿用同一套模型以保持三平台代码路径一致。
+- `src/bin/cef-example.rs`:浏览器(主)进程,CEF Views 顶层窗口 + 事件测试页。
+- `src/bin/kabegame-cef-helper.rs`:极薄的 CEF 子进程入口，调用 runtime 的 `run_cef_subprocess()`。
 
-运行:
+运行(三平台一致):
 
 ```bash
-bun b -c cef-helper       # 先构建 helper(cef-example 会检查其存在,不会代为构建)
-bun b -c cef-example       # Linux/Windows:cargo build;macOS:另在 gen/CEFExample.app 生成最小 bundle(含 Helper.app、CEF 框架符号链接)
-bun start -c cef-example   # Linux/Windows:cargo run;macOS:直接运行 gen/CEFExample.app(需先 bun b)
+CEF_PATH=... cargo build -p kabegame --features standard --bin kabegame-cef-helper
+CEF_PATH=... cargo run -p kabegame --features standard --bin cef-example
 ```
 
-macOS 上 `cargo run -p cef-example` 不可用 —— CEF 浏览器进程要求运行于 app bundle 内(读取主 bundle Info.plist),裸 exe 直跑不成立,详见 `scripts/plugins/os-plugin.ts` 的 `buildCEFExampleApp`。
+macOS 适配的硬性要点(实测踩坑,移植主 runtime 时同样适用):
 
-macOS 适配的四个硬性要点(实测踩坑,移植主 runtime 时同样适用):
-
-1. **运行时加载框架**:cef-dll-sys 在 macOS 不链接 libcef,任何 CEF 调用(含 `api_hash`)之前必须先 `cef::library_loader::LibraryLoader::load()`;主进程 `helper=false`(解析 `../Frameworks`),helper 进程 `helper=true`(解析 `../../..`)。顺序错了直接 SIGSEGV(跳零地址)。
-2. **helper 变体**:Chromium 按子进程类型选 helper `.app` **变体**(renderer 找 `<name> Helper (Renderer).app`,另有 GPU/Plugin/Alerts/plain 共 5 个,见 cef-rs `build_util/mac.rs` 的 `HELPERS`)。变体缺失时 renderer 启动**静默失败**,初始导航 `ERR_ABORTED`、页面黑屏且无任何错误日志。五个变体可共用同一二进制。
-3. **CefAppProtocol NSApplication**:`cef_initialize` 前必须用实现 `CrAppProtocol`/`CrAppControlProtocol`/`CefAppProtocol`(binding 在 `cef::application_mac`)的 NSApplication 子类创建 shared application(cefsimple 的 `SimpleApplication` 等价物),否则窗口无标题栏按钮、事件循环异常。注意类注册要在框架加载之后(协议由 libcef 注册)。
-4. **framework_dir_path 与符号链接**:bundle 内框架若是符号链接(dev 模式指向 CEF_PATH),`Settings.framework_dir_path` 必须显式设为 canonicalize 后的真实路径,与 LibraryLoader 实际加载路径一致;留空(走 bundle 默认符号链接路径)会导致 GPU 合成黑屏(JS/输入正常、画面全黑)。发布打包时框架整份拷入 bundle 则无此问题。
+1. **构建期直链框架**:cef-dll-sys(`third/cef-rs` fork)在 macOS 直接链接 framework 二进制,dyld 按 LC_LOAD_DYLIB(install_name `@executable_path/../Frameworks/...`)在 `main` 前加载。dev 裸跑依赖 `target/Frameworks` 符号链接(build.rs 自动创建/校正指向 `$CEF_PATH`);切换 `CEF_PATH` 会触发 cef-dll-sys 重跑并更新链接。历史上的运行时 `LibraryLoader` 加载顺序坑(先调 CEF API → SIGSEGV 跳零地址)已随直链消失。
+2. **helper 变体改写已被 patch 豁免**:stock Chromium 在 bundled 状态下按子进程类型改写路径找 `<name> Helper (Renderer).app` 等 5 个 `.app` 变体,变体缺失时 renderer **静默失败**(初始导航 `ERR_ABORTED`、黑屏无日志)。`third/cef` 的 `kabegame_flat_subprocess_path` patch 让显式 `browser_subprocess_path` 对所有子进程类型原样生效,单一扁平 `kabegame-cef-helper` 即可;dev 裸跑(非 bundled)时 stock CEF 本就不改写,不依赖该 patch。
+3. **CefAppProtocol NSApplication**:`cef_initialize` 前必须用实现 `CrAppProtocol`/`CrAppControlProtocol`/`CefAppProtocol`(binding 在 `cef::application_mac`)的 NSApplication 子类创建 shared application(cefsimple 的 `SimpleApplication` 等价物),否则窗口无标题栏按钮、事件循环异常。协议类由 libcef 注册,直链模式下 dyld 已在 `main` 前加载 libcef,无时序约束。
+4. **framework_dir_path 与符号链接**:`target/Frameworks`(dev)是符号链接,`Settings.framework_dir_path` 必须显式设为 canonicalize 后的真实路径,与 dyld 实际加载路径一致;留空或不一致会导致 GPU 合成黑屏(JS/输入正常、画面全黑)。发布打包时框架整份拷入 bundle 则无此问题。
+5. **裸跑 exe 的 Info.plist**:`kabegame/build.rs` 按 binary 分别嵌入主程序/example plist 与带 `LSUIElement` 的 helper plist；三者 bundle id 保持一致。
+6. **MachPortRendezvous 的 bundle id 一致性**(实测踩坑,症状是窗口壳正常但内容全空):Chromium 子进程通过 bootstrap 服务 `<BaseBundleID>.MachPortRendezvousServer.<browser pid>` 从 browser 拿 Mojo/共享内存句柄。裸跑时 runtime 生成 `<exe>/kabegame-main-bundle/Contents/Info.plist`并设 `settings.main_bundle_path`(见 `macos_unbundled_main_bundle`)；主程序、example、helper 和生成的 main bundle 必须使用同一 id。
 
 另:dev 下追加 `use-mock-keychain` 开关,避免 Chromium Safe Storage 初始化弹系统 Keychain 密码框。example 仍使用 CEF 自持 `run_message_loop`；主 runtime 已实现 CefAppProtocol NSApplication external pump。
 
@@ -136,8 +136,39 @@ cef-rs `wrap_window_delegate!` 的宏默认值坑(未实现的方法一律返回
 
 - **Linux**：`bin/linux/` 收集 `libcef.so` + 资源 + locales 白名单，注入 deb 到 `/usr/lib/kabegame/`（见 `cocs/build/PLATFORM_SHARED_LIBS.md`）。
 - **Windows**：`scripts/plugins/os-plugin.ts` 的 `collectWindowsCefRuntime()` 把 `WINDOWS_CEF_RUNTIME_FILES` + locales 白名单收进 `src-tauri/kabegame/resources/cef/`，随 `resources/**/*` 进 NSIS 安装包；`nsis/installer-hooks.nsh` 的 POSTINSTALL 再把它们搬到 `$INSTDIR`（exe 同目录）与 `$INSTDIR\locales\`。
-- **macOS dev**：`bun dev -c kabegame` 显式 cargo build 后生成 `gen/Kabegame.app`，框架使用 `CEF_PATH` 符号链接，随后自行启动 Vite 和 app 内可执行文件。前端保留 HMR，Rust 修改需重启命令。`Contents/Resources` 为真实目录（逐项符号链接 crate 内容），根下必须有 `icon.icns` + `CFBundleIconFile`：CEF Views 的 `set_window_app_icon` 只在运行期设 Dock 图标，Chromium 下载进度的 NSDockTile 重绘用的是 bundle 图标（`imageNamed:NSApplicationIcon`），bundle 无图标会在启动闪默认图标、下载时打回空白。
-- **macOS release**：Tauri 在打 dmg 前通过原生 `macOS.frameworks`/`macOS.files` 将 CEF framework 与 5 个 helper app 变体注入 `Contents/Frameworks/`；dmg 一次成型，无需事后手术或重签。Apple Silicon linker 的 ad-hoc 签名在未改写 Mach-O 时天然有效。
+- **macOS dev**：`bun dev -c kabegame` 的 ComponentPlugin `beforeBuild` 先构建 `kabegame-cef-helper`，再直接运行裸 `target/debug/kabegame`。CEF framework 经 `target/Frameworks` 符号链接由 dyld 解析，helper 在同目录。
+- **macOS release**：Tauri 在打 dmg 前通过原生 `macOS.frameworks` 注入 CEF framework 到 `Contents/Frameworks/`，`macOS.files` 把单一扁平 `kabegame-cef-helper` 放进 `Contents/MacOS/`；扁平 helper 依赖含 `kabegame_flat_subprocess_path` patch 的 CEF 构建。
+
+## CEF fork 与 patch(`third/cef-rs`、`third/cef`)
+
+两处 fork 都在 kabegame 组织下,以子模块进仓库,其他机器 `git submodule update --init` 即可复现:
+
+- **`third/cef-rs`**(kabegame/cef-rs,分支 `kabegame-149`,基于 tag `cef-dll-sys-v149.0.0+149.0.2`):
+  cef-dll-sys 在 macOS 改为构建期直链 framework(`rustc-link-lib=framework`)、
+  创建/校正 `target/Frameworks` 符号链接、提供 no-op `cef_load_library` stub、
+  不再跑 cmake 编 `cef_dll_wrapper`。根 `Cargo.toml` 以
+  `[patch.crates-io] cef-dll-sys = { path = "third/cef-rs/sys" }` 接入,
+  `cef` crate 本体仍来自 crates.io。Linux/Windows 行为不变。
+- **`third/cef`**(kabegame/cef,分支 `kabegame-7827`,基于 CEF 7827 =
+  Chromium 149.0.7827.201):新增 `patch/patches/kabegame_flat_subprocess_path.patch`
+  + `patch.cfg` 条目——`ChildProcessHost::GetChildPath()` 读到显式
+  `--browser-subprocess-path` 即原样返回,跳过 macOS helper `.app` 变体改写。
+  **只影响 release(bundled)**;dev 裸跑不依赖。
+
+在 `/Volumes/KIOXIA/cefbuild` 重编 CEF 时应用该 patch(下次构建 cef-prod 前必做,
+否则 release 包的子进程起不来):
+
+```bash
+cd /Volumes/KIOXIA/cefbuild/chromium_git/cef
+git fetch https://github.com/kabegame/cef.git kabegame-7827 && git checkout FETCH_HEAD
+cd ../chromium/src/cef && git fetch https://github.com/kabegame/cef.git kabegame-7827 && git checkout FETCH_HEAD
+python3 tools/patch_updater.py --reapply --patch kabegame_flat_subprocess_path
+# 然后按原流程重编 + 导出 cef-prod
+```
+
+升级 CEF 大版本时:cef-rs fork 从新的 `cef-dll-sys-v<ver>` tag 重建分支、
+cherry-pick 直链 commit;cef fork 从新的 CEF release branch 重建分支、
+patch 文件随 chromium 上游漂移 rebase(`patch_updater.py` 会报冲突位置)。
 
 ## 当前限制
 

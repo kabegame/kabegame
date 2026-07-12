@@ -6,8 +6,6 @@ members = [
   "src-tauri/kabegame",
   "src-tauri/kabegame-cli",
   "src-tauri/tauri-runtime-cef",
-  "src-tauri/cef-helper",
-  "src-tauri/cef-example",
   "src-tauri-plugins/tauri-plugin-picker",
   "src-tauri-plugins/tauri-plugin-pathes",
   "src-tauri-plugins/tauri-plugin-share",
@@ -15,6 +13,8 @@ members = [
   "src-tauri-plugins/tauri-plugin-wallpaper",
   "src-tauri-plugins/tauri-plugin-task-notification",
 ]
+# Keep the vendored cef-rs workspace as the owner of its inherited metadata.
+exclude = ["third/cef-rs"]
 resolver = "2"
 
 [workspace.package]
@@ -75,6 +75,7 @@ zip = "0.6"
 
 [patch.crates-io]
 tauri-runtime = { path = "third/tauri-runtime" }
+cef-dll-sys = { path = "third/cef-rs/sys" } # macOS direct-linked framework (kabegame-149 fork)
 
 # [profile.release]
 # on when release

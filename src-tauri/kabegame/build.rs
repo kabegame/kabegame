@@ -36,9 +36,9 @@ fn main() {
     #[cfg(all(feature = "standard", target_os = "windows", target_env = "msvc"))]
     {
         // Needed for /DELAYLOAD.
-        println!("cargo:rustc-link-lib=delayimp");
+        println!("cargo:rustc-link-arg-bin=kabegame=delayimp.lib");
         // Delay-load dokan2.dll; binary won't fail to launch if the DLL is absent.
-        println!("cargo:rustc-link-arg=/DELAYLOAD:dokan2.dll");
+        println!("cargo:rustc-link-arg-bin=kabegame=/DELAYLOAD:dokan2.dll");
     }
 
     // Bundled shared libs live in:
@@ -46,8 +46,14 @@ fn main() {
     //   macOS .app → Contents/Frameworks/ (binary at Contents/MacOS/Kabegame)
     // See cocs/build/PLATFORM_SHARED_LIBS.md.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib/kabegame");
-        println!("cargo:rustc-link-arg=-Wl,--enable-new-dtags");
+        println!("cargo:rustc-link-arg-bin=kabegame=-Wl,-rpath,$ORIGIN/../lib/kabegame");
+        println!("cargo:rustc-link-arg-bin=kabegame=-Wl,--enable-new-dtags");
+        if std::env::var("CARGO_FEATURE_STANDARD").is_ok() {
+            println!("cargo:rustc-link-arg-bin=kabegame-cef-helper=-Wl,-rpath,$ORIGIN");
+            println!("cargo:rustc-link-arg-bin=kabegame-cef-helper=-Wl,--enable-new-dtags");
+            println!("cargo:rustc-link-arg-bin=cef-example=-Wl,-rpath,$ORIGIN");
+            println!("cargo:rustc-link-arg-bin=cef-example=-Wl,--enable-new-dtags");
+        }
 
         // Linux CEF backend (standard): hide the bundled SQLite (rusqlite)
         // symbols from the dynamic symbol table.
@@ -75,10 +81,41 @@ fn main() {
         }
     }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
+        println!("cargo:rustc-link-arg-bin=kabegame=-Wl,-rpath,@executable_path/../Frameworks");
+        if std::env::var("CARGO_FEATURE_STANDARD").is_ok() {
+            println!("cargo:rustc-link-arg-bin=kabegame-cef-helper=-Wl,-rpath,@executable_path/../Frameworks");
+            println!(
+                "cargo:rustc-link-arg-bin=cef-example=-Wl,-rpath,@executable_path/../Frameworks"
+            );
+        }
+        // Give bare dev executables an embedded Info.plist for Retina, process
+        // naming and automatic GPU switching. An app bundle's plist takes
+        // precedence in release builds.
+        println!("cargo:rerun-if-changed=macos/embedded-Info.plist");
+        println!(
+            "cargo:rustc-link-arg-bin=kabegame=-Wl,-sectcreate,__TEXT,__info_plist,{}",
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("macos/embedded-Info.plist")
+                .display()
+        );
+        if std::env::var("CARGO_FEATURE_STANDARD").is_ok() {
+            println!("cargo:rerun-if-changed=macos/kabegame-cef-helper-Info.plist");
+            println!(
+                "cargo:rustc-link-arg-bin=kabegame-cef-helper=-Wl,-sectcreate,__TEXT,__info_plist,{}",
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("macos/kabegame-cef-helper-Info.plist")
+                    .display()
+            );
+            println!(
+                "cargo:rustc-link-arg-bin=cef-example=-Wl,-sectcreate,__TEXT,__info_plist,{}",
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("macos/embedded-Info.plist")
+                    .display()
+            );
+        }
         // libfuse 弱链接:有 macFUSE 则可用虚拟盘,无则不崩(设置页检测并提示安装)
         if std::env::var("CARGO_FEATURE_STANDARD").is_ok() {
-            println!("cargo:rustc-link-arg=-Wl,-weak-lfuse");
+            println!("cargo:rustc-link-arg-bin=kabegame=-Wl,-weak-lfuse");
         }
     }
 }

@@ -651,7 +651,7 @@ async fn run_task(
         return Ok(TaskOutcome::Terminal(completion.status, completion.error));
     }
 
-    #[cfg(not(target_os = "android"))]
+    // V8 后端：桌面 + Android 均可用（WebView 后端在上方，仅桌面 CEF）。
     {
         let v8_script = plugin.script.v8_source().map(|s| s.to_string());
         if let Some(crawl_v8) = v8_script {

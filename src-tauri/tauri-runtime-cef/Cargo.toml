@@ -28,7 +28,8 @@ cookie = "0.18"
 # The Chromium engine binding (tauri-apps/cef-rs). Tracks CEF/Chromium major
 # versions: bumping this version is how we "follow upstream Chromium".
 cef = { version = "149", default-features = false }
-cef-helper = { path = "../cef-helper" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Window + event-loop host (same lib tauri-runtime-wry uses). `rwh_06` exposes
 # raw-window-handle 0.6 so we can read the tao window's handle. Default features

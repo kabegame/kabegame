@@ -92,8 +92,8 @@
   - 适用场景：新增窗口 IPC 权限、调整 capability/permission、排查“命令不可用/全部被拒绝”问题。
 
 - [../src-tauri/tauri-runtime-cef/README.md](../src-tauri/tauri-runtime-cef/README.md)
-  - 主题：Windows/macOS/Linux 桌面 CEF runtime 后端的架构、平台门控与 CEF Views/windowed GPU 路径；自定义协议、page-load 生命周期与 `invoke` IPC 桥接；Windows manifest 与 runtime 安装；macOS framework 运行时加载、CefAppProtocol NSApplication external pump、独立 helper、`gen/Kabegame.app` dev 生命周期，以及 release/dmg 自包含注入与签名。
-  - 适用场景：排查桌面 CEF 启动/渲染/IPC、升级 CEF/Chromium、调整 `tauri-runtime-cef` trait 适配；排查 Windows GPU 子进程、macOS app bundle/helper/message pump，或三平台 CEF_PATH 解析与打包。
+  - 主题：Windows/macOS/Linux 桌面 CEF runtime 后端的架构、平台门控与 CEF Views/windowed GPU 路径；自定义协议、page-load 生命周期与 `invoke` IPC 桥接；Windows manifest 与 runtime 安装；`kabegame` package 内的扁平 `kabegame-cef-helper` 子进程、macOS 构建期直链 framework 与裸 exe dev 运行、CefAppProtocol external pump、release 打包，以及 CEF fork/patch 维护流程。
+  - 适用场景：排查桌面 CEF 启动/渲染/IPC、升级 CEF/Chromium（fork rebase）、调整 `tauri-runtime-cef` trait 适配；排查 Windows GPU 子进程、macOS 裸跑子进程起不来/窗口空白/黑屏、message pump，或三平台 CEF_PATH 解析与打包。
 
 ## 调试（`debug/`）
 
@@ -116,7 +116,7 @@
 ## 构建打包（`build/`）
 
 - [build/PLATFORM_SHARED_LIBS.md](build/PLATFORM_SHARED_LIBS.md)
-   - 主题：三平台动态库随包打包。`bin/{windows,linux,macos}/` 子目录约定、`OSPlugin.bundleLibs` 与 `verifyFFmpegBuildArtifacts` / `stageMacOSCefHelpers`、Linux rpath `$ORIGIN/../lib/kabegame`、macOS libfuse 弱链接懒加载(无 brew dylib 捆绑,无 install_name 改写,无 codesign 重签)、CEF 框架 + helper 经 Tauri 原生 `macOS.frameworks`/`macOS.files` 注入、Tauri handlebars 动态注入 `linux.deb.files` 与 `macOS.frameworks`/`macOS.files`、Linux 不捆 libfuse 但仍 apt 依赖 `fuse3`(fusermount3)、虚拟盘驱动/系统依赖由设置页检测并由用户触发或手动安装。
+   - 主题：三平台动态库与 CEF 运行时打包。涵盖 `OSPlugin.bundleLibs`、ComponentPlugin 预构建 `kabegame-cef-helper`、主程序/helper 的 Linux rpath 差异、macOS framework/files 注入、Windows NSIS 搬运，以及虚拟盘驱动/系统依赖策略。
   - 适用场景：新增/升级运行时动态库;排查最终用户报 `libx264.so.X: cannot open`、macOS `Library not loaded` 或画册盘驱动缺失;调整 build-ffmpeg / DLL 复制 / dmg fixup / NSIS hook 流程。
 
 ## 应用更新（`updater/`）

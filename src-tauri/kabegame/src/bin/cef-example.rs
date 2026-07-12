@@ -5,31 +5,30 @@
 //! create and own a top-level Views window, with GPU enabled.
 //!
 //! The browser (main) process lives here; every CEF subprocess (renderer/GPU/
-//! utility) is a *separate* executable — the `cef-helper` crate in this
-//! workspace — so this binary never re-executes itself. That split is required
-//! on macOS (subprocesses must be an independent helper `.app`) and is applied
-//! uniformly on Linux/Windows too so the three platforms share one code path.
+//! utility) is the sibling `kabegame-cef-helper` binary target, so this binary
+//! never re-executes itself. That split is required
+//! on macOS and is applied uniformly on Linux/Windows too so the three
+//! platforms share one code path.
 //!
-//! Run (Linux/Windows, `cef-helper` built and next to this binary):
+//! Run (`kabegame-cef-helper` built next to this binary):
 //! ```sh
 //! export CEF_PATH="$HOME/i/cef-dev"
 //! export LD_LIBRARY_PATH="$CEF_PATH:$LD_LIBRARY_PATH"
 //! CEF_WINDOWED_URL=file:///tmp/cef-gpu-readback.html \
-//!   cargo run -p cef-example
+//!   cargo build -p kabegame --features standard --bin kabegame-cef-helper
+//!   cargo run -p kabegame --features standard --bin cef-example
 //! ```
 //!
 //! Windows:
 //! ```powershell
 //! $env:CEF_PATH = "H:\cef-dev"
 //! $env:PATH = "$env:CEF_PATH;$env:PATH"
-//! cargo run -p cef-example
+//! cargo build -p kabegame --features standard --bin kabegame-cef-helper
+//! cargo run -p kabegame --features standard --bin cef-example
 //! ```
 //!
-//! macOS: run via `bun start -c cef-example` (builds `gen/CEFExample.app`,
-//! a minimal bundle wrapping this binary + `CEFExample Helper.app`, then
-//! launches it) — a bare `cargo run` will not work because macOS requires
-//! the browser process to live inside an app bundle. See
-//! `scripts/plugins/os-plugin.ts` `buildCEFExampleApp`.
+//! macOS uses the same two Cargo commands. Both executables are flat artifacts
+//! in `target/<profile>`; cef-dll-sys provides `target/Frameworks` for dyld.
 
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 fn main() {
@@ -543,9 +542,7 @@ mod minimal_windowed {
     }
 
     /// 解析子进程 helper 可执行文件的绝对路径。三平台都是独立于本进程的
-    /// 二进制:Linux/Windows 在本 exe 同目录找 `cef-helper`(由 `cef-helper`
-    /// crate 单独构建);macOS 是 bundle 内的独立 `CEFExample Helper.app`
-    /// (由 os-plugin 的 `buildCEFExampleApp` 生成,见 build.ts)。
+    /// 三平台均在本 exe 同目录找 `kabegame-cef-helper`。
     fn helper_path() -> std::path::PathBuf {
         let exe_dir = std::env::current_exe()
             .expect("failed to resolve current_exe")
@@ -555,34 +552,21 @@ mod minimal_windowed {
 
         #[cfg(target_os = "macos")]
         {
-            exe_dir.join("../Frameworks/CEFExample Helper.app/Contents/MacOS/CEFExample Helper")
+            exe_dir.join("kabegame-cef-helper")
         }
         #[cfg(target_os = "windows")]
         {
-            exe_dir.join("cef-helper.exe")
+            exe_dir.join("kabegame-cef-helper.exe")
         }
         #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
         {
-            exe_dir.join("cef-helper")
+            exe_dir.join("kabegame-cef-helper")
         }
     }
 
     pub fn run() {
-        // macOS: cef-dll-sys does not link libcef there (see cef-dll-sys
-        // build.rs) — the framework must be loaded at runtime, before *any*
-        // other CEF call (including api_hash below). helper=false resolves
-        // the framework relative to this exe via "../Frameworks" (see
-        // cef::library_loader).
-        #[cfg(target_os = "macos")]
-        let _library_loader = {
-            let exe = std::env::current_exe().expect("failed to resolve current_exe");
-            let loader = library_loader::LibraryLoader::new(&exe, false);
-            assert!(loader.load(), "cef-example: cef_load_library failed");
-            loader
-        };
-
-        // 必须在框架加载后、cef_initialize 前创建 CefAppProtocol NSApplication
-        // (见 crate::app_mac 模块注释)。
+        // dyld has already loaded libcef through LC_LOAD_DYLIB, so its protocol
+        // classes are available before CefAppProtocol NSApplication setup.
         #[cfg(target_os = "macos")]
         crate::app_mac::init_cef_application();
 
@@ -593,15 +577,15 @@ mod minimal_windowed {
         let pump_mode = PumpMode::from_env();
 
         // The browser (main) process never re-executes itself: every CEF
-        // subprocess is the standalone cef-helper binary, referenced below
+        // subprocess is the standalone kabegame-cef-helper binary, referenced below
         // via browser_subprocess_path. So there is no execute_process /
         // is_browser_process branching here — this function only ever runs
         // the browser process.
         let mut app = WindowedApp::new(quit.clone());
 
-        let helper = helper_path()
-            .canonicalize()
-            .unwrap_or_else(|e| panic!("cef-helper not found at {:?}: {e}", helper_path()));
+        let helper = helper_path().canonicalize().unwrap_or_else(|e| {
+            panic!("kabegame-cef-helper not found at {:?}: {e}", helper_path())
+        });
 
         let mut settings = Settings {
             no_sandbox: 1,
@@ -626,13 +610,10 @@ mod minimal_windowed {
                 settings.locales_dir_path = CefString::from(format!("{cef_path}/locales").as_str());
             }
         }
-        // macOS:framework_dir_path 必须给 canonicalize 后的真实路径。bundle 里的
-        // framework 是指向 CEF_PATH 的符号链接;LibraryLoader 已按真实路径加载了
-        // libcef,若这里留空,cef_initialize 会按 bundle 默认路径(符号链接字符串)
-        // 解析框架 —— 与已加载路径不一致,实测导致 GPU 合成黑屏(页面 JS 正常、
-        // 输入正常、唯独画面全黑;disable-gpu 可显示)。设为一致路径后 GPU 正常。
-        // 注:启动早期的 "Trying to load the allocator multiple times" 警告仍会
-        // 打一次,无害。
+        // macOS:dev resolves target/<profile>/../Frameworks through the symlink
+        // created by cef-dll-sys; release resolves the app bundle Frameworks.
+        // canonicalize keeps framework_dir_path identical to dyld's loaded path,
+        // avoiding the previously observed GPU-compositing black screen.
         #[cfg(target_os = "macos")]
         {
             let framework_dir = std::env::current_exe()
@@ -643,6 +624,9 @@ mod minimal_windowed {
                 .canonicalize()
                 .expect("CEF framework not found in app bundle Frameworks/");
             settings.framework_dir_path = CefString::from(framework_dir.to_string_lossy().as_ref());
+            if let Some(main_bundle) = tauri_runtime_cef::macos_unbundled_main_bundle() {
+                settings.main_bundle_path = CefString::from(main_bundle.to_string_lossy().as_ref());
+            }
         }
 
         assert_eq!(

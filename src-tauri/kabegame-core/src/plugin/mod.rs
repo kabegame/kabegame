@@ -1,8 +1,8 @@
 // Rhai 爬虫运行时/脚本执行
 pub mod metadata_migration;
 pub mod rhai;
-// Phase 0：嵌入式 V8 后端，仅桌面（Android 保留 Rhai）。
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+// 嵌入式 V8 后端：桌面 + Android（仅 iOS 不支持）。
+#[cfg(not(target_os = "ios"))]
 pub mod v8;
 
 use arc_swap::ArcSwap;

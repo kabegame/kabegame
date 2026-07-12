@@ -255,7 +255,13 @@ export class BuildSystem {
       killVite();
     } else {
       const cargoArgs = this.buildCargoArgs(
-        ["build", "-p", Component.MAIN],
+        [
+          "build",
+          "-p",
+          Component.MAIN,
+          "--bin",
+          "kabegame",
+        ],
         features,
         compileArgs,
       );
@@ -281,14 +287,7 @@ export class BuildSystem {
           process.on("SIGTERM", killVite);
           try {
             // await this.waitForDevServer("http://localhost:1420", 30_000);
-            const exe = path.join(
-              root,
-              "gen",
-              "Kabegame.app",
-              "Contents",
-              "MacOS",
-              "kabegame",
-            );
+            const exe = path.join(root, "target", "debug", "kabegame");
             run(exe, this.options.args || [], { cwd: root });
           } finally {
             killVite();
@@ -315,55 +314,6 @@ export class BuildSystem {
     this.commonUse(Cmd.START);
     this.commonBefore();
 
-    if (this.context.component?.isCEFExample) {
-      if (OSPlugin.isMacOS) {
-        // macOS 浏览器进程必须在 app bundle 内运行(见 os-plugin.buildCEFExampleApp);
-        // start 只负责运行已构建产物,不代为 build。
-        const exe = path.join(
-          root,
-          "gen",
-          "CEFExample.app",
-          "Contents",
-          "MacOS",
-          Component.CEF_EXAMPLE,
-        );
-        if (!existsSync(exe)) {
-          throw new Error(
-            `gen/CEFExample.app 不存在或未包含可执行文件,请先运行: bun b -c cef-example`,
-          );
-        }
-        this.hooks.beforeRun.call(Component.CEF_EXAMPLE);
-        try {
-          run(exe, this.options.args || [], { cwd: root });
-        } finally {
-          this.hooks.afterRun.call(Component.CEF_EXAMPLE);
-        }
-      } else {
-        const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(
-          Component.CEF_EXAMPLE,
-        );
-        const buildArgs = this.buildCargoArgs(
-          ["build", "-p", Component.CEF_EXAMPLE],
-          features,
-          compileArgs,
-        );
-        run("cargo", buildArgs, { cwd: SRC_TAURI_DIR });
-        this.hooks.beforeRun.call(Component.CEF_EXAMPLE);
-        try {
-          const runArgs = this.buildCargoArgs(
-            ["run", "-p", Component.CEF_EXAMPLE],
-            features,
-            compileArgs,
-          );
-          if (this.options.args?.length) runArgs.push("--", ...this.options.args);
-          run("cargo", runArgs, { cwd: SRC_TAURI_DIR });
-        } finally {
-          this.hooks.afterRun.call(Component.CEF_EXAMPLE);
-        }
-      }
-      return;
-    }
-
     const component = this.context.component!;
     const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call();
     // 先构建前端资源
@@ -377,7 +327,12 @@ export class BuildSystem {
       }
     }
     const buildArgs = this.buildCargoArgs(
-      ["build", "-p", component.cargoComp],
+      [
+        "build",
+        "-p",
+        component.cargoComp,
+        ...(component.isMain ? ["--bin", "kabegame"] : []),
+      ],
       features,
       compileArgs,
     );
@@ -387,16 +342,19 @@ export class BuildSystem {
       if (OSPlugin.isMacOS && component.isMain) {
         const exe = path.join(
           root,
-          "gen",
-          "Kabegame.app",
-          "Contents",
-          "MacOS",
+          "target",
+          this.options.release ? "release" : "debug",
           "kabegame",
         );
         run(exe, this.options.args || [], { cwd: root });
       } else {
         const runArgs = this.buildCargoArgs(
-          ["run", "-p", component.cargoComp],
+          [
+            "run",
+            "-p",
+            component.cargoComp,
+            ...(component.isMain ? ["--bin", "kabegame"] : []),
+          ],
           features,
           compileArgs,
         );
@@ -440,33 +398,6 @@ export class BuildSystem {
           cwd: SRC_TAURI_DIR,
         });
       }
-    }
-    if (this.context.component!.isCEFHelper) {
-      this.hooks.beforeBuild.call(Component.CEF_HELPER);
-      const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.CEF_HELPER);
-      const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
-      const args = this.buildCargoArgs(
-        ["build", "-p", Component.CEF_HELPER],
-        features,
-        mergedArgs.length > 0 ? mergedArgs : undefined,
-      );
-      if (!this.context.skip?.isCargo) {
-        run("cargo", args, { cwd: SRC_TAURI_DIR });
-      }
-    }
-    if (this.context.component!.isCEFExample) {
-      this.hooks.beforeBuild.call(Component.CEF_EXAMPLE);
-      const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.CEF_EXAMPLE);
-      const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
-      const args = this.buildCargoArgs(
-        ["build", "-p", Component.CEF_EXAMPLE],
-        features,
-        mergedArgs.length > 0 ? mergedArgs : undefined,
-      );
-      if (!this.context.skip?.isCargo) {
-        run("cargo", args, { cwd: SRC_TAURI_DIR });
-      }
-      await this.hooks.afterBuild.promise(Component.CEF_EXAMPLE);
     }
     if (this.context.component!.isMain) {
       this.hooks.beforeBuild.call(Component.MAIN);
@@ -526,10 +457,7 @@ export class BuildSystem {
     this.commonUse(Cmd.CHECK);
     this.commonBefore();
 
-    // cef-example/cef-helper 无前端目录(apps/<comp> 不存在),跳过 vue-tsc。
-    const hasNoFrontend =
-      this.context.component!.isCEFExample || this.context.component!.isCEFHelper;
-    if (!this.context.skip?.isVue && !hasNoFrontend) {
+    if (!this.context.skip?.isVue) {
       run("vue-tsc", [], {
         bin: "bun",
         cwd: this.context.component!.appFeDir,

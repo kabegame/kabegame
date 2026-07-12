@@ -787,7 +787,7 @@ mod imp {
                 _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
             ) -> ::std::os::raw::c_int {
                 if let Some(extra_info) = extra_info {
-                    match cef_helper::initialization_scripts_extra_info(
+                    match crate::subprocess::initialization_scripts_extra_info(
                         &self.initialization_scripts_payload,
                     ) {
                         Ok(initialization_scripts) => *extra_info = Some(initialization_scripts),
@@ -976,12 +976,12 @@ mod imp {
         let scripts = std::mem::take(&mut pending.webview_attributes.initialization_scripts);
         let initialization_scripts = scripts
             .into_iter()
-            .map(|script| cef_helper::InitializationScript {
+            .map(|script| crate::subprocess::InitializationScript {
                 script: script.script,
                 for_main_frame_only: script.for_main_frame_only,
             })
             .collect::<Vec<_>>();
-        let initialization_scripts_payload = cef_helper::encode_initialization_scripts(
+        let initialization_scripts_payload = crate::subprocess::encode_initialization_scripts(
             &initialization_scripts,
         )
         .map_err(|error| {
@@ -990,7 +990,7 @@ mod imp {
             ))))
         })?;
         let mut initialization_scripts_extra_info =
-            cef_helper::initialization_scripts_extra_info(&initialization_scripts_payload)
+            crate::subprocess::initialization_scripts_extra_info(&initialization_scripts_payload)
                 .map_err(|error| Error::CreateWebview(Box::new(io::Error::other(error))))?;
         let on_page_load = pending.on_page_load_handler.take().map(Rc::new);
         let download_handler = pending

@@ -711,11 +711,8 @@ mod imp {
         }
     }
 
-    /// 派发 CEF 子进程并在子进程中退出。
-    ///
-    /// 应用主进程调用后会继续返回；renderer/gpu 等 CEF 子进程会在这里
-    /// `std::process::exit`,不会进入 Tauri 初始化。
-    pub fn execute_cef_subprocess_and_exit() {
+    /// 在 Tauri 启动前初始化 CEF browser 主进程。
+    pub fn dispatch_cef_subprocess() {
         // Select X11 before CEF parses
         // the process environment or launches any child process.
         #[cfg(target_os = "linux")]
@@ -724,18 +721,12 @@ mod imp {
         }
         #[cfg(target_os = "macos")]
         {
-            static CEF_LIBRARY_LOADER: OnceLock<cef::library_loader::LibraryLoader> =
-                OnceLock::new();
-            CEF_LIBRARY_LOADER.get_or_init(|| {
-                let exe = std::env::current_exe().expect("failed to resolve current_exe");
-                let loader = cef::library_loader::LibraryLoader::new(&exe, false);
-                assert!(loader.load(), "kabegame: cef_load_library failed");
-                loader
-            });
-            crate::app_mac::init_cef_application();
+            // dyld loads the directly linked CEF framework at process startup,
+            // so CefAppProtocol setup has no runtime loader ordering constraint.
+            crate::app_mac::init_cef_app_mac();
         }
-        eprintln!("[cef-runtime] early subprocess dispatch (CEF Views/windowed)");
-        let mut app = init_cef_app_and_maybe_exit(true);
+        eprintln!("[cef-runtime] browser initialization (CEF Views/windowed)");
+        let mut app = create_cef_app();
         initialize_cef(&mut app).expect("failed to initialize CEF before Tauri startup");
         PREPARED_CEF_APP.with(|prepared| prepared.replace(Some(app)));
         CEF_INITIALIZED.with(|initialized| initialized.set(true));
@@ -744,6 +735,11 @@ mod imp {
     wrap_app! {
         struct CefRuntimeApp {
             windowed_quit: Arc<AtomicBool>,
+            // CEF 每次派发回调都会重新调 GetRenderProcessHandler/GetBrowserProcessHandler;
+            // handler 必须建一次、每次返回同一实例的 clone,否则 on_browser_created 存进
+            // 实例 A 的初始化脚本会在 on_context_created 的新实例 B 上丢失(注入静默失效)。
+            render_process_handler: RenderProcessHandler,
+            browser_process_handler: BrowserProcessHandler,
         }
         impl App {
             fn on_register_custom_schemes(&self, registrar: Option<&mut SchemeRegistrar>) {
@@ -793,25 +789,21 @@ mod imp {
                     // `execute_process` → 不跑 `on_register_custom_schemes` → fork 出的
                     // renderer 不认 `ipc://` / `cef-ipc://`(`ERR_UNKNOWN_URL_SCHEME`),
                     // 导致 Tauri IPC 全断、ACL 因 `is_local=false` 拒命令。关掉 zygote
-                    // 后每个 renderer 作为独立进程 re-exec 本二进制,自己注册自定义 scheme。
+                    // 后每个 renderer 都会启动独立 helper,并自行注册自定义 scheme。
                     cl.append_switch(Some(&CefString::from("no-zygote")));
                 }
                 // NOTE: 不要开 `single-process`。CEF/Chromium 单进程模式已弃用且极不
                 // 稳定(并伴随 "Cannot use V8 Proxy resolver in
-                // single process mode")。多进程下渲染/GPU 子进程会 re-exec 本二进制,
-                // 由 `execute_cef_subprocess_and_exit()` 在 main 最早期拦下退出
-                // (见 main.rs + browser_subprocess_path)。minimal.rs 多进程已验证可用。
+                // single process mode")。多进程下渲染/GPU 子进程由
+                // `browser_subprocess_path` 指向的独立 helper 承载。
             }
 
             fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
-                Some(WindowedBrowserProcessHandler::new(
-                    RefCell::new(None),
-                    self.windowed_quit.clone(),
-                ))
+                Some(self.browser_process_handler.clone())
             }
 
             fn render_process_handler(&self) -> Option<RenderProcessHandler> {
-                Some(cef_helper::initialization_render_process_handler())
+                Some(self.render_process_handler.clone())
             }
         }
     }
@@ -1263,54 +1255,105 @@ mod imp {
         }
     }
 
-    /// 创建 CEF app 并执行 `cef::execute_process`。
-    ///
-    /// `exit_subprocess` 为 true 时用于应用 `main` 最早阶段；为 false 时用于
-    /// runtime 初始化阶段,此时 browser 主进程应继续执行 `cef::initialize`。
-    fn init_cef_app_and_maybe_exit(exit_subprocess: bool) -> cef::App {
+    /// 创建 browser 与 helper 共用的 CEF app。
+    fn create_cef_app() -> cef::App {
         let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
-        #[allow(unused_mut)]
-        let mut app = CefRuntimeApp::new(windowed_quit());
-        #[cfg(target_os = "macos")]
-        let _ = exit_subprocess;
-        #[cfg(not(target_os = "macos"))]
-        {
-            let args = Args::new();
-            let cmd = args.as_cmd_line().expect("failed to parse command line");
-            let is_browser_process = cmd.has_switch(Some(&CefString::from("type"))) != 1;
-            let process_type = if is_browser_process {
-                "browser".to_string()
-            } else {
-                CefString::from(&cmd.switch_value(Some(&CefString::from("type")))).to_string()
-            };
-            eprintln!(
-            "[cef-runtime] cef_execute_process pid={} type={process_type} backend=windowed args={:?}",
+        let quit = windowed_quit();
+        CefRuntimeApp::new(
+            quit.clone(),
+            crate::subprocess::initialization_render_process_handler(),
+            WindowedBrowserProcessHandler::new(RefCell::new(None), quit),
+        )
+    }
+
+    /// 独立 helper binary 的 renderer/GPU/utility 进程入口。
+    pub fn run_cef_subprocess() -> ! {
+        // 必须先协商 API 版本:下面 as_cmd_line 已经进 CEF C API,
+        // 版本未配置(-1)会触发 CppToC wrap 的 NOTREACHED,helper 直接 abort。
+        let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+        let args = Args::new();
+        let process_type = args
+            .as_cmd_line()
+            .map(|command_line| {
+                CefString::from(&command_line.switch_value(Some(&CefString::from("type"))))
+                    .to_string()
+            })
+            .unwrap_or_default();
+        eprintln!(
+            "[cef-runtime] cef_execute_process pid={} type={process_type} args={:?}",
             std::process::id(),
             std::env::args().collect::<Vec<_>>()
         );
-            let code = execute_process(
-                Some(args.as_main_args()),
-                Some(&mut app),
-                std::ptr::null_mut(),
-            );
-            eprintln!(
-                "[cef-runtime] cef_execute_process returned pid={} type={process_type} code={code}",
-                std::process::id()
-            );
-            if exit_subprocess && !is_browser_process {
-                std::process::exit(code.max(0));
-            }
-        }
-        app
+        let mut app = create_cef_app();
+        let code = execute_process(
+            Some(args.as_main_args()),
+            Some(&mut app),
+            std::ptr::null_mut(),
+        );
+        std::process::exit(code.max(0));
     }
 
-    #[cfg(target_os = "macos")]
     fn helper_path() -> std::path::PathBuf {
+        #[cfg(all(target_os = "linux", not(debug_assertions)))]
+        {
+            "/usr/lib/kabegame/kabegame-cef-helper".into()
+        }
+        #[cfg(any(not(target_os = "linux"), debug_assertions))]
         std::env::current_exe()
             .expect("failed to resolve current_exe")
             .parent()
             .expect("exe has no parent dir")
-            .join("../Frameworks/Kabegame Helper.app/Contents/MacOS/Kabegame Helper")
+            .join(
+                #[cfg(target_os = "windows")]
+                "kabegame-cef-helper.exe",
+                #[cfg(target_os = "macos")]
+                "kabegame-cef-helper",
+                #[cfg(target_os = "linux")]
+                "kabegame-cef-helper",
+            )
+    }
+
+    /// 裸 exe(无 .app bundle)运行时,为 CEF 生成并返回一个最小 main bundle 目录。
+    ///
+    /// Chromium 的 MachPortRendezvous 用 `<BaseBundleID>.MachPortRendezvousServer.<pid>`
+    /// 作 bootstrap 服务名:browser 注册名来自 CEF `util_mac::OverrideBaseBundleID()`
+    /// (= main bundle 的 CFBundleIdentifier;裸 exe 下 `GetAppBundlePath()` 找不到
+    /// `.app` 祖先返回空 → override 成空串),子进程查找名来自其内嵌 __info_plist 的
+    /// CFBundleIdentifier。两者不一致时所有子进程 `bootstrap_look_up` 失败、起来即退
+    /// (窗口空白 + "Network service crashed" 循环)。把 `settings.main_bundle_path`
+    /// 指到本目录,让 browser 侧 override 与内嵌 plist 的 id 一致。
+    ///
+    /// 目录名**刻意不带 `.app` 后缀**:`AmIBundled()`(看 OuterBundle 路径后缀)保持
+    /// false,stock CEF 才不会把子进程路径改写成 5 个 helper `.app` 变体。
+    /// release(.app 内运行)返回 None:bundle 本身就是 main bundle。
+    #[cfg(target_os = "macos")]
+    pub fn macos_unbundled_main_bundle() -> Option<std::path::PathBuf> {
+        let exe = std::env::current_exe().ok()?;
+        let in_app_bundle = exe
+            .components()
+            .any(|c| c.as_os_str().to_string_lossy().ends_with(".app"));
+        if in_app_bundle {
+            return None;
+        }
+        // CFBundleIdentifier 必须与 kabegame / kabegame-cef-helper 的内嵌 plist 一致。
+        const PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>app.kabegame</string>
+    <key>CFBundleName</key>
+    <string>Kabegame</string>
+</dict>
+</plist>
+"#;
+        let bundle_dir = exe.parent()?.join("kabegame-main-bundle");
+        let plist_path = bundle_dir.join("Contents/Info.plist");
+        if std::fs::read_to_string(&plist_path).ok().as_deref() != Some(PLIST) {
+            std::fs::create_dir_all(plist_path.parent()?).ok()?;
+            std::fs::write(&plist_path, PLIST).ok()?;
+        }
+        Some(bundle_dir)
     }
 
     /// 解析 CEF 资源目录(`*.pak` / `icudtl.dat` / `v8_context_snapshot.bin` /
@@ -1325,24 +1368,19 @@ mod imp {
     /// 2. 安装态:`<exe>/../lib/kabegame`(deb `/usr/bin/kabegame` → `/usr/lib/kabegame`),
     ///    以是否存在 `icudtl.dat` 判定;
     /// 3. 都没有 → `None`(交给 CEF 默认:可执行文件同目录)。
+    #[cfg(not(target_os = "macos"))]
     fn resolve_cef_resource_dir() -> Option<std::path::PathBuf> {
-        #[cfg(target_os = "macos")]
-        return None;
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            if let Ok(cef_path) = std::env::var("CEF_PATH") {
-                if !cef_path.is_empty() {
-                    return Some(std::path::PathBuf::from(cef_path));
-                }
+        if let Ok(cef_path) = std::env::var("CEF_PATH") {
+            if !cef_path.is_empty() {
+                return Some(std::path::PathBuf::from(cef_path));
             }
-            let exe = std::env::current_exe().ok()?;
-            let dir = exe.parent()?.join("../lib/kabegame");
-            if dir.join("icudtl.dat").is_file() {
-                return Some(dir.canonicalize().unwrap_or(dir));
-            }
-            None
         }
+        let exe = std::env::current_exe().ok()?;
+        let dir = exe.parent()?.join("../lib/kabegame");
+        if dir.join("icudtl.dat").is_file() {
+            return Some(dir.canonicalize().unwrap_or(dir));
+        }
+        None
     }
 
     /// CEF 用户数据目录名。**dev(debug)与安装态(release)必须分开**:
@@ -1399,16 +1437,15 @@ mod imp {
         let mut settings = Settings {
             no_sandbox: 1,
             external_message_pump: 1,
-            log_severity: LogSeverity::VERBOSE,
+            log_severity: LogSeverity::ERROR,
             browser_subprocess_path: {
-                #[cfg(target_os = "macos")]
                 let subprocess = helper_path()
                     .canonicalize()
-                    .unwrap_or_else(|e| panic!("cef-helper not found at {:?}: {e}", helper_path()));
-                #[cfg(not(target_os = "macos"))]
-                let subprocess =
-                    std::env::current_exe().expect("failed to resolve CEF subprocess executable");
-                let subprocess = subprocess.to_string_lossy().into_owned();
+                    .unwrap_or_else(|e| {
+                        panic!("kabegame-cef-helper not found at {:?}: {e}", helper_path())
+                    })
+                    .to_string_lossy()
+                    .into_owned();
                 CefString::from(subprocess.as_str())
             },
             // cache_path 与 root_cache_path 相同是 CEF 允许的。
@@ -1433,6 +1470,9 @@ mod imp {
                 );
             }
         }
+        // Dev resolves target/debug/../Frameworks through the symlink created
+        // by cef-dll-sys; release resolves Contents/MacOS/../Frameworks in the
+        // app bundle. canonicalize keeps this path identical to dyld's load.
         #[cfg(target_os = "macos")]
         {
             let framework_dir = std::env::current_exe()
@@ -1443,6 +1483,9 @@ mod imp {
                 .canonicalize()
                 .expect("CEF framework not found in app bundle Frameworks/");
             settings.framework_dir_path = CefString::from(framework_dir.to_string_lossy().as_ref());
+            if let Some(main_bundle) = macos_unbundled_main_bundle() {
+                settings.main_bundle_path = CefString::from(main_bundle.to_string_lossy().as_ref());
+            }
         }
 
         if initialize(
@@ -1699,7 +1742,7 @@ mod imp {
             CEF_INITIALIZED.with(Cell::get)
         );
         if !CEF_INITIALIZED.with(Cell::get) {
-            let mut app = init_cef_app_and_maybe_exit(false);
+            let mut app = create_cef_app();
             initialize_cef(&mut app)?;
             PREPARED_CEF_APP.with(|prepared| prepared.replace(Some(app)));
             CEF_INITIALIZED.with(|initialized| initialized.set(true));

@@ -19,3 +19,11 @@
 [submodule "third/x264"]
 	path = third/x264
 	url = https://code.videolan.org/videolan/x264.git
+[submodule "third/cef-rs"]
+	path = third/cef-rs
+	url = https://github.com/kabegame/cef-rs.git
+	branch = kabegame-149
+[submodule "third/cef"]
+	path = third/cef
+	url = https://github.com/kabegame/cef.git
+	branch = kabegame-7827

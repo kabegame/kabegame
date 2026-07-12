@@ -1,10 +1,4 @@
-//! Shared CEF subprocess support.
-//!
-//! Tauri initialization scripts originate in the browser process, while the
-//! only reliable document-start callback lives in the renderer process. This
-//! module owns the versioned `extra_info` payload and the renderer-side V8
-//! context hook so the standalone macOS helper and the re-exec subprocesses on
-//! Windows/Linux use exactly the same protocol.
+//! CEF renderer-process support shared by the browser runtime and helper binary.
 
 use std::{cell::RefCell, collections::HashMap};
 
@@ -15,12 +9,12 @@ const INITIALIZATION_SCRIPTS_KEY: &str = "kabegame.init_scripts.v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InitializationScript {
-    pub script: String,
-    pub for_main_frame_only: bool,
+pub(crate) struct InitializationScript {
+    pub(crate) script: String,
+    pub(crate) for_main_frame_only: bool,
 }
 
-pub fn encode_initialization_scripts(
+pub(crate) fn encode_initialization_scripts(
     scripts: &[InitializationScript],
 ) -> Result<String, serde_json::Error> {
     serde_json::to_string(scripts)
@@ -31,7 +25,7 @@ fn decode_initialization_scripts(payload: &str) -> Result<Vec<InitializationScri
         .map_err(|error| format!("invalid CEF initialization-script payload: {error}"))
 }
 
-pub fn initialization_scripts_extra_info(payload: &str) -> Result<DictionaryValue, String> {
+pub(crate) fn initialization_scripts_extra_info(payload: &str) -> Result<DictionaryValue, String> {
     let dictionary = dictionary_value_create()
         .ok_or_else(|| "CEF failed to create initialization-script extra_info".to_string())?;
     let key = CefString::from(INITIALIZATION_SCRIPTS_KEY);
@@ -76,7 +70,7 @@ wrap_render_process_handler! {
                 }
                 Ok(None) => {}
                 Err(error) => eprintln!(
-                    "[cef-helper] browser={} {error}",
+                    "[cef-runtime] browser={} {error}",
                     browser.identifier()
                 ),
             }
@@ -125,7 +119,7 @@ wrap_render_process_handler! {
                         .map(|exception| CefString::from(&exception.message()).to_string())
                         .unwrap_or_else(|| "unknown V8 exception".to_string());
                     eprintln!(
-                        "[cef-helper] browser={} initialization script #{index} failed: {message}",
+                        "[cef-runtime] browser={} initialization script #{index} failed: {message}",
                         browser.identifier()
                     );
                 }
@@ -134,39 +128,8 @@ wrap_render_process_handler! {
     }
 }
 
-pub fn initialization_render_process_handler() -> RenderProcessHandler {
+pub(crate) fn initialization_render_process_handler() -> RenderProcessHandler {
     InitializationRenderProcessHandler::new(RefCell::new(HashMap::new()))
-}
-
-wrap_app! {
-    struct CefHelperApp {
-        render_process_handler: RenderProcessHandler,
-    }
-
-    impl App {
-        fn on_register_custom_schemes(&self, registrar: Option<&mut SchemeRegistrar>) {
-            let Some(registrar) = registrar else { return };
-            let web_resource_options = (SchemeOptions::STANDARD.get_raw()
-                | SchemeOptions::SECURE.get_raw()
-                | SchemeOptions::CORS_ENABLED.get_raw()
-                | SchemeOptions::FETCH_ENABLED.get_raw()) as i32;
-            for scheme in ["tauri", "asset"] {
-                registrar.add_custom_scheme(Some(&CefString::from(scheme)), web_resource_options);
-            }
-            let ipc_options = web_resource_options | SchemeOptions::CSP_BYPASSING.get_raw() as i32;
-            for scheme in ["ipc", "cef-ipc"] {
-                registrar.add_custom_scheme(Some(&CefString::from(scheme)), ipc_options);
-            }
-        }
-
-        fn render_process_handler(&self) -> Option<RenderProcessHandler> {
-            Some(self.render_process_handler.clone())
-        }
-    }
-}
-
-pub fn new_cef_helper_app() -> App {
-    CefHelperApp::new(initialization_render_process_handler())
 }
 
 #[cfg(test)]

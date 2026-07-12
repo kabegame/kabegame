@@ -25,6 +25,12 @@
   dll_move_done:
   FindClose $0
 
+  ; CEF subprocess helper must live next to kabegame.exe.
+  IfFileExists "$INSTDIR\resources\bin\kabegame-cef-helper.exe" 0 helper_move_done
+    ExecWait '$\"$SYSDIR\cmd.exe$\" /C move /Y $\"$INSTDIR\resources\bin\kabegame-cef-helper.exe$\" $\"$INSTDIR$\"' $2
+    DetailPrint "Move kabegame-cef-helper.exe -> $INSTDIR (exit $2)"
+  helper_move_done:
+
   ; Move the CEF runtime from resources/cef to install root. libcef.dll is
   ; load-time linked and CEF requires dll/pak/dat files and locales/ to sit
   ; next to the exe, so they cannot stay under resources\.
@@ -90,6 +96,7 @@
   ; CEF verbose log written next to the exe (if any)
   Delete "$INSTDIR\debug.log"
   RMDir /r "$INSTDIR\locales"
+  Delete "$INSTDIR\kabegame-cef-helper.exe"
 
   ; Remove folder attributes (best-effort).
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib -s -r $\"$INSTDIR$\"'

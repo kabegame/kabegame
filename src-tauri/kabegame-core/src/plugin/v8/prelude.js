@@ -22,26 +22,21 @@ import {
 
 const ops = Deno.core.ops;
 
-// deno_web and deno_fetch ship their APIs as lazy_loaded_js IIFE scripts that
-// `return { ... }` but do NOT attach to globalThis automatically. In a full Deno
-// process that wiring lives in runtime/js/99_main.js, which we omit. Load the
-// modules here and assign globals so the snapshot bakes them in.
-// NOTE: deno_crypto is intentionally absent - see below.
+// deno_web ships its APIs as lazy_loaded_js IIFE scripts that `return { ... }` but
+// do NOT attach to globalThis automatically. In a full Deno process that wiring
+// lives in runtime/js/99_main.js, which we omit. Load the modules here and assign
+// globals. deno_crypto is intentionally absent - see below.
 const webUrl = Deno.core.loadExtScript("ext:deno_web/00_url.js");
 const webBase64 = Deno.core.loadExtScript("ext:deno_web/05_base64.js");
 const webEncoding = Deno.core.loadExtScript("ext:deno_web/08_text_encoding.js");
 const webDomException = Deno.core.loadExtScript("ext:deno_web/01_dom_exception.js");
 const webTimers = Deno.core.loadExtScript("ext:deno_web/02_timers.js");
 // deno_crypto/00_crypto.js is NOT loaded here: it creates cppgc objects
-// (Crypto/SubtleCrypto/CryptoKey) which require a CppHeap. V8 snapshot isolates
-// have no CppHeap, so crypto is deferred to runtime startup in v8.rs.
-// Only Headers + Response are pulled from deno_fetch: they depend on deno_web
-// only. The native `Request`/`fetch` (23_request.js -> 22_http_client.js ->
-// ext:deno_net/02_tls.js, and 26_fetch.js -> ext:deno_telemetry/*) would drag in
-// deno_net (raw sockets) + deno_telemetry, so we provide host-backed `fetch` and
-// a minimal `Request` instead (see below), routed through the proxy-aware host.
-const fetchHeaders = Deno.core.loadExtScript("ext:deno_fetch/20_headers.js");
-const fetchResponse = Deno.core.loadExtScript("ext:deno_fetch/23_response.js");
+// (Crypto/SubtleCrypto/CryptoKey), attached at runtime startup in v8.rs.
+// Headers/Response are NOT pulled from deno_fetch either: that crate (and its
+// deno_net/deno_tls networking) is not linked at all. `fetch` is host-backed
+// (op_kabegame_fetch, proxy-aware reqwest), so we implement the minimal
+// Headers/Response/Request the crawler needs directly in JS (see below).
 
 Object.assign(globalThis, {
   URL: webUrl.URL,
@@ -54,8 +49,6 @@ Object.assign(globalThis, {
   TextDecoderStream: webEncoding.TextDecoderStream,
   DOMException: webDomException.DOMException,
   // Crypto/crypto/CryptoKey/SubtleCrypto are attached at runtime (see v8.rs).
-  Headers: fetchHeaders.Headers,
-  Response: fetchResponse.Response,
 });
 
 let domParserReady = null;
@@ -121,6 +114,117 @@ globalThis.console = {
   debug: (...args) => ops.op_kabegame_log("debug", formatConsoleArgs(args)),
 };
 
+// Minimal WHATWG Headers: case-insensitive multimap. Values for the same name are
+// combined with ", " on get()/iteration (except Set-Cookie, exposed via
+// getSetCookie()). No header name/value validation, which is fine because the host
+// owns the actual wire request; this only shapes what plugins read/pass.
+class Headers {
+  #map; // Map<lowercaseName, string[]>
+  constructor(init) {
+    this.#map = new Map();
+    if (init === undefined || init === null) return;
+    if (init instanceof Headers) {
+      for (const [name, value] of init) this.append(name, value);
+    } else if (Array.isArray(init)) {
+      for (const pair of init) this.append(pair[0], pair[1]);
+    } else {
+      for (const name of Object.keys(init)) this.append(name, init[name]);
+    }
+  }
+  append(name, value) {
+    const key = String(name).toLowerCase();
+    const arr = this.#map.get(key);
+    if (arr === undefined) this.#map.set(key, [String(value)]);
+    else arr.push(String(value));
+  }
+  set(name, value) {
+    this.#map.set(String(name).toLowerCase(), [String(value)]);
+  }
+  get(name) {
+    const arr = this.#map.get(String(name).toLowerCase());
+    return arr === undefined ? null : arr.join(", ");
+  }
+  has(name) {
+    return this.#map.has(String(name).toLowerCase());
+  }
+  delete(name) {
+    this.#map.delete(String(name).toLowerCase());
+  }
+  getSetCookie() {
+    const arr = this.#map.get("set-cookie");
+    return arr === undefined ? [] : arr.slice();
+  }
+  *entries() {
+    for (const key of [...this.#map.keys()].sort()) {
+      yield [key, this.#map.get(key).join(", ")];
+    }
+  }
+  *keys() {
+    for (const [key] of this.entries()) yield key;
+  }
+  *values() {
+    for (const [, value] of this.entries()) yield value;
+  }
+  forEach(callback, thisArg) {
+    for (const [key, value] of this.entries()) callback.call(thisArg, value, key, this);
+  }
+  [Symbol.iterator]() {
+    return this.entries();
+  }
+}
+globalThis.Headers = Headers;
+
+// Response statuses that must not carry a body (per the Response constructor).
+const NULL_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
+
+// Minimal WHATWG Response backed by host-fetched bytes. Supports the body accessors
+// crawler plugins use (text/json/arrayBuffer/bytes); no streaming body / clone. The
+// `body` arg is the host fetch result (Uint8Array), or a string/ArrayBuffer/null.
+class Response {
+  #bytes; // Uint8Array | null
+  constructor(body, init = {}) {
+    const status = init.status ?? 200;
+    this.status = status;
+    this.statusText = init.statusText ?? "";
+    this.headers = new Headers(init.headers);
+    this.ok = status >= 200 && status < 300;
+    this.redirected = false;
+    this.type = "default";
+    this.url = "";
+    this.bodyUsed = false;
+    if (body === null || body === undefined) {
+      this.#bytes = null;
+    } else if (body instanceof Uint8Array) {
+      this.#bytes = body;
+    } else if (body instanceof ArrayBuffer) {
+      this.#bytes = new Uint8Array(body);
+    } else if (typeof body === "string") {
+      this.#bytes = new webEncoding.TextEncoder().encode(body);
+    } else {
+      this.#bytes = new Uint8Array(0);
+    }
+  }
+  #consume() {
+    if (this.bodyUsed) throw new TypeError("Body has already been consumed");
+    this.bodyUsed = true;
+    return this.#bytes ?? new Uint8Array(0);
+  }
+  async arrayBuffer() {
+    const b = this.#consume();
+    return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+  }
+  async bytes() {
+    return this.#consume();
+  }
+  async text() {
+    return new webEncoding.TextDecoder().decode(this.#consume());
+  }
+  async json() {
+    return JSON.parse(new webEncoding.TextDecoder().decode(this.#consume()));
+  }
+}
+globalThis.Response = Response;
+
 // Minimal `Request`: enough to normalize fetch inputs (url/method/headers/body)
 // and support `input instanceof Request`. Not a full spec Request (no streaming
 // body, no cache/mode/credentials semantics) since fetch is host-backed.
@@ -147,12 +251,9 @@ class Request {
 }
 globalThis.Request = Request;
 
-// Response statuses that must not carry a body (per the Response constructor).
-const NULL_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
-
 // Host-backed `fetch`: routes through op_kabegame_fetch (proxy-aware reqwest on
 // the Rust side). The task's default request headers are merged on the host; here
-// we only forward the caller's method/headers/body and rebuild a native Response.
+// we only forward the caller's method/headers/body and rebuild a Response.
 globalThis.fetch = async (input, init = undefined) => {
   const request = new Request(input, init);
   const bodyText = request.bodyText;
@@ -167,9 +268,9 @@ globalThis.fetch = async (input, init = undefined) => {
     statusText: result.statusText,
     headers: result.headers,
   });
-  // `new Response()` always reports url === ""; surface the real (post-redirect)
-  // URL so callers relying on response.url behave like a network response.
-  Object.defineProperty(response, "url", { value: result.url, configurable: true });
+  // Surface the real (post-redirect) URL so callers relying on response.url behave
+  // like a network response.
+  response.url = result.url;
   return response;
 };
 

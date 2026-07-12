@@ -17,13 +17,16 @@ open class RustPlugin : Plugin<Project> {
     override fun apply(project: Project) = with(project) {
         config = extensions.create("rust", Config::class.java)
 
-        val defaultAbiList = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64");
+        // V8/deno_core 只提供 aarch64-linux-android 预编译静态库（rusty_v8 GitHub Release），
+        // 且 V8 静态库体积大。故默认仅编译 arm64；其它 ABI 需显式传 -PabiList/-ParchList/-PtargetList
+        // 且自备 V8_FROM_SOURCE 构建。参见 cocs/crawler/V8_RUNTIME.md。
+        val defaultAbiList = listOf("arm64-v8a");
         val abiList = (findProperty("abiList") as? String)?.split(',') ?: defaultAbiList
 
-        val defaultArchList = listOf("arm64", "arm", "x86", "x86_64");
+        val defaultArchList = listOf("arm64");
         val archList = (findProperty("archList") as? String)?.split(',') ?: defaultArchList
 
-        val targetsList = (findProperty("targetList") as? String)?.split(',') ?: listOf("aarch64", "armv7", "i686", "x86_64")
+        val targetsList = (findProperty("targetList") as? String)?.split(',') ?: listOf("aarch64")
 
         extensions.configure<ApplicationExtension> {
             @Suppress("UnstableApiUsage")

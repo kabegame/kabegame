@@ -114,17 +114,10 @@ export class ModePlugin extends BasePlugin {
           !this.mode!.isWeb
         ) {
           // dev/check 用 cef-dev(check 只需要任意有效 CEF 目录做编译,不打包);
-          // build 默认要求 cef-prod,除非是 cef-example/cef-helper 且未传
-          // --release(它们默认 debug profile,配 cef-dev 即可,不强制先编 cef-prod)。
-          const comp = bs.context.component;
-          const isCEFTool = !!(comp?.isCEFExample || comp?.isCEFHelper);
-          const cefVariant = isCEFTool
-            ? bs.options.release
-              ? "cef-prod"
-              : "cef-dev"
-            : bs.context.cmd.isDev || bs.context.cmd.isCheck
-              ? "cef-dev"
-              : "cef-dev";
+          // dev/check 用 cef-dev，build 用 cef-prod。
+          const cefVariant = bs.context.cmd.isDev || bs.context.cmd.isCheck
+            ? "cef-dev"
+            : "cef-prod";
           const cefPath =
             process.env.CEF_PATH ||
             (OSPlugin.isWindows

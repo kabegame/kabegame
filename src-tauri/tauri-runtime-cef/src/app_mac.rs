@@ -40,7 +40,7 @@ define_class!(
     unsafe impl CefAppProtocol for KabegameCefApplication {}
 );
 
-pub(crate) fn init_cef_application() {
+pub(crate) fn init_cef_app_mac() {
     let _mtm = MainThreadMarker::new().expect("CEF application must initialize on the main thread");
     let app: Retained<KabegameCefApplication> =
         unsafe { msg_send![KabegameCefApplication::class(), sharedApplication] };

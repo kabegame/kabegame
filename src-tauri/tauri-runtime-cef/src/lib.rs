@@ -45,6 +45,7 @@ use tauri_runtime::UserEvent;
 #[cfg(target_os = "macos")]
 mod app_mac;
 mod runtime;
+mod subprocess;
 mod webview;
 mod window;
 
@@ -87,9 +88,12 @@ pub struct CefEventLoopProxy<T: UserEvent> {
     pub(crate) context: runtime::CefContext<T>,
 }
 
-/// 执行 CEF 多进程子进程派发,并在非 browser 进程中直接退出。
-///
-/// 必须在应用 `main` 的最早阶段调用,早于 Tauri `Builder`、单例检测和任何
-/// 可能启动线程的初始化逻辑。CEF renderer/gpu 等子进程会通过这里进入
-/// `cef::execute_process`,browser 主进程则继续执行后续应用启动流程。
-pub use runtime::execute_cef_subprocess_and_exit;
+/// 在 Tauri 启动前初始化 CEF browser 主进程。
+pub use runtime::dispatch_cef_subprocess;
+
+/// 运行 CEF renderer/GPU/utility 子进程；仅供独立 helper binary 调用。
+pub use runtime::run_cef_subprocess;
+
+/// 为 macOS 裸 executable 准备与 helper bundle id 一致的最小 main bundle。
+#[cfg(target_os = "macos")]
+pub use runtime::macos_unbundled_main_bundle;

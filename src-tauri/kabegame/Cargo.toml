@@ -2,6 +2,7 @@
 edition = {workspace = true}
 name = "kabegame"
 version = {workspace = true}
+default-run = "kabegame"
 
 [lib]
 name = "kabegame"
@@ -17,6 +18,7 @@ memmap2 = {version = "0.9", optional = true}
 serde = {workspace = true}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
+cef = { version = "149", default-features = false, optional = true }
 kabegame-i18n = { workspace = true }
 pathql-rs = { workspace = true }
 dirs = "5.0"
@@ -73,6 +75,7 @@ windows-sys = {workspace = true, features = [
   "Win32_Security_Authorization",
   "Win32_System_DataExchange",
   "Win32_System_Memory",
+  "Win32_UI_WindowsAndMessaging",
 ] }
 winreg = "0.52"
 winver = "1"
@@ -86,6 +89,7 @@ tauri = { version = "2.11.2", default-features = false, features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = "3.6"
+gtk = { version = "0.18", features = ["v3_24"], optional = true }
 libc = "0.2"
 tauri-runtime-cef = { path = "../tauri-runtime-cef", optional = true }
 
@@ -97,6 +101,9 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
   "NSColor",
   "NSWindow",
   "NSApplication",
+  "NSEvent",
+  "NSResponder",
+  "NSRunningApplication",
   "NSScreen",
   "NSPasteboard",
 ] }
@@ -114,6 +121,8 @@ default = []
 
 # Standard desktop build: shared Tauri stack + virtual driver + video ingestion
 standard = [
+    "dep:cef",
+    "dep:gtk",
     "kabegame-core/virtual-driver",
     "dep:tauri",
     "dep:tauri-runtime-cef",
@@ -152,6 +161,16 @@ custom-protocol = ["tauri?/custom-protocol"]
 [[bin]]
 name = "kabegame"
 path = "src/main.rs"
+
+[[bin]]
+name = "kabegame-cef-helper"
+path = "src/bin/kabegame-cef-helper.rs"
+required-features = ["standard"]
+
+[[bin]]
+name = "cef-example"
+path = "src/bin/cef-example.rs"
+required-features = ["standard"]
 
 [profile.dev]
 opt-level = 0
