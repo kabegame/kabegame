@@ -125,8 +125,14 @@ macOS 适配的硬性要点(实测踩坑,移植主 runtime 时同样适用):
 2. **helper 变体改写已被 patch 豁免**:stock Chromium 在 bundled 状态下按子进程类型改写路径找 `<name> Helper (Renderer).app` 等 5 个 `.app` 变体,变体缺失时 renderer **静默失败**(初始导航 `ERR_ABORTED`、黑屏无日志)。`third/cef` 的 `kabegame_flat_subprocess_path` patch 让显式 `browser_subprocess_path` 对所有子进程类型原样生效,单一扁平 `kabegame-cef-helper` 即可;dev 裸跑(非 bundled)时 stock CEF 本就不改写,不依赖该 patch。
 3. **CefAppProtocol NSApplication**:`cef_initialize` 前必须用实现 `CrAppProtocol`/`CrAppControlProtocol`/`CefAppProtocol`(binding 在 `cef::application_mac`)的 NSApplication 子类创建 shared application(cefsimple 的 `SimpleApplication` 等价物),否则窗口无标题栏按钮、事件循环异常。协议类由 libcef 注册,直链模式下 dyld 已在 `main` 前加载 libcef,无时序约束。
 4. **framework_dir_path 与符号链接**:`target/Frameworks`(dev)是符号链接,`Settings.framework_dir_path` 必须显式设为 canonicalize 后的真实路径,与 dyld 实际加载路径一致;留空或不一致会导致 GPU 合成黑屏(JS/输入正常、画面全黑)。发布打包时框架整份拷入 bundle 则无此问题。
-5. **裸跑 exe 的 Info.plist**:`kabegame/build.rs` 按 binary 分别嵌入主程序/example plist 与带 `LSUIElement` 的 helper plist；三者 bundle id 保持一致。
-6. **MachPortRendezvous 的 bundle id 一致性**(实测踩坑,症状是窗口壳正常但内容全空):Chromium 子进程通过 bootstrap 服务 `<BaseBundleID>.MachPortRendezvousServer.<browser pid>` 从 browser 拿 Mojo/共享内存句柄。裸跑时 runtime 生成 `<exe>/kabegame-main-bundle/Contents/Info.plist`并设 `settings.main_bundle_path`(见 `macos_unbundled_main_bundle`)；主程序、example、helper 和生成的 main bundle 必须使用同一 id。
+5. **裸跑 exe 的 Info.plist**:`kabegame/build.rs` 按 binary 分别嵌入主程序/example plist 与带 `LSUIElement` 的 helper plist(`-sectcreate __TEXT __info_plist`);bundle id 一致性见第 6 点。
+6. **MachPortRendezvous 的 bundle id 一致性**(实测踩坑,症状是窗口壳正常但内容全空/黑屏):Chromium 子进程通过 bootstrap 服务 `<BaseBundleID>.MachPortRendezvousServer.<browser pid>` 从 browser 拿 Mojo/共享内存句柄;不一致时子进程 `bootstrap_look_up ... Unknown service name (1102)`、起来即退、"Network service crashed" 循环。**browser 注册名与子进程查找名必须完全相同**,而这个 id 有四处来源,全部必须等于 `tauri.conf.json.handlebars` 的桌面 `identifier`(当前 `Kabegame`,也即 release `.app/Contents/Info.plist` 的 `CFBundleIdentifier`,是 release 下 browser 的注册名):
+   - `kabegame/macos/embedded-Info.plist`(主程序 / example 裸跑内嵌 plist);
+   - `kabegame/macos/kabegame-cef-helper-Info.plist`(helper 内嵌 plist;**实测子进程即使位于 `.app` 内也优先取内嵌 `__info_plist` 而非 bundle 的 Info.plist**,这是 release 黑屏的直接原因);
+   - `runtime.rs` 的 `macos_unbundled_main_bundle` 生成的 `<exe>/kabegame-main-bundle/Contents/Info.plist`(仅裸跑,配合 `settings.main_bundle_path` 令 browser 注册名对齐);
+   - 上述 tauri 桌面 `identifier` 本身。
+
+   改动 identifier 时四处同步。dev 裸跑与 release bundled 走的注册名来源不同(前者是生成的 main-bundle,后者是 `.app` 的 Info.plist),但只要四者同值即两条路径都成立。
 
 另:dev 下追加 `use-mock-keychain` 开关,避免 Chromium Safe Storage 初始化弹系统 Keychain 密码框。example 仍使用 CEF 自持 `run_message_loop`；主 runtime 已实现 CefAppProtocol NSApplication external pump。
 
@@ -155,15 +161,17 @@ cef-rs `wrap_window_delegate!` 的宏默认值坑(未实现的方法一律返回
   `--browser-subprocess-path` 即原样返回,跳过 macOS helper `.app` 变体改写。
   **只影响 release(bundled)**;dev 裸跑不依赖。
 
-在 `/Volumes/KIOXIA/cefbuild` 重编 CEF 时应用该 patch(下次构建 cef-prod 前必做,
-否则 release 包的子进程起不来):
+`scripts/build-chromium.sh` 在构建前以仓库内 `third/cef` 为本地源码引用:
+把它的路径和当前提交分别传给 `automate-git.py --url` / `--checkout`。首次或
+`--clean` 构建会从该引用创建 `cefbuild/chromium_git/cef`，增量构建会把已有
+checkout 的 origin 校正到该引用、同步当前提交，并由 CEF 标准 patch 流程将
+`kabegame_flat_subprocess_path` 应用到 Chromium 源码。因此无需再手动 fetch fork
+或运行 `patch_updater.py`；构建前只需确保子模块已初始化:
 
 ```bash
-cd /Volumes/KIOXIA/cefbuild/chromium_git/cef
-git fetch https://github.com/kabegame/cef.git kabegame-7827 && git checkout FETCH_HEAD
-cd ../chromium/src/cef && git fetch https://github.com/kabegame/cef.git kabegame-7827 && git checkout FETCH_HEAD
-python3 tools/patch_updater.py --reapply --patch kabegame_flat_subprocess_path
-# 然后按原流程重编 + 导出 cef-prod
+git submodule update --init third/cef
+scripts/build-chromium.sh dev
+scripts/build-chromium.sh prod
 ```
 
 升级 CEF 大版本时:cef-rs fork 从新的 `cef-dll-sys-v<ver>` tag 重建分支、

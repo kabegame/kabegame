@@ -1319,13 +1319,18 @@ mod imp {
     /// 作 bootstrap 服务名:browser 注册名来自 CEF `util_mac::OverrideBaseBundleID()`
     /// (= main bundle 的 CFBundleIdentifier;裸 exe 下 `GetAppBundlePath()` 找不到
     /// `.app` 祖先返回空 → override 成空串),子进程查找名来自其内嵌 __info_plist 的
-    /// CFBundleIdentifier。两者不一致时所有子进程 `bootstrap_look_up` 失败、起来即退
-    /// (窗口空白 + "Network service crashed" 循环)。把 `settings.main_bundle_path`
-    /// 指到本目录,让 browser 侧 override 与内嵌 plist 的 id 一致。
+    /// CFBundleIdentifier(**实测即使 helper 位于 .app 内,内嵌 plist 也优先于
+    /// bundle 的 Info.plist**)。两者不一致时所有子进程 `bootstrap_look_up` 失败、
+    /// 起来即退(窗口空白 + "Network service crashed" 循环)。把
+    /// `settings.main_bundle_path` 指到本目录,让 browser 侧 override 与内嵌 plist
+    /// 的 id 一致。
     ///
     /// 目录名**刻意不带 `.app` 后缀**:`AmIBundled()`(看 OuterBundle 路径后缀)保持
     /// false,stock CEF 才不会把子进程路径改写成 5 个 helper `.app` 变体。
-    /// release(.app 内运行)返回 None:bundle 本身就是 main bundle。
+    /// release(.app 内运行)返回 None:bundle 本身就是 main bundle,browser 注册名
+    /// 因此来自 .app Info.plist 的 identifier(tauri.conf 桌面 identifier),而子进程
+    /// 查找名仍来自内嵌 plist —— 所以下方 PLIST、两个内嵌 plist 与 tauri identifier
+    /// 四者必须是同一个 id。
     #[cfg(target_os = "macos")]
     pub fn macos_unbundled_main_bundle() -> Option<std::path::PathBuf> {
         let exe = std::env::current_exe().ok()?;
@@ -1335,13 +1340,15 @@ mod imp {
         if in_app_bundle {
             return None;
         }
-        // CFBundleIdentifier 必须与 kabegame / kabegame-cef-helper 的内嵌 plist 一致。
+        // CFBundleIdentifier 必须与 kabegame / kabegame-cef-helper 的内嵌 plist
+        // 以及 tauri.conf.json.handlebars 的桌面 identifier(release .app 的
+        // Info.plist)一致,否则 release 下 browser 注册名与子进程查找名分叉。
         const PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>app.kabegame</string>
+    <string>Kabegame</string>
     <key>CFBundleName</key>
     <string>Kabegame</string>
 </dict>

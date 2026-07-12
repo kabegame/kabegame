@@ -47,7 +47,7 @@
 | 列表 + 双级缓存核心 | `src-tauri/kabegame-core/src/plugin/mod.rs` | `fetch_store_plugins`、`fetch_plugins_from_source_cached`、`fetch_plugins_from_source`、`ensure_plugin_cached`、`download_plugin_to_temp` |
 | index 持久化 | `src-tauri/kabegame-core/src/storage/plugin_sources.rs` | `get_source_cache`、`get_source_cache_row`（含 `updated_at`）、`save_source_cache` |
 | 安装预览命令 | `src-tauri/kabegame/src/commands/plugin.rs` | `preview_store_install`：有 `source_id`+`version` 时走 `ensure_plugin_cached` |
-| IPC | `src-tauri/kabegame/src/ipc/handlers/plugin.rs` | CLI/侧车同源逻辑 |
+| IPC | `src-tauri/kabegame/src/ipc/handlers/plugin.rs` | 主应用 IPC 入口；自包含 CLI 不读取插件商店 |
 | 路径 | `src-tauri/kabegame-core/src/app_paths.rs` | `store_cache_dir`、`store_plugin_cache_dir`、`store_plugin_cache_file` |
 | 前端 | `apps/kabegame/src/views/PluginBrowser.vue` | `loadStorePlugins`；手动刷新 `forceRefresh: true`；`revalidateStorePluginsInBackground` 传 `revalidateIfStaleAfterSecs` |
 

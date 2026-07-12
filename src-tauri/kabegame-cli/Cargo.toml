@@ -5,17 +5,14 @@ version = {workspace = true}
 default-run = "kabegame-cli"
 
 [dependencies]
-base64 = {workspace = true}
 clap = {version = "4.5", features = ["derive"]}
+dirs = "5.0"
 globset = "0.4"
 include_dir = "0.7"
-kabegame-core = {workspace = true, features = ["ipc-client", "virtual-driver"]}
+kabegame-core = {workspace = true, default-features = false}
 regex = "1"
-serde = {workspace = true}
 serde_json = {workspace = true}
 tokio = {workspace = true}
-url = {workspace = true}
-uuid = {workspace = true}
 zip = {workspace = true}
 
 [features]

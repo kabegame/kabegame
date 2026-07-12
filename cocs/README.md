@@ -25,6 +25,10 @@
   - 主题：VD 作为 Provider DSL 引擎**消费者**的落地方案。涵盖 i18n 路径分发（`i18n-<locale>` 静态层 + 每语言独立 router）、插件维度的 `get_plugin` SQL 函数桥（主机注册的 SQL 函数把 PluginManager 元数据接入 SQL 上下文）、`vd_plugins_router` 与 `plugins_provider` 双层结构、典型路径折叠示例。
   - 适用场景：新增 / 修改 VD 维度路径树；接入需要主机协调的非 SQL 数据；理解 i18n 切换、插件装卸的缓存行为。
 
+- [provider-dsl/ALBUM_SUB_TREE.md](provider-dsl/ALBUM_SUB_TREE.md)
+  - 主题：`albums://by_sub_tree` 的按名称递归画册树查询，以及 CLI `--album` 通过父路径直接子项解析目标画册 id 的契约。
+  - 适用场景：导入图片时按 `/父画册/子画册` 定位画册；新增或排查 albums 子树 PathQL 路由。
+
 ## 画廊与查询（`gallery/`）
 
 - [gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md](gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md)
@@ -59,8 +63,8 @@
   - 主题：Pixiv Rhai 插件 `metadata.body` 白名单入库与 DB 一次性迁移。
   - 适用场景：排查画册列表因 metadata 过大变慢、扩展 EJS 所需字段。
 
-- [crawler/PIXIV_RANKING_RHAI.md](crawler/PIXIV_RANKING_RHAI.md)
-  - 主题：Pixiv 排行榜模式的 `config.json` 三维度、`ranking_date`、Rhai 按接口 `next` 分页与 `warn`。
+- [crawler/PIXIV_RANKING_RHAI.md](crawler/PIXIV_RANKING_RHAI.md)（历史，Rhai 已移除）
+  - 主题：Pixiv 排行榜模式的 `config.json` 三维度、`ranking_date`、按接口 `next` 分页与 `warn`。
   - 适用场景：扩展/排查排行榜爬取、R18 与 `x-user-id`、理解列表分页语义。
 
 - [crawler/PLUGIN_DATA.md](crawler/PLUGIN_DATA.md)
@@ -68,12 +72,12 @@
   - 适用场景：插件需要缓存 tag taxonomy、emoji 元数据、token、TTL 状态，或在描述模板中读取爬虫预先计算的数据。
 
 - [crawler/METADATA_MIGRATION.md](crawler/METADATA_MIGRATION.md)
-  - 主题：插件图片 metadata 版本化迁移流程，含 `metadata_migrations/v{N}.rhai` 脚本契约、`download_image` / `create_image_metadata` 版本写入、`image_metadata` 复合去重、`metadata_full` 查询路径与 `metadata-migrate` 事件作用域。
-  - 适用场景：插件升级后历史图片详情结构变化；排查 metadata 迁移失败、缓存未刷新、去重合并或版本断档问题。
+  - 主题：插件图片 metadata 迁移流程——`kbMetadataMigration` 单一脚本契约（ES module，export migrate；裸 deno_core JsRuntime；schema 自检幂等、一步到位）+ packed 插件版本门控（`image_metadata.plugin_version`，每字节一段，应用维护、插件不可读写，写入自动盖章）、`image_metadata` 去重合并、`metadata_full` 查询路径与 `metadata-migrate` 事件作用域。
+  - 适用场景：插件升级后历史图片详情结构变化；排查 metadata 迁移失败、缓存未刷新、去重合并、版本编码（a.b.c 每段 ≤255）问题。
 
 - [crawler/V8_RUNTIME.md](crawler/V8_RUNTIME.md)
-  - 主题：桌面 V8 爬虫运行时的 Web 平台全局与 `Kabegame.*` 宿主桥。涵盖 `fetchJson` / `@kabegame/plugin-sdk/host` 移除、标准 `fetch` 使用、任务请求头合并、相对 URL 解析差异、SDK 保留工具模块。
-  - 适用场景：编写/迁移 V8 插件；排查 `Kabegame.*`、`fetch`、`URL`、`crypto`、`DOMParser` 可用性；更新 JS 插件模板和类型声明。
+  - 主题：V8 爬虫运行时（桌面 + Android/aarch64，仅 iOS 不支持）的 Web 平台全局与 `Kabegame.*` 宿主桥。涵盖 `plugin-runtime` feature 门控（主 app 启用、CLI 排除 deno/rusty_v8）、标准 `fetch` 使用、任务请求头合并、相对 URL 解析差异、SDK 保留工具模块；**运行时架构**（无启动快照/residual、即时 `init` 扩展、`deno_crypto` cppgc 显式加载）；**网络宿主化**（`op_kabegame_fetch`/`op_kabegame_to` 走 `reqwest`，不引入 `deno_fetch`/`deno_net`/`deno_tls`，`Response`/`Headers` 在 `prelude.js` 自实现）；**Android 交叉编译**（`rusty_v8` 仅 aarch64 预编译、`V8_FROM_SOURCE` 兜底、NDK libc++、`RustPlugin.kt` ABI 收敛、无 WebView 后端）。
+  - 适用场景：编写/迁移 V8 插件；排查 `Kabegame.*`、`fetch`、`URL`、`crypto`、`DOMParser` 可用性；更新 JS 插件模板和类型声明；排查 V8 后端 Android 交叉编译（依赖门控 / V8 预编译 / NDK 链接）或网络/`Response`/`Headers` 行为。
 
 ## 插件（`plugins/`）
 

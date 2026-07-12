@@ -1,5 +1,7 @@
 # 爬虫后端双选设计：Rhai 与 WebView
 
+> **⚠️ 历史文档（Rhai 后端已移除）**：本文写于 Rhai + WebView 双后端时期。现状是 **V8（deno_core）后端 + WebView 后端**，Rhai 已彻底移除，后端通过 `package.json` 的 `kbBackend`（`v8` / `webview`）显式声明。第 6 节的「Rhai API 与对等 JS API」仅作历史参考。当前 V8 运行时宿主 API 见 [../cocs/crawler/V8_RUNTIME.md](../cocs/crawler/V8_RUNTIME.md)，包格式见 [PLUGIN_FORMAT.md](./PLUGIN_FORMAT.md)。
+
 本文档描述插件层级的**后端选择**：同一套插件格式下，**脚本无需声明后端**；运行时根据是否提供 JS 脚本与当前平台自动选择 **Rhai 后端**或 **WebView 后端**，并初步总结 WebView 后端的实现要点与平台约束。
 
 ## 1. 设计目标

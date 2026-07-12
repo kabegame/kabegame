@@ -77,7 +77,7 @@ export interface Plugin {
   baseUrl: string;
   sizeBytes: number;
   config: Record<string, any>;
-  /** 脚本类型：rhai | js。安卓仅支持 rhai。 */
+  /** 脚本类型：js（webview）| v8（自包含 ES module）。 */
   scriptType?: string;
   /** manifest minAppVersion，运行前由前端校验 */
   minAppVersion?: string | null;

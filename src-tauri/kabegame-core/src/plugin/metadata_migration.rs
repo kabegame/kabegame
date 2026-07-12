@@ -1,16 +1,13 @@
-use std::collections::BTreeMap;
+use deno_core::{
+    resolve_url, serde_v8, v8, JsRuntime, PollEventLoopOptions, RuntimeOptions,
+};
 
-use rhai::packages::Package;
-use rhai::{Array, Dynamic, Engine, Map, Scope, AST};
-use rhai_chrono::ChronoPackage;
-
-use super::rhai::{json_value_to_rhai_dynamic, rhai_dynamic_to_json_value};
 use super::Plugin;
 use crate::emitter::GlobalEmitter;
 use crate::storage::Storage;
 
 pub fn spawn_metadata_migrations_for_plugin(plugin: Plugin) {
-    if plugin.metadata_migrations.is_empty() {
+    if plugin.metadata_migration.is_none() {
         return;
     }
     tokio::task::spawn_blocking(move || {
@@ -23,59 +20,54 @@ pub fn spawn_metadata_migrations_for_plugin(plugin: Plugin) {
     });
 }
 
+/// 单一脚本 + packed 插件版本门控：选出 `plugin_version < 当前插件 packed 版本` 的
+/// metadata 行，逐行调用 `migrate(input)`，成功后把行的 plugin_version 盖为 packed。
+/// 行级失败只记录并跳过（版本不动，下次触发重试）；脚本装载失败整体报错。
 pub fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
-    let scripts = migration_script_map(plugin);
-    let latest = latest_continuous_version(&scripts);
-    if latest == 0 {
+    let Some(script) = plugin.metadata_migration.as_deref() else {
         return Ok(false);
-    }
+    };
+    let target = plugin.version_packed;
 
-    let mut engine = migration_engine();
-    let compiled = compile_migrations(&engine, &scripts, latest);
-    let rows = Storage::global().metadata_rows_below_version(&plugin.id, latest)?;
+    let rows = Storage::global().metadata_rows_below_plugin_version(&plugin.id, target)?;
     if rows.is_empty() {
         return Ok(false);
     }
 
-    let mut changed = false;
-    for (row_id, original_data, row_version) in rows {
-        let mut data = original_data;
-        let mut cur = row_version;
-        for version in (row_version + 1)..=latest {
-            let Some(compiled_script) = compiled.get(&version) else {
-                break;
-            };
-            let ast = match compiled_script {
-                Ok(ast) => ast,
+    let plugin_id = plugin.id.clone();
+    let script = script.to_string();
+    // The migration engine owns a single-threaded `JsRuntime`, so the async body
+    // is driven with `block_on` on the current thread. Both entry points reach
+    // here from a `spawn_blocking` worker, where `Handle::current()` is valid and
+    // `block_on` is permitted.
+    let changed = tokio::runtime::Handle::current().block_on(async move {
+        let mut engine = MigrationEngine::new();
+        let func = engine
+            .load_script(&script)
+            .await
+            .map_err(|e| format!("迁移脚本装载失败: {e}"))?;
+
+        let mut changed = false;
+        for (row_id, data, _row_version) in rows {
+            match engine.call_migrate(&func, data).await {
+                Ok(migrated) => {
+                    if Storage::global().writeback_migrated_metadata_row(
+                        row_id, &plugin_id, target, &migrated,
+                    )? {
+                        changed = true;
+                    }
+                }
                 Err(e) => {
                     eprintln!(
-                        "[metadata-migration] plugin `{}` v{} compile failed: {}",
-                        plugin.id, version, e
+                        "[metadata-migration] plugin `{}` row {} migrate failed: {}",
+                        plugin_id, row_id, e
                     );
-                    break;
-                }
-            };
-            match call_migrate(&mut engine, ast, data.clone()) {
-                Ok(next_data) => {
-                    data = next_data;
-                    cur = version;
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[metadata-migration] plugin `{}` row {} stopped at v{} -> v{}: {}",
-                        plugin.id, row_id, cur, version, e
-                    );
-                    break;
                 }
             }
         }
 
-        if cur > row_version
-            && Storage::global().writeback_migrated_metadata_row(row_id, &plugin.id, cur, &data)?
-        {
-            changed = true;
-        }
-    }
+        Ok::<bool, String>(changed)
+    })?;
 
     if changed {
         if let Some(emitter) = GlobalEmitter::try_global() {
@@ -86,174 +78,195 @@ pub fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, Strin
     Ok(changed)
 }
 
-pub fn test_metadata_migrations(
-    input: String,
-    scripts: BTreeMap<u32, String>,
-) -> Result<String, String> {
-    let latest = latest_continuous_version(&scripts);
-    if latest == 0 {
-        return Err("未找到连续迁移脚本：需要 v1.rhai".to_string());
-    }
-
-    let mut engine = migration_engine();
-    let compiled = compile_migrations(&engine, &scripts, latest);
-    let mut data = input;
-    for version in 1..=latest {
-        let compiled_script = compiled
-            .get(&version)
-            .ok_or_else(|| format!("缺少已计划的迁移脚本 v{version}.rhai"))?;
-        let ast = compiled_script
-            .as_ref()
-            .map_err(|e| format!("v{version} 编译失败: {e}"))?;
-        data = call_migrate(&mut engine, ast, data)
-            .map_err(|e| format!("v{version} 执行失败: {e}"))?;
-    }
-    Ok(data)
+/// CLI 本地测试入口：对 `input` JSON 跑一次 `migrate(input)` 并返回结果。
+pub fn test_metadata_migration(input: String, script: String) -> Result<String, String> {
+    tokio::runtime::Handle::current().block_on(async move {
+        let mut engine = MigrationEngine::new();
+        let func = engine
+            .load_script(&script)
+            .await
+            .map_err(|e| format!("迁移脚本装载失败: {e}"))?;
+        engine
+            .call_migrate(&func, input)
+            .await
+            .map_err(|e| format!("迁移脚本执行失败: {e}"))
+    })
 }
 
-fn migration_engine() -> Engine {
-    let mut engine = Engine::new();
-    engine.set_max_expr_depths(128, 64);
-    ChronoPackage::new().register_into_engine(&mut engine);
-    engine.register_fn(
-        "parse_json",
-        |text: &str| -> Result<Dynamic, Box<rhai::EvalAltResult>> {
-            let value = serde_json::from_str::<serde_json::Value>(text)
-                .map_err(|e| format!("parse_json: {e}"))?;
-            Ok(json_value_to_rhai_dynamic(&value))
-        },
-    );
-    engine.register_fn(
-        "to_json",
-        |value: Dynamic| -> Result<String, Box<rhai::EvalAltResult>> {
-            let json = rhai_dynamic_to_json_value(&value)
-                .map_err(|e| Box::<rhai::EvalAltResult>::from(e.to_string()))?;
-            serde_json::to_string(&json)
-                .map_err(|e| Box::<rhai::EvalAltResult>::from(format!("to_json: {e}")))
-        },
-    );
-    engine.register_fn("re_is_match", |pattern: &str, text: &str| -> bool {
-        regex::Regex::new(pattern)
-            .map(|re| re.is_match(text))
-            .unwrap_or(false)
-    });
-    engine.register_fn(
-        "re_replace_all",
-        |pattern: &str, replacement: &str, text: &str| -> String {
-            regex::Regex::new(pattern)
-                .map(|re| re.replace_all(text, replacement).into_owned())
-                .unwrap_or_else(|_| text.to_string())
-        },
-    );
-    engine.register_fn("re_find_all", |pattern: &str, text: &str| -> Array {
-        let Ok(re) = regex::Regex::new(pattern) else {
-            return Array::new();
+/// Bare `deno_core` runtime for the metadata migration script.
+///
+/// The migration script is a self-contained ES module exporting
+/// `export function migrate(input) { return output; }` (async is allowed). The
+/// runtime registers no extensions, no ops and no snapshot: native
+/// `JSON`/`RegExp`/`Date`/`String` cover everything the old Rhai engine exposed
+/// via `parse_json`/`to_json`/`re_*`/chrono. `module_loader` is `None`, so any
+/// `import` inside a migration script fails — scripts must be self-contained.
+struct MigrationEngine {
+    runtime: JsRuntime,
+}
+
+impl MigrationEngine {
+    fn new() -> Self {
+        Self {
+            runtime: JsRuntime::new(RuntimeOptions::default()),
+        }
+    }
+
+    /// Load the migration script (`metadata_migrations/migrate.js`) as a side
+    /// module and return its `migrate` export.
+    async fn load_script(&mut self, source: &str) -> Result<v8::Global<v8::Function>, String> {
+        let specifier = resolve_url("file:///metadata_migrations/migrate.js")
+            .map_err(|e| format!("解析模块地址失败: {e}"))?;
+        let mod_id = self
+            .runtime
+            .load_side_es_module_from_code(&specifier, source.to_string())
+            .await
+            .map_err(|e| e.to_string())?;
+        let eval = self.runtime.mod_evaluate(mod_id);
+        self.runtime
+            .run_event_loop(PollEventLoopOptions::default())
+            .await
+            .map_err(|e| e.to_string())?;
+        eval.await.map_err(|e| e.to_string())?;
+
+        let namespace = self
+            .runtime
+            .get_module_namespace(mod_id)
+            .map_err(|e| e.to_string())?;
+        deno_core::scope!(scope, &mut self.runtime);
+        let ns = v8::Local::new(scope, namespace);
+        let key = v8::String::new(scope, "migrate")
+            .ok_or_else(|| "无法分配 `migrate` 键".to_string())?;
+        let value = ns
+            .get(scope, key.into())
+            .ok_or_else(|| "迁移脚本缺少 `migrate` 导出".to_string())?;
+        let func = v8::Local::<v8::Function>::try_from(value)
+            .map_err(|_| "迁移脚本的 `migrate` 导出不是函数".to_string())?;
+        Ok(v8::Global::new(scope, func))
+    }
+
+    /// Call `migrate(input) -> String`. `migrate` may be async; the returned
+    /// promise is driven by `with_event_loop_promise`.
+    async fn call_migrate(
+        &mut self,
+        func: &v8::Global<v8::Function>,
+        input: String,
+    ) -> Result<String, String> {
+        let arg: v8::Global<v8::Value> = {
+            deno_core::scope!(scope, &mut self.runtime);
+            let local = serde_v8::to_v8(scope, input).map_err(|e| e.to_string())?;
+            v8::Global::new(scope, local)
         };
-        let capture_names: Vec<String> = re
-            .capture_names()
-            .flatten()
-            .map(|name| name.to_string())
-            .collect();
-        let mut matches = Array::new();
-        for captures in re.captures_iter(text) {
-            let mut item = Map::new();
-            for index in 0..captures.len() {
-                if let Some(matched) = captures.get(index) {
-                    item.insert(
-                        index.to_string().into(),
-                        Dynamic::from(matched.as_str().to_string()),
-                    );
-                }
-            }
-            for name in &capture_names {
-                if let Some(matched) = captures.name(name) {
-                    item.insert(
-                        name.as_str().into(),
-                        Dynamic::from(matched.as_str().to_string()),
-                    );
-                }
-            }
-            matches.push(Dynamic::from_map(item));
-        }
-        matches
-    });
-    engine
-}
-
-fn migration_script_map(plugin: &Plugin) -> BTreeMap<u32, String> {
-    plugin
-        .metadata_migrations
-        .iter()
-        .filter(|(version, _)| *version > 0)
-        .map(|(version, source)| (*version, source.clone()))
-        .collect()
-}
-
-fn latest_continuous_version(scripts: &BTreeMap<u32, String>) -> u32 {
-    let mut version = 0;
-    loop {
-        let next = version + 1;
-        if scripts.contains_key(&next) {
-            version = next;
-        } else {
-            return version;
-        }
+        let call = self.runtime.call_with_args(func, &[arg]);
+        let result = self
+            .runtime
+            .with_event_loop_promise(call, PollEventLoopOptions::default())
+            .await
+            .map_err(|e| e.to_string())?;
+        deno_core::scope!(scope, &mut self.runtime);
+        let local = v8::Local::new(scope, result);
+        serde_v8::from_v8::<String>(scope, local)
+            .map_err(|_| "migrate() 必须返回 JSON 字符串".to_string())
     }
-}
-
-fn compile_migrations(
-    engine: &Engine,
-    scripts: &BTreeMap<u32, String>,
-    latest: u32,
-) -> BTreeMap<u32, Result<AST, String>> {
-    let mut compiled = BTreeMap::new();
-    for version in 1..=latest {
-        if let Some(source) = scripts.get(&version) {
-            compiled.insert(
-                version,
-                engine
-                    .compile(source)
-                    .map_err(|e| format!("compile v{version}: {e}")),
-            );
-        }
-    }
-    compiled
-}
-
-fn call_migrate(engine: &mut Engine, ast: &AST, input: String) -> Result<String, String> {
-    let mut scope = Scope::new();
-    engine
-        .call_fn::<String>(&mut scope, ast, "migrate", (input,))
-        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn migration_engine_re_find_all_returns_capture_maps() {
-        let mut engine = migration_engine();
-        let ast = engine
-            .compile(
-                r#"
-                fn migrate(text) {
-                    let captures = re_find_all("(?P<name>[a-z]+):(\\d+)", text);
-                    to_json(captures)
-                }
-                "#,
-            )
-            .expect("test migration script should compile");
+    /// Migration engines drive their `JsRuntime` with `block_on`, which panics on
+    /// an async worker thread. Run each case on a blocking-pool thread, mirroring
+    /// the `spawn_blocking` production callers.
+    fn run_blocking<F, T>(f: F) -> T
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async { tokio::task::spawn_blocking(f).await.unwrap() })
+    }
 
-        let output = call_migrate(&mut engine, &ast, "alpha:12 beta:34".to_string())
-            .expect("test migration script should run");
+    #[test]
+    fn js_migration_regexp_named_captures() {
+        let script = r#"
+export function migrate(text) {
+  const re = /(?<name>[a-z]+):(\d+)/g;
+  const out = [...text.matchAll(re)].map((m) => ({
+    "0": m[0], "1": m[1], "2": m[2], name: m.groups.name,
+  }));
+  return JSON.stringify(out);
+}
+"#
+        .to_string();
+        let output =
+            run_blocking(move || test_metadata_migration("alpha:12 beta:34".to_string(), script))
+                .expect("js migration should run");
         let value: serde_json::Value =
             serde_json::from_str(&output).expect("captures should serialize to JSON");
-
         assert_eq!(value[0]["0"], "alpha:12");
         assert_eq!(value[0]["1"], "alpha");
         assert_eq!(value[0]["2"], "12");
         assert_eq!(value[0]["name"], "alpha");
         assert_eq!(value[1]["name"], "beta");
+    }
+
+    #[test]
+    fn js_migration_schema_branch_and_passthrough() {
+        // 单一脚本按 metadata 内 schema 自检：老结构迁移，新结构原样返回（幂等）。
+        let script = r#"
+export function migrate(input) {
+  const m = JSON.parse(input);
+  if (m.schema === 2) return input;
+  return JSON.stringify({ schema: 2, title: m.legacyTitle ?? m.title ?? "" });
+}
+"#
+        .to_string();
+        let script2 = script.clone();
+
+        let migrated = run_blocking(move || {
+            test_metadata_migration(r#"{"legacyTitle":"old"}"#.to_string(), script)
+        })
+        .expect("legacy input should migrate");
+        let value: serde_json::Value = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(value["schema"], 2);
+        assert_eq!(value["title"], "old");
+
+        let current = r#"{"schema":2,"title":"new"}"#.to_string();
+        let passthrough =
+            run_blocking(move || test_metadata_migration(current.clone(), script2))
+                .expect("current input should pass through");
+        assert_eq!(passthrough, r#"{"schema":2,"title":"new"}"#);
+    }
+
+    #[test]
+    fn js_migration_async_migrate() {
+        let script = r#"
+export async function migrate(input) {
+  const m = JSON.parse(input);
+  m.done = await Promise.resolve(true);
+  return JSON.stringify(m);
+}
+"#
+        .to_string();
+        let output = run_blocking(move || test_metadata_migration("{}".to_string(), script))
+            .expect("async migrate should run");
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["done"], true);
+    }
+
+    #[test]
+    fn js_migration_missing_export_errors() {
+        let script = "export const notMigrate = 1;".to_string();
+        let err = run_blocking(move || test_metadata_migration("{}".to_string(), script))
+            .expect_err("missing migrate export should error");
+        assert!(err.contains("migrate"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn js_migration_non_string_return_errors() {
+        let script = "export function migrate(_input) { return 42; }".to_string();
+        let err = run_blocking(move || test_metadata_migration("{}".to_string(), script))
+            .expect_err("non-string return should error");
+        assert!(err.contains("字符串"), "unexpected error: {err}");
     }
 }

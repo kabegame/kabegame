@@ -22,8 +22,6 @@ infer = "0.19"
 lru = "0.12"
 md5 = { workspace = true }
 regex = "1.11"
-rhai = { workspace = true }
-rhai-chrono = { version = "0.1.1", default-features = false, features = ["sync"] }
 rusqlite = { version = "0.31", features = ["bundled", "functions"] }
 scraper = "0.19"
 select = "0.6"
@@ -59,23 +57,15 @@ rsmpeg = { workspace = true }
 # 运行期即时 init 扩展；网络全部走宿主 reqwest（op_kabegame_fetch / op_kabegame_to），
 # Response/Headers 由 prelude.js 自实现，故不引入 deno_fetch / deno_net / deno_tls。
 [target.'cfg(not(target_os = "ios"))'.dependencies]
-deno_core = "0.405"
-deno_error = "0.7"
-deno_webidl = "0.252"
-deno_web = "0.283"
-deno_crypto = "0.266"
-deno_permissions = "0.111"
-deno_features = "0.49"
-sys_traits = { version = "0.1", features = ["real", "libc", "winapi"] }
-tokio-util = "0.7"
-
-# build.rs 只在宿主（桌面）运行：用这几个 crate 枚举 deno 扩展的 lazy JS 源，
-# 落盘为 residual 供运行期 loadExtScript 使用（无快照，故需把全部 lazy 源内联进二进制）。
-[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.build-dependencies]
-deno_core = "0.405"
-deno_webidl = "0.252"
-deno_web = "0.283"
-deno_crypto = "0.266"
+deno_core = { version = "0.405", optional = true }
+deno_error = { version = "0.7", optional = true }
+deno_webidl = { version = "0.252", optional = true }
+deno_web = { version = "0.283", optional = true }
+deno_crypto = { version = "0.266", optional = true }
+deno_permissions = { version = "0.111", optional = true }
+deno_features = { version = "0.49", optional = true }
+sys_traits = { version = "0.1", features = ["real", "libc", "winapi"], optional = true }
+tokio-util = { version = "0.7", optional = true }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 reqwest = { version = "0.11", features = [
@@ -127,12 +117,23 @@ windows-sys = { version = "0.52", features = [
 ] }
 
 [features]
-default = ["ipc-client"]
+default = ["ipc-client", "plugin-runtime"]
 ipc-client = []
 ipc-server = []
 virtual-driver = ["dep:fuser", "dep:dokan"]
 # Phase 6b: 6c 通过 SqlExecutor 接入后再启用 VD module
 vd-legacy = []
+plugin-runtime = [
+  "dep:deno_core",
+  "dep:deno_error",
+  "dep:deno_webidl",
+  "dep:deno_web",
+  "dep:deno_crypto",
+  "dep:deno_permissions",
+  "dep:deno_features",
+  "dep:sys_traits",
+  "dep:tokio-util",
+]
 
 [dev-dependencies]
 tempfile = "3"

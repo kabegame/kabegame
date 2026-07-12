@@ -19,7 +19,7 @@ MUST read index for code base first. Keep in mind to sync these docs when do som
 
 ## What This Project Is
 
-Kabegame is a cross-platform anime wallpaper crawler and manager built with **Tauri 2** (Rust backend) and **Vue 3** (TypeScript frontend). It supports Windows, macOS, Linux, and Android — **not iOS**. Crawler plugins are written in the **Rhai** scripting language.
+Kabegame is a cross-platform anime wallpaper crawler and manager built with **Tauri 2** (Rust backend) and **Vue 3** (TypeScript frontend). It supports Windows, macOS, Linux, and Android — **not iOS**. Crawler plugins are written in **JavaScript/TypeScript** and run on an embedded V8 (deno_core) backend (or the WebView backend); the legacy Rhai backend has been removed.
 
 ## Commands
 
@@ -68,7 +68,7 @@ bun check -c kabegame --skip cargo   # Vue types only
 - `src-tauri/kabegame/` — Tauri GUI app (desktop + Android)
 - `src-tauri/kabegame-cli/` — Headless CLI
 - `src-tauri-plugins/` — Custom Tauri plugins (picker, pathes, share, compress, wallpaper, task-notification)
-- `src-crawler-plugins/` — Rhai-based crawler plugins packaged as `.kgpg` archives
+- `src-crawler-plugins/` — JS/TS crawler plugins (V8 backend) packaged as `.kgpg` archives
 
 ### Build Modes
 | Mode | Features |
@@ -102,7 +102,7 @@ New styles should use **UnoCSS utility classes** (configured in `uno.config.pub.
 - **iOS**: Not supported — do not add iOS adaptations
 
 ### Crawler Plugin Development
-Plugins are Rhai scripts packaged as `.kgpg` ZIP archives. See `docs/README_PLUGIN_DEV.md`, `docs/PLUGIN_FORMAT.md`, and `docs/RHAI_API.md`. Build with:
+Plugins are JS/TS scripts (V8 backend, self-contained ES module `export async function crawl`) packaged as `.kgpg` ZIP archives. See `docs/PLUGIN_FORMAT.md` and `cocs/crawler/V8_RUNTIME.md`. Build with:
 ```bash
 cd src-crawler-plugins && bun package        # Package all plugins
 bun generate-index                           # Regenerate plugin store index

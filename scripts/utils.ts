@@ -86,7 +86,7 @@ export function run(cmd: string, args: string[], opts: RunOptions = {}): void {
     chalk.yellow("RUN"),
     JSON.stringify(opts),
     "=>\n\t",
-    chalk.bold.italic(cmd, args.join(" ")),
+    chalk.bold.italic.redBright(cmd, args.join(" ")),
   );
   const res = spawnSync(cmd, args, {
     stdio: "inherit",

@@ -556,7 +556,7 @@ fn replace_image_thumbnail_path_deletes_old_independent_thumbnail() {
             surf_record_id: None,
             crawled_at: now_secs() as u64,
             metadata_id: None,
-            metadata_version: 0,
+            plugin_version: 0,
             thumbnail_path: old_thumb_str,
             favorite: false,
             is_hidden: false,

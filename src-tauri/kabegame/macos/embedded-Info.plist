@@ -2,8 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- 必须等于 tauri.conf.json.handlebars 的桌面 identifier(= release .app
+         Info.plist 的 CFBundleIdentifier)。Chromium MachPortRendezvous 要求
+         browser 注册名与子进程查找名一致;子进程查找名取自 helper 内嵌
+         __info_plist(实测即使 exe 位于 .app 内也优先于 bundle 的 Info.plist),
+         不一致时所有子进程起来即退、窗口黑屏。同步修改:本文件、
+         kabegame-cef-helper-Info.plist、runtime.rs macos_unbundled_main_bundle。 -->
     <key>CFBundleIdentifier</key>
-    <string>app.kabegame</string>
+    <string>Kabegame</string>
     <key>CFBundleName</key>
     <string>Kabegame</string>
     <key>NSHighResolutionCapable</key>

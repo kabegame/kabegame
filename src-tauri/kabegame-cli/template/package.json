@@ -21,10 +21,8 @@
     "@rspack/core": "^1",
     "typescript": "^5"
   }
-{%- elsif backend == "webview" %},
+{%- else %},
   "main": "crawl.js",
   "devDependencies": { "@types/web": "^0.0" }
-{%- else %},
-  "main": "crawl.rhai"
 {%- endif %}
 }

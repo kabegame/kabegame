@@ -648,18 +648,18 @@ pub fn create_crawler_window<R: Runtime>(
     }
 
     use tauri::{WebviewUrl, WebviewWindowBuilder};
-    // 编译时嵌入 crawler initialization scripts（从 resources 目录读取）
+    // 编译时嵌入 crawler initialization scripts（从 src/webview_js 目录读取）
     let media_capture = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/resources/media_capture.js"
+        "/src/webview_js/media_capture.js"
     ));
     let media_download = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/resources/media_download.js"
+        "/src/webview_js/media_download.js"
     ));
     let script = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/resources/bootstrap.js"
+        "/src/webview_js/bootstrap.js"
     ));
     let target = if base_url.trim().is_empty() {
         "about:blank"

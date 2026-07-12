@@ -15,6 +15,9 @@ use crate::storage::tasks::TaskStatus;
 pub struct JsTaskContext {
     pub task_id: String,
     pub plugin_id: String,
+    /// 运行中插件的 packed 版本（每字节一段），metadata 写入盖章用；应用维护，插件不可读写。
+    #[serde(default)]
+    pub plugin_version: u32,
     pub crawl_js: String,
     pub merged_config: HashMap<String, Value>,
     pub base_url: String,

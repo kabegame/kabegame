@@ -235,14 +235,19 @@ impl SyncHook {
                             metadata_id,
                             order,
                         };
-                        import_local_file(path, album_id, file.size.unwrap_or(0), Some(carry))
-                            .await?;
+                        import_local_file(
+                            path,
+                            Some(album_id),
+                            file.size.unwrap_or(0),
+                            Some(carry),
+                        )
+                        .await?;
                         self.reimported += 1;
                     }
                 }
             }
             None => {
-                import_local_file(path, album_id, file.size.unwrap_or(0), None).await?;
+                import_local_file(path, Some(album_id), file.size.unwrap_or(0), None).await?;
                 self.added += 1;
             }
         }

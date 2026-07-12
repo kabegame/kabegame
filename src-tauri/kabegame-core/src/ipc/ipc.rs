@@ -59,7 +59,7 @@ pub enum IpcRequest {
     /// 显示应用窗口（如果隐藏）
     AppShowWindow,
 
-    /// 运行一次 Rhai 插件（等价于 `kabegame-cli plugin run`）
+    /// 运行一次爬虫插件任务
     PluginRun {
         /// 插件 ID（已安装的 .kgpg 文件名，不含扩展名）或插件文件路径（.kgpg）
         plugin: String,

@@ -44,7 +44,7 @@ flowchart TD
 - 后端在 Rhai/WebView 入口写入 `image_metadata`，后续 `images` / `task_failed_images` 只保存 `metadata_id`。
 - 详情区按需加载 metadata 后，EJS **仅接收** `ejs.render(tpl, { metadata })` 中的 `metadata`，与 `pluginId` 配合使用。
 
-详见 [DOWNLOADER_FLOW.md](../downloader-tasks/DOWNLOADER_FLOW.md)、[docs/RHAI_API.md](../../docs/RHAI_API.md) 中 `download_image` / `metadata` 说明。
+详见 [DOWNLOADER_FLOW.md](../downloader-tasks/DOWNLOADER_FLOW.md)、[crawler/V8_RUNTIME.md](../crawler/V8_RUNTIME.md) 中 `downloadImage` / `metadata` 说明。
 
 ---
 

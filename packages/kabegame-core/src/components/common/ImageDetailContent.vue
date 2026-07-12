@@ -208,7 +208,7 @@ export type ImageDetailLike = {
   type?: string;
   metadata?: Record<string, unknown> | unknown;
   metadataId?: number;
-  metadataVersion?: number;
+  pluginVersion?: number;
   size?: number;
   width?: number;
   height?: number;
@@ -384,15 +384,15 @@ const injectedResolveMetadata = inject<ImageMetadataResolver | null>(
 
 /** 列表未带 metadata 时由懒加载写入；undefined 表示尚未完成一次解析 */
 const resolvedMetadata = ref<unknown | null | undefined>(undefined);
-const resolvedMetadataVersion = ref(0);
+const resolvedPluginVersion = ref(0);
 
 type ImageMetadataFullPayload = {
   data?: unknown | null;
-  version?: number | null;
+  pluginVersion?: number | null;
 } | null;
 
-function metadataVersionForImage(img: ImageDetailLike | null): number {
-  const version = img?.metadataVersion;
+function pluginVersionForImage(img: ImageDetailLike | null): number {
+  const version = img?.pluginVersion;
   return typeof version === "number" && Number.isFinite(version) && version >= 0
     ? Math.floor(version)
     : 0;
@@ -400,7 +400,7 @@ function metadataVersionForImage(img: ImageDetailLike | null): number {
 
 async function loadMetadataForImage(img: ImageDetailLike | null) {
   // resolvedMetadata.value = undefined;
-  resolvedMetadataVersion.value = metadataVersionForImage(img);
+  resolvedPluginVersion.value = pluginVersionForImage(img);
   if (!img?.id) {
     resolvedMetadata.value = null;
     return;
@@ -415,16 +415,18 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
   }
   try {
     if (injectedResolveMetadata) {
-      const m = await injectedResolveMetadata(img.id, resolvedMetadataVersion.value);
+      const m = await injectedResolveMetadata(img.id, resolvedPluginVersion.value);
       resolvedMetadata.value = m ?? null;
     } else {
       const full = await invoke<ImageMetadataFullPayload>("get_image_metadata_full", {
         imageId: img.id,
       });
-      resolvedMetadataVersion.value =
-        typeof full?.version === "number" && Number.isFinite(full.version) && full.version >= 0
-          ? Math.floor(full.version)
-          : resolvedMetadataVersion.value;
+      resolvedPluginVersion.value =
+        typeof full?.pluginVersion === "number" &&
+        Number.isFinite(full.pluginVersion) &&
+        full.pluginVersion >= 0
+          ? Math.floor(full.pluginVersion)
+          : resolvedPluginVersion.value;
       resolvedMetadata.value = full?.data ?? null;
     }
   } catch (e) {
@@ -434,7 +436,7 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
 }
 
 watch(
-  [() => props.image?.id, () => props.image?.metadataVersion],
+  [() => props.image?.id, () => props.image?.pluginVersion],
   () => {
     void loadMetadataForImage(props.image ?? null);
   },
@@ -652,7 +654,7 @@ const descriptionSrcdoc = computed(() => {
   try {
     let body = ejs.render(
       tpl,
-      { metadata: meta, metadata_version: resolvedMetadataVersion.value },
+      { metadata: meta, plugin_version: resolvedPluginVersion.value },
       { rmWhitespace: false },
     );
     body = body.replace(/<script(?![^>]*\bnonce[=\s])/gi, `<script nonce="${EJS_BRIDGE_NONCE}"`);

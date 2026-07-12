@@ -4,6 +4,8 @@ export default defineConfig({
   entry: { main: "./src/index.ts" },
   target: "es2022",
   devtool: false,
+  // 仅打包不压缩:保留可读符号名,插件报错栈有意义
+  optimization: { minimize: false },
   output: {
     filename: "[name].js",
     path: new URL("./dist", import.meta.url).pathname,

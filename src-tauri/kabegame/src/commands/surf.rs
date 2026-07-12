@@ -267,18 +267,18 @@ pub async fn surf_start_session<R: Runtime>(
         let host_for_plugin_id = host.clone();
         let record_id_for_download = record.id.clone();
         let navbar_label = surf_navbar_label(&host);
-        let media_capture = include_str!("../../resources/media_capture.js");
-        let media_download = include_str!("../../resources/media_download.js");
+        let media_capture = include_str!("../webview_js/media_capture.js");
+        let media_download = include_str!("../webview_js/media_download.js");
         let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
             .title(t!("surf.windowTitle", host = host.as_str()))
             .inner_size(1200.0, 800.0)
             .devtools(true)
             .initialization_script(media_capture)
             .initialization_script(media_download)
-            .initialization_script(include_str!("../../resources/surf_bootstrap.js"))
-            .initialization_script(include_str!("../../resources/surf_toast.js"))
-            .initialization_script(include_str!("../../resources/surf_context_menu.js"))
-            .initialization_script(include_str!("../../resources/surf_url_report.js"))
+            .initialization_script(include_str!("../webview_js/surf_bootstrap.js"))
+            .initialization_script(include_str!("../webview_js/surf_toast.js"))
+            .initialization_script(include_str!("../webview_js/surf_context_menu.js"))
+            .initialization_script(include_str!("../webview_js/surf_url_report.js"))
             .on_page_load({
                 let app = app.clone();
                 let host = host.clone();

@@ -60,8 +60,8 @@ Image fields (ImageInfo, camelCase via serde rename_all):
    lastSetWallpaperAt, size (bytes).
    Use images://id_{id}/metadata to fetch crawl-time JSON metadata.
 
-Plugin package layout (for model-authored plugins): manifest.json, crawl.rhai, config.json,
-doc_root/doc.md, optional icon.png.
+Plugin package layout (for model-authored plugins): package.json (kbBackend: v8),
+dist/main.js (export async function crawl), doc_root/doc.md, optional icon.png.
 
 Tools: set_album_images_order (manual order, up to 100 images per call), create_album,
 add_images_to_album, rename_image. After set_album_images_order, open the album in Kabegame

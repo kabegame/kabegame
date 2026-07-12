@@ -21,8 +21,8 @@
                 "in_need": true
             },
             {
-                "sql": "im.version",
-                "as": "version",
+                "sql": "im.plugin_version",
+                "as": "plugin_version",
                 "in_need": true
             },
             {

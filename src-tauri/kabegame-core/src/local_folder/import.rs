@@ -3,7 +3,7 @@ use crate::crawler::downloader::compress::{
     compress_video_for_preview, generate_compatible_image, generate_compatible_video,
 };
 use crate::crawler::downloader::{
-    compute_file_hash, generate_thumbnail, wait_after_download_if_needed, wait_after_non_pool_download_if_needed
+    compute_file_hash, generate_thumbnail, wait_after_download_if_needed,
 };
 use crate::emitter::GlobalEmitter;
 use crate::image_type::{is_video_by_path, mime_type_from_path};
@@ -23,7 +23,7 @@ pub struct CarryFromOld {
 
 pub async fn import_local_file(
     path: &Path,
-    album_id: &str,
+    album_id: Option<&str>,
     size: u64,
     carry: Option<CarryFromOld>,
 ) -> Result<String, String> {
@@ -39,14 +39,16 @@ pub async fn import_local_file(
     if let Some(existing) = Storage::find_image_by_path(&path_str).ok().flatten() {
         let storage = Storage::global();
         let image_id = existing.id.clone();
-        let added = storage.add_images_to_album_silent(album_id, &[image_id.clone()]);
-        if let Some(order) = carry.as_ref().and_then(|old| old.order) {
-            storage.update_album_images_order(album_id, &[(image_id.clone(), order)])?;
-        }
-        if added > 0 {
-            let album_ids = vec![album_id.to_string()];
-            let image_ids = vec![image_id.clone()];
-            GlobalEmitter::global().emit_album_images_change("add", &album_ids, &image_ids);
+        if let Some(album_id) = album_id {
+            let added = storage.add_images_to_album_silent(album_id, &[image_id.clone()]);
+            if let Some(order) = carry.as_ref().and_then(|old| old.order) {
+                storage.update_album_images_order(album_id, &[(image_id.clone(), order)])?;
+            }
+            if added > 0 {
+                let album_ids = vec![album_id.to_string()];
+                let image_ids = vec![image_id.clone()];
+                GlobalEmitter::global().emit_album_images_change("add", &album_ids, &image_ids);
+            }
         }
         wait_after_download_if_needed(import_start_time, None).await;
         return Ok(image_id);
@@ -98,7 +100,7 @@ pub async fn import_local_file(
         surf_record_id: None,
         crawled_at,
         metadata_id,
-        metadata_version: 0,
+        plugin_version: 0,
         thumbnail_path,
         favorite: false,
         is_hidden: false,
@@ -118,16 +120,20 @@ pub async fn import_local_file(
     let storage = Storage::global();
     let inserted = storage.add_image(image)?;
     let image_id = inserted.id.clone();
-    storage.add_images_to_album(album_id, &[image_id.clone()])?;
-    if let Some(order) = carry.as_ref().and_then(|old| old.order) {
-        storage.update_album_images_order(album_id, &[(image_id.clone(), order)])?;
+    if let Some(album_id) = album_id {
+        storage.add_images_to_album(album_id, &[image_id.clone()])?;
+        if let Some(order) = carry.as_ref().and_then(|old| old.order) {
+            storage.update_album_images_order(album_id, &[(image_id.clone(), order)])?;
+        }
     }
 
-    let album_ids = vec![album_id.to_string()];
     let image_ids = vec![image_id.clone()];
     let plugin_ids = vec![LOCAL_FOLDER_PLUGIN_ID.to_string()];
     GlobalEmitter::global().emit_images_change("add", &image_ids, None, None, Some(&plugin_ids));
-    GlobalEmitter::global().emit_album_images_change("add", &album_ids, &image_ids);
+    if let Some(album_id) = album_id {
+        let album_ids = vec![album_id.to_string()];
+        GlobalEmitter::global().emit_album_images_change("add", &album_ids, &image_ids);
+    }
 
     wait_after_download_if_needed(import_start_time, None).await;
     Ok(image_id)

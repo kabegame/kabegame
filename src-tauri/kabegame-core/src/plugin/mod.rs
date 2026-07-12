@@ -1,8 +1,9 @@
-// Rhai 爬虫运行时/脚本执行
+// metadata 迁移引擎（裸 deno_core JsRuntime）与 V8 爬虫运行时。
+// 两者均依赖 deno_core（Cargo.toml 已按 not(ios) 门控），故 iOS 排除。
+#[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod metadata_migration;
-pub mod rhai;
 // 嵌入式 V8 后端：桌面 + Android（仅 iOS 不支持）。
-#[cfg(not(target_os = "ios"))]
+#[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod v8;
 
 use arc_swap::ArcSwap;
@@ -30,9 +31,9 @@ use pathql_rs::{
 };
 
 /// 脚本后端枚举（core 权威定义）。kbBackend 字符串解析目标。
+/// Rhai 后端已移除：`kbBackend: "rhai"` 会在解析时报可读错误。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginBackend {
-    Rhai,
     V8,
     Webview,
 }
@@ -42,10 +43,12 @@ impl FromStr for PluginBackend {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "rhai" => Ok(PluginBackend::Rhai),
             "v8" => Ok(PluginBackend::V8),
             "webview" => Ok(PluginBackend::Webview),
-            _ => Err(format!("不支持的脚本后端: \"{}\"，支持 rhai / v8 / webview", s)),
+            "rhai" => Err(
+                "Rhai 后端已停止支持，请更新该插件（迁移到 v8 / webview 后端）".to_string(),
+            ),
+            _ => Err(format!("不支持的脚本后端: \"{}\"，支持 v8 / webview", s)),
         }
     }
 }
@@ -53,106 +56,41 @@ impl FromStr for PluginBackend {
 impl PluginBackend {
     fn script_type_str(self) -> &'static str {
         match self {
-            PluginBackend::Rhai => "rhai",
             PluginBackend::V8 => "v8",
             PluginBackend::Webview => "js",
         }
     }
 }
 
-pub enum PluginScript {
-    V2 {
-        rhai: Option<String>,
-        js: Option<String>,
-    },
-    V3 {
-        backend: PluginBackend,
-        source: String,
-    },
-}
-
-impl Default for PluginScript {
-    fn default() -> Self {
-        PluginScript::V2 {
-            rhai: None,
-            js: None,
-        }
-    }
-}
-
-impl std::fmt::Debug for PluginScript {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PluginScript::V2 { rhai, js } => f
-                .debug_struct("PluginScript::V2")
-                .field("rhai", rhai)
-                .field("js", js)
-                .finish(),
-            PluginScript::V3 { backend, source } => f
-                .debug_struct("PluginScript::V3")
-                .field("backend", backend)
-                .field("source", &format!("{} bytes", source.len()))
-                .finish(),
-        }
-    }
-}
-
-impl Clone for PluginScript {
-    fn clone(&self) -> Self {
-        match self {
-            PluginScript::V2 { rhai, js } => PluginScript::V2 {
-                rhai: rhai.clone(),
-                js: js.clone(),
-            },
-            PluginScript::V3 { backend, source } => PluginScript::V3 {
-                backend: *backend,
-                source: source.clone(),
-            },
-        }
-    }
+/// 插件脚本（package.json + main）。旧版 manifest.json (v2) 与 Rhai 均已移除。
+/// `backend` 为 `None` 表示无可执行脚本（如内置 local-import）。
+#[derive(Debug, Clone, Default)]
+pub struct PluginScript {
+    backend: Option<PluginBackend>,
+    source: String,
 }
 
 impl PluginScript {
-    fn script_type_str(&self) -> &'static str {
-        match self {
-            PluginScript::V2 { js, .. } => {
-                if js.is_some() {
-                    "js"
-                } else {
-                    "rhai"
-                }
-            }
-            PluginScript::V3 { backend, .. } => backend.script_type_str(),
+    fn new(backend: PluginBackend, source: String) -> Self {
+        Self {
+            backend: Some(backend),
+            source,
         }
     }
 
-    pub fn rhai_source(&self) -> Option<&str> {
-        match self {
-            PluginScript::V2 { rhai, .. } => rhai.as_deref(),
-            PluginScript::V3 { backend, source } if matches!(backend, PluginBackend::Rhai) => {
-                Some(source.as_str())
-            }
-            _ => None,
+    fn script_type_str(&self) -> &'static str {
+        match self.backend {
+            Some(backend) => backend.script_type_str(),
+            None => "js",
         }
     }
 
     pub fn js_source(&self) -> Option<&str> {
-        match self {
-            PluginScript::V2 { js, .. } => js.as_deref(),
-            PluginScript::V3 { backend, source } if matches!(backend, PluginBackend::Webview) => {
-                Some(source.as_str())
-            }
-            _ => None,
-        }
+        matches!(self.backend, Some(PluginBackend::Webview)).then(|| self.source.as_str())
     }
 
     pub fn v8_source(&self) -> Option<&str> {
-        match self {
-            PluginScript::V3 { backend, source } if matches!(backend, PluginBackend::V8) => {
-                Some(source.as_str())
-            }
-            _ => None,
-        }
+        matches!(self.backend, Some(PluginBackend::V8)).then(|| self.source.as_str())
     }
 }
 
@@ -172,7 +110,7 @@ pub struct Plugin {
     #[serde(rename = "sizeBytes")]
     pub size_bytes: u64,
     pub config: HashMap<String, serde_json::Value>,
-    /// 脚本类型：rhai（crawl.rhai）或 js（crawl.js）。安卓仅支持 rhai。
+    /// 脚本类型：js（webview crawl.js）或 v8（自包含 ES module）。
     #[serde(rename = "scriptType")]
     pub script_type: String,
     /// manifest.json 可选字段：运行本插件所需的最低 Kabegame 应用版本（semver 主.次.补丁）
@@ -225,9 +163,13 @@ pub struct Plugin {
     /// 插件内 providers/ 解析出的 DSL，仅后端使用，不序列化到前端。
     #[serde(skip)]
     pub providers: Vec<PluginProviderDef>,
-    /// metadata_migrations/vN.rhai 迁移脚本，仅后端使用，不序列化到前端。
+    /// kbMetadataMigration 单一迁移脚本源码（ES module，export migrate），仅后端使用，不序列化到前端。
     #[serde(skip)]
-    pub metadata_migrations: Vec<(u32, String)>,
+    pub metadata_migration: Option<String>,
+    /// 插件版本的 packed 编码（每字节一段，`3.4.1` → `0x00030401`），仅后端使用，不序列化到前端。
+    /// 用作 `image_metadata.plugin_version` 的写入值与迁移门控阈值。
+    #[serde(skip)]
+    pub version_packed: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -598,25 +540,6 @@ impl PluginManager {
         read_plugin_manifest_from_kgpg_file(zip_path).await
     }
 
-    /// 从 ZIP 格式的插件文件中读取 crawl.rhai 脚本
-    pub fn read_plugin_script(&self, zip_path: &Path) -> Result<Option<String>, String> {
-        let file =
-            fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
-        let mut archive =
-            ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
-
-        let mut script_file = match archive.by_name("crawl.rhai") {
-            Ok(f) => f,
-            Err(_) => return Ok(None), // crawl.rhai 是可选的
-        };
-
-        let mut content = String::new();
-        script_file
-            .read_to_string(&mut content)
-            .map_err(|e| format!("Failed to read crawl.rhai: {}", e))?;
-        Ok(Some(content))
-    }
-
     /// 从 ZIP 格式的插件文件中读取 config.json（供 CLI/外部调用复用）
     pub fn read_plugin_config_public(
         &self,
@@ -769,6 +692,7 @@ impl PluginManager {
             }
         }
 
+        #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
         crate::plugin::metadata_migration::spawn_metadata_migrations_for_plugin(plugin.clone());
 
         Ok(plugin)
@@ -2073,233 +1997,40 @@ impl PluginManager {
             script,
             doc_resource_entries,
             provider_entries,
-            metadata_migration_entries,
+            metadata_migration_entry,
         ) = tokio::task::spawn_blocking(move || -> Result<_, String> {
             let file = fs::File::open(&zip_path)
                 .map_err(|e| format!("Failed to open plugin file: {}", e))?;
             let mut archive =
                 ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
 
-            let mut manifest_json: Option<String> = None;
-            let mut config_json: Option<String> = None;
-            let mut package_json: Option<String> = None;
-            let mut icon_png_bytes: Option<Vec<u8>> = None;
-            let mut description_template: Option<String> = None;
-            let mut doc_entries: Vec<(String, String)> = Vec::new();
-            let mut config_presets: Vec<(String, serde_json::Value)> = Vec::new();
-            let mut script_type = "rhai".to_string();
-            let mut rhai_script_content: Option<String> = None;
-            let mut js_script_content: Option<String> = None;
-            let mut doc_resource_entries: Vec<(String, Vec<u8>)> = Vec::new();
-            let mut doc_resource_total_size: usize = 0;
-            let mut provider_entries: Vec<(String, String)> = Vec::new();
-            let mut metadata_migration_entries: Vec<(u32, String)> = Vec::new();
-
-            for i in 0..archive.len() {
-                let mut f = archive
-                    .by_index(i)
-                    .map_err(|e| format!("读取 ZIP 条目失败: {}", e))?;
-                let name = f.name().to_string();
-
-                let normalized_name = name.replace('\\', "/");
-
-                if name == "manifest.json" {
-                    let mut s = String::new();
-                    f.read_to_string(&mut s)
-                        .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
-                    manifest_json = Some(s);
-                } else if name == "config.json" {
-                    let mut s = String::new();
-                    f.read_to_string(&mut s)
-                        .map_err(|e| format!("Failed to read config.json: {}", e))?;
-                    config_json = Some(s);
-                } else if name == "package.json" {
+            // 读取 package.json 判定 v3；旧版 manifest.json (v2) 插件格式已停止支持。
+            let package_json: Option<String> = match archive.by_name("package.json") {
+                Ok(mut f) => {
                     let mut s = String::new();
                     f.read_to_string(&mut s)
                         .map_err(|e| format!("Failed to read package.json: {}", e))?;
-                    package_json = Some(s);
-                } else if name == "icon.png" {
-                    let mut bytes = Vec::new();
-                    f.read_to_end(&mut bytes)
-                        .map_err(|e| format!("Failed to read icon.png: {}", e))?;
-                    if !bytes.is_empty() {
-                        icon_png_bytes = Some(bytes);
-                    }
-                } else if name == "templates/description.ejs" {
-                    let mut s = String::new();
-                    f.read_to_string(&mut s)
-                        .map_err(|e| format!("Failed to read description.ejs: {}", e))?;
-                    if !s.is_empty() {
-                        description_template = Some(s);
-                    }
-                } else if name == "crawl.rhai" {
-                    let mut s = String::new();
-                    f.read_to_string(&mut s).ok();
-                    if !s.is_empty() {
-                        rhai_script_content = Some(s);
-                    }
-                } else if name == "crawl.js" {
-                    script_type = "js".to_string();
-                    let mut s = String::new();
-                    f.read_to_string(&mut s).ok();
-                    if !s.is_empty() {
-                        js_script_content = Some(s);
-                    }
-                } else if name.starts_with("configs/") && name.ends_with(".json") {
-                    let stem = Path::new(&name)
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_string();
-                    if !stem.is_empty() {
-                        let mut s = String::new();
-                        f.read_to_string(&mut s)
-                            .map_err(|e| format!("读取 {} 失败: {}", name, e))?;
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
-                            config_presets.push((stem, v));
-                        }
-                    }
-                } else if name == "doc.md" {
-                    let mut s = String::new();
-                    f.read_to_string(&mut s).ok();
-                    if !s.is_empty() {
-                        doc_entries.push(("default".to_string(), s));
-                    }
-                } else if name.starts_with("doc_root/doc") && name.ends_with(".md") {
-                    // doc_root/doc.md → "default", doc_root/doc.zh.md → "zh"
-                    let stem = Path::new(&name)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let lang_key = if stem == "doc" {
-                        "default".to_string()
-                    } else {
-                        stem.strip_prefix("doc.").unwrap_or(&stem).to_string()
-                    };
-                    let mut s = String::new();
-                    f.read_to_string(&mut s).ok();
-                    if !s.is_empty() {
-                        doc_entries.push((lang_key, s));
-                    }
-                } else if name.starts_with("doc_root/")
-                    && !name.ends_with(".md")
-                    && !name.ends_with('/')
-                {
-                    let rel_path = name.strip_prefix("doc_root/").unwrap().to_string();
-                    if !rel_path.is_empty() {
-                        let mut bytes = Vec::new();
-                        f.read_to_end(&mut bytes).ok();
-                        if !bytes.is_empty()
-                            && bytes.len() <= DOC_RESOURCE_MAX_FILE_SIZE
-                            && doc_resource_total_size + bytes.len() <= DOC_RESOURCE_MAX_TOTAL_SIZE
-                        {
-                            doc_resource_total_size += bytes.len();
-                            doc_resource_entries.push((rel_path, bytes));
-                        }
-                    }
-                } else if let Some(version) = metadata_migration_version_from_path(&normalized_name)
-                {
-                    let mut s = String::new();
-                    f.read_to_string(&mut s)
-                        .map_err(|e| format!("读取 metadata migration `{}` 失败: {}", name, e))?;
-                    if !s.trim().is_empty() {
-                        metadata_migration_entries.push((version, s));
-                    }
-                } else if crate::providers::is_provider_file_path(&name) {
-                    let mut s = String::new();
-                    f.read_to_string(&mut s)
-                        .map_err(|e| format!("读取 provider `{}` 失败: {}", name, e))?;
-                    if !s.trim().is_empty() {
-                        provider_entries.push((name, s));
-                    }
+                    Some(s)
                 }
-            }
-
-            // 回落：若 zip 根目录无 icon.png，尝试 doc_root/icon.png
-            if icon_png_bytes.is_none() {
-                if let Some((_, bytes)) = doc_resource_entries.iter().find(|(p, _)| p == "icon.png")
-                {
-                    icon_png_bytes = Some(bytes.clone());
-                }
-            }
-
-            let is_v3 = package_json
+                Err(_) => None,
+            };
+            let pkg = package_json
                 .as_deref()
-                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-                .as_ref()
-                .map(|v| package_json_is_v3(v))
-                .unwrap_or(false);
-
-            if is_v3 {
-                let pkg: serde_json::Value =
-                    serde_json::from_str(package_json.as_deref().unwrap())
-                        .map_err(|e| format!("Failed to parse package.json: {}", e))?;
-                load_plugin_v3_from_zip(
-                    &mut archive,
-                    &pkg,
-                    &plugin_id_for_zip,
-                    DOC_RESOURCE_MAX_FILE_SIZE,
-                    DOC_RESOURCE_MAX_TOTAL_SIZE,
-                )
-            } else {
-                let manifest_str = manifest_json
-                    .ok_or_else(|| "manifest.json not found in plugin archive".to_string())?;
-                let zip_manifest = serde_json::from_str::<PluginManifest>(&manifest_str)
-                    .map_err(|e| format!("Failed to parse manifest.json: {}", e))?;
-
-                let config: Option<PluginConfig> = config_json
-                    .map(|s| {
-                        serde_json::from_str(&s)
-                            .map_err(|e| format!("Failed to parse config.json: {}", e))
-                    })
-                    .transpose()?;
-
-                let doc: Option<PluginDoc> = if doc_entries.is_empty() {
-                    None
-                } else {
-                    Some(doc_entries.into_iter().collect())
-                };
-
-                config_presets.sort_by(|a, b| a.0.cmp(&b.0));
-                let recommended_configs: Vec<serde_json::Value> = config_presets
-                    .into_iter()
-                    .map(|(filename, v)| {
-                        let mut obj = serde_json::Map::new();
-                        obj.insert(
-                            "pluginId".to_string(),
-                            serde_json::json!(plugin_id_for_zip),
-                        );
-                        obj.insert("filename".to_string(), serde_json::json!(filename));
-                        if let serde_json::Value::Object(m) = v {
-                            for (k, val) in m {
-                                obj.insert(k, val);
-                            }
-                        }
-                        serde_json::Value::Object(obj)
-                    })
-                    .collect();
-
-                let script = PluginScript::V2 {
-                    rhai: rhai_script_content,
-                    js: js_script_content,
-                };
-                let script_type = script.script_type_str().to_string();
-
-                Ok((
-                    zip_manifest,
-                    config,
-                    doc,
-                    script_type,
-                    icon_png_bytes,
-                    description_template,
-                    recommended_configs,
-                    script,
-                    doc_resource_entries,
-                    provider_entries,
-                    metadata_migration_entries,
-                ))
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+            let is_v3 = pkg.as_ref().map(package_json_is_v3).unwrap_or(false);
+            if !is_v3 {
+                return Err(
+                    "只支持 package.json (v3) 插件格式；旧版 manifest.json (v2) 插件已停止支持"
+                        .to_string(),
+                );
             }
+            load_plugin_v3_from_zip(
+                &mut archive,
+                pkg.as_ref().unwrap(),
+                &plugin_id_for_zip,
+                DOC_RESOURCE_MAX_FILE_SIZE,
+                DOC_RESOURCE_MAX_TOTAL_SIZE,
+            )
         })
         .await
         .map_err(|e| format!("Failed to join ZIP parser task: {}", e))??;
@@ -2348,6 +2079,9 @@ impl PluginManager {
 
         let providers = parse_plugin_provider_entries(&plugin_id, provider_entries)?;
 
+        // 版本无法 packed 编码的插件直接拒绝加载（写入盖章与迁移门控都依赖它）
+        let version_packed = pack_plugin_version(&manifest.version)?;
+
         Ok(Plugin {
             id: plugin_id,
             name: manifest.name_to_value(),
@@ -2373,7 +2107,8 @@ impl PluginManager {
             script,
             doc_resources,
             providers,
-            metadata_migrations: metadata_migration_entries,
+            metadata_migration: metadata_migration_entry,
+            version_packed,
         })
     }
 }
@@ -2397,7 +2132,7 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         PluginScript,
         Vec<(String, Vec<u8>)>,
         Vec<(String, String)>,
-        Vec<(u32, String)>,
+        Option<String>,
     ),
     String,
 > {
@@ -2429,10 +2164,7 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         let mut source = String::new();
         f.read_to_string(&mut source)
             .map_err(|e| format!("读取 \"{}\" 失败: {}", main_path, e))?;
-        script = PluginScript::V3 {
-            backend,
-            source,
-        };
+        script = PluginScript::new(backend, source);
         script_type = script.script_type_str().to_string();
     }
 
@@ -2629,27 +2361,31 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         }
     }
 
-    let mut metadata_migration_entries: Vec<(u32, String)> = Vec::new();
-    if let Some(mig_arr) = pkg_obj.get("kbMetadataMigrations").and_then(|v| v.as_array()) {
-        for (i, mig_path_val) in mig_arr.iter().enumerate() {
-            let mig_path = mig_path_val.as_str().ok_or_else(|| {
-                format!("kbMetadataMigrations[{}] 必须是字符串", i)
-            })?;
-            validate_kb_rel_path(mig_path)?;
-
-            let mut f = archive.by_name(mig_path).map_err(|_| {
-                format!(
-                    "package.json 引用的 kbMetadataMigrations[{}] \"{}\" 不在包内",
-                    i, mig_path
-                )
-            })?;
-            let mut s = String::new();
-            f.read_to_string(&mut s)
-                .map_err(|e| format!("读取 \"{}\" 失败: {}", mig_path, e))?;
-            if !s.trim().is_empty() {
-                let version: u32 = (i + 1) as u32;
-                metadata_migration_entries.push((version, s));
-            }
+    // 单一迁移脚本：kbMetadataMigration（字符串路径，.js）。
+    // 旧 kbMetadataMigrations 数组键已停止支持，加载时完全不解析。
+    let mut metadata_migration_entry: Option<String> = None;
+    if let Some(mig_val) = pkg_obj.get("kbMetadataMigration") {
+        let mig_path = mig_val
+            .as_str()
+            .ok_or_else(|| "kbMetadataMigration 必须是字符串".to_string())?;
+        validate_kb_rel_path(mig_path)?;
+        if !mig_path.ends_with(".js") {
+            return Err(format!(
+                "kbMetadataMigration \"{}\" 必须是 .js 脚本（ES module，export migrate）",
+                mig_path
+            ));
+        }
+        let mut f = archive.by_name(mig_path).map_err(|_| {
+            format!(
+                "package.json 引用的 kbMetadataMigration \"{}\" 不在包内",
+                mig_path
+            )
+        })?;
+        let mut s = String::new();
+        f.read_to_string(&mut s)
+            .map_err(|e| format!("读取 \"{}\" 失败: {}", mig_path, e))?;
+        if !s.trim().is_empty() {
+            metadata_migration_entry = Some(s);
         }
     }
 
@@ -2664,18 +2400,8 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         script,
         doc_resource_entries,
         provider_entries,
-        metadata_migration_entries,
+        metadata_migration_entry,
     ))
-}
-
-fn metadata_migration_version_from_path(path: &str) -> Option<u32> {
-    let file = path.strip_prefix("metadata_migrations/")?;
-    let version = file.strip_prefix('v')?.strip_suffix(".rhai")?;
-    if version.is_empty() || !version.chars().all(|ch| ch.is_ascii_digit()) {
-        return None;
-    }
-    let parsed = version.parse::<u32>().ok()?;
-    (parsed > 0).then_some(parsed)
 }
 
 fn plugin_provider_namespace_allowed(plugin_id: &str, def: &ProviderDef) -> bool {
@@ -2919,6 +2645,25 @@ fn parse_semver_triple(s: &str) -> Option<(u32, u32, u32)> {
         parts[1].parse().ok()?,
         parts[2].parse().ok()?,
     ))
+}
+
+/// 把插件版本 `major.minor.patch` 编码为 u32（每字节一段，高字节留空）：
+/// `3.4.1` → `0x00030401`。直接比较大小即可比较版本先后。
+/// 每段必须 ≤255；不合规返回可读错误（加载/打包时报给用户）。
+pub fn pack_plugin_version(version: &str) -> Result<u32, String> {
+    let (major, minor, patch) = parse_semver_triple(version).ok_or_else(|| {
+        format!(
+            "插件版本 \"{}\" 无法编码为版本号整数：需要 major.minor.patch 形式",
+            version
+        )
+    })?;
+    if major > 255 || minor > 255 || patch > 255 {
+        return Err(format!(
+            "插件版本 \"{}\" 无法编码为版本号整数：每段必须 ≤255",
+            version
+        ));
+    }
+    Ok((major << 16) | (minor << 8) | patch)
 }
 
 /// 当前应用版本 `current` 是否满足插件要求的最低版本 `required`（`>=`）。
@@ -3709,7 +3454,7 @@ mod tests {
 
     #[test]
     fn test_validate_kb_rel_path() {
-        assert!(validate_kb_rel_path("something/script.rhai").is_ok());
+        assert!(validate_kb_rel_path("something/script.js").is_ok());
         assert!(validate_kb_rel_path("script.js").is_ok());
         assert!(validate_kb_rel_path("").is_err());
         assert!(validate_kb_rel_path("../escape.js").is_err());
@@ -3841,13 +3586,8 @@ mod tests {
 
         assert_eq!(manifest.version, "1.0.0");
         assert_eq!(script_type, "v8");
-        match &script {
-            PluginScript::V3 { backend, source } => {
-                assert!(matches!(backend, PluginBackend::V8));
-                assert_eq!(source, js_source);
-            }
-            _ => panic!("expected PluginScript::V3"),
-        }
+        assert_eq!(script.v8_source(), Some(js_source));
+        assert!(script.js_source().is_none());
     }
 
     #[test]
@@ -3856,8 +3596,8 @@ mod tests {
             "name": "t",
             "version": "1.0.0",
             "kbPackageVersion": 3,
-            "kbBackend": "rhai",
-            "main": "nonexistent.rhai",
+            "kbBackend": "v8",
+            "main": "nonexistent.js",
         });
         let data = make_zip(&[(
             "package.json",
@@ -3883,6 +3623,100 @@ mod tests {
             "error: {}",
             err
         );
+    }
+
+    #[test]
+    fn test_pack_plugin_version() {
+        assert_eq!(pack_plugin_version("3.4.1").unwrap(), 0x0003_0401);
+        assert_eq!(pack_plugin_version("1.6.3").unwrap(), 0x0001_0603);
+        assert_eq!(pack_plugin_version("0.0.0").unwrap(), 0);
+        assert_eq!(pack_plugin_version("255.255.255").unwrap(), 0x00FF_FFFF);
+        assert!(pack_plugin_version("1.2").is_err());
+        assert!(pack_plugin_version("1.2.3.4").is_err());
+        assert!(pack_plugin_version("1.2.256").is_err());
+        assert!(pack_plugin_version("abc").is_err());
+        // packed 比较与语义版本先后一致
+        assert!(pack_plugin_version("1.10.0").unwrap() > pack_plugin_version("1.9.9").unwrap());
+    }
+
+    #[test]
+    fn test_v3_load_metadata_migration_single_script() {
+        let pkg = serde_json::json!({
+            "name": "t",
+            "version": "1.0.0",
+            "kbPackageVersion": 3,
+            "kbBackend": "v8",
+            "main": "main.js",
+            "kbMetadataMigration": "metadata_migrations/migrate.js",
+        });
+        let mig_source = "export function migrate(input) { return input; }";
+        let data = make_zip(&[
+            ("package.json", serde_json::to_string_pretty(&pkg).unwrap().as_bytes()),
+            ("main.js", b"export async function crawl() {}"),
+            ("metadata_migrations/migrate.js", mig_source.as_bytes()),
+        ]);
+        let mut archive = open_zip(&data);
+        let (.., mig) = load_plugin_v3_from_zip(&mut archive, &pkg, "t", 2 << 20, 10 << 20).unwrap();
+        assert_eq!(mig.as_deref(), Some(mig_source));
+    }
+
+    #[test]
+    fn test_v3_load_metadata_migration_missing_file_error() {
+        let pkg = serde_json::json!({
+            "name": "t",
+            "version": "1.0.0",
+            "kbPackageVersion": 3,
+            "kbBackend": "v8",
+            "main": "main.js",
+            "kbMetadataMigration": "metadata_migrations/migrate.js",
+        });
+        let data = make_zip(&[
+            ("package.json", serde_json::to_string_pretty(&pkg).unwrap().as_bytes()),
+            ("main.js", b"export async function crawl() {}"),
+        ]);
+        let mut archive = open_zip(&data);
+        let err = load_plugin_v3_from_zip(&mut archive, &pkg, "t", 2 << 20, 10 << 20).unwrap_err();
+        assert!(err.contains("不在包内"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_v3_load_metadata_migration_non_js_error() {
+        let pkg = serde_json::json!({
+            "name": "t",
+            "version": "1.0.0",
+            "kbPackageVersion": 3,
+            "kbBackend": "v8",
+            "main": "main.js",
+            "kbMetadataMigration": "metadata_migrations/migrate.rhai",
+        });
+        let data = make_zip(&[
+            ("package.json", serde_json::to_string_pretty(&pkg).unwrap().as_bytes()),
+            ("main.js", b"export async function crawl() {}"),
+            ("metadata_migrations/migrate.rhai", b"fn migrate(m) { m }"),
+        ]);
+        let mut archive = open_zip(&data);
+        let err = load_plugin_v3_from_zip(&mut archive, &pkg, "t", 2 << 20, 10 << 20).unwrap_err();
+        assert!(err.contains(".js"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_v3_load_legacy_migrations_array_ignored() {
+        // 旧 kbMetadataMigrations 数组键完全不解析：正常加载且 metadata_migration 为 None
+        let pkg = serde_json::json!({
+            "name": "t",
+            "version": "1.0.0",
+            "kbPackageVersion": 3,
+            "kbBackend": "v8",
+            "main": "main.js",
+            "kbMetadataMigrations": ["metadata_migrations/v1.rhai"],
+        });
+        let data = make_zip(&[
+            ("package.json", serde_json::to_string_pretty(&pkg).unwrap().as_bytes()),
+            ("main.js", b"export async function crawl() {}"),
+        ]);
+        let mut archive = open_zip(&data);
+        let (.., mig) = load_plugin_v3_from_zip(&mut archive, &pkg, "t", 2 << 20, 10 << 20).unwrap();
+        assert!(mig.is_none());
     }
 
     #[test]
@@ -3915,25 +3749,31 @@ mod tests {
         );
     }
 
-    // ── v2 回归测试 ──
+    // ── PluginScript 构造回归测试 ──
 
     #[test]
-    fn test_v2_regression_script_construction() {
-        let v2 = PluginScript::V2 {
-            rhai: Some("// crawl".to_string()),
-            js: Some("// crawl js".to_string()),
-        };
-        assert_eq!(v2.script_type_str(), "js");
-        assert_eq!(v2.rhai_source(), Some("// crawl"));
-        assert_eq!(v2.js_source(), Some("// crawl js"));
-        assert_eq!(v2.v8_source(), None);
+    fn test_script_webview_and_v8_sources() {
+        let webview = PluginScript::new(PluginBackend::Webview, "// crawl js".to_string());
+        assert_eq!(webview.script_type_str(), "js");
+        assert_eq!(webview.js_source(), Some("// crawl js"));
+        assert_eq!(webview.v8_source(), None);
 
-        let v2_rhai_only = PluginScript::V2 {
-            rhai: Some("// crawl".to_string()),
-            js: None,
-        };
-        assert_eq!(v2_rhai_only.script_type_str(), "rhai");
-        assert_eq!(v2_rhai_only.rhai_source(), Some("// crawl"));
-        assert_eq!(v2_rhai_only.js_source(), None);
+        let v8 = PluginScript::new(PluginBackend::V8, "// crawl v8".to_string());
+        assert_eq!(v8.script_type_str(), "v8");
+        assert_eq!(v8.v8_source(), Some("// crawl v8"));
+        assert_eq!(v8.js_source(), None);
+
+        let empty = PluginScript::default();
+        assert_eq!(empty.js_source(), None);
+        assert_eq!(empty.v8_source(), None);
+    }
+
+    #[test]
+    fn test_backend_rhai_rejected() {
+        // Rhai 后端已移除：kbBackend "rhai" 解析报可读错误。
+        let err = PluginBackend::from_str("rhai").unwrap_err();
+        assert!(err.contains("Rhai"), "error: {}", err);
+        assert!(PluginBackend::from_str("v8").is_ok());
+        assert!(PluginBackend::from_str("webview").is_ok());
     }
 }

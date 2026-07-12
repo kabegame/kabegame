@@ -60,7 +60,7 @@ export function rowToImageInfo(row: Row): ImageInfo {
 
   const optionalNumbers: Array<[keyof ImageInfo, number | undefined]> = [
     ["metadataId", numberField(row, "metadata_id", "metadataId")],
-    ["metadataVersion", numberField(row, "metadata_version", "metadataVersion")],
+    ["pluginVersion", numberField(row, "plugin_version", "pluginVersion")],
     ["order", numberField(row, "album_order", "albumOrder")],
     ["width", numberField(row, "width")],
     ["height", numberField(row, "height")],

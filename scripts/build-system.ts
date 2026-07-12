@@ -254,56 +254,13 @@ export class BuildSystem {
       run("cargo", args, { cwd: SRC_TAURI_DIR });
       killVite();
     } else {
-      const cargoArgs = this.buildCargoArgs(
-        [
-          "build",
-          "-p",
-          Component.MAIN,
-          "--bin",
-          "kabegame",
-        ],
+      const args = this.buildTauriArgs(
+        ["dev"],
         features,
+        this.options.args,
         compileArgs,
       );
-      run("cargo", cargoArgs, { cwd: SRC_TAURI_DIR });
-      await this.hooks.afterBuild.promise(Component.MAIN);
-      this.hooks.beforeRun.call(Component.MAIN);
-
-      try {
-        if (OSPlugin.isMacOS) {
-          console.log(chalk.cyan("[macOS dev] Starting Vite dev server on 1420..."));
-          const viteProc = spawn("bun", ["run", "dev:frontend"], {
-            cwd: root,
-            stdio: "inherit",
-            env: process.env,
-          });
-          const killVite = () => {
-            if (!viteProc.killed) {
-              try { viteProc.kill("SIGTERM"); } catch {}
-            }
-          };
-          process.on("exit", killVite);
-          process.on("SIGINT", killVite);
-          process.on("SIGTERM", killVite);
-          try {
-            // await this.waitForDevServer("http://localhost:1420", 30_000);
-            const exe = path.join(root, "target", "debug", "kabegame");
-            run(exe, this.options.args || [], { cwd: root });
-          } finally {
-            killVite();
-          }
-        } else {
-          const args = this.buildTauriArgs(
-            ["dev"],
-            features,
-            this.options.args,
-            compileArgs,
-          );
-          run("tauri", args, { cwd, bin: "cargo" });
-        }
-      } finally {
-        this.hooks.afterRun.call(Component.MAIN);
-      }
+      run("tauri", args, { cwd, bin: "cargo" });
     }
   }
 
@@ -364,18 +321,6 @@ export class BuildSystem {
     } finally {
       this.hooks.afterRun.call(component.comp);
     }
-  }
-
-  private async waitForDevServer(url: string, timeoutMs: number): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      try {
-        const response = await fetch(url);
-        if (response.ok) return;
-      } catch {}
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    throw new Error(`Vite dev server did not become ready within ${timeoutMs}ms: ${url}`);
   }
 
   async build(options: BuildOptions): Promise<void> {

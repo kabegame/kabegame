@@ -61,7 +61,7 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers�
 
 ## Features
 
-- 🔌 **Crawler client**: Use `.kgpg` plugins to crawl wallpapers from various sites; built-in plugin store for browse/install/manage; task progress with stop/delete; CLI to run plugins, import images, etc.
+- 🔌 **Crawler client**: Use `.kgpg` plugins to crawl wallpapers from various sites; built-in plugin store for browse/install/manage; task progress with stop/delete; CLI to package/import plugins and import/query local data.
 - 🎨 **Wallpaper setter (image/video)**: Collect, manage, and rotate anime wallpapers; auto-switch desktop wallpaper from albums (random or sequential)
 - 🖼️ **Image manager (image/video)**: Gallery browsing, album organization, virtual disk (drive letter on Windows, virtual folder on macOS/Linux), drag-and-drop import for local images/videos/folders/archives or kgpg plugins
 
@@ -236,7 +236,7 @@ On Windows, macOS, and Linux, Kabegame can mount albums as a virtual disk (or vi
 
 ### ⌨️ CLI
 
-Headless CLI for running plugins, importing images, managing albums. Great for automation and batch jobs. Double-clicking a `.kgpg` file opens it with the CLI to view details.
+Self-contained CLI for creating, packaging, and importing plugins, importing one local image/video at a time, and querying PathQL data. It does not require a running Kabegame process.
 
 ### More
 

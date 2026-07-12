@@ -30,10 +30,10 @@ pub struct ImageInfo {
     #[serde(rename(serialize = "metadataId"), alias = "metadataId")]
     #[serde(default)]
     pub metadata_id: Option<i64>,
-    /// `image_metadata.version`；用于前端 metadata 缓存失效。
-    #[serde(rename(serialize = "metadataVersion"), alias = "metadataVersion")]
+    /// `image_metadata.plugin_version`（图片下载时的插件版本，packed u32）；用于前端 metadata 缓存失效。
+    #[serde(rename(serialize = "pluginVersion"), alias = "pluginVersion")]
     #[serde(default)]
-    pub metadata_version: u32,
+    pub plugin_version: u32,
     #[serde(rename(serialize = "thumbnailPath"), alias = "thumbnailPath")]
     #[serde(default)]
     pub thumbnail_path: String,
@@ -144,7 +144,8 @@ pub struct RangedImages {
 pub struct ImageMetadataFull {
     pub id: i64,
     pub data: Option<Value>,
-    pub version: u32,
+    /// 图片下载时的插件版本（packed u32）。
+    pub plugin_version: u32,
     pub plugin_id: String,
 }
 
@@ -184,14 +185,14 @@ pub(crate) fn insert_image_metadata_id(
     conn: &rusqlite::Connection,
     data_json: &str,
     plugin_id: &str,
-    version: u32,
+    plugin_version: u32,
 ) -> Result<i64, String> {
-    let version_i64 = i64::from(version);
+    let plugin_version_i64 = i64::from(plugin_version);
 
     conn.execute(
-        "INSERT INTO image_metadata (data, plugin_id, version)
+        "INSERT INTO image_metadata (data, plugin_id, plugin_version)
          VALUES (?1, ?2, ?3)",
-        params![data_json, plugin_id, version_i64],
+        params![data_json, plugin_id, plugin_version_i64],
     )
     .map_err(|e| format!("insert image_metadata: {}", e))?;
 
@@ -240,7 +241,7 @@ impl Storage {
         crate::providers::image_metadata_at(image_id)
     }
 
-    /// 读取 metadata 的完整行信息（含 version/plugin_id）。
+    /// 读取 metadata 的完整行信息（含 plugin_version/plugin_id）。
     pub fn get_image_metadata_full(
         &self,
         image_id: &str,
@@ -248,17 +249,18 @@ impl Storage {
         crate::providers::image_metadata_full_at(image_id)
     }
 
-    /// Rhai `create_image_metadata`：将 JSON 写入 `image_metadata` 并返回 id。
+    /// V8 `Kabegame.createImageMetadata`：将 JSON 写入 `image_metadata` 并返回 id。
+    /// `plugin_version` 为写入时运行插件的 packed 版本（应用维护，插件不可读写）。
     pub fn insert_image_metadata_row(
         &self,
         value: &Value,
         plugin_id: &str,
-        version: u32,
+        plugin_version: u32,
     ) -> Result<i64, String> {
         let s = serde_json::to_string(value)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        insert_image_metadata_id(&conn, &s, plugin_id, version)
+        insert_image_metadata_id(&conn, &s, plugin_id, plugin_version)
     }
 
     /// 读取某 metadata 行的原始 `data` 文本（用于文件夹同步重导入前「保存」内容）。
@@ -280,33 +282,33 @@ impl Storage {
         insert_image_metadata_id(&conn, data_json, "", 0)
     }
 
-    /// 扫描某插件低于目标版本的 metadata 行，供迁移运行器逐行升级。
-    pub fn metadata_rows_below_version(
+    /// 扫描某插件低于目标插件版本（packed）的 metadata 行，供迁移运行器逐行升级。
+    pub fn metadata_rows_below_plugin_version(
         &self,
         plugin_id: &str,
-        max_version: u32,
+        max_plugin_version: u32,
     ) -> Result<Vec<(i64, String, u32)>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, data, version
+                "SELECT id, data, plugin_version
                  FROM image_metadata
-                 WHERE plugin_id = ?1 AND version < ?2
+                 WHERE plugin_id = ?1 AND plugin_version < ?2
                  ORDER BY id",
             )
-            .map_err(|e| format!("prepare metadata_rows_below_version: {e}"))?;
+            .map_err(|e| format!("prepare metadata_rows_below_plugin_version: {e}"))?;
         let rows = stmt
-            .query_map(params![plugin_id, i64::from(max_version)], |row| {
-                let version: i64 = row.get(2)?;
+            .query_map(params![plugin_id, i64::from(max_plugin_version)], |row| {
+                let plugin_version: i64 = row.get(2)?;
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
-                    version.max(0) as u32,
+                    plugin_version.max(0) as u32,
                 ))
             })
-            .map_err(|e| format!("query metadata_rows_below_version: {e}"))?;
+            .map_err(|e| format!("query metadata_rows_below_plugin_version: {e}"))?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("collect metadata_rows_below_version: {e}"))
+            .map_err(|e| format!("collect metadata_rows_below_plugin_version: {e}"))
     }
 
     /// 写回迁移后的 metadata 行；如命中已有复合键，则重定向引用并删除当前行。
@@ -314,7 +316,7 @@ impl Storage {
         &self,
         row_id: i64,
         plugin_id: &str,
-        new_version: u32,
+        new_plugin_version: u32,
         new_data: &str,
     ) -> Result<bool, String> {
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -324,7 +326,7 @@ impl Storage {
 
         let current: Option<(String, i64)> = tx
             .query_row(
-                "SELECT data, version
+                "SELECT data, plugin_version
                  FROM image_metadata
                  WHERE id = ?1 AND plugin_id = ?2",
                 params![row_id, plugin_id],
@@ -338,7 +340,7 @@ impl Storage {
             return Ok(false);
         };
 
-        let new_version_i64 = i64::from(new_version);
+        let new_version_i64 = i64::from(new_plugin_version);
         if current_data == new_data && current_version == new_version_i64 {
             tx.commit()
                 .map_err(|e| format!("commit metadata writeback unchanged: {e}"))?;
@@ -349,7 +351,7 @@ impl Storage {
             .query_row(
                 "SELECT id
                  FROM image_metadata
-                 WHERE plugin_id = ?1 AND version = ?2 AND data = ?3 AND id <> ?4
+                 WHERE plugin_id = ?1 AND plugin_version = ?2 AND data = ?3 AND id <> ?4
                  LIMIT 1",
                 params![plugin_id, new_version_i64, new_data, row_id],
                 |row| row.get(0),
@@ -373,7 +375,7 @@ impl Storage {
         } else {
             tx.execute(
                 "UPDATE image_metadata
-                 SET data = ?1, version = ?2
+                 SET data = ?1, plugin_version = ?2
                  WHERE id = ?3",
                 params![new_data, new_version_i64, row_id],
             )

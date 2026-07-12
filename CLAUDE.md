@@ -19,7 +19,7 @@ This is a index for code base. Keep in mind to sync these docs when do some chan
 
 ## What This Project Is
 
-Kabegame is a cross-platform anime wallpaper crawler and manager built with **Tauri 2** (Rust backend) and **Vue 3** (TypeScript frontend). It supports Windows, macOS, Linux, and Android — **not iOS**. Crawler plugins are written in the **Rhai** scripting language.
+Kabegame is a cross-platform anime wallpaper crawler and manager built with **Tauri 2** (Rust backend) and **Vue 3** (TypeScript frontend). It supports Windows, macOS, Linux, and Android — **not iOS**. Crawler plugins are written in **JavaScript/TypeScript** and run on an embedded V8 (deno_core) backend (or the WebView backend); the legacy Rhai backend has been removed.
 
 ## Commands
 
@@ -34,7 +34,7 @@ bun dev -c kabegame --data prod      # Dev against system data dirs (not repo-lo
 bun dev:frontend            # Frontend only (no Tauri, port 1420)
 ```
 
-macOS 的 `bun dev -c kabegame` 会在 ComponentPlugin `beforeBuild` 中先构建 `kabegame-cef-helper` bin，再构建并直接运行裸 `target/debug/kabegame`——**不生成 app bundle**。CEF framework 为构建期直链（`third/cef-rs` fork），经 `target/Frameworks` 符号链接（cef-dll-sys 自动创建，指向 `CEF_PATH`）由 dyld 解析；helper 是 exe 旁的扁平 `kabegame-cef-helper`，三平台一致。前端 HMR 保留，但 Rust 文件修改不会自动重启，需重新执行命令。
+桌面三平台（含 macOS）的 `bun dev -c kabegame` 统一走 `tauri dev`；`kabegame-cef-helper` bin 由 ComponentPlugin `beforeBuild` 在主程序编译前先行构建。CEF framework 为构建期直链（`third/cef-rs` fork），经 `target/Frameworks` 符号链接（cef-dll-sys 自动创建，指向 `CEF_PATH`）由 dyld 解析；helper 是 exe 旁的扁平 `kabegame-cef-helper`，三平台一致。
 
 ### Build
 ```bash
@@ -118,7 +118,7 @@ struct Foo {
 - `src-tauri/kabegame/` — Tauri GUI app (desktop + Android)
 - `src-tauri/kabegame-cli/` — Headless CLI
 - `src-tauri-plugins/` — Custom Tauri plugins (picker, pathes, share, compress, wallpaper, task-notification)
-- `src-crawler-plugins/` — Rhai-based crawler plugins packaged as `.kgpg` archives
+- `src-crawler-plugins/` — JS/TS crawler plugins (V8 backend) packaged as `.kgpg` archives
 
 ### Build Modes
 | Mode | Features |
@@ -152,7 +152,7 @@ New styles should use **UnoCSS utility classes** (configured in `uno.config.pub.
 - **iOS**: Not supported — do not add iOS adaptations
 
 ### Crawler Plugin Development
-Plugins are Rhai scripts packaged as `.kgpg` ZIP archives. See `docs/README_PLUGIN_DEV.md`, `docs/PLUGIN_FORMAT.md`, and `docs/RHAI_API.md`. Build with:
+Plugins are JS/TS scripts (V8 backend, self-contained ES module `export async function crawl`) packaged as `.kgpg` ZIP archives. See `docs/PLUGIN_FORMAT.md` and `cocs/crawler/V8_RUNTIME.md`. Build with:
 ```bash
 cd src-crawler-plugins && bun package        # Package all plugins
 bun generate-index                           # Regenerate plugin store index

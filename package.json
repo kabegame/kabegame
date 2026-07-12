@@ -22,7 +22,6 @@
     "docs:dev": "bun --cwd apps/docs dev",
     "docs:build": "bun --cwd apps/docs build",
     "build:ffmpeg": "bash scripts/build-ffmpeg.sh",
-    "build:cef": "bash scripts/build-cef.sh",
     "prepare": "husky"
   },
   "dependencies": {

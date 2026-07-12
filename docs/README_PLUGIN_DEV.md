@@ -1,5 +1,14 @@
 # 插件开发指南
 
+> **⚠️ 已过时（Rhai 后端已移除）**：本指南的 `crawl.rhai` / Rhai 脚本示例已不再适用。
+> 插件现在只支持 v3 `package.json` 格式，脚本用 **JavaScript/TypeScript**（V8 后端，自包含 ES module
+> `export async function crawl(common, custom)`）或 WebView 后端。请以以下为准：
+> - 包格式与字段：[PLUGIN_FORMAT.md](./PLUGIN_FORMAT.md)
+> - V8 运行时宿主 API：[../cocs/crawler/V8_RUNTIME.md](../cocs/crawler/V8_RUNTIME.md)
+> - 后端选择：[CRAWLER_BACKENDS.md](./CRAWLER_BACKENDS.md)
+>
+> 下文保留仅作历史参考，待重写为 JS 版。
+
 ## 插件目录结构
 
 插件位于 `crawler-plugins/plugins/` 目录下，每个插件应该是一个独立的文件夹。

@@ -29,9 +29,9 @@
 | 插件脚本读取 | `src-tauri/kabegame-core/src/plugin/mod.rs` | `read_plugin_js_script(zip_path)` 从 .kgpg 内读 `crawl.js` |
 | session 状态 | `src-tauri/kabegame-core/src/crawler/webview.rs` | CrawlerSession、session 注册表、JsTaskContext、completion、label 工具、set_page_ready、try_dispatch_script |
 | 窗口创建与注入 | `src-tauri/kabegame/src/startup.rs` | create_crawler_window（initialization_script 依次注入 media_capture.js、media_download.js、bootstrap.js）、AppCrawlerWebViewHandler::create_task_window / destroy_task_window |
-| 媒体捕获脚本 | `src-tauri/kabegame/resources/media_capture.js` | 每次页面脚本前执行：hook `URL.createObjectURL`、`MediaSource.addSourceBuffer`、`SourceBuffer.appendBuffer`，维护 blob/MSE 注册表 |
-| 媒体上传脚本 | `src-tauri/kabegame/resources/media_download.js` | crawler 与 surf 共用：对 data/blob/MSE 做分流、全缓冲驱动、多流上传、DRM 拒绝 |
-| Bootstrap 脚本 | `src-tauri/kabegame/resources/bootstrap.js` | 每次页面加载执行：get_context → page_ready → bindApi → run_script；`downloadImage` 对 data/blob 委托共享媒体上传脚本 |
+| 媒体捕获脚本 | `src-tauri/kabegame/src/webview_js/media_capture.js` | 每次页面脚本前执行：hook `URL.createObjectURL`、`MediaSource.addSourceBuffer`、`SourceBuffer.appendBuffer`，维护 blob/MSE 注册表 |
+| 媒体上传脚本 | `src-tauri/kabegame/src/webview_js/media_download.js` | crawler 与 surf 共用：对 data/blob/MSE 做分流、全缓冲驱动、多流上传、DRM 拒绝 |
+| Bootstrap 脚本 | `src-tauri/kabegame/src/webview_js/bootstrap.js` | 每次页面加载执行：get_context → page_ready → bindApi → run_script；`downloadImage` 对 data/blob 委托共享媒体上传脚本 |
 | Tauri 命令 | `src-tauri/kabegame/src/commands/crawler.rs` | 从调用方 `crawler-<task_id>` label 路由到 session；crawl_get_context、crawl_page_ready、crawl_run_script、crawl_to、crawl_back、crawl_task_log 等 |
 | 权限 | `src-tauri/kabegame/capabilities/crawler.json` | `crawler-*` 窗口/webview 的 Tauri 权限（remote URLs、events、window） |
 | 插件脚本 | `src-crawler-plugins/plugins/<id>/crawl.js` | 业务逻辑，按 ctx.pageLabel 分支（initial/posts/detail/exit） |
@@ -69,7 +69,7 @@
 
 ### 3.3 页面加载后：Bootstrap 执行（每页一次）
 
-- **文件**：`src-tauri/kabegame/resources/media_capture.js`、`src-tauri/kabegame/resources/bootstrap.js`
+- **文件**：`src-tauri/kabegame/src/webview_js/media_capture.js`、`src-tauri/kabegame/src/webview_js/bootstrap.js`
 - **触发**：Tauri 的 **initialization_script** 在**每次** crawler WebView 的文档加载时执行（包括首次 about:blank 或 base_url，以及之后每次 `crawl_to` / `crawl_back` 导致的导航）。
 - **步骤**：
   1. **媒体捕获预注入**：`media_capture.js` 先于页面脚本与 bootstrap 执行，注册 `window.__kb_media__.resolve(url)`。它维护 Blob / MediaSource 捕获注册表，解析 fMP4 `tfdt` 与 MPEG-TS PTS，对 MSE fragment 排序去重，并检测 DRM/EME。

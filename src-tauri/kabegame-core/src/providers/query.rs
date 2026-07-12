@@ -344,11 +344,11 @@ pub fn image_metadata_full_at(image_id: &str) -> Result<Option<ImageMetadataFull
     let Some(id) = json_i64(row, "id") else {
         return Ok(None);
     };
-    let version = json_i64(row, "version").unwrap_or_default().max(0) as u32;
+    let plugin_version = json_i64(row, "plugin_version").unwrap_or_default().max(0) as u32;
     Ok(Some(ImageMetadataFull {
         id,
         data: parse_image_metadata_json(json_string(row, "data")),
-        version,
+        plugin_version,
         plugin_id: json_string(row, "plugin_id").unwrap_or_default(),
     }))
 }
@@ -489,7 +489,7 @@ pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, 
 
 /// JSON 行 → ImageInfo (按 gallery_route fields 的 alias 契约读列)。
 /// alias 名硬契约: id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at,
-/// metadata_id, metadata_version, thumbnail_path, hash, is_favorite, is_hidden, width, height, display_name,
+/// metadata_id, plugin_version, thumbnail_path, hash, is_favorite, is_hidden, width, height, display_name,
 /// media_type, last_set_wallpaper_at, size。
 fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
     let obj = row.as_object().ok_or("executor row not a JSON object")?;
@@ -512,7 +512,7 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
             .map(|t| t as u64)
             .unwrap_or(0),
         metadata_id: i("metadata_id"),
-        metadata_version: i("metadata_version")
+        plugin_version: i("plugin_version")
             .filter(|&v| v >= 0)
             .map(|v| v as u32)
             .unwrap_or(0),
@@ -619,11 +619,17 @@ mod tests {
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
-                parent_id TEXT
+                parent_id TEXT,
+                type TEXT NOT NULL DEFAULT 'normal',
+                sync_folder TEXT,
+                folder_status TEXT
             );
-            INSERT INTO albums VALUES
-                ('album-a', 'Album A', 1, NULL),
-                ('album-b', 'Album B', 2, NULL);
+            INSERT INTO albums (id, name, created_at, parent_id) VALUES
+                ('album-a', '星穹铁道', 1, NULL),
+                ('album-b', 'Album B', 2, NULL),
+                ('album-firefly', '萤', 3, 'album-a'),
+                ('album-march', '三月七', 4, 'album-a'),
+                ('album-secret', '秘密', 5, 'album-firefly');
             "#,
         )
         .unwrap();
@@ -759,7 +765,28 @@ mod tests {
         assert!(rows.iter().all(|row| row.get("id").is_some()));
 
         let albums = query_fetch_with_runtime(&runtime, "albums://all").unwrap();
-        assert_eq!(albums.len(), 2);
+        assert_eq!(albums.len(), 5);
         assert!(albums.iter().all(|row| row.get("name").is_some()));
+    }
+
+    #[test]
+    fn albums_by_sub_tree_fetches_direct_children() {
+        let runtime = build_runtime();
+
+        let root = query_fetch_with_runtime(&runtime, "albums://by_sub_tree").unwrap();
+        assert_eq!(root.len(), 2);
+        assert!(root.iter().any(|row| row["name"] == "星穹铁道"));
+
+        let children = query_fetch_with_runtime(&runtime, "albums://by_sub_tree/星穹铁道").unwrap();
+        assert_eq!(children.len(), 2);
+        assert!(children
+            .iter()
+            .any(|row| row["name"] == "萤" && row["id"] == "album-firefly"));
+        assert!(children.iter().any(|row| row["name"] == "三月七"));
+
+        let grandchildren =
+            query_fetch_with_runtime(&runtime, "albums://by_sub_tree/星穹铁道/萤").unwrap();
+        assert_eq!(grandchildren.len(), 1);
+        assert_eq!(grandchildren[0]["name"], "秘密");
     }
 }

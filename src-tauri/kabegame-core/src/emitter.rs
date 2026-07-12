@@ -96,9 +96,7 @@ impl GlobalEmitter {
 
     /// 发送下载条目移除事件（后端 wait 完成后调用，前端据此从活跃列表删除）
     pub fn emit_download_removed(&self, id: u64) {
-        let event = std::sync::Arc::new(DaemonEvent::DownloadRemoved {
-            id,
-        });
+        let event = std::sync::Arc::new(DaemonEvent::DownloadRemoved { id });
         EventBroadcaster::global().broadcast(event);
     }
 
@@ -461,6 +459,11 @@ pub struct GlobalEmitter;
 
 #[cfg(not(feature = "ipc-server"))]
 impl GlobalEmitter {
+    /// No-op 模式无需建立 IPC 单例，保留统一初始化接口供 standalone 调用方复用。
+    pub fn init_global() -> Result<(), String> {
+        Ok(())
+    }
+
     /// 获取全局 emitter 引用（No-op）
     pub fn global() -> &'static GlobalEmitter {
         static INSTANCE: GlobalEmitter = GlobalEmitter;

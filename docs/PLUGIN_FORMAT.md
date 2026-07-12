@@ -10,17 +10,17 @@
 ### 文件结构（ZIP 内部）
 ```
 plugin-name.kgpg
-    - package.json           # v3 自描述清单（推荐）
-    - crawl.rhai / crawl.js  # package.json main 指向的脚本
-    - doc_root/              # 文档目录（可选）
-        └── doc.md           # 插件文档，给用户查看。使用标准 Markdown 渲染（GFM），文档中的根目录为 doc_root，路径解析只允许在 doc_root 之下
-    - configs/               # 推荐配置
-    - metadata_migrations/    # 图片 metadata 迁移脚本（可选）
-        └── v{N}.rhai         # N 为从 1 开始的连续自然数版本
-    - templates/             # 插件提供模板
+    - package.json             # v3 自描述清单（唯一支持的格式）
+    - dist/main.js / crawl.js  # package.json main 指向的脚本（v8 打包产物 / webview 脚本）
+    - doc_root/                # 文档目录（可选）
+        └── doc.md             # 插件文档，给用户查看。使用标准 Markdown 渲染（GFM），文档中的根目录为 doc_root，路径解析只允许在 doc_root 之下
+    - configs/                 # 推荐配置
+    - metadata_migrations/     # 图片 metadata 迁移脚本（可选）
+        └── migrate.js         # kbMetadataMigration 指向的单一脚本（ES module，export migrate）
+    - templates/               # 插件提供模板
 ```
 
-legacy v2 包仍可包含 `manifest.json`、`config.json`、`crawl.rhai` / `crawl.js`、`icon.png`。新插件应使用 v3 `package.json`。
+只支持 v3 `package.json` 格式；旧版 manifest.json (v2) 与 Rhai 后端均已停止支持，加载/打包时报可读错误。
 
 ### templates/description.ejs（图片详情 HTML）
 
@@ -56,7 +56,7 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
   },
   "kbRecommendedConfigs": ["configs/every-day.json"],
   "kbPathQLProviders": ["providers/entry_provider.json5"],
-  "kbMetadataMigrations": ["metadata_migrations/v1.rhai"],
+  "kbMetadataMigration": "metadata_migrations/migrate.js",
   "kbDescriptionTemplate": "templates/description.ejs"
 }
 ```
@@ -64,21 +64,21 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `name` | 是 | 插件包名，必须等于插件目录名和输出 `.kgpg` stem。内置插件作为 `src-crawler-plugins` workspace 子包管理，因此这里也是 monorepo 包名。 |
-| `version` | 是 | 插件 semver。 |
+| `version` | 是 | 插件 semver，必须是 `a.b.c` 且每段 ≤255（应用将其 packed 编码为 u32 记录到 `image_metadata.plugin_version` 并做迁移门控）。 |
 | `private` | 否 | 内置插件建议为 `true`，避免作为 npm 包发布。 |
 | `name.*` / `description.*` | 否 | 扁平 i18n 键。`name` 自身已被包名占用；本地化展示名使用 `name.zh`、`name.en` 等。`description` 可作为默认描述。 |
 | `author` | 否 | 字符串或 `{ "name": "..." }`。 |
-| `kbPackageVersion` | 是 | 当前为 `3`。缺失或小于 3 时按 legacy v2 处理。 |
+| `kbPackageVersion` | 是 | 必须为 `3`。缺失或小于 3（旧版 manifest.json / v2）会在加载/打包时报可读错误。 |
 | `engines.kabegame` | 是 | 最低 Kabegame 版本，只支持 `>= X.Y.Z`，打包头部与商店索引会派生为 `minAppVersion`。 |
-| `main` | 是 | 插件根相对脚本路径。JS 插件用 `crawl.js`，Rhai 插件用 `crawl.rhai`。 |
-| `kbBackend` | 是 | 脚本后端：`rhai`、`v8`、`webview`。JS 插件默认应显式写 `v8`；只有确实需要浏览器窗口/DOM/Cookie 容器时才使用 `webview`。 |
+| `main` | 是 | 插件根相对脚本路径。v8 插件用打包产物（如 `dist/main.js`），webview 插件用 `crawl.js`。 |
+| `kbBackend` | 是 | 脚本后端：`v8`、`webview`。JS 插件默认应显式写 `v8`；只有确实需要浏览器窗口/DOM/Cookie 容器时才使用 `webview`。（`rhai` 已停止支持。） |
 | `kbBaseUrl` | 否 | 旧 `config.json.baseUrl`。 |
 | `kbConfig` | 否 | 旧 `config.json.var` 数组。 |
 | `kbIcon` | 否 | 插件图标路径，通常为 `icon.png`。打包时会写入 KGPG v2 固定头部。 |
 | `kbDoc` | 否 | 文档映射；`default` 对应默认文档，其他键为语言码。值为插件根相对路径，如 `doc_root/doc.ja.md`。 |
 | `kbRecommendedConfigs` | 否 | 推荐运行配置文件路径数组。 |
 | `kbPathQLProviders` | 否 | Provider DSL 文件路径数组。 |
-| `kbMetadataMigrations` | 否 | metadata 迁移脚本路径数组，必须从 `v1.rhai` 开始连续升序。 |
+| `kbMetadataMigration` | 否 | 单一 metadata 迁移脚本路径（`.js`，ES module，`export function migrate(input)`，需幂等一步到位；详见 cocs/crawler/METADATA_MIGRATION.md）。旧 `kbMetadataMigrations` 数组已停止支持：打包报可读错误，加载不解析。 |
 | `kbDescriptionTemplate` | 否 | 图片详情 EJS 模板路径。 |
 
 所有 `kb*` 路径字段都按插件根相对解析，禁止绝对路径、盘符和 `..`。`kbDoc` 中 Markdown 引用的本地图片会按文档所在目录解析；仅打包引用到且存在的图片资源，并受单文件 2 MB、总量 10 MB 的加载限制。
@@ -142,8 +142,8 @@ v2 清单继续兼容，但仅用于旧插件。新插件不要再新增 `manife
 
 使用 **ZIP 格式**，文件扩展名 `.kgpg`，内部结构：
 - `package.json` - v3 必需，包含插件元数据、配置、资源路径和后端声明
-- `crawl.rhai` / `crawl.js` - `main` 指向的爬取脚本
-- `metadata_migrations/v{N}.rhai` - 可选，图片 metadata 迁移脚本；`N` 为从 1 开始的连续自然数版本
+- `dist/main.js` / `crawl.js` - `main` 指向的爬取脚本（v8 打包产物 / webview 脚本）
+- `metadata_migrations/migrate.js` - 可选，`kbMetadataMigration` 指向的单一图片 metadata 迁移脚本（ES module，export migrate）
 - `doc_root/doc.md` - 可选，用户文档（基于标准 Markdown/GFM 渲染，图片路径仅允许 doc_root 内相对路径）
 - `doc_root/<image>` - 可选，文档引用的图片资源（jpg/jpeg/png/gif/webp/bmp）
 
@@ -151,8 +151,7 @@ v2 清单继续兼容，但仅用于旧插件。新插件不要再新增 `manife
 
 ### kbConfig 与变量在脚本中的访问
 
-- **Rhai 脚本（crawl.rhai）**：`kbConfig` 中定义的变量会直接注入为脚本内的同名变量，详见 [RHAI_API.md](./RHAI_API.md)。
-- **JS 脚本（crawl.js，V8 后端）**：脚本必须导出 `async function crawl(common, custom)`；`kbConfig` 中定义的变量通过第二个参数 `custom` 访问，键为每条变量定义的 `key`。V8 脚本是自包含 ES module，不依赖浏览器 DOM/WebView 环境。例如：
+- **JS 脚本（V8 后端）**：脚本必须导出 `async function crawl(common, custom)`；`kbConfig` 中定义的变量通过第二个参数 `custom` 访问，键为每条变量定义的 `key`。V8 脚本是自包含 ES module，不依赖浏览器 DOM/WebView 环境。宿主 API 详见 [cocs/crawler/V8_RUNTIME.md](../cocs/crawler/V8_RUNTIME.md)。例如：
 
   ```js
   // kbConfig 中有 key 为 startPage、endPage、tag 的变量时：

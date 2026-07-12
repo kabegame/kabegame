@@ -22,7 +22,7 @@ export interface ImageInfo {
   /** 外键 `image_metadata.id`；列表常带此字段以合并懒加载请求 */
   metadataId?: number;
   /** `image_metadata.version`；用于 metadata 缓存失效 */
-  metadataVersion?: number;
+  pluginVersion?: number;
   hash?: string;
   order?: number;
   width?: number;

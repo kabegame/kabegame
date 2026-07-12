@@ -50,27 +50,17 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn normalize_metadata_version(metadata_version: Option<i64>) -> Result<u32, String> {
-    match metadata_version {
-        None => Ok(0),
-        Some(v) if v >= 0 => {
-            u32::try_from(v).map_err(|_| "metadata_version is too large".to_string())
-        }
-        Some(_) => Err("metadata_version must be >= 0".to_string()),
-    }
-}
-
+/// `plugin_version` 为写入时运行插件的 packed 版本（应用维护，插件不可传入）。
 fn insert_metadata(
     plugin_id: &str,
     metadata: Option<Value>,
-    metadata_version: Option<i64>,
+    plugin_version: u32,
 ) -> Result<Option<i64>, String> {
-    let metadata_version = normalize_metadata_version(metadata_version)?;
     if let Some(value) = metadata {
         Ok(Some(Storage::global().insert_image_metadata_row(
             &value,
             plugin_id,
-            metadata_version,
+            plugin_version,
         )?))
     } else {
         Ok(None)
@@ -148,6 +138,8 @@ pub struct MediaStreamInit {
 struct MediaReceiveCtx {
     images_dir: PathBuf,
     plugin_id: String,
+    /// 运行中插件的 packed 版本；surf 窗口（无插件语境）恒为 0。
+    plugin_version: u32,
     task_id: String,
     surf_record_id: Option<String>,
     output_album_id: Option<String>,
@@ -180,6 +172,7 @@ async fn media_ctx_from_label(
         return Ok(MediaReceiveCtx {
             images_dir: PathBuf::from(&ctx.images_dir),
             plugin_id: ctx.plugin_id,
+            plugin_version: ctx.plugin_version,
             task_id,
             surf_record_id: None,
             output_album_id: ctx.output_album_id,
@@ -194,6 +187,7 @@ async fn media_ctx_from_label(
         return Ok(MediaReceiveCtx {
             images_dir: kabegame_core::crawler::downloader::get_default_images_dir(),
             plugin_id: host,
+            plugin_version: 0,
             task_id: String::new(),
             surf_record_id: Some(record.id),
             output_album_id: None,
@@ -501,7 +495,7 @@ pub async fn crawl_add_progress<R: Runtime>(
     Ok(())
 }
 
-/// WebView `ctx.downloadImage(url, opts)`：`opts.name` / `opts.metadata` 可单独或同时传入（与 Rhai `download_image(url, #{ ... })` 语义一致）。
+/// WebView `ctx.downloadImage(url, opts)`：`opts.name` / `opts.metadata` 可单独或同时传入。
 /// raw metadata 在入口处归一化为 `metadata_id`，下载队列只传 id。
 #[tauri::command]
 pub async fn crawl_download_image<R: Runtime>(
@@ -511,7 +505,6 @@ pub async fn crawl_download_image<R: Runtime>(
     headers: Option<HashMap<String, String>>,
     name: Option<String>,
     metadata: Option<Value>,
-    metadata_version: Option<i64>,
     source_url: Option<String>,
 ) -> Result<(), String> {
     let (_, session) = session_of(&webview).await?;
@@ -529,7 +522,7 @@ pub async fn crawl_download_image<R: Runtime>(
             request_headers.insert("Referer".to_string(), page_url.clone());
         }
     }
-    let metadata_id = insert_metadata(&ctx.plugin_id, metadata, metadata_version)?;
+    let metadata_id = insert_metadata(&ctx.plugin_id, metadata, ctx.plugin_version)?;
 
     let merged_headers = merge_task_headers(&ctx.task_id, Some(request_headers), None)?;
     std::fs::create_dir_all(&images_dir)
@@ -581,7 +574,6 @@ pub async fn surf_download_image<R: Runtime>(
     name: Option<String>,
     headers: Option<HashMap<String, String>>,
     metadata: Option<Value>,
-    metadata_version: Option<i64>,
     source_url: Option<String>,
 ) -> Result<(), String> {
     let ctx = media_ctx_from_label(webview.label(), true).await?;
@@ -601,7 +593,7 @@ pub async fn surf_download_image<R: Runtime>(
     )
     .map_err(|e| format!("Failed to compute native download destination: {}", e))?;
 
-    let metadata_id = insert_metadata(&ctx.plugin_id, metadata, metadata_version)?;
+    let metadata_id = insert_metadata(&ctx.plugin_id, metadata, ctx.plugin_version)?;
     let mut http_headers = ctx.http_headers.clone();
     if let Some(headers) = headers {
         http_headers.extend(headers);
@@ -648,7 +640,6 @@ pub async fn crawl_media_begin<R: Runtime>(
     streams: Vec<MediaStreamInit>,
     name: Option<String>,
     metadata: Option<Value>,
-    metadata_version: Option<i64>,
     page_url: Option<String>,
 ) -> Result<u64, String> {
     let ctx = media_ctx_from_label(webview.label(), true).await?;
@@ -672,7 +663,7 @@ pub async fn crawl_media_begin<R: Runtime>(
         compute_media_upload_paths(&ctx.images_dir, &parsed, &streams, custom_name.as_deref())?;
     let download_id = next_download_id();
     let download_start_time = now_ms();
-    let metadata_id = insert_metadata(&ctx.plugin_id, metadata, metadata_version)?;
+    let metadata_id = insert_metadata(&ctx.plugin_id, metadata, ctx.plugin_version)?;
 
     media_upload::begin(
         download_id,

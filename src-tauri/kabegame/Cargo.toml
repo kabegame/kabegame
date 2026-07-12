@@ -35,7 +35,7 @@ tauri-plugin-opener = { version = "2", optional = true }
 
 # 桌面端启用 IPC 功能，移动端禁用
 [target.'cfg(not(target_os = "android"))'.dependencies]
-kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "ipc-client"] }
+kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "ipc-client", "plugin-runtime"] }
 governor = "0.7"
 axum = { version = "0.8", features = ["multipart"] }
 futures-util = "0.3"
@@ -47,7 +47,7 @@ tower-http = { version = "0.6", features = ["fs", "cors"] }
 include_dir = "0.7"
 
 [target.'cfg(target_os = "android")'.dependencies]
-kabegame-core = {workspace = true, default-features = false, features = ["ipc-server"] }
+kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "plugin-runtime"] }
 reqwest = { version = "0.11", features = ["stream", "rustls-tls"] }
 tauri-plugin-picker = { workspace = true, optional = true }
 tauri-plugin-share = { workspace = true, optional = true }
@@ -56,7 +56,7 @@ tauri-plugin-wallpaper = { workspace = true, optional = true }
 tauri-plugin-task-notification = { workspace = true, optional = true }
 tauri-plugin-android-battery-optimization = { version = "0.1.4", optional = true }
 tauri = { version = "2.11.2", features = ["dbus", "common-controls-v6", "x11", "dynamic-acl", "compression",
-  "tray-icon", "devtools", "protocol-asset", "image-png", "unstable", "macos-private-api",
+  "tray-icon", "devtools", "protocol-asset", "image-png", "unstable",
 ], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -84,7 +84,7 @@ tauri-runtime-cef = { path = "../tauri-runtime-cef", optional = true }
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 tauri = { version = "2.11.2", default-features = false, features = [
   "tray-icon", "devtools", "protocol-asset", "image-png", "unstable",
-  "compression", "common-controls-v6", "dynamic-acl", "x11", "dbus", "macos-private-api",
+  "compression", "common-controls-v6", "dynamic-acl", "x11", "dbus",
 ], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

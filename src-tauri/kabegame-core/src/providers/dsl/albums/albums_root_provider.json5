@@ -18,6 +18,10 @@
             "provider": "albums_id_provider",
             "properties": { "album_id": "${capture[1]}" }
         },
-        "byType": { "provider": "albums_by_type_router" }
+        "byType": { "provider": "albums_by_type_router" },
+        "by_sub_tree": {
+            "provider": "albums_by_sub_tree_provider",
+            "properties": { "parent_id": "" }
+        }
     }
 }

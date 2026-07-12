@@ -33,11 +33,13 @@
 ### Changed
 - **界面**: webview现在用自研CEF运行时，Linux 上被 WebkitGTK 折磨的时代已经过去啦（代价是安装包膨胀100MB左右），并且还可以定制运行时和一致化webview行为。
 - **VD**: Dokan依赖、fuse依赖不再硬要求，在用户打开虚拟盘的时候要求先安装该依赖
+- **CLI**: 改为无需主程序/daemon 的自包含工具，移除 `plugin run`、`vd`、`ipc-status`，新增 `data import-image/query`；`--album /父/子` 通过 `albums://by_sub_tree` 解析现有画册。
 
 ### Removed
 - **Light**: 自研 CEF 运行时使得 light 模式含义变为不包含 webview，但那样会影响程序行为并添加说明负担，因此去掉light模式。
 - **CLI Bundling**: Standard 模式不再带kabegame-cli，cli改为单独发布。
 - **毛玻璃**：由于CEF限制，毛玻璃侧边栏特效去掉，win11保留标题栏毛玻璃特效。
+- **Rhai**: Rhai 插件后端被移除。仅剩v8和webview后端
 
 ## [4.2.1]
 ### Fixed

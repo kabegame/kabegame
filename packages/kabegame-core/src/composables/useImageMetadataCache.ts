@@ -3,10 +3,10 @@ import { invoke } from "../api";
 import { IS_WEB } from "../env";
 import { imageMetadataCacheDb } from "../cache/imageMetadataCache";
 
-/** 按 imageId + metadataVersion 解析插件 metadata（全局 LRU + IndexedDB 缓存，最多 1024 条） */
+/** 按 imageId + pluginVersion 解析插件 metadata（全局 LRU + IndexedDB 缓存，最多 1024 条） */
 export type ImageMetadataResolver = (
   imageId: string,
-  metadataVersion?: number | null,
+  pluginVersion?: number | null,
 ) => Promise<unknown | null>;
 
 export const imageMetadataResolverKey: InjectionKey<ImageMetadataResolver> =
@@ -14,14 +14,14 @@ export const imageMetadataResolverKey: InjectionKey<ImageMetadataResolver> =
 
 const MAX_CACHE_SIZE = 1024;
 
-function normalizeMetadataVersion(version: number | null | undefined): number {
+function normalizePluginVersion(version: number | null | undefined): number {
   return typeof version === "number" && Number.isFinite(version) && version >= 0
     ? Math.floor(version)
     : 0;
 }
 
-function cacheKeyFor(imageId: string, metadataVersion?: number | null): string {
-  return `${imageId}@v${normalizeMetadataVersion(metadataVersion)}`;
+function cacheKeyFor(imageId: string, pluginVersion?: number | null): string {
+  return `${imageId}@v${normalizePluginVersion(pluginVersion)}`;
 }
 
 class LruMap {
@@ -85,11 +85,11 @@ function ensureInit(): Promise<void> {
 export function useProvideImageMetadataCache() {
   async function resolveMetadata(
     imageId: string,
-    metadataVersion?: number | null,
+    pluginVersion?: number | null,
   ): Promise<unknown | null> {
     await ensureInit();
 
-    const key = cacheKeyFor(imageId, metadataVersion);
+    const key = cacheKeyFor(imageId, pluginVersion);
 
     // 1. 内存 LRU 命中（初始化后与 Dexie 同步，命中内存即命中持久化层）
     if (mem.has(key)) {

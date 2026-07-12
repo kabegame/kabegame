@@ -1,0 +1,24 @@
+{
+    "namespace": "kabegame",
+    "name": "albums_by_sub_tree_provider",
+    "properties": {
+        // 空字符串表示树根；进入某个画册后改为该画册 id。
+        "parent_id": { "type": "string", "default": "", "optional": false }
+    },
+    // fetch 当前路径时返回该节点的直接子画册。递归进入子节点时必须清掉父节点条件，
+    // 否则会形成 parent_id = A AND parent_id = B 的空集。
+    "query": {
+        "where_clear": ["albums.parent_id"],
+        "where": "((${properties.parent_id} = '' AND albums.parent_id IS NULL) OR albums.parent_id = ${properties.parent_id})",
+        "order": [{ "sql": "albums.created_at", "order": "asc" }]
+    },
+    "list": {
+        "${album.name}": {
+            "sql": "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status FROM albums WHERE ((${properties.parent_id} = '' AND parent_id IS NULL) OR parent_id = ${properties.parent_id}) ORDER BY created_at ASC",
+            "data_var": "album",
+            "provider": "albums_by_sub_tree_provider",
+            "properties": { "parent_id": "${album.id}" },
+            "meta": "${album}"
+        }
+    }
+}

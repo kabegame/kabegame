@@ -21,6 +21,8 @@ pub struct KabegameOpState {
     pub download_queue: Arc<crate::crawler::DownloadQueue>,
     pub images_dir: PathBuf,
     pub plugin_id: String,
+    /// 运行中插件的 packed 版本（每字节一段），metadata 写入盖章用；应用维护，插件不可读写。
+    pub plugin_version: u32,
     pub task_id: String,
     pub output_album_id: Option<String>,
     pub headers: HashMap<String, String>,
@@ -278,12 +280,13 @@ pub async fn op_kabegame_download_image(
     #[string] url: String,
     #[serde] opts: Option<JsonValue>,
 ) -> Result<(), JsErrorBox> {
-    let (download_queue, images_dir, plugin_id, task_id, output_album_id, headers, cancel) =
+    let (download_queue, images_dir, plugin_id, plugin_version, task_id, output_album_id, headers, cancel) =
         state_snapshot(&state, |s| {
             (
                 s.download_queue.clone(),
                 s.images_dir.clone(),
                 s.plugin_id.clone(),
+                s.plugin_version,
                 s.task_id.clone(),
                 s.output_album_id.clone(),
                 s.headers.clone(),
@@ -292,7 +295,7 @@ pub async fn op_kabegame_download_image(
         });
     check_cancelled(&cancel)?;
 
-    let (custom_name, metadata_id, post_url) = parse_download_opts(opts, &plugin_id)?;
+    let (custom_name, metadata_id, post_url) = parse_download_opts(opts, &plugin_id, plugin_version)?;
     let parsed_url =
         Url::parse(&url).map_err(|e| JsErrorBox::generic(format!("Invalid URL: {e}")))?;
     let download_start_time = now_ms();
@@ -320,12 +323,15 @@ pub async fn op_kabegame_download_image(
 pub fn op_kabegame_create_image_metadata(
     state: &mut OpState,
     #[serde] value: JsonValue,
-    #[serde] opts: Option<JsonValue>,
+    #[serde] _opts: Option<JsonValue>,
 ) -> Result<i64, JsErrorBox> {
-    let plugin_id = state.borrow::<KabegameOpState>().plugin_id.clone();
-    let version = parse_create_image_metadata_version(opts)?;
+    // plugin_version 由应用盖章（图片下载时的插件版本），插件不可传入；旧 opts.version 静默忽略。
+    let (plugin_id, plugin_version) = {
+        let s = state.borrow::<KabegameOpState>();
+        (s.plugin_id.clone(), s.plugin_version)
+    };
     Storage::global()
-        .insert_image_metadata_row(&value, &plugin_id, version)
+        .insert_image_metadata_row(&value, &plugin_id, plugin_version)
         .map_err(|e| JsErrorBox::generic(format!("create_image_metadata: {e}")))
 }
 
@@ -392,6 +398,7 @@ async fn resolve_url_for_task_async(task_id: &str, url: &str) -> Result<String, 
 fn parse_download_opts(
     opts: Option<JsonValue>,
     plugin_id: &str,
+    plugin_version: u32,
 ) -> Result<(Option<String>, Option<i64>, Option<String>), JsErrorBox> {
     let Some(opts) = opts else {
         return Ok((None, None, None));
@@ -404,13 +411,13 @@ fn parse_download_opts(
     let post_url = optional_string(opts, "url", "download_image")?;
     let metadata_id = optional_i64(opts, "metadata_id", "download_image")?;
     let metadata = opts.get("metadata").filter(|v| !v.is_null()).cloned();
-    let metadata_version = optional_u32(opts, "metadata_version", "download_image")?.unwrap_or(0);
+    // 版本由应用盖章（图片下载时的插件版本），插件不可传入；旧 `metadata_version` 键静默忽略。
     let metadata_id = if let Some(id) = metadata_id {
         Some(id)
     } else if let Some(value) = metadata {
         Some(
             Storage::global()
-                .insert_image_metadata_row(&value, plugin_id, metadata_version)
+                .insert_image_metadata_row(&value, plugin_id, plugin_version)
                 .map_err(JsErrorBox::generic)?,
         )
     } else {
@@ -468,16 +475,6 @@ fn parse_fetch_init(
     };
 
     Ok((method, headers, body))
-}
-
-fn parse_create_image_metadata_version(opts: Option<JsonValue>) -> Result<u32, JsErrorBox> {
-    let Some(opts) = opts else {
-        return Ok(0);
-    };
-    let opts = opts
-        .as_object()
-        .ok_or_else(|| JsErrorBox::generic("create_image_metadata opts must be an object"))?;
-    optional_u32(opts, "version", "create_image_metadata").map(|v| v.unwrap_or(0))
 }
 
 fn optional_string(

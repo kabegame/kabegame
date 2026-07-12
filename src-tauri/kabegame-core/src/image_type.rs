@@ -171,7 +171,7 @@ pub fn mime_type_from_bytes(bytes: &[u8]) -> Option<String> {
     }
 }
 
-/// 判断 URL 是否以支持的图片扩展名结尾（用于 Rhai `is_image_url` 等）。
+/// 判断 URL 是否以支持的图片扩展名结尾。
 pub fn url_has_image_extension(url: &str) -> bool {
     let url_lower = url.to_lowercase();
     if let Some(dot) = url_lower.rfind('.') {

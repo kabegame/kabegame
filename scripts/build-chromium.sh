@@ -26,6 +26,13 @@
 #
 set -euo pipefail
 
+# 仓库内 third/cef 是 Kabegame 的 CEF fork，也是所有 CEF 构建的源码入口。
+# automate-git.py 会从这里创建 cefbuild/chromium_git/cef 的本地 clone，避免构建
+# 过程中回退到官方 CEF checkout 而漏掉 Kabegame patch。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CEF_SOURCE="${CEF_SOURCE:-$REPO_ROOT/third/cef}"
+
 # ---------------------------------------------------------------------------
 # 可调参数
 # ---------------------------------------------------------------------------
@@ -154,7 +161,35 @@ check_build_dir() {
 }
 
 # ---------------------------------------------------------------------------
-# 3. 环境变量
+# 3. 准备仓库内 CEF fork 引用
+# ---------------------------------------------------------------------------
+prepare_cef_reference() {
+  [[ -d "$CEF_SOURCE" ]] || die "CEF 源码不存在: $CEF_SOURCE（请先 git submodule update --init third/cef）"
+  git -C "$CEF_SOURCE" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
+    die "third/cef 不是有效的 Git checkout: $CEF_SOURCE"
+
+  CEF_SOURCE_COMMIT="$(git -C "$CEF_SOURCE" rev-parse HEAD)"
+  if is_windows; then
+    # automate-git.py 会把 --url 拼进 git 命令；使用 mixed path 避免反斜杠
+    # 在 shell 中被当成转义字符。
+    CEF_SOURCE_URL="$(cygpath -m "$CEF_SOURCE")"
+  else
+    CEF_SOURCE_URL="$CEF_SOURCE"
+  fi
+
+  # 增量构建可能已有官方 CEF checkout。把它的 origin 校正到 third/cef，
+  # automate-git.py 随后会 fetch 当前提交并在需要时重拷贝 chromium/src/cef。
+  local checkout="$CEFBUILD/chromium_git/cef"
+  if git -C "$checkout" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$checkout" remote set-url origin "$CEF_SOURCE_URL"
+  fi
+
+  log "CEF 源码引用: $CEF_SOURCE"
+  log "CEF 源码提交: $CEF_SOURCE_COMMIT"
+}
+
+# ---------------------------------------------------------------------------
+# 4. 环境变量
 # ---------------------------------------------------------------------------
 setup_env() {
   mkdir -p "$CEFBUILD"/{tmp,cache,depot_tools,automate,shim}
@@ -209,7 +244,7 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# 4. 引导 depot_tools + automate-git.py
+# 5. 引导 depot_tools + automate-git.py
 # ---------------------------------------------------------------------------
 bootstrap() {
   if [[ ! -x "$CEFBUILD/depot_tools/gclient" && ! -f "$CEFBUILD/depot_tools/gclient.bat" ]]; then
@@ -226,7 +261,7 @@ bootstrap() {
 }
 
 # ---------------------------------------------------------------------------
-# 5. 按 variant 设置 GN_DEFINES + distrib 参数
+# 6. 按 variant 设置 GN_DEFINES + distrib 参数
 # ---------------------------------------------------------------------------
 configure_variant() {
   # 注意:CEF 7827 的 gn_args.py GetRequiredArgs() 硬性要求 optimize_webui=true、
@@ -264,7 +299,7 @@ configure_variant() {
 }
 
 # ---------------------------------------------------------------------------
-# 6. 决定全量 checkout 还是增量重编
+# 7. 决定全量 checkout 还是增量重编
 # ---------------------------------------------------------------------------
 configure_update() {
   local src="$CEFBUILD/chromium_git/chromium/src"
@@ -272,13 +307,13 @@ configure_update() {
     [[ "$CLEAN" == 1 ]] && log "强制全量 checkout (--clean)" || log "首次:全量 checkout(会拉取数十 G,耗时较长)"
     UPDATE_FLAGS=(--force-clean)
   else
-    log "增量:复用已有 checkout,仅重编 + 重新打包"
-    UPDATE_FLAGS=(--no-update --force-build --force-distrib)
+    log "增量:复用 Chromium checkout,同步 third/cef 后重编 + 重新打包"
+    UPDATE_FLAGS=(--no-chromium-update --force-cef-update --force-build --force-distrib)
   fi
 }
 
 # ---------------------------------------------------------------------------
-# 7. 导出 cef-rs 期望的扁平 runtime 目录
+# 8. 导出 cef-rs 期望的扁平 runtime 目录
 # ---------------------------------------------------------------------------
 export_cef_runtime() {
   local distrib="$1"
@@ -340,7 +375,7 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# 8. 跑 automate-git.py
+# 9. 跑 automate-git.py
 # ---------------------------------------------------------------------------
 run_build() {
   local logfile="$CEFBUILD/build-${VARIANT}.log"
@@ -371,6 +406,8 @@ run_build() {
     --download-dir="$(host_path "$download_dir")" \
     --depot-tools-dir="$(host_path "$depot_tools_dir")" \
     --branch="$CEF_BRANCH" \
+    --url="$CEF_SOURCE_URL" \
+    --checkout="$CEF_SOURCE_COMMIT" \
     "$ARCH_FLAG" \
     --no-debug-build \
     --build-target=cefsimple \
@@ -396,6 +433,7 @@ run_build() {
 main() {
   ensure_build_dir
   check_build_dir
+  prepare_cef_reference
   setup_env
   bootstrap
   configure_variant

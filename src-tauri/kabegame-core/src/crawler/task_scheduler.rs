@@ -11,14 +11,10 @@ use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
-use tokio::runtime::Handle;
 use tokio::sync::{mpsc, Mutex, Notify, RwLock};
-use tokio::task::JoinHandle;
 use url::Url;
 
 /// 任务 worker 协程数量上限（与设置「同时运行任务数」1~10 一致；实际并发由 `wait_for_task_slot` 与设置共同限制）。
@@ -69,7 +65,7 @@ pub struct TaskScheduler {
 pub struct PageStackEntry {
     pub url: String,
     pub html: String,
-    /// 最后一次成功 HTTP 响应头（小写名；同名多值用 `, ` 拼接），Rhai `current_headers()` 读取。
+    /// 最后一次成功 HTTP 响应头（小写名；同名多值用 `, ` 拼接），V8 `Kabegame.currentHeaders()` 读取。
     pub headers: HashMap<String, String>,
     pub page_label: String,
     pub page_state: serde_json::Value,
@@ -571,7 +567,7 @@ async fn run_task(
         ),
     );
 
-    // 内置本地导入：不运行 Rhai，直接执行内置例程
+    // 内置本地导入：不运行插件脚本，直接执行内置例程
     if task.plugin_id == "local-import" {
         crate::crawler::local_import::run_builtin_local_import(
             &req.task_id,
@@ -596,7 +592,6 @@ async fn run_task(
     // 从 Plugin 结构读取脚本和变量定义（已在 parse_kgpg 阶段加载到内存）
     #[cfg(not(target_os = "android"))]
     let js_script = plugin.script.js_source().map(|s| s.to_string());
-    let rhai_script = plugin.script.rhai_source().map(|s| s.to_string());
 
     // merged_config：默认值 -> 用户覆盖 -> checkbox 规范化（与 crawl_images 保持一致）
     let user_cfg = task.user_config.clone().unwrap_or_default();
@@ -608,6 +603,7 @@ async fn run_task(
         let context = JsTaskContext {
             task_id: req.task_id.clone(),
             plugin_id: plugin.id.clone(),
+            plugin_version: plugin.version_packed,
             crawl_js,
             merged_config,
             base_url: plugin.base_url.clone(),
@@ -645,13 +641,20 @@ async fn run_task(
         let destroy_result = handler.destroy_task_window(&req.task_id).await;
         let _ = remove_session(&req.task_id).await;
         if let Err(e) = destroy_result {
-            eprintln!("Failed to destroy crawler task window {}: {}", req.task_id, e);
+            eprintln!(
+                "Failed to destroy crawler task window {}: {}",
+                req.task_id, e
+            );
         }
         let completion = completion?;
         return Ok(TaskOutcome::Terminal(completion.status, completion.error));
     }
 
+    #[cfg(not(feature = "plugin-runtime"))]
+    let _ = &download_queue;
+
     // V8 后端：桌面 + Android 均可用（WebView 后端在上方，仅桌面 CEF）。
+    #[cfg(feature = "plugin-runtime")]
     {
         let v8_script = plugin.script.v8_source().map(|s| s.to_string());
         if let Some(crawl_v8) = v8_script {
@@ -660,7 +663,10 @@ async fn run_task(
             let task_id_for_watcher = req.task_id.clone();
             let watcher = tokio::spawn(async move {
                 loop {
-                    if TaskScheduler::global().is_task_canceled(&task_id_for_watcher).await {
+                    if TaskScheduler::global()
+                        .is_task_canceled(&task_id_for_watcher)
+                        .await
+                    {
                         watcher_cancel.cancel();
                         break;
                     }
@@ -697,32 +703,11 @@ async fn run_task(
         }
     }
 
-    let rhai_script = rhai_script
-        .ok_or_else(|| format!("插件 {} 没有提供 crawl.rhai 脚本文件，无法执行", plugin.id))?;
-    let plugin_for_exec = plugin.clone();
-    let task_id = req.task_id.clone();
-    let merged_config_for_exec = merged_config;
-    let output_album_id = task.output_album_id.clone();
-    let http_headers = task.http_headers.clone();
-
-    tokio::task::spawn_blocking(move || {
-        let mut rhai_runtime = crate::plugin::rhai::RhaiCrawlerRuntime::new(download_queue);
-        crate::plugin::rhai::execute_crawler_script_with_runtime(
-            &mut rhai_runtime,
-            &plugin_for_exec,
-            &images_dir,
-            &plugin_for_exec.id,
-            &task_id,
-            &rhai_script,
-            merged_config_for_exec,
-            output_album_id,
-            http_headers,
-        )
-    })
-    .await
-    .map_err(|e| format!("Task worker join error: {}", e))??;
-
-    Ok(TaskOutcome::Completed)
+    // Rhai 后端已移除：走到这里说明插件没有可执行的 v8/webview 脚本。
+    Err(format!(
+        "插件 {} 没有提供可执行的爬虫脚本（需要 v8 或 webview 后端）",
+        plugin.id
+    ))
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -43,8 +43,8 @@
                 "in_need": true
             },
             {
-                "sql": "COALESCE(metadata_im.version, 0)",
-                "as": "metadata_version",
+                "sql": "COALESCE(metadata_im.plugin_version, 0)",
+                "as": "plugin_version",
                 "in_need": true
             },
             {
