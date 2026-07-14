@@ -2,7 +2,7 @@ import { BasePlugin } from "./base-plugin";
 import { BuildSystem } from "../build-system";
 import * as path from "path";
 import { existsSync } from "fs";
-import { ROOT, run, platformExeExt } from "../utils";
+import { ROOT, TARGET_DIR, run, platformExeExt } from "../utils";
 import { Component } from "./component-plugin";
 
 /**
@@ -21,7 +21,10 @@ export class TauriCliPlugin extends BasePlugin {
   // crates/tauri-cli 的 manifest 位于 monorepo 内;构建产物落在 monorepo workspace 的
   // target/(third/tauri/target),而非子 crate 目录下。
   static readonly CLI_DIR = path.join(ROOT, "third", "tauri", "crates", "tauri-cli");
-  static readonly BIN_DIR = path.join(ROOT, "third", "tauri", "target", "release");
+  // fork CLI 与主构建共用统一 target(TARGET_DIR,默认 ROOT/target,或 CARGO_TARGET_DIR)。
+  // 注意:cargo 对 third/tauri 工作区的默认 target 是它自己的 third/tauri/target,
+  // 所以 beforeBuild 必须**显式** `--target-dir TARGET_DIR` 才能落到根 target;BIN_DIR 随之。
+  static readonly BIN_DIR = path.join(TARGET_DIR, "release");
 
   constructor() {
     super(TauriCliPlugin.NAME);
@@ -64,6 +67,9 @@ export class TauriCliPlugin extends BasePlugin {
           "--release",
           "--manifest-path",
           path.join(TauriCliPlugin.CLI_DIR, "Cargo.toml"),
+          // 显式统一到根 target(默认 ROOT/target,或 CARGO_TARGET_DIR),与主构建同处
+          "--target-dir",
+          TARGET_DIR,
         ],
         { cwd: ROOT },
       );

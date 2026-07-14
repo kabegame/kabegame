@@ -3,6 +3,7 @@ import { BasePlugin } from "./base-plugin.js";
 import { Component } from "./component-plugin";
 import {
   ROOT,
+  TARGET_DIR,
   RESOURCES_BIN_DIR,
   RESOURCES_DIR,
   ensureDir,
@@ -460,7 +461,7 @@ export class OSPlugin extends BasePlugin {
   }
 
   private ensureMacOSCefHelper(profile: "debug" | "release"): string {
-    const helper = path.join(ROOT, "target", profile, "kabegame-cef-helper");
+    const helper = path.join(TARGET_DIR, profile, "kabegame-cef-helper");
     if (!fs.existsSync(helper)) {
       throw new Error(
         [
@@ -574,7 +575,7 @@ export class OSPlugin extends BasePlugin {
     if (!OSPlugin.isWindows) return;
     const src = path.join(RESOURCES_BIN_DIR, "dokan2.dll");
     if (!existsFile(src)) return;
-    const dst = path.join(ROOT, "src-tauri", "target", "release", "dokan2.dll");
+    const dst = path.join(TARGET_DIR, "release", "dokan2.dll");
     try {
       fs.copyFileSync(src, dst);
       this.log(

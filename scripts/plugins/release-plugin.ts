@@ -9,7 +9,7 @@ import { BuildSystem } from "../build-system";
 import { Component } from "./component-plugin";
 import { OSPlugin } from "./os-plugin";
 import { ensureDir, readCargoTomlVersion, run } from "../utils";
-import { ROOT } from "../utils";
+import { ROOT, TARGET_DIR } from "../utils";
 
 function walkFiles(dir: string): string[] {
   return glob.sync("**/*", {
@@ -59,10 +59,10 @@ function releaseAssetFileName(params: {
 
 function findBundleDir(root: string): string | null {
   const p = OSPlugin.isAndroid ? path.join(root, "src-tauri", "kabegame", "gen", "android", "app", "build", "outputs", "apk", "universal", "release") 
-    : OSPlugin.isMacOS ? path.join(root, "target", "release", "bundle", "dmg")
-    : OSPlugin.isWindows ? path.join(root, "target", "release", "bundle", "nsis")
-    : OSPlugin.isLinux ? path.join(root, "target", "release", "bundle", "deb")
-    : path.join(root, "target", "release", "bundle");
+    : OSPlugin.isMacOS ? path.join(TARGET_DIR, "release", "bundle", "dmg")
+    : OSPlugin.isWindows ? path.join(TARGET_DIR, "release", "bundle", "nsis")
+    : OSPlugin.isLinux ? path.join(TARGET_DIR, "release", "bundle", "deb")
+    : path.join(TARGET_DIR, "release", "bundle");
   try {
     if (fs.existsSync(p) && fs.statSync(p).isDirectory()) return p;
   } catch {

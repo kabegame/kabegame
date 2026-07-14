@@ -1,0 +1,53 @@
+diff --git a/crates/tauri-utils/src/resources.rs b/crates/tauri-utils/src/resources.rs
+index 6c30b89de..c37807538 100644
+--- a/crates/tauri-utils/src/resources.rs
++++ b/crates/tauri-utils/src/resources.rs
+@@ -255,7 +255,10 @@ impl ResourcePathsIter<'_> {
+         Some(r) => Some(r),
+         None => {
+           self.current_iter = None;
+-          Some(Err(crate::Error::GlobPathNotFound(pattern.clone())))
++          // Pattern matched nothing — skip silently rather than hard-error, so
++          // optional resource globs (e.g. resources/**/*) don't break the build
++          // when the source directory doesn't exist yet.
++          self.next_pattern()
+         }
+       }
+     } else {
+@@ -606,9 +609,8 @@ mod tests {
+         ("../non-existent-dir", "dir"),
+         // exists but not allowed to walk
+         ("../src", "dir2"),
+-        // doesn't exist but it is a glob and will return an error
++        // globs that match nothing are silently skipped (no error)
+         ("../non-existent-glob-dir/*", "glob"),
+-        // exists but only contains directories and will not produce any values
+         ("../src/dir/*", "dir3"),
+       ]),
+       false,
+@@ -616,7 +618,8 @@ mod tests {
+     .iter()
+     .collect::<Vec<_>>();
+ 
+-    assert_eq!(resources.len(), 5);
++    // only the 3 non-glob patterns produce errors; empty-glob patterns are skipped
++    assert_eq!(resources.len(), 3);
+ 
+     assert!(resources.iter().all(|r| r.is_err()));
+ 
+@@ -641,15 +644,5 @@ mod tests {
+         .count(),
+       1
+     );
+-    assert!(resources
+-      .iter()
+-      .any(|r| matches!(r, Err(crate::Error::GlobPathNotFound(_)))));
+-    assert_eq!(
+-      resources
+-        .iter()
+-        .filter(|r| matches!(r, Err(crate::Error::GlobPathNotFound(_))))
+-        .count(),
+-      2
+-    );
+   }
+ }

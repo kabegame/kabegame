@@ -17,6 +17,27 @@ const __dirname = path.dirname(__filename);
 export const ROOT = path.resolve(__dirname, "..");
 export const THIRD_DIR = path.join(ROOT, "third");
 
+/**
+ * Cargo 产物目录(单一来源)。默认 `<workspace>/target`,工作区根即 ROOT。
+ * 若设了 `CARGO_TARGET_DIR`(如 `CARGO_TARGET_DIR=target-22`,用于在 Ubuntu 22.04
+ * 隔离环境做低 glibc 地板的 clean build),则以它为准:
+ *  - 相对值按 ROOT 解析(而非各自 cwd),避免相对 `CARGO_TARGET_DIR` 在不同 cwd 下歧义
+ *    (主构建 spawn cargo 时 cwd=src-tauri,tauri-cli/其它 cwd=ROOT);
+ *  - 归一化成绝对路径后**回写** `process.env.CARGO_TARGET_DIR`,保证所有以 `env: process.env`
+ *    派生的 cargo/tauri 落点与本变量一致。
+ * 构建系统一切「找/搬产物」的路径都应从这里取,不要再硬编码 `path.join(ROOT, "target")`。
+ */
+export const TARGET_DIR = (() => {
+  const env = process.env.CARGO_TARGET_DIR;
+  const dir = env
+    ? path.isAbsolute(env)
+      ? env
+      : path.join(ROOT, env)
+    : path.join(ROOT, "target");
+  if (env) process.env.CARGO_TARGET_DIR = dir; // 归一化回写,统一所有 cargo 派生进程
+  return dir;
+})();
+
 export const DATA_PLUGINS_DIR = path.join(
   ROOT,
   ".kabegame",
@@ -141,7 +162,7 @@ export function stageResourceFile(src: string, dstFileName: string): void {
 
 export function stageResourceBinary(binName: string): void {
   const ext = platformExeExt();
-  const src = path.join(ROOT, "target", "release", `${binName}${ext}`);
+  const src = path.join(TARGET_DIR, "release", `${binName}${ext}`);
   const dst = path.join(RESOURCES_BIN_DIR, `${binName}${ext}`);
   if (!fs.existsSync(src)) {
     console.error(

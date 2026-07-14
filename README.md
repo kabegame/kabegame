@@ -69,42 +69,26 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers�
 
 ## Installation
 
-**Desktop Kabegame** comes in two builds:
-
-| Feature | Standard | Light |
-|---------|----------|-------|
-| **Virtual disk** | ✅ | ❌ |
-| **CLI** | ✅ | ❌ |
-| **Video ingestion** | ✅ (download/import mp4/mov/wmv/webm/mkv) | ❌ (existing videos still play; no new ingestion) |
-| **Use case** | Daily use, CLI/virtual disk needed | Lightweight, basic features only |
-| **Size** | Larger | Smaller |
-| **Trade-off** | Full features, but OS-specific deps (see [Installation](#installation-1)) | Install and go, no virtual disk or CLI |
-
-**Pick the right package for your OS and needs.**
+**Pick the package for your OS.**
 
 **[View the latest GitHub Releases](https://github.com/kabegame/kabegame/releases/latest)**
 
-| OS | Standard | Light |
-|----|----------|-------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.3.2/Kabegame-standard_4.3.2_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.3.2/Kabegame-light_4.3.2_x64-setup.exe) |
-| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v4.3.2/Kabegame-standard_4.3.2_aarch64.dmg) | [dmg](https://github.com/kabegame/kabegame/releases/download/v4.3.2/Kabegame-light_4.3.2_aarch64.dmg) |
-| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v4.3.2/Kabegame-standard_4.3.2_amd64.deb) | [deb](https://github.com/kabegame/kabegame/releases/download/v4.3.2/Kabegame-light_4.3.2_amd64.deb) |
+| OS | Download |
+|----|----------|
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.3.0/Kabegame-standard_4.3.0_x64-setup.exe) |
+| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v4.3.0/Kabegame-standard_4.3.0_aarch64.dmg) |
+| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v4.3.0/Kabegame-standard_4.3.0_amd64.deb) |
 
-- **Android preview** : [apk](https://github.com/kabegame/kabegame/releases/download/v4.3.2/Kabegame_4.3.2_android-preview.apk) on the same releases page.
+- **Android preview** : [apk](https://github.com/kabegame/kabegame/releases/download/v4.3.0/Kabegame_4.3.0_android-preview.apk) on the same releases page.
+- **CLI**: Not bundled with the app — distributed separately. Download `kabegame-cli` for your platform from the same releases page and put it on your PATH (`kabegame-cli --help`).
 
 ## Installation
 
 ### Windows
 
-1. **Download**: Choose Standard or Light `setup.exe`.
+1. **Download**: Get the `setup.exe`.
 2. **Run installer**: Double-click and follow the wizard.
-3. **Virtual disk driver (Standard only)**:
-   - If Dokan is not installed, the installer will prompt for admin rights.
-   - Click "Yes" to install Dokan (required for virtual disk).
-   - Light build does not include virtual disk, so no Dokan.
-4. **CLI (Standard only)**:
-   - `kabegame-cli.exe` is installed in the app directory.
-   - Add that directory to PATH, or use the full path.
+3. That's it!
 
 > **Tip**: The installer supports auto-update; run it again to upgrade.
 
@@ -112,7 +96,7 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers�
 
 > **Minimum**: macOS **11 (Big Sur)** or later.
 
-1. **Download DMG**: Choose Standard or Light `.dmg`.
+1. **Download DMG**: Get the `.dmg`.
 2. **Install**:
    - Open the `.dmg`.
    - Drag `Kabegame.app` to Applications.
@@ -121,57 +105,18 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers�
 > After installing to Applications, you need to bypass Gatekeeper (this is an open-source app and the author can't afford Apple's developer fee).
 >
 > `xattr -d com.apple.quarantine /Applications/Kabegame.app`
-3. **Virtual disk / FUSE (Standard only)**:
+3. **Virtual disk / FUSE**:
    - Requires macFUSE: `brew install macfuse`
    - First mount will prompt for permission.
-4. **CLI (Standard only)**:
-   - Located at: `/Applications/Kabegame.app/Contents/Resources/resources/bin/kabegame-cli`
-   - To use globally:
-   ```bash
-   sudo ln -s "/Applications/Kabegame.app/Contents/Resources/resources/bin/kabegame-cli" /usr/local/bin/kabegame-cli
-   ```
-   - Then: `kabegame-cli --help`
-   - Light build has no CLI.
-
 ### Linux (Debian-based, e.g. Ubuntu)
 
-> **Minimum**: **Ubuntu 24.04** or later.
+> **Minimum**: **Ubuntu 22.04** / Debian 12 or later (glibc ≥ 2.35).
 
-1. **Dependencies (Standard only)**:
-   - Virtual disk needs `fuse3`:
-   ```bash
-   sudo apt update
-   sudo apt install fuse3
-   ```
-   - Light build does not need fuse3.
-
-2. **Install**:
-   ```bash
-   sudo dpkg -i Kabegame-<mode>_<version>_<arch>.deb
-   ```
-   - If dependencies fail: `sudo apt-get install -f`
-
-3. **CLI (Standard only)**:
-   - Installed to `/usr/bin/kabegame-cli`: `kabegame-cli --help`
-   - Light build has no CLI.
-
-4. **KDE Plasma Wallpaper Plugin (optional)**:
-   - **Requires**: KDE Plasma 6; Kabegame must be installed first (hard dependency). See [Kabegame installation](https://github.com/kabegame/kabegame#installation).
-   - Use Kabegame as the system wallpaper in Plasma 6. After installing the plugin deb, go to System Settings → Appearance → Wallpaper and select "Kabegame Wallpaper".
-   - **Install**: Download the `.deb` from [Releases](https://github.com/kabegame/plasma-wallpaper-plugin2/releases) (choose a release with `plasma-v*` tag), then:
-     ```bash
-     sudo dpkg -i kabegame-plasma-wallpaper_*_amd64.deb
-     ```
-     If dependencies fail: `sudo apt-get install -f`
-   - **Restart Plasma Shell** (required after install or update):
-     ```bash
-     kquitapp6 plasmashell 2>/dev/null; kstart6 plasmashell &
-     ```
-     Or log out and log back in.
-   - **Source**: [Plasma Wallpaper Plugin](https://github.com/kabegame/plasma-wallpaper-plugin2)
-
-5. **Rendering backend** (Linux):
-   - Kabegame uses its bundled CEF/Chromium runtime in windowed mode. The current backend runs through X11/ANGLE Vulkan; it does not use WebKitGTK or a software compositing fallback.
+**Install**:
+  ```bash
+  sudo apt install ./Kabegame-standard_<version>_<arch>.deb
+  ```
+  - Or `sudo dpkg -i Kabegame-standard_<version>_<arch>.deb`; if dependencies fail: `sudo apt-get install -f`
 
 ## Main Features
 
@@ -224,8 +169,6 @@ All crawl tasks in one place. Live progress, status, image count. View details, 
 
 ### 💾 Virtual Disk
 
-**<del>Not available in Light build</del>**
-
 On Windows, macOS, and Linux, Kabegame can mount albums as a virtual disk (or virtual folder). Browse albums and images in your file manager like normal folders. Supports layouts by plugin, time, task, or album.
 
 <div align="center">
@@ -236,7 +179,7 @@ On Windows, macOS, and Linux, Kabegame can mount albums as a virtual disk (or vi
 
 ### ⌨️ CLI
 
-Self-contained CLI for creating, packaging, and importing plugins, importing one local image/video at a time, and querying PathQL data. It does not require a running Kabegame process.
+Self-contained CLI for creating, packaging, and importing plugins, importing one local image/video at a time, and querying PathQL data. It does not require a running Kabegame process. Distributed separately from the app — download it from the releases page.
 
 ### More
 
@@ -325,13 +268,13 @@ bun b -c kabegame-cli             # CLI
 bun check -c kabegame                # Vue + cargo
 bun check -c kabegame --skip cargo   # Vue only
 
-# Build FFmpeg libav* libraries (required for desktop standard/light/CLI; not needed for Android)
+# Build FFmpeg libav* libraries (required for desktop standard/CLI; not needed for Android)
 bun run build:ffmpeg             # Needs libx264 (macOS: brew install x264, Ubuntu: libx264-dev)
 ```
 
 - `-c, --component`: `kabegame` | `kabegame-cli`
 - `bun check` requires `-c`
-- `--mode`: `standard` (default, store + virtual disk + CLI) | `light` (store only) | `android` (Android target)
+- `--mode`: `standard` (default, store + virtual disk + CLI) | `android` (Android target)
 - `--data`: `dev` (default for `bun dev` — uses repo-local `.kabegame/debug/data`, `.kabegame/debug/cache`, and `.kabegame/debug/tmp` dirs) | `prod` (default for all other commands — uses system data dirs). Use `--data prod` during `bun dev` to test against your installed Kabegame data.
 - `--skip`: `vue` | `cargo`
 - Kabegame app `bun dev -c kabegame` runs `crawler-plugins:package-to-dev-data` (NX) so packed `.kgpg` files land in `.kabegame/debug/data/plugins-directory` for local testing; release builds do not bundle store plugins (users install from the GitHub store).

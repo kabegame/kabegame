@@ -1,0 +1,20 @@
+diff --git a/crates/tauri-cli/src/interface/rust.rs b/crates/tauri-cli/src/interface/rust.rs
+--- a/crates/tauri-cli/src/interface/rust.rs
++++ b/crates/tauri-cli/src/interface/rust.rs
+@@ -1009,6 +1009,16 @@
+       }
+     }
+ 
++    // kabegame fork: 收集到多个 bin 且声明了 default-run 时,只保留 default-run
++    // (主 binary)进打包清单——辅助 [[bin]] / src/bin/(如 kabegame-cef-helper、
++    // cef-example)不再自动进 /usr/bin 等安装目录,需要随包分发时由应用在
++    // bundle files(deb files / macOS.files)里显式声明。无 default-run 或单
++    // bin 时维持上游原行为。
++    if binaries.len() > 1 && self.package_settings.default_run.is_some() {
++      let default_run = self.package_settings.default_run.as_ref().unwrap();
++      binaries.retain(|bin| bin.name() == default_run);
++    }
++
+     match binaries.len() {
+       0 => binaries.push(BundleBinary::new(
+         self.cargo_package_settings.name.clone(),

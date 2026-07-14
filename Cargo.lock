@@ -4176,7 +4176,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame"
-version = "4.3.2"
+version = "4.3.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -4234,7 +4234,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame-cli"
-version = "4.3.2"
+version = "4.3.0"
 dependencies = [
  "clap",
  "dirs 5.0.1",
@@ -4249,7 +4249,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame-core"
-version = "4.3.2"
+version = "4.3.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -5402,7 +5402,7 @@ checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "pathql-rs"
-version = "4.3.2"
+version = "4.3.0"
 dependencies = [
  "arc-swap",
  "json5",

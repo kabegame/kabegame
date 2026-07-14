@@ -16,7 +16,7 @@ import { TracePlugin } from "./plugins/trace-plugin.js";
 import { Cmd, CmdPlugin } from "./plugins/cmd-plugin.ts";
 import { OSPlugin } from "./plugins/os-plugin.js";
 import { SyncWaterfallHook } from "tapable";
-import { run } from "./utils.js";
+import { run, TARGET_DIR } from "./utils.js";
 import { BasePlugin } from "./plugins/base-plugin.ts";
 import { Skip, SkipPlugin } from "./plugins/skip-plugin.js";
 import { ReleasePlugin } from "./plugins/release-plugin.js";
@@ -297,8 +297,7 @@ export class BuildSystem {
     try {
       if (OSPlugin.isMacOS && component.isMain) {
         const exe = path.join(
-          root,
-          "target",
+          TARGET_DIR,
           this.options.release ? "release" : "debug",
           "kabegame",
         );

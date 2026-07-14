@@ -1,11 +1,11 @@
 # tauri patches
 
-Both kabegame changes to the **tauri monorepo** live here as one numbered series.
+All kabegame changes to the **tauri monorepo** live here as one numbered series.
 `third/tauri` is the pristine upstream `tauri-apps/tauri` submodule; the series patches
-its two consumed sub-crates: `crates/tauri-runtime` (a library, pulled into the app via
-`[patch.crates-io]`) and `crates/tauri-cli` (the forked `cargo-tauri` binary, built by
-`TauriCliPlugin`). One submodule, one series — no separate `kabegame/tauri-cli` fork and
-no vendored `third/tauri-runtime` copy to keep in sync.
+its three consumed sub-crates: `crates/tauri-runtime` and `crates/tauri-utils` (libraries,
+pulled into the app via `[patch.crates-io]`) and `crates/tauri-cli` (the forked
+`cargo-tauri` binary, built by `TauriCliPlugin`). One submodule, one series — no separate
+`kabegame/tauri-cli` fork and no vendored `third/tauri-runtime` copy to keep in sync.
 
 ## Upstream
 
@@ -32,6 +32,19 @@ no vendored `third/tauri-runtime` copy to keep in sync.
   reusing cargo-mobile2's NDK toolchain; no APK/AAB, no frontend.
 - `0005-tauri-cli-android-dev-localhost.patch` — a physical device no longer forces the LAN IP;
   a localhost devUrl is kept so `adb reverse` tunnels HTTP + HMR WebSocket over USB loopback.
+- `0008-tauri-cli-bundle-only-default-run.patch` — when `get_binaries` collects more than one
+  binary and `default-run` is declared, only the `default-run` (main) binary is auto-bundled
+  into install dirs (`/usr/bin`, .app, NSIS). Auxiliary `[[bin]]`/`src/bin/` targets
+  (`kabegame-cef-helper`, `cef-example`) must be shipped explicitly via bundle `files`
+  (deb files / `macOS.files`). Without `default-run` (or with a single bin) upstream
+  behavior is unchanged.
+
+`tauri-utils` (library, consumed via `[patch.crates-io]`):
+
+- `0007-tauri-utils-skip-empty-glob-resources.patch` — empty glob resource patterns (e.g.
+  `resources/**/*` when the `resources/` directory does not exist) are silently skipped
+  instead of failing the build with `GlobPathNotFound`. Allows builds where optional resource
+  directories are absent.
 
 `tauri-runtime` (library, consumed via `[patch.crates-io]`):
 

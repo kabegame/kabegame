@@ -2,6 +2,7 @@
 edition = {workspace = true}
 name = "kabegame"
 version = {workspace = true}
+description = "kabegame - an anime image crawler"
 default-run = "kabegame"
 
 [lib]
