@@ -43,7 +43,8 @@ bun b -c kabegame                    # Build main app only
 bun b -c kabegame --skip cargo       # Vue build only
 bun b -c kabegame --skip vue         # Cargo build only
 bun b --release                  # Copy artifacts to release/
-bun b -c kabegame --mode android     # Build Android APK/AAB
+bun b -c kabegame --mode android     # Build Android APK/AAB (mode-plugin injects --target aarch64 unless
+                                 # --target/-t is passed; gen/android RustPlugin.kt only has arm64 flavors)
 ```
 
 `bun b` on the cargo-only `kabegame-cli` component builds **debug** by default; pass `--release` for a release build. The main app's desktop/android build always goes through `tauri build`, which is release regardless of `--release`.

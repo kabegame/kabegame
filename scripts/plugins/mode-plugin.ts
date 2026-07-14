@@ -84,6 +84,25 @@ export class ModePlugin extends BasePlugin {
       bs.context.mode = modeObj;
       this.mode = modeObj;
       OSPlugin.isAndroid = modeObj.isAndroid;
+      // Android build 默认只出 aarch64:gen/android 的 RustPlugin.kt(ABI 收敛补丁)只创建
+      // universal/arm64 两个 flavor,不带 --target 时 tauri CLI 按 Target::all() 全 4 ABI
+      // 传 -ParchList=arm64,arm,...,gradle 配置期查 mergeArmDebugJniLibFolders 直接失败;
+      // 其它 ABI 也没有自建 rusty_v8/FFmpeg 产物。显式传过 --target/-t 时不注入。
+      // 仅 build 需要:dev 按连接设备选 target,check 固定 aarch64-linux-android。
+      // (options 是浅冻结,args 数组本身可变;run.ts 保证 args 已初始化为数组。)
+      if (modeObj.isAndroid && bs.context.cmd!.isBuild) {
+        const tauriArgs = bs.options.args;
+        const hasTarget = tauriArgs?.some(
+          (a) =>
+            a === "--target" ||
+            a.startsWith("--target=") ||
+            a === "-t" ||
+            a.startsWith("-t="),
+        );
+        if (tauriArgs && !hasTarget) {
+          tauriArgs.push("--target", "aarch64");
+        }
+      }
     });
 
     bs.hooks.prepareEnv.tap(this.name, () => {
