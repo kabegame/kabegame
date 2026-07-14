@@ -10,7 +10,6 @@
     "@element-plus/icons-vue": "^2.3.1",
     "@kabegame/core": "workspace:*",
     "@kabegame/i18n": "workspace:*",
-    "@kabegame/image-type": "workspace:*",
     "@tauri-apps/api": "^2.11",
     "@tauri-apps/plugin-dialog": "^2.0",
     "@tauri-apps/plugin-opener": "^2.0",

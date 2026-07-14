@@ -276,6 +276,9 @@
         @cancel="pageSizePicker.close()"
       />
     </van-popup>
+    <!-- 紧凑模式下 FailedImages 在 fold 菜单里，FailedImagesHeaderButton comp 不渲染，
+         对话框由本组件托管并经 handleAction 打开 -->
+    <FailedImagesDialog ref="failedImagesDialogRef" />
   </Teleport>
 </template>
 
@@ -302,6 +305,7 @@ import { invoke } from "@/api/rpc";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
 import { withGalleryPrefix } from "@/utils/path";
 import SearchInput from "@/components/SearchInput.vue";
+import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
@@ -386,6 +390,7 @@ const failedCountFoldLabel = computed(() => {
   const suffix = n >= 99 ? "99+" : String(n);
   return `${t("header.failedImages")} (${suffix})`;
 });
+const failedImagesDialogRef = ref<InstanceType<typeof FailedImagesDialog> | null>(null);
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 
@@ -1693,7 +1698,10 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
       // 整理由 header 的 OrganizeHeaderControl 处理，此处不会触发（Organize 在 show 中）
       break;
     case HeaderFeatureId.FailedImages:
-      // handled by FailedImagesHeaderButton comp directly
+      // 桌面由 show 区的 FailedImagesHeaderButton comp 直接处理；
+      // 紧凑模式走 fold 菜单 action，打开本组件托管的对话框
+      failedImagesDialogRef.value?.setTaskId(undefined);
+      failedImagesDialogRef.value?.open();
       break;
     case HeaderFeatureId.ToggleShowHidden:
       galleryRouteStore.hide = !galleryRouteStore.hide;

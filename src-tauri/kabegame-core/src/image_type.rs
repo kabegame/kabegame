@@ -1,18 +1,20 @@
 //! 支持的图片扩展名与 MIME 类型，集中定义供后端与前端一致使用。
-//! 后端固定支持常见类型和服务器可处理的现代格式；前端仍可通过 Tauri 命令上报额外 WebView 可解码格式。
+//! WebP/AVIF 固定为浏览器可直接显示；HEIC/HEIF 由后处理生成兼容副本。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::{LazyLock, OnceLock, RwLock};
+use std::sync::OnceLock;
 
-/// 后端内置支持的图片扩展名（小写，不含点号）。前端可通过 set_frontend_supported_image_formats 扩展额外格式。
-const BUILTIN_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp"];
+/// 后端内置支持的图片扩展名（小写，不含点号）。
+const BUILTIN_IMAGE_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "heic", "heif",
+];
 /// 后端内置支持的视频扩展名（小写，不含点号）。
 const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "m4v", "mov", "3gp", "3g2", "mkv", "webm", "wmv", "asf",
 ];
 
-/// 扩展名到 MIME 的映射（含内置 avif，以及前端可能上报的 heic）。
+/// 扩展名到 MIME 的映射。
 const EXT_MIME: &[(&str, &str)] = &[
     ("jpg", "image/jpeg"),
     ("jpeg", "image/jpeg"),
@@ -22,6 +24,7 @@ const EXT_MIME: &[(&str, &str)] = &[
     ("bmp", "image/bmp"),
     ("avif", "image/avif"),
     ("heic", "image/heic"),
+    ("heif", "image/heif"),
     ("mp4", "video/mp4"),
     ("m4v", "video/mp4"),
     ("mov", "video/quicktime"),
@@ -33,38 +36,23 @@ const EXT_MIME: &[(&str, &str)] = &[
     ("mkv", "video/x-matroska"),
 ];
 
-/// 浏览器（Chromium WebView）能直接显示的图片 MIME 集合（不依赖前端上报）。
-/// avif/heic 取决于前端能力，不在此列；调用方可结合 `FRONTEND_EXTENSIONS` 二次放行。
+/// 浏览器（Chromium WebView）能直接显示的图片 MIME 集合。
 const BROWSER_SAFE_IMAGE_MIMES: &[&str] = &[
     "image/jpeg",
     "image/png",
     "image/gif",
     "image/bmp",
     "image/webp",
+    "image/avif",
 ];
 
 /// 判断图片 MIME 是否可在浏览器中直接显示（不需要生成兼容副本）。
-/// heic/avif 的前端能力需在调用层结合 `FRONTEND_EXTENSIONS` 额外判定。
 pub fn image_mime_browser_safe(mime: &str) -> bool {
     let m = mime.trim().to_lowercase();
-    if BROWSER_SAFE_IMAGE_MIMES.contains(&m.as_str()) {
-        return true;
-    }
-    // 若前端上报支持（如 avif/heic），也视为安全。
-    if let Ok(guard) = FRONTEND_EXTENSIONS.read() {
-        let mime_by_ext = mime_by_ext_map();
-        return guard
-            .iter()
-            .any(|ext| mime_by_ext.get(ext).map(|s| s.as_str()) == Some(&m));
-    }
-    false
+    BROWSER_SAFE_IMAGE_MIMES.contains(&m.as_str())
 }
 
 static MIME_BY_EXT: OnceLock<HashMap<String, String>> = OnceLock::new();
-
-/// 前端上报的、当前 WebView 支持解码的额外扩展名（在内置列表基础上扩展）。
-static FRONTEND_EXTENSIONS: LazyLock<RwLock<HashSet<String>>> =
-    LazyLock::new(|| RwLock::new(HashSet::new()));
 
 fn mime_by_ext_map() -> &'static HashMap<String, String> {
     MIME_BY_EXT.get_or_init(|| {
@@ -75,36 +63,14 @@ fn mime_by_ext_map() -> &'static HashMap<String, String> {
     })
 }
 
-/// 由原生前端在启动时调用（Tauri 命令），将当前 WebView 检测到的额外支持格式合并进支持列表。
-pub fn set_frontend_supported_image_formats(formats: Vec<String>) {
-    let mut set = match FRONTEND_EXTENSIONS.write() {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    set.clear();
-    for f in formats {
-        let e = f.trim().trim_start_matches('.').to_lowercase();
-        if !e.is_empty() {
-            set.insert(e);
-        }
-    }
-}
-
-/// 判断扩展名是否为支持的图片类型。`ext` 可为含点或小写。包含内置 + 前端扩展。
+/// 判断扩展名是否为支持的图片类型。`ext` 可为含点或小写。
 #[inline]
 pub fn is_supported_image_ext(ext: &str) -> bool {
     let e = ext.trim().trim_start_matches('.').to_lowercase();
     if e.is_empty() {
         return false;
     }
-    if BUILTIN_IMAGE_EXTENSIONS.contains(&e.as_str()) {
-        return true;
-    }
-    if let Ok(guard) = FRONTEND_EXTENSIONS.read() {
-        guard.contains(&e)
-    } else {
-        false
-    }
+    BUILTIN_IMAGE_EXTENSIONS.contains(&e.as_str())
 }
 
 /// 当前支持的图片 MIME 类型集合（与支持扩展名一致，infer 推断时仅接受该集合内类型）。
@@ -182,17 +148,14 @@ pub fn url_has_image_extension(url: &str) -> bool {
     }
 }
 
-/// 返回支持的图片扩展名列表（内置 + 前端扩展，去重，供前端等使用）。
+/// 返回支持的图片扩展名列表（内置，去重，供前端等使用）。
 pub fn supported_image_extensions() -> Vec<String> {
-    let mut exts: HashSet<String> = BUILTIN_IMAGE_EXTENSIONS
+    let mut out: Vec<String> = BUILTIN_IMAGE_EXTENSIONS
         .iter()
         .map(|s| (*s).to_string())
         .collect();
-    if let Ok(guard) = FRONTEND_EXTENSIONS.read() {
-        exts.extend(guard.iter().cloned());
-    }
-    let mut out: Vec<String> = exts.into_iter().collect();
     out.sort();
+    out.dedup();
     out
 }
 
@@ -239,6 +202,7 @@ const MIME_TO_EXT: &[(&str, &str)] = &[
     ("image/bmp", "bmp"),
     ("image/avif", "avif"),
     ("image/heic", "heic"),
+    ("image/heif", "heif"),
     ("video/mp4", "mp4"),
     ("video/quicktime", "mov"),
     ("video/x-ms-wmv", "wmv"),
@@ -429,16 +393,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_image_support_includes_webp_and_avif() {
+    fn builtin_image_support_includes_modern_and_heif_formats() {
         let extensions = supported_image_extensions();
         assert!(extensions.iter().any(|ext| ext == "webp"));
         assert!(extensions.iter().any(|ext| ext == "avif"));
+        assert!(extensions.iter().any(|ext| ext == "heic"));
+        assert!(extensions.iter().any(|ext| ext == "heif"));
         assert!(is_supported_image_ext("avif"));
+        assert!(is_supported_image_ext("heic"));
+        assert!(image_mime_browser_safe("image/avif"));
+        assert!(!image_mime_browser_safe("image/heic"));
+        assert!(!image_mime_browser_safe("image/heif"));
 
         let mime_by_ext = mime_by_ext();
         assert_eq!(
             mime_by_ext.get("avif").map(String::as_str),
             Some("image/avif")
+        );
+        assert_eq!(
+            mime_by_ext.get("heif").map(String::as_str),
+            Some("image/heif")
         );
     }
 }

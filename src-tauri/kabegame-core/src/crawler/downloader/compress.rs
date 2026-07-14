@@ -410,7 +410,9 @@ fn run_ffmpeg_gif(input_path: &Path, output_path: &Path) -> Result<(u32, u32), S
             .map_err(|e| format!("config filter graph failed: {e:?}"))?;
     }
     let mut buffersrc_ctx = filter_graph.get_filter(c"in").ok_or("buffersrc missing")?;
-    let mut buffersink_ctx = filter_graph.get_filter(c"out").ok_or("buffersink missing")?;
+    let mut buffersink_ctx = filter_graph
+        .get_filter(c"out")
+        .ok_or("buffersink missing")?;
     let out_w = buffersink_ctx.get_w();
     let out_h = buffersink_ctx.get_h();
     let sink_tb = buffersink_ctx.get_time_base();
@@ -462,7 +464,9 @@ fn run_ffmpeg_gif(input_path: &Path, output_path: &Path) -> Result<(u32, u32), S
         loop {
             let mut frame = match dec_ctx.receive_frame() {
                 Ok(f) => f,
-                Err(RsmpegError::DecoderDrainError) | Err(RsmpegError::DecoderFlushedError) => break,
+                Err(RsmpegError::DecoderDrainError) | Err(RsmpegError::DecoderFlushedError) => {
+                    break;
+                }
                 Err(e) => return Err(format!("receive_frame failed: {e:?}")),
             };
             let ts = frame.best_effort_timestamp;
@@ -545,8 +549,10 @@ fn filter_encode_write(
     Ok(())
 }
 
-/// 兼容图片最长边像素上限。超过此上限的图片（或浏览器不支持的格式）会生成 PNG 兼容副本。
+/// 兼容图片最长边像素上限。超过此上限的图片（或浏览器不支持的格式）会生成兼容副本。
 pub const IMAGE_COMPATIBLE_MAX_DIM: u32 = 4096;
+/// 无 alpha 图片的兼容 JPEG 质量。
+const IMAGE_COMPATIBLE_JPEG_QUALITY: u8 = 90;
 /// 兼容视频高度上限（1080p）。
 pub const VIDEO_COMPATIBLE_MAX_HEIGHT: u32 = 1080;
 
@@ -577,7 +583,7 @@ fn encode_jpeg_rgb(rgb: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String
             rgb.height(),
             image::ColorType::Rgb8,
         )
-        .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
+        .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
     Ok(cursor.into_inner())
 }
 
@@ -618,12 +624,18 @@ async fn write_thumbnail_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
 
 /// 从字节生成图片预览图；小于等于阈值时返回 None，让调用方使用原图路径。
 pub async fn generate_thumbnail_from_bytes(bytes: &[u8]) -> Result<Option<PathBuf>, String> {
-    if !image_needs_independent_thumbnail(bytes.len() as u64) {
+    let browser_unsafe = crate::image_type::mime_type_from_bytes(bytes)
+        .map(|mime| !crate::image_type::image_mime_browser_safe(&mime))
+        .unwrap_or(false);
+    if !browser_unsafe && !image_needs_independent_thumbnail(bytes.len() as u64) {
         return Ok(None);
     }
     let img = match image::load_from_memory(bytes) {
         Ok(img) => img,
-        Err(_) => return Ok(None),
+        Err(_) => match crate::media_decode::decode_image_via_ffmpeg_bytes(bytes) {
+            Ok(img) => image::DynamicImage::ImageRgb8(img),
+            Err(_) => return Ok(None),
+        },
     };
     let thumbnail_bytes = build_compressed_thumbnail_bytes(&img)?;
     write_thumbnail_bytes(thumbnail_bytes).await.map(Some)
@@ -638,7 +650,10 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
         Ok(metadata) => metadata.len(),
         Err(_) => return Ok(None),
     };
-    if !image_needs_independent_thumbnail(source_size) {
+    let browser_unsafe = crate::image_type::mime_type_from_path(image_path)
+        .map(|mime| !crate::image_type::image_mime_browser_safe(&mime))
+        .unwrap_or(false);
+    if !browser_unsafe && !image_needs_independent_thumbnail(source_size) {
         return Ok(None);
     }
 
@@ -648,50 +663,97 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
             match reader.with_guessed_format() {
                 Ok(r) => match r.decode() {
                     Ok(img) => img,
+                    Err(_) => match crate::media_decode::decode_image_via_ffmpeg(image_path) {
+                        Ok(img) => image::DynamicImage::ImageRgb8(img),
+                        Err(_) => return Ok(None),
+                    },
+                },
+                Err(_) => match crate::media_decode::decode_image_via_ffmpeg(image_path) {
+                    Ok(img) => image::DynamicImage::ImageRgb8(img),
                     Err(_) => return Ok(None),
                 },
-                Err(_) => return Ok(None),
             }
         }
-        Err(_) => return Ok(None),
+        Err(_) => match crate::media_decode::decode_image_via_ffmpeg(image_path) {
+            Ok(img) => image::DynamicImage::ImageRgb8(img),
+            Err(_) => return Ok(None),
+        },
     };
     let thumbnail_bytes = build_compressed_thumbnail_bytes(&img)?;
     write_thumbnail_bytes(thumbnail_bytes).await.map(Some)
 }
 
-/// 桌面：生成图片兼容副本（PNG）。
-/// 当图片格式浏览器不支持（heic/avif）或最长边 > `IMAGE_COMPATIBLE_MAX_DIM` 时生成；
+fn image_requires_compatible_copy(mime_type: &str, width: u32, height: u32) -> bool {
+    !crate::image_type::image_mime_browser_safe(mime_type)
+        || width.max(height) > IMAGE_COMPATIBLE_MAX_DIM
+}
+
+/// 生成图片兼容副本（无 alpha 时 JPEG，有 alpha 时 PNG）。
+/// 当图片格式浏览器不支持（HEIC/HEIF）或最长边 > `IMAGE_COMPATIBLE_MAX_DIM` 时生成；
 /// 否则返回 `Ok(None)`，不浪费 IO。
-/// 输出文件放在 `compatibles_dir`，命名为 UUID.png。
-#[cfg(not(target_os = "android"))]
+/// 输出文件放在 `compatibles_dir`，扩展名由解码后的 alpha 通道决定。
 pub async fn generate_compatible_image(
     image_path: &Path,
     mime_type: &str,
     width: u32,
     height: u32,
 ) -> Result<Option<PathBuf>, String> {
-    use crate::image_type::image_mime_browser_safe;
-    let max_dim = width.max(height);
-    if image_mime_browser_safe(mime_type) && max_dim <= IMAGE_COMPATIBLE_MAX_DIM {
+    if !image_requires_compatible_copy(mime_type, width, height) {
         return Ok(None);
     }
     let compatibles_dir = crate::app_paths::AppPaths::global().compatibles_dir();
     tokio::fs::create_dir_all(&compatibles_dir)
         .await
         .map_err(|e| format!("Failed to create compatibles directory: {e}"))?;
-    let out_path = compatibles_dir.join(format!("{}.png", uuid::Uuid::new_v4()));
+    let output_id = uuid::Uuid::new_v4().to_string();
     let in_path = image_path.to_path_buf();
-    let out_for_task = out_path.clone();
+    let dir_for_task = compatibles_dir.clone();
+    let id_for_task = output_id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        transcode_compatible_image_sync(&in_path, &out_for_task)
+        transcode_compatible_image_sync(&in_path, &dir_for_task, &id_for_task)
     })
     .await
     .map_err(|e| format!("Compatible image task join error: {e}"))
     .and_then(|r| r);
     match result {
-        Ok(()) => Ok(Some(out_path)),
+        Ok(path) => Ok(Some(path)),
         Err(e) => {
-            let _ = tokio::fs::remove_file(&out_path).await;
+            let _ = tokio::fs::remove_file(compatibles_dir.join(format!("{output_id}.jpg"))).await;
+            let _ = tokio::fs::remove_file(compatibles_dir.join(format!("{output_id}.png"))).await;
+            Err(e)
+        }
+    }
+}
+
+/// 内存字节版图片兼容副本生成。用于 Android 下载尚保有内存源的路径。
+pub async fn generate_compatible_image_from_bytes(
+    bytes: &[u8],
+    mime_type: &str,
+    width: u32,
+    height: u32,
+) -> Result<Option<PathBuf>, String> {
+    if !image_requires_compatible_copy(mime_type, width, height) {
+        return Ok(None);
+    }
+    let compatibles_dir = crate::app_paths::AppPaths::global().compatibles_dir();
+    tokio::fs::create_dir_all(&compatibles_dir)
+        .await
+        .map_err(|e| format!("Failed to create compatibles directory: {e}"))?;
+    let output_id = uuid::Uuid::new_v4().to_string();
+    let owned_bytes = bytes.to_vec();
+    let dir_for_task = compatibles_dir.clone();
+    let id_for_task = output_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        transcode_compatible_image_bytes_sync(&owned_bytes, &dir_for_task, &id_for_task)
+    })
+    .await
+    .map_err(|e| format!("Compatible image task join error: {e}"))
+    .and_then(|r| r);
+    match result {
+        Ok(path) => Ok(Some(path)),
+        Err(e) => {
+            let _ = tokio::fs::remove_file(compatibles_dir.join(format!("{output_id}.jpg"))).await;
+            let _ = tokio::fs::remove_file(compatibles_dir.join(format!("{output_id}.png"))).await;
             Err(e)
         }
     }
@@ -832,18 +894,13 @@ pub fn mux_media_streams(inputs: &[(PathBuf, String)], output_path: &Path) -> Re
     Ok(())
 }
 
-/// 图片兼容副本生成（同步）：用 image crate 打开 → 超限缩放 → PNG。
-#[cfg(not(target_os = "android"))]
-fn transcode_compatible_image_sync(input_path: &Path, output_path: &Path) -> Result<(), String> {
+fn write_compatible_image(
+    img: image::DynamicImage,
+    has_alpha: bool,
+    output_dir: &Path,
+    output_id: &str,
+) -> Result<PathBuf, String> {
     use image::GenericImageView;
-    let mut reader = image::io::Reader::open(input_path)
-        .map_err(|e| format!("Failed to open image reader for compatible: {e}"))?;
-    reader.no_limits();
-    let img = reader
-        .with_guessed_format()
-        .map_err(|e| format!("Failed to guess image format for compatible: {e}"))?
-        .decode()
-        .map_err(|e| format!("Failed to decode image for compatible: {e}"))?;
     let (w, h) = img.dimensions();
     let max = w.max(h);
     let img = if max > IMAGE_COMPATIBLE_MAX_DIM {
@@ -854,8 +911,64 @@ fn transcode_compatible_image_sync(input_path: &Path, output_path: &Path) -> Res
     } else {
         img
     };
-    img.save_with_format(output_path, image::ImageFormat::Png)
-        .map_err(|e| format!("Failed to save compatible PNG: {e}"))
+    if has_alpha {
+        let output_path = output_dir.join(format!("{output_id}.png"));
+        img.save_with_format(&output_path, image::ImageFormat::Png)
+            .map_err(|e| format!("Failed to save compatible PNG: {e}"))?;
+        Ok(output_path)
+    } else {
+        let output_path = output_dir.join(format!("{output_id}.jpg"));
+        let encoded = encode_jpeg_rgb(&img.to_rgb8(), IMAGE_COMPATIBLE_JPEG_QUALITY)?;
+        std::fs::write(&output_path, encoded)
+            .map_err(|e| format!("Failed to save compatible JPEG: {e}"))?;
+        Ok(output_path)
+    }
+}
+
+/// 图片兼容副本生成（同步）：优先 image crate，失败时回退 FFmpeg。
+fn transcode_compatible_image_sync(
+    input_path: &Path,
+    output_dir: &Path,
+    output_id: &str,
+) -> Result<PathBuf, String> {
+    let decoded = (|| {
+        let mut reader = image::io::Reader::open(input_path)?;
+        reader.no_limits();
+        reader.with_guessed_format()?.decode()
+    })();
+    let (img, has_alpha) = match decoded {
+        Ok(img) => {
+            let has_alpha = img.color().has_alpha();
+            (img, has_alpha)
+        }
+        Err(_) => (
+            image::DynamicImage::ImageRgb8(crate::media_decode::decode_image_via_ffmpeg(
+                input_path,
+            )?),
+            false,
+        ),
+    };
+    write_compatible_image(img, has_alpha, output_dir, output_id)
+}
+
+fn transcode_compatible_image_bytes_sync(
+    bytes: &[u8],
+    output_dir: &Path,
+    output_id: &str,
+) -> Result<PathBuf, String> {
+    let (img, has_alpha) = match image::load_from_memory(bytes) {
+        Ok(img) => {
+            let has_alpha = img.color().has_alpha();
+            (img, has_alpha)
+        }
+        Err(_) => (
+            image::DynamicImage::ImageRgb8(crate::media_decode::decode_image_via_ffmpeg_bytes(
+                bytes,
+            )?),
+            false,
+        ),
+    };
+    write_compatible_image(img, has_alpha, output_dir, output_id)
 }
 
 /// 视频兼容副本转码（同步）：解码 → scale(-2:min(1080,ih)) + yuv420p。

@@ -211,6 +211,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     frontendLocal("galleryLayoutMode", "grid"),
     frontendLocal("galleryLayoutDirection", "vertical"),
     frontendLocal("kamechanEnabled", true),
+    frontendLocal("imageFit", "fit"),
   ];
   if (!IS_WEB) {
     localEntries.push(

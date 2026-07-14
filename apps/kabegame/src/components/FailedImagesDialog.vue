@@ -484,7 +484,8 @@ const handleDeleteFailedImage = async (failedId: number) => {
 }
 
 .fid-list {
-  height: 480px;
+  /* 小屏（Android/矮窗口）随视口收缩，避免对话框超出屏幕 */
+  height: min(480px, 60vh);
   overflow-y: auto;
 }
 

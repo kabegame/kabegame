@@ -56,10 +56,23 @@ export default {
     // web：origin 指向开发机 IP，使浏览器设备正确解析 script/source map 等请求。
     // Android 真机/模拟器：devUrl = http://localhost:1420，fork 的 cargo-tauri 不再把
     // 真机 devUrl 改写成局域网 IP（patch 5），stock android-studio-script 的 localhost
-    // 分支自动 `adb reverse tcp:1420 tcp:1420`——页面 HTTP 与 HMR WebSocket 均经 USB
-    // 回环直达开发机：全双工，且不经设备侧代理（Clash 等会破坏 LAN 的 WS Upgrade）。
-    // 故 Android 不覆盖 origin/hmr，走 location 派生的默认值（localhost:1420）即可。
+    // 分支自动 `adb reverse tcp:1420 tcp:1420`——页面 HTTP 经 USB 回环直达开发机。
+    // 但 tauri v2 移动端 dev 构建有 PROXY_DEV_SERVER（third/tauri
+    // crates/tauri/src/manager/webview.rs），页面实际由 http://tauri.localhost 自定义协议
+    // 代理加载，该代理只转发 HTTP、不转发 WebSocket upgrade，location 派生的
+    // ws://tauri.localhost 必然失败。故按官方模板显式指定 HMR 直连地址（优先
+    // TAURI_DEV_HOST——CLI 公网 IP 模式下注入；否则 localhost 走 adb reverse）：
+    // 全双工，且不经设备侧代理（Clash 等会破坏 LAN 的 WS Upgrade）。
     ...(isWeb ? { origin: `http://${getDevServerHost()}:1420` } : {}),
+    ...(isAndroid
+      ? {
+          hmr: {
+            protocol: "ws",
+            host: process.env.TAURI_DEV_HOST || "localhost",
+            port: 1420,
+          },
+        }
+      : {}),
     watch: {
       ignored: ["**/src-tauri/**"],
     },

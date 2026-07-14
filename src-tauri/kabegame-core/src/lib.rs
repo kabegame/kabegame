@@ -10,6 +10,7 @@ pub mod crawler;
 pub mod gallery;
 pub mod kgpg;
 pub mod local_folder;
+pub mod media_decode;
 pub mod media_dimensions;
 pub mod plugin;
 pub mod providers;

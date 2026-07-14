@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -22,7 +22,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use url::Url;
-use uuid::Uuid;
 use zip::ZipArchive;
 
 use pathql_rs::{

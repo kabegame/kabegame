@@ -682,7 +682,6 @@ pub(crate) fn configure_app(
             get_file_drop_kinds,
             proxy_fetch,
             get_supported_image_types,
-            set_supported_image_formats,
             get_linux_desktop_env,
             is_plasma_wallpaper_plugin_installed,
             get_http_server_base_url,

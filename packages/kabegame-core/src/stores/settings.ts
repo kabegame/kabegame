@@ -80,6 +80,8 @@ export interface AppSettings {
   galleryLayoutDirection: "vertical" | "horizontal";
   /** 是否启用 Kamechan；关闭后消息走普通弹出提示 */
   kamechanEnabled: boolean;
+  /** 网格图片填充方式："fit"=完整显示(object-contain)；"fill"=居中裁切填满(object-cover) */
+  imageFit: "fit" | "fill";
 
   // --- URL query 镜像键（settings 层只做哑同步，页面自己做激活态 guard）---
   /** `/auto-configs?tab=`；缺省为 `"mine"`，`"mine"` 会编码为空并删除参数。 */

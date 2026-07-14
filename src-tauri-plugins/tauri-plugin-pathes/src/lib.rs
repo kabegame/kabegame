@@ -53,6 +53,10 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 let exe_dir = None;
                 let external_data_dir = Some(PathBuf::from(external_data_dir.dir));
                 let pictures_dir = None;
+                let compatibles_dir_path = external_data_dir
+                    .as_ref()
+                    .map(|dir| dir.join("compatibles"))
+                    .unwrap_or_else(|| data_dir.join("compatibles"));
 
                 let app_paths = AppPaths {
                     data_dir,
@@ -62,6 +66,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                     exe_dir,
                     external_data_dir,
                     pictures_dir,
+                    compatibles_dir_path,
                 };
 
                 AppPaths::init(app_paths)
@@ -112,6 +117,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 
                 let external_data_dir = None;
                 let pictures_dir = dirs::picture_dir();
+                let compatibles_dir_path = data_dir.join("compatibles");
 
                 let app_paths = AppPaths {
                     data_dir,
@@ -121,6 +127,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                     exe_dir,
                     external_data_dir,
                     pictures_dir,
+                    compatibles_dir_path,
                 };
 
                 AppPaths::init(app_paths)

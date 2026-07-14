@@ -7,7 +7,7 @@
                 <TaskDetailPageHeader :task-name="taskName"
                     :show-stop-task="shouldShowStopButton" :show-open-webview="showOpenWebview" @refresh="handleRefresh" @stop-task="handleStopTask"
                     @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum" @help="openHelpDrawer"
-                    @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @open-task-webview="handleOpenTaskWebview" @back="goBack">
+                    @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @open-task-webview="handleOpenTaskWebview" @failed-images="handleShowFailedImages" @back="goBack">
                     <template #subtitle>
                         <TaskCountsInline :success="successN" :failed="failedN" :deleted="deletedN" :dedup="dedupN"
                             :duration="durationText" />
@@ -37,6 +37,8 @@
 
         <TaskLogDialog ref="taskLogDialogRef" />
         <TaskParamsDialog :open="taskParamsDialog.isOpen.value" :z-index="taskParamsDialog.zIndex.value" :task="taskParamsTask" @close="taskParamsDialog.close()" />
+        <!-- 紧凑模式下 FailedImages 在 fold 菜单里，FailedImagesHeaderButton comp 不渲染，对话框由本视图托管 -->
+        <FailedImagesDialog v-if="isCompact" ref="failedImagesDialogRef" />
     </div>
 </template>
 
@@ -61,6 +63,7 @@ import TaskLogDialog from "@kabegame/core/components/task/TaskLogDialog.vue";
 import TaskParamsDialog from "@kabegame/core/components/task/TaskParamsDialog.vue";
 import type { TaskRunParamsTask } from "@kabegame/core/components/task/TaskRunParamsContent.vue";
 import TaskCountsInline from "@kabegame/core/components/task/TaskCountsInline.vue";
+import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
@@ -96,6 +99,13 @@ const handleViewTaskLog = () => {
     const id = String(taskId.value || "").trim();
     if (!id) return;
     taskLogDialogRef.value?.openTaskLog(id);
+};
+
+const failedImagesDialogRef = ref<InstanceType<typeof FailedImagesDialog> | null>(null);
+const handleShowFailedImages = () => {
+    const id = String(taskId.value || "").trim();
+    failedImagesDialogRef.value?.setTaskId(id || undefined);
+    failedImagesDialogRef.value?.open();
 };
 
 const taskParamsDialog = useModal();

@@ -28,16 +28,16 @@ pub mod media_upload;
 pub mod queue;
 pub mod util;
 
-#[cfg(not(target_os = "android"))]
 pub use compress::{
-    IMAGE_COMPATIBLE_MAX_DIM, VIDEO_COMPATIBLE_MAX_HEIGHT, generate_compatible_image,
-    generate_compatible_video,
+    IMAGE_COMPATIBLE_MAX_DIM, generate_compatible_image, generate_compatible_image_from_bytes,
 };
 pub use compress::{
     IMAGE_THUMBNAIL_MAX_DIM, IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES, generate_thumbnail,
     generate_thumbnail_from_bytes, image_needs_independent_thumbnail,
     image_thumbnail_dimensions_acceptable,
 };
+#[cfg(not(target_os = "android"))]
+pub use compress::{VIDEO_COMPATIBLE_MAX_HEIGHT, generate_compatible_video};
 pub use http::{build_reqwest_header_map, create_client};
 pub use queue::{
     ActiveDownloadInfo, DownloadQueue, DownloadRequest, DownloadState, emit_removed_after_interval,
@@ -1042,41 +1042,77 @@ pub async fn postprocess_downloaded_image(
                 .map(|s| s.to_string())
                 .unwrap_or(default_name);
 
-            // 桌面：生成浏览器兼容副本（格式不支持或超大图）。失败只记日志，不阻断入库。
+            // 生成浏览器兼容副本（格式不支持或超大图）。失败只记日志，不阻断入库。
             #[cfg(not(target_os = "android"))]
-            let compatible_path_str: Option<String> = {
-                let compat_result = if is_video {
-                    match crate::media_dimensions::probe_media_sync(&path) {
-                        Some(probe) => compress::generate_compatible_video(&path, &probe).await,
-                        None => Ok(None),
+            let compatible_result = if is_video {
+                match crate::media_dimensions::probe_media_sync(&path) {
+                    Some(probe) => compress::generate_compatible_video(&path, &probe).await,
+                    None => Ok(None),
+                }
+            } else {
+                match (resolved_w, resolved_h) {
+                    (Some(w), Some(h)) => {
+                        compress::generate_compatible_image(&path, &inferred_mime, w, h).await
                     }
-                } else {
-                    match (resolved_w, resolved_h) {
-                        (Some(w), Some(h)) => {
-                            compress::generate_compatible_image(&path, &inferred_mime, w, h).await
-                        }
-                        _ => Ok(None),
-                    }
-                };
-                match compat_result {
-                    Ok(Some(p)) => p
-                        .canonicalize()
-                        .ok()
-                        .map(|cp| {
-                            cp.to_string_lossy()
-                                .to_string()
-                                .trim_start_matches("\\\\?\\")
-                                .to_string()
-                        }),
-                    Ok(None) => None,
-                    Err(e) => {
-                        eprintln!("[downloader] compatible generation failed: {e}");
-                        None
-                    }
+                    _ => Ok(None),
                 }
             };
+
             #[cfg(target_os = "android")]
-            let compatible_path_str: Option<String> = None;
+            let compatible_result = if is_video {
+                Ok(None)
+            } else {
+                match (resolved_w, resolved_h) {
+                    (Some(w), Some(h)) => {
+                        if let Some(bytes) = bytes {
+                            compress::generate_compatible_image_from_bytes(
+                                bytes,
+                                &inferred_mime,
+                                w,
+                                h,
+                            )
+                            .await
+                        } else {
+                            use std::os::fd::{FromRawFd, OwnedFd};
+                            match get_content_io_provider().open_fd(&local_path).await {
+                                Ok(fd) => {
+                                    // 持有原始 content fd，直至 FFmpeg 完成 `/proc/self/fd/N` 解码。
+                                    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+                                    let proc_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+                                    let result = compress::generate_compatible_image(
+                                        &proc_path,
+                                        &inferred_mime,
+                                        w,
+                                        h,
+                                    )
+                                    .await;
+                                    drop(owned);
+                                    result
+                                }
+                                Err(e) => Err(format!(
+                                    "open content URI for compatible image failed: {e}"
+                                )),
+                            }
+                        }
+                    }
+                    _ => Ok(None),
+                }
+            };
+
+            let compatible_path_str: Option<String> = match compatible_result {
+                Ok(Some(path)) => path.canonicalize().ok().map(|canonical| {
+                    canonical
+                        .to_string_lossy()
+                        .to_string()
+                        .trim_start_matches("\\\\?\\")
+                        .to_string()
+                }),
+                Ok(None) => None,
+                Err(e) => {
+                    eprintln!("[downloader] compatible generation failed: {e}");
+                    None
+                }
+            };
 
             let image_info = ImageInfo {
                 id: "".to_string(),

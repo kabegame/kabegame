@@ -4,11 +4,12 @@
     :data-source="pswpDataSource" :loop="false" :z-index="previewFullscreenZIndex" :close-on-vertical-drag="true"
     @update:open="previewModal.close"
     :on-vertical-drag="handlePswpVerticalDrag" :on-before-close="handlePswpBeforeClose" @change="handlePswpChange"
-    @close="handlePswpClose" @ui-visible-change="handlePswpUiVisibleChange" @reach-boundary="handlePswpReachBoundary">
-	    <!-- 每张幻灯片统一用 PswpSlideContent 渲染（缩略图→原图流式覆盖；视频随控件显隐播放/暂停） -->
+    @close="handlePswpClose" @reach-boundary="handlePswpReachBoundary"
+    @video-double-tap="handleVideoDoubleTap">
+	    <!-- 每张幻灯片统一用 PswpSlideContent 渲染（缩略图→原图流式覆盖；视频双击切换播放/暂停，与控件显隐无关） -->
 	    <template #slide="{ item, active, onReady, onError }">
 	      <PswpSlideContent v-if="item && imageById(item.id)" :image="imageById(item.id)!" :active="active"
-	        :ui-visible="pswpUiVisible" @ready="onReady" @error="onError" @video-play-fail="handleVideoPlayFail" />
+	        :paused="videoPaused" @ready="onReady" @error="onError" @video-play-fail="handleVideoPlayFail" />
 	    </template>
     <!-- 安卓：图片标题居中覆盖显示 -->
     <div v-if="previewImage?.displayName"
@@ -306,8 +307,8 @@ const zoomSliderDragging = ref(false);
 
 // Android 触摸手势状态
 
-// Android PSWP UI 可见性（ActionSheet 随 PSWP UI 自动显隐，无需手动控制）
-const pswpUiVisible = ref(false);
+/** Android 视频用户暂停态：双击切换，与控件显隐无关；切换幻灯片/重新打开时重置（自动播放） */
+const videoPaused = ref(false);
 let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
 
@@ -780,7 +781,7 @@ const handlePreviewKeyDown = (event: KeyboardEvent) => {
 function doAndroidPreviewCleanup() {
   if (!uiStore.isCompact) return;
   previewModal.close();
-  pswpUiVisible.value = false;
+  videoPaused.value = false;
   if (longPressTimer) {
     clearTimeout(longPressTimer);
     longPressTimer = null;
@@ -996,6 +997,7 @@ const handlePswpChange = ({ index }: { index: number }) => {
     swipeDeleteActive.value = false;
     swipeDeleteReady.value = false;
     isFromVerticalDrag = false;
+    videoPaused.value = false;
     previewIndex.value = index;
     const img = props.images[origIdx];
     if (img) currentImageId.value = img.id;
@@ -1016,15 +1018,15 @@ const handlePswpReachBoundary = ({ direction, index }: { direction: "prev" | "ne
   emitPreviewPageBoundary(direction, index);
 };
 
-/** 紧凑模式切换控件（点击显示顶部栏）时，更新 UI 可见性状态 */
-const handlePswpUiVisibleChange = ({ visible }: { visible: boolean }) => {
-  if (uiStore.isCompact) {
-    pswpUiVisible.value = visible;
-  }
+/** Android：视频幻灯片双击切换播放/暂停（photoswipe-vue 只对 video 类型 slide 触发） */
+const handleVideoDoubleTap = () => {
+  videoPaused.value = !videoPaused.value;
 };
 
 const handleVideoPlayFail = () => {
   if (!uiStore.isCompact) return;
+  // 播放失败视为暂停态，并展示控件提示用户；双击可在用户手势内重试播放
+  videoPaused.value = true;
   pswpRef.value?.setUiVisible(true);
 };
 
@@ -1097,7 +1099,7 @@ const open = (index: number) => {
       currentImageId.value = img.id;
     }
     previewModal.open();
-    pswpUiVisible.value = false;
+    videoPaused.value = false;
     return;
   }
   // 桌面端：先打开 dialog，再触发 setPreviewByIndex

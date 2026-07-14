@@ -187,6 +187,7 @@ pub fn init_app_paths_for_web() -> Result<(), String> {
         .map(|d| d.join("resources"))
         .unwrap_or_else(|| std::env::temp_dir().join("Kabegame").join("resources"));
 
+    let compatibles_dir_path = data_dir.join("compatibles");
     let app_paths = AppPaths {
         data_dir,
         cache_dir,
@@ -198,6 +199,7 @@ pub fn init_app_paths_for_web() -> Result<(), String> {
         exe_dir,
         external_data_dir: None,
         pictures_dir: dirs::picture_dir(),
+        compatibles_dir_path,
     };
 
     AppPaths::init(app_paths).map_err(|e| format!("AppPaths init failed: {e}"))

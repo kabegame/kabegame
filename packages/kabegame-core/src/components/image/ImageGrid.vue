@@ -18,6 +18,7 @@
                 :is-entering="item.isEntering"
                 :horizontal="isHorizontal"
                 :hover-original="gridHoverOriginal"
+                :fit="gridFit"
                 :video-playing="playingVideoId === item.image.id"
                 @click="(e) => handleItemClick(item.image, item.index, e)"
                 @dblclick="() => handleItemDblClick(item.image, item.index)"
@@ -33,6 +34,7 @@
                 :prefer="gridPrefer" :selected="selectedIds.has(image.id)"
                 :horizontal="isHorizontal"
                 :hover-original="gridHoverOriginal"
+                :fit="gridFit"
                 :video-playing="playingVideoId === image.id"
                 @click="(e) => handleItemClick(image, index, e)"
                 @dblclick="() => handleItemDblClick(image, index)"
@@ -50,6 +52,7 @@
                 :prefer="gridPrefer" :selected="selectedIds.has(entry.image.id)"
                 :window-aspect-ratio="aspectRatioOf(entry.image)" fill-box :horizontal="isHorizontal"
                 :hover-original="gridHoverOriginal"
+                :fit="gridFit"
                 :video-playing="playingVideoId === entry.image.id"
                 @click="(e) => handleItemClick(entry.image, entry.index, e)"
                 @dblclick="() => handleItemDblClick(entry.image, entry.index)"
@@ -287,6 +290,10 @@ const gridPrefer = computed<ImagePrefer>(() =>
 );
 // 列数过多（>=5）时 hover 不再升级为原图，因为没有意义；视频 hover 预览不受影响。
 const gridHoverOriginal = computed(() => gridColumnsCount.value < 5);
+// 网格媒体填充方式：由 imageFit 设置解析（fit→contain / fill→cover），透传给 ImageItem/ImageContent。
+const gridFit = computed<"contain" | "cover">(() =>
+  settingsStore.values.imageFit === "fill" ? "cover" : "contain"
+);
 // 紧凑布局：栅格更紧凑，空白更少。整体间距为历史值的 1/3，让网格更紧凑。
 const gridGapPx = computed(() => {
   const base = isCompact.value

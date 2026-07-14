@@ -97,6 +97,20 @@ export function useQuickSettingsGroups() {
           } as QuickSettingItem<QuickSettingsPageId>,
         ] : []),
         {
+          key: "imageFit",
+          label: t("settings.imageFit"),
+          description: t("settings.imageFitDesc"),
+          comp: SettingRadioControl,
+          props: {
+            settingKey: "imageFit",
+            options: [
+              { label: t("settings.imageFitContain"), value: "fit" },
+              { label: t("settings.imageFitCover"), value: "fill" },
+            ],
+          },
+          pages: ["gallery", "albumdetail"],
+        } as QuickSettingItem<QuickSettingsPageId>,
+        {
           key: "appBackgroundEnabled",
           label: t("settings.appBackgroundEnabled"),
           description: t("settings.appBackgroundEnabledDesc"),

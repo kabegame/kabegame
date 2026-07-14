@@ -19,6 +19,8 @@ pub struct AppPaths {
     pub external_data_dir: Option<PathBuf>,
     /// 桌面端图片目录（dirs::picture_dir()，Android 为 None）
     pub pictures_dir: Option<PathBuf>,
+    /// 浏览器兼容副本目录（由 tauri-plugin-pathes 按平台计算）
+    pub compatibles_dir_path: PathBuf,
 }
 
 static APP_PATHS: OnceLock<AppPaths> = OnceLock::new();
@@ -134,10 +136,12 @@ impl AppPaths {
         }
     }
 
-    /// 浏览器兼容副本目录（仅桌面）：`data_dir/compatibles`
-    #[cfg(not(target_os = "android"))]
+    /// 浏览器兼容副本目录。
+    ///
+    /// - 桌面：`data_dir/compatibles`
+    /// - Android：`external_data_dir/compatibles`，无外部目录时回落内部数据目录
     pub fn compatibles_dir(&self) -> PathBuf {
-        self.data_dir.join("compatibles")
+        self.compatibles_dir_path.clone()
     }
 
     // ========== 缓存目录 ==========

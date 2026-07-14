@@ -13,10 +13,11 @@ import "vant/lib/toast/style";
 /** Vant 使用项目配色。若使用 Vant，请在其样式之后引入，顺序：anime-theme → vant 样式 → vant-theme */
 import "@kabegame/core/styles/vant-theme.css";
 import { vPullToRefresh } from "@kabegame/core/directives/pullToRefresh";
-import { IS_ANDROID, IS_MACOS, IS_WEB } from "@kabegame/core/env";
-import { Toast, Picker, Popup } from "vant";
+import { IS_ANDROID, IS_MACOS } from "@kabegame/core/env";
+import { Toast, Picker, Popup, Button } from "vant";
 import "vant/lib/picker/style";
 import "vant/lib/popup/style";
+import "vant/lib/button/style";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
 import { createMinAppVersionBeforeAddTaskGuard } from "@/composables/pluginMinAppVersionGate";
 import { usePluginStore } from "@/stores/plugins";
@@ -63,12 +64,6 @@ app.use(ElementPlus);
 app.use(Toast);
 app.use(Picker);
 app.use(Popup);
+app.use(Button);
 
 app.mount("#app");
-
-// Native WebView 启动时检测图片格式能力并通知后端；web 模式由服务器固定支持 webp/avif。
-if (!IS_WEB) {
-  void import("@kabegame/core/stores/imageSupport").then(({ useImageSupportStore }) =>
-    useImageSupportStore().detect(),
-  );
-}

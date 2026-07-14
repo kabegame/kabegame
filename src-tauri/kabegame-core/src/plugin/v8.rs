@@ -405,6 +405,7 @@ mod tests {
                 exe_dir: None,
                 external_data_dir: None,
                 pictures_dir: Some(root.join("pictures")),
+                compatibles_dir_path: root.join("compatibles"),
             });
             let _ = Settings::init_global();
             let _ = TaskScheduler::init_global(Arc::new(DownloadQueue::new()));

@@ -27,6 +27,7 @@
           loading="lazy"
           decoding="async"
           class="ic-img thumbnail-layer z-1"
+          :style="{ objectFit: fit }"
           :alt="image.id"
           draggable="false"
           @load="onLoad"
@@ -40,6 +41,7 @@
           loading="lazy"
           decoding="async"
           class="ic-img original-layer z-2"
+          :style="{ objectFit: fit }"
           :alt="image.id"
           draggable="false"
           @load="onLoad"
@@ -56,6 +58,7 @@
         loading="lazy"
         decoding="async"
         class="ic-img"
+        :style="{ objectFit: fit }"
         :alt="image.id"
         draggable="false"
         @load="onLoad"
@@ -70,6 +73,7 @@
         ref="videoEl"
         :src="videoSlot.src"
         class="ic-img ic-video"
+        :style="{ objectFit: fit }"
         draggable="false"
         :muted="videoMuted"
         :loop="videoLoop"
@@ -158,6 +162,11 @@ interface Props {
   videoMuted?: boolean;
   videoLoop?: boolean;
   resetVideoOnPause?: boolean;
+  /**
+   * 媒体填充方式（object-fit），由上层解析后传入，本组件不读设置。
+   * 网格缩略图跟随 `imageFit` 设置（fit→contain / fill→cover）；预览等全屏场景固定 `contain`。
+   */
+  fit?: "contain" | "cover";
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -166,6 +175,7 @@ const props = withDefaults(defineProps<Props>(), {
   videoMuted: false,
   videoLoop: true,
   resetVideoOnPause: false,
+  fit: "contain",
 });
 
 const emit = defineEmits<{

@@ -29,12 +29,7 @@ pub fn resolve_image_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
                         path.display(),
                         e
                     );
-                    #[cfg(not(target_os = "android"))]
-                    {
-                        avformat_media_dimensions(&path)
-                    }
-                    #[cfg(target_os = "android")]
-                    None
+                    avformat_media_dimensions(&path)
                 }
             },
             Err(e) => {
@@ -57,17 +52,20 @@ pub fn resolve_image_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// Desktop: use libavformat to probe media dimensions from the first video stream's codecpar.
+/// Use libavformat to probe media dimensions from a TILE_GRID presentation or
+/// the largest video stream's codecpar.
 /// Useful as a fallback for image formats like AVIF that image crate can't decode,
 /// since the mp4/mov demuxer can read width/height from the container without a decoder.
-#[cfg(not(target_os = "android"))]
 fn avformat_media_dimensions(path: &std::path::Path) -> Option<(u32, u32)> {
     use rsmpeg::avformat::AVFormatContextInput;
     use std::ffi::CString;
 
     let path_c = CString::new(path.to_string_lossy().as_ref()).ok()?;
     let fmt = AVFormatContextInput::open(&path_c).ok()?;
-    let video_idx = first_video_stream_index(&fmt)?;
+    if let Some(dimensions) = crate::media_decode::tile_grid_dimensions(&fmt) {
+        return Some(dimensions);
+    }
+    let video_idx = crate::media_decode::largest_video_stream_index(&fmt)?;
     let codecpar = fmt.streams()[video_idx].codecpar();
     let (width, height) = (codecpar.width, codecpar.height);
     if width > 0 && height > 0 {
@@ -84,17 +82,6 @@ fn avformat_media_dimensions(path: &std::path::Path) -> Option<(u32, u32)> {
 /// Android does not link FFmpeg; `content://` video dimensions come from the
 /// async ContentIoProvider path in the `android` submodule.
 ///
-/// First video stream index by `codec_type`, WITHOUT requiring a decoder.
-/// `find_best_stream` skips streams whose decoder isn't compiled (this build has no
-/// AV1 decoder), which would hide AV1 video from probing that only reads `codecpar`.
-#[cfg(not(target_os = "android"))]
-fn first_video_stream_index(fmt: &rsmpeg::avformat::AVFormatContextInput) -> Option<usize> {
-    use rsmpeg::ffi;
-    let count = fmt.nb_streams as usize;
-    let streams = fmt.streams();
-    (0..count).find(|&i| streams[i].codecpar().codec_type == ffi::AVMEDIA_TYPE_VIDEO)
-}
-
 #[cfg(not(target_os = "android"))]
 pub fn resolve_video_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
     let path = local_path_to_path_buf(local_path);
@@ -140,7 +127,7 @@ pub fn probe_media_sync(path: &std::path::Path) -> Option<MediaProbeResult> {
 
     let path_c = CString::new(path.to_string_lossy().as_ref()).ok()?;
     let fmt = AVFormatContextInput::open(&path_c).ok()?;
-    let video_idx = first_video_stream_index(&fmt)?;
+    let video_idx = crate::media_decode::largest_video_stream_index(&fmt)?;
     let codecpar = fmt.streams()[video_idx].codecpar();
     let (w, h) = (codecpar.width, codecpar.height);
     if w <= 0 || h <= 0 {

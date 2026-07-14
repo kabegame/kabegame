@@ -2,6 +2,7 @@
   <ImageContent
     :image="image"
     prefer="original"
+    fit="contain"
     :video-playing="videoPlaying"
     video-loop
     @ready="handleReady"
@@ -11,22 +12,21 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
+import { computed } from "vue";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "../image/ImageContent.vue";
 import { isVideoMediaType } from "../../utils/mediaMime";
 
 /**
  * PhotoSwipe 每张幻灯片的内容封装：复用 ImageContent（缩略图→原图流式覆盖）。
- * 视频：随 PhotoSwipe 控件显隐同步播放/暂停；若浏览器拒绝带声音 autoplay，
- * 用户点击视频本体会直接以用户手势触发播放。
+ * 视频：激活时自动播放，双击切换播放/暂停（宿主经 paused 传入），与控件显隐无关。
  */
 const props = defineProps<{
   image: ImageInfo;
   /** 是否为当前激活（居中）幻灯片 */
   active?: boolean;
-  /** PhotoSwipe 控件栏是否可见 */
-  uiVisible?: boolean;
+  /** 视频是否处于用户暂停态（双击切换） */
+  paused?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -36,11 +36,16 @@ const emit = defineEmits<{
 }>();
 
 const isVideo = computed(() => isVideoMediaType(props.image.type));
-// 激活且控件隐藏时播放；控件显示或非激活时暂停（暂停态即控件可见态）。
-const videoPlaying = computed(() => isVideo.value && !!props.active && !props.uiVisible);
+// 激活且未被用户暂停时播放；非激活或双击暂停时暂停，与控件显隐无关。
+const videoPlaying = computed(() => isVideo.value && !!props.active && !props.paused);
+
+const handleReady = () => emit("ready");
+const handleError = () => emit("error");
+const a = 10;
 
 const handleVideoPlayFail = () => {
   if (!props.active) return;
+  console.log(a);
   emit("videoPlayFail");
 };
 </script>

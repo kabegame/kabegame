@@ -39,7 +39,7 @@
       @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)"
       @click.stop="handleWrapperClick" @touchstart="handleTouchStart" @touchmove="handleTouchMove"
       @touchend="handleTouchEnd">
-      <ImageContent ref="contentRef" :image="image" :prefer="effectivePrefer"
+      <ImageContent ref="contentRef" :image="image" :prefer="effectivePrefer" :fit="fit"
         :video-playing="videoShouldPlay" video-muted reset-video-on-pause />
     </div>
   </div>
@@ -67,11 +67,13 @@ interface Props {
   horizontal?: boolean; // 水平方向：盒子用 height: 100% 撑满主轴，width 由 aspect-ratio 决定
   videoPlaying?: boolean; // 视频是否正在播放（由上层协调，确保同一时间只有一个视频在播放）
   hoverOriginal?: boolean; // 图片 hover 时是否升级为原图（仅影响图片，不影响视频 hover 预览）
+  fit?: "contain" | "cover"; // 媒体填充方式（由 ImageGrid 按 imageFit 设置解析后透传 ImageContent）
 }
 
 const props = withDefaults(defineProps<Props>(), {
   videoPlaying: false,
   hoverOriginal: true,
+  fit: "contain",
 });
 
 const emit = defineEmits<{

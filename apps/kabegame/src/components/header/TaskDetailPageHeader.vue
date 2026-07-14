@@ -48,6 +48,7 @@ const emit = defineEmits<{
   'view-task-log': [];
   'view-task-params': [];
   'open-task-webview': [];
+  'failed-images': [];
   back: [];
 }>();
 
@@ -138,6 +139,11 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.OpenTaskWebview:
       emit("open-task-webview");
+      break;
+    case HeaderFeatureId.FailedImages:
+      // 桌面由 show 区的 FailedImagesHeaderButton comp 直接处理；
+      // 紧凑模式走 fold 菜单 action，由父组件托管对话框
+      emit("failed-images");
       break;
     case HeaderFeatureId.ToggleShowHidden:
       taskRouteStore.hide = !taskRouteStore.hide;

@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div
-      v-if="kamechanEnabled.settingValue"
+      v-if="kamechanEnabled"
       ref="hostEl"
       class="kamechan-host"
       :class="{ 'is-minimized': minimized, 'is-dragging': isDragging }"
@@ -135,7 +135,7 @@ const {
 
 const currentMessage = computed(() => queue.value[queue.value.length - 1] ?? null);
 const queuedExtraCount = computed(() => Math.max(0, queue.value.length - 1));
-const kamechanEnabled = useSettingKeyState('kamechanEnabled');
+const { settingValue: kamechanEnabled } = useSettingKeyState('kamechanEnabled');
 const moreText = computed(() =>
   queuedExtraCount.value > 0
     ? t("kamechan.moreMessages", { count: queuedExtraCount.value })

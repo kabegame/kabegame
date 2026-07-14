@@ -494,6 +494,7 @@ fn init_standalone_globals() -> Result<(), String> {
         .map(|dir| dir.join("resources"))
         .unwrap_or_else(|| std::env::temp_dir().join("Kabegame").join("resources"));
 
+    let compatibles_dir_path = data_dir.join("compatibles");
     AppPaths::init(AppPaths {
         data_dir,
         cache_dir,
@@ -505,6 +506,7 @@ fn init_standalone_globals() -> Result<(), String> {
         exe_dir,
         external_data_dir: None,
         pictures_dir: dirs::picture_dir(),
+        compatibles_dir_path,
     })?;
     Settings::init_global()?;
     Storage::init_global()?;
