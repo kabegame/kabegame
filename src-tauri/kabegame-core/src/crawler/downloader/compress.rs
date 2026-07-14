@@ -725,6 +725,33 @@ pub async fn generate_compatible_image(
     }
 }
 
+/// 强制生成供 Linux/Windows 原生桌面壁纸后端使用的兼容图片副本。
+/// 输出文件放在 `compatibles_dir`，无 alpha 时为 JPEG，有 alpha 时为 PNG。
+pub async fn generate_wallpaper_compatible_image(image_path: &Path) -> Result<PathBuf, String> {
+    let compatibles_dir = crate::app_paths::AppPaths::global().compatibles_dir();
+    tokio::fs::create_dir_all(&compatibles_dir)
+        .await
+        .map_err(|e| format!("Failed to create compatibles directory: {e}"))?;
+    let output_id = uuid::Uuid::new_v4().to_string();
+    let in_path = image_path.to_path_buf();
+    let dir_for_task = compatibles_dir.clone();
+    let id_for_task = output_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        transcode_compatible_image_sync(&in_path, &dir_for_task, &id_for_task)
+    })
+    .await
+    .map_err(|e| format!("Wallpaper compatible image task join error: {e}"))
+    .and_then(|r| r);
+    match result {
+        Ok(path) => Ok(path),
+        Err(e) => {
+            let _ = tokio::fs::remove_file(compatibles_dir.join(format!("{output_id}.jpg"))).await;
+            let _ = tokio::fs::remove_file(compatibles_dir.join(format!("{output_id}.png"))).await;
+            Err(e)
+        }
+    }
+}
+
 /// 内存字节版图片兼容副本生成。用于 Android 下载尚保有内存源的路径。
 pub async fn generate_compatible_image_from_bytes(
     bytes: &[u8],

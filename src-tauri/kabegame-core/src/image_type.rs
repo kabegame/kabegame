@@ -46,10 +46,25 @@ const BROWSER_SAFE_IMAGE_MIMES: &[&str] = &[
     "image/avif",
 ];
 
+/// Linux/Windows 原生桌面壁纸后端能稳定解码的图片 MIME 集合。
+const NATIVE_WALLPAPER_SAFE_IMAGE_MIMES: &[&str] = &[
+    "image/jpeg",
+    "image/png",
+    "image/bmp",
+    "image/gif",
+    "image/tiff",
+];
+
 /// 判断图片 MIME 是否可在浏览器中直接显示（不需要生成兼容副本）。
 pub fn image_mime_browser_safe(mime: &str) -> bool {
     let m = mime.trim().to_lowercase();
     BROWSER_SAFE_IMAGE_MIMES.contains(&m.as_str())
+}
+
+/// 判断图片 MIME 是否可直接交给 Linux/Windows 原生桌面壁纸后端。
+pub fn image_mime_native_wallpaper_safe(mime: &str) -> bool {
+    let m = mime.trim().to_lowercase();
+    NATIVE_WALLPAPER_SAFE_IMAGE_MIMES.contains(&m.as_str())
 }
 
 static MIME_BY_EXT: OnceLock<HashMap<String, String>> = OnceLock::new();
@@ -404,6 +419,9 @@ mod tests {
         assert!(image_mime_browser_safe("image/avif"));
         assert!(!image_mime_browser_safe("image/heic"));
         assert!(!image_mime_browser_safe("image/heif"));
+        assert!(image_mime_native_wallpaper_safe("image/png"));
+        assert!(!image_mime_native_wallpaper_safe("image/webp"));
+        assert!(!image_mime_native_wallpaper_safe("image/avif"));
 
         let mime_by_ext = mime_by_ext();
         assert_eq!(

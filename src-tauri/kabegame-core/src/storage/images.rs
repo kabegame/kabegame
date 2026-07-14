@@ -3,10 +3,8 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-// `fs` 仅用于桌面/iOS 的缩略图删除（remove_thumbnail_file_if_needed）；Android 无此用法。
-#[cfg(not(target_os = "android"))]
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +162,32 @@ fn remove_thumbnail_file_if_needed(local_path: Option<&str>, thumbnail_path: Opt
 
 #[cfg(target_os = "android")]
 fn remove_thumbnail_file_if_needed(_local_path: Option<&str>, _thumbnail_path: Option<&str>) {}
+
+/// 删除由 Kabegame 生成且位于 `compatibles_dir` 内的兼容副本。
+/// canonicalize 后再校验目录归属，避免删除原始媒体、外部路径或越界软链接。
+fn remove_compatible_file_if_owned(path: Option<&str>) {
+    let Some(path) = path.map(str::trim).filter(|p| !p.is_empty()) else {
+        return;
+    };
+    let Ok(root) = crate::app_paths::AppPaths::global()
+        .compatibles_dir()
+        .canonicalize()
+    else {
+        return;
+    };
+    let Ok(target) = Path::new(path).canonicalize() else {
+        return;
+    };
+    if !target.starts_with(&root) {
+        return;
+    }
+    if let Err(e) = fs::remove_file(&target) {
+        eprintln!(
+            "[storage] remove compatible file failed ({}): {e}",
+            target.display()
+        );
+    }
+}
 
 // v4.0 删除说明：resolve_file_size_for_backfill（含 Android / 桌面两个 cfg 版本）
 // 仅被 fill_missing_sizes 使用，随之一并删除。
@@ -633,15 +657,23 @@ impl Storage {
     pub fn delete_image(&self, image_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let image_paths: Option<(String, String, Option<i64>)> = conn
+        let image_paths: Option<(String, String, Option<i64>, Option<String>, Option<String>)> = conn
             .query_row(
-                "SELECT local_path, thumbnail_path, metadata_id FROM images WHERE id = ?1",
+                "SELECT local_path, thumbnail_path, metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
                 params![image_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .optional()
             .map_err(|e| format!("Failed to query image path: {}", e))?;
-        let metadata_id = image_paths.as_ref().and_then(|(_, _, id)| *id);
+        let metadata_id = image_paths.as_ref().and_then(|(_, _, id, _, _)| *id);
 
         // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
         let task_ids: Vec<String> = conn
@@ -660,8 +692,12 @@ impl Storage {
             })
             .map_err(|e| format!("Failed to query task IDs: {}", e))?;
 
-        if let Some((local_path, thumbnail_path, _)) = image_paths {
+        if let Some((local_path, thumbnail_path, _, compatible_path, wallpaper_compatible_path)) =
+            image_paths
+        {
             remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
+            remove_compatible_file_if_owned(compatible_path.as_deref());
+            remove_compatible_file_if_owned(wallpaper_compatible_path.as_deref());
             // 原始文件移入系统回收站（桌面，带护栏，绝不永久删除）；失败/不安全则保留磁盘文件。
             // Android 的 content:// 删除走内容提供方，这里不处理。
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -698,15 +734,23 @@ impl Storage {
     pub fn remove_image(&self, image_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let image_paths: Option<(String, String, Option<i64>)> = conn
+        let image_paths: Option<(String, String, Option<i64>, Option<String>, Option<String>)> = conn
             .query_row(
-                "SELECT local_path, thumbnail_path, metadata_id FROM images WHERE id = ?1",
+                "SELECT local_path, thumbnail_path, metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
                 params![image_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .optional()
             .map_err(|e| format!("Failed to query image path: {}", e))?;
-        let metadata_id = image_paths.as_ref().and_then(|(_, _, id)| *id);
+        let metadata_id = image_paths.as_ref().and_then(|(_, _, id, _, _)| *id);
 
         // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
         let task_ids: Vec<String> = conn
@@ -725,8 +769,12 @@ impl Storage {
             })
             .map_err(|e| format!("Failed to query task IDs: {}", e))?;
 
-        if let Some((local_path, thumbnail_path, _)) = image_paths {
+        if let Some((local_path, thumbnail_path, _, compatible_path, wallpaper_compatible_path)) =
+            image_paths
+        {
             remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
+            remove_compatible_file_if_owned(compatible_path.as_deref());
+            remove_compatible_file_if_owned(wallpaper_compatible_path.as_deref());
         }
 
         conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
@@ -794,20 +842,43 @@ impl Storage {
         let mut local_paths_to_trash: Vec<String> = Vec::new();
 
         for id in image_ids {
-            let image_paths: Option<(String, String, Option<i64>)> = tx
+            let image_paths: Option<(
+                String,
+                String,
+                Option<i64>,
+                Option<String>,
+                Option<String>,
+            )> = tx
                 .query_row(
-                    "SELECT local_path, thumbnail_path, metadata_id FROM images WHERE id = ?1",
+                    "SELECT local_path, thumbnail_path, metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
                     params![id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
                 )
                 .optional()
                 .map_err(|e| format!("Failed to query image path: {}", e))?;
 
-            if let Some((local_path, thumbnail_path, metadata_id)) = image_paths {
+            if let Some((
+                local_path,
+                thumbnail_path,
+                metadata_id,
+                compatible_path,
+                wallpaper_compatible_path,
+            )) = image_paths
+            {
                 if let Some(metadata_id) = metadata_id {
                     metadata_ids.push(metadata_id);
                 }
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
+                remove_compatible_file_if_owned(compatible_path.as_deref());
+                remove_compatible_file_if_owned(wallpaper_compatible_path.as_deref());
                 // Android 的 content:// 删除走内容提供方，这里不处理。
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 local_paths_to_trash.push(local_path);
@@ -885,20 +956,43 @@ impl Storage {
         }
 
         for id in image_ids {
-            let image_paths: Option<(String, String, Option<i64>)> = tx
+            let image_paths: Option<(
+                String,
+                String,
+                Option<i64>,
+                Option<String>,
+                Option<String>,
+            )> = tx
                 .query_row(
-                    "SELECT local_path, thumbnail_path, metadata_id FROM images WHERE id = ?1",
+                    "SELECT local_path, thumbnail_path, metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
                     params![id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
                 )
                 .optional()
                 .map_err(|e| format!("Failed to query image path: {}", e))?;
 
-            if let Some((local_path, thumbnail_path, metadata_id)) = image_paths {
+            if let Some((
+                local_path,
+                thumbnail_path,
+                metadata_id,
+                compatible_path,
+                wallpaper_compatible_path,
+            )) = image_paths
+            {
                 if let Some(metadata_id) = metadata_id {
                     metadata_ids.push(metadata_id);
                 }
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
+                remove_compatible_file_if_owned(compatible_path.as_deref());
+                remove_compatible_file_if_owned(wallpaper_compatible_path.as_deref());
             }
 
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])
@@ -1006,6 +1100,38 @@ impl Storage {
             params![compatible_path, image_id],
         )
         .map_err(|e| format!("Failed to update compatible_path: {}", e))?;
+        Ok(())
+    }
+
+    pub fn get_image_wallpaper_compatible_path(
+        &self,
+        image_id: &str,
+    ) -> Result<Option<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let path = conn
+            .query_row(
+                "SELECT wallpaper_compatible_path FROM images WHERE id = ?1",
+                params![image_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query wallpaper_compatible_path: {}", e))?
+            .flatten()
+            .filter(|path| !path.trim().is_empty());
+        Ok(path)
+    }
+
+    pub fn replace_image_wallpaper_compatible_path(
+        &self,
+        image_id: &str,
+        path: &str,
+    ) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.execute(
+            "UPDATE images SET wallpaper_compatible_path = ?1 WHERE id = ?2",
+            params![path, image_id],
+        )
+        .map_err(|e| format!("Failed to update wallpaper_compatible_path: {}", e))?;
         Ok(())
     }
 
