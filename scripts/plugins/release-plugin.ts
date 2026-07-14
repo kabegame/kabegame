@@ -8,7 +8,7 @@ import { BasePlugin } from "./base-plugin";
 import { BuildSystem } from "../build-system";
 import { Component } from "./component-plugin";
 import { OSPlugin } from "./os-plugin";
-import { ensureDir, readCargoTomlVersion, run } from "../utils";
+import { ensureDir, platformExeExt, readCargoTomlVersion, run } from "../utils";
 import { ROOT, TARGET_DIR } from "../utils";
 
 function walkFiles(dir: string): string[] {
@@ -55,6 +55,32 @@ function releaseAssetFileName(params: {
   } else {
     return `Kabegame_${version}_android-preview${ext}`;
   }
+}
+
+function osLabel(): string {
+  if (OSPlugin.isWindows) return "windows";
+  if (OSPlugin.isLinux) return "linux";
+  if (OSPlugin.isMacOS) return "macos";
+  return "unknown";
+}
+
+// kabegame-cli 是桌面原生 headless 二进制,直接取各平台惯用的 arch 记法,
+// 与 GUI 安装包命名(archForWindows/Deb/MacOS)保持一致。
+function cliArch(): string {
+  if (OSPlugin.isWindows) return archForWindows();
+  if (OSPlugin.isLinux) return archForDeb();
+  if (OSPlugin.isMacOS) return archForMacOS();
+  return process.arch;
+}
+
+// 形如 kabegame-cli-standard_1.2.3_windows_x64.exe / ..._linux_amd64 / ..._macos_aarch64
+function cliReleaseAssetFileName(params: {
+  mode: string;
+  version: string;
+  ext: string;
+}): string {
+  const { mode, version, ext } = params;
+  return `kabegame-cli-${mode}_${version}_${osLabel()}_${cliArch()}${ext}`;
 }
 
 function findBundleDir(root: string): string | null {
@@ -182,11 +208,37 @@ export class ReleasePlugin extends BasePlugin {
     );
 
     bs.hooks.afterBuild.tapPromise(this.name, async (comp: string) => {
-      if (comp !== Component.MAIN) return;
       if (bs.context.skip?.isCargo) return;
 
       const mode = bs.context.mode!.mode;
       const version = readCargoTomlVersion();
+      const releaseDir = path.join(ROOT, "release");
+
+      // kabegame-cli:裸 cargo 产物,按系统/平台改名复制到 release/。
+      // 只有桌面构建才有原生 CLI(android/web 不产出)。
+      if (comp === Component.CLI) {
+        if (bs.context.mode?.isAndroid || bs.context.mode?.isWeb) return;
+        const ext = platformExeExt();
+        const cliSrc = path.join(TARGET_DIR, "release", `kabegame-cli${ext}`);
+        if (!fs.existsSync(cliSrc)) {
+          throw new Error(
+            `找不到 kabegame-cli 构建产物：${path.relative(ROOT, cliSrc)}`,
+          );
+        }
+        ensureDir(releaseDir);
+        const dstName = cliReleaseAssetFileName({ mode, version, ext });
+        const dstPath = path.join(releaseDir, dstName);
+        fs.copyFileSync(cliSrc, dstPath);
+        this.log(
+          `copied ${path.relative(ROOT, cliSrc)} -> ${path.relative(
+            ROOT,
+            dstPath,
+          )}`,
+        );
+        return;
+      }
+
+      if (comp !== Component.MAIN) return;
 
       const bundleDir = findBundleDir(ROOT);
       if (!bundleDir) {
@@ -199,7 +251,6 @@ export class ReleasePlugin extends BasePlugin {
         );
       }
 
-      const releaseDir = path.join(ROOT, "release");
       ensureDir(releaseDir);
       for (const srcPath of assets) {
         if (OSPlugin.isLinux && srcPath.endsWith(".deb")) {

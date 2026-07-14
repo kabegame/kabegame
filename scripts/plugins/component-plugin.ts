@@ -274,7 +274,15 @@ export class ComponentPlugin extends BasePlugin {
         "standard",
         ...(release ? ["--release"] : []),
       ];
-      run("cargo", args, { cwd: SRC_TAURI_DIR });
+      // helper 走裸 cargo build(不经 cargo tauri),tauri-build 只在
+      // STATIC_VCRUNTIME=true 时才静态链接 vcruntime。主 exe 由 cargo tauri
+      // 设了这个 env,helper 没有 → 干净 Windows(无 VC++ 运行库)上启动报
+      // 找不到 VCRUNTIME140.dll。这里手动补上,让 build.rs 的 tauri_build::try_build
+      // 触发 static_vcruntime(其 rustc-link-arg 覆盖本包所有 bin,含 helper)。
+      const helperEnv = OSPlugin.isWindows
+        ? { ...process.env, STATIC_VCRUNTIME: "true" }
+        : process.env;
+      run("cargo", args, { cwd: SRC_TAURI_DIR, env: helperEnv });
       if (release && OSPlugin.isWindows) {
         stageResourceBinary("kabegame-cef-helper");
       }

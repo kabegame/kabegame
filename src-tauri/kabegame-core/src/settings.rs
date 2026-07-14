@@ -395,8 +395,13 @@ if ($tile -eq $null) { $tile = "0" }
 Write-Output "$style,$tile"
 "#;
 
+        // CREATE_NO_WINDOW:GUI 进程(无控制台)默认会给控制台子进程新建一个窗口,
+        // 首次启动时读系统壁纸设置会闪出一个 PowerShell 窗口。加此标志隐藏之。
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         match Command::new("powershell")
             .args(["-Command", script])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
         {
             Ok(output) => {

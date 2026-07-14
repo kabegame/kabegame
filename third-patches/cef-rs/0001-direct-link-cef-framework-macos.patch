@@ -50,7 +50,7 @@ index d064e51..ec4b5e3 100644
              let sdk_libs = [
                  "comctl32.lib",
                  "delayimp.lib",
-@@ -186,15 +186,29 @@ fn main() -> anyhow::Result<()> {
+@@ -186,15 +186,30 @@ fn main() -> anyhow::Result<()> {
          "macos" => {
              println!("cargo::rustc-link-lib=framework=AppKit");
  
@@ -84,6 +84,7 @@ index d064e51..ec4b5e3 100644
 +                } else if link.exists() {
 +                    std::fs::remove_dir_all(&link)?;
 +                }
++                #[cfg(unix)]
 +                std::os::unix::fs::symlink(&src, &link)?;
 +            }
          }

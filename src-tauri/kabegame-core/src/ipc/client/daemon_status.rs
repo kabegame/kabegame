@@ -64,9 +64,13 @@ fn show_daemon_error_dialog() {
 
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         use std::process::Command;
+        // CREATE_NO_WINDOW:隐藏 PowerShell 控制台窗口,只弹出其中的 MessageBox。
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let _ = Command::new("powershell")
             .args(&["-Command", &format!("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('{}', '连接失败', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)", message.replace("'", "''"))])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
     }
 

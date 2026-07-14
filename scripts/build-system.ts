@@ -341,6 +341,9 @@ export class BuildSystem {
           cwd: SRC_TAURI_DIR,
         });
       }
+      // 让 ReleasePlugin 有机会把 kabegame-cli 产物按系统/平台改名复制到 release/
+      // (release 构建才注册该 hook;非 release 时此调用为 no-op)。
+      await this.hooks.afterBuild.promise(Component.CLI);
     }
     if (this.context.component!.isMain) {
       this.hooks.beforeBuild.call(Component.MAIN);
