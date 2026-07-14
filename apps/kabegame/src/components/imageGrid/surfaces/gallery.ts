@@ -51,7 +51,7 @@ export function createGallerySurface(params: {
     // 空 `?path=` 表示回到默认画廊路径（如点击侧栏「画廊」）
     syncEmptyQueryPath: true,
     imagesChange: {
-      waitMs: 1000,
+      waitMs: 100,
       filter: (p, ctx) => {
         const reason = String(p.reason ?? "");
         const ids = Array.isArray(p.imageIds) ? p.imageIds : [];
@@ -75,7 +75,7 @@ export function createGallerySurface(params: {
     },
     /** 画册成员变化：FAVORITE 就地更新星标；HIDDEN / no-album 影响 gallery 可见性，需全量刷新。 */
     albumImagesChange: {
-      waitMs: 1000,
+      waitMs: 100,
       filter: (p) => {
         const ids = p.albumIds ?? [];
         return (

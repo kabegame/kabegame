@@ -14,10 +14,10 @@ export type ImagesChangePayload = {
 type UnlistenFn = () => void;
 
 /**
- * 统一的 images-change 监听 + “仅激活时刷新”封装。
+ * 统一的 images-change 监听 + "仅激活时刷新"封装。
  *
  * 设计目标：
- * - `images-change` 视为“数据可能变化”的失效信号（不保证命中当前 provider 视图）
+ * - `images-change` 视为"数据可能变化"的失效信号（不保证命中当前 provider 视图）
  * - 页面在激活时收到信号 -> 刷新当前页数据（整体替换数组引用）
  * - 使用 250ms 节流（带 trailing）合并 burst，且不丢最后一个事件
  */
