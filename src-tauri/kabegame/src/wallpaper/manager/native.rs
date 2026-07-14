@@ -538,6 +538,12 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
         println!("[DEBUG] NativeWallpaperManager::set_wallpaper_path 被调用");
         println!("[DEBUG] file_path: {}", file_path);
 
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        let file_path_owned =
+            kabegame_core::wallpaper_compat::ensure_native_wallpaper_path(file_path).await;
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        let file_path = file_path_owned.as_str();
+
         // Android 上为 content:// URI，不能按文件路径检查存在
         let path = Path::new(file_path);
         #[cfg(not(target_os = "android"))]
@@ -864,6 +870,8 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
         ) -> Result<(), String> {
             if let Some(path) = manager.current_wallpaper_path_from_settings() {
                 if std::path::Path::new(&path).exists() {
+                    let path =
+                        kabegame_core::wallpaper_compat::ensure_native_wallpaper_path(&path).await;
                     manager.set_wallpaper_plasma(&path, style)?;
                 } else {
                     return Err(format!("当前壁纸路径不存在: {}", path));
@@ -919,6 +927,8 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
             // 如果有当前壁纸路径，重新设置壁纸以应用新样式
             if let Some(path) = manager.current_wallpaper_path_from_settings() {
                 if std::path::Path::new(&path).exists() {
+                    let path =
+                        kabegame_core::wallpaper_compat::ensure_native_wallpaper_path(&path).await;
                     manager.set_wallpaper_gnome(&path, style)?;
                 }
             }

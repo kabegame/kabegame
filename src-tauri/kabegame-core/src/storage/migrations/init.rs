@@ -68,6 +68,7 @@ CREATE TABLE images (
     size                  INTEGER,
     description           TEXT,
     compatible_path       TEXT,
+    wallpaper_compatible_path TEXT,
     post_url              TEXT
 );
 CREATE INDEX idx_crawled_at                    ON images(crawled_at DESC);
