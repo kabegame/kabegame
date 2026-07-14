@@ -164,35 +164,35 @@ pub fn create_main_window<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Resul
             .visible(true)
             .devtools(true);
 
-    #[cfg(not(target_os = "linux"))]
-    let builder = builder.transparent(true);
+    // #[cfg(not(target_os = "macos"))]
+    // let builder = builder.transparent(true);
 
-    // Windows 11/macOS: 添加窗口效果（Windows 7/8/10 下 Acrylic 渲染异常，不应用毛玻璃特效）
-    #[cfg(not(target_os = "linux"))]
-    let builder = {
-        #[cfg(target_os = "windows")]
-        let should_apply_effects = {
-            let version = winver::WindowsVersion::detect();
-            version
-                .map(|v| v.major == 10 && v.minor == 0 && v.build >= 22000)
-                .unwrap_or(false)
-        };
-        #[cfg(not(target_os = "windows"))]
-        let should_apply_effects = true;
+    // // Windows 11/macOS: 添加窗口效果（Windows 7/8/10 下 Acrylic 渲染异常，不应用毛玻璃特效）
+    // #[cfg(not(target_os = "linux"))]
+    // let builder = {
+    //     #[cfg(target_os = "windows")]
+    //     let should_apply_effects = {
+    //         let version = winver::WindowsVersion::detect();
+    //         version
+    //             .map(|v| v.major == 10 && v.minor == 0 && v.build >= 22000)
+    //             .unwrap_or(false)
+    //     };
+    //     #[cfg(not(target_os = "windows"))]
+    //     let should_apply_effects = true;
 
-        if should_apply_effects {
-            use tauri::window::{Effect, EffectState, EffectsBuilder};
-            builder.effects(
-                EffectsBuilder::new()
-                    .effect(Effect::Sidebar)
-                    .effect(Effect::Acrylic)
-                    .state(EffectState::FollowsWindowActiveState)
-                    .build(),
-            )
-        } else {
-            builder
-        }
-    };
+    //     if should_apply_effects {
+    //         use tauri::window::{Effect, EffectState, EffectsBuilder};
+    //         builder.effects(
+    //             EffectsBuilder::new()
+    //                 .effect(Effect::Sidebar)
+    //                 .effect(Effect::Acrylic)
+    //                 .state(EffectState::FollowsWindowActiveState)
+    //                 .build(),
+    //         )
+    //     } else {
+    //         builder
+    //     }
+    // };
 
     builder
         .build()

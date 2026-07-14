@@ -292,6 +292,13 @@ CONFIG_FLAGS=(
   "--disable-vaapi"
   "--disable-vdpau"
   "--disable-opencl"
+  # 显式关闭 vulkan/xcb/xlib：configure 会自动探测 Homebrew 的 vulkan-loader/libxcb，
+  # 即使 xlib/xcbgrab 设备关着，仍把 -L/opt/homebrew/.../libx11 -lX11 烧进 libavutil.pc，
+  # 泄漏进 Rust 静态链接 → 主程序硬绑 Homebrew 绝对路径 libX11，非 Homebrew 机器启动即崩。
+  # 本项目 FFmpeg 只做缩略图/压缩解码，不需要这三者。
+  "--disable-vulkan"
+  "--disable-libxcb"
+  "--disable-xlib"
   "--enable-gpl"
 
   "--enable-protocol=file"

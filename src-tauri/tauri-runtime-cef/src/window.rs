@@ -265,14 +265,13 @@ mod imp {
             self
         }
 
+        // Mirror the trait gate: `WindowBuilder::transparent` only exists on
+        // macOS when the `macos-private-api` feature is enabled, which this
+        // crate never enables. Providing it unconditionally under
+        // `target_os = "macos"` breaks the trait impl (E0407).
         #[cfg(not(target_os = "macos"))]
         fn transparent(mut self, transparent: bool) -> Self {
             self.inner = self.inner.with_transparent(transparent);
-            self
-        }
-
-        #[cfg(target_os = "macos")]
-        fn transparent(self, _transparent: bool) -> Self {
             self
         }
 
