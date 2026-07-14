@@ -486,7 +486,7 @@ const pswpDataSource = computed(() => {
   const source = uiStore.isCompact
     ? androidFilteredIndices.value.map((idx) => props.images[idx]).filter(Boolean)
     : props.images;
-  return source.map((img) => {
+  const items = source.map((img) => {
     const url = getOriginalPreviewUrl(img) || getThumbnailPreviewUrl(img) || "";
     const isVideo = isVideoMediaType(img.type);
     return {
@@ -501,6 +501,7 @@ const pswpDataSource = computed(() => {
       id: img.id,
     };
   });
+  return items;
 });
 
 const setPreviewByIndex = (

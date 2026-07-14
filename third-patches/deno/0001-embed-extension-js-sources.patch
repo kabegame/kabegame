@@ -1,0 +1,67 @@
+diff --git a/libs/core/extensions.rs b/libs/core/extensions.rs
+index c653502..1f07dca 100644
+--- a/libs/core/extensions.rs
++++ b/libs/core/extensions.rs
+@@ -936,6 +936,12 @@ macro_rules! include_js_files {
+ /// directory name.
+ ///
+ /// See [`include_js_files!`] for details on available options.
++///
++/// kabegame patch: `mode=included` (embed via `include_str!`) rather than
++/// upstream `mode=loaded` (record an absolute build-time path). Same rationale
++/// as [`__extension_include_js_files_detect!`] — lazy sources such as
++/// `deno_crypto`'s `00_crypto.js` are `load()`ed from disk at runtime under the
++/// snapshotless runtime, which ENOENTs on a cross-compiled Android device.
+ #[macro_export]
+ macro_rules! include_lazy_loaded_js_files {
+   ($name:ident $( dir $dir:literal, )? $(
+@@ -943,7 +949,7 @@ macro_rules! include_lazy_loaded_js_files {
+     $(with_specifier $s2:literal)?
+     $(= $config:tt)?
+   ),* $(,)?) => {
+-    $crate::__extension_include_js_files_inner!(mode=loaded, name=$name, dir=$crate::__extension_root_dir!($($dir)?), $([
++    $crate::__extension_include_js_files_inner!(mode=included, name=$name, dir=$crate::__extension_root_dir!($($dir)?), $([
+       // These entries will be parsed in __extension_include_js_files_inner
+       $s1 $(with_specifier $s2)? $(= $config)?
+     ]),*)
+@@ -965,15 +971,34 @@ macro_rules! include_js_files_doctest {
+   };
+ }
+ 
+-/// Source files declared on an extension are recorded by absolute path; their
+-/// bytes are read from disk during snapshot creation and never embedded in the
+-/// final binary. With a startup snapshot, the source is reachable via the
+-/// snapshot bytes (for `esm`/`js`) or the residual lazy table emitted by the
+-/// snapshot build (for `lazy_loaded_*`).
++/// kabegame patch: embed extension source bytes into the binary via
++/// `include_str!` (`mode=included`) instead of recording an absolute build-time
++/// path read from disk at runtime (`mode=loaded`).
++///
++/// Upstream deno_core defaults to `mode=loaded`: every `esm`/`js` source is a
++/// `LoadedFromFsDuringSnapshot(<abs build path>)`, expecting a V8 startup
++/// snapshot to have captured its bytes. Deno always snapshots, so it never
++/// touches disk at runtime.
++///
++/// kabegame runs snapshotless (`startup_snapshot: None`), so `extension_set`'s
++/// "not in snapshot → load every declared file from disk" path reads each
++/// source from its absolute build-machine path at `JsRuntime::new` time. That
++/// happens to work on desktop (build machine == run machine) but breaks under
++/// cross-compilation: on an Android device the recorded paths are the Linux
++/// host's cargo-registry paths, which don't exist → `read_to_string` ENOENT →
++/// "Failed to initialize a JsRuntime: No such file or directory (os error 2)".
++///
++/// Because `[patch.crates-io] deno_core` routes `deno_web`/`deno_crypto`/
++/// `deno_webidl`'s `extension!` expansion through this crate too, flipping the
++/// default to `included` embeds all of their sources (and kabegame_v8's) at
++/// their own compile time — no runtime disk access, and desktop release builds
++/// stop depending on the build tree being present. This matches deno_core's
++/// pre-refactor `#[cfg(not(feature = "include_js_files_for_snapshotting"))]`
++/// default. kabegame never builds a snapshot, so unconditional embedding is safe.
+ #[doc(hidden)]
+ #[macro_export]
+ macro_rules! __extension_include_js_files_detect {
+-  ($($rest:tt)*) => { $crate::__extension_include_js_files_inner!(mode=loaded, $($rest)*) };
++  ($($rest:tt)*) => { $crate::__extension_include_js_files_inner!(mode=included, $($rest)*) };
+ }
+ 
+ /// This is the core of the [`include_js_files!`] and [`include_lazy_loaded_js_files`] macros. The first

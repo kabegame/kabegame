@@ -32,39 +32,99 @@
 #       2. 执行 D:\Programs\MSYS2\msys2_shell.cmd -mingw64 -use-full-path -defterm -no-start -here -c "cd /d/Codes/kabegame && ./scripts/build-ffmpeg.sh"
 #
 # 参数：
-#   --skip-x264   跳过重新编译 x264，复用 third/x264-build/install/ 下已有产物
+#   --skip-x264   跳过重新编译 x264，复用已装产物
 #                 （仅需迭代 FFmpeg configure flags 时用，节省 x264 编译时间；
 #                 若该目录下没有已安装的 x264 会报错退出）。
+#   --target android  交叉编译 aarch64 Android 静态库（用环境 NDK；仅 Linux/macOS 宿主）。
+#                 产物落在 third/{FFmpeg,x264}-build/android/aarch64/install/，与本机产物隔离，
+#                 且均已 gitignore —— 不入库，靠本命令复现（见 cocs/downloader-tasks/VIDEO_INGEST.md）。
+#                 NDK 定位顺序：NDK_HOME → ANDROID_NDK_HOME → ANDROID_NDK_ROOT →
+#                 $ANDROID_HOME/ndk/ 下最新版本；API level 由 ANDROID_API 覆盖（默认 24）。
+#                 依赖：git submodule update --init third/FFmpeg third/x264；host pkg-config。
 
-set -euo pipefail
+# 共用 helper：strict mode（set -euo pipefail）+ log/warn/die/kb_os/require_cmd（见 scripts/utils.sh）。
+source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
 
 SKIP_X264=0
+TARGET="native"
 _ARGS=()
-for _arg in "$@"; do
-  if [[ "$_arg" == "--skip-x264" ]]; then
-    SKIP_X264=1
-  else
-    _ARGS+=("$_arg")
-  fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-x264) SKIP_X264=1; shift ;;
+    --target)    TARGET="${2:-}"; shift 2 ;;
+    --target=*)  TARGET="${1#--target=}"; shift ;;
+    *)           _ARGS+=("$1"); shift ;;
+  esac
 done
 set -- "${_ARGS[@]}"
+if [[ "$TARGET" != "native" && "$TARGET" != "android" ]]; then
+  die "未知 --target: '$TARGET'（允许 native|android）"
+fi
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FFMPEG_SRC="${REPO_ROOT}/third/FFmpeg"
-BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build"
-INSTALL_DIR="${BUILD_DIR}/install"
 X264_SRC="${REPO_ROOT}/third/x264"
-X264_BUILD_DIR="${REPO_ROOT}/third/x264-build"
-X264_INSTALL_DIR="${X264_BUILD_DIR}/install"
 BUILD_TMP_DIR="${REPO_ROOT}/third/.tmp"
 
 case "$(uname -s)" in
   Darwin)            OS_KIND="unix" ;;
   Linux)             OS_KIND="unix" ;;
   MINGW*|MSYS*|CYGWIN*) OS_KIND="windows" ;;
-  *) echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
+  *) die "Unsupported OS: $(uname -s)" ;;
 esac
+
+if [[ "$TARGET" == "android" ]]; then
+  # 交叉编译:产物按 target/abi 独立目录,不与本机产物冲突;链接模型走 unix 静态库。
+  OS_KIND="unix"
+  ANDROID_ARCH="aarch64"
+  ANDROID_ABI="arm64-v8a"
+  ANDROID_TRIPLE="aarch64-linux-android"
+  ANDROID_API="${ANDROID_API:-24}"
+  BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build/android/${ANDROID_ARCH}"
+  INSTALL_DIR="${BUILD_DIR}/install"
+  X264_BUILD_DIR="${REPO_ROOT}/third/x264-build/android/${ANDROID_ARCH}"
+  X264_INSTALL_DIR="${X264_BUILD_DIR}/install"
+
+  # NDK 定位:优先显式 env,退回 $ANDROID_HOME/ndk 下最新版本。
+  NDK_DIR="${NDK_HOME:-${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}}"
+  if [[ -z "$NDK_DIR" && -n "${ANDROID_HOME:-}" && -d "$ANDROID_HOME/ndk" ]]; then
+    NDK_DIR="$(ls -d "$ANDROID_HOME"/ndk/*/ 2>/dev/null | sort -V | tail -1)"
+    NDK_DIR="${NDK_DIR%/}"
+  fi
+  if [[ -z "$NDK_DIR" || ! -d "$NDK_DIR" ]]; then
+    echo "错误: 未找到 Android NDK。请设置 NDK_HOME(或 ANDROID_NDK_HOME/ANDROID_NDK_ROOT)。" >&2
+    exit 1
+  fi
+  # 交叉编译工具链宿主 tag(NDK 只提供这两种预编译)。
+  case "$(uname -s)" in
+    Linux)  NDK_HOST_TAG="linux-x86_64" ;;
+    Darwin) NDK_HOST_TAG="darwin-x86_64" ;;
+    *) echo "错误: Android 交叉编译仅支持 Linux/macOS 宿主。" >&2; exit 1 ;;
+  esac
+  NDK_TC="$NDK_DIR/toolchains/llvm/prebuilt/$NDK_HOST_TAG"
+  ANDROID_CC="$NDK_TC/bin/${ANDROID_TRIPLE}${ANDROID_API}-clang"
+  if [[ ! -x "$ANDROID_CC" ]]; then
+    echo "错误: NDK clang 不存在: $ANDROID_CC" >&2
+    echo "确认 NDK($NDK_DIR)含 API ${ANDROID_API} 的 aarch64 工具链,或用 ANDROID_API 指定其它 level。" >&2
+    exit 1
+  fi
+  # 统一工具链的 clang 已内建 sysroot;binutils 用 llvm-* 通用工具。
+  export CC="$ANDROID_CC"
+  export CXX="${ANDROID_CC}++"
+  export AS="$ANDROID_CC"
+  export LD="$NDK_TC/bin/ld"
+  export AR="$NDK_TC/bin/llvm-ar"
+  export NM="$NDK_TC/bin/llvm-nm"
+  export RANLIB="$NDK_TC/bin/llvm-ranlib"
+  export STRIP="$NDK_TC/bin/llvm-strip"
+  echo "=== Android 交叉编译: NDK=$NDK_DIR  API=$ANDROID_API  ABI=$ANDROID_ABI ==="
+else
+  BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build"
+  INSTALL_DIR="${BUILD_DIR}/install"
+  X264_BUILD_DIR="${REPO_ROOT}/third/x264-build"
+  X264_INSTALL_DIR="${X264_BUILD_DIR}/install"
+fi
 
 mkdir -p "$BUILD_TMP_DIR"
 if [[ "$OS_KIND" == "windows" ]]; then
@@ -120,17 +180,27 @@ else
     "--enable-static"
     "--disable-cli"
   )
-  case "$(uname -s)" in
-    Linux)  X264_FLAGS+=("--enable-pic") ;;
-    Darwin) X264_FLAGS+=("--enable-pic") ;;
-    MINGW*|MSYS*|CYGWIN*)
-      # Windows/MinGW：x264 静态库嵌入 avcodec.dll，不需要 --enable-pic
-      ;;
-  esac
+  if [[ "$TARGET" == "android" ]]; then
+    # 交叉编译:--host 触发 cross 模式(跳过运行测试程序);CC/AR/... 已 export 为 NDK 工具。
+    # aarch64 asm 由 clang 内建汇编器处理(不用 nasm),保留启用。
+    X264_FLAGS+=(
+      "--enable-pic"
+      "--host=${ANDROID_TRIPLE}"
+      "--sysroot=${NDK_TC}/sysroot"
+    )
+  else
+    case "$(uname -s)" in
+      Linux)  X264_FLAGS+=("--enable-pic") ;;
+      Darwin) X264_FLAGS+=("--enable-pic") ;;
+      MINGW*|MSYS*|CYGWIN*)
+        # Windows/MinGW：x264 静态库嵌入 avcodec.dll，不需要 --enable-pic
+        ;;
+    esac
+  fi
 
   "$X264_SRC/configure" "${X264_FLAGS[@]}"
 
-  if [[ "$OS_KIND" == "unix" && "$(uname -s)" == "Linux" ]]; then
+  if [[ "$TARGET" == "native" && "$OS_KIND" == "unix" && "$(uname -s)" == "Linux" ]]; then
     # Linux only: disable x264 THP. CEF's PartitionAlloc rejects the 2MB
     # alignment requested by x264_malloc for large frame buffers.
     sed -i 's/#define HAVE_THP 1/#define HAVE_THP 0/' config.h
@@ -191,6 +261,28 @@ else
   _LINK_FLAGS=(--enable-static --disable-shared --enable-pic)
 fi
 
+# Android 交叉编译标志:显式指定 NDK 工具链 + target/arch;host pkg-config 读取我们
+# 自编的 x264.pc(路径为绝对的 android install 目录),--pkg-config-flags=--static
+# 确保静态解析 x264 传递依赖。
+_CROSS_FLAGS=()
+if [[ "$TARGET" == "android" ]]; then
+  _CROSS_FLAGS=(
+    --enable-cross-compile
+    --target-os=android
+    --arch="${ANDROID_ARCH}"
+    --cpu=armv8-a
+    --sysroot="${NDK_TC}/sysroot"
+    --cc="$CC"
+    --cxx="$CXX"
+    --ar="$AR"
+    --nm="$NM"
+    --ranlib="$RANLIB"
+    --strip="$STRIP"
+    --pkg-config=pkg-config
+    --pkg-config-flags=--static
+  )
+fi
+
 CONFIG_FLAGS=(
   "--disable-everything"
   "--disable-programs"
@@ -203,6 +295,9 @@ CONFIG_FLAGS=(
   "--enable-gpl"
 
   "--enable-protocol=file"
+  # Android: content:// 视频经 ContentIoProvider.open_fd 拿到 fd,Rust 用 file 协议打开
+  # /proc/self/fd/N;fd 协议一并启用以备直接按 fd 打开。桌面开销可忽略。
+  "--enable-protocol=fd"
   "--enable-demuxer=mov"
   "--enable-demuxer=matroska"
   "--enable-demuxer=asf"
@@ -231,6 +326,11 @@ CONFIG_FLAGS=(
   "--enable-muxer=mov"
   "--enable-muxer=mp4"
   "--enable-muxer=webm"
+  # GIF 动图预览：Android 视频缩略图（无鼠标悬浮，用动图而非静帧）经
+  # fps+scale+palettegen+paletteuse 生成 10fps GIF。桌面用 mp4 预览，不走 gif。
+  # 见 src-tauri/kabegame-core/src/crawler/downloader/compress.rs run_ffmpeg_gif。
+  "--enable-encoder=gif"
+  "--enable-muxer=gif"
 
   # 音频：兼容视频转 H.264 mp4 时需保留音轨 → 解码源音频 + AAC 编码
   "--enable-decoder=aac"
@@ -251,6 +351,11 @@ CONFIG_FLAGS=(
   "--enable-filter=buffer"
   "--enable-filter=buffersink"
   "--enable-filter=format"
+  # GIF 预览管线：fps 降帧 + split/palettegen/paletteuse 自适应调色板（优于 rgb8 定板）
+  "--enable-filter=fps"
+  "--enable-filter=split"
+  "--enable-filter=palettegen"
+  "--enable-filter=paletteuse"
   "--enable-filter=aresample"
   "--enable-filter=aformat"
   "--enable-filter=anull"
@@ -280,6 +385,7 @@ CONFIG_FLAGS=(
   --extra-cflags="-O2" \
   "${_LINK_FLAGS[@]}" \
   "${_EXTRA_LIBS[@]}" \
+  "${_CROSS_FLAGS[@]}" \
   "${CONFIGURE_EXTRA[@]}" \
   "$@"
 

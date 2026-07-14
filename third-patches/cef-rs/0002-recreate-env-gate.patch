@@ -1,0 +1,73 @@
+diff --git a/sys/build.rs b/sys/build.rs
+index ec4b5e3..e4246a1 100644
+--- a/sys/build.rs
++++ b/sys/build.rs
+@@ -23,26 +23,26 @@ fn main() -> anyhow::Result<()> {
+ 
+     let resolve_cef_dir = |location: &Path| -> anyhow::Result<PathBuf> {
+         let cef_dir = location.join(os_arch.to_string());
+-
+-        if !fs::exists(&cef_dir)? {
+-            let download_url = download_cef::default_download_url();
+-            let index = CefIndex::download_from(&download_url)?;
+-            let platform = index.platform(&target)?;
+-            let version = platform.version(&cef_version)?;
+-
+-            let archive = version.download_archive_from(&download_url, location, false)?;
+-            let extracted_dir =
+-                download_cef::extract_target_archive(&target, &archive, location, false)?;
+-            let extracted_dir_canonical = fs::canonicalize(&extracted_dir)?;
+-            let cef_dir_canonical = fs::canonicalize(&cef_dir)?;
+-            if extracted_dir_canonical != cef_dir_canonical {
+-                return Err(anyhow::anyhow!(
+-                    "extracted dir {extracted_dir_canonical:?} does not match cef_dir {cef_dir_canonical:?}",
+-                ));
+-            }
+-
+-            version.write_archive_json(extracted_dir)?;
+-        }
++        // 不主动下载
++        // if !fs::exists(&cef_dir)? {
++        //     let download_url = download_cef::default_download_url();
++        //     let index = CefIndex::download_from(&download_url)?;
++        //     let platform = index.platform(&target)?;
++        //     let version = platform.version(&cef_version)?;
++
++        //     let archive = version.download_archive_from(&download_url, location, false)?;
++        //     let extracted_dir =
++        //         download_cef::extract_target_archive(&target, &archive, location, false)?;
++        //     let extracted_dir_canonical = fs::canonicalize(&extracted_dir)?;
++        //     let cef_dir_canonical = fs::canonicalize(&cef_dir)?;
++        //     if extracted_dir_canonical != cef_dir_canonical {
++        //         return Err(anyhow::anyhow!(
++        //             "extracted dir {extracted_dir_canonical:?} does not match cef_dir {cef_dir_canonical:?}",
++        //         ));
++        //     }
++
++        //     version.write_archive_json(extracted_dir)?;
++        // }
+ 
+         Ok(cef_dir)
+     };
+@@ -197,8 +197,20 @@ fn main() -> anyhow::Result<()> {
+             std::fs::create_dir_all(&frameworks_dir)?;
+             let link = frameworks_dir.join("Chromium Embedded Framework.framework");
+             let src = cef_dir.join("Chromium Embedded Framework.framework");
++            // Only an explicitly configured CEF (CEF_PATH/FLATPAK) may re-point an
++            // existing symlink. The unconfigured OUT_DIR download fallback creates
++            // the link only when it is missing or dangling; otherwise a background
++            // `cargo check` without CEF_PATH (e.g. rust-analyzer) would silently
++            // swap the runtime framework to the official codec-less build.
++            let configured = env::var("FLATPAK").is_ok() || env::var("CEF_PATH").is_ok();
+             let needs_recreate = match std::fs::read_link(&link) {
+-                Ok(existing) => existing != src,
++                Ok(existing) => {
++                    if configured {
++                        existing != src
++                    } else {
++                        !existing.exists()
++                    }
++                }
+                 Err(_) => true,
+             };
+             if needs_recreate {

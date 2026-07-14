@@ -170,6 +170,11 @@ impl AppPaths {
         self.cache_dir.join("downloads")
     }
 
+    /// 插件 V8 baseline snapshot 缓存目录：`cache_dir/plugins/snapshots`
+    pub fn plugin_snapshots_dir(&self) -> PathBuf {
+        self.cache_dir.join("plugins").join("snapshots")
+    }
+
     // ========== 虚拟驱动相关（仅桌面） ==========
 
     /// 虚拟驱动备注文件目录

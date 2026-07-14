@@ -51,7 +51,6 @@ kabegame-core = {workspace = true, default-features = false, features = ["ipc-se
 reqwest = { version = "0.11", features = ["stream", "rustls-tls"] }
 tauri-plugin-picker = { workspace = true, optional = true }
 tauri-plugin-share = { workspace = true, optional = true }
-tauri-plugin-compress = { workspace = true, optional = true }
 tauri-plugin-wallpaper = { workspace = true, optional = true }
 tauri-plugin-task-notification = { workspace = true, optional = true }
 tauri-plugin-android-battery-optimization = { version = "0.1.4", optional = true }
@@ -145,7 +144,6 @@ android = [
     "dep:tauri-plugin-android-battery-optimization",
     "dep:tauri-plugin-picker",
     "dep:tauri-plugin-share",
-    "dep:tauri-plugin-compress",
     "dep:tauri-plugin-wallpaper",
     "dep:tauri-plugin-task-notification",
     "dep:tauri-build",

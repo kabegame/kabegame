@@ -55,9 +55,15 @@ interface PickerLauncherHost {
 class PickerPlugin(private val activity: Activity) : Plugin(activity) {
     companion object {
         private const val TAG = "PickerPlugin"
-        private const val PICTURES_RELATIVE_PATH = "Pictures/Kabegame/"
-        private const val VIDEO_RELATIVE_PATH = "Movies/Kabegame/"
     }
+
+    // dev/prod 装成不同 applicationId（app.kabegame.dev / app.kabegame，见 TAURI_CLI_FORK），
+    // 保存到系统相册的目录随之隔离：dev → Kabegame-dev，prod → Kabegame。
+    // 依赖运行时 applicationId，故不能是编译期 const。
+    private val albumDirName: String =
+        if (activity.packageName.endsWith(".dev")) "Kabegame-dev" else "Kabegame"
+    private val picturesRelativePath: String = "Pictures/$albumDirName/"
+    private val videoRelativePath: String = "Movies/$albumDirName/"
 
     private var pendingInvoke: Invoke? = null
     private var pendingImagesInvoke: Invoke? = null
@@ -566,6 +572,45 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @InvokeArg
+    class OpenFdArgs {
+        var uri: String = ""
+    }
+
+    /**
+     * 打开 content:// URI 并 detach 出原始文件描述符返回给 Rust。
+     * Rust 侧用 /proc/self/fd/N 交给 FFmpeg(rsmpeg)读取视频，取代慢速的 Kotlin 帧提取/编码。
+     * detachFd() 后 fd 所有权转移到 native，由调用方负责关闭。
+     */
+    @Command
+    fun openFd(invoke: Invoke) {
+        val args = invoke.parseArgs(OpenFdArgs::class.java)
+        val uriStr = args.uri
+        if (uriStr.isBlank()) {
+            invoke.reject("uri 不能为空")
+            return
+        }
+        try {
+            val uri = Uri.parse(uriStr)
+            if (uri.scheme != "content") {
+                invoke.reject("仅支持 content:// URI")
+                return
+            }
+            val pfd = activity.contentResolver.openFileDescriptor(uri, "r")
+                ?: run {
+                    invoke.reject("无法打开 URI: $uriStr")
+                    return
+                }
+            val fd = pfd.detachFd()
+            val result = JSObject()
+            result.put("fd", fd)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            Log.e("PickerPlugin", "openFd failed", e)
+            invoke.reject("打开文件描述符失败: ${e.message}", e)
+        }
+    }
+
+    @InvokeArg
     class ReadFileBytesArgs {
         var uri: String = ""
     }
@@ -1038,7 +1083,7 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, candidate)
             put(MediaStore.Images.Media.MIME_TYPE, mimeType)
-            put(MediaStore.Images.Media.RELATIVE_PATH, PICTURES_RELATIVE_PATH)
+            put(MediaStore.Images.Media.RELATIVE_PATH, picturesRelativePath)
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
 
@@ -1075,7 +1120,7 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, candidate)
             put(MediaStore.Video.Media.MIME_TYPE, mimeType)
-            put(MediaStore.Video.Media.RELATIVE_PATH, VIDEO_RELATIVE_PATH)
+            put(MediaStore.Video.Media.RELATIVE_PATH, videoRelativePath)
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
 
@@ -1107,7 +1152,7 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
             throw SecurityException("缺少 WRITE_EXTERNAL_STORAGE 权限（Android < 10）")
         }
         val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
-        val targetDir = File(picturesDir, "Kabegame")
+        val targetDir = File(picturesDir, albumDirName)
         if (!targetDir.exists()) {
             targetDir.mkdirs()
         }
@@ -1148,7 +1193,7 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
                 MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                 projection,
                 selection,
-                arrayOf(VIDEO_RELATIVE_PATH, displayName),
+                arrayOf(videoRelativePath, displayName),
                 null,
             )?.use { cursor ->
                 return cursor.moveToFirst()
@@ -1161,7 +1206,7 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             projection,
             selection,
-            arrayOf(PICTURES_RELATIVE_PATH, displayName),
+            arrayOf(picturesRelativePath, displayName),
             null,
         )?.use { cursor ->
             return cursor.moveToFirst()

@@ -1,0 +1,38 @@
+diff --git a/crates/tauri-cli/src/icon.rs b/crates/tauri-cli/src/icon.rs
+index e5863b1a3..e63cb1c32 100644
+--- a/crates/tauri-cli/src/icon.rs
++++ b/crates/tauri-cli/src/icon.rs
+@@ -323,6 +323,23 @@ fn appx(source: &Source, out_dir: &Path) -> Result<()> {
+   Ok(())
+ }
+ 
++// kabegame fork:macOS dock 图标设计规范要求内容四周留白(缩入)。内容居中占画布该百分比,
++// 单边缩入 (100 - 该值) / 2 ≈ 7.81%(check-icon.py 实测 icon.iconset 的目标值)。
++// 仅作用于 .icns(dock / Finder 展示);ico / png / android 仍整帧填充,各有自身规范。
++const MACOS_ICON_CONTENT_SCALE: f32 = 84.375;
++
++// kabegame fork:把整帧源图缩放到内容框(占画布 content_scale%),居中放在透明方形画布上,
++// 四周留出等宽透明边(dock 缩入)。与 tauri icon 其它目标一致:整帧缩放不裁剪,
++// 故源图应为紧贴边缘(无自带留白)的方形图标。
++fn resize_exact_inset(source: &Source, size: u32, content_scale: f32) -> DynamicImage {
++  let inner = (((size as f32) * content_scale / 100.0).round() as u32).clamp(1, size);
++  let content = source.resize_exact(inner);
++  let mut canvas = ImageBuffer::from_pixel(size, size, Rgba([0, 0, 0, 0]));
++  let offset = ((size - inner) / 2) as i64;
++  image::imageops::overlay(&mut canvas, &content, offset, offset);
++  DynamicImage::ImageRgba8(canvas)
++}
++
+ // Main target: macOS
+ fn icns(source: &Source, out_dir: &Path) -> Result<()> {
+   log::info!(action = "ICNS"; "Creating icon.icns");
+@@ -335,7 +352,8 @@ fn icns(source: &Source, out_dir: &Path) -> Result<()> {
+     let size = entry.size;
+     let mut buf = Vec::new();
+ 
+-    let image = source.resize_exact(size);
++    // kabegame fork:.icns 各尺寸都加 dock 缩入(留白),而非整帧填充。
++    let image = resize_exact_inset(source, size, MACOS_ICON_CONTENT_SCALE);
+ 
+     write_png(image.as_bytes(), &mut buf, size).context("failed to write output file")?;
+ 

@@ -11,6 +11,7 @@ const COMMANDS: &[&str] = &[
     "getMimeType",
     "getDisplayName",
     "getContentSize",
+    "openFd",
     "getImageDimensions",
     "getVideoDimensions",
     "isDirectory",

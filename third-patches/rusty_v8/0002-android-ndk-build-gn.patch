@@ -1,0 +1,13 @@
+diff --git a/build/config/android/BUILD.gn b/build/config/android/BUILD.gn
+index 5ba153643..14b45c471 100644
+--- a/build/config/android/BUILD.gn
++++ b/build/config/android/BUILD.gn
+@@ -34,7 +34,7 @@ config("compiler") {
+ 
+     # Forces full rebuilds on NDK rolls. To rebuild everything when NDK version
+     # stays the same, increment the suffix number.
+-    "ANDROID_NDK_VERSION_ROLL=${android_ndk_version}_1",
++    "ANDROID_NDK_VERSION_ROLL=r26c_1",
+   ]
+ 
+   if (android_64bit_current_cpu) {

@@ -11,8 +11,8 @@ use crate::models::{
     GetHttpServerBaseResponse, GetImageDimensionsArgs, GetImageDimensionsResponse,
     GetImageThumbnailArgs, GetMimeTypeArgs, GetMimeTypeResponse, GetVideoDimensionsArgs,
     GetVideoDimensionsResponse, IsDirectoryArgs, IsDirectoryResponse, ListContentChildrenArgs,
-    ListContentChildrenResponse, ReadFileBytesArgs, ReadFileBytesResponse,
-    TakePersistablePermissionArgs,
+    ListContentChildrenResponse, OpenFdArgs, OpenFdResponse, ReadFileBytesArgs,
+    ReadFileBytesResponse, TakePersistablePermissionArgs,
 };
 
 // initializes the Kotlin or Swift plugin classes
@@ -83,6 +83,16 @@ impl<R: Runtime> Picker<R> {
         let result: GetContentSizeResponse = self
             .0
             .run_mobile_plugin_async("getContentSize", GetContentSizeArgs { uri })
+            .await
+            .map_err(crate::Error::from)?;
+        Ok(result)
+    }
+
+    /// 打开 `content://` URI，返回 detach 的原始 fd（供 FFmpeg 经 `/proc/self/fd/N` 读取）。
+    pub async fn open_fd(&self, uri: String) -> crate::Result<OpenFdResponse> {
+        let result: OpenFdResponse = self
+            .0
+            .run_mobile_plugin_async("openFd", OpenFdArgs { uri })
             .await
             .map_err(crate::Error::from)?;
         Ok(result)

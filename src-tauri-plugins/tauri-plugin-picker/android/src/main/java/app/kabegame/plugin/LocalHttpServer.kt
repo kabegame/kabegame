@@ -95,7 +95,17 @@ internal class LocalHttpServer(context: Context) {
             try {
                 val client = socket.accept()
                 thread(name = "KabegameLocalHttpRequest", isDaemon = true) {
-                    handleClient(client)
+                    try {
+                        handleClient(client)
+                    } catch (e: IOException) {
+                        // 客户端(WebView <video>/<img>)中途断开(seek、切源、放弃缓冲)会让
+                        // 后续 output.write 抛 ConnectionReset / Broken pipe——属正常，绝不能
+                        // 让它逃出请求线程崩溃整个 app（本地媒体服务的必备容错）。
+                        Log.d(TAG, "client connection ended: ${e.message}")
+                    } catch (e: Throwable) {
+                        // 任何其它异常同样兜底：单个请求出错不应拖垮进程。
+                        Log.w(TAG, "handleClient failed", e)
+                    }
                 }
             } catch (e: IOException) {
                 if (!socket.isClosed) {

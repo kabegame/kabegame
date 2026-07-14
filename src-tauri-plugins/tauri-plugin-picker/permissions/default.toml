@@ -13,6 +13,7 @@ permissions = [
   "allow-getMimeType",
   "allow-getDisplayName",
   "allow-getContentSize",
+  "allow-openFd",
   "allow-getImageDimensions",
   "allow-getVideoDimensions",
   "allow-isDirectory",

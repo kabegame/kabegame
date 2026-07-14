@@ -20,21 +20,24 @@
         </div>
         <!-- 输入区 -->
         <div class="surf-search-row">
-          <PluginPickerField
-            :model-value="pluginQuickSelect || null"
-            :plugins="pluginsWithHttpRoot"
-            value-key="baseUrl"
-            :placeholder="$t('surf.placeholderPlugin')"
-            size="large"
-            class="surf-plugin-select"
-            @update:model-value="onPluginQuickSelect"
-          />
           <el-input
             v-model="inputUrl"
             :placeholder="$t('surf.placeholderUrl')"
             size="large"
             @keyup.enter="handleStart"
-          />
+          >
+            <template #prepend>
+              <PluginPickerField
+                :model-value="pluginQuickSelect || null"
+                :plugins="pluginsWithHttpRoot"
+                value-key="baseUrl"
+                :placeholder="$t('surf.placeholderPlugin')"
+                size="large"
+                class="surf-plugin-select"
+                @update:model-value="onPluginQuickSelect"
+              />
+            </template>
+          </el-input>
           <el-button type="primary" size="large" @click="handleStart">
             {{ $t('surf.startSurf') }}
           </el-button>
@@ -192,7 +195,6 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from "vue";
 import { useRouter } from "vue-router";
-import { invoke } from "@/api/rpc";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { ElDialog } from "element-plus";
@@ -577,14 +579,24 @@ onMounted(async () => {
     margin-bottom: 16px;
   }
 
-  .surf-plugin-select {
-    width: 180px;
-    flex-shrink: 0;
-  }
-
-  .el-input {
+  > .el-input {
     flex: 1;
     min-width: 0;
+  }
+
+  .surf-plugin-select {
+    width: 160px;
+  }
+
+  /* PluginPickerField 在 select 外多包了一层 div，EP 为“裸 select 直放 prepend”
+     准备的 padding(0 20px) + 负 margin(-20px) 抵消不再成立，统一归零 */
+  :deep(.el-input-group__prepend) {
+    padding: 0 0 0 8px;
+
+    .el-select {
+      margin: 0;
+      width: 100%;
+    }
   }
 }
 

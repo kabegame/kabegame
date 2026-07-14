@@ -1,0 +1,23 @@
+diff --git a/crates/tauri-cli/src/mobile/android/dev.rs b/crates/tauri-cli/src/mobile/android/dev.rs
+index f7258c182..131234364 100644
+--- a/crates/tauri-cli/src/mobile/android/dev.rs
++++ b/crates/tauri-cli/src/mobile/android/dev.rs
+@@ -238,12 +238,13 @@ fn run_dev(
+   noise_level: NoiseLevel,
+   dirs: &Dirs,
+ ) -> Result<()> {
+-  // when --host is provided or running on a physical device or resolving 0.0.0.0 we must use the network IP
++  // kabegame fork: unlike stock, a physical device does NOT force the network IP —
++  // a localhost devUrl is kept as-is, so android-studio-script's stock branch sets up
++  // `adb reverse tcp:<port> tcp:<port>` and the device reaches the dev server over the
++  // USB loopback tunnel: full-duplex HMR WebSocket, immune to on-device proxies
++  // (e.g. Clash) that break WS upgrades toward LAN addresses. Explicit `--host` and a
++  // 0.0.0.0 devUrl still force the network IP.
+   if options.host.0.is_some()
+-    || device
+-      .as_ref()
+-      .map(|device| !device.serial_no().starts_with("emulator"))
+-      .unwrap_or(false)
+     || tauri_config.build.dev_url.as_ref().is_some_and(|url| {
+       matches!(
+         url.host(),

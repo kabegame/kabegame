@@ -26,6 +26,9 @@ pub trait ContentIoProvider: Send + Sync {
     async fn get_mime_type(&self, uri: &str) -> Result<Option<String>, String>;
     async fn list_children(&self, uri: &str) -> Result<Vec<ContentEntry>, String>;
     async fn read_file_bytes(&self, uri: &str) -> Result<Vec<u8>, String>;
+    /// 打开 content:// URI 返回 detach 的原始 fd。调用方拥有该 fd 并负责关闭；
+    /// 用于让进程内 FFmpeg 经 `/proc/self/fd/N` 读取视频（取代慢速 Kotlin 编码）。
+    async fn open_fd(&self, uri: &str) -> Result<i32, String>;
     async fn take_persistable_permission(&self, uri: &str) -> Result<(), String>;
     async fn get_image_dimensions(&self, uri: &str) -> Result<(u32, u32), String>;
     async fn get_video_dimensions(&self, uri: &str) -> Result<(u32, u32), String>;

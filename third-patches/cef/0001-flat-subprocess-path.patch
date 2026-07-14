@@ -1,0 +1,43 @@
+diff --git a/patch/patch.cfg b/patch/patch.cfg
+index 340d5d8c830c8471efe45d7d780bad72059439b6..33e372fc3016ff6125663107b7ee81af1fe8d497 100644
+--- a/patch/patch.cfg
++++ b/patch/patch.cfg
+@@ -889,5 +889,11 @@ patches = [
+     # Fix crash during shutdown in TaskManagerImpl::OnReceivedMemoryDump with
+     # multi-threaded-message-loop.
+     'name': 'chrome_browser_task_manager',
++  },
++  {
++    # kabegame: honor an explicit --browser-subprocess-path for every child
++    # process type (skips the macOS helper-app variant rewrite so a single
++    # flat helper executable next to the main binary can serve all types).
++    'name': 'kabegame_flat_subprocess_path',
+   }
+ ]
+diff --git a/patch/patches/kabegame_flat_subprocess_path.patch b/patch/patches/kabegame_flat_subprocess_path.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..698ff5fe7b079c2a43988cb1d5e6e6f57ae93a0a
+--- /dev/null
++++ b/patch/patches/kabegame_flat_subprocess_path.patch
+@@ -0,0 +1,21 @@
++diff --git content/browser/child_process_host_impl.cc content/browser/child_process_host_impl.cc
++--- content/browser/child_process_host_impl.cc
+++++ content/browser/child_process_host_impl.cc
++@@ -56,8 +56,17 @@ base::FilePath ChildProcessHost::GetChildPath(int flags) {
++   base::FilePath child_path;
++ 
++   child_path = base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
++       switches::kBrowserSubprocessPath);
++ 
+++  // CEF (kabegame patch): when the embedder provides an explicit
+++  // --browser-subprocess-path, use it verbatim for every child process type.
+++  // In particular this skips the macOS helper-app variant rewrite below,
+++  // allowing a single flat helper executable next to the main binary
+++  // (matching the Windows/Linux subprocess model).
+++  if (!child_path.empty()) {
+++    return child_path;
+++  }
+++
++ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++   // Use /proc/self/exe rather than our known binary path so updates
++   // can't swap out the binary from underneath us.

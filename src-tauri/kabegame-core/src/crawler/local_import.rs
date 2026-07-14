@@ -212,7 +212,7 @@ impl LocalImportHook {
             None,
         )
         .await;
-        wait_after_non_pool_download_if_needed(download_start_time).await;
+        wait_after_download_if_needed(download_start_time, None).await;
         if result? {
             self.image_count += 1;
         }

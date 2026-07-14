@@ -76,8 +76,16 @@
   - 适用场景：插件升级后历史图片详情结构变化；排查 metadata 迁移失败、缓存未刷新、去重合并、版本编码（a.b.c 每段 ≤255）问题。
 
 - [crawler/V8_RUNTIME.md](crawler/V8_RUNTIME.md)
-  - 主题：V8 爬虫运行时（桌面 + Android/aarch64，仅 iOS 不支持）的 Web 平台全局与 `Kabegame.*` 宿主桥。涵盖 `plugin-runtime` feature 门控（主 app 启用、CLI 排除 deno/rusty_v8）、标准 `fetch` 使用、任务请求头合并、相对 URL 解析差异、SDK 保留工具模块；**运行时架构**（无启动快照/residual、即时 `init` 扩展、`deno_crypto` cppgc 显式加载）；**网络宿主化**（`op_kabegame_fetch`/`op_kabegame_to` 走 `reqwest`，不引入 `deno_fetch`/`deno_net`/`deno_tls`，`Response`/`Headers` 在 `prelude.js` 自实现）；**Android 交叉编译**（`rusty_v8` 仅 aarch64 预编译、`V8_FROM_SOURCE` 兜底、NDK libc++、`RustPlugin.kt` ABI 收敛、无 WebView 后端）。
-  - 适用场景：编写/迁移 V8 插件；排查 `Kabegame.*`、`fetch`、`URL`、`crypto`、`DOMParser` 可用性；更新 JS 插件模板和类型声明；排查 V8 后端 Android 交叉编译（依赖门控 / V8 预编译 / NDK 链接）或网络/`Response`/`Headers` 行为。
+  - 主题：V8 爬虫运行时（桌面 + Android/aarch64，仅 iOS 不支持）的 Web 平台全局与 `Kabegame.*` 宿主桥。涵盖 `plugin-runtime` feature 门控（主 app 启用、CLI 排除 deno/rusty_v8）、标准 `fetch` 使用、任务请求头合并、相对 URL 解析差异、SDK 保留工具模块；**运行时架构**（设备端共享 baseline startup snapshot 缓存、fresh fallback、指纹/V8 版本/CRC 校验、`deno_crypto` cppgc restore 后初始化）；**网络宿主化**（`op_kabegame_fetch`/`op_kabegame_to` 走 `reqwest`，不引入 `deno_fetch`/`deno_net`/`deno_tls`，`Response`/`Headers` 在 `prelude.js` 自实现）；**Android 交叉编译**（官方无 Android 预编译，仓库自带 `bin/android/` 自建产物 + mode-plugin 注入 `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH`、`V8_FROM_SOURCE` 自建流程、NDK libc++、`RustPlugin.kt` ABI 收敛、无 WebView 后端）。
+  - 适用场景：编写/迁移 V8 插件；排查 startup snapshot 生成/失效/fallback、`Kabegame.*`、`fetch`、`URL`、`crypto`、`DOMParser`；更新 JS 插件模板和类型声明；排查 V8 后端 Android 交叉编译（依赖门控 / 自建预编译产物 / NDK 链接）或网络/`Response`/`Headers` 行为。
+
+- [../third-patches/deno/README.md](../third-patches/deno/README.md)
+  - 主题：`deno_core` 的上游 vendor base 与 kabegame patch series。`third/deno` = `denoland/deno` monorepo submodule（pin `v2.9.0`，`libs/core` 与 crates.io deno_core 0.405.0 逐字节一致），经 `[patch.crates-io] deno_core = third/deno/libs/core` 单一来源消费；3 个 patch（扩展 JS 内嵌 / 共享 V8 platform 初始化 / Android Bionic errno）作用于 `libs/core`，`bun run patch deno` 应用。`serde_v8`/`deno_ops` 作为 monorepo path 依赖单份解析（无 path-vs-registry 重复）。
+  - 适用场景：新 checkout 后准备构建 V8 后端（先 `bun run patch deno`）；升级 deno_core 版本 re-vendor；排查 deno_core patch 应用/漂移或 serde_v8/deno_ops 解析来源。
+
+- [../third-patches/rusty_v8/README.md](../third-patches/rusty_v8/README.md)
+  - 主题：Android 版 `librusty_v8` 自建产物的可复现构建。`third/rusty_v8` = `denoland/rusty_v8` submodule（pin `v149.4.0` = Cargo.lock 的 v8）是**就地复用的胖构建树**（nested submodules + 已编译 target/ 都在其中，增量复用、不重拉/重编，`ignore = dirty`）。`bun run build:v8`（`scripts/build-v8.sh`，仅 Linux）幂等应用补丁并构建：补丁是 `third-patches/rusty_v8/` 顶层 `*.patch`，均 `git -C third/rusty_v8 apply`（0002 路径带 `build/` 前缀，跨进嵌套 build 子模块），**由 build-v8.sh 应用而非 `bun run patch`**——patch-manager 现只对**纯净树** forward、对**脏树** reverse（幂等），本胖树常驻脏态故被跳过。产物 `bin/android/*.a + src_binding.rs` gitignore、不入库。**`v8` 不经 `[patch.crates-io]`**——git 仓缺发布版的 `gen/` binding，patch 会破坏桌面构建；app 构建仍用 crates.io v8 + 注入 archive/binding。`scripts/utils.sh` 为 build-*.sh 共用（strict mode / os 检查 / log·die）。
+  - 适用场景：Linux 上复现/增量重建 Android v8 产物；升级 v8/deno_core 后重建；排查补丁应用（含跨嵌套子模块）、patch-manager 纯净度门控、from-source fixup、GN/NINJA、bindgen/LIBCLANG（clang19）或 mode-plugin 注入。
 
 ## 插件（`plugins/`）
 
@@ -95,9 +103,17 @@
   - 主题：Tauri v2 ACL（capability/permission）在 kabegame 的运行机制与故障复盘。
   - 适用场景：新增窗口 IPC 权限、调整 capability/permission、排查“命令不可用/全部被拒绝”问题。
 
+- [tauri/TAURI_CLI_FORK.md](tauri/TAURI_CLI_FORK.md)
+  - 主题：fork 的 `cargo-tauri`（上游 tauri monorepo `third/tauri` + `third-patches/tauri` patch series，基线 2.11.2；先 `bun run patch tauri`）。`TAURI_ANDROID_PACKAGE` 将 Android Java 包（源码目录/生成 Kotlin/JNI）与 identifier（applicationId，按 mode：dev=`app.kabegame.dev` / prod=`app.kabegame`）解耦，auto-launch 改传全限定类名；`TAURI_NO_WEBKIT_DEPS` 跳过 Linux deb/rpm 的 webkit 依赖注入并对依赖去重。含 TauriCliPlugin 接线（PATH 前置 + dev/build 前增量构建）与升级 re-vendor 流程。整个 tauri 栈经 `[patch.crates-io]` 指向 `third/tauri/crates/*`（单一来源，另见 [../third-patches/tauri/README.md](../third-patches/tauri/README.md)）。
+  - 适用场景：android dev/prod 真机并存隔离；排查 `Project directory ... does not exist`、auto-launch 拉起失败、`BuildConfig` 解析错误；升级 tauri-cli 版本；排查 deb 包 webkit 依赖或 Depends 重复。
+
 - [../src-tauri/tauri-runtime-cef/README.md](../src-tauri/tauri-runtime-cef/README.md)
-  - 主题：Windows/macOS/Linux 桌面 CEF runtime 后端的架构、平台门控与 CEF Views/windowed GPU 路径；自定义协议、page-load 生命周期与 `invoke` IPC 桥接；Windows manifest 与 runtime 安装；`kabegame` package 内的扁平 `kabegame-cef-helper` 子进程、macOS 构建期直链 framework 与裸 exe dev 运行、CefAppProtocol external pump、release 打包，以及 CEF fork/patch 维护流程。
-  - 适用场景：排查桌面 CEF 启动/渲染/IPC、升级 CEF/Chromium（fork rebase）、调整 `tauri-runtime-cef` trait 适配；排查 Windows GPU 子进程、macOS 裸跑子进程起不来/窗口空白/黑屏、message pump，或三平台 CEF_PATH 解析与打包。
+  - 主题：Windows/macOS/Linux 桌面 CEF runtime 后端的架构、平台门控与 CEF Views/windowed GPU 路径；自定义协议、page-load 生命周期与 `invoke` IPC 桥接；Windows manifest 与 runtime 安装；`kabegame` package 内的扁平 `kabegame-cef-helper` 子进程、macOS 构建期直链 framework 与裸 exe dev 运行、CefAppProtocol external pump、release 打包，以及 CEF 上游 pin/patch series 维护流程。
+  - 适用场景：排查桌面 CEF 启动/渲染/IPC、升级 CEF/Chromium（官方 pin + patch series re-vendor）、调整 `tauri-runtime-cef` trait 适配；排查 Windows GPU 子进程、macOS 裸跑子进程起不来/窗口空白/黑屏、message pump，或三平台 CEF_PATH 解析与打包。
+
+- [../third-patches/cef/README.md](../third-patches/cef/README.md)
+  - 主题：CEF 官方上游 vendor base、Kabegame 编号 patch series、`bun run patch` 原子 apply/reverse 命令与 re-vendor 流程（Bun 1.3 内置 `bun patch`，不可用作项目脚本缩写）。
+  - 适用场景：新 checkout 后准备自编 CEF；升级 CEF 7827 pin；修复 Chromium 上游变化导致的 patch context 漂移。
 
 ## 调试（`debug/`）
 

@@ -8,7 +8,6 @@
     "picker:default",
     "share:default",
     "task-notification:default",
-    "wallpaper:default",
-    "compress:default"
+    "wallpaper:default"
   ]
 }

@@ -17,6 +17,45 @@ fn main() {
     ))
     .expect("failed to run tauri-build");
 
+    // Android JNI symbol package override.
+    //
+    // tao/wry export the native entry points as `Java_<domain>_<app_name>_Rust_*`,
+    // where <domain>/<app_name> come from two rustc-env vars that `tauri-build`
+    // (called by try_build above) derives from `config.identifier`: it splits on
+    // '.' (all-but-last → PREFIX, last → APP_NAME). Kabegame's identifier is
+    // per-mode (dev `app.kabegame.dev` / prod `app.kabegame`) for side-by-side
+    // installs, so the stock derivation yields `Java_app_kabegame_dev_Rust_*` for
+    // dev — but the Kotlin `Rust` class lives in the fixed `namespace`
+    // (`app.kabegame`, decoupled from applicationId via the forked cargo-tauri +
+    // TAURI_ANDROID_PACKAGE). The JVM then can't resolve the native method:
+    //   UnsatisfiedLinkError: No implementation found for void app.kabegame.Rust.create()
+    //
+    // Re-emit both env vars from TAURI_ANDROID_PACKAGE (the stable Java package,
+    // = AGP namespace) so the JNI symbol stays `Java_app_kabegame_Rust_*`
+    // regardless of the per-mode applicationId. These println!s run AFTER
+    // try_build, and cargo uses the LAST value for a duplicated rustc-env key, so
+    // ours override tauri-build's identifier-derived values.
+    // See cocs/tauri/TAURI_CLI_FORK.md.
+    println!("cargo:rerun-if-env-changed=TAURI_ANDROID_PACKAGE");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        if let Ok(pkg) = std::env::var("TAURI_ANDROID_PACKAGE") {
+            if !pkg.is_empty() {
+                let parts: Vec<&str> = pkg.split('.').collect();
+                let last = parts.len() - 1;
+                // Mirror tauri-build's exact escaping: app_name replaces only '-',
+                // prefix words replace '_' and '-' with the JNI escape "_1".
+                let app_name = parts[last].replace('-', "_");
+                let prefix = parts[..last]
+                    .iter()
+                    .map(|w| w.replace(['_', '-'], "_1"))
+                    .collect::<Vec<_>>()
+                    .join("_");
+                println!("cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_APP_NAME={app_name}");
+                println!("cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_PREFIX={prefix}");
+            }
+        }
+    }
+
     println!("cargo:rustc-check-cfg=cfg(kabegame_data, values(\"dev\", \"prod\"))");
 
     println!("cargo:rerun-if-env-changed=KABEGAME_DATA");
@@ -118,4 +157,54 @@ fn main() {
             println!("cargo:rustc-link-arg-bin=kabegame=-Wl,-weak-lfuse");
         }
     }
+
+    // Android: V8's ARM64 JIT emits calls to __clear_cache (icache flush) that
+    // live as an undefined symbol in librusty_v8.a. rustc's link step doesn't
+    // pull in the NDK compiler-rt builtins that define it — and clang's implicit
+    // builtins land before the rust static libs, so lld never resolves the ref.
+    // The cdylib links anyway (undefined symbols are allowed in a shared object)
+    // but dlopen() then fails at runtime with UnsatisfiedLinkError. Append the
+    // NDK builtins archive at the end of the link line so it (and any sibling
+    // compiler-rt helpers V8 references) resolves.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        println!("cargo:rerun-if-env-changed=NDK_HOME");
+        match ndk_compiler_rt_builtins() {
+            Some(path) => println!("cargo:rustc-link-arg={}", path.display()),
+            None => println!(
+                "cargo:warning=NDK compiler-rt builtins not found under NDK_HOME; \
+                 libkabegame.so may fail to load (UnsatisfiedLinkError: __clear_cache)"
+            ),
+        }
+    }
+}
+
+/// Locate the NDK's static compiler-rt builtins archive for the current Android
+/// target arch, e.g. `.../lib/clang/<ver>/lib/linux/libclang_rt.builtins-aarch64-android.a`.
+fn ndk_compiler_rt_builtins() -> Option<std::path::PathBuf> {
+    let ndk = std::env::var("NDK_HOME")
+        .or_else(|_| std::env::var("ANDROID_NDK_HOME"))
+        .or_else(|_| std::env::var("ANDROID_NDK_ROOT"))
+        .ok()?;
+    let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").ok()?.as_str() {
+        "aarch64" => "aarch64",
+        "x86_64" => "x86_64",
+        "arm" => "arm",
+        "x86" => "i686",
+        _ => return None,
+    };
+    let libname = format!("libclang_rt.builtins-{arch}-android.a");
+    // toolchains/llvm/prebuilt/<host>/lib/clang/<ver>/lib/linux/<libname>
+    let prebuilt = std::path::Path::new(&ndk).join("toolchains/llvm/prebuilt");
+    for host in std::fs::read_dir(&prebuilt).ok()?.flatten() {
+        let Ok(vers) = std::fs::read_dir(host.path().join("lib/clang")) else {
+            continue;
+        };
+        for ver in vers.flatten() {
+            let cand = ver.path().join("lib/linux").join(&libname);
+            if cand.exists() {
+                return Some(cand);
+            }
+        }
+    }
+    None
 }

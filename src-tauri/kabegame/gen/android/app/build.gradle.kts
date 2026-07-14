@@ -1,5 +1,6 @@
 import java.util.Properties
 import java.io.FileInputStream
+import groovy.json.JsonSlurper
 
 plugins {
     id("com.android.application")
@@ -14,12 +15,27 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// applicationId 与 tauri.conf.json 的 identifier 一致(构建系统按 --mode 渲染:
+// dev=app.kabegame.dev / prod=app.kabegame),提供设备上 dev/prod 并存隔离与
+// `am start -n {identifier}/...` 拉起目标。
+// namespace(Java 包:源码/生成 Kotlin/BuildConfig/R)固定 app.kabegame,不随 mode 变——
+// fork 的 cargo-tauri 按 TAURI_ANDROID_PACKAGE 与 identifier 解耦,见 cocs/tauri/TAURI_CLI_FORK.md。
+val tauriIdentifier: String = run {
+    val confFile = file("../../../tauri.conf.json")
+    if (confFile.exists()) {
+        @Suppress("UNCHECKED_CAST")
+        val conf = JsonSlurper().parse(confFile) as Map<String, Any?>
+        // 只接受合法反向域名式 identifier;桌面渲染残留的 "Kabegame"(无点)时回退。
+        (conf["identifier"] as? String)?.takeIf { it.contains('.') } ?: "app.kabegame"
+    } else "app.kabegame"
+}
+
 android {
     compileSdk = 36
     namespace = "app.kabegame"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = "app.kabegame"
+        applicationId = tauriIdentifier
         minSdk = 26  // Android 8.0+ (API 26+)
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()

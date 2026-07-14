@@ -18,8 +18,6 @@ mod commands_core;
 mod debug_ingest;
 
 #[cfg(all(not(feature = "web"), target_os = "android"))]
-mod compress_provider;
-#[cfg(all(not(feature = "web"), target_os = "android"))]
 mod content_io_provider;
 #[cfg(any(not(target_os = "android"), not(feature = "web")))]
 mod http_server;
@@ -72,8 +70,6 @@ use core::fmt;
 use http_server::get_http_server_base_url;
 use startup::*;
 use std::process;
-#[cfg(not(feature = "web"))]
-use std::sync::Arc;
 #[cfg(not(feature = "web"))]
 use tauri::{AppHandle, Emitter, Listener, Manager};
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
@@ -185,18 +181,6 @@ fn init(
         let proxy = content_io_provider::ChannelContentIoProvider::new(provider);
         // 设置内容IO提供者
         kabegame_core::crawler::content_io::set_content_io_provider(Box::new(proxy));
-
-        let compress_provider =
-            compress_provider::PluginVideoCompressProvider::new(app.app_handle().clone());
-        let compress_proxy =
-            compress_provider::ChannelVideoCompressProvider::new(compress_provider);
-        if let Err(e) =
-            kabegame_core::crawler::downloader::compress::set_android_video_compress_provider(
-                Arc::new(compress_proxy),
-            )
-        {
-            eprintln!("[VideoCompress] Failed to set android compress provider: {e}");
-        }
     }
 
     spawn_startup_local_folder_sync();
@@ -388,7 +372,6 @@ pub(crate) fn configure_app(
     {
         builder = builder.plugin(tauri_plugin_picker::init());
         builder = builder.plugin(tauri_plugin_share::init());
-        builder = builder.plugin(tauri_plugin_compress::init());
         builder = builder.plugin(tauri_plugin_wallpaper::init());
         builder = builder.plugin(tauri_plugin_task_notification::init());
         builder = builder.plugin(tauri_plugin_android_battery_optimization::init());

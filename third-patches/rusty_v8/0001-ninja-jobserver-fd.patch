@@ -1,0 +1,15 @@
+diff --git a/build.rs b/build.rs
+index 5ad9a4d..45d57b8 100644
+--- a/build.rs
++++ b/build.rs
+@@ -1086,6 +1086,10 @@ type NinjaEnv = Vec<(String, String)>;
+ fn ninja(gn_out_dir: &Path, maybe_env: Option<NinjaEnv>) -> Command {
+   let cmd_string = env::var("NINJA").unwrap_or_else(|_| "ninja".to_owned());
+   let mut cmd = Command::new(&cmd_string);
++  // Cargo injects its jobserver via these into build scripts; the fds don't
++  // survive into ninja-spawned rustc, which then aborts on a dead descriptor.
++  cmd.env_remove("CARGO_MAKEFLAGS");
++  cmd.env_remove("MAKEFLAGS");
+   cmd.arg("-C");
+   cmd.arg(gn_out_dir);
+   if !cmd_string.ends_with("autoninja")

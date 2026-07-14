@@ -48,7 +48,7 @@
         />
       </template>
 
-      <!-- 安卓视频缩略：单张 GIF <img>，与 <video> 互斥（与图片双图层分开） -->
+      <!-- 安卓视频缩略：单张 GIF <img>（无鼠标悬浮，用动图预览而非静帧 <video>），与 <video> 互斥 -->
       <img
         v-else-if="mode === 'gif'"
         :key="`gif:${thumbSlot.src}`"
@@ -264,6 +264,7 @@ const isStaleMediaEvent = (e: Event): boolean => !(e.target as Element | null)?.
 
 const onImgError = (slot: typeof thumbSlot, e: Event) => {
   if (isStaleMediaEvent(e)) return;
+  console.error('[image-error]', e);
   slot.onError();
 };
 
@@ -323,13 +324,18 @@ const onLoad = (e: Event) => {
 
 const onVideoError = (e: Event) => {
   if (isStaleMediaEvent(e)) return;
+  console.error('[video-error]', e);
   videoSlot.onError();
 };
 
-// ---- Video playback control (unchanged) ----
+// ---- Video playback control ----
+// Android 也由本 watchEffect 驱动 play/pause：wry 的 RustWebView 已设
+// mediaPlaybackRequiresUserGesture=false，无手势 play() 合法。Android WebView 对
+// 「从未播放且无 poster」的 <video> 会渲染巨大播放键占位（灰底黑色圆形播放图标），
+// 因此不播放 ≠ 显示首帧——App 背景壁纸与 PhotoSwipe 预览都必须真正 play()。
 watchEffect(() => {
   const el = videoEl.value;
-  if (!el || mode.value !== "video" || IS_ANDROID || props.nativeVideoControls) return;
+  if (!el || mode.value !== "video" || props.nativeVideoControls) return;
   if (props.videoPlaying) {
     void el.play().catch(() => {
       emit("videoPlayFail");

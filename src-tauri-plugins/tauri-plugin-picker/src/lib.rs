@@ -44,6 +44,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::get_mime_type,
             commands::get_display_name,
             commands::get_content_size,
+            commands::open_fd,
             commands::get_image_dimensions,
             commands::get_video_dimensions,
             commands::is_directory,

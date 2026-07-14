@@ -9,17 +9,25 @@ members = [
   "src-tauri-plugins/tauri-plugin-picker",
   "src-tauri-plugins/tauri-plugin-pathes",
   "src-tauri-plugins/tauri-plugin-share",
-  "src-tauri-plugins/tauri-plugin-compress",
   "src-tauri-plugins/tauri-plugin-wallpaper",
   "src-tauri-plugins/tauri-plugin-task-notification",
 ]
 # Keep the vendored cef-rs workspace as the owner of its inherited metadata.
-exclude = ["third/cef-rs"]
+# third/deno is the upstream denoland/deno monorepo (submodule, pinned v2.9.0 + third-patches/deno):
+# its own [workspace] owns libs/core (published as deno_core, [patch]-only) — not a kabegame member.
+# third/tauri is the upstream tauri monorepo (submodule, pinned tauri-v2.11.2 + third-patches/tauri):
+# its own [workspace] owns crates/tauri-runtime ([patch]-only) and crates/tauri-cli (forked
+# cargo-tauri BINARY, built via --manifest-path + invoked through PATH) — neither is a kabegame member.
+# third/rusty_v8 is the upstream denoland/rusty_v8 (submodule, pinned v149.4.0 + third-patches/rusty_v8).
+# It is NOT a [patch] target — it is the reproducible SOURCE for the Android from-source build
+# (`bun run build:v8`). Excluded so that script's in-place `cargo build` inside it doesn't collide with
+# this workspace. Desktop/Android app builds keep the crates.io `v8` (see [patch.crates-io] note below).
+exclude = ["third/cef-rs", "third/deno", "third/tauri", "third/rusty_v8"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "4.3.0"
+version = "4.3.2"
 
 [workspace.dependencies]
 arc-swap= "1.7"
@@ -44,12 +52,12 @@ md5 = "0.7"
 # 进程内 FFmpeg（libav*）绑定：替代旧的 ffmpeg sidecar 进程调用与 mp4 crate。
 # feature 须匹配 third/FFmpeg 子模块的 FFmpeg 主版本（当前 n8.2 → ffmpeg8）。
 # 链接经 rusty_ffmpeg：由构建环境的 FFMPEG_PKG_CONFIG_PATH 指向 third/FFmpeg-build/install/lib/pkgconfig。
-rsmpeg = { path="./third/rsmpeg", default-features = false, features = ["ffmpeg8_1"] }
-rusty_ffmpeg = { path="./third/rusty_ffmpeg", default-features = false, features = ["ffmpeg8_1"]}
+# 源码来自 [patch.crates-io] 的 third/rsmpeg 子模块（larksuite/rsmpeg + third-patches/rsmpeg）；
+# rusty_ffmpeg 不在此声明——它只被 rsmpeg 依赖，同样经 [patch.crates-io] 解析。
+rsmpeg = { version = "0.18.0", default-features = false, features = ["ffmpeg8_1"] }
 percent-encoding = "2"
 sha2 = "0.10"
 tauri-build = {version = "2.6.2", features = []}
-tauri-plugin-compress = {path = "./src-tauri-plugins/tauri-plugin-compress"}
 tauri-plugin-pathes = {path = "./src-tauri-plugins/tauri-plugin-pathes"}
 tauri-plugin-picker = {path = "./src-tauri-plugins/tauri-plugin-picker"}
 tauri-plugin-share = {path = "./src-tauri-plugins/tauri-plugin-share"}
@@ -70,11 +78,37 @@ windows-sys = {version = "0.52", features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ]}
-zip = "0.6"
+# 只启用 deflate(纯 Rust,flate2/rust_backend)。.kgpg 打包(kabegame-cli plugin pack)只写
+# Deflated,读取只遇到 Deflated/Stored(Stored 无需 feature)。关掉默认的 bzip2/zstd/aes-crypto:
+# 既去掉 bzip2-sys(否则 Android 交叉编译因 PKG_CONFIG_ALLOW_CROSS 误链宿主 libbz2 而失败),
+# 也让三平台不再依赖系统 libbz2。
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [patch.crates-io]
-tauri-runtime = { path = "third/tauri-runtime" }
+# tauri-apps/tauri monorepo 整体经 [patch] 指向 third/tauri（submodule pinned tauri-v2.11.2 +
+# third-patches/tauri，先 `bun run patch tauri`）。全栈单一来源：bump 只需 bump submodule + rebase
+# patch，无需再同步 registry 版本（不维护两份）。tauri-runtime 加 optional `webkit` feature
+#（Linux CEF 构建不链接 webkit2gtk）；crates/tauri-cli 是 fork 的 cargo-tauri，走 TauriCliPlugin
+# 独立构建（不在此 patch）。tauri-winres 不在 monorepo，保持 registry。
+tauri = { path = "third/tauri/crates/tauri" }
+tauri-runtime = { path = "third/tauri/crates/tauri-runtime" }
+tauri-runtime-wry = { path = "third/tauri/crates/tauri-runtime-wry" }
+tauri-utils = { path = "third/tauri/crates/tauri-utils" }
+tauri-macros = { path = "third/tauri/crates/tauri-macros" }
+tauri-codegen = { path = "third/tauri/crates/tauri-codegen" }
+tauri-build = { path = "third/tauri/crates/tauri-build" }
+# tauri-plugin 不 patch：monorepo tag 版本(2.6.2)领先 crates.io(2.5.3),cargo 会判「patch 未使用」;
+# 且 tauri-plugin 只依赖 tauri/tauri-utils(无反向类型边界),registry 版经上面的 tauri-utils patch
+# already 复用同一份 tauri-utils,不产生重复。Cargo.lock 将 tauri-utils 钉在 2.9.2(与 monorepo 一致,
+# 满足所有 ^2.x 约束)以让 path patch 全图统一,避免 registry 2.9.3 混入。
 cef-dll-sys = { path = "third/cef-rs/sys" } # macOS direct-linked framework (kabegame-149 fork)
+# deno_core = libs/core of the denoland/deno monorepo submodule (third-patches/deno; 先 bun run patch deno).
+# serde_v8/deno_ops resolve as monorepo path deps (single copy — only deno_core references them).
+deno_core = { path = "third/deno/libs/core" }
+# larksuite/rsmpeg b21fcfd + third-patches/rsmpeg（先 bun run patch rsmpeg）
+rsmpeg = { path = "third/rsmpeg" }
+# CCExtractor/rusty_ffmpeg 3a0752a + third-patches/rusty_ffmpeg（先 bun run patch rusty_ffmpeg）
+rusty_ffmpeg = { path = "third/rusty_ffmpeg" }
 
 # [profile.release]
 # on when release

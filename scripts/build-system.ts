@@ -21,6 +21,7 @@ import { BasePlugin } from "./plugins/base-plugin.ts";
 import { Skip, SkipPlugin } from "./plugins/skip-plugin.js";
 import { ReleasePlugin } from "./plugins/release-plugin.js";
 import { DataPlugin } from "./plugins/data-plugin.js";
+import { TauriCliPlugin } from "./plugins/tauri-cli-plugin.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,11 +45,6 @@ export const RESOURCES_BIN_DIR = path.join(
 export const SRC_TAURI_DIR = path.join(root, "src-tauri");
 export const SRC_FE_DIR = path.join(root, "apps");
 export const TAURI_KABEGAME_DIR = path.join(SRC_TAURI_DIR, "kabegame");
-
-export const THIRD_DIR = path.join(
-  root,
-  "third",
-);
 
 interface BuildOptions {
   component?: string;
@@ -197,6 +193,9 @@ export class BuildSystem {
 
     // --data (dev | prod)
     this.use(new DataPlugin());
+
+    // fork 的 cargo-tauri(third/tauri/crates/tauri-cli):PATH 前置 + dev/build 前确保构建
+    this.use(new TauriCliPlugin());
   }
 
   commonBefore(): void {
@@ -413,6 +412,27 @@ export class BuildSystem {
       const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(
         this.context.component!.comp,
       );
+
+      if (this.context.mode!.isAndroid) {
+        // android check 走 fork 的 `cargo tauri android check`：复用 tauri/cargo-mobile2
+        // 的 NDK 交叉工具链（linker + TARGET_CC/CXX/AR，与 `tauri android build` 完全一致，
+        // 无需在 ModePlugin 手写 linker/CC）。FFMPEG / rusty_v8 / bindgen /
+        // PKG_CONFIG_ALLOW_CROSS 等 kabegame 特有 env 仍由 ModePlugin.prepareEnv 注入并透传。
+        // 见 cocs/tauri/TAURI_CLI_FORK.md。check.rs 不产 APK/AAB、不跑前端。
+        // beforeBuild：渲染 tauri.conf.json（ComponentPlugin）+ 确保 fork 已构建（TauriCliPlugin）；
+        // os-plugin/mode-plugin 的 beforeBuild 对 check 均为 no-op。
+        this.hooks.beforeBuild.call();
+        const cwd = this.context.component!.appDir;
+        const runnerArgs = [...(compileArgs || []), ...(this.options.args || [])];
+        const args = this.buildTauriArgs(
+          ["android", "check"],
+          features,
+          runnerArgs.length > 0 ? runnerArgs : undefined,
+        );
+        run("tauri", args, { cwd, bin: "cargo" });
+        return;
+      }
+
       const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
       const checkArgs = this.buildCargoArgs(
         ["check", "-p", this.context.component!.cargoComp],

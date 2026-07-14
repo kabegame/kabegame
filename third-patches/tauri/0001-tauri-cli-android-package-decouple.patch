@@ -1,0 +1,115 @@
+diff --git a/crates/tauri-cli/src/mobile/android/dev.rs b/crates/tauri-cli/src/mobile/android/dev.rs
+index dec1eea93..f7258c182 100644
+--- a/crates/tauri-cli/src/mobile/android/dev.rs
++++ b/crates/tauri-cli/src/mobile/android/dev.rs
+@@ -403,7 +403,9 @@ fn run(
+       }),
+       build_app_bundle,
+       false,
+-      format!("{}.MainActivity", config.app().identifier()),
++      // kabegame fork: 类包 = android_package(可与 applicationId 不同)。
++      // 相对形式 ".MainActivity" 会被 am 按 applicationId 展开,包/id 解耦时类不存在。
++      format!("{}.MainActivity", super::android_package(config.app())),
+       application_id_suffix,
+     )
+     .map(DevChild::new)
+diff --git a/crates/tauri-cli/src/mobile/android/mod.rs b/crates/tauri-cli/src/mobile/android/mod.rs
+index 5e41d7eae..698dafa47 100644
+--- a/crates/tauri-cli/src/mobile/android/mod.rs
++++ b/crates/tauri-cli/src/mobile/android/mod.rs
+@@ -123,6 +123,32 @@ pub fn command(cli: Cli, verbosity: u8) -> Result<()> {
+   Ok(())
+ }
+ 
++/// kabegame fork: Android 侧 Java 包(源码目录、生成 Kotlin 的 package、JNI 绑定)
++/// 由 `TAURI_ANDROID_PACKAGE` env 决定,与 identifier(applicationId/安装身份)解耦。
++/// 未设置或为空时回退 identifier,即 stock 行为。
++pub fn android_package(app: &App) -> String {
++  std::env::var("TAURI_ANDROID_PACKAGE")
++    .ok()
++    .filter(|p| !p.is_empty())
++    .unwrap_or_else(|| app.identifier().to_string())
++}
++
++/// kabegame fork: 与 cargo-mobile2 `App::android_identifier_escape_kotlin_keyword`
++/// 相同的转义逻辑,但作用于任意包名字符串(而非固定 identifier)。
++fn escape_kotlin_keywords(package: &str) -> String {
++  package
++    .split('.')
++    .map(|s| {
++      if cargo_mobile2::reserved_names::KOTLIN_ONLY_KEYWORDS.contains(&s) {
++        format!("`{s}`")
++      } else {
++        s.to_string()
++      }
++    })
++    .collect::<Vec<_>>()
++    .join(".")
++}
++
+ pub fn get_config(
+   app: &App,
+   config: &TauriConfig,
+@@ -158,18 +184,22 @@ pub fn get_config(
+     ..Default::default()
+   };
+ 
++  // kabegame fork: 包/目录一律按 android_package(env 覆盖,回退 identifier),
++  // identifier 只保留给 applicationId 与 am start 第一段(cargo-mobile2 侧)。
++  let android_package = android_package(app);
++
+   set_var(
+     "WRY_ANDROID_PACKAGE",
+-    app.android_identifier_escape_kotlin_keyword(),
++    escape_kotlin_keywords(&android_package),
+   );
+-  set_var("TAURI_ANDROID_PACKAGE_UNESCAPED", app.identifier());
++  set_var("TAURI_ANDROID_PACKAGE_UNESCAPED", &android_package);
+   set_var("WRY_ANDROID_LIBRARY", app.lib_name());
+   set_var("TAURI_ANDROID_PROJECT_PATH", config.project_dir());
+ 
+   let src_main_dir = config
+     .project_dir()
+     .join("app/src/main")
+-    .join(format!("java/{}", app.identifier().replace('.', "/"),));
++    .join(format!("java/{}", android_package.replace('.', "/"),));
+   if config.project_dir().exists() {
+     if src_main_dir.exists() {
+       let _ = create_dir(src_main_dir.join("generated"));
+diff --git a/crates/tauri-cli/src/mobile/android/run.rs b/crates/tauri-cli/src/mobile/android/run.rs
+index f459a88e1..09d0f0dff 100644
+--- a/crates/tauri-cli/src/mobile/android/run.rs
++++ b/crates/tauri-cli/src/mobile/android/run.rs
+@@ -156,7 +156,8 @@ pub fn command(options: Options, noise_level: NoiseLevel) -> Result<()> {
+           }),
+           false,
+           false,
+-          format!("{}.MainActivity", config.app().identifier()),
++          // kabegame fork: 全限定类名,同 dev.rs(包/id 解耦时相对形式命中不存在的类)。
++          format!("{}.MainActivity", super::android_package(config.app())),
+           application_id_suffix,
+         )
+         .map(|c| Box::new(DevChild::new(c)) as Box<dyn DevProcess + Send>)
+diff --git a/crates/tauri-cli/src/mobile/mod.rs b/crates/tauri-cli/src/mobile/mod.rs
+index 2e85355f3..636e685ae 100644
+--- a/crates/tauri-cli/src/mobile/mod.rs
++++ b/crates/tauri-cli/src/mobile/mod.rs
+@@ -488,9 +488,17 @@ fn ensure_init(
+ 
+   match target {
+     Target::Android => {
++      // kabegame fork:Java 源码目录按 android package(TAURI_ANDROID_PACKAGE 覆盖,回退
++      // identifier)解耦于 identifier —— identifier 按 mode 变(app.kabegame.dev / app.kabegame)
++      // 而源码树固定 app.kabegame。否则此处会误判「identifier 被改」并要求删库重 init。
++      // 与 android/mod.rs get_config 的包/目录派生同源。
+       let java_folder = project_dir
+         .join("app/src/main/java")
+-        .join(tauri_config.identifier.replace('.', "/").replace('-', "_"));
++        .join(
++          android::android_package(app)
++            .replace('.', "/")
++            .replace('-', "_"),
++        );
+       if java_folder.exists() {
+         #[cfg(unix)]
+         ensure_gradlew(&project_dir)?;

@@ -110,6 +110,20 @@ pub struct GetContentSizeResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct OpenFdArgs {
+    pub uri: String,
+}
+
+/// `content://` URI 打开后 detach 出的原始文件描述符（整数）。
+/// 调用方（Rust）拥有该 fd，负责关闭；用于让 FFmpeg 经 `/proc/self/fd/N` 读取。
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFdResponse {
+    pub fd: i32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReadFileBytesArgs {
     pub uri: String,
 }

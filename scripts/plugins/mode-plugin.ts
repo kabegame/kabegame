@@ -1,8 +1,8 @@
 import { BasePlugin } from "./base-plugin";
-import { run } from "../utils";
+import { run, ROOT, THIRD_DIR } from "../utils";
 import { Component } from "./component-plugin";
 import chalk from "chalk";
-import { BuildSystem, THIRD_DIR } from "../build-system";
+import { BuildSystem } from "../build-system";
 import { OSPlugin } from "./os-plugin";
 import path from "path";
 import fs from "fs";
@@ -63,9 +63,13 @@ export class ModePlugin extends BasePlugin {
       }
       if (
         modeObj.isAndroid &&
-        !(bs.context.cmd!.isDev || bs.context.cmd!.isBuild)
+        !(
+          bs.context.cmd!.isDev ||
+          bs.context.cmd!.isBuild ||
+          bs.context.cmd!.isCheck
+        )
       ) {
-        throw new Error("android mode 仅支持 dev 与 build 命令");
+        throw new Error("android mode 仅支持 dev、build 与 check 命令");
       }
       if (
         modeObj.isWeb &&
@@ -90,6 +94,122 @@ export class ModePlugin extends BasePlugin {
       if (this.mode!.isAndroid) {
         this.setEnv("VITE_ANDROID", "true");
         this.setEnv("TAURI_PLATFORM", "android");
+        // Android Java 包(源码目录/生成 Kotlin 包/JNI)固定为 app.kabegame,
+        // 与按 mode 变化的 identifier(applicationId:dev=app.kabegame.dev / prod=app.kabegame)
+        // 解耦。由 fork 的 cargo-tauri(third/tauri/crates/tauri-cli)消费,stock CLI 会忽略此变量。
+        // 见 cocs/tauri/TAURI_CLI_FORK.md。
+        this.setEnv("TAURI_ANDROID_PACKAGE", "app.kabegame");
+        // rusty_v8 官方自 v0.102.0 起不再发布 aarch64-linux-android 预编译产物,
+        // Android 交叉编译依赖自建产物(librusty_v8 静态库 + src_binding.rs),
+        // 存放在仓库根 bin/android/(gitignore、不入库,由 `bun run build:v8` 复现;不放 bin/linux/
+        // ——那里是 os-plugin 构建期生成并整目录进 deb 的。见 cocs/crawler/V8_RUNTIME.md)。
+        // 直接是 .a(bin/android 已 gitignore,无需 gzip);v8 build.rs 的 copy_archive 原样拷贝。
+        const rustyV8Dir = path.join(ROOT, "bin", "android");
+        const rustyV8Archive = path.join(
+          rustyV8Dir,
+          "librusty_v8_simdutf_release_aarch64-linux-android.a",
+        );
+        const rustyV8Binding = path.join(
+          rustyV8Dir,
+          "src_binding_simdutf_release_aarch64-linux-android.rs",
+        );
+        if (!fs.existsSync(rustyV8Archive) || !fs.existsSync(rustyV8Binding)) {
+          throw new Error(
+            [
+              `rusty_v8 Android 自建产物缺失: ${path.relative(ROOT, rustyV8Dir)}/`,
+              "在 x86_64 Linux 上一次性复现(产物 gitignore、不入库):",
+              "  bun run build:v8",
+              "见 third-patches/rusty_v8/README.md 与 cocs/crawler/V8_RUNTIME.md。",
+            ].join("\n"),
+          );
+        }
+        this.setEnv("RUSTY_V8_ARCHIVE", rustyV8Archive);
+        this.setEnv("RUSTY_V8_SRC_BINDING_PATH", rustyV8Binding);
+
+        // 进程内 FFmpeg(rsmpeg):Android 视频预览/维度/兼容副本改走交叉编译的 aarch64
+        // FFmpeg,取代此前慢速的 Kotlin 编码 provider(见 cocs/downloader-tasks/VIDEO_INGEST.md)。
+        // 产物由 `bun run build:ffmpeg --target android` 生成到
+        // third/FFmpeg-build/android/aarch64/install/(gitignore,不入库,命令复现)。
+        const androidArch = "aarch64";
+        const androidApi = process.env.ANDROID_API || "24";
+        const ffmpegAndroidInstall = path.join(
+          THIRD_DIR,
+          "FFmpeg-build",
+          "android",
+          androidArch,
+          "install",
+        );
+        const ffmpegAndroidPkgConfig = path.join(
+          ffmpegAndroidInstall,
+          "lib",
+          "pkgconfig",
+        );
+        if (
+          !fs.existsSync(path.join(ffmpegAndroidPkgConfig, "libavcodec.pc"))
+        ) {
+          throw new Error(
+            [
+              `Android FFmpeg 产物缺失: ${path.relative(ROOT, ffmpegAndroidInstall)}/`,
+              "需要(装好 NDK 的 Linux/macOS 宿主上)先交叉编译一次:",
+              "  git submodule update --init third/FFmpeg third/x264",
+              "  bun run build:ffmpeg --target android",
+            ].join("\n"),
+          );
+        }
+        this.setEnv("FFMPEG_PKG_CONFIG_PATH", ffmpegAndroidPkgConfig);
+        this.setEnv("FFMPEG_LINK_MODE", "static");
+
+        // bindgen(rusty_ffmpeg)解析 FFmpeg 头文件时必须按 android target + NDK sysroot,
+        // 否则 clang 用宿主 sysroot/宿主 target 解析,类型宽度与宏定义错乱(仿桌面 macOS
+        // 的 BINDGEN_EXTRA_CLANG_ARGS sysroot 注入)。NDK 定位顺序与 build-ffmpeg.sh 一致。
+        let ndkDir =
+          process.env.NDK_HOME ||
+          process.env.ANDROID_NDK_HOME ||
+          process.env.ANDROID_NDK_ROOT ||
+          "";
+        if (!ndkDir && process.env.ANDROID_HOME) {
+          const ndkRoot = path.join(process.env.ANDROID_HOME, "ndk");
+          if (fs.existsSync(ndkRoot)) {
+            const versions = fs
+              .readdirSync(ndkRoot)
+              .filter((v) =>
+                fs.statSync(path.join(ndkRoot, v)).isDirectory(),
+              )
+              .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+            if (versions.length) {
+              ndkDir = path.join(ndkRoot, versions[versions.length - 1]);
+            }
+          }
+        }
+        if (!ndkDir || !fs.existsSync(ndkDir)) {
+          throw new Error(
+            "未找到 Android NDK。请设置 NDK_HOME(或 ANDROID_NDK_HOME/ANDROID_NDK_ROOT)。",
+          );
+        }
+        const ndkHostTag = OSPlugin.isMacOS ? "darwin-x86_64" : "linux-x86_64";
+        const ndkSysroot = path.join(
+          ndkDir,
+          "toolchains",
+          "llvm",
+          "prebuilt",
+          ndkHostTag,
+          "sysroot",
+        );
+        this.setEnv(
+          "BINDGEN_EXTRA_CLANG_ARGS",
+          `--sysroot=${ndkSysroot} -target ${androidArch}-linux-android${androidApi}`,
+        );
+        // rusty_ffmpeg 用 pkg-config crate 探测,默认拒绝交叉编译。我们自编的 .pc 用的是
+        // android install 的绝对路径(无需 sysroot 前缀改写),放行即可直接使用。
+        // 注意:放行交叉后,任何其它 -sys crate 的 pkg-config 探针也会命中宿主 .pc
+        // (如 /usr/lib/pkgconfig/bzip2.pc),把 x86_64 的 `-L/usr/lib -lXXX` 注入 aarch64
+        // 链接而失败。此类依赖须避开宿主 .pc:去掉用不到的 feature(如根 Cargo.toml 给 zip
+        // 关掉默认的 bzip2/zstd,消除 bzip2-sys)、或走 vendored(如 openssl vendored)。
+        this.setEnv("PKG_CONFIG_ALLOW_CROSS", "1");
+
+        // 注:target 的 linker 与 TARGET_CC/CXX/AR 不在此手写。dev/build/check 都经 fork 的
+        // `cargo tauri android {dev,build,check}`,由 cargo-mobile2 的 NDK Env 从 NDK 推导
+        // 并注入(三者同源、随 minSdk/NDK 版本自动正确)。见 cocs/tauri/TAURI_CLI_FORK.md。
       } else {
         this.setEnv("FFMPEG_PKG_CONFIG_PATH", path.join(
             THIRD_DIR,

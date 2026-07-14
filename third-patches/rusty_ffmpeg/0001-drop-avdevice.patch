@@ -1,0 +1,16 @@
+diff --git a/build.rs b/build.rs
+index f1e4d02..869f9a7 100644
+--- a/build.rs
++++ b/build.rs
+@@ -6,10 +6,9 @@ use once_cell::sync::Lazy;
+ use std::{collections::HashSet, env, fs};
+ 
+ /// All the libs that FFmpeg has
+-static LIBS: Lazy<[&str; 7]> = Lazy::new(|| {
++static LIBS: Lazy<[&str; 6]> = Lazy::new(|| {
+     [
+         "avcodec",
+-        "avdevice",
+         "avfilter",
+         "avformat",
+         "avutil",

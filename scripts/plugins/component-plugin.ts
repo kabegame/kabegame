@@ -5,7 +5,6 @@ import {
   ROOT,
   RESOURCES_DIR,
   stageResourceBinary,
-  getDevServerHost,
   run,
 } from "../utils";
 import { OSPlugin } from "./os-plugin";
@@ -116,8 +115,10 @@ export class ComponentPlugin extends BasePlugin {
 
     bs.hooks.prepareEnv.tap(this.name, () => {
       this.setEnv("KABEGAME_COMPONENT", this.component?.comp || "");
-      const devServerHost = bs.context.mode?.isAndroid ? getDevServerHost() : "127.0.0.1";
-      this.setEnv("KABEGAME_DEV_SERVER_HOST", devServerHost);
+      // Android 真机/模拟器 dev 也走回环：adb reverse tcp:1420 把设备 127.0.0.1:1420
+      // 隧道到开发机（fork cargo-tauri patch 5 保留 localhost devUrl + stock
+      // android-studio-script localhost 分支），debug ingest 不再依赖局域网 IP/10.0.2.2。
+      this.setEnv("KABEGAME_DEV_SERVER_HOST", "127.0.0.1");
       this.setEnv("KABEGAME_DEV_SERVER_PORT", "1420");
       if (bs.context.cmd!.isDev && this.component && !this.component.isCli) {
         this.setEnv(
@@ -212,13 +213,20 @@ export class ComponentPlugin extends BasePlugin {
       this.log(`tauriConfigHandlebars: ${tauriConfigHandlebars}`);
       if (existsSync(tauriConfigHandlebars)) {
         const tauriConfig = path.resolve(component.appDir, "tauri.conf.json");
-        Handlebars.registerHelper("devServerHost", () => isAndroid ? getDevServerHost() : "localhost");
+        // devUrl/CSP 一律 localhost：Android 真机由 fork cargo-tauri 保留 localhost devUrl
+        // （patch 5，见 cocs/tauri/TAURI_CLI_FORK.md）并经 stock localhost 分支自动
+        // adb reverse tcp:1420，页面与 HMR WebSocket 全走 USB 回环，不再按局域网 IP 渲染。
+        Handlebars.registerHelper("devServerHost", () => "localhost");
         const template = Handlebars.compile(
           readFileSync(tauriConfigHandlebars, {
             encoding: "utf-8",
           }).toString(),
         );
         writeFileSync(tauriConfig, template(templateCtx));
+        // Android 的 Java 包/源码目录固定为 app.kabegame,不随 identifier(按 mode)变化——
+        // 由 fork 的 cargo-tauri 按 TAURI_ANDROID_PACKAGE 解耦(见 tauri-cli-plugin.ts /
+        // cocs/tauri/TAURI_CLI_FORK.md),这里无需再按 mode 渲染 Kotlin 源码。
+
         // 仅 main 组件：用 handlebars 生成 capabilities/main.json（桌面不含 picker 权限，移动端含）
         if (component.isMain) {
           const capHandlebars = path.resolve(

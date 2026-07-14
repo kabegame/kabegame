@@ -15,6 +15,7 @@ import chalk from "chalk";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export const ROOT = path.resolve(__dirname, "..");
+export const THIRD_DIR = path.join(ROOT, "third");
 
 export const DATA_PLUGINS_DIR = path.join(
   ROOT,

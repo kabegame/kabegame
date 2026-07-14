@@ -16,6 +16,7 @@ base64 = { workspace = true }
 encoding_rs = "0.8"
 dirs = "5.0"
 chrono = "0.4"
+crc32fast = { version = "1", optional = true }
 futures-util = "0.3"
 image = { workspace = true }
 infer = "0.19"
@@ -49,14 +50,16 @@ reqwest = { version = "0.11", features = [
 ] }
 # 桌面端删除原始文件时移入系统回收站（可恢复）；Android/iOS 不支持，单独处理。
 trash = "5"
-# 进程内 FFmpeg：视频预览压缩 + 维度读取（Android 走 Kotlin provider，无需）。
-# 链接依赖构建环境 FFMPEG_PKG_CONFIG_PATH 指向 third/FFmpeg-build/install/lib/pkgconfig。
-rsmpeg = { workspace = true }
 # V8_RUNTIME：嵌入式 V8 (deno_core/rusty_v8) 插件运行时。
-# 桌面 + Android 均接入（仅排除 iOS）。V8 启动快照已移除（跨架构不可移植，且非性能瓶颈），
-# 运行期即时 init 扩展；网络全部走宿主 reqwest（op_kabegame_fetch / op_kabegame_to），
+# 桌面 + Android 均接入（仅排除 iOS）。共享 baseline 启动快照由目标设备运行期生成并缓存，
+# 缺失/失效时回退即时 init；网络全部走宿主 reqwest（op_kabegame_fetch / op_kabegame_to），
 # Response/Headers 由 prelude.js 自实现，故不引入 deno_fetch / deno_net / deno_tls。
 [target.'cfg(not(target_os = "ios"))'.dependencies]
+# 进程内 FFmpeg：视频预览压缩 + 维度读取。桌面 + Android 均接入（仅排除 iOS）。
+# 链接依赖构建环境 FFMPEG_PKG_CONFIG_PATH 指向对应平台的 FFmpeg-build install/lib/pkgconfig
+# （桌面 third/FFmpeg-build/install；Android third/FFmpeg-build/android/<arch>/install）。
+# Android content:// 视频经 ContentIoProvider.open_fd 拿 fd，Rust 用 file 协议打开 /proc/self/fd/N。
+rsmpeg = { workspace = true }
 deno_core = { version = "0.405", optional = true }
 deno_error = { version = "0.7", optional = true }
 deno_webidl = { version = "0.252", optional = true }
@@ -131,6 +134,7 @@ plugin-runtime = [
   "dep:deno_crypto",
   "dep:deno_permissions",
   "dep:deno_features",
+  "dep:crc32fast",
   "dep:sys_traits",
   "dep:tokio-util",
 ]

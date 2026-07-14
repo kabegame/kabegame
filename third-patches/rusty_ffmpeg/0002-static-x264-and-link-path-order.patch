@@ -1,0 +1,93 @@
+diff --git a/build.rs b/build.rs
+index 869f9a7..4d345a5 100644
+--- a/build.rs
++++ b/build.rs
+@@ -334,6 +334,17 @@ fn remove_verbatim(path: String) -> PathBuf {
+ mod pkg_config_linking {
+     use super::*;
+ 
++    /// Codec dependencies that must be linked statically. Only x264 qualifies: it is
++    /// built from source into third/x264-build and MUST NOT resolve to the system
++    /// libx264.so — that shared library would be loaded into the same process as
++    /// libcef.so, whose PartitionAlloc replaces the global memalign and crashes on
++    /// x264's high-alignment SIMD allocations. x264's `-L` search path is emitted by
++    /// FFmpeg's own .pc (Libs line), so forcing it static by name is sufficient.
++    ///
++    /// All other codec deps (libvpx, libopus, …) stay dynamic and are bundled into
++    /// the package (deb) alongside the binary by scripts/plugins/os-plugin.ts.
++    const STATIC_FFMPEG_DEPENDENCIES: &[&str] = &["x264"];
++
+     /// Returns error when some library are missing. Otherwise, returns the paths of the libraries.
+     ///
+     /// Note: no side effect if this function errors.
+@@ -341,30 +352,56 @@ mod pkg_config_linking {
+         library_names: &[&str],
+         statik: bool,
+     ) -> Result<Vec<PathBuf>, pkg_config::Error> {
+-        // dry run for library linking
++        let static_dependency_names: HashSet<&str> = if statik {
++            STATIC_FFMPEG_DEPENDENCIES.iter().copied().collect()
++        } else {
++            HashSet::new()
++        };
++        let mut printed_search_paths = HashSet::new();
++
++        // Emit the FFmpeg libraries' own link paths (e.g. the project's
++        // third/FFmpeg-build/install/lib) FIRST, so our controlled static
++        // archives win over identically-named system archives. Without this,
++        // emitting the codec deps' system dir (/usr/lib/<triple>) before these
++        // lets a system libavfilter.a (built with extra filters such as
++        // bs2b/lv2) shadow ours during `+bundle static=...`, dragging in
++        // undefined bs2b_*/lilv_* symbols at the final link.
++        //
++        // pkg-config intentionally treats /usr as a system root and does not
++        // mark its archives static. Emit Cargo metadata ourselves so only the
++        // codec dependencies above are forced to their .a archives.
++        let mut paths = HashSet::new();
+         for libname in library_names {
+-            pkg_config::Config::new()
++            let library = pkg_config::Config::new()
+                 .statik(statik)
+                 .cargo_metadata(false)
+                 .env_metadata(false)
+-                .print_system_libs(false)
+-                .print_system_cflags(false)
+                 .probe(&format!("lib{}", libname))?;
+-        }
+ 
+-        // real linking
+-        let mut paths = HashSet::new();
+-        for libname in library_names {
+-            let new_paths = pkg_config::Config::new()
+-                .statik(statik)
+-                .probe(&format!("lib{}", libname))
+-                .unwrap_or_else(|_| panic!("{} not found!", libname))
+-                .include_paths;
+-            for new_path in new_paths {
++            for link_path in &library.link_paths {
++                if printed_search_paths.insert(link_path.clone()) {
++                    println!("cargo:rustc-link-search=native={}", link_path.display());
++                }
++            }
++            for linked_library in &library.libs {
++                let force_static = statik
++                    && (library_names.contains(&linked_library.as_str())
++                        || static_dependency_names.contains(linked_library.as_str()));
++                if force_static {
++                    println!("cargo:rustc-link-lib=static={linked_library}");
++                } else {
++                    println!("cargo:rustc-link-lib={linked_library}");
++                }
++            }
++            for args in &library.ld_args {
++                println!("cargo:rustc-link-arg=-Wl,{}", args.join(","));
++            }
++            for new_path in library.include_paths {
+                 let new_path = new_path.to_str().unwrap().to_string();
+                 paths.insert(new_path);
+             }
+         }
++
+         Ok(paths.into_iter().map(PathBuf::from).collect())
+     }
+ }

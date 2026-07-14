@@ -1,0 +1,41 @@
+diff --git a/crates/tauri-cli/src/interface/rust.rs b/crates/tauri-cli/src/interface/rust.rs
+index e18e8308f..41b274e32 100644
+--- a/crates/tauri-cli/src/interface/rust.rs
++++ b/crates/tauri-cli/src/interface/rust.rs
+@@ -1423,10 +1423,17 @@ fn tauri_config_to_bundle_settings(
+       }
+     }
+ 
+-    depends_deb.push("libwebkit2gtk-4.1-0".to_string());
++    // kabegame fork: TAURI_NO_WEBKIT_DEPS=1/true 跳过 webkit 依赖注入——
++    // 非 webkit runtime(如 CEF)的 deb/rpm 不应 Depends/Requires libwebkit2gtk。
++    // 未设置时保持 stock 行为。
++    let no_webkit_deps = std::env::var("TAURI_NO_WEBKIT_DEPS")
++      .map(|v| v == "1" || v == "true")
++      .unwrap_or(false);
++    if !no_webkit_deps {
++      depends_deb.push("libwebkit2gtk-4.1-0".to_string());
++      libs.push("libwebkit2gtk-4.1.so.0".into());
++    }
+     depends_deb.push("libgtk-3-0".to_string());
+-
+-    libs.push("libwebkit2gtk-4.1.so.0".into());
+     libs.push("libgtk-3.so.0".into());
+ 
+     for lib in libs {
+@@ -1438,6 +1445,15 @@ fn tauri_config_to_bundle_settings(
+     }
+   }
+ 
++  // kabegame fork: 去重——config 显式列出的依赖可能与上面注入的重复
++  // (如 libgtk-3-0 / libayatana-appindicator3-1),保序去重。
++  {
++    let mut seen = std::collections::HashSet::new();
++    depends_deb.retain(|d| seen.insert(d.clone()));
++    let mut seen = std::collections::HashSet::new();
++    depends_rpm.retain(|d| seen.insert(d.clone()));
++  }
++
+   #[cfg(windows)]
+   {
+     if let crate::helpers::config::WebviewInstallMode::FixedRuntime { path } =

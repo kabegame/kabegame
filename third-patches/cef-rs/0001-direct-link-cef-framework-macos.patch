@@ -1,0 +1,125 @@
+diff --git a/sys/build.rs b/sys/build.rs
+index d064e51..ec4b5e3 100644
+--- a/sys/build.rs
++++ b/sys/build.rs
+@@ -120,23 +120,6 @@ fn main() -> anyhow::Result<()> {
+     println!("cargo::metadata=CEF_DIR={cef_dir_str}");
+     println!("cargo::rustc-link-search=native={cef_dir_str}");
+ 
+-    let mut cef_dll_wrapper = cmake::Config::new(&cef_dir);
+-    cef_dll_wrapper
+-        .generator("Ninja")
+-        .profile("RelWithDebInfo")
+-        .build_target("libcef_dll_wrapper");
+-
+-    let project_arch = match os_arch.arch {
+-        "aarch64" => "arm64",
+-        arch => arch,
+-    };
+-
+-    let sandbox = if cfg!(feature = "sandbox") {
+-        "ON"
+-    } else {
+-        "OFF"
+-    };
+-
+     match os_arch.os {
+         "linux" => {
+             // On Windows and Linux the cef files usually have to be next to the main binary.
+@@ -150,6 +133,23 @@ fn main() -> anyhow::Result<()> {
+             // On macOS it's more complicated so we'll leave it to tools like tauri-cli for now.
+             copy_cef_runtime_files(&cef_dir, target_dir)?;
+ 
++            let mut cef_dll_wrapper = cmake::Config::new(&cef_dir);
++            cef_dll_wrapper
++                .generator("Ninja")
++                .profile("RelWithDebInfo")
++                .build_target("libcef_dll_wrapper");
++
++            let project_arch = match os_arch.arch {
++                "aarch64" => "arm64",
++                arch => arch,
++            };
++
++            let sandbox = if cfg!(feature = "sandbox") {
++                "ON"
++            } else {
++                "OFF"
++            };
++
+             let sdk_libs = [
+                 "comctl32.lib",
+                 "delayimp.lib",
+@@ -186,15 +186,29 @@ fn main() -> anyhow::Result<()> {
+         "macos" => {
+             println!("cargo::rustc-link-lib=framework=AppKit");
+ 
+-            let build_dir = cef_dll_wrapper
+-                .no_default_flags(true)
+-                .define("PROJECT_ARCH", project_arch)
+-                .define("USE_SANDBOX", sandbox)
+-                .build()
+-                .to_string_lossy()
+-                .into_owned();
+-            println!("cargo::rustc-link-search=native={build_dir}/build/libcef_dll_wrapper");
+-            println!("cargo::rustc-link-lib=static=cef_dll_wrapper");
++            // Direct-link the CEF framework. Its install name is
++            // @executable_path/../Frameworks/..., which resolves through the
++            // target/Frameworks symlink in dev and the app bundle in release.
++            println!("cargo::rustc-link-search=framework={cef_dir_str}");
++            println!("cargo::rustc-link-lib=framework=Chromium Embedded Framework");
++
++            // Support running the dev executable without an app bundle.
++            let frameworks_dir = target_dir.parent().unwrap().join("Frameworks");
++            std::fs::create_dir_all(&frameworks_dir)?;
++            let link = frameworks_dir.join("Chromium Embedded Framework.framework");
++            let src = cef_dir.join("Chromium Embedded Framework.framework");
++            let needs_recreate = match std::fs::read_link(&link) {
++                Ok(existing) => existing != src,
++                Err(_) => true,
++            };
++            if needs_recreate {
++                if link.is_symlink() || link.is_file() {
++                    std::fs::remove_file(&link)?;
++                } else if link.exists() {
++                    std::fs::remove_dir_all(&link)?;
++                }
++                std::os::unix::fs::symlink(&src, &link)?;
++            }
+         }
+         os => unimplemented!("unknown target {os}"),
+     }
+diff --git a/sys/src/direct_link_loader_stubs.rs b/sys/src/direct_link_loader_stubs.rs
+new file mode 100644
+index 0000000..0fa0e78
+--- /dev/null
++++ b/sys/src/direct_link_loader_stubs.rs
+@@ -0,0 +1,14 @@
++/// Direct-link mode (kabegame vendored build): libcef is linked at build time
++/// via LC_LOAD_DYLIB, so the runtime loader entry points become no-ops that
++/// report success, satisfying references from `cef::library_loader`.
++#[no_mangle]
++pub extern "C" fn cef_load_library(
++    _library_path: *const std::os::raw::c_char,
++) -> std::os::raw::c_int {
++    1
++}
++
++#[no_mangle]
++pub extern "C" fn cef_unload_library() -> std::os::raw::c_int {
++    1
++}
+diff --git a/sys/src/lib.rs b/sys/src/lib.rs
+index 7f092d3..21d8ee6 100644
+--- a/sys/src/lib.rs
++++ b/sys/src/lib.rs
+@@ -10,6 +10,9 @@
+ mod bindings;
+ pub use bindings::*;
+ 
++#[cfg(target_os = "macos")]
++mod direct_link_loader_stubs;
++
+ #[cfg(target_os = "windows")]
+ impl Default for HWND {
+     fn default() -> Self {

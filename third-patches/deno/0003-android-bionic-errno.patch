@@ -1,0 +1,23 @@
+diff --git a/libs/core/uv_compat/tty.rs b/libs/core/uv_compat/tty.rs
+index 542b0a5..1b39e17 100644
+--- a/libs/core/uv_compat/tty.rs
++++ b/libs/core/uv_compat/tty.rs
+@@ -397,7 +397,17 @@ mod global_termios {
+     unsafe { __errno_location() }
+   }
+ 
+-  #[cfg(not(any(target_os = "macos", target_os = "linux")))]
++  // Android (Bionic) exposes the thread-local errno via `__errno`, not glibc's
++  // `__errno_location`. See NDK <errno.h>: `#define errno (*__errno())`.
++  #[cfg(target_os = "android")]
++  fn errno_location() -> *mut c_int {
++    unsafe extern "C" {
++      fn __errno() -> *mut c_int;
++    }
++    unsafe { __errno() }
++  }
++
++  #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+   fn errno_location() -> *mut c_int {
+     compile_error!(
+       "errno_location not implemented for this platform — \

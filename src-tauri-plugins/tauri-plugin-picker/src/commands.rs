@@ -118,6 +118,14 @@ pub(crate) async fn get_content_size<R: Runtime>(
 }
 
 #[tauri::command]
+pub(crate) async fn open_fd<R: Runtime>(
+    app: AppHandle<R>,
+    uri: String,
+) -> Result<OpenFdResponse, String> {
+    app.picker().open_fd(uri).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub(crate) async fn get_image_dimensions<R: Runtime>(
     app: AppHandle<R>,
     uri: String,

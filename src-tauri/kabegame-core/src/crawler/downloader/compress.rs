@@ -1,20 +1,6 @@
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "android")]
-use async_trait::async_trait;
-#[cfg(target_os = "android")]
-use std::sync::{Arc, OnceLock};
-
-#[cfg(target_os = "android")]
-use image::codecs::gif::{GifEncoder, Repeat};
-#[cfg(target_os = "android")]
-use image::{Delay, Frame as ImageFrame};
-#[cfg(target_os = "android")]
-use std::fs::File;
-#[cfg(target_os = "android")]
-use std::io::BufWriter;
-
 /// 视频预览压缩结果。
 pub struct VideoCompressResult {
     pub preview_path: PathBuf,
@@ -22,69 +8,65 @@ pub struct VideoCompressResult {
     pub height: Option<u32>,
 }
 
-#[cfg(target_os = "android")]
-#[async_trait]
-pub trait AndroidVideoCompressProvider: Send + Sync + 'static {
-    async fn compress_video_for_preview(
-        &self,
-        input_uri: &str,
-        output_path: &Path,
-    ) -> Result<VideoCompressResult, String>;
-}
-
-#[cfg(target_os = "android")]
-static ANDROID_VIDEO_COMPRESS_PROVIDER: OnceLock<Arc<dyn AndroidVideoCompressProvider>> =
-    OnceLock::new();
-
-#[cfg(target_os = "android")]
-pub fn set_android_video_compress_provider(
-    provider: Arc<dyn AndroidVideoCompressProvider>,
-) -> Result<(), String> {
-    ANDROID_VIDEO_COMPRESS_PROVIDER
-        .set(provider)
-        .map_err(|_| "Android video compress provider already initialized".to_string())
-}
-
-#[cfg(target_os = "android")]
-fn get_android_video_compress_provider() -> Option<Arc<dyn AndroidVideoCompressProvider>> {
-    ANDROID_VIDEO_COMPRESS_PROVIDER.get().cloned()
-}
-
-/// Android：从 content URI 生成视频预览（GIF），走 Kotlin provider。
+/// Android：从 content:// URI 生成 10fps 动图 GIF 视频预览。
+/// 安卓网格无鼠标悬浮，静帧 <video> 无意义，故用动图预览（前端以 `<img>` 展示）。
+/// 先经 ContentIoProvider.open_fd 拿到 detach 的 fd，再用 `/proc/self/fd/N` 交给进程内
+/// FFmpeg(rsmpeg) 的 `run_ffmpeg_gif`（fps+scale+palettegen+paletteuse），取代旧的慢速
+/// Kotlin 帧提取 + image crate GIF 编码。
 #[cfg(target_os = "android")]
 pub async fn compress_video_for_preview(input_uri: &str) -> Result<VideoCompressResult, String> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+
     let thumbnails_dir = crate::app_paths::AppPaths::global().thumbnails_dir();
     tokio::fs::create_dir_all(&thumbnails_dir)
         .await
         .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
+    let out_path = thumbnails_dir.join(format!("{}.gif", uuid::Uuid::new_v4()));
 
-    let preview_id = uuid::Uuid::new_v4();
-    let out_path = thumbnails_dir.join(format!("{preview_id}.gif"));
-
-    if let Some(provider) = get_android_video_compress_provider() {
-        return provider
-            .compress_video_for_preview(input_uri, &out_path)
-            .await;
-    }
-
-    // 兜底：通过 content IO 读取字节写入输出文件
-    let bytes = crate::crawler::content_io::get_content_io_provider()
-        .read_file_bytes(input_uri)
+    let fd = crate::crawler::content_io::get_content_io_provider()
+        .open_fd(input_uri)
         .await
-        .map_err(|e| format!("Android fallback read failed: {e}"))?;
-    tokio::fs::write(&out_path, &bytes)
-        .await
-        .map_err(|e| format!("Android fallback write failed: {e}"))?;
-    Ok(VideoCompressResult {
-        preview_path: out_path,
-        width: None,
-        height: None,
+        .map_err(|e| format!("open_fd content URI failed: {e}"))?;
+
+    let out_for_task = out_path.clone();
+    // OwnedFd 在阻塞任务内持有，任务结束时关闭我们这份 fd；FFmpeg 打开 /proc/self/fd/N
+    // 时会 open() 出自己的副本，故只需在转码期间保持该 fd 存活。
+    let result = tokio::task::spawn_blocking(move || {
+        let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+        let proc_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+        let dims = run_ffmpeg_gif(&proc_path, &out_for_task);
+        drop(owned);
+        dims
     })
+    .await
+    .map_err(|e| format!("Android gif task join error: {e}"))
+    .and_then(|r| r);
+
+    match result {
+        Ok((w, h)) => Ok(VideoCompressResult {
+            preview_path: out_path,
+            width: Some(w),
+            height: Some(h),
+        }),
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&out_path).await;
+            Err(e)
+        }
+    }
 }
 
 /// 桌面：从文件路径生成 H.264 MP4 视频预览。
 #[cfg(not(target_os = "android"))]
 pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompressResult, String> {
+    generate_video_preview_from_path(input_path).await
+}
+
+/// 桌面：给定文件路径，用进程内 FFmpeg 解码首个视频流 → scale 缩放 → H.264/MP4 编码
+/// （无音轨、前 2.5s），产出预览缩略图（桌面用 <video> 悬浮自动播放）。
+#[cfg(not(target_os = "android"))]
+async fn generate_video_preview_from_path(
+    input_path: &Path,
+) -> Result<VideoCompressResult, String> {
     let thumbnails_dir = crate::app_paths::AppPaths::global().thumbnails_dir();
     tokio::fs::create_dir_all(&thumbnails_dir)
         .await
@@ -134,7 +116,7 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
 }
 
 /// 进程内 FFmpeg（rsmpeg/libav*）转码：解码首个视频流 → scale 缩放 → 编码（无音轨，截取前 2.5s）。
-/// 桌面统一使用 H.264/MP4。
+/// 桌面统一使用 H.264/MP4（Android 视频预览走 `run_ffmpeg_gif`）。
 /// 返回输出视频的宽高（缩放后）。替代旧的 ffmpeg sidecar 进程调用。
 #[cfg(not(target_os = "android"))]
 fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u32), String> {
@@ -309,7 +291,6 @@ fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u
 }
 
 /// 编码一帧并交错写入输出（frame=None 表示冲洗编码器）。
-#[cfg(not(target_os = "android"))]
 fn encode_write(
     enc_ctx: &mut rsmpeg::avcodec::AVCodecContext,
     ofmt_ctx: &mut rsmpeg::avformat::AVFormatContextOutput,
@@ -346,6 +327,193 @@ fn encode_write(
     Ok(())
 }
 
+/// Android：进程内 FFmpeg 生成 10fps 动图 GIF 预览（无鼠标悬浮，用动图而非静帧）。
+/// 解码首个视频流 → `fps=10,scale=最长边≤320:lanczos` → split/palettegen/paletteuse
+/// 自适应调色板 → gif 编码/封装（gif муxer 默认无限循环）。截取前 2.5s。返回输出宽高。
+/// palettegen 读完全部输入才在 EOF 产出调色板，故先把帧全部喂入 buffersrc 再一次性抽帧。
+#[cfg(target_os = "android")]
+fn run_ffmpeg_gif(input_path: &Path, output_path: &Path) -> Result<(u32, u32), String> {
+    use rsmpeg::avcodec::{AVCodec, AVCodecContext};
+    use rsmpeg::avfilter::{AVFilter, AVFilterGraph, AVFilterInOut};
+    use rsmpeg::avformat::{AVFormatContextInput, AVFormatContextOutput};
+    use rsmpeg::avutil::ra;
+    use rsmpeg::error::RsmpegError;
+    use rsmpeg::ffi;
+    use std::ffi::CString;
+
+    const PREVIEW_SECONDS: f64 = 2.5;
+
+    let to_cstring = |p: &Path| -> Result<CString, String> {
+        CString::new(p.to_string_lossy().as_ref())
+            .map_err(|e| format!("path contains NUL byte: {e}"))
+    };
+    let input_c = to_cstring(input_path)?;
+    let output_c = to_cstring(output_path)?;
+
+    // ---- 输入 + 解码器 ----
+    let mut ifmt =
+        AVFormatContextInput::open(&input_c).map_err(|e| format!("open input failed: {e:?}"))?;
+    let (video_idx, decoder) = ifmt
+        .find_best_stream(ffi::AVMEDIA_TYPE_VIDEO)
+        .map_err(|e| format!("find_best_stream failed: {e:?}"))?
+        .ok_or_else(|| "no video stream in input".to_string())?;
+    let in_tb = ifmt.streams()[video_idx].time_base;
+
+    let mut dec_ctx = AVCodecContext::new(&decoder);
+    dec_ctx
+        .apply_codecpar(&ifmt.streams()[video_idx].codecpar())
+        .map_err(|e| format!("apply_codecpar failed: {e:?}"))?;
+    dec_ctx.set_pkt_timebase(in_tb);
+    dec_ctx
+        .open(None)
+        .map_err(|e| format!("open decoder failed: {e:?}"))?;
+
+    // ---- 滤镜图：buffer → fps=10,scale,split/palettegen/paletteuse → buffersink(pal8) ----
+    let filter_graph = AVFilterGraph::new();
+    let buffersrc = AVFilter::get_by_name(c"buffer").ok_or("buffer filter missing")?;
+    let buffersink = AVFilter::get_by_name(c"buffersink").ok_or("buffersink filter missing")?;
+    let args = format!(
+        "video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",
+        dec_ctx.width,
+        dec_ctx.height,
+        dec_ctx.pix_fmt,
+        in_tb.num,
+        in_tb.den,
+        dec_ctx.sample_aspect_ratio.num,
+        dec_ctx.sample_aspect_ratio.den,
+    );
+    let args_c = CString::new(args).map_err(|e| format!("filter args NUL: {e}"))?;
+    {
+        let mut src = filter_graph
+            .create_filter_context(&buffersrc, c"in", Some(&args_c))
+            .map_err(|e| format!("create buffersrc failed: {e:?}"))?;
+        let mut sink = filter_graph
+            .alloc_filter_context(&buffersink, c"out")
+            .ok_or("alloc buffersink failed")?;
+        // gif 编码器要求调色板像素格式。
+        sink.opt_set(c"pixel_formats", c"pal8")
+            .map_err(|e| format!("set sink pix_fmt failed: {e:?}"))?;
+        sink.init_str(None)
+            .map_err(|e| format!("init buffersink failed: {e:?}"))?;
+
+        let outputs = AVFilterInOut::new(c"in", &mut src, 0);
+        let inputs = AVFilterInOut::new(c"out", &mut sink, 0);
+        filter_graph
+            .parse_ptr(
+                c"fps=10,scale='min(320,iw)':-2:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+                Some(inputs),
+                Some(outputs),
+            )
+            .map_err(|e| format!("parse gif filter graph failed: {e:?}"))?;
+        filter_graph
+            .config()
+            .map_err(|e| format!("config filter graph failed: {e:?}"))?;
+    }
+    let mut buffersrc_ctx = filter_graph.get_filter(c"in").ok_or("buffersrc missing")?;
+    let mut buffersink_ctx = filter_graph.get_filter(c"out").ok_or("buffersink missing")?;
+    let out_w = buffersink_ctx.get_w();
+    let out_h = buffersink_ctx.get_h();
+    let sink_tb = buffersink_ctx.get_time_base();
+
+    // ---- gif 编码器 + 封装 ----
+    let encoder = AVCodec::find_encoder(ffi::AV_CODEC_ID_GIF).ok_or("gif encoder not found")?;
+    let mut enc_ctx = AVCodecContext::new(&encoder);
+    enc_ctx.set_width(out_w);
+    enc_ctx.set_height(out_h);
+    enc_ctx.set_pix_fmt(ffi::AV_PIX_FMT_PAL8);
+    // gif 以 1/100s（厘秒）为时基；10fps → 每帧 10 厘秒。
+    enc_ctx.set_time_base(ra(1, 100));
+    enc_ctx.set_framerate(ra(10, 1));
+
+    let mut ofmt = AVFormatContextOutput::create(&output_c)
+        .map_err(|e| format!("create output failed: {e:?}"))?;
+    if ofmt.oformat().flags & ffi::AVFMT_GLOBALHEADER as i32 != 0 {
+        enc_ctx.set_flags(enc_ctx.flags | ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
+    }
+    enc_ctx
+        .open(None)
+        .map_err(|e| format!("open gif encoder failed: {e:?}"))?;
+
+    let stream_index;
+    {
+        let mut out_stream = ofmt.new_stream();
+        out_stream.set_codecpar(enc_ctx.extract_codecpar());
+        out_stream.set_time_base(enc_ctx.time_base);
+        stream_index = out_stream.index as usize;
+    }
+    ofmt.write_header(&mut None)
+        .map_err(|e| format!("write_header failed: {e:?}"))?;
+
+    let in_tb_secs = in_tb.num as f64 / in_tb.den as f64;
+
+    // ---- 先把 2.5s 内所有解码帧喂入滤镜（palettegen 要读完全部输入）----
+    'outer: loop {
+        let packet = match ifmt.read_packet() {
+            Ok(Some(p)) => p,
+            Ok(None) => break,
+            Err(e) => return Err(format!("read_packet failed: {e:?}")),
+        };
+        if packet.stream_index as usize != video_idx {
+            continue;
+        }
+        dec_ctx
+            .send_packet(Some(&packet))
+            .map_err(|e| format!("send_packet failed: {e:?}"))?;
+        loop {
+            let mut frame = match dec_ctx.receive_frame() {
+                Ok(f) => f,
+                Err(RsmpegError::DecoderDrainError) | Err(RsmpegError::DecoderFlushedError) => break,
+                Err(e) => return Err(format!("receive_frame failed: {e:?}")),
+            };
+            let ts = frame.best_effort_timestamp;
+            if ts != ffi::AV_NOPTS_VALUE && (ts as f64) * in_tb_secs >= PREVIEW_SECONDS {
+                break 'outer;
+            }
+            frame.set_pts(ts);
+            buffersrc_ctx
+                .buffersrc_add_frame(Some(frame), None)
+                .map_err(|e| format!("buffersrc_add_frame failed: {e:?}"))?;
+        }
+    }
+    // 冲洗解码器（补齐 2.5s 内的尾帧）
+    let _ = dec_ctx.send_packet(None);
+    loop {
+        let mut frame = match dec_ctx.receive_frame() {
+            Ok(f) => f,
+            Err(_) => break,
+        };
+        let ts = frame.best_effort_timestamp;
+        if ts != ffi::AV_NOPTS_VALUE && (ts as f64) * in_tb_secs >= PREVIEW_SECONDS {
+            break;
+        }
+        frame.set_pts(ts);
+        buffersrc_ctx
+            .buffersrc_add_frame(Some(frame), None)
+            .map_err(|e| format!("buffersrc_add_frame failed: {e:?}"))?;
+    }
+    // EOF → 触发 palettegen 出调色板、paletteuse 出帧
+    buffersrc_ctx
+        .buffersrc_add_frame(None, None)
+        .map_err(|e| format!("buffersrc EOF failed: {e:?}"))?;
+
+    // ---- 抽取滤镜输出帧 → gif 编码 → 写出 ----
+    loop {
+        let mut filtered = match buffersink_ctx.buffersink_get_frame(None) {
+            Ok(f) => f,
+            Err(RsmpegError::BufferSinkDrainError) | Err(RsmpegError::BufferSinkEofError) => break,
+            Err(e) => return Err(format!("buffersink_get_frame failed: {e:?}")),
+        };
+        filtered.set_time_base(sink_tb);
+        filtered.set_pict_type(ffi::AV_PICTURE_TYPE_NONE);
+        encode_write(&mut enc_ctx, &mut ofmt, stream_index, Some(filtered))?;
+    }
+    encode_write(&mut enc_ctx, &mut ofmt, stream_index, None)?;
+    ofmt.write_trailer()
+        .map_err(|e| format!("write_trailer failed: {e:?}"))?;
+
+    Ok((out_w as u32, out_h as u32))
+}
+
 /// 将一帧送入滤镜图，取出滤镜输出帧并编码写出（frame=None 表示冲洗滤镜）。
 #[cfg(not(target_os = "android"))]
 #[allow(clippy::too_many_arguments)]
@@ -374,52 +542,6 @@ fn filter_encode_write(
         filtered.set_pict_type(ffi::AV_PICTURE_TYPE_NONE);
         encode_write(enc_ctx, ofmt_ctx, stream_index, Some(filtered))?;
     }
-    Ok(())
-}
-
-/// 将目录下 frame_000.png, frame_001.png, ... 编码为动图 GIF（4fps），仅 Android 使用。
-#[cfg(target_os = "android")]
-pub fn encode_frames_dir_to_gif(frame_dir: &Path, output_path: &Path) -> Result<(), String> {
-    let mut entries: Vec<_> = std::fs::read_dir(frame_dir)
-        .map_err(|e| format!("读取帧目录失败: {e}"))?
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x.eq_ignore_ascii_case("png"))
-                .unwrap_or(false)
-                && e.file_name().to_string_lossy().starts_with("frame_")
-        })
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
-    if entries.is_empty() {
-        return Err("帧目录下没有 frame_*.png".to_string());
-    }
-    // 与 ffmpeg 一致：预览最多 2.5s，4fps => 最多 10 帧
-    const MAX_FRAMES_2_5S: usize = 10;
-    if entries.len() > MAX_FRAMES_2_5S {
-        entries.truncate(MAX_FRAMES_2_5S);
-    }
-
-    // 4fps = 250ms 每帧
-    let delay = Delay::from_numer_denom_ms(250, 1);
-
-    let out_file = File::create(output_path).map_err(|e| format!("创建 GIF 文件失败: {e}"))?;
-    let mut encoder = GifEncoder::new_with_speed(BufWriter::new(out_file), 10);
-    encoder
-        .set_repeat(Repeat::Infinite)
-        .map_err(|e| format!("set_repeat 失败: {e}"))?;
-
-    for entry in entries {
-        let path = entry.path();
-        let img = image::open(&path).map_err(|e| format!("加载帧 {} 失败: {e}", path.display()))?;
-        let rgba = img.to_rgba8();
-        let frame = ImageFrame::from_parts(rgba, 0, 0, delay);
-        encoder
-            .encode_frame(frame)
-            .map_err(|e| format!("编码帧 {} 失败: {e}", path.display()))?;
-    }
-
     Ok(())
 }
 

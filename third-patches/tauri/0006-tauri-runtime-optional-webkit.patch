@@ -1,0 +1,91 @@
+diff --git a/crates/tauri-runtime/Cargo.toml b/crates/tauri-runtime/Cargo.toml
+index 7b73df458..b32303441 100644
+--- a/crates/tauri-runtime/Cargo.toml
++++ b/crates/tauri-runtime/Cargo.toml
+@@ -44,7 +44,9 @@ webview2-com = "0.38"
+ 
+ [target."cfg(any(target_os = \"linux\", target_os = \"dragonfly\", target_os = \"freebsd\", target_os = \"openbsd\", target_os = \"netbsd\"))".dependencies]
+ gtk = { version = "0.18", features = ["v3_24"] }
+-webkit2gtk = { version = "=2.0", features = ["v2_40"] }
++# kabegame fork: webkit2gtk 变为可选,由 `webkit` feature 开启。
++# 非 webkit runtime(CEF)不启用该 feature,Linux 构建不再链接 webkit2gtk。
++webkit2gtk = { version = "=2.0", features = ["v2_40"], optional = true }
+ 
+ [target."cfg(target_os = \"android\")".dependencies]
+ jni = "0.21"
+@@ -70,3 +72,5 @@ objc2-web-kit = { version = "0.3", default-features = false, features = [
+ [features]
+ devtools = []
+ macos-private-api = []
++# kabegame fork: 显式开启 Linux/BSD 的 webkit2gtk 依赖与相关 webview 代码。
++webkit = ["dep:webkit2gtk"]
+diff --git a/crates/tauri-runtime/src/webview.rs b/crates/tauri-runtime/src/webview.rs
+index d7fb9c80f..7e40b69a5 100644
+--- a/crates/tauri-runtime/src/webview.rs
++++ b/crates/tauri-runtime/src/webview.rs
+@@ -94,12 +94,15 @@ pub struct NewWindowOpener {
+   /// The instance of the webview that initiated the new window request.
+   ///
+   /// This must be set as the related view of the new webview. See [`WebviewAttributes::related_view`].
+-  #[cfg(any(
+-    target_os = "linux",
+-    target_os = "dragonfly",
+-    target_os = "freebsd",
+-    target_os = "netbsd",
+-    target_os = "openbsd",
++  #[cfg(all(
++    feature = "webkit",
++    any(
++      target_os = "linux",
++      target_os = "dragonfly",
++      target_os = "freebsd",
++      target_os = "netbsd",
++      target_os = "openbsd",
++    )
+   ))]
+   pub webview: webkit2gtk::WebView,
+   /// The instance of the webview that initiated the new window request.
+@@ -410,12 +413,15 @@ pub struct WebviewAttributes {
+ 
+   /// Creates a new webview sharing the same web process with the provided webview.
+   /// Useful if you need to link a webview to another, for instance when using the [`PendingWebview::new_window_handler`].
+-  #[cfg(any(
+-    target_os = "linux",
+-    target_os = "dragonfly",
+-    target_os = "freebsd",
+-    target_os = "netbsd",
+-    target_os = "openbsd",
++  #[cfg(all(
++    feature = "webkit",
++    any(
++      target_os = "linux",
++      target_os = "dragonfly",
++      target_os = "freebsd",
++      target_os = "netbsd",
++      target_os = "openbsd",
++    )
+   ))]
+   pub related_view: Option<webkit2gtk::WebView>,
+ 
+@@ -540,12 +546,15 @@ impl WebviewAttributes {
+       input_accessory_view_builder: None,
+       #[cfg(windows)]
+       environment: None,
+-      #[cfg(any(
+-        target_os = "linux",
+-        target_os = "dragonfly",
+-        target_os = "freebsd",
+-        target_os = "netbsd",
+-        target_os = "openbsd",
++      #[cfg(all(
++        feature = "webkit",
++        any(
++          target_os = "linux",
++          target_os = "dragonfly",
++          target_os = "freebsd",
++          target_os = "netbsd",
++          target_os = "openbsd",
++        )
+       ))]
+       related_view: None,
+       #[cfg(target_os = "macos")]

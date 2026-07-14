@@ -693,7 +693,15 @@ impl PluginManager {
         }
 
         #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
-        crate::plugin::metadata_migration::spawn_metadata_migrations_for_plugin(plugin.clone());
+        {
+            crate::plugin::metadata_migration::spawn_metadata_migrations_for_plugin(plugin.clone());
+            // The baseline is shared by every V8 plugin. Startup refresh and
+            // install/update all pass through this hook, so one trigger covers
+            // both lifecycle paths.
+            if plugin.script.v8_source().is_some() {
+                crate::plugin::v8::snapshot::spawn_generate_if_missing();
+            }
+        }
 
         Ok(plugin)
     }

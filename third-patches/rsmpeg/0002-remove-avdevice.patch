@@ -1,0 +1,21 @@
+diff --git a/src/avdevice/mod.rs b/src/avdevice/mod.rs
+deleted file mode 100644
+index 1a35620..0000000
+--- a/src/avdevice/mod.rs
++++ /dev/null
+@@ -1,3 +0,0 @@
+-//! Everything related to `libavdevice`.
+-
+-crate::avutil::impl_version!(avdevice);
+diff --git a/src/lib.rs b/src/lib.rs
+index a3b8be3..592b344 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -12,7 +12,6 @@ mod macros;
+ mod shared;
+ 
+ pub mod avcodec;
+-pub mod avdevice;
+ pub mod avfilter;
+ pub mod avformat;
+ pub mod avutil;

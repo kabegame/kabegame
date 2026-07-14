@@ -32,6 +32,7 @@ enum Request {
     GetMimeType(String),
     ListChildren(String),
     ReadFileBytes(String),
+    OpenFd(String),
     TakePersistablePermission(String),
     GetImageDimensions(String),
     GetVideoDimensions(String),
@@ -56,6 +57,7 @@ enum Response {
     GetMimeType(Result<Option<String>, String>),
     ListChildren(Result<Vec<ContentEntry>, String>),
     ReadFileBytes(Result<Vec<u8>, String>),
+    OpenFd(Result<i32, String>),
     TakePersistablePermission(Result<(), String>),
     GetImageDimensions(Result<(u32, u32), String>),
     GetVideoDimensions(Result<(u32, u32), String>),
@@ -135,6 +137,18 @@ fn run_worker_loop<R: Runtime + 'static>(
                     base64::engine::general_purpose::STANDARD
                         .decode(&resp.data)
                         .map_err(|e| e.to_string())
+                }))
+            }
+            Request::OpenFd(uri) => {
+                let p = &provider;
+                Response::OpenFd(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .picker()
+                        .open_fd(uri)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(resp.fd)
                 }))
             }
             Request::TakePersistablePermission(uri) => {
@@ -312,6 +326,17 @@ impl ContentIoProvider for ChannelContentIoProvider {
             .map_err(|e| e.to_string())?;
         match resp_rx.await.map_err(|e| e.to_string())? {
             Response::ReadFileBytes(r) => r,
+            _ => Err("unexpected response".to_string()),
+        }
+    }
+
+    async fn open_fd(&self, uri: &str) -> Result<i32, String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send((Request::OpenFd(uri.to_string()), resp_tx))
+            .map_err(|e| e.to_string())?;
+        match resp_rx.await.map_err(|e| e.to_string())? {
+            Response::OpenFd(r) => r,
             _ => Err("unexpected response".to_string()),
         }
     }

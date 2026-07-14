@@ -63,6 +63,9 @@ On macOS both binaries are flat cargo artifacts in `target/<profile>`; the CEF f
 ```bash
 bun check -c kabegame                # Check Vue types + Cargo
 bun check -c kabegame --skip cargo   # Vue types only
+bun check -c kabegame --mode android --skip vue  # cargo check for Android via fork's `cargo tauri
+                                     # android check` (NDK toolchain from cargo-mobile2, same as build).
+                                     # Needs env NDK + bun run build:ffmpeg --target android + bin/android/ v8.
 ```
 
 ### Data directory modes (`--data`)
@@ -74,10 +77,17 @@ bun check -c kabegame --skip cargo   # Vue types only
 ### Other
 ```bash
 bun run set-version              # Bump version across workspace
-bun run build:ffmpeg             # Build x264 (third/x264) + FFmpeg libav* libs from source
+bun run patch cef                # Apply third-patches/cef series atomically to third/cef
+bun run patch cef -r             # Reverse the CEF series in reverse order
+bun run patch --all --check      # Dry-run every available third-patches/* series
+# Use `bun run patch`, not `bun patch`: Bun 1.3 has a built-in command with that name.
+bun run build:ffmpeg             # Build x264 (third/x264) + FFmpeg libav* libs from source (native)
                                  # x264 is built-in (no system libx264 needed); Linux build uses
                                  # --disable-asm + -DNATIVE_ALIGN=16 to avoid CEF/PartitionAlloc crash
                                  # Required before standard/CLI cargo build
+bun run build:ffmpeg --target android  # Cross-compile aarch64 FFmpeg via env NDK (NDK_HOME etc.)
+                                 # Output gitignored under third/FFmpeg-build/android/ (reproduced by
+                                 # command, not committed). Required before android cargo build/check.
 ```
 
 ### Verification workflow
@@ -119,6 +129,7 @@ struct Foo {
 - `src-tauri/kabegame-cli/` — Headless CLI
 - `src-tauri-plugins/` — Custom Tauri plugins (picker, pathes, share, compress, wallpaper, task-notification)
 - `src-crawler-plugins/` — JS/TS crawler plugins (V8 backend) packaged as `.kgpg` archives
+- `third-patches/` — Numbered patch series for keeping `third/` submodules clean and close to upstream
 
 ### Build Modes
 | Mode | Features |
@@ -129,14 +140,20 @@ struct Foo {
 ### Key Architecture Rules
 **Path logic belongs in `tauri-plugin-pathes`** — Any path/directory calculation must live in `src-tauri-plugins/tauri-plugin-pathes/`. Other modules call into it via `AppPaths`; never hardcode or recompute paths elsewhere.
 
+**Third-party patch series** — Kabegame changes to vendored `third/` repositories belong in matching `third-patches/<dir>/NNNN-*.patch` files, applied manually with `bun run patch <dir>`. The manager preflights the full ordered series in a disposable Git worktree before changing the real submodule and rolls back a partial commit-stage failure. Reverse mode applies patches in reverse order. `third/cef` directly pins official `chromiumembedded/cef` commit `0d0eeb611`; apply `third-patches/cef/0001-flat-subprocess-path.patch` before preparing a custom CEF/Chromium build. Re-vendor by reversing the series, bumping the upstream pin, then regenerating patches. See `third-patches/cef/README.md`.
+
+**Script repository paths** — `scripts/utils.ts` is the single source for both `ROOT` and `THIRD_DIR`; standalone scripts and build plugins import `THIRD_DIR` from there, not from `build-system.ts` and not by recomputing `path.join(ROOT, "third")`.
+
 **Single source of truth for file types:**
 - Image extensions/MIME: use `kabegame_core::image_type::*` (e.g. `is_image_by_path`, `supported_image_extensions`). Never hardcode `["jpg","png",...]` in Rust. Frontend uses the `get_supported_image_types` Tauri command.
 - `supported_video_extensions()` always returns the built-in video list. Frontend `isVideoMediaType` checks `type.startsWith("video/")` for gallery display.
 
-**Video ingestion is platform-gated, not Cargo-feature-gated:**
-- Desktop builds (standard/CLI on Windows/macOS/Linux) link rsmpeg/FFmpeg for preview compression and video dimensions.
-- Android must not compile FFmpeg/rsmpeg; it uses `AndroidVideoCompressProvider` backed by `tauri-plugin-compress`/Kotlin and content URI media APIs.
-- rsmpeg usage in `compress.rs` and `media_dimensions.rs` is guarded with `#[cfg(not(target_os = "android"))]`; Android alternatives are guarded with `#[cfg(target_os = "android")]`.
+**Video ingestion uses rsmpeg/FFmpeg on desktop AND Android (only iOS excluded):**
+- Desktop builds (standard/CLI on Windows/macOS/Linux) link rsmpeg/FFmpeg for preview compression and video dimensions (native static libs from `bun run build:ffmpeg`).
+- **Android also links rsmpeg/FFmpeg** — aarch64 static libs cross-compiled by `bun run build:ffmpeg --target android` (env NDK; output gitignored under `third/FFmpeg-build/android/`, reproduced by command, not committed). `rsmpeg`/`rusty_ffmpeg` are gated `cfg(not(target_os = "ios"))`.
+- Preview format differs by platform: **desktop** = H.264 MP4 (grid uses `<video>`, hover-autoplays); **Android** = 10fps animated **GIF** (`run_ffmpeg_gif`: `fps,scale,palettegen,paletteuse`), because Android grids have no hover so a static `<video>` frame is useless — the frontend shows it in `<img>` (`ImageContent.vue` `mode==='gif'`). The Android FFmpeg build enables the gif encoder/muxer + palettegen/paletteuse/fps filters. The old Kotlin `tauri-plugin-compress` GIF path is removed.
+- Android reads `content://` videos via `ContentIoProvider.open_fd(uri)` (PickerPlugin `openFileDescriptor().detachFd()`), then FFmpeg opens `/proc/self/fd/N`. Never treat a `content://` URI as a plain path or spill it to disk first. Video **dimensions** still come from `ContentIoProvider.get_video_dimensions` (`MediaMetadataRetriever`), not FFmpeg.
+- `mode-plugin.ts` injects the Android FFmpeg env (`FFMPEG_PKG_CONFIG_PATH`, `FFMPEG_LINK_MODE=static`, `BINDGEN_EXTRA_CLANG_ARGS` with NDK sysroot+target, `PKG_CONFIG_ALLOW_CROSS=1`, NDK cross linker/CC). `bun check -c kabegame --mode android` is supported (runs `cargo check --target aarch64-linux-android`). See `cocs/downloader-tasks/VIDEO_INGEST.md`.
 - Linux CEF/Chromium is built with common MP4 codec support. Desktop video compatibility copies are H.264/AAC MP4 on Windows/macOS/Linux, and video preview thumbnails are H.264 MP4. Do not add Linux-only WebM regeneration logic for organize/postprocess; WebM muxing is retained only for stream-copy MSE captures whose original streams are VP9/Opus WebM.
 - Gallery playback of stored videos is always supported (uses the HTML `<video>` element, no FFmpeg needed).
 
@@ -149,6 +166,7 @@ New styles should use **UnoCSS utility classes** (configured in `uno.config.pub.
 - **Windows/macOS/Linux**: Virtual disk (Dokan / macFUSE / FUSE) for wallpaper mounting
 - **Windows/macOS/Linux standard**: Uses the CEF runtime backend. All three platforms link CEF at build time and spawn subprocesses via a flat `kabegame-cef-helper` next to the exe (macOS dev runs the bare executable; release bundles embed the framework via `macOS.frameworks` and the helper via `macOS.files`).
 - **Android**: Simplified UI; picker/share/compress plugins; `useModalBack` is required
+- **Android identity split**: identifier (applicationId) is per-mode — dev `app.kabegame.dev` / prod `app.kabegame` (side-by-side installs) — while the Java package / source tree stays fixed at `app.kabegame` (`namespace`). Enabled by the forked `cargo-tauri` (upstream tauri monorepo at `third/tauri`, patched by `third-patches/tauri` — run `bun run patch tauri` first; honors `TAURI_ANDROID_PACKAGE`; built from `crates/tauri-cli` + PATH-injected by `TauriCliPlugin`). Never re-derive Kotlin package names from the identifier. See `cocs/tauri/TAURI_CLI_FORK.md`.
 - **iOS**: Not supported — do not add iOS adaptations
 
 ### Crawler Plugin Development

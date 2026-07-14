@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kabegame",
-  "version": "4.3.0",
-  "identifier": {{#if isAndroid}}"app.kabegame"{{else}}"Kabegame"{{/if}},
+  "version": "4.3.1",
+  "identifier": {{#if isAndroid}}{{#if isDev}}"app.kabegame.dev"{{else}}"app.kabegame"{{/if}}{{else}}"Kabegame"{{/if}},
   "build": {
     "beforeDevCommand": "bun run dev:frontend",
     "devUrl": "http://{{devServerHost}}:1420"{{#unless isDev}},
@@ -49,15 +49,6 @@
       {{#if isWindows}}"nsis"{{else if isMacOS}}"dmg"{{else if isLinux}}"deb"{{/if}}
     ],
     {{/unless}}
-    "icon": [
-      "./icons/icon.png",
-      "./icons/32x32.png", 
-      "./icons/64x64.png", 
-      "./icons/128x128.png", 
-      "./icons/128x128@2x.png", 
-      "./icons/icon.icns", 
-      "./icons/icon.ico"
-    ],
     {{!-- 只有非linux平台需要文件关联，linux用手动关联 desktop 文件 --}}
     {{#unless isLinux}}
     "fileAssociations": [
@@ -94,7 +85,7 @@
     {{#if isLinux}}
     "linux": {
       "deb": {
-        "depends": ["libayatana-appindicator3-1", "libnss3", "libnspr4", "libgbm1", "libdrm2", "libxkbcommon0", "libxcb1", "libasound2", "libcups2", "libdbus-1-3", "libpango-1.0-0", "libcairo2", "libatk1.0-0", "libatk-bridge2.0-0", "libgtk-3-0", "zlib1g", "libbz2-1.0"],
+        "depends": ["libayatana-appindicator3-1", "libnss3", "libnspr4", "libgbm1", "libdrm2", "libxkbcommon0", "libxcb1", "libasound2", "libcups2", "libdbus-1-3", "libpango-1.0-0", "libcairo2", "libatk1.0-0", "libatk-bridge2.0-0", "libgtk-3-0", "zlib1g"],
         "files": {
           {{#each linuxBins}}
           "/usr/lib/kabegame/{{this}}": "../../bin/linux/{{this}}",
@@ -112,8 +103,31 @@
       }
     },
     {{/if}}
+    {{#unless isAndroid}}
     "resources": [
       "resources/**/*"
+    ],
+    {{/unless}}
+     {{!-- dev 用 icons/dev/ 下的图标(便于与正式版在 dock / 启动器区分);
+          安卓 dev 的启动器图标另由 gen/android/app/src/debug/res 覆盖。 --}}
+     "icon": [
+      {{#if isDev}}
+      "./icons/dev/icon.png",
+      "./icons/dev/32x32.png",
+      "./icons/dev/64x64.png",
+      "./icons/dev/128x128.png",
+      "./icons/dev/128x128@2x.png",
+      "./icons/dev/icon.icns",
+      "./icons/dev/icon.ico"
+      {{else}}
+      "./icons/icon.png",
+      "./icons/32x32.png",
+      "./icons/64x64.png",
+      "./icons/128x128.png",
+      "./icons/128x128@2x.png",
+      "./icons/icon.icns",
+      "./icons/icon.ico"
+      {{/if}}
     ]
   }
 }

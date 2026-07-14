@@ -1,0 +1,21 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index b0ea3a5..f947674 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -14,7 +14,7 @@ exclude = ["/.github", "/tests", "/utils"]
+ rust-version = "1.81.0"
+ 
+ [dependencies]
+-rusty_ffmpeg = "0.16.7"
++rusty_ffmpeg = "0.17.0"
+ paste = "1.0"
+ thiserror = "2.0"
+ bon = "3"
+@@ -36,6 +36,7 @@ ffmpeg7 = ["ffmpeg6", "rusty_ffmpeg/ffmpeg7"]
+ # ffmpeg 7.1+
+ ffmpeg7_1 = ["ffmpeg7"]
+ ffmpeg8 = ["ffmpeg7_1", "rusty_ffmpeg/ffmpeg8"]
++ffmpeg8_1 = ["ffmpeg8", "rusty_ffmpeg/ffmpeg8_1"]
+ 
+ # Try linking ffmpeg with pkg-config.
+ link_system_ffmpeg = ["rusty_ffmpeg/link_system_ffmpeg"]

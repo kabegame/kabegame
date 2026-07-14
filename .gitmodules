@@ -4,6 +4,7 @@
 [submodule "packages/photoswipe-vue"]
 	path = packages/photoswipe-vue
 	url = git@github.com:cmtheit/PhotoSwipe-vue.git
+	branch = master
 [submodule "third/FFmpeg"]
 	path = third/FFmpeg
 	url = https://github.com/FFmpeg/FFmpeg.git
@@ -21,9 +22,27 @@
 	url = https://code.videolan.org/videolan/x264.git
 [submodule "third/cef-rs"]
 	path = third/cef-rs
-	url = https://github.com/kabegame/cef-rs.git
-	branch = kabegame-149
+	url = https://github.com/tauri-apps/cef-rs.git
+	branch = 149-wrapper-path
 [submodule "third/cef"]
 	path = third/cef
-	url = https://github.com/kabegame/cef.git
-	branch = kabegame-7827
+	url = https://github.com/chromiumembedded/cef.git
+	branch = 7827
+[submodule "third/rsmpeg"]
+	path = third/rsmpeg
+	url = https://github.com/larksuite/rsmpeg.git
+[submodule "third/rusty_ffmpeg"]
+	path = third/rusty_ffmpeg
+	url = https://github.com/CCExtractor/rusty_ffmpeg.git
+[submodule "third/tauri"]
+	path = third/tauri
+	url = https://github.com/tauri-apps/tauri.git
+[submodule "third/deno"]
+	path = third/deno
+	url = https://github.com/denoland/deno.git
+	shallow = true
+[submodule "third/rusty_v8"]
+	path = third/rusty_v8
+	url = https://github.com/denoland/rusty_v8.git
+	shallow = true
+	ignore = dirty

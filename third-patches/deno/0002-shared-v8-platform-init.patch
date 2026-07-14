@@ -1,0 +1,60 @@
+diff --git a/libs/core/runtime/setup.rs b/libs/core/runtime/setup.rs
+index 0871329..7351d56 100644
+--- a/libs/core/runtime/setup.rs
++++ b/libs/core/runtime/setup.rs
+@@ -161,24 +161,16 @@ fn v8_init(
+     " --js-source-phase-imports",
+     " --js-defer-import-eval"
+   );
+-  let snapshot_flags = "--predictable --random-seed=42";
+   let expose_natives_flags = "--expose_gc --allow_natives_syntax";
+-  let lazy_flags = if cfg!(feature = "snapshot_flags_eager_parse") {
+-    "--no-lazy --no-lazy-eval --no-lazy-streaming"
++  // KABEGAME PATCH: device-generated cache snapshots and ordinary runtimes
++  // coexist in one process. Snapshot creation must not install deterministic
++  // process-wide flags (notably a fixed random seed) merely because it wins
++  // the one-time V8 initialization race.
++  let _ = snapshot;
++  let flags = if expose_natives {
++    format!("{base_flags} {expose_natives_flags}")
+   } else {
+-    ""
+-  };
+-  let flags = match (snapshot, expose_natives) {
+-    (false, false) => base_flags.to_string(),
+-    (true, false) => {
+-      format!("{base_flags} {snapshot_flags} {lazy_flags}")
+-    }
+-    (false, true) => format!("{base_flags} {expose_natives_flags}"),
+-    (true, true) => {
+-      format!(
+-        "{base_flags} {snapshot_flags} {lazy_flags} {expose_natives_flags}"
+-      )
+-    }
++    base_flags.to_string()
+   };
+   v8::V8::set_flags_from_string(&flags);
+ 
+@@ -212,19 +204,10 @@ pub fn init_v8(
+   expose_natives: bool,
+ ) {
+   static DENO_INIT: Once = Once::new();
+-  static DENO_SNAPSHOT: AtomicBool = AtomicBool::new(false);
+-  static DENO_SNAPSHOT_SET: AtomicBool = AtomicBool::new(false);
+-
+-  if DENO_SNAPSHOT_SET.load(Ordering::SeqCst) {
+-    let current = DENO_SNAPSHOT.load(Ordering::SeqCst);
+-    assert_eq!(
+-      current, snapshot,
+-      "V8 may only be initialized once in either snapshotting or non-snapshotting mode. Either snapshotting or non-snapshotting mode may be used in a single process, not both."
+-    );
+-    DENO_SNAPSHOT_SET.store(true, Ordering::SeqCst);
+-    DENO_SNAPSHOT.store(snapshot, Ordering::SeqCst);
+-  }
+ 
++  // KABEGAME PATCH: snapshot and non-snapshot isolates intentionally share
++  // the same V8 platform. Their flags are identical above, so initialization
++  // order is immaterial.
+   DENO_INIT.call_once(move || v8_init(v8_platform, snapshot, expose_natives));
+ }
+ 
