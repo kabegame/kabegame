@@ -1,5 +1,5 @@
-import { BuildSystem } from "../build-system.js";
-import { BasePlugin } from "./base-plugin.js";
+import { BuildSystem } from "../build-system.ts";
+import { BasePlugin } from "./base-plugin.ts";
 
 export class Cmd {
   static readonly DEV = "dev";

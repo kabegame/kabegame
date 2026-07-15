@@ -60,7 +60,9 @@ trash = "5"
 # （桌面 third/FFmpeg-build/install；Android third/FFmpeg-build/android/<arch>/install）。
 # Android content:// 视频经 ContentIoProvider.open_fd 拿 fd，Rust 用 file 协议打开 /proc/self/fd/N。
 rsmpeg = { workspace = true }
-deno_core = { version = "0.405", optional = true }
+# embed_ext_sources：kabegame 补丁 feature（third/deno libs/core），无快照运行时将扩展 JS
+# 内嵌进二进制（Android 交叉编译必需）；树内 deno CLI 构建不开启该 feature、保持上游行为。
+deno_core = { version = "0.405", optional = true, features = ["embed_ext_sources"] }
 deno_error = { version = "0.7", optional = true }
 deno_webidl = { version = "0.252", optional = true }
 deno_web = { version = "0.283", optional = true }

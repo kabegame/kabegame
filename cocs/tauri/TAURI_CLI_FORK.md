@@ -4,7 +4,7 @@ kabegame 使用自有 fork 的 `cargo-tauri`，替代全局安装版。源码是
 （[tauri-apps/tauri](https://github.com/tauri-apps/tauri)，submodule 挂载于 `third/tauri`，
 pin tag `tauri-v2.11.2`）的 `crates/tauri-cli` 子 crate，fork 差异以 patch 形式存放于
 `third-patches/tauri/`（`0001`–`0005`、`0008` 为 tauri-cli，`0006` 为 tauri-runtime，
-`0007` 为 tauri-utils），构建前先 `bun run patch tauri` 应用。基线 **tauri-cli 2.11.2**。
+`0007` 为 tauri-utils），构建前先 `deno task patch tauri` 应用。基线 **tauri-cli 2.11.2**。
 
 > 不再有独立的 `kabegame/tauri-cli` fork 仓或 vendored `third/tauri-runtime` 拷贝：
 > 两个子 crate 的改动都在同一条 series 里，submodule 保持上游纯净。见
@@ -25,7 +25,7 @@ dev/prod 并存隔离），而 Java 包/源码树固定 `app.kabegame`。stock C
 identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 auto-launch 传相对形式
 `.MainActivity`（被 `am` 按 applicationId 展开 → 类不存在）。
 
-## fork 相对上游的 patch（tauri-cli 共 6 个：0001–0005、0008）
+## fork 相对上游的 patch（tauri-cli 共 7 个：0001–0005、0008、0009）
 
 1. **`TAURI_ANDROID_PACKAGE` 解耦**（`src/mobile/{mod,android/{mod,dev,run}}.rs`）
    - `get_config`：包/目录改按 `android_package`（env 覆盖，未设或空回退 identifier =
@@ -63,7 +63,7 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
      （`env.ndk.compiler_path/ar_path`）、`ANDROID_NATIVE_API_LEVEL`（来自 `min_sdk`）全部由
      cargo-mobile2 推导——与 `tauri android build` **完全同源**，因此 kabegame 不再在
      `mode-plugin.ts` 手写 target linker/CC/CXX/AR。
-   - 动机：让 `bun check -c kabegame --mode android` 有一条快速类型/借用检查通道，且交叉工具链
+   - 动机：让 `deno task check -c kabegame --mode android` 有一条快速类型/借用检查通道，且交叉工具链
      与真实 build 零漂移。FFmpeg / rusty_v8 / bindgen / `PKG_CONFIG_ALLOW_CROSS` 等 kabegame
      特有 env 仍由 `mode-plugin.ts` 注入,随 cargo-mobile2 的 `Env` 作为进程环境透传。
 
@@ -97,6 +97,26 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
      尊重 `CARGO_TARGET_DIR`（component-plugin 注入,见 LINUX_BUILD_WORKFLOW 踩坑）。
    - 无 `default-run` 或单 bin 时与上游行为一致。
 
+7. **顶层 `bins` 配置驱动桌面编译清单（不再 `--bins` 全量编译）**（`crates/tauri-utils/src/config.rs` + `src/interface/{rust,mod}.rs` + CLI 内嵌 `config.schema.json`（含 schema-generator 同名产物）,patch **0009**）
+   - 注意:CLI 在 serde 反序列化**之前**先按内嵌 JSON schema 校验 tauri.conf.json,漏改
+     schema 会报 `Additional properties are not allowed ('bins' was unexpected)`——两处
+     (结构体 + schema)必须同 patch。
+   - stock 桌面 `tauri build` 恒定给 cargo 传 `--bins`,package 里全部 bin(含 `cef-example`
+     这类不出货的示例)都被编进 release。fork 给 tauri.conf.json 新增**顶层 `bins: string[]`**
+     (tauri-utils `Config` 加字段——`deny_unknown_fields` 下不打 patch 则配置解析直接报错;
+     运行时嵌入恒为 `None`,仅 CLI 构建期读取):声明了就逐个翻译成 `--bin <name>` 传给
+     cargo(带去重,args 里已有的不重复追加);**未声明回退 `get_binaries()` 的打包清单**
+     (经 0008 过滤,即仅 default-run 主 bin);清单为空回退上游 `--bins`。仅桌面生效
+     (mobile 仍走 `--lib`;`tauri dev` 是 `cargo run`,不经此路径)。
+   - **Windows 打包**:`bins` 里的辅助 bin 以非 main binary 挂进 bundle,NSIS 模板原生装到
+     `$INSTDIR` 根(主 exe 旁)、卸载时自动删除——kabegame 的 `kabegame-cef-helper.exe`
+     因此不再经 resources/bin stage + installer hook 搬运,Windows build 也不再需要
+     ComponentPlugin 预构建。macOS/Linux 安装布局各异(`Contents/MacOS`、
+     `/usr/lib/kabegame`),仍由 `macOS.files` / deb `files` 显式声明(0008 语义不变)。
+   - kabegame 接线:`tauri.conf.json.handlebars` 桌面(非 android)渲染
+     `"bins": ["kabegame", "kabegame-cef-helper"]`;ComponentPlugin 仅在 **dev** 预构建
+     helper(`cargo run` 无法同调用多编一个 bin)。
+
 ## 库 crate patch（经 root `[patch.crates-io]` 生效,非 CLI）
 
 - **0006 `tauri-runtime` optional webkit**（`crates/tauri-runtime/{Cargo.toml,src/webview.rs}`）
@@ -105,6 +125,12 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
     （三处）。
   - 动机:kabegame Linux 是 CEF runtime（`tauri-runtime-cef`）,不应链接 webkit2gtk;
     不开 feature 即零 webkit 依赖,与 patch 0002 的 `TAURI_NO_WEBKIT_DEPS`（打包依赖侧）配套。
+- **0010 `tauri-build` 恒定静态 vcruntime**（`crates/tauri-build/src/lib.rs`）
+  - Windows(msvc)下 `static_vcruntime::build()` 恒定执行,删除 `STATIC_VCRUNTIME` env
+    门控(不可配置)。此前 `tauri build` 会自动设该 env,但裸 `cargo build` 的辅助 bin
+    (如 dev 期预构建的 `kabegame-cef-helper`)没有 → 动态链接 vcruntime,在无 VC++
+    运行库的干净 Windows 上报找不到 `VCRUNTIME140.dll`;改后无需任何 env 注入
+    (component-plugin 原来的 `STATIC_VCRUNTIME=true` 注入已移除)。
 - **0007 `tauri-utils` 空 glob resources 跳过**（`crates/tauri-utils/src/resources.rs`）
   - resource glob pattern（如 `resources/**/*`）匹配不到任何文件时,stock 直接
     `GlobPathNotFound` 硬错终止构建;patch 改为静默跳过、继续下一个 pattern
@@ -119,7 +145,7 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
   - `beforeBuild`：dev/build 的主组件流程、**以及 android check**（`needsTauriCli` 覆盖
     `isCheck && isAndroid && isMain`）先 `cargo build --release --manifest-path
     third/tauri/crates/tauri-cli/Cargo.toml`（增量，已最新近似 no-op；桌面 check/test/cli/web
-    不触发）。**前置**须已 `bun run patch tauri` 应用 series。
+    不触发）。**前置**须已 `deno task patch tauri` 应用 series。
 - `scripts/build-system.ts` `check()`：android 分支走 `cargo tauri android check --features <...>`
   （`bin: "cargo"`, cwd=appDir），并先 `beforeBuild.call()`（渲染 tauri.conf.json + 确保 fork 已构建；
   os-plugin/mode-plugin 的 beforeBuild 对 check 均 no-op）。桌面/CLI 仍走裸 `cargo check -p`。
@@ -146,7 +172,7 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
 
 ## 升级（re-vendor）流程
 
-1. `bun run patch tauri -r` 还原 submodule 到上游纯净树。
+1. `deno task patch tauri -r` 还原 submodule 到上游纯净树。
 2. 把 `third/tauri` submodule bump 到新的上游 tag（选 `tauri`/`tauri-runtime` 版本与 app
    解析一致的），提交新的 submodule 指针。
 3. 逐个 `git apply --check third-patches/tauri/NNNN-*.patch` 核对漂移并修复，逐一核对 patch 点：
@@ -168,8 +194,8 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
 4. 重新生成编号 patch 文件并更新 `third-patches/tauri/README.md`；如新 tag 的 `tauri-utils`
    版本与 crates.io 最新不一致，`cargo update -p tauri-utils --precise <monorepo 版本>` 重钉。
 5. 主仓库更新 submodule 指针；跑一次
-   `bun dev -c kabegame --mode android`、`bun check -c kabegame --mode android --skip vue`
-   与 Linux `bun b` 验证。
+   `deno task dev -c kabegame --mode android`、`deno task check -c kabegame --mode android --skip vue`
+   与 Linux `deno task b` 验证。
 
 ## 已知边界
 

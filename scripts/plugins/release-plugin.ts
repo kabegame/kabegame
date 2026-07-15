@@ -4,12 +4,12 @@ import { fileURLToPath } from "url";
 import { glob } from "glob";
 import os from "os";
 import { spawnSync } from "child_process";
-import { BasePlugin } from "./base-plugin";
-import { BuildSystem } from "../build-system";
-import { Component } from "./component-plugin";
-import { OSPlugin } from "./os-plugin";
-import { ensureDir, platformExeExt, readCargoTomlVersion, run } from "../utils";
-import { ROOT, TARGET_DIR } from "../utils";
+import { BasePlugin } from "./base-plugin.ts";
+import { BuildSystem } from "../build-system.ts";
+import { Component } from "./component-plugin.ts";
+import { OSPlugin } from "./os-plugin.ts";
+import { ensureDir, platformExeExt, readCargoTomlVersion, run } from "../utils.ts";
+import { ROOT, TARGET_DIR } from "../utils.ts";
 
 function walkFiles(dir: string): string[] {
   return glob.sync("**/*", {
@@ -190,7 +190,7 @@ export class ReleasePlugin extends BasePlugin {
       this.addRustFlags("-C codegen-units=1");
     });
 
-    // `bun b` 不再对直接 cargo build 的组件(kabegame-cli)
+    // `deno task b` 不再对直接 cargo build 的组件(kabegame-cli)
     // 硬编 --release —— 默认 debug,只有传了 --release 时才在这里补上 cargo 的
     // --release 标志。main 组件桌面/android 走 `tauri build`,本身即恒定 release,
     // 不需要(也不认识)这个 cargo 标志。

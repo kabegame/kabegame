@@ -8,6 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+node_modules-*/
 dist-*
 !dist-kabegame/
 dist-kabegame/*
@@ -28,6 +29,8 @@ dist-kabegame/*
 
 # Tauri
 target
+# 隔离构建 target（target-22：22.04 VM 低 glibc；target-web：docker web-release）
+target-*/
 # 由 handlebars 生成
 src-tauri/kabegame/capabilities/main.json
 src-tauri/kabegame/tauri.conf.json
@@ -64,9 +67,6 @@ src-tauri/kabegame/resources/cef/
 # development data
 /.kabegame/debug
 
-# Nx
-.nx/cache
-.nx/workspace-data
 # .cursor/
 
 # /test/
@@ -74,6 +74,8 @@ src-tauri/kabegame/resources/cef/
 # 外树构建目录
 third/FFmpeg-build
 third/x264-build
+third/FFmpeg-build-*/
+third/x264-build-*/
 
 # 一些临时文件
 /ignore

@@ -1,12 +1,16 @@
 /**
  * Takes screenshots of key Kabegame UI views for docs.
- * Run: bun scripts/take-screenshots.ts
+ * Run: deno run -A scripts/take-screenshots.ts
  */
 import { chromium } from "playwright";
-import { join } from "path";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 
 const BASE = "http://localhost:1420";
-const OUT = join(import.meta.dir, "../apps/docs/src/assets/screenshots");
+const OUT = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../apps/docs/src/assets/screenshots",
+);
 
 const VIEWS = [
   { url: "/gallery",        file: "gallery.png",       waitFor: ".image-grid, .empty-state, [class*='gallery']" },

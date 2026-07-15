@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { BuildSystem } from "../build-system";
+import { BuildSystem } from "../build-system.ts";
 
 /**
  * 插件基类

@@ -1,7 +1,7 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S deno run -A
 
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 
@@ -73,14 +73,14 @@ function parseArgs(argv: string[]): Options {
 
 function printHelp(): void {
   console.log(`Usage:
-  bun scripts/upload-wechat-draft.ts --article <article.final.md> [--env <wechat.env>] [--dry-run]
+  deno run -A scripts/upload-wechat-draft.ts --article <article.final.md> [--env <wechat.env>] [--dry-run]
 
 Required env values:
   WECHAT_APP_ID
   WECHAT_APP_SECRET
 
 Typical run:
-  bun scripts/upload-wechat-draft.ts --article ignore/wechat-daily-codex/.../article.final.md --env ignore/wechat-daily-codex/wechat.env
+  deno run -A scripts/upload-wechat-draft.ts --article ignore/wechat-daily-codex/.../article.final.md --env ignore/wechat-daily-codex/wechat.env
 `);
 }
 
@@ -95,8 +95,8 @@ async function findLatestFinalArticle(): Promise<string> {
       if (entry.isDirectory()) {
         await walk(full);
       } else if (entry.name === "article.final.md") {
-        const stat = Bun.file(full);
-        found.push({ file: full, mtimeMs: (await stat.stat()).mtimeMs });
+        const st = await stat(full);
+        found.push({ file: full, mtimeMs: st.mtimeMs });
       }
     }
   }

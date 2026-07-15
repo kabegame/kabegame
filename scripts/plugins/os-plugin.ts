@@ -1,16 +1,17 @@
-import { BuildSystem } from "../build-system";
-import { BasePlugin } from "./base-plugin.js";
-import { Component } from "./component-plugin";
+import { BuildSystem } from "../build-system.ts";
+import { BasePlugin } from "./base-plugin.ts";
+import { Component } from "./component-plugin.ts";
 import {
   ROOT,
   TARGET_DIR,
+  FFMPEG_BUILD_DIR,
   RESOURCES_BIN_DIR,
   RESOURCES_DIR,
   ensureDir,
   existsFile,
   findFirstExisting,
   stageResourceFile,
-} from "../utils";
+} from "../utils.ts";
 import chalk from "chalk";
 import { execSync } from "child_process";
 import fs from "fs";
@@ -72,7 +73,7 @@ const WINDOWS_FFMPEG_DLLS_EXPECTED = [
 ];
 
 // 经 ROOT 拼出,避免与 build-system.ts 形成循环导入(后者反过来 import OSPlugin)
-const FFMPEG_INSTALL_DIR = path.join(ROOT, "third", "FFmpeg-build", "install");
+const FFMPEG_INSTALL_DIR = path.join(FFMPEG_BUILD_DIR, "install");
 
 export class OSPlugin extends BasePlugin {
   constructor() {
@@ -204,7 +205,7 @@ export class OSPlugin extends BasePlugin {
         throw new Error(
           [
             `❌ 未找到 FFmpeg 构建产物: ${path.relative(ROOT, archive)}`,
-            `请先运行: bun run build:ffmpeg`,
+            `请先运行: deno task build:ffmpeg`,
             `(脚本 scripts/build-ffmpeg.sh 会编出 libav*.a 到 third/FFmpeg-build/install/lib/)`,
           ].join("\n"),
         );
@@ -220,7 +221,7 @@ export class OSPlugin extends BasePlugin {
         throw new Error(
           [
             `❌ 未找到 FFmpeg 构建产物: ${path.relative(ROOT, installBin)}/avcodec-*.dll`,
-            `请在 MSYS2 MinGW 64-bit 终端中运行: bun run build:ffmpeg`,
+            `请在 MSYS2 MinGW 64-bit 终端中运行: deno task build:ffmpeg`,
           ].join("\n"),
         );
       }
@@ -243,7 +244,7 @@ export class OSPlugin extends BasePlugin {
       );
     if (ffmpegDlls.length === 0) {
       throw new Error(
-        `❌ ${path.relative(ROOT, installBin)} 中未发现 libav* DLL;请重新运行 bun run build:ffmpeg`,
+        `❌ ${path.relative(ROOT, installBin)} 中未发现 libav* DLL;请重新运行 deno task build:ffmpeg`,
       );
     }
     for (const f of ffmpegDlls) {

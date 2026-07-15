@@ -63,6 +63,7 @@ fi
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BUILD_SUFFIX="${KB_BUILD_SUFFIX:-}"
 FFMPEG_SRC="${REPO_ROOT}/third/FFmpeg"
 X264_SRC="${REPO_ROOT}/third/x264"
 BUILD_TMP_DIR="${REPO_ROOT}/third/.tmp"
@@ -81,9 +82,9 @@ if [[ "$TARGET" == "android" ]]; then
   ANDROID_ABI="arm64-v8a"
   ANDROID_TRIPLE="aarch64-linux-android"
   ANDROID_API="${ANDROID_API:-24}"
-  BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build/android/${ANDROID_ARCH}"
+  BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build${BUILD_SUFFIX}/android/${ANDROID_ARCH}"
   INSTALL_DIR="${BUILD_DIR}/install"
-  X264_BUILD_DIR="${REPO_ROOT}/third/x264-build/android/${ANDROID_ARCH}"
+  X264_BUILD_DIR="${REPO_ROOT}/third/x264-build${BUILD_SUFFIX}/android/${ANDROID_ARCH}"
   X264_INSTALL_DIR="${X264_BUILD_DIR}/install"
 
   # NDK 定位:优先显式 env,退回 $ANDROID_HOME/ndk 下最新版本。
@@ -120,9 +121,9 @@ if [[ "$TARGET" == "android" ]]; then
   export STRIP="$NDK_TC/bin/llvm-strip"
   echo "=== Android 交叉编译: NDK=$NDK_DIR  API=$ANDROID_API  ABI=$ANDROID_ABI ==="
 else
-  BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build"
+  BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build${BUILD_SUFFIX}"
   INSTALL_DIR="${BUILD_DIR}/install"
-  X264_BUILD_DIR="${REPO_ROOT}/third/x264-build"
+  X264_BUILD_DIR="${REPO_ROOT}/third/x264-build${BUILD_SUFFIX}"
   X264_INSTALL_DIR="${X264_BUILD_DIR}/install"
 fi
 

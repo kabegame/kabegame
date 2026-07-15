@@ -1,0 +1,13 @@
+---
+description: third-patches 系列追加式原则：不改不删已入库 patch，只在末尾新增编号
+globs: third-patches/**
+alwaysApply: false
+---
+
+# third-patches 追加式原则
+
+- **禁止修改或删除**已入库的 `third-patches/<dir>/NNNN-*.patch`（内容与文件名都不许动）。
+- 需要调整 fork 行为时，**只能在系列末尾追加新编号 patch**：在已套用全系列的子模块工作树上继续改源码，用 `git diff` 生成新 patch（工法：先 `git -C third/<dir> add -A` 把当前已套用状态存入 index，改完源码后 `git diff` 即为新 patch 内容，最后 `git reset` 恢复）。
+- **唯一例外**：re-vendor（升级上游 pin）时按 `third-patches/<dir>/README.md` 的流程整体重生成系列。
+- **原因**：`deno task patch <dir> --from <N>` 与 `.husky/post-merge` 钩子的自动重同步，依赖"磁盘上的前缀 patch 与子模块已应用内容逐字节一致"才能正确回滚；改动已入库 patch 会让所有已套用旧系列的 checkout 无法回滚重同步。
+- 新增 patch 后：跑 `deno task patch <dir> -r --check`（一次性 worktree 里全系列正向+逆向预检）验证，并同步 `third-patches/<dir>/README.md` 与相关 cocs 文档。

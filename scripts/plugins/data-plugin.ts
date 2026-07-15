@@ -1,5 +1,5 @@
-import { BasePlugin } from "./base-plugin";
-import { BuildSystem } from "../build-system";
+import { BasePlugin } from "./base-plugin.ts";
+import { BuildSystem } from "../build-system.ts";
 
 export class DataMode {
   static readonly DEV = "dev";
@@ -9,8 +9,8 @@ export class DataMode {
 
 /**
  * 解析 --data dev|prod，控制数据目录模式。
- * dev：使用仓库本地 .kabegame/debug/{data,cache,tmp} 目录（默认用于 bun dev）。
- * prod：使用系统用户数据目录（默认用于 bun build / bun start / bun check）。
+ * dev：使用仓库本地 .kabegame/debug/{data,cache,tmp} 目录（默认用于 deno task dev）。
+ * prod：使用系统用户数据目录（默认用于 deno task b / deno task start / deno task check）。
  * 对应 Rust cfg: kabegame_data="dev"|"prod"，由 build.rs 注入。
  */
 export class DataPlugin extends BasePlugin {

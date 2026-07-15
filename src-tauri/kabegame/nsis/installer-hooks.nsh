@@ -25,11 +25,9 @@
   dll_move_done:
   FindClose $0
 
-  ; CEF subprocess helper must live next to kabegame.exe.
-  IfFileExists "$INSTDIR\resources\bin\kabegame-cef-helper.exe" 0 helper_move_done
-    ExecWait '$\"$SYSDIR\cmd.exe$\" /C move /Y $\"$INSTDIR\resources\bin\kabegame-cef-helper.exe$\" $\"$INSTDIR$\"' $2
-    DetailPrint "Move kabegame-cef-helper.exe -> $INSTDIR (exit $2)"
-  helper_move_done:
+  ; kabegame-cef-helper.exe is no longer staged under resources\bin: it is a
+  ; first-class bundle binary (tauri.conf.json top-level `bins`, fork patch 0009)
+  ; that NSIS installs directly to $INSTDIR and deletes on uninstall.
 
   ; Move the CEF runtime from resources/cef to install root. libcef.dll is
   ; load-time linked and CEF requires dll/pak/dat files and locales/ to sit
@@ -96,7 +94,8 @@
   ; CEF verbose log written next to the exe (if any)
   Delete "$INSTDIR\debug.log"
   RMDir /r "$INSTDIR\locales"
-  Delete "$INSTDIR\kabegame-cef-helper.exe"
+  ; kabegame-cef-helper.exe: deleted by the generated uninstaller's native
+  ; binaries section (it is a bundle binary since fork patch 0009).
 
   ; Remove folder attributes (best-effort).
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib -s -r $\"$INSTDIR$\"'

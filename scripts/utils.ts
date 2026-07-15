@@ -16,6 +16,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export const ROOT = path.resolve(__dirname, "..");
 export const THIRD_DIR = path.join(ROOT, "third");
+export const BUILD_SUFFIX = process.env.KB_BUILD_SUFFIX ?? "";
+export const FFMPEG_BUILD_DIR = path.join(THIRD_DIR, `FFmpeg-build${BUILD_SUFFIX}`);
+export const X264_BUILD_DIR = path.join(THIRD_DIR, `x264-build${BUILD_SUFFIX}`);
+export const CRAWLER_PLUGINS_DIR = path.join(ROOT, "src-crawler-plugins");
 
 /**
  * Cargo 产物目录(单一来源)。默认 `<workspace>/target`,工作区根即 ROOT。
@@ -88,13 +92,15 @@ interface RunOptions {
   [key: string]: any;
 }
 
-// 传入 opt.bin 为运行工具，可以为 bun、cargo。如果不传则为二进制
+// 传入 opt.bin 为运行工具，可以为 deno-task、cargo。如果不传则为二进制
 export function run(cmd: string, args: string[], opts: RunOptions = {}): void {
   // console.log('runopts: ', cmd, args, opts)
   switch (opts.bin) {
-    case "bun": {
-      args = ["run", cmd, ...args];
-      cmd = "bun";
+    case "deno-task": {
+      // `deno task <script> <args...>`：args 由 deno_task_shell 原样追加进脚本命令，
+      // 脚本在 opts.cwd（或 ROOT）的 package.json 中解析。
+      args = ["task", cmd, ...args];
+      cmd = "deno";
       break;
     }
     case "cargo": {

@@ -1,0 +1,168 @@
+diff --git a/crates/tauri-cli/config.schema.json b/crates/tauri-cli/config.schema.json
+--- a/crates/tauri-cli/config.schema.json
++++ b/crates/tauri-cli/config.schema.json
+@@ -30,6 +30,16 @@
+         "null"
+       ]
+     },
++    "bins": {
++      "description": "kabegame fork: 桌面 `tauri build` 要编译的 cargo bin 目标清单（逐个翻译成 `cargo build --bin <name>` 传给 cargo；Windows 下这些 bin 还会作为非 main binaries 进 bundle，由 NSIS 装到安装根、随卸载删除）。缺省时由 CLI 回退到 get_binaries() 的打包清单（bundle-only-default-run 过滤后）决定编译哪些 bin。仅桌面使用；mobile 忽略。",
++      "type": [
++        "array",
++        "null"
++      ],
++      "items": {
++        "type": "string"
++      }
++    },
+     "version": {
+       "description": "App version. It is a semver version number or a path to a `package.json` file containing the `version` field.\n\n If removed the version number from `Cargo.toml` is used.\n It's recommended to manage the app versioning in the Tauri config.\n\n ## Platform-specific\n\n - **macOS**: Translates to the bundle's CFBundleShortVersionString property and is used as the default CFBundleVersion.\n    You can set an specific bundle version using [`bundle > macOS > bundleVersion`](MacConfig::bundle_version).\n - **iOS**: Translates to the bundle's CFBundleShortVersionString property and is used as the default CFBundleVersion.\n    You can set an specific bundle version using [`bundle > iOS > bundleVersion`](IosConfig::bundle_version).\n    The `tauri ios build` CLI command has a `--build-number <number>` option that lets you append a build number to the app version.\n - **Android**: By default version 1.0 is used. You can set a version code using [`bundle > android > versionCode`](AndroidConfig::version_code).\n\n By default version 1.0 is used on Android.",
+       "type": [
+diff --git a/crates/tauri-cli/src/interface/mod.rs b/crates/tauri-cli/src/interface/mod.rs
+--- a/crates/tauri-cli/src/interface/mod.rs
++++ b/crates/tauri-cli/src/interface/mod.rs
+@@ -66,6 +66,22 @@ pub trait AppSettings {
+       main.set_name(main_binary_name.to_owned());
+     }
+ 
++    // kabegame fork(0009-tauri-config-bins-compile-list): Windows 下把顶层
++    // `bins` 配置声明的辅助 bin 以非 main binary 挂进 bundle——NSIS 模板的
++    // binaries 段原生把它们装到 $INSTDIR 根(主 exe 旁)并在卸载时删除,
++    // 应用无需再经 resources + installer hook 搬运。macOS/Linux 的辅助 bin
++    // 布局各异(Contents/MacOS、/usr/lib/<app>),仍由 bundle files
++    // (macOS.files / deb files)显式声明,此处不扩展。
++    if target.contains("-windows-") {
++      if let Some(config_bins) = &config.bins {
++        for name in config_bins {
++          if !bins.iter().any(|b| b.name() == name) {
++            bins.push(tauri_bundler::BundleBinary::new(name.clone(), false));
++          }
++        }
++      }
++    }
++
+     let mut settings_builder = SettingsBuilder::new()
+       .package_settings(self.get_package_settings())
+       .bundle_settings(self.get_bundle_settings(&options, config, &enabled_features, tauri_dir)?)
+diff --git a/crates/tauri-cli/src/interface/rust.rs b/crates/tauri-cli/src/interface/rust.rs
+--- a/crates/tauri-cli/src/interface/rust.rs
++++ b/crates/tauri-cli/src/interface/rust.rs
+@@ -130,6 +130,10 @@ pub struct RustupTarget {
+ pub struct Rust {
+   app_settings: Arc<RustAppSettings>,
+   config_features: Vec<String>,
++  // kabegame fork(0009): 顶层 bins 配置与 tauri_dir,供 build_options 桌面分支
++  // 决定 cargo --bin 清单(回退 get_binaries 需要 tauri_dir)。
++  config_bins: Option<Vec<String>>,
++  tauri_dir: PathBuf,
+   available_targets: Option<Vec<RustupTarget>>,
+   main_binary_name: Option<String>,
+ }
+@@ -171,6 +175,8 @@ impl Rust {
+     Ok(Self {
+       app_settings: Arc::new(app_settings),
+       config_features: config.build.features.clone().unwrap_or_default(),
++      config_bins: config.bins.clone(),
++      tauri_dir: tauri_dir.to_path_buf(),
+       main_binary_name: config.main_binary_name.clone(),
+       available_targets: None,
+     })
+@@ -488,7 +494,43 @@ impl Rust {
+         args.push("--lib".into());
+       }
+     } else {
+-      args.push("--bins".into());
++      // kabegame fork(0009-tauri-config-bins-compile-list): 桌面不再无差别
++      // `--bins` 编译 package 里全部 bin(会把示例类不出货的 bin 一起编进
++      // release)。改为:tauri.conf.json 顶层 `bins` 显式声明要编译的 bin
++      // (逐个翻译成 cargo 的 `--bin <name>`);未声明时回退到 get_binaries()
++      // 的打包清单(经 bundle-only-default-run 过滤,即仅 default-run 主 bin)。
++      // 带去重:args 里已有的 --bin 不重复追加;清单为空时回退上游 `--bins`。
++      // 仅桌面生效(mobile 走上方 --lib 分支)。
++      let has_bin_arg = |args: &[String], name: &str| {
++        args
++          .iter()
++          .any(|a| a.strip_prefix("--bin=").is_some_and(|v| v == name))
++          || args.windows(2).any(|w| w[0] == "--bin" && w[1] == name)
++      };
++      let bin_names: Vec<String> = match &self.config_bins {
++        Some(bins) => bins.clone(),
++        None => {
++          let options = Options {
++            features: features.clone(),
++            ..Default::default()
++          };
++          self
++            .app_settings
++            .get_binaries(&options, &self.tauri_dir)
++            .map(|bins| bins.iter().map(|bin| bin.name().to_string()).collect())
++            .unwrap_or_default()
++        }
++      };
++      if bin_names.is_empty() {
++        args.push("--bins".into());
++      } else {
++        for name in bin_names {
++          if !has_bin_arg(args, &name) {
++            args.push("--bin".into());
++            args.push(name);
++          }
++        }
++      }
+     }
+   }
+ 
+diff --git a/crates/tauri-schema-generator/schemas/config.schema.json b/crates/tauri-schema-generator/schemas/config.schema.json
+--- a/crates/tauri-schema-generator/schemas/config.schema.json
++++ b/crates/tauri-schema-generator/schemas/config.schema.json
+@@ -30,6 +30,16 @@
+         "null"
+       ]
+     },
++    "bins": {
++      "description": "kabegame fork: 桌面 `tauri build` 要编译的 cargo bin 目标清单（逐个翻译成 `cargo build --bin <name>` 传给 cargo；Windows 下这些 bin 还会作为非 main binaries 进 bundle，由 NSIS 装到安装根、随卸载删除）。缺省时由 CLI 回退到 get_binaries() 的打包清单（bundle-only-default-run 过滤后）决定编译哪些 bin。仅桌面使用；mobile 忽略。",
++      "type": [
++        "array",
++        "null"
++      ],
++      "items": {
++        "type": "string"
++      }
++    },
+     "version": {
+       "description": "App version. It is a semver version number or a path to a `package.json` file containing the `version` field.\n\n If removed the version number from `Cargo.toml` is used.\n It's recommended to manage the app versioning in the Tauri config.\n\n ## Platform-specific\n\n - **macOS**: Translates to the bundle's CFBundleShortVersionString property and is used as the default CFBundleVersion.\n    You can set an specific bundle version using [`bundle > macOS > bundleVersion`](MacConfig::bundle_version).\n - **iOS**: Translates to the bundle's CFBundleShortVersionString property and is used as the default CFBundleVersion.\n    You can set an specific bundle version using [`bundle > iOS > bundleVersion`](IosConfig::bundle_version).\n    The `tauri ios build` CLI command has a `--build-number <number>` option that lets you append a build number to the app version.\n - **Android**: By default version 1.0 is used. You can set a version code using [`bundle > android > versionCode`](AndroidConfig::version_code).\n\n By default version 1.0 is used on Android.",
+       "type": [
+diff --git a/crates/tauri-utils/src/config.rs b/crates/tauri-utils/src/config.rs
+--- a/crates/tauri-utils/src/config.rs
++++ b/crates/tauri-utils/src/config.rs
+@@ -3607,6 +3607,13 @@ pub struct Config {
+   /// [`different-binary-name`]: https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#different-binary-name
+   #[serde(alias = "main-binary-name")]
+   pub main_binary_name: Option<String>,
++  /// kabegame fork: 桌面 `tauri build` 要编译的 cargo bin 目标清单（逐个翻译成
++  /// `cargo build --bin <name>` 传给 cargo；Windows 下这些 bin 还会作为非 main
++  /// binaries 进 bundle，由 NSIS 装到安装根、随卸载删除）。缺省时由 CLI 回退到
++  /// get_binaries() 的打包清单（bundle-only-default-run 过滤后）决定编译哪些 bin。
++  /// 仅桌面使用；mobile 忽略。
++  #[serde(default)]
++  pub bins: Option<Vec<String>>,
+   /// App version. It is a semver version number or a path to a `package.json` file containing the `version` field.
+   ///
+   /// If removed the version number from `Cargo.toml` is used.
+@@ -4410,6 +4417,8 @@ mod build {
+       let schema = quote!(None);
+       let product_name = opt_str_lit(self.product_name.as_ref());
+       let main_binary_name = opt_str_lit(self.main_binary_name.as_ref());
++      // kabegame fork: bins 仅供 CLI 构建期使用,运行时嵌入恒为 None(同 schema 字段)。
++      let bins = quote!(None);
+       let version = opt_str_lit(self.version.as_ref());
+       let identifier = str_lit(&self.identifier);
+       let app = &self.app;
+@@ -4423,6 +4432,7 @@ mod build {
+         schema,
+         product_name,
+         main_binary_name,
++        bins,
+         version,
+         identifier,
+         app,

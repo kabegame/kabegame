@@ -1,9 +1,9 @@
-import { BasePlugin } from "./base-plugin";
-import { BuildSystem } from "../build-system";
+import { BasePlugin } from "./base-plugin.ts";
+import { BuildSystem } from "../build-system.ts";
 import * as path from "path";
 import { existsSync } from "fs";
-import { ROOT, TARGET_DIR, run, platformExeExt } from "../utils";
-import { Component } from "./component-plugin";
+import { ROOT, TARGET_DIR, run, platformExeExt } from "../utils.ts";
+import { Component } from "./component-plugin.ts";
 
 /**
  * TauriCliPlugin — 让所有 `cargo tauri` 调用命中 fork 的 CLI(tauri 上游 monorepo 的
@@ -13,7 +13,7 @@ import { Component } from "./component-plugin";
  *(源码目录 / 生成 Kotlin 包 / JNI)按 `TAURI_ANDROID_PACKAGE` env 解耦于 identifier
  *(applicationId),使 dev/prod 双 identifier 并存安装时源码树保持固定 `app.kabegame`;另含
  * `TAURI_NO_WEBKIT_DEPS`、`.icns` 留白、`android check` 子命令、真机 localhost devUrl。
- * 见 cocs/tauri/TAURI_CLI_FORK.md。先 `bun run patch tauri` 应用 series 再构建。
+ * 见 cocs/tauri/TAURI_CLI_FORK.md。先 `deno task patch tauri` 应用 series 再构建。
  */
 export class TauriCliPlugin extends BasePlugin {
   static readonly NAME = "TauriCliPlugin";
@@ -79,7 +79,7 @@ export class TauriCliPlugin extends BasePlugin {
       );
       if (!existsSync(bin)) {
         throw new Error(
-          `fork 的 cargo-tauri 未产出: ${bin}\n请检查 third/tauri 子模块是否已初始化(git submodule update --init third/tauri)并已应用 patch(bun run patch tauri)`,
+          `fork 的 cargo-tauri 未产出: ${bin}\n请检查 third/tauri 子模块是否已初始化(git submodule update --init third/tauri)并已应用 patch(deno task patch tauri)`,
         );
       }
     });

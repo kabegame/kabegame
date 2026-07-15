@@ -1,0 +1,1447 @@
+diff --git a/cli/lib.rs b/cli/lib.rs
+index f767370..4017def 100644
+--- a/cli/lib.rs
++++ b/cli/lib.rs
+@@ -13,6 +13,8 @@ mod lsp;
+ mod module_loader;
+ mod node;
+ mod node_compat_shim;
++// kabegame patch(node_modules-suffix)
++mod node_modules_suffix;
+ mod npm;
+ mod ops;
+ mod registry;
+@@ -26,8 +28,7 @@ mod util;
+ mod worker;
+ 
+ pub(crate) mod sys {
+-  #[allow(clippy::disallowed_types, reason = "definition")]
+-  pub type CliSys = sys_traits::impls::RealSys;
++  pub use crate::node_modules_suffix::CliSys;
+ }
+ 
+ use std::borrow::Cow;
+diff --git a/cli/node_modules_suffix.rs b/cli/node_modules_suffix.rs
+new file mode 100644
+index 0000000..c800d11
+--- /dev/null
++++ b/cli/node_modules_suffix.rs
+@@ -0,0 +1,536 @@
++// Copyright 2018-2026 the Deno authors. MIT license.
++
++#![allow(
++  clippy::disallowed_methods,
++  reason = "delegating the real system implementation at the IO boundary"
++)]
++#![allow(
++  clippy::disallowed_types,
++  reason = "CliSys deliberately wraps RealSys at the IO boundary"
++)]
++
++// kabegame patch(node_modules-suffix): see the twin copies in deno_fs,
++// deno_napi, and deno_process.
++// DENO_NODE_MODULES_SUFFIX redirects every path component == "node_modules" to
++// "node_modules{suffix}" at the real-IO boundary (in-process bind mount for
++// per-glibc-environment native module isolation). Unset/empty => zero-cost no-op.
++
++use std::borrow::Cow;
++use std::ffi::OsStr;
++use std::ffi::OsString;
++use std::path::Path;
++use std::path::PathBuf;
++use std::sync::OnceLock;
++use std::time::Duration;
++use std::time::SystemTime;
++
++use sys_traits::BaseEnvRemoveVar;
++use sys_traits::BaseEnvSetCurrentDir;
++use sys_traits::BaseEnvSetVar;
++use sys_traits::BaseEnvVar;
++use sys_traits::BaseFsCanonicalize;
++use sys_traits::BaseFsChown;
++use sys_traits::BaseFsCloneFile;
++use sys_traits::BaseFsCopy;
++use sys_traits::BaseFsCreateDir;
++use sys_traits::BaseFsCreateJunction;
++use sys_traits::BaseFsHardLink;
++use sys_traits::BaseFsMetadata;
++use sys_traits::BaseFsOpen;
++use sys_traits::BaseFsRead;
++use sys_traits::BaseFsReadDir;
++use sys_traits::BaseFsReadLink;
++use sys_traits::BaseFsRemoveDir;
++use sys_traits::BaseFsRemoveDirAll;
++use sys_traits::BaseFsRemoveFile;
++use sys_traits::BaseFsRename;
++use sys_traits::BaseFsSetFileTimes;
++use sys_traits::BaseFsSetPermissions;
++use sys_traits::BaseFsSetSymlinkFileTimes;
++use sys_traits::BaseFsSymlinkChown;
++use sys_traits::BaseFsSymlinkDir;
++use sys_traits::BaseFsSymlinkFile;
++use sys_traits::BaseFsWrite;
++use sys_traits::EnvCacheDir;
++use sys_traits::EnvCurrentDir;
++use sys_traits::EnvHomeDir;
++#[cfg(windows)]
++use sys_traits::EnvProgramsDir;
++use sys_traits::EnvSetUmask;
++use sys_traits::EnvTempDir;
++use sys_traits::EnvUmask;
++use sys_traits::EnvVars;
++use sys_traits::ProcessExit;
++use sys_traits::SystemRandom;
++use sys_traits::SystemTimeNow;
++use sys_traits::ThreadSleep;
++
++fn suffix() -> Option<&'static str> {
++  static SUFFIX: OnceLock<Option<String>> = OnceLock::new();
++  SUFFIX
++    .get_or_init(|| {
++      std::env::var("DENO_NODE_MODULES_SUFFIX")
++        .ok()
++        .filter(|s| !s.is_empty())
++    })
++    .as_deref()
++}
++
++// kabegame patch(node_modules-suffix): mirrors deno_cache_dir::DenoDir so
++// package data inside Deno's own cache is never treated as installed modules.
++fn deno_cache_root() -> Option<&'static Path> {
++  static CACHE_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
++  CACHE_ROOT
++    .get_or_init(|| {
++      let root = std::env::var_os("DENO_DIR")
++        .filter(|value| !value.is_empty())
++        .map(PathBuf::from)
++        .or_else(default_deno_cache_root)?;
++      if root.is_absolute() {
++        Some(root)
++      } else {
++        // Deno resolves a relative DENO_DIR against the initial cwd.
++        Some(
++          std::env::current_dir()
++            .map(|cwd| cwd.join(&root))
++            .unwrap_or(root),
++        )
++      }
++    })
++    .as_deref()
++}
++
++fn default_deno_cache_root() -> Option<PathBuf> {
++  #[cfg(windows)]
++  {
++    std::env::var_os("LOCALAPPDATA")
++      .filter(|value| !value.is_empty())
++      .map(PathBuf::from)
++      .map(|path| path.join("deno"))
++  }
++  #[cfg(target_os = "macos")]
++  {
++    std::env::var_os("HOME")
++      .filter(|value| !value.is_empty())
++      .map(PathBuf::from)
++      .map(|path| path.join("Library/Caches/deno"))
++  }
++  #[cfg(all(not(windows), not(target_os = "macos")))]
++  {
++    std::env::var_os("XDG_CACHE_HOME")
++      .filter(|value| !value.is_empty())
++      .map(PathBuf::from)
++      .map(|path| path.join("deno"))
++      .or_else(|| {
++        std::env::var_os("HOME")
++          .filter(|value| !value.is_empty())
++          .map(PathBuf::from)
++          .map(|path| path.join(".cache/deno"))
++      })
++  }
++}
++
++fn is_in_deno_cache(path: &Path) -> bool {
++  deno_cache_root().is_some_and(|root| path.starts_with(root))
++}
++
++fn redirect_node_modules(path: &Path) -> Cow<'_, Path> {
++  let Some(suffix) = suffix() else {
++    return Cow::Borrowed(path);
++  };
++  if is_in_deno_cache(path) {
++    return Cow::Borrowed(path);
++  }
++  if !path
++    .components()
++    .any(|component| component.as_os_str() == OsStr::new("node_modules"))
++  {
++    return Cow::Borrowed(path);
++  }
++
++  let replaced = format!("node_modules{suffix}");
++  let mut output =
++    PathBuf::with_capacity(path.as_os_str().len() + suffix.len());
++  for component in path.components() {
++    if component.as_os_str() == OsStr::new("node_modules") {
++      output.push(&replaced);
++    } else {
++      output.push(component.as_os_str());
++    }
++  }
++  Cow::Owned(output)
++}
++
++// kabegame patch(node_modules-suffix): canonicalize must return the logical
++// mount-point path, not the suffixed backing path.
++fn restore_node_modules(path: &Path) -> Cow<'_, Path> {
++  let Some(suffix) = suffix() else {
++    return Cow::Borrowed(path);
++  };
++  if is_in_deno_cache(path) {
++    return Cow::Borrowed(path);
++  }
++  let replaced = format!("node_modules{suffix}");
++  if !path
++    .components()
++    .any(|component| component.as_os_str() == OsStr::new(&replaced))
++  {
++    return Cow::Borrowed(path);
++  }
++
++  let mut output = PathBuf::with_capacity(path.as_os_str().len());
++  for component in path.components() {
++    if component.as_os_str() == OsStr::new(&replaced) {
++      output.push("node_modules");
++    } else {
++      output.push(component.as_os_str());
++    }
++  }
++  Cow::Owned(output)
++}
++
++#[derive(Debug, Clone, Default)]
++pub struct CliSys(sys_traits::impls::RealSys);
++
++impl EnvCurrentDir for CliSys {
++  fn env_current_dir(&self) -> std::io::Result<PathBuf> {
++    self.0.env_current_dir()
++  }
++}
++
++impl BaseEnvSetCurrentDir for CliSys {
++  fn base_env_set_current_dir(&self, path: &Path) -> std::io::Result<()> {
++    self
++      .0
++      .base_env_set_current_dir(&redirect_node_modules(path))
++  }
++}
++
++impl BaseEnvVar for CliSys {
++  fn base_env_var_os(&self, key: &OsStr) -> Option<OsString> {
++    self.0.base_env_var_os(key)
++  }
++}
++
++impl EnvVars for CliSys {
++  type EnvVarsOs = <sys_traits::impls::RealSys as EnvVars>::EnvVarsOs;
++
++  fn env_vars_os(&self) -> Self::EnvVarsOs {
++    self.0.env_vars_os()
++  }
++}
++
++impl BaseEnvRemoveVar for CliSys {
++  fn base_env_remove_var(&self, key: &OsStr) {
++    self.0.base_env_remove_var(key)
++  }
++}
++
++impl BaseEnvSetVar for CliSys {
++  fn base_env_set_var(&self, key: &OsStr, value: &OsStr) {
++    self.0.base_env_set_var(key, value)
++  }
++}
++
++impl EnvUmask for CliSys {
++  fn env_umask(&self) -> std::io::Result<u32> {
++    self.0.env_umask()
++  }
++}
++
++impl EnvSetUmask for CliSys {
++  fn env_set_umask(&self, umask: u32) -> std::io::Result<u32> {
++    self.0.env_set_umask(umask)
++  }
++}
++
++impl EnvCacheDir for CliSys {
++  fn env_cache_dir(&self) -> Option<PathBuf> {
++    self.0.env_cache_dir()
++  }
++}
++
++impl EnvHomeDir for CliSys {
++  fn env_home_dir(&self) -> Option<PathBuf> {
++    self.0.env_home_dir()
++  }
++}
++
++#[cfg(windows)]
++impl EnvProgramsDir for CliSys {
++  fn env_programs_dir(&self) -> Option<PathBuf> {
++    self.0.env_programs_dir()
++  }
++}
++
++impl EnvTempDir for CliSys {
++  fn env_temp_dir(&self) -> std::io::Result<PathBuf> {
++    self.0.env_temp_dir()
++  }
++}
++
++impl BaseFsCanonicalize for CliSys {
++  fn base_fs_canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
++    let path = self.0.base_fs_canonicalize(&redirect_node_modules(path))?;
++    Ok(match restore_node_modules(&path) {
++      Cow::Borrowed(_) => path,
++      Cow::Owned(path) => path,
++    })
++  }
++}
++
++impl BaseFsChown for CliSys {
++  fn base_fs_chown(
++    &self,
++    path: &Path,
++    uid: Option<u32>,
++    gid: Option<u32>,
++  ) -> std::io::Result<()> {
++    self.0.base_fs_chown(&redirect_node_modules(path), uid, gid)
++  }
++}
++
++impl BaseFsSymlinkChown for CliSys {
++  fn base_fs_symlink_chown(
++    &self,
++    path: &Path,
++    uid: Option<u32>,
++    gid: Option<u32>,
++  ) -> std::io::Result<()> {
++    self
++      .0
++      .base_fs_symlink_chown(&redirect_node_modules(path), uid, gid)
++  }
++}
++
++impl BaseFsCloneFile for CliSys {
++  fn base_fs_clone_file(&self, from: &Path, to: &Path) -> std::io::Result<()> {
++    self.0.base_fs_clone_file(
++      &redirect_node_modules(from),
++      &redirect_node_modules(to),
++    )
++  }
++}
++
++impl BaseFsCopy for CliSys {
++  fn base_fs_copy(&self, from: &Path, to: &Path) -> std::io::Result<u64> {
++    self
++      .0
++      .base_fs_copy(&redirect_node_modules(from), &redirect_node_modules(to))
++  }
++}
++
++impl BaseFsCreateDir for CliSys {
++  fn base_fs_create_dir(
++    &self,
++    path: &Path,
++    options: &sys_traits::CreateDirOptions,
++  ) -> std::io::Result<()> {
++    self
++      .0
++      .base_fs_create_dir(&redirect_node_modules(path), options)
++  }
++}
++
++impl BaseFsHardLink for CliSys {
++  fn base_fs_hard_link(&self, src: &Path, dst: &Path) -> std::io::Result<()> {
++    self.0.base_fs_hard_link(
++      &redirect_node_modules(src),
++      &redirect_node_modules(dst),
++    )
++  }
++}
++
++impl BaseFsCreateJunction for CliSys {
++  fn base_fs_create_junction(
++    &self,
++    original: &Path,
++    junction: &Path,
++  ) -> std::io::Result<()> {
++    self.0.base_fs_create_junction(
++      &redirect_node_modules(original),
++      &redirect_node_modules(junction),
++    )
++  }
++}
++
++impl BaseFsMetadata for CliSys {
++  type Metadata = <sys_traits::impls::RealSys as BaseFsMetadata>::Metadata;
++
++  fn base_fs_metadata(&self, path: &Path) -> std::io::Result<Self::Metadata> {
++    self.0.base_fs_metadata(&redirect_node_modules(path))
++  }
++
++  fn base_fs_symlink_metadata(
++    &self,
++    path: &Path,
++  ) -> std::io::Result<Self::Metadata> {
++    self
++      .0
++      .base_fs_symlink_metadata(&redirect_node_modules(path))
++  }
++
++  fn base_fs_exists_no_err(&self, path: &Path) -> bool {
++    self.0.base_fs_exists_no_err(&redirect_node_modules(path))
++  }
++}
++
++impl BaseFsOpen for CliSys {
++  type File = <sys_traits::impls::RealSys as BaseFsOpen>::File;
++
++  fn base_fs_open(
++    &self,
++    path: &Path,
++    options: &sys_traits::OpenOptions,
++  ) -> std::io::Result<Self::File> {
++    self.0.base_fs_open(&redirect_node_modules(path), options)
++  }
++}
++
++impl BaseFsRead for CliSys {
++  fn base_fs_read(&self, path: &Path) -> std::io::Result<Cow<'static, [u8]>> {
++    self.0.base_fs_read(&redirect_node_modules(path))
++  }
++}
++
++impl BaseFsReadDir for CliSys {
++  type ReadDirEntry =
++    <sys_traits::impls::RealSys as BaseFsReadDir>::ReadDirEntry;
++
++  fn base_fs_read_dir(
++    &self,
++    path: &Path,
++  ) -> std::io::Result<
++    Box<dyn Iterator<Item = std::io::Result<Self::ReadDirEntry>>>,
++  > {
++    self.0.base_fs_read_dir(&redirect_node_modules(path))
++  }
++}
++
++impl BaseFsReadLink for CliSys {
++  fn base_fs_read_link(&self, path: &Path) -> std::io::Result<PathBuf> {
++    self.0.base_fs_read_link(&redirect_node_modules(path))
++  }
++}
++
++impl BaseFsRemoveDir for CliSys {
++  fn base_fs_remove_dir(&self, path: &Path) -> std::io::Result<()> {
++    self.0.base_fs_remove_dir(&redirect_node_modules(path))
++  }
++}
++
++impl BaseFsRemoveDirAll for CliSys {
++  fn base_fs_remove_dir_all(&self, path: &Path) -> std::io::Result<()> {
++    self.0.base_fs_remove_dir_all(&redirect_node_modules(path))
++  }
++}
++
++impl BaseFsRemoveFile for CliSys {
++  fn base_fs_remove_file(&self, path: &Path) -> std::io::Result<()> {
++    self.0.base_fs_remove_file(&redirect_node_modules(path))
++  }
++}
++
++impl BaseFsRename for CliSys {
++  fn base_fs_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
++    self
++      .0
++      .base_fs_rename(&redirect_node_modules(from), &redirect_node_modules(to))
++  }
++}
++
++impl BaseFsSetFileTimes for CliSys {
++  fn base_fs_set_file_times(
++    &self,
++    path: &Path,
++    atime: SystemTime,
++    mtime: SystemTime,
++  ) -> std::io::Result<()> {
++    self
++      .0
++      .base_fs_set_file_times(&redirect_node_modules(path), atime, mtime)
++  }
++}
++
++impl BaseFsSetSymlinkFileTimes for CliSys {
++  fn base_fs_set_symlink_file_times(
++    &self,
++    path: &Path,
++    atime: SystemTime,
++    mtime: SystemTime,
++  ) -> std::io::Result<()> {
++    self.0.base_fs_set_symlink_file_times(
++      &redirect_node_modules(path),
++      atime,
++      mtime,
++    )
++  }
++}
++
++impl BaseFsSetPermissions for CliSys {
++  fn base_fs_set_permissions(
++    &self,
++    path: &Path,
++    mode: u32,
++  ) -> std::io::Result<()> {
++    self
++      .0
++      .base_fs_set_permissions(&redirect_node_modules(path), mode)
++  }
++}
++
++impl BaseFsSymlinkDir for CliSys {
++  fn base_fs_symlink_dir(
++    &self,
++    original: &Path,
++    link: &Path,
++  ) -> std::io::Result<()> {
++    self.0.base_fs_symlink_dir(
++      &redirect_node_modules(original),
++      &redirect_node_modules(link),
++    )
++  }
++}
++
++impl BaseFsSymlinkFile for CliSys {
++  fn base_fs_symlink_file(
++    &self,
++    original: &Path,
++    link: &Path,
++  ) -> std::io::Result<()> {
++    self.0.base_fs_symlink_file(
++      &redirect_node_modules(original),
++      &redirect_node_modules(link),
++    )
++  }
++}
++
++impl BaseFsWrite for CliSys {
++  fn base_fs_write(&self, path: &Path, data: &[u8]) -> std::io::Result<()> {
++    self.0.base_fs_write(&redirect_node_modules(path), data)
++  }
++}
++
++impl SystemTimeNow for CliSys {
++  fn sys_time_now(&self) -> SystemTime {
++    self.0.sys_time_now()
++  }
++}
++
++impl SystemRandom for CliSys {
++  fn sys_random(&self, buf: &mut [u8]) -> std::io::Result<()> {
++    self.0.sys_random(buf)
++  }
++}
++
++impl ProcessExit for CliSys {
++  fn process_exit(&self, code: i32) -> ! {
++    self.0.process_exit(code)
++  }
++}
++
++impl ThreadSleep for CliSys {
++  fn thread_sleep(&self, duration: Duration) {
++    self.0.thread_sleep(duration)
++  }
++}
+diff --git a/ext/fs/lib.rs b/ext/fs/lib.rs
+index 8e22749..3ca0581 100644
+--- a/ext/fs/lib.rs
++++ b/ext/fs/lib.rs
+@@ -1,6 +1,8 @@
+ // Copyright 2018-2026 the Deno authors. MIT license.
+ 
+ mod interface;
++// kabegame patch(node_modules-suffix)
++mod node_modules_suffix;
+ mod ops;
+ mod std_fs;
+ 
+diff --git a/ext/fs/node_modules_suffix.rs b/ext/fs/node_modules_suffix.rs
+new file mode 100644
+index 0000000..bce182a
+--- /dev/null
++++ b/ext/fs/node_modules_suffix.rs
+@@ -0,0 +1,144 @@
++// Copyright 2018-2026 the Deno authors. MIT license.
++
++// kabegame patch(node_modules-suffix): see the twin copies in the deno CLI,
++// deno_napi, and deno_process.
++// DENO_NODE_MODULES_SUFFIX redirects every path component == "node_modules" to
++// "node_modules{suffix}" at the real-IO boundary (in-process bind mount for
++// per-glibc-environment native module isolation). Unset/empty => zero-cost no-op.
++
++use std::borrow::Cow;
++use std::ffi::OsStr;
++use std::path::Path;
++use std::path::PathBuf;
++use std::sync::OnceLock;
++
++fn suffix() -> Option<&'static str> {
++  static SUFFIX: OnceLock<Option<String>> = OnceLock::new();
++  SUFFIX
++    .get_or_init(|| {
++      std::env::var("DENO_NODE_MODULES_SUFFIX")
++        .ok()
++        .filter(|s| !s.is_empty())
++    })
++    .as_deref()
++}
++
++// kabegame patch(node_modules-suffix): mirrors deno_cache_dir::DenoDir so
++// package data inside Deno's own cache is never treated as installed modules.
++fn deno_cache_root() -> Option<&'static Path> {
++  static CACHE_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
++  CACHE_ROOT
++    .get_or_init(|| {
++      let root = std::env::var_os("DENO_DIR")
++        .filter(|value| !value.is_empty())
++        .map(PathBuf::from)
++        .or_else(default_deno_cache_root)?;
++      if root.is_absolute() {
++        Some(root)
++      } else {
++        // Deno resolves a relative DENO_DIR against the initial cwd.
++        Some(
++          std::env::current_dir()
++            .map(|cwd| cwd.join(&root))
++            .unwrap_or(root),
++        )
++      }
++    })
++    .as_deref()
++}
++
++fn default_deno_cache_root() -> Option<PathBuf> {
++  #[cfg(windows)]
++  {
++    std::env::var_os("LOCALAPPDATA")
++      .filter(|value| !value.is_empty())
++      .map(PathBuf::from)
++      .map(|path| path.join("deno"))
++  }
++  #[cfg(target_os = "macos")]
++  {
++    std::env::var_os("HOME")
++      .filter(|value| !value.is_empty())
++      .map(PathBuf::from)
++      .map(|path| path.join("Library/Caches/deno"))
++  }
++  #[cfg(all(not(windows), not(target_os = "macos")))]
++  {
++    std::env::var_os("XDG_CACHE_HOME")
++      .filter(|value| !value.is_empty())
++      .map(PathBuf::from)
++      .map(|path| path.join("deno"))
++      .or_else(|| {
++        std::env::var_os("HOME")
++          .filter(|value| !value.is_empty())
++          .map(PathBuf::from)
++          .map(|path| path.join(".cache/deno"))
++      })
++  }
++}
++
++fn is_in_deno_cache(path: &Path) -> bool {
++  deno_cache_root().is_some_and(|root| path.starts_with(root))
++}
++
++pub fn redirect_node_modules(path: &Path) -> Cow<'_, Path> {
++  let Some(suffix) = suffix() else {
++    return Cow::Borrowed(path);
++  };
++  if is_in_deno_cache(path) {
++    return Cow::Borrowed(path);
++  }
++  if !path
++    .components()
++    .any(|component| component.as_os_str() == OsStr::new("node_modules"))
++  {
++    return Cow::Borrowed(path);
++  }
++
++  let replaced = format!("node_modules{suffix}");
++  let mut output =
++    PathBuf::with_capacity(path.as_os_str().len() + suffix.len());
++  for component in path.components() {
++    if component.as_os_str() == OsStr::new("node_modules") {
++      output.push(&replaced);
++    } else {
++      output.push(component.as_os_str());
++    }
++  }
++  Cow::Owned(output)
++}
++
++// kabegame patch(node_modules-suffix): canonicalize must return the logical
++// mount-point path, not the suffixed backing path.
++pub fn restore_node_modules(path: &Path) -> Cow<'_, Path> {
++  let Some(suffix) = suffix() else {
++    return Cow::Borrowed(path);
++  };
++  if is_in_deno_cache(path) {
++    return Cow::Borrowed(path);
++  }
++  let replaced = format!("node_modules{suffix}");
++  if !path
++    .components()
++    .any(|component| component.as_os_str() == OsStr::new(&replaced))
++  {
++    return Cow::Borrowed(path);
++  }
++
++  let mut output = PathBuf::with_capacity(path.as_os_str().len());
++  for component in path.components() {
++    if component.as_os_str() == OsStr::new(&replaced) {
++      output.push("node_modules");
++    } else {
++      output.push(component.as_os_str());
++    }
++  }
++  Cow::Owned(output)
++}
++
++pub fn redirect_node_modules_path_buf(path: PathBuf) -> PathBuf {
++  match redirect_node_modules(&path) {
++    Cow::Borrowed(_) => path,
++    Cow::Owned(path) => path,
++  }
++}
+diff --git a/ext/fs/std_fs.rs b/ext/fs/std_fs.rs
+index 8dde6d7..6dd0d0d 100644
+--- a/ext/fs/std_fs.rs
++++ b/ext/fs/std_fs.rs
+@@ -30,11 +30,16 @@ use crate::interface::FsDirEntry;
+ use crate::interface::FsFileType;
+ use crate::interface::FsReadDir;
+ use crate::interface::FsReadDirRc;
++use crate::node_modules_suffix::redirect_node_modules;
++use crate::node_modules_suffix::redirect_node_modules_path_buf;
++use crate::node_modules_suffix::restore_node_modules;
+ 
+ #[derive(Debug, Default, Clone)]
+ pub struct RealFs;
+ 
+ #[async_trait::async_trait(?Send)]
++// kabegame patch(node_modules-suffix): all logical paths are redirected at the
++// real-IO boundary in this impl and its filesystem helpers below.
+ impl FileSystem for RealFs {
+   fn cwd(&self) -> FsResult<PathBuf> {
+     std::env::current_dir().map_err(Into::into)
+@@ -45,7 +50,7 @@ impl FileSystem for RealFs {
+   }
+ 
+   fn chdir(&self, path: &CheckedPath) -> FsResult<()> {
+-    std::env::set_current_dir(path).map_err(Into::into)
++    std::env::set_current_dir(redirect_node_modules(path)).map_err(Into::into)
+   }
+ 
+   #[cfg(windows)]
+@@ -267,6 +272,7 @@ impl FileSystem for RealFs {
+     &self,
+     path: CheckedPathBuf,
+   ) -> FsResult<FsReadDirRc> {
++    let path = redirect_node_modules_path_buf(path.into_path_buf());
+     Ok(new_rc(RealFsReadDir(Mutex::new(
+       tokio::fs::read_dir(path).await?,
+     ))))
+@@ -277,13 +283,19 @@ impl FileSystem for RealFs {
+     oldpath: &CheckedPath,
+     newpath: &CheckedPath,
+   ) -> FsResult<()> {
+-    fs::rename(oldpath, newpath).map_err(Into::into)
++    fs::rename(
++      redirect_node_modules(oldpath),
++      redirect_node_modules(newpath),
++    )
++    .map_err(Into::into)
+   }
+   async fn rename_async(
+     &self,
+     oldpath: CheckedPathBuf,
+     newpath: CheckedPathBuf,
+   ) -> FsResult<()> {
++    let oldpath = redirect_node_modules_path_buf(oldpath.into_path_buf());
++    let newpath = redirect_node_modules_path_buf(newpath.into_path_buf());
+     spawn_blocking(move || fs::rename(oldpath, newpath))
+       .await?
+       .map_err(Into::into)
+@@ -306,13 +318,19 @@ impl FileSystem for RealFs {
+     oldpath: &CheckedPath,
+     newpath: &CheckedPath,
+   ) -> FsResult<()> {
+-    fs::hard_link(oldpath, newpath).map_err(Into::into)
++    fs::hard_link(
++      redirect_node_modules(oldpath),
++      redirect_node_modules(newpath),
++    )
++    .map_err(Into::into)
+   }
+   async fn link_async(
+     &self,
+     oldpath: CheckedPathBuf,
+     newpath: CheckedPathBuf,
+   ) -> FsResult<()> {
++    let oldpath = redirect_node_modules_path_buf(oldpath.into_path_buf());
++    let newpath = redirect_node_modules_path_buf(newpath.into_path_buf());
+     spawn_blocking(move || fs::hard_link(oldpath, newpath))
+       .await?
+       .map_err(Into::into)
+@@ -336,18 +354,20 @@ impl FileSystem for RealFs {
+   }
+ 
+   fn read_link_sync(&self, path: &CheckedPath) -> FsResult<PathBuf> {
+-    fs::read_link(path).map_err(Into::into)
++    fs::read_link(redirect_node_modules(path)).map_err(Into::into)
+   }
+   async fn read_link_async(&self, path: CheckedPathBuf) -> FsResult<PathBuf> {
++    let path = redirect_node_modules_path_buf(path.into_path_buf());
+     spawn_blocking(move || fs::read_link(path))
+       .await?
+       .map_err(Into::into)
+   }
+ 
+   fn rmdir_sync(&self, path: &CheckedPath) -> FsResult<()> {
+-    fs::remove_dir(path).map_err(Into::into)
++    fs::remove_dir(redirect_node_modules(path)).map_err(Into::into)
+   }
+   async fn rmdir_async(&self, path: CheckedPathBuf) -> FsResult<()> {
++    let path = redirect_node_modules_path_buf(path.into_path_buf());
+     spawn_blocking(move || fs::remove_dir(path))
+       .await?
+       .map_err(Into::into)
+@@ -374,7 +394,8 @@ impl FileSystem for RealFs {
+   ) -> FsResult<()> {
+     let atime = filetime::FileTime::from_unix_time(atime_secs, atime_nanos);
+     let mtime = filetime::FileTime::from_unix_time(mtime_secs, mtime_nanos);
+-    filetime::set_file_times(path, atime, mtime).map_err(Into::into)
++    filetime::set_file_times(redirect_node_modules(path), atime, mtime)
++      .map_err(Into::into)
+   }
+   async fn utime_async(
+     &self,
+@@ -386,6 +407,7 @@ impl FileSystem for RealFs {
+   ) -> FsResult<()> {
+     let atime = filetime::FileTime::from_unix_time(atime_secs, atime_nanos);
+     let mtime = filetime::FileTime::from_unix_time(mtime_secs, mtime_nanos);
++    let path = redirect_node_modules_path_buf(path.into_path_buf());
+     spawn_blocking(move || {
+       filetime::set_file_times(path, atime, mtime).map_err(Into::into)
+     })
+@@ -402,7 +424,8 @@ impl FileSystem for RealFs {
+   ) -> FsResult<()> {
+     let atime = filetime::FileTime::from_unix_time(atime_secs, atime_nanos);
+     let mtime = filetime::FileTime::from_unix_time(mtime_secs, mtime_nanos);
+-    filetime::set_symlink_file_times(path, atime, mtime).map_err(Into::into)
++    filetime::set_symlink_file_times(redirect_node_modules(path), atime, mtime)
++      .map_err(Into::into)
+   }
+ 
+   async fn lutime_async(
+@@ -415,6 +438,7 @@ impl FileSystem for RealFs {
+   ) -> FsResult<()> {
+     let atime = filetime::FileTime::from_unix_time(atime_secs, atime_nanos);
+     let mtime = filetime::FileTime::from_unix_time(mtime_secs, mtime_nanos);
++    let path = redirect_node_modules_path_buf(path.into_path_buf());
+     spawn_blocking(move || {
+       filetime::set_symlink_file_times(path, atime, mtime).map_err(Into::into)
+     })
+@@ -500,6 +524,8 @@ impl FileSystem for RealFs {
+ }
+ 
+ fn mkdir(path: &Path, recursive: bool, mode: Option<u32>) -> FsResult<()> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   let mut builder = fs::DirBuilder::new();
+   builder.recursive(recursive);
+   #[cfg(unix)]
+@@ -516,6 +542,8 @@ fn mkdir(path: &Path, recursive: bool, mode: Option<u32>) -> FsResult<()> {
+ 
+ #[cfg(unix)]
+ fn chmod(path: &Path, mode: u32) -> FsResult<()> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   use std::os::unix::fs::PermissionsExt;
+   let permissions = fs::Permissions::from_mode(mode);
+   fs::set_permissions(path, permissions)?;
+@@ -524,6 +552,8 @@ fn chmod(path: &Path, mode: u32) -> FsResult<()> {
+ 
+ #[cfg(not(unix))]
+ fn chmod(path: &Path, mode: i32) -> FsResult<()> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   use std::os::windows::ffi::OsStrExt;
+ 
+   // Windows chmod doesn't follow symlinks unlike the UNIX counterpart,
+@@ -546,6 +576,8 @@ fn chmod(path: &Path, mode: i32) -> FsResult<()> {
+ 
+ #[cfg(unix)]
+ fn chown(path: &Path, uid: Option<u32>, gid: Option<u32>) -> FsResult<()> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   use nix::unistd::Gid;
+   use nix::unistd::Uid;
+   use nix::unistd::chown;
+@@ -566,6 +598,8 @@ fn chown(_path: &Path, _uid: Option<u32>, _gid: Option<u32>) -> FsResult<()> {
+ 
+ #[cfg(target_os = "macos")]
+ fn lchmod(path: &Path, mode: u32) -> FsResult<()> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   use std::os::unix::fs::OpenOptionsExt;
+   use std::os::unix::fs::PermissionsExt;
+ 
+@@ -586,6 +620,8 @@ fn lchmod(_path: &Path, _mode: u32) -> FsResult<()> {
+ 
+ #[cfg(unix)]
+ fn lchown(path: &Path, uid: Option<u32>, gid: Option<u32>) -> FsResult<()> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   use std::os::unix::ffi::OsStrExt;
+   let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+   // -1 = leave unchanged
+@@ -610,6 +646,8 @@ fn lchown(_path: &Path, _uid: Option<u32>, _gid: Option<u32>) -> FsResult<()> {
+ }
+ 
+ fn remove(path: &Path, recursive: bool) -> FsResult<()> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   // TODO: this is racy. This should open fds, and then `unlink` those.
+   let metadata = fs::symlink_metadata(path)?;
+ 
+@@ -644,6 +682,10 @@ fn remove(path: &Path, recursive: bool) -> FsResult<()> {
+ }
+ 
+ fn copy_file(from: &Path, to: &Path) -> FsResult<()> {
++  let from = redirect_node_modules(from);
++  let from = from.as_ref();
++  let to = redirect_node_modules(to);
++  let to = to.as_ref();
+   // Guard against copying a file onto itself. Otherwise the destination is
+   // opened with truncation (or unlinked) before the source is read, which
+   // silently empties the file. Match `cp` behavior and error instead.
+@@ -739,7 +781,15 @@ fn copy_file(from: &Path, to: &Path) -> FsResult<()> {
+ }
+ 
+ fn cp(from: &Path, to: &Path) -> FsResult<()> {
++  let from = redirect_node_modules(from);
++  let from = from.as_ref();
++  let to = redirect_node_modules(to);
++  let to = to.as_ref();
+   fn cp_(source_meta: fs::Metadata, from: &Path, to: &Path) -> FsResult<()> {
++    let from = redirect_node_modules(from);
++    let from = from.as_ref();
++    let to = redirect_node_modules(to);
++    let to = to.as_ref();
+     use rayon::prelude::IntoParallelIterator;
+     use rayon::prelude::ParallelIterator;
+ 
+@@ -772,17 +822,18 @@ fn cp(from: &Path, to: &Path) -> FsResult<()> {
+         .map(|file_name| {
+           let from_path = from.join(&file_name);
+           let to_path = to.join(&file_name);
+-          let meta = fs::symlink_metadata(&from_path).map_err(|err| {
+-            io::Error::new(
+-              err.kind(),
+-              format!(
+-                "failed to copy '{}' to '{}': {:?}",
+-                from_path.display(),
+-                to_path.display(),
+-                err,
+-              ),
+-            )
+-          })?;
++          let meta = fs::symlink_metadata(redirect_node_modules(&from_path))
++            .map_err(|err| {
++              io::Error::new(
++                err.kind(),
++                format!(
++                  "failed to copy '{}' to '{}': {:?}",
++                  from_path.display(),
++                  to_path.display(),
++                  err,
++                ),
++              )
++            })?;
+           cp_(meta, &from_path, &to_path).map_err(|err| {
+             io::Error::new(
+               err.kind(),
+@@ -800,11 +851,12 @@ fn cp(from: &Path, to: &Path) -> FsResult<()> {
+       return Ok(());
+     } else if ty.is_symlink() {
+       let from = std::fs::read_link(from)?;
++      let from = redirect_node_modules(&from);
+ 
+       #[cfg(unix)]
+-      std::os::unix::fs::symlink(from, to)?;
++      std::os::unix::fs::symlink(&from, to)?;
+       #[cfg(windows)]
+-      std::os::windows::fs::symlink_file(from, to)?;
++      std::os::windows::fs::symlink_file(&from, to)?;
+ 
+       return Ok(());
+     }
+@@ -924,12 +976,16 @@ fn cp(from: &Path, to: &Path) -> FsResult<()> {
+ 
+ #[cfg(not(windows))]
+ fn stat(path: &Path) -> FsResult<FsStat> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   let metadata = fs::metadata(path)?;
+   Ok(FsStat::from_std(metadata))
+ }
+ 
+ #[cfg(windows)]
+ fn stat(path: &Path) -> FsResult<FsStat> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   let file = open_for_stat_windows(path, false)?;
+   let metadata = file.metadata()?;
+   let mut fsstat = FsStat::from_std(metadata);
+@@ -939,12 +995,16 @@ fn stat(path: &Path) -> FsResult<FsStat> {
+ 
+ #[cfg(not(windows))]
+ fn lstat(path: &Path) -> FsResult<FsStat> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   let metadata = fs::symlink_metadata(path)?;
+   Ok(FsStat::from_std(metadata))
+ }
+ 
+ #[cfg(windows)]
+ fn lstat(path: &Path) -> FsResult<FsStat> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   let file = open_for_stat_windows(path, true)?;
+   let metadata = file.metadata()?;
+   let mut fsstat = FsStat::from_std(metadata);
+@@ -962,6 +1022,8 @@ fn open_for_stat_windows(
+   path: &Path,
+   do_not_follow_symlink: bool,
+ ) -> io::Result<fs::File> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   use std::os::windows::fs::OpenOptionsExt;
+ 
+   use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+@@ -992,6 +1054,8 @@ fn open_for_stat_windows(
+ const ERROR_INVALID_FUNCTION: i32 = 1;
+ 
+ fn statfs(path: &Path, bigint: bool) -> FsResult<FsStatFs> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   #[cfg(unix)]
+   {
+     use std::os::unix::ffi::OsStrExt;
+@@ -1113,6 +1177,8 @@ fn statfs(path: &Path, bigint: bool) -> FsResult<FsStatFs> {
+ }
+ 
+ fn exists(path: &Path) -> bool {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   #[cfg(unix)]
+   {
+     use nix::unistd::AccessFlags;
+@@ -1127,10 +1193,18 @@ fn exists(path: &Path) -> bool {
+ }
+ 
+ fn realpath(path: &Path) -> FsResult<PathBuf> {
+-  Ok(deno_path_util::strip_unc_prefix(path.canonicalize()?))
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
++  let path = deno_path_util::strip_unc_prefix(path.canonicalize()?);
++  Ok(match restore_node_modules(&path) {
++    Cow::Borrowed(_) => path,
++    Cow::Owned(path) => path,
++  })
+ }
+ 
+ fn read_dir(path: &Path) -> FsResult<Vec<FsDirEntry>> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   let entries = fs::read_dir(path)?
+     .filter_map(|entry| {
+       let entry = entry.ok()?;
+@@ -1205,6 +1279,10 @@ fn symlink(
+   newpath: &Path,
+   _file_type: Option<FsFileType>,
+ ) -> FsResult<()> {
++  let oldpath = redirect_node_modules(oldpath);
++  let oldpath = oldpath.as_ref();
++  let newpath = redirect_node_modules(newpath);
++  let newpath = newpath.as_ref();
+   std::os::unix::fs::symlink(oldpath, newpath)?;
+   Ok(())
+ }
+@@ -1215,6 +1293,10 @@ fn symlink(
+   newpath: &Path,
+   file_type: Option<FsFileType>,
+ ) -> FsResult<()> {
++  let oldpath = redirect_node_modules(oldpath);
++  let oldpath = oldpath.as_ref();
++  let newpath = redirect_node_modules(newpath);
++  let newpath = newpath.as_ref();
+   let file_type = match file_type {
+     Some(file_type) => file_type,
+     None => {
+@@ -1259,6 +1341,8 @@ fn symlink(
+ }
+ 
+ fn truncate(path: &Path, len: u64) -> FsResult<()> {
++  let path = redirect_node_modules(path);
++  let path = path.as_ref();
+   let mut open_options = fs::OpenOptions::new();
+   open_options.write(true);
+   // The permission check for truncate is performed no-follow (against the
+@@ -1321,7 +1405,7 @@ pub fn open_with_checked_path(
+   // exist, then open for reading). Handle this by creating the file first
+   // if needed, then opening for read only.
+   if opts.create && !opts.write && !opts.append {
+-    if !path.exists() {
++    if !redirect_node_modules(path).exists() {
+       let create_opts = OpenOptions {
+         read: false,
+         write: true,
+@@ -1361,12 +1445,13 @@ fn open_path_with_options(
+   path: &CheckedPath,
+ ) -> io::Result<fs::File> {
+   let std_opts = open_options_for_checked_path(opts, path);
+-  match std_opts.open(path) {
++  let io_path = redirect_node_modules(path);
++  match std_opts.open(&io_path) {
+     Ok(file) => Ok(file),
+     #[cfg(windows)]
+     Err(err) if err.raw_os_error() == Some(ERROR_INVALID_FUNCTION) => {
+       let fallback = open_options_for_checked_path_no_backup(opts, path);
+-      fallback.open(path).map_err(|_| err)
++      fallback.open(&io_path).map_err(|_| err)
+     }
+     // A canonicalized path is opened with `O_NOFOLLOW` (see
+     // `open_options_for_checked_path`). If the final component is still a
+diff --git a/ext/napi/lib.rs b/ext/napi/lib.rs
+index 3e620b9..d8a2f78 100644
+--- a/ext/napi/lib.rs
++++ b/ext/napi/lib.rs
+@@ -26,6 +26,8 @@ pub mod js_native_api;
+ pub mod node_api;
+ pub mod util;
+ pub mod uv;
++// kabegame patch(node_modules-suffix)
++mod node_modules_suffix;
+ 
+ use core::ptr::NonNull;
+ use std::borrow::Cow;
+@@ -713,6 +715,11 @@ fn op_napi_open<'scope>(
+     let permissions =
+       op_state.borrow_mut::<deno_permissions::PermissionsContainer>();
+     let path = permissions.check_ffi(Cow::Borrowed(Path::new(path)))?;
++    // kabegame patch(node_modules-suffix): redirect only after permission checks.
++    let path = match node_modules_suffix::redirect_node_modules(&path) {
++      Cow::Borrowed(_) => path,
++      Cow::Owned(path) => Cow::Owned(path),
++    };
+     let napi_state = op_state.borrow::<NapiState>();
+     (
+       op_state.borrow::<V8CrossThreadTaskSpawner>().clone(),
+diff --git a/ext/napi/node_modules_suffix.rs b/ext/napi/node_modules_suffix.rs
+new file mode 100644
+index 0000000..c8b5b61
+--- /dev/null
++++ b/ext/napi/node_modules_suffix.rs
+@@ -0,0 +1,109 @@
++// Copyright 2018-2026 the Deno authors. MIT license.
++
++// kabegame patch(node_modules-suffix): see the twin copies in the deno CLI,
++// deno_fs, and deno_process.
++// DENO_NODE_MODULES_SUFFIX redirects every path component == "node_modules" to
++// "node_modules{suffix}" at the real-IO boundary (in-process bind mount for
++// per-glibc-environment native module isolation). Unset/empty => zero-cost no-op.
++
++use std::borrow::Cow;
++use std::ffi::OsStr;
++use std::path::Path;
++use std::path::PathBuf;
++use std::sync::OnceLock;
++
++fn suffix() -> Option<&'static str> {
++  static SUFFIX: OnceLock<Option<String>> = OnceLock::new();
++  SUFFIX
++    .get_or_init(|| {
++      std::env::var("DENO_NODE_MODULES_SUFFIX")
++        .ok()
++        .filter(|s| !s.is_empty())
++    })
++    .as_deref()
++}
++
++// kabegame patch(node_modules-suffix): mirrors deno_cache_dir::DenoDir so
++// package data inside Deno's own cache is never treated as installed modules.
++fn deno_cache_root() -> Option<&'static Path> {
++  static CACHE_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
++  CACHE_ROOT
++    .get_or_init(|| {
++      let root = std::env::var_os("DENO_DIR")
++        .filter(|value| !value.is_empty())
++        .map(PathBuf::from)
++        .or_else(default_deno_cache_root)?;
++      if root.is_absolute() {
++        Some(root)
++      } else {
++        // Deno resolves a relative DENO_DIR against the initial cwd.
++        Some(
++          std::env::current_dir()
++            .map(|cwd| cwd.join(&root))
++            .unwrap_or(root),
++        )
++      }
++    })
++    .as_deref()
++}
++
++fn default_deno_cache_root() -> Option<PathBuf> {
++  #[cfg(windows)]
++  {
++    std::env::var_os("LOCALAPPDATA")
++      .filter(|value| !value.is_empty())
++      .map(PathBuf::from)
++      .map(|path| path.join("deno"))
++  }
++  #[cfg(target_os = "macos")]
++  {
++    std::env::var_os("HOME")
++      .filter(|value| !value.is_empty())
++      .map(PathBuf::from)
++      .map(|path| path.join("Library/Caches/deno"))
++  }
++  #[cfg(all(not(windows), not(target_os = "macos")))]
++  {
++    std::env::var_os("XDG_CACHE_HOME")
++      .filter(|value| !value.is_empty())
++      .map(PathBuf::from)
++      .map(|path| path.join("deno"))
++      .or_else(|| {
++        std::env::var_os("HOME")
++          .filter(|value| !value.is_empty())
++          .map(PathBuf::from)
++          .map(|path| path.join(".cache/deno"))
++      })
++  }
++}
++
++fn is_in_deno_cache(path: &Path) -> bool {
++  deno_cache_root().is_some_and(|root| path.starts_with(root))
++}
++
++pub fn redirect_node_modules(path: &Path) -> Cow<'_, Path> {
++  let Some(suffix) = suffix() else {
++    return Cow::Borrowed(path);
++  };
++  if is_in_deno_cache(path) {
++    return Cow::Borrowed(path);
++  }
++  if !path
++    .components()
++    .any(|component| component.as_os_str() == OsStr::new("node_modules"))
++  {
++    return Cow::Borrowed(path);
++  }
++
++  let replaced = format!("node_modules{suffix}");
++  let mut output =
++    PathBuf::with_capacity(path.as_os_str().len() + suffix.len());
++  for component in path.components() {
++    if component.as_os_str() == OsStr::new("node_modules") {
++      output.push(&replaced);
++    } else {
++      output.push(component.as_os_str());
++    }
++  }
++  Cow::Owned(output)
++}
+diff --git a/ext/process/lib.rs b/ext/process/lib.rs
+index 40c5903..a607f29 100644
+--- a/ext/process/lib.rs
++++ b/ext/process/lib.rs
+@@ -58,6 +58,8 @@ use serde::Deserialize;
+ use tokio::process::Child as AsyncChild;
+ 
+ pub mod ipc;
++// kabegame patch(node_modules-suffix)
++mod node_modules_suffix;
+ use ipc::IpcAdvancedStreamResource;
+ use ipc::IpcJsonStreamResource;
+ use ipc::IpcRefTracker;
+@@ -609,6 +611,9 @@ fn create_command(
+     api_name,
+     allow_cwd_inherit,
+   )?;
++  // kabegame patch(node_modules-suffix): keep resolution and permission checks
++  // on logical paths, then redirect the real spawn boundary.
++  let cmd = node_modules_suffix::redirect_node_modules(&cmd);
+ 
+   // On Unix, optionally run the command through `/bin/sh` so that files which
+   // the kernel can't exec directly (e.g. shell scripts without a shebang) are
+@@ -621,15 +626,15 @@ fn create_command(
+   #[cfg(unix)]
+   let mut command = if wrap_in_shell {
+     let mut command = Command::new("/bin/sh");
+-    command.arg(&cmd);
++    command.arg(cmd.as_ref());
+     command
+   } else {
+-    Command::new(cmd)
++    Command::new(cmd.as_ref())
+   };
+   #[cfg(windows)]
+   let mut command = {
+     let _ = wrap_in_shell;
+-    Command::new(cmd)
++    Command::new(cmd.as_ref())
+   };
+ 
+   #[cfg(windows)]
+@@ -660,7 +665,9 @@ fn create_command(
+   }
+ 
+   if run_env.set_cwd_on_command {
+-    command.current_dir(&run_env.cwd);
++    command.current_dir(
++      node_modules_suffix::redirect_node_modules(&run_env.cwd).as_ref(),
++    );
+   }
+   command.env_clear();
+   command.envs(run_env.envs.into_iter().map(|(k, v)| (k.into_inner(), v)));
+diff --git a/ext/process/node_modules_suffix.rs b/ext/process/node_modules_suffix.rs
+new file mode 100644
+index 0000000..c635f2b
+--- /dev/null
++++ b/ext/process/node_modules_suffix.rs
+@@ -0,0 +1,109 @@
++// Copyright 2018-2026 the Deno authors. MIT license.
++
++// kabegame patch(node_modules-suffix): see the twin copies in the deno CLI,
++// deno_fs, and deno_napi.
++// DENO_NODE_MODULES_SUFFIX redirects every path component == "node_modules" to
++// "node_modules{suffix}" at the real-IO boundary (in-process bind mount for
++// per-glibc-environment native module isolation). Unset/empty => zero-cost no-op.
++
++use std::borrow::Cow;
++use std::ffi::OsStr;
++use std::path::Path;
++use std::path::PathBuf;
++use std::sync::OnceLock;
++
++fn suffix() -> Option<&'static str> {
++  static SUFFIX: OnceLock<Option<String>> = OnceLock::new();
++  SUFFIX
++    .get_or_init(|| {
++      std::env::var("DENO_NODE_MODULES_SUFFIX")
++        .ok()
++        .filter(|s| !s.is_empty())
++    })
++    .as_deref()
++}
++
++// kabegame patch(node_modules-suffix): mirrors deno_cache_dir::DenoDir so
++// package data inside Deno's own cache is never treated as installed modules.
++fn deno_cache_root() -> Option<&'static Path> {
++  static CACHE_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
++  CACHE_ROOT
++    .get_or_init(|| {
++      let root = std::env::var_os("DENO_DIR")
++        .filter(|value| !value.is_empty())
++        .map(PathBuf::from)
++        .or_else(default_deno_cache_root)?;
++      if root.is_absolute() {
++        Some(root)
++      } else {
++        // Deno resolves a relative DENO_DIR against the initial cwd.
++        Some(
++          std::env::current_dir()
++            .map(|cwd| cwd.join(&root))
++            .unwrap_or(root),
++        )
++      }
++    })
++    .as_deref()
++}
++
++fn default_deno_cache_root() -> Option<PathBuf> {
++  #[cfg(windows)]
++  {
++    std::env::var_os("LOCALAPPDATA")
++      .filter(|value| !value.is_empty())
++      .map(PathBuf::from)
++      .map(|path| path.join("deno"))
++  }
++  #[cfg(target_os = "macos")]
++  {
++    std::env::var_os("HOME")
++      .filter(|value| !value.is_empty())
++      .map(PathBuf::from)
++      .map(|path| path.join("Library/Caches/deno"))
++  }
++  #[cfg(all(not(windows), not(target_os = "macos")))]
++  {
++    std::env::var_os("XDG_CACHE_HOME")
++      .filter(|value| !value.is_empty())
++      .map(PathBuf::from)
++      .map(|path| path.join("deno"))
++      .or_else(|| {
++        std::env::var_os("HOME")
++          .filter(|value| !value.is_empty())
++          .map(PathBuf::from)
++          .map(|path| path.join(".cache/deno"))
++      })
++  }
++}
++
++fn is_in_deno_cache(path: &Path) -> bool {
++  deno_cache_root().is_some_and(|root| path.starts_with(root))
++}
++
++pub fn redirect_node_modules(path: &Path) -> Cow<'_, Path> {
++  let Some(suffix) = suffix() else {
++    return Cow::Borrowed(path);
++  };
++  if is_in_deno_cache(path) {
++    return Cow::Borrowed(path);
++  }
++  if !path
++    .components()
++    .any(|component| component.as_os_str() == OsStr::new("node_modules"))
++  {
++    return Cow::Borrowed(path);
++  }
++
++  let replaced = format!("node_modules{suffix}");
++  let mut output =
++    PathBuf::with_capacity(path.as_os_str().len() + suffix.len());
++  for component in path.components() {
++    if component.as_os_str() == OsStr::new("node_modules") {
++      output.push(&replaced);
++    } else {
++      output.push(component.as_os_str());
++    }
++  }
++  Cow::Owned(output)
++}

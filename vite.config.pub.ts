@@ -82,6 +82,11 @@ export default {
     alias: {
       "@": path.resolve(process.cwd(), "src"),
       "@kabegame/core": path.resolve(root, "packages", "kabegame-core", "src"),
+      // element-plus 在其 package.json 里把 "@popperjs/core" 别名到
+      // "npm:@sxzz/popperjs-es"（ESM fork）。bun 会在 node_modules 物化该别名目录，
+      // 但 deno 的 hoisted linker 不物化「依赖的 npm 别名」，rollup 从 element-plus
+      // 解析裸 "@popperjs/core" 会失败。此处直接把裸 specifier 指到实包。
+      "@popperjs/core": "@sxzz/popperjs-es",
     },
   },
   css: {

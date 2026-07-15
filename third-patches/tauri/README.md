@@ -38,6 +38,20 @@ pulled into the app via `[patch.crates-io]`) and `crates/tauri-cli` (the forked
   (`kabegame-cef-helper`, `cef-example`) must be shipped explicitly via bundle `files`
   (deb files / `macOS.files`). Without `default-run` (or with a single bin) upstream
   behavior is unchanged.
+- `0009-tauri-config-bins-compile-list.patch` — adds a top-level `bins: string[]` config
+  (field on tauri-utils `Config`, embedded as `None` at runtime; the struct is
+  `deny_unknown_fields`, so configs using `bins` require this patch to parse). Also updates
+  the CLI-embedded `crates/tauri-cli/config.schema.json` (and the identical
+  `tauri-schema-generator/schemas/` copy) — the CLI validates `tauri.conf.json` against that
+  JSON schema before deserializing, so without the schema hunk it rejects `bins` with
+  "Additional properties are not allowed". Desktop
+  `tauri build` no longer passes `--bins` to cargo: it passes one `--bin <name>` per
+  configured entry (deduped against existing runner args); with no `bins` config it falls
+  back to the `get_binaries()` bundle list (i.e. only the default-run binary after 0008),
+  and to upstream `--bins` if that list is empty. On Windows the configured auxiliary bins
+  are additionally added to the bundle as non-main binaries, so NSIS installs them next to
+  the main exe and deletes them on uninstall (no resources staging / installer-hook moves).
+  Mobile is untouched (`--lib`); `tauri dev` (cargo run) does not use this path.
 
 `tauri-utils` (library, consumed via `[patch.crates-io]`):
 
@@ -52,14 +66,31 @@ pulled into the app via `[patch.crates-io]`) and `crates/tauri-cli` (the forked
   `webkit` feature and gates the Linux/BSD `webkit2gtk::WebView` fields in `webview.rs` behind
   it, so the Linux CEF build does not link `webkit2gtk`.
 
+`tauri-build` (library, consumed via `[patch.crates-io]`):
+
+- `0010-tauri-build-always-static-vcruntime.patch` — on Windows (msvc) the static vcruntime
+  link is always applied: the `STATIC_VCRUNTIME` env gate is removed (non-configurable).
+  Bare `cargo build` invocations of auxiliary bins (e.g. the dev-time `kabegame-cef-helper`
+  pre-build) previously missed the env that `tauri build` sets, yielding binaries that fail
+  with a missing `VCRUNTIME140.dll` on machines without the VC++ runtime.
+
 Apply the whole series manually before building against `third/tauri`:
 
 ```bash
-bun run patch tauri
+deno task patch tauri
 ```
 
-Use `bun run patch`, not `bun patch`: Bun 1.3 provides its own unrelated
-dependency-patching subcommand under the latter name.
+The series is **append-only**: never edit or delete a published `NNNN-*.patch` — add a new
+numbered patch on top instead (`.cursor/rules/third-patches-append-only.mdc`; the only
+exception is a full re-vendor, below). When a pull adds new patches while the submodule still
+has the old prefix applied, resync with:
+
+```bash
+deno task patch tauri --from <N>   # reverse applied prefix (< N), then re-apply the full series
+```
+
+The `.husky/post-merge` hook detects newly added `third-patches/*/*.patch` after a pull and
+runs this automatically.
 
 ## Consumption (root `Cargo.toml`)
 
@@ -78,7 +109,7 @@ requirement) so the path patch unifies the whole graph on one `tauri-utils`.
 
 ## Re-vendor
 
-1. `bun run patch tauri -r` to restore the clean submodule tree.
+1. `deno task patch tauri -r` to restore the clean submodule tree.
 2. Bump `third/tauri` to the new upstream tag (pick one whose `tauri`/`tauri-runtime` match
    the version the app resolves).
 3. Re-apply each patch with `git apply --check`, repairing context drift (see the drift-prone

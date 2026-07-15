@@ -23,35 +23,35 @@ Kabegame is a cross-platform anime wallpaper crawler and manager built with **Ta
 
 ## Commands
 
-All top-level commands go through `scripts/run.ts` (a Tapable-based build system) and are run with `bun`.
+All top-level commands go through `scripts/run.ts` (a Tapable-based build system) and are run with `deno task` (Deno 2.9.0; after cloning, run `deno install && deno task prepare` first).
 
 ### Development
 ```bash
-bun dev -c kabegame                  # Start dev server (Vite + Tauri, port 1420)
-bun dev -c kabegame --mode local     # Dev with all plugins bundled locally
-bun dev -c kabegame --mode android   # Android dev
-bun dev -c kabegame --data prod      # Dev against system data dirs (not repo-local data/)
-bun dev:frontend            # Frontend only (no Tauri, port 1420)
+deno task dev -c kabegame                  # Start dev server (Vite + Tauri, port 1420)
+deno task dev -c kabegame --mode local     # Dev with all plugins bundled locally
+deno task dev -c kabegame --mode android   # Android dev
+deno task dev -c kabegame --data prod      # Dev against system data dirs (not repo-local data/)
+deno task dev:frontend            # Frontend only (no Tauri, port 1420)
 ```
 
 ### Build
 ```bash
-bun b                            # Build everything (kabegame + kabegame-cli)
-bun b -c kabegame                    # Build main app only
-bun b -c kabegame --skip cargo       # Vue build only
-bun b -c kabegame --skip vue         # Cargo build only
-bun b --release                  # Copy artifacts to release/
-bun b -c kabegame --mode android     # Build Android APK/AAB
+deno task b                            # Build everything (kabegame + kabegame-cli)
+deno task b -c kabegame                    # Build main app only
+deno task b -c kabegame --skip cargo       # Vue build only
+deno task b -c kabegame --skip vue         # Cargo build only
+deno task b --release                  # Copy artifacts to release/
+deno task b -c kabegame --mode android     # Build Android APK/AAB
 ```
 
 ### Type Checking
 ```bash
-bun check -c kabegame                # Check Vue types + Cargo
-bun check -c kabegame --skip cargo   # Vue types only
+deno task check -c kabegame                # Check Vue types + Cargo
+deno task check -c kabegame --skip cargo   # Vue types only
 ```
 
 ### Data directory modes (`--data`)
-- `dev` (default for `bun dev`): repo-local `data/` and `cache/` dirs — isolated from installed app
+- `dev` (default for `deno task dev`): repo-local `data/` and `cache/` dirs — isolated from installed app
 - `prod` (default for all other commands): system user data dirs (`%LOCALAPPDATA%\Kabegame` on Windows, `~/.local/share/Kabegame` on Linux/macOS)
 - Use `--data prod` during dev to test against real installed data; use `--data dev` in a release build for CI/testing isolation
 - Controlled via `kabegame_data` Rust cfg injected by `src-tauri/{kabegame-core,kabegame}/build.rs`
@@ -104,8 +104,8 @@ New styles should use **UnoCSS utility classes** (configured in `uno.config.pub.
 ### Crawler Plugin Development
 Plugins are JS/TS scripts (V8 backend, self-contained ES module `export async function crawl`) packaged as `.kgpg` ZIP archives. See `docs/PLUGIN_FORMAT.md` and `cocs/crawler/V8_RUNTIME.md`. Build with:
 ```bash
-cd src-crawler-plugins && bun package        # Package all plugins
-bun generate-index                           # Regenerate plugin store index
+deno task --cwd src-crawler-plugins package         # Package all plugins
+deno task --cwd src-crawler-plugins generate-index  # Regenerate plugin store index
 ```
 
 ### Others

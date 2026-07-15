@@ -8,7 +8,7 @@ export const IS_LIGHT_MODE = __LIGHT_MODE__;
 
 /**
  * 应用版本号。由 `apps/kabegame/.env` 的 `VITE_APP_VERSION` 编译期注入，
- * 通过 `bun run set-version` 与 Cargo.toml 同步；所有平台（含 web）一致。
+ * 通过 `deno task set-version` 与 Cargo.toml 同步；所有平台（含 web）一致。
  */
 export const APP_VERSION: string | null =
   (import.meta.env.VITE_APP_VERSION as string | undefined)?.trim() || null;

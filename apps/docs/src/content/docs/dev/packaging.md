@@ -10,7 +10,7 @@ description: 把 Rhai 插件打成 .kgpg 并发布到商店或自建源的完整
 在运行任何打包命令之前，确保以下工具就位：
 
 - **Bun**：仓库统一使用 `bun` 运行脚本，不支持 `pnpm` / `npm` 的旧命令。
-- **已构建的 `kabegame-cli`**：`bun package` 实际调用 `target/release/kabegame-cli(.exe)` 来写 `.kgpg` 固定头部，**不是**纯 JS 打包。若缺失会报错「找不到 cli … 请在 kabegame 父仓库构建 cli 工具！」。
+- **已构建的 `kabegame-cli`**：`deno task package` 实际调用 `target/release/kabegame-cli(.exe)` 来写 `.kgpg` 固定头部，**不是**纯 JS 打包。若缺失会报错「找不到 cli … 请在 kabegame 父仓库构建 cli 工具！」。
 
   第一次克隆仓库后，至少执行一次：
 
@@ -19,7 +19,7 @@ description: 把 Rhai 插件打成 .kgpg 并发布到商店或自建源的完整
   ```
 
 :::caution
-`src-crawler-plugins/` 是一个 submodule；如果你直接 clone 了插件仓库，需要回到 Kabegame 主仓构建 CLI，否则 `bun package` 无法运行。
+`src-crawler-plugins/` 是一个 submodule；如果你直接 clone 了插件仓库，需要回到 Kabegame 主仓构建 CLI，否则 `deno task package` 无法运行。
 :::
 
 ## 本地测试
@@ -27,7 +27,7 @@ description: 把 Rhai 插件打成 .kgpg 并发布到商店或自建源的完整
 打包之前先在真机跑一遍。推荐的迭代流程：
 
 ```bash
-bun dev -c kabegame --mode local
+deno task dev -c kabegame --mode local
 ```
 
 `--mode local` 会在 dev 启动时自动把 `src-crawler-plugins/plugins/*` 打到仓库根的 `data/plugins-directory/`，应用启动即加载。这条路径只在 dev 下生效，`build` / `start` 不会触发。
@@ -35,23 +35,23 @@ bun dev -c kabegame --mode local
 如果你只改了某个插件，用 `--only` 加速：
 
 ```bash
-bun package-plugin.ts --only konachan danbooru --out-dir ../data/plugins-directory
+deno task package --only konachan danbooru --out-dir ../data/plugins-directory
 ```
 
 也可以逗号分隔：`--only konachan,danbooru`。
 
 :::caution
-`--only` 会清理 `packed/` 中**未列出**的 `.kgpg` 文件以防旧版本残留。**不要**在正式发布流程里用 `--only`，否则 `bun generate-index` 产出的 `index.json` 只包含子集。
+`--only` 会清理 `packed/` 中**未列出**的 `.kgpg` 文件以防旧版本残留。**不要**在正式发布流程里用 `--only`，否则 `deno task generate-index` 产出的 `index.json` 只包含子集。
 :::
 
-## `bun package`
+## `deno task package`
 
 全量打包命令：
 
 ```bash
-bun package                       # 打包所有插件
-bun package <plugin-id>            # 只打单个
-bun package --only <id1> <id2>     # 多选
+deno task package                       # 打包所有插件
+deno task package <plugin-id>            # 只打单个
+deno task package --only <id1> <id2>     # 多选
 ```
 
 ### 输入文件
@@ -77,10 +77,10 @@ bun package --only <id1> <id2>     # 多选
 
 格式遵循 KGPG v2（固定头部 + ZIP）。头部里已内嵌 icon，`index.json` 不再需要 `iconUrl`，旧的 `<id>.icon.png` 会被打包流程主动清理。详见 [插件格式（.kgpg）](/dev/format/)。
 
-## `bun generate-index`
+## `deno task generate-index`
 
 ```bash
-bun generate-index
+deno task generate-index
 ```
 
 读取 `packed/*.kgpg` + 每个插件的 `manifest.json` + 仓库根 `package.json` 的 `version`，产出 `packed/index.json`。这个文件就是商店前端拉取的清单，每一项包含：
@@ -107,10 +107,10 @@ bun generate-index
 ### 一键打包 + 索引
 
 ```bash
-bun release
+deno task release
 ```
 
-等价于 `bun package && bun generate-index`。
+等价于 `deno task package && deno task generate-index`。
 
 ## 发布
 
@@ -179,7 +179,7 @@ https://github.com/kabegame/crawler-plugins/releases/latest/download/index.json
 
 ## 排障
 
-**现象** `bun package` 报「找不到 cli … 请在 kabegame 父仓库构建 cli 工具！」  
+**现象** `deno task package` 报「找不到 cli … 请在 kabegame 父仓库构建 cli 工具！」  
 **原因** 缺少 `target/release/kabegame-cli(.exe)`。  
 **操作** 在主仓执行 `cargo build --release -p kabegame-cli`。
 

@@ -1,14 +1,13 @@
-import { BasePlugin } from "./base-plugin";
-import { BuildSystem, SRC_FE_DIR, SRC_TAURI_DIR } from "../build-system";
+import { BasePlugin } from "./base-plugin.ts";
+import { BuildSystem, SRC_FE_DIR, SRC_TAURI_DIR } from "../build-system.ts";
 import * as path from "path";
 import {
   ROOT,
   RESOURCES_DIR,
   TARGET_DIR,
-  stageResourceBinary,
   run,
-} from "../utils";
-import { OSPlugin } from "./os-plugin";
+} from "../utils.ts";
+import { OSPlugin } from "./os-plugin.ts";
 import {
   readdirSync,
   statSync,
@@ -107,7 +106,7 @@ export class ComponentPlugin extends BasePlugin {
       const comp = new Component(component);
       if (bs.context.cmd!.isDev && comp.isCli) {
         throw new Error(
-          `当前 dev 不支持 ${comp.comp}！请用 bun b 构建后用 bun start 测试运行`,
+          `当前 dev 不支持 ${comp.comp}！请用 deno task b 构建后用 deno task start 测试运行`,
         );
       }
       this.component = comp;
@@ -255,15 +254,22 @@ export class ComponentPlugin extends BasePlugin {
       }
     });
 
-    // dev/build 的桌面端 kabegame 在主程序编译前先产出 CEF helper。
+    // 桌面端 CEF helper 的编译方式:
+    //   - build(三平台):由 tauri.conf.json 顶层 `bins`(fork patch 0009,
+    //     见 cocs/tauri/TAURI_CLI_FORK.md)驱动,`tauri build` 把清单逐个
+    //     `--bin` 传给 cargo,helper 随主编译一并产出;Windows 由 NSIS 原生
+    //     装到安装根,macOS/Linux 走 bundle files 映射,均无需预构建/stage。
+    //   - dev:tauri dev 走 `cargo run`(单一运行目标),无法在同一调用里
+    //     多编一个 bin,保留主程序编译前的裸 cargo 预构建。
     // start 不触发 beforeBuild，仍使用已有产物。
     bs.hooks.beforeBuild.tap(`${this.name}:build-kabegame-cef-helper`, (comp?: string) => {
       const component = comp ? new Component(comp) : this.component!;
       if (!component.isMain) return;
       if (bs.context.mode?.isAndroid || bs.context.mode?.isWeb) return;
       if (bs.context.skip?.isCargo) return;
+      // build:helper 由 tauri build 按顶层 bins 配置一并编译,无需预构建
+      if (bs.context.cmd?.isBuild) return;
 
-      const release = !!bs.context.cmd?.isBuild;
       const args = [
         "build",
         "-p",
@@ -272,20 +278,10 @@ export class ComponentPlugin extends BasePlugin {
         "kabegame-cef-helper",
         "--features",
         "standard",
-        ...(release ? ["--release"] : []),
       ];
-      // helper 走裸 cargo build(不经 cargo tauri),tauri-build 只在
-      // STATIC_VCRUNTIME=true 时才静态链接 vcruntime。主 exe 由 cargo tauri
-      // 设了这个 env,helper 没有 → 干净 Windows(无 VC++ 运行库)上启动报
-      // 找不到 VCRUNTIME140.dll。这里手动补上,让 build.rs 的 tauri_build::try_build
-      // 触发 static_vcruntime(其 rustc-link-arg 覆盖本包所有 bin,含 helper)。
-      const helperEnv = OSPlugin.isWindows
-        ? { ...process.env, STATIC_VCRUNTIME: "true" }
-        : process.env;
-      run("cargo", args, { cwd: SRC_TAURI_DIR, env: helperEnv });
-      if (release && OSPlugin.isWindows) {
-        stageResourceBinary("kabegame-cef-helper");
-      }
+      // Windows 的静态 vcruntime 由 fork 的 tauri-build 恒定开启(patch 0010,
+      // 不再读 STATIC_VCRUNTIME env),裸 cargo build 无需注入任何环境变量。
+      run("cargo", args, { cwd: SRC_TAURI_DIR });
     });
 
     if (bs.context.cmd!.isBuild) {

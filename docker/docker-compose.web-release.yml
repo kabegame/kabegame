@@ -3,6 +3,11 @@
 # 用法：
 #   docker compose -f docker/docker-compose.web-release.yml run --rm build
 #
+# 源码树 bind-mount 到 /src（不烘焙进镜像）；构建产物落 CARGO_TARGET_DIR=/src/target-web
+# （即宿主机仓库根下的 target-web/，与 target/、target-22/ 隔离，跨 run 增量复用）。
+# 首次 run 会自编 deno（build-deno.sh，纯 bash，almalinux8 glibc 2.28 跑不了官方二进制），
+# 之后增量近似 no-op。
+#
 # 产物路径（宿主机）：dist-web/kabegame
 # 部署到服务器：
 #   rsync -avz dist-web/kabegame cmtheit.com:/home/cmtheit/kabegame/kabegame
@@ -17,15 +22,21 @@ services:
     stdin_open: true
     tty: false
     volumes:
+      # 整个仓库树 bind-mount 到 /src（含 third/ 子模块，需在宿主先 submodule update）。
+      # node_modules 隔离由自编 deno 的 0004 补丁承担（Dockerfile 里
+      # DENO_NODE_MODULES_SUFFIX=-web）：deno 在真实 IO 边界把 node_modules 重定向到
+      # node_modules-web（进程内 bind-mount），无需 volume 覆盖；node_modules-web 由
+      # 容器内带该变量的 `deno install` 生成（嵌套目录物理带后缀，不能从宿主树复制）。
+      - ..:/src
       - ../dist-web:/dist
     command:
       - bash
       - -lc
       - >-
-        bun install --frozen-lockfile
+        bash scripts/build-deno.sh
+        && deno install --frozen
         && bash ./scripts/build-ffmpeg.sh
-        && bun b -c kabegame --mode web --no-nx
+        && deno task b -c kabegame --mode web
         && mkdir -p /dist
-        && cp target/release/kabegame /dist/kabegame
+        && cp target-web/release/kabegame /dist/kabegame
         && echo "✓ 产物已写入 /dist/kabegame"
-

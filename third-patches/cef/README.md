@@ -12,15 +12,12 @@
 Apply this series manually before running CEF's `patcher.py`:
 
 ```bash
-bun run patch cef
+deno task patch cef
 ```
-
-Use `bun run patch`, not `bun patch`: Bun 1.3 provides its own unrelated
-dependency-patching subcommand under the latter name.
 
 ## Re-vendor
 
-1. Run `bun run patch cef -r` to restore the clean vendor tree.
+1. Run `deno task patch cef -r` to restore the clean vendor tree.
 2. Update `third/cef` to the desired commit from the upstream repository.
 3. Apply each patch with `git apply --check`, repairing context drift as needed.
 4. Regenerate the numbered patch files against the new vendor base and update this README.

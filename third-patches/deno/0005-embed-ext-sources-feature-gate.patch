@@ -1,0 +1,100 @@
+diff --git a/libs/core/Cargo.toml b/libs/core/Cargo.toml
+index bbb953d..833e575 100644
+--- a/libs/core/Cargo.toml
++++ b/libs/core/Cargo.toml
+@@ -24,6 +24,10 @@ unsafe_runtime_options = []
+ unsafe_use_unprotected_platform = []
+ snapshot_flags_eager_parse = []
+ uv_compat_export = []
++# kabegame patch: embed extension JS sources via include_str! (snapshotless
++# runtimes / cross-compilation). Must stay OFF for the in-tree deno CLI build —
++# see __extension_include_js_files_detect! in extensions.rs.
++embed_ext_sources = []
+ 
+ [dependencies]
+ anyhow.workspace = true
+diff --git a/libs/core/extensions.rs b/libs/core/extensions.rs
+index 1f07dca..24ad8b0 100644
+--- a/libs/core/extensions.rs
++++ b/libs/core/extensions.rs
+@@ -937,11 +937,13 @@ macro_rules! include_js_files {
+ ///
+ /// See [`include_js_files!`] for details on available options.
+ ///
+-/// kabegame patch: `mode=included` (embed via `include_str!`) rather than
+-/// upstream `mode=loaded` (record an absolute build-time path). Same rationale
+-/// as [`__extension_include_js_files_detect!`] — lazy sources such as
+-/// `deno_crypto`'s `00_crypto.js` are `load()`ed from disk at runtime under the
+-/// snapshotless runtime, which ENOENTs on a cross-compiled Android device.
++/// kabegame patch: mode now follows the `embed_ext_sources` cargo feature via
++/// [`__extension_include_js_files_detect!`] — see that macro for the rationale.
++/// Lazy sources such as `deno_crypto`'s `00_crypto.js` are `load()`ed from disk
++/// at runtime under kabegame's snapshotless runtime, which ENOENTs on a
++/// cross-compiled Android device, so kabegame builds embed them; the deno CLI
++/// keeps upstream `mode=loaded` (its lazy TS sources must go through the
++/// snapshot build's transpile step — embedding raw `.ts` breaks `node:*`).
+ #[macro_export]
+ macro_rules! include_lazy_loaded_js_files {
+   ($name:ident $( dir $dir:literal, )? $(
+@@ -949,7 +951,7 @@ macro_rules! include_lazy_loaded_js_files {
+     $(with_specifier $s2:literal)?
+     $(= $config:tt)?
+   ),* $(,)?) => {
+-    $crate::__extension_include_js_files_inner!(mode=included, name=$name, dir=$crate::__extension_root_dir!($($dir)?), $([
++    $crate::__extension_include_js_files_detect!(name=$name, dir=$crate::__extension_root_dir!($($dir)?), $([
+       // These entries will be parsed in __extension_include_js_files_inner
+       $s1 $(with_specifier $s2)? $(= $config)?
+     ]),*)
+@@ -973,7 +975,8 @@ macro_rules! include_js_files_doctest {
+ 
+ /// kabegame patch: embed extension source bytes into the binary via
+ /// `include_str!` (`mode=included`) instead of recording an absolute build-time
+-/// path read from disk at runtime (`mode=loaded`).
++/// path read from disk at runtime (`mode=loaded`) — gated behind the
++/// `embed_ext_sources` cargo feature.
+ ///
+ /// Upstream deno_core defaults to `mode=loaded`: every `esm`/`js` source is a
+ /// `LoadedFromFsDuringSnapshot(<abs build path>)`, expecting a V8 startup
+@@ -989,18 +992,37 @@ macro_rules! include_js_files_doctest {
+ /// "Failed to initialize a JsRuntime: No such file or directory (os error 2)".
+ ///
+ /// Because `[patch.crates-io] deno_core` routes `deno_web`/`deno_crypto`/
+-/// `deno_webidl`'s `extension!` expansion through this crate too, flipping the
+-/// default to `included` embeds all of their sources (and kabegame_v8's) at
+-/// their own compile time — no runtime disk access, and desktop release builds
+-/// stop depending on the build tree being present. This matches deno_core's
++/// `deno_webidl`'s `extension!` expansion through this crate too, the
++/// `embed_ext_sources` feature (enabled by kabegame-core's `deno_core`
++/// dependency) embeds all of their sources (and kabegame_v8's) at their own
++/// compile time — no runtime disk access, and desktop release builds stop
++/// depending on the build tree being present. This matches deno_core's
+ /// pre-refactor `#[cfg(not(feature = "include_js_files_for_snapshotting"))]`
+-/// default. kabegame never builds a snapshot, so unconditional embedding is safe.
++/// default. kabegame never builds a snapshot, so embedding is safe there.
++///
++/// The feature must stay OFF for the deno CLI built from this monorepo
++/// (`cargo build -p deno`): its extension sources include TypeScript
++/// (`ext/node`'s `node:*` polyfills) that upstream transpiles during the
++/// snapshot build. Embedding the raw `.ts` bytes bypasses that transpile and
++/// V8 throws `SyntaxError: Unexpected identifier` the moment `node:url`/
++/// `node:console` load. Feature off → upstream `mode=loaded` behavior.
+ #[doc(hidden)]
++#[cfg(feature = "embed_ext_sources")]
+ #[macro_export]
+ macro_rules! __extension_include_js_files_detect {
+   ($($rest:tt)*) => { $crate::__extension_include_js_files_inner!(mode=included, $($rest)*) };
+ }
+ 
++/// Upstream behavior (`mode=loaded`) when `embed_ext_sources` is off — used by
++/// the deno CLI build. See the feature-gated twin above for the kabegame patch
++/// rationale.
++#[doc(hidden)]
++#[cfg(not(feature = "embed_ext_sources"))]
++#[macro_export]
++macro_rules! __extension_include_js_files_detect {
++  ($($rest:tt)*) => { $crate::__extension_include_js_files_inner!(mode=loaded, $($rest)*) };
++}
++
+ /// This is the core of the [`include_js_files!`] and [`include_lazy_loaded_js_files`] macros. The first
+ /// rule is the entry point that receives a list of unparsed file entries. Each entry is extracted and
+ /// then parsed with the `@parse_item` rules.

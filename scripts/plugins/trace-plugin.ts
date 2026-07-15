@@ -1,4 +1,4 @@
-import { BasePlugin } from "./base-plugin.js";
+import { BasePlugin } from "./base-plugin.ts";
 
 
 export class TracePlugin extends BasePlugin {

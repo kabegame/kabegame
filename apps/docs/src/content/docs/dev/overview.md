@@ -192,10 +192,10 @@ for src in image_urls {
 ### 2. 启动开发服务
 
 ```bash
-bun dev -c kabegame
+deno task dev -c kabegame
 ```
 
-这条命令本身就会触发插件打包：构建系统在每次 `bun dev -c kabegame` 启动时自动运行 `nx run crawler-plugins:package-to-dev-data`，把 `src-crawler-plugins/plugins/` 下的**每一个**插件打成 `.kgpg`，输出到 `<repo>/data/plugins-directory/`。应用启动时从该目录加载，你的插件会立刻出现在源列表里。
+这条命令本身就会触发插件打包：构建系统在每次 `deno task dev -c kabegame` 启动时自动运行 `deno task --cwd src-crawler-plugins package --out-dir 目标目录`，把 `src-crawler-plugins/plugins/` 下的**每一个**插件打成 `.kgpg`，输出到 `<repo>/data/plugins-directory/`。应用启动时从该目录加载，你的插件会立刻出现在源列表里。
 
 :::note
 `--mode local` 是另一回事：它是 Rust 侧的构建开关，用于把所有插件**内嵌进发行版的二进制**，与开发循环无关。不加 `--mode local` 照样会打包插件到 `data/plugins-directory/`。
@@ -203,7 +203,7 @@ bun dev -c kabegame
 
 ### 3. 修改 → 重启
 
-改完脚本或配置后**重启 `bun dev`**，仓库目录中的最新版本会被重新打包并加载。
+改完脚本或配置后**重启 `deno task dev`**，仓库目录中的最新版本会被重新打包并加载。
 
 :::caution
 开发数据目录模式由 `--data` 控制，默认是 `dev`（使用仓库内 `data/`）。如果你传 `--data prod`（系统数据目录）测试已安装版本，请确认插件也放到了对应的系统目录下，否则它们不会出现。
@@ -214,17 +214,17 @@ bun dev -c kabegame
 当你要把插件交付出去时，进入 `src-crawler-plugins/` 目录执行：
 
 ```bash
-bun package                    # 打包全部插件到 packed/<id>.kgpg
-bun package <插件名>           # 只打一个
-bun package --only <a> <b>     # 打指定子集
-bun package --out-dir <path>   # 改变输出目录
+deno task package                    # 打包全部插件到 packed/<id>.kgpg
+deno task package <插件名>           # 只打一个
+deno task package --only <a> <b>     # 打指定子集
+deno task package --out-dir <path>   # 改变输出目录
 ```
 
-打包依赖编译好的 `kabegame-cli`（由主仓库的 `bun dev -c kabegame` 或 `bun b` 自动构建）。若你自建插件商店，还需要生成索引：
+打包依赖编译好的 `kabegame-cli`（由主仓库的 `deno task dev -c kabegame` 或 `deno task b` 自动构建）。若你自建插件商店，还需要生成索引：
 
 ```bash
-bun generate-index             # 读取 packed/*.kgpg，写出 packed/index.json
-bun release                    # 等价于 bun package && bun generate-index
+deno task generate-index             # 读取 packed/*.kgpg，写出 packed/index.json
+deno task release                    # 等价于 deno task package && deno task generate-index
 ```
 
 单独发布一个插件时可以跳过索引，直接分发 `.kgpg` 文件；用户在「源管理」页面拖入或「导入源」即可安装。详细格式与发布约定见 [插件格式](/dev/format/)。

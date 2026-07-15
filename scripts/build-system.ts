@@ -10,18 +10,19 @@ import chalk from "chalk";
 import path from "path";
 import { existsSync } from "fs";
 import { fileURLToPath } from "url";
-import { Component, ComponentPlugin } from "./plugins/component-plugin.js";
-import { Mode, ModePlugin } from "./plugins/mode-plugin.js";
-import { TracePlugin } from "./plugins/trace-plugin.js";
+import { Component, ComponentPlugin } from "./plugins/component-plugin.ts";
+import { Mode, ModePlugin } from "./plugins/mode-plugin.ts";
+import { TracePlugin } from "./plugins/trace-plugin.ts";
 import { Cmd, CmdPlugin } from "./plugins/cmd-plugin.ts";
-import { OSPlugin } from "./plugins/os-plugin.js";
+import { OSPlugin } from "./plugins/os-plugin.ts";
 import { SyncWaterfallHook } from "tapable";
-import { run, TARGET_DIR } from "./utils.js";
+import { run, TARGET_DIR } from "./utils.ts";
 import { BasePlugin } from "./plugins/base-plugin.ts";
-import { Skip, SkipPlugin } from "./plugins/skip-plugin.js";
-import { ReleasePlugin } from "./plugins/release-plugin.js";
-import { DataPlugin } from "./plugins/data-plugin.js";
-import { TauriCliPlugin } from "./plugins/tauri-cli-plugin.js";
+import { Skip, SkipPlugin } from "./plugins/skip-plugin.ts";
+import { ReleasePlugin } from "./plugins/release-plugin.ts";
+import { DataPlugin } from "./plugins/data-plugin.ts";
+import { TauriCliPlugin } from "./plugins/tauri-cli-plugin.ts";
+import { DenoCliPlugin } from "./plugins/deno-cli-plugin.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,8 +58,6 @@ interface BuildOptions {
   args?: string[];
   package?: string;
   test?: string;
-  /** false 表示 --no-nx：不经 nx 构建 kabegame 前端 */
-  nx?: boolean;
 }
 
 interface BuildContext {
@@ -196,6 +195,9 @@ export class BuildSystem {
 
     // fork 的 cargo-tauri(third/tauri/crates/tauri-cli):PATH 前置 + dev/build 前确保构建
     this.use(new TauriCliPlugin());
+
+    // 树内自编 deno CLI(third/deno):dev/build 前增量刷新,与 tauri-cli 同款管理
+    this.use(new DenoCliPlugin());
   }
 
   commonBefore(): void {
@@ -228,7 +230,7 @@ export class BuildSystem {
       // Vite 后台运行，cargo 前台运行；cargo 退出时杀掉 Vite
       const feDir = this.context.component!.appFeDir;
       console.log(chalk.cyan("[web dev] Starting Vite dev server on 1420..."));
-      const viteProc = spawn("bun", ["run", "dev"], {
+      const viteProc = spawn("deno", ["task", "dev"], {
         cwd: feDir,
         stdio: "inherit",
         env: process.env,
@@ -274,13 +276,10 @@ export class BuildSystem {
     const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call();
     // 先构建前端资源
     if (this.context.component?.isMain) {
-      if (this.options.nx === false) {
-        run("bun", ["-b", "--cwd", this.context.component!.appFeDir, "build"], {});
-      } else {
-        run("nx", ["run", `.:build-${this.context.component!.comp}`], {
-          bin: "bun",
-        });
-      }
+      run("build", [], {
+        bin: "deno-task",
+        cwd: this.context.component!.appFeDir,
+      });
     }
     const buildArgs = this.buildCargoArgs(
       [
@@ -350,13 +349,10 @@ export class BuildSystem {
       const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.MAIN);
       const cwd = Component.appDir(Component.MAIN);
       if (!this.context.skip?.isVue) {
-        if (this.options.nx === false) {
-          run("bun", ["-b", "--cwd", "apps/kabegame", "build"], {});
-        } else {
-          run("nx", ["run", ".:build-kabegame"], {
-            bin: "bun",
-          });
-        }
+        run("build", [], {
+          bin: "deno-task",
+          cwd: this.context.component!.appFeDir,
+        });
       }
       if (!this.context.skip?.isCargo) {
         if (this.context.mode!.isAndroid) {
@@ -372,7 +368,7 @@ export class BuildSystem {
           if (!existsSync(distMain)) {
             throw new Error(
               `[web build] dist-kabegame/ not found at ${distMain}.\n` +
-              `Run Vue build first: bun b -c kabegame --mode web --skip cargo`,
+              `Run Vue build first: deno task b -c kabegame --mode web --skip cargo`,
             );
           }
           const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
@@ -405,7 +401,7 @@ export class BuildSystem {
 
     if (!this.context.skip?.isVue) {
       run("vue-tsc", [], {
-        bin: "bun",
+        bin: "deno-task",
         cwd: this.context.component!.appFeDir,
       });
     }

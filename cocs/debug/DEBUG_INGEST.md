@@ -53,7 +53,7 @@ curl http://127.0.0.1:1420/__kabegame_debug/health
 
 返回 debug 日志目录。
 
-Android 真机/模拟器不能用 `127.0.0.1` 访问开发机；这里应使用构建脚本生成 Tauri `devUrl` 时同一个 host。`bun dev -c kabegame --mode android` 会通过 `KABEGAME_DEV_SERVER_HOST` 把这个 host 注入给 Rust。
+Android 真机/模拟器不能用 `127.0.0.1` 访问开发机；这里应使用构建脚本生成 Tauri `devUrl` 时同一个 host。`deno task dev -c kabegame --mode android` 会通过 `KABEGAME_DEV_SERVER_HOST` 把这个 host 注入给 Rust。
 
 ### 写入单个事件
 
@@ -204,7 +204,7 @@ KABEGAME_DEBUG_TEE_CONSOLE=true
 
 1. 选择一个短 session id，例如 `preview-debug-001`。
 2. 在可疑前端路径和 Rust 路径插入 `sendDebugEvent` / `spawn_debug_event`。
-3. 启动 `bun dev -c kabegame`。
+3. 启动 `deno task dev -c kabegame`。
 4. 复现问题。
 5. 读取 `.kabegame/debug/debug-preview-debug-001.ndjson`。
 6. 根据日志修复问题。

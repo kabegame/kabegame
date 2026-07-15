@@ -36,6 +36,7 @@ Windows/Linux 使用 `Ctrl+Shift+D`。
 | 页面生命周期 | `LoadHandler` 映射到 Tauri page-load hook |
 | Cookie API | CEF 全局 `CookieManager` 映射到 Tauri `cookies_for_url` / `cookies` / `set_cookie` / `delete_cookie` |
 | 窗口事件 | CEF `WindowDelegate` 回流为 Tauri runtime events |
+| Linux 窗口身份 | CEF Views 默认不设 X11 `WM_CLASS` / Wayland app_id，桌面环境无法把窗口关联到 `.desktop`（任务栏双条目、StartupNotify 转圈超时）；`WindowDelegate::get_linux_window_properties` 显式提供（优先 `RuntimeInitArgs::app_id`，回退可执行文件名），deb 模板 `StartupWMClass={{exec}}` 与之匹配 |
 | Raw window handle | Linux 返回 Xlib window，Windows 返回 Win32 HWND（+HINSTANCE）；macOS CEF Views 暂不暴露 NSView，返回 unavailable |
 
 ## 平台门控
@@ -71,9 +72,9 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
   zygote，`no-zygote` 开关仅 Linux 追加。
 - cookies/localStorage 落 `%LOCALAPPDATA%\kabegame-cef`（Linux 为 XDG cache）。
   **dev 与安装态目录必须分开**：CEF 是 Chrome runtime，`cef_initialize` 会在该目录建
-  Chrome profile 并注册进程级 ProcessSingleton（单实例锁）。若 `bun dev` 与已安装正式版
+  Chrome profile 并注册进程级 ProcessSingleton（单实例锁）。若 `deno task dev` 与已安装正式版
   共用目录，后启动者会命中对方 singleton → `Opening in existing browser session.` →
-  `cef_initialize` 返回 false → panic。故按构建 profile 隔离：debug（`bun dev`）用
+  `cef_initialize` 返回 false → panic。故按构建 profile 隔离：debug（`deno task dev`）用
   `kabegame-cef-dev`，release（安装态）用 `kabegame-cef`（见 `cef_cache_dir_name`）。
 - **前端/asset scheme 与 Linux 不同**：Windows/Android 上 Tauri core 用 `http://<scheme>.localhost`
   提供自定义 scheme 资源（`tauri_protocol_url` / `window_origin` 改写，默认 `http`，
@@ -142,7 +143,7 @@ cef-rs `wrap_window_delegate!` 的宏默认值坑(未实现的方法一律返回
 
 - **Linux**：`bin/linux/` 收集 `libcef.so` + 资源 + locales 白名单，注入 deb 到 `/usr/lib/kabegame/`（见 `cocs/build/PLATFORM_SHARED_LIBS.md`）。
 - **Windows**：`scripts/plugins/os-plugin.ts` 的 `collectWindowsCefRuntime()` 把 `WINDOWS_CEF_RUNTIME_FILES` + locales 白名单收进 `src-tauri/kabegame/resources/cef/`，随 `resources/**/*` 进 NSIS 安装包；`nsis/installer-hooks.nsh` 的 POSTINSTALL 再把它们搬到 `$INSTDIR`（exe 同目录）与 `$INSTDIR\locales\`。
-- **macOS dev**：`bun dev -c kabegame` 的 ComponentPlugin `beforeBuild` 先构建 `kabegame-cef-helper`，再直接运行裸 `target/debug/kabegame`。CEF framework 经 `target/Frameworks` 符号链接由 dyld 解析，helper 在同目录。
+- **macOS dev**：`deno task dev -c kabegame` 的 ComponentPlugin `beforeBuild` 先构建 `kabegame-cef-helper`，再直接运行裸 `target/debug/kabegame`。CEF framework 经 `target/Frameworks` 符号链接由 dyld 解析，helper 在同目录。
 - **macOS release**：Tauri 在打 dmg 前通过原生 `macOS.frameworks` 注入 CEF framework 到 `Contents/Frameworks/`，`macOS.files` 把单一扁平 `kabegame-cef-helper` 放进 `Contents/MacOS/`；扁平 helper 依赖含 `kabegame_flat_subprocess_path` patch 的 CEF 构建。
 
 ## CEF 依赖与 patch(`third/cef-rs`、`third/cef`)
@@ -171,13 +172,13 @@ checkout 的 origin 校正到该引用、同步当前提交，并由 CEF 标准 
 
 ```bash
 git submodule update --init third/cef
-bun run patch cef
+deno task patch cef
 scripts/build-chromium.sh dev
 scripts/build-chromium.sh prod
 ```
 
 升级 CEF 大版本时：cef-rs fork 从新的 `cef-dll-sys-v<ver>` tag 重建分支并
-cherry-pick 直链 commit；CEF 源码先以 `bun run patch cef -r` 还原，再 bump 官方上游
+cherry-pick 直链 commit；CEF 源码先以 `deno task patch cef -r` 还原，再 bump 官方上游
 pin，最后按 `third-patches/cef/README.md` 修复并重新生成 patch series。
 
 ## 当前限制

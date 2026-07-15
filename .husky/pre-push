@@ -1,1 +1,1 @@
-node src-crawler-plugins/scripts/git/ensure-tag.mjs
+deno run -A src-crawler-plugins/scripts/git/ensure-tag.mjs

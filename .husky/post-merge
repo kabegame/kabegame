@@ -1,0 +1,25 @@
+# 拉取/合并后自动重同步 third/ 子模块的 patch 系列:
+# 若本次合并给 third-patches/<dir>/ 追加了新 patch(系列是追加式的,已入库
+# patch 不改不删,见 .cursor/rules/third-patches-append-only.mdc),对每个
+# 受影响目录执行 `deno task patch <dir> --from <最小新增编号>`——先回滚已
+# 应用的旧前缀,再全量正向套用到系列末尾。失败只告警,不阻断合并。
+command -v deno >/dev/null 2>&1 || exit 0
+
+# 追加式原则告警:合并如果修改/删除了已入库的 patch 文件,提示人工处理
+violated=$(git diff --name-only --diff-filter=MD ORIG_HEAD HEAD -- 'third-patches/*/*.patch' 2>/dev/null)
+if [ -n "$violated" ]; then
+  echo "[post-merge] ⚠ 检测到已入库 patch 被修改/删除(违反追加式原则),请手动重同步对应子模块:"
+  echo "$violated" | sed 's/^/[post-merge]   /'
+fi
+
+added=$(git diff --name-only --diff-filter=A ORIG_HEAD HEAD -- 'third-patches/*/*.patch' 2>/dev/null)
+[ -z "$added" ] && exit 0
+
+echo "$added" | awk -F/ '
+  { n = $3; sub(/-.*$/, "", n); if (!($2 in min) || n + 0 < min[$2]) min[$2] = n + 0 }
+  END { for (dir in min) print dir, min[dir] }
+' | while read -r dir from; do
+  echo "[post-merge] third-patches/$dir 新增 patch,重同步: deno task patch $dir --from $from"
+  deno task patch "$dir" --from "$from" ||
+    echo "[post-merge] ⚠ deno task patch $dir --from $from 失败,请手动处理"
+done

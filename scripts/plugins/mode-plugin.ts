@@ -1,9 +1,14 @@
-import { BasePlugin } from "./base-plugin";
-import { run, ROOT, THIRD_DIR } from "../utils";
-import { Component } from "./component-plugin";
+import { BasePlugin } from "./base-plugin.ts";
+import {
+  run,
+  ROOT,
+  FFMPEG_BUILD_DIR,
+  CRAWLER_PLUGINS_DIR,
+} from "../utils.ts";
+import { Component } from "./component-plugin.ts";
 import chalk from "chalk";
-import { BuildSystem } from "../build-system";
-import { OSPlugin } from "./os-plugin";
+import { BuildSystem } from "../build-system.ts";
+import { OSPlugin } from "./os-plugin.ts";
 import path from "path";
 import fs from "fs";
 import os from "os";
@@ -120,7 +125,7 @@ export class ModePlugin extends BasePlugin {
         this.setEnv("TAURI_ANDROID_PACKAGE", "app.kabegame");
         // rusty_v8 官方自 v0.102.0 起不再发布 aarch64-linux-android 预编译产物,
         // Android 交叉编译依赖自建产物(librusty_v8 静态库 + src_binding.rs),
-        // 存放在仓库根 bin/android/(gitignore、不入库,由 `bun run build:v8` 复现;不放 bin/linux/
+        // 存放在仓库根 bin/android/(gitignore、不入库,由 `deno task build:v8` 复现;不放 bin/linux/
         // ——那里是 os-plugin 构建期生成并整目录进 deb 的。见 cocs/crawler/V8_RUNTIME.md)。
         // 直接是 .a(bin/android 已 gitignore,无需 gzip);v8 build.rs 的 copy_archive 原样拷贝。
         const rustyV8Dir = path.join(ROOT, "bin", "android");
@@ -137,7 +142,7 @@ export class ModePlugin extends BasePlugin {
             [
               `rusty_v8 Android 自建产物缺失: ${path.relative(ROOT, rustyV8Dir)}/`,
               "在 x86_64 Linux 上一次性复现(产物 gitignore、不入库):",
-              "  bun run build:v8",
+              "  deno task build:v8",
               "见 third-patches/rusty_v8/README.md 与 cocs/crawler/V8_RUNTIME.md。",
             ].join("\n"),
           );
@@ -147,13 +152,12 @@ export class ModePlugin extends BasePlugin {
 
         // 进程内 FFmpeg(rsmpeg):Android 视频预览/维度/兼容副本改走交叉编译的 aarch64
         // FFmpeg,取代此前慢速的 Kotlin 编码 provider(见 cocs/downloader-tasks/VIDEO_INGEST.md)。
-        // 产物由 `bun run build:ffmpeg --target android` 生成到
+        // 产物由 `deno task build:ffmpeg --target android` 生成到
         // third/FFmpeg-build/android/aarch64/install/(gitignore,不入库,命令复现)。
         const androidArch = "aarch64";
         const androidApi = process.env.ANDROID_API || "24";
         const ffmpegAndroidInstall = path.join(
-          THIRD_DIR,
-          "FFmpeg-build",
+          FFMPEG_BUILD_DIR,
           "android",
           androidArch,
           "install",
@@ -171,7 +175,7 @@ export class ModePlugin extends BasePlugin {
               `Android FFmpeg 产物缺失: ${path.relative(ROOT, ffmpegAndroidInstall)}/`,
               "需要(装好 NDK 的 Linux/macOS 宿主上)先交叉编译一次:",
               "  git submodule update --init third/FFmpeg third/x264",
-              "  bun run build:ffmpeg --target android",
+              "  deno task build:ffmpeg --target android",
             ].join("\n"),
           );
         }
@@ -230,13 +234,14 @@ export class ModePlugin extends BasePlugin {
         // `cargo tauri android {dev,build,check}`,由 cargo-mobile2 的 NDK Env 从 NDK 推导
         // 并注入(三者同源、随 minSdk/NDK 版本自动正确)。见 cocs/tauri/TAURI_CLI_FORK.md。
       } else {
-        this.setEnv("FFMPEG_PKG_CONFIG_PATH", path.join(
-            THIRD_DIR,
-            "FFmpeg-build",
+        this.setEnv(
+          "FFMPEG_PKG_CONFIG_PATH",
+          path.join(
+            FFMPEG_BUILD_DIR,
             "install",
             "lib",
             "pkgconfig",
-          )
+          ),
         );
         // Linux 将 FFmpeg 与 x264 显式静态链接；该模式还会让
         // rusty_ffmpeg 完整解析 .pc 的传递依赖，避免复用旧的链接元数据。
@@ -316,18 +321,15 @@ export class ModePlugin extends BasePlugin {
         // windows: libs dir
         else if (OSPlugin.isWindows) {
           const ffmpegBinDir = path.join(
-            THIRD_DIR,
-            "FFmpeg-build",
+            FFMPEG_BUILD_DIR,
             "install",
             "bin",
           );
           this.setEnv("FFMPEG_LIBS_DIR", ffmpegBinDir);
-          this.setEnv("FFMPEG_INCLUDE_DIR", path.join(
-            THIRD_DIR,
-            "FFmpeg-build",
-            "install",
-            "include",
-          ));
+          this.setEnv(
+            "FFMPEG_INCLUDE_DIR",
+            path.join(FFMPEG_BUILD_DIR, "install", "include"),
+          );
           this.setEnv("FFMPEG_LINK_MODE", "dynamic");
           const pathPrefixes = [OSPlugin.binDir, ffmpegBinDir].filter((dir) => {
             return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
@@ -423,26 +425,28 @@ export class ModePlugin extends BasePlugin {
     if (comp.isMain && cmd.isDev) {
       this.log(
         chalk.blue(
-          "打包插件到开发 data 目录: crawler-plugins:package-to-dev-data",
+          "打包插件到开发 data 目录: deno task package --out-dir ../.kabegame/debug/data/plugins-directory",
         ),
       );
-      run("nx", ["run", "crawler-plugins:package-to-dev-data"], {
-        bin: "bun",
+      run("package", ["--out-dir", "../.kabegame/debug/data/plugins-directory"], {
+        bin: "deno-task",
+        cwd: CRAWLER_PLUGINS_DIR,
       });
     } else if (comp.isMain && cmd.isBuild && !this.mode!.isAndroid) {
       // 注意：本步骤在 tauri/cargo 编译 kabegame 主程序之前执行（build-system.ts
       // 的 beforeBuild hook 早于实际编译调用），因此依赖 kabegame-cli release
       // sidecar（target/release/kabegame-cli[.exe]）已提前构建好（package-plugin.ts
-      // 的 cliPackPlugin 通过它打包 .kgpg）。这是 package-to-dev-data 同样存在的
-      // 既有约束：CI 中 .github/workflows/release.yml 已保证先 `bun b -c kabegame-cli`
-      // 再 `bun b -c kabegame --release`；本地构建需遵循同样的顺序。
+      // 的 cliPackPlugin 通过它打包 .kgpg）。CI 中 .github/workflows/release.yml
+      // 已保证先 `deno task b -c kabegame-cli` 再 `deno task b -c kabegame --release`；
+      // 本地构建需遵循同样的顺序。
       this.log(
         chalk.blue(
-          "打包插件到安装包资源目录: crawler-plugins:package-to-resources",
+          "打包插件到安装包资源目录: deno task package --out-dir ../src-tauri/kabegame/resources/plugins",
         ),
       );
-      run("nx", ["run", "crawler-plugins:package-to-resources"], {
-        bin: "bun",
+      run("package", ["--out-dir", "../src-tauri/kabegame/resources/plugins"], {
+        bin: "deno-task",
+        cwd: CRAWLER_PLUGINS_DIR,
       });
     }
   }

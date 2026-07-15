@@ -11,4 +11,6 @@ Icon={{icon}}
 Terminal=false
 Categories=Graphics;Viewer;Utility;
 StartupNotify=true
+# 与 CEF 窗口的 WM_CLASS(可执行文件名)对应,任务栏据此把窗口和启动反馈归到本条目
+StartupWMClass={{exec}}
 Keywords=wallpaper;anime;image;gallery;

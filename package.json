@@ -9,20 +9,21 @@
     "src-tauri-plugins/tauri-plugin-share"
   ],
   "scripts": {
-    "dev": "bun scripts/run.ts dev",
-    "start": "bun scripts/run.ts start",
-    "b": "bun scripts/run.ts build",
-    "check": "bun scripts/run.ts check",
-    "test:media": "bun scripts/run.ts test -c kabegame --package kabegame-core --test probe_media",
-    "dev:frontend": "bun --cwd apps/kabegame dev",
-    "//": "以下命令为构建前端的命令，通过 bun b 调用不要直接调用因为没有设置相关环境变量",
-    "build-kabegame": "bun -b --cwd apps/kabegame build",
-    "set-version": "bun scripts/set-version.ts",
-    "patch": "bun scripts/patch-manager.ts",
-    "docs:dev": "bun --cwd apps/docs dev",
-    "docs:build": "bun --cwd apps/docs build",
+    "dev": "deno run -A scripts/run.ts dev",
+    "start": "deno run -A scripts/run.ts start",
+    "b": "deno run -A scripts/run.ts build",
+    "check": "deno run -A scripts/run.ts check",
+    "test:media": "deno run -A scripts/run.ts test -c kabegame --package kabegame-core --test probe_media",
+    "dev:frontend": "deno task --cwd apps/kabegame dev",
+    "//": "以下命令为构建前端的命令，通过 deno task b 调用不要直接调用因为没有设置相关环境变量",
+    "build-kabegame": "deno task --cwd apps/kabegame build",
+    "set-version": "deno run -A scripts/set-version.ts",
+    "patch": "deno run -A scripts/patch-manager.ts",
+    "docs:dev": "deno task --cwd apps/docs dev",
+    "docs:build": "deno task --cwd apps/docs build",
     "build:ffmpeg": "bash scripts/build-ffmpeg.sh",
     "build:v8": "bash scripts/build-v8.sh",
+    "build:deno": "bash scripts/build-deno.sh",
     "prepare": "husky"
   },
   "dependencies": {
@@ -43,9 +44,8 @@
     "winston": "^3.19.0"
   },
   "devDependencies": {
-    "@nx/devkit": "^20.0.0",
-    "@types/bun": "^1.3.6",
     "@types/lodash-es": "^4.17.12",
+    "@types/node": "^22.0.0",
     "@vitejs/plugin-vue": "^5.0.4",
     "@vue/tsconfig": "^0.5.1",
     "chalk": "^5.3.0",
@@ -53,7 +53,6 @@
     "glob": "^13.0.1",
     "handlebars": "^4.7.8",
     "husky": "^9.1.7",
-    "nx": "^20.0.0",
     "sass": "^1.97.1",
     "sharp": "^0.34.5",
     "tapable": "^2.3.0",
@@ -63,6 +62,6 @@
     "vue-tsc": "^2.0.6"
   },
   "engines": {
-    "bun": ">= 1.3.0"
+    "deno": ">=2.9.0"
   }
 }

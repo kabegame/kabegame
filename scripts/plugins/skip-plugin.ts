@@ -1,5 +1,5 @@
-import { BasePlugin } from "./base-plugin";
-import { BuildSystem } from "../build-system";
+import { BasePlugin } from "./base-plugin.ts";
+import { BuildSystem } from "../build-system.ts";
 
 export class SkipItem {
   static readonly VUE = "vue";

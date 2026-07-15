@@ -1,23 +1,23 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S deno run -A
 /**
  * Unified entry for Kabegame workspace:
  * - 1 个前端应用（kabegame）跑在 1420
  * - 2 个 Rust crate：kabegame / kabegame-cli，共用 kabegame-core
  *
- * 用法（PowerShell）：
- * - bun dev -c kabegame
- * - bun b                             （默认构建全部：kabegame + kabegame-cli）
- * - bun b -c kabegame|kabegame-cli
+ * 用法：
+ * - deno task dev -c kabegame
+ * - deno task b                       （默认构建全部：kabegame + kabegame-cli）
+ * - deno task b -c kabegame|kabegame-cli
  *
  * 说明：
- * - bun dev -c kabegame 时由构建链打包爬虫插件到 .kabegame/debug/data/plugins-directory（package-to-dev-data），不写入 app resources
+ * - deno task dev -c kabegame 时由构建链打包爬虫插件到 .kabegame/debug/data/plugins-directory，不写入 app resources
  * - kabegame 的前端由各自 tauri.conf.json 的 beforeDev/BuildCommand 触发
  */
 
 import { Command } from "commander";
-import { BuildSystem } from "./build-system";
-import { Component } from "./plugins/component-plugin";
-import { Mode } from "./plugins/mode-plugin";
+import { BuildSystem } from "./build-system.ts";
+import { Component } from "./plugins/component-plugin.ts";
+import { Mode } from "./plugins/mode-plugin.ts";
 
 const buildSystem = new BuildSystem();
 
@@ -32,8 +32,6 @@ interface BuildOptions {
   release?: boolean;
   package?: string;
   test?: string;
-  /** false 表示传入 --no-nx，不经 nx 构建 kabegame 前端 */
-  nx?: boolean;
 }
 
 /**
@@ -108,10 +106,6 @@ program
   )
   .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
-  .option(
-    "--no-nx",
-    "构建 kabegame 前端时不经 nx（不读写 .nx 缓存，适合 Docker）",
-  )
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {
     options.args = args || [];
@@ -142,10 +136,6 @@ program
     "--release",
     "构建完成后复制安装包到 release/ 目录，只有构建 kabegame 获取全量的情况下才可用",
     false,
-  )
-  .option(
-    "--no-nx",
-    "构建 kabegame 前端时不经 nx（不读写 .nx 缓存，适合 Docker）",
   )
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {

@@ -1279,32 +1279,26 @@ fn maybe_run_plugin_build(plugin_dir: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    let has_bun_lock =
-        plugin_dir.join("bun.lockb").is_file() || plugin_dir.join("bun.lock").is_file();
-    let use_bun = if has_bun_lock {
-        command_exists("bun")
-    } else {
-        false
-    };
-
-    let (runner, args) = if use_bun {
-        ("bun", vec!["run", "build"])
+    // deno 优先（项目工具链），npm 次之，bun 兜底（端上用户机器可能只装了其中之一）。
+    let (runner, args) = if command_exists("deno") {
+        ("deno", vec!["task", "build"])
     } else if command_exists("npm") {
         ("npm", vec!["run", "build"])
     } else if command_exists("bun") {
         ("bun", vec!["run", "build"])
     } else {
-        return Err("未找到可用的包管理器（npm/bun），无法执行插件构建".to_string());
+        return Err("未找到可用的运行器（deno/npm/bun），无法执行插件构建".to_string());
     };
 
     let status = Command::new(runner)
         .current_dir(plugin_dir)
-        .args(args)
+        .args(&args)
         .status()
-        .map_err(|e| format!("执行 `{runner} run build` 失败: {e}"))?;
+        .map_err(|e| format!("执行 `{runner} {}` 失败: {e}", args.join(" ")))?;
     if !status.success() {
         return Err(format!(
-            "插件构建失败（`{runner} run build` 退出码: {status}）"
+            "插件构建失败（`{runner} {}` 退出码: {status}）",
+            args.join(" ")
         ));
     }
     Ok(())

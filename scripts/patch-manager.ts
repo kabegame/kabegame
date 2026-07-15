@@ -1,11 +1,15 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S deno run -A
 /**
  * 原子管理 third/ 子模块对应的 third-patches/ patch series。
  *
  * 用法:
- *   bun run patch cef
- *   bun run patch cef --reverse
- *   bun run patch --all --check
+ *   deno task patch cef
+ *   deno task patch cef --reverse
+ *   deno task patch --all --check
+ *   deno task patch tauri --from 9   # 系列新增 0009 后重同步:回滚已应用前缀(1..8)再全量正向套用
+ *
+ * patch 系列是**追加式**的:已入库的 NNNN-*.patch 一律不改不删,只在末尾追加新编号
+ * (--from 的回滚正确性依赖"磁盘上的前缀 == 已应用的前缀")。见 .cursor/rules/third-patches-append-only.mdc。
  */
 
 import { spawnSync } from "child_process";
@@ -15,7 +19,7 @@ import path from "path";
 import chalk from "chalk";
 import { Command } from "commander";
 import { globSync } from "glob";
-import { ROOT, THIRD_DIR } from "./utils";
+import { ROOT, THIRD_DIR } from "./utils.ts";
 
 const THIRD_PATCHES_DIR = path.join(ROOT, "third-patches");
 
@@ -74,7 +78,7 @@ export function discoverRepos(onlyDir?: string, all = false): RepoPlan[] {
   }
 
   if (!all) {
-    throw new Error("请指定 third 目录，例如 `bun run patch cef`，或使用 --all");
+    throw new Error("请指定 third 目录，例如 `deno task patch cef`，或使用 --all");
   }
 
   if (!fs.existsSync(THIRD_PATCHES_DIR)) {
@@ -245,6 +249,64 @@ export function chainApply(
   return { ok: true, rollbackOk: true };
 }
 
+/** 解析 patch 文件名的前导编号(如 0009-foo.patch → 9) */
+export function patchNumber(patch: string): number {
+  const m = path.basename(patch).match(/^(\d+)-/);
+  if (!m) {
+    throw new Error(`patch 文件名缺少数字编号前缀: ${path.basename(patch)}`);
+  }
+  return parseInt(m[1], 10);
+}
+
+/**
+ * `--from N`:系列在末尾追加了新 patch(编号 ≥ N)后,把子模块从"旧前缀已应用"
+ * 重同步到"完整系列已应用"。分两步、各自复用 processRepo 的既有门控:
+ *   1. 回滚前缀(编号 < N,逆序 reverse)——含脏检查:纯净树(全新 checkout、
+ *      从未应用过)自动跳过回滚,直接进入第 2 步;
+ *   2. 正向套用完整系列——含干净检查:第 1 步之后树应回到纯净基线,否则报错。
+ * 前提:追加式原则保证磁盘上的前缀文件与已应用内容逐字节一致,回滚才可行。
+ */
+export function processRepoFrom(
+  plan: RepoPlan,
+  from: number,
+  check: boolean,
+): void {
+  const prefix = plan.patches.filter((patch) => patchNumber(patch) < from);
+  if (prefix.length === plan.patches.length) {
+    throw new Error(
+      `${plan.dir}: --from ${from} 之后没有更新的 patch,无需重同步`,
+    );
+  }
+
+  // 幂等保护:最新 patch 若已可反向 dry-run(即已应用),说明树已处于完整系列
+  // 状态,重跑 --from 会先把前缀回滚出一个"只剩新 patch"的坏状态,这里直接跳过。
+  const newest = plan.patches[plan.patches.length - 1];
+  if (
+    isRepo(plan.sub) &&
+    gitApply(plan.sub, newest, { reverse: true, check: true }).ok
+  ) {
+    console.log(
+      chalk.gray(
+        `${plan.dir}: 最新 patch 已应用,树已是完整系列状态,跳过 --from`,
+      ),
+    );
+    return;
+  }
+
+  processRepo(
+    { ...plan, patches: prefix },
+    { reverse: true, check },
+  );
+  // 正向套用前显式断言纯净:processRepo 的 forward 门控对脏树是"静默跳过"
+  // 语义,放在 --from 里会把"回滚成功但树仍脏"的异常状态误报为成功。
+  if (!check && !isClean(plan.sub)) {
+    throw new Error(
+      `${plan.dir}: 回滚前缀(--from ${from})后工作区仍非纯净,拒绝正向套用;请手动检查本地改动`,
+    );
+  }
+  processRepo(plan, { reverse: false, check });
+}
+
 function patchFailure(
   plan: RepoPlan,
   patch: string | undefined,
@@ -321,6 +383,7 @@ interface CliOptions {
   reverse: boolean;
   check: boolean;
   all: boolean;
+  from?: string;
 }
 
 export function main(argv = process.argv): void {
@@ -332,7 +395,28 @@ export function main(argv = process.argv): void {
     .option("-r, --reverse", "逆序移除 patch", false)
     .option("--check", "仅在一次性 worktree 中预检", false)
     .option("--all", "处理 third-patches/ 下的全部仓库", false)
+    .option(
+      "--from <n>",
+      "系列末尾新增编号 ≥ n 的 patch 后重同步:先回滚已应用前缀(编号 < n),再全量正向套用",
+    )
     .action((thirdDir: string | undefined, options: CliOptions) => {
+      let from: number | undefined;
+      if (options.from !== undefined) {
+        from = Number(options.from);
+        if (!Number.isInteger(from) || from < 1) {
+          console.error(chalk.red(`✗ --from 需要 ≥1 的整数编号: ${options.from}`));
+          process.exitCode = 1;
+          return;
+        }
+        if (options.reverse || options.all || !thirdDir) {
+          console.error(
+            chalk.red("✗ --from 需要显式指定单个 third 目录,且不能与 --reverse/--all 同用"),
+          );
+          process.exitCode = 1;
+          return;
+        }
+      }
+
       let plans: RepoPlan[];
       try {
         plans = discoverRepos(thirdDir, options.all);
@@ -349,7 +433,11 @@ export function main(argv = process.argv): void {
       const failures: string[] = [];
       for (const plan of plans) {
         try {
-          processRepo(plan, options);
+          if (from !== undefined) {
+            processRepoFrom(plan, from, options.check);
+          } else {
+            processRepo(plan, options);
+          }
         } catch (error) {
           const message = (error as Error).message;
           failures.push(message);

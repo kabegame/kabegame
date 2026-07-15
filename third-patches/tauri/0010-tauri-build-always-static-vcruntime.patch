@@ -1,0 +1,15 @@
+diff --git a/crates/tauri-build/src/lib.rs b/crates/tauri-build/src/lib.rs
+--- a/crates/tauri-build/src/lib.rs
++++ b/crates/tauri-build/src/lib.rs
+@@ -705,7 +705,10 @@ pub fn try_build(attributes: Attributes) -> Result<()> {
+           }
+         }
+       }
+-      "msvc" if env::var_os("STATIC_VCRUNTIME").is_some_and(|v| v == "true") => {
++      // kabegame fork(0010): 恒定静态链接 vcruntime,不再读 STATIC_VCRUNTIME env
++      // (不可配置)。避免裸 cargo build 的辅助 bin(如 dev 期 kabegame-cef-helper)
++      // 因缺 env 而动态链接,在无 VC++ 运行库的 Windows 上报找不到 VCRUNTIME140.dll。
++      "msvc" => {
+         static_vcruntime::build();
+       }
+       _ => (),

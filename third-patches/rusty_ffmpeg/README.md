@@ -17,15 +17,12 @@ dependency (patched in `third-patches/rsmpeg/`) resolves to it the same way.
 Apply this series manually before any cargo build that resolves `rusty_ffmpeg`:
 
 ```bash
-bun run patch rusty_ffmpeg
+deno task patch rusty_ffmpeg
 ```
-
-Use `bun run patch`, not `bun patch`: Bun 1.3 provides its own unrelated
-dependency-patching subcommand under the latter name.
 
 ## Re-vendor
 
-1. Run `bun run patch rusty_ffmpeg -r` to restore the clean vendor tree.
+1. Run `deno task patch rusty_ffmpeg -r` to restore the clean vendor tree.
 2. Update `third/rusty_ffmpeg` to the desired commit from the upstream repository.
 3. Apply each patch with `git apply --check`, repairing context drift as needed.
 4. Regenerate the numbered patch files against the new vendor base and update this README.

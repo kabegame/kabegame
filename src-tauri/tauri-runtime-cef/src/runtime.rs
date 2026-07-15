@@ -78,6 +78,26 @@ mod imp {
             .clone()
     }
 
+    /// Linux 下 CEF Views 窗口的 X11 WM_CLASS / Wayland app_id。
+    ///
+    /// CEF 只在 `WindowDelegate::get_linux_window_properties` 提供时才设置
+    /// WM_CLASS;不提供则窗口完全没有该属性,桌面环境无法把窗口关联到
+    /// `.desktop`(任务栏出现游离的第二条目,StartupNotify 反馈转圈到超时)。
+    /// 优先取 `RuntimeInitArgs::app_id`(tauri `app.enable_gtk_app_id`),
+    /// 否则退回可执行文件名,与 `.desktop` 的 `Exec`/`StartupWMClass` 对应。
+    #[cfg(target_os = "linux")]
+    static LINUX_WINDOW_CLASS: OnceLock<String> = OnceLock::new();
+
+    #[cfg(target_os = "linux")]
+    fn linux_window_class() -> &'static str {
+        LINUX_WINDOW_CLASS.get_or_init(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.file_stem().map(|s| s.to_string_lossy().into_owned()))
+                .unwrap_or_default()
+        })
+    }
+
     fn disable_chrome_only_features(command_line: &CommandLine) {
         let switch = CefString::from("disable-features");
         let mut value = if command_line.has_switch(Some(&switch)) == 1 {
@@ -1017,6 +1037,32 @@ mod imp {
             fn window_runtime_style(&self) -> RuntimeStyle {
                 RuntimeStyle::ALLOY
             }
+
+            // CEF Views 默认不设置 X11 WM_CLASS / Wayland app_id,窗口会以
+            // “无类名”状态 map,桌面环境无法关联 `.desktop`。返回 1 表示采用。
+            #[cfg(target_os = "linux")]
+            fn linux_window_properties(
+                &self,
+                _window: Option<&mut cef::Window>,
+                properties: Option<&mut LinuxWindowProperties>,
+            ) -> ::std::os::raw::c_int {
+                let Some(properties) = properties else { return 0 };
+                let class = linux_window_class();
+                if class.is_empty() {
+                    return 0;
+                }
+                // res_name 与 `Exec`/`StartupWMClass` 一致;res_class 按 X11
+                // 惯例首字母大写(KDE/GNOME 匹配均不区分大小写)。
+                let mut chars = class.chars();
+                let capitalized = chars
+                    .next()
+                    .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
+                    .unwrap_or_default();
+                properties.wm_class_name = CefString::from(class);
+                properties.wm_class_class = CefString::from(capitalized.as_str());
+                properties.wayland_app_id = CefString::from(class);
+                1
+            }
         }
     }
 
@@ -1743,6 +1789,12 @@ mod imp {
         #[cfg(target_os = "linux")]
         unsafe {
             std::env::set_var("GDK_BACKEND", "x11");
+        }
+        // 必须先于 initialize_cef:bootstrap 窗口在 CEF context 初始化回调里
+        // 创建,届时 delegate 已经要读取窗口类名。
+        #[cfg(target_os = "linux")]
+        if let Some(app_id) = args.app_id.clone() {
+            let _ = LINUX_WINDOW_CLASS.set(app_id);
         }
         eprintln!(
             "[cef-runtime] runtime init backend=windowed initialized={}",

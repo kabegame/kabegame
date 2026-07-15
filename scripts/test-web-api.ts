@@ -1,6 +1,6 @@
 /**
  * Web mode Phase 3 smoke test
- * Usage: bun scripts/test-web-api.ts
+ * Usage: deno run -A scripts/test-web-api.ts
  */
 
 const BASE = "http://127.0.0.1:7490";

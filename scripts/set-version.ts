@@ -1,12 +1,12 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S deno run -A
 /**
  * scripts/set-version.ts
  *
  * 用于统一管理项目版本号。
  *
  * 用法:
- *   1. 设置新版本并同步: bun run set-version 3.0.1
- *   2. 从 Cargo.toml 同步: bun run set-version --sync
+ *   1. 设置新版本并同步: deno task set-version 3.0.1
+ *   2. 从 Cargo.toml 同步: deno task set-version --sync
  *
  * 会同步 README.md / README.zh-CN.md / README.ja.md / README.ko.md 中 GitHub Release 直链里的版本号。
  */
@@ -15,8 +15,8 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Command } from "commander";
-import { readCargoTomlVersion } from "./utils";
-import { ROOT } from "./utils";
+import { readCargoTomlVersion } from "./utils.ts";
+import { ROOT } from "./utils.ts";
 
 interface PackageJson {
   version: string;
