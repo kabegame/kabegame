@@ -74,7 +74,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::album::get_albums()
+                    kabegame_core::commands::album::get_albums()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -94,8 +94,11 @@ pub fn init_registry() {
                         limit: usize,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::album::get_album_preview(args.album_id, args.limit)
-                        .map_err(RpcError::internal)
+                    let mut result =
+                        kabegame_core::commands::album::get_album_preview(args.album_id, args.limit)
+                            .map_err(RpcError::internal)?;
+                    crate::web::image_rewrite::rewrite_image_value(&mut result);
+                    Ok(result)
                 })
             }),
         },
@@ -113,7 +116,7 @@ pub fn init_registry() {
                         path: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::pathql_entry(args.path)
+                    kabegame_core::commands::image::pathql_entry(args.path)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -135,7 +138,7 @@ pub fn init_registry() {
                         with_count: bool,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::pathql_list(args.path, args.with_count)
+                    kabegame_core::commands::image::pathql_list(args.path, args.with_count)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -155,9 +158,11 @@ pub fn init_registry() {
                         path: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::pathql_fetch(args.path)
+                    let mut result = kabegame_core::commands::image::pathql_fetch(args.path)
                         .await
-                        .map_err(RpcError::internal)
+                        .map_err(RpcError::internal)?;
+                    crate::web::image_rewrite::rewrite_image_value(&mut result);
+                    Ok(result)
                 })
             }),
         },
@@ -169,7 +174,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::image::get_images_count()
+                    kabegame_core::commands::image::get_images_count()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -182,7 +187,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::image::get_gallery_plugin_groups()
+                    kabegame_core::commands::image::get_gallery_plugin_groups()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -195,7 +200,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::image::get_gallery_media_type_counts()
+                    kabegame_core::commands::image::get_gallery_media_type_counts()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -214,7 +219,7 @@ pub fn init_registry() {
                         album_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::get_album_media_type_counts(args.album_id)
+                    kabegame_core::commands::image::get_album_media_type_counts(args.album_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -227,7 +232,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::image::get_gallery_time_filter_data()
+                    kabegame_core::commands::image::get_gallery_time_filter_data()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -246,8 +251,10 @@ pub fn init_registry() {
                         image_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::get_image_by_id(args.image_id)
-                        .map_err(RpcError::internal)
+                    let mut result = kabegame_core::commands::image::get_image_by_id(args.image_id)
+                        .map_err(RpcError::internal)?;
+                    crate::web::image_rewrite::rewrite_image_value(&mut result);
+                    Ok(result)
                 })
             }),
         },
@@ -265,7 +272,7 @@ pub fn init_registry() {
                         image_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::get_image_metadata(args.image_id)
+                    kabegame_core::commands::image::get_image_metadata(args.image_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -284,7 +291,7 @@ pub fn init_registry() {
                         image_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::get_image_metadata_full(args.image_id)
+                    kabegame_core::commands::image::get_image_metadata_full(args.image_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -297,7 +304,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::task::get_all_tasks()
+                    kabegame_core::commands::task::get_all_tasks()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -310,7 +317,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::task::get_run_configs()
+                    kabegame_core::commands::task::get_run_configs()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -329,7 +336,7 @@ pub fn init_registry() {
                         config_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::get_run_config(args.config_id)
+                    kabegame_core::commands::task::get_run_config(args.config_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -342,7 +349,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::task::get_missed_runs()
+                    kabegame_core::commands::task::get_missed_runs()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -362,7 +369,7 @@ pub fn init_registry() {
                         offset: u32,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::get_tasks_page(args.limit, args.offset)
+                    kabegame_core::commands::task::get_tasks_page(args.limit, args.offset)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -381,7 +388,7 @@ pub fn init_registry() {
                         task_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::get_task(args.task_id)
+                    kabegame_core::commands::task::get_task(args.task_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -394,7 +401,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::task::get_active_downloads()
+                    kabegame_core::commands::task::get_active_downloads()
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -414,7 +421,7 @@ pub fn init_registry() {
                         task_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::get_task_logs(args.task_id)
+                    kabegame_core::commands::task::get_task_logs(args.task_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -433,7 +440,7 @@ pub fn init_registry() {
                         task_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::get_task_failed_images(args.task_id)
+                    kabegame_core::commands::task::get_task_failed_images(args.task_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -446,7 +453,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::task::get_all_failed_images()
+                    kabegame_core::commands::task::get_all_failed_images()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -459,7 +466,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::misc::get_build_mode().map_err(RpcError::internal)
+                    crate::build_mode::get_build_mode().map_err(RpcError::internal)
                 })
             }),
         },
@@ -471,7 +478,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::misc::get_supported_image_types()
+                    kabegame_core::commands::misc::get_supported_image_types()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -484,9 +491,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::plugin::get_plugins()
-                        .await
-                        .map_err(RpcError::internal)
+                    web_get_plugins().await
                 })
             }),
         },
@@ -505,7 +510,7 @@ pub fn init_registry() {
                         source_id: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::get_plugin_detail(args.plugin_id, args.source_id)
+                    kabegame_core::commands::plugin::get_plugin_detail(args.plugin_id, args.source_id)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -519,7 +524,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::plugin::get_plugin_sources()
+                    kabegame_core::commands::plugin::get_plugin_sources()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -538,7 +543,7 @@ pub fn init_registry() {
                         plugin_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::get_plugin_data(args.plugin_id)
+                    kabegame_core::commands::plugin::get_plugin_data(args.plugin_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -559,7 +564,7 @@ pub fn init_registry() {
                         revalidate_if_stale_after_secs: Option<u64>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::get_store_plugins(
+                    kabegame_core::commands::plugin::get_store_plugins(
                         args.source_id,
                         args.force_refresh.unwrap_or(false),
                         args.revalidate_if_stale_after_secs,
@@ -585,7 +590,7 @@ pub fn init_registry() {
                         plugin_id: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::get_remote_plugin_icon(
+                    kabegame_core::commands::plugin::get_remote_plugin_icon(
                         args.download_url,
                         args.source_id,
                         args.plugin_id,
@@ -610,7 +615,7 @@ pub fn init_registry() {
                         headers: Option<HashMap<String, String>>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::proxy::proxy_fetch(args.url, args.headers)
+                    kabegame_core::commands::proxy::proxy_fetch(args.url, args.headers)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -624,7 +629,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::settings::get_favorite_album_id()
+                    kabegame_core::commands::settings::get_favorite_album_id()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -642,7 +647,7 @@ pub fn init_registry() {
                         keys: Vec<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::settings::get_settings(args.keys)
+                    kabegame_core::commands::settings::get_settings(args.keys)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -655,7 +660,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::settings::get_import_recommended_schedule_enabled()
+                    kabegame_core::commands::settings::get_import_recommended_schedule_enabled()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -668,7 +673,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::settings::get_max_concurrent_downloads()
+                    kabegame_core::commands::settings::get_max_concurrent_downloads()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -681,7 +686,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::settings::get_max_concurrent_tasks()
+                    kabegame_core::commands::settings::get_max_concurrent_tasks()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -694,7 +699,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::settings::get_download_interval_ms()
+                    kabegame_core::commands::settings::get_download_interval_ms()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -707,7 +712,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::settings::get_network_retry_count()
+                    kabegame_core::commands::settings::get_network_retry_count()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -720,7 +725,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::settings::get_auto_deduplicate()
+                    kabegame_core::commands::settings::get_auto_deduplicate()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -740,7 +745,8 @@ pub fn init_registry() {
                         task: Value,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    let task_id = crate::commands_core::task::start_task(args.task)
+                    let task_id = kabegame_core::commands::task::start_task(args.task)
+                        .await
                         .map_err(RpcError::internal)?;
                     Ok(Value::String(task_id))
                 })
@@ -761,7 +767,7 @@ pub fn init_registry() {
                         new_name: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::album::rename_album(args.album_id, args.new_name)
+                    kabegame_core::commands::album::rename_album(args.album_id, args.new_name)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -780,7 +786,7 @@ pub fn init_registry() {
                         album_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::album::delete_album(args.album_id)
+                    kabegame_core::commands::album::delete_album(args.album_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -800,7 +806,7 @@ pub fn init_registry() {
                         favorite: bool,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::toggle_image_favorite(args.image_id, args.favorite)
+                    kabegame_core::commands::image::toggle_image_favorite(args.image_id, args.favorite)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -813,9 +819,7 @@ pub fn init_registry() {
             requires_super: true,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::plugin::refresh_plugins()
-                        .await
-                        .map_err(RpcError::internal)
+                    web_refresh_plugins().await
                 })
             }),
         },
@@ -833,7 +837,7 @@ pub fn init_registry() {
                         plugin_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::get_plugin_default_config(args.plugin_id)
+                    kabegame_core::commands::plugin::get_plugin_default_config(args.plugin_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -852,7 +856,7 @@ pub fn init_registry() {
                         plugin_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::ensure_plugin_default_config(args.plugin_id)
+                    kabegame_core::commands::plugin::ensure_plugin_default_config(args.plugin_id)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -873,7 +877,7 @@ pub fn init_registry() {
                         config: serde_json::Value,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::save_plugin_default_config(
+                    kabegame_core::commands::plugin::save_plugin_default_config(
                         args.plugin_id,
                         args.config,
                     )
@@ -895,7 +899,7 @@ pub fn init_registry() {
                         plugin_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::reset_plugin_default_config(args.plugin_id)
+                    kabegame_core::commands::plugin::reset_plugin_default_config(args.plugin_id)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -917,7 +921,7 @@ pub fn init_registry() {
                         image_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::delete_image(args.image_id)
+                    kabegame_core::commands::image::delete_image(args.image_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -936,7 +940,7 @@ pub fn init_registry() {
                         image_ids: Vec<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::batch_delete_images(args.image_ids)
+                    kabegame_core::commands::image::batch_delete_images(args.image_ids)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -955,7 +959,7 @@ pub fn init_registry() {
                         image_ids: Vec<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::batch_remove_images(args.image_ids)
+                    kabegame_core::commands::image::batch_remove_images(args.image_ids)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -974,7 +978,7 @@ pub fn init_registry() {
                         image_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::image::remove_image(args.image_id)
+                    kabegame_core::commands::image::remove_image(args.image_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -994,7 +998,7 @@ pub fn init_registry() {
                         new_parent_id: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::album::move_album(args.album_id, args.new_parent_id)
+                    kabegame_core::commands::album::move_album(args.album_id, args.new_parent_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1014,7 +1018,7 @@ pub fn init_registry() {
                         parent_id: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::album::add_album(args.name, args.parent_id)
+                    kabegame_core::commands::album::add_album(args.name, args.parent_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1035,7 +1039,7 @@ pub fn init_registry() {
                         create_missing_albums: Option<bool>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::album::sync_local_folder_album(
+                    kabegame_core::commands::album::sync_local_folder_album(
                         args.album_id,
                         args.recursive,
                         args.create_missing_albums,
@@ -1059,7 +1063,7 @@ pub fn init_registry() {
                         album_ids: Vec<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::album::sync_local_folder_albums(args.album_ids)
+                    kabegame_core::commands::album::sync_local_folder_albums(args.album_ids)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1080,7 +1084,7 @@ pub fn init_registry() {
                         image_ids: Vec<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::album::add_images_to_album(args.album_id, args.image_ids)
+                    kabegame_core::commands::album::add_images_to_album(args.album_id, args.image_ids)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1100,7 +1104,7 @@ pub fn init_registry() {
                         album_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::album::add_task_images_to_album(
+                    kabegame_core::commands::album::add_task_images_to_album(
                         args.task_id,
                         args.album_id,
                     )
@@ -1123,7 +1127,7 @@ pub fn init_registry() {
                         image_ids: Vec<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::album::remove_images_from_album(
+                    kabegame_core::commands::album::remove_images_from_album(
                         args.album_id,
                         args.image_ids,
                     )
@@ -1146,7 +1150,7 @@ pub fn init_registry() {
                         image_orders: Vec<(String, i64)>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::album::update_album_images_order(
+                    kabegame_core::commands::album::update_album_images_order(
                         args.album_id,
                         args.image_orders,
                     )
@@ -1170,7 +1174,7 @@ pub fn init_registry() {
                         task_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::cancel_task(args.task_id)
+                    kabegame_core::commands::task::cancel_task(args.task_id)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1190,7 +1194,7 @@ pub fn init_registry() {
                         task_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::delete_task(args.task_id)
+                    kabegame_core::commands::task::delete_task(args.task_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1208,7 +1212,7 @@ pub fn init_registry() {
                         task: Value,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::add_task(args.task)
+                    kabegame_core::commands::task::add_task(args.task)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1221,7 +1225,7 @@ pub fn init_registry() {
             requires_super: true,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    crate::commands_core::task::clear_finished_tasks()
+                    kabegame_core::commands::task::clear_finished_tasks()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1240,7 +1244,7 @@ pub fn init_registry() {
                         config_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::copy_run_config(args.config_id)
+                    kabegame_core::commands::task::copy_run_config(args.config_id)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1262,7 +1266,7 @@ pub fn init_registry() {
                         failed_id: i64,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::retry_task_failed_image(args.failed_id)
+                    kabegame_core::commands::task::retry_task_failed_image(args.failed_id)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1281,7 +1285,7 @@ pub fn init_registry() {
                         ids: Vec<i64>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::retry_failed_images(args.ids)
+                    kabegame_core::commands::task::retry_failed_images(args.ids)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1301,7 +1305,7 @@ pub fn init_registry() {
                         failed_id: i64,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::cancel_retry_failed_image(args.failed_id)
+                    kabegame_core::commands::task::cancel_retry_failed_image(args.failed_id)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1320,7 +1324,7 @@ pub fn init_registry() {
                         ids: Vec<i64>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::cancel_retry_failed_images(args.ids)
+                    kabegame_core::commands::task::cancel_retry_failed_images(args.ids)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1339,7 +1343,7 @@ pub fn init_registry() {
                         ids: Vec<i64>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::delete_failed_images(args.ids)
+                    kabegame_core::commands::task::delete_failed_images(args.ids)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1359,7 +1363,7 @@ pub fn init_registry() {
                         failed_id: i64,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::delete_task_failed_image(args.failed_id)
+                    kabegame_core::commands::task::delete_task_failed_image(args.failed_id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1379,7 +1383,7 @@ pub fn init_registry() {
                         config: Value,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::add_run_config(args.config)
+                    kabegame_core::commands::task::add_run_config(args.config)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1398,7 +1402,7 @@ pub fn init_registry() {
                         config: Value,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::update_run_config(args.config)
+                    kabegame_core::commands::task::update_run_config(args.config)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1418,7 +1422,7 @@ pub fn init_registry() {
                         config_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::delete_run_config(args.config_id)
+                    kabegame_core::commands::task::delete_run_config(args.config_id)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1438,7 +1442,7 @@ pub fn init_registry() {
                         config_ids: Vec<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::run_missed_configs(args.config_ids)
+                    kabegame_core::commands::task::run_missed_configs(args.config_ids)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1458,7 +1462,7 @@ pub fn init_registry() {
                         config_ids: Vec<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::task::dismiss_missed_configs(args.config_ids)
+                    kabegame_core::commands::task::dismiss_missed_configs(args.config_ids)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1480,7 +1484,7 @@ pub fn init_registry() {
                         plugin_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::delete_plugin(args.plugin_id)
+                    kabegame_core::commands::plugin::delete_plugin(args.plugin_id)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1501,7 +1505,7 @@ pub fn init_registry() {
                         plugin_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::install_from_store(args.source_id, args.plugin_id)
+                    kabegame_core::commands::plugin::install_from_store(args.source_id, args.plugin_id)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1521,7 +1525,7 @@ pub fn init_registry() {
                         zip_path: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::import_plugin_from_zip(args.zip_path)
+                    kabegame_core::commands::plugin::import_plugin_from_zip(args.zip_path)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1541,7 +1545,7 @@ pub fn init_registry() {
                         index_url: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::validate_plugin_source(args.index_url)
+                    kabegame_core::commands::plugin::validate_plugin_source(args.index_url)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1563,7 +1567,7 @@ pub fn init_registry() {
                         index_url: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::update_plugin_source(
+                    kabegame_core::commands::plugin::update_plugin_source(
                         args.id,
                         args.name,
                         args.index_url,
@@ -1585,7 +1589,7 @@ pub fn init_registry() {
                         id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::delete_plugin_source(args.id)
+                    kabegame_core::commands::plugin::delete_plugin_source(args.id)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1606,7 +1610,7 @@ pub fn init_registry() {
                         index_url: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::add_plugin_source(
+                    kabegame_core::commands::plugin::add_plugin_source(
                         args.id,
                         args.name,
                         args.index_url,
@@ -1629,7 +1633,7 @@ pub fn init_registry() {
                         zip_path: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::preview_import_plugin(args.zip_path)
+                    kabegame_core::commands::plugin::preview_import_plugin(args.zip_path)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1650,7 +1654,7 @@ pub fn init_registry() {
                         plugin_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::plugin::preview_store_install(
+                    kabegame_core::commands::plugin::preview_store_install(
                         args.source_id,
                         args.plugin_id,
                     )
@@ -1674,7 +1678,7 @@ pub fn init_registry() {
                         host: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::surf::surf_delete_record(args.host)
+                    kabegame_core::commands::surf::surf_delete_record(args.host)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1693,7 +1697,7 @@ pub fn init_registry() {
                         name: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::surf::surf_update_name(args.host, args.name)
+                    kabegame_core::commands::surf::surf_update_name(args.host, args.name)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1713,7 +1717,7 @@ pub fn init_registry() {
                         root_url: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::surf::surf_update_root_url(args.host, args.root_url)
+                    kabegame_core::commands::surf::surf_update_root_url(args.host, args.root_url)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1733,7 +1737,8 @@ pub fn init_registry() {
                         count: u32,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::settings::set_max_concurrent_downloads(args.count)
+                    kabegame_core::commands::settings::set_max_concurrent_downloads(args.count)
+                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1751,7 +1756,7 @@ pub fn init_registry() {
                         count: u32,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::settings::set_max_concurrent_tasks(args.count)
+                    kabegame_core::commands::settings::set_max_concurrent_tasks(args.count)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1770,7 +1775,7 @@ pub fn init_registry() {
                         interval_ms: u32,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::settings::set_download_interval_ms(args.interval_ms)
+                    kabegame_core::commands::settings::set_download_interval_ms(args.interval_ms)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1788,7 +1793,7 @@ pub fn init_registry() {
                         count: u32,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::settings::set_network_retry_count(args.count)
+                    kabegame_core::commands::settings::set_network_retry_count(args.count)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1806,7 +1811,7 @@ pub fn init_registry() {
                         enabled: bool,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::settings::set_auto_deduplicate(args.enabled)
+                    kabegame_core::commands::settings::set_auto_deduplicate(args.enabled)
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1824,7 +1829,7 @@ pub fn init_registry() {
                         enabled: bool,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::settings::set_import_recommended_schedule_enabled(
+                    kabegame_core::commands::settings::set_import_recommended_schedule_enabled(
                         args.enabled,
                     )
                     .map_err(RpcError::internal)
@@ -1844,11 +1849,49 @@ pub fn init_registry() {
                     // Tauri invoke wraps typed args under a named key matching the Rust param name ("args").
                     // Extract that inner value before deserializing.
                     let inner = p.get("args").cloned().unwrap_or(p);
-                    let args: crate::commands_core::organize::StartOrganizeArgs =
+                    let args: kabegame_core::commands::organize::StartOrganizeArgs =
                         serde_json::from_value(inner).map_err(RpcError::invalid_params)?;
-                    crate::commands_core::organize::start_organize(args)
+                    kabegame_core::commands::organize::start_organize(args)
                         .await
                         .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "get_organize_total_count",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|_p| {
+                Box::pin(async move {
+                    kabegame_core::commands::organize::get_organize_total_count()
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "get_organize_run_state",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|_p| {
+                Box::pin(async move {
+                    kabegame_core::commands::organize::get_organize_run_state()
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "cancel_organize",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|_p| {
+                Box::pin(async move {
+                    kabegame_core::commands::organize::cancel_organize().map_err(RpcError::internal)
                 })
             }),
         },
@@ -1883,6 +1926,30 @@ pub async fn dispatch(req: JsonRpcRequest, is_super: bool) -> Value {
         }
         Err(e) => rpc_error(id, e.code, e.message),
     }
+}
+
+// Web 专属：只回 `{id, version}` 索引（详情体积大，web 客户端按需 `get_plugin_detail`
+// 单取）。桌面走 `commands::plugin::get_plugins` 回整份列表——两端形状不同，故各自实现，
+// 不下沉到 feature-agnostic 的 core commands 层。
+async fn web_get_plugins() -> Result<Value, RpcError> {
+    let pm = kabegame_core::plugin::PluginManager::global();
+    pm.ensure_installed_cache_initialized()
+        .await
+        .map_err(RpcError::internal)?;
+    let plugins = pm.get_all().map_err(RpcError::internal)?;
+    let index: Vec<Value> = plugins
+        .iter()
+        .map(|p| serde_json::json!({ "id": p.id, "version": p.version }))
+        .collect();
+    Ok(Value::Array(index))
+}
+
+async fn web_refresh_plugins() -> Result<Value, RpcError> {
+    kabegame_core::plugin::PluginManager::global()
+        .refresh_plugins()
+        .await
+        .map_err(RpcError::internal)?;
+    web_get_plugins().await
 }
 
 // Why: 非 super 读路径（get_task / get_run_config / get_plugin_default_config 等）

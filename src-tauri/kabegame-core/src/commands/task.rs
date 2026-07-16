@@ -1,6 +1,6 @@
-use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::scheduler::Scheduler;
-use kabegame_core::storage::{RunConfig, Storage, TaskInfo, TaskStatus};
+use crate::emitter::GlobalEmitter;
+use crate::scheduler::Scheduler;
+use crate::storage::{RunConfig, Storage, TaskInfo, TaskStatus};
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -41,12 +41,12 @@ pub fn get_all_failed_images() -> Result<Value, String> {
 }
 
 pub async fn get_active_downloads() -> Result<Value, String> {
-    use kabegame_core::crawler::TaskScheduler;
+    use crate::crawler::TaskScheduler;
     let downloads = TaskScheduler::global().get_active_downloads().await?;
     serde_json::to_value(downloads).map_err(|e| e.to_string())
 }
 
-pub fn start_task(task: Value) -> Result<String, String> {
+pub async fn start_task(task: Value) -> Result<String, String> {
     use std::collections::HashMap;
 
     #[derive(serde::Deserialize)]
@@ -72,7 +72,7 @@ pub fn start_task(task: Value) -> Result<String, String> {
 
     let task_id = uuid::Uuid::new_v4().to_string();
     let images_dir =
-        kabegame_core::crawler::downloader::resolve_crawl_output_dir(p.output_dir.as_deref());
+        crate::crawler::downloader::resolve_crawl_output_dir(p.output_dir.as_deref());
     let output_dir = Some(images_dir.to_string_lossy().into_owned());
 
     let now_ms = std::time::SystemTime::now()
@@ -103,25 +103,18 @@ pub fn start_task(task: Value) -> Result<String, String> {
     Storage::global().add_task(t)?;
     GlobalEmitter::global().emit_task_added(&payload);
 
-    let req = kabegame_core::crawler::CrawlTaskRequest {
+    let req = crate::crawler::CrawlTaskRequest {
         task_id: task_id.clone(),
         plugin_file_path: p.plugin_file_path,
     };
-    if let Err(e) = kabegame_core::crawler::TaskScheduler::global().submit_task(req) {
-        // 入队失败：将 DB 记录标记为 Failed
-        if let Ok(Some(mut failed_task)) = Storage::global().get_task(&task_id) {
-            failed_task.status = TaskStatus::Failed;
-            failed_task.end_time = Some(now_ms);
-            failed_task.error = Some(e.clone());
-            let _ = Storage::global().update_task(failed_task);
-        }
-        return Err(e);
-    }
+    crate::crawler::TaskScheduler::global()
+        .submit_task(req)
+        .await?;
     Ok(task_id)
 }
 
 pub async fn cancel_task(task_id: String) -> Result<Value, String> {
-    use kabegame_core::crawler::TaskScheduler;
+    use crate::crawler::TaskScheduler;
     TaskScheduler::global().cancel_task(&task_id).await;
     Ok(Value::Null)
 }
@@ -149,7 +142,7 @@ pub fn delete_task(task_id: String) -> Result<Value, String> {
 }
 
 pub async fn retry_task_failed_image(failed_id: i64) -> Result<Value, String> {
-    use kabegame_core::crawler::TaskScheduler;
+    use crate::crawler::TaskScheduler;
     TaskScheduler::global()
         .retry_failed_image(failed_id)
         .await?;
@@ -157,13 +150,13 @@ pub async fn retry_task_failed_image(failed_id: i64) -> Result<Value, String> {
 }
 
 pub async fn retry_failed_images(ids: Vec<i64>) -> Result<Value, String> {
-    use kabegame_core::crawler::TaskScheduler;
+    use crate::crawler::TaskScheduler;
     let started = TaskScheduler::global().retry_failed_images(&ids).await?;
     serde_json::to_value(started).map_err(|e| e.to_string())
 }
 
 pub async fn cancel_retry_failed_image(failed_id: i64) -> Result<Value, String> {
-    use kabegame_core::crawler::TaskScheduler;
+    use crate::crawler::TaskScheduler;
     TaskScheduler::global()
         .cancel_retry_failed_image(failed_id)
         .await;
@@ -171,7 +164,7 @@ pub async fn cancel_retry_failed_image(failed_id: i64) -> Result<Value, String> 
 }
 
 pub async fn cancel_retry_failed_images(ids: Vec<i64>) -> Result<Value, String> {
-    use kabegame_core::crawler::TaskScheduler;
+    use crate::crawler::TaskScheduler;
     TaskScheduler::global()
         .cancel_retry_failed_images(&ids)
         .await;
@@ -179,7 +172,7 @@ pub async fn cancel_retry_failed_images(ids: Vec<i64>) -> Result<Value, String> 
 }
 
 pub async fn delete_failed_images(ids: Vec<i64>) -> Result<Value, String> {
-    use kabegame_core::crawler::TaskScheduler;
+    use crate::crawler::TaskScheduler;
     TaskScheduler::global()
         .cancel_retry_failed_images(&ids)
         .await;
@@ -245,13 +238,13 @@ pub async fn delete_run_config(config_id: String) -> Result<Value, String> {
 }
 
 pub async fn run_missed_configs(config_ids: Vec<String>) -> Result<Value, String> {
-    kabegame_core::scheduler::run_missed_configs(&config_ids);
+    crate::scheduler::run_missed_configs(&config_ids);
     let _ = Scheduler::global().reload_config("").await;
     Ok(Value::Null)
 }
 
 pub async fn dismiss_missed_configs(config_ids: Vec<String>) -> Result<Value, String> {
-    kabegame_core::scheduler::dismiss_missed_configs(&config_ids);
+    crate::scheduler::dismiss_missed_configs(&config_ids);
     let _ = Scheduler::global().reload_config("").await;
     Ok(Value::Null)
 }
@@ -312,6 +305,6 @@ pub fn get_run_config(config_id: String) -> Result<Value, String> {
 }
 
 pub fn get_missed_runs() -> Result<Value, String> {
-    let items = kabegame_core::scheduler::collect_missed_runs_now()?;
+    let items = crate::scheduler::collect_missed_runs_now()?;
     serde_json::to_value(items).map_err(|e| e.to_string())
 }

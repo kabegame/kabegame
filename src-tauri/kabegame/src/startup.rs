@@ -30,8 +30,7 @@ use kabegame_core::app_paths::AppPaths;
 use kabegame_core::crawler::downloader::{postprocess_downloaded_image, DownloadState};
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::webview::{
-    crawler_window_label, get_session, set_webview_handler, try_get_session_context,
-    CrawlerWebViewHandler,
+    crawler_window_label, set_webview_handler, CrawlerWebViewHandler,
 };
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use tauri::webview::DownloadEvent;
@@ -45,10 +44,25 @@ struct AppCrawlerWebViewHandler<R: Runtime> {
 #[async_trait]
 impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
     async fn create_task_window(&self, task_id: &str, base_url: &str) -> Result<(), String> {
+        let run = TaskScheduler::global()
+            .get_run(task_id)
+            .ok_or_else(|| format!("Crawler task not found for task {task_id}"))?;
+        let plugin = run
+            .params
+            .plugin
+            .as_ref()
+            .ok_or_else(|| format!("Crawler task {task_id} missing plugin"))?;
+        let crawl_js = plugin
+            .script
+            .js_source()
+            .ok_or_else(|| format!("Plugin {} missing webview crawl script", plugin.id))?
+            .to_string();
+        let vars_json = serde_json::to_string(&run.params.config)
+            .map_err(|e| format!("Failed to serialize crawler vars: {e}"))?;
         let task_id = task_id.to_string();
         let base_url = base_url.to_string();
         run_on_main_thread_sync(&self.app, move |app| {
-            create_crawler_window(app, &task_id, &base_url)
+            create_crawler_window(app, &task_id, &base_url, &crawl_js, &vars_json)
         })
     }
 
@@ -168,31 +182,31 @@ pub fn create_main_window<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Resul
     // let builder = builder.transparent(true);
 
     // // Windows 11/macOS: 添加窗口效果（Windows 7/8/10 下 Acrylic 渲染异常，不应用毛玻璃特效）
-    // #[cfg(not(target_os = "linux"))]
-    // let builder = {
-    //     #[cfg(target_os = "windows")]
-    //     let should_apply_effects = {
-    //         let version = winver::WindowsVersion::detect();
-    //         version
-    //             .map(|v| v.major == 10 && v.minor == 0 && v.build >= 22000)
-    //             .unwrap_or(false)
-    //     };
-    //     #[cfg(not(target_os = "windows"))]
-    //     let should_apply_effects = true;
+    #[cfg(not(target_os = "linux"))]
+    let builder = {
+        #[cfg(target_os = "windows")]
+        let should_apply_effects = {
+            let version = winver::WindowsVersion::detect();
+            version
+                .map(|v| v.major == 10 && v.minor == 0 && v.build >= 22000)
+                .unwrap_or(false)
+        };
+        #[cfg(not(target_os = "windows"))]
+        let should_apply_effects = true;
 
-    //     if should_apply_effects {
-    //         use tauri::window::{Effect, EffectState, EffectsBuilder};
-    //         builder.effects(
-    //             EffectsBuilder::new()
-    //                 .effect(Effect::Sidebar)
-    //                 .effect(Effect::Acrylic)
-    //                 .state(EffectState::FollowsWindowActiveState)
-    //                 .build(),
-    //         )
-    //     } else {
-    //         builder
-    //     }
-    // };
+        if should_apply_effects {
+            use tauri::window::{Effect, EffectState, EffectsBuilder};
+            builder.effects(
+                EffectsBuilder::new()
+                    .effect(Effect::Sidebar)
+                    .effect(Effect::Acrylic)
+                    .state(EffectState::FollowsWindowActiveState)
+                    .build(),
+            )
+        } else {
+            builder
+        }
+    };
 
     builder
         .build()
@@ -392,88 +406,41 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
                 });
             }
 
+            // 事件名与 payload：Generic 自带，其余按 kind 名发全量事件。算完只 emit 一次，
+            // 副作用另行 match —— 不要把副作用写成 emit 的分支，那样会抢占 emit
+            // （Android 的 TaskChanged 曾因此完全收不到事件）。
             #[cfg(not(feature = "web"))]
-            let _ = app.emit(
-                kind.as_event_name().as_str(),
-                serde_json::to_value(&event).unwrap_or_else(|_| serde_json::Value::Null),
-            );
+            {
+                let (name, payload) = if let DaemonEvent::Generic { event, payload } = &*event {
+                    (event.clone(), payload.clone())
+                } else {
+                    (
+                        kind.as_event_name(),
+                        serde_json::to_value(&event).unwrap_or(serde_json::Value::Null),
+                    )
+                };
+                let _ = app.emit(name.as_str(), payload);
+            }
 
             match &*event {
-                DaemonEvent::Generic { event, payload } => {
-                    #[cfg(not(feature = "web"))]
-                    let _ = app.emit(event.as_str(), payload.clone());
-                }
-                DaemonEvent::SettingChange { changes } => {
+                // 落盘是所有设置写入方的公共收口（命令、爬虫、壁纸轮播……都会改设置），
+                // 只能留在事件循环里；语言与并发等按 key 的副作用已下沉到各自 command。
+                DaemonEvent::SettingChange { .. } => {
                     if let Err(e) = Settings::trigger_debounce_save() {
                         eprintln!("保存设置失败 {}", e);
                     }
-
-                    #[cfg(not(feature = "web"))]
-                    let _ = app.emit("setting-change", changes.clone());
-
-                    // maxConcurrentDownloads 变更时更新运行时调度器
-                    if changes.get("maxConcurrentDownloads").is_some() {
-                        let scheduler = TaskScheduler::global();
-                        tokio::spawn(async move {
-                            scheduler.set_download_concurrency().await;
-                        });
-                    }
-
-                    if changes.get("maxConcurrentTasks").is_some() {
-                        TaskScheduler::global().set_task_concurrency();
-                    }
-
-                    // 语言变更时刷新托盘菜单、收藏画册/官方插件源 i18n 名称（与磁盘挂载等实现方式一致，在 setting 回调处处理）。web的语言在前端处理
-                    #[cfg(not(feature = "web"))]
-                    if changes.get("language").is_some() {
-                        let raw = t!("albums.favorite");
-                        let i18n_name = if raw == "albums.favorite" {
-                            "收藏".to_string()
-                        } else {
-                            raw
-                        };
-                        let raw_source_name = t!("plugins.officialGithubReleaseSourceName");
-                        let i18n_source_name = if raw_source_name
-                            == "plugins.officialGithubReleaseSourceName"
-                        {
-                            kabegame_core::storage::plugin_sources::OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME
-                                    .to_string()
-                        } else {
-                            raw_source_name
-                        };
-                        #[cfg(not(target_os = "android"))]
-                        if let Err(e) = crate::tray::update_tray_menu(&app) {
-                            eprintln!("[托盘] 语言切换后刷新菜单失败: {}", e);
-                        }
-                        let _ = Storage::global().ensure_favorite_album();
-                        if let Err(e) = Storage::global().set_favorite_album_name(&i18n_name) {
-                            eprintln!("[收藏画册] 语言切换后设置 i18n 名称失败: {}", e);
-                        }
-                        if let Err(e) = Storage::global()
-                            .plugin_sources()
-                            .set_official_source_name(&i18n_source_name)
-                        {
-                            eprintln!("[插件官方源] 语言切换后设置 i18n 名称失败: {}", e);
-                        }
-                    }
                 }
-                #[cfg(all(target_os = "android", not(feature = "web")))]
+                #[cfg(target_os = "android")]
                 DaemonEvent::TaskChanged { diff, .. } => {
                     // 任务状态变化时刷新汇总(运行数 + 下载快照);完成态由命令内「无下载+无运行」自动转「全部完成」。
                     if diff.get("status").is_some() {
                         refresh_notifications(&app).await;
                     }
                 }
-                _ => {
-                    #[cfg(not(feature = "web"))]
-                    let _ = app.emit(
-                        kind.as_event_name().as_str(),
-                        serde_json::to_value(&event).unwrap_or_else(|_| serde_json::Value::Null),
-                    );
-                }
+                _ => {}
             }
 
-            // Android:下载事件追加副作用驱动通知刷新(不抢占默认臂的 app.emit,前端 TaskDrawer 照常)。
+            // Android:下载事件追加副作用驱动通知刷新(emit 已在上面统一做过,前端 TaskDrawer 照常)。
             #[cfg(all(target_os = "android", not(feature = "web")))]
             if matches!(
                 &*event,
@@ -614,6 +581,8 @@ pub fn create_crawler_window<R: Runtime>(
     app_handle: AppHandle<R>,
     task_id: &str,
     base_url: &str,
+    crawl_js: &str,
+    vars_json: &str,
 ) -> Result<(), String> {
     let label = crawler_window_label(task_id);
     if let Some(window) = app_handle.get_webview_window(&label) {
@@ -640,10 +609,15 @@ pub fn create_crawler_window<R: Runtime>(
         env!("CARGO_MANIFEST_DIR"),
         "/src/webview_js/media_download.js"
     ));
-    let script = include_str!(concat!(
+    // bootstrap.js 是模板：把该任务的 merged_config（vars）与插件 crawl.js 烘焙进去，
+    // 得到该任务专属的一次性注入脚本（每页 document-start 自执行，无乒乓）。
+    let bootstrap_tpl = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/webview_js/bootstrap.js"
     ));
+    let script = bootstrap_tpl
+        .replace("__KB_VARS_JSON__", vars_json)
+        .replace("/*__KB_CRAWL_JS__*/", crawl_js);
     let target = if base_url.trim().is_empty() {
         "about:blank"
     } else {
@@ -669,10 +643,10 @@ pub fn create_crawler_window<R: Runtime>(
         })
         .on_download(move |_webview, event| match event {
             DownloadEvent::Requested { url, destination } => {
-                let Some(ctx) = try_get_session_context(&task_id_for_download) else {
+                let Some(run) = TaskScheduler::global().get_run(&task_id_for_download) else {
                     return false;
                 };
-                let images_dir = std::path::PathBuf::from(&ctx.images_dir);
+                let images_dir = run.params.images_dir.clone();
                 if let Err(e) = std::fs::create_dir_all(&images_dir) {
                     eprintln!("Failed to create native download dir: {}", e);
                     return false;
@@ -720,21 +694,10 @@ pub fn create_crawler_window<R: Runtime>(
                             .await;
                         let task_id =
                             (!entry.task_id.trim().is_empty()).then_some(entry.task_id.as_str());
-                        let images_dir = match get_session(&entry.task_id).await {
-                            Some(session) => match session.get_context().await {
-                                Some(ctx) => std::path::PathBuf::from(ctx.images_dir),
-                                None => {
-                                    let error =
-                                        "Crawler context not found for native download output";
-                                    let _ = tokio::fs::remove_file(&final_path).await;
-                                    dq.switch_state(entry.id, DownloadState::Failed, Some(error))
-                                        .await;
-                                    dq.wait_then_finish_download(entry.id, false).await;
-                                    return;
-                                }
-                            },
+                        let images_dir = match TaskScheduler::global().get_run(&entry.task_id) {
+                            Some(run) => run.params.images_dir.clone(),
                             None => {
-                                let error = "Crawler context not found for native download output";
+                                let error = "Crawler task not found for native download output";
                                 let _ = tokio::fs::remove_file(&final_path).await;
                                 dq.switch_state(entry.id, DownloadState::Failed, Some(error))
                                     .await;

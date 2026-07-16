@@ -26,7 +26,7 @@
 
 该列**由应用维护，插件不可读写**：
 
-- 写入路径（`Kabegame.downloadImage` / `Kabegame.createImageMetadata`、webview `ctx.downloadImage`）不再接受任何版本参数，应用自动盖当前运行插件的 packed 版本（V8 侧 `KabegameOpState.plugin_version`，webview 侧 `JsTaskContext.plugin_version`）。
+- 写入路径（`Kabegame.downloadImage` / `Kabegame.createImageMetadata`、webview `ctx.downloadImage`）不再接受任何版本参数，应用自动盖当前运行插件的 packed 版本；V8 与 WebView 都从运行中 `Task.params.plugin_version()` 派生。
 - 迁移 runner 成功迁移一行后，把该行 `plugin_version` 盖为当前插件 packed 版本。
 - 无插件语境的写入（folder-sync、surf）恒为 0，永不参与迁移。
 - 插件对自己数据结构的版本理解只放在 metadata 内（`schema` 字段自检）。
@@ -58,7 +58,7 @@ L1 存储 / 迁移：
 L2 插件 / V8：
 
 - `src-tauri/kabegame-core/src/plugin/mod.rs`：`kbMetadataMigration` 解析、`pack_plugin_version`、安装 / 启动后调度迁移。
-- `src-tauri/kabegame-core/src/plugin/v8/ops.rs`：写入自动盖章（`KabegameOpState.plugin_version`）。
+- `src-tauri/kabegame-core/src/plugin/v8/ops.rs`：写入自动盖章（从 `Task.params.plugin_version()` 读取）。
 - `src-tauri/kabegame-core/src/plugin/metadata_migration.rs`：裸 `JsRuntime` 迁移运行器（side ES module + `migrate` 导出）与 `metadata-migrate` 事件；CLI 不再加载 V8，也不再提供 `plugin run migrate`。
 
 L3 查询 / 前端：

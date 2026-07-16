@@ -90,8 +90,8 @@ fn main() {
         if std::env::var("CARGO_FEATURE_STANDARD").is_ok() {
             println!("cargo:rustc-link-arg-bin=kabegame-cef-helper=-Wl,-rpath,$ORIGIN");
             println!("cargo:rustc-link-arg-bin=kabegame-cef-helper=-Wl,--enable-new-dtags");
-            println!("cargo:rustc-link-arg-bin=cef-example=-Wl,-rpath,$ORIGIN");
-            println!("cargo:rustc-link-arg-bin=cef-example=-Wl,--enable-new-dtags");
+            println!("cargo:rustc-link-arg-examples=-Wl,-rpath,$ORIGIN");
+            println!("cargo:rustc-link-arg-examples=-Wl,--enable-new-dtags");
         }
 
         // Linux CEF backend (standard): hide the bundled SQLite (rusqlite)
@@ -124,7 +124,7 @@ fn main() {
         if std::env::var("CARGO_FEATURE_STANDARD").is_ok() {
             println!("cargo:rustc-link-arg-bin=kabegame-cef-helper=-Wl,-rpath,@executable_path/../Frameworks");
             println!(
-                "cargo:rustc-link-arg-bin=cef-example=-Wl,-rpath,@executable_path/../Frameworks"
+                "cargo:rustc-link-arg-examples=-Wl,-rpath,@executable_path/../Frameworks"
             );
         }
         // Give bare dev executables an embedded Info.plist for Retina, process
@@ -146,7 +146,7 @@ fn main() {
                     .display()
             );
             println!(
-                "cargo:rustc-link-arg-bin=cef-example=-Wl,-sectcreate,__TEXT,__info_plist,{}",
+                "cargo:rustc-link-arg-examples=-Wl,-sectcreate,__TEXT,__info_plist,{}",
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("macos/embedded-Info.plist")
                     .display()

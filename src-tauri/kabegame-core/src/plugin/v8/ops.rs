@@ -1,4 +1,4 @@
-use crate::crawler::task_scheduler::PageStackEntry;
+use crate::crawler::task_scheduler::{PageStackEntry, Task};
 use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
@@ -9,7 +9,6 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value as JsonValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,15 +17,7 @@ use url::Url;
 
 #[derive(Clone)]
 pub struct KabegameOpState {
-    pub download_queue: Arc<crate::crawler::DownloadQueue>,
-    pub images_dir: PathBuf,
-    pub plugin_id: String,
-    /// 运行中插件的 packed 版本（每字节一段），metadata 写入盖章用；应用维护，插件不可读写。
-    pub plugin_version: u32,
     pub task_id: String,
-    pub output_album_id: Option<String>,
-    pub headers: HashMap<String, String>,
-    pub progress: f64,
     pub cancel: CancellationToken,
 }
 
@@ -35,14 +26,7 @@ impl KabegameOpState {
     /// snapshot. Extension ESM initialization must not invoke host ops.
     pub(crate) fn snapshot_placeholder() -> Self {
         Self {
-            download_queue: Arc::new(crate::crawler::DownloadQueue::new()),
-            images_dir: PathBuf::new(),
-            plugin_id: String::new(),
-            plugin_version: 0,
             task_id: String::new(),
-            output_album_id: None,
-            headers: HashMap::new(),
-            progress: 0.0,
             cancel: CancellationToken::new(),
         }
     }
@@ -54,17 +38,17 @@ pub async fn op_kabegame_to(
     state: Rc<RefCell<OpState>>,
     #[string] url: String,
 ) -> Result<String, JsErrorBox> {
-    let (task_id, headers, cancel) = state_snapshot(&state, |s| {
-        (s.task_id.clone(), s.headers.clone(), s.cancel.clone())
-    });
+    let (task_id, cancel) = state_snapshot(&state, |s| (s.task_id.clone(), s.cancel.clone()));
     check_cancelled(&cancel)?;
+    let run = run_of(&task_id)?;
+    let headers = run.headers_snapshot();
 
     let resolved_url = resolve_url_for_task_async(&task_id, &url).await?;
     emit_http_info(&task_id, format!("[to] 打开页面：{resolved_url}"));
     let (final_url, html, resp_headers) =
         http_get_text_with_retry(&task_id, &resolved_url, "to", &headers, &cancel).await?;
 
-    let stack = get_page_stack_async(&task_id).await?;
+    let stack = get_page_stack(&task_id)?;
     let mut stack_guard = stack
         .lock()
         .map_err(|e| JsErrorBox::generic(format!("Lock error: {e}")))?;
@@ -89,7 +73,7 @@ pub async fn op_kabegame_to(
 #[op2]
 pub async fn op_kabegame_back(state: Rc<RefCell<OpState>>) -> Result<(), JsErrorBox> {
     let task_id = state_snapshot(&state, |s| s.task_id.clone());
-    let stack = get_page_stack_async(&task_id).await?;
+    let stack = get_page_stack(&task_id)?;
     let mut stack_guard = stack
         .lock()
         .map_err(|e| JsErrorBox::generic(format!("Lock error: {e}")))?;
@@ -144,10 +128,9 @@ pub async fn op_kabegame_fetch(
     #[string] url: String,
     #[serde] init: Option<JsonValue>,
 ) -> Result<FetchResult, JsErrorBox> {
-    let (task_id, default_headers, cancel) = state_snapshot(&state, |s| {
-        (s.task_id.clone(), s.headers.clone(), s.cancel.clone())
-    });
+    let (task_id, cancel) = state_snapshot(&state, |s| (s.task_id.clone(), s.cancel.clone()));
     check_cancelled(&cancel)?;
+    let default_headers = run_of(&task_id)?.headers_snapshot();
 
     let (method, init_headers, body) = parse_fetch_init(init)?;
 
@@ -210,7 +193,8 @@ pub async fn op_kabegame_fetch(
 #[op2]
 #[serde]
 pub fn op_kabegame_plugin_data(state: &mut OpState) -> Result<JsonValue, JsErrorBox> {
-    let plugin_id = state.borrow::<KabegameOpState>().plugin_id.clone();
+    let task_id = state.borrow::<KabegameOpState>().task_id.clone();
+    let plugin_id = run_of(&task_id)?.params.plugin_id.clone();
     Storage::global()
         .plugin_data()
         .get(&plugin_id)
@@ -228,7 +212,8 @@ pub fn op_kabegame_set_plugin_data(
             "set_plugin_data: value must be an object",
         ));
     }
-    let plugin_id = state.borrow::<KabegameOpState>().plugin_id.clone();
+    let task_id = state.borrow::<KabegameOpState>().task_id.clone();
+    let plugin_id = run_of(&task_id)?.params.plugin_id.clone();
     Storage::global()
         .plugin_data()
         .set(&plugin_id, &value)
@@ -250,17 +235,29 @@ pub fn op_kabegame_set_header(state: &mut OpState, #[string] key: String, #[stri
         emit_http_warn(&task_id, format!("[headers] 跳过无效 header 值：{k} ({e})"));
         return;
     }
-    state
-        .borrow_mut::<KabegameOpState>()
-        .headers
-        .insert(k.to_string(), value);
+    match run_of(&task_id) {
+        Ok(run) => {
+            if let Err(e) = run.set_header(k.to_string(), value) {
+                emit_http_warn(&task_id, format!("[headers] 写入 header 失败：{e}"));
+            }
+        }
+        Err(e) => emit_http_warn(&task_id, format!("[headers] 写入 header 失败：{e}")),
+    }
 }
 
 #[op2(fast)]
 pub fn op_kabegame_del_header(state: &mut OpState, #[string] key: String) {
     let k = key.trim();
     if !k.is_empty() {
-        state.borrow_mut::<KabegameOpState>().headers.remove(k);
+        let task_id = state.borrow::<KabegameOpState>().task_id.clone();
+        match run_of(&task_id) {
+            Ok(run) => {
+                if let Err(e) = run.del_header(k) {
+                    emit_http_warn(&task_id, format!("[headers] 删除 header 失败：{e}"));
+                }
+            }
+            Err(e) => emit_http_warn(&task_id, format!("[headers] 删除 header 失败：{e}")),
+        }
     }
 }
 
@@ -283,13 +280,10 @@ pub fn op_kabegame_add_progress(state: &mut OpState, percentage: f64) -> Result<
         check_cancelled(&state.cancel)?;
     }
 
-    let (task_id, final_progress) = {
-        let state = state.borrow_mut::<KabegameOpState>();
-        state.progress = (state.progress + percentage).clamp(0.0, 99.9);
-        (state.task_id.clone(), state.progress)
-    };
-    GlobalEmitter::global().emit_task_progress(&task_id, final_progress);
-    Ok(final_progress)
+    let task_id = state.borrow::<KabegameOpState>().task_id.clone();
+    TaskScheduler::global()
+        .add_task_progress(&task_id, percentage)
+        .map_err(JsErrorBox::generic)
 }
 
 #[op2]
@@ -298,20 +292,15 @@ pub async fn op_kabegame_download_image(
     #[string] url: String,
     #[serde] opts: Option<JsonValue>,
 ) -> Result<(), JsErrorBox> {
-    let (download_queue, images_dir, plugin_id, plugin_version, task_id, output_album_id, headers, cancel) =
-        state_snapshot(&state, |s| {
-            (
-                s.download_queue.clone(),
-                s.images_dir.clone(),
-                s.plugin_id.clone(),
-                s.plugin_version,
-                s.task_id.clone(),
-                s.output_album_id.clone(),
-                s.headers.clone(),
-                s.cancel.clone(),
-            )
-        });
+    let (task_id, cancel) = state_snapshot(&state, |s| (s.task_id.clone(), s.cancel.clone()));
     check_cancelled(&cancel)?;
+    let run = run_of(&task_id)?;
+    let download_queue = TaskScheduler::global().download_queue();
+    let images_dir = run.params.images_dir.clone();
+    let plugin_id = run.params.plugin_id.clone();
+    let plugin_version = run.params.plugin_version();
+    let output_album_id = run.params.output_album_id.clone();
+    let headers = run.headers_snapshot();
 
     let (custom_name, metadata_id, post_url) = parse_download_opts(opts, &plugin_id, plugin_version)?;
     let parsed_url =
@@ -344,10 +333,10 @@ pub fn op_kabegame_create_image_metadata(
     #[serde] _opts: Option<JsonValue>,
 ) -> Result<i64, JsErrorBox> {
     // plugin_version 由应用盖章（图片下载时的插件版本），插件不可传入；旧 opts.version 静默忽略。
-    let (plugin_id, plugin_version) = {
-        let s = state.borrow::<KabegameOpState>();
-        (s.plugin_id.clone(), s.plugin_version)
-    };
+    let task_id = state.borrow::<KabegameOpState>().task_id.clone();
+    let run = run_of(&task_id)?;
+    let plugin_id = run.params.plugin_id.clone();
+    let plugin_version = run.params.plugin_version();
     Storage::global()
         .insert_image_metadata_row(&value, &plugin_id, plugin_version)
         .map_err(|e| JsErrorBox::generic(format!("create_image_metadata: {e}")))
@@ -366,13 +355,15 @@ fn check_cancelled(cancel: &CancellationToken) -> Result<(), JsErrorBox> {
     }
 }
 
-async fn get_page_stack_async(
-    task_id: &str,
-) -> Result<crate::crawler::task_scheduler::PageStack, JsErrorBox> {
+fn run_of(task_id: &str) -> Result<Arc<Task>, JsErrorBox> {
     TaskScheduler::global()
-        .page_stacks()
-        .get_stack(task_id)
-        .await
+        .get_run(task_id)
+        .ok_or_else(|| JsErrorBox::generic(format!("Task not found: {task_id}")))
+}
+
+fn get_page_stack(task_id: &str) -> Result<crate::crawler::task_scheduler::PageStack, JsErrorBox> {
+    TaskScheduler::global()
+        .page_stack(task_id)
         .ok_or_else(|| JsErrorBox::generic(format!("Page stack not found for task {task_id}")))
 }
 
@@ -381,7 +372,7 @@ async fn current_page_value_async<T>(
     f: impl FnOnce(&PageStackEntry) -> T,
 ) -> Result<T, JsErrorBox> {
     let task_id = state_snapshot(&state, |s| s.task_id.clone());
-    let stack = get_page_stack_async(&task_id).await?;
+    let stack = get_page_stack(&task_id)?;
     let stack_guard = stack
         .lock()
         .map_err(|e| JsErrorBox::generic(format!("Lock error: {e}")))?;
@@ -396,7 +387,7 @@ async fn resolve_url_for_task_async(task_id: &str, url: &str) -> Result<String, 
         return Ok(url.to_string());
     }
 
-    let stack = get_page_stack_async(task_id).await?;
+    let stack = get_page_stack(task_id)?;
     let base_url = {
         let stack_guard = stack
             .lock()

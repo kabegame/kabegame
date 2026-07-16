@@ -93,6 +93,7 @@ impl PluginScript {
     }
 }
 
+//TODO: local-import也用Plugin表示
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plugin {

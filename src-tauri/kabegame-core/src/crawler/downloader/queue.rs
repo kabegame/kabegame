@@ -325,7 +325,6 @@ impl DownloadQueue {
             .iter()
             .position(|download| download.native && download.url == url)?;
         let info = downloads.remove(index);
-        self.capacity_notify.notify_waiters();
         Some(info)
     }
 
@@ -522,7 +521,7 @@ impl DownloadQueue {
         };
 
         if !blocking {
-            if TaskScheduler::global().is_task_canceled(&task_id).await {
+            if TaskScheduler::global().is_task_canceled(&task_id) {
                 return Err("Task canceled".into());
             }
             self.pending_queue.lock().await.push_back(request);
@@ -545,7 +544,7 @@ impl DownloadQueue {
                 .filter(|d| !d.native)
                 .count();
             if active_pool < desired {
-                if TaskScheduler::global().is_task_canceled(&task_id).await {
+                if TaskScheduler::global().is_task_canceled(&task_id) {
                     return Err("Task canceled".into());
                 }
                 self.pending_queue.lock().await.push_back(request);
@@ -663,9 +662,6 @@ impl DownloadQueue {
                 true,
             );
             GlobalEmitter::global().emit_download_removed(entry.id);
-        }
-        if !native_entries.is_empty() {
-            self.capacity_notify.notify_waiters();
         }
         pool_canceled || !native_entries.is_empty() || !upload_ids.is_empty()
     }
@@ -827,16 +823,14 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             }
         };
 
-        // 取出任务后检查任务是否取消
-        {
-            let tasks = TaskScheduler::global().canceled_tasks.read().await;
-            if tasks.contains(&job.task_id) {
-                // 甚至没加入活跃列表，直接跳过，不需要切换取消状态
-                continue;
-            }
-            // 取出任务后、加入活跃列表前有竞态，这里在持 canceled_tasks 读锁时加入活跃列表，
-            // 避免 cancel_task 在此窗口期漏掉这个下载
-            dq.add_active_then_prepare(&job).await;
+        if TaskScheduler::global().is_task_canceled(&job.task_id) {
+            continue;
+        }
+        dq.add_active_then_prepare(&job).await;
+        if TaskScheduler::global().is_task_canceled(&job.task_id) {
+            dq.switch_state(job.id, DownloadState::Canceled, None).await;
+            dq.wait_then_finish_download(job.id, true).await;
+            continue;
         }
 
         let job_url = job.url.clone();

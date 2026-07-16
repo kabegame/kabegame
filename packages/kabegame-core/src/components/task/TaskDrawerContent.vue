@@ -96,6 +96,7 @@
                             }">
                               <el-progress :percentage="taskProgressPercent(item.data)" :stroke-width="4"
                                 :color="taskProgressBarColor(item.data.status)"
+                                :format="() => taskProgressText(item.data)"
                                 :show-text="item.data.status === 'running'" />
                               <div v-if="item.data.status === 'running'" class="progress-footer">
                                 <el-button text size="small" type="warning" class="stop-btn"
@@ -266,18 +267,25 @@ function isCanceledTaskStatus(status: string): boolean {
   return status === "canceled" || status === "cancelled";
 }
 
-/** 与 CrawlTask 一致：running / failed / canceled 且 progress>0 时显示进度条（老任务 progress=0 不显示） */
+/**
+ * pending 尚未开始、completed 已经结束，都不挂条；其余（running / failed / canceled）显示。
+ * running 一进入就显示，从 0% 起步 —— 不等第一个 progress 事件。
+ */
 function shouldShowTaskProgressBar(task: ScriptTask): boolean {
-  const p = Number(task.progress ?? 0);
-  if (!Number.isFinite(p) || p <= 0) return false;
   const s = task.status;
-  return s === "running" || s === "failed" || isCanceledTaskStatus(s);
+  return s !== "pending" && s !== "completed";
 }
 
 function taskProgressPercent(task: ScriptTask): number {
   const p = Number(task.progress ?? 0);
   if (!Number.isFinite(p)) return 0;
-  return Math.round(Math.min(100, Math.max(0, p)));
+  // 保留两位小数：取整会把细粒度进度抹平（图多的任务里 1% 也是好些张）
+  return Math.round(Math.min(100, Math.max(0, p)) * 100) / 100;
+}
+
+/** 百分比文字固定两位小数：默认格式会随数值在 "33%" / "33.4%" 间变宽，带动条抖动。 */
+function taskProgressText(task: ScriptTask): string {
+  return `${taskProgressPercent(task).toFixed(2)}%`;
 }
 
 /** failed：外层 .task-progress--failed-bar 强制红条；running：默认主色；canceled：.task-progress--canceled-bar 灰条 */

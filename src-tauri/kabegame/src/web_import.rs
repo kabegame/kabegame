@@ -186,7 +186,7 @@ async fn handle_import(Query(q): Query<ImportQuery>, mut multipart: Multipart) -
         task_id: task_id.clone(),
         plugin_file_path: None,
     };
-    if let Err(e) = TaskScheduler::global().submit_task(req) {
+    if let Err(e) = TaskScheduler::global().submit_task(req).await {
         return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
     }
 

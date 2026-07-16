@@ -2,9 +2,10 @@
 identifier = "crawler"
 description = "Crawler window permissions"
 commands.allow = [
-    "crawl_get_context",
-    "crawl_page_ready",
     # apis
+    "crawl_get_page_label",
+    "crawl_get_page_state",
+    "crawl_get_state",
     "crawl_task_log",
     "crawl_add_progress",
     "crawl_download_image",
@@ -19,5 +20,4 @@ commands.allow = [
     "crawl_error",
     "show_crawler_window",
     "crawl_clear_site_data",
-    "crawl_run_script",
 ]

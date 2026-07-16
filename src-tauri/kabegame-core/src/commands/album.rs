@@ -1,20 +1,17 @@
-//! Web JSON-RPC 相册后端层。见 `super::image` 模块注释：
-//! 返回 `ImageInfo` 的函数必须先 [`crate::web::image_rewrite::rewrite_image_info`]。
+//! 相册命令的共享实现层。返回 `ImageInfo` 的函数一律回**原始本地路径**；
+//! web 模式的 CDN 改写由调用方（`kabegame::web::dispatch`）在本层返回之后施加。
 
-use kabegame_core::settings::Settings;
-use kabegame_core::storage::image_events::{
+use crate::settings::Settings;
+use crate::storage::image_events::{
     add_images_to_album_with_event, remove_images_from_album_with_event,
 };
-use kabegame_core::storage::{Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
-#[cfg(feature = "standard")]
-use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(feature = "standard")]
-use kabegame_core::virtual_driver::VirtualDriveService;
+use crate::storage::{Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
+#[cfg(feature = "virtual-driver")]
+use crate::virtual_driver::driver_service::VirtualDriveServiceTrait;
+#[cfg(feature = "virtual-driver")]
+use crate::virtual_driver::VirtualDriveService;
 use kabegame_i18n::t;
 use serde_json::Value;
-
-#[cfg(feature = "web")]
-use crate::web::image_rewrite::rewrite_image_info;
 
 pub fn get_albums() -> Result<Value, String> {
     let albums = Storage::global().list_all_albums()?;
@@ -22,18 +19,14 @@ pub fn get_albums() -> Result<Value, String> {
 }
 
 pub fn get_album_preview(album_id: String, limit: usize) -> Result<Value, String> {
-    let mut images = Storage::global().get_album_preview(&album_id, limit)?;
-    #[cfg(feature = "web")]
-    for info in images.iter_mut() {
-        rewrite_image_info(info);
-    }
+    let images = Storage::global().get_album_preview(&album_id, limit)?;
     serde_json::to_value(images).map_err(|e| e.to_string())
 }
 
 pub fn rename_album(album_id: String, new_name: String) -> Result<Value, String> {
     Storage::global().rename_album(&album_id, &new_name)?;
-    #[cfg(feature = "standard")]
-    kabegame_core::virtual_driver::VirtualDriveService::global().bump_albums();
+    #[cfg(feature = "virtual-driver")]
+    crate::virtual_driver::VirtualDriveService::global().bump_albums();
     Ok(Value::Null)
 }
 
@@ -44,15 +37,15 @@ pub fn delete_album(album_id: String) -> Result<Value, String> {
             Settings::global().set_wallpaper_rotation_album_id(None)?;
         }
     }
-    #[cfg(feature = "standard")]
-    kabegame_core::virtual_driver::VirtualDriveService::global().bump_albums();
+    #[cfg(feature = "virtual-driver")]
+    crate::virtual_driver::VirtualDriveService::global().bump_albums();
     Ok(Value::Null)
 }
 
 pub fn move_album(album_id: String, new_parent_id: Option<String>) -> Result<Value, String> {
     Storage::global().move_album(&album_id, new_parent_id.as_deref())?;
-    #[cfg(feature = "standard")]
-    kabegame_core::virtual_driver::VirtualDriveService::global().bump_albums();
+    #[cfg(feature = "virtual-driver")]
+    crate::virtual_driver::VirtualDriveService::global().bump_albums();
     Ok(Value::Null)
 }
 
@@ -67,7 +60,7 @@ pub fn add_images_to_album(
 ) -> Result<Value, String> {
     Storage::global().ensure_album_is_writable(&album_id)?;
     let r = add_images_to_album_with_event(&album_id, &image_ids)?;
-    #[cfg(feature = "standard")]
+    #[cfg(feature = "virtual-driver")]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
     serde_json::to_value(r).map_err(|e| e.to_string())
 }
@@ -84,7 +77,7 @@ pub fn add_task_images_to_album(task_id: String, album_id: String) -> Result<Val
         }));
     }
     let r = add_images_to_album_with_event(&album_id, &image_ids)?;
-    #[cfg(feature = "standard")]
+    #[cfg(feature = "virtual-driver")]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
     serde_json::to_value(r).map_err(|e| e.to_string())
 }
@@ -95,7 +88,7 @@ pub fn remove_images_from_album(
 ) -> Result<Value, String> {
     Storage::global().ensure_album_is_writable(&album_id)?;
     let removed = remove_images_from_album_with_event(&album_id, &image_ids)?;
-    #[cfg(feature = "standard")]
+    #[cfg(feature = "virtual-driver")]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
     serde_json::to_value(removed).map_err(|e| e.to_string())
 }
@@ -108,14 +101,14 @@ pub fn update_album_images_order(
     Ok(Value::Null)
 }
 
-#[cfg(all(not(target_os = "android"), not(feature = "web")))]
+#[cfg(not(target_os = "android"))]
 pub async fn add_local_folder_album(
     name: String,
     parent_id: Option<String>,
     sync_folder: String,
     recursive: bool,
 ) -> Result<Value, String> {
-    use kabegame_core::local_folder::build_entries_non_recursive;
+    use crate::local_folder::build_entries_non_recursive;
     use std::path::Path;
     // 检查画册名称
     let name = name.trim();
@@ -161,7 +154,7 @@ pub async fn add_local_folder_album(
     // （下载输出目录不再禁止：同步时按路径复用图库已有图片，不会产生 local_path 冲突。）
     let mut forbidden_roots: Vec<std::path::PathBuf> = Vec::new();
 
-    #[cfg(feature = "standard")]
+    #[cfg(feature = "virtual-driver")]
     {
         if let Some(mount_point) = VirtualDriveService::global().current_mount_point() {
             let mount_path = Path::new(&mount_point);
@@ -203,9 +196,9 @@ pub async fn add_local_folder_album(
     tokio::spawn(async move {
         if recursive {
             let _ =
-                kabegame_core::local_folder::sync_album_recursive(&root_id, forbidden_roots).await;
+                crate::local_folder::sync_album_recursive(&root_id, forbidden_roots).await;
         } else {
-            let _ = kabegame_core::local_folder::sync_album(&root_id).await;
+            let _ = crate::local_folder::sync_album(&root_id).await;
         }
     });
 
@@ -220,10 +213,10 @@ pub async fn sync_local_folder_album(
 ) -> Result<Value, String> {
     if recursive.unwrap_or(false) {
         let forbidden_roots = local_folder_forbidden_roots();
-        let options = kabegame_core::local_folder::RecursiveSyncOptions {
+        let options = crate::local_folder::RecursiveSyncOptions {
             create_missing_albums: create_missing_albums.unwrap_or(true),
         };
-        let report = kabegame_core::local_folder::sync_album_recursive_with_options(
+        let report = crate::local_folder::sync_album_recursive_with_options(
             &album_id,
             forbidden_roots,
             options,
@@ -231,7 +224,7 @@ pub async fn sync_local_folder_album(
         .await?;
         serde_json::to_value(report).map_err(|e| e.to_string())
     } else {
-        let report = kabegame_core::local_folder::sync_album(&album_id).await?;
+        let report = crate::local_folder::sync_album(&album_id).await?;
         serde_json::to_value(report).map_err(|e| e.to_string())
     }
 }
@@ -247,7 +240,7 @@ pub async fn sync_local_folder_album(
 
 #[cfg(not(target_os = "android"))]
 pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<Value, String> {
-    let results = kabegame_core::local_folder::sync_albums_by_ids(&album_ids).await;
+    let results = crate::local_folder::sync_albums_by_ids(&album_ids).await;
     let payload: Vec<Value> = album_ids
         .iter()
         .zip(results.into_iter())
@@ -276,7 +269,7 @@ pub async fn sync_local_folder_albums(_album_ids: Vec<String>) -> Result<Value, 
 #[cfg(not(target_os = "android"))]
 fn local_folder_forbidden_roots() -> Vec<std::path::PathBuf> {
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
-    #[cfg(feature = "standard")]
+    #[cfg(feature = "virtual-driver")]
     {
         if let Some(mount_point) = VirtualDriveService::global().current_mount_point() {
             let p = std::path::Path::new(&mount_point);

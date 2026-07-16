@@ -3,7 +3,7 @@
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::storage::Storage;
 use kabegame_i18n::t;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -112,7 +112,7 @@ pub async fn get_file_drop_kinds(paths: Vec<String>) -> Result<Vec<FileDropKindI
 
 #[tauri::command]
 pub async fn get_supported_image_types() -> Result<serde_json::Value, String> {
-    crate::commands_core::misc::get_supported_image_types()
+    kabegame_core::commands::misc::get_supported_image_types()
 }
 
 /// 读取后端缓存的 Linux 桌面环境（plasma|gnome|unknown）
@@ -177,34 +177,33 @@ pub async fn clear_user_data<R: Runtime>(app: AppHandle<R>) -> Result<(), String
     Ok(())
 }
 
-/// 参数结构见 `commands_core::organize::StartOrganizeArgs`（与前端 `invoke` 对象字段一致，
+/// 参数结构见 `commands::organize::StartOrganizeArgs`（与前端 `invoke` 对象字段一致，
 /// camelCase；勿改用平铺 `bool` 参数，否则 serde 无法匹配 `removeUnrecognized` 等键，会得到默认值 false）。
 #[tauri::command]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub async fn start_organize(
-    args: crate::commands_core::organize::StartOrganizeArgs,
+    args: kabegame_core::commands::organize::StartOrganizeArgs,
 ) -> Result<serde_json::Value, String> {
-    crate::commands_core::organize::start_organize(args).await
+    kabegame_core::commands::organize::start_organize(args).await
 }
 
 #[tauri::command]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub async fn get_organize_total_count() -> Result<usize, String> {
-    kabegame_core::storage::Storage::global().get_images_total_count()
+pub async fn get_organize_total_count() -> Result<serde_json::Value, String> {
+    kabegame_core::commands::organize::get_organize_total_count()
 }
 
 /// 页面刷新后同步：是否正在整理及当前进度快照（与 `organize-progress` 一致）
 #[tauri::command]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub async fn get_organize_run_state(
-) -> Result<kabegame_core::storage::organize::OrganizeRunState, String> {
-    Ok(kabegame_core::storage::organize::OrganizeService::global().get_run_state())
+pub async fn get_organize_run_state() -> Result<serde_json::Value, String> {
+    kabegame_core::commands::organize::get_organize_run_state()
 }
 
 #[tauri::command]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub async fn cancel_organize() -> Result<bool, String> {
-    kabegame_core::storage::organize::OrganizeService::global().cancel()
+pub async fn cancel_organize() -> Result<serde_json::Value, String> {
+    kabegame_core::commands::organize::cancel_organize()
 }
 
 #[tauri::command]
@@ -480,7 +479,7 @@ pub async fn copy_image_to_clipboard<R: Runtime>(
 
     #[cfg(target_os = "android")]
     {
-        use serde::Serialize;
+        use serde::{Deserialize, Serialize};
         use tauri_plugin_share::ShareExt;
 
         // TODO: 添加 mime_type 到 image 表之后优先用 image 表 mime_type 字段，否则回落到 png

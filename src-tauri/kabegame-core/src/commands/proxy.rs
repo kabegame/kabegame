@@ -14,7 +14,7 @@ pub async fn proxy_fetch(
 ) -> Result<serde_json::Value, String> {
     let mut client_builder =
         reqwest::Client::builder().redirect(reqwest::redirect::Policy::default());
-    if let Some(ref proxy_url) = kabegame_core::crawler::proxy::get_proxy_config().proxy_url {
+    if let Some(ref proxy_url) = crate::crawler::proxy::get_proxy_config().proxy_url {
         if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
             client_builder = client_builder.proxy(proxy);
         }

@@ -4,7 +4,7 @@
   "version": "4.4.0",
   {{#unless isAndroid}}
   {{!-- fork 顶层 bins(patch 0009):桌面 tauri build 只编译这里列出的 bin
-       (逐个 --bin 传给 cargo,不再 --bins 全量编译,cef-example 不进 release);
+       (逐个 --bin 传给 cargo,不再 --bins 全量编译,examples 不进 release);
        Windows 下辅助 bin 还会由 NSIS 原生装到安装根(主 exe 旁)并随卸载删除,
        无需 resources/bin + installer hook 搬运。macOS/Linux 的 helper 仍走下方
        macOS.files / deb files 显式映射。 --}}

@@ -148,7 +148,7 @@ async fn schedule_trigger_once(config: &RunConfig) -> Result<String, String> {
         task_id: task_id.clone(),
         plugin_file_path: None,
     };
-    TaskScheduler::global().submit_task(req)?;
+    TaskScheduler::global().submit_task(req).await?;
     let now_s = now_secs();
     let _ = Storage::global().set_run_config_schedule_last_run_at(&config.id, Some(now_s));
     let next_planned = compute_next_planned_at(config, now_s);

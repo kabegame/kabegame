@@ -1,5 +1,7 @@
-// haowallpaper WebView 爬虫：基于 page_label 的 switch 流程
-// API: 全局 ctx { vars, currentContext, addProgress, downloadImage, to, exit, error, requestShowWebview }
+// haowallpaper WebView 爬虫：基于 pageLabel 的 switch 流程
+// 运行环境：闭包内注入的 Kabegame（不挂 window）。功能相似的接口与 V8 后端同名。
+// 差异：真实 document（$/$$/waitForSelector）、按页重跑的生命周期、pageState/state
+// 需按调用经 invoke 获取（异步方法：await Kabegame.pageLabel()/pageState()/state()）。
 
 /**
  * 在页面内派发一段随机鼠标移动事件（mousemove），可指定次数或时长。
@@ -51,51 +53,52 @@ function triggerMouseUp(el) {
 }
 
 async function run() {
-  const step = ctx.pageLabel;
-  state = ctx.state;
+  const step = await Kabegame.pageLabel();
+  const state = await Kabegame.state();
   if (!state.dataCleared) {
-    await ctx.updateState({ dataCleared: true })
-    await ctx.clearData();
+    await Kabegame.updateState({ dataCleared: true });
+    await Kabegame.clearData();
   }
 
   switch (step) {
     case "initial":
-      // 首次进入（ctx.pageLabel 由 Rust 在创建任务时设为 initial）
-      await handleInitial(ctx);
+      // 首次进入（pageLabel 由 Rust 在创建任务时设为 initial）
+      await handleInitial();
       break;
     case "posts":
       // 列表页：解析条目，可 to 到详情或下一页
-      await handlePosts(ctx);
+      await handlePosts();
       break;
     case "detail":
       // 详情页：下载图片，再 to 下一项或 exit
-      await handleDetail(ctx);
+      await handleDetail();
       break;
     case "exit":
     default:
       // 脚本结束退出。
-      await ctx.exit();
+      await Kabegame.exit();
   }
 }
 
-async function handleInitial(ctx) {
-  const state = ctx.state;
-  const formats = ctx.vars?.formats ?? {
+async function handleInitial() {
+  let state = await Kabegame.state();
+  const formats = Kabegame.vars?.formats ?? {
     image: true,
     video: true
   };
   if (Object.keys(formats).length === 0) {
-    await ctx.log("没有勾选任何格式，退出");
-    await ctx.exit();
+    await Kabegame.log("没有勾选任何格式，退出");
+    await Kabegame.exit();
     return;
   }
 
   // 获得开始页面设置，1为默认值
-  const startPage = ctx.vars?.startPage ?? 1;
+  const startPage = Kabegame.vars?.startPage ?? 1;
   // 执行初始化动作
   if (!state.page) {
-    await ctx.updateState({ page: startPage, formats, startPage });
-    const endPage = ctx.vars?.endPage ?? startPage;
+    // updateState 返回合并后的 state，直接复用，无需再取一次。
+    state = await Kabegame.updateState({ page: startPage, formats, startPage });
+    const endPage = Kabegame.vars?.endPage ?? startPage;
     if (endPage >= startPage + 100) {
       throw "在一次之内不允许爬取超过100页，咱二次元人要保持文明礼仪";
     } else if (endPage < startPage) {
@@ -111,56 +114,56 @@ async function handleInitial(ctx) {
 
   if (endPage) {
     if (page > endPage) {
-      await ctx.exit();
+      await Kabegame.exit();
       return;
     }
   }
 
   // 准备进入下一页
-  await ctx.updateState({ page: page + 1 });
+  await Kabegame.updateState({ page: page + 1 });
 
-  const wallpaperType = ctx.vars?.wallpaperType?.trim() ?? "";
-  await ctx.sleep(2000);
-  ctx.log(`当前页面: ${page}, 种类: ${wallpaperType}, 标签: ${ctx.vars?.tags}, 格式: ${Object.keys(ctx.vars?.formats)}`);
-  await ctx.to(`/${wallpaperType}?page=${page}`, {
+  const wallpaperType = Kabegame.vars?.wallpaperType?.trim() ?? "";
+  await Kabegame.sleep(2000);
+  Kabegame.log(`当前页面: ${page}, 种类: ${wallpaperType}, 标签: ${Kabegame.vars?.tags}, 格式: ${Object.keys(Kabegame.vars?.formats)}`);
+  await Kabegame.to(`/${wallpaperType}?page=${page}`, {
     pageLabel: "posts",
     pageState: { nth: 1, lastSearched: -1 },
   });
 }
 
-async function handlePosts(ctx) {
-  await ctx.waitForDom();
-  await ctx.sleep(5000);
-  const state = ctx.state;
+async function handlePosts() {
+  await Kabegame.waitForDom();
+  await Kabegame.sleep(5000);
+  let state = await Kabegame.state();
 
   // 不知道最后一页是多少
   if (state.endPage === undefined) {
-    const endPageConfig = ctx.vars?.endPage ?? state.startPage;
+    const endPageConfig = Kabegame.vars?.endPage ?? state.startPage;
     let totalPages = NaN;
     try {
-      const lastNum = await ctx.waitForSelector(".page-content > div:last-of-type", {
+      const lastNum = await Kabegame.waitForSelector(".page-content > div:last-of-type", {
         timeout: 20000,
         interval: 500,
       });
       totalPages = parseInt(lastNum.textContent, 10);
     } catch (e) {
-      ctx.log(`无法获取总页数: ${e?.message ?? e}`);
+      Kabegame.log(`无法获取总页数: ${e?.message ?? e}`);
     }
     if (!Number.isFinite(totalPages)) totalPages = endPageConfig;
     const endPage = Math.min(endPageConfig, totalPages);
     const totalPage = endPage - state.startPage + 1;
-    await ctx.updateState({ endPage, percentPerPage: 100 / totalPage });
-    ctx.log(`最大页数: ${endPage}，总页数: ${totalPage}`);
+    state = await Kabegame.updateState({ endPage, percentPerPage: 100 / totalPage });
+    Kabegame.log(`最大页数: ${endPage}，总页数: ${totalPage}`);
   }
 
-  const pageState = ctx.pageState;
+  const pageState = await Kabegame.pageState();
   const lastSearched = pageState.lastSearched;
   const nth = pageState.nth;
 
-  const items = ctx.$$(".card");
+  const items = Kabegame.$$(".card");
 
   if (lastSearched === -1) {
-    ctx.log(`本页图片数量: ${items.length}`);
+    Kabegame.log(`本页图片数量: ${items.length}`);
   }
 
   for (let i = lastSearched + 1; i < items.length; ++i) {
@@ -174,19 +177,19 @@ async function handlePosts(ctx) {
     if (item.querySelector('.resource-container > img')) {
       isImage = true;
       if (wantVideo && !wantImage) {
-        ctx.log(`${i} 不是视频，跳过`)
+        Kabegame.log(`${i} 不是视频，跳过`)
         continue;
       }
     } else {
       isVideo = true;
       if (wantImage && !wantVideo) {
-        ctx.log(`${i} 不是视频，跳过`)
+        Kabegame.log(`${i} 不是视频，跳过`)
         continue;
       }
     }
 
     if (!isImage && !isVideo) {
-      await ctx.exit()
+      await Kabegame.exit()
       return;
     }
 
@@ -194,7 +197,7 @@ async function handlePosts(ctx) {
       item.querySelectorAll(".labelDiv > span"),
     ).map((span) => span.textContent);
 
-    const wantsTags = (ctx.vars?.tags ?? []).map((t) => t.trim());
+    const wantsTags = (Kabegame.vars?.tags ?? []).map((t) => t.trim());
     let wantDownload = wantsTags.length === 0;
     if (!wantDownload) {
       for (const tag in wantsTags) {
@@ -205,48 +208,48 @@ async function handlePosts(ctx) {
     }
     if (wantDownload) {
       const percentPerPage = state.percentPerPage;
-      await ctx.addProgress(percentPerPage * (i - lastSearched) / items.length);
+      await Kabegame.addProgress(percentPerPage * (i - lastSearched) / items.length);
 
 
-      await ctx.updatePageState({ nth: nth + 1, lastSearched: i });
+      await Kabegame.updatePageState({ nth: nth + 1, lastSearched: i });
       const button = item.querySelector('.card--button a');
-      ctx.log(`下载第${nth}个资源 ${button.href}，为${isImage ? '图片' : '视频' }`);
-      await ctx.to(button.href, { pageLabel: "detail" });
+      Kabegame.log(`下载第${nth}个资源 ${button.href}，为${isImage ? '图片' : '视频' }`);
+      await Kabegame.to(button.href, { pageLabel: "detail" });
       return;
     }
   }
 
-  await ctx.addProgress((items.length - lastSearched) / items.length * state.percentPerPage)
-  await ctx.back();
+  await Kabegame.addProgress((items.length - lastSearched) / items.length * state.percentPerPage)
+  await Kabegame.back();
   return;
 }
 
-async function handleDetail(ctx) {
-  await ctx.waitForDom();
+async function handleDetail() {
+  await Kabegame.waitForDom();
   await emitRandomMouseMoves();
-  await ctx.sleep(3000);
-  
-  const downloadButton = await ctx.waitForSelector(".DownButtom", {
+  await Kabegame.sleep(3000);
+
+  const downloadButton = await Kabegame.waitForSelector(".DownButtom", {
     interval: 1000,
     timeout: 30000,
   });
   // 模拟点击
   triggerMouseUp(downloadButton);
-  ctx.sleep(2000);
+  Kabegame.sleep(2000);
   // 模拟点击
-  (await ctx.waitForSelector('.altcha input')).click();
+  (await Kabegame.waitForSelector('.altcha input')).click();
   for (let i = 0; i < 15; ++i) {
     await emitRandomMouseMoves({ count: 30, intervalMs: 100 });
-    const num = ctx.$('#progressBar .num').textContent;
+    const num = Kabegame.$('#progressBar .num').textContent;
     if (num === '100') {
-      ctx.log(`触发下载: ${location.href}`);
+      Kabegame.log(`触发下载: ${location.href}`);
       break;
     }
   }
-  await ctx.updateState({
+  await Kabegame.updateState({
     dataCleared: false
   })
-  await ctx.back();
+  await Kabegame.back();
 }
 
 await run();

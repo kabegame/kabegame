@@ -65,7 +65,7 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
   Windows 8+ 兼容性（`<compatibility>` supportedOS）的进程开放；不带 manifest 的
   cargo 默认 exe 会让 GPU 进程 `CreateWindowEx` 失败 → NOTREACHED 崩溃循环
   （CEF #3765）。`kabegame` package 的 build.rs 通过 tauri-build
-  `WindowsAttributes::app_manifest` 同时为主程序、helper 和 example 注入
+  `WindowsAttributes::app_manifest` 同时为主程序、helper 和 Cargo example target 注入
   `src-tauri/kabegame/windows-app.manifest`。
 - CEF 子进程 = exe 旁的独立 `kabegame-cef-helper.exe`（`browser_subprocess_path`，三平台统一），
   `dispatch_cef_subprocess()` 必须在 `main` 最早期调用（与 Linux 相同）。Windows 无
@@ -108,16 +108,16 @@ CEF 是多进程运行时。`dispatch_cef_subprocess()` 必须在 Tauri Builder 
 
 ## Example / demo
 
-`cef-example` 与 `kabegame-cef-helper` 都是 `kabegame` package 的 binary target，用于在不接入 Tauri 的情况下验证 CEF 自身的窗口/多进程链路:
+`cef-example` 是 `kabegame` package 的 Cargo example target，配合 `kabegame-cef-helper` binary target，用于在不接入 Tauri 的情况下验证 CEF 自身的窗口/多进程链路:
 
-- `src/bin/cef-example.rs`:浏览器(主)进程,CEF Views 顶层窗口 + 事件测试页。
+- `examples/cef-example.rs`:浏览器(主)进程,CEF Views 顶层窗口 + 事件测试页。
 - `src/bin/kabegame-cef-helper.rs`:极薄的 CEF 子进程入口，调用 runtime 的 `run_cef_subprocess()`。
 
 运行(三平台一致):
 
 ```bash
 CEF_PATH=... cargo build -p kabegame --features standard --bin kabegame-cef-helper
-CEF_PATH=... cargo run -p kabegame --features standard --bin cef-example
+CEF_PATH=... cargo run -p kabegame --features standard --example cef-example
 ```
 
 macOS 适配的硬性要点(实测踩坑,移植主 runtime 时同样适用):

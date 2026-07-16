@@ -1,18 +1,16 @@
-//! Web 边界：把 `ImageInfo.local_path` / `thumbnail_path` 改写为 CDN 绝对 URL。
+//! Web 边界：把 core 命令返回的图片 JSON 里的 `local_path` / `thumbnail_path`
+//! 改写为 CDN 绝对 URL。
 //!
-//! 仅供 `commands_core::image` / `commands_core::album` 这些 web-only 包装层调用。
-//! 桌面 Tauri 走 `commands::image` 不经过这里，保持返回文件系统路径。
+//! `kabegame-core::commands` 层是 feature-agnostic 的，一律回**原始本地路径**；
+//! 改写在**本层（web dispatch 出口）**对 core 已序列化的 `serde_json::Value`
+//! 就地施加。桌面 Tauri 不经过这里，保持文件系统路径。
 //!
 //! 规则：取 local_path 的 **末级目录名** + **basename**，拼到 [`CDN_BASE`]。
-//! 这样 images/ 与 thumbnails/ 都走同一函数，future 多层目录或多租户分桶也不必改逻辑。
-//!
-//! 注意：不要退回 `serde_json::Value` 原地改写的风格
-//! （参考 `web::dispatch::strip_http_headers_in_place` 的反面示例）——那里丢类型检查，
-//! 多 RPC 维护成本高。此处在类型化的 `ImageInfo` 上改。
+//! images/ 与 thumbnails/ 共用同一函数，未来多层目录 / 多租户分桶也不必改逻辑。
 
 use std::path::Path;
 
-use kabegame_core::storage::ImageInfo;
+use serde_json::Value;
 
 pub const CDN_BASE: &str = "https://cdn.kabegame.com";
 
@@ -37,18 +35,32 @@ pub fn rewrite_fs_path(p: &str) -> String {
     format!("{}/{}/{}", CDN_BASE, dir, filename)
 }
 
-/// 对单个 ImageInfo 改写 local_path 与 thumbnail_path。
+/// 对 core 返回的图片 `Value` 就地改写 `local_path` / `thumbnail_path`。
+/// 接受单个 image 对象，或 image 对象数组（`get_album_preview` / `pathql_fetch`）。
 ///
-/// **Debug 构建下是 no-op**——`bun dev` 里 web server 和桌面共用调试二进制，
-/// 开发时不希望 web RPC 返回 CDN URL（本地没挂 CDN、打断断点调试时的路径观察）。
-/// release（`bun b --release`，debug_assertions=false）才启用改写；上线生效。
-pub fn rewrite_image_info(info: &mut ImageInfo) {
+/// **Debug 构建下是 no-op**——`deno task dev` 里 web server 与桌面共用调试二进制，
+/// 开发时不希望 web RPC 返回 CDN URL（本地没挂 CDN、会打断断点调试时的路径观察）。
+/// release（`deno task b --release`，debug_assertions=false）才启用改写；上线生效。
+pub fn rewrite_image_value(v: &mut Value) {
     if cfg!(debug_assertions) {
-        let _ = info;
         return;
     }
-    info.local_path = rewrite_fs_path(&info.local_path);
-    info.thumbnail_path = rewrite_fs_path(&info.thumbnail_path);
+    match v {
+        Value::Array(items) => items.iter_mut().for_each(rewrite_obj_paths),
+        obj @ Value::Object(_) => rewrite_obj_paths(obj),
+        _ => {}
+    }
+}
+
+fn rewrite_obj_paths(v: &mut Value) {
+    let Some(obj) = v.as_object_mut() else {
+        return;
+    };
+    for key in ["local_path", "thumbnail_path"] {
+        if let Some(Value::String(s)) = obj.get_mut(key) {
+            *s = rewrite_fs_path(s);
+        }
+    }
 }
 
 #[cfg(test)]

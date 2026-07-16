@@ -166,9 +166,9 @@ name = "kabegame-cef-helper"
 path = "src/bin/kabegame-cef-helper.rs"
 required-features = ["standard"]
 
-[[bin]]
+[[example]]
 name = "cef-example"
-path = "src/bin/cef-example.rs"
+path = "examples/cef-example.rs"
 required-features = ["standard"]
 
 [profile.dev]

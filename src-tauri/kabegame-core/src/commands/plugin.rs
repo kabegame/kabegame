@@ -1,31 +1,12 @@
-use kabegame_core::plugin::{Plugin, PluginManager};
-use kabegame_core::storage::Storage;
+//! 插件命令的共享实现层。
+//!
+//! `get_plugins` / `refresh_plugins` **不在**此处：桌面要整份列表、web 只要
+//! `{id, version}` 索引，两者形状不同，各自在 `kabegame` crate 的调用方实现
+//! （`commands::plugin` 与 `web::dispatch`）。本层只放两端一致的插件命令。
+
+use crate::plugin::PluginManager;
+use crate::storage::Storage;
 use serde_json::{json, Value};
-use std::sync::Arc;
-
-async fn all_plugins() -> Result<Vec<Arc<Plugin>>, String> {
-    let pm = PluginManager::global();
-    pm.ensure_installed_cache_initialized().await?;
-    pm.get_all()
-}
-
-/// Web 模式：只回 `{id, version}` 索引，详情由 `get_plugin_detail` 按需单取
-/// （详情体积大，web 客户端不需要整份列表）。桌面走 [`get_plugins_full`]。
-pub async fn get_plugins() -> Result<Value, String> {
-    let plugins = all_plugins().await?;
-    let index: Vec<Value> = plugins
-        .iter()
-        .map(|p| json!({ "id": p.id, "version": p.version }))
-        .collect();
-    Ok(Value::Array(index))
-}
-
-/// 桌面模式：一次返回完整插件列表。
-#[cfg(not(feature = "web"))]
-pub async fn get_plugins_full() -> Result<Value, String> {
-    let plugins = all_plugins().await?;
-    serde_json::to_value(plugins).map_err(|e| e.to_string())
-}
 
 pub async fn get_plugin_detail(
     plugin_id: String,
@@ -37,19 +18,6 @@ pub async fn get_plugin_detail(
         None => pm.load_installed_plugin_detail(&plugin_id).await?,
     };
     serde_json::to_value(plugin).map_err(|e| e.to_string())
-}
-
-/// 前端手动触发：重扫磁盘后返回最新索引（web）。桌面走 [`refresh_plugins_full`]。
-pub async fn refresh_plugins() -> Result<Value, String> {
-    PluginManager::global().refresh_plugins().await?;
-    get_plugins().await
-}
-
-/// 前端手动触发：重扫磁盘后返回完整插件列表（桌面）。
-#[cfg(not(feature = "web"))]
-pub async fn refresh_plugins_full() -> Result<Value, String> {
-    PluginManager::global().refresh_plugins().await?;
-    get_plugins_full().await
 }
 
 pub fn get_plugin_sources() -> Result<Value, String> {

@@ -86,7 +86,8 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
 
 6. **多 bin 时只自动打包 default-run**（`src/interface/rust.rs` `get_binaries`,patch **0008**）
    - stock `get_binaries` 把所有 `[[bin]]`（按 `required-features` 过滤）+ `src/bin/` 目录
-     扫描结果全部塞进打包清单,kabegame 的辅助 bin（`kabegame-cef-helper`、`cef-example`）
+     扫描结果全部塞进打包清单,kabegame 的辅助 bin（`kabegame-cef-helper`，历史上还包括
+     现已迁到 Cargo examples 的 `cef-example`）
      因此被装进 deb 的 `/usr/bin`——其中 `/usr/bin/kabegame-cef-helper` 的
      rpath=`$ORIGIN` 在 `/usr/bin` 下解析不到 `libcef.so`,本就不可运行,纯属冗余。
    - fork 行为:收集完成后若 bin 数 > 1 **且** Cargo.toml 声明了 `default-run`,清单只保留
@@ -101,8 +102,8 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
    - 注意:CLI 在 serde 反序列化**之前**先按内嵌 JSON schema 校验 tauri.conf.json,漏改
      schema 会报 `Additional properties are not allowed ('bins' was unexpected)`——两处
      (结构体 + schema)必须同 patch。
-   - stock 桌面 `tauri build` 恒定给 cargo 传 `--bins`,package 里全部 bin(含 `cef-example`
-     这类不出货的示例)都被编进 release。fork 给 tauri.conf.json 新增**顶层 `bins: string[]`**
+   - stock 桌面 `tauri build` 恒定给 cargo 传 `--bins`,package 里全部 bin(历史上含
+     `cef-example` 这类不出货的示例；现已迁到 Cargo examples)都被编进 release。fork 给 tauri.conf.json 新增**顶层 `bins: string[]`**
      (tauri-utils `Config` 加字段——`deny_unknown_fields` 下不打 patch 则配置解析直接报错;
      运行时嵌入恒为 `None`,仅 CLI 构建期读取):声明了就逐个翻译成 `--bin <name>` 传给
      cargo(带去重,args 里已有的不重复追加);**未声明回退 `get_binaries()` 的打包清单**

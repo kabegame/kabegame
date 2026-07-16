@@ -8,7 +8,11 @@
 
 ## [4.4.0]
 ### Fixed
-- **壁纸**: Windows \ MacOS 窗口模式壁纸显示失败bug
+- **壁纸**: Windows \ MacOS 窗口模式壁纸不显示的bug
+- **任务**:
+  - 安卓爬虫任务进度条不显示的bug
+  - 取消、失败任务进度条不显示的bug
+  - js任务没有记录进度条，只是发送了进度条事件debug
 
 ### Optimized
 - **安装**: Windows 安装弹太多黑窗问题

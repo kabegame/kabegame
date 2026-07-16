@@ -1,4 +1,6 @@
-use kabegame_core::settings::Settings;
+use crate::crawler::TaskScheduler;
+use crate::settings::Settings;
+use crate::storage::FAVORITE_ALBUM_ID;
 use serde_json::Value;
 
 const WEB_READABLE_SETTING_KEYS: &[&str] = &[
@@ -28,9 +30,7 @@ pub fn get_settings(keys: Vec<String>) -> Result<Value, String> {
 }
 
 pub fn get_favorite_album_id() -> Result<Value, String> {
-    Ok(Value::String(
-        "00000000-0000-0000-0000-000000000001".to_string(),
-    ))
+    Ok(Value::String(FAVORITE_ALBUM_ID.to_string()))
 }
 
 pub fn get_import_recommended_schedule_enabled() -> Result<Value, String> {
@@ -67,13 +67,22 @@ pub fn get_auto_deduplicate() -> Result<Value, String> {
     Ok(Value::Bool(Settings::global().get_auto_deduplicate()))
 }
 
-pub fn set_max_concurrent_downloads(count: u32) -> Result<Value, String> {
+/// 写入 + 同步运行时调度器。调度器从设置里读新值，故必须写在前。
+///
+/// 副作用原先挂在 `startup::start_event_loop` 的 `SettingChange` 分支（且 `tokio::spawn`
+/// 后台跑，调用方无从得知是否生效）。现在与写入同处一地：三个入口（Tauri 命令 /
+/// web dispatch / IPC handler）都必须经此，任何绕开 core 直接调
+/// `Settings::global().set_max_concurrent_downloads` 的路径都不会调整运行时并发。
+pub async fn set_max_concurrent_downloads(count: u32) -> Result<Value, String> {
     Settings::global().set_max_concurrent_downloads(count)?;
+    TaskScheduler::global().set_download_concurrency().await;
     Ok(Value::Null)
 }
 
+/// 同 [`set_max_concurrent_downloads`]：写入后唤醒等待任务槽的 worker。
 pub fn set_max_concurrent_tasks(count: u32) -> Result<Value, String> {
     Settings::global().set_max_concurrent_tasks(count)?;
+    TaskScheduler::global().set_task_concurrency();
     Ok(Value::Null)
 }
 

@@ -80,7 +80,7 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
 
         IpcRequest::SettingsSetAutoLaunch { enabled } => Some(set_auto_launch(*enabled)),
         IpcRequest::SettingsSetMaxConcurrentDownloads { count } => {
-            Some(set_max_concurrent_downloads(*count))
+            Some(set_max_concurrent_downloads(*count).await)
         }
         IpcRequest::SettingsSetMaxConcurrentTasks { count } => {
             Some(set_max_concurrent_tasks(*count))
@@ -262,16 +262,18 @@ fn set_auto_launch(enabled: bool) -> IpcResponse {
     }
 }
 
-fn set_max_concurrent_downloads(count: u32) -> IpcResponse {
-    match Settings::global().set_max_concurrent_downloads(count) {
-        Ok(()) => IpcResponse::ok("updated"),
+/// 走 core：CLI 自身没有 plugin 运行时，改并发只能由 daemon 侧应用，
+/// 故必须与 Tauri 命令 / web dispatch 共用 `commands::settings` 的实现。
+async fn set_max_concurrent_downloads(count: u32) -> IpcResponse {
+    match kabegame_core::commands::settings::set_max_concurrent_downloads(count).await {
+        Ok(_) => IpcResponse::ok("updated"),
         Err(e) => IpcResponse::err(e),
     }
 }
 
 fn set_max_concurrent_tasks(count: u32) -> IpcResponse {
-    match Settings::global().set_max_concurrent_tasks(count) {
-        Ok(()) => IpcResponse::ok("updated"),
+    match kabegame_core::commands::settings::set_max_concurrent_tasks(count) {
+        Ok(_) => IpcResponse::ok("updated"),
         Err(e) => IpcResponse::err(e),
     }
 }

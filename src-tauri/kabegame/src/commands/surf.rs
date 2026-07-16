@@ -675,19 +675,19 @@ pub async fn surf_get_record_images(
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_update_root_url(host: String, root_url: String) -> Result<serde_json::Value, String> {
-    crate::commands_core::surf::surf_update_root_url(host, root_url)
+    kabegame_core::commands::surf::surf_update_root_url(host, root_url)
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_update_name(host: String, name: String) -> Result<serde_json::Value, String> {
-    crate::commands_core::surf::surf_update_name(host, name)
+    kabegame_core::commands::surf::surf_update_name(host, name)
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_delete_record(host: String) -> Result<serde_json::Value, String> {
-    crate::commands_core::surf::surf_delete_record(host)
+    kabegame_core::commands::surf::surf_delete_record(host)
 }
 
 /// 返回当前畅游会话对应站点的 Cookie（与浏览器请求头中发送的一致，含 HttpOnly）。

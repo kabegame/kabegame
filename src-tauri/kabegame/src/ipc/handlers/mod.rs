@@ -171,7 +171,7 @@ async fn handle_task_start(task: serde_json::Value) -> IpcResponse {
         plugin_file_path: None,
     };
 
-    if let Err(e) = TaskScheduler::global().enqueue(req) {
+    if let Err(e) = TaskScheduler::global().enqueue(req).await {
         return IpcResponse::err(e);
     }
 
@@ -331,7 +331,7 @@ async fn handle_plugin_run(
         plugin_file_path: plugin_file_path.map(|p| p.to_string_lossy().to_string()),
     };
 
-    if let Err(e) = TaskScheduler::global().enqueue(req) {
+    if let Err(e) = TaskScheduler::global().enqueue(req).await {
         return IpcResponse::err(e);
     }
 

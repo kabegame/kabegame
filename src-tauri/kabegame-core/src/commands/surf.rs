@@ -1,4 +1,4 @@
-use kabegame_core::storage::Storage;
+use crate::storage::Storage;
 use serde_json::Value;
 
 fn normalize_surf_host(host: &str) -> String {

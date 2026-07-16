@@ -16,7 +16,7 @@
 //! export LD_LIBRARY_PATH="$CEF_PATH:$LD_LIBRARY_PATH"
 //! CEF_WINDOWED_URL=file:///tmp/cef-gpu-readback.html \
 //!   cargo build -p kabegame --features standard --bin kabegame-cef-helper
-//!   cargo run -p kabegame --features standard --bin cef-example
+//!   cargo run -p kabegame --features standard --example cef-example
 //! ```
 //!
 //! Windows:
@@ -24,7 +24,7 @@
 //! $env:CEF_PATH = "H:\cef-dev"
 //! $env:PATH = "$env:CEF_PATH;$env:PATH"
 //! cargo build -p kabegame --features standard --bin kabegame-cef-helper
-//! cargo run -p kabegame --features standard --bin cef-example
+//! cargo run -p kabegame --features standard --example cef-example
 //! ```
 //!
 //! macOS uses the same two Cargo commands. Both executables are flat artifacts

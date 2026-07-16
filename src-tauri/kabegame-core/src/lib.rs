@@ -2,6 +2,8 @@
 
 pub mod app_paths;
 pub mod bin_finder;
+/// 命令后端层：Tauri 命令 / Web JSON-RPC / IPC 共用的实现（原 `kabegame::commands_core`）。
+pub mod commands;
 pub mod image_type;
 pub mod ipc;
 

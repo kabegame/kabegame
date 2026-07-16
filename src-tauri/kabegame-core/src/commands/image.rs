@@ -1,41 +1,19 @@
 //! 图片命令的共享实现层。
 //!
-//! 调用方：`crate::web::dispatch`（web 模式 JSON-RPC）与 `crate::commands::image`
-//! （桌面 Tauri 薄包装）。两者共用同一份实现，行为差异只允许由 feature 决定。
-//! 本模块同时是 web 边界：任何返回 `ImageInfo`（或嵌套 `ImageInfo`）的函数，
-//! **必须**在序列化前调用 `crate::web::image_rewrite::rewrite_image_info`，
-//! 把 `local_path` / `thumbnail_path` 改写成 CDN 绝对 URL。否则 web 客户端拿到
-//! 的是服务器本地路径，浏览器没法直接加载。
+//! 调用方（均在 `kabegame` crate）：`web::dispatch`（web 模式 JSON-RPC）与
+//! `commands::image`（桌面 Tauri 薄包装）。两者共用本实现。
+//! 返回 `ImageInfo`（或嵌套）的函数一律回**原始本地路径**；web 模式的 CDN 改写
+//! 由 `kabegame::web::dispatch` 在本层返回之后施加，本层不感知 web。
 
-use kabegame_core::providers::{
+use crate::providers::{
     decode_provider_path_segments, query_entry, query_fetch, query_list,
 };
-use kabegame_core::settings::Settings;
-use kabegame_core::storage::image_events::{
+use crate::settings::Settings;
+use crate::storage::image_events::{
     delete_images_with_events, toggle_image_favorite_with_event,
 };
-use kabegame_core::storage::Storage;
+use crate::storage::Storage;
 use serde_json::Value;
-
-#[cfg(feature = "web")]
-use crate::web::image_rewrite::{rewrite_fs_path, rewrite_image_info};
-
-#[cfg(feature = "web")]
-fn rewrite_pathql_image_rows(rows: &mut [Value]) {
-    if cfg!(debug_assertions) {
-        return;
-    }
-    for row in rows {
-        let Some(obj) = row.as_object_mut() else {
-            continue;
-        };
-        for key in ["local_path", "thumbnail_path"] {
-            if let Some(Value::String(path)) = obj.get_mut(key) {
-                *path = rewrite_fs_path(path);
-            }
-        }
-    }
-}
 
 pub async fn pathql_entry(path: String) -> Result<Value, String> {
     let path = decode_provider_path_segments(&path);
@@ -55,12 +33,9 @@ pub async fn pathql_list(path: String, with_count: bool) -> Result<Value, String
 
 pub async fn pathql_fetch(path: String) -> Result<Value, String> {
     let path = decode_provider_path_segments(&path);
-    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-    let mut result = tokio::task::spawn_blocking(move || query_fetch(&path))
+    let result = tokio::task::spawn_blocking(move || query_fetch(&path))
         .await
         .map_err(|e| e.to_string())??;
-    #[cfg(feature = "web")]
-    rewrite_pathql_image_rows(&mut result);
     serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
@@ -90,12 +65,7 @@ pub fn get_gallery_time_filter_data() -> Result<Value, String> {
 }
 
 pub fn get_image_by_id(image_id: String) -> Result<Value, String> {
-    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-    let mut image = Storage::find_image_by_id(&image_id)?;
-    #[cfg(feature = "web")]
-    if let Some(info) = image.as_mut() {
-        rewrite_image_info(info);
-    }
+    let image = Storage::find_image_by_id(&image_id)?;
     serde_json::to_value(image).map_err(|e| e.to_string())
 }
 
@@ -111,11 +81,11 @@ pub fn get_image_metadata_full(image_id: String) -> Result<Value, String> {
 
 pub fn toggle_image_favorite(image_id: String, favorite: bool) -> Result<Value, String> {
     toggle_image_favorite_with_event(&image_id, favorite)?;
-    #[cfg(feature = "standard")]
+    #[cfg(feature = "virtual-driver")]
     {
-        use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-        kabegame_core::virtual_driver::VirtualDriveService::global()
-            .notify_album_dir_changed(kabegame_core::storage::FAVORITE_ALBUM_ID);
+        use crate::virtual_driver::driver_service::VirtualDriveServiceTrait;
+        crate::virtual_driver::VirtualDriveService::global()
+            .notify_album_dir_changed(crate::storage::FAVORITE_ALBUM_ID);
     }
     Ok(Value::Null)
 }

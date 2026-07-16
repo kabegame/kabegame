@@ -10,12 +10,12 @@ use deno_core::{
 use deno_web::{BlobStore, InMemoryBroadcastChannel};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(test)]
 use super::PluginScript;
+use crate::crawler::task_scheduler::Task;
 use crate::plugin::Plugin;
 
 mod ops;
@@ -274,37 +274,27 @@ impl JsPluginRuntime {
 
 /// V8 backend scheduling entry, wired into the task worker dispatch in
 /// `task_scheduler::run_task`.
-pub fn execute_crawler_script_v8(
-    download_queue: Arc<crate::crawler::DownloadQueue>,
-    plugin: &Plugin,
-    images_dir: &Path,
-    plugin_id: &str,
-    task_id: &str,
-    script_content: &str,
-    merged_config: HashMap<String, serde_json::Value>,
-    output_album_id: Option<String>,
-    http_headers: Option<HashMap<String, String>>,
-    cancel: CancellationToken,
-) -> std::result::Result<(), String> {
-    let (common, custom) = build_crawl_configs(plugin, merged_config);
-    let plugin_version = plugin.version_packed;
-    let images_dir = images_dir.to_path_buf();
-    let plugin_id = plugin_id.to_string();
-    let task_id = task_id.to_string();
-    let script_content = script_content.to_string();
+pub fn execute_crawler_script_v8(run: Arc<Task>) -> std::result::Result<(), String> {
+    let plugin = run
+        .params
+        .plugin
+        .as_ref()
+        .ok_or_else(|| format!("任务 {} 缺少插件参数", run.task_id))?;
+    let script_content = plugin
+        .script
+        .v8_source()
+        .ok_or_else(|| format!("插件 {} 没有提供 V8 脚本", plugin.id))?
+        .to_string();
+    let (common, custom) = build_crawl_configs(plugin, run.params.config.clone());
+    let plugin_id = run.params.plugin_id.clone();
+    let task_id = run.task_id.clone();
+    let cancel = run.cancel.clone();
     let cancel_for_ctx = cancel.clone();
     let cancel_for_watcher = cancel.clone();
 
     tokio::runtime::Handle::current().block_on(async move {
         let ctx = KabegameOpState {
-            download_queue,
-            images_dir,
-            plugin_id: plugin_id.clone(),
-            plugin_version,
             task_id,
-            output_album_id,
-            headers: http_headers.unwrap_or_default(),
-            progress: 0.0,
             cancel: cancel_for_ctx,
         };
         let mut rt = JsPluginRuntime::new(ctx).map_err(|e| e.to_string())?;
@@ -365,8 +355,11 @@ fn normalize_cancel_error(
 mod tests {
     use super::*;
     use crate::app_paths::AppPaths;
+    use crate::crawler::task_scheduler::TaskParams;
     use crate::crawler::{DownloadQueue, TaskScheduler};
+    use crate::plugin::PluginBackend;
     use crate::settings::Settings;
+    use crate::storage::Storage;
     use serde_json::json;
     use std::collections::HashMap;
     use std::fs;
@@ -377,7 +370,6 @@ mod tests {
     use std::sync::Once;
     use std::thread;
     use std::time::Duration;
-    use tokio_util::sync::CancellationToken;
 
     static INIT_SCHEDULER: Once = Once::new();
 
@@ -408,22 +400,46 @@ mod tests {
                 compatibles_dir_path: root.join("compatibles"),
             });
             let _ = Settings::init_global();
+            let _ = Storage::init_global();
             let _ = TaskScheduler::init_global(Arc::new(DownloadQueue::new()));
         });
     }
 
-    fn test_state(task_id: &str) -> KabegameOpState {
+    fn test_run(task_id: &str, base_url: &str) -> Arc<Task> {
         init_scheduler();
+        test_run_with_script(task_id, base_url, PluginScript::default(), HashMap::new())
+    }
+
+    fn test_run_with_script(
+        task_id: &str,
+        base_url: &str,
+        script: PluginScript,
+        config: HashMap<String, JsonValue>,
+    ) -> Arc<Task> {
+        init_scheduler();
+        let mut plugin = test_plugin(base_url);
+        plugin.script = script;
+        let run = Arc::new(Task::new(
+            task_id.to_string(),
+            TaskParams {
+                plugin: Some(Arc::new(plugin)),
+                plugin_id: "plugin.test".to_string(),
+                images_dir: PathBuf::new(),
+                output_album_id: None,
+                config,
+            },
+            None,
+        ));
+        TaskScheduler::global()
+            .register_run(Arc::clone(&run))
+            .expect("register test run");
+        run
+    }
+
+    fn test_state(run: &Arc<Task>) -> KabegameOpState {
         KabegameOpState {
-            download_queue: Arc::new(DownloadQueue::new()),
-            images_dir: PathBuf::new(),
-            plugin_id: "plugin.test".to_string(),
-            plugin_version: 0,
-            task_id: task_id.to_string(),
-            output_album_id: None,
-            headers: HashMap::new(),
-            progress: 0.0,
-            cancel: CancellationToken::new(),
+            task_id: run.task_id.clone(),
+            cancel: run.cancel.clone(),
         }
     }
 
@@ -475,7 +491,8 @@ mod tests {
         "#
         .to_string();
 
-        let mut rt = JsPluginRuntime::new(test_state("v8-sync-ops")).expect("runtime init");
+        let run = test_run("v8-sync-ops", "https://example.test");
+        let mut rt = JsPluginRuntime::new(test_state(&run)).expect("runtime init");
         rt.run_crawl(
             "plugin.test",
             entry,
@@ -489,7 +506,8 @@ mod tests {
     #[tokio::test]
     async fn run_crawl_errors_when_export_missing() {
         let entry = "export const notCrawl = 1;".to_string();
-        let mut rt = JsPluginRuntime::new(test_state("v8-missing-export")).expect("runtime init");
+        let run = test_run("v8-missing-export", "");
+        let mut rt = JsPluginRuntime::new(test_state(&run)).expect("runtime init");
         let err = rt
             .run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
@@ -507,7 +525,8 @@ mod tests {
             }
         "#
         .to_string();
-        let mut rt = JsPluginRuntime::new(test_state("v8-import-rejected")).expect("runtime init");
+        let run = test_run("v8-import-rejected", "");
+        let mut rt = JsPluginRuntime::new(test_state(&run)).expect("runtime init");
         let err = rt
             .run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
@@ -521,10 +540,7 @@ mod tests {
     async fn web_globals_and_fetch_work_without_updating_stack() {
         init_scheduler();
         let task_id = "v8-web-fetch";
-        TaskScheduler::global()
-            .page_stacks()
-            .create_stack(task_id)
-            .await;
+        let run = test_run(task_id, "");
         let server = spawn_http_server(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 7\r\n\r\n[1,2,3]",
         );
@@ -555,16 +571,12 @@ mod tests {
             "#
         );
 
-        let mut rt = JsPluginRuntime::new(test_state(task_id)).expect("runtime init");
+        let mut rt = JsPluginRuntime::new(test_state(&run)).expect("runtime init");
         rt.run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
             .expect("fetch should resolve");
 
-        let stack = TaskScheduler::global()
-            .page_stacks()
-            .get_stack(task_id)
-            .await
-            .expect("stack");
+        let stack = Arc::clone(&run.page_stack);
         assert!(stack.lock().unwrap().is_empty());
     }
 
@@ -572,17 +584,14 @@ mod tests {
     async fn snapshot_round_trip_restores_crypto_web_dom_timer_and_fetch() {
         init_scheduler();
         let task_id = "v8-snapshot-round-trip";
-        TaskScheduler::global()
-            .page_stacks()
-            .create_stack(task_id)
-            .await;
+        let run = test_run(task_id, "");
         let server = spawn_http_server(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\n\r\n{\"ok\":true}",
         );
 
         let blob: &'static [u8] =
             Box::leak(snapshot::generate_snapshot_bytes().expect("generate baseline snapshot"));
-        let mut runtime = JsPluginRuntime::with_snapshot(test_state(task_id), blob)
+        let mut runtime = JsPluginRuntime::with_snapshot(test_state(&run), blob)
             .expect("restore snapshot runtime");
         let entry = format!(
             r#"
@@ -627,10 +636,7 @@ mod tests {
     async fn to_updates_page_stack_and_current_page_ops_read_it() {
         init_scheduler();
         let task_id = "v8-to-stack";
-        TaskScheduler::global()
-            .page_stacks()
-            .create_stack(task_id)
-            .await;
+        let run = test_run(task_id, "");
         let server = spawn_http_server(
             "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\nx-seen: yes\r\ncontent-length: 15\r\n\r\n<html>ok</html>",
         );
@@ -651,7 +657,7 @@ mod tests {
             "#
         );
 
-        let mut rt = JsPluginRuntime::new(test_state(task_id)).expect("runtime init");
+        let mut rt = JsPluginRuntime::new(test_state(&run)).expect("runtime init");
         rt.run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
             .expect("to should resolve");
@@ -661,12 +667,9 @@ mod tests {
     async fn cancellation_interrupts_async_ops() {
         init_scheduler();
         let task_id = "v8-cancel-to";
-        TaskScheduler::global()
-            .page_stacks()
-            .create_stack(task_id)
-            .await;
+        let run = test_run(task_id, "");
         let server = spawn_hanging_http_server();
-        let state = test_state(task_id);
+        let state = test_state(&run);
         let cancel = state.cancel.clone();
         let entry = format!(
             r#"
@@ -692,7 +695,8 @@ mod tests {
 
     #[tokio::test]
     async fn download_image_checks_cancel_before_queueing() {
-        let state = test_state("v8-cancel-download");
+        let run = test_run("v8-cancel-download", "");
+        let state = test_state(&run);
         state.cancel.cancel();
         let entry = r#"
             export async function crawl() {
@@ -714,21 +718,18 @@ mod tests {
 
     #[tokio::test]
     async fn execute_entry_normalizes_hard_interrupt_to_task_canceled() {
-        let cancel = CancellationToken::new();
-        let cancel_for_task = cancel.clone();
+        let run = test_run_with_script(
+            "v8-hard-cancel",
+            "",
+            PluginScript::new(
+                PluginBackend::V8,
+                "export async function crawl() { for (;;) {} }".to_string(),
+            ),
+            HashMap::new(),
+        );
+        let cancel = run.cancel.clone();
         let join = tokio::task::spawn_blocking(move || {
-            execute_crawler_script_v8(
-                Arc::new(DownloadQueue::new()),
-                &test_plugin(""),
-                &PathBuf::new(),
-                "plugin.test",
-                "v8-hard-cancel",
-                "export async function crawl() { for (;;) {} }",
-                HashMap::new(),
-                None,
-                None,
-                cancel_for_task,
-            )
+            execute_crawler_script_v8(run)
         });
 
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -746,25 +747,24 @@ mod tests {
         let mut config = HashMap::new();
         config.insert("page".to_string(), json!(3));
         config.insert("keep".to_string(), JsonValue::Null);
-        let join = tokio::task::spawn_blocking(move || {
-            execute_crawler_script_v8(
-                Arc::new(DownloadQueue::new()),
-                &test_plugin("https://example.test"),
-                &PathBuf::new(),
-                "plugin.test",
-                "v8-execute-config",
+        let run = test_run_with_script(
+            "v8-execute-config",
+            "https://example.test",
+            PluginScript::new(
+                PluginBackend::V8,
                 r#"
                     export async function crawl(common, custom) {
                         if (common.base_url !== "https://example.test") throw new Error("bad base");
                         if (custom.page !== 3 || custom.keep !== null) throw new Error("bad custom");
                         await new Promise((resolve) => setTimeout(resolve, 1));
                     }
-                "#,
-                config,
-                None,
-                None,
-                CancellationToken::new(),
-            )
+                "#
+                .to_string(),
+            ),
+            config,
+        );
+        let join = tokio::task::spawn_blocking(move || {
+            execute_crawler_script_v8(run)
         });
 
         join.await

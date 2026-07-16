@@ -10,25 +10,25 @@ use crate::storage::tasks::TaskStatus;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, RwLock as StdRwLock};
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex, Notify, RwLock};
+use tokio::sync::{mpsc, Mutex, Notify};
 use url::Url;
+
+pub mod task;
+pub use task::{Task, TaskCompletion, TaskParams};
 
 /// 任务 worker 协程数量上限（与设置「同时运行任务数」1~10 一致；实际并发由 `wait_for_task_slot` 与设置共同限制）。
 pub const MAX_TASK_WORKER_LOOPS: usize = 10;
 
-/// 首次进入 WebView 爬虫时的 page_label（ctx.pageLabel 的初始值）。
+/// 首次进入 WebView 爬虫时的 page_label（Kabegame.pageLabel() 的初始值）。
 #[cfg(not(target_os = "android"))]
 const INITIAL_PAGE_LABEL: &str = "initial";
 
 #[cfg(not(target_os = "android"))]
-use crate::crawler::webview::{
-    get_session, get_webview_handler, pathbuf_to_string, register_session, remove_session,
-    JsTaskContext,
-};
+use crate::crawler::webview::get_webview_handler;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,14 +51,12 @@ pub struct TaskTransition {
 pub struct TaskScheduler {
     // 下载队列
     download_queue: Arc<DownloadQueue>,
-    queue_tx: mpsc::UnboundedSender<CrawlTaskRequest>,
-    queue_rx: Arc<Mutex<mpsc::UnboundedReceiver<CrawlTaskRequest>>>,
+    queue_tx: mpsc::UnboundedSender<String>,
+    queue_rx: Arc<Mutex<mpsc::UnboundedReceiver<String>>>,
     running_workers: Arc<AtomicUsize>,
-    page_stacks: Arc<PageStackStore>,
+    tasks: Arc<StdRwLock<HashMap<String, Arc<Task>>>>,
     /// 有任务结束或「同时运行任务数」设置变更时唤醒，避免等待槽位时忙等。
     task_slot_notify: Arc<Notify>,
-    /// 待取消的任务列表
-    pub canceled_tasks: Arc<RwLock<HashSet<String>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -73,39 +71,6 @@ pub struct PageStackEntry {
 
 pub type PageStack = Arc<StdMutex<Vec<PageStackEntry>>>;
 
-pub struct PageStackStore {
-    stacks: RwLock<HashMap<String, PageStack>>,
-}
-
-impl PageStackStore {
-    pub fn new() -> Self {
-        Self {
-            stacks: RwLock::new(HashMap::new()),
-        }
-    }
-
-    pub async fn create_stack(&self, task_id: &str) -> PageStack {
-        let stack = Arc::new(StdMutex::new(Vec::new()));
-        let mut guard = self.stacks.write().await;
-        guard.insert(task_id.to_string(), Arc::clone(&stack));
-        stack
-    }
-
-    pub async fn get_stack(&self, task_id: &str) -> Option<PageStack> {
-        let guard = self.stacks.read().await;
-        guard.get(task_id).cloned()
-    }
-
-    pub fn get_stack_sync(&self, task_id: &str) -> Option<PageStack> {
-        tokio::runtime::Handle::current().block_on(self.get_stack(task_id))
-    }
-
-    pub async fn remove_stack(&self, task_id: &str) {
-        let mut guard = self.stacks.write().await;
-        guard.remove(task_id);
-    }
-}
-
 // 全局 TaskScheduler 单例
 static TASK_SCHEDULER: OnceLock<TaskScheduler> = OnceLock::new();
 
@@ -117,9 +82,8 @@ impl TaskScheduler {
             queue_tx,
             queue_rx: Arc::new(Mutex::new(queue_rx)),
             running_workers: Arc::new(AtomicUsize::new(0)),
-            page_stacks: Arc::new(PageStackStore::new()),
+            tasks: Arc::new(StdRwLock::new(HashMap::new())),
             task_slot_notify: Arc::new(Notify::new()),
-            canceled_tasks: Arc::new(RwLock::new(HashSet::new())),
         };
         s
     }
@@ -137,18 +101,36 @@ impl TaskScheduler {
     }
 
     /// 入队一个任务：
+    /// - 提交时冻结运行参数，避免 worker 启动后再次解析插件/配置
     /// - 若有空闲 task worker，会很快被取走并进入 running
     /// - 若当前 10 个 worker 都忙，则任务保持 pending 并排队等待
-    pub fn enqueue(&self, req: CrawlTaskRequest) -> Result<(), String> {
-        // 先保证 DB 状态为 pending（创建任务默认是Pending，但这里做幂等兜底）
-        let storage = Storage::global();
-        // let emitter = GlobalEmitter::global();
-        let _ = persist_task_status(storage, &req.task_id, TaskStatus::Pending, None, None, None);
-        GlobalEmitter::global().emit_task_changed(&req.task_id, json!({ "status": "pending" }));
+    pub async fn enqueue(&self, req: CrawlTaskRequest) -> Result<(), String> {
+        let task_id = req.task_id.clone();
+        let result = self.freeze_task(req).await.and_then(|run| {
+            self.register_run(Arc::clone(&run))?;
+            let storage = Storage::global();
+            let _ = persist_task_status(storage, &task_id, TaskStatus::Pending, None, None, None);
+            GlobalEmitter::global().emit_task_changed(&task_id, json!({ "status": "pending" }));
+            self.queue_tx
+                .send(task_id.clone())
+                .map_err(|e| format!("Failed to enqueue task: {}", e))
+                .inspect_err(|_| {
+                    self.remove_run(&task_id);
+                })
+        });
 
-        self.queue_tx
-            .send(req)
-            .map_err(|e| format!("Failed to enqueue task: {}", e))
+        if let Err(ref e) = result {
+            self.transition(
+                &task_id,
+                TaskStatus::Failed,
+                TaskTransition {
+                    start_time: None,
+                    end_time: Some(now_ms()),
+                    error: Some(e.clone()),
+                },
+            );
+        }
+        result
     }
 
     /// 获取当前正在下载的任务列表
@@ -157,32 +139,124 @@ impl TaskScheduler {
     }
 
     /// 提交新任务
-    pub fn submit_task(&self, req: CrawlTaskRequest) -> Result<String, String> {
-        self.enqueue(req.clone())?;
+    pub async fn submit_task(&self, req: CrawlTaskRequest) -> Result<String, String> {
+        self.enqueue(req.clone()).await?;
         Ok(req.task_id)
+    }
+
+    async fn freeze_task(&self, req: CrawlTaskRequest) -> Result<Arc<Task>, String> {
+        let storage = Storage::global();
+        let task = storage
+            .get_task(&req.task_id)?
+            .ok_or_else(|| format!("任务记录不存在: {}", req.task_id))?;
+        let images_dir = resolve_crawl_output_dir(task.output_dir.as_deref());
+
+        let params = if task.plugin_id == "local-import" {
+            TaskParams {
+                plugin: None,
+                plugin_id: task.plugin_id.clone(),
+                images_dir,
+                output_album_id: task.output_album_id.clone(),
+                config: task.user_config.clone().unwrap_or_default(),
+            }
+        } else {
+            let plugin_manager = PluginManager::global();
+            let (plugin, _plugin_file_path) = plugin_manager
+                .resolve_plugin_for_task_request(&task.plugin_id, req.plugin_file_path.as_deref())
+                .await?;
+            if let Some(ref min_ver) = plugin.min_app_version {
+                check_min_app_version(env!("CARGO_PKG_VERSION"), min_ver)?;
+            }
+            let user_cfg = task.user_config.clone().unwrap_or_default();
+            let config = build_effective_user_config_from_var_defs(&plugin.var_defs, user_cfg);
+            TaskParams {
+                plugin: Some(Arc::new(plugin)),
+                plugin_id: task.plugin_id.clone(),
+                images_dir,
+                output_album_id: task.output_album_id.clone(),
+                config,
+            }
+        };
+
+        Ok(Arc::new(Task::new(
+            req.task_id,
+            params,
+            task.http_headers.clone(),
+        )))
     }
 
     /// 取消任务（标记取消 + 唤醒等待中的下载）
     pub async fn cancel_task(&self, task_id: &str) {
-        // 这里用active_downloads，存在竞态：不在该列表，但即将进入该列表的下载
+        let Some(run) = self.get_run(task_id) else {
+            return;
+        };
+        // 取消顺序不变量：先打 token，再取消下载队列，避免取出 job 后加入 active 的竞态漏过取消。
+        run.cancel.cancel();
         self.download_queue.cancel_task_downloads(task_id).await;
-        self.canceled_tasks.write().await.insert(task_id.into());
-        #[cfg(not(target_os = "android"))]
-        if let Some(session) = get_session(task_id).await {
-            session
-                .complete(TaskStatus::Canceled, Some("Task canceled".to_string()))
-                .await;
-        }
+        run.complete_webview(TaskStatus::Canceled, Some("Task canceled".to_string()));
         self.download_queue.capacity_notify.notify_waiters(); // 唤醒被阻塞的 download() 调用，让它们检查取消状态
     }
 
-    pub async fn is_task_canceled(&self, task_id: &str) -> bool {
-        self.canceled_tasks.read().await.contains(task_id)
+    pub fn is_task_canceled(&self, task_id: &str) -> bool {
+        self.get_run(task_id)
+            .map(|run| run.cancel.is_cancelled())
+            .unwrap_or(false)
     }
 
-    /// 同步版本，供非 async 上下文调用（内部 block_on）。
-    pub fn is_task_canceled_blocking(&self, task_id: &str) -> bool {
-        tokio::runtime::Handle::current().block_on(self.is_task_canceled(task_id))
+    pub fn get_run(&self, task_id: &str) -> Option<Arc<Task>> {
+        self.tasks.read().unwrap().get(task_id).cloned()
+    }
+
+    pub(crate) fn register_run(&self, run: Arc<Task>) -> Result<(), String> {
+        let mut guard = self.tasks.write().unwrap();
+        if guard.contains_key(&run.task_id) {
+            return Err(format!("Task already registered: {}", run.task_id));
+        }
+        guard.insert(run.task_id.clone(), run);
+        Ok(())
+    }
+
+    pub fn remove_run(&self, task_id: &str) -> Option<Arc<Task>> {
+        self.tasks.write().unwrap().remove(task_id)
+    }
+
+    pub fn add_task_progress(&self, task_id: &str, delta: f64) -> Result<f64, String> {
+        let run = self
+            .get_run(task_id)
+            .ok_or_else(|| format!("Task not found: {task_id}"))?;
+        Ok(run.add_progress(delta))
+    }
+
+    pub fn merge_task_headers(
+        &self,
+        task_id: &str,
+        extra: Option<HashMap<String, String>>,
+        cookie: Option<String>,
+    ) -> Result<HashMap<String, String>, String> {
+        let run = self
+            .get_run(task_id)
+            .ok_or_else(|| format!("Task not found: {task_id}"))?;
+        run.merge_headers(extra, cookie)
+    }
+
+    pub fn page_stack(&self, task_id: &str) -> Option<PageStack> {
+        self.get_run(task_id).map(|run| Arc::clone(&run.page_stack))
+    }
+
+    pub async fn complete_webview_task(
+        &self,
+        task_id: &str,
+        status: TaskStatus,
+        error: Option<String>,
+    ) -> bool {
+        let Some(run) = self.get_run(task_id) else {
+            return false;
+        };
+        if status == TaskStatus::Canceled {
+            run.cancel.cancel();
+            self.download_queue.cancel_task_downloads(task_id).await;
+        }
+        run.complete_webview(status, error)
     }
 
     #[allow(dead_code)]
@@ -297,11 +371,6 @@ impl TaskScheduler {
         Arc::clone(&self.download_queue)
     }
 
-    /// 获取页面栈存储（task_id -> 页面栈）
-    pub fn page_stacks(&self) -> Arc<PageStackStore> {
-        Arc::clone(&self.page_stacks)
-    }
-
     /// 启动下载 worker（先根据设置设置并发数并 spawn 对应数量，避免 total_workers 仍为 0 时 spawn 0 个 worker）
     pub async fn start_download_workers_async(&self) {
         // 启动时清理上次残留下的溢写临时文件
@@ -409,26 +478,27 @@ async fn wait_for_task_slot(running: &Arc<AtomicUsize>, notify: &Arc<Notify>) {
 async fn worker_loop(
     scheduler: TaskScheduler,
     download_queue: Arc<DownloadQueue>,
-    queue_rx: Arc<Mutex<mpsc::UnboundedReceiver<CrawlTaskRequest>>>,
+    queue_rx: Arc<Mutex<mpsc::UnboundedReceiver<String>>>,
     running: Arc<AtomicUsize>,
 ) {
-    let storage = Storage::global();
-
     loop {
-        let req = {
+        let task_id = {
             let mut rx = queue_rx.lock().await;
             rx.recv().await
         };
 
-        let Some(req) = req else {
+        let Some(task_id) = task_id else {
             continue;
         };
 
-        // 若任务已取消（排队期间），直接 canceled
-        if scheduler.is_task_canceled(&req.task_id).await {
+        let Some(run) = scheduler.get_run(&task_id) else {
+            continue;
+        };
+
+        if run.cancel.is_cancelled() {
             let end = now_ms();
             scheduler.transition(
-                &req.task_id,
+                &task_id,
                 TaskStatus::Canceled,
                 TaskTransition {
                     start_time: None,
@@ -436,15 +506,32 @@ async fn worker_loop(
                     error: Some("Task canceled".to_string()),
                 },
             );
+            scheduler.remove_run(&task_id);
             continue;
         }
 
         wait_for_task_slot(&running, &scheduler.task_slot_notify).await;
+        if run.cancel.is_cancelled() {
+            let end = now_ms();
+            scheduler.transition(
+                &task_id,
+                TaskStatus::Canceled,
+                TaskTransition {
+                    start_time: None,
+                    end_time: Some(end),
+                    error: Some("Task canceled".to_string()),
+                },
+            );
+            scheduler.remove_run(&task_id);
+            running.fetch_sub(1, Ordering::Relaxed);
+            scheduler.task_slot_notify.notify_one();
+            continue;
+        }
 
         // running
         let start = now_ms();
         scheduler.transition(
-            &req.task_id,
+            &task_id,
             TaskStatus::Running,
             TaskTransition {
                 start_time: Some(start),
@@ -453,16 +540,14 @@ async fn worker_loop(
             },
         );
 
-        let page_stacks = scheduler.page_stacks();
-        page_stacks.create_stack(&req.task_id).await;
-        let res = run_task(&storage, Arc::clone(&download_queue), &req).await;
+        let res = run_task(Arc::clone(&download_queue), Arc::clone(&run)).await;
 
         match res {
             Ok(TaskOutcome::Completed) => {
                 let end = now_ms();
-                if scheduler.is_task_canceled(&req.task_id).await {
+                if run.cancel.is_cancelled() {
                     scheduler.transition(
-                        &req.task_id,
+                        &task_id,
                         TaskStatus::Canceled,
                         TaskTransition {
                             start_time: None,
@@ -470,15 +555,9 @@ async fn worker_loop(
                             error: Some("Task canceled".to_string()),
                         },
                     );
-                    // 清理canceled_tasks
-                    scheduler
-                        .canceled_tasks
-                        .write()
-                        .await
-                        .retain(|d| *d != req.task_id);
                 } else {
                     scheduler.transition(
-                        &req.task_id,
+                        &task_id,
                         TaskStatus::Completed,
                         TaskTransition {
                             start_time: None,
@@ -492,17 +571,12 @@ async fn worker_loop(
                 let end = now_ms();
                 if status == TaskStatus::Canceled {
                     scheduler
-                        .canceled_tasks
-                        .write()
-                        .await
-                        .retain(|d| *d != req.task_id);
-                    scheduler
                         .download_queue
-                        .cancel_task_downloads(&req.task_id)
+                        .cancel_task_downloads(&task_id)
                         .await;
                 }
                 scheduler.transition(
-                    &req.task_id,
+                    &task_id,
                     status,
                     TaskTransition {
                         start_time: None,
@@ -512,20 +586,14 @@ async fn worker_loop(
                 );
             }
             Err(e) => {
-                let is_canceled = scheduler.is_task_canceled(&req.task_id).await;
                 let end = now_ms();
-                let next = if is_canceled {
-                    scheduler
-                        .canceled_tasks
-                        .write()
-                        .await
-                        .retain(|d| *d != req.task_id);
+                let next = if run.cancel.is_cancelled() {
                     TaskStatus::Canceled
                 } else {
                     TaskStatus::Failed
                 };
                 scheduler.transition(
-                    &req.task_id,
+                    &task_id,
                     next,
                     TaskTransition {
                         start_time: None,
@@ -535,7 +603,7 @@ async fn worker_loop(
                 );
             }
         }
-        page_stacks.remove_stack(&req.task_id).await;
+        scheduler.remove_run(&task_id);
 
         running.fetch_sub(1, Ordering::Relaxed);
         scheduler.task_slot_notify.notify_one();
@@ -548,102 +616,73 @@ enum TaskOutcome {
     Terminal(TaskStatus, Option<String>),
 }
 
-async fn run_task(
-    storage: &Storage,
-    download_queue: Arc<DownloadQueue>,
-    req: &CrawlTaskRequest,
-) -> Result<TaskOutcome, String> {
-    let task = storage
-        .get_task(&req.task_id)?
-        .ok_or_else(|| format!("任务记录不存在: {}", req.task_id))?;
-
-    let plugin_manager = PluginManager::global();
+async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> Result<TaskOutcome, String> {
     GlobalEmitter::global().emit_task_log(
-        &req.task_id,
+        &run.task_id,
         "info",
         &task_log_i18n(
             "taskLogSchedulerStart",
-            json!({ "pluginId": task.plugin_id, "taskId": req.task_id }),
+            json!({ "pluginId": run.params.plugin_id, "taskId": run.task_id }),
         ),
     );
 
     // 内置本地导入：不运行插件脚本，直接执行内置例程
-    if task.plugin_id == "local-import" {
-        crate::crawler::local_import::run_builtin_local_import(
-            &req.task_id,
-            task.user_config.clone(),
-            task.output_album_id.clone(),
-        )
-        .await?;
+    if run.params.plugin_id == "local-import" {
+        crate::crawler::local_import::run_builtin_local_import(Arc::clone(&run)).await?;
         return Ok(TaskOutcome::Completed);
     }
 
-    // 两种运行模式：
-    // 1) 已安装插件：通过 plugin_id 查找并运行
-    // 2) TODO: 临时插件文件：通过 plugin_file_path 读取 manifest/config 并运行（不要求安装）
-    let (plugin, _plugin_file_path) = plugin_manager
-        .resolve_plugin_for_task_request(&task.plugin_id, req.plugin_file_path.as_deref())
-        .await?;
-    if let Some(ref min_ver) = plugin.min_app_version {
-        check_min_app_version(env!("CARGO_PKG_VERSION"), min_ver)?;
-    }
-    let images_dir = resolve_crawl_output_dir(task.output_dir.as_deref());
+    let plugin = run
+        .params
+        .plugin
+        .as_ref()
+        .ok_or_else(|| format!("任务 {} 缺少插件参数", run.task_id))?;
 
     // 从 Plugin 结构读取脚本和变量定义（已在 parse_kgpg 阶段加载到内存）
     #[cfg(not(target_os = "android"))]
     let js_script = plugin.script.js_source().map(|s| s.to_string());
 
-    // merged_config：默认值 -> 用户覆盖 -> checkbox 规范化（与 crawl_images 保持一致）
-    let user_cfg = task.user_config.clone().unwrap_or_default();
-    let var_defs = plugin.var_defs.clone();
-    let merged_config = build_effective_user_config_from_var_defs(&var_defs, user_cfg);
-
     #[cfg(not(target_os = "android"))]
     if let Some(crawl_js) = js_script {
-        let context = JsTaskContext {
-            task_id: req.task_id.clone(),
-            plugin_id: plugin.id.clone(),
-            plugin_version: plugin.version_packed,
-            crawl_js,
-            merged_config,
-            base_url: plugin.base_url.clone(),
-            current_url: None,
-            page_label: INITIAL_PAGE_LABEL.to_string(),
-            page_state: Some(serde_json::Value::Object(serde_json::Map::new())),
-            state: Some(serde_json::Value::Object(serde_json::Map::new())),
-            resume_mode: INITIAL_PAGE_LABEL.to_string(),
-            images_dir: pathbuf_to_string(&images_dir),
-            output_album_id: task.output_album_id.clone(),
-            http_headers: task.http_headers.clone().unwrap_or_default(),
-        };
-
-        let (_session, completion_rx) = register_session(&req.task_id, context).await?;
+        let _ = crawl_js;
+        {
+            let mut stack = run.page_stack.lock().unwrap();
+            stack.push(PageStackEntry {
+                url: if run.params.base_url().trim().is_empty() {
+                    "about:blank".to_string()
+                } else {
+                    run.params.base_url().to_string()
+                },
+                html: String::new(),
+                headers: HashMap::new(),
+                page_label: INITIAL_PAGE_LABEL.to_string(),
+                page_state: serde_json::Value::Object(serde_json::Map::new()),
+            });
+        }
+        let completion_rx = run.begin_webview_session()?;
         let Some(handler) = get_webview_handler() else {
-            let _ = remove_session(&req.task_id).await;
             return Err("Crawler webview handler is not initialized".to_string());
         };
 
-        let base_url = if plugin.base_url.trim().is_empty() {
+        let base_url = if run.params.base_url().trim().is_empty() {
             "about:blank".to_string()
         } else {
-            plugin.base_url.clone()
+            run.params.base_url().to_string()
         };
 
-        if let Err(e) = handler.create_task_window(&req.task_id, &base_url).await {
-            let _ = handler.destroy_task_window(&req.task_id).await;
-            let _ = remove_session(&req.task_id).await;
+        if let Err(e) = handler.create_task_window(&run.task_id, &base_url).await {
+            let _ = handler.destroy_task_window(&run.task_id).await;
             return Err(e);
         }
 
         let completion = completion_rx
             .await
             .map_err(|_| "Crawler task completion channel closed".to_string());
-        let destroy_result = handler.destroy_task_window(&req.task_id).await;
-        let _ = remove_session(&req.task_id).await;
+        let destroy_result = handler.destroy_task_window(&run.task_id).await;
         if let Err(e) = destroy_result {
             eprintln!(
                 "Failed to destroy crawler task window {}: {}",
-                req.task_id, e
+                run.task_id, e
             );
         }
         let completion = completion?;
@@ -658,46 +697,15 @@ async fn run_task(
     {
         let v8_script = plugin.script.v8_source().map(|s| s.to_string());
         if let Some(crawl_v8) = v8_script {
-            let cancel = tokio_util::sync::CancellationToken::new();
-            let watcher_cancel = cancel.clone();
-            let task_id_for_watcher = req.task_id.clone();
-            let watcher = tokio::spawn(async move {
-                loop {
-                    if TaskScheduler::global()
-                        .is_task_canceled(&task_id_for_watcher)
-                        .await
-                    {
-                        watcher_cancel.cancel();
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                }
-            });
-
-            let plugin_for_exec = plugin.clone();
-            let task_id = req.task_id.clone();
-            let merged_config_for_exec = merged_config;
-            let output_album_id = task.output_album_id.clone();
-            let http_headers = task.http_headers.clone();
+            let _ = crawl_v8;
+            let run_for_exec = Arc::clone(&run);
 
             let result = tokio::task::spawn_blocking(move || {
-                crate::plugin::v8::execute_crawler_script_v8(
-                    download_queue,
-                    &plugin_for_exec,
-                    &images_dir,
-                    &plugin_for_exec.id,
-                    &task_id,
-                    &crawl_v8,
-                    merged_config_for_exec,
-                    output_album_id,
-                    http_headers,
-                    cancel,
-                )
+                crate::plugin::v8::execute_crawler_script_v8(run_for_exec)
             })
             .await
             .map_err(|e| format!("V8 task worker join error: {}", e))?;
 
-            watcher.abort();
             result?;
             return Ok(TaskOutcome::Completed);
         }

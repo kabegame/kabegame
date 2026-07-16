@@ -193,3 +193,11 @@ Plugins are JS/TS scripts (V8 backend, self-contained ES module `export async fu
 deno task --cwd src-crawler-plugins package         # Package all plugins
 deno task --cwd src-crawler-plugins generate-index  # Regenerate plugin store index
 ```
+
+语言规范
+所有与用户的交流均使用简体中文。
+任务计划、进度说明、问题分析、调试结论和最终回答均使用中文。
+工具调用前后的说明使用中文。
+代码标识符、终端命令、文件路径、API 名称和原始错误信息保持原语言。
+代码注释默认使用中文，除非当前项目已有明确的英文注释规范。
+不要因为代码库、日志或文档是英文而切换成英文回答。

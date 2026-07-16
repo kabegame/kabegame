@@ -14,7 +14,8 @@ mod web_import;
 #[cfg(not(feature = "web"))]
 mod commands;
 
-mod commands_core;
+/// 构建变体上报（web/android/standard）。web 与桌面路径共用，故不随 web/not-web 门控。
+mod build_mode;
 mod debug_ingest;
 
 #[cfg(all(not(feature = "web"), target_os = "android"))]
@@ -644,9 +645,11 @@ pub(crate) fn configure_app(
             #[cfg(not(target_os = "android"))]
             open_dev_webview,
             #[cfg(not(target_os = "android"))]
-            crawl_get_context,
+            crawl_get_page_label,
             #[cfg(not(target_os = "android"))]
-            crawl_run_script,
+            crawl_get_page_state,
+            #[cfg(not(target_os = "android"))]
+            crawl_get_state,
             #[cfg(not(target_os = "android"))]
             crawl_exit,
             #[cfg(not(target_os = "android"))]
@@ -673,8 +676,6 @@ pub(crate) fn configure_app(
             crawl_update_page_state,
             #[cfg(not(target_os = "android"))]
             crawl_update_state,
-            #[cfg(not(target_os = "android"))]
-            crawl_page_ready,
             #[cfg(not(target_os = "android"))]
             crawl_clear_site_data,
             #[cfg(not(target_os = "android"))]

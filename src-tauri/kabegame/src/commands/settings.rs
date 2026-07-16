@@ -271,9 +271,11 @@ pub fn install_album_drive_driver() -> Result<(), String> {
     Ok(())
 }
 
+/// 收藏画册 id 是常量而非设置项：走 core 复用 `kabegame_core::storage::FAVORITE_ALBUM_ID`，
+/// 不要再抄字面量。
 #[tauri::command]
-pub fn get_favorite_album_id() -> Result<String, String> {
-    Ok("00000000-0000-0000-0000-000000000001".to_string())
+pub fn get_favorite_album_id() -> Result<serde_json::Value, String> {
+    kabegame_core::commands::settings::get_favorite_album_id()
 }
 
 #[tauri::command]
@@ -317,10 +319,52 @@ pub fn set_album_drive_mount_point(mount_point: String) -> Result<(), String> {
     Settings::global().set_album_drive_mount_point(mount_point)
 }
 
+/// 语言变更的落地点：写入 → `sync_locale` → 刷新依赖 locale 的后端派生物
+/// （托盘菜单、收藏画册名、官方插件源名）。
+///
+/// 这些副作用原先在 `startup::start_event_loop` 的 `SettingChange` 分支里做，
+/// 但那里与 `sync_locale` 是竞态的：事件循环可能在 `sync_locale` 之前就跑 `t!()`，
+/// 从而按旧 locale 写名字。放在这里可保证顺序。启动时的同等逻辑见 `core_init`。
 #[tauri::command]
-pub fn set_language(language: Option<String>) -> Result<(), String> {
+pub fn set_language<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    language: Option<String>,
+) -> Result<(), String> {
     Settings::global().set_language(language.clone())?;
     kabegame_i18n::sync_locale(language.as_deref());
+
+    #[cfg(not(target_os = "android"))]
+    if let Err(e) = crate::tray::update_tray_menu(&app) {
+        eprintln!("[托盘] 语言切换后刷新菜单失败: {}", e);
+    }
+    #[cfg(target_os = "android")]
+    let _ = &app;
+
+    let raw = kabegame_i18n::t!("albums.favorite");
+    let i18n_name = if raw == "albums.favorite" {
+        "收藏"
+    } else {
+        raw.as_str()
+    };
+    let storage = kabegame_core::storage::Storage::global();
+    let _ = storage.ensure_favorite_album();
+    if let Err(e) = storage.set_favorite_album_name(i18n_name) {
+        eprintln!("[收藏画册] 语言切换后设置 i18n 名称失败: {}", e);
+    }
+
+    let raw_source_name = kabegame_i18n::t!("plugins.officialGithubReleaseSourceName");
+    let i18n_source_name = if raw_source_name == "plugins.officialGithubReleaseSourceName" {
+        kabegame_core::storage::plugin_sources::OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME
+    } else {
+        raw_source_name.as_str()
+    };
+    if let Err(e) = storage
+        .plugin_sources()
+        .set_official_source_name(i18n_source_name)
+    {
+        eprintln!("[插件官方源] 语言切换后设置 i18n 名称失败: {}", e);
+    }
+
     Ok(())
 }
 
@@ -334,15 +378,15 @@ pub fn set_auto_open_crawler_webview(enabled: bool) -> Result<(), String> {
     Settings::global().set_auto_open_crawler_webview(enabled)
 }
 
+/// 走 core：写入设置的同时同步运行时调度器，见 `commands::settings`。
 #[tauri::command]
-pub fn set_max_concurrent_downloads(count: u32) -> Result<(), String> {
-    Settings::global().set_max_concurrent_downloads(count)
+pub async fn set_max_concurrent_downloads(count: u32) -> Result<serde_json::Value, String> {
+    kabegame_core::commands::settings::set_max_concurrent_downloads(count).await
 }
 
 #[tauri::command]
-pub fn set_max_concurrent_tasks(count: u32) -> Result<(), String> {
-    Settings::global().set_max_concurrent_tasks(count)?;
-    Ok(())
+pub fn set_max_concurrent_tasks(count: u32) -> Result<serde_json::Value, String> {
+    kabegame_core::commands::settings::set_max_concurrent_tasks(count)
 }
 
 #[tauri::command]

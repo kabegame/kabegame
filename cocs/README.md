@@ -42,7 +42,7 @@
 ## 下载与任务（`downloader-tasks/`）
 
 - [downloader-tasks/DOWNLOADER_FLOW.md](downloader-tasks/DOWNLOADER_FLOW.md)
-  - 主题：当前下载器全链路与模块边界。涵盖 `mod.rs` scheme registry / `queue.rs` worker / `content.rs` Android content downloader 的分工，`download_with_retry` 通过 `DownloadSink` 溢写（5 MiB 阈值）返回 `DownloadOutcome`（Bytes/Path）、Fatal/Retriable/Resumable 三级错误重试、crawler/surf 共享的 blob/data/MSE 分块上传通道、MSE 多流上传与桌面合流、DRM 拒绝、统一 `postprocess_downloaded_image`（`PostprocessSource` 枚举）、URL 与 hash 两级去重、桌面落盘、Android MediaStore copy 与 content URI 沿用、失败重试、`task-image-counts`、启动临时文件清理以及 **`images-change` / `album-images-change`** 事件。
+  - 主题：当前下载器全链路与模块边界。涵盖 `mod.rs` scheme registry / `queue.rs` worker / `content.rs` Android content downloader 的分工，`download_with_retry` 通过 `DownloadSink` 溢写（5 MiB 阈值）返回 `DownloadOutcome`（Bytes/Path）、Fatal/Retriable/Resumable 三级错误重试、crawler/surf 共享的 blob/data/MSE 分块上传通道、MSE 多流上传与桌面合流、DRM 拒绝、统一 `postprocess_downloaded_image`（`PostprocessSource` 枚举）、URL 与 hash 两级去重、桌面落盘、Android MediaStore copy 与 content URI 沿用、失败重试、任务计数经 `tasks-change` / `TaskChanged` diff 同步、`Task.cancel` 取消语义、启动临时文件清理以及 **`images-change` / `album-images-change`** 事件。
   - 适用场景：下载任务生命周期、Android `content://` 与 HTTP/HTTPS 下载差异、JS 爬虫或畅游窗口的 `blob:` / `data:` / MSE 媒体下载、MSE 多 SourceBuffer 合流、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
 
 - [downloader-tasks/VIDEO_INGEST.md](downloader-tasks/VIDEO_INGEST.md)
@@ -56,8 +56,8 @@
 ## 爬虫（`crawler/`）
 
 - [crawler/CRAWLER_JS_FLOW.md](crawler/CRAWLER_JS_FLOW.md)
-  - 主题：Crawler JS 执行链路与相关模块关系，含每任务独立 WebView 窗口、media_capture/media_download/bootstrap initialization scripts、session 注册表、worker await completion、按 `crawler-<task_id>` label 路由命令。
-  - 适用场景：调度、注入、抓取流程排查与扩展；排查 JS 任务并发、窗口创建/销毁、IPC 路由问题；排查 `ctx.downloadImage` 对 blob/data/MSE 的分流、多流上传、DRM 拒绝与桌面合流。
+  - 主题：Crawler JS 执行链路与相关模块关系，含提交时冻结 `Task/TaskParams`、每任务独立 WebView 窗口、media_capture/media_download/bootstrap initialization scripts、Task 内 page stack/state/completion、worker await completion、按 `crawler-<task_id>` label 路由命令。
+  - 适用场景：调度、注入、抓取流程排查与扩展；排查 JS 任务并发、窗口创建/销毁、IPC 路由、Task 注册表状态、`ctx.downloadImage` 对 blob/data/MSE 的分流、多流上传、DRM 拒绝与桌面合流。
 
 - [crawler/PIXIV_METADATA.md](crawler/PIXIV_METADATA.md)
   - 主题：Pixiv Rhai 插件 `metadata.body` 白名单入库与 DB 一次性迁移。
