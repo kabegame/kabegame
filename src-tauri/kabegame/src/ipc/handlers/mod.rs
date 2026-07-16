@@ -26,7 +26,10 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Runtime};
 
 /// 分发 IPC 请求到对应的处理器（app_handle 由 start_ipc_server 传入，仅需发事件的请求使用）
-pub async fn dispatch_request<R: Runtime>(
+///
+/// Web 模式没有 Tauri runtime：`app_handle` 与 `R` 一起被 cfg 掉（与
+/// `startup::start_ipc_server` 的签名一致）。
+pub async fn dispatch_request<#[cfg(not(feature = "web"))] R: Runtime>(
     req: IpcRequest,
     #[cfg(not(feature = "web"))] app_handle: AppHandle<R>,
 ) -> IpcResponse {

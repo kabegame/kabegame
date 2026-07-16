@@ -103,6 +103,7 @@ fn init(
 
     // 启动内置 Backend
     crate::core_init::init_globals()?;
+    #[cfg(debug_assertions)]
     crate::debug_ingest::spawn_debug_event(
         std::env::var("KABEGAME_DEBUG_SESSION_ID").unwrap_or_else(|_| "backend".to_string()),
         "backend_started",

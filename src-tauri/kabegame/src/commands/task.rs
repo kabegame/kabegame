@@ -1,274 +1,151 @@
-// 任务相关命令
+//! 任务相关命令。Tauri 薄包装：实现在 `commands_core::task`，与 Web 模式 RPC 共享。
+//!
+//! 命令保持 `async fn`（Tauri 只把 async 命令派到工作线程，同步命令跑在主线程），
+//! 即使被调的 core 实现是同步的。
 
-use std::collections::HashSet;
+use serde_json::Value;
 
-use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::scheduler::Scheduler;
-use kabegame_core::storage::{Storage, TaskInfo};
+use crate::commands_core;
 
 #[tauri::command]
-pub async fn add_run_config(config: serde_json::Value) -> Result<serde_json::Value, String> {
-    use kabegame_core::storage::RunConfig;
-    let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
-    let config_id = run_config.id.clone();
-    let result = Storage::global().add_run_config(run_config)?;
-    let _ = Scheduler::global().reload_config(&config_id).await;
-    GlobalEmitter::global().emit_auto_config_change("configadd", &config_id);
-    Ok(serde_json::to_value(result).map_err(|e| e.to_string())?)
+pub async fn add_run_config(config: Value) -> Result<Value, String> {
+    commands_core::task::add_run_config(config).await
 }
 
 #[tauri::command]
-pub async fn update_run_config(config: serde_json::Value) -> Result<(), String> {
-    use kabegame_core::storage::RunConfig;
-    let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
-    let config_id = run_config.id.clone();
-    Storage::global().update_run_config(run_config)?;
-    let _ = Scheduler::global().reload_config(&config_id).await;
-    GlobalEmitter::global().emit_auto_config_change("configchange", &config_id);
-    Ok(())
+pub async fn update_run_config(config: Value) -> Result<Value, String> {
+    commands_core::task::update_run_config(config).await
 }
 
 #[tauri::command]
-pub async fn get_run_configs() -> Result<serde_json::Value, String> {
-    let configs = Storage::global().get_run_configs()?;
-    Ok(serde_json::to_value(configs).map_err(|e| e.to_string())?)
+pub async fn get_run_configs() -> Result<Value, String> {
+    commands_core::task::get_run_configs()
 }
 
 #[tauri::command]
-pub async fn get_run_config(config_id: String) -> Result<serde_json::Value, String> {
-    match Storage::global().get_run_config(&config_id)? {
-        Some(cfg) => serde_json::to_value(cfg).map_err(|e| e.to_string()),
-        None => Ok(serde_json::Value::Null),
-    }
+pub async fn get_run_config(config_id: String) -> Result<Value, String> {
+    commands_core::task::get_run_config(config_id)
 }
 
 #[tauri::command]
-pub async fn delete_run_config(config_id: String) -> Result<(), String> {
-    let _ = Scheduler::global().remove_config(&config_id).await;
-    Storage::global().delete_run_config(&config_id)?;
-    GlobalEmitter::global().emit_auto_config_change("configdelete", &config_id);
-    Ok(())
+pub async fn delete_run_config(config_id: String) -> Result<Value, String> {
+    commands_core::task::delete_run_config(config_id).await
 }
 
 #[tauri::command]
-pub async fn copy_run_config(config_id: String) -> Result<serde_json::Value, String> {
-    let new_id = uuid::Uuid::new_v4().to_string();
-    let copied = Storage::global().copy_run_config(&config_id, &new_id)?;
-    let _ = Scheduler::global().reload_config(&new_id).await;
-    GlobalEmitter::global().emit_auto_config_change("configadd", &copied.id);
-    serde_json::to_value(copied).map_err(|e| e.to_string())
+pub async fn copy_run_config(config_id: String) -> Result<Value, String> {
+    commands_core::task::copy_run_config(config_id).await
 }
 
 #[tauri::command]
-pub async fn get_missed_runs() -> Result<serde_json::Value, String> {
-    let items = kabegame_core::scheduler::collect_missed_runs_now()?;
-    serde_json::to_value(items).map_err(|e| e.to_string())
+pub async fn get_missed_runs() -> Result<Value, String> {
+    commands_core::task::get_missed_runs()
 }
 
 #[tauri::command]
-pub async fn run_missed_configs(config_ids: Vec<String>) -> Result<(), String> {
-    kabegame_core::scheduler::run_missed_configs(&config_ids);
-    let _ = Scheduler::global().reload_config("").await;
-    Ok(())
+pub async fn run_missed_configs(config_ids: Vec<String>) -> Result<Value, String> {
+    commands_core::task::run_missed_configs(config_ids).await
 }
 
 #[tauri::command]
-pub async fn dismiss_missed_configs(config_ids: Vec<String>) -> Result<(), String> {
-    kabegame_core::scheduler::dismiss_missed_configs(&config_ids);
-    let _ = Scheduler::global().reload_config("").await;
-    Ok(())
+pub async fn dismiss_missed_configs(config_ids: Vec<String>) -> Result<Value, String> {
+    commands_core::task::dismiss_missed_configs(config_ids).await
 }
 
+/// 除 core 的取消外，桌面端还要立即结束 WebView 任务窗口：否则脚本后续调用
+/// `ctx.error` 会把任务写成 failed，而不是 canceled。
 #[tauri::command]
-pub async fn cancel_task(task_id: String) {
-    use kabegame_core::{crawler::TaskScheduler, storage::tasks::TaskStatus};
-    TaskScheduler::global().cancel_task(&task_id).await;
-    // WebView 任务：立即以"已取消"结束并更新 DB，避免脚本后续调用 ctx.error 时被写成 failed
+pub async fn cancel_task(task_id: String) -> Result<Value, String> {
+    let r = commands_core::task::cancel_task(task_id.clone()).await?;
     #[cfg(not(target_os = "android"))]
-    super::crawler::crawl_exit_with_status(TaskStatus::Canceled, Some(&task_id)).await;
-}
-
-#[tauri::command]
-pub async fn get_active_downloads() -> Result<serde_json::Value, String> {
-    use kabegame_core::crawler::TaskScheduler;
-    let downloads = TaskScheduler::global().get_active_downloads().await?;
-    Ok(serde_json::to_value(downloads).map_err(|e| e.to_string())?)
-}
-
-#[tauri::command]
-pub async fn clear_finished_tasks() -> Result<usize, String> {
-    let storage = Storage::global();
-    let task_ids = storage.get_finished_task_ids()?;
-    let mut all_image_ids: Vec<String> = Vec::new();
-    for tid in &task_ids {
-        let ids = Storage::get_task_image_ids(tid)?;
-        all_image_ids.extend(ids);
+    {
+        use kabegame_core::storage::tasks::TaskStatus;
+        super::crawler::crawl_exit_with_status(TaskStatus::Canceled, Some(&task_id)).await;
     }
-    let mut plugin_seen = HashSet::new();
-    let plugin_ids: Vec<String> = task_ids
-        .iter()
-        .filter_map(|tid| storage.get_task(tid).ok().flatten().map(|t| t.plugin_id))
-        .filter(|pid| plugin_seen.insert(pid.clone()))
-        .collect();
-    let count = storage.clear_finished_tasks()?;
-    for tid in &task_ids {
-        GlobalEmitter::global().emit_task_deleted(tid);
-    }
-    if !all_image_ids.is_empty() {
-        let mut seen = HashSet::new();
-        all_image_ids.retain(|id| seen.insert(id.clone()));
-        GlobalEmitter::global().emit_images_change(
-            "change",
-            &all_image_ids,
-            Some(&task_ids),
-            None,
-            Some(&plugin_ids),
-        );
-    }
-    Ok(count)
+    Ok(r)
 }
 
 #[tauri::command]
-pub async fn get_task_failed_images(task_id: String) -> Result<serde_json::Value, String> {
-    crate::commands_core::task::get_task_failed_images(task_id).await
+pub async fn get_active_downloads() -> Result<Value, String> {
+    commands_core::task::get_active_downloads().await
 }
 
 #[tauri::command]
-pub async fn get_all_failed_images() -> Result<serde_json::Value, String> {
-    crate::commands_core::task::get_all_failed_images().await
+pub async fn clear_finished_tasks() -> Result<Value, String> {
+    commands_core::task::clear_finished_tasks()
 }
 
 #[tauri::command]
-pub async fn get_task_logs(task_id: String) -> Result<serde_json::Value, String> {
-    crate::commands_core::task::get_task_logs(task_id).await
+pub async fn get_task_failed_images(task_id: String) -> Result<Value, String> {
+    commands_core::task::get_task_failed_images(task_id)
 }
 
 #[tauri::command]
-pub async fn retry_task_failed_image(failed_id: i64) -> Result<(), String> {
-    use kabegame_core::crawler::TaskScheduler;
-    TaskScheduler::global().retry_failed_image(failed_id).await
+pub async fn get_all_failed_images() -> Result<Value, String> {
+    commands_core::task::get_all_failed_images()
 }
 
 #[tauri::command]
-pub async fn retry_failed_images(ids: Vec<i64>) -> Result<Vec<i64>, String> {
-    use kabegame_core::crawler::TaskScheduler;
-    TaskScheduler::global().retry_failed_images(&ids).await
+pub async fn get_task_logs(task_id: String) -> Result<Value, String> {
+    commands_core::task::get_task_logs(task_id)
 }
 
 #[tauri::command]
-pub async fn cancel_retry_failed_image(failed_id: i64) -> Result<(), String> {
-    use kabegame_core::crawler::TaskScheduler;
-    TaskScheduler::global()
-        .cancel_retry_failed_image(failed_id)
-        .await;
-    Ok(())
+pub async fn retry_task_failed_image(failed_id: i64) -> Result<Value, String> {
+    commands_core::task::retry_task_failed_image(failed_id).await
 }
 
 #[tauri::command]
-pub async fn cancel_retry_failed_images(ids: Vec<i64>) -> Result<(), String> {
-    use kabegame_core::crawler::TaskScheduler;
-    TaskScheduler::global()
-        .cancel_retry_failed_images(&ids)
-        .await;
-    Ok(())
+pub async fn retry_failed_images(ids: Vec<i64>) -> Result<Value, String> {
+    commands_core::task::retry_failed_images(ids).await
 }
 
 #[tauri::command]
-pub async fn delete_failed_images(ids: Vec<i64>) -> Result<(), String> {
-    use kabegame_core::crawler::TaskScheduler;
-    TaskScheduler::global()
-        .cancel_retry_failed_images(&ids)
-        .await;
-    let storage = Storage::global();
-    let groups = storage.delete_failed_images(&ids)?;
-    for (task_id, del_ids) in &groups {
-        GlobalEmitter::global().emit_failed_images_removed(task_id, del_ids);
-        if let Ok(Some(t)) = storage.get_task(task_id) {
-            GlobalEmitter::global().emit_task_image_counts(
-                task_id,
-                Some(t.success_count),
-                Some(t.deleted_count),
-                Some(t.failed_count),
-                Some(t.dedup_count),
-            );
-        }
-    }
-    Ok(())
+pub async fn cancel_retry_failed_image(failed_id: i64) -> Result<Value, String> {
+    commands_core::task::cancel_retry_failed_image(failed_id).await
 }
 
 #[tauri::command]
-pub async fn delete_task_failed_image(failed_id: i64) -> Result<(), String> {
-    let storage = Storage::global();
-    let task_id = Storage::get_task_failed_image_by_id(failed_id)?.map(|item| item.task_id);
-    storage.delete_task_failed_image(failed_id)?;
-    if let Some(ref tid) = task_id {
-        GlobalEmitter::global().emit_failed_images_removed(tid, &[failed_id]);
-        if let Ok(Some(t)) = storage.get_task(tid) {
-            GlobalEmitter::global().emit_task_image_counts(
-                tid,
-                Some(t.success_count),
-                Some(t.deleted_count),
-                Some(t.failed_count),
-                Some(t.dedup_count),
-            );
-        }
-    }
-    Ok(())
-}
-
-// 补充：add_task, delete_task, start_task (之前在 daemon.rs 里的)
-#[tauri::command]
-pub async fn get_all_tasks() -> Result<serde_json::Value, String> {
-    let tasks = Storage::global().get_all_tasks()?;
-    Ok(serde_json::to_value(tasks).map_err(|e| e.to_string())?)
+pub async fn cancel_retry_failed_images(ids: Vec<i64>) -> Result<Value, String> {
+    commands_core::task::cancel_retry_failed_images(ids).await
 }
 
 #[tauri::command]
-pub async fn get_tasks_page(limit: u32, offset: u32) -> Result<serde_json::Value, String> {
-    let (tasks, total) = Storage::global().get_tasks_page(limit, offset)?;
-    serde_json::to_value(serde_json::json!({ "tasks": tasks, "total": total }))
-        .map_err(|e| e.to_string())
+pub async fn delete_failed_images(ids: Vec<i64>) -> Result<Value, String> {
+    commands_core::task::delete_failed_images(ids).await
 }
 
 #[tauri::command]
-pub async fn get_task(task_id: String) -> Result<serde_json::Value, String> {
-    let task = Storage::global().get_task(&task_id)?;
-    Ok(serde_json::to_value(task).map_err(|e| e.to_string())?)
+pub async fn delete_task_failed_image(failed_id: i64) -> Result<Value, String> {
+    commands_core::task::delete_task_failed_image(failed_id)
 }
 
 #[tauri::command]
-pub async fn add_task(task: serde_json::Value) -> Result<(), String> {
-    let task_info: TaskInfo = serde_json::from_value(task).map_err(|e| e.to_string())?;
-    Storage::global().add_task(task_info.clone())?;
-    let payload = serde_json::to_value(&task_info).map_err(|e| e.to_string())?;
-    GlobalEmitter::global().emit_task_added(&payload);
-    Ok(())
+pub async fn get_all_tasks() -> Result<Value, String> {
+    commands_core::task::get_all_tasks()
 }
 
 #[tauri::command]
-pub async fn delete_task(task_id: String) -> Result<(), String> {
-    let storage = Storage::global();
-    let image_ids = Storage::get_task_image_ids(&task_id)?;
-    let plugin_ids = storage
-        .get_task(&task_id)?
-        .map(|t| vec![t.plugin_id])
-        .unwrap_or_default();
-    storage.delete_task(&task_id)?;
-    GlobalEmitter::global().emit_task_deleted(&task_id);
-    if !image_ids.is_empty() {
-        let tids = vec![task_id];
-        GlobalEmitter::global().emit_images_change(
-            "change",
-            &image_ids,
-            Some(&tids),
-            None,
-            Some(&plugin_ids),
-        );
-    }
-    Ok(())
+pub async fn get_tasks_page(limit: u32, offset: u32) -> Result<Value, String> {
+    commands_core::task::get_tasks_page(limit, offset)
 }
 
 #[tauri::command]
-pub async fn start_task(task: serde_json::Value) -> Result<String, String> {
-    crate::commands_core::task::start_task(task).await
+pub async fn get_task(task_id: String) -> Result<Value, String> {
+    commands_core::task::get_task(task_id)
+}
+
+#[tauri::command]
+pub async fn add_task(task: Value) -> Result<Value, String> {
+    commands_core::task::add_task(task)
+}
+
+#[tauri::command]
+pub async fn delete_task(task_id: String) -> Result<Value, String> {
+    commands_core::task::delete_task(task_id)
+}
+
+#[tauri::command]
+pub async fn start_task(task: Value) -> Result<String, String> {
+    commands_core::task::start_task(task)
 }

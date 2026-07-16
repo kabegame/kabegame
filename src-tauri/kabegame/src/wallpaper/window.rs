@@ -1,7 +1,128 @@
 // 窗口壁纸模块 - 类似 Wallpaper Engine 的实现
 
 use std::sync::{Condvar, Mutex, OnceLock};
-use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
+use tauri::{Runtime, WebviewWindow};
+
+/// 桌面层 Z-order 的**唯一实现**。
+///
+/// 壁纸窗口是 Progman 的子窗口,和桌面图标层(`SHELLDLL_DefView` / `SysListView32`)
+/// 以及 `WorkerW` 是兄弟。任何会改变 Z-order 的操作(SetParent、show、主窗口最小化…)
+/// 之后都要重新压一次层次,否则壁纸会盖住桌面图标。
+///
+/// 此前这套逻辑在四处各抄了一份(挂载中、挂载后、remount、fix_wallpaper_zorder 命令),
+/// 必然同步漂移;现全部改为调用本模块。
+#[cfg(target_os = "windows")]
+pub(crate) mod zorder {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowExW, FindWindowW, GetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW,
+    };
+
+    const HWND_TOP: HWND = 0;
+
+    /// Win11 "raised desktop" 标志。注意:读的是 **Progman 的**扩展样式,
+    /// 用来判断桌面结构形态 —— 与壁纸窗口自身是否带该标志无关。
+    const WS_EX_NOREDIRECTIONBITMAP: u32 = 0x0020_0000;
+
+    pub(crate) fn wide(s: &str) -> Vec<u16> {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        OsStr::new(s).encode_wide().chain(Some(0)).collect()
+    }
+
+    /// 桌面根窗口。
+    pub(crate) fn progman() -> Option<HWND> {
+        let hwnd = unsafe { FindWindowW(wide("Progman").as_ptr(), std::ptr::null()) };
+        (hwnd != 0).then_some(hwnd)
+    }
+
+    /// Progman 是否为 Win11 raised desktop 形态(其 EX_STYLE 带
+    /// `WS_EX_NOREDIRECTIONBITMAP`)。Win10 及更早返回 false。
+    pub(crate) fn is_raised_desktop(progman: HWND) -> bool {
+        let ex_style = unsafe { GetWindowLongPtrW(progman, GWL_EXSTYLE) } as u32;
+        (ex_style & WS_EX_NOREDIRECTIONBITMAP) != 0
+    }
+
+    /// Progman 下的桌面图标层。
+    pub(crate) fn def_view(progman: HWND) -> Option<HWND> {
+        let hwnd = unsafe {
+            FindWindowExW(
+                progman,
+                0,
+                wide("SHELLDLL_DefView").as_ptr(),
+                std::ptr::null(),
+            )
+        };
+        (hwnd != 0).then_some(hwnd)
+    }
+
+    /// 把桌面图标层提到 Progman 子窗口的最顶。
+    pub(crate) fn raise_icon_layer(def_view: HWND) {
+        unsafe {
+            ShowWindow(def_view, SW_SHOW);
+            SetWindowPos(
+                def_view,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+
+            let folder_view =
+                FindWindowExW(def_view, 0, wide("SysListView32").as_ptr(), std::ptr::null());
+            if folder_view != 0 {
+                ShowWindow(folder_view, SW_SHOW);
+                SetWindowPos(
+                    folder_view,
+                    HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+        }
+    }
+
+    /// 把壁纸窗口压到图标层之下(只改 Z-order,不动位置和尺寸)。
+    pub(crate) fn sink_below_icons(wallpaper: HWND, def_view: HWND) {
+        unsafe {
+            SetWindowPos(
+                wallpaper,
+                def_view,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    /// 恢复桌面层次:图标层在上、壁纸窗口在下。
+    ///
+    /// 只在 Win11 raised desktop 下生效 —— 旧版 Windows 的壁纸窗口挂在 WorkerW 下,
+    /// 天然就在图标层之下,无需干预。
+    ///
+    /// `wallpaper` 为 `None` 时只提升图标层(用于还没有壁纸窗口句柄的场景)。
+    pub(crate) fn restore(wallpaper: Option<HWND>) {
+        let Some(progman) = progman() else { return };
+        if !is_raised_desktop(progman) {
+            return;
+        }
+        let Some(def_view) = def_view(progman) else {
+            return;
+        };
+        raise_icon_layer(def_view);
+        if let Some(wallpaper) = wallpaper {
+            sink_below_icons(wallpaper, def_view);
+        }
+    }
+}
 
 // 标记壁纸窗口是否已完全初始化（前端 DOM + Vue 组件 + 事件监听器都已就绪）
 // 由 wallpaper_window_ready 命令设置为 true，并通过 notify_all 唤醒所有等待者
@@ -21,37 +142,12 @@ fn ready_notify() -> &'static ReadyNotify {
 
 pub struct WallpaperWindow<R: Runtime> {
     window: WebviewWindow<R>,
-    app: AppHandle<R>,
 }
 
 impl<R: Runtime> WallpaperWindow<R> {
-    pub fn new(app: AppHandle<R>) -> Self {
-        Self {
-            window: app.get_webview_window("wallpaper").unwrap(),
-            app,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn sync_wallpaper(&self, image_path: &str) -> Result<(), String> {
-        // 等待窗口完全初始化（前端 DOM + Vue 组件 + 事件监听器都已就绪）
-        // 超时时间：最多等待 100 秒
-        Self::wait_ready(std::time::Duration::from_secs(100))?;
-
-        // 如果窗口已就绪，则直接推送壁纸更新事件到窗口
-        self.app
-            .emit("wallpaper-update-image", image_path)
-            .map_err(|e| format!("推送壁纸图片事件失败: {}", e))?;
-
-        // 在 Windows 上设置窗口为壁纸层
-        self.set_window_as_wallpaper()
-            .map_err(|e| format!("设置窗口为壁纸层失败: {}", e))?;
-
-        // 显示窗口
-        self.window
-            .show()
-            .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
-        Ok(())
+    /// 由 `WindowWallpaperManager::init()` 在确保窗口已创建后调用。
+    pub fn new(window: WebviewWindow<R>) -> Self {
+        Self { window }
     }
 
     /// 标记壁纸窗口已完全初始化（由 wallpaper_window_ready 命令调用）
@@ -66,8 +162,9 @@ impl<R: Runtime> WallpaperWindow<R> {
         }
     }
 
-    /// 重置 ready 标记（窗口重新创建或隐藏时调用）
-    #[allow(dead_code)]
+    /// 重置 ready 标记。**必须**在销毁壁纸窗口时调用：ready 是进程级静态，
+    /// 不重置的话下次重建窗口时 `wait_ready` 会立刻返回，挂载会打在一个
+    /// 前端尚未加载的窗口上。
     pub fn reset_ready() {
         let n = ready_notify();
         if let Ok(mut ready) = n.ready.lock() {
@@ -75,14 +172,7 @@ impl<R: Runtime> WallpaperWindow<R> {
         }
     }
 
-    /// 检查窗口是否已 ready
-    #[allow(dead_code)]
-    pub fn is_ready() -> bool {
-        let n = ready_notify();
-        n.ready.lock().map(|g| *g).unwrap_or(false)
-    }
-
-    /// 等待窗口 ready（用于 window_manager 在 set_wallpaper 时阻塞等待）
+    /// 等待窗口 ready（挂载前阻塞等待前端加载完成）
     pub fn wait_ready(timeout: std::time::Duration) -> Result<(), String> {
         let n = ready_notify();
         let guard = n
@@ -107,152 +197,17 @@ impl<R: Runtime> WallpaperWindow<R> {
         }
     }
 
-    /// 更新壁纸图片（已废弃：壁纸页面通过 setting-change 自驱动）
-    #[allow(dead_code)]
-    pub fn update_image(&self, image_path: &str) -> Result<(), String> {
-        // 事件改为广播，不依赖任何窗口引用（方便用 wallpaper-debug 验证事件是否到达）
-        let _ = self.window.as_ref();
-        let _ = self.app.get_webview_window("wallpaper");
-        self.app
-            .emit("wallpaper-update-image", image_path)
-            .map_err(|e| format!("广播壁纸图片事件失败: {}", e))?;
-
-        Ok(())
-    }
-
-    /// 重新挂载窗口到桌面（用于从原生模式切换回窗口模式时）
-    pub fn remount(&self) -> Result<(), String> {
-        // 先挂载窗口到桌面
-        self.set_window_as_wallpaper()
-            .map_err(|e| format!("重新挂载窗口到桌面失败: {}", e))?;
-
-        // 显示窗口
-        self.window
-            .show()
-            .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
-
-        #[cfg(target_os = "windows")]
-        {
-            // 关键：show() 后可能会改变 Z-order，需要再次确保 DefView 在顶部
-            // 特别是在从原生模式切换到窗口模式时
-            use windows_sys::Win32::Foundation::HWND;
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                FindWindowExW, FindWindowW, GetWindowLongPtrW, SetWindowPos, ShowWindow,
-                GWL_EXSTYLE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW,
-            };
-
-            let tauri_hwnd = self
-                .window
-                .hwnd()
-                .map_err(|e| format!("无法获取壁纸窗口句柄(hwnd): {}", e))?;
-            let tauri_hwnd: HWND = tauri_hwnd.0 as isize;
-
-            // 检查是否是 Windows 11 raised desktop
-            unsafe {
-                fn wide(s: &str) -> Vec<u16> {
-                    use std::ffi::OsStr;
-                    use std::os::windows::ffi::OsStrExt;
-                    OsStr::new(s).encode_wide().chain(Some(0)).collect()
-                }
-
-                const WS_EX_NOREDIRECTIONBITMAP: u32 = 0x00200000;
-                const HWND_TOP: HWND = 0;
-
-                let progman = FindWindowW(wide("Progman").as_ptr(), std::ptr::null());
-                if progman != 0 {
-                    let ex_style = GetWindowLongPtrW(progman, GWL_EXSTYLE) as u32;
-                    let is_raised_desktop = (ex_style & WS_EX_NOREDIRECTIONBITMAP) != 0;
-
-                    if is_raised_desktop {
-                        eprintln!("[DEBUG-SAIKYO] remount: 检测到 Windows 11 raised desktop，确保 DefView 在顶部");
-
-                        // 查找 DefView
-                        let shell_dll_defview = FindWindowExW(
-                            progman,
-                            0,
-                            wide("SHELLDLL_DefView").as_ptr(),
-                            std::ptr::null(),
-                        );
-
-                        if shell_dll_defview != 0 {
-                            // 确保 DefView 在顶部
-                            ShowWindow(shell_dll_defview, SW_SHOW);
-                            SetWindowPos(
-                                shell_dll_defview,
-                                HWND_TOP,
-                                0,
-                                0,
-                                0,
-                                0,
-                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                            );
-
-                            // 查找并提升 SysListView32
-                            let folder_view = FindWindowExW(
-                                shell_dll_defview,
-                                0,
-                                wide("SysListView32").as_ptr(),
-                                std::ptr::null(),
-                            );
-                            if folder_view != 0 {
-                                ShowWindow(folder_view, SW_SHOW);
-                                SetWindowPos(
-                                    folder_view,
-                                    HWND_TOP,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                                );
-                            }
-
-                            // 确保壁纸窗口在 DefView 之下
-                            SetWindowPos(
-                                tauri_hwnd,
-                                shell_dll_defview as HWND,
-                                0,
-                                0,
-                                0,
-                                0,
-                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                            );
-
-                            eprintln!("[DEBUG-SAIKYO] remount: ✓ 已重新调整 Z-order");
-                        }
-                    }
-                }
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            crate::wallpaper::window_mount_macos::mount_to_desktop(&self.window)?;
-        }
-
-        Ok(())
-    }
-
-    fn set_window_as_wallpaper(&self) -> Result<(), String> {
-        use std::time::Duration;
-
-        // 等待 wallpaper 窗口前端 ready（由 mark_ready() -> notify_all() 唤醒），
-        // 避免靠固定 sleep 猜测窗口/DOM 初始化时机
-        Self::wait_ready(Duration::from_secs(100))?;
+    /// 把窗口挂到桌面层并显示。窗口在 window 模式的整个生命周期内保持挂载与常显，
+    /// 故本方法只在 `WindowWallpaperManager::init()` 建立窗口时调用一次。
+    pub fn mount(&self) -> Result<(), String> {
+        // 等待前端 ready（由 mark_ready() -> notify_all() 唤醒）后再挂载：
+        // 挂载会读取窗口句柄并改其父子/样式，必须等 webview 真正建起来。
+        Self::wait_ready(std::time::Duration::from_secs(100))?;
 
         #[cfg(target_os = "windows")]
         {
             use crate::wallpaper::window_mount;
-            use windows_sys::Win32::Foundation::HWND;
-
-            let tauri_hwnd = self
-                .window
-                .hwnd()
-                .map_err(|e| format!("无法获取壁纸窗口句柄(hwnd): {}", e))?;
-            let tauri_hwnd: HWND = tauri_hwnd.0 as isize;
-
-            // 使用高级版挂载函数（来自 Window.rs 的完整实现）
-            window_mount::mount_to_desktop_saikyo(tauri_hwnd)?;
+            window_mount::mount_to_desktop_saikyo(self.hwnd()?)?;
         }
 
         #[cfg(target_os = "macos")]
@@ -260,6 +215,25 @@ impl<R: Runtime> WallpaperWindow<R> {
             crate::wallpaper::window_mount_macos::mount_to_desktop(&self.window)?;
         }
 
+        // 建窗时是 visible(false)（避免挂载前闪一下全屏窗口），挂好后转常显。
+        self.window
+            .show()
+            .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
+
+        // show() 会打乱 Z-order，收尾再压一次层次。
+        #[cfg(target_os = "windows")]
+        zorder::restore(Some(self.hwnd()?));
+
         Ok(())
+    }
+
+    /// 壁纸窗口的原生句柄。
+    #[cfg(target_os = "windows")]
+    pub fn hwnd(&self) -> Result<windows_sys::Win32::Foundation::HWND, String> {
+        let hwnd = self
+            .window
+            .hwnd()
+            .map_err(|e| format!("无法获取壁纸窗口句柄(hwnd): {}", e))?;
+        Ok(hwnd.0 as isize)
     }
 }

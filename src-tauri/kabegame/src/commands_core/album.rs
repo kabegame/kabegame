@@ -16,12 +16,12 @@ use serde_json::Value;
 #[cfg(feature = "web")]
 use crate::web::image_rewrite::rewrite_image_info;
 
-pub async fn get_albums() -> Result<Value, String> {
+pub fn get_albums() -> Result<Value, String> {
     let albums = Storage::global().list_all_albums()?;
     serde_json::to_value(albums).map_err(|e| e.to_string())
 }
 
-pub async fn get_album_preview(album_id: String, limit: usize) -> Result<Value, String> {
+pub fn get_album_preview(album_id: String, limit: usize) -> Result<Value, String> {
     let mut images = Storage::global().get_album_preview(&album_id, limit)?;
     #[cfg(feature = "web")]
     for info in images.iter_mut() {
@@ -30,14 +30,14 @@ pub async fn get_album_preview(album_id: String, limit: usize) -> Result<Value, 
     serde_json::to_value(images).map_err(|e| e.to_string())
 }
 
-pub async fn rename_album(album_id: String, new_name: String) -> Result<Value, String> {
+pub fn rename_album(album_id: String, new_name: String) -> Result<Value, String> {
     Storage::global().rename_album(&album_id, &new_name)?;
     #[cfg(feature = "standard")]
     kabegame_core::virtual_driver::VirtualDriveService::global().bump_albums();
     Ok(Value::Null)
 }
 
-pub async fn delete_album(album_id: String) -> Result<Value, String> {
+pub fn delete_album(album_id: String) -> Result<Value, String> {
     Storage::global().delete_album(&album_id)?;
     if let Some(id) = Settings::global().get_wallpaper_rotation_album_id() {
         if id == album_id {
@@ -49,19 +49,19 @@ pub async fn delete_album(album_id: String) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-pub async fn move_album(album_id: String, new_parent_id: Option<String>) -> Result<Value, String> {
+pub fn move_album(album_id: String, new_parent_id: Option<String>) -> Result<Value, String> {
     Storage::global().move_album(&album_id, new_parent_id.as_deref())?;
     #[cfg(feature = "standard")]
     kabegame_core::virtual_driver::VirtualDriveService::global().bump_albums();
     Ok(Value::Null)
 }
 
-pub async fn add_album(name: String, parent_id: Option<String>) -> Result<Value, String> {
+pub fn add_album(name: String, parent_id: Option<String>) -> Result<Value, String> {
     let album = Storage::global().add_album(&name, parent_id.as_deref())?;
     serde_json::to_value(album).map_err(|e| e.to_string())
 }
 
-pub async fn add_images_to_album(
+pub fn add_images_to_album(
     album_id: String,
     image_ids: Vec<String>,
 ) -> Result<Value, String> {
@@ -72,7 +72,7 @@ pub async fn add_images_to_album(
     serde_json::to_value(r).map_err(|e| e.to_string())
 }
 
-pub async fn add_task_images_to_album(task_id: String, album_id: String) -> Result<Value, String> {
+pub fn add_task_images_to_album(task_id: String, album_id: String) -> Result<Value, String> {
     Storage::global().ensure_album_is_writable(&album_id)?;
     let image_ids = Storage::get_task_image_ids(&task_id)?;
     if image_ids.is_empty() {
@@ -89,7 +89,7 @@ pub async fn add_task_images_to_album(task_id: String, album_id: String) -> Resu
     serde_json::to_value(r).map_err(|e| e.to_string())
 }
 
-pub async fn remove_images_from_album(
+pub fn remove_images_from_album(
     album_id: String,
     image_ids: Vec<String>,
 ) -> Result<Value, String> {
@@ -100,7 +100,7 @@ pub async fn remove_images_from_album(
     serde_json::to_value(removed).map_err(|e| e.to_string())
 }
 
-pub async fn update_album_images_order(
+pub fn update_album_images_order(
     album_id: String,
     image_orders: Vec<(String, i64)>,
 ) -> Result<Value, String> {

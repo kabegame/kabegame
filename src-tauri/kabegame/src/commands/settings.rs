@@ -335,9 +335,8 @@ pub fn set_auto_open_crawler_webview(enabled: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn set_max_concurrent_downloads(count: u32) -> Result<(), String> {
-    Settings::global().set_max_concurrent_downloads(count)?;
-    Ok(())
+pub fn set_max_concurrent_downloads(count: u32) -> Result<(), String> {
+    Settings::global().set_max_concurrent_downloads(count)
 }
 
 #[tauri::command]

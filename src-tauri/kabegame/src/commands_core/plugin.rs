@@ -1,16 +1,30 @@
-use kabegame_core::plugin::PluginManager;
+use kabegame_core::plugin::{Plugin, PluginManager};
 use kabegame_core::storage::Storage;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
-pub async fn get_plugins() -> Result<Value, String> {
+async fn all_plugins() -> Result<Vec<Arc<Plugin>>, String> {
     let pm = PluginManager::global();
     pm.ensure_installed_cache_initialized().await?;
-    let plugins = pm.get_all()?;
+    pm.get_all()
+}
+
+/// Web 模式：只回 `{id, version}` 索引，详情由 `get_plugin_detail` 按需单取
+/// （详情体积大，web 客户端不需要整份列表）。桌面走 [`get_plugins_full`]。
+pub async fn get_plugins() -> Result<Value, String> {
+    let plugins = all_plugins().await?;
     let index: Vec<Value> = plugins
         .iter()
         .map(|p| json!({ "id": p.id, "version": p.version }))
         .collect();
     Ok(Value::Array(index))
+}
+
+/// 桌面模式：一次返回完整插件列表。
+#[cfg(not(feature = "web"))]
+pub async fn get_plugins_full() -> Result<Value, String> {
+    let plugins = all_plugins().await?;
+    serde_json::to_value(plugins).map_err(|e| e.to_string())
 }
 
 pub async fn get_plugin_detail(
@@ -25,18 +39,25 @@ pub async fn get_plugin_detail(
     serde_json::to_value(plugin).map_err(|e| e.to_string())
 }
 
+/// 前端手动触发：重扫磁盘后返回最新索引（web）。桌面走 [`refresh_plugins_full`]。
 pub async fn refresh_plugins() -> Result<Value, String> {
-    let pm = PluginManager::global();
-    pm.refresh_plugins().await?;
+    PluginManager::global().refresh_plugins().await?;
     get_plugins().await
 }
 
-pub async fn get_plugin_sources() -> Result<Value, String> {
+/// 前端手动触发：重扫磁盘后返回完整插件列表（桌面）。
+#[cfg(not(feature = "web"))]
+pub async fn refresh_plugins_full() -> Result<Value, String> {
+    PluginManager::global().refresh_plugins().await?;
+    get_plugins_full().await
+}
+
+pub fn get_plugin_sources() -> Result<Value, String> {
     let sources = PluginManager::global().load_plugin_sources()?;
     serde_json::to_value(sources).map_err(|e| e.to_string())
 }
 
-pub async fn get_plugin_data(plugin_id: String) -> Result<Value, String> {
+pub fn get_plugin_data(plugin_id: String) -> Result<Value, String> {
     Storage::global()
         .plugin_data()
         .get(&plugin_id)
@@ -70,7 +91,7 @@ pub async fn get_remote_plugin_icon(
     serde_json::to_value(bytes).map_err(|e| e.to_string())
 }
 
-pub async fn get_plugin_default_config(plugin_id: String) -> Result<Value, String> {
+pub fn get_plugin_default_config(plugin_id: String) -> Result<Value, String> {
     let v = PluginManager::global().read_plugin_default_config_file(&plugin_id)?;
     serde_json::to_value(v).map_err(|e| e.to_string())
 }
@@ -81,7 +102,7 @@ pub async fn ensure_plugin_default_config(plugin_id: String) -> Result<Value, St
         .await
 }
 
-pub async fn save_plugin_default_config(plugin_id: String, config: Value) -> Result<Value, String> {
+pub fn save_plugin_default_config(plugin_id: String, config: Value) -> Result<Value, String> {
     PluginManager::global().save_plugin_default_config(&plugin_id, &config)?;
     Ok(Value::Null)
 }
@@ -119,21 +140,17 @@ pub async fn validate_plugin_source(index_url: String) -> Result<Value, String> 
     Ok(Value::Null)
 }
 
-pub async fn update_plugin_source(
-    id: String,
-    name: String,
-    index_url: String,
-) -> Result<Value, String> {
+pub fn update_plugin_source(id: String, name: String, index_url: String) -> Result<Value, String> {
     PluginManager::global().update_plugin_source(id, name, index_url)?;
     Ok(Value::Null)
 }
 
-pub async fn delete_plugin_source(id: String) -> Result<Value, String> {
+pub fn delete_plugin_source(id: String) -> Result<Value, String> {
     PluginManager::global().delete_plugin_source(id)?;
     Ok(Value::Null)
 }
 
-pub async fn add_plugin_source(
+pub fn add_plugin_source(
     id: Option<String>,
     name: String,
     index_url: String,

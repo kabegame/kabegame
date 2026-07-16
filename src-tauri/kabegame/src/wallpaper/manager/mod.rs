@@ -109,24 +109,24 @@ impl WallpaperController {
         Ok(())
     }
 
-    /// 初始化活动管理器（如创建窗口等）
-    /// 异步执行，完成后返回结果
+    /// 拉起**当前应该活跃**的后端。
+    ///
+    /// 不变量：**壁纸窗口存在 ⟺ `wallpaperMode == "window"` ∧ `!wallpaperDisabled`**。
+    /// 本函数是该不变量的唯一实现处，两个条件缺一不可：
+    /// - 不看 mode：`WindowWallpaperManager::init()` 会建窗并挂到桌面层，native 模式下
+    ///   调用它等于凭空在桌面上盖一层窗口。
+    /// - 不看 disabled：用户关掉壁纸后重启，窗口会照样挂出来——他关的东西又回来了。
+    ///
+    /// 切换由 `commands/wallpaper.rs` 负责：模式切换走 `apply_backend_lifecycle`
+    /// （它 init 的是**目标**模式，此时 mode 尚未落盘，故不能复用本函数；其入口有
+    /// `reject_if_wallpaper_disabled` 守卫）；开关走 `set_wallpaper_disabled`
+    /// （关 → `cleanup()`，开 → 本函数）。
     pub fn init(&self) -> Result<(), String> {
-        // 注意：这里不要只初始化 active_manager（它依赖 settings.wallpaper_mode）。
-        // 启动时经常是 native 模式，但用户可能随后切换到 window 模式；
-        // 若 window manager 未 init，会导致切换时报 "窗口未初始化，请先调用 init 方法"，前端卡在"切换中"。
-        //
-        // 我们在 Windows 上同时初始化两个后端：
-        // - native: no-op
-        // - window: 只确保 wallpaper 窗口存在且保持隐藏，不做挂载/显示
-        // Linux plasma-plugin: 不在此处切换系统壁纸插件，仅在用户切换到插件模式时由 set_wallpaper_mode 调用 init
-        self.native.init()?;
-
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        {
-            self.window.init()?;
+        let settings = Settings::global();
+        if settings.get_wallpaper_disabled() {
+            return Ok(());
         }
-        Ok(())
+        self.manager_for_mode(&settings.get_wallpaper_mode()).init()
     }
 }
 

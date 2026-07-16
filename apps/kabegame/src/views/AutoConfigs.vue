@@ -519,7 +519,7 @@ function onPluginFilterChange(value: string | null) {
 const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconDataUrl(pluginId);
 
 const openTaskImages = (taskId: string) => {
-  void router.push({ name: "TaskDetail", params: { id: taskId } });
+  void router.push({ name: "TaskDetail", params: { taskId } });
 };
 
 const openTaskLog = async (taskId: string) => {

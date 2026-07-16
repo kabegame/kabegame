@@ -674,32 +674,20 @@ pub async fn surf_get_record_images(
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_update_root_url(host: String, root_url: String) -> Result<(), String> {
-    let host = normalize_surf_host(&host);
-    let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {
-        return Err("畅游记录不存在".to_string());
-    };
-    Storage::global().update_surf_record_root_url(&record.id, &root_url)
+pub async fn surf_update_root_url(host: String, root_url: String) -> Result<serde_json::Value, String> {
+    crate::commands_core::surf::surf_update_root_url(host, root_url)
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_update_name(host: String, name: String) -> Result<(), String> {
-    let host = normalize_surf_host(&host);
-    let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {
-        return Err("畅游记录不存在".to_string());
-    };
-    Storage::global().update_surf_record_name(&record.id, &name)
+pub async fn surf_update_name(host: String, name: String) -> Result<serde_json::Value, String> {
+    crate::commands_core::surf::surf_update_name(host, name)
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_delete_record(host: String) -> Result<(), String> {
-    let host = normalize_surf_host(&host);
-    let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {
-        return Err("畅游记录不存在".to_string());
-    };
-    Storage::global().delete_surf_record(&record.id)
+pub async fn surf_delete_record(host: String) -> Result<serde_json::Value, String> {
+    crate::commands_core::surf::surf_delete_record(host)
 }
 
 /// 返回当前畅游会话对应站点的 Cookie（与浏览器请求头中发送的一致，含 HttpOnly）。

@@ -331,6 +331,42 @@ pub async fn set_wallpaper_rotation_transition(transition: String) -> Result<(),
     Ok(())
 }
 
+/// 把后端切到 `mode`：新后端 `init()`，旧后端 `cleanup()`。
+///
+/// 后端资源的存续与 `wallpaperMode` **同寿命**，与"当前有没有壁纸"无关，因此
+/// `set_wallpaper_mode` 的**每一条**成功路径都必须调用本函数——包括无当前壁纸的
+/// 早返回。`WindowWallpaperManager::set_wallpaper_path` 已是 no-op，不再兜底懒挂载：
+/// 切入 window 时漏掉 `init()` 就永远建不出窗口；切出 window 时漏掉 `cleanup()`
+/// 会留下一个孤儿壁纸窗口继续挂在桌面上。
+///
+/// 反过来，本函数必须在所有可能**中止**切换的检查之后调用，否则中止会留下半切换状态。
+fn apply_backend_lifecycle(
+    controller: &'static WallpaperController,
+    old_mode: &str,
+    mode: &str,
+) -> Result<(), String> {
+    eprintln!("[DEBUG] set_wallpaper_mode: 开始应用模式 {}", mode);
+    controller
+        .manager_for_mode(mode)
+        .init()
+        .map_err(|e| format!("init 失败: {}", e))?;
+
+    if old_mode == "window" && mode != "window" {
+        controller
+            .manager_for_mode("window")
+            .cleanup()
+            .unwrap_or_else(|e| eprintln!("[WARN] 清理 window 资源失败: {}", e));
+    }
+    #[cfg(target_os = "linux")]
+    if old_mode == "plasma-plugin" && mode != "plasma-plugin" {
+        controller
+            .manager_for_mode("plasma-plugin")
+            .cleanup()
+            .unwrap_or_else(|e| eprintln!("[WARN] 清理 plasma-plugin 资源失败: {}", e));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn set_wallpaper_mode<R: tauri::Runtime>(
     mode: String,
@@ -357,23 +393,20 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
     let cur_style = settings.get_wallpaper_rotation_style();
     let cur_transition = settings.get_wallpaper_rotation_transition();
 
+    let target = controller.manager_for_mode(&mode);
+
     let current_wallpaper = match get_current_wallpaper_path_from_settings(&app).await {
         Ok(Some(p)) => p,
         _ => {
-            // 无当前壁纸时，对于 plasma-plugin 仍需调用 init 切换系统壁纸插件
-            #[cfg(target_os = "linux")]
-            if mode == "plasma-plugin" {
-                let target = controller.manager_for_mode(&mode);
-                target
-                    .init()
-                    .map_err(|e| format!("切换系统壁纸插件失败: {}", e))?;
-            }
+            // 无当前壁纸：内容无从谈起，但后端仍必须切换到位（见
+            // `apply_backend_lifecycle` 的说明），否则切入 window 永远建不出窗口、
+            // 切出 window 会留下孤儿窗口。
+            apply_backend_lifecycle(controller, &old_mode, &mode)?;
             settings.set_wallpaper_mode(mode.clone())?;
             return Ok(());
         }
     };
 
-    let target = controller.manager_for_mode(&mode);
     let current_cleaned = current_wallpaper
         .trim()
         .trim_start_matches(r"\\?\")
@@ -402,8 +435,6 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
             }
         };
 
-    eprintln!("[DEBUG] set_wallpaper_mode: 开始应用模式 {}", mode);
-    target.init().map_err(|e| format!("init 失败: {}", e))?;
     #[cfg(not(target_os = "linux"))]
     let is_plugin_mode = false;
     #[cfg(target_os = "linux")]
@@ -425,29 +456,15 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
         }
         return Err(error_msg);
     }
+
+    // 放在所有可能中止切换的检查之后：中止时不应留下半切换状态
+    // （窗口已建但模式没落 / 窗口已毁但模式还是 window）。
+    apply_backend_lifecycle(controller, &old_mode, &mode)?;
+
     target.set_wallpaper_path(&resolved_wallpaper).await?;
     target.set_style(&style_to_apply).await?;
     if rotation_enabled {
         target.set_transition(&transition_to_apply).await?;
-    }
-
-    if old_mode == "window" && mode != "window" {
-        controller
-            .manager_for_mode("window")
-            .cleanup()
-            .unwrap_or_else(|e| eprintln!("清理 window 资源失败: {}", e));
-    }
-    #[cfg(target_os = "linux")]
-    if old_mode == "plasma-plugin" && mode != "plasma-plugin" {
-        controller
-            .manager_for_mode("plasma-plugin")
-            .cleanup()
-            .unwrap_or_else(|e| eprintln!("清理 plasma-plugin 资源失败: {}", e));
-    }
-    if old_mode == "gdi" && mode != "gdi" {
-        if let Err(e) = controller.manager_for_mode("gdi").cleanup() {
-            eprintln!("[ERROR] 清理 gdi 资源失败: {}", e);
-        }
     }
 
     settings.set_wallpaper_mode(mode.clone())?;
@@ -501,7 +518,18 @@ pub async fn set_wallpaper_disabled<R: tauri::Runtime>(
             }
         }
     } else {
-        // 重新启用：恢复上次壁纸（复用启动恢复逻辑）
+        // 重新启用：先把当前模式的后端拉起来，再恢复壁纸内容。
+        //
+        // 顺序不可颠倒，且这一步不可省：上面 `disabled` 分支的 `cleanup()` 已经把
+        // 壁纸窗口**销毁**了（不是隐藏），而 `init_wallpaper_on_startup()` 终点是
+        // `set_wallpaper_path()` —— 它在 window 模式下是 no-op，不会兜底建窗。
+        // 少了这行，关掉再打开壁纸就永远显示不出来。
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        if let Err(e) = WallpaperController::global().init() {
+            eprintln!("[WARN] set_wallpaper_disabled: 初始化壁纸后端失败: {}", e);
+        }
+
+        // 恢复上次壁纸（复用启动恢复逻辑）
         if let Err(e) = crate::startup::init_wallpaper_on_startup().await {
             eprintln!("[WARN] set_wallpaper_disabled: 恢复壁纸失败: {}", e);
         }

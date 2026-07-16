@@ -75,7 +75,6 @@ pub fn init_registry() {
             handler: Arc::new(|_p| {
                 Box::pin(async move {
                     crate::commands_core::album::get_albums()
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -96,7 +95,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::album::get_album_preview(args.album_id, args.limit)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -172,7 +170,6 @@ pub fn init_registry() {
             handler: Arc::new(|_p| {
                 Box::pin(async move {
                     crate::commands_core::image::get_images_count()
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -186,7 +183,6 @@ pub fn init_registry() {
             handler: Arc::new(|_p| {
                 Box::pin(async move {
                     crate::commands_core::image::get_gallery_plugin_groups()
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -200,7 +196,6 @@ pub fn init_registry() {
             handler: Arc::new(|_p| {
                 Box::pin(async move {
                     crate::commands_core::image::get_gallery_media_type_counts()
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -220,7 +215,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::image::get_album_media_type_counts(args.album_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -234,7 +228,6 @@ pub fn init_registry() {
             handler: Arc::new(|_p| {
                 Box::pin(async move {
                     crate::commands_core::image::get_gallery_time_filter_data()
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -254,7 +247,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::image::get_image_by_id(args.image_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -274,7 +266,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::image::get_image_metadata(args.image_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -294,7 +285,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::image::get_image_metadata_full(args.image_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -308,7 +298,6 @@ pub fn init_registry() {
             handler: Arc::new(|_p| {
                 Box::pin(async move {
                     crate::commands_core::task::get_all_tasks()
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -322,7 +311,6 @@ pub fn init_registry() {
             handler: Arc::new(|_p| {
                 Box::pin(async move {
                     crate::commands_core::task::get_run_configs()
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -342,7 +330,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::task::get_run_config(args.config_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -356,7 +343,6 @@ pub fn init_registry() {
             handler: Arc::new(|_p| {
                 Box::pin(async move {
                     crate::commands_core::task::get_missed_runs()
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -377,7 +363,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::task::get_tasks_page(args.limit, args.offset)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -397,7 +382,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::task::get_task(args.task_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -431,7 +415,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::task::get_task_logs(args.task_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -451,7 +434,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::task::get_task_failed_images(args.task_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -465,7 +447,6 @@ pub fn init_registry() {
             handler: Arc::new(|_p| {
                 Box::pin(async move {
                     crate::commands_core::task::get_all_failed_images()
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -539,7 +520,6 @@ pub fn init_registry() {
             handler: Arc::new(|_p| {
                 Box::pin(async move {
                     crate::commands_core::plugin::get_plugin_sources()
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -559,7 +539,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::plugin::get_plugin_data(args.plugin_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -762,7 +741,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     let task_id = crate::commands_core::task::start_task(args.task)
-                        .await
                         .map_err(RpcError::internal)?;
                     Ok(Value::String(task_id))
                 })
@@ -784,7 +762,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::album::rename_album(args.album_id, args.new_name)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -804,7 +781,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::album::delete_album(args.album_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -825,7 +801,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::image::toggle_image_favorite(args.image_id, args.favorite)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -859,7 +834,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::plugin::get_plugin_default_config(args.plugin_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -903,7 +877,6 @@ pub fn init_registry() {
                         args.plugin_id,
                         args.config,
                     )
-                    .await
                     .map_err(RpcError::internal)
                 })
             }),
@@ -945,7 +918,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::image::delete_image(args.image_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -965,7 +937,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::image::batch_delete_images(args.image_ids)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -985,7 +956,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::image::batch_remove_images(args.image_ids)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1005,7 +975,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::image::remove_image(args.image_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1026,7 +995,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::album::move_album(args.album_id, args.new_parent_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1047,7 +1015,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::album::add_album(args.name, args.parent_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1114,7 +1081,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::album::add_images_to_album(args.album_id, args.image_ids)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1138,7 +1104,6 @@ pub fn init_registry() {
                         args.task_id,
                         args.album_id,
                     )
-                    .await
                     .map_err(RpcError::internal)
                 })
             }),
@@ -1162,7 +1127,6 @@ pub fn init_registry() {
                         args.album_id,
                         args.image_ids,
                     )
-                    .await
                     .map_err(RpcError::internal)
                 })
             }),
@@ -1186,7 +1150,6 @@ pub fn init_registry() {
                         args.album_id,
                         args.image_orders,
                     )
-                    .await
                     .map_err(RpcError::internal)
                 })
             }),
@@ -1228,7 +1191,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::task::delete_task(args.task_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1247,7 +1209,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::task::add_task(args.task)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1261,7 +1222,6 @@ pub fn init_registry() {
             handler: Arc::new(|_p| {
                 Box::pin(async move {
                     crate::commands_core::task::clear_finished_tasks()
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1400,7 +1360,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::task::delete_task_failed_image(args.failed_id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1609,7 +1568,6 @@ pub fn init_registry() {
                         args.name,
                         args.index_url,
                     )
-                    .await
                     .map_err(RpcError::internal)
                 })
             }),
@@ -1628,7 +1586,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::plugin::delete_plugin_source(args.id)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1654,7 +1611,6 @@ pub fn init_registry() {
                         args.name,
                         args.index_url,
                     )
-                    .await
                     .map_err(RpcError::internal)
                 })
             }),
@@ -1719,7 +1675,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::surf::surf_delete_record(args.host)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1739,7 +1694,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::surf::surf_update_name(args.host, args.name)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1760,7 +1714,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::surf::surf_update_root_url(args.host, args.root_url)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1799,7 +1752,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::settings::set_max_concurrent_tasks(args.count)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1819,7 +1771,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::settings::set_download_interval_ms(args.interval_ms)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1838,7 +1789,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::settings::set_network_retry_count(args.count)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1857,7 +1807,6 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     crate::commands_core::settings::set_auto_deduplicate(args.enabled)
-                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1878,7 +1827,6 @@ pub fn init_registry() {
                     crate::commands_core::settings::set_import_recommended_schedule_enabled(
                         args.enabled,
                     )
-                    .await
                     .map_err(RpcError::internal)
                 })
             }),

@@ -75,11 +75,11 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapersâ€
 
 | OS | Download |
 |----|----------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.3.0/Kabegame-standard_4.3.0_x64-setup.exe) |
-| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v4.3.0/Kabegame-standard_4.3.0_aarch64.dmg) |
-| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v4.3.0/Kabegame-standard_4.3.0_amd64.deb) |
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.4.0/Kabegame-standard_4.4.0_x64-setup.exe) |
+| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v4.4.0/Kabegame-standard_4.4.0_aarch64.dmg) |
+| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v4.4.0/Kabegame-standard_4.4.0_amd64.deb) |
 
-- **Android preview** : [apk](https://github.com/kabegame/kabegame/releases/download/v4.3.0/Kabegame_4.3.0_android-preview.apk) on the same releases page.
+- **Android preview** : [apk](https://github.com/kabegame/kabegame/releases/download/v4.4.0/Kabegame_4.4.0_android-preview.apk) on the same releases page.
 - **CLI**: Not bundled with the app â€” distributed separately. Download `kabegame-cli` for your platform from the same releases page and put it on your PATH (`kabegame-cli --help`).
 
 ## Installation

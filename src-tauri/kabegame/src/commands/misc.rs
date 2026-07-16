@@ -110,20 +110,9 @@ pub async fn get_file_drop_kinds(paths: Vec<String>) -> Result<Vec<FileDropKindI
     Ok(out)
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SupportedImageTypes {
-    extensions: Vec<String>,
-    mime_by_ext: std::collections::HashMap<String, String>,
-}
-
 #[tauri::command]
 pub async fn get_supported_image_types() -> Result<serde_json::Value, String> {
-    let payload = SupportedImageTypes {
-        extensions: kabegame_core::image_type::supported_media_extensions(),
-        mime_by_ext: kabegame_core::image_type::mime_by_ext(),
-    };
-    Ok(serde_json::to_value(payload).map_err(|e| e.to_string())?)
+    crate::commands_core::misc::get_supported_image_types()
 }
 
 /// 读取后端缓存的 Linux 桌面环境（plasma|gnome|unknown）
@@ -188,50 +177,14 @@ pub async fn clear_user_data<R: Runtime>(app: AppHandle<R>) -> Result<(), String
     Ok(())
 }
 
-/// 与前端 `invoke` 对象字段一致（camelCase）；勿改用平铺 `bool` 参数，否则 serde 无法匹配 `removeUnrecognized` 等键，会得到默认值 false。
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StartOrganizeArgs {
-    pub dedupe: bool,
-    /// 去重保留策略：true 保留最新，false 保留最旧（缺省保留最新）
-    #[serde(default)]
-    pub dedupe_keep_new: bool,
-    pub remove_missing: bool,
-    pub remove_unrecognized: bool,
-    pub regen_thumbnails: bool,
-    #[serde(default)]
-    pub regen_compatible: bool,
-    #[serde(default)]
-    pub delete_source_files: bool,
-    pub range_start: Option<usize>,
-    pub range_end: Option<usize>,
-}
-
+/// 参数结构见 `commands_core::organize::StartOrganizeArgs`（与前端 `invoke` 对象字段一致，
+/// camelCase；勿改用平铺 `bool` 参数，否则 serde 无法匹配 `removeUnrecognized` 等键，会得到默认值 false）。
 #[tauri::command]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub async fn start_organize(args: StartOrganizeArgs) -> Result<(), String> {
-    use kabegame_core::storage::organize::{OrganizeOptions, OrganizeService};
-    let (offset, limit) = match (args.range_start, args.range_end) {
-        (Some(s), Some(e)) if e > s => (Some(s), Some(e - s)),
-        _ => (None, None),
-    };
-    OrganizeService::global()
-        .clone()
-        .start(
-            std::sync::Arc::new(kabegame_core::storage::Storage::global().clone()),
-            OrganizeOptions {
-                dedupe: args.dedupe,
-                dedupe_keep_new: args.dedupe_keep_new,
-                remove_missing: args.remove_missing,
-                remove_unrecognized: args.remove_unrecognized,
-                regen_thumbnails: args.regen_thumbnails,
-                regen_compatible: args.regen_compatible,
-                delete_source_files: args.delete_source_files,
-                offset,
-                limit,
-            },
-        )
-        .await
+pub async fn start_organize(
+    args: crate::commands_core::organize::StartOrganizeArgs,
+) -> Result<serde_json::Value, String> {
+    crate::commands_core::organize::start_organize(args).await
 }
 
 #[tauri::command]

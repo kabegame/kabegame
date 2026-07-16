@@ -5,7 +5,7 @@ fn normalize_surf_host(host: &str) -> String {
     host.trim().to_lowercase()
 }
 
-pub async fn surf_update_root_url(host: String, root_url: String) -> Result<Value, String> {
+pub fn surf_update_root_url(host: String, root_url: String) -> Result<Value, String> {
     let host = normalize_surf_host(&host);
     let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {
         return Err("畅游记录不存在".to_string());
@@ -14,7 +14,7 @@ pub async fn surf_update_root_url(host: String, root_url: String) -> Result<Valu
     Ok(Value::Null)
 }
 
-pub async fn surf_update_name(host: String, name: String) -> Result<Value, String> {
+pub fn surf_update_name(host: String, name: String) -> Result<Value, String> {
     let host = normalize_surf_host(&host);
     let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {
         return Err("畅游记录不存在".to_string());
@@ -23,7 +23,7 @@ pub async fn surf_update_name(host: String, name: String) -> Result<Value, Strin
     Ok(Value::Null)
 }
 
-pub async fn surf_delete_record(host: String) -> Result<Value, String> {
+pub fn surf_delete_record(host: String) -> Result<Value, String> {
     let host = normalize_surf_host(&host);
     let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {
         return Err("畅游记录不存在".to_string());

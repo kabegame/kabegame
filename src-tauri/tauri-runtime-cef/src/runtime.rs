@@ -833,6 +833,13 @@ mod imp {
             shared: Arc<Mutex<WindowedWindowShared>>,
             initial_bounds: cef::Rect,
             initial_show_state: ShowState,
+            // Tauri `visible: false`。**不能**用 `ShowState::HIDDEN` 表达:
+            // `CEF_SHOW_STATE_HIDDEN` 只在 macOS 有效,其他平台 CEF 会把它翻译成
+            // `kMinimized`(`libcef/browser/views/window_view.cc`),窗口会以最小化
+            // 状态创建 —— WS_MINIMIZE、残留 stub 尺寸、渲染控件 0x0、永不出帧,
+            // 且事后 `ShowWindow(SW_SHOW)` 不还原最小化窗口(需 SW_RESTORE)。
+            // 故几何状态与"是否显示"拆成两个字段,由本字段单独门控 `show()`。
+            initially_visible: bool,
             frameless: bool,
             resizable: bool,
             maximizable: bool,
@@ -904,10 +911,12 @@ mod imp {
                     }));
                 }
 
-                if self.initial_show_state != ShowState::HIDDEN {
+                if self.initially_visible {
                     window.show();
+                    eprintln!("[cef-runtime] windowed top-level CEF window shown");
+                } else {
+                    eprintln!("[cef-runtime] windowed top-level CEF window created (not shown)");
                 }
-                eprintln!("[cef-runtime] windowed top-level CEF window shown");
             }
 
             fn on_window_destroyed(&self, _window: Option<&mut cef::Window>) {
@@ -1277,6 +1286,8 @@ mod imp {
                             height: 768,
                         },
                         ShowState::NORMAL,
+                        // bootstrap 窗口创建后即显示。
+                        true,
                         false,
                         true,
                         true,
@@ -2137,6 +2148,7 @@ mod imp {
                     height: size.height as i32,
                 },
                 initial_show_state(attrs.visible, attrs.maximized, attrs.fullscreen.is_some()),
+                attrs.visible,
                 !attrs.decorations,
                 attrs.resizable,
                 attrs.maximizable,
@@ -3018,10 +3030,21 @@ mod imp {
         }
     }
 
+    /// 窗口的**几何**初始状态。与"是否显示"无关 —— 后者见
+    /// `WindowedTopLevelWindowDelegate::initially_visible`。
+    ///
+    /// `ShowState::HIDDEN` 只在 macOS 表示"隐藏(无 dock 缩略图)";其他平台 CEF 的
+    /// `window_view.cc` 会把 `CEF_SHOW_STATE_HIDDEN` 翻译成 `kMinimized`,窗口以
+    /// 最小化状态创建后再也画不出东西。所以这里只在 macOS 上报 HIDDEN。
     fn initial_show_state(visible: bool, maximized: bool, fullscreen: bool) -> ShowState {
+        #[cfg(target_os = "macos")]
         if !visible {
-            ShowState::HIDDEN
-        } else if fullscreen {
+            return ShowState::HIDDEN;
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = visible;
+
+        if fullscreen {
             ShowState::FULLSCREEN
         } else if maximized {
             ShowState::MAXIMIZED

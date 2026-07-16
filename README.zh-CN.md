@@ -77,11 +77,11 @@
 
 | 操作系统 | 下载 |
 |---------|------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.3.0/Kabegame-standard_4.3.0_x64-setup.exe) |
-| macOS | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v4.3.0/Kabegame-standard_4.3.0_aarch64.dmg) |
-| Linux | [deb 包](https://github.com/kabegame/kabegame/releases/download/v4.3.0/Kabegame-standard_4.3.0_amd64.deb) |
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.4.0/Kabegame-standard_4.4.0_x64-setup.exe) |
+| macOS | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v4.4.0/Kabegame-standard_4.4.0_aarch64.dmg) |
+| Linux | [deb 包](https://github.com/kabegame/kabegame/releases/download/v4.4.0/Kabegame-standard_4.4.0_amd64.deb) |
 
-- **安卓预览版**：[apk](https://github.com/kabegame/kabegame/releases/download/v4.3.0/Kabegame_4.3.0_android-preview.apk)（同一发布页）。
+- **安卓预览版**：[apk](https://github.com/kabegame/kabegame/releases/download/v4.4.0/Kabegame_4.4.0_android-preview.apk)（同一发布页）。
 - **CLI 工具**：不随应用打包，单独分发；在同一发布页下载对应平台的 `kabegame-cli`，放入 PATH 即可使用（`kabegame-cli --help`）。
 
 ## 安装方法

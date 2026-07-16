@@ -1,17 +1,17 @@
 // 窗口挂载模块 - 将窗口挂载到桌面层的通用逻辑
 // 提供两个版本的实现：简化版和高级版，供测试和选择
 
+use crate::wallpaper::window::zorder;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::thread;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, EnumWindows, FindWindowExW, FindWindowW, GetClientRect, GetParent,
-    GetSystemMetrics, GetWindowLongPtrW, IsWindowVisible, SendMessageTimeoutW, SendMessageW,
-    SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, SMTO_NORMAL,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOW, WS_CHILD,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_POPUP,
+    EnumChildWindows, EnumWindows, FindWindowExW, GetClientRect, GetParent, GetSystemMetrics,
+    GetWindowLongPtrW, SendMessageTimeoutW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    GWL_EXSTYLE, GWL_STYLE, SMTO_NORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_SHOWWINDOW, SW_SHOW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_POPUP,
 };
 
 fn wide(s: &str) -> Vec<u16> {
@@ -25,30 +25,19 @@ fn wide(s: &str) -> Vec<u16> {
 /// - 正确处理 Z-order 确保图标层可见
 /// - 使用 MapWindowPoints 进行坐标转换
 pub fn mount_to_desktop_saikyo(hwnd: HWND) -> Result<(), String> {
-    // Windows 常量定义
-    const WS_EX_NOREDIRECTIONBITMAP: u32 = 0x00200000; // Windows 11 raised desktop 标志
     const HWND_BOTTOM: HWND = 1;
-    const HWND_TOP: HWND = 0;
 
     unsafe {
         // 1. 获取 Progman 窗口
-        let progman = FindWindowW(wide("Progman").as_ptr(), std::ptr::null());
-        if progman == 0 {
+        let Some(progman) = zorder::progman() else {
             return Err("FindWindowW(Progman) failed".to_string());
-        }
+        };
 
         // 2. 检测 Windows 11 raised desktop with layered ShellView
-        // 检查 Progman 是否有 WS_EX_NOREDIRECTIONBITMAP 样式
-        let ex_style = GetWindowLongPtrW(progman, GWL_EXSTYLE) as u32;
-        let is_raised_desktop = (ex_style & WS_EX_NOREDIRECTIONBITMAP) != 0;
+        let is_raised_desktop = zorder::is_raised_desktop(progman);
 
         eprintln!("[DEBUG-SAIKYO] ========== Windows 11 检测 ==========");
         eprintln!("[DEBUG-SAIKYO] Progman HWND: 0x{:X}", progman);
-        eprintln!("[DEBUG-SAIKYO] Progman EX_STYLE: 0x{:X}", ex_style);
-        eprintln!(
-            "[DEBUG-SAIKYO] WS_EX_NOREDIRECTIONBITMAP: 0x{:X}",
-            WS_EX_NOREDIRECTIONBITMAP
-        );
         eprintln!("[DEBUG-SAIKYO] is_raised_desktop: {}", is_raised_desktop);
 
         if is_raised_desktop {
@@ -232,102 +221,11 @@ pub fn mount_to_desktop_saikyo(hwnd: HWND) -> Result<(), String> {
             }
 
             eprintln!("[DEBUG-SAIKYO] ========== Windows 11 支线：调整 Z-order ==========");
-            // 调整 Z-order: 壁纸窗口应该在 DefView 之下、WorkerW 之上
+            // 层次由 `window::zorder` 单一实现负责（此处只定层次，位置/尺寸稍后设）。
             if shell_dll_defview != 0 {
-                eprintln!(
-                    "[DEBUG-SAIKYO] 调整 Z-order: 壁纸窗口放在 DefView (0x{:X}) 之下",
-                    shell_dll_defview
-                );
-                // 注意：这里只是设置 Z-order 关系，不设置位置和大小（稍后设置）
-                // 将壁纸窗口放在 DefView 之下（相对于 Progman 的 Z-order）
-                let wallpaper_zorder_result = SetWindowPos(
-                    hwnd,
-                    shell_dll_defview as HWND,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
-                eprintln!(
-                    "[DEBUG-SAIKYO] SetWindowPos(壁纸, DefView) 结果: {}",
-                    wallpaper_zorder_result
-                );
-                eprintln!("[DEBUG-SAIKYO] ✓ 壁纸窗口 Z-order 已调整（临时，稍后会设置大小）");
-
-                // 关键：显式将 DefView 提升到顶部，确保图标可见
-                eprintln!(
-                    "[DEBUG-SAIKYO] 显式提升 DefView (0x{:X}) 到顶部",
-                    shell_dll_defview
-                );
-
-                // 检查 DefView 是否可见
-                let defview_visible = IsWindowVisible(shell_dll_defview);
-                eprintln!("[DEBUG-SAIKYO] DefView 可见性: {}", defview_visible);
-
-                ShowWindow(shell_dll_defview, SW_SHOW);
-                let defview_zorder_result = SetWindowPos(
-                    shell_dll_defview,
-                    HWND_TOP,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
-                eprintln!(
-                    "[DEBUG-SAIKYO] SetWindowPos(DefView, HWND_TOP) 结果: {}",
-                    defview_zorder_result
-                );
-
-                // 刷新 DefView 窗口以确保可见
-                const WM_PAINT: u32 = 0x000F;
-                const WM_NCPAINT: u32 = 0x0085;
-                let _ = SendMessageW(shell_dll_defview, WM_NCPAINT, 0, 0);
-                let _ = SendMessageW(shell_dll_defview, WM_PAINT, 0, 0);
-                eprintln!("[DEBUG-SAIKYO] ✓ 已刷新 DefView 窗口");
-
-                // 查找并提升 SysListView32（桌面图标列表）
-                let folder_view = FindWindowExW(
-                    shell_dll_defview,
-                    0,
-                    wide("SysListView32").as_ptr(),
-                    std::ptr::null(),
-                );
-                if folder_view != 0 {
-                    eprintln!(
-                        "[DEBUG-SAIKYO] 找到 SysListView32 (0x{:X})，提升到顶部",
-                        folder_view
-                    );
-                    let folder_visible = IsWindowVisible(folder_view);
-                    eprintln!("[DEBUG-SAIKYO] SysListView32 可见性: {}", folder_visible);
-
-                    ShowWindow(folder_view, SW_SHOW);
-                    let folder_zorder_result = SetWindowPos(
-                        folder_view,
-                        HWND_TOP,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                    );
-                    eprintln!(
-                        "[DEBUG-SAIKYO] SetWindowPos(SysListView32, HWND_TOP) 结果: {}",
-                        folder_zorder_result
-                    );
-
-                    let _ = SendMessageW(folder_view, WM_NCPAINT, 0, 0);
-                    let _ = SendMessageW(folder_view, WM_PAINT, 0, 0);
-                    eprintln!("[DEBUG-SAIKYO] ✓ 已刷新 SysListView32 窗口");
-                } else {
-                    eprintln!("[DEBUG-SAIKYO] ⚠ 未找到 SysListView32");
-                }
-
-                // 验证最终 Z-order：检查壁纸窗口是否真的在 DefView 之下
-                // 注意：对于子窗口，Z-order 是相对于父窗口的，所以我们需要检查它们在父窗口中的顺序
-                eprintln!("[DEBUG-SAIKYO] 验证最终 Z-order...");
-                eprintln!("[DEBUG-SAIKYO] ✓ DefView 和图标层已提升到顶部");
+                zorder::sink_below_icons(hwnd, shell_dll_defview);
+                zorder::raise_icon_layer(shell_dll_defview);
+                eprintln!("[DEBUG-SAIKYO] ✓ 壁纸窗口已压到图标层之下");
             } else {
                 eprintln!("[DEBUG-SAIKYO] ⚠ DefView 为 0，跳过 Z-order 调整");
             }
@@ -481,43 +379,9 @@ pub fn mount_to_desktop_saikyo(hwnd: HWND) -> Result<(), String> {
 
         ShowWindow(hwnd, SW_SHOW);
 
-        // Windows 11: 在设置窗口大小后，再次确保 DefView 在顶部
+        // 设置尺寸与 ShowWindow 都会打乱 Z-order，收尾再压一次层次。
         if is_raised_desktop && shell_dll_defview != 0 {
-            eprintln!("[DEBUG-SAIKYO] 窗口大小设置后，再次确保 DefView 在顶部");
-            const HWND_TOP: HWND = 0;
-            SetWindowPos(
-                shell_dll_defview,
-                HWND_TOP,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-
-            // 刷新 DefView
-            const WM_PAINT: u32 = 0x000F;
-            let _ = SendMessageW(shell_dll_defview, WM_PAINT, 0, 0);
-
-            // 刷新 SysListView32
-            let folder_view = FindWindowExW(
-                shell_dll_defview,
-                0,
-                wide("SysListView32").as_ptr(),
-                std::ptr::null(),
-            );
-            if folder_view != 0 {
-                SetWindowPos(
-                    folder_view,
-                    HWND_TOP,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
-                let _ = SendMessageW(folder_view, WM_PAINT, 0, 0);
-            }
+            zorder::raise_icon_layer(shell_dll_defview);
             eprintln!("[DEBUG-SAIKYO] ✓ 已重新提升 DefView 和图标层");
         }
 

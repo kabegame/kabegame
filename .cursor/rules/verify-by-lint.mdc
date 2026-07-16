@@ -1,10 +1,30 @@
 ---
-description: 不手动跑编译，以 lint 为准
+description: 不跑构建，用 deno task check 校验
 alwaysApply: true
 ---
 
-# 校验方式：以 Lint 为准
+# 校验方式：跑 check，不跑 build
 
-- **不要**主动运行 `cargo build`、`npm run build` 等编译/构建命令来检查代码是否正确。
-- **以**编辑器/工作区的 **lint 诊断** 为准：修改后参考 `ReadLints` 或 IDE 中的报错即可。
-- 仅在用户明确要求「帮我编译一下」或「跑一下构建」时才执行编译命令。
+- **不要**用 `cargo build` / `tauri build` / `deno task b` / `npm run build` 等**构建**命令来校验代码是否正确。构建耗时以分钟计，且会产出无人需要的产物。
+- **要**跑 `deno task check -c <component>`（如 `deno task check -c kabegame`）。它是本仓库校验的正规入口：注入 `CEF_PATH`、FFmpeg、V8 等环境后跑 `cargo check` + Vue 类型检查。缩小范围用 `--skip vue`（只查 Rust）或 `--skip cargo`（只查前端）。
+- 编辑器/工作区的 **lint 诊断**（`ReadLints` 或 IDE 报错）同样有效，改动小时可只看它，不必每次都跑 check。
+- 仅在用户明确要求「帮我编译/构建一下」，或**需要真正运行程序来验证行为**时才执行构建（后者见 [debug-empirically.mdc](mdc:.cursor/rules/debug-empirically.mdc)：跑起来观察 > 纯静态推理）。
+
+## 坑：`target/` 的文件占用
+
+Windows 下 `check`/`build` 会被**占着 `target/<profile>/` 产物的进程**挡住，有两种表现：
+
+- `os error 32`（"另一个进程正在使用此文件"）—— `cef-dll-sys` 的 build script 拷 CEF 运行时时被挡。
+- `os error 5`（"拒绝访问"）+ `failed to remove file ...kabegame-cef-helper.exe` —— cargo 重新链接时被挡，退出码 **101**（**不是 panic，别误诊**）。
+
+规避：
+
+1. **别在一个构建/dev 跑着的时候并发跑另一个 `check`/`build`**。这是最常见的诱因，也是 `os error 5` 的真正来源。
+2. 跑之前确认**没有残留进程**，且注意时序：`kabegame.exe` 会派生多个 `kabegame-cef-helper.exe` 子进程；在 `deno task dev` **编译期间**杀进程没有意义——app 随后才启动并生出新的一批。要杀就在 app 已经起来之后杀，杀完复查：
+
+```bash
+taskkill //F //IM kabegame-cef-helper.exe //T; taskkill //F //IM kabegame.exe //T
+tasklist | grep -ic kabegame        # 复查:应为 0
+```
+
+3. `deno task dev` 另一个常见失败是 `Port 1420 is already in use`——上一个 `dev:frontend` 还占着。用 `netstat -ano | grep :1420` 找 PID 后 `taskkill //F //PID <pid> //T`。

@@ -277,31 +277,10 @@ pub fn init_wallpaper_controller(app: &mut tauri::App<crate::AppRuntime>) {
         return;
     }
 
-    // 创建壁纸窗口（用于窗口模式）
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    {
-        use tauri::{WebviewUrl, WebviewWindowBuilder};
-        let builder = WebviewWindowBuilder::new(
-            app,
-            "wallpaper",
-            // 使用独立的 wallpaper.html，只渲染 WallpaperLayer 组件
-            WebviewUrl::App("wallpaper.html".into()),
-        )
-        // 给壁纸窗口一个固定标题，便于脚本/调试定位到正确窗口
-        .title(t!("window.wallpaperTitle"))
-        .fullscreen(true)
-        .decorations(false);
-
-        #[cfg(target_os = "windows")]
-        let builder = builder.transparent(true);
-
-        let _ = builder.visible(false).skip_taskbar(true).build();
-
-        #[cfg(target_os = "macos")]
-        if let Some(wallpaper_window) = app.get_webview_window("wallpaper") {
-            let _ = crate::wallpaper::window_mount_macos::mount_to_desktop(&wallpaper_window);
-        }
-    }
+    // 壁纸窗口不在此创建：它与 `wallpaperMode == "window"` 同寿命，由
+    // `WindowWallpaperManager::init()` 在进入 window 模式时创建并挂到桌面层，
+    // 由 `cleanup()` 在离开时销毁。下面的 `WallpaperController::init()` 只会
+    // 初始化当前活动后端。
 
     // 创建系统托盘（使用 Tauri 2.0 内置 API）
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -406,14 +385,18 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
             #[cfg(feature = "web")]
             {
                 counter += 1;
+                let _ = bus.send(SseMessage {
+                    event: kind.as_event_name(),
+                    data: serde_json::to_string(&*event).unwrap_or_else(|_| "null".into()),
+                    id: counter,
+                });
             }
 
-            #[cfg(feature = "web")]
-            let _ = bus.send(SseMessage {
-                event: kind.as_event_name(),
-                data: serde_json::to_string(&*event).unwrap_or_else(|_| "null".into()),
-                id: counter,
-            });
+            #[cfg(not(feature = "web"))]
+            let _ = app.emit(
+                kind.as_event_name().as_str(),
+                serde_json::to_value(&event).unwrap_or_else(|_| serde_json::Value::Null),
+            );
 
             match &*event {
                 DaemonEvent::Generic { event, payload } => {

@@ -6,6 +6,14 @@
 
 **Changelog entries:** ~~Write release notes in **English** (new sections and bullets from [3.4.5] onward). ~~ 从4.2.1开始用中文。
 
+## [4.4.0]
+### Fixed
+- **壁纸**: Windows \ MacOS 窗口模式壁纸显示失败bug
+
+### Optimized
+- **安装**: Windows 安装弹太多黑窗问题
+
+
 ## [4.3.0]
 ### Added
 - **爬虫**: webview 爬虫插件现在可以多窗口了

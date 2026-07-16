@@ -107,7 +107,9 @@ deno task build:deno             # Build the deno CLI from third/deno sources (p
 ```
 
 ### Verification workflow
-**Do not run `cargo build` or full builds to verify changes.** Rely on lint diagnostics (`deno task check`) instead. Only run build commands when the user explicitly requests a build.
+**Do not run `cargo build` / `tauri build` / `deno task b` to verify changes** — run `deno task check -c <component>` instead (narrow it with `--skip vue` / `--skip cargo`). Editor lint diagnostics are equally valid for small edits. Only build when the user explicitly asks. Gotcha: `check` fails with `os error 32` while an app instance is running (`cef-dll-sys`'s build script copies the CEF runtime into `target/`) — kill `kabegame.exe` first. Rule: `.cursor/rules/verify-by-lint.mdc`.
+
+**Debugging is the exception — run the thing.** Lint cannot prove runtime behavior. When diagnosing a bug: measure the object's actual state before explaining the symptom; trace the real call chain and verify actual values at every hop (especially Rust↔CEF, frontend↔Tauri, main↔subprocess); prefer zero-cost experiments (existing binary + env var / Chromium `--disable-features=<Name>` / existing `[DEBUG-*]` logs) over editing code; write the falsification criterion *before* running the experiment; quote source verbatim without inlining your own annotations. The higher the cost of a conclusion (patch a vendored lib, rebuild Chromium, large refactor), the stronger the empirical evidence it demands. Rule: `.cursor/rules/debug-empirically.mdc`.
 
 ### Plan & change-description format
 When writing a plan or describing code changes, organize by explicit **points** (明确的点). Under each point, group items under **新增 / 修改 / 删除** (Add / Modify / Delete), each with an optional indented note. Keep 现状 separate from the change:

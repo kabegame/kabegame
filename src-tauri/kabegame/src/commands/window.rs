@@ -4,106 +4,20 @@
 pub(super) async fn fix_wallpaper_window_zorder<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     use tauri::Manager;
     use windows_sys::Win32::Foundation::HWND;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowExW, FindWindowW, GetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE,
-        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW,
-    };
 
-    // 检查是否是窗口模式（从 Settings 读取 settings.wallpaperMode）
-    let is_window_mode =
-        kabegame_core::settings::Settings::global().get_wallpaper_mode() == "window";
-
-    if !is_window_mode {
+    // 非 window 模式下没有壁纸窗口可压。
+    if kabegame_core::settings::Settings::global().get_wallpaper_mode() != "window" {
         return;
     }
 
-    // 获取壁纸窗口
     let Some(wallpaper_window) = app.get_webview_window("wallpaper") else {
         return;
     };
-
     let Ok(tauri_hwnd) = wallpaper_window.hwnd() else {
         return;
     };
-    let tauri_hwnd: HWND = tauri_hwnd.0 as isize;
 
-    unsafe {
-        fn wide(s: &str) -> Vec<u16> {
-            use std::ffi::OsStr;
-            use std::os::windows::ffi::OsStrExt;
-            OsStr::new(s).encode_wide().chain(Some(0)).collect()
-        }
-
-        const WS_EX_NOREDIRECTIONBITMAP: u32 = 0x00200000;
-        const HWND_TOP: HWND = 0;
-
-        let progman = FindWindowW(wide("Progman").as_ptr(), std::ptr::null());
-        if progman == 0 {
-            return;
-        }
-
-        let ex_style = GetWindowLongPtrW(progman, GWL_EXSTYLE) as u32;
-        let is_raised_desktop = (ex_style & WS_EX_NOREDIRECTIONBITMAP) != 0;
-
-        if is_raised_desktop {
-            eprintln!("[DEBUG] fix_wallpaper_window_zorder: 修复壁纸窗口 Z-order (Windows 11 raised desktop)");
-
-            // 查找 DefView
-            let shell_dll_defview = FindWindowExW(
-                progman,
-                0,
-                wide("SHELLDLL_DefView").as_ptr(),
-                std::ptr::null(),
-            );
-
-            if shell_dll_defview != 0 {
-                // 确保 DefView 在顶部
-                ShowWindow(shell_dll_defview, SW_SHOW);
-                SetWindowPos(
-                    shell_dll_defview,
-                    HWND_TOP,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
-
-                // 查找并提升 SysListView32
-                let folder_view = FindWindowExW(
-                    shell_dll_defview,
-                    0,
-                    wide("SysListView32").as_ptr(),
-                    std::ptr::null(),
-                );
-                if folder_view != 0 {
-                    ShowWindow(folder_view, SW_SHOW);
-                    SetWindowPos(
-                        folder_view,
-                        HWND_TOP,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                    );
-                }
-
-                // 确保壁纸窗口在 DefView 之下
-                SetWindowPos(
-                    tauri_hwnd,
-                    shell_dll_defview as HWND,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
-
-                eprintln!("[DEBUG] fix_wallpaper_window_zorder: ✓ 壁纸窗口 Z-order 已修复");
-            }
-        }
-    }
+    crate::wallpaper::window::zorder::restore(Some(tauri_hwnd.0 as HWND));
 }
 
 /// 隐藏主窗口（用于窗口关闭事件处理）

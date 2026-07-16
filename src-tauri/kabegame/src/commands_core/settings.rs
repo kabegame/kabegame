@@ -72,27 +72,27 @@ pub fn set_max_concurrent_downloads(count: u32) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-pub async fn set_max_concurrent_tasks(count: u32) -> Result<Value, String> {
+pub fn set_max_concurrent_tasks(count: u32) -> Result<Value, String> {
     Settings::global().set_max_concurrent_tasks(count)?;
     Ok(Value::Null)
 }
 
-pub async fn set_download_interval_ms(interval_ms: u32) -> Result<Value, String> {
+pub fn set_download_interval_ms(interval_ms: u32) -> Result<Value, String> {
     Settings::global().set_download_interval_ms(interval_ms)?;
     Ok(Value::Null)
 }
 
-pub async fn set_network_retry_count(count: u32) -> Result<Value, String> {
+pub fn set_network_retry_count(count: u32) -> Result<Value, String> {
     Settings::global().set_network_retry_count(count)?;
     Ok(Value::Null)
 }
 
-pub async fn set_auto_deduplicate(enabled: bool) -> Result<Value, String> {
+pub fn set_auto_deduplicate(enabled: bool) -> Result<Value, String> {
     Settings::global().set_auto_deduplicate(enabled)?;
     Ok(Value::Null)
 }
 
-pub async fn set_import_recommended_schedule_enabled(enabled: bool) -> Result<Value, String> {
+pub fn set_import_recommended_schedule_enabled(enabled: bool) -> Result<Value, String> {
     Settings::global().set_import_recommended_schedule_enabled(enabled)?;
     Ok(Value::Null)
 }
