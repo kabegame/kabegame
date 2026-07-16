@@ -94,9 +94,6 @@ import { ElDialog } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { open } from "@tauri-apps/plugin-dialog";
 import { storeToRefs } from "pinia";
-import { IS_WEB } from "@kabegame/core/env";
-import { trackEvent } from "@kabegame/core/track/umami";
-import { uploadImport } from "@/api/rpc";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useImageTypes } from "@/composables/useImageTypes";
@@ -129,7 +126,6 @@ const selectedOutputAlbumId = ref<string | null>(null);
 const newOutputAlbumName = ref("");
 const newOutputAlbumParentId = ref<string | null>(null);
 const paths = ref<string[]>([]);
-const files = ref<File[]>([]);
 const recursive = ref(true);
 const isCreatingNewOutputAlbum = computed(
   () => selectedOutputAlbumId.value === "__create_new__"
@@ -140,43 +136,7 @@ watch(selectedOutputAlbumId, (value) => {
     newOutputAlbumParentId.value = null;
   }
 });
-const displayItems = computed(() =>
-  IS_WEB ? files.value.map((f) => f.name) : paths.value,
-);
-
-function trackLocalImportStart(data: Record<string, unknown>) {
-  if (!IS_WEB) return;
-  trackEvent("gallery_import_start", {
-    plugin_id: "local-import",
-    source: "local",
-    ...data,
-  });
-}
-
-function pickWebFiles(directory: boolean): Promise<File[]> {
-  return new Promise((resolve) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.multiple = true;
-    if (directory) {
-      (input as HTMLInputElement & { webkitdirectory?: boolean }).webkitdirectory = true;
-    }
-    input.style.display = "none";
-    let settled = false;
-    const finish = (list: File[]) => {
-      if (settled) return;
-      settled = true;
-      if (input.parentNode) input.parentNode.removeChild(input);
-      resolve(list);
-    };
-    input.addEventListener("change", () => {
-      finish(input.files ? Array.from(input.files) : []);
-    });
-    input.addEventListener("cancel", () => finish([]));
-    document.body.appendChild(input);
-    input.click();
-  });
-}
+const displayItems = computed(() => paths.value);
 
 async function loadAlbums() {
   try {
@@ -189,15 +149,6 @@ async function loadAlbums() {
 async function handleAddFiles() {
   try {
     await loadImageTypes();
-    if (IS_WEB) {
-      const picked = await pickWebFiles(false);
-      for (const f of picked) {
-        if (!files.value.some((x) => x.name === f.name && x.size === f.size)) {
-          files.value.push(f);
-        }
-      }
-      return;
-    }
     const exts = imageExtensions.value.length ? imageExtensions.value : ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "mp4", "mov"];
     const selected = await open({
       directory: false,
@@ -225,16 +176,6 @@ async function handleAddFiles() {
 
 async function handleAddFolder() {
   try {
-    if (IS_WEB) {
-      const picked = await pickWebFiles(true);
-      for (const f of picked) {
-        const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
-        if (!files.value.some((x) => ((x as File & { webkitRelativePath?: string }).webkitRelativePath || x.name) === rel)) {
-          files.value.push(f);
-        }
-      }
-      return;
-    }
     const selected = await open({
       directory: true,
       multiple: false,
@@ -255,11 +196,7 @@ async function handleAddFolder() {
 }
 
 function removeItem(idx: number) {
-  if (IS_WEB) {
-    files.value.splice(idx, 1);
-  } else {
-    paths.value.splice(idx, 1);
-  }
+  paths.value.splice(idx, 1);
 }
 
 async function createOutputAlbum(showSuccess = true) {
@@ -308,32 +245,6 @@ async function handleSubmit() {
     outputAlbumId = selectedOutputAlbumId.value;
   }
 
-  if (IS_WEB) {
-    const fileCount = files.value.length;
-    try {
-      await uploadImport(files.value, {
-        outputAlbumId,
-        recursive: recursive.value,
-      });
-    } catch (e) {
-      console.error("上传导入失败:", e);
-      ElMessage.error(t('albums.selectFileFailed'));
-      return;
-    }
-    modal.close();
-    files.value = [];
-    ElMessage.success(t('gallery.localImportTaskAdded'));
-    trackLocalImportStart({
-      mode: "upload",
-      file_count: fileCount,
-      recursive: recursive.value,
-      output_album: outputAlbumId ? "existing" : "none",
-    });
-    return;
-  }
-
-  const pathCount = paths.value.length;
-
   crawlerStore.addTask("local-import", undefined, {
     paths: paths.value,
     recursive: recursive.value,
@@ -342,12 +253,6 @@ async function handleSubmit() {
   modal.close();
   paths.value = [];
   ElMessage.success(t('gallery.localImportTaskAdded'));
-  trackLocalImportStart({
-    mode: "task",
-    path_count: pathCount,
-    recursive: recursive.value,
-    output_album: outputAlbumId ? "existing" : "none",
-  });
 }
 
 function handleOpen() {
@@ -356,7 +261,6 @@ function handleOpen() {
 
 function handleClosed() {
   paths.value = [];
-  files.value = [];
   newOutputAlbumName.value = "";
   newOutputAlbumParentId.value = null;
   selectedOutputAlbumId.value = null;

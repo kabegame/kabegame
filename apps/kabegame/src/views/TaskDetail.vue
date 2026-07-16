@@ -70,12 +70,10 @@ import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 import { IS_WEB } from "@kabegame/core/env";
 import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
-import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
+import { useI18n } from "@kabegame/i18n";
 import { useFailedImagesStore } from "@/stores/failedImages";
 
 const { t } = useI18n();
-const { pluginName: resolvePluginName } = usePluginManifestI18n();
-
 const route = useRoute();
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
@@ -140,9 +138,7 @@ const task = computed(() => {
 const taskName = computed(() => {
     const tsk = task.value;
     if (!tsk) return "";
-    if (tsk.pluginId === "local-import") return t("tasks.drawerLocalImport");
-    const plugin = pluginStore.plugins.find((p) => p.id === tsk.pluginId);
-    return plugin ? (resolvePluginName(plugin) || tsk.pluginId) : (tsk.pluginId || t("tasks.task"));
+    return tsk.pluginId ? pluginStore.pluginLabel(tsk.pluginId) : t("tasks.task");
 });
 
 const taskStatusFromStore = computed(() => task.value?.status ?? "");

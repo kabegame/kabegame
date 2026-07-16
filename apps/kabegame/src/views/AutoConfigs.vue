@@ -166,7 +166,7 @@
 
     <!-- 安卓不显示这个页面，所以不做判断.收集（与画廊页一致：桌面 CrawlerDialog / 本地导入；安卓 CollectSourcePicker / drawer / MediaPicker） -->
     <CrawlerDialog :model-value="crawlerDialog.isOpen.value" :initial-config="crawlerDialogInitialConfig" @update:model-value="crawlerDialog.close" />
-    <LocalImportDialog :model-value="localImportDialog.isOpen.value" @update:model-value="localImportDialog.close" />
+    <LocalImportDialog v-if="!IS_WEB" :model-value="localImportDialog.isOpen.value" @update:model-value="localImportDialog.close" />
 
     <!-- <CollectSourcePicker v-if="IS_ANDROID" v-model="showCollectSourcePicker" @select="handleCollectSourceSelect" /> -->
     <!-- <MediaPicker v-if="IS_ANDROID" v-model="showMediaPicker" @select="handleMediaPickerSelect" /> -->
@@ -184,7 +184,7 @@ import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import AutoConfigDetailContent from "@kabegame/core/components/scheduler/AutoConfigDetailContent.vue";
 import { useModal } from "@kabegame/core/composables/useModal";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import TaskLogDialog from "@kabegame/core/components/task/TaskLogDialog.vue";
 import AutoConfigListCard from "@/components/scheduler/AutoConfigListCard.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
@@ -516,7 +516,7 @@ function onPluginFilterChange(value: string | null) {
   filterPluginId.value = value ? value : null;
 }
 
-const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconDataUrl(pluginId);
+const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconSrc(pluginId);
 
 const openTaskImages = (taskId: string) => {
   void router.push({ name: "TaskDetail", params: { taskId } });
@@ -535,6 +535,7 @@ const goCreate = () => {
 const handleCollectSourceSelect = (source: "local" | "remote") => {
   showCollectSourcePicker.value = false;
   if (source === "local") {
+    if (IS_WEB) return;
     showMediaPicker.value = true;
   } else {
     crawlerDrawerStore.open();
@@ -629,6 +630,7 @@ const handleHeaderAction = (payload: { id: string; data?: { type: string; value?
       showCollectSourcePicker.value = true;
     } else if (d?.type === "select") {
       if (d.value === "local") {
+        if (IS_WEB) return;
         localImportDialog.open();
       } else if (d.value === "network") {
         crawlerDialog.open();

@@ -18,7 +18,7 @@
     </el-button>
     <template #dropdown>
       <el-dropdown-menu>
-        <el-dropdown-item command="local">
+        <el-dropdown-item v-if="!IS_WEB" command="local">
           <el-icon><FolderOpened /></el-icon>
           {{ t('gallery.local') }}
         </el-dropdown-item>
@@ -35,6 +35,7 @@
 import { useI18n } from "@kabegame/i18n";
 import { Plus, ArrowDown, FolderOpened, Connection } from "@element-plus/icons-vue";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import { IS_WEB } from "@kabegame/core/env";
 
 const { t } = useI18n();
 

@@ -6,7 +6,7 @@ use pathql_rs::provider::{
 };
 use serde_json::{json, Value};
 
-use crate::plugin::{Plugin, PluginManager};
+use crate::plugin::{Plugin, PluginManager, manifest_value_display_for_locale};
 
 pub fn register_plugin_resource_provider(runtime: &ProviderRuntime) -> Result<(), EngineError> {
     runtime.register_programmatic_provider("kabegame", "plugin_resource_root_provider", |_| {
@@ -36,6 +36,13 @@ fn plugin_error(message: String) -> EngineError {
 fn serialize_plugin_lite(plugin: &Arc<Plugin>) -> Value {
     let mut value = serde_json::to_value(plugin.as_ref()).unwrap_or(Value::Null);
     if let Value::Object(ref mut map) = value {
+        map.insert(
+            "displayName".to_string(),
+            Value::String(manifest_value_display_for_locale(
+                &plugin.name,
+                kabegame_i18n::current_vd_locale(),
+            )),
+        );
         map.remove("docResources");
         map.remove("iconPngBase64");
         map.remove("descriptionTemplate");

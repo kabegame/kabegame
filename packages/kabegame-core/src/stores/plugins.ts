@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, unref } from "vue";
+import { computed, ref, unref } from "vue";
 import { invoke, listen } from "../api";
 import { IS_WEB } from "../env";
 import { pluginCacheDb } from "../cache/pluginCache";
@@ -12,17 +12,11 @@ export type PluginManifestText = Record<string, string>;
 /** 内置本地导入插件 id（爬虫任务、画廊、任务抽屉一致） */
 export const LOCAL_IMPORT_PLUGIN_ID = "local-import" as const;
 
-/**
- * 单条插件记录的展示名（当前全局 locale + manifest；内置 local-import 用 tasks.drawerLocalImport）。
- */
+/** 单条插件记录的展示名（当前全局 locale + manifest）。 */
 export function resolvePluginRecordDisplayName(plugin: {
   id: string;
   name?: PluginManifestText;
 }): string {
-  if (plugin.id === LOCAL_IMPORT_PLUGIN_ID) {
-    const s = String(i18n.global.t("tasks.drawerLocalImport")).trim();
-    return s || plugin.id;
-  }
   const locale = String(unref(i18n.global.locale) ?? "en");
   const raw = plugin.name;
   if (!raw || typeof raw !== "object") return plugin.id;
@@ -41,10 +35,6 @@ export function resolvePluginIdDisplayName(
   pluginId: string,
   installed: ReadonlyArray<{ id: string; name?: PluginManifestText }>,
 ): string {
-  if (pluginId === LOCAL_IMPORT_PLUGIN_ID) {
-    const s = String(i18n.global.t("tasks.drawerLocalImport")).trim();
-    return s || pluginId;
-  }
   const plugin = installed.find((p) => p.id === pluginId);
   if (!plugin) return pluginId;
   return resolvePluginRecordDisplayName(plugin);
@@ -159,32 +149,16 @@ export function buildVarMetaMapFromPluginConfig(
   return metaMap;
 }
 
-/** 内置本地导入插件的变量展示名（需传入 `t` 以随语言切换）。 */
-export function localImportVarMetaMap(
-  t: (key: string) => string,
-): Record<string, PluginVarMeta> {
-  return {
-    paths: { name: t("tasks.drawerPathsMeta"), type: "text" },
-    recursive: { name: t("tasks.drawerRecursiveMeta"), type: "boolean" },
-  };
-}
-
-/**
- * 解析某插件下某变量的展示名（已安装列表 + 内置 local-import）。
- */
+/** 解析某插件下某变量的展示名（已安装列表 + 后端下发 config.vars）。 */
 export function resolvePluginVarDisplayName(
   pluginId: string,
   varKey: string,
   localeCode: string,
   installed: ReadonlyArray<Plugin>,
-  t: (key: string) => string,
 ): string {
-  const meta =
-    pluginId === LOCAL_IMPORT_PLUGIN_ID
-      ? localImportVarMetaMap(t)[varKey]
-      : buildVarMetaMapFromPluginConfig(
-          installed.find((p) => p.id === pluginId)?.config,
-        )[varKey];
+  const meta = buildVarMetaMapFromPluginConfig(
+    installed.find((p) => p.id === pluginId)?.config,
+  )[varKey];
   const rawName = meta?.name;
   if (rawName == null) return varKey;
   if (typeof rawName === "string") return rawName;
@@ -197,6 +171,9 @@ export function resolvePluginVarDisplayName(
 
 export const usePluginStore = defineStore("plugins", () => {
   const plugins = ref<Plugin[]>([]);
+  const visiblePlugins = computed(() =>
+    plugins.value.filter((p) => p.scriptType !== "builtin"),
+  );
   const activePlugin = ref<Plugin | null>(null);
   /** 插件详情页缓存（按路由 key 存；已安装和商店插件共用） */
   const pluginDetailCache = ref<Record<string, Plugin>>({});
@@ -274,6 +251,11 @@ export const usePluginStore = defineStore("plugins", () => {
   function pluginIconDataUrl(pluginId: string): string | undefined {
     const p = plugins.value.find((x) => x.id === pluginId);
     return pluginIconToDataUrl(p?.iconPngBase64);
+  }
+
+  /** 插件图标统一出口：由后端下发 iconPngBase64，调用侧不再做内建插件特判。 */
+  function pluginIconSrc(pluginId: string): string | undefined {
+    return pluginIconDataUrl(pluginId);
   }
 
   /** 从已加载的插件列表中返回多语言 doc */
@@ -387,29 +369,29 @@ export const usePluginStore = defineStore("plugins", () => {
     return resolvePluginIdDisplayName(pluginId, plugins.value);
   }
 
-  /** 使用当前 store 中的已安装列表解析变量展示名（不含内置 local-import，需自行处理）。 */
+  /** 使用当前 store 中的插件列表解析变量展示名。 */
   function resolveVarDisplayName(
     pluginId: string,
     varKey: string,
     localeCode: string,
-    t: (key: string) => string,
   ): string {
     return resolvePluginVarDisplayName(
       pluginId,
       varKey,
       localeCode,
       plugins.value,
-      t,
     );
   }
 
   return {
     plugins,
+    visiblePlugins,
     activePlugin,
     pluginDetailCache,
     loadPlugins,
     refreshPlugins,
     pluginIconDataUrl,
+    pluginIconSrc,
     pluginDoc,
     pluginDescriptionTemplate,
     deletePlugin,
@@ -419,7 +401,6 @@ export const usePluginStore = defineStore("plugins", () => {
     clearPluginDetailCache,
     pluginLabel,
     buildVarMetaMapFromPluginConfig,
-    localImportVarMetaMap,
     resolveVarDisplayName,
   };
 });

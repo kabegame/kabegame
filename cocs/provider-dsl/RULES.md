@@ -576,7 +576,7 @@ vd_display_name(canonical) -> TEXT
 ```sql
 SELECT
     plugin_id,
-    json_extract(get_plugin(plugin_id, '${properties.locale}'), '$.name') AS plugin_name,
+    json_extract(get_plugin(plugin_id, '${properties.locale}'), '$.displayName') AS plugin_name,
     json_extract(get_plugin(plugin_id, '${properties.locale}'), '$.description') AS plugin_desc
 FROM plugins
 ```

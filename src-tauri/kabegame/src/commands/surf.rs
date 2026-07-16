@@ -614,32 +614,19 @@ pub async fn surf_get_session_status<R: Runtime>(
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_list_records(offset: usize, limit: usize) -> Result<RangedSurfRecords, String> {
-    let page_limit = if limit == 0 { 10 } else { limit };
-    Storage::global().list_surf_records(offset, page_limit)
+    kabegame_core::commands::surf::surf_list_records(offset, limit)
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_get_all_records() -> Result<Vec<SurfRecord>, String> {
-    Storage::global().list_all_surf_records()
+    kabegame_core::commands::surf::surf_get_all_records()
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_get_records_by_ids(ids: Vec<String>) -> Result<Vec<SurfRecord>, String> {
-    let ids: Vec<String> = ids
-        .into_iter()
-        .map(|id| id.trim().to_string())
-        .filter(|id| !id.is_empty())
-        .collect();
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let map = Storage::global().get_surf_records_by_ids(&ids)?;
-    Ok(ids
-        .into_iter()
-        .filter_map(|id| map.get(&id).cloned())
-        .collect())
+    kabegame_core::commands::surf::surf_get_records_by_ids(ids)
 }
 
 fn normalize_surf_host(host: &str) -> String {
@@ -649,11 +636,7 @@ fn normalize_surf_host(host: &str) -> String {
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_get_record(host: String) -> Result<Option<SurfRecord>, String> {
-    let host = normalize_surf_host(&host);
-    if host.is_empty() {
-        return Ok(None);
-    }
-    Storage::global().get_surf_record_by_host(&host)
+    kabegame_core::commands::surf::surf_get_record(host)
 }
 
 #[cfg(not(target_os = "android"))]
@@ -663,13 +646,7 @@ pub async fn surf_get_record_images(
     offset: usize,
     limit: usize,
 ) -> Result<serde_json::Value, String> {
-    let host = normalize_surf_host(&host);
-    let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {
-        return Err("畅游记录不存在".to_string());
-    };
-    let page_limit = if limit == 0 { 50 } else { limit };
-    let images = Storage::global().get_surf_record_images(&record.id, offset, page_limit)?;
-    serde_json::to_value(images).map_err(|e| e.to_string())
+    kabegame_core::commands::surf::surf_get_record_images(host, offset, limit)
 }
 
 #[cfg(not(target_os = "android"))]

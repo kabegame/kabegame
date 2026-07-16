@@ -1,21 +1,13 @@
 import { ref, Ref, onUnmounted } from "vue";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { invoke, uploadImport } from "@/api/rpc";
+import { invoke } from "@/api/rpc";
 import FileDropOverlay from "@/components/FileDropOverlay.vue";
 import ImportConfirmDialog from "@/components/import/ImportConfirmDialog.vue";
 import { useTaskDrawerStore } from "@/stores/taskDrawer";
 import { useCrawlerStore } from "@/stores/crawler";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { i18n } from "@kabegame/i18n";
-import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
-import { useImageTypes } from "@/composables/useImageTypes";
-
-// 媒体类型真理源：扩展名→MIME 由后端经 useImageTypes 提供（load 后填充）
-const { mimeByExt, load: loadImageTypes } = useImageTypes();
-
-// 支持的扩展名列表（用于默认提示文案），运行时由 updateSupportedTypes 从后端覆盖
-let SUPPORTED_KGPG_EXTENSIONS = ["kgpg"];
 
 /** 后端根据路径推断类型（扩展名 + infer），用于拖入文件分类 */
 interface FileDropKindItem {
@@ -39,121 +31,6 @@ export interface ImportItem {
   isVideo?: boolean;
 }
 
-interface WebFileSystemEntry {
-  isFile: boolean;
-  isDirectory: boolean;
-  name: string;
-}
-
-interface WebFileSystemFileEntry extends WebFileSystemEntry {
-  isFile: true;
-  file: (success: (file: File) => void, error?: (error: DOMException) => void) => void;
-}
-
-interface WebFileSystemDirectoryEntry extends WebFileSystemEntry {
-  isDirectory: true;
-  createReader: () => {
-    readEntries: (
-      success: (entries: WebFileSystemEntry[]) => void,
-      error?: (error: DOMException) => void,
-    ) => void;
-  };
-}
-
-type DataTransferItemWithEntry = DataTransferItem & {
-  webkitGetAsEntry?: () => WebFileSystemEntry | null;
-};
-
-const getExt = (name: string) => {
-  const idx = name.lastIndexOf(".");
-  return idx >= 0 ? name.slice(idx + 1).toLowerCase() : "";
-};
-
-const isKgpgName = (name: string) =>
-  SUPPORTED_KGPG_EXTENSIONS.includes(getExt(name));
-
-const isImageFile = (file: File) =>
-  file.type.startsWith("image/") ||
-  ["jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "jxl"].includes(getExt(file.name));
-
-const isVideoFile = (file: File) =>
-  file.type.startsWith("video/") ||
-    (mimeByExt.value[getExt(file.name)] ?? "").startsWith("video/");
-
-const isWebImportableFile = (file: File) =>
-  !isKgpgName(file.name) && (isImageFile(file) || isVideoFile(file));
-
-const fileDisplayPath = (file: File) =>
-  (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-
-const withRelativePath = (file: File, relPath: string) => {
-  if (!relPath || relPath === file.name) return file;
-  try {
-    Object.defineProperty(file, "webkitRelativePath", {
-      value: relPath,
-      configurable: true,
-    });
-  } catch {
-    // Some browsers expose webkitRelativePath as non-configurable. Falling back
-    // to the original filename still lets the upload proceed.
-  }
-  return file;
-};
-
-const readFileEntry = (entry: WebFileSystemFileEntry, relPath: string) =>
-  new Promise<File>((resolve, reject) => {
-    entry.file(
-      (file) => resolve(withRelativePath(file, relPath)),
-      (error) => reject(error),
-    );
-  });
-
-const readAllDirectoryEntries = async (entry: WebFileSystemDirectoryEntry) => {
-  const reader = entry.createReader();
-  const all: WebFileSystemEntry[] = [];
-  while (true) {
-    const batch = await new Promise<WebFileSystemEntry[]>((resolve, reject) => {
-      reader.readEntries(resolve, reject);
-    });
-    if (batch.length === 0) break;
-    all.push(...batch);
-  }
-  return all;
-};
-
-const collectEntryFiles = async (
-  entry: WebFileSystemEntry,
-  parentPath = "",
-): Promise<File[]> => {
-  const relPath = parentPath ? `${parentPath}/${entry.name}` : entry.name;
-  if (entry.isFile) {
-    return [await readFileEntry(entry as WebFileSystemFileEntry, relPath)];
-  }
-  if (entry.isDirectory) {
-    const children = await readAllDirectoryEntries(entry as WebFileSystemDirectoryEntry);
-    const nested = await Promise.all(children.map((child) => collectEntryFiles(child, relPath)));
-    return nested.flat();
-  }
-  return [];
-};
-
-const getWebDroppedFiles = async (dataTransfer: DataTransfer | null): Promise<File[]> => {
-  if (!dataTransfer) return [];
-  const itemFiles = await Promise.all(
-    Array.from(dataTransfer.items || [])
-      .filter((item) => item.kind === "file")
-      .map(async (rawItem) => {
-        const item = rawItem as DataTransferItemWithEntry;
-        const entry = item.webkitGetAsEntry?.();
-        if (entry) return collectEntryFiles(entry);
-        const file = item.getAsFile();
-        return file ? [file] : [];
-      }),
-  );
-  const files = itemFiles.flat();
-  return files.length > 0 ? files : Array.from(dataTransfer.files || []);
-};
-
 /**
  * 文件拖拽 composable
  */
@@ -167,7 +44,6 @@ export function useFileDrop(
   let fileDropUnlisten: (() => void) | null = null;
   let currentWindow: ReturnType<typeof getCurrentWebviewWindow> | null = null;
   let isOverlayVisible = false; // 跟踪遮罩是否显示
-  let webDragDepth = 0;
 
   // 辅助函数：将窗口带到前台并聚焦（只置顶一次，不设置 alwaysOnTop）
   const bringWindowToFront = async () => {
@@ -181,143 +57,9 @@ export function useFileDrop(
     }
   };
 
-  const updateSupportedTypes = async () => {
-    try {
-      // 确保 mimeByExt 真理源已加载（用于 isVideoFile/isImageFile 按扩展名分类）
-      await loadImageTypes();
-      const dropRes = await invoke<{
-        pluginExtensions: string[];
-      }>("get_file_drop_supported_types");
-      if (dropRes?.pluginExtensions) {
-        SUPPORTED_KGPG_EXTENSIONS = dropRes.pluginExtensions;
-      }
-    } catch (e) {
-      console.warn("[App] 获取支持的文件类型失败，使用默认值:", e);
-    }
-  };
-
-  const webDropText = (files?: File[]) => {
-    const t = (key: string, params?: Record<string, string>) =>
-      params ? i18n.global.t(key, params) : i18n.global.t(key);
-    const first = files?.[0];
-    if (!first) return t("import.dropFileToImport");
-    if (isImageFile(first)) return t("import.dropImageToImport");
-    if (isVideoFile(first)) return t("import.dropVideoToImport");
-    return t("import.dropSupportedTypes");
-  };
-
-  const handleWebDrop = async (event: DragEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    webDragDepth = 0;
-    fileDropOverlayRef.value?.hide();
-    isOverlayVisible = false;
-
-    try {
-      const droppedFiles = await getWebDroppedFiles(event.dataTransfer);
-      const files = droppedFiles.filter(isWebImportableFile);
-      if (files.length === 0) {
-        ElMessage.warning(i18n.global.t("import.noImportableFound"));
-        return;
-      }
-
-      const items: ImportItem[] = files.map((file) => {
-        const path = fileDisplayPath(file);
-        return {
-          path,
-          name: path.split("/").pop() || file.name,
-          isDirectory: path.includes("/"),
-          isKgpg: false,
-          isVideo: isVideoFile(file),
-        };
-      });
-
-      const confirmed = (await importConfirmDialogRef.value?.open(items)) !== null;
-      if (!confirmed) {
-        console.log("[App] 用户取消导入");
-        return;
-      }
-
-      if (await guardDesktopOnly("localImport", { needSuper: true })) return;
-
-      try {
-        taskDrawerStore.open();
-      } catch {
-        // ignore
-      }
-
-      await uploadImport(files, {
-        recursive: true,
-      });
-      ElMessage.success(i18n.global.t("import.addedLocalImport"));
-    } catch (error) {
-      console.error("[App] 处理 Web 文件拖入失败:", error);
-      ElMessage.error(
-        `${i18n.global.t("import.fileDropFailed")}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  };
-
-  const initWebFileDrop = () => {
-    const hasFiles = (event: DragEvent) =>
-      Array.from(event.dataTransfer?.types || []).includes("Files");
-
-    const showOverlay = (event: DragEvent) => {
-      if (!hasFiles(event)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      fileDropOverlayRef.value?.show(webDropText());
-      isOverlayVisible = true;
-    };
-
-    const onDragEnter = (event: DragEvent) => {
-      if (!hasFiles(event)) return;
-      webDragDepth += 1;
-      showOverlay(event);
-    };
-
-    const onDragOver = (event: DragEvent) => {
-      if (!hasFiles(event)) return;
-      showOverlay(event);
-      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
-    };
-
-    const onDragLeave = (event: DragEvent) => {
-      if (!hasFiles(event)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      webDragDepth = Math.max(0, webDragDepth - 1);
-      if (webDragDepth === 0) {
-        fileDropOverlayRef.value?.hide();
-        isOverlayVisible = false;
-      }
-    };
-
-    window.addEventListener("dragenter", onDragEnter, true);
-    window.addEventListener("dragover", onDragOver, true);
-    window.addEventListener("dragleave", onDragLeave, true);
-    window.addEventListener("drop", handleWebDrop, true);
-    fileDropUnlisten = () => {
-      window.removeEventListener("dragenter", onDragEnter, true);
-      window.removeEventListener("dragover", onDragOver, true);
-      window.removeEventListener("dragleave", onDragLeave, true);
-      window.removeEventListener("drop", handleWebDrop, true);
-    };
-  };
-
   const init = async () => {
-    // 安卓下不支持拖拽导入，直接返回
-    if (IS_ANDROID) {
-      return;
-    }
-
-    // 初始化时获取支持的类型
-    await updateSupportedTypes();
-
-    if (IS_WEB) {
-      initWebFileDrop();
+    // 安卓与 web 下不支持拖拽导入，直接返回
+    if (IS_ANDROID || IS_WEB) {
       return;
     }
 

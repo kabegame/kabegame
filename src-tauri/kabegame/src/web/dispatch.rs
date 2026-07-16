@@ -485,6 +485,21 @@ pub fn init_registry() {
         },
     );
 
+    #[cfg(not(feature = "web"))]
+    map.insert(
+        "get_wallpaper_capabilities",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|_p| {
+                Box::pin(async move {
+                    crate::commands::wallpaper::get_wallpaper_capabilities()
+                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string()))
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
     map.insert(
         "get_plugins",
         MethodEntry {
@@ -1936,7 +1951,8 @@ async fn web_get_plugins() -> Result<Value, RpcError> {
     pm.ensure_installed_cache_initialized()
         .await
         .map_err(RpcError::internal)?;
-    let plugins = pm.get_all().map_err(RpcError::internal)?;
+    let mut plugins = pm.get_all().map_err(RpcError::internal)?;
+    plugins.extend(pm.builtin_plugins());
     let index: Vec<Value> = plugins
         .iter()
         .map(|p| serde_json::json!({ "id": p.id, "version": p.version }))

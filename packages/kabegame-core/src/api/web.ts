@@ -24,8 +24,6 @@ function sseUrl(): string {
   return `${API_ROOT}events${qsSuper()}`;
 }
 
-const UPLOAD_URL = `${API_ROOT}api/import`;
-
 let rpcIdCounter = 0;
 
 export async function invoke<T>(
@@ -112,36 +110,4 @@ export async function listen<T>(
     s.delete(cb as EventCallback<unknown>);
     if (s.size === 0) eventListeners.delete(event);
   };
-}
-
-export interface ImportUploadParams {
-  outputAlbumId?: string;
-  recursive: boolean;
-}
-
-export interface ImportUploadResult {
-  task_id: string;
-}
-
-export async function uploadImport(
-  files: File[],
-  params: ImportUploadParams,
-): Promise<ImportUploadResult> {
-  const form = new FormData();
-  for (const f of files) {
-    const relPath = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
-    form.append("files", f, relPath);
-  }
-  const qs = new URLSearchParams();
-  if (params.outputAlbumId) qs.set("output_album_id", params.outputAlbumId);
-  qs.set("recursive", params.recursive ? "1" : "0");
-  if (getIsSuper()) qs.set("super", "1");
-  const res = await fetch(`${UPLOAD_URL}?${qs.toString()}`, {
-    method: "POST",
-    body: form,
-  });
-  if (!res.ok) {
-    throw new Error(`Upload HTTP ${res.status}`);
-  }
-  return res.json();
 }

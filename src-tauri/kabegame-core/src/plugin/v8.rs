@@ -3,9 +3,9 @@
 //! Platform gate: desktop + Android (only iOS is excluded).
 
 use deno_core::{
-    anyhow::{anyhow, Result as AnyhowResult},
-    extension, resolve_url, serde_v8, v8, Extension, ExtensionArguments, JsRuntime,
-    PollEventLoopOptions, RuntimeOptions,
+    Extension, ExtensionArguments, JsRuntime, PollEventLoopOptions, RuntimeOptions,
+    anyhow::{Result as AnyhowResult, anyhow},
+    extension, resolve_url, serde_v8, v8,
 };
 use deno_web::{BlobStore, InMemoryBroadcastChannel};
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 #[cfg(test)]
 use super::PluginScript;
-use crate::crawler::task_scheduler::Task;
+use crate::crawler::task_scheduler::{Task, TaskError, TaskResult};
 use crate::plugin::Plugin;
 
 mod ops;
@@ -274,19 +274,15 @@ impl JsPluginRuntime {
 
 /// V8 backend scheduling entry, wired into the task worker dispatch in
 /// `task_scheduler::run_task`.
-pub fn execute_crawler_script_v8(run: Arc<Task>) -> std::result::Result<(), String> {
-    let plugin = run
-        .params
-        .plugin
-        .as_ref()
-        .ok_or_else(|| format!("任务 {} 缺少插件参数", run.task_id))?;
+pub fn execute_crawler_script_v8(run: Arc<Task>) -> TaskResult {
+    let plugin = &run.params.plugin;
     let script_content = plugin
         .script
         .v8_source()
-        .ok_or_else(|| format!("插件 {} 没有提供 V8 脚本", plugin.id))?
+        .ok_or_else(|| TaskError::Other(format!("插件 {} 没有提供 V8 脚本", plugin.id)))?
         .to_string();
     let (common, custom) = build_crawl_configs(plugin, run.params.config.clone());
-    let plugin_id = run.params.plugin_id.clone();
+    let plugin_id = run.params.plugin.id.clone();
     let task_id = run.task_id.clone();
     let cancel = run.cancel.clone();
     let cancel_for_ctx = cancel.clone();
@@ -297,7 +293,7 @@ pub fn execute_crawler_script_v8(run: Arc<Task>) -> std::result::Result<(), Stri
             task_id,
             cancel: cancel_for_ctx,
         };
-        let mut rt = JsPluginRuntime::new(ctx).map_err(|e| e.to_string())?;
+        let mut rt = JsPluginRuntime::new(ctx).map_err(|e| TaskError::Other(e.to_string()))?;
         let isolate_handle = rt.runtime_mut().v8_isolate().thread_safe_handle();
         let watcher = tokio::spawn(async move {
             cancel_for_watcher.cancelled().await;
@@ -331,10 +327,7 @@ fn build_crawl_configs(
     )
 }
 
-fn normalize_cancel_error(
-    result: AnyhowResult<()>,
-    cancel: &CancellationToken,
-) -> std::result::Result<(), String> {
+fn normalize_cancel_error(result: AnyhowResult<()>, cancel: &CancellationToken) -> TaskResult {
     match result {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -343,9 +336,9 @@ fn normalize_cancel_error(
                 || msg.contains("execution terminated")
                 || msg.contains("Task canceled")
             {
-                Err("Task canceled".to_string())
+                Err(TaskError::Canceled)
             } else {
-                Err(msg)
+                Err(TaskError::Other(msg))
             }
         }
     }
@@ -422,8 +415,7 @@ mod tests {
         let run = Arc::new(Task::new(
             task_id.to_string(),
             TaskParams {
-                plugin: Some(Arc::new(plugin)),
-                plugin_id: "plugin.test".to_string(),
+                plugin: Arc::new(plugin),
                 images_dir: PathBuf::new(),
                 output_album_id: None,
                 config,
@@ -728,9 +720,7 @@ mod tests {
             HashMap::new(),
         );
         let cancel = run.cancel.clone();
-        let join = tokio::task::spawn_blocking(move || {
-            execute_crawler_script_v8(run)
-        });
+        let join = tokio::task::spawn_blocking(move || execute_crawler_script_v8(run));
 
         tokio::time::sleep(Duration::from_millis(50)).await;
         cancel.cancel();
@@ -739,7 +729,7 @@ mod tests {
             .expect("blocking worker should not panic")
             .expect_err("hard interrupt should fail as canceled");
 
-        assert_eq!(err, "Task canceled");
+        assert_eq!(err, TaskError::Canceled);
     }
 
     #[tokio::test]
@@ -763,9 +753,7 @@ mod tests {
             ),
             config,
         );
-        let join = tokio::task::spawn_blocking(move || {
-            execute_crawler_script_v8(run)
-        });
+        let join = tokio::task::spawn_blocking(move || execute_crawler_script_v8(run));
 
         join.await
             .expect("blocking worker should not panic")

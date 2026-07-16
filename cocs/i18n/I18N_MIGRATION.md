@@ -532,7 +532,7 @@
 ### 8.5 其他与插件相关的界面文本
 
 - **packed/index.json**：商店索引中的 `name`、`description`、`author` 与各插件 manifest 一致，随 .kgpg 发布生成，若插件支持 i18n 则索引生成逻辑可能需按语言输出或仅保留一种语言。
-- **应用内「本地导入」**：`packages/core/.../TaskDrawerContent.vue` 中 `pluginId === "本地导入"` 与 `getBuiltinLocalImportMeta()[key]?.name` 为内置任务参数 label，属于主应用 i18n 范围，非插件包内文案。
+- **内建「本地导入」**：`local-import` 的名称、描述、图标和 `paths` / `recursive` 变量展示元数据由后端内建插件 manifest 下发；前端不再维护任务抽屉名称、图标或变量名特判。
 
 ### 8.6 实现思路与已实现部分
 

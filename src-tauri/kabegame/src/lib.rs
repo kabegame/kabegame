@@ -7,8 +7,6 @@ pub(crate) mod web;
 // Web mode entry
 #[cfg(feature = "web")]
 mod web_assets;
-#[cfg(feature = "web")]
-mod web_import;
 
 // Local (Tauri native) modules
 #[cfg(not(feature = "web"))]
@@ -262,8 +260,6 @@ pub fn run() {
             process::exit(1);
         }
 
-        tokio::spawn(async { crate::web_import::gc_stale_uploads().await });
-
         // web 无前端弹窗确认：启动时自动触发所有漏跑的定时任务
         tokio::spawn(async {
             match kabegame_core::scheduler::collect_missed_runs_now() {
@@ -283,7 +279,6 @@ pub fn run() {
         let router = Router::new()
             .route("/__ping", get(|| async { "ok" }))
             .merge(crate::http_server::file_routes_web())
-            .merge(crate::web_import::api_routes())
             .merge(crate::mcp_server::mcp_nest())
             .merge(crate::web::web_routes())
             .fallback_service(crate::web_assets::static_assets_router());
@@ -578,6 +573,7 @@ pub(crate) fn configure_app(
             set_wallpaper_by_image_id,
             get_current_wallpaper_image_id,
             clear_current_wallpaper_image_id,
+            get_wallpaper_capabilities,
             get_current_wallpaper_path,
             set_wallpaper_rotation_enabled,
             get_wallpaper_rotation_enabled,

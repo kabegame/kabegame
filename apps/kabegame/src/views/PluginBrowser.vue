@@ -578,7 +578,7 @@ const editSourceForm = reactive<{ id: string; name: string; indexUrl: string }>(
   indexUrl: "",
 });
 
-const installedPlugins = computed(() => pluginStore.plugins);
+const installedPlugins = computed(() => pluginStore.visiblePlugins);
 
 const storeTabName = (sourceId: string) => `store:${sourceId}`;
 const isStoreTab = (tabName: string) => tabName.startsWith("store:");
@@ -678,14 +678,14 @@ const getPluginIconSrc = (p: PluginListItem) => {
     if (store.iconUrl) return store.iconUrl;
     // 商店插件 id 与已安装插件一致时，直接复用已安装图标
     if (installedPlugins.value.some((x) => x.id === p.id)) {
-      return pluginStore.pluginIconDataUrl(p.id) || null;
+      return pluginStore.pluginIconSrc(p.id) || null;
     }
     const key = getIconKey(p);
     return pluginIcons.value[key] || null;
   }
 
   // 已安装：图标已在 Plugin.iconPngBase64 中，直接从 store 读取
-  return pluginStore.pluginIconDataUrl(p.id) || null;
+  return pluginStore.pluginIconSrc(p.id) || null;
 };
 
 // 商店列表：当 index.json 不再提供 iconUrl 时，从 .kgpg 固定头部通过 Range 读取 icon（后端返回 PNG bytes）

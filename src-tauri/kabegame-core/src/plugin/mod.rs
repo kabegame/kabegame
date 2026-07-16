@@ -6,6 +6,8 @@ pub mod metadata_migration;
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod v8;
 
+mod builtin;
+
 use arc_swap::ArcSwap;
 use futures_util::StreamExt;
 use reqwest;
@@ -35,6 +37,7 @@ use pathql_rs::{
 pub enum PluginBackend {
     V8,
     Webview,
+    Builtin,
 }
 
 impl FromStr for PluginBackend {
@@ -44,9 +47,9 @@ impl FromStr for PluginBackend {
         match s {
             "v8" => Ok(PluginBackend::V8),
             "webview" => Ok(PluginBackend::Webview),
-            "rhai" => Err(
-                "Rhai 后端已停止支持，请更新该插件（迁移到 v8 / webview 后端）".to_string(),
-            ),
+            "rhai" => {
+                Err("Rhai 后端已停止支持，请更新该插件（迁移到 v8 / webview 后端）".to_string())
+            }
             _ => Err(format!("不支持的脚本后端: \"{}\"，支持 v8 / webview", s)),
         }
     }
@@ -57,12 +60,13 @@ impl PluginBackend {
         match self {
             PluginBackend::V8 => "v8",
             PluginBackend::Webview => "js",
+            PluginBackend::Builtin => "builtin",
         }
     }
 }
 
 /// 插件脚本（package.json + main）。旧版 manifest.json (v2) 与 Rhai 均已移除。
-/// `backend` 为 `None` 表示无可执行脚本（如内置 local-import）。
+/// `backend` 为 `None` 表示解析异常或无可执行脚本。
 #[derive(Debug, Clone, Default)]
 pub struct PluginScript {
     backend: Option<PluginBackend>,
@@ -91,14 +95,17 @@ impl PluginScript {
     pub fn v8_source(&self) -> Option<&str> {
         matches!(self.backend, Some(PluginBackend::V8)).then(|| self.source.as_str())
     }
+
+    pub fn is_builtin(&self) -> bool {
+        matches!(self.backend, Some(PluginBackend::Builtin))
+    }
 }
 
-//TODO: local-import也用Plugin表示
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plugin {
     pub id: String,
-    /// 插件名称：string 或按语言 key 的对象（如 name、ja、ko），前端按 locale 解析，name 为回退
+    /// 插件名称：string 或按语言 key 的对象（如 default、zh、ja、ko），前端按 locale 解析，default 为回退
     pub name: serde_json::Value,
     /// 插件描述：同上
     pub description: serde_json::Value,
@@ -405,27 +412,36 @@ impl PluginManager {
         Ok(plugins)
     }
 
+    /// 获取内建插件列表。它们不进入已安装插件缓存，由命令层按需追加到展示通道。
+    pub fn builtin_plugins(&self) -> Vec<Arc<Plugin>> {
+        let mut plugins: Vec<Arc<Plugin>> = builtin::builtin_plugins()
+            .values()
+            .map(Arc::clone)
+            .collect();
+        plugins.sort_by(|a, b| a.id.cmp(&b.id));
+        plugins
+    }
+
     /// 同步获取 Plugin（无锁读 ArcSwap 快照）。
     pub fn get(&self, id: &str) -> Option<Arc<Plugin>> {
+        if let Some(plugin) = builtin::builtin_plugins().get(id) {
+            return Some(Arc::clone(plugin));
+        }
         let guard = self.plugins.load_full();
         let plugins = guard.as_ref().as_ref()?;
         plugins.get(id).map(|a| (*a).clone())
     }
 
-    /// 同步读取已安装缓存中的插件展示名（不做磁盘 IO）。
-    /// - 仅使用内存缓存；缓存未初始化时返回 None。
+    /// 同步读取插件展示名（不做磁盘 IO）。已安装插件使用内存缓存，内建插件使用静态表。
     pub fn get_cached_plugin_display_name_sync(&self, plugin_id: &str) -> Option<String> {
-        let guard = self.plugins.load();
-        let plugins = guard.as_ref().as_ref()?;
-        let plugin = plugins.get(plugin_id)?;
-        let name = manifest_value_to_display_string(&plugin.name)
+        let plugin = self.get(plugin_id)?;
+        let name = manifest_value_display_for_locale(
+            &plugin.name,
+            kabegame_i18n::current_vd_locale(),
+        )
             .trim()
             .to_string();
-        if name.is_empty() {
-            None
-        } else {
-            Some(name)
-        }
+        if name.is_empty() { None } else { Some(name) }
     }
 
     /// CLI 场景：支持传入插件 id（已安装）或 `.kgpg` 路径（临时运行）。
@@ -1283,11 +1299,7 @@ impl PluginManager {
         let effective_pkg_ver: u16 = {
             const MAX: u64 = 3;
             let v = if raw_pkg_ver > MAX { MAX } else { raw_pkg_ver };
-            if v < 1 {
-                1
-            } else {
-                v as u16
-            }
+            if v < 1 { 1 } else { v as u16 }
         };
 
         let icon_url = plugin_json
@@ -1735,7 +1747,7 @@ impl PluginManager {
             if let Some(source_map) = cache.get(source_id) {
                 if let Some(plugin) = source_map.get(plugin_id) {
                     if let Some(ref b64) = plugin.icon_png_base64 {
-                        use base64::{engine::general_purpose::STANDARD, Engine as _};
+                        use base64::{Engine as _, engine::general_purpose::STANDARD};
                         if let Ok(bytes) = STANDARD.decode(b64) {
                             return Ok(Some(bytes));
                         }
@@ -1807,12 +1819,8 @@ impl PluginManager {
 
     pub async fn load_installed_plugin_detail(&self, plugin_id: &str) -> Result<Plugin, String> {
         self.ensure_installed_cache_initialized().await?;
-        let guard = self.plugins.load();
-        guard
-            .as_ref()
-            .as_ref()
-            .and_then(|m| m.get(plugin_id))
-            .map(|a| (**a).clone())
+        self.get(plugin_id)
+            .map(|a| (*a).clone())
             .ok_or_else(|| format!("Plugin {} not found", plugin_id))
     }
 
@@ -1859,6 +1867,16 @@ impl PluginManager {
                 if !(path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg")) {
                     continue;
                 }
+                // 与内建插件同名的 kgpg 直接跳过（parse_kgpg 会拒绝它；这里先跳，避免一颗文件炸掉整次刷新）
+                if path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|stem| builtin::builtin_plugins().contains_key(stem))
+                    .unwrap_or(false)
+                {
+                    eprintln!("[plugin] 跳过与内建插件同名的 kgpg: {}", path.display());
+                    continue;
+                }
                 let plugin = self.install_plugin_from_kgpg(&path).await?;
                 seen_plugin_ids.insert(plugin.id);
             }
@@ -1883,6 +1901,10 @@ impl PluginManager {
     /// 安装/更新/删除后：按 pluginId 局部刷新（部分刷新）
     /// 仅从用户目录（data）查找指定 plugin_id
     pub async fn refresh_plugin(&self, plugin_id: &str) -> Result<(), String> {
+        // 内建插件不落盘也不进已安装缓存，无需刷新/清理
+        if builtin::builtin_plugins().contains_key(plugin_id) {
+            return Ok(());
+        }
         let user_plugins_dir = self.get_plugins_directory();
 
         // 仅从用户目录查找
@@ -1952,6 +1974,14 @@ impl PluginManager {
             .filter(|s| !s.is_empty())
             .ok_or_else(|| format!("无法从路径提取插件 ID: {}", path.display()))?
             .to_string();
+
+        // 内建插件 id 保留：磁盘 kgpg 不得与内建插件同名（安装/临时运行/商店缓存统一在此拒绝；
+        // 运行时查找另有 get() 内建优先兜底）。refresh 扫描对同名文件先行跳过，不会撞到这里。
+        if builtin::builtin_plugins().contains_key(&plugin_id) {
+            return Err(format!(
+                "插件 ID \"{plugin_id}\" 为内建插件保留，不能安装同名插件"
+            ));
+        }
 
         let size_bytes = fs::metadata(path)
             .map_err(|e| format!("读取插件文件大小失败: {}", e))?
@@ -2047,7 +2077,7 @@ impl PluginManager {
 
         // 优先使用 KGPG v2 头部 icon（RGB24 raw → PNG），回落到 zip icon_png_bytes
         let icon_png_base64 = if let Some(rgb24) = v2_icon_rgb24 {
-            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
             use image::RgbImage;
             let w = crate::kgpg::KGPG2_ICON_W;
             let h = crate::kgpg::KGPG2_ICON_H;
@@ -2069,7 +2099,7 @@ impl PluginManager {
                 .or_else(|| icon_png_bytes.as_ref().map(|b| STANDARD.encode(b)))
         } else {
             icon_png_bytes.as_ref().map(|bytes| {
-                use base64::{engine::general_purpose::STANDARD, Engine as _};
+                use base64::{Engine as _, engine::general_purpose::STANDARD};
                 STANDARD.encode(bytes)
             })
         };
@@ -2077,7 +2107,7 @@ impl PluginManager {
         let doc_resources = if doc_resource_entries.is_empty() {
             None
         } else {
-            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
             let map: HashMap<String, String> = doc_resource_entries
                 .into_iter()
                 .map(|(path, bytes)| (path, STANDARD.encode(&bytes)))
@@ -2176,34 +2206,30 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         script_type = script.script_type_str().to_string();
     }
 
-    let icon_png_bytes: Option<Vec<u8>> = if let Some(icon_path) =
-        pkg_obj.get("kbIcon").and_then(|v| v.as_str())
-    {
-        validate_kb_rel_path(icon_path)?;
-        match archive.by_name(icon_path) {
-            Ok(mut f) => {
-                let mut bytes = Vec::new();
-                f.read_to_end(&mut bytes)
-                    .map_err(|e| format!("读取 kbIcon \"{}\" 失败: {}", icon_path, e))?;
-                if bytes.is_empty() {
-                    None
-                } else {
-                    Some(bytes)
+    let icon_png_bytes: Option<Vec<u8>> =
+        if let Some(icon_path) = pkg_obj.get("kbIcon").and_then(|v| v.as_str()) {
+            validate_kb_rel_path(icon_path)?;
+            match archive.by_name(icon_path) {
+                Ok(mut f) => {
+                    let mut bytes = Vec::new();
+                    f.read_to_end(&mut bytes)
+                        .map_err(|e| format!("读取 kbIcon \"{}\" 失败: {}", icon_path, e))?;
+                    if bytes.is_empty() { None } else { Some(bytes) }
+                }
+                Err(_) => {
+                    return Err(format!(
+                        "package.json 引用的 kbIcon \"{}\" 不在包内",
+                        icon_path
+                    ));
                 }
             }
-            Err(_) => {
-                return Err(format!(
-                    "package.json 引用的 kbIcon \"{}\" 不在包内",
-                    icon_path
-                ));
-            }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
-    let description_template: Option<String> = if let Some(tpl_path) =
-        pkg_obj.get("kbDescriptionTemplate").and_then(|v| v.as_str())
+    let description_template: Option<String> = if let Some(tpl_path) = pkg_obj
+        .get("kbDescriptionTemplate")
+        .and_then(|v| v.as_str())
     {
         validate_kb_rel_path(tpl_path)?;
         let mut f = archive.by_name(tpl_path).map_err(|_| {
@@ -2215,11 +2241,7 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         let mut s = String::new();
         f.read_to_string(&mut s)
             .map_err(|e| format!("读取 \"{}\" 失败: {}", tpl_path, e))?;
-        if s.is_empty() {
-            None
-        } else {
-            Some(s)
-        }
+        if s.is_empty() { None } else { Some(s) }
     } else {
         None
     };
@@ -2230,9 +2252,9 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
 
     if let Some(doc_map) = pkg_obj.get("kbDoc").and_then(|v| v.as_object()) {
         for (lang_key, md_path_val) in doc_map {
-            let md_path = md_path_val.as_str().ok_or_else(|| {
-                format!("kbDoc[\"{}\"] 必须是字符串", lang_key)
-            })?;
+            let md_path = md_path_val
+                .as_str()
+                .ok_or_else(|| format!("kbDoc[\"{}\"] 必须是字符串", lang_key))?;
             validate_kb_rel_path(md_path)?;
 
             let md_text = {
@@ -2261,10 +2283,7 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
                     Ok(mut res_f) => {
                         let mut bytes = Vec::new();
                         res_f.read_to_end(&mut bytes).map_err(|e| {
-                            format!(
-                                "读取文档资源 \"{}\" 失败: {}",
-                                normalized_path, e
-                            )
+                            format!("读取文档资源 \"{}\" 失败: {}", normalized_path, e)
                         })?;
 
                         let res_size = bytes.len();
@@ -2281,8 +2300,7 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
                         if already_exists {
                             rewritten_md = rewritten_md.replace(original_ref, normalized_path);
                         } else {
-                            doc_resource_entries
-                                .push((normalized_path.clone(), bytes));
+                            doc_resource_entries.push((normalized_path.clone(), bytes));
                             rewritten_md = rewritten_md.replace(original_ref, normalized_path);
                         }
                     }
@@ -2306,11 +2324,14 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
     };
 
     let mut recommended_configs: Vec<serde_json::Value> = Vec::new();
-    if let Some(configs_arr) = pkg_obj.get("kbRecommendedConfigs").and_then(|v| v.as_array()) {
+    if let Some(configs_arr) = pkg_obj
+        .get("kbRecommendedConfigs")
+        .and_then(|v| v.as_array())
+    {
         for (i, cfg_path_val) in configs_arr.iter().enumerate() {
-            let cfg_path = cfg_path_val.as_str().ok_or_else(|| {
-                format!("kbRecommendedConfigs[{}] 必须是字符串", i)
-            })?;
+            let cfg_path = cfg_path_val
+                .as_str()
+                .ok_or_else(|| format!("kbRecommendedConfigs[{}] 必须是字符串", i))?;
             validate_kb_rel_path(cfg_path)?;
 
             let mut f = archive.by_name(cfg_path).map_err(|_| {
@@ -2329,13 +2350,10 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
                 .unwrap_or("")
                 .to_string();
 
-            let v: serde_json::Value =
-                serde_json::from_str(&s).map_err(|e| format!("解析 \"{}\" 失败: {}", cfg_path, e))?;
+            let v: serde_json::Value = serde_json::from_str(&s)
+                .map_err(|e| format!("解析 \"{}\" 失败: {}", cfg_path, e))?;
             let mut obj = serde_json::Map::new();
-            obj.insert(
-                "pluginId".to_string(),
-                serde_json::json!(plugin_id),
-            );
+            obj.insert("pluginId".to_string(), serde_json::json!(plugin_id));
             obj.insert("filename".to_string(), serde_json::json!(filename));
             if let serde_json::Value::Object(m) = v {
                 for (k, val) in m {
@@ -2349,9 +2367,9 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
     let mut provider_entries: Vec<(String, String)> = Vec::new();
     if let Some(prov_arr) = pkg_obj.get("kbPathQLProviders").and_then(|v| v.as_array()) {
         for (i, prov_path_val) in prov_arr.iter().enumerate() {
-            let prov_path = prov_path_val.as_str().ok_or_else(|| {
-                format!("kbPathQLProviders[{}] 必须是字符串", i)
-            })?;
+            let prov_path = prov_path_val
+                .as_str()
+                .ok_or_else(|| format!("kbPathQLProviders[{}] 必须是字符串", i))?;
             validate_kb_rel_path(prov_path)?;
 
             let mut f = archive.by_name(prov_path).map_err(|_| {
@@ -2448,7 +2466,7 @@ fn normalize_plugin_provider_def(
             return Err(format!(
                 "插件 provider namespace `{}` 不能逃逸 `{}`",
                 ns, base
-            ))
+            ));
         }
     }
     ensure_plugin_provider_filter_comb_resolve(&mut def);
@@ -2830,6 +2848,32 @@ pub fn manifest_value_to_display_string(v: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
+/// 按 locale 解析 manifest 文案；兼容旧插件中的字符串值和 `name` 回退键。
+pub fn manifest_value_display_for_locale(v: &serde_json::Value, locale: &str) -> String {
+    if let Some(s) = v.as_str() {
+        return s.to_string();
+    }
+    let Some(m) = v.as_object() else {
+        return String::new();
+    };
+    if let Some(s) = m.get(locale).and_then(|v| v.as_str()) {
+        return s.to_string();
+    }
+    if let Some(prefix) = locale.split(['_', '-']).next() {
+        if !prefix.is_empty() && prefix != locale {
+            if let Some(s) = m.get(prefix).and_then(|v| v.as_str()) {
+                return s.to_string();
+            }
+        }
+    }
+    for key in ["default", "en", "name", "description"] {
+        if let Some(s) = m.get(key).and_then(|v| v.as_str()) {
+            return s.to_string();
+        }
+    }
+    String::new()
+}
+
 // 变量定义（config.json 中的 var 字段，现在是数组格式）
 /// 选项：兼容 ["high","medium"] 或 [{ "name": "...", "variable": "..." }]；name 支持扁平多语言 name / name.zh / name.en
 #[derive(Debug, Clone, Serialize)]
@@ -2931,11 +2975,7 @@ impl<'de> Deserialize<'de> for VarDefinition {
         }
         let descripts = {
             let d = extract_manifest_text_from_flat(map, "descripts");
-            if d.is_empty() {
-                None
-            } else {
-                Some(d)
-            }
+            if d.is_empty() { None } else { Some(d) }
         };
         let default = map.get("default").cloned();
         let options: Option<Vec<VarOption>> = map.get("options").and_then(|v| {
@@ -3204,17 +3244,10 @@ pub fn normalize_engines_kabegame(raw: &str) -> Result<String, String> {
         }
     };
     if version_str.is_empty() {
-        return Err(format!(
-            "engines.kabegame `>=` 后缺少版本号: \"{}\"",
-            raw
-        ));
+        return Err(format!("engines.kabegame `>=` 后缺少版本号: \"{}\"", raw));
     }
-    let _v = semver::Version::parse(version_str).map_err(|e| {
-        format!(
-            "engines.kabegame 版本号无效 \"{}\": {}",
-            version_str, e
-        )
-    })?;
+    let _v = semver::Version::parse(version_str)
+        .map_err(|e| format!("engines.kabegame 版本号无效 \"{}\": {}", version_str, e))?;
     Ok(version_str.to_string())
 }
 
@@ -3226,35 +3259,24 @@ pub fn validate_kb_rel_path(p: &str) -> Result<(), String> {
     let normalized = p.replace('\\', "/");
 
     if normalized.starts_with('/') {
-        return Err(format!(
-            "kb 路径字段不能以 \"/\" 开头: \"{}\"",
-            p
-        ));
+        return Err(format!("kb 路径字段不能以 \"/\" 开头: \"{}\"", p));
     }
 
     for seg in normalized.split('/') {
         if seg == ".." {
-            return Err(format!(
-                "kb 路径字段不能包含 \"..\": \"{}\"",
-                p
-            ));
+            return Err(format!("kb 路径字段不能包含 \"..\": \"{}\"", p));
         }
     }
 
     if normalized.contains(":\\") || normalized.contains(":/") {
-        return Err(format!(
-            "kb 路径字段不能是绝对路径或包含盘符: \"{}\"",
-            p
-        ));
+        return Err(format!("kb 路径字段不能是绝对路径或包含盘符: \"{}\"", p));
     }
 
     Ok(())
 }
 
 /// package.json（v3）→ PluginManifest
-pub fn plugin_manifest_from_package_json(
-    v: &serde_json::Value,
-) -> Result<PluginManifest, String> {
+pub fn plugin_manifest_from_package_json(v: &serde_json::Value) -> Result<PluginManifest, String> {
     let obj = v
         .as_object()
         .ok_or_else(|| "package.json 必须是 JSON 对象".to_string())?;
@@ -3326,9 +3348,8 @@ pub fn plugin_config_from_package_json(
                 .ok_or_else(|| "kbConfig 必须是数组".to_string())?;
             let mut defs = Vec::with_capacity(arr.len());
             for item in arr {
-                let def: VarDefinition = serde_json::from_value(item.clone()).map_err(|e| {
-                    format!("kbConfig 变量定义解析失败: {}", e)
-                })?;
+                let def: VarDefinition = serde_json::from_value(item.clone())
+                    .map_err(|e| format!("kbConfig 变量定义解析失败: {}", e))?;
                 defs.push(def);
             }
             Ok(defs)
@@ -3440,18 +3461,9 @@ mod tests {
 
     #[test]
     fn test_normalize_engines_kabegame() {
-        assert_eq!(
-            normalize_engines_kabegame(">=4.3.0").unwrap(),
-            "4.3.0"
-        );
-        assert_eq!(
-            normalize_engines_kabegame(">= 4.3.0").unwrap(),
-            "4.3.0"
-        );
-        assert_eq!(
-            normalize_engines_kabegame(">=0.1.0").unwrap(),
-            "0.1.0"
-        );
+        assert_eq!(normalize_engines_kabegame(">=4.3.0").unwrap(), "4.3.0");
+        assert_eq!(normalize_engines_kabegame(">= 4.3.0").unwrap(), "4.3.0");
+        assert_eq!(normalize_engines_kabegame(">=0.1.0").unwrap(), "0.1.0");
         assert!(normalize_engines_kabegame("^4.0.0").is_err());
         assert!(normalize_engines_kabegame("~4.0.0").is_err());
         assert!(normalize_engines_kabegame("4.0.0").is_err());
@@ -3483,14 +3495,8 @@ mod tests {
         assert_eq!(m.name.get("name").unwrap(), "my-plugin");
         assert_eq!(m.version, "2.0.0");
         assert_eq!(m.author, "Test Author");
-        assert_eq!(
-            m.description.get("description").unwrap(),
-            "desc default"
-        );
-        assert_eq!(
-            m.description.get("description.zh").unwrap(),
-            "中文描述"
-        );
+        assert_eq!(m.description.get("description").unwrap(), "desc default");
+        assert_eq!(m.description.get("description.zh").unwrap(), "中文描述");
         assert!(m.min_app_version.is_none());
     }
 
@@ -3576,7 +3582,10 @@ mod tests {
         });
         let js_source = "export async function crawl() {}";
         let data = make_zip(&[
-            ("package.json", serde_json::to_string_pretty(&pkg).unwrap().as_bytes()),
+            (
+                "package.json",
+                serde_json::to_string_pretty(&pkg).unwrap().as_bytes(),
+            ),
             ("crawl/crawl.js", js_source.as_bytes()),
         ]);
 
@@ -3589,8 +3598,19 @@ mod tests {
             2 * 1024 * 1024,
             10 * 1024 * 1024,
         );
-        let (manifest, _config, _doc, script_type, _icon, _tpl, _configs, script, _res, _prov, _mig) =
-            result.unwrap();
+        let (
+            manifest,
+            _config,
+            _doc,
+            script_type,
+            _icon,
+            _tpl,
+            _configs,
+            script,
+            _res,
+            _prov,
+            _mig,
+        ) = result.unwrap();
 
         assert_eq!(manifest.version, "1.0.0");
         assert_eq!(script_type, "v8");
@@ -3621,16 +3641,9 @@ mod tests {
             2 * 1024 * 1024,
             10 * 1024 * 1024,
         );
-        assert!(
-            result.is_err(),
-            "missing main ref should error"
-        );
+        assert!(result.is_err(), "missing main ref should error");
         let err = result.unwrap_err();
-        assert!(
-            err.contains("不在包内"),
-            "error: {}",
-            err
-        );
+        assert!(err.contains("不在包内"), "error: {}", err);
     }
 
     #[test]
@@ -3659,12 +3672,16 @@ mod tests {
         });
         let mig_source = "export function migrate(input) { return input; }";
         let data = make_zip(&[
-            ("package.json", serde_json::to_string_pretty(&pkg).unwrap().as_bytes()),
+            (
+                "package.json",
+                serde_json::to_string_pretty(&pkg).unwrap().as_bytes(),
+            ),
             ("main.js", b"export async function crawl() {}"),
             ("metadata_migrations/migrate.js", mig_source.as_bytes()),
         ]);
         let mut archive = open_zip(&data);
-        let (.., mig) = load_plugin_v3_from_zip(&mut archive, &pkg, "t", 2 << 20, 10 << 20).unwrap();
+        let (.., mig) =
+            load_plugin_v3_from_zip(&mut archive, &pkg, "t", 2 << 20, 10 << 20).unwrap();
         assert_eq!(mig.as_deref(), Some(mig_source));
     }
 
@@ -3679,7 +3696,10 @@ mod tests {
             "kbMetadataMigration": "metadata_migrations/migrate.js",
         });
         let data = make_zip(&[
-            ("package.json", serde_json::to_string_pretty(&pkg).unwrap().as_bytes()),
+            (
+                "package.json",
+                serde_json::to_string_pretty(&pkg).unwrap().as_bytes(),
+            ),
             ("main.js", b"export async function crawl() {}"),
         ]);
         let mut archive = open_zip(&data);
@@ -3698,7 +3718,10 @@ mod tests {
             "kbMetadataMigration": "metadata_migrations/migrate.rhai",
         });
         let data = make_zip(&[
-            ("package.json", serde_json::to_string_pretty(&pkg).unwrap().as_bytes()),
+            (
+                "package.json",
+                serde_json::to_string_pretty(&pkg).unwrap().as_bytes(),
+            ),
             ("main.js", b"export async function crawl() {}"),
             ("metadata_migrations/migrate.rhai", b"fn migrate(m) { m }"),
         ]);
@@ -3719,11 +3742,15 @@ mod tests {
             "kbMetadataMigrations": ["metadata_migrations/v1.rhai"],
         });
         let data = make_zip(&[
-            ("package.json", serde_json::to_string_pretty(&pkg).unwrap().as_bytes()),
+            (
+                "package.json",
+                serde_json::to_string_pretty(&pkg).unwrap().as_bytes(),
+            ),
             ("main.js", b"export async function crawl() {}"),
         ]);
         let mut archive = open_zip(&data);
-        let (.., mig) = load_plugin_v3_from_zip(&mut archive, &pkg, "t", 2 << 20, 10 << 20).unwrap();
+        let (.., mig) =
+            load_plugin_v3_from_zip(&mut archive, &pkg, "t", 2 << 20, 10 << 20).unwrap();
         assert!(mig.is_none());
     }
 
@@ -3738,7 +3765,10 @@ mod tests {
             "description": "d",
         });
         let data = make_zip(&[
-            ("package.json", serde_json::to_string_pretty(&pkg).unwrap().as_bytes()),
+            (
+                "package.json",
+                serde_json::to_string_pretty(&pkg).unwrap().as_bytes(),
+            ),
             ("s.py", b"print('hi')"),
         ]);
 
@@ -3751,10 +3781,7 @@ mod tests {
             2 * 1024 * 1024,
             10 * 1024 * 1024,
         );
-        assert!(
-            result.is_err(),
-            "invalid kbBackend should error"
-        );
+        assert!(result.is_err(), "invalid kbBackend should error");
     }
 
     // ── PluginScript 构造回归测试 ──

@@ -39,7 +39,7 @@
           @change="onPluginChange"
         >
           <el-option
-            v-for="plugin in pluginStore.plugins"
+            v-for="plugin in pluginStore.visiblePlugins"
             :key="plugin.id"
             :label="pluginName(plugin.id)"
             :value="plugin.id"

@@ -59,8 +59,7 @@ pub async fn cancel_task(task_id: String) -> Result<Value, String> {
     let r = commands::task::cancel_task(task_id.clone()).await?;
     #[cfg(not(target_os = "android"))]
     {
-        use kabegame_core::storage::tasks::TaskStatus;
-        super::crawler::crawl_exit_with_status(TaskStatus::Canceled, Some(&task_id)).await;
+        super::crawler::crawl_cancel_for_task(&task_id).await;
     }
     Ok(r)
 }

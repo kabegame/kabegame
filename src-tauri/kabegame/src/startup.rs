@@ -1,13 +1,13 @@
 // 启动步骤函数
 
 use async_trait::async_trait;
-use kabegame_core::crawler::{task_scheduler, TaskScheduler};
+use kabegame_core::crawler::{TaskScheduler, task_scheduler};
 use kabegame_i18n::t;
 // 事件转发到前端（桌面与 Android 均需要，用于 tasks-change 等）
 #[cfg(not(feature = "web"))]
-use crate::wallpaper::manager::WallpaperController;
-#[cfg(not(feature = "web"))]
 use crate::wallpaper::WallpaperRotator;
+#[cfg(not(feature = "web"))]
+use crate::wallpaper::manager::WallpaperController;
 #[cfg(feature = "web")]
 use crate::web::server::SseMessage;
 use kabegame_core::ipc::events::DaemonEventKind;
@@ -27,10 +27,10 @@ use crate::web::server::*;
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::app_paths::AppPaths;
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-use kabegame_core::crawler::downloader::{postprocess_downloaded_image, DownloadState};
+use kabegame_core::crawler::downloader::{DownloadState, postprocess_downloaded_image};
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::webview::{
-    crawler_window_label, set_webview_handler, CrawlerWebViewHandler,
+    CrawlerWebViewHandler, crawler_window_label, set_webview_handler,
 };
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use tauri::webview::DownloadEvent;
@@ -47,11 +47,7 @@ impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
         let run = TaskScheduler::global()
             .get_run(task_id)
             .ok_or_else(|| format!("Crawler task not found for task {task_id}"))?;
-        let plugin = run
-            .params
-            .plugin
-            .as_ref()
-            .ok_or_else(|| format!("Crawler task {task_id} missing plugin"))?;
+        let plugin = &run.params.plugin;
         let crawl_js = plugin
             .script
             .js_source()
@@ -490,7 +486,7 @@ pub fn try_forward_to_existing_instance_and_exit() {
         return;
     }
 
-    use kabegame_core::ipc::ipc::{request, IpcRequest};
+    use kabegame_core::ipc::ipc::{IpcRequest, request};
 
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
@@ -797,7 +793,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     // Linux Plasma + 插件模式：若当前系统壁纸插件不是 Kabegame，自动切到 Kabegame（与 Windows/macOS 窗口模式启动时对齐）
     #[cfg(target_os = "linux")]
     {
-        use crate::linux_desktop::{linux_desktop, LinuxDesktop};
+        use crate::linux_desktop::{LinuxDesktop, linux_desktop};
         use crate::wallpaper::manager::PlasmaPluginWallpaperManager;
         let mode = Settings::global().get_wallpaper_mode();
         if linux_desktop() == LinuxDesktop::Plasma && mode == "plasma-plugin" {

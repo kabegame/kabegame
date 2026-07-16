@@ -6,16 +6,15 @@
 
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
+use crate::crawler::downloader::{DownloadQueue, next_download_id, wait_after_download_if_needed};
 #[cfg(not(target_os = "android"))]
 use crate::crawler::downloader::{build_safe_filename, unique_path};
-use crate::crawler::downloader::{
-    next_download_id, wait_after_download_if_needed, DownloadQueue,
-};
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::crawler::task_scheduler::Task;
 use crate::emitter::GlobalEmitter;
+use crate::local_folder::import::LOCAL_FOLDER_PLUGIN_ID;
 use crate::local_folder::scan_service::{
-    scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile,
+    FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile, scan_and_visit,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -25,8 +24,6 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use url::Url;
-
-const PLUGIN_ID: &str = "local-import";
 
 /// On macOS, map permission-denied (EPERM) to a user-friendly message with drag-drop hint and System Settings instructions.
 fn map_io_error_for_user(e: io::Error, context: &str) -> String {
@@ -119,7 +116,7 @@ impl LocalImportHook {
             },
             false,
             &file.url,
-            PLUGIN_ID,
+            LOCAL_FOLDER_PLUGIN_ID,
             Some(&self.task_id),
             None,
             None,
@@ -195,7 +192,7 @@ impl LocalImportHook {
             crate::crawler::downloader::PostprocessSource::ContentUri,
             false,
             url,
-            PLUGIN_ID,
+            LOCAL_FOLDER_PLUGIN_ID,
             Some(self.task_id.as_str()),
             None,
             None,

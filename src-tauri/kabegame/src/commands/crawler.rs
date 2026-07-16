@@ -1,15 +1,13 @@
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use kabegame_core::crawler::downloader::{
-    build_safe_filename, build_safe_filename_no_ext, compute_unique_download_path_with_name,
-    media_upload, next_download_id, postprocess_downloaded_image, unique_path, ActiveDownloadInfo,
-    DownloadState, PostprocessSource,
-};
-use kabegame_core::crawler::task_scheduler::PageStackEntry;
-use kabegame_core::crawler::task_scheduler::Task;
-use kabegame_core::crawler::webview::{crawler_window_label, task_id_from_crawler_label};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use kabegame_core::crawler::TaskScheduler;
+use kabegame_core::crawler::downloader::{
+    ActiveDownloadInfo, DownloadState, PostprocessSource, build_safe_filename,
+    build_safe_filename_no_ext, compute_unique_download_path_with_name, media_upload,
+    next_download_id, postprocess_downloaded_image, unique_path,
+};
+use kabegame_core::crawler::task_scheduler::{PageStackEntry, Task, TaskError};
+use kabegame_core::crawler::webview::{crawler_window_label, task_id_from_crawler_label};
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::storage::tasks::TaskStatus;
 use kabegame_core::storage::Storage;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -149,7 +147,7 @@ async fn media_ctx_from_label(
         };
         return Ok(MediaReceiveCtx {
             images_dir: run.params.images_dir.clone(),
-            plugin_id: run.params.plugin_id.clone(),
+            plugin_id: run.params.plugin.id.clone(),
             plugin_version: run.params.plugin_version(),
             task_id,
             surf_record_id: None,
@@ -301,9 +299,7 @@ fn merge_task_headers(
 /// 每页动态状态按需单独获取（不再一次性 crawl_get_context；crawl.js 与 vars 在
 /// 建窗时已烘焙进 initialization_script）。
 #[tauri::command]
-pub async fn crawl_get_page_label<R: Runtime>(
-    webview: WebviewWindow<R>,
-) -> Result<String, String> {
+pub async fn crawl_get_page_label<R: Runtime>(webview: WebviewWindow<R>) -> Result<String, String> {
     let (_, run) = run_of(&webview)?;
     Ok(run
         .with_stack_top(|entry| entry.page_label.clone())
@@ -324,25 +320,18 @@ pub async fn crawl_get_state<R: Runtime>(webview: WebviewWindow<R>) -> Result<Va
     Ok(state_plain_object(Some(&run.webview_state())))
 }
 
-/// 内部：按给定状态结束当前 webview 任务并释放。若 only_for_task_id 为 Some，
-/// 仅当当前上下文为该任务时执行，否则直接返回（用于取消时只释放对应任务）。
-pub async fn crawl_exit_with_status(status: TaskStatus, only_for_task_id: Option<&str>) {
-    if let Some(task_id) = only_for_task_id {
-        TaskScheduler::global()
-            .complete_webview_task(
-                task_id,
-                status,
-                (status == TaskStatus::Canceled).then(|| "Task canceled".to_string()),
-            )
-            .await;
-    }
+/// 内部：按任务 id 取消当前 WebView 任务并释放。
+pub async fn crawl_cancel_for_task(task_id: &str) {
+    TaskScheduler::global()
+        .complete_webview_task(task_id, Err(TaskError::Canceled))
+        .await;
 }
 
 #[tauri::command]
 pub async fn crawl_exit<R: Runtime>(webview: WebviewWindow<R>) -> Result<(), String> {
     let (task_id, _) = run_of(&webview)?;
     TaskScheduler::global()
-        .complete_webview_task(&task_id, TaskStatus::Completed, None)
+        .complete_webview_task(&task_id, Ok(()))
         .await;
     Ok(())
 }
@@ -358,14 +347,14 @@ pub async fn crawl_error<R: Runtime>(
     } else {
         message
     };
-    // 用户取消时脚本可能调用 ctx.error("Task canceled")，应显示为"已取消"而非"失败"
-    let next = if err.contains("Task canceled") {
-        TaskStatus::Canceled
+    // 用户取消时脚本可能调用 ctx.error("Task canceled")，取消文案由 worker 统一写入。
+    let result = if err.contains("Task canceled") {
+        Err(TaskError::Canceled)
     } else {
-        TaskStatus::Failed
+        Err(TaskError::Other(err))
     };
     TaskScheduler::global()
-        .complete_webview_task(&task_id, next, Some(err))
+        .complete_webview_task(&task_id, result)
         .await;
     Ok(())
 }
@@ -415,11 +404,8 @@ pub async fn crawl_download_image<R: Runtime>(
     if let Some(page_url) = current_url.filter(|url| !url.trim().is_empty()) {
         request_headers.insert("Referer".to_string(), page_url);
     }
-    let metadata_id = insert_metadata(
-        &run.params.plugin_id,
-        metadata,
-        run.params.plugin_version(),
-    )?;
+    let metadata_id =
+        insert_metadata(&run.params.plugin.id, metadata, run.params.plugin_version())?;
 
     let merged_headers = merge_task_headers(&task_id, Some(request_headers), None)?;
     std::fs::create_dir_all(&images_dir)
@@ -431,7 +417,7 @@ pub async fn crawl_download_image<R: Runtime>(
     let native_info = ActiveDownloadInfo {
         id: download_id,
         url: parsed.as_str().to_string(),
-        plugin_id: run.params.plugin_id.clone(),
+        plugin_id: run.params.plugin.id.clone(),
         start_time: download_start_time,
         task_id: task_id.clone(),
         state: DownloadState::Preparing,
@@ -807,7 +793,10 @@ pub async fn crawl_update_page_state<R: Runtime>(
     let (_, run) = run_of(&webview)?;
     let patch_obj = page_state_plain_object(Some(&patch));
     let merged = {
-        let mut stack = run.page_stack.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let mut stack = run
+            .page_stack
+            .lock()
+            .map_err(|e| format!("Lock error: {e}"))?;
         let current = stack.last().map(|entry| &entry.page_state);
         let merged = merge_page_state(current, &patch_obj);
         if let Some(top) = stack.last_mut() {
@@ -857,15 +846,13 @@ pub async fn crawl_to<R: Runtime>(
 ) -> Result<(), String> {
     let (task_id, run) = run_of(&webview)?;
     let current_url = run.current_page_url();
-    let target_url = resolve_target_url(&payload.url, current_url.as_deref(), run.params.base_url())?;
+    let target_url =
+        resolve_target_url(&payload.url, current_url.as_deref(), run.params.base_url())?;
     let stack = get_page_stack(&task_id)?;
-    let new_page_label = payload
-        .page_label
-        .clone()
-        .unwrap_or_else(|| {
-            run.with_stack_top(|entry| entry.page_label.clone())
-                .unwrap_or_else(|| "initial".to_string())
-        });
+    let new_page_label = payload.page_label.clone().unwrap_or_else(|| {
+        run.with_stack_top(|entry| entry.page_label.clone())
+            .unwrap_or_else(|| "initial".to_string())
+    });
     let new_page_state = page_state_plain_object(payload.page_state.as_ref());
     {
         let mut guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;

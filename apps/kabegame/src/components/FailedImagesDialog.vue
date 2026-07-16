@@ -177,7 +177,7 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { isTauri } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
+import { useI18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { useDownloadStateStore } from "@/stores/downloadState";
@@ -198,7 +198,6 @@ const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 
 const { t } = useI18n();
-const { pluginName: resolvePluginName } = usePluginManifestI18n();
 const router = useRouter();
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
@@ -331,9 +330,7 @@ const openFailedUrl = async (url: string) => {
 };
 
 const getFailedPluginName = (pluginId: string) => {
-  if (pluginId === "local-import") return t("tasks.drawerLocalImport");
-  const plugin = pluginStore.plugins.find((p) => p.id === pluginId);
-  return plugin ? resolvePluginName(plugin) || pluginId : pluginId;
+  return pluginStore.pluginLabel(pluginId);
 };
 
 const formatFailedTime = (value: number) => {

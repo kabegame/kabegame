@@ -107,7 +107,6 @@ fn vd_flat_key_for_canonical(canonical: &str) -> Option<&'static str> {
         "image-only" => Some("vd.imageOnly"),
         "video-only" => Some("vd.videoOnly"),
         "tree" | "subAlbums" => Some("vd.subAlbums"),
-        "local-import" => Some("vd.localImport"),
         "hidden-album" => Some("vd.hiddenAlbum"),
         _ => None,
     }

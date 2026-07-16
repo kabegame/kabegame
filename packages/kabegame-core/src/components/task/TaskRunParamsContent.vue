@@ -98,9 +98,7 @@ import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { Clock, CopyDocument, Grid, WarningFilled } from "@element-plus/icons-vue";
 import {
-  LOCAL_IMPORT_PLUGIN_ID,
   buildVarMetaMapFromPluginConfig,
-  localImportVarMetaMap,
   usePluginStore,
 } from "../../stores/plugins";
 import type { PluginVarMeta } from "../../stores/plugins";
@@ -132,20 +130,15 @@ const props = defineProps<{
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 
-const kbAppPublicIcon = `${(import.meta.env.BASE_URL || "/").replace(/\/$/, "")}/icon.png`;
-
 const pluginIconDisplayUrl = computed(() => {
   const id = props.task.pluginId;
   if (!id) return null;
-  if (id === LOCAL_IMPORT_PLUGIN_ID) return kbAppPublicIcon;
-  return pluginStore.pluginIconDataUrl(id) ?? null;
+  return pluginStore.pluginIconSrc(id) ?? null;
 });
 
 const varMetaByPluginId = computed(() => {
   void locale.value;
-  const out: Record<string, Record<string, PluginVarMeta>> = {
-    [LOCAL_IMPORT_PLUGIN_ID]: localImportVarMetaMap((k) => t(k)),
-  };
+  const out: Record<string, Record<string, PluginVarMeta>> = {};
   for (const p of pluginStore.plugins) {
     out[p.id] = buildVarMetaMapFromPluginConfig(p.config);
   }
@@ -219,8 +212,8 @@ const formatConfigValue = (pluginId: string, key: string, value: any, raw = fals
   if (value === null || value === undefined) return raw ? "null" : t("tasks.drawerUnset");
   if (typeof value === "boolean") return raw ? String(value) : value ? t("tasks.drawerYes") : t("tasks.drawerNo");
   if (Array.isArray(value)) {
-    if (pluginId === LOCAL_IMPORT_PLUGIN_ID && key === "paths" && value.length > 3 && !raw) {
-      return t("tasks.drawerPathsCount", { n: value.length });
+    if (value.length > 3 && !raw) {
+      return t("tasks.drawerListCount", { n: value.length });
     }
     return value
       .map((v) =>

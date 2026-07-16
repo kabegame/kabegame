@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 use std::sync::{Arc, OnceLock};
 
-pub use crate::crawler::task_scheduler::task::TaskCompletion;
-
 #[async_trait]
 pub trait CrawlerWebViewHandler: Send + Sync + 'static {
     async fn create_task_window(&self, task_id: &str, base_url: &str) -> Result<(), String>;

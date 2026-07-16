@@ -167,7 +167,7 @@ const pluginRows = computed((): PluginPickerOption[] => {
       value: pluginId,
       label: pluginStore.pluginLabel(pluginId),
       pluginId,
-      iconSrc: pluginStore.pluginIconDataUrl(pluginId),
+      iconSrc: pluginStore.pluginIconSrc(pluginId),
       warning: props.showJsWarning && pluginStore.plugins.find((p) => p.id === pluginId)?.scriptType === "js",
       count: rowCount(pluginId),
       plugin: pluginStore.plugins.find((p) => p.id === pluginId),
@@ -175,14 +175,14 @@ const pluginRows = computed((): PluginPickerOption[] => {
   }
 
   const rows: PluginPickerOption[] = [];
-  for (const plugin of props.plugins ?? pluginStore.plugins) {
+  for (const plugin of props.plugins ?? pluginStore.visiblePlugins) {
     const value = valueForPlugin(plugin);
     if (!value) continue;
     rows.push({
       value,
       label: pluginLabel(plugin),
       pluginId: plugin.id,
-      iconSrc: pluginStore.pluginIconDataUrl(plugin.id),
+      iconSrc: pluginStore.pluginIconSrc(plugin.id),
       warning: props.showJsWarning && plugin.scriptType === "js",
       count: rowCount(value),
       plugin,

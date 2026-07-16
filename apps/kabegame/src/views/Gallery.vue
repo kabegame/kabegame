@@ -50,13 +50,13 @@
 
     <!-- 收集对话框（非 Android：本地渲染；Android：由 App.vue 全局承载） -->
     <CrawlerDialog v-if="!isCompact" :model-value="crawlerDialog.isOpen.value" :initial-config="crawlerDialogInitialConfig" @update:model-value="crawlerDialog.close" />
-    <LocalImportDialog v-if="!isCompact" :model-value="localImportDialog.isOpen.value" @update:model-value="localImportDialog.close" />
+    <LocalImportDialog v-if="!isCompact && !IS_WEB" :model-value="localImportDialog.isOpen.value" @update:model-value="localImportDialog.close" />
 
     <!-- 桌面：空状态/无下拉时用对话框选择 本地/网络 -->
     <el-dialog :model-value="collectMenuDialog.isOpen.value" :z-index="collectMenuDialog.zIndex.value" :title="$t('gallery.chooseCollectMethod')" width="360px" destroy-on-close
       class="collect-menu-dialog" @update:model-value="collectMenuDialog.close">
       <div class="collect-menu-options">
-        <div class="collect-menu-option" @click="onDesktopCollectLocal">
+        <div v-if="!IS_WEB" class="collect-menu-option" @click="onDesktopCollectLocal">
           <el-icon>
             <FolderOpened />
           </el-icon>
@@ -74,7 +74,7 @@
     <!-- Android：收集方式选择器（本地 → MediaPicker，远程 → 收集 drawer） -->
     <CollectSourcePicker v-if="uiStore.isCompact" :model-value="collectSourcePicker.isOpen.value" @update:model-value="collectSourcePicker.close" @select="handleCollectSourceSelect" />
     <!-- 安卓媒体选择器（本地导入） -->
-    <MediaPicker v-if="uiStore.isCompact" :model-value="mediaPicker.isOpen.value" @update:model-value="mediaPicker.close" @select="handleMediaPickerSelect" />
+    <MediaPicker v-if="uiStore.isCompact && !IS_WEB" :model-value="mediaPicker.isOpen.value" @update:model-value="mediaPicker.close" @select="handleMediaPickerSelect" />
 
     <!-- 整理对话框：由 header 的 OrganizeHeaderControl 触发打开，确认后回传参数给 header 启动整理 -->
     <OrganizeDialog :model-value="organizeStore.dialogOpen" @update:model-value="onOrganizeDialogVisible" @confirm="onOrganizeConfirm" />
@@ -173,6 +173,7 @@ const handleShowCrawlerDialog = () => {
 };
 
 const handleShowLocalImport = () => {
+  if (IS_WEB) return;
   analytics.track("gallery_import_entry", { entry: "local" });
   localImportDialog.open();
 };
@@ -205,6 +206,7 @@ const handleEmptyStateCollect = () => {
 
 // 桌面：选择收集方式对话框 → 本地
 const onDesktopCollectLocal = () => {
+  if (IS_WEB) return;
   analytics.track("gallery_import_entry", { entry: "local", source: "empty_state_dialog" });
   collectMenuDialog.close();
   localImportDialog.open();
@@ -225,6 +227,7 @@ const handleCollectSourceSelect = (source: "local" | "remote") => {
   });
   collectSourcePicker.close();
   if (source === "local") {
+    if (IS_WEB) return;
     mediaPicker.open();
   } else {
     crawlerDrawerStore.open();

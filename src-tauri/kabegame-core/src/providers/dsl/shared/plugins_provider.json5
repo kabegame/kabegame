@@ -5,7 +5,7 @@
     // callers decide the visible label and target router.
     "list": {
         "${out.plugin_id}": {
-            "sql": "SELECT q.plugin_id AS plugin_id, q.plugin_meta_json AS plugin_meta_json, CASE WHEN IFNULL(json_extract(q.plugin_meta_json, '$.name'), '') != '' THEN json_extract(q.plugin_meta_json, '$.name') || ' - ' || q.plugin_id ELSE q.plugin_id END AS display FROM (SELECT p.plugin_id AS plugin_id, get_plugin(p.plugin_id) AS plugin_meta_json FROM (SELECT DISTINCT images.plugin_id AS plugin_id FROM images WHERE images.plugin_id IS NOT NULL AND images.plugin_id != '') p) q ORDER BY q.plugin_id ASC",
+            "sql": "SELECT q.plugin_id AS plugin_id, q.plugin_meta_json AS plugin_meta_json, CASE WHEN IFNULL(json_extract(q.plugin_meta_json, '$.displayName'), '') != '' THEN json_extract(q.plugin_meta_json, '$.displayName') || ' - ' || q.plugin_id ELSE q.plugin_id END AS display FROM (SELECT p.plugin_id AS plugin_id, get_plugin(p.plugin_id) AS plugin_meta_json FROM (SELECT DISTINCT images.plugin_id AS plugin_id FROM images WHERE images.plugin_id IS NOT NULL AND images.plugin_id != '') p) q ORDER BY q.plugin_id ASC",
             "data_var": "out",
             "meta": {
                 "plugin_id": "${out.plugin_id}",

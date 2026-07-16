@@ -71,7 +71,8 @@ async fn get_plugins() -> IpcResponse {
         return IpcResponse::err(e);
     }
     match plugin_manager.get_all() {
-        Ok(plugins) => {
+        Ok(mut plugins) => {
+            plugins.extend(plugin_manager.builtin_plugins());
             IpcResponse::ok_with_data("ok", serde_json::to_value(plugins).unwrap_or_default())
         }
         Err(e) => IpcResponse::err(e),

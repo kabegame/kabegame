@@ -167,7 +167,7 @@ import TaskLogDialog from "./TaskLogDialog.vue";
 import TaskParamsDialog from "./TaskParamsDialog.vue";
 import TaskSummaryRow, { type TaskSummaryRowTask } from "./TaskSummaryRow.vue";
 import { useCrawlerStore } from "../../stores/crawler";
-import { LOCAL_IMPORT_PLUGIN_ID, usePluginStore } from "../../stores/plugins";
+import { usePluginStore } from "../../stores/plugins";
 import type { PluginManifestText } from "../../stores/plugins";
 import type { TaskRunParamsTask } from "./TaskRunParamsContent.vue";
 import { trackEvent } from "../../track/umami";
@@ -261,8 +261,6 @@ const displayTaskCount = computed(() =>
 
 const loadingMore = ref(false);
 
-const kbAppPublicIcon = `${(import.meta.env.BASE_URL || "/").replace(/\/$/, "")}/icon.png`;
-
 function isCanceledTaskStatus(status: string): boolean {
   return status === "canceled" || status === "cancelled";
 }
@@ -294,11 +292,10 @@ function taskProgressBarColor(status: string): string | undefined {
   return undefined;
 }
 
-/** 抽屉任务行图标：本地导入用应用 public/icon.png，其余读 pluginStore 缓存 */
+/** 抽屉任务行图标：统一读 pluginStore 缓存。 */
 function drawerPluginIconSrc(pluginId: string): string | undefined {
   if (!pluginId) return undefined;
-  if (pluginId === LOCAL_IMPORT_PLUGIN_ID) return kbAppPublicIcon;
-  return pluginStore.pluginIconDataUrl(pluginId);
+  return pluginStore.pluginIconSrc(pluginId);
 }
 
 /** 与虚拟列表行高一致（须与 .task-drawer-virtual-item height 相同） */

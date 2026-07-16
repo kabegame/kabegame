@@ -1,7 +1,6 @@
 use crate::crawler::task_scheduler::PageStack;
 use crate::emitter::GlobalEmitter;
 use crate::plugin::Plugin;
-use crate::storage::tasks::TaskStatus;
 use crate::storage::Storage;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -10,16 +9,17 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Debug, Clone)]
-pub struct TaskCompletion {
-    pub status: TaskStatus,
-    pub error: Option<String>,
+#[derive(Debug, Clone, PartialEq)]
+pub enum TaskError {
+    Canceled,
+    Other(String),
 }
+
+pub type TaskResult = Result<(), TaskError>;
 
 /// 提交入队时冻结的运行参数。
 pub struct TaskParams {
-    pub plugin: Option<Arc<Plugin>>,
-    pub plugin_id: String,
+    pub plugin: Arc<Plugin>,
     pub images_dir: PathBuf,
     pub output_album_id: Option<String>,
     pub config: HashMap<String, Value>,
@@ -27,22 +27,16 @@ pub struct TaskParams {
 
 impl TaskParams {
     pub fn plugin_version(&self) -> u32 {
-        self.plugin
-            .as_ref()
-            .map(|plugin| plugin.version_packed)
-            .unwrap_or(0)
+        self.plugin.version_packed
     }
 
     pub fn base_url(&self) -> &str {
-        self.plugin
-            .as_ref()
-            .map(|plugin| plugin.base_url.as_str())
-            .unwrap_or("")
+        &self.plugin.base_url
     }
 }
 
 pub struct WebviewSession {
-    pub completion: Option<oneshot::Sender<TaskCompletion>>,
+    pub completion: Option<oneshot::Sender<TaskResult>>,
     pub state: Value,
 }
 
@@ -151,12 +145,15 @@ impl Task {
         self.with_stack_top(|entry| entry.url.clone())
     }
 
-    pub fn with_stack_top<T>(&self, f: impl FnOnce(&crate::crawler::task_scheduler::PageStackEntry) -> T) -> Option<T> {
+    pub fn with_stack_top<T>(
+        &self,
+        f: impl FnOnce(&crate::crawler::task_scheduler::PageStackEntry) -> T,
+    ) -> Option<T> {
         let guard = self.page_stack.lock().unwrap();
         guard.last().map(f)
     }
 
-    pub fn begin_webview_session(&self) -> Result<oneshot::Receiver<TaskCompletion>, String> {
+    pub fn begin_webview_session(&self) -> Result<oneshot::Receiver<TaskResult>, String> {
         let (completion_tx, completion_rx) = oneshot::channel();
         let mut guard = self.webview.lock().unwrap();
         if guard.is_some() {
@@ -172,13 +169,13 @@ impl Task {
         Ok(completion_rx)
     }
 
-    pub fn complete_webview(&self, status: TaskStatus, error: Option<String>) -> bool {
+    pub fn complete_webview(&self, result: TaskResult) -> bool {
         let tx = {
             let mut guard = self.webview.lock().unwrap();
             guard.as_mut().and_then(|session| session.completion.take())
         };
         if let Some(tx) = tx {
-            let _ = tx.send(TaskCompletion { status, error });
+            let _ = tx.send(result);
             true
         } else {
             false

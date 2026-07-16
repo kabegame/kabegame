@@ -1,24 +1,25 @@
 use crate::crawler::downloader::{
-    get_default_images_dir, resolve_crawl_output_dir, ActiveDownloadInfo, DownloadQueue,
+    ActiveDownloadInfo, DownloadQueue, get_default_images_dir, resolve_crawl_output_dir,
 };
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
-use crate::plugin::{check_min_app_version, PluginManager, VarDefinition, VarOption};
+use crate::local_folder::import::LOCAL_FOLDER_PLUGIN_ID;
+use crate::plugin::{PluginManager, VarDefinition, VarOption, check_min_app_version};
 use crate::schedule_sync::on_crawl_task_reached_terminal;
 use crate::settings::Settings;
-use crate::storage::tasks::TaskStatus;
 use crate::storage::Storage;
+use crate::storage::tasks::TaskStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, RwLock as StdRwLock};
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, mpsc};
 use url::Url;
 
 pub mod task;
-pub use task::{Task, TaskCompletion, TaskParams};
+pub use task::{Task, TaskError, TaskParams, TaskResult};
 
 /// 任务 worker 协程数量上限（与设置「同时运行任务数」1~10 一致；实际并发由 `wait_for_task_slot` 与设置共同限制）。
 pub const MAX_TASK_WORKER_LOOPS: usize = 10;
@@ -151,31 +152,20 @@ impl TaskScheduler {
             .ok_or_else(|| format!("任务记录不存在: {}", req.task_id))?;
         let images_dir = resolve_crawl_output_dir(task.output_dir.as_deref());
 
-        let params = if task.plugin_id == "local-import" {
-            TaskParams {
-                plugin: None,
-                plugin_id: task.plugin_id.clone(),
-                images_dir,
-                output_album_id: task.output_album_id.clone(),
-                config: task.user_config.clone().unwrap_or_default(),
-            }
-        } else {
-            let plugin_manager = PluginManager::global();
-            let (plugin, _plugin_file_path) = plugin_manager
-                .resolve_plugin_for_task_request(&task.plugin_id, req.plugin_file_path.as_deref())
-                .await?;
-            if let Some(ref min_ver) = plugin.min_app_version {
-                check_min_app_version(env!("CARGO_PKG_VERSION"), min_ver)?;
-            }
-            let user_cfg = task.user_config.clone().unwrap_or_default();
-            let config = build_effective_user_config_from_var_defs(&plugin.var_defs, user_cfg);
-            TaskParams {
-                plugin: Some(Arc::new(plugin)),
-                plugin_id: task.plugin_id.clone(),
-                images_dir,
-                output_album_id: task.output_album_id.clone(),
-                config,
-            }
+        let plugin_manager = PluginManager::global();
+        let (plugin, _plugin_file_path) = plugin_manager
+            .resolve_plugin_for_task_request(&task.plugin_id, req.plugin_file_path.as_deref())
+            .await?;
+        if let Some(ref min_ver) = plugin.min_app_version {
+            check_min_app_version(env!("CARGO_PKG_VERSION"), min_ver)?;
+        }
+        let user_cfg = task.user_config.clone().unwrap_or_default();
+        let config = build_effective_user_config_from_var_defs(&plugin.var_defs, user_cfg);
+        let params = TaskParams {
+            plugin: Arc::new(plugin),
+            images_dir,
+            output_album_id: task.output_album_id.clone(),
+            config,
         };
 
         Ok(Arc::new(Task::new(
@@ -193,7 +183,7 @@ impl TaskScheduler {
         // 取消顺序不变量：先打 token，再取消下载队列，避免取出 job 后加入 active 的竞态漏过取消。
         run.cancel.cancel();
         self.download_queue.cancel_task_downloads(task_id).await;
-        run.complete_webview(TaskStatus::Canceled, Some("Task canceled".to_string()));
+        run.complete_webview(Err(TaskError::Canceled));
         self.download_queue.capacity_notify.notify_waiters(); // 唤醒被阻塞的 download() 调用，让它们检查取消状态
     }
 
@@ -243,20 +233,15 @@ impl TaskScheduler {
         self.get_run(task_id).map(|run| Arc::clone(&run.page_stack))
     }
 
-    pub async fn complete_webview_task(
-        &self,
-        task_id: &str,
-        status: TaskStatus,
-        error: Option<String>,
-    ) -> bool {
+    pub async fn complete_webview_task(&self, task_id: &str, result: TaskResult) -> bool {
         let Some(run) = self.get_run(task_id) else {
             return false;
         };
-        if status == TaskStatus::Canceled {
+        if matches!(result, Err(TaskError::Canceled)) {
             run.cancel.cancel();
             self.download_queue.cancel_task_downloads(task_id).await;
         }
-        run.complete_webview(status, error)
+        run.complete_webview(result)
     }
 
     #[allow(dead_code)]
@@ -543,7 +528,7 @@ async fn worker_loop(
         let res = run_task(Arc::clone(&download_queue), Arc::clone(&run)).await;
 
         match res {
-            Ok(TaskOutcome::Completed) => {
+            Ok(()) => {
                 let end = now_ms();
                 if run.cancel.is_cancelled() {
                     scheduler.transition(
@@ -567,25 +552,23 @@ async fn worker_loop(
                     );
                 }
             }
-            Ok(TaskOutcome::Terminal(status, error)) => {
+            Err(TaskError::Canceled) => {
                 let end = now_ms();
-                if status == TaskStatus::Canceled {
-                    scheduler
-                        .download_queue
-                        .cancel_task_downloads(&task_id)
-                        .await;
-                }
+                scheduler
+                    .download_queue
+                    .cancel_task_downloads(&task_id)
+                    .await;
                 scheduler.transition(
                     &task_id,
-                    status,
+                    TaskStatus::Canceled,
                     TaskTransition {
                         start_time: None,
                         end_time: Some(end),
-                        error,
+                        error: Some("Task canceled".to_string()),
                     },
                 );
             }
-            Err(e) => {
+            Err(TaskError::Other(e)) => {
                 let end = now_ms();
                 let next = if run.cancel.is_cancelled() {
                     TaskStatus::Canceled
@@ -610,33 +593,28 @@ async fn worker_loop(
     }
 }
 
-#[derive(Debug, Clone)]
-enum TaskOutcome {
-    Completed,
-    Terminal(TaskStatus, Option<String>),
-}
-
-async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> Result<TaskOutcome, String> {
+async fn run_task(_download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskResult {
     GlobalEmitter::global().emit_task_log(
         &run.task_id,
         "info",
         &task_log_i18n(
             "taskLogSchedulerStart",
-            json!({ "pluginId": run.params.plugin_id, "taskId": run.task_id }),
+            json!({ "pluginId": run.params.plugin.id, "taskId": run.task_id }),
         ),
     );
 
-    // 内置本地导入：不运行插件脚本，直接执行内置例程
-    if run.params.plugin_id == "local-import" {
-        crate::crawler::local_import::run_builtin_local_import(Arc::clone(&run)).await?;
-        return Ok(TaskOutcome::Completed);
-    }
+    let plugin = &run.params.plugin;
 
-    let plugin = run
-        .params
-        .plugin
-        .as_ref()
-        .ok_or_else(|| format!("任务 {} 缺少插件参数", run.task_id))?;
+    if plugin.script.is_builtin() {
+        return match plugin.id.as_str() {
+            LOCAL_FOLDER_PLUGIN_ID => {
+                crate::crawler::local_import::run_builtin_local_import(Arc::clone(&run))
+                    .await
+                    .map_err(TaskError::Other)
+            }
+            other => Err(TaskError::Other(format!("未知内建插件: {other}"))),
+        };
+    }
 
     // 从 Plugin 结构读取脚本和变量定义（已在 parse_kgpg 阶段加载到内存）
     #[cfg(not(target_os = "android"))]
@@ -659,9 +637,11 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> Result<
                 page_state: serde_json::Value::Object(serde_json::Map::new()),
             });
         }
-        let completion_rx = run.begin_webview_session()?;
+        let completion_rx = run.begin_webview_session().map_err(TaskError::Other)?;
         let Some(handler) = get_webview_handler() else {
-            return Err("Crawler webview handler is not initialized".to_string());
+            return Err(TaskError::Other(
+                "Crawler webview handler is not initialized".to_string(),
+            ));
         };
 
         let base_url = if run.params.base_url().trim().is_empty() {
@@ -672,12 +652,12 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> Result<
 
         if let Err(e) = handler.create_task_window(&run.task_id, &base_url).await {
             let _ = handler.destroy_task_window(&run.task_id).await;
-            return Err(e);
+            return Err(TaskError::Other(e));
         }
 
         let completion = completion_rx
             .await
-            .map_err(|_| "Crawler task completion channel closed".to_string());
+            .map_err(|_| TaskError::Other("Crawler task completion channel closed".to_string()));
         let destroy_result = handler.destroy_task_window(&run.task_id).await;
         if let Err(e) = destroy_result {
             eprintln!(
@@ -685,12 +665,11 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> Result<
                 run.task_id, e
             );
         }
-        let completion = completion?;
-        return Ok(TaskOutcome::Terminal(completion.status, completion.error));
+        return completion?;
     }
 
     #[cfg(not(feature = "plugin-runtime"))]
-    let _ = &download_queue;
+    let _ = &_download_queue;
 
     // V8 后端：桌面 + Android 均可用（WebView 后端在上方，仅桌面 CEF）。
     #[cfg(feature = "plugin-runtime")]
@@ -704,18 +683,17 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> Result<
                 crate::plugin::v8::execute_crawler_script_v8(run_for_exec)
             })
             .await
-            .map_err(|e| format!("V8 task worker join error: {}", e))?;
+            .map_err(|e| TaskError::Other(format!("V8 task worker join error: {}", e)))?;
 
-            result?;
-            return Ok(TaskOutcome::Completed);
+            return result;
         }
     }
 
     // Rhai 后端已移除：走到这里说明插件没有可执行的 v8/webview 脚本。
-    Err(format!(
+    Err(TaskError::Other(format!(
         "插件 {} 没有提供可执行的爬虫脚本（需要 v8 或 webview 后端）",
         plugin.id
-    ))
+    )))
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -12,6 +12,7 @@
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { FolderOpened, Connection } from "@element-plus/icons-vue";
+import { IS_WEB } from "@kabegame/core/env";
 import OptionPickerDrawer from "@/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@/components/common/OptionPickerDrawer.vue";
 
@@ -32,12 +33,12 @@ const emit = defineEmits<{
 }>();
 
 const sourceOptions = computed<OptionItem[]>(() => [
-  {
+  ...(!IS_WEB ? [{
     id: "local",
     title: t('gallery.local'),
     desc: t('gallery.localDesc'),
     icon: FolderOpened,
-  },
+  }] : []),
   {
     id: "remote",
     title: t('gallery.network'),

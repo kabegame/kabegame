@@ -133,7 +133,7 @@ worker 数量由 `start_download_workers` 与设置缩容逻辑维护。worker l
 - `get_native` / `contains_native`：用于 Requested 复用预登记项和 navigation 拦截。
 - `take_native`：Finished 时移除项并把其后端上下文交给后处理。
 
-下载池容量门控只统计 `native=false` 的项，保持浏览器原生下载不挤占 reqwest worker 并发额度。任务取消以 `Task.cancel: CancellationToken` 为权威；`TaskScheduler::cancel_task` 先打 token，再调用 `DownloadQueue::cancel_task_downloads`，最后完成 WebView completion。下载 worker 从 pending 取出 job 后先检查 token，加入 active 后再复查一次；若第二次发现取消，立即切到 `Canceled` 并释放 active 项，避免 pending -> active 竞态漏过取消。`cancel_task_downloads` 仍负责把下载池项加入协作取消集合、移除 native 项并发送 `Canceled` / `download-removed`。如果浏览器下载之后仍回调 Finished，因为列表中已没有对应 URL，回调会被忽略。
+下载池容量门控只统计 `native=false` 的项，保持浏览器原生下载不挤占 reqwest worker 并发额度。任务取消以 `Task.cancel: CancellationToken` 为权威；`TaskScheduler::cancel_task` 先打 token，再调用 `DownloadQueue::cancel_task_downloads`，最后用 `Err(TaskError::Canceled)` 完成 WebView completion。下载 worker 从 pending 取出 job 后先检查 token，加入 active 后再复查一次；若第二次发现取消，立即切到 `Canceled` 并释放 active 项，避免 pending -> active 竞态漏过取消。`cancel_task_downloads` 仍负责把下载池项加入协作取消集合、移除 native 项并发送 `Canceled` / `download-removed`。如果浏览器下载之后仍回调 Finished，因为列表中已没有对应 URL，回调会被忽略。任务 worker 收到 `TaskError::Canceled` 时统一把 DB error 写为 `"Task canceled"`；`TaskError::Other` 在 token 已取消时仍以取消终态保留原始错误文案。
 
 ---
 
@@ -205,7 +205,7 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 
 Rust 命令语义：
 
-- `crawl_media_begin`：按调用方 label 解析上下文。`crawler-<task_id>` 从 `TaskScheduler::get_run(task_id)` 取 `TaskParams.images_dir/plugin_id/plugin_version/output_album_id`，Referer 从当前 page stack 顶部 URL 派生，并合并任务 header；`surf-{host}` 按 host 现算下载显示用来源与 `surf_record_id`、默认图片目录。随后分配 `download_id`，按每个 stream 的 MIME/name 计算临时文件，创建上传会话，并把 `ActiveDownloadInfo { native: true, state: Preparing, total_bytes, ... }` 登记到 `DownloadQueue`，随后切到 `Downloading`。
+- `crawl_media_begin`：按调用方 label 解析上下文。`crawler-<task_id>` 从 `TaskScheduler::get_run(task_id)` 取 `TaskParams.images_dir/plugin.id/plugin_version/output_album_id`，Referer 从当前 page stack 顶部 URL 派生，并合并任务 header；`surf-{host}` 按 host 现算下载显示用来源与 `surf_record_id`、默认图片目录。随后分配 `download_id`，按每个 stream 的 MIME/name 计算临时文件，创建上传会话，并把 `ActiveDownloadInfo { native: true, state: Preparing, total_bytes, ... }` 登记到 `DownloadQueue`，随后切到 `Downloading`。
 - `crawl_media_chunk`：base64 解码 JS chunk，按 `stream` 索引追加写入对应会话文件，并调用 `report_progress(id, written, total)` 推动任务抽屉进度。
 - `crawl_media_end(success=true)`：关闭会话文件，单流直接后处理，多流桌面先合流成临时单文件，再切到 `Processing` 并用 `PostprocessSource::Path { relocate_to: None }` 进入统一后处理；完成后由后处理切到 `Completed` 或 `Failed`，再 `wait_then_finish_download`。畅游媒体下载成功入库时会同步增加对应 surf 记录下载计数。
 - `crawl_media_end(success=false)` 或任务取消：abort 会话、删除半截文件。任务取消统一在 `DownloadQueue::cancel_task_downloads` 中调用 `media_upload::abort_task_sessions(task_id)`，覆盖用户取消和 `crawl_error` 的取消路径。

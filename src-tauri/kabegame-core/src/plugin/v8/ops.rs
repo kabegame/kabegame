@@ -1,9 +1,9 @@
-use crate::crawler::task_scheduler::{PageStackEntry, Task};
 use crate::crawler::TaskScheduler;
+use crate::crawler::task_scheduler::{PageStackEntry, Task};
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::Storage;
-use deno_core::{op2, OpState};
+use deno_core::{OpState, op2};
 use deno_error::JsErrorBox;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value as JsonValue;
@@ -194,7 +194,7 @@ pub async fn op_kabegame_fetch(
 #[serde]
 pub fn op_kabegame_plugin_data(state: &mut OpState) -> Result<JsonValue, JsErrorBox> {
     let task_id = state.borrow::<KabegameOpState>().task_id.clone();
-    let plugin_id = run_of(&task_id)?.params.plugin_id.clone();
+    let plugin_id = run_of(&task_id)?.params.plugin.id.clone();
     Storage::global()
         .plugin_data()
         .get(&plugin_id)
@@ -213,7 +213,7 @@ pub fn op_kabegame_set_plugin_data(
         ));
     }
     let task_id = state.borrow::<KabegameOpState>().task_id.clone();
-    let plugin_id = run_of(&task_id)?.params.plugin_id.clone();
+    let plugin_id = run_of(&task_id)?.params.plugin.id.clone();
     Storage::global()
         .plugin_data()
         .set(&plugin_id, &value)
@@ -297,12 +297,13 @@ pub async fn op_kabegame_download_image(
     let run = run_of(&task_id)?;
     let download_queue = TaskScheduler::global().download_queue();
     let images_dir = run.params.images_dir.clone();
-    let plugin_id = run.params.plugin_id.clone();
+    let plugin_id = run.params.plugin.id.clone();
     let plugin_version = run.params.plugin_version();
     let output_album_id = run.params.output_album_id.clone();
     let headers = run.headers_snapshot();
 
-    let (custom_name, metadata_id, post_url) = parse_download_opts(opts, &plugin_id, plugin_version)?;
+    let (custom_name, metadata_id, post_url) =
+        parse_download_opts(opts, &plugin_id, plugin_version)?;
     let parsed_url =
         Url::parse(&url).map_err(|e| JsErrorBox::generic(format!("Invalid URL: {e}")))?;
     let download_start_time = now_ms();
@@ -335,7 +336,7 @@ pub fn op_kabegame_create_image_metadata(
     // plugin_version 由应用盖章（图片下载时的插件版本），插件不可传入；旧 opts.version 静默忽略。
     let task_id = state.borrow::<KabegameOpState>().task_id.clone();
     let run = run_of(&task_id)?;
-    let plugin_id = run.params.plugin_id.clone();
+    let plugin_id = run.params.plugin.id.clone();
     let plugin_version = run.params.plugin_version();
     Storage::global()
         .insert_image_metadata_row(&value, &plugin_id, plugin_version)
@@ -473,7 +474,7 @@ fn parse_fetch_init(
         Some(_) => {
             return Err(JsErrorBox::generic(
                 "fetch init.headers must be an object or array of pairs",
-            ))
+            ));
         }
     };
 

@@ -22,7 +22,7 @@
   - 配套：[../src-tauri/kabegame-core/src/providers/schema.json5](../src-tauri/kabegame-core/src/providers/schema.json5) 为语法 schema。
 
 - [provider-dsl/VD_INTEGRATION.md](provider-dsl/VD_INTEGRATION.md)
-  - 主题：VD 作为 Provider DSL 引擎**消费者**的落地方案。涵盖 i18n 路径分发（`i18n-<locale>` 静态层 + 每语言独立 router）、插件维度的 `get_plugin` SQL 函数桥（主机注册的 SQL 函数把 PluginManager 元数据接入 SQL 上下文）、`vd_plugins_router` 与 `plugins_provider` 双层结构、典型路径折叠示例。
+  - 主题：VD 作为 Provider DSL 引擎**消费者**的落地方案。涵盖 i18n 路径分发（`i18n-<locale>` 静态层 + 每语言独立 router）、插件维度的 `get_plugin` SQL 函数桥（主机注册的 SQL 函数把 PluginManager 元数据和按 locale 解析的 `displayName` 接入 SQL 上下文）、`vd_plugins_router` 与 `plugins_provider` 双层结构、典型路径折叠示例。
   - 适用场景：新增 / 修改 VD 维度路径树；接入需要主机协调的非 SQL 数据；理解 i18n 切换、插件装卸的缓存行为。
 
 - [provider-dsl/ALBUM_SUB_TREE.md](provider-dsl/ALBUM_SUB_TREE.md)
@@ -56,7 +56,7 @@
 ## 爬虫（`crawler/`）
 
 - [crawler/CRAWLER_JS_FLOW.md](crawler/CRAWLER_JS_FLOW.md)
-  - 主题：Crawler JS 执行链路与相关模块关系，含提交时冻结 `Task/TaskParams`、每任务独立 WebView 窗口、media_capture/media_download/bootstrap initialization scripts、Task 内 page stack/state/completion、worker await completion、按 `crawler-<task_id>` label 路由命令。
+  - 主题：Crawler JS 执行链路与相关模块关系，含提交时冻结 `Task/TaskParams`、内建 `local-import` 插件化及后端展示元数据、`get_plugins` 追加内建且前端管理列表过滤、web 本地导入入口移除、每任务独立 WebView 窗口、media_capture/media_download/bootstrap initialization scripts、Task 内 page stack/state/`TaskResult` completion、worker await completion、按 `crawler-<task_id>` label 路由命令。
   - 适用场景：调度、注入、抓取流程排查与扩展；排查 JS 任务并发、窗口创建/销毁、IPC 路由、Task 注册表状态、`ctx.downloadImage` 对 blob/data/MSE 的分流、多流上传、DRM 拒绝与桌面合流。
 
 - [crawler/PIXIV_METADATA.md](crawler/PIXIV_METADATA.md)

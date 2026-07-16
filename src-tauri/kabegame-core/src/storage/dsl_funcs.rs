@@ -18,7 +18,7 @@ use rusqlite::Connection;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use crate::plugin::PluginManager;
+use crate::plugin::{PluginManager, manifest_value_display_for_locale};
 
 static GET_PLUGIN_PROFILE_CALLS: AtomicU64 = AtomicU64::new(0);
 static GET_PLUGIN_PROFILE_MICROS: AtomicU64 = AtomicU64::new(0);
@@ -193,10 +193,12 @@ fn get_plugin_json(plugin_id: &str, locale: Option<&str>) -> String {
         }
     };
     let name = resolve_i18n_text(&plugin.name, locale_str);
+    let display_name = manifest_value_display_for_locale(&plugin.name, locale_str);
     let description = resolve_i18n_text(&plugin.description, locale_str);
     serde_json::json!({
         "id": plugin.id,
         "name": name,
+        "displayName": display_name,
         "description": description,
         "baseUrl": plugin.base_url,
     })

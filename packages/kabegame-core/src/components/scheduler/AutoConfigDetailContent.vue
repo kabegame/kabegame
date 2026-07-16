@@ -108,9 +108,7 @@ import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { Grid } from "@element-plus/icons-vue";
 import ScheduleProgressBar from "./ScheduleProgressBar.vue";
 import {
-  LOCAL_IMPORT_PLUGIN_ID,
   buildVarMetaMapFromPluginConfig,
-  localImportVarMetaMap,
   usePluginStore,
 } from "../../stores/plugins";
 import type { PluginVarMeta } from "../../stores/plugins";
@@ -140,20 +138,15 @@ function scrollScheduleIntoView() {
 
 defineExpose({ scrollScheduleIntoView });
 
-const kbAppPublicIcon = `${(import.meta.env.BASE_URL || "/").replace(/\/$/, "")}/icon.png`;
-
 const pluginIconDisplayUrl = computed(() => {
   const id = props.config.pluginId;
   if (!id) return null;
-  if (id === LOCAL_IMPORT_PLUGIN_ID) return kbAppPublicIcon;
-  return pluginStore.pluginIconDataUrl(id) ?? null;
+  return pluginStore.pluginIconSrc(id) ?? null;
 });
 
 const varMetaByPluginId = computed(() => {
   void locale.value;
-  const out: Record<string, Record<string, PluginVarMeta>> = {
-    [LOCAL_IMPORT_PLUGIN_ID]: localImportVarMetaMap((k) => t(k)),
-  };
+  const out: Record<string, Record<string, PluginVarMeta>> = {};
   for (const p of pluginStore.plugins) {
     out[p.id] = buildVarMetaMapFromPluginConfig(p.config);
   }

@@ -15,10 +15,10 @@ use kabegame_core::ipc::ipc::{IpcRequest, IpcResponse};
 use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
+use kabegame_core::storage::Storage;
 #[cfg(not(target_os = "android"))]
 use kabegame_core::storage::organize::OrganizeService;
 use kabegame_core::storage::tasks::{TaskInfo, TaskStatus};
-use kabegame_core::storage::Storage;
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::Arc;
@@ -183,7 +183,7 @@ async fn handle_task_start(task: serde_json::Value) -> IpcResponse {
 async fn handle_task_cancel(task_id: String) -> IpcResponse {
     TaskScheduler::global().cancel_task(&task_id).await;
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-    crate::commands::crawl_exit_with_status(TaskStatus::Canceled, Some(&task_id)).await;
+    crate::commands::crawl_cancel_for_task(&task_id).await;
     IpcResponse::ok("ok")
 }
 

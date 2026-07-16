@@ -693,7 +693,7 @@ function formatMetadataValue(v: unknown): string {
   }
 }
 
-/** 与 TaskSummaryRow 一致：回退用 pluginStore.pluginLabel（含 local-import → tasks.drawerLocalImport） */
+/** 与 TaskSummaryRow 一致：回退用 pluginStore.pluginLabel。 */
 const getPluginName = (pluginId?: string): string => {
   if (!pluginId) return "unknown";
   const plugin = (props.plugins || []).find((p) => p.id === pluginId);
