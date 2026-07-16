@@ -3,13 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-use std::process::Command;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::emitter::GlobalEmitter;
+
+mod migrations;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use dirs;
@@ -239,7 +239,7 @@ impl Settings {
     /// 初始化全局 Settings（必须在首次使用前调用）
     pub fn init_global() -> Result<(), String> {
         let settings_file = Self::get_settings_file();
-        let cells = Self::load_settings_map(&settings_file)?;
+        let (cells, needs_write) = Self::load_settings_map(&settings_file)?;
 
         CELLS
             .set(cells)
@@ -253,6 +253,10 @@ impl Settings {
         SETTINGS
             .set(Settings)
             .map_err(|_| "Settings already initialized".to_string())?;
+
+        if needs_write {
+            Self::write_settings_file_now(&settings_file)?;
+        }
 
         if let Err(e) = Self::normalize_setting_value_now(&settings_file, SettingKey::Language) {
             eprintln!(
@@ -336,15 +340,15 @@ impl Settings {
     }
 
     fn default_wallpaper_rotation_style() -> String {
-        "system".to_string()
+        "fill".to_string()
     }
 
     fn default_wallpaper_rotation_transition() -> String {
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        #[cfg(target_os = "windows")]
         {
             "fade".to_string()
         }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        #[cfg(not(target_os = "windows"))]
         {
             "none".to_string()
         }
@@ -383,137 +387,9 @@ impl Settings {
         }
     }
 
-    /// 获取系统默认的壁纸设置
-    #[cfg(target_os = "windows")]
-    fn get_system_wallpaper_settings() -> (String, String) {
-        let script = r#"
-$regPath = "HKCU:\Control Panel\Desktop";
-$style = (Get-ItemProperty -Path $regPath -Name "WallpaperStyle" -ErrorAction SilentlyContinue).WallpaperStyle;
-$tile = (Get-ItemProperty -Path $regPath -Name "TileWallpaper" -ErrorAction SilentlyContinue).TileWallpaper;
-if ($style -eq $null) { $style = "10" }
-if ($tile -eq $null) { $tile = "0" }
-Write-Output "$style,$tile"
-"#;
-
-        // CREATE_NO_WINDOW:GUI 进程(无控制台)默认会给控制台子进程新建一个窗口,
-        // 首次启动时读系统壁纸设置会闪出一个 PowerShell 窗口。加此标志隐藏之。
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        match Command::new("powershell")
-            .args(["-Command", script])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-        {
-            Ok(output) => {
-                let output_str = String::from_utf8_lossy(&output.stdout);
-                let parts: Vec<&str> = output_str.trim().split(',').collect();
-                if parts.len() >= 2 {
-                    let style_value: u32 = parts[0].trim().parse().unwrap_or(10);
-                    let tile_value: u32 = parts[1].trim().parse().unwrap_or(0);
-
-                    let style = match (style_value, tile_value) {
-                        (0, 1) => "tile",
-                        (0, 0) => "center",
-                        (2, 0) => "stretch",
-                        (6, 0) => "fit",
-                        (10, 0) => "fill",
-                        _ => "fill",
-                    };
-
-                    (style.to_string(), "none".to_string())
-                } else {
-                    ("fill".to_string(), "none".to_string())
-                }
-            }
-            Err(_) => ("fill".to_string(), "none".to_string()),
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn get_system_wallpaper_settings() -> (String, String) {
-        ("system".to_string(), "none".to_string())
-    }
-
-    #[cfg(target_os = "linux")]
-    fn get_system_wallpaper_settings() -> (String, String) {
-        if let Ok(output) = Command::new("gsettings")
-            .args(["get", "org.gnome.desktop.background", "picture-options"])
-            .output()
-        {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            let style = match output_str.trim() {
-                s if s.contains("scaled") => "fit", // 修正：scaled 对应 fit（适应）
-                s if s.contains("zoom") => "fill",  // zoom 对应 fill（填充）
-                s if s.contains("spanned") => "fill", // spanned 对应 fill（多屏横向拼接）
-                s if s.contains("stretched") => "stretch", // stretched 对应 stretch（拉伸）
-                s if s.contains("centered") => "center", // centered 对应 center（居中）
-                s if s.contains("wallpaper") => "tile", // wallpaper 对应 tile（平铺）
-                _ => "fill",
-            };
-            return (style.to_string(), "none".to_string());
-        }
-
-        if let Ok(output) = Command::new("xfconf-query")
-            .args([
-                "-c",
-                "xfce4-desktop",
-                "-p",
-                "/backdrop/screen0/monitor0/image-style",
-            ])
-            .output()
-        {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            let style = match output_str.trim() {
-                "0" => "center",
-                "1" => "tile",
-                "2" => "stretch",
-                "3" => "fit",
-                "4" | "5" => "fill",
-                _ => "fill",
-            };
-            return (style.to_string(), "none".to_string());
-        }
-
-        if let Ok(output) = Command::new("kreadconfig5")
-            .args([
-                "--file",
-                "plasma-org.kde.plasma.desktop-appletsrc",
-                "--group",
-                "Containments",
-                "--group",
-                "1",
-                "--group",
-                "Wallpaper",
-                "--group",
-                "org.kde.image",
-                "--group",
-                "General",
-                "--key",
-                "FillMode",
-            ])
-            .output()
-        {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            let style = match output_str.trim() {
-                "0" => "fit",
-                "1" => "fill",
-                "2" => "stretch",
-                _ => "fill",
-            };
-            return (style.to_string(), "none".to_string());
-        }
-
-        ("fill".to_string(), "none".to_string())
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    fn get_system_wallpaper_settings() -> (String, String) {
-        ("fill".to_string(), "none".to_string())
-    }
-
     fn load_settings_map(
         file: &Path,
-    ) -> Result<HashMap<SettingKey, ArcSwap<SettingValue>>, String> {
+    ) -> Result<(HashMap<SettingKey, ArcSwap<SettingValue>>, bool), String> {
         let mut cells = HashMap::new();
 
         // 初始化所有键的默认值
@@ -554,7 +430,8 @@ Write-Output "$style,$tile"
         ];
 
         // 先读取 JSON（如果存在）
-        let json_value = if file.exists() {
+        let file_exists = file.exists();
+        let mut json_value = if file_exists {
             let mut content =
                 fs::read_to_string(file).map_err(|e| format!("读取设置文件失败！ {}", e))?;
 
@@ -586,6 +463,12 @@ Write-Output "$style,$tile"
             None
         };
 
+        let migrated = if let Some(ref mut json) = json_value {
+            migrations::run_pending(json)?
+        } else {
+            false
+        };
+
         // 创建所有键的值（从 JSON 读取或使用默认值）
         for key in all_keys {
             let value = if let Some(ref json) = json_value {
@@ -596,17 +479,7 @@ Write-Output "$style,$tile"
             cells.insert(key, ArcSwap::new(Arc::new(value)));
         }
 
-        // 如果文件不存在或为空，使用系统默认值覆盖壁纸相关设置
-        if json_value.is_none() {
-            let (style, transition) = Self::get_system_wallpaper_settings();
-            *cells.get_mut(&SettingKey::WallpaperStyle).unwrap() =
-                ArcSwap::new(Arc::new(SettingValue::String(style)));
-            *cells
-                .get_mut(&SettingKey::WallpaperRotationTransition)
-                .unwrap() = ArcSwap::new(Arc::new(SettingValue::String(transition)));
-        }
-
-        Ok(cells)
+        Ok((cells, !file_exists || migrated))
     }
 
     fn get_value_from_json(key: SettingKey, json: &serde_json::Value) -> Option<SettingValue> {
@@ -752,13 +625,23 @@ Write-Output "$style,$tile"
                 .map_err(|e| format!("Failed to create settings directory: {}", e))?;
         }
 
-        let json_val = Self::serialize_to_json()?;
+        let mut json_val = Self::serialize_to_json()?;
+        Self::insert_schema_version(&mut json_val);
         let content = serde_json::to_string_pretty(&json_val)
             .map_err(|e| format!("Failed to serialize settings: {}", e))?;
         let tmp = file.with_extension("json.tmp");
         fs::write(&tmp, content)
             .map_err(|e| format!("Failed to write temp settings file: {}", e))?;
         atomic_replace_file(&tmp, file)
+    }
+
+    fn insert_schema_version(json: &mut serde_json::Value) {
+        if let serde_json::Value::Object(map) = json {
+            map.insert(
+                migrations::VERSION_KEY.to_string(),
+                serde_json::Value::from(migrations::LATEST_VERSION),
+            );
+        }
     }
 
     fn normalize_setting_value_now(
@@ -924,7 +807,8 @@ Write-Output "$style,$tile"
                 }
 
                 // 序列化并写入
-                if let Ok(json_val) = Self::serialize_to_json() {
+                if let Ok(mut json_val) = Self::serialize_to_json() {
+                    Self::insert_schema_version(&mut json_val);
                     if let Ok(content) = serde_json::to_string_pretty(&json_val) {
                         let tmp = file.with_extension("json.tmp");
                         if fs::write(&tmp, content).is_ok() {
@@ -1100,10 +984,15 @@ Write-Output "$style,$tile"
     }
 
     pub fn get_wallpaper_rotation_style(&self) -> String {
-        Self::cells()
+        let style = Self::cells()
             .get(&SettingKey::WallpaperStyle)
             .map(|c| c.load().as_string().unwrap_or_else(|| "fill".to_string()))
-            .unwrap_or_else(|| "fill".to_string())
+            .unwrap_or_else(|| "fill".to_string());
+        if style == "system" {
+            "fill".to_string()
+        } else {
+            style
+        }
     }
 
     pub fn get_wallpaper_rotation_transition(&self) -> String {
@@ -1449,6 +1338,11 @@ Write-Output "$style,$tile"
     }
 
     pub fn set_wallpaper_style(&self, style: String) -> Result<(), String> {
+        let style = if style == "system" {
+            "fill".to_string()
+        } else {
+            style
+        };
         let mode = self.get_wallpaper_mode();
         let cells = Self::cells();
 
@@ -1690,9 +1584,14 @@ Write-Output "$style,$tile"
 
     fn normalize_transition_for_mode(mode: &str, transition: &str) -> String {
         if mode == "native" {
+            #[cfg(target_os = "windows")]
             match transition {
                 "none" | "fade" => transition.to_string(),
                 _ => "none".to_string(),
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                "none".to_string()
             }
         } else {
             transition.to_string()
@@ -1700,6 +1599,7 @@ Write-Output "$style,$tile"
     }
 
     fn normalize_style_for_mode(mode: &str, style: &str) -> String {
+        let style = if style == "system" { "fill" } else { style };
         if mode != "native" {
             return style.to_string();
         }
@@ -1711,7 +1611,7 @@ Write-Output "$style,$tile"
 
         #[cfg(target_os = "macos")]
         {
-            let supported = ["fill", "center"];
+            let supported = ["fill"];
             if supported.contains(&style) {
                 return style.to_string();
             }

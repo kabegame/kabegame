@@ -1,9 +1,9 @@
 //! Images 表相关操作。
 use kabegame_core::ipc::ipc::IpcResponse;
+use kabegame_core::storage::Storage;
 use kabegame_core::storage::image_events::{
     delete_images_with_events, toggle_image_favorite_with_event,
 };
-use kabegame_core::storage::Storage;
 
 pub async fn get_images_count() -> IpcResponse {
     let storage = Storage::global();

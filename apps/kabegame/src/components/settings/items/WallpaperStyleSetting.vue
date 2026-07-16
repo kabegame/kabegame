@@ -24,71 +24,44 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useI18n } from "@kabegame/i18n";
+import { resolveManifestText, useI18n } from "@kabegame/i18n";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
-import { useDesktop } from "@/composables/useDesktop";
+import { IS_ANDROID } from "@kabegame/core/env";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import { useWallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 
 const props = defineProps<{
   disabled?: boolean;
 }>();
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
-type Style = "fill" | "fit" | "stretch" | "center" | "tile" | "system";
-type Opt = { label: string; value: Style; desc: string };
-
-const ALL_STYLES: Style[] = ["fill", "fit", "stretch", "center", "tile"];
-
-const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperStyle");
+const { settingValue, disabled, set } = useSettingKeyState("wallpaperStyle");
 const settingsStore = useSettingsStore();
 const { wallpaperModeSwitching } = useUiStore();
-const { isPlasma } = useDesktop();
-
-const nativeWallpaperStyles = computed<Style[]>(() => {
-  if (IS_WINDOWS) return [...ALL_STYLES];
-  if (IS_MACOS) return [];
-  if (IS_LINUX) return isPlasma.value ? ["fill", "fit", "center", "tile"] : [...ALL_STYLES];
-  if (IS_ANDROID) return ["fill"];
-  return ["fill"];
-});
+const capabilities = useWallpaperCapabilities();
 
 const mode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
 
-const styleOptions = computed<Opt[]>(() => [
-  { label: t("settings.styleFill"), value: "fill", desc: t("settings.styleFillDesc") },
-  { label: t("settings.styleFit"), value: "fit", desc: t("settings.styleFitDesc") },
-  { label: t("settings.styleStretch"), value: "stretch", desc: t("settings.styleStretchDesc") },
-  { label: t("settings.styleCenter"), value: "center", desc: t("settings.styleCenterDesc") },
-  { label: t("settings.styleTile"), value: "tile", desc: t("settings.styleTileDesc") },
-]);
-
-const systemOpt = computed<Opt>(() => ({
-  label: t("settings.styleSystem"),
-  value: "system",
-  desc: t("settings.styleSystemDesc"),
-}));
-
-const options = computed(() => {
-  const list =
-    (mode.value === "window" && (IS_WINDOWS || IS_MACOS)) || mode.value === "plasma-plugin"
-      ? styleOptions.value
-      : styleOptions.value.filter((o) => nativeWallpaperStyles.value.includes(o.value as Style));
-  return [systemOpt.value, ...list];
-});
+const options = computed(() =>
+  capabilities.stylesFor(mode.value).map((opt) => ({
+    value: opt.value,
+    label: resolveManifestText(opt.label, locale.value),
+    desc: resolveManifestText(opt.desc, locale.value),
+  }))
+);
 
 const pickerOptions = computed(() =>
   options.value.map((o) => ({ label: o.label, value: o.value }))
 );
 
-const localValue = ref<string>("system");
+const localValue = ref<string>("fill");
 watch(
   () => settingValue.value,
   (v) => {
-    localValue.value = (v as any as string) || "system";
+    localValue.value = (v as any as string) || "fill";
   },
   { immediate: true }
 );
@@ -98,6 +71,6 @@ const handleChange = async (style: string) => {
 };
 
 const onPickerChange = async (v: string | null) => {
-  await handleChange(v ?? "system");
+  await handleChange(v ?? "fill");
 };
 </script>

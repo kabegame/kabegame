@@ -7,7 +7,7 @@ use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::{
-    driver_service::VirtualDriveServiceTrait, VirtualDriveService,
+    VirtualDriveService, driver_service::VirtualDriveServiceTrait,
 };
 
 /// 处理所有 Settings 相关的 IPC 请求

@@ -576,20 +576,8 @@ impl WallpaperRotator {
                     }
                 };
 
-                let style = match manager.get_style().await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("获取壁纸样式失败: {}", e);
-                        continue;
-                    }
-                };
-                let transition = match manager.get_transition().await {
-                    Ok(t) => t,
-                    Err(e) => {
-                        eprintln!("获取壁纸过渡效果失败: {}", e);
-                        continue;
-                    }
-                };
+                let style = settings.get_wallpaper_rotation_style();
+                let transition = settings.get_wallpaper_rotation_transition();
                 if let Err(e) = manager
                     .set_wallpaper(&wallpaper_path, &style, &transition)
                     .await

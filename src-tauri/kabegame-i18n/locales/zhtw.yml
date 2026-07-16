@@ -11,6 +11,24 @@ common:
 settings:
   title: 設定
   language: 語言
+  styleFill: "填滿"
+  styleFillDesc: "填滿 - 保持寬高比，填滿螢幕"
+  styleFit: "適應"
+  styleFitDesc: "適應 - 保持寬高比，完整顯示"
+  styleStretch: "拉伸"
+  styleStretchDesc: "拉伸 - 拉伸填滿螢幕"
+  styleCenter: "置中"
+  styleCenterDesc: "置中 - 原始大小置中顯示"
+  styleTile: "並排"
+  styleTileDesc: "並排 - 適應縮放後置中並排"
+  transitionNone: "無過渡"
+  transitionFollowSystem: "跟隨系統"
+  transitionFade: "淡入淡出"
+  transitionSlide: "滑動"
+  transitionZoom: "縮放"
+  modeNative: "原生模式"
+  modeWindow: "視窗模式"
+  modePlugin: "插件模式"
 
 tray:
   show: 顯示

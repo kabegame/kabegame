@@ -404,8 +404,9 @@ pub async fn crawl_download_image<R: Runtime>(
     if let Some(page_url) = current_url.filter(|url| !url.trim().is_empty()) {
         request_headers.insert("Referer".to_string(), page_url);
     }
-    let metadata_id =
-        insert_metadata(&run.params.plugin.id, metadata, run.params.plugin_version())?;
+    let metadata_id = metadata
+        .map(|value| run.insert_image_metadata(&value))
+        .transpose()?;
 
     let merged_headers = merge_task_headers(&task_id, Some(request_headers), None)?;
     std::fs::create_dir_all(&images_dir)

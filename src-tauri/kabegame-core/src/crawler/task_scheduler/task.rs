@@ -145,6 +145,26 @@ impl Task {
         self.with_stack_top(|entry| entry.url.clone())
     }
 
+    /// 页面栈顶当前 HTML（V8 `Kabegame.currentHtml()`）。
+    pub fn current_page_html(&self) -> Option<String> {
+        self.with_stack_top(|entry| entry.html.clone())
+    }
+
+    /// 页面栈顶最后一次响应头（V8 `Kabegame.currentHeaders()`）。
+    pub fn current_page_headers(&self) -> Option<HashMap<String, String>> {
+        self.with_stack_top(|entry| entry.headers.clone())
+    }
+
+    /// 写入一行图片 metadata。plugin_id 与 packed 版本由本任务参数盖章
+    /// （应用维护，插件不可传入）；WebView `downloadImage` 与 V8 ops 共用此入口。
+    pub fn insert_image_metadata(&self, value: &Value) -> Result<i64, String> {
+        Storage::global().insert_image_metadata_row(
+            value,
+            &self.params.plugin.id,
+            self.params.plugin_version(),
+        )
+    }
+
     pub fn with_stack_top<T>(
         &self,
         f: impl FnOnce(&crate::crawler::task_scheduler::PageStackEntry) -> T,

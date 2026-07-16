@@ -1,6 +1,7 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 const DEFAULT_LANGUAGE: &str = "en";
+pub const SUPPORTED_LOCALES: &[&str] = &["en", "zh", "ja", "ko", "zhtw"];
 
 #[inline]
 fn locale_alias(locale: &str) -> Option<&'static str> {
@@ -71,6 +72,12 @@ pub fn set_locale(language: &str) {
 #[inline]
 pub fn translate(key: &str) -> String {
     rust_i18n::t!(key).to_string()
+}
+
+#[inline]
+pub fn translate_for_locale(key: &str, locale: &str) -> String {
+    let lang = resolve_supported_language(locale).unwrap_or(DEFAULT_LANGUAGE);
+    rust_i18n::t!(key, locale = lang).to_string()
 }
 
 /// 与 `UnifiedRootProvider` / `VfsSemantics` 的 `vd/{locale}` 段一致（zh/en/ja/ko/zhtw）。

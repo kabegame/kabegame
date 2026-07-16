@@ -2,7 +2,7 @@
 //! 而非 org.kde.plasmashell 原生接口。支持视频壁纸和过渡效果。
 
 use super::plasma_qdbus;
-use super::WallpaperManager;
+use super::{style_options, transition_options, WallpaperManager, WallpaperOption};
 use async_trait::async_trait;
 use kabegame_core::settings::Settings;
 use tauri::{AppHandle, Runtime};
@@ -58,12 +58,15 @@ impl PlasmaPluginWallpaperManager {
 
 #[async_trait]
 impl WallpaperManager for PlasmaPluginWallpaperManager {
-    async fn get_style(&self) -> Result<String, String> {
-        Ok(Settings::global().get_wallpaper_rotation_style())
+    fn supported_styles(&self) -> Vec<WallpaperOption> {
+        style_options(&["fill", "fit", "stretch", "center", "tile"])
     }
 
-    async fn get_transition(&self) -> Result<String, String> {
-        Ok(Settings::global().get_wallpaper_rotation_transition())
+    fn supported_transitions(&self) -> Vec<WallpaperOption> {
+        transition_options(
+            &["none", "fade", "slide", "zoom"],
+            "settings.transitionNone",
+        )
     }
 
     async fn set_style(&self, style: &str) -> Result<(), String> {
@@ -86,10 +89,6 @@ impl WallpaperManager for PlasmaPluginWallpaperManager {
 
     fn cleanup(&self) -> Result<(), String> {
         Self::switch_to_org_kde_image()
-    }
-
-    fn refresh_desktop(&self) -> Result<(), String> {
-        Ok(())
     }
 
     fn init(&self) -> Result<(), String> {

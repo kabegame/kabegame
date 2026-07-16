@@ -87,13 +87,19 @@ pub async fn op_kabegame_back(state: Rc<RefCell<OpState>>) -> Result<(), JsError
 #[op2]
 #[string]
 pub async fn op_kabegame_current_url(state: Rc<RefCell<OpState>>) -> Result<String, JsErrorBox> {
-    current_page_value_async(state, |entry| entry.url.clone()).await
+    let task_id = state_snapshot(&state, |s| s.task_id.clone());
+    run_of(&task_id)?
+        .current_page_url()
+        .ok_or_else(|| JsErrorBox::generic("Page stack is empty"))
 }
 
 #[op2]
 #[string]
 pub async fn op_kabegame_current_html(state: Rc<RefCell<OpState>>) -> Result<String, JsErrorBox> {
-    current_page_value_async(state, |entry| entry.html.clone()).await
+    let task_id = state_snapshot(&state, |s| s.task_id.clone());
+    run_of(&task_id)?
+        .current_page_html()
+        .ok_or_else(|| JsErrorBox::generic("Page stack is empty"))
 }
 
 #[op2]
@@ -101,7 +107,10 @@ pub async fn op_kabegame_current_html(state: Rc<RefCell<OpState>>) -> Result<Str
 pub async fn op_kabegame_current_headers(
     state: Rc<RefCell<OpState>>,
 ) -> Result<HashMap<String, String>, JsErrorBox> {
-    current_page_value_async(state, |entry| entry.headers.clone()).await
+    let task_id = state_snapshot(&state, |s| s.task_id.clone());
+    run_of(&task_id)?
+        .current_page_headers()
+        .ok_or_else(|| JsErrorBox::generic("Page stack is empty"))
 }
 
 /// Host-backed `fetch` result. Constructed into a native `Response` in the
@@ -298,12 +307,10 @@ pub async fn op_kabegame_download_image(
     let download_queue = TaskScheduler::global().download_queue();
     let images_dir = run.params.images_dir.clone();
     let plugin_id = run.params.plugin.id.clone();
-    let plugin_version = run.params.plugin_version();
     let output_album_id = run.params.output_album_id.clone();
     let headers = run.headers_snapshot();
 
-    let (custom_name, metadata_id, post_url) =
-        parse_download_opts(opts, &plugin_id, plugin_version)?;
+    let (custom_name, metadata_id, post_url) = parse_download_opts(opts, &run)?;
     let parsed_url =
         Url::parse(&url).map_err(|e| JsErrorBox::generic(format!("Invalid URL: {e}")))?;
     let download_start_time = now_ms();
@@ -335,11 +342,8 @@ pub fn op_kabegame_create_image_metadata(
 ) -> Result<i64, JsErrorBox> {
     // plugin_version 由应用盖章（图片下载时的插件版本），插件不可传入；旧 opts.version 静默忽略。
     let task_id = state.borrow::<KabegameOpState>().task_id.clone();
-    let run = run_of(&task_id)?;
-    let plugin_id = run.params.plugin.id.clone();
-    let plugin_version = run.params.plugin_version();
-    Storage::global()
-        .insert_image_metadata_row(&value, &plugin_id, plugin_version)
+    run_of(&task_id)?
+        .insert_image_metadata(&value)
         .map_err(|e| JsErrorBox::generic(format!("create_image_metadata: {e}")))
 }
 
@@ -368,21 +372,6 @@ fn get_page_stack(task_id: &str) -> Result<crate::crawler::task_scheduler::PageS
         .ok_or_else(|| JsErrorBox::generic(format!("Page stack not found for task {task_id}")))
 }
 
-async fn current_page_value_async<T>(
-    state: Rc<RefCell<OpState>>,
-    f: impl FnOnce(&PageStackEntry) -> T,
-) -> Result<T, JsErrorBox> {
-    let task_id = state_snapshot(&state, |s| s.task_id.clone());
-    let stack = get_page_stack(&task_id)?;
-    let stack_guard = stack
-        .lock()
-        .map_err(|e| JsErrorBox::generic(format!("Lock error: {e}")))?;
-    let entry = stack_guard
-        .last()
-        .ok_or_else(|| JsErrorBox::generic("Page stack is empty"))?;
-    Ok(f(entry))
-}
-
 async fn resolve_url_for_task_async(task_id: &str, url: &str) -> Result<String, JsErrorBox> {
     if url.starts_with("http://") || url.starts_with("https://") {
         return Ok(url.to_string());
@@ -407,8 +396,7 @@ async fn resolve_url_for_task_async(task_id: &str, url: &str) -> Result<String, 
 
 fn parse_download_opts(
     opts: Option<JsonValue>,
-    plugin_id: &str,
-    plugin_version: u32,
+    run: &Task,
 ) -> Result<(Option<String>, Option<i64>, Option<String>), JsErrorBox> {
     let Some(opts) = opts else {
         return Ok((None, None, None));
@@ -425,11 +413,7 @@ fn parse_download_opts(
     let metadata_id = if let Some(id) = metadata_id {
         Some(id)
     } else if let Some(value) = metadata {
-        Some(
-            Storage::global()
-                .insert_image_metadata_row(&value, plugin_id, plugin_version)
-                .map_err(JsErrorBox::generic)?,
-        )
+        Some(run.insert_image_metadata(&value).map_err(JsErrorBox::generic)?)
     } else {
         None
     };

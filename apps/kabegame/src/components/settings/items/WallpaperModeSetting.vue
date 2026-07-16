@@ -1,29 +1,34 @@
 <template>
-    <el-radio-group v-model="localValue" :disabled="switching" class="wallpaper-mode-radio-group"
+    <el-radio-group v-model="localValue" :disabled="switching" class="flex flex-col items-start gap-3"
         @change="handleChange">
-        <el-radio value="native">{{ t('settings.modeNative') }}</el-radio>
-        <el-radio v-if="isPlasmaPluginAvailable" value="plasma-plugin">{{ t('settings.modePlugin') }}</el-radio>
-        <el-radio v-if="IS_WINDOWS || IS_MACOS" value="window">{{ t('settings.modeWindow') }}</el-radio>
+        <el-radio v-for="mode in modeOptions" :key="mode.value" :value="mode.value">
+            {{ mode.label }}
+        </el-radio>
     </el-radio-group>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useI18n } from "@kabegame/i18n";
+import { resolveManifestText, useI18n } from "@kabegame/i18n";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
-import { IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
-import { useDesktop } from "@/composables/useDesktop";
+import { useWallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
 
-const { t } = useI18n();
-const { isPlasmaPluginAvailable } = useDesktop();
+const { t, locale } = useI18n();
+const capabilities = useWallpaperCapabilities();
 
-const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperMode");
+const { settingValue, disabled, set } = useSettingKeyState("wallpaperMode");
 const uiStore = useUiStore();
 
-const switching = computed(() => uiStore.wallpaperModeSwitching === true);
+const switching = computed(() => uiStore.wallpaperModeSwitching === true || disabled.value);
+const modeOptions = computed(() =>
+    capabilities.modes.value.map((mode) => ({
+        value: mode.value,
+        label: resolveManifestText(mode.label, locale.value),
+    }))
+);
 
 const localValue = ref<string>("native");
 watch(
@@ -89,12 +94,3 @@ const handleChange = async (mode: string) => {
     }
 };
 </script>
-
-<style scoped lang="scss">
-.wallpaper-mode-radio-group {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-}
-</style>

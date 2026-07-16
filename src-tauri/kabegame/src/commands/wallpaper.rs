@@ -1,6 +1,6 @@
 // 壁纸相关命令和函数
 
-use crate::wallpaper::manager::WallpaperController;
+use crate::wallpaper::manager::{WallpaperCapabilities, WallpaperController};
 use crate::wallpaper::rotator::pick_random_gallery_wallpaper;
 use crate::wallpaper::WallpaperRotator;
 use kabegame_core::emitter::GlobalEmitter;
@@ -105,6 +105,11 @@ pub fn get_current_wallpaper_image_id() -> Option<String> {
 #[tauri::command]
 pub fn clear_current_wallpaper_image_id() -> Result<(), String> {
     Settings::global().set_current_wallpaper_image_id(None)
+}
+
+#[tauri::command]
+pub fn get_wallpaper_capabilities() -> Result<WallpaperCapabilities, String> {
+    Ok(WallpaperController::global().capabilities())
 }
 
 #[tauri::command]

@@ -13,6 +13,7 @@ pub use plasma_plugin::PlasmaPluginWallpaperManager;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub use window::WindowWallpaperManager;
 
+use std::collections::HashMap;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
@@ -21,6 +22,87 @@ use tauri::{AppHandle, Runtime};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::wallpaper::window::WallpaperWindow;
 use kabegame_core::settings::Settings;
+use serde_json::{json, Map, Value};
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WallpaperOption {
+    pub value: String,
+    pub label: Value,
+    pub desc: Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WallpaperCapabilities {
+    pub modes: Vec<WallpaperOption>,
+    pub styles: HashMap<String, Vec<WallpaperOption>>,
+    pub transitions: HashMap<String, Vec<WallpaperOption>>,
+}
+
+pub(super) fn i18n_map(key: &str) -> Value {
+    let mut map = Map::new();
+    map.insert(
+        "default".into(),
+        Value::from(kabegame_i18n::translate_for_locale(key, "en")),
+    );
+    for locale in kabegame_i18n::SUPPORTED_LOCALES {
+        map.insert(
+            (*locale).into(),
+            Value::from(kabegame_i18n::translate_for_locale(key, locale)),
+        );
+    }
+    Value::Object(map)
+}
+
+pub(super) fn wallpaper_option(
+    value: &str,
+    label_key: &str,
+    desc_key: Option<&str>,
+) -> WallpaperOption {
+    WallpaperOption {
+        value: value.to_string(),
+        label: i18n_map(label_key),
+        desc: desc_key.map(i18n_map).unwrap_or_else(|| json!({})),
+    }
+}
+
+pub(super) fn style_options(values: &[&str]) -> Vec<WallpaperOption> {
+    values
+        .iter()
+        .map(|value| {
+            let suffix = match *value {
+                "fill" => "Fill",
+                "fit" => "Fit",
+                "stretch" => "Stretch",
+                "center" => "Center",
+                "tile" => "Tile",
+                _ => "Fill",
+            };
+            wallpaper_option(
+                value,
+                &format!("settings.style{}", suffix),
+                Some(&format!("settings.style{}Desc", suffix)),
+            )
+        })
+        .collect()
+}
+
+pub(super) fn transition_options(values: &[&str], none_label_key: &str) -> Vec<WallpaperOption> {
+    values
+        .iter()
+        .map(|value| {
+            let label_key = match *value {
+                "none" => none_label_key,
+                "fade" => "settings.transitionFade",
+                "slide" => "settings.transitionSlide",
+                "zoom" => "settings.transitionZoom",
+                _ => none_label_key,
+            };
+            wallpaper_option(value, label_key, None)
+        })
+        .collect()
+}
 
 /// 全局壁纸控制器（基础 manager）：负责根据当前 `wallpaper_mode` 选择后端（native/window/plasma-plugin），并保留 window 模式的运行状态。
 ///
@@ -102,6 +184,36 @@ impl WallpaperController {
         }
     }
 
+    pub fn capabilities(&self) -> WallpaperCapabilities {
+        let mut modes = vec![wallpaper_option("native", "settings.modeNative", None)];
+
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        modes.push(wallpaper_option("window", "settings.modeWindow", None));
+
+        #[cfg(target_os = "linux")]
+        if plasma_qdbus::is_kabegame_plasma_plugin_installed() {
+            modes.push(wallpaper_option(
+                "plasma-plugin",
+                "settings.modePlugin",
+                None,
+            ));
+        }
+
+        let mut styles = HashMap::new();
+        let mut transitions = HashMap::new();
+        for mode in &modes {
+            let manager = self.manager_for_mode(&mode.value);
+            styles.insert(mode.value.clone(), manager.supported_styles());
+            transitions.insert(mode.value.clone(), manager.supported_transitions());
+        }
+
+        WallpaperCapabilities {
+            modes,
+            styles,
+            transitions,
+        }
+    }
+
     /// 单张壁纸设置：只应用 `file_path + style`，不涉及 transition（用于适配"非轮播/单张"场景）。
     pub async fn set_wallpaper(&self, file_path: &str, style: &str) -> Result<(), String> {
         let manager = self.active_manager().await?;
@@ -135,23 +247,9 @@ use async_trait::async_trait;
 /// 壁纸管理器 trait，定义壁纸设置的通用接口
 #[async_trait]
 pub trait WallpaperManager: Send + Sync {
-    ///
-    /// # Returns
-    /// * `String` - 当前样式
-    ///
-    /// # Errors
-    /// * `String` - 错误信息
-    #[allow(dead_code)]
-    async fn get_style(&self) -> Result<String, String>;
+    fn supported_styles(&self) -> Vec<WallpaperOption>;
 
-    ///
-    /// # Returns
-    /// * `String` - 当前过渡效果
-    ///
-    /// # Errors
-    /// * `String` - 错误信息
-    #[allow(dead_code)]
-    async fn get_transition(&self) -> Result<String, String>;
+    fn supported_transitions(&self) -> Vec<WallpaperOption>;
 
     /// 更新壁纸样式，立即生效
     ///
@@ -192,13 +290,6 @@ pub trait WallpaperManager: Send + Sync {
     /// 清理资源（如关闭窗口等）
     #[allow(dead_code)]
     fn cleanup(&self) -> Result<(), String>;
-
-    /// 手动刷新桌面以同步壁纸设置
-    ///
-    /// 当 set_wallpaper_path 未刷新桌面时，
-    /// 可以调用此方法来手动触发桌面刷新，使壁纸设置生效
-    #[allow(dead_code)]
-    fn refresh_desktop(&self) -> Result<(), String>;
 
     /// 初始化管理器（如创建窗口等）
     ///

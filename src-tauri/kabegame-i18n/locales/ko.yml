@@ -11,6 +11,24 @@ common:
 settings:
   title: 설정
   language: 언어
+  styleFill: "채우기"
+  styleFillDesc: "채우기 - 비율 유지, 잘릴 수 있음"
+  styleFit: "맞춤"
+  styleFitDesc: "맞춤 - 비율 유지, 전체 표시"
+  styleStretch: "늘리기"
+  styleStretchDesc: "늘리기 - 왜곡될 수 있음"
+  styleCenter: "중앙"
+  styleCenterDesc: "중앙 - 원본 크기"
+  styleTile: "바둑판"
+  styleTileDesc: "바둑판 - 맞춤 크기, 중앙 반복"
+  transitionNone: "없음"
+  transitionFollowSystem: "시스템 따름"
+  transitionFade: "페이드"
+  transitionSlide: "슬라이드"
+  transitionZoom: "확대"
+  modeNative: "네이티브 모드"
+  modeWindow: "창 모드"
+  modePlugin: "플러그인 모드"
 
 tray:
   show: 표시

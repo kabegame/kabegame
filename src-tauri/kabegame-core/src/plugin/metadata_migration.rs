@@ -1,6 +1,4 @@
-use deno_core::{
-    resolve_url, serde_v8, v8, JsRuntime, PollEventLoopOptions, RuntimeOptions,
-};
+use deno_core::{JsRuntime, PollEventLoopOptions, RuntimeOptions, resolve_url, serde_v8, v8};
 
 use super::Plugin;
 use crate::emitter::GlobalEmitter;
@@ -51,9 +49,9 @@ pub fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, Strin
         for (row_id, data, _row_version) in rows {
             match engine.call_migrate(&func, data).await {
                 Ok(migrated) => {
-                    if Storage::global().writeback_migrated_metadata_row(
-                        row_id, &plugin_id, target, &migrated,
-                    )? {
+                    if Storage::global()
+                        .writeback_migrated_metadata_row(row_id, &plugin_id, target, &migrated)?
+                    {
                         changed = true;
                     }
                 }
@@ -135,8 +133,8 @@ impl MigrationEngine {
             .map_err(|e| e.to_string())?;
         deno_core::scope!(scope, &mut self.runtime);
         let ns = v8::Local::new(scope, namespace);
-        let key = v8::String::new(scope, "migrate")
-            .ok_or_else(|| "无法分配 `migrate` 键".to_string())?;
+        let key =
+            v8::String::new(scope, "migrate").ok_or_else(|| "无法分配 `migrate` 键".to_string())?;
         let value = ns
             .get(scope, key.into())
             .ok_or_else(|| "迁移脚本缺少 `migrate` 导出".to_string())?;
@@ -232,9 +230,8 @@ export function migrate(input) {
         assert_eq!(value["title"], "old");
 
         let current = r#"{"schema":2,"title":"new"}"#.to_string();
-        let passthrough =
-            run_blocking(move || test_metadata_migration(current.clone(), script2))
-                .expect("current input should pass through");
+        let passthrough = run_blocking(move || test_metadata_migration(current.clone(), script2))
+            .expect("current input should pass through");
         assert_eq!(passthrough, r#"{"schema":2,"title":"new"}"#);
     }
 

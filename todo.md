@@ -91,3 +91,4 @@
 - [ ] 脚本化爬取流程，自动爬取用脚本化爬取代替
 
 ## stash
+- 精简WallpaperManager类型

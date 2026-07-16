@@ -131,6 +131,7 @@ commands.allow = [
   "set_wallpaper_by_image_id",
   "get_current_wallpaper_image_id",
   "clear_current_wallpaper_image_id",
+  "get_wallpaper_capabilities",
   "get_current_wallpaper_path",
   "set_wallpaper_rotation_enabled",
   "get_wallpaper_rotation_enabled",

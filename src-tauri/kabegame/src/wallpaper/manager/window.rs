@@ -1,4 +1,4 @@
-use super::WallpaperManager;
+use super::{style_options, transition_options, WallpaperManager, WallpaperOption};
 use crate::wallpaper::window::WallpaperWindow;
 use async_trait::async_trait;
 use kabegame_i18n::t;
@@ -80,12 +80,15 @@ impl<R: Runtime> WindowWallpaperManager<R> {
 
 #[async_trait]
 impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
-    async fn get_style(&self) -> Result<String, String> {
-        Ok(kabegame_core::settings::Settings::global().get_wallpaper_rotation_style())
+    fn supported_styles(&self) -> Vec<WallpaperOption> {
+        style_options(&["fill", "fit", "stretch", "center", "tile"])
     }
 
-    async fn get_transition(&self) -> Result<String, String> {
-        Ok(kabegame_core::settings::Settings::global().get_wallpaper_rotation_transition())
+    fn supported_transitions(&self) -> Vec<WallpaperOption> {
+        transition_options(
+            &["none", "fade", "slide", "zoom"],
+            "settings.transitionNone",
+        )
     }
 
     async fn set_wallpaper_path(&self, _file_path: &str) -> Result<(), String> {
@@ -125,11 +128,6 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
         // ready 是进程级静态，必须随窗口一起重置，否则下次重建时 wait_ready 会
         // 立刻返回，挂载会打在一个前端尚未加载的新窗口上。
         WallpaperWindow::<R>::reset_ready();
-        Ok(())
-    }
-
-    fn refresh_desktop(&self) -> Result<(), String> {
-        // 窗口模式不刷新系统桌面：壁纸由本窗口自己画。
         Ok(())
     }
 

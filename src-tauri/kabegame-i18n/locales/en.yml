@@ -11,6 +11,24 @@ common:
 settings:
   title: Settings
   language: Language
+  styleFill: "Fill"
+  styleFillDesc: "Fill - keep ratio, may crop"
+  styleFit: "Fit"
+  styleFitDesc: "Fit - keep ratio, full display"
+  styleStretch: "Stretch"
+  styleStretchDesc: "Stretch - may distort"
+  styleCenter: "Center"
+  styleCenterDesc: "Center - original size"
+  styleTile: "Tile"
+  styleTileDesc: "Tile - fit-scaled, centered repeat"
+  transitionNone: "None"
+  transitionFollowSystem: "Follow system"
+  transitionFade: "Fade"
+  transitionSlide: "Slide"
+  transitionZoom: "Zoom"
+  modeNative: "Native mode"
+  modeWindow: "Window mode"
+  modePlugin: "Plugin mode"
 
 tray:
   show: Show

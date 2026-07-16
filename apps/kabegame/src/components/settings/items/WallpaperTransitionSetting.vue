@@ -22,49 +22,36 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { useI18n } from "@kabegame/i18n";
+import { resolveManifestText, useI18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_ANDROID, IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
+import { IS_ANDROID } from "@kabegame/core/env";
+import { useWallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 
 const props = defineProps<{
   disabled?: boolean;
 }>();
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
-type Transition = "none" | "fade" | "slide" | "zoom";
-type Opt = { label: string; value: Transition };
-
-const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperRotationTransition");
+const { settingValue, disabled, set } = useSettingKeyState("wallpaperRotationTransition");
 const { wallpaperModeSwitching } = useUiStore();
 const settingsStore = useSettingsStore();
+const capabilities = useWallpaperCapabilities();
 
 const mode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
 const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 
-const options = computed<Opt[]>(() => {
-  if (mode.value === "native") {
-    return [
-      { label: t("settings.transitionFollowSystem"), value: "none" },
-    ];
-  } else if ((mode.value === "window" && (IS_WINDOWS || IS_MACOS)) || mode.value === "plasma-plugin") {
-    return [
-      { label: t("settings.transitionNone"), value: "none" },
-      { label: t("settings.transitionFade"), value: "fade" },
-      { label: t("settings.transitionSlide"), value: "slide" },
-      { label: t("settings.transitionZoom"), value: "zoom" },
-    ];
-  } else {
-    return [
-      { label: t("settings.transitionNotImplemented"), value: "none" }
-    ];
-  }
-});
+const options = computed(() =>
+  capabilities.transitionsFor(mode.value).map((opt) => ({
+    value: opt.value,
+    label: resolveManifestText(opt.label, locale.value),
+  }))
+);
 
 const localValue = ref<string>("none");
 watch(
@@ -76,17 +63,18 @@ watch(
 );
 
 onMounted(async () => {
-  // 若当前值在 native 模式不可用，做一次本地纠正（保持旧逻辑一致）
-  if (mode.value === "native") {
-    const unsupported = ["slide", "zoom"];
-    const cur = (settingValue.value as any as string) || "none";
-    if (unsupported.includes(cur)) {
-      settingsStore.values.wallpaperRotationTransition = "none" as any;
-      localValue.value = "none";
-      if (rotationEnabled.value) {
-        try {
-          await invoke("set_wallpaper_rotation_transition", { transition: "none" });
-        } catch { }
+  await capabilities.load();
+  const cur = (settingValue.value as any as string) || "none";
+  const values = options.value.map((opt) => opt.value);
+  if (values.length > 0 && !values.includes(cur)) {
+    const fallback = values[0] ?? "none";
+    settingsStore.values.wallpaperRotationTransition = fallback as any;
+    localValue.value = fallback;
+    if (rotationEnabled.value) {
+      try {
+        await invoke("set_wallpaper_rotation_transition", { transition: fallback });
+      } catch {
+        // 后端纠正失败时保留本地回退，等待下一次设置同步。
       }
     }
   }

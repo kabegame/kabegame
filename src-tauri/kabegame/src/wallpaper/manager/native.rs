@@ -1,4 +1,4 @@
-use super::WallpaperManager;
+use super::{style_options, transition_options, WallpaperManager, WallpaperOption};
 use async_trait::async_trait;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
@@ -124,19 +124,6 @@ end tell"#,
         }
     }
 
-    #[cfg(target_os = "linux")]
-    fn plasma_fill_mode_to_style(fill_mode: &str) -> &'static str {
-        // 将 Plasma FillMode 字符串映射回 style 字符串
-        match fill_mode.trim() {
-            "0" => "stretch",
-            "1" => "center",
-            "2" => "fill",
-            "3" => "tile",
-            "5" => "fit",
-            _ => "fill", // 默认填充
-        }
-    }
-
     /// 将应用内部的 style 字符串映射到 GNOME picture-options
     #[cfg(target_os = "linux")]
     fn style_to_gnome_picture_options(style: &str) -> &'static str {
@@ -155,39 +142,6 @@ end tell"#,
             "tile" => "wallpaper",
             _ => "zoom", // 默认填充
         }
-    }
-
-    /// 从 GNOME picture-options 读取当前样式
-    #[cfg(target_os = "linux")]
-    fn get_wallpaper_gnome_picture_options(&self) -> Result<String, String> {
-        use std::process::Command;
-
-        let output = Command::new("gsettings")
-            .args(["get", "org.gnome.desktop.background", "picture-options"])
-            .output()
-            .map_err(|e| format!("执行 `gsettings` 失败：{}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!(
-                "`gsettings get picture-options` 失败 (code={:?})。\nstderr: {}",
-                output.status.code(),
-                stderr.trim()
-            ));
-        }
-
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        let style = match output_str.trim() {
-            s if s.contains("scaled") => "fit",
-            s if s.contains("zoom") => "fill",
-            s if s.contains("spanned") => "fill",
-            s if s.contains("stretched") => "stretch",
-            s if s.contains("centered") => "center",
-            s if s.contains("wallpaper") => "tile",
-            _ => "fill", // 默认填充
-        };
-
-        Ok(style.to_string())
     }
 
     /// 通过 gsettings 设置 GNOME 壁纸
@@ -280,39 +234,8 @@ end tell"#,
     }
 
     #[cfg(target_os = "linux")]
-    fn run_qdbus_evaluate_script_with_output(script: &str) -> Result<String, String> {
-        super::plasma_qdbus::run_qdbus_evaluate_script_with_output(script)
-    }
-
-    #[cfg(target_os = "linux")]
     fn run_qdbus_evaluate_script(script: &str) -> Result<(), String> {
         super::plasma_qdbus::run_qdbus_evaluate_script(script)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn get_wallpaper_plasma_fill_mode(&self) -> Result<String, String> {
-        // 通过 qdbus evaluateScript 读取第一个桌面的 FillMode
-        let script = r#"
-            var allDesktops = desktops();
-            if (allDesktops.length > 0) {
-                var d = allDesktops[0];
-                d.currentConfigGroup = ['Wallpaper', 'org.kde.image', 'General'];
-                print(d.readConfig('FillMode'));
-            } else {
-                print('2'); // 默认 fill
-            }
-        "#;
-
-        // 复用 run_qdbus_evaluate_script_with_output 读取输出
-        let stdout = Self::run_qdbus_evaluate_script_with_output(script)?;
-        let fill_mode = stdout.trim();
-
-        // 如果输出为空或不是预期的数字，返回默认值
-        if fill_mode.is_empty() {
-            Ok("2".to_string()) // 默认 fill
-        } else {
-            Ok(fill_mode.to_string())
-        }
     }
 
     #[cfg(target_os = "linux")]
@@ -412,124 +335,51 @@ for (var i=0; i<allDesktops.length; i++) {{\n\
 
 #[async_trait]
 impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
-    // 从注册表读取当前壁纸样式（Windows）
     #[cfg(target_os = "windows")]
-    async fn get_style(&self) -> Result<String, String> {
-        // 优化：直接使用 winreg crate 读取注册表，而不是通过 PowerShell
-        use winreg::enums::*;
-        use winreg::RegKey;
-
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let desktop_key = hkcu
-            .open_subkey("Control Panel\\Desktop")
-            .map_err(|e| format!("无法打开注册表键: {}", e))?;
-
-        // 读取 WallpaperStyle 和 TileWallpaper
-        let style_value: String = desktop_key
-            .get_value("WallpaperStyle")
-            .unwrap_or_else(|_| "10".to_string()); // 默认 fill
-        let tile_value: String = desktop_key
-            .get_value("TileWallpaper")
-            .unwrap_or_else(|_| "0".to_string()); // 默认不平铺
-
-        // 将注册表值映射回样式字符串
-        let style = match (style_value.as_str(), tile_value.as_str()) {
-            ("0", "0") => "center",
-            ("0", "1") => "tile",
-            ("2", "0") => "stretch",
-            ("6", "0") => "fit",
-            ("10", "0") => "fill",
-            _ => "fill", // 默认填充
-        };
-
-        Ok(style.to_string())
+    fn supported_styles(&self) -> Vec<WallpaperOption> {
+        style_options(&["fill", "fit", "stretch", "center", "tile"])
     }
 
-    // Linux：根据运行时桌面环境选择实现，失败回退
     #[cfg(target_os = "linux")]
-    async fn get_style(&self) -> Result<String, String> {
+    fn supported_styles(&self) -> Vec<WallpaperOption> {
         use crate::linux_desktop::{linux_desktop, LinuxDesktop};
 
-        let desktop = linux_desktop();
-        match desktop {
-            LinuxDesktop::Plasma => match self.get_wallpaper_plasma_fill_mode() {
-                Ok(fill_mode) => Ok(Self::plasma_fill_mode_to_style(&fill_mode).to_string()),
-                Err(e) => {
-                    eprintln!(
-                        "[WARN] 无法读取 Plasma FillMode: {}，尝试 GNOME picture-options",
-                        e
-                    );
-                    match self.get_wallpaper_gnome_picture_options() {
-                        Ok(style) => Ok(style),
-                        Err(e2) => {
-                            eprintln!(
-                                "[WARN] 无法读取 GNOME picture-options: {}，返回默认值 fill",
-                                e2
-                            );
-                            Ok("fill".to_string())
-                        }
-                    }
-                }
-            },
-            LinuxDesktop::Gnome => match self.get_wallpaper_gnome_picture_options() {
-                Ok(style) => Ok(style),
-                Err(e) => {
-                    eprintln!(
-                        "[WARN] 无法读取 GNOME picture-options: {}，尝试 Plasma FillMode",
-                        e
-                    );
-                    match self.get_wallpaper_plasma_fill_mode() {
-                        Ok(fill_mode) => {
-                            Ok(Self::plasma_fill_mode_to_style(&fill_mode).to_string())
-                        }
-                        Err(e2) => {
-                            eprintln!("[WARN] 无法读取 Plasma FillMode: {}，返回默认值 fill", e2);
-                            Ok("fill".to_string())
-                        }
-                    }
-                }
-            },
-            LinuxDesktop::Unknown => {
-                // Unknown 时先尝试 GNOME，再尝试 Plasma
-                match self.get_wallpaper_gnome_picture_options() {
-                    Ok(style) => Ok(style),
-                    Err(e) => {
-                        eprintln!(
-                            "[WARN] Unknown 桌面环境：读取 GNOME picture-options 失败: {}，尝试 Plasma FillMode",
-                            e
-                        );
-                        match self.get_wallpaper_plasma_fill_mode() {
-                            Ok(fill_mode) => {
-                                Ok(Self::plasma_fill_mode_to_style(&fill_mode).to_string())
-                            }
-                            Err(e2) => {
-                                eprintln!(
-                                    "[WARN] Unknown 桌面环境：读取 Plasma FillMode 失败: {}，返回默认值 fill",
-                                    e2
-                                );
-                                Ok("fill".to_string())
-                            }
-                        }
-                    }
-                }
+        match linux_desktop() {
+            LinuxDesktop::Plasma => style_options(&["fill", "fit", "center", "tile"]),
+            LinuxDesktop::Gnome | LinuxDesktop::Unknown => {
+                style_options(&["fill", "fit", "stretch", "center", "tile"])
             }
         }
     }
 
-    // macOS：样式跟随系统，不读取系统设置，返回 fill
     #[cfg(target_os = "macos")]
-    async fn get_style(&self) -> Result<String, String> {
-        Ok("fill".to_string())
+    fn supported_styles(&self) -> Vec<WallpaperOption> {
+        style_options(&["fill"])
     }
 
-    // 其他平台：返回默认值
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-    async fn get_style(&self) -> Result<String, String> {
-        Ok("fill".to_string())
+    #[cfg(target_os = "android")]
+    fn supported_styles(&self) -> Vec<WallpaperOption> {
+        style_options(&["fill"])
     }
 
-    async fn get_transition(&self) -> Result<String, String> {
-        Ok(Settings::global().get_wallpaper_rotation_transition())
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android"
+    )))]
+    fn supported_styles(&self) -> Vec<WallpaperOption> {
+        style_options(&["fill"])
+    }
+
+    #[cfg(target_os = "windows")]
+    fn supported_transitions(&self) -> Vec<WallpaperOption> {
+        transition_options(&["none", "fade"], "settings.transitionFollowSystem")
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn supported_transitions(&self) -> Vec<WallpaperOption> {
+        transition_options(&["none"], "settings.transitionFollowSystem")
     }
 
     async fn set_wallpaper_path(&self, file_path: &str) -> Result<(), String> {
@@ -697,14 +547,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
         {
             use crate::linux_desktop::{linux_desktop, LinuxDesktop};
 
-            let style = Settings::global().get_wallpaper_rotation_style();
-            let effective = if style == "system" {
-                self.get_style()
-                    .await
-                    .unwrap_or_else(|_| "fill".to_string())
-            } else {
-                style
-            };
+            let effective = Settings::global().get_wallpaper_rotation_style();
 
             let desktop = linux_desktop();
 
@@ -756,15 +599,9 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
         #[cfg(target_os = "android")]
         {
             let style = Settings::global().get_wallpaper_rotation_style();
-            // Android 无 "system" 样式，用 fill 作为兜底
-            let style = if style == "system" {
-                "fill"
-            } else {
-                style.as_str()
-            };
             self._app
                 .wallpaper()
-                .set_wallpaper(file_path, style)
+                .set_wallpaper(file_path, style.as_str())
                 .await
                 .map_err(|e| e.to_string())?;
             return Ok(());
@@ -784,9 +621,6 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
 
     #[cfg(target_os = "windows")]
     async fn set_style(&self, style: &str) -> Result<(), String> {
-        if style == "system" {
-            return Ok(());
-        }
         use winreg::enums::*;
         use winreg::RegKey;
 
@@ -856,10 +690,6 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
     /// Linux：根据运行时桌面环境设置样式，失败回退
     #[cfg(target_os = "linux")]
     async fn set_style(&self, style: &str) -> Result<(), String> {
-        if style == "system" {
-            return Ok(());
-        }
-
         use crate::linux_desktop::{linux_desktop, LinuxDesktop};
 
         let desktop = linux_desktop();
@@ -980,11 +810,11 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
         Ok(())
     }
 
-    /// Android/iOS 原生壁纸：仅保存设置，不进行系统级设置
-    #[cfg(any(target_os = "android", target_os = "ios"))]
+    /// Android 原生壁纸：仅保存设置，不进行系统级设置
+    #[cfg(target_os = "android")]
     async fn set_style(&self, _style: &str) -> Result<(), String> {
-        // Android/iOS 平台：仅保存设置到配置，不进行系统级设置
-        println!("[DEBUG] Android/iOS 壁纸样式仅保存设置");
+        // Android 平台：仅保存设置到配置，不进行系统级设置
+        println!("[DEBUG] Android 壁纸样式仅保存设置");
         Ok(())
     }
 
@@ -1039,41 +869,6 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
 
     fn cleanup(&self) -> Result<(), String> {
         // 原生模式不需要清理资源
-        Ok(())
-    }
-
-    #[cfg(target_os = "windows")]
-    fn refresh_desktop(&self) -> Result<(), String> {
-        // 优化：直接使用 Windows API 刷新桌面，而不是通过 PowerShell
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
-        };
-
-        unsafe {
-            let mut result: usize = 0;
-            let ret = SendMessageTimeoutW(
-                HWND_BROADCAST,
-                WM_SETTINGCHANGE,
-                0,
-                0,
-                SMTO_ABORTIFHUNG,
-                5000,
-                &mut result,
-            );
-
-            if ret == 0 {
-                use windows_sys::Win32::Foundation::GetLastError;
-                let err = GetLastError();
-                return Err(format!("SendMessageTimeoutW failed. GetLastError={}", err));
-            }
-        }
-
-        println!("[DEBUG] 桌面刷新完成（使用 FFI，快速）");
-        Ok(())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    fn refresh_desktop(&self) -> Result<(), String> {
         Ok(())
     }
 
