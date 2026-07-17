@@ -1,0 +1,59 @@
+{
+  "category": {
+    "images": "圖片",
+    "albums": "畫冊",
+    "tasks": "任務",
+    "surf_records": "暢遊記錄",
+    "plugin": "外掛"
+  },
+  "kind": {
+    "read": "讀取",
+    "write": "寫入"
+  },
+  "cap": {
+    "images": {
+      "read": {
+        "gallery": { "name": "畫廊圖片", "desc": "瀏覽畫廊圖片列表" },
+        "raw": { "name": "原始圖片列", "desc": "讀取分頁後的原始圖片記錄" },
+        "by_id": { "name": "單張圖片", "desc": "按 ID 讀取單張圖片詳情" },
+        "metadata": { "name": "圖片中繼資料", "desc": "讀取圖片的爬取中繼資料" }
+      },
+      "write": {
+        "rename_image": { "name": "重新命名圖片", "desc": "修改圖片的顯示名稱" }
+      }
+    },
+    "albums": {
+      "read": {
+        "list": { "name": "畫冊列表", "desc": "瀏覽所有畫冊" },
+        "by_id": { "name": "單個畫冊", "desc": "按 ID 讀取畫冊詳情" }
+      },
+      "write": {
+        "create_album": { "name": "建立畫冊", "desc": "新建一個畫冊" },
+        "add_images_to_album": { "name": "加入圖片到畫冊", "desc": "把圖片加入指定畫冊" },
+        "set_album_images_order": { "name": "設定畫冊圖片順序", "desc": "按手動順序排列畫冊中的圖片" }
+      }
+    },
+    "tasks": {
+      "read": {
+        "list": { "name": "任務列表", "desc": "瀏覽下載與爬蟲任務列表" },
+        "by_id": { "name": "單個任務", "desc": "按 ID 讀取任務詳情" }
+      }
+    },
+    "surf_records": {
+      "read": {
+        "list": { "name": "暢遊記錄列表", "desc": "瀏覽全部暢遊記錄" },
+        "by_id": { "name": "單條暢遊記錄", "desc": "按 ID 讀取暢遊記錄詳情" }
+      }
+    },
+    "plugin": {
+      "read": {
+        "list": { "name": "外掛列表", "desc": "瀏覽已安裝外掛" },
+        "info": { "name": "外掛資訊", "desc": "讀取單個外掛的基礎資訊" },
+        "icon": { "name": "外掛圖示", "desc": "讀取外掛圖示圖片" },
+        "description_template": { "name": "外掛描述模板", "desc": "讀取外掛描述頁模板" },
+        "doc": { "name": "外掛文件", "desc": "讀取外掛預設文件" },
+        "doc_resource": { "name": "外掛文件資源", "desc": "讀取外掛文件引用的資源檔案" }
+      }
+    }
+  }
+}

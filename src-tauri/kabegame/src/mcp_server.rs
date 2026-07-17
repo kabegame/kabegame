@@ -1,6 +1,7 @@
 use kabegame_core::{
     emitter::GlobalEmitter,
     providers::provider_runtime,
+    settings::Settings,
     storage::{Album, ImageInfo, Storage, SurfRecord, TaskInfo},
 };
 use pathql_rs::EngineError;
@@ -15,6 +16,10 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
 };
 use serde_json::{json, Value};
+
+use crate::mcp_capabilities::{
+    capability_for_tool, is_capability_enabled, read_capability_id,
+};
 
 pub const MCP_PORT: u16 = 7490;
 
@@ -99,6 +104,25 @@ fn resource_segments(uri: &str) -> Vec<&str> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn is_uri_capability_enabled(uri: &str, disabled: &[String]) -> bool {
+    let Ok(scheme) = resource_scheme(uri) else {
+        return true;
+    };
+    let segments = resource_segments(uri);
+    match read_capability_id(scheme, segments.as_slice()) {
+        Some(id) => is_capability_enabled(id, disabled),
+        None => true,
+    }
+}
+
+fn disabled_resource_error(uri: &str) -> McpError {
+    McpError::resource_not_found("resource_disabled", Some(json!({ "uri": uri })))
+}
+
+fn disabled_tool_error(tool: &str) -> McpError {
+    McpError::invalid_request("tool_disabled", Some(json!({ "tool": tool })))
 }
 
 async fn fetch_resource_rows(uri: &str) -> Result<Vec<Value>, McpError> {
@@ -204,35 +228,59 @@ impl ServerHandler for KabegameMcpServer {
         _request: Option<PaginatedRequestParams>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
+        let disabled = Settings::global().get_mcp_disabled_capabilities();
         let resources = vec![
-            RawResource::new("images://gallery/all", "Gallery images")
-                .with_description("Gallery collection from the images PathQL tree")
-                .with_mime_type("application/json")
-                .no_annotation(),
-            RawResource::new("images://x100x/1", "Raw image rows")
-                .with_description("First 100 raw rows from images")
-                .with_mime_type("application/json")
-                .no_annotation(),
-            RawResource::new("albums://all", "All albums")
-                .with_description("Full list of albums (Vec<Album>)")
-                .with_mime_type("application/json")
-                .no_annotation(),
-            RawResource::new("tasks://all", "All tasks")
-                .with_description("Full list of tasks (Vec<TaskInfo>)")
-                .with_mime_type("application/json")
-                .no_annotation(),
-            RawResource::new("surf_records://all", "All surf records")
-                .with_description("Full list of surf records (Vec<SurfRecord>)")
-                .with_mime_type("application/json")
-                .no_annotation(),
-            RawResource::new("plugin://", "All plugins (trimmed)")
-                .with_description(
-                    "Full list of installed plugins with heavy fields (docResources, \
-                     iconPngBase64, descriptionTemplate) stripped",
-                )
-                .with_mime_type("application/json")
-                .no_annotation(),
-        ];
+            (
+                "images://gallery/all",
+                RawResource::new("images://gallery/all", "Gallery images")
+                    .with_description("Gallery collection from the images PathQL tree")
+                    .with_mime_type("application/json")
+                    .no_annotation(),
+            ),
+            (
+                "images://x100x/1",
+                RawResource::new("images://x100x/1", "Raw image rows")
+                    .with_description("First 100 raw rows from images")
+                    .with_mime_type("application/json")
+                    .no_annotation(),
+            ),
+            (
+                "albums://all",
+                RawResource::new("albums://all", "All albums")
+                    .with_description("Full list of albums (Vec<Album>)")
+                    .with_mime_type("application/json")
+                    .no_annotation(),
+            ),
+            (
+                "tasks://all",
+                RawResource::new("tasks://all", "All tasks")
+                    .with_description("Full list of tasks (Vec<TaskInfo>)")
+                    .with_mime_type("application/json")
+                    .no_annotation(),
+            ),
+            (
+                "surf_records://all",
+                RawResource::new("surf_records://all", "All surf records")
+                    .with_description("Full list of surf records (Vec<SurfRecord>)")
+                    .with_mime_type("application/json")
+                    .no_annotation(),
+            ),
+            (
+                "plugin://",
+                RawResource::new("plugin://", "All plugins (trimmed)")
+                    .with_description(
+                        "Full list of installed plugins with heavy fields (docResources, \
+                         iconPngBase64, descriptionTemplate) stripped",
+                    )
+                    .with_mime_type("application/json")
+                    .no_annotation(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(uri, resource)| {
+            is_uri_capability_enabled(uri, &disabled).then_some(resource)
+        })
+        .collect();
 
         Ok(ListResourcesResult {
             resources,
@@ -248,6 +296,12 @@ impl ServerHandler for KabegameMcpServer {
     ) -> Result<ReadResourceResult, McpError> {
         let scheme = resource_scheme(&request.uri)?;
         let segments = resource_segments(&request.uri);
+        let disabled = Settings::global().get_mcp_disabled_capabilities();
+        if let Some(id) = read_capability_id(scheme, segments.as_slice()) {
+            if !is_capability_enabled(id, &disabled) {
+                return Err(disabled_resource_error(&request.uri));
+            }
+        }
 
         match scheme {
             "images" => {
@@ -408,66 +462,107 @@ impl ServerHandler for KabegameMcpServer {
         _request: Option<PaginatedRequestParams>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
+        let disabled = Settings::global().get_mcp_disabled_capabilities();
         Ok(ListResourceTemplatesResult {
             next_cursor: None,
             resource_templates: vec![
-                RawResourceTemplate::new("images://id_{imageId}", "Image info")
-                    .with_description("Full ImageInfo for a single image including metadataId.")
-                    .with_mime_type("application/json")
-                    .no_annotation(),
-                RawResourceTemplate::new("images://id_{imageId}/metadata", "Image metadata")
-                    .with_description(
-                        "Crawl-time metadata — can be 10s of KB (tags, author, URLs, etc.).",
+                (
+                    "images.read.by_id",
+                    RawResourceTemplate::new("images://id_{imageId}", "Image info")
+                        .with_description(
+                            "Full ImageInfo for a single image including metadataId.",
+                        )
+                        .with_mime_type("application/json")
+                        .no_annotation(),
+                ),
+                (
+                    "images.read.metadata",
+                    RawResourceTemplate::new("images://id_{imageId}/metadata", "Image metadata")
+                        .with_description(
+                            "Crawl-time metadata — can be 10s of KB (tags, author, URLs, etc.).",
+                        )
+                        .with_mime_type("application/json")
+                        .no_annotation(),
+                ),
+                (
+                    "albums.read.by_id",
+                    RawResourceTemplate::new("albums://id_{albumId}", "Album info")
+                        .with_description("Full album object: id, name, parentId, createdAt.")
+                        .with_mime_type("application/json")
+                        .no_annotation(),
+                ),
+                (
+                    "tasks.read.by_id",
+                    RawResourceTemplate::new("tasks://id_{taskId}", "Task info")
+                        .with_description(
+                            "Full task object: id, pluginId, status, progress, counts, etc.",
+                        )
+                        .with_mime_type("application/json")
+                        .no_annotation(),
+                ),
+                (
+                    "surf_records.read.by_id",
+                    RawResourceTemplate::new(
+                        "surf_records://id_{surfRecordId}",
+                        "Surf record info",
                     )
-                    .with_mime_type("application/json")
-                    .no_annotation(),
-                RawResourceTemplate::new("albums://id_{albumId}", "Album info")
-                    .with_description("Full album object: id, name, parentId, createdAt.")
-                    .with_mime_type("application/json")
-                    .no_annotation(),
-                RawResourceTemplate::new("tasks://id_{taskId}", "Task info")
-                    .with_description(
-                        "Full task object: id, pluginId, status, progress, counts, etc.",
-                    )
-                    .with_mime_type("application/json")
-                    .no_annotation(),
-                RawResourceTemplate::new("surf_records://id_{surfRecordId}", "Surf record info")
                     .with_description(
                         "Full surf record: id, host, name, imageCount, lastVisitAt, etc.",
                     )
                     .with_mime_type("application/json")
                     .no_annotation(),
-                RawResourceTemplate::new("plugin://{pluginId}", "Plugin info (trimmed)")
-                    .with_description(
-                        "Plugin metadata without docResources/iconPngBase64/descriptionTemplate. \
-                         Fetch those via sub-path resources on demand.",
+                ),
+                (
+                    "plugin.read.info",
+                    RawResourceTemplate::new("plugin://{pluginId}", "Plugin info (trimmed)")
+                        .with_description(
+                            "Plugin metadata without docResources/iconPngBase64/descriptionTemplate. \
+                             Fetch those via sub-path resources on demand.",
+                        )
+                        .with_mime_type("application/json")
+                        .no_annotation(),
+                ),
+                (
+                    "plugin.read.doc",
+                    RawResourceTemplate::new("plugin://{pluginId}/doc", "Plugin documentation")
+                        .with_description("Plugin doc.md content in Markdown (default locale).")
+                        .with_mime_type("text/markdown")
+                        .no_annotation(),
+                ),
+                (
+                    "plugin.read.icon",
+                    RawResourceTemplate::new("plugin://{pluginId}/icon", "Plugin icon")
+                        .with_description("Plugin icon as base64-encoded PNG.")
+                        .with_mime_type("image/png")
+                        .no_annotation(),
+                ),
+                (
+                    "plugin.read.description_template",
+                    RawResourceTemplate::new(
+                        "plugin://{pluginId}/description_template",
+                        "Plugin description template",
                     )
-                    .with_mime_type("application/json")
+                    .with_description("EJS template used to render plugin descriptions.")
+                    .with_mime_type("text/plain")
                     .no_annotation(),
-                RawResourceTemplate::new("plugin://{pluginId}/doc", "Plugin documentation")
-                    .with_description("Plugin doc.md content in Markdown (default locale).")
-                    .with_mime_type("text/markdown")
+                ),
+                (
+                    "plugin.read.doc_resource",
+                    RawResourceTemplate::new(
+                        "plugin://{pluginId}/doc_resource/{resourceKey}",
+                        "Plugin doc resource",
+                    )
+                    .with_description(
+                        "A single doc_resource (e.g. images referenced by doc.md); mime inferred by extension.",
+                    )
                     .no_annotation(),
-                RawResourceTemplate::new("plugin://{pluginId}/icon", "Plugin icon")
-                    .with_description("Plugin icon as base64-encoded PNG.")
-                    .with_mime_type("image/png")
-                    .no_annotation(),
-                RawResourceTemplate::new(
-                    "plugin://{pluginId}/description_template",
-                    "Plugin description template",
-                )
-                .with_description("EJS template used to render plugin descriptions.")
-                .with_mime_type("text/plain")
-                .no_annotation(),
-                RawResourceTemplate::new(
-                    "plugin://{pluginId}/doc_resource/{resourceKey}",
-                    "Plugin doc resource",
-                )
-                .with_description(
-                    "A single doc_resource (e.g. images referenced by doc.md); mime inferred by extension.",
-                )
-                .no_annotation(),
-            ],
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(id, template)| {
+                is_capability_enabled(id, &disabled).then_some(template)
+            })
+            .collect(),
             meta: None,
         })
     }
@@ -477,84 +572,104 @@ impl ServerHandler for KabegameMcpServer {
         _request: Option<PaginatedRequestParams>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
+        let disabled = Settings::global().get_mcp_disabled_capabilities();
         Ok(ListToolsResult {
             tools: vec![
-                Tool::new(
+                (
                     "set_album_images_order",
-                    "Set the manual display order of images in an album. \
-                     Process one page (up to 100 images) at a time; call repeatedly for larger albums.",
-                    object(json!({
-                        "type": "object",
-                        "properties": {
-                            "album_id": { "type": "string", "description": "Album ID" },
-                            "image_orders": {
-                                "type": "array",
-                                "description": "Images to reorder. order values are integers; \
-                                                lower values appear first.",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "image_id": { "type": "string" },
-                                        "order":    { "type": "integer" }
-                                    },
-                                    "required": ["image_id", "order"]
+                    Tool::new(
+                        "set_album_images_order",
+                        "Set the manual display order of images in an album. \
+                         Process one page (up to 100 images) at a time; call repeatedly for larger albums.",
+                        object(json!({
+                            "type": "object",
+                            "properties": {
+                                "album_id": { "type": "string", "description": "Album ID" },
+                                "image_orders": {
+                                    "type": "array",
+                                    "description": "Images to reorder. order values are integers; \
+                                                    lower values appear first.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "image_id": { "type": "string" },
+                                            "order":    { "type": "integer" }
+                                        },
+                                        "required": ["image_id", "order"]
+                                    }
                                 }
-                            }
-                        },
-                        "required": ["album_id", "image_orders"]
-                    })),
+                            },
+                            "required": ["album_id", "image_orders"]
+                        })),
+                    ),
                 ),
-                Tool::new(
+                (
                     "create_album",
-                    "Create a new album. Optionally specify a parent album ID to create a nested album.",
-                    object(json!({
-                        "type": "object",
-                        "properties": {
-                            "name":      { "type": "string", "description": "Album display name" },
-                            "parent_id": { "type": "string", "description": "Parent album ID (omit for root album)" }
-                        },
-                        "required": ["name"]
-                    })),
+                    Tool::new(
+                        "create_album",
+                        "Create a new album. Optionally specify a parent album ID to create a nested album.",
+                        object(json!({
+                            "type": "object",
+                            "properties": {
+                                "name":      { "type": "string", "description": "Album display name" },
+                                "parent_id": { "type": "string", "description": "Parent album ID (omit for root album)" }
+                            },
+                            "required": ["name"]
+                        })),
+                    ),
                 ),
-                Tool::new(
+                (
                     "add_images_to_album",
-                    "Add images to an album. Images already in the album are silently skipped. \
-                     Optionally set per-image order values at the same time (otherwise order is \
-                     auto-assigned after the current last image).",
-                    object(json!({
-                        "type": "object",
-                        "properties": {
-                            "album_id":  { "type": "string" },
-                            "image_ids": { "type": "array", "items": { "type": "string" } },
-                            "image_orders": {
-                                "type": "array",
-                                "description": "Optional: set order for specific images after adding.",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "image_id": { "type": "string" },
-                                        "order":    { "type": "integer" }
-                                    },
-                                    "required": ["image_id", "order"]
+                    Tool::new(
+                        "add_images_to_album",
+                        "Add images to an album. Images already in the album are silently skipped. \
+                         Optionally set per-image order values at the same time (otherwise order is \
+                         auto-assigned after the current last image).",
+                        object(json!({
+                            "type": "object",
+                            "properties": {
+                                "album_id":  { "type": "string" },
+                                "image_ids": { "type": "array", "items": { "type": "string" } },
+                                "image_orders": {
+                                    "type": "array",
+                                    "description": "Optional: set order for specific images after adding.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "image_id": { "type": "string" },
+                                            "order":    { "type": "integer" }
+                                        },
+                                        "required": ["image_id", "order"]
+                                    }
                                 }
-                            }
-                        },
-                        "required": ["album_id", "image_ids"]
-                    })),
+                            },
+                            "required": ["album_id", "image_ids"]
+                        })),
+                    ),
                 ),
-                Tool::new(
+                (
                     "rename_image",
-                    "Update the display name of an image.",
-                    object(json!({
-                        "type": "object",
-                        "properties": {
-                            "image_id":     { "type": "string" },
-                            "display_name": { "type": "string" }
-                        },
-                        "required": ["image_id", "display_name"]
-                    })),
+                    Tool::new(
+                        "rename_image",
+                        "Update the display name of an image.",
+                        object(json!({
+                            "type": "object",
+                            "properties": {
+                                "image_id":     { "type": "string" },
+                                "display_name": { "type": "string" }
+                            },
+                            "required": ["image_id", "display_name"]
+                        })),
+                    ),
                 ),
-            ],
+            ]
+            .into_iter()
+            .filter_map(|(name, tool)| {
+                capability_for_tool(name)
+                    .is_none_or(|id| is_capability_enabled(id, &disabled))
+                    .then_some(tool)
+            })
+            .collect(),
             next_cursor: None,
             meta: None,
         })
@@ -565,6 +680,13 @@ impl ServerHandler for KabegameMcpServer {
         request: CallToolRequestParams,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        let disabled = Settings::global().get_mcp_disabled_capabilities();
+        if let Some(id) = capability_for_tool(request.name.as_ref()) {
+            if !is_capability_enabled(id, &disabled) {
+                return Err(disabled_tool_error(request.name.as_ref()));
+            }
+        }
+
         match request.name.as_ref() {
             "set_album_images_order" => {
                 #[derive(serde::Deserialize)]
@@ -727,11 +849,4 @@ pub fn mcp_nest() -> axum::Router {
     );
 
     axum::Router::new().nest_service("/mcp", service)
-}
-
-pub async fn start_mcp_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", MCP_PORT)).await?;
-    println!("  ✓ MCP server listening on 127.0.0.1:{MCP_PORT}");
-    axum::serve(listener, mcp_nest()).await?;
-    Ok(())
 }

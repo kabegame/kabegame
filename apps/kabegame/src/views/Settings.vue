@@ -237,6 +237,10 @@
           </el-card>
         </el-tab-pane>
 
+        <el-tab-pane v-if="!IS_WEB && !IS_ANDROID" :label="$t('settings.tabMcp')" :name="SETTINGS_TAB_NAMES[4]">
+          <McpSettingsPanel />
+        </el-tab-pane>
+
       </StyledTabs>
     </div>
   </div>
@@ -273,6 +277,7 @@ import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetti
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
 import LanguageSetting from "@/components/settings/items/LanguageSetting.vue";
+import McpSettingsPanel from "@/components/settings/McpSettingsPanel.vue";
 import PluginDefaultConfigsPanel from "@/components/settings/PluginDefaultConfigsPanel.vue";
 import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV, IS_MACOS, IS_WEB } from "@kabegame/core/env";
 
@@ -334,7 +339,7 @@ const isHorizontal = computed(
 );
 
 // 持久化用户最后访问的设置 tab
-const SETTINGS_TAB_NAMES = ["app", "wallpaper", "download", "plugins"] as const;
+const SETTINGS_TAB_NAMES = ["app", "wallpaper", "download", "plugins", "mcp"] as const;
 const storedSettingsTab = useLocalStorage("kabegame-settings-last-tab", "app");
 const activeTab = computed({
   get: () =>

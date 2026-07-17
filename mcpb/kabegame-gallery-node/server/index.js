@@ -2,6 +2,8 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -37,8 +39,6 @@ const PLUGIN_SUB_RESOURCES = new Set([
   "doc",
   "doc_resource",
 ]);
-
-let rpcCounter = 1;
 
 function toBool(value, defaultValue = false) {
   if (typeof value === "boolean") return value;
@@ -224,76 +224,97 @@ function toolResponse(resultObj) {
   };
 }
 
-async function rpcCall(method, params) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-  const id = rpcCounter++;
-  const req = {
-    jsonrpc: "2.0",
-    id,
-    method,
-    params,
-  };
+// 与 upstream Kabegame MCP server（rmcp StreamableHTTP）的连接：用官方 SDK
+// client 维护，自动完成 initialize / session / SSE。lazy 建立并缓存复用。
+let upstreamClient = null;
+let upstreamConnecting = null;
+
+async function ensureUpstream() {
+  if (upstreamClient) return upstreamClient;
+  if (!upstreamConnecting) {
+    upstreamConnecting = (async () => {
+      const client = new Client(
+        { name: "kabegame-gallery-local-mcpb-upstream", version: "1.1.2" },
+        { capabilities: {} },
+      );
+      const transport = new StreamableHTTPClientTransport(new URL(config.endpoint));
+      await client.connect(transport);
+      client.onclose = () => {
+        if (upstreamClient === client) upstreamClient = null;
+      };
+      log("debug", "Upstream MCP client connected", { endpoint: config.endpoint });
+      upstreamClient = client;
+      return client;
+    })().finally(() => {
+      upstreamConnecting = null;
+    });
+  }
+  return upstreamConnecting;
+}
+
+// 统一调用包装：超时用 Promise.race（跨 SDK 版本安全），错误按语义映射；
+// 连接类错误丢弃缓存以便下次重连，协议/业务错误上报 UPSTREAM_MCP_ERROR。
+async function withUpstream(fn) {
+  let client;
+  try {
+    client = await ensureUpstream();
+  } catch (error) {
+    upstreamClient = null;
+    throw makeError("UPSTREAM_REQUEST_FAILED", "Failed to connect upstream MCP endpoint", {
+      message: String(error?.message ?? error),
+    });
+  }
+
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(makeError("TIMEOUT", `Upstream request timed out after ${config.timeoutMs}ms`)),
+      config.timeoutMs,
+    );
+  });
 
   try {
-    log("debug", "Sending upstream MCP request", { method, id });
-    const response = await fetch(config.endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-      },
-      body: JSON.stringify(req),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw makeError("UPSTREAM_HTTP_ERROR", `Upstream returned HTTP ${response.status}`, {
-        status: response.status,
+    return await Promise.race([fn(client), timeoutPromise]);
+  } catch (error) {
+    if (error?.ok === false) throw error; // 已是我们的 makeError（校验 / TIMEOUT）
+    // SDK McpError 带数字 code：-32001 为请求超时，其余为协议/业务错误，连接仍有效
+    if (typeof error?.code === "number") {
+      if (error.code === -32001) {
+        throw makeError("TIMEOUT", `Upstream request timed out after ${config.timeoutMs}ms`);
+      }
+      throw makeError("UPSTREAM_MCP_ERROR", "Upstream MCP error", {
+        code: error.code,
+        message: error.message,
+        data: error.data,
       });
     }
-
-    const body = await response.json();
-    if (body?.error) {
-      throw makeError("UPSTREAM_MCP_ERROR", "Upstream MCP error", body.error);
+    // 连接 / 传输类错误：丢弃 client，下次调用重连
+    try {
+      await client.close();
+    } catch {
+      // ignore
     }
-    if (!Object.prototype.hasOwnProperty.call(body ?? {}, "result")) {
-      throw makeError("UPSTREAM_PROTOCOL_ERROR", "Upstream response missing result", body);
-    }
-
-    return body.result;
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw makeError(
-        "TIMEOUT",
-        `Upstream request timed out after ${config.timeoutMs}ms`,
-        { method },
-      );
-    }
-    if (error?.ok === false) {
-      throw error;
-    }
+    if (upstreamClient === client) upstreamClient = null;
     throw makeError("UPSTREAM_REQUEST_FAILED", "Failed to call upstream MCP endpoint", {
       message: String(error?.message ?? error),
-      method,
     });
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timer);
   }
 }
 
 async function readResource(uri) {
-  return rpcCall("resources/read", { uri });
+  return withUpstream((client) => client.readResource({ uri }));
 }
 
 async function callUpstreamTool(name, args) {
-  return rpcCall("tools/call", { name, arguments: args });
+  return withUpstream((client) => client.callTool({ name, arguments: args }));
 }
 
 const server = new Server(
   {
     name: "kabegame-gallery-local-mcpb",
-    version: "1.1.1",
+    version: "1.1.2",
   },
   {
     capabilities: {
@@ -302,8 +323,7 @@ const server = new Server(
   },
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
+const ALL_TOOLS = [
     {
       name: TOOL_NAMES.READ_PROVIDER,
       description:
@@ -496,8 +516,66 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["image_id", "display_name"],
       },
     },
-  ],
-}));
+];
+
+// bridge 工具 → server 能力归属：写工具对应同名 server 工具；读工具对应 resource scheme。
+const WRITE_TOOL_SET = new Set([
+  TOOL_NAMES.SET_ALBUM_ORDER,
+  TOOL_NAMES.CREATE_ALBUM,
+  TOOL_NAMES.ADD_IMAGES_TO_ALBUM,
+  TOOL_NAMES.RENAME_IMAGE,
+]);
+const READ_TOOL_SCHEME = {
+  [TOOL_NAMES.READ_PROVIDER]: "images",
+  [TOOL_NAMES.READ_IMAGE]: "images",
+  [TOOL_NAMES.READ_IMAGE_METADATA]: "images",
+  [TOOL_NAMES.READ_ALBUM]: "albums",
+  [TOOL_NAMES.READ_TASK]: "tasks",
+  [TOOL_NAMES.READ_SURF]: "surf_records",
+  [TOOL_NAMES.READ_PLUGIN]: "plugin",
+};
+
+function schemeOf(uri) {
+  const idx = String(uri ?? "").indexOf("://");
+  return idx > 0 ? uri.slice(0, idx) : "";
+}
+
+// 查询 server 当前启用的写工具与读 scheme，用于动态过滤 bridge 工具列表。
+// upstream 不可达时返回 null → 回退暴露全部工具（调用时仍由 server 兜底）。
+async function fetchEnabledCapabilities() {
+  try {
+    return await withUpstream(async (client) => {
+      const [tools, resources, templates] = await Promise.all([
+        client.listTools().catch(() => ({ tools: [] })),
+        client.listResources().catch(() => ({ resources: [] })),
+        client.listResourceTemplates().catch(() => ({ resourceTemplates: [] })),
+      ]);
+      const enabledWrite = new Set((tools.tools ?? []).map((t) => t.name));
+      const enabledSchemes = new Set();
+      for (const r of resources.resources ?? []) enabledSchemes.add(schemeOf(r.uri));
+      for (const t of templates.resourceTemplates ?? []) {
+        enabledSchemes.add(schemeOf(t.uriTemplate));
+      }
+      return { enabledWrite, enabledSchemes };
+    });
+  } catch (error) {
+    log("debug", "Failed to fetch upstream capabilities for tool filtering", {
+      message: String(error?.message ?? error),
+    });
+    return null;
+  }
+}
+
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const caps = await fetchEnabledCapabilities();
+  if (!caps) return { tools: ALL_TOOLS };
+  const tools = ALL_TOOLS.filter((tool) => {
+    if (WRITE_TOOL_SET.has(tool.name)) return caps.enabledWrite.has(tool.name);
+    const scheme = READ_TOOL_SCHEME[tool.name];
+    return scheme ? caps.enabledSchemes.has(scheme) : true;
+  });
+  return { tools };
+});
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;

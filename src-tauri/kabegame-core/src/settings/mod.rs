@@ -138,6 +138,12 @@ pub enum SettingKey {
     ImportRecommendedScheduleEnabled,
     /// 界面语言（空/None 表示跟随系统）
     Language,
+    /// MCP 服务启用状态
+    McpEnabled,
+    /// MCP 服务端口
+    McpPort,
+    /// MCP 禁用能力 id 列表
+    McpDisabledCapabilities,
 }
 
 // 用于序列化的值类型
@@ -152,6 +158,7 @@ pub enum SettingValue {
     WindowState(WindowState),
     OptionWindowState(Option<WindowState>),
     HashMapStringString(HashMap<String, String>),
+    VecString(Vec<String>),
 }
 
 impl SettingValue {
@@ -210,6 +217,13 @@ impl SettingValue {
     fn as_hashmap_string_string(&self) -> Option<HashMap<String, String>> {
         match self {
             SettingValue::HashMapStringString(m) => Some(m.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn as_vec_string(&self) -> Option<&Vec<String>> {
+        match self {
+            SettingValue::VecString(v) => Some(v),
             _ => None,
         }
     }
@@ -336,6 +350,9 @@ impl Settings {
             }
             SettingKey::ImportRecommendedScheduleEnabled => SettingValue::Bool(true),
             SettingKey::Language => SettingValue::OptionString(None),
+            SettingKey::McpEnabled => SettingValue::Bool(false),
+            SettingKey::McpPort => SettingValue::U32(7490),
+            SettingKey::McpDisabledCapabilities => SettingValue::VecString(vec![]),
         }
     }
 
@@ -427,6 +444,9 @@ impl Settings {
             SettingKey::AlbumDriveMountPoint,
             SettingKey::ImportRecommendedScheduleEnabled,
             SettingKey::Language,
+            SettingKey::McpEnabled,
+            SettingKey::McpPort,
+            SettingKey::McpDisabledCapabilities,
         ];
 
         // 先读取 JSON（如果存在）
@@ -510,7 +530,8 @@ impl Settings {
             | SettingKey::AutoDeduplicate
             | SettingKey::RealtimeFolderSync
             | SettingKey::WallpaperRotationEnabled
-            | SettingKey::WallpaperDisabled => {
+            | SettingKey::WallpaperDisabled
+            | SettingKey::McpEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
             SettingKey::ImportRecommendedScheduleEnabled => {
@@ -526,7 +547,8 @@ impl Settings {
             SettingKey::MaxConcurrentDownloads
             | SettingKey::MaxConcurrentTasks
             | SettingKey::NetworkRetryCount
-            | SettingKey::WallpaperRotationIntervalMinutes => {
+            | SettingKey::WallpaperRotationIntervalMinutes
+            | SettingKey::McpPort => {
                 Ok(SettingValue::U32(json.as_u64().unwrap_or(0) as u32))
             }
             SettingKey::DownloadIntervalMs => {
@@ -589,6 +611,18 @@ impl Settings {
                     }
                 }
                 Ok(SettingValue::HashMapStringString(map))
+            }
+            SettingKey::McpDisabledCapabilities => {
+                let values = json
+                    .as_array()
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(ToString::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Ok(SettingValue::VecString(values))
             }
             SettingKey::WindowState => {
                 if let Ok(ws) = serde_json::from_value::<WindowState>(json.clone()) {
@@ -722,6 +756,9 @@ impl Settings {
                 "importRecommendedScheduleEnabled".to_string()
             }
             SettingKey::Language => "language".to_string(),
+            SettingKey::McpEnabled => "mcpEnabled".to_string(),
+            SettingKey::McpPort => "mcpPort".to_string(),
+            SettingKey::McpDisabledCapabilities => "mcpDisabledCapabilities".to_string(),
         }
     }
 
@@ -754,6 +791,12 @@ impl Settings {
                 }
                 Ok(serde_json::Value::Object(json_map))
             }
+            SettingValue::VecString(values) => Ok(serde_json::Value::Array(
+                values
+                    .iter()
+                    .map(|value| serde_json::Value::String(value.clone()))
+                    .collect(),
+            )),
         }
     }
 
@@ -1086,6 +1129,27 @@ impl Settings {
             .flatten()
     }
 
+    pub fn get_mcp_enabled(&self) -> bool {
+        Self::cells()
+            .get(&SettingKey::McpEnabled)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
+    }
+
+    pub fn get_mcp_port(&self) -> u32 {
+        Self::cells()
+            .get(&SettingKey::McpPort)
+            .map(|c| c.load().as_u32().unwrap_or(7490))
+            .unwrap_or(7490)
+    }
+
+    pub fn get_mcp_disabled_capabilities(&self) -> Vec<String> {
+        Self::cells()
+            .get(&SettingKey::McpDisabledCapabilities)
+            .and_then(|c| c.load().as_vec_string().cloned())
+            .unwrap_or_default()
+    }
+
     // ========== Setter 方法 ==========
 
     pub fn set_auto_launch(&self, enabled: bool) -> Result<(), String> {
@@ -1148,6 +1212,36 @@ impl Settings {
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::ImportRecommendedScheduleEnabled, &new_value);
+        Ok(())
+    }
+
+    pub fn set_mcp_enabled(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::McpEnabled) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::McpEnabled, &new_value);
+        Ok(())
+    }
+
+    pub fn set_mcp_port(&self, port: u32) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::U32(port);
+        if let Some(cell) = cells.get(&SettingKey::McpPort) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::McpPort, &new_value);
+        Ok(())
+    }
+
+    pub fn set_mcp_disabled_capabilities(&self, disabled: Vec<String>) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::VecString(disabled);
+        if let Some(cell) = cells.get(&SettingKey::McpDisabledCapabilities) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::McpDisabledCapabilities, &new_value);
         Ok(())
     }
 

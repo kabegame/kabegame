@@ -1,0 +1,59 @@
+{
+  "category": {
+    "images": "图片",
+    "albums": "画册",
+    "tasks": "任务",
+    "surf_records": "畅游记录",
+    "plugin": "插件"
+  },
+  "kind": {
+    "read": "读取",
+    "write": "写入"
+  },
+  "cap": {
+    "images": {
+      "read": {
+        "gallery": { "name": "画廊图片", "desc": "浏览画廊图片列表" },
+        "raw": { "name": "原始图片行", "desc": "读取分页后的原始图片记录" },
+        "by_id": { "name": "单张图片", "desc": "按 ID 读取单张图片详情" },
+        "metadata": { "name": "图片元数据", "desc": "读取图片的爬取元数据" }
+      },
+      "write": {
+        "rename_image": { "name": "重命名图片", "desc": "修改图片的显示名称" }
+      }
+    },
+    "albums": {
+      "read": {
+        "list": { "name": "画册列表", "desc": "浏览所有画册" },
+        "by_id": { "name": "单个画册", "desc": "按 ID 读取画册详情" }
+      },
+      "write": {
+        "create_album": { "name": "创建画册", "desc": "新建一个画册" },
+        "add_images_to_album": { "name": "添加图片到画册", "desc": "把图片加入指定画册" },
+        "set_album_images_order": { "name": "设置画册图片顺序", "desc": "按手动顺序排列画册中的图片" }
+      }
+    },
+    "tasks": {
+      "read": {
+        "list": { "name": "任务列表", "desc": "浏览下载与爬虫任务列表" },
+        "by_id": { "name": "单个任务", "desc": "按 ID 读取任务详情" }
+      }
+    },
+    "surf_records": {
+      "read": {
+        "list": { "name": "畅游记录列表", "desc": "浏览全部畅游记录" },
+        "by_id": { "name": "单条畅游记录", "desc": "按 ID 读取畅游记录详情" }
+      }
+    },
+    "plugin": {
+      "read": {
+        "list": { "name": "插件列表", "desc": "浏览已安装插件" },
+        "info": { "name": "插件信息", "desc": "读取单个插件的基础信息" },
+        "icon": { "name": "插件图标", "desc": "读取插件图标图片" },
+        "description_template": { "name": "插件描述模板", "desc": "读取插件描述页模板" },
+        "doc": { "name": "插件文档", "desc": "读取插件默认文档" },
+        "doc_resource": { "name": "插件文档资源", "desc": "读取插件文档引用的资源文件" }
+      }
+    }
+  }
+}

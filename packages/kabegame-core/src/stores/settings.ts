@@ -65,6 +65,14 @@ export interface AppSettings {
   /** 界面语言（持久化为 canonical 语种码；缺失或非法时由前端解析链写回） */
   language: string | null;
 
+  // MCP 服务（仅桌面，走 tauri 设置；运行态用 mcpEnabled 表示，无独立 state）
+  /** 是否启用本机 MCP 服务（默认关闭；启动降级/端口占用会被后端置回 false） */
+  mcpEnabled: boolean;
+  /** MCP 监听端口（默认 7490，范围 1024-65535） */
+  mcpPort: number;
+  /** 禁用的 MCP 能力 id 列表（UI 勾选=启用，未勾选进此列表） */
+  mcpDisabledCapabilities: string[];
+
   // --- 前端本地偏好（始终走 localStorage，所有平台一致）---
   /** 应用内背景图开关 */
   appBackgroundEnabled: boolean;

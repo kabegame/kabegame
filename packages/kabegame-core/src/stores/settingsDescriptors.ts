@@ -200,6 +200,15 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     );
   }
 
+  // MCP 服务（仅桌面）：复用 settings 架构，运行态用 mcpEnabled 表示，无独立 state
+  if (!IS_ANDROID && !IS_WEB) {
+    entries.push(
+      tauri("mcpEnabled", "get_mcp_enabled", "set_mcp_enabled", "enabled"),
+      tauri("mcpPort", "get_mcp_port", "set_mcp_port", "port"),
+      tauri("mcpDisabledCapabilities", "get_mcp_disabled_capabilities", "set_mcp_disabled_capabilities", "disabled"),
+    );
+  }
+
   for (const entry of entries) assignEntry(map, entry);
 
   const localEntries = [

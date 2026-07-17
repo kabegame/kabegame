@@ -1,0 +1,59 @@
+{
+  "category": {
+    "images": "이미지",
+    "albums": "앨범",
+    "tasks": "작업",
+    "surf_records": "서프 기록",
+    "plugin": "플러그인"
+  },
+  "kind": {
+    "read": "읽기",
+    "write": "쓰기"
+  },
+  "cap": {
+    "images": {
+      "read": {
+        "gallery": { "name": "갤러리 이미지", "desc": "갤러리 이미지 목록을 탐색합니다" },
+        "raw": { "name": "원시 이미지 행", "desc": "페이지 단위의 원시 이미지 레코드를 읽습니다" },
+        "by_id": { "name": "단일 이미지", "desc": "ID로 이미지 상세 정보를 읽습니다" },
+        "metadata": { "name": "이미지 메타데이터", "desc": "이미지의 크롤링 메타데이터를 읽습니다" }
+      },
+      "write": {
+        "rename_image": { "name": "이미지 이름 변경", "desc": "이미지 표시 이름을 변경합니다" }
+      }
+    },
+    "albums": {
+      "read": {
+        "list": { "name": "앨범 목록", "desc": "모든 앨범을 탐색합니다" },
+        "by_id": { "name": "단일 앨범", "desc": "ID로 앨범 상세 정보를 읽습니다" }
+      },
+      "write": {
+        "create_album": { "name": "앨범 만들기", "desc": "새 앨범을 만듭니다" },
+        "add_images_to_album": { "name": "앨범에 이미지 추가", "desc": "지정한 앨범에 이미지를 추가합니다" },
+        "set_album_images_order": { "name": "앨범 이미지 순서 설정", "desc": "앨범 안의 이미지를 수동 순서로 정렬합니다" }
+      }
+    },
+    "tasks": {
+      "read": {
+        "list": { "name": "작업 목록", "desc": "다운로드 및 크롤러 작업 목록을 탐색합니다" },
+        "by_id": { "name": "단일 작업", "desc": "ID로 작업 상세 정보를 읽습니다" }
+      }
+    },
+    "surf_records": {
+      "read": {
+        "list": { "name": "서프 기록 목록", "desc": "모든 서프 기록을 탐색합니다" },
+        "by_id": { "name": "단일 서프 기록", "desc": "ID로 서프 기록 상세 정보를 읽습니다" }
+      }
+    },
+    "plugin": {
+      "read": {
+        "list": { "name": "플러그인 목록", "desc": "설치된 플러그인을 탐색합니다" },
+        "info": { "name": "플러그인 정보", "desc": "단일 플러그인의 기본 정보를 읽습니다" },
+        "icon": { "name": "플러그인 아이콘", "desc": "플러그인 아이콘 이미지를 읽습니다" },
+        "description_template": { "name": "플러그인 설명 템플릿", "desc": "플러그인 설명 페이지 템플릿을 읽습니다" },
+        "doc": { "name": "플러그인 문서", "desc": "플러그인 기본 문서를 읽습니다" },
+        "doc_resource": { "name": "플러그인 문서 리소스", "desc": "플러그인 문서가 참조하는 리소스 파일을 읽습니다" }
+      }
+    }
+  }
+}

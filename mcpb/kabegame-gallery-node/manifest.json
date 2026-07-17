@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "kabegame-gallery-local",
   "display_name": "Kabegame Gallery Local MCP",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Local MCP bundle that bridges to the Kabegame app's MCP server (images/albums/tasks/surf_records/plugin resources + write tools).",
   "long_description": "This MCP Bundle connects to the local Kabegame MCP HTTP endpoint (default http://127.0.0.1:7490/mcp) and exposes defensive, validated tools mirroring the upstream resource schemes (images:// / albums:// / tasks:// / surf_records:// / plugin://) plus the four write tools (set_album_images_order, create_album, add_images_to_album, rename_image). Strict endpoint and timeout controls keep it usable only for local Kabegame instances.",
   "author": {

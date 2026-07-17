@@ -1,0 +1,59 @@
+{
+  "category": {
+    "images": "Images",
+    "albums": "Albums",
+    "tasks": "Tasks",
+    "surf_records": "Surf records",
+    "plugin": "Plugins"
+  },
+  "kind": {
+    "read": "Read",
+    "write": "Write"
+  },
+  "cap": {
+    "images": {
+      "read": {
+        "gallery": { "name": "Gallery images", "desc": "Browse the gallery image list" },
+        "raw": { "name": "Raw image rows", "desc": "Read paged raw image records" },
+        "by_id": { "name": "Single image", "desc": "Read one image by ID" },
+        "metadata": { "name": "Image metadata", "desc": "Read crawler metadata for an image" }
+      },
+      "write": {
+        "rename_image": { "name": "Rename image", "desc": "Change an image display name" }
+      }
+    },
+    "albums": {
+      "read": {
+        "list": { "name": "Album list", "desc": "Browse all albums" },
+        "by_id": { "name": "Single album", "desc": "Read one album by ID" }
+      },
+      "write": {
+        "create_album": { "name": "Create album", "desc": "Create a new album" },
+        "add_images_to_album": { "name": "Add images to album", "desc": "Add images to a selected album" },
+        "set_album_images_order": { "name": "Set album image order", "desc": "Arrange images in an album manually" }
+      }
+    },
+    "tasks": {
+      "read": {
+        "list": { "name": "Task list", "desc": "Browse download and crawler tasks" },
+        "by_id": { "name": "Single task", "desc": "Read one task by ID" }
+      }
+    },
+    "surf_records": {
+      "read": {
+        "list": { "name": "Surf record list", "desc": "Browse all surf records" },
+        "by_id": { "name": "Single surf record", "desc": "Read one surf record by ID" }
+      }
+    },
+    "plugin": {
+      "read": {
+        "list": { "name": "Plugin list", "desc": "Browse installed plugins" },
+        "info": { "name": "Plugin info", "desc": "Read basic information for one plugin" },
+        "icon": { "name": "Plugin icon", "desc": "Read the plugin icon image" },
+        "description_template": { "name": "Plugin description template", "desc": "Read the plugin description page template" },
+        "doc": { "name": "Plugin documentation", "desc": "Read the default plugin documentation" },
+        "doc_resource": { "name": "Plugin doc resource", "desc": "Read a resource file referenced by plugin documentation" }
+      }
+    }
+  }
+}

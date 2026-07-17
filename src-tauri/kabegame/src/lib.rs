@@ -24,7 +24,11 @@ mod ipc;
 #[cfg(all(not(feature = "web"), target_os = "linux"))]
 mod linux_desktop;
 #[cfg(not(target_os = "android"))]
+mod mcp_capabilities;
+#[cfg(not(target_os = "android"))]
 mod mcp_server;
+#[cfg(not(target_os = "android"))]
+mod mcp_service;
 pub mod startup;
 #[cfg(all(not(feature = "web"), not(mobile)))]
 mod tray;
@@ -163,13 +167,6 @@ fn init(
 
     #[cfg(not(target_os = "android"))]
     {
-        #[cfg(not(feature = "web"))]
-        tauri::async_runtime::spawn(async {
-            if let Err(e) = mcp_server::start_mcp_server().await {
-                eprintln!("Failed to start MCP server: {}", e);
-            }
-        });
-
         startup::start_ipc_server(
             #[cfg(not(feature = "web"))]
             app.app_handle().clone(),
@@ -186,12 +183,30 @@ fn init(
     spawn_startup_local_folder_sync();
     spawn_realtime_folder_sync_if_enabled();
 
-    // 桌面端自动更新：初始化后端权威状态机单例 + 启动首检&24h 调度
+    // 桌面端 MCP 与自动更新：初始化后端权威单例
     #[cfg(all(not(feature = "web"), not(target_os = "android")))]
     {
+        let _ = mcp_service::McpService::init_global(std::sync::Arc::new(
+            mcp_service::McpService::new(),
+        ));
         let _ = updater::UpdaterService::init_global(std::sync::Arc::new(
             updater::UpdaterService::new(),
         ));
+
+        tauri::async_runtime::spawn(async {
+            if kabegame_core::settings::Settings::global().get_mcp_enabled() {
+                let port: u16 = kabegame_core::settings::Settings::global()
+                    .get_mcp_port()
+                    .try_into()
+                    .unwrap_or(mcp_server::MCP_PORT);
+                if let Err(e) = mcp_service::McpService::global().start(port).await {
+                    eprintln!("[MCP] 启动失败，已降级关闭: {e}");
+                    let _ = kabegame_core::settings::Settings::global().set_mcp_enabled(false);
+                    mcp_service::McpService::global().stop().await;
+                }
+            }
+        });
+
         updater::spawn_schedule();
     }
 
@@ -561,6 +576,20 @@ pub(crate) fn configure_app(
             set_auto_deduplicate,
             get_realtime_folder_sync,
             set_realtime_folder_sync,
+            #[cfg(not(target_os = "android"))]
+            get_mcp_enabled,
+            #[cfg(not(target_os = "android"))]
+            get_mcp_port,
+            #[cfg(not(target_os = "android"))]
+            get_mcp_disabled_capabilities,
+            #[cfg(not(target_os = "android"))]
+            set_mcp_enabled,
+            #[cfg(not(target_os = "android"))]
+            set_mcp_port,
+            #[cfg(not(target_os = "android"))]
+            set_mcp_disabled_capabilities,
+            #[cfg(not(target_os = "android"))]
+            get_mcp_capabilities,
             get_default_download_dir,
             set_default_download_dir,
             get_default_images_dir,

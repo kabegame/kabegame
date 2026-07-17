@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 mod v001_wallpaper_drop_system;
+mod v002_mcp_settings;
 
 type MigrationFn = fn(&mut Value) -> Result<(), String>;
 
@@ -10,13 +11,20 @@ struct Migration {
     up: MigrationFn,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "wallpaper_drop_system",
-    up: v001_wallpaper_drop_system::up,
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "wallpaper_drop_system",
+        up: v001_wallpaper_drop_system::up,
+    },
+    Migration {
+        version: 2,
+        name: "mcp_settings",
+        up: v002_mcp_settings::up,
+    },
+];
 
-pub const LATEST_VERSION: u32 = 1;
+pub const LATEST_VERSION: u32 = 2;
 pub const VERSION_KEY: &str = "schemaVersion";
 
 fn current_version(json: &Value) -> u32 {

@@ -4,6 +4,8 @@ pub mod album;
 pub mod crawler;
 pub mod filesystem;
 pub mod image;
+#[cfg(not(target_os = "android"))]
+pub mod mcp;
 pub mod misc;
 pub mod plugin;
 pub mod proxy;
@@ -21,6 +23,8 @@ pub use album::*;
 pub use crawler::*;
 pub use filesystem::*;
 pub use image::*;
+#[cfg(not(target_os = "android"))]
+pub use mcp::*;
 pub use misc::*;
 pub use plugin::*;
 pub use proxy::*;

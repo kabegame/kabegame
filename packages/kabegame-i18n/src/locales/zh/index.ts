@@ -14,6 +14,7 @@ import autoConfig from "./autoConfig.json";
 import web from "./web.json";
 import kamechan from "./kamechan.json";
 import updater from "./updater.json";
+import mcp from "./mcp.json";
 
 export default {
   common,
@@ -32,4 +33,5 @@ export default {
   web,
   kamechan,
   updater,
+  mcp,
 };
