@@ -50,6 +50,16 @@
   "detailNameLabel": "名称",
   "detailVersionLabel": "版本",
   "detailDescriptionLabel": "描述",
+  "detailLabelsLabel": "标签",
+  "pluginLabels": {
+    "authNeedCookie": { "name": "需要 Cookie", "desc": "该源可能需要先在{surf}中登录获取 Cookie 才能爬取" },
+    "authNeedProxy": { "name": "需要代理", "desc": "该源可能需要代理才能在中国大陆完整访问" },
+    "contentResMobile": { "name": "移动端", "desc": "提供移动端 / 竖屏分辨率壁纸" },
+    "contentResDesktop": { "name": "桌面端", "desc": "提供桌面端 / 横屏分辨率壁纸" },
+    "contentNsfw": { "name": "NSFW", "desc": "可能包含 NSFW / R-18 内容" },
+    "contentTypeVideo": { "name": "视频", "desc": "提供视频 / 动态壁纸" },
+    "versionIncompatible": { "name": "版本不兼容", "desc": "该插件要求的应用版本高于当前已安装版本" }
+  },
   "detailCrawlUrlLabel": "爬取地址",
   "detailCopyAction": "复制",
   "confirmInstall": "确认安装",

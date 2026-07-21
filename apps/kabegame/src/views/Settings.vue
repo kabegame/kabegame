@@ -288,6 +288,7 @@ const { isPlasma } = useDesktop();
 const imageClickActionOptions = computed(() => [
   { label: t("settings.imageClickPreview"), value: "preview" },
   { label: t("settings.imageClickOpen"), value: "open" },
+  { label: t("settings.imageClickAsk"), value: "unconfigured" },
 ]);
 const wallpaperModeOptions = computed(() => [
   { label: t("settings.wallpaperModeRandom"), value: "random" },

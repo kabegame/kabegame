@@ -1,5 +1,7 @@
 use crate::crawler::task_scheduler::PageStack;
 use crate::emitter::GlobalEmitter;
+#[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+use crate::plugin::vfs::PluginVfs;
 use crate::plugin::Plugin;
 use crate::storage::Storage;
 use serde_json::Value;
@@ -44,6 +46,9 @@ pub struct Task {
     pub task_id: String,
     pub params: TaskParams,
     pub cancel: CancellationToken,
+    pub fs_handle: u64,
+    #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+    pub vfs: Arc<PluginVfs>,
     progress: StdMutex<f64>,
     headers: StdMutex<HashMap<String, String>>,
     pub page_stack: PageStack,
@@ -51,20 +56,39 @@ pub struct Task {
 }
 
 impl Task {
+    /// 保留给现有测试辅助代码的便捷构造器；生产注册路径使用 `try_new` 传播 VFS 错误。
     pub fn new(
         task_id: String,
         params: TaskParams,
         http_headers: Option<HashMap<String, String>>,
     ) -> Self {
-        Self {
+        match Self::try_new(task_id, params, http_headers) {
+            Ok(task) => task,
+            Err(error) => panic!("Task construction failed: {error}"),
+        }
+    }
+
+    pub fn try_new(
+        task_id: String,
+        params: TaskParams,
+        http_headers: Option<HashMap<String, String>>,
+    ) -> Result<Self, String> {
+        let fs_handle = random_fs_handle();
+        #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+        let vfs = create_plugin_vfs(&task_id, &params.plugin.id, fs_handle)?;
+
+        Ok(Self {
             task_id,
             params,
             cancel: CancellationToken::new(),
+            fs_handle,
+            #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+            vfs,
             progress: StdMutex::new(0.0),
             headers: StdMutex::new(http_headers.unwrap_or_default()),
             page_stack: Arc::new(StdMutex::new(Vec::new())),
             webview: StdMutex::new(None),
-        }
+        })
     }
 
     pub fn add_progress(&self, delta: f64) -> f64 {
@@ -226,4 +250,25 @@ impl Task {
         task.http_headers = Some(headers.clone());
         storage.update_task(task)
     }
+}
+
+/// UUID v4 由系统随机源生成；将两半异或可保留完整 64 位随机输出。
+fn random_fs_handle() -> u64 {
+    let (high, low) = uuid::Uuid::new_v4().as_u64_pair();
+    high ^ low
+}
+
+#[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+fn create_plugin_vfs(
+    task_id: &str,
+    plugin_id: &str,
+    fs_handle: u64,
+) -> Result<Arc<PluginVfs>, String> {
+    PluginVfs::new(fs_handle, plugin_id)
+        .map(Arc::new)
+        .map_err(|error| {
+            format!(
+                "Failed to initialize plugin VFS for task {task_id} (plugin {plugin_id}): {error}"
+            )
+        })
 }

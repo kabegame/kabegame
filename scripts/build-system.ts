@@ -22,7 +22,6 @@ import { Skip, SkipPlugin } from "./plugins/skip-plugin.ts";
 import { ReleasePlugin } from "./plugins/release-plugin.ts";
 import { DataPlugin } from "./plugins/data-plugin.ts";
 import { TauriCliPlugin } from "./plugins/tauri-cli-plugin.ts";
-import { DenoCliPlugin } from "./plugins/deno-cli-plugin.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -197,7 +196,7 @@ export class BuildSystem {
     this.use(new TauriCliPlugin());
 
     // 树内自编 deno CLI(third/deno):dev/build 前增量刷新,与 tauri-cli 同款管理
-    this.use(new DenoCliPlugin());
+    // this.use(new DenoCliPlugin());
   }
 
   commonBefore(): void {

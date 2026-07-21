@@ -1,4 +1,9 @@
+// 部分文件系统命令实现取自并改编自 tauri-plugin-fs 2.4.4（Apache-2.0 OR MIT）。
+// 原始版权：Copyright 2019-2023 Tauri Programme within The Commons Conservancy；
+// Copyright 2018-2023 the Deno authors.
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use deno_fs::{FileSystem, OpenOptions};
+use deno_permissions::CheckedPathBuf;
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::crawler::downloader::{
     ActiveDownloadInfo, DownloadState, PostprocessSource, build_safe_filename,
@@ -8,13 +13,16 @@ use kabegame_core::crawler::downloader::{
 use kabegame_core::crawler::task_scheduler::{PageStackEntry, Task, TaskError};
 use kabegame_core::crawler::webview::{crawler_window_label, task_id_from_crawler_label};
 use kabegame_core::emitter::GlobalEmitter;
+use kabegame_core::plugin::vfs::PluginVfs;
 use kabegame_core::storage::Storage;
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
-use tauri::{AppHandle, Manager, Runtime, Webview, WebviewWindow};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Manager, Resource, ResourceId, Runtime, Webview, WebviewWindow};
 use url::Url;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -24,6 +32,85 @@ pub struct CrawlToPayload {
     pub page_label: Option<String>,
     pub page_state: Option<Value>,
 }
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrawlFsWriteOptions {
+    pub append: Option<bool>,
+    pub create: Option<bool>,
+    pub create_new: Option<bool>,
+    pub mode: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrawlFsOpenOptions {
+    pub read: Option<bool>,
+    pub write: Option<bool>,
+    pub append: Option<bool>,
+    pub truncate: Option<bool>,
+    pub create: Option<bool>,
+    pub create_new: Option<bool>,
+    pub mode: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrawlFsMkdirOptions {
+    pub recursive: Option<bool>,
+    pub mode: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrawlFsRemoveOptions {
+    pub recursive: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrawlFsDirEntry {
+    pub name: String,
+    pub is_file: bool,
+    pub is_directory: bool,
+    pub is_symlink: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrawlFsStat {
+    pub is_file: bool,
+    pub is_directory: bool,
+    pub is_symlink: bool,
+    pub size: u64,
+    pub mtime: Option<u64>,
+    pub atime: Option<u64>,
+    pub birthtime: Option<u64>,
+    pub ctime: Option<u64>,
+    pub dev: u64,
+    pub ino: Option<u64>,
+    pub mode: u32,
+    pub nlink: Option<u64>,
+    pub uid: u32,
+    pub gid: u32,
+    pub rdev: u64,
+    pub blksize: u64,
+    pub blocks: Option<u64>,
+    pub is_block_device: bool,
+    pub is_char_device: bool,
+    pub is_fifo: bool,
+    pub is_socket: bool,
+}
+
+struct CrawlFsFileResource(Mutex<std::fs::File>);
+
+impl CrawlFsFileResource {
+    fn new(file: std::fs::File) -> Self {
+        Self(Mutex::new(file))
+    }
+}
+
+impl Resource for CrawlFsFileResource {}
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -266,6 +353,26 @@ fn resolve_target_url(
     Ok(target.to_string())
 }
 
+fn resolve_download_image_url(
+    raw_url: &str,
+    current_url: Option<&str>,
+    base_url: &str,
+    fs_handle: u64,
+) -> Result<Url, String> {
+    // 只认自己的 handle 前缀。不要把"首段是数字"当作 VFS 特征：WebView 后端会把
+    // 相对 URL 解析到当前页面，而大量图站的图片就在 /12345/image.jpg 这类数字段路径
+    // 下，那样会把合法的站内相对 URL 误判成 VFS 路径并报 Invalid URL。
+    // 别的 handle 走正常的站内解析即可——它拿不到任何 VFS 访问，只是一次普通 HTTP 请求。
+    let is_vfs_path = raw_url.starts_with(&format!("/{fs_handle}/"))
+        || Url::parse(raw_url).is_ok_and(|url| url.scheme() == "task-vfs");
+    if is_vfs_path {
+        return kabegame_core::plugin::parse_download_image_url(raw_url, fs_handle);
+    }
+
+    let resolved = resolve_target_url(raw_url, current_url, base_url)?;
+    kabegame_core::plugin::parse_download_image_url(&resolved, fs_handle)
+}
+
 fn get_page_stack(
     task_id: &str,
 ) -> Result<kabegame_core::crawler::task_scheduler::PageStack, String> {
@@ -286,6 +393,596 @@ fn run_of_label(label: &str) -> Result<(String, Arc<Task>), String> {
         .get_run(&task_id)
         .ok_or_else(|| format!("Crawler task not found for task {}", task_id))?;
     Ok((task_id, run))
+}
+
+async fn crawl_fs_blocking<T, F>(
+    vfs: Arc<PluginVfs>,
+    path: String,
+    operation: &'static str,
+    action: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&PluginVfs, CheckedPathBuf) -> Result<T, deno_fs::FsError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let checked_path = CheckedPathBuf::unsafe_new(PathBuf::from(&path));
+        action(&vfs, checked_path).map_err(|error| format!("{operation} '{path}': {error}"))
+    })
+    .await
+    .map_err(|error| format!("Failed to join {operation}: {error}"))?
+}
+
+async fn crawl_fs_file_blocking<R, T, F>(
+    webview: &WebviewWindow<R>,
+    rid: ResourceId,
+    operation: &'static str,
+    action: F,
+) -> Result<T, String>
+where
+    R: Runtime,
+    T: Send + 'static,
+    F: FnOnce(&mut std::fs::File) -> std::io::Result<T> + Send + 'static,
+{
+    let resource = webview
+        .resources_table()
+        .get::<CrawlFsFileResource>(rid)
+        .map_err(|error| format!("{operation} rid {rid}: {error}"))?;
+    tokio::task::spawn_blocking(move || {
+        let mut file = resource
+            .0
+            .lock()
+            .map_err(|_| format!("{operation} rid {rid}: file lock poisoned"))?;
+        action(&mut file).map_err(|error| format!("{operation} rid {rid}: {error}"))
+    })
+    .await
+    .map_err(|error| format!("Failed to join {operation}: {error}"))?
+}
+
+fn crawl_fs_open_options(options: Option<CrawlFsOpenOptions>) -> OpenOptions {
+    match options {
+        Some(options) => OpenOptions {
+            read: options.read.unwrap_or(true),
+            write: options.write.unwrap_or(false),
+            create: options.create.unwrap_or(false),
+            truncate: options.truncate.unwrap_or(false),
+            append: options.append.unwrap_or(false),
+            create_new: options.create_new.unwrap_or(false),
+            custom_flags: None,
+            mode: options.mode,
+        },
+        None => OpenOptions::read(),
+    }
+}
+
+fn crawl_fs_raw_handle_write_request(
+    request: &tauri::ipc::Request<'_>,
+) -> Result<(ResourceId, Vec<u8>), String> {
+    let rid = request
+        .headers()
+        .get("rid")
+        .ok_or_else(|| "Missing file resource id header".to_string())?
+        .to_str()
+        .map_err(|error| format!("Invalid file resource id header: {error}"))?
+        .parse::<ResourceId>()
+        .map_err(|error| format!("Invalid file resource id: {error}"))?;
+    let data = match request.body() {
+        tauri::ipc::InvokeBody::Raw(data) => data.clone(),
+        _ => return Err("Expected raw IPC body for file handle write".to_string()),
+    };
+    Ok((rid, data))
+}
+
+fn crawl_fs_raw_write_request(
+    request: &tauri::ipc::Request<'_>,
+) -> Result<(String, Vec<u8>, CrawlFsWriteOptions), String> {
+    let encoded_path = request
+        .headers()
+        .get("path")
+        .ok_or_else(|| "Missing file path header".to_string())?
+        .to_str()
+        .map_err(|error| format!("Invalid file path header: {error}"))?;
+    let path = percent_encoding::percent_decode_str(encoded_path)
+        .decode_utf8()
+        .map_err(|_| "File path is not valid UTF-8".to_string())?
+        .into_owned();
+    let options = request
+        .headers()
+        .get("options")
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|error| format!("Invalid file options header: {error}"))
+                .and_then(|value| {
+                    serde_json::from_str(value)
+                        .map_err(|error| format!("Invalid file options JSON: {error}"))
+                })
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let data = match request.body() {
+        tauri::ipc::InvokeBody::Raw(data) => data.clone(),
+        _ => return Err("Expected raw IPC body for file write".to_string()),
+    };
+    Ok((path, data, options))
+}
+
+async fn crawl_fs_metadata(
+    vfs: Arc<PluginVfs>,
+    path: String,
+    operation: &'static str,
+    follow_symlinks: bool,
+) -> Result<CrawlFsStat, String> {
+    crawl_fs_blocking(vfs, path, operation, move |vfs, path| {
+        let stat = if follow_symlinks {
+            vfs.stat_sync(&path.as_checked_path())
+        } else {
+            vfs.lstat_sync(&path.as_checked_path())
+        }?;
+        Ok(CrawlFsStat {
+            is_file: stat.is_file,
+            is_directory: stat.is_directory,
+            is_symlink: stat.is_symlink,
+            size: stat.size,
+            mtime: stat.mtime,
+            atime: stat.atime,
+            birthtime: stat.birthtime,
+            ctime: stat.ctime,
+            dev: stat.dev,
+            ino: stat.ino,
+            mode: stat.mode,
+            nlink: stat.nlink,
+            uid: stat.uid,
+            gid: stat.gid,
+            rdev: stat.rdev,
+            blksize: stat.blksize,
+            blocks: stat.blocks,
+            is_block_device: stat.is_block_device,
+            is_char_device: stat.is_char_device,
+            is_fifo: stat.is_fifo,
+            is_socket: stat.is_socket,
+        })
+    })
+    .await
+}
+
+fn crawl_fs_stat_from_std(metadata: std::fs::Metadata) -> CrawlFsStat {
+    macro_rules! unix_some_or_none {
+        ($member:ident) => {{
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                Some(metadata.$member())
+            }
+            #[cfg(not(unix))]
+            {
+                None
+            }
+        }};
+    }
+
+    macro_rules! unix_or_zero {
+        ($member:ident) => {{
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                metadata.$member()
+            }
+            #[cfg(not(unix))]
+            {
+                0
+            }
+        }};
+    }
+
+    macro_rules! unix_or_false {
+        ($member:ident) => {{
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::FileTypeExt;
+                metadata.file_type().$member()
+            }
+            #[cfg(not(unix))]
+            {
+                false
+            }
+        }};
+    }
+
+    fn to_msec(time: std::io::Result<std::time::SystemTime>) -> Option<u64> {
+        time.ok().map(|time| {
+            time.duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis() as u64)
+                .unwrap_or_else(|error| error.duration().as_millis() as u64)
+        })
+    }
+
+    let ctime = unix_or_zero!(ctime);
+    CrawlFsStat {
+        is_file: metadata.is_file(),
+        is_directory: metadata.is_dir(),
+        is_symlink: metadata.file_type().is_symlink(),
+        size: metadata.len(),
+        mtime: to_msec(metadata.modified()),
+        atime: to_msec(metadata.accessed()),
+        birthtime: to_msec(metadata.created()),
+        ctime: (ctime > 0).then_some(ctime as u64 * 1000),
+        dev: unix_or_zero!(dev),
+        ino: unix_some_or_none!(ino),
+        mode: unix_or_zero!(mode),
+        nlink: unix_some_or_none!(nlink),
+        uid: unix_or_zero!(uid),
+        gid: unix_or_zero!(gid),
+        rdev: unix_or_zero!(rdev),
+        blksize: unix_or_zero!(blksize),
+        blocks: unix_some_or_none!(blocks),
+        is_block_device: unix_or_false!(is_block_device),
+        is_char_device: unix_or_false!(is_char_device),
+        is_fifo: unix_or_false!(is_fifo),
+        is_socket: unix_or_false!(is_socket),
+    }
+}
+
+fn crawl_fs_size_sync(
+    vfs: &PluginVfs,
+    path: CheckedPathBuf,
+) -> Result<u64, deno_fs::FsError> {
+    let stat = vfs.stat_sync(&path.as_checked_path())?;
+    if stat.is_file {
+        return Ok(stat.size);
+    }
+
+    let mut size = 0u64;
+    for entry in vfs.read_dir_sync(&path.as_checked_path())? {
+        let child = CheckedPathBuf::unsafe_new(path.join(entry.name));
+        size = size.checked_add(crawl_fs_size_sync(vfs, child)?).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "File size overflow")
+        })?;
+    }
+    Ok(size)
+}
+
+#[tauri::command]
+pub async fn crawl_fs_open<R: Runtime>(
+    webview: WebviewWindow<R>,
+    path: String,
+    options: Option<CrawlFsOpenOptions>,
+) -> Result<ResourceId, String> {
+    let (_, run) = run_of(&webview)?;
+    let options = crawl_fs_open_options(options);
+    let file = crawl_fs_blocking(run.vfs.clone(), path, "open", move |vfs, path| {
+        vfs.open_std(&path, options)
+    })
+    .await?;
+    Ok(webview
+        .resources_table()
+        .add(CrawlFsFileResource::new(file)))
+}
+
+#[tauri::command]
+pub async fn crawl_fs_create<R: Runtime>(
+    webview: WebviewWindow<R>,
+    path: String,
+) -> Result<ResourceId, String> {
+    let (_, run) = run_of(&webview)?;
+    let options = OpenOptions {
+        read: false,
+        write: true,
+        create: true,
+        truncate: true,
+        append: false,
+        create_new: false,
+        custom_flags: None,
+        mode: None,
+    };
+    let file = crawl_fs_blocking(run.vfs.clone(), path, "create", move |vfs, path| {
+        vfs.open_std(&path, options)
+    })
+    .await?;
+    Ok(webview
+        .resources_table()
+        .add(CrawlFsFileResource::new(file)))
+}
+
+#[tauri::command]
+pub async fn crawl_fs_fread<R: Runtime>(
+    webview: WebviewWindow<R>,
+    rid: ResourceId,
+    len: usize,
+) -> Result<tauri::ipc::Response, String> {
+    let mut data = vec![0; len];
+    let (mut data, nread) = crawl_fs_file_blocking(&webview, rid, "fread", move |file| {
+        let nread = file.read(&mut data)?;
+        Ok((data, nread))
+    })
+    .await?;
+
+    // 与 tauri-plugin-fs 一致，把读取数作为 8 字节大端整数附在 Raw IPC 响应末尾。
+    data.extend_from_slice(&(nread as u64).to_be_bytes());
+    Ok(tauri::ipc::Response::new(data))
+}
+
+#[tauri::command]
+pub async fn crawl_fs_fwrite<R: Runtime>(
+    webview: WebviewWindow<R>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<usize, String> {
+    let (rid, data) = crawl_fs_raw_handle_write_request(&request)?;
+    crawl_fs_file_blocking(&webview, rid, "fwrite", move |file| file.write(&data)).await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_fseek<R: Runtime>(
+    webview: WebviewWindow<R>,
+    rid: ResourceId,
+    offset: i64,
+    whence: u16,
+) -> Result<u64, String> {
+    let position = match whence {
+        0 => SeekFrom::Start(
+            u64::try_from(offset)
+                .map_err(|_| "fseek from start requires a non-negative offset".to_string())?,
+        ),
+        1 => SeekFrom::Current(offset),
+        2 => SeekFrom::End(offset),
+        _ => return Err(format!("Invalid fseek whence: {whence}")),
+    };
+    crawl_fs_file_blocking(&webview, rid, "fseek", move |file| file.seek(position)).await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_fstat<R: Runtime>(
+    webview: WebviewWindow<R>,
+    rid: ResourceId,
+) -> Result<CrawlFsStat, String> {
+    crawl_fs_file_blocking(&webview, rid, "fstat", |file| {
+        file.metadata().map(crawl_fs_stat_from_std)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_ftruncate<R: Runtime>(
+    webview: WebviewWindow<R>,
+    rid: ResourceId,
+    len: Option<u64>,
+) -> Result<(), String> {
+    crawl_fs_file_blocking(&webview, rid, "ftruncate", move |file| {
+        file.set_len(len.unwrap_or(0))
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn crawl_fs_close<R: Runtime>(
+    webview: WebviewWindow<R>,
+    rid: ResourceId,
+) -> Result<(), String> {
+    let resource = webview
+        .resources_table()
+        .take::<CrawlFsFileResource>(rid)
+        .map_err(|error| format!("close rid {rid}: {error}"))?;
+    drop(resource);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn crawl_fs_read_file<R: Runtime>(
+    webview: WebviewWindow<R>,
+    path: String,
+) -> Result<tauri::ipc::Response, String> {
+    let (_, run) = run_of(&webview)?;
+    let bytes = crawl_fs_blocking(run.vfs.clone(), path, "readfile", |vfs, path| {
+        vfs.read_file_sync(&path.as_checked_path(), OpenOptions::read())
+            .map(|bytes| bytes.into_owned())
+    })
+    .await?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[tauri::command]
+pub async fn crawl_fs_read_text_file<R: Runtime>(
+    webview: WebviewWindow<R>,
+    path: String,
+) -> Result<tauri::ipc::Response, String> {
+    let (_, run) = run_of(&webview)?;
+    let text = crawl_fs_blocking(run.vfs.clone(), path, "readtextfile", |vfs, path| {
+        vfs.read_text_file_lossy_sync(&path.as_checked_path())
+            .map(|text| text.into_owned())
+    })
+    .await?;
+    Ok(tauri::ipc::Response::new(text.into_bytes()))
+}
+
+#[tauri::command]
+pub async fn crawl_fs_write_file<R: Runtime>(
+    webview: WebviewWindow<R>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<(), String> {
+    let (_, run) = run_of(&webview)?;
+    let (path, data, options) = crawl_fs_raw_write_request(&request)?;
+    let open_options = OpenOptions::write(
+        options.create.unwrap_or(true),
+        options.append.unwrap_or(false),
+        options.create_new.unwrap_or(false),
+        options.mode,
+    );
+    crawl_fs_blocking(run.vfs.clone(), path, "writefile", move |vfs, path| {
+        vfs.write_file_sync(&path.as_checked_path(), open_options, &data)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_write_text_file<R: Runtime>(
+    webview: WebviewWindow<R>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<(), String> {
+    let (_, run) = run_of(&webview)?;
+    let (path, data, options) = crawl_fs_raw_write_request(&request)?;
+    let open_options = OpenOptions::write(
+        options.create.unwrap_or(true),
+        options.append.unwrap_or(false),
+        options.create_new.unwrap_or(false),
+        options.mode,
+    );
+    crawl_fs_blocking(run.vfs.clone(), path, "writetextfile", move |vfs, path| {
+        vfs.write_file_sync(&path.as_checked_path(), open_options, &data)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_mkdir<R: Runtime>(
+    webview: WebviewWindow<R>,
+    path: String,
+    options: Option<CrawlFsMkdirOptions>,
+) -> Result<(), String> {
+    let (_, run) = run_of(&webview)?;
+    let options = options.unwrap_or_default();
+    let recursive = options.recursive.unwrap_or(false);
+    let mode = Some(options.mode.unwrap_or(0o777) & 0o777);
+    crawl_fs_blocking(run.vfs.clone(), path, "mkdir", move |vfs, path| {
+        vfs.mkdir_sync(&path.as_checked_path(), recursive, mode)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_read_dir<R: Runtime>(
+    webview: WebviewWindow<R>,
+    path: String,
+) -> Result<Vec<CrawlFsDirEntry>, String> {
+    let (_, run) = run_of(&webview)?;
+    crawl_fs_blocking(run.vfs.clone(), path, "readdir", |vfs, path| {
+        vfs.read_dir_sync(&path.as_checked_path()).map(|entries| {
+            entries
+                .into_iter()
+                .map(|entry| CrawlFsDirEntry {
+                    name: entry.name,
+                    is_file: entry.is_file,
+                    is_directory: entry.is_directory,
+                    is_symlink: entry.is_symlink,
+                })
+                .collect()
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_remove<R: Runtime>(
+    webview: WebviewWindow<R>,
+    path: String,
+    options: Option<CrawlFsRemoveOptions>,
+) -> Result<(), String> {
+    let (_, run) = run_of(&webview)?;
+    let recursive = options.unwrap_or_default().recursive.unwrap_or(false);
+    crawl_fs_blocking(run.vfs.clone(), path, "remove", move |vfs, path| {
+        vfs.remove_sync(&path.as_checked_path(), recursive)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_stat<R: Runtime>(
+    webview: WebviewWindow<R>,
+    path: String,
+) -> Result<CrawlFsStat, String> {
+    let (_, run) = run_of(&webview)?;
+    crawl_fs_metadata(run.vfs.clone(), path, "stat", true).await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_lstat<R: Runtime>(
+    webview: WebviewWindow<R>,
+    path: String,
+) -> Result<CrawlFsStat, String> {
+    let (_, run) = run_of(&webview)?;
+    crawl_fs_metadata(run.vfs.clone(), path, "lstat", false).await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_rename<R: Runtime>(
+    webview: WebviewWindow<R>,
+    old_path: String,
+    new_path: String,
+) -> Result<(), String> {
+    let (_, run) = run_of(&webview)?;
+    crawl_fs_blocking(run.vfs.clone(), old_path, "rename", move |vfs, old_path| {
+        let new_path = CheckedPathBuf::unsafe_new(PathBuf::from(new_path));
+        vfs.rename_sync(
+            &old_path.as_checked_path(),
+            &new_path.as_checked_path(),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_copy_file<R: Runtime>(
+    webview: WebviewWindow<R>,
+    from_path: String,
+    to_path: String,
+) -> Result<(), String> {
+    let (_, run) = run_of(&webview)?;
+    crawl_fs_blocking(run.vfs.clone(), from_path, "copyfile", move |vfs, from_path| {
+        let to_path = CheckedPathBuf::unsafe_new(PathBuf::from(to_path));
+        vfs.copy_file_sync(
+            &from_path.as_checked_path(),
+            &to_path.as_checked_path(),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_exists<R: Runtime>(
+    webview: WebviewWindow<R>,
+    path: String,
+) -> Result<bool, String> {
+    let (_, run) = run_of(&webview)?;
+    crawl_fs_blocking(run.vfs.clone(), path, "exists", |vfs, path| {
+        Ok(vfs.exists_sync(&path.as_checked_path()))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_truncate<R: Runtime>(
+    webview: WebviewWindow<R>,
+    path: String,
+    len: Option<u64>,
+) -> Result<(), String> {
+    let (_, run) = run_of(&webview)?;
+    crawl_fs_blocking(run.vfs.clone(), path, "truncate", move |vfs, path| {
+        vfs.truncate_sync(&path.as_checked_path(), len.unwrap_or(0))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_size<R: Runtime>(
+    webview: WebviewWindow<R>,
+    path: String,
+) -> Result<u64, String> {
+    let (_, run) = run_of(&webview)?;
+    crawl_fs_blocking(run.vfs.clone(), path, "size", crawl_fs_size_sync).await
+}
+
+#[tauri::command]
+pub async fn crawl_fs_get_root<R: Runtime>(
+    webview: WebviewWindow<R>,
+) -> Result<String, String> {
+    let (_, run) = run_of(&webview)?;
+    let vfs = run.vfs.clone();
+    tokio::task::spawn_blocking(move || {
+        vfs.cwd()
+            .map(|path| path.to_string_lossy().into_owned())
+            .map_err(|error| format!("getroot: {error}"))
+    })
+    .await
+    .map_err(|error| format!("Failed to join getroot: {error}"))?
 }
 
 fn merge_task_headers(
@@ -396,8 +1093,12 @@ pub async fn crawl_download_image<R: Runtime>(
     let (task_id, run) = run_of(&webview)?;
 
     let current_url = run.current_page_url();
-    let target_url = resolve_target_url(&url, current_url.as_deref(), run.params.base_url())?;
-    let parsed = Url::parse(&target_url).map_err(|e| format!("Invalid URL: {}", e))?;
+    let parsed = resolve_download_image_url(
+        &url,
+        current_url.as_deref(),
+        run.params.base_url(),
+        run.fs_handle,
+    )?;
     let images_dir = run.params.images_dir.clone();
     let download_start_time = now_ms();
     let mut request_headers = headers.unwrap_or_default();
@@ -409,6 +1110,28 @@ pub async fn crawl_download_image<R: Runtime>(
         .transpose()?;
 
     let merged_headers = merge_task_headers(&task_id, Some(request_headers), None)?;
+    let dq = TaskScheduler::global().download_queue();
+    if parsed.scheme() == "task-vfs" {
+        let cancel = run.cancel.clone();
+        let download = dq.download_image(
+            parsed,
+            images_dir,
+            run.params.plugin.id.clone(),
+            task_id,
+            download_start_time,
+            run.params.output_album_id.clone(),
+            merged_headers,
+            name,
+            metadata_id,
+            source_url,
+        );
+        return tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err("Task canceled".to_string()),
+            result = download => result.map_err(|error| format!("Failed to download image: {error}")),
+        };
+    }
+
     std::fs::create_dir_all(&images_dir)
         .map_err(|e| format!("Failed to create native download dir: {}", e))?;
     let _native_dest =
@@ -433,7 +1156,6 @@ pub async fn crawl_download_image<R: Runtime>(
         metadata_id,
         post_url: source_url,
     };
-    let dq = TaskScheduler::global().download_queue();
     dq.register_native(native_info)?;
 
     #[cfg(target_os = "linux")]

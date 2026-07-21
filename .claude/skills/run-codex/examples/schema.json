@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "component": { "type": "string" },
+    "risk": { "type": "string", "enum": ["low", "medium", "high"] },
+    "files": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["component", "risk", "files"],
+  "additionalProperties": false
+}

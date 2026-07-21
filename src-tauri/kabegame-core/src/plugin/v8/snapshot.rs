@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::time::Instant;
 
 const MAGIC: &[u8; 8] = b"KGVSNAP1";
@@ -18,13 +18,14 @@ const MAGIC: &[u8; 8] = b"KGVSNAP1";
 ///
 /// `CRYPTO_INIT_SCRIPT` runs after restore and does not require a bump. The V8
 /// version is recorded separately in the metadata below.
-const SNAPSHOT_FINGERPRINT: u32 = 1;
+const SNAPSHOT_FINGERPRINT: u32 = 3;
 const MAX_META_LEN: usize = 4096;
 
 static LOADED: OnceLock<&'static [u8]> = OnceLock::new();
 static LOAD_GUARD: Mutex<()> = Mutex::new(());
 static DISABLED: AtomicBool = AtomicBool::new(false);
 static GENERATING: AtomicBool = AtomicBool::new(false);
+static LEGACY_CLEANUP: Once = Once::new();
 
 fn meta_string() -> String {
     format!(
@@ -37,6 +38,20 @@ fn snapshot_file() -> PathBuf {
     crate::app_paths::AppPaths::global()
         .plugin_snapshots_dir()
         .join(format!("runtime@{SNAPSHOT_FINGERPRINT}.bin"))
+}
+
+fn cleanup_legacy_snapshot_dir_once() {
+    LEGACY_CLEANUP.call_once(|| {
+        let path = crate::app_paths::AppPaths::global().legacy_plugin_snapshots_dir();
+        if let Err(error) = fs::remove_dir_all(&path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "[v8-snapshot] failed to remove legacy cache {}: {error}",
+                    path.display()
+                );
+            }
+        }
+    });
 }
 
 fn disabled_by_env() -> bool {
@@ -55,6 +70,11 @@ pub(crate) fn try_load() -> Option<&'static [u8]> {
     if let Some(blob) = LOADED.get() {
         return Some(*blob);
     }
+
+    // 必须在上面的早退检查之后：本函数原先在被禁用时完全不碰 AppPaths，
+    // 而 AppPaths::global() 未初始化会 panic。放在函数开头会把
+    // KABEGAME_DISABLE_V8_SNAPSHOT=1 这条无害路径变成 panic 路径。
+    cleanup_legacy_snapshot_dir_once();
 
     let _guard = LOAD_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(blob) = LOADED.get() {
@@ -110,6 +130,8 @@ pub fn spawn_generate_if_missing() {
     if DISABLED.load(Ordering::Acquire) || disabled_by_env() || LOADED.get().is_some() {
         return;
     }
+    // 同 try_load：早退之后再碰 AppPaths，避免禁用路径 panic。
+    cleanup_legacy_snapshot_dir_once();
 
     let path = snapshot_file();
     if file_meta_is_current(&path) {
@@ -143,9 +165,11 @@ pub fn spawn_generate_if_missing() {
 /// Bake extension ESM only. Crypto globals are deliberately initialized after
 /// restore because their cppgc objects cannot be serialized in a V8 snapshot.
 pub(super) fn generate_snapshot_bytes() -> Result<Box<[u8]>, String> {
+    let fs: deno_fs::FileSystemRc =
+        Arc::new(crate::plugin::vfs::PluginVfs::snapshot_placeholder());
     let runtime = deno_core::JsRuntimeForSnapshot::try_new(deno_core::RuntimeOptions {
         module_loader: None,
-        extensions: super::base_extensions(super::KabegameOpState::snapshot_placeholder()),
+        extensions: super::base_extensions(super::KabegameOpState::snapshot_placeholder(), fs),
         ..Default::default()
     })
     .map_err(|error| format!("snapshot runtime init: {error}"))?;

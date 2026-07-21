@@ -32,6 +32,7 @@
       <div class="plugin-info-section">
         <PluginInfo v-if="plugin" :show-header="false" :plugin-id="plugin.id" :name="displayName"
           :description="displayDesc" :version="plugin.version" :min-app-version="plugin.minAppVersion ?? null"
+          :labels="plugin.labels ?? []" :min-app-incompatible="plugin.minAppIncompatible"
           :app-version="appVersion ?? null" :base-url="plugin.baseUrl" :installed="installed" :show-copy-id="true"
           :show-primary-action="true" :primary-action-loading="installing" :primary-action-disabled="installing"
           :primary-action-text="installing ? effectiveInstallingText : effectiveInstallText"

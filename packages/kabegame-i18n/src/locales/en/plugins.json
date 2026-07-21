@@ -50,6 +50,16 @@
   "detailNameLabel": "Name",
   "detailVersionLabel": "Version",
   "detailDescriptionLabel": "Description",
+  "detailLabelsLabel": "Labels",
+  "pluginLabels": {
+    "authNeedCookie": { "name": "Need Cookie", "desc": "This source may require logging in via {surf} first to obtain a cookie for crawling" },
+    "authNeedProxy": { "name": "Need Proxy", "desc": "This source may require a proxy for full access from mainland China" },
+    "contentResMobile": { "name": "Mobile", "desc": "Provides mobile / portrait resolution wallpapers" },
+    "contentResDesktop": { "name": "Desktop", "desc": "Provides desktop / landscape resolution wallpapers" },
+    "contentNsfw": { "name": "NSFW", "desc": "May contain NSFW / R-18 content" },
+    "contentTypeVideo": { "name": "Video", "desc": "Provides video / animated wallpapers" },
+    "versionIncompatible": { "name": "Incompatible", "desc": "This plugin requires a newer app version than the one installed" }
+  },
   "detailCrawlUrlLabel": "Crawl base URL",
   "detailCopyAction": "Copy",
   "confirmInstall": "Confirm install",

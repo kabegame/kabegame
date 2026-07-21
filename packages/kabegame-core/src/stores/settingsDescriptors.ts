@@ -211,7 +211,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
 
   for (const entry of entries) assignEntry(map, entry);
 
-  const localEntries = [
+  const localEntries: Array<[AppSettingKey, SettingDescriptor]> = [
     frontendLocal("appBackgroundEnabled", false),
     frontendLocal("appBackgroundBlur", 2),
     frontendLocal("appBackgroundOpacity", 0.25),
@@ -221,12 +221,13 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     frontendLocal("galleryLayoutDirection", "vertical"),
     frontendLocal("kamechanEnabled", true),
     frontendLocal("imageFit", "fit"),
+    frontendLocal("linkOpenMode", "unconfigured"),
   ];
+  if (IS_WINDOWS || IS_LINUX) {
+    localEntries.push(frontendLocal("closeAction", "unconfigured"));
+  }
   if (!IS_WEB) {
-    localEntries.push(
-      // @ts-expect-error 非web下localstorage
-      frontendLocal("gallery-path", ""),
-    )
+    localEntries.push(frontendLocal("gallery-path", ""));
   }
   for (const entry of localEntries) assignEntry(map, entry);
 

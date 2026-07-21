@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "surf-navbar"
+description = "Commands available only to the local surf navbar webview"
+commands.allow = ["surf_open_in_browser"]

@@ -6,7 +6,7 @@ alwaysApply: true
 # 校验方式：跑 check，不跑 build
 
 - **不要**用 `cargo build` / `tauri build` / `deno task b` / `npm run build` 等**构建**命令来校验代码是否正确。构建耗时以分钟计，且会产出无人需要的产物。
-- **要**跑 `deno task check -c <component>`（如 `deno task check -c kabegame`）。它是本仓库校验的正规入口：注入 `CEF_PATH`、FFmpeg、V8 等环境后跑 `cargo check` + Vue 类型检查。缩小范围用 `--skip vue`（只查 Rust）或 `--skip cargo`（只查前端）。
+- **要**跑 `.claude/skills/check-kabegame/driver.sh`（Claude Code 下即 `check-kabegame` skill）。它包装 `deno task check -c <component>` —— 本仓库校验的正规入口：注入 `CEF_PATH`、FFmpeg、V8 等环境后跑 `cargo check` + Vue 类型检查 —— 并额外落盘日志、从几百行 warning 里摘出真正的 error。缩小范围用 `--skip vue`（只查 Rust）或 `--skip cargo`（只查前端）。用法与坑见 [SKILL.md](mdc:.claude/skills/check-kabegame/SKILL.md)。不用 skill 时等价裸命令是 `deno task check -c kabegame`。
 - 编辑器/工作区的 **lint 诊断**（`ReadLints` 或 IDE 报错）同样有效，改动小时可只看它，不必每次都跑 check。
 - 仅在用户明确要求「帮我编译/构建一下」，或**需要真正运行程序来验证行为**时才执行构建（后者见 [debug-empirically.mdc](mdc:.cursor/rules/debug-empirically.mdc)：跑起来观察 > 纯静态推理）。
 

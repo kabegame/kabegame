@@ -7,7 +7,24 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 ## 全局能力
 
 - Web 平台：`URL` / `URLSearchParams`、`TextEncoder` / `TextDecoder`、`atob` / `btoa`、timer、`crypto`、`fetch` / `Request` / `Response` / `Headers`、`DOMParser`。
-- 宿主桥：`Kabegame.to`、`back`、`currentUrl`、`currentHtml`、`currentDocument`、`currentHeaders`、`pluginData`、`setPluginData`、`setHeader`、`delHeader`、`warn`、`addProgress`、`downloadImage`、`createImageMetadata`。
+- 宿主桥：`Kabegame.to`、`back`、`currentUrl`、`currentHtml`、`currentDocument`、`currentHeaders`、`pluginData`、`setPluginData`、`setHeader`、`requireCookie`、`delHeader`、`warn`、`addProgress`、`downloadImage`、`createImageMetadata`，以及基于每任务 `PluginVfs` 的 `Kabegame.fs`（`getRoot()` 返回本次任务的虚拟根）。
+
+### 畅游 Cookie 注入
+
+- `Kabegame.requireCookie(host?): boolean` 让宿主从畅游（surf）持久化记录中读取目标 host 的 Cookie，并写入当前任务的 `Cookie` 请求头，效果等价于 `setHeader("Cookie", ...)`。返回值仅表示是否注入成功，Cookie 明文不会返回给插件脚本。
+- 省略 `host` 时从插件 `baseUrl` 解析；也可传入 host 覆盖默认值。
+- Cookie 仅来自数据库持久化的 `get_surf_record_by_host` 记录。用户必须先在畅游访问并登录目标站点；无记录或记录中没有 Cookie 时返回 `false`。
+- `auth.needCookie` 标签负责提示插件需要 Cookie，并引导用户去畅游登录；插件随后调用 `requireCookie()` 取用，形成“标签提示 → 畅游登录 → 插件注入”的闭环。
+
+### 插件私有虚拟文件系统
+
+- `Kabegame.fs` 是 `deno_fs` 的完整 `30_fs.js` API，包含 `open` / `create` 返回的 `FsFile` 句柄、同步与异步文件方法，以及额外的 `getRoot(): string`。它只存在于 `Kabegame` 下，不暴露宿主物理路径。
+- 每个任务创建随机 `u64` handle，`getRoot()` 返回 `/{handle}`。插件应从该值拼接 `data`、`cache`、`tmp` 三个挂载点，例如 `${Kabegame.fs.getRoot()}/data/state.json`，不要猜测或硬编码 handle。
+- 三个挂载点映射到插件 id 隔离的物理目录：`data` 用于持久数据，应用升级或覆盖安装时保留；`cache` 可被应用或系统清理；`tmp` 当前不会自动清理，插件需要自行删除不再使用的临时文件。卸载插件会 best-effort 删除三类目录；单个目录删除失败只记日志，不阻断卸载。升级不经过卸载流程，因此三类目录都保留。
+- 权限分三层：虚拟 `/` 一律拒绝；`/{handle}` 只读；`/{handle}/{data|cache|tmp}/...` 可读写。`resolve()` 统一做词法 normalize、拒绝越界和软链接、校验当前任务 handle；`realPath` / `cwd` / `readLink` 等返回路径会反向翻译为虚拟路径。`umask` 是进程级设置，无法由路径沙箱约束，因此始终拒绝。
+- handle 只在任务注册期间有效。任务结束后调度器移除 handle 索引，旧虚拟路径无法再解析；插件不得把 `/{handle}/...` 写进持久配置或 metadata。底层 `data` 内容仍可在下一任务通过新的 `getRoot()` 访问。
+- `downloadImage()` 接受当前任务的虚拟路径并在宿主侧转换为内部 `task-vfs://` 下载；插件不能直接传 `task-vfs://`。这类入库记录使用占位 URL，不做 URL 去重，仍依靠内容 hash 去重。
+- WebView 后端复用同一个 `PluginVfs` 安全边界，但只提供无句柄异步子集：`readFile`、`writeFile`、`mkdir`、`readDir`、`remove`、`stat`、`getRoot`，且 `getRoot()` 返回 Promise。V8 类型包 `@kabegame/types` 只声明 V8 完整 API，不表示两后端等价。
 
 ## 迁移点
 
@@ -20,8 +37,8 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 
 - **网络全部走宿主 `reqwest`**，V8 侧不做任何 socket/TLS。`fetch` 是 `op_kabegame_fetch`（代理感知、跟随重定向 ≤10），`Kabegame.to`/页面抓取是 `op_kabegame_to`（手动重定向 + 重试），两者都在 `ops.rs` 用 `reqwest` 实现。因此 **不引入 `deno_fetch` / `deno_net` / `deno_tls`**，也就没有 hyper/其自带 TLS 的编译与体积负担。
 - 因为不再从 `deno_fetch` 取 `Headers` / `Response`，这两个类在 `prelude.js` 里**自实现**（`Headers` 为大小写不敏感多值 map；`Response` 由宿主返回的 `Uint8Array` 承载 body，支持 `text()`/`json()`/`arrayBuffer()`/`bytes()`，无流式 body / `clone`）。`Request` 仍是归一化 fetch 入参用的最小实现。改这三个类只需改 `prelude.js`。
-- 保留的 deno 扩展只有 `deno_webidl` / `deno_web`（URL/编码/timer/base64/DOMException）/ `deno_crypto`（`crypto.subtle`）。`deno_crypto` 的 `00_crypto.js` 是 lazy JS 且创建 cppgc 对象，在 `JsPluginRuntime::new` 里 isolate 建好后用 `loadExtScript` 显式加载并挂全局。
-- **设备端共享 baseline 快照缓存**：Android 交叉编译不能在 x86_64 宿主生成可供 arm64 V8 加载的快照，因此运行时在设备自身后台生成并缓存到 `cache_dir/plugins/snapshots/runtime@<fingerprint>.bin`。任一 V8 插件加载/安装会触发生成；首任务缺缓存时仍走 fresh 初始化，不额外阻塞，后续任务和进程重启后优先从磁盘快照恢复。快照只烘焙 `deno_webidl` / `deno_web` / `deno_crypto` / `kabegame_v8` 的扩展 ESM，插件模块仍按任务加载。
+- 保留的 deno 扩展为 `deno_webidl` / `deno_web`（URL/编码/timer/base64/DOMException）/ `deno_crypto`（`crypto.subtle`）/ `deno_io` / `deno_fs`；`deno_io` 不注册 stdio，`deno_fs` 注入每任务的 `PluginVfs`。`deno_crypto` 的 `00_crypto.js` 是 lazy JS 且创建 cppgc 对象，在 `JsPluginRuntime::new` 里 isolate 建好后用 `loadExtScript` 显式加载并挂全局。
+- **设备端共享 baseline 快照缓存**：Android 交叉编译不能在 x86_64 宿主生成可供 arm64 V8 加载的快照，因此运行时在设备自身后台生成并缓存到 `cache_dir/plugins/snapshots/runtime@<fingerprint>.bin`。任一 V8 插件加载/安装会触发生成；首任务缺缓存时仍走 fresh 初始化，不额外阻塞，后续任务和进程重启后优先从磁盘快照恢复。快照只烘焙 `deno_webidl` / `deno_web` / `deno_crypto` / `deno_io` / `deno_fs` / `kabegame_v8` 的扩展 JS；`Arc<PluginVfs>` 等 Rust state 在恢复后按相同 extension 顺序补入，插件模块仍按任务加载。
 - 快照文件有独立 magic、内容指纹、V8 精确版本、payload 长度和 CRC32；验证失败会删除并重建，restore 失败则本进程禁用快照并回退 fresh。`KABEGAME_DISABLE_V8_SNAPSHOT=1` 可强制关闭。修改 vendored `deno_core` 快照布局、deno 扩展版本/顺序或 `kabegame_v8` ESM 时，必须同步递增 `snapshot.rs` 的 `SNAPSHOT_FINGERPRINT`。
 - `deno_crypto` 的 `Crypto` / `SubtleCrypto` / `CryptoKey` 是 cppgc 对象，不能进入 V8 startup snapshot；`00_crypto.js` 始终在 fresh/restore isolate 建成后执行并挂载 globals。扩展 JS 继续以 `IncludedInBinary` 内嵌，既保证首次 fresh 初始化，也保证设备端快照生成不依赖构建机路径；仍无 residual 表或 `build.rs` 快照步骤。
 

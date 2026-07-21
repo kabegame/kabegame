@@ -28,6 +28,7 @@
   "imageClickActionDesc": "Action when left-clicking an image",
   "imageClickPreview": "In-app preview",
   "imageClickOpen": "Open with system default",
+  "imageClickAsk": "Ask every time",
   "galleryColumns": "Gallery columns",
   "galleryColumnsDesc": "Dynamic columns support shortcut adjustment; fixed columns disable shortcut",
   "galleryPageSize": "Images per page",

@@ -75,7 +75,7 @@
 
 ## 6. 远程图标与缓存
 
-- `fetch_remote_plugin_icon_v2` 等在提供 `source_id` + `plugin_id` 时，**优先**从已存在的 `store_plugin_cache_file` 读 icon，避免重复 Range 请求；缓存不存在再走 HTTP Range。详见 `plugin/mod.rs` 中 `fetch_remote_plugin_icon_v2`。
+- `fetch_remote_plugin_icon_v3` 在提供 `source_id` + `plugin_id` 时，**优先**从已存在的 `store_plugin_cache_file` 读 icon，避免重复 Range 请求；缓存不存在再走 HTTP Range。详见 `plugin/mod.rs` 中 `fetch_remote_plugin_icon_v3`。
 
 ---
 

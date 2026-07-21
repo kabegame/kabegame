@@ -74,6 +74,10 @@
                     {{ description || t('plugins.noDescription') }}
                 </el-descriptions-item>
 
+                <el-descriptions-item v-if="labels && labels.length" :label="t('plugins.detailLabelsLabel')">
+                    <PluginLabelTags :labels="labels" />
+                </el-descriptions-item>
+
                 <el-descriptions-item :label="t('plugins.detailStatusLabel')">
                     <el-tag v-if="installed" type="success">{{ t('plugins.installed') }}</el-tag>
                     <el-tag v-else type="info">{{ t('plugins.notInstalled') }}</el-tag>
@@ -117,11 +121,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { WarningFilled } from "@element-plus/icons-vue";
-import { IS_WEB } from "../../env";
-import { compareVersions } from "../../utils/version";
+import { openExternalLink } from "../../utils/openExternalLink";
+import type { PluginLabel } from "../../stores/pluginLabels";
+import PluginLabelTags from "./PluginLabelTags.vue";
 
 const KABEGAME_RELEASES_LATEST = "https://github.com/kabegame/kabegame/releases/latest";
 
@@ -134,6 +138,8 @@ const props = defineProps<{
     version?: string | null;
     minAppVersion?: string | null;
     appVersion?: string | null;
+    labels?: PluginLabel[];
+    minAppIncompatible?: boolean;
     baseUrl?: string | null;
     iconUrl?: string | null;
     installed: boolean;
@@ -157,20 +163,11 @@ const appVersionTooltipLine = computed(() =>
         : t("plugins.docTooltipUnknownApp"),
 );
 
-const minAppBelowRequired = computed(() => {
-    const minV = minAppVersionTrimmed.value;
-    const appV = appVersionTrimmed.value;
-    if (!minV || !appV) return false;
-    return compareVersions(appV, minV) < 0;
-});
+const minAppBelowRequired = computed(() => !!props.minAppIncompatible);
 
-const minAppTagType = computed<"success" | "danger" | "info">(() => {
-    const minV = minAppVersionTrimmed.value;
-    const appV = appVersionTrimmed.value;
-    if (!minV) return "info";
-    if (!appV) return "info";
-    return compareVersions(appV, minV) >= 0 ? "success" : "danger";
-});
+const minAppTagType = computed<"success" | "danger" | "info">(() =>
+    !minAppVersionTrimmed.value ? "info" : (props.minAppIncompatible ? "danger" : "success"),
+);
 
 function handleOpenLatestRelease(event: MouseEvent) {
     void handleOpenExternalUrl(event, KABEGAME_RELEASES_LATEST);
@@ -181,10 +178,9 @@ const handleOpenBaseUrl = (event: MouseEvent, url: string) => {
 };
 
 const handleOpenExternalUrl = async (event: MouseEvent, url: string) => {
-    if (IS_WEB) return;
     event.preventDefault();
     try {
-        await openUrl(url);
+        await openExternalLink(url);
     } catch (error) {
         console.error("打开链接失败:", error);
         ElMessage.error(t("common.openUrlFailed"));

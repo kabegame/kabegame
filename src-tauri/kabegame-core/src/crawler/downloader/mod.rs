@@ -19,6 +19,7 @@ use tokio::time::{Duration, sleep};
 use url::Url;
 
 pub const DATA_URI_PLACEHOLDER: &str = "data:dummy";
+pub const TASK_VFS_URI_PLACEHOLDER: &str = "task-vfs://placeholder";
 
 pub mod compress;
 #[cfg(target_os = "android")]
@@ -26,6 +27,8 @@ mod content;
 mod http;
 pub mod media_upload;
 pub mod queue;
+#[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+mod task_vfs;
 pub mod util;
 
 pub use compress::{
@@ -379,9 +382,9 @@ pub(crate) trait SchemeDownloader: Send + Sync {
 
 /// 宏：根据 (scheme 列表, 变体名, 类型路径) 静态生成枚举、trait 实现和注册表，避免重复代码。
 macro_rules! define_scheme_downloader_registry {
-    ($( ($schemes:expr, $variant:ident, $type:path) ),* $(,)?) => {
+    ($( $(#[$meta:meta])* ($schemes:expr, $variant:ident, $type:path) ),* $(,)?) => {
         enum SchemeDownloaderEnum {
-            $($variant($type),)*
+            $($(#[$meta])* $variant($type),)*
         }
 
         #[async_trait]
@@ -394,20 +397,20 @@ macro_rules! define_scheme_downloader_registry {
                 already_received: u64,
             ) -> Result<(), DownloadAttemptError> {
                 match self {
-                    $(SchemeDownloaderEnum::$variant(d) => d.download(url, headers, out, already_received).await,)*
+                    $($(#[$meta])* SchemeDownloaderEnum::$variant(d) => d.download(url, headers, out, already_received).await,)*
                 }
             }
 
             async fn display_name(&self, url: &Url, final_local_path: &str) -> String {
                 match self {
-                    $(SchemeDownloaderEnum::$variant(d) => d.display_name(url, final_local_path).await,)*
+                    $($(#[$meta])* SchemeDownloaderEnum::$variant(d) => d.display_name(url, final_local_path).await,)*
                 }
             }
         }
 
         /// 静态下载器注册表：(scheme 列表, 下载器)。无需 OnceLock，编译期确定。
         static DOWNLOADER_REGISTRY: &[(&[&'static str], SchemeDownloaderEnum)] = &[
-            $(($schemes, SchemeDownloaderEnum::$variant($type)),)*
+            $($(#[$meta])* ($schemes, SchemeDownloaderEnum::$variant($type)),)*
         ];
     };
 }
@@ -415,11 +418,15 @@ macro_rules! define_scheme_downloader_registry {
 #[cfg(target_os = "android")]
 define_scheme_downloader_registry! {
     (&["content"], Content, content::ContentSchemeDownloader),
+    #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+    (&["task-vfs"], TaskVfs, task_vfs::TaskVfsSchemeDownloader),
     (&["http", "https"], Http, http::HttpSchemeDownloader),
 }
 
 #[cfg(not(target_os = "android"))]
 define_scheme_downloader_registry! {
+    #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+    (&["task-vfs"], TaskVfs, task_vfs::TaskVfsSchemeDownloader),
     (&["http", "https"], Http, http::HttpSchemeDownloader),
 }
 
@@ -1120,6 +1127,8 @@ pub async fn postprocess_downloaded_image(
                     None
                 } else if url.scheme() == "data" {
                     Some(DATA_URI_PLACEHOLDER.to_string())
+                } else if url.scheme() == "task-vfs" {
+                    Some(TASK_VFS_URI_PLACEHOLDER.to_string())
                 } else {
                     Some(url.to_string())
                 },

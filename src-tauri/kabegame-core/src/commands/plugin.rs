@@ -54,7 +54,7 @@ pub async fn get_remote_plugin_icon(
     plugin_id: Option<String>,
 ) -> Result<Value, String> {
     let bytes = PluginManager::global()
-        .fetch_remote_plugin_icon_v2(&download_url, source_id.as_deref(), plugin_id.as_deref())
+        .fetch_remote_plugin_icon_v3(&download_url, source_id.as_deref(), plugin_id.as_deref())
         .await?;
     serde_json::to_value(bytes).map_err(|e| e.to_string())
 }

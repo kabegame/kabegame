@@ -5,6 +5,7 @@ import { IS_WEB } from "../env";
 import { pluginCacheDb } from "../cache/pluginCache";
 import { i18n, resolveConfigText, resolveManifestText } from "@kabegame/i18n";
 import { useCrawlerStore } from "./crawler";
+import type { PluginLabel } from "./pluginLabels";
 
 /** manifest name/description：后端下发的 Record，键为 "default"（默认）及语言码 "zh"、"ja"、"ko" 等 */
 export type PluginManifestText = Record<string, string>;
@@ -71,6 +72,8 @@ export interface Plugin {
   scriptType?: string;
   /** manifest minAppVersion，运行前由前端校验 */
   minAppVersion?: string | null;
+  labels?: PluginLabel[];
+  minAppIncompatible?: boolean;
   /** 插件包文件路径（.kgpg），仅已安装插件有值 */
   filePath?: string | null;
   /** 多语言文档 */

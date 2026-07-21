@@ -28,6 +28,7 @@
   "imageClickActionDesc": "左键点击图片时的行为",
   "imageClickPreview": "应用内预览",
   "imageClickOpen": "系统默认打开",
+  "imageClickAsk": "每次询问",
   "galleryColumns": "画廊列数",
   "galleryColumnsDesc": "动态列数支持快捷键调整；固定列数时快捷键不生效",
   "galleryPageSize": "每页显示数量",

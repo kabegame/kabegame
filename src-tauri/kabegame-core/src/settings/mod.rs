@@ -315,7 +315,7 @@ impl Settings {
             SettingKey::MaxConcurrentTasks => SettingValue::U32(2),
             SettingKey::DownloadIntervalMs => SettingValue::U32(500),
             SettingKey::NetworkRetryCount => SettingValue::U32(2),
-            SettingKey::ImageClickAction => SettingValue::String("preview".to_string()),
+            SettingKey::ImageClickAction => SettingValue::String("unconfigured".to_string()),
             SettingKey::GalleryImageAspectRatio => SettingValue::OptionString(None),
             SettingKey::GalleryImageObjectPosition => SettingValue::String("center".to_string()),
             SettingKey::AutoDeduplicate => SettingValue::Bool(false),
@@ -944,9 +944,9 @@ impl Settings {
             .map(|c| {
                 c.load()
                     .as_string()
-                    .unwrap_or_else(|| "preview".to_string())
+                    .unwrap_or_else(|| "unconfigured".to_string())
             })
-            .unwrap_or_else(|| "preview".to_string())
+            .unwrap_or_else(|| "unconfigured".to_string())
     }
 
     pub fn get_gallery_image_aspect_ratio(&self) -> Option<String> {

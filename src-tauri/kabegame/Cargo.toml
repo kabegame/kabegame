@@ -37,14 +37,15 @@ tauri-plugin-opener = { version = "2", optional = true }
 # 桌面端启用 IPC 功能，移动端禁用
 [target.'cfg(not(target_os = "android"))'.dependencies]
 kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "ipc-client", "plugin-runtime"] }
+deno_fs = { version = "0.162", features = ["sync_fs"] }
+deno_permissions = "0.111"
+percent-encoding = {workspace = true}
 governor = "0.7"
 axum = { version = "0.8", features = ["multipart"] }
 futures-util = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 reqwest = { version = "0.11", features = ["stream", "native-tls"] }
 rmcp = { version = "1.4", features = ["server", "transport-streamable-http-server"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "cors"] }
 include_dir = "0.7"
 
 [target.'cfg(target_os = "android")'.dependencies]

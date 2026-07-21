@@ -4,6 +4,7 @@
   "webviews": ["surf-*-navbar"],
   "permissions": [
     "surf",
+    "surf-navbar",
     "core:event:default"
   ]
 }

@@ -31,6 +31,16 @@ const webBase64 = Deno.core.loadExtScript("ext:deno_web/05_base64.js");
 const webEncoding = Deno.core.loadExtScript("ext:deno_web/08_text_encoding.js");
 const webDomException = Deno.core.loadExtScript("ext:deno_web/01_dom_exception.js");
 const webTimers = Deno.core.loadExtScript("ext:deno_web/02_timers.js");
+// deno_fs statSync/lstatSync read Deno.build.os from a generated decoder.
+// The full Deno runtime maps this same core metadata onto Deno.build; keep the
+// compatibility property non-enumerable and expose filesystem APIs only below.
+Object.defineProperty(Deno, "build", {
+  value: Deno.core.build,
+  configurable: false,
+  enumerable: false,
+  writable: false,
+});
+const denoFs = Deno.core.loadExtScript("ext:deno_fs/30_fs.js");
 // deno_crypto/00_crypto.js is NOT loaded here: it creates cppgc objects
 // (Crypto/SubtleCrypto/CryptoKey), attached at runtime startup in v8.rs.
 // Headers/Response are NOT pulled from deno_fetch either: that crate (and its
@@ -274,7 +284,13 @@ globalThis.fetch = async (input, init = undefined) => {
   return response;
 };
 
+const kabegameFs = Object.freeze({
+  ...denoFs,
+  getRoot: () => ops.op_kabegame_fs_root(),
+});
+
 globalThis.Kabegame = Object.freeze({
+  fs: kabegameFs,
   to: (url) => ops.op_kabegame_to(url),
   back: () => ops.op_kabegame_back(),
   currentUrl: () => ops.op_kabegame_current_url(),
@@ -292,6 +308,7 @@ globalThis.Kabegame = Object.freeze({
   pluginData: () => ops.op_kabegame_plugin_data(),
   setPluginData: (map) => ops.op_kabegame_set_plugin_data(map),
   setHeader: (key, value) => ops.op_kabegame_set_header(key, value),
+  requireCookie: (host) => ops.op_kabegame_require_cookie(host ?? ""),
   delHeader: (key) => ops.op_kabegame_del_header(key),
   warn: (message) => ops.op_kabegame_warn(message),
   addProgress: (percentage) => ops.op_kabegame_add_progress(percentage),

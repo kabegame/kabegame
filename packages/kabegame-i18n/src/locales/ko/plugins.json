@@ -50,6 +50,16 @@
   "detailNameLabel": "이름",
   "detailVersionLabel": "버전",
   "detailDescriptionLabel": "설명",
+  "detailLabelsLabel": "라벨",
+  "pluginLabels": {
+    "authNeedCookie": { "name": "쿠키 필요", "desc": "이 소스는 크롤링용 쿠키를 얻기 위해 먼저 {surf}에서 로그인해야 할 수 있습니다" },
+    "authNeedProxy": { "name": "프록시 필요", "desc": "이 소스는 중국 본토에서 완전히 접근하려면 프록시가 필요할 수 있습니다" },
+    "contentResMobile": { "name": "모바일", "desc": "모바일 / 세로 해상도 배경화면을 제공합니다" },
+    "contentResDesktop": { "name": "데스크톱", "desc": "데스크톱 / 가로 해상도 배경화면을 제공합니다" },
+    "contentNsfw": { "name": "NSFW", "desc": "NSFW / R-18 콘텐츠가 포함될 수 있습니다" },
+    "contentTypeVideo": { "name": "비디오", "desc": "비디오 / 라이브 배경화면을 제공합니다" },
+    "versionIncompatible": { "name": "호환 불가", "desc": "이 플러그인은 현재 설치된 앱보다 최신 버전이 필요합니다" }
+  },
   "detailCrawlUrlLabel": "크롤 기준 URL",
   "detailCopyAction": "복사",
   "confirmInstall": "설치 확인",

@@ -174,7 +174,6 @@ import {
   Refresh,
   WarningFilled,
 } from "@element-plus/icons-vue";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { isTauri } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useI18n } from "@kabegame/i18n";
@@ -184,6 +183,7 @@ import { useDownloadStateStore } from "@/stores/downloadState";
 import type { TaskFailedImage } from "@kabegame/core/types/image";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import { openExternalLink } from "@kabegame/core/utils/openExternalLink";
 
 interface Props {
   modelValue?: boolean;
@@ -323,7 +323,7 @@ const openTaskDetail = async (taskId: string) => {
 
 const openFailedUrl = async (url: string) => {
   try {
-    await openUrl(url);
+    await openExternalLink(url);
   } catch {
     ElMessage.error(t("common.openUrlFailed"));
   }

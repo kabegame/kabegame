@@ -1832,6 +1832,10 @@ mod imp {
         #[cfg(not(target_os = "linux"))]
         let _ = &args;
         let event_loop = builder.build();
+        // tao 在 build 时装了自己的 app delegate,必须在其之后覆盖,否则 Dock 点击
+        // 只会进 tao 那条我们不消费的队列。
+        #[cfg(target_os = "macos")]
+        crate::app_mac::install_app_delegate();
         let monitors = cef_monitor_snapshot().unwrap_or_else(|| tao_monitor_snapshot(&event_loop));
         eprintln!(
             "[cef-runtime] monitor snapshot source={} primary={:?}",
@@ -2328,6 +2332,12 @@ mod imp {
                     Instant::now() + Duration::from_millis(if once { 0 } else { 1 }),
                 );
                 self.drain_messages(&self.event_loop, &mut callback, &mut control_flow);
+                #[cfg(target_os = "macos")]
+                if let Some(has_visible_windows) = crate::app_mac::take_pending_reopen() {
+                    callback(RunEvent::Reopen {
+                        has_visible_windows,
+                    });
+                }
                 callback(RunEvent::MainEventsCleared);
                 let did_platform_work = pump_platform_messages();
                 do_message_loop_work();
@@ -3118,7 +3128,25 @@ mod imp {
         ))
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(target_os = "macos")]
+    fn raw_window_handle_from_cef_window(
+        window: &cef::Window,
+    ) -> std::result::Result<SendRawWindowHandle, raw_window_handle::HandleError> {
+        // macOS 上 `cef_window_handle_t` 即 `NSView*`（CefWindow 的根视图）。
+        // tauri 的 `ns_window()` 期望拿到 `AppKit` 句柄，再经 `view.window()`
+        // 反推 NSWindow，故这里必须回传 NSView 指针而非 Unavailable。
+        let ns_view = window.window_handle();
+        let Some(ns_view) = std::ptr::NonNull::new(ns_view) else {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        };
+        Ok(SendRawWindowHandle(
+            raw_window_handle::RawWindowHandle::AppKit(
+                raw_window_handle::AppKitWindowHandle::new(ns_view),
+            ),
+        ))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     fn raw_window_handle_from_cef_window(
         _window: &cef::Window,
     ) -> std::result::Result<SendRawWindowHandle, raw_window_handle::HandleError> {

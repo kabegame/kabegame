@@ -28,6 +28,7 @@
   "imageClickActionDesc": "画像を左クリックしたときの動作",
   "imageClickPreview": "アプリ内プレビュー",
   "imageClickOpen": "システムデフォルトで開く",
+  "imageClickAsk": "毎回確認",
   "galleryColumns": "ギャラリー列数",
   "galleryColumnsDesc": "動的列はショートカットで調整可能；固定列はショートカット無効",
   "galleryPageSize": "1ページあたりの表示数",

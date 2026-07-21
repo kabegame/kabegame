@@ -6,7 +6,7 @@ description: kabegame-cli 子命令、参数、退出码与守护进程依赖关
 `kabegame-cli` 是 Kabegame 随主应用一起发布的 sidecar 可执行文件，用于在不打开 GUI 的前提下脚手架、打包、导入并运行爬虫插件，或在脚本中控制虚拟磁盘。本页列出当前代码实际存在的子命令与参数。
 
 :::note
-除 `plugin new` / `plugin pack` / `plugin import` 外，所有子命令都需要 `kabegame-daemon` 正在运行。通常启动 GUI 主应用即可同时启动 daemon；也可以手动启动 `kabegame-daemon`。详见下方[守护进程依赖](#守护进程依赖)。
+除 `plugin new` / `plugin pack` / `plugin import` / `plugin run` 外，所有子命令都需要 `kabegame-daemon` 正在运行。通常启动 GUI 主应用即可同时启动 daemon；也可以手动启动 `kabegame-daemon`。详见下方[守护进程依赖](#守护进程依赖)。
 :::
 
 ## 启动与定位
@@ -55,38 +55,57 @@ kabegame-cli plugin new my-site --backend webview
 
 ### plugin run
 
-通过 daemon 执行一个已安装的插件或本地 `.kgpg` 文件。**需要 daemon。**
+在 CLI **本进程内**跑一个已安装的 V8 插件，实时渲染日志与进度。**不需要 daemon。**
+
+主要用途是插件开发期的快速验证：改完插件源码 → 重打包投放到 dev 数据目录 → 直接 `plugin run`，不用启动 GUI。
 
 ```bash
-kabegame-cli plugin run --plugin <id或路径> [选项] -- [插件参数...]
+kabegame-cli plugin run <plugin> [选项]
 ```
 
-| 参数                 | 必填 | 说明                                                                                                                                                                  |
-| -------------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-p`, `--plugin`     | 是   | 已安装的插件 ID（即 `.kgpg` 文件去掉扩展名），或一个本地 `.kgpg` 文件路径。                                                                                           |
-| `-o`, `--output-dir` | 否   | 输出目录。省略时由 daemon 使用默认目录（Pictures/Kabegame 或数据目录）。                                                                                              |
-| `--task-id`          | 否   | 任务 ID，用于进度与日志归档；省略时自动生成。                                                                                                                         |
-| `--output-album`     | 否   | 目标画册**名称**（不是 ID）。由 daemon 调用 `storage_get_albums` 做大小写不敏感匹配；未匹配到会输出 `未找到名称为 "<name>" 的画册` 并以 1 退出。                      |
-| `-- [args]`          | 否   | 结尾 `--` 后的所有参数会被透传到插件，映射为插件 `config.json` 中的 `var` 条目。clap 启用了 `trailing_var_arg` 与 `allow_hyphen_values`，所以带连字符的值也能直接写。 |
+| 参数             | 必填 | 说明                                                                                             |
+| ---------------- | ---- | ------------------------------------------------------------------------------------------------ |
+| `<plugin>`       | 是   | **已安装**插件的 id（等于 `.kgpg` 文件名 stem）。未安装会列出当前可用的 id。先用 `plugin import` 装。 |
+| `--var KEY=VALUE`| 否   | 覆盖单个 `kbConfig` 项，可重复。值按该 key 在 `kbConfig` 里声明的类型自动转换（int/float/boolean 等），所以 `--var page=3` 会变成数字 `3`。未知 key 会直接报错并列出可用项。 |
+| `--data dev\|prod\|auto` | 否 | 数据目录。`dev` = 仓库内 `.kabegame/debug`（`repack-crawler-plugins` skill 投放插件的地方），`prod` = 系统用户数据目录，`auto`（默认）跟随编译期的 `kabegame_data` cfg。**release 构建的 CLI 默认是 prod**，测试仓库内的插件时通常要显式加 `--data dev`。 |
+| `--output-dir`   | 否   | 图片输出目录。优先级高于插件默认配置里保存的 `outputDir`。                                          |
+| `--album-id`     | 否   | 目标画册 id。                                                                                     |
+| `--dry-run`      | 否   | 只解析并打印最终配置，不真正建任务。                                                              |
+| `--plain`        | 否   | 不渲染进度条，日志逐行直出。非 TTY（管道、CI）会自动进入此模式。                                    |
 
-:::caution
-当前 zh 文档旧版本中写的 `--output-album-id`（接收 ID）已不存在，实际参数是 `--output-album`（接收名称）。
-:::
+**配置解析**与主应用一致，三层叠加后打印成 JSON：
+
+1. `kbConfig` 各项的 `default`
+2. 用户在应用里保存的插件默认配置（`plugins-directory/default-configs/<id>.json` 的 `userConfig`；同一文件里的 `httpHeaders` / `outputDir` 也会被采用）
+3. 本次命令行的 `--var`
+
+**限制**：只支持 `kbBackend: "v8"` 的插件。WebView 后端要真实浏览器窗口，headless CLI 起不来，遇到会直接报错。
 
 ```bash
-# 单张图片导入
-kabegame-cli plugin run --plugin local-import -- --file_path "C:/Pictures/image.jpg"
+# 先安装，再运行
+kabegame-cli plugin import ./packed/kemono.kgpg
+kabegame-cli plugin run kemono --data dev \
+  --var source=creator --var service=patreon --var creator_id=44096704 \
+  --var creator_page_start=1 --var creator_page_end=1
 
-# 递归导入文件夹，并指定输出目录与画册名
-kabegame-cli plugin run --plugin local-import \
-  -o "D:/my-gallery" \
-  --output-album "我的收藏" \
-  -- --folder_path "C:/Pictures/anime" --recursive=true
+# 只看最终配置，不跑
+kabegame-cli plugin run kemono --data dev --dry-run --var source=tag --var tag=nsfw
 ```
+
+输出形态：进度条常驻最后一行，日志从它上方滚出（同 cargo / apt）。
+
+```text
+   LOG  [kemono]   ┌ 第 1 页开始：50 个帖子，178 张图
+   LOG  [kemono]   → 帖子开始 「Pudgy Paige Deadlock Mod」(patreon:44096704:151426947)：3 张图
+  WARN  附件下载失败：https://…（HTTP 404）
+⠐ [00:00:06] [==========================> ]  95% kemono · ↓12 · ⊘11
+```
+
+进度条尾部计数：`↓` 已下载、`✗` 失败、`⊘` 去重跳过。`Ctrl-C` 会取消任务而不是硬退出，避免数据库里留下永远 `running` 的任务。
 
 ### plugin pack
 
-把一个插件目录打包为 KGPG v2 格式的 `.kgpg`。**离线可用，不需要 daemon。**
+把一个插件目录打包为 KGPG v3 格式的 `.kgpg`。**离线可用，不需要 daemon。**
 
 ```bash
 kabegame-cli plugin pack --plugin-dir <目录> --output <输出.kgpg>
@@ -94,13 +113,13 @@ kabegame-cli plugin pack --plugin-dir <目录> --output <输出.kgpg>
 
 | 参数           | 必填 | 说明                                                              |
 | -------------- | ---- | ----------------------------------------------------------------- |
-| `--plugin-dir` | 是   | 包含 v3 `package.json` 与 `main` 指向脚本的插件目录；legacy v2 目录仍兼容 `manifest.json` + `crawl.js`/`crawl.rhai`。 |
+| `--plugin-dir` | 是   | 包含 v3 `package.json` 与 `main` 指向脚本的插件目录。 |
 | `--output`     | 是   | 输出的 `.kgpg` 文件路径。                                         |
 
-v3 插件打包时读取 `package.json.main` 与 `package.json.kbBackend`。legacy v2 插件仍保留旧检测逻辑：优先 `crawl.js`（webview），否则回退 `crawl.rhai`；两者都不存在会报错。
+打包时读取 `package.json.main` 与 `package.json.kbBackend`；缺少 v3 清单或必需脚本会直接报错。
 
 :::caution
-若目录内 `package.json` 存在且 `scripts.build` 非空，`plugin pack` 会在打包前**先执行一次构建**：检测到 bun lockfile 且 `bun` 在 PATH 时使用 bun，否则使用 npm，两者都找不到时报 `未找到可用的包管理器（npm/bun）…`。
+`plugin pack` 只打包已经构建好的目录，不执行 `scripts.build`。仓库打包流程由 `src-crawler-plugins/package-plugin.ts` 在调用 CLI 前负责构建。
 :::
 
 内部 ZIP 会收集 `package.json` 明确引用的脚本、文档、推荐配置、providers、metadata 迁移脚本与模板。`icon.png` 被单独编码进 KGPG 头部字段，失败时仅日志警告，不中断打包。
@@ -189,7 +208,7 @@ CLI 使用三种退出码：
 | `plugin new`                            | 否              | 纯本地模板复制。                           |
 | `plugin pack`                           | 否              | 读取目录，必要时在本地执行 npm/bun 构建。  |
 | `plugin import`                         | 否              | 本地初始化 `PluginManager`。               |
-| `plugin run`                            | 是              | 通过 `IpcRequest::PluginRun` 委派 daemon。 |
+| `plugin run`                            | 否              | 在本进程内初始化 TaskScheduler + V8 运行时执行，只订阅进程内的 `EventBroadcaster`。 |
 | `vd mount` / `vd unmount` / `vd status` | 是              | 全部走 IPC。                               |
 | `ipc-status`                            | 是              | 用来探测 daemon。                          |
 

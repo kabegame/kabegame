@@ -1,25 +1,23 @@
 import { i18n } from "@kabegame/i18n";
-import { compareVersions } from "@kabegame/core/utils/version";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternalLink } from "@kabegame/core/utils/openExternalLink";
 import { ElMessageBox } from "element-plus";
 import { useApp } from "@/stores/app";
 
 const KABEGAME_RELEASES_LATEST = "https://github.com/kabegame/kabegame/releases/latest";
 
-/** 插件声明了 minAppVersion 且能读到当前应用版本时，判断当前是否低于要求 */
+/** 读取后端在插件加载期计算的最低应用版本兼容状态。 */
 export function isPluginMinAppNotSatisfied(
-  plugin: { minAppVersion?: string | null } | null | undefined,
-  appVersion: string | null | undefined,
+  plugin: { minAppIncompatible?: boolean } | null | undefined,
 ): boolean {
-  const minV = (plugin?.minAppVersion ?? "").trim();
-  if (!minV) return false;
-  const cur = (appVersion ?? "").trim();
-  if (!cur) return false;
-  return compareVersions(cur, minV) < 0;
+  return !!plugin?.minAppIncompatible;
 }
 
 type PluginStoreLike = {
-  plugins: ReadonlyArray<{ id: string; minAppVersion?: string | null }>;
+  plugins: ReadonlyArray<{
+    id: string;
+    minAppVersion?: string | null;
+    minAppIncompatible?: boolean;
+  }>;
 };
 
 /**
@@ -36,7 +34,7 @@ export function createMinAppVersionBeforeAddTaskGuard(pluginStore: PluginStoreLi
     const cur = (appV ?? "").trim();
     if (!cur) return true;
 
-    if (!isPluginMinAppNotSatisfied(p, appV)) return true;
+    if (!isPluginMinAppNotSatisfied(p)) return true;
 
     const t = i18n.global.t;
     try {
@@ -50,7 +48,7 @@ export function createMinAppVersionBeforeAddTaskGuard(pluginStore: PluginStoreLi
           distinguishCancelAndClose: true,
         },
       );
-      await openUrl(KABEGAME_RELEASES_LATEST);
+      await openExternalLink(KABEGAME_RELEASES_LATEST);
     } catch {
       /* 取消或关闭 */
     }

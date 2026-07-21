@@ -200,6 +200,14 @@ pub async fn op_kabegame_fetch(
 }
 
 #[op2]
+#[string]
+pub fn op_kabegame_fs_root(state: &mut OpState) -> Result<String, JsErrorBox> {
+    let task_id = state.borrow::<KabegameOpState>().task_id.clone();
+    let run = run_of(&task_id)?;
+    Ok(format!("/{}", run.fs_handle))
+}
+
+#[op2]
 #[serde]
 pub fn op_kabegame_plugin_data(state: &mut OpState) -> Result<JsonValue, JsErrorBox> {
     let task_id = state.borrow::<KabegameOpState>().task_id.clone();
@@ -251,6 +259,57 @@ pub fn op_kabegame_set_header(state: &mut OpState, #[string] key: String, #[stri
             }
         }
         Err(e) => emit_http_warn(&task_id, format!("[headers] 写入 header 失败：{e}")),
+    }
+}
+
+#[op2(fast)]
+pub fn op_kabegame_require_cookie(state: &mut OpState, #[string] host: String) -> bool {
+    let task_id = state.borrow::<KabegameOpState>().task_id.clone();
+    let run = match run_of(&task_id) {
+        Ok(r) => r,
+        Err(e) => {
+            emit_http_warn(&task_id, format!("[cookie] 无法定位任务：{e}"));
+            return false;
+        }
+    };
+    let target_host = {
+        let h = host.trim();
+        if !h.is_empty() {
+            Some(h.to_string())
+        } else {
+            Url::parse(run.params.base_url())
+                .ok()
+                .and_then(|u| u.host_str().map(|s| s.to_string()))
+        }
+    };
+    let Some(host) = target_host else {
+        emit_http_warn(&task_id, "[cookie] 无法解析目标 host".to_string());
+        return false;
+    };
+    match Storage::global().get_surf_record_by_host(&host) {
+        Ok(Some(rec)) if !rec.cookie.trim().is_empty() => {
+            match run.set_header("Cookie".to_string(), rec.cookie) {
+                Ok(()) => {
+                    emit_http_info(&task_id, format!("[cookie] 已从畅游注入 {host} 的 Cookie"));
+                    true
+                }
+                Err(e) => {
+                    emit_http_warn(&task_id, format!("[cookie] 写入 Cookie 失败：{e}"));
+                    false
+                }
+            }
+        }
+        Ok(_) => {
+            emit_http_warn(
+                &task_id,
+                format!("[cookie] 畅游无 {host} 的 Cookie(请先在畅游登录该站)"),
+            );
+            false
+        }
+        Err(e) => {
+            emit_http_warn(&task_id, format!("[cookie] 读取畅游记录失败：{e}"));
+            false
+        }
     }
 }
 
@@ -311,8 +370,8 @@ pub async fn op_kabegame_download_image(
     let headers = run.headers_snapshot();
 
     let (custom_name, metadata_id, post_url) = parse_download_opts(opts, &run)?;
-    let parsed_url =
-        Url::parse(&url).map_err(|e| JsErrorBox::generic(format!("Invalid URL: {e}")))?;
+    let parsed_url = crate::plugin::parse_download_image_url(&url, run.fs_handle)
+        .map_err(JsErrorBox::generic)?;
     let download_start_time = now_ms();
     let fut = download_queue.download_image(
         parsed_url,

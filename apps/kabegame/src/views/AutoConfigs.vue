@@ -164,12 +164,9 @@
       </template>
     </el-dialog>
 
-    <!-- 安卓不显示这个页面，所以不做判断.收集（与画廊页一致：桌面 CrawlerDialog / 本地导入；安卓 CollectSourcePicker / drawer / MediaPicker） -->
+    <!-- 安卓不显示这个页面，所以不做判断 -->
     <CrawlerDialog :model-value="crawlerDialog.isOpen.value" :initial-config="crawlerDialogInitialConfig" @update:model-value="crawlerDialog.close" />
     <LocalImportDialog v-if="!IS_WEB" :model-value="localImportDialog.isOpen.value" @update:model-value="localImportDialog.close" />
-
-    <!-- <CollectSourcePicker v-if="IS_ANDROID" v-model="showCollectSourcePicker" @select="handleCollectSourceSelect" /> -->
-    <!-- <MediaPicker v-if="IS_ANDROID" v-model="showMediaPicker" @select="handleMediaPickerSelect" /> -->
   </div>
 </template>
 
@@ -192,7 +189,6 @@ import LocalImportDialog from "@/components/LocalImportDialog.vue";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useCrawlerStore } from "@/stores/crawler";
-import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
@@ -207,7 +203,6 @@ const { t, locale } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
-const crawlerDrawerStore = useCrawlerDrawerStore();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
 const pluginStore = usePluginStore();
@@ -228,8 +223,6 @@ const headerShowFeatures = [
 
 const crawlerDialog = useModal();
 const localImportDialog = useModal();
-const showMediaPicker = ref(false);
-const showCollectSourcePicker = ref(false);
 const crawlerDialogInitialConfig = ref<{
   pluginId?: string;
   outputDir?: string;
@@ -532,16 +525,6 @@ const goCreate = () => {
   autoConfigDialog.openCreate();
 };
 
-const handleCollectSourceSelect = (source: "local" | "remote") => {
-  showCollectSourcePicker.value = false;
-  if (source === "local") {
-    if (IS_WEB) return;
-    showMediaPicker.value = true;
-  } else {
-    crawlerDrawerStore.open();
-  }
-};
-
 const handleDelete = async (id: string) => {
   if (await guardDesktopOnly("deleteRunConfig", { needSuper: true })) return;
   try {
@@ -626,9 +609,7 @@ const handleHeaderAction = (payload: { id: string; data?: { type: string; value?
   }
   if (payload.id === HeaderFeatureId.Collect) {
     const d = payload.data;
-    if (d?.type === "openMenu") {
-      showCollectSourcePicker.value = true;
-    } else if (d?.type === "select") {
+    if (d?.type === "select") {
       if (d.value === "local") {
         if (IS_WEB) return;
         localImportDialog.open();

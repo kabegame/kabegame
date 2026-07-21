@@ -5,6 +5,8 @@ pub mod metadata_migration;
 // 嵌入式 V8 后端：桌面 + Android（仅 iOS 不支持）。
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod v8;
+#[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+pub mod vfs;
 
 mod builtin;
 
@@ -15,14 +17,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{Read, SeekFrom};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use url::Url;
 use zip::ZipArchive;
 
@@ -38,6 +39,29 @@ pub enum PluginBackend {
     V8,
     Webview,
     Builtin,
+}
+
+/// 将插件传入的图片来源转换为下载器 URL。
+///
+/// VFS 路径只能引用当前任务的 handle；调用方必须在进入没有 task_id 语境的
+/// SchemeDownloader 前完成这项归属校验，且不允许插件用字面量 `task-vfs:` 绕过它。
+pub fn parse_download_image_url(url: &str, fs_handle: u64) -> Result<Url, String> {
+    if Url::parse(url).is_ok_and(|parsed| parsed.scheme() == "task-vfs") {
+        return Err(
+            "Direct task-vfs URLs are not allowed; pass a path from Kabegame.fs instead"
+                .to_string(),
+        );
+    }
+
+    let owned_root = format!("/{fs_handle}/");
+    if let Some(relative_path) = url.strip_prefix(&owned_root) {
+        let mut parsed = Url::parse(&format!("task-vfs://{fs_handle}/"))
+            .expect("task-vfs URL with numeric handle must be valid");
+        parsed.set_path(&format!("/{relative_path}"));
+        return Ok(parsed);
+    }
+
+    Url::parse(url).map_err(|error| format!("Invalid URL: {error}"))
 }
 
 impl FromStr for PluginBackend {
@@ -65,7 +89,7 @@ impl PluginBackend {
     }
 }
 
-/// 插件脚本（package.json + main）。旧版 manifest.json (v2) 与 Rhai 均已移除。
+/// 插件脚本（package.json + main）。旧清单格式与 Rhai 均已移除。
 /// `backend` 为 `None` 表示解析异常或无可执行脚本。
 #[derive(Debug, Clone, Default)]
 pub struct PluginScript {
@@ -102,6 +126,22 @@ impl PluginScript {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginLabel {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub desc: String,
+}
+
+fn plugin_labels_from_object(obj: &serde_json::Map<String, serde_json::Value>) -> Vec<PluginLabel> {
+    obj.get("kbLabels")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<PluginLabel>>(value).ok())
+        .unwrap_or_default()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plugin {
     pub id: String,
@@ -127,6 +167,10 @@ pub struct Plugin {
         rename = "minAppVersion"
     )]
     pub min_app_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<PluginLabel>,
+    #[serde(rename = "minAppIncompatible", default)]
+    pub min_app_incompatible: bool,
     /// 插件包文件路径（.kgpg），仅已安装插件有值
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "filePath")]
     pub file_path: Option<String>,
@@ -494,6 +538,23 @@ impl PluginManager {
         if let Err(e) = crate::storage::Storage::global().plugin_data().delete(id) {
             eprintln!("[plugin-data] cleanup failed for {id}: {e}");
         }
+        let app_paths = crate::app_paths::AppPaths::global();
+        for (kind, dir) in [
+            ("plugin-vfs-data", app_paths.plugin_data_dir(id)),
+            ("plugin-vfs-cache", app_paths.plugin_cache_dir(id)),
+            ("plugin-vfs-tmp", app_paths.plugin_temp_dir(id)),
+        ] {
+            match dir {
+                Ok(path) => {
+                    if let Err(e) = fs::remove_dir_all(path) {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            eprintln!("[{kind}] cleanup failed for {id}: {e}");
+                        }
+                    }
+                }
+                Err(e) => eprintln!("[{kind}] cleanup failed for {id}: {e}"),
+            }
+        }
         // 删除后局部刷新缓存（避免前端仍看到旧列表/旧图标）
         self.refresh_plugin(id).await?;
 
@@ -551,12 +612,12 @@ impl PluginManager {
         Ok(())
     }
 
-    /// 从 ZIP 格式的插件文件中读取 manifest.json
+    /// 从 KGPG v3 插件文件中读取 package.json 清单。
     pub async fn read_plugin_manifest(&self, zip_path: &Path) -> Result<PluginManifest, String> {
         read_plugin_manifest_from_kgpg_file(zip_path).await
     }
 
-    /// 从 ZIP 格式的插件文件中读取 config.json（供 CLI/外部调用复用）
+    /// 从 KGPG v3 插件文件中读取配置（供 CLI/外部调用复用）。
     pub fn read_plugin_config_public(
         &self,
         zip_path: &Path,
@@ -564,7 +625,7 @@ impl PluginManager {
         self.read_plugin_config(zip_path)
     }
 
-    /// 从任意 .kgpg 文件读取变量定义（config.json 的 var），不存在则返回空数组。
+    /// 从 KGPG v3 文件读取变量定义，不存在则返回空数组。
     pub fn get_plugin_vars_from_file(&self, zip_path: &Path) -> Result<Vec<VarDefinition>, String> {
         Ok(self
             .read_plugin_config(zip_path)?
@@ -572,43 +633,24 @@ impl PluginManager {
             .unwrap_or_default())
     }
 
-    /// 从 ZIP 格式的插件文件中读取 icon.png
+    /// 从 KGPG v3 固定头部读取 icon。
     pub async fn read_plugin_icon(&self, zip_path: &Path) -> Result<Option<Vec<u8>>, String> {
-        // v2：优先读取头部固定 icon（RGB24 raw），并转换为 PNG bytes（前端保持不变）
-        if let Ok(Some(rgb)) = crate::kgpg::read_kgpg2_icon_rgb_from_file(zip_path).await {
-            if rgb.len() == crate::kgpg::KGPG2_ICON_SIZE {
-                use image::{ImageOutputFormat, RgbImage};
-                let img =
-                    RgbImage::from_raw(crate::kgpg::KGPG2_ICON_W, crate::kgpg::KGPG2_ICON_H, rgb)
-                        .ok_or_else(|| "Invalid kgpg2 icon buffer".to_string())?;
-                let mut out: Vec<u8> = Vec::new();
-                let mut cursor = std::io::Cursor::new(&mut out);
-                img.write_to(&mut cursor, ImageOutputFormat::Png)
-                    .map_err(|e| format!("Failed to encode icon png: {}", e))?;
-                return Ok(Some(out));
-            }
-        }
-
-        let file =
-            fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
-        let mut archive =
-            ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
-
-        let mut icon_file = match archive.by_name("icon.png") {
-            Ok(f) => f,
-            Err(_) => return Ok(None), // icon.png 是可选的
+        let Some(rgb) = crate::kgpg::read_kgpg3_icon_rgb(zip_path).await? else {
+            return Ok(None);
         };
-
-        let mut icon_data = Vec::new();
-        icon_file
-            .read_to_end(&mut icon_data)
-            .map_err(|e| format!("Failed to read icon.png: {}", e))?;
-
-        Ok(Some(icon_data))
+        use image::{ImageOutputFormat, RgbImage};
+        let img = RgbImage::from_raw(crate::kgpg::KGPG3_ICON_W, crate::kgpg::KGPG3_ICON_H, rgb)
+            .ok_or_else(|| "Invalid KGPG v3 icon buffer".to_string())?;
+        let mut out: Vec<u8> = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut out);
+        img.write_to(&mut cursor, ImageOutputFormat::Png)
+            .map_err(|e| format!("Failed to encode icon png: {}", e))?;
+        Ok(Some(out))
     }
 
-    /// 从 ZIP 格式的插件文件中读取 config.json
+    /// 从 KGPG v3 插件文件中读取 package.json 配置。
     fn read_plugin_config(&self, zip_path: &Path) -> Result<Option<PluginConfig>, String> {
+        crate::kgpg::read_kgpg3_meta_sync(zip_path)?;
         let file =
             fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
         let mut archive =
@@ -1322,6 +1364,7 @@ impl PluginManager {
             .and_then(|v| v.as_str())
             .filter(|s| !s.trim().is_empty())
             .map(|s| s.to_string());
+        let labels = plugin_labels_from_object(map);
 
         Ok(StorePluginResolved {
             id,
@@ -1338,6 +1381,8 @@ impl PluginManager {
             installed_version: None,
             store_download_progress: None,
             store_download_error: None,
+            labels,
+            min_app_incompatible: plugin_min_app_incompatible(min_app_version.as_deref()),
             min_app_version,
         })
     }
@@ -1733,9 +1778,9 @@ impl PluginManager {
         Ok(cache_file)
     }
 
-    /// KGPG v2：仅通过 HTTP Range 获取固定头部，并返回 icon（PNG bytes）。
+    /// KGPG v3：仅通过 HTTP Range 获取固定头部，并返回 icon（PNG bytes）。
     /// 用于商店列表展示，避免额外的 `<id>.icon.png` 资产。
-    pub async fn fetch_remote_plugin_icon_v2(
+    pub async fn fetch_remote_plugin_icon_v3(
         &self,
         download_url: &str,
         source_id: Option<&str>,
@@ -1771,7 +1816,7 @@ impl PluginManager {
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-        let end = crate::kgpg::KGPG2_TOTAL_HEADER_SIZE.saturating_sub(1);
+        let end = crate::kgpg::KGPG3_TOTAL_HEADER_SIZE.saturating_sub(1);
         let range_value = format!("bytes=0-{}", end);
         let resp = client
             .get(download_url)
@@ -1791,25 +1836,24 @@ impl PluginManager {
             .bytes()
             .await
             .map_err(|e| format!("Failed to read kgpg header bytes: {}", e))?;
-        if bytes.len() < crate::kgpg::KGPG2_TOTAL_HEADER_SIZE {
+        if bytes.len() < crate::kgpg::KGPG3_TOTAL_HEADER_SIZE {
             return Err(format!(
                 "Invalid kgpg header size: got {} expected {}",
                 bytes.len(),
-                crate::kgpg::KGPG2_TOTAL_HEADER_SIZE
+                crate::kgpg::KGPG3_TOTAL_HEADER_SIZE
             ));
         }
 
-        let Some(rgb) = crate::kgpg::read_kgpg2_icon_rgb_from_bytes(&bytes) else {
-            // 非 v2：不在这里回退（商店列表不强依赖 icon）
+        let Some(rgb) = crate::kgpg::read_kgpg3_icon_rgb_from_bytes(&bytes)? else {
             return Ok(None);
         };
-        if rgb.len() != crate::kgpg::KGPG2_ICON_SIZE {
-            return Ok(None);
+        if rgb.len() != crate::kgpg::KGPG3_ICON_SIZE {
+            return Err("Invalid KGPG v3 icon buffer size".to_string());
         }
 
         use image::{ImageOutputFormat, RgbImage};
-        let img = RgbImage::from_raw(crate::kgpg::KGPG2_ICON_W, crate::kgpg::KGPG2_ICON_H, rgb)
-            .ok_or_else(|| "Invalid kgpg2 icon buffer".to_string())?;
+        let img = RgbImage::from_raw(crate::kgpg::KGPG3_ICON_W, crate::kgpg::KGPG3_ICON_H, rgb)
+            .ok_or_else(|| "Invalid KGPG v3 icon buffer".to_string())?;
         let mut out: Vec<u8> = Vec::new();
         let mut out_cursor = std::io::Cursor::new(&mut out);
         img.write_to(&mut out_cursor, ImageOutputFormat::Png)
@@ -1987,36 +2031,8 @@ impl PluginManager {
             .map_err(|e| format!("读取插件文件大小失败: {}", e))?
             .len();
 
-        // v2：异步读取固定头部，优先获取 manifest 与 icon（无需解 zip）
-        let mut manifest_from_meta: Option<PluginManifest> = None;
-        let mut v2_icon_rgb24: Option<Vec<u8>> = None;
-        if let Ok(Some(meta)) = crate::kgpg::read_kgpg2_meta(path).await {
-            if let Ok(mut file) = tokio::fs::File::open(path).await {
-                if meta.manifest_present() && meta.manifest_len > 0 {
-                    let manifest_off =
-                        (crate::kgpg::KGPG2_META_SIZE + crate::kgpg::KGPG2_ICON_SIZE) as u64;
-                    let mut slot = vec![0u8; crate::kgpg::KGPG2_MANIFEST_SLOT_SIZE];
-                    if file.seek(SeekFrom::Start(manifest_off)).await.is_ok()
-                        && file.read_exact(&mut slot).await.is_ok()
-                    {
-                        let s = String::from_utf8_lossy(&slot[..meta.manifest_len as usize])
-                            .to_string();
-                        if !s.trim().is_empty() {
-                            if let Ok(m) = serde_json::from_str::<PluginManifest>(&s) {
-                                manifest_from_meta = Some(m);
-                            }
-                        }
-                    }
-                }
-                if meta.icon_present() {
-                    if let Ok(Some(rgb)) = crate::kgpg::read_kgpg2_icon_rgb(path).await {
-                        if !rgb.is_empty() {
-                            v2_icon_rgb24 = Some(rgb);
-                        }
-                    }
-                }
-            }
-        }
+        // 先严格验证容器头部，再读取固定 icon；任何非 v3 容器都直接报错。
+        let v3_icon_rgb24 = crate::kgpg::read_kgpg3_icon_rgb(path).await?;
 
         // ZIP 解析放到 blocking 线程池（单次遍历读取所有条目）
         let zip_path = path.to_path_buf();
@@ -2042,7 +2058,7 @@ impl PluginManager {
             let mut archive =
                 ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
 
-            // 读取 package.json 判定 v3；旧版 manifest.json (v2) 插件格式已停止支持。
+            // 读取 package.json 并验证插件包规范版本。
             let package_json: Option<String> = match archive.by_name("package.json") {
                 Ok(mut f) => {
                     let mut s = String::new();
@@ -2058,8 +2074,7 @@ impl PluginManager {
             let is_v3 = pkg.as_ref().map(package_json_is_v3).unwrap_or(false);
             if !is_v3 {
                 return Err(
-                    "只支持 package.json (v3) 插件格式；旧版 manifest.json (v2) 插件已停止支持"
-                        .to_string(),
+                    "只支持 kbPackageVersion >= 3 的 package.json 插件格式".to_string(),
                 );
             }
             load_plugin_v3_from_zip(
@@ -2073,14 +2088,15 @@ impl PluginManager {
         .await
         .map_err(|e| format!("Failed to join ZIP parser task: {}", e))??;
 
-        let manifest = manifest_from_meta.unwrap_or(zip_manifest);
+        // 运行时以 ZIP 内 package.json 为权威。
+        let manifest = zip_manifest;
 
-        // 优先使用 KGPG v2 头部 icon（RGB24 raw → PNG），回落到 zip icon_png_bytes
-        let icon_png_base64 = if let Some(rgb24) = v2_icon_rgb24 {
+        // 优先使用 KGPG v3 头部 icon（RGB24 raw → PNG），回落到 ZIP 内图标字节。
+        let icon_png_base64 = if let Some(rgb24) = v3_icon_rgb24 {
             use base64::{Engine as _, engine::general_purpose::STANDARD};
             use image::RgbImage;
-            let w = crate::kgpg::KGPG2_ICON_W;
-            let h = crate::kgpg::KGPG2_ICON_H;
+            let w = crate::kgpg::KGPG3_ICON_W;
+            let h = crate::kgpg::KGPG3_ICON_H;
             RgbImage::from_raw(w, h, rgb24)
                 .and_then(|img| {
                     let mut png_bytes: Vec<u8> = Vec::new();
@@ -2133,6 +2149,8 @@ impl PluginManager {
             config: plugin_config_to_frontend_config_map(&config),
             script_type,
             min_app_version: manifest.min_app_version.clone(),
+            labels: manifest.labels.clone(),
+            min_app_incompatible: plugin_min_app_incompatible(manifest.min_app_version.as_deref()),
             file_path: Some(path.to_string_lossy().to_string()),
             doc,
             icon_png_base64,
@@ -2540,22 +2558,14 @@ fn parse_plugin_provider_entries(
     Ok(providers)
 }
 
-/// 从任意 `.kgpg` 文件读取 manifest.json（优先 KGPG v2 头部）。
+/// 从任意 `.kgpg` 文件的 ZIP 内容读取插件清单。
 ///
 /// 说明：
 /// - 这是 `PluginManager::read_plugin_manifest()` 的可复用实现。
 pub async fn read_plugin_manifest_from_kgpg_file(
     zip_path: &Path,
 ) -> Result<PluginManifest, String> {
-    // 优先尝试：KGPG v2 固定头部（无需解析 zip）
-    if let Ok(Some(s)) = crate::kgpg::read_kgpg2_manifest_json_from_file(zip_path).await {
-        if !s.trim().is_empty() {
-            if let Ok(m) = serde_json::from_str::<PluginManifest>(&s) {
-                return Ok(m);
-            }
-        }
-    }
-
+    crate::kgpg::read_kgpg3_meta(zip_path).await?;
     let zip_path = zip_path.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let file =
@@ -2592,17 +2602,8 @@ pub async fn read_plugin_manifest_from_kgpg_file(
 }
 
 pub fn read_plugin_manifest_from_kgpg_file_sync(zip_path: &Path) -> Result<PluginManifest, String> {
-    // 同步兼容入口：用于非 async 场景（如 VD provider）。
-    if let Ok(bytes) = fs::read(zip_path) {
-        if let Some(s) = crate::kgpg::read_kgpg2_manifest_json_from_bytes(&bytes) {
-            if !s.trim().is_empty() {
-                if let Ok(m) = serde_json::from_str::<PluginManifest>(&s) {
-                    return Ok(m);
-                }
-            }
-        }
-    }
-
+    // 同步入口：用于非 async 场景（如 VD provider），直接解析 ZIP 内容。
+    crate::kgpg::read_kgpg3_meta_sync(zip_path)?;
     let file =
         fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
     let mut archive =
@@ -2708,6 +2709,15 @@ pub fn check_min_app_version(current: &str, required: &str) -> Result<(), String
     }
 }
 
+fn plugin_min_app_incompatible(min_app_version: Option<&str>) -> bool {
+    match min_app_version {
+        Some(v) if !v.trim().is_empty() => {
+            check_min_app_version(env!("CARGO_PKG_VERSION"), v).is_err()
+        }
+        _ => false,
+    }
+}
+
 // 插件清单（manifest.json），扁平键 name / name.zh / name.ja，description / description.zh ...
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginManifest {
@@ -2722,6 +2732,8 @@ pub struct PluginManifest {
         rename = "minAppVersion"
     )]
     pub min_app_version: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<PluginLabel>,
 }
 
 impl<'de> Deserialize<'de> for PluginManifest {
@@ -2750,12 +2762,14 @@ impl<'de> Deserialize<'de> for PluginManifest {
             .map(|s| s.to_string());
         let name = extract_manifest_text_from_flat(map, "name");
         let description = extract_manifest_text_from_flat(map, "description");
+        let labels = plugin_labels_from_object(map);
         Ok(PluginManifest {
             name,
             version,
             description,
             author,
             min_app_version,
+            labels,
         })
     }
 }
@@ -3192,6 +3206,10 @@ pub struct StorePluginResolved {
     /// 可选：index.json 中与 manifest 一致的最低 Kabegame 版本要求
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_app_version: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<PluginLabel>,
+    #[serde(rename = "minAppIncompatible", default)]
+    pub min_app_incompatible: bool,
 }
 
 /// 商店源可用性验证结果
@@ -3316,6 +3334,7 @@ pub fn plugin_manifest_from_package_json(v: &serde_json::Value) -> Result<Plugin
     }
 
     let description = extract_manifest_text_from_flat(obj, "description");
+    let labels = plugin_labels_from_object(obj);
 
     Ok(PluginManifest {
         name,
@@ -3323,6 +3342,7 @@ pub fn plugin_manifest_from_package_json(v: &serde_json::Value) -> Result<Plugin
         description,
         author,
         min_app_version,
+        labels,
     })
 }
 
@@ -3441,6 +3461,35 @@ mod tests {
     }
 
     // ── 公共纯函数测试 ──
+
+    const DOWNLOAD_IMAGE_FS_HANDLE: u64 = 4242;
+
+    #[test]
+    fn download_image_wraps_only_its_own_vfs_path() {
+        let parsed = parse_download_image_url(
+            "/4242/data/x.jpg",
+            DOWNLOAD_IMAGE_FS_HANDLE,
+        )
+        .unwrap();
+        assert_eq!(parsed.as_str(), "task-vfs://4242/data/x.jpg");
+
+        let error = parse_download_image_url(
+            "/4243/data/x.jpg",
+            DOWNLOAD_IMAGE_FS_HANDLE,
+        )
+        .unwrap_err();
+        assert!(error.contains("Invalid URL"));
+    }
+
+    #[test]
+    fn download_image_rejects_literal_task_vfs_url() {
+        let error = parse_download_image_url(
+            "task-vfs://4242/data/x.jpg",
+            DOWNLOAD_IMAGE_FS_HANDLE,
+        )
+        .unwrap_err();
+        assert!(error.contains("Direct task-vfs URLs are not allowed"));
+    }
 
     #[test]
     fn test_package_json_is_v3() {

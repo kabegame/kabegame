@@ -16,6 +16,9 @@
 #   - 树内 deno_core 的 kabegame patch series（third-patches/deno）若已应用，编出的
 #     CLI 会带上这些补丁——这正是自编通道的目的。`embed_ext_sources` feature 不会被
 #     CLI 构建启用（仅 kabegame-core 依赖声明开启），CLI 行为与上游一致。
+#   - 默认关闭 upgrade feature：自编二进制不该被 `deno upgrade` 就地覆盖（会跟本脚本
+#     的产物管理打架），后台版本检查也是纯噪音。upgrade 是空 feature（不 gate 任何
+#     依赖），关掉只改行为、不省编译时间/体积。KB_DENO_UPGRADE=1 可切回官方默认。
 #   - Windows 下不能覆盖正在运行的 deno.exe：改动 third/deno 后请用官方 deno 或
 #     另一份拷贝运行本脚本。
 
@@ -45,10 +48,21 @@ else
   log "release profile 降级档: lto=$CARGO_PROFILE_RELEASE_LTO codegen-units=$CARGO_PROFILE_RELEASE_CODEGEN_UNITS opt-level=$CARGO_PROFILE_RELEASE_OPT_LEVEL"
 fi
 
+# feature 选择：默认剔除 upgrade,但必须手动带回 __vendored_zlib_ng(同在 default 里,
+# 是性能项不是可选项)。KB_DENO_UPGRADE=1 则完全走上游 default。
+FEATURE_ARGS=(--no-default-features --features __vendored_zlib_ng)
+if [[ "${KB_DENO_UPGRADE:-0}" == "1" ]]; then
+  FEATURE_ARGS=()
+  log "KB_DENO_UPGRADE=1：保留 upgrade feature（上游 default 特性集）"
+else
+  log "features: 上游 default 去掉 upgrade（deno upgrade 子命令与后台版本检查禁用）"
+fi
+
 log "building deno ($(git -C "$SUB" log -1 --format=%h 2>/dev/null || echo '?')) → $TARGET_DIR/release/deno"
 cargo build --release --locked \
   --manifest-path "$SUB/cli/Cargo.toml" \
   --target-dir "$TARGET_DIR" \
+  "${FEATURE_ARGS[@]}" \
   "$@"
 
 BIN="$TARGET_DIR/release/deno"

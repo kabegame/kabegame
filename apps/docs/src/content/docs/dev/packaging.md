@@ -75,7 +75,7 @@ deno task package --only <id1> <id2>     # 多选
 
 默认输出到 `src-crawler-plugins/packed/<plugin-id>.kgpg`，文件名等于插件目录名。可用 `--out-dir` / `--output-dir` 覆盖。
 
-格式遵循 KGPG v2（固定头部 + ZIP）。头部里已内嵌 icon，`index.json` 不再需要 `iconUrl`，旧的 `<id>.icon.png` 会被打包流程主动清理。详见 [插件格式（.kgpg）](/dev/format/)。
+格式遵循 KGPG v3（固定头部 + ZIP）。头部里已内嵌 icon，`index.json` 不再需要 `iconUrl`，旧的 `<id>.icon.png` 会被打包流程主动清理。详见 [插件格式（.kgpg）](/dev/format/)。
 
 ## `deno task generate-index`
 
@@ -89,7 +89,7 @@ deno task generate-index
 |---|---|
 | `id` | 插件 ID（= 目录名） |
 | `version` | 来自 `manifest.json` 的 semver |
-| `packageVersion` | KGPG 格式版本，当前为 `2` |
+| `packageVersion` | 插件包规范版本，当前为 `3` |
 | `downloadUrl` | `https://github.com/{owner}/{repo}/releases/download/v{ver}/<id>.kgpg` |
 | `sizeBytes` / `sha256` | 用于完整性校验与缓存失效 |
 | `name` / `name.zh` / `name.en` / `name.ja` / `name.ko` | 从 `manifest.json` 原样复制的扁平 i18n 键 |

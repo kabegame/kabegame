@@ -348,8 +348,8 @@ pub enum IpcRequest {
         plugin_id: String,
     },
 
-    /// KGPG v2：远程获取 icon（base64）
-    PluginGetRemoteIconV2 {
+    /// KGPG v3：远程获取 icon（base64）
+    PluginGetRemoteIconV3 {
         download_url: String,
         #[serde(default)]
         source_id: Option<String>,

@@ -31,16 +31,15 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { ElImageViewer } from "element-plus";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
 import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
-import { IS_WEB } from "../../env";
 import { useModal } from "../../composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import { openExternalLink } from "../../utils/openExternalLink";
 
 const props = withDefaults(
   defineProps<{
@@ -155,10 +154,8 @@ const handleDocClick = (e: MouseEvent) => {
   if (!a || !a.href) return;
   const href = a.getAttribute("href");
   if (!href || (!href.startsWith("http:") && !href.startsWith("https:"))) return;
-  // web mode：链接已有 target="_blank"，交给浏览器直接打开
-  if (IS_WEB) return;
   e.preventDefault();
-  void openUrl(href);
+  void openExternalLink(href);
 };
 
 const handleDocPreviewClose = () => {

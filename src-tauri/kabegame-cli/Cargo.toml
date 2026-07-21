@@ -6,10 +6,15 @@ default-run = "kabegame-cli"
 
 [dependencies]
 clap = {version = "4.5", features = ["derive"]}
+console = "0.16"
 dirs = "5.0"
 globset = "0.4"
 include_dir = "0.7"
-kabegame-core = {workspace = true, default-features = false}
+indicatif = "0.18"
+# plugin-runtime：`plugin run` 需要 V8 运行时（deno_core / rusty_v8）。
+# ipc-server：GlobalEmitter 在没有它时是 no-op 空壳（见 core/src/emitter.rs），
+#             CLI 要拿到 task-log / 进度事件就必须开它。
+kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "plugin-runtime"]}
 regex = "1"
 serde_json = {workspace = true}
 tokio = {workspace = true}

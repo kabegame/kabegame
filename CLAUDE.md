@@ -49,6 +49,8 @@ deno task b -c kabegame --mode android     # Build Android APK/AAB (mode-plugin 
 
 `deno task b` on the cargo-only `kabegame-cli` component builds **debug** by default; pass `--release` for a release build. The main app's desktop/android build always goes through `tauri build`, which is release regardless of `--release`.
 
+`kabegame-cli` enables `kabegame-core`'s `plugin-runtime` + `ipc-server` features, so it links deno_core/rusty_v8 and gets the real (non-no-op) `GlobalEmitter`. This powers `kabegame-cli plugin run <id>`, which executes an **installed V8 plugin in-process** (no daemon) and renders task logs above a pinned progress bar. Use it to test crawler plugins without launching the GUI — pair it with the `repack-crawler-plugins` skill and `--data dev`, since a release CLI otherwise resolves to the system data dir. See `apps/docs/src/content/docs/reference/cli.md`.
+
 ### CEF example
 
 `cef-example` and `kabegame-cef-helper` are binary targets of the `kabegame` package. They validate the CEF windowed backend outside Tauri and are not build-system components:
@@ -61,13 +63,18 @@ CEF_PATH=... cargo run -p kabegame --features standard --bin cef-example
 On macOS both binaries are flat cargo artifacts in `target/<profile>`; the CEF framework resolves through the `target/Frameworks` symlink created by cef-dll-sys. See `src-tauri/tauri-runtime-cef/README.md`.
 
 ### Type Checking
+**用 `check-kabegame` skill**（`.claude/skills/check-kabegame/`），不要手敲这些命令。
+它包装 `deno task check`，落盘日志并从几百行 warning 里摘出真正的 error：
+
 ```bash
-deno task check -c kabegame                # Check Vue types + Cargo
-deno task check -c kabegame --skip cargo   # Vue types only
-deno task check -c kabegame --mode android --skip vue  # cargo check for Android via fork's `cargo tauri
-                                     # android check` (NDK toolchain from cargo-mobile2, same as build).
-                                     # Needs env NDK + deno task build:ffmpeg --target android + bin/android/ v8.
+.claude/skills/check-kabegame/driver.sh              # vue-tsc + cargo check
+.claude/skills/check-kabegame/driver.sh --skip cargo # 只查前端类型（秒级）
+.claude/skills/check-kabegame/driver.sh --skip vue   # 只查 Rust
 ```
+
+Android（`--mode android --skip vue`）走 fork 的 `cargo tauri android check`（NDK
+toolchain 来自 cargo-mobile2，与 build 一致），需要 env NDK + `deno task build:ffmpeg
+--target android` + `bin/android/` v8 产物；细节与 gotchas 见 skill 的 SKILL.md。
 
 ### Data directory modes (`--data`)
 - `dev` (default for `deno task dev`): repo-local `.kabegame/debug/data`, `.kabegame/debug/cache`, and `.kabegame/debug/tmp` dirs — isolated from installed app
@@ -107,7 +114,7 @@ deno task build:deno             # Build the deno CLI from third/deno sources (p
 ```
 
 ### Verification workflow
-**Do not run `cargo build` / `tauri build` / `deno task b` to verify changes** — run `deno task check -c <component>` instead (narrow it with `--skip vue` / `--skip cargo`). Editor lint diagnostics are equally valid for small edits. Only build when the user explicitly asks. Gotcha: `check` fails with `os error 32` while an app instance is running (`cef-dll-sys`'s build script copies the CEF runtime into `target/`) — kill `kabegame.exe` first. Rule: `.cursor/rules/verify-by-lint.mdc`.
+**Do not run `cargo build` / `tauri build` / `deno task b` to verify changes** — invoke the **`check-kabegame` skill** instead (`.claude/skills/check-kabegame/driver.sh`, narrow it with `--skip vue` / `--skip cargo`). Editor lint diagnostics are equally valid for small edits. Only build when the user explicitly asks. Gotcha: `check` fails with `os error 32` while an app instance is running (`cef-dll-sys`'s build script copies the CEF runtime into `target/`) — kill `kabegame.exe` first. Rule: `.cursor/rules/verify-by-lint.mdc`.
 
 **Debugging is the exception — run the thing.** Lint cannot prove runtime behavior. When diagnosing a bug: measure the object's actual state before explaining the symptom; trace the real call chain and verify actual values at every hop (especially Rust↔CEF, frontend↔Tauri, main↔subprocess); prefer zero-cost experiments (existing binary + env var / Chromium `--disable-features=<Name>` / existing `[DEBUG-*]` logs) over editing code; write the falsification criterion *before* running the experiment; quote source verbatim without inlining your own annotations. The higher the cost of a conclusion (patch a vendored lib, rebuild Chromium, large refactor), the stronger the empirical evidence it demands. Rule: `.cursor/rules/debug-empirically.mdc`.
 

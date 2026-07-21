@@ -13,8 +13,8 @@
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Picture, FolderOpened, VideoPlay } from "@element-plus/icons-vue";
-import OptionPickerDrawer from "@/components/common/OptionPickerDrawer.vue";
-import type { OptionItem } from "@/components/common/OptionPickerDrawer.vue";
+import OptionPickerDrawer from "@kabegame/core/components/common/OptionPickerDrawer.vue";
+import type { OptionItem } from "@kabegame/core/components/common/OptionPickerDrawer.vue";
 import { pickFolder, type PickFolderResult } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useApp } from "@/stores/app";

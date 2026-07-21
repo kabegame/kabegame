@@ -47,12 +47,12 @@ pub async fn handle_plugin_request(req: &IpcRequest) -> Option<IpcResponse> {
         ),
 
         IpcRequest::PluginPreviewImport { zip_path } => Some(preview_import_plugin(zip_path).await),
-        IpcRequest::PluginGetRemoteIconV2 {
+        IpcRequest::PluginGetRemoteIconV3 {
             download_url,
             source_id,
             plugin_id,
         } => Some(
-            get_remote_plugin_icon_v2(download_url, source_id.as_deref(), plugin_id.as_deref())
+            get_remote_plugin_icon_v3(download_url, source_id.as_deref(), plugin_id.as_deref())
                 .await,
         ),
 
@@ -215,14 +215,14 @@ async fn preview_store_install(source_id: &str, plugin_id: &str) -> IpcResponse 
     )
 }
 
-async fn get_remote_plugin_icon_v2(
+async fn get_remote_plugin_icon_v3(
     download_url: &str,
     source_id: Option<&str>,
     plugin_id: Option<&str>,
 ) -> IpcResponse {
     let plugin_manager = PluginManager::global();
     let bytes = match plugin_manager
-        .fetch_remote_plugin_icon_v2(download_url, source_id, plugin_id)
+        .fetch_remote_plugin_icon_v3(download_url, source_id, plugin_id)
         .await
     {
         Ok(b) => b,

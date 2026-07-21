@@ -45,11 +45,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { ElButton, ElDialog, ElTabPane, ElTabs } from "element-plus";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { useI18n } from "@kabegame/i18n";
 import { IS_LINUX } from "@kabegame/core/env";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { renderBasicMarkdown } from "@kabegame/core/utils/renderMarkdown";
+import { openExternalLink } from "@kabegame/core/utils/openExternalLink";
 import * as updaterService from "@/services/updater";
 import { useUpdaterStore, type ReleaseInfo } from "@/stores/updater";
 
@@ -97,7 +97,7 @@ const showNoAssetHint = computed(() => !IS_LINUX && !!active.value && !active.va
 
 async function openRelease(r: ReleaseInfo) {
   try {
-    await openUrl(r.htmlUrl);
+    await openExternalLink(r.htmlUrl);
   } catch (e) {
     console.warn("[updater] openUrl failed:", e);
   }
@@ -121,7 +121,7 @@ function onBodyClick(e: MouseEvent) {
   const href = anchor.getAttribute("href");
   if (!href) return;
   e.preventDefault();
-  void openUrl(href).catch((err) => console.warn("[updater] openUrl failed:", err));
+  void openExternalLink(href).catch((err) => console.warn("[updater] openUrl failed:", err));
 }
 </script>
 

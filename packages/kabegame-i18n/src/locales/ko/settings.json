@@ -28,6 +28,7 @@
   "imageClickActionDesc": "이미지 왼쪽 클릭 시 동작",
   "imageClickPreview": "앱 내 미리보기",
   "imageClickOpen": "시스템 기본으로 열기",
+  "imageClickAsk": "매번 묻기",
   "galleryColumns": "갤러리 열 수",
   "galleryColumnsDesc": "동적 열은 단축키 조정 지원; 고정 열은 단축키 비활성화",
   "galleryPageSize": "페이지당 표시 수",

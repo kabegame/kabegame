@@ -1,7 +1,7 @@
 #[cfg(all(not(target_os = "android"), debug_assertions))]
 use std::sync::Arc;
 #[cfg(not(target_os = "android"))]
-use std::{path::Path, str::FromStr, sync::OnceLock};
+use std::{path::Path, sync::OnceLock};
 
 #[cfg(all(not(target_os = "android"), debug_assertions))]
 use axum::middleware::{from_fn, Next};
@@ -28,13 +28,14 @@ use tokio::io::SeekFrom;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 #[cfg(all(not(target_os = "android"), debug_assertions))]
 use tokio::sync::Semaphore;
-#[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
-use tower::ServiceExt;
-#[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
-use tower_http::services::ServeDir;
 
 #[cfg(not(target_os = "android"))]
 pub static HTTP_SERVER_PORT: OnceLock<u16> = OnceLock::new();
+
+/// 单次 206 响应的最大字节数。响应体是一次性读进内存的 `Vec<u8>`,不能让开放式
+/// Range 把整段视频拉进来。
+#[cfg(not(target_os = "android"))]
+const MAX_RANGE_CHUNK: u64 = 8 * 1024 * 1024;
 
 #[cfg(not(target_os = "android"))]
 #[derive(Debug, Deserialize)]
@@ -54,12 +55,6 @@ struct ProxyQuery {
 struct PluginDocImageQuery {
     plugin_id: String,
     path: String,
-}
-
-#[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
-fn build_serve_dir_request(path: &str) -> Option<Request<Body>> {
-    let uri = Uri::from_str(path).ok()?;
-    Request::builder().uri(uri).body(Body::empty()).ok()
 }
 
 #[cfg(not(target_os = "android"))]
@@ -159,24 +154,6 @@ async fn serve_file_with_mime(
     mime_type: Option<String>,
     range_header: Option<String>,
 ) -> Response {
-    // 优先尝试 ServeDir（桌面统一走 HTTP 文件服务）
-    #[cfg(not(target_os = "windows"))]
-    {
-        if path.starts_with('/') {
-            if let Some(req) = build_serve_dir_request(path) {
-                let service = ServeDir::new("/");
-                if let Ok(resp) = service.oneshot(req).await {
-                    if resp.status().is_success() {
-                        let mut out = resp.into_response();
-                        set_content_type_if_present(&mut out, mime_type.as_deref());
-                        set_immutable_cache(&mut out);
-                        return out;
-                    }
-                }
-            }
-        }
-    }
-
     if let Some(range_header) = range_header {
         match tokio::fs::metadata(path).await {
             Ok(meta) => {
@@ -200,7 +177,12 @@ async fn serve_file_with_mime(
                         end_str.parse::<u64>().ok()
                     };
                     if let Some(start) = start {
-                        let end = end.unwrap_or(file_size.saturating_sub(1));
+                        // 开放式区间(`bytes=N-`)按上限截断。Chromium 播放视频时首个
+                        // media 请求就是 `bytes=0-`,原样满足会把整个文件读进内存;
+                        // 截断后仍是合规 206,客户端照 Content-Range 继续要后续块。
+                        let end = end
+                            .unwrap_or_else(|| start.saturating_add(MAX_RANGE_CHUNK - 1))
+                            .min(file_size - 1);
                         if start <= end && end < file_size {
                             let chunk_len = (end - start + 1) as usize;
                             let mut file = match tokio::fs::File::open(path).await {
@@ -248,7 +230,7 @@ async fn serve_file_with_mime(
         }
     }
 
-    // ServeDir 不可用/失败时回落到直接读文件
+    // 无 Range 头:整文件返回(图片走这条;视频的 media 请求 Chromium 总会带 Range)
     match tokio::fs::read(path).await {
         Ok(bytes) => {
             let mut out = (StatusCode::OK, bytes).into_response();

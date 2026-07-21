@@ -171,7 +171,10 @@ pub async fn handle_connection<R, W, F, Fut>(
             } => {
                 match event_result {
                     Some((id, event)) => {
-                        match encode_frame(&event) {
+                        // 传 &DaemonEvent 而不是 &Arc<DaemonEvent>：后者要求 serde 的 `rc`
+                        // feature，而那只是 tauri 间接开进来的。不解引用的话，不依赖 tauri 的
+                        // 消费者（如 kabegame-cli 单独开 ipc-server）会编译失败。两者序列化结果一致。
+                        match encode_frame(&*event) {
                             Ok(bytes) => {
                                 if write_tx.send(bytes).is_err() {
                                     ipc_dbg!("[DEBUG] IPC 服务器写入通道关闭");

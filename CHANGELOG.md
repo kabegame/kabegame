@@ -7,16 +7,24 @@
 **Changelog entries:** ~~Write release notes in **English** (new sections and bullets from [3.4.5] onward). ~~ 从4.2.1开始用中文。
 
 ## [4.4.0]
+### Added
+- **插件**:
+  - 添加标签系统，可以声明自己是否需要翻墙、需要cookie
+  - 可以声明应用从畅游处cookie加到请求中(requireCookie)，插件读不了cookie。对于需要cookie的插件，能直接指示应用从畅游处获取cookie发送
+  - 添加每任务隔离的插件私有虚拟文件系统：V8 提供完整 `deno_fs` API，WebView 提供无句柄子集；插件卸载时 best-effort 清理其 data、cache、tmp 目录，升级时保留
+
 ### Fixed
 - **壁纸**: Windows \ MacOS 窗口模式壁纸不显示的bug
 - **任务**:
   - 安卓爬虫任务进度条不显示的bug
   - 取消、失败任务进度条不显示的bug
-  - js任务没有记录进度条，只是发送了进度条事件debug
+  - js任务没有记录进度条，只是发送了进度条事件的bug
+- **应用背景**:
+  - 应用侧边栏没有显示背景图的bug
+- MacOS点击图标不显示窗口的bug
 
 ### Optimized
 - **安装**: Windows 安装弹太多黑窗问题
-
 
 ## [4.3.0]
 ### Added

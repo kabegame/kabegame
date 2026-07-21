@@ -1,3 +1,6 @@
+// Kabegame.fs 的 API 形状与 Raw IPC 约定取自并改编自 tauri-plugin-fs 2.4.4
+//（Apache-2.0 OR MIT）。原始版权：Copyright 2019-2023 Tauri Programme
+// within The Commons Conservancy。
 // Kabegame WebView 爬虫运行环境模板。
 //
 // 本文件不是直接注入的脚本，而是由 Rust（create_crawler_window）在建窗时做
@@ -21,18 +24,242 @@
 
   const _tauri = window.__TAURI_INTERNALS__;
   if (!_tauri) return;
-  const invoke = (cmd, args) => _tauri.invoke(cmd, args || {});
+  const invoke = (cmd, args = {}, options) => _tauri.invoke(cmd, args, options);
   // 从 window 上摘掉 Tauri 内部对象，站点脚本无法据此判断处于爬虫环境。
   // media_capture.js / media_download.js 在本脚本之前注入并已各自捕获引用，不受影响。
   try {
     delete window.__TAURI_INTERNALS__;
   } catch (_) {}
 
+  const toFsBytes = (data, operation) => {
+    if (data instanceof Uint8Array) return data;
+    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    if (ArrayBuffer.isView(data)) {
+      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    }
+    throw new TypeError(`Kabegame.fs.${operation} data must be an ArrayBuffer or view`);
+  };
+
+  const parseFsStat = (value) => {
+    for (const key of ["mtime", "atime", "birthtime", "ctime"]) {
+      value[key] = value[key] == null ? null : new Date(value[key]);
+    }
+    return value;
+  };
+
+  const readBigEndianU64 = (bytes) => {
+    let value = 0;
+    for (const byte of bytes) value = value * 0x100 + byte;
+    return value;
+  };
+
+  class FileHandle {
+    #rid;
+    #closePromise = null;
+
+    constructor(rid) {
+      this.#rid = rid;
+    }
+
+    #resourceId() {
+      if (this.#rid === null) throw new Error("FileHandle is closed");
+      return this.#rid;
+    }
+
+    async read(buffer) {
+      if (!(buffer instanceof Uint8Array)) {
+        throw new TypeError("FileHandle.read buffer must be a Uint8Array");
+      }
+      if (buffer.byteLength === 0) return 0;
+
+      const data = await invoke("crawl_fs_fread", {
+        rid: this.#resourceId(),
+        len: buffer.byteLength,
+      });
+      const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : Uint8Array.from(data);
+      if (bytes.byteLength < 8) throw new Error("Invalid FileHandle.read response");
+      const nread = readBigEndianU64(bytes.subarray(bytes.byteLength - 8));
+      if (nread > buffer.byteLength) throw new Error("Invalid FileHandle.read byte count");
+      buffer.set(bytes.subarray(0, nread));
+      return nread === 0 ? null : nread;
+    }
+
+    write(data) {
+      const bytes = toFsBytes(data, "FileHandle.write");
+      return invoke("crawl_fs_fwrite", bytes, {
+        headers: { rid: String(this.#resourceId()) },
+      });
+    }
+
+    seek(offset, whence) {
+      return invoke("crawl_fs_fseek", {
+        rid: this.#resourceId(),
+        offset,
+        whence,
+      });
+    }
+
+    async stat() {
+      return parseFsStat(
+        await invoke("crawl_fs_fstat", { rid: this.#resourceId() }),
+      );
+    }
+
+    truncate(len) {
+      return invoke("crawl_fs_ftruncate", {
+        rid: this.#resourceId(),
+        len: len ?? undefined,
+      });
+    }
+
+    close() {
+      if (this.#rid === null) return this.#closePromise ?? Promise.resolve();
+      const rid = this.#rid;
+      this.#rid = null;
+      this.#closePromise = invoke("crawl_fs_close", { rid }).catch((error) => {
+        this.#rid = rid;
+        this.#closePromise = null;
+        throw error;
+      });
+      return this.#closePromise;
+    }
+  }
+
   // Kabegame 是闭包局部常量，crawl.js 被模板进同一闭包内即可直接引用；
   // 不挂到 window，避免站点通过全局检测。
   const Kabegame = Object.freeze({
     // 该任务的 merged_config（静态，建窗时烘焙）。
     vars: Object.freeze(__KB_VARS_JSON__),
+    // WebView 后端只暴露异步文件系统子集；所有路径均由任务 PluginVfs 校验。
+    fs: Object.freeze({
+      async open(path, options) {
+        const args = { path: String(path ?? "") };
+        if (typeof options === "object" && options !== null) {
+          args.options = {
+            read: options.read ?? undefined,
+            write: options.write ?? undefined,
+            append: options.append ?? undefined,
+            truncate: options.truncate ?? undefined,
+            create: options.create ?? undefined,
+            createNew: options.createNew ?? undefined,
+            mode: options.mode ?? undefined,
+          };
+        }
+        return new FileHandle(await invoke("crawl_fs_open", args));
+      },
+      async create(path) {
+        return new FileHandle(
+          await invoke("crawl_fs_create", { path: String(path ?? "") }),
+        );
+      },
+      async readFile(path) {
+        const data = await invoke("crawl_fs_read_file", {
+          path: String(path ?? ""),
+        });
+        return data instanceof ArrayBuffer ? new Uint8Array(data) : Uint8Array.from(data);
+      },
+      async readTextFile(path) {
+        const data = await invoke("crawl_fs_read_text_file", {
+          path: String(path ?? ""),
+        });
+        const bytes = data instanceof ArrayBuffer ? data : Uint8Array.from(data);
+        return new TextDecoder().decode(bytes);
+      },
+      async writeFile(path, data, options) {
+        const bytes = toFsBytes(data, "writeFile");
+        const o = typeof options === "object" && options !== null ? options : {};
+        return invoke("crawl_fs_write_file", bytes, {
+          headers: {
+            path: encodeURIComponent(String(path ?? "")),
+            options: JSON.stringify({
+              append: o.append ?? undefined,
+              create: o.create ?? undefined,
+              createNew: o.createNew ?? undefined,
+              mode: o.mode ?? undefined,
+            }),
+          },
+        });
+      },
+      writeTextFile(path, data, options) {
+        const o = typeof options === "object" && options !== null ? options : {};
+        return invoke("crawl_fs_write_text_file", new TextEncoder().encode(String(data ?? "")), {
+          headers: {
+            path: encodeURIComponent(String(path ?? "")),
+            options: JSON.stringify({
+              append: o.append ?? undefined,
+              create: o.create ?? undefined,
+              createNew: o.createNew ?? undefined,
+              mode: o.mode ?? undefined,
+            }),
+          },
+        });
+      },
+      mkdir(path, options) {
+        const o = typeof options === "object" && options !== null ? options : {};
+        return invoke("crawl_fs_mkdir", {
+          path: String(path ?? ""),
+          options: {
+            recursive: o.recursive ?? undefined,
+            mode: o.mode ?? undefined,
+          },
+        });
+      },
+      readDir(path) {
+        const virtualPath = String(path ?? "");
+        return {
+          async *[Symbol.asyncIterator]() {
+            const entries = await invoke("crawl_fs_read_dir", {
+              path: virtualPath,
+            });
+            for (const entry of entries) yield entry;
+          },
+        };
+      },
+      remove(path, options) {
+        const o = typeof options === "object" && options !== null ? options : {};
+        return invoke("crawl_fs_remove", {
+          path: String(path ?? ""),
+          options: { recursive: o.recursive ?? undefined },
+        });
+      },
+      rename(oldPath, newPath) {
+        return invoke("crawl_fs_rename", {
+          oldPath: String(oldPath ?? ""),
+          newPath: String(newPath ?? ""),
+        });
+      },
+      copyFile(fromPath, toPath) {
+        return invoke("crawl_fs_copy_file", {
+          fromPath: String(fromPath ?? ""),
+          toPath: String(toPath ?? ""),
+        });
+      },
+      async stat(path) {
+        return parseFsStat(
+          await invoke("crawl_fs_stat", { path: String(path ?? "") }),
+        );
+      },
+      async lstat(path) {
+        return parseFsStat(
+          await invoke("crawl_fs_lstat", { path: String(path ?? "") }),
+        );
+      },
+      exists(path) {
+        return invoke("crawl_fs_exists", { path: String(path ?? "") });
+      },
+      truncate(path, len) {
+        return invoke("crawl_fs_truncate", {
+          path: String(path ?? ""),
+          len: len ?? undefined,
+        });
+      },
+      size(path) {
+        return invoke("crawl_fs_size", { path: String(path ?? "") });
+      },
+      getRoot() {
+        return invoke("crawl_fs_get_root");
+      },
+    }),
     // 每页动态状态：按需经 invoke 单独获取（不做一次性上下文拉取）。
     pageLabel() {
       return invoke("crawl_get_page_label");
@@ -67,6 +294,7 @@
     // metadata 版本（plugin_version）由应用自动盖章，插件不可传入。
     async downloadImage(url, opts) {
       const rawUrl = String(url ?? "");
+      // /{handle}/... 是任务 VFS 路径，必须落入下方宿主命令做归属校验与包装。
       if (/^data:/i.test(rawUrl) || /^blob:/i.test(rawUrl)) {
         return window.__kb_media_download__(rawUrl, opts);
       }

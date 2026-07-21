@@ -82,16 +82,19 @@
                     <div class="plugin-info-group">
                       <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
                       <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
+                      <PluginLabelTags :labels="plugin.labels ?? []" size="small" />
                     </div>
                     <div class="plugin-info-group" aria-hidden="true">
                       <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
                       <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
+                      <PluginLabelTags :labels="plugin.labels ?? []" size="small" />
                     </div>
                   </div>
                 </div>
                 <div v-else class="plugin-info">
                   <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
                   <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
+                  <PluginLabelTags :labels="plugin.labels ?? []" size="small" />
                 </div>
 
                 <div class="plugin-footer">
@@ -220,6 +223,7 @@
                       size="small">{{
                         $t('plugins.canUpdate') }}</el-tag>
                     <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
+                    <PluginLabelTags :labels="plugin.labels ?? []" size="small" />
                   </div>
                   <div class="plugin-info-group" aria-hidden="true">
                     <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
@@ -230,6 +234,7 @@
                       size="small">{{
                         $t('plugins.canUpdate') }}</el-tag>
                     <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
+                    <PluginLabelTags :labels="plugin.labels ?? []" size="small" />
                   </div>
                 </div>
               </div>
@@ -242,6 +247,7 @@
                 <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger" size="small">{{
                   $t('plugins.canUpdate') }}</el-tag>
                 <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
+                <PluginLabelTags :labels="plugin.labels ?? []" size="small" />
               </div>
 
               <div class="plugin-footer">
@@ -399,6 +405,8 @@ import {
 } from "@element-plus/icons-vue";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import type { PluginManifestText } from "@kabegame/core/stores/plugins";
+import type { PluginLabel } from "@kabegame/core/stores/pluginLabels";
+import PluginLabelTags from "@kabegame/core/components/plugin/PluginLabelTags.vue";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
 import { invoke, listen } from "@/api/rpc";
@@ -441,6 +449,8 @@ interface StorePluginResolved {
   /** 后端 get_store_plugins 合并的当前下载进度 0–100 */
   storeDownloadProgress?: number | null;
   storeDownloadError?: string | null;
+  labels?: PluginLabel[];
+  minAppIncompatible?: boolean;
 }
 
 /** 与 Rust `StorePluginDownloadProgressEvent`（camelCase）一致 */

@@ -192,6 +192,11 @@ function mount() {
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>',
         () => runCommand("surf_open_devtools", { host }),
     );
+    const openInBrowser = iconButton(
+        "Open in browser",
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>',
+        () => runCommand("surf_open_in_browser", { url: currentUrl }),
+    );
 
     address.addEventListener("keydown", (event) => {
         if (event.key !== "Enter") return;
@@ -209,7 +214,7 @@ function mount() {
         address.value = currentUrl;
     });
 
-    bar.append(back, forward, reload, address, devtools);
+    bar.append(back, forward, reload, address, devtools, openInBrowser);
     root.appendChild(bar);
 
     listen<string>("surf-url-changed", (event) => {

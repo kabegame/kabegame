@@ -2,10 +2,7 @@
 
 ## 推荐格式：KGPG（ZIP 兼容）
 
-目前支持两种形态：
-
-1. **KGPG v1（纯 ZIP）**：文件扩展名 `.kgpg`，内容就是标准 ZIP。
-2. **KGPG v2（固定头部 + ZIP）**：`.kgpg` 文件前面加一个**固定大小头部**（用于无需解压/可 Range 读取 icon + manifest），后面仍然是标准 ZIP（SFX 兼容）。
+只支持 **KGPG v3（固定头部 + ZIP）**：`.kgpg` 文件前面是只含 meta 与 icon 的固定大小头部，用于无需解压或通过 HTTP Range 读取 icon；后面是标准 ZIP body（SFX 兼容），插件清单由 ZIP 内 `package.json` 提供。容器版本字段不是 `3` 的包一律拒绝加载。
 
 ### 文件结构（ZIP 内部）
 ```
@@ -20,7 +17,7 @@ plugin-name.kgpg
     - templates/               # 插件提供模板
 ```
 
-只支持 v3 `package.json` 格式；旧版 manifest.json (v2) 与 Rhai 后端均已停止支持，加载/打包时报可读错误。
+只支持 v3 `package.json` 格式；缺少有效 v3 清单的包与 Rhai 后端均不支持，加载/打包时报可读错误。
 
 ### templates/description.ejs（图片详情 HTML）
 
@@ -68,18 +65,32 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 | `private` | 否 | 内置插件建议为 `true`，避免作为 npm 包发布。 |
 | `name.*` / `description.*` | 否 | 扁平 i18n 键。`name` 自身已被包名占用；本地化展示名使用 `name.zh`、`name.en` 等。`description` 可作为默认描述。 |
 | `author` | 否 | 字符串或 `{ "name": "..." }`。 |
-| `kbPackageVersion` | 是 | 必须为 `3`。缺失或小于 3（旧版 manifest.json / v2）会在加载/打包时报可读错误。 |
-| `engines.kabegame` | 是 | 最低 Kabegame 版本，只支持 `>= X.Y.Z`，打包头部与商店索引会派生为 `minAppVersion`。 |
+| `kbPackageVersion` | 是 | 必须为 `3`。缺失或小于 3 会在加载/打包时报可读错误。 |
+| `engines.kabegame` | 是 | 最低 Kabegame 版本，只支持 `>= X.Y.Z`，商店索引会派生为 `minAppVersion`。 |
 | `main` | 是 | 插件根相对脚本路径。v8 插件用打包产物（如 `dist/main.js`），webview 插件用 `crawl.js`。 |
 | `kbBackend` | 是 | 脚本后端：`v8`、`webview`。JS 插件默认应显式写 `v8`；只有确实需要浏览器窗口/DOM/Cookie 容器时才使用 `webview`。（`rhai` 已停止支持。） |
 | `kbBaseUrl` | 否 | 旧 `config.json.baseUrl`。 |
+| `kbLabels` | 否 | 插件声明的标签数组；应用按内置支持列表渲染标签文案和颜色。 |
 | `kbConfig` | 否 | 旧 `config.json.var` 数组。 |
-| `kbIcon` | 否 | 插件图标路径，通常为 `icon.png`。打包时会写入 KGPG v2 固定头部。 |
+| `kbIcon` | 否 | 插件图标路径，通常为 `icon.png`。打包时会写入 KGPG v3 固定头部。 |
 | `kbDoc` | 否 | 文档映射；`default` 对应默认文档，其他键为语言码。值为插件根相对路径，如 `doc_root/doc.ja.md`。 |
 | `kbRecommendedConfigs` | 否 | 推荐运行配置文件路径数组。 |
 | `kbPathQLProviders` | 否 | Provider DSL 文件路径数组。 |
 | `kbMetadataMigration` | 否 | 单一 metadata 迁移脚本路径（`.js`，ES module，`export function migrate(input)`，需幂等一步到位；详见 cocs/crawler/METADATA_MIGRATION.md）。旧 `kbMetadataMigrations` 数组已停止支持：打包报可读错误，加载不解析。 |
 | `kbDescriptionTemplate` | 否 | 图片详情 EJS 模板路径。 |
+
+### 插件标签（`kbLabels`）
+
+`kbLabels` 的格式为 `[{ id, name?, desc? }, ...]`。预定义标签只需声明 `id`；命中应用内置支持列表后，标签文案与颜色由应用 i18n 和内置配置提供，`name` / `desc` 可以省略。应用不认识的未知标签才需要用可选的 `name` / `desc` 提供回落文案，回落标签使用灰色。
+
+当前内置标签 id 为：`auth.needCookie`、`auth.needProxy`、`content.res.mobile`、`content.res.desktop`、`content.nsfw`、`content.type.video`。应用还会按 `minAppVersion` 自动判定并合成 `app.versionIncompatible` 标签；该标签不由插件声明。
+
+```json
+"kbLabels": [
+  { "id": "auth.needCookie" },
+  { "id": "content.nsfw" }
+]
+```
 
 所有 `kb*` 路径字段都按插件根相对解析，禁止绝对路径、盘符和 `..`。`kbDoc` 中 Markdown 引用的本地图片会按文档所在目录解析；仅打包引用到且存在的图片资源，并受单文件 2 MB、总量 10 MB 的加载限制。
 
@@ -87,54 +98,39 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 
 v3 打包会先按 `package.json` 显式字段收集文件，再应用插件根目录下的 `.kabegameignore`。语法是简单 glob，每行一条，空行、`#` 和 `//` 注释会被忽略；以 `!` 开头的规则会强制重新包含匹配文件。`package.json`、`main` 和 `kbDoc` 明确引用的文档属于关键文件，不能被 ignore 排除。
 
-### 头部派生清单
+### 头部与插件清单
 
-KGPG v2 固定头部不直接存完整 `package.json`，而是从 v3 清单派生最小 manifest：`version`、`author`、`minAppVersion`、`name.*`、`description.*`。客户端商店列表可以通过 HTTP Range 读取该头部；完整安装和运行仍以 ZIP 内 `package.json` 为准。
+KGPG v3 固定头部只存 meta 与 icon，不存插件清单。完整安装、导入和运行均以 ZIP 内 `package.json` 为准；商店快捷显示所需的清单信息来自 `index.json`。
 
-### legacy v2 manifest.json 格式
-
-v2 清单继续兼容，但仅用于旧插件。新插件不要再新增 `manifest.json` / `config.json`。
-
-```json
-{
-  "name": "插件名称",
-  "version": "1.0.0",
-  "description": "插件描述",
-  "author": "作者名"
-}
-```
-
-### v2 额外优势（固定头部）
-1. **无需解压即可取 icon/manifest**：客户端只需读取固定偏移的数据块
+### 固定头部优势
+1. **无需解压即可取 icon**：客户端只需读取固定偏移的数据块
 2. **支持 HTTP Range**：商店列表可只拉取头部，不再依赖额外的 `<id>.icon.png` 资产
-3. **保持 ZIP 兼容**：旧逻辑仍可当作 ZIP 读取 `manifest.json/icon.png` 等条目
+3. **保持 ZIP 兼容**：插件清单继续从 ZIP 内 `package.json` 读取，通用 ZIP 工具也能直接打开
 
-## KGPG v2 固定头部规范（用于 Range 读取）
+## KGPG v3 固定头部规范（用于 Range 读取）
 
-固定头部总大小：**53312 bytes**
+固定头部总大小：**49216 bytes**
 
-- meta：64 bytes
-- icon：`128 * 128 * 3 = 49152 bytes`（RGB24，无 alpha，行优先，从上到下、从左到右）
-- manifest：4096 bytes（UTF-8 JSON，剩余用 `0x00` 填充）
+- meta：64 bytes，偏移 `0..64`
+- icon：`128 * 128 * 3 = 49152 bytes`，偏移 `64..49216`（RGB24，无 alpha，行优先，从上到下、从左到右）
+- ZIP body：从偏移 `49216` 开始
 
 ### meta（64 bytes，小端）
-- `magic`：4B，固定 `"KGPG"`
-- `version`：u16，固定 `2`
-- `meta_size`：u16，固定 `64`
-- `icon_w`：u16，固定 `128`
-- `icon_h`：u16，固定 `128`
-- `pixel_format`：u8，固定 `1`（表示 RGB24）
-- `flags`：u8
+- `magic`：偏移 `0..4`，4B，固定 `"KGPG"`
+- `version`：偏移 `4..6`，u16，固定 `3`
+- `meta_size`：偏移 `6..8`，u16，固定 `64`
+- `icon_w`：偏移 `8..10`，u16，固定 `128`
+- `icon_h`：偏移 `10..12`，u16，固定 `128`
+- `pixel_format`：偏移 `12`，u8，固定 `1`（表示 RGB24）
+- `flags`：偏移 `13`，u8
   - bit0：icon_present
-  - bit1：manifest_present
-- `manifest_len`：u16（0~4096）
-- `zip_offset`：u64（预留字段，当前固定等于 53312）
-- 其余：保留填 0
+- 保留：偏移 `14..16`，u16（填 0）
+- `zip_offset`：偏移 `16..24`，u64，固定等于 `49216`
+- 其余：偏移 `24..64`，保留填 0
 
 ### HTTP Range 示例
-- 拉取 icon + manifest（一次请求拿完整头部）：`Range: bytes=0-53311`
+- 拉取 meta + icon（一次请求拿完整头部）：`Range: bytes=0-49215`
 - 仅拉取 icon：`Range: bytes=64-49215`
-- 仅拉取 manifest 槽位：`Range: bytes=49216-53311`
 
 ## 替代方案对比
 
@@ -162,6 +158,40 @@ v2 清单继续兼容，但仅用于旧插件。新插件不要再新增 `manife
     console.log(common.base_url, startPage, endPage, tag);
   }
   ```
+
+- **V8 宿主 Cookie**：`Kabegame.requireCookie(host?): boolean` 从用户已访问并登录的畅游站点持久化记录中取 Cookie，注入当前任务请求头；省略 `host` 时使用插件 `baseUrl` 的 host，且 Cookie 明文不会返回脚本。
+
+### 插件私有文件系统：`Kabegame.fs`
+
+插件不能看到宿主物理目录。每次任务用 `Kabegame.fs.getRoot()` 取得形如 `/{handle}` 的虚拟根，再拼接以下挂载点：
+
+| 虚拟路径 | 用途与生命周期 |
+|---|---|
+| `${root}/data/...` | 持久数据；应用重启、插件升级或覆盖安装后保留，卸载插件时清理。 |
+| `${root}/cache/...` | 可重建缓存；可能被应用或系统清理，卸载插件时也会清理。 |
+| `${root}/tmp/...` | 临时工作文件；**当前不会自动清理**，插件应自行管理和删除，卸载插件时清理。 |
+
+权限也按路径层级固定：`/` 拒绝访问，`/{handle}` 只读，三个挂载点内部可读写。路径会先做词法规范化并拒绝越界和软链接；不要依赖 `..`、软链接或宿主绝对路径。任务 handle 每次随机生成，任务结束后旧路径即失效，因此不要持久化 `root` 或任何 `/{handle}/...` 路径；下一任务应重新调用 `getRoot()`。
+
+V8 后端暴露完整 `deno_fs` API，包括 `open`、`create`、同步方法和 `FsFile` 句柄；`umask` 因会修改进程级状态而始终被拒绝。WebView 后端不是同一套完整 API，只提供无句柄异步子集：`readFile`、`writeFile`、`mkdir`、`readDir`、`remove`、`stat`、`getRoot`。V8 的 `getRoot()` 同步返回字符串，WebView 的 `getRoot()` 返回 Promise。
+
+典型场景是下载压缩包，在插件自带的纯 JS 解压器中展开，再把文件交给下载器入库：
+
+```js
+// unzip 是插件自行打包的纯 JS helper，不是 Kabegame 内建 API。
+export async function crawl() {
+  const root = Kabegame.fs.getRoot();
+  const response = await fetch("https://example.test/wallpapers.zip");
+  const archive = new Uint8Array(await response.arrayBuffer());
+  const files = unzip(archive);
+
+  const imagePath = `${root}/data/x.jpg`;
+  await Kabegame.fs.writeFile(imagePath, files["x.jpg"]);
+  await Kabegame.downloadImage(imagePath, { name: "x" });
+}
+```
+
+批量解压时应逐项校验 ZIP entry 名称，并为每个文件重复 `writeFile` / `downloadImage`。`downloadImage` 接受当前任务的虚拟路径；不要自行构造内部 `task-vfs://` URL。
 
 - **JS 脚本（crawl.js，WebView 后端）**：仅用于需要浏览器窗口/DOM/Cookie 容器的插件；变量通过运行时注入的 `ctx.vars` 访问。
 

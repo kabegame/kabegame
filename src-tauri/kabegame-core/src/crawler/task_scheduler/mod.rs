@@ -55,9 +55,66 @@ pub struct TaskScheduler {
     queue_tx: mpsc::UnboundedSender<String>,
     queue_rx: Arc<Mutex<mpsc::UnboundedReceiver<String>>>,
     running_workers: Arc<AtomicUsize>,
-    tasks: Arc<StdRwLock<HashMap<String, Arc<Task>>>>,
+    task_registry: Arc<StdRwLock<TaskRegistry<Task>>>,
     /// 有任务结束或「同时运行任务数」设置变更时唤醒，避免等待槽位时忙等。
     task_slot_notify: Arc<Notify>,
+}
+
+trait RegistryTask {
+    fn fs_handle(&self) -> u64;
+}
+
+impl RegistryTask for Task {
+    fn fs_handle(&self) -> u64 {
+        self.fs_handle
+    }
+}
+
+struct TaskRegistry<T: RegistryTask> {
+    tasks: HashMap<String, Arc<T>>,
+    task_ids_by_handle: HashMap<u64, String>,
+}
+
+impl<T: RegistryTask> Default for TaskRegistry<T> {
+    fn default() -> Self {
+        Self {
+            tasks: HashMap::new(),
+            task_ids_by_handle: HashMap::new(),
+        }
+    }
+}
+
+impl<T: RegistryTask> TaskRegistry<T> {
+    fn get(&self, task_id: &str) -> Option<Arc<T>> {
+        self.tasks.get(task_id).cloned()
+    }
+
+    fn get_by_handle(&self, handle: u64) -> Option<Arc<T>> {
+        let task_id = self.task_ids_by_handle.get(&handle)?;
+        self.get(task_id)
+    }
+
+    fn insert(&mut self, task_id: String, task: Arc<T>) -> Result<(), String> {
+        if self.tasks.contains_key(&task_id) {
+            return Err(format!("Task already registered: {task_id}"));
+        }
+        let fs_handle = task.fs_handle();
+        if let Some(existing_task_id) = self.task_ids_by_handle.get(&fs_handle) {
+            return Err(format!(
+                "Task VFS handle already registered: {fs_handle} (task {existing_task_id})"
+            ));
+        }
+        self.task_ids_by_handle.insert(fs_handle, task_id.clone());
+        self.tasks.insert(task_id, task);
+        Ok(())
+    }
+
+    fn remove(&mut self, task_id: &str) -> Option<Arc<T>> {
+        let task = self.tasks.remove(task_id)?;
+        let indexed_task_id = self.task_ids_by_handle.remove(&task.fs_handle());
+        debug_assert_eq!(indexed_task_id.as_deref(), Some(task_id));
+        Some(task)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -83,7 +140,7 @@ impl TaskScheduler {
             queue_tx,
             queue_rx: Arc::new(Mutex::new(queue_rx)),
             running_workers: Arc::new(AtomicUsize::new(0)),
-            tasks: Arc::new(StdRwLock::new(HashMap::new())),
+            task_registry: Arc::new(StdRwLock::new(TaskRegistry::default())),
             task_slot_notify: Arc::new(Notify::new()),
         };
         s
@@ -108,7 +165,7 @@ impl TaskScheduler {
     pub async fn enqueue(&self, req: CrawlTaskRequest) -> Result<(), String> {
         let task_id = req.task_id.clone();
         let result = self.freeze_task(req).await.and_then(|run| {
-            self.register_run(Arc::clone(&run))?;
+            self.register_run(run)?;
             let storage = Storage::global();
             let _ = persist_task_status(storage, &task_id, TaskStatus::Pending, None, None, None);
             GlobalEmitter::global().emit_task_changed(&task_id, json!({ "status": "pending" }));
@@ -168,11 +225,7 @@ impl TaskScheduler {
             config,
         };
 
-        Ok(Arc::new(Task::new(
-            req.task_id,
-            params,
-            task.http_headers.clone(),
-        )))
+        Task::try_new(req.task_id, params, task.http_headers.clone()).map(Arc::new)
     }
 
     /// 取消任务（标记取消 + 唤醒等待中的下载）
@@ -194,20 +247,22 @@ impl TaskScheduler {
     }
 
     pub fn get_run(&self, task_id: &str) -> Option<Arc<Task>> {
-        self.tasks.read().unwrap().get(task_id).cloned()
+        self.task_registry.read().unwrap().get(task_id)
     }
 
+    pub fn get_run_by_handle(&self, handle: u64) -> Option<Arc<Task>> {
+        self.task_registry.read().unwrap().get_by_handle(handle)
+    }
+
+    /// handle 是 64 位随机数，碰撞概率可忽略（生日界约需 2^32 个并发任务）。
+    /// 因此碰撞按错误处理即可，不值得为其引入重生成机制。
     pub(crate) fn register_run(&self, run: Arc<Task>) -> Result<(), String> {
-        let mut guard = self.tasks.write().unwrap();
-        if guard.contains_key(&run.task_id) {
-            return Err(format!("Task already registered: {}", run.task_id));
-        }
-        guard.insert(run.task_id.clone(), run);
-        Ok(())
+        let mut registry = self.task_registry.write().unwrap();
+        registry.insert(run.task_id.clone(), run)
     }
 
     pub fn remove_run(&self, task_id: &str) -> Option<Arc<Task>> {
-        self.tasks.write().unwrap().remove(task_id)
+        self.task_registry.write().unwrap().remove(task_id)
     }
 
     pub fn add_task_progress(&self, task_id: &str, delta: f64) -> Result<f64, String> {
@@ -861,5 +916,60 @@ fn normalize_var_value(def: &VarDefinition, value: Option<serde_json::Value>) ->
             None => serde_json::Value::Array(vec![]),
         },
         _ => value.unwrap_or(serde_json::Value::Null),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestTask {
+        fs_handle: u64,
+    }
+
+    impl RegistryTask for TestTask {
+        fn fs_handle(&self) -> u64 {
+            self.fs_handle
+        }
+    }
+
+    #[test]
+    fn handle_index_tracks_registration_and_removal() {
+        let mut registry = TaskRegistry::default();
+        let task = Arc::new(TestTask { fs_handle: 4242 });
+
+        registry
+            .insert("handle-index-task".to_string(), Arc::clone(&task))
+            .expect("register test task in registry");
+        assert!(Arc::ptr_eq(
+            &registry.get("handle-index-task").unwrap(),
+            &task
+        ));
+        assert!(Arc::ptr_eq(&registry.get_by_handle(4242).unwrap(), &task));
+
+        let removed = registry.remove("handle-index-task").unwrap();
+        assert!(Arc::ptr_eq(&removed, &task));
+        assert!(registry.get("handle-index-task").is_none());
+        assert!(registry.get_by_handle(4242).is_none());
+    }
+
+    #[test]
+    fn handle_index_rejects_collisions_without_replacing_the_owner() {
+        let mut registry = TaskRegistry::default();
+        let first = Arc::new(TestTask { fs_handle: 4242 });
+        registry
+            .insert("first-handle-task".to_string(), Arc::clone(&first))
+            .unwrap();
+
+        let error = registry
+            .insert(
+                "second-handle-task".to_string(),
+                Arc::new(TestTask { fs_handle: 4242 }),
+            )
+            .unwrap_err();
+
+        assert!(error.contains("Task VFS handle already registered: 4242"));
+        assert!(Arc::ptr_eq(&registry.get_by_handle(4242).unwrap(), &first));
+        assert!(registry.get("second-handle-task").is_none());
     }
 }

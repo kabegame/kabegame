@@ -476,6 +476,7 @@ impl Storage {
     pub fn find_image_by_url(url: &str) -> Result<Option<ImageInfo>, String> {
         if url.is_empty()
             || url == crate::crawler::downloader::DATA_URI_PLACEHOLDER
+            || url == crate::crawler::downloader::TASK_VFS_URI_PLACEHOLDER
             || url.starts_with("blob:")
         {
             return Ok(None);

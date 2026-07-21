@@ -22,7 +22,7 @@ export interface AppSettings {
   /** 每次下载完成后进入下一轮前等待（ms，100-10000） */
   downloadIntervalMs: number;
   networkRetryCount: number;
-  imageClickAction: "preview" | "open" | "none";
+  imageClickAction: "preview" | "open" | "none" | "unconfigured";
   /** 画廊列数（0=动态；1-6=固定列数），前端本地偏好 */
   galleryGridColumns: number;
   autoDeduplicate: boolean;
@@ -90,6 +90,10 @@ export interface AppSettings {
   kamechanEnabled: boolean;
   /** 网格图片填充方式："fit"=完整显示(object-contain)；"fill"=居中裁切填满(object-cover) */
   imageFit: "fit" | "fill";
+  /** 应用内点击外部链接的打开方式；unconfigured 时首次触发会弹选择框 */
+  linkOpenMode: "surf" | "browser" | "unconfigured";
+  /** 关闭主窗口的行为(仅 Win/Linux);unconfigured 时首次关闭弹选择框 */
+  closeAction: "tray" | "exit" | "unconfigured";
 
   // --- URL query 镜像键（settings 层只做哑同步，页面自己做激活态 guard）---
   /** `/auto-configs?tab=`；缺省为 `"mine"`，`"mine"` 会编码为空并删除参数。 */

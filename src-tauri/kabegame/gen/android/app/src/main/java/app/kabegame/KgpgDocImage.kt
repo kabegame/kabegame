@@ -10,13 +10,15 @@ import java.util.zip.ZipInputStream
 
 /**
  * 从 .kgpg 插件包中读取 doc_root 下资源的解析逻辑。
- * KGPG v2 格式：固定头部 + ZIP；头部不参与 ZIP 解析。
+ * KGPG v3 格式：固定头部 + ZIP；头部不参与 ZIP 解析。
  * 用于安卓端插件文档图片的流式加载（不经过 Rust，不卡 UI）。
  */
 object KgpgDocImage {
 
-    /** KGPG v2 固定头部长度：meta 64 + icon 128*128*3 + manifest 4096 */
-    const val KGPG2_HEADER_SIZE = 64 + 128 * 128 * 3 + 4096
+    /** KGPG v3 固定头部长度：meta 64 + icon 128*128*3。 */
+    const val KGPG3_HEADER_SIZE = 64 + 128 * 128 * 3
+    private const val KGPG3_META_SIZE = 64
+    private const val KGPG3_VERSION = 3
 
     private const val DOC_ROOT_PREFIX = "doc_root/"
 
@@ -51,7 +53,7 @@ object KgpgDocImage {
 
     /**
      * 从 .kgpg 文件中打开 ZIP 内指定条目名的输入流。
-     * 跳过 KGPG2 固定头部后按 ZIP 解析。
+     * 验证并跳过 KGPG v3 固定头部后按 ZIP 解析。
      * @param kgpgFile .kgpg 文件
      * @param entryName ZIP 内条目名（如 "doc_root/screenshot.png"）
      * @return 成功返回该条目的 [InputStream]（调用方负责关闭），失败返回 null
@@ -59,13 +61,38 @@ object KgpgDocImage {
     fun openEntryStream(kgpgFile: File, entryName: String): InputStream? {
         return try {
             val fis = FileInputStream(kgpgFile)
-            var skipped = 0L
-            while (skipped < KGPG2_HEADER_SIZE) {
-                val n = fis.skip(KGPG2_HEADER_SIZE - skipped)
+            val meta = ByteArray(KGPG3_META_SIZE)
+            var metaRead = 0
+            while (metaRead < meta.size) {
+                val n = fis.read(meta, metaRead, meta.size - metaRead)
+                if (n <= 0) break
+                metaRead += n
+            }
+            val version = if (metaRead >= 6) {
+                (meta[4].toInt() and 0xff) or ((meta[5].toInt() and 0xff) shl 8)
+            } else {
+                -1
+            }
+            if (
+                metaRead != KGPG3_META_SIZE ||
+                !meta.copyOfRange(0, 4).contentEquals("KGPG".toByteArray()) ||
+                version != KGPG3_VERSION
+            ) {
+                fis.close()
+                android.util.Log.e(
+                    "Kabegame",
+                    "KgpgDocImage: invalid KGPG container version $version; only v$KGPG3_VERSION is supported"
+                )
+                return null
+            }
+
+            var skipped = KGPG3_META_SIZE.toLong()
+            while (skipped < KGPG3_HEADER_SIZE) {
+                val n = fis.skip(KGPG3_HEADER_SIZE - skipped)
                 if (n <= 0) break
                 skipped += n
             }
-            if (skipped < KGPG2_HEADER_SIZE) {
+            if (skipped < KGPG3_HEADER_SIZE) {
                 fis.close()
                 return null
             }

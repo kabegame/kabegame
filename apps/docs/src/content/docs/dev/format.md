@@ -1,19 +1,16 @@
 ---
 title: 插件格式（.kgpg）
-description: Kabegame 插件文件格式规范，包括 KGPG v1/v2 文件结构与 HTTP Range 读取。
+description: Kabegame KGPG v3 插件文件结构与 HTTP Range 读取规范。
 ---
 
 Kabegame 插件以 `.kgpg` 文件分发，本质上是一个 ZIP 压缩包，内部包含元数据、爬取脚本与可选资源。本页说明格式的心智模型与每类条目的用途；字段的完整定义请看 [插件字段表](/reference/plugin-schema/)。
 
 ## 文件格式概述
 
-`.kgpg` 目前有两种格式：
-
-- **KGPG v1（纯 ZIP）**：文件内容就是标准 ZIP。
-- **KGPG v2（固定头部 + ZIP）**：文件前面加一个固定大小头部（用于无需解压/可 HTTP Range 读取 icon + manifest），后面仍然是标准 ZIP（SFX 兼容）。
+`.kgpg` 只支持 **KGPG v3（固定头部 + ZIP）**：文件前面是只含 meta 与 icon 的固定头部，用于无需解压或通过 HTTP Range 读取 icon；后面是标准 ZIP body（SFX 兼容），插件清单由 ZIP 内 `package.json` 提供。
 
 :::note
-当前官方打包工具默认输出 v2；解析器仍兼容 v1。你不需要在两种格式间做选择——用 [`dev/packaging`](/dev/packaging/) 描述的命令打包即可，v2 头部由工具自动生成。v2 对通用 ZIP 工具透明，`unzip plugin.kgpg` 仍可直接打开。
+官方打包工具固定输出 v3，解析器也只接受容器版本 `3`。使用 [`dev/packaging`](/dev/packaging/) 描述的命令打包即可；固定头部由工具自动生成，通用 ZIP 工具仍可直接打开 ZIP body。
 :::
 
 ---
@@ -22,9 +19,9 @@ Kabegame 插件以 `.kgpg` 文件分发，本质上是一个 ZIP 压缩包，内
 
 ```
 plugin-name.kgpg
-    ├── package.json               # v3 自描述清单（推荐）
+    ├── package.json               # v3 自描述清单（必需）
     ├── crawl.rhai / crawl.js      # package.json main 指向的脚本
-    ├── icon.png                   # 插件图标（可选；v2 另存于固定头部）
+    ├── icon.png                   # 插件图标源文件（可选；打包后存于固定头部）
     ├── configs/*.json             # 推荐运行配置预设（可选）
     ├── metadata_migrations/
     │   └── v{N}.rhai              # 图片 metadata 迁移脚本（可选）
@@ -42,7 +39,7 @@ plugin-name.kgpg
 |------|------|------|
 | `package.json` | 是 | v3 自描述清单，包含 name / version / `kbBackend` / `main` / `kbConfig` / `engines.kabegame` 等 |
 | `main` 指向的脚本 | 是 | 爬取脚本；`kbBackend` 可为 `rhai`、`v8` 或 `webview`，Android 仅支持 Rhai |
-| `icon.png` | 否 | 插件图标；v2 若头部已有 icon 则优先使用头部数据 |
+| `icon.png` | 否 | 插件图标源文件；打包时转换为固定头部内的 RGB24 数据 |
 | `configs/*.json` | 否 | 一组推荐预设，按文件名排序展示给用户一键应用 |
 | `metadata_migrations/v{N}.rhai` | 否 | 历史图片 metadata 迁移脚本；`N` 为从 1 开始的连续自然数版本 |
 | `templates/description.ejs` | 否 | 图片详情区 HTML 模板；缺失时降级为原始 metadata 列表 |
@@ -76,10 +73,6 @@ plugin-name.kgpg
 
 完整字段（多语言 name/description、`minAppVersion` 等）见 [插件字段表](/reference/plugin-schema/)。
 
-:::note
-legacy v2 包仍兼容 `manifest.json` 与 `config.json`，但新插件应使用 v3 `package.json`。
-:::
-
 ### templates/description.ejs
 
 由 `ImageDetailContent.vue` 用 EJS 将 `metadata` 渲染为 HTML 后写入 iframe `srcdoc`。`metadata` 的来源是爬虫在 `download_image(..., { metadata })` 时写入的 `image_metadata` 行；描述页模板随插件元数据一起被加载到内存，由前端直接消费。
@@ -108,50 +101,45 @@ legacy v2 包仍兼容 `manifest.json` 与 `config.json`，但新插件应使用
 
 ---
 
-## KGPG v2 固定头部规范
+## KGPG v3 固定头部规范
 
-固定头部总大小：**53312 bytes**
+固定头部总大小：**49216 bytes**
 
 | 区域 | 大小 | 说明 |
 |------|------|------|
-| meta | 64 bytes | 文件魔数、版本、偏移等 |
-| icon | 49152 bytes | 128×128 RGB24 图像，行优先 |
-| manifest | 4096 bytes | UTF-8 JSON，剩余用 `0x00` 填充 |
+| meta | 64 bytes | 偏移 `0..64`；文件魔数、版本、偏移等 |
+| icon | 49152 bytes | 偏移 `64..49216`；128×128 RGB24 图像，行优先 |
+| ZIP body | 其余字节 | 从偏移 `49216` 开始 |
 
 ### meta（64 bytes，小端）
 
-| 字段 | 大小 | 说明 |
+| 字段 | 偏移 | 说明 |
 |------|------|------|
-| `magic` | 4B | 固定 `"KGPG"` |
-| `version` | u16 | 固定 `2` |
-| `meta_size` | u16 | 固定 `64` |
-| `icon_w` | u16 | 固定 `128` |
-| `icon_h` | u16 | 固定 `128` |
-| `pixel_format` | u8 | 固定 `1`（RGB24） |
-| `flags` | u8 | bit0: icon_present，bit1: manifest_present |
-| `manifest_len` | u16 | 0–4096 |
-| `zip_offset` | u64 | 当前固定等于 53312 |
-| 其余 | — | 保留，填 0 |
-
-:::caution
-manifest 槽位上限为 4096 字节。多语言 `name` / `description` 过长会导致打包工具报错——建议把长文说明放到 `doc_root/doc.md`。
-:::
+| `magic` | `0..4` | 4B，固定 `"KGPG"` |
+| `version` | `4..6` | u16，固定 `3` |
+| `meta_size` | `6..8` | u16，固定 `64` |
+| `icon_w` | `8..10` | u16，固定 `128` |
+| `icon_h` | `10..12` | u16，固定 `128` |
+| `pixel_format` | `12` | u8，固定 `1`（RGB24） |
+| `flags` | `13` | u8，bit0: icon_present |
+| 保留 | `14..16` | u16，填 0 |
+| `zip_offset` | `16..24` | u64，固定等于 `49216` |
+| 其余 | `24..64` | 保留，填 0 |
 
 ### HTTP Range 读取
 
 | 用途 | Range |
 |------|-------|
-| 拉取完整头部（icon + manifest） | `bytes=0-53311` |
+| 拉取完整头部（meta + icon） | `bytes=0-49215` |
 | 仅拉取 icon | `bytes=64-49215` |
-| 仅拉取 manifest 槽位 | `bytes=49216-53311` |
 
 ---
 
-## v2 优势
+## v3 优势
 
-1. **无需解压即可取 icon/manifest**：客户端只需读取固定偏移的数据块。
+1. **无需解压即可取 icon**：客户端只需读取固定偏移的数据块。
 2. **支持 HTTP Range**：商店列表可只拉取头部，不再依赖额外的 `<id>.icon.png` 资产。
-3. **保持 ZIP 兼容**：旧逻辑仍可当作 ZIP 读取 `package.json` / `icon.png` 等条目。
+3. **保持 ZIP 兼容**：插件清单继续从 ZIP 内 `package.json` 读取，通用 ZIP 工具也能直接打开。
 
 ---
 

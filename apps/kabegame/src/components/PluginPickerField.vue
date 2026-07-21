@@ -1,76 +1,84 @@
 <template>
-  <div class="plugin-picker-field">
-    <AndroidPickerSelect
-      v-if="isCompact"
-      :model-value="modelValue ?? null"
-      :options="androidOptions"
-      :title="pickerTitleResolved"
-      :placeholder="placeholder || $t('common.selectPlaceholder')"
-      :clearable="clearable"
-      :disabled="disabled"
-      @update:model-value="emitValue"
-    >
-      <template #option="{ option }">
-        <div class="plugin-picker-option">
-          <template v-if="showIcons && (option.pluginId || option.iconSrc)">
-            <img v-if="option.iconSrc" :src="option.iconSrc" class="plugin-picker-option__icon" alt="" />
-            <el-icon v-else class="plugin-picker-option__icon-placeholder">
-              <Grid />
+  <div class="plugin-picker-field flex w-full min-w-0 flex-col gap-1.5">
+    <div class="flex w-full min-w-0 items-center gap-2">
+      <AndroidPickerSelect
+        v-if="isCompact"
+        :model-value="modelValue ?? null"
+        :options="androidOptions"
+        :title="pickerTitleResolved"
+        :placeholder="placeholder || $t('common.selectPlaceholder')"
+        :clearable="clearable"
+        :disabled="disabled"
+        @update:model-value="emitValue"
+      >
+        <template #option="{ option }">
+          <div class="plugin-picker-option">
+            <template v-if="showIcons && (option.pluginId || option.iconSrc)">
+              <img v-if="option.iconSrc" :src="option.iconSrc" class="plugin-picker-option__icon" alt="" />
+              <el-icon v-else class="plugin-picker-option__icon-placeholder">
+                <Grid />
+              </el-icon>
+            </template>
+            <span class="plugin-picker-option__label">{{ option.label }}</span>
+            <span v-if="option.count !== undefined" class="plugin-picker-option__count">({{ option.count }})</span>
+            <el-icon
+              v-if="option.warning"
+              class="plugin-picker-option__warning"
+              :title="$t('plugins.androidNotSupported')"
+            >
+              <WarningFilled />
             </el-icon>
-          </template>
-          <span class="plugin-picker-option__label">{{ option.label }}</span>
-          <span v-if="option.count !== undefined" class="plugin-picker-option__count">({{ option.count }})</span>
-          <el-icon
-            v-if="option.warning"
-            class="plugin-picker-option__warning"
-            :title="$t('plugins.androidNotSupported')"
-          >
-            <WarningFilled />
-          </el-icon>
-        </div>
-      </template>
-    </AndroidPickerSelect>
+          </div>
+        </template>
+      </AndroidPickerSelect>
 
-    <el-select
-      v-else
-      :model-value="modelValue ?? undefined"
-      :placeholder="placeholder || $t('common.selectPlaceholder')"
-      :clearable="clearable"
-      :disabled="disabled"
-      :filterable="filterable"
-      :size="size"
-      :popper-class="popperClass"
-      style="width: 100%"
-      @update:model-value="emitValue"
-    >
-      <el-option v-for="option in options" :key="option.value" :label="option.label" :value="option.value">
-        <div class="plugin-picker-option">
-          <template v-if="showIcons && option.pluginId">
-            <img v-if="option.iconSrc" :src="option.iconSrc" class="plugin-picker-option__icon" alt="" />
-            <el-icon v-else class="plugin-picker-option__icon-placeholder">
-              <Grid />
+      <el-select
+        v-else
+        :model-value="modelValue ?? undefined"
+        :placeholder="placeholder || $t('common.selectPlaceholder')"
+        :clearable="clearable"
+        :disabled="disabled"
+        :filterable="filterable"
+        :size="size"
+        :popper-class="popperClass"
+        style="width: 100%"
+        @update:model-value="emitValue"
+      >
+        <el-option v-for="option in options" :key="option.value" :label="option.label" :value="option.value">
+          <div class="plugin-picker-option">
+            <template v-if="showIcons && option.pluginId">
+              <img v-if="option.iconSrc" :src="option.iconSrc" class="plugin-picker-option__icon" alt="" />
+              <el-icon v-else class="plugin-picker-option__icon-placeholder">
+                <Grid />
+              </el-icon>
+            </template>
+            <span class="plugin-picker-option__label">{{ option.label }}</span>
+            <span v-if="option.count !== undefined" class="plugin-picker-option__count">({{ option.count }})</span>
+            <el-icon
+              v-if="option.warning"
+              class="plugin-picker-option__warning"
+              :title="$t('plugins.androidNotSupported')"
+            >
+              <WarningFilled />
             </el-icon>
-          </template>
-          <span class="plugin-picker-option__label">{{ option.label }}</span>
-          <span v-if="option.count !== undefined" class="plugin-picker-option__count">({{ option.count }})</span>
-          <el-icon
-            v-if="option.warning"
-            class="plugin-picker-option__warning"
-            :title="$t('plugins.androidNotSupported')"
-          >
-            <WarningFilled />
-          </el-icon>
-        </div>
-      </el-option>
-    </el-select>
+            <PluginLabelTags v-if="showLabels" :labels="labelsFor(option.plugin)" size="small" />
+          </div>
+        </el-option>
+      </el-select>
 
-    <el-icon
-      v-if="showSelectedJsWarning && selectedPluginIsJs"
-      class="plugin-picker-field__selected-warning"
-      :title="$t('plugins.jsPluginAndroidNotSupportedTitle')"
-    >
-      <WarningFilled />
-    </el-icon>
+      <el-icon
+        v-if="showSelectedJsWarning && selectedPluginIsJs"
+        class="plugin-picker-field__selected-warning"
+        :title="$t('plugins.jsPluginAndroidNotSupportedTitle')"
+      >
+        <WarningFilled />
+      </el-icon>
+    </div>
+
+    <PluginLabelTags
+      v-if="showLabels && modelValue"
+      :labels="labelsFor(selectedPluginObj)"
+    />
   </div>
 </template>
 
@@ -79,6 +87,11 @@ import { computed } from "vue";
 import { Grid, WarningFilled } from "@element-plus/icons-vue";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
+import PluginLabelTags from "@kabegame/core/components/plugin/PluginLabelTags.vue";
+import {
+  VERSION_INCOMPATIBLE_LABEL_ID,
+  type PluginLabel,
+} from "@kabegame/core/stores/pluginLabels";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 
@@ -111,6 +124,7 @@ const props = withDefaults(
     showIcons?: boolean;
     showJsWarning?: boolean;
     showSelectedJsWarning?: boolean;
+    showLabels?: boolean;
     size?: PluginPickerSize;
     popperClass?: string;
   }>(),
@@ -124,6 +138,7 @@ const props = withDefaults(
     showIcons: true,
     showJsWarning: false,
     showSelectedJsWarning: false,
+    showLabels: false,
     size: "default",
     popperClass: undefined,
   },
@@ -161,21 +176,40 @@ function valueForPlugin(plugin: Plugin) {
   return props.valueKey === "baseUrl" ? plugin.baseUrl : plugin.id;
 }
 
+function labelsFor(p?: Plugin): PluginLabel[] {
+  if (!p) return [];
+  const base = p.labels ?? [];
+  return p.minAppIncompatible
+    ? [...base, { id: VERSION_INCOMPATIBLE_LABEL_ID }]
+    : base;
+}
+
 const pluginRows = computed((): PluginPickerOption[] => {
   if (props.pluginIds) {
-    return props.pluginIds.map((pluginId) => ({
-      value: pluginId,
-      label: pluginStore.pluginLabel(pluginId),
-      pluginId,
-      iconSrc: pluginStore.pluginIconSrc(pluginId),
-      warning: props.showJsWarning && pluginStore.plugins.find((p) => p.id === pluginId)?.scriptType === "js",
-      count: rowCount(pluginId),
-      plugin: pluginStore.plugins.find((p) => p.id === pluginId),
-    }));
+    return props.pluginIds
+      .map((pluginId) => ({
+        pluginId,
+        plugin: pluginStore.plugins.find((p) => p.id === pluginId),
+      }))
+      // 过滤掉内建插件（如 local-import），选择器不应展示
+      .filter(({ plugin }) => plugin?.scriptType !== "builtin")
+      .map(({ pluginId, plugin }) => ({
+        value: pluginId,
+        label: pluginStore.pluginLabel(pluginId),
+        pluginId,
+        iconSrc: pluginStore.pluginIconSrc(pluginId),
+        warning: props.showJsWarning && plugin?.scriptType === "js",
+        count: rowCount(pluginId),
+        plugin,
+      }));
   }
 
   const rows: PluginPickerOption[] = [];
-  for (const plugin of props.plugins ?? pluginStore.visiblePlugins) {
+  // 过滤掉内建插件（如 local-import），选择器不应展示
+  const source = (props.plugins ?? pluginStore.visiblePlugins).filter(
+    (plugin) => plugin.scriptType !== "builtin",
+  );
+  for (const plugin of source) {
     const value = valueForPlugin(plugin);
     if (!value) continue;
     rows.push({
@@ -211,22 +245,17 @@ const androidOptions = computed(() =>
   })),
 );
 
-const selectedPluginIsJs = computed(() => {
+const selectedPluginObj = computed<Plugin | undefined>(() => {
   const selected = options.value.find((option) => option.value === props.modelValue);
-  const plugin = selected?.plugin ?? pluginStore.plugins.find((p) => p.id === selected?.pluginId);
-  return plugin?.scriptType === "js";
+  return selected?.plugin ?? pluginStore.plugins.find((p) => p.id === selected?.pluginId);
+});
+
+const selectedPluginIsJs = computed(() => {
+  return selectedPluginObj.value?.scriptType === "js";
 });
 </script>
 
 <style scoped lang="scss">
-.plugin-picker-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-}
-
 .plugin-picker-option {
   display: flex;
   align-items: center;

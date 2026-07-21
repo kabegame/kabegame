@@ -45,10 +45,17 @@ deno task b -c kabegame --mode android     # Build Android APK/AAB
 ```
 
 ### Type Checking
+**用 `check-kabegame` skill**（`.claude/skills/check-kabegame/`），不要手敲 `deno task check`。
+它包装那条命令，落盘日志并从几百行 warning 里摘出真正的 error：
+
 ```bash
-deno task check -c kabegame                # Check Vue types + Cargo
-deno task check -c kabegame --skip cargo   # Vue types only
+.claude/skills/check-kabegame/driver.sh              # vue-tsc + cargo check
+.claude/skills/check-kabegame/driver.sh --skip cargo # 只查前端类型（秒级）
+.claude/skills/check-kabegame/driver.sh --skip vue   # 只查 Rust
 ```
+
+用法与 gotchas（退出码 2/101、warning 噪音、app 占用 target/、android 前置）见
+`.claude/skills/check-kabegame/SKILL.md`。
 
 ### Data directory modes (`--data`)
 - `dev` (default for `deno task dev`): repo-local `data/` and `cache/` dirs — isolated from installed app
@@ -57,7 +64,7 @@ deno task check -c kabegame --skip cargo   # Vue types only
 - Controlled via `kabegame_data` Rust cfg injected by `src-tauri/{kabegame-core,kabegame}/build.rs`
 
 ### Verification workflow
-**Do not run `cargo build` or full builds to verify changes.** Rely on lint diagnostics (`vue-tsc`, `cargo check`) instead. Only run build commands when the user explicitly requests a build.
+**Do not run `cargo build` or full builds to verify changes.** Invoke the **`check-kabegame` skill** (`.claude/skills/check-kabegame/driver.sh`) instead; editor lint diagnostics are equally valid for small edits. Only run build commands when the user explicitly requests a build.
 
 ## Architecture
 

@@ -59,6 +59,8 @@ pub fn builtin_plugins() -> &'static HashMap<String, Arc<Plugin>> {
             )]),
             script_type: "builtin".to_string(),
             min_app_version: None,
+            labels: vec![],
+            min_app_incompatible: false,
             file_path: None,
             doc: None,
             icon_png_base64: Some(BASE64_STANDARD.encode(LOCAL_IMPORT_ICON_PNG)),

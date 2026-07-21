@@ -1607,6 +1607,19 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
+version = "5.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
+dependencies = [
+ "cfg-if",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
+name = "dashmap"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
@@ -1768,6 +1781,66 @@ dependencies = [
 ]
 
 [[package]]
+name = "deno_fs"
+version = "0.162.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fbe7ade0636870b04c66216a5125e38f966e88f2755cedbbf9fcf0e93ec80e4"
+dependencies = [
+ "async-trait",
+ "boxed_error",
+ "deno_core",
+ "deno_error",
+ "deno_io",
+ "deno_maybe_sync",
+ "deno_path_util",
+ "deno_permissions",
+ "filetime",
+ "junction",
+ "libc",
+ "nix 0.30.1",
+ "rand 0.8.5",
+ "rayon",
+ "same-file",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "deno_io"
+version = "0.162.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "698b41acbbf230b081d51510caed01a00c6be27915a35a17a3d152f1b841515a"
+dependencies = [
+ "async-trait",
+ "deno_core",
+ "deno_error",
+ "deno_permissions",
+ "deno_subprocess_windows",
+ "filetime",
+ "libc",
+ "log",
+ "nix 0.30.1",
+ "os_pipe",
+ "parking_lot",
+ "pin-project",
+ "rand 0.8.5",
+ "tokio",
+ "uuid",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "deno_maybe_sync"
+version = "0.39.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "436bf225f77e5d1313a69b628a253596161e5da935a840df069b9e948253cb62"
+dependencies = [
+ "dashmap 5.5.3",
+]
+
+[[package]]
 name = "deno_ops"
 version = "0.281.0"
 dependencies = [
@@ -1822,6 +1895,18 @@ dependencies = [
  "unicode-normalization",
  "url",
  "which 8.0.4",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "deno_subprocess_windows"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c1b400b81bdf62a19269129cf5b8bb52938677aa44d9971ba0795b22efb2db8"
+dependencies = [
+ "fastrand",
+ "futures-channel",
+ "libc",
  "windows-sys 0.59.0",
 ]
 
@@ -3192,7 +3277,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0746aa765db78b521451ef74221663b57ba595bf83f75d0ce23cc09447c8139f"
 dependencies = [
  "cfg-if",
- "dashmap",
+ "dashmap 6.1.0",
  "futures-sink",
  "futures-timer",
  "futures-util",
@@ -3537,12 +3622,6 @@ name = "http-range"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21dec9db110f5f872ed9699c3ecf50cf16f423502706ba5c72462e28d3157573"
-
-[[package]]
-name = "http-range-header"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
 
 [[package]]
 name = "httparse"
@@ -4183,6 +4262,8 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "cef",
+ "deno_fs",
+ "deno_permissions",
  "dirs 5.0.1",
  "dispatch2",
  "dokan",
@@ -4200,6 +4281,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "pathql-rs",
+ "percent-encoding",
  "reqwest 0.11.27",
  "rmcp",
  "serde",
@@ -4220,8 +4302,6 @@ dependencies = [
  "tauri-runtime-cef",
  "tokio",
  "tokio-stream",
- "tower",
- "tower-http",
  "url",
  "uuid",
  "widestring",
@@ -4237,9 +4317,11 @@ name = "kabegame-cli"
 version = "4.4.0"
 dependencies = [
  "clap",
+ "console",
  "dirs 5.0.1",
  "globset",
  "include_dir",
+ "indicatif",
  "kabegame-core",
  "regex",
  "serde_json",
@@ -4262,6 +4344,8 @@ dependencies = [
  "deno_crypto",
  "deno_error",
  "deno_features",
+ "deno_fs",
+ "deno_io",
  "deno_permissions",
  "deno_web",
  "deno_webidl",
@@ -4661,16 +4745,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
-name = "mime_guess"
-version = "2.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
-dependencies = [
- "mime",
- "unicase",
-]
-
-[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4814,6 +4888,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -8633,24 +8708,14 @@ checksum = "d4e6559d53cc268e5031cd8429d05415bc4cb4aefc4aa5d6cc35fbf5b924a1f8"
 dependencies = [
  "bitflags 2.10.0",
  "bytes",
- "futures-core",
  "futures-util",
  "http 1.4.0",
  "http-body 1.0.1",
- "http-body-util",
- "http-range-header",
- "httpdate",
  "iri-string",
- "mime",
- "mime_guess",
- "percent-encoding",
  "pin-project-lite",
- "tokio",
- "tokio-util",
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
@@ -8834,12 +8899,6 @@ checksum = "96bd2f2237fe450fcd0a1d2f5f4e91711124f7857ba2e964247776ebeeb7b0c4"
 dependencies = [
  "unic-common",
 ]
-
-[[package]]
-name = "unicase"
-version = "2.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
 
 [[package]]
 name = "unicode-id-start"

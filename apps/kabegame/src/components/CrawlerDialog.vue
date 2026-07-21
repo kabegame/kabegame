@@ -24,7 +24,7 @@
         <div class="plugin-source-field">
           <PluginPickerField :model-value="form.pluginId || null" :plugins="plugins"
             :picker-title="$t('plugins.selectSource')" :placeholder="$t('plugins.selectSourcePlaceholder')"
-            show-js-warning show-selected-js-warning @update:model-value="onPluginChange" />
+            show-js-warning show-selected-js-warning show-labels @update:model-value="onPluginChange" />
           <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
             {{ crawlDialogMinAppErrorText }}
           </div>
@@ -210,7 +210,7 @@
         <div class="plugin-source-field">
           <PluginPickerField :model-value="form.pluginId || null" :plugins="plugins"
             :placeholder="$t('plugins.selectSourcePlaceholder')" popper-class="crawl-plugin-select-dropdown"
-            @update:model-value="onPluginChange" />
+            show-labels @update:model-value="onPluginChange" />
           <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
             {{ crawlDialogMinAppErrorText }}
           </div>
@@ -397,7 +397,6 @@ import {
   filterVarOptionsByWhen,
   coerceOptionsVarsToVisibleChoices,
 } from "@kabegame/core/utils/pluginVarWhen";
-import { isPluginMinAppNotSatisfied } from "@/composables/pluginMinAppVersionGate";
 import { useApp } from "@/stores/app";
 import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -754,9 +753,7 @@ const selectedPlugin = computed(() => {
 });
 const isSelectedPluginJs = computed(() => selectedPlugin.value?.scriptType === "js");
 
-const selectedPluginMinAppIncompatible = computed(() =>
-  isPluginMinAppNotSatisfied(selectedPlugin.value, crawlDialogAppVersion.value),
-);
+const selectedPluginMinAppIncompatible = computed(() => !!selectedPlugin.value?.minAppIncompatible);
 
 const crawlDialogMinAppErrorText = computed(() => {
   if (!selectedPluginMinAppIncompatible.value) return "";

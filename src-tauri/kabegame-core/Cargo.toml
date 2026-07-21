@@ -68,6 +68,8 @@ deno_error = { version = "0.7", optional = true }
 deno_webidl = { version = "0.252", optional = true }
 deno_web = { version = "0.283", optional = true }
 deno_crypto = { version = "0.266", optional = true }
+deno_fs = { version = "0.162", features = ["sync_fs"], optional = true }
+deno_io = { version = "0.162", optional = true }
 deno_permissions = { version = "0.111", optional = true }
 deno_features = { version = "0.49", optional = true }
 sys_traits = { version = "0.1", features = ["real", "libc", "winapi"], optional = true }
@@ -134,6 +136,8 @@ plugin-runtime = [
   "dep:deno_webidl",
   "dep:deno_web",
   "dep:deno_crypto",
+  "dep:deno_fs",
+  "dep:deno_io",
   "dep:deno_permissions",
   "dep:deno_features",
   "dep:crc32fast",

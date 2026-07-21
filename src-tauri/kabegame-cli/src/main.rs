@@ -4,6 +4,7 @@
 //! - `plugin new`：创建爬虫插件模板
 //! - `plugin pack`：打包单个插件目录为 `.kgpg`（package.json v3）
 //! - `plugin import`：导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
+//! - `plugin run`：在本进程跑一个**已安装**的 V8 插件，实时渲染日志与进度
 //! - `data import-image`：直接导入单个本地图片或视频
 //! - `data query`：查询 PathQL 数据
 
@@ -18,7 +19,6 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const TEMPLATE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/template");
 
@@ -45,10 +45,12 @@ enum Commands {
 enum PluginCommands {
     /// 创建插件模板目录
     New(NewPluginArgs),
-    /// 打包单个插件目录为 `.kgpg`（KGPG v2：固定头部 + ZIP，ZIP 内不含 icon.png）
+    /// 打包单个插件目录为 `.kgpg`（KGPG v3：固定头部 + ZIP，ZIP 内不含 icon.png）
     Pack(PackPluginArgs),
     /// 导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
     Import(ImportPluginArgs),
+    /// 运行一个已安装的 V8 插件（先 `plugin import` 安装）
+    Run(RunPluginArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -107,6 +109,32 @@ struct NewPluginArgs {
 struct ImportPluginArgs {
     /// 本地插件文件路径（.kgpg）
     path: PathBuf,
+}
+
+#[derive(Args, Debug)]
+struct RunPluginArgs {
+    /// 已安装插件的 id（等于插件目录名 / .kgpg 文件名 stem，如 kemono）
+    plugin: String,
+    /// 覆盖单个配置项，形如 `--var key=value`，可重复。
+    /// 值按插件 kbConfig 里该 key 的类型自动转换（int/float/boolean 等）。
+    #[arg(long = "var", value_name = "KEY=VALUE")]
+    vars: Vec<String>,
+    /// 图片输出目录；不传则用应用默认的爬取输出目录
+    #[arg(long = "output-dir")]
+    output_dir: Option<String>,
+    /// 目标画册 id；不传则不加入画册
+    #[arg(long = "album-id")]
+    album_id: Option<String>,
+    /// 只解析并打印最终配置，不真正运行任务
+    #[arg(long = "dry-run")]
+    dry_run: bool,
+    /// 不渲染进度条，日志逐行直出（适合 CI / 重定向到文件）
+    #[arg(long = "plain")]
+    plain: bool,
+    /// 数据目录：dev = 仓库内 .kabegame/debug（`repack-crawler-plugins` 投放插件的地方），
+    /// prod = 系统用户数据目录。默认跟随编译期配置。
+    #[arg(long = "data", value_enum, default_value_t = DataMode::Auto)]
+    data: DataMode,
 }
 
 #[derive(Args, Debug)]
@@ -305,6 +333,7 @@ async fn main() {
             PluginCommands::New(args) => new_plugin(args),
             PluginCommands::Pack(args) => pack_plugin(args),
             PluginCommands::Import(args) => import_plugin(args).await,
+            PluginCommands::Run(args) => run_plugin(args).await,
         },
         Commands::Data(cmd) => match cmd {
             DataCommands::ImportImage(args) => data_import_image(args).await,
@@ -460,12 +489,38 @@ fn is_valid_plugin_name(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// 数据目录模式。与构建系统的 `--data dev|prod`（见 CLAUDE.md）同义：
+/// dev = 仓库内 `.kabegame/debug/{data,cache,tmp}`，prod = 系统用户数据目录。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, ValueEnum)]
+enum DataMode {
+    /// 跟随编译期的 `kabegame_data` cfg（release 构建即 prod）
+    #[default]
+    Auto,
+    /// 强制用仓库内的 `.kabegame/debug` 目录
+    Dev,
+    /// 强制用系统用户数据目录
+    Prod,
+}
+
 fn init_standalone_globals() -> Result<(), String> {
+    init_standalone_globals_with(DataMode::Auto)
+}
+
+fn init_standalone_globals_with(mode: DataMode) -> Result<(), String> {
     use kabegame_core::app_paths::{is_dev, repo_root_dir, AppPaths};
     use kabegame_core::{emitter::GlobalEmitter, settings::Settings, storage::Storage};
 
-    let dev_debug_dir = if is_dev() {
-        repo_root_dir().map(|root| root.join(".kabegame").join("debug"))
+    let use_dev = match mode {
+        DataMode::Auto => is_dev(),
+        DataMode::Dev => true,
+        DataMode::Prod => false,
+    };
+    let dev_debug_dir = if use_dev {
+        let root = repo_root_dir().ok_or_else(|| {
+            "--data dev 需要在 Kabegame 仓库内运行（要能定位到包含 package.json 与 src-tauri/ 的目录）"
+                .to_string()
+        })?;
+        Some(root.join(".kabegame").join("debug"))
     } else {
         None
     };
@@ -511,6 +566,27 @@ fn init_standalone_globals() -> Result<(), String> {
     Settings::init_global()?;
     Storage::init_global()?;
     GlobalEmitter::init_global()?;
+    Ok(())
+}
+
+/// 在 `init_standalone_globals()` 之外，额外初始化「跑任务」需要的运行时。
+///
+/// 顺序与 GUI 的 `kabegame/src/core_init.rs:73-88` 一致：
+/// EventBroadcaster → SubscriptionManager → GlobalEmitter → DownloadQueue → TaskScheduler。
+/// GlobalEmitter 的 emit_* 会取 `EventBroadcaster::global()`，未初始化会 panic，
+/// 所以本函数必须在 `init_standalone_globals()`（内含 GlobalEmitter::init_global）之前调用。
+fn init_event_runtime() -> Result<(), String> {
+    use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
+    EventBroadcaster::init_global(1000).map_err(|e| format!("EventBroadcaster: {e}"))?;
+    SubscriptionManager::init_global().map_err(|e| format!("SubscriptionManager: {e}"))?;
+    Ok(())
+}
+
+fn init_task_runtime() -> Result<(), String> {
+    use kabegame_core::crawler::{DownloadQueue, TaskScheduler};
+    use std::sync::Arc;
+    let download_queue = Arc::new(DownloadQueue::new());
+    TaskScheduler::init_global(download_queue).map_err(|e| format!("TaskScheduler: {e}"))?;
     Ok(())
 }
 
@@ -665,17 +741,388 @@ async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+/// 运行一个已安装的 V8 插件。
+///
+/// 整体链路与 GUI 一致：`start_task` 建任务 → TaskScheduler 冻结参数并入队 →
+/// worker 取出后在 `spawn_blocking` 里跑 V8。差别只在于 CLI 自己订阅
+/// `EventBroadcaster` 把事件渲染到终端，而不是转发给前端。
+async fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
+    use kabegame_core::crawler::{TaskScheduler, MAX_TASK_WORKER_LOOPS};
+    use kabegame_core::ipc::server::EventBroadcaster;
+
+    // EventBroadcaster 必须先于 GlobalEmitter：后者 emit 时会取前者的全局单例。
+    init_event_runtime()?;
+    init_standalone_globals_with(args.data)?;
+    init_task_runtime()?;
+
+    // 扇出循环：不 spawn 的话所有事件只会堆在 mpsc 里，订阅者一条都收不到。
+    tokio::spawn(async { EventBroadcaster::start_forward_task().await });
+
+    PluginManager::init_global()?;
+    let pm = PluginManager::global();
+    // 刷新失败不致命：目录里若混有旧版容器（KGPG v2）等坏包，refresh_plugins 会在第一颗上
+    // 直接返回 Err。只要目标插件本身能解析出来，就不该挡住这次运行。
+    if let Err(e) = pm.ensure_installed_cache_initialized().await {
+        eprintln!(
+            "{} 插件目录扫描未全部成功：{e}",
+            console::style("[WARN]").yellow()
+        );
+    }
+
+    let plugin = pm.get(&args.plugin).ok_or_else(|| {
+        let mut ids: Vec<String> = pm
+            .get_all()
+            .unwrap_or_default()
+            .iter()
+            .map(|p| p.id.clone())
+            .collect();
+        ids.sort();
+        if ids.is_empty() {
+            format!(
+                "插件 {} 未安装，且当前没有任何已安装插件。\n先用 `kabegame-cli plugin import <file.kgpg>` 安装。",
+                args.plugin
+            )
+        } else {
+            format!(
+                "插件 {} 未安装。已安装的有：{}\n用 `kabegame-cli plugin import <file.kgpg>` 安装。",
+                args.plugin,
+                ids.join(", ")
+            )
+        }
+    })?;
+
+    // 暂时只支持 V8：WebView 后端要真实浏览器窗口，headless CLI 起不来。
+    if plugin.script_type != "v8" {
+        return Err(format!(
+            "插件 {} 的后端是 `{}`，`plugin run` 目前只支持 v8 后端。",
+            plugin.id, plugin.script_type
+        ));
+    }
+    if let Some(min_ver) = plugin.min_app_version.as_deref() {
+        core_plugin::check_min_app_version(env!("CARGO_PKG_VERSION"), min_ver)?;
+    }
+
+    let resolved = resolve_run_config(pm, &plugin, &args.vars)?;
+    let config = resolved.user_config;
+    // 用 BTreeMap 打印，保证 key 有序（HashMap 的迭代顺序每次都不同，diff 起来很烦）。
+    let sorted: std::collections::BTreeMap<_, _> = config.iter().collect();
+    let config_json = serde_json::to_string_pretty(&sorted).map_err(|e| e.to_string())?;
+    println!(
+        "{} {} v{}",
+        console::style("插件").dim(),
+        console::style(&plugin.id).bold(),
+        plugin.version
+    );
+    println!("{}", console::style("最终配置：").dim());
+    println!("{config_json}");
+
+    if args.dry_run {
+        return Ok(());
+    }
+
+    // 订阅必须早于 start_task：forward task 在没有订阅者时会直接丢弃事件，
+    // 晚订阅会漏掉任务开头的日志。
+    let mut events = EventBroadcaster::global().subscribe_filtered_stream(&[
+        kabegame_core::ipc::events::DaemonEventKind::TaskLog,
+        kabegame_core::ipc::events::DaemonEventKind::TasksChange,
+        kabegame_core::ipc::events::DaemonEventKind::ImagesChange,
+    ]);
+
+    let scheduler = TaskScheduler::global();
+    scheduler.start_workers(MAX_TASK_WORKER_LOOPS).await;
+    scheduler.start_download_workers_async().await;
+
+    // 字段名必须是 camelCase：commands::task::start_task 的 StartTaskParams 带
+    // `#[serde(rename_all = "camelCase")]`。
+    let mut task_param = serde_json::json!({
+        "pluginId": plugin.id,
+        "userConfig": config,
+        "triggerSource": "cli",
+    });
+    if !resolved.http_headers.is_empty() {
+        task_param["httpHeaders"] = serde_json::json!(resolved.http_headers);
+    }
+    // 命令行的 --output-dir 优先于默认配置里保存的 outputDir。
+    if let Some(dir) = args.output_dir.as_ref().or(resolved.output_dir.as_ref()) {
+        task_param["outputDir"] = serde_json::Value::String(dir.clone());
+    }
+    if let Some(album) = args.album_id.as_ref() {
+        task_param["outputAlbumId"] = serde_json::Value::String(album.clone());
+    }
+    let task_id = kabegame_core::commands::task::start_task(task_param).await?;
+
+    let plain = args.plain || !console::user_attended();
+    let outcome = render_task(&task_id, &plugin.id, &mut events, plain).await;
+
+    match outcome {
+        TaskOutcome::Completed { downloaded, failed } => {
+            println!(
+                "{} 下载 {} 张，失败 {}",
+                console::style("完成").green().bold(),
+                downloaded,
+                failed
+            );
+            Ok(())
+        }
+        TaskOutcome::Canceled => Err("任务已取消".to_string()),
+        TaskOutcome::Failed(err) => Err(format!("任务失败：{err}")),
+    }
+}
+
+enum TaskOutcome {
+    Completed { downloaded: u64, failed: u64 },
+    Canceled,
+    Failed(String),
+}
+
+/// 事件循环 + 终端渲染。
+///
+/// 形态：进度条常驻最后一行，日志由 `ProgressBar::println` 从进度条**上方**滚出，
+/// 与 cargo / apt 一致。非 TTY（管道、CI）自动降级成逐行直出。
+async fn render_task(
+    task_id: &str,
+    plugin_id: &str,
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<(
+        u64,
+        std::sync::Arc<kabegame_core::ipc::events::DaemonEvent>,
+    )>,
+    plain: bool,
+) -> TaskOutcome {
+    use indicatif::{ProgressBar, ProgressStyle};
+    use kabegame_core::ipc::events::DaemonEvent;
+
+    let bar = if plain {
+        ProgressBar::hidden()
+    } else {
+        let pb = ProgressBar::new(10_000);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:28.cyan/blue}] {percent:>3}% {msg}",
+            )
+            .unwrap()
+            .progress_chars("=> "),
+        );
+        pb.enable_steady_tick(std::time::Duration::from_millis(120));
+        pb
+    };
+
+    let mut downloaded: u64 = 0;
+    let mut failed: u64 = 0;
+    let mut dedup: u64 = 0;
+    let mut progress: f64 = 0.0;
+
+    let refresh = |bar: &ProgressBar, progress: f64, downloaded: u64, failed: u64, dedup: u64| {
+        bar.set_position((progress * 100.0) as u64);
+        let mut msg = format!("{plugin_id} · ↓{downloaded}");
+        if failed > 0 {
+            msg.push_str(&format!(" · {}", console::style(format!("✗{failed}")).red()));
+        }
+        if dedup > 0 {
+            msg.push_str(&format!(" · {}", console::style(format!("⊘{dedup}")).dim()));
+        }
+        bar.set_message(msg);
+    };
+    refresh(&bar, progress, downloaded, failed, dedup);
+
+    // Ctrl-C：取消任务而不是硬退出，避免 DB 里留下永远 Running 的任务。
+    let cancel_task_id = task_id.to_string();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            kabegame_core::crawler::TaskScheduler::global()
+                .cancel_task(&cancel_task_id)
+                .await;
+        }
+    });
+
+    while let Some((_id, ev)) = events.recv().await {
+        match &*ev {
+            DaemonEvent::TaskLog {
+                task_id: tid,
+                level,
+                message,
+            } if tid == task_id => {
+                let line = format_log_line(level, message);
+                if plain {
+                    println!("{line}");
+                } else {
+                    // 用 suspend 而不是 ProgressBar::println：后者在 indicatif 0.18 下实测
+                    // 不输出任何内容。suspend 会先擦掉进度条、执行闭包、再重绘，
+                    // 日志因此和 plain 模式一样走 stdout。
+                    bar.suspend(|| println!("{line}"));
+                }
+            }
+            DaemonEvent::ImagesChange {
+                reason,
+                image_ids,
+                task_ids,
+                ..
+            } if reason == "add" => {
+                // success_count 的自增是纯 SQL、不发事件，所以这里自己按 images-change 累加。
+                let ours = task_ids
+                    .as_ref()
+                    .map(|ids| ids.iter().any(|t| t == task_id))
+                    .unwrap_or(false);
+                if ours {
+                    downloaded += image_ids.len() as u64;
+                    refresh(&bar, progress, downloaded, failed, dedup);
+                }
+            }
+            DaemonEvent::TaskChanged { task_id: tid, diff } if tid == task_id => {
+                if let Some(p) = diff.get("progress").and_then(|v| v.as_f64()) {
+                    progress = p;
+                }
+                // 计数快照事件是权威值，直接覆盖本地累加。
+                if let Some(v) = diff.get("successCount").and_then(|v| v.as_u64()) {
+                    downloaded = v;
+                }
+                if let Some(v) = diff.get("failedCount").and_then(|v| v.as_u64()) {
+                    failed = v;
+                }
+                if let Some(v) = diff.get("dedupCount").and_then(|v| v.as_u64()) {
+                    dedup = v;
+                }
+                refresh(&bar, progress, downloaded, failed, dedup);
+
+                if let Some(status) = diff.get("status").and_then(|v| v.as_str()) {
+                    let outcome = match status {
+                        "completed" => Some(TaskOutcome::Completed { downloaded, failed }),
+                        "canceled" | "cancelled" => Some(TaskOutcome::Canceled),
+                        "failed" => Some(TaskOutcome::Failed(
+                            diff.get("error")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("未知错误")
+                                .to_string(),
+                        )),
+                        _ => None,
+                    };
+                    if let Some(outcome) = outcome {
+                        bar.finish_and_clear();
+                        return outcome;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    bar.finish_and_clear();
+    TaskOutcome::Failed("事件流意外结束".to_string())
+}
+
+fn format_log_line(level: &str, message: &str) -> String {
+    let tag = match level {
+        "error" => console::style(" ERROR ").red().bold().to_string(),
+        "warn" => console::style("  WARN ").yellow().bold().to_string(),
+        "info" => console::style("  INFO ").cyan().to_string(),
+        _ => console::style("   LOG ").dim().to_string(),
+    };
+    let body = match level {
+        "error" => console::style(message).red().to_string(),
+        "warn" => console::style(message).yellow().to_string(),
+        _ => message.to_string(),
+    };
+    format!("{tag} {body}")
+}
+
+/// `--var key=value` → (key, 原始字符串值)。值里允许再出现 `=`。
+fn parse_var_arg(raw: &str) -> Result<(String, String), String> {
+    let (k, v) = raw
+        .split_once('=')
+        .ok_or_else(|| format!("--var 需要 key=value 形式，收到：{raw}"))?;
+    let k = k.trim();
+    if k.is_empty() {
+        return Err(format!("--var 的 key 不能为空：{raw}"));
+    }
+    Ok((k.to_string(), v.to_string()))
+}
+
+/// 解析本次运行的最终配置。
+///
+/// 与主应用一致的三层叠加：
+/// 1. `kbConfig` 里每项的 `default`
+/// 2. 用户在应用里保存的插件默认配置（`plugins-directory/default-configs/<id>.json`）
+/// 3. 本次命令行的 `--var` 覆盖
+///
+/// 第 1 层由 `build_effective_user_config_from_var_defs` 负责（同时做类型规范化，
+/// 所以 `--var page=3` 这种字符串会被转成数字），这里只负责 2、3 层的合并。
+struct ResolvedRun {
+    user_config: HashMap<String, serde_json::Value>,
+    http_headers: HashMap<String, String>,
+    output_dir: Option<String>,
+}
+
+fn resolve_run_config(
+    pm: &PluginManager,
+    plugin: &core_plugin::Plugin,
+    vars: &[String],
+) -> Result<ResolvedRun, String> {
+    // 用户在应用里保存的默认配置。文件结构是 { userConfig, httpHeaders, outputDir }
+    // （见 PluginManager::build_default_config_json）；不存在或坏了都退回空，不阻断运行。
+    let saved = pm
+        .read_plugin_default_config_file(&plugin.id)
+        .ok()
+        .flatten()
+        .unwrap_or(serde_json::Value::Null);
+
+    let mut user_cfg: HashMap<String, serde_json::Value> = saved
+        .get("userConfig")
+        .and_then(|v| v.as_object())
+        .map(|m| m.clone().into_iter().collect())
+        .unwrap_or_default();
+    let http_headers: HashMap<String, String> = saved
+        .get("httpHeaders")
+        .and_then(|v| v.as_object())
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let output_dir = saved
+        .get("outputDir")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let known: std::collections::HashSet<&str> =
+        plugin.var_defs.iter().map(|d| d.key.as_str()).collect();
+    for raw in vars {
+        let (k, v) = parse_var_arg(raw)?;
+        if !known.contains(k.as_str()) {
+            let mut keys: Vec<&str> = known.iter().copied().collect();
+            keys.sort_unstable();
+            return Err(format!(
+                "插件 {} 没有配置项 `{}`。可用的有：{}",
+                plugin.id,
+                k,
+                keys.join(", ")
+            ));
+        }
+        // 一律先按字符串放进去，交给 normalize_var_value 按 var_defs 的类型转换。
+        user_cfg.insert(k, serde_json::Value::String(v));
+    }
+
+    Ok(ResolvedRun {
+        user_config:
+            kabegame_core::crawler::task_scheduler::build_effective_user_config_from_var_defs(
+                &plugin.var_defs,
+                user_cfg,
+            ),
+        http_headers,
+        output_dir,
+    })
+}
+
 async fn validate_kgpg_structure(
     pm: &PluginManager,
     zip_path: &std::path::Path,
 ) -> Result<(), String> {
     let _manifest = pm.read_plugin_manifest(zip_path).await?;
 
-    // 只支持 v3 (package.json)；旧版 manifest.json (v2) / Rhai 已停止支持。
+    // 只支持 v3 package.json；旧清单格式与 Rhai 均不支持。
     let pkg = read_optional_package_json_from_zip(zip_path)?
         .filter(core_plugin::package_json_is_v3)
         .ok_or_else(|| {
-            "只支持 package.json (v3) 插件格式；旧版 manifest.json (v2) 插件已停止支持".to_string()
+            "只支持 package.json (v3) 插件格式；旧清单格式不受支持".to_string()
         })?;
     let main_path = pkg.get("main").and_then(|v| v.as_str()).unwrap_or("");
     if main_path.is_empty() || !has_non_empty_zip_entry(zip_path, main_path)? {
@@ -732,11 +1179,11 @@ fn pack_plugin(args: PackPluginArgs) -> Result<(), String> {
         return Err(format!("插件目录不存在: {}", plugin_dir.display()));
     }
 
-    // 只支持 v3 (package.json)；旧版 manifest.json (v2) 插件格式已停止支持。
+    // 只支持 kbPackageVersion >= 3 的 package.json 插件格式。
     let pkg = read_optional_package_json(&plugin_dir)?
         .filter(|v| core_plugin::package_json_is_v3(v))
         .ok_or_else(|| {
-            "只支持 package.json (v3) 插件；旧版 manifest.json (v2) 已停止支持".to_string()
+            "只支持 kbPackageVersion >= 3 的 package.json 插件".to_string()
         })?;
     pack_plugin_v3(&plugin_dir, &args.output, &pkg)
 }
@@ -810,8 +1257,8 @@ fn pack_plugin_v3(plugin_dir: &Path, output: &Path, pkg: &serde_json::Value) -> 
         );
     }
 
-    maybe_run_plugin_build(plugin_dir)?;
-
+    // 不在这里跑插件构建：pack 只负责打包「已构建好」的目录。构建由上层
+    // package-plugin.ts 负责（见下方 main 脚本存在性检查——目录没构建过会在那里报错）。
     let kb_backend_str = pkg_obj
         .get("kbBackend")
         .and_then(|v| v.as_str())
@@ -915,9 +1362,6 @@ fn pack_plugin_v3(plugin_dir: &Path, output: &Path, pkg: &serde_json::Value) -> 
         }
     }
 
-    // ── 头部 ──
-    let header_manifest_bytes = derive_header_manifest(pkg)?;
-
     let icon_rgb = if let Some(icon_rel) = pkg_obj.get("kbIcon").and_then(|v| v.as_str()) {
         let icon_path = plugin_dir.join(icon_rel);
         match kgpg::icon_png_to_rgb24_fixed(&icon_path) {
@@ -930,77 +1374,12 @@ fn pack_plugin_v3(plugin_dir: &Path, output: &Path, pkg: &serde_json::Value) -> 
     } else {
         None
     };
-    let header = kgpg::build_kgpg2_header(icon_rgb.as_deref(), &header_manifest_bytes)?;
+    let header = kgpg::build_kgpg3_header(icon_rgb.as_deref())?;
 
     // ── ZIP ──
     let zip_bytes = collect_v3_entries(plugin_dir, pkg)?;
-    kgpg::write_kgpg2_from_zip_bytes(output, &header, &zip_bytes)?;
+    kgpg::write_kgpg3_from_zip_bytes(output, &header, &zip_bytes)?;
     Ok(())
-}
-
-fn derive_header_manifest(pkg: &serde_json::Value) -> Result<Vec<u8>, String> {
-    let obj = pkg
-        .as_object()
-        .ok_or_else(|| "package.json 必须是 JSON 对象".to_string())?;
-
-    let version = obj
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("1.0.0")
-        .to_string();
-
-    let author = match obj.get("author") {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(a @ serde_json::Value::Object(_)) => a
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        _ => String::new(),
-    };
-
-    let min_app_version = obj
-        .get("engines")
-        .and_then(|eng| eng.get("kabegame"))
-        .and_then(|v| v.as_str())
-        .map(|raw| core_plugin::normalize_engines_kabegame(raw))
-        .transpose()?
-        .unwrap_or_default();
-
-    let mut header: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-    header.insert("version".to_string(), serde_json::Value::String(version));
-    header.insert("author".to_string(), serde_json::Value::String(author));
-    if !min_app_version.is_empty() {
-        header.insert(
-            "minAppVersion".to_string(),
-            serde_json::Value::String(min_app_version),
-        );
-    }
-
-    // KGPG v2 header is a small store-list manifest, not the full v3
-    // package.json. Keep heavy fields such as kbConfig only inside the ZIP.
-    for (k, v) in obj {
-        if k == "name" || k.starts_with("name.") {
-            if let Some(s) = v.as_str() {
-                header.insert(k.clone(), serde_json::Value::String(s.to_string()));
-            }
-        }
-        if k == "description" || k.starts_with("description.") {
-            if let Some(s) = v.as_str() {
-                header.insert(k.clone(), serde_json::Value::String(s.to_string()));
-            }
-        }
-    }
-
-    let header_bytes = serde_json::to_vec(&serde_json::Value::Object(header))
-        .map_err(|e| format!("序列化头部 manifest 失败: {}", e))?;
-    if header_bytes.len() > 4096 {
-        return Err(format!(
-            "头部 manifest 超过 4096 字节（{} bytes）",
-            header_bytes.len()
-        ));
-    }
-    Ok(header_bytes)
 }
 
 fn collect_v3_entries(plugin_dir: &Path, pkg: &serde_json::Value) -> Result<Vec<u8>, String> {
@@ -1259,59 +1638,6 @@ fn make_rooted_globset(rules: &[String]) -> Result<globset::GlobSet, String> {
         .map_err(|e| format!("构建 globset 失败: {}", e))
 }
 
-fn maybe_run_plugin_build(plugin_dir: &Path) -> Result<(), String> {
-    let package_json_path = plugin_dir.join("package.json");
-    if !package_json_path.is_file() {
-        return Ok(());
-    }
-
-    let package_raw = std::fs::read_to_string(&package_json_path)
-        .map_err(|e| format!("读取 package.json 失败: {e}"))?;
-    let package_val: serde_json::Value =
-        serde_json::from_str(&package_raw).map_err(|e| format!("解析 package.json 失败: {e}"))?;
-    let has_build_script = package_val
-        .get("scripts")
-        .and_then(|s| s.get("build"))
-        .and_then(|v| v.as_str())
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
-    if !has_build_script {
-        return Ok(());
-    }
-
-    // deno 优先（项目工具链），npm 次之，bun 兜底（端上用户机器可能只装了其中之一）。
-    let (runner, args) = if command_exists("deno") {
-        ("deno", vec!["task", "build"])
-    } else if command_exists("npm") {
-        ("npm", vec!["run", "build"])
-    } else if command_exists("bun") {
-        ("bun", vec!["run", "build"])
-    } else {
-        return Err("未找到可用的运行器（deno/npm/bun），无法执行插件构建".to_string());
-    };
-
-    let status = Command::new(runner)
-        .current_dir(plugin_dir)
-        .args(&args)
-        .status()
-        .map_err(|e| format!("执行 `{runner} {}` 失败: {e}", args.join(" ")))?;
-    if !status.success() {
-        return Err(format!(
-            "插件构建失败（`{runner} {}` 退出码: {status}）",
-            args.join(" ")
-        ));
-    }
-    Ok(())
-}
-
-fn command_exists(bin: &str) -> bool {
-    Command::new(bin)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 fn has_non_empty_zip_entry(zip_path: &Path, entry_name: &str) -> Result<bool, String> {
     let bytes = std::fs::read(zip_path)
         .map_err(|e| format!("读取插件包失败 {}: {e}", zip_path.display()))?;
@@ -1498,52 +1824,6 @@ mod tests {
         assert!(!kabegame_core::plugin::package_json_is_v3(
             &serde_json::json!({"kbPackageVersion": 2})
         ));
-    }
-
-    #[test]
-    fn test_derive_header_manifest_excludes_v3_heavy_fields() {
-        let pkg = serde_json::json!({
-            "name": "heavy-plugin",
-            "name.zh": "重配置插件",
-            "version": "1.2.3",
-            "description": "short description",
-            "author": "Kabegame",
-            "kbPackageVersion": 3,
-            "engines": { "kabegame": ">=4.3.0" },
-            "main": "dist/main.js",
-            "kbBackend": "v8",
-            "kbBaseUrl": "https://example.com",
-            "kbConfig": (0..500)
-                .map(|i| serde_json::json!({
-                    "key": format!("option_{i}"),
-                    "type": "string",
-                    "name": format!("Option {i}"),
-                    "default": "x".repeat(64)
-                }))
-                .collect::<Vec<_>>(),
-        });
-
-        let header = derive_header_manifest(&pkg).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&header).unwrap();
-        let obj = value.as_object().unwrap();
-
-        assert_eq!(obj.get("version").and_then(|v| v.as_str()), Some("1.2.3"));
-        assert_eq!(
-            obj.get("minAppVersion").and_then(|v| v.as_str()),
-            Some("4.3.0")
-        );
-        assert_eq!(
-            obj.get("name").and_then(|v| v.as_str()),
-            Some("heavy-plugin")
-        );
-        assert_eq!(
-            obj.get("description").and_then(|v| v.as_str()),
-            Some("short description")
-        );
-        assert!(!obj.contains_key("kbConfig"));
-        assert!(!obj.contains_key("kbBaseUrl"));
-        assert!(!obj.contains_key("main"));
-        assert!(header.len() < kabegame_core::kgpg::KGPG2_MANIFEST_SLOT_SIZE);
     }
 
     #[test]

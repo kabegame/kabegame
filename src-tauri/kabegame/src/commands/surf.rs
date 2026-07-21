@@ -14,6 +14,7 @@ use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, Webview, WebviewUrl,
     WebviewWindowBuilder,
 };
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -166,6 +167,18 @@ pub async fn surf_open_devtools<R: Runtime>(
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
+pub async fn surf_open_in_browser<R: Runtime>(
+    app: AppHandle<R>,
+    url: String,
+) -> Result<(), String> {
+    let parsed = parse_external_url(url.trim())?;
+    app.opener()
+        .open_url(parsed.as_str(), None::<&str>)
+        .map_err(|e| format!("打开浏览器失败: {}", e))
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
 pub async fn surf_go_back<R: Runtime>(app: AppHandle<R>, host: String) -> Result<(), String> {
     let webview = surf_content_webview(&app, Some(&host))?;
     webview
@@ -263,6 +276,12 @@ pub async fn surf_start_session<R: Runtime>(
     if let Some(win) = app.get_window(&label) {
         let _ = win.show();
         let _ = win.set_focus();
+        // 复用窗口时导航到本次请求的 URL,否则传入的 url 被静默丢弃。
+        if let Ok(webview) = surf_content_webview(&app, Some(&host)) {
+            if let Err(error) = webview.navigate(parsed) {
+                eprintln!("复用畅游窗口导航失败: {error}");
+            }
+        }
     } else {
         let host_for_plugin_id = host.clone();
         let record_id_for_download = record.id.clone();

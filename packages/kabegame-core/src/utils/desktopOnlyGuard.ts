@@ -3,6 +3,7 @@ import { i18n } from "@kabegame/i18n";
 import { IS_WEB } from "../env";
 import { getIsSuper } from "../state/superState";
 import { trackEvent } from "../track/umami";
+import { openExternalLink } from "./openExternalLink";
 
 const HOMEPAGE = "https://github.com/kabegame/kabegame";
 
@@ -37,7 +38,7 @@ export async function guardDesktopOnly(
       },
     );
     trackEvent("desktop_only_guard", { feature: featureKey, action: "open_github" });
-    window.open(HOMEPAGE, "_blank", "noopener,noreferrer");
+    await openExternalLink(HOMEPAGE);
   } catch {
     trackEvent("desktop_only_guard", { feature: featureKey, action: "cancel" });
     // 用户取消

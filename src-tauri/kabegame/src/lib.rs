@@ -399,6 +399,11 @@ pub(crate) fn configure_app(
                     let _ = window.hide();
                     api.prevent_close();
                 }
+                #[cfg(any(windows, target_os = "linux"))]
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.emit("main-close-requested", ());
+                }
             }
             tauri::WindowEvent::Destroyed => {
                 if window.label().starts_with("surf-") {
@@ -506,6 +511,8 @@ pub(crate) fn configure_app(
             surf_get_cookies,
             #[cfg(not(target_os = "android"))]
             surf_open_devtools,
+            #[cfg(not(target_os = "android"))]
+            surf_open_in_browser,
             #[cfg(not(target_os = "android"))]
             surf_go_back,
             #[cfg(not(target_os = "android"))]
@@ -669,6 +676,52 @@ pub(crate) fn configure_app(
             apply_update_and_restart,
             #[cfg(not(target_os = "android"))]
             open_dev_webview,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_open,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_create,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_fread,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_fwrite,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_fseek,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_fstat,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_ftruncate,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_close,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_read_file,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_read_text_file,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_write_file,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_write_text_file,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_mkdir,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_read_dir,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_remove,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_stat,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_lstat,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_rename,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_copy_file,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_exists,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_truncate,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_size,
+            #[cfg(not(target_os = "android"))]
+            crawl_fs_get_root,
             #[cfg(not(target_os = "android"))]
             crawl_get_page_label,
             #[cfg(not(target_os = "android"))]

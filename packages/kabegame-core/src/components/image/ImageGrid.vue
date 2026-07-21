@@ -104,7 +104,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, markRaw, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
+import { FolderOpened, ZoomIn } from "@element-plus/icons-vue";
+import { useI18n } from "@kabegame/i18n";
 import ImageItem from "./ImageItem.vue";
 import type { ImageInfo } from "../../types/image";
 import EmptyState from "../common/EmptyState.vue";
@@ -118,6 +120,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { useModal } from "../../composables/useModal";
 import { useUiStore } from "../../stores/ui";
 import { useDragScroll } from "../../composables/useDragScroll";
+import { resolveSettingWithPrompt } from "../../composables/useSettingChoice";
 import { IS_WEB, IS_ANDROID } from "../../env";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
@@ -225,6 +228,7 @@ const emit = defineEmits<{
 }>();
 
 const settingsStore = useSettingsStore();
+const { t } = useI18n();
 /** 本栅格实例内的选择集，不跨页面/路由共享 */
 const selectedIds = ref<Set<string>>(new Set());
 /** 手动播放的视频 id：点击右上角按钮切换 */
@@ -756,7 +760,25 @@ const handleRootClick = (event: MouseEvent) => {
   }
 };
 
-const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) => {
+const resolveImageClickAction = () => resolveSettingWithPrompt("imageClickAction", {
+  title: t("common.chooseImageClickAction"),
+  options: [
+    {
+      id: "preview",
+      title: t('common["imageClick.preview.title"]'),
+      desc: t('common["imageClick.preview.desc"]'),
+      icon: markRaw(ZoomIn),
+    },
+    {
+      id: "open",
+      title: t('common["imageClick.open.title"]'),
+      desc: t('common["imageClick.open.desc"]'),
+      icon: markRaw(FolderOpened),
+    },
+  ],
+});
+
+const handleItemClick = async (image: ImageInfo, index: number, event?: MouseEvent) => {
   if (!event) return;
   focusGrid();
   
@@ -768,7 +790,7 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
 
   // 紧凑模式非选择模式下，单击直接预览
   if (isCompact.value && !androidSelectionMode.value) {
-    const action = settingsStore.values.imageClickAction || "none";
+    const action = await resolveImageClickAction();
     if (action === "preview") {
       openPreview(index);
       return;
@@ -802,7 +824,7 @@ function openPreview(index: number) {
   if (img) emit("preview-open", { image: img });
 }
 
-const handleItemDblClick = (image: ImageInfo, index: number) => {
+const handleItemDblClick = async (image: ImageInfo, index: number) => {
   // 紧凑模式选择中：快速连点会触发 dblclick，避免误开预览（单击已由 handleItemClick 处理）
   if (isCompact.value && androidSelectionMode.value) {
     return;
@@ -812,7 +834,7 @@ const handleItemDblClick = (image: ImageInfo, index: number) => {
     openPreview(index);
     return;
   }
-  const action = settingsStore.values.imageClickAction || "none";
+  const action = await resolveImageClickAction();
   if (action === "preview") {
     emit("image-dblclick", { action: "preview", image });
     openPreview(index);

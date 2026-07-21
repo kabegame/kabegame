@@ -1,6 +1,26 @@
-# 爬虫后端双选设计：Rhai 与 WebView
+# 爬虫后端：V8 与 WebView
 
 > **⚠️ 历史文档（Rhai 后端已移除）**：本文写于 Rhai + WebView 双后端时期。现状是 **V8（deno_core）后端 + WebView 后端**，Rhai 已彻底移除，后端通过 `package.json` 的 `kbBackend`（`v8` / `webview`）显式声明。第 6 节的「Rhai API 与对等 JS API」仅作历史参考。当前 V8 运行时宿主 API 见 [../cocs/crawler/V8_RUNTIME.md](../cocs/crawler/V8_RUNTIME.md)，包格式见 [PLUGIN_FORMAT.md](./PLUGIN_FORMAT.md)。
+
+## 当前实现的能力差异
+
+| 能力 | V8 后端 | WebView 后端 |
+|---|---|---|
+| `kbBackend` | `v8` | `webview` |
+| 平台 | Windows、macOS、Linux、Android/aarch64 | 仅桌面；Android 不启用 |
+| 执行环境 | 每任务独立 `deno_core` 运行时；无浏览器窗口，提供 `DOMParser` | 真实浏览器页面与 DOM/Cookie 容器；页面导航后在新 document 重新注入脚本 |
+| 私有文件系统 | 完整 `deno_fs` `30_fs.js` API，含同步方法、`open` / `create` 和 `FsFile` 句柄 | 异步子集：15 个路径方法，以及 `open` / `create` 返回的 `FileHandle`（`read` / `write` / `seek` / `stat` / `truncate` / `close`） |
+| `fs.getRoot()` | 同步返回 `/{handle}` 字符串 | 异步返回 `Promise<string>` |
+| WebView 文件 IPC | 不适用（直接调用 V8 ops） | 文件写入使用 Tauri Raw IPC；句柄 `read` 以二进制 response 返回，并在末尾附带 8 字节大端读取数 |
+| VFS 路径与权限 | 与 WebView 相同：`/` 拒绝、`/{handle}` 只读、`data` / `cache` / `tmp` 挂载点内读写 | 与 V8 相同，所有命令仍经当前任务 `PluginVfs` 校验 |
+| VFS 文件入库 | `downloadImage(virtualPath)`，支持当前任务路径 | `downloadImage(virtualPath)`，支持当前任务路径 |
+| 类型声明 | `@kabegame/types` 的 `lib.kabegame.d.ts` 声明 V8 完整 API | 当前类型包不单独声明 WebView API；异步路径与句柄子集由类型文件注释列明 |
+
+三个挂载点都属于插件私有目录：`data` 持久保存，`cache` 可被清理，`tmp` **当前不自动清理**、由插件自行管理。任务 handle 每次随机生成，任务结束后旧路径不可解析；插件必须每次调用 `getRoot()`，不能持久化虚拟路径。插件卸载时三类目录 best-effort 清理，升级或覆盖安装保留。完整用法与 ZIP 解压入库示例见 [PLUGIN_FORMAT.md](./PLUGIN_FORMAT.md)。
+
+WebView `FileHandle` 的 rid 存在当前 WebView 的 Tauri 资源表中，插件应始终 `await handle.close()`。用户手动关闭爬虫窗口只会隐藏窗口，不会释放遗漏的句柄；正常任务收尾会调用 `destroy_task_window()` 真正销毁窗口，此时资源表随 WebView 释放。若任务未收尾、窗口销毁失败或只是隐藏，句柄会继续占用，最迟到 WebView 后续销毁或应用退出才释放。
+
+下面第 1～7 节保留原 Rhai + WebView 设计记录，不再代表当前后端选择或 API 契约。
 
 本文档描述插件层级的**后端选择**：同一套插件格式下，**脚本无需声明后端**；运行时根据是否提供 JS 脚本与当前平台自动选择 **Rhai 后端**或 **WebView 后端**，并初步总结 WebView 后端的实现要点与平台约束。
 

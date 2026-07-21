@@ -232,7 +232,7 @@
 | `apps/kabegame/src/components/help/HelpDrawer.vue` | 帮助抽屉标题、分类 |
 | `apps/kabegame/src/components/help/CodeBlock.vue` | 若有「复制」等按钮 |
 | `apps/kabegame/src/components/common/EmptyState.vue` | 空状态标题/描述 |
-| `apps/kabegame/src/components/common/OptionPickerDrawer.vue` | 选项标题、确认等 |
+| `packages/kabegame-core/src/components/common/OptionPickerDrawer.vue` | 选项标题、确认等 |
 | `apps/kabegame/src/components/FileDropOverlay.vue` | 拖拽提示文案 |
 | `apps/kabegame/src/components/ImageGrid.vue` | 加载中、错误提示等 |
 | **`packages/core/.../ImageDetailDialog.vue`** | 图片详情弹窗标题与字段标签（**见 7.1.10**，位于 core 未迁移） |

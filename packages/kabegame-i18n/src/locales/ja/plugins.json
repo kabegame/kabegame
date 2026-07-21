@@ -50,6 +50,16 @@
   "detailNameLabel": "名前",
   "detailVersionLabel": "バージョン",
   "detailDescriptionLabel": "説明",
+  "detailLabelsLabel": "ラベル",
+  "pluginLabels": {
+    "authNeedCookie": { "name": "Cookie 必須", "desc": "このソースはクロール用の Cookie を取得するため、先に {surf} でのログインが必要な場合があります" },
+    "authNeedProxy": { "name": "プロキシ必須", "desc": "このソースは中国本土から完全にアクセスするためにプロキシが必要な場合があります" },
+    "contentResMobile": { "name": "モバイル", "desc": "モバイル / 縦向き解像度の壁紙を提供します" },
+    "contentResDesktop": { "name": "デスクトップ", "desc": "デスクトップ / 横向き解像度の壁紙を提供します" },
+    "contentNsfw": { "name": "NSFW", "desc": "NSFW / R-18 コンテンツを含む場合があります" },
+    "contentTypeVideo": { "name": "動画", "desc": "動画 / ライブ壁紙を提供します" },
+    "versionIncompatible": { "name": "非対応", "desc": "このプラグインは現在インストールされているアプリより新しいバージョンを必要とします" }
+  },
   "detailCrawlUrlLabel": "クロール基準 URL",
   "detailCopyAction": "コピー",
   "confirmInstall": "インストールを確認",

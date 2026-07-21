@@ -4,7 +4,7 @@
   <el-container class="app-container" :class="{ 'app-container-compact': uiStore.isCompact, 'has-app-background': bgVisible }">
     <div
       v-if="bgVisible && bgImage"
-      class="app-background-layer"
+      class="app-background-layer fixed inset-0 z-0 pointer-events-none overflow-hidden"
       aria-hidden="true"
     >
       <ImageContent
@@ -12,7 +12,7 @@
         :key="`bg-${bgImageToken}`"
         :image="bgImage"
         prefer="original"
-        class="app-background-media"
+        class="app-background-media w-full h-full scale-[1.04] transition-[opacity,filter] duration-250"
         :style="bgImageStyle"
         :video-playing="bgVisible && bgMediaType === 'video'"
         video-muted
@@ -34,6 +34,8 @@
     />
     <!-- 全局唯一的快捷设置抽屉（桌面与安卓均挂载） -->
     <QuickSettingsDrawer />
+    <!-- 全局唯一的未配置设置选择宿主 -->
+    <SettingChoiceHost />
     <!-- 桌面端自动更新：更新日志弹窗 + 下载进度弹窗（全局唯一，常驻以便下载中刷新存活） -->
     <template v-if="!uiStore.isCompact && !IS_WEB">
       <UpdateDialog />
@@ -125,20 +127,23 @@
       </router-view>
     </el-main>
     <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
-    <nav v-if="uiStore.isCompact" class="app-bottom-tabs" aria-label="主导航">
+    <nav
+      v-if="uiStore.isCompact"
+      class="app-bottom-tabs flex-none flex flex-row relative w-full border-t-2 border-solid border-(--anime-border) bg-(--anime-bg-card) pb-(--sab,env(safe-area-inset-bottom,0px)) shadow-[0_-4px_20px_rgba(255,107,157,0.08)]"
+      aria-label="主导航"
+    >
       <router-link
         v-for="tab in bottomTabs"
         :key="tab.index"
         :to="tab.index"
-        class="bottom-tab-item"
+        class="flex-1 flex flex-col items-center justify-center gap-1 py-2 px-1 min-w-0 no-underline text-(--anime-text-secondary) transition-[color,background] duration-200 active:bg-[rgba(255,107,157,0.08)] [&.is-active]:text-(--anime-primary) [&.is-active]:bg-linear-to-b [&.is-active]:from-[rgba(255,107,157,0.12)] [&.is-active]:to-[rgba(167,139,250,0.08)]"
         :class="{ 'is-active': activeRoute === tab.index }"
       >
-        <el-icon class="bottom-tab-icon">
+        <el-icon class="text-[22px] shrink-0">
           <component :is="tab.icon" />
         </el-icon>
-        <span class="bottom-tab-label">{{ tab.label }}</span>
+        <span class="text-[11px] leading-[1.2] overflow-hidden text-ellipsis whitespace-nowrap max-w-full">{{ tab.label }}</span>
       </router-link>
-      
     </nav>
     <KamechanMascot />
   </el-container>
@@ -202,6 +207,8 @@ import UpdateButton from "./components/updater/UpdateButton.vue";
 import UpdateDialog from "./components/updater/UpdateDialog.vue";
 import DownloadProgressDialog from "./components/updater/DownloadProgressDialog.vue";
 import ImageContent from "@kabegame/core/components/image/ImageContent.vue";
+import SettingChoiceHost from "@kabegame/core/components/common/SettingChoiceHost.vue";
+import { useMainCloseGuard } from "./composables/useMainCloseGuard";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
@@ -304,6 +311,7 @@ const {
 
 // 窗口事件监听
 const { init: initWindowEvents } = useWindowEvents();
+useMainCloseGuard();
 
 // 文件拖拽
 const { init: initFileDrop, handleOverlayClick } = useFileDrop(fileDropOverlayRef, importConfirmDialogRef);
@@ -636,9 +644,7 @@ html,
 body,
 #app {
   height: 100%;
-  background: transparent;
   overscroll-behavior: none;
-
 }
 
 * {
@@ -660,12 +666,16 @@ body,
   }
 
   &.has-app-background {
+    .app-sidebar {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
     .app-main {
-      background: rgba(255, 255, 255, 0.65);
+      background: rgba(255, 255, 255, 0.2);
     }
 
     .app-bottom-tabs {
-      background: rgba(255, 255, 255, 0.7);
+      background: rgba(255, 255, 255, 0.2);
     }
   }
 
@@ -675,21 +685,7 @@ body,
   }
 }
 
-.app-background-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.app-background-media {
-  width: 100%;
-  height: 100%;
-  transform: scale(1.04);
-  transition: opacity 0.25s ease, filter 0.25s ease;
-}
-
+// 背景层/媒体的基础布局已迁移到模板 UnoCSS 工具类；此处仅保留对 ImageContent 内部元素的覆盖
 .app-background-layer .app-background-media.image-content .ic-img {
   object-fit: cover !important;
 }
@@ -708,56 +704,6 @@ body,
 .app-container.app-container-compact * {
   -webkit-tap-highlight-color: transparent;
   tap-highlight-color: transparent;
-}
-
-// Android 底部 Tab 栏：均匀分布
-.app-bottom-tabs {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: row;
-  position: relative;
-  width: 100%;
-  border-top: 2px solid var(--anime-border);
-  background: var(--anime-bg-card);
-  padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px));
-  box-shadow: 0 -4px 20px rgba(255, 107, 157, 0.08);
-
-  .bottom-tab-item {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 8px 4px;
-    min-width: 0;
-    color: var(--anime-text-secondary);
-    text-decoration: none;
-    transition: color 0.2s ease, background 0.2s ease;
-
-    &:active {
-      background: rgba(255, 107, 157, 0.08);
-    }
-
-    &.is-active {
-      color: var(--anime-primary);
-      background: linear-gradient(180deg, rgba(255, 107, 157, 0.12) 0%, rgba(167, 139, 250, 0.08) 100%);
-    }
-  }
-
-  .bottom-tab-icon {
-    font-size: 22px;
-    flex-shrink: 0;
-  }
-
-  .bottom-tab-label {
-    font-size: 11px;
-    line-height: 1.2;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
-  }
 }
 
 .app-sidebar {

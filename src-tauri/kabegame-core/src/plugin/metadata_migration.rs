@@ -1,4 +1,4 @@
-use deno_core::{JsRuntime, PollEventLoopOptions, RuntimeOptions, resolve_url, serde_v8, v8};
+use deno_core::{resolve_url, serde_v8, v8, JsRuntime, PollEventLoopOptions, RuntimeOptions};
 
 use super::Plugin;
 use crate::emitter::GlobalEmitter;

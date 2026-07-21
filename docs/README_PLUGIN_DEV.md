@@ -71,7 +71,7 @@ node package-plugin.js --outDir ../data/plugins-directory
 ```
 
 打包后的文件将生成在 `crawler-plugins/packed/<插件名称>.kgpg`。
-（KGPG v2 下 `crawler-plugins/packed/` 可直接提交到仓库，用于 GitHub 发布时直接上传/引用。）
+`crawler-plugins/packed/` 可直接提交到仓库，用于 GitHub 发布时直接上传/引用。
 
 ## 插件文件格式
 
@@ -228,4 +228,3 @@ for src in img_srcs {
 ## 在应用中使用
 
 打包后的 `.kgpg` 文件可以通过应用的"导入收集源"功能导入使用。
-

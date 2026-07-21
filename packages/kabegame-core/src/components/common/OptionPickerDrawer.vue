@@ -43,8 +43,8 @@ import { ArrowRight } from "@element-plus/icons-vue";
 import { ElDrawer, ElIcon } from "element-plus";
 import { computed, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { useModal } from "@kabegame/core/composables/useModal";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useModal } from "../../composables/useModal";
+import { useUiStore } from "../../stores/ui";
 
 export interface OptionItem {
   id: string;

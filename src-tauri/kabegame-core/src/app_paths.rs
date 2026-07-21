@@ -67,6 +67,16 @@ impl AppPaths {
         self.data_dir.join("plugins-directory")
     }
 
+    /// 单个插件的私有数据目录：`data_dir/plugins-data/<plugin_id>`。
+    ///
+    /// 目录名带 `-data` 用途后缀，确保 Android 上 `temp_dir == cache_dir` 时，
+    /// data、cache、tmp 三类插件目录仍不会落入同一棵物理目录树。
+    /// 非法 `plugin_id` 返回错误，不会拼接到路径中。
+    pub fn plugin_data_dir(&self, plugin_id: &str) -> Result<PathBuf, String> {
+        validate_plugin_id(plugin_id)?;
+        Ok(self.data_dir.join("plugins-data").join(plugin_id))
+    }
+
     /// 预置（随安装包/更新分发）插件目录：`resource_dir/plugins`
     ///
     /// 由构建脚本在 build（非 Android）时写入（见 scripts/plugins/mode-plugin.ts 的
@@ -162,6 +172,26 @@ impl AppPaths {
             .join(format!("{}.kgpg", plugin_id))
     }
 
+    /// 单个插件的私有缓存目录：`cache_dir/plugins-cache/<plugin_id>`。
+    ///
+    /// 目录名带 `-cache` 用途后缀，确保 Android 上 `temp_dir == cache_dir` 时，
+    /// data、cache、tmp 三类插件目录仍不会落入同一棵物理目录树。
+    /// 非法 `plugin_id` 返回错误，不会拼接到路径中。
+    pub fn plugin_cache_dir(&self, plugin_id: &str) -> Result<PathBuf, String> {
+        validate_plugin_id(plugin_id)?;
+        Ok(self.cache_dir.join("plugins-cache").join(plugin_id))
+    }
+
+    /// 插件 V8 baseline snapshot 缓存目录：`cache_dir/snapshots`
+    pub fn plugin_snapshots_dir(&self) -> PathBuf {
+        self.cache_dir.join("snapshots")
+    }
+
+    /// 迁移前的插件 V8 baseline snapshot 缓存目录。
+    pub(crate) fn legacy_plugin_snapshots_dir(&self) -> PathBuf {
+        self.cache_dir.join("plugins").join("snapshots")
+    }
+
     // ========== 临时目录 ==========
 
     /// 插件下载临时目录（返回 temp_dir 根目录）
@@ -174,9 +204,14 @@ impl AppPaths {
         self.cache_dir.join("downloads")
     }
 
-    /// 插件 V8 baseline snapshot 缓存目录：`cache_dir/plugins/snapshots`
-    pub fn plugin_snapshots_dir(&self) -> PathBuf {
-        self.cache_dir.join("plugins").join("snapshots")
+    /// 单个插件的私有临时目录：`temp_dir/plugins-tmp/<plugin_id>`。
+    ///
+    /// 目录名带 `-tmp` 用途后缀，确保 Android 上 `temp_dir == cache_dir` 时，
+    /// data、cache、tmp 三类插件目录仍不会落入同一棵物理目录树。
+    /// 非法 `plugin_id` 返回错误，不会拼接到路径中。
+    pub fn plugin_temp_dir(&self, plugin_id: &str) -> Result<PathBuf, String> {
+        validate_plugin_id(plugin_id)?;
+        Ok(self.temp_dir.join("plugins-tmp").join(plugin_id))
     }
 
     // ========== 虚拟驱动相关（仅桌面） ==========
@@ -201,6 +236,22 @@ impl AppPaths {
     pub fn exe_dir(&self) -> Option<&PathBuf> {
         self.exe_dir.as_ref()
     }
+}
+
+/// 校验可安全用作插件私有目录名的插件 ID。
+///
+/// 仅允许非空的 ASCII 字母、数字、`.`、`_`、`-`，并拒绝 `.` 与 `..`。
+pub fn validate_plugin_id(plugin_id: &str) -> Result<(), String> {
+    if plugin_id.is_empty() || plugin_id == "." || plugin_id == ".." {
+        return Err("plugin_id 不能为空、`.` 或 `..`".to_string());
+    }
+    if !plugin_id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err("plugin_id 只能包含 ASCII 字母、数字、`.`、`_`、`-`".to_string());
+    }
+    Ok(())
 }
 
 /// 是否使用开发数据目录（仓库本地 .kabegame/debug/{data,cache,tmp}）。
@@ -230,4 +281,52 @@ pub fn repo_root_dir() -> Option<PathBuf> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_paths() -> AppPaths {
+        AppPaths {
+            data_dir: PathBuf::from("data"),
+            cache_dir: PathBuf::from("cache"),
+            temp_dir: PathBuf::from("tmp"),
+            resource_dir: PathBuf::from("resources"),
+            exe_dir: None,
+            external_data_dir: None,
+            pictures_dir: None,
+            compatibles_dir_path: PathBuf::from("compatibles"),
+        }
+    }
+
+    #[test]
+    fn validates_plugin_ids_for_directory_names() {
+        for valid in ["a", "Plugin-1_test.example", "0.1.2"] {
+            assert!(validate_plugin_id(valid).is_ok(), "{valid}");
+        }
+        for invalid in ["", ".", "..", "a/b", "a\\b", "space id", "插件"] {
+            assert!(validate_plugin_id(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn builds_isolated_plugin_directories() {
+        let paths = test_paths();
+        assert_eq!(
+            paths.plugin_data_dir("plugin.test").unwrap(),
+            PathBuf::from("data/plugins-data/plugin.test")
+        );
+        assert_eq!(
+            paths.plugin_cache_dir("plugin.test").unwrap(),
+            PathBuf::from("cache/plugins-cache/plugin.test")
+        );
+        assert_eq!(
+            paths.plugin_temp_dir("plugin.test").unwrap(),
+            PathBuf::from("tmp/plugins-tmp/plugin.test")
+        );
+        assert!(paths.plugin_data_dir("../escape").is_err());
+        assert!(paths.plugin_cache_dir("../escape").is_err());
+        assert!(paths.plugin_temp_dir("../escape").is_err());
+    }
 }

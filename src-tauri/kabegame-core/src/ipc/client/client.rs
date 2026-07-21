@@ -459,11 +459,11 @@ impl IpcClient {
         .await
     }
 
-    pub async fn plugin_get_remote_icon_v2(
+    pub async fn plugin_get_remote_icon_v3(
         &self,
         download_url: String,
     ) -> Result<Option<Vec<u8>>, String> {
-        self.request_bytes(IpcRequest::PluginGetRemoteIconV2 {
+        self.request_bytes(IpcRequest::PluginGetRemoteIconV3 {
             download_url,
             source_id: None,
             plugin_id: None,

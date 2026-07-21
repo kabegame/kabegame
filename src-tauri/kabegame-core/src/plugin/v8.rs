@@ -7,6 +7,7 @@ use deno_core::{
     anyhow::{Result as AnyhowResult, anyhow},
     extension, resolve_url, serde_v8, v8,
 };
+use deno_fs::FileSystemRc;
 use deno_web::{BlobStore, InMemoryBroadcastChannel};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::HashMap;
@@ -31,9 +32,11 @@ extension!(
         ops::op_kabegame_current_html,
         ops::op_kabegame_current_headers,
         ops::op_kabegame_fetch,
+        ops::op_kabegame_fs_root,
         ops::op_kabegame_plugin_data,
         ops::op_kabegame_set_plugin_data,
         ops::op_kabegame_set_header,
+        ops::op_kabegame_require_cookie,
         ops::op_kabegame_del_header,
         ops::op_kabegame_warn,
         ops::op_kabegame_log,
@@ -76,12 +79,14 @@ Object.assign(globalThis, {
 /// INVARIANT: this list, `lazy_extensions`, and `lazy_extension_args` must keep
 /// identical names/order, with `kabegame_v8` last. Snapshot sidecar validation
 /// and V8 external-reference indexing both depend on it.
-pub(crate) fn base_extensions(ctx: KabegameOpState) -> Vec<Extension> {
+pub(crate) fn base_extensions(ctx: KabegameOpState, fs: FileSystemRc) -> Vec<Extension> {
     let blob_store = BlobStore::default_arc();
     vec![
         deno_webidl::deno_webidl::init(),
         deno_web::deno_web::init(blob_store, None, false, InMemoryBroadcastChannel::default()),
         deno_crypto::deno_crypto::init(None),
+        deno_io::deno_io::init(None),
+        deno_fs::deno_fs::init(fs),
         kabegame_v8::init(ctx),
     ]
 }
@@ -91,16 +96,20 @@ fn lazy_extensions() -> Vec<Extension> {
         deno_webidl::deno_webidl::lazy_init(),
         deno_web::deno_web::lazy_init(),
         deno_crypto::deno_crypto::lazy_init(),
+        deno_io::deno_io::lazy_init(),
+        deno_fs::deno_fs::lazy_init(),
         kabegame_v8::lazy_init(),
     ]
 }
 
-fn lazy_extension_args(ctx: KabegameOpState) -> Vec<ExtensionArguments> {
+fn lazy_extension_args(ctx: KabegameOpState, fs: FileSystemRc) -> Vec<ExtensionArguments> {
     let blob_store = BlobStore::default_arc();
     vec![
         deno_webidl::deno_webidl::args(),
         deno_web::deno_web::args(blob_store, None, false, InMemoryBroadcastChannel::default()),
         deno_crypto::deno_crypto::args(None),
+        deno_io::deno_io::args(None),
+        deno_fs::deno_fs::args(fs),
         kabegame_v8::args(ctx),
     ]
 }
@@ -112,9 +121,9 @@ pub struct JsPluginRuntime {
 
 impl JsPluginRuntime {
     /// Assemble a runtime with Kabegame host ops wired into OpState.
-    pub fn new(ctx: KabegameOpState) -> AnyhowResult<Self> {
+    pub fn new(ctx: KabegameOpState, fs: FileSystemRc) -> AnyhowResult<Self> {
         if let Some(blob) = snapshot::try_load() {
-            match Self::with_snapshot(ctx.clone(), blob) {
+            match Self::with_snapshot(ctx.clone(), fs.clone(), blob) {
                 Ok(runtime) => return Ok(runtime),
                 Err(error) => {
                     eprintln!("[v8-snapshot] restore failed, falling back to fresh init: {error}");
@@ -126,12 +135,16 @@ impl JsPluginRuntime {
             snapshot::spawn_generate_if_missing();
         }
 
-        Self::fresh(ctx)
+        Self::fresh(ctx, fs)
     }
 
     /// Restore extension ESM from the shared baseline snapshot, then inject
     /// per-task native state and initialize crypto in the new isolate's CppHeap.
-    fn with_snapshot(ctx: KabegameOpState, blob: &'static [u8]) -> AnyhowResult<Self> {
+    fn with_snapshot(
+        ctx: KabegameOpState,
+        fs: FileSystemRc,
+        blob: &'static [u8],
+    ) -> AnyhowResult<Self> {
         let started = std::time::Instant::now();
         let mut runtime = JsRuntime::try_new(RuntimeOptions {
             module_loader: None,
@@ -139,7 +152,7 @@ impl JsPluginRuntime {
             extensions: lazy_extensions(),
             ..Default::default()
         })?;
-        runtime.lazy_init_extensions(lazy_extension_args(ctx))?;
+        runtime.lazy_init_extensions(lazy_extension_args(ctx, fs))?;
         runtime.execute_script("<kabegame_crypto_init>", CRYPTO_INIT_SCRIPT)?;
         eprintln!(
             "[v8-snapshot] restored runtime in {} ms",
@@ -150,20 +163,21 @@ impl JsPluginRuntime {
 
     /// Build a runtime without a snapshot. This retains the previous eager
     /// extension initialization behavior as the compatibility fallback.
-    fn fresh(ctx: KabegameOpState) -> AnyhowResult<Self> {
+    fn fresh(ctx: KabegameOpState, fs: FileSystemRc) -> AnyhowResult<Self> {
         let started = std::time::Instant::now();
         // No V8 startup snapshot: extensions are initialized eagerly with `init(...)`,
         // which registers their lazy_loaded_js and evaluates their ESM — including the
         // kabegame_v8 prelude — during `JsRuntime::new`. The prelude's
         // `Deno.core.loadExtScript` calls resolve against those normally-registered
         // sources, so no separate `residual_lazy_js_sources` table is needed.
-        // `kabegame_v8` stays LAST so deno_web/deno_crypto are registered before the
-        // prelude runs. Networking is host-side (op_kabegame_fetch), so there is no
+        // `kabegame_v8` stays LAST so deno_web/deno_crypto/deno_io/deno_fs are
+        // registered before the prelude runs. Networking is host-side
+        // (op_kabegame_fetch), so there is no
         // deno_fetch: Headers/Response are implemented in prelude.js.
         let mut runtime = JsRuntime::new(RuntimeOptions {
             module_loader: None,
             startup_snapshot: None,
-            extensions: base_extensions(ctx),
+            extensions: base_extensions(ctx, fs),
             ..Default::default()
         });
         // deno_crypto ships 00_crypto.js as lazy_loaded_js (not auto-attached). Load
@@ -285,6 +299,7 @@ pub fn execute_crawler_script_v8(run: Arc<Task>) -> TaskResult {
     let plugin_id = run.params.plugin.id.clone();
     let task_id = run.task_id.clone();
     let cancel = run.cancel.clone();
+    let fs: FileSystemRc = run.vfs.clone();
     let cancel_for_ctx = cancel.clone();
     let cancel_for_watcher = cancel.clone();
 
@@ -293,7 +308,8 @@ pub fn execute_crawler_script_v8(run: Arc<Task>) -> TaskResult {
             task_id,
             cancel: cancel_for_ctx,
         };
-        let mut rt = JsPluginRuntime::new(ctx).map_err(|e| TaskError::Other(e.to_string()))?;
+        let mut rt =
+            JsPluginRuntime::new(ctx, fs).map_err(|e| TaskError::Other(e.to_string()))?;
         let isolate_handle = rt.runtime_mut().v8_isolate().thread_safe_handle();
         let watcher = tokio::spawn(async move {
             cancel_for_watcher.cancelled().await;
@@ -446,6 +462,8 @@ mod tests {
             config: HashMap::new(),
             script_type: "v8".to_string(),
             min_app_version: None,
+            labels: vec![],
+            min_app_incompatible: false,
             file_path: None,
             doc: None,
             icon_png_base64: None,
@@ -484,7 +502,8 @@ mod tests {
         .to_string();
 
         let run = test_run("v8-sync-ops", "https://example.test");
-        let mut rt = JsPluginRuntime::new(test_state(&run)).expect("runtime init");
+        let mut rt =
+            JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         rt.run_crawl(
             "plugin.test",
             entry,
@@ -499,7 +518,8 @@ mod tests {
     async fn run_crawl_errors_when_export_missing() {
         let entry = "export const notCrawl = 1;".to_string();
         let run = test_run("v8-missing-export", "");
-        let mut rt = JsPluginRuntime::new(test_state(&run)).expect("runtime init");
+        let mut rt =
+            JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         let err = rt
             .run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
@@ -518,7 +538,8 @@ mod tests {
         "#
         .to_string();
         let run = test_run("v8-import-rejected", "");
-        let mut rt = JsPluginRuntime::new(test_state(&run)).expect("runtime init");
+        let mut rt =
+            JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         let err = rt
             .run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
@@ -563,7 +584,8 @@ mod tests {
             "#
         );
 
-        let mut rt = JsPluginRuntime::new(test_state(&run)).expect("runtime init");
+        let mut rt =
+            JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         rt.run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
             .expect("fetch should resolve");
@@ -573,7 +595,129 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshot_round_trip_restores_crypto_web_dom_timer_and_fetch() {
+    async fn kabegame_fs_uses_task_vfs_without_extending_deno_namespace() {
+        let run = test_run("v8-fs", "");
+        let entry = r#"
+            export async function crawl(common) {
+                const fs = Kabegame.fs;
+                if (!Object.isFrozen(fs)) throw new Error("Kabegame.fs is not frozen");
+                if (fs.getRoot() !== common.root) {
+                    throw new Error("bad fs root: " + fs.getRoot());
+                }
+                if ("readTextFile" in Deno || "writeTextFile" in Deno) {
+                    throw new Error("fs leaked onto Deno namespace");
+                }
+                const path = fs.getRoot() + "/data/runtime.txt";
+                await fs.writeTextFile(path, "kabegame-fs");
+                if (await fs.readTextFile(path) !== "kabegame-fs") {
+                    throw new Error("bad fs round trip");
+                }
+                const stat = fs.statSync(path);
+                if (!stat.isFile || stat.size !== 11) throw new Error("bad statSync result");
+            }
+        "#
+        .to_string();
+
+        let mut runtime =
+            JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
+        runtime
+            .run_crawl(
+                "plugin.test",
+                entry,
+                json!({ "root": format!("/{}", run.fs_handle) }),
+                json!({}),
+            )
+            .await
+            .expect("Kabegame.fs should use the task VFS");
+    }
+
+    #[tokio::test]
+    async fn download_image_wraps_and_reads_its_task_vfs_file() {
+        let run = test_run("v8-task-vfs-download", "");
+        let entry = r#"
+            export async function crawl() {
+                const path = Kabegame.fs.getRoot() + "/data/x.jpg";
+                await Kabegame.fs.writeTextFile(path, "task-vfs-image");
+                await Kabegame.downloadImage(path);
+            }
+        "#
+        .to_string();
+
+        let mut runtime =
+            JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
+        runtime
+            .run_crawl("plugin.test", entry, json!({}), json!({}))
+            .await
+            .expect("downloadImage should accept its task VFS path");
+
+        let download_queue = TaskScheduler::global().download_queue();
+        let request = {
+            let mut pending = download_queue.pending_queue.lock().await;
+            let index = pending
+                .iter()
+                .position(|request| request.task_id == run.task_id)
+                .expect("task VFS download should be queued");
+            pending.remove(index).unwrap()
+        };
+        assert_eq!(request.url.scheme(), "task-vfs");
+        let expected_handle = run.fs_handle.to_string();
+        assert_eq!(request.url.host_str(), Some(expected_handle.as_str()));
+        assert_eq!(request.url.path(), "/data/x.jpg");
+
+        let outcome = crate::crawler::downloader::download_with_retry(
+            &download_queue,
+            &run.task_id,
+            request.url.as_str(),
+            &request.http_headers,
+            request.id,
+        )
+        .await
+        .expect("registry downloader should read task VFS bytes");
+        match outcome {
+            crate::crawler::downloader::DownloadOutcome::Bytes(bytes) => {
+                assert_eq!(bytes, b"task-vfs-image")
+            }
+            crate::crawler::downloader::DownloadOutcome::Path(_) => {
+                panic!("small task VFS file should stay in memory")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_round_trip_restores_task_fs() {
+        let run = test_run("v8-snapshot-fs", "");
+        let blob: &'static [u8] =
+            Box::leak(snapshot::generate_snapshot_bytes().expect("generate baseline snapshot"));
+        let mut runtime =
+            JsPluginRuntime::with_snapshot(test_state(&run), run.vfs.clone(), blob)
+                .expect("restore snapshot runtime");
+        let entry = r#"
+            export async function crawl(common) {
+                if (Kabegame.fs.getRoot() !== common.root) {
+                    throw new Error("bad restored fs root: " + Kabegame.fs.getRoot());
+                }
+                const path = Kabegame.fs.getRoot() + "/cache/snapshot-fs.txt";
+                await Kabegame.fs.writeTextFile(path, "snapshot-fs");
+                if (await Kabegame.fs.readTextFile(path) !== "snapshot-fs") {
+                    throw new Error("bad restored fs round trip");
+                }
+            }
+        "#
+        .to_string();
+
+        runtime
+            .run_crawl(
+                "plugin.test",
+                entry,
+                json!({ "root": format!("/{}", run.fs_handle) }),
+                json!({}),
+            )
+            .await
+            .expect("restored runtime should use the task VFS");
+    }
+
+    #[tokio::test]
+    async fn snapshot_round_trip_restores_crypto_web_dom_timer_fetch_and_fs() {
         init_scheduler();
         let task_id = "v8-snapshot-round-trip";
         let run = test_run(task_id, "");
@@ -583,8 +727,10 @@ mod tests {
 
         let blob: &'static [u8] =
             Box::leak(snapshot::generate_snapshot_bytes().expect("generate baseline snapshot"));
-        let mut runtime = JsPluginRuntime::with_snapshot(test_state(&run), blob)
-            .expect("restore snapshot runtime");
+        let mut runtime =
+            JsPluginRuntime::with_snapshot(test_state(&run), run.vfs.clone(), blob)
+                .expect("restore snapshot runtime");
+        let expected_root = format!("/{}", run.fs_handle);
         let entry = format!(
             r#"
             export async function crawl() {{
@@ -614,6 +760,13 @@ mod tests {
                 await new Promise(resolve => setTimeout(resolve, 1));
                 const response = await (await fetch("{server}/snapshot")).json();
                 if (!response.ok) throw new Error("fetch unavailable");
+                if (Kabegame.fs.getRoot() !== "{expected_root}") {{
+                    throw new Error("fs root unavailable after restore");
+                }}
+                await Kabegame.fs.writeTextFile("{expected_root}/cache/snapshot.txt", "ok");
+                if (await Kabegame.fs.readTextFile("{expected_root}/cache/snapshot.txt") !== "ok") {{
+                    throw new Error("fs unavailable after restore");
+                }}
             }}
             "#
         );
@@ -649,7 +802,8 @@ mod tests {
             "#
         );
 
-        let mut rt = JsPluginRuntime::new(test_state(&run)).expect("runtime init");
+        let mut rt =
+            JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         rt.run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
             .expect("to should resolve");
@@ -671,7 +825,7 @@ mod tests {
             "#
         );
 
-        let mut rt = JsPluginRuntime::new(state).expect("runtime init");
+        let mut rt = JsPluginRuntime::new(state, run.vfs.clone()).expect("runtime init");
         let cancel_task = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(50)).await;
             cancel.cancel();
@@ -699,7 +853,7 @@ mod tests {
         "#
         .to_string();
 
-        let mut rt = JsPluginRuntime::new(state).expect("runtime init");
+        let mut rt = JsPluginRuntime::new(state, run.vfs.clone()).expect("runtime init");
         let err = rt
             .run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
