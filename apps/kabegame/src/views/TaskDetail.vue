@@ -145,12 +145,13 @@ const taskStatusFromStore = computed(() => task.value?.status ?? "");
 
 // 是否应该显示停止按钮（只在 running 状态显示）
 const shouldShowStopButton = computed(() => {
-    return taskStatusFromStore.value === "running";
+    return taskStatusFromStore.value === "running" ||
+        taskStatusFromStore.value === "waiting_downloads";
 });
 
 const showOpenWebview = computed(() => {
     const tsk = task.value;
-    if (!tsk || tsk.status !== "running") return false;
+    if (!tsk || (tsk.status !== "running" && tsk.status !== "waiting_downloads")) return false;
     return pluginStore.plugins.find((plugin) => plugin.id === tsk.pluginId)?.scriptType === "js";
 });
 

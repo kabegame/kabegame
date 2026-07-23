@@ -17,8 +17,9 @@
     -> 页面每次加载执行 media_capture.js -> media_download.js -> bootstrap
     -> crawl.js 通过 Kabegame.pageLabel()/pageState()/state() 读取 Task 内状态
     -> Kabegame.to()/back() 直接维护 Task.page_stack 并 navigate
-    -> Kabegame.exit()/error() 调用 TaskScheduler::complete_webview_task
-    -> worker await TaskResult 后统一 transition、销毁窗口、remove_run
+    -> Kabegame.exit()/error() 先 allSettled 当前页未决 downloadImage，再发送 TaskResult
+    -> worker await TaskResult 后等待该任务 pending + active 下载排空
+    -> 有下载时状态 Running -> WaitingDownloads，排空后销毁窗口并进入终态
 ```
 
 ---
@@ -29,8 +30,8 @@
 |------|----------|------|
 | 任务调度 | `src-tauri/kabegame-core/src/crawler/task_scheduler/mod.rs` | `TaskScheduler` 注册表、提交时冻结参数、worker、取消和 `TaskResult` 收尾 |
 | 任务条目 | `src-tauri/kabegame-core/src/crawler/task_scheduler/task.rs` | `Task` / `TaskParams` / `TaskResult`，保存 progress、headers、page stack、WebView state、completion、CancellationToken |
-| WebView 桥 | `src-tauri/kabegame-core/src/crawler/webview.rs` | 仅保留 `CrawlerWebViewHandler` trait 和窗口 label 工具 |
-| 窗口创建与注入 | `src-tauri/kabegame/src/startup.rs` | 从 `Task` 取 crawl.js/config，创建 crawler 窗口并处理 native download 回调 |
+| WebView 桥 | `src-tauri/kabegame-core/src/crawler/webview.rs` | `CrawlerWebViewHandler` trait、窗口 label 工具和 CEF 下载投递反调 |
+| 窗口创建与注入 | `src-tauri/kabegame/src/startup.rs` | 从 `Task` 取 crawl.js/config，创建 crawler 窗口并把 CEF Requested/Finished 与 worker oneshot 对接 |
 | Tauri 命令 | `src-tauri/kabegame/src/commands/crawler.rs` | 按 `crawler-<task_id>` label 找 `Task`，维护 page stack/state、下载、日志、进度、`TaskResult` completion |
 | Bootstrap 模板 | `src-tauri/kabegame/src/webview_js/bootstrap.js` | 构造闭包局部 `Kabegame`，执行烘焙进来的 crawl.js |
 | 媒体捕获脚本 | `src-tauri/kabegame/src/webview_js/media_capture.js` | 捕获 Blob/MSE 字节 |
@@ -93,7 +94,9 @@ Tauri initialization script 在每次页面加载时执行：
 
 ### 3.5 任务结束与取消
 
-`crawl_exit` / `crawl_error` / 任务取消都通过 `TaskScheduler::complete_webview_task` 发送 `TaskResult` 通知 worker。取消顺序为：
+`crawl_exit` / `crawl_error` / 任务取消都通过 `TaskScheduler::complete_webview_task` 发送 `TaskResult` 通知 worker。正常或错误脚本结果到达后，`run_task` 在销毁 WebView 前等待该任务全部 pending + active 下载完成；V8 分支在脚本 join 后使用同一个排空 helper。计数非零时任务转为持久化状态 `waiting_downloads`，每次下载完成由 `capacity_notify` 唤醒；120 秒无进展超时，数量下降会重置期限。
+
+取消顺序为：
 
 1. 先 `Task.cancel.cancel()`。
 2. 再 `DownloadQueue::cancel_task_downloads(task_id)`。
@@ -101,11 +104,13 @@ Tauri initialization script 在每次页面加载时执行：
 
 这个顺序用于避免下载 job 从 pending 取出到 active 登记之间的竞态。
 
+排空期间取消会立即打断等待并返回 `TaskError::Canceled`；WebView 随后销毁，销毁钩子会丢弃剩余 CEF completion tx，避免 worker 永久占槽。
+
 `TaskResult = Result<(), TaskError>`；`TaskError::Canceled` 不携带脚本原始消息，worker 在任务终态统一写入 `"Task canceled"`。其它错误走 `TaskError::Other(String)`，若 token 已取消仍按取消终态保留原始错误。
 
 ### 3.6 下载与媒体
 
-`Kabegame.downloadImage` 的普通 HTTP/HTTPS URL 走浏览器 native download，先登记 `ActiveDownloadInfo { native: true, ... }`，完成后统一交给 `postprocess_downloaded_image`。`data:` / `blob:` / MSE URL 走 `crawl_media_begin` / `crawl_media_chunk` / `crawl_media_end` 上传通道。
+`Kabegame.downloadImage` 的普通 HTTP/HTTPS URL 统一调用 `DownloadQueue::download_image`，在容量满时挂起 JS promise；worker 根据任务插件为 WebView backend 把 job 反投到对应 CEF 窗口，等待条目内 oneshot 后统一执行后处理。页面自发下载在首次 `Requested` 时取消并入队，worker 第二次发起后才真正落盘。`data:` / `blob:` / MSE URL 走 `crawl_media_begin` / `crawl_media_chunk` / `crawl_media_end` 上传通道。
 
 下载请求使用 `Task.headers_snapshot()`；页面 Referer 由当前 page stack 顶部 URL 派生。
 

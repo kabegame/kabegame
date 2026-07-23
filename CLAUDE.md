@@ -43,6 +43,12 @@ deno task b -c kabegame                    # Build main app only
 deno task b -c kabegame --skip cargo       # Vue build only
 deno task b -c kabegame --skip vue         # Cargo build only
 deno task b --release                  # Copy artifacts to release/
+deno task b -c kabegame --target x86_64    # macOS only: cross-compile for Intel (also valid on check/start).
+                                       # Artifacts go to target/<triple>/; FFmpeg/CEF deps are resolved per-arch
+                                       # (x86_64 uses third/FFmpeg-build/darwin/x86_64/ and cef-{dev,prod}-x64).
+                                       # Prepare deps first: deno task build:ffmpeg --target x86_64 and
+                                       # scripts/build-chromium.sh prod --target x86_64.
+                                       # See cocs/build/MACOS_CROSS_BUILD.md.
 deno task b -c kabegame --mode android     # Build Android APK/AAB (mode-plugin injects --target aarch64 unless
                                        # --target/-t is passed; gen/android RustPlugin.kt only has arm64 flavors)
 ```

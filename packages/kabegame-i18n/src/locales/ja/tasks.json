@@ -65,6 +65,7 @@
   "drawerUnselected": "未選択",
   "drawerTaskStatusPending": "待機中",
   "drawerTaskStatusRunning": "実行中",
+  "drawerTaskStatusWaitingDownloads": "残りのダウンロードを待機中",
   "drawerTaskStatusCompleted": "完了",
   "drawerTaskStatusFailed": "失敗",
   "drawerTaskStatusCanceled": "キャンセル",

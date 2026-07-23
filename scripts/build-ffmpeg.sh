@@ -35,6 +35,12 @@
 #   --skip-x264   跳过重新编译 x264，复用已装产物
 #                 （仅需迭代 FFmpeg configure flags 时用，节省 x264 编译时间；
 #                 若该目录下没有已安装的 x264 会报错退出）。
+#   --target x86_64|arm64  （仅 macOS）按目标架构构建，用于在一台 Mac 上跨编另一架构。
+#                 落点与 scripts/utils.ts 的 FFMPEG_INSTALL_DIR 严格对齐：
+#                   arm64  → third/{FFmpeg,x264}-build/install（与 native 同一份，不重复编译）
+#                   x86_64 → third/{FFmpeg,x264}-build/darwin/x86_64/install（与 arm64 隔离）
+#                 目标架构经 clang -arch 贯穿 cc/cflags/ldflags；跨编时 x264 额外传
+#                 --host 以切换 asm 后端（x86_64 需要 nasm，缺失则降级 C 实现）。
 #   --target android  交叉编译 aarch64 Android 静态库（用环境 NDK；仅 Linux/macOS 宿主）。
 #                 产物落在 third/{FFmpeg,x264}-build/android/aarch64/install/，与本机产物隔离，
 #                 且均已 gitignore —— 不入库，靠本命令复现（见 cocs/downloader-tasks/VIDEO_INGEST.md）。
@@ -57,8 +63,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 set -- "${_ARGS[@]}"
-if [[ "$TARGET" != "native" && "$TARGET" != "android" ]]; then
-  die "未知 --target: '$TARGET'（允许 native|android）"
+
+# --target 归一化。除 native/android 外，macOS 还支持按架构跨编（x86_64 / arm64），
+# 归一到 TARGET=darwin + MAC_ARCH；MAC_HOST_TRIPLE 供 x264 的 --host 使用。
+MAC_ARCH=""
+MAC_HOST_TRIPLE=""
+case "$TARGET" in
+  native|android) ;;
+  x86_64|x64|amd64|x86_64-apple-darwin)
+    MAC_ARCH="x86_64"; MAC_HOST_TRIPLE="x86_64-apple-darwin"; TARGET="darwin" ;;
+  arm64|aarch64|aarch64-apple-darwin)
+    MAC_ARCH="arm64";  MAC_HOST_TRIPLE="aarch64-apple-darwin"; TARGET="darwin" ;;
+  *) die "未知 --target: '$TARGET'（允许 native|android|x86_64|arm64）" ;;
+esac
+if [[ "$TARGET" == "darwin" && "$(uname -s)" != "Darwin" ]]; then
+  die "--target $MAC_ARCH 仅在 macOS 宿主上支持（跨编 x86_64 / arm64）"
 fi
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
@@ -120,6 +139,43 @@ if [[ "$TARGET" == "android" ]]; then
   export RANLIB="$NDK_TC/bin/llvm-ranlib"
   export STRIP="$NDK_TC/bin/llvm-strip"
   echo "=== Android 交叉编译: NDK=$NDK_DIR  API=$ANDROID_API  ABI=$ANDROID_ABI ==="
+elif [[ "$TARGET" == "darwin" ]]; then
+  # macOS 按目标架构跨编。产物落点必须与 scripts/utils.ts 的 FFMPEG_INSTALL_DIR 一致:
+  #   arm64  → 沿用既有的无后缀目录(与 native 同一份,不重复编译)
+  #   x86_64 → darwin/x86_64/,与 arm64 产物完全隔离,互不覆盖
+  MAC_HOST_ARCH="$(uname -m)"
+  MAC_CROSS=0
+  [[ "$MAC_ARCH" != "$MAC_HOST_ARCH" ]] && MAC_CROSS=1
+  if [[ "$MAC_ARCH" == "x86_64" ]]; then
+    BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build${BUILD_SUFFIX}/darwin/x86_64"
+    X264_BUILD_DIR="${REPO_ROOT}/third/x264-build${BUILD_SUFFIX}/darwin/x86_64"
+  else
+    BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build${BUILD_SUFFIX}"
+    X264_BUILD_DIR="${REPO_ROOT}/third/x264-build${BUILD_SUFFIX}"
+  fi
+  INSTALL_DIR="${BUILD_DIR}/install"
+  X264_INSTALL_DIR="${X264_BUILD_DIR}/install"
+  # x86_64 目标的 x264 汇编必须有 nasm:x264 的 configure 在缺 nasm 时是**硬失败**
+  # (`Found no assembler / Minimum version is nasm-2.13`),不会自动降级到 C 实现。
+  # 这里提前拦下,免得等 FFmpeg 那一步才炸。真要无汇编版可显式追加 --disable-asm
+  # (裸参数会透传给 x264/FFmpeg 的 configure),但 H.264 编码会慢数倍。
+  # arm64 的汇编走 clang 内建汇编器,不需要 nasm。
+  if [[ "$MAC_ARCH" == "x86_64" && "$SKIP_X264" -eq 0 ]] && ! command -v nasm &>/dev/null; then
+    die "x86_64 目标需要 nasm 汇编器(x264 缺它会直接失败)。请先安装: brew install nasm"
+  fi
+  # 编译器一律用 `cc`(/usr/bin/cc)——它是 xcode-select 的 shim,会自动注入 macOS SDK
+  # 与正确的 ld,`-arch` 即可跨架构,无需 -isysroot/-B。
+  # **不要**改用裸 `clang`:本仓库开发机的 PATH 里 Android NDK 的 toolchain/bin 排在
+  # Xcode 之前,同时遮蔽了 `clang` 和 `ld`,会一路踩到
+  #   `ld64.lld: library not found for -lSystem` → `ld: library 'System' not found`。
+  # NDK 不提供 `cc`,所以 `cc` 是安全的(现有 native 分支正是靠这一点)。
+  # x264 的 configure 默认 CC=gcc(同样经 PATH 解析),这里一并钉死。
+  export CC="cc"
+  if [[ "$MAC_CROSS" == 1 ]]; then
+    echo "=== macOS 跨编: 目标 $MAC_ARCH / 宿主 $MAC_HOST_ARCH ==="
+  else
+    echo "=== macOS 原生构建: $MAC_ARCH ==="
+  fi
 else
   BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build${BUILD_SUFFIX}"
   INSTALL_DIR="${BUILD_DIR}/install"
@@ -189,6 +245,20 @@ else
       "--host=${ANDROID_TRIPLE}"
       "--sysroot=${NDK_TC}/sysroot"
     )
+  elif [[ "$TARGET" == "darwin" ]]; then
+    # 目标架构经 clang 的 -arch 传递。注意**不要**设 --extra-asflags:x86_64 的汇编器
+    # 是 nasm(不认 -arch),它的 -f macho64 由 configure 从 --host 推导;arm64 的汇编
+    # 走 CC,已经吃到 extra-cflags 里的 -arch。
+    X264_FLAGS+=(
+      "--enable-pic"
+      "--extra-cflags=-arch ${MAC_ARCH}"
+      "--extra-ldflags=-arch ${MAC_ARCH}"
+    )
+    # --host 触发 cross 模式(不执行编译出的探测程序,并按目标架构选 asm 后端);
+    # 同架构原生构建时不传,保留本机探测能力。
+    if [[ "$MAC_CROSS" == 1 ]]; then
+      X264_FLAGS+=("--host=${MAC_HOST_TRIPLE}")
+    fi
   else
     case "$(uname -s)" in
       Linux)  X264_FLAGS+=("--enable-pic") ;;
@@ -282,6 +352,24 @@ if [[ "$TARGET" == "android" ]]; then
     --pkg-config=pkg-config
     --pkg-config-flags=--static
   )
+elif [[ "$TARGET" == "darwin" ]]; then
+  # macOS 目标架构:同一套 Xcode toolchain + SDK,只需把 -arch 贯穿 cc/cflags/ldflags。
+  # FFmpeg 的 --arch 接受 arm64(内部归一到 aarch64),x86_64 的 nasm 目标格式由
+  # arch + target-os 推导,无需额外指定。
+  _CROSS_FLAGS=(
+    --arch="${MAC_ARCH}"
+    --target-os=darwin
+    --cc="cc -arch ${MAC_ARCH}"
+    --extra-cflags="-arch ${MAC_ARCH}"
+    --extra-ldflags="-arch ${MAC_ARCH}"
+    # host_cc 用于编译构建期跑的辅助工具,必须是**宿主**架构:不带 -arch 即可。
+    --host-cc="cc"
+    --pkg-config-flags=--static
+  )
+  # 真正跨编时才关掉"编译并运行探测程序"的假设。
+  if [[ "$MAC_CROSS" == 1 ]]; then
+    _CROSS_FLAGS+=(--enable-cross-compile)
+  fi
 fi
 
 CONFIG_FLAGS=(

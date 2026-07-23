@@ -24,7 +24,13 @@ export interface CrawlTask {
   outputAlbumId?: string;
   runConfigId?: string;
   triggerSource: "manual" | "scheduled";
-  status: "pending" | "running" | "completed" | "failed" | "canceled";
+  status:
+    | "pending"
+    | "running"
+    | "waiting_downloads"
+    | "completed"
+    | "failed"
+    | "canceled";
   progress: number;
   deletedCount: number;
   dedupCount: number;
@@ -504,7 +510,11 @@ export const useCrawlerStore = defineStore("crawler", () => {
           const list = tasks.value;
           for (let i = 0; i < list.length; i++) {
             const t = list[i];
-            if (t.status === "running" || t.status === "pending") {
+            if (
+              t.status === "running" ||
+              t.status === "waiting_downloads" ||
+              t.status === "pending"
+            ) {
               void syncTaskFromBackend(t.id);
             }
           }
@@ -876,10 +886,13 @@ export const useCrawlerStore = defineStore("crawler", () => {
     );
   }
 
-  /** 与后端 clear_finished_tasks 一致：本地只保留 pending / running */
+  /** 与后端 clear_finished_tasks 一致：本地只保留未结束任务 */
   function applyKeepOnlyPendingAndRunningTasks() {
     tasks.value = tasks.value.filter(
-      (t) => t.status === "pending" || t.status === "running",
+      (t) =>
+        t.status === "pending" ||
+        t.status === "running" ||
+        t.status === "waiting_downloads",
     );
     tasksTotal.value = tasks.value.length;
   }
@@ -917,4 +930,3 @@ export const useCrawlerStore = defineStore("crawler", () => {
     applyKeepOnlyPendingAndRunningTasks,
   };
 });
-

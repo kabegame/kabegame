@@ -65,6 +65,7 @@
   "drawerUnselected": "未选择",
   "drawerTaskStatusPending": "等待中",
   "drawerTaskStatusRunning": "运行中",
+  "drawerTaskStatusWaitingDownloads": "等待剩余下载",
   "drawerTaskStatusCompleted": "完成",
   "drawerTaskStatusFailed": "失败",
   "drawerTaskStatusCanceled": "已取消",

@@ -21,7 +21,7 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex as StdMutex};
 use tauri::{AppHandle, Manager, Resource, ResourceId, Runtime, Webview, WebviewWindow};
 use url::Url;
 
@@ -102,11 +102,11 @@ pub struct CrawlFsStat {
     pub is_socket: bool,
 }
 
-struct CrawlFsFileResource(Mutex<std::fs::File>);
+struct CrawlFsFileResource(StdMutex<std::fs::File>);
 
 impl CrawlFsFileResource {
     fn new(file: std::fs::File) -> Self {
-        Self(Mutex::new(file))
+        Self(StdMutex::new(file))
     }
 }
 
@@ -194,6 +194,72 @@ fn surf_download_name_from_url(url: &Url) -> Option<String> {
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn native_download_id_from_path(path: &std::path::Path) -> Option<u64> {
+    path.file_name()?
+        .to_str()?
+        .strip_prefix("native-")?
+        .strip_suffix(".part")?
+        .parse()
+        .ok()
+}
+
+/// CEF Requested 回调认领 worker 发起的下载并设置统一临时路径。
+pub(crate) fn claim_native_download_destination(
+    task_id: Option<&str>,
+    surf_record_id: Option<&str>,
+    url: &Url,
+    destination: &mut PathBuf,
+) -> bool {
+    let temp_dir = kabegame_core::app_paths::AppPaths::global().downloads_temp_dir();
+    if std::fs::create_dir_all(&temp_dir).is_err() {
+        return false;
+    }
+    let dq = TaskScheduler::global().download_queue();
+    let Some(id) = dq.claim_native_download(task_id, surf_record_id, url.as_str()) else {
+        return false;
+    };
+    *destination = temp_dir.join(format!("native-{id}.part"));
+    true
+}
+
+/// CEF Finished 回调把终态送回对应 worker。无法找到等待者时立即清理孤儿文件。
+pub(crate) fn finish_native_download(
+    task_id: Option<&str>,
+    surf_record_id: Option<&str>,
+    url: &Url,
+    path: Option<PathBuf>,
+    success: bool,
+) {
+    if !success {
+        if let Some(path) = path.as_ref() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    let dq = TaskScheduler::global().download_queue();
+    let tx = path
+        .as_deref()
+        .and_then(native_download_id_from_path)
+        .and_then(|id| dq.take_native_completion(id))
+        .or_else(|| {
+            dq.take_native_completion_for_owner_url(
+                task_id,
+                surf_record_id,
+                url.as_str(),
+            )
+        });
+    let Some(tx) = tx else {
+        if let Some(path) = path {
+            let _ = std::fs::remove_file(path);
+        }
+        return;
+    };
+    if tx.send((path.clone(), success)).is_err() {
+        if let Some(path) = path {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1084,8 +1150,6 @@ pub async fn crawl_add_progress<R: Runtime>(
 pub async fn crawl_download_image<R: Runtime>(
     webview: WebviewWindow<R>,
     url: String,
-    _cookie: Option<bool>,
-    headers: Option<HashMap<String, String>>,
     name: Option<String>,
     metadata: Option<Value>,
     source_url: Option<String>,
@@ -1101,78 +1165,33 @@ pub async fn crawl_download_image<R: Runtime>(
     )?;
     let images_dir = run.params.images_dir.clone();
     let download_start_time = now_ms();
-    let mut request_headers = headers.unwrap_or_default();
-    if let Some(page_url) = current_url.filter(|url| !url.trim().is_empty()) {
-        request_headers.insert("Referer".to_string(), page_url);
-    }
     let metadata_id = metadata
         .map(|value| run.insert_image_metadata(&value))
         .transpose()?;
 
-    let merged_headers = merge_task_headers(&task_id, Some(request_headers), None)?;
     let dq = TaskScheduler::global().download_queue();
-    if parsed.scheme() == "task-vfs" {
-        let cancel = run.cancel.clone();
-        let download = dq.download_image(
-            parsed,
-            images_dir,
-            run.params.plugin.id.clone(),
-            task_id,
-            download_start_time,
-            run.params.output_album_id.clone(),
-            merged_headers,
-            name,
-            metadata_id,
-            source_url,
-        );
-        return tokio::select! {
-            biased;
-            _ = cancel.cancelled() => Err("Task canceled".to_string()),
-            result = download => result.map_err(|error| format!("Failed to download image: {error}")),
-        };
-    }
-
-    std::fs::create_dir_all(&images_dir)
-        .map_err(|e| format!("Failed to create native download dir: {}", e))?;
-    let _native_dest =
-        compute_unique_download_path_with_name(&images_dir, &parsed, None, name.as_deref())
-            .map_err(|e| format!("Failed to compute native download destination: {}", e))?;
-    let download_id = next_download_id();
-    let native_info = ActiveDownloadInfo {
-        id: download_id,
-        url: parsed.as_str().to_string(),
-        plugin_id: run.params.plugin.id.clone(),
-        start_time: download_start_time,
-        task_id: task_id.clone(),
-        state: DownloadState::Preparing,
-        native: true,
-        retried_for: None,
-        received_bytes: 0,
-        total_bytes: None,
-        surf_record_id: None,
-        http_headers: merged_headers,
-        output_album_id: run.params.output_album_id.clone(),
-        custom_display_name: name,
+    // 与 V8 op 同形：统一经容量门控入队；worker 再按插件 backend 选择 CEF 或 scheme downloader。
+    let cancel = run.cancel.clone();
+    let download = dq.download_image(
+        parsed,
+        images_dir,
+        run.params.plugin.id.clone(),
+        task_id,
+        download_start_time,
+        run.params.output_album_id.clone(),
+        HashMap::new(),
+        name,
         metadata_id,
-        post_url: source_url,
-    };
-    dq.register_native(native_info)?;
-
-    #[cfg(target_os = "linux")]
-    let start_result = tauri_runtime_cef::start_download(webview.label(), parsed.as_str())
-        .map_err(|e| e.to_string());
-    #[cfg(not(target_os = "linux"))]
-    let start_result = webview.navigate(parsed.clone()).map_err(|e| e.to_string());
-
-    if let Err(e) = start_result {
-        let _ = dq.take_native(parsed.as_str());
-        return Err(format!("Failed to start native crawler download: {}", e));
+        source_url,
+    );
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err("Task canceled".to_string()),
+        result = download => result.map_err(|error| format!("Failed to download image: {error}")),
     }
-    Ok(())
 }
 
-/// Surf right-click download entry: pre-register a native download so the surf WebView
-/// can keep cookies/session state while preserving the JS-computed display name.
+/// 畅游右键下载统一入队；worker 仍会在所属 surf WebView 中调用 CEF 下载以保留会话。
 #[tauri::command]
 pub async fn surf_download_image<R: Runtime>(
     webview: Webview<R>,
@@ -1189,54 +1208,28 @@ pub async fn surf_download_image<R: Runtime>(
     }
 
     let custom_name = name.or_else(|| surf_download_name_from_url(&parsed));
-    std::fs::create_dir_all(&ctx.images_dir)
-        .map_err(|e| format!("Failed to create native download dir: {}", e))?;
-    let _native_dest = compute_unique_download_path_with_name(
-        &ctx.images_dir,
-        &parsed,
-        None,
-        custom_name.as_deref(),
-    )
-    .map_err(|e| format!("Failed to compute native download destination: {}", e))?;
-
     let metadata_id = insert_metadata(&ctx.plugin_id, metadata, ctx.plugin_version)?;
     let mut http_headers = ctx.http_headers.clone();
     if let Some(headers) = headers {
         http_headers.extend(headers);
     }
-    let download_id = next_download_id();
-    let native_info = ActiveDownloadInfo {
-        id: download_id,
-        url: parsed.as_str().to_string(),
-        plugin_id: ctx.plugin_id.clone(),
-        start_time: now_ms(),
-        task_id: ctx.task_id.clone(),
-        state: DownloadState::Preparing,
-        native: true,
-        retried_for: None,
-        received_bytes: 0,
-        total_bytes: None,
-        surf_record_id: ctx.surf_record_id.clone(),
-        http_headers,
-        output_album_id: ctx.output_album_id.clone(),
-        custom_display_name: custom_name,
-        metadata_id,
-        post_url: source_url,
-    };
     let dq = TaskScheduler::global().download_queue();
-    dq.register_native(native_info)?;
-
-    #[cfg(target_os = "linux")]
-    let start_result = tauri_runtime_cef::start_download(webview.label(), parsed.as_str())
-        .map_err(|e| e.to_string());
-    #[cfg(not(target_os = "linux"))]
-    let start_result = webview.navigate(parsed.clone()).map_err(|e| e.to_string());
-
-    if let Err(e) = start_result {
-        let _ = dq.take_native(parsed.as_str());
-        return Err(format!("Failed to start native surf download: {}", e));
-    }
-    Ok(())
+    dq.download(
+        parsed,
+        ctx.images_dir,
+        ctx.plugin_id,
+        ctx.task_id,
+        now_ms(),
+        ctx.output_album_id,
+        ctx.surf_record_id,
+        http_headers,
+        None,
+        custom_name,
+        metadata_id,
+        false,
+        source_url,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1279,14 +1272,13 @@ pub async fn crawl_media_begin<R: Runtime>(
         total_bytes,
     )?;
 
-    let native_info = ActiveDownloadInfo {
+    let active_info = ActiveDownloadInfo {
         id: download_id,
         url: parsed.as_str().to_string(),
         plugin_id: ctx.plugin_id.clone(),
         start_time: download_start_time,
         task_id: ctx.task_id.clone(),
         state: DownloadState::Preparing,
-        native: true,
         retried_for: None,
         received_bytes: 0,
         total_bytes,
@@ -1296,9 +1288,10 @@ pub async fn crawl_media_begin<R: Runtime>(
         custom_display_name: custom_name,
         metadata_id,
         post_url: page_url,
+        native_completion: Arc::new(StdMutex::new(None)),
     };
     let dq = TaskScheduler::global().download_queue();
-    if let Err(e) = dq.register_native(native_info) {
+    if let Err(e) = dq.register_active_download(active_info) {
         media_upload::abort(download_id);
         return Err(e);
     }
@@ -1486,7 +1479,6 @@ pub async fn crawl_media_end<R: Runtime>(
         entry.start_time,
         entry.output_album_id.as_deref(),
         &entry.http_headers,
-        true,
         entry.custom_display_name.as_deref(),
         entry.metadata_id,
         entry.post_url.as_deref(),
@@ -1494,13 +1486,6 @@ pub async fn crawl_media_end<R: Runtime>(
     .await;
     if let Some(path) = temp_mux_path.as_ref() {
         let _ = std::fs::remove_file(path);
-    }
-    if let Ok(inserted) = result.as_ref() {
-        if *inserted {
-            if let Some(surf_record_id) = entry.surf_record_id.as_deref() {
-                let _ = Storage::global().increment_surf_record_download_count(surf_record_id);
-            }
-        }
     }
     dq.wait_then_finish_download(id, false).await;
     result.map(|_| ())

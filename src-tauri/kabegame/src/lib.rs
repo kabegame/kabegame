@@ -407,6 +407,18 @@ pub(crate) fn configure_app(
             }
             tauri::WindowEvent::Destroyed => {
                 if window.label().starts_with("surf-") {
+                    if let Some(host) =
+                        commands::surf::host_from_surf_label(window.label())
+                    {
+                        if let Ok(Some(record)) =
+                            kabegame_core::storage::Storage::global()
+                                .get_surf_record_by_host(&host)
+                        {
+                            kabegame_core::crawler::TaskScheduler::global()
+                                .download_queue()
+                                .abort_native_waits_for_surf(&record.id);
+                        }
+                    }
                     commands::surf::notify_surf_session_closed(
                         &window.app_handle(),
                         Some(window.label()),

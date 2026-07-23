@@ -18,6 +18,7 @@ export const useTaskDrawerStore = defineStore("taskDrawer", () => {
       (task) =>
         task.status === "pending" ||
         task.status === "running" ||
+        task.status === "waiting_downloads" ||
         task.status === "failed" ||
         task.status === "canceled" ||
         task.status === "completed"
@@ -27,7 +28,10 @@ export const useTaskDrawerStore = defineStore("taskDrawer", () => {
   // 右上角徽章显示：排队中 + 运行中
   const activeTasksCount = computed(() => {
     return crawlerStore.tasks.filter(
-      (task) => task.status === "pending" || task.status === "running"
+      (task) =>
+        task.status === "pending" ||
+        task.status === "running" ||
+        task.status === "waiting_downloads"
     ).length;
   });
 

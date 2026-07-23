@@ -13,6 +13,8 @@ pub enum TaskStatus {
     #[default]
     Pending,
     Running,
+    #[serde(rename = "waiting_downloads")]
+    WaitingDownloads,
     Completed,
     Failed,
     #[serde(alias = "cancelled")]
@@ -31,7 +33,8 @@ impl TaskStatus {
         use TaskStatus::*;
         match self {
             Pending => matches!(next, Running | Canceled | Failed),
-            Running => matches!(next, Completed | Canceled | Failed),
+            Running => matches!(next, WaitingDownloads | Completed | Canceled | Failed),
+            WaitingDownloads => matches!(next, Completed | Canceled | Failed),
             Completed | Canceled | Failed => false,
         }
     }
@@ -437,7 +440,7 @@ impl Storage {
         Ok((tasks, total))
     }
 
-    // 启动期批量失效 pending/running 任务（FSM 合法跳转 pending|running→failed，
+    // 启动期批量失效未结束任务（FSM 合法跳转 pending|running|waiting_downloads→failed，
     // 但走批量 SQL 而非 transition 入口：此时无前端监听且处于启动清理阶段）。
     pub fn mark_pending_running_tasks_as_failed(&self) -> Result<usize, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -447,7 +450,7 @@ impl Storage {
             .as_millis() as i64;
         let count = conn
             .execute(
-                "UPDATE tasks SET status = 'failed', error = '任务已失效', end_time = ?1 WHERE status IN ('pending', 'running')",
+                "UPDATE tasks SET status = 'failed', error = '任务已失效', end_time = ?1 WHERE status IN ('pending', 'running', 'waiting_downloads')",
                 params![now],
             )
             .map_err(|e| format!("Failed to mark tasks as failed: {}", e))?;

@@ -32,6 +32,7 @@ interface BuildOptions {
   release?: boolean;
   package?: string;
   test?: string;
+  target?: string;
 }
 
 /**
@@ -83,6 +84,9 @@ program
     Mode.STANDARD,
   )
   .option("--data <data>", "数据目录模式：dev | prod（默认 dev）")
+  // dev 不支持跨编。这里仍然声明该选项，是为了让 TargetPlugin 给出"为什么不行"的
+  // 解释，而不是让 commander 抛 `unknown option '--target' (Did you mean --trace?)`。
+  .option("--target <arch>", "（dev 不支持跨编，见 build 命令的同名选项）")
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", true)
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {
@@ -105,6 +109,10 @@ program
     Mode.STANDARD,
   )
   .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
+  .option(
+    "--target <arch>",
+    "目标架构（仅 macOS）：x86_64 | arm64。见 build 命令的同名选项",
+  )
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {
@@ -133,6 +141,11 @@ program
   )
   .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
   .option(
+    "--target <arch>",
+    "目标架构（仅 macOS）：x86_64 | arm64。用于在一台 Mac 上跨编另一架构；" +
+      "产物落 target/<triple>/，FFmpeg/CEF 依赖按架构隔离取用。不传则按宿主原生构建",
+  )
+  .option(
     "--release",
     "构建完成后复制安装包到 release/ 目录，只有构建 kabegame 获取全量的情况下才可用",
     false,
@@ -158,6 +171,10 @@ program
     Mode.STANDARD,
   )
   .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
+  .option(
+    "--target <arch>",
+    "目标架构（仅 macOS）：x86_64 | arm64。见 build 命令的同名选项",
+  )
   .action(async (options: BuildOptions) => {
     await check(options);
   });

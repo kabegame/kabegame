@@ -98,7 +98,7 @@
                                 :color="taskProgressBarColor(item.data.status)"
                                 :format="() => taskProgressText(item.data)"
                                 :show-text="item.data.status === 'running'" />
-                              <div v-if="item.data.status === 'running'" class="progress-footer">
+                              <div v-if="item.data.status === 'running' || item.data.status === 'waiting_downloads'" class="progress-footer">
                                 <el-button text size="small" type="warning" class="stop-btn"
                                   @click.stop="$emit('cancel-task', item.data.id)">
                                   {{ t("tasks.drawerStop") }}
@@ -179,7 +179,7 @@ const crawlerStore = useCrawlerStore();
 
 const TASK_PAGE_SIZE = 20;
 
-type TaskStatus = "pending" | "running" | "completed" | "failed" | "canceled";
+type TaskStatus = "pending" | "running" | "waiting_downloads" | "completed" | "failed" | "canceled";
 type ScriptTask = {
   id: string;
   pluginId: string;
@@ -205,7 +205,6 @@ type ActiveDownloadInfo = {
   startTime: number;
   taskId: string;
   state?: string;
-  native?: boolean;
 };
 
 type DownloadProgressPayload = {
@@ -222,7 +221,6 @@ type DownloadStatePayload = {
   pluginId: string;
   state: string;
   error?: string;
-  native?: boolean;
 };
 
 const props = withDefaults(
@@ -247,7 +245,12 @@ const emit = defineEmits<{
 }>();
 
 const nonRunningTasksCount = computed(
-  () => props.tasks.filter((t) => t.status !== "running" && t.status !== "pending").length
+  () => props.tasks.filter(
+    (task) =>
+      task.status !== "running" &&
+      task.status !== "waiting_downloads" &&
+      task.status !== "pending"
+  ).length
 );
 
 /** 分页：已加载数 < 总数 则有更多 */
@@ -366,10 +369,7 @@ const activeDownloadsRunningCount = computed(() =>
     return st !== "completed" && st !== "failed" && st !== "canceled";
   }).length
 );
-const orderedActiveDownloads = computed(() => [
-  ...allDownloads.value.filter((d) => !d.native),
-  ...allDownloads.value.filter((d) => !!d.native),
-]);
+const orderedActiveDownloads = computed(() => allDownloads.value);
 
 let unlistenDownloadProgress: null | (() => void) = null;
 let unlistenDownloadState: null | (() => void) = null;
@@ -439,7 +439,7 @@ const loadDownloads = async () => {
         ...downloadsMap[d.id],
         id: d.id, url: d.url, pluginId: d.pluginId,
         startTime: d.startTime, taskId: d.taskId,
-        state: d.state ?? "downloading", native: d.native,
+        state: d.state ?? "downloading",
       };
     }
   } catch (error) {
@@ -485,7 +485,6 @@ const initAllEventListeners = async () => {
         startTime: Number(raw.startTime ?? 0),
         taskId: String(raw.taskId ?? ""),
         state,
-        native: !!raw.native,
       };
     });
   } catch (error) {
@@ -523,7 +522,8 @@ const isJsTask = (pluginId: string) =>
   pluginStore.plugins.find((plugin) => plugin.id === pluginId)?.scriptType === "js";
 
 const shouldShowTaskWebviewButton = (task: ScriptTask) =>
-  task.status === "running" && isJsTask(task.pluginId);
+  (task.status === "running" || task.status === "waiting_downloads") &&
+  isJsTask(task.pluginId);
 
 async function openTaskWindow(taskId: string) {
   const id = String(taskId || "").trim();

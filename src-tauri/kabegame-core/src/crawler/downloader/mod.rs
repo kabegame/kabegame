@@ -2,7 +2,9 @@
 use crate::crawler::content_io::get_content_io_provider;
 #[cfg(windows)]
 use crate::crawler::downloader::util::remove_zone_identifier;
+use crate::crawler::TaskScheduler;
 use crate::crawler::task_log_i18n::task_log_i18n;
+use crate::crawler::webview::get_webview_handler;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::{ImageInfo, Storage};
@@ -14,7 +16,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 use std::time::Instant;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, oneshot};
 use tokio::time::{Duration, sleep};
 use url::Url;
 
@@ -43,8 +45,7 @@ pub use compress::{
 pub use compress::{VIDEO_COMPATIBLE_MAX_HEIGHT, generate_compatible_video};
 pub use http::{build_reqwest_header_map, create_client};
 pub use queue::{
-    ActiveDownloadInfo, DownloadQueue, DownloadRequest, DownloadState, emit_removed_after_interval,
-    next_download_id,
+    ActiveDownloadInfo, DownloadQueue, DownloadRequest, DownloadState, next_download_id,
 };
 pub use util::{
     build_safe_filename, build_safe_filename_no_ext, compute_bytes_hash, compute_file_hash,
@@ -461,22 +462,35 @@ pub(crate) fn emit_task_log(task_id: &str, level: &str, message: impl Into<Strin
 }
 
 /// 根据 URL scheme 选择下载器，重试成功后返回 DownloadOutcome（Bytes 或 Path）。
+/// native(CEF)下载旁路所需上下文：把请求路由到对应 webview 窗口并做认领身份匹配。
+/// download_id 与 url 已是 `download_with_retry` 的参数，故这里只带这两项。
+pub struct NativeDownloadCtx {
+    pub task_id: String,
+    pub surf_record_id: Option<String>,
+}
+
 pub async fn download_with_retry(
     dq: &DownloadQueue,
     task_id: &str,
     url: &str,
     headers: &HashMap<String, String>,
     download_id: u64,
+    native: Option<NativeDownloadCtx>,
 ) -> Result<DownloadOutcome, String> {
     let parsed = Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
-    let downloader = get_downloader_for_url(&parsed).ok_or_else(|| {
-        let supported = supported_url_schemes().join(", ");
-        format!(
-            "Unsupported URL scheme: '{}'. Only {} are supported.",
-            parsed.scheme(),
-            supported
-        )
-    })?;
+    // native 走 CEF 旁路（见 native_download_attempt），无需按 scheme 解析 downloader。
+    let downloader = if native.is_some() {
+        None
+    } else {
+        Some(get_downloader_for_url(&parsed).ok_or_else(|| {
+            let supported = supported_url_schemes().join(", ");
+            format!(
+                "Unsupported URL scheme: '{}'. Only {} are supported.",
+                parsed.scheme(),
+                supported
+            )
+        })?)
+    };
     let max_attempts = Settings::global()
         .get_network_retry_count()
         .saturating_add(1)
@@ -493,10 +507,14 @@ pub async fn download_with_retry(
 
         // 已接收量 >0 表示续传：download 据此发送 Range。
         let already_received = writer.received();
-        match downloader
-            .download(&parsed, headers, &mut writer, already_received)
-            .await
-        {
+        let attempt_result = match (&native, downloader) {
+            // native：CEF 下完后一次性把临时文件拷进 writer；失败即 Retriable 重试。
+            (Some(nc), _) => native_download_attempt(dq, nc, &parsed, download_id, &mut writer).await,
+            // 常规：按 scheme 的 downloader 直写 writer（支持 Range 续传）。
+            (None, Some(d)) => d.download(&parsed, headers, &mut writer, already_received).await,
+            (None, None) => unreachable!("non-native path always resolves a downloader"),
+        };
+        match attempt_result {
             // 流结束：曾落盘 → Path，否则 → Bytes。
             Ok(()) => {
                 return writer
@@ -521,29 +539,77 @@ pub async fn download_with_retry(
     unreachable!()
 }
 
+/// native(CEF)下载的一次 attempt：触发所属 webview 的原生下载、等待终态，成功则把 CEF 落下的
+/// 临时文件 `native-{id}.part` 一次性拷进 `out`（复用溢写/finalize/outcome），失败按可否重试分类。
+/// - CEF 服务器失败（`SERVER_FAILED` 等）→ `retriable`，让外层重试兜住 CDN 瞬时拒绝。
+/// - task 取消 / 派发失败 / 窗口销毁 → `fatal`，立即放弃不重试。
+async fn native_download_attempt(
+    dq: &DownloadQueue,
+    nc: &NativeDownloadCtx,
+    url: &Url,
+    download_id: u64,
+    out: &mut dyn DownloadWriter,
+) -> Result<(), DownloadAttemptError> {
+    let handler = get_webview_handler()
+        .ok_or_else(|| DownloadAttemptError::fatal("Crawler webview handler is not initialized"))?;
+    let (tx, rx) = oneshot::channel();
+    // 每个 attempt 重新武装：把 active 条目置回 Preparing 并挂上新的完成 tx，
+    // 使 CEF `on_before_download` 的 claim 能再次命中（claim 命中即翻 Downloading）。
+    if !dq.arm_native_attempt(download_id, tx) {
+        return Err(DownloadAttemptError::fatal(
+            "Native download is no longer active",
+        ));
+    }
+
+    if let Err(error) = handler
+        .start_native_download(&nc.task_id, nc.surf_record_id.as_deref(), url.as_str())
+        .await
+    {
+        let _ = dq.take_native_completion(download_id);
+        return Err(DownloadAttemptError::fatal(error));
+    }
+
+    let waited = match TaskScheduler::global().get_run(&nc.task_id) {
+        Some(run) => tokio::select! {
+            biased;
+            _ = run.cancel.cancelled() => {
+                let _ = dq.take_native_completion(download_id);
+                return Err(DownloadAttemptError::fatal("Task canceled"));
+            }
+            result = rx => result.map_err(|_| DownloadAttemptError::fatal("webview destroyed"))?,
+        },
+        None => rx
+            .await
+            .map_err(|_| DownloadAttemptError::fatal("webview destroyed"))?,
+    };
+
+    match waited {
+        (Some(path), true) => {
+            // CEF 成功：把临时文件一次性拷进 out（driver 溢写/finalize），随后删除临时文件。
+            let mut file = tokio::fs::File::open(&path)
+                .await
+                .map_err(|e| DownloadAttemptError::retriable(format!("open native temp: {e}")))?;
+            if let Ok(meta) = file.metadata().await {
+                out.set_total(Some(meta.len()));
+            }
+            tokio::io::copy(&mut file, out)
+                .await
+                .map_err(|e| DownloadAttemptError::retriable(format!("copy native temp: {e}")))?;
+            drop(file);
+            let _ = tokio::fs::remove_file(&path).await;
+            Ok(())
+        }
+        (path, _) => {
+            if let Some(path) = path {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+            Err(DownloadAttemptError::retriable("Native download failed"))
+        }
+    }
+}
+
 fn download_interval_ms() -> u64 {
     Settings::global().get_download_interval_ms() as u64
-}
-
-async fn wait_until_download_interval_elapsed(download_start_time: u64, interval_ms: u64) {
-    if interval_ms == 0 {
-        return;
-    }
-    let elapsed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
-        - download_start_time;
-    if elapsed < interval_ms {
-        let remaining = interval_ms - elapsed;
-        sleep(Duration::from_millis(remaining)).await;
-    }
-}
-
-/// 非下载池路径（本地导入、本地文件夹同步）使用：
-/// 确保单个文件处理从开始到结束至少间隔设置中的下载间隔。
-pub async fn wait_after_non_pool_download_if_needed(download_start_time: u64) {
-    wait_until_download_interval_elapsed(download_start_time, download_interval_ms()).await;
 }
 
 /// 每次下载完成后，按设置等待一段时间再进入下一轮；等待期间可被 exit_notify 中断。
@@ -637,7 +703,6 @@ pub async fn postprocess_downloaded_image(
     download_start_time: u64,
     output_album_id: Option<&str>,
     http_headers: &HashMap<String, String>,
-    _native: bool,
     custom_display_name: Option<&str>,
     metadata_id: Option<i64>,
     post_url: Option<&str>,
@@ -1237,6 +1302,12 @@ pub async fn postprocess_downloaded_image(
                     let _ = Storage::global().increment_task_dedup_count(task_id);
                 }
                 emit_task_image_counts_snapshot(task_id);
+            }
+            if imported {
+                if let Some(surf_record_id) = surf_record_id {
+                    let _ = Storage::global()
+                        .increment_surf_record_download_count(surf_record_id);
+                }
             }
             clear_failed_image_after_success(failed_image_id);
             dq.switch_state(id, DownloadState::Completed, None).await;

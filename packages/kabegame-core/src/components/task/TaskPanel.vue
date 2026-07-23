@@ -55,7 +55,7 @@
                 <Delete />
               </el-icon>
             </el-button>
-            <el-button v-if="t.status === 'pending' || t.status === 'running'" size="small" type="danger" plain
+            <el-button v-if="t.status === 'pending' || t.status === 'running' || t.status === 'waiting_downloads'" size="small" type="danger" plain
               @click="$emit('cancel-task', t.id)">
               取消
             </el-button>
@@ -86,7 +86,7 @@
 <script setup lang="ts">
 import { Delete, InfoFilled, Picture } from "@element-plus/icons-vue";
 
-type TaskStatus = "pending" | "running" | "completed" | "failed" | "canceled";
+type TaskStatus = "pending" | "running" | "waiting_downloads" | "completed" | "failed" | "canceled";
 type ScriptTask = {
   id: string;
   pluginId: string;
@@ -127,6 +127,8 @@ function statusText(s: TaskStatus): string {
       return "排队中";
     case "running":
       return "运行中";
+    case "waiting_downloads":
+      return "等待剩余下载";
     case "completed":
       return "已完成";
     case "failed":
@@ -141,6 +143,8 @@ function statusTagType(s: TaskStatus): "info" | "warning" | "success" | "danger"
     case "pending":
       return "info";
     case "running":
+      return "warning";
+    case "waiting_downloads":
       return "warning";
     case "completed":
       return "success";
@@ -164,6 +168,7 @@ function shouldShowTaskProgressBar(t: ScriptTask): boolean {
   if (!Number.isFinite(p) || p <= 0) return false;
   return (
     t.status === "running" ||
+    t.status === "waiting_downloads" ||
     t.status === "failed" ||
     isCanceledTaskStatus(t.status)
   );
@@ -305,4 +310,3 @@ function taskProgressBarColor(status: TaskStatus | string): string | undefined {
   }
 }
 </style>
-

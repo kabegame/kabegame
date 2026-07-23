@@ -229,7 +229,7 @@ const shouldShowInlineProgressBar = computed(() => {
   const p = Number(props.task.progress ?? 0);
   if (!Number.isFinite(p) || p <= 0) return false;
   const s = props.task.status;
-  return s === "running" || s === "failed" || isCanceledTaskStatus(s);
+  return s === "running" || s === "waiting_downloads" || s === "failed" || isCanceledTaskStatus(s);
 });
 
 const inlineProgressPercent = computed(() => {
@@ -248,6 +248,7 @@ function statusTagType(s: string): "info" | "warning" | "success" | "danger" | "
   const map: Record<string, "info" | "warning" | "success" | "danger" | "primary"> = {
     pending: "info",
     running: "warning",
+    waiting_downloads: "warning",
     completed: "success",
     failed: "danger",
     canceled: "primary",
@@ -259,6 +260,7 @@ function statusLabel(s: string): string {
   const keyMap: Record<string, string> = {
     pending: "tasks.drawerTaskStatusPending",
     running: "tasks.drawerTaskStatusRunning",
+    waiting_downloads: "tasks.drawerTaskStatusWaitingDownloads",
     completed: "tasks.drawerTaskStatusCompleted",
     failed: "tasks.drawerTaskStatusFailed",
     canceled: "tasks.drawerTaskStatusCanceled",

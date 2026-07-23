@@ -3,6 +3,10 @@ import {
   run,
   ROOT,
   FFMPEG_BUILD_DIR,
+  FFMPEG_INSTALL_DIR,
+  CEF_DIR_SUFFIX,
+  TARGET_ARCH,
+  IS_CROSS_COMPILE,
   CRAWLER_PLUGINS_DIR,
 } from "../utils.ts";
 import { Component } from "./component-plugin.ts";
@@ -234,14 +238,11 @@ export class ModePlugin extends BasePlugin {
         // `cargo tauri android {dev,build,check}`,由 cargo-mobile2 的 NDK Env 从 NDK 推导
         // 并注入(三者同源、随 minSdk/NDK 版本自动正确)。见 cocs/tauri/TAURI_CLI_FORK.md。
       } else {
+        // 桌面 FFmpeg 安装前缀按目标架构取(macOS --target x86_64 时是独立的
+        // third/FFmpeg-build/darwin/x86_64/install,与 arm64 产物隔离)。见 utils.FFMPEG_INSTALL_DIR。
         this.setEnv(
           "FFMPEG_PKG_CONFIG_PATH",
-          path.join(
-            FFMPEG_BUILD_DIR,
-            "install",
-            "lib",
-            "pkgconfig",
-          ),
+          path.join(FFMPEG_INSTALL_DIR, "lib", "pkgconfig"),
         );
         // Linux 将 FFmpeg 与 x264 显式静态链接；该模式还会让
         // rusty_ffmpeg 完整解析 .pc 的传递依赖，避免复用旧的链接元数据。
@@ -259,9 +260,13 @@ export class ModePlugin extends BasePlugin {
         ) {
           // dev/check 用 cef-dev(check 只需要任意有效 CEF 目录做编译,不打包);
           // dev/check 用 cef-dev，build 用 cef-prod。
-          const cefVariant = bs.context.cmd.isDev || bs.context.cmd.isCheck
-            ? "cef-dev"
-            : "cef-prod";
+          // macOS 跨编时 CEF runtime 也必须换成对应架构那一份:framework 的架构不匹配
+          // 链接期才炸(且报错在 ld 层面,不可读),这里的默认路径直接按架构分叉,
+          // 与 build-chromium.sh 的 export_dir(cef-<variant>[-x64])完全对齐。
+          const cefVariant =
+            (bs.context.cmd.isDev || bs.context.cmd.isCheck
+              ? "cef-dev"
+              : "cef-prod") + (OSPlugin.isMacOS ? CEF_DIR_SUFFIX : "");
           const cefPath =
             process.env.CEF_PATH ||
             (OSPlugin.isWindows
@@ -285,7 +290,12 @@ export class ModePlugin extends BasePlugin {
                 "Set CEF_PATH to an exported cef-rs runtime directory" +
                   (OSPlugin.isLinux || OSPlugin.isMacOS ? ", or run:" : "."),
                 ...(OSPlugin.isLinux || OSPlugin.isMacOS
-                  ? ["scripts/build-chromium.sh dev", "scripts/build-chromium.sh prod"]
+                  ? TARGET_ARCH
+                    ? [
+                        `scripts/build-chromium.sh dev --target ${TARGET_ARCH}`,
+                        `scripts/build-chromium.sh prod --target ${TARGET_ARCH}`,
+                      ]
+                    : ["scripts/build-chromium.sh dev", "scripts/build-chromium.sh prod"]
                   : []),
               ].join("\n"),
             );
@@ -313,22 +323,32 @@ export class ModePlugin extends BasePlugin {
         if (OSPlugin.isMacOS) {
           try {
             const sdkPath = execSync("xcrun --sdk macosx --show-sdk-path", { encoding: "utf8" }).trim();
-            this.setEnv("BINDGEN_EXTRA_CLANG_ARGS", `-isysroot ${sdkPath}`);
+            // 跨编时还必须显式给 target,否则 bindgen 用宿主 arch 解析 FFmpeg 头文件,
+            // 与实际链接的另一架构静态库对不上(仿 android 分支的 --sysroot + -target 注入)。
+            const crossTarget =
+              IS_CROSS_COMPILE && TARGET_ARCH
+                ? ` -target ${TARGET_ARCH === "x86_64" ? "x86_64" : "arm64"}-apple-darwin`
+                : "";
+            this.setEnv("BINDGEN_EXTRA_CLANG_ARGS", `-isysroot ${sdkPath}${crossTarget}`);
           } catch {
             this.log(chalk.yellow("Warning: xcrun failed — BINDGEN_EXTRA_CLANG_ARGS not set. bindgen may fail to find system headers."));
+          }
+          // 跨编时 rusty_ffmpeg 的 build.rs 用 pkg-config crate 静态探测,而它默认
+          // 拒绝交叉编译(host≠target)直接 panic。我们自编的 x64 .pc 用的是 x64 install
+          // 的绝对路径(无需 sysroot 前缀改写),放行即可直接消费(仿 android 分支)。
+          // 非跨编(--target 同宿主架构或不传)时 host==target,pkg-config crate 根本
+          // 不检查该 env,设了也无副作用——但仅在跨编时设,语义更清晰。
+          if (IS_CROSS_COMPILE) {
+            this.setEnv("PKG_CONFIG_ALLOW_CROSS", "1");
           }
         }
         // windows: libs dir
         else if (OSPlugin.isWindows) {
-          const ffmpegBinDir = path.join(
-            FFMPEG_BUILD_DIR,
-            "install",
-            "bin",
-          );
+          const ffmpegBinDir = path.join(FFMPEG_INSTALL_DIR, "bin");
           this.setEnv("FFMPEG_LIBS_DIR", ffmpegBinDir);
           this.setEnv(
             "FFMPEG_INCLUDE_DIR",
-            path.join(FFMPEG_BUILD_DIR, "install", "include"),
+            path.join(FFMPEG_INSTALL_DIR, "include"),
           );
           this.setEnv("FFMPEG_LINK_MODE", "dynamic");
           const pathPrefixes = [OSPlugin.binDir, ffmpegBinDir].filter((dir) => {

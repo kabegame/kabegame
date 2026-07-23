@@ -4,7 +4,7 @@ import * as path from "path";
 import {
   ROOT,
   RESOURCES_DIR,
-  TARGET_DIR,
+  ARTIFACT_DIR,
   run,
 } from "../utils.ts";
 import { OSPlugin } from "./os-plugin.ts";
@@ -185,11 +185,12 @@ export class ComponentPlugin extends BasePlugin {
         noResources: false,
         linuxBins,
         macosFrameworks,
-        // cargo 产物目录(尊重 CARGO_TARGET_DIR,见 utils.TARGET_DIR)。模板里
-        // bundle files 的源路径(如 kabegame-cef-helper)必须用它,不能写死
+        // cargo 产物目录(尊重 CARGO_TARGET_DIR 与 --target triple,见 utils.ARTIFACT_DIR)。
+        // 模板里 bundle files 的源路径(如 kabegame-cef-helper)必须用它,不能写死
         // ../../target——否则 CARGO_TARGET_DIR 构建(如 VM 的 target-22)会把
-        // host 旧产物打进包(见 cocs/build/LINUX_BUILD_WORKFLOW.md 踩坑 4)。
-        targetDir: TARGET_DIR.split(path.sep).join("/"),
+        // host 旧产物打进包(见 cocs/build/LINUX_BUILD_WORKFLOW.md 踩坑 4);
+        // macOS 跨编(--target x86_64)同理会打进上一次 arm64 的 helper。
+        targetDir: ARTIFACT_DIR.split(path.sep).join("/"),
       };
 
       // 编译 apps/<comp>/index.html.handlebars → index.html（在所有模式下，包括 web）

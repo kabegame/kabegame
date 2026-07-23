@@ -648,7 +648,67 @@ async fn worker_loop(
     }
 }
 
-async fn run_task(_download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskResult {
+/// 任务脚本结束前等待该任务全部排队及活跃下载落盘。
+/// 每次数量下降重置 120 秒无进展期限；用户取消可立即打断等待。
+async fn wait_task_downloads_drained(download_queue: &DownloadQueue, run: &Arc<Task>) {
+    let task_id = run.task_id.as_str();
+    if download_queue.count_task_downloads(task_id).await == 0 {
+        return;
+    }
+    TaskScheduler::global().transition(
+        task_id,
+        TaskStatus::WaitingDownloads,
+        TaskTransition {
+            start_time: None,
+            end_time: None,
+            error: None,
+        },
+    );
+
+    let mut last_n = usize::MAX;
+    let mut deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        let notified = download_queue.capacity_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        let n = download_queue.count_task_downloads(task_id).await;
+        if n == 0 {
+            break;
+        }
+        if n < last_n {
+            deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+        }
+        last_n = n;
+        GlobalEmitter::global().emit_task_log(
+            task_id,
+            "print",
+            &format!("等待剩余 {n} 个下载完成…"),
+        );
+        tokio::select! {
+            biased;
+            _ = run.cancel.cancelled() => {
+                GlobalEmitter::global().emit_task_log(
+                    task_id,
+                    "print",
+                    "任务已取消，停止等待剩余下载",
+                );
+                break;
+            }
+            _ = &mut notified => {}
+            _ = tokio::time::sleep_until(deadline) => {
+                GlobalEmitter::global().emit_task_log(
+                    task_id,
+                    "warn",
+                    &format!("等待下载无进展超时，仍有 {n} 个未完成，继续结束任务"),
+                );
+                break;
+            }
+        }
+    }
+}
+
+async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskResult {
     GlobalEmitter::global().emit_task_log(
         &run.task_id,
         "info",
@@ -713,6 +773,16 @@ async fn run_task(_download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRe
         let completion = completion_rx
             .await
             .map_err(|_| TaskError::Other("Crawler task completion channel closed".to_string()));
+        let mut result = match completion {
+            Ok(result) => result,
+            Err(error) => Err(error),
+        };
+        if !matches!(result, Err(TaskError::Canceled)) {
+            wait_task_downloads_drained(&download_queue, &run).await;
+            if run.cancel.is_cancelled() && result.is_ok() {
+                result = Err(TaskError::Canceled);
+            }
+        }
         let destroy_result = handler.destroy_task_window(&run.task_id).await;
         if let Err(e) = destroy_result {
             eprintln!(
@@ -720,11 +790,11 @@ async fn run_task(_download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRe
                 run.task_id, e
             );
         }
-        return completion?;
+        return result;
     }
 
     #[cfg(not(feature = "plugin-runtime"))]
-    let _ = &_download_queue;
+    let _ = &download_queue;
 
     // V8 后端：桌面 + Android 均可用（WebView 后端在上方，仅桌面 CEF）。
     #[cfg(feature = "plugin-runtime")]
@@ -734,12 +804,18 @@ async fn run_task(_download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRe
             let _ = crawl_v8;
             let run_for_exec = Arc::clone(&run);
 
-            let result = tokio::task::spawn_blocking(move || {
+            let mut result = tokio::task::spawn_blocking(move || {
                 crate::plugin::v8::execute_crawler_script_v8(run_for_exec)
             })
             .await
             .map_err(|e| TaskError::Other(format!("V8 task worker join error: {}", e)))?;
 
+            if !matches!(result, Err(TaskError::Canceled)) {
+                wait_task_downloads_drained(&download_queue, &run).await;
+                if run.cancel.is_cancelled() && result.is_ok() {
+                    result = Err(TaskError::Canceled);
+                }
+            }
             return result;
         }
     }

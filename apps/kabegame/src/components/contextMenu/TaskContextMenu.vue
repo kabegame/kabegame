@@ -23,7 +23,10 @@ const menuItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = [];
 
   // 停止任务（只在运行中时显示）
-  if (props.task?.status === "running") {
+  if (
+    props.task?.status === "running" ||
+    props.task?.status === "waiting_downloads"
+  ) {
     items.push({
       key: "stop",
       type: "item",

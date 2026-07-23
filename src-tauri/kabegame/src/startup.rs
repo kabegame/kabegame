@@ -25,10 +25,6 @@ use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
 #[cfg(feature = "web")]
 use crate::web::server::*;
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-use kabegame_core::app_paths::AppPaths;
-#[cfg(all(not(target_os = "android"), not(feature = "web")))]
-use kabegame_core::crawler::downloader::{DownloadState, postprocess_downloaded_image};
-#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::webview::{
     CrawlerWebViewHandler, crawler_window_label, set_webview_handler,
 };
@@ -64,14 +60,42 @@ impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
 
     async fn destroy_task_window(&self, task_id: &str) -> Result<(), String> {
         let label = crawler_window_label(task_id);
-        run_on_main_thread_sync(&self.app, move |app| {
+        let result = run_on_main_thread_sync(&self.app, move |app| {
             if let Some(window) = app.get_webview_window(&label) {
                 window
                     .destroy()
                     .map_err(|e| format!("Failed to destroy crawler window: {}", e))?;
             }
             Ok(())
+        });
+        TaskScheduler::global()
+            .download_queue()
+            .abort_native_waits_for_task(task_id);
+        result
+    }
+
+    async fn start_native_download(
+        &self,
+        task_id: &str,
+        surf_record_id: Option<&str>,
+        url: &str,
+    ) -> Result<(), String> {
+        let label = if let Some(surf_record_id) = surf_record_id {
+            let record = Storage::global()
+                .get_surf_record(surf_record_id)?
+                .ok_or_else(|| format!("Surf record not found: {surf_record_id}"))?;
+            crate::commands::surf::surf_label(&record.host)
+        } else {
+            crawler_window_label(task_id)
+        };
+        let url = url.to_string();
+        // CEF 内部会同步等待 UI 线程投递结果，必须放到 blocking 线程。
+        // 若等待超时但 Requested 迟到，worker 已取走 completion；回调会拒绝该请求。
+        tauri::async_runtime::spawn_blocking(move || {
+            tauri_runtime_cef::start_download(&label, &url).map_err(|error| error.to_string())
         })
+        .await
+        .map_err(|error| format!("Native download dispatch task failed: {error}"))?
     }
 }
 
@@ -632,116 +656,70 @@ pub fn create_crawler_window<R: Runtime>(
         .initialization_script(media_download)
         .initialization_script(script)
         .on_page_load(move |_webview, _payload| {})
-        .on_navigation(|url| {
-            !TaskScheduler::global()
-                .download_queue()
-                .contains_native(url.as_str())
-        })
         .on_download(move |_webview, event| match event {
             DownloadEvent::Requested { url, destination } => {
-                let Some(run) = TaskScheduler::global().get_run(&task_id_for_download) else {
-                    return false;
-                };
-                let images_dir = run.params.images_dir.clone();
-                if let Err(e) = std::fs::create_dir_all(&images_dir) {
-                    eprintln!("Failed to create native download dir: {}", e);
-                    return false;
+                let suggested_name = destination
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(ToOwned::to_owned);
+                if crate::commands::crawler::claim_native_download_destination(
+                    Some(&task_id_for_download),
+                    None,
+                    &url,
+                    destination,
+                ) {
+                    return true;
                 }
+
                 let dq = TaskScheduler::global().download_queue();
-                let entry = if let Some(entry) = dq.get_native(url.as_str()) {
-                    entry
-                } else {
-                    eprintln!("[Crawler] Cannot find the download for crawler webview.");
-                    return false;
-                };
-                let temp_dir = AppPaths::global().downloads_temp_dir();
-                if let Err(e) = std::fs::create_dir_all(&temp_dir) {
-                    eprintln!("Failed to create native download temp dir: {}", e);
+                // start_download 超时后同一 active 条目仍会短暂存在；拒绝迟到请求，
+                // 不把它误判成页面自发下载再次入队。
+                if dq.has_active_native_owner_url(
+                    Some(&task_id_for_download),
+                    None,
+                    url.as_str(),
+                ) {
                     return false;
                 }
-                *destination = temp_dir.join(format!("crawler-native-{}.part", entry.id));
+
+                let task_id = task_id_for_download.clone();
+                let url = url.clone();
                 tauri::async_runtime::spawn(async move {
-                    dq.switch_state(entry.id, DownloadState::Downloading, None)
+                    let Some(run) = TaskScheduler::global().get_run(&task_id) else {
+                        return;
+                    };
+                    let result = TaskScheduler::global()
+                        .download_queue()
+                        .download_image(
+                            url,
+                            run.params.images_dir.clone(),
+                            run.params.plugin.id.clone(),
+                            task_id,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                            run.params.output_album_id.clone(),
+                            std::collections::HashMap::new(),
+                            suggested_name,
+                            None,
+                            None,
+                        )
                         .await;
+                    if let Err(error) = result {
+                        eprintln!("[Crawler] Failed to enqueue page download: {error}");
+                    }
                 });
-                true
+                false
             }
             DownloadEvent::Finished { url, path, success } => {
-                let dq = TaskScheduler::global().download_queue();
-                let Some(entry) = dq.get_native(url.as_str()) else {
-                    return true;
-                };
-                if success {
-                    let Some(final_path) = path else {
-                        tauri::async_runtime::spawn(async move {
-                            dq.switch_state(
-                                entry.id,
-                                DownloadState::Failed,
-                                Some("Native download finished without output path"),
-                            )
-                            .await;
-                            dq.wait_then_finish_download(entry.id, false).await;
-                        });
-                        return true;
-                    };
-                    tauri::async_runtime::spawn(async move {
-                        let dq = TaskScheduler::global().download_queue();
-                        dq.switch_state(entry.id, DownloadState::Processing, None)
-                            .await;
-                        let task_id =
-                            (!entry.task_id.trim().is_empty()).then_some(entry.task_id.as_str());
-                        let images_dir = match TaskScheduler::global().get_run(&entry.task_id) {
-                            Some(run) => run.params.images_dir.clone(),
-                            None => {
-                                let error = "Crawler task not found for native download output";
-                                let _ = tokio::fs::remove_file(&final_path).await;
-                                dq.switch_state(entry.id, DownloadState::Failed, Some(error))
-                                    .await;
-                                dq.wait_then_finish_download(entry.id, false).await;
-                                return;
-                            }
-                        };
-                        let result = postprocess_downloaded_image(
-                            &*dq,
-                            entry.id,
-                            kabegame_core::crawler::downloader::PostprocessSource::Path {
-                                path: &final_path,
-                                relocate_to: Some(&images_dir),
-                            },
-                            true,
-                            &url,
-                            &entry.plugin_id,
-                            task_id,
-                            None,
-                            entry.surf_record_id.as_deref(),
-                            entry.start_time,
-                            entry.output_album_id.as_deref(),
-                            &entry.http_headers,
-                            true,
-                            entry.custom_display_name.as_deref(),
-                            entry.metadata_id,
-                            entry.post_url.as_deref(),
-                        )
-                        .await;
-                        if result.is_err() {
-                            let _ = tokio::fs::remove_file(&final_path).await;
-                        }
-                        dq.wait_then_finish_download(entry.id, false).await;
-                    });
-                } else {
-                    if let Some(path) = path {
-                        let _ = std::fs::remove_file(path);
-                    }
-                    tauri::async_runtime::spawn(async move {
-                        dq.switch_state(
-                            entry.id,
-                            DownloadState::Failed,
-                            Some("Native download finished with failure"),
-                        )
-                        .await;
-                        dq.wait_then_finish_download(entry.id, false).await;
-                    });
-                }
+                crate::commands::crawler::finish_native_download(
+                    Some(&task_id_for_download),
+                    None,
+                    &url,
+                    path.clone(),
+                    success,
+                );
                 true
             }
             _ => true,

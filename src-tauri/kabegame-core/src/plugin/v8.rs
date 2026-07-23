@@ -670,6 +670,7 @@ mod tests {
             request.url.as_str(),
             &request.http_headers,
             request.id,
+            None,
         )
         .await
         .expect("registry downloader should read task VFS bytes");

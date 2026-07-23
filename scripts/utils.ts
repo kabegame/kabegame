@@ -17,9 +17,101 @@ const __dirname = path.dirname(__filename);
 export const ROOT = path.resolve(__dirname, "..");
 export const THIRD_DIR = path.join(ROOT, "third");
 export const BUILD_SUFFIX = process.env.KB_BUILD_SUFFIX ?? "";
+export const CRAWLER_PLUGINS_DIR = path.join(ROOT, "src-crawler-plugins");
+
+/**
+ * 目标架构（**仅 macOS**）。由 `--target x86_64|arm64` 指定，用于在 Apple Silicon 上
+ * 交叉编译 Intel 版（或反之）。不传 `--target` 时全部为 undefined，行为与改动前完全一致。
+ *
+ * 约定（按 arch 决定，不随宿主变化，保证同一命令在任何 Mac 上落点一致）：
+ *  - `arm64`  → 沿用既有的无后缀目录（third/FFmpeg-build/install、CEF_PATH=.../cef-{dev,prod}）
+ *  - `x86_64` → 独立目录（third/FFmpeg-build/darwin/x86_64/install、.../cef-{dev,prod}-x64），
+ *               与 arm64 产物完全隔离，互不覆盖。
+ * cargo/tauri 侧则一律落在 `TARGET_DIR/<triple>/`（见 ARTIFACT_DIR）。
+ */
+export type TargetArch = "x86_64" | "arm64";
+
+const TARGET_ARCH_ALIASES: Record<string, TargetArch> = {
+  x86_64: "x86_64",
+  x64: "x86_64",
+  amd64: "x86_64",
+  "x86_64-apple-darwin": "x86_64",
+  arm64: "arm64",
+  aarch64: "arm64",
+  "aarch64-apple-darwin": "arm64",
+};
+
+export function normalizeTargetArch(raw: string): TargetArch {
+  const arch = TARGET_ARCH_ALIASES[raw.trim().toLowerCase()];
+  if (!arch) {
+    throw new Error(
+      `未知的 --target: '${raw}'（允许 x86_64 | arm64，也接受 x64/aarch64 与完整 triple）`,
+    );
+  }
+  return arch;
+}
+
+/**
+ * 只解析 argv 中第一个裸 `--` **之前**的 `--target`。`--` 之后的参数是原样透传给
+ * tauri/cargo 的，由调用方自己负责，这里不消费也不重复注入。
+ */
+function parseTargetArchFromArgv(): TargetArch | undefined {
+  const argv = process.argv.slice(2);
+  const sep = argv.indexOf("--");
+  const scope = sep === -1 ? argv : argv.slice(0, sep);
+  for (let i = 0; i < scope.length; i++) {
+    const a = scope[i];
+    if (a === "--target") {
+      return scope[i + 1] ? normalizeTargetArch(scope[i + 1]) : undefined;
+    }
+    if (a.startsWith("--target=")) {
+      return normalizeTargetArch(a.slice("--target=".length));
+    }
+  }
+  return undefined;
+}
+
+/** 宿主架构（macOS 之外的取值无意义，仅用于判断是否真正交叉）。 */
+export const HOST_ARCH: TargetArch =
+  process.arch === "arm64" ? "arm64" : "x86_64";
+
+/** 显式指定的目标架构；未传 `--target` 时为 undefined。 */
+export const TARGET_ARCH: TargetArch | undefined = (() => {
+  const env = process.env.KB_TARGET_ARCH;
+  const arch = env ? normalizeTargetArch(env) : parseTargetArchFromArgv();
+  if (!arch) return undefined;
+  if (process.platform !== "darwin") {
+    throw new Error(
+      `--target 仅在 macOS 上支持（跨编 x86_64 / arm64）；当前平台: ${process.platform}`,
+    );
+  }
+  process.env.KB_TARGET_ARCH = arch; // 回写，供 package-plugin 等子进程继承
+  return arch;
+})();
+
+/** rustc target triple；未指定 `--target` 时为 undefined（cargo 不加 --target）。 */
+export const TARGET_TRIPLE: string | undefined = TARGET_ARCH
+  ? `${TARGET_ARCH === "x86_64" ? "x86_64" : "aarch64"}-apple-darwin`
+  : undefined;
+
+/** 是否为真正的交叉编译（目标架构 ≠ 宿主架构）。 */
+export const IS_CROSS_COMPILE =
+  TARGET_ARCH !== undefined && TARGET_ARCH !== HOST_ARCH;
+
 export const FFMPEG_BUILD_DIR = path.join(THIRD_DIR, `FFmpeg-build${BUILD_SUFFIX}`);
 export const X264_BUILD_DIR = path.join(THIRD_DIR, `x264-build${BUILD_SUFFIX}`);
-export const CRAWLER_PLUGINS_DIR = path.join(ROOT, "src-crawler-plugins");
+
+/**
+ * 桌面 FFmpeg 安装前缀（与 scripts/build-ffmpeg.sh 的落点约定一致）。
+ * Android 走 `FFMPEG_BUILD_DIR/android/<arch>/install`，由 mode-plugin 单独拼。
+ */
+export const FFMPEG_INSTALL_DIR =
+  TARGET_ARCH === "x86_64"
+    ? path.join(FFMPEG_BUILD_DIR, "darwin", "x86_64", "install")
+    : path.join(FFMPEG_BUILD_DIR, "install");
+
+/** CEF runtime 导出目录后缀（与 scripts/build-chromium.sh 的 export_dir 约定一致）。 */
+export const CEF_DIR_SUFFIX = TARGET_ARCH === "x86_64" ? "-x64" : "";
 
 /**
  * Cargo 产物目录(单一来源)。默认 `<workspace>/target`,工作区根即 ROOT。
@@ -41,6 +133,18 @@ export const TARGET_DIR = (() => {
   if (env) process.env.CARGO_TARGET_DIR = dir; // 归一化回写,统一所有 cargo 派生进程
   return dir;
 })();
+
+/**
+ * 本次构建**实际产物**所在目录。传了 `--target` 时 cargo/tauri 会多套一层 triple
+ * (`target/<triple>/{debug,release}/`),所有"找产物/搬产物"的路径都必须用它而不是
+ * TARGET_DIR——否则跨编时会静默打包上一次 native 构建的残留(架构混合的 .app)。
+ * 未传 `--target` 时等同 TARGET_DIR,行为不变。
+ */
+export const ARTIFACT_DIR = TARGET_TRIPLE
+  ? path.join(TARGET_DIR, TARGET_TRIPLE)
+  : TARGET_DIR;
+// 供子进程(如 src-crawler-plugins/package-plugin.ts)定位产物,无需重复解析 --target。
+process.env.KB_ARTIFACT_DIR = ARTIFACT_DIR;
 
 export const DATA_PLUGINS_DIR = path.join(
   ROOT,
@@ -168,7 +272,7 @@ export function stageResourceFile(src: string, dstFileName: string): void {
 
 export function stageResourceBinary(binName: string): void {
   const ext = platformExeExt();
-  const src = path.join(TARGET_DIR, "release", `${binName}${ext}`);
+  const src = path.join(ARTIFACT_DIR, "release", `${binName}${ext}`);
   const dst = path.join(RESOURCES_BIN_DIR, `${binName}${ext}`);
   if (!fs.existsSync(src)) {
     console.error(

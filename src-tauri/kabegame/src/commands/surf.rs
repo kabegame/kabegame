@@ -1,8 +1,4 @@
-use kabegame_core::app_paths::AppPaths;
-use kabegame_core::crawler::downloader::{
-    get_default_images_dir, next_download_id, postprocess_downloaded_image, ActiveDownloadInfo,
-    DownloadState,
-};
+use kabegame_core::crawler::downloader::get_default_images_dir;
 use kabegame_core::crawler::favicon::fetch_favicon;
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::storage::{RangedSurfRecords, Storage, SurfRecord};
@@ -87,20 +83,6 @@ fn collect_surf_cookie_string<R: Runtime>(
     Ok(pairs.join("; "))
 }
 
-fn eval_surf_toast<R: Runtime>(app: &AppHandle<R>, message: &str, kind: &str) {
-    if let Some(webview) = app
-        .webviews()
-        .into_iter()
-        .find_map(|(label, webview)| is_surf_content_label(&label).then_some(webview))
-    {
-        let msg_json =
-            serde_json::to_string(message).unwrap_or_else(|_| "\"下载失败\"".to_string());
-        let kind_json = serde_json::to_string(kind).unwrap_or_else(|_| "\"failed\"".to_string());
-        let script = format!("window.__kabegame_toast?.({}, {});", msg_json, kind_json);
-        let _ = webview.eval(script.as_str());
-    }
-}
-
 fn eval_surf_toast_for_host<R: Runtime>(app: &AppHandle<R>, host: &str, message: &str, kind: &str) {
     if let Some(webview) = app.get_webview(&surf_label(host)) {
         let msg_json =
@@ -111,7 +93,7 @@ fn eval_surf_toast_for_host<R: Runtime>(app: &AppHandle<R>, host: &str, message:
     }
 }
 
-fn surf_label(host: &str) -> String {
+pub(crate) fn surf_label(host: &str) -> String {
     // Tauri window labels only allow [a-zA-Z0-9-/:_]; replace '.' with '_'
     format!("surf-{}", host.trim().to_lowercase().replace('.', "_"))
 }
@@ -124,7 +106,7 @@ fn is_surf_content_label(label: &str) -> bool {
     label.starts_with("surf-") && !label.ends_with("-navbar")
 }
 
-fn host_from_surf_label(label: &str) -> Option<String> {
+pub(crate) fn host_from_surf_label(label: &str) -> Option<String> {
     label
         .strip_prefix("surf-")
         .filter(|s| !s.ends_with("-navbar"))
@@ -348,186 +330,82 @@ pub async fn surf_start_session<R: Runtime>(
                     NewWindowResponse::Deny
                 }
             })
-            .on_navigation(|url| {
-                !TaskScheduler::global()
-                    .download_queue()
-                    .contains_native(url.as_str())
-            })
             .on_download({
                 let app = app.clone();
                 let host = host_for_plugin_id.clone();
                 let surf_record_id = record_id_for_download.clone();
                 move |_webview, event| match event {
                     DownloadEvent::Requested { url, destination } => {
-                        let images_dir = get_default_images_dir();
-                        if std::fs::create_dir_all(&images_dir).is_err() {
+                        let suggested_name = destination
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .map(ToOwned::to_owned);
+                        if crate::commands::crawler::claim_native_download_destination(
+                            None,
+                            Some(&surf_record_id),
+                            &url,
+                            destination,
+                        ) {
+                            return true;
+                        }
+
+                        let dq = TaskScheduler::global().download_queue();
+                        if dq.has_active_native_owner_url(
+                            None,
+                            Some(&surf_record_id),
+                            url.as_str(),
+                        ) {
                             return false;
                         }
-                        let dq = TaskScheduler::global().download_queue();
-                        if let Some(entry) = dq.get_native(url.as_str()) {
-                            let temp_dir = AppPaths::global().downloads_temp_dir();
-                            if std::fs::create_dir_all(&temp_dir).is_err() {
-                                return false;
-                            }
-                            *destination = temp_dir.join(format!("surf-native-{}.part", entry.id));
-                            let dq2 = dq.clone();
-                            let entry_id = entry.id;
-                            tauri::async_runtime::spawn(async move {
-                                dq2.switch_state(entry_id, DownloadState::Downloading, None)
-                                    .await;
-                            });
-                        } else {
-                            let download_start_time = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis() as u64)
-                                .unwrap_or(0);
-                            let download_id = next_download_id();
-                            let temp_dir = AppPaths::global().downloads_temp_dir();
-                            if std::fs::create_dir_all(&temp_dir).is_err() {
-                                return false;
-                            }
-                            let native_dest =
-                                temp_dir.join(format!("surf-native-{}.part", download_id));
-                            let entry = ActiveDownloadInfo {
-                                id: download_id,
-                                url: url.as_str().to_string(),
-                                plugin_id: host_for_plugin_id.clone(),
-                                start_time: download_start_time,
-                                task_id: String::new(),
-                                state: DownloadState::Downloading,
-                                native: true,
-                                retried_for: None,
-                                received_bytes: 0,
-                                total_bytes: None,
-                                surf_record_id: Some(surf_record_id.clone()),
-                                http_headers: HashMap::new(),
-                                output_album_id: None,
-                                custom_display_name: None,
-                                metadata_id: None,
-                                post_url: None,
-                            };
 
-                            if dq.register_native(entry.clone()).is_err() {
-                                return false;
+                        let app = app.clone();
+                        let host = host.clone();
+                        let surf_record_id = surf_record_id.clone();
+                        let url = url.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let result = TaskScheduler::global()
+                                .download_queue()
+                                .download(
+                                    url,
+                                    get_default_images_dir(),
+                                    host.clone(),
+                                    String::new(),
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64,
+                                    None,
+                                    Some(surf_record_id),
+                                    HashMap::new(),
+                                    None,
+                                    suggested_name,
+                                    None,
+                                    false,
+                                    None,
+                                )
+                                .await;
+                            match result {
+                                Ok(()) => eval_surf_toast_for_host(
+                                    &app,
+                                    &host,
+                                    "已加入下载列表",
+                                    "start",
+                                ),
+                                Err(error) => {
+                                    eprintln!("[Surf] Failed to enqueue page download: {error}");
+                                }
                             }
-                            *destination = native_dest;
-                        }
-
-                        eval_surf_toast_for_host(&app, &host, "开始下载", "start");
-                        true
+                        });
+                        false
                     }
                     DownloadEvent::Finished { url, path, success } => {
-                        let dq = TaskScheduler::global().download_queue();
-                        let Some(entry) = dq.take_native(url.as_str()) else {
-                            return true;
-                        };
-                        if success {
-                            let app2 = app.clone();
-                            let host_for_toast = host_for_plugin_id.clone();
-                            let Some(final_path) = path else {
-                                tauri::async_runtime::spawn(async move {
-                                    dq.switch_state(
-                                        entry.id,
-                                        DownloadState::Failed,
-                                        Some("Native download finished without output path"),
-                                    )
-                                    .await;
-                                    dq.wait_then_finish_download(entry.id, false).await;
-                                });
-                                eval_surf_toast_for_host(
-                                    &app,
-                                    &host_for_plugin_id,
-                                    "下载失败",
-                                    "failed",
-                                );
-                                return true;
-                            };
-                            tauri::async_runtime::spawn(async move {
-                                let dq = TaskScheduler::global().download_queue();
-                                let surf_record_id = entry.surf_record_id.clone();
-                                let images_dir = get_default_images_dir();
-                                dq.switch_state(entry.id, DownloadState::Processing, None)
-                                    .await;
-                                let result = postprocess_downloaded_image(
-                                    &*dq,
-                                    entry.id,
-                                    kabegame_core::crawler::downloader::PostprocessSource::Path {
-                                        path: &final_path,
-                                        relocate_to: Some(&images_dir),
-                                    },
-                                    true,
-                                    &url,
-                                    &entry.plugin_id,
-                                    None,
-                                    None,
-                                    surf_record_id.as_deref(),
-                                    entry.start_time,
-                                    None,
-                                    &entry.http_headers,
-                                    true,
-                                    entry.custom_display_name.as_deref(),
-                                    entry.metadata_id,
-                                    entry.post_url.as_deref(),
-                                )
-                                .await;
-                                if result.is_err() {
-                                    let _ = tokio::fs::remove_file(&final_path).await;
-                                }
-                                dq.wait_then_finish_download(entry.id, false).await;
-                                match result {
-                                    Ok(inserted) => {
-                                        if let Some(id) = surf_record_id.as_deref() {
-                                            if inserted {
-                                                let _ = Storage::global()
-                                                    .increment_surf_record_download_count(id);
-                                                eval_surf_toast_for_host(
-                                                    &app2,
-                                                    &host_for_toast,
-                                                    "下载成功",
-                                                    "success",
-                                                );
-                                            } else {
-                                                eval_surf_toast_for_host(
-                                                    &app2,
-                                                    &host_for_toast,
-                                                    "下载失败（重复或未入库）",
-                                                    "failed",
-                                                );
-                                            }
-                                        } else {
-                                            eval_surf_toast_for_host(
-                                                &app2,
-                                                &host_for_toast,
-                                                "下载失败",
-                                                "failed",
-                                            );
-                                        }
-                                    }
-                                    Err(_) => {
-                                        eval_surf_toast_for_host(
-                                            &app2,
-                                            &host_for_toast,
-                                            "下载失败",
-                                            "failed",
-                                        );
-                                    }
-                                }
-                            });
-                        } else {
-                            if let Some(path) = path {
-                                let _ = std::fs::remove_file(path);
-                            }
-                            tauri::async_runtime::spawn(async move {
-                                dq.switch_state(
-                                    entry.id,
-                                    DownloadState::Failed,
-                                    Some("Native download finished with failure"),
-                                )
-                                .await;
-                                dq.wait_then_finish_download(entry.id, false).await;
-                            });
-                            eval_surf_toast_for_host(&app, &host, "下载失败", "failed");
-                        }
+                        crate::commands::crawler::finish_native_download(
+                            None,
+                            Some(&surf_record_id),
+                            &url,
+                            path.clone(),
+                            success,
+                        );
                         true
                     }
                     _ => true,

@@ -116,7 +116,14 @@ const saveConfigName = ref("");
 const saveConfigDescription = ref("");
 
 const plugins = computed(() => pluginStore.plugins);
-const nonRunningTasksCount = computed(() => props.tasks.filter((t) => t.status !== "running" && t.status !== "pending").length);
+const nonRunningTasksCount = computed(() =>
+  props.tasks.filter(
+    (task) =>
+      task.status !== "running" &&
+      task.status !== "waiting_downloads" &&
+      task.status !== "pending"
+  ).length
+);
 
 
 const getPluginName = (pluginId: string) => pluginStore.pluginLabel(pluginId);
@@ -250,7 +257,8 @@ const handleDeleteTaskById = async (taskId: string) => {
   trackTaskDrawerAction("delete_task", task);
   if (await guardDesktopOnly("deleteTask", { needSuper: true })) return;
   try {
-    const needStop = task.status === "running";
+    const needStop =
+      task.status === "running" || task.status === "waiting_downloads";
     const msg = needStop
       ? t('tasks.deleteTaskConfirmRunning')
       : t('tasks.deleteTaskConfirm');
@@ -315,7 +323,10 @@ const handleDeleteAllTasks = async () => {
   if (await guardDesktopOnly("deleteTask", { needSuper: true })) return;
   try {
     const pendingCount = props.tasks.filter((t) => t.status === "pending").length;
-    const runningCount = props.tasks.filter((t) => t.status === "running").length;
+    const runningCount = props.tasks.filter(
+      (task) =>
+        task.status === "running" || task.status === "waiting_downloads"
+    ).length;
     const preservedCount = pendingCount + runningCount;
     const deletableCount = nonRunningTasksCount.value;
     const msg = preservedCount > 0

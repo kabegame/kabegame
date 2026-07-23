@@ -79,7 +79,6 @@ impl GlobalEmitter {
         state: DownloadState,
         error: Option<&str>,
         retried_for: Option<i64>,
-        native: bool,
     ) {
         let event = std::sync::Arc::new(DaemonEvent::DownloadState {
             id,
@@ -88,7 +87,6 @@ impl GlobalEmitter {
             plugin_id: plugin_id.to_string(),
             state,
             error: error.map(|e| e.to_string()),
-            native,
             retried_for,
         });
         EventBroadcaster::global().broadcast(event);
@@ -486,20 +484,6 @@ impl GlobalEmitter {
         _state: DownloadState,
         _error: Option<&str>,
         _retried_for: Option<i64>,
-        _native: bool,
-    ) {
-    }
-
-    pub fn emit_download_state_with_native(
-        &self,
-        _id: u64,
-        _url: &str,
-        _start_time: u64,
-        _plugin_id: &str,
-        _state: DownloadState,
-        _error: Option<&str>,
-        _retried_for: Option<i64>,
-        _native: bool,
     ) {
     }
 

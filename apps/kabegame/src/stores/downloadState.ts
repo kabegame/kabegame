@@ -9,7 +9,6 @@ export type DownloadEntry = {
   progress?: number;
   pluginId?: string;
   retriedFor?: number;
-  native?: boolean;
 };
 
 export type DownloadStatePayload = {
@@ -21,7 +20,6 @@ export type DownloadStatePayload = {
   /** 仅 `get_active_downloads` 快照携带；用于初始化恢复进度 */
   receivedBytes?: number;
   totalBytes?: number | null;
-  native?: boolean;
 };
 
 export type DownloadProgressPayload = {
@@ -61,7 +59,6 @@ export const useDownloadStateStore = defineStore("downloadState", () => {
       state: String(p.state ?? "").trim(),
       pluginId: p.pluginId,
       retriedFor: p.retriedFor,
-      native: p.native,
       ...(snapshotProgress != null ? { progress: snapshotProgress } : {}),
     };
   };

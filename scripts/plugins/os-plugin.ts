@@ -3,8 +3,9 @@ import { BasePlugin } from "./base-plugin.ts";
 import { Component } from "./component-plugin.ts";
 import {
   ROOT,
-  TARGET_DIR,
-  FFMPEG_BUILD_DIR,
+  ARTIFACT_DIR,
+  FFMPEG_INSTALL_DIR,
+  TARGET_ARCH,
   RESOURCES_BIN_DIR,
   RESOURCES_DIR,
   ensureDir,
@@ -73,7 +74,6 @@ const WINDOWS_FFMPEG_DLLS_EXPECTED = [
 ];
 
 // 经 ROOT 拼出,避免与 build-system.ts 形成循环导入(后者反过来 import OSPlugin)
-const FFMPEG_INSTALL_DIR = path.join(FFMPEG_BUILD_DIR, "install");
 
 export class OSPlugin extends BasePlugin {
   constructor() {
@@ -205,8 +205,9 @@ export class OSPlugin extends BasePlugin {
         throw new Error(
           [
             `❌ 未找到 FFmpeg 构建产物: ${path.relative(ROOT, archive)}`,
-            `请先运行: deno task build:ffmpeg`,
-            `(脚本 scripts/build-ffmpeg.sh 会编出 libav*.a 到 third/FFmpeg-build/install/lib/)`,
+            `请先运行: deno task build:ffmpeg${TARGET_ARCH ? ` --target ${TARGET_ARCH}` : ""}`,
+            `(脚本 scripts/build-ffmpeg.sh 会把 libav*.a 编到上述 install/lib/;` +
+              `macOS 跨编时 x86_64 产物独立落在 third/FFmpeg-build/darwin/x86_64/)`,
           ].join("\n"),
         );
       }
@@ -462,7 +463,7 @@ export class OSPlugin extends BasePlugin {
   }
 
   private ensureMacOSCefHelper(profile: "debug" | "release"): string {
-    const helper = path.join(TARGET_DIR, profile, "kabegame-cef-helper");
+    const helper = path.join(ARTIFACT_DIR, profile, "kabegame-cef-helper");
     if (!fs.existsSync(helper)) {
       throw new Error(
         [
@@ -576,7 +577,7 @@ export class OSPlugin extends BasePlugin {
     if (!OSPlugin.isWindows) return;
     const src = path.join(RESOURCES_BIN_DIR, "dokan2.dll");
     if (!existsFile(src)) return;
-    const dst = path.join(TARGET_DIR, "release", "dokan2.dll");
+    const dst = path.join(ARTIFACT_DIR, "release", "dokan2.dll");
     try {
       fs.copyFileSync(src, dst);
       this.log(

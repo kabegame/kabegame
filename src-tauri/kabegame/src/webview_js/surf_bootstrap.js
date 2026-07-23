@@ -48,7 +48,9 @@
       name: options.name ?? undefined,
       sourceUrl: options.url ?? undefined,
       source_url: options.url ?? undefined,
-    }).catch(reportErr);
+    })
+      .then(() => window.__kabegame_toast?.("已加入下载列表", "start"))
+      .catch(reportErr);
   }
 
   window.__kabegame_surf_triggerDownload = triggerDownload;

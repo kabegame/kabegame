@@ -406,7 +406,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             path.file_name().and_then(|name| name.to_str()),
-            Some("Some_Page _ media.mp4")
+            Some("Some.Page _ media.mp4")
         );
 
         fs::remove_dir_all(&dir).unwrap();

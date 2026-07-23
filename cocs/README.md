@@ -145,6 +145,10 @@
    - 主题：三平台动态库与 CEF 运行时打包。涵盖 `OSPlugin.bundleLibs`、`kabegame-cef-helper` 的编译方式（build 经 `tauri build -- --bin` 随主编译产出；dev 与 Windows build 由 ComponentPlugin 预构建）、主程序/helper 的 Linux rpath 差异、macOS framework/files 注入、Windows NSIS 搬运，以及虚拟盘驱动/系统依赖策略。
   - 适用场景：新增/升级运行时动态库;排查最终用户报 `libx264.so.X: cannot open`、macOS `Library not loaded` 或画册盘驱动缺失;调整 build-ffmpeg / DLL 复制 / dmg fixup / NSIS hook 流程。
 
+- [build/MACOS_CROSS_BUILD.md](build/MACOS_CROSS_BUILD.md)
+  - 主题：**macOS 跨架构构建**（Apple Silicon ↔ Intel）。涵盖统一入口 `--target x86_64|arm64`（仅 macOS，`build`/`check`/`start` 可用，`dev` 与 android/web 拒绝）、`scripts/utils.ts` 作为架构解析与路径常量的单一来源（`TARGET_ARCH`/`TARGET_TRIPLE`/`ARTIFACT_DIR`/`FFMPEG_INSTALL_DIR`/`CEF_DIR_SUFFIX`，回写 `KB_TARGET_ARCH`/`KB_ARTIFACT_DIR` 供子进程继承）、按架构（而非宿主）决定的目录隔离约定（arm64 沿用无后缀目录、x86_64 全部独立）、出 Intel 包的完整命令顺序，以及踩坑：**官方 CEF 预编译包因缺 flat-subprocess patch 不可用**、**PATH 上的 Android NDK toolchain 劫持 `clang`/`ld`（故一律用 `cc` shim）**、`--target arm64` 也会换产物目录、x86_64 的 x264 硬依赖 nasm、**跨编专属 env（`PKG_CONFIG_ALLOW_CROSS` + bindgen `-target`，只有实跑 cargo 才暴露）**、**CEF 自编 `--x64-build` 不足需 `CEF_ENABLE_*`+`GN_OUT_CONFIGS` 让 gn_args 真的生成 x64 配置、并按目标架构补下 PGO profile**。
+  - 适用场景：在 Apple Silicon 上出 Intel dmg；排查 `ld: library 'System' not found`、架构混合的 `.app`、跨编时 FFmpeg/CEF 取错架构的依赖；新增需要感知目标架构的构建期路径。
+
 - [build/LINUX_BUILD_WORKFLOW.md](build/LINUX_BUILD_WORKFLOW.md)
   - 主题：**本机 Linux 发布构建工作流**——因本机 glibc 2.43 太新，出货用的 `.deb` 在 Ubuntu 22.04 VM（glibc 2.35）里做最终链接（不重编 CEF/Chromium/V8）。涵盖 VM/virtiofs 环境（源码挂到与 host 相同路径）、隔离 `CARGO_TARGET_DIR=target-22`、`.vm/` 环境与一键 `run-build3.sh`、`TARGET_DIR` 单一来源、glibc 地板验证；以及踩坑：**预编译 `.a` 的 `__isoc23_*`（2.38 新名符号、无版本标签、易漏判）必须重编 x264+FFmpeg**、`.pc` 烧死的 host 绝对路径、构建脚本写死 `target/release`、`package-plugin.ts` 误跑 host cli。
   - 适用场景：出货 Linux deb（标准流程）；判断某个预编译 `.a`（x264/FFmpeg/v8）能否跨 glibc 复用；排查 `version 'GLIBC_2.xx' not found`、`undefined symbol: __isoc23_*`、`.pc` prefix 失效、`CARGO_TARGET_DIR` 未被某脚本尊重；复现/维护 22.04 构建 VM。

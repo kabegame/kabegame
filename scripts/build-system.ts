@@ -16,12 +16,13 @@ import { TracePlugin } from "./plugins/trace-plugin.ts";
 import { Cmd, CmdPlugin } from "./plugins/cmd-plugin.ts";
 import { OSPlugin } from "./plugins/os-plugin.ts";
 import { SyncWaterfallHook } from "tapable";
-import { run, TARGET_DIR } from "./utils.ts";
+import { run, ARTIFACT_DIR, TARGET_TRIPLE } from "./utils.ts";
 import { BasePlugin } from "./plugins/base-plugin.ts";
 import { Skip, SkipPlugin } from "./plugins/skip-plugin.ts";
 import { ReleasePlugin } from "./plugins/release-plugin.ts";
 import { DataPlugin } from "./plugins/data-plugin.ts";
 import { TauriCliPlugin } from "./plugins/tauri-cli-plugin.ts";
+import { TargetPlugin } from "./plugins/target-plugin.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -137,12 +138,21 @@ export class BuildSystem {
   /**
    * 将 features 和 cfgs 转换为 cargo 命令行参数
    */
+  /**
+   * `--target <triple>`（仅 macOS 跨编时非空）。对 cargo 与 tauri CLI 都是同名同义的
+   * 参数，但**必须**交给 tauri 本身（而不是 `--` 之后透传给 cargo）——否则 bundler
+   * 仍按 `target/release/bundle` 找产物，会打包上一次 native 构建的残留。
+   */
+  private targetArgs(): string[] {
+    return TARGET_TRIPLE ? ["--target", TARGET_TRIPLE] : [];
+  }
+
   private buildCargoArgs(
     baseArgs: string[],
     features: string[],
     additionalArgs?: string[],
   ): string[] {
-    const args = [...baseArgs];
+    const args = [...baseArgs, ...this.targetArgs()];
     if (features.length > 0) {
       args.push("--features", features.join(","));
     }
@@ -158,7 +168,7 @@ export class BuildSystem {
     runnerArgs?: string[],
     additionalTauriArgs?: string[],
   ): string[] {
-    const args = [...baseArgs];
+    const args = [...baseArgs, ...this.targetArgs()];
     if (features.length > 0) {
       args.push("--features", features.join(","));
     }
@@ -179,6 +189,9 @@ export class BuildSystem {
 
     // --mode (standard | android)
     this.use(new ModePlugin());
+
+    // --target (x86_64 | arm64，仅 macOS)：必须排在 ModePlugin 之后，需要 context.mode
+    this.use(new TargetPlugin());
 
     // --release
     this.use(new ReleasePlugin());
@@ -295,7 +308,7 @@ export class BuildSystem {
     try {
       if (OSPlugin.isMacOS && component.isMain) {
         const exe = path.join(
-          TARGET_DIR,
+          ARTIFACT_DIR,
           this.options.release ? "release" : "debug",
           "kabegame",
         );

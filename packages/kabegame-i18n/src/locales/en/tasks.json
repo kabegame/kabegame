@@ -65,6 +65,7 @@
   "drawerUnselected": "None selected",
   "drawerTaskStatusPending": "Pending",
   "drawerTaskStatusRunning": "Running",
+  "drawerTaskStatusWaitingDownloads": "Waiting for downloads",
   "drawerTaskStatusCompleted": "Completed",
   "drawerTaskStatusFailed": "Failed",
   "drawerTaskStatusCanceled": "Canceled",

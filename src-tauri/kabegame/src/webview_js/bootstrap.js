@@ -25,6 +25,18 @@
   const _tauri = window.__TAURI_INTERNALS__;
   if (!_tauri) return;
   const invoke = (cmd, args = {}, options) => _tauri.invoke(cmd, args, options);
+  const pendingDownloads = new Set();
+  const trackDownload = (promise) => {
+    const tracked = Promise.resolve(promise);
+    pendingDownloads.add(tracked);
+    tracked.then(
+      () => pendingDownloads.delete(tracked),
+      () => pendingDownloads.delete(tracked),
+    );
+    return tracked;
+  };
+  const waitPendingDownloads = () =>
+    Promise.allSettled(Array.from(pendingDownloads));
   // 从 window 上摘掉 Tauri 内部对象，站点脚本无法据此判断处于爬虫环境。
   // media_capture.js / media_download.js 在本脚本之前注入并已各自捕获引用，不受影响。
   try {
@@ -290,24 +302,21 @@
       return invoke("crawl_add_progress", { percentage });
     },
     // 统一下载 API：走 Rust download_worker。opts 为 plain object，可选键：
-    // cookie、headers、name（展示名）、metadata（任意 JSON）、url（source url）。
+    // name（展示名）、metadata（任意 JSON）、url（source url）。
     // metadata 版本（plugin_version）由应用自动盖章，插件不可传入。
     async downloadImage(url, opts) {
       const rawUrl = String(url ?? "");
       // /{handle}/... 是任务 VFS 路径，必须落入下方宿主命令做归属校验与包装。
       if (/^data:/i.test(rawUrl) || /^blob:/i.test(rawUrl)) {
-        return window.__kb_media_download__(rawUrl, opts);
+        return trackDownload(window.__kb_media_download__(rawUrl, opts));
       }
       const o = typeof opts === "object" && opts !== null ? opts : {};
-      return invoke("crawl_download_image", {
+      return trackDownload(invoke("crawl_download_image", {
         url: rawUrl,
-        cookie: !!o.cookie,
-        headers: o.headers ?? undefined,
         name: o.name ?? undefined,
         metadata: o.metadata ?? undefined,
-        source_url: o.url ?? undefined,
         sourceUrl: o.url ?? undefined,
-      });
+      }));
     },
     // 导航到新页面；payload 可为字符串 url，opts 合并 pageLabel/pageState。
     // 导航后当前页 JS 上下文销毁、新页重跑本模板（按页重跑生命周期）。
@@ -374,10 +383,12 @@
         }, intervalMs);
       });
     },
-    exit() {
+    async exit() {
+      await waitPendingDownloads();
       return invoke("crawl_exit");
     },
-    error(message) {
+    async error(message) {
+      await waitPendingDownloads();
       return invoke("crawl_error", { message: String(message ?? "") });
     },
     // 请求显示爬虫 WebView 窗口（例如在挑战页让用户手动通过验证）

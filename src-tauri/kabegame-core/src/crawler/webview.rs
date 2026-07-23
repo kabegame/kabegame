@@ -5,6 +5,14 @@ use std::sync::{Arc, OnceLock};
 pub trait CrawlerWebViewHandler: Send + Sync + 'static {
     async fn create_task_window(&self, task_id: &str, base_url: &str) -> Result<(), String>;
     async fn destroy_task_window(&self, task_id: &str) -> Result<(), String>;
+    /// 向所属 CEF webview 投递原生下载。surf_record_id 有值时使用畅游窗口，
+    /// 否则使用 crawler 任务窗口；终态由下载条目上的 oneshot 回传给 worker。
+    async fn start_native_download(
+        &self,
+        task_id: &str,
+        surf_record_id: Option<&str>,
+        url: &str,
+    ) -> Result<(), String>;
 }
 
 static CRAWLER_WEBVIEW_HANDLER: OnceLock<Arc<dyn CrawlerWebViewHandler>> = OnceLock::new();

@@ -281,7 +281,10 @@ pub fn recalc_all_planned_at(now_ts: i64) -> Result<Vec<MissedRunItem>, String> 
         .into_iter()
         .filter(|t| {
             t.trigger_source == "scheduled"
-                && matches!(t.status, TaskStatus::Pending | TaskStatus::Running)
+                && matches!(
+                    t.status,
+                    TaskStatus::Pending | TaskStatus::Running | TaskStatus::WaitingDownloads
+                )
                 && t.run_config_id.is_some()
         })
         .filter_map(|t| t.run_config_id)

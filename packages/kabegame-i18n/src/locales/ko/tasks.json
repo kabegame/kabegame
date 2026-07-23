@@ -65,6 +65,7 @@
   "drawerUnselected": "선택 안 됨",
   "drawerTaskStatusPending": "대기 중",
   "drawerTaskStatusRunning": "실행 중",
+  "drawerTaskStatusWaitingDownloads": "남은 다운로드 대기 중",
   "drawerTaskStatusCompleted": "완료",
   "drawerTaskStatusFailed": "실패",
   "drawerTaskStatusCanceled": "취소됨",

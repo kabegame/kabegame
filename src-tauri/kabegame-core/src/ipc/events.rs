@@ -189,8 +189,6 @@ pub enum DaemonEvent {
         plugin_id: String,
         state: DownloadState,
         error: Option<String>,
-        #[serde(default)]
-        native: bool,
         retried_for: Option<i64>,
     },
 
