@@ -798,6 +798,14 @@ mod imp {
                 cl.append_switch(Some(&CefString::from("no-sandbox")));
                 #[cfg(target_os = "macos")]
                 cl.append_switch(Some(&CefString::from("use-mock-keychain")));
+                // 壁纸窗口 setIgnoresMouseEvents,永远不会有用户手势;Chromium 默认
+                // autoplay 策略下,无手势页面只允许静音自动播放,靠静音获准播放的
+                // 视频一旦被取消静音(壁纸音量默认 >0)会被立即暂停,表现为视频
+                // 壁纸停在第 0 帧。放开手势要求,允许壁纸窗口带声自动播放。
+                cl.append_switch_with_value(
+                    Some(&CefString::from("autoplay-policy")),
+                    Some(&CefString::from("no-user-gesture-required")),
+                );
                 apply_windowed_gpu_mode(cl);
                 // CEF WebContents are not Chrome browser tabs. Some Chrome UI
                 // features assume tabs::TabInterface exists and crash on SPA

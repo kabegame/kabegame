@@ -376,11 +376,18 @@ async function playVideo(el: HTMLVideoElement | null, src: string) {
         el.src = src;
     }
     applyVideoLoopToElement(el);
+    // 强制先静音再 play:壁纸窗口没有用户手势,Chromium 只允许静音自动播放。
+    // applyWallpaperVolume(设置 hydrate / setting-change)可能已把元素取消静音,
+    // 若带声调用 play() 会被 NotAllowedError 拒绝并停在第 0 帧。
+    el.muted = true;
     try {
         await el.play();
         unmuteVideo(el);
-    } catch {
-        // 自动播放被阻止时保持静默，后续事件会重试
+    } catch (err) {
+        // 自动播放被拒绝时记录原因(不再静默吞掉),后续事件会重试
+        const e = err as DOMException;
+        lastError = `play rejected: ${e?.name || "?"}: ${e?.message || err}`;
+        updateDebugPanel();
     }
 }
 
@@ -468,7 +475,15 @@ async function setImagePath(path: string) {
             if (topVideoEl) topVideoEl.style.opacity = "";
             phase = "enter";
             applyStyles();
-            if (topVideoEl) void topVideoEl.play().then(() => unmuteVideo(topVideoEl)).catch(() => {});
+            if (topVideoEl) {
+                // 同 playVideo:先静音保证自动播放获准,成功后再按音量恢复
+                topVideoEl.muted = true;
+                void topVideoEl.play().then(() => unmuteVideo(topVideoEl)).catch((err) => {
+                    const e = err as DOMException;
+                    lastError = `top play rejected: ${e?.name || "?"}: ${e?.message || err}`;
+                    updateDebugPanel();
+                });
+            }
             if (transitionGuardTimer) window.clearTimeout(transitionGuardTimer);
             transitionGuardTimer = window.setTimeout(() => {
                 if (phase === "enter" && topVideoSrc) commitTopToBase();
@@ -586,7 +601,7 @@ async function setImagePath(path: string) {
 
 function updateDebugPanel() {
     if (!IS_DEV || !debugPanelEl) return;
-    
+
     debugPanelEl.innerHTML = `
         <div class="debug-title">Wallpaper Debug</div>
         <div>label: ${windowLabel || "unknown"}</div>
