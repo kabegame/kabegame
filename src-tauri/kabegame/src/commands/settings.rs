@@ -35,11 +35,6 @@ pub fn get_auto_launch() -> bool {
 }
 
 #[tauri::command]
-pub fn get_auto_open_crawler_webview() -> bool {
-    Settings::global().get_auto_open_crawler_webview()
-}
-
-#[tauri::command]
 pub fn get_import_recommended_schedule_enabled() -> bool {
     Settings::global().get_import_recommended_schedule_enabled()
 }
@@ -371,11 +366,6 @@ pub fn set_language<R: tauri::Runtime>(
 #[tauri::command]
 pub fn set_auto_launch(enabled: bool) -> Result<(), String> {
     Settings::global().set_auto_launch(enabled)
-}
-
-#[tauri::command]
-pub fn set_auto_open_crawler_webview(enabled: bool) -> Result<(), String> {
-    Settings::global().set_auto_open_crawler_webview(enabled)
 }
 
 /// 走 core：写入设置的同时同步运行时调度器，见 `commands::settings`。

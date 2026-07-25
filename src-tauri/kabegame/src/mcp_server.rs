@@ -61,7 +61,7 @@ Do not use provider://, image://, album://, task://, or surf://. They are not su
 Image fields (ImageInfo, camelCase via serde rename_all):
    id, url, localPath, pluginId, taskId, surfRecordId, crawledAt (unix sec),
    metadataId, thumbnailPath, favorite, localExists, hash, width, height, displayName,
-   type ("image" | "video" — NOTE: serde key is `type`, not `mediaType`),
+   type (format key, e.g. "image/jpg" or "video/mp4" — NOTE: serde key is `type`, not `mediaType`),
    lastSetWallpaperAt, size (bytes).
    Use images://id_{id}/metadata to fetch crawl-time JSON metadata.
 

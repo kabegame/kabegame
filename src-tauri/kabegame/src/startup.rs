@@ -727,12 +727,6 @@ pub fn create_crawler_window<R: Runtime>(
         .build()
         .map_err(|e| format!("创建 crawler 窗口失败: {}", e))?;
 
-    if Settings::global().get_auto_open_crawler_webview() {
-        if let Some(window) = app_handle.get_webview_window(&label) {
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-    }
     Ok(())
 }
 

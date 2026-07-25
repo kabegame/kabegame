@@ -36,6 +36,7 @@ mod v019_image_post_url;
 mod v020_nullable_image_plugin_id;
 mod v021_image_metadata_plugin_version;
 mod v022_image_wallpaper_compatible_path;
+mod v023_media_type_format_keys;
 
 use rusqlite::Connection;
 
@@ -126,13 +127,18 @@ const MIGRATIONS: &[Migration] = &[
         name: "image_wallpaper_compatible_path",
         up: v022_image_wallpaper_compatible_path::up,
     },
+    Migration {
+        version: 23,
+        name: "media_type_format_keys",
+        up: v023_media_type_format_keys::up,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 22;
+pub const LATEST_VERSION: u32 = 23;
 
 fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

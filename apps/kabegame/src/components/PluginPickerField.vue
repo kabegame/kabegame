@@ -6,6 +6,10 @@
         :model-value="modelValue ?? null"
         :options="androidOptions"
         :title="pickerTitleResolved"
+        :subtitle="$t('plugins.selectSourceSubtitle')"
+        :primary-group-label="$t('plugins.recommendedSources')"
+        :restricted-group-label="$t('plugins.webviewPlugins')"
+        :restricted-group-note="$t('plugins.webviewMobileUnsupportedNote')"
         :placeholder="placeholder || $t('common.selectPlaceholder')"
         :clearable="clearable"
         :disabled="disabled"
@@ -13,21 +17,22 @@
       >
         <template #option="{ option }">
           <div class="plugin-picker-option">
-            <template v-if="showIcons && (option.pluginId || option.iconSrc)">
-              <img v-if="option.iconSrc" :src="option.iconSrc" class="plugin-picker-option__icon" alt="" />
-              <el-icon v-else class="plugin-picker-option__icon-placeholder">
-                <Grid />
-              </el-icon>
-            </template>
-            <span class="plugin-picker-option__label">{{ option.label }}</span>
-            <span v-if="option.count !== undefined" class="plugin-picker-option__count">({{ option.count }})</span>
-            <el-icon
-              v-if="option.warning"
-              class="plugin-picker-option__warning"
-              :title="$t('plugins.androidNotSupported')"
-            >
-              <WarningFilled />
-            </el-icon>
+            <!-- 图标瓦片：优先真实图标，回退首字符 + 色相渐变 -->
+            <div class="plugin-picker-option__tile" :style="tileStyle(option)">
+              <img v-if="showIcons && option.iconSrc" :src="option.iconSrc" class="plugin-picker-option__tile-img" alt="" />
+              <span v-else>{{ tileInitial(option.label) }}</span>
+            </div>
+            <div class="plugin-picker-option__main">
+              <div class="plugin-picker-option__name">{{ option.label }}</div>
+              <div v-if="option.desc" class="plugin-picker-option__desc">{{ option.desc }}</div>
+              <!-- Webview 项：警告 pill；其余：真实插件标签 -->
+              <div class="plugin-picker-option__tagrow">
+                <span v-if="option.warning" class="plugin-picker-option__warn-pill">
+                  <span class="plugin-picker-option__warn-dot">!</span>{{ $t('plugins.webviewNeedsDesktop') }}
+                </span>
+                <PluginLabelTags v-else-if="option.labels?.length" :labels="option.labels" size="small" />
+              </div>
+            </div>
           </div>
         </template>
       </AndroidPickerSelect>
@@ -149,7 +154,7 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-const { pluginName } = usePluginManifestI18n();
+const { pluginName, pluginDescription } = usePluginManifestI18n();
 const uiStore = useUiStore();
 const pluginStore = usePluginStore();
 
@@ -242,8 +247,32 @@ const androidOptions = computed(() =>
     iconSrc: option.iconSrc,
     warning: option.warning,
     count: option.count,
+    desc: option.plugin ? pluginDescription(option.plugin) : undefined,
+    labels: option.plugin ? labelsFor(option.plugin) : undefined,
   })),
 );
+
+// 无真实图标时，用插件 id 派生稳定色相生成瓦片渐变（呼应设计的 oklch 辉光）。
+function tileHue(option: { pluginId?: string; value: string }) {
+  const seed = option.pluginId ?? option.value ?? "";
+  let h = 0;
+  for (const ch of seed) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h % 360;
+}
+
+function tileStyle(option: { pluginId?: string; value: string; iconSrc?: string }) {
+  // 有真实图标时瓦片仅作底衬，无需辉光渐变
+  if (props.showIcons && option.iconSrc) return {};
+  const h = tileHue(option);
+  return {
+    background: `linear-gradient(140deg, oklch(0.77 0.12 ${h}), oklch(0.6 0.16 ${h}))`,
+    boxShadow: `0 6px 16px oklch(0.7 0.16 ${h} / 0.5)`,
+  };
+}
+
+function tileInitial(label: string) {
+  return Array.from(label ?? "")[0] ?? "?";
+}
 
 const selectedPluginObj = computed<Plugin | undefined>(() => {
   const selected = options.value.find((option) => option.value === props.modelValue);
@@ -308,7 +337,91 @@ const selectedPluginIsJs = computed(() => {
   font-size: 20px;
 }
 
-:deep(.android-picker-select__list-item) .plugin-picker-option {
+/* ============ 移动端居中弹窗行内容（方案 1c 图标 + 名称 + 描述 + 标签） ============ */
+.plugin-picker-option:has(.plugin-picker-option__tile) {
+  gap: 13px;
+}
+
+.plugin-picker-option__tile {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 50px;
+  height: 50px;
+  border-radius: 15px;
+  overflow: hidden;
+  color: #fff;
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.plugin-picker-option__tile-img {
   width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 受限（Webview）行的图标去饱和 */
+.apk-row--disabled .plugin-picker-option__tile {
+  filter: grayscale(0.35);
+}
+
+.plugin-picker-option__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.plugin-picker-option__name {
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--anime-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plugin-picker-option__desc {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: #8a6d8b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plugin-picker-option__tagrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+
+  &:empty {
+    display: none;
+  }
+}
+
+.plugin-picker-option__warn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #b45309;
+}
+
+.plugin-picker-option__warn-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: #f59e0b;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
 }
 </style>

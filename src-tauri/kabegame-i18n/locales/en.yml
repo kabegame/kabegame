@@ -52,7 +52,6 @@ dialog:
 window:
   wallpaperTitle: Kabegame Wallpaper
   crawlerTitle: Kabegame Crawler
-  devWebViewTitle: Kabegame Dev WebView
 
 albums:
   favorite: Favorites

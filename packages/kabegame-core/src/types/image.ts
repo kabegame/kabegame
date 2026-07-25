@@ -36,7 +36,7 @@ export interface ImageInfo {
   // 显示名称（从数据库 display_name 列读取）
   displayName?: string;
 
-  /** 媒体 MIME（如 image/jpeg、video/mp4）；视频判定用 `video` 或 `video/*` 前缀。 */
+  /** 媒体格式键（如 image/jpg、video/mp4）；视频判定用 `video` 或 `video/*` 前缀。 */
   type?: string;
 
   /** 最后一次被设为壁纸的 Unix 时间戳（秒） */

@@ -3,7 +3,7 @@ title: kabegame-cli 命令行参考
 description: kabegame-cli 子命令、参数、退出码与守护进程依赖关系的完整参考。
 ---
 
-`kabegame-cli` 是 Kabegame 随主应用一起发布的 sidecar 可执行文件，用于在不打开 GUI 的前提下脚手架、打包、导入并运行爬虫插件，或在脚本中控制虚拟磁盘。本页列出当前代码实际存在的子命令与参数。
+`kabegame-cli` 是 Kabegame 的命令行可执行文件，用于在不打开 GUI 的前提下脚手架、打包、导入并运行爬虫插件，或在脚本中控制虚拟磁盘。它**不随主程序打包**，需要时从发布页单独下载。本页列出当前代码实际存在的子命令与参数。
 
 :::note
 除 `plugin new` / `plugin pack` / `plugin import` / `plugin run` 外，所有子命令都需要 `kabegame-daemon` 正在运行。通常启动 GUI 主应用即可同时启动 daemon；也可以手动启动 `kabegame-daemon`。详见下方[守护进程依赖](#守护进程依赖)。
@@ -16,11 +16,9 @@ description: kabegame-cli 子命令、参数、退出码与守护进程依赖关
 - Windows：`kabegame-cli.exe`
 - macOS / Linux：`kabegame-cli`
 
-安装位置因平台而异：
+获取方式：
 
-- **Windows / macOS 标准版**：CLI 会作为 sidecar 打包在主应用目录（Windows）或 `.app` 资源目录（macOS）中。
-- **Linux**：目前 Linux 端未随主应用一同发布 `kabegame-cli`，若需使用请自行从源码构建。
-- **Light 构建**：不包含 `vd *` 子命令。
+- **Windows / macOS / Linux**：从 [GitHub Releases](https://github.com/kabegame/kabegame/releases/latest) 单独下载对应平台的 `Kabegame-cli-standard_<版本>_<架构>` 资产（Windows 为 setup.exe，macOS / Linux 为可执行文件）。下载后放到 PATH 或直接用绝对路径调用。
 - **Android**：不提供 CLI。
 
 全局参数只有 clap 自带的 `--help` / `-h` 与 `--version` / `-V`。
@@ -37,19 +35,18 @@ kabegame-cli plugin run --help
 在当前目录脚手架一个新的插件目录。**离线可用，不需要 daemon。**
 
 ```bash
-kabegame-cli plugin new <name> [--backend rhai|v8|webview]
+kabegame-cli plugin new <name> [--backend v8|webview]
 ```
 
 | 参数        | 必填 | 说明                                                                                                                 |
 | ----------- | ---- | -------------------------------------------------------------------------------------------------------------------- |
 | `name`      | 是   | 插件名，必须是 kebab-case（正则 `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`）。`MyPlugin`、`my_plugin`、`1stplugin` 都会被拒绝。 |
-| `--backend` | 否   | `v8`（默认）、`rhai` 或 `webview`，决定生成的脚本文件与 `package.json.kbBackend`。                                      |
+| `--backend` | 否   | `v8`（默认）或 `webview`，决定生成的脚本文件与 `package.json.kbBackend`。（Rhai 后端已移除，不可选。）                |
 
 目标目录若已存在则直接报错退出。脚手架会从模板生成 `package.json`、`icon.png`、`doc_root/doc.md` 等通用文件，并根据 backend 生成对应脚本。
 
 ```bash
 kabegame-cli plugin new my-site
-kabegame-cli plugin new my-site --backend rhai
 kabegame-cli plugin new my-site --backend webview
 ```
 
@@ -136,7 +133,7 @@ kabegame-cli plugin import <path.kgpg>
 | -------- | ---- | ----------------------------------------------------------- |
 | 位置参数 | 是   | `.kgpg` 文件路径。文件不存在或扩展名非 `.kgpg` 会立即报错。 |
 
-安装前会验证：manifest 可解析、包含非空 `crawl.rhai` 或 `crawl.js`、若存在 `config.json` 则可解析。成功时输出：
+安装前会验证：v3 `package.json` 可解析、`main` 指向的脚本非空、`kbConfig` 若存在则可解析。成功时输出：
 
 ```text
 导入成功：id=…; name=…; version=…; 目标目录=…
@@ -146,9 +143,9 @@ kabegame-cli plugin import <path.kgpg>
 CLI 层没有版本 / 冲突检查，重复导入同一 ID 可能覆盖已有插件。
 :::
 
-## vd 子命令组（仅标准构建）
+## vd 子命令组（桌面版）
 
-`vd *` 只在非 Light 构建中编译。虚拟磁盘当前实际可用平台以 Windows（Dokan）为主；macOS / Linux 相关实现处于实验状态。所有 `vd` 子命令都通过 IPC 走 daemon。
+`vd *` 只在桌面版编译。虚拟磁盘当前实际可用平台以 Windows（Dokan）为主；macOS / Linux 相关实现处于实验状态。所有 `vd` 子命令都通过 IPC 走 daemon。
 
 ### vd mount
 
@@ -206,7 +203,7 @@ CLI 使用三种退出码：
 | 子命令                                  | 是否需要 daemon | 原因                                       |
 | --------------------------------------- | --------------- | ------------------------------------------ |
 | `plugin new`                            | 否              | 纯本地模板复制。                           |
-| `plugin pack`                           | 否              | 读取目录，必要时在本地执行 npm/bun 构建。  |
+| `plugin pack`                           | 否              | 读取目录并打包，不执行 `scripts.build`。   |
 | `plugin import`                         | 否              | 本地初始化 `PluginManager`。               |
 | `plugin run`                            | 否              | 在本进程内初始化 TaskScheduler + V8 运行时执行，只订阅进程内的 `EventBroadcaster`。 |
 | `vd mount` / `vd unmount` / `vd status` | 是              | 全部走 IPC。                               |
@@ -214,23 +211,21 @@ CLI 使用三种退出码：
 
 ## 平台差异
 
-| 能力                             | Windows     | macOS | Linux                | Android |
-| -------------------------------- | ----------- | ----- | -------------------- | ------- |
-| 随主应用发布 CLI                 | 是          | 是    | 否（需自行构建）     | 不适用  |
-| `plugin new` / `pack` / `import` | 是          | 是    | 是（需本地构建 CLI） | 不适用  |
-| `plugin run`                     | 是          | 是    | 是（需 daemon）      | 不适用  |
-| `vd *`                           | 是（Dokan） | 实验  | 实验                 | 不适用  |
-| Light 构建含 `vd *`              | 否          | 否    | 否                   | 不适用  |
+| 能力                             | Windows     | macOS | Linux    | Android |
+| -------------------------------- | ----------- | ----- | -------- | ------- |
+| 发布页单独下载 CLI               | 是          | 是    | 是       | 不适用  |
+| `plugin new` / `pack` / `import` | 是          | 是    | 是       | 不适用  |
+| `plugin run`                     | 是          | 是    | 是       | 不适用  |
+| `vd *`                           | 是（Dokan） | 实验  | 实验     | 不适用  |
 
 ## 常见问题
 
 - **无法连接 kabegame-daemon** → daemon 未启动 → 启动 GUI 主应用，或在终端手动运行 `kabegame-daemon`，再重试。
 - **`--output-album` 未匹配到画册** → 名称拼写或大小写问题（匹配本身已做大小写不敏感与去空格）→ 在 GUI 中确认画册显示名，复制后再试。
-- **`plugin pack` 报 `未找到可用的包管理器`** → 插件 `package.json` 声明了 build 脚本但系统上没有 bun / npm → 安装其一后再打包，或移除 `scripts.build`。
 - **`plugin new` 拒绝名称** → 名称非 kebab-case → 使用 `my-plugin` 这类全小写、短横线分隔、首字符为字母的名称。
 
 ## 延伸阅读
 
-- [插件管理](/guide/plugins/)
+- [插件管理](/guide/plugins-usage/)
 - [虚拟磁盘](/guide/virtual-drive/)
 - [命令行（入门指南）](/guide/command-line/)

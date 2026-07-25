@@ -1,0 +1,208 @@
+---
+title: 插件清单与格式字段
+description: Kabegame 插件 package.json（KGPG v3 自描述清单）、kbConfig、kbLabels 字段速查。
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+本页是 Kabegame 插件 `package.json`（KGPG v3 自描述清单）的字段速查。格式的整体结构见 [插件格式](/dev/format/)，后端选择见 [爬虫后端](/dev/crawler-backends/)。
+
+「最低版本」标注插件用到该字段/能力时应在 `engines.kabegame` 声明的最低应用版本。基线：V8 / WebView 插件本身自 <Badge text="4.3.0" variant="note" /> 起就绪；标注更高版本的字段是后续增量。
+
+:::note[版本标注是本文档的持续约定]
+新增接口或字段时，本站按版本标注：字段/方法旁用 <Badge text="4.4.0" variant="note" /> 徽章标出**首次可用的应用版本**，`package.json` 结构变化也在此页同步。写插件时把 `engines.kabegame` 抬到你用到的最高版本。
+:::
+
+## .kgpg 目录结构
+
+```text
+plugin-name.kgpg
+    ├── package.json                    # v3 自描述清单
+    ├── dist/main.js 或 crawl.js        # main 指向的脚本
+    ├── icon.png                        # kbIcon
+    ├── configs/*.json                  # kbRecommendedConfigs
+    ├── providers/*.json5               # kbPathQLProviders
+    ├── metadata_migrations/migrate.js  # kbMetadataMigration
+    ├── doc_root/                       # kbDoc
+    └── templates/description.ejs       # kbDescriptionTemplate
+```
+
+## package.json 字段
+
+### 标准 npm 字段
+
+| 字段 | 类型 | 必填 | 最低版本 | 说明 |
+|---|---|---|---|---|
+| `name` | string | 是 | 4.3.0 | 显示名回退（无点后缀）。**真实插件 ID 是目录名 / `.kgpg` 文件名，不是 `name`**。支持多语言点键。 |
+| `version` | string | 是 | 4.3.0 | 语义化版本 `major.minor.patch`，每段 ≤255。同 ID 升级必须 bump。 |
+| `description` | string | 是 | 4.3.0 | 默认描述，支持多语言点键。 |
+| `author` | string \| object | 是 | 4.3.0 | 作者。对象形式取 `author.name`。 |
+| `private` | boolean | 否 | — | 纯 npm 语义，Kabegame 不读；样例常写 `true` 防误发 npm。 |
+| `main` | string | 是 | 4.3.0 | 入口脚本的包内相对路径。经安全校验（禁 `..` / 绝对路径）。 |
+| `engines.kabegame` | string | 否（强烈建议） | 4.3.0 | 最低应用版本，仅支持 `>=X.Y.Z`。是 `minAppVersion` 的权威来源。 |
+| `scripts` | object | 否 | — | npm 构建脚本（如 `rspack build`）；Kabegame 不读，仅打包前本地构建用。 |
+
+**多语言点键**：`name` / `description` 以及 `kbConfig` 里的 `name` / `descripts` / `options[].name` 都用**扁平点号键**（不是嵌套对象）：`name`、`name.zh`、`name.en`、`name.ja`、`name.ko`、`name.zhtw`。无点后缀的作为 `default` 回退。前端按当前 locale 取值。
+
+### kb* 专有字段
+
+| 字段 | 类型 | 必填 | 最低版本 | 说明 |
+|---|---|---|---|---|
+| `kbPackageVersion` | number | 是 | 4.3.0 | 清单格式版本，**必须 ≥3**。当前生态一律 `3`。 |
+| `kbBackend` | string | 是 | 4.3.0 | 脚本后端：`"v8"` 或 `"webview"`。`"rhai"` 报「Rhai 后端已停止支持」；其它值报错。 |
+| `kbBaseUrl` | string | 否 | 4.3.0 | 基础 URL。运行时作为 `common.base_url` 注入；WebView 后端还用作任务窗口初始 URL。空串合法。 |
+| `kbConfig` | array | 否 | 4.3.0 | 采集对话框表单变量定义数组，顺序即展示顺序。见 [kbConfig 变量](#kbconfig-变量)。 |
+| `kbLabels` | array | 否 | <Badge text="4.4.0" variant="note" /> | 插件声明的标签数组。见 [kbLabels](#kblabels)。 |
+| `kbIcon` | string | 否 | 4.3.0 | 包内图标 PNG 相对路径。 |
+| `kbDoc` | object | 否 | 4.3.0 | 多语言文档映射：键 `default`/`zh`/`en`/`ja`/`ko`/`zhtw`，值为 `.md` 相对路径。 |
+| `kbRecommendedConfigs` | string[] | 否 | 4.3.0 | 推荐运行配置文件路径数组（`configs/*.json`）。 |
+| `kbPathQLProviders` | string[] | 否 | 4.3.0 | PathQL provider DSL 文件路径数组（`providers/*.json5`），后端用。 |
+| `kbDescriptionTemplate` | string | 否 | 4.3.0 | 图片描述模板 `.ejs` 路径。 |
+| `kbMetadataMigration` | string | 否 | 4.3.0 | 单一 metadata 迁移脚本路径（须 `.js`，ES module，`export migrate`）。 |
+
+所有 `kb*` 路径字段统一走安全校验：非空、包根相对、禁 `..`、禁绝对路径 / 盘符 / 前导 `/`。
+
+:::note[`minAppVersion` 与 `engines.kabegame`]
+v3 插件只写 `engines.kabegame`（`>=X.Y.Z`）。`minAppVersion` 是它去掉 `>=` 后的规范化派生值，出现在 `index.json` 与运行时兼容判断里（应用版本 `>= minAppVersion` 才允许安装，否则打上 `app.versionIncompatible` 标签）。作者面**只需写 `engines.kabegame`**。
+:::
+
+## kbConfig 变量
+
+`kbConfig` 是变量对象数组。每个变量：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `key` | string | 是 | 变量名；脚本中 V8 用 `custom[key]`，WebView 用 `Kabegame.vars[key]`。 |
+| `type` | string | 是 | 变量类型（见下表）。 |
+| `name` | string（+ 多语言点键） | 是 | 展示名。 |
+| `descripts` | string（+ 多语言点键） | 否 | 说明文案（注意拼写是 `descripts`）。 |
+| `default` | 随 type | 否 | 默认值。 |
+| `min` / `max` | number | 否 | `int` / `float` 的取值范围。 |
+| `options` | array | `options`/`checkbox` 必填 | 选项列表，元素为 `{ name, variable, when? }`（`name` 支持多语言点键）。 |
+| `when` | object | 否 | 条件显示：`{ otherKey: [值...] }`，某 key 当前值 ∈ 数组才显示；多 key 之间为 AND。可挂变量或单个 option 上。 |
+| `format` | string | `date` 用 | dayjs 格式，决定提交的日期字符串；默认 `YYYY-MM-DD`。 |
+| `dateMin` / `dateMax` | string | `date` 用 | 可选日期范围：`YYYY-MM-DD` 或关键字 `today` / `yesterday`。 |
+
+### 变量类型
+
+| type | 脚本收到的值 | 说明 |
+|---|---|---|
+| `int` | number（整数） | 用 `min` / `max` |
+| `float` | number | 用 `min` / `max` |
+| `string` | string | 单行文本 |
+| `boolean` | bool | 开关 |
+| `date` | string | 受 `format` / `dateMin` / `dateMax` 控制 |
+| `options` | string（选中项的 `variable`） | 单选下拉；UI 显示 `name`，脚本收到 `variable` |
+| `list` | string[] | 可变长字符串列表；`options` 为字符串建议项 |
+| `checkbox` | 对象 `{ [variable]: bool }` | 多选；脚本中通过 `key.a`、`key.b` 访问；`default` 可为勾选项数组或 `{variable:bool}` |
+| `path` / `file` / `folder` / `file_or_folder` | string | 路径选择器（分别为文件或文件夹 / 仅文件 / 仅文件夹 / 二者）。前端已实现，未写入 schema，主要面向本地导入类插件。 |
+
+**options 示例**
+
+```jsonc
+{
+  "key": "quality",
+  "type": "options",
+  "name": "图片质量",
+  "options": [
+    { "name": "高清", "variable": "high" },
+    { "name": "中等", "variable": "medium" }
+  ],
+  "default": "high"
+}
+```
+
+**checkbox 示例**（脚本中 `wallpaper_type.desktop`、`wallpaper_type.mobile`）
+
+```jsonc
+{
+  "key": "wallpaper_type",
+  "type": "checkbox",
+  "name": "壁纸类型",
+  "options": [
+    { "name": "桌面壁纸", "variable": "desktop" },
+    { "name": "手机壁纸", "variable": "mobile" }
+  ],
+  "default": ["desktop", "mobile"]
+}
+```
+
+**when 条件显示示例**（`source` 取 `user` / `bookmark` 时才显示 `artist_id`）
+
+```jsonc
+{
+  "key": "artist_id",
+  "type": "string",
+  "name": "画师 UID",
+  "when": { "source": ["user", "bookmark"] }
+}
+```
+
+## kbLabels
+
+<Badge text="4.4.0" variant="note" /> 插件声明的标签，渲染在源列表 / 详情里。数组元素：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | string | 是 | 标签 id。命中预定义集合时用内置文案 + 颜色。 |
+| `name` | string | 否 | 仅**未知 id** 的回退显示名。 |
+| `desc` | string | 否 | 仅未知 id 的回退说明。 |
+
+### 预定义标签
+
+命中下列 id 时只填 `id` 即可，文案与颜色由应用提供：
+
+| id | 含义 | 颜色 |
+|---|---|---|
+| `auth.needCookie` | 该源可能需要先在**畅游**里登录取得 cookie 才能爬取 | warning |
+| `auth.needProxy` | 该源在中国大陆可能需要代理才能完整访问 | warning |
+| `content.res.mobile` | 提供移动端 / 竖屏分辨率壁纸 | primary |
+| `content.res.desktop` | 提供桌面端 / 横屏分辨率壁纸 | primary |
+| `content.nsfw` | 可能含 NSFW / R-18 内容 | danger |
+| `content.type.video` | 提供视频 / 动图壁纸 | success |
+
+```jsonc
+{
+  "kbLabels": [
+    { "id": "auth.needCookie" },
+    { "id": "content.nsfw" }
+  ]
+}
+```
+
+:::note
+还有一个 `app.versionIncompatible`（红色）标签，由**应用自动合成**（插件要求的版本高于当前安装版本时），不是插件声明的。声明 `auth.needCookie` 时通常配合 `Kabegame.requireCookie()` 使用，见 [V8 脚本 · 请求头与 Cookie](/dev/v8-api/#请求头与-cookie)。
+:::
+
+## 完整示例骨架
+
+```jsonc
+{
+  "name": "myplugin",                     // 显示名回退；真实 ID = 目录名
+  "version": "0.1.0",
+  "description": "…",
+  "description.en": "…",
+  "author": "You",
+  "private": true,                        // npm 语义，Kabegame 忽略
+  "engines": { "kabegame": ">=4.4.0" },   // = minAppVersion 权威来源
+  "kbPackageVersion": 3,                  // 必须 ≥3
+  "kbBackend": "v8",                     // v8 | webview
+  "main": "dist/main.js",                 // v8: dist/main.js；webview: crawl.js
+  "kbBaseUrl": "https://example.com",     // → common.base_url
+  "kbLabels": [{ "id": "auth.needCookie" }],  // 4.4.0+
+  "kbConfig": [ /* 变量定义 */ ],
+  "kbIcon": "icon.png",
+  "kbDoc": { "default": "doc_root/doc.md", "en": "doc_root/doc.en.md" },
+  "kbRecommendedConfigs": ["configs/x.json"],
+  "kbPathQLProviders": ["providers/tag_provider.json5"],
+  "kbDescriptionTemplate": "templates/description.ejs",
+  "kbMetadataMigration": "metadata_migrations/migrate.js"
+}
+```
+
+## 延伸阅读
+
+- [插件格式](/dev/format/) —— `.kgpg` 结构与每类条目。
+- [V8 脚本](/dev/v8-api/) / [WebView 脚本](/dev/webview-api/) —— 脚本怎么读 `kbConfig`。
+- [Kabegame API 字典](/reference/kabegame-api/) —— 宿主全局的完整签名。
+- [打包与发布](/dev/packaging/) —— 打包命令与 `index.json`。

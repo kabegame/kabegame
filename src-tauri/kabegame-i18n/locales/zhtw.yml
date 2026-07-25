@@ -52,7 +52,6 @@ dialog:
 window:
   wallpaperTitle: Kabegame 桌布
   crawlerTitle: Kabegame 爬蟲
-  devWebViewTitle: Kabegame 開發 WebView
 
 albums:
   favorite: 收藏

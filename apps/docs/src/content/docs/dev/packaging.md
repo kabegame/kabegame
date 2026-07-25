@@ -1,6 +1,6 @@
 ---
 title: 打包与发布
-description: 把 Rhai 插件打成 .kgpg 并发布到商店或自建源的完整流程。
+description: 把插件打成 .kgpg 并发布到商店或自建源的完整流程。
 ---
 
 写好插件后，你需要把它装进真机验证、打成 `.kgpg` 单文件、生成索引，然后发布到官方仓库或自建源。本文覆盖作者侧的完整发布链路，以及用户什么时候能看到你的新版本。
@@ -9,7 +9,8 @@ description: 把 Rhai 插件打成 .kgpg 并发布到商店或自建源的完整
 
 在运行任何打包命令之前，确保以下工具就位：
 
-- **Bun**：仓库统一使用 `bun` 运行脚本，不支持 `pnpm` / `npm` 的旧命令。
+- **Deno**：仓库顶层打包命令统一走 `deno task`（`deno run -A package-plugin.ts`）。
+- **包管理器（若插件声明了 `scripts.build`）**：打包前需要先把 `src/` 编译成 `main` 指向的产物。仓库脚本会自动检测并调用 `bun` 或 `npm` 执行插件的 `scripts.build`（如 `rspack build`）；系统上没有任何一个会报「未找到可用的包管理器」。纯静态插件（无 `scripts.build`）不需要。
 - **已构建的 `kabegame-cli`**：`deno task package` 实际调用 `target/release/kabegame-cli(.exe)` 来写 `.kgpg` 固定头部，**不是**纯 JS 打包。若缺失会报错「找不到 cli … 请在 kabegame 父仓库构建 cli 工具！」。
 
   第一次克隆仓库后，至少执行一次：
@@ -56,19 +57,22 @@ deno task package --only <id1> <id2>     # 多选
 
 ### 输入文件
 
-打包只收集插件目录下以下文件：
+打包只收集 `package.json` 里 `kb*` 指针**明确引用**的文件：
 
-- `manifest.json`（必需）
-- `crawl.rhai`（必需）
-- `config.json`
-- `icon.png`
-- `doc_root/doc.md`
-- `doc_root/` 下的 `jpg` / `jpeg` / `png` / `gif` / `webp` / `bmp` / `svg` / `ico`
+- `package.json`（必需，v3 自描述清单）
+- `main` 指向的脚本（必需，如 `dist/main.js` 或 `crawl.js`）
+- `icon.png`（`kbIcon`，另编码进 KGPG 头部）
+- `kbRecommendedConfigs` 引用的 `configs/*.json`
+- `kbPathQLProviders` 引用的 `providers/*.json5`
+- `kbMetadataMigration` 引用的迁移脚本
+- `kbDescriptionTemplate` 引用的 `templates/description.ejs`
+- `kbDoc` 引用的 `doc_root/doc.md` / `doc.<lang>.md`
+- `doc_root/` 下文档引用的图片资源
 
-缺少 `manifest.json` 或 `crawl.rhai` 会直接报错。
+缺少 v3 `package.json` 或 `main` 指向的脚本会直接报错。
 
 :::note
-`doc_root/` 之外的自定义目录会被**静默丢弃**，不会提示。所有文档资源都要放进 `doc_root/`。
+清单未引用的文件会被**静默丢弃**，不会提示。所有要打包的资源都要通过 `kb*` 字段声明；文档资源要放进 `doc_root/`。
 :::
 
 ### 输出
@@ -83,16 +87,16 @@ deno task package --only <id1> <id2>     # 多选
 deno task generate-index
 ```
 
-读取 `packed/*.kgpg` + 每个插件的 `manifest.json` + 仓库根 `package.json` 的 `version`，产出 `packed/index.json`。这个文件就是商店前端拉取的清单，每一项包含：
+读取 `packed/*.kgpg` + 每个插件的 `package.json` + 仓库根 `package.json` 的 `version`，产出 `packed/index.json`。这个文件就是商店前端拉取的清单，每一项包含：
 
 | 字段 | 说明 |
 |---|---|
 | `id` | 插件 ID（= 目录名） |
-| `version` | 来自 `manifest.json` 的 semver |
+| `version` | 来自 `package.json` 的 semver |
 | `packageVersion` | 插件包规范版本，当前为 `3` |
 | `downloadUrl` | `https://github.com/{owner}/{repo}/releases/download/v{ver}/<id>.kgpg` |
 | `sizeBytes` / `sha256` | 用于完整性校验与缓存失效 |
-| `name` / `name.zh` / `name.en` / `name.ja` / `name.ko` | 从 `manifest.json` 原样复制的扁平 i18n 键 |
+| `name` / `name.zh` / `name.en` / `name.ja` / `name.ko` | 从 `package.json` 原样复制的扁平 i18n 键 |
 | `description` / `description.*` | 同上 |
 
 索引的 `version` 字段派生规则（优先级从高到低）：
@@ -145,7 +149,7 @@ https://github.com/kabegame/crawler-plugins/releases/latest/download/index.json
 
 应用允许用户在「源管理」手动添加自建源，只要该源提供一个可公开访问的 `index.json`，且 JSON 里每个插件条目至少包含：
 
-- `id`、`version`、`packageVersion`（`2`）
+- `id`、`version`、`packageVersion`（`3`）
 - `downloadUrl`（可以是非 GitHub 的任意公开 URL）
 - `sizeBytes`、`sha256`
 - `name` / `description`（建议附带 `.zh` / `.en` 等 i18n 键）
@@ -162,19 +166,19 @@ https://github.com/kabegame/crawler-plugins/releases/latest/download/index.json
 
 所以作者预期：**最多 24 小时** 内所有活跃用户可以自动看到新版本；急需验证可让用户手动刷新。
 
-已下载的 `.kgpg` 还有一层磁盘缓存，在 `<cache>/store-cache/<source_id>/<plugin>.kgpg`。版本号升级后下次安装会自动失效并重下——**前提是你 bump 了 `manifest.json` 的 `version`**。
+已下载的 `.kgpg` 还有一层磁盘缓存，在 `<cache>/store-cache/<source_id>/<plugin>.kgpg`。版本号升级后下次安装会自动失效并重下——**前提是你 bump 了 `package.json` 的 `version`**。
 
 ## 版本与兼容性
 
-`manifest.json` 有两个字段决定发布能否生效：
+插件的 `package.json` 有两个字段决定发布能否生效：
 
 | 字段 | 必需 | 作用 |
 |---|---|---|
-| `version` | ✅ | semver。同一 `id` 升级**必须** bump 此字段，否则用户端磁盘包缓存按 `expected_version` 命中旧 `.kgpg`，新内容根本不下发 |
-| `minAppVersion` | 可选 | `major.minor.patch`。当前应用版本低于要求则拒绝安装，弹出「此插件要求 Kabegame >= {required}，当前版本为 {current}」 |
+| `version` | ✅ | semver（每段 ≤255）。同一 `id` 升级**必须** bump 此字段，否则用户端磁盘包缓存按 `expected_version` 命中旧 `.kgpg`，新内容根本不下发 |
+| `engines.kabegame` | 可选（强烈建议） | 最低应用版本，写法 `>=X.Y.Z`。当前应用版本低于要求则拒绝安装并打上「版本不兼容」标签。用到某个版本才有的接口时抬到那个版本（如用了 `kbLabels` / `Kabegame.requireCookie()` 就写 `>=4.4.0`）。它是 `minAppVersion` 的权威来源——`index.json` 里规范化后的 `minAppVersion` 字段由它派生。 |
 
 :::caution
-要 bump 的是**插件目录下的 `manifest.json`**，不是 `src-crawler-plugins/package.json`。后者只影响 Release tag 与 `index.json` 的顶层 `version`，与用户端缓存失效无关。
+要 bump 的是**插件目录下的 `package.json`**，不是 `src-crawler-plugins/package.json`。后者只影响 Release tag 与 `index.json` 的顶层 `version`，与用户端缓存失效无关。
 :::
 
 ## 排障
@@ -185,7 +189,7 @@ https://github.com/kabegame/crawler-plugins/releases/latest/download/index.json
 
 **现象** 发布后用户商店里没看到新版本。  
 **原因** 24h revalidate 周期未到；或 `.kgpg` 磁盘缓存命中旧 `version`。  
-**操作** 让用户在「源管理」点刷新强制 revalidate；确认已 bump `manifest.json` 的 `version`。
+**操作** 让用户在「源管理」点刷新强制 revalidate；确认已 bump `package.json` 的 `version`。
 
 **现象** `packed/index.json` 里 `version` 变成了 `main`。  
 **原因** 旧版本在 CI push main 时会读 `GITHUB_REF_NAME`。  
@@ -198,5 +202,5 @@ https://github.com/kabegame/crawler-plugins/releases/latest/download/index.json
 ## 延伸阅读
 
 - [插件开发总览](/dev/overview/) — 进入发布前先把插件写好
-- [插件格式（.kgpg）](/dev/format/) — 理解 `packageVersion: 2` 与 `sha256` 的来由
+- [插件格式（.kgpg）](/dev/format/) — 理解 `kbPackageVersion: 3` 与 `sha256` 的来由
 - [插件使用方法](/guide/plugins-usage/) — 从用户侧看导入与刷新

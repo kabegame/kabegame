@@ -474,6 +474,7 @@ fn vd_image_entry_from_row(row: &Value) -> Option<VdImageEntry> {
         id: json_string(row, "id")?,
         local_path: json_string(row, "local_path")?,
         display_name: json_string(row, "display_name").unwrap_or_default(),
+        // media_type 对应 images.type 格式键；"image" 仅作为缺失值的历史兼容兜底。
         media_type: json_string(row, "media_type").unwrap_or_else(|| "image".to_string()),
         is_hidden: json_bool(row, "is_hidden"),
         crawled_at: json_u64(row, "crawled_at").unwrap_or(0),

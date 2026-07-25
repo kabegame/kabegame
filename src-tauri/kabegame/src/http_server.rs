@@ -60,7 +60,9 @@ struct PluginDocImageQuery {
 #[cfg(not(target_os = "android"))]
 fn mime_from_path(path: &str) -> Option<String> {
     if let Some(m) = kabegame_core::image_type::mime_type_from_path(Path::new(path)) {
-        return Some(m);
+        if let Some(mime) = kabegame_core::image_type::mime_from_format(&m) {
+            return Some(mime.to_string());
+        }
     }
     let ext = Path::new(path)
         .extension()
@@ -109,7 +111,12 @@ async fn handle_file_query(
         _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
     };
 
-    let mime = image_info.media_type.or_else(|| mime_from_path(path));
+    let mime = image_info
+        .media_type
+        .as_deref()
+        .and_then(kabegame_core::image_type::mime_from_format)
+        .map(str::to_string)
+        .or_else(|| mime_from_path(path));
 
     let range = headers
         .get(RANGE)
@@ -138,8 +145,7 @@ async fn handle_thumbnail_query(
     }
 
     // 缩略图 MIME 优先根据缩略图文件路径推断（缩略图可能是 jpg 而原始文件是 mp4）
-    let thumb_mime = kabegame_core::image_type::mime_type_from_path(Path::new(path))
-        .or_else(|| mime_from_path(path));
+    let thumb_mime = mime_from_path(path);
 
     let range = headers
         .get(RANGE)
@@ -260,9 +266,13 @@ async fn handle_compatible_query(
 
     match kabegame_core::storage::Storage::find_image_by_compatible_path(path) {
         Ok(Some(info)) => {
-            // compatible_path may differ from the source record MIME. The response MIME
-            // must describe the served compatible file.
-            let mime = mime_from_path(path).or(info.media_type);
+            // compatible_path 可能与源记录格式不同，响应 MIME 必须描述实际返回的兼容文件。
+            let mime = mime_from_path(path).or_else(|| {
+                info.media_type
+                    .as_deref()
+                    .and_then(kabegame_core::image_type::mime_from_format)
+                    .map(str::to_string)
+            });
             let range = headers
                 .get(RANGE)
                 .and_then(|v| v.to_str().ok())

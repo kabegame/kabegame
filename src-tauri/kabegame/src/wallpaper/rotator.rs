@@ -141,8 +141,6 @@ fn load_random_image_for_wallpaper(
         .map(|c| c.name)
         .collect();
 
-    println!("{:?}", pages);
-
     while !pages.is_empty() {
         let idx = random_index(pages.len());
         let page = pages.swap_remove(idx);

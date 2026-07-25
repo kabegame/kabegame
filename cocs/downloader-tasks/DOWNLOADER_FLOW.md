@@ -171,10 +171,10 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 
 下载池 worker 调用统一的 `postprocess_downloaded_image`，不区分 `_bytes` / `_path` 变体。该函数接收 `PostprocessSource`，内部按 source 分发：
 
-1. 推断 MIME（`Bytes` 用 `mime_type_from_bytes`；`Path` 用 `mime_type_from_path`）。
+1. 推断格式键（`Bytes` 用 `mime_type_from_bytes`；`Path` 用 `mime_type_from_path`）。
 2. 计算 hash（同 source 分发）。
 3. 查 `Storage::find_image_by_hash` 做 hash 去重。
-4. 未命中去重时，根据 MIME 计算最终目标路径/文件名，落盘（或 Android MediaStore copy）。
+4. 未命中去重时，根据格式键计算最终目标路径/文件名，落盘（或映射回标准 MIME 后执行 Android MediaStore copy）。
 5. 生成缩略图/预览，写入 `images` 表，广播事件。
 
 `images.plugin_id` 仅表示爬虫插件来源，可为空；畅游来源图片不再把 host 写入 `plugin_id`，而是写入 `surf_record_id`，详情页再通过 Surf 记录解析 host。普通爬虫任务仍写入 `plugin_id`。
@@ -183,8 +183,9 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 
 桌面后处理（`PostprocessSource::Bytes` 或 `Path`）：
 
-- 从 source 推断 MIME，并在函数内计算最终文件名和扩展名
+- 从 source 推断格式键，并在函数内计算最终文件名和扩展名
 - 桌面端若脚本指定了展示名（`custom_display_name`），`Bytes` 与 `Path { relocate_to: Some }` 都按 `custom_display_name + inferred_ext` 生成最终文件名
+- `images.type` 写入格式键，落盘采用该格式的规范后缀；桌面本地导入选择复制到目标目录时，也会在复制前按文件头 infer 并用规范后缀起名
 - 未重复时写入最终文件
 - 生成缩略图或视频预览
 - 写入 `images`，其中 `local_path` 是磁盘路径，`thumbnail_path` 是缩略图路径或回退本地路径

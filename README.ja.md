@@ -1,258 +1,86 @@
 # Kabegame 二次元クローラークライアント
 
-> *Translated by AI. [English](README.md) | [中文](README.zh-CN.md) | 日本語 | [한국어](README.ko.md)*
+> *Translated by AI. [中文](README.md) | [English](README.en-US.md) | 日本語 | [한국어](README.ko.md)*
 
-Tauri ベースの二次元クローラークライアント！画像をクロール、壁紙をクロール・管理・設定・ローテーション。推しの画像たちで毎日癒やされよう～ プラグインで拡張可能、様々な二次元系サイトから簡単に画像を取得できます。
+Tauri ベースの二次元クローラークライアント！壁紙をクロール・管理・設定/ローテーションして、推しの嫁（や旦那）たちに毎日そばにいてもらおう～ プラグインで拡張でき、様々な二次元サイトのリソースを簡単にクロールできます。
 
-> 🌐 **デモページ**：[https://kabegame.com/](https://kabegame.com/)
+> 📖 **完全なドキュメント**：[https://kabegame.com](https://kabegame.com/)
+> 🌐 **オンラインで体験（Demo）**：[https://demo.kabegame.com](https://demo.kabegame.com/)
 
 <div align="center">
   <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
 </div>
 
-## ギャラリースクリーンショット
-
 <table>
   <tr>
     <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-windows-gallery.png" alt="Kabegame Windows スクショ 1" width="300"/><br/>
+      <img src="docs/images/main-screenshot-windows-gallery.png" alt="Kabegame windows 截图 1" width="300"/><br/>
       <small>Windows</small>
     </td>
     <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-windows-preview.png" alt="Kabegame Windows スクショ 2" width="300"/><br/>
+      <img src="docs/images/main-screenshot-windows-preview.png" alt="Kabegame windows 截图 2" width="300"/><br/>
       <small>Windows</small>
     </td>
     <td align="center" rowspan="2" style="vertical-align: top; text-align: right; width: 200px;">
-      <img src="docs/images/main-screenshot-android-gallery.jpg" alt="Kabegame Android スクショ" width="200"><br/>
+      <img src="docs/images/main-screenshot-android-gallery.jpg" alt="Kabegame android 截图" width="200"><br/>
       <small>Android</small>
     </td>
   </tr>
   <tr>
     <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame macOS スクショ" width="300"/><br/>
+      <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame macos 截图" width="300"/><br/>
       <small>macOS</small>
     </td>
     <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-linux.png" alt="Kabegame Linux スクショ" width="300"/><br/>
+      <img src="docs/images/main-screenshot-linux.png" alt="Kabegame linux 截图" width="300"/><br/>
       <small>Linux</small>
     </td>
   </tr>
 </table>
 
-## クローラースクリーンショット
-
-|  |  |
-| --- | --- |
-| <div align="center"><img src="docs/images/crawler/pixiv.png" alt="Pixiv クローラー" width="380"/><br/><small><a href="https://pixiv.net">Pixiv</a>（絵師：<a href="https://www.pixiv.net/users/16365055">somna</a>）</small></div> | <div align="center"><img src="docs/images/crawler/anihonet.png" alt="anihonet クローラー" width="380"/><br/><small><a href="https://anihonetwallpaper.com">anihonet</a>（年間ランキング）</small></div> |
-| <div align="center"><img src="docs/images/crawler/anime-pictures.png" alt="anime-pictures クローラー" width="380"/><br/><small><a href="https://anime-pictures.net">anime-pictures</a>（キーワード：崩壊:スターレイル）</small></div> | <div align="center"><img src="docs/images/crawler/konachan.png" alt="konachan クローラー" width="380"/><br/><small><a href="https://konachan.net">konachan</a>壁紙</small></div> |
-| <div align="center"><img src="docs/images/crawler/2dwallpaper.png" alt="2dwallpaper クローラー" width="380"/><br/><small><a href="https://2dwallpapers.com">2dwallpaper</a>（ゲーム→原神→最多閲覧）</small></div> | <div align="center"><img src="docs/images/crawler/ziworld.png" alt="ziworld クローラー" width="380"/><br/><small><a href="https://t.ziworld.top">ziworld</a>壁紙</small></div> |
-
-<p align="center"><sub>多数サイト対応、プラグインで拡張可能。貢献大歓迎！</sub></p>
-
-[→ クローラープラグインリポジトリ](https://github.com/kabegame/crawler-plugins/tree/main)
-
-## 名前の由来 🐢
-
-**Kabegame** は日本語の「壁亀」（かべがめ）のローマ字。壁紙（かべがみ）と発音が似ている～ 静かな亀がデスクトップで見守ってくれるように、あなたのアニメ壁紙コレクションをそっと守ってくれます。これで毎日癒やされるね。やったぁ～ ✨
-
-> 私のこだわり：オープンソースに取り入れ、オタクだけのためのソフトウェアを作り上げる。
-
-## 機能
-
-- 🔌 **クローラークライアント**：`.kgpg` プラグインで各サイトから壁紙を取得；内蔵プラグインストアで閲覧・インストール・管理；タスク進捗・停止・削除；CLI でプラグイン実行・画像インポートなど
-- 🎨 **壁紙設定（画像/動画）**：アニメ壁紙の収集・管理・ローテーション；指定アルバムから自動でデスクトップ壁紙を切り替え（ランダム/順番）
-- 🖼️ **画像管理（画像/動画）**：ギャラリーブラウズ、アルバム整理、仮想ディスク（Windows はドライブ、macOS/Linux は仮想フォルダ）、ローカル画像・動画・フォルダ・アーカイブや kgpg のドラッグ＆ドロップ
-
-（動画は v3.2.2 時点で mp4 と mov のみ対応）
-
-## インストール
-
-**OS に合わせてパッケージを選んでください。**
-
-**[GitHub Releases（最新版）でダウンロード](https://github.com/kabegame/kabegame/releases/latest)**
-
-| OS | ダウンロード |
-|----|------------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v4.4.0/Kabegame-standard_4.4.0_x64-setup.exe) |
-| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v4.4.0/Kabegame-standard_4.4.0_aarch64.dmg) |
-| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v4.4.0/Kabegame-standard_4.4.0_amd64.deb) |
-
-- **Android プレビュー**：[apk](https://github.com/kabegame/kabegame/releases/download/v4.4.0/Kabegame_4.4.0_android-preview.apk)（同一リリースページ）。
-- **CLI**：アプリには同梱されず、単体で配布。同じリリースページから `kabegame-cli` をダウンロードし、PATH に配置して使用（`kabegame-cli --help`）。
-
-## インストール
-
-### Windows
-
-1. **ダウンロード**：`setup.exe` をダウンロード
-2. **インストーラー実行**：ダブルクリックしてウィザードに従う
-3. これで完了！
-
-> **ヒント**：インストーラーは自動更新対応。再実行でアップグレード可能。
-
-### macOS
-
-> **最低**：macOS **11 (Big Sur)** 以降。
-
-1. **DMG ダウンロード**：`.dmg` をダウンロード
-2. **インストール**：
-   - `.dmg` を開く
-   - `Kabegame.app` をアプリフォルダにドラッグ
-> [!IMPORTANT]
-> ## 修正：「Kabegame.app」が破損しているため開けません
-> アプリフォルダにインストール後、Gatekeeper をバイパスする必要があります（オープンソースで開発者料金を払っていないため）。
->
-> `xattr -d com.apple.quarantine /Applications/Kabegame.app`
-3. **仮想ディスク / FUSE**：
-   - macFUSE が必要：`brew install macfuse`
-   - 初回マウントで権限要求
-### Linux（Debian 系、Ubuntu 等）
-
-> **最低**：**Ubuntu 22.04** / Debian 12 以降（glibc ≥ 2.35）。
-
-**インストール**：
-  ```bash
-  sudo apt install ./Kabegame-standard_<version>_<arch>.deb
-  ```
-  - または `sudo dpkg -i Kabegame-standard_<version>_<arch>.deb`。依存関係エラー時は `sudo apt-get install -f`
-
 ## 主な機能
 
-### 🖼️ ギャラリー＆画像管理
+- 🔌 **クローラークライアント**：`.kgpg` プラグインで各サイトから壁紙をクロール。内蔵のプラグインストアで閲覧/インストール/管理が可能。プラグインは JS/TS で書かれ、V8（deno_core）または WebView バックエンドで動作します。
+- 🎨 **壁紙セッター（画像/動画）**：二次元壁紙を収集・管理・ローテーションし、指定した画集からデスクトップ壁紙を自動で切り替えます。
+- 🖼️ **画像マネージャー**：ギャラリー閲覧、画集の整理、仮想ディスク、ドラッグ＆ドロップでのインポート、フォルダと画集の同期。
+- 🧩 **MCP 整理**：MCP サーバーを開き、外部の AI エージェントにきめ細かな権限のもとで壁紙の整理を任せられます。
 
-ギャラリーは Kabegame の中心。収集した壁紙がここに表示されます。ページネーション、プレビュー、複数選択、重複除去など。ローカルファイルをドラッグでインポート。ダブルクリックでアプリ内プレビュー（ズーム・パン・ナビゲーション）。
+Windows、macOS、Linux、Android に対応（iOS は非対応）。
 
-### 📸 アルバム
+## 興味があるかもしれません
+二次元壁紙やクローラーには興味がないかもしれませんが、本アプリのいくつかの技術的な工夫にはもしかしたら興味を持ってもらえるかもしれません
+- Tauri ベースの Webview クローラー [WebviewHandler](./src-tauri/kabegame-core/src/crawler/webview.rs)
+- 自作の Tauri runtime [tauri-runtime-cef](./src-tauri/tauri-runtime-cef/)
+  Kabegame 向けに深くカスタマイズしているため crate としては公開していませんが、AI に頼んで自分のプロジェクトへ移植できます。
+- 自作のパス折りたたみ式クエリエンジン [PathQL](./src-tauri/pathql-rs/)
+  簡単に紹介すると、Provider DSL と呼ばれるパーサーと、URL パスベースのクエリ構文を開発しました。アプリ内のほとんどの画像クエリはすでに [Provider DSL JSON5 形式](./src-tauri/kabegame-core/src/providers/dsl/) に置き換えられており、これらの JSON が PathQL エンジンのクエリ折りたたみ方法を決定します。たとえば 2026 年 6 月のすべての動画を取得したい場合、クエリはこう書きます:
+    ```url
+    images://hide/media-type/video/filter_comb/date/2026y/06m/filter_comb/sort/by-id/1
+    ```
+  このクエリエンジンに興味があれば issue を立ててください。ドキュメントを充実させます。
+  理論上は crate として公開できますが、まだ探り切れていないエッジケースのバグがおそらく残っているので、AI に頼んで自分のプロジェクトへコピーしてもらうのもありです（GPT-3.0 にはご注意を）。
 
-壁紙をカスタムアルバムで整理。お気に入りを追加、ドラッグで並び替え。アルバムは壁紙ローテーションと仮想ディスクのレイアウトに使えます。
+## ダウンロードとインストール
 
-### 🔌 プラグインシステム
+**[GitHub Releases](https://github.com/kabegame/kabegame/releases/latest)** から各プラットフォーム向けのインストーラーをダウンロードしてください。
 
-Kabegame の強みはプラグインベースのクローラー。`.kgpg` プラグインでアニメ壁紙サイトから画像を取得。Rhai で記述。内蔵プラグインストアでワンクリックインストール、または他開発者のプラグインをインポート、自分で作成も可能。分かるな。
+各プラットフォームのインストール手順、仮想ディスクの依存関係、データディレクトリの説明はドキュメントを参照：**[インストールと初回起動](https://kabegame.com/guide/installation/)**。
 
-### 🎨 壁紙＆ローテーション
+## ドキュメント
 
-ワンクリックでデスクトップ壁紙を設定。ネイティブモード（パフォーマンス）とウィンドウモード（機能追加）。ローテーションでアルバムから自動切り替え（ランダム/順番）、間隔も設定可能。
+完全なドキュメントはすべて **[kabegame.com](https://kabegame.com/)** にあります：
 
-### 📋 クローラータスク管理
+- [ユーザーガイド](https://kabegame.com/guide/installation/) —— インストール、ギャラリー、画集、壁紙、仮想ディスク、MCP など。
+- [プラグイン開発](https://kabegame.com/dev/overview/) —— V8 / WebView クローラープラグインの作成、`.kgpg` 形式、パッケージングと公開。
+- [開発に参加](https://kabegame.com/dev-contrib/building/) —— ソースからのビルド、Android 開発、アーキテクチャと技術スタック、謝辞と組み込み依存関係。
+- [コマンドラインツール](https://kabegame.com/reference/cli/) と [API リファレンス](https://kabegame.com/reference/kabegame-api/)。
 
-全タスクを一括管理。進捗・状態・画像数。詳細表示、実行中停止、完了削除。
-
-### 💾 仮想ディスク
-
-Windows・macOS・Linux でアルバムを仮想ディスク（仮想フォルダ）としてマウント。ファイルマネージャで通常フォルダのように閲覧。
-
-### ⌨️ CLI
-
-Headless CLI でプラグイン実行・画像インポート・アルバム管理。自動化・バッチ処理に最適。`.kgpg` をダブルクリックで CLI で詳細表示。アプリには同梱されず、リリースページから単体でダウンロード。
-
-### その他
-
-内蔵ヘルプページで Kabegame をもっと知れます。
-
-これからもっと機能や改良を行っていく予定です。ぜひご期待を。
-
-## 注意事項
-
-- クロール時は対象サイトの robots.txt と利用規約を遵守してください。
-- 壁紙はデフォルトで `Pictures/Kabegame`、またはアプリデータの `images` フォルダに保存（アプリ内で設定可能）。
-- アンインストール時に「データ削除」を選択するとアプリデータは削除されますが、画像は残ります。
-- 壁紙ローテーションはアプリをバックグラウンド（トレイ）で実行する必要があります。
-
-## アンインストール
-
-### Windows
-設定 → アプリ → インストール済み → Kabegame 検索 → ⋮ → アンインストール
-
-### Linux
-`sudo dpkg -r kabegame`
-
----
-
-## 技術スタック
-
-- **フロント**：Vue 3 + TypeScript + Element Plus + UnoCSS
-- **バック**：Rust (Tauri) + Kotlin (Jetpack)
-- **状態**：Pinia
-- **ルーター**：Vue Router
-- **ビルド**：Vite 5
-- **プラグイン**：Rhai
-
-## 開発
-
-### 前提
-
-- Deno 2.9.0（推奨：ツリー内ソースからビルド — `bash scripts/build-deno.sh` で `target/release/deno` を生成し、`target/release` を PATH の先頭に追加。または移行措置として公式インストールスクリプトで 2.9.0 を導入）
-- Rust 1.70+ (Rust 2021 Edition)
-- [Tauri CLI](https://tauri.app/v2/guides/getting-started/prerequisites)
-
-### 依存関係
-
-```bash
-deno install
-```
-
-FFmpeg は `third/FFmpeg` の Git サブモジュール。`deno task build:ffmpeg` の前に `git submodule update --init --recursive`。
-
-### 開発・ビルド
-
-```bash
-deno task dev -c kabegame              # メインアプリ
-deno task dev -c kabegame --mode local # ローカルモード
-deno task start -c kabegame-cli             # CLI
-deno task b                        # 全ビルド
-deno task check -c kabegame            # チェック
-```
-
-### Android
-
-- Android Studio、JAVA_HOME、ANDROID_HOME、NDK_HOME 必須
-- `deno task dev -c kabegame --mode android`（`--android` から変更）
-- デバッグは Chrome DevTools で `chrome://inspect/#devices`
-
-## プロジェクト構造
-
-```
-.
-├── apps/kabegame/
-├── packages/core/
-├── src-tauri/
-│   ├── kabegame-core/
-│   ├── kabegame/
-│   └── kabegame-cli/
-├── src-crawler-plugins/
-├── docs/
-└── ...
-```
-
-![visitor badge](https://visitor-badge.laobi.icu/badge?page_id=kabegame.readme.ja)
-
-## プラグイン開発
-
-- [プラグイン開発ガイド](docs/README_PLUGIN_DEV.md)
-- [プラグイン形式](docs/PLUGIN_FORMAT.md)
-- [Rhai API](docs/RHAI_API.md)
+クローラープラグインリポジトリ：**[kabegame/crawler-plugins](https://github.com/kabegame/crawler-plugins)**（プラグインの貢献を歓迎します！）
 
 ## ライセンス
 
-GPL v3. [LICENSE](./LICENSE) を参照。
+ソースコードは [GPL v3](./LICENSE) ライセンスの下で提供されています。
 
-## 謝辞
+## 名前の由来 🐢
 
-本プロジェクトは以下のオープンソースプロジェクトに基づいています：Tauri、Vue、Vite、TypeScript、Element Plus、Pinia、Rhai、FFmpeg 等。感謝！
-
-### ベンダー込み & パッチ適用済み（`third/`）
-
-これらの上流プロジェクトは `third/` に Git サブモジュールとしてベンダー込みされ、`third-patches/` の番号付きパッチシリーズで管理されています。
-
-- [**CEF (Chromium Embedded Framework)**](https://github.com/chromiumembedded/cef) - デスクトップ WebView バックエンドとして使用する Chromium ブラウザエンジン（branch 7827）
-- [**cef-rs**](https://github.com/tauri-apps/cef-rs) - CEF の Rust バインディング（tauri-apps fork、フラットサブプロセスパス対応パッチ済み）
-- [**deno**](https://github.com/denoland/deno) - V8 ベースの JS ランタイム；`deno_core` クレートがクローラープラグイン V8 バックエンドと自己ビルド Deno CLI を駆動
-- [**rusty_v8**](https://github.com/denoland/rusty_v8) - V8 の Rust バインディング；Android aarch64 向けにセルフビルド
-- [**FFmpeg**](https://github.com/FFmpeg/FFmpeg) - デスクトップ動画取り込み（プレビュー圧縮・寸法検出）向けマルチメディアフレームワーク
-- [**x264**](https://code.videolan.org/videolan/x264) - H.264 エンコーダ；FFmpeg ビルドで静的リンク
-- [**rsmpeg**](https://github.com/larksuite/rsmpeg) - FFmpeg libav\* の安全な Rust ラッパー
-- [**rusty_ffmpeg**](https://github.com/CCExtractor/rusty_ffmpeg) - rsmpeg が使用する FFmpeg bindgen ヘルパー
-- [**tauri**](https://github.com/tauri-apps/tauri) - クロスプラットフォームデスクトップフレームワーク；`TAURI_ANDROID_PACKAGE`・トップレベル `bins` 設定などの Kabegame 固有パッチを適用した fork
-
-これらのプロジェクトが役に立ったら ⭐ Star をつけてみてください！
+**Kabegame** は日本語の「壁亀」（かべがめ）のローマ字表記で、「壁紙」（かべがみ）と発音が近いんです～ まるで静かな亀さんがあなたのデスクトップに乗って、二次元壁紙コレクションをそっと見守っているかのよう。オープンソースを大切に、二次元好きのための、二次元好き自身のソフトウェアを作ろう。

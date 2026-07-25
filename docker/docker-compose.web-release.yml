@@ -1,20 +1,35 @@
 # 本地构建 kabegame web 二进制，产物输出到 dist-web/kabegame
 #
 # 用法：
-#   docker compose -f docker/docker-compose.web-release.yml run --rm build
+#   docker compose -f docker/docker-compose.web-release.yml build          # 首次 / 依赖或 third 子模块变更后
+#   docker compose -f docker/docker-compose.web-release.yml run --rm build # 日常：只跑最后一步构建
 #
-# 源码树 bind-mount 到 /src（不烘焙进镜像）；构建产物落 CARGO_TARGET_DIR=/src/target-web
-# （即宿主机仓库根下的 target-web/，与 target/、target-22/ 隔离，跨 run 增量复用）。
-# 首次 run 会自编 deno（build-deno.sh，纯 bash，almalinux8 glibc 2.28 跑不了官方二进制），
-# 之后增量近似 no-op。
+# 前置（宿主）：git submodule update --init third/deno third/FFmpeg third/x264
+#   且 third/deno 已应用补丁（deno task patch deno）。
+#
+# 分工：
+#   镜像构建（web-release.Dockerfile，多阶段）：自编 deno（0004 后缀补丁）、x264+FFmpeg
+#     静态库（-web 后缀）、`deno install --frozen` 出 node_modules-web 种子——全部烘进镜像层，
+#     清单/子模块不变时全缓存。deno.lock 变更后需重新 `build`（运行时 entrypoint 会告警）。
+#   运行（本文件 command）：只剩 `deno task b -c kabegame --mode web`。镜像 entrypoint
+#     （web-release-entrypoint.sh）先把种子 rsync 进 /src——FFmpeg/x264 → third/*-build-web/
+#     install/、node_modules-web 按清单——再执行 command。
+#
+# 编译隔离（镜像 ENV 注入，与宿主/其它 glibc 环境互不污染）：
+#   CARGO_TARGET_DIR=/src/target-web    （宿主 target-web/，跨 run 增量复用）
+#   DENO_NODE_MODULES_SUFFIX=-web       （node_modules → node_modules-web，种子来自镜像）
+#   KB_BUILD_SUFFIX=-web                （FFmpeg/x264 产物目录带 -web 后缀）
 #
 # 产物路径（宿主机）：dist-web/kabegame
-# 部署到服务器：
-#   rsync -avz dist-web/kabegame cmtheit.com:/home/cmtheit/kabegame/kabegame
+# 部署到服务器：bash scripts/deploy-web.sh（demo.kabegame.com，见脚本头注）
 
 services:
   build:
     image: ${KABEGAME_WEB_BUILD_IMAGE:-kabegame-web-release:latest}
+    # 部署目标（cmtheit.com）是 x86_64——必须钉死平台，否则在 Apple Silicon 上
+    # 默认起 arm64 容器，编出 aarch64 二进制传上去跑不了。
+    # x86_64 Linux 宿主上此项为 no-op；Mac 上走 Rosetta/QEMU 模拟（慢但产物正确）。
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: docker/web-release.Dockerfile
@@ -22,21 +37,15 @@ services:
     stdin_open: true
     tty: false
     volumes:
-      # 整个仓库树 bind-mount 到 /src（含 third/ 子模块，需在宿主先 submodule update）。
-      # node_modules 隔离由自编 deno 的 0004 补丁承担（Dockerfile 里
-      # DENO_NODE_MODULES_SUFFIX=-web）：deno 在真实 IO 边界把 node_modules 重定向到
-      # node_modules-web（进程内 bind-mount），无需 volume 覆盖；node_modules-web 由
-      # 容器内带该变量的 `deno install` 生成（嵌套目录物理带后缀，不能从宿主树复制）。
+      # 整个仓库树 bind-mount 到 /src（含 third/ 子模块）。镜像内预制产物由 entrypoint
+      # 种回该树的 gitignored 路径（third/*-build-web/、node_modules-web/）。
       - ..:/src
       - ../dist-web:/dist
     command:
       - bash
       - -lc
       - >-
-        bash scripts/build-deno.sh
-        && deno install --frozen
-        && bash ./scripts/build-ffmpeg.sh
-        && deno task b -c kabegame --mode web
+        deno task b -c kabegame --mode web
         && mkdir -p /dist
         && cp target-web/release/kabegame /dist/kabegame
         && echo "✓ 产物已写入 /dist/kabegame"

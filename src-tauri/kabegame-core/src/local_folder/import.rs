@@ -81,9 +81,9 @@ pub async fn import_local_file(
     let media_type = mime_type_from_path(path).or_else(|| {
         Some(
             if is_video {
-                crate::image_type::default_video_mime()
+                crate::image_type::default_video_format()
             } else {
-                crate::image_type::default_image_mime()
+                crate::image_type::default_image_format()
             }
             .to_string(),
         )

@@ -59,7 +59,6 @@ export interface AppSettings {
   albumDriveEnabled: boolean;
   albumDriveMountPoint: string;
   albumDriveDriverInstalled: boolean;
-  autoOpenCrawlerWebview: boolean;
   /** 导入插件推荐运行配置时是否默认启用定时（默认 true） */
   importRecommendedScheduleEnabled: boolean;
   /** 界面语言（持久化为 canonical 语种码；缺失或非法时由前端解析链写回） */

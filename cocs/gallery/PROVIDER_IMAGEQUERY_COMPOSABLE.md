@@ -79,6 +79,8 @@
 
 画廊根级另有 `media-type/image`、`media-type/video`（`MainMediaTypeGroupProvider`）；虚拟盘中文根目录在 `RootProvider` 中为「按种类」→「图片」/「视频」（`MediaTypeGroupProvider`）。
 
+`images.type` 现存格式键，因此格式细分值使用规范后缀（如 `jpg` / `mov` / `mkv`），不再显示旧标准 MIME 的 `jpeg` / `quicktime` / `x-matroska` 子类型。
+
 ## desc 子目录统一规则
 
 以前靠硬编码判断“是否 all_recent / wallpaper_set asc”，现在统一为结构化判断：

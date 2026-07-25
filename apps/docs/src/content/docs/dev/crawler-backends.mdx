@@ -1,0 +1,125 @@
+---
+title: 爬虫后端选择
+description: 了解 V8 与 WebView 两种爬虫后端的差异，以及如何为你的插件做正确选型。
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+Kabegame 的 v3 爬虫插件通过 `package.json` 的 `kbBackend` 显式声明运行后端。当前只有两个后端：**V8** 与 **WebView**。作为插件作者，你需要知道它们各自的能力边界，才能判断目标站点该写哪个脚本、以及能否在安卓上跑。
+
+:::caution[Rhai 已移除]
+早期还有第三个后端 Rhai（`crawl.rhai`）。**它自 <Badge text="4.3.0" variant="note" /> 起已停止支持**：`kbBackend: "rhai"` 会在加载时报「Rhai 后端已停止支持，请更新该插件」。合法值只有 `v8` / `webview`。
+:::
+
+## 后端概览
+
+| 后端 | 入口 | 运行环境 | 桌面 | 安卓 |
+|---|---|---|---|---|
+| **V8** | `export async function crawl(common, custom)` | 嵌入式 JS 引擎 + 宿主 HTTP / 下载 API，无 DOM | ✅ | ✅ |
+| **WebView** | 顶层脚本，每页重跑 | 真实浏览器上下文（隐藏窗口） | ✅ | ❌ |
+
+脚本放在 `.kgpg` 包内，由 `package.json` 的 `main` 与 `kbBackend` 指定。详见 [插件格式](/dev/format/)。
+
+:::note
+v3 插件是单后端模型：`main` 指向哪个脚本，运行时就装载哪个。两个后端的宿主桥都叫 `Kabegame`，但**接口面并不相同**——不要假设 V8 的方法在 WebView 下也存在（对照表见下）。
+:::
+
+## 何时用 V8 后端
+
+V8 是默认首选。选它的场景：
+
+- 目标站有清晰的 REST / JSON 接口，或列表页是可解析的 HTML。
+- 需要自包含的爬取逻辑（签名、分页、数据整理用 JS 更合适），但**不需要** DOM 渲染、浏览器 Cookie 容器或页面执行环境。
+- **你希望插件在安卓上也能工作** —— V8 是唯一能在安卓运行的后端。
+
+V8 脚本导出 `async function crawl(common, custom)`。配置从 `custom` 读；宿主能力通过全局 `Kabegame.*` 提供（`Kabegame.to`、`downloadImage`、`currentDocument` 等）。运行时还提供常用 Web 平台全局（`URL`、`fetch`、`crypto.subtle`、`DOMParser` 等）。完整说明见 [V8 脚本](/dev/v8-api/)。
+
+## 何时用 WebView 后端
+
+把爬取任务交给真实浏览器环境的场景：
+
+- 目标站是 SPA，数据靠 JS 渲染进 DOM，纯 HTTP 拿不到。
+- 有 Cloudflare JS 挑战、浏览器指纹检测等反爬机制。
+- 需要复用用户在爬虫窗口里登录留下的 Cookie / Session。
+- 依赖 `fetch` / `XMLHttpRequest` 在浏览器上下文里的同源优势。
+
+WebView 后端会启动一个隐藏的爬虫窗口执行你的脚本。**这是桌面专属能力**，且只在确实需要浏览器环境时使用。入口不是 `crawl()` 函数，而是一段每次页面加载都重跑的顶层脚本；配置从 `Kabegame.vars` 读。完整说明见 [WebView 脚本](/dev/webview-api/)。
+
+## 两个后端的 `Kabegame.*` 差异
+
+两个后端的宿主桥同名 `Kabegame`，但能力面不同。V8 的类型声明在 `@kabegame/types`，只覆盖 V8 的完整 API；WebView 的桥是另一套。
+
+| 能力 | V8 | WebView |
+|---|---|---|
+| 入口 | `export async function crawl(common, custom)` | 顶层脚本，每页重跑 |
+| 读表单配置 | `crawl` 的 `custom` 参数 | `Kabegame.vars`（frozen 对象） |
+| 导航 | `to(url)` 宿主抓取式 | `to(payload, { pageLabel, pageState })` 真实浏览器导航 + page_stack |
+| `back()` | `back()` | `back(count?)` |
+| 读当前页 | `currentUrl` / `currentHtml` / `currentDocument` / `currentHeaders` | 用浏览器原生 `location` / `document` / `fetch` |
+| 下载 | `downloadImage(url, opts?)` | `downloadImage(url, opts?)` |
+| 进度 / 日志 | `addProgress` / `warn` | `addProgress` / `warn` / `log(msg, level?)` |
+| 请求头 | `setHeader` / `delHeader` | ❌（由真实浏览器会话决定） |
+| Cookie 注入 | `requireCookie(host?)` <Badge text="4.4.0" variant="note" /> | ❌（靠真实登录态自动带 Cookie） |
+| 私有持久数据 | `pluginData` / `setPluginData` | ❌ |
+| 跨页状态 | 不需要（`crawl` 一次跑完） | `state` / `updateState` / `pageState` / `updatePageState` |
+| metadata 行 | `createImageMetadata` | ❌（随 `downloadImage(url, { metadata })` 传） |
+| DOM 辅助 | ❌（用 `DOMParser`） | `$` / `$$` / `waitForDom` / `waitForSelector` |
+| 生命周期 | `crawl` 返回 / 抛异常即结束 | `exit()` / `error()` / `requestShowWebview()` / `clearData()` |
+| 私有虚拟文件系统 `fs` | 完整 `deno_fs`（含同步方法） | 仅异步子集 |
+
+逐方法签名见 [Kabegame API 字典](/reference/kabegame-api/)。
+
+## Android 限制
+
+**WebView 后端在安卓构建里不可用**，相关代码被条件编译剔除（爬虫窗口创建、WebView handler、crawler-capability 都在 `#[cfg(not(target_os = "android"))]` 里，或在生成 `tauri.conf.json` 时排除）。
+
+**V8 后端在安卓上可用** —— 运行时使用仓库自建的 aarch64 v8 产物。因此插件要覆盖安卓用户，**必须用 V8 后端**。
+
+更多安卓侧的使用差异见 [Android 指南](/guide/android/)。
+
+## Cookie 与登录态
+
+两个后端处理登录态的方式不同：
+
+- **WebView 后端**：使用浏览器原生 Cookie Store。用户在爬虫窗口里登录后，Cookie 持久化，下次任务自动携带。适合需要长期登录态的站点。
+- **V8 后端**：没有浏览器 Cookie 容器。有两种做法：
+  1. 自行 `Kabegame.setHeader("Cookie", ...)`。
+  2. 用 `Kabegame.requireCookie(host?)` <Badge text="4.4.0" variant="note" /> 让宿主把用户在**畅游**里登录该站留下的 cookie 注入到本任务的请求头。cookie 明文不会暴露给插件，返回值只表示注入是否成功。
+
+如果目标站要求登录且验证流程复杂（滑块、短信、JS 挑战），WebView 几乎是唯一选择。
+
+## 性能与资源
+
+| 维度 | V8 | WebView |
+|---|---|---|
+| 启动开销 | 低 | 需创建隐藏窗口、加载目标页 |
+| 内存占用 | 中 | 一个完整的 WebView 进程 |
+| 渲染 JS | 执行脚本但无 DOM | 完整浏览器渲染 |
+| 适合场景 | HTTP / API 采集、签名、数据整理；安卓 | 少量、必需浏览器上下文的站点 |
+
+:::tip
+爬虫窗口默认隐藏。想观察脚本运行（调试用），可在脚本里调用 `Kabegame.requestShowWebview()`，或打开设置「启动爬虫任务时自动显示爬虫窗口」。
+:::
+
+## 速查：我该选哪个
+
+- 能写成 HTTP 请求 + 解析，或需要安卓可用 → **V8**
+- 强 JS 渲染 / 反爬 / 需浏览器登录态 → **WebView（仅桌面）**
+
+## 后端声明
+
+```jsonc
+{
+  "main": "dist/main.js",
+  "kbBackend": "v8"       // 或 "webview"（main 一般为 crawl.js）
+}
+```
+
+## 延伸阅读
+
+- [插件开发概览](/dev/overview/)
+- [V8 脚本](/dev/v8-api/)
+- [WebView 脚本](/dev/webview-api/)
+- [Kabegame API 字典](/reference/kabegame-api/)
+- [插件格式](/dev/format/)
+- [Android 指南](/guide/android/)

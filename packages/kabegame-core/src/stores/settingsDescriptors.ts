@@ -184,7 +184,6 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
       tauri("autoLaunch", "get_auto_launch", "set_auto_launch", "enabled"),
       tauri("imageClickAction", "get_image_click_action", "set_image_click_action", "action"),
       tauri("defaultDownloadDir", "get_default_download_dir", "set_default_download_dir", "dir"),
-      tauri("autoOpenCrawlerWebview", "get_auto_open_crawler_webview", "set_auto_open_crawler_webview", "enabled"),
     );
   }
 
@@ -256,7 +255,6 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
       readonly("albumDriveEnabled", false),
       readonly("albumDriveMountPoint", ""),
       readonly("albumDriveDriverInstalled", false),
-      readonly("autoOpenCrawlerWebview", false),
       readonly("defaultDownloadDir", null),
       readonly("autoLaunch", false),
     ];

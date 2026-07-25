@@ -567,7 +567,7 @@ function trackAlbumChildEnter(child: Album) {
 
 const openChildAlbum = (child: Album) => {
   trackAlbumChildEnter(child);
-  router.push({ name: "AlbumDetail", params: { id: child.id } });
+  router.push({ name: "AlbumDetail", params: { albumId: child.id } });
 };
 
 const openChildAlbumContextMenu = (event: MouseEvent, child: Album) => {

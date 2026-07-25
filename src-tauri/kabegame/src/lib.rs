@@ -573,8 +573,6 @@ pub(crate) fn configure_app(
             set_language,
             get_auto_launch,
             set_auto_launch,
-            get_auto_open_crawler_webview,
-            set_auto_open_crawler_webview,
             get_import_recommended_schedule_enabled,
             set_import_recommended_schedule_enabled,
             get_max_concurrent_downloads,
@@ -686,8 +684,6 @@ pub(crate) fn configure_app(
             cancel_download,
             #[cfg(not(target_os = "android"))]
             apply_update_and_restart,
-            #[cfg(not(target_os = "android"))]
-            open_dev_webview,
             #[cfg(not(target_os = "android"))]
             crawl_fs_open,
             #[cfg(not(target_os = "android"))]

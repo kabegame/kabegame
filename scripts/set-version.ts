@@ -8,7 +8,7 @@
  *   1. 设置新版本并同步: deno task set-version 3.0.1
  *   2. 从 Cargo.toml 同步: deno task set-version --sync
  *
- * 会同步 README.md / README.zh-CN.md / README.ja.md / README.ko.md 中 GitHub Release 直链里的版本号。
+ * 会同步 README.md / README.en-US.md / README.ja.md / README.ko.md 中 GitHub Release 直链里的版本号。
  */
 
 import fs from "fs";
@@ -110,7 +110,7 @@ function updateMainEnvVersion(newVersion: string): void {
 
 const README_RELEASE_FILES = [
   "README.md",
-  "README.zh-CN.md",
+  "README.en-US.md",
   "README.ja.md",
   "README.ko.md",
 ] as const;

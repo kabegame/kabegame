@@ -1,0 +1,208 @@
+---
+title: V8 脚本
+description: 用 V8 后端编写 Kabegame 爬虫插件：crawl 入口、Kabegame.* 宿主能力、运行时全局与分页元数据。
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+本页面向**插件作者**，讲解怎样用 V8 后端编写爬虫脚本：入口签名、配置怎么传入、宿主能力 `Kabegame.*`、运行时提供的 Web 平台全局，以及下载、分页与元数据。全部方法的完整签名见 [Kabegame API 字典](/reference/kabegame-api/)。
+
+打包工具库 `@kabegame/plugin-sdk` 是**另一回事**——它是打包进插件产物的纯 JS 工具函数（`resolveUrl`、`sleep`、`md5` 等），与本页的运行时注入能力分开，见 [plugin-sdk 工具库](/dev/plugin-sdk/)。
+
+插件包结构与打包见 [插件格式](/dev/format/)；两个后端的整体对比见 [爬虫后端选择](/dev/crawler-backends/)。
+
+---
+
+## 入口：`crawl(common, custom)`
+
+V8 插件必须导出一个 `crawl` 函数。它可以是同步的，也可以返回 Promise；副作用全部通过 `Kabegame.*` 产生。
+
+```ts
+export async function crawl(common, custom) {
+  const baseUrl = common.base_url ?? "https://example.com";
+  // custom 是用户在采集对话框填的 kbConfig 值
+  const page = custom.start ?? 1;
+  await Kabegame.to(`${baseUrl}/posts?page=${page}`);
+  // ...
+}
+```
+
+### `common` —— 宿主提供的公共配置
+
+当前只有一个键：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `common.base_url` | `string \| null` | 来自 `package.json` 的 `kbBaseUrl`（trim 后；未定义为 `null`）。 |
+
+:::caution
+键名是 **`base_url`（snake_case）**，不是 `baseUrl`。始终保留一个 fallback，因为它可能是 `null`：`const baseUrl = common.base_url ?? "https://…";`
+:::
+
+### `custom` —— 用户填的表单值
+
+`custom` 是 `kbConfig` 所有变量的合并结果（默认值叠加用户输入），形如 `{ [key]: value }`。每个值的类型对应其 `kbConfig` 声明（`int`/`float` → 数字，`string` → 字符串，`boolean` → 布尔，`options` → 选中项的 `variable`，`list` → 字符串数组，`checkbox` → `{ variable: bool }` 对象……）。变量类型详见 [插件清单字段 · kbConfig](/reference/plugin-schema/#kbconfig-变量)。
+
+```ts
+export async function crawl(_common, custom) {
+  // 不需要 base_url 时用 _common 忽略第一参
+  const mode = custom.crawl_mode;          // options → "all" | "tags" | ...
+  const tags = custom.mode_tag_value ?? []; // list → string[]
+  const includeR18 = custom.r18 === true;   // boolean
+}
+```
+
+---
+
+## 运行时全局
+
+除了 `Kabegame`，V8 运行时还提供一批标准 **Web 平台全局**，直接使用即可，无需 import：
+
+- `URL` / `URLSearchParams`
+- `TextEncoder` / `TextDecoder`
+- `atob` / `btoa`
+- `crypto` / `crypto.subtle`
+- `fetch` / `Request` / `Response` / `Headers`
+- `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
+- `DOMParser`（把 HTML 字符串解析成 DOM，用于选择器查询）
+- `console.*`
+
+:::note
+V8 后端**没有** DOM、`window`、`document`、`localStorage`。要查询页面结构，用 `Kabegame.currentDocument()`（宿主抓取的 HTML 解析成 `Document`）或自己用 `DOMParser`。这些是 WebView 后端才有的浏览器全局。
+:::
+
+### 用 `fetch` 请求 JSON
+
+旧的 `@kabegame/plugin-sdk/host` 与 `fetchJson` 已移除。请求 JSON 用标准 `fetch`：
+
+```ts
+const data = await (await fetch(url)).json();
+```
+
+`fetch` 会合并当前任务通过 `Kabegame.setHeader()` 设置的请求头，但**不会**按当前页面自动解析相对 URL。需要相对路径时显式写：
+
+```ts
+const abs = new URL(relative, await Kabegame.currentUrl()).href;
+```
+
+---
+
+## `Kabegame.*` 宿主能力
+
+宿主对象 `Kabegame` 在每个 V8 插件里全局可用（不从 SDK 导入）。下面按用途分组，完整签名与返回值见 [Kabegame API 字典](/reference/kabegame-api/)。
+
+### 页面栈与导航
+
+运行时维护一个页面栈：
+
+- `await Kabegame.to(url)` — 访问一个页面并推入栈，返回最终 URL（相对 URL 相对当前页解析）。
+- `await Kabegame.back()` — 弹出栈顶页面。
+- `await Kabegame.currentUrl()` / `currentHtml()` / `currentDocument()` / `currentHeaders()` — 读栈顶页面的 URL / 原始 HTML / 解析后的 `Document` / 响应头。
+
+```ts
+await Kabegame.to(postUrl);
+const doc = await Kabegame.currentDocument();
+const href = doc?.querySelector(".icon-download")?.getAttribute("href");
+if (href) {
+  await Kabegame.downloadImage(new URL(href, await Kabegame.currentUrl()).href);
+}
+await Kabegame.back();
+```
+
+### 下载图片 / 视频
+
+```ts
+await Kabegame.downloadImage(imageUrl, {
+  name: "artist / character",   // 展示名 / 文件名
+  url: postUrl,                 // 来源 URL
+  metadata: { schema: 1, title: "Post title", tags: ["wallpaper"] },
+});
+```
+
+- `downloadImage` 把资源加入下载队列。
+- `opts.metadata` 是任意 JSON，写入 `image_metadata` 行，用于详情页展示（配合 `templates/description.ejs`）。存储时会由应用自动盖上**运行插件的版本号**；请在 metadata 里自带一个 `schema` 标记供迁移脚本判断。
+- 多张图共享一行 metadata，或需要在解析出图片 URL 前先写 metadata 时，用 `createImageMetadata` 拿到 `metadata_id` 再传给 `downloadImage(url, { metadata_id })`。
+
+### 请求头与 Cookie
+
+```ts
+Kabegame.setHeader("Cookie", "sitelang=zh-cn");   // 影响后续 to() 与 fetch
+Kabegame.delHeader("Cookie");
+
+// 让宿主把用户在「畅游」里登录该站的 cookie 注入本任务请求头：
+if (!Kabegame.requireCookie()) {                  // 省略 host 时从 base_url 推断
+  Kabegame.warn("请先在畅游里登录该站点");
+}
+```
+
+`Kabegame.requireCookie(host?)` <Badge text="4.4.0" variant="note" /> 不会把 cookie 明文暴露给插件，返回值只表示注入是否成功。需要这个能力时把 `engines.kabegame` 抬到 `>=4.4.0`。配合 [`kbLabels`](/reference/plugin-schema/#kblabels) 的 `auth.needCookie` 标签向用户提示。
+
+### 进度与日志
+
+```ts
+Kabegame.addProgress(100 / imageUrls.length);  // 累加进度，宿主会 clamp
+Kabegame.warn("排行榜实际获取数量少于请求上限");  // warn 级任务日志
+console.log("普通日志");                         // 走 console
+```
+
+### 插件私有数据
+
+`Kabegame.pluginData()` / `setPluginData(map)` 读写按插件 ID 隔离的持久 JSON 对象，适合缓存游标、token、TTL 状态等：
+
+```ts
+const data = Kabegame.pluginData<{ cursor?: string }>();
+if (data.cursor) await Kabegame.to(data.cursor);
+// ...
+Kabegame.setPluginData({ cursor: nextPageUrl });
+```
+
+### 私有虚拟文件系统 `Kabegame.fs`
+
+每个 V8 爬虫任务有一个私有虚拟文件系统，暴露完整的 `deno_fs` 接口（含同步方法）。路径从 `Kabegame.fs.getRoot()`（V8 下同步返回）开始，句柄随任务结束失效，**不要持久化虚拟路径**。
+
+```ts
+const root = Kabegame.fs.getRoot();
+await Kabegame.fs.writeTextFile(`${root}/data/cursor.txt`, "abc");
+```
+
+---
+
+## 提前退出与取消
+
+- `crawl` 正常返回即结束；抛异常则任务失败并记录错误。
+- 需要提前结束就直接 `return`。
+- 任务被用户取消后，下一次 `Kabegame.*` 调用会抛错；用 `await` 让异常自然向外传播即可干净中止。
+
+---
+
+## 元数据迁移
+
+插件升级后，历史图片的 `metadata` 结构可能变化。提供 `metadata_migrations/migrate.js` 并在 `package.json` 声明 `kbMetadataMigration`，即可把旧行就地迁移到新结构。
+
+契约：一个 ES module，`export function migrate(metadata)`（或 `export default`），入参与返回值都是 **JSON 字符串**，运行在**裸 V8**（无 import、无 `Kabegame.*`、无宿主 API，只有原生 `JSON`/`String`/`RegExp` 等）。脚本应按 metadata 里的 `schema` 自检、**幂等、一步到位**。
+
+```js
+// metadata_migrations/migrate.js
+export function migrate(json) {
+  const m = JSON.parse(json);
+  if (m.schema === 1) return json;          // 已是最新结构，原样返回
+  // ...把旧结构升级到 schema 1...
+  return JSON.stringify({ schema: 1, title: m.title });
+}
+```
+
+迁移后的行按 `(plugin_id, version, content_hash)` 去重；迁移成功会发出作用域为该插件的 `metadata-migrate` 变更事件刷新详情缓存。
+
+:::note
+旧的 `metadata_migrations/v{N}.rhai` 逐版本迁移与数组键 `kbMetadataMigrations` 已废弃、不再解析。用单一 `migrate.js` + `kbMetadataMigration`。
+:::
+
+---
+
+## 延伸阅读
+
+- [Kabegame API 字典](/reference/kabegame-api/) —— `Kabegame.*` 每个方法的完整签名（V8 / WebView 对照）。
+- [plugin-sdk 工具库](/dev/plugin-sdk/) —— 打包进插件的纯工具函数。
+- [WebView 脚本](/dev/webview-api/) —— 真实浏览器后端的写法。
+- [插件格式](/dev/format/) —— `package.json` 与 `.kgpg` 结构。
+- [插件清单字段](/reference/plugin-schema/) —— `kbConfig` / `kbLabels` 全字段。

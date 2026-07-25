@@ -114,7 +114,13 @@ pub fn build_safe_filename(hint_filename: &str, fallback_ext: &str) -> String {
     let raw_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
     let raw_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-    let ext = normalize_ext(raw_ext, fallback_ext);
+    let ext = if crate::image_type::is_supported_media_ext(raw_ext)
+        && !fallback_ext.trim().trim_start_matches('.').is_empty()
+    {
+        normalize_ext(fallback_ext, crate::image_type::default_image_extension())
+    } else {
+        normalize_ext(raw_ext, fallback_ext)
+    };
     let stem = sanitize_stem_for_filename(raw_stem);
 
     let reserve = 1 + ext.len();
@@ -152,6 +158,15 @@ fn build_safe_custom_filename(hint_name: &str, ext: Option<&str>) -> String {
             lower
                 .strip_suffix(&suffix)
                 .map(|stem| &hint_name[..stem.len()])
+        })
+        .or_else(|| {
+            let path = Path::new(&hint_name);
+            let hint_ext = path.extension().and_then(|value| value.to_str())?;
+            if crate::image_type::is_supported_media_ext(hint_ext) {
+                path.file_stem().and_then(|value| value.to_str())
+            } else {
+                None
+            }
         })
         .unwrap_or(hint_name.as_str());
     let stem = sanitize_stem_for_filename(raw_stem);
@@ -289,7 +304,10 @@ pub fn compute_unique_download_path_with_name(
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_unique_download_path, compute_unique_download_path_with_name};
+    use super::{
+        build_safe_custom_filename, build_safe_filename, compute_unique_download_path,
+        compute_unique_download_path_with_name,
+    };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
     use url::Url;
@@ -410,6 +428,19 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn inferred_extension_replaces_existing_media_extension() {
+        assert_eq!(build_safe_filename("foo.jpg", "webp"), "foo.webp");
+        assert_eq!(
+            build_safe_custom_filename("foo.jpg", Some("webp")),
+            "foo.webp"
+        );
+        assert_eq!(
+            build_safe_custom_filename("Some.Page", Some("webp")),
+            "Some.Page.webp"
+        );
     }
 }
 

@@ -1,8 +1,8 @@
-/** 与后端 `images.type` / API `type` 一致：具体 MIME；视频为 `video` 或 `video/*` */
+/** 与后端 `images.type` / API `type` 一致：格式键（如 `image/jpg`、`video/mp4`）；兼容历史 `video`。 */
 
 export const DEFAULT_IMAGE_MIME = "image/jpeg";
 
-/** 是否为视频类（`video` 或 `video/*`，大小写不敏感） */
+/** 是否为视频类（格式键以 `video/` 开头，同时兼容历史 `video`；大小写不敏感） */
 export function isVideoMediaType(t: string | undefined): boolean {
   if (t == null) return false;
   const s = String(t).trim().toLowerCase();

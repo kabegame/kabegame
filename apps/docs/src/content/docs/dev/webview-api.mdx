@@ -1,0 +1,190 @@
+---
+title: WebView 脚本
+description: 用 WebView 后端编写 Kabegame 爬虫插件：顶层重跑模型、Kabegame.vars、真实导航与跨页状态、DOM 辅助与安全边界。
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+WebView 后端在一个隐藏的**真实浏览器窗口**里运行你的脚本。适合 SPA、强反爬、需要浏览器登录态的站点。**这是桌面专属能力，安卓不可用。** 什么时候该选它见 [爬虫后端选择](/dev/crawler-backends/)。
+
+本页讲 WebView 脚本的运行模型与桥接 API。它与 [V8 脚本](/dev/v8-api/) 差异很大——虽然桥对象同样叫 `Kabegame`，但**不是同一套接口**。
+
+---
+
+## 运行模型：顶层脚本，每页重跑
+
+WebView 脚本**不导出 `crawl` 函数**。它是一段顶层脚本，在**每次页面加载**（含 `to()` / `back()` 触发的导航）时，于 document-start 自动从头执行一次。
+
+这意味着：
+
+- **上一页的 JS 变量全部丢失** —— 每次导航都是全新的浏览器上下文。
+- 想跨页面保留数据，必须写回宿主状态（`Kabegame.updateState` / `updatePageState`），或用 `Kabegame.fs`。
+- 惯用写法：定义 `async function main()`，用 `Kabegame.pageLabel()` 判断当前处于哪个阶段并分派，文件末尾 `await main()`。
+
+```js
+// crawl.js
+async function main() {
+  await Kabegame.waitForDom();
+  const label = await Kabegame.pageLabel();   // 初始为 "initial"
+  if (label === "initial") {
+    await handleInitial();
+  } else if (label === "list") {
+    await handleList();
+  }
+}
+main().catch((e) => Kabegame.error(String(e)));
+```
+
+:::note
+`main` 名字不是约定，任意即可——关键是**顶层直接执行**。`Kabegame` 不挂在 `window` 上（构造后即从全局删除内部句柄以防站点探测），直接引用 `Kabegame.*` 就行。脚本只在**顶层帧**运行，iframe 中会直接跳过。
+:::
+
+---
+
+## 读配置：`Kabegame.vars`
+
+用户在采集对话框填的 `kbConfig` 值，在建窗时以 JSON 字面量烘焙进脚本，作为**同步只读**属性 `Kabegame.vars` 暴露（不是函数）：
+
+```js
+const mode = Kabegame.vars.crawl_mode;      // options
+const maxItems = Kabegame.vars.max_items;    // int
+const wantVideo = Kabegame.vars.download_video === true;
+```
+
+`Kabegame.vars` 是 frozen 对象，键就是 `kbConfig` 里的 `key`。变量类型见 [插件清单字段 · kbConfig](/reference/plugin-schema/#kbconfig-变量)。
+
+---
+
+## 导航：真实浏览器跳转 + page_stack
+
+`Kabegame.to()` 触发**真实浏览器导航**（整个窗口跳到新页面），并把目标压入任务的 page_stack。因为导航后上下文销毁，通常在导航前把要带到下一页的信息一起写入。
+
+```js
+// 字符串形式
+await Kabegame.to(targetUrl);
+
+// 带 pageLabel / pageState —— 新页面用 pageLabel() 识别自己的阶段
+await Kabegame.to(targetUrl, { pageLabel: "list", pageState: { page: 1 } });
+
+// 返回上一页（可弹多层）
+await Kabegame.back();
+await Kabegame.back(2);
+```
+
+因为是真实导航，新页面能拿到真实登录态、SSR 数据，并可执行懒加载滚动。
+
+:::tip
+很多 SPA 不必逐页导航——你可以在当前页用浏览器原生 `fetch(detailUrl, { credentials: "include" })` 直接抓详情页 HTML / JSON（同源自动带 Cookie、不受 CORS 限制），比顶层导航快得多。`xhs-webview` 就是这么做的。
+:::
+
+---
+
+## 跨页状态
+
+由于每页重跑，跨页数据只能存宿主：
+
+| 方法 | 作用域 | 说明 |
+|---|---|---|
+| `await Kabegame.state()` | 任务级（跨所有页） | 读任务级共享 state。 |
+| `await Kabegame.updateState(patch)` | 任务级 | 对任务级 state 做浅合并，返回合并后结果。**跨页保留状态的正规手段。** |
+| `await Kabegame.pageState()` | 当前页 | 读栈顶页面独立的 page_state。 |
+| `await Kabegame.updatePageState(patch)` | 当前页 | 对栈顶页 page_state 浅合并。 |
+
+```js
+async function handleInitial() {
+  await Kabegame.updateState({ mode: Kabegame.vars.crawl_mode, maxItems: Kabegame.vars.max_items });
+  await Kabegame.to(targetUrl, { pageLabel: "list" });
+}
+async function handleList() {
+  const { mode, maxItems } = await Kabegame.state();  // 取回上一阶段写入的状态
+  // ...
+}
+```
+
+---
+
+## DOM 与时序辅助
+
+因为有真实 `document`，WebView 提供一批 DOM / 等待辅助（V8 后端没有）：
+
+| 方法 | 说明 |
+|---|---|
+| `Kabegame.$(selector)` | 同步 `document.querySelector`。 |
+| `Kabegame.$$(selector)` | `Array.from(document.querySelectorAll(...))`。 |
+| `await Kabegame.waitForDom()` | 等 `DOMContentLoaded`（已就绪则立即 resolve）。 |
+| `await Kabegame.waitForSelector(sel, { timeout?, interval? })` | 轮询直到命中；超时 reject。 |
+| `await Kabegame.sleep(ms)` | 本地延时。 |
+
+也可以直接用浏览器原生的 `document`、`window`、`location`、`fetch`、`localStorage` 等。
+
+---
+
+## 下载、进度与日志
+
+```js
+await Kabegame.downloadImage(url, {
+  name: "sample",
+  url: pageUrl,                      // 来源 URL
+  metadata: { schema: 1, tags: [] }, // 任意 JSON；plugin_version 由宿主盖章
+});
+await Kabegame.addProgress(100 / total);
+await Kabegame.log("普通日志");
+await Kabegame.warn("找不到下载链接");   // = log(msg, "warn")
+```
+
+`downloadImage` 对 `http(s)` 走下载队列；对 `data:` / `blob:` / MSE 媒体走内部媒体上传通道（框架已注入捕获脚本）。WebView 后端**没有** `createImageMetadata`——metadata 直接随 `downloadImage(url, { metadata })` 传。
+
+---
+
+## 生命周期
+
+V8 靠 `crawl` 返回/抛异常结束；WebView 需要显式收尾：
+
+| 方法 | 说明 |
+|---|---|
+| `await Kabegame.exit()` | 正常结束：先等当前页未决下载排空，再通知 worker 任务完成。 |
+| `await Kabegame.error(message)` | 失败结束：同样先排空下载，再把任务转为失败。顶层 `catch` 里调用它上报未捕获异常。 |
+| `await Kabegame.requestShowWebview()` | 请求显示（unhide）爬虫窗口，让用户手动登录 / 过验证码。 |
+| `await Kabegame.clearData()` | 清 `localStorage` / `sessionStorage` 及当前页 Cookie。 |
+
+```js
+async function handleList() {
+  // ...抓完最后一页...
+  await Kabegame.exit();
+}
+```
+
+---
+
+## 私有虚拟文件系统 `Kabegame.fs`
+
+WebView 也有每任务隔离的私有 VFS，但只暴露**异步无同步方法的子集**：`open` / `create`（返回带 `read`/`write`/`seek`/`stat`/`truncate`/`close` 的句柄）、`readFile` / `readTextFile` / `writeFile` / `writeTextFile` / `mkdir` / `readDir` / `remove` / `rename` / `copyFile` / `stat` / `lstat` / `exists` / `truncate` / `size` / `getRoot`。
+
+:::caution
+与 V8 不同，**WebView 下 `Kabegame.fs.getRoot()` 是异步的**（返回 `Promise<string>`），且没有任何 `*Sync` 方法。
+:::
+
+---
+
+## 安全边界（capability）
+
+爬虫窗口的 Tauri capability 被刻意收紧，只放行：事件三件套（`core:event:allow-listen` / `allow-emit` / `allow-emit-to`）、`core:window:allow-hide`，以及这一整组 `crawl_*` 宿主命令（即 `Kabegame.*` 的底层）。
+
+这意味着：
+
+- **不要**在脚本里尝试调用 `shell:open`、文件对话框、任意 Tauri 命令 —— 不在白名单内。
+- 只使用 `Kabegame.*` 提供的桥接 API 与浏览器原生能力。
+- 受限权限是系统级保护，不是遗漏，请勿通过改 capability 绕过。
+
+---
+
+## 参考实现
+
+仓库内 `src-crawler-plugins/plugins/xhs-webview/` 是唯一的 WebView 参考插件（`main` 指向 `crawl.js`，`kbBackend: "webview"`）。它演示了 `pageLabel` 阶段分派、`updateState` 跨页、原生 `fetch` 抓详情、视频 / 实况照片下载。
+
+## 延伸阅读
+
+- [Kabegame API 字典](/reference/kabegame-api/) —— `Kabegame.*` 每个方法的完整签名（V8 / WebView 对照）。
+- [V8 脚本](/dev/v8-api/) —— 另一个（且默认的）后端。
+- [爬虫后端选择](/dev/crawler-backends/) —— V8 与 WebView 的选型。
+- [插件清单字段](/reference/plugin-schema/) —— `kbConfig` / `kbLabels` 全字段。

@@ -1,7 +1,15 @@
 # 减小 docker build 上下文（COPY 进镜像时排除生成物与大目录）
 **/target
 **/node_modules
+**/node_modules-*
+target-*
 release
+dist-web
+.kabegame
+ignore
 .git/worktrees
 third/FFmpeg-build
+third/FFmpeg-build-*
+third/x264-build
+third/x264-build-*
 test

@@ -2,9 +2,13 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
+  site: 'https://kabegame.com',
   redirects: {
     '/guide/shortcuts': '/reference/shortcuts/',
     '/guide/command-line': '/reference/cli/',
+    // Rhai 后端已移除，旧脚本文档重定向到 V8 对应页
+    '/dev/rhai-api': '/dev/v8-api/',
+    '/reference/rhai-dictionary': '/reference/kabegame-api/',
   },
   integrations: [
     starlight({
@@ -45,10 +49,21 @@ export default defineConfig({
           label: '插件开发',
           items: [
             { label: '开发总览', slug: 'dev/overview' },
-            { label: '插件格式', slug: 'dev/format' },
-            { label: 'Rhai 脚本', slug: 'dev/rhai-api' },
             { label: '爬虫后端选择', slug: 'dev/crawler-backends' },
+            { label: 'V8 脚本', slug: 'dev/v8-api' },
+            { label: 'WebView 脚本', slug: 'dev/webview-api' },
+            { label: 'plugin-sdk 工具库', slug: 'dev/plugin-sdk' },
+            { label: '插件格式', slug: 'dev/format' },
             { label: '打包与发布', slug: 'dev/packaging' },
+          ],
+        },
+        {
+          label: '参与开发',
+          items: [
+            { label: '从源码构建', slug: 'dev-contrib/building' },
+            { label: 'Android 开发', slug: 'dev-contrib/android-build' },
+            { label: '架构与项目结构', slug: 'dev-contrib/architecture' },
+            { label: '致谢与内嵌依赖', slug: 'dev-contrib/acknowledgements' },
           ],
         },
         {
@@ -58,7 +73,7 @@ export default defineConfig({
             { label: '命令行工具', slug: 'reference/cli' },
             { label: 'MCP URI / 工具', slug: 'reference/mcp' },
             { label: '插件清单字段', slug: 'reference/plugin-schema' },
-            { label: 'Rhai API 字典', slug: 'reference/rhai-dictionary' },
+            { label: 'Kabegame API 字典', slug: 'reference/kabegame-api' },
           ],
         },
       ],

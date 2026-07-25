@@ -16,7 +16,9 @@
 - **CLI**: 新增 plugn run 命令，能够运行一个已安装插件，先import安装kgpg插件，然后run，是当前的v8插件的开发、测试工作流（集成Claude skill）。
 
 ### Fixed
-- **壁纸**: Windows \ MacOS 窗口模式壁纸不显示的bug
+- **壁纸**: 
+  - Windows \ MacOS 窗口模式壁纸不显示的bug
+  - 视频壁纸不自动播放bug
 - **任务**:
   - 安卓爬虫任务进度条不显示的bug
   - 取消、失败任务进度条不显示的bug
@@ -25,12 +27,23 @@
   - 应用侧边栏没有显示背景图的bug
 - MacOS点击图标不显示窗口的bug
 - **畅游**： 打开重复host的url的时候，已有窗口会刷新到新url而不只是打开。
+- **画册**: 
+  - 无法查看子画册bug
+  - 画册设置轮播对象失败bug
 
 ### Optimized
 - **安装**: Windows 安装弹太多黑窗问题
+- **安卓**: 安卓选择插件变成弹窗，更好看
 
 ### Changed
 - **畅游**： 下载不再脱离并发限制，但也不阻塞交互，而是进队，之后调度webview开启原生下载。
+- **文档**: Demo 页面url改成 demo.kabegame.com
+
+### Removed
+- **插件**: 移除kgpg v2兼容，迁到kgpg v3，文件头包含50kb的固定icon数据
+- **文档**: 
+  - README 改成指向 kabegame.com 网站
+  - 去掉帮助页，文档统一收束。
 
 ## [4.3.0]
 ### Added
@@ -786,14 +799,3 @@ Main updates for release manga: (only explore those related code changes)
 ### Added
 
 - 初始版本
-
----
-
-## 变更记录指引（建议）
-
-- **前端（Vue3/Vite/ElementPlus）**：`src/`
-  - 例如：页面/组件改动、交互变更、状态管理、性能优化、样式主题等
-- **后端（Tauri v2/Rust）**：`src-tauri/`
-  - 例如：命令/事件、下载队列、壁纸管理器、存储/迁移等
-- **插件系统（Rhai / crawler-plugins / .kgpg）**
-  - 例如：Rhai API 变更、插件打包格式、插件商店安装/更新、兼容性说明等

@@ -71,23 +71,13 @@
                   :description="$t('settings.clearUserDataDesc')">
                   <ClearUserDataSetting />
                 </SettingRow>
-                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.autoOpenWebView')"
-                  :description="$t('settings.autoOpenWebViewDesc')">
-                  <SettingSwitchControl :setting-key="autoOpenCrawlerWebviewKey" />
+                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.linkOpenMode')"
+                  :description="$t('settings.linkOpenModeDesc')">
+                  <SettingRadioControl setting-key="linkOpenMode" :options="linkOpenModeOptions" />
                 </SettingRow>
-                <SettingRow v-if="!IS_ANDROID && IS_DEV" :label="$t('settings.debugGenerateImages')"
-                  :description="$t('settings.debugGenerateImagesDesc')">
-                  <DebugGenerateImagesSetting />
-                </SettingRow>
-                <SettingRow v-if="!IS_ANDROID && !IS_WEB && IS_DEV" :label="$t('settings.devWebView')"
-                  :description="$t('settings.devWebViewDesc')">
-                  <div class="dev-webview-row">
-                    <el-input v-model="devWebviewUrl" :placeholder="$t('settings.devWebviewPlaceholder')" clearable
-                      class="dev-webview-input" @keyup.enter="openDevWebview" />
-                    <el-button type="primary" :loading="devWebviewOpening" @click="openDevWebview">
-                      {{ $t('settings.openWebViewButton') }}
-                    </el-button>
-                  </div>
+                <SettingRow v-if="IS_WINDOWS || IS_LINUX" :label="$t('settings.closeAction')"
+                  :description="$t('settings.closeActionDesc')">
+                  <SettingRadioControl setting-key="closeAction" :options="closeActionOptions" />
                 </SettingRow>
               </div>
             </div>
@@ -256,7 +246,6 @@ import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import type { AppSettingKey } from "@kabegame/core/stores/settings";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { trackEvent } from "@kabegame/core/track/umami";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
@@ -274,12 +263,11 @@ import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSet
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
 import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetting.vue";
-import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
 import LanguageSetting from "@/components/settings/items/LanguageSetting.vue";
 import McpSettingsPanel from "@/components/settings/McpSettingsPanel.vue";
 import PluginDefaultConfigsPanel from "@/components/settings/PluginDefaultConfigsPanel.vue";
-import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV, IS_MACOS, IS_WEB } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_MACOS, IS_WEB } from "@kabegame/core/env";
 
 const { t } = useI18n();
 
@@ -302,26 +290,17 @@ const galleryLayoutDirectionOptions = computed(() => [
   { label: t("settings.galleryLayoutDirectionVertical"), value: "vertical" },
   { label: t("settings.galleryLayoutDirectionHorizontal"), value: "horizontal" },
 ]);
+const linkOpenModeOptions = computed(() => [
+  { label: t("settings.linkOpenSurf"), value: "surf" },
+  { label: t("settings.linkOpenBrowser"), value: "browser" },
+  { label: t("settings.linkOpenAsk"), value: "unconfigured" },
+]);
+const closeActionOptions = computed(() => [
+  { label: t("settings.closeActionExit"), value: "exit" },
+  { label: t("settings.closeActionTray"), value: "tray" },
+  { label: t("settings.closeActionAsk"), value: "unconfigured" },
+]);
 
-const autoOpenCrawlerWebviewKey: AppSettingKey = "autoOpenCrawlerWebview";
-const devWebviewUrl = ref("https://www.example.com");
-const devWebviewOpening = ref(false);
-async function openDevWebview() {
-  const url = devWebviewUrl.value?.trim() || "";
-  if (!url) {
-    ElMessage.warning(t("settings.messageInputUrl"));
-    return;
-  }
-  devWebviewOpening.value = true;
-  try {
-    await invoke("open_dev_webview", { url });
-    ElMessage.success(t("settings.messageWebViewOpened"));
-  } catch (e) {
-    ElMessage.error(String(e));
-  } finally {
-    devWebviewOpening.value = false;
-  }
-}
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 import { useDesktop } from "@/composables/useDesktop";
@@ -521,18 +500,6 @@ onActivated(async () => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.dev-webview-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.dev-webview-input {
-  flex: 1;
-  min-width: 200px;
 }
 
 .settings-list {

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 部署在线 Demo（--mode web 的 Rust 二进制）。
+# Demo 现在对外走 demo.kabegame.com（原 kabegame.com 已改为文档站，见 deploy-docs.sh）。
+# 域名切换在 NPM(Nginx Proxy Manager)面板手动维护；本机 systemd 服务名与端口(127.0.0.1:7490)不变。
+
 REMOTE_HOST="cmtheit.com"
 REMOTE_USER="cmtheit"
 REMOTE_DIR="/home/${REMOTE_USER}/kabegame"

@@ -14,6 +14,10 @@ hero:
     - text: 插件开发
       link: /dev/overview/
       icon: external
+    - text: 在线体验（Demo）
+      link: https://demo.kabegame.com/
+      icon: rocket
+      variant: minimal
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
@@ -22,7 +26,7 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 <CardGrid stagger>
   <Card title="插件驱动收集" icon="puzzle">
-    通过 Rhai 脚本插件从各类动漫图站自动爬取图片，支持一键安装来自插件商店的社区插件。
+    通过 JS/TS 插件（V8 / WebView 后端）从各类动漫图站自动爬取图片，支持一键安装来自插件商店的社区插件。
   </Card>
   <Card title="画廊与画册管理" icon="open-book">
     统一管理所有来源的图片，通过画册自由分类整理，支持批量操作与去重。
@@ -34,3 +38,15 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
     Windows、macOS、Linux 桌面端及 Android 均可使用，功能大体一致。
   </Card>
 </CardGrid>
+
+## 名称由来 🐢
+
+**Kabegame** 是日语「壁亀」（かべがめ）的罗马音，与「壁纸」（かべがみ）发音相近。就像一只安静的龟龟趴在你的桌面上，默默守护着你的二次元壁纸收藏——不吵不闹，只负责治愈你。
+
+拥抱开源，做二次元人自己的软件。
+
+## 想参与开发？
+
+- [从源码构建](/dev-contrib/building/) — 环境搭建与统一的 `deno task` 命令入口。
+- [架构与项目结构](/dev-contrib/architecture/) — monorepo 布局、技术栈与 WebView 爬虫 / tauri-runtime-cef / PathQL 等核心实现。
+- [插件开发指南](/dev/overview/) — 编写你自己的爬虫插件。

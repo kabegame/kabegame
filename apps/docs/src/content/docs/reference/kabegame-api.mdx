@@ -1,0 +1,126 @@
+---
+title: Kabegame API 字典
+description: 爬虫插件宿主全局 Kabegame.* 的完整方法速查，含 V8 与 WebView 后端对照。
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+`Kabegame` 是运行时注入到每个爬虫插件的宿主全局对象（不 import）。**两个后端的桥同名 `Kabegame`，但接口面不同**——本页逐方法列出签名，并标出各在哪个后端可用。用法教程见 [V8 脚本](/dev/v8-api/) 与 [WebView 脚本](/dev/webview-api/)。
+
+打包工具库 `@kabegame/plugin-sdk`（`resolveUrl` / `md5` / …）是另一回事，见 [plugin-sdk 工具库](/dev/plugin-sdk/)。
+
+「最低版本」为该方法应在 `engines.kabegame` 声明的最低应用版本；未标注即随后端基线（V8 / WebView 自 <Badge text="4.3.0" variant="note" /> 就绪）。
+
+## 后端速览
+
+| | V8 | WebView |
+|---|---|---|
+| 入口 | `export async function crawl(common, custom)` | 顶层脚本，每页重跑 |
+| 读配置 | `crawl` 的 `custom` 参数 | `Kabegame.vars` |
+| 类型声明 | `@kabegame/types`（`lib.kabegame.d.ts`） | — |
+
+## 导航
+
+| 方法 | 签名 | V8 | WebView | 说明 |
+|---|---|:--:|:--:|---|
+| `to` | V8: `to(url): Promise<string>`<br/>WebView: `to(payload, opts?): Promise<void>` | ✅ | ✅ | 导航到 URL 并压入页面栈。V8 返回最终 URL；WebView 触发**真实浏览器导航**，`payload` 可为字符串或 `{url, pageLabel?, pageState?}`。相对 URL 相对当前页解析。 |
+| `back` | V8: `back(): Promise<void>`<br/>WebView: `back(count?): Promise<void>` | ✅ | ✅ | 弹出栈顶页面（WebView 可弹多层）。 |
+| `currentUrl` | `currentUrl(): Promise<string>` | ✅ | ❌ | 当前页面 URL。WebView 用原生 `location.href`。 |
+| `currentHtml` | `currentHtml(): Promise<string>` | ✅ | ❌ | 当前页面原始 HTML。WebView 用原生 `document` / `fetch`。 |
+| `currentDocument` | `currentDocument(): Promise<Document \| null>` | ✅ | ❌ | 把当前页 HTML 解析成 `Document`；缺失/失败返回 `null`。WebView 有真实 `document`。 |
+| `currentHeaders` | `currentHeaders(): Promise<Record<string,string>>` | ✅ | ❌ | 当前页响应头。 |
+
+## 下载与元数据
+
+| 方法 | 签名 | V8 | WebView | 说明 |
+|---|---|:--:|:--:|---|
+| `downloadImage` | `downloadImage(url, opts?): Promise<void>` | ✅ | ✅ | 把图片 / 视频加入下载。`opts` 见下表。 |
+| `createImageMetadata` | `createImageMetadata(map, opts?): bigint` | ✅ | ❌ | 预先写入一行 metadata 并返回 `metadata_id`；可传给 `downloadImage(url, { metadata_id })` 复用。 |
+
+**`downloadImage` 的 `opts`**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | `string \| null` | 展示名 / 文件名。 |
+| `url` | `string \| null` | 来源 / 帖子 URL。 |
+| `metadata` | JSON | 写入 `image_metadata` 的任意 JSON；`metadata_id` 已设时忽略。存储时由应用盖上运行插件的版本号；请在 metadata 内自带 `schema` 标记供迁移。 |
+| `metadata_id` | `number \| null` | 复用 `createImageMetadata` 返回的行 id。 |
+
+## 请求头与 Cookie（V8）
+
+| 方法 | 签名 | V8 | WebView | 说明 |
+|---|---|:--:|:--:|---|
+| `setHeader` | `setHeader(key, value): void` | ✅ | ❌ | 设置后续宿主 HTTP 请求与 `fetch` 的请求头。 |
+| `delHeader` | `delHeader(key): void` | ✅ | ❌ | 删除先前设置的请求头。 |
+| `requireCookie` | `requireCookie(host?): boolean` <Badge text="4.4.0" variant="note" /> | ✅ | ❌ | 把用户在**畅游**里登录该 host 留下的 cookie 注入本任务 `Cookie` 头。省略 `host` 时从 `base_url` 推断。cookie 明文不暴露给插件，返回值只表示注入是否成功。 |
+
+WebView 后端没有这些方法——请求头由真实浏览器会话决定，登录态自动携带。
+
+## 进度与日志
+
+| 方法 | 签名 | V8 | WebView | 说明 |
+|---|---|:--:|:--:|---|
+| `addProgress` | `addProgress(percentage): number \| Promise<void>` | ✅ | ✅ | 累加任务进度百分比，宿主会 clamp。 |
+| `warn` | `warn(message): void \| Promise<void>` | ✅ | ✅ | warn 级任务日志。 |
+| `log` | `log(message, level?): Promise<void>` | ❌ | ✅ | 写任务日志（WebView 独有；V8 用 `console.*`）。 |
+
+## 插件私有数据（V8）
+
+| 方法 | 签名 | V8 | WebView | 说明 |
+|---|---|:--:|:--:|---|
+| `pluginData` | `pluginData<T>(): T` | ✅ | ❌ | 读按插件 ID 隔离的持久 JSON 对象。 |
+| `setPluginData` | `setPluginData(map): void` | ✅ | ❌ | 替换该 JSON 对象。 |
+
+## 跨页状态（WebView）
+
+因每页重跑，WebView 用宿主状态跨页保留数据；V8 的 `crawl` 一次跑完，不需要。
+
+| 方法 | 签名 | V8 | WebView | 说明 |
+|---|---|:--:|:--:|---|
+| `vars` | 属性（frozen 对象） | ❌ | ✅ | 本任务的 `kbConfig` 合并值，同步只读。 |
+| `state` | `state(): Promise<object>` | ❌ | ✅ | 读任务级共享 state。 |
+| `updateState` | `updateState(patch): Promise<object>` | ❌ | ✅ | 对任务级 state 浅合并，返回结果。 |
+| `pageState` | `pageState(): Promise<object>` | ❌ | ✅ | 读栈顶页独立 page_state。 |
+| `updatePageState` | `updatePageState(patch): Promise<object>` | ❌ | ✅ | 对栈顶页 page_state 浅合并。 |
+| `pageLabel` | `pageLabel(): Promise<string>` | ❌ | ✅ | 栈顶页阶段标签，初始 `"initial"`。 |
+
+## DOM 与时序辅助（WebView）
+
+| 方法 | 签名 | V8 | WebView | 说明 |
+|---|---|:--:|:--:|---|
+| `$` | `$(selector): Element \| null` | ❌ | ✅ | 同步 `document.querySelector`。 |
+| `$$` | `$$(selector): Element[]` | ❌ | ✅ | `Array.from(document.querySelectorAll(...))`。 |
+| `waitForDom` | `waitForDom(): Promise<void>` | ❌ | ✅ | 等 `DOMContentLoaded`。 |
+| `waitForSelector` | `waitForSelector(sel, opts?): Promise<Element>` | ❌ | ✅ | 轮询直到命中；`opts.timeout` / `opts.interval`。 |
+| `sleep` | `sleep(ms): Promise<void>` | ❌ | ✅ | 本地延时（V8 用 SDK 的 `sleep` 或 `setTimeout`）。 |
+
+## 生命周期（WebView）
+
+V8 靠 `crawl` 返回 / 抛异常结束；WebView 需显式收尾。
+
+| 方法 | 签名 | V8 | WebView | 说明 |
+|---|---|:--:|:--:|---|
+| `exit` | `exit(): Promise<void>` | ❌ | ✅ | 正常结束：先排空当前页未决下载，再通知完成。 |
+| `error` | `error(message): Promise<void>` | ❌ | ✅ | 失败结束。 |
+| `requestShowWebview` | `requestShowWebview(): Promise<void>` | ❌ | ✅ | 显示爬虫窗口供用户手动登录 / 过验证。 |
+| `clearData` | `clearData(): Promise<void>` | ❌ | ✅ | 清 localStorage / sessionStorage 及当前页 Cookie。 |
+
+## 私有虚拟文件系统 `Kabegame.fs`
+
+每任务隔离的私有 VFS，路径从 `getRoot()` 开始，句柄随任务结束失效（勿持久化虚拟路径）。
+
+- **V8**：完整 `deno_fs` 接口，含所有 `*Sync` 同步方法；`getRoot()` **同步**返回 `string`。
+- **WebView**：仅异步子集，**无任何 `*Sync`**；`getRoot()` 返回 `Promise<string>`。可用：`open` / `create`（返回带 `read`/`write`/`seek`/`stat`/`truncate`/`close` 的句柄）、`readFile` / `readTextFile` / `writeFile` / `writeTextFile` / `mkdir` / `readDir` / `remove` / `rename` / `copyFile` / `stat` / `lstat` / `exists` / `truncate` / `size` / `getRoot`。
+
+完整的 V8 `fs` 类型见 `@kabegame/types` 的 `KabegameFsApi`。
+
+## 元数据迁移辅助
+
+`metadata_migrations/migrate.js` 运行在**裸 V8**，**没有 `Kabegame.*`**，只有原生 `JSON` / `String` / `RegExp` 等。契约见 [V8 脚本 · 元数据迁移](/dev/v8-api/#元数据迁移)。
+
+## 延伸阅读
+
+- [V8 脚本](/dev/v8-api/) —— `crawl` 生命周期与用法。
+- [WebView 脚本](/dev/webview-api/) —— 顶层重跑模型与用法。
+- [plugin-sdk 工具库](/dev/plugin-sdk/) —— 打包进插件的纯工具函数。
+- [插件清单字段](/reference/plugin-schema/) —— `package.json` / `kbConfig` / `kbLabels`。

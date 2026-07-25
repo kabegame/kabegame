@@ -52,7 +52,6 @@ dialog:
 window:
   wallpaperTitle: Kabegame 壁紙
   crawlerTitle: Kabegame クローラー
-  devWebViewTitle: Kabegame 開発用 WebView
 
 albums:
   favorite: お気に入り

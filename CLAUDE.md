@@ -176,7 +176,8 @@ struct Foo {
 **Script repository paths** — `scripts/utils.ts` is the single source for both `ROOT` and `THIRD_DIR`; standalone scripts and build plugins import `THIRD_DIR` from there, not from `build-system.ts` and not by recomputing `path.join(ROOT, "third")`.
 
 **Single source of truth for file types:**
-- Image extensions/MIME: use `kabegame_core::image_type::*` (e.g. `is_image_by_path`, `supported_image_extensions`). Never hardcode `["jpg","png",...]` in Rust. Frontend uses the `get_supported_image_types` Tauri command.
+- `kabegame_core::image_type::MEDIA_FORMATS` is the single table for format keys, standard MIME values, extensions, aliases, and support flags. `images.type` stores format keys such as `image/jpg` and `video/mov`; use `mime_from_format` only at boundaries that require a standard MIME (HTTP Content-Type / Android MediaStore).
+- Use `kabegame_core::image_type::*` (e.g. `is_image_by_path`, `supported_image_extensions`) instead of hardcoding extensions or MIME values in Rust. Frontend uses the `get_supported_image_types` Tauri command; its `mimeByExt` values remain standard MIME.
 - `supported_video_extensions()` always returns the built-in video list. Frontend `isVideoMediaType` checks `type.startsWith("video/")` for gallery display.
 
 **Video ingestion uses rsmpeg/FFmpeg on desktop AND Android (only iOS excluded):**

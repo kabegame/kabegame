@@ -5,7 +5,7 @@ description: 在文件管理器里像磁盘一样浏览画册与图片文件（�
 
 「虚拟盘（VD）」会把你的图库以一个磁盘或目录的形式挂载到系统文件管理器里。你可以像浏览普通文件夹一样浏览画册和图片，适合拖拽、复制路径、被外部工具打开等场景。
 
-VD 在 Windows、macOS、Linux 三端都可用（均为 Standard 模式）；Android 不支持，Light 版构建也不包含此功能。
+VD 在 Windows、macOS、Linux 三端桌面版都可用；Android 与 Web 版本不支持。
 
 ## 前置依赖
 
@@ -52,7 +52,7 @@ Windows 下如果出现「Dokan 驱动不可用」或「Dokan 版本不兼容」
 - 也可以直接在文件管理器地址栏输入挂载点路径
 
 :::note
-「去VD查看」按钮只在 VD 已开启、且不在 Android / Web / Light 模式下显示。
+「去VD查看」按钮只在 VD 已开启、且不在 Android / Web 版本下显示。
 :::
 
 ## 挂载点根目录结构
@@ -137,7 +137,7 @@ Android 版本完全不编译 VD 模块，设置里也没有「画册盘」这�
 - **现象**：macOS / Linux 上挂载失败，错误文本来自 fuser（如 dlopen 失败）。**原因**：macFUSE / fuse3 未安装。**操作**：按 [安装与首次启动](/guide/installation/) 安装对应驱动。
 - **现象**：macOS / Linux 上报「挂载点不是目录」或提示是残留挂载点。**原因**：上次异常退出没有卸载干净。**操作**：手动执行 `fusermount3 -u <path>`（Linux）或 `umount <path>`（macOS）清理后再重试。
 - **现象**：挂载点输入框无法编辑。**原因**：VD 已开启。**操作**：先关闭 VD，再改挂载点，再重新开启。
-- **现象**：看不到「去VD查看」按钮。**原因**：VD 未开启，或当前是 Android / Web / Light 模式。**操作**：到设置里开启「画册盘」；Light / Android 版本不支持此功能。
+- **现象**：看不到「去VD查看」按钮。**原因**：VD 未开启，或当前是 Android / Web 版本。**操作**：到设置里开启「画册盘」；Android / Web 版本不支持此功能。
 
 ## 延伸阅读
 

@@ -1,0 +1,203 @@
+---
+title: 插件开发指南
+description: 从零开始开发 Kabegame 爬虫插件，了解目录骨架、开发循环与发布方式。
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+Kabegame 的抓取能力全部由插件提供。一个插件是一个自包含的文件夹，描述「去哪里取图」以及「怎么把图取回来」。本页帮你在 10 分钟内跑通一个插件的开发循环：从把插件放进仓库到在运行中的 Kabegame 看到自己的改动。
+
+插件用 **JavaScript / TypeScript** 编写，打包成 `.kgpg` 文件分发。脚本后端有两个：**V8**（默认，嵌入式 JS 引擎）与 **WebView**（真实浏览器窗口）。
+
+:::caution[Rhai 已移除]
+早期版本用 Rhai 脚本（`crawl.rhai`）。**Rhai 后端自 <Badge text="4.3.0" variant="note" /> 起已停止支持**：`kbBackend: "rhai"` 会在加载时报「Rhai 后端已停止支持，请更新该插件」。现存所有插件都必须是 V8 或 WebView。本文档不再涉及 Rhai。
+:::
+
+## 什么是插件
+
+一个插件告诉 Kabegame：
+
+- **在哪里取图**：`kbBaseUrl` 入口，以及可选的登录 / 筛选参数。
+- **怎么取图**：一段脚本（V8 或 WebView），负责遍历列表页、解析详情页、把图片 URL 交给下载器。
+- **怎么展示自己**：图标、多语言名称与描述、标签，以及「采集」对话框里的表单项。
+
+后端怎么选见 [爬虫后端选择](/dev/crawler-backends/)。简单说：能用 HTTP 请求 + 解析拿到数据就用 **V8**（也是唯一能在安卓上运行的后端）；只有目标站必须靠真实浏览器渲染、反爬或登录态时才用 **WebView**（仅桌面）。
+
+## 插件目录骨架
+
+每个插件是 `src-crawler-plugins/plugins/` 下的一个子目录。**目录名就是插件 ID**（它出现在 `.kgpg` 文件名、图片记录以及日志里；`package.json` 里的 `name` 只是显示名，不是 ID）。
+
+```
+my-plugin/
+├── package.json           # 必需：v3 自描述清单（元数据 + 配置 + 后端声明）
+├── src/index.ts           # 源码（用 TS + plugin-sdk 编写）
+├── dist/main.js           # 必需：package.json.main 指向的打包产物
+├── icon.png               # 推荐：图标，打包进 KGPG 头部（HTTP Range 可读）
+├── configs/               # 可选：推荐预设，出现在「预设」里
+│   └── <preset>.json
+├── providers/             # 可选：PathQL provider DSL（*.json5）
+├── metadata_migrations/   # 可选：图片 metadata 迁移脚本
+│   └── migrate.js
+├── doc_root/              # 可选：用户文档，应用内渲染
+│   ├── doc.md             #       默认语言
+│   └── doc.<lang>.md      #       各语言覆盖（zh / en / ja / ko / zhtw）
+├── templates/             # 可选：EJS 模板
+│   └── description.ejs    #       在源管理详情面板渲染 metadata
+└── README.md              # 可选：开发者自用说明，不会被应用读取
+```
+
+:::note
+V8 插件通常用 TypeScript 写在 `src/` 里，再用打包器（如 rspack）编译成单个 `dist/main.js`，`package.json.main` 指向这个产物。WebView 插件的 `main` 一般直接指向一个 `crawl.js`。
+:::
+
+### package.json（必需）
+
+这是 KGPG v3 的自描述清单——元数据、后端、表单、标签**全部内联在一个文件里**（不再有独立的 `manifest.json` 或 `config.json`）。最小可用字段：
+
+```jsonc
+{
+  "name": "my-plugin",              // 显示名回退；真实 ID = 目录名
+  "version": "1.0.0",              // 每段 ≤255
+  "description": "插件描述",
+  "author": "you",
+  "kbPackageVersion": 3,           // 必须 ≥3
+  "engines": { "kabegame": ">=4.3.0" },  // 最低 Kabegame 版本
+  "main": "dist/main.js",          // 入口脚本相对路径
+  "kbBackend": "v8",              // "v8" 或 "webview"
+  "kbBaseUrl": "https://example.com",
+  "kbConfig": []                   // 采集对话框表单变量
+}
+```
+
+- `kbPackageVersion` 必须为 `3`；低于 3 的旧格式已不再支持。
+- `engines.kabegame` 声明插件需要的最低应用版本（只支持 `>=X.Y.Z` 写法）。用到某个版本才有的接口时，把它抬高到那个版本——比如用了 `kbLabels` 或 `Kabegame.requireCookie()` 就要写 `>=4.4.0`。
+- `name` / `description` 支持以点号展平的多语言键，例如 `"name.zh": "我的插件"`、`"description.ja": "..."`。
+
+完整字段（`kbLabels`、`kbConfig`、`kbIcon`、`kbDoc` 等）见 [插件清单字段](/reference/plugin-schema/)。
+
+### kbConfig（可选）
+
+定义采集对话框里的表单项。用户填的值在 V8 脚本里通过 `crawl(common, custom)` 的 `custom` 参数读取（详见 [V8 脚本](/dev/v8-api/)），在 WebView 脚本里通过 `Kabegame.vars` 读取（详见 [WebView 脚本](/dev/webview-api/)）。
+
+```jsonc
+{
+  "kbConfig": [
+    {
+      "key": "start",
+      "type": "int",
+      "name": "起始页面",
+      "descripts": "要拉取的起始页面",
+      "default": 1,
+      "min": 1,
+      "max": 5
+    },
+    {
+      "key": "keyword",
+      "type": "string",
+      "name": "搜索关键词"
+    }
+  ]
+}
+```
+
+支持的变量类型（`int` / `float` / `string` / `date` / `boolean` / `options` / `list` / `checkbox` / 路径类）、`options` / `checkbox` 的结构、`when` 条件显示等完整语义见 [插件清单字段 · kbConfig](/reference/plugin-schema/#kbconfig-变量)。
+
+### 一个最小 V8 脚本
+
+V8 插件导出 `async function crawl(common, custom)`，宿主能力通过全局 `Kabegame.*` 提供：
+
+```ts
+export async function crawl(common, custom) {
+  const baseUrl = common.base_url ?? "https://example.com";
+  await Kabegame.to(`${baseUrl}/gallery`);
+
+  const doc = await Kabegame.currentDocument();
+  for (const img of doc?.querySelectorAll("img") ?? []) {
+    const src = img.getAttribute("src");
+    if (src) {
+      await Kabegame.downloadImage(new URL(src, await Kabegame.currentUrl()).href);
+    }
+  }
+}
+```
+
+`Kabegame.*` 的完整接口见 [V8 脚本](/dev/v8-api/) 与 [Kabegame API 字典](/reference/kabegame-api/)；`URL` 等 Web 平台全局与打包工具库分别见 [V8 脚本 · 运行时全局](/dev/v8-api/#运行时全局) 和 [plugin-sdk 工具库](/dev/plugin-sdk/)。
+
+## 开发循环
+
+推荐在 Kabegame 主仓库内开发，直接享受自动打包与实时加载。
+
+### 1. 把插件放进仓库
+
+将插件目录放到 `src-crawler-plugins/plugins/<your-plugin-id>/`。可以从现有插件复制一份作为起点（见下文「从哪个插件开始读」）。
+
+### 2. 启动开发服务
+
+```bash
+deno task dev -c kabegame
+```
+
+构建系统在每次 `deno task dev -c kabegame` 启动时自动打包 `src-crawler-plugins/plugins/` 下的**每一个**插件为 `.kgpg`，输出到 dev 数据目录 `.kabegame/debug/data/plugins-directory/`。应用启动时从该目录加载，你的插件会立刻出现在源列表里。
+
+### 3. 改完后重打包
+
+改完源码后，用 `repack-crawler-plugins` skill 把该插件重打成 `.kgpg` 投放到 dev 数据目录，正在跑的 dev 应用即可加载到改动；或直接重启 `deno task dev`。
+
+不想开 GUI 时，可以用 CLI 在本进程内直接跑 V8 插件验证：
+
+```bash
+kabegame-cli plugin run <plugin-id> --data dev --var key=value
+```
+
+它会在日志上方渲染一个常驻进度条。**只支持 V8 后端**（WebView 需要真实浏览器窗口，headless CLI 起不来）。详见 [命令行工具 · plugin run](/reference/cli/#plugin-run)。
+
+:::caution
+数据目录模式由 `--data` 控制，dev 默认用仓库内 `.kabegame/debug/`。release 构建的 CLI 默认解析到系统数据目录，测试仓库内插件时通常要显式加 `--data dev`。
+:::
+
+## 打包与发布
+
+交付插件时，进入 `src-crawler-plugins/` 执行：
+
+```bash
+deno task package                    # 打包全部插件到 packed/<id>.kgpg
+deno task package <插件名>           # 只打一个
+deno task package --only <a> <b>     # 打指定子集
+deno task package --out-dir <path>   # 改变输出目录
+deno task generate-index             # 读取 packed/*.kgpg，写出 packed/index.json
+deno task release                    # 等价于 package && generate-index
+```
+
+打包依赖编译好的 `kabegame-cli`（由主仓的 `deno task dev -c kabegame` 或 `deno task b` 构建）。完整发布链路与用户何时看到更新见 [打包与发布](/dev/packaging/)。
+
+## 从哪个插件开始读
+
+仓库内置了 16 个插件作为参考实现，位于 `src-crawler-plugins/plugins/`：
+
+`anihonet-wallpaper`、`anime-pictures`、`bilibili`、`haowallpaper`、`heybox`、`kemono`、`konachan`、`miyoushe`、`pixai`、`pixiv`、`twodwallpapers`、`wallpapers-craft`、`wallspic`、`xhs`、`xhs-webview`、`ziworld`。
+
+推荐阅读顺序：
+
+1. **`konachan`** — V8 后端、无登录，覆盖 `kbConfig` 的 `options` / `list` / `when`、多语言 `doc_root/`、`configs/`、`providers/`、`templates/description.ejs`，与本页骨架几乎一一对应。
+2. **`pixiv`** — 强大但复杂：需要登录 cookie（`Kabegame.requireCookie()`）、R18 判定、`kbLabels`，熟悉基本流程后再看。
+3. **`xhs-webview`** — 唯一的 WebView 参考实现：真实浏览器页面抓取、`Kabegame.vars` 读配置、跨页 `updateState`。
+
+## 在应用中导入插件
+
+打包好的 `.kgpg` 可以：
+
+1. 双击 `.kgpg` 文件（仅桌面）。
+2. 把 `.kgpg` 拖到主窗口中（仅桌面）。
+3. 在「源管理」页点击「导入源」按钮（全平台）。
+
+详情见 [插件导入方法](/guide/plugins-usage/#导入本地-kgpg)。
+
+## 延伸阅读
+
+- [爬虫后端选择](/dev/crawler-backends/) — V8 与 WebView 的能力边界与选型。
+- [V8 脚本](/dev/v8-api/) — `crawl(common, custom)` 生命周期与 `Kabegame.*` 宿主能力。
+- [WebView 脚本](/dev/webview-api/) — 真实浏览器后端的桥接 API 与跨页状态。
+- [plugin-sdk 工具库](/dev/plugin-sdk/) — 打包进插件的纯工具函数（与宿主全局分开）。
+- [插件格式（.kgpg）](/dev/format/) — `.kgpg` 二进制结构与清单字段。
+- [插件清单字段](/reference/plugin-schema/) — `package.json` 全字段、`kbConfig`、`kbLabels`。
+- [打包与发布](/dev/packaging/) — 打包命令、索引与发布链路。

@@ -750,7 +750,7 @@ pub async fn postprocess_downloaded_image(
                     .await
                     .ok()
                     .flatten()
-                    .unwrap_or_else(|| crate::image_type::default_image_mime().to_string());
+                    .unwrap_or_else(|| crate::image_type::default_image_format().to_string());
                 let hash_start = Instant::now();
                 let hash = match io.compute_hash(url.as_str()).await {
                     Ok(h) => h,
@@ -972,7 +972,12 @@ pub async fn postprocess_downloaded_image(
                             .to_string()
                     });
                 let uri = get_content_io_provider()
-                    .copy_image_to_pictures(&local_path, &inferred_mime, &copy_name)
+                    .copy_image_to_pictures(
+                        &local_path,
+                        crate::image_type::mime_from_format(&inferred_mime)
+                            .unwrap_or(&inferred_mime),
+                        &copy_name,
+                    )
                     .await?;
                 // 临时文件已进库，删除
                 let _ = tokio::fs::remove_file(&path).await;

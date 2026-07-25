@@ -97,7 +97,11 @@ impl LocalImportHook {
                 .await
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
             let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("image");
-            let safe = build_safe_filename(name, "bin");
+            let fallback_ext = crate::image_type::mime_type_from_path(&src)
+                .as_deref()
+                .and_then(crate::image_type::ext_from_mime)
+                .unwrap_or_else(|| "bin".to_string());
+            let safe = build_safe_filename(name, &fallback_ext);
             let dest = unique_path(dest_dir, &safe);
             fs::copy(&src, &dest)
                 .await
@@ -149,9 +153,9 @@ impl LocalImportHook {
         let inferred = crate::image_type::mime_type_from_path(&src);
         let mime = inferred.unwrap_or_else(|| {
             if crate::image_type::is_video_by_path(&src) {
-                crate::image_type::default_video_mime().to_string()
+                crate::image_type::default_video_format().to_string()
             } else {
-                crate::image_type::default_image_mime().to_string()
+                crate::image_type::default_image_format().to_string()
             }
         });
         let display_name = src
@@ -160,7 +164,11 @@ impl LocalImportHook {
             .unwrap_or("image")
             .to_string();
         let copied_uri = get_content_io_provider()
-            .copy_image_to_pictures(src.to_string_lossy().as_ref(), &mime, &display_name)
+            .copy_image_to_pictures(
+                src.to_string_lossy().as_ref(),
+                crate::image_type::mime_from_format(&mime).unwrap_or(&mime),
+                &display_name,
+            )
             .await?;
         let copied_url = Url::parse(&copied_uri).map_err(|e| e.to_string())?;
         self.import_content_url(&copied_url, download_start_time, Some(display_name))

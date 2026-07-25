@@ -76,8 +76,6 @@ pub struct WindowState {
 pub enum SettingKey {
     /// 开机启动
     AutoLaunch,
-    /// 启动 WebView 插件任务时自动打开 crawler 窗口
-    AutoOpenCrawlerWebview,
     /// 最大并发下载数
     MaxConcurrentDownloads,
     /// 同时运行的爬虫任务数（1-10）
@@ -310,7 +308,6 @@ impl Settings {
     fn default_value(key: SettingKey) -> SettingValue {
         match key {
             SettingKey::AutoLaunch => SettingValue::Bool(false),
-            SettingKey::AutoOpenCrawlerWebview => SettingValue::Bool(false),
             SettingKey::MaxConcurrentDownloads => SettingValue::U32(3),
             SettingKey::MaxConcurrentTasks => SettingValue::U32(2),
             SettingKey::DownloadIntervalMs => SettingValue::U32(500),
@@ -412,7 +409,6 @@ impl Settings {
         // 初始化所有键的默认值
         let all_keys = vec![
             SettingKey::AutoLaunch,
-            SettingKey::AutoOpenCrawlerWebview,
             SettingKey::MaxConcurrentDownloads,
             SettingKey::MaxConcurrentTasks,
             SettingKey::DownloadIntervalMs,
@@ -526,7 +522,6 @@ impl Settings {
         // json 参数已经是值了，不需要再次查找
         match key {
             SettingKey::AutoLaunch
-            | SettingKey::AutoOpenCrawlerWebview
             | SettingKey::AutoDeduplicate
             | SettingKey::RealtimeFolderSync
             | SettingKey::WallpaperRotationEnabled
@@ -718,7 +713,6 @@ impl Settings {
     fn key_to_json_string(key: SettingKey) -> String {
         match key {
             SettingKey::AutoLaunch => "autoLaunch".to_string(),
-            SettingKey::AutoOpenCrawlerWebview => "autoOpenCrawlerWebview".to_string(),
             SettingKey::MaxConcurrentDownloads => "maxConcurrentDownloads".to_string(),
             SettingKey::MaxConcurrentTasks => "maxConcurrentTasks".to_string(),
             SettingKey::DownloadIntervalMs => "downloadIntervalMs".to_string(),
@@ -892,13 +886,6 @@ impl Settings {
     pub fn get_auto_launch(&self) -> bool {
         Self::cells()
             .get(&SettingKey::AutoLaunch)
-            .map(|c| c.load().as_bool().unwrap_or(false))
-            .unwrap_or(false)
-    }
-
-    pub fn get_auto_open_crawler_webview(&self) -> bool {
-        Self::cells()
-            .get(&SettingKey::AutoOpenCrawlerWebview)
             .map(|c| c.load().as_bool().unwrap_or(false))
             .unwrap_or(false)
     }
@@ -1192,16 +1179,6 @@ impl Settings {
             }
         }
 
-        Ok(())
-    }
-
-    pub fn set_auto_open_crawler_webview(&self, enabled: bool) -> Result<(), String> {
-        let cells = Self::cells();
-        let new_value = SettingValue::Bool(enabled);
-        if let Some(cell) = cells.get(&SettingKey::AutoOpenCrawlerWebview) {
-            cell.store(Arc::new(new_value.clone()));
-        }
-        Self::emit_setting_change(SettingKey::AutoOpenCrawlerWebview, &new_value);
         Ok(())
     }
 

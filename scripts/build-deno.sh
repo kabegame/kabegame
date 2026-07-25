@@ -59,11 +59,15 @@ else
 fi
 
 log "building deno ($(git -C "$SUB" log -1 --format=%h 2>/dev/null || echo '?')) → $TARGET_DIR/release/deno"
-cargo build --release --locked \
+# 在 third/deno 目录内执行 cargo，让 rustup 认到 deno 自带的 rust-toolchain.toml
+# （channel 1.95.0，支持 deno_crypto 的 if_let_guard）。若从仓库根跑，CWD 无 toml，
+# rustup 会退回默认工具链——旧默认过低会报 “if let guards are experimental”。
+# 用子 shell 限定 cd，不影响后续步骤；manifest/target/路径均为绝对，cd 后仍成立。
+( cd "$SUB" && cargo build --release --locked \
   --manifest-path "$SUB/cli/Cargo.toml" \
   --target-dir "$TARGET_DIR" \
   "${FEATURE_ARGS[@]}" \
-  "$@"
+  "$@" )
 
 BIN="$TARGET_DIR/release/deno"
 [[ -x "$BIN" ]] || die "构建完成但未找到产物: $BIN"

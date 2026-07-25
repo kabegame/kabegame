@@ -1,0 +1,137 @@
+---
+title: plugin-sdk 工具库
+description: '@kabegame/plugin-sdk：打包进插件的纯工具函数与 TypeScript 类型，与运行时注入的 Kabegame 宿主全局分开。'
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+`@kabegame/plugin-sdk` 是一个**打包进插件产物**的 npm 工具库，提供 URL 解析、正则、md5、类型声明等纯工具。
+
+:::caution[和 `Kabegame.*` 不是一回事]
+本页的 SDK 与运行时注入的宿主全局 `Kabegame.*` 是**两种完全不同的东西**：
+
+| | `@kabegame/plugin-sdk` | `Kabegame.*` |
+|---|---|---|
+| 来源 | 你 `import`，**打包进**你的 `dist/main.js` | **运行时注入**的全局对象，不 import |
+| 内容 | 纯 JS 工具函数 + TS 类型 | 宿主能力（导航、下载、DB、fs…） |
+| 能否离线跑 | 大多可以（纯计算） | 不行，需要宿主 |
+
+宿主能力见 [V8 脚本](/dev/v8-api/) 与 [Kabegame API 字典](/reference/kabegame-api/)。
+:::
+
+SDK 主要服务 V8 后端（用 TypeScript 写在 `src/`，打包成单个 `dist/main.js`）。WebView 后端有真实浏览器环境，通常直接用原生 API，用到的 SDK 较少。
+
+## 安装与使用
+
+仓库内的插件已把 `@kabegame/plugin-sdk` 作为 workspace 依赖。在插件源码里直接 import，打包器会把用到的部分内联进产物：
+
+```ts
+import { type kbCrawlFn, resolveUrl, sleep } from "@kabegame/plugin-sdk";
+
+export const crawl = (async (common, custom) => {
+  await Kabegame.to("https://example.test/posts");
+  await sleep(1000);
+  await Kabegame.downloadImage(await resolveUrl("/image.jpg"));
+}) satisfies kbCrawlFn;
+```
+
+## URL
+
+### `resolveUrl`
+
+两个重载：
+
+```ts
+resolveUrl(relative: string, base: string): string             // 同步，相对显式 base 解析
+resolveUrl(relative: string): Promise<string>                  // 异步，相对 Kabegame.currentUrl() 解析
+```
+
+- 给了 `base` → 同步返回 `new URL(relative, base).toString()`。
+- 不给 `base` → 异步，相对**当前页面 URL**解析（内部读 `Kabegame.currentUrl()`）；当前 URL 不可用时原样返回 `relative`。
+
+```ts
+const a = resolveUrl("/images/o.jpg", "https://example.test/post/1");  // 同步
+const b = await resolveUrl(href);                                       // 相对当前页
+```
+
+:::note
+不带 base 的异步重载依赖宿主 `Kabegame.currentUrl()`，因此它不是"纯"工具——但它仍是打包进插件的代码，不是宿主注入的方法。
+:::
+
+## 时间与延时（misc）
+
+```ts
+unixTimeMs(): number                            // = Date.now()
+randF64(min = 0, max = 1): number               // [min, max) 随机浮点
+sleep(ms: number): Promise<void>                // 至少等待 ms（用 Web timer，无需 Node API）
+```
+
+```ts
+await sleep(randF64(500, 1500));  // 随机退避
+```
+
+## 正则（regex）
+
+不抛异常的正则工具，适合处理来自插件配置的模式串（非法模式返回安全默认值而非报错）：
+
+```ts
+reIsMatch(pattern: string | RegExp, text: string): boolean
+reReplaceAll(pattern: string | RegExp, replacement: string, text: string): string
+reFindAll(pattern: string | RegExp, text: string): KbRegexMatch[]
+```
+
+`reFindAll` 返回的每个 `KbRegexMatch`：
+
+```ts
+interface KbRegexMatch {
+  match: string;                       // 完整匹配文本
+  captures: string[];                  // 位置捕获组（缺失归一化为空串）
+  groups: Record<string, string>;      // 命名捕获组
+  index: number;                       // 匹配在文本中的 0 基下标
+}
+```
+
+## 哈希（md5）
+
+```ts
+md5(value: string): string            // 十六进制 md5，用于构造去重 key、签名参数等
+```
+
+## TypeScript 类型
+
+SDK 还导出用于给 `crawl` 加类型的辅助（纯类型，无运行时开销）：
+
+| 类型 | 说明 |
+|---|---|
+| `kbCrawlFn<CustomCfg>` | `crawl` 入口的签名：`(common: KbCommonCfg, custom: CustomCfg) => void \| Promise<void>`。 |
+| `KbCommonCfg` | `common` 的形状：`{ base_url: string \| null }`。 |
+| `kbCustomCfg<Fields>` | 由字段列表构建 `custom` 的类型。 |
+| `kbCfgField<K, T>` | 描述一个 `custom` 字段（键 + 值类型）。 |
+| `kbCfgInt` / `kbCfgStr` / `kbCfgBool` / `kbCfgDate` / `kbCfgList<T>` / `kbCfgOption<T>` / `kbCfgCheckbox` | 各 `kbConfig` 变量类型对应的值类型。 |
+| `JsonValue` / `JsonObject` / `JsonPrimitive` | 可跨宿主边界的 JSON 值。 |
+
+给 `custom` 加类型：
+
+```ts
+import type { kbCfgField, kbCfgInt, kbCfgStr, kbCustomCfg, KbCommonCfg } from "@kabegame/plugin-sdk";
+
+type Cfg = kbCustomCfg<[
+  kbCfgField<"startPage", kbCfgInt>,
+  kbCfgField<"tag", kbCfgStr>,
+]>;
+
+export async function crawl(common: KbCommonCfg, custom: Cfg) {
+  const startPage = custom.startPage ?? 1;   // 默认每个字段还接受 null
+  const tag = custom.tag ?? "";
+}
+```
+
+:::note
+`Kabegame` 全局的类型声明在单独的 `@kabegame/types`（`packages/kabegame-types/lib.kabegame.d.ts`），把它加入插件的 `tsconfig` 即可获得 `Kabegame.*` 的类型提示。它只覆盖 V8 后端的完整 API。
+:::
+
+## 延伸阅读
+
+- [V8 脚本](/dev/v8-api/) —— 在哪里用这些工具，以及 `Kabegame.*` 宿主能力。
+- [Kabegame API 字典](/reference/kabegame-api/) —— 宿主全局的完整签名。
+- [插件清单字段](/reference/plugin-schema/) —— `kbConfig` 变量类型与 SDK 类型的对应。
