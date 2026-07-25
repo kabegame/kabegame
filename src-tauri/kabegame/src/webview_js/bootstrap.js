@@ -25,6 +25,15 @@
   const _tauri = window.__TAURI_INTERNALS__;
   if (!_tauri) return;
   const invoke = (cmd, args = {}, options) => _tauri.invoke(cmd, args, options);
+  window.__kb_media_submit__ = (vfsPath, sourceUrl, opts) => {
+    const o = typeof opts === "object" && opts !== null ? opts : {};
+    return invoke("crawl_download_image", {
+      url: vfsPath,
+      name: o.name ?? undefined,
+      metadata: o.metadata ?? undefined,
+      sourceUrl,
+    });
+  };
   const pendingDownloads = new Set();
   const trackDownload = (promise) => {
     const tracked = Promise.resolve(promise);
@@ -270,6 +279,14 @@
       },
       getRoot() {
         return invoke("crawl_fs_get_root");
+      },
+    }),
+    ffmpeg: Object.freeze({
+      muxStreams(inputs, output) {
+        return invoke("crawl_ffmpeg_mux", { inputs, output });
+      },
+      probe(path) {
+        return invoke("crawl_ffmpeg_probe", { path });
       },
     }),
     // 每页动态状态：按需经 invoke 单独获取（不做一次性上下文拉取）。

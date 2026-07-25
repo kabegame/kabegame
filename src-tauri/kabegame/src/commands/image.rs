@@ -39,6 +39,11 @@ pub async fn get_image_metadata_full(image_id: String) -> Result<Value, String> 
 }
 
 #[tauri::command]
+pub async fn get_image_native_metadata(image_id: String) -> Result<Value, String> {
+    commands::image::get_image_native_metadata(image_id).await
+}
+
+#[tauri::command]
 pub async fn get_images_count() -> Result<Value, String> {
     commands::image::get_images_count()
 }

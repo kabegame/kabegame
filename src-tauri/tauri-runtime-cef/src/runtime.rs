@@ -120,6 +120,83 @@ mod imp {
             .append_switch_with_value(Some(&switch), Some(&CefString::from(value.as_str())));
     }
 
+    /// CDP 调试端口是否被请求——**纯 env 判断,不分配端口**。
+    ///
+    /// command-line hook 在每个 CEF 进程(含 renderer/GPU/utility helper)里都会跑,
+    /// 那里只需要知道"要不要放行 CDP origin",不能去调
+    /// [`remote_debugging_port`]：`random` 模式下那会让每个子进程各自 bind 一个空闲
+    /// 端口来探号,理论上可能抢掉 browser 进程正要 bind 的那个。
+    fn remote_debugging_requested() -> bool {
+        match std::env::var("KABEGAME_CEF_DEBUG_PORT") {
+            Ok(raw) => !matches!(raw.trim(), "" | "0" | "off" | "false"),
+            Err(_) => false,
+        }
+    }
+
+    static RESOLVED_REMOTE_DEBUGGING_PORT: OnceLock<Option<u16>> = OnceLock::new();
+
+    /// 解析开发期 CDP(Chrome DevTools Protocol)远程调试端口。
+    ///
+    /// 取值：`random` / `auto` → 内核分配的随机空闲端口；其它按整数端口解析；
+    /// `0` / `off` / `false` / 未设置 → 不启用。
+    ///
+    /// 端口一旦监听,本机任意进程都能完全控制该 browser(读 cookie、执行任意 JS),
+    /// 因此**发布包默认不监听任何调试端口**：只有 `deno task dev` 会由
+    /// ComponentPlugin 注入 `random`(见 `scripts/plugins/component-plugin.ts`),
+    /// build/打包路径不注入；随机端口也比固定 9222 少一点被守株待兔的面。
+    /// 需要在 dev 下关掉就显式设 `KABEGAME_CEF_DEBUG_PORT=0`。
+    ///
+    /// 结果 memoize 在 `OnceLock` 里：`random` 每次调用都重算会让 `CefSettings` 里
+    /// 真正 bind 的端口和事后上报的端口对不上。
+    ///
+    /// 供 `.claude/skills/kabegame-chromium/` 驱动截图与 UI 自动化——browser 进程起来
+    /// 后由 app crate 把实际端口 POST 给 vite dev server(`/__kabegame_cdp/register`),
+    /// 于是 skill 只认死端口 1420 就能发现这个随机端口。
+    pub fn remote_debugging_port() -> Option<u16> {
+        *RESOLVED_REMOTE_DEBUGGING_PORT.get_or_init(|| {
+            let raw = std::env::var("KABEGAME_CEF_DEBUG_PORT").ok()?;
+            let raw = raw.trim();
+            if !remote_debugging_requested() {
+                return None;
+            }
+            if matches!(raw, "random" | "auto") {
+                return pick_free_loopback_port();
+            }
+            match raw.parse::<u16>() {
+                // 0 已被 remote_debugging_requested 挡掉,这里兜底保持同一语义。
+                Ok(0) => None,
+                Ok(port) => Some(port),
+                Err(_) => {
+                    eprintln!(
+                        "[cef-runtime] WARN: KABEGAME_CEF_DEBUG_PORT={raw:?} is not a valid port \
+                         (expected an integer, `random` or `auto`); \
+                         remote debugging stays disabled"
+                    );
+                    None
+                }
+            }
+        })
+    }
+
+    /// 让内核分配一个空闲回环端口,读到号后立刻释放,把号交给 CEF 去 bind。
+    ///
+    /// 释放与 CEF 真正 bind 之间有极小的 TOCTOU 窗口(别的进程可能抢先占上),
+    /// dev-only 场景可接受；真撞上了表现为 CDP 起不来,重启 dev 换个号即可。
+    fn pick_free_loopback_port() -> Option<u16> {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .inspect_err(|error| {
+                eprintln!("[cef-runtime] WARN: cannot allocate a free CDP port: {error}");
+            })
+            .ok()?;
+        listener
+            .local_addr()
+            .inspect_err(|error| {
+                eprintln!("[cef-runtime] WARN: cannot read probe socket addr: {error}");
+            })
+            .ok()
+            .map(|addr| addr.port())
+    }
+
     fn apply_windowed_gpu_mode(command_line: &CommandLine) {
         let mode = std::env::var("KABEGAME_CEF_GPU_MODE")
             .or_else(|_| std::env::var("CEF_WINDOWED_GPU_MODE"))
@@ -806,6 +883,16 @@ mod imp {
                     Some(&CefString::from("autoplay-policy")),
                     Some(&CefString::from("no-user-gesture-required")),
                 );
+                // Chromium 111+ 要求 CDP WebSocket 握手带白名单 origin;Playwright /
+                // puppeteer 的 connectOverCDP 会带 origin 头,不放行会被 403。
+                // 仅在调试端口确实开启时追加。用纯 env 判断而不是解析端口——见
+                // remote_debugging_requested 的注释(子进程别去抢随机端口号)。
+                if remote_debugging_requested() {
+                    cl.append_switch_with_value(
+                        Some(&CefString::from("remote-allow-origins")),
+                        Some(&CefString::from("*")),
+                    );
+                }
                 apply_windowed_gpu_mode(cl);
                 // CEF WebContents are not Chrome browser tabs. Some Chrome UI
                 // features assume tabs::TabInterface exists and crash on SPA
@@ -1527,6 +1614,15 @@ mod imp {
             root_cache_path: CefString::from(cef_root_cache_dir().to_string_lossy().as_ref()),
             ..Default::default()
         };
+        // 开发期 CDP：仅在显式设置 KABEGAME_CEF_DEBUG_PORT 时监听（dev 由
+        // ComponentPlugin 注入 random）。
+        if let Some(port) = remote_debugging_port() {
+            settings.remote_debugging_port = port as i32;
+            eprintln!(
+                "[cef-runtime] remote debugging (CDP) listening on 127.0.0.1:{port} \
+                 — anyone on this machine can drive this browser"
+            );
+        }
         #[cfg(not(target_os = "macos"))]
         match resolve_cef_resource_dir() {
             Some(dir) => {

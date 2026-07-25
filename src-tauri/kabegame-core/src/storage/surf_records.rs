@@ -604,7 +604,7 @@ impl Storage {
                         width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
-                        media_type: crate::image_type::normalize_stored_media_type(
+                        media_type: crate::media::image_type::normalize_stored_media_type(
                             row.get::<_, Option<String>>(14)?,
                         ),
                         last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(
@@ -679,7 +679,7 @@ impl Storage {
                     width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                     height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                     display_name: row.get(13)?,
-                    media_type: crate::image_type::normalize_stored_media_type(
+                    media_type: crate::media::image_type::normalize_stored_media_type(
                         row.get::<_, Option<String>>(14)?,
                     ),
                     last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,

@@ -1,36 +1,29 @@
 <template>
-  <div class="album-drive-setting">
+  <SettingRow :label="$t('settings.albumDrive')" :description="$t('settings.albumDriveDesc')">
     <el-switch v-model="enabled" :loading="showEnabledLoading" :disabled="enabledDisabled"
       @change="handleToggle" />
+  </SettingRow>
 
-    <el-button circle size="small" :icon="Refresh" :loading="driverStatusLoading"
-      :title="$t('settings.albumDriveRefreshDriverStatus')" @click="handleRefreshDriverStatus" />
-
-    <el-button v-if="showInstallDriverButton" :loading="installingDriver" @click="handleInstallDriver">
-      {{ $t('settings.albumDriveInstallDriverButton') }}
-    </el-button>
-
+  <!-- 挂载点是独立一项：盘已挂载时不能改，必须先关掉画册盘 -->
+  <SettingRow :label="$t('settings.albumDriveMountPoint')"
+    :description="$t('settings.albumDriveMountPointDesc')">
     <el-input v-model="mountPoint" class="mount-point-input" size="default"
       :disabled="enabled || showEnabledLoading || showMountPointLoading"
       :placeholder="$t('settings.albumDriveMountPointPlaceholder')"
       @blur="handleMountPointBlur" />
-
-    <el-button v-if="enabled" :disabled="showEnabledLoading" @click="openExplorer">
-      {{ $t('settings.albumDriveOpenButton') }}
-    </el-button>
-  </div>
+  </SettingRow>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { ElMessageBox } from "element-plus";
-import { Refresh } from "@element-plus/icons-vue";
 import { invoke } from "@/api/rpc";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { IS_LINUX, IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 
 const { t } = useI18n();
 const settingsStore = useSettingsStore();
@@ -55,9 +48,6 @@ const {
 
 const enabled = ref<boolean>(!!enabledValue.value);
 const mountPoint = ref<string>((mountPointValue.value as string) ?? "K:\\");
-
-const driverStatusLoading = computed(() => settingsStore.isLoading("albumDriveDriverInstalled"));
-const showInstallDriverButton = computed(() => driverInstalled.value === false);
 
 watch(
   enabledValue,
@@ -93,16 +83,8 @@ onMounted(() => {
   void refreshDriverStatus();
 });
 
-const handleRefreshDriverStatus = async () => {
-  try {
-    await refreshDriverStatus();
-  } catch (e) {
-    console.error(e);
-    ElMessage.error(String(e));
-  }
-};
-
-const handleInstallDriver = async () => {
+// 驱动缺失时的安装引导。没有独立按钮，由开关的开启动作触发（见 handleToggle）。
+const installDriver = async () => {
   if (IS_WINDOWS) {
     installingDriver.value = true;
     try {
@@ -152,22 +134,22 @@ const handleMountPointBlur = async () => {
   }
 };
 
-const openExplorer = async () => {
-  try {
-    const mp = normalizedMountPoint.value || "K:\\";
-    await invoke("open_explorer", { path: mp });
-  } catch (e) {
-    console.error(e);
-    ElMessage.error(`${String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
-  }
-};
-
 const handleToggle = async (val: boolean) => {
   const mp = normalizedMountPoint.value;
   if (val && !mp) {
     enabled.value = false;
     ElMessage.error(t("settings.albumDriveMessageMountPointRequired"));
     return;
+  }
+
+  // 驱动（Dokan / macFUSE / FUSE）缺失时先复查一次状态，仍然缺失就走安装引导并撤销这次开启
+  if (val && driverInstalled.value === false && !installingDriver.value) {
+    await refreshDriverStatus();
+    if (driverInstalled.value === false) {
+      enabled.value = false;
+      await installDriver();
+      return;
+    }
   }
 
   try {
@@ -188,13 +170,7 @@ const handleToggle = async (val: boolean) => {
 </script>
 
 <style scoped>
-.album-drive-setting {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
 .mount-point-input {
-  width: 180px;
+  width: 220px;
 }
 </style>

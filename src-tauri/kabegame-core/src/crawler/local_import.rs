@@ -6,15 +6,15 @@
 
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
-use crate::crawler::downloader::{DownloadQueue, next_download_id, wait_after_download_if_needed};
 #[cfg(not(target_os = "android"))]
 use crate::crawler::downloader::{build_safe_filename, unique_path};
+use crate::crawler::downloader::{next_download_id, wait_after_download_if_needed, DownloadQueue};
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::crawler::task_scheduler::Task;
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::import::LOCAL_FOLDER_PLUGIN_ID;
 use crate::local_folder::scan_service::{
-    FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile, scan_and_visit,
+    scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -97,9 +97,9 @@ impl LocalImportHook {
                 .await
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
             let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("image");
-            let fallback_ext = crate::image_type::mime_type_from_path(&src)
+            let fallback_ext = crate::media::image_type::mime_type_from_path(&src)
                 .as_deref()
-                .and_then(crate::image_type::ext_from_mime)
+                .and_then(crate::media::image_type::ext_from_mime)
                 .unwrap_or_else(|| "bin".to_string());
             let safe = build_safe_filename(name, &fallback_ext);
             let dest = unique_path(dest_dir, &safe);
@@ -150,12 +150,12 @@ impl LocalImportHook {
             .path
             .clone()
             .ok_or_else(|| format!("Invalid file URL: {}", file.url))?;
-        let inferred = crate::image_type::mime_type_from_path(&src);
+        let inferred = crate::media::image_type::mime_type_from_path(&src);
         let mime = inferred.unwrap_or_else(|| {
-            if crate::image_type::is_video_by_path(&src) {
-                crate::image_type::default_video_format().to_string()
+            if crate::media::image_type::is_video_by_path(&src) {
+                crate::media::image_type::default_video_format().to_string()
             } else {
-                crate::image_type::default_image_format().to_string()
+                crate::media::image_type::default_image_format().to_string()
             }
         });
         let display_name = src
@@ -166,7 +166,7 @@ impl LocalImportHook {
         let copied_uri = get_content_io_provider()
             .copy_image_to_pictures(
                 src.to_string_lossy().as_ref(),
-                crate::image_type::mime_from_format(&mime).unwrap_or(&mime),
+                crate::media::image_type::mime_from_format(&mime).unwrap_or(&mime),
                 &display_name,
             )
             .await?;
@@ -187,8 +187,8 @@ impl LocalImportHook {
         let _ = io.take_persistable_permission(uri).await;
         let mime = io.get_mime_type(uri).await?;
 
-        let is_image = crate::image_type::is_image_mime(&mime);
-        let is_video = crate::image_type::is_video_mime(&mime);
+        let is_image = crate::media::image_type::is_image_mime(&mime);
+        let is_video = crate::media::image_type::is_video_mime(&mime);
         if !is_image && !is_video {
             return Ok(());
         }

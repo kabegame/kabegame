@@ -37,13 +37,13 @@
 
 为减少翻页时读取/传输/解析整页插件 JSON，**浏览列表**路径统一不返回 metadata，只返回 `metadata_id`：
 
-- **Provider / storage 查询**：列表只带 `metadata_id`，不内联 `image_metadata.data`。
+- **Provider / storage 查询**：列表只带 `metadata_id`，不内联 `metadata.data`。
 - **详情区**：通过 `metadata_id` 或 `imageId` 懒加载 JSON。
 
 详情区（EJS / 原始键值）按需加载：
 
 - **命令**：`get_image_metadata`（[`kabegame/src/commands/image.rs`](/src-tauri/kabegame/src/commands/image.rs)），参数 **`imageId`**（与前端 camelCase 一致）。
-- **实现**：[`Storage::get_image_metadata`](/src-tauri/kabegame-core/src/storage/images.rs) 通过 provider 路径读取 `image_metadata.data`。
+- **实现**：[`Storage::get_metadata`](/src-tauri/kabegame-core/src/storage/images.rs) 通过 provider 路径读取 `metadata.data`。
 
 ### 与 VD / Greedy 的区别
 

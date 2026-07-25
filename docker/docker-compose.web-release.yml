@@ -11,9 +11,11 @@
 #   镜像构建（web-release.Dockerfile，多阶段）：自编 deno（0004 后缀补丁）、x264+FFmpeg
 #     静态库（-web 后缀）、`deno install --frozen` 出 node_modules-web 种子——全部烘进镜像层，
 #     清单/子模块不变时全缓存。deno.lock 变更后需重新 `build`（运行时 entrypoint 会告警）。
-#   运行（本文件 command）：只剩 `deno task b -c kabegame --mode web`。镜像 entrypoint
-#     （web-release-entrypoint.sh）先把种子 rsync 进 /src——FFmpeg/x264 → third/*-build-web/
-#     install/、node_modules-web 按清单——再执行 command。
+#   运行（本文件 command）：只剩仓库源码自身的构建——先 `deno task b -c kabegame-cli --release`
+#     （web 构建打包插件 .kgpg 需要 target-web/release/kabegame-cli；它是随源码变化的 cargo
+#     产物，不能烘进镜像，靠 target-web 跨 run 增量），再 `deno task b -c kabegame --mode web`。
+#     镜像 entrypoint（web-release-entrypoint.sh）先把种子 rsync 进 /src——FFmpeg/x264 →
+#     third/*-build-web/install/、node_modules-web 按清单（含 src-crawler-plugins）——再执行 command。
 #
 # 编译隔离（镜像 ENV 注入，与宿主/其它 glibc 环境互不污染）：
 #   CARGO_TARGET_DIR=/src/target-web    （宿主 target-web/，跨 run 增量复用）
@@ -45,7 +47,8 @@ services:
       - bash
       - -lc
       - >-
-        deno task b -c kabegame --mode web
+        deno task b -c kabegame-cli --release
+        && deno task b -c kabegame --mode web
         && mkdir -p /dist
         && cp target-web/release/kabegame /dist/kabegame
         && echo "✓ 产物已写入 /dist/kabegame"

@@ -75,7 +75,7 @@ import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import type {
   ImageDetailGalleryFilterTarget,
   ImageDetailSurfRecordTarget,
-} from "@kabegame/core/components/common/ImageDetailContent.vue";
+} from "@kabegame/core/components/common/ImageBasicInfoPanel.vue";
 import { usePluginStore } from "@/stores/plugins";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
 import { singleFilterToSet, type GalleryFilter, type GalleryFilterSet } from "@/utils/galleryPath";
@@ -193,7 +193,7 @@ const albumStore = useAlbumStore();
 const adapter = props.surface;
 
 function handleOpenTask(taskId: string) {
-  void router.push({ name: "TaskDetail", params: { id: taskId } });
+  void router.push({ name: "TaskDetail", params: { taskId: taskId } });
 }
 
 async function handleOpenSurfRecord(target: ImageDetailSurfRecordTarget) {

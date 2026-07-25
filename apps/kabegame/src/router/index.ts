@@ -52,18 +52,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "route.settings" },
   },
   {
-    path: "/help",
-    name: "Help",
-    component: () => import("@/views/Help.vue"),
-    meta: { title: "route.help" },
-  },
-  {
-    path: "/help/tips/:tipId",
-    name: "HelpTip",
-    component: () => import("@/views/Help.vue"),
-    meta: { title: "route.help" },
-  },
-  {
     path: "/surf",
     name: "Surf",
     component: () => import("@/views/Surf.vue"),

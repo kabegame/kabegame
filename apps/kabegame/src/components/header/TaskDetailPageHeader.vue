@@ -14,13 +14,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, watch } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import { HeaderFeatureId, useHeaderStore } from "@kabegame/core/stores/header";
+import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { storeToRefs } from "pinia";
 import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
+import { usePageBridgeStore } from "@/stores/pageBridge";
 
 interface Props {
   taskName?: string;
@@ -43,8 +44,6 @@ const emit = defineEmits<{
   'stop-task': [];
   'delete-task': [];
   'add-to-album': [];
-  help: [];
-  'quick-settings': [];
   'view-task-log': [];
   'view-task-params': [];
   'open-task-webview': [];
@@ -54,56 +53,50 @@ const emit = defineEmits<{
 
 const { isCompact } = storeToRefs(useUiStore());
 const taskRouteStore = useTaskDetailRouteStore();
-const { hide: taskHide } = storeToRefs(taskRouteStore);
-const headerStore = useHeaderStore();
+const pageBridge = usePageBridgeStore();
 
-watch(
-  taskHide,
-  () => {
-    headerStore.setFoldLabel(
-      HeaderFeatureId.ToggleShowHidden,
-      taskHide.value ? t("header.showHidden") : t("header.hideHidden"),
-    );
-  },
-  { immediate: true },
-);
+// Refresh / ToggleShowHidden 入口已收进全局工具箱，这里只注册桥接。
+onMounted(() => {
+  pageBridge.setRefresh(() => emit("refresh"));
+  pageBridge.setToggleShowHidden({
+    get: () => taskRouteStore.hide,
+    set: (v) => {
+      taskRouteStore.hide = v;
+    },
+  });
+});
 onUnmounted(() => {
-  headerStore.setFoldLabel(HeaderFeatureId.ToggleShowHidden, undefined);
+  pageBridge.setRefresh(null);
+  pageBridge.setToggleShowHidden(null);
 });
 
 // 计算显示和折叠的feature ID
 const showIds = computed(() => {
   if (isCompact.value) {
-    return [HeaderFeatureId.Refresh, HeaderFeatureId.TaskDrawer];
+    return [HeaderFeatureId.TaskDrawer];
   } else {
     const ids = [
-      HeaderFeatureId.Refresh,
       HeaderFeatureId.DeleteTask,
       HeaderFeatureId.AddToAlbum,
       HeaderFeatureId.FailedImages,
       HeaderFeatureId.TaskDrawer,
       HeaderFeatureId.TaskViewLog,
       HeaderFeatureId.TaskViewParams,
-      HeaderFeatureId.Help,
-      HeaderFeatureId.QuickSettings,
     ];
-    if (props.showStopTask) ids.splice(1, 0, HeaderFeatureId.StopTask);
-    if (props.showOpenWebview) ids.splice(8, 0, HeaderFeatureId.OpenTaskWebview);
+    if (props.showStopTask) ids.unshift(HeaderFeatureId.StopTask);
+    if (props.showOpenWebview) ids.push(HeaderFeatureId.OpenTaskWebview);
     return ids;
   }
 });
 
 const foldIds = computed(() => {
-  if (!isCompact.value) return [HeaderFeatureId.ToggleShowHidden];
+  if (!isCompact.value) return [];
   const ids = [
     HeaderFeatureId.DeleteTask,
     HeaderFeatureId.AddToAlbum,
     HeaderFeatureId.FailedImages,
     HeaderFeatureId.TaskViewLog,
     HeaderFeatureId.TaskViewParams,
-    HeaderFeatureId.Help,
-    HeaderFeatureId.QuickSettings,
-    HeaderFeatureId.ToggleShowHidden,
   ];
   if (props.showStopTask) ids.unshift(HeaderFeatureId.StopTask);
   if (props.showOpenWebview) ids.splice(props.showStopTask ? 3 : 2, 0, HeaderFeatureId.OpenTaskWebview);
@@ -113,9 +106,6 @@ const foldIds = computed(() => {
 // 处理action事件
 const handleAction = (payload: { id: string; data: { type: string } }) => {
   switch (payload.id) {
-    case HeaderFeatureId.Refresh:
-      emit("refresh");
-      break;
     case HeaderFeatureId.StopTask:
       emit("stop-task");
       break;
@@ -124,12 +114,6 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.AddToAlbum:
       emit("add-to-album");
-      break;
-    case HeaderFeatureId.Help:
-      emit("help");
-      break;
-    case HeaderFeatureId.QuickSettings:
-      emit("quick-settings");
       break;
     case HeaderFeatureId.TaskViewLog:
       emit("view-task-log");
@@ -144,9 +128,6 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       // 桌面由 show 区的 FailedImagesHeaderButton comp 直接处理；
       // 紧凑模式走 fold 菜单 action，由父组件托管对话框
       emit("failed-images");
-      break;
-    case HeaderFeatureId.ToggleShowHidden:
-      taskRouteStore.hide = !taskRouteStore.hide;
       break;
   }
 };

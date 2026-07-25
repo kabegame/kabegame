@@ -2,13 +2,20 @@
   <AndroidPickerSelect
     v-if="isCompact"
     :model-value="modelValue ?? null"
-    :options="androidOptions"
+    :options="frosted ? frostedOptions : androidOptions"
     :title="pickerTitleResolved"
     :placeholder="placeholder || $t('common.selectPlaceholder')"
     :clearable="clearable"
     :disabled="disabled"
     @update:model-value="(v) => emit('update:modelValue', v)"
-  />
+  >
+    <template v-if="frosted" #option="{ option }">
+      <div class="album-picker-field-option">
+        <span class="album-picker-field-option-title">{{ option.label }}</span>
+        <span v-if="option.desc" class="album-picker-field-option-desc">{{ option.desc }}</span>
+      </div>
+    </template>
+  </AndroidPickerSelect>
   <el-tree-select
     v-else
     :model-value="modelValue ?? undefined"
@@ -34,7 +41,7 @@ import { useI18n } from "@kabegame/i18n";
 import { useUiStore } from "../../stores/ui";
 import AndroidPickerSelect from "../AndroidPickerSelect.vue";
 import type { AlbumTreeNode } from "../../types/album";
-import { flattenAlbumTreeForAndroidPicker } from "../../utils/albumTree";
+import { flattenAlbumTreeForAndroidPicker, flattenAlbumTreeForFrostedPicker } from "../../utils/albumTree";
 
 const props = withDefaults(
   defineProps<{
@@ -43,14 +50,16 @@ const props = withDefaults(
     albumCounts: Record<string, number>;
     allowCreate?: boolean;
     /** 插入在画册树根之前的选项（如「全部画廊」），value 可为空字符串 */
-    prependOptions?: { value: string; label: string }[];
+    prependOptions?: { value: string; label: string; desc?: string }[];
     placeholder?: string;
     /** 安卓底部选择器标题；默认用 placeholder */
     pickerTitle?: string;
     clearable?: boolean;
     disabled?: boolean;
+    /** 安卓下改用居中磨玻璃列表（点选即生效），而非底部滚轮选择器 */
+    frosted?: boolean;
   }>(),
-  { allowCreate: false, clearable: true, prependOptions: () => [], disabled: false },
+  { allowCreate: false, clearable: true, prependOptions: () => [], disabled: false, frosted: false },
 );
 
 const emit = defineEmits<{
@@ -123,4 +132,41 @@ const androidOptions = computed(() => {
   }
   return [...prepend, ...flat];
 });
+
+const frostedOptions = computed(() => {
+  const prepend = (props.prependOptions ?? []).map((o) => ({
+    label: o.label,
+    value: o.value,
+    desc: o.desc,
+  }));
+  const flat = flattenAlbumTreeForFrostedPicker(props.albumTree ?? [], props.albumCounts).map((n) => ({
+    label: n.label,
+    value: n.value,
+    desc: n.childCount > 0
+      ? `${t("albums.albumCount", { count: n.count })} · ${t("albums.frostedPickerSubAlbumCount", { count: n.childCount })}`
+      : t("albums.albumCount", { count: n.count }),
+  }));
+  if (props.allowCreate) {
+    flat.push({ label: t("albums.createNewAlbum"), value: "__create_new__", desc: undefined });
+  }
+  return [...prepend, ...flat];
+});
 </script>
+
+<style scoped>
+.album-picker-field-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.album-picker-field-option-title {
+  font-size: 15px;
+  color: var(--anime-text-primary);
+}
+
+.album-picker-field-option-desc {
+  font-size: 11.5px;
+  color: var(--anime-text-muted);
+}
+</style>

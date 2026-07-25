@@ -119,7 +119,7 @@ pub(crate) fn is_wallpaper_suitable(img: &ImageInfo, wallpaper_mode: &str) -> bo
     if wallpaper_mode == "window" || wallpaper_mode == "plasma-plugin" {
         return true;
     }
-    !kabegame_core::image_type::is_video_by_path(Path::new(&img.local_path))
+    !kabegame_core::media::image_type::is_video_by_path(Path::new(&img.local_path))
 }
 
 /// 随机模式: 从 `<base>/x100x/` 随机抽一页, 再从该页可用图中随机取一张;
@@ -276,7 +276,7 @@ impl WallpaperRotator {
         if wallpaper_mode == "window" || wallpaper_mode == "plasma-plugin" {
             return true;
         }
-        !kabegame_core::image_type::is_video_by_path(Path::new(path))
+        !kabegame_core::media::image_type::is_video_by_path(Path::new(path))
     }
 
     async fn load_images_for_source(

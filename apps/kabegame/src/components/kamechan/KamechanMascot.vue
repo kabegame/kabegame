@@ -12,14 +12,24 @@
       @touchend.passive="cancelLongPress"
       @touchcancel.passive="cancelLongPress"
     >
+      <!-- 工具箱气泡打开时替换消息气泡，关闭后消息气泡自动恢复 -->
       <KameBubble
         :text="currentMessage?.text ?? ''"
         :type="currentMessage?.type ?? 'info'"
-        :visible="!!currentMessage"
+        :visible="!!currentMessage && !toolboxModal.isOpen.value"
         :more-text="moreText"
         :side="bubbleSide"
         :max-width="bubbleMaxWidth"
         :compact="minimized"
+      />
+
+      <KameToolboxBubble
+        :visible="toolboxModal.isOpen.value"
+        :side="bubbleSide"
+        :max-width="bubbleMaxWidth"
+        :compact="minimized"
+        @open-settings="handleOpenSettings"
+        @close="toolboxModal.close()"
       />
 
       <button
@@ -70,7 +80,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from "vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { storeToRefs } from "pinia";
-import { Clock, Hide, Minus } from "@element-plus/icons-vue";
+import { Clock, FullScreen, Hide, Minus } from "@element-plus/icons-vue";
 import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import { useKameMessageStore } from "@kabegame/core/stores/kameMessage";
@@ -80,8 +90,11 @@ import { useI18n } from "@kabegame/i18n";
 import appLogoUrl from "@/assets/icon-small.png";
 import { useKamechanMachine } from "./useKamechanMachine";
 import KameBubble from "./KameBubble.vue";
+import KameToolboxBubble from "./KameToolboxBubble.vue";
 import KamechanHistoryDialog from "./KamechanHistoryDialog.vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState.ts";
+
+const emit = defineEmits<{ "open-settings": [] }>();
 
 const { t } = useI18n();
 const store = useKameMessageStore();
@@ -95,6 +108,8 @@ const {
 
 const minimized = ref(false);
 const historyModal = useModal();
+/** kamechan 开着时它就是全局工具箱的入口（方案 2a），点击 toggle 气泡 */
+const toolboxModal = useModal();
 const hostEl = ref<HTMLElement | null>(null);
 const position = ref<{ left: number; bottom: number } | null>(null);
 const isDragging = ref(false);
@@ -149,12 +164,20 @@ const actions = computed<ActionItem<"kamechan">[]>(() => [
     label: t("kamechan.history"),
     icon: Clock,
   },
-  {
-    key: "minimize",
-    command: "minimize",
-    label: t("kamechan.minimize"),
-    icon: Minus,
-  },
+  // 点击已让位给工具箱气泡，「恢复立绘」改由右键菜单承载
+  ...(minimized.value
+    ? [{
+        key: "restore",
+        command: "restore",
+        label: t("kamechan.restore"),
+        icon: FullScreen,
+      } as ActionItem<"kamechan">]
+    : [{
+        key: "minimize",
+        command: "minimize",
+        label: t("kamechan.minimize"),
+        icon: Minus,
+      } as ActionItem<"kamechan">]),
   {
     key: "disable",
     command: "disable",
@@ -214,20 +237,40 @@ function restore() {
   wave();
 }
 
+/** 立绘态与缩小态都是同一个动作：toggle 工具箱气泡（打开时顺带挥个手） */
+function toggleToolbox() {
+  if (toolboxModal.isOpen.value) {
+    toolboxModal.close();
+    return;
+  }
+  toolboxModal.open();
+  wave();
+}
+
 function handleMascotClick(event: MouseEvent) {
   if (consumeSuppressedClick(event)) return;
-  wave();
+  toggleToolbox();
 }
 
 function handleMinimizedClick(event: MouseEvent) {
   if (consumeSuppressedClick(event)) return;
-  restore();
+  toggleToolbox();
+}
+
+function handleOpenSettings() {
+  toolboxModal.close();
+  // 桌面弹窗 / 紧凑路由的分流由 App.vue 决定，这里只上报意图
+  emit("open-settings");
 }
 
 function handleCommand(command: string) {
   hideMenu();
   if (command === "history") {
     historyModal.open();
+    return;
+  }
+  if (command === "restore") {
+    restore();
     return;
   }
   if (command === "minimize") {
@@ -411,9 +454,25 @@ watch(minimized, async () => {
   clampCurrentPosition();
 });
 
+/** 点击 kamechan 宿主之外的任何地方收起工具箱气泡（宿主内的点击由 toggle 自己处理） */
+function handleDocumentPointerDown(event: PointerEvent) {
+  const host = hostEl.value;
+  if (host && event.target instanceof Node && host.contains(event.target)) return;
+  toolboxModal.close();
+}
+
+watch(() => toolboxModal.isOpen.value, (open) => {
+  if (open) {
+    document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+  } else {
+    document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
+  }
+});
+
 watch(kamechanEnabled, (enabled) => {
   if (!enabled) {
     hideMenu();
+    toolboxModal.close();
     store.closeKamechanQueue();
   }
 });
@@ -435,6 +494,7 @@ onBeforeUnmount(() => {
   cancelLongPress();
   cleanupDrag();
   window.removeEventListener("resize", clampCurrentPosition);
+  document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
 });
 </script>
 

@@ -47,3 +47,22 @@ export function flattenAlbumTreeForAndroidPicker(
     ...flattenAlbumTreeForAndroidPicker(n.children, albumCounts, depth + 1),
   ]);
 }
+
+/**
+ * 安卓居中磨玻璃列表画册选择器：树压平为 { label, value, count, childCount } 列表。
+ * label 为纯画册名（不带缩进/计数），count/childCount 供调用方拼装描述文案（如「248 张 · 含 2 个子画册」）。
+ */
+export function flattenAlbumTreeForFrostedPicker(
+  nodes: AlbumTreeNode[],
+  albumCounts: Record<string, number>,
+): { label: string; value: string; count: number; childCount: number }[] {
+  return nodes.flatMap((n) => [
+    {
+      label: n.name,
+      value: n.id,
+      count: albumCounts[n.id] ?? 0,
+      childCount: n.children.length,
+    },
+    ...flattenAlbumTreeForFrostedPicker(n.children, albumCounts),
+  ]);
+}

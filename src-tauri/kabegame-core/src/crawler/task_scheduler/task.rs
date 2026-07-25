@@ -181,8 +181,8 @@ impl Task {
 
     /// 写入一行图片 metadata。plugin_id 与 packed 版本由本任务参数盖章
     /// （应用维护，插件不可传入）；WebView `downloadImage` 与 V8 ops 共用此入口。
-    pub fn insert_image_metadata(&self, value: &Value) -> Result<i64, String> {
-        Storage::global().insert_image_metadata_row(
+    pub fn insert_metadata(&self, value: &Value) -> Result<i64, String> {
+        Storage::global().insert_metadata_row(
             value,
             &self.params.plugin.id,
             self.params.plugin_version(),

@@ -515,7 +515,7 @@ impl Storage {
         if !failed_image_ids.is_empty() {
             GlobalEmitter::global().emit_failed_images_removed(task_id, &failed_image_ids);
         }
-        let _ = self.gc_image_metadata(&metadata_ids);
+        let _ = self.gc_metadata(&metadata_ids);
         Ok(())
     }
 
@@ -660,7 +660,7 @@ impl Storage {
                 GlobalEmitter::global().emit_failed_images_removed(&task_id, &ids);
             }
         }
-        let _ = self.gc_image_metadata(&metadata_ids);
+        let _ = self.gc_metadata(&metadata_ids);
         Ok(count)
     }
 
@@ -821,7 +821,7 @@ impl Storage {
             }
         };
         if let Some(metadata_id) = metadata_id {
-            let _ = self.gc_image_metadata(&[metadata_id]);
+            let _ = self.gc_metadata(&[metadata_id]);
         }
         Ok(())
     }
@@ -879,7 +879,7 @@ impl Storage {
         tx.commit()
             .map_err(|e| format!("Failed to commit delete_failed_images: {}", e))?;
         drop(conn);
-        let _ = self.gc_image_metadata(&metadata_ids);
+        let _ = self.gc_metadata(&metadata_ids);
         Ok(by_task.into_iter().collect())
     }
 

@@ -80,6 +80,7 @@
   "selectFolderFailed": "폴더 선택 실패",
   "pleaseSelectFolder": "폴더를 선택해 주세요",
   "albumCount": "{count}개 이미지",
+  "frostedPickerSubAlbumCount": "하위 앨범 {count}개 포함",
   "albumCardImageCount": "{imageCount}개 이미지",
   "albumCardSubAlbums": "/ {subAlbumCount}개 하위 앨범",
   "createdAt": "{date} 생성",

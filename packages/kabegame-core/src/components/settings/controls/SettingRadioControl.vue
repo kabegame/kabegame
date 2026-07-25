@@ -1,13 +1,17 @@
 <template>
-  <el-radio-group :model-value="radioValue" :disabled="props.disabled || disabled" :loading="showDisabled" @change="onChange">
-    <el-radio v-for="opt in options" :key="String(opt.value)" :value="opt.value">{{ opt.label }}</el-radio>
-  </el-radio-group>
+  <SegmentedControl
+    :model-value="radioValue"
+    :options="options"
+    :disabled="props.disabled || disabled || showDisabled"
+    @update:model-value="onChange"
+  />
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import { useSettingKeyState } from "../../../composables/useSettingKeyState";
 import { type AppSettingKey } from "../../../stores/settings";
+import SegmentedControl from "./SegmentedControl.vue";
 
 type Option = { label: string; value: string };
 
@@ -20,9 +24,8 @@ const props = defineProps<{
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState(props.settingKey);
 const radioValue = computed(() => settingValue.value == null ? "" : String(settingValue.value));
 
-const onChange = async (v: any) => {
-  const val = String(v);
-  await set(val);
+const onChange = async (v: string) => {
+  await set(v);
 };
 </script>
 

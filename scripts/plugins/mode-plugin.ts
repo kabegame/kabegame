@@ -254,9 +254,13 @@ export class ModePlugin extends BasePlugin {
         // (见 .cursor/rules/cef-path-set.mdc)。
         // 回退约定:Linux ~/i/cef-{dev,prod};Windows H:\cef-{dev,prod}；
         // macOS /Volumes/KIOXIA/cef-{dev,prod}(见 scripts/build-chromium.sh)。
+        // 只有主 app 组件链接 CEF(cef-dll-sys 在 tauri-runtime-cef 依赖链里);
+        // kabegame-cli 是 headless,不检查也不注入 CEF_PATH(web-release 容器等
+        // 无 CEF runtime 的环境要能单独构建 cli)。
         if (
           (OSPlugin.isLinux || OSPlugin.isWindows || OSPlugin.isMacOS) &&
-          !this.mode!.isWeb
+          !this.mode!.isWeb &&
+          bs.context.component!.isMain
         ) {
           // dev/check 用 cef-dev(check 只需要任意有效 CEF 目录做编译,不打包);
           // dev/check 用 cef-dev，build 用 cef-prod。

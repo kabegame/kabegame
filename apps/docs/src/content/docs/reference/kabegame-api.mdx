@@ -114,6 +114,15 @@ V8 靠 `crawl` 返回 / 抛异常结束；WebView 需显式收尾。
 
 完整的 V8 `fs` 类型见 `@kabegame/types` 的 `KabegameFsApi`。
 
+## 虚拟路径媒体工具 `Kabegame.ffmpeg`
+
+| 方法 | 签名 | V8 | WebView | 说明 |
+|---|---|:--:|:--:|---|
+| `ffmpeg.muxStreams` | `muxStreams(inputs, output): Promise<void>` <Badge text="4.4.0" variant="note" /> | ✅ | ✅ | 对至少两个媒体流做 stream-copy 合流。`inputs` 与 `output` 都必须是当前任务虚拟文件系统中的绝对路径。 |
+| `ffmpeg.probe` | `probe(path): Promise<ProbeResult \| null>` <Badge text="4.4.0" variant="note" /> | ✅ | ✅ | 探测虚拟路径媒体；成功返回 `{ isVideo, mimeType, width, height, browserSafe }`，无法识别或非视频返回 `null`。 |
+
+这两个 API 不接受或返回宿主真实路径。Android 不提供 FFmpeg/rsmpeg，调用会抛出可读的不支持错误。插件使用任一方法时，须声明 `engines.kabegame >= 4.4.0`。
+
 ## 元数据迁移辅助
 
 `metadata_migrations/migrate.js` 运行在**裸 V8**，**没有 `Kabegame.*`**，只有原生 `JSON` / `String` / `RegExp` 等。契约见 [V8 脚本 · 元数据迁移](/dev/v8-api/#元数据迁移)。

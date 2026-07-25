@@ -4,8 +4,10 @@
 #
 # 分工（与 docker-compose.web-release.yml 配套）：
 #   镜像构建（本文件）承担全部准备步骤——自编 deno（含 0004 node_modules 后缀补丁）、
-#   x264+FFmpeg 静态库、`deno install` 出 node_modules-web 种子；源码/依赖不变时全部命中层缓存。
-#   compose 运行时只剩最后一步 `deno task b -c kabegame --mode web`。
+#   x264+FFmpeg 静态库、`deno install` 出 node_modules-web 种子（根 workspace +
+#   src-crawler-plugins 独立工程）；源码/依赖不变时全部命中层缓存。
+#   compose 运行时只剩仓库源码自身的构建：kabegame-cli（release，插件 .kgpg 打包所需）
+#   与 `deno task b -c kabegame --mode web`。
 #
 # 路径契约：ffmpeg-builder 在 /src（=运行时 bind-mount 挂载点）就地构建，使 .pc 烧入的
 #   prefix=/src/third/*-build-web/install 在运行时容器里原样有效；产物经 /opt/kabegame/seed
@@ -86,6 +88,21 @@ COPY third/FFmpeg /src/third/FFmpeg
 
 RUN bash scripts/build-ffmpeg.sh
 
+########## scp-manifests：提取 src-crawler-plugins 清单（独立工程，plugins/* 随仓库演进） ##########
+# 先整体 COPY 再只取 package.json/deno.lock：本阶段随任意插件源码变动重跑（很快），
+# 但产出 /out 只含清单——下游 COPY --from 按内容寻址，清单不变则 nm-builder 层继续命中缓存。
+FROM base AS scp-manifests
+COPY src-crawler-plugins /tmp/scp
+RUN mkdir -p /out/src-crawler-plugins/plugins \
+ && cp /tmp/scp/package.json /tmp/scp/deno.lock /out/src-crawler-plugins/ \
+ && for d in /tmp/scp/plugins/*/; do \
+      n="$(basename "$d")"; \
+      if [ -f "$d/package.json" ]; then \
+        mkdir -p "/out/src-crawler-plugins/plugins/$n"; \
+        cp "$d/package.json" "/out/src-crawler-plugins/plugins/$n/"; \
+      fi; \
+    done
+
 ########## nm-builder：deno install 出 node_modules-web 种子（只 COPY 清单，依赖不变则缓存） ##########
 FROM base AS nm-builder
 COPY --from=deno-builder /usr/local/bin/deno /usr/local/bin/deno
@@ -103,11 +120,17 @@ COPY packages/kabegame-types/package.json /src/packages/kabegame-types/
 COPY packages/photoswipe-vue/package.json /src/packages/photoswipe-vue/
 COPY src-tauri-plugins/tauri-plugin-picker/package.json /src/src-tauri-plugins/tauri-plugin-picker/
 COPY src-tauri-plugins/tauri-plugin-share/package.json /src/src-tauri-plugins/tauri-plugin-share/
+# src-crawler-plugins 是独立工程（不在根 workspaces；rspack 构建插件、web 构建会把
+# 全部插件打进 resources/plugins），须单独 install 出它自己的 node_modules-web。
+# 其 file:../packages/* devDeps 由上面已 COPY 的 packages/* 清单满足（deno 以符号链接落位，
+# 运行时经 /src 挂载解析到真实源码）。
+COPY --from=scp-manifests /out/src-crawler-plugins /src/src-crawler-plugins
 
 # 0004 补丁：node_modules 路径在真实 IO 边界重定向到 node_modules-web，
 # 嵌套目录物理带后缀——必须由带该变量的 deno install 生成，不能从宿主树复制。
 # 装完把所有 node_modules-web 树收进 /opt/kabegame/seed（含清单），供 final/entrypoint 消费。
 RUN deno install --frozen \
+ && (cd /src/src-crawler-plugins && deno install --frozen) \
  && mkdir -p /opt/kabegame/seed \
  && find . -maxdepth 4 -type d -name 'node_modules-web' -not -path '*/node_modules-web/*' \
       | sed 's|^\./||' > /opt/kabegame/seed/nm-list.txt \

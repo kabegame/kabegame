@@ -33,9 +33,11 @@ version = "4.4.0"
 arc-swap= "1.7"
 async-trait = "0.1"
 base64 = "0.22"
+flate2 = "1"
 image = "0.24"
 include_dir = "0.7"
 json5 = "0.4"
+kamadak-exif = "0.6"
 kabegame-core = {path = "./src-tauri/kabegame-core", default-features = false}
 kabegame-i18n = {path = "./src-tauri/kabegame-i18n"}
 pathql-rs = {path = "./src-tauri/pathql-rs", default-features = false}

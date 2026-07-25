@@ -103,7 +103,7 @@ pub fn normalize_ext(ext: &str, fallback_ext: &str) -> String {
     let e = if e.is_empty() { fallback_ext.trim() } else { e };
     let e = e.trim().trim_start_matches('.').trim();
     if e.is_empty() {
-        crate::image_type::default_image_extension().to_string()
+        crate::media::image_type::default_image_extension().to_string()
     } else {
         e.to_ascii_lowercase()
     }
@@ -114,10 +114,13 @@ pub fn build_safe_filename(hint_filename: &str, fallback_ext: &str) -> String {
     let raw_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
     let raw_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-    let ext = if crate::image_type::is_supported_media_ext(raw_ext)
+    let ext = if crate::media::image_type::is_supported_media_ext(raw_ext)
         && !fallback_ext.trim().trim_start_matches('.').is_empty()
     {
-        normalize_ext(fallback_ext, crate::image_type::default_image_extension())
+        normalize_ext(
+            fallback_ext,
+            crate::media::image_type::default_image_extension(),
+        )
     } else {
         normalize_ext(raw_ext, fallback_ext)
     };
@@ -149,7 +152,7 @@ fn build_safe_custom_filename(hint_name: &str, ext: Option<&str>) -> String {
         return stem_final.to_string();
     };
 
-    let ext = normalize_ext(ext, crate::image_type::default_image_extension());
+    let ext = normalize_ext(ext, crate::media::image_type::default_image_extension());
     let suffix = format!(".{ext}");
     let raw_stem = hint_name
         .strip_suffix(&suffix)
@@ -162,7 +165,7 @@ fn build_safe_custom_filename(hint_name: &str, ext: Option<&str>) -> String {
         .or_else(|| {
             let path = Path::new(&hint_name);
             let hint_ext = path.extension().and_then(|value| value.to_str())?;
-            if crate::image_type::is_supported_media_ext(hint_ext) {
+            if crate::media::image_type::is_supported_media_ext(hint_ext) {
                 path.file_stem().and_then(|value| value.to_str())
             } else {
                 None
@@ -251,7 +254,7 @@ pub fn compute_unique_download_path(
     let filename = if let Some(ext) = ext.filter(|e| !e.trim().trim_start_matches('.').is_empty()) {
         let path = Path::new(url_path);
         let raw_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
-        let ext = normalize_ext(ext, crate::image_type::default_image_extension());
+        let ext = normalize_ext(ext, crate::media::image_type::default_image_extension());
         let stem = sanitize_stem_for_filename(raw_stem);
         let reserve = 1 + ext.len();
         let stem_max = MAX_SAFE_FILENAME_LEN.saturating_sub(reserve).max(1);
@@ -263,7 +266,7 @@ pub fn compute_unique_download_path(
         {
             build_safe_filename(
                 url_path,
-                extension.unwrap_or(crate::image_type::default_image_extension()),
+                extension.unwrap_or(crate::media::image_type::default_image_extension()),
             )
         }
         #[cfg(not(target_os = "android"))]
@@ -294,7 +297,8 @@ pub fn compute_unique_download_path_with_name(
             .and_then(|ext| ext.to_str())
     });
     #[cfg(target_os = "android")]
-    let fallback_ext = fallback_ext.or_else(|| Some(crate::image_type::default_image_extension()));
+    let fallback_ext =
+        fallback_ext.or_else(|| Some(crate::media::image_type::default_image_extension()));
 
     Ok(unique_path(
         output_dir,
@@ -395,7 +399,7 @@ mod tests {
     fn clamp_utf8_len_never_splits_a_multibyte_char() {
         use super::clamp_utf8_len;
         let s = "壁纸"; // 每个汉字 3 字节,共 6 字节
-        // max_len 落在字符中间时应回退到边界,而不是 panic 或产生非法 UTF-8。
+                        // max_len 落在字符中间时应回退到边界,而不是 panic 或产生非法 UTF-8。
         assert_eq!(clamp_utf8_len(s, 4), "壁");
         assert_eq!(clamp_utf8_len(s, 3), "壁");
         assert_eq!(clamp_utf8_len(s, 2), "");
@@ -446,7 +450,7 @@ mod tests {
 
 #[cfg(target_os = "android")]
 pub(super) fn derive_display_name_from_url(url: &str) -> String {
-    let fallback_ext = crate::image_type::default_image_extension();
+    let fallback_ext = crate::media::image_type::default_image_extension();
     let parsed = match Url::parse(url) {
         Ok(u) => u,
         Err(_) => return format!("image.{}", fallback_ext),
@@ -473,10 +477,10 @@ pub(super) fn mime_type_from_filename(filename: &str) -> String {
     let ext = Path::new(filename)
         .extension()
         .and_then(|e| e.to_str())
-        .unwrap_or(crate::image_type::default_image_extension())
+        .unwrap_or(crate::media::image_type::default_image_extension())
         .trim_start_matches('.')
         .to_ascii_lowercase();
-    crate::image_type::mime_by_ext()
+    crate::media::image_type::mime_by_ext()
         .get(&ext)
         .cloned()
         .unwrap_or_else(|| "application/octet-stream".to_string())

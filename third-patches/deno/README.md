@@ -62,6 +62,16 @@ All three patch `libs/core` (i.e. the `deno_core` crate). See
   Known limits: native subprocesses that walk the fs themselves (esbuild's binary during
   `vite dev` optimizeDeps) and deno_task_shell's PATH lookup of non-registered native bins
   don't see the illusion — neither is used by kabegame build/check flows.
+- `0006-node-modules-suffix-keep-alias-dir.patch` — `libs/npm_installer/local.rs`: follow-up
+  gap in 0004. `cleanup_unused_packages` lists `.deno/` with `fs_read_dir`, which returns
+  **physical** entry names — under a suffix the alias dir is physically `node_modules<suffix>`,
+  failing the literal `== "node_modules"` keep-check and getting `remove_dir_all`'d as an
+  "unused package folder"; the later conflict-alias symlinks into `.deno/node_modules/*` then
+  die with ENOENT (`symlink '../<pkg>@<ver>/node_modules/<pkg>' -> '…/.deno/node_modules/<pkg>'`).
+  Only projects whose graph contains the same package at conflicting versions exercise the
+  alias dir (kabegame root doesn't; src-crawler-plugins does — that's how it surfaced). Fix:
+  keep-check becomes `starts_with("node_modules")` — store folder names are `<name>@<version>`
+  and can never start with `node_modules`, so this is safe for any suffix including unset.
 
 Apply the whole series manually before building against `third/deno`:
 

@@ -132,7 +132,9 @@ await Kabegame.log("普通日志");
 await Kabegame.warn("找不到下载链接");   // = log(msg, "warn")
 ```
 
-`downloadImage` 对 `http(s)` 走下载队列；对 `data:` / `blob:` / MSE 媒体走内部媒体上传通道（框架已注入捕获脚本）。WebView 后端**没有** `createImageMetadata`——metadata 直接随 `downloadImage(url, { metadata })` 传。
+`downloadImage` 对 `http(s)` 走下载队列；对 `data:` / `blob:` / MSE 媒体仍由框架注入的捕获脚本处理，对插件的调用形状和结果不变。内部会把捕获内容经 `Kabegame.fs` 分块落到任务 VFS，多流再用 `Kabegame.ffmpeg` 显式合流，最终从虚拟路径提交入库。WebView 后端**没有** `createImageMetadata`——metadata 直接随 `downloadImage(url, { metadata })` 传。
+
+**内部流式上传通道已移除** <Badge text="4.4.0" variant="danger" />：自 4.4.0 起不再使用专用的 begin/chunk/end 上传命令或 base64 传输；`downloadImage(blob:/data:)` 的插件行为保持不变。
 
 ---
 

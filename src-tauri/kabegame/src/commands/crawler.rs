@@ -1,19 +1,13 @@
 // 部分文件系统命令实现取自并改编自 tauri-plugin-fs 2.4.4（Apache-2.0 OR MIT）。
 // 原始版权：Copyright 2019-2023 Tauri Programme within The Commons Conservancy；
 // Copyright 2018-2023 the Deno authors.
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use deno_fs::{FileSystem, OpenOptions};
 use deno_permissions::CheckedPathBuf;
-use kabegame_core::crawler::TaskScheduler;
-use kabegame_core::crawler::downloader::{
-    ActiveDownloadInfo, DownloadState, PostprocessSource, build_safe_filename,
-    build_safe_filename_no_ext, compute_unique_download_path_with_name, media_upload,
-    next_download_id, postprocess_downloaded_image, unique_path,
-};
 use kabegame_core::crawler::task_scheduler::{PageStackEntry, Task, TaskError};
 use kabegame_core::crawler::webview::{crawler_window_label, task_id_from_crawler_label};
+use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::plugin::vfs::PluginVfs;
+use kabegame_core::plugin::{ffmpeg::FfmpegProbeResult, vfs::PluginVfs};
 use kabegame_core::storage::Storage;
 use serde::Deserialize;
 use serde::Serialize;
@@ -112,7 +106,7 @@ impl CrawlFsFileResource {
 
 impl Resource for CrawlFsFileResource {}
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -120,13 +114,13 @@ fn now_ms() -> u64 {
 }
 
 /// `plugin_version` 为写入时运行插件的 packed 版本（应用维护，插件不可传入）。
-fn insert_metadata(
+pub(crate) fn insert_metadata(
     plugin_id: &str,
     metadata: Option<Value>,
     plugin_version: u32,
 ) -> Result<Option<i64>, String> {
     if let Some(value) = metadata {
-        Ok(Some(Storage::global().insert_image_metadata_row(
+        Ok(Some(Storage::global().insert_metadata_row(
             &value,
             plugin_id,
             plugin_version,
@@ -136,56 +130,7 @@ fn insert_metadata(
     }
 }
 
-fn media_upload_ext(mime: &str) -> String {
-    let base_mime = mime.split(';').next().unwrap_or("").trim().to_lowercase();
-    kabegame_core::image_type::ext_from_mime(&base_mime)
-        .unwrap_or_else(|| kabegame_core::image_type::default_image_extension().to_string())
-}
-
-fn compute_media_upload_path(
-    images_dir: &std::path::Path,
-    source_url: &Url,
-    mime: &str,
-    name: Option<&str>,
-) -> Result<PathBuf, String> {
-    let ext = media_upload_ext(mime);
-    compute_unique_download_path_with_name(images_dir, source_url, Some(&ext), name)
-}
-
-fn compute_media_upload_paths(
-    images_dir: &std::path::Path,
-    source_url: &Url,
-    streams: &[MediaStreamInit],
-    name: Option<&str>,
-) -> Result<Vec<(PathBuf, String)>, String> {
-    if streams.is_empty() {
-        return Err("Media upload requires at least one stream".to_string());
-    }
-    if streams.len() == 1 {
-        let mime = streams[0].mime.clone().unwrap_or_default();
-        return Ok(vec![(
-            compute_media_upload_path(images_dir, source_url, &mime, name)?,
-            mime,
-        )]);
-    }
-
-    let base_name = name
-        .filter(|value| !value.trim().is_empty())
-        .map(build_safe_filename_no_ext)
-        .unwrap_or_else(|| "media".to_string());
-    streams
-        .iter()
-        .enumerate()
-        .map(|(idx, stream)| {
-            let mime = stream.mime.clone().unwrap_or_default();
-            let ext = media_upload_ext(&mime);
-            let filename = build_safe_filename(&format!("{base_name}-{idx}.{ext}"), &ext);
-            Ok((unique_path(images_dir, &filename), mime))
-        })
-        .collect()
-}
-
-fn surf_download_name_from_url(url: &Url) -> Option<String> {
+pub(crate) fn surf_download_name_from_url(url: &Url) -> Option<String> {
     if matches!(url.scheme(), "blob" | "data") {
         return None;
     }
@@ -242,13 +187,7 @@ pub(crate) fn finish_native_download(
         .as_deref()
         .and_then(native_download_id_from_path)
         .and_then(|id| dq.take_native_completion(id))
-        .or_else(|| {
-            dq.take_native_completion_for_owner_url(
-                task_id,
-                surf_record_id,
-                url.as_str(),
-            )
-        });
+        .or_else(|| dq.take_native_completion_for_owner_url(task_id, surf_record_id, url.as_str()));
     let Some(tx) = tx else {
         if let Some(path) = path {
             let _ = std::fs::remove_file(path);
@@ -262,92 +201,24 @@ pub(crate) fn finish_native_download(
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MediaStreamInit {
-    pub mime: Option<String>,
-    pub total_bytes: Option<u64>,
-}
-
 #[derive(Debug)]
-struct MediaReceiveCtx {
-    images_dir: PathBuf,
-    plugin_id: String,
-    /// 运行中插件的 packed 版本；surf 窗口（无插件语境）恒为 0。
-    plugin_version: u32,
-    task_id: String,
-    surf_record_id: Option<String>,
-    output_album_id: Option<String>,
-    http_headers: HashMap<String, String>,
+pub(crate) struct SurfReceiveCtx {
+    pub(crate) images_dir: PathBuf,
+    pub(crate) host: String,
+    pub(crate) surf_record_id: String,
 }
 
-// surf 内容 webview 所在窗口含 navbar 子 webview,不是 WebviewWindow,
-// 命令参数用 `Webview`(对 crawler 窗口同样适用),按 label 分流。
-async fn media_ctx_from_label(
-    label: &str,
-    include_headers: bool,
-) -> Result<MediaReceiveCtx, String> {
-    if label.starts_with("crawler-") {
-        let (task_id, run) = run_of_label(label)?;
-        let merged_headers = if include_headers {
-            let mut request_headers = HashMap::new();
-            if let Some(page_url) = run.current_page_url().filter(|url| !url.trim().is_empty()) {
-                request_headers.insert("Referer".to_string(), page_url);
-            }
-            merge_task_headers(&task_id, Some(request_headers), None)?
-        } else {
-            HashMap::new()
-        };
-        return Ok(MediaReceiveCtx {
-            images_dir: run.params.images_dir.clone(),
-            plugin_id: run.params.plugin.id.clone(),
-            plugin_version: run.params.plugin_version(),
-            task_id,
-            surf_record_id: None,
-            output_album_id: run.params.output_album_id.clone(),
-            http_headers: merged_headers,
-        });
-    }
-
-    if let Some(host) = surf_host_from_label(label) {
-        let record = Storage::global()
-            .get_surf_record_by_host(&host)?
-            .ok_or_else(|| format!("Surf record not found for host: {host}"))?;
-        return Ok(MediaReceiveCtx {
-            images_dir: kabegame_core::crawler::downloader::get_default_images_dir(),
-            plugin_id: host,
-            plugin_version: 0,
-            task_id: String::new(),
-            surf_record_id: Some(record.id),
-            output_album_id: None,
-            http_headers: HashMap::new(),
-        });
-    }
-
-    Err(format!("Invalid media receiver window label: {label}"))
-}
-
-fn active_download_matches_ctx(entry: &ActiveDownloadInfo, ctx: &MediaReceiveCtx) -> bool {
-    if !ctx.task_id.is_empty() {
-        entry.task_id == ctx.task_id
-    } else {
-        entry.task_id.is_empty()
-            && entry.plugin_id == ctx.plugin_id
-            && entry.surf_record_id == ctx.surf_record_id
-    }
-}
-
-fn sum_stream_totals(streams: &[MediaStreamInit]) -> Result<Option<u64>, String> {
-    let mut total = 0u64;
-    for stream in streams {
-        let Some(bytes) = stream.total_bytes else {
-            return Ok(None);
-        };
-        total = total
-            .checked_add(bytes)
-            .ok_or_else(|| "Media upload total byte count overflow".to_string())?;
-    }
-    Ok(Some(total))
+pub(crate) fn surf_ctx_from_label(label: &str) -> Result<SurfReceiveCtx, String> {
+    let host =
+        surf_host_from_label(label).ok_or_else(|| format!("Invalid surf window label: {label}"))?;
+    let record = Storage::global()
+        .get_surf_record_by_host(&host)?
+        .ok_or_else(|| format!("Surf record not found for host: {host}"))?;
+    Ok(SurfReceiveCtx {
+        images_dir: kabegame_core::crawler::downloader::get_default_images_dir(),
+        host,
+        surf_record_id: record.id,
+    })
 }
 
 fn surf_host_from_label(label: &str) -> Option<String> {
@@ -461,6 +332,17 @@ fn run_of_label(label: &str) -> Result<(String, Arc<Task>), String> {
     Ok((task_id, run))
 }
 
+fn vfs_of_label(label: &str) -> Result<Arc<PluginVfs>, String> {
+    if label.starts_with("crawler-") {
+        return run_of_label(label).map(|(_, run)| Arc::clone(&run.vfs));
+    }
+    if let Some(host) = surf_host_from_label(label) {
+        return crate::commands::surf_session::get_or_create_session(&host)
+            .map(|session| Arc::clone(&session.vfs));
+    }
+    Err(format!("Invalid fs window label: {label}"))
+}
+
 async fn crawl_fs_blocking<T, F>(
     vfs: Arc<PluginVfs>,
     path: String,
@@ -480,7 +362,7 @@ where
 }
 
 async fn crawl_fs_file_blocking<R, T, F>(
-    webview: &WebviewWindow<R>,
+    webview: &Webview<R>,
     rid: ResourceId,
     operation: &'static str,
     action: F,
@@ -689,10 +571,7 @@ fn crawl_fs_stat_from_std(metadata: std::fs::Metadata) -> CrawlFsStat {
     }
 }
 
-fn crawl_fs_size_sync(
-    vfs: &PluginVfs,
-    path: CheckedPathBuf,
-) -> Result<u64, deno_fs::FsError> {
+fn crawl_fs_size_sync(vfs: &PluginVfs, path: CheckedPathBuf) -> Result<u64, deno_fs::FsError> {
     let stat = vfs.stat_sync(&path.as_checked_path())?;
     if stat.is_file {
         return Ok(stat.size);
@@ -701,22 +580,24 @@ fn crawl_fs_size_sync(
     let mut size = 0u64;
     for entry in vfs.read_dir_sync(&path.as_checked_path())? {
         let child = CheckedPathBuf::unsafe_new(path.join(entry.name));
-        size = size.checked_add(crawl_fs_size_sync(vfs, child)?).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "File size overflow")
-        })?;
+        size = size
+            .checked_add(crawl_fs_size_sync(vfs, child)?)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "File size overflow")
+            })?;
     }
     Ok(size)
 }
 
 #[tauri::command]
 pub async fn crawl_fs_open<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     path: String,
     options: Option<CrawlFsOpenOptions>,
 ) -> Result<ResourceId, String> {
-    let (_, run) = run_of(&webview)?;
+    let vfs = vfs_of_label(webview.label())?;
     let options = crawl_fs_open_options(options);
-    let file = crawl_fs_blocking(run.vfs.clone(), path, "open", move |vfs, path| {
+    let file = crawl_fs_blocking(vfs, path, "open", move |vfs, path| {
         vfs.open_std(&path, options)
     })
     .await?;
@@ -727,10 +608,10 @@ pub async fn crawl_fs_open<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_create<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     path: String,
 ) -> Result<ResourceId, String> {
-    let (_, run) = run_of(&webview)?;
+    let vfs = vfs_of_label(webview.label())?;
     let options = OpenOptions {
         read: false,
         write: true,
@@ -741,7 +622,7 @@ pub async fn crawl_fs_create<R: Runtime>(
         custom_flags: None,
         mode: None,
     };
-    let file = crawl_fs_blocking(run.vfs.clone(), path, "create", move |vfs, path| {
+    let file = crawl_fs_blocking(vfs, path, "create", move |vfs, path| {
         vfs.open_std(&path, options)
     })
     .await?;
@@ -752,7 +633,7 @@ pub async fn crawl_fs_create<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_fread<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     rid: ResourceId,
     len: usize,
 ) -> Result<tauri::ipc::Response, String> {
@@ -770,7 +651,7 @@ pub async fn crawl_fs_fread<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_fwrite<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     request: tauri::ipc::Request<'_>,
 ) -> Result<usize, String> {
     let (rid, data) = crawl_fs_raw_handle_write_request(&request)?;
@@ -779,7 +660,7 @@ pub async fn crawl_fs_fwrite<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_fseek<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     rid: ResourceId,
     offset: i64,
     whence: u16,
@@ -798,7 +679,7 @@ pub async fn crawl_fs_fseek<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_fstat<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     rid: ResourceId,
 ) -> Result<CrawlFsStat, String> {
     crawl_fs_file_blocking(&webview, rid, "fstat", |file| {
@@ -809,7 +690,7 @@ pub async fn crawl_fs_fstat<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_ftruncate<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     rid: ResourceId,
     len: Option<u64>,
 ) -> Result<(), String> {
@@ -820,10 +701,7 @@ pub async fn crawl_fs_ftruncate<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn crawl_fs_close<R: Runtime>(
-    webview: WebviewWindow<R>,
-    rid: ResourceId,
-) -> Result<(), String> {
+pub fn crawl_fs_close<R: Runtime>(webview: Webview<R>, rid: ResourceId) -> Result<(), String> {
     let resource = webview
         .resources_table()
         .take::<CrawlFsFileResource>(rid)
@@ -834,11 +712,11 @@ pub fn crawl_fs_close<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_read_file<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     path: String,
 ) -> Result<tauri::ipc::Response, String> {
-    let (_, run) = run_of(&webview)?;
-    let bytes = crawl_fs_blocking(run.vfs.clone(), path, "readfile", |vfs, path| {
+    let vfs = vfs_of_label(webview.label())?;
+    let bytes = crawl_fs_blocking(vfs, path, "readfile", |vfs, path| {
         vfs.read_file_sync(&path.as_checked_path(), OpenOptions::read())
             .map(|bytes| bytes.into_owned())
     })
@@ -848,11 +726,11 @@ pub async fn crawl_fs_read_file<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_read_text_file<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     path: String,
 ) -> Result<tauri::ipc::Response, String> {
-    let (_, run) = run_of(&webview)?;
-    let text = crawl_fs_blocking(run.vfs.clone(), path, "readtextfile", |vfs, path| {
+    let vfs = vfs_of_label(webview.label())?;
+    let text = crawl_fs_blocking(vfs, path, "readtextfile", |vfs, path| {
         vfs.read_text_file_lossy_sync(&path.as_checked_path())
             .map(|text| text.into_owned())
     })
@@ -862,10 +740,10 @@ pub async fn crawl_fs_read_text_file<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_write_file<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     request: tauri::ipc::Request<'_>,
 ) -> Result<(), String> {
-    let (_, run) = run_of(&webview)?;
+    let vfs = vfs_of_label(webview.label())?;
     let (path, data, options) = crawl_fs_raw_write_request(&request)?;
     let open_options = OpenOptions::write(
         options.create.unwrap_or(true),
@@ -873,7 +751,7 @@ pub async fn crawl_fs_write_file<R: Runtime>(
         options.create_new.unwrap_or(false),
         options.mode,
     );
-    crawl_fs_blocking(run.vfs.clone(), path, "writefile", move |vfs, path| {
+    crawl_fs_blocking(vfs, path, "writefile", move |vfs, path| {
         vfs.write_file_sync(&path.as_checked_path(), open_options, &data)
     })
     .await
@@ -881,10 +759,10 @@ pub async fn crawl_fs_write_file<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_write_text_file<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     request: tauri::ipc::Request<'_>,
 ) -> Result<(), String> {
-    let (_, run) = run_of(&webview)?;
+    let vfs = vfs_of_label(webview.label())?;
     let (path, data, options) = crawl_fs_raw_write_request(&request)?;
     let open_options = OpenOptions::write(
         options.create.unwrap_or(true),
@@ -892,7 +770,7 @@ pub async fn crawl_fs_write_text_file<R: Runtime>(
         options.create_new.unwrap_or(false),
         options.mode,
     );
-    crawl_fs_blocking(run.vfs.clone(), path, "writetextfile", move |vfs, path| {
+    crawl_fs_blocking(vfs, path, "writetextfile", move |vfs, path| {
         vfs.write_file_sync(&path.as_checked_path(), open_options, &data)
     })
     .await
@@ -900,15 +778,15 @@ pub async fn crawl_fs_write_text_file<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_mkdir<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     path: String,
     options: Option<CrawlFsMkdirOptions>,
 ) -> Result<(), String> {
-    let (_, run) = run_of(&webview)?;
+    let vfs = vfs_of_label(webview.label())?;
     let options = options.unwrap_or_default();
     let recursive = options.recursive.unwrap_or(false);
     let mode = Some(options.mode.unwrap_or(0o777) & 0o777);
-    crawl_fs_blocking(run.vfs.clone(), path, "mkdir", move |vfs, path| {
+    crawl_fs_blocking(vfs, path, "mkdir", move |vfs, path| {
         vfs.mkdir_sync(&path.as_checked_path(), recursive, mode)
     })
     .await
@@ -916,11 +794,11 @@ pub async fn crawl_fs_mkdir<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_read_dir<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     path: String,
 ) -> Result<Vec<CrawlFsDirEntry>, String> {
-    let (_, run) = run_of(&webview)?;
-    crawl_fs_blocking(run.vfs.clone(), path, "readdir", |vfs, path| {
+    let vfs = vfs_of_label(webview.label())?;
+    crawl_fs_blocking(vfs, path, "readdir", |vfs, path| {
         vfs.read_dir_sync(&path.as_checked_path()).map(|entries| {
             entries
                 .into_iter()
@@ -938,13 +816,13 @@ pub async fn crawl_fs_read_dir<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_remove<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     path: String,
     options: Option<CrawlFsRemoveOptions>,
 ) -> Result<(), String> {
-    let (_, run) = run_of(&webview)?;
+    let vfs = vfs_of_label(webview.label())?;
     let recursive = options.unwrap_or_default().recursive.unwrap_or(false);
-    crawl_fs_blocking(run.vfs.clone(), path, "remove", move |vfs, path| {
+    crawl_fs_blocking(vfs, path, "remove", move |vfs, path| {
         vfs.remove_sync(&path.as_checked_path(), recursive)
     })
     .await
@@ -952,63 +830,57 @@ pub async fn crawl_fs_remove<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_stat<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     path: String,
 ) -> Result<CrawlFsStat, String> {
-    let (_, run) = run_of(&webview)?;
-    crawl_fs_metadata(run.vfs.clone(), path, "stat", true).await
+    let vfs = vfs_of_label(webview.label())?;
+    crawl_fs_metadata(vfs, path, "stat", true).await
 }
 
 #[tauri::command]
 pub async fn crawl_fs_lstat<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     path: String,
 ) -> Result<CrawlFsStat, String> {
-    let (_, run) = run_of(&webview)?;
-    crawl_fs_metadata(run.vfs.clone(), path, "lstat", false).await
+    let vfs = vfs_of_label(webview.label())?;
+    crawl_fs_metadata(vfs, path, "lstat", false).await
 }
 
 #[tauri::command]
 pub async fn crawl_fs_rename<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     old_path: String,
     new_path: String,
 ) -> Result<(), String> {
-    let (_, run) = run_of(&webview)?;
-    crawl_fs_blocking(run.vfs.clone(), old_path, "rename", move |vfs, old_path| {
+    let vfs = vfs_of_label(webview.label())?;
+    crawl_fs_blocking(vfs, old_path, "rename", move |vfs, old_path| {
         let new_path = CheckedPathBuf::unsafe_new(PathBuf::from(new_path));
-        vfs.rename_sync(
-            &old_path.as_checked_path(),
-            &new_path.as_checked_path(),
-        )
+        vfs.rename_sync(&old_path.as_checked_path(), &new_path.as_checked_path())
     })
     .await
 }
 
 #[tauri::command]
 pub async fn crawl_fs_copy_file<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     from_path: String,
     to_path: String,
 ) -> Result<(), String> {
-    let (_, run) = run_of(&webview)?;
-    crawl_fs_blocking(run.vfs.clone(), from_path, "copyfile", move |vfs, from_path| {
+    let vfs = vfs_of_label(webview.label())?;
+    crawl_fs_blocking(vfs, from_path, "copyfile", move |vfs, from_path| {
         let to_path = CheckedPathBuf::unsafe_new(PathBuf::from(to_path));
-        vfs.copy_file_sync(
-            &from_path.as_checked_path(),
-            &to_path.as_checked_path(),
-        )
+        vfs.copy_file_sync(&from_path.as_checked_path(), &to_path.as_checked_path())
     })
     .await
 }
 
 #[tauri::command]
 pub async fn crawl_fs_exists<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     path: String,
 ) -> Result<bool, String> {
-    let (_, run) = run_of(&webview)?;
-    crawl_fs_blocking(run.vfs.clone(), path, "exists", |vfs, path| {
+    let vfs = vfs_of_label(webview.label())?;
+    crawl_fs_blocking(vfs, path, "exists", |vfs, path| {
         Ok(vfs.exists_sync(&path.as_checked_path()))
     })
     .await
@@ -1016,32 +888,26 @@ pub async fn crawl_fs_exists<R: Runtime>(
 
 #[tauri::command]
 pub async fn crawl_fs_truncate<R: Runtime>(
-    webview: WebviewWindow<R>,
+    webview: Webview<R>,
     path: String,
     len: Option<u64>,
 ) -> Result<(), String> {
-    let (_, run) = run_of(&webview)?;
-    crawl_fs_blocking(run.vfs.clone(), path, "truncate", move |vfs, path| {
+    let vfs = vfs_of_label(webview.label())?;
+    crawl_fs_blocking(vfs, path, "truncate", move |vfs, path| {
         vfs.truncate_sync(&path.as_checked_path(), len.unwrap_or(0))
     })
     .await
 }
 
 #[tauri::command]
-pub async fn crawl_fs_size<R: Runtime>(
-    webview: WebviewWindow<R>,
-    path: String,
-) -> Result<u64, String> {
-    let (_, run) = run_of(&webview)?;
-    crawl_fs_blocking(run.vfs.clone(), path, "size", crawl_fs_size_sync).await
+pub async fn crawl_fs_size<R: Runtime>(webview: Webview<R>, path: String) -> Result<u64, String> {
+    let vfs = vfs_of_label(webview.label())?;
+    crawl_fs_blocking(vfs, path, "size", crawl_fs_size_sync).await
 }
 
 #[tauri::command]
-pub async fn crawl_fs_get_root<R: Runtime>(
-    webview: WebviewWindow<R>,
-) -> Result<String, String> {
-    let (_, run) = run_of(&webview)?;
-    let vfs = run.vfs.clone();
+pub async fn crawl_fs_get_root<R: Runtime>(webview: Webview<R>) -> Result<String, String> {
+    let vfs = vfs_of_label(webview.label())?;
     tokio::task::spawn_blocking(move || {
         vfs.cwd()
             .map(|path| path.to_string_lossy().into_owned())
@@ -1051,12 +917,29 @@ pub async fn crawl_fs_get_root<R: Runtime>(
     .map_err(|error| format!("Failed to join getroot: {error}"))?
 }
 
-fn merge_task_headers(
-    task_id: &str,
-    headers: Option<HashMap<String, String>>,
-    cookie_header: Option<String>,
-) -> Result<HashMap<String, String>, String> {
-    TaskScheduler::global().merge_task_headers(task_id, headers, cookie_header)
+#[tauri::command]
+pub async fn crawl_ffmpeg_mux<R: Runtime>(
+    webview: Webview<R>,
+    inputs: Vec<String>,
+    output: String,
+) -> Result<(), String> {
+    let vfs = vfs_of_label(webview.label())?;
+    tokio::task::spawn_blocking(move || {
+        kabegame_core::plugin::ffmpeg::mux_streams_sync(&vfs, &inputs, &output)
+    })
+    .await
+    .map_err(|error| format!("音视频合流任务执行失败：{error}"))?
+}
+
+#[tauri::command]
+pub async fn crawl_ffmpeg_probe<R: Runtime>(
+    webview: Webview<R>,
+    path: String,
+) -> Result<Option<FfmpegProbeResult>, String> {
+    let vfs = vfs_of_label(webview.label())?;
+    tokio::task::spawn_blocking(move || kabegame_core::plugin::ffmpeg::probe_sync(&vfs, &path))
+        .await
+        .map_err(|error| format!("媒体探测任务执行失败：{error}"))?
 }
 
 /// 每页动态状态按需单独获取（不再一次性 crawl_get_context；crawl.js 与 vars 在
@@ -1166,7 +1049,7 @@ pub async fn crawl_download_image<R: Runtime>(
     let images_dir = run.params.images_dir.clone();
     let download_start_time = now_ms();
     let metadata_id = metadata
-        .map(|value| run.insert_image_metadata(&value))
+        .map(|value| run.insert_metadata(&value))
         .transpose()?;
 
     let dq = TaskScheduler::global().download_queue();
@@ -1201,15 +1084,15 @@ pub async fn surf_download_image<R: Runtime>(
     metadata: Option<Value>,
     source_url: Option<String>,
 ) -> Result<(), String> {
-    let ctx = media_ctx_from_label(webview.label(), true).await?;
+    let ctx = surf_ctx_from_label(webview.label())?;
     let parsed = Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err("Surf download only supports http or https URLs".to_string());
     }
 
     let custom_name = name.or_else(|| surf_download_name_from_url(&parsed));
-    let metadata_id = insert_metadata(&ctx.plugin_id, metadata, ctx.plugin_version)?;
-    let mut http_headers = ctx.http_headers.clone();
+    let metadata_id = insert_metadata(&ctx.host, metadata, 0)?;
+    let mut http_headers = HashMap::new();
     if let Some(headers) = headers {
         http_headers.extend(headers);
     }
@@ -1217,11 +1100,11 @@ pub async fn surf_download_image<R: Runtime>(
     dq.download(
         parsed,
         ctx.images_dir,
-        ctx.plugin_id,
-        ctx.task_id,
+        ctx.host,
+        String::new(),
         now_ms(),
-        ctx.output_album_id,
-        ctx.surf_record_id,
+        None,
+        Some(ctx.surf_record_id),
         http_headers,
         None,
         custom_name,
@@ -1230,265 +1113,6 @@ pub async fn surf_download_image<R: Runtime>(
         source_url,
     )
     .await
-}
-
-#[tauri::command]
-pub async fn crawl_media_begin<R: Runtime>(
-    webview: tauri::Webview<R>,
-    source_url: String,
-    streams: Vec<MediaStreamInit>,
-    name: Option<String>,
-    metadata: Option<Value>,
-    page_url: Option<String>,
-) -> Result<u64, String> {
-    let ctx = media_ctx_from_label(webview.label(), true).await?;
-    let total_bytes = sum_stream_totals(&streams)?;
-    if matches!(total_bytes, Some(total) if total > media_upload::SESSION_MAX_BYTES) {
-        return Err(format!(
-            "Media upload exceeds {} bytes",
-            media_upload::SESSION_MAX_BYTES
-        ));
-    }
-
-    let parsed = Url::parse(&source_url).map_err(|e| format!("Invalid media URL: {}", e))?;
-    std::fs::create_dir_all(&ctx.images_dir)
-        .map_err(|e| format!("Failed to create media upload dir: {e}"))?;
-    let custom_name = name.or_else(|| {
-        ctx.surf_record_id
-            .as_ref()
-            .and_then(|_| surf_download_name_from_url(&parsed))
-    });
-    let paths =
-        compute_media_upload_paths(&ctx.images_dir, &parsed, &streams, custom_name.as_deref())?;
-    let download_id = next_download_id();
-    let download_start_time = now_ms();
-    let metadata_id = insert_metadata(&ctx.plugin_id, metadata, ctx.plugin_version)?;
-
-    media_upload::begin(
-        download_id,
-        ctx.task_id.clone(),
-        paths,
-        parsed.as_str().to_string(),
-        total_bytes,
-    )?;
-
-    let active_info = ActiveDownloadInfo {
-        id: download_id,
-        url: parsed.as_str().to_string(),
-        plugin_id: ctx.plugin_id.clone(),
-        start_time: download_start_time,
-        task_id: ctx.task_id.clone(),
-        state: DownloadState::Preparing,
-        retried_for: None,
-        received_bytes: 0,
-        total_bytes,
-        surf_record_id: ctx.surf_record_id.clone(),
-        http_headers: ctx.http_headers.clone(),
-        output_album_id: ctx.output_album_id.clone(),
-        custom_display_name: custom_name,
-        metadata_id,
-        post_url: page_url,
-        native_completion: Arc::new(StdMutex::new(None)),
-    };
-    let dq = TaskScheduler::global().download_queue();
-    if let Err(e) = dq.register_active_download(active_info) {
-        media_upload::abort(download_id);
-        return Err(e);
-    }
-    dq.switch_state(download_id, DownloadState::Downloading, None)
-        .await;
-    Ok(download_id)
-}
-
-#[tauri::command]
-pub async fn crawl_media_chunk<R: Runtime>(
-    webview: tauri::Webview<R>,
-    id: u64,
-    stream: Option<usize>,
-    data: String,
-) -> Result<(), String> {
-    let ctx = media_ctx_from_label(webview.label(), false).await?;
-    let dq = TaskScheduler::global().download_queue();
-    let Some(entry) = dq.get_active_download(id) else {
-        return Err(format!("Media upload download not found: {id}"));
-    };
-    if !active_download_matches_ctx(&entry, &ctx) {
-        return Err("Media upload context mismatch".to_string());
-    }
-
-    let bytes = BASE64_STANDARD
-        .decode(data.as_bytes())
-        .map_err(|e| format!("Invalid media upload chunk: {e}"))?;
-    match media_upload::append(id, stream.unwrap_or(0), &bytes) {
-        Ok((written, total)) => {
-            dq.report_progress(id, written, total);
-            Ok(())
-        }
-        Err(e) => {
-            media_upload::abort(id);
-            dq.switch_state(id, DownloadState::Failed, Some(e.as_str()))
-                .await;
-            dq.wait_then_finish_download(id, false).await;
-            Err(e)
-        }
-    }
-}
-
-#[tauri::command]
-pub async fn crawl_media_end<R: Runtime>(
-    webview: tauri::Webview<R>,
-    id: u64,
-    success: bool,
-    error: Option<String>,
-) -> Result<(), String> {
-    let ctx = media_ctx_from_label(webview.label(), false).await?;
-    let dq = TaskScheduler::global().download_queue();
-    let Some(entry) = dq.get_active_download(id) else {
-        if !success {
-            media_upload::abort(id);
-            return Ok(());
-        }
-        return Err(format!("Media upload download not found: {id}"));
-    };
-    if !active_download_matches_ctx(&entry, &ctx) {
-        return Err("Media upload context mismatch".to_string());
-    }
-
-    if !success {
-        media_upload::abort(id);
-        let error = error
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or("Media upload aborted");
-        dq.switch_state(id, DownloadState::Failed, Some(error))
-            .await;
-        dq.wait_then_finish_download(id, false).await;
-        return Ok(());
-    }
-
-    let upload = match media_upload::finish(id) {
-        Ok(upload) => upload,
-        Err(e) => {
-            dq.switch_state(id, DownloadState::Failed, Some(e.as_str()))
-                .await;
-            dq.wait_then_finish_download(id, false).await;
-            return Err(e);
-        }
-    };
-    if upload.task_id != ctx.task_id {
-        for (path, _) in &upload.streams {
-            let _ = std::fs::remove_file(path);
-        }
-        let error = "Media upload context mismatch";
-        dq.switch_state(id, DownloadState::Failed, Some(error))
-            .await;
-        dq.wait_then_finish_download(id, false).await;
-        return Err(error.to_string());
-    }
-    if let Some(total) = upload.total {
-        if total != upload.written {
-            let error = format!(
-                "Media upload size mismatch: wrote {} of {} bytes",
-                upload.written, total
-            );
-            dq.switch_state(id, DownloadState::Failed, Some(error.as_str()))
-                .await;
-            dq.wait_then_finish_download(id, false).await;
-            for (path, _) in &upload.streams {
-                let _ = std::fs::remove_file(path);
-            }
-            return Err(error);
-        }
-    }
-
-    let parsed =
-        Url::parse(&upload.source_url).map_err(|e| format!("Invalid media upload URL: {e}"))?;
-    dq.switch_state(id, DownloadState::Processing, None).await;
-    let task_id = (!entry.task_id.trim().is_empty()).then_some(entry.task_id.as_str());
-    let postprocess_path;
-    let temp_mux_path;
-    let relocate_to;
-    let delete_postprocess_source;
-    if upload.streams.len() == 1 {
-        postprocess_path = upload.streams[0].0.clone();
-        temp_mux_path = None;
-        relocate_to = None;
-        delete_postprocess_source = false;
-    } else {
-        #[cfg(target_os = "android")]
-        {
-            for (path, _) in &upload.streams {
-                let _ = std::fs::remove_file(path);
-            }
-            let error = "A/V stream merge not supported on Android";
-            dq.switch_state(id, DownloadState::Failed, Some(error))
-                .await;
-            dq.wait_then_finish_download(id, false).await;
-            return Err(error.to_string());
-        }
-
-        #[cfg(not(target_os = "android"))]
-        {
-            let out_ext = if upload
-                .streams
-                .iter()
-                .any(|(_, mime)| mime.to_lowercase().contains("webm"))
-            {
-                "webm"
-            } else {
-                "mp4"
-            };
-            let out_path = kabegame_core::app_paths::AppPaths::global()
-                .temp_dir
-                .join(format!("media-mux-{}.{}", id, out_ext));
-            if let Err(e) = kabegame_core::crawler::downloader::compress::mux_media_streams(
-                &upload.streams,
-                &out_path,
-            ) {
-                for (path, _) in &upload.streams {
-                    let _ = std::fs::remove_file(path);
-                }
-                let _ = std::fs::remove_file(&out_path);
-                dq.switch_state(id, DownloadState::Failed, Some(e.as_str()))
-                    .await;
-                dq.wait_then_finish_download(id, false).await;
-                return Err(e);
-            }
-            for (path, _) in &upload.streams {
-                let _ = std::fs::remove_file(path);
-            }
-            postprocess_path = out_path.clone();
-            temp_mux_path = Some(out_path);
-            relocate_to = Some(ctx.images_dir.as_path());
-            delete_postprocess_source = true;
-        }
-    }
-    let result = postprocess_downloaded_image(
-        &*dq,
-        id,
-        PostprocessSource::Path {
-            path: &postprocess_path,
-            relocate_to,
-        },
-        delete_postprocess_source,
-        &parsed,
-        &entry.plugin_id,
-        task_id,
-        None,
-        entry.surf_record_id.as_deref(),
-        entry.start_time,
-        entry.output_album_id.as_deref(),
-        &entry.http_headers,
-        entry.custom_display_name.as_deref(),
-        entry.metadata_id,
-        entry.post_url.as_deref(),
-    )
-    .await;
-    if let Some(path) = temp_mux_path.as_ref() {
-        let _ = std::fs::remove_file(path);
-    }
-    dq.wait_then_finish_download(id, false).await;
-    result.map(|_| ())
 }
 
 /// 更新当前页 page_state（浅合并），返回合并后的 page_state 供脚本直接复用

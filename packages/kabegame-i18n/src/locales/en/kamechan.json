@@ -1,9 +1,11 @@
 {
   "history": "Message history",
   "minimize": "Minimize",
+  "restore": "Restore",
   "disable": "Disable Kamechan",
   "historyTitle": "Message History",
   "historyEmpty": "No messages yet",
   "historyClear": "Clear",
-  "moreMessages": "{count} more messages"
+  "moreMessages": "{count} more messages",
+  "toolboxTitle": "What would you like to do?"
 }

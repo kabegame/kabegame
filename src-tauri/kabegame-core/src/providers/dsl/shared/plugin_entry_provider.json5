@@ -12,7 +12,7 @@
         // from images.metadata_id.
         "join": [{
             "kind": "LEFT",
-            "table": "image_metadata",
+            "table": "metadata",
             "as": "plugin_im",
             "on": "images.metadata_id = plugin_im.id",
             "in_need": true

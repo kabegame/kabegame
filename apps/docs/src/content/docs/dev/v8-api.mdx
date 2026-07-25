@@ -165,6 +165,52 @@ const root = Kabegame.fs.getRoot();
 await Kabegame.fs.writeTextFile(`${root}/data/cursor.txt`, "abc");
 ```
 
+### 虚拟路径媒体工具 `Kabegame.ffmpeg`
+
+`Kabegame.ffmpeg` <Badge text="4.4.0" variant="note" /> 提供两个高层媒体函数：
+
+- `await Kabegame.ffmpeg.muxStreams(inputs, output)`：对至少两个输入流做 stream-copy 合流。
+- `await Kabegame.ffmpeg.probe(path)`：返回 `{ isVideo, mimeType, width, height, browserSafe }`，无法识别或非视频时返回 `null`。
+
+输入与输出都必须是当前任务 VFS 的虚拟绝对路径。插件使用这些 API 时须声明 `engines.kabegame >= 4.4.0`；Android 调用会抛出可读的不支持错误。
+
+下面示例把已获取的音视频分片写入 VFS、合流，再用同一个虚拟路径下载 API 提交入库。文件句柄的 `write()` 可能短写，因此循环到整段写完：
+
+```ts
+async function writeParts(path: string, parts: ArrayBuffer[]) {
+  const file = await Kabegame.fs.create(path);
+  try {
+    for (const part of parts) {
+      const bytes = new Uint8Array(part);
+      let offset = 0;
+      while (offset < bytes.byteLength) {
+        const written = await file.write(bytes.subarray(offset));
+        if (written <= 0) throw new Error("写入媒体分片失败");
+        offset += written;
+      }
+    }
+  } finally {
+    file.close();
+  }
+}
+
+const root = Kabegame.fs.getRoot();
+const workDir = `${root}/tmp/media-example`;
+const videoPath = `${workDir}/video.mp4`;
+const audioPath = `${workDir}/audio.mp4`;
+const outputPath = `${workDir}/output.mp4`;
+
+await Kabegame.fs.mkdir(workDir, { recursive: true });
+try {
+  await writeParts(videoPath, videoFragments);
+  await writeParts(audioPath, audioFragments);
+  await Kabegame.ffmpeg.muxStreams([videoPath, audioPath], outputPath);
+  await Kabegame.downloadImage(outputPath, { name: "合流视频", url: postUrl });
+} finally {
+  await Kabegame.fs.remove(workDir, { recursive: true });
+}
+```
+
 ---
 
 ## 提前退出与取消

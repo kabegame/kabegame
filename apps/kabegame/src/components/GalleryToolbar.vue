@@ -283,7 +283,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, ref, watch, onUnmounted, type Component } from "vue";
+import { computed, markRaw, ref, watch, onMounted, onUnmounted, type Component } from "vue";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
@@ -310,6 +310,7 @@ import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModal } from "@kabegame/core/composables/useModal";
+import { usePageBridgeStore } from "@/stores/pageBridge";
 import {
   GALLERY_ASPECT_BUCKETS,
   GALLERY_NAME_LANGUAGE_BUCKETS,
@@ -1573,8 +1574,6 @@ const totalCountText = computed(() => {
 
 const emit = defineEmits<{
   refresh: [];
-  showHelp: [];
-  showQuickSettings: [];
   showCrawlerDialog: [];
   showLocalImport: [];
   openCollectMenu: [];
@@ -1589,10 +1588,6 @@ const showIds = computed(() => {
     return [HeaderFeatureId.Collect, HeaderFeatureId.TaskDrawer];
   }
   return [
-    HeaderFeatureId.Refresh,
-    HeaderFeatureId.Help,
-    HeaderFeatureId.QuickSettings,
-    HeaderFeatureId.Organize,
     HeaderFeatureId.FailedImages,
     HeaderFeatureId.TaskDrawer,
     HeaderFeatureId.Collect,
@@ -1601,7 +1596,7 @@ const showIds = computed(() => {
 
 const foldIds = computed(() => {
   if (!uiStore.isCompact) {
-    return [HeaderFeatureId.ToggleShowAlbumImages, HeaderFeatureId.ToggleShowHidden];
+    return [];
   }
   const ids: HeaderFeatureId[] = [HeaderFeatureId.FailedImages];
   if (showGalleryFilterFold.value) {
@@ -1609,8 +1604,6 @@ const foldIds = computed(() => {
   }
   ids.push(HeaderFeatureId.GallerySort);
   ids.push(HeaderFeatureId.GalleryPageSize);
-  ids.push(HeaderFeatureId.ToggleShowAlbumImages);
-  ids.push(HeaderFeatureId.ToggleShowHidden);
   return ids;
 });
 
@@ -1624,18 +1617,8 @@ watch(
     showGalleryFilterFold,
     () => props.pageSize,
     () => failedImagesStore.allFailed.length,
-    galleryHide,
-    isNoAlbumBrowse,
   ],
   () => {
-    headerStore.setFoldLabel(
-      HeaderFeatureId.ToggleShowAlbumImages,
-      isNoAlbumBrowse.value ? t("header.showAlbumImages") : t("header.hideAlbumImages")
-    );
-    headerStore.setFoldLabel(
-      HeaderFeatureId.ToggleShowHidden,
-      galleryHide.value ? t("header.showHidden") : t("header.hideHidden")
-    );
     if (!uiStore.isCompact) return;
     headerStore.setFoldLabel(HeaderFeatureId.FailedImages, failedCountFoldLabel.value);
     if (showGalleryFilterFold.value) {
@@ -1652,8 +1635,6 @@ watch(
   { immediate: true }
 );
 onUnmounted(() => {
-  headerStore.setFoldLabel(HeaderFeatureId.ToggleShowAlbumImages, undefined);
-  headerStore.setFoldLabel(HeaderFeatureId.ToggleShowHidden, undefined);
   if (!uiStore.isCompact) return;
   headerStore.setFoldLabel(HeaderFeatureId.FailedImages, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, undefined);
@@ -1661,12 +1642,38 @@ onUnmounted(() => {
   headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, undefined);
 });
 
+// Refresh / ToggleShowHidden / ToggleShowAlbumImages 入口已收进全局工具箱，这里只注册桥接。
+const pageBridge = usePageBridgeStore();
+onMounted(() => {
+  pageBridge.setRefresh(() => emit("refresh"));
+  pageBridge.setToggleShowHidden({
+    get: () => galleryHide.value,
+    set: (v) => {
+      galleryRouteStore.hide = v;
+    },
+  });
+  pageBridge.setToggleShowAlbumImages({
+    get: () => isNoAlbumBrowse.value,
+    set: (v) => {
+      const next: GalleryFilterSet = { ...activeFilters.value };
+      if (v) {
+        next.noAlbum = true;
+      } else {
+        delete next.noAlbum;
+      }
+      emit("update:filters", next);
+    },
+  });
+});
+onUnmounted(() => {
+  pageBridge.setRefresh(null);
+  pageBridge.setToggleShowHidden(null);
+  pageBridge.setToggleShowAlbumImages(null);
+});
+
 // 处理action事件
 const handleAction = (payload: { id: string; data: { type: string; value?: string } }) => {
   switch (payload.id) {
-    case HeaderFeatureId.Refresh:
-      emit("refresh");
-      break;
     case HeaderFeatureId.Collect:
       if (payload.data.type === "openMenu") {
         emit("openCollectMenu");
@@ -1678,12 +1685,6 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
         }
       }
       break;
-    case HeaderFeatureId.Help:
-      emit("showHelp");
-      break;
-    case HeaderFeatureId.QuickSettings:
-      emit("showQuickSettings");
-      break;
     case HeaderFeatureId.GalleryFilter:
       filterPicker.open();
       break;
@@ -1694,28 +1695,12 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
       pageSizePickerSelected.value = [String(props.pageSize)];
       pageSizePicker.open();
       break;
-    case HeaderFeatureId.Organize:
-      // 整理由 header 的 OrganizeHeaderControl 处理，此处不会触发（Organize 在 show 中）
-      break;
     case HeaderFeatureId.FailedImages:
       // 桌面由 show 区的 FailedImagesHeaderButton comp 直接处理；
       // 紧凑模式走 fold 菜单 action，打开本组件托管的对话框
       failedImagesDialogRef.value?.setTaskId(undefined);
       failedImagesDialogRef.value?.open();
       break;
-    case HeaderFeatureId.ToggleShowHidden:
-      galleryRouteStore.hide = !galleryRouteStore.hide;
-      break;
-    case HeaderFeatureId.ToggleShowAlbumImages: {
-      const next: GalleryFilterSet = { ...activeFilters.value };
-      if (next.noAlbum) {
-        delete next.noAlbum;
-      } else {
-        next.noAlbum = true;
-      }
-      emit("update:filters", next);
-      break;
-    }
   }
 };
 </script>

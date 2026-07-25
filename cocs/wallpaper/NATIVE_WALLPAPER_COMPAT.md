@@ -39,7 +39,7 @@ Plasma 插件、macOS 与 Android manager 不接入此逻辑。
 
 - `src-tauri/kabegame-core/src/wallpaper_compat.rs`
 - `src-tauri/kabegame-core/src/crawler/downloader/compress.rs`
-- `src-tauri/kabegame-core/src/image_type.rs`
+- `src-tauri/kabegame-core/src/media/image_type.rs`
 - `src-tauri/kabegame-core/src/storage/images.rs`
 - `src-tauri/kabegame-core/src/storage/migrations/`
 - `src-tauri/kabegame/src/wallpaper/manager/native.rs`

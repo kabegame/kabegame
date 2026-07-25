@@ -2,9 +2,9 @@
 use crate::crawler::content_io::get_content_io_provider;
 #[cfg(windows)]
 use crate::crawler::downloader::util::remove_zone_identifier;
-use crate::crawler::TaskScheduler;
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::crawler::webview::get_webview_handler;
+use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::{ImageInfo, Storage};
@@ -13,11 +13,11 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::task::{Context, Poll, ready};
+use std::task::{ready, Context, Poll};
 use std::time::Instant;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::{Notify, oneshot};
-use tokio::time::{Duration, sleep};
+use tokio::sync::{oneshot, Notify};
+use tokio::time::{sleep, Duration};
 use url::Url;
 
 pub const DATA_URI_PLACEHOLDER: &str = "data:dummy";
@@ -27,25 +27,24 @@ pub mod compress;
 #[cfg(target_os = "android")]
 mod content;
 mod http;
-pub mod media_upload;
 pub mod queue;
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 mod task_vfs;
 pub mod util;
 
 pub use compress::{
-    IMAGE_COMPATIBLE_MAX_DIM, generate_compatible_image, generate_compatible_image_from_bytes,
-};
-pub use compress::{
-    IMAGE_THUMBNAIL_MAX_DIM, IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES, generate_thumbnail,
-    generate_thumbnail_from_bytes, image_needs_independent_thumbnail,
-    image_thumbnail_dimensions_acceptable,
+    generate_compatible_image, generate_compatible_image_from_bytes, IMAGE_COMPATIBLE_MAX_DIM,
 };
 #[cfg(not(target_os = "android"))]
-pub use compress::{VIDEO_COMPATIBLE_MAX_HEIGHT, generate_compatible_video};
+pub use compress::{generate_compatible_video, VIDEO_COMPATIBLE_MAX_HEIGHT};
+pub use compress::{
+    generate_thumbnail, generate_thumbnail_from_bytes, image_needs_independent_thumbnail,
+    image_thumbnail_dimensions_acceptable, IMAGE_THUMBNAIL_MAX_DIM,
+    IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES,
+};
 pub use http::{build_reqwest_header_map, create_client};
 pub use queue::{
-    ActiveDownloadInfo, DownloadQueue, DownloadRequest, DownloadState, next_download_id,
+    next_download_id, ActiveDownloadInfo, DownloadQueue, DownloadRequest, DownloadState,
 };
 pub use util::{
     build_safe_filename, build_safe_filename_no_ext, compute_bytes_hash, compute_file_hash,
@@ -509,9 +508,14 @@ pub async fn download_with_retry(
         let already_received = writer.received();
         let attempt_result = match (&native, downloader) {
             // native：CEF 下完后一次性把临时文件拷进 writer；失败即 Retriable 重试。
-            (Some(nc), _) => native_download_attempt(dq, nc, &parsed, download_id, &mut writer).await,
+            (Some(nc), _) => {
+                native_download_attempt(dq, nc, &parsed, download_id, &mut writer).await
+            }
             // 常规：按 scheme 的 downloader 直写 writer（支持 Range 续传）。
-            (None, Some(d)) => d.download(&parsed, headers, &mut writer, already_received).await,
+            (None, Some(d)) => {
+                d.download(&parsed, headers, &mut writer, already_received)
+                    .await
+            }
             (None, None) => unreachable!("non-native path always resolves a downloader"),
         };
         match attempt_result {
@@ -684,6 +688,62 @@ pub enum PostprocessSource<'a> {
     ContentUri,
 }
 
+async fn persist_native_metadata_best_effort(image: &ImageInfo, bytes: Option<&[u8]>) {
+    let format_key = image.media_type.as_deref().unwrap_or("").trim();
+    if !matches!(format_key, "image/jpg" | "image/jpeg" | "image/png") {
+        return;
+    }
+
+    let storage = Storage::global();
+    match storage.ensure_native_metadata_for_hash(&image.hash, None) {
+        Ok(Some(_)) => return,
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("[downloader] native metadata sharing failed: {e}");
+            return;
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    let file_bytes;
+    let source_bytes = if let Some(bytes) = bytes {
+        bytes
+    } else {
+        #[cfg(target_os = "android")]
+        {
+            // content:// 溢写不在下载链路整文件读取，留给查看命令懒计算。
+            return;
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            file_bytes = match std::fs::read(&image.local_path) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    eprintln!("[downloader] read image for native metadata failed: {e}");
+                    return;
+                }
+            };
+            &file_bytes
+        }
+    };
+
+    let Some(metadata) =
+        crate::media::native_metadata::parse_native_metadata(format_key, source_bytes)
+    else {
+        return;
+    };
+    let json = match serde_json::to_string(&metadata) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("[downloader] serialize native metadata failed: {e}");
+            return;
+        }
+    };
+    if let Err(e) = storage.ensure_native_metadata_for_hash(&image.hash, Some(&json)) {
+        eprintln!("[downloader] store native metadata failed: {e}");
+    }
+}
+
 /// 对图片数据处理，提取入库需要的参数，并在必要的时候落盘，最后入库
 /// 数据为字节或者路径，字节或者路径可能被复制到另一个最终path
 /// 安卓：自然下载的数据可能是在临时目录的字节或者文件，但不会被输出到任何地方，而是最后统一复制到Pictures
@@ -713,7 +773,7 @@ pub async fn postprocess_downloaded_image(
         // Android content:// 由系统 ContentIoProvider 提供 MIME。
         let (inferred_mime, hash, hash_ms) = match &source {
             PostprocessSource::Bytes { bytes, .. } => {
-                let inferred_mime = match crate::image_type::mime_type_from_bytes(bytes) {
+                let inferred_mime = match crate::media::image_type::mime_type_from_bytes(bytes) {
                     Some(mime) => mime,
                     None => {
                         return Err(format!("下载文件格式不受支持（infer）：{}", url));
@@ -725,7 +785,7 @@ pub async fn postprocess_downloaded_image(
                 (inferred_mime, hash, hash_ms)
             }
             PostprocessSource::Path { path, .. } => {
-                let inferred_mime = match crate::image_type::mime_type_from_path(path) {
+                let inferred_mime = match crate::media::image_type::mime_type_from_path(path) {
                     Some(mime) => mime,
                     None => {
                         return Err(format!("下载文件格式不受支持（infer）：{}", url));
@@ -750,7 +810,7 @@ pub async fn postprocess_downloaded_image(
                     .await
                     .ok()
                     .flatten()
-                    .unwrap_or_else(|| crate::image_type::default_image_format().to_string());
+                    .unwrap_or_else(|| crate::media::image_type::default_image_format().to_string());
                 let hash_start = Instant::now();
                 let hash = match io.compute_hash(url.as_str()).await {
                     Ok(h) => h,
@@ -761,7 +821,7 @@ pub async fn postprocess_downloaded_image(
             }
         };
         // 算正确的扩展名，稍后用来给新文件添加扩展名，如果没有新文件就没有用。
-        let inferred_ext = crate::image_type::ext_from_mime(&inferred_mime);
+        let inferred_ext = crate::media::image_type::ext_from_mime(&inferred_mime);
         let auto_deduplicate = Settings::global().get_auto_deduplicate();
 
         // 去重
@@ -818,7 +878,7 @@ pub async fn postprocess_downloaded_image(
                 #[cfg(target_os = "android")]
                 let path = {
                     let ext = inferred_ext
-                        .unwrap_or_else(|| crate::image_type::default_image_extension().to_string());
+                        .unwrap_or_else(|| crate::media::image_type::default_image_extension().to_string());
                     output_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext))
                 };
 
@@ -974,7 +1034,7 @@ pub async fn postprocess_downloaded_image(
                 let uri = get_content_io_provider()
                     .copy_image_to_pictures(
                         &local_path,
-                        crate::image_type::mime_from_format(&inferred_mime)
+                        crate::media::image_type::mime_from_format(&inferred_mime)
                             .unwrap_or(&inferred_mime),
                         &copy_name,
                     )
@@ -997,7 +1057,7 @@ pub async fn postprocess_downloaded_image(
             };
             #[cfg(not(target_os = "android"))]
             let (resolved_w, resolved_h) =
-                crate::media_dimensions::resolve_media_dimensions_sync(&local_path)
+                crate::media::dimensions::resolve_media_dimensions_sync(&local_path)
                     .map(|(w, h)| (Some(w), Some(h)))
                     .unwrap_or((None, None));
 
@@ -1013,7 +1073,7 @@ pub async fn postprocess_downloaded_image(
             let resolved_size = if let Some(b) = bytes {
                 Some(b.len() as u64)
             } else {
-                crate::media_dimensions::resolve_file_size_sync(&local_path)
+                crate::media::dimensions::resolve_file_size_sync(&local_path)
             };
 
             let t_thumb = (!auto_deduplicate).then(Instant::now);
@@ -1122,7 +1182,7 @@ pub async fn postprocess_downloaded_image(
             // 生成浏览器兼容副本（格式不支持或超大图）。失败只记日志，不阻断入库。
             #[cfg(not(target_os = "android"))]
             let compatible_result = if is_video {
-                match crate::media_dimensions::probe_media_sync(&path) {
+                match crate::media::dimensions::probe_media_sync(&path) {
                     Some(probe) => compress::generate_compatible_video(&path, &probe).await,
                     None => Ok(None),
                 }
@@ -1235,6 +1295,7 @@ pub async fn postprocess_downloaded_image(
                 Ok(inserted) => {
                     let add_ms = t_add.map(|t| t.elapsed().as_millis() as u64);
                     let image_id = inserted.id.clone();
+                    persist_native_metadata_best_effort(&inserted, bytes).await;
                     let t_album = (!auto_deduplicate).then(Instant::now);
                     let ids = vec![image_id.clone()];
                     let task_opt = task_id.map(|t| vec![t.to_string()]);
@@ -1382,7 +1443,7 @@ pub async fn clear_downloads_temp_dir() {
 
 #[cfg(test)]
 mod spill_writer_tests {
-    use super::{DOWNLOAD_SPILL_THRESHOLD, DownloadOutcome, SpillWriter};
+    use super::{DownloadOutcome, SpillWriter, DOWNLOAD_SPILL_THRESHOLD};
     use std::path::PathBuf;
     use tokio::io::AsyncWriteExt;
 

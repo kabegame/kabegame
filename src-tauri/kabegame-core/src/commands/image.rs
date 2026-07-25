@@ -5,15 +5,11 @@
 //! 返回 `ImageInfo`（或嵌套）的函数一律回**原始本地路径**；web 模式的 CDN 改写
 //! 由 `kabegame::web::dispatch` 在本层返回之后施加，本层不感知 web。
 
-use crate::providers::{
-    decode_provider_path_segments, query_entry, query_fetch, query_list,
-};
+use crate::providers::{decode_provider_path_segments, query_entry, query_fetch, query_list};
 use crate::settings::Settings;
-use crate::storage::image_events::{
-    delete_images_with_events, toggle_image_favorite_with_event,
-};
+use crate::storage::image_events::{delete_images_with_events, toggle_image_favorite_with_event};
 use crate::storage::Storage;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 pub async fn pathql_entry(path: String) -> Result<Value, String> {
     let path = decode_provider_path_segments(&path);
@@ -70,13 +66,77 @@ pub fn get_image_by_id(image_id: String) -> Result<Value, String> {
 }
 
 pub fn get_image_metadata(image_id: String) -> Result<Value, String> {
-    let meta = Storage::global().get_image_metadata(&image_id)?;
+    let meta = Storage::global().get_metadata(&image_id)?;
     serde_json::to_value(meta).map_err(|e| e.to_string())
 }
 
 pub fn get_image_metadata_full(image_id: String) -> Result<Value, String> {
-    let meta = Storage::global().get_image_metadata_full(&image_id)?;
+    let meta = Storage::global().get_metadata_full(&image_id)?;
     serde_json::to_value(meta).map_err(|e| e.to_string())
+}
+
+pub async fn get_image_native_metadata(image_id: String) -> Result<Value, String> {
+    let storage = Storage::global();
+    let row = storage
+        .get_image_native_metadata_row(&image_id)?
+        .ok_or_else(|| "native-metadata:image-not-found".to_string())?;
+    let format_key = row
+        .format_key
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(
+        format_key.as_str(),
+        "image/jpg" | "image/jpeg" | "image/png"
+    ) {
+        return Ok(Value::Null);
+    }
+
+    if row.parser_version == Some(crate::media::native_metadata::PARSER_VERSION) {
+        if let Some(data) = row.data.as_deref() {
+            return native_metadata_payload(data, row.parser_version.unwrap());
+        }
+    }
+
+    if storage
+        .ensure_native_metadata_for_image(&image_id, &row.hash, None)?
+        .is_some()
+    {
+        if let Some(shared) = storage.get_image_native_metadata_row(&image_id)? {
+            if shared.parser_version == Some(crate::media::native_metadata::PARSER_VERSION) {
+                if let Some(data) = shared.data.as_deref() {
+                    return native_metadata_payload(data, shared.parser_version.unwrap());
+                }
+            }
+        }
+    }
+
+    let bytes = crate::media::native_metadata::read_image_bytes(&row.local_path).await?;
+    let parsed = crate::media::native_metadata::parse_native_metadata(&format_key, &bytes)
+        .ok_or_else(|| "native-metadata:unsupported-format".to_string())?;
+    let json = serde_json::to_string(&parsed)
+        .map_err(|e| format!("native-metadata:serialize-failed:{e}"))?;
+    storage.ensure_native_metadata_for_image(&image_id, &row.hash, Some(&json))?;
+
+    let stored = storage
+        .get_image_native_metadata_row(&image_id)?
+        .ok_or_else(|| "native-metadata:image-not-found".to_string())?;
+    let data = stored
+        .data
+        .as_deref()
+        .ok_or_else(|| "native-metadata:store-failed".to_string())?;
+    native_metadata_payload(data, stored.parser_version.unwrap_or_default())
+}
+
+fn native_metadata_payload(data: &str, parser_version: u32) -> Result<Value, String> {
+    let mut payload: Value =
+        serde_json::from_str(data).map_err(|e| format!("native-metadata:invalid-cache:{e}"))?;
+    let object = payload
+        .as_object_mut()
+        .ok_or_else(|| "native-metadata:invalid-cache".to_string())?;
+    object.insert("v".to_string(), json!(parser_version));
+    Ok(payload)
 }
 
 pub fn toggle_image_favorite(image_id: String, favorite: bool) -> Result<Value, String> {

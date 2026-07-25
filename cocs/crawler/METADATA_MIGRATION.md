@@ -22,7 +22,7 @@
 
 ## packed 插件版本
 
-`image_metadata.plugin_version` 列记录「图片下载时的插件版本」，为 u32 packed 编码：每字节一段，`3.4.1` → `0x00030401`（`(major<<16)|(minor<<8)|patch`），直接比较大小即可比较版本先后。因此插件版本必须是 `a.b.c` 且每段 ≤255（加载/打包时校验，见 `pack_plugin_version`）。
+`metadata.plugin_version` 列（原 `image_metadata` 表，v024 起改名为 `metadata`；`image_metadata` 现为图片原生元数据表）记录「图片下载时的插件版本」，为 u32 packed 编码：每字节一段，`3.4.1` → `0x00030401`（`(major<<16)|(minor<<8)|patch`），直接比较大小即可比较版本先后。因此插件版本必须是 `a.b.c` 且每段 ≤255（加载/打包时校验，见 `pack_plugin_version`）。
 
 该列**由应用维护，插件不可读写**：
 
@@ -33,7 +33,7 @@
 
 ## 写入与去重
 
-写入统一进入 `image_metadata` 表，按 `(plugin_id, plugin_version, data)` 去重合并。`plugin_id` / `plugin_version` 落在 `image_metadata` 上而不是 `images` 上：metadata 行可被多张图片、失败重试记录或后续合并引用。图片列表只携带 `metadata_id` 与派生的 `plugin_version`（前端 `pluginVersion`），用于前端 metadata 缓存失效。
+写入统一进入 `metadata` 表，按 `(plugin_id, plugin_version, data)` 去重合并。`plugin_id` / `plugin_version` 落在 `metadata` 上而不是 `images` 上：metadata 行可被多张图片、失败重试记录或后续合并引用。图片列表只携带 `metadata_id` 与派生的 `plugin_version`（前端 `pluginVersion`），用于前端 metadata 缓存失效。
 
 ## 执行流程
 
@@ -51,9 +51,9 @@
 
 L1 存储 / 迁移：
 
-- `src-tauri/kabegame-core/src/storage/migrations/init.rs`：`image_metadata` 结构与 `(plugin_id, plugin_version)` 去重索引。
+- `src-tauri/kabegame-core/src/storage/migrations/init.rs`：`metadata` 表（v024 前名为 `image_metadata`）结构与 `(plugin_id, plugin_version)` 去重索引。
 - `src-tauri/kabegame-core/src/storage/migrations/v021_image_metadata_plugin_version.rs`：列改名 + 归 0 的一次性迁移。
-- `src-tauri/kabegame-core/src/storage/images.rs`：metadata 写入（`insert_image_metadata_row`）、迁移行查询（`metadata_rows_below_plugin_version`）、合并写回（`writeback_migrated_metadata_row`）、GC。
+- `src-tauri/kabegame-core/src/storage/images.rs`：metadata 写入（`insert_metadata_row`）、迁移行查询（`metadata_rows_below_plugin_version`）、合并写回（`writeback_migrated_metadata_row`）、GC。
 
 L2 插件 / V8：
 

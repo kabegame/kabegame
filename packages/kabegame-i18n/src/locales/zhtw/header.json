@@ -1,7 +1,10 @@
 {
-  "help": "說明",
-  "quickSettings": "快速設定",
   "refresh": "重新整理",
+  "tasks": "任務",
+  "toolbox": "工具箱",
+  "toolboxApp": "應用",
+  "toolboxMaintenance": "維護",
+  "toolboxDisplay": "顯示",
   "stopTask": "停止任務",
   "deleteTask": "刪除任務",
   "organize": "整理",

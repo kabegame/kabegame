@@ -617,7 +617,7 @@ async fn sync_reimports_changed_file_and_carries_user_fields() {
     let metadata_id = {
         let conn = Storage::global().db.lock().unwrap();
         conn.execute(
-            "INSERT INTO image_metadata (data) VALUES (?1)",
+            "INSERT INTO metadata (data) VALUES (?1)",
             params![r#"{"edited":true}"#],
         )
         .unwrap();
@@ -642,7 +642,7 @@ async fn sync_reimports_changed_file_and_carries_user_fields() {
     let new_metadata_id = new.4.expect("reimport should carry metadata");
     assert_eq!(
         Storage::global()
-            .read_image_metadata_text(new_metadata_id)
+            .read_metadata_text(new_metadata_id)
             .unwrap()
             .unwrap(),
         r#"{"edited":true}"#

@@ -58,7 +58,7 @@
     images://hide/media-type/video/filter_comb/date/2026y/06m/filter_comb/sort/by-id/1
     ```
   如果你对该查询引擎感兴趣，可以提issue，我来完善文档。
-  理论上可以发crate，但应该还存在某些边界情况的bug没有探出来，所以你也可以让AI抄到你的项目里（注意GPT-3.0）
+  理论上可以发crate，但应该还存在某些边界情况的bug没有探出来，所以你也可以让AI抄到你的项目里（注意GPL-3.0）
 
 ## 下载与安装
 

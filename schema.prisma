@@ -45,16 +45,27 @@ model Task {
 }
 
 /// 插件详情 JSON 存储
-model ImageMetadata {
-  id       Int    @id @default(autoincrement())
-  data     String // JSON string
-  version  Int    @default(0)
-  pluginId String @default("") @map("plugin_id")
+model Metadata {
+  id            Int    @id @default(autoincrement())
+  data          String // JSON string
+  pluginVersion Int    @default(0) @map("plugin_version")
+  pluginId      String @default("") @map("plugin_id")
 
   images           Image[]
   taskFailedImages TaskFailedImage[]
 
-  @@index([pluginId, version], name: "idx_image_metadata_dedup")
+  @@index([pluginId, pluginVersion], name: "idx_metadata_dedup")
+  @@map("metadata")
+}
+
+/// 图片文件内嵌的 JPEG EXIF / PNG chunk 元数据
+model ImageMetadata {
+  id            Int    @id @default(autoincrement())
+  data          String // JSON string
+  parserVersion Int    @default(0) @map("parser_version")
+
+  images Image[]
+
   @@map("image_metadata")
 }
 
@@ -68,6 +79,7 @@ model Image {
   surfRecordId       String? @map("surf_record_id")
   crawledAt          Int     @map("crawled_at")
   metadataId         Int?    @map("metadata_id")
+  imageMetadataId    Int?    @map("image_metadata_id")
   thumbnailPath      String  @default("") @map("thumbnail_path")
   hash               String  @default("")
   type               String? @default("image")
@@ -80,7 +92,8 @@ model Image {
   compatiblePath     String? @map("compatible_path")
 
   task          Task?          @relation("TaskToImage", fields: [taskId], references: [id], onDelete: SetNull)
-  imageMetadata ImageMetadata? @relation(fields: [metadataId], references: [id])
+  metadata      Metadata?      @relation(fields: [metadataId], references: [id])
+  imageMetadata ImageMetadata? @relation(fields: [imageMetadataId], references: [id])
 
   @@index([crawledAt(sort: Desc)], name: "idx_crawled_at")
   @@index([pluginId], name: "idx_plugin_id")
@@ -141,7 +154,7 @@ model TaskFailedImage {
   displayName     String? @map("display_name")
   headerSnapshot  String? @map("header_snapshot") // JSON string: Record<string,string>
 
-  imageMetadata ImageMetadata? @relation(fields: [metadataId], references: [id])
+  metadata Metadata? @relation(fields: [metadataId], references: [id])
 
   @@index([taskId], name: "idx_task_failed_images_task")
   @@map("task_failed_images")

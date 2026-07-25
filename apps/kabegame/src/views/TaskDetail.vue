@@ -6,8 +6,8 @@
             <template #before-grid="{ totalCount, currentPage, pageSize, jumpToPage }">
                 <TaskDetailPageHeader :task-name="taskName"
                     :show-stop-task="shouldShowStopButton" :show-open-webview="showOpenWebview" @refresh="handleRefresh" @stop-task="handleStopTask"
-                    @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum" @help="openHelpDrawer"
-                    @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @open-task-webview="handleOpenTaskWebview" @failed-images="handleShowFailedImages" @back="goBack">
+                    @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum"
+                    @view-task-log="handleViewTaskLog" @view-task-params="handleViewTaskParams" @open-task-webview="handleOpenTaskWebview" @failed-images="handleShowFailedImages" @back="goBack">
                     <template #subtitle>
                         <TaskCountsInline :success="successN" :failed="failedN" :deleted="deletedN" :dedup="dedupN"
                             :duration="durationText" />
@@ -64,8 +64,6 @@ import TaskParamsDialog from "@kabegame/core/components/task/TaskParamsDialog.vu
 import type { TaskRunParamsTask } from "@kabegame/core/components/task/TaskRunParamsContent.vue";
 import TaskCountsInline from "@kabegame/core/components/task/TaskCountsInline.vue";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
-import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
-import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 import { IS_WEB } from "@kabegame/core/env";
@@ -86,11 +84,6 @@ const isOnTaskRoute = computed(() => {
     const n = String(route.name ?? "");
     return n === "TaskDetail";
 });
-
-const quickSettingsDrawer = useQuickSettingsDrawerStore();
-const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
-const helpDrawer = useHelpDrawerStore();
-const openHelpDrawer = () => helpDrawer.open("taskdetail");
 
 const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
 const handleViewTaskLog = () => {

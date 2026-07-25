@@ -1,6 +1,4 @@
 import {
-  QuestionFilled,
-  Setting,
   Refresh,
   Plus,
   FolderOpened,
@@ -24,8 +22,6 @@ import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { i18n } from "@kabegame/i18n";
 
 import CollectAction from "./comps/CollectAction.vue";
-import OrganizeHeaderControl from "./comps/OrganizeHeaderControl.vue";
-import CheckUpdateControl from "./comps/CheckUpdateControl.vue";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import FailedImagesHeaderButton from "@/components/common/FailedImagesHeaderButton.vue";
 import GalleryFilterControl from "./comps/GalleryFilterControl.vue";
@@ -41,16 +37,6 @@ export function registerHeaderFeatures() {
 
   store.register([
     {
-      id: HeaderFeatureId.Help,
-      label: t("header.help"),
-      icon: QuestionFilled,
-    },
-    {
-      id: HeaderFeatureId.QuickSettings,
-      label: t("header.quickSettings"),
-      icon: Setting,
-    },
-    {
       id: HeaderFeatureId.Refresh,
       label: t("header.refresh"),
       icon: Refresh,
@@ -64,12 +50,6 @@ export function registerHeaderFeatures() {
       id: HeaderFeatureId.DeleteTask,
       label: t("header.deleteTask"),
       icon: Delete,
-    },
-    {
-      id: HeaderFeatureId.Organize,
-      label: t("header.organize"),
-      icon: FolderOpened,
-      comp: OrganizeHeaderControl,
     },
     {
       id: HeaderFeatureId.Collect,
@@ -193,12 +173,6 @@ export function registerHeaderFeatures() {
       id: HeaderFeatureId.ToggleShowAlbumImages,
       label: t("header.hideAlbumImages"),
       icon: FolderOpened,
-    },
-    {
-      id: HeaderFeatureId.CheckUpdate,
-      label: t("updater.checkUpdate"),
-      icon: Refresh,
-      comp: CheckUpdateControl,
     },
   ]);
 }

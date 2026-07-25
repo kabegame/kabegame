@@ -123,7 +123,7 @@ fn run_ffmpeg_transcode(input_path: &Path, output_path: &Path) -> Result<(u32, u
     use rsmpeg::avcodec::{AVCodec, AVCodecContext};
     use rsmpeg::avfilter::{AVFilter, AVFilterGraph, AVFilterInOut};
     use rsmpeg::avformat::{AVFormatContextInput, AVFormatContextOutput};
-    use rsmpeg::avutil::{AVDictionary, av_inv_q, ra};
+    use rsmpeg::avutil::{av_inv_q, ra, AVDictionary};
     use rsmpeg::error::RsmpegError;
     use rsmpeg::ffi;
     use std::ffi::CString;
@@ -624,15 +624,15 @@ async fn write_thumbnail_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
 
 /// 从字节生成图片预览图；小于等于阈值时返回 None，让调用方使用原图路径。
 pub async fn generate_thumbnail_from_bytes(bytes: &[u8]) -> Result<Option<PathBuf>, String> {
-    let browser_unsafe = crate::image_type::mime_type_from_bytes(bytes)
-        .map(|mime| !crate::image_type::image_mime_browser_safe(&mime))
+    let browser_unsafe = crate::media::image_type::mime_type_from_bytes(bytes)
+        .map(|mime| !crate::media::image_type::image_mime_browser_safe(&mime))
         .unwrap_or(false);
     if !browser_unsafe && !image_needs_independent_thumbnail(bytes.len() as u64) {
         return Ok(None);
     }
     let img = match image::load_from_memory(bytes) {
         Ok(img) => img,
-        Err(_) => match crate::media_decode::decode_image_via_ffmpeg_bytes(bytes) {
+        Err(_) => match crate::media::decode::decode_image_via_ffmpeg_bytes(bytes) {
             Ok(img) => image::DynamicImage::ImageRgb8(img),
             Err(_) => return Ok(None),
         },
@@ -643,15 +643,15 @@ pub async fn generate_thumbnail_from_bytes(bytes: &[u8]) -> Result<Option<PathBu
 
 /// 图片缩略图策略：小文件直接用原图，大文件用 image crate 生成最长边 ≤ IMAGE_THUMBNAIL_MAX_DIM 的 JPEG 预览图。
 pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, String> {
-    if !crate::image_type::is_image_by_path(image_path) {
+    if !crate::media::image_type::is_image_by_path(image_path) {
         return Ok(None);
     }
     let source_size = match tokio::fs::metadata(image_path).await {
         Ok(metadata) => metadata.len(),
         Err(_) => return Ok(None),
     };
-    let browser_unsafe = crate::image_type::mime_type_from_path(image_path)
-        .map(|mime| !crate::image_type::image_mime_browser_safe(&mime))
+    let browser_unsafe = crate::media::image_type::mime_type_from_path(image_path)
+        .map(|mime| !crate::media::image_type::image_mime_browser_safe(&mime))
         .unwrap_or(false);
     if !browser_unsafe && !image_needs_independent_thumbnail(source_size) {
         return Ok(None);
@@ -663,18 +663,18 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
             match reader.with_guessed_format() {
                 Ok(r) => match r.decode() {
                     Ok(img) => img,
-                    Err(_) => match crate::media_decode::decode_image_via_ffmpeg(image_path) {
+                    Err(_) => match crate::media::decode::decode_image_via_ffmpeg(image_path) {
                         Ok(img) => image::DynamicImage::ImageRgb8(img),
                         Err(_) => return Ok(None),
                     },
                 },
-                Err(_) => match crate::media_decode::decode_image_via_ffmpeg(image_path) {
+                Err(_) => match crate::media::decode::decode_image_via_ffmpeg(image_path) {
                     Ok(img) => image::DynamicImage::ImageRgb8(img),
                     Err(_) => return Ok(None),
                 },
             }
         }
-        Err(_) => match crate::media_decode::decode_image_via_ffmpeg(image_path) {
+        Err(_) => match crate::media::decode::decode_image_via_ffmpeg(image_path) {
             Ok(img) => image::DynamicImage::ImageRgb8(img),
             Err(_) => return Ok(None),
         },
@@ -684,7 +684,7 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
 }
 
 fn image_requires_compatible_copy(mime_type: &str, width: u32, height: u32) -> bool {
-    !crate::image_type::image_mime_browser_safe(mime_type)
+    !crate::media::image_type::image_mime_browser_safe(mime_type)
         || width.max(height) > IMAGE_COMPATIBLE_MAX_DIM
 }
 
@@ -791,7 +791,7 @@ pub async fn generate_compatible_image_from_bytes(
 #[cfg(not(target_os = "android"))]
 pub async fn generate_compatible_video(
     video_path: &Path,
-    probe: &crate::media_dimensions::MediaProbeResult,
+    probe: &crate::media::dimensions::MediaProbeResult,
 ) -> Result<Option<PathBuf>, String> {
     if probe.browser_safe {
         return Ok(None);
@@ -969,7 +969,7 @@ fn transcode_compatible_image_sync(
             (img, has_alpha)
         }
         Err(_) => (
-            image::DynamicImage::ImageRgb8(crate::media_decode::decode_image_via_ffmpeg(
+            image::DynamicImage::ImageRgb8(crate::media::decode::decode_image_via_ffmpeg(
                 input_path,
             )?),
             false,
@@ -989,7 +989,7 @@ fn transcode_compatible_image_bytes_sync(
             (img, has_alpha)
         }
         Err(_) => (
-            image::DynamicImage::ImageRgb8(crate::media_decode::decode_image_via_ffmpeg_bytes(
+            image::DynamicImage::ImageRgb8(crate::media::decode::decode_image_via_ffmpeg_bytes(
                 bytes,
             )?),
             false,
@@ -1005,7 +1005,7 @@ fn transcode_compatible_video_sync(input_path: &Path, output_path: &Path) -> Res
     use rsmpeg::avcodec::{AVCodec, AVCodecContext};
     use rsmpeg::avfilter::{AVFilter, AVFilterGraph, AVFilterInOut};
     use rsmpeg::avformat::{AVFormatContextInput, AVFormatContextOutput};
-    use rsmpeg::avutil::{AVDictionary, av_inv_q, ra};
+    use rsmpeg::avutil::{av_inv_q, ra, AVDictionary};
     use rsmpeg::error::RsmpegError;
     use rsmpeg::ffi;
     use std::ffi::{CStr, CString};

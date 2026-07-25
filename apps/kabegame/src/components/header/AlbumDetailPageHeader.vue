@@ -36,13 +36,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, nextTick, onUnmounted } from "vue";
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import { HeaderFeatureId, useHeaderStore } from "@kabegame/core/stores/header";
+import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { storeToRefs } from "pinia";
 import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
+import { usePageBridgeStore } from "@/stores/pageBridge";
 
 interface Props {
   albumName?: string;
@@ -74,8 +75,6 @@ const emit = defineEmits<{
   refresh: [];
   'set-wallpaper-rotate': [];
   'delete-album': [];
-  help: [];
-  'quick-settings': [];
   back: [];
   'start-rename': [];
   'confirm-rename': [name: string];
@@ -90,22 +89,32 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const renameInputRef = ref<HTMLInputElement>();
 const albumRouteStore = useAlbumDetailRouteStore();
-const { hide: albumHide } = storeToRefs(albumRouteStore);
 const { isCompact } = storeToRefs(useUiStore());
-const headerStore = useHeaderStore();
+const pageBridge = usePageBridgeStore();
 
+// Refresh / ToggleShowHidden 入口已收进全局工具箱，这里只注册桥接。
+onMounted(() => {
+  pageBridge.setRefresh(() => emit("refresh"));
+});
 watch(
-  albumHide,
-  () => {
-    headerStore.setFoldLabel(
-      HeaderFeatureId.ToggleShowHidden,
-      albumHide.value ? t("header.showHidden") : t("header.hideHidden")
+  () => props.isHiddenAlbum,
+  (hidden) => {
+    pageBridge.setToggleShowHidden(
+      hidden
+        ? null
+        : {
+            get: () => albumRouteStore.hide,
+            set: (v) => {
+              albumRouteStore.hide = v;
+            },
+          }
     );
   },
   { immediate: true }
 );
 onUnmounted(() => {
-  headerStore.setFoldLabel(HeaderFeatureId.ToggleShowHidden, undefined);
+  pageBridge.setRefresh(null);
+  pageBridge.setToggleShowHidden(null);
 });
 
 const subtitle = computed(() =>
@@ -138,34 +147,29 @@ const showIds = computed(() => {
   if (isCompact.value) {
     return [HeaderFeatureId.TaskDrawer];
   } else {
-    return withoutHiddenAlbumActions(withoutCreateAlbum(withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings])));
+    return withoutHiddenAlbumActions(withoutCreateAlbum(withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.CreateAlbum, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer])));
   }
 });
 
 const foldIds = computed(() => {
-  const hideToggleIds = props.isHiddenAlbum ? [] : [HeaderFeatureId.ToggleShowHidden];
   if (isCompact.value) {
     const base = withoutHiddenAlbumActions(withoutCreateAlbum(withVd([
       HeaderFeatureId.OpenVirtualDrive,
-      HeaderFeatureId.Refresh,
       HeaderFeatureId.CreateAlbum,
       HeaderFeatureId.SetAsWallpaperCarousel,
       HeaderFeatureId.DeleteAlbum,
-      HeaderFeatureId.Help,
-      HeaderFeatureId.QuickSettings,
     ])));
-    const withHide = [...base, ...hideToggleIds];
     if (props.includeBrowseControls) {
       return [
         HeaderFeatureId.AlbumBrowseFilter,
         HeaderFeatureId.AlbumBrowseSort,
         HeaderFeatureId.GalleryPageSize,
-        ...withHide,
+        ...base,
       ];
     }
-    return withHide;
+    return base;
   }
-  return hideToggleIds;
+  return [];
 });
 
 // 处理action事件
@@ -173,9 +177,6 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
   switch (payload.id) {
     case HeaderFeatureId.OpenVirtualDrive:
       emit("view-vd");
-      break;
-    case HeaderFeatureId.Refresh:
-      emit("refresh");
       break;
     case HeaderFeatureId.CreateAlbum:
       emit("create-sub-album");
@@ -186,12 +187,6 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
     case HeaderFeatureId.DeleteAlbum:
       emit("delete-album");
       break;
-    case HeaderFeatureId.Help:
-      emit("help");
-      break;
-    case HeaderFeatureId.QuickSettings:
-      emit("quick-settings");
-      break;
     case HeaderFeatureId.AlbumBrowseFilter:
       emit("open-browse-filter");
       break;
@@ -200,9 +195,6 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.GalleryPageSize:
       emit("open-browse-page-size");
-      break;
-    case HeaderFeatureId.ToggleShowHidden:
-      albumRouteStore.hide = !albumRouteStore.hide;
       break;
   }
 };

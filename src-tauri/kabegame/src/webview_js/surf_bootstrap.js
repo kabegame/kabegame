@@ -2,6 +2,16 @@
   "use strict";
 
   const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args || {});
+  window.__kb_media_submit__ = (vfsPath, sourceUrl, opts) => {
+    const o = typeof opts === "object" && opts !== null ? opts : {};
+    return invoke("surf_import_media", {
+      path: vfsPath,
+      sourceUrl,
+      name: o.name ?? undefined,
+      metadata: o.metadata ?? undefined,
+      pageUrl: o.url ?? undefined,
+    });
+  };
 
   function reportErr(error) {
     window.__kabegame_toast?.(String(error && error.message ? error.message : error), "failed");

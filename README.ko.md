@@ -58,7 +58,7 @@ Windows, macOS, Linux, Android를 지원합니다(iOS는 미지원).
     images://hide/media-type/video/filter_comb/date/2026y/06m/filter_comb/sort/by-id/1
     ```
   이 쿼리 엔진에 관심이 있다면 issue를 남겨주세요. 문서를 보완하겠습니다.
-  이론상 crate로 배포할 수 있지만, 아직 찾아내지 못한 엣지 케이스 버그가 남아 있을 것이므로, AI를 시켜 여러분의 프로젝트로 베껴 오게 해도 됩니다(GPT-3.0에 유의하세요).
+  이론상 crate로 배포할 수 있지만, 아직 찾아내지 못한 엣지 케이스 버그가 남아 있을 것이므로, AI를 시켜 여러분의 프로젝트로 베껴 오게 해도 됩니다(GPL-3.0에 유의하세요).
 
 ## 다운로드 및 설치
 

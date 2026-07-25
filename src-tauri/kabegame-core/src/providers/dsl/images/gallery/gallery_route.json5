@@ -123,7 +123,7 @@
             "in_need": true
         }, {
             "kind": "LEFT",
-            "table": "image_metadata",
+            "table": "metadata",
             "as": "metadata_im",
             "on": "images.metadata_id = metadata_im.id",
             "in_need": true

@@ -2,6 +2,8 @@
 // 两者均依赖 deno_core（Cargo.toml 已按 not(ios) 门控），故 iOS 排除。
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod metadata_migration;
+#[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+pub mod ffmpeg;
 // 嵌入式 V8 后端：桌面 + Android（仅 iOS 不支持）。
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod v8;
@@ -218,7 +220,7 @@ pub struct Plugin {
     #[serde(skip)]
     pub metadata_migration: Option<String>,
     /// 插件版本的 packed 编码（每字节一段，`3.4.1` → `0x00030401`），仅后端使用，不序列化到前端。
-    /// 用作 `image_metadata.plugin_version` 的写入值与迁移门控阈值。
+    /// 用作 `metadata.plugin_version` 的写入值与迁移门控阈值。
     #[serde(skip)]
     pub version_packed: u32,
 }
@@ -479,13 +481,15 @@ impl PluginManager {
     /// 同步读取插件展示名（不做磁盘 IO）。已安装插件使用内存缓存，内建插件使用静态表。
     pub fn get_cached_plugin_display_name_sync(&self, plugin_id: &str) -> Option<String> {
         let plugin = self.get(plugin_id)?;
-        let name = manifest_value_display_for_locale(
-            &plugin.name,
-            kabegame_i18n::current_vd_locale(),
-        )
-            .trim()
-            .to_string();
-        if name.is_empty() { None } else { Some(name) }
+        let name =
+            manifest_value_display_for_locale(&plugin.name, kabegame_i18n::current_vd_locale())
+                .trim()
+                .to_string();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
+        }
     }
 
     /// CLI 场景：支持传入插件 id（已安装）或 `.kgpg` 路径（临时运行）。
@@ -1341,7 +1345,11 @@ impl PluginManager {
         let effective_pkg_ver: u16 = {
             const MAX: u64 = 3;
             let v = if raw_pkg_ver > MAX { MAX } else { raw_pkg_ver };
-            if v < 1 { 1 } else { v as u16 }
+            if v < 1 {
+                1
+            } else {
+                v as u16
+            }
         };
 
         let icon_url = plugin_json
@@ -1792,7 +1800,7 @@ impl PluginManager {
             if let Some(source_map) = cache.get(source_id) {
                 if let Some(plugin) = source_map.get(plugin_id) {
                     if let Some(ref b64) = plugin.icon_png_base64 {
-                        use base64::{Engine as _, engine::general_purpose::STANDARD};
+                        use base64::{engine::general_purpose::STANDARD, Engine as _};
                         if let Ok(bytes) = STANDARD.decode(b64) {
                             return Ok(Some(bytes));
                         }
@@ -2073,9 +2081,7 @@ impl PluginManager {
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
             let is_v3 = pkg.as_ref().map(package_json_is_v3).unwrap_or(false);
             if !is_v3 {
-                return Err(
-                    "只支持 kbPackageVersion >= 3 的 package.json 插件格式".to_string(),
-                );
+                return Err("只支持 kbPackageVersion >= 3 的 package.json 插件格式".to_string());
             }
             load_plugin_v3_from_zip(
                 &mut archive,
@@ -2093,7 +2099,7 @@ impl PluginManager {
 
         // 优先使用 KGPG v3 头部 icon（RGB24 raw → PNG），回落到 ZIP 内图标字节。
         let icon_png_base64 = if let Some(rgb24) = v3_icon_rgb24 {
-            use base64::{Engine as _, engine::general_purpose::STANDARD};
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
             use image::RgbImage;
             let w = crate::kgpg::KGPG3_ICON_W;
             let h = crate::kgpg::KGPG3_ICON_H;
@@ -2115,7 +2121,7 @@ impl PluginManager {
                 .or_else(|| icon_png_bytes.as_ref().map(|b| STANDARD.encode(b)))
         } else {
             icon_png_bytes.as_ref().map(|bytes| {
-                use base64::{Engine as _, engine::general_purpose::STANDARD};
+                use base64::{engine::general_purpose::STANDARD, Engine as _};
                 STANDARD.encode(bytes)
             })
         };
@@ -2123,7 +2129,7 @@ impl PluginManager {
         let doc_resources = if doc_resource_entries.is_empty() {
             None
         } else {
-            use base64::{Engine as _, engine::general_purpose::STANDARD};
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
             let map: HashMap<String, String> = doc_resource_entries
                 .into_iter()
                 .map(|(path, bytes)| (path, STANDARD.encode(&bytes)))
@@ -2232,7 +2238,11 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
                     let mut bytes = Vec::new();
                     f.read_to_end(&mut bytes)
                         .map_err(|e| format!("读取 kbIcon \"{}\" 失败: {}", icon_path, e))?;
-                    if bytes.is_empty() { None } else { Some(bytes) }
+                    if bytes.is_empty() {
+                        None
+                    } else {
+                        Some(bytes)
+                    }
                 }
                 Err(_) => {
                     return Err(format!(
@@ -2259,7 +2269,11 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         let mut s = String::new();
         f.read_to_string(&mut s)
             .map_err(|e| format!("读取 \"{}\" 失败: {}", tpl_path, e))?;
-        if s.is_empty() { None } else { Some(s) }
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
     } else {
         None
     };
@@ -2989,7 +3003,11 @@ impl<'de> Deserialize<'de> for VarDefinition {
         }
         let descripts = {
             let d = extract_manifest_text_from_flat(map, "descripts");
-            if d.is_empty() { None } else { Some(d) }
+            if d.is_empty() {
+                None
+            } else {
+                Some(d)
+            }
         };
         let default = map.get("default").cloned();
         let options: Option<Vec<VarOption>> = map.get("options").and_then(|v| {
@@ -3466,28 +3484,20 @@ mod tests {
 
     #[test]
     fn download_image_wraps_only_its_own_vfs_path() {
-        let parsed = parse_download_image_url(
-            "/4242/data/x.jpg",
-            DOWNLOAD_IMAGE_FS_HANDLE,
-        )
-        .unwrap();
+        let parsed =
+            parse_download_image_url("/4242/data/x.jpg", DOWNLOAD_IMAGE_FS_HANDLE).unwrap();
         assert_eq!(parsed.as_str(), "task-vfs://4242/data/x.jpg");
 
-        let error = parse_download_image_url(
-            "/4243/data/x.jpg",
-            DOWNLOAD_IMAGE_FS_HANDLE,
-        )
-        .unwrap_err();
+        let error =
+            parse_download_image_url("/4243/data/x.jpg", DOWNLOAD_IMAGE_FS_HANDLE).unwrap_err();
         assert!(error.contains("Invalid URL"));
     }
 
     #[test]
     fn download_image_rejects_literal_task_vfs_url() {
-        let error = parse_download_image_url(
-            "task-vfs://4242/data/x.jpg",
-            DOWNLOAD_IMAGE_FS_HANDLE,
-        )
-        .unwrap_err();
+        let error =
+            parse_download_image_url("task-vfs://4242/data/x.jpg", DOWNLOAD_IMAGE_FS_HANDLE)
+                .unwrap_err();
         assert!(error.contains("Direct task-vfs URLs are not allowed"));
     }
 

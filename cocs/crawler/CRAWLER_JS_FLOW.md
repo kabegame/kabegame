@@ -35,7 +35,7 @@
 | Tauri 命令 | `src-tauri/kabegame/src/commands/crawler.rs` | 按 `crawler-<task_id>` label 找 `Task`，维护 page stack/state、下载、日志、进度、`TaskResult` completion |
 | Bootstrap 模板 | `src-tauri/kabegame/src/webview_js/bootstrap.js` | 构造闭包局部 `Kabegame`，执行烘焙进来的 crawl.js |
 | 媒体捕获脚本 | `src-tauri/kabegame/src/webview_js/media_capture.js` | 捕获 Blob/MSE 字节 |
-| 媒体上传脚本 | `src-tauri/kabegame/src/webview_js/media_download.js` | data/blob/MSE 上传到 Rust |
+| 媒体落盘脚本 | `src-tauri/kabegame/src/webview_js/media_download.js` | data/blob/MSE 经会话 VFS 分块落盘、显式合流并统一提交 |
 
 ---
 
@@ -71,7 +71,7 @@ worker 启动后不再重新解析 DB/PluginManager。提交失败由 `enqueue` 
 Tauri initialization script 在每次页面加载时执行：
 
 1. `media_capture.js` 捕获 Blob/MSE。
-2. `media_download.js` 注册共享媒体上传入口。
+2. `media_download.js` 注册共享媒体落盘/提交入口。
 3. 烘焙后的 `bootstrap.js` 捕获并隐藏 `__TAURI_INTERNALS__`。
 4. 闭包内构造 `Kabegame`，直接执行插件 `crawl.js`。
 
@@ -110,7 +110,17 @@ Tauri initialization script 在每次页面加载时执行：
 
 ### 3.6 下载与媒体
 
-`Kabegame.downloadImage` 的普通 HTTP/HTTPS URL 统一调用 `DownloadQueue::download_image`，在容量满时挂起 JS promise；worker 根据任务插件为 WebView backend 把 job 反投到对应 CEF 窗口，等待条目内 oneshot 后统一执行后处理。页面自发下载在首次 `Requested` 时取消并入队，worker 第二次发起后才真正落盘。`data:` / `blob:` / MSE URL 走 `crawl_media_begin` / `crawl_media_chunk` / `crawl_media_end` 上传通道。
+`Kabegame.downloadImage` 的普通 HTTP/HTTPS URL 统一调用 `DownloadQueue::download_image`，在容量满时挂起 JS promise；worker 根据任务插件为 WebView backend 把 job 反投到对应 CEF 窗口，等待条目内 oneshot 后统一执行后处理。页面自发下载在首次 `Requested` 时取消并入队，worker 第二次发起后才真正落盘。
+
+`data:` / 普通 `blob:` / MSE `blob:` 保持对插件相同的 `downloadImage(url, opts)` 调用形状，但内部不再走专用媒体上传命令：
+
+1. `media_capture.js` 继续维护 Blob/MSE 捕获表；MSE 下载前仍由 `ensureFullyBuffered` 高倍速全缓冲并侦测换集，之后检查 DRM、截断和空数据。
+2. `media_download.js` 通过 `crawl_fs_get_root` 在当前任务 VFS 的 `tmp/media-*` 建子目录，以 8 MiB Raw IPC 分块写每条流；`crawl_fs_fwrite` 的短写会循环补齐。
+3. 多 SourceBuffer 显式调用 `crawl_ffmpeg_mux`，容器规则为任一流 MIME 含 `webm` 则 WebM，否则 MP4。
+4. `bootstrap.js` 注入的 `window.__kb_media_submit__` 把最终虚拟绝对路径作为 `crawl_download_image.url` 提交。宿主将其解析为内部 `task-vfs://`，scheme downloader 从 VFS 流式读取并进入 `DownloadSink` / 统一后处理。
+5. `finally` 递归删除本次 `tmp/media-*` 子目录。`crawl_download_image` 会等待下载完成，因此清理不会早于 task-vfs 读取。
+
+同一 `media_download.js` 也供 surf 使用，但提交回调由 `surf_bootstrap.js` 注入为 `surf_import_media`，以会话 VFS 的 Path 直通入库；媒体脚本本身不判断窗口类型。
 
 下载请求使用 `Task.headers_snapshot()`；页面 Referer 由当前 page stack 顶部 URL 派生。
 

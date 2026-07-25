@@ -58,7 +58,7 @@ Maybe anime wallpapers and crawlers aren't your thing, but a few of the technica
     images://hide/media-type/video/filter_comb/date/2026y/06m/filter_comb/sort/by-id/1
     ```
   If you're interested in this query engine, feel free to file an issue and I'll flesh out the docs.
-  In theory it could be published as a crate, but there are probably still some edge-case bugs I haven't ferreted out, so you could also have AI copy it into your project (mind you, GPT-3.0).
+  In theory it could be published as a crate, but there are probably still some edge-case bugs I haven't ferreted out, so you could also have AI copy it into your project (mind you, GPL-3.0).
 
 ## Download & Install
 

@@ -27,7 +27,7 @@ const onChange = async (v: string | number | boolean | undefined) => {
   if (!Number.isFinite(n)) return;
   if (n !== 100 && n !== 500 && n !== 1000) return;
   await set(n, {
-    source: location.pathname === "/settings" ? "settings_page" : "quick_settings_drawer",
+    source: location.pathname === "/settings" ? "settings_page" : "settings_dialog",
   });
 };
 </script>

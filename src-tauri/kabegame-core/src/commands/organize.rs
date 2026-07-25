@@ -22,6 +22,8 @@ pub struct StartOrganizeArgs {
     #[serde(default)]
     pub regen_compatible: bool,
     #[serde(default)]
+    pub backfill_native_metadata: bool,
+    #[serde(default)]
     pub delete_source_files: bool,
     pub range_start: Option<usize>,
     pub range_end: Option<usize>,
@@ -43,6 +45,7 @@ pub async fn start_organize(args: StartOrganizeArgs) -> Result<Value, String> {
                 remove_unrecognized: args.remove_unrecognized,
                 regen_thumbnails: args.regen_thumbnails,
                 regen_compatible: args.regen_compatible,
+                backfill_native_metadata: args.backfill_native_metadata,
                 delete_source_files: args.delete_source_files,
                 offset,
                 limit,

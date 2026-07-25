@@ -1,7 +1,10 @@
 {
-  "help": "Help",
-  "quickSettings": "Quick settings",
   "refresh": "Refresh",
+  "tasks": "Tasks",
+  "toolbox": "Toolbox",
+  "toolboxApp": "App",
+  "toolboxMaintenance": "Maintenance",
+  "toolboxDisplay": "Display",
   "stopTask": "Stop task",
   "deleteTask": "Delete task",
   "organize": "Organize",

@@ -59,18 +59,20 @@ struct PluginDocImageQuery {
 
 #[cfg(not(target_os = "android"))]
 fn mime_from_path(path: &str) -> Option<String> {
-    if let Some(m) = kabegame_core::image_type::mime_type_from_path(Path::new(path)) {
-        if let Some(mime) = kabegame_core::image_type::mime_from_format(&m) {
+    if let Some(m) = kabegame_core::media::image_type::mime_type_from_path(Path::new(path)) {
+        if let Some(mime) = kabegame_core::media::image_type::mime_from_format(&m) {
             return Some(mime.to_string());
         }
     }
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
-        .unwrap_or(kabegame_core::image_type::default_image_extension())
+        .unwrap_or(kabegame_core::media::image_type::default_image_extension())
         .trim_start_matches('.')
         .to_ascii_lowercase();
-    kabegame_core::image_type::mime_by_ext().get(&ext).cloned()
+    kabegame_core::media::image_type::mime_by_ext()
+        .get(&ext)
+        .cloned()
 }
 
 #[cfg(not(target_os = "android"))]
@@ -114,7 +116,7 @@ async fn handle_file_query(
     let mime = image_info
         .media_type
         .as_deref()
-        .and_then(kabegame_core::image_type::mime_from_format)
+        .and_then(kabegame_core::media::image_type::mime_from_format)
         .map(str::to_string)
         .or_else(|| mime_from_path(path));
 
@@ -270,7 +272,7 @@ async fn handle_compatible_query(
             let mime = mime_from_path(path).or_else(|| {
                 info.media_type
                     .as_deref()
-                    .and_then(kabegame_core::image_type::mime_from_format)
+                    .and_then(kabegame_core::media::image_type::mime_from_format)
                     .map(str::to_string)
             });
             let range = headers

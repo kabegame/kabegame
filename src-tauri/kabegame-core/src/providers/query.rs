@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::storage::gallery::{DateGroup, DayGroup, GalleryMediaTypeCounts, PluginGroup};
 use crate::storage::gallery_time::{gallery_month_groups_from_days, GalleryTimeFilterPayload};
-use crate::storage::images::{parse_image_metadata_json, ImageMetadataFull};
+use crate::storage::images::{parse_metadata_json, MetadataFull};
 use crate::storage::organize::OrganizeScanRow;
 use crate::storage::tasks::TaskFailedImage;
 use crate::storage::ImageInfo;
@@ -319,23 +319,25 @@ pub fn organize_batch_at(page_size: usize, page: usize) -> Result<Vec<OrganizeSc
                     .ok_or("organize row missing `local_path`")?,
                 thumbnail_path: json_string(row, "thumbnail_path").unwrap_or_default(),
                 compatible_path: json_string(row, "compatible_path").unwrap_or_default(),
+                format_key: json_string(row, "type"),
+                native_parser_version: None,
             })
         })
         .collect()
 }
 
-/// `images://id_{id}/metadata` → metadata JSON from `image_metadata.data`.
-pub fn image_metadata_at(image_id: &str) -> Result<Option<Value>, String> {
+/// `images://id_{id}/metadata` → metadata JSON from `metadata.data`.
+pub fn metadata_at(image_id: &str) -> Result<Option<Value>, String> {
     let encoded = urlencoding::encode(image_id.trim());
     let rows = raw_rows_at(&format!("images://id_{}/metadata", encoded))?;
     let Some(row) = rows.first() else {
         return Ok(None);
     };
-    Ok(parse_image_metadata_json(json_string(row, "metadata_json")))
+    Ok(parse_metadata_json(json_string(row, "metadata_json")))
 }
 
-/// `images://id_{id}/metadata_full` → full metadata row from `image_metadata`.
-pub fn image_metadata_full_at(image_id: &str) -> Result<Option<ImageMetadataFull>, String> {
+/// `images://id_{id}/metadata_full` → full metadata row from `metadata`.
+pub fn metadata_full_at(image_id: &str) -> Result<Option<MetadataFull>, String> {
     let encoded = urlencoding::encode(image_id.trim());
     let rows = raw_rows_at(&format!("images://id_{}/metadata_full", encoded))?;
     let Some(row) = rows.first() else {
@@ -345,9 +347,9 @@ pub fn image_metadata_full_at(image_id: &str) -> Result<Option<ImageMetadataFull
         return Ok(None);
     };
     let plugin_version = json_i64(row, "plugin_version").unwrap_or_default().max(0) as u32;
-    Ok(Some(ImageMetadataFull {
+    Ok(Some(MetadataFull {
         id,
-        data: parse_image_metadata_json(json_string(row, "data")),
+        data: parse_metadata_json(json_string(row, "data")),
         plugin_version,
         plugin_id: json_string(row, "plugin_id").unwrap_or_default(),
     }))
@@ -524,7 +526,7 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
         width: i("width").map(|v| v as u32),
         height: i("height").map(|v| v as u32),
         display_name: s("display_name").unwrap_or_default(),
-        media_type: crate::image_type::normalize_stored_media_type(s("media_type")),
+        media_type: crate::media::image_type::normalize_stored_media_type(s("media_type")),
         last_set_wallpaper_at: i("last_set_wallpaper_at")
             .filter(|&t| t >= 0)
             .map(|t| t as u64),
@@ -609,7 +611,7 @@ mod tests {
                 "order" INTEGER,
                 PRIMARY KEY (album_id, image_id)
             );
-            CREATE TABLE image_metadata (
+            CREATE TABLE metadata (
                 id INTEGER PRIMARY KEY,
                 data TEXT NOT NULL,
                 version INTEGER NOT NULL DEFAULT 0,

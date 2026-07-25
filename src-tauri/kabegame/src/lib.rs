@@ -106,6 +106,8 @@ fn init(
 
     // 启动内置 Backend
     crate::core_init::init_globals()?;
+    #[cfg(not(target_os = "android"))]
+    commands::surf_session::clear_stale_sessions();
     #[cfg(debug_assertions)]
     crate::debug_ingest::spawn_debug_event(
         std::env::var("KABEGAME_DEBUG_SESSION_ID").unwrap_or_else(|_| "backend".to_string()),
@@ -243,10 +245,7 @@ fn spawn_startup_local_folder_sync() {
     tauri::async_runtime::spawn(fut);
 }
 
-#[cfg(all(
-    not(feature = "web"),
-    not(target_os = "android")
-))]
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
 fn spawn_realtime_folder_sync_if_enabled() {
     tauri::async_runtime::spawn(async {
         if kabegame_core::settings::Settings::global().get_realtime_folder_sync() {
@@ -255,10 +254,7 @@ fn spawn_realtime_folder_sync_if_enabled() {
     });
 }
 
-#[cfg(not(all(
-    not(feature = "web"),
-    not(target_os = "android")
-)))]
+#[cfg(not(all(not(feature = "web"), not(target_os = "android"))))]
 fn spawn_realtime_folder_sync_if_enabled() {}
 
 // ---- web entry point ----
@@ -407,17 +403,15 @@ pub(crate) fn configure_app(
             }
             tauri::WindowEvent::Destroyed => {
                 if window.label().starts_with("surf-") {
-                    if let Some(host) =
-                        commands::surf::host_from_surf_label(window.label())
-                    {
+                    if let Some(host) = commands::surf::host_from_surf_label(window.label()) {
                         if let Ok(Some(record)) =
-                            kabegame_core::storage::Storage::global()
-                                .get_surf_record_by_host(&host)
+                            kabegame_core::storage::Storage::global().get_surf_record_by_host(&host)
                         {
                             kabegame_core::crawler::TaskScheduler::global()
                                 .download_queue()
                                 .abort_native_waits_for_surf(&record.id);
                         }
+                        commands::surf_session::drop_session(&host);
                     }
                     commands::surf::notify_surf_session_closed(
                         &window.app_handle(),
@@ -439,6 +433,9 @@ pub(crate) fn configure_app(
                 );
                 eprintln!("应用初始化过程中出现了错误！:{}", e);
             }
+            // dev-only：把 CEF 的随机 CDP 端口寄存到 vite dev server，
+            // 供 .claude/skills/kabegame-chromium 只凭 1420 就能发现它。
+            crate::debug_ingest::spawn_cdp_register();
             Ok(())
         })
         // 维护这些命令还要维护 permissions/main.toml
@@ -463,6 +460,7 @@ pub(crate) fn configure_app(
             get_image_by_id,
             get_image_metadata,
             get_image_metadata_full,
+            get_image_native_metadata,
             get_gallery_image,
             copy_image_to_clipboard,
             delete_image,
@@ -731,6 +729,10 @@ pub(crate) fn configure_app(
             #[cfg(not(target_os = "android"))]
             crawl_fs_get_root,
             #[cfg(not(target_os = "android"))]
+            crawl_ffmpeg_mux,
+            #[cfg(not(target_os = "android"))]
+            crawl_ffmpeg_probe,
+            #[cfg(not(target_os = "android"))]
             crawl_get_page_label,
             #[cfg(not(target_os = "android"))]
             crawl_get_page_state,
@@ -749,11 +751,7 @@ pub(crate) fn configure_app(
             #[cfg(not(target_os = "android"))]
             surf_download_image,
             #[cfg(not(target_os = "android"))]
-            crawl_media_begin,
-            #[cfg(not(target_os = "android"))]
-            crawl_media_chunk,
-            #[cfg(not(target_os = "android"))]
-            crawl_media_end,
+            surf_import_media,
             #[cfg(not(target_os = "android"))]
             crawl_to,
             #[cfg(not(target_os = "android"))]

@@ -3,31 +3,7 @@
 
   const _tauri = window.__TAURI_INTERNALS__;
   const invoke = (cmd, args) => _tauri.invoke(cmd, args || {});
-  const UPLOAD_CHUNK = 2 * 1024 * 1024;
-
-  function toBase64(bytes) {
-    let binary = "";
-    const step = 64 * 1024;
-    for (let offset = 0; offset < bytes.length; offset += step) {
-      const chunk = bytes.subarray(offset, offset + step);
-      binary += String.fromCharCode.apply(null, chunk);
-    }
-    return btoa(binary);
-  }
-
-  function uploadCommon(opts) {
-    const o = typeof opts === "object" && opts !== null ? opts : {};
-    return {
-      name: o.name ?? undefined,
-      metadata: o.metadata ?? undefined,
-      // Tauri v2 按「Rust snake_case 参数 → camelCase」查找 invoke 实参,故必须传
-      // camelCase 的 pageUrl,才能命中 crawl_media_begin 的 page_url;只传 snake_case
-      // 的 page_url 会被丢弃 → post_url 为空(MSE/流式视频丢失帖子 url,而右键图片走
-      // surf_download_image 的 sourceUrl 正常)。保留 page_url 以兼容潜在的双向匹配。
-      page_url: o.url ?? undefined,
-      pageUrl: o.url ?? undefined,
-    };
-  }
+  const WRITE_CHUNK = 8 * 1024 * 1024;
 
   function toast(message, type) {
     try {
@@ -41,37 +17,49 @@
     return "下载中 " + percent + "%";
   }
 
-  async function uploadBlob(blob, sourceUrl, opts) {
-    const id = await invoke("crawl_media_begin", {
-      sourceUrl,
-      streams: [{ mime: blob.type || "", totalBytes: blob.size }],
-      ...uploadCommon(opts),
-    });
-    toast("开始下载", "start");
-    try {
-      let written = 0;
-      for (let offset = 0; offset < blob.size; offset += UPLOAD_CHUNK) {
-        const buf = await blob.slice(offset, offset + UPLOAD_CHUNK).arrayBuffer();
-        const chunk = new Uint8Array(buf);
-        await invoke("crawl_media_chunk", {
-          id,
-          stream: 0,
-          data: toBase64(chunk),
-        });
-        written += chunk.byteLength;
-        toast(progressMessage(written, blob.size), "start");
+  function streamExtension(mime) {
+    const base = String(mime || "").split(";")[0].trim().toLowerCase();
+    if (base.includes("webm")) return "webm";
+    if (base.includes("mp4")) return "mp4";
+    let subtype = base.split("/")[1]?.split("+")[0]?.replace(/^x-/, "") || "";
+    if (subtype === "jpeg") subtype = "jpg";
+    if (subtype === "quicktime") subtype = "mov";
+    if (subtype === "matroska") subtype = "mkv";
+    if (subtype === "mp2t") subtype = "ts";
+    return /^[a-z0-9]{1,8}$/.test(subtype) ? subtype : "bin";
+  }
+
+  async function writeRaw(rid, bytes, onWrite) {
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const chunk = bytes.subarray(offset, Math.min(bytes.byteLength, offset + WRITE_CHUNK));
+      const count = await _tauri.invoke("crawl_fs_fwrite", chunk, {
+        headers: { rid: String(rid) },
+      });
+      if (!Number.isInteger(count) || count <= 0 || count > chunk.byteLength) {
+        throw new Error(`crawl_fs_fwrite 返回无效写入字节数：${count}`);
       }
-      await invoke("crawl_media_end", { id, success: true });
-      toast("下载完成", "success");
-    } catch (e) {
-      await invoke("crawl_media_end", {
-        id,
-        success: false,
-        error: String(e),
-      }).catch(() => {});
-      toast("下载失败", "failed");
-      throw e;
+      offset += count;
+      onWrite(count);
     }
+  }
+
+  async function createAndWrite(path, writer) {
+    const rid = await invoke("crawl_fs_create", { path });
+    try {
+      await writer(rid);
+    } finally {
+      await invoke("crawl_fs_close", { rid });
+    }
+  }
+
+  async function writeBlob(path, blob, onWrite) {
+    await createAndWrite(path, async (rid) => {
+      for (let offset = 0; offset < blob.size; offset += WRITE_CHUNK) {
+        const buffer = await blob.slice(offset, offset + WRITE_CHUNK).arrayBuffer();
+        await writeRaw(rid, new Uint8Array(buffer), onWrite);
+      }
+    });
   }
 
   function bufferParts(buffer) {
@@ -85,45 +73,94 @@
     return bufferParts(buffer).reduce((sum, part) => sum + part.byteLength, 0);
   }
 
-  async function uploadStreams(buffers, sourceUrl, opts) {
-    const totalBytes = buffers.reduce((sum, buffer) => sum + bufferTotal(buffer), 0);
-    const id = await invoke("crawl_media_begin", {
-      sourceUrl,
-      streams: buffers.map((buffer) => ({
-        mime: buffer.mime || "",
-        totalBytes: bufferTotal(buffer),
-      })),
-      ...uploadCommon(opts),
+  async function writeBuffer(path, buffer, onWrite) {
+    await createAndWrite(path, async (rid) => {
+      for (const part of bufferParts(buffer)) {
+        await writeRaw(rid, new Uint8Array(part), onWrite);
+      }
     });
-    toast("开始下载", "start");
+  }
+
+  function sessionName() {
+    return `media-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  async function saveAndSubmit(streams, sourceUrl, opts) {
+    let sessionDir = null;
     try {
+      const root = await invoke("crawl_fs_get_root");
+      sessionDir = `${root}/tmp/${sessionName()}`;
+      await invoke("crawl_fs_mkdir", {
+        path: sessionDir,
+        options: { recursive: true },
+      });
+
+      toast("开始下载", "start");
+      const totalBytes = streams.reduce((sum, stream) => sum + stream.totalBytes, 0);
       let written = 0;
-      for (let stream = 0; stream < buffers.length; stream++) {
-        for (const part of bufferParts(buffers[stream])) {
-          const bytes = new Uint8Array(part);
-          for (let offset = 0; offset < bytes.length; offset += UPLOAD_CHUNK) {
-            const chunk = bytes.subarray(offset, offset + UPLOAD_CHUNK);
-            await invoke("crawl_media_chunk", {
-              id,
-              stream,
-              data: toBase64(chunk),
-            });
-            written += chunk.byteLength;
-            toast(progressMessage(written, totalBytes), "start");
-          }
+      const onWrite = (count) => {
+        written += count;
+        toast(progressMessage(written, totalBytes), "start");
+      };
+      const paths = [];
+      for (let index = 0; index < streams.length; index++) {
+        const stream = streams[index];
+        const path = `${sessionDir}/stream-${index}.${streamExtension(stream.mime)}`;
+        paths.push(path);
+        if (stream.blob) {
+          await writeBlob(path, stream.blob, onWrite);
+        } else {
+          await writeBuffer(path, stream.buffer, onWrite);
         }
       }
-      await invoke("crawl_media_end", { id, success: true });
+
+      let outputPath = paths[0];
+      if (paths.length > 1) {
+        const outputExt = streams.some((stream) =>
+          String(stream.mime || "").toLowerCase().includes("webm")
+        )
+          ? "webm"
+          : "mp4";
+        outputPath = `${sessionDir}/output.${outputExt}`;
+        toast("正在合并音视频", "start");
+        await invoke("crawl_ffmpeg_mux", { inputs: paths, output: outputPath });
+      }
+
+      await window.__kb_media_submit__(outputPath, sourceUrl, opts);
       toast("下载完成", "success");
     } catch (e) {
-      await invoke("crawl_media_end", {
-        id,
-        success: false,
-        error: String(e),
-      }).catch(() => {});
       toast("下载失败", "failed");
       throw e;
+    } finally {
+      if (sessionDir) {
+        await invoke("crawl_fs_remove", {
+          path: sessionDir,
+          options: { recursive: true },
+        }).catch((error) => {
+          console.warn("[kabegame] failed to clean media session:", error);
+        });
+      }
     }
+  }
+
+  function saveBlob(blob, sourceUrl, opts) {
+    return saveAndSubmit(
+      [{ mime: blob.type || "", totalBytes: blob.size, blob }],
+      sourceUrl,
+      opts,
+    );
+  }
+
+  function saveStreams(buffers, sourceUrl, opts) {
+    return saveAndSubmit(
+      buffers.map((buffer) => ({
+        mime: buffer.mime || "",
+        totalBytes: bufferTotal(buffer),
+        buffer,
+      })),
+      sourceUrl,
+      opts,
+    );
   }
 
   function findVideoForUrl(url, opts) {
@@ -214,16 +251,16 @@
     const rawUrl = String(url || "");
     if (/^data:/i.test(rawUrl)) {
       const blob = await (await fetch(rawUrl)).blob();
-      return uploadBlob(blob, rawUrl, opts);
+      return saveBlob(blob, rawUrl, opts);
     }
     if (/^blob:/i.test(rawUrl)) {
       let entry = window.__kb_media__?.resolve(rawUrl);
       if (!entry) {
         const blob = await (await fetch(rawUrl)).blob();
-        return uploadBlob(blob, rawUrl, opts);
+        return saveBlob(blob, rawUrl, opts);
       }
       if (entry.kind === "blob") {
-        return uploadBlob(entry.blob, rawUrl, opts);
+        return saveBlob(entry.blob, rawUrl, opts);
       }
       if (entry.drm || window.__kb_media__?.hasDrm?.()) {
         throw new Error("DRM/EME 保护内容无法下载");
@@ -257,10 +294,10 @@
       if (!buffers.length) {
         throw new Error("MSE capture has no media data");
       }
-      return uploadStreams(buffers, rawUrl, opts);
+      return saveStreams(buffers, rawUrl, opts);
     }
     const blob = await (await fetch(rawUrl)).blob();
-    return uploadBlob(blob, rawUrl, opts);
+    return saveBlob(blob, rawUrl, opts);
   }
 
   Object.defineProperty(window, "__kb_media_download__", {

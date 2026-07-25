@@ -10,8 +10,8 @@ struct SupportedImageTypes {
 
 pub fn get_supported_image_types() -> Result<Value, String> {
     let payload = SupportedImageTypes {
-        extensions: crate::image_type::supported_media_extensions(),
-        mime_by_ext: crate::image_type::mime_by_ext(),
+        extensions: crate::media::image_type::supported_media_extensions(),
+        mime_by_ext: crate::media::image_type::mime_by_ext(),
     };
     serde_json::to_value(payload).map_err(|e| e.to_string())
 }

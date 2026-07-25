@@ -225,12 +225,14 @@ pub enum DaemonEvent {
         range_end: Option<usize>,
         removed: usize,
         regenerated: usize,
+        backfilled: usize,
     },
 
     /// 整理完成事件
     OrganizeFinished {
         removed: usize,
         regenerated: usize,
+        backfilled: usize,
         canceled: bool,
     },
 

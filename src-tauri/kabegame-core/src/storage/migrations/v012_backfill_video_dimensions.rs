@@ -33,7 +33,7 @@ pub fn up(conn: &Connection) -> Result<(), String> {
             eprintln!("[v012] skip id={id} (content:// handled by live path)");
             continue;
         }
-        match crate::media_dimensions::resolve_video_dimensions_sync(path) {
+        match crate::media::dimensions::resolve_video_dimensions_sync(path) {
             Some((w, h)) => {
                 if let Err(e) = conn.execute(
                     "UPDATE images SET width = ?1, height = ?2 WHERE id = ?3",

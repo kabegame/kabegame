@@ -38,15 +38,22 @@ CREATE TABLE tasks (
 );
 CREATE INDEX idx_tasks_start_time ON tasks(start_time DESC);
 
--- ───────────── image_metadata ─────────────
-CREATE TABLE image_metadata (
+-- ───────────── metadata ─────────────
+CREATE TABLE metadata (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     data           TEXT    NOT NULL,
     plugin_version INTEGER NOT NULL DEFAULT 0,
     plugin_id      TEXT    NOT NULL DEFAULT ''
 );
-CREATE INDEX idx_image_metadata_dedup
-    ON image_metadata(plugin_id, plugin_version);
+CREATE INDEX idx_metadata_dedup
+    ON metadata(plugin_id, plugin_version);
+
+-- ───────────── image_metadata ─────────────
+CREATE TABLE image_metadata (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    data           TEXT    NOT NULL,
+    parser_version INTEGER NOT NULL DEFAULT 0
+);
 
 -- ───────────── images ─────────────
 CREATE TABLE images (
@@ -57,7 +64,7 @@ CREATE TABLE images (
     task_id               TEXT    REFERENCES tasks(id) ON DELETE SET NULL,
     surf_record_id        TEXT,
     crawled_at            INTEGER NOT NULL,
-    metadata_id           INTEGER REFERENCES image_metadata(id),
+    metadata_id           INTEGER REFERENCES metadata(id),
     thumbnail_path        TEXT    NOT NULL DEFAULT '',
     hash                  TEXT    NOT NULL DEFAULT '',
     type                  TEXT    DEFAULT 'image',
@@ -69,7 +76,8 @@ CREATE TABLE images (
     description           TEXT,
     compatible_path       TEXT,
     wallpaper_compatible_path TEXT,
-    post_url              TEXT
+    post_url              TEXT,
+    image_metadata_id     INTEGER REFERENCES image_metadata(id)
 );
 CREATE INDEX idx_crawled_at                    ON images(crawled_at DESC);
 CREATE INDEX idx_plugin_id                     ON images(plugin_id);
@@ -116,7 +124,7 @@ CREATE TABLE task_failed_images (
     created_at        INTEGER NOT NULL,
     last_error        TEXT,
     last_attempted_at INTEGER,
-    metadata_id       INTEGER REFERENCES image_metadata(id),
+    metadata_id       INTEGER REFERENCES metadata(id),
     display_name      TEXT,
     header_snapshot   TEXT
 );

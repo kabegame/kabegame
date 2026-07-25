@@ -11,6 +11,8 @@ export interface OrganizeOptions {
   regenThumbnails: boolean;
   /** 为旧库媒体补充生成浏览器兼容副本（仅桌面） */
   regenCompatible: boolean;
+  /** 为缺失或版本过旧的 JPEG/PNG 补充原生元数据 */
+  backfillNativeMetadata: boolean;
   deleteSourceFiles: boolean;
   rangeStart: number | null;
   rangeEnd: number | null;

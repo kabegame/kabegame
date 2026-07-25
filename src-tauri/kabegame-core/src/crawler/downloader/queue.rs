@@ -1,5 +1,5 @@
-use crate::crawler::TaskScheduler;
 use crate::crawler::task_log_i18n::task_log_i18n;
+use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::Storage;
@@ -9,11 +9,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::{Mutex, Notify, RwLock, oneshot};
+use tokio::sync::{oneshot, Mutex, Notify, RwLock};
 use url::Url;
 
+use super::postprocess_downloaded_image;
 use super::{download_with_retry, emit_task_log, wait_after_download_if_needed};
-use super::{media_upload, postprocess_downloaded_image};
 
 static DOWNLOAD_ID_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -99,8 +99,7 @@ pub struct ActiveDownloadInfo {
     /// CEF 原生下载的完成信号：worker 等待接收，Finished 回调取出后发送终态。
     /// `(Option<PathBuf>, bool)` 分别表示落盘路径与成功标记。
     #[serde(skip)]
-    pub native_completion:
-        Arc<StdMutex<Option<oneshot::Sender<(Option<PathBuf>, bool)>>>>,
+    pub native_completion: Arc<StdMutex<Option<oneshot::Sender<(Option<PathBuf>, bool)>>>>,
 }
 
 pub(super) fn emit_task_image_counts_snapshot(task_id: &str) {
@@ -178,7 +177,7 @@ pub struct DownloadRequest {
     pub failed_image_id: Option<i64>,
     /// 脚本/爬虫指定的展示名；为空则沿用文件名或 URL 推断。
     pub custom_display_name: Option<String>,
-    /// 已写入 `image_metadata` 的 id。
+    /// 已写入 `metadata` 的 id。
     pub metadata_id: Option<i64>,
     /// 帖子/页面地址（与下载 URL 分开）；爬虫传入时为当前页面 URL。
     pub post_url: Option<String>,
@@ -277,7 +276,7 @@ impl DownloadQueue {
             .clone())
     }
 
-    /// 登记不经 worker 入队的活跃下载（当前仅浏览器内 blob/MSE 分块上传使用）。
+    /// 登记不经 worker 入队、直接进入后处理的活跃下载。
     pub fn register_active_download(&self, info: ActiveDownloadInfo) -> Result<(), String> {
         if info.url.trim().is_empty() {
             return Err("active download url is empty".to_string());
@@ -422,16 +421,12 @@ impl DownloadQueue {
     ) -> bool {
         self.active_downloads.lock().is_ok_and(|downloads| {
             downloads.iter().any(|download| {
-                download.url == url
-                    && Self::native_owner_matches(download, task_id, surf_record_id)
+                download.url == url && Self::native_owner_matches(download, task_id, surf_record_id)
             })
         })
     }
 
-    fn abort_native_waits(
-        &self,
-        predicate: impl Fn(&ActiveDownloadInfo) -> bool,
-    ) {
+    fn abort_native_waits(&self, predicate: impl Fn(&ActiveDownloadInfo) -> bool) {
         let completions = {
             let Ok(downloads) = self.active_downloads.lock() else {
                 return;
@@ -761,34 +756,20 @@ impl DownloadQueue {
     }
 
     pub async fn cancel_task_downloads(&self, task_id: &str) -> bool {
-        let upload_ids = media_upload::abort_task_sessions(task_id);
-        let upload_id_set = upload_ids.iter().copied().collect::<HashSet<_>>();
-        let (active_ids, upload_entries): (Vec<u64>, Vec<ActiveDownloadInfo>) = {
-            let mut downloads = self.active_downloads.lock().unwrap();
-            let mut worker_ids = Vec::new();
-            let mut uploads = Vec::new();
-            let mut i = 0;
-            while i < downloads.len() {
-                if downloads[i].task_id == task_id {
-                    if upload_id_set.contains(&downloads[i].id) {
-                        uploads.push(downloads.remove(i));
-                        continue;
-                    }
-                    worker_ids.push(downloads[i].id);
-                }
-                i += 1;
-            }
-            (worker_ids, uploads)
+        let active_ids = {
+            let downloads = self.active_downloads.lock().unwrap();
+            downloads
+                .iter()
+                .filter(|download| download.task_id == task_id)
+                .map(|download| download.id)
+                .collect::<Vec<_>>()
         };
         let pending_ids = self.get_pending_task_download_ids(task_id).await;
 
-        if active_ids.is_empty()
-            && pending_ids.is_empty()
-            && upload_entries.is_empty()
-        {
+        if active_ids.is_empty() && pending_ids.is_empty() {
             return false;
         }
-        let pool_canceled = {
+        let changed = {
             let mut canceled = self.canceled_downloads.write().await;
             let mut changed = false;
             for &id in active_ids.iter().chain(pending_ids.iter()) {
@@ -796,22 +777,7 @@ impl DownloadQueue {
             }
             changed
         };
-        for entry in &upload_entries {
-            self.emit_state(
-                entry.id,
-                &entry.url,
-                entry.start_time,
-                &entry.plugin_id,
-                DownloadState::Canceled,
-                None,
-                None,
-            );
-            GlobalEmitter::global().emit_download_removed(entry.id);
-        }
-        if !upload_entries.is_empty() {
-            self.capacity_notify.notify_waiters();
-        }
-        pool_canceled || !upload_entries.is_empty()
+        changed
     }
 
     /// 按 id 切换 active_downloads 状态 + 发事件。状态机非法跳转直接拒绝（不改不发，stderr 日志）。
@@ -1054,7 +1020,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             dq.wait_then_finish_download(job.id, true).await;
             continue;
         }
-
 
         // file:// 不走网络下载，直接用本地路径走 postprocess（含重试场景）
         if job_url.scheme() == "file" {

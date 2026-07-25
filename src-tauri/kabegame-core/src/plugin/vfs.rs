@@ -103,6 +103,16 @@ impl PluginVfs {
         Ok(Self::from_roots(handle, data_root, cache_root, tmp_root))
     }
 
+    /// 创建由宿主管理生命周期的会话 VFS。
+    pub fn new_session(handle: u64, session_root: &Path) -> Self {
+        Self::from_roots(
+            handle,
+            session_root.join("data"),
+            session_root.join("cache"),
+            session_root.join("tmp"),
+        )
+    }
+
     /// 仅用于生成 V8 baseline snapshot 的不可用占位文件系统。
     ///
     /// 快照生成只求值 extension JS，不应执行任何文件操作；`resolve` 会在读取这些
@@ -133,6 +143,20 @@ impl PluginVfs {
 
     pub fn bytes_written(&self) -> u64 {
         self.bytes_written.load(Ordering::Relaxed)
+    }
+
+    /// 将只读虚拟路径解析为宿主路径，仅供 FFmpeg 等宿主内建工具消费。
+    ///
+    /// 返回的真实路径不得回传给插件 JavaScript。
+    pub fn host_path_for_read(&self, virtual_path: &Path) -> FsResult<PathBuf> {
+        self.resolve(virtual_path, Access::ReadOnly)
+    }
+
+    /// 将可写虚拟路径解析为宿主路径，仅供 FFmpeg 等宿主内建工具消费。
+    ///
+    /// 返回的真实路径不得回传给插件 JavaScript。
+    pub fn host_path_for_write(&self, virtual_path: &Path) -> FsResult<PathBuf> {
+        self.resolve(virtual_path, Access::ReadWrite)
     }
 
     /// 校验虚拟路径后直接打开宿主文件，避免把已解析的真实路径暴露给 VFS 模块之外。
@@ -936,6 +960,34 @@ mod tests {
         let mut contents = String::new();
         file.read_to_string(&mut contents).unwrap();
         assert_eq!(contents, "ok");
+    }
+
+    #[test]
+    fn session_vfs_maps_all_mounts_under_one_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let vfs = PluginVfs::new_session(HANDLE, temp.path());
+
+        assert_eq!(
+            vfs.host_path_for_read(Path::new("/4242/data/input.mp4"))
+                .unwrap(),
+            temp.path().join("data/input.mp4")
+        );
+        assert_eq!(
+            vfs.host_path_for_write(Path::new("/4242/tmp/output.mp4"))
+                .unwrap(),
+            temp.path().join("tmp/output.mp4")
+        );
+        assert!(temp.path().join("tmp").is_dir());
+    }
+
+    #[test]
+    fn host_path_helpers_preserve_vfs_escape_checks() {
+        let test = test_vfs();
+        let error = test
+            .vfs
+            .host_path_for_read(Path::new("/4242/data/../../outside.mp4"))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]

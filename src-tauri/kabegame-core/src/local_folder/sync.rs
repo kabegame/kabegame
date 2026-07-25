@@ -222,12 +222,12 @@ impl SyncHook {
                         // （仅当它只被这张旧图引用时）。故先把内容读出来，删除后再写入：
                         // 内容仍在 → 拿回原 id；已被 GC → 得新 id（无人引用，id 变了也无妨）。
                         let metadata_text = match existing.metadata_id {
-                            Some(mid) => storage.read_image_metadata_text(mid)?,
+                            Some(mid) => storage.read_metadata_text(mid)?,
                             None => None,
                         };
                         delete_images_with_events(&[existing.id.clone()], false)?;
                         let metadata_id = match metadata_text {
-                            Some(text) => Some(storage.insert_image_metadata_text(&text)?),
+                            Some(text) => Some(storage.insert_metadata_text(&text)?),
                             None => None,
                         };
                         let carry = CarryFromOld {

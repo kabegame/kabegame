@@ -9,6 +9,7 @@
       :placeholder="t('settings.rotationTargetPlaceholder')"
       :picker-title="t('settings.rotationTargetTitle')"
       :clearable="false"
+      frosted
       @update:model-value="onPickerAlbumId"
     />
   </div>
@@ -39,7 +40,11 @@ const WALLPAPER_ROTATION_ALL_GALLERY = "__kabegame_wallpaper_all_gallery__";
 
 /** 与 CrawlerDialog 输出画册一致：树选；首项「全部画廊」对应空字符串 */
 const rotationPrependOptions = computed(() => [
-  { value: WALLPAPER_ROTATION_ALL_GALLERY, label: t("settings.rotationTargetAllGallery") },
+  {
+    value: WALLPAPER_ROTATION_ALL_GALLERY,
+    label: t("settings.rotationTargetAllGallery"),
+    desc: t("settings.rotationTargetAllGalleryDesc"),
+  },
 ]);
 
 const pickerAlbumId = computed((): string | null => {

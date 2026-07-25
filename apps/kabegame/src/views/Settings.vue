@@ -1,18 +1,78 @@
 <template>
-  <div class="settings-container" v-pull-to-refresh="pullToRefreshOpts">
+  <div
+    class="settings-container"
+    :class="{ 'settings-container--embedded': embedded }"
+    v-pull-to-refresh="pullToRefreshOpts"
+  >
     <div class="settings-content">
-      <PageHeader :title="$t('settings.title')" :show="settingsShowIds" :fold="[]" @action="handleSettingsAction"
-        sticky />
+      <!-- embedded（桌面弹窗）时标题与关闭按钮由 el-dialog 自带 header 提供，这里不再自绘 -->
+      <PageHeader
+        v-if="!embedded"
+        :title="mobileDetailOpen ? mobileCategoryLabel : $t('settings.title')"
+        :show="settingsShowIds"
+        :show-back="mobileDetailOpen"
+        :fold="[]"
+        sticky
+        class="settings-page-header"
+        @back="closeMobileCategory"
+        @action="handleSettingsAction"
+      />
 
-      <StyledTabs v-model="activeTab" sticky>
+      <div class="settings-layout">
+        <nav
+          v-if="!isCompact"
+          class="settings-category-nav"
+          :aria-label="$t('settings.title')"
+        >
+          <button
+            v-for="category in settingsCategories"
+            :key="category.name"
+            type="button"
+            class="settings-category-button"
+            :class="{ 'is-active': activeTab === category.name }"
+            :aria-current="activeTab === category.name ? 'page' : undefined"
+            @click="activeTab = category.name"
+          >
+            <el-icon class="settings-category-icon">
+              <component :is="category.icon" />
+            </el-icon>
+            <span>{{ category.label }}</span>
+          </button>
+          <div class="settings-category-nav-spacer" />
+          <div class="settings-category-nav-version">Kabegame {{ appVersion }}</div>
+        </nav>
 
-        <el-tab-pane :label="$t('settings.appSettings')" :name="SETTINGS_TAB_NAMES[0]">
-          <el-card class="settings-card" :class="appBackgroundCardClass">
-            <template #header>
-              <span>{{ $t('settings.appSettings') }}</span>
-            </template>
-            <div v-loading="showLoading" element-loading-text="" style="min-height: 120px;">
-              <div v-if="!loading" class="settings-list">
+        <div v-if="isCompact && !mobileDetailOpen" class="settings-mobile-category-list">
+          <button
+            v-for="(category, index) in settingsCategories"
+            :key="category.name"
+            type="button"
+            class="settings-mobile-category-card"
+            @click="activeTab = category.name"
+          >
+            <span class="settings-mobile-category-icon" :class="{ 'is-alt': index % 2 === 1 }">
+              <el-icon><component :is="category.icon" /></el-icon>
+            </span>
+            <span class="settings-mobile-category-text">
+              <span class="settings-mobile-category-title">{{ category.label }}</span>
+              <span class="settings-mobile-category-summary">{{ category.summary }}</span>
+            </span>
+            <el-icon class="settings-mobile-category-chevron"><ArrowRight /></el-icon>
+          </button>
+        </div>
+
+        <main
+          v-if="!isCompact || mobileDetailOpen"
+          v-loading="showLoading"
+          element-loading-text=""
+          class="settings-panel"
+        >
+          <div class="settings-panel-inner" v-if="!loading">
+            <SettingsSection
+              v-show="activeTab === 'general'"
+              :title="$t('settings.categoryGeneral')"
+              :transparent="settingsStore.values.appBackgroundEnabled"
+            >
                 <SettingRow :label="$t('settings.language')" :description="$t('settings.languageDesc')">
                   <LanguageSetting />
                 </SettingRow>
@@ -24,14 +84,25 @@
                   :description="$t('settings.autoLaunchDesc')">
                   <SettingSwitchControl setting-key="autoLaunch" />
                 </SettingRow>
-                <SettingRow v-if="!IS_ANDROID && !IS_WEB && !isLightMode" :label="$t('settings.albumDrive')"
-                  :description="$t('settings.albumDriveDesc')">
-                  <AlbumDriveSetting />
-                </SettingRow>
                 <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageClickAction')"
                   :description="$t('settings.imageClickActionDesc')">
                   <SettingRadioControl setting-key="imageClickAction" :options="imageClickActionOptions" />
                 </SettingRow>
+                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.linkOpenMode')"
+                  :description="$t('settings.linkOpenModeDesc')">
+                  <SettingRadioControl setting-key="linkOpenMode" :options="linkOpenModeOptions" />
+                </SettingRow>
+                <SettingRow v-if="IS_WINDOWS || IS_LINUX" :label="$t('settings.closeAction')"
+                  :description="$t('settings.closeActionDesc')">
+                  <SettingRadioControl setting-key="closeAction" :options="closeActionOptions" />
+                </SettingRow>
+            </SettingsSection>
+
+            <SettingsSection
+              v-show="activeTab === 'appearance'"
+              :title="$t('settings.categoryAppearance')"
+              :transparent="settingsStore.values.appBackgroundEnabled"
+            >
                 <SettingRow v-if="!IS_ANDROID"
                   :label="isHorizontal ? $t('settings.galleryRows') : $t('settings.galleryColumns')"
                   :description="isHorizontal ? $t('settings.galleryRowsDesc') : $t('settings.galleryColumnsDesc')">
@@ -58,7 +129,7 @@
                 <template v-if="settingsStore.values.appBackgroundEnabled">
                   <SettingRow :label="$t('settings.appBackgroundOpacity')"
                     :description="$t('settings.appBackgroundOpacityDesc')">
-                    <SettingSliderControl setting-key="appBackgroundOpacity" :min="0.05" :max="0.6" :step="0.05"
+                    <SettingSliderControl setting-key="appBackgroundOpacity" :min="0.05" :max="1" :step="0.05"
                       :precision="2" />
                   </SettingRow>
                   <SettingRow :label="$t('settings.appBackgroundBlur')"
@@ -67,31 +138,14 @@
                       :precision="0" />
                   </SettingRow>
                 </template>
-                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.clearUserData')"
-                  :description="$t('settings.clearUserDataDesc')">
-                  <ClearUserDataSetting />
-                </SettingRow>
-                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.linkOpenMode')"
-                  :description="$t('settings.linkOpenModeDesc')">
-                  <SettingRadioControl setting-key="linkOpenMode" :options="linkOpenModeOptions" />
-                </SettingRow>
-                <SettingRow v-if="IS_WINDOWS || IS_LINUX" :label="$t('settings.closeAction')"
-                  :description="$t('settings.closeActionDesc')">
-                  <SettingRadioControl setting-key="closeAction" :options="closeActionOptions" />
-                </SettingRow>
-              </div>
-            </div>
-          </el-card>
-        </el-tab-pane>
+            </SettingsSection>
 
-        <el-tab-pane v-if="!IS_WEB" :label="$t('settings.tabWallpaper')" :name="SETTINGS_TAB_NAMES[1]">
-          <el-card class="settings-card" :class="appBackgroundCardClass">
-            <template #header>
-              <span>{{ $t('settings.wallpaperSectionTitle') }}</span>
-            </template>
-
-            <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
-              <div v-if="!loading" class="settings-list">
+            <SettingsSection
+              v-if="!IS_WEB"
+              v-show="activeTab === 'wallpaper'"
+              :title="$t('settings.categoryWallpaper')"
+              :transparent="settingsStore.values.appBackgroundEnabled"
+            >
                 <SettingRow :label="$t('settings.wallpaperDisabled')"
                   :description="$t('settings.wallpaperDisabledDesc')">
                   <SettingSwitchControl setting-key="wallpaperDisabled" />
@@ -114,15 +168,11 @@
                 >
                   <SettingSwitchControl setting-key="wallpaperRotationIncludeSubalbums" />
                 </SettingRow>
-                <div v-if="currentWallpaperPath" class="settings-list-current-wallpaper setting-row-desc">
-                  <div class="setting-row-desc__spacer"></div>
-                  <div class="setting-row-desc__content setting-description">
-                    <span class="setting-row-desc__label">{{ $t('settings.wallpaperCurrent') }}</span>
-                    <button type="button" class="setting-row-desc__path" @click="openCurrentWallpaperPath">
+                <SettingRow v-if="currentWallpaperPath" :label="$t('settings.wallpaperCurrent')">
+                    <button type="button" class="setting-current-wallpaper-path" @click="openCurrentWallpaperPath">
                       {{ currentWallpaperPath }}
                     </button>
-                  </div>
-                </div>
+                </SettingRow>
 
                 <SettingRow :label="$t('settings.wallpaperRotationInterval')"
                   :description="$t('settings.wallpaperRotationIntervalDesc', { min: rotationIntervalMin })">
@@ -163,19 +213,13 @@
                 </SettingRow>
 
                 </div>
-              </div>
-            </div>
-          </el-card>
-        </el-tab-pane>
+            </SettingsSection>
 
-        <el-tab-pane :label="$t('settings.tabDownload')" :name="SETTINGS_TAB_NAMES[2]">
-          <el-card class="settings-card" :class="appBackgroundCardClass">
-            <template #header>
-              <span>{{ $t('settings.downloadSectionTitle') }}</span>
-            </template>
-
-            <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
-              <div v-if="!loading" class="settings-list">
+            <SettingsSection
+              v-show="activeTab === 'download'"
+              :title="$t('settings.categoryDownload')"
+              :transparent="settingsStore.values.appBackgroundEnabled"
+            >
                 <SettingRow :label="$t('settings.maxConcurrentTasks')"
                   :description="$t('settings.maxConcurrentTasksDesc')">
                   <SettingNumberControl setting-key="maxConcurrentTasks" :min="1" :max="10" :step="1" />
@@ -203,18 +247,13 @@
                   :description="$t('settings.defaultDownloadDirDesc')">
                   <DefaultDownloadDirSetting />
                 </SettingRow>
-              </div>
-            </div>
-          </el-card>
-        </el-tab-pane>
+            </SettingsSection>
 
-        <el-tab-pane :label="$t('settings.tabPlugins')" :name="SETTINGS_TAB_NAMES[3]">
-          <el-card class="settings-card" :class="appBackgroundCardClass">
-            <template #header>
-              <span>{{ $t("settings.pluginDefaultsSectionTitle") }}</span>
-            </template>
-            <div v-loading="showLoading" element-loading-text="" style="min-height: 120px;">
-              <div v-if="!loading" class="settings-list">
+            <SettingsSection
+              v-show="activeTab === 'plugins'"
+              :title="$t('settings.categoryPlugins')"
+              :transparent="settingsStore.values.appBackgroundEnabled"
+            >
                 <SettingRow
                   :label="$t('settings.importRecommendedScheduleEnabled')"
                   :description="$t('settings.importRecommendedScheduleEnabledDesc')"
@@ -222,31 +261,48 @@
                   <SettingSwitchControl setting-key="importRecommendedScheduleEnabled" />
                 </SettingRow>
                 <PluginDefaultConfigsPanel />
-              </div>
-            </div>
-          </el-card>
-        </el-tab-pane>
+            </SettingsSection>
 
-        <el-tab-pane v-if="!IS_WEB && !IS_ANDROID" :label="$t('settings.tabMcp')" :name="SETTINGS_TAB_NAMES[4]">
-          <McpSettingsPanel />
-        </el-tab-pane>
-
-      </StyledTabs>
+            <SettingsSection
+              v-if="!IS_ANDROID"
+              v-show="activeTab === 'advanced'"
+              :title="$t('settings.categoryAdvanced')"
+              :transparent="settingsStore.values.appBackgroundEnabled"
+            >
+              <SettingRow v-if="IS_WEB" :label="$t('settings.superMode')"
+                :description="$t('settings.superModeDesc')">
+                <SuperModeSetting />
+              </SettingRow>
+              <!-- 画册盘自带两行（开关 + 挂载点），不再套外层 SettingRow -->
+              <AlbumDriveSetting v-if="!IS_WEB && !isLightMode" />
+              <McpSettingsPanel v-if="!IS_WEB" class="settings-mcp-panel" />
+            </SettingsSection>
+          </div>
+        </main>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onActivated, computed, watch } from "vue";
+import {
+  ArrowRight,
+  Brush,
+  Connection,
+  Download,
+  Operation,
+  PictureRounded,
+  Tools,
+} from "@element-plus/icons-vue";
 import { useI18n } from "@kabegame/i18n";
 import { useLocalStorage } from "@vueuse/core";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import StyledTabs from "@/components/common/StyledTabs.vue";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { HeaderFeatureId } from "@kabegame/core/stores/header";
+import { useUiStore } from "@kabegame/core/stores/ui";
 import { trackEvent } from "@kabegame/core/track/umami";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
@@ -262,14 +318,25 @@ import WallpaperRotationTargetSetting from "@/components/settings/items/Wallpape
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
-import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
 import LanguageSetting from "@/components/settings/items/LanguageSetting.vue";
+import SuperModeSetting from "@/components/settings/items/SuperModeSetting.vue";
 import McpSettingsPanel from "@/components/settings/McpSettingsPanel.vue";
 import PluginDefaultConfigsPanel from "@/components/settings/PluginDefaultConfigsPanel.vue";
-import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_MACOS, IS_WEB } from "@kabegame/core/env";
+import SettingsSection from "@/components/settings/SettingsSection.vue";
+import { APP_VERSION, IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_MACOS, IS_WEB } from "@kabegame/core/env";
+
+const props = withDefaults(defineProps<{
+  embedded?: boolean;
+}>(), {
+  embedded: false,
+});
+const { embedded } = props;
 
 const { t } = useI18n();
+const uiStore = useUiStore();
+const isCompact = computed(() => uiStore.isCompact);
+const appVersion = computed(() => APP_VERSION ?? "");
 
 const { isPlasma } = useDesktop();
 
@@ -301,32 +368,65 @@ const closeActionOptions = computed(() => [
   { label: t("settings.closeActionAsk"), value: "unconfigured" },
 ]);
 
-import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 import { useDesktop } from "@/composables/useDesktop";
 
 // 使用 300ms 防闪屏加载延迟
-const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
+const { loading, showLoading } = useLoadingDelay(300);
 
 const settingsStore = useSettingsStore();
-const appBackgroundCardClass = computed(() =>
-  settingsStore.values.appBackgroundEnabled
-    ? "!bg-transparent [--el-card-bg-color:transparent]"
-    : ""
-);
 const isHorizontal = computed(
   () => settingsStore.values.galleryLayoutDirection === "horizontal"
 );
 
-// 持久化用户最后访问的设置 tab
-const SETTINGS_TAB_NAMES = ["app", "wallpaper", "download", "plugins", "mcp"] as const;
-const storedSettingsTab = useLocalStorage("kabegame-settings-last-tab", "app");
+// 持久化用户最后访问的设置分类，并兼容旧版 app / mcp tab 值。
+const SETTINGS_TAB_NAMES = ["general", "appearance", "wallpaper", "download", "plugins", "advanced"] as const;
+type SettingsTabName = (typeof SETTINGS_TAB_NAMES)[number];
+const storedSettingsTab = useLocalStorage("kabegame-settings-last-tab", "general");
+const settingsCategories = computed(() => [
+  { name: "general" as const, label: t("settings.categoryGeneral"), icon: Operation, summary: t("settings.categoryGeneralSummary") },
+  { name: "appearance" as const, label: t("settings.categoryAppearance"), icon: Brush, summary: t("settings.categoryAppearanceSummary") },
+  ...(!IS_WEB
+    ? [{ name: "wallpaper" as const, label: t("settings.categoryWallpaper"), icon: PictureRounded, summary: t("settings.categoryWallpaperSummary") }]
+    : []),
+  { name: "download" as const, label: t("settings.categoryDownload"), icon: Download, summary: t("settings.categoryDownloadSummary") },
+  { name: "plugins" as const, label: t("settings.categoryPlugins"), icon: Connection, summary: t("settings.categoryPluginsSummary") },
+  ...(!IS_ANDROID
+    ? [{ name: "advanced" as const, label: t("settings.categoryAdvanced"), icon: Tools, summary: t("settings.categoryAdvancedSummary") }]
+    : []),
+]);
+
+// 安卓/紧凑布局下的两级导航：null 表示停留在一级分类列表。
+const mobileCategory = ref<SettingsTabName | null>(null);
+const mobileDetailOpen = computed(() => isCompact.value && mobileCategory.value !== null);
+const mobileCategoryLabel = computed(
+  () => settingsCategories.value.find((category) => category.name === mobileCategory.value)?.label ?? ""
+);
+function closeMobileCategory() {
+  mobileCategory.value = null;
+}
+watch(isCompact, (compact) => {
+  if (!compact) mobileCategory.value = null;
+});
+
 const activeTab = computed({
-  get: () =>
-    SETTINGS_TAB_NAMES.includes(storedSettingsTab.value as (typeof SETTINGS_TAB_NAMES)[number])
-      ? storedSettingsTab.value
-      : "app",
-  set: (v: string) => {
+  get: (): SettingsTabName => {
+    if (isCompact.value) return mobileCategory.value ?? "general";
+    const legacyMap: Record<string, SettingsTabName> = {
+      app: "general",
+      mcp: "advanced",
+    };
+    const value = legacyMap[storedSettingsTab.value] ?? storedSettingsTab.value;
+    const available = settingsCategories.value.some((category) => category.name === value);
+    return SETTINGS_TAB_NAMES.includes(value as SettingsTabName) && available
+      ? value as SettingsTabName
+      : "general";
+  },
+  set: (v: SettingsTabName) => {
+    if (isCompact.value) {
+      mobileCategory.value = v;
+      return;
+    }
     storedSettingsTab.value = v;
   },
 });
@@ -384,25 +484,18 @@ watch(wallpaperDisabled, (disabled, prev) => {
     ElMessage.warning(t("settings.wallpaperDisabledNativeWarning"));
   }
 });
-const helpDrawer = useHelpDrawerStore();
-const openHelpDrawer = () => helpDrawer.open("settings");
 const isLightMode = IS_LIGHT_MODE;
 
-const settingsShowIds = computed(() => {
-  if (IS_ANDROID) return [];
-  const ids = [HeaderFeatureId.Help];
-  // 桌面端（非 web）显示「检查更新」按钮
-  if (!IS_WEB) ids.unshift(HeaderFeatureId.CheckUpdate);
-  return ids;
-});
+const settingsShowIds = computed(() => []);
 const pullToRefreshOpts = computed(() =>
   IS_ANDROID
     ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
     : undefined
 );
 
-function handleSettingsAction(payload: { id: string; data: { type: string } }) {
-  if (payload.id === HeaderFeatureId.Help) openHelpDrawer();
+function handleSettingsAction(_payload: { id: string; data: { type: string } }) {
+  // HeaderFeatureId.Help 已下线；HeaderFeatureId.CheckUpdate 迁移到全局工具箱「维护」分组。
+  // settingsShowIds 现为空数组，这里暂无需要处理的 action。
 }
 
 const refreshSettings = async () => {
@@ -438,209 +531,228 @@ onActivated(async () => {
 </script>
 
 <style scoped lang="scss">
-// 切换模式时的鼠标加载态
-.wallpaper-mode-switching {
-  cursor: wait !important;
-
-  :deep(.el-radio) {
-    cursor: wait !important;
-
-    .el-radio__label {
-      cursor: wait !important;
-    }
-  }
-}
-
 .settings-container {
   width: 100%;
   height: 100%;
-  display: flex;
-  flex-direction: column;
   padding: 20px;
-  /* 隐藏滚动条 */
-  scrollbar-width: none;
-  /* Firefox */
-  -ms-overflow-style: none;
-  /* IE and Edge */
+  overflow: hidden;
+
+  // 弹窗内 el-dialog 高度为 auto，这里给一个固定高度，避免切换分类时弹窗高度跳动；
+  // 圆角 + 描边让「左导航 + 右面板」在 el-dialog 自带内边距里成为一块完整面板
+  &--embedded {
+    height: min(620px, 72dvh);
+    padding: 0;
+    border: 1px solid var(--anime-border);
+    border-radius: 14px;
+  }
 }
 
 .settings-content {
+  display: flex;
+  flex-direction: column;
   height: 100%;
+}
+
+.settings-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-category-nav {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 200px;
+  gap: 2px;
+  padding: 10px 8px;
   overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  /* 隐藏滚动条 */
-  scrollbar-width: none;
-  /* Firefox */
-  -ms-overflow-style: none;
-  /* IE and Edge */
-
-  &::-webkit-scrollbar {
-    display: none;
-    /* Chrome, Safari, Opera */
-  }
+  border-right: 1px solid var(--anime-border);
+  background: var(--anime-bg-sidebar);
 }
 
-.wallpaper-actual-alert {
-  width: 100%;
-}
-
-.settings-card {
-  background: var(--anime-bg-card);
-  border-radius: 16px;
-  box-shadow: var(--anime-shadow);
-  transition: none !important;
-
-  &:hover {
-    transform: none !important;
-    box-shadow: var(--anime-shadow) !important;
-  }
-}
-
-.form-item-content {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.settings-list {
-  display: flex;
-  flex-direction: column;
-}
-
-/* 与 SettingRow 同宽两列网格，小字显示在下方控件列 */
-.setting-row-desc {
-  display: grid;
-  grid-template-columns: 3fr 7fr;
-  gap: 16px;
-  align-items: start;
-  padding: 0 0 10px 0;
-}
-
-.setting-row-desc__spacer {
-  min-width: 0;
-}
-
-.setting-row-desc__content {
-  line-height: 1.4;
-  word-break: break-all;
-}
-
-.setting-row-desc__label {
-  color: var(--anime-text-muted);
-}
-
-.setting-row-desc__path {
+.settings-category-button {
   appearance: none;
-  background: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 42px;
+  padding: 0 14px;
   border: none;
-  padding: 0;
+  border-radius: 12px;
   margin: 0;
   font: inherit;
-  font-size: 12px;
-  color: var(--anime-primary);
+  font-size: 14px;
+  color: var(--anime-text-primary);
+  background: transparent;
   cursor: pointer;
-  text-decoration: underline;
   text-align: left;
+  transition: color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
 
   &:hover {
-    color: var(--anime-primary-hover, var(--anime-primary));
+    background: color-mix(in srgb, var(--anime-primary) 8%, transparent);
+  }
+
+  &.is-active {
+    color: #fff;
+    font-weight: 600;
+    background: linear-gradient(90deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
+    box-shadow: var(--anime-shadow);
   }
 }
 
-.setting-description {
-  font-size: 12px;
+.settings-category-icon {
+  flex: none;
+  font-size: 17px;
+}
+
+.settings-category-nav-spacer {
+  flex: 1;
+}
+
+.settings-category-nav-version {
+  padding: 0 14px 6px;
   color: var(--anime-text-muted);
-  margin-top: 0;
+  font-size: 11px;
 }
 
-.path-button {
-  padding: 0;
-  margin-left: 6px;
-  max-width: 100%;
-  justify-content: flex-start;
+.settings-mobile-category-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 12px;
+  overflow-y: auto;
 }
 
-.path-text {
-  margin-left: 6px;
-  max-width: 560px;
+.settings-mobile-category-card {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 15px 16px;
+  border: 1px solid var(--anime-border);
+  border-radius: 18px;
+  margin: 0;
+  background: var(--anime-bg-card);
+  box-shadow: var(--anime-shadow);
+  cursor: pointer;
+  font: inherit;
   text-align: left;
+
+  &:active {
+    transform: scale(0.99);
+  }
+}
+
+.settings-mobile-category-icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--anime-primary), var(--anime-secondary));
+  box-shadow: 0 4px 12px rgba(255, 107, 157, 0.25);
+  color: #fff;
+  font-size: 20px;
+
+  &.is-alt {
+    background: linear-gradient(135deg, var(--anime-primary-light), var(--anime-secondary-light));
+  }
+}
+
+.settings-mobile-category-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-mobile-category-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--anime-text-primary);
+}
+
+.settings-mobile-category-summary {
   overflow: hidden;
+  color: var(--anime-text-muted);
+  font-size: 12.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
-  display: inline-block;
-  vertical-align: bottom;
 }
 
-/* 确保 switch 有平滑的过渡动画 */
-:deep(.el-switch) {
-  transition: all 0.3s ease;
+.settings-mobile-category-chevron {
+  flex: none;
+  color: color-mix(in srgb, var(--anime-secondary) 45%, transparent);
+  font-size: 15px;
 }
 
-:deep(.el-switch__core) {
-  transition: all 0.3s ease;
+.settings-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 120px;
+  padding: 22px 36px 28px;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--anime-text-muted) 30%, transparent) transparent;
 }
 
-:deep(.el-switch__action) {
-  transition: all 0.3s ease;
+.settings-panel-inner {
+  display: flex;
+  flex-direction: column;
+  max-width: 660px;
 }
 
-/* 移除 input-number 的边框 */
-:deep(.el-input-number) {
-  border: none !important;
+:deep(.setting-control .el-input__wrapper),
+:deep(.setting-control .el-select .el-input__wrapper),
+:deep(.setting-control .el-input-number),
+:deep(.setting-control .android-picker-select) {
+  min-height: 34px;
+}
 
-  .el-input__wrapper {
-    border: none !important;
-    box-shadow: none !important;
+.setting-current-wallpaper-path {
+  appearance: none;
+  max-width: 460px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  margin: 0;
+  color: var(--anime-primary);
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.settings-mcp-panel {
+  margin: 18px -8px 4px;
+}
+
+:deep(.setting-control > .setting-slider-wrap) {
+  width: min(280px, 100%);
+}
+
+// 紧凑布局（安卓 / 窄视口 web）恒为非 embedded 全屏页：取消侧栏后内容区不设 max-width。
+.settings-container:not(.settings-container--embedded) {
+  .settings-panel {
+    padding: 0 16px 24px;
   }
 
-  &:hover .el-input__wrapper {
-    border: none !important;
-    box-shadow: none !important;
-  }
-
-  &.is-controls-right {
-    border: none !important;
-
-    &:hover {
-      border: none !important;
-    }
-  }
-
-  .el-input-number__increase,
-  .el-input-number__decrease {
-    border: none !important;
-  }
-
-  &:hover .el-input-number__increase,
-  &:hover .el-input-number__decrease {
-    border: none !important;
-  }
-}
-
-.loading-placeholder {
-  padding: 20px;
-  text-align: center;
-  color: var(--anime-text-secondary);
-}
-
-// 切换模式时的鼠标加载态
-.wallpaper-mode-switching-container {
-  cursor: wait !important;
-}
-
-.wallpaper-mode-switching {
-  cursor: wait !important;
-
-  :deep(.el-radio) {
-    cursor: wait !important;
-
-    .el-radio__label {
-      cursor: wait !important;
-    }
-
-    .el-radio__input {
-      cursor: wait !important;
-    }
+  .settings-panel-inner {
+    max-width: none;
   }
 }
 </style>

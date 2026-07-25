@@ -7,6 +7,9 @@
         <span>{{ headerSubtitle }}</span>
       </template>
       <template #extra>
+        <el-button circle :title="autoConfigHelpTitle" @click="openAutoConfigHelp">
+          <el-icon><QuestionFilled /></el-icon>
+        </el-button>
         <el-button type="primary" @click="goCreate">
           {{ $t("autoConfig.create") }}
         </el-button>
@@ -176,7 +179,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useVirtualList } from "@vueuse/core";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { AlarmClock, ArrowDown, Timer } from "@element-plus/icons-vue";
+import { AlarmClock, ArrowDown, QuestionFilled, Timer } from "@element-plus/icons-vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import AutoConfigDetailContent from "@kabegame/core/components/scheduler/AutoConfigDetailContent.vue";
@@ -189,7 +192,6 @@ import LocalImportDialog from "@/components/LocalImportDialog.vue";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useCrawlerStore } from "@/stores/crawler";
-import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { checkRecommendedPresetCompatibility } from "@/composables/useConfigCompatibility";
@@ -203,7 +205,6 @@ const { t, locale } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
-const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
 const pluginStore = usePluginStore();
 const settingsStore = useSettingsStore();
@@ -215,10 +216,8 @@ const appBackgroundCardClass = computed(() =>
 );
 
 const headerShowFeatures = [
-  HeaderFeatureId.QuickSettings,
   HeaderFeatureId.TaskDrawer,
   HeaderFeatureId.Collect,
-  HeaderFeatureId.Help,
 ];
 
 const crawlerDialog = useModal();
@@ -594,19 +593,21 @@ const handleScheduleEnabled = async (cfg: RunConfig, enabled: boolean) => {
   }
 };
 
+// 帮助内容按当前 tab 区分（定时说明 / 推荐配置说明），是页面本地弹窗，不经过 HeaderFeatureId 通道。
+function openAutoConfigHelp() {
+  if (listTab.value === "recommended") {
+    recommendedHelpDialog.open();
+  } else {
+    scheduleHelpDialog.open();
+  }
+}
+const autoConfigHelpTitle = computed(() =>
+  listTab.value === "recommended"
+    ? t("autoConfig.recommendedHelpTitle")
+    : t("autoConfig.scheduleHelpTitle")
+);
+
 const handleHeaderAction = (payload: { id: string; data?: { type: string; value?: string } }) => {
-  if (payload.id === HeaderFeatureId.Help) {
-    if (listTab.value === "recommended") {
-      recommendedHelpDialog.open();
-    } else {
-      scheduleHelpDialog.open();
-    }
-    return;
-  }
-  if (payload.id === HeaderFeatureId.QuickSettings) {
-    quickSettingsDrawer.open("autoconfigs");
-    return;
-  }
   if (payload.id === HeaderFeatureId.Collect) {
     const d = payload.data;
     if (d?.type === "select") {

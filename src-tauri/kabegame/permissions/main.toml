@@ -19,6 +19,7 @@ commands.allow = [
   "get_image_by_id",
   "get_image_metadata",
   "get_image_metadata_full",
+  "get_image_native_metadata",
   "get_gallery_image",
   "copy_image_to_clipboard",
   "delete_image",

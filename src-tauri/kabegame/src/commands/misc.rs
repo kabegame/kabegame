@@ -61,8 +61,8 @@ pub async fn get_file_drop_kinds(paths: Vec<String>) -> Result<Vec<FileDropKindI
             }
         };
         let is_directory = meta.is_dir();
-        let is_image = !is_directory && kabegame_core::image_type::is_image_by_path(path);
-        let is_video = !is_directory && kabegame_core::image_type::is_video_by_path(path);
+        let is_image = !is_directory && kabegame_core::media::image_type::is_image_by_path(path);
+        let is_video = !is_directory && kabegame_core::media::image_type::is_video_by_path(path);
         let is_kgpg = !is_directory
             && path_str
                 .rsplit_once('.')

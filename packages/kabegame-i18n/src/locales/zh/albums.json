@@ -83,6 +83,7 @@
   "selectFolderFailed": "选择文件夹失败",
   "pleaseSelectFolder": "请选择文件夹",
   "albumCount": "{count} 张",
+  "frostedPickerSubAlbumCount": "含 {count} 个子画册",
   "albumCardImageCount": "{imageCount} 张",
   "albumCardSubAlbums": "/ {subAlbumCount} 子画册",
   "createdAt": "创建 {date}",

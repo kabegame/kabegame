@@ -214,6 +214,11 @@ impl AppPaths {
         Ok(self.temp_dir.join("plugins-tmp").join(plugin_id))
     }
 
+    /// 单个畅游文件系统会话的临时目录：`temp_dir/surf-sessions/<handle>`。
+    pub fn surf_session_temp_dir(&self, handle: u64) -> PathBuf {
+        self.temp_dir.join("surf-sessions").join(handle.to_string())
+    }
+
     // ========== 虚拟驱动相关（仅桌面） ==========
 
     /// 虚拟驱动备注文件目录
@@ -324,6 +329,10 @@ mod tests {
         assert_eq!(
             paths.plugin_temp_dir("plugin.test").unwrap(),
             PathBuf::from("tmp/plugins-tmp/plugin.test")
+        );
+        assert_eq!(
+            paths.surf_session_temp_dir(4242),
+            PathBuf::from("tmp/surf-sessions/4242")
         );
         assert!(paths.plugin_data_dir("../escape").is_err());
         assert!(paths.plugin_cache_dir("../escape").is_err());

@@ -14,6 +14,11 @@
   - 添加每任务隔离的插件私有虚拟文件系统：V8 提供完整 `deno_fs` API，WebView 提供无句柄子集；插件卸载时 best-effort 清理其 data、cache、tmp 目录，升级时保留
   - 新增[haowallpaper](https://www.haowallpaper.com)、[小红书](https://www.xiaohongshu.com)、[kemono](https://kemono.cr) 插件。小红书webview插件实现了关键字检索+滚动下载。参考项目 [XHS-Downloader](https://github/JoeanAmier/XHS-Downloader)
 - **CLI**: 新增 plugn run 命令，能够运行一个已安装插件，先import安装kgpg插件，然后run，是当前的v8插件的开发、测试工作流（集成Claude skill）。
+- **原生元数据**:
+  - 新增图片格式原生元数据查看：JPEG 读 EXIF（拍摄参数、GPS、缩略图、MakerNote，含 GPS 隐私提示），PNG 走自写 chunk walker（IHDR、tEXt/iTXt/zTXt 文本块、色彩、物理尺寸/时间、未知块），能直接看到 ComfyUI 的 `prompt`/`workflow`、A1111 的 `parameters`、NovelAI 的生成参数（进一步可以通过MCP帮忙检索所有带生成参数的图片）
+  - 存量图片不迁移，改为懒计算：按图片内容 hash 去重共享一份解析结果，同哈希图片自动回填；新下载与本地导入在入库后 best-effort 计算
+  - 整理新增「补充原生元数据」选项（默认关闭）：批量为缺失或解析器版本过旧的 JPEG/PNG 补算，开启后整理批次自动收敛到 10；即将被整理删除的图片跳过，避免白做解析
+- **图片详情**: 预览窗左右侧栏宽度可拖动（240px ~ min(560px, 45vw)，双击复位，分别持久化）
 
 ### Fixed
 - **壁纸**: 
@@ -37,6 +42,7 @@
 
 ### Changed
 - **畅游**： 下载不再脱离并发限制，但也不阻塞交互，而是进队，之后调度webview开启原生下载。
+- **图片详情**: 详情区拆成基本信息、原生元数据、插件简介三个同构面板
 - **文档**: Demo 页面url改成 demo.kabegame.com
 
 ### Removed

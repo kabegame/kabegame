@@ -1,0 +1,23 @@
+diff --git a/libs/npm_installer/local.rs b/libs/npm_installer/local.rs
+index 6e9cb49ec..9dd57df68 100644
+--- a/libs/npm_installer/local.rs
++++ b/libs/npm_installer/local.rs
+@@ -2120,7 +2120,17 @@ fn cleanup_unused_packages<TSys: LocalNpmInstallSys>(
+     for entry in entries.flatten() {
+       let file_name = entry.file_name();
+       if let Some(name_str) = file_name.to_str() {
+-        if name_str == "node_modules" || name_str.starts_with(".deno.lock") {
++        // kabegame patch(node_modules-suffix): fs_read_dir returns physical
++        // entry names — with DENO_NODE_MODULES_SUFFIX set the alias dir is
++        // physically `node_modules<suffix>`, which the literal "node_modules"
++        // comparison treated as an unused package folder and deleted; later
++        // conflict-alias symlinks into `.deno/node_modules/*` then fail with
++        // ENOENT. Package folder names here are `<name>@<version>` and can
++        // never start with "node_modules", so prefix matching is safe for any
++        // suffix (including unset).
++        if name_str.starts_with("node_modules")
++          || name_str.starts_with(".deno.lock")
++        {
+           continue;
+         }
+ 

@@ -126,6 +126,99 @@ pub async fn send_debug_event_with_level(
     Ok(())
 }
 
+/// vite dev server 上的 CDP 端口登记入口(见 `scripts/vite-debug-server.ts`)。
+#[cfg(all(
+    debug_assertions,
+    not(feature = "web"),
+    any(target_os = "linux", target_os = "windows", target_os = "macos"),
+    feature = "standard"
+))]
+const CDP_REGISTER_PATH: &str = "/__kabegame_cdp/register";
+
+/// 把本进程 CEF 的 CDP 端口上报给 vite dev server。
+///
+/// 为什么要这一步：dev 下 CDP 端口是**随机**的(`KABEGAME_CEF_DEBUG_PORT=random`,
+/// 由 ComponentPlugin 注入),`.claude/skills/kabegame-chromium/` 不可能猜到号；而
+/// vite 的 1420 是死端口。于是让 app 主动把号"寄存"到 vite,skill 只探 1420 即可。
+///
+/// 等 `/json/version` 真的应答之后才上报,所以"vite 上有端口"等价于"CDP 已就绪",
+/// skill 不必自己轮询 app 启动进度。
+#[cfg(all(
+    debug_assertions,
+    not(feature = "web"),
+    any(target_os = "linux", target_os = "windows", target_os = "macos"),
+    feature = "standard"
+))]
+pub fn spawn_cdp_register() {
+    let Some(port) = tauri_runtime_cef::remote_debugging_port() else {
+        return;
+    };
+    spawn_task(async move {
+        if let Err(error) = register_cdp_port(port).await {
+            eprintln!("[kabegame-cdp] failed to publish CDP port {port} to dev server: {error}");
+        }
+    });
+}
+
+#[cfg(not(all(
+    debug_assertions,
+    not(feature = "web"),
+    any(target_os = "linux", target_os = "windows", target_os = "macos"),
+    feature = "standard"
+)))]
+pub fn spawn_cdp_register() {}
+
+#[cfg(all(
+    debug_assertions,
+    not(feature = "web"),
+    any(target_os = "linux", target_os = "windows", target_os = "macos"),
+    feature = "standard"
+))]
+async fn register_cdp_port(port: u16) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(800))
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    // CDP 的 listener 由 cef_initialize 内部起,setup() 跑到时可能还没 bind 上。
+    let probe = format!("http://127.0.0.1:{port}/json/version");
+    let mut ready = false;
+    for _ in 0..60 {
+        if let Ok(response) = client.get(&probe).send().await {
+            if response.status().is_success() {
+                ready = true;
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    if !ready {
+        return Err(format!("CDP on 127.0.0.1:{port} never became ready"));
+    }
+
+    let url = format!(
+        "http://{}:{}{}",
+        dev_server_host(),
+        dev_server_port(),
+        CDP_REGISTER_PATH
+    );
+    let response = client
+        .post(url)
+        .json(&serde_json::json!({
+            "port": port,
+            "pid": std::process::id(),
+        }))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("dev server returned {}", response.status()));
+    }
+    eprintln!("[kabegame-cdp] CDP ready on 127.0.0.1:{port}, published to dev server");
+    Ok(())
+}
+
 #[cfg(debug_assertions)]
 fn debug_ingest_enabled() -> bool {
     std::env::var("KABEGAME_DEBUG_INGEST")

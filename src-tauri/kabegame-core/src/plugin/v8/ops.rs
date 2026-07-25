@@ -1,9 +1,10 @@
-use crate::crawler::TaskScheduler;
 use crate::crawler::task_scheduler::{PageStackEntry, Task};
+use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
+use crate::plugin::ffmpeg::FfmpegProbeResult;
 use crate::settings::Settings;
 use crate::storage::Storage;
-use deno_core::{OpState, op2};
+use deno_core::{op2, OpState};
 use deno_error::JsErrorBox;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value as JsonValue;
@@ -208,6 +209,38 @@ pub fn op_kabegame_fs_root(state: &mut OpState) -> Result<String, JsErrorBox> {
 }
 
 #[op2]
+pub async fn op_kabegame_ffmpeg_mux(
+    state: Rc<RefCell<OpState>>,
+    #[serde] inputs: Vec<String>,
+    #[string] output: String,
+) -> Result<(), JsErrorBox> {
+    let (task_id, cancel) = state_snapshot(&state, |s| (s.task_id.clone(), s.cancel.clone()));
+    check_cancelled(&cancel)?;
+    let vfs = Arc::clone(&run_of(&task_id)?.vfs);
+    tokio::task::spawn_blocking(move || {
+        crate::plugin::ffmpeg::mux_streams_sync(&vfs, &inputs, &output)
+    })
+    .await
+    .map_err(|error| JsErrorBox::generic(format!("音视频合流任务执行失败：{error}")))?
+    .map_err(JsErrorBox::generic)
+}
+
+#[op2]
+#[serde]
+pub async fn op_kabegame_ffmpeg_probe(
+    state: Rc<RefCell<OpState>>,
+    #[string] path: String,
+) -> Result<Option<FfmpegProbeResult>, JsErrorBox> {
+    let (task_id, cancel) = state_snapshot(&state, |s| (s.task_id.clone(), s.cancel.clone()));
+    check_cancelled(&cancel)?;
+    let vfs = Arc::clone(&run_of(&task_id)?.vfs);
+    tokio::task::spawn_blocking(move || crate::plugin::ffmpeg::probe_sync(&vfs, &path))
+        .await
+        .map_err(|error| JsErrorBox::generic(format!("媒体探测任务执行失败：{error}")))?
+        .map_err(JsErrorBox::generic)
+}
+
+#[op2]
 #[serde]
 pub fn op_kabegame_plugin_data(state: &mut OpState) -> Result<JsonValue, JsErrorBox> {
     let task_id = state.borrow::<KabegameOpState>().task_id.clone();
@@ -402,7 +435,7 @@ pub fn op_kabegame_create_image_metadata(
     // plugin_version 由应用盖章（图片下载时的插件版本），插件不可传入；旧 opts.version 静默忽略。
     let task_id = state.borrow::<KabegameOpState>().task_id.clone();
     run_of(&task_id)?
-        .insert_image_metadata(&value)
+        .insert_metadata(&value)
         .map_err(|e| JsErrorBox::generic(format!("create_image_metadata: {e}")))
 }
 
@@ -472,7 +505,7 @@ fn parse_download_opts(
     let metadata_id = if let Some(id) = metadata_id {
         Some(id)
     } else if let Some(value) = metadata {
-        Some(run.insert_image_metadata(&value).map_err(JsErrorBox::generic)?)
+        Some(run.insert_metadata(&value).map_err(JsErrorBox::generic)?)
     } else {
         None
     };

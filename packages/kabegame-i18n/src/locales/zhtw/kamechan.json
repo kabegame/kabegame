@@ -1,9 +1,11 @@
 {
   "history": "訊息歷史",
   "minimize": "最小化",
+  "restore": "恢復立繪",
   "disable": "關閉 Kamechan",
   "historyTitle": "訊息歷史",
   "historyEmpty": "還沒有訊息",
   "historyClear": "清空",
-  "moreMessages": "還有 {count} 則訊息"
+  "moreMessages": "還有 {count} 則訊息",
+  "toolboxTitle": "你要做點什麼？"
 }

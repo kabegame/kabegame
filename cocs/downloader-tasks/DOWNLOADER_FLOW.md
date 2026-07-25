@@ -8,7 +8,7 @@
 
 ```
 任务/脚本发起 download_image
-    -> 写入 image_metadata，DownloadRequest 只携带 metadata_id 与 display_name
+    -> 写入 metadata 表，DownloadRequest 只携带 metadata_id 与 display_name
     -> DownloadQueue::download 等待下载池容量并入队
     -> download_worker_loop 取 job，发送 Preparing -> Downloading
     -> URL 前置去重：命中已有图片时跳过读取，只补画册/计数/事件
@@ -19,7 +19,7 @@
 
 下载阶段通过 `DownloadSink` 管理内存/磁盘缓冲，下载结果为 `DownloadOutcome`（`Bytes` 或 `Path`）。后处理由统一的 `postprocess_downloaded_image` 函数完成，根据 `PostprocessSource` 枚举（`Bytes` 或 `Path`）自适应处理路径。桌面 WebView/CEF 下载同样先生成 `DownloadRequest` 入队并占用 worker；worker 按 `surf_record_id` 或任务插件 backend 分派到所属 CEF WebView。Android 本地 `content://` 导入不走网络读取，直接走 content URI 入库。
 
-JS 爬虫与畅游窗口还有一条浏览器内媒体上传通道：`data:`、普通 `blob:` 和 MSE `blob:` 不交给 WebView 原生下载，而是在页面 JS 层读取/捕获字节后，通过 `crawl_media_begin` / `crawl_media_chunk` / `crawl_media_end` 分块上传给 Rust。MSE 支持单流与音视频分离多 SourceBuffer；JS 捕获层会按解码时间排序去重，桌面端多流由 rsmpeg stream-copy 合流后再进入 `postprocess_downloaded_image(PostprocessSource::Path)`。Rust 侧把这类上传登记为普通 active download，进度通过 `DownloadQueue::report_progress` 发出。
+JS 爬虫与畅游窗口对 `data:`、普通 `blob:` 和 MSE `blob:` 使用通用 VFS 原语：页面 JS 读取/捕获字节，在当前任务或畅游会话的 `PluginVfs` 中分块落盘；MSE 多 SourceBuffer 再显式调用 `crawl_ffmpeg_mux` 做 stream-copy 合流。crawler 把最终虚拟路径交给 `crawl_download_image`，由 `task-vfs://` scheme 流式读入下载管线；surf 则调用 `surf_import_media`，以 `PostprocessSource::Path` 直通后处理。浏览器侧写盘进度仍通过 toast 展示，不再存在专用媒体上传会话或 base64 IPC。
 
 ---
 
@@ -30,11 +30,13 @@ JS 爬虫与畅游窗口还有一条浏览器内媒体上传通道：`data:`、�
 | `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | downloader 模块门面；scheme downloader trait/注册表；`download_with_retry`；下载间隔 helper；统一 `postprocess_downloaded_image`；`DownloadSink` / `DownloadOutcome` / `PostprocessSource` 定义；最终目标路径与 Android Pictures copy / content URI 入库 |
 | `src-tauri/kabegame-core/src/crawler/downloader/queue.rs` | `DownloadQueue`、下载池、统一 active download 状态机、CEF worker 分派与完成 oneshot、worker loop、URL 前置去重、失败记录 upsert、任务图片计数快照 |
 | `src-tauri/kabegame-core/src/crawler/downloader/http.rs` | HTTP/HTTPS scheme downloader；响应流读取写入 `DownloadSink`、Range 续传、进度事件、请求头处理 |
-| `src-tauri/kabegame-core/src/crawler/downloader/media_upload.rs` | JS 层 blob/data/MSE 分块上传会话表；负责上传临时文件句柄、字节上限、任务取消清理 |
+| `src-tauri/kabegame-core/src/crawler/downloader/task_vfs.rs` | `task-vfs://` scheme downloader；校验当前任务 handle 后从 `PluginVfs` 分块读取并写入 `DownloadSink` |
 | `src-tauri/kabegame-core/src/crawler/downloader/content.rs` | Android-only `content://` scheme downloader；从 ContentResolver 读取 bytes 写入 `DownloadSink` |
 | `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | 图片缩略图、视频预览压缩、缩略图尺寸策略 |
 | `src-tauri/kabegame-core/src/crawler/downloader/util.rs` | 安全文件名、唯一下载路径、hash、MIME/文件名辅助 |
-| `src-tauri/kabegame/src/startup.rs`、`src-tauri/kabegame/src/commands/surf.rs`、`src-tauri/kabegame/src/commands/crawler.rs` | 桌面 WebView/CEF 下载投递、按窗口身份认领、`.part` 路径指定、Finished 回传与媒体上传命令路由 |
+| `src-tauri/kabegame-core/src/plugin/vfs.rs`、`src-tauri/kabegame-core/src/plugin/ffmpeg.rs` | 任务/会话虚拟路径安全边界；虚拟路径上的显式媒体合流与探测 |
+| `src-tauri/kabegame/src/webview_js/media_capture.js`、`src-tauri/kabegame/src/webview_js/media_download.js` | 捕获 Blob/MSE；以 Raw IPC 分块写入会话 VFS、显式合流并提交 |
+| `src-tauri/kabegame/src/startup.rs`、`src-tauri/kabegame/src/commands/surf.rs`、`src-tauri/kabegame/src/commands/crawler.rs`、`src-tauri/kabegame/src/commands/surf_session.rs` | 桌面 WebView/CEF 下载投递与回传；fs/ffmpeg 命令按窗口 label 选择 VFS；surf 会话 VFS 与 Path 直通导入 |
 | `src-tauri/kabegame-core/src/crawler/task_scheduler/mod.rs`、`src-tauri/kabegame-core/src/crawler/task_scheduler/task.rs` | crawl task 调度；运行中 `Task` 注册表；任务级 header/display_name/metadata 快照回放；失败图片重试入口 |
 | `src-tauri/kabegame/src/commands/task.rs` | 失败项重试、取消重试、删除失败项等命令入口 |
 | `apps/kabegame/src/stores/failedImages.ts` | 前端失败图片事件增量同步 |
@@ -176,6 +178,7 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 3. 查 `Storage::find_image_by_hash` 做 hash 去重。
 4. 未命中去重时，根据格式键计算最终目标路径/文件名，落盘（或映射回标准 MIME 后执行 Android MediaStore copy）。
 5. 生成缩略图/预览，写入 `images` 表，广播事件。
+6. `add_image` 成功后 best-effort 计算**原生元数据**（JPEG EXIF / PNG chunk，`media::native_metadata`）：仅对 `image/jpg`、`image/png`；先按 `hash` 查同哈希图片是否已挂 `parser_version` 匹配的 `image_metadata` 行（命中则共享 id 回填所有同哈希图片，不重复解析），未命中才解析（优先内存 `bytes`，桌面 `Path` 读文件；Android 无 bytes 的 content:// 溢写场景跳过，留给 `get_image_native_metadata` 查看时懒计算）。任何失败仅 log，不阻断入库。注意 `image_metadata` 表现指原生元数据（v024 起），插件业务元数据表已改名 `metadata`。
 
 `images.plugin_id` 仅表示爬虫插件来源，可为空；畅游来源图片不再把 host 写入 `plugin_id`，而是写入 `surf_record_id`，详情页再通过 Surf 记录解析 host。普通爬虫任务仍写入 `plugin_id`。
 
@@ -193,26 +196,29 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 
 桌面 WebView/CEF 下载完成后也复用同一后处理入口。`DownloadRequest`/`ActiveDownloadInfo` 携带 `task_id` / `surf_record_id`、`plugin_id`、输出画册、header 快照、脚本指定展示名和 `metadata_id`；敏感后端字段使用 `#[serde(skip)]`。CEF 只负责把字节落到 `downloads_temp_dir()/native-<id>.part` 并回传终态，worker 再以 `PostprocessSource::Path { relocate_to: Some(images_dir) }` 进入后处理。CEF 与 reqwest 下载发送相同 lifecycle，前端不再区分 `native` 字段。
 
-### JS 层流式上传通道
+### 浏览器媒体捕获、会话 VFS 与提交
 
-`ctx.downloadImage(url)` 在 bootstrap 中按 scheme 分流；畅游 `surf-{host}` 窗口的右键下载对 `data:` / `blob:` 也复用同一条共享上传脚本：
+`Kabegame.downloadImage(url)` 在 bootstrap 中按 scheme 分流；畅游 `surf-{host}` 窗口的右键下载对 `data:` / `blob:` 也复用同一份 `media_download.js`：
 
 - `http:` / `https:` 等普通 URL：先统一入队；webview 爬虫或 surf job 由 worker 分派回对应 CEF WebView。
-- `data:`：页面内 `fetch(url).blob()` 后按 2 MiB 切片上传。
+- `data:`：页面内 `fetch(url).blob()` 后按 8 MiB 切片写入 VFS，不把大 Blob 一次性读入内存。
 - 普通 `blob:`：优先从 `media_capture.js` 维护的 `URL.createObjectURL` 注册表取 Blob；未命中时兜底 `fetch(blobUrl)`。
 - MSE `blob:`：`media_capture.js` 早期 hook `MediaSource.addSourceBuffer` 与 `SourceBuffer.appendBuffer`，只保存页面实际 append 过的媒体片段；下载前 `media_download.js` 会静音高倍速驱动 `<video>` 尽量全缓冲，直播或长时间无推进会明确报错。
 - 捕获结果在 `resolve()` 时按容器归一化：fMP4/CMAF 读取 `tfdt.baseMediaDecodeTime`，MPEG-TS 读取首个 PES PTS，按时间升序排序并去重；无法识别的容器保留 append 顺序并标记 `unordered`。
-- MSE 多 SourceBuffer 上传为多流会话。桌面端在 `crawl_media_end` 中调用 `compress::mux_media_streams` 做 stream-copy 合流；Android 不编译 FFmpeg/rsmpeg，多流合流会优雅失败。
 - DRM/EME 只做检测和拒绝：检测到 `setMediaKeys` 或 `encrypted` 事件后抛出清晰错误，不尝试解密，也不生成坏文件。
 
-Rust 命令语义：
+落盘与提交顺序：
 
-- `crawl_media_begin`：按调用方 label 解析上下文。`crawler-<task_id>` 从 `TaskScheduler::get_run(task_id)` 取 `TaskParams.images_dir/plugin.id/plugin_version/output_album_id`，Referer 从当前 page stack 顶部 URL 派生，并合并任务 header；`surf-{host}` 按 host 现算下载显示用来源与 `surf_record_id`、默认图片目录。随后分配 `download_id`，按每个 stream 的 MIME/name 计算临时文件，创建上传会话，并把 `ActiveDownloadInfo { state: Preparing, total_bytes, ... }` 通过通用 active 登记口加入 `DownloadQueue`，随后切到 `Downloading`。
-- `crawl_media_chunk`：base64 解码 JS chunk，按 `stream` 索引追加写入对应会话文件，并调用 `report_progress(id, written, total)` 推动任务抽屉进度。
-- `crawl_media_end(success=true)`：关闭会话文件，单流直接后处理，多流桌面先合流成临时单文件，再切到 `Processing` 并用 `PostprocessSource::Path { relocate_to: None }` 进入统一后处理；完成后由后处理切到 `Completed` 或 `Failed`，再 `wait_then_finish_download`。畅游媒体下载成功入库时会同步增加对应 surf 记录下载计数。
-- `crawl_media_end(success=false)` 或任务取消：abort 会话、删除半截文件。任务取消统一在 `DownloadQueue::cancel_task_downloads` 中调用 `media_upload::abort_task_sessions(task_id)`，覆盖用户取消和 `crawl_error` 的取消路径。
+1. `crawl_fs_get_root` 取得 `/{handle}`，在 `${root}/tmp/media-<timestamp>-<random>` 建本次下载子目录。
+2. 每个流写入 `stream-<index>.<ext>`：`crawl_fs_create` 创建句柄，`crawl_fs_fwrite` 通过 Raw IPC 发送原始字节。Rust 返回本次实际写入数，JS 对短写循环推进，直至当前 8 MiB 块完整写入，最后 `crawl_fs_close`。
+3. 单流直接使用该流路径；多流显式调用 `crawl_ffmpeg_mux({ inputs, output })`。任一流 MIME 含 `webm` 时输出 WebM，否则输出 MP4；`inputs` / `output` 始终是当前 VFS 的虚拟绝对路径。Android 的 FFmpeg 桥返回可读的不支持错误。
+4. crawler 的 `window.__kb_media_submit__` 调用 `crawl_download_image({ url: vfsPath, ... })`。宿主包装成内部 `task-vfs://`，`task_vfs.rs` 以固定缓冲区流式读 VFS 文件，`DownloadSink` 超过 5 MiB 后继续溢写磁盘，再进入统一后处理。
+5. surf 的提交回调调用 `surf_import_media({ path: vfsPath, ... })`。宿主解析出受会话 VFS 约束的真实路径，以 `PostprocessSource::Path { relocate_to: Some(images_dir) }` 直通后处理；成功后源文件所有权交给 Rust。
+6. 无论捕获、写盘、合流或提交成功与否，JS 都在 `finally` 递归删除本次下载子目录。surf 窗口销毁还会删除整棵会话目录，启动期清理提供兜底。
 
-上传会话累计上限为 2 GiB，单个 MediaSource 捕获上限为 768 MiB。该通道不做 HLS/DASH manifest 解析，也不主动抓分片；它只处理播放器已经通过 `appendBuffer` 喂给 MSE 的字节。
+写 VFS 阶段尚未登记为 `ActiveDownloadInfo`，百分比由页面 toast 直接展示；crawler 提交入队、surf 开始 Path 后处理后，才进入各自既有下载状态/事件流程。
+
+单个 MediaSource 捕获上限仍为 768 MiB。该机制不做 HLS/DASH manifest 解析，也不主动抓分片；它只处理播放器已经通过 `appendBuffer` 喂给 MSE 的字节。
 
 桌面的 `file://` 或其他本地导入路径也通过 `PostprocessSource::Path` 走统一后处理。
 

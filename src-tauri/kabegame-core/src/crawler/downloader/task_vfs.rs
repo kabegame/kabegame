@@ -1,12 +1,11 @@
-//! task-vfs:// 下载实现：从运行中任务的 PluginVfs 读取完整字节。
+//! task-vfs:// 下载实现：从运行中任务的 PluginVfs 流式读取文件。
 
 use async_trait::async_trait;
-use deno_fs::{FileSystem, OpenOptions};
-use deno_permissions::CheckedPathBuf;
+use deno_fs::OpenOptions;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::Url;
 
 use super::{DownloadAttemptError, DownloadWriter, SchemeDownloader};
@@ -69,12 +68,11 @@ async fn download_from_vfs(
 ) -> Result<(), DownloadAttemptError> {
     let decoded_path = decoded_url_path(url)?;
     let virtual_path = PathBuf::from(format!("/{handle}{decoded_path}"));
-    let checked_path = CheckedPathBuf::unsafe_new(virtual_path);
-    // deno_fs 的异步 FileSystem future 是 !Send，而 scheme downloader 会在 Tokio worker
-    // 中作为 Send future 执行；放到 blocking 池调用同一 VFS API，仍完整经过权限与软链校验。
-    let bytes = tokio::task::spawn_blocking(move || {
-        vfs.read_file_sync(&checked_path.as_checked_path(), OpenOptions::read())
-            .map(std::borrow::Cow::into_owned)
+    // 先在 blocking 池完成 VFS 权限/软链校验并打开 std File，再交给 Tokio 分块读取。
+    let (file, total) = tokio::task::spawn_blocking(move || {
+        let file = vfs.open_std(&virtual_path, OpenOptions::read())?;
+        let total = file.metadata()?.len();
+        Ok::<_, deno_fs::FsError>((file, total))
     })
     .await
     .map_err(|error| DownloadAttemptError::fatal(format!("Failed to join task VFS read: {error}")))?
@@ -82,10 +80,21 @@ async fn download_from_vfs(
         DownloadAttemptError::fatal(format!("Failed to read task VFS file: {error}"))
     })?;
 
-    out.set_total(Some(bytes.len() as u64));
-    out.write_all(&bytes)
-        .await
-        .map_err(|error| DownloadAttemptError::fatal(format!("write download buffer: {error}")))?;
+    out.set_total(Some(total));
+    let mut file = tokio::fs::File::from_std(file);
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .await
+            .map_err(|error| DownloadAttemptError::fatal(format!("read task VFS file: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        out.write_all(&buffer[..read]).await.map_err(|error| {
+            DownloadAttemptError::fatal(format!("write download buffer: {error}"))
+        })?;
+    }
     Ok(())
 }
 
@@ -93,7 +102,9 @@ async fn download_from_vfs(
 mod tests {
     use super::*;
     use crate::app_paths::AppPaths;
-    use crate::crawler::downloader::{DownloadErrorKind, DownloadOutcome, SpillWriter};
+    use crate::crawler::downloader::{
+        DownloadErrorKind, DownloadOutcome, SpillWriter, DOWNLOAD_SPILL_THRESHOLD,
+    };
     use crate::crawler::{DownloadQueue, TaskScheduler};
     use std::sync::Arc;
 
@@ -139,6 +150,33 @@ mod tests {
         match writer.finalize().await.unwrap() {
             DownloadOutcome::Bytes(bytes) => assert_eq!(bytes, b"vfs-image"),
             DownloadOutcome::Path(_) => panic!("small VFS file should stay in memory"),
+        }
+    }
+
+    #[tokio::test]
+    async fn spills_large_vfs_file_to_path() {
+        init_paths();
+        let plugin_id = format!("task-vfs-spill-{}", std::process::id());
+        let data_root = AppPaths::global().plugin_data_dir(&plugin_id).unwrap();
+        std::fs::create_dir_all(&data_root).unwrap();
+        let expected_len = DOWNLOAD_SPILL_THRESHOLD + 1;
+        std::fs::write(data_root.join("large.mp4"), vec![0x5a; expected_len]).unwrap();
+        let vfs = Arc::new(test_vfs(&plugin_id));
+        let url = Url::parse(&format!("task-vfs://{HANDLE}/data/large.mp4")).unwrap();
+        let output_dir =
+            std::env::temp_dir().join(format!("kabegame-task-vfs-spill-{}", std::process::id()));
+        let mut writer = SpillWriter::new_in(4, output_dir);
+
+        download_from_vfs(vfs, HANDLE, &url, &mut writer)
+            .await
+            .expect("stream task VFS file");
+        assert_eq!(writer.total, Some(expected_len as u64));
+        match writer.finalize().await.unwrap() {
+            DownloadOutcome::Path(path) => {
+                assert_eq!(std::fs::metadata(&path).unwrap().len(), expected_len as u64);
+                let _ = std::fs::remove_file(path);
+            }
+            DownloadOutcome::Bytes(_) => panic!("large VFS file should spill to disk"),
         }
     }
 

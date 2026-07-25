@@ -1,8 +1,8 @@
 <template>
   <div class="plugin-browser-container" v-pull-to-refresh="pullToRefreshOpts">
     <div class="plugin-browser-content">
-      <PluginBrowserPageHeader @refresh="handleRefresh" @import-source="handleImportSource" @help="openHelpDrawer"
-        @quick-settings="openQuickSettings" @manage-sources="openManageSources" />
+      <PluginBrowserPageHeader @refresh="handleRefresh" @import-source="handleImportSource"
+        @manage-sources="openManageSources" />
 
       <div v-if="sourcesLoadedOnce && sources.length === 0" class="plugin-sources-empty-hint">
         <el-alert type="info" :closable="false" show-icon>
@@ -416,8 +416,6 @@ import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import PluginBrowserPageHeader from "@/components/header/PluginBrowserPageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import { isUpdateAvailable } from "@/utils/version";
-import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
-import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { storePluginCacheDb } from "@kabegame/core/cache/storePluginCache";
@@ -469,10 +467,6 @@ const pluginStore = usePluginStore();
 const { t } = useI18n();
 const { pluginName, pluginDescription } = usePluginManifestI18n();
 const router = useRouter();
-const quickSettingsDrawer = useQuickSettingsDrawerStore();
-const openQuickSettings = () => quickSettingsDrawer.open("pluginbrowser");
-const helpDrawer = useHelpDrawerStore();
-const openHelpDrawer = () => helpDrawer.open("pluginbrowser");
 
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();

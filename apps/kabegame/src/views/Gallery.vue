@@ -18,7 +18,7 @@
                 :filters="galleryRouteStore.filters"
                 :sort="galleryRouteStore.sort" :page-size="pageSize" :search="search"
                 :provider-context-prefix="galleryRouteStore.computedContextPath"
-                @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
+                @refresh="handleManualRefresh"
                 @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="handleShowLocalImport"
                 @open-collect-menu="handleOpenCollectMenu"
                 @update:filters="(filters) => galleryRouteStore.navigate({ filters, page: 1 }, { push: true })"
@@ -100,8 +100,6 @@ import OrganizeDialog from "@/components/OrganizeDialog.vue";
 import { useOrganizeStore, type OrganizeOptions } from "@/stores/organize";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { createGallerySurface } from "@/components/imageGrid/surfaces/gallery";
-import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
-import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
@@ -124,10 +122,6 @@ const uiStore = useUiStore();
 const { isCompact } = storeToRefs(uiStore);
 const crawlerStore = useCrawlerStore();
 const crawlerDrawerStore = useCrawlerDrawerStore();
-const quickSettingsDrawer = useQuickSettingsDrawerStore();
-const openQuickSettingsDrawer = () => quickSettingsDrawer.open("gallery");
-const helpDrawer = useHelpDrawerStore();
-const openHelpDrawer = () => helpDrawer.open("gallery");
 const router = useRouter();
 const galleryRouteStore = useGalleryRouteStore();
 const { search } = storeToRefs(galleryRouteStore);

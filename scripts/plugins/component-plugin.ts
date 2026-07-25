@@ -125,6 +125,15 @@ export class ComponentPlugin extends BasePlugin {
           "TAURI_CLI_WATCHER_IGNORE_FILENAME",
           path.join(this.component.appDir, ".taurignore"),
         );
+        // dev 默认开 CEF 的 CDP 调试端口，供 .claude/skills/kabegame-chromium 截图/驱动 UI。
+        // 端口取 random（内核分配）而不是固定 9222：调试端口一开，本机任意进程就能
+        // 完全控制该 browser，随机号少一点被守株待兔的面。app 起来后会把实际端口
+        // POST 给 vite（/__kabegame_cdp/register），skill 只探 1420 即可发现。
+        // **只注入 dev**——build/打包路径不经过这里，发布包依旧不监听任何调试端口。
+        // 显式设 KABEGAME_CEF_DEBUG_PORT（含 =0 关闭）时尊重用户的值，不覆盖。
+        if (process.env.KABEGAME_CEF_DEBUG_PORT === undefined) {
+          this.setEnv("KABEGAME_CEF_DEBUG_PORT", "random");
+        }
       }
     });
 

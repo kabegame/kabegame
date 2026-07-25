@@ -1,7 +1,10 @@
 {
-  "help": "ヘルプ",
-  "quickSettings": "クイック設定",
   "refresh": "更新",
+  "tasks": "タスク",
+  "toolbox": "ツールボックス",
+  "toolboxApp": "アプリ",
+  "toolboxMaintenance": "メンテナンス",
+  "toolboxDisplay": "表示",
   "stopTask": "タスクを停止",
   "deleteTask": "タスクを削除",
   "organize": "整理",

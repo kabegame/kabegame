@@ -80,6 +80,7 @@
   "selectFolderFailed": "フォルダの選択に失敗しました",
   "pleaseSelectFolder": "フォルダを選択してください",
   "albumCount": "{count} 枚",
+  "frostedPickerSubAlbumCount": "子画集 {count} 件を含む",
   "albumCardImageCount": "{imageCount} 枚",
   "albumCardSubAlbums": "/ {subAlbumCount} サブアルバム",
   "createdAt": "作成日 {date}",

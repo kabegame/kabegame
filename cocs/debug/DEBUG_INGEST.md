@@ -200,6 +200,30 @@ KABEGAME_DEBUG_TEE_CONSOLE=true
 
 让 Vite middleware 在写文件的同时 `console.debug`。
 
+## CDP 端口寄存
+
+同一个 Vite middleware 还兼职一个与 debug ingest 无关的用途：给 `kabegame-chromium`
+skill 寄存 CEF 的 CDP（Chrome DevTools Protocol）端口。
+
+dev 下 `scripts/plugins/component-plugin.ts` 注入 `KABEGAME_CEF_DEBUG_PORT=random`，
+`src-tauri/tauri-runtime-cef/src/runtime.rs` 的 `remote_debugging_port()` 让内核分配一个
+空闲回环端口（结果 memoize 在 `OnceLock`），`src-tauri/kabegame/src/debug_ingest.rs` 的
+`spawn_cdp_register()` 轮询 `/json/version` 直到 CDP 真的应答，然后把端口 POST 给 Vite。
+
+```text
+POST http://127.0.0.1:1420/__kabegame_cdp/register   {"port": 51234, "pid": 4321}
+GET  http://127.0.0.1:1420/__kabegame_cdp            → {"ok":true,"port":51234,...}
+```
+
+要点：
+
+- 登记是 **Vite 进程内内存态**，没有撤销接口：app 退出后端口仍留在上面，vite 重启则清空。
+  消费方（`.claude/skills/kabegame-chromium/driver.sh`）在用之前会再探一次 `/json/version`。
+- 「vite 上有端口」等价于「CDP 已就绪」——因为后端是探通之后才上报的。
+- 只在 dev 注入；build/打包路径不经过 `component-plugin.ts`。显式设 `KABEGAME_CEF_DEBUG_PORT`
+  （含 `=0` 关闭）时尊重用户的值。
+- 与 debug ingest 共用同一套 loopback 来源校验。
+
 ## 推荐排查流程
 
 1. 选择一个短 session id，例如 `preview-debug-001`。

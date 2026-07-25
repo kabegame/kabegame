@@ -9,9 +9,11 @@ function currentUrl() {
   return typeof location === "undefined" ? "" : location.pathname + location.search;
 }
 
+// 设置有两种承载：紧凑端的 /settings 全屏路由页，桌面端的 SettingsDialog 弹窗。
+// （旧的 QuickSettingsDrawer 已删除，不再有 quick_settings_drawer 这一来源。）
 function currentSettingsSource() {
   if (typeof location === "undefined") return "unknown";
-  return location.pathname === "/settings" ? "settings_page" : "quick_settings_drawer";
+  return location.pathname === "/settings" ? "settings_page" : "settings_dialog";
 }
 
 function trackSettingChange(

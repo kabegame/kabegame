@@ -32,17 +32,20 @@
       :kgpg-path="importKgpgPath"
       @update:visible="importDialog.close"
     />
-    <!-- 全局唯一的快捷设置抽屉（桌面与安卓均挂载） -->
-    <QuickSettingsDrawer />
     <!-- 全局唯一的未配置设置选择宿主 -->
     <SettingChoiceHost />
+    <!-- 桌面端完整设置弹窗；紧凑布局继续使用全屏设置页 -->
+    <SettingsDialog
+      v-if="!uiStore.isCompact"
+      :open="settingsModal.isOpen.value"
+      :z-index="settingsModal.zIndex.value"
+      @close="settingsModal.close()"
+    />
     <!-- 桌面端自动更新：更新日志弹窗 + 下载进度弹窗（全局唯一，常驻以便下载中刷新存活） -->
     <template v-if="!uiStore.isCompact && !IS_WEB">
       <UpdateDialog />
       <DownloadProgressDialog />
     </template>
-    <!-- 全局唯一的帮助抽屉（按页面展示帮助内容） -->
-    <HelpDrawer />
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
     <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
     <AutoConfigDialog />
@@ -103,20 +106,26 @@
               </el-icon>
               <span>{{ $t('route.autoConfigs') }}</span>
             </el-menu-item>
-            <el-menu-item index="/settings">
-              <el-icon>
-                <Setting />
-              </el-icon>
-              <span>{{ $t('route.settings') }}</span>
-            </el-menu-item>
-            <el-menu-item index="/help">
-              <el-icon>
-                <QuestionFilled />
-              </el-icon>
-              <span>{{ $t('route.help') }}</span>
-            </el-menu-item>
           </el-menu>
         </div>
+        <!-- kamechan 开着时它就是工具箱入口（方案 2a），底部只留空白给立绘；隐藏后才回落到这里 -->
+        <div v-if="!kamechanEnabled" class="sidebar-bottom-dock" :class="{ 'is-collapsed': isCollapsed }">
+          <div
+            class="dock-row"
+            :class="{ 'is-active': settingsModal.isOpen.value }"
+            @click="openSettingsEntry()"
+          >
+            <el-icon class="dock-icon">
+              <Setting />
+            </el-icon>
+            <template v-if="!isCollapsed">
+              <span class="dock-label">{{ $t('route.settings') }}</span>
+              <span class="dock-shortcut">{{ shortcutLabel('openSettings') }}</span>
+            </template>
+          </div>
+          <GlobalToolsPopover variant="sidebar" :collapsed="isCollapsed" @open-settings="openSettingsEntry()" />
+        </div>
+        <div v-else class="sidebar-kamechan-space" aria-hidden="true" />
       </el-aside>
     </template>
     <el-main class="app-main">
@@ -129,14 +138,14 @@
     <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
     <nav
       v-if="uiStore.isCompact"
-      class="app-bottom-tabs flex-none flex flex-row relative w-full border-t-2 border-solid border-(--anime-border) bg-(--anime-bg-card) pb-(--sab,env(safe-area-inset-bottom,0px)) shadow-[0_-4px_20px_rgba(255,107,157,0.08)]"
+      class="app-bottom-tabs flex-none flex flex-row relative w-full border-t-2 border-solid border-[var(--anime-border)] bg-[var(--anime-bg-card)] pb-[var(--sab,env(safe-area-inset-bottom,0px))] shadow-[0_-4px_20px_rgba(255,107,157,0.08)]"
       aria-label="主导航"
     >
       <router-link
         v-for="tab in bottomTabs"
         :key="tab.index"
         :to="tab.index"
-        class="flex-1 flex flex-col items-center justify-center gap-1 py-2 px-1 min-w-0 no-underline text-(--anime-text-secondary) transition-[color,background] duration-200 active:bg-[rgba(255,107,157,0.08)] [&.is-active]:text-(--anime-primary) [&.is-active]:bg-linear-to-b [&.is-active]:from-[rgba(255,107,157,0.12)] [&.is-active]:to-[rgba(167,139,250,0.08)]"
+        class="flex-1 flex flex-col items-center justify-center gap-1 py-2 px-1 min-w-0 no-underline text-[var(--anime-text-secondary)] transition-[color,background] duration-200 active:bg-[rgba(255,107,157,0.08)] [&.is-active]:text-[var(--anime-primary)] [&.is-active]:bg-linear-to-b [&.is-active]:from-[rgba(255,107,157,0.12)] [&.is-active]:to-[rgba(167,139,250,0.08)]"
         :class="{ 'is-active': activeRoute === tab.index }"
       >
         <el-icon class="text-[22px] shrink-0">
@@ -144,8 +153,13 @@
         </el-icon>
         <span class="text-[11px] leading-[1.2] overflow-hidden text-ellipsis whitespace-nowrap max-w-full">{{ tab.label }}</span>
       </router-link>
+      <!-- 同上：kamechan 开着时工具箱入口在它身上，底部 tab 不再重复一个 -->
+      <div v-if="!kamechanEnabled" class="flex-1 flex flex-col items-center justify-center min-w-0">
+        <!-- 紧凑布局用全屏设置页（SettingsDialog 仅桌面挂载），走路由而非弹窗 -->
+        <GlobalToolsPopover variant="compact" @open-settings="openSettingsEntry()" />
+      </div>
     </nav>
-    <KamechanMascot />
+    <KamechanMascot @open-settings="openSettingsEntry()" />
   </el-container>
   <FrameMonitor />
   </el-config-provider>
@@ -158,14 +172,13 @@ import en from "element-plus/dist/locale/en.mjs";
 import zhTw from "element-plus/dist/locale/zh-tw.mjs";
 import ja from "element-plus/dist/locale/ja.mjs";
 import ko from "element-plus/dist/locale/ko.mjs";
-import { Picture, Grid, Setting, Collection, QuestionFilled, Compass, AlarmClock } from "@element-plus/icons-vue";
+import { Picture, Grid, Setting, Collection, Compass, AlarmClock } from "@element-plus/icons-vue";
 import appLogoUrl from "@/assets/icon-small.png";
 import { setSettingsQueryAdapter, useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useI18n, setLocale, tryResolveStoredLanguage, i18n } from "@kabegame/i18n";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
-import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
-import HelpDrawer from "./components/help/HelpDrawer.vue";
+import GlobalToolsPopover from "@/header/comps/GlobalToolsPopover.vue";
 import TaskDrawer from "./components/TaskDrawer.vue";
 import { useTaskDrawerStore } from "./stores/taskDrawer";
 import { useCrawlerDrawerStore } from "./stores/crawlerDrawer";
@@ -198,6 +211,7 @@ import { useAlbumStore } from "./stores/albums";
 import { useRoute, useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 import { useModal } from "@kabegame/core/composables/useModal";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { ElMessageBox } from "element-plus";
 import { useThrottleFn } from "@vueuse/core";
 import { useApp } from "@/stores/app";
@@ -208,7 +222,9 @@ import UpdateDialog from "./components/updater/UpdateDialog.vue";
 import DownloadProgressDialog from "./components/updater/DownloadProgressDialog.vue";
 import ImageContent from "@kabegame/core/components/image/ImageContent.vue";
 import SettingChoiceHost from "@kabegame/core/components/common/SettingChoiceHost.vue";
+import SettingsDialog from "./components/settings/SettingsDialog.vue";
 import { useMainCloseGuard } from "./composables/useMainCloseGuard";
+import { useGlobalShortcuts, shortcutLabel } from "./composables/useGlobalShortcuts";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
@@ -240,28 +256,31 @@ function initializeLanguageSetting() {
   applyLanguageSetting(settingsStore.values.language);
 }
 
-// Android 底部 Tab 配置（均匀分布；爬虫仅桌面端有代理，故仅侧栏展示）
+// Android 底部 Tab 配置：画廊/画册/插件三个路由 tab + 第四格「工具箱」浮层（非路由，见模板）。
+// 运行配置/设置/帮助已收进侧栏底部常驻区 / 工具箱，紧凑端不再单独占一个 tab。
 // 依赖 locale 以便语言切换时标签立即更新
-// 安卓暂不展示「运行配置」入口（与桌面侧栏 /auto-configs 区分）
 const bottomTabs = computed(() => {
   void locale.value;
-  const tabs = [
+  return [
     { index: galleryMenuRoute.value, icon: Picture, label: i18n.global.t("route.gallery") },
     { index: "/albums", icon: Collection, label: i18n.global.t("route.albums") },
     { index: "/plugin-browser", icon: Grid, label: i18n.global.t("route.pluginBrowser") },
-    { index: "/auto-configs", icon: AlarmClock, label: i18n.global.t("route.autoConfigs") },
-    { index: "/settings", icon: Setting, label: i18n.global.t("route.settings") },
-    { index: "/help", icon: QuestionFilled, label: i18n.global.t("route.help") },
   ];
-  if (uiStore.isCompact) {
-    return tabs.filter((t) => t.index !== "/auto-configs");
-  }
-  return tabs;
 });
 
 // 任务抽屉 store
 const taskDrawerStore = useTaskDrawerStore();
 const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskDrawerStore);
+
+// kamechan 开着时它承载全局工具箱入口，侧栏底部 / 紧凑端 tab 的入口让位
+const { settingValue: kamechanEnabled } = useSettingKeyState("kamechanEnabled");
+
+// 全局快捷键：⌘,(设置) / ⇧⌘R(刷新页面)，全应用唯一一处注册
+const openSettingsEntry = () => {
+  if (uiStore.isCompact) void router.push("/settings");
+  else settingsModal.open();
+};
+useGlobalShortcuts({ openSettings: openSettingsEntry });
 
 // Android：导入抽屉 store
 const crawlerDrawerStore = useCrawlerDrawerStore();
@@ -274,6 +293,9 @@ const albumStore = useAlbumStore();
 
 const router = useRouter();
 const route = useRoute();
+// 桌面端设置是弹窗、不是路由目的地：打开时侧栏仍高亮当前页面，
+// 「设置」自身的按下态由底部常驻区 dock-row 的 is-active 表达。
+const settingsModal = useModal();
 setSettingsQueryAdapter({
   query: computed(() => route.query as Record<string, unknown>),
   async write(param, value, history) {
@@ -867,6 +889,71 @@ body,
     min-height: 0;
     width: 100%;
     overflow: hidden;
+  }
+
+  // kamechan 立绘的地盘：留空不放任何可点内容，避免被立绘压住
+  .sidebar-kamechan-space {
+    flex: none;
+    height: 210px;
+    pointer-events: none;
+  }
+
+  .sidebar-bottom-dock {
+    flex: none;
+    padding: 10px 8px 14px;
+    border-top: 2px solid var(--anime-border);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    &.is-collapsed {
+      padding: 10px 4px 14px;
+      align-items: center;
+    }
+
+    .dock-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 40px;
+      padding: 0 12px;
+      border-radius: 11px;
+      cursor: pointer;
+      color: var(--anime-text-primary);
+      transition: all 0.2s ease;
+
+      &:hover,
+      &.is-active {
+        background: rgba(255, 107, 157, 0.1);
+      }
+
+      .dock-icon {
+        font-size: 17px;
+        flex-shrink: 0;
+      }
+
+      .dock-label {
+        font-size: 13px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .dock-shortcut {
+        margin-left: auto;
+        flex: none;
+        font-size: 11px;
+        color: var(--anime-text-muted);
+        font-family: ui-monospace, Menlo, monospace;
+      }
+    }
+
+    &.is-collapsed .dock-row {
+      width: 40px;
+      padding: 0;
+      justify-content: center;
+    }
   }
 
   .sidebar-menu {

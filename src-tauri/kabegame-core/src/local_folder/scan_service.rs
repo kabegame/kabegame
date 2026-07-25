@@ -11,7 +11,7 @@
 //! - [`ScanCtx`] 在一次扫描中贯穿始终，记录当前目录栈和带位置的非致命错误。
 //! - 根目录不触发 `on_enter_dir`/`on_exit_dir`；根上下文由调用方提供并自行收尾。
 
-use crate::image_type::is_media_by_path;
+use crate::media::image_type::is_media_by_path;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use url::Url;
@@ -398,8 +398,8 @@ async fn process_file<H: FolderScanHook>(
                     .get_mime_type(raw.url.as_str())
                     .await
                     .unwrap_or(None);
-                let is_media = crate::image_type::is_image_mime(&mime)
-                    || crate::image_type::is_video_mime(&mime);
+                let is_media = crate::media::image_type::is_image_mime(&mime)
+                    || crate::media::image_type::is_video_mime(&mime);
                 if !is_media {
                     return Ok(());
                 }

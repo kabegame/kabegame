@@ -53,7 +53,7 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
     let plugin_id = info.plugin_id;
 
     let requires_window_mode =
-        kabegame_core::image_type::requires_window_mode(Path::new(&local_path));
+        kabegame_core::media::image_type::requires_window_mode(Path::new(&local_path));
     if requires_window_mode {
         let current_mode = settings.get_wallpaper_mode();
         if current_mode != "window" {
@@ -62,7 +62,7 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
     }
 
     let requires_plugin_mode =
-        kabegame_core::image_type::requires_plugin_mode(Path::new(&local_path));
+        kabegame_core::media::image_type::requires_plugin_mode(Path::new(&local_path));
     if requires_plugin_mode {
         let current_mode = settings.get_wallpaper_mode();
         if current_mode != "plasma-plugin" {

@@ -6,7 +6,13 @@
         :show="surfHeaderShowIds"
         sticky
         @action="handleSurfHeaderAction"
-      />
+      >
+        <template #extra>
+          <el-button circle :title="$t('surf.surfHelpTitle')" @click="helpDialog.open()">
+            <el-icon><QuestionFilled /></el-icon>
+          </el-button>
+        </template>
+      </PageHeader>
 
       <div class="surf-content" :class="{ 'has-records': hasRecords }">
         <!-- Logo：搜索栏上方 -->
@@ -198,6 +204,7 @@ import { useRouter } from "vue-router";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { ElDialog } from "element-plus";
+import { QuestionFilled } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
@@ -221,7 +228,7 @@ const appBackgroundCardClass = computed(() =>
     ? "!bg-transparent [--el-card-bg-color:transparent]"
     : ""
 );
-const surfHeaderShowIds = computed(() => [HeaderFeatureId.Help]);
+const surfHeaderShowIds = computed(() => [HeaderFeatureId.TaskDrawer]);
 
 const helpDialog = useModal();
 const detailDialog = useModal();
@@ -232,8 +239,9 @@ const detailCopyDone = ref(false);
 
 const inputUrl = ref("");
 const pluginQuickSelect = ref("");
-function handleSurfHeaderAction(payload: { id: string; data: { type: string } }) {
-  if (payload.id === HeaderFeatureId.Help) helpDialog.open();
+function handleSurfHeaderAction(_payload: { id: string; data: { type: string } }) {
+  // HeaderFeatureId.Help 已下线，帮助按钮改为页面本地入口（见上方 #extra 插槽）；
+  // 当前 show 区只剩 TaskDrawer，其自身处理点击，不经过这里。
 }
 
 const surfRecordActions = createSurfRecordActions();

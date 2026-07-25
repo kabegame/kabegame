@@ -74,8 +74,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    kabegame_core::commands::album::get_albums()
-                        .map_err(RpcError::internal)
+                    kabegame_core::commands::album::get_albums().map_err(RpcError::internal)
                 })
             }),
         },
@@ -94,9 +93,11 @@ pub fn init_registry() {
                         limit: usize,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    let mut result =
-                        kabegame_core::commands::album::get_album_preview(args.album_id, args.limit)
-                            .map_err(RpcError::internal)?;
+                    let mut result = kabegame_core::commands::album::get_album_preview(
+                        args.album_id,
+                        args.limit,
+                    )
+                    .map_err(RpcError::internal)?;
                     crate::web::image_rewrite::rewrite_image_value(&mut result);
                     Ok(result)
                 })
@@ -174,8 +175,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    kabegame_core::commands::image::get_images_count()
-                        .map_err(RpcError::internal)
+                    kabegame_core::commands::image::get_images_count().map_err(RpcError::internal)
                 })
             }),
         },
@@ -299,13 +299,32 @@ pub fn init_registry() {
     );
 
     map.insert(
+        "get_image_native_metadata",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(serde::Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        image_id: String,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    kabegame_core::commands::image::get_image_native_metadata(args.image_id)
+                        .await
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
         "get_all_tasks",
         MethodEntry {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    kabegame_core::commands::task::get_all_tasks()
-                        .map_err(RpcError::internal)
+                    kabegame_core::commands::task::get_all_tasks().map_err(RpcError::internal)
                 })
             }),
         },
@@ -317,8 +336,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    kabegame_core::commands::task::get_run_configs()
-                        .map_err(RpcError::internal)
+                    kabegame_core::commands::task::get_run_configs().map_err(RpcError::internal)
                 })
             }),
         },
@@ -349,8 +367,7 @@ pub fn init_registry() {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    kabegame_core::commands::task::get_missed_runs()
-                        .map_err(RpcError::internal)
+                    kabegame_core::commands::task::get_missed_runs().map_err(RpcError::internal)
                 })
             }),
         },
@@ -465,9 +482,9 @@ pub fn init_registry() {
         MethodEntry {
             requires_super: false,
             handler: Arc::new(|_p| {
-                Box::pin(async move {
-                    crate::build_mode::get_build_mode().map_err(RpcError::internal)
-                })
+                Box::pin(
+                    async move { crate::build_mode::get_build_mode().map_err(RpcError::internal) },
+                )
             }),
         },
     );
@@ -504,11 +521,7 @@ pub fn init_registry() {
         "get_plugins",
         MethodEntry {
             requires_super: false,
-            handler: Arc::new(|_p| {
-                Box::pin(async move {
-                    web_get_plugins().await
-                })
-            }),
+            handler: Arc::new(|_p| Box::pin(async move { web_get_plugins().await })),
         },
     );
 
@@ -525,9 +538,12 @@ pub fn init_registry() {
                         source_id: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::plugin::get_plugin_detail(args.plugin_id, args.source_id)
-                        .await
-                        .map_err(RpcError::internal)
+                    kabegame_core::commands::plugin::get_plugin_detail(
+                        args.plugin_id,
+                        args.source_id,
+                    )
+                    .await
+                    .map_err(RpcError::internal)
                 })
             }),
         },
@@ -821,8 +837,11 @@ pub fn init_registry() {
                         favorite: bool,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::image::toggle_image_favorite(args.image_id, args.favorite)
-                        .map_err(RpcError::internal)
+                    kabegame_core::commands::image::toggle_image_favorite(
+                        args.image_id,
+                        args.favorite,
+                    )
+                    .map_err(RpcError::internal)
                 })
             }),
         },
@@ -832,11 +851,7 @@ pub fn init_registry() {
         "refresh_plugins",
         MethodEntry {
             requires_super: true,
-            handler: Arc::new(|_p| {
-                Box::pin(async move {
-                    web_refresh_plugins().await
-                })
-            }),
+            handler: Arc::new(|_p| Box::pin(async move { web_refresh_plugins().await })),
         },
     );
 
@@ -1099,8 +1114,11 @@ pub fn init_registry() {
                         image_ids: Vec<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::album::add_images_to_album(args.album_id, args.image_ids)
-                        .map_err(RpcError::internal)
+                    kabegame_core::commands::album::add_images_to_album(
+                        args.album_id,
+                        args.image_ids,
+                    )
+                    .map_err(RpcError::internal)
                 })
             }),
         },
@@ -1227,8 +1245,7 @@ pub fn init_registry() {
                         task: Value,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::task::add_task(args.task)
-                        .map_err(RpcError::internal)
+                    kabegame_core::commands::task::add_task(args.task).map_err(RpcError::internal)
                 })
             }),
         },
@@ -1520,9 +1537,12 @@ pub fn init_registry() {
                         plugin_id: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::plugin::install_from_store(args.source_id, args.plugin_id)
-                        .await
-                        .map_err(RpcError::internal)
+                    kabegame_core::commands::plugin::install_from_store(
+                        args.source_id,
+                        args.plugin_id,
+                    )
+                    .await
+                    .map_err(RpcError::internal)
                 })
             }),
         },

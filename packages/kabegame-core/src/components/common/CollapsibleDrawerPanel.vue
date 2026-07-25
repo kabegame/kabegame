@@ -6,28 +6,45 @@
       'kb-collapsible-panel--fill': fillWhenExpanded,
     }"
   >
-    <button
-      type="button"
-      class="kb-collapsible-panel__header"
-      :aria-expanded="panelOpen"
-      :aria-label="toggleAriaLabel"
-      @click="panelOpen = !panelOpen"
-    >
-      <span class="kb-collapsible-panel__title">
+    <div class="kb-collapsible-panel__header">
+      <button
+        v-if="collapsible"
+        type="button"
+        class="kb-collapsible-panel__toggle"
+        :aria-expanded="panelOpen"
+        :aria-label="toggleAriaLabel"
+        @click="panelOpen = !panelOpen"
+      >
+        <span class="kb-collapsible-panel__title">
+          <slot name="title" />
+        </span>
+      </button>
+      <span v-else class="kb-collapsible-panel__title">
         <slot name="title" />
       </span>
       <div class="kb-collapsible-panel__header-right">
         <slot name="trailing" />
-        <span class="kb-collapsible-panel__caret" :class="{ 'is-open': panelOpen }">▾</span>
+        <button
+          v-if="collapsible"
+          type="button"
+          class="kb-collapsible-panel__caret-button"
+          :aria-expanded="panelOpen"
+          :aria-label="toggleAriaLabel"
+          @click="panelOpen = !panelOpen"
+        >
+          <span class="kb-collapsible-panel__caret" :class="{ 'is-open': panelOpen }">▾</span>
+        </button>
       </div>
-    </button>
-    <div v-show="panelOpen" class="kb-collapsible-panel__body">
+    </div>
+    <!-- 收拢时不渲染内容（v-if 而非 v-show）：插件简介 iframe 等重内容需要真正销毁 -->
+    <div v-if="panelOpen" class="kb-collapsible-panel__body">
       <slot />
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { useLocalStorage } from "@vueuse/core";
 
 const props = withDefaults(
@@ -38,15 +55,29 @@ const props = withDefaults(
     toggleAriaLabel?: string;
     /** 展开时是否参与 flex 占满剩余高度（任务抽屉、图片详情插件区等） */
     fillWhenExpanded?: boolean;
+    /**
+     * 是否允许收拢。false 时隐藏箭头、标题不可点，内容恒定展开
+     * （详情弹窗桌面端三栏并排，空间充足，不提供收拢）。
+     */
+    collapsible?: boolean;
   }>(),
   {
     defaultOpen: true,
     fillWhenExpanded: true,
+    collapsible: true,
   },
 );
 
-const panelOpen = useLocalStorage(props.storageKey, props.defaultOpen, {
+const storedOpen = useLocalStorage(props.storageKey, props.defaultOpen, {
   mergeDefaults: true,
+});
+
+/** 不可收拢时恒定展开，但不写回持久化值（保留用户在可收拢场景下的偏好）。 */
+const panelOpen = computed({
+  get: () => (props.collapsible ? storedOpen.value : true),
+  set: (v: boolean) => {
+    if (props.collapsible) storedOpen.value = v;
+  },
 });
 </script>
 
@@ -71,7 +102,7 @@ const panelOpen = useLocalStorage(props.storageKey, props.defaultOpen, {
 }
 
 .kb-collapsible-panel__header {
-  border: 0;
+  box-sizing: border-box;
   width: 100%;
   display: flex;
   align-items: center;
@@ -80,7 +111,22 @@ const panelOpen = useLocalStorage(props.storageKey, props.defaultOpen, {
   padding: 10px 12px;
   background: transparent;
   color: var(--anime-text-primary);
+  text-align: left;
+}
+
+.kb-collapsible-panel__toggle,
+.kb-collapsible-panel__caret-button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
+}
+
+.kb-collapsible-panel__toggle {
+  display: flex;
+  min-width: 0;
+  flex: 1;
   text-align: left;
 }
 
@@ -98,7 +144,14 @@ const panelOpen = useLocalStorage(props.storageKey, props.defaultOpen, {
   flex-shrink: 0;
 }
 
+.kb-collapsible-panel__caret-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .kb-collapsible-panel__caret {
+  display: inline-block;
   font-size: 13px;
   color: var(--anime-text-secondary);
   transition: transform 0.2s ease;

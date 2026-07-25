@@ -6,8 +6,6 @@
         @view-vd="openVirtualDrive"
         @refresh="handleRefresh"
         @create-album="createDialog.open()"
-        @help="openHelpDrawer"
-        @quick-settings="openQuickSettings"
       />
 
       <div v-loading="showLoading" style="min-height: 200px;">
@@ -147,8 +145,6 @@ import AlbumCard from "@/components/albums/AlbumCard.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import type { Album } from "@/stores/albums";
-import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
-import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
@@ -187,10 +183,6 @@ const { albums, albumRoots } = storeToRefs(albumStore);
 const globalPathRoute = useGlobalPathRoute();
 const { hide: globalHide } = storeToRefs(globalPathRoute);
 const router = useRouter();
-const quickSettingsDrawer = useQuickSettingsDrawerStore();
-const openQuickSettings = () => quickSettingsDrawer.open("albums");
-const helpDrawer = useHelpDrawerStore();
-const openHelpDrawer = () => helpDrawer.open("albums");
 const uiStore = useUiStore();
 const { isCompact } = storeToRefs(uiStore);
 

@@ -1,7 +1,10 @@
 {
-  "help": "도움말",
-  "quickSettings": "빠른 설정",
   "refresh": "새로고침",
+  "tasks": "작업",
+  "toolbox": "도구함",
+  "toolboxApp": "앱",
+  "toolboxMaintenance": "유지 관리",
+  "toolboxDisplay": "표시",
   "stopTask": "작업 중지",
   "deleteTask": "작업 삭제",
   "organize": "정리",

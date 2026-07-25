@@ -604,7 +604,7 @@ async fn data_import_image(args: ImportImageArgs) -> Result<(), String> {
     let carry = match args.metadata {
         Some(metadata) => {
             let metadata_id =
-                kabegame_core::storage::Storage::global().insert_image_metadata_text(&metadata)?;
+                kabegame_core::storage::Storage::global().insert_metadata_text(&metadata)?;
             let display_name = args
                 .path
                 .file_name()
@@ -915,7 +915,10 @@ async fn render_task(
         bar.set_position((progress * 100.0) as u64);
         let mut msg = format!("{plugin_id} · ↓{downloaded}");
         if failed > 0 {
-            msg.push_str(&format!(" · {}", console::style(format!("✗{failed}")).red()));
+            msg.push_str(&format!(
+                " · {}",
+                console::style(format!("✗{failed}")).red()
+            ));
         }
         if dedup > 0 {
             msg.push_str(&format!(" · {}", console::style(format!("⊘{dedup}")).dim()));
@@ -1121,9 +1124,7 @@ async fn validate_kgpg_structure(
     // 只支持 v3 package.json；旧清单格式与 Rhai 均不支持。
     let pkg = read_optional_package_json_from_zip(zip_path)?
         .filter(core_plugin::package_json_is_v3)
-        .ok_or_else(|| {
-            "只支持 package.json (v3) 插件格式；旧清单格式不受支持".to_string()
-        })?;
+        .ok_or_else(|| "只支持 package.json (v3) 插件格式；旧清单格式不受支持".to_string())?;
     let main_path = pkg.get("main").and_then(|v| v.as_str()).unwrap_or("");
     if main_path.is_empty() || !has_non_empty_zip_entry(zip_path, main_path)? {
         return Err(format!("v3 插件包 `main` 脚本不存在或为空: {}", main_path));
@@ -1182,9 +1183,7 @@ fn pack_plugin(args: PackPluginArgs) -> Result<(), String> {
     // 只支持 kbPackageVersion >= 3 的 package.json 插件格式。
     let pkg = read_optional_package_json(&plugin_dir)?
         .filter(|v| core_plugin::package_json_is_v3(v))
-        .ok_or_else(|| {
-            "只支持 kbPackageVersion >= 3 的 package.json 插件".to_string()
-        })?;
+        .ok_or_else(|| "只支持 kbPackageVersion >= 3 的 package.json 插件".to_string())?;
     pack_plugin_v3(&plugin_dir, &args.output, &pkg)
 }
 

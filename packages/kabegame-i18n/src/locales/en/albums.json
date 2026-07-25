@@ -83,6 +83,7 @@
   "selectFolderFailed": "Failed to select folder",
   "pleaseSelectFolder": "Please select a folder",
   "albumCount": "{count} images",
+  "frostedPickerSubAlbumCount": "includes {count} sub-albums",
   "albumCardImageCount": "{imageCount} images",
   "albumCardSubAlbums": "/ {subAlbumCount} sub-albums",
   "createdAt": "Created {date}",

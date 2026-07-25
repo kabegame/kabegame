@@ -11,8 +11,7 @@
         :is-hidden-album="albumId === HIDDEN_ALBUM_ID"
         :include-browse-controls="false"
         @view-vd="openVirtualDriveAlbumFolder" @refresh="handleRefresh"
-        @set-wallpaper-rotate="handleSetAsWallpaperCarousel" @delete-album="handleDeleteAlbum" @help="openHelpDrawer"
-        @quick-settings="openQuickSettings" @back="goBack" @start-rename="handleStartRename"
+        @set-wallpaper-rotate="handleSetAsWallpaperCarousel" @delete-album="handleDeleteAlbum" @back="goBack" @start-rename="handleStartRename"
         @confirm-rename="handleRenameConfirm" @cancel-rename="handleRenameCancel"
         @open-browse-filter="albumBrowseToolbarRef?.openFilterPicker()"
         @open-browse-sort="albumBrowseToolbarRef?.openSortPicker()"
@@ -97,8 +96,7 @@
           :is-hidden-album="albumId === HIDDEN_ALBUM_ID"
           :include-browse-controls="activeAlbumDetailTab === 'images'"
           @view-vd="openVirtualDriveAlbumFolder" @refresh="handleRefresh"
-          @set-wallpaper-rotate="handleSetAsWallpaperCarousel" @delete-album="handleDeleteAlbum" @help="openHelpDrawer"
-          @quick-settings="openQuickSettings" @back="goBack" @start-rename="handleStartRename"
+          @set-wallpaper-rotate="handleSetAsWallpaperCarousel" @delete-album="handleDeleteAlbum" @back="goBack" @start-rename="handleStartRename"
           @confirm-rename="handleRenameConfirm" @cancel-rename="handleRenameCancel"
           @open-browse-filter="albumBrowseToolbarRef?.openFilterPicker()"
           @open-browse-sort="albumBrowseToolbarRef?.openSortPicker()"
@@ -243,8 +241,6 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import { IS_LIGHT_MODE, IS_WEB, IS_ANDROID } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
 import { createImageAnalytics, currentUrl } from "@kabegame/core/track/imageAnalytics";
-import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
-import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
@@ -281,10 +277,6 @@ const isCompact = computed(() => uiStore.isCompact);
 const albumDetailRouteStore = useAlbumDetailRouteStore();
 const { search, albumId } = storeToRefs(albumDetailRouteStore);
 
-const quickSettingsDrawer = useQuickSettingsDrawerStore();
-const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
-const helpDrawer = useHelpDrawerStore();
-const openHelpDrawer = () => helpDrawer.open("albumdetail");
 
 const albumName = ref<string>("");
 const currentPath = computed(() => albumDetailRouteStore.computedPath);

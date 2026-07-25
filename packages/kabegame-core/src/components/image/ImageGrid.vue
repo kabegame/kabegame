@@ -114,7 +114,7 @@ import ImagePreviewDialog from "../common/ImagePreviewDialog.vue";
 import type {
   ImageDetailGalleryFilterTarget,
   ImageDetailSurfRecordTarget,
-} from "../common/ImageDetailContent.vue";
+} from "../common/ImageBasicInfoPanel.vue";
 import ScrollButtons from "../common/ScrollButtons.vue";
 import { useSettingsStore } from "../../stores/settings";
 import { useModal } from "../../composables/useModal";

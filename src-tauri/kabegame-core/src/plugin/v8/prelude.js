@@ -289,8 +289,14 @@ const kabegameFs = Object.freeze({
   getRoot: () => ops.op_kabegame_fs_root(),
 });
 
+const kabegameFfmpeg = Object.freeze({
+  muxStreams: (inputs, output) => ops.op_kabegame_ffmpeg_mux(inputs, output),
+  probe: (path) => ops.op_kabegame_ffmpeg_probe(path),
+});
+
 globalThis.Kabegame = Object.freeze({
   fs: kabegameFs,
+  ffmpeg: kabegameFfmpeg,
   to: (url) => ops.op_kabegame_to(url),
   back: () => ops.op_kabegame_back(),
   currentUrl: () => ops.op_kabegame_current_url(),

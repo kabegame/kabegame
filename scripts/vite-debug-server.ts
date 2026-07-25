@@ -5,7 +5,22 @@ import path from "node:path";
 import type { Plugin } from "vite";
 
 const DEBUG_PREFIX = "/__kabegame_debug";
+const CDP_PREFIX = "/__kabegame_cdp";
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+
+/**
+ * app 上报的 CEF CDP 端口。
+ *
+ * dev 下 CDP 端口是随机的（`KABEGAME_CEF_DEBUG_PORT=random`），而 vite 的 1420 是
+ * 死端口，所以让 app 把号寄存在这里当集合点：`.claude/skills/kabegame-chromium/`
+ * 只探 1420 就能拿到端口。**进程内内存态**——vite 重启即清空，由 app 下次启动
+ * 重新上报（app 的重启频率远高于 vite）。
+ */
+interface CdpRegistration {
+  port: number;
+  pid: number | null;
+  registeredAt: string;
+}
 
 export interface KabegameDebugServerOptions {
   workspaceRoot: string;
@@ -23,6 +38,7 @@ export function kabegameDebugServer(options: KabegameDebugServerOptions): Plugin
   const logToConsole = options.logToConsole ?? process.env.KABEGAME_DEBUG_TEE_CONSOLE === "true";
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const debugDir = path.resolve(options.workspaceRoot, ".kabegame", "debug");
+  let cdp: CdpRegistration | null = null;
 
   return {
     name: "kabegame-debug-server",
@@ -32,7 +48,10 @@ export function kabegameDebugServer(options: KabegameDebugServerOptions): Plugin
 
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url ?? "/", "http://kabegame.local");
-        if (url.pathname !== DEBUG_PREFIX && !url.pathname.startsWith(`${DEBUG_PREFIX}/`)) {
+        const isDebug =
+          url.pathname === DEBUG_PREFIX || url.pathname.startsWith(`${DEBUG_PREFIX}/`);
+        const isCdp = url.pathname === CDP_PREFIX || url.pathname.startsWith(`${CDP_PREFIX}/`);
+        if (!isDebug && !isCdp) {
           next();
           return;
         }
@@ -43,6 +62,36 @@ export function kabegameDebugServer(options: KabegameDebugServerOptions): Plugin
         }
 
         try {
+          // ---- CDP 端口集合点：app 上报 / skill 查询 ----
+          if (isCdp) {
+            if (req.method === "POST" && url.pathname === `${CDP_PREFIX}/register`) {
+              const body = await readBody(req, maxBodyBytes);
+              const parsed = JSON.parse(body || "{}") as { port?: unknown; pid?: unknown };
+              const port = Number(parsed.port);
+              if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+                sendJson(res, 400, { ok: false, error: `invalid port: ${String(parsed.port)}` });
+                return;
+              }
+              const pid = Number.isInteger(Number(parsed.pid)) ? Number(parsed.pid) : null;
+              cdp = { port, pid, registeredAt: new Date().toISOString() };
+              console.log(`[kabegame-cdp] registered CDP port ${port}${pid ? ` (pid ${pid})` : ""}`);
+              sendJson(res, 200, { ok: true, ...cdp });
+              return;
+            }
+
+            if (req.method === "GET" && (url.pathname === CDP_PREFIX || url.pathname === `${CDP_PREFIX}/`)) {
+              if (!cdp) {
+                sendJson(res, 404, { ok: false, error: "no CDP port registered" });
+                return;
+              }
+              sendJson(res, 200, { ok: true, ...cdp });
+              return;
+            }
+
+            sendJson(res, 404, { ok: false, error: "unknown cdp endpoint" });
+            return;
+          }
+
           if (req.method === "GET" && url.pathname === `${DEBUG_PREFIX}/health`) {
             sendJson(res, 200, { ok: true, debugDir });
             return;

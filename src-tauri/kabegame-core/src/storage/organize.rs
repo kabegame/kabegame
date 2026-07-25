@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +59,8 @@ pub struct OrganizeScanRow {
     pub local_path: String,
     pub thumbnail_path: String,
     pub compatible_path: String,
+    pub format_key: Option<String>,
+    pub native_parser_version: Option<i64>,
 }
 
 impl Storage {
@@ -75,8 +77,11 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, COALESCE(hash, ''), local_path, COALESCE(thumbnail_path, ''), COALESCE(compatible_path, '') \
-                 FROM images WHERE id > ?1 ORDER BY id ASC LIMIT ?2",
+                "SELECT i.id, COALESCE(i.hash, ''), i.local_path, COALESCE(i.thumbnail_path, ''), \
+                        COALESCE(i.compatible_path, ''), i.type, im.parser_version \
+                 FROM images i \
+                 LEFT JOIN image_metadata im ON im.id = i.image_metadata_id \
+                 WHERE i.id > ?1 ORDER BY i.id ASC LIMIT ?2",
             )
             .map_err(|e| format!("Failed to prepare organize batch: {}", e))?;
         let rows = stmt
@@ -87,6 +92,8 @@ impl Storage {
                     local_path: row.get(2)?,
                     thumbnail_path: row.get(3)?,
                     compatible_path: row.get(4)?,
+                    format_key: row.get(5)?,
+                    native_parser_version: row.get(6)?,
                 })
             })
             .map_err(|e| format!("Failed to query organize batch: {}", e))?;
@@ -152,6 +159,8 @@ pub struct OrganizeOptions {
     pub regen_thumbnails: bool,
     /// 为尚无兼容副本的媒体（浏览器不兼容格式/超大图）生成兼容副本（仅桌面）
     pub regen_compatible: bool,
+    /// 为缺失或解析器版本过旧的 JPEG/PNG 补充原生元数据
+    pub backfill_native_metadata: bool,
     /// 在 DB 记录删除后是否同时删除磁盘上的源文件
     pub delete_source_files: bool,
     /// 从有序列表（按 id ASC）中跳过的前若干条
@@ -169,6 +178,7 @@ pub struct OrganizeRunState {
     pub processed_global: usize,
     pub removed: usize,
     pub regenerated: usize,
+    pub backfilled: usize,
     pub range_start: Option<usize>,
     pub range_end: Option<usize>,
     pub dedupe: bool,
@@ -177,6 +187,7 @@ pub struct OrganizeRunState {
     pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
     pub regen_compatible: bool,
+    pub backfill_native_metadata: bool,
     pub delete_source_files: bool,
 }
 
@@ -218,6 +229,7 @@ impl OrganizeService {
             processed_global: 0,
             removed: 0,
             regenerated: 0,
+            backfilled: 0,
             range_start,
             range_end,
             dedupe: options.dedupe,
@@ -226,6 +238,7 @@ impl OrganizeService {
             remove_unrecognized: options.remove_unrecognized,
             regen_thumbnails: options.regen_thumbnails,
             regen_compatible: options.regen_compatible,
+            backfill_native_metadata: options.backfill_native_metadata,
             delete_source_files: options.delete_source_files,
         };
         let mut g = self
@@ -241,11 +254,13 @@ impl OrganizeService {
         processed_global: usize,
         removed: usize,
         regenerated: usize,
+        backfilled: usize,
     ) {
         if let Ok(mut g) = self.run_state.lock() {
             g.processed_global = processed_global;
             g.removed = removed;
             g.regenerated = regenerated;
+            g.backfilled = backfilled;
         }
     }
 
@@ -335,6 +350,7 @@ fn push_organize_progress(
     processed_global: usize,
     removed_total: usize,
     regenerated_total: usize,
+    backfilled_total: usize,
 ) {
     let (range_start, range_end) = range_bounds_for_ui(options);
     GlobalEmitter::global().emit_organize_progress(
@@ -344,16 +360,23 @@ fn push_organize_progress(
         range_end,
         removed_total,
         regenerated_total,
+        backfilled_total,
     );
     OrganizeService::global().update_run_state_progress(
         processed_global,
         removed_total,
         regenerated_total,
+        backfilled_total,
     );
 }
 
-fn emit_organize_finished(removed: usize, regenerated: usize, canceled: bool) {
-    GlobalEmitter::global().emit_organize_finished(removed, regenerated, canceled);
+fn emit_organize_finished(
+    removed: usize,
+    regenerated: usize,
+    backfilled: usize,
+    canceled: bool,
+) {
+    GlobalEmitter::global().emit_organize_finished(removed, regenerated, backfilled, canceled);
 }
 
 fn organize_range_upper_bound(offset: Option<usize>, limit: Option<usize>) -> Option<usize> {
@@ -398,7 +421,7 @@ fn thumbnail_refresh_action(row: &OrganizeScanRow) -> Option<ThumbnailRefreshAct
         return None;
     }
 
-    if crate::image_type::is_video_by_path(local) {
+    if crate::media::image_type::is_video_by_path(local) {
         let thumb = row.thumbnail_path.trim();
         if thumb.is_empty() || thumb == local_path || !Path::new(thumb).exists() {
             return Some(ThumbnailRefreshAction::RegenerateVideo {
@@ -409,7 +432,7 @@ fn thumbnail_refresh_action(row: &OrganizeScanRow) -> Option<ThumbnailRefreshAct
         return None;
     }
 
-    if !crate::image_type::is_image_by_path(local) {
+    if !crate::media::image_type::is_image_by_path(local) {
         return None;
     }
 
@@ -483,11 +506,15 @@ fn run_organize(
     let mut row_index: usize = 0;
     let mut removed_total: usize = 0;
     let mut regenerated_total: usize = 0;
+    let mut backfilled_total: usize = 0;
     // id 游标：上一批处理到的最大 id。用游标分页而非 OFFSET，避免边扫边删导致漏扫。
     let mut last_id: i64 = 0;
 
-    // 缩略图重生成 / 兼容格式生成均重（解码 + 写文件），保持小批；其余只读判断 + 删除，用大批减少往返。
-    let batch_size = if options.regen_thumbnails || options.regen_compatible {
+    // 缩略图、兼容格式和原生元数据补算都会读文件并解析，保持小批；其余操作用大批减少往返。
+    let batch_size = if options.regen_thumbnails
+        || options.regen_compatible
+        || options.backfill_native_metadata
+    {
         10
     } else {
         100
@@ -498,7 +525,12 @@ fn run_organize(
 
     loop {
         if cancel.load(Ordering::Relaxed) {
-            emit_organize_finished(removed_total, regenerated_total, true);
+            emit_organize_finished(
+                removed_total,
+                regenerated_total,
+                backfilled_total,
+                true,
+            );
             return Ok(());
         }
 
@@ -525,6 +557,8 @@ fn run_organize(
         let mut remove_ids: Vec<String> = Vec::new();
         let mut refresh_list: Vec<ThumbnailRefreshAction> = Vec::new();
         let mut should_remove: HashSet<i64> = HashSet::new();
+        let mut native_metadata_list: Vec<(i64, String, String, String)> = Vec::new();
+        let mut native_metadata_hashes: HashSet<String> = HashSet::new();
         #[cfg(not(target_os = "android"))]
         let mut compat_list: Vec<(i64, String, String)> = Vec::new();
 
@@ -570,7 +604,8 @@ fn run_organize(
             if options.remove_unrecognized
                 && !should_remove.contains(&row.id)
                 && Path::new(&row.local_path).exists()
-                && crate::image_type::mime_type_from_path(Path::new(&row.local_path)).is_none()
+                && crate::media::image_type::mime_type_from_path(Path::new(&row.local_path))
+                    .is_none()
             {
                 remove_ids.push(row.id.to_string());
                 should_remove.insert(row.id);
@@ -595,6 +630,34 @@ fn run_organize(
                     let local = row.local_path.trim();
                     if !local.is_empty() && Path::new(local).exists() {
                         compat_list.push((row.id, local.to_string(), compatible_path.to_string()));
+                    }
+                }
+            }
+
+            // 6. 补充原生元数据。即将删除的图片不处理；同一非空 hash 在本批只选一个代表。
+            if options.backfill_native_metadata
+                && !should_remove.contains(&row.id)
+                && row.native_parser_version
+                    != Some(i64::from(crate::media::native_metadata::PARSER_VERSION))
+            {
+                let format_key = row
+                    .format_key
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase();
+                if matches!(
+                    format_key.as_str(),
+                    "image/jpg" | "image/jpeg" | "image/png"
+                ) {
+                    let hash = row.hash.trim();
+                    if hash.is_empty() || native_metadata_hashes.insert(row.hash.clone()) {
+                        native_metadata_list.push((
+                            row.id,
+                            row.hash.clone(),
+                            row.local_path.clone(),
+                            format_key,
+                        ));
                     }
                 }
             }
@@ -634,7 +697,12 @@ fn run_organize(
         // 执行缩略图补充（进度仅在整批——含缩略图——结束后发送，避免扫描已 100% 仍在补图）
         for action in refresh_list {
             if cancel.load(Ordering::Relaxed) {
-                emit_organize_finished(removed_total, regenerated_total, true);
+                emit_organize_finished(
+                    removed_total,
+                    regenerated_total,
+                    backfilled_total,
+                    true,
+                );
                 return Ok(());
             }
             match action {
@@ -689,14 +757,19 @@ fn run_organize(
         #[cfg(not(target_os = "android"))]
         for (id, local_path, previous_compatible_path) in compat_list {
             if cancel.load(Ordering::Relaxed) {
-                emit_organize_finished(removed_total, regenerated_total, true);
+                emit_organize_finished(
+                    removed_total,
+                    regenerated_total,
+                    backfilled_total,
+                    true,
+                );
                 return Ok(());
             }
             let local = Path::new(&local_path);
-            let is_video = crate::image_type::is_video_by_path(local);
+            let is_video = crate::media::image_type::is_video_by_path(local);
             let compat_result = handle.block_on(async {
                 if is_video {
-                    match crate::media_dimensions::probe_media_sync(local) {
+                    match crate::media::dimensions::probe_media_sync(local) {
                         Some(probe) if probe.browser_safe => CompatResult::NotNeeded,
                         Some(probe) => {
                             eprintln!(
@@ -720,11 +793,11 @@ fn run_organize(
                         None => CompatResult::Unknown,
                     }
                 } else {
-                    let Some(mime) = crate::image_type::mime_type_from_path(local) else {
+                    let Some(mime) = crate::media::image_type::mime_type_from_path(local) else {
                         return CompatResult::Unknown;
                     };
                     let Some((w, h)) =
-                        crate::media_dimensions::resolve_media_dimensions_sync(&local_path)
+                        crate::media::dimensions::resolve_media_dimensions_sync(&local_path)
                     else {
                         return CompatResult::Unknown;
                     };
@@ -778,15 +851,99 @@ fn run_organize(
             }
         }
 
-        // 本批（扫描 + 删除 + 缩略图 + 兼容格式）完成后发送进度
-        push_organize_progress(total, &options, row_index, removed_total, regenerated_total);
+        // 执行原生元数据补充。失败只记录并跳过，不中断整批整理。
+        for (id, hash, local_path, format_key) in native_metadata_list {
+            if cancel.load(Ordering::Relaxed) {
+                emit_organize_finished(
+                    removed_total,
+                    regenerated_total,
+                    backfilled_total,
+                    true,
+                );
+                return Ok(());
+            }
+
+            let image_id = id.to_string();
+            match storage.ensure_native_metadata_for_image(&image_id, &hash, None) {
+                Ok(Some(_)) => {
+                    backfilled_total += 1;
+                    continue;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!(
+                        "[organize] native metadata shared lookup failed for {id} ({local_path}): {e}"
+                    );
+                    continue;
+                }
+            }
+
+            let bytes = match handle.block_on(
+                crate::media::native_metadata::read_image_bytes(&local_path),
+            ) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    eprintln!(
+                        "[organize] native metadata file read failed for {id} ({local_path}): {e}"
+                    );
+                    continue;
+                }
+            };
+            let Some(parsed) =
+                crate::media::native_metadata::parse_native_metadata(&format_key, &bytes)
+            else {
+                eprintln!(
+                    "[organize] native metadata parse returned no result for {id} ({local_path})"
+                );
+                continue;
+            };
+            let json = match serde_json::to_string(&parsed) {
+                Ok(json) => json,
+                Err(e) => {
+                    eprintln!(
+                        "[organize] native metadata serialization failed for {id} ({local_path}): {e}"
+                    );
+                    continue;
+                }
+            };
+            match storage.ensure_native_metadata_for_image(&image_id, &hash, Some(&json)) {
+                Ok(Some(_)) => {
+                    backfilled_total += 1;
+                }
+                Ok(None) => {
+                    eprintln!(
+                        "[organize] native metadata store returned no result for {id} ({local_path})"
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[organize] native metadata store failed for {id} ({local_path}): {e}"
+                    );
+                }
+            }
+        }
+
+        // 本批（扫描 + 删除 + 缩略图 + 兼容格式 + 原生元数据）完成后发送进度
+        push_organize_progress(
+            total,
+            &options,
+            row_index,
+            removed_total,
+            regenerated_total,
+            backfilled_total,
+        );
 
         if finish_organize {
             break;
         }
     }
 
-    emit_organize_finished(removed_total, regenerated_total, false);
+    emit_organize_finished(
+        removed_total,
+        regenerated_total,
+        backfilled_total,
+        false,
+    );
     Ok(())
 }
 
@@ -804,6 +961,8 @@ mod tests {
             local_path: local_path.to_string_lossy().to_string(),
             thumbnail_path: thumbnail_path.to_string_lossy().to_string(),
             compatible_path: String::new(),
+            format_key: None,
+            native_parser_version: None,
         }
     }
 
@@ -883,6 +1042,8 @@ mod tests {
                 .to_string_lossy()
                 .to_string(),
             compatible_path: String::new(),
+            format_key: None,
+            native_parser_version: None,
         };
         let action = thumbnail_refresh_action(&row).unwrap();
         match action {
@@ -907,6 +1068,8 @@ mod tests {
             local_path: local.to_string_lossy().to_string(),
             thumbnail_path: thumb.to_string_lossy().to_string(),
             compatible_path: String::new(),
+            format_key: None,
+            native_parser_version: None,
         };
         assert!(thumbnail_refresh_action(&row).is_none());
     }

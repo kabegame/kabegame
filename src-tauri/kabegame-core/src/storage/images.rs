@@ -24,11 +24,11 @@ pub struct ImageInfo {
     #[serde(default)]
     pub surf_record_id: Option<String>,
     pub crawled_at: u64,
-    /// 外键指向 `image_metadata.id`；下载入口已将 raw metadata 预先归一化为该 id。
+    /// 外键指向 `metadata.id`；下载入口已将 raw metadata 预先归一化为该 id。
     #[serde(rename(serialize = "metadataId"), alias = "metadataId")]
     #[serde(default)]
     pub metadata_id: Option<i64>,
-    /// `image_metadata.plugin_version`（图片下载时的插件版本，packed u32）；用于前端 metadata 缓存失效。
+    /// `metadata.plugin_version`（图片下载时的插件版本，packed u32）；用于前端 metadata 缓存失效。
     #[serde(rename(serialize = "pluginVersion"), alias = "pluginVersion")]
     #[serde(default)]
     pub plugin_version: u32,
@@ -139,12 +139,22 @@ pub struct RangedImages {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ImageMetadataFull {
+pub struct MetadataFull {
     pub id: i64,
     pub data: Option<Value>,
     /// 图片下载时的插件版本（packed u32）。
     pub plugin_version: u32,
     pub plugin_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImageNativeMetadataRow {
+    pub image_metadata_id: Option<i64>,
+    pub data: Option<String>,
+    pub parser_version: Option<u32>,
+    pub hash: String,
+    pub local_path: String,
+    pub format_key: Option<String>,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -192,8 +202,8 @@ fn remove_compatible_file_if_owned(path: Option<&str>) {
 // v4.0 删除说明：resolve_file_size_for_backfill（含 Android / 桌面两个 cfg 版本）
 // 仅被 fill_missing_sizes 使用，随之一并删除。
 
-/// 从 DB `image_metadata.data` 文本列解析为 JSON；空串或无效则 `None`。
-pub(crate) fn parse_image_metadata_json(s: Option<String>) -> Option<Value> {
+/// 从 DB `metadata.data` 文本列解析为 JSON；空串或无效则 `None`。
+pub(crate) fn parse_metadata_json(s: Option<String>) -> Option<Value> {
     s.and_then(|s| {
         let t = s.trim();
         if t.is_empty() {
@@ -204,8 +214,8 @@ pub(crate) fn parse_image_metadata_json(s: Option<String>) -> Option<Value> {
     })
 }
 
-/// 将 JSON 文本写入 `image_metadata` 并返回新插入的行 id。
-pub(crate) fn insert_image_metadata_id(
+/// 将 JSON 文本写入 `metadata` 并返回新插入的行 id。
+pub(crate) fn insert_metadata_id(
     conn: &rusqlite::Connection,
     data_json: &str,
     plugin_id: &str,
@@ -214,11 +224,11 @@ pub(crate) fn insert_image_metadata_id(
     let plugin_version_i64 = i64::from(plugin_version);
 
     conn.execute(
-        "INSERT INTO image_metadata (data, plugin_id, plugin_version)
+        "INSERT INTO metadata (data, plugin_id, plugin_version)
          VALUES (?1, ?2, ?3)",
         params![data_json, plugin_id, plugin_version_i64],
     )
-    .map_err(|e| format!("insert image_metadata: {}", e))?;
+    .map_err(|e| format!("insert metadata: {}", e))?;
 
     Ok(conn.last_insert_rowid())
 }
@@ -260,22 +270,19 @@ impl Storage {
         ))
     }
 
-    /// 读取 `image_metadata.data`。
-    pub fn get_image_metadata(&self, image_id: &str) -> Result<Option<Value>, String> {
-        crate::providers::image_metadata_at(image_id)
+    /// 读取 `metadata.data`。
+    pub fn get_metadata(&self, image_id: &str) -> Result<Option<Value>, String> {
+        crate::providers::metadata_at(image_id)
     }
 
     /// 读取 metadata 的完整行信息（含 plugin_version/plugin_id）。
-    pub fn get_image_metadata_full(
-        &self,
-        image_id: &str,
-    ) -> Result<Option<ImageMetadataFull>, String> {
-        crate::providers::image_metadata_full_at(image_id)
+    pub fn get_metadata_full(&self, image_id: &str) -> Result<Option<MetadataFull>, String> {
+        crate::providers::metadata_full_at(image_id)
     }
 
-    /// V8 `Kabegame.createImageMetadata`：将 JSON 写入 `image_metadata` 并返回 id。
+    /// V8 `Kabegame.createImageMetadata`：将 JSON 写入 `metadata` 并返回 id。
     /// `plugin_version` 为写入时运行插件的 packed 版本（应用维护，插件不可读写）。
-    pub fn insert_image_metadata_row(
+    pub fn insert_metadata_row(
         &self,
         value: &Value,
         plugin_id: &str,
@@ -284,26 +291,26 @@ impl Storage {
         let s = serde_json::to_string(value)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        insert_image_metadata_id(&conn, &s, plugin_id, plugin_version)
+        insert_metadata_id(&conn, &s, plugin_id, plugin_version)
     }
 
     /// 读取某 metadata 行的原始 `data` 文本（用于文件夹同步重导入前「保存」内容）。
-    pub fn read_image_metadata_text(&self, metadata_id: i64) -> Result<Option<String>, String> {
+    pub fn read_metadata_text(&self, metadata_id: i64) -> Result<Option<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         conn.query_row(
-            "SELECT data FROM image_metadata WHERE id = ?1",
+            "SELECT data FROM metadata WHERE id = ?1",
             params![metadata_id],
             |row| row.get::<_, String>(0),
         )
         .optional()
-        .map_err(|e| format!("read_image_metadata_text: {}", e))
+        .map_err(|e| format!("read_metadata_text: {}", e))
     }
 
     /// 按原始 JSON 文本写入 metadata 行并返回 id。
     /// 文件夹同步重导入用：删旧行后重写——若内容仍在则拿回原 id，若已被 GC 则得新 id。
-    pub fn insert_image_metadata_text(&self, data_json: &str) -> Result<i64, String> {
+    pub fn insert_metadata_text(&self, data_json: &str) -> Result<i64, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        insert_image_metadata_id(&conn, data_json, "", 0)
+        insert_metadata_id(&conn, data_json, "", 0)
     }
 
     /// 扫描某插件低于目标插件版本（packed）的 metadata 行，供迁移运行器逐行升级。
@@ -316,7 +323,7 @@ impl Storage {
         let mut stmt = conn
             .prepare(
                 "SELECT id, data, plugin_version
-                 FROM image_metadata
+                 FROM metadata
                  WHERE plugin_id = ?1 AND plugin_version < ?2
                  ORDER BY id",
             )
@@ -351,7 +358,7 @@ impl Storage {
         let current: Option<(String, i64)> = tx
             .query_row(
                 "SELECT data, plugin_version
-                 FROM image_metadata
+                 FROM metadata
                  WHERE id = ?1 AND plugin_id = ?2",
                 params![row_id, plugin_id],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
@@ -374,7 +381,7 @@ impl Storage {
         let target_id: Option<i64> = tx
             .query_row(
                 "SELECT id
-                 FROM image_metadata
+                 FROM metadata
                  WHERE plugin_id = ?1 AND plugin_version = ?2 AND data = ?3 AND id <> ?4
                  LIMIT 1",
                 params![plugin_id, new_version_i64, new_data, row_id],
@@ -394,16 +401,16 @@ impl Storage {
                 params![target_id, row_id],
             )
             .map_err(|e| format!("repoint task_failed_images.metadata_id: {e}"))?;
-            tx.execute("DELETE FROM image_metadata WHERE id = ?1", params![row_id])
-                .map_err(|e| format!("delete merged image_metadata row: {e}"))?;
+            tx.execute("DELETE FROM metadata WHERE id = ?1", params![row_id])
+                .map_err(|e| format!("delete merged metadata row: {e}"))?;
         } else {
             tx.execute(
-                "UPDATE image_metadata
+                "UPDATE metadata
                  SET data = ?1, plugin_version = ?2
                  WHERE id = ?3",
                 params![new_data, new_version_i64, row_id],
             )
-            .map_err(|e| format!("update migrated image_metadata row: {e}"))?;
+            .map_err(|e| format!("update migrated metadata row: {e}"))?;
         }
 
         tx.commit()
@@ -411,7 +418,7 @@ impl Storage {
         Ok(true)
     }
 
-    pub fn gc_image_metadata(&self, candidate_ids: &[i64]) -> Result<usize, String> {
+    pub fn gc_metadata(&self, candidate_ids: &[i64]) -> Result<usize, String> {
         if candidate_ids.is_empty() {
             return Ok(0);
         }
@@ -430,14 +437,195 @@ impl Storage {
                     params![id],
                     |row| row.get(0),
                 )
-                .map_err(|e| format!("gc_image_metadata count: {}", e))?;
+                .map_err(|e| format!("gc_metadata count: {}", e))?;
             if used == 0 {
-                conn.execute("DELETE FROM image_metadata WHERE id = ?1", params![id])
-                    .map_err(|e| format!("gc_image_metadata delete: {}", e))?;
+                conn.execute("DELETE FROM metadata WHERE id = ?1", params![id])
+                    .map_err(|e| format!("gc_metadata delete: {}", e))?;
                 deleted += 1;
             }
         }
         Ok(deleted)
+    }
+
+    /// 查找同内容哈希且解析器版本匹配的原生元数据，并回填到全部同哈希图片。
+    /// 未命中时仅在传入 JSON 后创建新行；空哈希不跨图片共享。
+    pub fn ensure_native_metadata_for_hash(
+        &self,
+        hash: &str,
+        json_if_missing: Option<&str>,
+    ) -> Result<Option<i64>, String> {
+        let hash = hash.trim();
+        if hash.is_empty() {
+            return Ok(None);
+        }
+
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("begin ensure native metadata: {e}"))?;
+        let candidate_ids = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT DISTINCT image_metadata_id
+                     FROM images
+                     WHERE hash = ?1 AND image_metadata_id IS NOT NULL",
+                )
+                .map_err(|e| format!("prepare native metadata candidates: {e}"))?;
+            let rows = stmt
+                .query_map(params![hash], |row| row.get::<_, i64>(0))
+                .map_err(|e| format!("query native metadata candidates: {e}"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("collect native metadata candidates: {e}"))?
+        };
+
+        let current_id = tx
+            .query_row(
+                "SELECT im.id
+                 FROM images i
+                 INNER JOIN image_metadata im ON im.id = i.image_metadata_id
+                 WHERE i.hash = ?1 AND im.parser_version = ?2
+                 ORDER BY im.id
+                 LIMIT 1",
+                params![
+                    hash,
+                    i64::from(crate::media::native_metadata::PARSER_VERSION)
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|e| format!("select shared native metadata: {e}"))?;
+
+        let metadata_id = if let Some(id) = current_id {
+            id
+        } else if let Some(json) = json_if_missing {
+            tx.execute(
+                "INSERT INTO image_metadata (data, parser_version) VALUES (?1, ?2)",
+                params![
+                    json,
+                    i64::from(crate::media::native_metadata::PARSER_VERSION)
+                ],
+            )
+            .map_err(|e| format!("insert native metadata: {e}"))?;
+            tx.last_insert_rowid()
+        } else {
+            tx.commit()
+                .map_err(|e| format!("commit native metadata miss: {e}"))?;
+            return Ok(None);
+        };
+
+        tx.execute(
+            "UPDATE images SET image_metadata_id = ?1 WHERE hash = ?2",
+            params![metadata_id, hash],
+        )
+        .map_err(|e| format!("backfill shared native metadata: {e}"))?;
+        gc_native_metadata_candidates(&tx, &candidate_ids, Some(metadata_id))?;
+        tx.commit()
+            .map_err(|e| format!("commit shared native metadata: {e}"))?;
+        Ok(Some(metadata_id))
+    }
+
+    /// 空哈希历史数据退化为仅挂载当前图片；正常哈希仍走共享路径。
+    pub fn ensure_native_metadata_for_image(
+        &self,
+        image_id: &str,
+        hash: &str,
+        json_if_missing: Option<&str>,
+    ) -> Result<Option<i64>, String> {
+        if !hash.trim().is_empty() {
+            return self.ensure_native_metadata_for_hash(hash, json_if_missing);
+        }
+
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("begin image native metadata: {e}"))?;
+        let current = tx
+            .query_row(
+                "SELECT im.id, im.parser_version
+                 FROM images i
+                 LEFT JOIN image_metadata im ON im.id = i.image_metadata_id
+                 WHERE i.id = ?1",
+                params![image_id],
+                |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("select image native metadata: {e}"))?;
+        let Some((old_id, old_version)) = current else {
+            tx.commit()
+                .map_err(|e| format!("commit missing image native metadata: {e}"))?;
+            return Ok(None);
+        };
+        if old_id.is_some()
+            && old_version == Some(i64::from(crate::media::native_metadata::PARSER_VERSION))
+        {
+            tx.commit()
+                .map_err(|e| format!("commit current image native metadata: {e}"))?;
+            return Ok(old_id);
+        }
+        let Some(json) = json_if_missing else {
+            tx.commit()
+                .map_err(|e| format!("commit image native metadata miss: {e}"))?;
+            return Ok(None);
+        };
+
+        tx.execute(
+            "INSERT INTO image_metadata (data, parser_version) VALUES (?1, ?2)",
+            params![
+                json,
+                i64::from(crate::media::native_metadata::PARSER_VERSION)
+            ],
+        )
+        .map_err(|e| format!("insert image native metadata: {e}"))?;
+        let metadata_id = tx.last_insert_rowid();
+        tx.execute(
+            "UPDATE images SET image_metadata_id = ?1 WHERE id = ?2",
+            params![metadata_id, image_id],
+        )
+        .map_err(|e| format!("attach image native metadata: {e}"))?;
+        if let Some(old_id) = old_id {
+            gc_native_metadata_candidates(&tx, &[old_id], Some(metadata_id))?;
+        }
+        tx.commit()
+            .map_err(|e| format!("commit image native metadata: {e}"))?;
+        Ok(Some(metadata_id))
+    }
+
+    pub fn get_image_native_metadata_row(
+        &self,
+        image_id: &str,
+    ) -> Result<Option<ImageNativeMetadataRow>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        conn.query_row(
+            "SELECT i.image_metadata_id, im.data, im.parser_version,
+                    COALESCE(i.hash, ''), i.local_path, i.type
+             FROM images i
+             LEFT JOIN image_metadata im ON im.id = i.image_metadata_id
+             WHERE i.id = ?1",
+            params![image_id],
+            |row| {
+                let parser_version = row
+                    .get::<_, Option<i64>>(2)?
+                    .map(|version| version.max(0) as u32);
+                Ok(ImageNativeMetadataRow {
+                    image_metadata_id: row.get(0)?,
+                    data: row.get(1)?,
+                    parser_version,
+                    hash: row.get(3)?,
+                    local_path: row.get(4)?,
+                    format_key: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| format!("get image native metadata row: {e}"))
+    }
+
+    pub fn gc_image_metadata(&self, candidate_ids: &[i64]) -> Result<usize, String> {
+        if candidate_ids.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        gc_native_metadata_candidates(&conn, candidate_ids, None)
     }
 
     pub fn find_image_by_path(local_path: &str) -> Result<Option<ImageInfo>, String> {
@@ -520,7 +708,8 @@ impl Storage {
     pub fn add_image(&self, mut image: ImageInfo) -> Result<ImageInfo, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        image.media_type = crate::image_type::normalize_stored_media_type(image.media_type.take());
+        image.media_type =
+            crate::media::image_type::normalize_stored_media_type(image.media_type.take());
 
         let thumbnail_path = if image.thumbnail_path.trim().is_empty() {
             image.local_path.clone()
@@ -531,7 +720,7 @@ impl Storage {
         let crawled_at_i64 = image.crawled_at as i64;
         conn.execute(
             "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata_id, thumbnail_path, hash, type, width, height, display_name, size, compatible_path, post_url)
-             VALUES (?1, ?2, ?3, (SELECT id FROM tasks WHERE id = ?4), ?5, ?6, (SELECT id FROM image_metadata WHERE id = ?7), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+             VALUES (?1, ?2, ?3, (SELECT id FROM tasks WHERE id = ?4), ?5, ?6, (SELECT id FROM metadata WHERE id = ?7), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 &image.url,
                 image.local_path,
@@ -658,9 +847,16 @@ impl Storage {
     pub fn delete_image(&self, image_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let image_paths: Option<(String, String, Option<i64>, Option<String>, Option<String>)> = conn
+        let image_paths: Option<(
+            String,
+            String,
+            Option<i64>,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+        )> = conn
             .query_row(
-                "SELECT local_path, thumbnail_path, metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
+                "SELECT local_path, thumbnail_path, metadata_id, image_metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
                 params![image_id],
                 |row| {
                     Ok((
@@ -669,12 +865,14 @@ impl Storage {
                         row.get(2)?,
                         row.get(3)?,
                         row.get(4)?,
+                        row.get(5)?,
                     ))
                 },
             )
             .optional()
             .map_err(|e| format!("Failed to query image path: {}", e))?;
-        let metadata_id = image_paths.as_ref().and_then(|(_, _, id, _, _)| *id);
+        let metadata_id = image_paths.as_ref().and_then(|(_, _, id, _, _, _)| *id);
+        let image_metadata_id = image_paths.as_ref().and_then(|(_, _, _, id, _, _)| *id);
 
         // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
         let task_ids: Vec<String> = conn
@@ -693,8 +891,14 @@ impl Storage {
             })
             .map_err(|e| format!("Failed to query task IDs: {}", e))?;
 
-        if let Some((local_path, thumbnail_path, _, compatible_path, wallpaper_compatible_path)) =
-            image_paths
+        if let Some((
+            local_path,
+            thumbnail_path,
+            _,
+            _,
+            compatible_path,
+            wallpaper_compatible_path,
+        )) = image_paths
         {
             remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
             remove_compatible_file_if_owned(compatible_path.as_deref());
@@ -726,7 +930,10 @@ impl Storage {
         self.invalidate_images_total_cache();
         drop(conn);
         if let Some(metadata_id) = metadata_id {
-            let _ = self.gc_image_metadata(&[metadata_id]);
+            let _ = self.gc_metadata(&[metadata_id]);
+        }
+        if let Some(image_metadata_id) = image_metadata_id {
+            let _ = self.gc_image_metadata(&[image_metadata_id]);
         }
 
         Ok(())
@@ -735,9 +942,16 @@ impl Storage {
     pub fn remove_image(&self, image_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let image_paths: Option<(String, String, Option<i64>, Option<String>, Option<String>)> = conn
+        let image_paths: Option<(
+            String,
+            String,
+            Option<i64>,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+        )> = conn
             .query_row(
-                "SELECT local_path, thumbnail_path, metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
+                "SELECT local_path, thumbnail_path, metadata_id, image_metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
                 params![image_id],
                 |row| {
                     Ok((
@@ -746,12 +960,14 @@ impl Storage {
                         row.get(2)?,
                         row.get(3)?,
                         row.get(4)?,
+                        row.get(5)?,
                     ))
                 },
             )
             .optional()
             .map_err(|e| format!("Failed to query image path: {}", e))?;
-        let metadata_id = image_paths.as_ref().and_then(|(_, _, id, _, _)| *id);
+        let metadata_id = image_paths.as_ref().and_then(|(_, _, id, _, _, _)| *id);
+        let image_metadata_id = image_paths.as_ref().and_then(|(_, _, _, id, _, _)| *id);
 
         // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
         let task_ids: Vec<String> = conn
@@ -770,8 +986,14 @@ impl Storage {
             })
             .map_err(|e| format!("Failed to query task IDs: {}", e))?;
 
-        if let Some((local_path, thumbnail_path, _, compatible_path, wallpaper_compatible_path)) =
-            image_paths
+        if let Some((
+            local_path,
+            thumbnail_path,
+            _,
+            _,
+            compatible_path,
+            wallpaper_compatible_path,
+        )) = image_paths
         {
             remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
             remove_compatible_file_if_owned(compatible_path.as_deref());
@@ -797,7 +1019,10 @@ impl Storage {
         self.invalidate_images_total_cache();
         drop(conn);
         if let Some(metadata_id) = metadata_id {
-            let _ = self.gc_image_metadata(&[metadata_id]);
+            let _ = self.gc_metadata(&[metadata_id]);
+        }
+        if let Some(image_metadata_id) = image_metadata_id {
+            let _ = self.gc_image_metadata(&[image_metadata_id]);
         }
 
         Ok(())
@@ -813,6 +1038,7 @@ impl Storage {
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
         let mut metadata_ids = Vec::new();
+        let mut image_metadata_ids = Vec::new();
 
         // 在删除前，查询所有图片所属的任务，并统计每个任务需要增加的 deleted_count
         let mut task_deleted_counts: HashMap<String, i64> = HashMap::new();
@@ -847,11 +1073,12 @@ impl Storage {
                 String,
                 String,
                 Option<i64>,
+                Option<i64>,
                 Option<String>,
                 Option<String>,
             )> = tx
                 .query_row(
-                    "SELECT local_path, thumbnail_path, metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
+                    "SELECT local_path, thumbnail_path, metadata_id, image_metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
                     params![id],
                     |row| {
                         Ok((
@@ -860,6 +1087,7 @@ impl Storage {
                             row.get(2)?,
                             row.get(3)?,
                             row.get(4)?,
+                            row.get(5)?,
                         ))
                     },
                 )
@@ -870,12 +1098,16 @@ impl Storage {
                 local_path,
                 thumbnail_path,
                 metadata_id,
+                image_metadata_id,
                 compatible_path,
                 wallpaper_compatible_path,
             )) = image_paths
             {
                 if let Some(metadata_id) = metadata_id {
                     metadata_ids.push(metadata_id);
+                }
+                if let Some(image_metadata_id) = image_metadata_id {
+                    image_metadata_ids.push(image_metadata_id);
                 }
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
                 remove_compatible_file_if_owned(compatible_path.as_deref());
@@ -916,7 +1148,8 @@ impl Storage {
 
         self.invalidate_images_total_cache();
         drop(conn);
-        let _ = self.gc_image_metadata(&metadata_ids);
+        let _ = self.gc_metadata(&metadata_ids);
+        let _ = self.gc_image_metadata(&image_metadata_ids);
 
         Ok(())
     }
@@ -931,6 +1164,7 @@ impl Storage {
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
         let mut metadata_ids = Vec::new();
+        let mut image_metadata_ids = Vec::new();
 
         // 在删除前，查询所有图片所属的任务，并统计每个任务需要增加的 deleted_count
         let mut task_deleted_counts: HashMap<String, i64> = HashMap::new();
@@ -961,11 +1195,12 @@ impl Storage {
                 String,
                 String,
                 Option<i64>,
+                Option<i64>,
                 Option<String>,
                 Option<String>,
             )> = tx
                 .query_row(
-                    "SELECT local_path, thumbnail_path, metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
+                    "SELECT local_path, thumbnail_path, metadata_id, image_metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
                     params![id],
                     |row| {
                         Ok((
@@ -974,6 +1209,7 @@ impl Storage {
                             row.get(2)?,
                             row.get(3)?,
                             row.get(4)?,
+                            row.get(5)?,
                         ))
                     },
                 )
@@ -984,12 +1220,16 @@ impl Storage {
                 local_path,
                 thumbnail_path,
                 metadata_id,
+                image_metadata_id,
                 compatible_path,
                 wallpaper_compatible_path,
             )) = image_paths
             {
                 if let Some(metadata_id) = metadata_id {
                     metadata_ids.push(metadata_id);
+                }
+                if let Some(image_metadata_id) = image_metadata_id {
+                    image_metadata_ids.push(image_metadata_id);
                 }
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
                 remove_compatible_file_if_owned(compatible_path.as_deref());
@@ -1015,7 +1255,8 @@ impl Storage {
 
         self.invalidate_images_total_cache();
         drop(conn);
-        let _ = self.gc_image_metadata(&metadata_ids);
+        let _ = self.gc_metadata(&metadata_ids);
+        let _ = self.gc_image_metadata(&image_metadata_ids);
 
         Ok(())
     }
@@ -1179,4 +1420,30 @@ impl Storage {
 
         Ok(id)
     }
+}
+
+fn gc_native_metadata_candidates(
+    conn: &rusqlite::Connection,
+    candidate_ids: &[i64],
+    keep_id: Option<i64>,
+) -> Result<usize, String> {
+    let mut deleted = 0usize;
+    let mut seen = HashSet::new();
+    for &id in candidate_ids {
+        if Some(id) == keep_id || !seen.insert(id) {
+            continue;
+        }
+        let changed = conn
+            .execute(
+                "DELETE FROM image_metadata
+                 WHERE id = ?1
+                   AND NOT EXISTS (
+                       SELECT 1 FROM images WHERE image_metadata_id = ?1
+                   )",
+                params![id],
+            )
+            .map_err(|e| format!("gc image metadata: {e}"))?;
+        deleted += changed;
+    }
+    Ok(deleted)
 }

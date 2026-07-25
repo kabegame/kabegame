@@ -1,11 +1,10 @@
 <template>
-  <AndroidPickerNumber
+  <SettingStepperControl
     v-if="isCompact"
     :model-value="localValue"
     :min="effectiveMin"
     :max="effectiveMax"
-    :step="effectiveStep"
-    title="选择数值"
+    :step-size="effectiveStep"
     :disabled="props.disabled || disabled"
     @update:model-value="onChange"
   />
@@ -26,7 +25,7 @@ import { computed, ref, watch } from "vue";
 import { useSettingKeyState } from "../../../composables/useSettingKeyState";
 import { type AppSettingKey } from "../../../stores/settings";
 import { useUiStore } from "../../../stores/ui";
-import AndroidPickerNumber from "../../AndroidPickerNumber.vue";
+import SettingStepperControl from "./SettingStepperControl.vue";
 
 const props = defineProps<{
   settingKey: AppSettingKey;

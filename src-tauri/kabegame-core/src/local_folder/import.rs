@@ -6,8 +6,8 @@ use crate::crawler::downloader::{
     compute_file_hash, generate_thumbnail, wait_after_download_if_needed,
 };
 use crate::emitter::GlobalEmitter;
-use crate::image_type::{is_video_by_path, mime_type_from_path};
-use crate::media_dimensions::{resolve_file_size_sync, resolve_media_dimensions_sync};
+use crate::media::dimensions::{resolve_file_size_sync, resolve_media_dimensions_sync};
+use crate::media::image_type::{is_video_by_path, mime_type_from_path};
 use crate::storage::{ImageInfo, Storage};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -81,9 +81,9 @@ pub async fn import_local_file(
     let media_type = mime_type_from_path(path).or_else(|| {
         Some(
             if is_video {
-                crate::image_type::default_video_format()
+                crate::media::image_type::default_video_format()
             } else {
-                crate::image_type::default_image_format()
+                crate::media::image_type::default_image_format()
             }
             .to_string(),
         )
@@ -176,7 +176,7 @@ async fn build_compatible_path(
     height: Option<u32>,
 ) -> Option<String> {
     let result = if is_video {
-        match crate::media_dimensions::probe_media_sync(path) {
+        match crate::media::dimensions::probe_media_sync(path) {
             Some(probe) => generate_compatible_video(path, &probe).await,
             None => Ok(None),
         }

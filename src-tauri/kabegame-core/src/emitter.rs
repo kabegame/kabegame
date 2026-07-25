@@ -154,6 +154,7 @@ impl GlobalEmitter {
         range_end: Option<usize>,
         removed: usize,
         regenerated: usize,
+        backfilled: usize,
     ) {
         let event = std::sync::Arc::new(DaemonEvent::OrganizeProgress {
             processed_global,
@@ -162,15 +163,23 @@ impl GlobalEmitter {
             range_end,
             removed,
             regenerated,
+            backfilled,
         });
         EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送整理完成事件
-    pub fn emit_organize_finished(&self, removed: usize, regenerated: usize, canceled: bool) {
+    pub fn emit_organize_finished(
+        &self,
+        removed: usize,
+        regenerated: usize,
+        backfilled: usize,
+        canceled: bool,
+    ) {
         let event = std::sync::Arc::new(DaemonEvent::OrganizeFinished {
             removed,
             regenerated,
+            backfilled,
             canceled,
         });
         EventBroadcaster::global().broadcast(event);
@@ -515,10 +524,18 @@ impl GlobalEmitter {
         _range_end: Option<usize>,
         _removed: usize,
         _regenerated: usize,
+        _backfilled: usize,
     ) {
     }
 
-    pub fn emit_organize_finished(&self, _removed: usize, _regenerated: usize, _canceled: bool) {}
+    pub fn emit_organize_finished(
+        &self,
+        _removed: usize,
+        _regenerated: usize,
+        _backfilled: usize,
+        _canceled: bool,
+    ) {
+    }
 
     pub fn emit_wallpaper_update_image(&self, _image_path: &str) {}
 

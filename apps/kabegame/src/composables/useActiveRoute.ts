@@ -49,15 +49,8 @@ export function useActiveRoute() {
       return "/plugin-browser";
     }
 
-    // 设置：精确匹配
-    if (path === "/settings") {
-      return "/settings";
-    }
-
-    // 帮助：匹配 /help 开头的所有路径（包括 /help/tips/:tipId）
-    if (path.startsWith("/help")) {
-      return "/help";
-    }
+    // 设置不是导航目的地：桌面端是弹窗，紧凑端的 /settings 路由页也不对应任何 tab，
+    // 交给下面的兜底分支即可（返回自身，不会命中任何菜单项）。
 
     if (path.startsWith("/surf")) {
       return "/surf";

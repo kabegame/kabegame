@@ -36,10 +36,10 @@ async fn resolve_native_wallpaper_path(file_path: &str) -> Result<String, String
         .map(str::trim)
         .filter(|mime| !mime.is_empty())
         .map(str::to_owned)
-        .or_else(|| crate::image_type::mime_type_from_path(source_path));
+        .or_else(|| crate::media::image_type::mime_type_from_path(source_path));
     if mime
         .as_deref()
-        .is_some_and(crate::image_type::image_mime_native_wallpaper_safe)
+        .is_some_and(crate::media::image_type::image_mime_native_wallpaper_safe)
     {
         return Ok(file_path.to_string());
     }

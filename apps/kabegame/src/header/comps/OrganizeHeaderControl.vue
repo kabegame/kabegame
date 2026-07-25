@@ -12,10 +12,11 @@
         <span class="organize-popover-ref">
           <el-tooltip :content="progressTooltipText" :disabled="!loading" placement="bottom">
             <span class="organize-tooltip-trigger">
-              <el-button circle :title="loading ? progressTooltipText : t('header.organize')" @click="handleOrganizeButtonClick">
+              <el-button :title="loading ? progressTooltipText : t('header.organize')" @click="handleOrganizeButtonClick">
                 <el-icon :class="{ 'organizing-icon': loading }">
                   <FolderOpened />
                 </el-icon>
+                <span>{{ t("header.organize") }}</span>
               </el-button>
             </span>
           </el-tooltip>
@@ -28,6 +29,9 @@
         <el-progress :percentage="progressPercentage" :stroke-width="8" />
         <div v-if="progress.removed > 0 || progress.regenerated > 0" class="popover-progress-detail">
           {{ t("gallery.organizingDetail", { removed: progress.removed, regenerated: progress.regenerated }) }}
+        </div>
+        <div v-if="progress.backfilled > 0" class="popover-progress-detail">
+          {{ t("gallery.organizeBackfilledCount", { count: progress.backfilled }) }}
         </div>
         <!-- <div class="popover-note">{{ t("gallery.organizeNoNewDownloadHint") }}</div> -->
 
@@ -75,6 +79,7 @@ type OrganizeProgressState = {
   rangeEnd: number | null;
   removed: number;
   regenerated: number;
+  backfilled: number;
 };
 
 type OrganizeRunStatePayload = OrganizeProgressState & {
@@ -85,6 +90,7 @@ type OrganizeRunStatePayload = OrganizeProgressState & {
   removeUnrecognized: boolean;
   regenThumbnails: boolean;
   regenCompatible: boolean;
+  backfillNativeMetadata: boolean;
   deleteSourceFiles: boolean;
 };
 
@@ -99,6 +105,7 @@ const progress = ref<OrganizeProgressState>({
   rangeEnd: null,
   removed: 0,
   regenerated: 0,
+  backfilled: 0,
 });
 const lastRunOptions = ref<OrganizeOptions | null>(null);
 
@@ -127,7 +134,11 @@ const progressTooltipText = computed(() => {
     progress.value.removed > 0 || progress.value.regenerated > 0
       ? ` ${t("gallery.organizingDetail", { removed: progress.value.removed, regenerated: progress.value.regenerated })}`
       : "";
-  return `${progressSummaryText.value}${detail}`;
+  const backfilled =
+    progress.value.backfilled > 0
+      ? ` ${t("gallery.organizeBackfilledCount", { count: progress.value.backfilled })}`
+      : "";
+  return `${progressSummaryText.value}${detail}${backfilled}`;
 });
 
 const progressPercentage = computed(() => {
@@ -152,6 +163,11 @@ const optionRows = computed(() => {
     { key: "removeUnrecognized", label: t("gallery.removeUnrecognized"), enabled: options.removeUnrecognized },
     { key: "regenThumbnails", label: t("gallery.regenThumbnails"), enabled: options.regenThumbnails },
     { key: "regenCompatible", label: t("gallery.regenCompatible"), enabled: options.regenCompatible },
+    {
+      key: "backfillNativeMetadata",
+      label: t("gallery.organizeBackfillNativeMetadata"),
+      enabled: options.backfillNativeMetadata,
+    },
     { key: "deleteSourceFiles", label: t("gallery.deleteSourceFiles"), enabled: options.deleteSourceFiles },
   ];
 });
@@ -176,6 +192,7 @@ function applyProgressPayload(payload: Partial<OrganizeProgressState> & Record<s
     rangeEnd: (payload.rangeEnd as number | null | undefined) ?? null,
     removed: typeof payload.removed === "number" ? payload.removed : progress.value.removed,
     regenerated: typeof payload.regenerated === "number" ? payload.regenerated : progress.value.regenerated,
+    backfilled: typeof payload.backfilled === "number" ? payload.backfilled : progress.value.backfilled,
   };
 }
 
@@ -192,6 +209,7 @@ async function syncOrganizeRunStateFromBackend() {
       removeUnrecognized: s.removeUnrecognized,
       regenThumbnails: s.regenThumbnails,
       regenCompatible: s.regenCompatible,
+      backfillNativeMetadata: s.backfillNativeMetadata,
       deleteSourceFiles: s.deleteSourceFiles,
       rangeStart: s.rangeStart ?? null,
       rangeEnd: s.rangeEnd ?? null,
@@ -212,6 +230,7 @@ onMounted(async () => {
   unlistenFinished = await listen<{
     removed: number;
     regenerated: number;
+    backfilled: number;
     canceled: boolean;
   }>("organize-finished", (event) => {
     const p = event.payload;
@@ -225,6 +244,7 @@ onMounted(async () => {
       rangeEnd: null,
       removed: 0,
       regenerated: 0,
+      backfilled: 0,
     };
     if (p?.canceled) {
       ElMessage.info(t("gallery.organizeCanceled"));
@@ -263,6 +283,7 @@ async function runOrganize(options: OrganizeOptions) {
       rangeEnd: null,
       removed: 0,
       regenerated: 0,
+      backfilled: 0,
     };
     lastRunOptions.value = { ...options };
     await invoke("start_organize", {
@@ -273,6 +294,7 @@ async function runOrganize(options: OrganizeOptions) {
         removeUnrecognized: options.removeUnrecognized,
         regenThumbnails: options.regenThumbnails,
         regenCompatible: options.regenCompatible,
+        backfillNativeMetadata: options.backfillNativeMetadata,
         deleteSourceFiles: options.deleteSourceFiles,
         rangeStart: options.rangeStart,
         rangeEnd: options.rangeEnd,

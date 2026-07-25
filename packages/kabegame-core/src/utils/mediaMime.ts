@@ -14,3 +14,10 @@ export function displayImageMimeType(t: string | undefined): string {
   const s = t == null ? "" : String(t).trim();
   return s || DEFAULT_IMAGE_MIME;
 }
+
+/** 是否支持读取并展示图片文件内嵌的原生元数据 */
+export function isNativeMetadataEligible(t?: string): boolean {
+  return ["image/jpg", "image/jpeg", "image/png"].includes(
+    (t ?? "").trim().toLowerCase(),
+  );
+}

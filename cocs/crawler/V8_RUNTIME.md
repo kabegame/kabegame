@@ -7,7 +7,7 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 ## 全局能力
 
 - Web 平台：`URL` / `URLSearchParams`、`TextEncoder` / `TextDecoder`、`atob` / `btoa`、timer、`crypto`、`fetch` / `Request` / `Response` / `Headers`、`DOMParser`。
-- 宿主桥：`Kabegame.to`、`back`、`currentUrl`、`currentHtml`、`currentDocument`、`currentHeaders`、`pluginData`、`setPluginData`、`setHeader`、`requireCookie`、`delHeader`、`warn`、`addProgress`、`downloadImage`、`createImageMetadata`，以及基于每任务 `PluginVfs` 的 `Kabegame.fs`（`getRoot()` 返回本次任务的虚拟根）。
+- 宿主桥：`Kabegame.to`、`back`、`currentUrl`、`currentHtml`、`currentDocument`、`currentHeaders`、`pluginData`、`setPluginData`、`setHeader`、`requireCookie`、`delHeader`、`warn`、`addProgress`、`downloadImage`、`createImageMetadata`，以及基于每任务 `PluginVfs` 的 `Kabegame.fs`（`getRoot()` 返回本次任务的虚拟根）与 `Kabegame.ffmpeg`。
 
 ### 畅游 Cookie 注入
 
@@ -24,7 +24,15 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 - 权限分三层：虚拟 `/` 一律拒绝；`/{handle}` 只读；`/{handle}/{data|cache|tmp}/...` 可读写。`resolve()` 统一做词法 normalize、拒绝越界和软链接、校验当前任务 handle；`realPath` / `cwd` / `readLink` 等返回路径会反向翻译为虚拟路径。`umask` 是进程级设置，无法由路径沙箱约束，因此始终拒绝。
 - handle 只在任务注册期间有效。任务结束后调度器移除 handle 索引，旧虚拟路径无法再解析；插件不得把 `/{handle}/...` 写进持久配置或 metadata。底层 `data` 内容仍可在下一任务通过新的 `getRoot()` 访问。
 - `downloadImage()` 接受当前任务的虚拟路径并在宿主侧转换为内部 `task-vfs://` 下载；插件不能直接传 `task-vfs://`。这类入库记录使用占位 URL，不做 URL 去重，仍依靠内容 hash 去重。
-- WebView 后端复用同一个 `PluginVfs` 安全边界，但只提供无句柄异步子集：`readFile`、`writeFile`、`mkdir`、`readDir`、`remove`、`stat`、`getRoot`，且 `getRoot()` 返回 Promise。V8 类型包 `@kabegame/types` 只声明 V8 完整 API，不表示两后端等价。
+- WebView 后端复用同一个 `PluginVfs` 安全边界，但只提供异步文件系统子集，且 `getRoot()` 返回 Promise。`Kabegame.ffmpeg` 的两个高层函数则与 V8 同形。V8 类型包 `@kabegame/types` 仍只声明 V8 的完整 API，不表示两后端其余能力等价。
+
+### 虚拟路径媒体工具 `Kabegame.ffmpeg`
+
+- `Kabegame.ffmpeg.muxStreams(inputs, output): Promise<void>` 对至少两个媒体输入执行 stream-copy 合流；输入和输出都必须是当前任务 VFS 内的虚拟绝对路径。
+- `Kabegame.ffmpeg.probe(path): Promise<FfmpegProbeResult | null>` 探测受支持的媒体；无法识别或非视频返回 `null`，成功对象为 `{ isVideo, mimeType, width, height, browserSafe }`。
+- 两个函数都只接受虚拟路径，不向 JS 暴露宿主真实路径。路径仍由 `PluginVfs` 做 handle、越界和软链接校验。
+- Android 不链接 FFmpeg/rsmpeg，调用会抛出人类可读的不支持错误；插件如需跨平台运行，应让错误自然传播或按业务需要捕获。
+- WebView bootstrap 将这两个函数映射到 `crawl_ffmpeg_mux` / `crawl_ffmpeg_probe`；V8 运行时映射到对应 op，API 形状一致。
 
 ## 迁移点
 
@@ -39,7 +47,7 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 - 因为不再从 `deno_fetch` 取 `Headers` / `Response`，这两个类在 `prelude.js` 里**自实现**（`Headers` 为大小写不敏感多值 map；`Response` 由宿主返回的 `Uint8Array` 承载 body，支持 `text()`/`json()`/`arrayBuffer()`/`bytes()`，无流式 body / `clone`）。`Request` 仍是归一化 fetch 入参用的最小实现。改这三个类只需改 `prelude.js`。
 - 保留的 deno 扩展为 `deno_webidl` / `deno_web`（URL/编码/timer/base64/DOMException）/ `deno_crypto`（`crypto.subtle`）/ `deno_io` / `deno_fs`；`deno_io` 不注册 stdio，`deno_fs` 注入每任务的 `PluginVfs`。`deno_crypto` 的 `00_crypto.js` 是 lazy JS 且创建 cppgc 对象，在 `JsPluginRuntime::new` 里 isolate 建好后用 `loadExtScript` 显式加载并挂全局。
 - **设备端共享 baseline 快照缓存**：Android 交叉编译不能在 x86_64 宿主生成可供 arm64 V8 加载的快照，因此运行时在设备自身后台生成并缓存到 `cache_dir/plugins/snapshots/runtime@<fingerprint>.bin`。任一 V8 插件加载/安装会触发生成；首任务缺缓存时仍走 fresh 初始化，不额外阻塞，后续任务和进程重启后优先从磁盘快照恢复。快照只烘焙 `deno_webidl` / `deno_web` / `deno_crypto` / `deno_io` / `deno_fs` / `kabegame_v8` 的扩展 JS；`Arc<PluginVfs>` 等 Rust state 在恢复后按相同 extension 顺序补入，插件模块仍按任务加载。
-- 快照文件有独立 magic、内容指纹、V8 精确版本、payload 长度和 CRC32；验证失败会删除并重建，restore 失败则本进程禁用快照并回退 fresh。`KABEGAME_DISABLE_V8_SNAPSHOT=1` 可强制关闭。修改 vendored `deno_core` 快照布局、deno 扩展版本/顺序或 `kabegame_v8` ESM 时，必须同步递增 `snapshot.rs` 的 `SNAPSHOT_FINGERPRINT`。
+- 快照文件有独立 magic、内容指纹、V8 精确版本、payload 长度和 CRC32；验证失败会删除并重建，restore 失败则本进程禁用快照并回退 fresh。`KABEGAME_DISABLE_V8_SNAPSHOT=1` 可强制关闭。修改 vendored `deno_core` 快照布局、deno 扩展版本/顺序或 `kabegame_v8` ESM 时，必须同步递增 `snapshot.rs` 的 `SNAPSHOT_FINGERPRINT`；当前因加入 `Kabegame.ffmpeg` 为 **4**。
 - `deno_crypto` 的 `Crypto` / `SubtleCrypto` / `CryptoKey` 是 cppgc 对象，不能进入 V8 startup snapshot；`00_crypto.js` 始终在 fresh/restore isolate 建成后执行并挂载 globals。扩展 JS 继续以 `IncludedInBinary` 内嵌，既保证首次 fresh 初始化，也保证设备端快照生成不依赖构建机路径；仍无 residual 表或 `build.rs` 快照步骤。
 
 ## Android 交叉编译

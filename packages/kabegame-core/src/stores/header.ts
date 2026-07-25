@@ -3,8 +3,6 @@ import { shallowReactive } from "vue";
 import type { Component } from "vue";
 
 export enum HeaderFeatureId {
-  Help = "help",
-  QuickSettings = "quickSettings",
   Refresh = "refresh",
   StopTask = "stopTask",
   DeleteTask = "deleteTask",

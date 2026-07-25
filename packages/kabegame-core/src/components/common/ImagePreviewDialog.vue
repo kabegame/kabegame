@@ -47,12 +47,58 @@
       class="image-preview-dialog" :show-close="true" :lock-scroll="true"
       :z-index="previewFullscreenZIndex" @update:model-value="previewModal.close" @close="closePreview">
       <div v-if="previewModal.isOpen.value" class="preview-desktop-body">
+        <aside class="preview-detail-drawer preview-detail-drawer-left"
+          :class="{
+            'is-open': detailDrawerLeftOpen,
+            'is-resizing': resizingDrawer === 'left',
+          }"
+          :style="detailDrawerLeftStyle"
+          @click.stop @wheel.stop>
+          <!-- 面板自带折叠外壳：展开的 flex:1 争夺侧栏空间，收拢的只占标题行 -->
+          <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-left">
+            <ImageBasicInfoPanel
+              :image="previewImage"
+              :plugins="plugins"
+              fill-when-expanded
+              @open-task="emit('open-task', $event)"
+              @open-gallery-filter="handleOpenGalleryFilter"
+              @open-surf-record="emit('open-surf-record', $event)"
+            />
+            <ImageNativeMetadataPanel
+              v-if="isNativeMetadataEligible(previewImage?.type)"
+              :image="previewImage"
+              fill-when-expanded
+            />
+          </div>
+          <div
+            class="preview-detail-resize-handle preview-detail-resize-handle-left"
+            :title="t('gallery.toggleImageInfoPanel')"
+            @pointerdown="handleDrawerResizeStart('left', $event)"
+            @pointermove="handleDrawerResizeMove('left', $event)"
+            @pointerup="handleDrawerResizeEnd('left', $event)"
+            @pointercancel="handleDrawerResizeEnd('left', $event)"
+            @lostpointercapture="handleDrawerResizeEnd('left', $event)"
+            @dblclick="resetDrawerWidth('left')"
+          />
+        </aside>
         <div ref="previewContainerRef" class="preview-container" :class="{ 'is-app-fullscreen': isAppFullscreen }"
           @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
           @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePreviewWheel">
+          <button v-if="!isAppFullscreen" type="button"
+            class="preview-detail-toggle preview-detail-toggle-left"
+            :class="{ visible: previewHoverSide === 'left' || detailDrawerLeftOpen }"
+            :title="t('gallery.toggleImageInfoPanel')" :aria-expanded="detailDrawerLeftOpen"
+            :aria-label="t('gallery.toggleImageInfoPanel')" @click.stop="toggleDetailDrawerLeft">
+            <svg class="preview-detail-drawer-icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true">
+              <path fill="currentColor"
+                d="M176 752a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h672a16 16 0 0 0 16-16v-64a16 16 0 0 0-16-16H176zm240-192a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432a16 16 0 0 0 16-16V576a16 16 0 0 0-16-16H416zM299.264 395.392a16 16 0 0 0-22.592.064L171.264 501.376a16 16 0 0 0 .064 22.592l105.408 104.896a16 16 0 0 0 27.264-11.328V406.784a16 16 0 0 0-4.736-11.392zM416 368a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432A16 16 0 0 0 864 448V384a16 16 0 0 0-16-16H416zm-240-192A16 16 0 0 0 160 192v64c0 8.832 7.168 16 16 16h672A16 16 0 0 0 864 256V192a16 16 0 0 0-16-16H176z" />
+            </svg>
+          </button>
           <button v-if="!isAppFullscreen" type="button" class="preview-detail-toggle"
             :class="{ visible: previewHoverSide === 'right' || detailDrawerOpen }"
-            :title="t('gallery.toggleDetailPanel')" :aria-expanded="detailDrawerOpen" aria-label="toggle detail panel"
+            :title="t('gallery.toggleDetailPanel')" :aria-expanded="detailDrawerOpen"
+            :aria-label="t('gallery.toggleDetailPanel')"
             @click.stop="toggleDetailDrawer">
             <svg class="preview-detail-drawer-icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"
               aria-hidden="true">
@@ -133,16 +179,28 @@
               @toggle-fullscreen="toggleAppFullscreen" />
           </div>
         </div>
-        <aside class="preview-detail-drawer" :class="{ 'is-open': detailDrawerOpen }" @click.stop
+        <!-- 抽屉开关只由用户控制，不随内容有无自动收起（避免切图时闪出/闪收）；
+             无插件内容时面板自身渲染为空 -->
+        <aside class="preview-detail-drawer"
+          :class="{
+            'is-open': detailDrawerOpen,
+            'is-resizing': resizingDrawer === 'right',
+          }"
+          :style="detailDrawerRightStyle"
+          @click.stop
           @wheel.stop>
-          <div class="preview-detail-drawer-scroll">
-            <ImageDetailContent
-              :image="previewImage"
-              :plugins="plugins"
-              @open-task="emit('open-task', $event)"
-              @open-gallery-filter="handleOpenGalleryFilter"
-              @open-surf-record="emit('open-surf-record', $event)"
-            />
+          <div
+            class="preview-detail-resize-handle preview-detail-resize-handle-right"
+            :title="t('gallery.toggleDetailPanel')"
+            @pointerdown="handleDrawerResizeStart('right', $event)"
+            @pointermove="handleDrawerResizeMove('right', $event)"
+            @pointerup="handleDrawerResizeEnd('right', $event)"
+            @pointercancel="handleDrawerResizeEnd('right', $event)"
+            @lostpointercapture="handleDrawerResizeEnd('right', $event)"
+            @dblclick="resetDrawerWidth('right')"
+          />
+          <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-right">
+            <ImagePluginDescriptionPanel :image="previewImage" fill-when-expanded />
           </div>
         </aside>
       </div>
@@ -164,10 +222,12 @@ import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "../image/ImageContent.vue";
 import PswpSlideContent from "./PswpSlideContent.vue";
-import ImageDetailContent, {
+import ImageBasicInfoPanel, {
   type ImageDetailGalleryFilterTarget,
   type ImageDetailSurfRecordTarget,
-} from "./ImageDetailContent.vue";
+} from "./ImageBasicInfoPanel.vue";
+import ImageNativeMetadataPanel from "./ImageNativeMetadataPanel.vue";
+import ImagePluginDescriptionPanel from "./ImagePluginDescriptionPanel.vue";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 import VideoControls from "./VideoControls.vue";
@@ -181,8 +241,8 @@ import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
 import { useAudioKeepAlive } from "../../composables/useAudioKeepAlive";
 import { useModal } from "../../composables/useModal";
 import { fileToUrl, thumbnailToUrl } from "../../httpServer";
-import { isVideoMediaType } from "../../utils/mediaMime";
-import { Plugin } from "@kabegame/core/stores/plugins";
+import { isNativeMetadataEligible, isVideoMediaType } from "../../utils/mediaMime";
+import type { Plugin } from "@kabegame/core/stores/plugins";
 
 const { t } = useI18n();
 const uiStore = useUiStore();
@@ -208,6 +268,50 @@ const props = withDefaults(defineProps<{
 const detailDrawerOpen = useLocalStorage("kabegame-preview-detail-open", false, {
   mergeDefaults: true,
 });
+const detailDrawerLeftOpen = useLocalStorage(
+  "kabegame-preview-detail-left-open",
+  false,
+  { mergeDefaults: true },
+);
+const PREVIEW_DRAWER_DEFAULT_WIDTH = 320;
+const PREVIEW_DRAWER_MIN_WIDTH = 240;
+const PREVIEW_DRAWER_MAX_WIDTH = 560;
+const detailDrawerLeftWidth = useLocalStorage(
+  "kabegame-preview-detail-left-width",
+  PREVIEW_DRAWER_DEFAULT_WIDTH,
+  { mergeDefaults: true },
+);
+const detailDrawerRightWidth = useLocalStorage(
+  "kabegame-preview-detail-right-width",
+  PREVIEW_DRAWER_DEFAULT_WIDTH,
+  { mergeDefaults: true },
+);
+type PreviewDrawerSide = "left" | "right";
+const resizingDrawer = ref<PreviewDrawerSide | null>(null);
+let drawerResizeStartX = 0;
+let drawerResizeStartWidth = PREVIEW_DRAWER_DEFAULT_WIDTH;
+
+function drawerMaxWidth(): number {
+  if (typeof window === "undefined") return PREVIEW_DRAWER_MAX_WIDTH;
+  return Math.max(
+    PREVIEW_DRAWER_MIN_WIDTH,
+    Math.min(PREVIEW_DRAWER_MAX_WIDTH, window.innerWidth * 0.45),
+  );
+}
+
+function clampDrawerWidth(value: number): number {
+  const safeValue = Number.isFinite(value) ? value : PREVIEW_DRAWER_DEFAULT_WIDTH;
+  return Math.round(
+    Math.min(drawerMaxWidth(), Math.max(PREVIEW_DRAWER_MIN_WIDTH, safeValue)),
+  );
+}
+
+const detailDrawerLeftStyle = computed(() => ({
+  "--preview-drawer-width": `${clampDrawerWidth(Number(detailDrawerLeftWidth.value))}px`,
+}));
+const detailDrawerRightStyle = computed(() => ({
+  "--preview-drawer-width": `${clampDrawerWidth(Number(detailDrawerRightWidth.value))}px`,
+}));
 
 const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
@@ -403,6 +507,55 @@ const handleDocumentZoomPointerUp = () => {
   markPreviewInteracting();
 };
 
+function drawerWidthRef(side: PreviewDrawerSide) {
+  return side === "left" ? detailDrawerLeftWidth : detailDrawerRightWidth;
+}
+
+function resetPanzoomAfterDrawerResize() {
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      measureContainerSize();
+      panzoomReset();
+    });
+  });
+}
+
+function handleDrawerResizeStart(side: PreviewDrawerSide, event: PointerEvent) {
+  if (event.button !== 0) return;
+  const widthRef = drawerWidthRef(side);
+  resizingDrawer.value = side;
+  drawerResizeStartX = event.clientX;
+  drawerResizeStartWidth = clampDrawerWidth(Number(widthRef.value));
+  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  notifyPreviewInteracting(true);
+  event.preventDefault();
+}
+
+function handleDrawerResizeMove(side: PreviewDrawerSide, event: PointerEvent) {
+  if (resizingDrawer.value !== side) return;
+  const delta = event.clientX - drawerResizeStartX;
+  const directionalDelta = side === "left" ? delta : -delta;
+  drawerWidthRef(side).value = clampDrawerWidth(
+    drawerResizeStartWidth + directionalDelta,
+  );
+}
+
+function handleDrawerResizeEnd(side: PreviewDrawerSide, event: PointerEvent) {
+  if (resizingDrawer.value !== side) return;
+  const handle = event.currentTarget as HTMLElement;
+  resizingDrawer.value = null;
+  if (handle.hasPointerCapture(event.pointerId)) {
+    handle.releasePointerCapture(event.pointerId);
+  }
+  markPreviewInteracting();
+  resetPanzoomAfterDrawerResize();
+}
+
+function resetDrawerWidth(side: PreviewDrawerSide) {
+  drawerWidthRef(side).value = clampDrawerWidth(PREVIEW_DRAWER_DEFAULT_WIDTH);
+  resetPanzoomAfterDrawerResize();
+}
+
 /** 切换详情抽屉并重置 Panzoom，使图片按新容器尺寸适配（含抽屉动画结束后再对齐一次） */
 const toggleDetailDrawer = () => {
   detailDrawerOpen.value = !detailDrawerOpen.value;
@@ -410,6 +563,20 @@ const toggleDetailDrawer = () => {
     open: detailDrawerOpen.value,
     image: previewImage.value,
   });
+  panzoomReset();
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      panzoomReset();
+    });
+    window.setTimeout(() => {
+      panzoomReset();
+    }, 240);
+  });
+};
+
+/** 切换左侧图片信息抽屉，并在抽屉过渡的三个时机重置 Panzoom。 */
+const toggleDetailDrawerLeft = () => {
+  detailDrawerLeftOpen.value = !detailDrawerLeftOpen.value;
   panzoomReset();
   void nextTick(() => {
     requestAnimationFrame(() => {
@@ -807,6 +974,7 @@ const closePreview = () => {
   previewHoverSide.value = null;
   closePreviewContextMenu();
   previewImageLoading.value = false;
+  resizingDrawer.value = null;
   panzoomDestroy();
   if (previewInteractTimer) clearTimeout(previewInteractTimer);
   previewInteractTimer = null;
@@ -903,7 +1071,9 @@ const setupResizeObserver = () => {
   resizeObserver = new ResizeObserver(() => {
     if (!previewVisible.value) return;
     measureContainerSize();
-    panzoomReset();
+    if (!resizingDrawer.value) {
+      panzoomReset();
+    }
   });
   resizeObserver.observe(container);
 };
@@ -1054,6 +1224,7 @@ onUnmounted(() => {
   window.removeEventListener("keydown", handlePreviewKeyDown, true);
   document.removeEventListener("mouseup", handleDocumentZoomPointerUp);
   document.removeEventListener("touchend", handleDocumentZoomPointerUp);
+  resizingDrawer.value = null;
   syncKamechanVisibilityForPreview(false);
   panzoomDestroy();
   if (previewInteractTimer) {
@@ -1247,13 +1418,23 @@ body.image-preview-hides-kamechan .kamechan-host {
     }
   }
 
+  .preview-detail-toggle-left {
+    right: auto;
+    left: 12px;
+
+    .preview-detail-drawer-icon {
+      transform: scaleX(-1);
+    }
+  }
+
   .preview-detail-drawer {
     flex: 0 0 0;
     width: 0;
     min-width: 0;
-    max-width: 320px;
+    max-width: min(560px, 45vw);
     overflow: hidden;
     box-sizing: border-box;
+    position: relative;
     border-left: 1px solid transparent;
     background: var(--anime-bg-card, rgba(255, 255, 255, 0.96));
     opacity: 0;
@@ -1265,10 +1446,24 @@ body.image-preview-hides-kamechan .kamechan-host {
       border-color 0.18s ease;
 
     &.is-open {
-      flex: 0 0 320px;
-      min-width: 30%;
+      flex: 0 0 var(--preview-drawer-width, 320px);
+      width: var(--preview-drawer-width, 320px);
       opacity: 1;
       border-left-color: var(--anime-border, rgba(0, 0, 0, 0.12));
+    }
+
+    &.is-resizing {
+      transition: none;
+    }
+  }
+
+  .preview-detail-drawer-left {
+    border-right: 1px solid transparent;
+    border-left: 0;
+
+    &.is-open {
+      border-right-color: var(--anime-border, rgba(0, 0, 0, 0.12));
+      border-left-color: transparent;
     }
   }
 
@@ -1278,6 +1473,43 @@ body.image-preview-hides-kamechan .kamechan-host {
     overflow-y: auto;
     padding: 12px 14px 16px;
     box-sizing: border-box;
+  }
+
+  .preview-detail-resize-handle {
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    bottom: 0;
+    width: 6px;
+    cursor: col-resize;
+    touch-action: none;
+    transition: background-color 0.15s ease;
+
+    &:hover {
+      background: color-mix(in srgb, var(--anime-primary) 58%, transparent);
+    }
+  }
+
+  .preview-detail-drawer.is-resizing .preview-detail-resize-handle {
+    background: color-mix(in srgb, var(--anime-primary) 72%, transparent);
+  }
+
+  .preview-detail-resize-handle-left {
+    right: 0;
+  }
+
+  .preview-detail-resize-handle-right {
+    left: 0;
+  }
+
+  /* 侧栏内多面板：展开的（--fill）flex:1 争夺空间，收拢的只占标题行；面板内部各自滚动 */
+  .preview-detail-drawer-scroll-left,
+  .preview-detail-drawer-scroll-right {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
   }
 
   .preview-loading {

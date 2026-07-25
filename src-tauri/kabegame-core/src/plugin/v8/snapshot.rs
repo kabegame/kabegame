@@ -18,7 +18,7 @@ const MAGIC: &[u8; 8] = b"KGVSNAP1";
 ///
 /// `CRYPTO_INIT_SCRIPT` runs after restore and does not require a bump. The V8
 /// version is recorded separately in the metadata below.
-const SNAPSHOT_FINGERPRINT: u32 = 3;
+const SNAPSHOT_FINGERPRINT: u32 = 4;
 const MAX_META_LEN: usize = 4096;
 
 static LOADED: OnceLock<&'static [u8]> = OnceLock::new();
