@@ -89,6 +89,7 @@ fn register_fixture_functions(conn: &Connection) {
             Ok(serde_json::json!({
                 "id": plugin_id,
                 "name": name,
+                "displayName": name,
                 "description": format!("{name} fixture"),
                 "baseUrl": "https://example.test"
             })
@@ -178,7 +179,12 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             height INTEGER,
             display_name TEXT NOT NULL DEFAULT '',
             last_set_wallpaper_at INTEGER,
-            size INTEGER
+            size INTEGER,
+            description TEXT,
+            compatible_path TEXT,
+            post_url TEXT,
+            wallpaper_compatible_path TEXT,
+            image_metadata_id INTEGER
         );
         CREATE TABLE album_images (
             album_id TEXT NOT NULL,
@@ -189,11 +195,11 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         CREATE TABLE metadata (
             id INTEGER PRIMARY KEY,
             data TEXT NOT NULL,
-            version INTEGER NOT NULL DEFAULT 0,
+            plugin_version INTEGER NOT NULL DEFAULT 0,
             plugin_id TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX idx_metadata_dedup
-            ON metadata(plugin_id, version);
+            ON metadata(plugin_id, plugin_version);
         CREATE TABLE albums (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -241,8 +247,6 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             root_url TEXT NOT NULL,
             icon BLOB,
             last_visit_at INTEGER NOT NULL,
-            download_count INTEGER NOT NULL DEFAULT 0,
-            deleted_count INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
             name TEXT NOT NULL DEFAULT '',
             cookie TEXT NOT NULL DEFAULT ''
@@ -250,7 +254,7 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         INSERT INTO albums(id, name, created_at, parent_id) VALUES
             ('11111111-1111-1111-1111-111111111111', 'AlbumA', 1, NULL),
             ('33333333-3333-3333-3333-333333333333', 'AlbumChild', 2, '11111111-1111-1111-1111-111111111111');
-        INSERT INTO metadata(id, data, version, plugin_id) VALUES
+        INSERT INTO metadata(id, data, plugin_version, plugin_id) VALUES
             (1, '{"source":"table","tags":["a"]}', 0, 'pixiv');
         INSERT INTO tasks VALUES
             (
@@ -262,7 +266,7 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
                 NULL,
                 NULL,
                 'manual',
-                'done',
+                'completed',
                 100.0,
                 0,
                 1,
@@ -275,8 +279,11 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         INSERT INTO task_failed_images VALUES
             (1, '22222222-2222-2222-2222-222222222222', 'pixiv', 'https://example.test/fail-1.jpg', 10, 30, 'network', 31, '{"User-Agent":"Kabegame"}', 1, 'failed-1'),
             (2, 'other-task', 'pixiv', 'https://example.test/fail-2.jpg', 20, 32, 'timeout', NULL, NULL, NULL, 'failed-2');
-        INSERT INTO surf_records VALUES
-            ('surf-a', 'pixiv.test', 'https://pixiv.test', NULL, 20, 2, 0, 10, 'Pixiv Test', '');
+        INSERT INTO surf_records (
+            id, host, root_url, icon, last_visit_at, created_at, name, cookie
+        ) VALUES (
+            'surf-a', 'pixiv.test', 'https://pixiv.test', NULL, 20, 10, 'Pixiv Test', ''
+        );
         "#,
     )
     .unwrap();
@@ -545,7 +552,13 @@ fn plural_resource_schemas_fetch_and_deserialize_rows() {
         .unwrap();
     let surf: SurfRecord = serde_json::from_value(surf).unwrap();
     assert_eq!(surf.id, "surf-a");
-    assert_eq!(surf.image_count, 120);
+    assert_eq!(
+        runtime.count("images://gallery/surf/pixiv.test").unwrap(),
+        120
+    );
+    assert!(runtime
+        .count("images://gallery/hide/surf/pixiv.test")
+        .is_ok());
 }
 
 #[test]
@@ -849,22 +862,22 @@ fn gallery_filter_combines_dimensions_and_sort() {
 }
 
 #[test]
-fn gallery_no_album_filter_excludes_non_hidden_album_memberships() {
+fn gallery_no_album_filter_excludes_album_memberships_except_favorite() {
     let runtime = build_runtime();
 
+    // 收藏画册归属不算"已分类"(is_favorite or ...): image 10 仅在收藏画册,仍出现在 no-album 中
     let no_album = runtime.fetch("images://gallery/no-album/x10x/1").unwrap();
     assert_eq!(
         ids(no_album),
-        ["9", "11", "12", "13", "14", "15", "16", "17", "18", "19"]
+        ["9", "10", "11", "12", "13", "14", "15", "16", "17", "18"]
     );
-    assert_eq!(runtime.count("images://gallery/no-album").unwrap(), 111);
+    assert_eq!(runtime.count("images://gallery/no-album").unwrap(), 112);
 
     let combined = runtime
         .fetch("images://gallery/media-type/image/filter_comb/no-album/filter_comb/sort/by-size/desc/x10x/1")
         .unwrap();
     let combined_ids = ids(combined);
     assert_eq!(combined_ids.len(), 10);
-    assert!(!combined_ids.contains(&"10".to_string()));
     assert!(!combined_ids.contains(&"1".to_string()));
     assert_eq!(
         runtime
@@ -872,7 +885,7 @@ fn gallery_no_album_filter_excludes_non_hidden_album_memberships() {
                 "images://gallery/media-type/image/filter_comb/no-album/filter_comb/sort/by-size"
             )
             .unwrap(),
-        110
+        111
     );
 }
 
@@ -945,9 +958,8 @@ fn album_sort_path_paginates_and_rejects_legacy_entries() {
     assert_eq!(ids(hidden), ["8", "7", "6"]);
     assert_eq!(ids(delegated_all), ["6", "7", "8"]);
     assert_eq!(ids(image_only), ["6", "7", "8"]);
-    assert!(
-        matches!(video_only, Err(EngineError::PathNotFound(path)) if path == "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/video-only/x3x/1")
-    );
+    // video-only 已是合法路径(gallery_album_media_type_provider);该画册只有 jpeg,结果为空
+    assert!(video_only.unwrap().is_empty());
     assert!(image_only_wallpaper_order.is_empty());
     assert!(album_wallpaper_order.is_empty());
     assert_eq!(ids(image_filter_album_order), ["8", "7", "6"]);

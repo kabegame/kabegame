@@ -17,9 +17,7 @@ use rmcp::{
 };
 use serde_json::{json, Value};
 
-use crate::mcp_capabilities::{
-    capability_for_tool, is_capability_enabled, read_capability_id,
-};
+use crate::mcp_capabilities::{capability_for_tool, is_capability_enabled, read_capability_id};
 
 pub const MCP_PORT: u16 = 7490;
 
@@ -277,9 +275,7 @@ impl ServerHandler for KabegameMcpServer {
             ),
         ]
         .into_iter()
-        .filter_map(|(uri, resource)| {
-            is_uri_capability_enabled(uri, &disabled).then_some(resource)
-        })
+        .filter_map(|(uri, resource)| is_uri_capability_enabled(uri, &disabled).then_some(resource))
         .collect();
 
         Ok(ListResourcesResult {
@@ -507,7 +503,7 @@ impl ServerHandler for KabegameMcpServer {
                         "Surf record info",
                     )
                     .with_description(
-                        "Full surf record: id, host, name, imageCount, lastVisitAt, etc.",
+                        "Full surf record: id, host, name, lastVisitAt, etc.",
                     )
                     .with_mime_type("application/json")
                     .no_annotation(),

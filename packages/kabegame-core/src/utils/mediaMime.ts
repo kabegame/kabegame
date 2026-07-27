@@ -15,9 +15,16 @@ export function displayImageMimeType(t: string | undefined): string {
   return s || DEFAULT_IMAGE_MIME;
 }
 
-/** 是否支持读取并展示图片文件内嵌的原生元数据 */
+/**
+ * 是否支持读取并展示图片文件内嵌的原生元数据。
+ * 必须与 Rust `native_metadata::supports_native_metadata` 的格式集保持一致。
+ */
 export function isNativeMetadataEligible(t?: string): boolean {
-  return ["image/jpg", "image/jpeg", "image/png"].includes(
-    (t ?? "").trim().toLowerCase(),
-  );
+  return [
+    "image/jpg",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+  ].includes((t ?? "").trim().toLowerCase());
 }

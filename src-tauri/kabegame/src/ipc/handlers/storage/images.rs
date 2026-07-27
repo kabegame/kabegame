@@ -56,29 +56,29 @@ pub async fn get_gallery_plugin_groups() -> IpcResponse {
 }
 
 pub async fn delete_image(image_id: &str) -> IpcResponse {
-    match delete_images_with_events(&[image_id.to_string()], true) {
-        Ok(()) => IpcResponse::ok("deleted"),
+    match delete_images_with_events(&[image_id.to_string()], true).await {
+        Ok(_) => IpcResponse::ok("deleted"),
         Err(e) => IpcResponse::err(e),
     }
 }
 
 pub async fn remove_image(image_id: &str) -> IpcResponse {
-    match delete_images_with_events(&[image_id.to_string()], false) {
-        Ok(()) => IpcResponse::ok("removed"),
+    match delete_images_with_events(&[image_id.to_string()], false).await {
+        Ok(_) => IpcResponse::ok("removed"),
         Err(e) => IpcResponse::err(e),
     }
 }
 
 pub async fn batch_delete_images(image_ids: &[String]) -> IpcResponse {
-    match delete_images_with_events(image_ids, true) {
-        Ok(()) => IpcResponse::ok("deleted"),
+    match delete_images_with_events(image_ids, true).await {
+        Ok(_) => IpcResponse::ok("deleted"),
         Err(e) => IpcResponse::err(e),
     }
 }
 
 pub async fn batch_remove_images(image_ids: &[String]) -> IpcResponse {
-    match delete_images_with_events(image_ids, false) {
-        Ok(()) => IpcResponse::ok("removed"),
+    match delete_images_with_events(image_ids, false).await {
+        Ok(_) => IpcResponse::ok("removed"),
         Err(e) => IpcResponse::err(e),
     }
 }

@@ -16,7 +16,7 @@ import {
   WarningFilled,
   Document,
   InfoFilled,
-  View,
+  Hide,
 } from "@element-plus/icons-vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { i18n } from "@kabegame/i18n";
@@ -166,8 +166,8 @@ export function registerHeaderFeatures() {
     },
     {
       id: HeaderFeatureId.ToggleShowHidden,
-      label: t("header.showHidden"),
-      icon: View,
+      label: t("header.hideHidden"),
+      icon: Hide,
     },
     {
       id: HeaderFeatureId.ToggleShowAlbumImages,

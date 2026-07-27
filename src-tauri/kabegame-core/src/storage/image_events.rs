@@ -2,6 +2,7 @@
 
 use crate::emitter::GlobalEmitter;
 use crate::storage::albums::AddToAlbumResult;
+use crate::storage::source_purge::{purge_source_files, PurgeReport};
 use crate::storage::{Storage, FAVORITE_ALBUM_ID};
 
 fn emit_task_image_counts_full(task_id: &str) {
@@ -17,33 +18,25 @@ fn emit_task_image_counts_full(task_id: &str) {
 }
 
 /// 删除 `images` 表行（删文件或仅删记录），并发射 `images-change(delete)` + 必要时 `album-images-change(delete)`。
-pub fn delete_images_with_events(image_ids: &[String], delete_files: bool) -> Result<(), String> {
+///
+/// 源文件 purge 固定在 DB 事务与事件发射之后执行，避免未来调用方遗漏异步清除。
+pub async fn delete_images_with_events(
+    image_ids: &[String],
+    delete_files: bool,
+) -> Result<PurgeReport, String> {
     let storage = Storage::global();
     let album_ids = storage.collect_album_ids_for_images(image_ids)?;
     let task_ids = storage.collect_task_ids_for_images(image_ids)?;
     let plugin_ids = storage.collect_plugin_ids_for_images(image_ids)?;
-    let surf_counts = storage.collect_surf_record_counts_for_images(image_ids)?;
-    let surf_record_ids: Vec<String> = surf_counts.keys().cloned().collect();
-    if delete_files {
-        storage.batch_delete_images(image_ids)?;
+    let surf_record_ids = storage.collect_surf_record_ids_for_images(image_ids)?;
+    let paths = if delete_files {
+        storage.batch_delete_images(image_ids)?
     } else {
         storage.batch_remove_images(image_ids)?;
-    }
+        Vec::new()
+    };
     for tid in &task_ids {
         emit_task_image_counts_full(tid);
-    }
-    for (srid, delta) in surf_counts {
-        let _ = storage.increment_surf_record_deleted_count(&srid, delta as i64);
-        if let Ok((image_count, deleted_count, download_count)) =
-            storage.surf_record_counts_snapshot(&srid)
-        {
-            GlobalEmitter::global().emit_surf_record_counts(
-                &srid,
-                image_count,
-                deleted_count,
-                download_count,
-            );
-        }
     }
     GlobalEmitter::global().emit_images_change(
         "delete",
@@ -55,7 +48,7 @@ pub fn delete_images_with_events(image_ids: &[String], delete_files: bool) -> Re
     if !album_ids.is_empty() {
         GlobalEmitter::global().emit_album_images_change("delete", &album_ids, image_ids);
     }
-    Ok(())
+    Ok(purge_source_files(&paths).await)
 }
 
 /// 加入画册并发 `album-images-change(add)`。

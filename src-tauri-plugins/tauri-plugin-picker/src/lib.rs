@@ -52,6 +52,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::read_file_bytes,
             commands::take_persistable_permission,
             commands::copy_image_to_pictures,
+            commands::delete_media_uris,
             commands::copy_extracted_images_to_pictures,
         ])
         .setup(|app, api| {

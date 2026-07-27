@@ -1,4 +1,5 @@
 pub mod album;
+pub mod hidden_cleanup;
 pub mod image;
 pub mod misc;
 pub mod organize;

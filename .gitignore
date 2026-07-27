@@ -15,7 +15,7 @@ dist-kabegame/*
 !dist-kabegame/.gitkeep
 *.local
 
-/release
+/.kabegame/release
 /build
 
 # Editor directories and files

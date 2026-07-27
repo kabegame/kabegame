@@ -12,13 +12,12 @@
         <template #before-grid="{ totalCount, currentPage, pageSize, jumpToPage }">
           <PageHeader
             :title="recordTitle"
-            :subtitle="lastVisitSubtitle"
+            :subtitle="totalCountSubtitle(totalCount)"
             :show="[]"
-            :fold="[HeaderFeatureId.ToggleShowHidden]"
+            :fold="[]"
             show-back
             sticky
             @back="goBack"
-            @action="handleHeaderAction"
           />
 
           <GalleryFilters
@@ -51,7 +50,7 @@
 </template>
 
 <script setup lang="ts">
-import { onActivated, onUnmounted, ref, computed, watch } from "vue";
+import { onActivated, onMounted, onUnmounted, ref, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
@@ -62,7 +61,7 @@ import { createSurfImagesSurface } from "@/components/imageGrid/surfaces/surf";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import { useSurfImagesRouteStore } from "@/stores/surfImagesRoute";
 import type { GalleryFilterDimension, GallerySortField } from "@/utils/galleryPath";
-import { HeaderFeatureId, useHeaderStore } from "@kabegame/core/stores/header";
+import { usePageBridgeStore } from "@/stores/pageBridge";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useI18n } from "@kabegame/i18n";
 
@@ -72,7 +71,6 @@ const router = useRouter();
 const { isCompact } = storeToRefs(useUiStore());
 const surfStore = useSurfStore();
 const surfImagesRouteStore = useSurfImagesRouteStore();
-const { hide: surfHide } = storeToRefs(surfImagesRouteStore);
 
 const surfFilterFeatures: GalleryFilterDimension[] = [
   "wallpaperOrder", "noAlbum", "plugin", "mediaType", "date", "name", "size", "aspect",
@@ -92,34 +90,31 @@ const surface = createSurfImagesSurface({
   recordId: () => record.value?.id ?? "",
 });
 
-const headerStore = useHeaderStore();
-watch(
-  surfHide,
-  () => {
-    headerStore.setFoldLabel(
-      HeaderFeatureId.ToggleShowHidden,
-      surfHide.value ? t("header.showHidden") : t("header.hideHidden")
-    );
-  },
-  { immediate: true }
-);
+// 「显示隐藏图片」入口与画廊/任务详情一致收进全局工具箱，这里只注册桥接。
+const pageBridge = usePageBridgeStore();
+onMounted(() => {
+  pageBridge.setToggleShowHidden({
+    get: () => surfImagesRouteStore.hide,
+    set: (v) => {
+      surfImagesRouteStore.hide = v;
+    },
+  });
+});
 onUnmounted(() => {
-  headerStore.setFoldLabel(HeaderFeatureId.ToggleShowHidden, undefined);
+  pageBridge.setToggleShowHidden(null);
 });
 
-const handleHeaderAction = (payload: { id: string }) => {
-  if (payload.id === HeaderFeatureId.ToggleShowHidden) {
-    surfImagesRouteStore.hide = !surfImagesRouteStore.hide;
-  }
-};
+// 与畅游列表/详情一致：优先展示用户起的名字，没起过才退回 host
+const recordTitle = computed(
+  () => record.value?.name || record.value?.host || t("surf.surfImagesTitle")
+);
 
-const recordTitle = computed(() => record.value?.host ?? t("surf.surfImagesTitle"));
-const lastVisitSubtitle = computed(() => {
-  const r = record.value;
-  if (!r?.lastVisitAt) return "";
-  const date = new Date(r.lastVisitAt * 1000);
-  return t("surf.lastSurfTime") + date.toLocaleString();
-});
+/**
+ * 副标题只给总图片数，与画册详情页一致——直接复用 ImageGrid 已经算好的 totalCount，
+ * 不额外查询。文案共用 `albums.totalCountSubtitle`，避免两份相同副本各自漂移。
+ */
+const totalCountSubtitle = (totalCount: number) =>
+  totalCount ? t("albums.totalCountSubtitle", { count: totalCount }) : "";
 
 const initRecord = async (host: string) => {
   surfHost.value = host;

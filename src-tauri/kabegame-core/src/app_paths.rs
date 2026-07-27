@@ -99,12 +99,6 @@ impl AppPaths {
             .join(format!("{}.json", plugin_id))
     }
 
-    /// .cleanup_marker 文件路径（仅桌面）
-    #[cfg(not(target_os = "android"))]
-    pub fn cleanup_marker(&self) -> PathBuf {
-        self.data_dir.join(".cleanup_marker")
-    }
-
     // ========== 图片相关目录 ==========
 
     /// 图片存储目录

@@ -150,19 +150,19 @@ wrap_resource_handler! {
 
             // Tauri handlers are allowed to respond inline. In that case CEF
             // must not receive `cont()` re-entrantly while `open` is running;
-            // return a synchronous handled result instead. A later response
-            // resumes the request via the cloned callback above.
+            // return a synchronous handled result (`handle_request=1`) instead.
+            //
+            // 异步响应(invoke 命令等)按 CEF 契约必须**仍返回 1** 且
+            // `handle_request=0`,稍后经上面克隆的 callback `cont()` 恢复;
+            // 返回 0 的语义是"取消请求",会让页面侧 fetch 立刻
+            // `TypeError: Failed to fetch`(cef-ipc:///raw 二进制通道就栽在这)。
             let response_is_ready = {
                 let mut state = self.state.lock().unwrap();
                 state.open_in_progress = false;
                 state.response.is_some()
             };
-            if response_is_ready {
-                *handle_request = 1;
-                1
-            } else {
-                0
-            }
+            *handle_request = i32::from(response_is_ready);
+            1
         }
 
         fn response_headers(

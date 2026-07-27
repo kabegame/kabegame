@@ -94,3 +94,8 @@ pub async fn sync_local_folder_album(
 pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<Value, String> {
     commands::album::sync_local_folder_albums(album_ids).await
 }
+
+#[tauri::command]
+pub async fn get_folder_sync_run_state() -> Result<Value, String> {
+    commands::album::get_folder_sync_run_state()
+}

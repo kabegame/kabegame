@@ -62,7 +62,7 @@ worker 启动后不再重新解析 DB/PluginManager。提交失败由 `enqueue` 
 - `Task.progress` 内存累加后写回 DB 并发 `tasks-change/TaskChanged`。
 - `Task.headers` 保存任务级 header 快照；V8 和 WebView 修改 header 都写回 DB。
 - `Task.page_stack` 保存 WebView/V8 当前页面栈。
-- `Task.webview` 保存 `TaskResult` completion sender 与 `Kabegame.state()` 的任务级 state。
+- `Task.webview` 保存 `TaskResult` completion sender、心跳 sender（见 3.6）与 `Kabegame.state()` 的任务级 state。
 
 旧的 `CRAWLER_SESSIONS`、`JsTaskContext`、`JsTaskPatch`、独立 `PageStackStore` 与 `canceled_tasks` 表已经移除。
 
@@ -108,6 +108,16 @@ Tauri initialization script 在每次页面加载时执行：
 
 `TaskResult = Result<(), TaskError>`；`TaskError::Canceled` 不携带脚本原始消息，worker 在任务终态统一写入 `"Task canceled"`。其它错误走 `TaskError::Other(String)`，若 token 已取消仍按取消终态保留原始错误。
 
+### 3.6 心跳看门狗（WebView 无响应检测）
+
+隐藏的爬虫窗口收不到用户输入，CEF 内置 hung-renderer 检测（基于输入回执）永远不会触发；渲染进程卡死（死循环 JS 等）时 completion 永不到达。为此 WebView 会话带一条心跳链路：
+
+- `bootstrap.js` 在每页 document-start 立即 invoke 一次 `crawl_heartbeat`，之后每 **60 秒**一次；页面导航重跑脚本、重新起 interval。
+- `crawl_heartbeat` 命令按 label 找到 `Task`，经 `Task::heartbeat_webview()` 向会话的心跳 channel 发一个信号。
+- `run_task` 的 WebView 分支不再裸 await completion，而是 `select!` 循环等待 completion / 心跳 / **120 秒**超时（`WEBVIEW_HEARTBEAT_TIMEOUT`）；收到心跳重置超时，超时则以 `TaskError::Other("WebView 窗口无响应")` 结束任务（不刷新窗口——刷新会导致任务状态不稳定），随后走既有的下载排空 + 销毁窗口收尾。
+
+渲染进程真崩溃时心跳同样停止，由同一条超时路径在 ≤120 秒内兜底。可见窗口（主窗口/Surf）则由 `tauri-runtime-cef` 的 `RequestHandler` 用 CEF 内置检测处理：`on_render_process_unresponsive` 直接 terminate 渲染进程、`on_render_process_terminated` 自动 `reload` 恢复（`crawler-*` 窗口在这两个回调里被排除）。
+
 ### 3.6 下载与媒体
 
 `Kabegame.downloadImage` 的普通 HTTP/HTTPS URL 统一调用 `DownloadQueue::download_image`，在容量满时挂起 JS promise；worker 根据任务插件为 WebView backend 把 job 反投到对应 CEF 窗口，等待条目内 oneshot 后统一执行后处理。页面自发下载在首次 `Requested` 时取消并入队，worker 第二次发起后才真正落盘。
@@ -115,7 +125,7 @@ Tauri initialization script 在每次页面加载时执行：
 `data:` / 普通 `blob:` / MSE `blob:` 保持对插件相同的 `downloadImage(url, opts)` 调用形状，但内部不再走专用媒体上传命令：
 
 1. `media_capture.js` 继续维护 Blob/MSE 捕获表；MSE 下载前仍由 `ensureFullyBuffered` 高倍速全缓冲并侦测换集，之后检查 DRM、截断和空数据。
-2. `media_download.js` 通过 `crawl_fs_get_root` 在当前任务 VFS 的 `tmp/media-*` 建子目录，以 8 MiB Raw IPC 分块写每条流；`crawl_fs_fwrite` 的短写会循环补齐。
+2. `media_download.js` 通过 `crawl_fs_get_root` 在当前任务 VFS 的 `tmp/media-*` 建子目录，以 8 MiB Raw IPC 分块写每条流；`crawl_fs_fwrite` 的短写会循环补齐。CEF 桌面端 raw 分块不走标准 invoke（postMessage JSON 通道会把 `Uint8Array` 退化成数字数组），改经 runtime 注入的 `window.__kb_raw_invoke__`（`cef-ipc://localhost/raw` 帧化通道，见 `tauri-runtime-cef/src/ipc.rs`），无桥平台回退标准 invoke。
 3. 多 SourceBuffer 显式调用 `crawl_ffmpeg_mux`，容器规则为任一流 MIME 含 `webm` 则 WebM，否则 MP4。
 4. `bootstrap.js` 注入的 `window.__kb_media_submit__` 把最终虚拟绝对路径作为 `crawl_download_image.url` 提交。宿主将其解析为内部 `task-vfs://`，scheme downloader 从 VFS 流式读取并进入 `DownloadSink` / 统一后处理。
 5. `finally` 递归删除本次 `tmp/media-*` 子目录。`crawl_download_image` 会等待下载完成，因此清理不会早于 task-vfs 读取。

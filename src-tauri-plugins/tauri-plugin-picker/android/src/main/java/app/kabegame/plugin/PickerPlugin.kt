@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.pm.PackageManager
 import android.content.ContentValues
 import android.content.Intent
+import android.content.IntentSender
 import android.Manifest
 import android.media.MediaMetadataRetriever
 import android.media.MediaScannerConnection
@@ -48,6 +49,7 @@ interface PickerLauncherHost {
     fun launchPickImages(onResult: (List<Uri>) -> Unit)
     fun launchPickVideos(onResult: (List<Uri>) -> Unit)
     fun launchPickKgpgFile(intent: Intent, onResult: (ActivityResult) -> Unit)
+    fun launchDeleteRequest(sender: IntentSender, onResult: (ActivityResult) -> Unit)
 }
 
 
@@ -69,6 +71,10 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
     private var pendingImagesInvoke: Invoke? = null
     private var pendingVideosInvoke: Invoke? = null
     private var pendingKgpgInvoke: Invoke? = null
+    private var pendingDeleteInvoke: Invoke? = null
+    private var pendingDeleteDeleted: Int = 0
+    private var pendingDeleteSkipped: Int = 0
+    private var pendingDeleteConsentUris: List<Uri> = emptyList()
     private val localHttpServer by lazy { LocalHttpServer(activity.applicationContext) }
 
     /** Launcher 由 Activity 在 onCreate 前注册并通过 PickerLauncherHost 提供，避免 RESUMED 后 register 崩溃 */
@@ -161,6 +167,142 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
             Log.e(TAG, "copyImageToPictures failed", e)
             invoke.reject("复制到 Pictures 失败: ${e.message}", e)
         }
+    }
+
+    @InvokeArg
+    class DeleteMediaUrisArgs {
+        var uris: List<String> = emptyList()
+    }
+
+    @Command
+    fun deleteMediaUris(invoke: Invoke) {
+        if (pendingDeleteInvoke != null) {
+            invoke.reject("已有媒体删除授权正在进行中")
+            return
+        }
+        val args = invoke.parseArgs(DeleteMediaUrisArgs::class.java)
+        if (args.uris.isEmpty()) {
+            val result = JSObject()
+            result.put("deleted", 0)
+            result.put("skipped", 0)
+            invoke.resolve(result)
+            return
+        }
+
+        pendingDeleteInvoke = invoke
+        CoroutineScope(Dispatchers.IO).launch {
+            val resolver = activity.contentResolver
+            val needConsent = mutableListOf<Uri>()
+            var deleted = 0
+            var skipped = 0
+
+            for (uriString in args.uris) {
+                val uri = try {
+                    Uri.parse(uriString)
+                } catch (e: Exception) {
+                    skipped += 1
+                    Log.e(TAG, "删除媒体失败，URI 无效: $uriString", e)
+                    continue
+                }
+                if (uri.scheme != "content") {
+                    skipped += 1
+                    Log.e(TAG, "删除媒体失败，仅支持 content:// URI: $uriString")
+                    continue
+                }
+
+                try {
+                    if (resolver.delete(uri, null, null) > 0) {
+                        deleted += 1
+                    } else {
+                        skipped += 1
+                        Log.w(TAG, "MediaStore 未删除任何条目，保留源文件: $uriString")
+                    }
+                } catch (e: SecurityException) {
+                    // RecoverableSecurityException 继承自 SecurityException，同样进入一次性授权批次。
+                    needConsent.add(uri)
+                    Log.i(TAG, "MediaStore 直删需要用户授权: $uriString", e)
+                } catch (e: Exception) {
+                    skipped += 1
+                    Log.e(TAG, "MediaStore 直删失败，保留源文件: $uriString", e)
+                }
+            }
+
+            withContext(Dispatchers.Main) {
+                if (needConsent.isEmpty()) {
+                    resolveDeleteMediaUris(deleted, skipped)
+                    return@withContext
+                }
+
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                    needConsent.forEach {
+                        Log.w(TAG, "Android 11 以下无批量删除授权 API，保留源文件: $it")
+                    }
+                    resolveDeleteMediaUris(deleted, skipped + needConsent.size)
+                    return@withContext
+                }
+
+                val host = launcherHost
+                if (host == null) {
+                    needConsent.forEach {
+                        Log.e(TAG, "Activity 未实现 PickerLauncherHost，保留源文件: $it")
+                    }
+                    resolveDeleteMediaUris(deleted, skipped + needConsent.size)
+                    return@withContext
+                }
+
+                val sender = try {
+                    MediaStore.createDeleteRequest(resolver, needConsent).intentSender
+                } catch (e: Exception) {
+                    needConsent.forEach {
+                        Log.e(TAG, "创建 MediaStore 批量删除请求失败，保留源文件: $it", e)
+                    }
+                    resolveDeleteMediaUris(deleted, skipped + needConsent.size)
+                    return@withContext
+                }
+
+                pendingDeleteDeleted = deleted
+                pendingDeleteSkipped = skipped
+                pendingDeleteConsentUris = needConsent.toList()
+                try {
+                    host.launchDeleteRequest(sender) { result -> handleDeleteRequestResult(result) }
+                } catch (e: Exception) {
+                    needConsent.forEach {
+                        Log.e(TAG, "启动 MediaStore 批量删除授权失败，保留源文件: $it", e)
+                    }
+                    resolveDeleteMediaUris(deleted, skipped + needConsent.size)
+                }
+            }
+        }
+    }
+
+    private fun handleDeleteRequestResult(result: ActivityResult) {
+        val consentCount = pendingDeleteConsentUris.size
+        if (result.resultCode == Activity.RESULT_OK) {
+            resolveDeleteMediaUris(
+                pendingDeleteDeleted + consentCount,
+                pendingDeleteSkipped,
+            )
+        } else {
+            pendingDeleteConsentUris.forEach {
+                Log.w(TAG, "用户拒绝 MediaStore 批量删除授权，保留源文件: $it")
+            }
+            resolveDeleteMediaUris(
+                pendingDeleteDeleted,
+                pendingDeleteSkipped + consentCount,
+            )
+        }
+    }
+
+    private fun resolveDeleteMediaUris(deleted: Int, skipped: Int) {
+        val invoke = pendingDeleteInvoke ?: return
+        pendingDeleteInvoke = null
+        pendingDeleteDeleted = 0
+        pendingDeleteSkipped = 0
+        pendingDeleteConsentUris = emptyList()
+        val result = JSObject()
+        result.put("deleted", deleted)
+        result.put("skipped", skipped)
+        invoke.resolve(result)
     }
 
     @InvokeArg

@@ -54,10 +54,7 @@ pub fn add_album(name: String, parent_id: Option<String>) -> Result<Value, Strin
     serde_json::to_value(album).map_err(|e| e.to_string())
 }
 
-pub fn add_images_to_album(
-    album_id: String,
-    image_ids: Vec<String>,
-) -> Result<Value, String> {
+pub fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Result<Value, String> {
     Storage::global().ensure_album_is_writable(&album_id)?;
     let r = add_images_to_album_with_event(&album_id, &image_ids)?;
     #[cfg(feature = "virtual-driver")]
@@ -82,10 +79,7 @@ pub fn add_task_images_to_album(task_id: String, album_id: String) -> Result<Val
     serde_json::to_value(r).map_err(|e| e.to_string())
 }
 
-pub fn remove_images_from_album(
-    album_id: String,
-    image_ids: Vec<String>,
-) -> Result<Value, String> {
+pub fn remove_images_from_album(album_id: String, image_ids: Vec<String>) -> Result<Value, String> {
     Storage::global().ensure_album_is_writable(&album_id)?;
     let removed = remove_images_from_album_with_event(&album_id, &image_ids)?;
     #[cfg(feature = "virtual-driver")]
@@ -195,8 +189,7 @@ pub async fn add_local_folder_album(
 
     tokio::spawn(async move {
         if recursive {
-            let _ =
-                crate::local_folder::sync_album_recursive(&root_id, forbidden_roots).await;
+            let _ = crate::local_folder::sync_album_recursive(&root_id, forbidden_roots).await;
         } else {
             let _ = crate::local_folder::sync_album(&root_id).await;
         }
@@ -263,6 +256,17 @@ pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<Value, S
 #[cfg(target_os = "android")]
 pub async fn sync_local_folder_albums(_album_ids: Vec<String>) -> Result<Value, String> {
     Err(t!("albums.localFolderErrors.androidUnsupported").to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn get_folder_sync_run_state() -> Result<Value, String> {
+    let tasks = crate::local_folder::FolderSyncService::global().snapshot();
+    Ok(serde_json::json!({ "tasks": tasks }))
+}
+
+#[cfg(target_os = "android")]
+pub fn get_folder_sync_run_state() -> Result<Value, String> {
+    Ok(serde_json::json!({ "tasks": [] }))
 }
 
 /// 递归同步/创建时需要刻意避开的「禁区根」（规范化）：仅 VD 挂载点。

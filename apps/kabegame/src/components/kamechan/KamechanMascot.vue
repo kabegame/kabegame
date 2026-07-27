@@ -12,6 +12,12 @@
       @touchend.passive="cancelLongPress"
       @touchcancel.passive="cancelLongPress"
     >
+      <KamechanBusyBadge
+        v-if="badgeVisible"
+        :minimized="minimized"
+        @click="toggleToolbox"
+      />
+
       <!-- 工具箱气泡打开时替换消息气泡，关闭后消息气泡自动恢复 -->
       <KameBubble
         :text="currentMessage?.text ?? ''"
@@ -93,6 +99,8 @@ import KameBubble from "./KameBubble.vue";
 import KameToolboxBubble from "./KameToolboxBubble.vue";
 import KamechanHistoryDialog from "./KamechanHistoryDialog.vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState.ts";
+import KamechanBusyBadge from "./KamechanBusyBadge.vue";
+import { useBusyTasks } from "@/composables/useBusyTasks";
 
 const emit = defineEmits<{ "open-settings": [] }>();
 
@@ -110,6 +118,12 @@ const minimized = ref(false);
 const historyModal = useModal();
 /** kamechan 开着时它就是全局工具箱的入口（方案 2a），点击 toggle 气泡 */
 const toolboxModal = useModal();
+const {
+  count: busyCount,
+  hasUnseenFailure,
+  markFailuresSeen,
+} = useBusyTasks();
+const badgeVisible = computed(() => busyCount.value > 0 || hasUnseenFailure.value);
 const hostEl = ref<HTMLElement | null>(null);
 const position = ref<{ left: number; bottom: number } | null>(null);
 const isDragging = ref(false);
@@ -463,6 +477,7 @@ function handleDocumentPointerDown(event: PointerEvent) {
 
 watch(() => toolboxModal.isOpen.value, (open) => {
   if (open) {
+    markFailuresSeen();
     document.addEventListener("pointerdown", handleDocumentPointerDown, true);
   } else {
     document.removeEventListener("pointerdown", handleDocumentPointerDown, true);

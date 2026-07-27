@@ -9,7 +9,7 @@ import { BuildSystem } from "../build-system.ts";
 import { Component } from "./component-plugin.ts";
 import { OSPlugin } from "./os-plugin.ts";
 import { ensureDir, platformExeExt, readCargoTomlVersion, run } from "../utils.ts";
-import { ARTIFACT_DIR, ROOT, TARGET_ARCH } from "../utils.ts";
+import { ARTIFACT_DIR, RELEASE_DIR, ROOT, TARGET_ARCH } from "../utils.ts";
 
 function walkFiles(dir: string): string[] {
   return glob.sync("**/*", {
@@ -215,7 +215,7 @@ export class ReleasePlugin extends BasePlugin {
 
       const mode = bs.context.mode!.mode;
       const version = readCargoTomlVersion();
-      const releaseDir = path.join(ROOT, "release");
+      const releaseDir = RELEASE_DIR;
 
       // kabegame-cli:裸 cargo 产物,按系统/平台改名复制到 release/。
       // 只有桌面构建才有原生 CLI(android/web 不产出)。
@@ -243,9 +243,16 @@ export class ReleasePlugin extends BasePlugin {
 
       if (comp !== Component.MAIN) return;
 
+      // web 模式的主组件是裸 cargo 产物(单个 headless 二进制,无 tauri bundle),
+      // --release 只用于给 cargo 补 --release 标志;产物由 docker compose 的
+      // /dist 挂载直接落到 RELEASE_DIR,无需本 hook 再搬运。
+      if (bs.context.mode?.isWeb) return;
+
       const bundleDir = findBundleDir(ROOT);
       if (!bundleDir) {
-        throw new Error("找不到构建产物目录：target/release/bundle");
+        throw new Error(
+          `找不到构建产物目录：${path.relative(ROOT, path.join(ARTIFACT_DIR, "release", "bundle"))}`,
+        );
       }
       const assets = pickBundleAssets(bundleDir, version);
       if (!assets.length) {

@@ -80,44 +80,45 @@ pub async fn get_image_native_metadata(image_id: String) -> Result<Value, String
     let row = storage
         .get_image_native_metadata_row(&image_id)?
         .ok_or_else(|| "native-metadata:image-not-found".to_string())?;
-    let format_key = row
-        .format_key
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    if !matches!(
-        format_key.as_str(),
-        "image/jpg" | "image/jpeg" | "image/png"
-    ) {
+    let format_key = row.format_key.as_deref().unwrap_or("");
+    if !crate::media::native_metadata::supports_native_metadata(format_key) {
         return Ok(Value::Null);
     }
+    let Some(expected_version) = crate::media::native_metadata::parser_version_for(format_key)
+    else {
+        return Ok(Value::Null);
+    };
 
-    if row.parser_version == Some(crate::media::native_metadata::PARSER_VERSION) {
+    if row.parser_version == Some(expected_version) {
         if let Some(data) = row.data.as_deref() {
-            return native_metadata_payload(data, row.parser_version.unwrap());
+            return native_metadata_payload(data, expected_version);
         }
     }
 
     if storage
-        .ensure_native_metadata_for_image(&image_id, &row.hash, None)?
+        .ensure_native_metadata_for_image(&image_id, &row.hash, expected_version, None)?
         .is_some()
     {
         if let Some(shared) = storage.get_image_native_metadata_row(&image_id)? {
-            if shared.parser_version == Some(crate::media::native_metadata::PARSER_VERSION) {
+            if shared.parser_version == Some(expected_version) {
                 if let Some(data) = shared.data.as_deref() {
-                    return native_metadata_payload(data, shared.parser_version.unwrap());
+                    return native_metadata_payload(data, expected_version);
                 }
             }
         }
     }
 
     let bytes = crate::media::native_metadata::read_image_bytes(&row.local_path).await?;
-    let parsed = crate::media::native_metadata::parse_native_metadata(&format_key, &bytes)
+    let parsed = crate::media::native_metadata::parse_native_metadata(format_key, &bytes)
         .ok_or_else(|| "native-metadata:unsupported-format".to_string())?;
     let json = serde_json::to_string(&parsed)
         .map_err(|e| format!("native-metadata:serialize-failed:{e}"))?;
-    storage.ensure_native_metadata_for_image(&image_id, &row.hash, Some(&json))?;
+    storage.ensure_native_metadata_for_image(
+        &image_id,
+        &row.hash,
+        expected_version,
+        Some(&json),
+    )?;
 
     let stored = storage
         .get_image_native_metadata_row(&image_id)?
@@ -126,7 +127,7 @@ pub async fn get_image_native_metadata(image_id: String) -> Result<Value, String
         .data
         .as_deref()
         .ok_or_else(|| "native-metadata:store-failed".to_string())?;
-    native_metadata_payload(data, stored.parser_version.unwrap_or_default())
+    native_metadata_payload(data, expected_version)
 }
 
 fn native_metadata_payload(data: &str, parser_version: u32) -> Result<Value, String> {
@@ -160,26 +161,26 @@ fn clear_current_wallpaper_if_removed(removed_ids: &[String]) {
     }
 }
 
-pub fn delete_image(image_id: String) -> Result<Value, String> {
-    delete_images_with_events(std::slice::from_ref(&image_id), true)?;
+pub async fn delete_image(image_id: String) -> Result<Value, String> {
+    delete_images_with_events(std::slice::from_ref(&image_id), true).await?;
     clear_current_wallpaper_if_removed(std::slice::from_ref(&image_id));
     Ok(Value::Null)
 }
 
-pub fn remove_image(image_id: String) -> Result<Value, String> {
-    delete_images_with_events(std::slice::from_ref(&image_id), false)?;
+pub async fn remove_image(image_id: String) -> Result<Value, String> {
+    delete_images_with_events(std::slice::from_ref(&image_id), false).await?;
     clear_current_wallpaper_if_removed(std::slice::from_ref(&image_id));
     Ok(Value::Null)
 }
 
-pub fn batch_delete_images(image_ids: Vec<String>) -> Result<Value, String> {
-    delete_images_with_events(&image_ids, true)?;
+pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<Value, String> {
+    delete_images_with_events(&image_ids, true).await?;
     clear_current_wallpaper_if_removed(&image_ids);
     Ok(Value::Null)
 }
 
-pub fn batch_remove_images(image_ids: Vec<String>) -> Result<Value, String> {
-    delete_images_with_events(&image_ids, false)?;
+pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<Value, String> {
+    delete_images_with_events(&image_ids, false).await?;
     clear_current_wallpaper_if_removed(&image_ids);
     Ok(Value::Null)
 }

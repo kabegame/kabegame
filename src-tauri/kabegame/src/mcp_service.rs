@@ -54,8 +54,8 @@ impl McpService {
             .map_err(|e| format!("无法启动 MCP 服务：端口 {port} 绑定失败：{e}"))?;
         let (shutdown, rx) = oneshot::channel();
         let join = tokio::spawn(async move {
-            let server = axum::serve(listener, mcp_server::mcp_nest())
-                .with_graceful_shutdown(async move {
+            let server =
+                axum::serve(listener, mcp_server::mcp_nest()).with_graceful_shutdown(async move {
                     let _ = rx.await;
                 });
             if let Err(e) = server.await {

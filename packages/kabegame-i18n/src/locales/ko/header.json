@@ -5,9 +5,14 @@
   "toolboxApp": "앱",
   "toolboxMaintenance": "유지 관리",
   "toolboxDisplay": "표시",
+  "busyTitle": "지금 처리 중",
+  "busyBackground": "백그라운드 {count}개",
+  "busyCancelAll": "모두 취소",
+  "busyView": "보기",
   "stopTask": "작업 중지",
   "deleteTask": "작업 삭제",
   "organize": "정리",
+  "organizeInProgress": "진행 중",
   "collect": "수집",
   "createAlbum": "새 앨범",
   "openVirtualDrive": "VD에서 보기",
@@ -23,8 +28,9 @@
   "failedImagesRetryAll": "모두 재시도",
   "failedImagesDeleteAll": "모두 삭제",
   "failedImagesFilter": "플러그인별 필터",
-  "showHidden": "숨김 이미지 표시",
-  "hideHidden": "숨김 이미지 숨기기",
-  "showAlbumImages": "앨범 이미지 표시",
-  "hideAlbumImages": "앨범 이미지 숨기기"
+  "hideHidden": "숨김 이미지 표시 안 함",
+  "hideAlbumImages": "앨범 이미지 표시 안 함",
+  "cleanHidden": "숨김 이미지 정리",
+  "cleanHiddenInProgress": "진행 중",
+  "cleanHiddenEmpty": "숨김 이미지가 없습니다"
 }

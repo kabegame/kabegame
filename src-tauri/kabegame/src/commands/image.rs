@@ -71,22 +71,22 @@ pub async fn get_gallery_time_filter_data() -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn delete_image(image_id: String) -> Result<Value, String> {
-    commands::image::delete_image(image_id)
+    commands::image::delete_image(image_id).await
 }
 
 #[tauri::command]
 pub async fn remove_image(image_id: String) -> Result<Value, String> {
-    commands::image::remove_image(image_id)
+    commands::image::remove_image(image_id).await
 }
 
 #[tauri::command]
 pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<Value, String> {
-    commands::image::batch_delete_images(image_ids)
+    commands::image::batch_delete_images(image_ids).await
 }
 
 #[tauri::command]
 pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<Value, String> {
-    commands::image::batch_remove_images(image_ids)
+    commands::image::batch_remove_images(image_ids).await
 }
 
 #[tauri::command]

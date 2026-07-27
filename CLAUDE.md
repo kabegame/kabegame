@@ -51,7 +51,11 @@ deno task b -c kabegame --target x86_64    # macOS only: cross-compile for Intel
                                        # See cocs/build/MACOS_CROSS_BUILD.md.
 deno task b -c kabegame --mode android     # Build Android APK/AAB (mode-plugin injects --target aarch64 unless
                                        # --target/-t is passed; gen/android RustPlugin.kt only has arm64 flavors)
-```
+bash scripts/build-web.sh              # Web release (demo.kabegame.com): host builds ALL JS (vite dist-kabegame
+                                       # + plugin .kgpg), docker (linux/amd64) builds Rust only via --skip vue.
+                                       # NEVER run JS builds inside the x86_64-emulated container: Rosetta-for-Linux
+                                       # truncates every V8 double to its integer part (0.96→0) with zero errors,
+                                       # silently corrupting sass/rollup output. See the script header & compose file.
 
 `deno task b` on the cargo-only `kabegame-cli` component builds **debug** by default; pass `--release` for a release build. The main app's desktop/android build always goes through `tauri build`, which is release regardless of `--release`.
 

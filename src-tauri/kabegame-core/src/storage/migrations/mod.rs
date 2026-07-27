@@ -38,6 +38,8 @@ mod v021_image_metadata_plugin_version;
 mod v022_image_wallpaper_compatible_path;
 mod v023_media_type_format_keys;
 mod v024_metadata_rename_and_image_metadata;
+mod v025_drop_surf_record_deleted_count;
+mod v026_drop_surf_record_download_count;
 
 use rusqlite::Connection;
 
@@ -138,13 +140,23 @@ const MIGRATIONS: &[Migration] = &[
         name: "metadata_rename_and_image_metadata",
         up: v024_metadata_rename_and_image_metadata::up,
     },
+    Migration {
+        version: 25,
+        name: "drop_surf_record_deleted_count",
+        up: v025_drop_surf_record_deleted_count::up,
+    },
+    Migration {
+        version: 26,
+        name: "drop_surf_record_download_count",
+        up: v026_drop_surf_record_download_count::up,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 24;
+pub const LATEST_VERSION: u32 = 26;
 
 fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

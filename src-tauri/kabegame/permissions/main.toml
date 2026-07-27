@@ -16,6 +16,7 @@ commands.allow = [
   "add_local_folder_album",
   "sync_local_folder_album",
   "sync_local_folder_albums",
+  "get_folder_sync_run_state",
   "get_image_by_id",
   "get_image_metadata",
   "get_image_metadata_full",
@@ -132,7 +133,6 @@ commands.allow = [
   "set_default_download_dir",
   "get_default_images_dir",
   "get_desktop_resolution",
-  "clear_user_data",
   "set_wallpaper_mode",
   "set_wallpaper_by_image_id",
   "get_current_wallpaper_image_id",
@@ -197,6 +197,9 @@ commands.allow = [
   "get_organize_total_count",
   "get_organize_run_state",
   "cancel_organize",
+  "start_hidden_cleanup",
+  "get_hidden_cleanup_run_state",
+  "cancel_hidden_cleanup",
   "share_file",
 ]
 

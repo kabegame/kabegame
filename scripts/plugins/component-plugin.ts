@@ -298,7 +298,11 @@ export class ComponentPlugin extends BasePlugin {
       bs.hooks.prepareEnv.tap(this.name, (comp?: string) => {
         this.setEnv("KABEGAME_COMPONENT", this.component?.comp || comp || "");
         const component = comp ? new Component(comp) : this.component!;
-        if (component.isMain) {
+        // 清空是"重新打包/收集前的准备"，必须与打包步骤同进退：
+        // KABEGAME_SKIP_PLUGIN_PACKAGE=1 时 ModePlugin.packagePlugins 不再产出，
+        // 此处若照常清空，净效果就是把上游(宿主)已打包好的 .kgpg 全删掉。
+        // 见 scripts/build-web.sh 的宿主/容器拆分。
+        if (component.isMain && process.env.KABEGAME_SKIP_PLUGIN_PACKAGE !== "1") {
           // 先清空 resources 下所有插件和二进制文件
           const resourcesDir = path.join(RESOURCES_DIR);
           const pluginDir = path.join(resourcesDir, "plugins");

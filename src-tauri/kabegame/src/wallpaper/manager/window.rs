@@ -22,7 +22,10 @@ pub struct WindowWallpaperManager<R: Runtime> {
 }
 
 impl<R: Runtime> WindowWallpaperManager<R> {
-    pub fn new(app: AppHandle<R>, wallpaper_window: Arc<Mutex<Option<WallpaperWindow<R>>>>) -> Self {
+    pub fn new(
+        app: AppHandle<R>,
+        wallpaper_window: Arc<Mutex<Option<WallpaperWindow<R>>>>,
+    ) -> Self {
         Self {
             app,
             wallpaper_window,

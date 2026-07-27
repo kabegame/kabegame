@@ -7,12 +7,12 @@ use tauri::{
 use crate::models::{
     ComputeHashArgs, ComputeHashResponse, CopyExtractedImagesToPicturesArgs,
     CopyExtractedImagesToPicturesResponse, CopyImageToPicturesArgs, CopyImageToPicturesResponse,
-    GetContentSizeArgs, GetContentSizeResponse, GetDisplayNameArgs, GetDisplayNameResponse,
-    GetHttpServerBaseResponse, GetImageDimensionsArgs, GetImageDimensionsResponse,
-    GetImageThumbnailArgs, GetMimeTypeArgs, GetMimeTypeResponse, GetVideoDimensionsArgs,
-    GetVideoDimensionsResponse, IsDirectoryArgs, IsDirectoryResponse, ListContentChildrenArgs,
-    ListContentChildrenResponse, OpenFdArgs, OpenFdResponse, ReadFileBytesArgs,
-    ReadFileBytesResponse, TakePersistablePermissionArgs,
+    DeleteMediaUrisArgs, DeleteMediaUrisResponse, GetContentSizeArgs, GetContentSizeResponse,
+    GetDisplayNameArgs, GetDisplayNameResponse, GetHttpServerBaseResponse, GetImageDimensionsArgs,
+    GetImageDimensionsResponse, GetImageThumbnailArgs, GetMimeTypeArgs, GetMimeTypeResponse,
+    GetVideoDimensionsArgs, GetVideoDimensionsResponse, IsDirectoryArgs, IsDirectoryResponse,
+    ListContentChildrenArgs, ListContentChildrenResponse, OpenFdArgs, OpenFdResponse,
+    ReadFileBytesArgs, ReadFileBytesResponse, TakePersistablePermissionArgs,
 };
 
 // initializes the Kotlin or Swift plugin classes
@@ -155,6 +155,18 @@ impl<R: Runtime> Picker<R> {
                     display_name,
                 },
             )
+            .await
+            .map_err(crate::Error::from)?;
+        Ok(result)
+    }
+
+    pub async fn delete_media_uris(
+        &self,
+        uris: Vec<String>,
+    ) -> crate::Result<DeleteMediaUrisResponse> {
+        let result: DeleteMediaUrisResponse = self
+            .0
+            .run_mobile_plugin_async("deleteMediaUris", DeleteMediaUrisArgs { uris })
             .await
             .map_err(crate::Error::from)?;
         Ok(result)

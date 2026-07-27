@@ -80,7 +80,7 @@ Android 的省电策略会冻结后台应用，导致下载停滞或轮播失效
 | Wallpaper Engine 导出 | Wallpaper Engine 无 Android 版，菜单项仅 Windows 可见。 |
 | 拖拽导入（文件/文件夹/zip） | 只能通过「开始收集 → 本地」的系统选择器导入。 |
 | 打开所在文件夹 | Android 没有文件管理器定位的通用机制，菜单项隐藏。 |
-| WebView 相关设置 | WebView 入口、自动打开、清理数据、开发者 WebView 等选项全部隐藏。 |
+| WebView 相关设置 | WebView 入口、自动打开、开发者 WebView 等选项全部隐藏。 |
 | 快捷键帮助页 | 无物理键盘前提下被隐藏。 |
 | 画廊列数 / 对齐方式 / 图片宽高比 / 默认下载目录 | Android 使用固定布局或不同的选择组件，桌面的对应设置项不展示。 |
 

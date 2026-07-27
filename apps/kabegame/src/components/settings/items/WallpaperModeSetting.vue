@@ -1,10 +1,7 @@
 <template>
-    <el-radio-group v-model="localValue" :disabled="switching" class="flex flex-col items-start gap-3"
-        @change="handleChange">
-        <el-radio v-for="mode in modeOptions" :key="mode.value" :value="mode.value">
-            {{ mode.label }}
-        </el-radio>
-    </el-radio-group>
+    <!-- 与「轮播模式」等设置一致，用方框分段切换而不是 radio -->
+    <SegmentedControl :model-value="localValue" :options="modeOptions" :disabled="switching"
+        @update:model-value="handleChange" />
 </template>
 
 <script setup lang="ts">
@@ -15,6 +12,7 @@ import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useWallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
+import SegmentedControl from "@kabegame/core/components/settings/controls/SegmentedControl.vue";
 
 const { t, locale } = useI18n();
 const capabilities = useWallpaperCapabilities();
@@ -54,8 +52,7 @@ const handleChange = async (mode: string) => {
                 }
             );
         } catch {
-            // 用户取消，恢复原值
-            localValue.value = (settingValue.value as any as string) || "native";
+            // 用户取消。SegmentedControl 不做乐观更新，选中项还停在原值，无需回滚
             return;
         }
     }
@@ -71,12 +68,13 @@ const handleChange = async (mode: string) => {
                 }
             );
         } catch {
-            localValue.value = (settingValue.value as any as string) || "native";
             return;
         }
     }
 
     const prevMode = (settingValue.value as any as string) || "native";
+    // 切换期间控件被 switching 禁用，这里乐观更新只为让选中框立刻跟手，失败再回滚
+    localValue.value = mode;
     uiStore.wallpaperModeSwitching = true as any;
 
     try {

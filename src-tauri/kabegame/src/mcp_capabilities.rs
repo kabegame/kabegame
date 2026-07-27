@@ -141,16 +141,12 @@ mcp_capabilities! {
 pub fn read_capability_id(scheme: &str, segments: &[&str]) -> Option<&'static str> {
     match scheme {
         "images" => read_images_capability_id(segments),
-        "albums" => read_collection_capability_id(
-            segments,
-            ids::ALBUMS_READ_LIST,
-            ids::ALBUMS_READ_BY_ID,
-        ),
-        "tasks" => read_collection_capability_id(
-            segments,
-            ids::TASKS_READ_LIST,
-            ids::TASKS_READ_BY_ID,
-        ),
+        "albums" => {
+            read_collection_capability_id(segments, ids::ALBUMS_READ_LIST, ids::ALBUMS_READ_BY_ID)
+        }
+        "tasks" => {
+            read_collection_capability_id(segments, ids::TASKS_READ_LIST, ids::TASKS_READ_BY_ID)
+        }
         "surf_records" => read_collection_capability_id(
             segments,
             ids::SURF_RECORDS_READ_LIST,

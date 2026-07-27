@@ -2,6 +2,7 @@
 
 pub mod create;
 pub mod import;
+pub mod run_state;
 pub mod scan;
 pub mod scan_service;
 pub mod status;
@@ -12,6 +13,7 @@ pub mod watch;
 mod tests;
 
 pub use create::{build_entries_non_recursive, NewLocalFolderEntry};
+pub use run_state::{FolderSyncRunGuard, FolderSyncService, FolderSyncTaskState};
 pub use scan_service::{
     scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanIssue, ScanOptions, ScannedDir,
     ScannedFile,

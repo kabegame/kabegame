@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-getExternalDataDir"
+description = "Enables the getExternalDataDir command without any pre-configured scope."
+commands.allow = ["getExternalDataDir"]
+
+[[permission]]
+identifier = "deny-getExternalDataDir"
+description = "Denies the getExternalDataDir command without any pre-configured scope."
+commands.deny = ["getExternalDataDir"]

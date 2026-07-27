@@ -25,6 +25,17 @@
   const _tauri = window.__TAURI_INTERNALS__;
   if (!_tauri) return;
   const invoke = (cmd, args = {}, options) => _tauri.invoke(cmd, args, options);
+  // 二进制 body 专用:CEF 上普通 invoke 走 postMessage(JSON)通道,Uint8Array
+  // 会退化成数字数组;__kb_raw_invoke__ 是 CEF runtime 注入的 cef-ipc:///raw
+  // 帧化通道(见 tauri-runtime-cef/src/ipc.rs)。非 CEF 平台回退标准 invoke。
+  const _kbRaw = window.__kb_raw_invoke__;
+  const rawInvoke = (cmd, bytes, options) =>
+    _kbRaw ? _kbRaw(cmd, bytes, options) : _tauri.invoke(cmd, bytes, options);
+  // 心跳:立即 + 每 60s 上报一次;Rust 调度器 120s 未收到判 WebView 无响应结束任务。
+  // 页面导航会重跑本脚本,新页面重新起 interval;渲染进程卡死/崩溃则上报停止。
+  const heartbeat = () => invoke("crawl_heartbeat").catch(() => {});
+  heartbeat();
+  setInterval(heartbeat, 60_000);
   window.__kb_media_submit__ = (vfsPath, sourceUrl, opts) => {
     const o = typeof opts === "object" && opts !== null ? opts : {};
     return invoke("crawl_download_image", {
@@ -107,7 +118,7 @@
 
     write(data) {
       const bytes = toFsBytes(data, "FileHandle.write");
-      return invoke("crawl_fs_fwrite", bytes, {
+      return rawInvoke("crawl_fs_fwrite", bytes, {
         headers: { rid: String(this.#resourceId()) },
       });
     }
@@ -189,7 +200,7 @@
       async writeFile(path, data, options) {
         const bytes = toFsBytes(data, "writeFile");
         const o = typeof options === "object" && options !== null ? options : {};
-        return invoke("crawl_fs_write_file", bytes, {
+        return rawInvoke("crawl_fs_write_file", bytes, {
           headers: {
             path: encodeURIComponent(String(path ?? "")),
             options: JSON.stringify({
@@ -203,7 +214,7 @@
       },
       writeTextFile(path, data, options) {
         const o = typeof options === "object" && options !== null ? options : {};
-        return invoke("crawl_fs_write_text_file", new TextEncoder().encode(String(data ?? "")), {
+        return rawInvoke("crawl_fs_write_text_file", new TextEncoder().encode(String(data ?? "")), {
           headers: {
             path: encodeURIComponent(String(path ?? "")),
             options: JSON.stringify({

@@ -71,8 +71,12 @@ pub(crate) mod zorder {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
 
-            let folder_view =
-                FindWindowExW(def_view, 0, wide("SysListView32").as_ptr(), std::ptr::null());
+            let folder_view = FindWindowExW(
+                def_view,
+                0,
+                wide("SysListView32").as_ptr(),
+                std::ptr::null(),
+            );
             if folder_view != 0 {
                 ShowWindow(folder_view, SW_SHOW);
                 SetWindowPos(

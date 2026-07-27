@@ -28,6 +28,11 @@ pub const MAX_TASK_WORKER_LOOPS: usize = 10;
 #[cfg(not(target_os = "android"))]
 const INITIAL_PAGE_LABEL: &str = "initial";
 
+/// WebView 会话心跳超时：bootstrap.js 每 60s 上报一次（crawl_heartbeat），
+/// 超过该时长未收到即判定窗口无响应，结束任务。
+#[cfg(not(target_os = "android"))]
+const WEBVIEW_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(120);
+
 #[cfg(not(target_os = "android"))]
 use crate::crawler::webview::get_webview_handler;
 
@@ -752,7 +757,8 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRes
                 page_state: serde_json::Value::Object(serde_json::Map::new()),
             });
         }
-        let completion_rx = run.begin_webview_session().map_err(TaskError::Other)?;
+        let (mut completion_rx, mut heartbeat_rx) =
+            run.begin_webview_session().map_err(TaskError::Other)?;
         let Some(handler) = get_webview_handler() else {
             return Err(TaskError::Other(
                 "Crawler webview handler is not initialized".to_string(),
@@ -770,9 +776,31 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRes
             return Err(TaskError::Other(e));
         }
 
-        let completion = completion_rx
-            .await
-            .map_err(|_| TaskError::Other("Crawler task completion channel closed".to_string()));
+        // 心跳看门狗:每轮 select 重建 sleep,收到心跳即重置超时;
+        // 超时(渲染进程卡死/崩溃后心跳停止)则以「窗口无响应」结束任务,
+        // 不刷新窗口(刷新会导致任务状态不稳定),走既有失败收尾路径。
+        let completion = loop {
+            tokio::select! {
+                r = &mut completion_rx => {
+                    break r.map_err(|_| {
+                        TaskError::Other("Crawler task completion channel closed".to_string())
+                    });
+                }
+                // 通道关闭时模式不匹配 → 本轮内禁用该分支,继续等 completion/超时。
+                Some(()) = heartbeat_rx.recv() => {}
+                _ = tokio::time::sleep(WEBVIEW_HEARTBEAT_TIMEOUT) => {
+                    GlobalEmitter::global().emit_task_log(
+                        &run.task_id,
+                        "error",
+                        &format!(
+                            "超过 {} 秒未收到 WebView 心跳，判定窗口无响应，结束任务",
+                            WEBVIEW_HEARTBEAT_TIMEOUT.as_secs()
+                        ),
+                    );
+                    break Err(TaskError::Other("WebView 窗口无响应".to_string()));
+                }
+            }
+        };
         let mut result = match completion {
             Ok(result) => result,
             Err(error) => Err(error),

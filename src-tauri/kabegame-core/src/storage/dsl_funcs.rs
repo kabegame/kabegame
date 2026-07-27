@@ -18,7 +18,7 @@ use rusqlite::Connection;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use crate::plugin::{PluginManager, manifest_value_display_for_locale};
+use crate::plugin::{manifest_value_display_for_locale, PluginManager};
 
 static GET_PLUGIN_PROFILE_CALLS: AtomicU64 = AtomicU64::new(0);
 static GET_PLUGIN_PROFILE_MICROS: AtomicU64 = AtomicU64::new(0);

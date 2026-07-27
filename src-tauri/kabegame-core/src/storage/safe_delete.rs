@@ -12,6 +12,7 @@
 
 #![cfg(not(any(target_os = "android", target_os = "ios")))]
 
+use crate::storage::source_purge::PurgeReport;
 use std::path::Path;
 
 /// 自身或任一祖先目录是否为软链接。命中即视为"非正常本机路径"。
@@ -156,11 +157,17 @@ pub fn trash_source_file(path: &Path) -> bool {
     }
 }
 
-/// 把多个原始文件一次性移入系统回收站（`trash::delete_all`）。
+/// 把多个原始文件分批移入系统回收站（`trash::delete_all`）。
 ///
-/// 过滤掉不安全路径后，对剩余路径调用一次 `delete_all`，减少回收站交互次数。
+/// 必须分块：macOS Finder 后端会把整批路径拼进一条 AppleScript，过大会触发
+/// `ARG_MAX` 或 120 秒超时；Windows/Linux 虽无该硬上限，但任一路径失败也会让
+/// 整批返回 `Err`；而 `trash::delete_all` 的整体 canonicalize 还会被单条竞态消失
+/// 拖垮。每块失败后逐条降级，让坏路径只影响自己并在日志中定位。
 /// 无论成功与否，调用方都应照常删除数据库记录。
-pub fn trash_source_files_batch(paths: &[&Path]) {
+pub fn trash_source_files_batch(paths: &[&Path]) -> PurgeReport {
+    const TRASH_CHUNK: usize = 256;
+
+    let mut report = PurgeReport::default();
     let safe: Vec<&Path> = paths
         .iter()
         .copied()
@@ -171,16 +178,32 @@ pub fn trash_source_files_batch(paths: &[&Path]) {
                     p.display(),
                     reason
                 );
+                report.kept += 1;
                 false
             } else {
                 true
             }
         })
         .collect();
-    if safe.is_empty() {
-        return;
+
+    for chunk in safe.chunks(TRASH_CHUNK) {
+        match trash::delete_all(chunk) {
+            Ok(()) => report.purged += chunk.len(),
+            Err(error) => {
+                eprintln!(
+                    "[safe_delete] 分块批量移入回收站失败，降级逐条处理（{} 条）: {error}",
+                    chunk.len()
+                );
+                for path in chunk {
+                    if trash_source_file(path) {
+                        report.purged += 1;
+                    } else {
+                        report.kept += 1;
+                    }
+                }
+            }
+        }
     }
-    if let Err(e) = trash::delete_all(&safe) {
-        eprintln!("[safe_delete] 批量移入回收站失败，保留磁盘文件: {}", e);
-    }
+
+    report
 }

@@ -1,23 +1,22 @@
 <template>
-  <div class="download-interval-setting">
-    <AndroidPickerDuration
-      v-if="uiStore.isCompact"
-      :model-value="localValue"
-      :title="$t('settings.downloadIntervalTitle')"
-      :disabled="disabled"
-      @update:model-value="onChange"
-    />
-    <el-input-number
-      v-else
-      v-model="localValue"
-      :min="100"
-      :max="10000"
-      :step="100"
-      :disabled="disabled"
-      :loading="showDisabled"
-      @change="onChange"
-    />
-  </div>
+  <!-- 不套外层容器：SettingRow 的控件格靠 justify-end 右对齐，多一层 width:100% 的包裹会把控件顶到左边 -->
+  <AndroidPickerDuration
+    v-if="uiStore.isCompact"
+    :model-value="localValue"
+    :title="$t('settings.downloadIntervalTitle')"
+    :disabled="disabled"
+    @update:model-value="onChange"
+  />
+  <el-input-number
+    v-else
+    v-model="localValue"
+    :min="100"
+    :max="10000"
+    :step="100"
+    :disabled="disabled"
+    :loading="showDisabled"
+    @change="onChange"
+  />
 </template>
 
 <script setup lang="ts">
@@ -49,9 +48,3 @@ const onChange = async (v: number | undefined) => {
   await set(clamped);
 };
 </script>
-
-<style scoped lang="scss">
-.download-interval-setting {
-  width: 100%;
-}
-</style>

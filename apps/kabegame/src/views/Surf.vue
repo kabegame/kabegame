@@ -25,12 +25,20 @@
           />
         </div>
         <!-- 输入区 -->
-        <div class="surf-search-row">
-          <el-input
+        <div class="surf-search-row" :class="{ 'is-open': suggestOpen }">
+          <el-autocomplete
+            ref="autocompleteRef"
             v-model="inputUrl"
+            :fetch-suggestions="fetchSuggestions"
             :placeholder="$t('surf.placeholderUrl')"
+            :trigger-on-focus="true"
+            :highlight-first-item="true"
+            fit-input-width
+            popper-class="surf-suggest-popper"
             size="large"
-            @keyup.enter="handleStart"
+            clearable
+            @select="onSuggestionSelect"
+            @keydown.enter="onEnterKey"
           >
             <template #prepend>
               <PluginPickerField
@@ -43,10 +51,33 @@
                 @update:model-value="onPluginQuickSelect"
               />
             </template>
-          </el-input>
-          <el-button type="primary" size="large" @click="handleStart">
-            {{ $t('surf.startSurf') }}
-          </el-button>
+
+            <template #append>
+              <el-button
+                class="surf-go-btn"
+                type="primary"
+                circle
+                :disabled="!inputUrl.trim()"
+                :title="$t('surf.startSurf')"
+                @click="handleStart"
+              >
+                <el-icon><Right /></el-icon>
+              </el-button>
+            </template>
+
+            <template #default="{ item }">
+              <div class="surf-suggest-item">
+                <span class="surf-suggest-icon">
+                  <img v-if="item.icon" :src="item.icon" alt="" />
+                  <span v-else-if="item.kind === 'plugin'" class="letter">{{ item.letter }}</span>
+                  <el-icon v-else-if="item.kind === 'history'"><Clock /></el-icon>
+                  <el-icon v-else><Link /></el-icon>
+                </span>
+                <span class="surf-suggest-label">{{ item.pre }}<b>{{ item.hit }}</b>{{ item.post }}</span>
+                <span class="surf-suggest-meta">{{ item.meta }}</span>
+              </div>
+            </template>
+          </el-autocomplete>
         </div>
 
         <!-- 畅游记录列表 -->
@@ -67,12 +98,13 @@
                   <div class="root-url">{{ record.rootUrl }}</div>
                 </div>
                 <div class="surf-card-tags">
-                  <el-tag size="small" type="info">{{ $t('surf.imageCount') }} {{ record.imageCount }}</el-tag>
-                  <el-tag size="small" type="warning">{{ $t('surf.deletedCount') }} {{ record.deletedCount }}</el-tag>
+                  <el-tag size="small" type="info">{{ $t('surf.imageCount') }} {{ surfCounts.countOf(record.host) }}</el-tag>
                 </div>
               </div>
               <div class="card-foot">
-                <span>{{ $t('surf.lastVisit') }}{{ formatTime(record.lastVisitAt) }}</span>
+                <span :title="formatAbsolute(record.lastVisitAt)">
+                  {{ $t('surf.lastVisit') }}{{ formatRelative(record.lastVisitAt) }}
+                </span>
                   <div class="card-actions">
                     <el-button
                       size="small"
@@ -139,12 +171,8 @@
           </div>
         </div>
         <div class="detail-item detail-stats">
-          <span class="detail-label">{{ $t("surf.imageCount") }}</span>
-          <span class="detail-stat-value">{{ detailRecord.imageCount }}</span>
-        </div>
-        <div class="detail-item detail-stats">
-          <span class="detail-label">{{ $t("surf.deletedCount") }}</span>
-          <span class="detail-stat-value">{{ detailRecord.deletedCount }}</span>
+          <span class="detail-label">{{ $t("surf.lastVisitLabel") }}</span>
+          <span class="detail-stat-value">{{ formatAbsolute(detailRecord.lastVisitAt) }}</span>
         </div>
         <div class="detail-item">
           <span class="detail-label">{{ $t("surf.cookieLabel") }}</span>
@@ -199,17 +227,19 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, computed } from "vue";
+import { onMounted, ref, computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { ElDialog } from "element-plus";
-import { QuestionFilled } from "@element-plus/icons-vue";
+import { QuestionFilled, Right, Clock, Link } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_LINUX } from "@kabegame/core/env";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
+import { useSurfImageCountsStore } from "@/stores/surfImageCounts";
+import { useGlobalPathRoute } from "@/stores/pathRoute";
 import { usePluginStore } from "@/stores/plugins";
 import { useI18n } from "@kabegame/i18n";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
@@ -217,10 +247,20 @@ import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
 import { createSurfRecordActions } from "@/actions/surfRecordActions";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import PluginPickerField from "@/components/PluginPickerField.vue";
+import {
+  useImagesChangeRefresh,
+  type ImagesChangePayload,
+} from "@/composables/useImagesChangeRefresh";
+import {
+  formatAbsoluteTime,
+  formatRelativeTime,
+} from "@kabegame/core/utils/relativeTime";
 
 const { t } = useI18n();
 const router = useRouter();
 const surfStore = useSurfStore();
+const surfCounts = useSurfImageCountsStore();
+const globalRoute = useGlobalPathRoute();
 const pluginStore = usePluginStore();
 const settingsStore = useSettingsStore();
 const appBackgroundCardClass = computed(() =>
@@ -239,6 +279,40 @@ const detailCopyDone = ref(false);
 
 const inputUrl = ref("");
 const pluginQuickSelect = ref("");
+
+/** el-autocomplete 实例；用它暴露的 activated/suggestions/highlightedIndex 判断面板真实状态 */
+const autocompleteRef = ref<any>(null);
+/** 面板真的展开（有内容）时才让胶囊下缘变直角，否则会出现「方角接空气」 */
+const suggestOpen = computed(() => {
+  const ac = autocompleteRef.value;
+  return !!ac?.activated && (ac?.suggestions?.length ?? 0) > 0;
+});
+
+type SurfSuggestion = {
+  kind: "plugin" | "history" | "url";
+  /** 选中后填入输入框的值（el-autocomplete 默认 value-key = "value"） */
+  value: string;
+  pre: string;
+  hit: string;
+  post: string;
+  meta: string;
+  icon?: string;
+  letter?: string;
+  host?: string;
+};
+
+/** 把 text 按 q 切成 前 / 命中 / 后 三段，供模板加粗（不用 v-html，避免 XSS） */
+function highlight(text: string, q: string) {
+  if (!q) return { pre: text, hit: "", post: "" };
+  const i = text.toLowerCase().indexOf(q.toLowerCase());
+  if (i < 0) return { pre: text, hit: "", post: "" };
+  return {
+    pre: text.slice(0, i),
+    hit: text.slice(i, i + q.length),
+    post: text.slice(i + q.length),
+  };
+}
+
 function handleSurfHeaderAction(_payload: { id: string; data: { type: string } }) {
   // HeaderFeatureId.Help 已下线，帮助按钮改为页面本地入口（见上方 #extra 插槽）；
   // 当前 show 区只剩 TaskDrawer，其自身处理点击，不经过这里。
@@ -291,11 +365,9 @@ const iconDataUrl = (bytes?: number[] | null) => {
   return `data:image/png;base64,${toBase64(bytes)}`;
 };
 
-const formatTime = (ts: number) => {
-  if (!ts) return "-";
-  const date = new Date(ts * 1000);
-  return date.toLocaleString();
-};
+/** 列表/建议里只给「多久以前」，精确到秒的时间在详情弹窗看 */
+const formatRelative = (ts: number) => (ts ? formatRelativeTime(ts * 1000) : "-");
+const formatAbsolute = (ts: number) => (ts ? formatAbsoluteTime(ts * 1000) : "-");
 
 function fallbackRootUrl(host: string) {
   return `https://${host}/`;
@@ -350,6 +422,92 @@ const handleStart = async () => {
   } catch (e: any) {
     ElMessage.error(e?.message || String(e) || t("surf.sessionStartFailed"));
   }
+};
+
+/**
+ * 建议列表：只消费已有数据源（pluginsWithHttpRoot、surfStore.records），不新增接口。
+ * 空输入 → 只出历史；有输入 → 插件 / 历史 / 直接打开三类混排。
+ */
+const fetchSuggestions = (
+  queryString: string,
+  cb: (data: SurfSuggestion[]) => void
+) => {
+  const q = (queryString || "").trim();
+  const lower = q.toLowerCase();
+  const out: SurfSuggestion[] = [];
+
+  // ① 已安装插件 —— 只在有输入时出现，空态不铺插件全表（全表走左端下拉）
+  if (lower) {
+    for (const p of pluginsWithHttpRoot.value) {
+      const base = p.baseUrl;
+      // name 可能是 { name?, ja?, ... } 多语言对象，统一走 store 解析成展示字符串
+      const text = pluginStore.pluginLabel(p.id) || base;
+      if (!text.toLowerCase().includes(lower) && !base.toLowerCase().includes(lower)) continue;
+      out.push({
+        kind: "plugin",
+        value: base,
+        ...highlight(text, q),
+        meta: t("surf.suggestPlugin"),
+        icon: pluginStore.pluginIconSrc(p.id),
+        letter: text[0]?.toUpperCase(),
+      });
+    }
+  }
+
+  // ② 历史畅游记录 —— 空输入时这里就是「最近畅游」列表
+  for (const r of surfStore.records) {
+    const text = r.name || r.host;
+    if (lower && !text.toLowerCase().includes(lower) && !r.rootUrl.toLowerCase().includes(lower)) continue;
+    out.push({
+      kind: "history",
+      value: r.rootUrl,
+      host: r.host,
+      ...highlight(text, q),
+      meta: `${formatRelative(r.lastVisitAt)} · ${t("surf.imageCount")} ${surfCounts.countOf(r.host)}`,
+      icon: iconDataUrl(r.icon) || undefined,
+    });
+  }
+
+  // ③ 直接打开 —— 复用已有的 normalizeAndValidateUrl，跟上面不重复才加
+  if (lower && !out.some((s) => s.value.toLowerCase() === lower)) {
+    const direct = normalizeAndValidateUrl(q);
+    if ("url" in direct) {
+      out.push({
+        kind: "url",
+        value: direct.url,
+        ...highlight(direct.url, q),
+        meta: t("surf.suggestOpen"),
+      });
+    }
+  }
+
+  cb(out.slice(0, 8));
+};
+
+/** EP 在 keydown 阶段就处理了 Enter 选中；标记一下，避免我们的 Enter 处理重复起会话 */
+let selectGuard = false;
+
+const onSuggestionSelect = async (item: Record<string, any>) => {
+  const s = item as SurfSuggestion;
+  selectGuard = true;
+  setTimeout(() => (selectGuard = false), 0);
+  inputUrl.value = s.value;
+  // 历史记录走 handleRecordClick（它带上记录自己的 rootUrl 语义）
+  if (s.kind === "history" && s.host) {
+    const record = surfStore.records.find((r) => r.host === s.host);
+    if (record) return handleRecordClick(record);
+  }
+  await handleStart();
+};
+
+/**
+ * Enter：若面板里已有高亮项，交给 el-autocomplete 走 select（-> onSuggestionSelect），
+ * 我们不再重复起一次会话；否则按输入框里的原文开始畅游。
+ */
+const onEnterKey = () => {
+  const highlighted = autocompleteRef.value?.highlightedIndex;
+  if (selectGuard || (typeof highlighted === "number" && highlighted >= 0)) return;
+  void handleStart();
 };
 
 async function openDetailDialog(record: SurfRecord) {
@@ -489,6 +647,38 @@ const handleRecordMenuCommand = async (command: "viewImages" | "details" | "dele
   }
 };
 
+const allSurfHosts = () => surfStore.records.map((record) => record.host);
+
+useImagesChangeRefresh({
+  enabled: ref(true),
+  onRefresh: async (payload: ImagesChangePayload) => {
+    const recordIds = (payload.surfRecordIds ?? [])
+      .map((id) => String(id).trim())
+      .filter(Boolean);
+    if (recordIds.length === 0) {
+      await surfCounts.refreshAll(allSurfHosts());
+      return;
+    }
+    const hosts = recordIds
+      .map((id) => surfStore.hostById(id))
+      .filter((host): host is string => !!host);
+    await surfCounts.refreshSome(hosts);
+  },
+});
+
+watch(
+  () => globalRoute.hide,
+  () => void surfCounts.refreshAll(allSurfHosts()),
+);
+
+// 记录集合变化（含 init 首次灌入、后续增删）即重算。immediate 覆盖「store 已被别处
+// 初始化过、length 不再变化」的情况；此时 init() 不触发第二次，不会打两轮全量 count。
+watch(
+  () => surfStore.orderedIds.length,
+  () => void surfCounts.refreshAll(allSurfHosts()),
+  { immediate: true },
+);
+
 onMounted(async () => {
   await surfStore.init();
 });
@@ -578,33 +768,185 @@ onMounted(async () => {
 
 .surf-search-row {
   display: flex;
-  gap: 10px;
   align-items: center;
   width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
   flex-shrink: 0;
 
   .surf-content.has-records & {
     margin-bottom: 16px;
   }
 
-  > .el-input {
+  > .el-autocomplete {
     flex: 1;
     min-width: 0;
   }
 
-  .surf-plugin-select {
-    width: 160px;
+  /* ── 一颗胶囊：外壳只画在最外层 .el-input 上 ── */
+  :deep(.el-input) {
+    height: 56px;
+    border-radius: 28px;
+    background: var(--el-fill-color-blank, #fff);
+    border: 1px solid rgba(74, 21, 75, 0.08);
+    box-shadow: 0 1px 4px rgba(74, 21, 75, 0.06);
+    overflow: hidden;
+    transition: box-shadow 0.18s ease, border-color 0.18s ease,
+      border-radius 0.18s ease;
+
+    &:hover {
+      box-shadow: 0 3px 12px rgba(74, 21, 75, 0.1);
+    }
+
+    /* 聚焦：边框让位给阴影，粉色不上边框 */
+    &:focus-within {
+      border-color: transparent;
+      box-shadow: 0 6px 22px rgba(74, 21, 75, 0.14);
+    }
   }
 
-  /* PluginPickerField 在 select 外多包了一层 div，EP 为“裸 select 直放 prepend”
+  /* 内层三段一律抹平：EP 默认给 wrapper / prepend / append 各自一圈 box-shadow 边框 */
+  :deep(.el-input__wrapper) {
+    box-shadow: none !important;
+    background: transparent;
+    padding: 0 4px;
+  }
+
+  :deep(.el-input-group__prepend),
+  :deep(.el-input-group__append) {
+    background: transparent;
+    border: none;
+    box-shadow: none !important;
+    color: inherit;
+  }
+
+  /* 左端：插件选择器 + 一根 1px 竖分隔线（唯一的内部分界）
+     PluginPickerField 在 select 外多包了一层 div，EP 为“裸 select 直放 prepend”
      准备的 padding(0 20px) + 负 margin(-20px) 抵消不再成立，统一归零 */
   :deep(.el-input-group__prepend) {
-    padding: 0 0 0 8px;
+    position: relative;
+    padding: 0 0 0 16px;
 
     .el-select {
       margin: 0;
       width: 100%;
     }
+
+    /* EP 还会给 prepend 内的 select wrapper 单独描一圈 inset 边框，一并抹掉 */
+    .el-select__wrapper {
+      box-shadow: none !important;
+      background: transparent;
+    }
+
+    &::after {
+      content: "";
+      position: absolute;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 1px;
+      height: 24px;
+      background: rgba(74, 21, 75, 0.1);
+    }
+  }
+
+  .surf-plugin-select {
+    width: 150px;
+  }
+
+  /* 右端：圆形主按钮，渐变只出现在这一处。
+     选择器要比 EP 的 `.el-input-group__append button.el-button` 更具体，
+     否则 flex:1 / margin:-20px / 透明底色会把按钮打回原形 */
+  :deep(.el-input-group__append) {
+    padding: 0 8px 0 0;
+
+    .surf-go-btn {
+      flex: none;
+      display: inline-flex;
+      width: 40px;
+      height: 40px;
+      margin: 0;
+      border: none;
+      background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
+      box-shadow: 0 2px 10px rgba(255, 107, 157, 0.35);
+      color: #fff;
+      transition: transform 0.15s ease, opacity 0.15s ease;
+
+      &:hover:not(.is-disabled) {
+        transform: scale(1.06);
+      }
+
+      &.is-disabled {
+        opacity: 0.4;
+        box-shadow: none;
+      }
+    }
+  }
+
+  /* 面板展开：胶囊下缘变直角，和面板连成一块（Google 的做法） */
+  &.is-open :deep(.el-input) {
+    border-radius: 28px 28px 0 0;
+    border-color: transparent;
+    box-shadow: 0 8px 30px rgba(74, 21, 75, 0.18);
+  }
+}
+
+/* 建议项 —— popper 虽被 teleport 到 body，但插槽内容写在本文件模板里，
+   编译期就带上了本组件的 scope id，scoped 依然生效 */
+.surf-suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: 100%;
+
+  .surf-suggest-icon {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--el-text-color-placeholder);
+
+    img {
+      width: 100%;
+      height: 100%;
+      border-radius: 4px;
+      object-fit: cover;
+    }
+
+    .letter {
+      width: 100%;
+      height: 100%;
+      border-radius: 4px;
+      background: var(--anime-primary);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+  }
+
+  .surf-suggest-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--el-text-color-primary);
+
+    b {
+      font-weight: 700;
+    }
+  }
+
+  .surf-suggest-meta {
+    margin-left: auto;
+    flex: none;
+    padding-left: 12px;
+    font-size: 12px;
+    color: var(--el-text-color-placeholder);
   }
 }
 
@@ -827,5 +1169,41 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+</style>
+
+<style lang="scss">
+/* popper 挂在 body 上，容器本身到不了 scoped，用 popper-class 限定作用域。
+   el-autocomplete 不透传 offset/popper-options，ElTooltip 默认 offset=12，
+   这里用负 margin 把面板贴回胶囊下缘（popper 用 top/left 定位，margin 生效）。 */
+.surf-suggest-popper.el-popper {
+  margin-top: -12px;
+  border: none !important;
+  border-radius: 0 0 20px 20px !important;
+  background: var(--el-fill-color-blank, #fff) !important;
+  box-shadow: 0 8px 30px rgba(74, 21, 75, 0.18) !important;
+  padding: 8px 0 10px !important;
+  overflow: hidden;
+
+  .el-popper__arrow {
+    display: none !important;
+  }
+
+  /* 建议最多 8 条，max-height 取 8 × 44px，避免 EP 默认 280px 在末尾裁出半行 */
+  .el-autocomplete-suggestion__wrap {
+    padding: 0;
+    max-height: 352px;
+  }
+
+  .el-autocomplete-suggestion__list li {
+    height: 44px;
+    line-height: 44px;
+    padding: 0 22px;
+
+    &.highlighted,
+    &:hover {
+      background: rgba(255, 107, 157, 0.07);
+    }
+  }
 }
 </style>

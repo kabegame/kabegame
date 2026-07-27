@@ -2,6 +2,7 @@ package app.kabegame
 
 import android.content.ContentResolver
 import android.content.Intent
+import android.content.IntentSender
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.net.Uri
@@ -20,6 +21,7 @@ import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.activity.result.ActivityResultCallback
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.webkit.WebViewCompat
 import app.kabegame.plugin.PickerLauncherHost
@@ -91,6 +93,14 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
   ) { result ->
     pickKgpgCallback?.invoke(result)
     pickKgpgCallback = null
+  }
+
+  private var deleteRequestCallback: ((ActivityResult) -> Unit)? = null
+  private val deleteRequestLauncher = registerForActivityResult(
+    ActivityResultContracts.StartIntentSenderForResult()
+  ) { result ->
+    deleteRequestCallback?.invoke(result)
+    deleteRequestCallback = null
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -209,6 +219,11 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
   override fun launchPickKgpgFile(intent: Intent, onResult: (ActivityResult) -> Unit) {
     pickKgpgCallback = onResult
     pickKgpgFileLauncher.launch(intent)
+  }
+
+  override fun launchDeleteRequest(sender: IntentSender, onResult: (ActivityResult) -> Unit) {
+    deleteRequestCallback = onResult
+    deleteRequestLauncher.launch(IntentSenderRequest.Builder(sender).build())
   }
 
   /** 将 content:// URI 转为可读文件路径（供需要时使用） */

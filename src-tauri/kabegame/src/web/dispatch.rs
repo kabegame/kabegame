@@ -952,6 +952,7 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::image::delete_image(args.image_id)
+                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -971,6 +972,7 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::image::batch_delete_images(args.image_ids)
+                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -990,6 +992,7 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::image::batch_remove_images(args.image_ids)
+                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1009,6 +1012,7 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::image::remove_image(args.image_id)
+                        .await
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1095,6 +1099,19 @@ pub fn init_registry() {
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::sync_local_folder_albums(args.album_ids)
                         .await
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "get_folder_sync_run_state",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|_p| {
+                Box::pin(async move {
+                    kabegame_core::commands::album::get_folder_sync_run_state()
                         .map_err(RpcError::internal)
                 })
             }),
@@ -1927,6 +1944,48 @@ pub fn init_registry() {
             handler: Arc::new(|_p| {
                 Box::pin(async move {
                     kabegame_core::commands::organize::cancel_organize().map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    // ── hidden cleanup ────────────────────────────────────────────────────────
+
+    map.insert(
+        "start_hidden_cleanup",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|_p| {
+                Box::pin(async move {
+                    kabegame_core::commands::hidden_cleanup::start_hidden_cleanup()
+                        .await
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "get_hidden_cleanup_run_state",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|_p| {
+                Box::pin(async move {
+                    kabegame_core::commands::hidden_cleanup::get_hidden_cleanup_run_state()
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "cancel_hidden_cleanup",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|_p| {
+                Box::pin(async move {
+                    kabegame_core::commands::hidden_cleanup::cancel_hidden_cleanup()
+                        .map_err(RpcError::internal)
                 })
             }),
         },

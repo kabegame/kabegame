@@ -2,6 +2,7 @@ use crate::crawler::downloader::compute_file_hash;
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::create::build_entries_non_recursive;
 use crate::local_folder::import::{import_local_file, CarryFromOld};
+use crate::local_folder::run_state::FolderSyncService;
 use crate::local_folder::scan::dir_mtime_unix_ms;
 use crate::local_folder::scan_service::{
     scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile,
@@ -13,10 +14,15 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
 const NAME_SEPARATOR: &str = "-";
+
+/// 同步的逐文件节流间隔：**只在真正写了库之后**才等这一手（新增 / 链接进画册 / 重导入）。
+/// 已入库且本次什么都没做的文件全速掠过——否则一个几万张图的老目录，光空转就要几十分钟。
+const SYNC_WRITE_THROTTLE_MS: u64 = 100;
 
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -134,6 +140,8 @@ struct SyncDirCtx {
 /// - `on_file`：按**路径**做新增/链接/重导入（复刻原 `diff` 语义）。
 /// - `on_exit_dir`：收尾子画册（删除未见行 + 落 ok 状态）。
 struct SyncHook {
+    /// 进度事件以根画册 id 为任务 key，递归子画册的计数都汇总到这里。
+    run_album_id: String,
     /// 规范化禁区根（VD / 下载目录），命中则剪枝整棵子树。
     forbidden_roots: Vec<PathBuf>,
     /// 已存在本地画册：canon 目录 -> (album_id, album_name)，用于复用/贯穿。
@@ -154,12 +162,14 @@ struct SyncHook {
 
 impl SyncHook {
     fn new(
+        run_album_id: String,
         forbidden_roots: Vec<PathBuf>,
         existing: HashMap<PathBuf, (String, String)>,
         finalize_synced_at_ms: u64,
         options: RecursiveSyncOptions,
     ) -> Self {
         Self {
+            run_album_id,
             forbidden_roots,
             existing,
             pending_delete: HashMap::new(),
@@ -171,6 +181,26 @@ impl SyncHook {
             finalize_synced_at_ms,
             create_missing_albums: options.create_missing_albums,
         }
+    }
+
+    fn record_added(&mut self) {
+        self.added += 1;
+        FolderSyncService::global().update(&self.run_album_id, |state| state.added += 1);
+    }
+
+    fn record_deleted(&mut self, count: usize) {
+        self.deleted += count;
+        FolderSyncService::global().update(&self.run_album_id, |state| state.deleted += count);
+    }
+
+    fn record_reimported(&mut self) {
+        self.reimported += 1;
+        FolderSyncService::global().update(&self.run_album_id, |state| state.reimported += 1);
+    }
+
+    fn record_created_album(&mut self) {
+        self.created_albums += 1;
+        FolderSyncService::global().update(&self.run_album_id, |state| state.created_albums += 1);
     }
 
     /// 懒加载某 album 的当前图片 id 集（作为待删除候选基线）。
@@ -188,13 +218,17 @@ impl SyncHook {
     }
 
     /// 单个媒体文件的入库逻辑（仅 file://）。
-    async fn import_one(&mut self, file: &ScannedFile, album_id: &str) -> Result<(), String> {
+    /// 返回是否**真的写了库**（新增 / 链接进画册 / 重导入），供调用方决定要不要节流。
+    async fn import_one(&mut self, file: &ScannedFile, album_id: &str) -> Result<bool, String> {
         let Some(path) = file.path.as_deref() else {
             // 同步只走 file://；content:// 无 mtime/size，忽略。
-            return Ok(());
+            return Ok(false);
         };
         let path_str = path.to_string_lossy();
         let storage = Storage::global();
+
+        // 本次是否落了写操作；决定调用方要不要节流。
+        let mut wrote = false;
 
         match Storage::find_image_by_path(&path_str)? {
             Some(existing) => {
@@ -206,7 +240,8 @@ impl SyncHook {
                         &[album_id.to_string()],
                         &[existing.id.clone()],
                     );
-                    self.added += 1;
+                    self.record_added();
+                    wrote = true;
                 }
                 // 保留：从待删除候选中移除。
                 if let Some(set) = self.pending_delete.get_mut(album_id) {
@@ -225,7 +260,7 @@ impl SyncHook {
                             Some(mid) => storage.read_metadata_text(mid)?,
                             None => None,
                         };
-                        delete_images_with_events(&[existing.id.clone()], false)?;
+                        delete_images_with_events(&[existing.id.clone()], false).await?;
                         let metadata_id = match metadata_text {
                             Some(text) => Some(storage.insert_metadata_text(&text)?),
                             None => None,
@@ -242,16 +277,18 @@ impl SyncHook {
                             Some(carry),
                         )
                         .await?;
-                        self.reimported += 1;
+                        self.record_reimported();
+                        wrote = true;
                     }
                 }
             }
             None => {
                 import_local_file(path, Some(album_id), file.size.unwrap_or(0), None).await?;
-                self.added += 1;
+                self.record_added();
+                wrote = true;
             }
         }
-        Ok(())
+        Ok(wrote)
     }
 
     /// 收尾一个 album：移除未见旧图的画册关联 + 落 ok 状态。
@@ -259,8 +296,8 @@ impl SyncHook {
         if let Some(set) = self.pending_delete.remove(album_id) {
             if !set.is_empty() {
                 let ids: Vec<String> = set.into_iter().collect();
-                self.deleted += ids.len();
                 Storage::global().remove_images_from_album(album_id, &ids)?;
+                self.record_deleted(ids.len());
                 GlobalEmitter::global().emit_album_images_change(
                     "delete",
                     &[album_id.to_string()],
@@ -316,7 +353,7 @@ impl FolderScanHook for SyncHook {
             Storage::global()
                 .add_local_folder_albums_tx(std::slice::from_ref(&entry))
                 .map_err(ScanError::Skip)?;
-            self.created_albums += 1;
+            self.record_created_album();
             self.existing
                 .insert(canon, (entry.id.clone(), name.clone()));
             SyncDirCtx {
@@ -353,9 +390,16 @@ impl FolderScanHook for SyncHook {
             }
             Err(err) => return Err(ScanError::Skip(err)),
         }
-        self.import_one(file, album_id)
+        let wrote = self
+            .import_one(file, album_id)
             .await
-            .map_err(ScanError::Skip)
+            .map_err(ScanError::Skip)?;
+        // 节流放在这里而不是 scan_service 的通用 min_collect_interval：
+        // 后者对每个媒体文件都等，已入库、本次无改动的文件也要陪跑。
+        if wrote {
+            tokio::time::sleep(Duration::from_millis(SYNC_WRITE_THROTTLE_MS)).await;
+        }
+        Ok(())
     }
 }
 
@@ -418,11 +462,13 @@ async fn sync_album_inner(album_id: &str, scan_mode: ScanMode) -> Result<SyncRep
         }
     }
 
+    let run_guard = FolderSyncService::global().begin(album.id.clone(), album.name.clone(), false);
     let root_url = Url::from_file_path(sync_path)
         .map_err(|_| format!("invalid sync_folder path: {sync_folder}"))?;
 
     // 非递归：仅扫本层文件；不建子画册。
     let mut hook = SyncHook::new(
+        album.id.clone(),
         Vec::new(),
         HashMap::new(),
         scan_started_at_ms,
@@ -433,9 +479,9 @@ async fn sync_album_inner(album_id: &str, scan_mode: ScanMode) -> Result<SyncRep
         album_id: album_id.to_string(),
         album_name: album.name.clone(),
     };
+    // 不用通用 min_collect_interval：同步自己在 on_file 里按「是否写了库」节流。
     let options = ScanOptions {
         recursive: false,
-        min_collect_interval_ms: Some(300),
         ..Default::default()
     };
     let scan_ctx = scan_and_visit(&[root_url.clone()], root_ctx, &options, &mut hook).await?;
@@ -452,6 +498,7 @@ async fn sync_album_inner(album_id: &str, scan_mode: ScanMode) -> Result<SyncRep
     report.added = hook.added;
     report.deleted = hook.deleted;
     report.reimported = hook.reimported;
+    run_guard.finish(None);
     Ok(report)
 }
 
@@ -494,6 +541,8 @@ pub async fn sync_album_recursive_with_options(
         return Ok(report);
     }
 
+    let run_guard = FolderSyncService::global().begin(album.id.clone(), album.name.clone(), true);
+
     // 已存在本地画册：canon 目录 -> (id, name)，用于复用/贯穿。
     let mut existing: HashMap<PathBuf, (String, String)> = HashMap::new();
     for a in storage.list_local_folder_albums()? {
@@ -508,15 +557,21 @@ pub async fn sync_album_recursive_with_options(
     let root_url = Url::from_file_path(&root_path)
         .map_err(|_| format!("invalid sync_folder path: {root_folder}"))?;
 
-    let mut hook = SyncHook::new(forbidden_roots, existing, run_started_ms, options);
+    let mut hook = SyncHook::new(
+        album.id.clone(),
+        forbidden_roots,
+        existing,
+        run_started_ms,
+        options,
+    );
     hook.load_album(&album.id)?;
     let root_ctx = SyncDirCtx {
         album_id: album.id.clone(),
         album_name: album.name.clone(),
     };
+    // 不用通用 min_collect_interval：同步自己在 on_file 里按「是否写了库」节流。
     let options = ScanOptions {
         recursive: true,
-        min_collect_interval_ms: Some(300),
         skip_hidden_dirs: true,
         ..Default::default()
     };
@@ -542,6 +597,7 @@ pub async fn sync_album_recursive_with_options(
         }
     }
 
+    run_guard.finish(None);
     Ok(report)
 }
 

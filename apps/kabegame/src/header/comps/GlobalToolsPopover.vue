@@ -20,16 +20,27 @@
       </div>
       <div
         v-else
-        class="global-tools-trigger global-tools-trigger--compact"
+        class="global-tools-trigger global-tools-trigger--compact relative"
         :class="{ 'is-active': modal.isOpen.value }"
         @click="modal.toggle()"
       >
         <el-icon class="trigger-icon"><Tools /></el-icon>
+        <span
+          v-if="busyCount > 0 || hasUnseenFailure"
+          class="absolute left-[calc(50%+7px)] top-1 min-w-4 h-4 px-1 grid place-items-center rounded-full text-[9px] font-800 leading-none text-white"
+          :class="hasUnseenFailure ? 'bg-[var(--el-color-danger)]' : 'bg-[var(--anime-primary)]'"
+        >
+          {{ busyCount > 0 ? busyCount : "" }}
+        </span>
         <span class="trigger-label">{{ t("header.toolbox") }}</span>
       </div>
     </template>
 
     <div class="global-tools-content">
+      <template v-if="busyCount > 0 || hasUnseenFailure">
+        <BusyTasksSection @close="modal.close()" />
+        <div class="tool-divider" />
+      </template>
       <template v-if="variant === 'compact'">
         <!-- 任务入口不进工具箱：各页 header 已常驻 TaskDrawerButton -->
         <div class="tool-group-title">{{ t("header.toolboxApp") }}</div>
@@ -66,10 +77,13 @@
 </template>
 
 <script setup lang="ts">
+import { watch } from "vue";
 import { Tools, Setting } from "@element-plus/icons-vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useGlobalTools, type GlobalToolItem } from "@/header/globalToolsRegistry";
+import { useBusyTasks } from "@/composables/useBusyTasks";
+import BusyTasksSection from "@/components/busy/BusyTasksSection.vue";
 
 withDefaults(defineProps<{ variant: "sidebar" | "compact"; collapsed?: boolean }>(), {
   collapsed: false,
@@ -79,6 +93,18 @@ const emit = defineEmits<{ "open-settings": [] }>();
 const { t } = useI18n();
 const modal = useModal();
 const { groups } = useGlobalTools();
+const {
+  count: busyCount,
+  hasUnseenFailure,
+  markFailuresSeen,
+} = useBusyTasks();
+
+watch(
+  () => modal.isOpen.value,
+  (open) => {
+    if (open) markFailuresSeen();
+  },
+);
 
 const handleOpenSettings = () => {
   emit("open-settings");
@@ -227,6 +253,12 @@ defineExpose({ close: () => modal.close() });
 .tool-row-comp {
   display: flex;
   align-items: center;
+
+  :deep(.organize-header-control),
+  :deep(.hidden-cleanup-control) {
+    display: flex;
+    width: 100%;
+  }
 
   :deep(.el-button) {
     width: 100%;

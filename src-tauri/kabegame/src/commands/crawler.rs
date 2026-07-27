@@ -973,6 +973,14 @@ pub async fn crawl_cancel_for_task(task_id: &str) {
         .await;
 }
 
+/// WebView 心跳上报（bootstrap.js 每 60s 调一次）；调度器看门狗以此重置无响应超时。
+#[tauri::command]
+pub async fn crawl_heartbeat<R: Runtime>(webview: WebviewWindow<R>) -> Result<(), String> {
+    let (_, run) = run_of(&webview)?;
+    run.heartbeat_webview();
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn crawl_exit<R: Runtime>(webview: WebviewWindow<R>) -> Result<(), String> {
     let (task_id, _) = run_of(&webview)?;

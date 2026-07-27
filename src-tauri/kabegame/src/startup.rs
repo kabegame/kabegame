@@ -1,13 +1,13 @@
 // 启动步骤函数
 
 use async_trait::async_trait;
-use kabegame_core::crawler::{TaskScheduler, task_scheduler};
+use kabegame_core::crawler::{task_scheduler, TaskScheduler};
 use kabegame_i18n::t;
 // 事件转发到前端（桌面与 Android 均需要，用于 tasks-change 等）
 #[cfg(not(feature = "web"))]
-use crate::wallpaper::WallpaperRotator;
-#[cfg(not(feature = "web"))]
 use crate::wallpaper::manager::WallpaperController;
+#[cfg(not(feature = "web"))]
+use crate::wallpaper::WallpaperRotator;
 #[cfg(feature = "web")]
 use crate::web::server::SseMessage;
 use kabegame_core::ipc::events::DaemonEventKind;
@@ -17,7 +17,6 @@ use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-use std::fs;
 use std::sync::Arc;
 #[cfg(not(feature = "web"))]
 use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
@@ -26,7 +25,7 @@ use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
 use crate::web::server::*;
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::webview::{
-    CrawlerWebViewHandler, crawler_window_label, set_webview_handler,
+    crawler_window_label, set_webview_handler, CrawlerWebViewHandler,
 };
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use tauri::webview::DownloadEvent;
@@ -136,37 +135,6 @@ pub fn init_kgpg_plugin() {
     tauri::async_runtime::spawn(task_future);
     #[cfg(feature = "web")]
     tokio::spawn(task_future);
-}
-
-// 清理用户数据（清理后重启时在 init_globals 之前执行，避免 DB 已打开导致删除失败）
-#[cfg(all(not(target_os = "android"), not(feature = "web")))]
-pub fn cleanup_user_data_if_marked() -> bool {
-    let paths = kabegame_core::app_paths::AppPaths::global();
-    let cleanup_marker = paths.cleanup_marker();
-    let app_data_dir = paths.data_dir.clone();
-    let cache_dir = paths.cache_dir.clone();
-    let is_cleaning_data = cleanup_marker.exists();
-    if is_cleaning_data {
-        // 先删除标记文件（在 data_dir 内，后面会一起删掉，但先删可避免重复进入）
-        let _ = fs::remove_file(&cleanup_marker);
-        // 删除 data 目录（此时尚未 init_globals，无文件占用）
-        if app_data_dir.exists() {
-            if let Err(e) = fs::remove_dir_all(&app_data_dir) {
-                eprintln!("警告：清理数据目录失败: {}", e);
-            } else {
-                println!("成功清理应用数据目录");
-            }
-        }
-        // 删除缓存目录（provider-cache、store-cache 等）
-        if cache_dir.exists() {
-            if let Err(e) = fs::remove_dir_all(&cache_dir) {
-                eprintln!("警告：清理缓存目录失败: {}", e);
-            } else {
-                println!("成功清理缓存目录");
-            }
-        }
-    }
-    is_cleaning_data
 }
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
@@ -478,39 +446,10 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
     tokio::spawn(event_loop_future);
 }
 
-/// 在 AppPaths 尚未初始化时独立计算 data_dir 并检查 `.cleanup_marker` 是否存在。
-/// 用于 `try_forward_to_existing_instance_and_exit` 跳过清理重启时的单例检测。
-#[cfg(not(target_os = "android"))]
-fn is_cleanup_restart() -> bool {
-    use kabegame_core::app_paths::{is_dev, repo_root_dir};
-
-    let data_dir = if is_dev() {
-        if let Some(repo_root) = repo_root_dir() {
-            repo_root.join(".kabegame").join("debug").join("data")
-        } else {
-            match dirs::data_local_dir().or_else(dirs::data_dir) {
-                Some(d) => d.join("Kabegame"),
-                None => return false,
-            }
-        }
-    } else {
-        match dirs::data_local_dir().or_else(dirs::data_dir) {
-            Some(d) => d.join("Kabegame"),
-            None => return false,
-        }
-    };
-    data_dir.join(".cleanup_marker").exists()
-}
-
 /// 单例检测：若已有实例在运行则通过 IPC 转发请求并退出，仅在桌面端、在 setup 最早阶段调用（早于 init_shortcut）。
 #[cfg(not(target_os = "android"))]
 pub fn try_forward_to_existing_instance_and_exit() {
-    if is_cleanup_restart() {
-        println!("[IPC] 检测到清理重启标记，跳过单例检测");
-        return;
-    }
-
-    use kabegame_core::ipc::ipc::{IpcRequest, request};
+    use kabegame_core::ipc::ipc::{request, IpcRequest};
 
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
@@ -674,11 +613,7 @@ pub fn create_crawler_window<R: Runtime>(
                 let dq = TaskScheduler::global().download_queue();
                 // start_download 超时后同一 active 条目仍会短暂存在；拒绝迟到请求，
                 // 不把它误判成页面自发下载再次入队。
-                if dq.has_active_native_owner_url(
-                    Some(&task_id_for_download),
-                    None,
-                    url.as_str(),
-                ) {
+                if dq.has_active_native_owner_url(Some(&task_id_for_download), None, url.as_str()) {
                     return false;
                 }
 
@@ -765,7 +700,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     // Linux Plasma + 插件模式：若当前系统壁纸插件不是 Kabegame，自动切到 Kabegame（与 Windows/macOS 窗口模式启动时对齐）
     #[cfg(target_os = "linux")]
     {
-        use crate::linux_desktop::{LinuxDesktop, linux_desktop};
+        use crate::linux_desktop::{linux_desktop, LinuxDesktop};
         use crate::wallpaper::manager::PlasmaPluginWallpaperManager;
         let mode = Settings::global().get_wallpaper_mode();
         if linux_desktop() == LinuxDesktop::Plasma && mode == "plasma-plugin" {

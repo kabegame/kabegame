@@ -2,14 +2,14 @@ import { invoke } from "../api";
 import { nativeMetadataCacheDb } from "../cache/nativeMetadataCache";
 import { IS_WEB } from "../env";
 import {
-  NATIVE_METADATA_PARSER_VERSION,
+  NATIVE_METADATA_CACHE_VERSION,
   type NativeMetadataPayload,
 } from "../types/nativeMetadata";
 
 const MAX_CACHE_SIZE = 256;
 
 function cacheKeyFor(imageId: string): string {
-  return `${imageId}@nv${NATIVE_METADATA_PARSER_VERSION}`;
+  return `${imageId}@nv${NATIVE_METADATA_CACHE_VERSION}`;
 }
 
 class LruMap {

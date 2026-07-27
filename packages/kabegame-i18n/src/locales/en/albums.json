@@ -1,4 +1,10 @@
 {
+  "syncCardTitle": "Sync folder album",
+  "syncScanning": "Scanning, {added} added",
+  "syncDetailDeleted": "Removed {deleted}",
+  "syncDetailReimported": "Reimported {reimported}",
+  "syncDoneToast": "“{name}” synced, {added} added",
+  "syncFailedToast": "Failed to sync “{name}”",
   "emptyTip": "No albums yet; tap top-right to create",
   "subAlbums": "Sub-albums",
   "imagesTab": "Images",

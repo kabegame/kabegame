@@ -95,17 +95,19 @@
                               'task-progress--failed-bar': item.data.status === 'failed',
                             }">
                               <el-progress :percentage="taskProgressPercent(item.data)" :stroke-width="4"
-                                :color="taskProgressBarColor(item.data.status)"
-                                :format="() => taskProgressText(item.data)"
-                                :show-text="item.data.status === 'running'" />
-                              <div v-if="item.data.status === 'running' || item.data.status === 'waiting_downloads'" class="progress-footer">
-                                <el-button text size="small" type="warning" class="stop-btn"
-                                  @click.stop="$emit('cancel-task', item.data.id)">
-                                  {{ t("tasks.drawerStop") }}
-                                </el-button>
-                              </div>
+                                :color="taskProgressBarColor(item.data.status)" :show-text="false" />
+                              <el-button v-if="item.data.status === 'running' || item.data.status === 'waiting_downloads'"
+                                text circle size="small" class="progress-cancel-btn" :title="t('tasks.drawerStop')"
+                                @click.stop="$emit('cancel-task', item.data.id)">
+                                <el-icon><Close /></el-icon>
+                              </el-button>
                             </div>
                           </div>
+                        </div>
+                        <div class="task-drawer-footer-percent-slot">
+                          <span v-if="shouldShowTaskProgressBar(item.data)" class="task-drawer-footer-percent">
+                            {{ taskProgressText(item.data) }}
+                          </span>
                         </div>
                         <div class="task-drawer-footer-actions">
                           <div class="task-drawer-action-btns">
@@ -829,7 +831,8 @@ onUnmounted(() => {
   }
 
   .task-item-body.task-item-body--drawer {
-    --task-drawer-progress-slot-h: 36px;
+    --task-drawer-progress-slot-h: 20px;
+    --task-drawer-percent-slot-h: 16px;
     display: grid;
     grid-template-columns: 52px minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
@@ -872,7 +875,7 @@ onUnmounted(() => {
     min-width: 0;
   }
 
-  /* 纵向 grid：顶行 1fr 占位；中间固定高度进度槽（无进度时也占高）；底行按钮 */
+  /* 纵向 grid：第一行进度条（无进度时也占高，避免按钮行跳动）；第二行百分比；第三行按钮 */
   .task-drawer-grid-footer {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -880,13 +883,13 @@ onUnmounted(() => {
     min-height: 0;
     height: 100%;
     display: grid;
-    grid-template-rows: minmax(0, 1fr) var(--task-drawer-progress-slot-h) auto;
+    grid-template-rows: var(--task-drawer-progress-slot-h) var(--task-drawer-percent-slot-h) auto;
     row-gap: 4px;
     padding-top: 0;
   }
 
   .task-drawer-footer-progress-slot {
-    grid-row: 2;
+    grid-row: 1;
     min-width: 0;
     min-height: var(--task-drawer-progress-slot-h);
     max-height: var(--task-drawer-progress-slot-h);
@@ -904,6 +907,25 @@ onUnmounted(() => {
     :deep(.el-progress-bar__outer) {
       margin: 0;
     }
+  }
+
+  .task-drawer-footer-percent-slot {
+    grid-row: 2;
+    min-width: 0;
+    min-height: var(--task-drawer-percent-slot-h);
+    max-height: var(--task-drawer-percent-slot-h);
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .task-drawer-footer-percent {
+    font-size: 11px;
+    line-height: 1.2;
+    color: var(--anime-text-muted, var(--el-text-color-secondary));
+    font-variant-numeric: tabular-nums;
   }
 
   .task-drawer-running-block {
@@ -975,9 +997,14 @@ onUnmounted(() => {
     margin: 0;
     min-width: 0;
     display: flex;
-    flex-direction: column;
-    gap: 0;
-    justify-content: center;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+
+    :deep(.el-progress) {
+      flex: 1;
+      min-width: 0;
+    }
 
     &.task-progress--failed-bar {
       :deep(.el-progress-bar__inner) {
@@ -997,17 +1024,19 @@ onUnmounted(() => {
       }
     }
 
-    .progress-footer {
-      display: flex;
-      justify-content: flex-end;
-      align-items: center;
-      margin-top: 0;
-      min-height: 18px;
+    .progress-cancel-btn {
+      flex-shrink: 0;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      color: var(--anime-text-muted, var(--el-text-color-secondary));
 
-      .stop-btn {
-        padding: 0 2px;
-        height: auto;
-        font-size: 11px;
+      &:hover {
+        color: var(--el-color-danger, #f56c6c);
+      }
+
+      .el-icon {
+        font-size: 12px;
       }
     }
   }

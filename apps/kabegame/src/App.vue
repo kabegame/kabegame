@@ -110,6 +110,10 @@
         </div>
         <!-- kamechan 开着时它就是工具箱入口（方案 2a），底部只留空白给立绘；隐藏后才回落到这里 -->
         <div v-if="!kamechanEnabled" class="sidebar-bottom-dock" :class="{ 'is-collapsed': isCollapsed }">
+          <SidebarActivityBar
+            v-if="busyEntryVisible"
+            :collapsed="isCollapsed"
+          />
           <div
             class="dock-row"
             :class="{ 'is-active': settingsModal.isOpen.value }"
@@ -217,6 +221,9 @@ import { useThrottleFn } from "@vueuse/core";
 import { useApp } from "@/stores/app";
 import { useMissedRunsWatch } from "./composables/useMissedRunsWatch";
 import * as updaterService from "@/services/updater";
+import * as organizeService from "@/services/organize";
+import * as hiddenCleanupService from "@/services/hiddenCleanup";
+import * as folderSyncService from "@/services/folderSync";
 import UpdateButton from "./components/updater/UpdateButton.vue";
 import UpdateDialog from "./components/updater/UpdateDialog.vue";
 import DownloadProgressDialog from "./components/updater/DownloadProgressDialog.vue";
@@ -225,6 +232,8 @@ import SettingChoiceHost from "@kabegame/core/components/common/SettingChoiceHos
 import SettingsDialog from "./components/settings/SettingsDialog.vue";
 import { useMainCloseGuard } from "./composables/useMainCloseGuard";
 import { useGlobalShortcuts, shortcutLabel } from "./composables/useGlobalShortcuts";
+import SidebarActivityBar from "./components/busy/SidebarActivityBar.vue";
+import { useBusyTasks } from "./composables/useBusyTasks";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
@@ -274,6 +283,13 @@ const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskD
 
 // kamechan 开着时它承载全局工具箱入口，侧栏底部 / 紧凑端 tab 的入口让位
 const { settingValue: kamechanEnabled } = useSettingKeyState("kamechanEnabled");
+const {
+  count: busyCount,
+  hasUnseenFailure: hasUnseenBusyFailure,
+} = useBusyTasks();
+const busyEntryVisible = computed(
+  () => busyCount.value > 0 || hasUnseenBusyFailure.value,
+);
 
 // 全局快捷键：⌘,(设置) / ⇧⌘R(刷新页面)，全应用唯一一处注册
 const openSettingsEntry = () => {
@@ -635,6 +651,9 @@ onMounted(async () => {
   
   // 桌面端应用自动更新：hydrate 后端状态 + 订阅事件（调度在后端；web / android 内部 noop）
   void updaterService.init();
+  void organizeService.init();
+  void hiddenCleanupService.init();
+  void folderSyncService.init();
 
   // 通知后端已准备好接收事件
   emit('app-ready');
@@ -656,6 +675,9 @@ onUnmounted(() => {
   }
   // 注销更新事件订阅
   updaterService.dispose();
+  organizeService.dispose();
+  hiddenCleanupService.dispose();
+  folderSyncService.dispose();
   downloadStateStore.dispose();
 });
 

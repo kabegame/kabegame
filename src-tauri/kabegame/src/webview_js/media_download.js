@@ -33,9 +33,16 @@
     let offset = 0;
     while (offset < bytes.byteLength) {
       const chunk = bytes.subarray(offset, Math.min(bytes.byteLength, offset + WRITE_CHUNK));
-      const count = await _tauri.invoke("crawl_fs_fwrite", chunk, {
-        headers: { rid: String(rid) },
-      });
+      // CEF 上普通 invoke 走 postMessage(JSON)通道,二进制会退化成数字数组;
+      // raw body 必须走 __kb_raw_invoke__(cef-ipc:///raw 帧化通道)。
+      // 非 CEF 平台(Android WebView)没有该桥,回退标准 invoke。
+      const count = window.__kb_raw_invoke__
+        ? await window.__kb_raw_invoke__("crawl_fs_fwrite", chunk, {
+            headers: { rid: String(rid) },
+          })
+        : await _tauri.invoke("crawl_fs_fwrite", chunk, {
+            headers: { rid: String(rid) },
+          });
       if (!Number.isInteger(count) || count <= 0 || count > chunk.byteLength) {
         throw new Error(`crawl_fs_fwrite 返回无效写入字节数：${count}`);
       }
@@ -256,7 +263,17 @@
     if (/^blob:/i.test(rawUrl)) {
       let entry = window.__kb_media__?.resolve(rawUrl);
       if (!entry) {
-        const blob = await (await fetch(rawUrl)).blob();
+        // 兜底：捕获表未命中时试着直接读 blob URL。MediaSource 的 object URL
+        // 不可 fetch（必然 ERR_FILE_NOT_FOUND），失败时给出可诊断的错误,
+        // 而不是把一条裸 net 错误抛给用户。
+        let blob;
+        try {
+          blob = await (await fetch(rawUrl)).blob();
+        } catch (_) {
+          const message = "未捕获到该视频的媒体流（页面可能在注入前就开始播放，可刷新页面后重试）";
+          toast(message, "failed");
+          throw new Error(message);
+        }
         return saveBlob(blob, rawUrl, opts);
       }
       if (entry.kind === "blob") {

@@ -1,4 +1,10 @@
 {
+  "syncCardTitle": "同步資料夾畫冊",
+  "syncScanning": "掃描中，已新增 {added}",
+  "syncDetailDeleted": "已移除 {deleted}",
+  "syncDetailReimported": "重新匯入 {reimported}",
+  "syncDoneToast": "「{name}」已同步，新增 {added} 張",
+  "syncFailedToast": "「{name}」同步失敗",
   "emptyTip": "暫無畫冊，點擊右上角建立",
   "subAlbums": "子畫冊",
   "imagesTab": "圖片",

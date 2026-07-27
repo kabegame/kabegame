@@ -689,13 +689,18 @@ pub enum PostprocessSource<'a> {
 }
 
 async fn persist_native_metadata_best_effort(image: &ImageInfo, bytes: Option<&[u8]>) {
-    let format_key = image.media_type.as_deref().unwrap_or("").trim();
-    if !matches!(format_key, "image/jpg" | "image/jpeg" | "image/png") {
+    let format_key = image.media_type.as_deref().unwrap_or("");
+    if !crate::media::native_metadata::supports_native_metadata(format_key) {
         return;
     }
+    let Some(expected_version) =
+        crate::media::native_metadata::parser_version_for(format_key)
+    else {
+        return;
+    };
 
     let storage = Storage::global();
-    match storage.ensure_native_metadata_for_hash(&image.hash, None) {
+    match storage.ensure_native_metadata_for_hash(&image.hash, expected_version, None) {
         Ok(Some(_)) => return,
         Ok(None) => {}
         Err(e) => {
@@ -739,7 +744,9 @@ async fn persist_native_metadata_best_effort(image: &ImageInfo, bytes: Option<&[
             return;
         }
     };
-    if let Err(e) = storage.ensure_native_metadata_for_hash(&image.hash, Some(&json)) {
+    if let Err(e) =
+        storage.ensure_native_metadata_for_hash(&image.hash, expected_version, Some(&json))
+    {
         eprintln!("[downloader] store native metadata failed: {e}");
     }
 }
@@ -1368,12 +1375,6 @@ pub async fn postprocess_downloaded_image(
                     let _ = Storage::global().increment_task_dedup_count(task_id);
                 }
                 emit_task_image_counts_snapshot(task_id);
-            }
-            if imported {
-                if let Some(surf_record_id) = surf_record_id {
-                    let _ = Storage::global()
-                        .increment_surf_record_download_count(surf_record_id);
-                }
             }
             clear_failed_image_after_success(failed_image_id);
             dq.switch_state(id, DownloadState::Completed, None).await;

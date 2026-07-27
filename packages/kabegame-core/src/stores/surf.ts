@@ -12,12 +12,6 @@ export interface SurfRecord {
   cookie: string;
   icon?: number[] | null;
   lastVisitAt: number;
-  /** 累计成功下载次数（入库计次） */
-  downloadCount: number;
-  /** 累计删除张数 */
-  deletedCount: number;
-  /** 当前 `images` 表中关联条数 */
-  imageCount: number;
   createdAt: number;
   lastImage?: ImageInfo | null;
 }
@@ -51,9 +45,6 @@ function normalizeSurfRecord(raw: unknown): SurfRecord | null {
     cookie: String(r.cookie ?? ""),
     icon: Array.isArray(r.icon) ? (r.icon as number[]) : null,
     lastVisitAt: Number(r.lastVisitAt ?? r.last_visit_at ?? 0) || 0,
-    downloadCount: Number(r.downloadCount ?? r.download_count ?? 0) || 0,
-    deletedCount: Number(r.deletedCount ?? r.deleted_count ?? 0) || 0,
-    imageCount: Number(r.imageCount ?? r.image_count ?? 0) || 0,
     createdAt: Number(r.createdAt ?? r.created_at ?? 0) || 0,
     lastImage: (r.lastImage ?? r.last_image) as ImageInfo | null | undefined,
   };
@@ -172,12 +163,6 @@ export const useSurfStore = defineStore("surf", () => {
       return v != null && Number.isFinite(Number(v)) ? Number(v) : undefined;
     };
     const patch: Partial<SurfRecord> = {};
-    const ni = n("imageCount");
-    if (ni !== undefined) patch.imageCount = ni;
-    const nd = n("deletedCount");
-    if (nd !== undefined) patch.deletedCount = nd;
-    const nc = n("downloadCount");
-    if (nc !== undefined) patch.downloadCount = nc;
     const nv = n("lastVisitAt");
     if (nv !== undefined) patch.lastVisitAt = nv;
     if (typeof diff.name === "string") patch.name = diff.name;

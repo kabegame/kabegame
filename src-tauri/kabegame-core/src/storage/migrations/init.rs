@@ -154,8 +154,6 @@ CREATE TABLE surf_records (
     root_url       TEXT    NOT NULL,
     icon           BLOB,
     last_visit_at  INTEGER NOT NULL,
-    download_count INTEGER NOT NULL DEFAULT 0,
-    deleted_count  INTEGER NOT NULL DEFAULT 0,
     created_at     INTEGER NOT NULL,
     name           TEXT    NOT NULL DEFAULT '',
     cookie         TEXT    NOT NULL DEFAULT ''

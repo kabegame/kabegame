@@ -43,6 +43,7 @@ enum Request {
         mime_type: String,
         display_name: String,
     },
+    DeleteMediaUris(Vec<String>),
     CopyExtractedImagesToPictures(String),
     ComputeHash(String),
     GetImageThumbnail {
@@ -64,6 +65,7 @@ enum Response {
     GetContentSize(Result<u64, String>),
     GetDisplayName(Result<String, String>),
     CopyImageToPictures(Result<String, String>),
+    DeleteMediaUris(Result<(usize, usize), String>),
     CopyExtractedImagesToPictures(Result<Vec<CopiedImageEntry>, String>),
     ComputeHash(Result<String, String>),
     GetImageThumbnail(Result<(), String>),
@@ -223,6 +225,18 @@ fn run_worker_loop<R: Runtime + 'static>(
                         .await
                         .map_err(|e| e.to_string())?;
                     Ok(resp.content_uri)
+                }))
+            }
+            Request::DeleteMediaUris(uris) => {
+                let p = &provider;
+                Response::DeleteMediaUris(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .picker()
+                        .delete_media_uris(uris)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok((resp.deleted, resp.skipped))
                 }))
             }
             Request::CopyExtractedImagesToPictures(source_dir) => {
@@ -415,6 +429,17 @@ impl ContentIoProvider for ChannelContentIoProvider {
             .map_err(|e| e.to_string())?;
         match resp_rx.await.map_err(|e| e.to_string())? {
             Response::CopyImageToPictures(r) => r,
+            _ => Err("unexpected response".to_string()),
+        }
+    }
+
+    async fn delete_media_uris(&self, uris: &[String]) -> Result<(usize, usize), String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send((Request::DeleteMediaUris(uris.to_vec()), resp_tx))
+            .map_err(|e| e.to_string())?;
+        match resp_rx.await.map_err(|e| e.to_string())? {
+            Response::DeleteMediaUris(r) => r,
             _ => Err("unexpected response".to_string()),
         }
     }

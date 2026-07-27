@@ -452,6 +452,7 @@ impl Storage {
     pub fn ensure_native_metadata_for_hash(
         &self,
         hash: &str,
+        expected_version: u32,
         json_if_missing: Option<&str>,
     ) -> Result<Option<i64>, String> {
         let hash = hash.trim();
@@ -483,13 +484,10 @@ impl Storage {
                 "SELECT im.id
                  FROM images i
                  INNER JOIN image_metadata im ON im.id = i.image_metadata_id
-                 WHERE i.hash = ?1 AND im.parser_version = ?2
+                WHERE i.hash = ?1 AND im.parser_version = ?2
                  ORDER BY im.id
                  LIMIT 1",
-                params![
-                    hash,
-                    i64::from(crate::media::native_metadata::PARSER_VERSION)
-                ],
+                params![hash, i64::from(expected_version)],
                 |row| row.get::<_, i64>(0),
             )
             .optional()
@@ -500,10 +498,7 @@ impl Storage {
         } else if let Some(json) = json_if_missing {
             tx.execute(
                 "INSERT INTO image_metadata (data, parser_version) VALUES (?1, ?2)",
-                params![
-                    json,
-                    i64::from(crate::media::native_metadata::PARSER_VERSION)
-                ],
+                params![json, i64::from(expected_version)],
             )
             .map_err(|e| format!("insert native metadata: {e}"))?;
             tx.last_insert_rowid()
@@ -529,10 +524,11 @@ impl Storage {
         &self,
         image_id: &str,
         hash: &str,
+        expected_version: u32,
         json_if_missing: Option<&str>,
     ) -> Result<Option<i64>, String> {
         if !hash.trim().is_empty() {
-            return self.ensure_native_metadata_for_hash(hash, json_if_missing);
+            return self.ensure_native_metadata_for_hash(hash, expected_version, json_if_missing);
         }
 
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
@@ -555,9 +551,7 @@ impl Storage {
                 .map_err(|e| format!("commit missing image native metadata: {e}"))?;
             return Ok(None);
         };
-        if old_id.is_some()
-            && old_version == Some(i64::from(crate::media::native_metadata::PARSER_VERSION))
-        {
+        if old_id.is_some() && old_version == Some(i64::from(expected_version)) {
             tx.commit()
                 .map_err(|e| format!("commit current image native metadata: {e}"))?;
             return Ok(old_id);
@@ -570,10 +564,7 @@ impl Storage {
 
         tx.execute(
             "INSERT INTO image_metadata (data, parser_version) VALUES (?1, ?2)",
-            params![
-                json,
-                i64::from(crate::media::native_metadata::PARSER_VERSION)
-            ],
+            params![json, i64::from(expected_version)],
         )
         .map_err(|e| format!("insert image native metadata: {e}"))?;
         let metadata_id = tx.last_insert_rowid();
@@ -806,16 +797,16 @@ impl Storage {
         Ok(set.into_iter().collect())
     }
 
-    /// 批量图片在删除前按畅游记录 id 统计张数（用于 `deleted_count` 与 `images-change`）。
-    pub fn collect_surf_record_counts_for_images(
+    /// 批量图片在删除/移除前涉及的畅游记录 id（去重），用于 `images-change` 事件。
+    pub fn collect_surf_record_ids_for_images(
         &self,
         image_ids: &[String],
-    ) -> Result<HashMap<String, usize>, String> {
+    ) -> Result<Vec<String>, String> {
         if image_ids.is_empty() {
-            return Ok(HashMap::new());
+            return Ok(Vec::new());
         }
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut map = HashMap::new();
+        let mut set = HashSet::new();
         let mut stmt = conn
             .prepare(
                 "SELECT surf_record_id FROM images WHERE id = ?1 \
@@ -828,24 +819,16 @@ impl Storage {
                 .map_err(|e| format!("Failed to query surf record IDs: {}", e))?;
             for row in rows {
                 if let Ok(srid) = row {
-                    *map.entry(srid).or_insert(0) += 1;
+                    set.insert(srid);
                 }
             }
         }
-        Ok(map)
+        Ok(set.into_iter().collect())
     }
 
-    /// 批量图片在删除/移除前涉及的畅游记录 id（去重），用于 `images-change` 事件。
-    pub fn collect_surf_record_ids_for_images(
-        &self,
-        image_ids: &[String],
-    ) -> Result<Vec<String>, String> {
-        let m = self.collect_surf_record_counts_for_images(image_ids)?;
-        Ok(m.into_keys().collect())
-    }
-
-    pub fn delete_image(&self, image_id: &str) -> Result<(), String> {
+    pub fn delete_image(&self, image_id: &str) -> Result<Vec<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut local_paths_to_purge = Vec::new();
 
         let image_paths: Option<(
             String,
@@ -903,12 +886,8 @@ impl Storage {
             remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
             remove_compatible_file_if_owned(compatible_path.as_deref());
             remove_compatible_file_if_owned(wallpaper_compatible_path.as_deref());
-            // 原始文件移入系统回收站（桌面，带护栏，绝不永久删除）；失败/不安全则保留磁盘文件。
-            // Android 的 content:// 删除走内容提供方，这里不处理。
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            {
-                crate::storage::safe_delete::trash_source_file(std::path::Path::new(&local_path));
-            }
+            // purge 是异步操作（Android 需经过 IPC，且可能弹系统授权窗），不能在持有 DB 锁时执行。
+            local_paths_to_purge.push(local_path);
         }
 
         conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
@@ -936,7 +915,7 @@ impl Storage {
             let _ = self.gc_image_metadata(&[image_metadata_id]);
         }
 
-        Ok(())
+        Ok(local_paths_to_purge)
     }
 
     pub fn remove_image(&self, image_id: &str) -> Result<(), String> {
@@ -1028,9 +1007,9 @@ impl Storage {
         Ok(())
     }
 
-    pub fn batch_delete_images(&self, image_ids: &[String]) -> Result<(), String> {
+    pub fn batch_delete_images(&self, image_ids: &[String]) -> Result<Vec<String>, String> {
         if image_ids.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -1064,9 +1043,8 @@ impl Storage {
             }
         }
 
-        // 收集所有需要删除的原始文件路径，事后批量扔回收站。
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        let mut local_paths_to_trash: Vec<String> = Vec::new();
+        // purge 是异步操作（Android 需经过 IPC，且可能弹系统授权窗），不能在持有 DB 锁时执行。
+        let mut local_paths_to_purge: Vec<String> = Vec::new();
 
         for id in image_ids {
             let image_paths: Option<(
@@ -1112,27 +1090,13 @@ impl Storage {
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
                 remove_compatible_file_if_owned(compatible_path.as_deref());
                 remove_compatible_file_if_owned(wallpaper_compatible_path.as_deref());
-                // Android 的 content:// 删除走内容提供方，这里不处理。
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                local_paths_to_trash.push(local_path);
+                local_paths_to_purge.push(local_path);
             }
 
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])
                 .map_err(|e| format!("Failed to delete image: {}", e))?;
 
             let _ = tx.execute("DELETE FROM album_images WHERE image_id = ?1", params![id]);
-        }
-
-        // 原始文件一次性批量移入系统回收站（带软链接/异构盘护栏，绝不永久删除）；
-        // 失败或路径不安全时保留磁盘文件，数据库记录已删除。
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        {
-            let paths: Vec<std::path::PathBuf> = local_paths_to_trash
-                .iter()
-                .map(|s| std::path::PathBuf::from(s))
-                .collect();
-            let path_refs: Vec<&std::path::Path> = paths.iter().map(|p| p.as_path()).collect();
-            crate::storage::safe_delete::trash_source_files_batch(&path_refs);
         }
 
         // 更新所有相关任务的 deleted_count 与 success_count
@@ -1151,7 +1115,7 @@ impl Storage {
         let _ = self.gc_metadata(&metadata_ids);
         let _ = self.gc_image_metadata(&image_metadata_ids);
 
-        Ok(())
+        Ok(local_paths_to_purge)
     }
 
     pub fn batch_remove_images(&self, image_ids: &[String]) -> Result<(), String> {

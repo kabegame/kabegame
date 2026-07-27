@@ -5,9 +5,14 @@
   "toolboxApp": "App",
   "toolboxMaintenance": "Maintenance",
   "toolboxDisplay": "Display",
+  "busyTitle": "I'm busy with these",
+  "busyBackground": "{count} in background",
+  "busyCancelAll": "Cancel all",
+  "busyView": "View",
   "stopTask": "Stop task",
   "deleteTask": "Delete task",
   "organize": "Organize",
+  "organizeInProgress": "In progress",
   "collect": "Collect",
   "createAlbum": "New album",
   "openVirtualDrive": "View in VD",
@@ -23,8 +28,9 @@
   "failedImagesRetryAll": "Retry all",
   "failedImagesDeleteAll": "Delete all",
   "failedImagesFilter": "Filter by plugin",
-  "showHidden": "Show hidden images",
-  "hideHidden": "Hide hidden images",
-  "showAlbumImages": "Show album images",
-  "hideAlbumImages": "Hide album images"
+  "hideHidden": "Don't show hidden images",
+  "hideAlbumImages": "Don't show album images",
+  "cleanHidden": "Clean hidden images",
+  "cleanHiddenInProgress": "In progress",
+  "cleanHiddenEmpty": "No hidden images"
 }

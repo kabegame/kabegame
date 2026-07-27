@@ -71,8 +71,7 @@ pub async fn start_task(task: Value) -> Result<String, String> {
     let p: StartTaskParams = serde_json::from_value(task).map_err(|e| e.to_string())?;
 
     let task_id = uuid::Uuid::new_v4().to_string();
-    let images_dir =
-        crate::crawler::downloader::resolve_crawl_output_dir(p.output_dir.as_deref());
+    let images_dir = crate::crawler::downloader::resolve_crawl_output_dir(p.output_dir.as_deref());
     let output_dir = Some(images_dir.to_string_lossy().into_owned());
 
     let now_ms = std::time::SystemTime::now()

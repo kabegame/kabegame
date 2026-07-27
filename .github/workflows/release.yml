@@ -128,7 +128,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.platform.name }}
-          path: release/*
+          # 构建产物汇集目录，单一来源见 scripts/utils.ts 的 RELEASE_DIR
+          path: .kabegame/release/*
           if-no-files-found: error
 
   release:

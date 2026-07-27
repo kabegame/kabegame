@@ -98,5 +98,12 @@
   "close.tray.title": "最小化到系統匣",
   "close.tray.desc": "關閉視窗時隱藏到系統匣，應用程式會繼續在背景執行",
   "close.exit.title": "結束應用程式",
-  "close.exit.desc": "關閉視窗時直接結束應用程式"
+  "close.exit.desc": "關閉視窗時直接結束應用程式",
+  "timeJustNow": "剛剛",
+  "timeMinutesAgo": "{n} 分鐘前",
+  "timeHoursAgo": "{n} 小時前",
+  "timeDaysAgo": "{n} 天前",
+  "timeWeeksAgo": "{n} 週前",
+  "timeMonthsAgo": "{n} 個月前",
+  "timeYearsAgo": "{n} 年前"
 }

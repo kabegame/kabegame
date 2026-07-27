@@ -38,6 +38,7 @@ commands.allow = [
     "crawl_back",
     "crawl_update_page_state",
     "crawl_update_state",
+    "crawl_heartbeat",
     "crawl_exit",
     "crawl_error",
     "show_crawler_window",

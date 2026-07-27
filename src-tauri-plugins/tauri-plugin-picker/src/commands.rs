@@ -190,6 +190,17 @@ pub(crate) async fn copy_image_to_pictures<R: Runtime>(
 }
 
 #[tauri::command]
+pub(crate) async fn delete_media_uris<R: Runtime>(
+    app: AppHandle<R>,
+    uris: Vec<String>,
+) -> Result<DeleteMediaUrisResponse, String> {
+    app.picker()
+        .delete_media_uris(uris)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub(crate) async fn copy_extracted_images_to_pictures<R: Runtime>(
     app: AppHandle<R>,
     source_dir: String,

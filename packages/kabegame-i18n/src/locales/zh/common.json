@@ -98,5 +98,12 @@
   "close.tray.title": "最小化到托盘",
   "close.tray.desc": "关闭窗口时隐藏到系统托盘，应用继续在后台运行",
   "close.exit.title": "退出应用",
-  "close.exit.desc": "关闭窗口时直接退出应用"
+  "close.exit.desc": "关闭窗口时直接退出应用",
+  "timeJustNow": "刚刚",
+  "timeMinutesAgo": "{n} 分钟前",
+  "timeHoursAgo": "{n} 小时前",
+  "timeDaysAgo": "{n} 天前",
+  "timeWeeksAgo": "{n} 周前",
+  "timeMonthsAgo": "{n} 个月前",
+  "timeYearsAgo": "{n} 年前"
 }

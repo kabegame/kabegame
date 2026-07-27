@@ -221,6 +221,19 @@ pub struct CopyImageToPicturesResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DeleteMediaUrisArgs {
+    pub uris: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteMediaUrisResponse {
+    pub deleted: usize,
+    pub skipped: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CopyExtractedImagesToPicturesArgs {
     pub source_dir: String,
 }

@@ -65,6 +65,7 @@ export const useUpdaterStore = defineStore("updater", () => {
   const downloadedBytes = ref(0);
   const totalBytes = ref<number | null>(null);
   const lastDownloadError = ref<string | null>(null);
+  const downloadStartedAtMs = ref<number | null>(null);
 
   /** 更新弹窗（changelog tabs）是否打开。纯 UI 态。 */
   const dialogOpen = ref(false);
@@ -87,7 +88,13 @@ export const useUpdaterStore = defineStore("updater", () => {
 
   /** 整体替换镜像（hydrate / `updater-state-change` 都走它）。 */
   function applyState(snap: UpdaterState) {
+    const wasDownloading = phase.value === "downloading";
     phase.value = snap.phase;
+    if (snap.phase === "downloading") {
+      downloadStartedAtMs.value = wasDownloading ? downloadStartedAtMs.value : Date.now();
+    } else {
+      downloadStartedAtMs.value = null;
+    }
     currentVersion.value = snap.currentVersion;
     platform.value = snap.platform;
     mode.value = snap.mode;
@@ -131,6 +138,7 @@ export const useUpdaterStore = defineStore("updater", () => {
     downloadedBytes,
     totalBytes,
     lastDownloadError,
+    downloadStartedAtMs,
     hasUpdate,
     isChecking,
     isDownloading,

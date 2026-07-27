@@ -20,6 +20,25 @@ export const BUILD_SUFFIX = process.env.KB_BUILD_SUFFIX ?? "";
 export const CRAWLER_PLUGINS_DIR = path.join(ROOT, "src-crawler-plugins");
 
 /**
+ * 发布产物汇集目录（gitignored，`.kabegame/` 下与 debug/ 等运行期目录同级）。
+ *
+ * 单一来源：`deno task b --release` 的桌面安装包/CLI（ReleasePlugin）、web 二进制
+ * （docker-compose.web-release.yml 的 /dist 挂载）、以及 web 模式的爬虫插件
+ * （RELEASE_PLUGINS_DIR）统一落在这里，供 scripts/deploy-web.sh 与 CI 上传。
+ * 前端产物不在此列——仍是仓库根的 dist-kabegame/（编译期由 include_dir! 嵌入）。
+ */
+export const RELEASE_DIR = path.join(ROOT, ".kabegame", "release");
+
+/**
+ * web 发布用的爬虫插件目录：`.kabegame/release/plugins`。
+ *
+ * 桌面构建的插件仍写 `src-tauri/kabegame/resources/plugins`（要随 tauri
+ * bundle.resources 打进安装包）；web 二进制不嵌入插件，服务器改由用户数据目录
+ * `~/.local/share/Kabegame/plugins-directory/` 加载，故单独产出到这里再上传。
+ */
+export const RELEASE_PLUGINS_DIR = path.join(RELEASE_DIR, "plugins");
+
+/**
  * 目标架构（**仅 macOS**）。由 `--target x86_64|arm64` 指定，用于在 Apple Silicon 上
  * 交叉编译 Intel 版（或反之）。不传 `--target` 时全部为 undefined，行为与改动前完全一致。
  *

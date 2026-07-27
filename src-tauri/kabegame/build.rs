@@ -58,6 +58,16 @@ fn main() {
 
     println!("cargo:rustc-check-cfg=cfg(kabegame_data, values(\"dev\", \"prod\"))");
 
+    // web feature 的 release 二进制经 include_dir! 编译期嵌入 dist-kabegame/
+    // (src/web_assets.rs)。include_dir 宏在稳定版不追踪资产变化——不加这条,
+    // 前端产物更新后增量编译会沿用旧资产(混合构建流程里宿主重出 dist 后,
+    // 容器 cargo 必须感知;见 scripts/build-web.sh)。
+    if std::env::var_os("CARGO_FEATURE_WEB").is_some() {
+        let dist = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../dist-kabegame");
+        println!("cargo:rerun-if-changed={}", dist.display());
+    }
+
     println!("cargo:rerun-if-env-changed=KABEGAME_DATA");
 
     let data = std::env::var("KABEGAME_DATA").unwrap_or_else(|_| "prod".to_string());

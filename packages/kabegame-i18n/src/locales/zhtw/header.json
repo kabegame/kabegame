@@ -5,9 +5,14 @@
   "toolboxApp": "應用",
   "toolboxMaintenance": "維護",
   "toolboxDisplay": "顯示",
+  "busyTitle": "我正在忙這些",
+  "busyBackground": "背景 {count} 項",
+  "busyCancelAll": "全部取消",
+  "busyView": "檢視",
   "stopTask": "停止任務",
   "deleteTask": "刪除任務",
   "organize": "整理",
+  "organizeInProgress": "進行中",
   "collect": "收集",
   "createAlbum": "新增畫冊",
   "openVirtualDrive": "前往 VD 檢視",
@@ -23,8 +28,9 @@
   "failedImagesRetryAll": "全部重試",
   "failedImagesDeleteAll": "全部刪除",
   "failedImagesFilter": "依插件篩選",
-  "showHidden": "顯示隱藏圖片",
-  "hideHidden": "隱藏隱藏圖片",
-  "showAlbumImages": "顯示畫冊圖片",
-  "hideAlbumImages": "隱藏畫冊圖片"
+  "hideHidden": "不顯示隱藏圖片",
+  "hideAlbumImages": "不顯示畫冊圖片",
+  "cleanHidden": "清理隱藏圖片",
+  "cleanHiddenInProgress": "進行中",
+  "cleanHiddenEmpty": "沒有隱藏圖片"
 }

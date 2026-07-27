@@ -19,6 +19,7 @@ const COMMANDS: &[&str] = &[
     "readFileBytes",
     "takePersistablePermission",
     "copyImageToPictures",
+    "deleteMediaUris",
     "copyExtractedImagesToPictures",
 ];
 

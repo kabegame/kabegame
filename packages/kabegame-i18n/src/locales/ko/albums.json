@@ -1,4 +1,10 @@
 {
+  "syncCardTitle": "폴더 앨범 동기화",
+  "syncScanning": "스캔 중, {added}개 추가",
+  "syncDetailDeleted": "{deleted}개 제거",
+  "syncDetailReimported": "{reimported}개 다시 가져옴",
+  "syncDoneToast": "「{name}」 동기화 완료, {added}개 추가",
+  "syncFailedToast": "「{name}」 동기화 실패",
   "emptyTip": "아직 앨범 없음; 오른쪽 상단에서 생성",
   "subAlbums": "하위 앨범",
   "imagesTab": "이미지",

@@ -98,5 +98,12 @@
   "close.tray.title": "Minimize to tray",
   "close.tray.desc": "Hide the window in the system tray and keep the app running in the background",
   "close.exit.title": "Exit app",
-  "close.exit.desc": "Exit the app when the window closes"
+  "close.exit.desc": "Exit the app when the window closes",
+  "timeJustNow": "just now",
+  "timeMinutesAgo": "{n} minute ago | {n} minutes ago",
+  "timeHoursAgo": "{n} hour ago | {n} hours ago",
+  "timeDaysAgo": "{n} day ago | {n} days ago",
+  "timeWeeksAgo": "{n} week ago | {n} weeks ago",
+  "timeMonthsAgo": "{n} month ago | {n} months ago",
+  "timeYearsAgo": "{n} year ago | {n} years ago"
 }

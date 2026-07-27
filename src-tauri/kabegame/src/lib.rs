@@ -97,16 +97,12 @@ use std::net::SocketAddr;
 fn init(
     #[cfg(not(feature = "web"))] app: &mut tauri::App<crate::AppRuntime>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    // 若有清理标记，必须在 init_globals 之前清理 data/cache，否则 DB 等已打开无法删除
-    #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-    let _ = cleanup_user_data_if_marked();
-
     #[cfg(feature = "web")]
     crate::core_init::init_app_paths_for_web()?;
 
     // 启动内置 Backend
     crate::core_init::init_globals()?;
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(feature = "web", target_os = "android")))]
     commands::surf_session::clear_stale_sessions();
     #[cfg(debug_assertions)]
     crate::debug_ingest::spawn_debug_event(
@@ -456,6 +452,7 @@ pub(crate) fn configure_app(
             add_local_folder_album,
             sync_local_folder_album,
             sync_local_folder_albums,
+            get_folder_sync_run_state,
             // --- Images ---
             get_image_by_id,
             get_image_metadata,
@@ -609,8 +606,6 @@ pub(crate) fn configure_app(
             set_default_download_dir,
             get_default_images_dir,
             get_desktop_resolution,
-            #[cfg(not(target_os = "android"))]
-            clear_user_data,
             // --- Wallpaper ---
             // set_wallpaper,
             set_wallpaper_mode,
@@ -739,6 +734,8 @@ pub(crate) fn configure_app(
             #[cfg(not(target_os = "android"))]
             crawl_get_state,
             #[cfg(not(target_os = "android"))]
+            crawl_heartbeat,
+            #[cfg(not(target_os = "android"))]
             crawl_exit,
             #[cfg(not(target_os = "android"))]
             crawl_error,
@@ -779,6 +776,9 @@ pub(crate) fn configure_app(
             get_organize_run_state,
             #[cfg(not(target_os = "android"))]
             cancel_organize,
+            start_hidden_cleanup,
+            get_hidden_cleanup_run_state,
+            cancel_hidden_cleanup,
             // --- Share (Android) ---
             #[cfg(target_os = "android")]
             share_file,

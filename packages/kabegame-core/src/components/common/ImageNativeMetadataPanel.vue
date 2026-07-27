@@ -45,13 +45,7 @@
           {{ t("gallery.nativeMetaEmptyTitle") }}
         </div>
         <div class="native-meta-state-desc">
-          {{
-            t(
-              emptyFormat === "png"
-                ? "gallery.nativeMetaEmptyPng"
-                : "gallery.nativeMetaEmptyJpeg",
-            )
-          }}
+          {{ t(emptyDescKey) }}
         </div>
       </div>
 
@@ -173,7 +167,11 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { kameMessage as ElMessage } from "../../utils/kameMessage";
 import { useNativeMetadataState } from "../../composables/useNativeMetadataState";
 import { IS_WEB } from "../../env";
-import type { NativeEntry, NativeGroup } from "../../types/nativeMetadata";
+import type {
+  NativeEntry,
+  NativeGroup,
+  NativeMetadataFormat,
+} from "../../types/nativeMetadata";
 import { displayImageMimeType } from "../../utils/mediaMime";
 
 type NativeMetadataImageLike = {
@@ -209,10 +207,26 @@ const {
 
 const mimeLabel = computed(() => displayImageMimeType(props.image?.type));
 
-const emptyFormat = computed<"jpeg" | "png">(() => {
+/** 空态文案按格式区分；后端没返回 format 时（例如解析前）退回按 MIME 猜。 */
+const emptyDescKeys: Record<NativeMetadataFormat, string> = {
+  jpeg: "gallery.nativeMetaEmptyJpeg",
+  png: "gallery.nativeMetaEmptyPng",
+  webp: "gallery.nativeMetaEmptyWebp",
+  gif: "gallery.nativeMetaEmptyGif",
+};
+
+const mimeToFormat: Record<string, NativeMetadataFormat> = {
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
+const emptyFormat = computed<NativeMetadataFormat>(() => {
   if (payload.value?.format) return payload.value.format;
-  return mimeLabel.value.trim().toLowerCase() === "image/png" ? "png" : "jpeg";
+  return mimeToFormat[mimeLabel.value.trim().toLowerCase()] ?? "jpeg";
 });
+
+const emptyDescKey = computed(() => emptyDescKeys[emptyFormat.value]);
 
 const groupKeys: Record<string, string> = {
   image: "nativeMetaGroupImage",
@@ -221,6 +235,9 @@ const groupKeys: Record<string, string> = {
   thumbnail: "nativeMetaGroupThumbnail",
   misc: "nativeMetaGroupMisc",
   ihdr: "nativeMetaGroupIhdr",
+  vp8x: "nativeMetaGroupVp8x",
+  screen: "nativeMetaGroupScreen",
+  anim: "nativeMetaGroupAnim",
   text: "nativeMetaGroupText",
   color: "nativeMetaGroupColor",
   phys: "nativeMetaGroupPhys",

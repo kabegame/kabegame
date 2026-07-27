@@ -2,12 +2,24 @@
 # Web 模式发布构建环境（多阶段）
 # 仅构建 kabegame web 二进制（axum HTTP 服务器，无 GUI/Tauri 依赖）。
 #
-# 分工（与 docker-compose.web-release.yml 配套）：
-#   镜像构建（本文件）承担全部准备步骤——自编 deno（含 0004 node_modules 后缀补丁）、
-#   x264+FFmpeg 静态库、`deno install` 出 node_modules-web 种子（根 workspace +
-#   src-crawler-plugins 独立工程）；源码/依赖不变时全部命中层缓存。
-#   compose 运行时只剩仓库源码自身的构建：kabegame-cli（release，插件 .kgpg 打包所需）
-#   与 `deno task b -c kabegame --mode web`。
+# 分工（与 docker-compose.web-release.yml 配套；统一入口 scripts/build-web.sh）：
+#   镜像构建（本文件）：官方 deno 二进制（仅跑构建编排）+ x264/FFmpeg 静态库
+#   （-web 后缀）；源码/依赖不变时全部命中层缓存。
+#   compose 运行时只剩 Rust：`deno task b -c kabegame --mode web --release --skip vue`。
+#   前端 dist-kabegame/ 与插件打包在宿主完成（build-web.sh）——Apple Silicon 的
+#   linux/amd64 模拟层下 V8 浮点损坏（小数截断为整数），容器内不得跑任何 JS 构建；
+#   rustc/esbuild(Go)/SWC(Rust) 不受影响。
+#
+# deno 用官方二进制而非自编（2026-07 起）：
+#   容器内 deno 只执行 scripts/run.ts 构建编排——纯 JS 控制流，零小数运算，
+#   依赖（commander/tapable/chalk/glob/handlebars）均为纯 JS。因此：
+#   - 不再需要 0004 node_modules 后缀补丁（那是给容器内 vite/rollup 等 JS 产物
+#     构建做 per-glibc 原生依赖隔离用的；现已无此类构建），官方 deno 在
+#     nodeModulesDir=manual 下直接读挂载树的宿主 node_modules；
+#   - 旧注释称官方二进制在此基线段错误——实测 deno 2.9.0 于 almalinux 8
+#     （glibc 2.28，Rosetta linux/amd64）运行正常，不再成立。
+#   注意 V8 浮点缺陷对官方/自编 deno 同等生效（与构建方式无关），编排层经
+#   多次完整构建验证不受影响。
 #
 # 路径契约：ffmpeg-builder 在 /src（=运行时 bind-mount 挂载点）就地构建，使 .pc 烧入的
 #   prefix=/src/third/*-build-web/install 在运行时容器里原样有效；产物经 /opt/kabegame/seed
@@ -15,16 +27,16 @@
 #   FFMPEG_PKG_CONFIG_PATH 无条件指向 <repo>/third/FFmpeg-build-web/install/lib/pkgconfig，
 #   所以产物必须真实存在于 /src 树内，不能只留在镜像路径。
 #
-# 前置（宿主）：git submodule update --init third/deno third/FFmpeg third/x264
-#   且 third/deno 已应用补丁（deno task patch deno）——COPY 的是宿主工作树。
+# 前置（宿主）：git submodule update --init third/FFmpeg third/x264
 #
-# 编译隔离：CARGO_TARGET_DIR=/src/target-web（宿主增量）、DENO_NODE_MODULES_SUFFIX=-web、
-#   KB_BUILD_SUFFIX=-web。almalinux8 与服务器（Alibaba Cloud Linux 3）同 glibc 2.28 基线；
-#   官方 deno 2.9.0 二进制 glibc 基线更新、在此段错误，故必须自编。
+# 编译隔离：CARGO_TARGET_DIR=/src/target-web（宿主增量）、KB_BUILD_SUFFIX=-web。
+#   almalinux8 与服务器（Alibaba Cloud Linux 3）同 glibc 2.28 基线。
 
+# RUST_TOOLCHAIN 必须 ≥1.95：主 app 链 crates.io deno_crypto 0.266（deno 2.9.0 的
+# ext/crypto，用了 if_let_guard）。
 ARG RUST_TOOLCHAIN=1.97.0
 
-########## base：系统依赖 + rustup（final 与各 builder 共用） ##########
+########## base：系统依赖 + rustup（final 与 ffmpeg-builder 共用） ##########
 FROM almalinux:8 AS base
 ARG RUST_TOOLCHAIN
 
@@ -63,21 +75,6 @@ RUN git config --global --add safe.directory '*'
 
 WORKDIR /src
 
-########## deno-builder：自编 deno CLI（third/deno pin v2.9.0 + kabegame 补丁） ##########
-FROM base AS deno-builder
-
-COPY scripts/utils.sh scripts/build-deno.sh /src/scripts/
-COPY third/deno /src/third/deno
-
-# build-deno.sh 会 cd 进 third/deno 再跑 cargo，故 deno 用自带的 rust-toolchain.toml
-# （1.95.0，支持 deno_crypto 的 if_let_guard）构建，rustup 本阶段自动装，不进 final。
-# 注：final 运行时编译主 app 用的是 base 默认工具链（RUST_TOOLCHAIN）——它链 crates.io
-# deno_crypto 0.266（即 deno 2.9.0 的 ext/crypto，同样用了 if_let_guard），故 RUST_TOOLCHAIN 必须 ≥1.95。
-# deno 的 cargo target（>10GB）用完即弃，只留二进制。
-RUN CARGO_TARGET_DIR=/tmp/deno-target bash scripts/build-deno.sh \
- && install -m 755 /tmp/deno-target/release/deno /usr/local/bin/deno \
- && rm -rf /tmp/deno-target
-
 ########## ffmpeg-builder：x264 + FFmpeg 静态库（-web 后缀，就地 /src 构建） ##########
 FROM base AS ffmpeg-builder
 ENV KB_BUILD_SUFFIX=-web
@@ -88,77 +85,26 @@ COPY third/FFmpeg /src/third/FFmpeg
 
 RUN bash scripts/build-ffmpeg.sh
 
-########## scp-manifests：提取 src-crawler-plugins 清单（独立工程，plugins/* 随仓库演进） ##########
-# 先整体 COPY 再只取 package.json/deno.lock：本阶段随任意插件源码变动重跑（很快），
-# 但产出 /out 只含清单——下游 COPY --from 按内容寻址，清单不变则 nm-builder 层继续命中缓存。
-FROM base AS scp-manifests
-COPY src-crawler-plugins /tmp/scp
-RUN mkdir -p /out/src-crawler-plugins/plugins \
- && cp /tmp/scp/package.json /tmp/scp/deno.lock /out/src-crawler-plugins/ \
- && for d in /tmp/scp/plugins/*/; do \
-      n="$(basename "$d")"; \
-      if [ -f "$d/package.json" ]; then \
-        mkdir -p "/out/src-crawler-plugins/plugins/$n"; \
-        cp "$d/package.json" "/out/src-crawler-plugins/plugins/$n/"; \
-      fi; \
-    done
-
-########## nm-builder：deno install 出 node_modules-web 种子（只 COPY 清单，依赖不变则缓存） ##########
-FROM base AS nm-builder
-COPY --from=deno-builder /usr/local/bin/deno /usr/local/bin/deno
-ENV DENO_DIR=/opt/kabegame/deno-dir \
-    DENO_NODE_MODULES_SUFFIX=-web
-
-# 与根 package.json 的 workspaces 一一对应；新增 workspace 时需在此补一行。
-COPY package.json deno.json deno.lock /src/
-COPY apps/kabegame/package.json /src/apps/kabegame/
-COPY apps/docs/package.json /src/apps/docs/
-COPY packages/kabegame-core/package.json /src/packages/kabegame-core/
-COPY packages/kabegame-i18n/package.json /src/packages/kabegame-i18n/
-COPY packages/kabegame-plugin-sdk/package.json /src/packages/kabegame-plugin-sdk/
-COPY packages/kabegame-types/package.json /src/packages/kabegame-types/
-COPY packages/photoswipe-vue/package.json /src/packages/photoswipe-vue/
-COPY src-tauri-plugins/tauri-plugin-picker/package.json /src/src-tauri-plugins/tauri-plugin-picker/
-COPY src-tauri-plugins/tauri-plugin-share/package.json /src/src-tauri-plugins/tauri-plugin-share/
-# src-crawler-plugins 是独立工程（不在根 workspaces；rspack 构建插件、web 构建会把
-# 全部插件打进 resources/plugins），须单独 install 出它自己的 node_modules-web。
-# 其 file:../packages/* devDeps 由上面已 COPY 的 packages/* 清单满足（deno 以符号链接落位，
-# 运行时经 /src 挂载解析到真实源码）。
-COPY --from=scp-manifests /out/src-crawler-plugins /src/src-crawler-plugins
-
-# 0004 补丁：node_modules 路径在真实 IO 边界重定向到 node_modules-web，
-# 嵌套目录物理带后缀——必须由带该变量的 deno install 生成，不能从宿主树复制。
-# 装完把所有 node_modules-web 树收进 /opt/kabegame/seed（含清单），供 final/entrypoint 消费。
-RUN deno install --frozen \
- && (cd /src/src-crawler-plugins && deno install --frozen) \
- && mkdir -p /opt/kabegame/seed \
- && find . -maxdepth 4 -type d -name 'node_modules-web' -not -path '*/node_modules-web/*' \
-      | sed 's|^\./||' > /opt/kabegame/seed/nm-list.txt \
- && while IFS= read -r rel; do \
-      mkdir -p "/opt/kabegame/seed/$(dirname "$rel")"; \
-      cp -a "/src/$rel" "/opt/kabegame/seed/$rel"; \
-    done < /opt/kabegame/seed/nm-list.txt \
- && cp deno.lock /opt/kabegame/seed/deno.lock
-
-########## final：工具链 + 预制产物 + seed entrypoint ##########
+########## final：工具链 + 官方 deno + 预制产物 + seed entrypoint ##########
 FROM base
 
-COPY --from=deno-builder /usr/local/bin/deno /usr/local/bin/deno
+# 官方 deno（pin 与仓库 third/deno 同版）。理由见文件头"deno 用官方二进制"。
+ARG DENO_VERSION=2.9.0
+RUN curl -fsSL -o /tmp/deno.zip \
+      "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" \
+ && unzip -q /tmp/deno.zip -d /usr/local/bin \
+ && rm /tmp/deno.zip \
+ && deno --version
+
 # 只带 install 前缀（.pc/头文件/静态库），FFmpeg 编译中间产物不进 final。
 COPY --from=ffmpeg-builder /src/third/FFmpeg-build-web/install /opt/kabegame/seed/third/FFmpeg-build-web/install
 COPY --from=ffmpeg-builder /src/third/x264-build-web/install /opt/kabegame/seed/third/x264-build-web/install
-COPY --from=nm-builder /opt/kabegame/seed /opt/kabegame/seed
-COPY --from=nm-builder /opt/kabegame/deno-dir /opt/kabegame/deno-dir
 COPY docker/web-release-entrypoint.sh /usr/local/bin/web-release-entrypoint.sh
 RUN chmod +x /usr/local/bin/web-release-entrypoint.sh
 
-# 注意 PATH 不再前置 /src/target-web/release：deno 权威来源是镜像 /usr/local/bin/deno
-# （带补丁、与种子一致），避免宿主残留的旧自编 deno 遮蔽它。
-# KABEGAME_SKIP_DENO_CLI=1：deno 已预编进镜像，DenoCliPlugin 不再重编。
+# KABEGAME_SKIP_DENO_CLI=1：容器用镜像里的官方 deno，DenoCliPlugin 不做自编刷新。
 ENV CARGO_TARGET_DIR="/src/target-web" \
     KB_BUILD_SUFFIX=-web \
-    DENO_NODE_MODULES_SUFFIX=-web \
-    DENO_DIR=/opt/kabegame/deno-dir \
     KABEGAME_SKIP_DENO_CLI=1
 
 ENTRYPOINT ["/usr/local/bin/web-release-entrypoint.sh"]

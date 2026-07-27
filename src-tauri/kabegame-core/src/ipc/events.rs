@@ -72,6 +72,8 @@ daemon_event_kinds! {
     ConnectionStatus,
     OrganizeProgress,
     OrganizeFinished,
+    HiddenCleanupProgress,
+    HiddenCleanupFinished,
     WallpaperUpdateImage,
     ImagesChange,
     AlbumImagesChange,
@@ -107,6 +109,8 @@ impl DaemonEventKind {
             DaemonEventKind::ConnectionStatus => "connection-status",
             DaemonEventKind::OrganizeProgress => "organize-progress",
             DaemonEventKind::OrganizeFinished => "organize-finished",
+            DaemonEventKind::HiddenCleanupProgress => "hidden-cleanup-progress",
+            DaemonEventKind::HiddenCleanupFinished => "hidden-cleanup-finished",
             DaemonEventKind::WallpaperUpdateImage => "wallpaper-update-image",
             DaemonEventKind::ImagesChange => "images-change",
             DaemonEventKind::AlbumImagesChange => "album-images-change",
@@ -137,6 +141,8 @@ impl DaemonEventKind {
             "connection-status" => Some(DaemonEventKind::ConnectionStatus),
             "organize-progress" => Some(DaemonEventKind::OrganizeProgress),
             "organize-finished" => Some(DaemonEventKind::OrganizeFinished),
+            "hidden-cleanup-progress" => Some(DaemonEventKind::HiddenCleanupProgress),
+            "hidden-cleanup-finished" => Some(DaemonEventKind::HiddenCleanupFinished),
             "wallpaper-update-image" => Some(DaemonEventKind::WallpaperUpdateImage),
             "images-change" => Some(DaemonEventKind::ImagesChange),
             "album-images-change" => Some(DaemonEventKind::AlbumImagesChange),
@@ -234,6 +240,25 @@ pub enum DaemonEvent {
         regenerated: usize,
         backfilled: usize,
         canceled: bool,
+        error: Option<String>,
+    },
+
+    /// 隐藏图片清理进度事件
+    #[serde(rename_all = "camelCase")]
+    HiddenCleanupProgress {
+        processed: usize,
+        total: usize,
+        removed: usize,
+        kept_files: usize,
+    },
+
+    /// 隐藏图片清理完成事件
+    #[serde(rename_all = "camelCase")]
+    HiddenCleanupFinished {
+        removed: usize,
+        kept_files: usize,
+        canceled: bool,
+        error: Option<String>,
     },
 
     /// `images` 表增删改（reason: `add` | `delete` | `change`）
@@ -377,6 +402,8 @@ impl DaemonEvent {
             DaemonEvent::ConnectionStatus { .. } => DaemonEventKind::ConnectionStatus,
             DaemonEvent::OrganizeProgress { .. } => DaemonEventKind::OrganizeProgress,
             DaemonEvent::OrganizeFinished { .. } => DaemonEventKind::OrganizeFinished,
+            DaemonEvent::HiddenCleanupProgress { .. } => DaemonEventKind::HiddenCleanupProgress,
+            DaemonEvent::HiddenCleanupFinished { .. } => DaemonEventKind::HiddenCleanupFinished,
             DaemonEvent::ImagesChange { .. } => DaemonEventKind::ImagesChange,
             DaemonEvent::AlbumImagesChange { .. } => DaemonEventKind::AlbumImagesChange,
             DaemonEvent::WallpaperUpdateImage { .. } => DaemonEventKind::WallpaperUpdateImage,

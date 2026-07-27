@@ -20,6 +20,10 @@
       <div class="kame-toolbox-bubble__divider" />
 
       <div class="kame-toolbox-bubble__body">
+        <template v-if="busyCount > 0 || hasUnseenFailure">
+          <BusyTasksSection @close="emit('close')" />
+          <div class="tool-divider" />
+        </template>
         <template v-for="(group, gi) in groups" :key="group.id">
           <div class="tool-group-title">{{ group.title }}</div>
           <template v-for="item in group.items" :key="item.id">
@@ -52,6 +56,8 @@ import { Setting } from "@element-plus/icons-vue";
 import { useI18n } from "@kabegame/i18n";
 import { useGlobalTools, type GlobalToolItem } from "@/header/globalToolsRegistry";
 import { shortcutLabel } from "@/composables/useGlobalShortcuts";
+import { useBusyTasks } from "@/composables/useBusyTasks";
+import BusyTasksSection from "@/components/busy/BusyTasksSection.vue";
 
 const props = withDefaults(defineProps<{
   visible: boolean;
@@ -71,6 +77,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const { groups } = useGlobalTools();
+const { count: busyCount, hasUnseenFailure } = useBusyTasks();
 
 // 工具箱内容比消息气泡宽，最小宽度单独兜底，避免贴边时被压扁到不可读
 const bubbleStyle = computed(() => ({
@@ -252,6 +259,12 @@ const handleItemClick = (item: GlobalToolItem) => {
 .tool-row-comp {
   display: flex;
   align-items: center;
+
+  :deep(.organize-header-control),
+  :deep(.hidden-cleanup-control) {
+    display: flex;
+    width: 100%;
+  }
 
   :deep(.el-button) {
     width: 100%;

@@ -5,9 +5,14 @@
   "toolboxApp": "アプリ",
   "toolboxMaintenance": "メンテナンス",
   "toolboxDisplay": "表示",
+  "busyTitle": "いま対応中",
+  "busyBackground": "バックグラウンド {count} 件",
+  "busyCancelAll": "すべてキャンセル",
+  "busyView": "表示",
   "stopTask": "タスクを停止",
   "deleteTask": "タスクを削除",
   "organize": "整理",
+  "organizeInProgress": "進行中",
   "collect": "収集",
   "createAlbum": "新規アルバム",
   "openVirtualDrive": "VDで表示",
@@ -23,8 +28,9 @@
   "failedImagesRetryAll": "すべて再試行",
   "failedImagesDeleteAll": "すべて削除",
   "failedImagesFilter": "プラグインでフィルター",
-  "showHidden": "非表示画像を表示",
-  "hideHidden": "非表示画像を隠す",
-  "showAlbumImages": "アルバム画像を表示",
-  "hideAlbumImages": "アルバム画像を隠す"
+  "hideHidden": "非表示画像を表示しない",
+  "hideAlbumImages": "アルバム画像を表示しない",
+  "cleanHidden": "非表示画像を整理",
+  "cleanHiddenInProgress": "実行中",
+  "cleanHiddenEmpty": "非表示画像はありません"
 }

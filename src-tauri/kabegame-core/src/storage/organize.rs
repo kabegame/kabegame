@@ -306,6 +306,14 @@ impl OrganizeService {
             eprintln!("[organize] 开始整理 {:?}", options);
             let res = run_organize(&handle, storage, options, cancel);
             if let Err(e) = res {
+                let state = svc.get_run_state();
+                emit_organize_finished(
+                    state.removed,
+                    state.regenerated,
+                    state.backfilled,
+                    false,
+                    Some(e.clone()),
+                );
                 eprintln!("[organize] 任务失败: {}", e);
             }
 
@@ -375,8 +383,15 @@ fn emit_organize_finished(
     regenerated: usize,
     backfilled: usize,
     canceled: bool,
+    error: Option<String>,
 ) {
-    GlobalEmitter::global().emit_organize_finished(removed, regenerated, backfilled, canceled);
+    GlobalEmitter::global().emit_organize_finished(
+        removed,
+        regenerated,
+        backfilled,
+        canceled,
+        error,
+    );
 }
 
 fn organize_range_upper_bound(offset: Option<usize>, limit: Option<usize>) -> Option<usize> {
@@ -511,14 +526,13 @@ fn run_organize(
     let mut last_id: i64 = 0;
 
     // 缩略图、兼容格式和原生元数据补算都会读文件并解析，保持小批；其余操作用大批减少往返。
-    let batch_size = if options.regen_thumbnails
-        || options.regen_compatible
-        || options.backfill_native_metadata
-    {
-        10
-    } else {
-        100
-    };
+    let batch_size =
+        if options.regen_thumbnails || options.regen_compatible || options.backfill_native_metadata
+        {
+            10
+        } else {
+            100
+        };
 
     // 当前壁纸 id：若被移除则清空（与历史行为保持一致）
     let mut current_wallpaper_id = Settings::global().get_current_wallpaper_image_id();
@@ -530,6 +544,7 @@ fn run_organize(
                 regenerated_total,
                 backfilled_total,
                 true,
+                None,
             );
             return Ok(());
         }
@@ -635,29 +650,21 @@ fn run_organize(
             }
 
             // 6. 补充原生元数据。即将删除的图片不处理；同一非空 hash 在本批只选一个代表。
-            if options.backfill_native_metadata
-                && !should_remove.contains(&row.id)
-                && row.native_parser_version
-                    != Some(i64::from(crate::media::native_metadata::PARSER_VERSION))
-            {
-                let format_key = row
-                    .format_key
-                    .as_deref()
-                    .unwrap_or("")
-                    .trim()
-                    .to_ascii_lowercase();
-                if matches!(
-                    format_key.as_str(),
-                    "image/jpg" | "image/jpeg" | "image/png"
-                ) {
-                    let hash = row.hash.trim();
-                    if hash.is_empty() || native_metadata_hashes.insert(row.hash.clone()) {
-                        native_metadata_list.push((
-                            row.id,
-                            row.hash.clone(),
-                            row.local_path.clone(),
-                            format_key,
-                        ));
+            if options.backfill_native_metadata && !should_remove.contains(&row.id) {
+                let format_key = row.format_key.as_deref().unwrap_or("").to_string();
+                if let Some(expected_version) =
+                    crate::media::native_metadata::parser_version_for(&format_key)
+                {
+                    if row.native_parser_version != Some(i64::from(expected_version)) {
+                        let hash = row.hash.trim();
+                        if hash.is_empty() || native_metadata_hashes.insert(row.hash.clone()) {
+                            native_metadata_list.push((
+                                row.id,
+                                row.hash.clone(),
+                                row.local_path.clone(),
+                                format_key,
+                            ));
+                        }
                     }
                 }
             }
@@ -665,7 +672,10 @@ fn run_organize(
 
         // 执行删除
         if !remove_ids.is_empty() {
-            crate::storage::image_events::delete_images_with_events(&remove_ids, false)?;
+            handle.block_on(crate::storage::image_events::delete_images_with_events(
+                &remove_ids,
+                false,
+            ))?;
 
             // 检查壁纸是否被移除
             if let Some(cur) = current_wallpaper_id.as_deref() {
@@ -677,20 +687,14 @@ fn run_organize(
 
             removed_total += remove_ids.len();
 
-            // 「删除源文件」=移入系统回收站（带软链接/异构盘护栏，绝不永久删除）。
-            // 历史事故：`~/Pictures` 软链到外置盘后，删除穿过软链误删共享物理文件。
-            // 现在软链接 / 网络盘 / 虚拟盘上的文件只移出图库、保留磁盘文件（见 safe_delete）。
-            // Android 的 content:// 删除不在此处。
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if options.delete_source_files {
-                let paths: Vec<&Path> = batch
+                let paths: Vec<String> = batch
                     .iter()
                     .filter(|r| should_remove.contains(&r.id))
-                    .map(|r| r.local_path.trim())
+                    .map(|r| r.local_path.trim().to_string())
                     .filter(|p| !p.is_empty())
-                    .map(Path::new)
                     .collect();
-                crate::storage::safe_delete::trash_source_files_batch(&paths);
+                handle.block_on(crate::storage::source_purge::purge_source_files(&paths));
             }
         }
 
@@ -702,6 +706,7 @@ fn run_organize(
                     regenerated_total,
                     backfilled_total,
                     true,
+                    None,
                 );
                 return Ok(());
             }
@@ -762,6 +767,7 @@ fn run_organize(
                     regenerated_total,
                     backfilled_total,
                     true,
+                    None,
                 );
                 return Ok(());
             }
@@ -853,18 +859,25 @@ fn run_organize(
 
         // 执行原生元数据补充。失败只记录并跳过，不中断整批整理。
         for (id, hash, local_path, format_key) in native_metadata_list {
+            let Some(expected_version) =
+                crate::media::native_metadata::parser_version_for(&format_key)
+            else {
+                continue;
+            };
             if cancel.load(Ordering::Relaxed) {
                 emit_organize_finished(
                     removed_total,
                     regenerated_total,
                     backfilled_total,
                     true,
+                    None,
                 );
                 return Ok(());
             }
 
             let image_id = id.to_string();
-            match storage.ensure_native_metadata_for_image(&image_id, &hash, None) {
+            match storage.ensure_native_metadata_for_image(&image_id, &hash, expected_version, None)
+            {
                 Ok(Some(_)) => {
                     backfilled_total += 1;
                     continue;
@@ -878,9 +891,9 @@ fn run_organize(
                 }
             }
 
-            let bytes = match handle.block_on(
-                crate::media::native_metadata::read_image_bytes(&local_path),
-            ) {
+            let bytes = match handle
+                .block_on(crate::media::native_metadata::read_image_bytes(&local_path))
+            {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     eprintln!(
@@ -906,7 +919,12 @@ fn run_organize(
                     continue;
                 }
             };
-            match storage.ensure_native_metadata_for_image(&image_id, &hash, Some(&json)) {
+            match storage.ensure_native_metadata_for_image(
+                &image_id,
+                &hash,
+                expected_version,
+                Some(&json),
+            ) {
                 Ok(Some(_)) => {
                     backfilled_total += 1;
                 }
@@ -943,6 +961,7 @@ fn run_organize(
         regenerated_total,
         backfilled_total,
         false,
+        None,
     );
     Ok(())
 }

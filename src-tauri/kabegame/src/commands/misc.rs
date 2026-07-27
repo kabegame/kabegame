@@ -5,7 +5,7 @@ use kabegame_core::storage::Storage;
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 
 /// 退出应用。用于 Android 返回键确认退出及桌面/托盘等场景。
 /// 使用 AppHandle::exit 确保进程正确退出（win.close() 在 Android 上可能只关窗口不退出进程）。
@@ -120,32 +120,6 @@ pub async fn is_plasma_wallpaper_plugin_installed() -> Result<bool, String> {
     }
 }
 
-#[tauri::command]
-#[cfg(not(target_os = "android"))]
-pub async fn clear_user_data<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    let app_data_dir = kabegame_core::app_paths::AppPaths::global()
-        .data_dir
-        .clone();
-
-    if !app_data_dir.exists() {
-        return Ok(()); // 目录不存在，无需清理
-    }
-
-    // 方案：创建清理标记文件，在应用重启后清理
-    // 这样可以避免删除正在使用的文件
-    let cleanup_marker = kabegame_core::app_paths::AppPaths::global().cleanup_marker();
-    fs::write(&cleanup_marker, "1")
-        .map_err(|e| format!("Failed to create cleanup marker: {}", e))?;
-
-    // 延迟重启，确保响应已发送
-    tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        app.restart();
-    });
-
-    Ok(())
-}
-
 /// 参数结构见 `commands::organize::StartOrganizeArgs`（与前端 `invoke` 对象字段一致，
 /// camelCase；勿改用平铺 `bool` 参数，否则 serde 无法匹配 `removeUnrecognized` 等键，会得到默认值 false）。
 #[tauri::command]
@@ -173,6 +147,21 @@ pub async fn get_organize_run_state() -> Result<serde_json::Value, String> {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub async fn cancel_organize() -> Result<serde_json::Value, String> {
     kabegame_core::commands::organize::cancel_organize()
+}
+
+#[tauri::command]
+pub async fn start_hidden_cleanup() -> Result<serde_json::Value, String> {
+    kabegame_core::commands::hidden_cleanup::start_hidden_cleanup().await
+}
+
+#[tauri::command]
+pub async fn get_hidden_cleanup_run_state() -> Result<serde_json::Value, String> {
+    kabegame_core::commands::hidden_cleanup::get_hidden_cleanup_run_state()
+}
+
+#[tauri::command]
+pub async fn cancel_hidden_cleanup() -> Result<serde_json::Value, String> {
+    kabegame_core::commands::hidden_cleanup::cancel_hidden_cleanup()
 }
 
 #[tauri::command]

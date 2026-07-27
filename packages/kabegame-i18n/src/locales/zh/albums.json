@@ -1,4 +1,10 @@
 {
+  "syncCardTitle": "同步文件夹画册",
+  "syncScanning": "扫描中，已新增 {added}",
+  "syncDetailDeleted": "已移除 {deleted}",
+  "syncDetailReimported": "重新导入 {reimported}",
+  "syncDoneToast": "「{name}」已同步，新增 {added} 张",
+  "syncFailedToast": "「{name}」同步失败",
   "emptyTip": "暂无画册，点击右上角创建",
   "subAlbums": "子画册",
   "imagesTab": "图片",

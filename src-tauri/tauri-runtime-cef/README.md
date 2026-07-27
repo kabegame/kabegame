@@ -31,13 +31,14 @@ Windows/Linux 使用 `Ctrl+Shift+D`。
 | Tauri 能力 | CEF 实现 |
 | --- | --- |
 | 前端资源 | 全局 scheme handler factory 服务前端/asset 资源。Linux/macOS 走自定义 scheme（`tauri://localhost` / `asset://localhost`）；Windows 上 Tauri core 把自定义 scheme `X` 改写为 `http://X.localhost`（见 `tauri` manager `webview.rs`），故 CEF 改为对 `http` scheme + `X.localhost` 域注册 factory（`protocol::cef_scheme_and_domain`），否则 `http://tauri.localhost` 会当成真实网络请求 → `ERR_CONNECTION_REFUSED` |
-| `invoke()` | `ipc://` 主路径与 `cef-ipc://` postMessage 后备桥接；内部 IPC scheme 允许绕过页面 CSP，以支持 surf 等第三方页面中的 Tauri IPC |
+| `invoke()` | 普通 invoke 强制走 `cef-ipc://` postMessage(JSON)桥（`ipc.rs::force_postmessage_ipc_transport`：上游 `fetch(ipc://)` 路径的 `Tauri-*` 自定义头触发 CORS 预检，而 CEF scheme handler 收不到 network process 发起的 preflight → `ERR_UNKNOWN_URL_SCHEME`）；**二进制 body**（`InvokeBody::Raw`，如 `crawl_fs_fwrite` 流式写）走 `cef-ipc://localhost/raw` 帧化通道——元数据在 body 前缀、请求零自定义头不触发预检，Rust 侧解帧后转发给 Tauri `ipc` 协议 handler（完整 invoke 解析 + ACL），页面侧入口为 shim 注入的 `window.__kb_raw_invoke__`；内部 IPC scheme 允许绕过页面 CSP，以支持 surf 等第三方页面中的 Tauri IPC |
 | 初始化脚本 | browser 创建时通过版本化 `extra_info` 传给 renderer，在每个新 V8 context 的 `RenderProcessHandler::on_context_created` 中同步执行，保证首次加载、刷新与跨页面导航均为 document-start |
 | 页面生命周期 | `LoadHandler` 映射到 Tauri page-load hook |
 | Cookie API | CEF 全局 `CookieManager` 映射到 Tauri `cookies_for_url` / `cookies` / `set_cookie` / `delete_cookie` |
 | 窗口事件 | CEF `WindowDelegate` 回流为 Tauri runtime events |
 | Linux 窗口身份 | CEF Views 默认不设 X11 `WM_CLASS` / Wayland app_id，桌面环境无法把窗口关联到 `.desktop`（任务栏双条目、StartupNotify 转圈超时）；`WindowDelegate::get_linux_window_properties` 显式提供（优先 `RuntimeInitArgs::app_id`，回退可执行文件名），deb 模板 `StartupWMClass={{exec}}` 与之匹配 |
 | Raw window handle | Linux 返回 Xlib window，Windows 返回 Win32 HWND（+HINSTANCE）；macOS CEF Views 暂不暴露 NSView，返回 unavailable |
+| 渲染进程看门狗 | `TauriCefRequestHandler` 对所有 webview 无条件挂载（导航闸门为可选字段）。`on_render_process_unresponsive`（渲染进程约 15s 未回执输入）直接 `terminate()`；`on_render_process_terminated`（含真崩溃）自动 `browser.reload()` 恢复。`crawler-*` 标签的隐藏爬虫窗口在两个回调中均被排除——其卡死由 kabegame-core 调度器的 60s/120s 心跳看门狗判定并结束任务（见 `cocs/crawler/CRAWLER_JS_FLOW.md` 3.6） |
 
 ## 平台门控
 

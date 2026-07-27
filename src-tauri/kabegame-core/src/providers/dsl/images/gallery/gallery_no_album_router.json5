@@ -2,14 +2,8 @@
     "namespace": "kabegame",
     "name": "gallery_no_album_router",
     "query": {
-        "join": [{
-            "kind": "LEFT",
-            "table": "album_images",
-            "as": "no_album_ai",
-            "on": "no_album_ai.image_id = images.id and no_album_ai.album_id <> ${global.hidden_album_id}",
-            "in_need": true
-        }],
-        "where": "is_favorite or no_album_ai.image_id IS NULL"
+        // LEFT JOIN album_images 会按画册归属数扇出行（收藏且在其他画册的图片被 is_favorite 全部放行），改用 NOT EXISTS 保证每图至多一行
+        "where": "is_favorite or NOT EXISTS (SELECT 1 FROM album_images nai WHERE nai.image_id = images.id AND nai.album_id <> ${global.hidden_album_id})"
     },
     "resolve": {
         "filter_comb": {

@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +39,9 @@ impl TaskParams {
 
 pub struct WebviewSession {
     pub completion: Option<oneshot::Sender<TaskResult>>,
+    /// WebView 心跳(bootstrap.js 每 60s invoke crawl_heartbeat);
+    /// run_task 的看门狗 120s 未收到即判窗口无响应结束任务。
+    pub heartbeat: mpsc::UnboundedSender<()>,
     pub state: Value,
 }
 
@@ -197,8 +200,11 @@ impl Task {
         guard.last().map(f)
     }
 
-    pub fn begin_webview_session(&self) -> Result<oneshot::Receiver<TaskResult>, String> {
+    pub fn begin_webview_session(
+        &self,
+    ) -> Result<(oneshot::Receiver<TaskResult>, mpsc::UnboundedReceiver<()>), String> {
         let (completion_tx, completion_rx) = oneshot::channel();
+        let (heartbeat_tx, heartbeat_rx) = mpsc::unbounded_channel();
         let mut guard = self.webview.lock().unwrap();
         if guard.is_some() {
             return Err(format!(
@@ -208,9 +214,18 @@ impl Task {
         }
         *guard = Some(WebviewSession {
             completion: Some(completion_tx),
+            heartbeat: heartbeat_tx,
             state: Value::Object(serde_json::Map::new()),
         });
-        Ok(completion_rx)
+        Ok((completion_rx, heartbeat_rx))
+    }
+
+    /// WebView 心跳上报(crawl_heartbeat 命令)。会话不存在或接收端已结束时静默忽略。
+    pub fn heartbeat_webview(&self) {
+        let guard = self.webview.lock().unwrap();
+        if let Some(session) = guard.as_ref() {
+            let _ = session.heartbeat.send(());
+        }
     }
 
     pub fn complete_webview(&self, result: TaskResult) -> bool {

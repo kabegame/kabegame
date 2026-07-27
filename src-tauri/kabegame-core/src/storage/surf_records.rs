@@ -16,12 +16,6 @@ pub struct SurfRecord {
     pub cookie: String,
     pub icon: Option<Vec<u8>>,
     pub last_visit_at: u64,
-    pub download_count: i64,
-    /// 累计删除张数（存储）
-    pub deleted_count: i64,
-    /// 当前关联 `images` 行数（由查询计算，非存储列）
-    #[serde(default)]
-    pub image_count: i64,
     pub created_at: u64,
     #[serde(default)]
     pub last_image: Option<ImageInfo>,
@@ -67,8 +61,8 @@ impl Storage {
         let ts = now_secs();
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         conn.execute(
-            "INSERT INTO surf_records (id, host, root_url, icon, last_visit_at, download_count, deleted_count, created_at)
-             VALUES (?1, ?2, ?3, NULL, ?4, 0, 0, ?5)",
+            "INSERT INTO surf_records (id, host, root_url, icon, last_visit_at, created_at)
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5)",
             params![id, host, root_url, ts as i64, ts as i64],
         )
         .map_err(|e| format!("Failed to create surf_record: {}", e))?;
@@ -87,8 +81,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let row = conn
             .query_row(
-                "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.download_count, sr.deleted_count, sr.created_at,
-                        (SELECT COUNT(*) FROM images WHERE surf_record_id = sr.id) AS image_count
+                "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.created_at
                  FROM surf_records sr
                  WHERE sr.host = ?1
                  LIMIT 1",
@@ -103,9 +96,6 @@ impl Storage {
                         r.get::<_, Option<Vec<u8>>>(5)?,
                         r.get::<_, i64>(6)?,
                         r.get::<_, i64>(7)?,
-                        r.get::<_, i64>(8)?,
-                        r.get::<_, i64>(9)?,
-                        r.get::<_, i64>(10)?,
                     ))
                 },
             )
@@ -114,19 +104,7 @@ impl Storage {
         drop(conn);
 
         match row {
-            Some((
-                id,
-                host,
-                name,
-                root_url,
-                cookie,
-                icon,
-                last_visit_at,
-                download_count,
-                deleted_count,
-                created_at,
-                image_count,
-            )) => {
+            Some((id, host, name, root_url, cookie, icon, last_visit_at, created_at)) => {
                 let last_image = self.find_latest_image_by_surf_record(&id)?;
                 Ok(Some(SurfRecord {
                     id,
@@ -136,9 +114,6 @@ impl Storage {
                     cookie,
                     icon,
                     last_visit_at: last_visit_at as u64,
-                    download_count,
-                    deleted_count,
-                    image_count,
                     created_at: created_at as u64,
                     last_image,
                 }))
@@ -151,8 +126,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let row = conn
             .query_row(
-                "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.download_count, sr.deleted_count, sr.created_at,
-                        (SELECT COUNT(*) FROM images WHERE surf_record_id = sr.id) AS image_count
+                "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.created_at
                  FROM surf_records sr
                  WHERE sr.id = ?1
                  LIMIT 1",
@@ -167,9 +141,6 @@ impl Storage {
                         r.get::<_, Option<Vec<u8>>>(5)?,
                         r.get::<_, i64>(6)?,
                         r.get::<_, i64>(7)?,
-                        r.get::<_, i64>(8)?,
-                        r.get::<_, i64>(9)?,
-                        r.get::<_, i64>(10)?,
                     ))
                 },
             )
@@ -178,19 +149,7 @@ impl Storage {
         drop(conn);
 
         match row {
-            Some((
-                id,
-                host,
-                name,
-                root_url,
-                cookie,
-                icon,
-                last_visit_at,
-                download_count,
-                deleted_count,
-                created_at,
-                image_count,
-            )) => {
+            Some((id, host, name, root_url, cookie, icon, last_visit_at, created_at)) => {
                 let last_image = self.find_latest_image_by_surf_record(&id)?;
                 Ok(Some(SurfRecord {
                     id,
@@ -200,9 +159,6 @@ impl Storage {
                     cookie,
                     icon,
                     last_visit_at: last_visit_at as u64,
-                    download_count,
-                    deleted_count,
-                    image_count,
                     created_at: created_at as u64,
                     last_image,
                 }))
@@ -227,8 +183,7 @@ impl Storage {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.download_count, sr.deleted_count, sr.created_at,
-                    (SELECT COUNT(*) FROM images WHERE surf_record_id = sr.id) AS image_count
+            "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.created_at
              FROM surf_records sr WHERE sr.id IN ({})",
             placeholders
         );
@@ -245,10 +200,7 @@ impl Storage {
                     cookie: r.get::<_, String>(4)?,
                     icon: r.get::<_, Option<Vec<u8>>>(5)?,
                     last_visit_at: r.get::<_, i64>(6)? as u64,
-                    download_count: r.get::<_, i64>(7)?,
-                    deleted_count: r.get::<_, i64>(8)?,
-                    created_at: r.get::<_, i64>(9)? as u64,
-                    image_count: r.get::<_, i64>(10)?,
+                    created_at: r.get::<_, i64>(7)? as u64,
                     last_image: None,
                 })
             })
@@ -271,8 +223,7 @@ impl Storage {
             .map_err(|e| format!("Failed to query surf_records total: {}", e))?;
         let mut stmt = conn
             .prepare(
-                "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.download_count, sr.deleted_count, sr.created_at,
-                        (SELECT COUNT(*) FROM images WHERE surf_record_id = sr.id) AS image_count
+                "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.created_at
                  FROM surf_records sr
                  ORDER BY sr.last_visit_at DESC
                  LIMIT ?1 OFFSET ?2",
@@ -289,9 +240,6 @@ impl Storage {
                     r.get::<_, Option<Vec<u8>>>(5)?,
                     r.get::<_, i64>(6)?,
                     r.get::<_, i64>(7)?,
-                    r.get::<_, i64>(8)?,
-                    r.get::<_, i64>(9)?,
-                    r.get::<_, i64>(10)?,
                 ))
             })
             .map_err(|e| format!("Failed to query surf_records: {}", e))?;
@@ -304,20 +252,7 @@ impl Storage {
         drop(conn);
 
         let mut records = Vec::with_capacity(raw.len());
-        for (
-            id,
-            host,
-            name,
-            root_url,
-            cookie,
-            icon,
-            last_visit_at,
-            download_count,
-            deleted_count,
-            created_at,
-            image_count,
-        ) in raw
-        {
+        for (id, host, name, root_url, cookie, icon, last_visit_at, created_at) in raw {
             records.push(SurfRecord {
                 last_image: self.find_latest_image_by_surf_record(&id)?,
                 id,
@@ -327,9 +262,6 @@ impl Storage {
                 cookie,
                 icon,
                 last_visit_at: last_visit_at as u64,
-                download_count,
-                deleted_count,
-                image_count,
                 created_at: created_at as u64,
             });
         }
@@ -401,44 +333,6 @@ impl Storage {
         Ok(count > 0)
     }
 
-    /// 当前畅游记录下图片数、累计删除数、累计下载数（用于事件快照）。
-    pub fn surf_record_counts_snapshot(&self, id: &str) -> Result<(i64, i64, i64), String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let row = conn
-            .query_row(
-                "SELECT download_count, deleted_count FROM surf_records WHERE id = ?1",
-                params![id],
-                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
-            )
-            .optional()
-            .map_err(|e| format!("Failed to read surf_record counts: {}", e))?;
-        let (download_count, deleted_count) = match row {
-            Some(x) => x,
-            None => return Err("surf record not found".to_string()),
-        };
-        let image_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM images WHERE surf_record_id = ?1",
-                params![id],
-                |r| r.get(0),
-            )
-            .map_err(|e| format!("Failed to count surf images: {}", e))?;
-        Ok((image_count, deleted_count, download_count))
-    }
-
-    pub fn increment_surf_record_deleted_count(&self, id: &str, delta: i64) -> Result<(), String> {
-        if delta <= 0 {
-            return Ok(());
-        }
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.execute(
-            "UPDATE surf_records SET deleted_count = deleted_count + ?1 WHERE id = ?2",
-            params![delta, id],
-        )
-        .map_err(|e| format!("Failed to increment surf_record deleted_count: {}", e))?;
-        Ok(())
-    }
-
     pub fn update_surf_record_visit(&self, id: &str) -> Result<(), String> {
         let ts = now_secs() as i64;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -461,27 +355,6 @@ impl Storage {
         .map_err(|e| format!("Failed to update surf_record icon: {}", e))?;
         drop(conn);
         GlobalEmitter::global().emit_surf_record_changed(id, json!({ "iconChanged": true }));
-        Ok(())
-    }
-
-    pub fn increment_surf_record_download_count(&self, id: &str) -> Result<(), String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.execute(
-            "UPDATE surf_records SET download_count = download_count + 1 WHERE id = ?1",
-            params![id],
-        )
-        .map_err(|e| format!("Failed to increment surf_record download_count: {}", e))?;
-        drop(conn);
-        if let Ok((image_count, deleted_count, download_count)) =
-            self.surf_record_counts_snapshot(id)
-        {
-            GlobalEmitter::global().emit_surf_record_counts(
-                id,
-                image_count,
-                deleted_count,
-                download_count,
-            );
-        }
         Ok(())
     }
 

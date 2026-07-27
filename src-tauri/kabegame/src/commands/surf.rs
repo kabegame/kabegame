@@ -350,11 +350,8 @@ pub async fn surf_start_session<R: Runtime>(
                         }
 
                         let dq = TaskScheduler::global().download_queue();
-                        if dq.has_active_native_owner_url(
-                            None,
-                            Some(&surf_record_id),
-                            url.as_str(),
-                        ) {
+                        if dq.has_active_native_owner_url(None, Some(&surf_record_id), url.as_str())
+                        {
                             return false;
                         }
 
@@ -385,12 +382,9 @@ pub async fn surf_start_session<R: Runtime>(
                                 )
                                 .await;
                             match result {
-                                Ok(()) => eval_surf_toast_for_host(
-                                    &app,
-                                    &host,
-                                    "已加入下载列表",
-                                    "start",
-                                ),
+                                Ok(()) => {
+                                    eval_surf_toast_for_host(&app, &host, "已加入下载列表", "start")
+                                }
                                 Err(error) => {
                                     eprintln!("[Surf] Failed to enqueue page download: {error}");
                                 }
@@ -548,7 +542,10 @@ pub async fn surf_get_record_images(
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn surf_update_root_url(host: String, root_url: String) -> Result<serde_json::Value, String> {
+pub async fn surf_update_root_url(
+    host: String,
+    root_url: String,
+) -> Result<serde_json::Value, String> {
     kabegame_core::commands::surf::surf_update_root_url(host, root_url)
 }
 

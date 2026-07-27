@@ -98,5 +98,12 @@
   "close.tray.title": "トレイに最小化",
   "close.tray.desc": "ウィンドウをシステムトレイに隠し、アプリをバックグラウンドで実行し続けます",
   "close.exit.title": "アプリを終了",
-  "close.exit.desc": "ウィンドウを閉じるときにアプリを終了します"
+  "close.exit.desc": "ウィンドウを閉じるときにアプリを終了します",
+  "timeJustNow": "たった今",
+  "timeMinutesAgo": "{n} 分前",
+  "timeHoursAgo": "{n} 時間前",
+  "timeDaysAgo": "{n} 日前",
+  "timeWeeksAgo": "{n} 週間前",
+  "timeMonthsAgo": "{n} か月前",
+  "timeYearsAgo": "{n} 年前"
 }

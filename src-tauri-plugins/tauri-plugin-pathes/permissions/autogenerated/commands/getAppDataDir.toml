@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-getAppDataDir"
+description = "Enables the getAppDataDir command without any pre-configured scope."
+commands.allow = ["getAppDataDir"]
+
+[[permission]]
+identifier = "deny-getAppDataDir"
+description = "Denies the getAppDataDir command without any pre-configured scope."
+commands.deny = ["getAppDataDir"]

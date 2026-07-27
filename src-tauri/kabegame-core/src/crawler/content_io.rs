@@ -45,6 +45,8 @@ pub trait ContentIoProvider: Send + Sync {
         mime_type: &str,
         display_name: &str,
     ) -> Result<String, String>;
+    /// 删除一批 MediaStore URI，返回 `(deleted, skipped)`。
+    async fn delete_media_uris(&self, uris: &[String]) -> Result<(usize, usize), String>;
     async fn copy_extracted_images_to_pictures(
         &self,
         source_dir: &str,

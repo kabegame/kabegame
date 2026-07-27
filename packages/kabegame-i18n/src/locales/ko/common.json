@@ -98,5 +98,12 @@
   "close.tray.title": "트레이로 최소화",
   "close.tray.desc": "창을 시스템 트레이에 숨기고 앱을 백그라운드에서 계속 실행합니다",
   "close.exit.title": "앱 종료",
-  "close.exit.desc": "창을 닫을 때 앱을 바로 종료합니다"
+  "close.exit.desc": "창을 닫을 때 앱을 바로 종료합니다",
+  "timeJustNow": "방금 전",
+  "timeMinutesAgo": "{n}분 전",
+  "timeHoursAgo": "{n}시간 전",
+  "timeDaysAgo": "{n}일 전",
+  "timeWeeksAgo": "{n}주 전",
+  "timeMonthsAgo": "{n}개월 전",
+  "timeYearsAgo": "{n}년 전"
 }

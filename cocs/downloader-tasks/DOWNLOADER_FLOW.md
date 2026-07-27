@@ -21,6 +21,8 @@
 
 JS 爬虫与畅游窗口对 `data:`、普通 `blob:` 和 MSE `blob:` 使用通用 VFS 原语：页面 JS 读取/捕获字节，在当前任务或畅游会话的 `PluginVfs` 中分块落盘；MSE 多 SourceBuffer 再显式调用 `crawl_ffmpeg_mux` 做 stream-copy 合流。crawler 把最终虚拟路径交给 `crawl_download_image`，由 `task-vfs://` scheme 流式读入下载管线；surf 则调用 `surf_import_media`，以 `PostprocessSource::Path` 直通后处理。浏览器侧写盘进度仍通过 toast 展示，不再存在专用媒体上传会话或 base64 IPC。
 
+分块落盘的 raw 二进制 IPC 在 CEF 桌面端**不走标准 invoke**：普通 invoke 被强制为 postMessage(JSON)通道（`Uint8Array` 会退化成数字数组），`crawl_fs_fwrite` / `crawl_fs_write_file` 等 raw body 命令改经 CEF runtime 注入的 `window.__kb_raw_invoke__`（`cef-ipc://localhost/raw` 帧化通道：元数据在 body 前缀、请求零自定义头以规避 CORS 预检；Rust 侧解帧后转发 Tauri `ipc` 协议 handler，完整走 invoke 解析 + ACL + `InvokeBody::Raw`）。`media_download.js` 与 `bootstrap.js` 均优先该桥、无桥时（Android WebView）回退标准 invoke。见 `src-tauri/tauri-runtime-cef/src/ipc.rs`。
+
 ---
 
 ## 2. 代码位置
@@ -34,6 +36,8 @@ JS 爬虫与畅游窗口对 `data:`、普通 `blob:` 和 MSE `blob:` 使用通�
 | `src-tauri/kabegame-core/src/crawler/downloader/content.rs` | Android-only `content://` scheme downloader；从 ContentResolver 读取 bytes 写入 `DownloadSink` |
 | `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | 图片缩略图、视频预览压缩、缩略图尺寸策略 |
 | `src-tauri/kabegame-core/src/crawler/downloader/util.rs` | 安全文件名、唯一下载路径、hash、MIME/文件名辅助 |
+| `src-tauri/kabegame-core/src/storage/source_purge.rs`、`safe_delete.rs` | 图库源文件清除唯一入口；桌面回收站护栏、分块与逐条降级；Android MediaStore / 普通路径分流 |
+| `src-tauri/kabegame-core/src/storage/hidden_cleanup.rs` | 隐藏画册分批清理服务、运行状态、取消与进度/完成事件 |
 | `src-tauri/kabegame-core/src/plugin/vfs.rs`、`src-tauri/kabegame-core/src/plugin/ffmpeg.rs` | 任务/会话虚拟路径安全边界；虚拟路径上的显式媒体合流与探测 |
 | `src-tauri/kabegame/src/webview_js/media_capture.js`、`src-tauri/kabegame/src/webview_js/media_download.js` | 捕获 Blob/MSE；以 Raw IPC 分块写入会话 VFS、显式合流并提交 |
 | `src-tauri/kabegame/src/startup.rs`、`src-tauri/kabegame/src/commands/surf.rs`、`src-tauri/kabegame/src/commands/crawler.rs`、`src-tauri/kabegame/src/commands/surf_session.rs` | 桌面 WebView/CEF 下载投递与回传；fs/ffmpeg 命令按窗口 label 选择 VFS；surf 会话 VFS 与 Path 直通导入 |
@@ -242,7 +246,31 @@ Android 下载池也走 `postprocess_downloaded_image`：
 
 ---
 
-## 7. 失败记录与重试
+## 7. 源文件清除与隐藏图片清理
+
+### 统一源文件清除
+
+删除图片时，`Storage::delete_image` / `batch_delete_images` 只在 DB 锁内删除记录、缩略图和应用拥有的兼容副本，并返回待清除的 `local_path`。`image_events::delete_images_with_events` 在 DB 事务提交和 `images-change` / `album-images-change` 发射完成后，统一异步调用 `storage::source_purge::purge_source_files`；调用方不能自行绕过该入口。
+
+- 桌面：进入 `safe_delete::trash_source_files_batch`，保留软链接、网络盘、虚拟盘与未知文件系统护栏。安全路径按 256 条分块调用 `trash::delete_all`；任一块失败后只对该块逐条降级到 `trash_source_file`，避免 macOS Finder AppleScript 触发 `ARG_MAX` / 超时，也避免单条路径竞态消失拖垮整批。
+- Android：`content://` URI 交给 picker 插件的 `deleteMediaUris`。先逐条 `ContentResolver.delete`，app 自己写入 MediaStore 的媒体通常无需弹窗即可直接删除；权限异常项在 API 30+ 合并成一次 `MediaStore.createDeleteRequest` 系统授权。API 26–29 没有批量授权 API，权限异常项保留并计入 `skipped`。非 `content://` 值按普通文件路径执行 `remove_file`，覆盖旧系统 `copyFileToPicturesLegacy` 写入的真实文件。
+- iOS：项目不支持，仅保留空 cfg 分支保证条件编译完整。
+
+`PurgeReport { purged, kept }` 让上层区分实际清除和保留源文件；数据库记录无论源文件能否清除都已按请求移出图库。
+
+### 清理隐藏图片
+
+固定隐藏画册 `HIDDEN_ALBUM_ID` 的一键清理由 `HiddenCleanupService` 管理，命令契约为：
+
+- `start_hidden_cleanup`：不可重入，启动时固定记录隐藏图片总数，之后每批从画册头部读取 200 个 id 并删除。
+- `get_hidden_cleanup_run_state`：运行时返回 `{ running, total, processed, removed, keptFiles }`；未运行时返回全零默认值。
+- `cancel_hidden_cleanup`：设置批次间检查的取消标志，返回是否确实存在运行任务。
+
+每批完成后发 `hidden-cleanup-progress`（`processed / total / removed / keptFiles`）；正常完成、取消或失败均发一次 `hidden-cleanup-finished`（`removed / keptFiles / canceled / error`）。事件统一构造为 `DaemonEvent` 并经 `GlobalEmitter` 广播，因此 Tauri 事件、Web SSE 与 daemon IPC 使用同一 payload。由于删除会同时移除 `album_images` 行，循环无需游标；连续两次读到相同 id 集合时会按错误停止，防止异常数据导致死循环。
+
+---
+
+## 8. 失败记录与重试
 
 失败记录写入 `task_failed_images`，核心字段包括：
 
@@ -272,7 +300,7 @@ Android 下载池也走 `postprocess_downloaded_image`：
 
 ---
 
-## 8. 事件
+## 9. 事件
 
 ### 下载状态事件
 
@@ -316,7 +344,7 @@ Android 下载池也走 `postprocess_downloaded_image`：
 
 ---
 
-## 9. 设置
+## 10. 设置
 
 ### 下载并发
 
@@ -339,7 +367,7 @@ CEF/surf 下载已由 worker 统一执行，终态后同样通过 `wait_then_fin
 
 ---
 
-## 10. 启动临时文件清理
+## 11. 启动临时文件清理
 
 应用启动时执行临时文件清理，防止溢写残留占用磁盘：
 

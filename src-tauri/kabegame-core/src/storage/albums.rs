@@ -536,6 +536,36 @@ impl Storage {
         ))
     }
 
+    /// 获取画册中的图片总数，用于固定任务分母。
+    pub fn count_album_images(&self, album_id: &str) -> Result<usize, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        conn.query_row(
+            "SELECT COUNT(*) FROM album_images WHERE album_id = ?1",
+            params![album_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to count album images: {e}"))
+    }
+
+    /// 从画册头部获取一批图片 id。调用方删除 `album_images` 后可继续无游标读取。
+    pub fn get_album_image_ids_batch(
+        &self,
+        album_id: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let mut stmt = conn
+            .prepare("SELECT image_id FROM album_images WHERE album_id = ?1 LIMIT ?2")
+            .map_err(|e| format!("Failed to prepare album image batch: {e}"))?;
+        let rows = stmt
+            .query_map(params![album_id, limit as i64], |row| {
+                Ok(row.get::<_, i64>(0)?.to_string())
+            })
+            .map_err(|e| format!("Failed to query album image batch: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read album image batch: {e}"))
+    }
+
     /// 按 BFS 顺序收集某画册子树内的所有画册 id（含根）。根在前，子画册按 `created_at`。
     pub fn list_subtree_album_ids(&self, root_id: &str) -> Result<Vec<String>, String> {
         self.collect_subtree_album_ids_bfs(root_id)

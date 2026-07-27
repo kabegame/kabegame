@@ -8,6 +8,7 @@ import {
   TARGET_ARCH,
   IS_CROSS_COMPILE,
   CRAWLER_PLUGINS_DIR,
+  RELEASE_PLUGINS_DIR,
 } from "../utils.ts";
 import { Component } from "./component-plugin.ts";
 import chalk from "chalk";
@@ -444,6 +445,14 @@ export class ModePlugin extends BasePlugin {
   //   机制，跳过。
   // - start：不打包插件；正式环境插件从 GitHub Releases 下载
   packagePlugins(bs: BuildSystem): void {
+    // 显式跳过插件打包(rspack + kabegame-cli 均为 JS/宿主工具链步骤)。
+    // web-release 容器设置此变量:插件打包已在宿主完成(scripts/build-web.sh),
+    // 且 web 二进制不消费 resources/plugins(运行时读 exe 旁目录,部署只传二进制),
+    // 容器内重打包纯属浪费——x86_64 模拟层下 V8 浮点损坏,容器里也不该跑任何 JS 构建。
+    if (process.env.KABEGAME_SKIP_PLUGIN_PACKAGE === "1") {
+      this.log(chalk.yellow("KABEGAME_SKIP_PLUGIN_PACKAGE=1 → 跳过爬虫插件打包"));
+      return;
+    }
     const cmd = bs.context.cmd;
     const comp = bs.context.component!;
     if (comp.isMain && cmd.isDev) {
@@ -453,6 +462,19 @@ export class ModePlugin extends BasePlugin {
         ),
       );
       run("package", ["--out-dir", "../.kabegame/debug/data/plugins-directory"], {
+        bin: "deno-task",
+        cwd: CRAWLER_PLUGINS_DIR,
+      });
+    } else if (comp.isMain && cmd.isBuild && this.mode!.isWeb) {
+      // web：插件不进二进制（无 tauri bundle.resources），服务器改从用户数据目录
+      // plugins-directory/ 加载。故产出到 .kabegame/release/plugins，由
+      // scripts/deploy-web.sh 上传。见 utils.RELEASE_PLUGINS_DIR。
+      this.log(
+        chalk.blue(
+          `打包插件到发布目录: deno task package --out-dir ${RELEASE_PLUGINS_DIR}`,
+        ),
+      );
+      run("package", ["--out-dir", RELEASE_PLUGINS_DIR], {
         bin: "deno-task",
         cwd: CRAWLER_PLUGINS_DIR,
       });

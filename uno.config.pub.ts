@@ -19,6 +19,12 @@ export default defineConfig({
     ['wide-only', 'hidden md:block'],
     // ImageContent 媒体层：绝对定位铺满容器并 contain 缩放（App.vue 背景形态以 .ic-img 选择器覆写）
     ['ic-img', 'absolute top-0 left-0 w-full h-full object-contain will-change-[contents,opacity] [-webkit-tap-highlight-color:transparent]'],
+    // 后台任务专用卡片：结构共用（外框/密度），底色与边框色由各卡片按任务类型着色（粉=整理、紫=同步、蓝=更新）。
+    ['busy-task-card', 'relative rounded-[11px] border border-solid px-3 py-2.5 flex flex-col gap-2'],
+    ['busy-task-cancel', 'appearance-none border-0 bg-transparent h-5 w-5 shrink-0 grid place-items-center rounded-full cursor-pointer text-[var(--anime-secondary-light)] transition-colors hover:text-[var(--anime-danger)]'],
+    // 后台任务渐变进度条：轨道浅紫、填充粉→紫渐变，对齐设计稿
+    ['busy-bar-track', 'h-[5px] rounded-[3px] bg-[rgba(167,139,250,0.22)] overflow-hidden'],
+    ['busy-bar-fill', 'block h-full rounded-[3px] bg-gradient-to-r from-[#ff6b9d] to-[#a78bfa] transition-[width] duration-300'],
   ],
   rules: [
     // Drawer 最大宽度规则（所有平台统一使用 500px，使用 !important 确保优先级）

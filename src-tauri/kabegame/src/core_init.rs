@@ -1,3 +1,4 @@
+use kabegame_core::storage::hidden_cleanup::HiddenCleanupService;
 #[cfg(not(target_os = "android"))]
 use kabegame_core::storage::organize::OrganizeService;
 #[cfg(all(not(target_os = "android"), feature = "standard"))]
@@ -99,6 +100,7 @@ pub fn init_globals() -> Result<(), String> {
     // OrganizeService 在 local 和 web 模式下均需要（非 Android）
     #[cfg(not(target_os = "android"))]
     OrganizeService::init_global(Arc::new(OrganizeService::new()))?;
+    HiddenCleanupService::init_global(Arc::new(HiddenCleanupService::new()))?;
 
     // 桌面端 standard mode：VD 等全局单例（light 与 android 桌面分支跳过 VD）
     #[cfg(all(not(target_os = "android"), feature = "standard"))]

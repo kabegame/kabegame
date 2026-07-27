@@ -1,4 +1,10 @@
 {
+  "syncCardTitle": "フォルダアルバムを同期",
+  "syncScanning": "スキャン中、{added} 枚追加",
+  "syncDetailDeleted": "{deleted} 枚削除",
+  "syncDetailReimported": "{reimported} 枚再インポート",
+  "syncDoneToast": "「{name}」を同期しました。{added} 枚追加",
+  "syncFailedToast": "「{name}」の同期に失敗しました",
   "emptyTip": "まだアルバムがありません。右上のボタンで作成",
   "subAlbums": "サブアルバム",
   "imagesTab": "画像",

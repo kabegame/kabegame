@@ -603,7 +603,12 @@ mod tests {
                 height INTEGER,
                 display_name TEXT NOT NULL DEFAULT '',
                 last_set_wallpaper_at INTEGER,
-                size INTEGER
+                size INTEGER,
+                description TEXT,
+                compatible_path TEXT,
+                post_url TEXT,
+                wallpaper_compatible_path TEXT,
+                image_metadata_id INTEGER
             );
             CREATE TABLE album_images (
                 album_id TEXT NOT NULL,
@@ -614,7 +619,7 @@ mod tests {
             CREATE TABLE metadata (
                 id INTEGER PRIMARY KEY,
                 data TEXT NOT NULL,
-                version INTEGER NOT NULL DEFAULT 0,
+                plugin_version INTEGER NOT NULL DEFAULT 0,
                 plugin_id TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE albums (

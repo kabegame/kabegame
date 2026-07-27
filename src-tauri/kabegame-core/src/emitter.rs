@@ -175,12 +175,46 @@ impl GlobalEmitter {
         regenerated: usize,
         backfilled: usize,
         canceled: bool,
+        error: Option<String>,
     ) {
         let event = std::sync::Arc::new(DaemonEvent::OrganizeFinished {
             removed,
             regenerated,
             backfilled,
             canceled,
+            error,
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    pub fn emit_hidden_cleanup_progress(
+        &self,
+        processed: usize,
+        total: usize,
+        removed: usize,
+        kept_files: usize,
+    ) {
+        let event = std::sync::Arc::new(DaemonEvent::HiddenCleanupProgress {
+            processed,
+            total,
+            removed,
+            kept_files,
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    pub fn emit_hidden_cleanup_finished(
+        &self,
+        removed: usize,
+        kept_files: usize,
+        canceled: bool,
+        error: Option<String>,
+    ) {
+        let event = std::sync::Arc::new(DaemonEvent::HiddenCleanupFinished {
+            removed,
+            kept_files,
+            canceled,
+            error,
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -259,21 +293,6 @@ impl GlobalEmitter {
             diff,
         });
         EventBroadcaster::global().broadcast(event);
-    }
-
-    /// 畅游记录计数快照（image / deleted / download）
-    pub fn emit_surf_record_counts(
-        &self,
-        surf_record_id: &str,
-        image_count: i64,
-        deleted_count: i64,
-        download_count: i64,
-    ) {
-        let mut diff = serde_json::Map::new();
-        diff.insert("imageCount".to_string(), json!(image_count));
-        diff.insert("deletedCount".to_string(), json!(deleted_count));
-        diff.insert("downloadCount".to_string(), json!(download_count));
-        self.emit_surf_record_changed(surf_record_id, serde_json::Value::Object(diff));
     }
 
     /// 发送失败图片新增事件
@@ -534,6 +553,25 @@ impl GlobalEmitter {
         _regenerated: usize,
         _backfilled: usize,
         _canceled: bool,
+        _error: Option<String>,
+    ) {
+    }
+
+    pub fn emit_hidden_cleanup_progress(
+        &self,
+        _processed: usize,
+        _total: usize,
+        _removed: usize,
+        _kept_files: usize,
+    ) {
+    }
+
+    pub fn emit_hidden_cleanup_finished(
+        &self,
+        _removed: usize,
+        _kept_files: usize,
+        _canceled: bool,
+        _error: Option<String>,
     ) {
     }
 
@@ -564,15 +602,6 @@ impl GlobalEmitter {
     pub fn emit_surf_record_deleted(&self, _surf_record_id: &str) {}
 
     pub fn emit_surf_record_changed(&self, _surf_record_id: &str, _diff: serde_json::Value) {}
-
-    pub fn emit_surf_record_counts(
-        &self,
-        _surf_record_id: &str,
-        _image_count: i64,
-        _deleted_count: i64,
-        _download_count: i64,
-    ) {
-    }
 
     pub fn emit_failed_image_added(&self, _task_id: &str, _failed_image: &TaskFailedImage) {}
 

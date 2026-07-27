@@ -7,6 +7,7 @@ pub mod albums;
 pub mod dsl_funcs;
 pub mod gallery;
 pub mod gallery_time;
+pub mod hidden_cleanup;
 pub mod image_events;
 pub mod images;
 pub mod migrations;
@@ -16,6 +17,7 @@ pub mod plugin_sources;
 pub mod run_configs;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod safe_delete;
+pub mod source_purge;
 pub mod surf_records;
 pub mod tasks;
 pub(crate) mod template_bridge;

@@ -6,6 +6,7 @@
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { IS_WEB, IS_ANDROID } from "@kabegame/core/env";
 import { kameMessage } from "@kabegame/core/utils/kameMessage";
+import { i18n } from "@kabegame/i18n";
 import {
   useUpdaterStore,
   type DownloadProgress,
@@ -37,7 +38,11 @@ export async function init(): Promise<void> {
 
   // 2) 订阅后端事件
   unlistenState = await listen<UpdaterState>("updater-state-change", (e) => {
+    const previousPhase = store.phase;
     store.applyState(e.payload);
+    if (previousPhase === "downloading" && e.payload.phase === "restartable") {
+      kameMessage.success(i18n.global.t("updater.restartReadyTitle"));
+    }
   });
   unlistenProgress = await listen<DownloadProgress>("update-download-progress", (e) => {
     store.applyProgress(e.payload);
