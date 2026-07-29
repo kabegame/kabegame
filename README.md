@@ -14,26 +14,34 @@
 
 <p align="center">
   <a href="https://github.com/kabegame/kabegame/releases/latest">
-    <img alt="Latest release" src="https://img.shields.io/github/v/release/kabegame/kabegame?style=flat-square&sort=semver"/>
+    <img alt="最新版本" src="https://img.shields.io/github/v/release/kabegame/kabegame?style=flat-square&sort=semver&logo=github" height="20"/>
   </a>
   <a href="https://github.com/kabegame/kabegame/releases">
-    <img alt="Total downloads" src="https://img.shields.io/github/downloads/kabegame/kabegame/total?style=flat-square&logo=github"/>
+    <img alt="累计下载量" src="https://img.shields.io/github/downloads/kabegame/kabegame/total?style=flat-square&logo=github" height="20"/>
+  </a>
+  <a href="https://github.com/kabegame/kabegame/stargazers">
+    <img alt="GitHub Stars" src="https://img.shields.io/github/stars/kabegame/kabegame?style=flat-square&logo=github" height="20"/>
   </a>
   <a href="https://github.com/kabegame/kabegame/blob/main/LICENSE">
-    <img alt="License" src="https://img.shields.io/github/license/kabegame/kabegame?style=flat-square"/>
-  </a>
-  <a href="https://kabegame.com/guide/installation/">
-    <img alt="Platforms" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-5c6bc0?style=flat-square"/>
+    <img alt="许可证" src="https://img.shields.io/github/license/kabegame/kabegame?style=flat-square" height="20"/>
   </a>
   <a href="https://kabegame.com">
-    <img alt="Documentation" src="https://img.shields.io/badge/docs-kabegame.com-2f80ed?style=flat-square"/>
+    <img alt="项目文档" src="https://img.shields.io/badge/docs-kabegame.com-2f80ed?style=flat-square" height="20"/>
+  </a>
+  <br/>
+  <a href="https://kabegame.com/guide/installation/">
+    <img alt="支持平台" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-5c6bc0?style=flat-square" height="20"/>
+  </a>
+  <a href="https://v2.tauri.app/">
+    <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" height="20"/>
+  </a>
+  <a href="https://vuejs.org/">
+    <img alt="Vue 3" src="https://img.shields.io/badge/Vue-3-42B883?style=flat-square&logo=vuedotjs&logoColor=white" height="20"/>
+  </a>
+  <a href="https://www.rust-lang.org/">
+    <img alt="Rust 后端" src="https://img.shields.io/badge/Rust-backend-000000?style=flat-square&logo=rust&logoColor=white" height="20"/>
   </a>
 </p>
-
- [![GitHub Stars](https://img.shields.io/github/stars/kabegame/kabegame?style=flat-square&logo=github)](https://github.com/kabegame/kabegame/stargazers)
- ![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)
-![Vue 3](https://img.shields.io/badge/Vue-3-42B883?style=flat-square&logo=vuedotjs&logoColor=white)
-![Rust](https://img.shields.io/badge/Rust-backend-000000?style=flat-square&logo=rust&logoColor=white)
 
 <table width="100%">
   <tr>
