@@ -1,6 +1,6 @@
 # Kabegame 二次元爬虫客户端
 
-> 中文 | [English](README.en-US.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
+> 中文  | [日本語](README.ja.md) | [한국어](README.ko.md) | [English](README.en-US.md)
 
 一个基于 Tauri 的二次元爬虫客户端！爬取、管理、设置/轮播壁纸，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元站点资源~
 
@@ -13,22 +13,27 @@
 </div>
 
 <p align="center">
-    <a href="https://github.com/kabegame/kabegame/releases/latest">
-      <img alt="Latest release" src="https://img.shields.io/github/v/release/kabegame/kabegame?style=flat-square&sort=semver"/>
-    </a>
-    <a href="https://github.com/kabegame/kabegame/releases">
-      <img alt="Total downloads" src="https://img.shields.io/github/downloads/kabegame/kabegame/total?style=flat-square&logo=github"/>
-    </a>
-    <a href="https://github.com/kabegame/kabegame/blob/main/LICENSE">
-      <img alt="License" src="https://img.shields.io/github/license/kabegame/kabegame?style=flat-square"/>
-    </a>
-    <a href="https://kabegame.com/guide/installation/">
-      <img alt="Platforms" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-5c6bc0?style=flat-square"/>
-    </a>
-    <a href="https://kabegame.com">
-      <img alt="Documentation" src="https://img.shields.io/badge/docs-kabegame.com-2f80ed?style=flat-square"/>
-    </a>
-  </p>
+  <a href="https://github.com/kabegame/kabegame/releases/latest">
+    <img alt="Latest release" src="https://img.shields.io/github/v/release/kabegame/kabegame?style=flat-square&sort=semver"/>
+  </a>
+  <a href="https://github.com/kabegame/kabegame/releases">
+    <img alt="Total downloads" src="https://img.shields.io/github/downloads/kabegame/kabegame/total?style=flat-square&logo=github"/>
+  </a>
+  <a href="https://github.com/kabegame/kabegame/blob/main/LICENSE">
+    <img alt="License" src="https://img.shields.io/github/license/kabegame/kabegame?style=flat-square"/>
+  </a>
+  <a href="https://kabegame.com/guide/installation/">
+    <img alt="Platforms" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-5c6bc0?style=flat-square"/>
+  </a>
+  <a href="https://kabegame.com">
+    <img alt="Documentation" src="https://img.shields.io/badge/docs-kabegame.com-2f80ed?style=flat-square"/>
+  </a>
+</p>
+
+ [![GitHub Stars](https://img.shields.io/github/stars/kabegame/kabegame?style=flat-square&logo=github)](https://github.com/kabegame/kabegame/stargazers)
+ ![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)
+![Vue 3](https://img.shields.io/badge/Vue-3-42B883?style=flat-square&logo=vuedotjs&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-backend-000000?style=flat-square&logo=rust&logoColor=white)
 
 <table width="100%">
   <tr>
