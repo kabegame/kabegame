@@ -7,7 +7,11 @@ use kabegame_core::crawler::task_scheduler::{PageStackEntry, Task, TaskError};
 use kabegame_core::crawler::webview::{crawler_window_label, task_id_from_crawler_label};
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::plugin::{ffmpeg::FfmpegProbeResult, vfs::PluginVfs};
+use kabegame_core::plugin::{
+    archive::{ExtractOptions, ExtractResult},
+    ffmpeg::FfmpegProbeResult,
+    vfs::PluginVfs,
+};
 use kabegame_core::storage::Storage;
 use serde::Deserialize;
 use serde::Serialize;
@@ -942,6 +946,54 @@ pub async fn crawl_ffmpeg_probe<R: Runtime>(
         .map_err(|error| format!("媒体探测任务执行失败：{error}"))?
 }
 
+#[tauri::command]
+pub async fn crawl_archive_zip<R: Runtime>(
+    webview: Webview<R>,
+    src: String,
+    dest_dir: String,
+    opts: Option<ExtractOptions>,
+) -> Result<ExtractResult, String> {
+    let vfs = vfs_of_label(webview.label())?;
+    let opts = opts.unwrap_or_default();
+    tokio::task::spawn_blocking(move || {
+        kabegame_core::plugin::archive::extract_zip_sync(&vfs, &src, &dest_dir, &opts)
+    })
+    .await
+    .map_err(|error| format!("ZIP 解压任务执行失败：{error}"))?
+}
+
+#[tauri::command]
+pub async fn crawl_archive_tar<R: Runtime>(
+    webview: Webview<R>,
+    src: String,
+    dest_dir: String,
+    opts: Option<ExtractOptions>,
+) -> Result<ExtractResult, String> {
+    let vfs = vfs_of_label(webview.label())?;
+    let opts = opts.unwrap_or_default();
+    tokio::task::spawn_blocking(move || {
+        kabegame_core::plugin::archive::extract_tar_sync(&vfs, &src, &dest_dir, &opts)
+    })
+    .await
+    .map_err(|error| format!("TAR 解压任务执行失败：{error}"))?
+}
+
+#[tauri::command]
+pub async fn crawl_archive_7z<R: Runtime>(
+    webview: Webview<R>,
+    src: String,
+    dest_dir: String,
+    opts: Option<ExtractOptions>,
+) -> Result<ExtractResult, String> {
+    let vfs = vfs_of_label(webview.label())?;
+    let opts = opts.unwrap_or_default();
+    tokio::task::spawn_blocking(move || {
+        kabegame_core::plugin::archive::extract_7z_sync(&vfs, &src, &dest_dir, &opts)
+    })
+    .await
+    .map_err(|error| format!("7z 解压任务执行失败：{error}"))?
+}
+
 /// 每页动态状态按需单独获取（不再一次性 crawl_get_context；crawl.js 与 vars 在
 /// 建窗时已烘焙进 initialization_script）。
 #[tauri::command]
@@ -1035,7 +1087,17 @@ pub async fn crawl_add_progress<R: Runtime>(
     Ok(())
 }
 
-/// WebView `ctx.downloadImage(url, opts)`：`opts.name` / `opts.metadata` 可单独或同时传入。
+#[tauri::command]
+pub async fn crawl_create_image_metadata<R: Runtime>(
+    webview: WebviewWindow<R>,
+    value: Value,
+) -> Result<i64, String> {
+    let (_, run) = run_of(&webview)?;
+    run.insert_metadata(&value)
+}
+
+/// WebView `Kabegame.downloadImage(url, opts)`：支持与 V8 同形的
+/// `opts.name` / `opts.url` / `opts.metadata_id` / `opts.metadata`。
 /// raw metadata 在入口处归一化为 `metadata_id`，下载队列只传 id。
 #[tauri::command]
 pub async fn crawl_download_image<R: Runtime>(
@@ -1043,6 +1105,7 @@ pub async fn crawl_download_image<R: Runtime>(
     url: String,
     name: Option<String>,
     metadata: Option<Value>,
+    metadata_id: Option<i64>,
     source_url: Option<String>,
 ) -> Result<(), String> {
     let (task_id, run) = run_of(&webview)?;
@@ -1056,9 +1119,13 @@ pub async fn crawl_download_image<R: Runtime>(
     )?;
     let images_dir = run.params.images_dir.clone();
     let download_start_time = now_ms();
-    let metadata_id = metadata
-        .map(|value| run.insert_metadata(&value))
-        .transpose()?;
+    let metadata_id = if let Some(id) = metadata_id {
+        Some(id)
+    } else if let Some(value) = metadata {
+        Some(run.insert_metadata(&value)?)
+    } else {
+        None
+    };
 
     let dq = TaskScheduler::global().download_queue();
     // 与 V8 op 同形：统一经容量门控入队；worker 再按插件 backend 选择 CEF 或 scheme downloader。

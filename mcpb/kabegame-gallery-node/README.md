@@ -6,6 +6,14 @@
 
 桥接器一一映射 `src-tauri/kabegame/src/mcp_server.rs` 暴露的资源 / 工具：
 
+发现工具（包装 `tools/call` 的 `list_pathql_entry`）：
+
+- `list_pathql_entry(path, include_counts?, offset?, limit?)`：枚举某个 PathQL 节点的子项。
+  资源是懒树，`resources/list` 不枚举图库，必须用它逐层往下走
+  （`images://gallery` → `gallery/plugin` → 真实插件 id）。返回当前节点的 `total` / `note`
+  与子节点列表，每个子节点带 `name` / `path` / `note` / `meta` / `total`；`path` 已编码，
+  可直接交给下面的读类工具。未带 scheme 的路径提升为 `images://`。
+
 读类工具（包装 `resources/read`）：
 
 - `read_gallery_provider(path)`：`images://...`；未带 scheme 的路径会映射到 `images://gallery/...`

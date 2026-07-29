@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_surfs_router",
+    "note": "Filter by surf source host. List this node to get hosts that currently have images and their surf-record metadata, then use a host such as pixiv.net as the next segment. The segment is a host, not a surf record id.",
     // 7c S4: programmatic GallerySurfsRouter 迁 DSL。
     // 路径段是 host (如 "pixiv.net"), 不是 record_id —— provider 也按 host 过滤
     // (image.surf_record_id IN (SELECT id FROM surf_records WHERE host = ?))。

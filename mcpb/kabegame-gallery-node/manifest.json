@@ -28,6 +28,10 @@
   },
   "tools": [
     {
+      "name": "list_pathql_entry",
+      "description": "List one level of Kabegame's lazy PathQL images tree for path discovery."
+    },
+    {
       "name": "read_gallery_provider",
       "description": "Read a Kabegame images:// path. Relative gallery paths are mapped under images://gallery/."
     },

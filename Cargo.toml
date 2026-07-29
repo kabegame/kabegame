@@ -55,7 +55,6 @@ serde_json = "1.0"
 sevenz-rust2 = { version = "0.21", default-features = false, features = [
   "aes256", "bzip2", "deflate", "ppmd",
 ] }
-md5 = "0.7"
 # 进程内 FFmpeg（libav*）绑定：替代旧的 ffmpeg sidecar 进程调用与 mp4 crate。
 # feature 须匹配 third/FFmpeg 子模块的 FFmpeg 主版本（当前 n8.2 → ffmpeg8）。
 # 链接经 rusty_ffmpeg：由构建环境的 FFMPEG_PKG_CONFIG_PATH 指向 third/FFmpeg-build/install/lib/pkgconfig。

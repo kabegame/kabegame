@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_by_id_router",
+    "note": "One image by id, WITH favorite / isHidden / albumOrder computed. Prefer this over images://id_{id}, where those three are always false/false/null.",
     "resolve": {
         "(.+)": {
             "provider": "gallery_by_id_provider",

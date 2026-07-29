@@ -25,7 +25,8 @@ export const CRAWLER_PLUGINS_DIR = path.join(ROOT, "src-crawler-plugins");
  * 单一来源：`deno task b --release` 的桌面安装包/CLI（ReleasePlugin）、web 二进制
  * （docker-compose.web-release.yml 的 /dist 挂载）、以及 web 模式的爬虫插件
  * （RELEASE_PLUGINS_DIR）统一落在这里，供 scripts/deploy-web.sh 与 CI 上传。
- * 前端产物不在此列——仍是仓库根的 dist-kabegame/（编译期由 include_dir! 嵌入）。
+ * 前端产物不在此列——仍是仓库根的 dist-kabegame-web/（编译期由 include_dir! 嵌入；
+ * 桌面/Android 的前端则出到 dist-kabegame/，两者严格分开互不覆盖）。
  */
 export const RELEASE_DIR = path.join(ROOT, ".kabegame", "release");
 

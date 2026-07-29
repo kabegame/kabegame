@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_name_router",
+    "note": "Filter by the detected language of display_name. List this node, then choose english, chinese, japanese, korean, or other; the listing order follows the current UI locale.",
     // 按 display_name 的语种桶浏览。桶顺序由当前 UI locale 决定；路径段保持稳定英文。
     "list": {
         "${out.bucket}": {

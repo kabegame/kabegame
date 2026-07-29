@@ -39,7 +39,13 @@ Kabegame 的 MCP 服务默认关闭。需要在「设置 → MCP」中开启；�
 http://127.0.0.1:7490/mcp
 ```
 
-连通后，让助手调用 `list_resources`，或直接读 `images://gallery/all`、`albums://all` 等 URI，就能浏览你的画廊。
+连通后，让助手按下面的三步发现循环浏览画廊：
+
+1. 调用 `list_pathql_entry("images://gallery")` 查看当前可用维度和每个节点的说明。
+2. 选择返回的 `child.path` 继续逐层调用，例如进入 `images://gallery/plugin` 枚举已安装插件。
+3. 原样复制目标 child 的已编码路径，补上 `/desc/x100x/1` 等显式分页，再交给 `resources/read`。
+
+不要从 `list_resources` 推断完整画廊树，也不要直接读取未分页的 `images://gallery/all`。画册、任务、畅游记录和插件等非画廊资源仍可使用参考页列出的固定 URI。
 
 ### 仅支持 stdio 的 Host
 
@@ -49,8 +55,9 @@ http://127.0.0.1:7490/mcp
 
 Kabegame 通过五类 URI scheme 暴露资源，供助手读取：
 
-| URI | 用途 |
+| 能力 / URI | 用途 |
 |---|---|
+| `list_pathql_entry` | 逐层发现 PathQL 画廊维度、子节点、说明与可读路径 |
 | `images://gallery/...` | 浏览画廊图片（画册、日期、媒体类型、壁纸历史、全部） |
 | `images://id_{id}` / `images://id_{id}/metadata` | 读取图片基础字段与爬取期元数据（tag、作者、原始 URL 等） |
 | `albums://all` / `albums://id_{id}` | 列出画册，或读取单个画册详情 |

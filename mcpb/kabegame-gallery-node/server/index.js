@@ -10,6 +10,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 const TOOL_NAMES = {
+  LIST_ENTRY: "list_pathql_entry",
   READ_PROVIDER: "read_gallery_provider",
   READ_IMAGE: "read_image",
   READ_IMAGE_METADATA: "read_image_metadata",
@@ -325,10 +326,45 @@ const server = new Server(
 
 const ALL_TOOLS = [
     {
+      name: TOOL_NAMES.LIST_ENTRY,
+      description:
+        "List one level of Kabegame's lazy PathQL resource tree. " +
+        "Paths without :// are promoted to images://. Returned child paths can be copied " +
+        "directly into resources/read or walked again with this tool.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "PathQL URI. Paths without :// are promoted to images://.",
+          },
+          include_counts: {
+            type: "boolean",
+            default: false,
+            description:
+              "Count each returned child only when the requested window has at most 50 children.",
+          },
+          offset: {
+            type: "integer",
+            minimum: 0,
+            default: 0,
+          },
+          limit: {
+            type: "integer",
+            minimum: 0,
+            maximum: 200,
+            default: 100,
+          },
+        },
+        required: ["path"],
+      },
+    },
+    {
       name: TOOL_NAMES.READ_PROVIDER,
       description:
         "Read a Kabegame images:// path. Relative gallery paths are mapped under images://gallery/. " +
-        "Examples: 'gallery/all', 'all/desc/x100x/1', 'album/{id}/x100x/1', 'date/2024y/03m/'.",
+        "Examples: 'gallery/all', 'all/desc/x100x/1', 'album/{id}/x100x/1', " +
+        "'date/2024y/03m/', 'plugin/patreon/x100x/1'.",
       inputSchema: {
         type: "object",
         properties: {
@@ -526,6 +562,7 @@ const WRITE_TOOL_SET = new Set([
   TOOL_NAMES.RENAME_IMAGE,
 ]);
 const READ_TOOL_SCHEME = {
+  [TOOL_NAMES.LIST_ENTRY]: "images",
   [TOOL_NAMES.READ_PROVIDER]: "images",
   [TOOL_NAMES.READ_IMAGE]: "images",
   [TOOL_NAMES.READ_IMAGE_METADATA]: "images",
@@ -582,6 +619,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
+      case TOOL_NAMES.LIST_ENTRY: {
+        const result = await callUpstreamTool(TOOL_NAMES.LIST_ENTRY, args);
+        return toolResponse(makeSuccess(result));
+      }
+
       case TOOL_NAMES.READ_PROVIDER: {
         const path = args.path;
         const uri = imagePathToUri(path);

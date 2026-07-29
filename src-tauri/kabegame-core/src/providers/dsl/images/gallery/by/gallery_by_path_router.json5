@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_by_path_router",
+    "note": "Look up one image by its local file path. Pass the exact stored local_path as the next single PathQL segment; a missing path returns an empty result.",
     "resolve": {
         "(.+)": {
             "provider": "gallery_by_path_provider",

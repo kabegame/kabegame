@@ -30,7 +30,7 @@
         "resolve": { "$ref": "#/definitions/Resolve" },
         "note": {
             "type": "string",
-            "description": "VD 说明文件内容(Provider::get_note)"
+            "description": "Provider 节点的可读说明(Provider::get_note)；既供 VD 生成说明文件，也由 MCP 发现工具下发给模型。说明应写在被说明的 provider 自己身上；JSON 实体数据请使用 ChildEntry.meta"
         }
     },
 

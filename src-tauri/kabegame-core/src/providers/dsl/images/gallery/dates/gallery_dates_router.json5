@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_dates_router",
+    "note": "Filter by crawl date. List each level and follow <YYYY>y, then <MM>m, then <DD>d; year and month nodes may also be paginated directly. Listed years are newest first.",
     // 7c S7-b: programmatic GalleryDatesRouter 迁 DSL。年→月→日 三层结构。
     // 排序由 gallery_sort_router 独立处理。
     "list": {

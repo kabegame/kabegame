@@ -595,6 +595,53 @@ fn root_gallery_and_vd_topology_uses_images_schema() {
 }
 
 #[test]
+fn gallery_static_routes_are_enumerable_without_changing_alias_or_meta_semantics() {
+    let runtime = build_runtime();
+
+    let gallery = runtime.list("images://gallery").unwrap();
+    assert!(!gallery.is_empty());
+    let gallery_names = gallery
+        .iter()
+        .map(|child| child.name.as_str())
+        .collect::<Vec<_>>();
+    for expected in ["plugin", "album", "date", "sort"] {
+        assert!(
+            gallery_names.contains(&expected),
+            "gallery names={gallery_names:?}"
+        );
+    }
+    assert!(
+        gallery.iter().all(|child| child.meta.is_none()),
+        "gallery dimension nodes must not carry entity metadata"
+    );
+
+    let sort = runtime.list("images://gallery/sort").unwrap();
+    assert_eq!(sort.len(), 7);
+
+    assert_eq!(
+        runtime
+            .count("images://gallery/plugins/pixiv")
+            .unwrap(),
+        runtime.count("images://gallery/plugin/pixiv").unwrap()
+    );
+
+    for path in [
+        "images://gallery",
+        "images://gallery/plugin",
+        "images://gallery/sort",
+    ] {
+        assert!(runtime.note(path).unwrap().is_some(), "missing note: {path}");
+    }
+
+    let plugins = runtime.list("images://gallery/plugin").unwrap();
+    let pixiv = plugins.iter().find(|child| child.name == "pixiv").unwrap();
+    assert_eq!(
+        pixiv.meta.as_ref().and_then(|meta| meta.get("id")),
+        Some(&serde_json::json!("pixiv"))
+    );
+}
+
+#[test]
 fn image_basic_delegate_contributes_fields_order_and_schema_from() {
     let runtime = build_runtime();
     let resolved = runtime.resolve("images://x100x/1").unwrap();
@@ -1218,4 +1265,67 @@ fn date_path_fold_builds_expected_sql_shape() {
     assert!(debug_params.contains("2023"));
     assert!(debug_params.contains("2023-04"));
     assert!(debug_params.contains("2023-04-05"));
+}
+
+/// 每条会被上层当作图片集合消费的路径，其行必须能反序列化成 `ImageInfo`。
+///
+/// 这是 `fetch` 之外的一层独立契约：`runtime.fetch` 只返回 `Vec<Value>`，不做类型化，
+/// 所以列名层面的问题（重复列、别名漂移）在其它 e2e 断言里完全看不见。MCP 的
+/// `rows_to_value::<ImageInfo>` 和 core 的 `images_at()` 都要过这一关。
+///
+/// 回归背景：`gallery_route` 曾把 `COALESCE(images.type, 'image')` 取别名 `media_type`，
+/// 而上游 `images_root_provider` 贡献的 `images.*` 已展开出一个 `type` 列；当时
+/// `ImageInfo` 的该字段是 `#[serde(rename = "type", alias = "media_type")]`，两个键名
+/// 都接受，于是同时出现就报 `duplicate field type` —— 整棵 gallery 子树都读不出数据，
+/// 而所有 e2e 断言依然全绿（因为 `fetch` 不做类型化）。
+///
+/// 现已统一为单一键名 `type`：DSL 不再产出 `media_type` 列，`ImageInfo` 也去掉了该
+/// 别名。下面对 `type` / `media_type` 的计数断言就是防止这个别名重新长出来。
+#[test]
+fn image_collection_paths_decode_into_image_info() {
+    let runtime = build_runtime();
+
+    for path in [
+        "images://",
+        "images://x2x/1",
+        "images://gallery/all",
+        "images://gallery/all/x2x/1",
+        "images://gallery/all/desc/x2x/1",
+        "images://gallery/plugin/pixiv",
+        "images://gallery/sort/by-name/x2x/1",
+        "images://gallery/media-type/image/x2x/1",
+        "images://gallery/hide/all/x2x/1",
+        // VD 侧走 vd_root_router 的 fields，与 gallery 是两条独立的字段贡献链，
+        // 所以必须各测一条。
+        "images://vd/i18n-en_US/By Album/AlbumA/x100x/1",
+    ] {
+        let rows = runtime
+            .fetch(path)
+            .unwrap_or_else(|e| panic!("fetch {path} failed: {e}"));
+        assert!(!rows.is_empty(), "{path} returned no rows; fixture changed?");
+
+        for row in &rows {
+            // 先单独盯住 type：它是唯一一个别名与列名不同的字段，也是最容易再次漂移的地方。
+            let type_like: Vec<&String> = row
+                .as_object()
+                .expect("row is an object")
+                .keys()
+                .filter(|k| k.as_str() == "type" || k.as_str() == "media_type")
+                .collect();
+            assert_eq!(
+                type_like.len(),
+                1,
+                "{path} row exposes {type_like:?}; ImageInfo accepts both `type` and \
+                 `media_type`, so exactly one of them may be present"
+            );
+
+            let image: ImageInfo = serde_json::from_value(row.clone())
+                .unwrap_or_else(|e| panic!("{path} row failed to decode as ImageInfo: {e}"));
+            assert!(
+                image.media_type.as_deref().is_some_and(|t| !t.is_empty()),
+                "{path} decoded with media_type = {:?}; the COALESCE default was lost",
+                image.media_type
+            );
+        }
+    }
 }

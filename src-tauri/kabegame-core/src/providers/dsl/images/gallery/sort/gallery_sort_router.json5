@@ -1,7 +1,8 @@
 {
     "namespace": "kabegame",
     "name": "gallery_sort_router",
-    "resolve": {
+    "note": "Sort keys: by-id | by-time | by-size | by-name | by-aspect | by-set-time | by-album-order. Applies to whatever filter set precedes it; append /desc to reverse. Default order is crawledAt ascending, so /desc means newest first.",
+    "list": {
         "by-id": {
             "provider": "gallery_sort_by_id_provider"
         },

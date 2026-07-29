@@ -27,7 +27,7 @@
           </el-breadcrumb-item>
           <el-breadcrumb-item v-for="crumb in albumAncestorCrumbs" :key="crumb.id">
             <router-link
-              :to="{ name: 'AlbumDetail', params: { id: crumb.id } }"
+              :to="{ name: 'AlbumDetail', params: { albumId: crumb.id } }"
               class="album-breadcrumb-link"
             >
               {{ crumb.name }}
@@ -109,7 +109,7 @@
             </el-breadcrumb-item>
             <el-breadcrumb-item v-for="crumb in albumAncestorCrumbs" :key="crumb.id">
               <router-link
-                :to="{ name: 'AlbumDetail', params: { id: crumb.id } }"
+                :to="{ name: 'AlbumDetail', params: { albumId: crumb.id } }"
                 class="album-breadcrumb-link"
               >
                 {{ crumb.name }}
@@ -269,6 +269,12 @@ const { search, albumId } = storeToRefs(albumDetailRouteStore);
 
 
 const albumName = ref<string>("");
+/**
+ * 本组件已完成初始化的画册 id。
+ * 与 `albumId`（albumDetailRouteStore 的状态，路由一变就同步）刻意分开：
+ * 判断「要不要重新初始化」只能看这个，否则后退时会误判为同一画册而跳过初始化。
+ */
+const initializedAlbumId = ref<string>("");
 const currentPath = computed(() => albumDetailRouteStore.computedPath);
 let lastTrackedAlbumPath: string | null = null;
 
@@ -676,8 +682,15 @@ function getImagesScrollEl(): HTMLElement | null {
   return albumViewRef.value?.getContainerEl?.() ?? null;
 }
 
-function captureAlbumDetailSnapshot(): AlbumDetailSnapshot | null {
-  const currentAlbumId = albumId.value?.trim();
+/**
+ * 捕获「正要离开的画册」的视图状态。
+ *
+ * 必须由调用方显式传入该画册 id：`albumId` 来自 albumDetailRouteStore，
+ * 路由一变就同步成新画册，在路由 watcher 里读它拿到的是**目的地**而非来源，
+ * 快照会挂到错误的画册上，导致访问栈永远建不起来、后退时无从恢复。
+ */
+function captureAlbumDetailSnapshot(sourceAlbumId: string): AlbumDetailSnapshot | null {
+  const currentAlbumId = sourceAlbumId?.trim();
   if (!currentAlbumId) return null;
   return {
     albumId: currentAlbumId,
@@ -951,8 +964,13 @@ const handleRefresh = async () => {
 
 // ---------- Album initialization ----------
 const initAlbum = async (newAlbumId: string) => {
-  // 同画册且当前页已有图片时跳过重复初始化
-  if (albumId.value === newAlbumId && (albumViewRef.value?.images?.length ?? 0) > 0) {
+  // 同画册且当前页已有图片时跳过重复初始化。
+  //
+  // 这里必须比 `initializedAlbumId`（本组件真正初始化到哪个画册），不能比 `albumId`：
+  // `albumId` 来自 albumDetailRouteStore，会在路由变化时先于本 watcher 同步成「新」画册 id，
+  // 于是浏览器后退时条件恒真、直接早退，albumName / 快照恢复全被跳过
+  // （表现：面包屑还是子画册名，子画册数却已是父画册的）。
+  if (initializedAlbumId.value === newAlbumId && (albumViewRef.value?.images?.length ?? 0) > 0) {
     return;
   }
 
@@ -974,6 +992,7 @@ const initAlbum = async (newAlbumId: string) => {
   await albumStore.loadAlbums();
   const found = albumStore.albums.find((a) => a.id === newAlbumId);
   albumName.value = found?.name || "画册";
+  initializedAlbumId.value = newAlbumId;
 
   // 清除store中的缓存；列表与总数由 ImageGrid 自动加载（albumName 就绪后 isActive 翻转触发）
   delete albumStore.albumImages[newAlbumId];
@@ -989,7 +1008,7 @@ watch(
     if (oldAlbumId === newId) return;
 
     // 1) 离开旧画册前，捕获其当前视图状态（滚动 / 选项卡）。
-    const leaving = oldAlbumId ? captureAlbumDetailSnapshot() : null;
+    const leaving = oldAlbumId ? captureAlbumDetailSnapshot(oldAlbumId) : null;
 
     // 2) 维护栈之前，查看新画册是否已在栈中。
     //    只有「沿祖先链向上」回到曾停留过的画册时才存在（如面包屑上溯）。

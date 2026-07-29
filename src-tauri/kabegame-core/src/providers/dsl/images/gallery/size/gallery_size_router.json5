@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_size_router",
+    "note": "Filter by stored file size. Use unknown or a <min>-<max> segment such as 512KB-1MB or 50MB-; supported units are B, KB, MB, and GB, case-insensitive. Either bound may be omitted.",
     // 画廊文件大小 router。
     // "unknown" 直接路由；其余路径段（如 512KB-1MB）委托给 gallery_size_range_provider.resolve
     // 解析为字节数，再传给 gallery_size_range_router。

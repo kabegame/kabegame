@@ -2,9 +2,14 @@
     "namespace": "kabegame",
     "name": "gallery_all_router",
     // 6e 起 Contrib 形态: 贡献 images.crawled_at ASC 基础排序 (从 v4.0.1 GalleryAllProvider
-    // 迁移; 6c → 6d 之间的 delegate 写法漏掉了这条 ORDER BY); limit=100 + offset=0 提供
-    // 默认页 (images://gallery/all 等价 images://gallery/all/x100x/1/); 子路径 x100x/N 由 gallery_paginate_router
-    // 重写 limit/offset, x500x/x1000x 同理。
+    // 迁移; 6c → 6d 之间的 delegate 写法漏掉了这条 ORDER BY)。
+    // 注意: 本 provider **没有 query 块**, 因此不贡献 limit/offset ——
+    // `images://gallery/all` 是无界集合, 不等价于 `.../x100x/1`
+    // (dsl_e2e.rs 的 `count("images://gallery/all") == 120` 即为此语义的锚点)。
+    // 分页只由子路径提供: x100x/N 交给 gallery_paginate_router 写 limit/offset, x500x/x1000x 同理。
+    // 也**不要**在这里补 limit: runtime.count() 是 SELECT COUNT(*) FROM (<inner>),
+    // build_sql 末尾会 render_pagination, LIMIT 会被套进子查询, 使全局总数塌成 100
+    // (前端画廊的总数/页数即取自这条路径)。无界读取的防护在 MCP 层做, 见 cocs/mcp/MCP_SERVER.md。
     "list": {
         "${page.name}": {
             "child_var": "page",
@@ -32,5 +37,5 @@
             "meta": "${child.meta}"
         }
     },
-    "note": "All router provider, default 100 items per page sorted by crawled_at; dynamic xPAGE_SIZEx (≥1) supported"
+    "note": "Every image, ordered by crawled_at ascending. This node is UNBOUNDED: reading images://gallery/all directly returns the whole library, so always append a pagination leaf — /x100x/1 for the first 100, or /desc/x100x/1 for newest first. Any page size x<N>x with N >= 1 works. Listing this node enumerates page numbers, which scans the full result set; prefer the `total` field to compute page count."
 }

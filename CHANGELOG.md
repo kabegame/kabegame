@@ -13,6 +13,7 @@
   - 可以声明应用从畅游处cookie加到请求中(requireCookie)，插件读不了cookie。对于需要cookie的插件，能直接指示应用从畅游处获取cookie发送
   - 添加每任务隔离的插件私有虚拟文件系统：V8 提供完整 `deno_fs` API，WebView 提供无句柄子集；插件卸载时 best-effort 清理其 data、cache、tmp 目录，升级时保留
   - 新增[haowallpaper](https://www.haowallpaper.com)、[小红书](https://www.xiaohongshu.com)、[kemono](https://kemono.cr) 插件。小红书webview插件实现了关键字检索+滚动下载。参考项目 [XHS-Downloader](https://github/JoeanAmier/XHS-Downloader)
+  - 新增archive接口，能够解压zip、gzip、bzip、7z、tar，使用方法是通过原生vfs接口来解压，然后遍历图片文件downloadImage导入。
 - **CLI**: 新增 plugn run 命令，能够运行一个已安装插件，先import安装kgpg插件，然后run，是当前的v8插件的开发、测试工作流（集成Claude skill）。
 - **原生元数据**:
   - 新增图片格式原生元数据查看：JPEG 读 EXIF（拍摄参数、GPS、缩略图、MakerNote，含 GPS 隐私提示），PNG 走自写 chunk walker（IHDR、tEXt/iTXt/zTXt 文本块、色彩、物理尺寸/时间、未知块），能直接看到 ComfyUI 的 `prompt`/`workflow`、A1111 的 `parameters`、NovelAI 的生成参数（进一步可以通过MCP帮忙检索所有带生成参数的图片）
@@ -21,6 +22,10 @@
   - 整理新增「补充原生元数据」选项（默认关闭）：批量为缺失或解析器版本过旧的 JPEG/PNG/WebP/GIF 补算，开启后整理批次自动收敛到 10；即将被整理删除的图片跳过，避免白做解析
 - **图片详情**: 预览窗左右侧栏宽度可拖动（240px ~ min(560px, 45vw)，双击复位，分别持久化）
 - **隐藏图片清理**: 新增一键清空隐藏画册；桌面源文件分批移入系统回收站并对失败块逐条降级，Android 优先直删 app 自有 MediaStore 媒体，其余在 Android 11+ 合并为一次系统删除授权。
+- **MCP**:
+  - 新增只读发现工具 `list_pathql_entry`，可逐层枚举 PathQL 懒树、读取节点说明并分页发现子节点；资源模板由 10 条扩展到 15 条。
+  - 新增 images 集合分页护栏：未显式分页且超过 500 行的读取返回 `pagination_required`，避免一次拉取过大结果集。
+
 
 ### Fixed
 - **壁纸**: 
@@ -38,6 +43,10 @@
 - **画册**: 
   - 无法查看子画册bug
   - 画册设置轮播对象失败bug
+  - 面包屑跳转bug
+  - 子画册返回bug
+- **插件**:
+  - 插件文档无法渲染问题
 
 ### Optimized
 - **安装**: Windows 安装弹太多黑窗问题
@@ -48,11 +57,16 @@
   - 帮助页面去除，改成打开官网
   - 畅游页面优化
   - 应用后台任务可以看到进度了
+- **本地文件夹画册**: 可以取消，可以选择快速导入（比较文件夹是否更新）
 
 ### Changed
+- **MCP**:
+  - Rust MCP 服务升级到 rmcp 3.0，继续使用 StreamableHTTP 与本地 session manager。
+  - **行为变更**：URI 无法映射到精确 read capability 时，不再默认放行；仅当同 scheme 仍有任一 read 能力开启时才允许。因此关闭全部 images read 后 `images://` 裸根也会拒绝，未注册 scheme 直接拒绝。
 - **畅游**： 下载不再脱离并发限制，但也不阻塞交互，而是进队，之后调度webview开启原生下载。
 - **图片详情**: 详情区拆成基本信息、原生元数据、插件简介三个同构面板
 - **文档**: Demo 页面url改成 demo.kabegame.com
+- **插件**: 插件要声明白名单的文档asset列表，而不会自动递归查找
 
 ### Removed
 - **插件**: 移除kgpg v2兼容，迁到kgpg v3，文件头包含50kb的固定icon数据

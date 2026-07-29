@@ -50,7 +50,8 @@ export function rowToImageInfo(row: Row): ImageInfo {
     ["pluginId", stringField(row, "plugin_id", "pluginId")],
     ["taskId", stringField(row, "task_id", "taskId")],
     ["surfRecordId", stringField(row, "surf_record_id", "surfRecordId")],
-    ["type", stringField(row, "media_type", "type")],
+    // 列名统一为 type；media_type 已从 provider 树与 storage SQL 中移除。
+    ["type", stringField(row, "type")],
     ["compatiblePath", stringField(row, "compatible_path", "compatiblePath")],
     ["postUrl", stringField(row, "post_url")],
   ];

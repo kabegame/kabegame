@@ -819,8 +819,8 @@ pub async fn generate_compatible_video(
     }
 }
 
-/// 桌面：把页面捕获到的分离 MSE 音视频流 stream-copy 合流成单文件。
-#[cfg(not(target_os = "android"))]
+/// 桌面与 Android：把页面捕获到的分离 MSE 音视频流 stream-copy 合流成单文件。
+#[cfg(not(target_os = "ios"))]
 pub fn mux_media_streams(inputs: &[(PathBuf, String)], output_path: &Path) -> Result<(), String> {
     use rsmpeg::avcodec::AVCodecParameters;
     use rsmpeg::avformat::{AVFormatContextInput, AVFormatContextOutput};

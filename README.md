@@ -5,6 +5,7 @@
 一个基于 Tauri 的二次元爬虫客户端！爬取、管理、设置/轮播壁纸，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元站点资源~
 
 > 📖 **完整文档**：[https://kabegame.com](https://kabegame.com/)
+
 > 🌐 **在线体验（Demo）**：[https://demo.kabegame.com](https://demo.kabegame.com/)
 
 <div align="center">
@@ -14,33 +15,77 @@
 <table>
   <tr>
     <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-windows-gallery.png" alt="Kabegame windows 截图 1" width="300"/><br/>
-      <small>Windows</small>
+      <img src="docs/images/gallery/gallery-main.png" alt="Kabegame windows 截图 1" width="300"/><br/>
+      <small>画廊</small>
     </td>
     <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-windows-preview.png" alt="Kabegame windows 截图 2" width="300"/><br/>
-      <small>Windows</small>
+      <img src="docs/images/gallery/gallery-preview.png" alt="Kabegame windows 截图 2" width="300"/><br/>
+      <small>预览</small>
     </td>
-    <td align="center" rowspan="2" style="vertical-align: top; text-align: right; width: 200px;">
-      <img src="docs/images/main-screenshot-android-gallery.jpg" alt="Kabegame android 截图" width="200"><br/>
-      <small>Android</small>
+    <!-- <td align="center" rowspan="2" style="vertical-align: top; text-align: right; width: 200px;">
+      <img src="docs/images/" alt="Kabegame android 截图" width="200"><br/>
+      <small>Android(4.4.0敬请期待)</small>
+    </td> -->
+  </tr>
+  <tr>
+    <td align="center" style="width: 300px;">
+      <img src="docs/images/gallery/gallery-detail.jpg" alt="Kabegame macos 截图" width="300"/><br/>
+      <small>详细元信息</small>
+    </td>
+    <td align="center" style="width: 300px;">
+      <img src="docs/images/gallery/gallery-filters.jpg" alt="画廊过滤" width="300"/><br/>
+      <small>随心过滤</small>
     </td>
   </tr>
   <tr>
     <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame macos 截图" width="300"/><br/>
-      <small>macOS</small>
+      <img src="docs/images/album/album-main.jpg" alt="Kabegame windows 截图 1" width="300"/><br/>
+      <small>画册整理</small>
     </td>
     <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-linux.png" alt="Kabegame linux 截图" width="300"/><br/>
-      <small>Linux</small>
+      <img src="docs/images/album/album-folder.jpg" alt="Kabegame windows 截图 2" width="300"/><br/>
+      <small>文件夹同步</small>
+    </td>
+    <!-- <td align="center" rowspan="2" style="vertical-align: top; text-align: right; width: 200px;">
+      <img src="docs/images/album/" alt="Kabegame android 截图" width="200"><br/>
+      <small>Android (4.4.0敬请期待)</small>
+    </td> -->
+  </tr>
+  <tr>
+    <td align="center" style="width: 300px;">
+      <img src="docs/images/source/source-main.jpg" alt="Kabegame macos 截图" width="300"/><br/>
+      <small>源插件列表</small>
+    </td>
+    <td align="center" style="width: 300px;">
+      <img src="docs/images/source/source-doc.jpg" alt="Kabegame linux 截图" width="300"/><br/>
+      <small>源插件文档</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" style="width: 300px;">
+      <img src="docs/images/crawler/crawler-config.jpg" alt="Kabegame macos 截图" width="300"/><br/>
+      <small>配置任务参数</small>
+    </td>
+    <td align="center" style="width: 300px;">
+      <img src="docs/images/crawler/crawler-start.jpg" alt="Kabegame linux 截图" width="300"/><br/>
+      <small>开始执行任务</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" style="width: 300px;">
+      <img src="docs/images/crawler/task-images.jpg" alt="Kabegame macos 截图" width="300"/><br/>
+      <small>任务图片</small>
+    </td>
+    <td align="center" style="width: 300px;">
+      <img src="docs/images/crawler/task-log.jpg" alt="Kabegame linux 截图" width="300"/><br/>
+      <small>任务日志(快速定位问题)</small>
     </td>
   </tr>
 </table>
 
 ## 主要功能
 
-- 🔌 **爬虫客户端**：通过 `.kgpg` 插件从各站爬取壁纸，内置插件商店可浏览/安装/管理；插件用 JS/TS 编写，跑在 V8（deno_core）或 WebView 后端。
+- 🔌 **爬虫客户端**：通过 `.kgpg` 插件从各站爬取壁纸，内置插件商店可浏览/安装/管理，4.3.0开始内置打包所有发布时的最新插件；插件用 JS/TS 编写，跑在 V8（deno_core）或 WebView 后端。
 - 🎨 **壁纸设置器（图片/视频）**：收集、管理、轮播二次元壁纸，自动从指定画册更换桌面壁纸。
 - 🖼️ **图片管理者**：画廊浏览、画册整理、虚拟磁盘、拖拽导入、文件夹同步画册。
 - 🧩 **MCP 整理**：打开 MCP 服务器，让外部 AI 代理按精细权限帮你整理壁纸。

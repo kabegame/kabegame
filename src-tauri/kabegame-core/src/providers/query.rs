@@ -138,7 +138,7 @@ fn encode_provider_path_segment(s: &str) -> String {
         .collect()
 }
 
-fn child_runtime_path(base: &str, child_name: &str) -> String {
+pub fn child_runtime_path(base: &str, child_name: &str) -> String {
     if base.ends_with("://") {
         format!("{}{}", base, encode_provider_path_segment(child_name))
     } else {
@@ -526,7 +526,7 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
         width: i("width").map(|v| v as u32),
         height: i("height").map(|v| v as u32),
         display_name: s("display_name").unwrap_or_default(),
-        media_type: crate::media::image_type::normalize_stored_media_type(s("media_type")),
+        media_type: crate::media::image_type::normalize_stored_media_type(s("type")),
         last_set_wallpaper_at: i("last_set_wallpaper_at")
             .filter(|&t| t >= 0)
             .map(|t| t as u64),

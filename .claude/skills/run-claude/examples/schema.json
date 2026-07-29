@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "view": { "type": "string" },
+    "components": { "type": "array", "items": { "type": "string" } },
+    "usesPinia": { "type": "boolean" }
+  },
+  "required": ["view", "components", "usesPinia"],
+  "additionalProperties": false
+}

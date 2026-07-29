@@ -42,6 +42,7 @@
       url: vfsPath,
       name: o.name ?? undefined,
       metadata: o.metadata ?? undefined,
+      metadataId: o.metadata_id ?? undefined,
       sourceUrl,
     });
   };
@@ -300,6 +301,55 @@
         return invoke("crawl_ffmpeg_probe", { path });
       },
     }),
+    /// @from 4.4.0
+    archive: Object.freeze({
+      zip(src, destDir, opts) {
+        return invoke("crawl_archive_zip", {
+          src: String(src ?? ""),
+          destDir: String(destDir ?? ""),
+          opts: opts ?? null,
+        });
+      },
+      tar(src, destDir, opts) {
+        return invoke("crawl_archive_tar", {
+          src: String(src ?? ""),
+          destDir: String(destDir ?? ""),
+          opts: opts ?? null,
+        });
+      },
+      sevenZip(src, destDir, opts) {
+        return invoke("crawl_archive_7z", {
+          src: String(src ?? ""),
+          destDir: String(destDir ?? ""),
+          opts: opts ?? null,
+        });
+      },
+    }),
+    async fetchToFile(url, destPath, init) {
+      const response = await fetch(url, init);
+      const file = await Kabegame.fs.create(String(destPath ?? ""));
+      let bytesWritten = 0;
+      try {
+        if (response.body !== null) {
+          const reader = response.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            await file.write(value);
+            bytesWritten += value.byteLength;
+          }
+        }
+      } finally {
+        await file.close();
+      }
+      return {
+        status: response.status,
+        statusText: response.statusText,
+        headers: Array.from(response.headers.entries()),
+        url: response.url,
+        bytesWritten,
+      };
+    },
     // 每页动态状态：按需经 invoke 单独获取（不做一次性上下文拉取）。
     pageLabel() {
       return invoke("crawl_get_page_label");
@@ -329,8 +379,12 @@
     addProgress(percentage) {
       return invoke("crawl_add_progress", { percentage });
     },
+    createImageMetadata(value, opts) {
+      return invoke("crawl_create_image_metadata", { value });
+    },
     // 统一下载 API：走 Rust download_worker。opts 为 plain object，可选键：
-    // name（展示名）、metadata（任意 JSON）、url（source url）。
+    // name（展示名）、metadata_id（已有 metadata 行）、metadata（任意 JSON）、
+    // url（source url）。metadata_id 优先于 metadata。
     // metadata 版本（plugin_version）由应用自动盖章，插件不可传入。
     async downloadImage(url, opts) {
       const rawUrl = String(url ?? "");
@@ -343,6 +397,7 @@
         url: rawUrl,
         name: o.name ?? undefined,
         metadata: o.metadata ?? undefined,
+        metadataId: o.metadata_id ?? undefined,
         sourceUrl: o.url ?? undefined,
       }));
     },

@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_bigger_crawler_time_router",
+    "note": "Filter to images whose crawled_at value is greater than the next segment. Supply a Unix timestamp value, then terminate with l<N>l for a raw LIMIT; this branch does not use the normal x<N>x/page pagination.",
     "resolve": {
         // 任意非空段被当作 unix epoch 时间戳, 转交 filter
         "(.+)": {

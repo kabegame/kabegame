@@ -79,8 +79,8 @@ fn avformat_media_dimensions(path: &std::path::Path) -> Option<(u32, u32)> {
 /// stream's `codecpar` width/height via libavformat (rsmpeg), so it works
 /// uniformly for mp4/mov/wmv/webm/mkv. Returns `None` on error.
 ///
-/// Android does not link FFmpeg; `content://` video dimensions come from the
-/// async ContentIoProvider path in the `android` submodule.
+/// Android `content://` video dimensions use the async ContentIoProvider path
+/// in the `android` submodule; this sync helper handles filesystem paths only.
 ///
 #[cfg(not(target_os = "android"))]
 pub fn resolve_video_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
@@ -97,15 +97,15 @@ pub fn resolve_video_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// Android stub: FFmpeg is not linked; real `content://` video dimensions come
-/// from the async ContentIoProvider path in the `android` submodule.
+/// Android stub: `content://` video dimensions use the async ContentIoProvider
+/// path in the `android` submodule.
 #[cfg(target_os = "android")]
 pub fn resolve_video_dimensions_sync(_local_path: &str) -> Option<(u32, u32)> {
     None
 }
 
-/// 桌面端视频探测结果。FFmpeg/rsmpeg 仅用于视频处理路径，不用于图片类型推断。
-#[cfg(not(target_os = "android"))]
+/// 桌面与 Android 视频探测结果。FFmpeg/rsmpeg 仅用于视频处理路径，不用于图片类型推断。
+#[cfg(not(target_os = "ios"))]
 #[derive(Debug, Clone)]
 pub struct MediaProbeResult {
     pub is_video: bool,
@@ -118,9 +118,9 @@ pub struct MediaProbeResult {
     pub browser_safe: bool,
 }
 
-/// 桌面端：用 libavformat 打开文件并探测首个视频流，返回视频 MIME/宽高/浏览器兼容性。
+/// 桌面与 Android：用 libavformat 打开文件并探测首个视频流，返回视频 MIME/宽高/浏览器兼容性。
 /// 打开失败、无视频流、宽高非法或类型不受支持时返回 `None`。图片不走此函数。
-#[cfg(not(target_os = "android"))]
+#[cfg(not(target_os = "ios"))]
 pub fn probe_media_sync(path: &std::path::Path) -> Option<MediaProbeResult> {
     use rsmpeg::avformat::AVFormatContextInput;
     use std::ffi::CString;
@@ -145,7 +145,7 @@ pub fn probe_media_sync(path: &std::path::Path) -> Option<MediaProbeResult> {
 }
 
 /// 把 (视频编码器 id, 容器格式名) 映射到受支持的 (MIME, browser_safe)。
-#[cfg(not(target_os = "android"))]
+#[cfg(not(target_os = "ios"))]
 fn classify_video_probe_mime(
     codec_id: rsmpeg::ffi::AVCodecID,
     fmt_name: &str,

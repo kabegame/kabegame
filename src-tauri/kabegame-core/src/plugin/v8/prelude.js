@@ -294,9 +294,19 @@ const kabegameFfmpeg = Object.freeze({
   probe: (path) => ops.op_kabegame_ffmpeg_probe(path),
 });
 
+const kabegameArchive = Object.freeze({
+  zip: (src, destDir, opts) =>
+    ops.op_kabegame_archive_zip(src, destDir, opts ?? null),
+  tar: (src, destDir, opts) =>
+    ops.op_kabegame_archive_tar(src, destDir, opts ?? null),
+  sevenZip: (src, destDir, opts) =>
+    ops.op_kabegame_archive_7z(src, destDir, opts ?? null),
+});
+
 globalThis.Kabegame = Object.freeze({
   fs: kabegameFs,
   ffmpeg: kabegameFfmpeg,
+  archive: kabegameArchive,
   to: (url) => ops.op_kabegame_to(url),
   back: () => ops.op_kabegame_back(),
   currentUrl: () => ops.op_kabegame_current_url(),
@@ -318,6 +328,15 @@ globalThis.Kabegame = Object.freeze({
   delHeader: (key) => ops.op_kabegame_del_header(key),
   warn: (message) => ops.op_kabegame_warn(message),
   addProgress: (percentage) => ops.op_kabegame_add_progress(percentage),
+  fetchToFile: async (url, destPath, init = undefined) => {
+    const request = new Request(url, init);
+    const bodyText = request.bodyText;
+    return ops.op_kabegame_fetch_to_file(request.url, String(destPath), {
+      method: request.method,
+      headers: [...request.headers],
+      body: bodyText == null ? null : String(bodyText),
+    });
+  },
   downloadImage: (url, opts) => ops.op_kabegame_download_image(url, opts ?? null),
   createImageMetadata: (map, opts) =>
     ops.op_kabegame_create_image_metadata(map, opts ?? null),

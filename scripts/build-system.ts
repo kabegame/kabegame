@@ -376,10 +376,12 @@ export class BuildSystem {
           );
           run("tauri", args, { cwd, bin: "cargo" });
         } else if (this.context.mode!.isWeb) {
-          const distMain = path.join(root, "dist-kabegame");
+          // web 前端产物是独立目录（dist-kabegame-web/），与桌面/Android 的
+          // dist-kabegame/ 分开，两种构建可任意交错而不会互相覆盖。
+          const distMain = path.join(root, "dist-kabegame-web");
           if (!existsSync(distMain)) {
             throw new Error(
-              `[web build] dist-kabegame/ not found at ${distMain}.\n` +
+              `[web build] dist-kabegame-web/ not found at ${distMain}.\n` +
               `Run Vue build first: deno task b -c kabegame --mode web --skip cargo`,
             );
           }

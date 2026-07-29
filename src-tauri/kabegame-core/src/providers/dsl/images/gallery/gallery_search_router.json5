@@ -1,10 +1,11 @@
 {
     "namespace": "kabegame",
     "name": "gallery_search_router",
+    "note": "Search by display name: search/display-name/<query>. This is a PREFIX — you can keep filtering after it, e.g. search/display-name/<query>/plugin/patreon/x100x/1",
     // 7a: 纯 router 壳 — 仅持 list 路由表, 无 apply_query 贡献 (search 本身不变换 query;
     // search 子项 /<query>/ 才会注入 LIKE WHERE). 严格遵守 router/provider 分工:
     // 这一层只负责"知道往下能走 display-name", 不混业务逻辑。
-    "resolve": {
+    "list": {
         "display-name": { "provider": "gallery_search_display_name_router" }
     }
 }

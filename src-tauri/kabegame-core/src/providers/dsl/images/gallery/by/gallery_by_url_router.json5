@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_by_url_router",
+    "note": "Look up one image by its source URL. Pass the exact stored URL as the next single PathQL segment; a missing URL returns an empty result.",
     "resolve": {
         "(.+)": {
             "provider": "gallery_by_url_provider",

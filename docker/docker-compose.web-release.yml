@@ -3,12 +3,12 @@
 # 用法（标准入口是 scripts/build-web.sh，它先在宿主构建前端再调本文件）：
 #   bash scripts/build-web.sh                                              # 完整流程（推荐）
 #   docker compose -f docker/docker-compose.web-release.yml build          # 首次 / 依赖或 third 子模块变更后
-#   docker compose -f docker/docker-compose.web-release.yml run --rm build # 仅容器步骤（要求 dist-kabegame/ 已就绪）
+#   docker compose -f docker/docker-compose.web-release.yml run --rm build # 仅容器步骤（要求 dist-kabegame-web/ 已就绪）
 #
 # 前置（宿主）：git submodule update --init third/FFmpeg third/x264
 #
 # 分工：
-#   宿主（scripts/build-web.sh）：一切 JS 构建——vite 出 dist-kabegame/、爬虫插件打包。
+#   宿主（scripts/build-web.sh）：一切 JS 构建——vite 出 dist-kabegame-web/、爬虫插件打包。
 #     ⚠ 容器内严禁跑任何 JS 构建：Apple Silicon 上 linux/amd64 模拟层（Rosetta for Linux）
 #     下 V8 所有 double 的小数部分被截断为整数（0.96→0、Math.PI→3），sass/rollup 产物
 #     被静默数值污染（背景全透明、transition 全 0s 等），且不报任何错误。
@@ -18,7 +18,7 @@
 #     子模块不变时全缓存。
 #   运行（本文件 command）：只剩 Rust——`deno task b -c kabegame --mode web --release --skip vue`
 #     （--skip vue 跳过前端；KABEGAME_SKIP_PLUGIN_PACKAGE=1 跳过插件打包，两者均已在宿主完成。
-#     dist-kabegame/ 缺失时 build-system 会带清晰报错直接失败；kabegame build.rs 对该目录
+#     dist-kabegame-web/ 缺失时 build-system 会带清晰报错直接失败；kabegame build.rs 对该目录
 #     rerun-if-changed，宿主重出前端后容器增量编译必然重新嵌入）。不再构建 kabegame-cli
 #     （此前仅为容器内插件打包所需）。镜像 entrypoint（web-release-entrypoint.sh）先把
 #     FFmpeg/x264 种子 rsync 进 /src 的 third/*-build-web/install/，再执行 command。

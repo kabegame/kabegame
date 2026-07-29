@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_plugin_router",
+    "note": "Images from the selected crawler plugin. Continue with filter_comb to add another dimension, extend for the plugin-defined entry tree, or desc/x<N>x/<page> for a collection. A syntactically valid but uninstalled plugin id resolves to an empty set.",
     "properties": {
         "plugin_id": { "type": "string", "default": "", "optional": false }
     },

@@ -12,7 +12,7 @@ use axum::{
 
 /// Returns a Router that serves compiled Vue static assets via a fallback handler.
 ///
-/// Release builds embed `dist-kabegame/` at compile time via `include_dir!` (single-binary).
+/// Release builds embed `dist-kabegame-web/` at compile time via `include_dir!` (single-binary).
 /// Debug builds return 404 — the Vite dev server on :1420 serves the frontend.
 pub fn static_assets_router() -> Router {
     Router::new().fallback(static_fallback)
@@ -20,7 +20,7 @@ pub fn static_assets_router() -> Router {
 
 #[cfg(not(debug_assertions))]
 static DIST: include_dir::Dir<'_> =
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../dist-kabegame");
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../dist-kabegame-web");
 
 async fn static_fallback(req: Request) -> Response {
     #[cfg(not(debug_assertions))]

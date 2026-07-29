@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_wallpaper_order_router",
+    "note": "Filter to images that have been set as wallpaper at least once. Continue with filter_comb to add another dimension, or append desc/x<N>x/<page>; sorting is still controlled explicitly by sort.",
     // 7c S5: programmatic GalleryWallpaperOrderRouter 迁 DSL。
     // 仅取被设过壁纸的图；排序由 gallery_sort_router 独立处理。
     "query": {

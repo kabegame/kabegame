@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_hide_router",
+    "note": "Exclude images in the hidden album. This is a PREFIX, so the next segment is another gallery route such as plugin, album, all, or sort; hide/all is valid, but all/hide is not.",
     "query": {
         "where": "hid_ai.image_id IS NULL"
     },

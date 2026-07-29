@@ -19,52 +19,34 @@ pub fn mux_streams_sync(vfs: &PluginVfs, inputs: &[String], output: &str) -> Res
         return Err("音视频合流至少需要两个输入流".to_string());
     }
 
-    #[cfg(target_os = "android")]
-    {
-        let _ = (vfs, output);
-        return Err("音视频合流暂不支持 Android".to_string());
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        let real_inputs = inputs
-            .iter()
-            .map(|input| {
-                vfs.host_path_for_read(Path::new(input))
-                    .map(|path| (path, String::new()))
-                    .map_err(|error| format!("无法读取合流输入“{input}”：{error}"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let real_output = vfs
-            .host_path_for_write(Path::new(output))
-            .map_err(|error| format!("无法写入合流输出“{output}”：{error}"))?;
-        crate::crawler::downloader::compress::mux_media_streams(&real_inputs, &real_output)
-    }
+    let real_inputs = inputs
+        .iter()
+        .map(|input| {
+            vfs.host_path_for_read(Path::new(input))
+                .map(|path| (path, String::new()))
+                .map_err(|error| format!("无法读取合流输入“{input}”：{error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let real_output = vfs
+        .host_path_for_write(Path::new(output))
+        .map_err(|error| format!("无法写入合流输出“{output}”：{error}"))?;
+    crate::crawler::downloader::compress::mux_media_streams(&real_inputs, &real_output)
 }
 
 /// 通过任务虚拟路径探测受支持的视频媒体。
 pub fn probe_sync(vfs: &PluginVfs, path: &str) -> Result<Option<FfmpegProbeResult>, String> {
-    #[cfg(target_os = "android")]
-    {
-        let _ = (vfs, path);
-        return Err("媒体探测暂不支持 Android".to_string());
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        let real_path = vfs
-            .host_path_for_read(Path::new(path))
-            .map_err(|error| format!("无法读取待探测媒体“{path}”：{error}"))?;
-        Ok(
-            crate::media::dimensions::probe_media_sync(&real_path).map(|probe| FfmpegProbeResult {
-                is_video: probe.is_video,
-                mime_type: probe.mime_type,
-                width: probe.width,
-                height: probe.height,
-                browser_safe: probe.browser_safe,
-            }),
-        )
-    }
+    let real_path = vfs
+        .host_path_for_read(Path::new(path))
+        .map_err(|error| format!("无法读取待探测媒体“{path}”：{error}"))?;
+    Ok(
+        crate::media::dimensions::probe_media_sync(&real_path).map(|probe| FfmpegProbeResult {
+            is_video: probe.is_video,
+            mime_type: probe.mime_type,
+            width: probe.width,
+            height: probe.height,
+            browser_safe: probe.browser_safe,
+        }),
+    )
 }
 
 #[cfg(test)]

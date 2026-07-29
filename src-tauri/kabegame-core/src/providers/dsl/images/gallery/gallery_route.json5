@@ -83,8 +83,15 @@
                 "in_need": true
             },
             {
+                // as 必须是 "type" 而不是 "media_type":上游 images_root_provider 贡献
+                // `images.*`,展开后已含一个 type 列。ImageInfo 的该字段是
+                // `#[serde(rename = "type", alias = "media_type")]` —— 两个键名都吃,
+                // 所以一旦 SELECT 里同时出现 type 和 media_type,反序列化就报
+                // `duplicate field type`,整条 gallery 路径读不出数据。
+                // 用同名 type 时,sql_executor 的 obj.insert 后写覆盖前者,
+                // 而本 COALESCE 排在 images.* 之后,最终取到的正是补过默认值的结果。
                 "sql": "COALESCE(images.type, 'image')",
-                "as": "media_type",
+                "as": "type",
                 "in_need": true,
             },
             {
@@ -129,7 +136,8 @@
             "in_need": true
         }]
     },
-    "resolve": {
+    "note": "Gallery root. Each segment narrows the previous one; filters AND together. Combine two dimensions with `filter_comb`: gallery/plugin/patreon/filter_comb/media-type/image/x100x/1. `sort` is a sibling of `all`, not a child of it. `/desc` reverses the current order. `hide/` is a PREFIX excluding hidden images. Always end a collection path with /x<N>x/<page>.",
+    "list": {
         "all": {
             "provider": "gallery_all_router"
         },
@@ -142,25 +150,13 @@
         "name": {
             "provider": "gallery_name_router"
         },
-        "names": {
-            "provider": "gallery_name_router"
-        },
         "plugin": {
-            "provider": "gallery_plugins_router"
-        },
-        "plugins": {
             "provider": "gallery_plugins_router"
         },
         "task": {
             "provider": "gallery_tasks_router"
         },
-        "tasks": {
-            "provider": "gallery_tasks_router"
-        },
         "surf": {
-            "provider": "gallery_surfs_router"
-        },
-        "surfs": {
             "provider": "gallery_surfs_router"
         },
         "media-type": {
@@ -169,13 +165,7 @@
         "date": {
             "provider": "gallery_dates_router"
         },
-        "dates": {
-            "provider": "gallery_dates_router"
-        },
         "album": {
-            "provider": "gallery_albums_router"
-        },
-        "albums": {
             "provider": "gallery_albums_router"
         },
         "hide": {
@@ -213,6 +203,26 @@
         },
         "aspect": {
             "provider": "gallery_aspect_router"
+        }
+    },
+    "resolve": {
+        "names": {
+            "provider": "gallery_name_router"
+        },
+        "plugins": {
+            "provider": "gallery_plugins_router"
+        },
+        "tasks": {
+            "provider": "gallery_tasks_router"
+        },
+        "surfs": {
+            "provider": "gallery_surfs_router"
+        },
+        "dates": {
+            "provider": "gallery_dates_router"
+        },
+        "albums": {
+            "provider": "gallery_albums_router"
         },
         "dimension": {
             "provider": "gallery_aspect_router"

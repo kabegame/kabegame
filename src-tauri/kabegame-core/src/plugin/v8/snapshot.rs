@@ -18,7 +18,8 @@ const MAGIC: &[u8; 8] = b"KGVSNAP1";
 ///
 /// `CRYPTO_INIT_SCRIPT` runs after restore and does not require a bump. The V8
 /// version is recorded separately in the metadata below.
-const SNAPSHOT_FINGERPRINT: u32 = 4;
+/// Fingerprint 5 is reserved for the upcoming op set and `prelude.js` changes.
+const SNAPSHOT_FINGERPRINT: u32 = 5;
 const MAX_META_LEN: usize = 4096;
 
 static LOADED: OnceLock<&'static [u8]> = OnceLock::new();
@@ -165,8 +166,7 @@ pub fn spawn_generate_if_missing() {
 /// Bake extension ESM only. Crypto globals are deliberately initialized after
 /// restore because their cppgc objects cannot be serialized in a V8 snapshot.
 pub(super) fn generate_snapshot_bytes() -> Result<Box<[u8]>, String> {
-    let fs: deno_fs::FileSystemRc =
-        Arc::new(crate::plugin::vfs::PluginVfs::snapshot_placeholder());
+    let fs: deno_fs::FileSystemRc = Arc::new(crate::plugin::vfs::PluginVfs::snapshot_placeholder());
     let runtime = deno_core::JsRuntimeForSnapshot::try_new(deno_core::RuntimeOptions {
         module_loader: None,
         extensions: super::base_extensions(super::KabegameOpState::snapshot_placeholder(), fs),

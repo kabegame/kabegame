@@ -1,8 +1,9 @@
 {
     "namespace": "kabegame",
     "name": "gallery_media_type_router",
+    "note": "Filter by broad media type. Choose image or video next, then list that node to discover concrete stored formats such as webp or mp4. A broad type can also continue directly to filtering or pagination.",
     // 7c S5: 静态二选一: image / video。
-    "resolve": {
+    "list": {
         "image": {
             "provider": "gallery_media_type_provider",
             "properties": { "kind": "image" }

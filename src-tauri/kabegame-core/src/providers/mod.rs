@@ -22,8 +22,8 @@ pub use dsl_loader::is_provider_file_path;
 pub use init::{provider_runtime, provider_template_context};
 pub use pathql_rs::ProviderRuntime;
 pub use query::{
-    album_preview_at, count_at, decode_provider_path_segments, failed_images_at,
-    gallery_date_groups_at, gallery_day_groups_at, gallery_media_type_counts_at,
+    album_preview_at, child_runtime_path, count_at, decode_provider_path_segments,
+    failed_images_at, gallery_date_groups_at, gallery_day_groups_at, gallery_media_type_counts_at,
     gallery_plugin_groups_at, gallery_time_filter_payload_at, gallery_total_count_at, images_at,
     metadata_at, metadata_full_at, organize_batch_at, query_entry, query_fetch, query_list,
     runtime_path, ProviderEntry, ProviderListChild, ProviderNote,

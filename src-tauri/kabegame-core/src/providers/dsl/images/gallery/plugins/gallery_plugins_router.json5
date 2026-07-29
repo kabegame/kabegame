@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_plugins_router",
+    "note": "Filter by crawler plugin. List this node to get the real plugin ids in this library (ids are lowercase slugs). Then: gallery/plugin/<id>/desc/x100x/1",
     "list": {
         "${plugin.name}": {
             "delegate": {

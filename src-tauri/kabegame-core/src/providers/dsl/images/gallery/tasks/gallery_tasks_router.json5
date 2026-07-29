@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_tasks_router",
+    "note": "Filter by crawler task. List this node to get task UUIDs that have images and their task metadata, then use a UUID as the next segment. Non-UUID task ids do not resolve.",
     // Gallery keeps full task metadata on child meta; shared tasks_provider owns the scan SQL.
     "list": {
         "${task.name}": {

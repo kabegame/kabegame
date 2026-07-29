@@ -155,6 +155,15 @@ return ResolvedNode { provider, composed }
 
 ## 4. List 语义
 
+### 4.0 路由表与说明字段约定
+
+- gallery 路由表已统一使用 `list` 范式，与 VD 一致。新增纯字面量路由表必须写在 `list`，
+  不要写进 `resolve`；`resolve` 虽可解析字面量，但该层无法被 `runtime.list` 和 MCP
+  `list_pathql_entry` 枚举。
+- `note` 与 `meta` 职责分离：`note` 是面向人和模型的可读节点说明，写在**被说明的 provider
+  自己身上**；`meta` 是 ChildEntry 的 JSON 实体数据，例如 album 行、plugin manifest 或
+  路由所需结构化属性。不要把说明文字塞进 `meta`，也不要用 `note` 承载实体数据。
+
 ### 4.1 静态项（StaticListEntry）
 
 key 形态分两类（7b 起）：

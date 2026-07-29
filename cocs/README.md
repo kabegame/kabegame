@@ -29,6 +29,12 @@
   - 主题：`albums://by_sub_tree` 的按名称递归画册树查询，以及 CLI `--album` 通过父路径直接子项解析目标画册 id 的契约。
   - 适用场景：导入图片时按 `/父画册/子画册` 定位画册；新增或排查 albums 子树 PathQL 路由。
 
+## MCP（`mcp/`）
+
+- [mcp/MCP_SERVER.md](mcp/MCP_SERVER.md)
+  - 主题：桌面端 MCP Server 的模块分工、URI path/read 与 tool/write 能力体系、`list_pathql_entry` 懒树发现契约、500 行分页护栏，以及为什么不能在 `gallery_all_router.json5` 加 limit。
+  - 适用场景：新增或排查 MCP 资源/工具/能力开关；维护 PathQL 发现与分页；避免用 DSL LIMIT 破坏全局 COUNT、前端总数和页数。
+
 ## 画廊与查询（`gallery/`）
 
 - [gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md](gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md)

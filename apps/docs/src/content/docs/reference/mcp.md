@@ -16,7 +16,7 @@ description: Kabegame 本地 MCP 服务器的 URI scheme、分页规则与写入
 | URL | `http://127.0.0.1:7490/mcp` |
 | 端口 | 默认 `7490`，可在设置中修改 |
 | 绑定 | `127.0.0.1`（仅回环，无鉴权） |
-| Transport | StreamableHTTP（rmcp 1.4，`LocalSessionManager`） |
+| Transport | StreamableHTTP（rmcp 3.0，`LocalSessionManager`） |
 | 启动时机 | 默认关闭；在「设置 → MCP」开启后启动（仅桌面） |
 | 平台 | Windows / macOS / Linux（仅桌面），Android 不暴露 MCP |
 
@@ -27,6 +27,44 @@ description: Kabegame 本地 MCP 服务器的 URI scheme、分页规则与写入
 ### Server instructions
 
 连接后，服务器会在 MCP 握手的 `instructions` 字段里返回一份 cheat sheet：包含 URI 速查、字段清单、`plugin://` 瘦身提示，以及「不支持删除」的说明。Host 侧可以把它直接作为系统提示的一部分。
+
+## 发现流程与 PathQL 路径文法
+
+Kabegame 的图片资源是一棵**懒加载树**：`list_resources` 只列出少量预置入口，不会展开完整画廊。模型应使用 `list_pathql_entry` 每次枚举一层，读取当前节点和子节点的 `note`，而不是猜测路径段、插件 id 或图片 id。
+
+标准的三步发现循环是：
+
+1. 调用 `list_pathql_entry({ "path": "images://gallery" })`，从返回的 22 个维度及其 `note` 中选择入口。
+2. 对选中的 `child.path` 继续调用 `list_pathql_entry`，例如枚举 `images://gallery/plugin` 下已安装的插件。大型子节点列表用 `offset` / `limit` 翻页。
+3. 原样复制返回的、已 percent-encode 的 `child.path`；集合叶子补上 `/desc/x100x/1` 等显式分页后交给 `resources/read`。不要再次编码，也不要对分页节点调用发现工具。
+
+例如，插件维度的完整路径可以从 `images://gallery` → `images://gallery/plugin` → 返回的插件 child 逐层得到，最后读取：
+
+```text
+images://gallery/plugin/<pluginId>/desc/x100x/1
+```
+
+### 画廊维度速查
+
+`list_pathql_entry("images://gallery")` 当前返回 22 个可枚举维度：
+
+| 类别 | 路径段 |
+|---|---|
+| 常用集合 | `all`、`wallpaper-order`、`no-album` |
+| 过滤维度 | `name`、`plugin`、`task`、`surf`、`media-type`、`date`、`album`、`size`、`aspect` |
+| 路径控制 | `hide`、`search`、`sort` |
+| 精确查询 | `by_id`、`by_path`、`by_compatible_path`、`by_thumbnail_path`、`by_url`、`by_hash`、`bigger_crawler_time` |
+
+`list_pathql_entry("images://gallery/sort")` 返回 7 个排序键：`by-id`、`by-time`、`by-size`、`by-name`、`by-aspect`、`by-set-time`、`by-album-order`。
+
+### 组合规则
+
+- 每个路径段都会继续收窄前一个节点，沿路径累积的过滤条件按 AND 组合；路径大小写敏感。
+- `filter_comb` 用于在已有过滤之后再组合一个维度，例如 `images://gallery/plugin/patreon/filter_comb/media-type/image/desc/x100x/1`。
+- `sort` 是 `all` 的**兄弟节点**，不是子节点。正确写法是 `gallery/sort/<key>/...`，不要写成 `gallery/all/sort/...`。
+- `/desc` 反转当前排序方向；默认画廊顺序为 `crawledAt` 升序，因此 `/desc` 表示最新在前。
+- `hide` 是排除隐藏图片的**前缀**。`gallery/hide/all/...` 有效，`gallery/all/hide/...` 无效。
+- 对未列出的后续语法，继续发现当前节点并读取 `note`，不要自行发明路径。
 
 ## 五类 URI scheme 一览
 
@@ -57,7 +95,6 @@ description: Kabegame 本地 MCP 服务器的 URI scheme、分页规则与写入
 
 | 路径 | 含义 |
 |---|---|
-| `images://gallery/all` | 所有图片第 1 页，按爬取时间升序 |
 | `images://gallery/all/desc/x100x/1` | 所有图片第 1 页，最新在前，每页 100 张 |
 | `images://gallery/album/{albumId}/x100x/1` | 指定画册第 1 页 |
 | `images://gallery/album/{albumId}/desc/x100x/1` | 指定画册第 1 页，最新在前 |
@@ -70,7 +107,13 @@ description: Kabegame 本地 MCP 服务器的 URI scheme、分页规则与写入
 
 ### `ImageInfo` 字段（camelCase）
 
-`id`、`url`、`localPath`、`pluginId`、`taskId`、`surfRecordId`、`crawledAt`（unix 秒）、`metadataId`、`thumbnailPath`、`favorite`、`localExists`、`hash`、`width`、`height`、`displayName`、`type`（`"image" | "video"`，注意 serde key 是 `type` 而不是 `mediaType`）、`lastSetWallpaperAt`、`size`（字节）。
+`id`、`url`、`localPath`、`pluginId`、`taskId`、`surfRecordId`、`crawledAt`（unix 秒）、`metadataId`、`pluginVersion`、`thumbnailPath`、`favorite`、`isHidden`、`localExists`、`hash`、`width`、`height`、`displayName`、`type`、`lastSetWallpaperAt`、`size`（字节）、`albumOrder`、`compatiblePath`、`postUrl`。
+
+`type` 是入库前经 `normalize_stored_media_type` 归一化的**存储格式 key**，例如 `image/jpg`、`video/mp4`；只有历史空值才回落为 `image`。序列化 key 是 `type`，不是 `mediaType`。
+
+:::caution
+`favorite`、`isHidden`、`albumOrder` 只在 `images://gallery/...` 路径上计算。在原始单图路径 `images://id_{id}` 上，它们恒为 `false`、`false`、`null`；需要这些画廊衍生字段时，请改读 `images://gallery/by_id/{id}`。
+:::
 
 :::note
 列表类端点只返回图片基础字段。需要爬取期 metadata 时单独读 `images://id_{id}/metadata`。
@@ -115,11 +158,9 @@ description: Kabegame 本地 MCP 服务器的 URI scheme、分页规则与写入
 ## 通用分页规则
 
 - **页码从 1 开始。`page 0` 是非法值，一律视为错误。**
-- 页大小跟随用户设置 `galleryPageSize`，可选 **100 / 500 / 1000**，默认 100。其它值会被规整回 100。
+- PathQL 页大小段匹配 `x([1-9][0-9]*)x`，接受任意 `N ≥ 1`，例如 `x25x`、`x100x`、`x1200x`。
 - 第 N 页从 `(N - 1) * page_size` 处开始。
-- 非 SimplePage 路径（Greedy 路径）使用固定的内部 `LEAF_SIZE = 100`，不跟随用户设置。
-
-分页上下文与 `galleryPageSize` 的具体行为见 [画廊](/guide/gallery/)。
+- 未以页号收尾、且不是 `id_*` 单图的 `images://` 集合会先执行 COUNT；总数超过 500 时返回 `pagination_required`，要求补上 `/x<N>x/<page>`。
 
 ## 预置资源（`list_resources`）
 
@@ -127,7 +168,7 @@ description: Kabegame 本地 MCP 服务器的 URI scheme、分页规则与写入
 
 | URI | 名称 | 说明 |
 |---|---|---|
-| `images://gallery/all` | Gallery images | 画廊默认图片页 |
+| `images://gallery/all/desc/x100x/1` | Gallery images (first page) | 画廊最新 100 条 |
 | `images://x100x/1` | Raw image rows | 原始 `images` 表第 1 页 |
 | `albums://all` | All albums | `Vec<Album>` |
 | `tasks://all` | All tasks | `Vec<TaskInfo>` |
@@ -136,11 +177,18 @@ description: Kabegame 本地 MCP 服务器的 URI scheme、分页规则与写入
 
 ## 资源模板（`list_resource_templates`）
 
-共十条模板，供 Host 动态拼接：
+共十五条模板，供 Host 动态拼接：
 
 - `images://id_{imageId}`、`images://id_{imageId}/metadata`
+- `images://gallery/plugin/{pluginId}/desc/x100x/{page}`
+- `images://gallery/album/{albumId}/desc/x100x/{page}`
+- `images://gallery/date/{year}y/{month}m/{day}d/desc/x100x/{page}`
+- `images://gallery/search/display-name/{query}/all/desc/x100x/{page}`
+- `images://gallery/by_id/{imageId}`
 - `albums://id_{albumId}`、`tasks://id_{taskId}`、`surf_records://id_{surfRecordId}`
 - `plugin://{pluginId}`、`plugin://{pluginId}/doc`、`plugin://{pluginId}/icon`、`plugin://{pluginId}/description_template`、`plugin://{pluginId}/doc_resource/{resourceKey}`
+
+新增的 5 条 gallery 模板都复用 `images.read.gallery` capability id。
 
 ## 能力开关（资源/工具过滤）
 
@@ -153,6 +201,70 @@ description: Kabegame 本地 MCP 服务器的 URI scheme、分页规则与写入
 - `list_tools` 不再列出被禁用的工具。
 - `read_resource` 读取被禁用资源时返回 `resource_disabled`。
 - `call_tool` 调用被禁用工具时返回 `tool_disabled`。
+
+当 URI 能精确映射 capability id 时，按该 id 判定。若 `read_capability_id` 返回 `None`，现在只有在**同 scheme 下仍有至少一个 read capability 开启**时才放行：因此关闭全部 images read 后，`images://` 裸根也会返回 `resource_disabled`；`fail-images://` 等未注册 scheme 会直接拒绝。`list_pathql_entry` 复用同一判定，没有新增 capability。
+
+## 读工具 `list_pathql_entry`
+
+Rust MCP 服务器共暴露 5 个工具：1 个只读发现工具和 4 个写工具。`list_pathql_entry` 每次列出 PathQL 懒树的一层；不含 `://` 的 `path` 会提升为 `images://`。
+
+**输入 schema：**
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "PathQL URI. Paths without :// are promoted to images://."
+    },
+    "include_counts": {
+      "type": "boolean",
+      "default": false
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 200,
+      "default": 100
+    }
+  },
+  "required": ["path"]
+}
+```
+
+`limit > 200` 不会被截断，而是返回 `limit_exceeded`。`include_counts` 只有在本次返回窗口不超过 50 个 child 时才生效，以避免对每个子节点扇出昂贵的 COUNT；实际是否执行会反映在 `countsIncluded`。
+
+**返回结构：**
+
+| 字段 | 含义 |
+|---|---|
+| `path` | 规范化后的 PathQL URI |
+| `total` | 当前路径的 COUNT；COUNT 失败时为 `null` |
+| `note` | 当前 provider 的可读说明 |
+| `children[]` | 当前分页窗口内的子节点 |
+| `childCount` | 当前节点的全部直属 child 数量 |
+| `offset` / `limit` | 实际窗口参数 |
+| `hasMore` | 是否还有后续 child |
+| `countsIncluded` | 是否为本窗口执行了逐 child COUNT |
+| `hint` | 节点无 child 或请求到空窗口时出现的提示 |
+
+每个 child 包含 `name`、`path`、`note`、`meta`、`total`。其中 `path` 已 percent-encode，可以直接交给 `resources/read` 或再次传给 `list_pathql_entry`，不要重新编码；`total` 只在 `countsIncluded = true` 且该 child COUNT 成功时有值。
+
+鉴权直接复用 `is_uri_capability_enabled`：例如 `images://gallery/...` 受 `images.read.gallery` 控制；发现工具本身不新增 capability。常见错误包括：
+
+| 错误码 | 条件 |
+|---|---|
+| `limit_exceeded` | `limit > 200`，data 含 `limit` / `maxLimit` |
+| `resource_disabled` | 目标路径对应的 read capability 已关闭，或该 scheme 没有任何 read capability 开启 |
+| `resource_not_found` | PathQL 路径、provider 或 schema 不存在 |
+| `invalid_params` | 输入无法按 schema / 参数类型解析 |
+| `internal_error` | 其它 PathQL 或后台任务错误 |
 
 ## 写工具（Rust MCP 服务器）
 
@@ -251,7 +363,11 @@ Rust 端通过 HTTP transport 暴露四个写入工具。Stdio Bundle 会透传�
 
 ### 桥暴露的工具
 
-所有工具响应都包在 `{ ok, data }` 或 `{ ok: false, code, message, details }` 里。错误码包括：`INVALID_ARGUMENT`、`UPSTREAM_HTTP_ERROR`、`UPSTREAM_MCP_ERROR`、`UPSTREAM_PROTOCOL_ERROR`、`TIMEOUT`、`UPSTREAM_REQUEST_FAILED`、`UNKNOWN_TOOL`、`UNEXPECTED_ERROR`。
+所有工具响应都包在 `{ ok, data }` 或 `{ ok: false, code, message, details }` 里。错误码包括：`INVALID_ARGUMENT`、`UPSTREAM_MCP_ERROR`、`TIMEOUT`、`UPSTREAM_REQUEST_FAILED`、`UNKNOWN_TOOL`、`UNEXPECTED_ERROR`。
+
+#### `list_pathql_entry`
+
+输入 schema、返回结构和限制与 Rust 服务器的同名工具一致。桥通过 SDK 的 `client.callTool` 原样转发参数；当上游关闭全部 images read capability 时，桥的能力过滤也不再暴露该工具。
 
 #### `read_gallery_provider`
 
@@ -328,7 +444,7 @@ Rust 端通过 HTTP transport 暴露四个写入工具。Stdio Bundle 会透传�
 
 ### 桥未暴露的能力
 
-MCPB 暴露和 HTTP MCP 同名的四个写工具，并额外提供上面的读工具包装。它仍保持以下限制：
+MCPB 暴露 `list_pathql_entry`、和 HTTP MCP 同名的四个写工具，并额外提供上面的资源读取包装。它仍保持以下限制：
 
 - endpoint 只能指向本机回环地址。
 - `read_gallery_provider` 只读取 `images://` 资源，不支持旧 `provider://` 的 `?without=images` 结构目录模式。
@@ -341,6 +457,7 @@ MCPB 暴露和 HTTP MCP 同名的四个写工具，并额外提供上面的读�
 | 能力 | 首次出现版本 |
 |---|---|
 | `images://` + 复数表 scheme 布局 | — |
+| `list_pathql_entry` | — |
 | `set_album_images_order` | — |
 | `create_album` | — |
 | `add_images_to_album` | — |
@@ -353,9 +470,21 @@ MCPB 暴露和 HTTP MCP 同名的四个写工具，并额外提供上面的读�
 
 ## 边界与错误
 
+### 协议错误速查
+
+| 错误码 | 条件与 data |
+|---|---|
+| `pagination_required` | 未显式分页的 images 集合超过 500 行；data 含 `{ uri, total, maxRows, howTo }` |
+| `limit_exceeded` | `list_pathql_entry.limit > 200`；data 含 `{ limit, maxLimit }` |
+| `resource_disabled` | 精确 read capability 已关闭，或 URI 无精确映射且同 scheme 没有任何 read capability 开启 |
+| `tool_disabled` | 对应写工具 capability 已关闭 |
+| `resource_not_found` | PathQL 路径或目标资源不存在 |
+
 - **页码 0 非法**，永远从第 1 页开始。
-- **页大小上限 1000**；超出 100 / 500 / 1000 三档的自定义值会被规整回 100。
-- **旧 scheme 不再支持**：`provider://`、`image://`、`album://`、`task://`、`surf://` 都会返回 unknown scheme。
+- **PathQL 页大小为任意 `N ≥ 1`**，语法是 `/x<N>x/<page>`；这与画廊 UI 的页大小选项无关。
+- **纯数字搜索词漏网**：末段恰为纯数字的搜索词（如 `gallery/search/display-name/2024`）会被当作页号，因此仍应在完整搜索路径后追加显式 `/x<N>x/<page>`。
+- **鉴权收紧**：关闭某个 scheme 的全部 read capability 后，该 scheme 的裸根也会返回 `resource_disabled`；未注册 scheme 直接拒绝。
+- **旧 scheme 不再支持**：`provider://`、`image://`、`album://`、`task://`、`surf://` 没有兼容别名，会被 capability gate 以 `resource_disabled` 拒绝。
 - **不要批量拉 plugin 重字段**：`plugin://` 和 `plugin://{id}` 返回瘦身对象，图标、描述模板、文档与文档资源要按子路径单独读取。
 - **metadata 懒加载**：图片列表结果只带 `metadataId`，只有 `images://id_{id}/metadata` 会返回完整 metadata。
 - **`surf_records://id_{id}` 以记录 id 为键**，不是 host。
@@ -370,5 +499,5 @@ MCPB 暴露和 HTTP MCP 同名的四个写工具，并额外提供上面的读�
 
 - [MCP 服务](/guide/mcp/) — Host 接入流程与日常使用。
 - [安装 MCP Bundle](/guide/mcp-bundle/) — 在 Claude Desktop 等 stdio Host 上使用。
-- [画廊](/guide/gallery/) — `galleryPageSize` 与分页语义的来源。
+- [画廊](/guide/gallery/) — PathQL 画廊路径与应用内浏览视图的对应关系。
 - [插件使用](/guide/plugins-usage/) — `plugin://` 所对应的用户侧视图。

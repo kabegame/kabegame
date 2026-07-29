@@ -1,18 +1,23 @@
 use crate::crawler::task_scheduler::{PageStackEntry, Task};
 use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
+use crate::plugin::archive::{ExtractOptions, ExtractResult};
 use crate::plugin::ffmpeg::FfmpegProbeResult;
 use crate::settings::Settings;
 use crate::storage::Storage;
 use deno_core::{op2, OpState};
 use deno_error::JsErrorBox;
+use deno_fs::OpenOptions;
+use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value as JsonValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -127,6 +132,16 @@ pub struct FetchResult {
     body: deno_core::ToJsBuffer,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchToFileResult {
+    status: u16,
+    status_text: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    bytes_written: u64,
+}
+
 /// Host-backed `fetch`. Uses the proxy-aware reqwest client (same proxy/no_proxy
 /// config as the rest of the crawler); the runtime does NOT include `deno_net`,
 /// so plugins get no raw-socket surface. The task's default request headers are
@@ -138,6 +153,91 @@ pub async fn op_kabegame_fetch(
     #[string] url: String,
     #[serde] init: Option<JsonValue>,
 ) -> Result<FetchResult, JsErrorBox> {
+    let (_task_id, cancel, resp) = send_fetch_request(state, url, init).await?;
+    let (status, status_text, final_url, headers) = fetch_response_metadata(&resp);
+
+    let bytes = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(JsErrorBox::generic("Task canceled")),
+        result = resp.bytes() => result.map_err(|e| JsErrorBox::generic(format!("fetch: read body failed: {e}")))?,
+    };
+
+    Ok(FetchResult {
+        status,
+        status_text,
+        url: final_url,
+        headers,
+        body: deno_core::ToJsBuffer::from(bytes.to_vec()),
+    })
+}
+
+#[op2]
+#[serde]
+pub async fn op_kabegame_fetch_to_file(
+    state: Rc<RefCell<OpState>>,
+    #[string] url: String,
+    #[string] dest_path: String,
+    #[serde] init: Option<JsonValue>,
+) -> Result<FetchToFileResult, JsErrorBox> {
+    let (task_id, cancel, resp) = send_fetch_request(state, url, init).await?;
+    let (status, status_text, final_url, headers) = fetch_response_metadata(&resp);
+    let vfs = Arc::clone(&run_of(&task_id)?.vfs);
+    let output = vfs
+        .open_std(
+            Path::new(&dest_path),
+            OpenOptions::write(true, false, false, None),
+        )
+        .map_err(|error| {
+            JsErrorBox::generic(format!("fetchToFile: 无法写入目标“{dest_path}”：{error}"))
+        })?;
+    let mut output = tokio::fs::File::from_std(output);
+    let mut stream = resp.bytes_stream();
+    let mut bytes_written = 0u64;
+
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(JsErrorBox::generic("Task canceled")),
+            next = stream.next() => next,
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
+        let chunk = chunk
+            .map_err(|error| JsErrorBox::generic(format!("fetchToFile: 读取响应失败：{error}")))?;
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(JsErrorBox::generic("Task canceled")),
+            result = output.write_all(&chunk) => result.map_err(|error| {
+                JsErrorBox::generic(format!("fetchToFile: 写入目标“{dest_path}”失败：{error}"))
+            })?,
+        }
+        bytes_written = bytes_written
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| JsErrorBox::generic("fetchToFile: 已写入字节数溢出"))?;
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(JsErrorBox::generic("Task canceled")),
+        result = output.flush() => result.map_err(|error| {
+            JsErrorBox::generic(format!("fetchToFile: 刷新目标“{dest_path}”失败：{error}"))
+        })?,
+    }
+
+    Ok(FetchToFileResult {
+        status,
+        status_text,
+        url: final_url,
+        headers,
+        bytes_written,
+    })
+}
+
+async fn send_fetch_request(
+    state: Rc<RefCell<OpState>>,
+    url: String,
+    init: Option<JsonValue>,
+) -> Result<(String, CancellationToken, reqwest::Response), JsErrorBox> {
     let (task_id, cancel) = state_snapshot(&state, |s| (s.task_id.clone(), s.cancel.clone()));
     check_cancelled(&cancel)?;
     let default_headers = run_of(&task_id)?.headers_snapshot();
@@ -172,6 +272,12 @@ pub async fn op_kabegame_fetch(
         result = req.send() => result.map_err(|e| JsErrorBox::generic(format!("fetch failed: {e}")))?,
     };
 
+    Ok((task_id, cancel, resp))
+}
+
+fn fetch_response_metadata(
+    resp: &reqwest::Response,
+) -> (u16, String, String, Vec<(String, String)>) {
     let status = resp.status();
     let final_url = resp.url().to_string();
     let headers: Vec<(String, String)> = resp
@@ -185,19 +291,12 @@ pub async fn op_kabegame_fetch(
         })
         .collect();
 
-    let bytes = tokio::select! {
-        biased;
-        _ = cancel.cancelled() => return Err(JsErrorBox::generic("Task canceled")),
-        result = resp.bytes() => result.map_err(|e| JsErrorBox::generic(format!("fetch: read body failed: {e}")))?,
-    };
-
-    Ok(FetchResult {
-        status: status.as_u16(),
-        status_text: status.canonical_reason().unwrap_or("").to_string(),
-        url: final_url,
+    (
+        status.as_u16(),
+        status.canonical_reason().unwrap_or("").to_string(),
+        final_url,
         headers,
-        body: deno_core::ToJsBuffer::from(bytes.to_vec()),
-    })
+    )
 }
 
 #[op2]
@@ -238,6 +337,66 @@ pub async fn op_kabegame_ffmpeg_probe(
         .await
         .map_err(|error| JsErrorBox::generic(format!("媒体探测任务执行失败：{error}")))?
         .map_err(JsErrorBox::generic)
+}
+
+#[op2]
+#[serde]
+pub async fn op_kabegame_archive_zip(
+    state: Rc<RefCell<OpState>>,
+    #[string] src: String,
+    #[string] dest_dir: String,
+    #[serde] opts: Option<ExtractOptions>,
+) -> Result<ExtractResult, JsErrorBox> {
+    let (task_id, cancel) = state_snapshot(&state, |s| (s.task_id.clone(), s.cancel.clone()));
+    check_cancelled(&cancel)?;
+    let vfs = Arc::clone(&run_of(&task_id)?.vfs);
+    let opts = opts.unwrap_or_default();
+    tokio::task::spawn_blocking(move || {
+        crate::plugin::archive::extract_zip_sync(&vfs, &src, &dest_dir, &opts)
+    })
+    .await
+    .map_err(|error| JsErrorBox::generic(format!("ZIP 解压任务执行失败：{error}")))?
+    .map_err(JsErrorBox::generic)
+}
+
+#[op2]
+#[serde]
+pub async fn op_kabegame_archive_tar(
+    state: Rc<RefCell<OpState>>,
+    #[string] src: String,
+    #[string] dest_dir: String,
+    #[serde] opts: Option<ExtractOptions>,
+) -> Result<ExtractResult, JsErrorBox> {
+    let (task_id, cancel) = state_snapshot(&state, |s| (s.task_id.clone(), s.cancel.clone()));
+    check_cancelled(&cancel)?;
+    let vfs = Arc::clone(&run_of(&task_id)?.vfs);
+    let opts = opts.unwrap_or_default();
+    tokio::task::spawn_blocking(move || {
+        crate::plugin::archive::extract_tar_sync(&vfs, &src, &dest_dir, &opts)
+    })
+    .await
+    .map_err(|error| JsErrorBox::generic(format!("TAR 解压任务执行失败：{error}")))?
+    .map_err(JsErrorBox::generic)
+}
+
+#[op2]
+#[serde]
+pub async fn op_kabegame_archive_7z(
+    state: Rc<RefCell<OpState>>,
+    #[string] src: String,
+    #[string] dest_dir: String,
+    #[serde] opts: Option<ExtractOptions>,
+) -> Result<ExtractResult, JsErrorBox> {
+    let (task_id, cancel) = state_snapshot(&state, |s| (s.task_id.clone(), s.cancel.clone()));
+    check_cancelled(&cancel)?;
+    let vfs = Arc::clone(&run_of(&task_id)?.vfs);
+    let opts = opts.unwrap_or_default();
+    tokio::task::spawn_blocking(move || {
+        crate::plugin::archive::extract_7z_sync(&vfs, &src, &dest_dir, &opts)
+    })
+    .await
+    .map_err(|error| JsErrorBox::generic(format!("7z 解压任务执行失败：{error}")))?
+    .map_err(JsErrorBox::generic)
 }
 
 #[op2]

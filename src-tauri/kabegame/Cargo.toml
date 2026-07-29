@@ -14,8 +14,6 @@ crate-type = ["cdylib", "rlib"]
 async-trait = { workspace = true }
 base64 = {workspace = true}
 image = {workspace = true}
-lru = {version = "0.12", optional = true}
-memmap2 = {version = "0.9", optional = true}
 serde = {workspace = true}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
@@ -40,12 +38,12 @@ kabegame-core = {workspace = true, default-features = false, features = ["ipc-se
 deno_fs = { version = "0.162", features = ["sync_fs"] }
 deno_permissions = "0.111"
 percent-encoding = {workspace = true}
-governor = "0.7"
+governor = "0.10"
 axum = { version = "0.8", features = ["multipart"] }
 futures-util = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 reqwest = { version = "0.11", features = ["stream", "native-tls"] }
-rmcp = { version = "1.4", features = ["server", "transport-streamable-http-server"] }
+rmcp = { version = "3.0", features = ["server", "transport-streamable-http-server"] }
 include_dir = "0.7"
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -61,9 +59,6 @@ tauri = { version = "2.11.2", features = ["dbus", "common-controls-v6", "x11", "
 ], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-dokan = {version = "0.3.1", optional = true}
-widestring = {version = "0.4.3", optional = true}
-winapi = {version = "0.3.9", features = ["ntstatus", "winnt", "winbase"], optional = true}
 windows = {version = "0.52", features = [
   "Win32_Foundation",
   "Win32_System_Com",
@@ -78,7 +73,7 @@ windows-sys = {workspace = true, features = [
   "Win32_System_Memory",
   "Win32_UI_WindowsAndMessaging",
 ] }
-winreg = "0.52"
+winreg = "0.55"
 winver = "1"
 tauri-runtime-cef = { path = "../tauri-runtime-cef", optional = true }
 

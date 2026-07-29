@@ -20,7 +20,10 @@
             { "sql": "images.width", "as": "width", "in_need": true },
             { "sql": "images.height", "as": "height", "in_need": true },
             { "sql": "images.display_name", "as": "display_name", "in_need": true },
-            { "sql": "COALESCE(images.type, 'image')", "as": "media_type", "in_need": true },
+            // as 用 "type" 而非 "media_type",理由同 gallery_route:ImageInfo 的该字段
+            // 同时接受 type / media_type 两个键,与上游 images.* 的 type 列并存会导致
+            // `duplicate field type`。
+            { "sql": "COALESCE(images.type, 'image')", "as": "type", "in_need": true },
             { "sql": "images.last_set_wallpaper_at", "as": "last_set_wallpaper_at", "in_need": true },
             { "sql": "images.size", "as": "size", "in_need": true },
             { "sql": "images.compatible_path", "as": "compatible_path", "in_need": true }

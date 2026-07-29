@@ -3,86 +3,132 @@
 
 use kabegame_core::{
     emitter::GlobalEmitter,
-    providers::provider_runtime,
+    providers::{child_runtime_path, provider_runtime},
     settings::Settings,
     storage::{Album, ImageInfo, Storage, SurfRecord, TaskInfo},
 };
 use pathql_rs::EngineError;
 use rmcp::{
     model::{
-        object, AnnotateAble, CallToolRequestParams, CallToolResult, Content, ErrorCode,
+        object, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode,
         Implementation, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
-        PaginatedRequestParams, RawResource, RawResourceTemplate, ReadResourceRequestParams,
-        ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo, Tool,
+        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
+        ReadResourceResult, Resource, ResourceContents, ResourceTemplate, ServerCapabilities,
+        ServerInfo, Tool, ToolAnnotations,
     },
     service::RequestContext,
     ErrorData as McpError, RoleServer, ServerHandler,
 };
 use serde_json::{json, Value};
 
-use crate::mcp_capabilities::{capability_for_tool, is_capability_enabled, read_capability_id};
+use crate::mcp_capabilities::{
+    all_mcp_capabilities, capability_for_tool, is_capability_enabled, read_capability_id,
+    McpCapabilityKind,
+};
 
 pub const MCP_PORT: u16 = 7490;
 
-const MCP_INSTRUCTIONS: &str = r#"Kabegame MCP exposes PathQL-backed read resources plus write tools.
+const MCP_INSTRUCTIONS: &str = r#"Kabegame read resources form a LAZY TREE. resources/list does NOT enumerate the
+gallery: use list_pathql_entry to walk PathQL one level at a time, then read a bounded leaf.
 
-Use these read schemes:
+Discovery loop:
+1. list_pathql_entry("images://gallery") to discover dimensions and read their notes.
+2. list_pathql_entry("gallery/plugin") to discover installed plugin children.
+3. Copy a returned child.path verbatim, append /desc/x100x/1 when needed, and pass the
+   resulting URI to resources/read, for example:
+   images://gallery/plugin/<id>/desc/x100x/1
+Do not re-encode child.path. Paths without :// passed to list_pathql_entry are promoted to
+images:// paths.
+Use offset and limit to page large child lists; limit is capped at 200. include_counts defaults
+to false and is honored only when the returned window contains at most 50 children, preventing
+an accidental fan-out of expensive COUNT queries.
 
-1) images://
-   images://id_{id}              full ImageInfo (including metadataId)
-   images://id_{id}/metadata     crawl-time metadata (tags, author, URLs; can be 10s of KB)
-   images://gallery/all          gallery collection from the existing images tree
-   images://x100x/1              first 100 raw image rows
+NEVER GUESS IMAGE IDS. Discover a bounded gallery collection first and use the returned
+ImageInfo.id values. Do not probe images://id_20000, images://id_23000, or similar guesses.
 
-2) albums://
-   albums://all                  list ALL Albums — returns Vec<Album>
-   albums://id_{id}              single Album
+PathQL gallery grammar:
+- Every segment narrows the result of the previous segment; filters accumulated along a path
+  are combined with AND. Path segments are case-sensitive.
+- filter_comb combines two dimensions, for example:
+  images://gallery/plugin/patreon/filter_comb/media-type/image/desc/x100x/1
+- sort is a sibling of all, not a child: use gallery/sort/<key>/..., never gallery/all/sort/...
+- /desc reverses the current order.
+- hide/ is a prefix that excludes hidden images, for example gallery/hide/all/desc/x100x/1.
+- Common starts:
+  gallery/all
+  gallery/plugin/<pluginId>
+  gallery/album/<albumId>
+  gallery/date/<YYYY>y/<MM>m/<DD>d
+  gallery/search/display-name/<query>/all
+  gallery/sort/<key>
+- For every other dimension or legal continuation, list the current node and read each
+  returned note instead of inventing syntax.
 
-3) tasks://
-   tasks://all                   list ALL Tasks — returns Vec<TaskInfo>
-   tasks://id_{id}               single TaskInfo
+Pagination is mandatory for collection reads:
+- Always end collection URIs with /x<N>x/<page>, normally /x100x/1.
+- An unpaginated images read exceeding 500 rows is rejected with pagination_required.
+- The page count is ceil(total / N); list_pathql_entry returns total when count succeeds.
+- Do NOT list a pagination node. Its page provider may materialize the full result set.
+  Compute page numbers from total and read each page URI directly.
+- A search term that is itself all digits can look like a page segment; still append explicit
+  /x<N>x/<page> pagination after completing the search path.
 
-4) surf_records://
-   surf_records://all            list ALL SurfRecords — returns Vec<SurfRecord>
-   surf_records://id_{id}        single SurfRecord
+Image read resources:
+  images://gallery/all/desc/x100x/1      first bounded gallery page with gallery joins
+  images://gallery/by_id/{id}            one ImageInfo with gallery-computed fields
+  images://id_{id}                       one raw ImageInfo
+  images://id_{id}/metadata              crawl-time metadata; can be tens of KB
+  images://x100x/1                       first 100 raw rows, without gallery joins
 
-5) plugin://                              list ALL Plugins (trimmed — see note below)
-   plugin://{id}                          single Plugin (trimmed)
-   plugin://{id}/icon                     base64 icon PNG                (image/png, blob)
-   plugin://{id}/description_template     EJS description template       (text/plain)
-   plugin://{id}/doc                      doc.md (default locale)        (text/markdown)
-   plugin://{id}/doc_resource/{key}       one plugin doc resource file   (mime by extension, blob)
-   doc_resource key = the normalized Markdown reference; sourced from kbDocAssets
-   (legacy packages fall back to scanning Markdown).
+Other read schemes:
+  albums://all                           all Albums (Vec<Album>)
+  albums://id_{id}                       one Album
+  tasks://all                            all Tasks (Vec<TaskInfo>)
+  tasks://id_{id}                        one TaskInfo
+  surf_records://all                     all SurfRecords (Vec<SurfRecord>)
+  surf_records://id_{id}                 one SurfRecord
+  plugin://                              all Plugins, trimmed
+  plugin://{id}                          one Plugin, trimmed
+  plugin://{id}/icon                     base64 PNG blob
+  plugin://{id}/description_template     EJS template
+  plugin://{id}/doc                      default-locale doc.md
+  plugin://{id}/doc_resource/{key}       one documentation asset, MIME by extension
 
-   "Trimmed" = the Plugin JSON returned by plugin:// and plugin://{id} has `docResources`,
-   `iconPngBase64`, and `descriptionTemplate` stripped out. Fetch each heavy resource on
-   demand via the sub-paths above.
+For doc_resource, key is the normalized Markdown reference. Entries come from kbDocAssets;
+legacy packages fall back to scanning Markdown. "Trimmed" plugin JSON has docResources,
+iconPngBase64, and descriptionTemplate removed; fetch those heavy resources through the
+sub-paths above.
 
 Do not use provider://, image://, album://, task://, or surf://. They are not supported.
 
-Image fields (ImageInfo, camelCase via serde rename_all):
-   id, url, localPath, pluginId, taskId, surfRecordId, crawledAt (unix sec),
-   metadataId, thumbnailPath, favorite, localExists, hash, width, height, displayName,
-   type (format key, e.g. "image/jpg" or "video/mp4" — NOTE: serde key is `type`, not `mediaType`),
-   lastSetWallpaperAt, size (bytes).
-   Use images://id_{id}/metadata to fetch crawl-time JSON metadata.
+ImageInfo fields (camelCase):
+  id, url, localPath, pluginId, taskId, surfRecordId, crawledAt (Unix seconds),
+  metadataId, pluginVersion, thumbnailPath, favorite, isHidden, localExists, hash,
+  width, height, displayName, type, lastSetWallpaperAt, size, albumOrder,
+  compatiblePath, postUrl.
+type is a stored media format such as "image/jpg" or "video/mp4"; the key is `type`, not
+`mediaType`. Use images://id_{id}/metadata for crawl-time JSON metadata.
+favorite, isHidden, and albumOrder are computed only on images://gallery/... paths.
+On images://id_{id} they are always false, false, and null; use
+images://gallery/by_id/{id} when those values are needed.
 
-Plugin package layout (for model-authored plugins): package.json (kbBackend: v8,
-kbDocAssets maps normalized Markdown-reference keys to package-relative files),
-dist/main.js (export async function crawl), doc_root/doc.md, optional icon.png.
+Plugin package layout, in brief: package.json declares kbBackend: v8, and kbDocAssets maps
+normalized Markdown-reference keys to package-relative files; dist/main.js exports async
+function crawl; docs live in doc_root/doc.md; icon.png is optional.
 
-Tools: set_album_images_order (manual order, up to 100 images per call), create_album,
-add_images_to_album, rename_image. After set_album_images_order, open the album in Kabegame
-and switch sort mode to album-order to see the arrangement.
+Tools:
+- list_pathql_entry is the read-only discovery tool described above.
+- set_album_images_order sets manual order, up to 100 images per call. Open the album in
+  Kabegame and switch to album-order to see it.
+- create_album creates an album; add_images_to_album adds images; rename_image renames one.
 
 IMPORTANT — actions that are NOT supported:
 - Deleting images is not possible. If the user asks to delete images, explain that this
-  action is not available through MCP, and offer to collect the unwanted images into an
-  album (e.g. "待删除") instead so the user can review and delete them manually in the app.
+  action is unavailable through MCP, and offer to collect them into an album such as "待删除"
+  so the user can review and delete them manually in the app.
 - Deleting albums is not possible. If the user asks to delete an album, explain that this
-  action is not available, and offer to move its contents into another album or nest it
-  inside another album using create_album + add_images_to_album.
+  action is unavailable, and offer to move its contents into another album or nest it inside
+  another album using create_album + add_images_to_album.
 - No other destructive or write operations beyond the tools listed above are supported.
 "#;
 
@@ -110,14 +156,24 @@ fn resource_segments(uri: &str) -> Vec<&str> {
         .unwrap_or_default()
 }
 
+fn is_any_read_capability_enabled(disabled: &[String]) -> bool {
+    all_mcp_capabilities().iter().any(|capability| {
+        capability.kind == McpCapabilityKind::Read && is_capability_enabled(capability.id, disabled)
+    })
+}
+
 fn is_uri_capability_enabled(uri: &str, disabled: &[String]) -> bool {
     let Ok(scheme) = resource_scheme(uri) else {
-        return true;
+        return false;
     };
     let segments = resource_segments(uri);
     match read_capability_id(scheme, segments.as_slice()) {
         Some(id) => is_capability_enabled(id, disabled),
-        None => true,
+        None => all_mcp_capabilities().iter().any(|capability| {
+            capability.category == scheme
+                && capability.kind == McpCapabilityKind::Read
+                && is_capability_enabled(capability.id, disabled)
+        }),
     }
 }
 
@@ -129,20 +185,69 @@ fn disabled_tool_error(tool: &str) -> McpError {
     McpError::invalid_request("tool_disabled", Some(json!({ "tool": tool })))
 }
 
+fn pathql_error(error: EngineError) -> McpError {
+    match error {
+        EngineError::PathNotFound(_)
+        | EngineError::NoProvider(_)
+        | EngineError::SchemaNotFound(_) => {
+            McpError::resource_not_found("resource_not_found", None)
+        }
+        other => McpError::internal_error(format!("pathql: {other}"), None),
+    }
+}
+
 async fn fetch_resource_rows(uri: &str) -> Result<Vec<Value>, McpError> {
     let rt = provider_runtime().clone();
     let uri = uri.to_string();
     tokio::task::spawn_blocking(move || rt.fetch(&uri))
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?
-        .map_err(|e| match e {
-            EngineError::PathNotFound(_)
-            | EngineError::NoProvider(_)
-            | EngineError::SchemaNotFound(_) => {
-                McpError::resource_not_found("resource_not_found", None)
-            }
-            other => McpError::internal_error(format!("pathql: {other}"), None),
-        })
+        .map_err(pathql_error)
+}
+
+fn is_paginated_image_path(segments: &[&str]) -> bool {
+    segments
+        .last()
+        .is_some_and(|segment| !segment.is_empty() && segment.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+async fn enforce_image_pagination(uri: &str, segments: &[&str]) -> Result<(), McpError> {
+    const MAX_ROWS: usize = 500;
+
+    let is_single = matches!(segments, [segment] if segment.starts_with("id_"));
+    if is_single || is_paginated_image_path(segments) {
+        return Ok(());
+    }
+
+    let rt = provider_runtime().clone();
+    let count_uri = uri.to_string();
+    let total = tokio::task::spawn_blocking(move || rt.count(&count_uri))
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        .map_err(pathql_error)?;
+    if total > MAX_ROWS {
+        return Err(McpError::invalid_params(
+            "pagination_required",
+            Some(json!({
+                "uri": uri,
+                "total": total,
+                "maxRows": MAX_ROWS,
+                "howTo": "Append /x<N>x/<page> to the completed collection path, for example /x100x/1."
+            })),
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_pathql_uri(path: &str) -> String {
+    let path = path.trim();
+    if path.contains("://") {
+        path.to_string()
+    } else if path.is_empty() {
+        "images://".to_string()
+    } else {
+        format!("images://{}", path.trim_start_matches('/'))
+    }
 }
 
 fn rows_to_value<T>(rows: Vec<Value>, single: bool, uri: &str) -> Result<Value, McpError>
@@ -192,7 +297,7 @@ fn metadata_rows_to_value(rows: Vec<Value>, uri: &str) -> Result<Value, McpError
 fn json_value_resource(
     value: Value,
     uri: impl Into<String>,
-) -> Result<ReadResourceResult, McpError> {
+) -> Result<ReadResourceResponse, McpError> {
     let json =
         serde_json::to_string(&value).map_err(|e| McpError::internal_error(e.to_string(), None))?;
     json_resource(json, uri)
@@ -205,11 +310,11 @@ fn parse_args<T: serde::de::DeserializeOwned>(
         .map_err(|e| McpError::invalid_params(e.to_string(), None))
 }
 
-fn json_resource(json: String, uri: impl Into<String>) -> Result<ReadResourceResult, McpError> {
-    Ok(ReadResourceResult::new(vec![ResourceContents::text(
-        json, uri,
-    )
-    .with_mime_type("application/json")]))
+fn json_resource(json: String, uri: impl Into<String>) -> Result<ReadResourceResponse, McpError> {
+    Ok(ReadResourceResult::new(vec![
+        ResourceContents::text(json, uri).with_mime_type("application/json")
+    ])
+    .into())
 }
 
 #[derive(Clone)]
@@ -235,49 +340,48 @@ impl ServerHandler for KabegameMcpServer {
         let disabled = Settings::global().get_mcp_disabled_capabilities();
         let resources = vec![
             (
-                "images://gallery/all",
-                RawResource::new("images://gallery/all", "Gallery images")
-                    .with_description("Gallery collection from the images PathQL tree")
-                    .with_mime_type("application/json")
-                    .no_annotation(),
+                "images://gallery/all/desc/x100x/1",
+                Resource::new(
+                    "images://gallery/all/desc/x100x/1",
+                    "Gallery images (first page)",
+                )
+                .with_description("First 100 gallery rows in descending order")
+                .with_mime_type("application/json"),
             ),
             (
                 "images://x100x/1",
-                RawResource::new("images://x100x/1", "Raw image rows")
-                    .with_description("First 100 raw rows from images")
-                    .with_mime_type("application/json")
-                    .no_annotation(),
+                Resource::new("images://x100x/1", "Raw image rows")
+                    .with_description(
+                        "First 100 raw rows from images, without album/favorite joins",
+                    )
+                    .with_mime_type("application/json"),
             ),
             (
                 "albums://all",
-                RawResource::new("albums://all", "All albums")
+                Resource::new("albums://all", "All albums")
                     .with_description("Full list of albums (Vec<Album>)")
-                    .with_mime_type("application/json")
-                    .no_annotation(),
+                    .with_mime_type("application/json"),
             ),
             (
                 "tasks://all",
-                RawResource::new("tasks://all", "All tasks")
+                Resource::new("tasks://all", "All tasks")
                     .with_description("Full list of tasks (Vec<TaskInfo>)")
-                    .with_mime_type("application/json")
-                    .no_annotation(),
+                    .with_mime_type("application/json"),
             ),
             (
                 "surf_records://all",
-                RawResource::new("surf_records://all", "All surf records")
+                Resource::new("surf_records://all", "All surf records")
                     .with_description("Full list of surf records (Vec<SurfRecord>)")
-                    .with_mime_type("application/json")
-                    .no_annotation(),
+                    .with_mime_type("application/json"),
             ),
             (
                 "plugin://",
-                RawResource::new("plugin://", "All plugins (trimmed)")
+                Resource::new("plugin://", "All plugins (trimmed)")
                     .with_description(
                         "Full list of installed plugins with heavy fields (docResources, \
                          iconPngBase64, descriptionTemplate) stripped",
                     )
-                    .with_mime_type("application/json")
-                    .no_annotation(),
+                    .with_mime_type("application/json"),
             ),
         ]
         .into_iter()
@@ -288,6 +392,7 @@ impl ServerHandler for KabegameMcpServer {
             resources,
             next_cursor: None,
             meta: None,
+            ..Default::default()
         })
     }
 
@@ -295,14 +400,12 @@ impl ServerHandler for KabegameMcpServer {
         &self,
         request: ReadResourceRequestParams,
         _ctx: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<ReadResourceResponse, McpError> {
         let scheme = resource_scheme(&request.uri)?;
         let segments = resource_segments(&request.uri);
         let disabled = Settings::global().get_mcp_disabled_capabilities();
-        if let Some(id) = read_capability_id(scheme, segments.as_slice()) {
-            if !is_capability_enabled(id, &disabled) {
-                return Err(disabled_resource_error(&request.uri));
-            }
+        if !is_uri_capability_enabled(&request.uri, &disabled) {
+            return Err(disabled_resource_error(&request.uri));
         }
 
         match scheme {
@@ -312,6 +415,7 @@ impl ServerHandler for KabegameMcpServer {
                     && segments[1] == "metadata";
                 let is_single = segments.len() == 1
                     && segments.first().is_some_and(|seg| seg.starts_with("id_"));
+                enforce_image_pagination(&request.uri, segments.as_slice()).await?;
                 let rows = fetch_resource_rows(&request.uri).await?;
                 let value = if is_metadata {
                     metadata_rows_to_value(rows, &request.uri)?
@@ -377,7 +481,8 @@ impl ServerHandler for KabegameMcpServer {
                             data.to_string(),
                             request.uri,
                         )
-                        .with_mime_type("image/png")]))
+                        .with_mime_type("image/png")])
+                        .into())
                     }
                     [_plugin_id, "description_template"] => {
                         let row = rows.into_iter().next().ok_or_else(|| {
@@ -399,7 +504,8 @@ impl ServerHandler for KabegameMcpServer {
                             text.to_string(),
                             request.uri,
                         )
-                        .with_mime_type("text/plain")]))
+                        .with_mime_type("text/plain")])
+                        .into())
                     }
                     [_plugin_id, "doc"] => {
                         let row = rows.into_iter().next().ok_or_else(|| {
@@ -445,7 +551,8 @@ impl ServerHandler for KabegameMcpServer {
                             data.to_string(),
                             request.uri,
                         )
-                        .with_mime_type(mime)]))
+                        .with_mime_type(mime)])
+                        .into())
                     }
                     _ => Err(McpError::resource_not_found(
                         "invalid_plugin_path",
@@ -471,94 +578,141 @@ impl ServerHandler for KabegameMcpServer {
             resource_templates: vec![
                 (
                     "images.read.by_id",
-                    RawResourceTemplate::new("images://id_{imageId}", "Image info")
+                    ResourceTemplate::new("images://id_{imageId}", "Image info")
                         .with_description(
                             "Full ImageInfo for a single image including metadataId.",
                         )
-                        .with_mime_type("application/json")
-                        .no_annotation(),
+                        .with_mime_type("application/json"),
                 ),
                 (
                     "images.read.metadata",
-                    RawResourceTemplate::new("images://id_{imageId}/metadata", "Image metadata")
+                    ResourceTemplate::new("images://id_{imageId}/metadata", "Image metadata")
                         .with_description(
                             "Crawl-time metadata — can be 10s of KB (tags, author, URLs, etc.).",
                         )
-                        .with_mime_type("application/json")
-                        .no_annotation(),
+                        .with_mime_type("application/json"),
+                ),
+                (
+                    "images.read.gallery",
+                    ResourceTemplate::new(
+                        "images://gallery/plugin/{pluginId}/desc/x100x/{page}",
+                        "Gallery images by plugin",
+                    )
+                    .with_description(
+                        "A descending 100-row gallery page filtered by crawler plugin.",
+                    )
+                    .with_mime_type("application/json"),
+                ),
+                (
+                    "images.read.gallery",
+                    ResourceTemplate::new(
+                        "images://gallery/album/{albumId}/desc/x100x/{page}",
+                        "Gallery images by album",
+                    )
+                    .with_description(
+                        "A descending 100-row gallery page filtered by album.",
+                    )
+                    .with_mime_type("application/json"),
+                ),
+                (
+                    "images.read.gallery",
+                    ResourceTemplate::new(
+                        "images://gallery/date/{year}y/{month}m/{day}d/desc/x100x/{page}",
+                        "Gallery images by date",
+                    )
+                    .with_description(
+                        "A descending 100-row gallery page filtered by crawl date.",
+                    )
+                    .with_mime_type("application/json"),
+                ),
+                (
+                    "images.read.gallery",
+                    ResourceTemplate::new(
+                        "images://gallery/search/display-name/{query}/all/desc/x100x/{page}",
+                        "Search gallery display names",
+                    )
+                    .with_description(
+                        "A descending 100-row page whose display names contain the query.",
+                    )
+                    .with_mime_type("application/json"),
+                ),
+                (
+                    "images.read.gallery",
+                    ResourceTemplate::new(
+                        "images://gallery/by_id/{imageId}",
+                        "Gallery image by ID",
+                    )
+                    .with_description(
+                        "One ImageInfo with favorite, isHidden, and albumOrder computed.",
+                    )
+                    .with_mime_type("application/json"),
                 ),
                 (
                     "albums.read.by_id",
-                    RawResourceTemplate::new("albums://id_{albumId}", "Album info")
+                    ResourceTemplate::new("albums://id_{albumId}", "Album info")
                         .with_description("Full album object: id, name, parentId, createdAt.")
-                        .with_mime_type("application/json")
-                        .no_annotation(),
+                        .with_mime_type("application/json"),
                 ),
                 (
                     "tasks.read.by_id",
-                    RawResourceTemplate::new("tasks://id_{taskId}", "Task info")
+                    ResourceTemplate::new("tasks://id_{taskId}", "Task info")
                         .with_description(
                             "Full task object: id, pluginId, status, progress, counts, etc.",
                         )
-                        .with_mime_type("application/json")
-                        .no_annotation(),
+                        .with_mime_type("application/json"),
                 ),
                 (
                     "surf_records.read.by_id",
-                    RawResourceTemplate::new(
+                    ResourceTemplate::new(
                         "surf_records://id_{surfRecordId}",
                         "Surf record info",
                     )
                     .with_description(
                         "Full surf record: id, host, name, lastVisitAt, etc.",
                     )
-                    .with_mime_type("application/json")
-                    .no_annotation(),
+                    .with_mime_type("application/json"),
                 ),
                 (
                     "plugin.read.info",
-                    RawResourceTemplate::new("plugin://{pluginId}", "Plugin info (trimmed)")
+                    ResourceTemplate::new("plugin://{pluginId}", "Plugin info (trimmed)")
                         .with_description(
                             "Plugin metadata without docResources/iconPngBase64/descriptionTemplate. \
                              Fetch those via sub-path resources on demand.",
                         )
-                        .with_mime_type("application/json")
-                        .no_annotation(),
+                        .with_mime_type("application/json"),
                 ),
                 (
                     "plugin.read.doc",
-                    RawResourceTemplate::new("plugin://{pluginId}/doc", "Plugin documentation")
+                    ResourceTemplate::new("plugin://{pluginId}/doc", "Plugin documentation")
                         .with_description("Plugin doc.md content in Markdown (default locale).")
-                        .with_mime_type("text/markdown")
-                        .no_annotation(),
+                        .with_mime_type("text/markdown"),
                 ),
                 (
                     "plugin.read.icon",
-                    RawResourceTemplate::new("plugin://{pluginId}/icon", "Plugin icon")
+                    ResourceTemplate::new("plugin://{pluginId}/icon", "Plugin icon")
                         .with_description("Plugin icon as base64-encoded PNG.")
-                        .with_mime_type("image/png")
-                        .no_annotation(),
+                        .with_mime_type("image/png"),
                 ),
                 (
                     "plugin.read.description_template",
-                    RawResourceTemplate::new(
+                    ResourceTemplate::new(
                         "plugin://{pluginId}/description_template",
                         "Plugin description template",
                     )
                     .with_description("EJS template used to render plugin descriptions.")
-                    .with_mime_type("text/plain")
-                    .no_annotation(),
+                    .with_mime_type("text/plain"),
                 ),
                 (
                     "plugin.read.doc_resource",
-                    RawResourceTemplate::new(
+                    ResourceTemplate::new(
                         "plugin://{pluginId}/doc_resource/{resourceKey}",
                         "Plugin doc resource",
                     )
                     .with_description(
-                        "A single doc_resource (e.g. images referenced by doc.md); mime inferred by extension.",
-                    )
-                    .no_annotation(),
+                        "A single doc_resource. resourceKey is the normalized Markdown reference; \
+                         entries come from kbDocAssets, with legacy packages falling back to Markdown scanning. \
+                         MIME is inferred by extension.",
+                    ),
                 ),
             ]
             .into_iter()
@@ -567,6 +721,7 @@ impl ServerHandler for KabegameMcpServer {
             })
             .collect(),
             meta: None,
+            ..Default::default()
         })
     }
 
@@ -578,6 +733,47 @@ impl ServerHandler for KabegameMcpServer {
         let disabled = Settings::global().get_mcp_disabled_capabilities();
         Ok(ListToolsResult {
             tools: vec![
+                (
+                    "list_pathql_entry",
+                    Tool::new(
+                        "list_pathql_entry",
+                        "List one level of Kabegame's lazy PathQL resource tree. \
+                         resources/list does not enumerate the gallery. Every returned child.path \
+                         can be copied directly into resources/read or walked with this tool. \
+                         NEVER guess numeric image ids; discover paths and bounded pages here.",
+                        object(json!({
+                            "type": "object",
+                            "properties": {
+                                "path": {
+                                    "type": "string",
+                                    "description": "PathQL URI. Paths without :// are promoted to images://."
+                                },
+                                "include_counts": {
+                                    "type": "boolean",
+                                    "default": false,
+                                    "description": "Count each returned child only when the requested window has at most 50 children."
+                                },
+                                "offset": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "default": 0
+                                },
+                                "limit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 200,
+                                    "default": 100
+                                }
+                            },
+                            "required": ["path"]
+                        })),
+                    )
+                    .annotate(
+                        ToolAnnotations::new()
+                            .read_only(true)
+                            .idempotent(true),
+                    ),
+                ),
                 (
                     "set_album_images_order",
                     Tool::new(
@@ -669,12 +865,16 @@ impl ServerHandler for KabegameMcpServer {
             .into_iter()
             .filter_map(|(name, tool)| {
                 capability_for_tool(name)
-                    .is_none_or(|id| is_capability_enabled(id, &disabled))
+                    .map_or_else(
+                        || is_any_read_capability_enabled(&disabled),
+                        |id| is_capability_enabled(id, &disabled),
+                    )
                     .then_some(tool)
             })
             .collect(),
             next_cursor: None,
             meta: None,
+            ..Default::default()
         })
     }
 
@@ -682,7 +882,7 @@ impl ServerHandler for KabegameMcpServer {
         &self,
         request: CallToolRequestParams,
         _ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         let disabled = Settings::global().get_mcp_disabled_capabilities();
         if let Some(id) = capability_for_tool(request.name.as_ref()) {
             if !is_capability_enabled(id, &disabled) {
@@ -691,6 +891,94 @@ impl ServerHandler for KabegameMcpServer {
         }
 
         match request.name.as_ref() {
+            "list_pathql_entry" => {
+                #[derive(serde::Deserialize)]
+                struct Args {
+                    path: String,
+                    #[serde(default)]
+                    include_counts: bool,
+                    offset: Option<usize>,
+                    limit: Option<usize>,
+                }
+
+                let args: Args = parse_args(request.arguments)?;
+                let offset = args.offset.unwrap_or(0);
+                let limit = args.limit.unwrap_or(100);
+                if limit > 200 {
+                    return Err(McpError::invalid_params(
+                        "limit_exceeded",
+                        Some(json!({ "limit": limit, "maxLimit": 200 })),
+                    ));
+                }
+
+                let uri = normalize_pathql_uri(&args.path);
+                if !is_uri_capability_enabled(&uri, &disabled) {
+                    return Err(disabled_resource_error(&uri));
+                }
+
+                let rt = provider_runtime().clone();
+                let payload = tokio::task::spawn_blocking(move || {
+                    rt.resolve(&uri)?;
+                    let total = rt.count(&uri).ok();
+                    let note = rt.note(&uri).ok().flatten();
+                    let children = rt.list(&uri)?;
+                    let child_count = children.len();
+                    let window: Vec<_> = children.into_iter().skip(offset).take(limit).collect();
+                    let counts_included = args.include_counts && window.len() <= 50;
+                    let window_len = window.len();
+                    let has_more = offset.saturating_add(window_len) < child_count;
+                    let children: Vec<Value> = window
+                        .into_iter()
+                        .map(|child| {
+                            let path = child_runtime_path(&uri, &child.name);
+                            let child_note = rt.note(&path).ok().flatten();
+                            let child_total = if counts_included {
+                                rt.count(&path).ok()
+                            } else {
+                                None
+                            };
+                            json!({
+                                "name": child.name,
+                                "path": path,
+                                "note": child_note,
+                                "meta": child.meta,
+                                "total": child_total
+                            })
+                        })
+                        .collect();
+                    let mut payload = json!({
+                        "path": uri,
+                        "total": total,
+                        "note": note,
+                        "children": children,
+                        "childCount": child_count,
+                        "offset": offset,
+                        "limit": limit,
+                        "hasMore": has_more,
+                        "countsIncluded": counts_included
+                    });
+                    // hint 分两种:节点真的没有子项 vs 只是本页窗口空(offset 越界 / limit=0)。
+                    // 后者若也报"这是叶子",会把翻页翻过头的调用方误导成"此路不通"。
+                    if child_count == 0 {
+                        payload["hint"] = json!(
+                            "This is either a collection leaf (append /x100x/1 and use \
+                             resources/read) or its next children are syntax keywords rather \
+                             than enumerable data; see server instructions."
+                        );
+                    } else if window_len == 0 {
+                        payload["hint"] = json!(format!(
+                            "Empty window: this node has {child_count} children but offset \
+                             {offset} skips past all of them. Retry with a smaller offset."
+                        ));
+                    }
+                    Ok::<_, EngineError>(payload)
+                })
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                .map_err(pathql_error)?;
+
+                Ok(CallToolResult::structured(payload).into())
+            }
             "set_album_images_order" => {
                 #[derive(serde::Deserialize)]
                 struct Args {
@@ -716,12 +1004,13 @@ impl ServerHandler for KabegameMcpServer {
                     .update_album_images_order(&args.album_id, &pairs)
                     .map_err(|e| McpError::internal_error(e, None))?;
 
-                Ok(CallToolResult::success(vec![Content::text(format!(
+                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Updated order for {count} images in album '{}'. \
                      To see the new arrangement, open this album in Kabegame \
                      and switch the sort mode to '加入顺序' (album-order / join order).",
                     args.album_id
-                ))]))
+                ))])
+                .into())
             }
             "create_album" => {
                 #[derive(serde::Deserialize)]
@@ -733,9 +1022,10 @@ impl ServerHandler for KabegameMcpServer {
                 let album = Storage::global()
                     .add_album(&args.name, args.parent_id.as_deref())
                     .map_err(|e| McpError::internal_error(e, None))?;
-                Ok(CallToolResult::success(vec![Content::text(
+                Ok(CallToolResult::success(vec![ContentBlock::text(
                     serde_json::to_string(&album).unwrap_or_default(),
-                )]))
+                )])
+                .into())
             }
             "add_images_to_album" => {
                 #[derive(serde::Deserialize)]
@@ -777,10 +1067,11 @@ impl ServerHandler for KabegameMcpServer {
                     );
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(format!(
+                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Added {}/{} images to album '{}'.",
                     result.added, result.attempted, args.album_id
-                ))]))
+                ))])
+                .into())
             }
             "rename_image" => {
                 #[derive(serde::Deserialize)]
@@ -805,10 +1096,11 @@ impl ServerHandler for KabegameMcpServer {
                     None,
                     Some(&plugin_ids),
                 );
-                Ok(CallToolResult::success(vec![Content::text(format!(
+                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Renamed image '{}' to '{}'.",
                     args.image_id, args.display_name
-                ))]))
+                ))])
+                .into())
             }
             _ => Err(McpError::new(
                 ErrorCode::METHOD_NOT_FOUND,

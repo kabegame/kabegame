@@ -10,9 +10,14 @@ set -euo pipefail
 # 97% 的小数字面量丢失），且全程零报错。Rust/C/Go 工具链不受影响（rustc、
 # esbuild 的 Go 二进制、rspack 的 SWC 浮点均实测正常）。
 # 因此：一切 JS 构建（vite 前端 + 爬虫插件打包）在宿主原生执行；容器只负责
-# 以服务器 glibc 基线（almalinux 8）链接 x86_64 Rust 二进制。dist-kabegame/
+# 以服务器 glibc 基线（almalinux 8）链接 x86_64 Rust 二进制。dist-kabegame-web/
 # 是纯文本静态资源，与构建宿主的架构无关（web 模式下平台 define 全为 false，
 # 由 KABEGAME_MODE 驱动而非宿主 OS）。
+#
+# 注意产物目录：web 前端出 dist-kabegame-web/，桌面/Android 出 dist-kabegame/。
+# 两者的平台 define 与 chunking 完全不同，故严格分开——本脚本是「宿主出前端 →
+# 容器编 Rust 嵌入」两段式，共用目录时中途插入的桌面构建会静默把 web bundle
+# 换成桌面 bundle（浏览器里 invoke 走 __TAURI_INTERNALS__，页面全挂）。
 #
 # 用法：
 #   bash scripts/build-web.sh            # 日常构建
@@ -32,18 +37,18 @@ if [[ "${1:-}" == "--rebuild" ]]; then
   "${COMPOSE[@]}" build
 fi
 
-# 1) 宿主原生构建前端（vite → dist-kabegame/）+ 打包爬虫插件。
+# 1) 宿主原生构建前端（vite → dist-kabegame-web/）+ 打包爬虫插件。
 #    插件打包经 kabegame-cli sidecar（宿主 target/release/），缺失则先构建。
 if [[ ! -x target/release/kabegame-cli ]]; then
   echo "==> 宿主 kabegame-cli 缺失，先构建（插件 .kgpg 打包所需）"
   deno task b -c kabegame-cli --release
 fi
 
-echo "==> [宿主] 构建 web 前端 dist-kabegame/ + 插件 .kabegame/release/plugins/"
+echo "==> [宿主] 构建 web 前端 dist-kabegame-web/ + 插件 .kabegame/release/plugins/"
 deno task b -c kabegame --mode web --skip cargo
 
-if [[ ! -f dist-kabegame/index.html ]]; then
-  echo "Error: dist-kabegame/index.html 不存在，前端构建未产出" >&2
+if [[ ! -f dist-kabegame-web/index.html ]]; then
+  echo "Error: dist-kabegame-web/index.html 不存在，前端构建未产出" >&2
   exit 1
 fi
 if ! compgen -G ".kabegame/release/plugins/*.kgpg" >/dev/null; then

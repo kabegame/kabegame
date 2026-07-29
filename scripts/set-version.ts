@@ -49,20 +49,30 @@ function updateCargoTomlVersion(newVersion: string): void {
   console.log(`✓ Updated Cargo.toml to ${newVersion}`);
 }
 
-// 更新 packages/kabegame-core/package.json
-function updateCorePackageJson(newVersion: string): void {
-  const corePkgPath = path.join(ROOT, "packages", "kabegame-core", "package.json");
-  if (!fs.existsSync(corePkgPath)) {
-    return;
-  }
+const VERSIONED_PACKAGE_JSON_PATHS = [
+  "packages/kabegame-core/package.json",
+  "packages/kabegame-plugin-sdk/package.json",
+  "packages/kabegame-types/package.json",
+] as const;
 
-  try {
-    const pkg: PackageJson = JSON.parse(fs.readFileSync(corePkgPath, "utf8"));
-    pkg.version = newVersion;
-    fs.writeFileSync(corePkgPath, JSON.stringify(pkg, null, 2) + "\n");
-    console.log(`✓ Updated packages/kabegame-core/package.json to ${newVersion}`);
-  } catch (e: any) {
-    console.error(`✗ Error updating ${corePkgPath}:`, e.message);
+// 更新需要与应用保持相同版本的 package.json
+function updatePackageJsonVersions(newVersion: string): void {
+  for (const relPath of VERSIONED_PACKAGE_JSON_PATHS) {
+    const packageJsonPath = path.join(ROOT, relPath);
+    if (!fs.existsSync(packageJsonPath)) {
+      continue;
+    }
+
+    try {
+      const pkg: PackageJson = JSON.parse(
+        fs.readFileSync(packageJsonPath, "utf8"),
+      );
+      pkg.version = newVersion;
+      fs.writeFileSync(packageJsonPath, JSON.stringify(pkg, null, 2) + "\n");
+      console.log(`✓ Updated ${relPath} to ${newVersion}`);
+    } catch (e: any) {
+      console.error(`✗ Error updating ${packageJsonPath}:`, e.message);
+    }
   }
 }
 
@@ -189,7 +199,7 @@ function setVersion(newVersion: string): void {
   try {
     const previousVersion = readCargoTomlVersion();
     updateCargoTomlVersion(newVersion);
-    updateCorePackageJson(newVersion);
+    updatePackageJsonVersions(newVersion);
     updateAllTauriConfs(newVersion);
     updateMainEnvVersion(newVersion);
     updateReadmeKabegameReleaseLinks(previousVersion, newVersion);
@@ -208,7 +218,7 @@ function syncVersion(): void {
     const version = readCargoTomlVersion();
     console.log(`Found version ${version} in Cargo.toml`);
 
-    updateCorePackageJson(version);
+    updatePackageJsonVersions(version);
     updateAllTauriConfs(version);
     updateMainEnvVersion(version);
     const readmeReleaseVer = readReadmeKabegameReleaseVersion();

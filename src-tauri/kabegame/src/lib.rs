@@ -737,6 +737,12 @@ pub(crate) fn configure_app(
             #[cfg(not(target_os = "android"))]
             crawl_ffmpeg_probe,
             #[cfg(not(target_os = "android"))]
+            crawl_archive_zip,
+            #[cfg(not(target_os = "android"))]
+            crawl_archive_tar,
+            #[cfg(not(target_os = "android"))]
+            crawl_archive_7z,
+            #[cfg(not(target_os = "android"))]
             crawl_get_page_label,
             #[cfg(not(target_os = "android"))]
             crawl_get_page_state,
@@ -752,6 +758,8 @@ pub(crate) fn configure_app(
             crawl_task_log,
             #[cfg(not(target_os = "android"))]
             crawl_add_progress,
+            #[cfg(not(target_os = "android"))]
+            crawl_create_image_metadata,
             #[cfg(not(target_os = "android"))]
             crawl_download_image,
             #[cfg(not(target_os = "android"))]

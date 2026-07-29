@@ -822,10 +822,10 @@ async fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
 
     // 订阅必须早于 start_task：forward task 在没有订阅者时会直接丢弃事件，
     // 晚订阅会漏掉任务开头的日志。
+    // 不订阅 ImagesChange：计数一律取 TasksChange 里的权威快照，见 render_task 的说明。
     let mut events = EventBroadcaster::global().subscribe_filtered_stream(&[
         kabegame_core::ipc::events::DaemonEventKind::TaskLog,
         kabegame_core::ipc::events::DaemonEventKind::TasksChange,
-        kabegame_core::ipc::events::DaemonEventKind::ImagesChange,
     ]);
 
     let scheduler = TaskScheduler::global();
@@ -954,27 +954,16 @@ async fn render_task(
                     bar.suspend(|| println!("{line}"));
                 }
             }
-            DaemonEvent::ImagesChange {
-                reason,
-                image_ids,
-                task_ids,
-                ..
-            } if reason == "add" => {
-                // success_count 的自增是纯 SQL、不发事件，所以这里自己按 images-change 累加。
-                let ours = task_ids
-                    .as_ref()
-                    .map(|ids| ids.iter().any(|t| t == task_id))
-                    .unwrap_or(false);
-                if ours {
-                    downloaded += image_ids.len() as u64;
-                    refresh(&bar, progress, downloaded, failed, dedup);
-                }
-            }
             DaemonEvent::TaskChanged { task_id: tid, diff } if tid == task_id => {
                 if let Some(p) = diff.get("progress").and_then(|v| v.as_f64()) {
                     progress = p;
                 }
-                // 计数快照事件是权威值，直接覆盖本地累加。
+                // 计数只认这个快照：downloader 每次落库/去重后都会
+                // `emit_task_image_counts_snapshot` 发一份读自 DB 的全量计数。
+                // 曾经这里还按 `images-change(add)` 自行累加，但那两类事件走的是
+                // 各自的 broadcast channel、再由独立 task 汇进同一个 mpsc，
+                // 相互之间没有顺序保证：快照先到就会被随后的累加又叠一次，
+                // 于是每张图都多计一次（实测稳定 +1）。
                 if let Some(v) = diff.get("successCount").and_then(|v| v.as_u64()) {
                     downloaded = v;
                 }

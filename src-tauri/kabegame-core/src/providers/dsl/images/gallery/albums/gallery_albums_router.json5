@@ -1,6 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_albums_router",
+    "note": "Filter by album. List this node to get root album UUIDs and their album metadata, then use an id as the next segment. Any UUID-shaped id resolves, but a missing album yields an empty image set.",
     // 7c S1: programmatic GalleryAlbumsRouter 迁 DSL。
     // - INNER JOIN album_images AS ai (让下游 album entry 能用 ai.album_id WHERE)
     // - 暴露 ai."order" AS album_order (壁纸顺序模式 marker, 7b S1e 引入)
