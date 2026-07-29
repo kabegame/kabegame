@@ -12,72 +12,85 @@
   <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
 </div>
 
-<table>
+<p align="center">
+    <a href="https://github.com/kabegame/kabegame/releases/latest">
+      <img alt="Latest release" src="https://img.shields.io/github/v/release/kabegame/kabegame?style=flat-square&sort=semver"/>
+    </a>
+    <a href="https://github.com/kabegame/kabegame/releases">
+      <img alt="Total downloads" src="https://img.shields.io/github/downloads/kabegame/kabegame/total?style=flat-square&logo=github"/>
+    </a>
+    <a href="https://github.com/kabegame/kabegame/actions/workflows/release.yml">
+      <img alt="Release build" src="https://github.com/kabegame/kabegame/actions/workflows/release.yml/badge.svg"/>
+    </a>
+    <a href="https://github.com/kabegame/kabegame/blob/main/LICENSE">
+      <img alt="License" src="https://img.shields.io/github/license/kabegame/kabegame?style=flat-square"/>
+    </a>
+    <a href="https://kabegame.com/guide/installation/">
+      <img alt="Platforms" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-5c6bc0?style=flat-square"/>
+    </a>
+    <a href="https://kabegame.com">
+      <img alt="Documentation" src="https://img.shields.io/badge/docs-kabegame.com-2f80ed?style=flat-square"/>
+    </a>
+  </p>
+
+<table width="100%">
   <tr>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/gallery/gallery-main.png" alt="Kabegame windows 截图 1" width="300"/><br/>
+    <td align="center" width="50%">
+      <img src="docs/images/gallery/gallery-main.png" alt="Kabegame 画廊" width="100%"/><br/>
       <small>画廊</small>
     </td>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/gallery/gallery-preview.png" alt="Kabegame windows 截图 2" width="300"/><br/>
+    <td align="center" width="50%">
+      <img src="docs/images/gallery/gallery-preview.png" alt="Kabegame 图片预览" width="100%"/><br/>
       <small>预览</small>
     </td>
-    <!-- <td align="center" rowspan="2" style="vertical-align: top; text-align: right; width: 200px;">
-      <img src="docs/images/" alt="Kabegame android 截图" width="200"><br/>
-      <small>Android(4.4.0敬请期待)</small>
-    </td> -->
   </tr>
   <tr>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/gallery/gallery-detail.jpg" alt="Kabegame macos 截图" width="300"/><br/>
+    <td align="center" width="50%">
+      <img src="docs/images/gallery/gallery-detail.jpg" alt="Kabegame 详细元信息" width="100%"/><br/>
       <small>详细元信息</small>
     </td>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/gallery/gallery-filters.jpg" alt="画廊过滤" width="300"/><br/>
+    <td align="center" width="50%">
+      <img src="docs/images/gallery/gallery-filters.jpg" alt="Kabegame 画廊过滤" width="100%"/><br/>
       <small>随心过滤</small>
     </td>
   </tr>
   <tr>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/album/album-main.jpg" alt="Kabegame windows 截图 1" width="300"/><br/>
+    <td align="center" width="50%">
+      <img src="docs/images/album/album-main.jpg" alt="Kabegame 画册整理" width="100%"/><br/>
       <small>画册整理</small>
     </td>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/album/album-folder.jpg" alt="Kabegame windows 截图 2" width="300"/><br/>
+    <td align="center" width="50%">
+      <img src="docs/images/album/album-folder.jpg" alt="Kabegame 文件夹同步" width="100%"/><br/>
       <small>文件夹同步</small>
     </td>
-    <!-- <td align="center" rowspan="2" style="vertical-align: top; text-align: right; width: 200px;">
-      <img src="docs/images/album/" alt="Kabegame android 截图" width="200"><br/>
-      <small>Android (4.4.0敬请期待)</small>
-    </td> -->
   </tr>
   <tr>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/source/source-main.jpg" alt="Kabegame macos 截图" width="300"/><br/>
+    <td align="center" width="50%">
+      <img src="docs/images/source/source-main.jpg" alt="Kabegame 源插件列表" width="100%"/><br/>
       <small>源插件列表</small>
     </td>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/source/source-doc.jpg" alt="Kabegame linux 截图" width="300"/><br/>
+    <td align="center" width="50%">
+      <img src="docs/images/source/source-doc.jpg" alt="Kabegame 源插件文档" width="100%"/><br/>
       <small>源插件文档</small>
     </td>
   </tr>
   <tr>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/crawler/crawler-config.jpg" alt="Kabegame macos 截图" width="300"/><br/>
+    <td align="center" width="50%">
+      <img src="docs/images/crawler/crawler-config.jpg" alt="Kabegame 任务参数配置" width="100%"/><br/>
       <small>配置任务参数</small>
     </td>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/crawler/crawler-start.jpg" alt="Kabegame linux 截图" width="300"/><br/>
+    <td align="center" width="50%">
+      <img src="docs/images/crawler/crawler-start.jpg" alt="Kabegame 任务执行" width="100%"/><br/>
       <small>开始执行任务</small>
     </td>
   </tr>
   <tr>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/crawler/task-images.jpg" alt="Kabegame macos 截图" width="300"/><br/>
+    <td align="center" width="50%">
+      <img src="docs/images/crawler/task-images.jpg" alt="Kabegame 任务图片" width="100%"/><br/>
       <small>任务图片</small>
     </td>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/crawler/task-log.jpg" alt="Kabegame linux 截图" width="300"/><br/>
+    <td align="center" width="50%">
+      <img src="docs/images/crawler/task-log.jpg" alt="Kabegame 任务日志" width="100%"/><br/>
       <small>任务日志(快速定位问题)</small>
     </td>
   </tr>

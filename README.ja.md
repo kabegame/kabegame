@@ -5,42 +5,79 @@
 Tauri ベースの二次元クローラークライアント！壁紙をクロール・管理・設定/ローテーションして、推しの嫁（や旦那）たちに毎日そばにいてもらおう～ プラグインで拡張でき、様々な二次元サイトのリソースを簡単にクロールできます。
 
 > 📖 **完全なドキュメント**：[https://kabegame.com](https://kabegame.com/)
+
 > 🌐 **オンラインで体験（Demo）**：[https://demo.kabegame.com](https://demo.kabegame.com/)
 
 <div align="center">
   <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
 </div>
 
-<table>
+<table width="100%">
   <tr>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-windows-gallery.png" alt="Kabegame windows 截图 1" width="300"/><br/>
-      <small>Windows</small>
+    <td align="center" width="50%">
+      <img src="docs/images/gallery/gallery-main.png" alt="Kabegame ギャラリー" width="100%"/><br/>
+      <small>ギャラリー</small>
     </td>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-windows-preview.png" alt="Kabegame windows 截图 2" width="300"/><br/>
-      <small>Windows</small>
-    </td>
-    <td align="center" rowspan="2" style="vertical-align: top; text-align: right; width: 200px;">
-      <img src="docs/images/main-screenshot-android-gallery.jpg" alt="Kabegame android 截图" width="200"><br/>
-      <small>Android</small>
+    <td align="center" width="50%">
+      <img src="docs/images/gallery/gallery-preview.png" alt="Kabegame 画像プレビュー" width="100%"/><br/>
+      <small>プレビュー</small>
     </td>
   </tr>
   <tr>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame macos 截图" width="300"/><br/>
-      <small>macOS</small>
+    <td align="center" width="50%">
+      <img src="docs/images/gallery/gallery-detail.jpg" alt="Kabegame 詳細メタデータ" width="100%"/><br/>
+      <small>詳細メタデータ</small>
     </td>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-linux.png" alt="Kabegame linux 截图" width="300"/><br/>
-      <small>Linux</small>
+    <td align="center" width="50%">
+      <img src="docs/images/gallery/gallery-filters.jpg" alt="Kabegame ギャラリーフィルター" width="100%"/><br/>
+      <small>自由なフィルタリング</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/album/album-main.jpg" alt="Kabegame 画集の整理" width="100%"/><br/>
+      <small>画集の整理</small>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/album/album-folder.jpg" alt="Kabegame フォルダ同期" width="100%"/><br/>
+      <small>フォルダ同期</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/source/source-main.jpg" alt="Kabegame ソースプラグイン一覧" width="100%"/><br/>
+      <small>ソースプラグイン一覧</small>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/source/source-doc.jpg" alt="Kabegame ソースプラグインドキュメント" width="100%"/><br/>
+      <small>ソースプラグインドキュメント</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/crawler/crawler-config.jpg" alt="Kabegame タスクパラメータ設定" width="100%"/><br/>
+      <small>タスクパラメータ設定</small>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/crawler/crawler-start.jpg" alt="Kabegame タスク実行" width="100%"/><br/>
+      <small>タスクを実行</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/crawler/task-images.jpg" alt="Kabegame タスク画像" width="100%"/><br/>
+      <small>タスク画像</small>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/crawler/task-log.jpg" alt="Kabegame タスクログ" width="100%"/><br/>
+      <small>タスクログ（問題を素早く特定）</small>
     </td>
   </tr>
 </table>
 
 ## 主な機能
 
-- 🔌 **クローラークライアント**：`.kgpg` プラグインで各サイトから壁紙をクロール。内蔵のプラグインストアで閲覧/インストール/管理が可能。プラグインは JS/TS で書かれ、V8（deno_core）または WebView バックエンドで動作します。
+- 🔌 **クローラークライアント**：`.kgpg` プラグインで各サイトから壁紙をクロール。内蔵のプラグインストアで閲覧/インストール/管理が可能。4.3.0 以降、リリース時点の最新プラグインをすべて同梱しています。プラグインは JS/TS で書かれ、V8（deno_core）または WebView バックエンドで動作します。
 - 🎨 **壁紙セッター（画像/動画）**：二次元壁紙を収集・管理・ローテーションし、指定した画集からデスクトップ壁紙を自動で切り替えます。
 - 🖼️ **画像マネージャー**：ギャラリー閲覧、画集の整理、仮想ディスク、ドラッグ＆ドロップでのインポート、フォルダと画集の同期。
 - 🧩 **MCP 整理**：MCP サーバーを開き、外部の AI エージェントにきめ細かな権限のもとで壁紙の整理を任せられます。

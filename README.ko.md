@@ -5,42 +5,79 @@
 Tauri 기반 이차원 크롤러 클라이언트! 벽지를 크롤링·관리·설정/로테이션하여, 아내(또는 남편)들이 매일 당신 곁을 지켜주게 하세요~ 플러그인 확장을 지원해 다양한 이차원 사이트의 리소스를 손쉽게 크롤링할 수 있습니다.
 
 > 📖 **전체 문서**：[https://kabegame.com](https://kabegame.com/)
+
 > 🌐 **온라인 체험（Demo）**：[https://demo.kabegame.com](https://demo.kabegame.com/)
 
 <div align="center">
   <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
 </div>
 
-<table>
+<table width="100%">
   <tr>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-windows-gallery.png" alt="Kabegame windows 截图 1" width="300"/><br/>
-      <small>Windows</small>
+    <td align="center" width="50%">
+      <img src="docs/images/gallery/gallery-main.png" alt="Kabegame 갤러리" width="100%"/><br/>
+      <small>갤러리</small>
     </td>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-windows-preview.png" alt="Kabegame windows 截图 2" width="300"/><br/>
-      <small>Windows</small>
-    </td>
-    <td align="center" rowspan="2" style="vertical-align: top; text-align: right; width: 200px;">
-      <img src="docs/images/main-screenshot-android-gallery.jpg" alt="Kabegame android 截图" width="200"><br/>
-      <small>Android</small>
+    <td align="center" width="50%">
+      <img src="docs/images/gallery/gallery-preview.png" alt="Kabegame 이미지 미리보기" width="100%"/><br/>
+      <small>미리보기</small>
     </td>
   </tr>
   <tr>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame macos 截图" width="300"/><br/>
-      <small>macOS</small>
+    <td align="center" width="50%">
+      <img src="docs/images/gallery/gallery-detail.jpg" alt="Kabegame 상세 메타데이터" width="100%"/><br/>
+      <small>상세 메타데이터</small>
     </td>
-    <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-linux.png" alt="Kabegame linux 截图" width="300"/><br/>
-      <small>Linux</small>
+    <td align="center" width="50%">
+      <img src="docs/images/gallery/gallery-filters.jpg" alt="Kabegame 갤러리 필터링" width="100%"/><br/>
+      <small>자유로운 필터링</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/album/album-main.jpg" alt="Kabegame 화집 정리" width="100%"/><br/>
+      <small>화집 정리</small>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/album/album-folder.jpg" alt="Kabegame 폴더 동기화" width="100%"/><br/>
+      <small>폴더 동기화</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/source/source-main.jpg" alt="Kabegame 소스 플러그인 목록" width="100%"/><br/>
+      <small>소스 플러그인 목록</small>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/source/source-doc.jpg" alt="Kabegame 소스 플러그인 문서" width="100%"/><br/>
+      <small>소스 플러그인 문서</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/crawler/crawler-config.jpg" alt="Kabegame 작업 매개변수 설정" width="100%"/><br/>
+      <small>작업 매개변수 설정</small>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/crawler/crawler-start.jpg" alt="Kabegame 작업 실행" width="100%"/><br/>
+      <small>작업 실행</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/crawler/task-images.jpg" alt="Kabegame 작업 이미지" width="100%"/><br/>
+      <small>작업 이미지</small>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/crawler/task-log.jpg" alt="Kabegame 작업 로그" width="100%"/><br/>
+      <small>작업 로그(빠른 문제 파악)</small>
     </td>
   </tr>
 </table>
 
 ## 주요 기능
 
-- 🔌 **크롤러 클라이언트**：`.kgpg` 플러그인으로 여러 사이트에서 벽지를 크롤링하고, 내장 플러그인 스토어에서 탐색/설치/관리할 수 있습니다. 플러그인은 JS/TS로 작성되며 V8(deno_core) 또는 WebView 백엔드에서 실행됩니다.
+- 🔌 **크롤러 클라이언트**：`.kgpg` 플러그인으로 여러 사이트에서 벽지를 크롤링하고, 내장 플러그인 스토어에서 탐색/설치/관리할 수 있습니다. 4.3.0부터 릴리스 시점의 최신 플러그인을 모두 기본으로 포함합니다. 플러그인은 JS/TS로 작성되며 V8(deno_core) 또는 WebView 백엔드에서 실행됩니다.
 - 🎨 **벽지 설정기(이미지/동영상)**：이차원 벽지를 수집·관리·로테이션하고, 지정한 화집에서 바탕화면 벽지를 자동으로 교체합니다.
 - 🖼️ **이미지 관리자**：갤러리 탐색, 화집 정리, 가상 디스크, 드래그 앤 드롭 가져오기, 폴더-화집 동기화.
 - 🧩 **MCP 정리**：MCP 서버를 열어 외부 AI 에이전트가 세밀한 권한 아래 벽지 정리를 돕게 할 수 있습니다.
