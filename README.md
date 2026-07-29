@@ -19,9 +19,6 @@
     <a href="https://github.com/kabegame/kabegame/releases">
       <img alt="Total downloads" src="https://img.shields.io/github/downloads/kabegame/kabegame/total?style=flat-square&logo=github"/>
     </a>
-    <a href="https://github.com/kabegame/kabegame/actions/workflows/release.yml">
-      <img alt="Release build" src="https://github.com/kabegame/kabegame/actions/workflows/release.yml/badge.svg"/>
-    </a>
     <a href="https://github.com/kabegame/kabegame/blob/main/LICENSE">
       <img alt="License" src="https://img.shields.io/github/license/kabegame/kabegame?style=flat-square"/>
     </a>
