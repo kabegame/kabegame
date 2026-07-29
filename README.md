@@ -38,9 +38,6 @@
   <a href="https://vuejs.org/">
     <img alt="Vue 3" src="https://img.shields.io/badge/Vue-3-42B883?style=flat-square&logo=vuedotjs&logoColor=white" height="20"/>
   </a>
-  <a href="https://www.rust-lang.org/">
-    <img alt="Rust 后端" src="https://img.shields.io/badge/Rust-backend-000000?style=flat-square&logo=rust&logoColor=white" height="20"/>
-  </a>
 </p>
 
 <table width="100%">
