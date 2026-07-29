@@ -96,6 +96,14 @@
                   :description="$t('settings.closeActionDesc')">
                   <SettingRadioControl setting-key="closeAction" :options="closeActionOptions" />
                 </SettingRow>
+                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.realtimeFolderSync')"
+                  :description="$t('settings.realtimeFolderSyncDesc')">
+                  <RealtimeFolderSyncSetting />
+                </SettingRow>
+                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.fastFolderSync')"
+                  :description="$t('settings.fastFolderSyncDesc')">
+                  <SettingSwitchControl setting-key="fastFolderSync" />
+                </SettingRow>
             </SettingsSection>
 
             <SettingsSection
@@ -319,6 +327,7 @@ import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSet
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
+import RealtimeFolderSyncSetting from "@/components/settings/items/RealtimeFolderSyncSetting.vue";
 import LanguageSetting from "@/components/settings/items/LanguageSetting.vue";
 import SuperModeSetting from "@/components/settings/items/SuperModeSetting.vue";
 import McpSettingsPanel from "@/components/settings/McpSettingsPanel.vue";

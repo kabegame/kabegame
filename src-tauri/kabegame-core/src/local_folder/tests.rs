@@ -1,15 +1,15 @@
 use super::status::FolderStatus;
-use super::sync::sync_album_if_folder_changed;
-use super::sync_album;
+use super::{sync_album, SyncAlbumOptions};
 use crate::app_paths::AppPaths;
 use crate::crawler::downloader::{IMAGE_THUMBNAIL_MAX_DIM, IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES};
+use crate::settings::Settings;
 use crate::storage::{ImageInfo, Storage};
 use image::{Rgb, RgbImage};
 use rusqlite::{params, OptionalExtension};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static TEST_INIT: OnceLock<()> = OnceLock::new();
@@ -38,6 +38,7 @@ fn init_test_runtime() {
         compatibles_dir_path: root.join("compatibles"),
     })
     .unwrap();
+    let _ = Settings::init_global();
     Storage::init_global().unwrap();
 
     #[cfg(feature = "ipc-server")]
@@ -47,6 +48,22 @@ fn init_test_runtime() {
     }
 
     let _ = crate::providers::provider_runtime();
+}
+
+struct FastSyncGuard(bool);
+
+impl FastSyncGuard {
+    fn set(enabled: bool) -> Self {
+        let previous = Settings::global().get_fast_folder_sync();
+        Settings::global().set_fast_folder_sync(enabled).unwrap();
+        Self(previous)
+    }
+}
+
+impl Drop for FastSyncGuard {
+    fn drop(&mut self) {
+        let _ = Settings::global().set_fast_folder_sync(self.0);
+    }
 }
 
 fn now_secs() -> i64 {
@@ -277,9 +294,15 @@ async fn recursive_sync_creates_subalbums_and_imports() {
     write_png(&dir.join("cats/cat.png"), [2, 2, 2]);
     let album_id = create_sync_album(&dir);
 
-    let report = super::sync_album_recursive(&album_id, vec![])
-        .await
-        .unwrap();
+    let report = sync_album(
+        &album_id,
+        SyncAlbumOptions {
+            recursive: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(report.created_albums, 1, "应为 cats 子目录建一个子画册");
     assert_eq!(report.added, 2);
@@ -311,11 +334,12 @@ async fn recursive_sync_without_create_skips_new_subalbum_dirs() {
     let album_id = create_sync_album(&dir);
     let cats_album_id = create_sync_album_with_parent(&cats_dir, Some(&album_id));
 
-    let report = super::sync_album_recursive_with_options(
+    let report = sync_album(
         &album_id,
-        vec![],
-        super::RecursiveSyncOptions {
+        SyncAlbumOptions {
+            recursive: true,
             create_missing_albums: false,
+            ..Default::default()
         },
     )
     .await
@@ -335,6 +359,7 @@ async fn sync_skips_finalize_for_album_with_errored_file() {
     use std::os::unix::fs::PermissionsExt;
 
     let _guard = test_guard();
+    let _fast = FastSyncGuard::set(false);
     let (_tmp, dir) = temp_album_dir();
     let bad_dir = dir.join("bad");
     let clean_dir = dir.join("clean");
@@ -347,9 +372,15 @@ async fn sync_skips_finalize_for_album_with_errored_file() {
     write_png(&clean_stale, [2, 2, 2]);
 
     let album_id = create_sync_album(&dir);
-    let first = super::sync_album_recursive(&album_id, vec![])
-        .await
-        .unwrap();
+    let first = sync_album(
+        &album_id,
+        SyncAlbumOptions {
+            recursive: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(first.added, 2);
 
     let bad_album_id = album_id_for_sync_folder(&bad_dir);
@@ -365,9 +396,15 @@ async fn sync_skips_finalize_for_album_with_errored_file() {
     perms.set_mode(0o000);
     fs::set_permissions(&broken, perms).unwrap();
 
-    let second = super::sync_album_recursive(&album_id, vec![])
-        .await
-        .unwrap();
+    let second = sync_album(
+        &album_id,
+        SyncAlbumOptions {
+            recursive: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
 
     let mut restore = fs::metadata(&broken).unwrap().permissions();
     restore.set_mode(0o644);
@@ -498,7 +535,9 @@ async fn sync_adds_stable_media_file() {
     write_png(&file, [255, 0, 0]);
     let album_id = create_sync_album(&dir);
 
-    let report = sync_album(&album_id).await.unwrap();
+    let report = sync_album(&album_id, SyncAlbumOptions::default())
+        .await
+        .unwrap();
 
     assert_eq!(report.added, 1);
     assert_eq!(report.deleted, 0);
@@ -522,7 +561,9 @@ async fn sync_large_image_creates_target_sized_thumbnail() {
     write_large_png(&file);
     let album_id = create_sync_album(&dir);
 
-    let report = sync_album(&album_id).await.unwrap();
+    let report = sync_album(&album_id, SyncAlbumOptions::default())
+        .await
+        .unwrap();
 
     assert_eq!(report.added, 1);
     let thumbnail = image_thumbnail_for_path(&file).unwrap();
@@ -586,14 +627,23 @@ fn replace_image_thumbnail_path_deletes_old_independent_thumbnail() {
 #[tokio::test(flavor = "current_thread")]
 async fn sync_unlinks_from_album_when_file_disappears() {
     let _guard = test_guard();
+    let _fast = FastSyncGuard::set(false);
     let (_tmp, dir) = temp_album_dir();
     let file = dir.join("gone.png");
     write_png(&file, [0, 255, 0]);
     let album_id = create_sync_album(&dir);
-    assert_eq!(sync_album(&album_id).await.unwrap().added, 1);
+    assert_eq!(
+        sync_album(&album_id, SyncAlbumOptions::default())
+            .await
+            .unwrap()
+            .added,
+        1
+    );
 
     fs::remove_file(&file).unwrap();
-    let report = sync_album(&album_id).await.unwrap();
+    let report = sync_album(&album_id, SyncAlbumOptions::default())
+        .await
+        .unwrap();
 
     assert_eq!(report.deleted, 1);
     assert_eq!(image_count_for_path(&file), 1);
@@ -601,13 +651,78 @@ async fn sync_unlinks_from_album_when_file_disappears() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn cancel_mid_sync_preserves_unseen_images_and_folder_status() {
+    let _guard = test_guard();
+    let _fast = FastSyncGuard::set(false);
+    let (_tmp, dir) = temp_album_dir();
+    let existing_file = dir.join("z-existing.png");
+    write_png(&existing_file, [0, 255, 0]);
+    let album_id = create_sync_album(&dir);
+
+    let first = sync_album(&album_id, SyncAlbumOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(first.added, 1);
+    let previous_report_status = first.status;
+    let previous_status = folder_status_json(&album_id);
+    let existing_image_id = image_row_for_path(&existing_file).unwrap().0;
+
+    // 文件名排序确保新增文件先写库并进入 100ms 节流，旧图尚未从 pending_delete 移除。
+    write_png(&dir.join("a-new.png"), [255, 0, 0]);
+    let sync_album_id = album_id.clone();
+    let sync =
+        tokio::spawn(async move { sync_album(&sync_album_id, SyncAlbumOptions::default()).await });
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let first_add_completed = super::FolderSyncService::global()
+                .snapshot()
+                .iter()
+                .any(|task| task.album_id == album_id && task.added >= 1);
+            if first_add_completed {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("sync should import the first file before timeout");
+
+    assert!(super::FolderSyncService::global().cancel(&album_id));
+    let report = sync.await.unwrap().unwrap();
+
+    assert!(report.canceled);
+    assert_eq!(report.added, 1);
+    assert_eq!(report.status, previous_report_status);
+    assert_eq!(
+        folder_status_json(&album_id),
+        previous_status,
+        "取消同步不得推进 folder_status"
+    );
+    assert!(
+        Storage::global()
+            .list_album_image_ids_for_sync(&album_id)
+            .unwrap()
+            .contains(&existing_image_id),
+        "尚未扫描到的已入库图片不得从画册删除"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn sync_reimports_changed_file_and_carries_user_fields() {
     let _guard = test_guard();
+    let _fast = FastSyncGuard::set(false);
     let (_tmp, dir) = temp_album_dir();
     let file = dir.join("changed.png");
     write_png(&file, [0, 0, 255]);
     let album_id = create_sync_album(&dir);
-    assert_eq!(sync_album(&album_id).await.unwrap().added, 1);
+    assert_eq!(
+        sync_album(&album_id, SyncAlbumOptions::default())
+            .await
+            .unwrap()
+            .added,
+        1
+    );
 
     let old = image_row_for_path(&file).unwrap();
     let old_hash = image_hash_for_path(&file).unwrap();
@@ -631,7 +746,9 @@ async fn sync_reimports_changed_file_and_carries_user_fields() {
     };
 
     write_png(&file, [255, 255, 0]);
-    let report = sync_album(&album_id).await.unwrap();
+    let report = sync_album(&album_id, SyncAlbumOptions::default())
+        .await
+        .unwrap();
 
     assert_eq!(report.reimported, 1);
     assert_eq!(image_count_for_path(&file), 1);
@@ -667,7 +784,9 @@ async fn sync_persists_missing_folder_status() {
     let missing = dir.path().join("missing");
     let album_id = create_sync_album(&missing);
 
-    let report = sync_album(&album_id).await.unwrap();
+    let report = sync_album(&album_id, SyncAlbumOptions::default())
+        .await
+        .unwrap();
 
     assert!(matches!(report.status, Some(FolderStatus::Missing { .. })));
     let raw = folder_status_json(&album_id).unwrap();
@@ -676,25 +795,139 @@ async fn sync_persists_missing_folder_status() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn startup_sync_skips_when_folder_mtime_is_unchanged() {
+async fn fast_sync_manual_entry_skips_unchanged_folder_and_preserves_last_synced_at() {
     let _guard = test_guard();
+    let _fast = FastSyncGuard::set(true);
     let (_tmp, dir) = temp_album_dir();
     let file = dir.join("wall.png");
     write_png(&file, [255, 0, 0]);
     let album_id = create_sync_album(&dir);
 
-    let first = sync_album(&album_id).await.unwrap();
+    let first = sync_album(&album_id, SyncAlbumOptions::default())
+        .await
+        .unwrap();
     assert_eq!(first.added, 1);
     assert!(!first.skipped_unchanged);
-    assert!(first
+    let first_last_synced_at_ms = first
         .status
         .as_ref()
         .and_then(FolderStatus::last_synced_at_ms)
-        .is_some());
+        .expect("first sync should persist last_synced_at_ms");
 
-    let second = sync_album_if_folder_changed(&album_id).await.unwrap();
+    let second = sync_album(&album_id, SyncAlbumOptions::default())
+        .await
+        .unwrap();
     assert!(second.skipped_unchanged);
     assert_eq!(second.added, 0);
     assert_eq!(second.deleted, 0);
     assert_eq!(second.reimported, 0);
+    assert_eq!(album_image_count(&album_id), 1);
+    assert_eq!(
+        second
+            .status
+            .as_ref()
+            .and_then(FolderStatus::last_synced_at_ms),
+        Some(first_last_synced_at_ms),
+        "摸戳不得推进 last_synced_at_ms"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn disabled_fast_sync_rescans_unchanged_folder() {
+    let _guard = test_guard();
+    let _fast = FastSyncGuard::set(false);
+    let (_tmp, dir) = temp_album_dir();
+    write_png(&dir.join("wall.png"), [255, 0, 0]);
+    let album_id = create_sync_album(&dir);
+
+    let first = sync_album(&album_id, SyncAlbumOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(first.added, 1);
+
+    let second = sync_album(&album_id, SyncAlbumOptions::default())
+        .await
+        .unwrap();
+    assert!(!second.skipped_unchanged);
+    assert_eq!(second.deleted, 0);
+    assert_eq!(album_image_count(&album_id), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recursive_fast_sync_skips_unchanged_dirs_without_delete_or_missing() {
+    let _guard = test_guard();
+    let initial_fast = FastSyncGuard::set(false);
+    let (_tmp, dir) = temp_album_dir();
+    let child_dir = dir.join("child");
+    fs::create_dir_all(&child_dir).unwrap();
+    write_png(&child_dir.join("wall.png"), [1, 2, 3]);
+    let album_id = create_sync_album(&dir);
+    let recursive_options = || SyncAlbumOptions {
+        recursive: true,
+        ..Default::default()
+    };
+
+    let first = sync_album(&album_id, recursive_options()).await.unwrap();
+    assert_eq!(first.added, 1);
+    let child_id = album_id_for_sync_folder(&child_dir);
+    let first_child_status: FolderStatus =
+        serde_json::from_str(&folder_status_json(&child_id).unwrap()).unwrap();
+    let first_child_last_synced_at_ms = first_child_status
+        .last_synced_at_ms()
+        .expect("first recursive sync should timestamp child album");
+
+    drop(initial_fast);
+    let _fast = FastSyncGuard::set(true);
+    let second = sync_album(&album_id, recursive_options()).await.unwrap();
+
+    assert_eq!(second.deleted, 0);
+    assert_eq!(second.failed, 0);
+    assert_eq!(second.skipped_unchanged_dirs, 2);
+    assert!(matches!(
+        serde_json::from_str::<FolderStatus>(&folder_status_json(&child_id).unwrap()).unwrap(),
+        FolderStatus::Ok {
+            last_synced_at_ms,
+            ..
+        } if last_synced_at_ms == first_child_last_synced_at_ms
+    ));
+    assert_eq!(album_image_count(&child_id), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recursive_fast_sync_descends_through_skipped_parents() {
+    let _guard = test_guard();
+    let initial_fast = FastSyncGuard::set(false);
+    let (_tmp, dir) = temp_album_dir();
+    let parent_dir = dir.join("parent");
+    let child_dir = parent_dir.join("child");
+    fs::create_dir_all(&child_dir).unwrap();
+    let album_id = create_sync_album(&dir);
+    let recursive_options = || SyncAlbumOptions {
+        recursive: true,
+        ..Default::default()
+    };
+
+    let first = sync_album(&album_id, recursive_options()).await.unwrap();
+    assert_eq!(first.created_albums, 2);
+    let root_mtime = fs::metadata(&dir).unwrap().modified().unwrap();
+    let parent_mtime = fs::metadata(&parent_dir).unwrap().modified().unwrap();
+
+    drop(initial_fast);
+    let _fast = FastSyncGuard::set(true);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let new_file = child_dir.join("new.png");
+    write_png(&new_file, [9, 8, 7]);
+    assert_eq!(fs::metadata(&dir).unwrap().modified().unwrap(), root_mtime);
+    assert_eq!(
+        fs::metadata(&parent_dir).unwrap().modified().unwrap(),
+        parent_mtime
+    );
+
+    let second = sync_album(&album_id, recursive_options()).await.unwrap();
+    let child_id = album_id_for_sync_folder(&child_dir);
+    assert_eq!(second.added, 1);
+    assert_eq!(second.failed, 0);
+    assert_eq!(second.skipped_unchanged_dirs, 2);
+    assert_eq!(album_image_count(&child_id), 1);
+    assert!(image_row_for_path(&new_file).is_some());
 }

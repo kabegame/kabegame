@@ -136,6 +136,8 @@
   "realtimeFolderSyncDesc": "로컬 폴더 앨범의 원본 디렉터리를 감시하고 파일 추가, 삭제, 교체 시 자동으로 동기화합니다",
   "realtimeFolderSyncOn": "실시간 동기화가 켜졌습니다",
   "realtimeFolderSyncOff": "실시간 동기화가 꺼졌습니다",
+  "fastFolderSync": "빠른 동기화",
+  "fastFolderSyncDesc": "수정 시간이 변경되지 않은 폴더를 건너뜁니다. 폴더 안의 이미지 파일이 제자리에서 수정되지 않는 경우에만 사용하세요",
   "defaultDownloadDir": "기본 다운로드 디렉터리",
   "defaultDownloadDirDesc": "작업이 출력을 지정하지 않을 때 사용 (플러그인별 하위 폴더)",
   "defaultDownloadDirPlaceholder": "비워두면 기본 위치 사용",
@@ -223,7 +225,6 @@
   "mcpCapabilitiesSaveFailed": "MCP 기능을 저장하지 못했습니다",
 
   "quickDisplay": "표시",
-  "quickLocalFolderSync": "로컬 폴더 동기화",
   "quickDownload": "다운로드",
   "quickWallpaper": "배경화면",
   "quickApp": "앱",

@@ -253,13 +253,8 @@ import {
   loadAlbumMediaPreview,
   type AlbumMediaNode,
 } from "@/utils/albumMediaTree";
-import {
-  syncLocalFolderAlbum,
-  syncLocalFolderAlbums,
-  type BatchSyncItem,
-  type FolderStatusState,
-  type SyncReport,
-} from "@/api/syncLocalFolder";
+import { syncLocalFolderAlbum, syncLocalFolderAlbums } from "@/api/syncLocalFolder";
+import { reportBatchSyncResult, reportSingleSyncResult } from "@/utils/folderSyncReport";
 
 // ---------- Component setup ----------
 const route = useRoute();
@@ -325,88 +320,6 @@ watch(
     if (typeof v === "number") totalImagesCount.value = v;
   }
 );
-
-// ---------- Local folder sync helpers ----------
-const syncStatusSuffix = (state: FolderStatusState) =>
-  state.replace(/(^|_)(\w)/g, (_, __, c: string) => c.toUpperCase());
-
-const reportBatchSyncResult = (results: BatchSyncItem[]) => {
-  if (results.length === 0) return;
-
-  const errors = results.filter((r) => r.err != null);
-  const badStatus = results.filter(
-    (r) => r.ok && r.ok.status && r.ok.status.state !== "ok",
-  );
-  const okResults = results.filter((r) => r.ok && (!r.ok.status || r.ok.status.state === "ok"));
-
-  let added = 0;
-  let deleted = 0;
-  let reimported = 0;
-  let skippedInFlight = 0;
-  for (const r of okResults) {
-    if (!r.ok) continue;
-    added += r.ok.added;
-    deleted += r.ok.deleted;
-    reimported += r.ok.reimported;
-    if (r.ok.skippedInFlight) skippedInFlight++;
-  }
-
-  if (errors.length > 0) {
-    console.warn("[local_folder] sync errors", errors);
-    ElMessage.error(
-      t("albums.localFolder.refreshSyncFailedSome", {
-        count: errors.length,
-        firstError: errors[0]?.err ?? "",
-      }),
-    );
-    return;
-  }
-
-  if (badStatus.length > 0) {
-    console.warn("[local_folder] sync bad status", badStatus);
-    ElMessage.warning(
-      t("albums.localFolder.refreshSyncBadStatus", { count: badStatus.length }),
-    );
-    return;
-  }
-
-  const skippedText =
-    skippedInFlight > 0
-      ? t("albums.localFolder.refreshSyncSkippedSuffix", { skipped: skippedInFlight })
-      : "";
-  ElMessage.success(
-    t("albums.localFolder.refreshSyncDone", {
-      added,
-      deleted,
-      reimported,
-      skippedText,
-    }),
-  );
-};
-
-const reportSingleSyncResult = (report: SyncReport) => {
-  if (report.skippedInFlight) {
-    ElMessage.info(t("albums.localFolder.syncInFlight"));
-    return;
-  }
-
-  if (report.status && report.status.state !== "ok") {
-    ElMessage.warning(
-      t(`albums.localFolder.status${syncStatusSuffix(report.status.state)}`, {
-        message: report.status.message ?? "",
-      }),
-    );
-    return;
-  }
-
-  ElMessage.success(
-    t("albums.localFolder.syncDone", {
-      added: report.added,
-      deleted: report.deleted,
-      reimported: report.reimported,
-    }),
-  );
-};
 
 const isLightMode = IS_LIGHT_MODE;
 const albumDriveEnabled = computed(() => !isLightMode && !!settingsStore.values.albumDriveEnabled);
@@ -663,13 +576,23 @@ const handleChildAlbumMenuCommand = async (
         createMissingAlbums: command === "syncNowRecursiveFull",
       });
       if (report) {
+        // 递归入口合并后首次可能返回 skippedInFlight（同一画册并发递归的第二次调用）。
+        if (report.skippedInFlight) {
+          ElMessage.info(t("albums.localFolder.syncInFlight"));
+          return;
+        }
         await albumStore.loadAlbums();
+        if (report.canceled) return; // 取消的提示走 folder-sync-finished 事件
+        const skippedText = report.skippedUnchangedDirs > 0
+          ? t("albums.localFolder.recursiveSyncSkippedSuffix", { skipped: report.skippedUnchangedDirs })
+          : "";
         ElMessage.success(
           t("albums.localFolder.recursiveSyncDone", {
             createdAlbums: report.createdAlbums,
             syncedAlbums: report.syncedAlbums,
             added: report.added,
             deleted: report.deleted,
+            skippedText,
           }),
         );
       }

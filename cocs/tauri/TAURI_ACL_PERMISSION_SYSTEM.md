@@ -86,6 +86,20 @@ if (plugin_command.is_some() || has_app_acl_manifest) && invoke.acl.is_none() {
 - 恢复到原本 capability 结构（`main` + `crawler`）。
 - 让 `has_app_acl_manifest` 回到原先行为预期，避免影响全局命令路径。
 
+## 新增一个 `#[tauri::command]` 时（最常见情形）
+
+本工程已进入 ACL 强校验（存在 app 级 manifest），**主窗口能调的应用命令由
+`permissions/main.toml` 的 `commands.allow` 白名单逐条列出**。所以新增命令时，
+除了 `lib.rs` 的 `generate_handler!` 注册，还必须把命令名加进该白名单——
+漏了在编译期毫无征兆，只在运行时报：
+
+```
+Command <name> not allowed by ACL
+```
+
+`crawler` / `surf` 等窗口各有自己的 `permissions/*.toml`，按调用方所在窗口补对应文件。
+改完 `.toml` 需要重新编译（`build.rs` 重新生成授权数据），dev 下重启 `tauri dev` 即可。
+
 ## 变更建议（后续新增权限时）
 
 ### 推荐做法
@@ -100,6 +114,8 @@ if (plugin_command.is_some() || has_app_acl_manifest) && invoke.acl.is_none() {
 - 未评估 `main` 窗口现有命令集合就切换到严格 ACL。
 
 ## 快速排查清单
+
+单个命令报 `not allowed by ACL` 时：看它有没有进对应窗口 `permissions/*.toml` 的 `commands.allow`（见上一节）。
 
 出现“命令都不可用”时，优先检查：
 

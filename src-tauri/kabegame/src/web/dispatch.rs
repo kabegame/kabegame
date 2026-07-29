@@ -1119,6 +1119,25 @@ pub fn init_registry() {
     );
 
     map.insert(
+        "cancel_folder_sync",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        album_id: Option<String>,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    kabegame_core::commands::album::cancel_folder_sync(args.album_id)
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
         "add_images_to_album",
         MethodEntry {
             requires_super: true,

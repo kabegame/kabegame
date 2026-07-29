@@ -26,8 +26,19 @@ export interface SyncReport {
   added: number;
   deleted: number;
   reimported: number;
+  /** 递归同步新建的子画册数；非递归恒为 0。 */
+  createdAlbums: number;
+  /** 递归同步涉及的画册数（含被快速同步跳过的）；非递归恒为 0。 */
+  syncedAlbums: number;
+  /** 递归同步中因目录已消失而落 missing 状态的子画册数；非递归恒为 0。 */
+  failed: number;
   skippedInFlight: boolean;
+  /** 快速同步：整次同步因根目录未变而被跳过（非递归）。后端不扫不写，added/deleted/reimported 恒为 0。 */
   skippedUnchanged: boolean;
+  /** 快速同步：跳过文件扫描的目录数（递归同步专用，逐目录累计）。非递归的整次跳过用 skippedUnchanged 表示，此字段恒为 0。 */
+  skippedUnchangedDirs: number;
+  /** 被用户取消：已扫到的照常入库，未扫到的一律不动（不删图、不推进 lastSyncedAtMs）。 */
+  canceled: boolean;
 }
 
 export interface BatchSyncItem {
@@ -36,15 +47,8 @@ export interface BatchSyncItem {
   err: string | null;
 }
 
-export interface RecursiveSyncReport {
-  albumId: string;
-  createdAlbums: number;
-  syncedAlbums: number;
-  added: number;
-  deleted: number;
-  reimported: number;
-  failed: number;
-}
+/** @deprecated 后端已把递归/非递归报告合并为统一的 SyncReport，保留别名兼容既有 import。 */
+export type RecursiveSyncReport = SyncReport;
 
 export interface SyncLocalFolderAlbumOptions {
   recursive?: boolean;
@@ -74,6 +78,18 @@ export async function syncLocalFolderAlbum(
     console.warn("[local_folder] sync_local_folder_album failed", albumId, e);
     throw e;
   }
+}
+
+/**
+ * 取消进行中的文件夹同步：传 albumId 取消单个，不传取消全部。
+ * 返回实际被置位的任务数（已结束的任务不计）。
+ */
+export async function cancelFolderSync(albumId?: string): Promise<number> {
+  if (LOCAL_FOLDER_UNSUPPORTED) return 0;
+  const result = await invoke<{ canceled: number }>("cancel_folder_sync", {
+    albumId: albumId ?? null,
+  });
+  return result?.canceled ?? 0;
 }
 
 export async function syncLocalFolderAlbums(

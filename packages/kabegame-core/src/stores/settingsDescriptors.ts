@@ -189,6 +189,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
 
   if (!IS_ANDROID && !IS_WEB && (IS_MACOS || IS_LINUX || IS_WINDOWS)) {
     entries.push(tauri("realtimeFolderSync", "get_realtime_folder_sync", "set_realtime_folder_sync", "enabled"));
+    entries.push(tauri("fastFolderSync", "get_fast_folder_sync", "set_fast_folder_sync", "enabled"));
   }
 
   if (!IS_ANDROID && !IS_LIGHT_MODE) {

@@ -17,16 +17,25 @@
       >
         {{ t("header.busyView") }}
       </button>
+      <button
+        type="button"
+        class="busy-task-cancel"
+        :title="t('common.cancel')"
+        @click.stop="folderSyncService.cancel(props.albumId)"
+      >
+        <el-icon class="text-[13px]"><Close /></el-icon>
+      </button>
     </div>
   </article>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Refresh } from "@element-plus/icons-vue";
+import { Close, Refresh } from "@element-plus/icons-vue";
 import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
 import { useFolderSyncStore } from "@/stores/folderSync";
+import * as folderSyncService from "@/services/folderSync";
 
 const props = defineProps<{ albumId: string }>();
 const emit = defineEmits<{ close: [] }>();

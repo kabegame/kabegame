@@ -27,6 +27,8 @@ export interface AppSettings {
   galleryGridColumns: number;
   autoDeduplicate: boolean;
   realtimeFolderSync: boolean;
+  /** 快速同步：跳过修改时间未变的文件夹（本地文件夹同步全入口生效），默认开启 */
+  fastFolderSync: boolean;
   defaultDownloadDir: string | null;
   wallpaperRotationEnabled: boolean;
   wallpaperRotationAlbumId: string | null;

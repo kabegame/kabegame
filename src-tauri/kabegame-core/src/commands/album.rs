@@ -188,11 +188,12 @@ pub async fn add_local_folder_album(
         Storage::global().add_local_folder_albums_tx(std::slice::from_ref(&root_entry))?;
 
     tokio::spawn(async move {
-        if recursive {
-            let _ = crate::local_folder::sync_album_recursive(&root_id, forbidden_roots).await;
-        } else {
-            let _ = crate::local_folder::sync_album(&root_id).await;
-        }
+        let options = crate::local_folder::SyncAlbumOptions {
+            recursive,
+            forbidden_roots,
+            ..Default::default()
+        };
+        let _ = crate::local_folder::sync_album(&root_id, options).await;
     });
 
     serde_json::to_value(created).map_err(|e| e.to_string())
@@ -204,22 +205,18 @@ pub async fn sync_local_folder_album(
     recursive: Option<bool>,
     create_missing_albums: Option<bool>,
 ) -> Result<Value, String> {
-    if recursive.unwrap_or(false) {
-        let forbidden_roots = local_folder_forbidden_roots();
-        let options = crate::local_folder::RecursiveSyncOptions {
-            create_missing_albums: create_missing_albums.unwrap_or(true),
-        };
-        let report = crate::local_folder::sync_album_recursive_with_options(
-            &album_id,
-            forbidden_roots,
-            options,
-        )
-        .await?;
-        serde_json::to_value(report).map_err(|e| e.to_string())
-    } else {
-        let report = crate::local_folder::sync_album(&album_id).await?;
-        serde_json::to_value(report).map_err(|e| e.to_string())
-    }
+    let recursive = recursive.unwrap_or(false);
+    let options = crate::local_folder::SyncAlbumOptions {
+        recursive,
+        create_missing_albums: create_missing_albums.unwrap_or(true),
+        forbidden_roots: if recursive {
+            local_folder_forbidden_roots()
+        } else {
+            Vec::new()
+        },
+    };
+    let report = crate::local_folder::sync_album(&album_id, options).await?;
+    serde_json::to_value(report).map_err(|e| e.to_string())
 }
 
 #[cfg(target_os = "android")]
@@ -267,6 +264,21 @@ pub fn get_folder_sync_run_state() -> Result<Value, String> {
 #[cfg(target_os = "android")]
 pub fn get_folder_sync_run_state() -> Result<Value, String> {
     Ok(serde_json::json!({ "tasks": [] }))
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn cancel_folder_sync(album_id: Option<String>) -> Result<Value, String> {
+    let service = crate::local_folder::FolderSyncService::global();
+    let canceled = match album_id {
+        Some(album_id) => usize::from(service.cancel(&album_id)),
+        None => service.cancel_all(),
+    };
+    Ok(serde_json::json!({ "canceled": canceled }))
+}
+
+#[cfg(target_os = "android")]
+pub fn cancel_folder_sync(_album_id: Option<String>) -> Result<Value, String> {
+    Ok(serde_json::json!({ "canceled": 0 }))
 }
 
 /// 递归同步/创建时需要刻意避开的「禁区根」（规范化）：仅 VD 挂载点。

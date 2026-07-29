@@ -2,7 +2,10 @@ use crate::emitter::GlobalEmitter;
 use crate::local_folder::status::now_millis;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock,
+};
 use std::time::{Duration, Instant};
 
 const PROGRESS_THROTTLE: Duration = Duration::from_millis(200);
@@ -30,14 +33,20 @@ struct FolderSyncFinished {
     deleted: usize,
     reimported: usize,
     created_albums: usize,
+    canceled: bool,
     error: Option<String>,
+}
+
+struct FolderSyncTask {
+    state: FolderSyncTaskState,
+    cancel: Arc<AtomicBool>,
 }
 
 static SVC: OnceLock<FolderSyncService> = OnceLock::new();
 
 #[derive(Default)]
 pub struct FolderSyncService {
-    tasks: Mutex<HashMap<String, FolderSyncTaskState>>,
+    tasks: Mutex<HashMap<String, FolderSyncTask>>,
     last_emit: Mutex<HashMap<String, Instant>>,
 }
 
@@ -63,11 +72,15 @@ impl FolderSyncService {
             started_at_ms: now_millis(),
         };
         let album_id = state.album_id.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
 
-        self.tasks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(album_id.clone(), state.clone());
+        self.tasks.lock().unwrap_or_else(|e| e.into_inner()).insert(
+            album_id.clone(),
+            FolderSyncTask {
+                state: state.clone(),
+                cancel: cancel.clone(),
+            },
+        );
         self.last_emit
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -76,6 +89,7 @@ impl FolderSyncService {
         Self::emit_progress(&state);
         FolderSyncRunGuard {
             album_id,
+            cancel,
             finished: false,
         }
     }
@@ -86,7 +100,7 @@ impl FolderSyncService {
             let Some(task) = tasks.get_mut(album_id) else {
                 return;
             };
-            f(task);
+            f(&mut task.state);
 
             let now = Instant::now();
             let mut last_emit = self.last_emit.lock().unwrap_or_else(|e| e.into_inner());
@@ -101,7 +115,7 @@ impl FolderSyncService {
                     true
                 }
             };
-            should_emit.then(|| task.clone())
+            should_emit.then(|| task.state.clone())
         };
 
         if let Some(state) = state {
@@ -109,8 +123,8 @@ impl FolderSyncService {
         }
     }
 
-    pub fn finish(&self, album_id: &str, error: Option<String>) {
-        let state = self
+    pub fn finish(&self, album_id: &str, canceled: bool, error: Option<String>) {
+        let task = self
             .tasks
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -120,7 +134,8 @@ impl FolderSyncService {
             .unwrap_or_else(|e| e.into_inner())
             .remove(album_id);
 
-        if let Some(state) = state {
+        if let Some(task) = task {
+            let state = task.state;
             let payload = FolderSyncFinished {
                 album_id: state.album_id,
                 album_name: state.album_name,
@@ -129,6 +144,7 @@ impl FolderSyncService {
                 deleted: state.deleted,
                 reimported: state.reimported,
                 created_albums: state.created_albums,
+                canceled,
                 error,
             };
             if let Ok(payload) = serde_json::to_value(payload) {
@@ -137,13 +153,30 @@ impl FolderSyncService {
         }
     }
 
+    pub fn cancel(&self, album_id: &str) -> bool {
+        let tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(task) = tasks.get(album_id) else {
+            return false;
+        };
+        task.cancel.store(true, Ordering::Relaxed);
+        true
+    }
+
+    pub fn cancel_all(&self) -> usize {
+        let tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
+        for task in tasks.values() {
+            task.cancel.store(true, Ordering::Relaxed);
+        }
+        tasks.len()
+    }
+
     pub fn snapshot(&self) -> Vec<FolderSyncTaskState> {
         let mut tasks: Vec<_> = self
             .tasks
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .values()
-            .cloned()
+            .map(|task| task.state.clone())
             .collect();
         tasks.sort_by(|a, b| {
             a.started_at_ms
@@ -162,13 +195,25 @@ impl FolderSyncService {
 
 pub struct FolderSyncRunGuard {
     album_id: String,
+    cancel: Arc<AtomicBool>,
     finished: bool,
 }
 
 impl FolderSyncRunGuard {
+    pub fn cancel_flag(&self) -> Arc<AtomicBool> {
+        self.cancel.clone()
+    }
+
     pub fn finish(mut self, error: Option<String>) {
         if !self.finished {
-            FolderSyncService::global().finish(&self.album_id, error);
+            FolderSyncService::global().finish(&self.album_id, false, error);
+            self.finished = true;
+        }
+    }
+
+    pub fn finish_canceled(mut self) {
+        if !self.finished {
+            FolderSyncService::global().finish(&self.album_id, true, None);
             self.finished = true;
         }
     }
@@ -177,7 +222,7 @@ impl FolderSyncRunGuard {
 impl Drop for FolderSyncRunGuard {
     fn drop(&mut self) {
         if !self.finished {
-            FolderSyncService::global().finish(&self.album_id, Some("aborted".to_string()));
+            FolderSyncService::global().finish(&self.album_id, false, Some("aborted".to_string()));
             self.finished = true;
         }
     }

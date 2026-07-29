@@ -136,6 +136,8 @@
   "realtimeFolderSyncDesc": "ローカルフォルダアルバムの元フォルダを監視し、ファイルの追加・削除・置換時に自動同期します",
   "realtimeFolderSyncOn": "リアルタイム同期を有効にしました",
   "realtimeFolderSyncOff": "リアルタイム同期を無効にしました",
+  "fastFolderSync": "高速同期",
+  "fastFolderSyncDesc": "更新日時が変わっていないフォルダをスキップします。フォルダ内の画像ファイルが上書き変更されない場合にのみ有効にしてください",
   "defaultDownloadDir": "デフォルトダウンロードディレクトリ",
   "defaultDownloadDirDesc": "タスクが出力を指定しない場合に使用（プラグインごとのサブフォルダ）",
   "defaultDownloadDirPlaceholder": "空欄でデフォルト位置を使用",
@@ -223,7 +225,6 @@
   "mcpCapabilitiesSaveFailed": "MCP 機能の保存に失敗しました",
 
   "quickDisplay": "表示",
-  "quickLocalFolderSync": "ローカルフォルダ同期",
   "quickDownload": "ダウンロード",
   "quickWallpaper": "壁紙",
   "quickApp": "アプリ",

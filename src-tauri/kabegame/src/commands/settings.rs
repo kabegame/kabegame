@@ -90,6 +90,11 @@ pub fn get_realtime_folder_sync() -> bool {
 }
 
 #[tauri::command]
+pub fn get_fast_folder_sync() -> bool {
+    Settings::global().get_fast_folder_sync()
+}
+
+#[tauri::command]
 pub fn get_default_download_dir() -> Option<String> {
     Settings::global().get_default_download_dir()
 }
@@ -444,6 +449,11 @@ pub async fn set_realtime_folder_sync(enabled: bool) -> Result<(), String> {
     Settings::global().set_realtime_folder_sync(enabled)?;
     kabegame_core::local_folder::watch::set_enabled(enabled).await;
     Ok(())
+}
+
+#[tauri::command]
+pub fn set_fast_folder_sync(enabled: bool) -> Result<(), String> {
+    Settings::global().set_fast_folder_sync(enabled)
 }
 
 #[tauri::command]

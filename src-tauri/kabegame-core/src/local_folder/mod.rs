@@ -20,6 +20,5 @@ pub use scan_service::{
 };
 pub use status::FolderStatus;
 pub use sync::{
-    sync_album, sync_album_recursive, sync_album_recursive_with_options, sync_albums_by_ids,
-    sync_all_local_folder_albums, RecursiveSyncOptions, RecursiveSyncReport, SyncReport,
+    sync_album, sync_albums_by_ids, sync_all_local_folder_albums, SyncAlbumOptions, SyncReport,
 };

@@ -178,6 +178,11 @@ fn init(
         kabegame_core::crawler::content_io::set_content_io_provider(Box::new(proxy));
     }
 
+    // 桌面端启动时的自动同步归「实时同步文件夹」开关管：开关开着才有 watcher，而
+    // watcher 起来后本就会先跑一次全量增量扫描（watch::run_manager），启动同步由它承担；
+    // 开关关着就不该在启动时自动扫盘（手动同步不受影响）。
+    // web/android 没有 watcher，保留无条件的启动同步。
+    #[cfg(any(feature = "web", target_os = "android"))]
     spawn_startup_local_folder_sync();
     spawn_realtime_folder_sync_if_enabled();
 
@@ -217,6 +222,7 @@ fn init(
     Ok(())
 }
 
+#[cfg(any(feature = "web", target_os = "android"))]
 fn spawn_startup_local_folder_sync() {
     let fut = async {
         let reports = kabegame_core::local_folder::sync_all_local_folder_albums().await;
@@ -453,6 +459,7 @@ pub(crate) fn configure_app(
             sync_local_folder_album,
             sync_local_folder_albums,
             get_folder_sync_run_state,
+            cancel_folder_sync,
             // --- Images ---
             get_image_by_id,
             get_image_metadata,
@@ -588,6 +595,8 @@ pub(crate) fn configure_app(
             set_auto_deduplicate,
             get_realtime_folder_sync,
             set_realtime_folder_sync,
+            get_fast_folder_sync,
+            set_fast_folder_sync,
             #[cfg(not(target_os = "android"))]
             get_mcp_enabled,
             #[cfg(not(target_os = "android"))]

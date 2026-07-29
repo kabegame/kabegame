@@ -126,9 +126,12 @@ pub async fn set_enabled(enabled: bool) {
         let (tx, rx) = mpsc::channel::<ManagerMsg>(64);
         let join = tokio::spawn(run_manager(rx, tx.clone()));
         *slot = Some(ManagerHandle { tx, join });
-    } else if let Some(handle) = slot.take() {
-        let _ = handle.tx.send(ManagerMsg::Shutdown).await;
-        let _ = handle.join.await;
+    } else {
+        crate::local_folder::FolderSyncService::global().cancel_all();
+        if let Some(handle) = slot.take() {
+            let _ = handle.tx.send(ManagerMsg::Shutdown).await;
+            let _ = handle.join.await;
+        }
     }
 }
 
@@ -201,7 +204,12 @@ async fn sync_album_after_event(album_id: String) {
     // 落地前已列完目录，从而漏掉本次变更，且该已写完文件不一定再触发新的文件事件。
     // 稳定性相关的重试已随该功能移除。
     for attempt in 0..=IN_FLIGHT_RETRY_LIMIT {
-        let report = match crate::local_folder::sync_album(&album_id).await {
+        let report = match crate::local_folder::sync_album(
+            &album_id,
+            crate::local_folder::SyncAlbumOptions::default(),
+        )
+        .await
+        {
             Ok(report) => report,
             Err(err) => {
                 eprintln!("[local_folder.watch] sync_album {album_id} failed: {err}");

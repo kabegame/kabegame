@@ -136,6 +136,8 @@
   "realtimeFolderSyncDesc": "监听本地文件夹画册的源目录，外部新增、删除或替换文件后自动同步",
   "realtimeFolderSyncOn": "实时同步已开启",
   "realtimeFolderSyncOff": "实时同步已关闭",
+  "fastFolderSync": "快速同步",
+  "fastFolderSyncDesc": "跳过修改时间未变的文件夹。仅在文件夹内的图片文件不会被原地修改时启用",
   "defaultDownloadDir": "默认下载目录",
   "defaultDownloadDirDesc": "未在任务里指定输出目录时，将下载到该目录（按插件分文件夹保存）",
   "defaultDownloadDirPlaceholder": "留空使用默认位置",
@@ -223,7 +225,6 @@
   "mcpCapabilitiesSaveFailed": "保存 MCP 能力失败",
 
   "quickDisplay": "显示",
-  "quickLocalFolderSync": "本地文件夹同步",
   "quickDownload": "下载",
   "quickWallpaper": "壁纸",
   "quickApp": "应用",

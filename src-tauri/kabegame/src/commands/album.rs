@@ -99,3 +99,8 @@ pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<Value, S
 pub async fn get_folder_sync_run_state() -> Result<Value, String> {
     commands::album::get_folder_sync_run_state()
 }
+
+#[tauri::command]
+pub async fn cancel_folder_sync(album_id: Option<String>) -> Result<Value, String> {
+    commands::album::cancel_folder_sync(album_id)
+}

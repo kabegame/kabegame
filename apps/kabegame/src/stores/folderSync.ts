@@ -15,6 +15,8 @@ export interface FolderSyncTask {
 
 /** `folder-sync-finished` 不再携带 startedAtMs。 */
 export type FolderSyncFinished = Omit<FolderSyncTask, "startedAtMs"> & {
+  /** 用户主动取消（不是失败）：与 error 互斥。 */
+  canceled: boolean;
   error: string | null;
 };
 

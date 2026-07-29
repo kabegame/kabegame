@@ -94,6 +94,8 @@ pub enum SettingKey {
     AutoDeduplicate,
     /// 实时监听本地文件夹画册源目录
     RealtimeFolderSync,
+    /// 本地文件夹画册快速同步
+    FastFolderSync,
     /// 默认下载目录
     DefaultDownloadDir,
     /// 壁纸轮播启用
@@ -317,6 +319,7 @@ impl Settings {
             SettingKey::GalleryImageObjectPosition => SettingValue::String("center".to_string()),
             SettingKey::AutoDeduplicate => SettingValue::Bool(false),
             SettingKey::RealtimeFolderSync => SettingValue::Bool(false),
+            SettingKey::FastFolderSync => SettingValue::Bool(true),
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
             SettingKey::WallpaperRotationEnabled => SettingValue::Bool(false),
             SettingKey::WallpaperRotationAlbumId => SettingValue::OptionString(None),
@@ -418,6 +421,7 @@ impl Settings {
             SettingKey::GalleryImageObjectPosition,
             SettingKey::AutoDeduplicate,
             SettingKey::RealtimeFolderSync,
+            SettingKey::FastFolderSync,
             SettingKey::DefaultDownloadDir,
             SettingKey::WallpaperRotationEnabled,
             SettingKey::WallpaperRotationAlbumId,
@@ -535,6 +539,7 @@ impl Settings {
             SettingKey::WallpaperRotationIncludeSubalbums => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
             }
+            SettingKey::FastFolderSync => Ok(SettingValue::Bool(json.as_bool().unwrap_or(true))),
             #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
@@ -722,6 +727,7 @@ impl Settings {
             SettingKey::GalleryImageObjectPosition => "galleryImageObjectPosition".to_string(),
             SettingKey::AutoDeduplicate => "autoDeduplicate".to_string(),
             SettingKey::RealtimeFolderSync => "realtimeFolderSync".to_string(),
+            SettingKey::FastFolderSync => "fastFolderSync".to_string(),
             SettingKey::DefaultDownloadDir => "defaultDownloadDir".to_string(),
             SettingKey::WallpaperRotationEnabled => "wallpaperRotationEnabled".to_string(),
             SettingKey::WallpaperRotationAlbumId => "wallpaperRotationAlbumId".to_string(),
@@ -962,6 +968,13 @@ impl Settings {
             .get(&SettingKey::RealtimeFolderSync)
             .map(|c| c.load().as_bool().unwrap_or(false))
             .unwrap_or(false)
+    }
+
+    pub fn get_fast_folder_sync(&self) -> bool {
+        Self::cells()
+            .get(&SettingKey::FastFolderSync)
+            .map(|c| c.load().as_bool().unwrap_or(true))
+            .unwrap_or(true)
     }
 
     pub fn get_default_download_dir(&self) -> Option<String> {
@@ -1314,6 +1327,16 @@ impl Settings {
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::RealtimeFolderSync, &new_value);
+        Ok(())
+    }
+
+    pub fn set_fast_folder_sync(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::FastFolderSync) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::FastFolderSync, &new_value);
         Ok(())
     }
 
