@@ -16,7 +16,7 @@ use kabegame_core::{
     plugin::{manifest_value_to_display_string, PluginManager},
 };
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -1299,6 +1299,108 @@ fn pack_plugin_v3(plugin_dir: &Path, output: &Path, pkg: &serde_json::Value) -> 
             }
         }
     }
+
+    if let Some(assets_value) = pkg_obj.get("kbDocAssets") {
+        let assets = assets_value
+            .as_object()
+            .ok_or_else(|| "kbDocAssets 必须是对象".to_string())?;
+        let mut normalized_assets: HashMap<String, String> = HashMap::new();
+        let mut total_size = 0_u64;
+
+        for (raw_key, path_value) in assets {
+            let normalized_key = core_plugin::doc_assets::normalize_doc_asset_key(raw_key)
+                .ok_or_else(|| format!("kbDocAssets 含非法资源键: {raw_key:?}"))?;
+            if let Some(previous_path) = normalized_assets.get(&normalized_key) {
+                return Err(format!(
+                    "kbDocAssets 资源键归一化后冲突: {raw_key:?} 与已注册路径 \
+                     {previous_path:?} 都归一化为 {normalized_key:?}"
+                ));
+            }
+
+            let path = path_value
+                .as_str()
+                .ok_or_else(|| format!("kbDocAssets[{raw_key:?}] 必须是字符串"))?;
+            core_plugin::validate_kb_rel_path(path)?;
+            let asset_file = plugin_dir.join(path);
+            if !asset_file.is_file() {
+                return Err(format!("kbDocAssets[{raw_key:?}] 引用的文件不存在: {path}"));
+            }
+            let mime = core_plugin::doc_assets::mime_for_doc_asset(path);
+            if !mime.starts_with("image/") || mime == "image/svg+xml" {
+                return Err(format!(
+                    "kbDocAssets[{raw_key:?}] 的文件扩展名不受支持: {path} \
+                     （仅支持 jpg/jpeg/png/gif/webp/bmp）"
+                ));
+            }
+
+            let size = std::fs::metadata(&asset_file)
+                .map_err(|error| format!("读取文档资源文件大小失败 {path}: {error}"))?
+                .len();
+            if size > core_plugin::doc_assets::DOC_ASSET_MAX_FILE_SIZE as u64 {
+                return Err(format!(
+                    "kbDocAssets[{raw_key:?}] 文件超过 2 MB 硬上限: {path} ({size} bytes)"
+                ));
+            }
+            total_size = total_size.saturating_add(size);
+            normalized_assets.insert(normalized_key, path.to_string());
+        }
+
+        let mut referenced_keys = HashSet::new();
+        if let Some(doc_map) = pkg_obj.get("kbDoc").and_then(|value| value.as_object()) {
+            for (lang, doc_path_value) in doc_map {
+                let Some(doc_path) = doc_path_value.as_str() else {
+                    continue;
+                };
+                let md = std::fs::read_to_string(plugin_dir.join(doc_path))
+                    .map_err(|error| format!("读取 kbDoc[{lang:?}] {doc_path:?} 失败: {error}"))?;
+                let doc_dir = Path::new(doc_path)
+                    .parent()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                for (normalized_path, original_ref) in
+                    core_plugin::extract_doc_local_refs(&md, &doc_dir)
+                {
+                    let Some(normalized_key) =
+                        core_plugin::doc_assets::normalize_doc_asset_key(&original_ref)
+                    else {
+                        continue;
+                    };
+                    referenced_keys.insert(normalized_key.clone());
+                    if !normalized_assets.contains_key(&normalized_key) {
+                        let key_json =
+                            serde_json::to_string(&original_ref).unwrap_or_else(|_| "\"\"".into());
+                        let path_json = serde_json::to_string(&normalized_path)
+                            .unwrap_or_else(|_| "\"\"".into());
+                        return Err(format!(
+                            "kbDoc[{lang:?}] 引用了未在 kbDocAssets 注册的本地资源 \
+                             {original_ref:?}（归一化键 {normalized_key:?}）。建议补充：\
+                             \n\"kbDocAssets\": {{ {key_json}: {path_json} }}"
+                        ));
+                    }
+                }
+            }
+        }
+
+        for (normalized_key, path) in &normalized_assets {
+            if !referenced_keys.contains(normalized_key) {
+                eprintln!(
+                    "[WARN] kbDocAssets 注册但未被任何 kbDoc 引用（允许预留）: \
+                     {normalized_key:?} -> {path:?}"
+                );
+            }
+        }
+        if total_size > core_plugin::doc_assets::DOC_ASSET_MAX_TOTAL_SIZE as u64 {
+            eprintln!(
+                "[WARN] kbDocAssets 总体积超过 10 MB，加载期将跳过超出部分: {total_size} bytes"
+            );
+        }
+    } else {
+        eprintln!(
+            "[WARN] package.json 未声明 kbDocAssets，文档资源正在使用 Markdown 自动扫描回退；\
+             该回退未来会移除"
+        );
+    }
+
     if let Some(cfgs) = pkg_obj
         .get("kbRecommendedConfigs")
         .and_then(|v| v.as_array())
@@ -1415,52 +1517,63 @@ fn collect_v3_entries(plugin_dir: &Path, pkg: &serde_json::Value) -> Result<Vec<
         entries.push((tpl.to_string(), plugin_dir.join(tpl)));
     }
 
-    // kbDoc + referenced images
+    // kbDoc + 文档资源（新包读取显式白名单；旧包保持自动扫描回退）
+    let has_doc_assets = pkg_obj.contains_key("kbDocAssets");
     if let Some(doc_map) = pkg_obj.get("kbDoc").and_then(|v| v.as_object()) {
         for (_lang, doc_path_val) in doc_map {
             let doc_path = doc_path_val.as_str().unwrap_or("");
             let doc_full = plugin_dir.join(doc_path);
-            let md_text = std::fs::read_to_string(&doc_full)
-                .map_err(|e| format!("读取 {} 失败: {}", doc_path, e))?;
 
-            let md_dir = std::path::Path::new(doc_path)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let refs = core_plugin::extract_doc_local_refs(&md_text, &md_dir);
+            if !has_doc_assets {
+                let md_text = std::fs::read_to_string(&doc_full)
+                    .map_err(|e| format!("读取 {} 失败: {}", doc_path, e))?;
 
-            for (normalized_path, _original_ref) in &refs {
-                let ref_full = plugin_dir.join(normalized_path);
-                if ref_full.is_file() {
-                    let ext = ref_full
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_ascii_lowercase();
-                    let is_img = matches!(
-                        ext.as_str(),
-                        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
-                    );
-                    if is_img {
-                        const MAX_SIZE: u64 = 2 * 1024 * 1024;
-                        let sz = std::fs::metadata(&ref_full).map(|m| m.len()).unwrap_or(0);
-                        if sz > MAX_SIZE {
-                            eprintln!(
-                                "[WARN] doc 图片过大已跳过（上限 2MB）: {} ({} bytes)",
-                                normalized_path, sz
-                            );
-                            continue;
+                let md_dir = std::path::Path::new(doc_path)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let refs = core_plugin::extract_doc_local_refs(&md_text, &md_dir);
+
+                for (normalized_path, _original_ref) in &refs {
+                    let ref_full = plugin_dir.join(normalized_path);
+                    if ref_full.is_file() {
+                        let ext = ref_full
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_ascii_lowercase();
+                        let is_img = matches!(
+                            ext.as_str(),
+                            "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
+                        );
+                        if is_img {
+                            let sz = std::fs::metadata(&ref_full).map(|m| m.len()).unwrap_or(0);
+                            if sz > core_plugin::doc_assets::DOC_ASSET_MAX_FILE_SIZE as u64 {
+                                eprintln!(
+                                    "[WARN] doc 图片过大已跳过（上限 2MB）: {} ({} bytes)",
+                                    normalized_path, sz
+                                );
+                                continue;
+                            }
+                            entries.push((normalized_path.clone(), ref_full));
                         }
-                        entries.push((normalized_path.clone(), ref_full));
+                    } else {
+                        return Err(format!(
+                            "文档 \"{}\" 引用的图片 \"{}\" 不存在",
+                            doc_path, normalized_path
+                        ));
                     }
-                } else {
-                    return Err(format!(
-                        "文档 \"{}\" 引用的图片 \"{}\" 不存在",
-                        doc_path, normalized_path
-                    ));
                 }
             }
             entries.push((doc_path.to_string(), doc_full));
+        }
+    }
+    if let Some(assets) = pkg_obj
+        .get("kbDocAssets")
+        .and_then(|value| value.as_object())
+    {
+        for asset_path in assets.values().filter_map(|value| value.as_str()) {
+            entries.push((asset_path.to_string(), plugin_dir.join(asset_path)));
         }
     }
 
@@ -1503,6 +1616,11 @@ fn collect_v3_entries(plugin_dir: &Path, pkg: &serde_json::Value) -> Result<Vec<
                         .get("kbDoc")
                         .and_then(|v| v.as_object())
                         .map(|d| d.values().any(|x| x.as_str() == Some(name)))
+                        .unwrap_or(false)
+                    || pkg_obj
+                        .get("kbDocAssets")
+                        .and_then(|v| v.as_object())
+                        .map(|assets| assets.values().any(|x| x.as_str() == Some(name)))
                         .unwrap_or(false);
                 if is_critical {
                     eprintln!("[ERROR] .kabegameignore 排除了关键文件: {}", name);
@@ -1549,12 +1667,21 @@ fn collect_v3_entries(plugin_dir: &Path, pkg: &serde_json::Value) -> Result<Vec<
         }
     }
 
+    // 按 ZIP 内路径去重，保留首次出现。
+    // 多语言 kbDoc 会让同一张插图被每个语言的 doc 各收集一次（6 个语言 = 6 份），
+    // 图标 / 模板等也可能被多个字段同时引用。重复条目在 zip 0.6 下只是白白撑大包体，
+    // 到了 zip 8 会直接报 `Duplicate filename` 让打包失败。
+    {
+        let mut seen = std::collections::HashSet::new();
+        entries.retain(|(name, _)| seen.insert(name.clone()));
+    }
+
     // write ZIP
     let mut buf: Vec<u8> = Vec::new();
     {
         let cursor = std::io::Cursor::new(&mut buf);
         let mut zip = zip::ZipWriter::new(cursor);
-        let opt = zip::write::FileOptions::default()
+        let opt = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .unix_permissions(0o644);
 

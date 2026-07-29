@@ -33,7 +33,9 @@ version = "4.4.0"
 arc-swap= "1.7"
 async-trait = "0.1"
 base64 = "0.22"
+bzip2 = "0.6"
 flate2 = "1"
+globset = "0.4"
 image = "0.24"
 include_dir = "0.7"
 json5 = "0.4"
@@ -50,6 +52,9 @@ serde = {version = "1.0", features = ["derive"]}
 serde_bytes = "0.11"
 serde_cbor = "0.11"
 serde_json = "1.0"
+sevenz-rust2 = { version = "0.21", default-features = false, features = [
+  "aes256", "bzip2", "deflate", "ppmd",
+] }
 md5 = "0.7"
 # 进程内 FFmpeg（libav*）绑定：替代旧的 ffmpeg sidecar 进程调用与 mp4 crate。
 # feature 须匹配 third/FFmpeg 子模块的 FFmpeg 主版本（当前 n8.2 → ffmpeg8）。
@@ -65,6 +70,7 @@ tauri-plugin-picker = {path = "./src-tauri-plugins/tauri-plugin-picker"}
 tauri-plugin-share = {path = "./src-tauri-plugins/tauri-plugin-share"}
 tauri-plugin-task-notification = {path = "./src-tauri-plugins/tauri-plugin-task-notification"}
 tauri-plugin-wallpaper = {path = "./src-tauri-plugins/tauri-plugin-wallpaper"}
+tar = "0.4"
 tokio = {version = "1", features = ["full"]}
 url = "2.5"
 uuid = {version = "1.6", features = ["v4", "serde"]}
@@ -80,11 +86,16 @@ windows-sys = {version = "0.52", features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ]}
-# 只启用 deflate(纯 Rust,flate2/rust_backend)。.kgpg 打包(kabegame-cli plugin pack)只写
-# Deflated,读取只遇到 Deflated/Stored(Stored 无需 feature)。关掉默认的 bzip2/zstd/aes-crypto:
-# 既去掉 bzip2-sys(否则 Android 交叉编译因 PKG_CONFIG_ALLOW_CROSS 误链宿主 libbz2 而失败),
-# 也让三平台不再依赖系统 libbz2。
-zip = { version = "0.6", default-features = false, features = ["deflate"] }
+# 全部 feature 均为纯 Rust:deflate-flate2-zlib-rs→zlib-rs、bzip2→libbz2-rs-sys(≥0.6)、
+# lzma/xz→lzma-rust2、ppmd→ppmd-rust、aes-crypto→RustCrypto。
+# **永远不要开 zstd**(zip 8 默认开着,必须 default-features = false 关掉):它走 zstd-sys(C),
+# 会被 scripts/plugins/mode-plugin.ts 全局的 PKG_CONFIG_ALLOW_CROSS=1 带去命中宿主 .pc,
+# Android/macOS 跨编在 ld 期炸。同理不要用 deflate-flate2-zlib / -zlib-ng 这两个 deflate
+# 后端变体(链系统 zlib)。
+zip = { version = "8", default-features = false, features = [
+  "deflate", "deflate-flate2-zlib-rs", "deflate64",
+  "bzip2", "lzma", "xz", "ppmd", "aes-crypto",
+] }
 
 [patch.crates-io]
 # tauri-apps/tauri monorepo 整体经 [patch] 指向 third/tauri（submodule pinned tauri-v2.11.2 +

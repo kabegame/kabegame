@@ -1,3 +1,6 @@
+//! MCP 的 `plugin://{id}/doc_resource/{key}` 中，key 是文档引用串的归一化结果；
+//! 资源来自 `kbDocAssets`，旧包回退为扫描 Markdown。
+
 use kabegame_core::{
     emitter::GlobalEmitter,
     providers::provider_runtime,
@@ -48,7 +51,9 @@ Use these read schemes:
    plugin://{id}/icon                     base64 icon PNG                (image/png, blob)
    plugin://{id}/description_template     EJS description template       (text/plain)
    plugin://{id}/doc                      doc.md (default locale)        (text/markdown)
-   plugin://{id}/doc_resource/{key}       one doc_root resource file     (mime by extension, blob)
+   plugin://{id}/doc_resource/{key}       one plugin doc resource file   (mime by extension, blob)
+   doc_resource key = the normalized Markdown reference; sourced from kbDocAssets
+   (legacy packages fall back to scanning Markdown).
 
    "Trimmed" = the Plugin JSON returned by plugin:// and plugin://{id} has `docResources`,
    `iconPngBase64`, and `descriptionTemplate` stripped out. Fetch each heavy resource on
@@ -63,7 +68,8 @@ Image fields (ImageInfo, camelCase via serde rename_all):
    lastSetWallpaperAt, size (bytes).
    Use images://id_{id}/metadata to fetch crawl-time JSON metadata.
 
-Plugin package layout (for model-authored plugins): package.json (kbBackend: v8),
+Plugin package layout (for model-authored plugins): package.json (kbBackend: v8,
+kbDocAssets maps normalized Markdown-reference keys to package-relative files),
 dist/main.js (export async function crawl), doc_root/doc.md, optional icon.png.
 
 Tools: set_album_images_order (manual order, up to 100 images per call), create_album,
@@ -412,7 +418,8 @@ impl ServerHandler for KabegameMcpServer {
                             text.to_string(),
                             request.uri,
                         )
-                        .with_mime_type("text/markdown")]))
+                        .with_mime_type("text/markdown")])
+                        .into())
                     }
                     [_plugin_id, "doc_resource", _key] => {
                         let row = rows.into_iter().next().ok_or_else(|| {

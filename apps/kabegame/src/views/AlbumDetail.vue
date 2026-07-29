@@ -39,10 +39,7 @@
         </el-breadcrumb>
       </nav>
 
-      <StyledTabs v-model="activeAlbumDetailTab" class="album-detail-tabs">
-        <el-tab-pane :label="imagesTabLabel" name="images" />
-        <el-tab-pane :label="subAlbumsTabLabel" name="subAlbums" />
-      </StyledTabs>
+      <KbTab v-model="activeAlbumDetailTab" :items="albumDetailTabItems" class="album-detail-tabs" />
 
       <div
         class="child-albums-view"
@@ -124,10 +121,8 @@
           </el-breadcrumb>
         </nav>
 
-        <StyledTabs v-if="showAlbumDetailTabs" v-model="activeAlbumDetailTab" class="album-detail-tabs">
-          <el-tab-pane :label="imagesTabLabel" name="images" />
-          <el-tab-pane :label="subAlbumsTabLabel" name="subAlbums" />
-        </StyledTabs>
+        <KbTab v-if="showAlbumDetailTabs" v-model="activeAlbumDetailTab" :items="albumDetailTabItems"
+          class="album-detail-tabs" />
 
         <GalleryFilters
           ref="albumBrowseToolbarRef"
@@ -236,7 +231,7 @@ import { useUiStore } from "@kabegame/core/stores/ui";
 import AlbumDetailPageHeader from "@/components/header/AlbumDetailPageHeader.vue";
 import GalleryFilters from "@/components/GalleryFilters.vue";
 import type { GalleryFilterDimension, GallerySortField } from "@/utils/galleryPath";
-import StyledTabs from "@/components/common/StyledTabs.vue";
+import KbTab, { type KbTabItem } from "@/components/common/KbTab.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { IS_LIGHT_MODE, IS_WEB, IS_ANDROID } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
@@ -366,8 +361,10 @@ const childAlbumCountsForPicker = computed(() => ({
 }));
 const showAlbumDetailTabs = computed(() => childAlbums.value.length > 0);
 const activeAlbumDetailTab = ref<AlbumDetailTab>("images");
-const imagesTabLabel = computed(() => `${t("albums.imagesTab")} (${totalImagesCount.value})`);
-const subAlbumsTabLabel = computed(() => `${t("albums.subAlbums")} (${childAlbums.value.length})`);
+const albumDetailTabItems = computed<KbTabItem<AlbumDetailTab>[]>(() => [
+  { name: "images", label: t("albums.imagesTab"), count: totalImagesCount.value },
+  { name: "subAlbums", label: t("albums.subAlbums"), count: childAlbums.value.length },
+]);
 
 /** 从根到直接父级（不含当前画册），供面包屑中间段 */
 const albumAncestorCrumbs = computed((): { id: string; name: string }[] => {
@@ -1210,11 +1207,7 @@ onDeactivated(() => {
 
 .album-detail-tabs {
   flex: none;
-  margin-top: 0;
-
-  :deep(.el-tabs__header) {
-    margin-bottom: 12px;
-  }
+  margin-bottom: 12px;
 }
 
 .child-albums-view {

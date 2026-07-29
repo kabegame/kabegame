@@ -52,13 +52,34 @@
   "detailDescriptionLabel": "説明",
   "detailLabelsLabel": "ラベル",
   "pluginLabels": {
-    "authNeedCookie": { "name": "Cookie 必須", "desc": "このソースはクロール用の Cookie を取得するため、先に {surf} でのログインが必要な場合があります" },
-    "authNeedProxy": { "name": "プロキシ必須", "desc": "このソースは中国本土から完全にアクセスするためにプロキシが必要な場合があります" },
-    "contentResMobile": { "name": "モバイル", "desc": "モバイル / 縦向き解像度の壁紙を提供します" },
-    "contentResDesktop": { "name": "デスクトップ", "desc": "デスクトップ / 横向き解像度の壁紙を提供します" },
-    "contentNsfw": { "name": "NSFW", "desc": "NSFW / R-18 コンテンツを含む場合があります" },
-    "contentTypeVideo": { "name": "動画", "desc": "動画 / ライブ壁紙を提供します" },
-    "versionIncompatible": { "name": "非対応", "desc": "このプラグインは現在インストールされているアプリより新しいバージョンを必要とします" }
+    "authNeedCookie": {
+      "name": "Cookie 必須",
+      "desc": "このソースはクロール用の Cookie を取得するため、先に {surf} でのログインが必要な場合があります"
+    },
+    "authNeedProxy": {
+      "name": "プロキシ必須",
+      "desc": "このソースは中国本土から完全にアクセスするためにプロキシが必要な場合があります"
+    },
+    "contentResMobile": {
+      "name": "モバイル",
+      "desc": "モバイル / 縦向き解像度の壁紙を提供します"
+    },
+    "contentResDesktop": {
+      "name": "デスクトップ",
+      "desc": "デスクトップ / 横向き解像度の壁紙を提供します"
+    },
+    "contentNsfw": {
+      "name": "NSFW",
+      "desc": "NSFW / R-18 コンテンツを含む場合があります"
+    },
+    "contentTypeVideo": {
+      "name": "動画",
+      "desc": "動画 / ライブ壁紙を提供します"
+    },
+    "versionIncompatible": {
+      "name": "非対応",
+      "desc": "このプラグインは現在インストールされているアプリより新しいバージョンを必要とします"
+    }
   },
   "detailCrawlUrlLabel": "クロール基準 URL",
   "detailCopyAction": "コピー",
@@ -152,5 +173,16 @@
   "loadSourcesFailed": "ストアソース一覧の読み込みに失敗しました",
   "officialSourceMissing": "公式ソースが見つかりません。アプリを再起動してください。",
   "cannotDeleteOfficialSource": "公式 GitHub Releases ソースは削除できません",
-  "officialGithubReleaseSourceName": "公式 GitHub Releases ソース"
+  "officialGithubReleaseSourceName": "公式 GitHub Releases ソース",
+  "quickPreview": {
+    "loadingSamples": "サンプル画像を読み込み中",
+    "noSampleImages": "このソースにはサンプル画像がありません",
+    "installToPreview": "インストールするとサンプル画像を表示できます",
+    "prevImage": "前の画像",
+    "nextImage": "次の画像",
+    "canUpdateTo": "{version} に更新できます",
+    "viewDetails": "クリックで詳細",
+    "searchPlaceholder": "ソース名またはサイトを検索",
+    "noSearchResult": "一致するソースがありません"
+  }
 }

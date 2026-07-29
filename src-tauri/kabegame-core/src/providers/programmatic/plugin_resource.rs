@@ -6,7 +6,9 @@ use pathql_rs::provider::{
 };
 use serde_json::{json, Value};
 
-use crate::plugin::{Plugin, PluginManager, manifest_value_display_for_locale};
+use crate::plugin::{
+    doc_assets::mime_for_doc_asset, manifest_value_display_for_locale, Plugin, PluginManager,
+};
 
 pub fn register_plugin_resource_provider(runtime: &ProviderRuntime) -> Result<(), EngineError> {
     runtime.register_programmatic_provider("kabegame", "plugin_resource_root_provider", |_| {
@@ -48,21 +50,6 @@ fn serialize_plugin_lite(plugin: &Arc<Plugin>) -> Value {
         map.remove("descriptionTemplate");
     }
     value
-}
-
-fn mime_for_key(key: &str) -> &'static str {
-    let ext = std::path::Path::new(key)
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-    match ext.as_deref() {
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("webp") => "image/webp",
-        Some("svg") => "image/svg+xml",
-        Some("gif") => "image/gif",
-        _ => "application/octet-stream",
-    }
 }
 
 struct PluginRootProvider;
@@ -304,7 +291,7 @@ impl Provider for PluginDocResourceProvider {
             .map(|data| {
                 vec![json!({
                     "key": self.resource_key.clone(),
-                    "mime": mime_for_key(&self.resource_key),
+                    "mime": mime_for_doc_asset(&self.resource_key),
                     "dataBase64": data,
                 })]
             })

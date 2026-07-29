@@ -52,13 +52,34 @@
   "detailDescriptionLabel": "설명",
   "detailLabelsLabel": "라벨",
   "pluginLabels": {
-    "authNeedCookie": { "name": "쿠키 필요", "desc": "이 소스는 크롤링용 쿠키를 얻기 위해 먼저 {surf}에서 로그인해야 할 수 있습니다" },
-    "authNeedProxy": { "name": "프록시 필요", "desc": "이 소스는 중국 본토에서 완전히 접근하려면 프록시가 필요할 수 있습니다" },
-    "contentResMobile": { "name": "모바일", "desc": "모바일 / 세로 해상도 배경화면을 제공합니다" },
-    "contentResDesktop": { "name": "데스크톱", "desc": "데스크톱 / 가로 해상도 배경화면을 제공합니다" },
-    "contentNsfw": { "name": "NSFW", "desc": "NSFW / R-18 콘텐츠가 포함될 수 있습니다" },
-    "contentTypeVideo": { "name": "비디오", "desc": "비디오 / 라이브 배경화면을 제공합니다" },
-    "versionIncompatible": { "name": "호환 불가", "desc": "이 플러그인은 현재 설치된 앱보다 최신 버전이 필요합니다" }
+    "authNeedCookie": {
+      "name": "쿠키 필요",
+      "desc": "이 소스는 크롤링용 쿠키를 얻기 위해 먼저 {surf}에서 로그인해야 할 수 있습니다"
+    },
+    "authNeedProxy": {
+      "name": "프록시 필요",
+      "desc": "이 소스는 중국 본토에서 완전히 접근하려면 프록시가 필요할 수 있습니다"
+    },
+    "contentResMobile": {
+      "name": "모바일",
+      "desc": "모바일 / 세로 해상도 배경화면을 제공합니다"
+    },
+    "contentResDesktop": {
+      "name": "데스크톱",
+      "desc": "데스크톱 / 가로 해상도 배경화면을 제공합니다"
+    },
+    "contentNsfw": {
+      "name": "NSFW",
+      "desc": "NSFW / R-18 콘텐츠가 포함될 수 있습니다"
+    },
+    "contentTypeVideo": {
+      "name": "비디오",
+      "desc": "비디오 / 라이브 배경화면을 제공합니다"
+    },
+    "versionIncompatible": {
+      "name": "호환 불가",
+      "desc": "이 플러그인은 현재 설치된 앱보다 최신 버전이 필요합니다"
+    }
   },
   "detailCrawlUrlLabel": "크롤 기준 URL",
   "detailCopyAction": "복사",
@@ -152,5 +173,16 @@
   "loadSourcesFailed": "스토어 소스 목록을 불러오지 못했습니다",
   "officialSourceMissing": "공식 소스를 찾을 수 없습니다. 앱을 다시 시작해 보세요.",
   "cannotDeleteOfficialSource": "공식 GitHub Releases 소스는 삭제할 수 없습니다",
-  "officialGithubReleaseSourceName": "공식 GitHub Releases 소스"
+  "officialGithubReleaseSourceName": "공식 GitHub Releases 소스",
+  "quickPreview": {
+    "loadingSamples": "예시 이미지를 불러오는 중",
+    "noSampleImages": "이 소스에는 예시 이미지가 없습니다",
+    "installToPreview": "설치하면 예시 이미지를 볼 수 있습니다",
+    "prevImage": "이전 이미지",
+    "nextImage": "다음 이미지",
+    "canUpdateTo": "{version}(으)로 업데이트 가능",
+    "viewDetails": "클릭하여 상세 보기",
+    "searchPlaceholder": "소스 이름 또는 사이트 검색",
+    "noSearchResult": "일치하는 소스가 없습니다"
+  }
 }

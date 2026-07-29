@@ -67,13 +67,15 @@ deno task package --only <id1> <id2>     # 多选
 - `kbMetadataMigration` 引用的迁移脚本
 - `kbDescriptionTemplate` 引用的 `templates/description.ejs`
 - `kbDoc` 引用的 `doc_root/doc.md` / `doc.<lang>.md`
-- `doc_root/` 下文档引用的图片资源
+- `kbDocAssets` values 指向的文档图片资源
 
 缺少 v3 `package.json` 或 `main` 指向的脚本会直接报错。
 
 :::note
-清单未引用的文件会被**静默丢弃**，不会提示。所有要打包的资源都要通过 `kb*` 字段声明；文档资源要放进 `doc_root/`。
+清单未引用的文件会被**静默丢弃**，不会提示。文档资源应显式写进 `kbDocAssets`：key 使用 Markdown 中的字面引用（如 `./images/home.png`），value 使用插件根相对路径（如 `doc_root/images/home.png`）。字段存在时，Markdown 引用了但未注册会硬报错；注册但未引用只警告。旧包缺少该字段时仍回退为 Markdown 自动扫描，但会提示未来移除。
 :::
+
+`kbDocAssets` value 必须存在且为 jpg/jpeg/png/gif/webp/bmp；单文件超过 2 MB 会硬报错，总体积超过 10 MB 会警告。`.kabegameignore` 不能排除 `kbDoc` 或 `kbDocAssets` 明确引用的关键文件。
 
 ### 输出
 
@@ -195,9 +197,11 @@ https://github.com/kabegame/crawler-plugins/releases/latest/download/index.json
 **原因** 旧版本在 CI push main 时会读 `GITHUB_REF_NAME`。  
 **操作** 升级 `generate-index.ts`（已修复：只接受匹配 `v\d+\.\d+\.\d+` 的值），或显式传 `--tag v1.2.3`。
 
-**现象** `doc_root/` 外某个自定义资源没被打进 `.kgpg`。  
-**原因** 打包器只收白名单文件；`doc_root/` 以外的目录静默丢弃。  
-**操作** 把资源移到 `doc_root/`。
+**现象** 文档图片没被打进 `.kgpg`。
+
+**原因** 打包器只收 `kbDocAssets` 白名单 values（旧包才自动扫描 Markdown）。
+
+**操作** 在 `package.json` 注册 `"./图片引用": "插件根相对/文件路径"`，并确认 Markdown 引用归一化后没有键冲突。
 
 ## 延伸阅读
 

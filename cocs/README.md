@@ -89,6 +89,10 @@
 
 ## 插件（`plugins/`）
 
+- [plugins/PLUGIN_DOC_ASSETS.md](plugins/PLUGIN_DOC_ASSETS.md)
+  - 主题：插件文档配图的**声明→打包→加载→展示**全链路。涵盖 `kbDocAssets` 白名单（与 `kbDoc` 职责划分、旧包正则回退、空对象为何不能写）、**资源键归一化契约**（9 条规则、刻意不 strip `doc_root/`、不做大小写归一、Rust/TS 两份同构实现）、打包期交叉校验与 2MB/10MB 限额、`Plugin.docResources` 键语义，以及「源」页面 hover 快捷预览走马灯（复用 docResources、排序/图注/MIME 口径、为何未安装条目不出图）与插件详情由路由改为弹窗。
+  - 适用场景：给插件补配图或迁移 `kbDocAssets`；排查文档图片「加载失败」、打包报「引用了未注册的资源」、单文件超 2MB 打包失败；改归一化规则；排查快捷预览面板不弹出或走马灯无图。
+
 - [plugins/PLUGIN_STORE_CACHE.md](plugins/PLUGIN_STORE_CACHE.md)
   - 主题：插件商店缓存机制与更新策略。
   - 适用场景：插件列表更新延迟、缓存失效与命中行为分析。

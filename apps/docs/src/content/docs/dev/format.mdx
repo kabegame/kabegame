@@ -31,12 +31,12 @@ plugin-name.kgpg
     ├── doc_root/                  # 插件文档目录（可选）
     │   ├── doc.md                 # 默认语言文档（GFM Markdown）
     │   ├── doc.<lang>.md          # 其它语言，如 doc.zh.md / doc.en.md
-    │   └── <image>                # 文档引用的资源（jpg/jpeg/png/gif/webp/bmp）
+    │   └── <image>                # kbDocAssets 显式导入的资源（jpg/jpeg/png/gif/webp/bmp）
     └── templates/
         └── description.ejs        # 图片详情页 HTML 模板（可选）
 ```
 
-`package.json` 用 **`kb*` 指针字段**声明这些文件的路径（`main` / `kbIcon` / `kbDoc` / `kbRecommendedConfigs` / `kbPathQLProviders` / `kbMetadataMigration` / `kbDescriptionTemplate`）。解析器只读清单**明确引用**的条目，其余文件忽略。
+`package.json` 用 **`kb*` 指针字段**声明这些文件的路径（`main` / `kbIcon` / `kbDoc` / `kbDocAssets` / `kbRecommendedConfigs` / `kbPathQLProviders` / `kbMetadataMigration` / `kbDescriptionTemplate`）。解析器只读清单**明确引用**的条目，其余文件忽略。
 
 | 条目 | 必需 | 由哪个字段引用 | 作用 |
 |------|------|----------------|------|
@@ -48,13 +48,17 @@ plugin-name.kgpg
 | `metadata_migrations/migrate.js` | 否 | `kbMetadataMigration` | 历史图片 metadata 迁移脚本（单文件，见下） |
 | `templates/description.ejs` | 否 | `kbDescriptionTemplate` | 图片详情区 HTML 模板；缺失时降级为原始 metadata 列表 |
 | `doc_root/doc.md`·`doc.<lang>.md` | 否 | `kbDoc` | 插件文档，多语言按键区分（`default` / `zh` / `en` / `ja` / `ko` / `zhtw`） |
-| `doc_root/<image>` | 否 | — | 文档引用的图片资源 |
+| `doc_root/<image>` | 否 | `kbDocAssets` | 文档引用的图片资源；key 是 Markdown 字面引用，value 是插件根相对路径 |
 
-所有 `kb*` 路径都做安全校验：必须是包根相对路径，禁 `..`、禁绝对路径 / 盘符 / 前导 `/`。
+所有 `kb*` 路径（包括 `kbDocAssets` value）都做安全校验：必须是包根相对路径，禁 `..`、禁绝对路径 / 盘符 / 前导 `/`。
 
 :::caution
-`doc_root/` 内资源有体积限制：**单文件 ≤ 2 MB、总和 ≤ 10 MB**。超限的文件会在打包或解析阶段被跳过。
+`kbDocAssets` 只允许 jpg/jpeg/png/gif/webp/bmp。显式资源 **单文件 ≤ 2 MB**，超限会使打包失败；总和超过 **10 MB** 会警告，加载时跳过超出部分。
 :::
+
+`kbDocAssets` 的 key、Markdown 引用和运行时 `docResources` key 共用归一化规则：标题后缀、query/fragment、前导 `/` 会被去掉，反斜杠改为 `/`，百分号按 UTF-8 解码，`.` / `..` 按段折叠；HTTP(S)、`data:` 与 `//` 外链不注册。键大小写敏感，且不剥 `doc_root/`：`./images/a.png` → `images/a.png`，但 `doc_root/images/a.png` 保持不变。Markdown 原文不会被加载器改写。
+
+字段存在时，Markdown 的每个本地图片引用都必须注册；未引用项只警告，允许预留。旧包缺少 `kbDocAssets` 时继续自动扫描 Markdown 并内嵌资源，但会提示迁移。
 
 ### package.json 最小示例
 
@@ -75,7 +79,7 @@ plugin-name.kgpg
 }
 ```
 
-完整字段（多语言 name/description、`kbLabels` <Badge text="4.4.0" variant="note" />、`kbIcon` / `kbDoc` 等）见 [插件清单字段](/reference/plugin-schema/)。
+完整字段（多语言 name/description、`kbLabels` <Badge text="4.4.0" variant="note" />、`kbIcon` / `kbDoc` / `kbDocAssets` 等）见 [插件清单字段](/reference/plugin-schema/)。
 
 ### metadata_migrations/migrate.js
 

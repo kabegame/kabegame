@@ -41,11 +41,8 @@ export function useActiveRoute() {
       return "/albums";
     }
 
-    // 收集源：匹配 /plugin-browser 和 /plugin-detail 开头的路径
-    if (
-      path.startsWith("/plugin-browser") ||
-      path.startsWith("/plugin-detail")
-    ) {
+    // 收集源：/plugin-browser 开头的路径（插件详情已改为弹窗，不再有独立路由）
+    if (path.startsWith("/plugin-browser")) {
       return "/plugin-browser";
     }
 

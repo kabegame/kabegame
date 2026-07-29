@@ -126,11 +126,6 @@ const autoConfigTabCodec: QuerySettingCodec<AppSettings["autoConfigTab"]> = {
   decode: (raw) => raw === "recommended" ? "recommended" : "mine",
 };
 
-const pluginDetailModeCodec: QuerySettingCodec<AppSettings["pluginDetailMode"]> = {
-  encode: (value) => value === "remote" ? "remote" : "",
-  decode: (raw) => raw === "remote" ? "remote" : "local",
-};
-
 function assignEntry<K extends AppSettingKey>(
   map: SettingsDescriptorMap,
   [key, descriptor]: [K, SettingDescriptor<K>],
@@ -266,9 +261,6 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     query("autoConfigTab", "tab", autoConfigTabCodec),
     query("previewImageId", "pvwimgid"),
     query("superMode", "super", booleanQueryCodec),
-    query("pluginDetailMode", "mode", pluginDetailModeCodec),
-    query("pluginDetailSourceId", "sourceId"),
-    query("pluginDetailVersion", "version"),
     query("task-detail-path", "path"),
     query("surf-images-path", "path"),
     query("album-detail-path", "path"),

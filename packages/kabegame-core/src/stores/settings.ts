@@ -103,12 +103,6 @@ export interface AppSettings {
   previewImageId: string;
   /** web super query `?super=1`；非 `"1"` 都解码为 false。 */
   superMode: boolean;
-  /** 插件详情来源模式 query `?mode=remote`；缺省为 `"local"`。 */
-  pluginDetailMode: "local" | "remote";
-  /** 插件详情商店源 query `?sourceId=`；空串表示未指定。 */
-  pluginDetailSourceId: string;
-  /** 插件详情期望版本 query `?version=`；空串表示未指定。 */
-  pluginDetailVersion: string;
   /** 画廊 route path query 的原始字符串，包含可选 `hide/` 前缀。 */
   "gallery-path": string;
   /** 任务详情 route path query 的原始字符串，包含可选 `hide/` 前缀。 */

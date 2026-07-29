@@ -40,12 +40,16 @@ import "photoswipe-vue/photoswipe.css";
 import { useModal } from "../../composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { openExternalLink } from "../../utils/openExternalLink";
+import { guessDocAssetMime, normalizeDocAssetKey } from "../../utils/docAssetKey";
 
 const props = withDefaults(
   defineProps<{
     markdown?: string | null;
     emptyDescription?: string;
-    /** 已安装插件内嵌的 doc_root 资源：相对路径 → base64。优先级最高。 */
+    /**
+     * 插件内嵌的文档资源：归一化键 → base64。
+     * 键的语义由 `normalizeDocAssetKey` 裁决，与后端 `doc_assets::normalize_doc_asset_key` 同构。
+     */
     docResources?: Record<string, string> | null;
   }>(),
   {
@@ -177,26 +181,6 @@ onBeforeUnmount(() => {
 
 const md = computed(() => (props.markdown || "").trim());
 
-const bytesToBase64 = (bytes: Uint8Array): string => {
-  const chunkSize = 8192;
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode.apply(null, Array.from(chunk));
-  }
-  return btoa(binary);
-};
-
-const guessMime = (path: string): string => {
-  const ext = path.split(".").pop()?.toLowerCase();
-  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
-  if (ext === "gif") return "image/gif";
-  if (ext === "webp") return "image/webp";
-  if (ext === "avif") return "image/avif";
-  if (ext === "bmp") return "image/bmp";
-  return "image/png";
-};
-
 const escapeHtml = (s: string): string =>
   s
     .replace(/&/g, "&amp;")
@@ -204,34 +188,6 @@ const escapeHtml = (s: string): string =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-
-const normalizeDocPath = (imgPath: string): string => {
-  let p = imgPath.trim();
-
-  // 安全检查（前端快速过滤，后端仍会做更严格验证）
-  if (p.startsWith("/") || p.startsWith("\\")) throw new Error("不允许绝对路径");
-  if (p.includes("../") || p.includes("..\\")) throw new Error("不允许路径遍历");
-
-  if (p.startsWith("./")) p = p.slice(2);
-  if (p.startsWith("doc_root/")) p = p.slice("doc_root/".length);
-
-  // URL decode（容错）
-  try {
-    p = decodeURIComponent(p);
-  } catch {
-    p = p
-      .replace(/%20/g, " ")
-      .replace(/%28/g, "(")
-      .replace(/%29/g, ")")
-      .replace(/%2F/g, "/")
-      .replace(/%2E/g, ".")
-      .replace(/%5F/g, "_");
-  }
-
-  if (!p) throw new Error("图片路径为空");
-  if (p.includes("../") || p.includes("..\\")) throw new Error("不允许路径遍历");
-  return p;
-};
 
 const sanitizeHtml = (rawHtml: string): string => {
   const sanitized = DOMPurify.sanitize(rawHtml, {
@@ -296,29 +252,29 @@ const renderMarkdown = async (
     searchIndex = pathEnd + 1;
   }
 
-  // 2) 替换图片：用 docResources（内嵌 base64）
+  // 2) 替换本地图片引用：用 docResources（内嵌 base64）。
+  //    外链（http/https/data/协议相对）归一化返回 null，原样留给 marked 渲染。
   let processed = markdown;
-  if (imageMatches.length > 0 && docResources) {
-    for (const img of imageMatches.slice().reverse()) {
-        const normalizedPath = normalizeDocPath(img.path);
-        const base64 = docResources[normalizedPath];
-        const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        if (base64) {
-          const mime = guessMime(img.path);
-          const url = `data:${mime};base64,${base64}`;
-          processed = processed.replace(
-            new RegExp(escapedMatch, "g"),
-            `<img src="${url}" alt="${escapeHtml(
-              img.alt
-            )}" style="max-width: 100%; height: auto;" />`
-          );
-        } else {
-          processed = processed.replace(
-            new RegExp(escapedMatch, "g"),
-            `[图片加载失败: ${escapeHtml(img.path)}]`
-          );
-        }
-      }
+  for (const img of imageMatches.slice().reverse()) {
+    const key = normalizeDocAssetKey(img.path);
+    if (key === null) continue;
+
+    const base64 = docResources?.[key];
+    const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (base64) {
+      const url = `data:${guessDocAssetMime(key)};base64,${base64}`;
+      processed = processed.replace(
+        new RegExp(escapedMatch, "g"),
+        `<img src="${url}" alt="${escapeHtml(
+          img.alt
+        )}" style="max-width: 100%; height: auto;" />`
+      );
+    } else {
+      processed = processed.replace(
+        new RegExp(escapedMatch, "g"),
+        `[图片加载失败: ${escapeHtml(img.path)}]`
+      );
+    }
   }
 
   // 3) 配置 marked 渲染器，让链接在新窗口打开

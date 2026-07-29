@@ -15,9 +15,24 @@
         </el-alert>
       </div>
 
-      <!-- Tab 切换 -->
-      <StyledTabs v-model="activeTab" :before-leave="beforeLeaveTab">
-        <el-tab-pane :label="$t('plugins.installedTab')" name="installed">
+      <!-- Tab 切换：分段式胶囊组，右侧搜索框与其同排 -->
+      <div class="plugin-tabs-row">
+        <KbTab v-model="activeTab" :items="tabItems" :close-title="$t('plugins.delete')"
+          @close="handleDeleteSourceById" @select="handleTabSelect" />
+
+        <div class="plugin-search">
+          <el-input v-model="searchKeyword" :placeholder="$t('plugins.quickPreview.searchPlaceholder')" clearable>
+            <template #prefix>
+              <el-icon>
+                <Search />
+              </el-icon>
+            </template>
+          </el-input>
+        </div>
+      </div>
+
+      <div class="plugin-tab-panes">
+        <div v-show="activeTab === 'installed'">
           <!-- 已安装插件配置表格 -->
           <div v-if="showSkeletonBySource['installed'] && activeTab === 'installed'" class="loading-skeleton">
             <el-skeleton :rows="8" animated />
@@ -30,91 +45,25 @@
             </el-empty>
           </div>
 
+          <div v-else-if="filteredInstalledPlugins.length === 0" class="empty">
+            <el-empty :description="$t('plugins.quickPreview.noSearchResult')" :image-size="100" />
+          </div>
+
           <!-- 已安装：布局与商店一致 -->
           <div v-else>
             <transition-group name="fade-in-list" tag="div" class="plugin-grid"
               :class="{ 'plugin-grid-android': uiStore.isCompact }">
-              <el-card v-for="plugin in installedPlugins" :key="plugin.id"
-                :class="['plugin-card', appBackgroundCardClass]" shadow="hover"
-                @click="viewPluginDetails(plugin)">
-                <template v-if="uiStore.isCompact">
-                  <div class="plugin-android-icon">
-                    <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
-                      <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
-                    </div>
-                    <div v-else-if="isIconLoading(plugin)" class="plugin-icon-placeholder plugin-icon-loading">
-                      <el-icon class="spin">
-                        <Loading />
-                      </el-icon>
-                    </div>
-                    <div v-else class="plugin-icon-placeholder">
-                      <el-icon>
-                        <Grid />
-                      </el-icon>
-                    </div>
-                  </div>
-                  <div class="plugin-android-title">
-                    <h3>{{ pluginName(plugin) }}</h3>
-                  </div>
-                </template>
-                <div v-else class="plugin-header">
-                  <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
-                    <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
-                  </div>
-                  <div v-else-if="isIconLoading(plugin)" class="plugin-icon-placeholder plugin-icon-loading">
-                    <el-icon class="spin">
-                      <Loading />
-                    </el-icon>
-                  </div>
-                  <div v-else class="plugin-icon-placeholder">
-                    <el-icon>
-                      <Grid />
-                    </el-icon>
-                  </div>
-                  <div class="plugin-title">
-                    <h3>{{ pluginName(plugin) }}</h3>
-                    <p class="plugin-desp">{{ pluginDescription(plugin) || $t('plugins.noDescription') }}</p>
-                  </div>
-                </div>
-
-                <div v-if="uiStore.isCompact" class="plugin-info plugin-info--marquee">
-                  <div class="plugin-info-track">
-                    <div class="plugin-info-group">
-                      <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
-                      <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
-                      <PluginLabelTags :labels="plugin.labels ?? []" size="small" />
-                    </div>
-                    <div class="plugin-info-group" aria-hidden="true">
-                      <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
-                      <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
-                      <PluginLabelTags :labels="plugin.labels ?? []" size="small" />
-                    </div>
-                  </div>
-                </div>
-                <div v-else class="plugin-info">
-                  <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
-                  <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
-                  <PluginLabelTags :labels="plugin.labels ?? []" size="small" />
-                </div>
-
-                <div class="plugin-footer">
-                  <el-button type="danger" size="small" @click.stop="handleDelete(plugin)">
-                    {{ $t('plugins.uninstall') }}
-                  </el-button>
-                </div>
-              </el-card>
+              <PluginGridCard v-for="plugin in filteredInstalledPlugins" :key="plugin.id"
+                :card-class="appBackgroundCardClass" :name="pluginName(plugin)" :version="plugin.version"
+                :icon-src="getPluginIconSrc(plugin)" :icon-loading="isIconLoading(plugin)"
+                :update-available="hasKnownUpdateFor(plugin.id, plugin.version)"
+                @click="openDetailDialog(plugin)" v-on="quickPreview.cardListeners(plugin)" />
             </transition-group>
           </div>
-        </el-tab-pane>
+        </div>
+
         <!-- 商店源：按"源名称"动态生成 tab；每个 tab 只显示该源的数据 -->
-        <el-tab-pane v-for="s in storeSourcesToRender" :key="s.id" :name="storeTabName(s.id)">
-          <template #label>
-            <span>{{ pluginSourceDisplayName(s) }}</span>
-            <el-icon v-if="s.id !== OFFICIAL_PLUGIN_SOURCE_ID" class="tab-close-icon"
-              @click.stop="handleDeleteSource(s)">
-              <Close />
-            </el-icon>
-          </template>
+        <div v-for="s in storeSourcesToRender" :key="s.id" v-show="activeTab === storeTabName(s.id)">
           <!-- 插件列表（300ms 延迟显示骨架屏，避免快速刷新时闪屏） -->
           <div v-if="showSkeletonBySource[s.id]" class="loading-skeleton">
             <div v-if="uiStore.isCompact" class="skeleton-grid skeleton-grid-android">
@@ -167,149 +116,20 @@
             <el-empty :description="$t('plugins.noPluginsInSource', { name: pluginSourceDisplayName(s) })" />
           </div>
 
+          <div v-else-if="filteredStorePlugins(s.id).length === 0" class="empty">
+            <el-empty :description="$t('plugins.quickPreview.noSearchResult')" :image-size="100" />
+          </div>
+
           <transition-group v-else name="fade-in-list" tag="div" class="plugin-grid"
             :class="{ 'plugin-grid-android': uiStore.isCompact }">
-            <el-card v-for="plugin in getStorePlugins(s.id)" :key="plugin.id"
-              :class="['plugin-card', appBackgroundCardClass]" shadow="hover"
-              @click="viewPluginDetails(plugin)">
-              <template v-if="uiStore.isCompact">
-                <div class="plugin-android-icon">
-                  <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
-                    <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
-                  </div>
-                  <div v-else-if="isIconLoading(plugin)" class="plugin-icon-placeholder plugin-icon-loading">
-                    <el-icon class="spin">
-                      <Loading />
-                    </el-icon>
-                  </div>
-                  <div v-else class="plugin-icon-placeholder">
-                    <el-icon>
-                      <Grid />
-                    </el-icon>
-                  </div>
-                </div>
-                <div class="plugin-android-title">
-                  <h3>{{ pluginName(plugin) }}</h3>
-                </div>
-              </template>
-              <div v-else class="plugin-header">
-                <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
-                  <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
-                </div>
-                <div v-else-if="isIconLoading(plugin)" class="plugin-icon-placeholder plugin-icon-loading">
-                  <el-icon class="spin">
-                    <Loading />
-                  </el-icon>
-                </div>
-                <div v-else class="plugin-icon-placeholder">
-                  <el-icon>
-                    <Grid />
-                  </el-icon>
-                </div>
-                <div class="plugin-title">
-                  <h3>{{ pluginName(plugin) }}</h3>
-                  <p class="plugin-desp">{{ pluginDescription(plugin) || $t('plugins.noDescription') }}</p>
-                </div>
-              </div>
-
-              <div v-if="uiStore.isCompact" class="plugin-info plugin-info--marquee">
-                <div class="plugin-info-track">
-                  <div class="plugin-info-group">
-                    <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
-                    <el-tag v-if="plugin.installedVersion" type="success" size="small">{{
-                      $t('plugins.installedVersion', { version: plugin.installedVersion }) }}</el-tag>
-                    <el-tag v-else type="warning" size="small">{{ $t('plugins.notInstalled') }}</el-tag>
-                    <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger"
-                      size="small">{{
-                        $t('plugins.canUpdate') }}</el-tag>
-                    <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
-                    <PluginLabelTags :labels="plugin.labels ?? []" size="small" />
-                  </div>
-                  <div class="plugin-info-group" aria-hidden="true">
-                    <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
-                    <el-tag v-if="plugin.installedVersion" type="success" size="small">{{
-                      $t('plugins.installedVersion', { version: plugin.installedVersion }) }}</el-tag>
-                    <el-tag v-else type="warning" size="small">{{ $t('plugins.notInstalled') }}</el-tag>
-                    <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger"
-                      size="small">{{
-                        $t('plugins.canUpdate') }}</el-tag>
-                    <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
-                    <PluginLabelTags :labels="plugin.labels ?? []" size="small" />
-                  </div>
-                </div>
-              </div>
-              <div v-else class="plugin-info">
-                <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
-                <el-tag v-if="plugin.installedVersion" type="success" size="small">{{ $t('plugins.installedVersion', {
-                  version: plugin.installedVersion
-                }) }}</el-tag>
-                <el-tag v-else type="warning" size="small">{{ $t('plugins.notInstalled') }}</el-tag>
-                <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger" size="small">{{
-                  $t('plugins.canUpdate') }}</el-tag>
-                <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
-                <PluginLabelTags :labels="plugin.labels ?? []" size="small" />
-              </div>
-
-              <div class="plugin-footer">
-                <el-button v-if="!plugin.installedVersion" type="primary" size="small" class="plugin-store-install-btn"
-                  :class="{ 'plugin-store-install-btn--progress': isInstalling(plugin.id) }"
-                  :disabled="isInstalling(plugin.id)" @click.stop="handleStoreInstall(plugin)">
-                  <span v-if="isInstalling(plugin.id)" class="plugin-store-install-btn__fill-wrap">
-                    <span class="plugin-store-install-btn__fill"
-                      :style="{ width: `${storeInstallPercentClamped(plugin)}%` }" />
-                    <span class="plugin-store-install-btn__label">{{
-                      t('plugins.installingWithPercent', { percent: storeInstallPercentClamped(plugin) })
-                      }}</span>
-                  </span>
-                  <span v-else>{{ $t('plugins.install') }}</span>
-                </el-button>
-                <el-button v-else-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="warning"
-                  size="small" class="plugin-store-install-btn"
-                  :class="{ 'plugin-store-install-btn--progress': isInstalling(plugin.id) }"
-                  :disabled="isInstalling(plugin.id)" @click.stop="handleStoreInstall(plugin)">
-                  <span v-if="isInstalling(plugin.id)" class="plugin-store-install-btn__fill-wrap">
-                    <span class="plugin-store-install-btn__fill"
-                      :style="{ width: `${storeInstallPercentClamped(plugin)}%` }" />
-                    <span class="plugin-store-install-btn__label">{{
-                      t('plugins.updatingWithPercent', { percent: storeInstallPercentClamped(plugin) })
-                      }}</span>
-                  </span>
-                  <span v-else>{{ $t('plugins.update') }}</span>
-                </el-button>
-                <el-button v-else-if="plugin.installedVersion === plugin.version" type="info" plain disabled
-                  size="small" class="plugin-store-install-btn plugin-store-install-btn--installed-only" tabindex="-1">
-                  {{ $t('plugins.installed') }}
-                </el-button>
-                <el-button v-else size="small" class="plugin-store-install-btn"
-                  :class="{ 'plugin-store-install-btn--progress': isInstalling(plugin.id) }"
-                  :disabled="isInstalling(plugin.id)" @click.stop="handleStoreInstall(plugin, true)">
-                  <span v-if="isInstalling(plugin.id)" class="plugin-store-install-btn__fill-wrap">
-                    <span class="plugin-store-install-btn__fill"
-                      :style="{ width: `${storeInstallPercentClamped(plugin)}%` }" />
-                    <span class="plugin-store-install-btn__label">{{
-                      t('plugins.reinstallingWithPercent', { percent: storeInstallPercentClamped(plugin) })
-                      }}</span>
-                  </span>
-                  <span v-else>{{ $t('plugins.reinstall') }}</span>
-                </el-button>
-              </div>
-            </el-card>
+            <PluginGridCard v-for="plugin in filteredStorePlugins(s.id)" :key="plugin.id"
+              :card-class="appBackgroundCardClass" :name="pluginName(plugin)" :version="plugin.version"
+              :icon-src="getPluginIconSrc(plugin)" :icon-loading="isIconLoading(plugin)"
+              :update-available="isUpdateAvailable(plugin.installedVersion, plugin.version)"
+              @click="openDetailDialog(plugin)" v-on="quickPreview.cardListeners(plugin)" />
           </transition-group>
-        </el-tab-pane>
-
-        <!-- 添加源 tab -->
-        <el-tab-pane name="add-source">
-          <template #label>
-            <el-icon style="margin-right: 4px;">
-              <Plus />
-            </el-icon>
-            {{ $t('plugins.addSourceTab') }}
-          </template>
-          <div class="add-source-content">
-            <el-empty :description="$t('plugins.addSourceHint')" />
-          </div>
-        </el-tab-pane>
-      </StyledTabs>
+        </div>
+      </div>
     </div>
 
     <!-- 商店源管理 -->
@@ -386,6 +206,29 @@
       </template>
     </el-dialog>
 
+    <!-- 桌面 hover 悬浮快捷预览：贴卡片弹出，跟随卡片翻转/贴边定位 -->
+    <Teleport to="body">
+      <div v-if="quickPreview.visible.value && !quickPreview.compact.value"
+        :ref="(el) => (quickPreview.panelRef.value = (el as HTMLElement | null))" :style="quickPreview.panelStyle.value"
+        v-on="quickPreview.panelListeners" @click="handleQuickPreviewOpenDetail">
+        <PluginQuickPreviewPanel v-if="quickPreviewPlugin" :plugin="quickPreviewPlugin" :icon-src="quickPreviewIconSrc"
+          :images="quickPreviewImages" :empty-reason="quickPreviewEmptyReason"
+          :update-available-version="quickPreviewUpdateVersion" />
+      </div>
+    </Teleport>
+
+    <!-- 紧凑端长按：同一张面板以底部抽屉形态展现 -->
+    <el-drawer v-if="quickPreview.compact.value" :model-value="quickPreview.visible.value" direction="btt" size="auto"
+      :with-header="false" append-to-body class="quick-preview-drawer"
+      @update:model-value="(v) => (v ? null : quickPreview.close())" @click="handleQuickPreviewOpenDetail">
+      <PluginQuickPreviewPanel v-if="quickPreviewPlugin" :plugin="quickPreviewPlugin" :icon-src="quickPreviewIconSrc"
+        :images="quickPreviewImages" :empty-reason="quickPreviewEmptyReason"
+        :update-available-version="quickPreviewUpdateVersion" class="quick-preview-drawer-panel" />
+    </el-drawer>
+
+    <!-- 插件/源详情：弹窗形式，不再走独立路由 -->
+    <PluginDetailDialog v-model:visible="detailDialogVisible" :target="detailDialogTarget" />
+
   </div>
 </template>
 
@@ -396,25 +239,31 @@ import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import {
   Refresh,
   Upload,
-  Grid,
   Plus,
+  Search,
   Setting,
   QuestionFilled,
-  Loading,
-  Close,
 } from "@element-plus/icons-vue";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import type { PluginManifestText } from "@kabegame/core/stores/plugins";
 import type { PluginLabel } from "@kabegame/core/stores/pluginLabels";
-import PluginLabelTags from "@kabegame/core/components/plugin/PluginLabelTags.vue";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
-import { useRouter } from "vue-router";
 import { invoke, listen } from "@/api/rpc";
 import { open } from "@tauri-apps/plugin-dialog";
 import { pickKgpgFile } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import PluginBrowserPageHeader from "@/components/header/PluginBrowserPageHeader.vue";
-import StyledTabs from "@/components/common/StyledTabs.vue";
+import KbTab, { type KbTabItem } from "@/components/common/KbTab.vue";
+import PluginGridCard from "@/components/plugin/PluginGridCard.vue";
+import PluginDetailDialog, {
+  type PluginDetailDialogTarget,
+} from "@/components/plugin/PluginDetailDialog.vue";
+import PluginQuickPreviewPanel, {
+  type QuickPreviewPluginLike,
+} from "@kabegame/core/components/plugin/PluginQuickPreviewPanel.vue";
+import type { PluginQuickPreviewImage } from "@kabegame/core/components/plugin/PluginQuickPreviewCarousel.vue";
+import { usePluginQuickPreview } from "@kabegame/core/composables/usePluginQuickPreview";
+import { guessDocAssetMime, humanizeDocAssetLabel } from "@kabegame/core/utils/docAssetKey";
 import { isUpdateAvailable } from "@/utils/version";
 import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -452,21 +301,13 @@ interface StorePluginResolved {
 }
 
 /** 与 Rust `StorePluginDownloadProgressEvent`（camelCase）一致 */
-interface StoreDownloadProgressPayload {
-  sourceId: string;
-  pluginId: string;
-  percent: number;
-  error?: string | null;
-}
-
 /** 已安装插件或商店插件，用于列表卡片、详情跳转等统一入参 */
 type PluginListItem = Plugin | StorePluginResolved;
 
 
 const pluginStore = usePluginStore();
 const { t } = useI18n();
-const { pluginName, pluginDescription } = usePluginManifestI18n();
-const router = useRouter();
+const { pluginName } = usePluginManifestI18n();
 
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
@@ -532,37 +373,6 @@ const importDialog = useModal();
 const selectedFilePath = ref<string | null>(null);
 const isRefreshing = ref(false);
 
-// 安装/更新进行中状态（避免“刷新感”，并防止重复点击）
-const installingById = ref<Record<string, boolean>>({});
-const isInstalling = (pluginId: string) => !!installingById.value[pluginId];
-const setInstalling = (pluginId: string, installing: boolean) => {
-  if (installing) {
-    installingById.value = { ...installingById.value, [pluginId]: true };
-    return;
-  }
-  const next = { ...installingById.value };
-  delete next[pluginId];
-  installingById.value = next;
-};
-
-/** 与后端 `source_id::plugin_id` 一致，用于下载进度事件与列表合并 */
-const storePluginProgressKey = (p: StorePluginResolved) => `${p.sourceId}::${p.id}`;
-
-/** 按源+插件维度的下载进度（事件优先，其次列表接口合并字段） */
-const installProgressByKey = ref<Record<string, number>>({});
-
-const storeInstallPercent = (p: StorePluginResolved): number => {
-  const k = storePluginProgressKey(p);
-  const fromEvent = installProgressByKey.value[k];
-  if (fromEvent != null) return fromEvent;
-  if (p.storeDownloadProgress != null) return p.storeDownloadProgress;
-  return 0;
-};
-
-const storeInstallPercentClamped = (p: StorePluginResolved) =>
-  Math.min(storeInstallPercent(p), 100);
-
-let unlistenStoreDownloadProgress: (() => void) | undefined;
 let unlistenPluginSourcesChanged: (() => void) | undefined;
 
 // 商店插件：按商店源分组缓存（每个 tab 独立显示/刷新）
@@ -586,12 +396,53 @@ const installedPlugins = computed(() => pluginStore.visiblePlugins);
 
 const storeTabName = (sourceId: string) => `store:${sourceId}`;
 const isStoreTab = (tabName: string) => tabName.startsWith("store:");
+
+/** 「添加源」伪 tab：点击只开弹窗，不作为可选中的内容页 */
+const ADD_SOURCE_TAB = "add-source";
+
+const tabItems = computed<KbTabItem[]>(() => [
+  {
+    name: "installed",
+    label: t("plugins.installedTab"),
+    count: installedPlugins.value.length,
+  },
+  ...storeSourcesToRender.value.map((s) => ({
+    name: storeTabName(s.id),
+    label: pluginSourceDisplayName(s),
+    // 未加载过的源不显示计数（0 会被误读成「这个源是空的」）
+    count: storeLoadedBySource.value[s.id] ? getStorePlugins(s.id).length : null,
+    closable: s.id !== OFFICIAL_PLUGIN_SOURCE_ID,
+  })),
+  {
+    name: ADD_SOURCE_TAB,
+    label: t("plugins.addSourceTab"),
+    icon: Plus,
+    iconOnly: true,
+    action: true,
+  },
+]);
 const activeStoreSourceId = computed(() => {
   if (!isStoreTab(activeTab.value)) return null;
   return activeTab.value.slice("store:".length);
 });
 
 const getStorePlugins = (sourceId: string) => storePluginsBySource.value[sourceId] || [];
+
+// ---- 搜索：只过滤网格展示，不影响 tab 计数与 installedVersion 合并等既有逻辑 ----
+const searchKeyword = ref("");
+
+const matchesSearch = (p: PluginListItem): boolean => {
+  const kw = searchKeyword.value.trim().toLowerCase();
+  if (!kw) return true;
+  const haystack = [p.id, pluginName(p), "baseUrl" in p ? p.baseUrl : null]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(kw);
+};
+
+const filteredInstalledPlugins = computed(() => installedPlugins.value.filter(matchesSearch));
+const filteredStorePlugins = (sourceId: string) => getStorePlugins(sourceId).filter(matchesSearch);
 
 const sourceAnalyticsItem = (sourceId: string) => {
   const source = sources.value.find((s) => s.id === sourceId);
@@ -616,14 +467,6 @@ const pluginAnalyticsItem = (plugin: PluginListItem) => {
       }
       : {}),
   };
-};
-
-const storePluginInstallAction = (
-  plugin: StorePluginResolved,
-  forceReinstall = false
-): "install" | "update" | "reinstall" => {
-  if (forceReinstall && plugin.installedVersion === plugin.version) return "reinstall";
-  return isUpdateAvailable(plugin.installedVersion, plugin.version) ? "update" : "install";
 };
 
 // 已安装版本索引：用于给商店列表补齐 installedVersion（按 id + version 判断状态）
@@ -690,6 +533,77 @@ const getPluginIconSrc = (p: PluginListItem) => {
 
   // 已安装：图标已在 Plugin.iconPngBase64 中，直接从 store 读取
   return pluginStore.pluginIconSrc(p.id) || null;
+};
+
+// ---- hover 快捷预览（走马灯示例图仅取已安装插件的 docResources，内存直读零成本；
+//      商店未安装条目若拉取示例图需要 get_plugin_detail 现下整包 .kgpg，
+//      hover 这种高频轻量交互不适合触发这种下载，故只做 best-effort：
+//      版本与已安装一致时复用本地已装包，否则提示"安装后可查看"）----
+const quickPreview = usePluginQuickPreview<PluginListItem>();
+
+/** 已安装 tab 里"已知有更新"仅在对应商店列表恰好已加载时才能判断，不主动为此发请求 */
+const hasKnownUpdateFor = (pluginId: string, installedVersion: string): boolean => {
+  for (const arr of Object.values(storePluginsBySource.value)) {
+    const match = (arr || []).find((p) => p.id === pluginId);
+    if (match && isUpdateAvailable(installedVersion, match.version)) return true;
+  }
+  return false;
+};
+
+/** 预览目标对应的"已安装 Plugin"：本身就是已安装插件，或商店条目版本与本地一致（同一份内容，复用零成本） */
+const quickPreviewInstalledMatch = computed<Plugin | null>(() => {
+  const item = quickPreview.activeItem.value;
+  if (!item) return null;
+  if (!("sourceId" in item)) return item as Plugin;
+  const store = item as StorePluginResolved;
+  if (store.installedVersion && store.installedVersion === store.version) {
+    return installedPlugins.value.find((p) => p.id === store.id) ?? null;
+  }
+  return null;
+});
+
+const quickPreviewPlugin = computed<QuickPreviewPluginLike | null>(() => quickPreview.activeItem.value);
+const quickPreviewIconSrc = computed(() => {
+  const item = quickPreview.activeItem.value;
+  return item ? getPluginIconSrc(item) : null;
+});
+
+const quickPreviewImages = computed<PluginQuickPreviewImage[]>(() => {
+  const resources = quickPreviewInstalledMatch.value?.docResources;
+  if (!resources) return [];
+  return Object.keys(resources)
+    .sort()
+    .map((key) => ({
+      key,
+      src: `data:${guessDocAssetMime(key)};base64,${resources[key]}`,
+      label: humanizeDocAssetLabel(key),
+    }));
+});
+
+const quickPreviewEmptyReason = computed<"no-assets" | "not-installed" | null>(() => {
+  if (quickPreviewImages.value.length > 0) return null;
+  return quickPreviewInstalledMatch.value ? "no-assets" : "not-installed";
+});
+
+const quickPreviewUpdateVersion = computed<string | null>(() => {
+  const item = quickPreview.activeItem.value;
+  if (!item) return null;
+  if ("sourceId" in item) {
+    const store = item as StorePluginResolved;
+    return isUpdateAvailable(store.installedVersion, store.version) ? store.version : null;
+  }
+  for (const arr of Object.values(storePluginsBySource.value)) {
+    const match = (arr || []).find((p) => p.id === item.id);
+    if (match && isUpdateAvailable(item.version, match.version)) return match.version;
+  }
+  return null;
+});
+
+const handleQuickPreviewOpenDetail = () => {
+  const item = quickPreview.activeItem.value;
+  if (!item) return;
+  quickPreview.close();
+  openDetailDialog(item);
 };
 
 // 商店列表：当 index.json 不再提供 iconUrl 时，从 .kgpg 固定头部通过 Range 读取 icon（后端返回 PNG bytes）
@@ -794,16 +708,6 @@ const refreshPluginIcons = async () => {
   // 已安装插件的图标已内嵌在 Plugin.iconPngBase64 中，无需单独加载
 };
 
-const markStorePluginInstalled = (pluginId: string, installedVersion: string) => {
-  const next: Record<string, StorePluginResolved[]> = {};
-  for (const [sourceId, arr] of Object.entries(storePluginsBySource.value)) {
-    next[sourceId] = (arr || []).map((p) =>
-      p.id === pluginId ? { ...p, installedVersion } : p
-    );
-  }
-  storePluginsBySource.value = next;
-};
-
 watch(
   [
     () => installedPlugins.value.map((p) => p.id).join("|"),
@@ -901,14 +805,15 @@ const addSource = () => {
   editSourceDialog.open();
 };
 
-// 阻止切换到“添加源”这个伪 tab（避免出现空白 tab 闪烁）
-// Element Plus: before-leave 返回 false 可以取消切换
-const beforeLeaveTab = (newName: string | number, _oldName: string | number) => {
-  if (newName === "add-source") {
-    addSource();
-    return false;
-  }
-  return true;
+/** 「添加源」是 action 项：KbTab 不会把它设为选中，只回调这里开弹窗 */
+const handleTabSelect = (name: string) => {
+  if (name === ADD_SOURCE_TAB) addSource();
+};
+
+const handleDeleteSourceById = (name: string) => {
+  const sourceId = name.slice("store:".length);
+  const source = sources.value.find((s) => s.id === sourceId);
+  if (source) void handleDeleteSource(source);
 };
 
 const editSource = (idx: number) => {
@@ -1274,114 +1179,29 @@ const handleImport = async () => {
   }
 };
 
-const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = false) => {
-  const action = storePluginInstallAction(plugin, forceReinstall);
-  trackPluginBrowserEvent("plugin_browser_store_plugin_install_attempt", {
-    action,
-    ...pluginAnalyticsItem(plugin),
-  });
-  if (await guardDesktopOnly("installPlugin", { needSuper: true })) return;
-  try {
-    // 之所以先下载，是为了避免实际版本不一致
-    const willUpdate = isUpdateAvailable(plugin.installedVersion, plugin.version);
-    const isReinstall = forceReinstall && plugin.installedVersion === plugin.version;
-    const title = isReinstall ? t("plugins.confirmReinstall") : willUpdate ? t("plugins.confirmUpdate") : t("plugins.confirmInstall");
-    const confirmButtonText = isReinstall ? t("plugins.reinstall") : willUpdate ? t("plugins.update") : t("plugins.install");
-    const displayName = pluginName(plugin);
-    const msg = isReinstall
-      ? `将重新安装 <b>${escapeHtml(displayName)}</b>（v${escapeHtml(plugin.version)}，${formatBytes(
-        plugin.sizeBytes
-      )}），是否继续？`
-      : willUpdate
-        ? `将从 <b>v${escapeHtml(plugin.installedVersion || "?")}</b> 更新为 <b>v${escapeHtml(
-          plugin.version
-        )}</b>（${formatBytes(plugin.sizeBytes)}），是否继续？`
-        : `将安装 <b>${escapeHtml(displayName)}</b>（v${escapeHtml(plugin.version)}，${formatBytes(
-          plugin.sizeBytes
-        )}），是否继续？`;
+/** 详情弹窗当前定位到的插件（null = 未打开）。安装/更新/卸载均在弹窗内完成，网格不再放操作按钮。 */
+const detailDialogVisible = ref(false);
+const detailDialogTarget = ref<PluginDetailDialogTarget | null>(null);
 
-    await ElMessageBox.confirm(msg, title, {
-      type: "warning",
-      dangerouslyUseHTMLString: true,
-      confirmButtonText,
-      cancelButtonText: t("common.cancel"),
-    });
-
-    setInstalling(plugin.id, true);
-    installProgressByKey.value = {
-      ...installProgressByKey.value,
-      [storePluginProgressKey(plugin)]: 0,
-    };
-    const installed = await invoke<Plugin>("install_from_store", {
-      sourceId: plugin.sourceId,
-      pluginId: plugin.id,
-    });
-
-    ElMessage.success(isReinstall ? t("plugins.reinstallSuccess") : willUpdate ? t("plugins.updateSuccess") : t("plugins.installSuccess"));
-    // plugin-added / plugin-updated event auto-updates the store
-
-    // 只更新本地 UI 状态：不触发整页/整 tab 列表刷新
-    markStorePluginInstalled(plugin.id, installed.version);
-    if (plugin.sourceId && installed.version && plugin.version !== installed.version) {
-      const list = storePluginsBySource.value[plugin.sourceId] || [];
-      storePluginsBySource.value = {
-        ...storePluginsBySource.value,
-        [plugin.sourceId]: list.map((p) => (p.id === plugin.id ? { ...p, version: installed.version } : p)),
-      };
-    }
-  } catch (error) {
-    if (error !== "cancel") {
-      console.error("商店安装失败:", error);
-      ElMessage.error(error instanceof Error ? error.message : "安装/更新失败");
-    }
-  } finally {
-    setInstalling(plugin.id, false);
-    const pk = storePluginProgressKey(plugin);
-    if (installProgressByKey.value[pk] !== undefined) {
-      const next = { ...installProgressByKey.value };
-      delete next[pk];
-      installProgressByKey.value = next;
-    }
-  }
-};
-
-const viewPluginDetails = (plugin: PluginListItem) => {
+const openDetailDialog = (plugin: PluginListItem) => {
   trackPluginBrowserEvent("plugin_browser_plugin_open", pluginAnalyticsItem(plugin));
-  // 跳转到插件详情页面，对 ID 进行 URL 编码以支持中文字符
-  // 商店/官方源条目：通过 mode=remote&sourceId 进入远程详情路径
-  const path = `/plugin-detail/${encodeURIComponent(plugin.id)}`;
   if ("downloadUrl" in plugin && plugin.downloadUrl) {
     const store = plugin as StorePluginResolved;
     // 已安装且与商店版本一致：走本地已安装详情与文档，不拉远程包
     if (store.installedVersion && store.installedVersion === store.version) {
-      router.push(path);
-      return;
-    }
-    router.push({
-      path,
-      query: {
+      detailDialogTarget.value = { pluginId: store.id, mode: "local" };
+    } else {
+      detailDialogTarget.value = {
+        pluginId: store.id,
         mode: "remote",
-        sourceId: store.sourceId ?? undefined,
+        sourceId: store.sourceId,
         version: store.version,
-      },
-    });
-    return;
+      };
+    }
+  } else {
+    detailDialogTarget.value = { pluginId: plugin.id, mode: "local" };
   }
-  router.push(path);
-};
-
-const handleDelete = async (plugin: Plugin) => {
-  trackPluginBrowserEvent("plugin_browser_plugin_delete_attempt", pluginAnalyticsItem(plugin));
-  if (await guardDesktopOnly("uninstallPlugin", { needSuper: true })) return;
-  try {
-    await ElMessageBox.confirm(t("plugins.confirmUninstall", { name: pluginName(plugin) }), t("plugins.confirmDelete"), {
-      type: "warning",
-    });
-    await pluginStore.deletePlugin(plugin.id);
-    ElMessage.success(t("plugins.pluginDeleted"));
-  } catch (error) {
-    // 用户取消
-  }
+  detailDialogVisible.value = true;
 };
 
 // 统一的刷新处理，根据当前 tab 执行不同逻辑
@@ -1479,20 +1299,7 @@ onMounted(async () => {
     try {
       const { isTauri } = await import("@tauri-apps/api/core");
       if (isTauri()) {
-        unlistenStoreDownloadProgress = await listen<StoreDownloadProgressPayload>(
-          "plugin-store-download-progress",
-          (event) => {
-            const { sourceId, pluginId, percent, error } = event.payload;
-            const k = `${sourceId}::${pluginId}`;
-            if (error) {
-              const next = { ...installProgressByKey.value };
-              delete next[k];
-              installProgressByKey.value = next;
-              return;
-            }
-            installProgressByKey.value = { ...installProgressByKey.value, [k]: percent };
-          }
-        );
+        // 下载进度事件现由 PluginDetailDialog.vue 自行订阅（安装/更新都在弹窗内完成）
         unlistenPluginSourcesChanged = await listen<{ sourceId?: string; name?: string }>(
           "plugin-sources-changed",
           () => {
@@ -1552,7 +1359,6 @@ watch(activeTab, async (tab, prevTab) => {
 });
 
 onUnmounted(() => {
-  unlistenStoreDownloadProgress?.();
   unlistenPluginSourcesChanged?.();
 });
 </script>
@@ -1598,175 +1404,17 @@ onUnmounted(() => {
     gap: 10px;
   }
 
+  /* 卡片本身（图标+名称+版本）的样式在 PluginGridCard.vue 里；这里只管网格布局 */
   .plugin-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 20px;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    gap: 12px;
   }
 
-  /* 安卓：2 列正方形；上/中/下固定比例，仅名称可省略，标签区可滚动（隐藏滚动条） */
+  /* 紧凑端：2 列 */
   .plugin-grid-android {
     grid-template-columns: repeat(2, 1fr);
     gap: 10px;
-
-    .plugin-card {
-      height: auto;
-      aspect-ratio: 1;
-      min-height: 0;
-      overflow: hidden;
-      --el-card-padding: 10px;
-
-      .el-card__body {
-        flex: 1;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        padding: 5px 6px;
-        box-sizing: border-box;
-        gap: 0;
-        overflow: hidden;
-      }
-
-      /* 图标区与标题区分开：图标占卡片内容区高度 40%，标题单独一行、字号 15px */
-      .plugin-android-icon {
-        flex: 0 0 40%;
-        min-height: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        overflow: hidden;
-
-        .plugin-icon,
-        .plugin-icon-placeholder {
-          width: clamp(40px, 52%, 56px);
-          height: clamp(40px, 52%, 56px);
-          border-radius: 8px;
-        }
-
-        .plugin-icon-placeholder {
-          font-size: 22px;
-        }
-      }
-
-      .plugin-android-title {
-        flex: 0 0 auto;
-        width: 100%;
-        min-width: 0;
-        text-align: center;
-        padding: 2px 4px 0;
-        box-sizing: border-box;
-
-        h3 {
-          margin: 0 !important;
-          font-size: 15px;
-          font-weight: 600;
-          line-height: 1.2;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          width: 100%;
-          max-width: 100%;
-        }
-      }
-
-      /* 单行标签：横向自动循环（双列无缝），不可手动滑动 */
-      .plugin-info {
-        flex: 0 0 auto;
-        width: 100%;
-        margin-bottom: 0 !important;
-        margin-top: 1px;
-        padding: 0;
-
-        .el-tag {
-          flex-shrink: 0;
-          margin: 0;
-          height: 13px;
-          padding: 0 3px;
-          font-size: 8px;
-          line-height: 11px;
-          border-radius: 3px;
-          box-sizing: border-box;
-          white-space: nowrap;
-        }
-
-        .el-tag .el-tag__content {
-          line-height: 11px;
-        }
-      }
-
-      .plugin-info--marquee {
-        overflow: hidden;
-        touch-action: none;
-        -webkit-user-select: none;
-        user-select: none;
-      }
-
-      .plugin-info-track {
-        display: flex;
-        flex-direction: row;
-        flex-wrap: nowrap;
-        width: max-content;
-        will-change: transform;
-        animation: plugin-info-marquee-android 16s linear infinite;
-
-        @media (prefers-reduced-motion: reduce) {
-          animation: none;
-        }
-      }
-
-      .plugin-info-group {
-        display: flex;
-        flex-flow: row nowrap;
-        align-items: center;
-        gap: 3px;
-        padding-right: 14px;
-        flex-shrink: 0;
-      }
-
-      @keyframes plugin-info-marquee-android {
-        0% {
-          transform: translateX(0);
-        }
-
-        100% {
-          transform: translateX(-50%);
-        }
-      }
-
-      .plugin-footer {
-        flex: 0 0 auto;
-        flex-shrink: 0;
-        flex-direction: column;
-        gap: 3px;
-        margin-top: auto;
-        padding-top: 3px;
-        border-top: 1px solid var(--anime-border, rgba(128, 128, 128, 0.2));
-
-        .el-button {
-          width: 100%;
-          margin: 0;
-          padding: 4px 6px;
-          font-size: 11px;
-        }
-      }
-
-      .plugin-store-install-btn {
-        min-width: 0;
-
-        &--progress {
-          padding: 3px 8px;
-        }
-
-        &__fill-wrap {
-          min-height: 18px;
-        }
-
-        &__label {
-          font-size: 10px;
-          line-height: 18px;
-        }
-      }
-    }
   }
 }
 
@@ -1796,212 +1444,36 @@ onUnmounted(() => {
   transition: transform 0.4s ease;
 }
 
-.plugin-card {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  border: 2px solid var(--anime-border);
-  cursor: pointer;
+/* 卡片自身样式（图标/名称/版本/更新角标）在 PluginGridCard.vue 的 scoped style 里 */
 
-  &:hover {
-    box-shadow: var(--anime-shadow-hover);
-    border-color: var(--anime-primary-light);
+/* 胶囊 tab 组（KbTab，样式自带）与搜索框同排 */
+.plugin-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 20px;
+  margin-bottom: 18px;
+}
+
+.plugin-search {
+  margin-left: auto;
+  width: 230px;
+  flex: none;
+
+  .el-input__wrapper {
+    border-radius: 10px;
+  }
+}
+
+/* 窄屏没有横向余量：搜索框换到 tab 组下方独占一行 */
+@media (max-width: 900px) {
+  .plugin-tabs-row {
+    flex-wrap: wrap;
   }
 
-  .plugin-header {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    margin-bottom: 12px;
-  }
-
-  .plugin-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: 8px;
-    overflow: hidden;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--anime-bg-secondary);
-
-    .el-image {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-    }
-
-    .el-image__inner {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-    }
-  }
-
-  .plugin-icon-placeholder {
-    width: 48px;
-    height: 48px;
-    border-radius: 12px;
-    background: linear-gradient(135deg, rgba(255, 107, 157, 0.2) 0%, rgba(167, 139, 250, 0.2) 100%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    color: var(--anime-primary);
-    font-size: 24px;
-
-    &.plugin-icon-loading {
-      background: var(--anime-bg-secondary);
-      color: var(--anime-text-regular);
-    }
-
-    .spin {
-      animation: icon-spin 1s linear infinite;
-    }
-  }
-
-  .plugin-title {
-    flex: 1;
-    min-width: 0;
-    user-select: text;
-    cursor: inherit;
-
-    h3 {
-      margin: 0 0 4px 0;
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--anime-text-primary);
-      user-select: text;
-      cursor: inherit;
-    }
-  }
-
-  .plugin-desp {
-    margin: 0;
-    font-size: 12px;
-    color: var(--anime-text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-    user-select: text;
-    cursor: text;
-  }
-
-  .plugin-actions {
-    flex-shrink: 0;
-  }
-
-  .plugin-info {
-    margin-bottom: 12px;
-  }
-
-  .plugin-footer {
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
-    align-items: center;
-  }
-
-  .plugin-store-install-btn {
-    min-width: 132px;
-
-    &--progress {
-      position: relative;
-      overflow: hidden;
-      padding: 5px 14px;
-    }
-
-    &__fill-wrap {
-      position: relative;
-      display: block;
-      width: 100%;
-      min-width: 104px;
-      min-height: 22px;
-      border-radius: 4px;
-      overflow: hidden;
-      /* 未装填区域：略压暗，装填层从左盖上 */
-      background: rgba(0, 0, 0, 0.14);
-    }
-
-    /* 从左向右装填（“水”） */
-    &__fill {
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      width: 0;
-      border-radius: 0 3px 3px 0;
-      pointer-events: none;
-      transition: width 0.22s ease-out;
-      z-index: 0;
-      background: linear-gradient(90deg,
-          rgba(255, 255, 255, 0.52) 0%,
-          rgba(255, 255, 255, 0.22) 100%);
-    }
-
-    &__label {
-      position: relative;
-      z-index: 1;
-      display: block;
-      font-size: 12px;
-      line-height: 22px;
-      text-align: center;
-      white-space: nowrap;
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-    }
-
-    &.el-button--warning {
-      .plugin-store-install-btn__fill {
-        background: linear-gradient(90deg,
-            rgba(255, 255, 255, 0.5) 0%,
-            rgba(255, 255, 255, 0.2) 100%);
-      }
-    }
-
-    /* 默认/浅色按钮：用主题色半透明作为装填 */
-    &.el-button--default {
-      .plugin-store-install-btn__fill-wrap {
-        background: rgba(0, 0, 0, 0.06);
-      }
-
-      .plugin-store-install-btn__fill {
-        background: linear-gradient(90deg,
-            var(--el-color-primary-light-5) 0%,
-            var(--el-color-primary-light-7) 100%);
-      }
-
-      .plugin-store-install-btn__label {
-        color: var(--el-text-color-primary);
-        text-shadow: none;
-      }
-    }
-
-    &--installed-only {
-      cursor: default;
-      pointer-events: none;
-    }
-  }
-
-  /* Tab 关闭按钮样式 */
-  .tab-close-icon {
-    margin-left: 8px;
-    font-size: 14px;
-    cursor: pointer;
-    opacity: 0.6;
-    transition: opacity 0.2s;
-
-    &:hover {
-      opacity: 1;
-      color: #f56c6c;
-    }
-  }
-
-  /* 禁用插件卡片上标签和按钮的初始展开动画 */
-  .el-tag {
-    animation: none !important;
-    transition: none !important;
+  .plugin-search {
+    margin-left: 0;
+    width: 100%;
   }
 }
 
@@ -2085,5 +1557,20 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--el-text-color-regular);
   word-break: break-all;
+}
+
+/* 紧凑端长按快捷预览：底部抽屉，面板铺满宽度、贴底圆角 */
+.quick-preview-drawer .el-drawer__body {
+  padding: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.quick-preview-drawer-panel {
+  width: 100% !important;
+  max-width: 420px;
+  border-radius: 18px 18px 0 0 !important;
+  box-shadow: none !important;
+  border: none !important;
 }
 </style>

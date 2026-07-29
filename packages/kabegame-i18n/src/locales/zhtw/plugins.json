@@ -52,13 +52,34 @@
   "detailDescriptionLabel": "描述",
   "detailLabelsLabel": "標籤",
   "pluginLabels": {
-    "authNeedCookie": { "name": "需要 Cookie", "desc": "此來源可能需要先在{surf}中登入取得 Cookie 才能爬取" },
-    "authNeedProxy": { "name": "需要代理", "desc": "此來源可能需要代理才能在中國大陸完整存取" },
-    "contentResMobile": { "name": "行動端", "desc": "提供行動端 / 直式解析度桌布" },
-    "contentResDesktop": { "name": "桌面端", "desc": "提供桌面端 / 橫式解析度桌布" },
-    "contentNsfw": { "name": "NSFW", "desc": "可能包含 NSFW / R-18 內容" },
-    "contentTypeVideo": { "name": "影片", "desc": "提供影片 / 動態桌布" },
-    "versionIncompatible": { "name": "版本不相容", "desc": "此外掛要求的應用程式版本高於目前已安裝版本" }
+    "authNeedCookie": {
+      "name": "需要 Cookie",
+      "desc": "此來源可能需要先在{surf}中登入取得 Cookie 才能爬取"
+    },
+    "authNeedProxy": {
+      "name": "需要代理",
+      "desc": "此來源可能需要代理才能在中國大陸完整存取"
+    },
+    "contentResMobile": {
+      "name": "行動端",
+      "desc": "提供行動端 / 直式解析度桌布"
+    },
+    "contentResDesktop": {
+      "name": "桌面端",
+      "desc": "提供桌面端 / 橫式解析度桌布"
+    },
+    "contentNsfw": {
+      "name": "NSFW",
+      "desc": "可能包含 NSFW / R-18 內容"
+    },
+    "contentTypeVideo": {
+      "name": "影片",
+      "desc": "提供影片 / 動態桌布"
+    },
+    "versionIncompatible": {
+      "name": "版本不相容",
+      "desc": "此外掛要求的應用程式版本高於目前已安裝版本"
+    }
   },
   "detailCrawlUrlLabel": "擷取網址",
   "detailCopyAction": "複製",
@@ -152,5 +173,16 @@
   "loadSourcesFailed": "載入商店源清單失敗",
   "officialSourceMissing": "找不到官方源，請重新啟動應用程式後再試",
   "cannotDeleteOfficialSource": "官方 GitHub Releases 源不可刪除",
-  "officialGithubReleaseSourceName": "官方 GitHub Releases 源"
+  "officialGithubReleaseSourceName": "官方 GitHub Releases 源",
+  "quickPreview": {
+    "loadingSamples": "正在讀取範例圖",
+    "noSampleImages": "這個來源沒帶範例圖",
+    "installToPreview": "安裝後可查看範例圖",
+    "prevImage": "上一張",
+    "nextImage": "下一張",
+    "canUpdateTo": "可更新至 {version}",
+    "viewDetails": "點擊查看詳情",
+    "searchPlaceholder": "搜尋來源名稱或站點",
+    "noSearchResult": "沒有符合的來源"
+  }
 }

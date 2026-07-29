@@ -51,8 +51,12 @@ deno task b -c kabegame --target x86_64    # macOS only: cross-compile for Intel
                                        # See cocs/build/MACOS_CROSS_BUILD.md.
 deno task b -c kabegame --mode android     # Build Android APK/AAB (mode-plugin injects --target aarch64 unless
                                        # --target/-t is passed; gen/android RustPlugin.kt only has arm64 flavors)
-bash scripts/build-web.sh              # Web release (demo.kabegame.com): host builds ALL JS (vite dist-kabegame
+bash scripts/build-web.sh              # Web release (demo.kabegame.com): host builds ALL JS (vite dist-kabegame-web
                                        # + plugin .kgpg), docker (linux/amd64) builds Rust only via --skip vue.
+                                       # Frontend output dirs are per-mode and must stay separate: web →
+                                       # dist-kabegame-web/ (embedded by include_dir! in src/web_assets.rs),
+                                       # desktop/android → dist-kabegame/. Sharing one dir lets a desktop build
+                                       # silently overwrite the web bundle between the host and container steps.
                                        # NEVER run JS builds inside the x86_64-emulated container: Rosetta-for-Linux
                                        # truncates every V8 double to its integer part (0.96→0) with zero errors,
                                        # silently corrupting sass/rollup output. See the script header & compose file.
@@ -130,10 +134,17 @@ deno task build:deno             # Build the deno CLI from third/deno sources (p
 
 ### Plan & change-description format
 When writing a plan or describing code changes, organize by explicit **points** (明确的点). Under each point, group items under **新增 / 修改 / 删除** (Add / Modify / Delete), each with an optional indented note. Keep 现状 separate from the change:
+- **总体设计思路** comes **first**, before 现状锚点. Prose, not a checklist — state the shape of the solution in a few paragraphs: what the new mechanism is, where the boundary between components moves, which direction data flows after the change, and the load-bearing decisions with their rationale. A reader must be able to stop after this section and correctly explain the design. Do not open with 现状 or with point 1.
 - **现状** sections show real, excerpted code blocks (not just `file:line`), annotated with comments describing **what the code is today** (not what will change).
 - **实施方案** points carry the target code blocks, annotated to mark exactly what is added/modified/deleted.
 
 ````md
+### 总体设计思路
+把 `Foo` 的进度从「writer 自己算」改成「writer 上报、reader 汇总」:writer 只在 `Foo`
+里累加已写字节,不再持有 UI 相关状态;汇总与展示全部下沉到 reader 侧。
+关键决策:进度字段放在 `Foo` 而非新建并行结构,因为 `Foo` 已经是该数据的唯一属主,
+新建结构会带来两份状态需要同步。
+
 ### 现状锚点
 **a. `Foo`**(`foo.rs:64`)
 ```rust

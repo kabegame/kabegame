@@ -1,9 +1,12 @@
 // metadata 迁移引擎（裸 deno_core JsRuntime）与 V8 爬虫运行时。
 // 两者均依赖 deno_core（Cargo.toml 已按 not(ios) 门控），故 iOS 排除。
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
-pub mod metadata_migration;
+pub mod archive;
+pub mod doc_assets;
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod ffmpeg;
+#[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+pub mod metadata_migration;
 // 嵌入式 V8 后端：桌面 + Android（仅 iOS 不支持）。
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod v8;
@@ -206,7 +209,8 @@ pub struct Plugin {
     /// 脚本内容及后端类型，仅后端使用，不序列化到前端
     #[serde(skip)]
     pub script: PluginScript,
-    /// doc_root 下的非 .md 资源文件（图片等），键为相对路径，值为 base64 编码
+    /// 文档资源文件（图片等）：键为文档引用串经 normalize_doc_asset_key 归一化后的结果，
+    /// 值为 base64 编码
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -2045,9 +2049,6 @@ impl PluginManager {
         // ZIP 解析放到 blocking 线程池（单次遍历读取所有条目）
         let zip_path = path.to_path_buf();
         let plugin_id_for_zip = plugin_id.clone();
-        const DOC_RESOURCE_MAX_FILE_SIZE: usize = 2 * 1024 * 1024; // 2 MB per file
-        const DOC_RESOURCE_MAX_TOTAL_SIZE: usize = 10 * 1024 * 1024; // 10 MB total
-
         let (
             zip_manifest,
             config,
@@ -2083,13 +2084,7 @@ impl PluginManager {
             if !is_v3 {
                 return Err("只支持 kbPackageVersion >= 3 的 package.json 插件格式".to_string());
             }
-            load_plugin_v3_from_zip(
-                &mut archive,
-                pkg.as_ref().unwrap(),
-                &plugin_id_for_zip,
-                DOC_RESOURCE_MAX_FILE_SIZE,
-                DOC_RESOURCE_MAX_TOTAL_SIZE,
-            )
+            load_plugin_v3_from_zip(&mut archive, pkg.as_ref().unwrap(), &plugin_id_for_zip)
         })
         .await
         .map_err(|e| format!("Failed to join ZIP parser task: {}", e))??;
@@ -2180,8 +2175,6 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
     archive: &mut ZipArchive<R>,
     pkg: &serde_json::Value,
     plugin_id: &str,
-    doc_resource_max_file_size: usize,
-    doc_resource_max_total_size: usize,
 ) -> Result<
     (
         PluginManifest,
@@ -2279,8 +2272,10 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
     };
 
     let mut doc_entries: Vec<(String, String)> = Vec::new();
+    let mut doc_md_by_path: HashMap<String, String> = HashMap::new();
     let mut doc_resource_entries: Vec<(String, Vec<u8>)> = Vec::new();
     let mut doc_resource_total_size: usize = 0;
+    let use_doc_asset_fallback = !pkg_obj.contains_key("kbDocAssets");
 
     if let Some(doc_map) = pkg_obj.get("kbDoc").and_then(|v| v.as_object()) {
         for (lang_key, md_path_val) in doc_map {
@@ -2302,51 +2297,56 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
                 s
             };
 
-            let md_dir = std::path::Path::new(md_path)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            let local_refs = extract_doc_local_refs(&md_text, &md_dir);
-            let mut rewritten_md = md_text.clone();
-
-            for (normalized_path, original_ref) in &local_refs {
-                match archive.by_name(normalized_path) {
-                    Ok(mut res_f) => {
-                        let mut bytes = Vec::new();
-                        res_f.read_to_end(&mut bytes).map_err(|e| {
-                            format!("读取文档资源 \"{}\" 失败: {}", normalized_path, e)
-                        })?;
-
-                        let res_size = bytes.len();
-                        if res_size > doc_resource_max_file_size
-                            || doc_resource_total_size + res_size > doc_resource_max_total_size
-                        {
-                            continue;
-                        }
-                        doc_resource_total_size += res_size;
-
-                        let already_exists = doc_resource_entries
-                            .iter()
-                            .any(|(p, _)| p == normalized_path);
-                        if already_exists {
-                            rewritten_md = rewritten_md.replace(original_ref, normalized_path);
-                        } else {
-                            doc_resource_entries.push((normalized_path.clone(), bytes));
-                            rewritten_md = rewritten_md.replace(original_ref, normalized_path);
-                        }
-                    }
-                    Err(_) => {
-                        return Err(format!(
-                            "文档 \"{}\" 引用的资源 \"{}\" 不在包内",
-                            md_path, normalized_path
-                        ));
-                    }
-                }
+            if use_doc_asset_fallback {
+                doc_md_by_path.insert(md_path.to_string(), md_text.clone());
             }
-
-            doc_entries.push((lang_key.clone(), rewritten_md));
+            doc_entries.push((lang_key.clone(), md_text));
         }
+    }
+
+    let mut read_doc_md = |path: &str| doc_md_by_path.get(path).cloned();
+    let mut doc_asset_index: Vec<(String, String)> =
+        doc_assets::build_doc_asset_index(pkg, &mut read_doc_md)
+            .into_iter()
+            .collect();
+    doc_asset_index.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    for (resource_key, zip_path) in doc_asset_index {
+        if let Err(error) = validate_kb_rel_path(&zip_path) {
+            eprintln!("[WARN] 文档资源 {resource_key:?} 的包内路径非法，已跳过: {error}");
+            continue;
+        }
+        let mut resource_file = match archive.by_name(&zip_path) {
+            Ok(file) => file,
+            Err(_) => {
+                eprintln!(
+                    "[WARN] 文档资源 {resource_key:?} 引用的包内条目 {zip_path:?} 不存在，已跳过"
+                );
+                continue;
+            }
+        };
+        let mut bytes = Vec::new();
+        resource_file
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("读取文档资源 \"{}\" 失败: {}", zip_path, error))?;
+
+        let resource_size = bytes.len();
+        if resource_size > doc_assets::DOC_ASSET_MAX_FILE_SIZE {
+            eprintln!(
+                "[WARN] 文档资源 {resource_key:?} 超过单文件 2 MB 上限，已跳过: {resource_size} bytes"
+            );
+            continue;
+        }
+        if doc_resource_total_size.saturating_add(resource_size)
+            > doc_assets::DOC_ASSET_MAX_TOTAL_SIZE
+        {
+            eprintln!(
+                "[WARN] 文档资源总量超过 10 MB 上限，已跳过 {resource_key:?}: {resource_size} bytes"
+            );
+            continue;
+        }
+        doc_resource_total_size += resource_size;
+        doc_resource_entries.push((resource_key, bytes));
     }
 
     let doc: Option<PluginDoc> = if doc_entries.is_empty() {
@@ -3465,8 +3465,8 @@ mod tests {
     fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let buf = std::io::Cursor::new(Vec::new());
         let mut writer = zip::ZipWriter::new(buf);
-        let opts =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         for (name, data) in entries {
             writer.start_file(*name, opts).unwrap();
             writer.write_all(data).unwrap();
@@ -3629,6 +3629,73 @@ mod tests {
     // ── v3 zip 装载测试 ──
 
     #[test]
+    fn test_v3_doc_assets_keep_markdown_verbatim_and_use_normalized_keys() {
+        let pkg = serde_json::json!({
+            "name": "t",
+            "version": "1.0.0",
+            "kbPackageVersion": 3,
+            "kbBackend": "v8",
+            "main": "main.js",
+            "kbDoc": {"default": "doc_root/doc.md"},
+            "kbDocAssets": {
+                "./images/home.png": "doc_root/images/home.png"
+            }
+        });
+        let md = "# Doc\n![](./images/home.png)\n`./images/home.png`\n";
+        let image = b"png bytes";
+        let data = make_zip(&[
+            (
+                "package.json",
+                serde_json::to_string_pretty(&pkg).unwrap().as_bytes(),
+            ),
+            ("main.js", b"export async function crawl() {}"),
+            ("doc_root/doc.md", md.as_bytes()),
+            ("doc_root/images/home.png", image),
+        ]);
+
+        let mut archive = open_zip(&data);
+        let (_, _, doc, _, _, _, _, _, resources, _, _) =
+            load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
+
+        assert_eq!(
+            doc.as_ref()
+                .and_then(|docs| docs.get("default"))
+                .map(String::as_str),
+            Some(md)
+        );
+        assert_eq!(
+            resources,
+            vec![("images/home.png".to_string(), image.to_vec())]
+        );
+    }
+
+    #[test]
+    fn test_v3_missing_doc_asset_warns_and_does_not_reject_plugin() {
+        let pkg = serde_json::json!({
+            "name": "t",
+            "version": "1.0.0",
+            "kbPackageVersion": 3,
+            "kbBackend": "v8",
+            "main": "main.js",
+            "kbDocAssets": {
+                "./missing.png": "doc_root/missing.png"
+            }
+        });
+        let data = make_zip(&[
+            (
+                "package.json",
+                serde_json::to_string_pretty(&pkg).unwrap().as_bytes(),
+            ),
+            ("main.js", b"export async function crawl() {}"),
+        ]);
+
+        let mut archive = open_zip(&data);
+        let (_, _, _, _, _, _, _, _, resources, _, _) =
+            load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
+        assert!(resources.is_empty());
+    }
+
+    #[test]
     fn test_v3_load_with_v8_backend() {
         let pkg = serde_json::json!({
             "name": "test-v3",
@@ -3650,13 +3717,7 @@ mod tests {
 
         let plugin_id = "test-v3";
         let mut archive = open_zip(&data);
-        let result = load_plugin_v3_from_zip(
-            &mut archive,
-            &pkg,
-            plugin_id,
-            2 * 1024 * 1024,
-            10 * 1024 * 1024,
-        );
+        let result = load_plugin_v3_from_zip(&mut archive, &pkg, plugin_id);
         let (
             manifest,
             _config,
@@ -3693,13 +3754,7 @@ mod tests {
 
         let plugin_id = "t";
         let mut archive = open_zip(&data);
-        let result = load_plugin_v3_from_zip(
-            &mut archive,
-            &pkg,
-            plugin_id,
-            2 * 1024 * 1024,
-            10 * 1024 * 1024,
-        );
+        let result = load_plugin_v3_from_zip(&mut archive, &pkg, plugin_id);
         assert!(result.is_err(), "missing main ref should error");
         let err = result.unwrap_err();
         assert!(err.contains("不在包内"), "error: {}", err);
@@ -3739,8 +3794,7 @@ mod tests {
             ("metadata_migrations/migrate.js", mig_source.as_bytes()),
         ]);
         let mut archive = open_zip(&data);
-        let (.., mig) =
-            load_plugin_v3_from_zip(&mut archive, &pkg, "t", 2 << 20, 10 << 20).unwrap();
+        let (.., mig) = load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
         assert_eq!(mig.as_deref(), Some(mig_source));
     }
 
@@ -3762,7 +3816,7 @@ mod tests {
             ("main.js", b"export async function crawl() {}"),
         ]);
         let mut archive = open_zip(&data);
-        let err = load_plugin_v3_from_zip(&mut archive, &pkg, "t", 2 << 20, 10 << 20).unwrap_err();
+        let err = load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap_err();
         assert!(err.contains("不在包内"), "error: {}", err);
     }
 
@@ -3785,7 +3839,7 @@ mod tests {
             ("metadata_migrations/migrate.rhai", b"fn migrate(m) { m }"),
         ]);
         let mut archive = open_zip(&data);
-        let err = load_plugin_v3_from_zip(&mut archive, &pkg, "t", 2 << 20, 10 << 20).unwrap_err();
+        let err = load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap_err();
         assert!(err.contains(".js"), "error: {}", err);
     }
 
@@ -3808,8 +3862,7 @@ mod tests {
             ("main.js", b"export async function crawl() {}"),
         ]);
         let mut archive = open_zip(&data);
-        let (.., mig) =
-            load_plugin_v3_from_zip(&mut archive, &pkg, "t", 2 << 20, 10 << 20).unwrap();
+        let (.., mig) = load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
         assert!(mig.is_none());
     }
 
@@ -3833,13 +3886,7 @@ mod tests {
 
         let plugin_id = "t";
         let mut archive = open_zip(&data);
-        let result = load_plugin_v3_from_zip(
-            &mut archive,
-            &pkg,
-            plugin_id,
-            2 * 1024 * 1024,
-            10 * 1024 * 1024,
-        );
+        let result = load_plugin_v3_from_zip(&mut archive, &pkg, plugin_id);
         assert!(result.is_err(), "invalid kbBackend should error");
     }
 
