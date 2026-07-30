@@ -2,7 +2,8 @@ use crate::ast::{DynamicListEntry, ListEntry, Query, SqlExpr};
 use crate::validate::{ValidateConfig, ValidateError, ValidateErrorKind};
 
 use sqlparser::ast::{
-    Insert, Join, ObjectName, Query as SqlQuery, SetExpr, Statement, TableFactor, TableWithJoins,
+    Insert, Join, ObjectName, Query as SqlQuery, SetExpr, Statement, TableFactor, TableObject,
+    TableWithJoins, Update, UpdateTableFromKind,
 };
 use sqlparser::dialect::SQLiteDialect;
 use sqlparser::parser::Parser;
@@ -280,22 +281,25 @@ fn literal_tables_in_stmt(stmt: &Statement) -> Vec<String> {
     match stmt {
         Statement::Query(q) => collect_tables_query(q, &mut tables),
         Statement::Insert(Insert {
-            table_name, source, ..
+            table, source, ..
         }) => {
-            tables.push(object_name_to_string(table_name));
+            if let TableObject::TableName(table_name) = table {
+                tables.push(object_name_to_string(table_name));
+            }
             if let Some(src) = source {
                 collect_tables_query(src, &mut tables);
             }
         }
-        Statement::Update {
-            table,
-            from,
-            selection: _,
-            ..
-        } => {
+        Statement::Update(Update { table, from, .. }) => {
             collect_tables_table_with_joins(table, &mut tables);
             if let Some(from) = from {
-                collect_tables_table_with_joins(from, &mut tables);
+                let from = match from {
+                    UpdateTableFromKind::BeforeSet(from)
+                    | UpdateTableFromKind::AfterSet(from) => from,
+                };
+                for table in from {
+                    collect_tables_table_with_joins(table, &mut tables);
+                }
             }
         }
         Statement::Delete(d) => {
@@ -381,7 +385,8 @@ fn collect_tables_table_factor(tf: &TableFactor, out: &mut Vec<String>) {
 
 fn object_name_to_string(n: &ObjectName) -> String {
     n.0.iter()
-        .map(|i| i.value.clone())
+        .filter_map(|part| part.as_ident())
+        .map(|ident| ident.value.clone())
         .collect::<Vec<_>>()
         .join(".")
 }

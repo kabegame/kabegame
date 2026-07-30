@@ -39,13 +39,12 @@ impl Loader for Json5Loader {
 }
 
 fn map_json5_error(e: ::json5::Error, path: Option<PathBuf>) -> LoadError {
-    match e {
-        ::json5::Error::Message { msg, location } => LoadError::Syntax {
-            path,
-            line: location.as_ref().map(|l| l.line as u32),
-            col: location.as_ref().map(|l| l.column as u32),
-            msg,
-        },
+    let position = e.position();
+    LoadError::Syntax {
+        path,
+        line: position.map(|p| (p.line + 1) as u32),
+        col: position.map(|p| (p.column + 1) as u32),
+        msg: e.to_string(),
     }
 }
 

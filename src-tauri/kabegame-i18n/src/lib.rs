@@ -21,7 +21,7 @@ fn resolve_supported_language(language: &str) -> Option<&'static str> {
     }
     let normalized = language.to_lowercase().replace('_', "-");
     let segments: Vec<&str> = normalized.split('-').collect();
-    let supported = rust_i18n::available_locales!();
+    let supported = SUPPORTED_LOCALES;
     for i in (1..=segments.len()).rev() {
         let prefix = segments[..i].join("-");
         if let Some(alias) = locale_alias(&prefix) {
