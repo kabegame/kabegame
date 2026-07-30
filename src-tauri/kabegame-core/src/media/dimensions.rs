@@ -19,7 +19,7 @@ fn local_path_to_path_buf(local_path: &str) -> PathBuf {
 /// Image dimensions for a desktop or `file://` path. Returns `None` on error.
 pub fn resolve_image_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
     let path = local_path_to_path_buf(local_path);
-    match image::io::Reader::open(&path) {
+    match image::ImageReader::open(&path) {
         Ok(reader) => match reader.with_guessed_format() {
             Ok(r) => match r.into_dimensions() {
                 Ok((w, h)) => Some((w as u32, h as u32)),

@@ -11,7 +11,7 @@ pathql-rs = { workspace = true, features = ["json5", "validate"] }
 include_dir = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
-auto-launch = "0.5"
+auto-launch = "0.6"
 base64 = { workspace = true }
 bzip2 = { workspace = true }
 dirs = "5.0"
@@ -109,7 +109,7 @@ dokan = { version = "0.3.1", optional = true }
 memmap2 = "0.9"
 widestring = "0.4.3"
 winapi = { version = "0.3.9", features = ["ntstatus", "winnt", "winbase"] }
-winreg = "0.52"
+winreg = "0.55"
 windows-sys = { version = "0.52", features = [
   "Win32_Foundation",
   "Win32_Security",

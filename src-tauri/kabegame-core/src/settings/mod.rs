@@ -1171,6 +1171,7 @@ impl Settings {
             let mut builder = AutoLaunchBuilder::new();
             builder.set_app_name("Kabegame");
             builder.set_app_path(app_path_str);
+            builder.set_windows_enable_mode(auto_launch::WindowsEnableMode::CurrentUser);
 
             // 如果启用开机启动，添加 --minimized 参数
             if enabled {

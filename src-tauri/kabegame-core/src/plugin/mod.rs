@@ -646,12 +646,12 @@ impl PluginManager {
         let Some(rgb) = crate::kgpg::read_kgpg3_icon_rgb(zip_path).await? else {
             return Ok(None);
         };
-        use image::{ImageOutputFormat, RgbImage};
+        use image::{ImageFormat, RgbImage};
         let img = RgbImage::from_raw(crate::kgpg::KGPG3_ICON_W, crate::kgpg::KGPG3_ICON_H, rgb)
             .ok_or_else(|| "Invalid KGPG v3 icon buffer".to_string())?;
         let mut out: Vec<u8> = Vec::new();
         let mut cursor = std::io::Cursor::new(&mut out);
-        img.write_to(&mut cursor, ImageOutputFormat::Png)
+        img.write_to(&mut cursor, ImageFormat::Png)
             .map_err(|e| format!("Failed to encode icon png: {}", e))?;
         Ok(Some(out))
     }
@@ -1863,12 +1863,12 @@ impl PluginManager {
             return Err("Invalid KGPG v3 icon buffer size".to_string());
         }
 
-        use image::{ImageOutputFormat, RgbImage};
+        use image::{ImageFormat, RgbImage};
         let img = RgbImage::from_raw(crate::kgpg::KGPG3_ICON_W, crate::kgpg::KGPG3_ICON_H, rgb)
             .ok_or_else(|| "Invalid KGPG v3 icon buffer".to_string())?;
         let mut out: Vec<u8> = Vec::new();
         let mut out_cursor = std::io::Cursor::new(&mut out);
-        img.write_to(&mut out_cursor, ImageOutputFormat::Png)
+        img.write_to(&mut out_cursor, ImageFormat::Png)
             .map_err(|e| format!("Failed to encode icon png: {}", e))?;
         Ok(Some(out))
     }

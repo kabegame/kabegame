@@ -581,7 +581,7 @@ fn encode_jpeg_rgb(rgb: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String
             rgb.as_raw(),
             rgb.width(),
             rgb.height(),
-            image::ColorType::Rgb8,
+            image::ExtendedColorType::Rgb8,
         )
         .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
     Ok(cursor.into_inner())
@@ -657,7 +657,7 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
         return Ok(None);
     }
 
-    let img = match image::io::Reader::open(image_path) {
+    let img = match image::ImageReader::open(image_path) {
         Ok(mut reader) => {
             reader.no_limits();
             match reader.with_guessed_format() {
@@ -959,7 +959,7 @@ fn transcode_compatible_image_sync(
     output_id: &str,
 ) -> Result<PathBuf, String> {
     let decoded = (|| {
-        let mut reader = image::io::Reader::open(input_path)?;
+        let mut reader = image::ImageReader::open(input_path)?;
         reader.no_limits();
         reader.with_guessed_format()?.decode()
     })();

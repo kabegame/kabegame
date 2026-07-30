@@ -36,7 +36,16 @@ base64 = "0.22"
 bzip2 = "0.6"
 flate2 = "1"
 globset = "0.4"
-image = "0.24"
+# 0.25 的 default-formats 里**含 `avif`,那是编码器**(拉 ravif→rav1e 一整棵 AV1 编码树,约 28 个 crate),
+# 而 0.24 的 default 不含它。我们从不生成 AVIF(压缩输出只有 JPEG/WebP/PNG/H.264),所以显式列 feature
+# 把它关掉。下面这份 = 0.25 `default-formats` 去掉 `avif`,能力集与升级前的 0.24 等价。
+# 注:AVIF **解码**是另一个 feature(`avif-native`,走 C 的 dav1d),0.24 也没开,不属于本次回归——
+# AVIF 图在 CEF/WebView 里直接显示(image_mime_browser_safe),不经 image crate 解码。
+# `rayon` 保留(0.24 的 jpeg_rayon 在 0.25 并入全局 rayon):缩略图缩放是热点路径。
+image = { version = "0.25.10", default-features = false, features = [
+  "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg",
+  "png", "pnm", "qoi", "tga", "tiff", "webp", "rayon",
+] }
 include_dir = "0.7"
 json5 = "0.4"
 kamadak-exif = "0.6"
