@@ -177,10 +177,6 @@ function backendKeys() {
   return (Object.keys(descriptors) as AppSettingKey[]).filter((key) => descriptorFor(key)?.backend === "tauri");
 }
 
-function camelToSnake(str: string): string {
-  return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-}
-
 function rawQueryValue(param: string): string {
   const adapter = queryAdapterRef.value;
   if (!adapter) return "";
@@ -406,7 +402,7 @@ export const useSettingsStore = defineStore("settings", () => {
     descriptor: Extract<SettingDescriptor<K>, { backend: "tauri" }>,
     value: AppSettings[K],
   ) => {
-    const paramKey = descriptor.param || camelToSnake(String(key));
+    const paramKey = descriptor.param || String(key);
     const args: Record<string, unknown> = { [paramKey]: value };
     if (IS_DEV) {
       console.log(`Saving setting ${String(key)} with value`, value, args);

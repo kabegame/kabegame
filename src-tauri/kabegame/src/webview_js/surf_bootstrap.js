@@ -57,7 +57,6 @@
       url: String(url),
       name: options.name ?? undefined,
       sourceUrl: options.url ?? undefined,
-      source_url: options.url ?? undefined,
     })
       .then(() => window.__kabegame_toast?.("已加入下载列表", "start"))
       .catch(reportErr);

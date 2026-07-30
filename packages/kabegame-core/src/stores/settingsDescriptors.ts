@@ -51,7 +51,7 @@ export type TauriSettingDescriptor<K extends AppSettingKey = AppSettingKey> = {
   getter: string;
   /** IPC setter 命令名；`save` 会调用 `invoke(setter, { [param]: value })`。 */
   setter?: string;
-  /** setter 入参名；省略时回退为设置 key 的 snake_case 形式。 */
+  /** setter 入参名；省略时使用 lowerCamelCase 的设置 key。 */
   param?: string;
   _key?: K;
 };
