@@ -1014,8 +1014,12 @@ mod tests {
             vec![1u8; (IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES + 1) as usize],
         )
         .unwrap();
-        // 缩略图最长边 ≤ 上限 → 不需重生成。
-        image::RgbImage::new(800, 600).save(&thumb).unwrap();
+        // 缩略图最长边 ≤ 上限 → 不需重生成。取恰好等于上限的边界值,与
+        // thumbnail_refresh_regenerates_oversized_thumbnail 的 `+100` 对称;
+        // 必须引用常量而非写死尺寸,否则上限调整后本测试会静默失效。
+        image::RgbImage::new(IMAGE_THUMBNAIL_MAX_DIM, IMAGE_THUMBNAIL_MAX_DIM - 100)
+            .save(&thumb)
+            .unwrap();
 
         assert!(thumbnail_refresh_action(&row(8, &local, &thumb)).is_none());
     }
