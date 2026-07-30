@@ -360,7 +360,7 @@ fn handle_macos_run_event(app_handle: &tauri::AppHandle<AppRuntime>, event: taur
     }
 }
 
-/// 把全套插件 / setup / invoke_handler 装进 builder。Wry 与 CEF(Linux)两条 run
+/// 把全套插件 / setup / invoke_handler 装进 builder。Wry(Android) 与 CEF 两条 run
 /// 路径共用它,保证 CEF 下后端能力与 Wry 完全一致。`crate::AppRuntime` 按 cfg 解析为
 /// `Wry` 或 `Cef`,因此本函数在每个具体 build 里是单态的。
 #[cfg(not(feature = "web"))]

@@ -52,7 +52,8 @@
         "icon": { "name": "Plugin icon", "desc": "Read the plugin icon image" },
         "description_template": { "name": "Plugin description template", "desc": "Read the plugin description page template" },
         "doc": { "name": "Plugin documentation", "desc": "Read the default plugin documentation" },
-        "doc_resource": { "name": "Plugin doc resource", "desc": "Read a resource file referenced by plugin documentation" }
+        "changelog": { "name": "Plugin changelog", "desc": "Read the default plugin changelog" },
+        "asset": { "name": "Plugin asset", "desc": "Read a resource file referenced by plugin documentation and changelogs" }
       }
     }
   }

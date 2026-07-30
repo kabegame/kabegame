@@ -1,5 +1,5 @@
-//! MCP 的 `plugin://{id}/doc_resource/{key}` 中，key 是文档引用串的归一化结果；
-//! 资源来自 `kbDocAssets`，旧包回退为扫描 Markdown。
+//! MCP 的 `plugin://{id}/asset/{path}` 中，path 是归一化后的插件根相对路径；
+//! 资源来自 `kbAssets`，由文档与更新日志共用。
 
 use kabegame_core::{
     emitter::GlobalEmitter,
@@ -92,12 +92,12 @@ Other read schemes:
   plugin://{id}/icon                     base64 PNG blob
   plugin://{id}/description_template     EJS template
   plugin://{id}/doc                      default-locale doc.md
-  plugin://{id}/doc_resource/{key}       one documentation asset, MIME by extension
+  plugin://{id}/changelog                default-locale CHANGELOG.md
+  plugin://{id}/asset/{path}             one plugin asset, MIME by extension
 
-For doc_resource, key is the normalized Markdown reference. Entries come from kbDocAssets;
-legacy packages fall back to scanning Markdown. "Trimmed" plugin JSON has docResources,
-iconPngBase64, and descriptionTemplate removed; fetch those heavy resources through the
-sub-paths above.
+For asset, path is the normalized plugin-root-relative path declared in kbAssets. Documentation
+and changelogs share these entries. "Trimmed" plugin JSON has assets, iconPngBase64, and
+descriptionTemplate removed; fetch those heavy resources through the sub-paths above.
 
 Do not use provider://, image://, album://, task://, or surf://. They are not supported.
 
@@ -112,9 +112,9 @@ favorite, isHidden, and albumOrder are computed only on images://gallery/... pat
 On images://id_{id} they are always false, false, and null; use
 images://gallery/by_id/{id} when those values are needed.
 
-Plugin package layout, in brief: package.json declares kbBackend: v8, and kbDocAssets maps
-normalized Markdown-reference keys to package-relative files; dist/main.js exports async
-function crawl; docs live in doc_root/doc.md; icon.png is optional.
+Plugin package layout, in brief: package.json declares kbBackend: v8, and kbAssets lists
+plugin-root-relative resource paths; dist/main.js exports async function crawl; kbDoc points
+to documentation files; icon.png is optional.
 
 Tools:
 - list_pathql_entry is the read-only discovery tool described above.
@@ -378,7 +378,7 @@ impl ServerHandler for KabegameMcpServer {
                 "plugin://",
                 Resource::new("plugin://", "All plugins (trimmed)")
                     .with_description(
-                        "Full list of installed plugins with heavy fields (docResources, \
+                        "Full list of installed plugins with heavy fields (assets, \
                          iconPngBase64, descriptionTemplate) stripped",
                     )
                     .with_mime_type("application/json"),
@@ -527,10 +527,33 @@ impl ServerHandler for KabegameMcpServer {
                         .with_mime_type("text/markdown")])
                         .into())
                     }
-                    [_plugin_id, "doc_resource", _key] => {
+                    [_plugin_id, "changelog"] => {
                         let row = rows.into_iter().next().ok_or_else(|| {
                             McpError::resource_not_found(
-                                "doc_resource_not_found",
+                                "no_plugin_changelog",
+                                Some(json!({ "uri": request.uri })),
+                            )
+                        })?;
+                        let text =
+                            row.get("changelog")
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| {
+                                    McpError::resource_not_found(
+                                        "no_plugin_changelog",
+                                        Some(json!({ "uri": request.uri })),
+                                    )
+                                })?;
+                        Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                            text.to_string(),
+                            request.uri,
+                        )
+                        .with_mime_type("text/markdown")])
+                        .into())
+                    }
+                    [_plugin_id, "asset", _path] => {
+                        let row = rows.into_iter().next().ok_or_else(|| {
+                            McpError::resource_not_found(
+                                "asset_not_found",
                                 Some(json!({ "uri": request.uri })),
                             )
                         })?;
@@ -539,7 +562,7 @@ impl ServerHandler for KabegameMcpServer {
                                 .and_then(Value::as_str)
                                 .ok_or_else(|| {
                                     McpError::resource_not_found(
-                                        "doc_resource_not_found",
+                                        "asset_not_found",
                                         Some(json!({ "uri": request.uri })),
                                     )
                                 })?;
@@ -579,9 +602,7 @@ impl ServerHandler for KabegameMcpServer {
                 (
                     "images.read.by_id",
                     ResourceTemplate::new("images://id_{imageId}", "Image info")
-                        .with_description(
-                            "Full ImageInfo for a single image including metadataId.",
-                        )
+                        .with_description("Full ImageInfo for a single image including metadataId.")
                         .with_mime_type("application/json"),
                 ),
                 (
@@ -609,9 +630,7 @@ impl ServerHandler for KabegameMcpServer {
                         "images://gallery/album/{albumId}/desc/x100x/{page}",
                         "Gallery images by album",
                     )
-                    .with_description(
-                        "A descending 100-row gallery page filtered by album.",
-                    )
+                    .with_description("A descending 100-row gallery page filtered by album.")
                     .with_mime_type("application/json"),
                 ),
                 (
@@ -620,9 +639,7 @@ impl ServerHandler for KabegameMcpServer {
                         "images://gallery/date/{year}y/{month}m/{day}d/desc/x100x/{page}",
                         "Gallery images by date",
                     )
-                    .with_description(
-                        "A descending 100-row gallery page filtered by crawl date.",
-                    )
+                    .with_description("A descending 100-row gallery page filtered by crawl date.")
                     .with_mime_type("application/json"),
                 ),
                 (
@@ -663,20 +680,15 @@ impl ServerHandler for KabegameMcpServer {
                 ),
                 (
                     "surf_records.read.by_id",
-                    ResourceTemplate::new(
-                        "surf_records://id_{surfRecordId}",
-                        "Surf record info",
-                    )
-                    .with_description(
-                        "Full surf record: id, host, name, lastVisitAt, etc.",
-                    )
-                    .with_mime_type("application/json"),
+                    ResourceTemplate::new("surf_records://id_{surfRecordId}", "Surf record info")
+                        .with_description("Full surf record: id, host, name, lastVisitAt, etc.")
+                        .with_mime_type("application/json"),
                 ),
                 (
                     "plugin.read.info",
                     ResourceTemplate::new("plugin://{pluginId}", "Plugin info (trimmed)")
                         .with_description(
-                            "Plugin metadata without docResources/iconPngBase64/descriptionTemplate. \
+                            "Plugin metadata without assets/iconPngBase64/descriptionTemplate. \
                              Fetch those via sub-path resources on demand.",
                         )
                         .with_mime_type("application/json"),
@@ -685,6 +697,14 @@ impl ServerHandler for KabegameMcpServer {
                     "plugin.read.doc",
                     ResourceTemplate::new("plugin://{pluginId}/doc", "Plugin documentation")
                         .with_description("Plugin doc.md content in Markdown (default locale).")
+                        .with_mime_type("text/markdown"),
+                ),
+                (
+                    "plugin.read.changelog",
+                    ResourceTemplate::new("plugin://{pluginId}/changelog", "Plugin changelog")
+                        .with_description(
+                            "Plugin CHANGELOG.md content in Markdown (default locale).",
+                        )
                         .with_mime_type("text/markdown"),
                 ),
                 (
@@ -703,22 +723,17 @@ impl ServerHandler for KabegameMcpServer {
                     .with_mime_type("text/plain"),
                 ),
                 (
-                    "plugin.read.doc_resource",
-                    ResourceTemplate::new(
-                        "plugin://{pluginId}/doc_resource/{resourceKey}",
-                        "Plugin doc resource",
-                    )
-                    .with_description(
-                        "A single doc_resource. resourceKey is the normalized Markdown reference; \
-                         entries come from kbDocAssets, with legacy packages falling back to Markdown scanning. \
+                    "plugin.read.asset",
+                    ResourceTemplate::new("plugin://{pluginId}/asset/{assetPath}", "Plugin asset")
+                        .with_description(
+                        "A single asset. assetPath is the normalized plugin-root-relative path \
+                         declared in kbAssets; documentation and changelogs share these entries. \
                          MIME is inferred by extension.",
                     ),
                 ),
             ]
             .into_iter()
-            .filter_map(|(id, template)| {
-                is_capability_enabled(id, &disabled).then_some(template)
-            })
+            .filter_map(|(id, template)| is_capability_enabled(id, &disabled).then_some(template))
             .collect(),
             meta: None,
             ..Default::default()
@@ -1124,8 +1139,8 @@ mod tests {
     #[test]
     fn resource_segments_split_after_scheme() {
         assert_eq!(
-            resource_segments("plugin://pixiv/doc_resource/readme.png"),
-            vec!["pixiv", "doc_resource", "readme.png"]
+            resource_segments("plugin://pixiv/asset/readme.png"),
+            vec!["pixiv", "asset", "readme.png"]
         );
         assert!(resource_segments("plugin://").is_empty());
     }

@@ -1,6 +1,6 @@
 <template>
   <div class="qp-carousel">
-    <!-- 加载态：仅在数据尚未就绪时短暂出现（已安装插件的 docResources 本就在内存中，通常不会显示） -->
+    <!-- 加载态：仅在数据尚未就绪时短暂出现（已安装插件的 assets 本就在内存中，通常不会显示） -->
     <div v-if="loading" class="qp-carousel-box qp-carousel-state">
       <el-icon class="qp-spin"><Loading /></el-icon>
       <span class="qp-carousel-state-text">{{ t("plugins.quickPreview.loadingSamples") }}</span>

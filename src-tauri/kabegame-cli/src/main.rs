@@ -1278,116 +1278,104 @@ fn pack_plugin_v3(plugin_dir: &Path, output: &Path, pkg: &serde_json::Value) -> 
             }
         }
     }
-    if let Some(doc_map) = pkg_obj.get("kbDoc").and_then(|v| v.as_object()) {
-        for (lang, v) in doc_map {
-            if let Some(path) = v.as_str() {
-                core_plugin::validate_kb_rel_path(path)?;
-                if !plugin_dir.join(path).is_file() {
-                    return Err(format!("kbDoc[\"{}\"] 引用的文件不存在: {}", lang, path));
+    for field in ["kbDoc", "kbChangelog"] {
+        if let Some(doc_map) = pkg_obj.get(field).and_then(|v| v.as_object()) {
+            for (lang, v) in doc_map {
+                if let Some(path) = v.as_str() {
+                    core_plugin::validate_kb_rel_path(path)?;
+                    if !plugin_dir.join(path).is_file() {
+                        return Err(format!("{field}[\"{lang}\"] 引用的文件不存在: {path}"));
+                    }
                 }
             }
         }
     }
 
-    if let Some(assets_value) = pkg_obj.get("kbDocAssets") {
-        let assets = assets_value
-            .as_object()
-            .ok_or_else(|| "kbDocAssets 必须是对象".to_string())?;
-        let mut normalized_assets: HashMap<String, String> = HashMap::new();
-        let mut total_size = 0_u64;
-
-        for (raw_key, path_value) in assets {
-            let normalized_key = core_plugin::doc_assets::normalize_doc_asset_key(raw_key)
-                .ok_or_else(|| format!("kbDocAssets 含非法资源键: {raw_key:?}"))?;
-            if let Some(previous_path) = normalized_assets.get(&normalized_key) {
+    let mut assets: HashMap<String, String> = HashMap::new();
+    let mut total_size = 0_u64;
+    if pkg_obj.contains_key("kbDocAssets") {
+        return Err(
+            "kbDocAssets 已被 kbAssets 取代：改为插件根相对路径数组，例如 \
+             \"kbAssets\": [\"images/a.png\"]"
+                .to_string(),
+        );
+    }
+    if let Some(items) = pkg_obj.get("kbAssets") {
+        let items = items
+            .as_array()
+            .ok_or_else(|| "kbAssets 必须是数组".to_string())?;
+        for item in items {
+            let raw = item
+                .as_str()
+                .ok_or_else(|| "kbAssets 每一项必须是字符串".to_string())?;
+            let path = core_plugin::assets::normalize_asset_path(raw)
+                .ok_or_else(|| format!("kbAssets 含非法资源路径: {raw:?}"))?;
+            if let Some(prev) = assets.get(&path) {
                 return Err(format!(
-                    "kbDocAssets 资源键归一化后冲突: {raw_key:?} 与已注册路径 \
-                     {previous_path:?} 都归一化为 {normalized_key:?}"
+                    "kbAssets 归一化后冲突: {raw:?} 与 {prev:?} 都归一化为 {path:?}"
                 ));
             }
-
-            let path = path_value
-                .as_str()
-                .ok_or_else(|| format!("kbDocAssets[{raw_key:?}] 必须是字符串"))?;
-            core_plugin::validate_kb_rel_path(path)?;
-            let asset_file = plugin_dir.join(path);
-            if !asset_file.is_file() {
-                return Err(format!("kbDocAssets[{raw_key:?}] 引用的文件不存在: {path}"));
+            core_plugin::validate_kb_rel_path(&path)?;
+            let file = plugin_dir.join(&path);
+            if !file.is_file() {
+                return Err(format!("kbAssets 项引用的文件不存在: {raw:?} → {path}"));
             }
-            let mime = core_plugin::doc_assets::mime_for_doc_asset(path);
+            let mime = core_plugin::assets::mime_for_asset(&path);
             if !mime.starts_with("image/") || mime == "image/svg+xml" {
                 return Err(format!(
-                    "kbDocAssets[{raw_key:?}] 的文件扩展名不受支持: {path} \
-                     （仅支持 jpg/jpeg/png/gif/webp/bmp）"
+                    "kbAssets 项扩展名不受支持: {path}（仅 jpg/jpeg/png/gif/webp/bmp）"
                 ));
             }
-
-            let size = std::fs::metadata(&asset_file)
-                .map_err(|error| format!("读取文档资源文件大小失败 {path}: {error}"))?
+            let size = std::fs::metadata(&file)
+                .map_err(|e| format!("读取资源文件大小失败 {path}: {e}"))?
                 .len();
-            if size > core_plugin::doc_assets::DOC_ASSET_MAX_FILE_SIZE as u64 {
+            if size > core_plugin::assets::ASSET_MAX_FILE_SIZE as u64 {
                 return Err(format!(
-                    "kbDocAssets[{raw_key:?}] 文件超过 2 MB 硬上限: {path} ({size} bytes)"
+                    "kbAssets 项超过 2 MB 硬上限: {path} ({size} bytes)"
                 ));
             }
             total_size = total_size.saturating_add(size);
-            normalized_assets.insert(normalized_key, path.to_string());
+            assets.insert(path, raw.to_string());
         }
+    }
 
-        let mut referenced_keys = HashSet::new();
-        if let Some(doc_map) = pkg_obj.get("kbDoc").and_then(|value| value.as_object()) {
-            for (lang, doc_path_value) in doc_map {
-                let Some(doc_path) = doc_path_value.as_str() else {
+    let mut referenced = HashSet::new();
+    for field in ["kbDoc", "kbChangelog"] {
+        let Some(doc_map) = pkg_obj.get(field).and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for (lang, path_value) in doc_map {
+            let Some(md_path) = path_value.as_str() else {
+                continue;
+            };
+            let md = std::fs::read_to_string(plugin_dir.join(md_path))
+                .map_err(|e| format!("读取 {field}[{lang:?}] {md_path:?} 失败: {e}"))?;
+            for raw_ref in core_plugin::extract_local_refs(&md) {
+                let Some(path) = core_plugin::assets::normalize_asset_path(&raw_ref) else {
                     continue;
                 };
-                let md = std::fs::read_to_string(plugin_dir.join(doc_path))
-                    .map_err(|error| format!("读取 kbDoc[{lang:?}] {doc_path:?} 失败: {error}"))?;
-                let doc_dir = Path::new(doc_path)
-                    .parent()
-                    .map(|path| path.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                for (normalized_path, original_ref) in
-                    core_plugin::extract_doc_local_refs(&md, &doc_dir)
-                {
-                    let Some(normalized_key) =
-                        core_plugin::doc_assets::normalize_doc_asset_key(&original_ref)
-                    else {
-                        continue;
-                    };
-                    referenced_keys.insert(normalized_key.clone());
-                    if !normalized_assets.contains_key(&normalized_key) {
-                        let key_json =
-                            serde_json::to_string(&original_ref).unwrap_or_else(|_| "\"\"".into());
-                        let path_json = serde_json::to_string(&normalized_path)
-                            .unwrap_or_else(|_| "\"\"".into());
-                        return Err(format!(
-                            "kbDoc[{lang:?}] 引用了未在 kbDocAssets 注册的本地资源 \
-                             {original_ref:?}（归一化键 {normalized_key:?}）。建议补充：\
-                             \n\"kbDocAssets\": {{ {key_json}: {path_json} }}"
-                        ));
-                    }
+                referenced.insert(path.clone());
+                if !assets.contains_key(&path) {
+                    let json = serde_json::to_string(&path).unwrap_or_else(|_| "\"\"".into());
+                    return Err(format!(
+                        "{field}[{lang:?}] 引用了未在 kbAssets 声明的本地资源 {raw_ref:?}\
+                         （插件根相对路径 {path:?}）。建议补充：\n\"kbAssets\": [{json}]"
+                    ));
                 }
             }
         }
+    }
 
-        for (normalized_key, path) in &normalized_assets {
-            if !referenced_keys.contains(normalized_key) {
-                eprintln!(
-                    "[WARN] kbDocAssets 注册但未被任何 kbDoc 引用（允许预留）: \
-                     {normalized_key:?} -> {path:?}"
-                );
-            }
-        }
-        if total_size > core_plugin::doc_assets::DOC_ASSET_MAX_TOTAL_SIZE as u64 {
+    for (path, raw) in &assets {
+        if !referenced.contains(path) {
             eprintln!(
-                "[WARN] kbDocAssets 总体积超过 10 MB，加载期将跳过超出部分: {total_size} bytes"
+                "[WARN] kbAssets 声明但未被任何 kbDoc / kbChangelog 引用（允许预留）: \
+                 {raw:?} → {path:?}"
             );
         }
-    } else {
-        eprintln!(
-            "[WARN] package.json 未声明 kbDocAssets，文档资源正在使用 Markdown 自动扫描回退；\
-             该回退未来会移除"
-        );
+    }
+    if total_size > core_plugin::assets::ASSET_MAX_TOTAL_SIZE as u64 {
+        eprintln!("[WARN] kbAssets 总体积超过 10 MB，加载期将跳过超出部分: {total_size} bytes");
     }
 
     if let Some(cfgs) = pkg_obj
@@ -1506,63 +1494,23 @@ fn collect_v3_entries(plugin_dir: &Path, pkg: &serde_json::Value) -> Result<Vec<
         entries.push((tpl.to_string(), plugin_dir.join(tpl)));
     }
 
-    // kbDoc + 文档资源（新包读取显式白名单；旧包保持自动扫描回退）
-    let has_doc_assets = pkg_obj.contains_key("kbDocAssets");
-    if let Some(doc_map) = pkg_obj.get("kbDoc").and_then(|v| v.as_object()) {
-        for (_lang, doc_path_val) in doc_map {
-            let doc_path = doc_path_val.as_str().unwrap_or("");
-            let doc_full = plugin_dir.join(doc_path);
-
-            if !has_doc_assets {
-                let md_text = std::fs::read_to_string(&doc_full)
-                    .map_err(|e| format!("读取 {} 失败: {}", doc_path, e))?;
-
-                let md_dir = std::path::Path::new(doc_path)
-                    .parent()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let refs = core_plugin::extract_doc_local_refs(&md_text, &md_dir);
-
-                for (normalized_path, _original_ref) in &refs {
-                    let ref_full = plugin_dir.join(normalized_path);
-                    if ref_full.is_file() {
-                        let ext = ref_full
-                            .extension()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("")
-                            .to_ascii_lowercase();
-                        let is_img = matches!(
-                            ext.as_str(),
-                            "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
-                        );
-                        if is_img {
-                            let sz = std::fs::metadata(&ref_full).map(|m| m.len()).unwrap_or(0);
-                            if sz > core_plugin::doc_assets::DOC_ASSET_MAX_FILE_SIZE as u64 {
-                                eprintln!(
-                                    "[WARN] doc 图片过大已跳过（上限 2MB）: {} ({} bytes)",
-                                    normalized_path, sz
-                                );
-                                continue;
-                            }
-                            entries.push((normalized_path.clone(), ref_full));
-                        }
-                    } else {
-                        return Err(format!(
-                            "文档 \"{}\" 引用的图片 \"{}\" 不存在",
-                            doc_path, normalized_path
-                        ));
-                    }
+    // kbDoc / kbChangelog md 本体
+    for field in ["kbDoc", "kbChangelog"] {
+        if let Some(doc_map) = pkg_obj.get(field).and_then(|v| v.as_object()) {
+            for (_lang, value) in doc_map {
+                if let Some(path) = value.as_str() {
+                    entries.push((path.to_string(), plugin_dir.join(path)));
                 }
             }
-            entries.push((doc_path.to_string(), doc_full));
         }
     }
-    if let Some(assets) = pkg_obj
-        .get("kbDocAssets")
-        .and_then(|value| value.as_object())
-    {
-        for asset_path in assets.values().filter_map(|value| value.as_str()) {
-            entries.push((asset_path.to_string(), plugin_dir.join(asset_path)));
+
+    // kbAssets 资源路径归一化后直接作为 ZIP 内路径。
+    if let Some(items) = pkg_obj.get("kbAssets").and_then(|v| v.as_array()) {
+        for raw in items.iter().filter_map(|v| v.as_str()) {
+            if let Some(path) = core_plugin::assets::normalize_asset_path(raw) {
+                entries.push((path.clone(), plugin_dir.join(path)));
+            }
         }
     }
 
@@ -1601,15 +1549,22 @@ fn collect_v3_entries(plugin_dir: &Path, pkg: &serde_json::Value) -> Result<Vec<
             if rooted.is_match(name) {
                 let is_critical = name == "package.json"
                     || name == main_path
+                    || ["kbDoc", "kbChangelog"].iter().any(|field| {
+                        pkg_obj
+                            .get(*field)
+                            .and_then(|v| v.as_object())
+                            .map(|docs| docs.values().any(|x| x.as_str() == Some(name)))
+                            .unwrap_or(false)
+                    })
                     || pkg_obj
-                        .get("kbDoc")
-                        .and_then(|v| v.as_object())
-                        .map(|d| d.values().any(|x| x.as_str() == Some(name)))
-                        .unwrap_or(false)
-                    || pkg_obj
-                        .get("kbDocAssets")
-                        .and_then(|v| v.as_object())
-                        .map(|assets| assets.values().any(|x| x.as_str() == Some(name)))
+                        .get("kbAssets")
+                        .and_then(|v| v.as_array())
+                        .map(|assets| {
+                            assets.iter().filter_map(|x| x.as_str()).any(|raw| {
+                                core_plugin::assets::normalize_asset_path(raw).as_deref()
+                                    == Some(name)
+                            })
+                        })
                         .unwrap_or(false);
                 if is_critical {
                     eprintln!("[ERROR] .kabegameignore 排除了关键文件: {}", name);

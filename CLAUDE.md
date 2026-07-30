@@ -34,7 +34,7 @@ deno task dev -c kabegame --data prod      # Dev against system data dirs (not r
 deno task dev:frontend            # Frontend only (no Tauri, port 1420)
 ```
 
-桌面三平台（含 macOS）的 `deno task dev -c kabegame` 统一走 `tauri dev`；`kabegame-cef-helper` bin 在 dev 下由 ComponentPlugin `beforeBuild` 在主程序编译前先行构建（`tauri dev` 走 `cargo run`，无法同调用多编一个 bin）；build 下由 tauri.conf.json 顶层 `bins`（fork patch 0009，见 cocs/tauri/TAURI_CLI_FORK.md）驱动 `tauri build` 随主编译一并产出——cargo 收到逐个 `--bin` 而非 `--bins` 全量（cef-example 不进 release），Windows 的 helper 由 NSIS 原生装到安装根（不再 stage 进 resources/bin）。CEF framework 为构建期直链（`third/cef-rs` fork），经 `target/Frameworks` 符号链接（cef-dll-sys 自动创建，指向 `CEF_PATH`）由 dyld 解析；helper 是 exe 旁的扁平 `kabegame-cef-helper`，三平台一致。
+桌面三平台的 `deno task dev -c kabegame` 统一走 `tauri dev`；`kabegame-cef-helper` bin 在 dev 下由 ComponentPlugin `beforeBuild` 在主程序编译前先行构建（`tauri dev` 走 `cargo run`，无法同调用多编一个 bin）；build 下由 tauri.conf.json 顶层 `bins`（fork patch 0009，见 cocs/tauri/TAURI_CLI_FORK.md）驱动 `tauri build` 随主编译一并产出——cargo 收到逐个 `--bin` 而非 `--bins` 全量（cef-example 不进 release），Windows 的 helper 由 NSIS 原生装到安装根（不再 stage 进 resources/bin）。CEF framework 为构建期直链（`third/cef-rs` fork），经 `target/Frameworks` 符号链接（cef-dll-sys 自动创建，指向 `CEF_PATH`）由 dyld 解析；helper 是 exe 旁的扁平 `kabegame-cef-helper`，三平台一致。
 
 ### Build
 ```bash
@@ -64,15 +64,6 @@ bash scripts/build-web.sh              # Web release (demo.kabegame.com): host b
 `deno task b` on the cargo-only `kabegame-cli` component builds **debug** by default; pass `--release` for a release build. The main app's desktop/android build always goes through `tauri build`, which is release regardless of `--release`.
 
 `kabegame-cli` enables `kabegame-core`'s `plugin-runtime` + `ipc-server` features, so it links deno_core/rusty_v8 and gets the real (non-no-op) `GlobalEmitter`. This powers `kabegame-cli plugin run <id>`, which executes an **installed V8 plugin in-process** (no daemon) and renders task logs above a pinned progress bar. Use it to test crawler plugins without launching the GUI — pair it with the `repack-crawler-plugins` skill and `--data dev`, since a release CLI otherwise resolves to the system data dir. See `apps/docs/src/content/docs/reference/cli.md`.
-
-### CEF example
-
-`cef-example` and `kabegame-cef-helper` are binary targets of the `kabegame` package. They validate the CEF windowed backend outside Tauri and are not build-system components:
-
-```bash
-CEF_PATH=... cargo build -p kabegame --features standard --bin kabegame-cef-helper
-CEF_PATH=... cargo run -p kabegame --features standard --bin cef-example
-```
 
 On macOS both binaries are flat cargo artifacts in `target/<profile>`; the CEF framework resolves through the `target/Frameworks` symlink created by cef-dll-sys. See `src-tauri/tauri-runtime-cef/README.md`.
 
@@ -176,12 +167,6 @@ struct Foo {
 - `src-tauri-plugins/` — Custom Tauri plugins (picker, pathes, share, compress, wallpaper, task-notification)
 - `src-crawler-plugins/` — JS/TS crawler plugins (V8 backend) packaged as `.kgpg` archives
 - `third-patches/` — Numbered patch series for keeping `third/` submodules clean and close to upstream
-
-### Build Modes
-| Mode | Features |
-|------|----------|
-| Standard (default) | Virtual disk, store plugins, **video ingestion** (rsmpeg/FFmpeg) |
-| Local (`--mode local`, dev) | All plugins bundled locally |
 
 ### Key Architecture Rules
 **Path logic belongs in `tauri-plugin-pathes`** — Any path/directory calculation must live in `src-tauri-plugins/tauri-plugin-pathes/`. Other modules call into it via `AppPaths`; never hardcode or recompute paths elsewhere.

@@ -133,7 +133,8 @@ mcp_capabilities! {
             PLUGIN_READ_ICON => "icon",
             PLUGIN_READ_DESCRIPTION_TEMPLATE => "description_template",
             PLUGIN_READ_DOC => "doc",
-            PLUGIN_READ_DOC_RESOURCE => "doc_resource",
+            PLUGIN_READ_CHANGELOG => "changelog",
+            PLUGIN_READ_ASSET => "asset",
         }
     }
 }
@@ -190,7 +191,8 @@ fn read_plugin_capability_id(segments: &[&str]) -> Option<&'static str> {
         [_id, "icon"] => Some(ids::PLUGIN_READ_ICON),
         [_id, "description_template"] => Some(ids::PLUGIN_READ_DESCRIPTION_TEMPLATE),
         [_id, "doc"] => Some(ids::PLUGIN_READ_DOC),
-        [_id, "doc_resource", ..] => Some(ids::PLUGIN_READ_DOC_RESOURCE),
+        [_id, "changelog"] => Some(ids::PLUGIN_READ_CHANGELOG),
+        [_id, "asset", ..] => Some(ids::PLUGIN_READ_ASSET),
         _ => None,
     }
 }

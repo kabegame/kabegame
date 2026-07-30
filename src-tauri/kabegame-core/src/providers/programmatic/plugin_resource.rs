@@ -7,7 +7,7 @@ use pathql_rs::provider::{
 use serde_json::{json, Value};
 
 use crate::plugin::{
-    doc_assets::mime_for_doc_asset, manifest_value_display_for_locale, Plugin, PluginManager,
+    assets::mime_for_asset, manifest_value_display_for_locale, Plugin, PluginManager,
 };
 
 pub fn register_plugin_resource_provider(runtime: &ProviderRuntime) -> Result<(), EngineError> {
@@ -45,7 +45,7 @@ fn serialize_plugin_lite(plugin: &Arc<Plugin>) -> Value {
                 kabegame_i18n::current_vd_locale(),
             )),
         );
-        map.remove("docResources");
+        map.remove("assets");
         map.remove("iconPngBase64");
         map.remove("descriptionTemplate");
     }
@@ -131,8 +131,15 @@ impl Provider for PluginEntryProvider {
                 meta: None,
             }),
             ListRef::Direct(ChildEntry {
-                name: "doc_resource".into(),
-                provider: Some(Arc::new(PluginDocResourceRootProvider {
+                name: "changelog".into(),
+                provider: Some(Arc::new(PluginChangelogProvider {
+                    plugin_id: self.plugin_id.clone(),
+                })),
+                meta: None,
+            }),
+            ListRef::Direct(ChildEntry {
+                name: "asset".into(),
+                provider: Some(Arc::new(PluginAssetRootProvider {
                     plugin_id: self.plugin_id.clone(),
                 })),
                 meta: None,
@@ -151,7 +158,10 @@ impl Provider for PluginEntryProvider {
             "doc" => Some(Arc::new(PluginDocProvider {
                 plugin_id: self.plugin_id.clone(),
             })),
-            "doc_resource" => Some(Arc::new(PluginDocResourceRootProvider {
+            "changelog" => Some(Arc::new(PluginChangelogProvider {
+                plugin_id: self.plugin_id.clone(),
+            })),
+            "asset" => Some(Arc::new(PluginAssetRootProvider {
                 plugin_id: self.plugin_id.clone(),
             })),
             _ => None,
@@ -231,18 +241,36 @@ impl Provider for PluginDocProvider {
     }
 }
 
-struct PluginDocResourceRootProvider {
+struct PluginChangelogProvider {
     plugin_id: String,
 }
 
-impl Provider for PluginDocResourceRootProvider {
+impl Provider for PluginChangelogProvider {
+    fn fetch_rows(
+        &self,
+        _composed: &ProviderQuery,
+        _ctx: &ProviderContext,
+    ) -> Result<Option<Vec<Value>>, EngineError> {
+        let rows = get_plugin(&self.plugin_id)
+            .and_then(|plugin| plugin.changelog.clone())
+            .and_then(|changelog| changelog.get("default").cloned())
+            .map(|text| vec![json!({ "changelog": text })])
+            .unwrap_or_default();
+        Ok(Some(rows))
+    }
+}
+
+struct PluginAssetRootProvider {
+    plugin_id: String,
+}
+
+impl Provider for PluginAssetRootProvider {
     fn list(
         &self,
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Vec<ListRef>, EngineError> {
-        let Some(resources) = get_plugin(&self.plugin_id).and_then(|p| p.doc_resources.clone())
-        else {
+        let Some(resources) = get_plugin(&self.plugin_id).and_then(|p| p.assets.clone()) else {
             return Ok(Vec::new());
         };
         let mut keys: Vec<String> = resources.keys().cloned().collect();
@@ -252,9 +280,9 @@ impl Provider for PluginDocResourceRootProvider {
             .map(|key| {
                 ListRef::Direct(ChildEntry {
                     name: key.clone(),
-                    provider: Some(Arc::new(PluginDocResourceProvider {
+                    provider: Some(Arc::new(PluginAssetProvider {
                         plugin_id: self.plugin_id.clone(),
-                        resource_key: key,
+                        asset_path: key,
                     })),
                     meta: None,
                 })
@@ -265,33 +293,34 @@ impl Provider for PluginDocResourceRootProvider {
     fn resolve(&self, name: &str, _composed: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
         ResolveRef::Terminal(Some(ChildEntry {
             name: name.to_string(),
-            provider: Some(Arc::new(PluginDocResourceProvider {
+            provider: Some(Arc::new(PluginAssetProvider {
                 plugin_id: self.plugin_id.clone(),
-                resource_key: name.to_string(),
+                asset_path: name.to_string(),
             })),
             meta: None,
         }))
     }
 }
 
-struct PluginDocResourceProvider {
+struct PluginAssetProvider {
     plugin_id: String,
-    resource_key: String,
+    asset_path: String,
 }
 
-impl Provider for PluginDocResourceProvider {
+impl Provider for PluginAssetProvider {
     fn fetch_rows(
         &self,
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
         let rows = get_plugin(&self.plugin_id)
-            .and_then(|plugin| plugin.doc_resources.clone())
-            .and_then(|resources| resources.get(&self.resource_key).cloned())
+            .and_then(|plugin| plugin.assets.clone())
+            .and_then(|assets| assets.get(&self.asset_path).cloned())
             .map(|data| {
                 vec![json!({
-                    "key": self.resource_key.clone(),
-                    "mime": mime_for_doc_asset(&self.resource_key),
+                    // key 是归一化后的插件根相对路径。
+                    "key": self.asset_path.clone(),
+                    "mime": mime_for_asset(&self.asset_path),
                     "dataBase64": data,
                 })]
             })

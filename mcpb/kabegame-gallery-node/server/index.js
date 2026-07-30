@@ -38,7 +38,8 @@ const PLUGIN_SUB_RESOURCES = new Set([
   "icon",
   "description_template",
   "doc",
-  "doc_resource",
+  "changelog",
+  "asset",
 ]);
 
 function toBool(value, defaultValue = false) {
@@ -448,7 +449,8 @@ const ALL_TOOLS = [
         "Omit plugin_id to list all (trimmed) plugins. " +
         "With plugin_id and resource='info' (default), returns the trimmed plugin object. " +
         "Other resource values: 'icon' (base64 PNG), 'description_template' (EJS), " +
-        "'doc' (doc.md, default locale), 'doc_resource' (requires `key`).",
+        "'doc' (doc.md, default locale), 'changelog' (CHANGELOG.md, default locale), " +
+        "'asset' (requires plugin-root-relative `key`).",
       inputSchema: {
         type: "object",
         properties: {
@@ -458,12 +460,12 @@ const ALL_TOOLS = [
           },
           resource: {
             type: "string",
-            enum: ["info", "icon", "description_template", "doc", "doc_resource"],
+            enum: ["info", "icon", "description_template", "doc", "changelog", "asset"],
             description: "Sub-resource to fetch. Defaults to 'info'.",
           },
           key: {
             type: "string",
-            description: "Required when resource='doc_resource' (the doc_resource key).",
+            description: "Required when resource='asset' (a kbAssets plugin-root-relative path).",
           },
         },
       },
@@ -723,9 +725,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           case "doc":
             uri += "/doc";
             break;
-          case "doc_resource": {
+          case "changelog":
+            uri += "/changelog";
+            break;
+          case "asset": {
             assertRequiredIdentifier(args.key, "key", 512);
-            uri += `/doc_resource/${args.key}`;
+            uri += `/asset/${args.key}`;
             break;
           }
           default:

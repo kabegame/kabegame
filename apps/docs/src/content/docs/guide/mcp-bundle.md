@@ -73,7 +73,7 @@ npx @anthropic-ai/mcpb pack .
 - **`read_image`** — 按 `image_id` 读单张图片的基础字段。
 - **`read_image_metadata`** — 按 `image_id` 读单张图片的 metadata（标签、作者、来源 URL 等）。
 - **`read_album` / `read_task` / `read_surf`** — 分别读取复数表资源；省略 id 时列出全部。
-- **`read_plugin`** — 读取瘦身插件信息或插件图标、描述模板、文档资源。
+- **`read_plugin`** — 读取瘦身插件信息或插件图标、描述模板、默认文档、默认更新日志与共用资源。
 - **`set_album_images_order`** — 为一个画册设置手动顺序，单次最多 100 条；超过的话需要分批调用。
 - **`create_album` / `add_images_to_album` / `rename_image`** — 透传 HTTP MCP 的非删除写工具。
 
@@ -86,7 +86,7 @@ npx @anthropic-ai/mcpb pack .
 | `read_image` | `image_id` 必填，长度 ≤ 256。 |
 | `read_image_metadata` | `image_id` 必填，长度 ≤ 256。 |
 | `read_album` / `read_task` / `read_surf` | 对应 id 可选；省略即列出全部。`read_surf` 使用 `surf_record_id`，不是 host。 |
-| `read_plugin` | `plugin_id` 可选；`resource=doc_resource` 时 `key` 必填。 |
+| `read_plugin` | `plugin_id` 可选；`resource` 可取 `doc`、`changelog`、`asset` 等，`resource=asset` 时 `key` 必填。 |
 | `set_album_images_order` | `image_orders` 长度 `1..100`，每项为 `{image_id, order}`。 |
 | `create_album` / `add_images_to_album` / `rename_image` | 与 HTTP MCP 同名工具一致；`add_images_to_album.image_ids` 单次 ≤ 1000。 |
 

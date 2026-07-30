@@ -53,7 +53,7 @@
       <!-- 文档（按当前语言解析 doc record） -->
       <div class="plugin-doc-section">
         <PluginDocRenderer v-if="displayDoc" :markdown="displayDoc"
-          :doc-resources="plugin?.docResources ?? null"
+          :assets="plugin?.assets ?? null"
           :empty-description="effectiveDocEmptyDescription"
           @image-preview-open="$emit('doc-image-preview-open', $event)"
           @image-preview-close="$emit('doc-image-preview-close', $event)" />

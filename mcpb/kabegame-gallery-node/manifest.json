@@ -57,7 +57,7 @@
     },
     {
       "name": "read_plugin",
-      "description": "List all plugins (trimmed) or fetch a plugin's info / icon / description_template / doc / doc_resource."
+      "description": "List all plugins (trimmed) or fetch a plugin's info / icon / description_template / doc / changelog / asset."
     },
     {
       "name": "set_album_images_order",

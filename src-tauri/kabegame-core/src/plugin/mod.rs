@@ -2,7 +2,7 @@
 // 两者均依赖 deno_core（Cargo.toml 已按 not(ios) 门控），故 iOS 排除。
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod archive;
-pub mod doc_assets;
+pub mod assets;
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod ffmpeg;
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
@@ -182,6 +182,9 @@ pub struct Plugin {
     /// 多语言文档：键为 "default"、"zh"、"en" 等
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc: Option<PluginDoc>,
+    /// 多语言更新日志：键同 doc。其中的图片资源与 doc 共用 assets
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changelog: Option<PluginDoc>,
     /// 图标 PNG 的 base64 编码（data:image/png;base64,... 不含前缀）
     #[serde(
         default,
@@ -209,14 +212,10 @@ pub struct Plugin {
     /// 脚本内容及后端类型，仅后端使用，不序列化到前端
     #[serde(skip)]
     pub script: PluginScript,
-    /// 文档资源文件（图片等）：键为文档引用串经 normalize_doc_asset_key 归一化后的结果，
-    /// 值为 base64 编码
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "docResources"
-    )]
-    pub doc_resources: Option<HashMap<String, String>>,
+    /// 资源文件（图片等）：键为 kbAssets 声明的插件根相对路径经
+    /// normalize_asset_path 归一化后的结果，值为 base64。doc 与 changelog 共用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assets: Option<HashMap<String, String>>,
     /// 插件内 providers/ 解析出的 DSL，仅后端使用，不序列化到前端。
     #[serde(skip)]
     pub providers: Vec<PluginProviderDef>,
@@ -2053,12 +2052,13 @@ impl PluginManager {
             zip_manifest,
             config,
             doc,
+            changelog,
             script_type,
             icon_png_bytes,
             description_template,
             recommended_configs,
             script,
-            doc_resource_entries,
+            asset_entries,
             provider_entries,
             metadata_migration_entry,
         ) = tokio::task::spawn_blocking(move || -> Result<_, String> {
@@ -2121,11 +2121,11 @@ impl PluginManager {
             })
         };
 
-        let doc_resources = if doc_resource_entries.is_empty() {
+        let assets = if asset_entries.is_empty() {
             None
         } else {
             use base64::{engine::general_purpose::STANDARD, Engine as _};
-            let map: HashMap<String, String> = doc_resource_entries
+            let map: HashMap<String, String> = asset_entries
                 .into_iter()
                 .map(|(path, bytes)| (path, STANDARD.encode(&bytes)))
                 .collect();
@@ -2154,6 +2154,7 @@ impl PluginManager {
             min_app_incompatible: plugin_min_app_incompatible(manifest.min_app_version.as_deref()),
             file_path: Some(path.to_string_lossy().to_string()),
             doc,
+            changelog,
             icon_png_base64,
             description_template,
             recommended_configs,
@@ -2162,12 +2163,39 @@ impl PluginManager {
                 .and_then(|c| c.var.clone())
                 .unwrap_or_default(),
             script,
-            doc_resources,
+            assets,
             providers,
             metadata_migration: metadata_migration_entry,
             version_packed,
         })
     }
+}
+
+// 读一个 locale map 字段（kbDoc / kbChangelog）的全部 md 文本。
+// 缺条目 = 硬错误：路径是作者显式声明的，静默跳过只会让文档凭空消失。
+fn read_locale_md_field<R: std::io::Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+    pkg_obj: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    entries: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    let Some(map) = pkg_obj.get(field).and_then(|value| value.as_object()) else {
+        return Ok(());
+    };
+    for (lang_key, md_path_val) in map {
+        let md_path = md_path_val
+            .as_str()
+            .ok_or_else(|| format!("{field}[\"{lang_key}\"] 必须是字符串"))?;
+        validate_kb_rel_path(md_path)?;
+        let mut file = archive.by_name(md_path).map_err(|_| {
+            format!("package.json 引用的 {field}[\"{lang_key}\"] \"{md_path}\" 不在包内")
+        })?;
+        let mut text = String::new();
+        file.read_to_string(&mut text)
+            .map_err(|error| format!("读取 {field} \"{md_path}\" 失败: {error}"))?;
+        entries.push((lang_key.clone(), text));
+    }
+    Ok(())
 }
 
 /// v3 装载：按 package.json 字段拉取 zip 条目，无条目名约定。
@@ -2177,17 +2205,18 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
     plugin_id: &str,
 ) -> Result<
     (
-        PluginManifest,
-        Option<PluginConfig>,
-        Option<PluginDoc>,
-        String,
-        Option<Vec<u8>>,
-        Option<String>,
-        Vec<serde_json::Value>,
-        PluginScript,
-        Vec<(String, Vec<u8>)>,
-        Vec<(String, String)>,
-        Option<String>,
+        PluginManifest,         // manifest（以 ZIP 内 package.json 为权威）
+        Option<PluginConfig>,   // config
+        Option<PluginDoc>,      // doc：kbDoc 各 locale 的 md 全文
+        Option<PluginDoc>,      // changelog：kbChangelog 各 locale 的 md 全文
+        String,                 // script_type
+        Option<Vec<u8>>,        // icon_png_bytes（ZIP 内 kbIcon 字节）
+        Option<String>,         // description_template（EJS 源码）
+        Vec<serde_json::Value>, // recommended_configs
+        PluginScript,           // script（main 源码 + backend）
+        Vec<(String, Vec<u8>)>, // asset_entries：归一化路径 → 原始字节
+        Vec<(String, String)>,  // provider_entries：包内路径 → DSL 源文
+        Option<String>,         // metadata_migration_entry（.js 源码）
     ),
     String,
 > {
@@ -2272,88 +2301,45 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
     };
 
     let mut doc_entries: Vec<(String, String)> = Vec::new();
-    let mut doc_md_by_path: HashMap<String, String> = HashMap::new();
-    let mut doc_resource_entries: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut doc_resource_total_size: usize = 0;
-    let use_doc_asset_fallback = !pkg_obj.contains_key("kbDocAssets");
+    let mut changelog_entries: Vec<(String, String)> = Vec::new();
+    let mut asset_entries: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut asset_total_size: usize = 0;
 
-    if let Some(doc_map) = pkg_obj.get("kbDoc").and_then(|v| v.as_object()) {
-        for (lang_key, md_path_val) in doc_map {
-            let md_path = md_path_val
-                .as_str()
-                .ok_or_else(|| format!("kbDoc[\"{}\"] 必须是字符串", lang_key))?;
-            validate_kb_rel_path(md_path)?;
+    read_locale_md_field(archive, pkg_obj, "kbDoc", &mut doc_entries)?;
+    read_locale_md_field(archive, pkg_obj, "kbChangelog", &mut changelog_entries)?;
 
-            let md_text = {
-                let mut f = archive.by_name(md_path).map_err(|_| {
-                    format!(
-                        "package.json 引用的 kbDoc[\"{}\"] \"{}\" 不在包内",
-                        lang_key, md_path
-                    )
-                })?;
-                let mut s = String::new();
-                f.read_to_string(&mut s)
-                    .map_err(|e| format!("读取 kbDoc \"{}\" 失败: {}", md_path, e))?;
-                s
-            };
-
-            if use_doc_asset_fallback {
-                doc_md_by_path.insert(md_path.to_string(), md_text.clone());
-            }
-            doc_entries.push((lang_key.clone(), md_text));
-        }
-    }
-
-    let mut read_doc_md = |path: &str| doc_md_by_path.get(path).cloned();
-    let mut doc_asset_index: Vec<(String, String)> =
-        doc_assets::build_doc_asset_index(pkg, &mut read_doc_md)
-            .into_iter()
-            .collect();
-    doc_asset_index.sort_by(|(left, _), (right, _)| left.cmp(right));
-
-    for (resource_key, zip_path) in doc_asset_index {
-        if let Err(error) = validate_kb_rel_path(&zip_path) {
-            eprintln!("[WARN] 文档资源 {resource_key:?} 的包内路径非法，已跳过: {error}");
-            continue;
-        }
-        let mut resource_file = match archive.by_name(&zip_path) {
+    for asset_path in assets::build_asset_index(pkg) {
+        let mut asset_file = match archive.by_name(&asset_path) {
             Ok(file) => file,
             Err(_) => {
-                eprintln!(
-                    "[WARN] 文档资源 {resource_key:?} 引用的包内条目 {zip_path:?} 不存在，已跳过"
-                );
+                eprintln!("[WARN] kbAssets 项 {asset_path:?} 不在包内，已跳过");
                 continue;
             }
         };
         let mut bytes = Vec::new();
-        resource_file
+        asset_file
             .read_to_end(&mut bytes)
-            .map_err(|error| format!("读取文档资源 \"{}\" 失败: {}", zip_path, error))?;
+            .map_err(|error| format!("读取资源 \"{}\" 失败: {}", asset_path, error))?;
 
-        let resource_size = bytes.len();
-        if resource_size > doc_assets::DOC_ASSET_MAX_FILE_SIZE {
+        let asset_size = bytes.len();
+        if asset_size > assets::ASSET_MAX_FILE_SIZE {
             eprintln!(
-                "[WARN] 文档资源 {resource_key:?} 超过单文件 2 MB 上限，已跳过: {resource_size} bytes"
+                "[WARN] 资源 {asset_path:?} 超过单文件 2 MB 上限，已跳过: {asset_size} bytes"
             );
             continue;
         }
-        if doc_resource_total_size.saturating_add(resource_size)
-            > doc_assets::DOC_ASSET_MAX_TOTAL_SIZE
-        {
-            eprintln!(
-                "[WARN] 文档资源总量超过 10 MB 上限，已跳过 {resource_key:?}: {resource_size} bytes"
-            );
+        if asset_total_size.saturating_add(asset_size) > assets::ASSET_MAX_TOTAL_SIZE {
+            eprintln!("[WARN] 资源总量超过 10 MB 上限，已跳过 {asset_path:?}: {asset_size} bytes");
             continue;
         }
-        doc_resource_total_size += resource_size;
-        doc_resource_entries.push((resource_key, bytes));
+        asset_total_size += asset_size;
+        asset_entries.push((asset_path, bytes));
     }
 
-    let doc: Option<PluginDoc> = if doc_entries.is_empty() {
-        None
-    } else {
-        Some(doc_entries.into_iter().collect())
-    };
+    let doc: Option<PluginDoc> =
+        (!doc_entries.is_empty()).then(|| doc_entries.into_iter().collect());
+    let changelog: Option<PluginDoc> =
+        (!changelog_entries.is_empty()).then(|| changelog_entries.into_iter().collect());
 
     let mut recommended_configs: Vec<serde_json::Value> = Vec::new();
     if let Some(configs_arr) = pkg_obj
@@ -2451,12 +2437,13 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         manifest,
         config,
         doc,
+        changelog,
         script_type,
         icon_png_bytes,
         description_template,
         recommended_configs,
         script,
-        doc_resource_entries,
+        asset_entries,
         provider_entries,
         metadata_migration_entry,
     ))
@@ -3401,19 +3388,20 @@ pub fn plugin_config_from_package_json(
     Ok(Some(PluginConfig { base_url, var }))
 }
 
-/// 解析一段 md 中的本地图片引用（![](...) 与 <img src>；跳过 http(s)/data:），
-/// 返回 (归一化根相对路径, 原引用串) 列表。
-pub fn extract_doc_local_refs(md: &str, doc_dir: &str) -> Vec<(String, String)> {
+/// 解析一段 md 中的本地资源引用（`![](...)` 与 `<img src>`）。
+/// 返回原始引用串列表，按出现顺序、不去重 —— 归一化交给
+/// [`assets::normalize_asset_path`]，由调用方决定怎么用（报错要原串，查表要归一化）。
+/// 引用一律按插件根解析，与 md 自身所在目录无关。
+pub fn extract_local_refs(md: &str) -> Vec<String> {
     let mut refs = Vec::new();
     let patterns = [
         regex::Regex::new(r"!\[[^\]]*\]\(([^)]+)\)").unwrap(),
         regex::Regex::new(r#"<img[^>]+src=["']([^"']+)["'][^>]*>"#).unwrap(),
     ];
 
-    let doc_dir = doc_dir.trim_end_matches('/');
-
     for pat in &patterns {
         for cap in pat.captures_iter(md) {
+            let matched = cap.get(0).unwrap();
             let raw_ref = cap.get(1).unwrap().as_str();
             if raw_ref.starts_with("http://")
                 || raw_ref.starts_with("https://")
@@ -3421,40 +3409,11 @@ pub fn extract_doc_local_refs(md: &str, doc_dir: &str) -> Vec<(String, String)> 
             {
                 continue;
             }
-
-            let normalized = if raw_ref.starts_with('/') {
-                raw_ref.trim_start_matches('/').to_string()
-            } else {
-                let prefix = if doc_dir.is_empty() {
-                    String::new()
-                } else {
-                    format!("{}/", doc_dir)
-                };
-                let combined = format!("{}{}", prefix, raw_ref);
-                normalized_path_from_dot_dot(&combined)
-            };
-
-            if !normalized.is_empty() {
-                refs.push((normalized, raw_ref.to_string()));
-            }
+            refs.push((matched.start(), raw_ref.to_string()));
         }
     }
-    refs
-}
-
-fn normalized_path_from_dot_dot(p: &str) -> String {
-    let mut stack: Vec<&str> = Vec::new();
-    let normalized = p.replace('\\', "/");
-    for seg in normalized.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                stack.pop();
-            }
-            _ => stack.push(seg),
-        }
-    }
-    stack.join("/")
+    refs.sort_by_key(|(offset, _)| *offset);
+    refs.into_iter().map(|(_, raw_ref)| raw_ref).collect()
 }
 
 #[cfg(test)]
@@ -3597,7 +3556,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_doc_local_refs() {
+    fn test_extract_local_refs() {
         let md = r#"
 # Title
 ![img](./img.png)
@@ -3606,30 +3565,22 @@ mod tests {
 ![ext](https://example.com/ext.png)
 ![data](data:image/png;base64,abc)
 "#;
-        let refs = extract_doc_local_refs(md, "doc");
-        assert_eq!(refs.len(), 3);
+        assert_eq!(
+            extract_local_refs(md),
+            vec!["./img.png", "sub/photo.jpg", "/assets/icon.png"]
+        );
 
-        let paths: Vec<&str> = refs.iter().map(|(p, _)| p.as_str()).collect();
-        assert!(paths.contains(&"doc/img.png"));
-        assert!(paths.contains(&"doc/sub/photo.jpg"));
-        assert!(paths.contains(&"assets/icon.png"));
-
-        let original_refs: Vec<&str> = refs.iter().map(|(_, r)| r.as_str()).collect();
-        assert!(original_refs.contains(&"./img.png"));
-        assert!(original_refs.contains(&"sub/photo.jpg"));
-        assert!(original_refs.contains(&"/assets/icon.png"));
-
-        // should NOT include external refs
-        for (_, ref_str) in &refs {
-            assert!(!ref_str.starts_with("http"));
-            assert!(!ref_str.starts_with("data:"));
-        }
+        // 即使 md 深埋在子目录，引用串也原样返回，不拼接 md 所在目录。
+        assert_eq!(
+            extract_local_refs("![deep](images/deep.png)"),
+            vec!["images/deep.png"]
+        );
     }
 
     // ── v3 zip 装载测试 ──
 
     #[test]
-    fn test_v3_doc_assets_keep_markdown_verbatim_and_use_normalized_keys() {
+    fn test_v3_assets_keep_markdown_verbatim_and_use_normalized_paths() {
         let pkg = serde_json::json!({
             "name": "t",
             "version": "1.0.0",
@@ -3637,9 +3588,7 @@ mod tests {
             "kbBackend": "v8",
             "main": "main.js",
             "kbDoc": {"default": "doc_root/doc.md"},
-            "kbDocAssets": {
-                "./images/home.png": "doc_root/images/home.png"
-            }
+            "kbAssets": ["images/home.png"]
         });
         let md = "# Doc\n![](./images/home.png)\n`./images/home.png`\n";
         let image = b"png bytes";
@@ -3650,11 +3599,11 @@ mod tests {
             ),
             ("main.js", b"export async function crawl() {}"),
             ("doc_root/doc.md", md.as_bytes()),
-            ("doc_root/images/home.png", image),
+            ("images/home.png", image),
         ]);
 
         let mut archive = open_zip(&data);
-        let (_, _, doc, _, _, _, _, _, resources, _, _) =
+        let (_, _, doc, _, _, _, _, _, _, resources, _, _) =
             load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
 
         assert_eq!(
@@ -3670,16 +3619,14 @@ mod tests {
     }
 
     #[test]
-    fn test_v3_missing_doc_asset_warns_and_does_not_reject_plugin() {
+    fn test_v3_missing_asset_warns_and_does_not_reject_plugin() {
         let pkg = serde_json::json!({
             "name": "t",
             "version": "1.0.0",
             "kbPackageVersion": 3,
             "kbBackend": "v8",
             "main": "main.js",
-            "kbDocAssets": {
-                "./missing.png": "doc_root/missing.png"
-            }
+            "kbAssets": ["missing.png"]
         });
         let data = make_zip(&[
             (
@@ -3690,7 +3637,7 @@ mod tests {
         ]);
 
         let mut archive = open_zip(&data);
-        let (_, _, _, _, _, _, _, _, resources, _, _) =
+        let (_, _, _, _, _, _, _, _, _, resources, _, _) =
             load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
         assert!(resources.is_empty());
     }
@@ -3722,6 +3669,7 @@ mod tests {
             manifest,
             _config,
             _doc,
+            _changelog,
             script_type,
             _icon,
             _tpl,

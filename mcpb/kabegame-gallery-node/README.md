@@ -23,7 +23,8 @@
 - `read_task(task_id?)`：`tasks://all` 列表 / `tasks://id_{id}` 单条
 - `read_surf(surf_record_id?)`：`surf_records://all` 列表 / `surf_records://id_{id}` 单条
 - `read_plugin(plugin_id?, resource?, key?)`：`plugin://` 列表（trimmed）；`resource` 取
-  `info`(默认) | `icon` | `description_template` | `doc` | `doc_resource`（需 `key`）
+  `info`(默认) | `icon` | `description_template` | `doc` | `changelog` | `asset`
+  （`asset` 需插件根相对路径 `key`）
 
 写类工具（直转上游 `tools/call`）：
 
@@ -79,8 +80,8 @@ mcpb pack .
   - 对应 id（`album_id` / `task_id` / `surf_record_id`）可选；省略即列出全部
 - `read_plugin`
   - `plugin_id` 可选；`resource` 默认 `info`，可选
-    `info` | `icon` | `description_template` | `doc` | `doc_resource`
-  - `resource = doc_resource` 时 `key` 必填（长度 <= 512）
+    `info` | `icon` | `description_template` | `doc` | `changelog` | `asset`
+  - `resource = asset` 时 `key` 必填（`kbAssets` 中的插件根相对路径，长度 <= 512）
   - 当 `plugin_id` 省略时，仅允许 `resource = info`（即列出全部）
 - `set_album_images_order`
   - `album_id` 必填；`image_orders` 必填数组，长度 1..100

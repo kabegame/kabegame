@@ -78,14 +78,15 @@ export interface Plugin {
   filePath?: string | null;
   /** 多语言文档 */
   doc?: PluginManifestDoc | null;
+  changelog?: PluginManifestDoc | null;
   /** 图标 PNG base64（不含 data: 前缀） */
   iconPngBase64?: string | null;
   /** templates/description.ejs 内容 */
   descriptionTemplate?: string | null;
   /** configs/*.json 推荐运行配置列表 */
   recommendedConfigs?: any[];
-  /** doc_root 下非 .md 资源（图片等）base64 映射，键为相对 doc_root 的路径 */
-  docResources?: Record<string, string> | null;
+  /** 插件资源（图片等）base64 映射，键为归一化后的插件根相对路径 */
+  assets?: Record<string, string> | null;
 }
 
 /**

@@ -263,7 +263,7 @@ import PluginQuickPreviewPanel, {
 } from "@kabegame/core/components/plugin/PluginQuickPreviewPanel.vue";
 import type { PluginQuickPreviewImage } from "@kabegame/core/components/plugin/PluginQuickPreviewCarousel.vue";
 import { usePluginQuickPreview } from "@kabegame/core/composables/usePluginQuickPreview";
-import { guessDocAssetMime, humanizeDocAssetLabel } from "@kabegame/core/utils/docAssetKey";
+import { guessAssetMime, humanizeAssetLabel } from "@kabegame/core/utils/assetPath";
 import { isUpdateAvailable } from "@/utils/version";
 import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -535,7 +535,7 @@ const getPluginIconSrc = (p: PluginListItem) => {
   return pluginStore.pluginIconSrc(p.id) || null;
 };
 
-// ---- hover 快捷预览（走马灯示例图仅取已安装插件的 docResources，内存直读零成本；
+// ---- hover 快捷预览（走马灯示例图仅取已安装插件的 assets，内存直读零成本；
 //      商店未安装条目若拉取示例图需要 get_plugin_detail 现下整包 .kgpg，
 //      hover 这种高频轻量交互不适合触发这种下载，故只做 best-effort：
 //      版本与已安装一致时复用本地已装包，否则提示"安装后可查看"）----
@@ -569,14 +569,14 @@ const quickPreviewIconSrc = computed(() => {
 });
 
 const quickPreviewImages = computed<PluginQuickPreviewImage[]>(() => {
-  const resources = quickPreviewInstalledMatch.value?.docResources;
+  const resources = quickPreviewInstalledMatch.value?.assets;
   if (!resources) return [];
   return Object.keys(resources)
     .sort()
     .map((key) => ({
       key,
-      src: `data:${guessDocAssetMime(key)};base64,${resources[key]}`,
-      label: humanizeDocAssetLabel(key),
+      src: `data:${guessAssetMime(key)};base64,${resources[key]}`,
+      label: humanizeAssetLabel(key),
     }));
 });
 

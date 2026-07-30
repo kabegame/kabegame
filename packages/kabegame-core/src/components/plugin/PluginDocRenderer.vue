@@ -40,17 +40,17 @@ import "photoswipe-vue/photoswipe.css";
 import { useModal } from "../../composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { openExternalLink } from "../../utils/openExternalLink";
-import { guessDocAssetMime, normalizeDocAssetKey } from "../../utils/docAssetKey";
+import { guessAssetMime, normalizeAssetPath } from "../../utils/assetPath";
 
 const props = withDefaults(
   defineProps<{
     markdown?: string | null;
     emptyDescription?: string;
     /**
-     * 插件内嵌的文档资源：归一化键 → base64。
-     * 键的语义由 `normalizeDocAssetKey` 裁决，与后端 `doc_assets::normalize_doc_asset_key` 同构。
+     * 插件内嵌资源：归一化后的插件根相对路径 → base64。
+     * 键的语义由 `normalizeAssetPath` 裁决，与后端 `assets::normalize_asset_path` 同构。
      */
-    docResources?: Record<string, string> | null;
+    assets?: Record<string, string> | null;
   }>(),
   {
     emptyDescription: "该源暂无文档",
@@ -211,7 +211,7 @@ const sanitizeHtml = (rawHtml: string): string => {
 
 const renderMarkdown = async (
   markdown: string,
-  docResources?: Record<string, string> | null
+  assets?: Record<string, string> | null
 ): Promise<string> => {
   if (!markdown) return "";
 
@@ -252,17 +252,17 @@ const renderMarkdown = async (
     searchIndex = pathEnd + 1;
   }
 
-  // 2) 替换本地图片引用：用 docResources（内嵌 base64）。
+  // 2) 替换本地图片引用：用 assets（内嵌 base64）。
   //    外链（http/https/data/协议相对）归一化返回 null，原样留给 marked 渲染。
   let processed = markdown;
   for (const img of imageMatches.slice().reverse()) {
-    const key = normalizeDocAssetKey(img.path);
+    const key = normalizeAssetPath(img.path);
     if (key === null) continue;
 
-    const base64 = docResources?.[key];
+    const base64 = assets?.[key];
     const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     if (base64) {
-      const url = `data:${guessDocAssetMime(key)};base64,${base64}`;
+      const url = `data:${guessAssetMime(key)};base64,${base64}`;
       processed = processed.replace(
         new RegExp(escapedMatch, "g"),
         `<img src="${url}" alt="${escapeHtml(
@@ -305,7 +305,7 @@ watchEffect(() => {
     }
     html.value = await renderMarkdown(
       text,
-      props.docResources
+      props.assets
     );
   })();
 });

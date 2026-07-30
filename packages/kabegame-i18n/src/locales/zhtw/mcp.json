@@ -52,7 +52,8 @@
         "icon": { "name": "外掛圖示", "desc": "讀取外掛圖示圖片" },
         "description_template": { "name": "外掛描述模板", "desc": "讀取外掛描述頁模板" },
         "doc": { "name": "外掛文件", "desc": "讀取外掛預設文件" },
-        "doc_resource": { "name": "外掛文件資源", "desc": "讀取外掛文件引用的資源檔案" }
+        "changelog": { "name": "外掛更新日誌", "desc": "讀取外掛預設更新日誌" },
+        "asset": { "name": "外掛資源", "desc": "讀取外掛文件與更新日誌引用的資源檔案" }
       }
     }
   }

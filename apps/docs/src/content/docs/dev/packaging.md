@@ -67,15 +67,16 @@ deno task package --only <id1> <id2>     # 多选
 - `kbMetadataMigration` 引用的迁移脚本
 - `kbDescriptionTemplate` 引用的 `templates/description.ejs`
 - `kbDoc` 引用的 `doc_root/doc.md` / `doc.<lang>.md`
-- `kbDocAssets` values 指向的文档图片资源
+- `kbChangelog` 引用的 `CHANGELOG.md` / `CHANGELOG.<lang>.md`
+- `kbAssets` 数组项指向的文档与更新日志共用资源
 
 缺少 v3 `package.json` 或 `main` 指向的脚本会直接报错。
 
 :::note
-清单未引用的文件会被**静默丢弃**，不会提示。文档资源应显式写进 `kbDocAssets`：key 使用 Markdown 中的字面引用（如 `./images/home.png`），value 使用插件根相对路径（如 `doc_root/images/home.png`）。字段存在时，Markdown 引用了但未注册会硬报错；注册但未引用只警告。旧包缺少该字段时仍回退为 Markdown 自动扫描，但会提示未来移除。
+清单未引用的文件会被**静默丢弃**，不会提示。文档与更新日志资源应显式写进 `kbAssets` 数组，数组项与 Markdown 本地资源引用都使用插件根相对路径（如 `images/home.png`）。Markdown 引用了但未声明会硬报错；声明但未引用只警告。字段缺失或空数组都表示零资源。
 :::
 
-`kbDocAssets` value 必须存在且为 jpg/jpeg/png/gif/webp/bmp；单文件超过 2 MB 会硬报错，总体积超过 10 MB 会警告。`.kabegameignore` 不能排除 `kbDoc` 或 `kbDocAssets` 明确引用的关键文件。
+`kbAssets` 项必须存在且为 jpg/jpeg/png/gif/webp/bmp；单文件超过 2 MB 会硬报错，总体积超过 10 MB 会警告。`.kabegameignore` 不能排除 `kbDoc`、`kbChangelog` 或 `kbAssets` 明确引用的关键文件。
 
 ### 输出
 
@@ -199,9 +200,9 @@ https://github.com/kabegame/crawler-plugins/releases/latest/download/index.json
 
 **现象** 文档图片没被打进 `.kgpg`。
 
-**原因** 打包器只收 `kbDocAssets` 白名单 values（旧包才自动扫描 Markdown）。
+**原因** 打包器只收 `kbAssets` 白名单中的插件根相对路径。
 
-**操作** 在 `package.json` 注册 `"./图片引用": "插件根相对/文件路径"`，并确认 Markdown 引用归一化后没有键冲突。
+**操作** 在 `package.json` 的 `kbAssets` 数组中声明图片的插件根相对路径，并确认 `kbDoc` / `kbChangelog` 中的引用归一化后与它一致。
 
 ## 延伸阅读
 

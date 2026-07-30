@@ -11,7 +11,7 @@ plugin-name.kgpg
     - dist/main.js / crawl.js  # package.json main 指向的脚本（v8 打包产物 / webview 脚本）
     - doc_root/                # 文档目录（可选）
         ├── doc.md             # 插件文档，给用户查看。使用标准 Markdown 渲染（GFM）
-        └── images/example.png # kbDocAssets 显式导入的文档资源
+        └── images/example.png # kbAssets 显式导入的文档/更新日志资源
     - configs/                 # 推荐配置
     - metadata_migrations/     # 图片 metadata 迁移脚本（可选）
         └── migrate.js         # kbMetadataMigration 指向的单一脚本（ES module，export migrate）
@@ -52,9 +52,10 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
     "default": "doc_root/doc.md",
     "en": "doc_root/doc.en.md"
   },
-  "kbDocAssets": {
-    "./images/example.png": "doc_root/images/example.png"
+  "kbChangelog": {
+    "default": "CHANGELOG.md"
   },
+  "kbAssets": ["doc_root/images/example.png"],
   "kbRecommendedConfigs": ["configs/every-day.json"],
   "kbPathQLProviders": ["providers/entry_provider.json5"],
   "kbMetadataMigration": "metadata_migrations/migrate.js",
@@ -78,7 +79,8 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 | `kbConfig` | 否 | 旧 `config.json.var` 数组。 |
 | `kbIcon` | 否 | 插件图标路径，通常为 `icon.png`。打包时会写入 KGPG v3 固定头部。 |
 | `kbDoc` | 否 | 文档映射；`default` 对应默认文档，其他键为语言码。值为插件根相对路径，如 `doc_root/doc.ja.md`。 |
-| `kbDocAssets` | 否 | 文档资源导入白名单：键写 Markdown 中的本地资源引用串，值写插件根相对的包内路径。字段存在时，打包器不再自动扫描图片；Markdown 引用未注册会报错，未引用的预留项只警告。 |
+| `kbChangelog` | 否 | 更新日志映射；与 `kbDoc` 同构，`default` 对应默认更新日志，其他键为语言码。值为插件根相对路径。 |
+| `kbAssets` | 否 | 文档与更新日志共用的资源白名单，值为插件根相对路径字符串数组。Markdown 本地资源引用未声明会报错，未引用的预留项只警告。 |
 | `kbRecommendedConfigs` | 否 | 推荐运行配置文件路径数组。 |
 | `kbPathQLProviders` | 否 | Provider DSL 文件路径数组。 |
 | `kbMetadataMigration` | 否 | 单一 metadata 迁移脚本路径（`.js`，ES module，`export function migrate(input)`，需幂等一步到位；详见 cocs/crawler/METADATA_MIGRATION.md）。旧 `kbMetadataMigrations` 数组已停止支持：打包报可读错误，加载不解析。 |
@@ -97,13 +99,13 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 ]
 ```
 
-所有 `kb*` 路径字段（包括 `kbDocAssets` 的 value）都按插件根相对解析，禁止绝对路径、盘符和 `..`。`kbDocAssets` 的 key、Markdown 引用和运行时 `Plugin.docResources` 的 key 使用同一套归一化：去标题后缀、query/fragment 与前导 `/`，统一 `/` 分隔并折叠 `.`/`..`，百分号解码；外链不注册，大小写保持不变，且不会剥掉 `doc_root/`。例如 `./images/a.png` 的键是 `images/a.png`，而 `doc_root/images/a.png` 仍是另一个键。
+所有 `kb*` 路径字段和 `kbAssets` 数组项都按插件根相对解析，禁止绝对路径、盘符和越界的 `..`。`kbAssets` 项、`kbDoc` / `kbChangelog` Markdown 的本地资源引用、运行时 `Plugin.assets` 的 key 使用同一个插件根坐标系：去标题后缀、query/fragment 与前导 `/`，统一 `/` 分隔，百分号解码并折叠路径段；外链不注册，大小写保持不变。Markdown 所在目录不参与解析，因此文档位于 `doc_root/doc.md` 时，引用同目录图片也应写 `doc_root/images/a.png`；`./images/a.png` 始终解析为插件根的 `images/a.png`。
 
-显式白名单中的文件必须存在且扩展名为 jpg/jpeg/png/gif/webp/bmp，单文件超过 **2 MB** 会使打包失败；总体积超过 **10 MB** 会警告，加载时超出部分不内嵌。旧包缺少 `kbDocAssets` 时仍按 `kbDoc` Markdown 自动扫描本地图片，保持兼容；该回退会发出迁移警告。
+显式白名单中的文件必须存在且扩展名为 jpg/jpeg/png/gif/webp/bmp，单文件超过 **2 MB** 会使打包失败；总体积超过 **10 MB** 会警告，加载时超出部分不内嵌。字段缺失或空数组都表示零资源。
 
 ### `.kabegameignore`
 
-v3 打包会先按 `package.json` 显式字段收集文件，再应用插件根目录下的 `.kabegameignore`。语法是简单 glob，每行一条，空行、`#` 和 `//` 注释会被忽略；以 `!` 开头的规则会强制重新包含匹配文件。`package.json`、`main`、`kbDoc` 文档和 `kbDocAssets` resources 都是关键文件，不能被 ignore 排除。
+v3 打包会先按 `package.json` 显式字段收集文件，再应用插件根目录下的 `.kabegameignore`。语法是简单 glob，每行一条，空行、`#` 和 `//` 注释会被忽略；以 `!` 开头的规则会强制重新包含匹配文件。`package.json`、`main`、`kbDoc` / `kbChangelog` Markdown 和 `kbAssets` resources 都是关键文件，不能被 ignore 排除。
 
 ### 头部与插件清单
 
@@ -148,9 +150,10 @@ KGPG v3 固定头部只存 meta 与 icon，不存插件清单。完整安装、�
 - `dist/main.js` / `crawl.js` - `main` 指向的爬取脚本（v8 打包产物 / webview 脚本）
 - `metadata_migrations/migrate.js` - 可选，`kbMetadataMigration` 指向的单一图片 metadata 迁移脚本（ES module，export migrate）
 - `doc_root/doc.md` - 可选，用户文档（基于标准 Markdown/GFM 渲染）
-- `doc_root/<image>` - 可选，由 `kbDocAssets` 显式导入的文档资源（jpg/jpeg/png/gif/webp/bmp）
+- `CHANGELOG.md` - 可选，`kbChangelog` 指向的更新日志（基于标准 Markdown/GFM 渲染）
+- `<image>` - 可选，由 `kbAssets` 显式导入、供文档与更新日志共用的资源（jpg/jpeg/png/gif/webp/bmp）
 
-  这些资源在插件解析时会被一次性读入内存，经 base64 编码后随插件列表以 `Plugin.docResources` 字段下发给前端。key 是 Markdown 引用串的归一化结果，不是包内路径；Markdown 原文不会被改写。显式白名单的单文件 **2 MB** 上限在 CLI 打包阶段硬校验，单插件所有资源合计 **10 MB** 上限在打包时警告、加载时截断。旧包继续用 Markdown 扫描回退，超大文件维持警告并跳过。
+  这些资源在插件解析时会被一次性读入内存，经 base64 编码后随插件列表以 `Plugin.assets` 字段下发给前端。key 是 `kbAssets` 声明的插件根相对路径经统一归一化后的结果，`kbDoc` 与 `kbChangelog` 共用同一张表；Markdown 原文不会被改写。显式白名单的单文件 **2 MB** 上限在 CLI 打包阶段硬校验，单插件所有资源合计 **10 MB** 上限在打包时警告、加载时截断。
 
 ### kbConfig 与变量在脚本中的访问
 
@@ -203,6 +206,6 @@ export async function crawl() {
 - **JS 脚本（crawl.js，WebView 后端）**：仅用于需要浏览器窗口/DOM/Cookie 容器的插件；变量通过运行时注入的 `ctx.vars` 访问。
 
 ### 加载与运行策略
-- **一次性加载**：已安装插件在首次列出时（或通过 `refresh_plugins`）被 `parse_kgpg` 一次性解析：`package.json`、`kbDoc` 文档、`kbDocAssets` 资源（旧包回退扫描 Markdown）、`main` 脚本内容、`templates/description.ejs`、`configs/*.json` 均被读入内存并挂在 `Plugin` 结构体上。资源条目缺失只警告并跳过，不会阻止整个插件加载。
+- **一次性加载**：已安装插件在首次列出时（或通过 `refresh_plugins`）被 `parse_kgpg` 一次性解析：`package.json`、`kbDoc` 文档、`kbChangelog` 更新日志、`kbAssets` 资源、`main` 脚本内容、`templates/description.ejs`、`configs/*.json` 均被读入内存并挂在 `Plugin` 结构体上。资源条目缺失只警告并跳过，不会阻止整个插件加载。
 - **运行阶段**：爬取任务、文档图片、变量定义等均直接从内存读取，不再重新打开 `.kgpg` ZIP（临时预览/导入时例外）。
 - **磁盘保留**：`.kgpg` 文件仍保留在插件目录（`Plugin.file_path`），用于插件升级、导出等操作。

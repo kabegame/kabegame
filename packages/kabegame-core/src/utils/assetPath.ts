@@ -1,10 +1,10 @@
 /**
- * 插件文档资源键归一化。
+ * 插件资源路径归一化。
  *
- * 这是 `kbDocAssets` 注册键、文档 md 里的引用串、后端 `Plugin.docResources` 的键
- * 三者的**唯一裁决者**：键就是「md 里字面写的那串」经本函数归一化后的结果。
+ * 这是 `kbAssets` 项、文档 md 里的引用串、后端 `Plugin.assets` 的键
+ * 三者的**唯一裁决者**：三者都使用归一化后的插件根相对路径。
  *
- * 同构 Rust 实现：`src-tauri/kabegame-core/src/plugin/doc_assets.rs::normalize_doc_asset_key`
+ * 同构 Rust 实现：`src-tauri/kabegame-core/src/plugin/assets.rs::normalize_asset_path`
  * —— 改规则必须同时改两处，顺序也要一致。
  *
  * 两边的差异只会影响「这张图找不找得到」，不涉及安全边界：包内路径的合法性由后端的
@@ -17,7 +17,7 @@ const EXTERNAL_PREFIXES = ["http://", "https://", "data:", "//"];
 /**
  * @returns 归一化后的键；`null` 表示「不是本地资源引用」或该引用非法（调用方应原样保留）。
  */
-export function normalizeDocAssetKey(raw: string): string | null {
+export function normalizeAssetPath(raw: string): string | null {
   // 1) 去首尾空白
   let p = raw.trim();
   if (!p) return null;
@@ -55,31 +55,25 @@ export function normalizeDocAssetKey(raw: string): string | null {
   // 7) 去掉所有前导 `/`（root-relative 视同插件根相对）
   p = p.replace(/^\/+/, "");
 
-  // 8) 段级规整：丢弃空段与 `.`；`..` 弹栈，栈空时保留字面 `..`
+  // 8) 段级规整：丢弃空段与 `.`；`..` 弹栈，栈空时判非法
   const segments: string[] = [];
   for (const segment of p.split("/")) {
     if (!segment || segment === ".") continue;
     if (segment === "..") {
-      if (segments.length > 0 && segments[segments.length - 1] !== "..") {
-        segments.pop();
-      } else {
-        segments.push("..");
-      }
+      if (segments.length === 0) return null;
+      segments.pop();
       continue;
     }
     segments.push(segment);
   }
 
-  // 9) 拼回；为空则视为非法
-  //
-  // 注意：这里刻意**不** strip `doc_root/` 前缀，也**不**做大小写归一 ——
-  // 前者曾经是文档图片全部渲染成「加载失败」的根因，后者会与 ZIP 条目名的大小写敏感冲突。
+  // 拼回；为空则视为非法。大小写保持不变，以匹配 ZIP 条目名。
   const key = segments.join("/");
   return key || null;
 }
 
-/** 按扩展名猜 MIME；与 Rust `doc_assets.rs::mime_for_doc_asset` 及打包器白名单口径一致。 */
-export function guessDocAssetMime(pathOrKey: string): string {
+/** 按扩展名猜 MIME；与 Rust `assets.rs::mime_for_asset` 及打包器白名单口径一致。 */
+export function guessAssetMime(pathOrKey: string): string {
   const ext = pathOrKey.split(".").pop()?.toLowerCase();
   switch (ext) {
     case "jpg":
@@ -102,7 +96,7 @@ export function guessDocAssetMime(pathOrKey: string): string {
  * 从文档资源键推导一个可读标签（去目录前缀与扩展名，`-`/`_` 转空格，首字母大写）。
  * 插件作者没有提供图注元数据，这是唯一能从真实数据推导出的说明文字，不编造内容。
  */
-export function humanizeDocAssetLabel(key: string): string {
+export function humanizeAssetLabel(key: string): string {
   const base = key.split("/").pop() || key;
   const withoutExt = base.replace(/\.[^./]+$/, "");
   const spaced = withoutExt.replace(/[-_]+/g, " ").trim();

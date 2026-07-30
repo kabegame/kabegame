@@ -74,7 +74,7 @@ images://gallery/plugin/<pluginId>/desc/x100x/1
 | `albums://` | `all` / `id_{id}` | 两者 | — | `Vec<Album>` 或 `Album` | `application/json` | — |
 | `tasks://` | `all` / `id_{id}` | 两者 | — | `Vec<TaskInfo>` 或 `TaskInfo` | `application/json` | — |
 | `surf_records://` | `all` / `id_{id}` | 两者 | — | `Vec<SurfRecord>` 或 `SurfRecord` | `application/json` | — |
-| `plugin://` | `` / `{id}` / `{id}/icon` / `{id}/description_template` / `{id}/doc` / `{id}/doc_resource/{key}` | 两者 + 子资源 | — | 瘦身的 Plugin / 二进制 / 文本 | 多种 | — |
+| `plugin://` | `` / `{id}` / `{id}/icon` / `{id}/description_template` / `{id}/doc` / `{id}/changelog` / `{id}/asset/{path}` | 两者 + 子资源 | — | 瘦身的 Plugin / 二进制 / 文本 | 多种 | — |
 
 :::caution
 `provider://`、`image://`、`album://`、`task://`、`surf://` 已停用。请改用 `images://` 与复数表资源 scheme。
@@ -149,11 +149,12 @@ images://gallery/plugin/<pluginId>/desc/x100x/1
 | `plugin://{id}/icon` | Base64 图标 PNG | `image/png` | — |
 | `plugin://{id}/description_template` | EJS 描述模板 | `text/plain` | — |
 | `plugin://{id}/doc` | 默认语言的 `doc.md` | `text/markdown` | — |
-| `plugin://{id}/doc_resource/{key}` | `doc_root` 内单个文件 | 按扩展推断（见下） | — |
+| `plugin://{id}/changelog` | 默认语言的 `CHANGELOG.md` | `text/markdown` | — |
+| `plugin://{id}/asset/{path}` | `kbAssets` 声明的单个插件资源 | 按扩展推断（见下） | — |
 
-`doc_resource` 的 MIME 推断：`.png` → `image/png`，`.jpg` / `.jpeg` → `image/jpeg`，`.webp` → `image/webp`，`.svg` → `image/svg+xml`，`.gif` → `image/gif`，其它回落到 `application/octet-stream`。
+`asset` 的 MIME 推断：`.png` → `image/png`，`.jpg` / `.jpeg` → `image/jpeg`，`.webp` → `image/webp`，`.svg` → `image/svg+xml`，`.gif` → `image/gif`，其它回落到 `application/octet-stream`。路径是 `kbAssets` 中归一化后的插件根相对路径，文档与更新日志共用这些资源。
 
-「瘦身」指剥离了 `docResources`、`iconPngBase64`、`descriptionTemplate` 三个重字段；这些内容要通过上面的子路径单独拉取。
+「瘦身」指剥离了 `assets`、`iconPngBase64`、`descriptionTemplate` 三个重字段；这些内容要通过上面的子路径单独拉取。
 
 ## 通用分页规则
 
@@ -177,7 +178,7 @@ images://gallery/plugin/<pluginId>/desc/x100x/1
 
 ## 资源模板（`list_resource_templates`）
 
-共十五条模板，供 Host 动态拼接：
+共十六条模板，供 Host 动态拼接：
 
 - `images://id_{imageId}`、`images://id_{imageId}/metadata`
 - `images://gallery/plugin/{pluginId}/desc/x100x/{page}`
@@ -186,7 +187,7 @@ images://gallery/plugin/<pluginId>/desc/x100x/1
 - `images://gallery/search/display-name/{query}/all/desc/x100x/{page}`
 - `images://gallery/by_id/{imageId}`
 - `albums://id_{albumId}`、`tasks://id_{taskId}`、`surf_records://id_{surfRecordId}`
-- `plugin://{pluginId}`、`plugin://{pluginId}/doc`、`plugin://{pluginId}/icon`、`plugin://{pluginId}/description_template`、`plugin://{pluginId}/doc_resource/{resourceKey}`
+- `plugin://{pluginId}`、`plugin://{pluginId}/doc`、`plugin://{pluginId}/changelog`、`plugin://{pluginId}/icon`、`plugin://{pluginId}/description_template`、`plugin://{pluginId}/asset/{assetPath}`
 
 新增的 5 条 gallery 模板都复用 `images.read.gallery` capability id。
 
@@ -423,7 +424,7 @@ Rust 端通过 HTTP transport 暴露四个写入工具。Stdio Bundle 会透传�
 
 #### `read_plugin`
 
-省略 `plugin_id` 时转发 `plugin://`；提供 `plugin_id` 时默认转发 `plugin://{plugin_id}`。`resource` 可取 `icon`、`description_template`、`doc`、`doc_resource`，其中 `doc_resource` 需要 `key`。
+省略 `plugin_id` 时转发 `plugin://`；提供 `plugin_id` 时默认转发 `plugin://{plugin_id}`。`resource` 可取 `icon`、`description_template`、`doc`、`changelog`、`asset`，其中 `asset` 需要 `key`。
 
 #### `set_album_images_order`
 
