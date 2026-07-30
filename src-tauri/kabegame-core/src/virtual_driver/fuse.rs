@@ -7,12 +7,14 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use fuser::{
-    FileAttr, FileType, Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyOpen,
-    Request,
+    Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo,
+    KernelConfig, LockOwner, OpenFlags, RenameFlags, ReplyAttr, ReplyData, ReplyDirectory,
+    ReplyEmpty, ReplyEntry, ReplyOpen, Request,
 };
 
 use crate::emitter::GlobalEmitter;
@@ -111,7 +113,7 @@ impl KabegameFuseFs {
                     0
                 };
                 FileAttr {
-                    ino,
+                    ino: INodeNo(ino),
                     size: 0,
                     blocks: 0,
                     atime: now,
@@ -139,7 +141,7 @@ impl KabegameFuseFs {
                     0
                 };
                 FileAttr {
-                    ino,
+                    ino: INodeNo(ino),
                     size: *size,
                     blocks: (size + 511) / 512,
                     atime: meta.accessed,
@@ -159,35 +161,35 @@ impl KabegameFuseFs {
         }
     }
 
-    /// 映射 VfsError 到 libc 错误码
-    fn map_vfs_error(e: VfsError) -> libc::c_int {
+    /// 映射 VfsError 到 FUSE 错误码
+    fn map_vfs_error(e: VfsError) -> Errno {
         match e {
-            VfsError::NotFound(_) => libc::ENOENT,
-            VfsError::NotADirectory(_) => libc::ENOTDIR,
-            VfsError::AccessDenied(_) => libc::EACCES,
-            VfsError::AlreadyExists(_) => libc::EEXIST,
-            VfsError::InvalidParameter(_) => libc::EINVAL,
-            VfsError::Other(_) => libc::EIO,
+            VfsError::NotFound(_) => Errno::ENOENT,
+            VfsError::NotADirectory(_) => Errno::ENOTDIR,
+            VfsError::AccessDenied(_) => Errno::EACCES,
+            VfsError::AlreadyExists(_) => Errno::EEXIST,
+            VfsError::InvalidParameter(_) => Errno::EINVAL,
+            VfsError::Other(_) => Errno::EIO,
         }
     }
 }
 
 impl Filesystem for KabegameFuseFs {
-    fn init(&mut self, _req: &Request<'_>, _config: &mut KernelConfig) -> Result<(), libc::c_int> {
+    fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> io::Result<()> {
         // 初始化完成
         Ok(())
     }
 
-    fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let Some(parent_path) = self.get_path(parent) else {
-            reply.error(libc::ENOENT);
+    fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
+        let Some(parent_path) = self.get_path(parent.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
 
         let name_str = match name.to_str() {
             Some(s) => s,
             None => {
-                reply.error(libc::EINVAL);
+                reply.error(Errno::EINVAL);
                 return;
             }
         };
@@ -200,7 +202,7 @@ impl Filesystem for KabegameFuseFs {
             Ok(item) => {
                 let ino = self.get_or_alloc_inode(&child_path);
                 let attr = self.opened_to_attr(&item, ino);
-                reply.entry(&TTL, &attr, 0);
+                reply.entry(&TTL, &attr, Generation(0));
             }
             Err(e) => {
                 reply.error(Self::map_vfs_error(e));
@@ -208,16 +210,22 @@ impl Filesystem for KabegameFuseFs {
         }
     }
 
-    fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
-        let Some(path) = self.get_path(ino) else {
-            reply.error(libc::ENOENT);
+    fn getattr(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: Option<FileHandle>,
+        reply: ReplyAttr,
+    ) {
+        let Some(path) = self.get_path(ino.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
 
         let sem = self.semantics();
         match sem.open_existing(&path) {
             Ok(item) => {
-                let attr = self.opened_to_attr(&item, ino);
+                let attr = self.opened_to_attr(&item, ino.0);
                 reply.attr(&TTL, &attr);
             }
             Err(e) => {
@@ -227,15 +235,15 @@ impl Filesystem for KabegameFuseFs {
     }
 
     fn readdir(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
         mut reply: ReplyDirectory,
     ) {
-        let Some(path) = self.get_path(ino) else {
-            reply.error(libc::ENOENT);
+        let Some(path) = self.get_path(ino.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
 
@@ -250,10 +258,10 @@ impl Filesystem for KabegameFuseFs {
 
         // 添加 "." 和 ".."
         let mut all_entries: Vec<(u64, &str, FileType)> = vec![
-            (ino, ".", FileType::Directory),
+            (ino.0, ".", FileType::Directory),
             (
                 if path.is_empty() {
-                    ino
+                    ino.0
                 } else {
                     self.get_or_alloc_inode(&path[..path.len() - 1])
                 },
@@ -284,22 +292,22 @@ impl Filesystem for KabegameFuseFs {
         // 根据 offset 跳过已发送的条目
         let start = offset as usize;
         for (i, (ino, name, kind)) in all_entries.iter().enumerate().skip(start) {
-            if reply.add(*ino, (i + 1) as i64, *kind, name) {
+            if reply.add(INodeNo(*ino), (i + 1) as u64, *kind, name) {
                 break;
             }
         }
         reply.ok();
     }
 
-    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         // 检查是否允许写入（我们只支持只读）
-        if (flags & libc::O_RDWR != 0) || (flags & libc::O_WRONLY != 0) {
-            reply.error(libc::EACCES);
+        if (flags.0 & libc::O_RDWR != 0) || (flags.0 & libc::O_WRONLY != 0) {
+            reply.error(Errno::EACCES);
             return;
         }
 
-        let Some(path) = self.get_path(ino) else {
-            reply.error(libc::ENOENT);
+        let Some(path) = self.get_path(ino.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
 
@@ -327,7 +335,7 @@ impl Filesystem for KabegameFuseFs {
                 );
                 drop(file_handles);
 
-                reply.opened(fh, 0);
+                reply.opened(FileHandle(fh), FopenFlags::empty());
             }
             Ok(VfsOpenedItem::Directory { .. }) => {
                 // 目录打开：返回一个简单的 fh
@@ -335,7 +343,7 @@ impl Filesystem for KabegameFuseFs {
                 let fh = *next_fh;
                 *next_fh += 1;
                 drop(next_fh);
-                reply.opened(fh, 0);
+                reply.opened(FileHandle(fh), FopenFlags::empty());
             }
             Err(e) => {
                 reply.error(Self::map_vfs_error(e));
@@ -344,58 +352,53 @@ impl Filesystem for KabegameFuseFs {
     }
 
     fn read(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
         size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
-        reply: fuser::ReplyData,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
+        reply: ReplyData,
     ) {
         let file_handles = self.file_handles.lock().unwrap();
-        let Some(opened_file) = file_handles.get(&fh) else {
-            reply.error(libc::EBADF);
+        let Some(opened_file) = file_handles.get(&fh.0) else {
+            reply.error(Errno::EBADF);
             return;
         };
 
-        if offset < 0 {
-            reply.error(libc::EINVAL);
-            return;
-        }
-
         let mut buffer = vec![0u8; size as usize];
-        match opened_file.read_handle.read_at(offset as u64, &mut buffer) {
+        match opened_file.read_handle.read_at(offset, &mut buffer) {
             Ok(n) => {
                 buffer.truncate(n);
                 reply.data(&buffer);
             }
             Err(_) => {
-                reply.error(libc::EIO);
+                reply.error(Errno::EIO);
             }
         }
     }
 
     fn release(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
         _flush: bool,
-        reply: fuser::ReplyEmpty,
+        reply: ReplyEmpty,
     ) {
         let mut file_handles = self.file_handles.lock().unwrap();
-        file_handles.remove(&fh);
+        file_handles.remove(&fh.0);
         reply.ok();
     }
 
     fn mkdir(
-        &mut self,
-        _req: &Request<'_>,
-        parent: u64,
+        &self,
+        _req: &Request,
+        parent: INodeNo,
         name: &OsStr,
         mode: u32,
         umask: u32,
@@ -404,70 +407,70 @@ impl Filesystem for KabegameFuseFs {
         let _ = mode; // 忽略 mode，使用语义层的权限控制
         let _ = umask; // 忽略 umask
 
-        let Some(parent_path) = self.get_path(parent) else {
-            reply.error(libc::ENOENT);
+        let Some(parent_path) = self.get_path(parent.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
 
         let name_str = match name.to_str() {
             Some(s) => s.trim(),
             None => {
-                reply.error(libc::EINVAL);
+                reply.error(Errno::EINVAL);
                 return;
             }
         };
 
         if name_str.is_empty() {
-            reply.error(libc::EINVAL);
+            reply.error(Errno::EINVAL);
             return;
         }
 
         // VD 只读——不允许创建目录
         let _ = name_str;
-        reply.error(libc::EACCES);
+        reply.error(Errno::EACCES);
     }
 
-    fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
-        let Some(parent_path) = self.get_path(parent) else {
-            reply.error(libc::ENOENT);
+    fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let Some(parent_path) = self.get_path(parent.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
 
         let name_str = match name.to_str() {
             Some(s) => s,
             None => {
-                reply.error(libc::EINVAL);
+                reply.error(Errno::EINVAL);
                 return;
             }
         };
 
         // VD 只读——不允许删除目录
         let _ = name_str;
-        reply.error(libc::EACCES);
+        reply.error(Errno::EACCES);
     }
 
     fn unlink(
-        &mut self,
-        _req: &Request<'_>,
-        _parent: u64,
+        &self,
+        _req: &Request,
+        _parent: INodeNo,
         _name: &OsStr,
-        reply: fuser::ReplyEmpty,
+        reply: ReplyEmpty,
     ) {
         // VD 只读——不允许删除文件
-        reply.error(libc::EACCES);
+        reply.error(Errno::EACCES);
     }
 
     fn rename(
-        &mut self,
-        _req: &Request<'_>,
-        _parent: u64,
+        &self,
+        _req: &Request,
+        _parent: INodeNo,
         _name: &OsStr,
-        _newparent: u64,
+        _newparent: INodeNo,
         _newname: &OsStr,
-        _flags: u32,
-        reply: fuser::ReplyEmpty,
+        _flags: RenameFlags,
+        reply: ReplyEmpty,
     ) {
         // VD 只读——不允许重命名
-        reply.error(libc::EACCES);
+        reply.error(Errno::EACCES);
     }
 }

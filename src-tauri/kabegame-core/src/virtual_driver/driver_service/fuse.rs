@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwap;
-use fuser::{spawn_mount2, BackgroundSession, MountOption};
+use fuser::{spawn_mount, BackgroundSession, Config, MountOption};
 
 use crate::providers::provider_runtime;
 use crate::virtual_driver::fuse::KabegameFuseFs;
@@ -184,7 +184,8 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
         let fs = KabegameFuseFs::new();
 
         // 挂载选项
-        let mount_options = &[
+        let mut cfg = Config::default();
+        cfg.mount_options = vec![
             MountOption::FSName("kabegame".to_string()),
             MountOption::Subtype("kabegame-vd".to_string()),
             // 注意：不使用 AllowOther，避免需要修改 /etc/fuse.conf
@@ -195,7 +196,7 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
 
         // 挂载文件系统
         let session =
-            spawn_mount2(fs, &mount_path, mount_options).map_err(|e| format!("挂载失败: {}", e))?;
+            spawn_mount(fs, &mount_path, &cfg).map_err(|e| format!("挂载失败: {}", e))?;
 
         // 保存状态
         let mount_point_arc: Arc<str> = Arc::from(mount_path.to_string_lossy().to_string());
@@ -216,8 +217,10 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
             return Ok(false);
         };
 
-        // 显式 join：确保卸载完成、目录不再 busy
-        session.join();
+        // 显式卸载并 join：确保卸载完成、目录不再 busy
+        session
+            .umount_and_join()
+            .map_err(|e| format!("卸载失败: {}", e))?;
 
         self.mounted.store(Arc::new(None));
         Ok(true)

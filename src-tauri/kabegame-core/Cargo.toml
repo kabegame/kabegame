@@ -94,11 +94,15 @@ libc = "0.2"
 # libfuse DT_NEEDED,挂载时才懒执行 SUID `fusermount3`(apt `fuse3` 提供)——
 # 语义与 Windows delay-load dokan2.dll 一致:缺库不影响启动,仅虚拟盘功能不可用。
 # 因此不需要 libfuse3.a/.so,构建期也不再需要 FUSE3_STATIC;deb 运行时仍 depends fuse3。
-fuser = { version = "0.16", optional = true }
+fuser = { version = "0.18", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
-fuser = { version = "0.16", features = ["libfuse"], optional = true }
+# macOS 保持 `libfuse`:fuser 0.18 的 build.rs 对 macOS 有专用分支,无条件
+# pkg_config probe `fuse`(macFUSE 4.x)并置 `fuser_mount_impl="libfuse2"` +
+# 自动开 `macfuse-4-compat`——「0.17 起优先 libfuse3」只作用于非 macOS 分支,
+# 所以**不需要**显式加 `libfuse2`。
+fuser = { version = "0.18", features = ["libfuse"], optional = true }
 
 # Android 交叉编译时无系统 OpenSSL，使用 vendored 从源码编译
 [target.'cfg(target_os = "android")'.dependencies]
