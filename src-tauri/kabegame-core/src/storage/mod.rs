@@ -137,7 +137,9 @@ PRAGMA mmap_size = 268435456;
             }
         }
         let total: usize = conn
-            .query_row("SELECT COUNT(*) FROM images", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM images", [], |row| {
+                row.get::<_, i64>(0).map(|count| count as usize)
+            })
             .map_err(|e| format!("Failed to query total count: {}", e))?;
         if let Ok(mut g) = self.cached_images_total.lock() {
             *g = Some(total);

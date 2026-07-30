@@ -111,7 +111,7 @@ fn main() {
         // Chromium/CEF performs TLS certificate verification via NSS, which
         // dlopen()s libsoftokn3 → system libsqlite3 to open its cert DB. Because
         // the MAIN executable's global symbols take precedence, softokn binds
-        // `sqlite3_*` to OUR statically-linked SQLite (rusqlite, 3.45.0) instead
+        // `sqlite3_*` to OUR statically-linked SQLite (rusqlite, 3.53.2) instead
         // of the system libsqlite3 (3.46.1) it was built against → mismatched
         // VFS/struct layout → call through a null pointer → SIGSEGV on startup.
         //

@@ -460,7 +460,7 @@ impl Storage {
             .query_row(
                 "SELECT COUNT(*) FROM album_images WHERE album_id = ?1",
                 params![album_id],
-                |row| row.get(0),
+                |row| row.get::<_, i64>(0).map(|count| count as usize),
             )
             .unwrap_or(0);
 
@@ -542,7 +542,7 @@ impl Storage {
         conn.query_row(
             "SELECT COUNT(*) FROM album_images WHERE album_id = ?1",
             params![album_id],
-            |row| row.get(0),
+            |row| row.get::<_, i64>(0).map(|count| count as usize),
         )
         .map_err(|e| format!("Failed to count album images: {e}"))
     }

@@ -219,7 +219,9 @@ impl Storage {
     ) -> Result<RangedSurfRecords, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let total: usize = conn
-            .query_row("SELECT COUNT(*) FROM surf_records", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM surf_records", [], |row| {
+                row.get::<_, i64>(0).map(|count| count as usize)
+            })
             .map_err(|e| format!("Failed to query surf_records total: {}", e))?;
         let mut stmt = conn
             .prepare(
@@ -426,7 +428,7 @@ impl Storage {
             .query_row(
                 "SELECT COUNT(*) FROM images WHERE surf_record_id = ?1",
                 params![surf_record_id],
-                |row| row.get(0),
+                |row| row.get::<_, i64>(0).map(|count| count as usize),
             )
             .map_err(|e| format!("Failed to query surf images total: {}", e))?;
         let query = format!(
@@ -466,7 +468,7 @@ impl Storage {
                         plugin_id: row.get::<_, Option<String>>(3)?,
                         task_id: row.get(4)?,
                         surf_record_id: Some(surf_record_id.to_string()),
-                        crawled_at: row.get(5)?,
+                        crawled_at: row.get::<_, i64>(5)? as u64,
                         metadata_id: row.get::<_, Option<i64>>(6)?,
                         plugin_version: 0,
                         thumbnail_path: row.get(7)?,
@@ -541,7 +543,7 @@ impl Storage {
                     plugin_id: row.get::<_, Option<String>>(3)?,
                     task_id: row.get(4)?,
                     surf_record_id: Some(surf_record_id.to_string()),
-                    crawled_at: row.get(5)?,
+                    crawled_at: row.get::<_, i64>(5)? as u64,
                     metadata_id: row.get::<_, Option<i64>>(6)?,
                     plugin_version: 0,
                     thumbnail_path: row.get(7)?,
