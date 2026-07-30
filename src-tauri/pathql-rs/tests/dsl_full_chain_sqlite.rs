@@ -46,15 +46,15 @@ fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
 const PROVIDER_FILES: &[&str] = &[
     "images/images_root_provider.json5",
     "images/image_basic_provider.json5",
-    "gallery/gallery_route.json5",
-    "gallery/gallery_hide_router.json5",
-    "gallery/all_router/gallery_all_router.json5",
-    "gallery/gallery_desc_pagination_page_comb.json5",
-    "gallery/all_router/x_page_x/gallery_paginate_router.json5",
+    "images/gallery/gallery_route.json5",
+    "images/gallery/gallery_hide_router.json5",
+    "images/gallery/all_router/gallery_all_router.json5",
+    "images/gallery/gallery_desc_pagination_page_comb.json5",
+    "images/gallery/all_router/x_page_x/gallery_paginate_router.json5",
     "shared/page_size_provider.json5",
     "shared/query_page_provider.json5",
-    "vd/vd_root_router.json5",
-    "vd/zh_CN/vd_zh_CN_root_router.json5",
+    "images/vd/vd_root_router.json5",
+    "images/vd/zh_CN/vd_zh_CN_root_router.json5",
 ];
 
 fn providers_dir() -> PathBuf {

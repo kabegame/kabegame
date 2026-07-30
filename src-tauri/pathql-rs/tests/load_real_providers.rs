@@ -26,9 +26,11 @@ fn recursive_scan_excludes_non_provider_files() {
 
     assert!(rels.contains(&"images/images_root_provider.json5".to_string()));
     assert!(rels.contains(&"images/image_basic_provider.json5".to_string()));
-    assert!(rels.contains(&"vd/zh_CN/vd_zh_CN_root_router.json5".to_string()));
+    assert!(rels.contains(&"images/vd/zh_CN/vd_zh_CN_root_router.json5".to_string()));
     assert!(!rels.contains(&"schema.json5".to_string()));
-    assert!(!rels.contains(&"gallery/all_router/x_page_x/gallery_page_router.json5".to_string()));
+    assert!(
+        !rels.contains(&"images/gallery/all_router/x_page_x/gallery_page_router.json5".to_string())
+    );
 }
 
 #[test]

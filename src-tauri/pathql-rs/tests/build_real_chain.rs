@@ -118,6 +118,7 @@ fn build_gallery_page_chain_renders_executable_sql() {
             local_path TEXT NOT NULL DEFAULT '',
             plugin_id TEXT,
             task_id TEXT,
+            surf_record_id TEXT,
             crawled_at INTEGER,
             metadata_id INTEGER,
             thumbnail_path TEXT NOT NULL DEFAULT '',
@@ -127,9 +128,18 @@ fn build_gallery_page_chain_renders_executable_sql() {
             display_name TEXT,
             type TEXT,
             last_set_wallpaper_at INTEGER,
-            size INTEGER
+            size INTEGER,
+            compatible_path TEXT,
+            post_url TEXT
          );
          CREATE TABLE album_images (album_id TEXT, image_id INTEGER);
+         -- gallery provider 会 LEFT JOIN metadata 取 plugin_version,列与 init.rs 的真实 schema 对齐
+         CREATE TABLE metadata (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT NOT NULL,
+            plugin_version INTEGER NOT NULL DEFAULT 0,
+            plugin_id TEXT NOT NULL DEFAULT ''
+         );
          INSERT INTO images (url, local_path, thumbnail_path, crawled_at, display_name)
          VALUES ('a','a.jpg','a.thumb',1,'a'), ('b','b.jpg','b.thumb',2,'b'), ('c','c.jpg','c.thumb',3,'c');",
     )
@@ -175,6 +185,7 @@ fn build_gallery_page_chain_with_page_2_offsets_correctly() {
             local_path TEXT NOT NULL DEFAULT '',
             plugin_id TEXT,
             task_id TEXT,
+            surf_record_id TEXT,
             crawled_at INTEGER,
             metadata_id INTEGER,
             thumbnail_path TEXT NOT NULL DEFAULT '',
@@ -184,9 +195,18 @@ fn build_gallery_page_chain_with_page_2_offsets_correctly() {
             display_name TEXT,
             type TEXT,
             last_set_wallpaper_at INTEGER,
-            size INTEGER
+            size INTEGER,
+            compatible_path TEXT,
+            post_url TEXT
          );
          CREATE TABLE album_images (album_id TEXT, image_id INTEGER);
+         -- gallery provider 会 LEFT JOIN metadata 取 plugin_version,列与 init.rs 的真实 schema 对齐
+         CREATE TABLE metadata (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT NOT NULL,
+            plugin_version INTEGER NOT NULL DEFAULT 0,
+            plugin_id TEXT NOT NULL DEFAULT ''
+         );
          INSERT INTO images (url, local_path, thumbnail_path, crawled_at, display_name)
          VALUES ('a','a.jpg','a.thumb',1,'a'), ('b','b.jpg','b.thumb',2,'b'), ('c','c.jpg','c.thumb',3,'c'), ('d','d.jpg','d.thumb',4,'d'), ('e','e.jpg','e.thumb',5,'e');",
     )

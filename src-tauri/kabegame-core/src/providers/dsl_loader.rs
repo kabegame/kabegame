@@ -28,8 +28,11 @@ pub static DSL_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/providers/ds
 pub const EXCLUDED_DSL_FILES: &[&str] = &[
     "schema.json5",
     // Legacy shim kept on disk for compatibility notes; shared/query_page_provider.json5
-    // is the canonical provider definition and has the same provider name.
-    "gallery/all_router/x_page_x/gallery_page_router.json5",
+    // is the canonical definition of this pagination step.
+    // 路径必须相对 `dsl/` 根且**全等**匹配 `include_dir` 给出的 path
+    // (`is_excluded_embedded_dsl_file` 用 eq_ignore_ascii_case,不做后缀匹配)——
+    // provider 布局迁到 `images/` 下后这里漏了前缀,排除曾静默失效。
+    "images/gallery/all_router/x_page_x/gallery_page_router.json5",
 ];
 
 fn is_excluded_embedded_dsl_file(path: &str) -> bool {

@@ -68,8 +68,8 @@ fn fold_gallery_page_chain() {
     assert_eq!(state.order.entries[0].0, "images.crawled_at");
     assert!(state.order.global.is_none());
 
-    assert_eq!(state.fields.len(), 17);
-    assert_eq!(state.joins.len(), 2);
+    assert_eq!(state.fields.len(), 21);
+    assert_eq!(state.joins.len(), 3);
     assert!(state.wheres.is_empty());
 
     // no refs allocated
@@ -100,8 +100,8 @@ fn fold_gallery_route_alone_keeps_schema_from() {
     fold_provider_query(&mut state, &r, "gallery_route");
     assert_eq!(state.from, Some(SqlExpr("images".into())));
     assert_eq!(state.limit, None);
-    assert_eq!(state.fields.len(), 17);
-    assert_eq!(state.joins.len(), 2);
+    assert_eq!(state.fields.len(), 21);
+    assert_eq!(state.joins.len(), 3);
     // 7b: gallery_route 邇ｰ荵溯ｴ｡迪ｮ order
     assert_eq!(state.order.entries.len(), 1);
     assert_eq!(state.order.entries[0].0, "images.crawled_at");

@@ -8,7 +8,7 @@ pub const PROVIDER_FILE_EXTENSIONS: &[&str] = &["json", "json5"];
 // live under the DSL root but are not provider definitions.
 pub const EXCLUDED_DSL_FILES: &[&str] = &[
     "schema.json5",
-    "gallery/all_router/x_page_x/gallery_page_router.json5",
+    "images/gallery/all_router/x_page_x/gallery_page_router.json5",
 ];
 
 pub fn providers_dir() -> PathBuf {
