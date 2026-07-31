@@ -1,7 +1,7 @@
 <template>
   <div ref="docRootRef" class="doc-root">
     <div v-if="!markdown" class="empty">
-      <el-empty :description="emptyDescription" :image-size="100" />
+      <el-empty :description="effectiveEmptyDescription" :image-size="100" />
     </div>
     <div v-else class="doc" v-html="html"></div>
 
@@ -37,10 +37,18 @@ import { marked } from "marked";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
 import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
+import { useI18n } from "@kabegame/i18n";
 import { useModal } from "../../composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { openExternalLink } from "../../utils/openExternalLink";
 import { guessAssetMime, normalizeAssetPath } from "../../utils/assetPath";
+
+/** 文档目录项：id 是渲染时打进标题的锚点，序号即下标，与 DOM 锚点天然一一对应 */
+export interface DocHeading {
+  id: string;
+  text: string;
+  level: number;
+}
 
 const props = withDefaults(
   defineProps<{
@@ -51,15 +59,20 @@ const props = withDefaults(
      * 键的语义由 `normalizeAssetPath` 裁决，与后端 `assets::normalize_asset_path` 同构。
      */
     assets?: Record<string, string> | null;
+    /** 标题锚点前缀；同页多个渲染器实例（如 说明/更新记录 tab 同时挂载）必须各自不同 */
+    anchorPrefix?: string;
   }>(),
   {
-    emptyDescription: "该源暂无文档",
+    anchorPrefix: "kbdoc",
   }
 );
+
+const { t } = useI18n();
 
 const emit = defineEmits<{
   (e: "image-preview-open", payload: DocImagePreviewPayload): void;
   (e: "image-preview-close", payload: DocImagePreviewPayload): void;
+  (e: "headings", headings: DocHeading[]): void;
 }>();
 
 type DocImagePreviewPayload = {
@@ -68,6 +81,8 @@ type DocImagePreviewPayload = {
   src: string;
   alt: string;
 };
+
+const effectiveEmptyDescription = computed(() => props.emptyDescription ?? t("common.pluginNoDoc"));
 
 const html = ref("");
 const docRootRef = ref<HTMLElement | null>(null);
@@ -212,8 +227,8 @@ const sanitizeHtml = (rawHtml: string): string => {
 const renderMarkdown = async (
   markdown: string,
   assets?: Record<string, string> | null
-): Promise<string> => {
-  if (!markdown) return "";
+): Promise<{ html: string; headings: DocHeading[] }> => {
+  if (!markdown) return { html: "", headings: [] };
 
   // 1) 解析图片引用：![alt](path)，路径中可含括号，用括号计数找闭合 ) 避免正文如「胡桃(原神)」干扰
   const imageMatches: Array<{ match: string; alt: string; path: string }> = [];
@@ -272,12 +287,14 @@ const renderMarkdown = async (
     } else {
       processed = processed.replace(
         new RegExp(escapedMatch, "g"),
-        `[图片加载失败: ${escapeHtml(img.path)}]`
+        `[${escapeHtml(t("plugins.detail.imageLoadFailed", { path: img.path }))}]`
       );
     }
   }
 
-  // 3) 配置 marked 渲染器，让链接在新窗口打开
+  // 3) 配置 marked 渲染器：链接新窗口打开；标题打序号锚点并同步收集目录项。
+  //    序号即锚点下标——TOC 项与 DOM 锚点共用同一个 i，不存在对不上的可能。
+  const headings: DocHeading[] = [];
   const renderer = new marked.Renderer();
   renderer.link = function(token) {
     const href = token.href;
@@ -286,6 +303,12 @@ const renderMarkdown = async (
     const titleAttr = title ? ` title="${title.replace(/"/g, '&quot;')}"` : '';
     return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
   };
+  renderer.heading = function (token) {
+    const text = this.parser.parseInline(token.tokens || []);
+    const id = `${props.anchorPrefix}-h-${headings.length}`;
+    headings.push({ id, text: String(token.text ?? "").trim(), level: token.depth });
+    return `<h${token.depth} id="${id}">${text}</h${token.depth}>`;
+  };
 
   // 使用 marked 做标准 Markdown 渲染，再进行 HTML 清洗
   const rawHtml = marked.parse(processed, {
@@ -293,7 +316,7 @@ const renderMarkdown = async (
     breaks: true,
     renderer,
   }) as string;
-  return sanitizeHtml(rawHtml);
+  return { html: sanitizeHtml(rawHtml), headings };
 };
 
 watchEffect(() => {
@@ -301,12 +324,12 @@ watchEffect(() => {
     const text = md.value;
     if (!text) {
       html.value = "";
+      emit("headings", []);
       return;
     }
-    html.value = await renderMarkdown(
-      text,
-      props.assets
-    );
+    const result = await renderMarkdown(text, props.assets);
+    html.value = result.html;
+    emit("headings", result.headings);
   })();
 });
 </script>

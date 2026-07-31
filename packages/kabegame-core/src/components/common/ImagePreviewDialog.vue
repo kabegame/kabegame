@@ -47,13 +47,19 @@
       class="image-preview-dialog" :show-close="true" :lock-scroll="true"
       :z-index="previewFullscreenZIndex" @update:model-value="previewModal.close" @close="closePreview">
       <div v-if="previewModal.isOpen.value" class="preview-desktop-body">
-        <aside class="preview-detail-drawer preview-detail-drawer-left"
-          :class="{
-            'is-open': detailDrawerLeftOpen,
-            'is-resizing': resizingDrawer === 'left',
-          }"
-          :style="detailDrawerLeftStyle"
-          @click.stop @wheel.stop>
+        <KbResizable
+          v-model="detailDrawerLeftWidth"
+          tag="aside"
+          side="right"
+          class="kb-side-pane preview-detail-drawer preview-detail-drawer-left"
+          :class="{ 'is-open': detailDrawerLeftOpen }"
+          :default-size="PREVIEW_DRAWER_DEFAULT_WIDTH"
+          :handle-title="t('gallery.toggleImageInfoPanel')"
+          @resize-start="handleDrawerResizeStart('left')"
+          @resize-end="handleDrawerResizeEnd"
+          @click.stop
+          @wheel.stop
+        >
           <!-- 面板自带折叠外壳：展开的 flex:1 争夺侧栏空间，收拢的只占标题行 -->
           <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-left">
             <ImageBasicInfoPanel
@@ -70,17 +76,7 @@
               fill-when-expanded
             />
           </div>
-          <div
-            class="preview-detail-resize-handle preview-detail-resize-handle-left"
-            :title="t('gallery.toggleImageInfoPanel')"
-            @pointerdown="handleDrawerResizeStart('left', $event)"
-            @pointermove="handleDrawerResizeMove('left', $event)"
-            @pointerup="handleDrawerResizeEnd('left', $event)"
-            @pointercancel="handleDrawerResizeEnd('left', $event)"
-            @lostpointercapture="handleDrawerResizeEnd('left', $event)"
-            @dblclick="resetDrawerWidth('left')"
-          />
-        </aside>
+        </KbResizable>
         <div ref="previewContainerRef" class="preview-container" :class="{ 'is-app-fullscreen': isAppFullscreen }"
           @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
           @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePreviewWheel">
@@ -181,28 +177,23 @@
         </div>
         <!-- 抽屉开关只由用户控制，不随内容有无自动收起（避免切图时闪出/闪收）；
              无插件内容时面板自身渲染为空 -->
-        <aside class="preview-detail-drawer"
-          :class="{
-            'is-open': detailDrawerOpen,
-            'is-resizing': resizingDrawer === 'right',
-          }"
-          :style="detailDrawerRightStyle"
+        <KbResizable
+          v-model="detailDrawerRightWidth"
+          tag="aside"
+          side="left"
+          class="kb-side-pane preview-detail-drawer"
+          :class="{ 'is-open': detailDrawerOpen }"
+          :default-size="PREVIEW_DRAWER_DEFAULT_WIDTH"
+          :handle-title="t('gallery.toggleDetailPanel')"
+          @resize-start="handleDrawerResizeStart('right')"
+          @resize-end="handleDrawerResizeEnd"
           @click.stop
-          @wheel.stop>
-          <div
-            class="preview-detail-resize-handle preview-detail-resize-handle-right"
-            :title="t('gallery.toggleDetailPanel')"
-            @pointerdown="handleDrawerResizeStart('right', $event)"
-            @pointermove="handleDrawerResizeMove('right', $event)"
-            @pointerup="handleDrawerResizeEnd('right', $event)"
-            @pointercancel="handleDrawerResizeEnd('right', $event)"
-            @lostpointercapture="handleDrawerResizeEnd('right', $event)"
-            @dblclick="resetDrawerWidth('right')"
-          />
+          @wheel.stop
+        >
           <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-right">
             <ImagePluginDescriptionPanel :image="previewImage" fill-when-expanded />
           </div>
-        </aside>
+        </KbResizable>
       </div>
     </el-dialog>
     <!-- 桌面端预览内右键：与单张图片相同的上下文菜单（z-index 高于 el-dialog 以免被遮） -->
@@ -228,6 +219,7 @@ import ImageBasicInfoPanel, {
 } from "./ImageBasicInfoPanel.vue";
 import ImageNativeMetadataPanel from "./ImageNativeMetadataPanel.vue";
 import ImagePluginDescriptionPanel from "./ImagePluginDescriptionPanel.vue";
+import KbResizable from "./KbResizable.vue";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 import VideoControls from "./VideoControls.vue";
@@ -273,9 +265,8 @@ const detailDrawerLeftOpen = useLocalStorage(
   false,
   { mergeDefaults: true },
 );
+/** 双击把手复位用；上下限由 CSS（`--kb-resizable-min/max`）给，见下方样式 */
 const PREVIEW_DRAWER_DEFAULT_WIDTH = 320;
-const PREVIEW_DRAWER_MIN_WIDTH = 240;
-const PREVIEW_DRAWER_MAX_WIDTH = 560;
 const detailDrawerLeftWidth = useLocalStorage(
   "kabegame-preview-detail-left-width",
   PREVIEW_DRAWER_DEFAULT_WIDTH,
@@ -287,31 +278,8 @@ const detailDrawerRightWidth = useLocalStorage(
   { mergeDefaults: true },
 );
 type PreviewDrawerSide = "left" | "right";
+/** 仅用于「拖拽期间别让 ResizeObserver 抢着重置 Panzoom」，尺寸本身由 KbResizable 管 */
 const resizingDrawer = ref<PreviewDrawerSide | null>(null);
-let drawerResizeStartX = 0;
-let drawerResizeStartWidth = PREVIEW_DRAWER_DEFAULT_WIDTH;
-
-function drawerMaxWidth(): number {
-  if (typeof window === "undefined") return PREVIEW_DRAWER_MAX_WIDTH;
-  return Math.max(
-    PREVIEW_DRAWER_MIN_WIDTH,
-    Math.min(PREVIEW_DRAWER_MAX_WIDTH, window.innerWidth * 0.45),
-  );
-}
-
-function clampDrawerWidth(value: number): number {
-  const safeValue = Number.isFinite(value) ? value : PREVIEW_DRAWER_DEFAULT_WIDTH;
-  return Math.round(
-    Math.min(drawerMaxWidth(), Math.max(PREVIEW_DRAWER_MIN_WIDTH, safeValue)),
-  );
-}
-
-const detailDrawerLeftStyle = computed(() => ({
-  "--preview-drawer-width": `${clampDrawerWidth(Number(detailDrawerLeftWidth.value))}px`,
-}));
-const detailDrawerRightStyle = computed(() => ({
-  "--preview-drawer-width": `${clampDrawerWidth(Number(detailDrawerRightWidth.value))}px`,
-}));
 
 const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
@@ -507,10 +475,6 @@ const handleDocumentZoomPointerUp = () => {
   markPreviewInteracting();
 };
 
-function drawerWidthRef(side: PreviewDrawerSide) {
-  return side === "left" ? detailDrawerLeftWidth : detailDrawerRightWidth;
-}
-
 function resetPanzoomAfterDrawerResize() {
   void nextTick(() => {
     requestAnimationFrame(() => {
@@ -520,39 +484,15 @@ function resetPanzoomAfterDrawerResize() {
   });
 }
 
-function handleDrawerResizeStart(side: PreviewDrawerSide, event: PointerEvent) {
-  if (event.button !== 0) return;
-  const widthRef = drawerWidthRef(side);
+function handleDrawerResizeStart(side: PreviewDrawerSide) {
   resizingDrawer.value = side;
-  drawerResizeStartX = event.clientX;
-  drawerResizeStartWidth = clampDrawerWidth(Number(widthRef.value));
-  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   notifyPreviewInteracting(true);
-  event.preventDefault();
 }
 
-function handleDrawerResizeMove(side: PreviewDrawerSide, event: PointerEvent) {
-  if (resizingDrawer.value !== side) return;
-  const delta = event.clientX - drawerResizeStartX;
-  const directionalDelta = side === "left" ? delta : -delta;
-  drawerWidthRef(side).value = clampDrawerWidth(
-    drawerResizeStartWidth + directionalDelta,
-  );
-}
-
-function handleDrawerResizeEnd(side: PreviewDrawerSide, event: PointerEvent) {
-  if (resizingDrawer.value !== side) return;
-  const handle = event.currentTarget as HTMLElement;
+/** 拖拽结束与双击复位共用：抽屉宽度变了就得让图片按新容器重新适配 */
+function handleDrawerResizeEnd() {
   resizingDrawer.value = null;
-  if (handle.hasPointerCapture(event.pointerId)) {
-    handle.releasePointerCapture(event.pointerId);
-  }
   markPreviewInteracting();
-  resetPanzoomAfterDrawerResize();
-}
-
-function resetDrawerWidth(side: PreviewDrawerSide) {
-  drawerWidthRef(side).value = clampDrawerWidth(PREVIEW_DRAWER_DEFAULT_WIDTH);
   resetPanzoomAfterDrawerResize();
 }
 
@@ -1427,11 +1367,11 @@ body.image-preview-hides-kamechan .kamechan-host {
     }
   }
 
+  /* 宽度上下限来自 KbResizable 的 kb-side-pane 预设（与插件详情两侧同一套），这里只管开合形态 */
   .preview-detail-drawer {
     flex: 0 0 0;
     width: 0;
     min-width: 0;
-    max-width: min(560px, 45vw);
     overflow: hidden;
     box-sizing: border-box;
     position: relative;
@@ -1446,8 +1386,8 @@ body.image-preview-hides-kamechan .kamechan-host {
       border-color 0.18s ease;
 
     &.is-open {
-      flex: 0 0 var(--preview-drawer-width, 320px);
-      width: var(--preview-drawer-width, 320px);
+      flex: 0 0 var(--kb-resizable-clamped);
+      width: var(--kb-resizable-clamped);
       opacity: 1;
       border-left-color: var(--anime-border, rgba(0, 0, 0, 0.12));
     }
@@ -1473,33 +1413,6 @@ body.image-preview-hides-kamechan .kamechan-host {
     overflow-y: auto;
     padding: 12px 14px 16px;
     box-sizing: border-box;
-  }
-
-  .preview-detail-resize-handle {
-    position: absolute;
-    z-index: 2;
-    top: 0;
-    bottom: 0;
-    width: 6px;
-    cursor: col-resize;
-    touch-action: none;
-    transition: background-color 0.15s ease;
-
-    &:hover {
-      background: color-mix(in srgb, var(--anime-primary) 58%, transparent);
-    }
-  }
-
-  .preview-detail-drawer.is-resizing .preview-detail-resize-handle {
-    background: color-mix(in srgb, var(--anime-primary) 72%, transparent);
-  }
-
-  .preview-detail-resize-handle-left {
-    right: 0;
-  }
-
-  .preview-detail-resize-handle-right {
-    left: 0;
   }
 
   /* 侧栏内多面板：展开的（--fill）flex:1 争夺空间，收拢的只占标题行；面板内部各自滚动 */

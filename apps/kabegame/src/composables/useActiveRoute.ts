@@ -41,9 +41,10 @@ export function useActiveRoute() {
       return "/albums";
     }
 
-    // 收集源：/plugin-browser 开头的路径（插件详情已改为弹窗，不再有独立路由）
-    if (path.startsWith("/plugin-browser")) {
-      return "/plugin-browser";
+    // 收集源：列表页 /plugins 与详情页 /plugins/:pluginId 都归到「源」菜单项
+    // （/plugin-browser 是旧路径，router 已重定向到 /plugins，这里无需再判）
+    if (path.startsWith("/plugins")) {
+      return "/plugins";
     }
 
     // 设置不是导航目的地：桌面端是弹窗，紧凑端的 /settings 路由页也不对应任何 tab，

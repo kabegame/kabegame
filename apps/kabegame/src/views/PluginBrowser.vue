@@ -226,14 +226,12 @@
         :update-available-version="quickPreviewUpdateVersion" class="quick-preview-drawer-panel" />
     </el-drawer>
 
-    <!-- 插件/源详情：弹窗形式，不再走独立路由 -->
-    <PluginDetailDialog v-model:visible="detailDialogVisible" :target="detailDialogTarget" />
-
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, reactive, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, reactive, watch, nextTick } from "vue";
+import { useRouter } from "vue-router";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import {
@@ -253,11 +251,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { pickKgpgFile } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import PluginBrowserPageHeader from "@/components/header/PluginBrowserPageHeader.vue";
-import KbTab, { type KbTabItem } from "@/components/common/KbTab.vue";
+import KbTab, { type KbTabItem } from "@kabegame/core/components/common/KbTab.vue";
 import PluginGridCard from "@/components/plugin/PluginGridCard.vue";
-import PluginDetailDialog, {
-  type PluginDetailDialogTarget,
-} from "@/components/plugin/PluginDetailDialog.vue";
 import PluginQuickPreviewPanel, {
   type QuickPreviewPluginLike,
 } from "@kabegame/core/components/plugin/PluginQuickPreviewPanel.vue";
@@ -369,6 +364,7 @@ const loadingBySource = ref<Record<string, boolean>>({}); // 按源区分的load
 const showSkeletonBySource = ref<Record<string, boolean>>({}); // 按源区分的骨架屏状态
 const skeletonTimersBySource = ref<Record<string, ReturnType<typeof setTimeout>>>({}); // 按源区分的骨架屏定时器
 const activeTab = ref<string>("installed");
+const router = useRouter();
 const importDialog = useModal();
 const selectedFilePath = ref<string | null>(null);
 const isRefreshing = ref(false);
@@ -1179,29 +1175,24 @@ const handleImport = async () => {
   }
 };
 
-/** 详情弹窗当前定位到的插件（null = 未打开）。安装/更新/卸载均在弹窗内完成，网格不再放操作按钮。 */
-const detailDialogVisible = ref(false);
-const detailDialogTarget = ref<PluginDetailDialogTarget | null>(null);
-
 const openDetailDialog = (plugin: PluginListItem) => {
   trackPluginBrowserEvent("plugin_browser_plugin_open", pluginAnalyticsItem(plugin));
+  // 详情信息量大，走独立页面 /plugins/:pluginId（远程条目把定位信息放 query）
   if ("downloadUrl" in plugin && plugin.downloadUrl) {
     const store = plugin as StorePluginResolved;
     // 已安装且与商店版本一致：走本地已安装详情与文档，不拉远程包
     if (store.installedVersion && store.installedVersion === store.version) {
-      detailDialogTarget.value = { pluginId: store.id, mode: "local" };
+      void router.push({ name: "PluginDetail", params: { pluginId: store.id } });
     } else {
-      detailDialogTarget.value = {
-        pluginId: store.id,
-        mode: "remote",
-        sourceId: store.sourceId,
-        version: store.version,
-      };
+      void router.push({
+        name: "PluginDetail",
+        params: { pluginId: store.id },
+        query: { mode: "remote", source: store.sourceId, version: store.version },
+      });
     }
   } else {
-    detailDialogTarget.value = { pluginId: plugin.id, mode: "local" };
+    void router.push({ name: "PluginDetail", params: { pluginId: plugin.id } });
   }
-  detailDialogVisible.value = true;
 };
 
 // 统一的刷新处理，根据当前 tab 执行不同逻辑
@@ -1299,7 +1290,6 @@ onMounted(async () => {
     try {
       const { isTauri } = await import("@tauri-apps/api/core");
       if (isTauri()) {
-        // 下载进度事件现由 PluginDetailDialog.vue 自行订阅（安装/更新都在弹窗内完成）
         unlistenPluginSourcesChanged = await listen<{ sourceId?: string; name?: string }>(
           "plugin-sources-changed",
           () => {

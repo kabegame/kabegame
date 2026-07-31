@@ -1,6 +1,7 @@
 {
   "gallery": "Gallery",
   "pluginBrowser": "Sources",
+  "pluginDetail": "Source detail",
   "albums": "Albums",
   "albumDetail": "Album",
   "taskDetail": "Task Detail",

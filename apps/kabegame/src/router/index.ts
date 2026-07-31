@@ -16,7 +16,7 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "route.gallery" },
   },
   {
-    path: "/plugin-browser",
+    path: "/plugins",
     name: "PluginBrowser",
     component: () => import("@/views/PluginBrowser.vue"),
     meta: { title: "route.pluginBrowser" },
@@ -64,8 +64,15 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "route.autoConfigs" },
   },
   {
-    path: "/plugins",
-    redirect: "/plugin-browser",
+    path: "/plugins/:pluginId",
+    name: "PluginDetail",
+    component: () => import("@/views/PluginDetail.vue"),
+    meta: { title: "route.pluginDetail" },
+  },
+  {
+    // 旧路径兼容：外部链接 / 历史记录仍可能指向 /plugin-browser
+    path: "/plugin-browser",
+    redirect: "/plugins",
   },
 ];
 

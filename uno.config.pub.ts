@@ -25,6 +25,10 @@ export default defineConfig({
     // 后台任务渐变进度条：轨道浅紫、填充粉→紫渐变，对齐设计稿
     ['busy-bar-track', 'h-[5px] rounded-[3px] bg-[rgba(167,139,250,0.22)] overflow-hidden'],
     ['busy-bar-fill', 'block h-full rounded-[3px] bg-gradient-to-r from-[#ff6b9d] to-[#a78bfa] transition-[width] duration-300'],
+    // 插件详情工作台（PluginDetailContent 1a 三栏）复用的四组合，避免在模板里重复写长串
+    ['kb-chip', 'inline-flex items-center h-5 px-1.75 rounded-8px text-12px font-500'],
+    ['kb-card', 'rounded-12px bg-white border border-solid border-[var(--anime-border)]'],
+    ['kb-grad', 'bg-gradient-to-r from-[var(--anime-primary)] to-[var(--anime-secondary)]'],
   ],
   rules: [
     // Drawer 最大宽度规则（所有平台统一使用 500px，使用 !important 确保优先级）

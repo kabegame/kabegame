@@ -13,13 +13,13 @@ html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-im
   overflow: hidden !important;
 }
 
-html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.file-drop-confirm-dialog):not(.exit-confirm-dialog) .el-dialog__header {
+html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.file-drop-confirm-dialog):not(.exit-confirm-dialog):not(.is-workbench) .el-dialog__header {
   flex-shrink: 0 !important;
   padding: 20px 20px 10px !important;
   border-bottom: 1px solid var(--anime-border);
 }
 
-html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.file-drop-confirm-dialog):not(.exit-confirm-dialog) .el-dialog__body {
+html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.file-drop-confirm-dialog):not(.exit-confirm-dialog):not(.is-workbench) .el-dialog__body {
   flex: 1 1 auto !important;
   overflow-y: auto !important;
   overflow-x: hidden !important;
@@ -28,7 +28,7 @@ html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-im
   max-height: none !important;
 }
 
-html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.file-drop-confirm-dialog):not(.exit-confirm-dialog) .el-dialog__footer {
+html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.file-drop-confirm-dialog):not(.exit-confirm-dialog):not(.is-workbench) .el-dialog__footer {
   flex-shrink: 0 !important;
   padding: 10px 20px 20px !important;
   border-top: 1px solid var(--anime-border);
