@@ -18,10 +18,18 @@
         :date-format="typeof varDef.format === 'string' && varDef.format.trim() !== '' ? varDef.format : undefined"
         :date-min="typeof varDef.dateMin === 'string' && varDef.dateMin.trim() !== '' ? varDef.dateMin : undefined"
         :date-max="typeof varDef.dateMax === 'string' && varDef.dateMax.trim() !== '' ? varDef.dateMax : undefined"
-        :allow-unset="!isRequired(varDef)"
-        @update:model-value="(val) => updateVar(varDef.key, val)"
+        :placeholder="varDescripts(varDef) ||
+          (varDef.type === 'options' ||
+            varDef.type === 'list' ||
+            varDef.type === 'checkbox' ||
+            varDef.type === 'date'
+            ? `请选择${varDisplayName(varDef)}`
+            : `请输入${varDisplayName(varDef)}`)
+        "
+        :allow-unset="allowUnsetAll || !isRequired(varDef)"
+        @update:model-value="(val) => updateVar(varDef, val)"
       />
-      <div v-if="varDescripts(varDef)">
+      <div v-if="varDescripts(varDef)" class="var-desc">
         {{ varDescripts(varDef) }}
       </div>
     </el-form-item>
@@ -32,19 +40,25 @@
 import PluginVarField from "../plugin/var-fields/PluginVarField.vue";
 import { usePluginConfigI18n } from "@kabegame/i18n";
 import { filterVarOptionsByWhen } from "../../utils/pluginVarWhen";
-import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
+import { isRequired, getValidationRules, type PluginVarDef } from "../../utils/pluginVarForm";
 
-const props = defineProps<{
-  pluginVars: PluginVarDef[];
-  modelValue: Record<string, any>;
-}>();
+const props = withDefaults(
+  defineProps<{
+    pluginVars: PluginVarDef[];
+    modelValue: Record<string, any>;
+    allowUnsetAll?: boolean;
+  }>(),
+  {
+    allowUnsetAll: false,
+  },
+);
 
 const emit = defineEmits<{
   "update:modelValue": [value: Record<string, any>];
+  "var-change": [varDef: PluginVarDef, value: unknown];
 }>();
 
 const { varDisplayName, varDescripts, optionDisplayName } = usePluginConfigI18n();
-const { isRequired, getValidationRules } = usePluginConfig();
 
 const optionsForVar = (varDef: PluginVarDef): (string | { name: string; variable: string })[] => {
   const filtered = filterVarOptionsByWhen(varDef.options, props.modelValue ?? {});
@@ -55,7 +69,7 @@ const optionsForVar = (varDef: PluginVarDef): (string | { name: string; variable
 
 const getFileExtensions = (varDef: PluginVarDef): string[] | undefined => {
   const opts = varDef.options;
-  if (!Array.isArray(opts)) return undefined;
+  if (!Array.isArray(opts) || opts.length === 0) return undefined;
   const exts = opts
     .map((o) => (typeof o === "string" ? o : o.variable))
     .map((s) => s.trim().replace(/^\./, "").toLowerCase())
@@ -63,10 +77,19 @@ const getFileExtensions = (varDef: PluginVarDef): string[] | undefined => {
   return exts.length > 0 ? exts : undefined;
 };
 
-const updateVar = (key: string, value: any) => {
+const updateVar = (varDef: PluginVarDef, value: any) => {
   emit("update:modelValue", {
     ...(props.modelValue ?? {}),
-    [key]: value,
+    [varDef.key]: value,
   });
+  emit("var-change", varDef, value);
 };
 </script>
+
+<style scoped lang="scss">
+.var-desc {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
+}
+</style>

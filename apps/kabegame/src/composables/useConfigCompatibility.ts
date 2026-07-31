@@ -4,8 +4,12 @@ import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useCrawlerStore, type RunConfig } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
-import { validateVarValue } from "@/utils/pluginVarValidation";
-import type { PluginVarDef } from "./usePluginConfig";
+import {
+  validateVarValue,
+  normalizeVarsForUI,
+  isRequired,
+  type PluginVarDef,
+} from "@kabegame/core/utils/pluginVarForm";
 
 export interface ConfigCompatibility {
   versionCompatible: boolean; // 第一步：插件是否存在
@@ -22,13 +26,7 @@ export function useConfigCompatibility(
   pluginVars: Ref<PluginVarDef[]>,
   form: Ref<{ pluginId: string; outputDir: string; vars: Record<string, any> }>,
   selectedRunConfigId: Ref<string | null>,
-  loadPluginVars: (pluginId: string) => Promise<unknown>,
   loadPluginVarDefs: (pluginId: string) => Promise<void>,
-  normalizeVarsForUI: (
-    rawVars: Record<string, any>,
-    defs: PluginVarDef[]
-  ) => Record<string, any>,
-  isRequired: (varDef: { default?: any }) => boolean,
   showCrawlerDialog?: Ref<boolean>
 ) {
   const { locale } = useI18n();

@@ -1,4 +1,4 @@
-import { PluginVarDef } from "../../../../apps/kabegame/src/composables/usePluginConfig";
+import type { PluginVarDef } from "./pluginVarForm";
 
 /**
  * Whether a plugin config var should be shown for the current `vars`,

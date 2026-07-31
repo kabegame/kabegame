@@ -16,25 +16,18 @@
         :show-skeleton="showSkeleton"
         :plugin="plugin"
         :is-remote="isRemote"
+        :initial-vars="initialVars"
         @start-task="handleStartTask"
         @import-all-presets="handleImportAllPresets"
         @doc-image-preview-open="handleDocImagePreviewOpen"
         @doc-image-preview-close="handleDocImagePreviewClose"
       />
     </div>
-
-    <!-- 桌面端「用此源新建任务」在本页开 CrawlerDialog；紧凑端走全局 crawlerDrawerStore -->
-    <CrawlerDialog
-      v-if="!isCompact"
-      :model-value="crawlerDialog.isOpen.value"
-      :initial-config="crawlerDialogInitialConfig"
-      @update:model-value="crawlerDialog.close"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
@@ -42,16 +35,14 @@ import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { invoke } from "@/api/rpc";
 import { IS_WEB } from "@kabegame/core/env";
 import { isUpdateAvailable } from "@kabegame/core/utils/version";
-import { useUiStore } from "@kabegame/core/stores/ui";
-import { useModal } from "@kabegame/core/composables/useModal";
 import { usePluginStore } from "@/stores/plugins";
 import { useCrawlerStore, type PluginRecommendedPreset } from "@/stores/crawler";
-import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { checkRecommendedPresetCompatibility } from "@/composables/useConfigCompatibility";
+import { usePluginConfig } from "@/composables/usePluginConfig";
+import { guardPluginPlatform, enqueueTask } from "@/composables/useCrawlTaskLauncher";
 import { trackEvent } from "@kabegame/core/track/umami";
 import PluginDetailContent from "@kabegame/core/components/plugin/PluginDetailContent.vue";
 import PluginDetailPageHeader from "@/components/header/PluginDetailPageHeader.vue";
-import CrawlerDialog from "@/components/CrawlerDialog.vue";
 import { usePluginDetailLoader } from "@/composables/usePluginDetailLoader";
 
 const { t } = useI18n();
@@ -60,9 +51,6 @@ const route = useRoute();
 const router = useRouter();
 const pluginStore = usePluginStore();
 const crawlerStore = useCrawlerStore();
-const crawlerDrawerStore = useCrawlerDrawerStore();
-const uiStore = useUiStore();
-const isCompact = computed(() => uiStore.isCompact);
 
 // ---- 路由参数：/plugins/:pluginId?mode=remote&source=<sourceId>&version=<v> ----
 const pluginIdRef = computed(() => (route.params.pluginId as string) || null);
@@ -165,33 +153,55 @@ const handleCopyPluginId = async (id?: string) => {
   }
 };
 
-// ---- 新建任务 ----
-const crawlerDialog = useModal();
-const crawlerDialogInitialConfig = ref<
-  { pluginId?: string; vars?: Record<string, any>; httpHeaders?: Record<string, string> } | undefined
->(undefined);
+// ---- 插件磁盘默认配置：非 remote 时预取，作为配置 tab 初值 + 起任务默认输出目录/请求头 ----
+const { form: pluginConfigForm, loadPluginVars } = usePluginConfig();
+const initialVars = ref<Record<string, any> | null>(null);
+const defaultOutputDir = ref("");
+const defaultHttpHeaders = ref<Record<string, string>>({});
 
-const handleStartTask = (payload: {
+watch(
+  () => [plugin.value?.id, isRemote.value] as const,
+  async ([id, remote]) => {
+    if (!id || remote) {
+      initialVars.value = null;
+      defaultOutputDir.value = "";
+      defaultHttpHeaders.value = {};
+      return;
+    }
+    try {
+      const { httpHeaders, outputDir } = await loadPluginVars(id);
+      initialVars.value = { ...pluginConfigForm.value.vars };
+      defaultOutputDir.value = outputDir;
+      defaultHttpHeaders.value = httpHeaders;
+    } catch (e) {
+      // 读不到磁盘默认配置不该让配置 tab 空掉：留 null 让表单退化为各字段 default
+      console.debug("读取插件默认配置失败（忽略，表单用字段 default）：", e);
+      initialVars.value = null;
+      defaultOutputDir.value = "";
+      defaultHttpHeaders.value = {};
+    }
+  },
+  { immediate: true },
+);
+
+// ---- 新建任务：配置 tab 已经是能直接填的表单，起任务即直接入队 ----
+const handleStartTask = async (payload: {
   pluginId: string;
   vars?: Record<string, any>;
   httpHeaders?: Record<string, string>;
 }) => {
-  if (isCompact.value) {
-    crawlerDrawerStore.open({ pluginId: payload.pluginId, vars: payload.vars, httpHeaders: payload.httpHeaders });
-    return;
-  }
-  crawlerDialogInitialConfig.value = {
+  if (!(await guardPluginPlatform(payload.pluginId))) return;
+  const added = await enqueueTask({
     pluginId: payload.pluginId,
-    vars: payload.vars,
-    httpHeaders: payload.httpHeaders,
-  };
-  crawlerDialog.open();
+    outputDir: defaultOutputDir.value || undefined,
+    userConfig: payload.vars,
+    httpHeaders: payload.httpHeaders ?? defaultHttpHeaders.value,
+    triggerSource: "manual",
+  });
+  if (added) {
+    ElMessage.success(t("plugins.detail.taskStarted"));
+  }
 };
-
-// 关闭后清掉初始配置，避免下次开对话框复用上一次的值（与 Gallery.vue 同一处理）
-watch(crawlerDialog.isOpen, (isOpen) => {
-  if (!isOpen) void nextTick(() => (crawlerDialogInitialConfig.value = undefined));
-});
 
 const handleImportAllPresets = async (presets: PluginRecommendedPreset[]) => {
   let success = 0;

@@ -187,11 +187,16 @@ import { useModal } from "@kabegame/core/composables/useModal";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
-import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
+import { usePluginConfig } from "@/composables/usePluginConfig";
 import {
   matchesPluginVarWhen,
   coerceOptionsVarsToVisibleChoices,
 } from "@kabegame/core/utils/pluginVarWhen";
+import {
+  normalizeVarsForUI,
+  expandVarsForBackend,
+  type PluginVarDef,
+} from "@kabegame/core/utils/pluginVarForm";
 import type { RunConfig, ScheduleSpec } from "@kabegame/core/stores/crawler";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
@@ -206,8 +211,6 @@ const {
   pluginVars,
   loadPluginVarDefs,
   loadPluginVars,
-  normalizeVarsForUI,
-  expandVarsForBackend,
 } = usePluginConfig();
 
 const panelMode = ref<"view" | "edit">("view");

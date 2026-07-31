@@ -61,27 +61,7 @@
 
       <template v-if="pluginVars.length > 0">
         <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
-        <el-form-item v-for="varDef in visiblePluginVars" :key="varDef.key" :label="varDisplayName(varDef)"
-          :prop="`vars.${varDef.key}`" :required="isRequired(varDef)"
-          :rules="getValidationRules(varDef, varDisplayName(varDef))">
-          <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="optionsForVar(varDef)"
-            :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
-            :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
-            :file-extensions="getFileExtensions(varDef)" :date-format="typeof varDef.format === 'string' && varDef.format.trim() !== '' ? varDef.format : undefined
-              " :date-min="typeof varDef.dateMin === 'string' && varDef.dateMin.trim() !== '' ? varDef.dateMin : undefined
-              " :date-max="typeof varDef.dateMax === 'string' && varDef.dateMax.trim() !== '' ? varDef.dateMax : undefined
-              " :placeholder="varDescripts(varDef) ||
-              (varDef.type === 'options' ||
-                varDef.type === 'list' ||
-                varDef.type === 'checkbox' ||
-                varDef.type === 'date'
-                ? `请选择${varDisplayName(varDef)}`
-                : `请输入${varDisplayName(varDef)}`)
-              " :allow-unset="!isRequired(varDef)" @update:model-value="(val) => onPluginVarChange(varDef, val)" />
-          <div v-if="varDescripts(varDef)">
-            {{ varDescripts(varDef) }}
-          </div>
-        </el-form-item>
+        <PluginVarsForm v-model="form.vars" :plugin-vars="visiblePluginVars" @var-change="onPluginVarChange" />
       </template>
 
       <el-divider content-position="left">{{ $t("plugins.advancedSettings") }}</el-divider>
@@ -247,27 +227,7 @@
 
       <template v-if="pluginVars.length > 0">
         <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
-        <el-form-item v-for="varDef in visiblePluginVars" :key="varDef.key" :label="varDisplayName(varDef)"
-          :prop="`vars.${varDef.key}`" :required="isRequired(varDef)"
-          :rules="getValidationRules(varDef, varDisplayName(varDef))">
-          <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="optionsForVar(varDef)"
-            :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
-            :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
-            :file-extensions="getFileExtensions(varDef)" :date-format="typeof varDef.format === 'string' && varDef.format.trim() !== '' ? varDef.format : undefined
-              " :date-min="typeof varDef.dateMin === 'string' && varDef.dateMin.trim() !== '' ? varDef.dateMin : undefined
-              " :date-max="typeof varDef.dateMax === 'string' && varDef.dateMax.trim() !== '' ? varDef.dateMax : undefined
-              " :placeholder="varDescripts(varDef) ||
-              (varDef.type === 'options' ||
-                varDef.type === 'list' ||
-                varDef.type === 'checkbox' ||
-                varDef.type === 'date'
-                ? `请选择${varDisplayName(varDef)}`
-                : `请输入${varDisplayName(varDef)}`)
-              " :allow-unset="!isRequired(varDef)" @update:model-value="(val) => onPluginVarChange(varDef, val)" />
-          <div v-if="varDescripts(varDef)">
-            {{ varDescripts(varDef) }}
-          </div>
-        </el-form-item>
+        <PluginVarsForm v-model="form.vars" :plugin-vars="visiblePluginVars" @var-change="onPluginVarChange" />
       </template>
 
       <el-divider content-position="left">{{ $t("plugins.advancedSettings") }}</el-divider>
@@ -377,28 +337,31 @@ import { FolderOpened } from "@element-plus/icons-vue";
 import { ElDialog } from "element-plus";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
-import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
+import { usePluginConfig } from "@/composables/usePluginConfig";
 import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
+import {
+  isRequired,
+  expandVarsForBackend,
+  normalizeVarsForUI,
+  type PluginVarDef,
+} from "@kabegame/core/utils/pluginVarForm";
 import { useCrawlerStore, type RunConfig, type ScheduleSpec } from "@/stores/crawler";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
-import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
+import PluginVarsForm from "@kabegame/core/components/crawler/PluginVarsForm.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import PluginPickerField from "@/components/PluginPickerField.vue";
-import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { IS_WEB } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
 import { useModal } from "@kabegame/core/composables/useModal";
-import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import { guardPluginPlatform, enqueueTask } from "@/composables/useCrawlTaskLauncher";
 import {
   matchesPluginVarWhen,
-  filterVarOptionsByWhen,
   coerceOptionsVarsToVisibleChoices,
 } from "@kabegame/core/utils/pluginVarWhen";
 import { useApp } from "@/stores/app";
-import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
 interface Props {
@@ -421,7 +384,6 @@ const emit = defineEmits<{
 
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
-const batteryOptimizationStore = useBatteryOptimizationStore();
 const crawlerDrawerStore = useCrawlerDrawerStore();
 const recommendedPresetCount = computed(
   () => crawlerStore.pluginRecommendedConfigs.length,
@@ -434,7 +396,7 @@ function goImportRecommendedPresets() {
 const pluginStore = usePluginStore();
 const appStore = useApp();
 const { version: crawlDialogAppVersion } = storeToRefs(appStore);
-const { varDisplayName, varDescripts, optionDisplayName, resolveConfigText, locale } = usePluginConfigI18n();
+const { varDisplayName, resolveConfigText, locale } = usePluginConfigI18n();
 
 function trackCrawlerEvent(name: string, data: Record<string, unknown> = {}) {
   if (!IS_WEB) return;
@@ -448,12 +410,6 @@ function runConfigDescription(cfg: { description?: unknown }): string {
   return resolveConfigText(cfg.description as any, locale.value);
 }
 
-function optionsForVar(varDef: PluginVarDef): (string | { name: string; variable: string })[] {
-  const filtered = filterVarOptionsByWhen(varDef.options, form.value.vars);
-  return filtered.map((opt) =>
-    typeof opt === "string" ? opt : { name: optionDisplayName(opt), variable: opt.variable },
-  );
-}
 const albumStore = useAlbumStore();
 const uiStore = useUiStore();
 
@@ -751,7 +707,6 @@ const selectedPlugin = computed(() => {
   const id = form.value.pluginId;
   return id ? plugins.value.find((p) => p.id === id) : null;
 });
-const isSelectedPluginJs = computed(() => selectedPlugin.value?.scriptType === "js");
 
 const selectedPluginMinAppIncompatible = computed(() => !!selectedPlugin.value?.minAppIncompatible);
 
@@ -773,10 +728,6 @@ const {
   selectedRunConfigId,
   formRef,
   pluginVars,
-  isRequired,
-  expandVarsForBackend,
-  normalizeVarsForUI,
-  getValidationRules,
   loadPluginVars,
   loadPluginVarDefs,
   resetFormVarsToDefaults,
@@ -857,17 +808,9 @@ function onPluginVarChange(varDef: PluginVarDef, value: unknown) {
   });
 }
 
-const visiblePluginVars = computed(() => {
-  const filtered = pluginVars.value.filter((varDef) => matchesPluginVarWhen(varDef.when, form.value.vars));
-  return filtered.map((varDef) => ({
-    ...varDef,
-    name: varDisplayName(varDef),
-    descripts: varDescripts(varDef),
-    options: varDef.options?.map((opt) =>
-      typeof opt === "string" ? opt : { ...opt, name: optionDisplayName(opt) },
-    ),
-  }));
-});
+const visiblePluginVars = computed(() =>
+  pluginVars.value.filter((varDef) => matchesPluginVarWhen(varDef.when, form.value.vars)),
+);
 
 watch(
   () => form.value.vars,
@@ -876,16 +819,6 @@ watch(
   },
   { deep: true },
 );
-
-const getFileExtensions = (varDef: any): string[] | undefined => {
-  const opts = varDef?.options;
-  if (!Array.isArray(opts) || opts.length === 0) return undefined;
-  const exts = opts
-    .map((o: any) => (typeof o === "string" ? o : o?.variable))
-    .filter((s: any) => typeof s === "string" && s.trim() !== "")
-    .map((s: string) => s.trim().replace(/^\./, "").toLowerCase());
-  return exts.length > 0 ? exts : undefined;
-};
 
 const {
   configCompatibilityStatus,
@@ -896,10 +829,7 @@ const {
   pluginVars,
   form,
   selectedRunConfigId,
-  loadPluginVars,
   loadPluginVarDefs,
-  normalizeVarsForUI,
-  isRequired,
   modal.isOpen,
 );
 
@@ -939,19 +869,10 @@ const handleCreateOutputAlbum = async () => {
 };
 
 const handleStartCrawl = async () => {
-  if (await guardDesktopOnly("crawl", { needSuper: true })) return;
+  if (!(await guardPluginPlatform(form.value.pluginId))) return;
   try {
     if (!form.value.pluginId) {
       ElMessage.warning(t("plugins.selectSourcePlaceholder"));
-      return;
-    }
-
-    if (IS_ANDROID && isSelectedPluginJs.value) {
-      await ElMessageBox.alert(
-        t("plugins.jsPluginAndroidNotSupported"),
-        t("plugins.jsPluginAndroidNotSupportedTitle"),
-        { confirmButtonText: t("common.ok"), type: "warning" as const },
-      );
       return;
     }
 
@@ -1037,18 +958,15 @@ const handleStartCrawl = async () => {
       }
     }
 
-    if (IS_ANDROID) {
-      await batteryOptimizationStore.checkAndPromptIfNeeded();
-    }
-    const taskAdded = await crawlerStore.addTask(
-      form.value.pluginId,
-      form.value.outputDir || undefined,
-      backendVars,
-      selectedOutputAlbumId.value || undefined,
+    const taskAdded = await enqueueTask({
+      pluginId: form.value.pluginId,
+      outputDir: form.value.outputDir || undefined,
+      userConfig: backendVars,
+      outputAlbumId: selectedOutputAlbumId.value || undefined,
       httpHeaders,
-      runConfigIdForTask,
-      "manual",
-    );
+      runConfigId: runConfigIdForTask,
+      triggerSource: "manual",
+    });
     if (!taskAdded) return;
 
     trackCrawlerEvent("gallery_import_start", {

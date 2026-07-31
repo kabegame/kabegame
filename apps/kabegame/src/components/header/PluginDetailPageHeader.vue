@@ -1,5 +1,10 @@
 <template>
-  <PageHeader :title="displayName || pluginId || t('plugins.pluginDetailTitle')" show-back @back="emit('back')">
+  <PageHeader
+    :title="displayName || pluginId || t('plugins.pluginDetailTitle')"
+    :show="[HeaderFeatureId.TaskDrawer]"
+    show-back
+    @back="emit('back')"
+  >
     <template v-if="iconUrl || plugin" #icon>
       <el-image v-if="iconUrl" :src="iconUrl" fit="contain" class="w-full h-full" />
       <div v-else class="w-full h-full flex items-center justify-center kb-grad text-white">
@@ -43,6 +48,7 @@ import { computed } from "vue";
 import { Delete, DocumentCopy, Grid } from "@element-plus/icons-vue";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
+import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import type { Plugin } from "@kabegame/core/stores/plugins";
 import { pluginIconToDataUrl } from "@kabegame/core/stores/plugins";
 import { usePluginActionState } from "@kabegame/core/composables/usePluginActionState";

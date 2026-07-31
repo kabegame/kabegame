@@ -79,6 +79,8 @@
             v-model:menu-width="menuWidth"
             :plugin="plugin"
             :menu-default-width="MENU_DEFAULT_WIDTH"
+            :is-remote="isRemote"
+            :initial-vars="initialVars"
             @start-task="emit('start-task', $event)"
             @import-all-presets="emit('import-all-presets', $event)"
           />
@@ -112,7 +114,6 @@
         :plugin="plugin"
         :app-version="appVersionText"
         :default-width="RAIL_DEFAULT_WIDTH"
-        @start-task="emit('start-task', $event)"
       />
     </div>
   </div>
@@ -184,6 +185,8 @@ const props = withDefaults(
     showSkeleton: boolean;
     /** 看的是不是一个「待安装的包」（商店条目 / .kgpg 预览）。false = 已安装的插件本体 */
     isRemote?: boolean;
+    /** 配置 tab 表单初值（UI 形态），由宿主页面读好插件磁盘默认配置后传下来；不传时退化为各字段 default */
+    initialVars?: Record<string, any> | null;
   }>(),
   {
     isRemote: false,

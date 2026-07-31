@@ -33,15 +33,6 @@
           </div>
         </div>
       </div>
-
-      <button
-        v-if="plugin"
-        type="button"
-        class="mt-auto h-9 border-none rounded-12px kb-grad text-white font-600 text-14.5px shadow-[var(--anime-shadow)] cursor-pointer hover:brightness-105"
-        @click="emit('start-task', { pluginId: plugin.id })"
-      >
-        {{ t("plugins.detail.startTaskWithSource") }}
-      </button>
     </div>
   </KbResizable>
 </template>
@@ -66,10 +57,6 @@ const props = defineProps<{
 
 /** 右栏宽度（px），由宿主持久化 */
 const width = defineModel<number>("width");
-
-const emit = defineEmits<{
-  (e: "start-task", payload: { pluginId: string }): void;
-}>();
 
 const { t } = useI18n();
 const surfStore = useSurfStore();

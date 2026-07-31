@@ -11,62 +11,10 @@
 
     <div v-if="selectedPluginId" v-loading="loading" class="plugin-defaults-editor">
       <el-form label-position="top" class="plugin-defaults-form">
-        <el-form-item v-if="!IS_ANDROID" :label="$t('plugins.outputDir')">
-          <el-input v-model="form.outputDir" clearable :placeholder="$t('plugins.outputDirPlaceholder')">
-            <template #append>
-              <el-button @click="selectOutputDir">
-                <el-icon>
-                  <FolderOpened />
-                </el-icon>
-                {{ $t("common.chooseFolder") }}
-              </el-button>
-            </template>
-          </el-input>
-        </el-form-item>
-
         <template v-if="pluginVars.length > 0">
           <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
-          <el-form-item
-            v-for="varDef in visiblePluginVars"
-            :key="varDef.key"
-            :label="varDisplayName(varDef)"
-          >
-            <PluginVarField
-              :type="varDef.type"
-              :model-value="form.vars[varDef.key]"
-              :options="optionsForVar(varDef)"
-              :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
-              :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
-              :file-extensions="getFileExtensions(varDef)"
-              :date-format="
-                typeof varDef.format === 'string' && varDef.format.trim() !== '' ? varDef.format : undefined
-              "
-              :date-min="
-                typeof varDef.dateMin === 'string' && varDef.dateMin.trim() !== '' ? varDef.dateMin : undefined
-              "
-              :date-max="
-                typeof varDef.dateMax === 'string' && varDef.dateMax.trim() !== '' ? varDef.dateMax : undefined
-              "
-              :placeholder="
-                varDescripts(varDef) ||
-                (varDef.type === 'options' ||
-                varDef.type === 'list' ||
-                varDef.type === 'checkbox' ||
-                varDef.type === 'date'
-                  ? `请选择${varDisplayName(varDef)}`
-                  : `请输入${varDisplayName(varDef)}`)
-              "
-              :allow-unset="true"
-              @update:model-value="(val) => (form.vars[varDef.key] = val)"
-            />
-            <div v-if="varDescripts(varDef)" class="var-desc">{{ varDescripts(varDef) }}</div>
-          </el-form-item>
+          <PluginVarsForm v-model="form.vars" :plugin-vars="visiblePluginVars" allow-unset-all />
         </template>
-
-        <el-divider content-position="left">{{ $t("plugins.advancedSettings") }}</el-divider>
-        <el-form-item :label="$t('plugins.httpHeaders')">
-          <HttpHeadersEditor v-model="headersModel" />
-        </el-form-item>
 
         <div class="plugin-defaults-actions">
           <el-button type="primary" :loading="saving" @click="handleSave">
@@ -88,25 +36,26 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
-import { FolderOpened } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke } from "@/api/rpc";
-import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
+import { useI18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
-import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
+import { usePluginConfig } from "@/composables/usePluginConfig";
 import {
   matchesPluginVarWhen,
-  filterVarOptionsByWhen,
   coerceOptionsVarsToVisibleChoices,
 } from "@kabegame/core/utils/pluginVarWhen";
-import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
-import HttpHeadersEditor from "@kabegame/core/components/crawler/HttpHeadersEditor.vue";
-import { IS_ANDROID } from "@kabegame/core/env";
+import {
+  expandVarsForBackend,
+  normalizeVarsForUI,
+  matchUserConfigFromDefaults,
+  type PluginVarDef,
+} from "@kabegame/core/utils/pluginVarForm";
+import PluginVarsForm from "@kabegame/core/components/crawler/PluginVarsForm.vue";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 
 const { t } = useI18n();
-const { varDisplayName, varDescripts, optionDisplayName } = usePluginConfigI18n();
 const pluginStore = usePluginStore();
 
 const {
@@ -114,14 +63,12 @@ const {
   pluginVars,
   loadPluginVars,
   loadPluginVarDefs,
-  expandVarsForBackend,
-  normalizeVarsForUI,
-  selectOutputDir,
-  matchUserConfigFromDefaults,
 } = usePluginConfig();
 
 const selectedPluginId = ref("");
-const headersModel = ref<Record<string, string>>({});
+/** 面板不显示的两个字段：保存/重置时原样回写，不能用面板输入清掉用户已有的默认值 */
+const keptHttpHeaders = ref<Record<string, string>>({});
+const keptOutputDir = ref("");
 const loading = ref(false);
 const saving = ref(false);
 const resetting = ref(false);
@@ -133,31 +80,18 @@ const visiblePluginVars = computed(() =>
   pluginVars.value.filter((varDef) => matchesPluginVarWhen(varDef.when, form.value.vars)),
 );
 
-function optionsForVar(varDef: PluginVarDef) {
-  const filtered = filterVarOptionsByWhen(varDef.options, form.value.vars);
-  return filtered.map((opt) =>
-    typeof opt === "string" ? opt : { name: optionDisplayName(opt), variable: opt.variable },
-  );
-}
-
-function getFileExtensions(varDef: PluginVarDef): string[] | undefined {
-  const opts = varDef.options;
-  if (!Array.isArray(opts) || opts.length === 0) return undefined;
-  const exts = opts
-    .map((o) => (typeof o === "string" ? o : o.variable))
-    .map((s) => s.trim().replace(/^\./, "").toLowerCase())
-    .filter(Boolean);
-  return exts.length > 0 ? exts : undefined;
-}
-
 async function loadEditorForPlugin(pluginId: string) {
   if (!pluginId) return;
   loading.value = true;
+  // 先清空再读：loadPluginVars 抛错时不能让上一个插件的值留在 kept ref 里，
+  // 否则保存会把上一个插件的输出目录/请求头写进当前插件的默认配置
+  keptHttpHeaders.value = {};
+  keptOutputDir.value = "";
   try {
     form.value.pluginId = pluginId;
     const { httpHeaders, outputDir } = await loadPluginVars(pluginId);
-    headersModel.value = { ...httpHeaders };
-    form.value.outputDir = outputDir;
+    keptHttpHeaders.value = { ...httpHeaders };
+    keptOutputDir.value = outputDir;
   } finally {
     loading.value = false;
   }
@@ -168,12 +102,12 @@ async function handleSave() {
   saving.value = true;
   try {
     const userConfig = expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[]);
-    const od = form.value.outputDir?.trim() ?? "";
+    const od = keptOutputDir.value.trim();
     await invoke("save_plugin_default_config", {
       pluginId: selectedPluginId.value,
       config: {
         userConfig,
-        httpHeaders: { ...headersModel.value },
+        httpHeaders: { ...keptHttpHeaders.value },
         outputDir: od === "" ? null : od,
       },
     });
@@ -211,8 +145,8 @@ async function handleReset() {
     >;
     const matched = matchUserConfigFromDefaults(raw, pluginVars.value as PluginVarDef[]);
     form.value.vars = normalizeVarsForUI(matched, pluginVars.value as PluginVarDef[]);
-    headersModel.value = { ...(json?.httpHeaders ?? {}) };
-    form.value.outputDir = typeof json?.outputDir === "string" ? json.outputDir : "";
+    keptHttpHeaders.value = { ...(json?.httpHeaders ?? {}) };
+    keptOutputDir.value = typeof json?.outputDir === "string" ? json.outputDir : "";
     ElMessage.success(t("common.save"));
   } catch (e) {
     console.error(e);
@@ -235,7 +169,8 @@ watch(selectedPluginId, (id) => {
   else {
     pluginVars.value = [];
     form.value.vars = {};
-    headersModel.value = {};
+    keptHttpHeaders.value = {};
+    keptOutputDir.value = "";
   }
 });
 
@@ -284,11 +219,5 @@ onMounted(async () => {
   display: flex;
   gap: 12px;
   margin-top: 8px;
-}
-
-.var-desc {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-top: 4px;
 }
 </style>

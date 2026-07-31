@@ -80,7 +80,7 @@
   "importRecommendedScheduleEnabled": "导入推荐配置时默认启用定时",
   "importRecommendedScheduleEnabledDesc": "从插件包导入推荐运行配置时，是否默认启用定时。关闭后导入的配置需在列表中手动开启定时。",
   "pluginDefaultsSectionTitle": "爬虫插件默认配置",
-  "pluginDefaultsDesc": "为每个已安装插件设置默认变量、HTTP 请求头与输出目录。在爬虫对话框或新建自动任务时选择该插件会优先使用此处保存的内容；字段不兼容时仅回退对应项。",
+  "pluginDefaultsDesc": "为每个已安装插件设置默认配置项。在爬虫对话框或新建自动任务时选择该插件会优先使用此处保存的内容；字段不兼容时仅回退对应项。",
   "pluginDefaultsSelectPlugin": "选择插件",
   "pluginDefaultsSave": "保存默认配置",
   "pluginDefaultsReset": "重置为插件定义默认值",

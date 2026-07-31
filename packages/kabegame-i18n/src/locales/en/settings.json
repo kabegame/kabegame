@@ -80,7 +80,7 @@
   "importRecommendedScheduleEnabled": "Enable schedule when importing presets",
   "importRecommendedScheduleEnabledDesc": "When importing a plugin preset run config, enable scheduling by default. If off, enable scheduling manually in the list.",
   "pluginDefaultsSectionTitle": "Crawler plugin default config",
-  "pluginDefaultsDesc": "Set default variables, HTTP headers, and output directory per installed plugin. When you pick a plugin in the crawl dialog or create an auto task, these values are applied first; incompatible fields fall back individually.",
+  "pluginDefaultsDesc": "Set default configuration values per installed plugin. When you pick a plugin in the crawl dialog or create an auto task, these values are applied first; incompatible fields fall back individually.",
   "pluginDefaultsSelectPlugin": "Select plugin",
   "pluginDefaultsSave": "Save defaults",
   "pluginDefaultsReset": "Reset to plugin-defined defaults",
