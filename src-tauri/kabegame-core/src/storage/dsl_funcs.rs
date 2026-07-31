@@ -9,11 +9,13 @@
 //! - `vd_display_name(canonical)` → 当前 VD locale 下的路径显示名。
 //! - `crawled_at_seconds(timestamp)` → 规整秒/毫秒时间戳。
 //! - `name_language_bucket(name)` / `name_language_rank(bucket)` → 名称语言分桶与排序。
+//! - `kb_rand(seed, id)` → 基于 SplitMix64 finalizer 的确定性随机排序值。
 //!
 //! 约束: host SQL function 不得访问当前 Storage/SQLite 连接。数据库中可查的数据应直接写
 //! SQL；否则会在 `KabegameSqlExecutor` 持有连接 mutex 期间重入同一把锁。
 
 use rusqlite::functions::FunctionFlags;
+use rusqlite::types::ValueRef;
 use rusqlite::Connection;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -56,11 +58,50 @@ fn profile_get_plugin_call(plugin_id: &str, locale: Option<&str>, started: Insta
 /// 在给定 connection 上注册所有 DSL 主机 SQL 函数。
 /// connection-scoped — 每个连接需独立注册。kabegame 当前单连接架构, 一次即可。
 pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::Error> {
+    register_kb_rand(conn)?;
     register_get_plugin(conn)?;
     register_crawled_at_seconds(conn)?;
     register_vd_display_name(conn)?;
     register_name_language_functions(conn)?;
     Ok(())
+}
+
+/// 返回固定 seed 与 id 对应的确定性随机排序值。
+pub fn kb_rand_value(seed: i64, id: i64) -> i64 {
+    let mut z = (seed as u64) ^ (id as u64);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    (z ^ (z >> 31)) as i64
+}
+
+fn kb_rand_arg(ctx: &rusqlite::functions::Context<'_>, idx: usize) -> rusqlite::Result<i64> {
+    match ctx.get_raw(idx) {
+        ValueRef::Integer(value) => Ok(value),
+        ValueRef::Text(value) => std::str::from_utf8(value)
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .ok_or_else(|| {
+                rusqlite::Error::UserFunctionError(
+                    format!("kb_rand: argument {} must be an integer", idx + 1).into(),
+                )
+            }),
+        _ => Err(rusqlite::Error::UserFunctionError(
+            format!("kb_rand: argument {} must be an integer", idx + 1).into(),
+        )),
+    }
+}
+
+fn register_kb_rand(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.create_scalar_function(
+        "kb_rand",
+        2,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| -> rusqlite::Result<i64> {
+            let seed = kb_rand_arg(ctx, 0)?;
+            let id = kb_rand_arg(ctx, 1)?;
+            Ok(kb_rand_value(seed, id))
+        },
+    )
 }
 
 fn register_name_language_functions(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -238,6 +279,26 @@ fn resolve_i18n_text(value: &serde_json::Value, locale: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn kb_rand_is_deterministic() {
+        assert_eq!(kb_rand_value(42, 7), kb_rand_value(42, 7));
+    }
+
+    #[test]
+    fn kb_rand_accepts_text_seed() {
+        let conn = Connection::open_in_memory().unwrap();
+        register_kb_rand(&conn).unwrap();
+        let value: i64 = conn
+            .query_row("SELECT kb_rand('42', 7)", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, kb_rand_value(42, 7));
+    }
+
+    #[test]
+    fn kb_rand_changes_with_seed() {
+        assert_ne!(kb_rand_value(42, 7), kb_rand_value(43, 7));
+    }
 
     #[test]
     fn resolve_i18n_text_exact_locale_match() {

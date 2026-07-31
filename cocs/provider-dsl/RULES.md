@@ -122,10 +122,13 @@ return ResolvedNode { provider, composed }
 
 - 数组每项是对象 `{ sql, order, prepend?, clear? }`。
 - `sql` 是 ORDER BY 字段或表达式；`order` 为 `asc` / `desc` / `revert`。
+- `order.sql` 支持 `${...}` 模板，在 build 期渲染为 bind param。它不做 per-instance intern：同名属性按 build 期合并属性表的后写值取值，`OrderState` 的去重键始终是未渲染模板串。
 - `prepend` 默认 `false`。`false` 表示新字段追加到末尾，已有字段保持原位置仅更新方向；`true` 表示新字段插入最前，已有字段移动到最前并更新方向。
 - `revert` 在 fold 期解析：字段已存在则翻转 `ASC` ↔ `DESC`，字段不存在则按 `ASC` 新增。
 - `clear: "all"` 可选，且只允许 `"all"`。它在当前 item 插入前清空已累积的 order entries，用于替代旧的 `order_clear`。
 - `order_clear` 已移除；需要覆盖上游排序时，把 `clear: "all"` 写在第一个替换排序项上。
+
+性能升级备忘：当前 seeded random 排序直接计算宿主函数；若库规模达到几十万行，升级路径是宿主 rank 物化缓存并通过 join 贡献接入，现有 path 契约保持不变。
 
 **形态 B — 全局指令**：
 

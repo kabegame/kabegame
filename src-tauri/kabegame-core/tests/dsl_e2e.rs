@@ -3,7 +3,7 @@
 //! The fixture uses an in-memory sqlite database and test-local host SQL
 //! functions, so these tests do not touch the user's Kabegame data directory.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use kabegame_core::providers::dsl_loader::{register_embedded_dsl, validate_dsl};
@@ -43,7 +43,39 @@ fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
         .collect()
 }
 
+fn fixture_kb_rand_arg(
+    ctx: &rusqlite::functions::Context<'_>,
+    idx: usize,
+) -> rusqlite::Result<i64> {
+    match ctx.get_raw(idx) {
+        rusqlite::types::ValueRef::Integer(value) => Ok(value),
+        rusqlite::types::ValueRef::Text(value) => std::str::from_utf8(value)
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .ok_or_else(|| {
+                rusqlite::Error::UserFunctionError(
+                    format!("kb_rand: argument {} must be an integer", idx + 1).into(),
+                )
+            }),
+        _ => Err(rusqlite::Error::UserFunctionError(
+            format!("kb_rand: argument {} must be an integer", idx + 1).into(),
+        )),
+    }
+}
+
 fn register_fixture_functions(conn: &Connection) {
+    conn.create_scalar_function(
+        "kb_rand",
+        2,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| -> rusqlite::Result<i64> {
+            let seed = fixture_kb_rand_arg(ctx, 0)?;
+            let id = fixture_kb_rand_arg(ctx, 1)?;
+            Ok(kabegame_core::storage::dsl_funcs::kb_rand_value(seed, id))
+        },
+    )
+    .unwrap();
+
     conn.create_scalar_function(
         "crawled_at_seconds",
         1,
@@ -801,6 +833,53 @@ fn gallery_sort_by_id_provider_orders_default_ids() {
         .fetch("images://gallery/sort/by-id/desc/x3x/1")
         .unwrap();
     assert_eq!(ids(by_id_desc), ["120", "119", "118"]);
+}
+
+#[test]
+fn gallery_seeded_random_sort_is_stable_and_reversible() {
+    let runtime = build_runtime();
+
+    let first_page = ids(runtime
+        .fetch("images://gallery/sort/random-42/x10x/1")
+        .unwrap());
+    let repeated_first_page = ids(runtime
+        .fetch("images://gallery/sort/random-42/x10x/1")
+        .unwrap());
+    assert_eq!(first_page, repeated_first_page);
+
+    let mut paged = Vec::new();
+    for page in 1..=12 {
+        paged.extend(ids(runtime
+            .fetch(&format!("images://gallery/sort/random-42/x10x/{page}"))
+            .unwrap()));
+    }
+    let unique = paged.iter().cloned().collect::<HashSet<_>>();
+    let expected = (1..=120).map(|id| id.to_string()).collect::<HashSet<_>>();
+    assert_eq!(paged.len(), 120);
+    assert_eq!(unique.len(), 120);
+    assert_eq!(unique, expected);
+
+    let seed_42 = ids(runtime.fetch("images://gallery/sort/random-42").unwrap());
+    let seed_43 = ids(runtime.fetch("images://gallery/sort/random-43").unwrap());
+    assert_ne!(seed_42, seed_43);
+
+    let mut reversed = seed_42.clone();
+    reversed.reverse();
+    let descending = ids(runtime
+        .fetch("images://gallery/sort/random-42/desc")
+        .unwrap());
+    assert_eq!(descending, reversed);
+
+    assert_eq!(
+        runtime.count("images://gallery/sort/random-42").unwrap(),
+        120
+    );
+    assert_eq!(
+        runtime
+            .count("images://gallery/sort/random-42/x10x/1")
+            .unwrap(),
+        10
+    );
 }
 
 #[test]

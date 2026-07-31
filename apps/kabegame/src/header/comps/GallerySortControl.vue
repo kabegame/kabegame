@@ -54,6 +54,7 @@ const sortAscLabel = computed(() => {
   if (galleryRouteStore.sort.field === "by-size") return t("gallery.bySizeAsc");
   if (galleryRouteStore.sort.field === "by-aspect") return t("gallery.byAspectWidthHeight");
   if (galleryRouteStore.sort.field === "by-set-time") return t("gallery.bySetTimeAsc");
+  if (galleryRouteStore.sort.field === "random") return t("gallery.byRandomAsc");
   if (isWallpaperOrderRoot.value) return t("gallery.bySetTimeAsc");
   if (isSizeRoot.value) return t("gallery.bySizeAsc");
   if (isAspectRoot.value) return t("gallery.byAspectWidthHeight");
@@ -67,6 +68,7 @@ const sortDescLabel = computed(() => {
   if (galleryRouteStore.sort.field === "by-size") return t("gallery.bySizeDesc");
   if (galleryRouteStore.sort.field === "by-aspect") return t("gallery.byAspectHeightWidth");
   if (galleryRouteStore.sort.field === "by-set-time") return t("gallery.bySetTimeDesc");
+  if (galleryRouteStore.sort.field === "random") return t("gallery.byRandomDesc");
   if (isWallpaperOrderRoot.value) return t("gallery.bySetTimeDesc");
   if (isSizeRoot.value) return t("gallery.bySizeDesc");
   if (isAspectRoot.value) return t("gallery.byAspectHeightWidth");

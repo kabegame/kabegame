@@ -290,6 +290,27 @@ fn ddl_in_dynamic_sql() {
 }
 
 #[test]
+fn ddl_in_order_sql() {
+    let q = ContribQuery {
+        order: Some(OrderForm::Array(vec![OrderItem {
+            sql: SqlExpr("${properties.rank}; DROP TABLE images".into()),
+            prepend: false,
+            order: OrderDirection::Asc,
+            clear: None,
+        }])),
+        ..Default::default()
+    };
+    let mut d = base_def("p");
+    d.query = Some(Query::Contrib(q));
+    let errs = run_one(d);
+    assert_kind(
+        &errs,
+        |k| matches!(k, ValidateErrorKind::SqlDdlNotAllowed(_)),
+        "SqlDdlNotAllowed (in order)",
+    );
+}
+
+#[test]
 fn invalid_regex_in_resolve() {
     let mut resolve = Resolve::default();
     resolve.0.insert(

@@ -102,6 +102,7 @@ import * as organizeService from "@/services/organize";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { createGallerySurface } from "@/components/imageGrid/surfaces/gallery";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
+import { newRandomSortSeed } from "@/utils/galleryPath";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -294,6 +295,16 @@ const handleManualRefresh = async () => {
   // 手动刷新：回到第 1 页并强制重拉当前路径。
   analytics.track("gallery_manual_refresh");
   refreshKey.value++;
+  if (galleryRouteStore.sort.field === "random") {
+    // 随机排序下手动刷新 = 重新洗牌：换 seed 即换 path，
+    // ImageGrid 的 path watcher（usePagedGallery）会据此自动重拉一次；
+    // 这里不再调用 galleryViewRef.refresh()，避免对同一次刷新重复拉两次。
+    await galleryRouteStore.navigate({
+      sort: { ...galleryRouteStore.sort, seed: newRandomSortSeed() },
+      page: 1,
+    });
+    return;
+  }
   isRefreshing.value = true;
   try {
     await galleryViewRef.value?.refresh({ resetScroll: true });

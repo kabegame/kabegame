@@ -264,7 +264,7 @@
                     "enum": ["all"]
                 }
             },
-            "description": "Order 数组项 — { sql, order, prepend?, clear? }。prepend=false(默认) 时新字段追加、已有字段保持位置更新方向; prepend=true 时新字段或重声明字段移动到最前。order:'revert' 翻转已有方向, 缺失时视为 asc。clear:'all' 在当前项插入前清空已累积的 order entries。"
+            "description": "Order 数组项 — { sql, order, prepend?, clear? }。sql 支持 ${...} 模板并在 build 期渲染为绑定参数; 不做 per-instance intern, 同名属性按 build 期合并表后写值取值, OrderState 以未渲染模板串去重。prepend=false(默认) 时新字段追加、已有字段保持位置更新方向; prepend=true 时新字段或重声明字段移动到最前。order:'revert' 翻转已有方向, 缺失时视为 asc。clear:'all' 在当前项插入前清空已累积的 order entries。"
         },
 
         "OrderGlobal": {

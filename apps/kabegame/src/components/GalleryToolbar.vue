@@ -326,6 +326,7 @@ import {
   filterSetToSingleFilter,
   hasActiveGalleryFilters,
   isSimpleFilter,
+  newRandomSortSeed,
   removeFilterDimension,
   serializeFilterSet,
   setFilterDimension,
@@ -453,6 +454,7 @@ const sortFieldOptions: GallerySortField[] = [
   "by-name",
   "by-aspect",
   "by-set-time",
+  "random",
 ];
 
 // no-album 不是可浏览过滤维度（不进过滤行 / 不显示图标），故从图标表中排除。
@@ -521,6 +523,8 @@ function sortFieldLabel(field: GallerySortField) {
       return t("gallery.sortByAspect");
     case "by-set-time":
       return t("gallery.sortBySetTime");
+    case "random":
+      return t("gallery.sortByRandom");
   }
 }
 
@@ -555,7 +559,12 @@ function onDimensionFilter(dimension: GalleryFilterDimension, filter: GalleryFil
 
 function onDesktopSortFieldCommand(cmd: string) {
   if (!sortFieldOptions.includes(cmd as GallerySortField)) return;
-  emit("update:sort", { ...props.sort, field: cmd as GallerySortField });
+  if (cmd === "random") {
+    // 已处于随机也重新洗牌：不做 already-active 提前返回。
+    emit("update:sort", { field: "random", desc: props.sort.desc, seed: newRandomSortSeed() });
+    return;
+  }
+  emit("update:sort", { field: cmd as GallerySortField, desc: props.sort.desc });
 }
 
 function toggleDesktopSortDesc() {
@@ -1137,6 +1146,8 @@ const sortOptionLabelAsc = computed(() => {
       return t("gallery.byAspectWidthHeight");
     case "by-time":
       return t("gallery.byTimeAsc");
+    case "random":
+      return t("gallery.byRandomAsc");
   }
 });
 const sortOptionLabelDesc = computed(() => {
@@ -1153,6 +1164,8 @@ const sortOptionLabelDesc = computed(() => {
       return t("gallery.byAspectHeightWidth");
     case "by-time":
       return t("gallery.byTimeDesc");
+    case "random":
+      return t("gallery.byRandomDesc");
   }
 });
 

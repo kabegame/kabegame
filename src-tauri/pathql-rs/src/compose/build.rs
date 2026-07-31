@@ -66,7 +66,7 @@ impl ProviderQuery {
         self.render_where(&mut sql, &mut params, ctx_ref, dialect)?;
 
         // ORDER BY
-        self.render_order(&mut sql);
+        self.render_order(&mut sql, &mut params, ctx_ref, dialect)?;
 
         // OFFSET / LIMIT
         self.render_pagination(&mut sql, &mut params, ctx_ref, dialect)?;
@@ -156,17 +156,23 @@ impl ProviderQuery {
         Ok(())
     }
 
-    fn render_order(&self, sql: &mut String) {
+    fn render_order(
+        &self,
+        sql: &mut String,
+        params: &mut Vec<TemplateValue>,
+        ctx: &TemplateContext,
+        dialect: SqlDialect,
+    ) -> Result<(), BuildError> {
         let entries = &self.order.entries;
         if entries.is_empty() {
-            return;
+            return Ok(());
         }
         sql.push_str(" ORDER BY ");
         for (i, (field, dir)) in entries.iter().enumerate() {
             if i > 0 {
                 sql.push_str(", ");
             }
-            sql.push_str(field);
+            render_template_sql(field, ctx, &self.aliases, dialect, sql, params)?;
             let effective = self.apply_global_modifier(*dir);
             sql.push_str(match effective {
                 OrderDirection::Asc => " ASC",
@@ -176,6 +182,7 @@ impl ProviderQuery {
                 }
             });
         }
+        Ok(())
     }
 
     fn apply_global_modifier(&self, base: OrderDirection) -> OrderDirection {
@@ -587,10 +594,41 @@ mod tests {
         let mut q = q_with_from("images");
         q.order.entries.push(("a".into(), OrderDirection::Asc));
         q.order.entries.push(("b".into(), OrderDirection::Desc));
-        let (sql, _) = q
+        let (sql, params) = q
             .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
             .unwrap();
-        assert!(sql.ends_with(" ORDER BY a ASC, b DESC"));
+        assert_eq!(sql, "SELECT images.* FROM images ORDER BY a ASC, b DESC");
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn order_template_param_follows_where_param() {
+        let mut q = q_with_from("images");
+        q.wheres
+            .push(SqlExpr("images.plugin_id = ${properties.plugin_id}".into()));
+        q.order.entries.push((
+            "kb_rand(${properties.seed}, images.id)".into(),
+            OrderDirection::Asc,
+        ));
+        let ctx = props(&[
+            ("plugin_id", TemplateValue::Text("pixiv".into())),
+            ("seed", TemplateValue::Text("42".into())),
+        ]);
+        let (sql, params) = q
+            .build_sql(&ctx, crate::provider::SqlDialect::Sqlite)
+            .unwrap();
+
+        assert_eq!(
+            sql,
+            "SELECT images.* FROM images WHERE (images.plugin_id = ?) ORDER BY kb_rand(?, images.id) ASC"
+        );
+        assert_eq!(
+            params,
+            vec![
+                TemplateValue::Text("pixiv".into()),
+                TemplateValue::Text("42".into())
+            ]
+        );
     }
 
     #[test]

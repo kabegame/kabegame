@@ -19,11 +19,19 @@ export type GallerySortField =
   | "by-name"
   | "by-aspect"
   | "by-set-time"
-  | "by-album-order";
+  | "by-album-order"
+  | "random";
 
 export interface GallerySort {
   field: GallerySortField;
   desc: boolean;
+  /** 随机排序种子（十进制字符串，1-18 位）；field 为 "random" 时必填。 */
+  seed?: string;
+}
+
+/** 生成新的随机排序种子：落在后端 `[0-9]{1,18}` 约束与 i64 范围内。 */
+export function newRandomSortSeed(): string {
+  return String(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER));
 }
 
 export interface GalleryFilterSet {
@@ -135,7 +143,11 @@ export function buildComposablePath(params: ComposablePathParams): string {
   const bodyParts: string[] = [];
 
   if (filterPath) bodyParts.push(filterPath);
-  bodyParts.push(`sort/${sort.field}`);
+  bodyParts.push(
+    sort.field === "random"
+      ? `sort/random-${sort.seed || newRandomSortSeed()}`
+      : `sort/${sort.field}`,
+  );
 
   const body = bodyParts.join(`/${FILTER_COMB}/`);
   const p = Math.max(1, Math.floor(Number(page)) || DEFAULT_PAGE);
@@ -180,10 +192,11 @@ export function parseComposablePath(
 
   const { body, tail } = splitBodyAndTail(restSegs);
   const { sort: order, pageSize, page } = parseTail(tail);
-  const { filters, sortField, legacyFilter } = parseBody(body);
+  const { filters, sortField, sortSeed, legacyFilter } = parseBody(body);
   const sort: GallerySort = {
     field: sortField ?? defaultSort,
     desc: order === "desc",
+    ...(sortField === "random" && sortSeed ? { seed: sortSeed } : {}),
   };
   const filter = legacyFilter ?? filterSetToSingleFilter(filters);
   return { filters, filter, sort, page, pageSize, search };
@@ -241,9 +254,11 @@ export function normalizeGallerySort(
   sort: GallerySort | GalleryStoredSort | undefined,
 ): GallerySort {
   if (sort && typeof sort === "object") {
+    const field = isGallerySortField(sort.field) ? sort.field : "by-time";
     return {
-      field: isGallerySortField(sort.field) ? sort.field : "by-time",
+      field,
       desc: !!sort.desc,
+      ...(field === "random" ? { seed: sort.seed } : {}),
     };
   }
   return { field: "by-time", desc: sort === "desc" };
@@ -257,7 +272,8 @@ export function isGallerySortField(field: string | undefined): field is GalleryS
     field === "by-name" ||
     field === "by-aspect" ||
     field === "by-set-time" ||
-    field === "by-album-order"
+    field === "by-album-order" ||
+    field === "random"
   );
 }
 
@@ -541,10 +557,12 @@ export function galleryPathWithSearchOnly(
 function parseBody(body: string[]): {
   filters: GalleryFilterSet;
   sortField?: GallerySortField;
+  sortSeed?: string;
   legacyFilter?: GalleryFilter;
 } {
   let filters: GalleryFilterSet = {};
   let sortField: GallerySortField | undefined;
+  let sortSeed: string | undefined;
   let legacyFilter: GalleryFilter | undefined;
 
   for (const chunk of splitFilterChunks(body)) {
@@ -553,7 +571,13 @@ function parseBody(body: string[]): {
     if (root === "all") continue;
     if (root === "sort") {
       const field = chunk[1];
-      if (isGallerySortField(field)) sortField = field;
+      const randomMatch = /^random-([0-9]{1,18})$/.exec(field ?? "");
+      if (randomMatch) {
+        sortField = "random";
+        sortSeed = randomMatch[1];
+      } else if (isGallerySortField(field)) {
+        sortField = field;
+      }
       continue;
     }
     const parsed = parseDimensionChunk(chunk);
@@ -565,7 +589,7 @@ function parseBody(body: string[]): {
     filters = setFilterDimension(filters, parsed.dimension, parsed.filter);
   }
 
-  return { filters, sortField, legacyFilter };
+  return { filters, sortField, sortSeed, legacyFilter };
 }
 
 function splitFilterChunks(body: string[]): string[][] {
