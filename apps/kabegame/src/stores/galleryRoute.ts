@@ -5,11 +5,19 @@ import {
   parseGalleryPath,
   GALLERY_STORAGE_KEY_PATH,
   DEFAULT_GALLERY_FILTER_SET,
+  newRandomSortSeed,
   type GalleryFilterSet,
   type GallerySort,
 } from "@/utils/galleryPath";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_WEB } from "@kabegame/core/env";
+
+/**
+ * web 版默认随机排序的种子：每次加载页面换一批图，但整个会话内保持同一次洗牌
+ * （defaultState 在 path 为空时会被反复求值，每次现生成会让翻页乱序）。
+ */
+let cachedWebRandomSeed: string | null = null;
+const webRandomSeed = () => (cachedWebRandomSeed ??= newRandomSortSeed());
 
 type GalleryRouteState = {
   filters: GalleryFilterSet;
@@ -40,7 +48,9 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
       const settings = useSettingsStore();
       const stored = IS_WEB ? null : localStorage.getItem(GALLERY_STORAGE_KEY_PATH);
       const parsed = stored ? parseGalleryPath(stored) : null;
-      const defaultSort: GallerySort = { field: "by-id", desc: IS_WEB };
+      const defaultSort: GallerySort = IS_WEB
+        ? { field: "random", desc: false, seed: webRandomSeed() }
+        : { field: "by-id", desc: false };
       return {
         filters: parsed?.filters ?? DEFAULT_GALLERY_FILTER_SET,
         sort: parsed?.sort ?? defaultSort,
