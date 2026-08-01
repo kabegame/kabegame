@@ -20,6 +20,7 @@
         "all": { "provider": "fail_images_all_provider" },
         "tasks": { "provider": "fail_images_tasks_router" },
         "id_([1-9][0-9]*)": {
+            "alias": "id",
             "provider": "fail_images_id_provider",
             "properties": { "failed_id": "${capture[1]}" }
         }

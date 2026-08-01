@@ -18,6 +18,7 @@
     },
     "resolve": {
         "english|chinese|japanese|korean|other": {
+            "alias": "bucket",
             "provider": "name_language_bucket_provider",
             "properties": {
                 "bucket": "${capture[0]}"

@@ -1,4 +1,5 @@
 use super::{pascal_case, CodegenModel, Edge, EdgeKind, EdgeTarget};
+use std::collections::HashSet;
 use std::fmt::{self, Write};
 
 const RUNTIME: &str = include_str!("runtime.ts");
@@ -21,11 +22,14 @@ pub(super) fn emit(model: &CodegenModel) -> String {
             provider.type_name
         ));
         writer.indented(|writer| {
+            // 同 class 内成员名去重: 多个无 alias 动态项都想叫 `$child`, 按声明序补
+            // 2/3/... (三类边统一防御 — 第三方插件 DSL 不能弄坏生成)。
+            let mut used_members = HashSet::new();
             for (index, edge) in provider.edges.iter().enumerate() {
                 if index > 0 {
                     writer.line(format_args!(""));
                 }
-                emit_edge(writer, edge);
+                emit_edge(writer, edge, &mut used_members);
             }
         });
         writer.line(format_args!("}}"));
@@ -67,24 +71,42 @@ pub(super) fn emit(model: &CodegenModel) -> String {
     writer.finish()
 }
 
-fn emit_edge(writer: &mut IndentWriter, edge: &Edge) {
+/// 取 class 内唯一成员名: 首个用 base 原名, 撞名按声明序补 2/3/...。
+fn unique_member(base: String, used: &mut HashSet<String>) -> String {
+    if used.insert(base.clone()) {
+        return base;
+    }
+    let mut n = 2usize;
+    loop {
+        let candidate = format!("{}{}", base, n);
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+fn emit_edge(writer: &mut IndentWriter, edge: &Edge, used_members: &mut HashSet<String>) {
     match &edge.kind {
         EdgeKind::Static { key } => {
-            let property = if is_identifier(key) && !key.starts_with('$') {
-                key.clone()
+            // getter 名去重登记用 key 原文 (quoted 与裸标识符同一命名空间)。
+            let name = unique_member(key.clone(), used_members);
+            let property = if is_identifier(&name) && !name.starts_with('$') {
+                name.clone()
             } else {
-                format!("[{}]", ts_string_literal(key))
+                format!("[{}]", ts_string_literal(&name))
             };
             writer.line(format_args!(
                 "get {}(): {} {{",
                 property, edge.target.type_name
             ));
+            // 段永远用原始 key: 去重只改成员名, 不改路径语义。
             let segment = ts_string_literal(key);
             writer.indented(|writer| emit_return(writer, &segment, &edge.target));
             writer.line(format_args!("}}"));
         }
         EdgeKind::Resolve { alias } => {
-            let method = format!("$resolve{}", pascal_case(alias));
+            let method = unique_member(format!("$resolve{}", pascal_case(alias)), used_members);
             writer.line(format_args!(
                 "{}(seg: string): {} {{",
                 method, edge.target.type_name
@@ -93,10 +115,11 @@ fn emit_edge(writer: &mut IndentWriter, edge: &Edge) {
             writer.line(format_args!("}}"));
         }
         EdgeKind::Dynamic { alias } => {
-            let method = alias
+            let base = alias
                 .as_ref()
                 .map(|alias| format!("$child{}", pascal_case(alias)))
                 .unwrap_or_else(|| "$child".to_string());
+            let method = unique_member(base, used_members);
             writer.line(format_args!(
                 "{}(name: string): {} {{",
                 method, edge.target.type_name

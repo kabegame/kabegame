@@ -48,6 +48,7 @@ fn runtime() -> Arc<ProviderRuntime> {
                     }
                 },
                 "resolve": {
+                    "filter_comb": { "provider": "all_provider" },
                     "x[1-9][0-9]*x": {
                         "provider": "paginate",
                         "alias": "page_size"
@@ -99,6 +100,28 @@ fn runtime() -> Arc<ProviderRuntime> {
         ))
         .unwrap();
 
+    // 两个无 alias 动态项: 成员名按声明序去重为 $child / $child2。
+    registry
+        .register(parse_def(
+            r#"{
+                "namespace": "test",
+                "name": "multi_dynamic",
+                "list": {
+                    "${a.name}": {
+                        "sql": "SELECT name FROM items",
+                        "data_var": "a",
+                        "provider": "child_provider"
+                    },
+                    "${b.name}": {
+                        "sql": "SELECT name FROM others",
+                        "data_var": "b",
+                        "provider": "all_provider"
+                    }
+                }
+            }"#,
+        ))
+        .unwrap();
+
     registry
         .register_provider(
             Namespace("test".into()),
@@ -144,6 +167,8 @@ fn typescript_snapshot_contains_expected_runtime_types_and_edges() {
 
     assert!(output.contains("$resolvePageSize(seg: string): TestPaginateNode"));
     assert!(!output.contains("$resolveRaw"));
+    // 纯字面量 resolve key: 无需 alias, 按静态边生成 getter。
+    assert!(output.contains("get filter_comb(): TestAllProviderNode"));
     assert!(output.contains("$childPlugin(name: string): TestChildProviderNode"));
     assert!(output.contains("$childTemplated(name: string): TestGalleryRouteTemplateNode"));
     assert!(output.contains("$childExtension(name: string): TestGalleryRouteExtendNode"));
@@ -162,6 +187,9 @@ fn typescript_snapshot_contains_expected_runtime_types_and_edges() {
     assert!(output.contains(
         "class TestSingleDynamicNode extends NodeBase {\n  $child(name: string): TestChildProviderNode"
     ));
+    // 多个无 alias 动态项: $child / $child2, 各自返回对应目标类型。
+    assert!(output.contains("$child(name: string): TestChildProviderNode"));
+    assert!(output.contains("$child2(name: string): TestAllProviderNode"));
 
     assert!(output.contains("gallery: new TestGalleryRouteNode([\"gallery://\"]),"));
     assert!(output.contains("\"fail-images\": new TestGalleryRouteNode([\"fail-images://\"]),"));

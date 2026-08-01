@@ -268,8 +268,17 @@ fn collect_edges(
     if let Some(resolve) = &def.resolve {
         let mut entries: Vec<_> = resolve.0.iter().collect();
         entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-        for (index, (_, entry)) in entries.into_iter().enumerate() {
-            let Some(alias) = &entry.alias else {
+        for (index, (key, entry)) in entries.into_iter().enumerate() {
+            // 纯字面量 key(无正则元字符)语义上就是静态子节点(RULES §5.1:
+            // 纯字面量是空元字符的合法子集)—— 无需 alias, 直接按静态边生成 getter。
+            // 带元字符的正则仍只认 alias; 无 alias 走 $raw。
+            let kind = if entry.alias.is_none() && is_literal_regex(key) {
+                EdgeKind::Static { key: key.clone() }
+            } else if let Some(alias) = &entry.alias {
+                EdgeKind::Resolve {
+                    alias: alias.clone(),
+                }
+            } else {
                 continue;
             };
             let target = target_for_invocation(
@@ -281,16 +290,19 @@ fn collect_edges(
                 index + 1,
                 placeholders,
             );
-            edges.push(RawEdge {
-                kind: EdgeKind::Resolve {
-                    alias: alias.clone(),
-                },
-                target,
-            });
+            edges.push(RawEdge { kind, target });
         }
     }
 
     edges
+}
+
+/// key 是否纯字面量正则: 不含任何正则元字符(也排除 `${...}` 模板 —— `$`/`{` 本身就是元字符)。
+fn is_literal_regex(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|c| !matches!(c, '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\'))
 }
 
 fn target_for_invocation(

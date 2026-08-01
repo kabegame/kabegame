@@ -6,7 +6,8 @@
 //! - `plugin import`：导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
 //! - `plugin run`：在本进程跑一个**已安装**的 V8 插件，实时渲染日志与进度
 //! - `data import-image`：直接导入单个本地图片或视频
-//! - `data query`：查询 PathQL 数据
+//! - `pathql generate`：生成 PathQL 客户端
+//! - `pathql query`：查询 PathQL 数据
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use include_dir::{include_dir, Dir};
@@ -17,7 +18,7 @@ use kabegame_core::{
 };
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 const TEMPLATE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/template");
@@ -39,6 +40,9 @@ enum Commands {
     /// 管理数据库
     #[command(subcommand)]
     Data(DataCommands),
+    /// PathQL 相关命令
+    #[command(subcommand)]
+    Pathql(PathqlCommands),
 }
 
 #[derive(Subcommand, Debug)]
@@ -57,8 +61,30 @@ enum PluginCommands {
 enum DataCommands {
     /// 将单个本地文件（图片或视频）直接导入数据库
     ImportImage(ImportImageArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum PathqlCommands {
+    /// 生成 PathQL 客户端
+    Generate(GenerateArgs),
     /// 查询 PathQL 结果
     Query(DataQueryArgs),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum GenerateTarget {
+    #[value(name = "typescript")]
+    TypeScript,
+}
+
+#[derive(Args, Debug)]
+struct GenerateArgs {
+    /// 生成目标
+    #[arg(long, value_enum, default_value = "typescript")]
+    target: GenerateTarget,
+    /// 输出文件路径；传 `-` 时写入标准输出
+    #[arg(long)]
+    out: PathBuf,
 }
 
 #[derive(Args, Debug)]
@@ -337,7 +363,10 @@ async fn main() {
         },
         Commands::Data(cmd) => match cmd {
             DataCommands::ImportImage(args) => data_import_image(args).await,
-            DataCommands::Query(args) => data_query(args),
+        },
+        Commands::Pathql(cmd) => match cmd {
+            PathqlCommands::Generate(args) => pathql_generate(args),
+            PathqlCommands::Query(args) => data_query(args),
         },
     };
 
@@ -656,6 +685,48 @@ fn data_query(args: DataQueryArgs) -> Result<(), String> {
     println!(
         "{}",
         serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
+    );
+    Ok(())
+}
+
+fn pathql_generate(args: GenerateArgs) -> Result<(), String> {
+    use kabegame_core::providers::provider_runtime;
+    use pathql_rs::client_codegen::CodegenTarget;
+
+    init_standalone_globals()?;
+    let target = match args.target {
+        GenerateTarget::TypeScript => CodegenTarget::TypeScript,
+    };
+    let output = provider_runtime()
+        .client_codegen(target)
+        .map_err(|error| error.to_string())?;
+    let byte_count = output.len();
+
+    if args.out == Path::new("-") {
+        let mut stdout = std::io::stdout().lock();
+        stdout
+            .write_all(output.as_bytes())
+            .map_err(|error| format!("写入标准输出失败: {error}"))?;
+        stdout
+            .flush()
+            .map_err(|error| format!("刷新标准输出失败: {error}"))?;
+        eprintln!("PathQL 客户端生成成功：{byte_count} 字节；输出=-");
+        return Ok(());
+    }
+
+    if let Some(parent) = args
+        .out
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("创建输出目录 `{}` 失败: {error}", parent.display()))?;
+    }
+    std::fs::write(&args.out, output)
+        .map_err(|error| format!("写入 `{}` 失败: {error}", args.out.display()))?;
+    eprintln!(
+        "PathQL 客户端生成成功：{byte_count} 字节；输出={}",
+        args.out.display()
     );
     Ok(())
 }
@@ -1766,30 +1837,41 @@ mod tests {
     }
 
     #[test]
-    fn test_data_query_parse_modes() {
+    fn test_pathql_query_parse_modes() {
         for args in [
-            vec!["kabegame-cli", "data", "query", "images://gallery/all"],
-            vec!["kabegame-cli", "data", "query", "p", "--list"],
+            vec!["kabegame-cli", "pathql", "query", "images://gallery/all"],
+            vec!["kabegame-cli", "pathql", "query", "p", "--list"],
             vec![
                 "kabegame-cli",
-                "data",
+                "pathql",
                 "query",
                 "p",
                 "--list",
                 "--with-count",
             ],
-            vec!["kabegame-cli", "data", "query", "p", "--entry"],
-            vec!["kabegame-cli", "data", "query", "p", "--fetch"],
+            vec!["kabegame-cli", "pathql", "query", "p", "--entry"],
+            vec!["kabegame-cli", "pathql", "query", "p", "--fetch"],
         ] {
             assert!(Cli::try_parse_from(args).is_ok());
         }
 
-        let cli =
-            Cli::try_parse_from(["kabegame-cli", "data", "query", "images://gallery/all"]).unwrap();
-        let Commands::Data(DataCommands::Query(args)) = cli.command else {
-            panic!("expected data query");
+        let cli = Cli::try_parse_from(["kabegame-cli", "pathql", "query", "images://gallery/all"])
+            .unwrap();
+        let Commands::Pathql(PathqlCommands::Query(args)) = cli.command else {
+            panic!("expected pathql query");
         };
         assert!(!args.list && !args.entry && !args.fetch && !args.with_count);
+    }
+
+    #[test]
+    fn test_pathql_generate_parse_defaults() {
+        let cli = Cli::try_parse_from(["kabegame-cli", "pathql", "generate", "--out", "client.ts"])
+            .unwrap();
+        let Commands::Pathql(PathqlCommands::Generate(args)) = cli.command else {
+            panic!("expected pathql generate");
+        };
+        assert_eq!(args.target, GenerateTarget::TypeScript);
+        assert_eq!(args.out, PathBuf::from("client.ts"));
     }
 
     #[test]
@@ -1811,9 +1893,11 @@ mod tests {
     #[test]
     fn test_removed_and_invalid_commands_fail_to_parse() {
         for args in [
-            vec!["kabegame-cli", "data", "query", "p", "--list", "--entry"],
-            vec!["kabegame-cli", "data", "query", "p", "--fetch", "--list"],
-            vec!["kabegame-cli", "data", "query", "p", "--with-count"],
+            vec!["kabegame-cli", "pathql", "query", "p", "--list", "--entry"],
+            vec!["kabegame-cli", "pathql", "query", "p", "--fetch", "--list"],
+            vec!["kabegame-cli", "pathql", "query", "p", "--with-count"],
+            vec!["kabegame-cli", "data", "query", "p"],
+            vec!["kabegame-cli", "pathql", "generate"],
             vec!["kabegame-cli", "data", "import-image"],
             vec!["kabegame-cli", "plugin", "pack"],
             vec!["kabegame-cli", "vd", "mount"],

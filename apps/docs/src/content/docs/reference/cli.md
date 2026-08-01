@@ -3,10 +3,10 @@ title: kabegame-cli 命令行参考
 description: kabegame-cli 子命令、参数、退出码与守护进程依赖关系的完整参考。
 ---
 
-`kabegame-cli` 是 Kabegame 的命令行可执行文件，用于在不打开 GUI 的前提下脚手架、打包、导入并运行爬虫插件，或在脚本中控制虚拟磁盘。它**不随主程序打包**，需要时从发布页单独下载。本页列出当前代码实际存在的子命令与参数。
+`kabegame-cli` 是 Kabegame 的命令行可执行文件，用于在不打开 GUI 的前提下脚手架、打包、导入并运行爬虫插件，生成或查询 PathQL，或在脚本中控制虚拟磁盘。它**不随主程序打包**，需要时从发布页单独下载。本页列出当前代码实际存在的子命令与参数。
 
 :::note
-除 `plugin new` / `plugin pack` / `plugin import` / `plugin run` 外，所有子命令都需要 `kabegame-daemon` 正在运行。通常启动 GUI 主应用即可同时启动 daemon；也可以手动启动 `kabegame-daemon`。详见下方[守护进程依赖](#守护进程依赖)。
+除 `plugin new` / `plugin pack` / `plugin import` / `plugin run` / `pathql generate` / `pathql query` 外，所有子命令都需要 `kabegame-daemon` 正在运行。通常启动 GUI 主应用即可同时启动 daemon；也可以手动启动 `kabegame-daemon`。详见下方[守护进程依赖](#守护进程依赖)。
 :::
 
 ## 启动与定位
@@ -143,6 +143,41 @@ kabegame-cli plugin import <path.kgpg>
 CLI 层没有版本 / 冲突检查，重复导入同一 ID 可能覆盖已有插件。
 :::
 
+## pathql 子命令组
+
+`pathql` 命令在 CLI 进程内初始化数据与 provider runtime，不需要 daemon。
+
+### pathql generate
+
+生成 TypeScript PathQL 客户端。输出目录不存在时会自动创建；传 `--out -` 可将生成物写到标准输出。
+
+```bash
+kabegame-cli pathql generate --target typescript --out packages/kabegame-pathql-client/client.ts
+```
+
+| 参数       | 必填 | 说明                                      |
+| ---------- | ---- | ----------------------------------------- |
+| `--target` | 否   | 生成目标，当前仅支持 `typescript`（默认）。 |
+| `--out`    | 是   | 输出文件路径；`-` 表示标准输出。          |
+
+生成物不入库；修改 provider DSL 后需手动重新生成。
+
+### pathql query
+
+直接查询 PathQL。默认拉取数据行，也可切换为列举子项或查询节点自身 entry。
+
+```bash
+kabegame-cli pathql query <path> [--list [--with-count] | --entry | --fetch]
+```
+
+| 参数           | 必填 | 说明                               |
+| ---------------- | ---- | ---------------------------------- |
+| `<path>`         | 是   | PathQL 查询路径。                  |
+| `--list`         | 否   | 列举子项。                         |
+| `--with-count`   | 否   | 为子项附带 total，仅与 `--list` 同用。 |
+| `--entry`        | 否   | 查询节点自身 entry。              |
+| `--fetch`        | 否   | 拉取数据行；未指定模式时也是此行为。 |
+
 ## vd 子命令组（桌面版）
 
 `vd *` 只在桌面版编译。虚拟磁盘当前实际可用平台以 Windows（Dokan）为主；macOS / Linux 相关实现处于实验状态。所有 `vd` 子命令都通过 IPC 走 daemon。
@@ -206,6 +241,7 @@ CLI 使用三种退出码：
 | `plugin pack`                           | 否              | 读取目录并打包，不执行 `scripts.build`。   |
 | `plugin import`                         | 否              | 本地初始化 `PluginManager`。               |
 | `plugin run`                            | 否              | 在本进程内初始化 TaskScheduler + V8 运行时执行，只订阅进程内的 `EventBroadcaster`。 |
+| `pathql generate` / `pathql query`      | 否              | 在本进程内初始化数据与 provider runtime。  |
 | `vd mount` / `vd unmount` / `vd status` | 是              | 全部走 IPC。                               |
 | `ipc-status`                            | 是              | 用来探测 daemon。                          |
 
@@ -216,6 +252,7 @@ CLI 使用三种退出码：
 | 发布页单独下载 CLI               | 是          | 是    | 是       | 不适用  |
 | `plugin new` / `pack` / `import` | 是          | 是    | 是       | 不适用  |
 | `plugin run`                     | 是          | 是    | 是       | 不适用  |
+| `pathql generate` / `pathql query` | 是        | 是    | 是       | 不适用  |
 | `vd *`                           | 是（Dokan） | 实验  | 实验     | 不适用  |
 
 ## 常见问题

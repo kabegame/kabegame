@@ -35,6 +35,7 @@
     // 的 `surf` / `plugin` 段), 所以路径前缀已隔离, regex 重叠不致冲突。
     "resolve": {
         "([a-zA-Z0-9][a-zA-Z0-9.-]*)": {
+            "alias": "host",
             "provider": "gallery_surf_provider",
             "properties": { "host": "${capture[1]}" }
         }

@@ -17,6 +17,7 @@
     "resolve": {
         "all": { "provider": "surf_records_all_provider" },
         "id_([^/]+)": {
+            "alias": "id",
             "provider": "surf_records_id_provider",
             "properties": { "surf_record_id": "${capture[1]}" }
         }

@@ -15,6 +15,7 @@
     "resolve": {
         "all": { "provider": "albums_all_provider" },
         "id_([^/]+)": {
+            "alias": "id",
             "provider": "albums_id_provider",
             "properties": { "album_id": "${capture[1]}" }
         },

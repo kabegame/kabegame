@@ -4541,6 +4541,7 @@ dependencies = [
  "include_dir",
  "indicatif",
  "kabegame-core",
+ "pathql-rs",
  "regex",
  "serde_json",
  "tokio",

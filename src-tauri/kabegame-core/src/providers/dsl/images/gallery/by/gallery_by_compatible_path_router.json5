@@ -4,6 +4,7 @@
     "note": "Look up one image by its compatibility-copy path. Pass the exact stored compatible_path as the next single PathQL segment; a missing value returns an empty result.",
     "resolve": {
         "(.+)": {
+            "alias": "compatible_path",
             "provider": "gallery_by_compatible_path_provider",
             "properties": { "path": "${capture[1]}" }
         }

@@ -4,6 +4,7 @@
     "note": "Look up one image by thumbnail path. Pass the path as the next single PathQL segment; slash direction is normalized, and images without a thumbnail fall back to matching local_path.",
     "resolve": {
         "(.+)": {
+            "alias": "thumbnail_path",
             "provider": "gallery_by_thumbnail_path_provider",
             "properties": { "path": "${capture[1]}" }
         }

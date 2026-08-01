@@ -11,6 +11,7 @@
             "properties": { "min_size": -1, "max_size": -1 }
         },
         ".*": {
+            "alias": "range",
             "delegate": { "provider": "gallery_size_range_provider" },
             "child_var": "computed",
             "provider": "gallery_size_range_router",

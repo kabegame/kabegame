@@ -4,6 +4,7 @@
     // 7c S6: 路径段是用户输入的搜索关键词 (任意 UTF-8 字符串)。空 list, 任意非空段都接 query provider。
     "resolve": {
         "(.+)": {
+            "alias": "query",
             "provider": "gallery_search_display_name_query_provider",
             "properties": { "query": "${capture[1]}" }
         }

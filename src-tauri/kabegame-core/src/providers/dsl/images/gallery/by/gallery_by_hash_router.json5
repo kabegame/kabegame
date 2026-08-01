@@ -4,6 +4,7 @@
     "note": "Look up one image by content hash. Pass the exact stored hash as the next segment; a missing hash returns an empty result.",
     "resolve": {
         "(.+)": {
+            "alias": "hash",
             "provider": "gallery_by_hash_provider",
             "properties": { "hash": "${capture[1]}" }
         }

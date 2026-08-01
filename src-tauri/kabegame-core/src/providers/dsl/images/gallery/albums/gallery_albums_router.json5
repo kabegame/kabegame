@@ -48,6 +48,7 @@
         // 静态/数字段冲突 (DSL resolve regex 在静态 list 之前生效)。不存在的 UUID 走空集
         // 而非 PathNotFound — 与原 programmatic album_exists None 语义有微小放宽。
         "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}": {
+            "alias": "album",
             "provider": "gallery_album_provider",
             "properties": {
                 "album_id": "${capture[0]}"

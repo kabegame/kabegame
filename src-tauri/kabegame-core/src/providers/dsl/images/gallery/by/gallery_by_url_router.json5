@@ -4,6 +4,7 @@
     "note": "Look up one image by its source URL. Pass the exact stored URL as the next single PathQL segment; a missing URL returns an empty result.",
     "resolve": {
         "(.+)": {
+            "alias": "url",
             "provider": "gallery_by_url_provider",
             "properties": { "url": "${capture[1]}" }
         }

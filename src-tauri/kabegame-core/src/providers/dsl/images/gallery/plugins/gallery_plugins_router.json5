@@ -17,6 +17,7 @@
     },
     "resolve": {
         "([a-z][a-z0-9_-]*)": {
+            "alias": "plugin",
             "provider": "gallery_plugin_router",
             "properties": {
                 "plugin_id": "${capture[1]}"

@@ -28,6 +28,7 @@
     "resolve": {
         "all": { "provider": "tasks_all_provider" },
         "id_([^/]+)": {
+            "alias": "id",
             "provider": "tasks_id_provider",
             "properties": { "task_id": "${capture[1]}" }
         }

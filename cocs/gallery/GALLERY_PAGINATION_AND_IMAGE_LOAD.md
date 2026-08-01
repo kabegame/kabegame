@@ -53,7 +53,7 @@
 ### 设置持久化
 
 - **Rust**：`SettingKey::GalleryPageSize`、getter/setter（与 `gallery_grid_columns` 同类模式）。
-- **CLI**：`data query` 直接查询 PathQL，不读取 `galleryPageSize`；分页大小和页码由查询路径本身表达（如 `images://gallery/all/x100x/1`）。
+- **CLI**：`pathql query` 直接查询 PathQL，不读取 `galleryPageSize`；分页大小和页码由查询路径本身表达（如 `images://gallery/all/x100x/1`）。
 
 ## 前端
 

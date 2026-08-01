@@ -90,6 +90,8 @@ toolchain 来自 cargo-mobile2，与 build 一致），需要 env NDK + `deno ta
 ### Other
 ```bash
 deno task set-version            # Bump version across workspace
+kabegame-cli pathql generate --target typescript --out packages/kabegame-pathql-client/client.ts
+                                 # 生成 PathQL 客户端；产物不入库，修改 DSL 后手动重生成
 deno task patch cef              # Apply third-patches/cef series atomically to third/cef
 deno task patch cef -r           # Reverse the CEF series in reverse order
 deno task patch --all --check    # Dry-run every available third-patches/* series

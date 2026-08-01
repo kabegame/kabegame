@@ -4,6 +4,7 @@
     "query": {},
     "resolve": {
         "id_([^/]+)": {
+            "alias": "task",
             "provider": "fail_images_task_provider",
             "properties": { "task_id": "${capture[1]}" }
         }
