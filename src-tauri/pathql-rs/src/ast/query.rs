@@ -1,4 +1,6 @@
-use crate::ast::{expr::*, invocation::ProviderCall, order::OrderForm, query_atoms::*};
+use crate::ast::{
+    expr::*, invocation::ProviderCall, order::OrderForm, query_atoms::*, where_query::WhereQuery,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -14,9 +16,12 @@ pub struct ContribQuery {
     pub fields: Option<Vec<Field>>,
     #[serde(default)]
     pub join: Option<Vec<Join>>,
+    /// WHERE 谓词树(字符串 = 原子 / 数组 = OR / `{not:...}` = 取非)。
+    /// fold 期坍缩成一条普通谓词; 详见 [`WhereQuery`]。
     #[serde(default, rename = "where")]
-    pub where_: Option<SqlExpr>,
+    pub where_: Option<WhereQuery>,
     /// 7c: 折叠期 substring 移除已有 WHERE 子句; 在新 `where` 写入前生效。
+    /// 匹配对象是**坍缩后的整条字符串** —— 清除粒度是整棵树, 摘不掉树内某一支。
     /// 用例: VD `vd_sub_album_gate_provider` 进入子画册 gate 时, 剥除父
     /// `ai.album_id = ?` WHERE, 让下游 entry 写入新 album_id 不形成
     /// 永远空的 `A AND B`。
@@ -104,7 +109,23 @@ mod tests {
     fn where_rename() {
         let v: Query = serde_json::from_str(r#"{"where":"x>0"}"#).unwrap();
         match v {
-            Query::Contrib(c) => assert_eq!(c.where_, Some(SqlExpr("x>0".into()))),
+            Query::Contrib(c) => assert_eq!(c.where_, Some(WhereQuery::Is(SqlExpr("x>0".into())))),
+            _ => panic!("expected Contrib"),
+        }
+    }
+
+    #[test]
+    fn where_tree_forms_parse_in_contrib() {
+        let v: Query =
+            serde_json::from_str(r#"{"where":["a = 1",{"not":"b = 2"}]}"#).unwrap();
+        match v {
+            Query::Contrib(c) => assert_eq!(
+                c.where_.unwrap(),
+                WhereQuery::Any(vec![
+                    WhereQuery::Is(SqlExpr("a = 1".into())),
+                    WhereQuery::Not(Box::new(WhereQuery::Is(SqlExpr("b = 2".into())))),
+                ])
+            ),
             _ => panic!("expected Contrib"),
         }
     }

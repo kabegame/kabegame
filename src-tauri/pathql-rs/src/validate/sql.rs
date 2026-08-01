@@ -33,7 +33,10 @@ pub fn validate_sql_exprs(
                 }
             }
             if let Some(w) = &c.where_ {
-                check_fragment(&fqn, "query.where", w, errors);
+                // 谓词树: 逐原子检查, field 路径带上树内位置(如 `query.where[1].not`)。
+                w.for_each_expr("query.where", &mut |expr, field| {
+                    check_fragment(&fqn, field, expr, errors);
+                });
             }
             if let Some(fields) = &c.fields {
                 for (i, f) in fields.iter().enumerate() {

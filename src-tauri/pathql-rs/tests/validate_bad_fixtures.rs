@@ -80,7 +80,7 @@ fn bad_namespace() {
 #[test]
 fn undefined_ref_in_where() {
     let q = ContribQuery {
-        where_: Some(SqlExpr("${ref:nope} > 0".into())),
+        where_: Some(WhereQuery::Is(SqlExpr("${ref:nope} > 0".into()))),
         ..Default::default()
     };
     let mut d = base_def("p");

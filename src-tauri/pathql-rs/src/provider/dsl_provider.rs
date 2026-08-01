@@ -69,7 +69,8 @@ impl DslProvider {
     ) -> ContribQuery {
         let mut out = q.clone();
         if let Some(w) = out.where_.as_mut() {
-            w.0 = intern_props_in_sql(&w.0, tctx, state);
+            // 谓词树逐原子改写; 树结构本身不含可 bind 的位置。
+            w.map_exprs_mut(&mut |e| e.0 = intern_props_in_sql(&e.0, tctx, state));
         }
         if let Some(fields) = out.fields.as_mut() {
             for f in fields.iter_mut() {

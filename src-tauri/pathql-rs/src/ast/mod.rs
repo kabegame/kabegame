@@ -8,6 +8,7 @@ pub mod provider_def;
 pub mod query;
 pub mod query_atoms;
 pub mod resolve;
+pub mod where_query;
 
 pub use expr::*;
 pub use invocation::*;
@@ -19,5 +20,6 @@ pub use provider_def::ProviderDef;
 pub use query::*;
 pub use query_atoms::*;
 pub use resolve::*;
+pub use where_query::WhereQuery;
 
 pub type MetaValue = serde_json::Value;

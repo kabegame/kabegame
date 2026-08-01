@@ -6,9 +6,11 @@
 
 pub mod dsl_provider;
 pub mod runtime;
+pub mod where_group;
 
 pub use dsl_provider::{DslProvider, EmptyDslProvider};
 pub use runtime::{ProviderRuntime, ResolvedNode, SchemaRoot};
+pub use where_group::escape_path_segment;
 
 use crate::compose::{BuildError, FoldError, ProviderQuery, RenderError};
 use crate::template::eval::TemplateValue;
@@ -292,6 +294,10 @@ pub enum EngineError {
     Load(#[from] LoadError),
     #[error("register provider error: {0}")]
     Registry(#[from] RegistryError),
+    /// 路径 WHERE 组合器 (`~any` / `~or` / `~not` / `~end`) 语法或语义错误。
+    /// 第一项是出错处的路径, 第二项是可直接展示给用户的原因。
+    #[error("where group error at `{0}`: {1}")]
+    WhereGroup(String, String),
 }
 
 #[cfg(test)]

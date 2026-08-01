@@ -4,6 +4,7 @@ use super::aliases::ResolvedAlias;
 use super::query::{FieldFrag, JoinFrag, ProviderQuery};
 use crate::ast::{
     ClearMode, ContribQuery, Field, Join, JoinKind, NumberOrTemplate, OrderForm, SqlExpr,
+    WhereQuery,
 };
 
 #[derive(Debug, Error, Clone, PartialEq)]
@@ -116,9 +117,10 @@ fn fold_joins(state: &mut ProviderQuery, joins: &Option<Vec<Join>>) -> Result<()
     Ok(())
 }
 
-fn fold_where(state: &mut ProviderQuery, w: &Option<SqlExpr>) {
-    if let Some(expr) = w {
-        state.wheres.push(expr.clone());
+/// 把 WhereQuery 树坍缩成一条普通谓词后 push。树不进入 `wheres`, 渲染层看不到它。
+fn fold_where(state: &mut ProviderQuery, w: &Option<WhereQuery>) {
+    if let Some(expr) = w.as_ref().and_then(|tree| tree.collapse()) {
+        state.wheres.push(expr);
     }
 }
 
@@ -359,10 +361,56 @@ mod tests {
         let mut s = ProviderQuery::new();
         for w in &["a > 0", "b < 10", "c IS NOT NULL"] {
             let mut q = empty_q();
-            q.where_ = Some(SqlExpr((*w).into()));
+            q.where_ = Some(WhereQuery::Is(SqlExpr((*w).into())));
             fold_contrib(&mut s, &q).unwrap();
         }
         assert_eq!(s.wheres.len(), 3);
+    }
+
+    #[test]
+    fn where_tree_collapses_to_single_entry() {
+        let mut s = ProviderQuery::new();
+        let mut q = empty_q();
+        q.where_ = Some(WhereQuery::Any(vec![
+            WhereQuery::Is(SqlExpr("a = 1".into())),
+            WhereQuery::Not(Box::new(WhereQuery::Is(SqlExpr("b = 2".into())))),
+        ]));
+        fold_contrib(&mut s, &q).unwrap();
+        // 整棵树坍缩成一条 —— 与相邻 where 之间仍是 AND。
+        assert_eq!(s.wheres.len(), 1);
+        assert_eq!(s.wheres[0].0, "(a = 1) OR (NOT (b = 2))");
+    }
+
+    #[test]
+    fn where_tree_and_plain_where_are_separate_and_terms() {
+        let mut s = ProviderQuery::new();
+        let mut q1 = empty_q();
+        q1.where_ = Some(WhereQuery::Is(SqlExpr("plugin = 'pixiv'".into())));
+        let mut q2 = empty_q();
+        q2.where_ = Some(WhereQuery::Any(vec![
+            WhereQuery::Is(SqlExpr("a = 1".into())),
+            WhereQuery::Is(SqlExpr("b = 2".into())),
+        ]));
+        fold_contrib(&mut s, &q1).unwrap();
+        fold_contrib(&mut s, &q2).unwrap();
+        assert_eq!(s.wheres.len(), 2);
+        assert_eq!(s.wheres[1].0, "(a = 1) OR (b = 2)");
+    }
+
+    #[test]
+    fn where_clear_matches_collapsed_tree_string() {
+        let mut s = ProviderQuery::new();
+        let mut q1 = empty_q();
+        q1.where_ = Some(WhereQuery::Any(vec![
+            WhereQuery::Is(SqlExpr("ai.album_id = 'A'".into())),
+            WhereQuery::Is(SqlExpr("ai.album_id = 'B'".into())),
+        ]));
+        fold_contrib(&mut s, &q1).unwrap();
+        let mut q2 = empty_q();
+        q2.where_clear = Some(vec![SqlExpr("ai.album_id".into())]);
+        fold_contrib(&mut s, &q2).unwrap();
+        // 清除粒度是整棵树, 不是树内某一支。
+        assert!(s.wheres.is_empty());
     }
 
     // ===== order =====
@@ -549,7 +597,7 @@ mod tests {
 
         // B: references ${ref:t1} in where (str preserved as-is)
         let mut q2 = empty_q();
-        q2.where_ = Some(SqlExpr("${ref:t1}.image_id = images.id".into()));
+        q2.where_ = Some(WhereQuery::Is(SqlExpr("${ref:t1}.image_id = images.id".into())));
         fold_contrib(&mut s, &q2).unwrap();
 
         assert_eq!(s.aliases.lookup("t1").unwrap().literal, "_a0");
@@ -605,7 +653,7 @@ mod tests {
     fn where_clear_drops_existing_matching_where() {
         let mut s = ProviderQuery::new();
         let mut q1 = empty_q();
-        q1.where_ = Some(SqlExpr("ai.album_id = 'A'".into()));
+        q1.where_ = Some(WhereQuery::Is(SqlExpr("ai.album_id = 'A'".into())));
         fold_contrib(&mut s, &q1).unwrap();
         assert_eq!(s.wheres.len(), 1);
 
@@ -622,12 +670,12 @@ mod tests {
     fn where_clear_then_new_where_in_same_contrib() {
         let mut s = ProviderQuery::new();
         let mut q1 = empty_q();
-        q1.where_ = Some(SqlExpr("ai.album_id = 'A'".into()));
+        q1.where_ = Some(WhereQuery::Is(SqlExpr("ai.album_id = 'A'".into())));
         fold_contrib(&mut s, &q1).unwrap();
 
         let mut q2 = empty_q();
         q2.where_clear = Some(vec![SqlExpr("ai.album_id".into())]);
-        q2.where_ = Some(SqlExpr("ai.album_id = 'B'".into()));
+        q2.where_ = Some(WhereQuery::Is(SqlExpr("ai.album_id = 'B'".into())));
         fold_contrib(&mut s, &q2).unwrap();
         // 父 WHERE 被剥, 新 WHERE 写入
         assert_eq!(s.wheres.len(), 1);
@@ -638,10 +686,10 @@ mod tests {
     fn where_clear_keeps_non_matching() {
         let mut s = ProviderQuery::new();
         let mut q1 = empty_q();
-        q1.where_ = Some(SqlExpr("images.plugin_id = 'pixiv'".into()));
+        q1.where_ = Some(WhereQuery::Is(SqlExpr("images.plugin_id = 'pixiv'".into())));
         fold_contrib(&mut s, &q1).unwrap();
         let mut q2 = empty_q();
-        q2.where_ = Some(SqlExpr("ai.album_id = 'A'".into()));
+        q2.where_ = Some(WhereQuery::Is(SqlExpr("ai.album_id = 'A'".into())));
         fold_contrib(&mut s, &q2).unwrap();
         let mut q3 = empty_q();
         q3.where_clear = Some(vec![SqlExpr("ai.album_id".into())]);

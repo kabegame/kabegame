@@ -9,6 +9,7 @@
 
 use arc_swap::ArcSwap;
 
+use super::where_group::{classify_segment, group_depths, GroupKind, GroupStack, SegmentKind};
 use super::{
     ChildEntry, DelegateTransform, EngineError, ListRef, Provider, ProviderContext, ProviderKey,
     ResolveRef, SqlExecutor,
@@ -35,6 +36,12 @@ pub struct ResolvedNode {
     pub provider: Option<Arc<dyn Provider>>,
     pub composed: ProviderQuery,
     pub(crate) provider_keys: Vec<ProviderKey>,
+    /// 路径结束时仍未闭合的 WHERE 组记号 (外层在前)。**尾部不自动闭合**。
+    ///
+    /// 非空时 `composed` 里的谓词是「当前分支视角」的中间态 —— 分支之间还没
+    /// OR 起来。浏览类操作 (list / note / meta) 照常可用 (便于逐段拼分支),
+    /// 执行类操作 (fetch / count) 拒绝, 见 [`ProviderRuntime::fetch`]。
+    pub open_groups: Vec<&'static str>,
 }
 
 impl std::fmt::Debug for ResolvedNode {
@@ -271,8 +278,12 @@ impl ProviderRuntime {
         let segments = self.normalize_path(rest);
         let ctx = self.make_ctx();
 
+        // WHERE 组内的中间态没有进缓存 (见下方 group_stack 门控), 所以前缀缓存只在
+        // 组深度归 0 的边界上可读 —— 那里组的效果已完全烘进 composed。
+        let depths = group_depths(&segments);
         let (start_idx, mut current, mut composed, mut provider_keys) =
-            self.find_longest_cached_prefix(scheme, &schema, &segments, &ctx)?;
+            self.find_longest_cached_prefix(scheme, &schema, &segments, &depths, &ctx)?;
+        let mut group_stack = GroupStack::default();
 
         if dbg_enabled() {
             eprintln!(
@@ -286,21 +297,55 @@ impl ProviderRuntime {
             if dbg_enabled() {
                 eprintln!("[pathql]   ← full-path cache hit, return");
             }
+            // 完整路径能命中缓存 ⇒ 它是深度 0 的边界 (组内不写缓存), 故无未闭合组。
             return Ok(ResolvedNode {
                 provider: current,
                 composed,
                 provider_keys,
+                open_groups: Vec::new(),
             });
         }
 
         // Resume / cold-start: 从 start_idx 续 fold 剩余段
         let mut path_so_far = build_path_key(scheme, &segments[..start_idx]);
-        for seg in &segments[start_idx..] {
+        for raw_seg in &segments[start_idx..] {
             let path_before_seg = path_so_far.clone();
             if !path_so_far.ends_with("://") {
                 path_so_far.push('/');
             }
-            path_so_far.push_str(seg);
+            path_so_far.push_str(raw_seg);
+
+            // 组合器记号在 provider resolve **之前**拦截: 它们是语法不是数据,
+            // 不参与任何 provider 的 resolve / list 匹配。
+            let seg = match classify_segment(raw_seg) {
+                SegmentKind::OpenAny => {
+                    group_stack.open(GroupKind::Any, current.clone(), &composed);
+                    continue;
+                }
+                SegmentKind::OpenNot => {
+                    group_stack.open(GroupKind::Not, current.clone(), &composed);
+                    continue;
+                }
+                SegmentKind::Branch => {
+                    let (provider, carry) = group_stack.branch(&path_so_far, &composed)?;
+                    current = provider;
+                    composed = carry;
+                    continue;
+                }
+                SegmentKind::Close => {
+                    let (provider, carry) = group_stack.close(&path_so_far, &composed)?;
+                    current = provider;
+                    composed = carry;
+                    // 组已闭合、效果烘进 composed → 此前缀可安全缓存。
+                    if group_stack.is_empty() {
+                        self.cache_node(&path_so_far, &current, &composed, &provider_keys);
+                    }
+                    continue;
+                }
+                SegmentKind::Literal(name) => name,
+            };
+            let seg = &seg;
+
             let key_mark = ctx.provider_key_mark();
             let c = current
                 .as_ref()
@@ -370,7 +415,9 @@ impl ProviderRuntime {
                 return Err(EngineError::PathNotFound(path_so_far.clone()));
             }
 
-            if from_list_fallback && no_delegate {
+            // 组内不得走缓存直通: 缓存里的 composed 是组外语境下的完整快照,
+            // 会把当前分支的基线整个顶掉。
+            if from_list_fallback && no_delegate && group_stack.is_empty() {
                 let cached = self.cache.lock().unwrap().get(&path_so_far).cloned();
                 if let Some(cn) = cached {
                     current = cn.provider;
@@ -389,23 +436,40 @@ impl ProviderRuntime {
             current = next_opt;
             extend_provider_keys(&mut provider_keys, ctx.provider_keys_since(key_mark));
             // 缓存命中非 Empty 项写入; no-provider 节点也缓存。
-            if current.as_ref().map(|p| !p.is_empty()).unwrap_or(true) {
-                self.cache.lock().unwrap().insert(
-                    path_so_far.clone(),
-                    CachedNode {
-                        provider: current.clone(),
-                        composed: composed.clone(),
-                        provider_keys: provider_keys.clone(),
-                    },
-                );
+            // 组内节点不写: 它的 composed 只在当前分支的基线下成立。
+            if group_stack.is_empty() {
+                self.cache_node(&path_so_far, &current, &composed, &provider_keys);
             }
         }
 
+        let open_groups = group_stack.open_markers();
         Ok(ResolvedNode {
             provider: current,
             composed,
             provider_keys,
+            open_groups,
         })
+    }
+
+    /// 写入路径前缀缓存。Empty provider 节点跳过; no-provider 节点照常缓存。
+    fn cache_node(
+        &self,
+        path: &str,
+        provider: &Option<Arc<dyn Provider>>,
+        composed: &ProviderQuery,
+        provider_keys: &[ProviderKey],
+    ) {
+        if !provider.as_ref().map(|p| !p.is_empty()).unwrap_or(true) {
+            return;
+        }
+        self.cache.lock().unwrap().insert(
+            path.to_string(),
+            CachedNode {
+                provider: provider.clone(),
+                composed: composed.clone(),
+                provider_keys: provider_keys.to_vec(),
+            },
+        );
     }
 
     /// 从最长前缀向短回退, 找到第一个缓存命中点的下一个index（或者说命中seg段的长度）。
@@ -418,6 +482,7 @@ impl ProviderRuntime {
         scheme: &str,
         schema: &SchemaRoot,
         segments: &[String],
+        depths: &[usize],
         ctx: &ProviderContext,
     ) -> Result<
         (
@@ -430,6 +495,11 @@ impl ProviderRuntime {
     > {
         let cache = self.cache.lock().unwrap();
         for prefix_len in (1..=segments.len()).rev() {
+            // 只在组深度归 0 的边界续跑: 组内前缀既没写过缓存, 从那里 resume 也
+            // 会丢掉组栈。
+            if depths.get(prefix_len - 1).copied().unwrap_or(0) != 0 {
+                continue;
+            }
             let key = build_path_key(scheme, &segments[..prefix_len]);
             if let Some(cached) = cache.get(&key) {
                 return Ok((
@@ -586,6 +656,7 @@ impl ProviderRuntime {
     /// 内部链路: resolve(path) → composed.build_sql(globals ctx, dialect) → executor.execute。
     pub fn fetch(&self, path: &str) -> Result<Vec<serde_json::Value>, EngineError> {
         let node = self.resolve(path)?;
+        reject_open_groups(path, &node)?;
         let provider = if let Some(provider) = node.provider.as_ref() {
             provider
         } else {
@@ -607,6 +678,7 @@ impl ProviderRuntime {
     /// pq_sub 别名硬编码; 与用户表别名重名概率近 0。
     pub fn count(&self, path: &str) -> Result<usize, EngineError> {
         let node = self.resolve(path)?;
+        reject_open_groups(path, &node)?;
         if node.provider.is_none() {
             return Err(EngineError::NoProvider(path.to_string()));
         }
@@ -640,9 +712,33 @@ impl ProviderRuntime {
         self.cache.lock().unwrap().len()
     }
 
+    /// 指定路径是否已进前缀缓存 (诊断 / 测试用)。
+    pub fn is_path_cached(&self, path: &str) -> bool {
+        self.cache
+            .lock()
+            .unwrap()
+            .contains_key(&canonical_path_key(path))
+    }
+
     pub fn clear_cache(&self) {
         self.cache.lock().unwrap().clear();
     }
+}
+
+/// 执行类操作 (fetch / count) 要求 WHERE 组全部闭合 —— 未闭合时分支尚未 OR 起来,
+/// 直接跑会得到「各分支 AND」的错误结果。
+fn reject_open_groups(path: &str, node: &ResolvedNode) -> Result<(), EngineError> {
+    if !node.open_groups.is_empty() {
+        return Err(EngineError::WhereGroup(
+            path.to_string(),
+            format!(
+                "unclosed where group(s) `{}`; append `~end` for each before querying \
+                 (the path tail is never auto-closed)",
+                node.open_groups.join("`, `")
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn build_path_key(scheme: &str, segments: &[String]) -> String {

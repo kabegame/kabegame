@@ -34,7 +34,7 @@ use zip::ZipArchive;
 
 use pathql_rs::{
     ContribQuery, InvokeByName, Json5Loader, List, Loader, Namespace, ProviderDef,
-    ProviderInvocation, ProviderName, Query, Resolve, SimpleName, Source, SqlExpr,
+    ProviderInvocation, ProviderName, Query, Resolve, SimpleName, Source, SqlExpr, WhereQuery,
 };
 
 /// 脚本后端枚举（core 权威定义）。kbBackend 字符串解析目标。
@@ -2515,7 +2515,7 @@ fn default_plugin_entry_provider(plugin_id: &str) -> ProviderDef {
         name: SimpleName("entry_provider".to_string()),
         properties: None,
         query: Some(Query::Contrib(ContribQuery {
-            where_: Some(SqlExpr("1 = 0".to_string())),
+            where_: Some(WhereQuery::Is(SqlExpr("1 = 0".to_string()))),
             ..Default::default()
         })),
         list: Some(List::default()),

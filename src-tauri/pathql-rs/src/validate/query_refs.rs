@@ -88,7 +88,9 @@ fn check_contrib(fqn: &str, c: &ContribQuery, errors: &mut Vec<ValidateError>) {
         }
     }
     if let Some(w) = &c.where_ {
-        check_refs(&w.0, "query.where", errors);
+        w.for_each_expr("query.where", &mut |expr, field| {
+            check_refs(&expr.0, field, errors);
+        });
     }
 }
 
@@ -107,6 +109,7 @@ mod tests {
     use super::*;
     use crate::ast::{
         AliasName, ContribQuery, Field, Join, JoinKind, ProviderDef, Query, SimpleName, SqlExpr,
+        WhereQuery,
     };
 
     fn def_with_query(q: ContribQuery) -> ProviderDef {
@@ -193,7 +196,7 @@ mod tests {
                 alias: Some(AliasName("img".into())),
                 in_need: None,
             }]),
-            where_: Some(SqlExpr("${ref:img} > 0".into())),
+            where_: Some(WhereQuery::Is(SqlExpr("${ref:img} > 0".into()))),
             ..Default::default()
         };
         assert!(run(q).is_empty());

@@ -78,7 +78,7 @@ return ResolvedNode { provider, composed }
 | 字段 | 累积语义 |
 |---|---|
 | `join[]` | **additive with as-dedup** — 累积到 FROM 之后，按 `as` 去重 / 共享 |
-| `where` | **additive AND** — 路径上各 provider 的 where 字符串用 AND 拼接成最终 WHERE |
+| `where` | **谓词树 + additive AND** — 单个 provider 的 where 是一棵 [WhereQuery](#33-wherewherequery-谓词树) 树（字符串/数组/`{not}`），fold 期坍缩成一条；路径上各 provider 之间仍用 AND 拼接 |
 | `fields[]` | **additive with as-dedup** — 累积到 SELECT 列表，按 `as` 去重 / 共享 |
 | `order` | **见 §3.4** — 数组项 `{ sql, order, prepend?, clear? }`；或全局 `{all: ...}` 指令 |
 | `offset` | **additive `+`** — 多次声明按路径顺序串接为 `(o₁) + (o₂) + ...`，实现嵌套分页 |
@@ -100,11 +100,91 @@ return ResolvedNode { provider, composed }
   - 同 ContribQuery 内其他位置（join.on / where / fields.sql）用 `${ref:my_id}` 引用
   - 不与 `in_need` 同时使用（auto-allocated 必然唯一，`in_need` 无意义 → 加载期拒绝）
 
-### 3.3 where（additive AND）
+### 3.3 where（WhereQuery 谓词树）
 
-- 单字符串表达式，可为任意 SQL 谓词组合（`a > 1 AND b < 100`）
-- 路径上各 provider 的 where 用 AND 串：`WHERE (where₁) AND (where₂) AND ...`
+`where` 是一棵递归的 **WhereQuery** 树，靠**形状**判别，无标签：
+
+| 写法 | 形态 | 语义 |
+|---|---|---|
+| `"a = 1"` | `Is`（原子） | 原子谓词。内部可含 `and` / `or` / `not`，**引擎不解析**，只在坍缩时加括号 |
+| `["a = 1", "b = 2"]` | `Any` | 成员之间 **OR**。空数组在加载期拒绝（空 OR 无意义，多半是生成逻辑 bug） |
+| `{ not: <WhereQuery> }` | `Not` | 整棵取非。对象形态只认 `not` 一个键 |
+
+```json5
+// (plugin = ?) OR (NOT ((hidden = 1) OR (deleted = 1)))
+where: [
+  "images.plugin_id = ${properties.p}",
+  { not: ["images.hidden = 1", "images.deleted = 1"] },
+]
+```
+
+**树上没有 AND 节点**——AND 由路径折叠（各 provider 的 where 天然 AND）与原子内部的
+`and` 承担；必要时也可用 De Morgan（`{not: [{not: a}, {not: b}]}`）表达。
+
+坍缩与拼接规则：
+
+- **树只活在 fold 期**：坍缩成**一条**普通 SQL 模板字符串后 push 进累积状态，渲染层
+  完全不知道树存在。
+- 顶层 `Is` 坍缩后**不额外加括号**（build 期本就给每条 where 包一层）；`Any` / `Not`
+  的每个操作数都带括号，优先级天然正确。
+- 路径上各 provider 的 where 之间仍用 AND 串：`WHERE (where₁) AND (where₂) AND ...`
 - 字符串内 `${properties.X}` 等模板由引擎转 bind param，不做字符串拼接（见 §7.1）
+- ⚠️ `where_clear` 匹配的是**坍缩后的整条字符串**，因此清除粒度是**整棵树**，
+  摘不掉树内某一支。
+
+### 3.3.1 路径 WHERE 组合器（`~any` / `~or` / `~not` / `~end`）
+
+同一棵谓词树也可以写在**路径**上，让 OR / NOT 的操作数来自不同的路径分支。路径是线性
+的而树需要边界，故引入一组以 `~` 开头的**保留段**作结构记号：
+
+```text
+group  ::= "~any" branch ("~or" branch)* "~end"
+         | "~not" branch "~end"
+branch ::= segment+           (可含嵌套 group)
+```
+
+```text
+gallery://all/~any/plugin/pixiv/~or/album/收藏/~end/~not/plugin/yande/~end
+⇒ (来自 pixiv OR 在收藏画册) AND NOT(来自 yande)
+```
+
+语义要点：
+
+- **分支是旁路（detour）**：每个分支从**组入口的 provider** 出发正常折叠，但只为收集
+  谓词贡献；`~end` 之后路径游标**回到组入口 provider** 继续前进。组合器是挂在入口节点
+  上的过滤器注解，不改变「你在树上的位置」。
+  - 推论：组能往下分支到哪，取决于**组入口 provider** 提供的子节点。挂在一个不再路由的
+    终端 provider 上的组，没有分支可走。
+- 每个分支的增量谓词先按 AND 压成一个原子，再按组类型组成 `Any` / `Not` 节点，最终坍缩
+  成一条 where 进入累积状态——与文件内 WhereQuery 汇入同一条管线。
+- 保留段在 provider resolve **之前**被拦截，不参与任何 provider 的 resolve/list 碰撞
+  检查，也不会被动态 list 反查吞掉；`list()` 永不枚举它们（是语法不是数据）。
+- 字面段确实以 `~` 开头时写 `~~<原名>` 转义（walker 剥一层）。
+
+**组内贡献约束**（fold 期强制，违反即报错）：
+
+- 只允许 `where` 与 **LEFT JOIN**。出现 `from` / `fields` / `order` / `limit` /
+  `offset` / **INNER JOIN** 一律拒绝。
+  - 为什么单挑 INNER JOIN：它是全局 AND 语义的行过滤，放进 OR 分支会把「或」悄悄变成
+    「且」；LEFT JOIN 只补列不滤行，谓词引用它是安全的。
+- 分支贡献的 LEFT JOIN 合并进外层查询并**跨分支保留**，别名冲突沿用 `as + in_need`
+  规则（两个分支共享同一 join 时用 `in_need: true`）。
+- 分支不得 `where_clear` 掉组外已累积的谓词。
+
+**尾部不自动闭合**：路径走完仍有未闭合的组时，`resolve` / `list` / `note` / `meta`
+照常可用（便于 UI 逐段浏览构建分支，此时 composed 是「当前分支视角」的中间态），但
+`fetch` / `count` **拒绝执行**并列出未闭合的记号。引擎绝不静默补 `~end`——那会让查询
+悄悄返回「各分支 AND」的意外结果。
+
+其它错误（均为确定性错误，带出错路径）：`~end` / `~or` 无匹配开组；`~not` 组内出现
+`~or`（改写成嵌套 `~not/~any/.../~end/~end`）。
+
+**缓存**：只有组深度归 0 的路径前缀参与前缀缓存读写——组内中间态只在当前分支基线下
+成立。闭合处（`~end` 所在的完整路径）是合法的缓存边界。
+
+⚠️ **NOT 与 NULL**：`NOT (t.x = 1)` 在 SQL 三值逻辑下不含 `t.x IS NULL` 的行，LEFT JOIN
+补列后这点会被放大。引擎不试图修正（原子不透明是既定原则），分支谓词请自带 `IS NULL`
+处理。
 
 ### 3.4 order（两种顶层形态）
 
@@ -474,6 +554,9 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
 
 加载期检测；冲突立即拒绝。
 
+**路径段保留前缀**：路径段的 `~` 前缀整体保留给引擎语法（当前记号 `~any` / `~or` /
+`~not` / `~end`，见 §3.3.1）。字面名以 `~` 开头的节点在路径中写 `~~<原名>` 转义。
+
 ---
 
 ## 9. 错误处理
@@ -502,8 +585,10 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
   - [ ] `order` 形态 A（数组）与形态 B（`{all}`）二选一
   - [ ] 形态 A 数组项必须含 `sql` + `order`，`order` ∈ {asc, desc, revert}，`clear` 只能为 `all`
   - [ ] `${ref:<X>}` 引用都能在同 ContribQuery 的 `join.as` / `fields.as` 找到定义
+        （`where` 谓词树逐原子下钻，错误定位到 `query.where[i].not` 这类树内路径）
   - [ ] `as: "${ref:...}"` 不与 `in_need: true` 同时出现
-  - [ ] 所有 SqlExpr 经 sqlparser 校验
+  - [ ] `where` 谓词树：数组形态非空；对象形态只含 `not` 键
+  - [ ] 所有 SqlExpr 经 sqlparser 校验（含 `where` 树的每个原子）
   - [ ] 所有字面 `join.table` 在白名单（子查询豁免）
   - [ ] DSL `query` 中不包含 `"from"`；FROM 只能来自 host schema 注册
 - [ ] DynamicListEntry 内：
@@ -697,6 +782,10 @@ pathql 体系对终端暴露三个核心查询入口：
 | `list(path)` | 解析路径到末端 provider，调其 `list` 抽象操作；返回 `Vec<ChildEntry>` |
 | `count(path)` | 解析路径，对末端 provider 累积 ProviderQuery 包 `SELECT COUNT(*) FROM (...)` 执行；返回 `u64` |
 | `query<T>(path)` | 解析路径，执行末端 build_sql 产物；按行类型化为 `T`（终端提供 row→T 映射）；返回 `Vec<T>` |
+
+**未闭合 WHERE 组的门槛**：`count` / `query<T>` 这类**执行类**入口在路径含未闭合 `~any`
+/ `~not` 时必须拒绝（见 §3.3.1）；`list` 这类**浏览类**入口照常工作。引擎不在路径尾部
+自动补 `~end`。
 
 **类型化的责任分配**：
 - pathql 抽象层不感知 `T`；它负责产 SQL + bind 参数 + 行迭代

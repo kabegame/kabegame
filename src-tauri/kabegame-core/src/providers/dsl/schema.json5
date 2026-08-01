@@ -2,7 +2,7 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "$id": "kabegame://provider/v0.7",
     "title": "Kabegame Provider Definition",
-    "description": "声明式 Provider — 路径折叠 × ProviderQuery 贡献 × 动态枚举。详细语义见 cocs/provider-dsl/RULES.md。\n\n与 Rust trait Provider 对齐:\n  query   ↔ apply_query   节点对累积 ProviderQuery 的贡献(或 delegate 委托另一 provider)\n  list    ↔ list_children 静态字面量 / 动态 SQL / 动态 delegate 子节点枚举\n  resolve ↔ get_child     正则解析单个子节点\n\nChildEntry 模型:\n  { name: string, provider?: ProviderInvocation, meta?: any }\n  - meta 为任意 JSON, 详见 RULES.md §4.5(字符串=SQL 或模板; 对象/数组/标量=直接作为 meta)\n  - provider 可缺省 — 当前层不挂下层 provider\n\n命名空间(Java 包风格):\n  顶层 namespace 字段, 形如 'kabegame' / 'kabegame.plugin' / 'pixiv'\n  全局名 = <namespace>.<name>; 同 namespace 内 provider 互相引用用 simple name\n  解析规则: 当前 namespace → 父 namespace → ... → root\n  ProviderInvocation.provider 可写 simple name 或绝对 'a.b.c.name'\n\n判别策略:\n  - Query 互斥: delegate ⊕ (from/join/where/fields/order/offset/limit)\n  - StaticListEntry 用 ProviderInvocation 二态: byName ⊕ Empty\n  - Resolve 用 ProviderInvocation 三态: byName ⊕ byDelegate ⊕ Empty (7b 起 byDelegate 复活, payload 为 ProviderCall)\n  - List entry 由 key 是否含 ${...} 判别 静态 / 动态\n  - DynamicListEntry 数据源互斥: sql ⊕ delegate\n  - order 形态: 数组项 {sql, order, prepend?, clear?} ⊕ {all:...} 全局指令(二选一)\n\n6e 起: query.delegate / list dynamic delegate 字段类型为 ProviderCall { provider, properties? }; 不再是路径表达式 (PathExpr 整个删除)。Provider 是 path-unaware 的 — 引用其它 provider 走 namespace 链 + name + properties, 不混入路径概念。\n\nDelegate 对称转发 (7b 起三处对齐):\n  - query.delegate         → target.apply_query(current, ctx)  ; 借目标的 contrib 入 composed\n  - list[<dyn>].delegate   → target.list(composed, ctx)        ; 调目标的 list 取 children 序列\n  - resolve[].delegate     → target.resolve(name, composed, ctx); 把当前 segment 的 resolve 决定权转给目标\n每处 payload 都是 ProviderCall, 永远 path-unaware。\n\nContribQuery 拼接语义:\n  fields  → 累积到 SELECT; 用 as + in_need 解决冲突\n  from    → cascading-replace(注意: from 不应内嵌 JOIN, 见 RULES.md §3.1)\n  join    → 累积; 用 as + in_need 解决冲突\n  where   → 路径上各节点 where 用 AND 拼接\n  order   → 数组项 {sql, order, prepend?, clear?} 按位置定优先级; 或 {all: asc/desc/revert} 全局指令\n  offset  → additive (+); 多次声明用 + 串接\n  limit   → last-wins\n\nas + in_need 别名共享机制:\n  as: 'ab'                → 字面别名; 路径累积时重名拒绝(默认 in_need=false)\n  as: 'ab', in_need: true → 重名时放弃本次贡献(用于跨 provider 共享同一 join/field)\n  as: '${ref:my_id}'      → 引擎自动分配唯一别名; 通过 ${ref:my_id} 在其他位置引用\n\nList 动态项的两种数据源:\n  sql 模式 (data_var 显式绑定):\n    SQL 每行 = 一项 child; ${<data_var>.<col>(.<sub>)*} 取 SQL 列(支持嵌套 JSON 列)\n  delegate 模式 (child_var 显式绑定):\n    调目标 ProviderCall list_children; ${<child_var>.name/provider/meta.X} 取 ChildEntry 字段\n\nResolve 全部按正则匹配(纯字面量是空元字符的合法子集); resolve 字段直接是 <regex>: ProviderInvocation 映射, 无 entries 包装。运行期解析顺序:\n  1) regex resolve → 2) 静态 list 字面 → 3) 动态 list 反查(默认开启, 命中进 LRU)\n\nResolve 加载期碰撞检查:\n  - 每条正则 vs 静态 list key 字面量: 任一匹配 → 拒绝\n  - 正则 vs 正则: regex_automata 求交集 → 非空则拒绝\n  - 动态 list 不参与碰撞检查(运行期碰撞按解析顺序覆写, 非正确性故障)\n\n模板变量 ${...} 语义(详见 RULES.md §6):\n  - ${<ns>(.<path>)*}      命名空间取值(properties / capture / data_var / child_var / composed)\n  - ${<ns>[<N>]}           索引访问(capture)\n  - ${<method>:<arg>}      方法标记 — 当前仅 ${ref:<ident>} 引擎分配别名\n\nDynamicListEntry.provider 字段语义:\n  - 缺省          → 当前层不挂 provider\n  - ProviderName  → 显式构造命名 provider, 用 properties 传参\n  - ${child_var.provider} → 透传 delegate 数据源返回的 child.provider",
+    "description": "声明式 Provider — 路径折叠 × ProviderQuery 贡献 × 动态枚举。详细语义见 cocs/provider-dsl/RULES.md。\n\n与 Rust trait Provider 对齐:\n  query   ↔ apply_query   节点对累积 ProviderQuery 的贡献(或 delegate 委托另一 provider)\n  list    ↔ list_children 静态字面量 / 动态 SQL / 动态 delegate 子节点枚举\n  resolve ↔ get_child     正则解析单个子节点\n\nChildEntry 模型:\n  { name: string, provider?: ProviderInvocation, meta?: any }\n  - meta 为任意 JSON, 详见 RULES.md §4.5(字符串=SQL 或模板; 对象/数组/标量=直接作为 meta)\n  - provider 可缺省 — 当前层不挂下层 provider\n\n命名空间(Java 包风格):\n  顶层 namespace 字段, 形如 'kabegame' / 'kabegame.plugin' / 'pixiv'\n  全局名 = <namespace>.<name>; 同 namespace 内 provider 互相引用用 simple name\n  解析规则: 当前 namespace → 父 namespace → ... → root\n  ProviderInvocation.provider 可写 simple name 或绝对 'a.b.c.name'\n\n判别策略:\n  - Query 互斥: delegate ⊕ (from/join/where/fields/order/offset/limit)\n  - StaticListEntry 用 ProviderInvocation 二态: byName ⊕ Empty\n  - Resolve 用 ProviderInvocation 三态: byName ⊕ byDelegate ⊕ Empty (7b 起 byDelegate 复活, payload 为 ProviderCall)\n  - List entry 由 key 是否含 ${...} 判别 静态 / 动态\n  - DynamicListEntry 数据源互斥: sql ⊕ delegate\n  - order 形态: 数组项 {sql, order, prepend?, clear?} ⊕ {all:...} 全局指令(二选一)\n\n6e 起: query.delegate / list dynamic delegate 字段类型为 ProviderCall { provider, properties? }; 不再是路径表达式 (PathExpr 整个删除)。Provider 是 path-unaware 的 — 引用其它 provider 走 namespace 链 + name + properties, 不混入路径概念。\n\nDelegate 对称转发 (7b 起三处对齐):\n  - query.delegate         → target.apply_query(current, ctx)  ; 借目标的 contrib 入 composed\n  - list[<dyn>].delegate   → target.list(composed, ctx)        ; 调目标的 list 取 children 序列\n  - resolve[].delegate     → target.resolve(name, composed, ctx); 把当前 segment 的 resolve 决定权转给目标\n每处 payload 都是 ProviderCall, 永远 path-unaware。\n\nContribQuery 拼接语义:\n  fields  → 累积到 SELECT; 用 as + in_need 解决冲突\n  from    → cascading-replace(注意: from 不应内嵌 JOIN, 见 RULES.md §3.1)\n  join    → 累积; 用 as + in_need 解决冲突\n  where   → 谓词树(字符串=原子 / 数组=OR / {not:...}=取非), fold 期坍缩成一条; 路径上各节点之间仍 AND 拼接\n  order   → 数组项 {sql, order, prepend?, clear?} 按位置定优先级; 或 {all: asc/desc/revert} 全局指令\n  offset  → additive (+); 多次声明用 + 串接\n  limit   → last-wins\n\nas + in_need 别名共享机制:\n  as: 'ab'                → 字面别名; 路径累积时重名拒绝(默认 in_need=false)\n  as: 'ab', in_need: true → 重名时放弃本次贡献(用于跨 provider 共享同一 join/field)\n  as: '${ref:my_id}'      → 引擎自动分配唯一别名; 通过 ${ref:my_id} 在其他位置引用\n\nList 动态项的两种数据源:\n  sql 模式 (data_var 显式绑定):\n    SQL 每行 = 一项 child; ${<data_var>.<col>(.<sub>)*} 取 SQL 列(支持嵌套 JSON 列)\n  delegate 模式 (child_var 显式绑定):\n    调目标 ProviderCall list_children; ${<child_var>.name/provider/meta.X} 取 ChildEntry 字段\n\nResolve 全部按正则匹配(纯字面量是空元字符的合法子集); resolve 字段直接是 <regex>: ProviderInvocation 映射, 无 entries 包装。运行期解析顺序:\n  1) regex resolve → 2) 静态 list 字面 → 3) 动态 list 反查(默认开启, 命中进 LRU)\n\nResolve 加载期碰撞检查:\n  - 每条正则 vs 静态 list key 字面量: 任一匹配 → 拒绝\n  - 正则 vs 正则: regex_automata 求交集 → 非空则拒绝\n  - 动态 list 不参与碰撞检查(运行期碰撞按解析顺序覆写, 非正确性故障)\n\n路径 WHERE 组合器(详见 RULES.md §3.4) — 把谓词树写在**路径**上, 保留段以 `~` 开头:\n  ~any <分支> (~or <分支>)* ~end   分支之间 OR\n  ~not <分支> ~end                 分支取非\n  分支是旁路: 从组入口 provider 出发折叠, ~end 后游标回到组入口; 组内只许 where + LEFT JOIN\n  字面段以 `~` 开头时写 `~~<原名>` 转义; 路径尾部**不自动闭合**, 未闭合时 fetch/count 拒绝\n\n模板变量 ${...} 语义(详见 RULES.md §6):\n  - ${<ns>(.<path>)*}      命名空间取值(properties / capture / data_var / child_var / composed)\n  - ${<ns>[<N>]}           索引访问(capture)\n  - ${<method>:<arg>}      方法标记 — 当前仅 ${ref:<ident>} 引擎分配别名\n\nDynamicListEntry.provider 字段语义:\n  - 缺省          → 当前层不挂 provider\n  - ProviderName  → 显式构造命名 provider, 用 properties 传参\n  - ${child_var.provider} → 透传 delegate 数据源返回的 child.provider",
 
     "type": "object",
     "required": ["name"],
@@ -71,6 +71,28 @@
         "SqlExpr": {
             "type": "string",
             "description": "受 sqlparser 校验的 SQL 片段; 多语句 / DDL 在加载期拒绝"
+        },
+
+        "WhereQuery": {
+            "description": "WHERE 谓词树, 靠**形状**判别, 无标签(详见 RULES.md §3.3):\n  - 字符串        → 原子谓词。内部可含 and / or / not, 引擎不解析, 只在坍缩时加括号\n  - 数组          → 成员之间 OR。不得为空数组(空 OR 无意义, 加载期拒绝)\n  - {not: <树>}   → 整棵取非。对象形态只认 `not` 一个键\n\n树上没有 AND 节点: AND 由路径折叠(各 provider 的 where 天然 AND)与原子内部的 and 承担。\n树只活在 fold 期 —— 坍缩成一条普通谓词后进入累积状态, 渲染层看不到它。\n注意 `where_clear` 匹配的是**坍缩后的整条字符串**, 清除粒度是整棵树。",
+            "oneOf": [
+                { "$ref": "#/definitions/SqlExpr" },
+                {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "$ref": "#/definitions/WhereQuery" },
+                    "description": "成员之间 OR"
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["not"],
+                    "properties": {
+                        "not": { "$ref": "#/definitions/WhereQuery" }
+                    },
+                    "description": "整棵取非"
+                }
+            ]
         },
 
         "MetaValue": {
@@ -171,8 +193,8 @@
                     "description": "JOIN 贡献(累积)。每项指定 table + as; 用 as + in_need 解决冲突 / 跨 provider 共享"
                 },
                 "where": {
-                    "$ref": "#/definitions/SqlExpr",
-                    "description": "任意 WHERE 表达式(单条; 可写 'a > 1 and b < 2' 等)。路径上各 provider 的 where 引擎用 AND 拼接"
+                    "$ref": "#/definitions/WhereQuery",
+                    "description": "WHERE 谓词树。字符串=原子(内部可写 'a > 1 and b < 2' / 'not (...)', 引擎不解析只加括号); 数组=成员之间 OR; {not:...}=整棵取非。fold 期坍缩成一条谓词, 路径上各 provider 的 where 之间仍用 AND 拼接"
                 },
                 "order": {
                     "oneOf": [
