@@ -890,7 +890,7 @@ impl Storage {
         }
         crate::providers::failed_images_at(&format!(
             "fail-images://tasks/id_{}",
-            urlencoding::encode(task_id)
+            pathql_rs::escape_path_segment(task_id)
         ))
     }
 
@@ -902,11 +902,12 @@ impl Storage {
         if id <= 0 {
             return Ok(None);
         }
-        Ok(
-            crate::providers::failed_images_at(&format!("fail-images://id_{}", id))?
-                .into_iter()
-                .next(),
-        )
+        Ok(crate::providers::failed_images_at(&format!(
+            "fail-images://{}",
+            pathql_rs::escape_path_segment(&format!("id_{id}"))
+        ))?
+        .into_iter()
+        .next())
     }
 
     pub fn get_task_image_ids(task_id: &str) -> Result<Vec<String>, String> {
@@ -914,7 +915,10 @@ impl Storage {
         if task_id.is_empty() {
             return Ok(Vec::new());
         }
-        let path = format!("images://gallery/task/{}", urlencoding::encode(task_id));
+        let path = format!(
+            "images://gallery/task/{}",
+            pathql_rs::escape_path_segment(task_id)
+        );
         Ok(crate::providers::images_at(&path)?
             .into_iter()
             .map(|image| image.id)

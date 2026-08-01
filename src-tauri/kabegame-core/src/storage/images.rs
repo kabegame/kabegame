@@ -279,7 +279,7 @@ fn first_gallery_image_at(path: &str) -> Result<Option<ImageInfo>, String> {
 }
 
 fn encode_provider_segment(value: &str) -> String {
-    urlencoding::encode(value).into_owned()
+    pathql_rs::escape_path_segment(value)
 }
 
 impl Storage {

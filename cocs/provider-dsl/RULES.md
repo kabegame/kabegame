@@ -159,7 +159,10 @@ gallery://all/~any/plugin/pixiv/~or/album/收藏/~end/~not/plugin/yande/~end
   成一条 where 进入累积状态——与文件内 WhereQuery 汇入同一条管线。
 - 保留段在 provider resolve **之前**被拦截，不参与任何 provider 的 resolve/list 碰撞
   检查，也不会被动态 list 反查吞掉；`list()` 永不枚举它们（是语法不是数据）。
-- 字面段确实以 `~` 开头时写 `~~<原名>` 转义（walker 剥一层）。
+- 路径段转义统一为**反斜线**：`\X` 无条件表示字面字符 `X`。字面段确实以 `~` 开头时写
+  `\~<原名>`；未转义的前导 `~` 且非四记号 → **walk 期报错**（不宽松按字面处理，防止忘
+  转义的宿主 bug 变成静默空结果）。段内斜线写 `\/`（未转义的 `/` 才是分隔符），字面反
+  斜线写 `\\`。
 
 **组内贡献约束**（fold 期强制，违反即报错）：
 
@@ -523,7 +526,11 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
 ### 7.2 路径安全
 
 - 6e 起 delegate 字段不再是 PathExpr — provider 引用走 ProviderCall (name + properties), 引擎按 namespace 链解析
-- 所有路径段在 resolve 前 percent-decode（兼容前端 `encodeURIComponent`）
+- 路径分段是**转义感知**的：`\X` 表示字面 X、未转义 `/` 才分段，数据进段唯一入口是
+  `escape_path_segment`（TS 侧 `encodeSeg`）。引擎核心不做 percent-decode——percent 是
+  URI 传输层职责，URI 边界（如 MCP server）自行 decode 后再交引擎。过渡期兜底：不含
+  `\` 的段仍尝试 percent-decode（兼容尚未迁移的前端 `encodeURIComponent` 调用点），
+  前端迁移完成后移除
 - 加载期 strict cross_ref 校验所有静态 ProviderCall.provider 必须存在；包含 `${...}` 的 provider 名是运行时动态引用，按模板 scope 校验后留到实例化时解析
 - cycle 检测捕获静态 delegate 自指 / 多节点环；运行时动态 provider 名不参与静态环检测
 
@@ -555,7 +562,9 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
 加载期检测；冲突立即拒绝。
 
 **路径段保留前缀**：路径段的 `~` 前缀整体保留给引擎语法（当前记号 `~any` / `~or` /
-`~not` / `~end`，见 §3.3.1）。字面名以 `~` 开头的节点在路径中写 `~~<原名>` 转义。
+`~not` / `~end`，见 §3.3.1）。字面名以 `~` 开头的节点在路径中写 `\~<原名>`（反斜线统
+一转义：`\X` = 字面 X，`\/` 把斜线放进段内，`\\` = 字面反斜线）；未转义的前导 `~` 且非
+记号的段在 walk 期报错。宿主用数据拼段一律过 `escape_path_segment`。
 
 ---
 

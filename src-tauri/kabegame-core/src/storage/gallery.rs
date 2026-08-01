@@ -111,7 +111,7 @@ impl Storage {
         }
         crate::providers::gallery_media_type_counts_at(&format!(
             "images://gallery/album/{}",
-            urlencoding::encode(id)
+            pathql_rs::escape_path_segment(id)
         ))
     }
 

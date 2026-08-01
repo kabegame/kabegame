@@ -95,8 +95,14 @@ PathQL 是懒树，`resources/list` 只暴露少量静态入口，不能枚举�
 2. `runtime.count(uri)` best-effort 得到当前集合总数；失败时 `total = null`。
 3. `runtime.note(uri)`取得当前 provider 的可读说明。
 4. `runtime.list(uri)` 枚举直属 child，再用 `offset` / `limit` 截取返回窗口。
-5. `child_runtime_path` 将 child name 追加并 percent-encode；对每个 child 调 `runtime.note`，
+5. `child_runtime_path` 将 child name 先做 PathQL 引擎转义（`escape_path_segment`，反斜线
+   语法层）、再 percent-encode（URI 传输层）后追加；对每个 child 调 `runtime.note`，
    仅当 `include_counts = true` 且窗口不超过 50 项时调用 `runtime.count`。
+
+> **URI 分层契约**：MCP URI 承载的是引擎语法路径，其段可额外做 URI 传输层 percent-encode。
+> 服务端入口 `normalize_mcp_uri_path` 只对含 `%` 的段剥一层 percent，**不再做引擎转义**；
+> `~any` 等组合器记号原样穿透。客户端要表达段内字面 `/` 应发 `%5C%2F`（先引擎转义再 URI
+> 编码），直接发 `%2F` 会被引擎按分隔符解释。
 
 因此发现依赖 `runtime.list/count/note` 三件套：
 

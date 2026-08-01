@@ -17,7 +17,7 @@ use crate::storage::ImageInfo;
 
 use super::init::provider_runtime;
 
-/// 对 provider 路径逐段 percent-decode。
+/// 把前端传入的 provider 路径段还原为引擎路径段。
 pub fn decode_provider_path_segments(raw: &str) -> String {
     let trimmed = raw.trim();
     let (body, suffix) = if let Some(stripped) = trimmed.strip_suffix("/*") {
@@ -36,6 +36,9 @@ pub fn decode_provider_path_segments(raw: &str) -> String {
         .map(|seg| {
             if seg.is_empty() {
                 String::new()
+            } else if seg.contains('\\') {
+                // TODO(Phase 3 收尾): 前端迁完后简化为 unescape_path_segment
+                pathql_rs::unescape_path_segment(seg)
             } else {
                 urlencoding::decode(seg)
                     .map(|cow| cow.into_owned())
@@ -138,16 +141,24 @@ fn encode_provider_path_segment(s: &str) -> String {
         .collect()
 }
 
-pub fn child_runtime_path(base: &str, child_name: &str) -> String {
+fn append_path_segment(base: &str, segment: &str) -> String {
     if base.ends_with("://") {
-        format!("{}{}", base, encode_provider_path_segment(child_name))
+        format!("{base}{segment}")
     } else {
-        format!(
-            "{}/{}",
-            base.trim_end_matches('/'),
-            encode_provider_path_segment(child_name)
-        )
+        format!("{}/{segment}", base.trim_end_matches('/'))
     }
+}
+
+fn child_engine_path(base: &str, child_name: &str) -> String {
+    append_path_segment(base, &pathql_rs::escape_path_segment(child_name))
+}
+
+/// 构造供客户端传输的子节点 URI。
+///
+/// 反斜线转义属于 PathQL 引擎语法层，percent 编码只属于 URI 传输层。
+pub fn child_runtime_path(base: &str, child_name: &str) -> String {
+    let engine_segment = pathql_rs::escape_path_segment(child_name);
+    append_path_segment(base, &encode_provider_path_segment(&engine_segment))
 }
 
 fn query_entry_with_runtime(rt: &ProviderRuntime, raw_path: &str) -> Result<ProviderEntry, String> {
@@ -195,7 +206,7 @@ fn query_list_with_runtime(
         .into_iter()
         .map(|child| {
             let total = if with_count {
-                rt.count(&child_runtime_path(&base, &child.name)).ok()
+                rt.count(&child_engine_path(&base, &child.name)).ok()
             } else {
                 None
             };
@@ -328,7 +339,7 @@ pub fn organize_batch_at(page_size: usize, page: usize) -> Result<Vec<OrganizeSc
 
 /// `images://id_{id}/metadata` → metadata JSON from `metadata.data`.
 pub fn metadata_at(image_id: &str) -> Result<Option<Value>, String> {
-    let encoded = urlencoding::encode(image_id.trim());
+    let encoded = pathql_rs::escape_path_segment(image_id.trim());
     let rows = raw_rows_at(&format!("images://id_{}/metadata", encoded))?;
     let Some(row) = rows.first() else {
         return Ok(None);
@@ -338,7 +349,7 @@ pub fn metadata_at(image_id: &str) -> Result<Option<Value>, String> {
 
 /// `images://id_{id}/metadata_full` → full metadata row from `metadata`.
 pub fn metadata_full_at(image_id: &str) -> Result<Option<MetadataFull>, String> {
-    let encoded = urlencoding::encode(image_id.trim());
+    let encoded = pathql_rs::escape_path_segment(image_id.trim());
     let rows = raw_rows_at(&format!("images://id_{}/metadata_full", encoded))?;
     let Some(row) = rows.first() else {
         return Ok(None);
@@ -369,7 +380,7 @@ pub fn gallery_plugin_groups_at() -> Result<Vec<PluginGroup>, String> {
         .map(|child| {
             let count = count_at(&format!(
                 "images://gallery/plugin/{}",
-                urlencoding::encode(&child.name)
+                pathql_rs::escape_path_segment(&child.name)
             ))?;
             Ok(PluginGroup {
                 plugin_id: child.name,
@@ -402,7 +413,10 @@ pub fn gallery_day_groups_at() -> Result<Vec<DayGroup>, String> {
         if y.len() != 4 || !y.chars().all(|c| c.is_ascii_digit()) {
             continue;
         }
-        let year_path = format!("images://gallery/date/{}", year.name);
+        let year_path = format!(
+            "images://gallery/date/{}",
+            pathql_rs::escape_path_segment(&year.name)
+        );
         for month in rt
             .list(&year_path)
             .map_err(|e| format!("list {} failed: {}", year_path, e))?
@@ -413,7 +427,11 @@ pub fn gallery_day_groups_at() -> Result<Vec<DayGroup>, String> {
             if m.len() != 2 || !m.chars().all(|c| c.is_ascii_digit()) {
                 continue;
             }
-            let month_path = format!("{}/{}", year_path, month.name);
+            let month_path = format!(
+                "{}/{}",
+                year_path,
+                pathql_rs::escape_path_segment(&month.name)
+            );
             for day in rt
                 .list(&month_path)
                 .map_err(|e| format!("list {} failed: {}", month_path, e))?
@@ -424,7 +442,11 @@ pub fn gallery_day_groups_at() -> Result<Vec<DayGroup>, String> {
                 if d.len() != 2 || !d.chars().all(|c| c.is_ascii_digit()) {
                     continue;
                 }
-                let day_path = format!("{}/{}", month_path, day.name);
+                let day_path = format!(
+                    "{}/{}",
+                    month_path,
+                    pathql_rs::escape_path_segment(&day.name)
+                );
                 days.push(DayGroup {
                     ymd: format!("{y}-{m}-{d}"),
                     count: count_at(&day_path)?,
@@ -447,7 +469,7 @@ pub fn gallery_time_filter_payload_at() -> Result<GalleryTimeFilterPayload, Stri
 
 pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, String> {
     let limit = limit.max(1);
-    let encoded = urlencoding::encode(album_id.trim());
+    let encoded = pathql_rs::escape_path_segment(album_id.trim());
     let base = format!("images://gallery/album/{}", encoded);
     let mut out = images_at(&format!("{}/order/x{}x/1", base, limit))?;
     if out.len() >= limit {
@@ -476,7 +498,7 @@ pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, 
             .and_then(|d| d.get("id"))
             .and_then(|v| v.as_str())
             .unwrap_or(&child.name);
-        let child_encoded = urlencoding::encode(child_id);
+        let child_encoded = pathql_rs::escape_path_segment(child_id);
         let child_path = format!("images://gallery/album/{}/order/x3x/1", child_encoded);
         for image in images_at(&child_path)? {
             out.push(image);
@@ -549,7 +571,8 @@ mod tests {
     use rusqlite::Connection;
 
     use super::{
-        query_entry_with_runtime, query_fetch_with_runtime, query_list_with_runtime, runtime_path,
+        decode_provider_path_segments, query_entry_with_runtime, query_fetch_with_runtime,
+        query_list_with_runtime, runtime_path,
     };
     use crate::providers::dsl_loader::{register_embedded_dsl, validate_dsl};
 
@@ -737,6 +760,18 @@ mod tests {
         assert_eq!(runtime_path("images://x100x/1"), "images://x100x/1");
         assert_eq!(runtime_path("vd://locale"), "vd://locale");
         assert_eq!(runtime_path("albums://all"), "albums://all");
+    }
+
+    #[test]
+    fn provider_path_segments_support_both_transition_encodings() {
+        assert_eq!(
+            decode_provider_path_segments("gallery/search/%E8%90%A4"),
+            "gallery/search/萤"
+        );
+        assert_eq!(
+            decode_provider_path_segments(r"gallery/search/\~any"),
+            "gallery/search/~any"
+        );
     }
 
     #[test]

@@ -159,7 +159,7 @@ impl<'a> VfsSemantics<'a> {
         let mut path = format!("images://vd/{}", Self::locale_route_segment());
         for segment in segments {
             path.push('/');
-            path.push_str(segment);
+            path.push_str(&pathql_rs::escape_path_segment(segment));
         }
         path
     }

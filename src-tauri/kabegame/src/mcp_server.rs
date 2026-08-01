@@ -10,6 +10,7 @@ use kabegame_core::{
     storage::{Album, ImageInfo, Storage, SurfRecord, TaskInfo},
 };
 use pathql_rs::EngineError;
+use percent_encoding::percent_decode_str;
 use rmcp::{
     model::{
         object, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode,
@@ -152,12 +153,46 @@ fn resource_scheme(uri: &str) -> Result<&str, McpError> {
 fn resource_segments(uri: &str) -> Vec<&str> {
     uri.split_once("://")
         .map(|(_, rest)| {
-            rest.trim_matches('/')
-                .split('/')
-                .filter(|segment| !segment.is_empty())
-                .collect()
+            let mut segments = Vec::new();
+            let mut start = 0;
+            let mut escaped = false;
+            for (index, ch) in rest.char_indices() {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '/' {
+                    if start < index {
+                        segments.push(&rest[start..index]);
+                    }
+                    start = index + ch.len_utf8();
+                }
+            }
+            if start < rest.len() {
+                segments.push(&rest[start..]);
+            }
+            segments
         })
         .unwrap_or_default()
+}
+
+/// 剥掉 MCP URI 的 percent 传输层，得到可直接交给 PathQL runtime 的引擎语法路径。
+///
+/// percent 编码属于 URI 传输层，反斜线转义属于 PathQL 引擎语法层；这里仅按 `/`
+/// 切分 URI 并 percent-decode 一次，不再调用 `escape_path_segment`。客户端若要表达段内
+/// 字面 `/`，应先做引擎转义再做 URI 编码，即发送 `%5C%2F`；直接发送 `%2F` 会在解码后
+/// 被引擎解释为路径分隔符。
+fn normalize_mcp_uri_path(path: &str) -> String {
+    path.split('/')
+        .map(|segment| {
+            if segment.contains('%') {
+                percent_decode_str(segment).decode_utf8_lossy().into_owned()
+            } else {
+                segment.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn is_any_read_capability_enabled(disabled: &[String]) -> bool {
@@ -405,10 +440,11 @@ impl ServerHandler for KabegameMcpServer {
         request: ReadResourceRequestParams,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
-        let scheme = resource_scheme(&request.uri)?;
-        let segments = resource_segments(&request.uri);
+        let runtime_uri = normalize_mcp_uri_path(&request.uri);
+        let scheme = resource_scheme(&runtime_uri)?;
+        let segments = resource_segments(&runtime_uri);
         let disabled = Settings::global().get_mcp_disabled_capabilities();
-        if !is_uri_capability_enabled(&request.uri, &disabled) {
+        if !is_uri_capability_enabled(&runtime_uri, &disabled) {
             return Err(disabled_resource_error(&request.uri));
         }
 
@@ -419,8 +455,8 @@ impl ServerHandler for KabegameMcpServer {
                     && segments[1] == "metadata";
                 let is_single = segments.len() == 1
                     && segments.first().is_some_and(|seg| seg.starts_with("id_"));
-                enforce_image_pagination(&request.uri, segments.as_slice()).await?;
-                let rows = fetch_resource_rows(&request.uri).await?;
+                enforce_image_pagination(&runtime_uri, segments.as_slice()).await?;
+                let rows = fetch_resource_rows(&runtime_uri).await?;
                 let value = if is_metadata {
                     metadata_rows_to_value(rows, &request.uri)?
                 } else {
@@ -430,7 +466,7 @@ impl ServerHandler for KabegameMcpServer {
             }
             "albums" => {
                 let is_single = matches!(segments.as_slice(), [seg] if seg.starts_with("id_"));
-                let rows = fetch_resource_rows(&request.uri).await?;
+                let rows = fetch_resource_rows(&runtime_uri).await?;
                 json_value_resource(
                     rows_to_value::<Album>(rows, is_single, &request.uri)?,
                     request.uri,
@@ -438,7 +474,7 @@ impl ServerHandler for KabegameMcpServer {
             }
             "tasks" => {
                 let is_single = matches!(segments.as_slice(), [seg] if seg.starts_with("id_"));
-                let rows = fetch_resource_rows(&request.uri).await?;
+                let rows = fetch_resource_rows(&runtime_uri).await?;
                 json_value_resource(
                     rows_to_value::<TaskInfo>(rows, is_single, &request.uri)?,
                     request.uri,
@@ -446,14 +482,14 @@ impl ServerHandler for KabegameMcpServer {
             }
             "surf_records" => {
                 let is_single = matches!(segments.as_slice(), [seg] if seg.starts_with("id_"));
-                let rows = fetch_resource_rows(&request.uri).await?;
+                let rows = fetch_resource_rows(&runtime_uri).await?;
                 json_value_resource(
                     rows_to_value::<SurfRecord>(rows, is_single, &request.uri)?,
                     request.uri,
                 )
             }
             "plugin" => {
-                let rows = fetch_resource_rows(&request.uri).await?;
+                let rows = fetch_resource_rows(&runtime_uri).await?;
                 match segments.as_slice() {
                     [] => json_value_resource(Value::Array(rows), request.uri),
                     [_plugin_id] => {
@@ -969,16 +1005,17 @@ impl ServerHandler for KabegameMcpServer {
                 }
 
                 let uri = normalize_pathql_uri(&args.path);
-                if !is_uri_capability_enabled(&uri, &disabled) {
+                let runtime_uri = normalize_mcp_uri_path(&uri);
+                if !is_uri_capability_enabled(&runtime_uri, &disabled) {
                     return Err(disabled_resource_error(&uri));
                 }
 
                 let rt = provider_runtime().clone();
                 let payload = tokio::task::spawn_blocking(move || {
-                    rt.resolve(&uri)?;
-                    let total = rt.count(&uri).ok();
-                    let note = rt.note(&uri).ok().flatten();
-                    let children = rt.list(&uri)?;
+                    rt.resolve(&runtime_uri)?;
+                    let total = rt.count(&runtime_uri).ok();
+                    let note = rt.note(&runtime_uri).ok().flatten();
+                    let children = rt.list(&runtime_uri)?;
                     let child_count = children.len();
                     let window: Vec<_> = children.into_iter().skip(offset).take(limit).collect();
                     let counts_included = args.include_counts && window.len() <= 50;
@@ -988,9 +1025,10 @@ impl ServerHandler for KabegameMcpServer {
                         .into_iter()
                         .map(|child| {
                             let path = child_runtime_path(&uri, &child.name);
-                            let child_note = rt.note(&path).ok().flatten();
+                            let child_engine_path = normalize_mcp_uri_path(&path);
+                            let child_note = rt.note(&child_engine_path).ok().flatten();
                             let child_total = if counts_included {
-                                rt.count(&path).ok()
+                                rt.count(&child_engine_path).ok()
                             } else {
                                 None
                             };
@@ -1170,7 +1208,9 @@ impl ServerHandler for KabegameMcpServer {
 
 #[cfg(test)]
 mod tests {
-    use super::{resource_scheme, resource_segments};
+    use kabegame_core::providers::child_runtime_path;
+
+    use super::{normalize_mcp_uri_path, resource_scheme, resource_segments};
 
     #[test]
     fn resource_scheme_parses_scheme_prefix() {
@@ -1185,6 +1225,67 @@ mod tests {
             vec!["pixiv", "asset", "readme.png"]
         );
         assert!(resource_segments("plugin://").is_empty());
+    }
+
+    #[test]
+    fn resource_segments_only_split_unescaped_slashes() {
+        assert_eq!(
+            resource_segments(r"plugin://a\/b/asset/readme.png"),
+            vec![r"a\/b", "asset", "readme.png"]
+        );
+        assert_eq!(
+            resource_segments(&normalize_mcp_uri_path("plugin://a%2Fb")),
+            vec!["a", "b"]
+        );
+    }
+
+    #[test]
+    fn normalize_mcp_uri_path_decodes_chinese_transport_segment() {
+        assert_eq!(
+            normalize_mcp_uri_path("images://gallery/search/display-name/%E8%90%A4"),
+            "images://gallery/search/display-name/萤"
+        );
+    }
+
+    #[test]
+    fn normalize_mcp_uri_path_preserves_bare_where_marker() {
+        assert_eq!(
+            normalize_mcp_uri_path("images://gallery/~any/plugin/pixiv"),
+            "images://gallery/~any/plugin/pixiv"
+        );
+    }
+
+    #[test]
+    fn normalize_mcp_uri_path_decodes_only_the_uri_layer() {
+        assert_eq!(
+            normalize_mcp_uri_path("images://gallery/search/display-name/%5C%2F"),
+            r"images://gallery/search/display-name/\/"
+        );
+    }
+
+    #[test]
+    fn normalize_mcp_uri_path_handles_mixed_segments() {
+        assert_eq!(
+            normalize_mcp_uri_path("images://gallery/%E4%B8%AD%E6%96%87/~any/%5C~literal"),
+            r"images://gallery/中文/~any/\~literal"
+        );
+    }
+
+    #[test]
+    fn child_runtime_path_round_trips_reserved_and_slash_names() {
+        let reserved = child_runtime_path("images://gallery/plugin", "~any");
+        assert_eq!(reserved, "images://gallery/plugin/%5C~any");
+        assert_eq!(
+            normalize_mcp_uri_path(&reserved),
+            r"images://gallery/plugin/\~any"
+        );
+
+        let with_slash = child_runtime_path("images://gallery/plugin", "a/b");
+        assert_eq!(with_slash, "images://gallery/plugin/a%5C%2Fb");
+        assert_eq!(
+            normalize_mcp_uri_path(&with_slash),
+            r"images://gallery/plugin/a\/b"
+        );
     }
 }
 

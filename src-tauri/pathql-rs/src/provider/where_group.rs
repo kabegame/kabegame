@@ -16,7 +16,9 @@
 //! 节点上的过滤器注解, 不改变「你在树上的位置」。
 //!
 //! 保留段在 provider resolve **之前**被拦截, 不参与任何 provider 的 resolve/list
-//! 碰撞检查, 也不会被动态 list 反查吞掉。字面段确实以 `~` 开头时写 `~~<原名>`。
+//! 碰撞检查, 也不会被动态 list 反查吞掉。字面段确实以 `~` 开头时写 `\~<原名>`。
+//! 路径段统一用反斜线转义: `\X` 表示字面字符 `X`; 未转义的 `/` 是分隔符,
+//! 需要放进段内的 `/` 写作 `\/`。
 
 use std::sync::Arc;
 
@@ -35,37 +37,65 @@ pub(crate) enum SegmentKind {
     Branch,
     /// 闭合当前组。
     Close,
-    /// 普通路径段 (已剥掉 `~~` 转义的一层 `~`)。
+    /// 未转义的 `~` 前缀保留段。
+    Reserved(String),
+    /// 普通路径段 (已解反斜线转义, 或经 percent-decode 过渡兜底)。
     Literal(String),
 }
 
-/// 解释单个路径段。`~` 前缀整体保留给引擎语法; `~~foo` 转义为字面 `~foo`。
+/// 解开字面路径段里的反斜线转义。
+///
+/// `\X` 无条件还原为 `X`; 孤立的尾部 `\` 按字面反斜线保留。
+pub fn unescape_path_segment(seg: &str) -> String {
+    let mut out = String::with_capacity(seg.len());
+    let mut chars = seg.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            out.push(chars.next().unwrap_or('\\'));
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// 解释单个原始路径段。未转义的 `~` 前缀整体保留给引擎语法。
 pub(crate) fn classify_segment(seg: &str) -> SegmentKind {
     match seg {
         "~any" => SegmentKind::OpenAny,
         "~or" => SegmentKind::Branch,
         "~not" => SegmentKind::OpenNot,
         "~end" => SegmentKind::Close,
+        _ if seg.starts_with('~') => SegmentKind::Reserved(seg.to_string()),
+        _ if seg.contains('\\') => SegmentKind::Literal(unescape_path_segment(seg)),
         _ => {
-            if let Some(rest) = seg.strip_prefix("~~") {
-                SegmentKind::Literal(format!("~{}", rest))
-            } else {
-                SegmentKind::Literal(seg.to_string())
-            }
+            // TODO(Phase 3 收尾): 前端全部迁到反斜线转义后移除本兜底
+            SegmentKind::Literal(
+                percent_encoding::percent_decode_str(seg)
+                    .decode_utf8_lossy()
+                    .into_owned(),
+            )
         }
     }
 }
 
 /// 把一个**字面**路径段转义成可安全放进路径的形式。
 ///
-/// 宿主用数据(画册名、插件 id、tag …)拼路径段时应过一道此函数 —— `encodeURIComponent`
-/// 之类不会转义 `~`, 于是一个真叫 `~any` 的画册会被当成组合器记号。
+/// 宿主用数据(画册名、插件 id、tag …)拼路径段时必须经过此函数。它会转义反斜线、
+/// 段内 `/` 与前导 `~`, 使返回值可直接作为一个原始路径段使用。
 pub fn escape_path_segment(literal: &str) -> String {
-    if literal.starts_with('~') {
-        format!("~{}", literal)
-    } else {
-        literal.to_string()
+    let mut escaped = String::with_capacity(literal.len());
+    for ch in literal.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '/' => escaped.push_str("\\/"),
+            _ => escaped.push(ch),
+        }
     }
+    if escaped.starts_with('~') {
+        escaped.insert(0, '\\');
+    }
+    escaped
 }
 
 /// 预扫描: 返回「处理完第 i 段之后」的组嵌套深度。
@@ -330,21 +360,62 @@ mod tests {
     }
 
     #[test]
-    fn double_tilde_escapes_to_literal_tilde() {
+    fn escaped_tilde_is_literal() {
         assert_eq!(
-            classify_segment("~~any"),
+            classify_segment(r"\~any"),
             SegmentKind::Literal("~any".into())
-        );
-        assert_eq!(
-            classify_segment("~~foo"),
-            SegmentKind::Literal("~foo".into())
         );
     }
 
     #[test]
-    fn unknown_tilde_segment_stays_literal() {
-        // 未来新增记号前, 未知 `~x` 按字面处理而不是报错。
-        assert_eq!(classify_segment("~x"), SegmentKind::Literal("~x".into()));
+    fn unknown_and_double_tilde_segments_are_reserved() {
+        assert_eq!(classify_segment("~x"), SegmentKind::Reserved("~x".into()));
+        assert_eq!(
+            classify_segment("~~foo"),
+            SegmentKind::Reserved("~~foo".into())
+        );
+    }
+
+    #[test]
+    fn backslash_escapes_are_unescaped_in_literals() {
+        assert_eq!(
+            classify_segment(r"a\/b"),
+            SegmentKind::Literal("a/b".into())
+        );
+        assert_eq!(
+            classify_segment(r"a\\b"),
+            SegmentKind::Literal(r"a\b".into())
+        );
+        assert_eq!(classify_segment(r"a\"), SegmentKind::Literal(r"a\".into()));
+    }
+
+    #[test]
+    fn percent_decode_fallback_only_applies_without_backslash() {
+        assert_eq!(
+            classify_segment("%E7%94%BB"),
+            SegmentKind::Literal("画".into())
+        );
+        assert_eq!(
+            classify_segment(r"a\%2F"),
+            SegmentKind::Literal("a%2F".into())
+        );
+    }
+
+    #[test]
+    fn escape_examples_and_unescape_round_trip() {
+        let cases = [
+            ("~any", r"\~any"),
+            ("a/b", r"a\/b"),
+            (r"a\b", r"a\\b"),
+            ("~a/b", r"\~a\/b"),
+            ("pixiv", "pixiv"),
+            ("100%", "100%"),
+        ];
+
+        for (literal, escaped) in cases {
+            assert_eq!(escape_path_segment(literal), escaped);
+            assert_eq!(unescape_path_segment(escaped), literal);
+        }
     }
 
     // ===== 深度预扫描 =====

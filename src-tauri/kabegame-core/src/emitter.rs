@@ -462,7 +462,10 @@ fn album_direct_counts(album_ids: &[String]) -> Option<HashMap<String, usize>> {
         if id.is_empty() || counts.contains_key(id) {
             continue;
         }
-        let path = format!("images://gallery/album/{}", urlencoding::encode(id));
+        let path = format!(
+            "images://gallery/album/{}",
+            pathql_rs::escape_path_segment(id)
+        );
         if let Ok(count) = crate::providers::count_at(&path) {
             counts.insert(id.to_string(), count);
         }

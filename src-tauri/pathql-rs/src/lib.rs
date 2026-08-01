@@ -14,9 +14,9 @@ pub mod validate;
 pub use ast::*;
 pub use loader::{LoadError, Loader, Source};
 pub use provider::{
-    ChildEntry, ClosureExecutor, DslProvider, EmptyDslProvider, EngineError, ListRef, Provider,
-    ProviderContext, ProviderKey, ProviderRuntime, ResolveRef, ResolvedNode, SchemaRoot,
-    SqlDialect, SqlExecutor,
+    escape_path_segment, unescape_path_segment, ChildEntry, ClosureExecutor, DslProvider,
+    EmptyDslProvider, EngineError, ListRef, Provider, ProviderContext, ProviderKey,
+    ProviderRuntime, ResolveRef, ResolvedNode, SchemaRoot, SqlDialect, SqlExecutor,
 };
 pub use registry::{ProviderRegistry, RegistryError};
 

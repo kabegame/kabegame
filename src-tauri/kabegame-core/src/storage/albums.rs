@@ -118,8 +118,8 @@ impl Storage {
         }
         let path = format!(
             "images://gallery/album/{}/id_{}",
-            urlencoding::encode(album_id.trim()),
-            urlencoding::encode(image_id.trim())
+            pathql_rs::escape_path_segment(album_id.trim()),
+            pathql_rs::escape_path_segment(image_id.trim())
         );
         Ok(crate::providers::images_at(&path)?
             .into_iter()
@@ -532,7 +532,7 @@ impl Storage {
     pub fn get_album_images(&self, album_id: &str) -> Result<Vec<ImageInfo>, String> {
         crate::providers::images_at(&format!(
             "images://gallery/album/{}/sort/by-album-order",
-            urlencoding::encode(album_id)
+            pathql_rs::escape_path_segment(album_id)
         ))
     }
 

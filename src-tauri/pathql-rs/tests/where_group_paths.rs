@@ -433,18 +433,18 @@ fn or_directly_inside_not_rejected() {
 // ===== 转义 =====
 
 #[test]
-fn double_tilde_escapes_to_literal_segment() {
+fn escaped_tilde_routes_to_literal_segment() {
     let rt = runtime();
-    // 字面名为 `~weird` 的节点用 `~~weird` 访问。
-    assert_eq!(ids(&rt, "t://~~weird"), vec![2, 4]);
+    // 字面名为 `~weird` 的节点用 `\~weird` 访问。
+    assert_eq!(ids(&rt, r"t://\~weird"), vec![2, 4]);
 }
 
 #[test]
 fn escape_helper_covers_literals_that_look_like_markers() {
     use pathql_rs::provider::escape_path_segment;
-    // 宿主拿数据(画册名等)拼段时的收口: 只有 `~` 开头需要加一层。
-    assert_eq!(escape_path_segment("~any"), "~~any");
-    assert_eq!(escape_path_segment("~weird"), "~~weird");
+    // 宿主拿数据(画册名等)拼段时的收口: 前导 `~` 用反斜线转义。
+    assert_eq!(escape_path_segment("~any"), r"\~any");
+    assert_eq!(escape_path_segment("~weird"), r"\~weird");
     assert_eq!(escape_path_segment("pixiv"), "pixiv");
 
     let rt = runtime();
@@ -452,6 +452,19 @@ fn escape_helper_covers_literals_that_look_like_markers() {
         ids(&rt, &format!("t://{}", escape_path_segment("~weird"))),
         vec![2, 4]
     );
+}
+
+#[test]
+fn bare_unknown_tilde_segment_is_rejected() {
+    let rt = runtime();
+    let err = rt.resolve("t://~weird").unwrap_err();
+    match err {
+        EngineError::ReservedPathSegment(path, msg) => {
+            assert_eq!(path, "t://~weird");
+            assert!(msg.contains(r"\~"), "unexpected message: {msg}");
+        }
+        other => panic!("expected ReservedPathSegment, got {other:?}"),
+    }
 }
 
 // ===== 缓存门控 =====

@@ -9,7 +9,9 @@
 
 use arc_swap::ArcSwap;
 
-use super::where_group::{classify_segment, group_depths, GroupKind, GroupStack, SegmentKind};
+use super::where_group::{
+    classify_segment, escape_path_segment, group_depths, GroupKind, GroupStack, SegmentKind,
+};
 use super::{
     ChildEntry, DelegateTransform, EngineError, ListRef, Provider, ProviderContext, ProviderKey,
     ResolveRef, SqlExecutor,
@@ -304,8 +306,20 @@ impl ProviderRuntime {
         // WHERE 组内的中间态没有进缓存 (见下方 group_stack 门控), 所以前缀缓存只在
         // 组深度归 0 的边界上可读 —— 那里组的效果已完全烘进 composed。
         let depths = group_depths(&segments);
-        let (start_idx, mut current, mut composed, mut provider_keys) =
-            self.find_longest_cached_prefix(scheme, &schema, &segments, &depths, &ctx)?;
+        // Reserved 必须留给下面的 walk 报错, 不能被动态 list 预写的完整路径缓存绕过。
+        let cache_prefix_limit = segments
+            .iter()
+            .position(|seg| matches!(classify_segment(seg), SegmentKind::Reserved(_)))
+            .unwrap_or(segments.len());
+        let (start_idx, mut current, mut composed, mut provider_keys) = self
+            .find_longest_cached_prefix(
+                scheme,
+                &schema,
+                &segments,
+                &depths,
+                cache_prefix_limit,
+                &ctx,
+            )?;
         let mut group_stack = GroupStack::default();
 
         if dbg_enabled() {
@@ -364,6 +378,14 @@ impl ProviderRuntime {
                         self.cache_node(&path_so_far, &current, &composed, &provider_keys);
                     }
                     continue;
+                }
+                SegmentKind::Reserved(raw) => {
+                    return Err(EngineError::ReservedPathSegment(
+                        path_so_far.clone(),
+                        format!(
+                            "unrecognized reserved segment `{raw}`; escape a literal segment starting with `~` as `\\~...`"
+                        ),
+                    ));
                 }
                 SegmentKind::Literal(name) => name,
             };
@@ -506,6 +528,7 @@ impl ProviderRuntime {
         schema: &SchemaRoot,
         segments: &[String],
         depths: &[usize],
+        cache_prefix_limit: usize,
         ctx: &ProviderContext,
     ) -> Result<
         (
@@ -517,7 +540,7 @@ impl ProviderRuntime {
         EngineError,
     > {
         let cache = self.cache.lock().unwrap();
-        for prefix_len in (1..=segments.len()).rev() {
+        for prefix_len in (1..=segments.len().min(cache_prefix_limit)).rev() {
             // 只在组深度归 0 的边界续跑: 组内前缀既没写过缓存, 从那里 resume 也
             // 会丢掉组栈。
             if depths.get(prefix_len - 1).copied().unwrap_or(0) != 0 {
@@ -617,8 +640,13 @@ impl ProviderRuntime {
                             );
 
                             if cache_expanded_children && cacheable {
+                                // 缓存键与查找键同用原始转义态: 字面名 `a/b` 若不转义,
+                                // 会与合法两段路径 `a/b` 撞键。
                                 self.cache.lock().unwrap().insert(
-                                    child_path_key(parent_path, &outer_child.name),
+                                    child_path_key(
+                                        parent_path,
+                                        &escape_path_segment(&outer_child.name),
+                                    ),
                                     CachedNode {
                                         provider: child_provider,
                                         composed: child_composed,
@@ -726,7 +754,7 @@ impl ProviderRuntime {
         Ok(n as usize)
     }
 
-    /// 路径段 normalize: percent-decode, 不做 lowercase 折叠 (§2 大小写敏感)。
+    /// 转义感知地切分路径段, 保留原始转义态, 不做 lowercase 折叠 (§2 大小写敏感)。
     fn normalize_path(&self, path: &str) -> Vec<String> {
         normalize_segments(path)
     }
@@ -824,15 +852,31 @@ fn is_valid_scheme(scheme: &str) -> bool {
 }
 
 fn normalize_segments(path: &str) -> Vec<String> {
-    path.trim_matches('/')
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            percent_encoding::percent_decode_str(s)
-                .decode_utf8_lossy()
-                .into_owned()
-        })
-        .collect()
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut chars = path.chars();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                current.push(ch);
+                if let Some(escaped) = chars.next() {
+                    current.push(escaped);
+                }
+            }
+            '/' => {
+                if !current.is_empty() {
+                    segments.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.is_empty() {
+        segments.push(current);
+    }
+    segments
 }
 
 fn provider_key_from_def(def: &ProviderDef) -> ProviderKey {
@@ -2366,6 +2410,7 @@ mod tests {
 
     #[test]
     fn percent_decode_path_segments() {
+        // 过渡期兜底: 无反斜线的字面段仍在 classify_segment 中 percent-decode。
         // simulate /vd/i18n-zh_CN/%E6%8C%89%E7%94%BB%E5%86%8C  (UTF-8 percent-encoded "画册")
         struct Inner {
             children: Vec<(String, Arc<dyn Provider>)>,
@@ -2396,6 +2441,141 @@ mod tests {
         let _ = runtime
             .resolve("test://%E6%8C%89%E7%94%BB%E5%86%8C")
             .expect("percent-decoded path should resolve");
+    }
+
+    #[test]
+    fn normalize_segments_is_escape_aware_and_preserves_raw_segments() {
+        assert_eq!(normalize_segments("a/b"), vec!["a", "b"]);
+        assert_eq!(normalize_segments(r"a\/b"), vec![r"a\/b"]);
+        assert_eq!(normalize_segments(r"a\\/b"), vec![r"a\\", "b"]);
+        assert_eq!(normalize_segments("//a//"), vec!["a"]);
+        assert_eq!(normalize_segments(r"a\"), vec![r"a\"]);
+    }
+
+    #[test]
+    fn reserved_segment_error_is_not_bypassed_by_full_path_cache() {
+        let cached_provider: Arc<dyn Provider> = Arc::new(NoteLeaf {
+            note: "must not resolve",
+            from: None,
+        });
+        let runtime = runtime_with_root(cached_provider.clone());
+        runtime.cache.lock().unwrap().insert(
+            "test://~weird".into(),
+            CachedNode {
+                provider: Some(cached_provider),
+                composed: ProviderQuery::new(),
+                provider_keys: Vec::new(),
+            },
+        );
+
+        let err = runtime.resolve("test://~weird").unwrap_err();
+        assert!(matches!(err, EngineError::ReservedPathSegment(_, _)));
+    }
+
+    #[test]
+    fn escaped_slash_routes_to_dynamic_child_with_literal_slash() {
+        struct DynamicRoot {
+            child: Arc<dyn Provider>,
+        }
+        impl Provider for DynamicRoot {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(vec![ListRef::Direct(ChildEntry {
+                    name: "a/b".into(),
+                    provider: Some(self.child.clone()),
+                    meta: None,
+                })])
+            }
+        }
+
+        let child: Arc<dyn Provider> = Arc::new(NoteLeaf {
+            note: "slash child",
+            from: None,
+        });
+        let runtime = runtime_with_root(Arc::new(DynamicRoot { child }));
+        assert_eq!(
+            runtime.note(r"test://a\/b").unwrap(),
+            Some("slash child".into())
+        );
+    }
+
+    #[test]
+    fn delegate_expand_child_cache_key_escapes_literal_name() {
+        struct Target;
+        impl Provider for Target {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                Ok(vec![ListRef::Direct(ChildEntry {
+                    name: "x".into(),
+                    provider: None,
+                    meta: None,
+                })])
+            }
+        }
+
+        struct Parent {
+            target: Arc<dyn Provider>,
+            leaf: Arc<dyn Provider>,
+        }
+        impl Provider for Parent {
+            fn list(
+                &self,
+                _: &ProviderQuery,
+                _: &ProviderContext,
+            ) -> Result<Vec<ListRef>, EngineError> {
+                let leaf = self.leaf.clone();
+                Ok(vec![ListRef::DelegateExpand {
+                    target: self.target.clone(),
+                    expand: Arc::new(move |_child, _ctx| {
+                        Ok(Some(ChildEntry {
+                            name: "a/b".into(),
+                            provider: Some(leaf.clone()),
+                            meta: None,
+                        }))
+                    }),
+                }])
+            }
+        }
+
+        struct Root {
+            parent: Arc<dyn Provider>,
+        }
+        impl Provider for Root {
+            fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+                ResolveRef::Terminal((name == "parent").then(|| ChildEntry {
+                    name: name.to_string(),
+                    provider: Some(self.parent.clone()),
+                    meta: None,
+                }))
+            }
+        }
+
+        let parent: Arc<dyn Provider> = Arc::new(Parent {
+            target: Arc::new(Target),
+            leaf: Arc::new(NoteLeaf {
+                note: "slash child",
+                from: None,
+            }),
+        });
+        let runtime = runtime_with_root(Arc::new(Root { parent }));
+
+        let children = runtime.list("test://parent").unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].name, "a/b");
+
+        // 预写缓存键用原始转义态: 命中转义寻址, 不污染合法两段路径 `parent/a/b`。
+        assert!(runtime.is_path_cached(r"test://parent/a\/b"));
+        assert!(!runtime.is_path_cached("test://parent/a/b"));
+        assert_eq!(
+            runtime.note(r"test://parent/a\/b").unwrap(),
+            Some("slash child".into())
+        );
     }
 
     // ── S1e S1: fetch(path) / count(path) ────────────────────────────────
