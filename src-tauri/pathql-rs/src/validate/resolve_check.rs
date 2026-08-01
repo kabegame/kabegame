@@ -54,7 +54,8 @@ pub fn validate_resolve(registry: &crate::ProviderRegistry, errors: &mut Vec<Val
         // 2) capture[N] bounds in invocation properties / meta
         let pattern_to_groups: HashMap<&str, usize> =
             compiled.iter().map(|(p, _, g)| (p.as_str(), *g)).collect();
-        for (pat, inv) in &resolve.0 {
+        for (pat, entry) in &resolve.0 {
+            let inv = &entry.invocation;
             if let ProviderInvocation::ByDelegate(b) = inv {
                 if !matches!(b.provider, Some(DelegateProviderField::Name(_)))
                     && b.properties.is_some()
@@ -229,14 +230,14 @@ mod tests {
     #[test]
     fn valid_resolve_pattern() {
         let mut r = Resolve::default();
-        r.0.insert("^x([0-9]+)$".into(), by_name("foo"));
+        r.0.insert("^x([0-9]+)$".into(), by_name("foo").into());
         assert!(run(r, None).is_empty());
     }
 
     #[test]
     fn invalid_regex_compile() {
         let mut r = Resolve::default();
-        r.0.insert("[unclosed".into(), by_name("foo"));
+        r.0.insert("[unclosed".into(), by_name("foo").into());
         let errs = run(r, None);
         assert!(errs
             .iter()
@@ -246,7 +247,7 @@ mod tests {
     #[test]
     fn delegate_child_ref_rejects_properties() {
         let mut r = Resolve::default();
-        r.0.insert(".*".into(), by_delegate_child_ref_with_props());
+        r.0.insert(".*".into(), by_delegate_child_ref_with_props().into());
         let errs = run(r, None);
         assert!(errs
             .iter()
@@ -257,7 +258,7 @@ mod tests {
     #[test]
     fn regex_overlapping_static_no_longer_errors() {
         let mut r = Resolve::default();
-        r.0.insert("x([0-9]+)x".into(), by_name("p"));
+        r.0.insert("x([0-9]+)x".into(), by_name("p").into());
         let list = List {
             entries: vec![("x100x".into(), ListEntry::Static(by_name("static_p")))],
         };
@@ -269,8 +270,8 @@ mod tests {
     #[test]
     fn regex_overlapping_pair_no_longer_errors() {
         let mut r = Resolve::default();
-        r.0.insert("a.*".into(), by_name("p1"));
-        r.0.insert("ab.*".into(), by_name("p2"));
+        r.0.insert("a.*".into(), by_name("p1").into());
+        r.0.insert("ab.*".into(), by_name("p2").into());
         // 7b: 不再报错
         assert!(run(r, None).is_empty());
     }
@@ -279,7 +280,7 @@ mod tests {
     #[test]
     fn wildcard_forward_with_static_list_ok() {
         let mut r = Resolve::default();
-        r.0.insert(".*".into(), by_name("forward_target"));
+        r.0.insert(".*".into(), by_name("forward_target").into());
         let list = List {
             entries: vec![("desc".into(), ListEntry::Static(by_name("desc_p")))],
         };
@@ -296,7 +297,7 @@ mod tests {
         let mut r = Resolve::default();
         r.0.insert(
             "x([1-9][0-9]*)x".into(),
-            by_name_with_props("paginate", props),
+            by_name_with_props("paginate", props).into(),
         );
         assert!(run(r, None).is_empty());
     }
@@ -306,7 +307,7 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("x".into(), TemplateValue::String("${capture[5]}".into()));
         let mut r = Resolve::default();
-        r.0.insert("^([a-z]+)$".into(), by_name_with_props("p", props));
+        r.0.insert("^([a-z]+)$".into(), by_name_with_props("p", props).into());
         let errs = run(r, None);
         assert!(errs.iter().any(|e| matches!(
             e.kind,
@@ -342,7 +343,7 @@ mod tests {
     #[test]
     fn instance_static_pattern_skipped_at_load() {
         let mut r = Resolve::default();
-        r.0.insert("${properties.prefix}_[a-z]+".into(), by_name("p"));
+        r.0.insert("${properties.prefix}_[a-z]+".into(), by_name("p").into());
         // 不应报 RegexCompileError (因为根本没尝试编译)
         let errs = run(r, None);
         assert!(errs

@@ -100,7 +100,7 @@ impl ProviderRegistry {
             .map(|(_, entry)| entry)
     }
 
-    fn lookup_with_key(
+    pub(crate) fn lookup_with_key(
         &self,
         current_ns: &Namespace,
         reference: &ProviderName,

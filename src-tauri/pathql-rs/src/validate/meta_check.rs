@@ -69,7 +69,8 @@ pub fn validate_meta(
         }
 
         if let Some(resolve) = &def.resolve {
-            for (k, inv) in &resolve.0 {
+            for (k, entry) in &resolve.0 {
+                let inv = &entry.invocation;
                 let allowed_ns = match inv {
                     ProviderInvocation::ByDelegate(b) => {
                         let mut ns = vec!["properties", "capture", "composed", "global", "_"];
@@ -298,7 +299,8 @@ mod tests {
                 provider: ProviderName("p".into()),
                 properties: None,
                 meta: Some(json!({"page": "${capture[1]}"})),
-            }),
+            })
+            .into(),
         );
         let d = ProviderDef {
             schema: None,

@@ -247,6 +247,7 @@ mod tests {
                 ListEntry::Dynamic(DynamicListEntry::Sql(DynamicSqlEntry {
                     sql: SqlExpr("SELECT id FROM x".into()),
                     data_var: Identifier("row".into()),
+                    alias: None,
                     provider: None,
                     properties: None,
                     meta: None,
@@ -264,6 +265,7 @@ mod tests {
                 ListEntry::Dynamic(DynamicListEntry::Sql(DynamicSqlEntry {
                     sql: SqlExpr("SELECT id".into()),
                     data_var: Identifier("row".into()),
+                    alias: None,
                     provider: None,
                     properties: None,
                     meta: None,
@@ -285,6 +287,7 @@ mod tests {
                 ListEntry::Dynamic(DynamicListEntry::Sql(DynamicSqlEntry {
                     sql: SqlExpr("SELECT id".into()),
                     data_var: Identifier("out".into()),
+                    alias: None,
                     provider: None,
                     properties: None,
                     meta: None,
@@ -307,6 +310,7 @@ mod tests {
                 ListEntry::Dynamic(DynamicListEntry::Delegate(DynamicDelegateEntry {
                     delegate: pcall("x"),
                     child_var: Identifier("out".into()),
+                    alias: None,
                     provider: None,
                     properties: Some(props),
                     meta: None,
@@ -329,6 +333,7 @@ mod tests {
                 ListEntry::Dynamic(DynamicListEntry::Sql(DynamicSqlEntry {
                     sql: SqlExpr("SELECT id".into()),
                     data_var: Identifier("row".into()),
+                    alias: None,
                     provider: Some(ProviderName("foo".into())),
                     properties: Some(props),
                     meta: None,
@@ -349,6 +354,7 @@ mod tests {
                 ListEntry::Dynamic(DynamicListEntry::Sql(DynamicSqlEntry {
                     sql: SqlExpr("SELECT 1".into()),
                     data_var: Identifier("ref".into()), // reserved
+                    alias: None,
                     provider: None,
                     properties: None,
                     meta: None,
@@ -369,6 +375,7 @@ mod tests {
                 ListEntry::Dynamic(DynamicListEntry::Delegate(DynamicDelegateEntry {
                     delegate: pcall("x"),
                     child_var: Identifier("properties".into()), // reserved
+                    alias: None,
                     provider: None,
                     properties: None,
                     meta: None,
@@ -394,6 +401,7 @@ mod tests {
                 ListEntry::Dynamic(DynamicListEntry::Delegate(DynamicDelegateEntry {
                     delegate: pcall("page_size_provider"),
                     child_var: Identifier("out".into()),
+                    alias: None,
                     provider: None,
                     properties: Some(props),
                     meta: None,

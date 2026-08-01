@@ -154,6 +154,29 @@ impl ProviderRuntime {
         schemes
     }
 
+    #[cfg(feature = "client-codegen")]
+    pub(crate) fn client_codegen_registry(&self) -> Arc<ProviderRegistry> {
+        self.registry.load_full()
+    }
+
+    #[cfg(feature = "client-codegen")]
+    pub(crate) fn client_codegen_schemas(&self) -> Vec<(String, ProviderKey)> {
+        let schemas = self.schemas.lock().unwrap();
+        let mut roots: Vec<_> = schemas
+            .iter()
+            .map(|(scheme, root)| {
+                let key = root
+                    .provider_keys
+                    .first()
+                    .cloned()
+                    .expect("registered schema must retain its root provider key");
+                (scheme.clone(), key)
+            })
+            .collect();
+        roots.sort_by(|left, right| left.0.cmp(&right.0));
+        roots
+    }
+
     /// 动态注册一个dsl
     #[cfg(feature = "json5")]
     pub fn register_provider_dsl(

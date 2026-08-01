@@ -100,8 +100,8 @@ fn collect_delegate_targets(def: &ProviderDef) -> Vec<&ProviderName> {
     }
     // 7b: resolve 表中的 ByDelegate (target.resolve 转发) 也是 delegate 边
     if let Some(resolve) = &def.resolve {
-        for (_, inv) in resolve.0.iter() {
-            if let ProviderInvocation::ByDelegate(b) = inv {
+        for (_, entry) in resolve.0.iter() {
+            if let ProviderInvocation::ByDelegate(b) = &entry.invocation {
                 out.push(&b.delegate.provider);
             }
         }
@@ -155,6 +155,7 @@ mod tests {
                             properties: None,
                         },
                         child_var: Identifier("out".into()),
+                        alias: None,
                         provider: None,
                         properties: None,
                         meta: None,

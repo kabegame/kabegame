@@ -1,4 +1,4 @@
-use crate::validate::{dynamic, names, query_refs, ValidateConfig, ValidateError};
+use crate::validate::{aliases, dynamic, names, query_refs, ValidateConfig, ValidateError};
 use crate::ProviderRegistry;
 
 /// 不需要 sqlparser / regex 的所有 per-provider 检查。
@@ -9,6 +9,7 @@ pub fn validate_simple(
 ) {
     for ((ns, name), def) in registry.iter_dsl() {
         names::validate_names(ns, name, def, errors);
+        aliases::validate_aliases(ns, name, def, errors);
         query_refs::validate_query_refs(ns, name, def, errors);
         dynamic::validate_dynamic(ns, name, def, cfg, errors);
     }

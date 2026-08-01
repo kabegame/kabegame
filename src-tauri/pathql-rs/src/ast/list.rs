@@ -18,6 +18,8 @@ pub struct DynamicSqlEntry {
     pub sql: SqlExpr,
     pub data_var: Identifier,
     #[serde(default)]
+    pub alias: Option<String>,
+    #[serde(default)]
     pub provider: Option<ProviderName>,
     #[serde(default)]
     pub properties: Option<HashMap<String, TemplateValue>>,
@@ -74,6 +76,8 @@ pub struct DynamicDelegateEntry {
     /// 6e: 数据源 provider 引用 (ProviderCall); 实例化后调它的 list_children 拿 children 序列。
     pub delegate: ProviderCall,
     pub child_var: Identifier,
+    #[serde(default)]
+    pub alias: Option<String>,
     #[serde(default)]
     pub provider: Option<DelegateProviderField>,
     #[serde(default)]
@@ -268,6 +272,13 @@ mod tests {
     }
 
     #[test]
+    fn static_entry_rejects_alias() {
+        let result: Result<List, _> =
+            serde_json::from_str(r#"{"a":{"provider":"x","alias":"entry"}}"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn dynamic_sql_entry() {
         let v: List =
             serde_json::from_str(r#"{"${row.id}":{"sql":"select 1","data_var":"row"}}"#).unwrap();
@@ -276,6 +287,21 @@ mod tests {
             ListEntry::Dynamic(DynamicListEntry::Sql(e)) => {
                 assert_eq!(e.sql, SqlExpr("select 1".into()));
                 assert_eq!(e.data_var, Identifier("row".into()));
+                assert_eq!(e.alias, None);
+            }
+            _ => panic!("expected Dynamic Sql"),
+        }
+    }
+
+    #[test]
+    fn dynamic_sql_entry_with_alias() {
+        let v: List = serde_json::from_str(
+            r#"{"${row.id}":{"sql":"select 1","data_var":"row","alias":"plugin"}}"#,
+        )
+        .unwrap();
+        match &v.entries[0].1 {
+            ListEntry::Dynamic(DynamicListEntry::Sql(e)) => {
+                assert_eq!(e.alias.as_deref(), Some("plugin"));
             }
             _ => panic!("expected Dynamic Sql"),
         }
@@ -292,6 +318,21 @@ mod tests {
             ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => {
                 assert_eq!(e.delegate.provider, ProviderName("z".into()));
                 assert_eq!(e.child_var, Identifier("out".into()));
+                assert_eq!(e.alias, None);
+            }
+            _ => panic!("expected Dynamic Delegate"),
+        }
+    }
+
+    #[test]
+    fn dynamic_delegate_entry_with_alias() {
+        let v: List = serde_json::from_str(
+            r#"{"${out.name}":{"delegate":{"provider":"z"},"child_var":"out","alias":"child"}}"#,
+        )
+        .unwrap();
+        match &v.entries[0].1 {
+            ListEntry::Dynamic(DynamicListEntry::Delegate(e)) => {
+                assert_eq!(e.alias.as_deref(), Some("child"));
             }
             _ => panic!("expected Dynamic Delegate"),
         }

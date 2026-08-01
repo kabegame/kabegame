@@ -70,7 +70,8 @@ fn collect_refs(def: &ProviderDef) -> Vec<(String, ProviderName)> {
     }
 
     if let Some(resolve) = &def.resolve {
-        for (k, inv) in &resolve.0 {
+        for (k, entry) in &resolve.0 {
+            let inv = &entry.invocation;
             match inv {
                 ProviderInvocation::ByName(b) => {
                     refs.push((format!("resolve[`{}`].provider", k), b.provider.clone()));

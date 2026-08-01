@@ -516,7 +516,8 @@ impl Provider for DslProvider {
         }
         // 1. resolve.entries (regex)
         if let Some(resolve) = &self.def.resolve {
-            for (pattern_template, invocation) in &resolve.0 {
+            for (pattern_template, entry) in &resolve.0 {
+                let invocation = &entry.invocation;
                 // 渲染 pattern 中的 ${properties.X} (instance-static)
                 let pattern = self.render_key_template(pattern_template, ctx);
                 let anchored = format!("^(?:{})$", pattern);

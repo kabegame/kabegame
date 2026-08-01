@@ -17,6 +17,7 @@ arc-swap = { workspace = true }
 
 [features]
 default = []
+client-codegen = []
 json5 = ["dep:json5"]
 validate = ["dep:regex-automata", "dep:sqlparser"]
 

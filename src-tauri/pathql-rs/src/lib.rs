@@ -1,4 +1,6 @@
 pub mod ast;
+#[cfg(feature = "client-codegen")]
+pub mod client_codegen;
 pub mod compose;
 pub mod loader;
 pub mod loaders;

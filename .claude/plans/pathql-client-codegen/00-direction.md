@@ -16,7 +16,8 @@ percent-encoding、段顺序、组合器结构);**不提供 invoke**——执行
    kabegame-cli 只是调用方。多来源(DSL/程序化/动态注册)天然支持;scheme 根注册无
    来源问题。
 2. **不可具体化节点 → 占位类型**:程序化 provider 与动态 delegate 只生成类型定义、
-   不具体化——通用占位节点,子节点访问接口为 **any(不是 unknown)**;每来源一个命名
+   不具体化——通用占位节点 `AnyProviderNode`:保留全部 `$` 方法面,索引访问返回
+   `AnyProviderNode` 自身(不是 `any`/`unknown`),链式每步仍是节点;每来源一个命名
    别名(命名方案见 01-design §3,由 Claude 设计)。
 3. **resolve 正则:注解字段 `alias`**。带 `alias: "{alias}"` 的 resolve 项生成
    `.$resolve{Alias}(seg: string)` 类型化接口——**所有这些方法函数体相同**(拼接转义后
@@ -40,8 +41,8 @@ percent-encoding、段顺序、组合器结构);**不提供 invoke**——执行
 | `resolve` 项 + `alias` | `.$resolve{Alias}(seg: string)` → 目标节点类型 |
 | `resolve` 项无 alias | 不生成;`$raw` 手动 |
 | `list` 动态 SQL 项(目标 provider 静态可知) | `.$child(name: string)` → 目标节点类型 |
-| `list`/`resolve` 动态 delegate、模板 provider | 占位类型(any 接口) |
-| 程序化 provider | 占位类型(any 接口) |
+| `list`/`resolve` 动态 delegate、模板 provider | 占位类型(AnyProviderNode) |
+| 程序化 provider | 占位类型(AnyProviderNode) |
 | 组合器 | 每节点 `$any(…)` / `$not(…)` |
 | 逃生口 | `$raw(segment)`(自动转义)→ 占位类型 |
 

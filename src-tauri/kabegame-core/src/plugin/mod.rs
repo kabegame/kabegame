@@ -2500,11 +2500,13 @@ fn ensure_plugin_provider_filter_comb_resolve(def: &mut ProviderDef) {
         .0
         .entry("filter_comb".to_string())
         .or_insert_with(|| {
+            // ResolveEntry::from — 不带 codegen alias 的普通 resolve 项。
             ProviderInvocation::ByName(InvokeByName {
                 provider: ProviderName("kabegame.gallery_filter_comb".to_string()),
                 properties: None,
                 meta: None,
             })
+            .into()
         });
 }
 

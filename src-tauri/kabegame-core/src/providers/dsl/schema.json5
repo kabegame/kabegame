@@ -111,6 +111,12 @@
             "description": "标识符(snake_case); 用作 child_var / data_var 等绑定名"
         },
 
+        "CodegenAlias": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "可选 codegen alias；必须为 snake_case，同一 provider 的 resolve 项与动态 list 项内唯一。仅供 client codegen 使用，引擎查询语义忽略"
+        },
+
         "PropertyDecl": {
             "oneOf": [
                 { "$ref": "#/definitions/NumberProp" },
@@ -337,7 +343,10 @@
         },
 
         "StaticListEntry": {
-            "$ref": "#/definitions/ProviderInvocation",
+            "allOf": [
+                { "$ref": "#/definitions/ProviderInvocation" },
+                { "not": { "required": ["alias"] } }
+            ],
             "description": "静态 list 项 = ProviderInvocation 二态 (byName / Empty); 6e 起 byDelegate variant 已删除"
         },
 
@@ -363,6 +372,7 @@
                     "$ref": "#/definitions/Identifier",
                     "description": "SQL 行绑定名。引擎要求 key 与 properties 中所有 ${X.Y} 的 X 必须等于此值"
                 },
+                "alias": { "$ref": "#/definitions/CodegenAlias" },
                 "provider": {
                     "$ref": "#/definitions/ProviderName",
                     "description": "缺省=不挂 provider; 字符串=显式命名 (SQL 模式无透传)"
@@ -393,6 +403,7 @@
                     "$ref": "#/definitions/Identifier",
                     "description": "ChildEntry 绑定名。引擎要求 key 与 properties 中所有 ${X.Y} 的 X 必须等于此值"
                 },
+                "alias": { "$ref": "#/definitions/CodegenAlias" },
                 "provider": {
                     "oneOf": [
                         { "$ref": "#/definitions/ProviderName" },
@@ -415,7 +426,7 @@
         "Resolve": {
             "type": "object",
             "additionalProperties": { "$ref": "#/definitions/ProviderInvocation" },
-            "description": "正则 → ProviderInvocation 映射 (直接 key-value, 无 entries 包装)。所有 key 一律按正则编译 (纯字面量是空元字符的合法子集)。\n\nKey 形态 (7b 起):\n  - 静态 regex (无 ${...})         → 加载期编译\n  - instance-static (${properties.X}) → 实例化期渲染后再编译\n  - 不允许 ${data_var.X} / ${child_var.X} (resolve 表无 row/child 上下文)\n\n运行期解析顺序 (deterministic): regex resolve → 静态 list 字面 → 动态 list 反查 (默认开启)。\n\n7b 起: 引擎不再做加载期碰撞检测 — `.*` 转发模式 + instance-static key 都让该检测全是 false-positive。多模式重叠由作者按 schema 出现顺序覆写决定。"
+            "description": "正则 → ProviderInvocation 映射 (直接 key-value, 无 entries 包装)。每项可带可选 codegen alias；必须为 snake_case，与同 provider 的其他 resolve / 动态 list alias 唯一，仅供 client codegen 使用，引擎查询语义忽略。所有 key 一律按正则编译 (纯字面量是空元字符的合法子集)。\n\nKey 形态 (7b 起):\n  - 静态 regex (无 ${...})         → 加载期编译\n  - instance-static (${properties.X}) → 实例化期渲染后再编译\n  - 不允许 ${data_var.X} / ${child_var.X} (resolve 表无 row/child 上下文)\n\n运行期解析顺序 (deterministic): regex resolve → 静态 list 字面 → 动态 list 反查 (默认开启)。\n\n7b 起: 引擎不再做加载期碰撞检测 — `.*` 转发模式 + instance-static key 都让该检测全是 false-positive。多模式重叠由作者按 schema 出现顺序覆写决定。"
         },
 
         "ProviderInvocation": {
@@ -433,6 +444,7 @@
             "required": ["provider"],
             "not": { "required": ["delegate"] },
             "properties": {
+                "alias": { "$ref": "#/definitions/CodegenAlias" },
                 "provider": { "$ref": "#/definitions/ProviderName" },
                 "properties": {
                     "type": "object",
@@ -457,6 +469,7 @@
                 }
             }],
             "properties": {
+                "alias": { "$ref": "#/definitions/CodegenAlias" },
                 "delegate": {
                     "$ref": "#/definitions/ProviderCall",
                     "description": "[操作转发 — 对称语义] 实例化 ProviderCall.provider; 在其上调用 target.resolve(name), 得到 ChildEntry 后再由当前项转换"
@@ -508,6 +521,7 @@
                 ]
             },
             "properties": {
+                "alias": { "$ref": "#/definitions/CodegenAlias" },
                 "meta": { "$ref": "#/definitions/MetaValue" }
             },
             "description": "空 invocation: 无 provider 也无 delegate。路径仍照常缓存, 但引擎不在该子节点提供 list / resolve 服务(缓存项为空, meta 可选)"

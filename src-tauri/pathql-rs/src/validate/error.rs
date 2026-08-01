@@ -46,6 +46,10 @@ pub enum ValidateErrorKind {
     InvalidNamespace(String),
     #[error("invalid name pattern: `{0}`")]
     InvalidName(String),
+    #[error("invalid alias pattern: `{0}`")]
+    InvalidAlias(String),
+    #[error("duplicate alias `{0}` in same provider")]
+    DuplicateAlias(String),
     #[error("SQL parse error: {0}")]
     SqlParseError(String),
     #[error("multiple SQL statements not allowed")]

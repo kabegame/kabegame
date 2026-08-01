@@ -1,10 +1,42 @@
 use crate::ast::invocation::ProviderInvocation;
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ResolveEntry {
+    #[serde(flatten)]
+    pub invocation: ProviderInvocation,
+    #[serde(default)]
+    pub alias: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ResolveEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        let alias = fields
+            .remove("alias")
+            .map(Option::<String>::deserialize)
+            .transpose()
+            .map_err(de::Error::custom)?
+            .flatten();
+        let invocation = ProviderInvocation::deserialize(serde_json::Value::Object(fields))
+            .map_err(de::Error::custom)?;
+        Ok(Self { invocation, alias })
+    }
+}
+
+impl From<ProviderInvocation> for ResolveEntry {
+    fn from(invocation: ProviderInvocation) -> Self {
+        Self {
+            invocation,
+            alias: None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 #[serde(transparent)]
-pub struct Resolve(pub HashMap<String, ProviderInvocation>);
+pub struct Resolve(pub HashMap<String, ResolveEntry>);
 
 #[cfg(test)]
 mod tests {
@@ -16,10 +48,41 @@ mod tests {
         let v: Resolve = serde_json::from_str(r#"{"^x([0-9]+)$":{"provider":"foo"}}"#).unwrap();
         assert_eq!(v.0.len(), 1);
         let entry = v.0.get("^x([0-9]+)$").unwrap();
-        match entry {
+        match &entry.invocation {
             ProviderInvocation::ByName(b) => assert_eq!(b.provider, ProviderName("foo".into())),
             _ => panic!("expected ByName"),
         }
+        assert_eq!(entry.alias, None);
+    }
+
+    #[test]
+    fn single_regex_with_alias() {
+        let v: Resolve =
+            serde_json::from_str(r#"{"^x([0-9]+)$":{"provider":"foo","alias":"page_size"}}"#)
+                .unwrap();
+        let entry = v.0.get("^x([0-9]+)$").unwrap();
+        assert_eq!(entry.alias.as_deref(), Some("page_size"));
+        assert!(matches!(entry.invocation, ProviderInvocation::ByName(_)));
+    }
+
+    #[test]
+    fn alias_preserves_delegate_discrimination() {
+        let v: Resolve =
+            serde_json::from_str(r#"{".*":{"delegate":{"provider":"foo"},"alias":"fallback"}}"#)
+                .unwrap();
+        let entry = v.0.get(".*").unwrap();
+        assert_eq!(entry.alias.as_deref(), Some("fallback"));
+        assert!(matches!(
+            entry.invocation,
+            ProviderInvocation::ByDelegate(_)
+        ));
+    }
+
+    #[test]
+    fn alias_does_not_relax_unknown_field_rejection() {
+        let result: Result<Resolve, _> =
+            serde_json::from_str(r#"{"x":{"provider":"foo","alias":"entry","unknown":true}}"#);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -46,6 +109,8 @@ mod tests {
     #[test]
     fn empty_value() {
         let v: Resolve = serde_json::from_str(r#"{"k":{}}"#).unwrap();
-        assert!(matches!(v.0.get("k"), Some(ProviderInvocation::Empty(_))));
+        let entry = v.0.get("k").unwrap();
+        assert!(matches!(entry.invocation, ProviderInvocation::Empty(_)));
+        assert_eq!(entry.alias, None);
     }
 }

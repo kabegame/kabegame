@@ -123,6 +123,7 @@ fn dynamic_var_mismatch() {
             ListEntry::Dynamic(DynamicListEntry::Sql(DynamicSqlEntry {
                 sql: SqlExpr("SELECT id FROM tbl".into()),
                 data_var: Identifier("row".into()),
+                alias: None,
                 provider: None,
                 properties: None,
                 meta: None,
@@ -149,6 +150,7 @@ fn dynamic_sql_provider_ref_rejected() {
             ListEntry::Dynamic(DynamicListEntry::Sql(DynamicSqlEntry {
                 sql: SqlExpr("SELECT 1".into()),
                 data_var: Identifier("row".into()),
+                alias: None,
                 provider: None,
                 properties: Some(props),
                 meta: None,
@@ -173,6 +175,7 @@ fn reserved_data_var() {
             ListEntry::Dynamic(DynamicListEntry::Sql(DynamicSqlEntry {
                 sql: SqlExpr("SELECT 1".into()),
                 data_var: Identifier("ref".into()),
+                alias: None,
                 provider: None,
                 properties: None,
                 meta: None,
@@ -249,6 +252,7 @@ fn multi_stmt_in_dynamic_sql() {
             ListEntry::Dynamic(DynamicListEntry::Sql(DynamicSqlEntry {
                 sql: SqlExpr("SELECT 1; SELECT 2".into()),
                 data_var: Identifier("row".into()),
+                alias: None,
                 provider: None,
                 properties: None,
                 meta: None,
@@ -273,6 +277,7 @@ fn ddl_in_dynamic_sql() {
             ListEntry::Dynamic(DynamicListEntry::Sql(DynamicSqlEntry {
                 sql: SqlExpr("DROP TABLE images".into()),
                 data_var: Identifier("row".into()),
+                alias: None,
                 provider: None,
                 properties: None,
                 meta: None,
@@ -319,7 +324,8 @@ fn invalid_regex_in_resolve() {
             provider: ProviderName("p2".into()),
             properties: None,
             meta: None,
-        }),
+        })
+        .into(),
     );
     let mut d = base_def("p");
     d.resolve = Some(resolve);
@@ -346,7 +352,8 @@ fn capture_index_out_of_bounds() {
             provider: ProviderName("p2".into()),
             properties: Some(props),
             meta: None,
-        }),
+        })
+        .into(),
     );
     let mut d = base_def("p");
     d.resolve = Some(resolve);

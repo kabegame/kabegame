@@ -4,6 +4,7 @@
 
 #![cfg(feature = "validate")]
 
+pub mod aliases;
 pub mod config;
 pub mod cross_ref;
 pub mod cycle;
